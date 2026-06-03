@@ -1,4 +1,5 @@
 import { db } from "../db/client";
+import { CliError } from "../output";
 import { formatError, withRetries } from "../retry";
 import { addTrackToPlaylist, fetchTrackMetadata, parseSpotifyTrackUrl } from "../spotify";
 import { formatTelegramMessage, postToTelegram } from "../telegram";
@@ -6,6 +7,22 @@ import { formatTelegramMessage, postToTelegram } from "../telegram";
 type AddOptions = {
   note?: string;
   dryRun?: boolean;
+  json?: boolean;
+};
+
+export type AddCommandResult = {
+  track: {
+    trackId: string;
+    spotifyUrl: string;
+    title: string;
+    artists: string[];
+    album?: string;
+    durationMs: number;
+  };
+  dryRun: boolean;
+  addedToSpotify: boolean;
+  postedToTelegram: boolean;
+  message: string;
 };
 
 type TrackRow = {
@@ -16,7 +33,7 @@ type TrackRow = {
   posted_to_telegram: number;
 };
 
-export async function addCommand(spotifyUrl: string, options: AddOptions): Promise<void> {
+export async function addCommand(spotifyUrl: string, options: AddOptions): Promise<AddCommandResult> {
   const trackId = parseSpotifyTrackUrl(spotifyUrl);
   const existingResult = await db.execute({
     sql: `select track_id, title, artists_json, added_to_spotify, posted_to_telegram
@@ -32,22 +49,25 @@ export async function addCommand(spotifyUrl: string, options: AddOptions): Promi
     const existingLine = `${existingArtists.join(", ")} — ${existing.title}`;
 
     if (existing.added_to_spotify && existing.posted_to_telegram) {
-      throw new Error(`Already published: ${existingLine}`);
+      throw new CliError("duplicate", `Already published: ${existingLine}`);
     }
 
-    throw new Error(`Already attempted but incomplete:
+    throw new CliError(
+      "incomplete_duplicate",
+      `Already attempted but incomplete:
 
 ${existingLine}
 
 ${existing.added_to_spotify ? "✅" : "❌"} Added to Spotify
-${existing.posted_to_telegram ? "✅" : "❌"} Posted to Telegram`);
+${existing.posted_to_telegram ? "✅" : "❌"} Posted to Telegram`,
+    );
   }
 
   const track = await fetchTrackMetadata(trackId);
   const artistLine = `${track.artists.join(", ")} — ${track.title}`;
 
   if (options.dryRun) {
-    console.log(`Dry run
+    const message = `Dry run
 
 ${artistLine}
 Album: ${track.album ?? "Unknown"}
@@ -58,8 +78,17 @@ Telegram message:
 
 ${formatTelegramMessage(track, options.note)}
 
-No database, Spotify, or Telegram changes were made.`);
-    return;
+No database, Spotify, or Telegram changes were made.`;
+
+    if (!options.json) {
+      console.log(message);
+    }
+
+    return buildAddResult(track, message, {
+      dryRun: true,
+      addedToSpotify: false,
+      postedToTelegram: false,
+    });
   }
 
   await db.execute({
@@ -100,7 +129,7 @@ No database, Spotify, or Telegram changes were made.`);
       args: [message, track.trackId],
     });
 
-    throw new Error(`Spotify failed. Telegram was not posted.\n${message}`);
+    throw new CliError("spotify_failed", `Spotify failed. Telegram was not posted.\n${message}`);
   }
 
   try {
@@ -113,7 +142,8 @@ No database, Spotify, or Telegram changes were made.`);
       args: [new Date().toISOString(), track.trackId],
     });
   } catch (error) {
-    throw new Error(
+    throw new CliError(
+      "db_update_failed",
       `Spotify succeeded, but the database update failed. Telegram was not posted.\n${formatError(error)}`,
     );
   }
@@ -127,7 +157,7 @@ No database, Spotify, or Telegram changes were made.`);
       args: [message, track.trackId],
     });
 
-    throw new Error(`Spotify succeeded, but Telegram failed.\n${message}`);
+    throw new CliError("telegram_failed", `Spotify succeeded, but Telegram failed.\n${message}`);
   }
 
   try {
@@ -140,15 +170,28 @@ No database, Spotify, or Telegram changes were made.`);
       args: [new Date().toISOString(), track.trackId],
     });
   } catch (error) {
-    throw new Error(`Telegram posted, but the database update failed.\n${formatError(error)}`);
+    throw new CliError(
+      "db_update_failed",
+      `Telegram posted, but the database update failed.\n${formatError(error)}`,
+    );
   }
 
-  console.log(`📻 Transmission sent
+  const message = `📻 Transmission sent
 
 ${artistLine}
 
 ✅ Added to Spotify
-✅ Posted to Telegram`);
+✅ Posted to Telegram`;
+
+  if (!options.json) {
+    console.log(message);
+  }
+
+  return buildAddResult(track, message, {
+    dryRun: false,
+    addedToSpotify: true,
+    postedToTelegram: true,
+  });
 }
 
 function formatDuration(durationMs: number): string {
@@ -157,4 +200,29 @@ function formatDuration(durationMs: number): string {
   const seconds = totalSeconds % 60;
 
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function buildAddResult(
+  track: Awaited<ReturnType<typeof fetchTrackMetadata>>,
+  message: string,
+  status: {
+    dryRun: boolean;
+    addedToSpotify: boolean;
+    postedToTelegram: boolean;
+  },
+): AddCommandResult {
+  return {
+    track: {
+      trackId: track.trackId,
+      spotifyUrl: track.spotifyUrl,
+      title: track.title,
+      artists: track.artists,
+      album: track.album,
+      durationMs: track.durationMs,
+    },
+    dryRun: status.dryRun,
+    addedToSpotify: status.addedToSpotify,
+    postedToTelegram: status.postedToTelegram,
+    message,
+  };
 }

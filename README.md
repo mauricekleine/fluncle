@@ -7,6 +7,7 @@ Local Bun/TypeScript CLI for publishing drum & bass tracks to Fluncle's Finest o
 ```bash
 fluncle add "https://open.spotify.com/track/..." --note "Absolute weapon"
 fluncle add "https://open.spotify.com/track/..." --dry-run
+fluncle recent --json
 fluncle auth spotify
 ```
 
@@ -58,6 +59,45 @@ Migrations are dev commands, not public CLI commands:
 ```bash
 bun run db:generate
 bun run db:migrate
+```
+
+## Raycast Extension
+
+The Raycast extension lives in `raycast/`. It is a thin client over the CLI and does not talk directly to Spotify, Telegram, or Turso.
+
+### Commands
+
+- `Fluncle: Quick Add`: reads the clipboard and immediately runs `fluncle add <url>`.
+- `Fluncle: Add Track`: form with Spotify URL and optional note.
+- `Fluncle: Add Track with Note`: clipboard-aware form focused on adding a note.
+- `Fluncle: Recent Transmissions`: reads recent tracks through `fluncle recent --json`.
+
+### Local Development
+
+```bash
+cd raycast
+bun install
+bun run build
+bun run lint
+bun run dev
+```
+
+The extension has one required preference:
+
+```text
+Fluncle CLI Path
+```
+
+Set it to the absolute path of the local executable, for example:
+
+```text
+/Users/maurice/.local/bin/fluncle
+```
+
+The CLI must already be configured and authenticated locally. Test it before using Raycast:
+
+```bash
+fluncle recent --limit 3 --json
 ```
 
 ## Deploy To A VPS

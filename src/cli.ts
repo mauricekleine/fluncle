@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { parseArgs } from "node:util";
+import { printJson, toJsonFailure } from "./output";
 import { formatError } from "./retry";
 
 async function main(): Promise<void> {
@@ -14,6 +15,12 @@ async function main(): Promise<void> {
   if (command === "add") {
     const { addCommand } = await import("./commands/add");
     await runAdd([subcommand, ...rest].filter(Boolean), addCommand);
+    return;
+  }
+
+  if (command === "recent") {
+    const { recentCommand } = await import("./commands/recent");
+    await runRecent([subcommand, ...rest].filter(Boolean), recentCommand);
     return;
   }
 
@@ -41,6 +48,10 @@ async function runAdd(
         type: "boolean",
         default: false,
       },
+      json: {
+        type: "boolean",
+        default: false,
+      },
     },
   });
 
@@ -50,21 +61,76 @@ async function runAdd(
     throw new Error("Missing Spotify track URL");
   }
 
-  await addCommand(spotifyUrl, {
+  const result = await addCommand(spotifyUrl, {
     note: parsed.values.note,
     dryRun: parsed.values["dry-run"],
+    json: parsed.values.json,
   });
+
+  if (parsed.values.json) {
+    printJson({
+      ok: true,
+      ...result,
+    });
+  }
+}
+
+async function runRecent(
+  args: string[],
+  recentCommand: typeof import("./commands/recent").recentCommand,
+): Promise<void> {
+  const parsed = parseArgs({
+    args,
+    allowPositionals: false,
+    options: {
+      limit: {
+        type: "string",
+        default: "10",
+      },
+      json: {
+        type: "boolean",
+        default: false,
+      },
+    },
+  });
+
+  const limit = Number.parseInt(parsed.values.limit ?? "10", 10);
+
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error("Limit must be an integer between 1 and 100");
+  }
+
+  const transmissions = await recentCommand(limit);
+
+  if (parsed.values.json) {
+    printJson({
+      ok: true,
+      transmissions,
+    });
+    return;
+  }
+
+  console.log(
+    transmissions
+      .map((track) => `${track.artists.join(", ")} — ${track.title}`)
+      .join("\n"),
+  );
 }
 
 function printHelp(): void {
   console.log(`fluncle
 
 Commands:
-  fluncle add <spotify-url> [--note "text"] [--dry-run]
+  fluncle add <spotify-url> [--note "text"] [--dry-run] [--json]
+  fluncle recent [--limit 10] [--json]
   fluncle auth spotify`);
 }
 
 main().catch((error) => {
-  console.error(formatError(error));
+  if (process.argv.includes("--json")) {
+    printJson(toJsonFailure(error));
+  } else {
+    console.error(formatError(error));
+  }
   process.exit(1);
 });

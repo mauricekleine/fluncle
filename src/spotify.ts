@@ -1,5 +1,6 @@
 import { db } from "./db/client";
 import { loadEnv } from "./env";
+import { CliError } from "./output";
 
 const SPOTIFY_ACCOUNTS_BASE_URL = "https://accounts.spotify.com";
 const SPOTIFY_API_BASE_URL = "https://api.spotify.com/v1";
@@ -45,22 +46,28 @@ export type TrackMetadata = {
 };
 
 export function parseSpotifyTrackUrl(input: string): string {
+  const uriMatch = input.match(/^spotify:track:([A-Za-z0-9]{22})$/);
+
+  if (uriMatch) {
+    return uriMatch[1];
+  }
+
   let url: URL;
 
   try {
     url = new URL(input);
   } catch {
-    throw new Error("Invalid Spotify URL");
+    throw new CliError("invalid_spotify_url", "Invalid Spotify URL");
   }
 
   if (url.hostname !== "open.spotify.com") {
-    throw new Error("Invalid Spotify URL: expected open.spotify.com");
+    throw new CliError("invalid_spotify_url", "Invalid Spotify URL: expected open.spotify.com");
   }
 
   const [kind, trackId] = url.pathname.split("/").filter(Boolean);
 
   if (kind !== "track" || !trackId || !/^[A-Za-z0-9]{22}$/.test(trackId)) {
-    throw new Error("Invalid Spotify track URL");
+    throw new CliError("invalid_spotify_url", "Invalid Spotify track URL");
   }
 
   return trackId;

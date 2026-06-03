@@ -1,0 +1,65 @@
+{
+  "name": "fluncle-raycast",
+  "title": "Fluncle",
+  "description": "Publish tracks to Fluncle's Finest through the Fluncle CLI.",
+  "icon": "icon.png",
+  "author": "mauricekleine",
+  "license": "MIT",
+  "scripts": {
+    "dev": "ray develop",
+    "build": "ray build",
+    "lint": "ray lint"
+  },
+  "dependencies": {
+    "@raycast/api": "^1.104.19"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^2.0.4",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.9.3"
+  },
+  "preferences": [
+    {
+      "name": "flunclePath",
+      "title": "Fluncle CLI Path",
+      "description": "Absolute path to the fluncle executable.",
+      "type": "textfield",
+      "required": true,
+      "default": "/Users/maurice/.local/bin/fluncle"
+    }
+  ],
+  "commands": [
+    {
+      "name": "quick-add",
+      "title": "Quick Add",
+      "subtitle": "Fluncle",
+      "description": "Publish the Spotify track URL from your clipboard.",
+      "mode": "no-view",
+      "keywords": ["spotify", "track", "clipboard"]
+    },
+    {
+      "name": "add-track",
+      "title": "Add Track",
+      "subtitle": "Fluncle",
+      "description": "Publish a Spotify track with an optional note.",
+      "mode": "view",
+      "keywords": ["spotify", "track", "note"]
+    },
+    {
+      "name": "add-track-with-note",
+      "title": "Add Track with Note",
+      "subtitle": "Fluncle",
+      "description": "Use the Spotify track URL from your clipboard and add a note.",
+      "mode": "view",
+      "keywords": ["spotify", "track", "clipboard", "note"]
+    },
+    {
+      "name": "recent-transmissions",
+      "title": "Recent Transmissions",
+      "subtitle": "Fluncle",
+      "description": "Browse recently published Fluncle tracks.",
+      "mode": "view",
+      "keywords": ["archive", "recent", "history"]
+    }
+  ]
+}
