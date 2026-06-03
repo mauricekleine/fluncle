@@ -3,13 +3,15 @@ import type { TrackMetadata } from "./spotify";
 
 export function formatTelegramMessage(track: TrackMetadata, note?: string): string {
   const artistLine = `${track.artists.join(", ")} — ${track.title}`;
-  const noteLine = note?.trim() ? `${note.trim()}\n\n` : "";
+  const lines = [`📻 Fluncle's Finest`, "", artistLine];
 
-  return `📻 Fluncle's Finest
+  if (note?.trim()) {
+    lines.push(note.trim());
+  }
 
-${artistLine}
-${noteLine}
-🎧 Spotify: ${track.spotifyUrl}`;
+  lines.push("", `🎧 Spotify: ${track.spotifyUrl}`);
+
+  return lines.join("\n");
 }
 
 export async function postToTelegram(track: TrackMetadata, note?: string): Promise<void> {
