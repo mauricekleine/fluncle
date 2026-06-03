@@ -1,6 +1,4 @@
-import { eq } from "drizzle-orm";
 import { db } from "./db/client";
-import { spotifyAuth } from "./db/schema";
 import { loadEnv } from "./env";
 
 const SPOTIFY_ACCOUNTS_BASE_URL = "https://accounts.spotify.com";
@@ -28,6 +26,12 @@ type SpotifyTrackResponse = {
   external_urls?: {
     spotify?: string;
   };
+};
+
+type SpotifyAuthRow = {
+  access_token: string;
+  refresh_token: string;
+  expires_at: string;
 };
 
 export type TrackMetadata = {
@@ -137,29 +141,32 @@ export async function addTrackToPlaylist(track: TrackMetadata): Promise<void> {
 }
 
 async function getSpotifyAccessToken(): Promise<string> {
-  const [auth] = await db
-    .select()
-    .from(spotifyAuth)
-    .where(eq(spotifyAuth.service, "spotify"))
-    .limit(1);
+  const result = await db.execute({
+    sql: `select access_token, refresh_token, expires_at
+      from spotify_auth
+      where service = ?
+      limit 1`,
+    args: ["spotify"],
+  });
+  const auth = result.rows[0] as unknown as SpotifyAuthRow | undefined;
 
   if (!auth) {
     throw new Error("Spotify is not authenticated. Run: fluncle auth spotify");
   }
 
-  const expiresAt = new Date(auth.expiresAt).getTime();
+  const expiresAt = new Date(auth.expires_at).getTime();
   const refreshWindowMs = 60_000;
 
   if (expiresAt - refreshWindowMs > Date.now()) {
-    return auth.accessToken;
+    return auth.access_token;
   }
 
   const data = await requestToken({
     grant_type: "refresh_token",
-    refresh_token: auth.refreshToken,
+    refresh_token: auth.refresh_token,
   });
 
-  const refreshToken = data.refresh_token ?? auth.refreshToken;
+  const refreshToken = data.refresh_token ?? auth.refresh_token;
   await upsertSpotifyAuth(data.access_token, refreshToken, data.expires_in, data.scope);
 
   return data.access_token;
@@ -192,26 +199,30 @@ async function upsertSpotifyAuth(
   const now = new Date();
   const expiresAt = new Date(now.getTime() + expiresIn * 1000);
 
-  await db
-    .insert(spotifyAuth)
-    .values({
-      service: "spotify",
+  await db.execute({
+    sql: `insert into spotify_auth (
+        service,
+        access_token,
+        refresh_token,
+        expires_at,
+        scope,
+        updated_at
+      ) values (?, ?, ?, ?, ?, ?)
+      on conflict(service) do update set
+        access_token = excluded.access_token,
+        refresh_token = excluded.refresh_token,
+        expires_at = excluded.expires_at,
+        scope = excluded.scope,
+        updated_at = excluded.updated_at`,
+    args: [
+      "spotify",
       accessToken,
       refreshToken,
-      expiresAt: expiresAt.toISOString(),
+      expiresAt.toISOString(),
       scope,
-      updatedAt: now.toISOString(),
-    })
-    .onConflictDoUpdate({
-      target: spotifyAuth.service,
-      set: {
-        accessToken,
-        refreshToken,
-        expiresAt: expiresAt.toISOString(),
-        scope,
-        updatedAt: now.toISOString(),
-      },
-    });
+      now.toISOString(),
+    ],
+  });
 }
 
 async function spotifyFetch(

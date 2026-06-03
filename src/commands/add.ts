@@ -1,6 +1,4 @@
-import { eq } from "drizzle-orm";
 import { db } from "../db/client";
-import { tracks } from "../db/schema";
 import { formatError, withRetries } from "../retry";
 import { addTrackToPlaylist, fetchTrackMetadata, parseSpotifyTrackUrl } from "../spotify";
 import { formatTelegramMessage, postToTelegram } from "../telegram";
@@ -10,19 +8,30 @@ type AddOptions = {
   dryRun?: boolean;
 };
 
+type TrackRow = {
+  track_id: string;
+  title: string;
+  artists_json: string;
+  added_to_spotify: number;
+  posted_to_telegram: number;
+};
+
 export async function addCommand(spotifyUrl: string, options: AddOptions): Promise<void> {
   const trackId = parseSpotifyTrackUrl(spotifyUrl);
-  const [existing] = await db
-    .select()
-    .from(tracks)
-    .where(eq(tracks.trackId, trackId))
-    .limit(1);
+  const existingResult = await db.execute({
+    sql: `select track_id, title, artists_json, added_to_spotify, posted_to_telegram
+      from tracks
+      where track_id = ?
+      limit 1`,
+    args: [trackId],
+  });
+  const existing = existingResult.rows[0] as unknown as TrackRow | undefined;
 
   if (existing) {
-    const existingArtists = JSON.parse(existing.artistsJson) as string[];
+    const existingArtists = JSON.parse(existing.artists_json) as string[];
     const existingLine = `${existingArtists.join(", ")} — ${existing.title}`;
 
-    if (existing.addedToSpotify && existing.postedToTelegram) {
+    if (existing.added_to_spotify && existing.posted_to_telegram) {
       throw new Error(`Already published: ${existingLine}`);
     }
 
@@ -30,8 +39,8 @@ export async function addCommand(spotifyUrl: string, options: AddOptions): Promi
 
 ${existingLine}
 
-${existing.addedToSpotify ? "✅" : "❌"} Added to Spotify
-${existing.postedToTelegram ? "✅" : "❌"} Posted to Telegram`);
+${existing.added_to_spotify ? "✅" : "❌"} Added to Spotify
+${existing.posted_to_telegram ? "✅" : "❌"} Posted to Telegram`);
   }
 
   const track = await fetchTrackMetadata(trackId);
@@ -53,41 +62,56 @@ No database, Spotify, or Telegram changes were made.`);
     return;
   }
 
-  await db.insert(tracks).values({
-    trackId: track.trackId,
-    spotifyUrl: track.spotifyUrl,
-    spotifyUri: track.spotifyUri,
-    title: track.title,
-    artistsJson: JSON.stringify(track.artists),
-    album: track.album,
-    durationMs: track.durationMs,
-    note: options.note,
-    addedAt: new Date().toISOString(),
-    addedToSpotify: false,
-    postedToTelegram: false,
+  await db.execute({
+    sql: `insert into tracks (
+        track_id,
+        spotify_url,
+        spotify_uri,
+        title,
+        artists_json,
+        album,
+        duration_ms,
+        note,
+        added_at,
+        added_to_spotify,
+        posted_to_telegram
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [
+      track.trackId,
+      track.spotifyUrl,
+      track.spotifyUri,
+      track.title,
+      JSON.stringify(track.artists),
+      track.album ?? null,
+      track.durationMs,
+      options.note ?? null,
+      new Date().toISOString(),
+      0,
+      0,
+    ],
   });
 
   try {
     await withRetries("Spotify playlist add", () => addTrackToPlaylist(track));
   } catch (error) {
     const message = formatError(error);
-    await db
-      .update(tracks)
-      .set({ spotifyError: message })
-      .where(eq(tracks.trackId, track.trackId));
+    await db.execute({
+      sql: `update tracks set spotify_error = ? where track_id = ?`,
+      args: [message, track.trackId],
+    });
 
     throw new Error(`Spotify failed. Telegram was not posted.\n${message}`);
   }
 
   try {
-    await db
-      .update(tracks)
-      .set({
-        addedToSpotify: true,
-        addedToSpotifyAt: new Date().toISOString(),
-        spotifyError: null,
-      })
-      .where(eq(tracks.trackId, track.trackId));
+    await db.execute({
+      sql: `update tracks
+        set added_to_spotify = 1,
+          added_to_spotify_at = ?,
+          spotify_error = null
+        where track_id = ?`,
+      args: [new Date().toISOString(), track.trackId],
+    });
   } catch (error) {
     throw new Error(
       `Spotify succeeded, but the database update failed. Telegram was not posted.\n${formatError(error)}`,
@@ -98,23 +122,23 @@ No database, Spotify, or Telegram changes were made.`);
     await withRetries("Telegram post", () => postToTelegram(track, options.note));
   } catch (error) {
     const message = formatError(error);
-    await db
-      .update(tracks)
-      .set({ telegramError: message })
-      .where(eq(tracks.trackId, track.trackId));
+    await db.execute({
+      sql: `update tracks set telegram_error = ? where track_id = ?`,
+      args: [message, track.trackId],
+    });
 
     throw new Error(`Spotify succeeded, but Telegram failed.\n${message}`);
   }
 
   try {
-    await db
-      .update(tracks)
-      .set({
-        postedToTelegram: true,
-        postedToTelegramAt: new Date().toISOString(),
-        telegramError: null,
-      })
-      .where(eq(tracks.trackId, track.trackId));
+    await db.execute({
+      sql: `update tracks
+        set posted_to_telegram = 1,
+          posted_to_telegram_at = ?,
+          telegram_error = null
+        where track_id = ?`,
+      args: [new Date().toISOString(), track.trackId],
+    });
   } catch (error) {
     throw new Error(`Telegram posted, but the database update failed.\n${formatError(error)}`);
   }
