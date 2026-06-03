@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fluncle Operator"
+  short_description: "Maintain Fluncle CLI, Raycast, and VPS workflows"
+  default_prompt: "Use $fluncle-operator to make a Fluncle CLI, Raycast, or VPS deployment change."
