@@ -1,15 +1,9 @@
 import { createClient } from "@libsql/client/web";
 import { createFileRoute } from "@tanstack/react-router";
-import { config } from "dotenv";
-
-if (import.meta.env.DEV) {
-  config({ path: ".env.local" });
-  config({ path: "../../.env.local" });
-  config();
-}
 
 const defaultLimit = 16;
 const maxLimit = 48;
+let didLoadLocalEnv = false;
 
 type Cursor = {
   addedAt: string;
@@ -29,6 +23,8 @@ export const Route = createFileRoute("/api/tracks")({
   server: {
     handlers: {
       GET: async ({ request }) => {
+        await loadLocalEnv();
+
         const url = new URL(request.url);
         const limit = parseLimit(url.searchParams.get("limit"));
         const cursor = parseCursor(url.searchParams.get("cursor"));
@@ -81,6 +77,20 @@ export const Route = createFileRoute("/api/tracks")({
     },
   },
 });
+
+async function loadLocalEnv(): Promise<void> {
+  if (!import.meta.env.DEV || didLoadLocalEnv) {
+    return;
+  }
+
+  const { config } = await import("dotenv");
+
+  config({ path: ".env.local" });
+  config({ path: "../../.env.local" });
+  config();
+
+  didLoadLocalEnv = true;
+}
 
 function parseLimit(value: string | null): number {
   if (!value) {
