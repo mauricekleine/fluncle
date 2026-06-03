@@ -12,6 +12,7 @@ type Cursor = {
 
 type TrackRow = {
   added_at: string;
+  album_image_url: string | null;
   artists_json: string;
   note: string | null;
   spotify_url: string;
@@ -48,6 +49,7 @@ export const Route = createFileRoute("/api/tracks")({
               track_id,
               spotify_url,
               title,
+              album_image_url,
               artists_json,
               note,
               added_at
@@ -78,6 +80,7 @@ export const Route = createFileRoute("/api/tracks")({
           totalCount,
           tracks: visibleRows.map((row) => ({
             addedAt: row.added_at,
+            albumImageUrl: row.album_image_url ?? undefined,
             artists: parseArtists(row.artists_json),
             note: row.note?.trim() ? row.note : undefined,
             spotifyUrl: row.spotify_url,

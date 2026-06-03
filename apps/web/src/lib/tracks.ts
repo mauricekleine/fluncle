@@ -1,5 +1,6 @@
 export type Track = {
   addedAt: string;
+  albumImageUrl?: string;
   artists: string[];
   note?: string;
   spotifyUrl: string;

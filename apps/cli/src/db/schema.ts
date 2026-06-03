@@ -5,6 +5,7 @@ export const tracks = sqliteTable("tracks", {
   addedToSpotify: integer("added_to_spotify", { mode: "boolean" }).notNull().default(false),
   addedToSpotifyAt: text("added_to_spotify_at"),
   album: text("album"),
+  albumImageUrl: text("album_image_url"),
   artistsJson: text("artists_json").notNull(),
   durationMs: integer("duration_ms").notNull(),
   note: text("note"),

@@ -17,6 +17,7 @@ export type AddCommandResult = {
     title: string;
     artists: string[];
     album?: string;
+    albumImageUrl?: string;
     durationMs: number;
   };
   dryRun: boolean;
@@ -102,6 +103,7 @@ No database, Spotify, or Telegram changes were made.`;
       track.title,
       JSON.stringify(track.artists),
       track.album ?? null,
+      track.albumImageUrl ?? null,
       track.durationMs,
       options.note ?? null,
       new Date().toISOString(),
@@ -115,12 +117,13 @@ No database, Spotify, or Telegram changes were made.`;
         title,
         artists_json,
         album,
+        album_image_url,
         duration_ms,
         note,
         added_at,
         added_to_spotify,
         posted_to_telegram
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 
   try {
@@ -221,6 +224,7 @@ function buildAddResult(
     postedToTelegram: status.postedToTelegram,
     track: {
       album: track.album,
+      albumImageUrl: track.albumImageUrl,
       artists: track.artists,
       durationMs: track.durationMs,
       spotifyUrl: track.spotifyUrl,

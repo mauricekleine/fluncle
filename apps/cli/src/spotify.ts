@@ -13,12 +13,19 @@ type SpotifyTokenResponse = {
   scope: string;
 };
 
+type SpotifyImage = {
+  height?: number;
+  url: string;
+  width?: number;
+};
+
 type SpotifyTrackResponse = {
   id: string;
   name: string;
   uri: string;
   duration_ms: number;
   album?: {
+    images?: SpotifyImage[];
     name?: string;
   };
   artists: Array<{
@@ -42,6 +49,7 @@ export type TrackMetadata = {
   title: string;
   artists: string[];
   album?: string;
+  albumImageUrl?: string;
   durationMs: number;
 };
 
@@ -123,6 +131,7 @@ export async function fetchTrackMetadata(trackId: string): Promise<TrackMetadata
 
   return {
     album: data.album?.name,
+    albumImageUrl: selectAlbumImageUrl(data.album?.images),
     artists: data.artists.map((artist) => artist.name),
     durationMs: data.duration_ms,
     spotifyUri: data.uri,
@@ -130,6 +139,18 @@ export async function fetchTrackMetadata(trackId: string): Promise<TrackMetadata
     title: data.name,
     trackId: data.id,
   };
+}
+
+function selectAlbumImageUrl(images: SpotifyImage[] | undefined): string | undefined {
+  if (!images?.length) {
+    return undefined;
+  }
+
+  return (
+    [...images]
+      .sort((left, right) => (left.width ?? 0) - (right.width ?? 0))
+      .find((image) => (image.width ?? 0) >= 300)?.url ?? images[0]?.url
+  );
 }
 
 export async function addTrackToPlaylist(track: TrackMetadata): Promise<void> {
