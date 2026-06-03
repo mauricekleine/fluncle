@@ -1,6 +1,9 @@
 import { config } from "dotenv";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 config({ path: ".env.local" });
+config({ path: join(homedir(), ".config/fluncle/.env.local") });
 config();
 
 const requiredKeys = [
