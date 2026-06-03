@@ -60,6 +60,56 @@ bun run db:generate
 bun run db:migrate
 ```
 
+## Deploy To A VPS
+
+The VPS does not need the source checkout. Build a standalone Linux binary locally, copy it to the server, and place config in the operator user's config directory.
+
+### 1. Build The Binary
+
+For a typical Linux x64 VPS:
+
+```bash
+bun build ./src/cli.ts --compile --target=bun-linux-x64-baseline --outfile ./dist/fluncle
+```
+
+For ARM64 Linux:
+
+```bash
+bun build ./src/cli.ts --compile --target=bun-linux-arm64 --outfile ./dist/fluncle
+```
+
+### 2. Copy Files To The Server
+
+Replace `<host>` with your SSH target:
+
+```bash
+scp ./dist/fluncle ./.env.local <host>:/tmp/
+```
+
+### 3. Install On The Server
+
+Run on the server:
+
+```bash
+mkdir -p ~/.config/fluncle
+install -m 600 /tmp/.env.local ~/.config/fluncle/.env.local
+sudo install -m 755 /tmp/fluncle /usr/local/bin/fluncle
+rm -f /tmp/fluncle /tmp/.env.local
+```
+
+The CLI loads config from:
+
+```text
+~/.config/fluncle/.env.local
+```
+
+### 4. Verify
+
+```bash
+fluncle --help
+fluncle add "https://open.spotify.com/track/..." --dry-run
+```
+
 ## Publish Flow
 
 `fluncle add` checks Turso for duplicates by Spotify track id. It inserts a pending row first, then adds the track to Spotify, then posts to Telegram. Each external operation is retried three times.
