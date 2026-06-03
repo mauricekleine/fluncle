@@ -88,7 +88,16 @@ The extension has one required preference:
 Fluncle CLI Path
 ```
 
-Set it to the absolute path of the local executable, for example:
+Raycast runs with a minimal shell environment, so this should point to a standalone binary rather than a Bun-linked script. Build and install one locally:
+
+```bash
+bun build ./src/cli.ts --compile --target=bun-darwin-arm64 --outfile ./dist/fluncle-darwin-arm64
+mkdir -p ~/.config/fluncle
+install -m 600 ./.env.local ~/.config/fluncle/.env.local
+install -m 755 ./dist/fluncle-darwin-arm64 ~/.local/bin/fluncle
+```
+
+Set the preference to:
 
 ```text
 /Users/maurice/.local/bin/fluncle
