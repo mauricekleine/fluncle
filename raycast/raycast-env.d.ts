@@ -20,8 +20,6 @@ declare namespace Preferences {
   export type QuickAdd = ExtensionPreferences & {}
   /** Preferences accessible in the `add-track` command */
   export type AddTrack = ExtensionPreferences & {}
-  /** Preferences accessible in the `add-track-with-note` command */
-  export type AddTrackWithNote = ExtensionPreferences & {}
   /** Preferences accessible in the `recent-transmissions` command */
   export type RecentTransmissions = ExtensionPreferences & {}
 }
@@ -31,8 +29,6 @@ declare namespace Arguments {
   export type QuickAdd = {}
   /** Arguments passed to the `add-track` command */
   export type AddTrack = {}
-  /** Arguments passed to the `add-track-with-note` command */
-  export type AddTrackWithNote = {}
   /** Arguments passed to the `recent-transmissions` command */
   export type RecentTransmissions = {}
 }

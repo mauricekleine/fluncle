@@ -46,14 +46,6 @@
       "keywords": ["spotify", "track", "note"]
     },
     {
-      "name": "add-track-with-note",
-      "title": "Add Track with Note",
-      "subtitle": "Fluncle",
-      "description": "Use the Spotify track URL from your clipboard and add a note.",
-      "mode": "view",
-      "keywords": ["spotify", "track", "clipboard", "note"]
-    },
-    {
       "name": "recent-transmissions",
       "title": "Recent Transmissions",
       "subtitle": "Fluncle",

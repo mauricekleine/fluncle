@@ -69,7 +69,6 @@ The Raycast extension lives in `raycast/`. It is a thin client over the CLI and 
 
 - `Fluncle: Quick Add`: reads the clipboard and immediately runs `fluncle add <url>`.
 - `Fluncle: Add Track`: form with Spotify URL and optional note.
-- `Fluncle: Add Track with Note`: clipboard-aware form focused on adding a note.
 - `Fluncle: Recent Transmissions`: reads recent tracks through `fluncle recent --json`.
 
 ### Local Development
