@@ -18,7 +18,7 @@
 :root {
   color-scheme: dark;
   --accent: #f5b800;
-  --accent-foreground: #090a0b;
+  --accent-foreground: #151006;
   --accent-strong: #ffd057;
   --background: #090a0b;
   --border: rgb(208 185 144 / 16%);
@@ -30,7 +30,7 @@
   --muted: rgb(208 185 144 / 10%);
   --muted-foreground: #b7ab95;
   --primary: #f5b800;
-  --primary-foreground: #090a0b;
+  --primary-foreground: #151006;
   --radius-md: 0.5rem;
   --ring: #f5b800;
   --secondary: #171611;
@@ -112,6 +112,10 @@ a,
   border: 1px solid var(--border);
   border-radius: 12px;
   overflow: hidden;
+}
+
+.playlist-scroll {
+  max-height: clamp(23rem, 48vh, 32rem);
 }
 
 .playlist-header {

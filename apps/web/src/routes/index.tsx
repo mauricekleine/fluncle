@@ -10,12 +10,14 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { type KeyboardEvent } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { spotifyPlaylistUrl, telegramUrl } from "@/lib/fluncle-links";
 import { fetchTracks, type Track } from "@/lib/tracks";
 import { cn } from "@/lib/utils";
 
-const pageSize = 2;
+const notePrefix = "Fluncle's thoughts:";
+const pageSize = 10;
 
 export const Route = createFileRoute("/")({
   component: HomePage,
@@ -147,8 +149,8 @@ function HomePage() {
             </nav>
           </header>
 
-          <div className="grid flex-1 content-center gap-10 py-8 lg:grid-cols-[280px_minmax(0,1fr)] lg:items-center">
-            <aside className="mx-auto w-full max-w-72 lg:mx-0">
+          <div className="grid flex-1 content-center gap-10 py-8 lg:grid-cols-[280px_minmax(0,1fr)] lg:items-start">
+            <aside className="mx-auto w-full max-w-72 lg:mx-0 lg:pt-7">
               <div className="cover-frame">
                 <img
                   alt="Fluncle cover art"
@@ -212,11 +214,13 @@ function HomePage() {
                 ) : undefined}
 
                 {!isLoading && tracks.length > 0 ? (
-                  <ol className="playlist-list">
-                    {tracks.map((track, index) => (
-                      <TrackRow index={index + 1} key={track.trackId} track={track} />
-                    ))}
-                  </ol>
+                  <ScrollArea className="playlist-scroll">
+                    <ol className="playlist-list">
+                      {tracks.map((track, index) => (
+                        <TrackRow index={index + 1} key={track.trackId} track={track} />
+                      ))}
+                    </ol>
+                  </ScrollArea>
                 ) : undefined}
               </div>
 
@@ -271,7 +275,11 @@ function TrackRow({ index, track }: { index: number; track: Track }) {
         <span className="mt-1 block text-pretty break-words text-sm text-[var(--muted-foreground)]">
           {track.artists.join(", ")}
         </span>
-        {track.note ? <span className="track-note">{track.note}</span> : undefined}
+        {track.note ? (
+          <span className="track-note">
+            <span className="font-semibold">{notePrefix}</span> {track.note}
+          </span>
+        ) : undefined}
       </span>
       <time
         className="hidden text-right text-sm text-[var(--muted-foreground)] sm:block"

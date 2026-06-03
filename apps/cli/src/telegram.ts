@@ -1,12 +1,14 @@
 import { loadEnv } from "./env";
 import { type TrackMetadata } from "./spotify";
 
+const notePrefix = "Fluncle's thoughts:";
+
 export function formatTelegramMessage(track: TrackMetadata, note?: string): string {
   const artistLine = `${track.artists.join(", ")} — ${track.title}`;
   const lines = [`📻 Fluncle's Finest`, "", artistLine];
 
   if (note?.trim()) {
-    lines.push(note.trim());
+    lines.push(`${notePrefix} ${note.trim()}`);
   }
 
   lines.push("", `🎧 Spotify: ${track.spotifyUrl}`);
