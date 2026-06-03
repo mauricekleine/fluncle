@@ -47,6 +47,12 @@ export const Route = createRootRoute({
         name: "description",
       },
     ],
+    scripts: [
+      {
+        async: true,
+        src: "https://scripts.simpleanalyticscdn.com/latest.js",
+      },
+    ],
   }),
 });
 
