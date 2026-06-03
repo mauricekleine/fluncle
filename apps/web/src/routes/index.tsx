@@ -8,7 +8,7 @@ import {
 } from "@phosphor-icons/react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { type KeyboardEvent } from "react";
+import { type CSSProperties, type KeyboardEvent } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -29,6 +29,7 @@ function HomePage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | undefined>();
+  const [totalCount, setTotalCount] = useState(0);
   const [tracks, setTracks] = useState<Track[]>([]);
 
   useEffect(() => {
@@ -41,6 +42,7 @@ function HomePage() {
         }
 
         setNextCursor(result.nextCursor);
+        setTotalCount(result.totalCount);
         setTracks(result.tracks);
       })
       .catch((caughtError: unknown) => {
@@ -77,6 +79,7 @@ function HomePage() {
 
       setCursor(nextCursor);
       setNextCursor(result.nextCursor);
+      setTotalCount(result.totalCount);
       setTracks((currentTracks) => [...currentTracks, ...result.tracks]);
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : String(caughtError));
@@ -86,6 +89,10 @@ function HomePage() {
   }
 
   const latestDate = useMemo(() => tracks[0]?.addedAt, [tracks]);
+  const trackNumberBase = totalCount || tracks.length;
+  const playlistScrollStyle = {
+    "--playlist-row-count": tracks.length,
+  } as CSSProperties;
 
   return (
     <TooltipProvider>
@@ -108,7 +115,7 @@ function HomePage() {
               <span className="leading-tight">
                 <span className="block text-lg font-bold tracking-normal">Fluncle</span>
                 <span className="block text-sm text-[var(--muted-foreground)]">
-                  Finest transmissions
+                  Daily Drum & Bass
                 </span>
               </span>
             </a>
@@ -150,7 +157,7 @@ function HomePage() {
           </header>
 
           <div className="grid flex-1 content-center gap-10 py-8 lg:grid-cols-[280px_minmax(0,1fr)] lg:items-start">
-            <aside className="mx-auto w-full max-w-72 lg:mx-0 lg:pt-7">
+            <aside className="mx-auto w-full max-w-72 lg:mx-0">
               <div className="cover-frame">
                 <img
                   alt="Fluncle cover art"
@@ -162,6 +169,7 @@ function HomePage() {
               </div>
               <div className="mt-5 flex items-center justify-center gap-2 lg:justify-start">
                 <Button
+                  className="flex-1"
                   nativeButton={false}
                   render={<a href={spotifyPlaylistUrl} rel="noreferrer" target="_blank" />}
                 >
@@ -169,6 +177,7 @@ function HomePage() {
                   Play playlist
                 </Button>
                 <Button
+                  className="flex-1"
                   nativeButton={false}
                   render={<a href={telegramUrl} rel="noreferrer" target="_blank" />}
                   variant="outline"
@@ -184,7 +193,7 @@ function HomePage() {
                 <div>
                   <p className="mb-2 flex items-center gap-2 text-sm font-medium text-[var(--accent)]">
                     <MusicNotes aria-hidden="true" size={18} weight="fill" />
-                    Drum & bass, freshly logged
+                    Daily Drum & Bass
                   </p>
                   <h1
                     className="max-w-2xl text-balance text-4xl font-black leading-[0.95] text-[var(--foreground)] sm:text-5xl"
@@ -214,10 +223,14 @@ function HomePage() {
                 ) : undefined}
 
                 {!isLoading && tracks.length > 0 ? (
-                  <ScrollArea className="playlist-scroll">
+                  <ScrollArea className="playlist-scroll" style={playlistScrollStyle}>
                     <ol className="playlist-list">
                       {tracks.map((track, index) => (
-                        <TrackRow index={index + 1} key={track.trackId} track={track} />
+                        <TrackRow
+                          key={track.trackId}
+                          track={track}
+                          trackNumber={trackNumberBase - index}
+                        />
                       ))}
                     </ol>
                   </ScrollArea>
@@ -246,7 +259,7 @@ function HomePage() {
   );
 }
 
-function TrackRow({ index, track }: { index: number; track: Track }) {
+function TrackRow({ track, trackNumber }: { track: Track; trackNumber: number }) {
   function openTrack(): void {
     window.open(track.spotifyUrl, "_blank", "noopener,noreferrer");
   }
@@ -267,7 +280,7 @@ function TrackRow({ index, track }: { index: number; track: Track }) {
       role="button"
       tabIndex={0}
     >
-      <span className="track-index">{index.toString().padStart(2, "0")}</span>
+      <span className="track-index">#{trackNumber.toString().padStart(2, "0")}</span>
       <span className="min-w-0">
         <span className="block text-pretty break-words font-semibold text-[var(--foreground)]">
           {track.title}

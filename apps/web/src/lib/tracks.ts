@@ -9,6 +9,7 @@ export type Track = {
 
 export type TracksResponse = {
   nextCursor?: string;
+  totalCount: number;
   tracks: Track[];
 };
 

@@ -19,6 +19,10 @@ type TrackRow = {
   track_id: string;
 };
 
+type TrackCountRow = {
+  total_count: number;
+};
+
 export const Route = createFileRoute("/api/tracks")({
   server: {
     handlers: {
@@ -37,9 +41,10 @@ export const Route = createFileRoute("/api/tracks")({
           : [limit + 1];
         const where = cursor ? "where added_at < ? or (added_at = ? and track_id < ?)" : "";
 
-        const result = await db.execute({
-          args,
-          sql: `select
+        const [result, countResult] = await Promise.all([
+          db.execute({
+            args,
+            sql: `select
               track_id,
               spotify_url,
               title,
@@ -50,11 +55,17 @@ export const Route = createFileRoute("/api/tracks")({
             ${where}
             order by added_at desc, track_id desc
             limit ?`,
-        });
+          }),
+          db.execute({
+            sql: `select count(*) as total_count from tracks`,
+          }),
+        ]);
         const rows = result.rows as unknown as TrackRow[];
+        const countRows = countResult.rows as unknown as TrackCountRow[];
         const visibleRows = rows.slice(0, limit);
         const hasMore = rows.length > limit;
         const lastVisibleRow = visibleRows.at(-1);
+        const totalCount = Number(countRows[0]?.total_count ?? visibleRows.length);
 
         return Response.json({
           nextCursor:
@@ -64,6 +75,7 @@ export const Route = createFileRoute("/api/tracks")({
                   trackId: lastVisibleRow.track_id,
                 })
               : undefined,
+          totalCount,
           tracks: visibleRows.map((row) => ({
             addedAt: row.added_at,
             artists: parseArtists(row.artists_json),
