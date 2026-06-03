@@ -157,7 +157,7 @@ function HomePage() {
           </header>
 
           <div className="grid flex-1 content-center gap-10 py-8 lg:grid-cols-[280px_minmax(0,1fr)] lg:items-start">
-            <aside className="mx-auto w-full max-w-72 lg:mx-0">
+            <aside className="mx-auto w-full max-w-72 lg:mx-0 lg:pt-[6.125rem]">
               <div className="cover-frame">
                 <img
                   alt="Fluncle cover art"
