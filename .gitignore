@@ -1,5 +1,12 @@
 .env
 .env.local
-node_modules
-dist
-.DS_Store
+.dev.vars
+.turbo/
+.wrangler/
+node_modules/
+dist/
+build/
+.output/
+apps/*/dist/
+apps/*/.output/
+apps/*/.wrangler/

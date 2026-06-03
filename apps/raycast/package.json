@@ -1,0 +1,72 @@
+{
+  "name": "fluncle-raycast",
+  "description": "Publish tracks to Fluncle's Finest through the Fluncle CLI.",
+  "license": "MIT",
+  "author": "mauricekleine",
+  "scripts": {
+    "build": "ray build",
+    "dev": "ray develop",
+    "lint": "ray lint",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@raycast/api": "^1.104.19",
+    "react": "^19.2.1"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^2.0.4",
+    "@types/node": "catalog:",
+    "@types/react": "^19.2.3",
+    "typescript": "catalog:"
+  },
+  "icon": "icon.png",
+  "commands": [
+    {
+      "name": "quick-add",
+      "title": "Quick Add",
+      "subtitle": "Fluncle",
+      "description": "Publish the Spotify track URL from your clipboard.",
+      "mode": "no-view",
+      "keywords": [
+        "spotify",
+        "track",
+        "clipboard"
+      ]
+    },
+    {
+      "name": "add-track",
+      "title": "Add Track",
+      "subtitle": "Fluncle",
+      "description": "Publish a Spotify track with an optional note.",
+      "mode": "view",
+      "keywords": [
+        "spotify",
+        "track",
+        "note"
+      ]
+    },
+    {
+      "name": "recent-transmissions",
+      "title": "Recent Transmissions",
+      "subtitle": "Fluncle",
+      "description": "Browse recently published Fluncle tracks.",
+      "mode": "view",
+      "keywords": [
+        "archive",
+        "recent",
+        "history"
+      ]
+    }
+  ],
+  "preferences": [
+    {
+      "name": "flunclePath",
+      "title": "Fluncle CLI Path",
+      "description": "Absolute path to the fluncle executable.",
+      "type": "textfield",
+      "required": true,
+      "default": "/Users/maurice/.local/bin/fluncle"
+    }
+  ],
+  "title": "Fluncle"
+}

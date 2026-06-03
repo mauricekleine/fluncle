@@ -1,11 +1,11 @@
 ---
 name: fluncle-operator
-description: Use when working in the Fluncle repository on the Bun/TypeScript CLI, Turso-backed publishing flow, Spotify/Telegram integration, Raycast extension, local standalone binary setup, or VPS deployment. Triggers include changes to `src/`, `raycast/`, CLI JSON output, `fluncle recent`, Raycast command behavior, `.env.local` handling, or standalone binary deployment.
+description: Use when working in the Fluncle repository on the Bun/Turborepo monorepo, CLI, Turso-backed publishing flow, Spotify/Telegram integration, Raycast extension, TanStack Start web app, local standalone binary setup, or VPS deployment. Triggers include changes to `apps/cli/src/`, `apps/raycast/`, `apps/web/`, CLI JSON output, `fluncle recent`, Raycast command behavior, `.env.local` handling, or standalone binary deployment.
 ---
 
 # Fluncle Operator
 
-Use this skill to preserve the core Fluncle architecture: the CLI is the source of truth. Raycast and deployment surfaces should call `fluncle`; they should not reimplement Spotify, Telegram, or Turso behavior.
+Use this skill to preserve the core Fluncle architecture: the CLI is the source of truth for publishing mutations. Raycast and deployment surfaces should call `fluncle`; they should not reimplement Spotify, Telegram, or Turso mutation behavior. The public web app can read Turso through TanStack Start API routes only.
 
 ## Start Here
 
@@ -20,6 +20,7 @@ rg --files -g '!node_modules' -g '!dist'
 
 - CLI behavior or JSON contracts: read `references/cli-contract.md`.
 - Raycast commands, local install, or command refresh issues: read `references/raycast.md`.
+- Public web app or fluncle.com changes: keep reads inside `apps/web/src/routes/api` route handlers and do not use TanStack server functions.
 - VPS install or standalone binary deployment: read `references/vps-deploy.md`.
 
 3. Keep `.env.local`, `node_modules`, `dist`, and generated temporary assets out of commits.
@@ -30,15 +31,22 @@ Run checks matching the touched surface:
 
 ```bash
 bun run typecheck
-fluncle recent --limit 1 --json
+bun run --cwd apps/cli fluncle recent --limit 1 --json
 ```
 
 For Raycast changes:
 
 ```bash
-cd raycast
-bun run build
-bun run lint
+bun run --cwd apps/raycast build
+bun run --cwd apps/raycast lint
+```
+
+For web changes:
+
+```bash
+bun run --cwd apps/web typecheck
+bun run --cwd apps/web build
+bun run --cwd apps/web lint
 ```
 
 For CLI changes that affect deployment, rebuild and verify the local or VPS standalone binary. See the deployment references.
@@ -49,3 +57,4 @@ For CLI changes that affect deployment, rebuild and verify the local or VPS stan
 - After changing Raycast command manifests, `bun run build` may compile but Raycast may keep stale command indexing. Run `bun run dev` briefly to refresh, then stop it.
 - `fluncle add` intentionally treats Spotify track IDs as case-sensitive.
 - `fluncle recent` and Raycast recent transmissions must read through the CLI, not directly through Turso.
+- `apps/web` is read-only. It may query Turso through API routes such as `/api/tracks`, but it must not publish to Spotify or Telegram.

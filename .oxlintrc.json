@@ -1,0 +1,25 @@
+{
+  "ignorePatterns": [
+    ".agents/skills/**",
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/.output/**",
+    "**/build/**",
+    "apps/web/src/routeTree.gen.ts"
+  ],
+  "plugins": ["eslint", "import", "oxc", "react", "typescript", "unicorn"],
+  "rules": {
+    "curly": "error",
+    "eslint/sort-keys": "error",
+    "import/consistent-type-specifier-style": ["error", "prefer-inline"],
+    "no-unused-vars": "warn",
+    "typescript/consistent-type-definitions": ["error", "type"],
+    "unicorn/filename-case": [
+      "error",
+      {
+        "case": "kebabCase"
+      }
+    ],
+    "unicorn/no-null": "off"
+  }
+}

@@ -7,13 +7,13 @@ The VPS does not need the source checkout. Deploy a standalone Linux binary and 
 For x64 Linux:
 
 ```bash
-bun build ./src/cli.ts --compile --target=bun-linux-x64-baseline --outfile ./dist/fluncle
+bun run --cwd apps/cli build:vps
 ```
 
 For ARM64 Linux:
 
 ```bash
-bun build ./src/cli.ts --compile --target=bun-linux-arm64 --outfile ./dist/fluncle
+bun build ./apps/cli/src/cli.ts --compile --target=bun-linux-arm64 --outfile ./apps/cli/dist/fluncle
 ```
 
 ## Copy
@@ -21,7 +21,7 @@ bun build ./src/cli.ts --compile --target=bun-linux-arm64 --outfile ./dist/flunc
 Replace `<host>` with the SSH target:
 
 ```bash
-scp ./dist/fluncle ./.env.local <host>:/tmp/
+scp ./apps/cli/dist/fluncle ./.env.local <host>:/tmp/
 ```
 
 ## Install On Server

@@ -1,0 +1,40 @@
+{
+  "name": "@fluncle/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "deploy": "vite build && wrangler deploy",
+    "dev": "vite dev --host 127.0.0.1 --port 3000",
+    "lint": "oxlint --type-aware",
+    "preview": "vite build && wrangler dev",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@base-ui/react": "^1.0.0-beta.4",
+    "@libsql/client": "catalog:",
+    "@phosphor-icons/react": "^2.1.10",
+    "@tailwindcss/vite": "^4.1.17",
+    "@tanstack/react-router": "^1.139.3",
+    "@tanstack/react-start": "^1.139.3",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "dotenv": "catalog:",
+    "lucide-react": "^0.468.0",
+    "nitro": "^3.0.260522-beta",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.1",
+    "tailwind-merge": "^3.3.1",
+    "tailwindcss": "^4.1.17"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.13.3",
+    "@types/react": "^19.2.3",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "typescript": "catalog:",
+    "vite": "^7.2.4",
+    "wrangler": "^4.50.0"
+  }
+}

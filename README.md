@@ -1,21 +1,37 @@
-# Fluncle CLI
+# Fluncle
 
-Local Bun/TypeScript CLI for publishing drum & bass tracks to Fluncle's Finest on Spotify and Telegram.
+Fluncle publishes drum & bass tracks to Fluncle's Finest on Spotify and Telegram, then shows the public archive on fluncle.com.
 
-## Commands
+## Monorepo Layout
 
-```bash
-fluncle add "https://open.spotify.com/track/..." --note "Absolute weapon"
-fluncle add "https://open.spotify.com/track/..." --dry-run
-fluncle recent --json
-fluncle auth spotify
+```text
+apps/cli      Bun/TypeScript CLI. Source of truth for publishing mutations.
+apps/raycast  Raycast extension. Thin client that shells out to the CLI.
+apps/web      TanStack Start public web app for read-only playlist browsing.
 ```
 
-## Operator Manual
+The CLI owns Spotify, Telegram, and Turso mutations. Raycast must keep calling `fluncle`. The web app may read Turso only through TanStack Start API routes in `apps/web/src/routes/api`; do not use server functions for database access.
 
-### 1. Environment
+## Root Workflows
 
-Copy `.env.example` to `.env.local` and fill the missing Spotify and Telegram values. The Turso values are generated during setup.
+```bash
+bun install
+bun run dev
+bun run build
+bun run typecheck
+bun run lint
+bun run lint:fix
+bun run format
+bun run format:check
+bun run check
+bun run check:fix
+```
+
+Root scripts are orchestrated with Turborepo. `oxlint` and `oxfmt` run from the root with workspace-aware configs.
+
+## Environment
+
+Copy `.env.example` to `.env.local` and fill the missing values:
 
 ```bash
 SPOTIFY_CLIENT_ID=
@@ -28,60 +44,38 @@ TELEGRAM_CHANNEL_ID=
 
 TURSO_DATABASE_URL=
 TURSO_AUTH_TOKEN=
+
+VITE_FLUNCLE_SPOTIFY_PLAYLIST_URL=
+VITE_FLUNCLE_TELEGRAM_URL=
 ```
 
-### 2. Spotify
+Use a read-only Turso token for web deployments.
 
-1. Create a Spotify app in the Spotify Developer Dashboard.
-2. Add this redirect URI to the app: `http://127.0.0.1:8787/callback`.
-3. Put the client ID, client secret, and playlist ID in `.env.local`.
-4. Run:
+## CLI
 
 ```bash
-bun run fluncle auth spotify
+bun run --cwd apps/cli fluncle add "https://open.spotify.com/track/..." --note "Absolute weapon"
+bun run --cwd apps/cli fluncle add "https://open.spotify.com/track/..." --dry-run
+bun run --cwd apps/cli fluncle recent --json
+bun run --cwd apps/cli fluncle auth spotify
 ```
 
-5. Open the printed URL, approve access, and paste the full callback URL into the terminal.
-
-The CLI stores Spotify OAuth tokens in Turso and refreshes the access token automatically.
-
-### 3. Telegram
-
-1. Create a bot with BotFather.
-2. Add the bot to the Fluncle's Finest channel.
-3. Give the bot permission to post messages.
-4. Put the bot token and channel id or public `@channelname` in `.env.local`.
-
-### 4. Database
-
-Migrations are dev commands, not public CLI commands:
+Database migrations are CLI workspace commands:
 
 ```bash
-bun run db:generate
-bun run db:migrate
+bun run --cwd apps/cli db:generate
+bun run --cwd apps/cli db:migrate
 ```
 
-## Raycast Extension
-
-The Raycast extension lives in `raycast/`. It is a thin client over the CLI and does not talk directly to Spotify, Telegram, or Turso.
-
-### Commands
-
-- `Fluncle: Quick Add`: reads the clipboard and immediately runs `fluncle add <url>`.
-- `Fluncle: Add Track`: form with Spotify URL and optional note.
-- `Fluncle: Recent Transmissions`: reads recent tracks through `fluncle recent --json`.
-
-### Local Development
+## Raycast
 
 ```bash
-cd raycast
-bun install
-bun run build
-bun run lint
-bun run dev
+bun run --cwd apps/raycast build
+bun run --cwd apps/raycast lint
+bun run --cwd apps/raycast dev
 ```
 
-The extension has one required preference:
+Raycast has one required preference:
 
 ```text
 Fluncle CLI Path
@@ -90,10 +84,10 @@ Fluncle CLI Path
 Raycast runs with a minimal shell environment, so this should point to a standalone binary rather than a Bun-linked script. Build and install one locally:
 
 ```bash
-bun build ./src/cli.ts --compile --target=bun-darwin-arm64 --outfile ./dist/fluncle-darwin-arm64
+bun run --cwd apps/cli build:local
 mkdir -p ~/.config/fluncle
 install -m 600 ./.env.local ~/.config/fluncle/.env.local
-install -m 755 ./dist/fluncle-darwin-arm64 ~/.local/bin/fluncle
+install -m 755 ./apps/cli/dist/fluncle-darwin-arm64 ~/.local/bin/fluncle
 ```
 
 Set the preference to:
@@ -102,39 +96,58 @@ Set the preference to:
 /Users/maurice/.local/bin/fluncle
 ```
 
-The CLI must already be configured and authenticated locally. Test it before using Raycast:
+Then verify:
 
 ```bash
 fluncle recent --limit 3 --json
 ```
 
-## Deploy To A VPS
-
-The VPS does not need the source checkout. Build a standalone Linux binary locally, copy it to the server, and place config in the operator user's config directory.
-
-### 1. Build The Binary
-
-For a typical Linux x64 VPS:
+## Web
 
 ```bash
-bun build ./src/cli.ts --compile --target=bun-linux-x64-baseline --outfile ./dist/fluncle
+bun run --cwd apps/web dev
+bun run --cwd apps/web build
+bun run --cwd apps/web typecheck
+bun run --cwd apps/web lint
+bun run --cwd apps/web preview
+bun run --cwd apps/web deploy
 ```
 
-For ARM64 Linux:
+The public app is dark-only and centered around the Fluncle cover art. Track data is loaded from `/api/tracks` with limit/cursor pagination. Track rows open Spotify directly.
+
+### Deploy Web To Cloudflare
+
+The web app deploys as a Cloudflare Worker through Wrangler. Keep Turso credentials out of `wrangler.jsonc`; set them as Worker secrets with a read-only Turso token:
 
 ```bash
-bun build ./src/cli.ts --compile --target=bun-linux-arm64 --outfile ./dist/fluncle
+bun run --cwd apps/web wrangler login
+bun run --cwd apps/web wrangler secret put TURSO_DATABASE_URL
+bun run --cwd apps/web wrangler secret put TURSO_AUTH_TOKEN
 ```
 
-### 2. Copy Files To The Server
-
-Replace `<host>` with your SSH target:
+For local Worker previews, copy `apps/web/.dev.vars.example` to `apps/web/.dev.vars` and fill in the same read-only Turso values:
 
 ```bash
-scp ./dist/fluncle ./.env.local <host>:/tmp/
+cp apps/web/.dev.vars.example apps/web/.dev.vars
+bun run --cwd apps/web preview
 ```
 
-### 3. Install On The Server
+Deploy:
+
+```bash
+bun run --cwd apps/web deploy
+```
+
+After the first deploy, add `fluncle.com` in the Cloudflare Workers custom domains settings.
+
+## Deploy CLI To A VPS
+
+Build a standalone Linux binary locally, copy it to the server, and place config in the operator user's config directory.
+
+```bash
+bun run --cwd apps/cli build:vps
+scp ./apps/cli/dist/fluncle ./.env.local <host>:/tmp/
+```
 
 Run on the server:
 
@@ -145,21 +158,15 @@ sudo install -m 755 /tmp/fluncle /usr/local/bin/fluncle
 rm -f /tmp/fluncle /tmp/.env.local
 ```
 
-The CLI loads config from:
-
-```text
-~/.config/fluncle/.env.local
-```
-
-### 4. Verify
+Verify:
 
 ```bash
 fluncle --help
-fluncle add "https://open.spotify.com/track/..." --dry-run
+fluncle recent --limit 1 --json
 ```
 
 ## Publish Flow
 
 `fluncle add` checks Turso for duplicates by Spotify track id. It inserts a pending row first, then adds the track to Spotify, then posts to Telegram. Each external operation is retried three times.
 
-If Spotify fails, Telegram is not posted. If Spotify succeeds but Telegram fails, the database row is kept with `posted_to_telegram = false` for later inspection/recovery.
+If Spotify fails, Telegram is not posted. If Spotify succeeds but Telegram fails, the database row is kept with `posted_to_telegram = false` for later inspection or recovery.

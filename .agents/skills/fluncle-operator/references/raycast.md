@@ -1,6 +1,6 @@
 # Raycast Workflow
 
-Raycast extension lives in `raycast/`.
+Raycast extension lives in `apps/raycast/`.
 
 ## Architecture
 
@@ -10,7 +10,7 @@ Raycast is a thin client over the CLI:
 Raycast -> fluncle CLI -> Spotify / Telegram / Turso
 ```
 
-Do not import Turso/libSQL, Spotify clients, or Telegram APIs inside `raycast/src`.
+Do not import Turso/libSQL, Spotify clients, or Telegram APIs inside `apps/raycast/src`.
 
 ## Commands
 
@@ -35,10 +35,10 @@ This must be a standalone binary, not a Bun-linked script. Raycast may fail with
 Build/install the local standalone binary:
 
 ```bash
-bun build ./src/cli.ts --compile --target=bun-darwin-arm64 --outfile ./dist/fluncle-darwin-arm64
+bun run --cwd apps/cli build:local
 mkdir -p ~/.config/fluncle
 install -m 600 ./.env.local ~/.config/fluncle/.env.local
-install -m 755 ./dist/fluncle-darwin-arm64 ~/.local/bin/fluncle
+install -m 755 ./apps/cli/dist/fluncle-darwin-arm64 ~/.local/bin/fluncle
 ```
 
 Verify from outside the repo:
@@ -51,17 +51,15 @@ fluncle recent --limit 1 --json
 ## Raycast Checks
 
 ```bash
-cd raycast
 bun install
-bun run build
-bun run lint
+bun run --cwd apps/raycast build
+bun run --cwd apps/raycast lint
 ```
 
 After manifest command changes, refresh Raycast command indexing:
 
 ```bash
-cd raycast
-bun run dev
+bun run --cwd apps/raycast dev
 ```
 
 Wait until it says the entry points are built, then stop the watcher. This is often needed after adding/removing commands.

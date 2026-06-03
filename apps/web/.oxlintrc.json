@@ -1,0 +1,12 @@
+{
+  "extends": ["../../.oxlintrc.json"],
+  "rules": {
+    "unicorn/filename-case": [
+      "error",
+      {
+        "case": "kebabCase",
+        "ignore": "(^\\$.+\\.(j|t)sx?$)|(routeTree.*.ts)"
+      }
+    ]
+  }
+}

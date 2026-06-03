@@ -1,13 +1,13 @@
 # CLI Contract
 
-The CLI is the source of truth for Fluncle publishing. Keep business logic in `src/`, not in Raycast.
+The CLI is the source of truth for Fluncle publishing. Keep business logic in `apps/cli/src/`, not in Raycast or the web app.
 
 ## Commands
 
 ```bash
-fluncle add <spotify-url-or-uri> [--note "text"] [--dry-run] [--json]
-fluncle recent [--limit 10] [--json]
-fluncle auth spotify
+bun run --cwd apps/cli fluncle add <spotify-url-or-uri> [--note "text"] [--dry-run] [--json]
+bun run --cwd apps/cli fluncle recent [--limit 10] [--json]
+bun run --cwd apps/cli fluncle auth spotify
 ```
 
 Supported track inputs:
@@ -88,11 +88,11 @@ If Spotify fails, do not post to Telegram. If Telegram fails after Spotify succe
 Use a duplicate track for non-mutating checks:
 
 ```bash
-fluncle add "spotify:track:2fyMcl41UQzD2WlBtJ0c8G" --json
+bun run --cwd apps/cli fluncle add "spotify:track:2fyMcl41UQzD2WlBtJ0c8G" --json
 ```
 
 Use recent for Turso/config checks:
 
 ```bash
-fluncle recent --limit 1 --json
+bun run --cwd apps/cli fluncle recent --limit 1 --json
 ```

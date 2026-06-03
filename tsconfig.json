@@ -1,12 +1,15 @@
 {
+  "$schema": "https://json.schemastore.org/tsconfig",
   "compilerOptions": {
-    "target": "ES2022",
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "strict": true,
-    "types": ["bun-types"],
+    "noEmit": true,
     "skipLibCheck": true,
-    "noEmit": true
-  },
-  "include": ["src/**/*.ts", "drizzle.config.ts"]
+    "strict": true,
+    "target": "ES2022"
+  }
 }
