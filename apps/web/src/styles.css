@@ -215,6 +215,9 @@ body::before {
   }
 }
 
+@theme {
+  --font-display: "Oxanium", ui-sans-serif, system-ui, sans-serif; 
+}
 
 @layer base {
   * {
@@ -223,6 +226,5 @@ body::before {
 
   body {
     @apply bg-background text-foreground;
-    font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
   }
 }
