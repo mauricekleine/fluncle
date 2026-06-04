@@ -1,0 +1,4 @@
+interface:
+  display_name: "Copywriting Maurice"
+  short_description: "Write Spinup content in Maurice's voice"
+  default_prompt: "Use $copywriting-maurice to draft a Spinup LinkedIn post, X thread, or blog post in Maurice's voice."

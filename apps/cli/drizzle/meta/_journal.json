@@ -15,6 +15,13 @@
       "when": 1780486833259,
       "tag": "0001_greedy_infant_terrible",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1780575195984,
+      "tag": "0002_cuddly_the_captain",
+      "breakpoints": true
     }
   ]
 }

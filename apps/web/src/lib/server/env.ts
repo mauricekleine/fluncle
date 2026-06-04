@@ -10,6 +10,7 @@ const envKeys = [
   "SPOTIFY_PLAYLIST_ID",
   "TELEGRAM_BOT_TOKEN",
   "TELEGRAM_CHANNEL_ID",
+  "DISCORD_WEBHOOK_URL",
   "TURSO_DATABASE_URL",
   "TURSO_AUTH_TOKEN",
 ] as const;
@@ -38,6 +39,14 @@ export async function readEnv(key: EnvKey): Promise<string> {
   }
 
   return value;
+}
+
+export async function readOptionalEnv(key: EnvKey): Promise<string | undefined> {
+  await loadLocalEnv();
+
+  const value = process.env[key];
+
+  return value?.trim() ? value : undefined;
 }
 
 export async function readEnvs<const T extends readonly EnvKey[]>(

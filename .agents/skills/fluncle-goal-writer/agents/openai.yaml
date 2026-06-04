@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fluncle Goal Writer"
+  short_description: "Draft compact Fluncle /goal prompts"
+  default_prompt: "Use $fluncle-goal-writer to turn this Fluncle work slice into a paste-ready /goal prompt."

@@ -26,9 +26,13 @@ export const Route = createRootRoute({
         rel: "stylesheet",
       },
       {
-        href: "/fluncle-cover.png",
+        href: "/favicon.png",
         rel: "icon",
         type: "image/png",
+      },
+      {
+        href: "/apple-touch-icon.png",
+        rel: "apple-touch-icon",
       },
     ],
     meta: [

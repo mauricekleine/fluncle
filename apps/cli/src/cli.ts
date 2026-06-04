@@ -21,7 +21,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (command === "recent") {
+  if (command === "recent" || command === "list") {
     const { recentCommand } = await import("./commands/recent");
     await runRecent([subcommand, ...rest].filter(Boolean), recentCommand);
     return;
@@ -30,6 +30,12 @@ async function main(): Promise<void> {
   if (command === "open") {
     const openCommands = await import("./commands/open");
     await runOpen([subcommand, ...rest].filter(Boolean), openCommands);
+    return;
+  }
+
+  if (command === "submit") {
+    const { submitCommand } = await import("./commands/submit");
+    await submitCommand([subcommand, ...rest].filter(Boolean).join(" ") || undefined);
     return;
   }
 
@@ -45,6 +51,12 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "admin" && subcommand === "submissions") {
+    const submissionCommands = await import("./commands/submissions");
+    await runAdminSubmissions(rest, submissionCommands);
+    return;
+  }
+
   if (command === "admin" && subcommand === "auth" && rest[0] === "spotify") {
     const { authSpotifyCommand } = await import("./commands/auth");
     await authSpotifyCommand();
@@ -52,6 +64,43 @@ async function main(): Promise<void> {
   }
 
   throw new Error(`Unknown command: ${[command, subcommand].filter(Boolean).join(" ")}`);
+}
+
+async function runAdminSubmissions(
+  args: string[],
+  submissionCommands: typeof import("./commands/submissions"),
+): Promise<void> {
+  const [action, submissionId, extra] = args;
+
+  if (!action) {
+    await submissionCommands.listSubmissionsCommand();
+    return;
+  }
+
+  if (extra) {
+    throw new Error(`Unknown submissions arguments: ${args.join(" ")}`);
+  }
+
+  if (!submissionId) {
+    throw new Error(`Missing submission id for: ${action}`);
+  }
+
+  if (action === "review") {
+    await submissionCommands.reviewSubmissionCommand(submissionId);
+    return;
+  }
+
+  if (action === "reject") {
+    await submissionCommands.rejectSubmissionCommand(submissionId);
+    return;
+  }
+
+  if (action === "approve") {
+    await submissionCommands.approveSubmissionCommand(submissionId);
+    return;
+  }
+
+  throw new Error(`Unknown submissions command: ${action}`);
 }
 
 async function runAdd(
@@ -233,11 +282,17 @@ Global options:
 
 Commands:
   fluncle recent [--limit 10] [--json]
+  fluncle list [--limit 10] [--json]
   fluncle open [--limit 20] [--browser|--app]
   fluncle open playlist [--browser|--app]
   fluncle open telegram [--browser|--app]
+  fluncle submit [search-or-spotify-url]
   fluncle version [--check] [--json]
   fluncle admin add <spotify-url> [--note "text"] [--dry-run] [--json]
+  fluncle admin submissions
+  fluncle admin submissions review <submission-id>
+  fluncle admin submissions reject <submission-id>
+  fluncle admin submissions approve <submission-id>
   fluncle admin auth spotify`);
 }
 

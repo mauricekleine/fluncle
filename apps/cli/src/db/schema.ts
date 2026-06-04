@@ -1,4 +1,4 @@
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const tracks = sqliteTable("tracks", {
   addedAt: text("added_at").notNull(),
@@ -27,3 +27,28 @@ export const spotifyAuth = sqliteTable("spotify_auth", {
   service: text("service").primaryKey(),
   updatedAt: text("updated_at").notNull(),
 });
+
+export const submissions = sqliteTable(
+  "submissions",
+  {
+    album: text("album"),
+    artistsJson: text("artists_json").notNull(),
+    artworkUrl: text("artwork_url"),
+    contact: text("contact"),
+    createdAt: text("created_at").notNull(),
+    id: text("id").primaryKey(),
+    note: text("note"),
+    reviewedAt: text("reviewed_at"),
+    source: text("source", { enum: ["web", "cli"] }).notNull(),
+    spotifyTrackId: text("spotify_track_id").notNull(),
+    spotifyUrl: text("spotify_url").notNull(),
+    status: text("status", { enum: ["pending", "approved", "rejected"] }).notNull(),
+    submitterHash: text("submitter_hash").notNull(),
+    title: text("title").notNull(),
+  },
+  (table) => [
+    index("submissions_status_created_at_idx").on(table.status, table.createdAt),
+    index("submissions_spotify_track_id_idx").on(table.spotifyTrackId),
+    index("submissions_submitter_hash_created_at_idx").on(table.submitterHash, table.createdAt),
+  ],
+);

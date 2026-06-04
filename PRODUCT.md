@@ -14,7 +14,7 @@ The product publishes selected drum & bass tracks to Spotify and Telegram throug
 
 ## Brand Personality
 
-Nocturnal, warm, direct. The site should feel like a carefully kept playlist rather than a marketing page or a generic music startup.
+Nocturnal, warm, direct, transcending. The creative north star is "The Nostalgic Cosmos" (DESIGN.md): this music projects your mind out into the cosmos, into another dimension, a parallel universe. The mood is awe and melancholy at once, "where did we come from" and "where do we go", floaty and atmospheric, never nihilist or cold. The dark is warm and inhabited, the way a city night is. The site should feel like a carefully kept playlist rather than a marketing page or a generic music startup.
 
 ## Anti-references
 
@@ -24,9 +24,10 @@ Avoid SaaS dashboards, bright streaming-app clones, generic landing-page hero se
 
 - Keep publishing authority behind the authenticated admin API.
 - Put the music first: artist, title, date, note, and the Spotify open action.
-- Use the cover art as the identity anchor.
+- Treat the cover art as the founding document of the visual system; every visual decision descends from it.
 - Make the public app quiet, centered, and fast.
 - Treat Telegram and Spotify as first-class destinations.
+- DESIGN.md is the leading visual spec: where this file and DESIGN.md overlap on aesthetics, DESIGN.md wins.
 
 ## Accessibility & Inclusion
 

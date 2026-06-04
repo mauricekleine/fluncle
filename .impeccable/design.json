@@ -1,0 +1,313 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-06-04T00:00:00Z",
+  "title": "Design System: Fluncle",
+  "extensions": {
+    "colorMeta": {
+      "eclipse-gold": {
+        "role": "primary",
+        "displayName": "Eclipse Gold",
+        "canonical": "#f5b800",
+        "tonalRamp": [
+          "oklch(25% 0.07 88)",
+          "oklch(36% 0.1 88)",
+          "oklch(48% 0.13 88)",
+          "oklch(60% 0.15 88)",
+          "oklch(72% 0.16 88)",
+          "oklch(82% 0.17 88)",
+          "oklch(89% 0.12 88)",
+          "oklch(95% 0.06 88)"
+        ]
+      },
+      "eclipse-glow": {
+        "role": "primary",
+        "displayName": "Eclipse Glow",
+        "canonical": "#ffd057",
+        "tonalRamp": [
+          "oklch(28% 0.06 90)",
+          "oklch(40% 0.09 90)",
+          "oklch(52% 0.12 90)",
+          "oklch(64% 0.14 90)",
+          "oklch(76% 0.15 90)",
+          "oklch(86% 0.14 90)",
+          "oklch(92% 0.09 90)",
+          "oklch(96% 0.05 90)"
+        ]
+      },
+      "deep-field": {
+        "role": "neutral",
+        "displayName": "Deep Field",
+        "canonical": "#090a0b",
+        "tonalRamp": [
+          "oklch(15% 0.005 80)",
+          "oklch(25% 0.005 80)",
+          "oklch(36% 0.005 80)",
+          "oklch(48% 0.005 80)",
+          "oklch(60% 0.005 80)",
+          "oklch(72% 0.005 80)",
+          "oklch(84% 0.005 80)",
+          "oklch(94% 0.005 80)"
+        ]
+      },
+      "sleeve-black": {
+        "role": "neutral",
+        "displayName": "Sleeve Black",
+        "canonical": "#10100d",
+        "tonalRamp": [
+          "oklch(16% 0.008 100)",
+          "oklch(26% 0.008 100)",
+          "oklch(37% 0.008 100)",
+          "oklch(49% 0.008 100)",
+          "oklch(61% 0.008 100)",
+          "oklch(73% 0.008 100)",
+          "oklch(85% 0.008 100)",
+          "oklch(94% 0.008 100)"
+        ]
+      },
+      "tape-black": {
+        "role": "neutral",
+        "displayName": "Tape Black",
+        "canonical": "#171611",
+        "tonalRamp": [
+          "oklch(18% 0.01 100)",
+          "oklch(28% 0.01 100)",
+          "oklch(39% 0.01 100)",
+          "oklch(51% 0.01 100)",
+          "oklch(63% 0.01 100)",
+          "oklch(75% 0.01 100)",
+          "oklch(86% 0.01 100)",
+          "oklch(95% 0.01 100)"
+        ]
+      },
+      "starlight-cream": {
+        "role": "neutral",
+        "displayName": "Starlight Cream",
+        "canonical": "#f4ead7",
+        "tonalRamp": [
+          "oklch(20% 0.02 85)",
+          "oklch(32% 0.025 85)",
+          "oklch(45% 0.03 85)",
+          "oklch(58% 0.035 85)",
+          "oklch(70% 0.035 85)",
+          "oklch(81% 0.03 85)",
+          "oklch(90% 0.025 85)",
+          "oklch(96% 0.015 85)"
+        ]
+      },
+      "stardust": {
+        "role": "neutral",
+        "displayName": "Stardust",
+        "canonical": "#b7ab95",
+        "tonalRamp": [
+          "oklch(22% 0.015 90)",
+          "oklch(33% 0.02 90)",
+          "oklch(45% 0.025 90)",
+          "oklch(57% 0.03 90)",
+          "oklch(68% 0.03 90)",
+          "oklch(78% 0.025 90)",
+          "oklch(87% 0.02 90)",
+          "oklch(94% 0.012 90)"
+        ]
+      },
+      "reentry-red": {
+        "role": "tertiary",
+        "displayName": "Re-entry Red",
+        "canonical": "#ff6b57",
+        "tonalRamp": [
+          "oklch(25% 0.08 30)",
+          "oklch(36% 0.12 30)",
+          "oklch(48% 0.16 30)",
+          "oklch(60% 0.19 30)",
+          "oklch(70% 0.19 30)",
+          "oklch(79% 0.14 30)",
+          "oklch(87% 0.09 30)",
+          "oklch(94% 0.04 30)"
+        ]
+      },
+      "ink-on-gold": {
+        "role": "neutral",
+        "displayName": "Ink on Gold",
+        "canonical": "#151006",
+        "tonalRamp": [
+          "oklch(16% 0.02 90)",
+          "oklch(26% 0.025 90)",
+          "oklch(38% 0.03 90)",
+          "oklch(50% 0.035 90)",
+          "oklch(62% 0.035 90)",
+          "oklch(74% 0.03 90)",
+          "oklch(85% 0.025 90)",
+          "oklch(94% 0.015 90)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display (Oxanium)",
+        "purpose": "Brand marks and identity moments only. There is deliberately no large on-page heading; the cover art is the hero."
+      },
+      "numeric": {
+        "displayName": "Numeric (Oxanium)",
+        "purpose": "Track indices and columnar numbers. Always tabular-nums."
+      },
+      "title": { "displayName": "Title", "purpose": "Track titles; the loudest text on the page." },
+      "body": { "displayName": "Body", "purpose": "Artist lines, descriptions, form text." },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Column headers and form labels. Bold and small, never uppercase-tracked."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "Literal terminal content only: CLI commands quoted verbatim. The machine's own voice."
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "ease-state",
+        "value": "150ms ease-out",
+        "purpose": "Default for background, color, and transform state changes."
+      },
+      {
+        "name": "ease-float",
+        "value": "180ms cubic-bezier(0.22, 1, 0.36, 1)",
+        "purpose": "The floaty lift: artwork scale and border heat on hover."
+      }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "lg", "value": "1024px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Eclipse Gold action button; the one sun on the screen.",
+      "html": "<button class=\"ds-btn ds-btn-primary\"><svg aria-hidden=\"true\" width=\"16\" height=\"16\" viewBox=\"0 0 256 256\" fill=\"currentColor\"><path d=\"M128 24a104 104 0 1 0 104 104A104.12 104.12 0 0 0 128 24Zm45.85 144.27a8 8 0 0 1-11 2.58c-22.06-13.47-50.79-16.5-83.69-8.94a8 8 0 0 1-3.58-15.59c36.13-8.31 68.18-4.78 93.69 10.93a8 8 0 0 1 2.58 11.02Zm12.46-28.34a10 10 0 0 1-13.76 3.23c-25.27-15.54-63.8-20-93.62-10.95a10 10 0 1 1-5.8-19.14c34.1-10.36 76.9-5.39 105.95 12.5a10 10 0 0 1 3.23 14.36Z\"/></svg>Playlist</button>",
+      "css": ".ds-btn { display: inline-flex; align-items: center; justify-content: center; gap: 0.375rem; height: 2.25rem; padding: 0 0.625rem; border: 1px solid transparent; border-radius: 0.5rem; font-size: 0.875rem; font-weight: 500; font-family: ui-sans-serif, system-ui, sans-serif; cursor: pointer; user-select: none; transition: all 150ms ease-out; outline: none; } .ds-btn:active { transform: translateY(1px); } .ds-btn:focus-visible { border-color: var(--ring, #f5b800); box-shadow: 0 0 0 3px rgb(245 184 0 / 50%); } .ds-btn-primary { background: var(--primary, #f5b800); color: var(--primary-foreground, #151006); } .ds-btn-primary:hover { background: rgb(245 184 0 / 80%); }"
+    },
+    {
+      "name": "Outline Button",
+      "kind": "button",
+      "refersTo": "button-outline",
+      "description": "Secondary action; Dust Line border over translucent Tape Black.",
+      "html": "<button class=\"ds-btn-o\">Load more</button>",
+      "css": ".ds-btn-o { display: inline-flex; align-items: center; justify-content: center; gap: 0.375rem; height: 2.25rem; padding: 0 0.625rem; border: 1px solid var(--border, rgb(208 185 144 / 16%)); border-radius: 0.5rem; background: rgb(23 22 17 / 30%); color: var(--foreground, #f4ead7); font-size: 0.875rem; font-weight: 500; font-family: ui-sans-serif, system-ui, sans-serif; cursor: pointer; user-select: none; transition: all 150ms ease-out; outline: none; } .ds-btn-o:hover { background: var(--muted, rgb(208 185 144 / 10%)); } .ds-btn-o:active { transform: translateY(1px); } .ds-btn-o:focus-visible { border-color: var(--ring, #f5b800); box-shadow: 0 0 0 3px rgb(245 184 0 / 50%); }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Tertiary action; invisible until hovered.",
+      "html": "<button class=\"ds-btn-g\">DM me on X</button>",
+      "css": ".ds-btn-g { display: inline-flex; align-items: center; justify-content: center; gap: 0.375rem; height: 2.25rem; padding: 0 0.625rem; border: 1px solid transparent; border-radius: 0.5rem; background: transparent; color: var(--foreground, #f4ead7); font-size: 0.875rem; font-weight: 500; font-family: ui-sans-serif, system-ui, sans-serif; cursor: pointer; user-select: none; transition: all 150ms ease-out; outline: none; } .ds-btn-g:hover { background: rgb(208 185 144 / 10%); } .ds-btn-g:active { transform: translateY(1px); } .ds-btn-g:focus-visible { border-color: var(--ring, #f5b800); box-shadow: 0 0 0 3px rgb(245 184 0 / 50%); }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input-text",
+      "description": "Tape Black field with an Eclipse Gold focus ring.",
+      "html": "<input class=\"ds-input\" type=\"text\" placeholder=\"Camo & Crooked or https://open.spotify.com/track/...\" />",
+      "css": ".ds-input { height: 2.5rem; width: 100%; padding: 0 0.75rem; border: 1px solid var(--border, rgb(208 185 144 / 16%)); border-radius: 0.5rem; background: var(--input, #171611); color: var(--foreground, #f4ead7); font-size: 0.875rem; font-family: ui-sans-serif, system-ui, sans-serif; outline: none; transition: border-color 150ms ease-out, box-shadow 150ms ease-out; } .ds-input::placeholder { color: var(--muted-foreground, #b7ab95); } .ds-input:focus-visible { border-color: var(--ring, #f5b800); box-shadow: 0 0 0 3px rgb(245 184 0 / 40%); }"
+    },
+    {
+      "name": "Track Row",
+      "kind": "custom",
+      "refersTo": "track-row",
+      "description": "The signature component: one track, one link to Spotify. Hover washes it in Gold Veil, heats the index, scales the artwork, drifts the caret.",
+      "html": "<a class=\"ds-track-row\" href=\"#\"><span class=\"ds-track-index\">#42</span><span class=\"ds-track-art\" aria-hidden=\"true\"></span><span class=\"ds-track-meta\"><span class=\"ds-track-title\">Mind Projection</span><span class=\"ds-track-artist\">Camo & Krooked, Mefjus</span></span><time class=\"ds-track-date\">4 Jun</time><svg class=\"ds-track-caret\" aria-hidden=\"true\" width=\"18\" height=\"18\" viewBox=\"0 0 256 256\" fill=\"currentColor\"><path d=\"M181.66 133.66l-80 80a8 8 0 0 1-11.32-11.32L164.69 128 90.34 53.66a8 8 0 0 1 11.32-11.32l80 80a8 8 0 0 1 0 11.32Z\"/></svg></a>",
+      "css": ".ds-track-row { display: grid; grid-template-columns: 3rem 3.25rem minmax(0, 1fr) 6.75rem 1.25rem; align-items: center; gap: 0.9rem; min-height: 5.25rem; padding: 0.95rem 1rem; border-bottom: 1px solid rgb(208 185 144 / 12%); background: transparent; cursor: pointer; text-decoration: none; outline: none; transition: background-color 150ms ease-out, color 150ms ease-out; } .ds-track-row:hover, .ds-track-row:focus-visible { background: var(--accent, rgb(245 184 0 / 10%)); } .ds-track-row:focus-visible { box-shadow: inset 0 0 0 2px var(--ring, #f5b800); } .ds-track-index { color: var(--muted-foreground, #b7ab95); font-family: Oxanium, ui-sans-serif, system-ui, sans-serif; font-size: 0.98rem; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; transition: color 150ms ease-out; } .ds-track-row:hover .ds-track-index { color: var(--accent-foreground, #ffd057); } .ds-track-art { display: block; width: 3.25rem; aspect-ratio: 1; border-radius: 6px; border: 1px solid rgb(208 185 144 / 16%); background: linear-gradient(145deg, rgb(245 184 0 / 18%), rgb(255 107 87 / 12%)), rgb(208 185 144 / 10%); transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1), border-color 180ms ease-out; } .ds-track-row:hover .ds-track-art { transform: scale(1.06); border-color: rgb(245 184 0 / 42%); } .ds-track-meta { min-width: 0; display: block; } .ds-track-title { display: block; color: var(--foreground, #f4ead7); font-family: ui-sans-serif, system-ui, sans-serif; font-size: 1.02rem; font-weight: 800; line-height: 1.18; letter-spacing: -0.01em; } .ds-track-artist { display: block; margin-top: 0.34rem; color: var(--muted-foreground, #b7ab95); font-family: ui-sans-serif, system-ui, sans-serif; font-size: 0.9rem; line-height: 1.25; } .ds-track-date { justify-self: end; color: var(--muted-foreground, #b7ab95); font-family: ui-sans-serif, system-ui, sans-serif; font-size: 0.82rem; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; } .ds-track-caret { color: var(--muted-foreground, #b7ab95); transition: transform 150ms ease-out; } .ds-track-row:hover .ds-track-caret { transform: translateX(2px); }"
+    },
+    {
+      "name": "Playlist Shell",
+      "kind": "card",
+      "refersTo": "track-row",
+      "description": "The glass pane that holds the tracklist: Sleeve Black at 48% with 18px backdrop blur over the cover-art sky.",
+      "html": "<div class=\"ds-shell\"><div class=\"ds-shell-header\"><span></span><span></span><span>Track</span><span>Added</span><span></span></div><div class=\"ds-shell-body\">Rows go here, separated by Dust Line borders.</div></div>",
+      "css": ".ds-shell { border: 1px solid var(--border, rgb(208 185 144 / 16%)); border-radius: 0.625rem; background: rgb(16 16 13 / 86%); overflow: hidden; font-family: ui-sans-serif, system-ui, sans-serif; } @supports (backdrop-filter: blur(1px)) { .ds-shell { backdrop-filter: blur(18px) saturate(125%); background: rgb(16 16 13 / 48%); } } .ds-shell-header { display: grid; grid-template-columns: 3rem 3.25rem minmax(0, 1fr) 6.75rem 1.25rem; gap: 0.9rem; padding: 0.85rem 1rem; border-bottom: 1px solid var(--border, rgb(208 185 144 / 16%)); color: var(--muted-foreground, #b7ab95); font-size: 0.76rem; font-weight: 800; } .ds-shell-body { padding: 0.95rem 1rem; color: var(--muted-foreground, #b7ab95); font-size: 0.9rem; }"
+    },
+    {
+      "name": "CLI Command",
+      "kind": "custom",
+      "refersTo": "input-text",
+      "description": "Literal terminal content in a quiet box with a themed thin scrollbar and copy action.",
+      "html": "<code class=\"ds-cli-command\">curl -fsSL https://www.fluncle.com/cli/latest.sh | sh</code>",
+      "css": ".ds-cli-command { display: block; padding: 0.625rem 0.75rem; background: var(--secondary, #171611); border: 1px solid var(--border, rgb(208 185 144 / 16%)); border-radius: 0.5rem; color: var(--foreground, #f4ead7); font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.82rem; line-height: 1.5; white-space: nowrap; overflow-x: auto; scrollbar-width: thin; scrollbar-color: rgb(208 185 144 / 16%) transparent; }"
+    },
+    {
+      "name": "Cover Frame",
+      "kind": "custom",
+      "refersTo": "track-row",
+      "description": "The identity anchor: a glass mat around the cover art tinted by the eclipse (gold-to-red gradient under 16px blur).",
+      "html": "<div class=\"ds-cover-frame\"><div class=\"ds-cover-art\"></div></div>",
+      "css": ".ds-cover-frame { width: 12rem; padding: 4px; border: 1px solid rgb(245 184 0 / 40%); border-radius: 0.625rem; background: linear-gradient(145deg, rgb(245 184 0 / 24%), rgb(255 107 87 / 20%)); } @supports (backdrop-filter: blur(1px)) { .ds-cover-frame { backdrop-filter: blur(16px) saturate(125%); background: linear-gradient(145deg, rgb(245 184 0 / 14%), rgb(255 107 87 / 12%)); } } .ds-cover-art { aspect-ratio: 1; border-radius: 0.5rem; background: radial-gradient(circle at 50% 0%, #f5b800 0%, #c2410c 18%, #1a0f08 45%, #090a0b 100%); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Nostalgic Cosmos",
+    "overview": "This music projects your mind out into the cosmos: another dimension, a parallel universe. The cover art is the founding document of the system: a figure floating up out of the tower blocks into a starfield, tethered to a Discman by a headphone cable, under a burning eclipse. The mood is awe and melancholy at once, 'where did we come from' and 'where do we go', floaty, atmospheric, transcending. Never nihilist, never cold; the dark is warm and inhabited, the way a city night is. The interface is a carefully kept playlist, not a marketing page. The cover art literally sits behind every screen, and the UI is built as translucent panes over it: you are always looking through the interface into the cosmos. Eclipse Gold is the single light source. There are no heroes, no metrics, no pitch; the tracklist IS the page.",
+    "keyCharacteristics": [
+      "Dark-only; the cover-art starfield shows through every surface",
+      "One light source: Eclipse Gold for the primary action, focus, and identity",
+      "Glass as doctrine, not decoration; depth from translucency, never shadows",
+      "Oxanium speaks for the brand (numerals, marks); the system sans does the reading",
+      "Floaty and tactile: hovers lift gently, presses land"
+    ],
+    "rules": [
+      {
+        "name": "The One Sun Rule",
+        "body": "Eclipse Gold is the single light source. It appears as the primary action, the focus ring, and identity moments, and on no more than roughly 10% of any screen. Two gold elements competing in one view means one of them is wrong.",
+        "section": "colors"
+      },
+      {
+        "name": "The Warm Dark Rule",
+        "body": "Every black and every neutral leans warm (toward the cream/dust hue). Cool grays and blue-tinted darks are prohibited; the night sky of this cosmos is warm and inhabited.",
+        "section": "colors"
+      },
+      {
+        "name": "The One Voice Rule",
+        "body": "Oxanium speaks only for the brand and the numbers. If body copy or a paragraph is set in Oxanium, it's a mistake.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tabular Rule",
+        "body": "Every number that sits in a column (indices, dates) is tabular-nums. Numbers that jitter on update break the instrument-panel calm.",
+        "section": "typography"
+      },
+      {
+        "name": "The Through-the-Glass Rule",
+        "body": "Surfaces are windows onto the cosmos. A surface that fully occludes the backdrop (opaque, blurless) must justify itself; a surface with a drop shadow is prohibited outright.",
+        "section": "elevation"
+      },
+      {
+        "name": "The One Pane Rule",
+        "body": "Glass does not stack on glass. One blurred shell per view (PRODUCT.md bans 'glassy card stacks' by name); content inside a pane sits flat on it.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Legible Sky Rule",
+        "body": "Text never sits on the raw backdrop. Every text surface is a pane that dims what it covers enough to hold WCAG AA (4.5:1 for body text), even where the burning sun sits behind the glass. If a bright backdrop region breaks contrast, the pane gets more opaque, not the text dimmer.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do keep the cover-art backdrop visible through every major surface; it is the design (The Through-the-Glass Rule).",
+      "Do reserve Eclipse Gold (#f5b800) for the primary action, focus ring, and identity moments; roughly 10% of any screen, no more (The One Sun Rule).",
+      "Do set every columnar number (indices, dates) in Oxanium tabular-nums (The Tabular Rule).",
+      "Do make hovers float and presses land: 1.06 artwork scale, 2px caret drift, 1px button press-down, all at 150-180ms ease-out.",
+      "Do ground every float under prefers-reduced-motion: reduce: color-only transitions, with the Gold Veil wash carrying the feedback.",
+      "Do keep body text at WCAG AA (4.5:1) against what is actually behind it, glass included (The Legible Sky Rule).",
+      "Do keep all neutrals warm; tint blacks and grays toward the cream/dust hue (#d0b990 family), never blue (The Warm Dark Rule).",
+      "Do put the music first on every surface: artist, title, date, note, and the Spotify open action before anything else."
+    ],
+    "donts": [
+      "Don't build SaaS dashboards, bright streaming-app clones, or generic landing-page hero sections (PRODUCT.md anti-references, verbatim).",
+      "Don't write oversized marketing copy; there is no pitch, the tracklist is the page.",
+      "Don't stack glassy cards or add decorative gradients that ignore the cover art; one blurred pane per view, and every gradient must derive from the eclipse palette (The One Pane Rule).",
+      "Don't use box-shadows for depth; depth is what shows through the glass.",
+      "Don't set body copy in Oxanium (The One Voice Rule), and don't add uppercase-tracked eyebrow labels; labels are bold and small, not tracked-out.",
+      "Don't introduce a light theme, cool grays, or a second accent hue; the system is dark-only with one sun."
+    ]
+  }
+}

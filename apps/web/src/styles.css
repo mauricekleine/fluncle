@@ -78,7 +78,7 @@
 }
 
 body::before {
-  background: url("/fluncle-cover-no-text.png") center / cover no-repeat;
+  background: url("/fluncle-cover-no-text.webp") center / cover no-repeat;
   content: "";
   inset: -1%;
   pointer-events: none;
@@ -205,6 +205,49 @@ body::before {
     var(--muted);
 }
 
+.track-title {
+  color: var(--foreground);
+  font-size: 1.02rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.18;
+}
+
+.track-artist {
+  color: var(--muted-foreground);
+  font-size: 0.9rem;
+  line-height: 1.25;
+  margin-top: 0.34rem;
+}
+
+.track-date {
+  color: var(--muted-foreground);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.cli-command {
+  background: var(--secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--foreground);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  overflow-x: auto;
+  scrollbar-color: var(--border) transparent;
+  scrollbar-width: thin;
+  white-space: nowrap;
+}
+
+.cli-inline {
+  color: var(--foreground);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.82rem;
+}
+
 @media (min-width: 640px) {
   .playlist-header {
     grid-template-columns: 3rem 3.25rem minmax(0, 1fr) 6.75rem 1.25rem;
@@ -212,6 +255,34 @@ body::before {
 
   .track-row {
     grid-template-columns: 3rem 3.25rem minmax(0, 1fr) 6.75rem 1.25rem;
+  }
+}
+
+/* The Grounded Floats Rule (DESIGN.md): under reduced motion, every float
+   collapses to a color-only transition. The Gold Veil wash carries feedback. */
+@media (prefers-reduced-motion: reduce) {
+  .track-row,
+  .track-index,
+  .track-artwork {
+    transition-property: background-color, border-color, color;
+  }
+
+  .track-row :is(.track-artwork, svg) {
+    transform: none !important;
+  }
+
+  [data-slot="button"]:active {
+    transform: none !important;
+  }
+
+  [data-slot="dialog-content"],
+  [data-slot="dialog-overlay"] {
+    animation-duration: 1ms !important;
+  }
+
+  .animate-pulse,
+  .animate-spin {
+    animation: none;
   }
 }
 
@@ -226,5 +297,10 @@ body::before {
 
   body {
     @apply bg-background text-foreground;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
   }
 }

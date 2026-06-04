@@ -1,6 +1,49 @@
 {
   "version": 1,
   "skills": {
+    "ai-seo": {
+      "source": "coreyhaines31/marketingskills",
+      "sourceType": "github",
+      "skillPath": "skills/ai-seo/SKILL.md",
+      "computedHash": "a6befed362ed7127d051db085bc8be9470abbe87f70a40ee9a05e201dd8c693f"
+    },
+    "copywriting-maurice": {
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/copywriting-maurice",
+      "sourceType": "local",
+      "computedHash": "14ac1bebaf6ed3718664ef3fb4905e72f674c95153b471e7143996a2303c63d4"
+    },
+    "fluncle-goal-writer": {
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/goal-writer",
+      "sourceType": "local",
+      "computedHash": "ab3290ff51f3a3fdf0a9ce690da460f45090664bca4b93987814a4502cf0b8f4"
+    },
+    "fluncle-operator": {
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-operator",
+      "sourceType": "local",
+      "computedHash": "154a625a396768ef3aa252430167466f91ad268a4dc10e3b79d37eee689bbb2c"
+    },
+    "hetzner-devbox": {
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/hetzner-devbox",
+      "sourceType": "local",
+      "computedHash": "aff498b547850bcabae44ca697ae71f76fef6078126ac951956459865891425e"
+    },
+    "seo-audit": {
+      "source": "coreyhaines31/marketingskills",
+      "sourceType": "github",
+      "skillPath": "skills/seo-audit/SKILL.md",
+      "computedHash": "f2dc52130189068981f21e1c0bdc4471ac7cd9b08d8a1320604411aa0f950385"
+    },
+    "shadcn": {
+      "source": "shadcn/ui",
+      "sourceType": "github",
+      "skillPath": "skills/shadcn/SKILL.md",
+      "computedHash": "8f8bcc9024aa068245fac646d654a18c80280e4b06112ccd3e691a8c96cd66bd"
+    },
+    "taste": {
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/taste",
+      "sourceType": "local",
+      "computedHash": "5f5843ddbf100be24ad706491b9ec54e29e6ad7f373c364849f830eb5f8a11c2"
+    },
     "vercel-react-best-practices": {
       "source": "vercel-labs/agent-skills",
       "sourceType": "github",

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Hetzner VPS"
+  short_description: "Provision private devboxes and public SSH app VPSes."
+  default_prompt: "Use $hetzner-devbox to provision or harden a Hetzner VPS for a private devbox or public SSH app."
+
+policy:
+  allow_implicit_invocation: true

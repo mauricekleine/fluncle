@@ -11,6 +11,7 @@ apps/web      TanStack Start public web app and server-side Fluncle API.
 ```
 
 The deployed web app owns Spotify, Telegram, and Turso secrets. Public reads are served by `/api/tracks` and `/rss.xml`. Admin mutations are served by authenticated `/api/admin/*` routes. Raycast must keep calling `fluncle`.
+Listener submissions are accepted through public `/api/search` and `/api/submissions` routes, then reviewed through authenticated admin submission routes. Approval still publishes only through the existing admin add flow.
 
 ## Root Workflows
 
@@ -48,12 +49,19 @@ curl -fsSL https://www.fluncle.com/cli/latest.sh | sh
 
 ```bash
 bun run --cwd apps/cli fluncle recent --json
+bun run --cwd apps/cli fluncle list --limit 10
 bun run --cwd apps/cli fluncle open
 bun run --cwd apps/cli fluncle open playlist --browser
 bun run --cwd apps/cli fluncle open telegram --app
+bun run --cwd apps/cli fluncle submit
+bun run --cwd apps/cli fluncle submit "https://open.spotify.com/track/..."
 bun run --cwd apps/cli fluncle version --check
 bun run --cwd apps/cli fluncle admin add "https://open.spotify.com/track/..." --note "Absolute weapon"
 bun run --cwd apps/cli fluncle admin add "https://open.spotify.com/track/..." --dry-run
+bun run --cwd apps/cli fluncle admin submissions
+bun run --cwd apps/cli fluncle admin submissions review <submission-id>
+bun run --cwd apps/cli fluncle admin submissions reject <submission-id>
+bun run --cwd apps/cli fluncle admin submissions approve <submission-id>
 bun run --cwd apps/cli fluncle admin auth spotify
 bun run --cwd apps/cli fluncle --env local recent --json
 ```
@@ -136,6 +144,7 @@ bun run --cwd apps/web wrangler secret put SPOTIFY_REDIRECT_URI
 bun run --cwd apps/web wrangler secret put SPOTIFY_PLAYLIST_ID
 bun run --cwd apps/web wrangler secret put TELEGRAM_BOT_TOKEN
 bun run --cwd apps/web wrangler secret put TELEGRAM_CHANNEL_ID
+bun run --cwd apps/web wrangler secret put DISCORD_WEBHOOK_URL
 ```
 
 For local Worker previews and local migration commands, copy `apps/web/.dev.vars.example` to `apps/web/.dev.vars` and fill in the same values:
@@ -182,6 +191,29 @@ fluncle recent --limit 1 --json
 `fluncle admin add` calls `POST /api/admin/tracks` with `Authorization: Bearer <FLUNCLE_API_TOKEN>`. The server checks Turso for duplicates by case-sensitive Spotify track id. It inserts a pending row first, then adds the track to Spotify, then posts to Telegram. Each external operation is retried three times.
 
 If Spotify fails, Telegram is not posted. If Spotify succeeds but Telegram fails, the database row is kept with `posted_to_telegram = false` for later inspection or recovery.
+
+## Submission Flow
+
+Listeners can submit tracks from fluncle.com or with:
+
+```bash
+fluncle submit
+fluncle submit "Camo & Crooked"
+fluncle submit "https://open.spotify.com/track/..."
+```
+
+Both clients call `GET /api/search?q=...`, select a visible candidate, then post the selected track to `POST /api/submissions`. Submissions are stored as pending rows with hashed rate-limit keys; rejected rows are kept.
+
+Operators review with:
+
+```bash
+fluncle admin submissions
+fluncle admin submissions review <submission-id>
+fluncle admin submissions reject <submission-id>
+fluncle admin submissions approve <submission-id>
+```
+
+Approval fetches the submission, runs `fluncle admin add "<spotify-url>" --dry-run`, asks `Publish this submission? (Y/n)`, then runs the real admin add call only after confirmation and marks the submission approved.
 
 ## CLI Releases
 

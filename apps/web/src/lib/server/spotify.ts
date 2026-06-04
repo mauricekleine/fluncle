@@ -35,6 +35,12 @@ type SpotifyTrackResponse = {
   };
 };
 
+type SpotifySearchResponse = {
+  tracks?: {
+    items?: SpotifyTrackResponse[];
+  };
+};
+
 type SpotifyAuthRow = {
   access_token: string;
   refresh_token: string;
@@ -50,6 +56,15 @@ export type TrackMetadata = {
   album?: string;
   albumImageUrl?: string;
   durationMs: number;
+};
+
+export type TrackSearchResult = {
+  id: string;
+  spotifyUrl: string;
+  title: string;
+  artists: string[];
+  album?: string;
+  artworkUrl?: string;
 };
 
 export async function buildSpotifyAuthUrl(state: string): Promise<string> {
@@ -97,6 +112,14 @@ export function parseSpotifyTrackUrl(input: string): string {
   return trackId;
 }
 
+export function tryParseSpotifyTrackUrl(input: string): string | undefined {
+  try {
+    return parseSpotifyTrackUrl(input);
+  } catch {
+    return undefined;
+  }
+}
+
 export async function exchangeCodeForToken(code: string): Promise<void> {
   const env = await readEnvs(["SPOTIFY_REDIRECT_URI"]);
   const data = await requestToken({
@@ -127,6 +150,32 @@ export async function fetchTrackMetadata(trackId: string): Promise<TrackMetadata
     title: data.name,
     trackId: data.id,
   };
+}
+
+export async function searchTrackCandidates(query: string): Promise<TrackSearchResult[]> {
+  const trackId = tryParseSpotifyTrackUrl(query);
+
+  if (trackId) {
+    return [toSearchResult(await fetchTrackMetadata(trackId))];
+  }
+
+  const accessToken = await getSpotifyAccessToken();
+  const params = new URLSearchParams({
+    limit: "8",
+    q: query,
+    type: "track",
+  });
+  const response = await spotifyFetch(`/search?${params.toString()}`, accessToken);
+  const data = (await response.json()) as SpotifySearchResponse;
+
+  return (data.tracks?.items ?? []).map((track) => ({
+    album: track.album?.name,
+    artists: track.artists.map((artist) => artist.name),
+    artworkUrl: selectAlbumImageUrl(track.album?.images),
+    id: track.id,
+    spotifyUrl: track.external_urls?.spotify ?? `https://open.spotify.com/track/${track.id}`,
+    title: track.name,
+  }));
 }
 
 export async function addTrackToPlaylist(track: TrackMetadata): Promise<void> {
@@ -166,6 +215,17 @@ function selectAlbumImageUrl(images: SpotifyImage[] | undefined): string | undef
       .sort((left, right) => (left.width ?? 0) - (right.width ?? 0))
       .find((image) => (image.width ?? 0) >= 300)?.url ?? images[0]?.url
   );
+}
+
+function toSearchResult(track: TrackMetadata): TrackSearchResult {
+  return {
+    album: track.album,
+    artists: track.artists,
+    artworkUrl: track.albumImageUrl,
+    id: track.trackId,
+    spotifyUrl: track.spotifyUrl,
+    title: track.title,
+  };
 }
 
 async function getSpotifyAccessToken(): Promise<string> {

@@ -11,6 +11,16 @@ export async function publicApiGet<T>(path: string): Promise<T> {
   return apiRequest<T>(path);
 }
 
+export async function publicApiPost<T>(path: string, body?: unknown): Promise<T> {
+  return apiRequest<T>(path, {
+    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: {
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+}
+
 export async function adminApiGet<T>(path: string): Promise<T> {
   return apiRequest<T>(path, {
     headers: adminHeaders(),
