@@ -38,7 +38,7 @@ export default function Command() {
     try {
       const result = await addTrack(spotifyUrl, values.note);
       toast.style = Toast.Style.Success;
-      toast.title = "📻 Transmission sent";
+      toast.title = "Track sent";
       toast.message = `${result.track.artists.join(", ")} — ${result.track.title}`;
     } catch (error) {
       toast.style = Toast.Style.Failure;

@@ -46,8 +46,8 @@
       ]
     },
     {
-      "name": "recent-transmissions",
-      "title": "Recent Transmissions",
+      "name": "recent-tracks",
+      "title": "Recent Tracks",
       "subtitle": "Fluncle",
       "description": "Browse recently published Fluncle tracks.",
       "mode": "view",
