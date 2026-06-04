@@ -6,11 +6,14 @@ import {
   DownloadSimpleIcon,
   MagnifyingGlassIcon,
   PaperPlaneTiltIcon,
+  ShuffleIcon,
   SpotifyLogoIcon,
   TelegramLogoIcon,
+  TerminalIcon,
   XLogoIcon,
 } from "@phosphor-icons/react";
 import { createFileRoute } from "@tanstack/react-router";
+import { createServerFn } from "@tanstack/react-start";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,56 +25,61 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import { spotifyPlaylistUrl, telegramUrl } from "@/lib/fluncle-links";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { siteUrl, spotifyPlaylistUrl, telegramUrl } from "@/lib/fluncle-links";
+import { listTracks } from "@/lib/server/tracks";
 import { searchTracks, submitTrack, type SearchResult } from "@/lib/submissions";
-import { fetchTracks, type Track } from "@/lib/tracks";
+import { fetchRandomTrack, fetchTracks, type Track } from "@/lib/tracks";
 
 const pageSize = 10;
 
+// Server-rendering the first page keeps the archive readable for crawlers
+// (search engines and AI agents alike) that never execute JavaScript.
+const fetchInitialTracks = createServerFn({ method: "GET" }).handler(() =>
+  listTracks({ limit: pageSize }),
+);
+
 export const Route = createFileRoute("/")({
   component: HomePage,
+  head: ({ loaderData }) => ({
+    scripts: [
+      {
+        children: JSON.stringify({
+          "@context": "https://schema.org",
+          "@type": "MusicPlaylist",
+          description: "Drum & bass bangers from another dimension.",
+          genre: "Drum and Bass",
+          image: `${siteUrl}/fluncle-cover.png`,
+          name: "Fluncle's Finest",
+          numTracks: loaderData?.totalCount,
+          sameAs: [spotifyPlaylistUrl, telegramUrl],
+          track: loaderData?.tracks.map((track) => ({
+            "@type": "MusicRecording",
+            byArtist: track.artists.map((artist) => ({
+              "@type": "MusicGroup",
+              name: artist,
+            })),
+            ...(track.album ? { inAlbum: { "@type": "MusicAlbum", name: track.album } } : {}),
+            name: track.title,
+            url: track.spotifyUrl,
+          })),
+          url: `${siteUrl}/`,
+        }),
+        type: "application/ld+json",
+      },
+    ],
+  }),
+  loader: () => fetchInitialTracks(),
 });
 
 function HomePage() {
+  const initialPage = Route.useLoaderData();
   const [cursor, setCursor] = useState<string | undefined>();
   const [error, setError] = useState<string | undefined>();
-  const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [nextCursor, setNextCursor] = useState<string | undefined>();
-  const [totalCount, setTotalCount] = useState(0);
-  const [tracks, setTracks] = useState<Track[]>([]);
-
-  useEffect(() => {
-    let isActive = true;
-
-    fetchTracks({ limit: pageSize })
-      .then((result) => {
-        if (!isActive) {
-          return;
-        }
-
-        setNextCursor(result.nextCursor);
-        setTotalCount(result.totalCount);
-        setTracks(result.tracks);
-      })
-      .catch((caughtError: unknown) => {
-        if (!isActive) {
-          return;
-        }
-
-        setError(caughtError instanceof Error ? caughtError.message : String(caughtError));
-      })
-      .finally(() => {
-        if (isActive) {
-          setIsLoading(false);
-        }
-      });
-
-    return () => {
-      isActive = false;
-    };
-  }, []);
+  const [nextCursor, setNextCursor] = useState<string | undefined>(initialPage.nextCursor);
+  const [totalCount, setTotalCount] = useState(initialPage.totalCount);
+  const [tracks, setTracks] = useState<Track[]>(initialPage.tracks);
 
   useEffect(() => {
     console.log(
@@ -79,7 +87,7 @@ function HomePage() {
       "font: 800 24px Oxanium, sans-serif; letter-spacing: -0.02em; color: #f5b800;",
     );
     console.log(
-      `%cFresh drum & bass, most nights. Tune in → ${telegramUrl}`,
+      `%cFresh bangers, most nights. Tune in, junglist → ${telegramUrl}`,
       "color: #b7ab95; font: 13px Oxanium, sans-serif;",
     );
   }, []);
@@ -149,16 +157,20 @@ function HomePage() {
       <main className="min-h-screen overflow-hidden text-foreground">
         <h1 className="sr-only">Fluncle's Finest</h1>
         <section className="mx-auto grid min-h-screen w-full max-w-7xl content-center gap-y-8 px-4 py-8 sm:px-6 lg:grid-cols-[minmax(240px,320px)_minmax(0,1fr)] lg:gap-x-12 lg:gap-y-10 lg:px-8">
-          <div className="grid items-start gap-x-12 gap-y-8 lg:col-span-2 lg:grid-cols-subgrid">
+          <div className="grid gap-x-12 gap-y-8 lg:col-span-2 lg:grid-cols-subgrid">
             <aside className="mx-auto w-full max-w-80 lg:mx-0 lg:max-w-none">
               <div className="cover-frame border border-primary/40 p-1 rounded-lg">
-                <img
-                  alt="Fluncle cover art"
-                  className="aspect-square w-full rounded-lg object-cover"
-                  height="512"
-                  src="/fluncle-cover.png"
-                  width="512"
-                />
+                {/* WebP for the page; the PNG stays canonical for og:image and JSON-LD. */}
+                <picture>
+                  <source srcSet="/fluncle-cover.webp" type="image/webp" />
+                  <img
+                    alt="Fluncle cover art"
+                    className="aspect-square w-full rounded-lg object-cover"
+                    height="512"
+                    src="/fluncle-cover.png"
+                    width="512"
+                  />
+                </picture>
               </div>
               <div className="mt-5 flex items-center justify-center gap-2 lg:justify-start">
                 <Button
@@ -180,45 +192,50 @@ function HomePage() {
                   <TelegramLogoIcon aria-hidden="true" weight="fill" />
                   Telegram
                 </Button>
+                <RandomBangerDialog />
               </div>
               <div className="mt-3 grid gap-2">
                 <SubmitTrackDialog />
-                <CliInstallDialog />
                 <Button
                   nativeButton={false}
                   render={<a href="https://x.com/mauricekleine" rel="noreferrer" target="_blank" />}
                   size="lg"
-                  variant="ghost"
+                  variant="outline"
                 >
                   <XLogoIcon aria-hidden="true" weight="bold" />
                   DM me on X
                 </Button>
+                <div className="playlist-shell mt-1 grid gap-1 rounded-lg border border-border px-3.5 py-3">
+                  <p className="text-xs font-extrabold text-muted-foreground">For the nerds:</p>
+                  <div className="grid justify-items-start">
+                    <CliInstallDialog />
+                    <TerminalRaversDialog />
+                  </div>
+                </div>
               </div>
             </aside>
 
-            <section aria-labelledby="playlist-title" className="min-w-0">
+            <section aria-labelledby="playlist-title" className="flex min-w-0 flex-col">
               <h2 className="sr-only" id="playlist-title">
-                Latest tracks
+                Latest bangers
               </h2>
-              <div className="playlist-shell border border-border rounded-lg">
+              <div className="playlist-shell flex flex-1 flex-col border border-border rounded-md">
                 <div aria-hidden="true" className="playlist-header">
                   <span aria-hidden="true" />
                   <span aria-hidden="true" />
                   <span>Track</span>
-                  <span className="hidden sm:block">Added</span>
+                  <span className="hidden sm:block">Discovered</span>
                   <span aria-hidden="true" />
                 </div>
 
-                {isLoading ? <LoadingRows /> : undefined}
-
-                {!isLoading && tracks.length === 0 && !error ? (
+                {tracks.length === 0 && !error ? (
                   <div className="px-4 py-10 text-center text-muted-foreground">
-                    No transmissions found yet.
+                    No bangers discovered yet. Quiet night in this dimension.
                   </div>
                 ) : undefined}
 
-                {!isLoading && tracks.length > 0 ? (
-                  <ScrollArea className="h-[min(32rem,65dvh)]">
+                {tracks.length > 0 ? (
+                  <ScrollArea className="h-[min(32rem,65dvh)] lg:h-[calc(100vh-8rem)]">
                     <ol className="grid m-0 list-none p-0 [&>li:last-child_.track-row]:border-b-0">
                       {tracks.map((track, index) => (
                         <TrackRow
@@ -259,6 +276,160 @@ function HomePage() {
         </section>
       </main>
     </TooltipProvider>
+  );
+}
+
+function RandomBangerDialog() {
+  const [open, setOpen] = useState(false);
+  const [track, setTrack] = useState<Track | undefined>();
+  const [error, setError] = useState<string | undefined>();
+  const [isLoading, setIsLoading] = useState(false);
+
+  async function loadRandomTrack(): Promise<void> {
+    setError(undefined);
+    setIsLoading(true);
+
+    try {
+      setTrack(await fetchRandomTrack());
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : String(caughtError));
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  function handleOpenChange(nextOpen: boolean): void {
+    setOpen(nextOpen);
+
+    if (nextOpen && !track && !isLoading) {
+      void loadRandomTrack();
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              aria-label="Random banger"
+              nativeButton={false}
+              render={<DialogTrigger />}
+              size="icon-lg"
+              variant="outline"
+            />
+          }
+        >
+          <ShuffleIcon aria-hidden="true" weight="bold" />
+        </TooltipTrigger>
+        <TooltipContent>Random banger</TooltipContent>
+      </Tooltip>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Random banger</DialogTitle>
+          <DialogDescription>The archive throws one back.</DialogDescription>
+        </DialogHeader>
+
+        {isLoading ? (
+          <div className="flex min-h-24 items-center justify-center gap-2 text-sm font-bold text-muted-foreground">
+            <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+            Scanning the archive
+          </div>
+        ) : undefined}
+
+        {!isLoading && track ? (
+          <div className="grid gap-3">
+            <div className="grid grid-cols-[3.25rem_minmax(0,1fr)] items-center gap-3 rounded-lg border border-border bg-secondary/50 p-2">
+              {track.albumImageUrl ? (
+                <img alt="" className="track-artwork" src={track.albumImageUrl} />
+              ) : (
+                <span aria-hidden="true" className="track-artwork track-artwork-fallback" />
+              )}
+              <span className="min-w-0">
+                <span className="block text-sm font-extrabold [overflow-wrap:anywhere]">
+                  {track.title}
+                </span>
+                <span className="mt-1 block text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                  {track.artists.join(", ")}
+                </span>
+              </span>
+            </div>
+            {track.note ? <p className="text-sm text-muted-foreground">{track.note}</p> : undefined}
+            <div className="flex flex-wrap gap-2">
+              <Button
+                nativeButton={false}
+                render={<a href={track.spotifyUrl} rel="noreferrer" target="_blank" />}
+              >
+                <SpotifyLogoIcon aria-hidden="true" weight="fill" />
+                Open on Spotify
+              </Button>
+              <Button onClick={loadRandomTrack} type="button" variant="outline">
+                <ShuffleIcon aria-hidden="true" weight="bold" />
+                Another one
+              </Button>
+            </div>
+          </div>
+        ) : undefined}
+
+        {error ? <p className="text-sm text-destructive">{error}</p> : undefined}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const sshCommand = "ssh rave.fluncle.com";
+
+function TerminalRaversDialog() {
+  const [didCopy, setDidCopy] = useState(false);
+  const copyResetTimeout = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  useEffect(() => {
+    return () => clearTimeout(copyResetTimeout.current);
+  }, []);
+
+  async function copySshCommand(): Promise<void> {
+    await navigator.clipboard.writeText(sshCommand);
+    setDidCopy(true);
+    clearTimeout(copyResetTimeout.current);
+    copyResetTimeout.current = setTimeout(() => setDidCopy(false), 2000);
+  }
+
+  return (
+    <Dialog>
+      <DialogTrigger className="cli-link">
+        <TerminalIcon aria-hidden="true" size={14} weight="bold" />
+        ssh rave.fluncle.com
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Terminal ravers</DialogTitle>
+          <DialogDescription>
+            Browse tracks, submit bangers, and enter the Fluncle rave terminal.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid min-w-0 gap-2">
+          <p className="text-sm font-bold">Connect</p>
+          <div className="flex min-w-0 items-center gap-2">
+            <code className="cli-command min-w-0 flex-1 px-3 py-2.5">{sshCommand}</code>
+            <Button
+              aria-label="Copy SSH command"
+              onClick={copySshCommand}
+              size="icon"
+              variant="outline"
+            >
+              {didCopy ? (
+                <CheckIcon aria-hidden="true" className="text-primary" weight="bold" />
+              ) : (
+                <CopyIcon aria-hidden="true" weight="bold" />
+              )}
+            </Button>
+          </div>
+          <p aria-live="polite" className="sr-only">
+            {didCopy ? "SSH command copied." : ""}
+          </p>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -449,7 +620,7 @@ function SubmitTrackDialog() {
 
         {didSubmit ? (
           <p className="rounded-md border border-primary/30 bg-accent px-3 py-2 text-sm text-accent-foreground">
-            Submission received.
+            Received. Fluncle will give it a listen.
           </p>
         ) : undefined}
 
@@ -485,16 +656,14 @@ function CliInstallDialog() {
 
   return (
     <Dialog>
-      <Button nativeButton={false} render={<DialogTrigger />} size="lg" variant="ghost">
-        <DownloadSimpleIcon aria-hidden="true" weight="bold" />
-        Download the CLI
-      </Button>
+      <DialogTrigger className="cli-link">
+        <DownloadSimpleIcon aria-hidden="true" size={14} weight="bold" />
+        install CLI
+      </DialogTrigger>
       <DialogContent className="sm:max-w-[32rem]">
         <DialogHeader>
           <DialogTitle>Install the Fluncle CLI</DialogTitle>
-          <DialogDescription>
-            One command installs it. The playlist follows you into the terminal.
-          </DialogDescription>
+          <DialogDescription>Same bangers, no browser.</DialogDescription>
         </DialogHeader>
         <div className="grid min-w-0 gap-2">
           <p className="text-sm font-bold">Install</p>
@@ -574,33 +743,12 @@ function TrackRow({ track, trackNumber }: { track: Track; trackNumber: number })
   );
 }
 
-function LoadingRows() {
-  return (
-    <div
-      aria-label="Loading tracks"
-      className="grid m-0 list-none p-0 [&>.track-row:last-child]:border-b-0"
-      role="status"
-    >
-      {Array.from({ length: 6 }).map((_, index) => (
-        <div className="track-row pointer-events-none cursor-default" key={index}>
-          <span className="track-index">--</span>
-          <span className="track-artwork track-artwork-fallback" />
-          <span className="min-w-0">
-            <span className="block h-[0.85rem] w-2/3 animate-pulse rounded-full bg-border" />
-            <span className="mt-3 block h-[0.85rem] w-1/3 animate-pulse rounded-full bg-border" />
-          </span>
-          <span className="hidden justify-self-end sm:block">
-            <span className="block h-[0.85rem] w-16 animate-pulse rounded-full bg-border" />
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function formatDate(value: string): string {
-  return new Intl.DateTimeFormat(undefined, {
+  // Pinned locale and timezone so the server-rendered date matches hydration
+  // on every client; VOICE.md's tabular convention is "Jun 4".
+  return new Intl.DateTimeFormat("en-US", {
     day: "numeric",
     month: "short",
+    timeZone: "UTC",
   }).format(new Date(value));
 }

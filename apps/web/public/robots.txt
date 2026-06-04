@@ -1,0 +1,9 @@
+# fluncle.com: one page, one archive. Crawl away.
+# Note: Cloudflare's managed robots.txt prepends its own directives when
+# enabled in the dashboard; this file is the origin's intent.
+
+User-agent: *
+Allow: /
+Disallow: /api/admin/
+
+Sitemap: https://www.fluncle.com/sitemap.xml

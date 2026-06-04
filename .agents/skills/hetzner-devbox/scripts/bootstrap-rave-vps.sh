@@ -86,7 +86,7 @@ AllowTcpForwarding no
 AllowAgentForwarding no
 PermitTunnel no
 SSHD
-systemctl reload ssh || systemctl restart ssh
+systemctl restart ssh
 
 log "Configuring UFW"
 ufw --force reset

@@ -50,7 +50,7 @@ export const Route = createFileRoute("/rss.xml")({
 <channel>
   <title>Fluncle's Finest</title>
   <link>https://www.fluncle.com</link>
-  <description>Recent Fluncle's Finest drum and bass tracks.</description>
+  <description>Drum &amp; bass bangers from another dimension.</description>
   ${newestDate ? `<lastBuildDate>${new Date(newestDate).toUTCString()}</lastBuildDate>` : ""}
 ${items.join("\n")}
 </channel>

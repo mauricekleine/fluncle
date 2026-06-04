@@ -55,7 +55,7 @@ export async function submitCommand(input: string | undefined): Promise<void> {
     title: selected.title,
   });
 
-  console.log("Submission received.");
+  console.log("Received. Fluncle will give it a listen.");
 }
 
 async function promptLine(label: string): Promise<string> {
@@ -171,7 +171,7 @@ function buildSelectorLines(
     "Select a track to submit",
     ...candidates.map((candidate, index) => {
       const prefix = index === selectedIndex ? "> " : "  ";
-      const label = `${candidate.title} - ${candidate.artists.join(", ")}`;
+      const label = `${candidate.artists.join(", ")} — ${candidate.title}`;
       const line = truncate(`${prefix}${label}`, Math.max(columns, 20));
 
       return index === selectedIndex ? `\x1b[7m${line}\x1b[0m` : line;

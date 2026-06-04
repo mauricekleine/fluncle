@@ -36,7 +36,7 @@ export type RecentTrack = {
 
 type RecentResult = {
   ok: true;
-  transmissions: RecentTrack[];
+  tracks: RecentTrack[];
 };
 
 type FluncleFailure = {
@@ -72,7 +72,7 @@ export async function addTrack(url: string, note?: string): Promise<AddResult> {
 export async function getRecentTracks(limit = 20): Promise<RecentTrack[]> {
   const result = await runFluncleJson<RecentResult>(["recent", "--limit", String(limit), "--json"]);
 
-  return result.transmissions;
+  return result.tracks;
 }
 
 export function isSpotifyTrackInput(input: string | undefined): boolean {

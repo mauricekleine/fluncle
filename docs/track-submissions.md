@@ -3,7 +3,7 @@
 ## Goal
 
 Let listeners submit Spotify tracks to Fluncle without publishing them immediately.
-Submissions are reviewed by the operator and only become real Fluncle transmissions through the existing authenticated admin add flow.
+Submissions are reviewed by the operator and only become real Fluncle's Finest bangers through the existing authenticated admin add flow.
 
 ## Architecture
 

@@ -8,7 +8,7 @@ const contactMaxLength = 120;
 const rateLimitWindowMs = 60 * 60 * 1000;
 const rateLimitMaxSubmissions = 5;
 
-const submissionSources = ["web", "cli"] as const;
+const submissionSources = ["web", "cli", "ssh"] as const;
 const submissionStatuses = ["pending", "approved", "rejected"] as const;
 
 export type SubmissionSource = (typeof submissionSources)[number];
@@ -348,7 +348,7 @@ function parseArtists(value: unknown): string[] {
 }
 
 function parseSource(value: unknown): SubmissionSource {
-  if (value === "web" || value === "cli") {
+  if (value === "web" || value === "cli" || value === "ssh") {
     return value;
   }
 

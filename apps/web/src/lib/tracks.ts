@@ -1,5 +1,6 @@
 export type Track = {
   addedAt: string;
+  album?: string;
   albumImageUrl?: string;
   artists: string[];
   note?: string;
@@ -12,6 +13,11 @@ export type TracksResponse = {
   nextCursor?: string;
   totalCount: number;
   tracks: Track[];
+};
+
+export type RandomTrackResponse = {
+  ok: true;
+  track: Track;
 };
 
 export async function fetchTracks({
@@ -34,4 +40,16 @@ export async function fetchTracks({
   }
 
   return (await response.json()) as TracksResponse;
+}
+
+export async function fetchRandomTrack(): Promise<Track> {
+  const response = await fetch("/api/tracks/random");
+
+  if (!response.ok) {
+    throw new Error(`Failed to load random track: ${response.status}`);
+  }
+
+  const data = (await response.json()) as RandomTrackResponse;
+
+  return data.track;
 }

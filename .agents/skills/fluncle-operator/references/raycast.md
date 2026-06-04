@@ -18,7 +18,7 @@ Current commands:
 
 - `quick-add`: no-view command; reads clipboard and runs `fluncle admin add <url> --json`.
 - `add-track`: form command; Spotify URL plus optional note.
-- `recent-transmissions`: list command; runs `fluncle recent --json`.
+- `recent-tracks`: list command titled "Recent Bangers"; runs `fluncle recent --json`.
 
 Do not re-add a separate note command unless there is a materially different workflow. `Add Track` already includes an optional note field and clipboard-prefills the URL.
 
@@ -74,4 +74,4 @@ Wait until it says the entry points are built, then stop the watcher. This is of
 
 ## Non-Mutating Launch Checks
 
-Use Recent Transmissions for a safe Raycast UI check. Quick Add publishes through the admin API on success, so use it only with a track the user agrees to publish, or with a known duplicate for a non-mutating error-path check.
+Use Recent Bangers for a safe Raycast UI check. Quick Add publishes through the admin API on success, so use it only with a track the user agrees to publish, or with a known duplicate for a non-mutating error-path check.

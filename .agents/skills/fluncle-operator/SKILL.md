@@ -56,5 +56,5 @@ For CLI changes that affect deployment, rebuild and verify the local or VPS stan
 - Raycast runs with a minimal shell environment. Do not point Raycast at a Bun-linked `#!/usr/bin/env bun` script; install a standalone macOS binary at the configured CLI path.
 - After changing Raycast command manifests, `bun run build` may compile but Raycast may keep stale command indexing. Run `bun run dev` briefly to refresh, then stop it.
 - `fluncle admin add` intentionally treats Spotify track IDs as case-sensitive.
-- `fluncle recent` and Raycast recent transmissions must read through the CLI, not directly through Turso.
+- `fluncle recent` and the Raycast recent bangers command must read through the CLI, not directly through Turso.
 - `apps/web` owns server-side API behavior. Public routes can read Turso; authenticated admin routes can publish to Spotify and Telegram.

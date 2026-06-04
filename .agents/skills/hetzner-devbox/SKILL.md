@@ -1,6 +1,6 @@
 ---
 name: hetzner-devbox
-description: "Provision and harden Hetzner Cloud Ubuntu VPS profiles for AI-agent private devboxes and public SSH app servers. Use when creating or verifying a Tailscale-only devbox, a public Wish/Bubble Tea SSH terminal such as ssh rave.fluncle.com, provider firewalls, systemd services, or remote development toolchains."
+description: "Provision, harden, deploy, and verify Hetzner Cloud Ubuntu VPS profiles for AI-agent private devboxes and public SSH app servers. Use when creating or operating a Tailscale-only devbox, deploying a public Wish/Bubble Tea SSH terminal such as ssh rave.fluncle.com, configuring provider firewalls, systemd services, GeoIP database refresh, or remote development toolchains."
 ---
 
 # Hetzner Devbox
@@ -121,6 +121,40 @@ SERVER_NAME=fluncle-rave-01 BINARY_PATH=./apps/ssh-rave/dist/fluncle-ssh \
 
 The service runs as `fluncle-ssh`, binds TCP/22 with `CAP_NET_BIND_SERVICE`, and keeps writable state confined to `/var/lib/fluncle-ssh`.
 
+For Fluncle's repo-native SSH app, build and deploy manually:
+
+```sh
+GOOS=linux GOARCH=amd64 go build -C apps/ssh -o dist/fluncle-ssh-linux-x64 .
+
+SSH_AUTH_SOCK="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock" \
+SERVER_NAME=<tailscale-ip> \
+BINARY_PATH=apps/ssh/dist/fluncle-ssh-linux-x64 \
+FLUNCLE_API_URL=https://www.fluncle.com \
+FLUNCLE_GEOIP_DB=/var/lib/fluncle-ssh/dbip-country-lite.mmdb \
+packages/skills/hetzner-devbox/scripts/deploy-ssh-app-service.sh
+```
+
+The deploy script uploads the binary, writes `/etc/fluncle-ssh.env`, installs `/etc/systemd/system/fluncle-ssh.service`, reloads systemd, restarts `fluncle-ssh`, and prints service status. Remove local `apps/ssh/dist/` artifacts before committing; the repo ignores `apps/*/dist/`.
+
+### Optional GeoIP Country Codes
+
+`fluncle-ssh` can show deduplicated country codes for connected sessions when `FLUNCLE_GEOIP_DB` points at a MaxMind-compatible `.mmdb`. Unknown, private, local, or failed lookups render as `VOID`.
+
+For the production rave server, DB-IP Lite is installed outside the repo:
+
+- Database: `/var/lib/fluncle-ssh/dbip-country-lite.mmdb`
+- Updater: `/opt/fluncle-ssh/update-geoip-db.sh`
+- Timer: `fluncle-ssh-geoip-update.timer`
+- Service env: `FLUNCLE_GEOIP_DB=/var/lib/fluncle-ssh/dbip-country-lite.mmdb`
+
+Install or refresh the DB-IP Lite setup with an admin Tailscale SSH session:
+
+```sh
+ssh -p 2222 admin@<tailscale-ip> 'sudo /opt/fluncle-ssh/update-geoip-db.sh && sudo systemctl restart fluncle-ssh'
+```
+
+If provisioning from scratch, create the updater and timer on the host, download `https://download.db-ip.com/free/dbip-country-lite-YYYY-MM.mmdb.gz`, decompress it to `/var/lib/fluncle-ssh/dbip-country-lite.mmdb`, and set owner/group to `fluncle-ssh:fluncle-ssh` with mode `0640`. DB-IP requires attribution when used; keep the SSH app's About screen attribution intact.
+
 ## Verification
 
 After setup, verify from a fresh local shell:
@@ -143,6 +177,8 @@ For public SSH app servers, verify:
 - `ssh rave.fluncle.com whoami` is rejected by the app.
 - `sudo ss -tulpn` shows the SSH app on `:22` and OpenSSH on `:2222`.
 - `sudo systemctl status fluncle-ssh` is healthy.
+- `sudo cat /etc/fluncle-ssh.env` has the expected API and optional GeoIP paths, without secrets.
+- `systemctl list-timers --all fluncle-ssh-geoip-update.timer --no-pager` shows a scheduled monthly refresh when GeoIP is enabled.
 
 ## Safety Rules
 

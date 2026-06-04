@@ -47,9 +47,9 @@
     },
     {
       "name": "recent-tracks",
-      "title": "Recent Tracks",
+      "title": "Recent Bangers",
       "subtitle": "Fluncle",
-      "description": "Browse recently published Fluncle tracks.",
+      "description": "Browse the bangers Fluncle discovered recently.",
       "mode": "view",
       "keywords": [
         "archive",

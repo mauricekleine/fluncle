@@ -46,6 +46,10 @@
         "typescript": "catalog:",
       },
     },
+    "apps/ssh": {
+      "name": "@fluncle/ssh",
+      "version": "0.1.0",
+    },
     "apps/web": {
       "name": "@fluncle/web",
       "version": "0.1.0",
@@ -265,6 +269,8 @@
     "@floating-ui/utils": ["@floating-ui/utils@0.2.11", "", {}, "sha512-RiB/yIh78pcIxl6lLMG0CgBXAZ2Y0eVHqMPYugu+9U0AeT6YBeiJpf7lbdJNIugFP5SIjwNRgo4DhR1Qxi26Gg=="],
 
     "@fluncle/cli": ["@fluncle/cli@workspace:apps/cli"],
+
+    "@fluncle/ssh": ["@fluncle/ssh@workspace:apps/ssh"],
 
     "@fluncle/web": ["@fluncle/web@workspace:apps/web"],
 

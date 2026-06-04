@@ -178,7 +178,7 @@ No database, Spotify, or Telegram changes were made.`;
     );
   }
 
-  const message = `📻 Transmission sent
+  const message = `Banger discovered
 
 ${artistLine}
 

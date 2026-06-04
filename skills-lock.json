@@ -7,10 +7,10 @@
       "skillPath": "skills/ai-seo/SKILL.md",
       "computedHash": "a6befed362ed7127d051db085bc8be9470abbe87f70a40ee9a05e201dd8c693f"
     },
-    "copywriting-maurice": {
-      "source": "/Users/maurice/Projects/fluncle/packages/skills/copywriting-maurice",
+    "copywriting-fluncle": {
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/copywriting-fluncle",
       "sourceType": "local",
-      "computedHash": "14ac1bebaf6ed3718664ef3fb4905e72f674c95153b471e7143996a2303c63d4"
+      "computedHash": "245f653feb899e920cf3355a37600f5305ebe9d8a198b0b4c4b411fac77a1b9d"
     },
     "fluncle-goal-writer": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/goal-writer",
@@ -20,12 +20,12 @@
     "fluncle-operator": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-operator",
       "sourceType": "local",
-      "computedHash": "154a625a396768ef3aa252430167466f91ad268a4dc10e3b79d37eee689bbb2c"
+      "computedHash": "306bd9ce5d6ef4c09eac7d7f41136d0fdaad589ac37b332cf63047dfd6a2a402"
     },
     "hetzner-devbox": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/hetzner-devbox",
       "sourceType": "local",
-      "computedHash": "aff498b547850bcabae44ca697ae71f76fef6078126ac951956459865891425e"
+      "computedHash": "3749b41b1386d44166c68bfa63470d19741f9f7dc195a41eedea27ac34bfa091"
     },
     "seo-audit": {
       "source": "coreyhaines31/marketingskills",

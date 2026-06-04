@@ -1,0 +1,29 @@
+# Fluncle
+
+> Drum & bass bangers from another dimension. Fluncle digs and certifies the tracks, publishes them to Spotify and Telegram, and keeps the full archive at fluncle.com.
+
+Fluncle is a single selector, not a team. Every track in the archive is one he discovered, listened to, and certified. Dates mark discovery: the day Fluncle first heard the tune, not the day it released.
+
+The collection is called Fluncle's Finest. New tracks land most nights.
+
+## Listen
+
+- [Fluncle's Finest on Spotify](https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0): the playlist itself
+- [Fluncle on Telegram](https://t.me/fluncle): one banger per post, most nights
+- [The archive](https://www.fluncle.com/): every certified track with discovery dates and notes
+
+## Data
+
+- [RSS feed](https://www.fluncle.com/rss.xml): the 25 most recent tracks
+- [Tracks API](https://www.fluncle.com/api/tracks): the archive as JSON, cursor-paginated; accepts limit (max 48) and cursor query params
+- [Random track](https://www.fluncle.com/api/tracks/random): one pick from the archive, as JSON
+
+## Submit
+
+- [Search API](https://www.fluncle.com/api/search): GET with a q query param (a track search or Spotify URL), returns candidates as JSON
+- [Submissions API](https://www.fluncle.com/api/submissions): POST a candidate for review; Fluncle gives it a listen before anything publishes
+
+## Tools
+
+- [CLI installer](https://www.fluncle.com/cli/latest.sh): curl -fsSL https://www.fluncle.com/cli/latest.sh | sh, then try fluncle recent
+- The rave terminal: ssh rave.fluncle.com, the deepest room in the ecosystem

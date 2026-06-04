@@ -29,6 +29,7 @@ FLUNCLE_API_URL="${FLUNCLE_API_URL:-https://www.fluncle.com}"
 FLUNCLE_SSH_HOST="${FLUNCLE_SSH_HOST:-0.0.0.0}"
 FLUNCLE_SSH_PORT="${FLUNCLE_SSH_PORT:-22}"
 FLUNCLE_SSH_DATA_DIR="${FLUNCLE_SSH_DATA_DIR:-/var/lib/fluncle-ssh}"
+FLUNCLE_GEOIP_DB="${FLUNCLE_GEOIP_DB:-}"
 
 if [[ -z "${BINARY_PATH}" ]]; then
   printf 'BINARY_PATH is required, for example ./apps/ssh-rave/dist/fluncle-ssh\n' >&2
@@ -43,12 +44,13 @@ fi
 printf 'Uploading %s to %s@%s:%s\n' "${BINARY_PATH}" "${USERNAME}" "${SERVER_NAME}" "${REMOTE_TMP}"
 scp -P "${ADMIN_SSH_PORT}" "${BINARY_PATH}" "${USERNAME}@${SERVER_NAME}:${REMOTE_TMP}"
 
-remote_env=$(printf 'REMOTE_TMP=%q FLUNCLE_API_URL=%q FLUNCLE_SSH_HOST=%q FLUNCLE_SSH_PORT=%q FLUNCLE_SSH_DATA_DIR=%q' \
+remote_env=$(printf 'REMOTE_TMP=%q FLUNCLE_API_URL=%q FLUNCLE_SSH_HOST=%q FLUNCLE_SSH_PORT=%q FLUNCLE_SSH_DATA_DIR=%q FLUNCLE_GEOIP_DB=%q' \
   "${REMOTE_TMP}" \
   "${FLUNCLE_API_URL}" \
   "${FLUNCLE_SSH_HOST}" \
   "${FLUNCLE_SSH_PORT}" \
-  "${FLUNCLE_SSH_DATA_DIR}")
+  "${FLUNCLE_SSH_DATA_DIR}" \
+  "${FLUNCLE_GEOIP_DB}")
 
 ssh -p "${ADMIN_SSH_PORT}" -o BatchMode=yes -o ConnectTimeout=30 "${USERNAME}@${SERVER_NAME}" "${remote_env} bash -s" <<'REMOTE'
 set -Eeuo pipefail
@@ -72,6 +74,7 @@ FLUNCLE_API_URL=${FLUNCLE_API_URL}
 FLUNCLE_SSH_HOST=${FLUNCLE_SSH_HOST}
 FLUNCLE_SSH_PORT=${FLUNCLE_SSH_PORT}
 FLUNCLE_SSH_DATA_DIR=${FLUNCLE_SSH_DATA_DIR}
+FLUNCLE_GEOIP_DB=${FLUNCLE_GEOIP_DB}
 ENV
 sudo install -m 0640 -o root -g "${APP_GROUP}" "${tmp_env}" "${ENV_FILE}"
 rm -f "${tmp_env}"
@@ -105,6 +108,7 @@ sudo install -m 0644 -o root -g root "${tmp_service}" "${SERVICE_FILE}"
 rm -f "${tmp_service}"
 
 sudo systemctl daemon-reload
-sudo systemctl enable --now fluncle-ssh
+sudo systemctl enable fluncle-ssh
+sudo systemctl restart fluncle-ssh
 sudo systemctl status --no-pager fluncle-ssh
 REMOTE

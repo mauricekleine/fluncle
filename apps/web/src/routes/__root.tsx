@@ -2,24 +2,24 @@
 
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
 import { type ReactNode } from "react";
+import { siteUrl } from "../lib/fluncle-links";
 import appCss from "../styles.css?url";
+
+const title = "Fluncle: drum & bass bangers from another dimension";
+const description =
+  "Drum & bass bangers from another dimension. Fluncle digs and certifies the finest tracks, publishes them to Spotify and Telegram, and keeps the archive here.";
+const coverUrl = `${siteUrl}/fluncle-cover.png`;
 
 export const Route = createRootRoute({
   component: RootLayout,
   head: () => ({
     links: [
       {
-        href: "https://fonts.googleapis.com",
-        rel: "preconnect",
-      },
-      {
+        as: "font",
         crossOrigin: "anonymous",
-        href: "https://fonts.gstatic.com",
-        rel: "preconnect",
-      },
-      {
-        href: "https://fonts.googleapis.com/css2?family=Oxanium:wght@400;500;600;700;800&display=swap",
-        rel: "stylesheet",
+        href: "/fonts/oxanium-latin.woff2",
+        rel: "preload",
+        type: "font/woff2",
       },
       {
         href: appCss,
@@ -34,6 +34,16 @@ export const Route = createRootRoute({
         href: "/apple-touch-icon.png",
         rel: "apple-touch-icon",
       },
+      {
+        href: `${siteUrl}/`,
+        rel: "canonical",
+      },
+      {
+        href: "/rss.xml",
+        rel: "alternate",
+        title: "Fluncle's Finest",
+        type: "application/rss+xml",
+      },
     ],
     meta: [
       {
@@ -44,11 +54,63 @@ export const Route = createRootRoute({
         name: "viewport",
       },
       {
-        title: "Fluncle",
+        title,
       },
       {
-        content: "Fresh drum & bass transmissions from Fluncle's Finest.",
+        content: description,
         name: "description",
+      },
+      {
+        content: title,
+        property: "og:title",
+      },
+      {
+        content: "Drum & bass bangers from another dimension.",
+        property: "og:description",
+      },
+      {
+        content: coverUrl,
+        property: "og:image",
+      },
+      {
+        content: "512",
+        property: "og:image:width",
+      },
+      {
+        content: "512",
+        property: "og:image:height",
+      },
+      {
+        content: "Fluncle cover art",
+        property: "og:image:alt",
+      },
+      {
+        content: `${siteUrl}/`,
+        property: "og:url",
+      },
+      {
+        content: "website",
+        property: "og:type",
+      },
+      {
+        content: "Fluncle",
+        property: "og:site_name",
+      },
+      {
+        content: "summary",
+        name: "twitter:card",
+      },
+      {
+        content: title,
+        name: "twitter:title",
+      },
+      {
+        content: "Drum & bass bangers from another dimension.",
+        name: "twitter:description",
+      },
+      {
+        content: coverUrl,
+        name: "twitter:image",
       },
     ],
     scripts: [

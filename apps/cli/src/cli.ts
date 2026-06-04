@@ -33,6 +33,12 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "random") {
+    const { randomCommand } = await import("./commands/random");
+    await runRandom([subcommand, ...rest].filter(Boolean), randomCommand);
+    return;
+  }
+
   if (command === "submit") {
     const { submitCommand } = await import("./commands/submit");
     await submitCommand([subcommand, ...rest].filter(Boolean).join(" ") || undefined);
@@ -170,19 +176,17 @@ async function runRecent(
     throw new Error("Limit must be an integer between 1 and 100");
   }
 
-  const transmissions = await recentCommand(limit);
+  const tracks = await recentCommand(limit);
 
   if (parsed.values.json) {
     printJson({
       ok: true,
-      transmissions,
+      tracks,
     });
     return;
   }
 
-  console.log(
-    transmissions.map((track) => `${track.artists.join(", ")} — ${track.title}`).join("\n"),
-  );
+  console.log(tracks.map((track) => `${track.artists.join(", ")} — ${track.title}`).join("\n"));
 }
 
 async function runOpen(
@@ -249,6 +253,40 @@ async function runOpen(
   });
 }
 
+async function runRandom(
+  args: string[],
+  randomCommand: typeof import("./commands/random").randomCommand,
+): Promise<void> {
+  const parsed = parseArgs({
+    allowPositionals: false,
+    args,
+    options: {
+      json: {
+        default: false,
+        type: "boolean",
+      },
+    },
+  });
+
+  const track = await randomCommand();
+
+  if (parsed.values.json) {
+    printJson({
+      ok: true,
+      track,
+    });
+    return;
+  }
+
+  console.log(`${track.artists.join(", ")} — ${track.title}`);
+
+  if (track.note) {
+    console.log(`Note: ${track.note}`);
+  }
+
+  console.log(track.spotifyUrl);
+}
+
 async function runVersion(
   args: string[],
   versionCommand: typeof import("./version").versionCommand,
@@ -275,25 +313,33 @@ async function runVersion(
 }
 
 function printHelp(): void {
-  console.log(`fluncle
+  console.log(`fluncle — drum & bass bangers from another dimension
 
 Global options:
-  --env <local|production>  Config profile to load (default: production)
+  --env <local|production>   Config profile to load (default: production)
 
-Commands:
-  fluncle recent [--limit 10] [--json]
-  fluncle list [--limit 10] [--json]
-  fluncle open [--limit 20] [--browser|--app]
-  fluncle open playlist [--browser|--app]
-  fluncle open telegram [--browser|--app]
-  fluncle submit [search-or-spotify-url]
-  fluncle version [--check] [--json]
+Listen:
+  fluncle recent [--limit 10] [--json]          The latest bangers, newest first
+  fluncle list [--limit 10] [--json]            Alias for recent
+  fluncle open [--limit 20] [--browser|--app]   Pick a track, open it in Spotify
+  fluncle open playlist [--browser|--app]       Open Fluncle's Finest in Spotify
+  fluncle open telegram [--browser|--app]       Open the Telegram feed
+  fluncle random [--json]                       The archive throws one back
+
+Share:
+  fluncle submit [search-or-spotify-url]   Send a track for review
+
+Meta:
+  fluncle version [--check] [--json]   Print the version, or check for a newer one
+
+Operator:
   fluncle admin add <spotify-url> [--note "text"] [--dry-run] [--json]
-  fluncle admin submissions
-  fluncle admin submissions review <submission-id>
-  fluncle admin submissions reject <submission-id>
-  fluncle admin submissions approve <submission-id>
-  fluncle admin auth spotify`);
+      Certify a track into the archive
+  fluncle admin submissions                          List pending submissions
+  fluncle admin submissions review <submission-id>   Inspect one submission
+  fluncle admin submissions reject <submission-id>   Reject a submission
+  fluncle admin submissions approve <submission-id>  Approve a submission
+  fluncle admin auth spotify                         Authorize Spotify access`);
 }
 
 function parseGlobalOptions(args: string[]): GlobalOptions {

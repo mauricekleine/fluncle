@@ -1,6 +1,6 @@
 ---
 name: Fluncle
-description: Fresh drum & bass transmissions from Fluncle's Finest, archived under a burning eclipse.
+description: Drum & bass bangers from another dimension, archived under a burning eclipse.
 colors:
   eclipse-gold: "#f5b800"
   eclipse-glow: "#ffd057"
@@ -170,7 +170,7 @@ Depth in this system comes from translucency, not shadows: every raised surface 
 
 **The Through-the-Glass Rule.** Surfaces are windows onto the cosmos. A surface that fully occludes the backdrop (opaque, blurless) must justify itself; a surface with a drop shadow is prohibited outright.
 
-**The One Pane Rule.** Glass does not stack on glass. One blurred shell per view (PRODUCT.md bans "glassy card stacks" by name); content inside a pane sits flat on it.
+**The One Pane Rule.** Glass does not stack on glass. Every pane sits directly on the cosmos, never on another pane (PRODUCT.md bans "glassy card stacks" by name); content inside a pane sits flat on it. The cover frame, the playlist shell, and the nerd card are each panes; none of them nest.
 
 **The Legible Sky Rule.** Text never sits on the raw backdrop. Every text surface is a pane that dims what it covers enough to hold WCAG AA (4.5:1 for body text), even where the burning sun sits behind the glass. If a bright backdrop region breaks contrast, the pane gets more opaque, not the text dimmer.
 
@@ -231,7 +231,7 @@ The identity anchor: the cover art wrapped in a 1px gold-tinted border and a 4px
 
 - **Don't** build SaaS dashboards, bright streaming-app clones, or generic landing-page hero sections (PRODUCT.md anti-references, verbatim).
 - **Don't** write oversized marketing copy; there is no pitch, the tracklist is the page.
-- **Don't** stack glassy cards or add decorative gradients that ignore the cover art; one blurred pane per view, and every gradient must derive from the eclipse palette (The One Pane Rule).
+- **Don't** stack glassy cards or add decorative gradients that ignore the cover art; panes sit on the cosmos, never on each other, and every gradient must derive from the eclipse palette (The One Pane Rule).
 - **Don't** use box-shadows for depth; depth is what shows through the glass.
 - **Don't** set body copy in Oxanium (The One Voice Rule), and don't add uppercase-tracked eyebrow labels; labels are bold and small, not tracked-out.
 - **Don't** introduce a light theme, cool grays, or a second accent hue; the system is dark-only with one sun.

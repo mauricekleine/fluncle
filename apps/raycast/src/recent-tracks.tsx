@@ -13,14 +13,14 @@ export default function Command() {
         void showToast({
           message: error instanceof Error ? error.message : String(error),
           style: Toast.Style.Failure,
-          title: "Failed to load recent tracks",
+          title: "Failed to load recent bangers",
         });
       })
       .finally(() => setIsLoading(false));
   }, []);
 
   return (
-    <List isLoading={isLoading} searchBarPlaceholder="Search recent tracks">
+    <List isLoading={isLoading} searchBarPlaceholder="Search recent bangers">
       {tracks.map((track) => (
         <List.Item
           key={track.trackId}

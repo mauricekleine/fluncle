@@ -10,3 +10,7 @@ build/
 apps/*/dist/
 apps/*/.output/
 apps/*/.wrangler/
+
+# fluncle-ssh local dev state (host keys) and go build artifact
+apps/ssh/.local/
+apps/ssh/ssh

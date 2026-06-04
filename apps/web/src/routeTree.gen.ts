@@ -9,12 +9,14 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as RssDotxmlRouteImport } from './routes/rss[.]xml'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as CliLatestDotshRouteImport } from './routes/cli/latest[.]sh'
 import { Route as ApiTracksRouteImport } from './routes/api/tracks'
 import { Route as ApiSubmissionsRouteImport } from './routes/api/submissions'
 import { Route as ApiSearchRouteImport } from './routes/api/search'
+import { Route as ApiTracksRandomRouteImport } from './routes/api/tracks/random'
 import { Route as ApiAdminTracksRouteImport } from './routes/api/admin/tracks'
 import { Route as ApiAdminSubmissionsRouteImport } from './routes/api/admin/submissions'
 import { Route as ApiAdminSubmissionsSubmissionIdRouteImport } from './routes/api/admin/submissions/$submissionId'
@@ -23,6 +25,11 @@ import { Route as ApiAdminSubmissionsSubmissionIdApproveRouteImport } from './ro
 import { Route as ApiAdminSpotifyAuthStartRouteImport } from './routes/api/admin/spotify/auth/start'
 import { Route as ApiAdminSpotifyAuthCallbackRouteImport } from './routes/api/admin/spotify/auth/callback'
 
+const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
+  id: '/sitemap.xml',
+  path: '/sitemap.xml',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const RssDotxmlRoute = RssDotxmlRouteImport.update({
   id: '/rss.xml',
   path: '/rss.xml',
@@ -52,6 +59,11 @@ const ApiSearchRoute = ApiSearchRouteImport.update({
   id: '/api/search',
   path: '/api/search',
   getParentRoute: () => rootRouteImport,
+} as any)
+const ApiTracksRandomRoute = ApiTracksRandomRouteImport.update({
+  id: '/random',
+  path: '/random',
+  getParentRoute: () => ApiTracksRoute,
 } as any)
 const ApiAdminTracksRoute = ApiAdminTracksRouteImport.update({
   id: '/api/admin/tracks',
@@ -97,12 +109,14 @@ const ApiAdminSpotifyAuthCallbackRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/rss.xml': typeof RssDotxmlRoute
+  '/sitemap.xml': typeof SitemapDotxmlRoute
   '/api/search': typeof ApiSearchRoute
   '/api/submissions': typeof ApiSubmissionsRoute
-  '/api/tracks': typeof ApiTracksRoute
+  '/api/tracks': typeof ApiTracksRouteWithChildren
   '/cli/latest.sh': typeof CliLatestDotshRoute
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
   '/api/admin/tracks': typeof ApiAdminTracksRoute
+  '/api/tracks/random': typeof ApiTracksRandomRoute
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
   '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
@@ -112,12 +126,14 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/rss.xml': typeof RssDotxmlRoute
+  '/sitemap.xml': typeof SitemapDotxmlRoute
   '/api/search': typeof ApiSearchRoute
   '/api/submissions': typeof ApiSubmissionsRoute
-  '/api/tracks': typeof ApiTracksRoute
+  '/api/tracks': typeof ApiTracksRouteWithChildren
   '/cli/latest.sh': typeof CliLatestDotshRoute
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
   '/api/admin/tracks': typeof ApiAdminTracksRoute
+  '/api/tracks/random': typeof ApiTracksRandomRoute
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
   '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
@@ -128,12 +144,14 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/rss.xml': typeof RssDotxmlRoute
+  '/sitemap.xml': typeof SitemapDotxmlRoute
   '/api/search': typeof ApiSearchRoute
   '/api/submissions': typeof ApiSubmissionsRoute
-  '/api/tracks': typeof ApiTracksRoute
+  '/api/tracks': typeof ApiTracksRouteWithChildren
   '/cli/latest.sh': typeof CliLatestDotshRoute
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
   '/api/admin/tracks': typeof ApiAdminTracksRoute
+  '/api/tracks/random': typeof ApiTracksRandomRoute
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
   '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
@@ -145,12 +163,14 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/rss.xml'
+    | '/sitemap.xml'
     | '/api/search'
     | '/api/submissions'
     | '/api/tracks'
     | '/cli/latest.sh'
     | '/api/admin/submissions'
     | '/api/admin/tracks'
+    | '/api/tracks/random'
     | '/api/admin/submissions/$submissionId'
     | '/api/admin/spotify/auth/callback'
     | '/api/admin/spotify/auth/start'
@@ -160,12 +180,14 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/rss.xml'
+    | '/sitemap.xml'
     | '/api/search'
     | '/api/submissions'
     | '/api/tracks'
     | '/cli/latest.sh'
     | '/api/admin/submissions'
     | '/api/admin/tracks'
+    | '/api/tracks/random'
     | '/api/admin/submissions/$submissionId'
     | '/api/admin/spotify/auth/callback'
     | '/api/admin/spotify/auth/start'
@@ -175,12 +197,14 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/rss.xml'
+    | '/sitemap.xml'
     | '/api/search'
     | '/api/submissions'
     | '/api/tracks'
     | '/cli/latest.sh'
     | '/api/admin/submissions'
     | '/api/admin/tracks'
+    | '/api/tracks/random'
     | '/api/admin/submissions/$submissionId'
     | '/api/admin/spotify/auth/callback'
     | '/api/admin/spotify/auth/start'
@@ -191,9 +215,10 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   RssDotxmlRoute: typeof RssDotxmlRoute
+  SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   ApiSearchRoute: typeof ApiSearchRoute
   ApiSubmissionsRoute: typeof ApiSubmissionsRoute
-  ApiTracksRoute: typeof ApiTracksRoute
+  ApiTracksRoute: typeof ApiTracksRouteWithChildren
   CliLatestDotshRoute: typeof CliLatestDotshRoute
   ApiAdminSubmissionsRoute: typeof ApiAdminSubmissionsRouteWithChildren
   ApiAdminTracksRoute: typeof ApiAdminTracksRoute
@@ -203,6 +228,13 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/sitemap.xml': {
+      id: '/sitemap.xml'
+      path: '/sitemap.xml'
+      fullPath: '/sitemap.xml'
+      preLoaderRoute: typeof SitemapDotxmlRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/rss.xml': {
       id: '/rss.xml'
       path: '/rss.xml'
@@ -244,6 +276,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/search'
       preLoaderRoute: typeof ApiSearchRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/api/tracks/random': {
+      id: '/api/tracks/random'
+      path: '/random'
+      fullPath: '/api/tracks/random'
+      preLoaderRoute: typeof ApiTracksRandomRouteImport
+      parentRoute: typeof ApiTracksRoute
     }
     '/api/admin/tracks': {
       id: '/api/admin/tracks'
@@ -297,6 +336,18 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface ApiTracksRouteChildren {
+  ApiTracksRandomRoute: typeof ApiTracksRandomRoute
+}
+
+const ApiTracksRouteChildren: ApiTracksRouteChildren = {
+  ApiTracksRandomRoute: ApiTracksRandomRoute,
+}
+
+const ApiTracksRouteWithChildren = ApiTracksRoute._addFileChildren(
+  ApiTracksRouteChildren,
+)
+
 interface ApiAdminSubmissionsSubmissionIdRouteChildren {
   ApiAdminSubmissionsSubmissionIdApproveRoute: typeof ApiAdminSubmissionsSubmissionIdApproveRoute
   ApiAdminSubmissionsSubmissionIdRejectRoute: typeof ApiAdminSubmissionsSubmissionIdRejectRoute
@@ -330,9 +381,10 @@ const ApiAdminSubmissionsRouteWithChildren =
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   RssDotxmlRoute: RssDotxmlRoute,
+  SitemapDotxmlRoute: SitemapDotxmlRoute,
   ApiSearchRoute: ApiSearchRoute,
   ApiSubmissionsRoute: ApiSubmissionsRoute,
-  ApiTracksRoute: ApiTracksRoute,
+  ApiTracksRoute: ApiTracksRouteWithChildren,
   CliLatestDotshRoute: CliLatestDotshRoute,
   ApiAdminSubmissionsRoute: ApiAdminSubmissionsRouteWithChildren,
   ApiAdminTracksRoute: ApiAdminTracksRoute,

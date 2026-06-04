@@ -1,0 +1,13 @@
+{
+  "name": "@fluncle/ssh",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "go build -o dist/fluncle-ssh .",
+    "build:linux-x64": "GOOS=linux GOARCH=amd64 go build -o dist/fluncle-ssh-linux-x64 .",
+    "dev": "FLUNCLE_API_URL=http://127.0.0.1:3000 FLUNCLE_SSH_HOST=127.0.0.1 FLUNCLE_SSH_PORT=2222 FLUNCLE_SSH_DATA_DIR=.local go run .",
+    "format": "gofmt -w .",
+    "lint": "go test ./...",
+    "typecheck": "go test ./..."
+  }
+}

@@ -1,6 +1,6 @@
 import { publicApiGet } from "../api";
 
-export type RecentTransmission = {
+export type RecentTrack = {
   trackId: string;
   spotifyUrl: string;
   title: string;
@@ -30,7 +30,7 @@ type TracksResponse = {
   nextCursor?: string;
 };
 
-export async function recentCommand(limit: number): Promise<RecentTransmission[]> {
+export async function recentCommand(limit: number): Promise<RecentTrack[]> {
   const response = await publicApiGet<TracksResponse>(`/api/tracks?limit=${limit}`);
 
   return response.tracks.map((track) => {

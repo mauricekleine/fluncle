@@ -1,5 +1,7 @@
 # Fluncle
 
+> Drum & bass bangers from another dimension.
+
 Fluncle publishes drum & bass tracks to Fluncle's Finest on Spotify and Telegram, then shows the public archive on fluncle.com.
 
 ## Monorepo Layout
@@ -127,7 +129,7 @@ bun run --cwd apps/web preview
 bun run --cwd apps/web deploy
 ```
 
-The public app is dark-only and centered around the Fluncle cover art. Track data is loaded from `/api/tracks` with limit/cursor pagination. Track rows open Spotify directly and use Spotify album artwork when available. The public RSS feed is available at `/rss.xml`.
+The public app is dark-only and centered around the Fluncle cover art. The first page of tracks is server-rendered for crawlers; further pages load from `/api/tracks` with limit/cursor pagination. Track rows open Spotify directly and use Spotify album artwork when available. The public RSS feed is available at `/rss.xml`; crawler surfaces are `/robots.txt`, `/sitemap.xml`, and `/llms.txt`.
 
 ### Deploy Web To Cloudflare
 

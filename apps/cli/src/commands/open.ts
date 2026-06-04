@@ -1,5 +1,5 @@
 import { CliError } from "../output";
-import { type RecentTransmission, recentCommand } from "./recent";
+import { type RecentTrack, recentCommand } from "./recent";
 
 const SPOTIFY_PLAYLIST_URL =
   "https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0?si=054d3c6cbcf14a36";
@@ -29,7 +29,7 @@ export async function openRecentCommand(options: OpenRecentOptions): Promise<voi
   const tracks = await recentCommand(options.limit);
 
   if (tracks.length === 0) {
-    console.log("No recent tracks found.");
+    console.log("No bangers discovered yet.");
     return;
   }
 
@@ -92,9 +92,7 @@ function platformOpenCommand(): string | undefined {
   return undefined;
 }
 
-async function selectRecentTrack(
-  tracks: RecentTransmission[],
-): Promise<RecentTransmission | undefined> {
+async function selectRecentTrack(tracks: RecentTrack[]): Promise<RecentTrack | undefined> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw new CliError(
       "not_interactive",
@@ -110,7 +108,7 @@ async function selectRecentTrack(
   const stdout = process.stdout;
   const wasRaw = stdin.isRaw === true;
 
-  return await new Promise<RecentTransmission | undefined>((resolve) => {
+  return await new Promise<RecentTrack | undefined>((resolve) => {
     function cleanup(): void {
       if (done) {
         return;
@@ -123,7 +121,7 @@ async function selectRecentTrack(
       stdout.write("\x1b[?25h");
     }
 
-    function finish(track?: RecentTransmission): void {
+    function finish(track?: RecentTrack): void {
       cleanup();
       stdout.write(renderedLines > 0 ? "\n" : "");
       resolve(track);
@@ -185,7 +183,7 @@ function clearRendered(stdout: NodeJS.WriteStream, lineCount: number): void {
 }
 
 function buildSelectorLines(
-  tracks: RecentTransmission[],
+  tracks: RecentTrack[],
   selectedIndex: number,
   columns: number,
 ): string[] {
@@ -193,7 +191,7 @@ function buildSelectorLines(
     "Select a track to open in Spotify",
     ...tracks.map((track, index) => {
       const prefix = index === selectedIndex ? "> " : "  ";
-      const label = `${track.artists.join(", ")} - ${track.title}`;
+      const label = `${track.artists.join(", ")} — ${track.title}`;
       const line = truncate(`${prefix}${label}`, Math.max(columns, 20));
 
       return index === selectedIndex ? `\x1b[7m${line}\x1b[0m` : line;
