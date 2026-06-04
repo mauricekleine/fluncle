@@ -9,12 +9,27 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as RssDotxmlRouteImport } from './routes/rss[.]xml'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as CliLatestDotshRouteImport } from './routes/cli/latest[.]sh'
 import { Route as ApiTracksRouteImport } from './routes/api/tracks'
+import { Route as ApiAdminTracksRouteImport } from './routes/api/admin/tracks'
+import { Route as ApiAdminSpotifyAuthStartRouteImport } from './routes/api/admin/spotify/auth/start'
+import { Route as ApiAdminSpotifyAuthCallbackRouteImport } from './routes/api/admin/spotify/auth/callback'
 
+const RssDotxmlRoute = RssDotxmlRouteImport.update({
+  id: '/rss.xml',
+  path: '/rss.xml',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CliLatestDotshRoute = CliLatestDotshRouteImport.update({
+  id: '/cli/latest.sh',
+  path: '/cli/latest.sh',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiTracksRoute = ApiTracksRouteImport.update({
@@ -22,40 +37,113 @@ const ApiTracksRoute = ApiTracksRouteImport.update({
   path: '/api/tracks',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAdminTracksRoute = ApiAdminTracksRouteImport.update({
+  id: '/api/admin/tracks',
+  path: '/api/admin/tracks',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAdminSpotifyAuthStartRoute =
+  ApiAdminSpotifyAuthStartRouteImport.update({
+    id: '/api/admin/spotify/auth/start',
+    path: '/api/admin/spotify/auth/start',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiAdminSpotifyAuthCallbackRoute =
+  ApiAdminSpotifyAuthCallbackRouteImport.update({
+    id: '/api/admin/spotify/auth/callback',
+    path: '/api/admin/spotify/auth/callback',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/rss.xml': typeof RssDotxmlRoute
   '/api/tracks': typeof ApiTracksRoute
+  '/cli/latest.sh': typeof CliLatestDotshRoute
+  '/api/admin/tracks': typeof ApiAdminTracksRoute
+  '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
+  '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/rss.xml': typeof RssDotxmlRoute
   '/api/tracks': typeof ApiTracksRoute
+  '/cli/latest.sh': typeof CliLatestDotshRoute
+  '/api/admin/tracks': typeof ApiAdminTracksRoute
+  '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
+  '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/rss.xml': typeof RssDotxmlRoute
   '/api/tracks': typeof ApiTracksRoute
+  '/cli/latest.sh': typeof CliLatestDotshRoute
+  '/api/admin/tracks': typeof ApiAdminTracksRoute
+  '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
+  '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/tracks'
+  fullPaths:
+    | '/'
+    | '/rss.xml'
+    | '/api/tracks'
+    | '/cli/latest.sh'
+    | '/api/admin/tracks'
+    | '/api/admin/spotify/auth/callback'
+    | '/api/admin/spotify/auth/start'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/tracks'
-  id: '__root__' | '/' | '/api/tracks'
+  to:
+    | '/'
+    | '/rss.xml'
+    | '/api/tracks'
+    | '/cli/latest.sh'
+    | '/api/admin/tracks'
+    | '/api/admin/spotify/auth/callback'
+    | '/api/admin/spotify/auth/start'
+  id:
+    | '__root__'
+    | '/'
+    | '/rss.xml'
+    | '/api/tracks'
+    | '/cli/latest.sh'
+    | '/api/admin/tracks'
+    | '/api/admin/spotify/auth/callback'
+    | '/api/admin/spotify/auth/start'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  RssDotxmlRoute: typeof RssDotxmlRoute
   ApiTracksRoute: typeof ApiTracksRoute
+  CliLatestDotshRoute: typeof CliLatestDotshRoute
+  ApiAdminTracksRoute: typeof ApiAdminTracksRoute
+  ApiAdminSpotifyAuthCallbackRoute: typeof ApiAdminSpotifyAuthCallbackRoute
+  ApiAdminSpotifyAuthStartRoute: typeof ApiAdminSpotifyAuthStartRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/rss.xml': {
+      id: '/rss.xml'
+      path: '/rss.xml'
+      fullPath: '/rss.xml'
+      preLoaderRoute: typeof RssDotxmlRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/cli/latest.sh': {
+      id: '/cli/latest.sh'
+      path: '/cli/latest.sh'
+      fullPath: '/cli/latest.sh'
+      preLoaderRoute: typeof CliLatestDotshRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/tracks': {
@@ -65,12 +153,38 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiTracksRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/admin/tracks': {
+      id: '/api/admin/tracks'
+      path: '/api/admin/tracks'
+      fullPath: '/api/admin/tracks'
+      preLoaderRoute: typeof ApiAdminTracksRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/spotify/auth/start': {
+      id: '/api/admin/spotify/auth/start'
+      path: '/api/admin/spotify/auth/start'
+      fullPath: '/api/admin/spotify/auth/start'
+      preLoaderRoute: typeof ApiAdminSpotifyAuthStartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/spotify/auth/callback': {
+      id: '/api/admin/spotify/auth/callback'
+      path: '/api/admin/spotify/auth/callback'
+      fullPath: '/api/admin/spotify/auth/callback'
+      preLoaderRoute: typeof ApiAdminSpotifyAuthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  RssDotxmlRoute: RssDotxmlRoute,
   ApiTracksRoute: ApiTracksRoute,
+  CliLatestDotshRoute: CliLatestDotshRoute,
+  ApiAdminTracksRoute: ApiAdminTracksRoute,
+  ApiAdminSpotifyAuthCallbackRoute: ApiAdminSpotifyAuthCallbackRoute,
+  ApiAdminSpotifyAuthStartRoute: ApiAdminSpotifyAuthStartRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

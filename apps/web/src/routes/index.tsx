@@ -5,7 +5,7 @@ import {
   TelegramLogoIcon,
 } from "@phosphor-icons/react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -94,7 +94,6 @@ function HomePage() {
     }
   }
 
-  const latestDate = useMemo(() => tracks[0]?.addedAt, [tracks]);
   const trackNumberBase = totalCount || tracks.length;
 
   return (
@@ -133,10 +132,7 @@ function HomePage() {
               </div>
             </aside>
 
-            <section
-              aria-labelledby="playlist-title"
-              className="min-w-0"
-            >
+            <section aria-labelledby="playlist-title" className="min-w-0">
               <div className="playlist-shell border border-border rounded-lg">
                 <div aria-hidden="true" className="playlist-header">
                   <span aria-hidden="true" />

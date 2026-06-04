@@ -1,21 +1,16 @@
-import { buildSpotifyAuthUrl, exchangeCodeForToken, extractCodeFromCallbackUrl } from "../spotify";
+import { adminApiGet } from "../api";
+
+type SpotifyAuthStartResponse = {
+  ok: true;
+  authUrl: string;
+};
 
 export async function authSpotifyCommand(): Promise<void> {
+  const response = await adminApiGet<SpotifyAuthStartResponse>("/api/admin/spotify/auth/start");
+
   console.log(`Open this Spotify authorization URL:
 
-${buildSpotifyAuthUrl()}
+${response.authUrl}
 
-After approving access, your browser will land on a 127.0.0.1 callback URL that may not load.
-Paste the full callback URL here and press Enter:`);
-
-  const callbackUrl = prompt("> ");
-
-  if (!callbackUrl) {
-    throw new Error("No callback URL provided");
-  }
-
-  const code = extractCodeFromCallbackUrl(callbackUrl.trim());
-  await exchangeCodeForToken(code);
-
-  console.log("Spotify auth stored in Turso.");
+After approving access, Spotify will return to the Fluncle admin callback and store auth server-side.`);
 }

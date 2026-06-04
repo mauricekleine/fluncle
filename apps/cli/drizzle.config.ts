@@ -1,9 +1,11 @@
 import { config } from "dotenv";
 import { defineConfig } from "drizzle-kit";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-config({ path: ".env.local" });
-config({ path: "../../.env.local" });
-config();
+const configDir = dirname(fileURLToPath(import.meta.url));
+
+config({ path: join(configDir, "../web/.dev.vars") });
 
 export default defineConfig({
   dbCredentials: {

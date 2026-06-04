@@ -49,7 +49,11 @@ function getTrackIcon(track: RecentTrack): Image.ImageLike {
 function TrackActions({ track }: { track: RecentTrack }) {
   return (
     <ActionPanel>
-      <Action.Open title="Open in Spotify" target={`spotify:track:${track.trackId}`} application="Spotify" />
+      <Action.Open
+        title="Open in Spotify"
+        target={`spotify:track:${track.trackId}`}
+        application="Spotify"
+      />
       <Action.OpenInBrowser title="Open in Browser" url={track.spotifyUrl} />
       <Action.CopyToClipboard title="Copy Spotify URL" content={track.spotifyUrl} />
     </ActionPanel>

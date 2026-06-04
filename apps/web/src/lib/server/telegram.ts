@@ -1,4 +1,4 @@
-import { loadEnv } from "./env";
+import { readEnvs } from "./env";
 import { type TrackMetadata } from "./spotify";
 
 const notePrefix = "Fluncle's thoughts:";
@@ -17,7 +17,7 @@ export function formatTelegramMessage(track: TrackMetadata, note?: string): stri
 }
 
 export async function postToTelegram(track: TrackMetadata, note?: string): Promise<void> {
-  const env = loadEnv(["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHANNEL_ID"]);
+  const env = await readEnvs(["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHANNEL_ID"]);
   const response = await fetch(
     `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`,
     {

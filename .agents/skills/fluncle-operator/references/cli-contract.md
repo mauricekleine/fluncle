@@ -1,13 +1,13 @@
 # CLI Contract
 
-The CLI is the source of truth for Fluncle publishing. Keep business logic in `apps/cli/src/`, not in Raycast or the web app.
+The deployed web app owns Fluncle server-side API routes. The CLI is a thin HTTP client for public reads and authenticated admin operations. Keep publishing mutations in `apps/web` server modules, not in Raycast.
 
 ## Commands
 
 ```bash
-bun run --cwd apps/cli fluncle add <spotify-url-or-uri> [--note "text"] [--dry-run] [--json]
 bun run --cwd apps/cli fluncle recent [--limit 10] [--json]
-bun run --cwd apps/cli fluncle auth spotify
+bun run --cwd apps/cli fluncle admin add <spotify-url-or-uri> [--note "text"] [--dry-run] [--json]
+bun run --cwd apps/cli fluncle admin auth spotify
 ```
 
 Supported track inputs:
@@ -19,7 +19,7 @@ spotify:track:<22-char-id>
 
 ## JSON Output
 
-Raycast depends on `--json`. Preserve these broad shapes:
+CLI and Raycast-style consumers depend on `--json`. Preserve these broad shapes:
 
 Success:
 
@@ -70,7 +70,7 @@ Recent:
 
 ## Publish Flow
 
-`fluncle add` should:
+`fluncle admin add` calls `POST /api/admin/tracks` with `Authorization: Bearer <FLUNCLE_API_TOKEN>`. The server should:
 
 1. Parse track ID.
 2. Check Turso duplicate by `track_id`.
@@ -88,10 +88,10 @@ If Spotify fails, do not post to Telegram. If Telegram fails after Spotify succe
 Use a duplicate track for non-mutating checks:
 
 ```bash
-bun run --cwd apps/cli fluncle add "spotify:track:2fyMcl41UQzD2WlBtJ0c8G" --json
+FLUNCLE_API_TOKEN=... bun run --cwd apps/cli fluncle admin add "spotify:track:2fyMcl41UQzD2WlBtJ0c8G" --json
 ```
 
-Use recent for Turso/config checks:
+Use recent for public API checks:
 
 ```bash
 bun run --cwd apps/cli fluncle recent --limit 1 --json

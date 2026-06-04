@@ -10,7 +10,7 @@ Fluncle is for people who follow Fluncle's Finest as a music feed: listeners who
 
 ## Product Purpose
 
-The product publishes selected drum & bass tracks to Spotify and Telegram through a reliable CLI workflow, then gives the public a fast archive at fluncle.com. Success means publishing stays operator-controlled while the public site feels immediate, focused, and unmistakably Fluncle.
+The product publishes selected drum & bass tracks to Spotify and Telegram through a server-owned admin API and a small operator CLI, then gives the public a fast archive at fluncle.com. Success means publishing stays operator-controlled while the public site feels immediate, focused, and unmistakably Fluncle.
 
 ## Brand Personality
 
@@ -22,7 +22,7 @@ Avoid SaaS dashboards, bright streaming-app clones, generic landing-page hero se
 
 ## Design Principles
 
-- Keep publishing authority in the CLI.
+- Keep publishing authority behind the authenticated admin API.
 - Put the music first: artist, title, date, note, and the Spotify open action.
 - Use the cover art as the identity anchor.
 - Make the public app quiet, centered, and fast.

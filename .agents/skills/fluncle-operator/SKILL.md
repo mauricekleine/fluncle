@@ -5,7 +5,7 @@ description: Use when working in the Fluncle repository on the Bun/Turborepo mon
 
 # Fluncle Operator
 
-Use this skill to preserve the core Fluncle architecture: the CLI is the source of truth for publishing mutations. Raycast and deployment surfaces should call `fluncle`; they should not reimplement Spotify, Telegram, or Turso mutation behavior. The public web app can read Turso through TanStack Start API routes only.
+Use this skill to preserve the core Fluncle architecture: `apps/web` owns public and admin API routes, including Spotify, Telegram, and Turso mutation behavior. The CLI is a thin HTTP client for public reads and authenticated admin commands. Raycast and deployment surfaces should call `fluncle`; they should not reimplement Spotify, Telegram, Turso, or HTTP API behavior.
 
 ## Start Here
 
@@ -20,10 +20,10 @@ rg --files -g '!node_modules' -g '!dist'
 
 - CLI behavior or JSON contracts: read `references/cli-contract.md`.
 - Raycast commands, local install, or command refresh issues: read `references/raycast.md`.
-- Public web app or fluncle.com changes: keep reads inside `apps/web/src/routes/api` route handlers and do not use TanStack server functions.
+- Public web app or fluncle.com changes: keep API behavior inside `apps/web/src/routes/api` route handlers and server modules under `apps/web/src/lib/server`.
 - VPS install or standalone binary deployment: read `references/vps-deploy.md`.
 
-3. Keep `.env.local`, `node_modules`, `dist`, and generated temporary assets out of commits.
+3. Keep `.env.local`, `.dev.vars`, `node_modules`, `dist`, and generated temporary assets out of commits.
 
 ## Validation Checklist
 
@@ -55,6 +55,6 @@ For CLI changes that affect deployment, rebuild and verify the local or VPS stan
 
 - Raycast runs with a minimal shell environment. Do not point Raycast at a Bun-linked `#!/usr/bin/env bun` script; install a standalone macOS binary at the configured CLI path.
 - After changing Raycast command manifests, `bun run build` may compile but Raycast may keep stale command indexing. Run `bun run dev` briefly to refresh, then stop it.
-- `fluncle add` intentionally treats Spotify track IDs as case-sensitive.
+- `fluncle admin add` intentionally treats Spotify track IDs as case-sensitive.
 - `fluncle recent` and Raycast recent transmissions must read through the CLI, not directly through Turso.
-- `apps/web` is read-only. It may query Turso through API routes such as `/api/tracks`, but it must not publish to Spotify or Telegram.
+- `apps/web` owns server-side API behavior. Public routes can read Turso; authenticated admin routes can publish to Spotify and Telegram.

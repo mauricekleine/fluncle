@@ -1,10 +1,9 @@
-import { db } from "./db/client";
-import { loadEnv } from "./env";
-import { CliError } from "./output";
+import { getDb } from "./db";
+import { readEnvs } from "./env";
 
-const SPOTIFY_ACCOUNTS_BASE_URL = "https://accounts.spotify.com";
-const SPOTIFY_API_BASE_URL = "https://api.spotify.com/v1";
-const SPOTIFY_SCOPES = ["playlist-modify-public", "playlist-modify-private"];
+const spotifyAccountsBaseUrl = "https://accounts.spotify.com";
+const spotifyApiBaseUrl = "https://api.spotify.com/v1";
+const spotifyScopes = ["playlist-modify-public", "playlist-modify-private"];
 
 type SpotifyTokenResponse = {
   access_token: string;
@@ -53,6 +52,19 @@ export type TrackMetadata = {
   durationMs: number;
 };
 
+export async function buildSpotifyAuthUrl(state: string): Promise<string> {
+  const env = await readEnvs(["SPOTIFY_CLIENT_ID", "SPOTIFY_REDIRECT_URI"]);
+  const params = new URLSearchParams({
+    client_id: env.SPOTIFY_CLIENT_ID,
+    redirect_uri: env.SPOTIFY_REDIRECT_URI,
+    response_type: "code",
+    scope: spotifyScopes.join(" "),
+    state,
+  });
+
+  return `${spotifyAccountsBaseUrl}/authorize?${params.toString()}`;
+}
+
 export function parseSpotifyTrackUrl(input: string): string {
   const uriMatch = input.match(/^spotify:track:([A-Za-z0-9]{22})$/);
 
@@ -65,52 +77,28 @@ export function parseSpotifyTrackUrl(input: string): string {
   try {
     url = new URL(input);
   } catch {
-    throw new CliError("invalid_spotify_url", "Invalid Spotify URL");
+    throw new ApiError("invalid_spotify_url", "Invalid Spotify URL", 400);
   }
 
   if (url.hostname !== "open.spotify.com") {
-    throw new CliError("invalid_spotify_url", "Invalid Spotify URL: expected open.spotify.com");
+    throw new ApiError(
+      "invalid_spotify_url",
+      "Invalid Spotify URL: expected open.spotify.com",
+      400,
+    );
   }
 
   const [kind, trackId] = url.pathname.split("/").filter(Boolean);
 
   if (kind !== "track" || !trackId || !/^[A-Za-z0-9]{22}$/.test(trackId)) {
-    throw new CliError("invalid_spotify_url", "Invalid Spotify track URL");
+    throw new ApiError("invalid_spotify_url", "Invalid Spotify track URL", 400);
   }
 
   return trackId;
 }
 
-export function buildSpotifyAuthUrl(): string {
-  const env = loadEnv(["SPOTIFY_CLIENT_ID", "SPOTIFY_REDIRECT_URI"]);
-  const params = new URLSearchParams({
-    client_id: env.SPOTIFY_CLIENT_ID,
-    redirect_uri: env.SPOTIFY_REDIRECT_URI,
-    response_type: "code",
-    scope: SPOTIFY_SCOPES.join(" "),
-  });
-
-  return `${SPOTIFY_ACCOUNTS_BASE_URL}/authorize?${params.toString()}`;
-}
-
-export function extractCodeFromCallbackUrl(input: string): string {
-  const url = new URL(input);
-  const error = url.searchParams.get("error");
-  const code = url.searchParams.get("code");
-
-  if (error) {
-    throw new Error(`Spotify authorization failed: ${error}`);
-  }
-
-  if (!code) {
-    throw new Error("Callback URL did not include a code");
-  }
-
-  return code;
-}
-
 export async function exchangeCodeForToken(code: string): Promise<void> {
-  const env = loadEnv(["SPOTIFY_REDIRECT_URI"]);
+  const env = await readEnvs(["SPOTIFY_REDIRECT_URI"]);
   const data = await requestToken({
     code,
     grant_type: "authorization_code",
@@ -141,20 +129,8 @@ export async function fetchTrackMetadata(trackId: string): Promise<TrackMetadata
   };
 }
 
-function selectAlbumImageUrl(images: SpotifyImage[] | undefined): string | undefined {
-  if (!images?.length) {
-    return undefined;
-  }
-
-  return (
-    [...images]
-      .sort((left, right) => (left.width ?? 0) - (right.width ?? 0))
-      .find((image) => (image.width ?? 0) >= 300)?.url ?? images[0]?.url
-  );
-}
-
 export async function addTrackToPlaylist(track: TrackMetadata): Promise<void> {
-  const env = loadEnv(["SPOTIFY_PLAYLIST_ID"]);
+  const env = await readEnvs(["SPOTIFY_PLAYLIST_ID"]);
   const accessToken = await getSpotifyAccessToken();
 
   await spotifyFetch(`/playlists/${env.SPOTIFY_PLAYLIST_ID}/items`, accessToken, {
@@ -168,7 +144,32 @@ export async function addTrackToPlaylist(track: TrackMetadata): Promise<void> {
   });
 }
 
+export class ApiError extends Error {
+  code: string;
+  status: number;
+
+  constructor(code: string, message: string, status = 500) {
+    super(message);
+    this.name = "ApiError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
+function selectAlbumImageUrl(images: SpotifyImage[] | undefined): string | undefined {
+  if (!images?.length) {
+    return undefined;
+  }
+
+  return (
+    [...images]
+      .sort((left, right) => (left.width ?? 0) - (right.width ?? 0))
+      .find((image) => (image.width ?? 0) >= 300)?.url ?? images[0]?.url
+  );
+}
+
 async function getSpotifyAccessToken(): Promise<string> {
+  const db = await getDb();
   const result = await db.execute({
     args: ["spotify"],
     sql: `select access_token, refresh_token, expires_at
@@ -179,7 +180,7 @@ async function getSpotifyAccessToken(): Promise<string> {
   const auth = result.rows[0] as unknown as SpotifyAuthRow | undefined;
 
   if (!auth) {
-    throw new Error("Spotify is not authenticated. Run: fluncle auth spotify");
+    throw new ApiError("spotify_not_authenticated", "Spotify is not authenticated", 400);
   }
 
   const expiresAt = new Date(auth.expires_at).getTime();
@@ -201,8 +202,8 @@ async function getSpotifyAccessToken(): Promise<string> {
 }
 
 async function requestToken(params: Record<string, string>): Promise<SpotifyTokenResponse> {
-  const env = loadEnv(["SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET"]);
-  const response = await fetch(`${SPOTIFY_ACCOUNTS_BASE_URL}/api/token`, {
+  const env = await readEnvs(["SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET"]);
+  const response = await fetch(`${spotifyAccountsBaseUrl}/api/token`, {
     body: new URLSearchParams(params),
     headers: {
       Authorization: `Basic ${btoa(`${env.SPOTIFY_CLIENT_ID}:${env.SPOTIFY_CLIENT_SECRET}`)}`,
@@ -224,6 +225,7 @@ async function upsertSpotifyAuth(
   expiresIn: number,
   scope: string,
 ): Promise<void> {
+  const db = await getDb();
   const now = new Date();
   const expiresAt = new Date(now.getTime() + expiresIn * 1000);
 
@@ -254,7 +256,7 @@ async function spotifyFetch(
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${accessToken}`);
 
-  const response = await fetch(`${SPOTIFY_API_BASE_URL}${path}`, {
+  const response = await fetch(`${spotifyApiBaseUrl}${path}`, {
     ...init,
     headers,
   });

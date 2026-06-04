@@ -216,7 +216,7 @@ body::before {
 }
 
 @theme {
-  --font-display: "Oxanium", ui-sans-serif, system-ui, sans-serif; 
+  --font-display: "Oxanium", ui-sans-serif, system-ui, sans-serif;
 }
 
 @layer base {

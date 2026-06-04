@@ -1,9 +1,8 @@
-import { createClient } from "@libsql/client/web";
 import { createFileRoute } from "@tanstack/react-router";
+import { getDb } from "../../lib/server/db";
 
 const defaultLimit = 16;
 const maxLimit = 48;
-let didLoadLocalEnv = false;
 
 type Cursor = {
   addedAt: string;
@@ -18,6 +17,8 @@ type TrackRow = {
   spotify_url: string;
   title: string;
   track_id: string;
+  added_to_spotify: number;
+  posted_to_telegram: number;
 };
 
 type TrackCountRow = {
@@ -28,15 +29,10 @@ export const Route = createFileRoute("/api/tracks")({
   server: {
     handlers: {
       GET: async ({ request }) => {
-        await loadLocalEnv();
-
         const url = new URL(request.url);
         const limit = parseLimit(url.searchParams.get("limit"));
         const cursor = parseCursor(url.searchParams.get("cursor"));
-        const db = createClient({
-          authToken: readEnv("TURSO_AUTH_TOKEN"),
-          url: readEnv("TURSO_DATABASE_URL"),
-        });
+        const db = await getDb();
         const args: Array<string | number> = cursor
           ? [cursor.addedAt, cursor.addedAt, cursor.trackId, limit + 1]
           : [limit + 1];
@@ -52,7 +48,9 @@ export const Route = createFileRoute("/api/tracks")({
               album_image_url,
               artists_json,
               note,
-              added_at
+              added_at,
+              added_to_spotify,
+              posted_to_telegram
             from tracks
             ${where}
             order by added_at desc, track_id desc
@@ -80,9 +78,11 @@ export const Route = createFileRoute("/api/tracks")({
           totalCount,
           tracks: visibleRows.map((row) => ({
             addedAt: row.added_at,
+            addedToSpotify: Boolean(row.added_to_spotify),
             albumImageUrl: row.album_image_url ?? undefined,
             artists: parseArtists(row.artists_json),
             note: row.note?.trim() ? row.note : undefined,
+            postedToTelegram: Boolean(row.posted_to_telegram),
             spotifyUrl: row.spotify_url,
             title: row.title,
             trackId: row.track_id,
@@ -92,20 +92,6 @@ export const Route = createFileRoute("/api/tracks")({
     },
   },
 });
-
-async function loadLocalEnv(): Promise<void> {
-  if (!import.meta.env.DEV || didLoadLocalEnv) {
-    return;
-  }
-
-  const { config } = await import("dotenv");
-
-  config({ path: ".env.local" });
-  config({ path: "../../.env.local" });
-  config();
-
-  didLoadLocalEnv = true;
-}
 
 function parseLimit(value: string | null): number {
   if (!value) {
@@ -155,14 +141,4 @@ function parseArtists(value: string): string[] {
   }
 
   return [];
-}
-
-function readEnv(key: "TURSO_AUTH_TOKEN" | "TURSO_DATABASE_URL"): string {
-  const value = process.env[key];
-
-  if (!value) {
-    throw new Error(`Missing ${key}`);
-  }
-
-  return value;
 }

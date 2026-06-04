@@ -1,20 +1,23 @@
 #!/usr/bin/env bun
 
 import { parseArgs } from "node:util";
+import { setEnvProfile } from "./env";
 import { printJson, toJsonFailure } from "./output";
 import { formatError } from "./retry";
 
+type GlobalOptions = {
+  args: string[];
+  envProfile?: string;
+};
+
 async function main(): Promise<void> {
-  const [command, subcommand, ...rest] = process.argv.slice(2);
+  const globalOptions = parseGlobalOptions(process.argv.slice(2));
+  setEnvProfile(globalOptions.envProfile);
+
+  const [command, subcommand, ...rest] = globalOptions.args;
 
   if (!command || command === "--help" || command === "-h") {
     printHelp();
-    return;
-  }
-
-  if (command === "add") {
-    const { addCommand } = await import("./commands/add");
-    await runAdd([subcommand, ...rest].filter(Boolean), addCommand);
     return;
   }
 
@@ -24,7 +27,19 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (command === "auth" && subcommand === "spotify") {
+  if (command === "version") {
+    const { versionCommand } = await import("./version");
+    await runVersion([subcommand, ...rest].filter(Boolean), versionCommand);
+    return;
+  }
+
+  if (command === "admin" && subcommand === "add") {
+    const { addCommand } = await import("./commands/add");
+    await runAdd(rest, addCommand);
+    return;
+  }
+
+  if (command === "admin" && subcommand === "auth" && rest[0] === "spotify") {
     const { authSpotifyCommand } = await import("./commands/auth");
     await authSpotifyCommand();
     return;
@@ -115,13 +130,74 @@ async function runRecent(
   );
 }
 
+async function runVersion(
+  args: string[],
+  versionCommand: typeof import("./version").versionCommand,
+): Promise<void> {
+  const parsed = parseArgs({
+    allowPositionals: false,
+    args,
+    options: {
+      check: {
+        default: false,
+        type: "boolean",
+      },
+      json: {
+        default: false,
+        type: "boolean",
+      },
+    },
+  });
+
+  await versionCommand({
+    check: parsed.values.check,
+    json: parsed.values.json,
+  });
+}
+
 function printHelp(): void {
   console.log(`fluncle
 
+Global options:
+  --env <local|production>  Config profile to load (default: production)
+
 Commands:
-  fluncle add <spotify-url> [--note "text"] [--dry-run] [--json]
   fluncle recent [--limit 10] [--json]
-  fluncle auth spotify`);
+  fluncle version [--check] [--json]
+  fluncle admin add <spotify-url> [--note "text"] [--dry-run] [--json]
+  fluncle admin auth spotify`);
+}
+
+function parseGlobalOptions(args: string[]): GlobalOptions {
+  const cleanedArgs: string[] = [];
+  let envProfile: string | undefined;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
+    if (arg === "--env") {
+      envProfile = args[index + 1];
+
+      if (!envProfile) {
+        throw new Error("Missing value for --env");
+      }
+
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith("--env=")) {
+      envProfile = arg.slice("--env=".length);
+      continue;
+    }
+
+    cleanedArgs.push(arg);
+  }
+
+  return {
+    args: cleanedArgs,
+    envProfile,
+  };
 }
 
 main().catch((error) => {
