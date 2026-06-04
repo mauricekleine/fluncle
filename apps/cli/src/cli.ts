@@ -27,6 +27,12 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "open") {
+    const openCommands = await import("./commands/open");
+    await runOpen([subcommand, ...rest].filter(Boolean), openCommands);
+    return;
+  }
+
   if (command === "version") {
     const { versionCommand } = await import("./version");
     await runVersion([subcommand, ...rest].filter(Boolean), versionCommand);
@@ -130,6 +136,70 @@ async function runRecent(
   );
 }
 
+async function runOpen(
+  args: string[],
+  openCommands: typeof import("./commands/open"),
+): Promise<void> {
+  const parsed = parseArgs({
+    allowPositionals: true,
+    args,
+    options: {
+      app: {
+        default: false,
+        type: "boolean",
+      },
+      browser: {
+        default: false,
+        type: "boolean",
+      },
+      limit: {
+        default: "20",
+        type: "string",
+      },
+    },
+  });
+
+  if (parsed.values.app && parsed.values.browser) {
+    throw new Error("Use either --app or --browser, not both");
+  }
+
+  const mode: import("./commands/open").OpenMode = parsed.values.browser
+    ? "browser"
+    : parsed.values.app
+      ? "app"
+      : "default";
+  const [target, extra] = parsed.positionals;
+
+  if (extra) {
+    throw new Error(`Unknown open target: ${parsed.positionals.join(" ")}`);
+  }
+
+  if (target === "playlist") {
+    await openCommands.openPlaylistCommand(mode);
+    return;
+  }
+
+  if (target === "telegram") {
+    await openCommands.openTelegramCommand(mode);
+    return;
+  }
+
+  if (target) {
+    throw new Error(`Unknown open target: ${target}`);
+  }
+
+  const limit = Number.parseInt(parsed.values.limit ?? "20", 10);
+
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error("Limit must be an integer between 1 and 100");
+  }
+
+  await openCommands.openRecentCommand({
+    limit,
+    mode,
+  });
+}
+
 async function runVersion(
   args: string[],
   versionCommand: typeof import("./version").versionCommand,
@@ -163,6 +233,9 @@ Global options:
 
 Commands:
   fluncle recent [--limit 10] [--json]
+  fluncle open [--limit 20] [--browser|--app]
+  fluncle open playlist [--browser|--app]
+  fluncle open telegram [--browser|--app]
   fluncle version [--check] [--json]
   fluncle admin add <spotify-url> [--note "text"] [--dry-run] [--json]
   fluncle admin auth spotify`);

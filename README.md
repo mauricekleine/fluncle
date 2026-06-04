@@ -48,6 +48,9 @@ curl -fsSL https://www.fluncle.com/cli/latest.sh | sh
 
 ```bash
 bun run --cwd apps/cli fluncle recent --json
+bun run --cwd apps/cli fluncle open
+bun run --cwd apps/cli fluncle open playlist --browser
+bun run --cwd apps/cli fluncle open telegram --app
 bun run --cwd apps/cli fluncle version --check
 bun run --cwd apps/cli fluncle admin add "https://open.spotify.com/track/..." --note "Absolute weapon"
 bun run --cwd apps/cli fluncle admin add "https://open.spotify.com/track/..." --dry-run
