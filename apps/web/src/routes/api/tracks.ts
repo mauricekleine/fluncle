@@ -11,8 +11,10 @@ export const Route = createFileRoute("/api/tracks")({
         const url = new URL(request.url);
         const limit = parseLimit(url.searchParams.get("limit"));
         const cursor = decodeTrackCursor(url.searchParams.get("cursor"));
+        const since = parseTimestamp(url.searchParams.get("since"));
+        const until = parseTimestamp(url.searchParams.get("until"));
 
-        return Response.json(await listTracks({ cursor, limit }));
+        return Response.json(await listTracks({ cursor, limit, since, until }));
       },
     },
   },
@@ -30,4 +32,17 @@ function parseLimit(value: string | null): number {
   }
 
   return Math.min(limit, maxLimit);
+}
+
+// Discovery-window bound as an ISO 8601 timestamp; invalid values are ignored
+// rather than erroring so a malformed query degrades to the unwindowed list.
+// Normalized to ISO so string comparison against stored added_at is correct.
+function parseTimestamp(value: string | null): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const parsed = new Date(value);
+
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
 }

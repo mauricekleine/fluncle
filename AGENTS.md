@@ -64,6 +64,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - [README.md](./README.md) - repo overview, package layout, local dev, deployment, CLI, Raycast, and publish flow.
 - [PRODUCT.md](./PRODUCT.md) - product purpose, brand direction, design principles, and accessibility.
 - [docs/track-submissions.md](./docs/track-submissions.md) - listener submission architecture and current implementation plan.
+- [docs/newsletter-agent.md](./docs/newsletter-agent.md) - instructions for the external Friday newsletter agent and its discovery-window contract with `/api/tracks`.
 
 ## Architecture
 

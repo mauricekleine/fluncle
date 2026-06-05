@@ -44,15 +44,39 @@ type TrackCountRow = {
 export async function listTracks({
   cursor,
   limit,
+  since,
+  until,
 }: {
   cursor?: TrackCursor;
   limit: number;
+  since?: string;
+  until?: string;
 }): Promise<TrackListPage> {
   const db = await getDb();
-  const args: Array<string | number> = cursor
-    ? [cursor.addedAt, cursor.addedAt, cursor.trackId, limit + 1]
-    : [limit + 1];
-  const where = cursor ? "where added_at < ? or (added_at = ? and track_id < ?)" : "";
+
+  // Discovery-window filters; totalCount is scoped to the same window so a
+  // windowed caller (the newsletter agent) gets the matching count, while the
+  // homepage's unwindowed calls keep the global archive count for numbering.
+  const windowClauses: string[] = [];
+  const windowArgs: string[] = [];
+
+  if (since) {
+    windowClauses.push("added_at >= ?");
+    windowArgs.push(since);
+  }
+
+  if (until) {
+    windowClauses.push("added_at < ?");
+    windowArgs.push(until);
+  }
+
+  if (cursor) {
+    windowClauses.push("(added_at < ? or (added_at = ? and track_id < ?))");
+  }
+
+  const where = windowClauses.length > 0 ? `where ${windowClauses.join(" and ")}` : "";
+  const cursorArgs = cursor ? [cursor.addedAt, cursor.addedAt, cursor.trackId] : [];
+  const args: Array<string | number> = [...windowArgs, ...cursorArgs, limit + 1];
 
   const [result, countResult] = await Promise.all([
     db.execute({
@@ -74,7 +98,12 @@ export async function listTracks({
             limit ?`,
     }),
     db.execute({
-      sql: `select count(*) as total_count from tracks`,
+      args: windowArgs,
+      sql: `select count(*) as total_count from tracks ${
+        windowArgs.length > 0
+          ? `where ${windowClauses.slice(0, windowArgs.length).join(" and ")}`
+          : ""
+      }`,
     }),
   ]);
   const rows = result.rows as unknown as TrackRow[];
