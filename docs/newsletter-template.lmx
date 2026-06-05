@@ -1,0 +1,21 @@
+<Style backgroundColor="" backgroundXPadding="0" backgroundYPadding="0" bodyColor="" bodyXPadding="0" bodyYPadding="0" bodyFontFamily="Inter" bodyFontCategory="sans-serif" borderColor="" borderWidth="0" borderRadius="0" buttonBodyColor="#f5b800" buttonBodyXPadding="16" buttonBodyYPadding="12" buttonBorderColor="" buttonBorderWidth="0" buttonBorderRadius="8" buttonTextColor="#151006" buttonTextFormat="0" buttonTextFontSize="16" dividerColor="#e8e0d0" dividerBorderWidth="1" textBaseColor="#151006" textBaseFontSize="14" textBaseLineHeight="150" textBaseLetterSpacing="0" textLinkColor="#8a6800" heading1Color="#151006" heading1FontSize="28" heading1LineHeight="125" heading1LetterSpacing="0" heading2Color="#151006" heading2FontSize="20" heading2LineHeight="125" heading2LetterSpacing="0" heading3Color="#151006" heading3FontSize="18" heading3LineHeight="125" heading3LetterSpacing="0" />
+<Paragraph>Ahoy cosmonauts,</Paragraph>
+<Paragraph></Paragraph>
+<Paragraph>SLOT_INTRO</Paragraph>
+<Paragraph></Paragraph>
+<H2>Discovered this week</H2>
+<Paragraph></Paragraph>
+<Paragraph><Strong><Link href="https://open.spotify.com/">SLOT_TRACK_ARTIST — SLOT_TRACK_TITLE</Link></Strong></Paragraph>
+<Paragraph>SLOT_TRACK_WHY</Paragraph>
+<Paragraph></Paragraph>
+<H2>Meanwhile, in the scene</H2>
+<Paragraph></Paragraph>
+<Paragraph>SLOT_TIDBIT</Paragraph>
+<Paragraph></Paragraph>
+<Divider width="100" />
+<Paragraph></Paragraph>
+<Button href="https://www.fluncle.com" align="center" textFormat="1">Open Fluncle's Finest</Button>
+<Paragraph></Paragraph>
+<Paragraph>Happy raving,</Paragraph>
+<Paragraph></Paragraph>
+<Paragraph>Fluncle</Paragraph>
