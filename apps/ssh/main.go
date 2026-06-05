@@ -645,11 +645,27 @@ func (m model) View() tea.View {
 }
 
 func (m model) renderMenu() string {
-	lines := []string{
-		logoStyle.Render(asciiLogo()),
-		plateStyle.Render("RAVE TERMINAL"),
-		taglineStyle.Render("Drum & bass bangers from another dimension"),
-		"",
+	// The full menu stands ~28 rows with padding; classic terminals open at
+	// 80x24. Below 30 rows the footer compacts to single lines, and below 21
+	// the figlet yields to a one-line plate, so "Connected ravers" never falls
+	// under the fold. Height 0 means no WindowSizeMsg yet; render full.
+	compact := m.height > 0 && m.height < 30
+	tiny := m.height > 0 && m.height < 21
+
+	var lines []string
+	if tiny {
+		lines = []string{
+			plateStyle.Render("FLUNCLE · RAVE TERMINAL"),
+			taglineStyle.Render("Drum & bass bangers from another dimension"),
+			"",
+		}
+	} else {
+		lines = []string{
+			logoStyle.Render(asciiLogo()),
+			plateStyle.Render("RAVE TERMINAL"),
+			taglineStyle.Render("Drum & bass bangers from another dimension"),
+			"",
+		}
 	}
 	for index, item := range menuItems() {
 		prefix := "  "
@@ -662,33 +678,56 @@ func (m model) renderMenu() string {
 	}
 	help := helpLine("↑/↓ j/k move", "enter select", "q quit")
 	lines = append(lines, "", help)
-	lines = append(lines, "", m.renderFooter())
+	lines = append(lines, "", m.renderFooter(compact))
 	return strings.Join(lines, "\n")
 }
 
-func (m model) renderFooter() string {
+func (m model) renderFooter(compact bool) string {
 	// Rule width matches the logo block, capped at the available content width.
 	rule := ruleStyle.Render(strings.Repeat("─", m.menuRuleWidth()))
-	lines := []string{rule, "", labelStyle.Render("Last discovered:")}
-	if m.footer == nil {
-		lines = append(lines, labelStyle.Render("Scanning the archive..."))
+	var lines []string
+
+	if compact {
+		// One line for the discovery, time inline, no breathing rows.
+		discovered := labelStyle.Render("Last discovered: ")
+		if m.footer == nil {
+			discovered += labelStyle.Render("scanning the archive...")
+		} else {
+			discovered += rowArtistStyle.Render(artistLine(m.footer.Artists)) +
+				rowDashStyle.Render(" — ") +
+				rowTitleStyle.Render(m.footer.Title) +
+				labelStyle.Render(" · "+relativeTime(m.footer.AddedAt))
+		}
+		lines = []string{rule, discovered}
 	} else {
-		// Footer grammar: artist Stardust, em dash rule-color, title Cream bold.
-		line := rowArtistStyle.Render(artistLine(m.footer.Artists)) +
-			rowDashStyle.Render(" — ") +
-			rowTitleStyle.Render(m.footer.Title)
-		lines = append(
-			lines,
-			line,
-			labelStyle.Render(relativeTime(m.footer.AddedAt)),
-		)
+		lines = []string{rule, "", labelStyle.Render("Last discovered:")}
+		if m.footer == nil {
+			lines = append(lines, labelStyle.Render("Scanning the archive..."))
+		} else {
+			// Footer grammar: artist Stardust, em dash rule-color, title Cream bold.
+			line := rowArtistStyle.Render(artistLine(m.footer.Artists)) +
+				rowDashStyle.Render(" — ") +
+				rowTitleStyle.Render(m.footer.Title)
+			lines = append(
+				lines,
+				line,
+				labelStyle.Render(relativeTime(m.footer.AddedAt)),
+			)
+		}
 	}
+
 	ravers := readingStyle.Render(fmt.Sprintf("%d", m.app.connectedRaverCount()))
 	raverLine := labelStyle.Render("Connected ravers: ") + ravers
 	if countries := m.app.raverCountrySummary(); countries != "" {
 		raverLine += labelStyle.Render(" (" + countries + ")")
 	}
-	lines = append(lines, "", raverLine)
+
+	if compact {
+		lines = append(lines, raverLine)
+	} else {
+		lines = append(lines, "", raverLine)
+	}
+
 	return strings.Join(lines, "\n")
 }
 
