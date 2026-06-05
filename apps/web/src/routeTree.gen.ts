@@ -16,6 +16,7 @@ import { Route as CliLatestDotshRouteImport } from './routes/cli/latest[.]sh'
 import { Route as ApiTracksRouteImport } from './routes/api/tracks'
 import { Route as ApiSubmissionsRouteImport } from './routes/api/submissions'
 import { Route as ApiSearchRouteImport } from './routes/api/search'
+import { Route as ApiNewsletterRouteImport } from './routes/api/newsletter'
 import { Route as ApiTracksRandomRouteImport } from './routes/api/tracks/random'
 import { Route as ApiAdminTracksRouteImport } from './routes/api/admin/tracks'
 import { Route as ApiAdminSubmissionsRouteImport } from './routes/api/admin/submissions'
@@ -58,6 +59,11 @@ const ApiSubmissionsRoute = ApiSubmissionsRouteImport.update({
 const ApiSearchRoute = ApiSearchRouteImport.update({
   id: '/api/search',
   path: '/api/search',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiNewsletterRoute = ApiNewsletterRouteImport.update({
+  id: '/api/newsletter',
+  path: '/api/newsletter',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiTracksRandomRoute = ApiTracksRandomRouteImport.update({
@@ -110,6 +116,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
+  '/api/newsletter': typeof ApiNewsletterRoute
   '/api/search': typeof ApiSearchRoute
   '/api/submissions': typeof ApiSubmissionsRoute
   '/api/tracks': typeof ApiTracksRouteWithChildren
@@ -127,6 +134,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
+  '/api/newsletter': typeof ApiNewsletterRoute
   '/api/search': typeof ApiSearchRoute
   '/api/submissions': typeof ApiSubmissionsRoute
   '/api/tracks': typeof ApiTracksRouteWithChildren
@@ -145,6 +153,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
+  '/api/newsletter': typeof ApiNewsletterRoute
   '/api/search': typeof ApiSearchRoute
   '/api/submissions': typeof ApiSubmissionsRoute
   '/api/tracks': typeof ApiTracksRouteWithChildren
@@ -164,6 +173,7 @@ export interface FileRouteTypes {
     | '/'
     | '/rss.xml'
     | '/sitemap.xml'
+    | '/api/newsletter'
     | '/api/search'
     | '/api/submissions'
     | '/api/tracks'
@@ -181,6 +191,7 @@ export interface FileRouteTypes {
     | '/'
     | '/rss.xml'
     | '/sitemap.xml'
+    | '/api/newsletter'
     | '/api/search'
     | '/api/submissions'
     | '/api/tracks'
@@ -198,6 +209,7 @@ export interface FileRouteTypes {
     | '/'
     | '/rss.xml'
     | '/sitemap.xml'
+    | '/api/newsletter'
     | '/api/search'
     | '/api/submissions'
     | '/api/tracks'
@@ -216,6 +228,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   RssDotxmlRoute: typeof RssDotxmlRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
+  ApiNewsletterRoute: typeof ApiNewsletterRoute
   ApiSearchRoute: typeof ApiSearchRoute
   ApiSubmissionsRoute: typeof ApiSubmissionsRoute
   ApiTracksRoute: typeof ApiTracksRouteWithChildren
@@ -275,6 +288,13 @@ declare module '@tanstack/react-router' {
       path: '/api/search'
       fullPath: '/api/search'
       preLoaderRoute: typeof ApiSearchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/newsletter': {
+      id: '/api/newsletter'
+      path: '/api/newsletter'
+      fullPath: '/api/newsletter'
+      preLoaderRoute: typeof ApiNewsletterRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/tracks/random': {
@@ -382,6 +402,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   RssDotxmlRoute: RssDotxmlRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
+  ApiNewsletterRoute: ApiNewsletterRoute,
   ApiSearchRoute: ApiSearchRoute,
   ApiSubmissionsRoute: ApiSubmissionsRoute,
   ApiTracksRoute: ApiTracksRouteWithChildren,

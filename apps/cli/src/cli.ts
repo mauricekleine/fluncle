@@ -45,6 +45,12 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "subscribe") {
+    const { subscribeCommand } = await import("./commands/subscribe");
+    await runSubscribe([subcommand, ...rest].filter(Boolean), subscribeCommand);
+    return;
+  }
+
   if (command === "version") {
     const { versionCommand } = await import("./version");
     await runVersion([subcommand, ...rest].filter(Boolean), versionCommand);
@@ -287,6 +293,30 @@ async function runRandom(
   console.log(track.spotifyUrl);
 }
 
+async function runSubscribe(
+  args: string[],
+  subscribeCommand: typeof import("./commands/subscribe").subscribeCommand,
+): Promise<void> {
+  const parsed = parseArgs({
+    allowPositionals: true,
+    args,
+    options: {
+      json: {
+        default: false,
+        type: "boolean",
+      },
+    },
+  });
+
+  const [email, extra] = parsed.positionals;
+
+  if (extra) {
+    throw new Error(`Unknown subscribe arguments: ${parsed.positionals.join(" ")}`);
+  }
+
+  await subscribeCommand(email, parsed.values.json);
+}
+
 async function runVersion(
   args: string[],
   versionCommand: typeof import("./version").versionCommand,
@@ -325,12 +355,13 @@ Listen:
   fluncle open playlist [--browser|--app]       Open Fluncle's Finest in Spotify
   fluncle open telegram [--browser|--app]       Open the Telegram feed
   fluncle random [--json]                       The archive throws one back
+  fluncle subscribe [email]                     Fresh bangers, every Friday
 
 Share:
   fluncle submit [search-or-spotify-url]   Send a track for review
 
 Meta:
-  fluncle version [--check] [--json]   Print the version, or check for a newer one
+  fluncle version [--check] [--json]   Print or check the version
 
 Operator:
   fluncle admin add <spotify-url> [--note "text"] [--dry-run] [--json]

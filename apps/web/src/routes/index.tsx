@@ -4,6 +4,7 @@ import {
   CircleNotchIcon,
   CopyIcon,
   DownloadSimpleIcon,
+  EnvelopeSimpleIcon,
   MagnifyingGlassIcon,
   PaperPlaneTiltIcon,
   ShuffleIcon,
@@ -27,6 +28,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { siteUrl, spotifyPlaylistUrl, telegramUrl } from "@/lib/fluncle-links";
+import { subscribeToNewsletter } from "@/lib/newsletter";
 import { listTracks } from "@/lib/server/tracks";
 import { searchTracks, submitTrack, type SearchResult } from "@/lib/submissions";
 import { fetchRandomTrack, fetchTracks, type Track } from "@/lib/tracks";
@@ -196,6 +198,7 @@ function HomePage() {
               </div>
               <div className="mt-3 grid gap-2">
                 <SubmitTrackDialog />
+                <SubscribeDialog />
                 <Button
                   nativeButton={false}
                   render={<a href="https://x.com/mauricekleine" rel="noreferrer" target="_blank" />}
@@ -638,6 +641,95 @@ const cliExamples = [
   { command: "fluncle open", description: "Open the playlist" },
   { command: "fluncle submit", description: "Send a track for review" },
 ];
+
+function SubscribeDialog() {
+  const [email, setEmail] = useState("");
+  const [website, setWebsite] = useState("");
+  const [error, setError] = useState<string | undefined>();
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [didSubscribe, setDidSubscribe] = useState(false);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    const trimmedEmail = email.trim();
+
+    if (!trimmedEmail) {
+      setError("Enter your email address.");
+      return;
+    }
+
+    setError(undefined);
+    setIsSubmitting(true);
+
+    try {
+      await subscribeToNewsletter({ email: trimmedEmail, honeypot: website });
+      setDidSubscribe(true);
+      setEmail("");
+      setWebsite("");
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : String(caughtError));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog>
+      <Button nativeButton={false} render={<DialogTrigger />} size="lg" variant="outline">
+        <EnvelopeSimpleIcon aria-hidden="true" weight="bold" />
+        Get the weekly newsletter
+      </Button>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>The weekly newsletter</DialogTitle>
+          <DialogDescription>Fresh bangers, every Friday, from Fluncle.</DialogDescription>
+        </DialogHeader>
+
+        {didSubscribe ? (
+          <p className="rounded-md border border-primary/30 bg-accent px-3 py-2 text-sm text-accent-foreground">
+            You're on the list.
+          </p>
+        ) : (
+          <form className="grid gap-3" onSubmit={handleSubmit}>
+            <label className="grid gap-2 text-sm font-bold" htmlFor="newsletter-email">
+              Email
+              <input
+                autoComplete="email"
+                className="h-10 rounded-md border border-input bg-input px-3 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40"
+                id="newsletter-email"
+                inputMode="email"
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="junglist@example.com"
+                type="email"
+                value={email}
+              />
+            </label>
+            <label aria-hidden="true" className="sr-only" htmlFor="newsletter-website">
+              Website
+              <input
+                autoComplete="off"
+                id="newsletter-website"
+                onChange={(event) => setWebsite(event.target.value)}
+                tabIndex={-1}
+                value={website}
+              />
+            </label>
+            <Button disabled={isSubmitting} type="submit">
+              {isSubmitting ? (
+                <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+              ) : (
+                <EnvelopeSimpleIcon aria-hidden="true" weight="bold" />
+              )}
+              Get on the list
+            </Button>
+          </form>
+        )}
+
+        {error ? <p className="text-sm text-destructive">{error}</p> : undefined}
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 function CliInstallDialog() {
   const [didCopy, setDidCopy] = useState(false);

@@ -147,6 +147,8 @@ bun run --cwd apps/web wrangler secret put SPOTIFY_PLAYLIST_ID
 bun run --cwd apps/web wrangler secret put TELEGRAM_BOT_TOKEN
 bun run --cwd apps/web wrangler secret put TELEGRAM_CHANNEL_ID
 bun run --cwd apps/web wrangler secret put DISCORD_WEBHOOK_URL
+bun run --cwd apps/web wrangler secret put LOOPS_API_KEY
+bun run --cwd apps/web wrangler secret put LOOPS_TRANSACTIONAL_ID
 ```
 
 For local Worker previews and local migration commands, copy `apps/web/.dev.vars.example` to `apps/web/.dev.vars` and fill in the same values:

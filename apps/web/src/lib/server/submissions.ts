@@ -403,7 +403,7 @@ function parseArtistsJson(value: string): string[] {
   return [];
 }
 
-function hashSubmitter(request: Request): string {
+export function hashSubmitter(request: Request): string {
   const forwardedFor = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
   const connectingIp = request.headers.get("cf-connecting-ip")?.trim();
   const userAgent = request.headers.get("user-agent")?.slice(0, 120) ?? "unknown";

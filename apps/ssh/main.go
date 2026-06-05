@@ -288,6 +288,8 @@ const (
 	screenNoteInput    screen = "note-input"
 	screenContactInput screen = "contact-input"
 	screenConfirm      screen = "confirm"
+	screenSubscribe    screen = "subscribe"
+	screenSubscribed   screen = "subscribed"
 	screenInstall      screen = "install"
 	screenAbout        screen = "about"
 	screenMessage      screen = "message"
@@ -360,6 +362,10 @@ type submitMsg struct {
 	err error
 }
 
+type subscribeMsg struct {
+	err error
+}
+
 func newModel(app *app, width, height int) model {
 	return model{
 		app:    app,
@@ -420,6 +426,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.message = "Received. Fluncle will give it a listen before it goes live."
 		m.screen = screenMessage
+	case subscribeMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.err = msg.err.Error()
+			return m, nil
+		}
+		m.input = ""
+		m.screen = screenSubscribed
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -439,13 +453,13 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handleMenuKey(key)
 	case screenLatest, screenSearch:
 		return m.handleListKey(key)
-	case screenDetail, screenInstall, screenAbout, screenMessage:
+	case screenDetail, screenInstall, screenAbout, screenMessage, screenSubscribed:
 		if key == "q" || key == "esc" || key == "backspace" || key == "b" {
 			m.screen = screenMenu
 			m.selected = 0
 			return m, nil
 		}
-	case screenSearchInput, screenNoteInput, screenContactInput:
+	case screenSearchInput, screenNoteInput, screenContactInput, screenSubscribe:
 		return m.handleInputKey(msg)
 	case screenConfirm:
 		return m.handleConfirmKey(key)
@@ -476,6 +490,10 @@ func (m model) handleMenuKey(key string) (tea.Model, tea.Cmd) {
 			return m, m.fetchRandom()
 		case "submit":
 			m.screen = screenSearchInput
+			m.input = ""
+			m.err = ""
+		case "subscribe":
+			m.screen = screenSubscribe
 			m.input = ""
 			m.err = ""
 		case "install":
@@ -550,6 +568,14 @@ func (m model) handleInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.contact = truncateInput(value, 120)
 			m.input = ""
 			m.screen = screenConfirm
+		case screenSubscribe:
+			if value == "" || !strings.Contains(value, "@") {
+				m.err = "Enter a valid email address."
+				return m, nil
+			}
+			m.loading = true
+			m.err = ""
+			return m, m.subscribe(value)
 		}
 	case "space":
 		m.input += " "
@@ -601,6 +627,10 @@ func (m model) View() tea.View {
 		content = m.renderInput("Contact", "email or X handle, optional")
 	case screenConfirm:
 		content = m.renderConfirm()
+	case screenSubscribe:
+		content = m.renderSubscribe()
+	case screenSubscribed:
+		content = m.renderSubscribed()
 	case screenInstall:
 		content = m.renderInstall()
 	case screenAbout:
@@ -788,6 +818,35 @@ func (m model) renderConfirm() string {
 	return scaffold("Submit this track to Fluncle?", "", content, help)
 }
 
+func (m model) renderSubscribe() string {
+	if m.loading {
+		return statusView("Subscribe", "Subscribing...")
+	}
+	cursor := " "
+	if time.Now().Unix()%2 == 0 {
+		cursor = "█"
+	}
+	field := m.input + cursor
+	if m.input == "" {
+		field = labelStyle.Render("you@example.com")
+	}
+	content := []string{
+		inputStyle.Render("> " + field),
+	}
+	if m.err != "" {
+		content = append(content, "", errorStyle.Render(m.err))
+	}
+	help := helpLine("enter subscribe", "esc cancel")
+	return scaffold("Subscribe", "Fresh bangers, every Friday, from Fluncle.", content, help)
+}
+
+func (m model) renderSubscribed() string {
+	wrapWidth := clamp(m.width-4, 48, 96) - 4
+	content := []string{readingStyle.Width(wrapWidth).Render("You're on the list.")}
+	help := helpLine("q back", "ctrl+c quit")
+	return scaffold("Subscribe", "", content, help)
+}
+
 func (m model) renderInstall() string {
 	content := []string{
 		readingStyle.Render("Browse the latest bangers, submit tracks, and dig through Fluncle's Finest from your terminal."),
@@ -921,6 +980,14 @@ func (m model) submit() tea.Cmd {
 	}
 }
 
+func (m model) subscribe(email string) tea.Cmd {
+	body := map[string]any{"email": email}
+	return func() tea.Msg {
+		err := m.app.postJSON("/api/newsletter", body, nil)
+		return subscribeMsg{err: err}
+	}
+}
+
 func (a *app) getJSON(path string, target any) error {
 	req, err := http.NewRequest(http.MethodGet, a.cfg.apiURL+path, nil)
 	if err != nil {
@@ -980,6 +1047,7 @@ func menuItems() []menuItem {
 		{id: "latest", label: "Latest bangers"},
 		{id: "random", label: "Random banger"},
 		{id: "submit", label: "Submit a track"},
+		{id: "subscribe", label: "Subscribe"},
 		{id: "install", label: "Install CLI"},
 		{id: "about", label: "About"},
 		{id: "quit", label: "Quit"},

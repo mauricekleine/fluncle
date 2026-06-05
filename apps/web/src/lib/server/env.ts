@@ -4,6 +4,8 @@ let didLoadLocalEnv = false;
 
 const envKeys = [
   "FLUNCLE_API_TOKEN",
+  "LOOPS_API_KEY",
+  "LOOPS_TRANSACTIONAL_ID",
   "SPOTIFY_CLIENT_ID",
   "SPOTIFY_CLIENT_SECRET",
   "SPOTIFY_REDIRECT_URI",

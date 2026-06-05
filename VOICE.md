@@ -8,7 +8,9 @@
 
 Fluncle himself. The uncle with the good records, doing this since '98. He went into space with a Discman and kept the cable plugged in; everything published on any surface is him talking. Maurice stays behind the curtain (the operator, never the narrator).
 
-Fluncle says "I". He addresses the listener as "you", and at identity moments as kin: junglist, raver, fam. He never says "we", because there is no team, there's an uncle.
+Fluncle says "I". He addresses the listener as "you", and at identity moments as kin: junglist, raver, fam, cosmonaut. He never says "we", because there is no team, there's an uncle.
+
+And he's one of the dudes: a bruv, a lad, your mate with the aux cord. He opens an email with "Ahoy cosmonauts" and tells you a banger teleported him to a parallel universe this week, because as far as he's concerned it did. Tidy copywriter sentences are not his; if a line reads drafted rather than said, he wouldn't say it. The test from the baseline applies double here: would the uncle say this out loud, to a mate, half-shouting over a tune.
 
 The mood is the Nostalgic Cosmos (DESIGN.md): awe and melancholy, "where did we come from" and "where do we go". Never nihilist, never cold, never corporate.
 
@@ -24,16 +26,17 @@ Three pillars, in priority order:
 
 ### Core terms
 
-| Term                       | Status      | Use                                                                                                                                            |
-| -------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| **banger**                 | Primary     | The word for a song Fluncle certified. Lead with it.                                                                                           |
-| **track**                  | Supporting  | Relief word when banger already appeared in the same breath; also the neutral term in technical contexts (`trackId`, API fields, form labels). |
-| **tune**                   | Supporting  | Scene-flavored casual synonym, prose only.                                                                                                     |
-| **discovered**             | The verb    | The moment Fluncle first heard it and went "fuck yeah". Dates always mark discovery, never release: "Discovered Jun 4".                        |
-| **Fluncle's Finest**       | Proper noun | The collection itself, on every surface. "Playlist" stays for the literal Spotify artifact (the button, the link).                             |
-| **the ecosystem**          | Proper-ish  | What you `ssh` into. The whole of Fluncle across web, Telegram, CLI, and terminal.                                                             |
-| **selector**               | Role        | What Fluncle is. Not curator, not admin, not editor.                                                                                           |
-| **junglist / raver / fam** | Kinship     | How Fluncle addresses the real ones. Identity moments only; heavier on SSH and Telegram.                                                       |
+| Term                                   | Status      | Use                                                                                                                                                                                 |
+| -------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **banger**                             | Primary     | The word for a song Fluncle certified. Lead with it.                                                                                                                                |
+| **track**                              | Supporting  | Relief word when banger already appeared in the same breath; also the neutral term in technical contexts (`trackId`, API fields, form labels).                                      |
+| **tune**                               | Supporting  | Scene-flavored casual synonym, prose only.                                                                                                                                          |
+| **discovered**                         | The verb    | The moment Fluncle first heard it and went "fuck yeah". Dates always mark discovery, never release: "Discovered Jun 4".                                                             |
+| **Fluncle's Finest**                   | Proper noun | The collection itself, on every surface. "Playlist" stays for the literal Spotify artifact (the button, the link).                                                                  |
+| **the ecosystem**                      | Proper-ish  | What you `ssh` into. The whole of Fluncle across web, Telegram, CLI, and terminal.                                                                                                  |
+| **selector**                           | Role        | What Fluncle is. Not curator, not admin, not editor.                                                                                                                                |
+| **junglist / raver / fam / cosmonaut** | Kinship     | How Fluncle addresses the real ones. Identity moments only; heavier on SSH, Telegram, and email.                                                                                    |
+| **the mothership**                     | Proper-ish  | The newsletter and its list. You board it by subscribing ("Welcome to the mothership"); it departs every Friday. Canonical descriptor: "Fresh bangers, every Friday, from Fluncle." |
 
 ### Banned
 
@@ -47,7 +50,7 @@ Three pillars, in priority order:
 
 ## 4. Named rules
 
-**The Garnish Rule.** The cosmos modifies; it never replaces the verb. "Banger received from another dimension" works because "received" still does the job and the dimension rides along. "Beam up a track" is banned cosplay: the action got costumed. Earth verbs, cosmic trim. Garnish goes where there's room for a trailing clause (confirmations, empty states, notifications, welcomes), never inside compact controls where every word is functional.
+**The Garnish Rule.** The cosmos modifies; it never replaces the verb. "Banger received from another dimension" works because "received" still does the job and the dimension rides along. "Beam up a track" is banned cosplay: the action got costumed. Earth verbs, cosmic trim. Garnish goes where there's room for a trailing clause (confirmations, empty states, notifications, welcomes), never inside compact controls where every word is functional. One carve-out: in long-form first-person speech (email, Telegram prose, the About screen) the cosmos may drive the verb, because "these bangers teleported me to a parallel universe" is testimony, not a control. The rule protects functional copy; it does not muzzle the uncle's stories.
 
 **The Banger Budget.** "Banger" lands once per breath. If a paragraph needs the word twice, the second one becomes track or tune. Scarcity keeps the certification meaningful.
 
@@ -59,12 +62,13 @@ Three pillars, in priority order:
 
 ## 5. Surface registers
 
-| Surface      | Altitude          | Register                                                                                                 | Sounds like                                                                       |
-| ------------ | ----------------- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| **Web**      | Floating in space | Quiet, warm, minimal. Garnish at identity moments only.                                                  | "No bangers discovered yet. Quiet night in this dimension."                       |
-| **Telegram** | The feed          | Same voice plus emoji; announcement cadence, one banger per post.                                        | "🛸 Fluncle's Finest" header, then the banger.                                    |
-| **CLI**      | Terminal          | Drier, more technical. Help text may joke; command output stays clean and parseable (it's a tool first). | "No bangers discovered yet."                                                      |
-| **SSH**      | Deepest in        | Ready Player One. Most technical, most referential, fully deadpan.                                       | "No shell here. Connect without a command: ssh rave.fluncle.com" (already canon). |
+| Surface      | Altitude                | Register                                                                                                                                                        | Sounds like                                                                       |
+| ------------ | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| **Web**      | Floating in space       | Quiet, warm, minimal. Garnish at identity moments only.                                                                                                         | "No bangers discovered yet. Quiet night in this dimension."                       |
+| **Telegram** | The feed                | Same voice plus emoji; announcement cadence, one banger per post.                                                                                               | "🛸 Fluncle's Finest" header, then the banger.                                    |
+| **CLI**      | Terminal                | Drier, more technical. Help text may joke; command output stays clean and parseable (it's a tool first).                                                        | "No bangers discovered yet."                                                      |
+| **SSH**      | Deepest in              | Ready Player One. Most technical, most referential, fully deadpan.                                                                                              | "No shell here. Connect without a command: ssh rave.fluncle.com" (already canon). |
+| **Email**    | A letter from the uncle | The warmest and most bruv surface: greeting, first-person stories, cosmos verbs allowed as testimony, sign-off. Still no exclamation marks; the lad is deadpan. | Opens "Ahoy cosmonauts," closes "Happy raving, Fluncle".                          |
 
 ## 6. Mechanics
 

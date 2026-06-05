@@ -14,3 +14,7 @@ DISCORD_WEBHOOK_URL=
 
 VITE_FLUNCLE_SPOTIFY_PLAYLIST_URL=https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0?si=054d3c6cbcf14a36
 VITE_FLUNCLE_TELEGRAM_URL=https://t.me/fluncle
+
+# Loops newsletter (transactional id is the published confirmation email)
+LOOPS_API_KEY=
+LOOPS_TRANSACTIONAL_ID=
