@@ -41,6 +41,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - Web changes: `bun run --cwd apps/web typecheck`, `bun run --cwd apps/web build`, and `bun run --cwd apps/web lint` when relevant.
 - CLI changes: `bun run --cwd apps/cli typecheck` and focused CLI commands such as `bun run --cwd apps/cli fluncle recent --limit 1 --json` when behavior changes.
 - Raycast changes: `bun run --cwd apps/raycast build` and `bun run --cwd apps/raycast lint`.
+- SSH app changes: `go build -C apps/ssh ./...`, `gofmt -l apps/ssh` (must list nothing), and `go vet -C apps/ssh ./...`.
 - SHOULD: Run focused checks first, then broader root checks when the change has cross-package or user-facing risk.
 - SHOULD: For docs-only changes, verify formatting/readability instead of running full test suites unless docs generation is affected.
 

@@ -9,10 +9,11 @@ Fluncle publishes drum & bass tracks to Fluncle's Finest on Spotify and Telegram
 ```text
 apps/cli      Bun/TypeScript CLI. Thin client for public reads and admin API calls.
 apps/raycast  Raycast extension. Thin client that shells out to the CLI.
+apps/ssh      Go Wish/Bubble Tea SSH terminal behind ssh rave.fluncle.com. Thin client of the public API.
 apps/web      TanStack Start public web app and server-side Fluncle API.
 ```
 
-The deployed web app owns Spotify, Telegram, and Turso secrets. Public reads are served by `/api/tracks` and `/rss.xml`. Admin mutations are served by authenticated `/api/admin/*` routes. Raycast must keep calling `fluncle`.
+The deployed web app owns the Spotify, Telegram, Turso, and Loops secrets. Public reads are served by `/api/tracks` (with `since`/`until` discovery windows), `/api/tracks/random`, and `/rss.xml`. Newsletter signups post to `/api/newsletter`, which the web app relays to Loops. Admin mutations are served by authenticated `/api/admin/*` routes. Raycast must keep calling `fluncle`.
 Listener submissions are accepted through public `/api/search` and `/api/submissions` routes, then reviewed through authenticated admin submission routes. Approval still publishes only through the existing admin add flow.
 
 ## Root Workflows
@@ -116,6 +117,38 @@ Then verify:
 
 ```bash
 fluncle recent --limit 3 --json
+```
+
+## SSH
+
+The rave terminal at `ssh rave.fluncle.com` is a Go app built on Wish and Bubble Tea. It serves the public archive over SSH: browse and submit tracks, subscribe to the newsletter, install the CLI. It reads the same public API as the other clients and owns no secrets.
+
+Run it locally and connect from a second terminal:
+
+```bash
+cd apps/ssh
+go run .
+ssh -p 2222 127.0.0.1
+```
+
+Configuration is environment-driven: `FLUNCLE_SSH_HOST` and `FLUNCLE_SSH_PORT` (defaults `127.0.0.1:2222`), `FLUNCLE_API_URL` (defaults to production), `FLUNCLE_SSH_DATA_DIR` for generated host keys (defaults to `.local`, gitignored), and optional `FLUNCLE_GEOIP_DB` pointing at a MaxMind-compatible `.mmdb` for the connected-ravers country codes (lookups render `VOID` without it).
+
+Checks:
+
+```bash
+go build -C apps/ssh ./...
+gofmt -l apps/ssh
+go vet -C apps/ssh ./...
+```
+
+Production runs as the `fluncle-ssh` systemd service on a dedicated VPS: the app terminates public TCP/22 while administrative OpenSSH listens on 2222 over Tailscale only. Cross-compile and deploy with the `hetzner-devbox` skill, which also documents provisioning and the monthly GeoIP refresh:
+
+```bash
+GOOS=linux GOARCH=amd64 go build -C apps/ssh -o dist/fluncle-ssh-linux-x64 .
+SERVER_NAME=<tailscale-ip> BINARY_PATH=apps/ssh/dist/fluncle-ssh-linux-x64 \
+  FLUNCLE_API_URL=https://www.fluncle.com \
+  FLUNCLE_GEOIP_DB=/var/lib/fluncle-ssh/dbip-country-lite.mmdb \
+  packages/skills/hetzner-devbox/scripts/deploy-ssh-app-service.sh
 ```
 
 ## Web
