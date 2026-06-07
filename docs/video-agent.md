@@ -14,7 +14,7 @@ Read these in full, in this order; they evolve and they override anything below:
 2. `DESIGN.md` at the repo root: the Nostalgic Cosmos, palette doctrine, named rules.
 3. `VOICE.md` at the repo root: every word that appears on screen follows it. Track lines are `Artist — Title`, dates are "Discovered Jun 4", sentence case, no exclamation marks, banger budget.
 
-The grammar split in one line: grain everywhere, one Eclipse Gold sun moment, Oxanium for brand marks and numerals, warm darks, the close card are LAW; palette blend, texture family (nebula / analog / dither / paint / fluent / duotone; the annotated references live in packages/video/moodboard/MOODBOARD.md, including the Retint Rule: steal techniques, recolor to canon), motion energy, and scene composition are YOURS.
+The grammar split in one line: grain everywhere, one Eclipse Gold sun moment, Oxanium for brand marks and numerals, warm darks, the close card are LAW; palette blend, texture family (nebula / analog / dither / paint / fluent / duotone; the annotated references live in packages/video/moodboard/MOODBOARD.md, including the Retint Rule: steal techniques, recolor to canon), motion energy, and scene composition are YOURS. The tower skyline (`<TowerBlocks />`, the founding image's city) is a motif, not a constant: one optional earthbound pole among many, powerful when the concept calls for the pull of the ground, absent otherwise; most videos should NOT include it by default.
 
 ## Workflow
 

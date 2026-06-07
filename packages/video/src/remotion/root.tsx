@@ -1,3 +1,4 @@
+import { GlProbe } from "./visual-test/gl-probe";
 import { Composition, type CalculateMetadataFunction } from "remotion";
 import { colors } from "@fluncle/tokens";
 import { NostalgicCosmos } from "./nostalgic-cosmos";
@@ -93,6 +94,14 @@ export const RemotionRoot: React.FC = () => {
           calculateMetadata={calculateMetadata}
         />
       ))}
+      <Composition
+        component={GlProbe}
+        durationInFrames={30}
+        fps={30}
+        height={1920}
+        id="GlProbe"
+        width={1080}
+      />
     </>
   );
 };

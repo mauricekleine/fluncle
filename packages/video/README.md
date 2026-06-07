@@ -26,6 +26,7 @@ The North Star is the cover art: a figure floating up out of the tower blocks in
 - **Texture family.** Pick the texture pole that fits the tune: nebula (soft `Starfield` + gradient washes), analog (heavy `Grain`, exposure flares on onsets), dither (the `DitherField` glitch pole, the squared Discman side), paint (layered translucent chroma through `KaleidoMirror`), fluent (flowing liquid gradients; motion lives in the surface), or duotone (strict two-color gel-split lighting). One family should lead; do not run them all at once. The annotated references per family live in `moodboard/MOODBOARD.md`, which also carries the Retint Rule: steal the reference techniques, recolor everything to the canon palette.
 - **Motion energy.** How hard the scene reacts to the audio. Feed `useBass`, `useBeat`, `useEnergy`, `useOnset` into intensity (rim swell, window glow, scale kicks, drift speed, grain kicks). A liquid roller breathes; a heavy neuro track snaps. Same primitives, different gain.
 - **Scene composition.** The order, timing, and staging of the scene beats: where the eclipse sits and how it rises, when the type enters, whether there is a kaleido passage and how long. `NostalgicCosmos` is one arrangement, not the only one. Keep the constants; rearrange the rest.
+- **The tower skyline is a motif, not a constant.** `<TowerBlocks />` renders the founding image's city, the earthbound pole the figure floats out of; it is powerful when the concept calls for that gravity, absent otherwise. It is one optional motif among many (architecture is not the only earthbound anchor), so most videos should NOT include it by default; reach for it only when the tune wants the pull of the ground, not because it is the founding image.
 
 ## Primitives catalog
 
@@ -163,6 +164,61 @@ Three supporting pieces that enforce brand law regardless of the vehicle:
 - **`<Retint>`** — the Retint Rule in code: recolor any borrowed/sampled content to the canon palette. `mode` (`"duotone" | "gradient-map" | "tint"`, default `"gradient-map"`), `stops` (override the canon ramp), `strength` (0..1 mix over the original), `tintBlend` (tint mode only). Implemented as a deterministic SVG `feColorMatrix` luminance collapse → `feComponentTransfer` table gradient-map with `color-interpolation-filters="sRGB"`; filter IDs come from `useId()` so multiple instances never cross-wire.
 - **`<Plate>`** — a first-party moodboard plate as a drifting background image (sources copied to `public/plates/`). `src` (a `staticFile` path), `fit` (`"cover"`), `drift` (`PlateDrift` or `"slow-drift" | "none"`), `grainBoost` (0.12, grain baked onto the plate), `seed`, `opacity`, `blendMode`. Pair with `<Retint>` to bend a plate to the track's palette.
 - **`<CloseCard>`** — the mandatory close card (tagline in cream + selector signature in the one permitted gold type moment). Drive it with the `"arrive"` phase: pass that phase's `phaseProgress` (a clean 0..1) as `arc`/`progress` and the card reveals exactly as the journey arrives. Props: `palette` (`{ink,accent}`), `floatBoost`, `taglineSize` (30), `signatureSize` (46), `align`.
+
+### The GPU shader workhorse: `<ShaderLayer>` + the `GLSL` snippet library
+
+The journey set also ships a GPU layer. `<ShaderLayer>` renders a fullscreen-triangle fragment shader into a canvas via raw WebGL, compiling/linking once per shader string and pushing uniforms + drawing synchronously every frame (the working pattern reference is `src/remotion/visual-test/gl-probe.tsx`). The upgraded GPU vehicles (`JourneyOrb` surface mode, `JourneyGlass`, `JourneyFractal`) and `<TowerBlocks />` are built on it. Determinism holds: `u_time = frame / fps`, `u_progress` from the clip, and every audio uniform comes from the curve hooks (`useBeat`/`useEnergy`/`useBass`), never wall clock or `Math.random`.
+
+**This is the preferred grain and Retint implementation at the GPU level.** A shader does its own grain via `GLSL.filmGrain` (organic emulsion clumping, luminance-shaped) and its own Retint via `GLSL.paletteRamp` / the injected `u_palette[4]` ramp (luminance → the four canon stops). Inside a shader, do NOT stack a CSS `<Grain />` or wrap in `<Retint>`; bake both into the fragment shader instead. The CSS `<Grain />` over the whole frame is still the system base texture for non-shader layers.
+
+**GPU rendering requires ANGLE/Metal.** Stills and renders must pass `--gl=angle` (e.g. `bunx remotion still … --gl=angle`); the pipeline sets it as default (`remotion.config.ts` `Config.setChromiumOpenGlRenderer("angle")` + `chromiumOptions: { gl: "angle" }` in `render.ts`). Verified locally on Apple Silicon ("ANGLE Metal Renderer: Apple M5 Pro").
+
+`<ShaderLayer>` injects a standard header ahead of every `fragmentShader` body, so a shader can rely on these uniforms and helpers without declaring them:
+
+```glsl
+precision highp float;
+uniform float u_time;      // seconds since clip start (frame / fps)
+uniform vec2  u_res;       // canvas resolution in px
+uniform float u_progress;  // 0..1 clip progress
+uniform float u_energy;    // 0..1 smoothed overall energy
+uniform float u_bass;      // 0..1 smoothed low-end energy
+uniform float u_beatPulse; // 0..1, snaps to 1 on each beat, decays before the next
+uniform float u_seed;      // per-track seed
+uniform vec3  u_palette[4];// Retint ramp stops, dark -> light
+float ditherValue(vec2 fragCoord); // ordered ~1/255 dither
+vec3  dither8(vec3 col, vec2 uv);  // call on final color to kill 8-bit banding
+```
+
+Props: `fragmentShader` (the GLSL body), `palette` / `paletteStops` (the four `u_palette` stops; default canon ramp Deep Field → Re-entry Red → Eclipse Gold → Starlight Cream), `progress`, `seed`, `beatGrid` / `beatDecay` (→ `u_beatPulse`), `energyCurve` (→ `u_energy`), `bassCurve` (→ `u_bass`), `uniforms` (custom float / vec2 / vec3 keyed by name, set per frame — declare matching `uniform`s in your shader), `opacity`, `blendMode`. On missing WebGL / compile / link failure it renders a full-screen error overlay with the GLSL info log; a `webglcontextlost` handler re-inits.
+
+The `GLSL` snippet library (`src/remotion/journey/glsl.ts`) is a set of composable GLSL function strings you spread into a fragment shader ahead of `void main()`. Mind dependencies: `valueNoise`/`simplexNoise` need `hash`; `fbm` needs `valueNoise`; `filmGrain` needs `valueNoise` + `hash`.
+
+| Snippet               | Provides                                                                                               |
+| --------------------- | ------------------------------------------------------------------------------------------------------ |
+| `hash`                | Deterministic value hashes `hash21`, `hash22`, `hash13` (base for all noise).                          |
+| `valueNoise`          | Smooth bilinear value noise `valueNoise(p) -> 0..1`. Needs `hash`.                                     |
+| `simplexNoise`        | Gradient (simplex-style) noise `simplexNoise(p) -> ~-1..1`. Needs `hash`.                              |
+| `fbm`                 | Domain-rotated fractal brownian motion `fbm(p, octaves) -> 0..1`. Needs `valueNoise`.                  |
+| `paletteRamp`         | The Retint gradient-map `paletteRamp(t) -> vec3` + `retint(src)` over `u_palette`.                     |
+| `polarFold`           | Kaleidoscope wedge fold `polarFold(uv, segments) -> vec2` around center.                               |
+| `sdf`                 | Signed-distance primitives `sdCircle`/`sdBox` + smooth union `smin`.                                   |
+| `filmGrain`           | Organic emulsion-clumping film grain `filmGrain(col, uv, time, intensity)`. Needs `valueNoise`+`hash`. |
+| `vignette`            | Radial darkening multiplier `vignette(uv, radius, softness) -> 0..1`.                                  |
+| `chromaticAberration` | Per-channel UV offset helpers `caOffsetR`/`caOffsetB` for an edge-growing RGB split.                   |
+
+```ts
+import { GLSL, ShaderLayer } from "./journey"; // or from "./cosmos"
+const frag = `
+  ${GLSL.hash} ${GLSL.valueNoise} ${GLSL.fbm} ${GLSL.paletteRamp} ${GLSL.filmGrain} ${GLSL.vignette}
+  void main() {
+    vec2 uv = gl_FragCoord.xy / u_res;
+    float n = fbm(uv * 3.0 + u_time * 0.1, 5);
+    vec3 col = paletteRamp(n);            // Retint at the GPU level
+    col = filmGrain(col, uv, u_time, 0.08); // grain at the GPU level
+    col *= vignette(uv, 0.6, 0.45);
+    gl_FragColor = vec4(dither8(col, uv), 1.0);
+  }`;
+```
 
 ### Visual-test scratch space
 

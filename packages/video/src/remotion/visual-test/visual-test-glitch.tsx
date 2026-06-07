@@ -1,22 +1,32 @@
-// "VisualTestGlitch" — the GLITCH travelling vehicle, authored as a real scene.
+// "VisualTestGlitch" — the GLITCH vehicle as a finished per-track scene.
 //
-// Track: Bugwell — Everything In Its Right Place (171 BPM techy/neuro roller).
-// Concept (the journey): SIGNAL LOST → SIGNAL FOUND. We depart inside a corrupted
-// transmission: the Eclipse is buried under a dither storm and an RGB channel
-// tear, the picture scrambled. As the drop lands, a corruption FRONT travels
-// across the frame; by arrival the static has swept off and the sun burns clean —
-// everything, at last, in its right place. The one Eclipse Gold sun moment lands
-// at arrival, when the corruption clears the disc.
+// Track: Bugwell — Everything In Its Right Place (a 171bpm DnB flip of the
+// Radiohead title). The props analysis tells the story: a quiet, low-bass intro
+// (0–~8.5s), a hard drop at ~9s, sustained high energy through ~17s, a one-bar
+// breakdown gap (~17.0–17.25s), then re-entry to the close. Cool artwork (slate
+// blue accent #3d6baf, oxblood glow #72191c) — the Retint Rule applies hard:
+// the corruption is recolored to warm dark + Eclipse Gold + Re-entry Red.
 //
-// One Vehicle Rule: the GLITCH carries it (JourneyGlitch, sweep + channel-split).
-// Texture family: DITHER (the matrix/Discman pole), retinted warm per the Retint
-// Rule — cream dither, Eclipse-Gold / Re-entry-Red channel tears, never the
-// artwork's cool blue as a field; the blue survives only as a faint star tint.
-// Everything else (Starfield, Eclipse, TowerBlocks, type) supports the glitch.
+// CONCEPT (journey + texture): the title is the thesis — order resolving out of
+// corruption. The frame DEPARTS as scattered 1-bit dither noise (data decay),
+// TRAVELS as a corruption front that resolves cell by cell, and ARRIVES with
+// everything snapped into its right place: a clean halftone Eclipse disc with a
+// single burning gold rim. Texture family: DITHER (the halftone/bitmap matrix
+// pole, MOODBOARD halftone-tulip-bloom + dither-hourglass-glitch + green-matrix-
+// bloom, all retinted warm). The one Eclipse Gold sun moment lands on the drop,
+// when the disc resolves and the rim ignites.
 //
-// Brand constants held: ONE Eclipse (the sun), Grain over everything, warm darks,
-// Artist — Title em dash, Discovered date, the close card with the single gold
-// type moment. Determinism: frame-, seed-, and audio-array-derived values only.
+// One Vehicle Rule: GLITCH. Everything is the dither corruption travelling and
+// resolving across the frame; the type and close card stay subordinate.
+//
+// The whole texture is ONE GPU <ShaderLayer> (the preferred grain + Retint path):
+// halftone dither, the resolving front, the eclipse SDF disc with gold rim,
+// organic film grain and the palette ramp all baked into the fragment shader.
+// No CSS <Grain> / <Retint> over the shader (README: bake both into the shader).
+//
+// Determinism: frame-/seed-/curve-derived only (useCurrentFrame/fps, the audio.*
+// curves through the hooks, remotion-seeded values). No Math.random / Date.now.
+// GPU renders on ANGLE/Metal — stills/renders pass --gl=angle.
 
 import {
   AbsoluteFill,
@@ -30,209 +40,212 @@ import { colors } from "@fluncle/tokens";
 import { type NostalgicCosmosProps } from "../types";
 import {
   CloseCard,
-  Eclipse,
   FloatingType,
-  Grain,
-  JourneyGlitch,
-  Starfield,
-  TowerBlocks,
-  useBass,
-  useBeat,
+  GLSL,
+  ShaderLayer,
+  paletteMix,
   useEnergy,
   useJourney,
-  useOnset,
-  withAlpha,
 } from "../cosmos";
 
-// Safe inset (matches the exemplar): keep all type clear of the 1080x1920 edges.
+// Safe margins: keep all type inside this inset (1080x1920, platform-chrome safe).
 const MARGIN_X = 96;
 const SAFE_TOP = 150;
 const SAFE_BOTTOM = 230;
 
-export const VisualTestGlitch: React.FC<NostalgicCosmosProps> = ({
-  track,
-  audio,
-  palette,
-  seed,
-}) => {
+// The drop lands at ~9s in the analysed window; the corruption resolves into the
+// disc across the bars before it, ignites on the drop, and the close arrives at
+// the tail. Times in seconds (intensity rides the audio).
+const T = {
+  brandIn: 0.5,
+  brandOut: 3.4,
+  closeIn: 17.4,
+  metaIn: 12.6,
+  metaOut: 16.6,
+  trackIn: 9.2,
+  trackOut: 12.4,
+};
+
+// The travelling-and-resolving dither scene. Spreads the GLSL snippet library
+// into one fragment shader: a halftone matrix corrupts the frame, a resolution
+// FRONT sweeps the corruption into order with u_progress (the journey travel),
+// an SDF disc emerges as the Eclipse with a single gold burning rim, then film
+// grain + palette ramp + dither8 finish it at the GPU level (the Retint Rule and
+// the grain constant, baked in — no CSS layers stacked over the shader).
+const GLITCH_FRAG = /* glsl */ `
+${GLSL.hash}
+${GLSL.valueNoise}
+${GLSL.fbm}
+${GLSL.paletteRamp}
+${GLSL.sdf}
+${GLSL.filmGrain}
+${GLSL.vignette}
+
+// Resolution front position 0..1 (depart->arrive). u_resolve from the journey arc.
+uniform float u_resolve;
+// 0..1 ignition of the disc/rim on the drop (energy-gated). u_ignite.
+uniform float u_ignite;
+// Per-onset corruption jolt 0..1. u_jolt.
+uniform float u_jolt;
+
+// Coarse halftone dither: render a smooth value as a grid of dots whose radius
+// tracks the value. This is the DITHER family (newsprint/bitmap), the matrix the
+// corruption travels over. cell in px; v 0..1.
+float halftone(vec2 fragPx, float v, float cell) {
+  vec2 g = fragPx / cell;
+  vec2 c = fract(g) - 0.5;
+  float d = length(c);
+  float r = sqrt(clamp(v, 0.0, 1.0)) * 0.72; // dot radius from the value
+  return smoothstep(r, r - 0.12, d);          // 1 inside the dot, 0 outside
+}
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / u_res;
+  vec2 fragPx = gl_FragCoord.xy;
+  // Aspect-correct space centered on the disc (slightly above middle).
+  float aspect = u_res.x / u_res.y;
+  vec2 p = (uv - vec2(0.5, 0.46));
+  p.x *= aspect;
+
+  // --- The subject: an eclipse disc (SDF), the One Sun -----------------------
+  float radius = 0.27 + u_bass * 0.02 + u_beatPulse * 0.015;
+  float disc = sdCircle(p, radius);
+  // Thin burning limb only (the One Sun Rule keeps the lit gold area small) —
+  // a tight band hugging the edge, not a fat glowing donut.
+  float rimBand = 1.0 - smoothstep(0.0, 0.022, abs(disc));     // thin burning rim
+  float inside = 1.0 - smoothstep(-0.01, 0.01, disc);          // disc interior
+  float core = smoothstep(radius * 0.95, 0.0, length(p));      // occluding core
+  float discBody = inside * (1.0 - core * 0.92);
+  // The disc only EXISTS once ignited: in the corrupt intro there is no sun,
+  // just scattered data; it resolves into being on the drop. Gate its presence
+  // on ignition so depart reads as corruption and arrive reads as order.
+  rimBand *= u_ignite;
+  discBody *= u_ignite;
+
+  // --- The corruption field --------------------------------------------------
+  // A drifting fbm field is the "signal"; halftone screens it into dots. Before
+  // the resolution front passes a cell, the value is scrambled by hash noise
+  // (data decay); after, it settles to the clean field. u_resolve is the front.
+  vec2 q = uv * vec2(1.0, 1.0 / aspect);
+  float signal = fbm(q * 3.4 + vec2(u_time * 0.04, -u_time * 0.06), 5);
+  // Lift the signal where the disc sits so the dots crowd into the sun shape.
+  signal = mix(signal, signal * 0.5 + discBody * 0.9 + rimBand * 0.6, 0.85);
+
+  // Per-cell resolution: cells resolve as a soft front crosses them (diagonal),
+  // jittered per cell so the edge dissolves rather than wipes like a bar.
+  float cellSize = mix(26.0, 13.0, u_resolve); // grid tightens as it resolves
+  vec2 cellId = floor(fragPx / cellSize);
+  float cellJitter = hash21(cellId) * 0.28;
+  float frontPos = u_resolve * 1.5 - 0.25;                 // sweeps past 1.0
+  float along = (uv.x * 0.6 + (1.0 - uv.y) * 0.4);          // diagonal coordinate
+  float resolved = smoothstep(frontPos + cellJitter, frontPos + cellJitter - 0.16, along);
+
+  // Scrambled (corrupt) vs clean signal per pixel; onset jolt re-corrupts briefly.
+  float t = floor(u_time * 20.0);
+  float scramble = hash21(cellId + t * 3.1);
+  float corruptAmt = (1.0 - resolved) + u_jolt * 0.5 * hash21(cellId + t);
+  corruptAmt = clamp(corruptAmt, 0.0, 1.0);
+  float value = mix(signal, scramble, corruptAmt);
+
+  // Screen the value through the halftone dot grid (the dither texture).
+  float dots = halftone(fragPx, value, cellSize);
+
+  // --- Compose into the warm palette via the Retint ramp ---------------------
+  // Map dot coverage + disc heat to a luminance, then ramp through u_palette so
+  // everything lands in the canon (warm dark -> Re-entry Red -> Eclipse Gold ->
+  // cream). Keep the ground dominant: most of the frame is near-black dust.
+  float heat =
+      dots * 0.30                        // base cream-ish dither speckle
+    + discBody * (0.34 + u_ignite * 0.26) // disc fills with heat as it ignites
+    + rimBand * (0.5 + u_ignite * 0.4);   // the thin burning rim, the gold moment
+  // A faint horizon lift so the bottom sits deeper than the sun band.
+  heat += (1.0 - uv.y) * 0.05;
+  heat = clamp(heat, 0.0, 1.0);
+
+  vec3 col = paletteRamp(heat * heat * 0.92);
+
+  // Reserve a true Eclipse Gold burn for the thin rim only (the One Sun).
+  vec3 gold = u_palette[2];
+  col = mix(col, gold, rimBand * 0.7);
+
+  // Vignette toward the warm dark, then organic film grain (the grain constant,
+  // thickened by the onset jolt), then dither8 to kill 8-bit banding.
+  col *= mix(0.45, 1.0, vignette(uv, 0.95, 0.85));
+  col = filmGrain(col, uv, u_time, 0.15 + u_jolt * 0.06);
+  gl_FragColor = vec4(dither8(col, uv), 1.0);
+}
+`;
+
+const VisualTestGlitch: React.FC<NostalgicCosmosProps> = ({ track, audio, palette, seed }) => {
   const frame = useCurrentFrame();
-  const { fps, durationInFrames, width, height } = useVideoConfig();
+  const { fps, durationInFrames } = useVideoConfig();
   const sec = frame / fps;
 
-  // Shared narrative clock. A quick depart, a long travel through the corruption,
-  // a settled arrival where the picture resolves.
-  const { arc, phase, phaseProgress } = useJourney({ split: [0.18, 0.8] });
+  // Bend the artwork's cool palette toward the canon (Retint at the data level
+  // too): warm-dark ground, reserved gold glow, artwork-derived accent.
+  const mixed = paletteMix(palette.swatches);
 
-  // --- Audio-reactive scalars ----------------------------------------------
-  const energy = useEnergy(audio.energyCurve, { smoothingFrames: 7 });
-  const bass = useBass(audio.bassCurve, { smoothingFrames: 3 });
-  const { pulse } = useBeat(audio.beatGrid, { decay: 3.4 });
-  const onset = useOnset(audio.onsets, 140);
+  // The journey clock. depart = the corrupt intro; travel = the resolving front
+  // through the drop; arrive = the close. Splits matched to the drop at ~9s/20s.
+  const { phase, phaseProgress, arc } = useJourney({ split: [0.45, 0.87] });
 
-  // The sun resolves as the journey arrives: buried at depart, burning at arrive.
-  // The corruption clearing off the disc IS the one gold moment, so let the rim
-  // brighten with `arc` (the resolve) on top of the bass/beat swell.
-  const resolve = arc; // 0 scrambled → 1 resolved
-  const rimIntensity = Math.min(1, 0.2 + resolve * 0.72 + bass * 0.3 + pulse * 0.2);
-  const eclipseScale = 1 + resolve * 0.04 + bass * 0.05 + pulse * 0.04;
-
-  // As the picture resolves, the eclipse occlusion eases open so more of the
-  // burning disc shows: the sun goes from a thin ghost rim (scrambled) to a full
-  // hero disc (arrived). This is the "signal found" payoff.
-  const occlusionMid = 52 + bass * 8 - resolve * 14;
-  const occlusionEnd = 78 + bass * 6 - resolve * 6;
-
-  // The eclipse rises gently as the figure floats up out of the towers.
-  const eclipseY = interpolate(arc, [0, 1], [0.46, 0.36], { extrapolateRight: "clamp" });
-  const eclipseSize = Math.min(width, height) * 0.5;
-
-  // Tower windows pulse with the low end; brighter once the picture resolves.
-  const windowGlow = Math.min(1.4, 0.4 + resolve * 0.35 + bass * 0.8 + pulse * 0.15);
-
-  // Energy opens the cosmos up (drift + float), subtly.
-  const driftBoost = 1 + energy * 1.5;
-  const floatBoost = 1 + energy * 0.7;
-
-  // Onset = brief exposure spike + grain kick (a neuro track snaps hard).
-  const exposure = onset * 0.18;
-  const grainKick = onset * 0.1;
-
-  // The corruption fades OUT as the journey arrives: the storm clears so the sun
-  // can hold the frame clean at the end. Driven by the arrive phase.
-  const glitchOpacity =
-    phase === "arrive"
-      ? interpolate(phaseProgress, [0, 0.55], [0.92, 0.06], {
-          extrapolateLeft: "clamp",
-          extrapolateRight: "clamp",
-        })
-      : interpolate(resolve, [0, 1], [1, 0.78], { extrapolateRight: "clamp" });
-
-  // The sun keeps the brand gold rim regardless of the cool artwork (One Sun).
-  const sunPalette = {
-    accent: colors.eclipseGold,
-    background: palette.background,
-    glow: colors.eclipseGlow,
-  };
-  const towerPalette = sunPalette;
-
-  // Glitch palette: warm-retinted channels (the Retint Rule). Cream body,
-  // Re-entry-Red as the heat channel. The artwork's cool blue never becomes a
-  // field here; it only tints the starfield faintly below.
-  const glitchPalette = {
-    accent: colors.reentryRed,
-    ink: colors.starlightCream,
-  };
-
-  // Close-card arrive timing: reveal in the back third as the picture resolves.
-  const closeArc = interpolate(
-    sec,
-    [durationInFrames / fps - 3.4, durationInFrames / fps - 2.4],
-    [0, 1],
-    {
+  // Energy gates the ignition: the disc/rim only burn once the drop lands (~9s).
+  // The intro energy hovers ~0.45–0.6, so the threshold sits ABOVE that — the
+  // gold sun moment is reserved for the sustained peak (energy 0.75+ after 9s),
+  // never the quiet, corrupt intro. A small time gate guarantees no disc pre-drop.
+  const energy = useEnergy(audio.energyCurve, { smoothingFrames: 8 });
+  const dropGate = interpolate(sec, [8.4, 9.4], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+  const ignite =
+    dropGate *
+    interpolate(energy, [0.62, 0.82], [0, 1], {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
-    },
-  );
+    });
+
+  // The resolution front rides the eased arc, but held back hard in the depart
+  // phase so the intro stays visibly scrambled (corruption), then sweeps the
+  // frame into order through the drop and arrives fully resolved.
+  const resolve = interpolate(arc, [0, 0.35, 1], [0, 0.12, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+
+  // Per-onset corruption jolt: a deterministic value-noise read on the onset
+  // flash so transients re-corrupt the frame briefly (the glitch tearing).
+  const onsetFlash = useNearestOnset(audio.onsets, sec, fps);
+  const jolt = onsetFlash;
+
+  const floatBoost = 1 + energy * 0.8;
+
+  // Close card arrives with the journey's arrive phase.
+  const closeArc = phase === "arrive" ? phaseProgress : 0;
 
   return (
-    <AbsoluteFill style={{ backgroundColor: palette.background || colors.deepField }}>
+    <AbsoluteFill style={{ backgroundColor: mixed.background || colors.deepField }}>
+      {/* Audio: the analysed clip window. */}
       <Audio
         src={staticFile(audio.file)}
         startFrom={Math.round((audio.startMs / 1000) * fps)}
         endAt={Math.round((audio.startMs / 1000) * fps) + durationInFrames}
       />
 
-      {/* Warm depth wash: the eclipse area lifts, the towers sit in deeper dark. */}
-      <AbsoluteFill
-        style={{
-          background: `radial-gradient(120% 80% at 50% ${eclipseY * 100}%,
-            ${withAlpha(colors.eclipseGold, 0.05)} 0%,
-            ${withAlpha(palette.background, 0)} 45%),
-            linear-gradient(180deg,
-            ${withAlpha(palette.background, 0)} 38%,
-            ${withAlpha(colors.deepField, 0.72)} 100%)`,
-        }}
-      />
-
-      {/* Starfield: the artwork's blue survives only here, as a faint cool tint
-          on the stars (a minor counter-accent per the Retint Rule). */}
-      <Starfield
-        seed={seed}
-        density={150}
-        depth={3}
-        drift={{ x: 0.004 * driftBoost, y: -0.011 * driftBoost }}
-        maxSize={2.8}
-        twinkle={0.42}
-        color={palette.swatches[4] ?? colors.starlightCream}
-      />
-
-      {/* The GLITCH vehicle carries the journey. It corrupts the cosmos+sun layer
-          beneath it: a sweep front travels across as the drop lands, RGB-warm
-          channel tears kick on every onset. The corruption is the transmission
-          we're tuning through; it clears as we arrive. */}
-      <JourneyGlitch
-        mode="sweep"
-        sweepAngle={108}
-        travelPerSec={0.085}
-        feather={0.3}
-        density="onset"
-        ditherPattern="pixel"
-        cellSize={13}
-        splitStrength={11}
-        onsets={audio.onsets}
+      {/* THE VEHICLE: one GPU shader carrying the whole dither corruption +
+          resolution journey, with grain and Retint baked in. */}
+      <ShaderLayer
+        fragmentShader={GLITCH_FRAG}
+        palette={mixed}
+        seed={seed % 100000}
+        beatGrid={audio.beatGrid}
+        beatDecay={3.0}
         energyCurve={audio.energyCurve}
-        palette={glitchPalette}
-        seed={seed % 7919}
-        opacity={glitchOpacity}
-      >
-        {/* The content being corrupted: the One Sun rising over the towers. */}
-        <AbsoluteFill>
-          <AbsoluteFill style={{ alignItems: "center", justifyContent: "flex-start" }}>
-            <div
-              style={{
-                left: "50%",
-                position: "absolute",
-                top: `${eclipseY * 100}%`,
-                transform: `translate(-50%, -50%) scale(${eclipseScale})`,
-              }}
-            >
-              <Eclipse
-                size={eclipseSize}
-                palette={sunPalette}
-                rimIntensity={rimIntensity}
-                grainAmount={0.16}
-                seed={seed % 1000}
-                variant="sun"
-              />
-              {/* Eclipse occlusion: a warm dark core so only the burning rim
-                  lights, honouring the One Sun Rule. */}
-              <div
-                style={{
-                  background: `radial-gradient(circle at 50% 50%,
-                    ${withAlpha(colors.deepField, 0.97)} 0%,
-                    ${withAlpha(colors.deepField, 0.95)} ${occlusionMid}%,
-                    ${withAlpha(colors.deepField, 0)} ${occlusionEnd}%)`,
-                  borderRadius: "50%",
-                  inset: 0,
-                  pointerEvents: "none",
-                  position: "absolute",
-                }}
-              />
-            </div>
-          </AbsoluteFill>
+        bassCurve={audio.bassCurve}
+        uniforms={{ u_ignite: ignite, u_jolt: jolt, u_resolve: resolve }}
+      />
 
-          <TowerBlocks
-            palette={towerPalette}
-            seed={seed % 6151}
-            count={13}
-            litWindowDensity={0.2}
-            maxHeight={0.3}
-            windowGlow={windowGlow}
-          />
-        </AbsoluteFill>
-      </JourneyGlitch>
-
-      {/* --- TYPE TIMELINE (all inside the safe inset) ------------------------ */}
+      {/* --- TYPE TIMELINE (all inside the safe inset) ----------------------- */}
       <AbsoluteFill
         style={{
           paddingBottom: SAFE_BOTTOM,
@@ -241,10 +254,11 @@ export const VisualTestGlitch: React.FC<NostalgicCosmosProps> = ({
           paddingTop: SAFE_TOP,
         }}
       >
-        {/* Opening mark: the artist, scrambling in. */}
+        {/* 0.5–3.4s: the artist as the opening brand-led mark (over the corrupt
+            intro). */}
         <TimedBlock
-          inSec={0.4}
-          outSec={3.4}
+          inSec={T.brandIn}
+          outSec={T.brandOut}
           fps={fps}
           style={{ left: MARGIN_X, position: "absolute", top: SAFE_TOP - 40 }}
         >
@@ -257,10 +271,11 @@ export const VisualTestGlitch: React.FC<NostalgicCosmosProps> = ({
           />
         </TimedBlock>
 
-        {/* Artist — Title (the only sanctioned em dash). */}
+        {/* 9.2–12.4s: Artist — Title resolves in on the drop (the only sanctioned
+            em dash). */}
         <TimedBlock
-          inSec={3.2}
-          outSec={8.0}
+          inSec={T.trackIn}
+          outSec={T.trackOut}
           fps={fps}
           style={{
             bottom: SAFE_BOTTOM + 150,
@@ -278,10 +293,10 @@ export const VisualTestGlitch: React.FC<NostalgicCosmosProps> = ({
           />
         </TimedBlock>
 
-        {/* Discovered date (tabular Oxanium). */}
+        {/* 12.6–16.6s: Discovered date (tabular Oxanium). */}
         <TimedBlock
-          inSec={8.0}
-          outSec={12.0}
+          inSec={T.metaIn}
+          outSec={T.metaOut}
           fps={fps}
           style={{ bottom: SAFE_BOTTOM + 100, left: MARGIN_X, position: "absolute" }}
         >
@@ -295,8 +310,8 @@ export const VisualTestGlitch: React.FC<NostalgicCosmosProps> = ({
           />
         </TimedBlock>
 
-        {/* The close card: the single permitted gold type moment, arriving as the
-            picture resolves. */}
+        {/* Final beats: the close card — tagline + selector signature (the one
+            permitted gold type moment, alongside the eclipse rim). */}
         <CloseCard
           arc={closeArc}
           floatBoost={floatBoost}
@@ -308,45 +323,34 @@ export const VisualTestGlitch: React.FC<NostalgicCosmosProps> = ({
           }}
         />
       </AbsoluteFill>
-
-      {/* Onset exposure spike: a brief additive gold veil at the sun. */}
-      {exposure > 0.001 ? (
-        <AbsoluteFill
-          style={{
-            background: `radial-gradient(80% 60% at 50% ${eclipseY * 100}%,
-              ${withAlpha(colors.eclipseGlow, exposure)} 0%,
-              ${withAlpha(colors.eclipseGold, 0)} 60%)`,
-            mixBlendMode: "screen",
-            pointerEvents: "none",
-          }}
-        />
-      ) : null}
-
-      {/* GRAIN OVER EVERYTHING, ALWAYS. Onset kicks thicken it briefly. */}
-      <Grain
-        opacity={0.16 + grainKick}
-        intensity={0.85}
-        seed={(seed % 97) + 1}
-        framePool={14}
-        blendMode="overlay"
-      />
-
-      {/* Cinematic vignette to seat the type and hold the warm dark. */}
-      <AbsoluteFill
-        style={{
-          background: `radial-gradient(130% 100% at 50% 46%,
-            ${withAlpha(colors.deepField, 0)} 55%,
-            ${withAlpha(colors.deepField, 0.55)} 100%)`,
-          pointerEvents: "none",
-        }}
-      />
     </AbsoluteFill>
   );
 };
 
 // --- Helpers ---------------------------------------------------------------
 
-/** Fade + float in/out over a [inSec, outSec) window. Pure, frame-derived. */
+/**
+ * A deterministic 0..1 onset flash: 1 at the nearest onset, decaying linearly
+ * over `windowMs`. Mirrors useOnset but inlined so the jolt uniform stays a pure
+ * function of (sec, onsets). Frame-derived; no random, no wall clock.
+ */
+const useNearestOnset = (onsets: number[], sec: number, _fps: number): number => {
+  const nowMs = sec * 1000;
+  const windowMs = 160;
+  let flash = 0;
+  for (const o of onsets) {
+    const dt = nowMs - o;
+    if (dt >= 0 && dt < windowMs) {
+      flash = Math.max(flash, 1 - dt / windowMs);
+    }
+  }
+  return flash;
+};
+
+/**
+ * A block that fades + floats in/out over a [inSec, outSec) window. Pure: the
+ * envelope is frame-derived. Returns null outside the window so layout is cheap.
+ */
 const TimedBlock: React.FC<{
   inSec: number;
   outSec: number;

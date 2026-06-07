@@ -30,12 +30,16 @@ export async function render(
   });
 
   const composition = await selectComposition({
+    // GPU shaders: ANGLE (Metal on Apple Silicon) gives WebGL a real hardware
+    // context headlessly, matching remotion.config.ts for Studio/CLI parity.
+    chromiumOptions: { gl: "angle" },
     id: compositionId,
     inputProps,
     serveUrl,
   });
 
   await renderMedia({
+    chromiumOptions: { gl: "angle" },
     codec: "h264",
     composition,
     inputProps,

@@ -34,6 +34,10 @@ export {
   type JourneyGlitchProps,
 } from "./journey-glitch";
 
+// GPU shader workhorse + composable GLSL snippet library
+export { ShaderLayer, type ShaderLayerProps, type ShaderUniformValue } from "./shader-layer";
+export { GLSL, type GlslSnippet } from "./glsl";
+
 // Brand-law trio (Retint Rule, plates, close card)
 export { Retint, type RetintMode, type RetintProps, type RetintStop } from "./retint";
 export { Plate, type PlateDrift, type PlateDriftPreset, type PlateProps } from "./plate";

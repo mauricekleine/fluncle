@@ -1,65 +1,180 @@
-// "VisualTestFractal" — a real FRACTAL-vehicle scene (One Vehicle Rule).
+// "VisualTestFractal" — the FRACTAL travelling vehicle (the One Vehicle Rule,
+// packages/video/README.md), authored as a real per-track scene for
+// Bugwell — "Everything In Its Right Place".
 //
-// Track: Bugwell — Everything In Its Right Place (171 BPM). The clip window opens
-// on the drop: a quiet starlit night folds inward through a spinning mirror
-// vortex (the JourneyFractal vehicle), then settles back to stillness for the
-// close. Everything else (starfield, towers, the One Eclipse, the type timeline)
-// stays subordinate to the tunnel.
+// CONCEPT (journey / texture family):
+//   The journey is a fall INTO order: a polarFold kaleidoscope tunnel that hangs
+//   nearly still through the sparse intro (depart), then — on the drop at ~10s —
+//   pulls the camera continuously inward through recursive mirrored wedges
+//   (travel), and decelerates as it arrives at the close card. The title wants
+//   obsessive symmetry, every filament snapping into its right wedge; the fractal
+//   recursion IS that compulsion made spatial. Texture family: PAINT — layered
+//   translucent chroma folded through the kaleidoscope (MOODBOARD.md paint pole),
+//   built GPU-grade with an fbm interior + engraved line-screen over smooth
+//   gradient (the liquid-spectrum-vortex.png technique) so it reads rendered, not
+//   flat DOM. The artwork is cool (steely blue accent, oxblood glow), so the
+//   Retint Rule applies: blue + oxblood-red carry the wedges as the night's
+//   chroma; gold is withheld for ONE moment only.
 //
-// Journey: depart from a quiet starfield-and-towers night → travel by plunging
-// through a beat-folding kaleido vortex built from the artwork's oxblood/blue
-// chroma → arrive back to stillness at the close card.
+//   THE ONE ECLIPSE GOLD MOMENT: the vortex core. A single burning gold sun sits
+//   at the tunnel's convergence point and only fully ignites on the drop and its
+//   transients (u_beatPulse + the drop gate). Everywhere else stays blue/oxblood
+//   over warm dark — so the gold reads as the one sun we are falling toward.
 //
-// Texture family: PAINT — layered translucent chroma mirrored through the
-// recursion. Retint Rule: the artwork's broadcast blue (#3d6baf) is pushed down
-// to a minor counter-accent; the oxblood glow (#72191c) is heated toward
-// Re-entry Red. Gold stays reserved for the One Sun (the Eclipse rim) and the
-// one close-card signature.
-//
-// Determinism: only frame-/seed-/curve-derived values (Remotion random via the
-// primitives, the audio arrays through the hooks). No Math.random / Date.now.
+// Determinism: only frame-, seed-, and curve-derived values (useCurrentFrame/fps,
+// useJourney, the audio.* curves through ShaderLayer's uniforms, remotion random
+// is not needed here). No Math.random / Date.now. GPU shader via ANGLE/Metal
+// (render/still with --gl=angle).
 
-import {
-  AbsoluteFill,
-  Audio,
-  interpolate,
-  staticFile,
-  useCurrentFrame,
-  useVideoConfig,
-} from "remotion";
+import { AbsoluteFill, interpolate, useCurrentFrame, useVideoConfig } from "remotion";
 import { colors } from "@fluncle/tokens";
 import { type NostalgicCosmosProps } from "../types";
 import {
   CloseCard,
-  DitherField,
-  Eclipse,
   FloatingType,
+  GLSL,
   Grain,
-  JourneyFractal,
-  Starfield,
-  TowerBlocks,
-  useBass,
-  useBeat,
+  ShaderLayer,
   useEnergy,
   useJourney,
-  useOnset,
   withAlpha,
 } from "../cosmos";
 
-// Safe margins (the exemplar's insets): keep type clear of the 1080x1920 edges.
+// Safe margins (README authoring rule): keep all type inside this inset so it
+// never crowds the 1080x1920 edges or gets cropped by platform chrome.
 const MARGIN_X = 96;
 const SAFE_TOP = 150;
 const SAFE_BOTTOM = 230;
 
-// Scene beats in seconds. The vortex owns the middle; type rides the quiet ends.
-const T = {
-  artistIn: 0.4,
-  artistOut: 3.0,
-  metaIn: 6.6,
-  metaOut: 8.6,
-  trackIn: 3.0,
-  trackOut: 6.6,
-};
+// The fractal fragment shader. A polarFold kaleidoscope folds the frame into
+// mirrored wedges; the wedge interior is an fbm field run through the Retint
+// palette ramp; a journey-driven log-radius zoom pulls the camera continuously
+// INTO the vortex; an engraved fine-line groove rides over the smooth gradient
+// (the vortex reference); and a single GOLD core burns at the convergence point
+// as the One Sun, gated to ignite on the drop and its beat transients.
+//
+// Custom uniforms (declared below, set per frame from JS, all frame-derived):
+//   u_segments  mirrored wedge count
+//   u_octaves   fbm octaves for the interior (floored)
+//   u_foldRot   total fold rotation (radians): continuous spin + per-beat kick
+//   u_zoom      total domain zoom in log e-folds (the travel into the fractal)
+//   u_sun       0..1 gold-core ignition gate (drop + transients)
+//   u_coolMix   0..1 how strongly to push wedge chroma toward the cool accent
+const FRACTAL_FRAG = /* glsl */ `
+${GLSL.hash}
+${GLSL.valueNoise}
+${GLSL.fbm}
+${GLSL.paletteRamp}
+${GLSL.polarFold}
+${GLSL.filmGrain}
+${GLSL.vignette}
+
+uniform float u_segments;
+uniform float u_octaves;
+uniform float u_foldRot;
+uniform float u_zoom;
+uniform float u_sun;
+uniform float u_coolMix;
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / u_res;
+  // Aspect-correct around center so the fold stays circular on a 9:16 frame.
+  float aspect = u_res.x / u_res.y;
+  vec2 p = (uv - 0.5) * vec2(aspect, 1.0) + 0.5;
+
+  // Rotate the whole field (the vortex twist + the per-beat fold kick).
+  vec2 c = p - 0.5;
+  float cs = cos(u_foldRot);
+  float sn = sin(u_foldRot);
+  c = mat2(cs, -sn, sn, cs) * c;
+  p = c + 0.5;
+
+  // Kaleidoscope: mirror into a single wedge (silky seams from polarFold's
+  // within-wedge mirror).
+  vec2 fold = polarFold(p, max(2.0, u_segments));
+  int oct = int(max(1.0, u_octaves) + 0.5);
+
+  // TRAVEL: march the sampled domain inward in (log-radius, angle) space so the
+  // tunnel keeps feeding new rings as we fall — endless travel, not a finite
+  // plate being scaled. Subtract u_zoom from log-radius so detail flows toward us.
+  vec2 fc = fold - 0.5;
+  float r = length(fc) + 1e-4;
+  float ang = atan(fc.y, fc.x);
+  float lr = log(r) - u_zoom;
+  vec2 q = vec2(lr * 2.4, ang * (max(2.0, u_segments) / 6.2831853) * 6.2831853 * 0.5);
+  q += vec2(u_time * 0.05 + u_seed * 2.3, u_time * 0.02);
+  float warp = fbm(q * 0.9 + vec2(0.0, lr), 4);
+  float field = fbm(q + warp * 0.85, oct);
+
+  // PAINT texture: layered translucent chroma. Two offset fbm reads cross-fade so
+  // the wedge interior reads as overlapping washes rather than one flat field.
+  float wash = fbm(q * 0.55 - vec2(lr * 0.6, u_time * 0.03), 4);
+
+  // Warm-dark must win (Warm Dark Rule), but the kaleidoscope FILAMENTS must
+  // actually read: lift the lit band so the wedge interior shows its painted
+  // chroma, while keeping broad darker troughs between filaments. centerHeat is
+  // kept gentle so the center does not wash out before the sun even lights.
+  float centerHeat = smoothstep(0.55, 0.1, r) * 0.5;
+  float lit = smoothstep(0.28, 0.78, field);
+  float t = lit * 0.74 + centerHeat * 0.18 + wash * 0.16;
+  t = clamp(t, 0.0, 1.0);
+
+  // Retint: this is a COOL track and gold is withheld for the core only, so the
+  // wedge body is painted in the artwork's blue accent (u_palette[1]) and the
+  // oxblood glow (u_palette[2]), never reaching gold. Build an explicit cool ramp
+  // dark -> accent -> oxblood -> cream-tipped, then blend the canon ramp toward
+  // it by u_coolMix. Each band keeps real saturation so the wedges read painted.
+  vec3 ramp = paletteRamp(t);
+  vec3 cool;
+  if (t < 0.5) {
+    cool = mix(u_palette[0], u_palette[1], smoothstep(0.05, 0.5, t));   // dark -> accent
+  } else if (t < 0.82) {
+    cool = mix(u_palette[1], u_palette[2], smoothstep(0.5, 0.82, t));   // accent -> oxblood
+  } else {
+    cool = mix(u_palette[2], mix(u_palette[2], u_palette[3], 0.6), smoothstep(0.82, 1.0, t));
+  }
+  vec3 col = mix(ramp, cool, u_coolMix);
+
+  // --- Engraved line-screen overlay (the vortex reference) -----------------
+  // Fine spiral grooves etched over the smooth gradient: only darken narrow
+  // troughs (engraved look), never wash the color. Bass swells the depth.
+  float engraveFreq = 130.0;
+  float linePhase = lr * engraveFreq + ang * max(2.0, u_segments) * 1.5;
+  float lines = abs(sin(linePhase));
+  float grooves = smoothstep(0.0, 0.4, lines);
+  float engraveDepth = 0.22 + 0.12 * u_bass;
+  col *= 1.0 - engraveDepth * (1.0 - grooves);
+  // Concentric rings marching inward give the spokes DEPTH (a tunnel, not a
+  // starburst): faint dark rings spaced in log-radius so they crawl toward us.
+  float rings = abs(sin(lr * 9.0 - u_time * 0.3));
+  float ringGroove = smoothstep(0.0, 0.5, rings);
+  col *= 1.0 - 0.12 * (1.0 - ringGroove);
+
+  // --- THE ONE SUN: the gold vortex core -----------------------------------
+  // A single SMALL burning Eclipse-Gold disc at the convergence point — a disc,
+  // not a cloud (One Sun Rule: gold lives on ~10% of the frame). Withheld
+  // (u_sun low) through the sparse intro; ignites on the drop, snaps on the beat.
+  // This is the ONLY gold in the frame. Tight radii keep it compact and burning.
+  float core = smoothstep(0.05, 0.0, r);   // cream-hot heart, very small
+  float disc = smoothstep(0.11, 0.02, r);  // gold body
+  float rim  = smoothstep(0.15, 0.10, r);  // burning rim ring
+  float ignite = clamp(u_sun, 0.0, 1.0);
+  float beat = 0.55 + 0.45 * u_beatPulse;
+  // True canon gold/cream regardless of palette tinting (the sun is reserved gold).
+  vec3 sunGold = vec3(0.961, 0.722, 0.0);   // #f5b800 Eclipse Gold
+  vec3 sunCream = vec3(0.957, 0.918, 0.843); // #f4ead7 Starlight Cream
+  // Lay the gold disc OVER the tunnel (mix, not just add) so it occludes the cool
+  // interior into a clean burning sun rather than a blown additive haze.
+  col = mix(col, sunGold, disc * ignite * 0.92);
+  col = mix(col, sunCream, core * ignite * beat);
+  col += rim * ignite * beat * 0.5 * sunGold;
+
+  // --- Finish --------------------------------------------------------------
+  col *= mix(0.42, 1.0, vignette(uv, 1.1, 0.95));
+  col = filmGrain(col, uv, u_time, 0.11);
+  gl_FragColor = vec4(dither8(col, uv), 1.0);
+}
+`;
 
 export const VisualTestFractal: React.FC<NostalgicCosmosProps> = ({
   track,
@@ -71,215 +186,116 @@ export const VisualTestFractal: React.FC<NostalgicCosmosProps> = ({
   const { fps, durationInFrames, width, height } = useVideoConfig();
   const sec = frame / fps;
 
-  // --- Narrative clock: the fractal travels along this single arc ------------
-  // Quick lift-off, a long fall through the tunnel, a settled arrival.
-  const { arc, phase, phaseProgress } = useJourney({ split: [0.16, 0.82] });
+  // Shared narrative clock. A quick depart, a long fall, a settled arrive — the
+  // split lands the bulk of the travel across the roller body.
+  const { progress, arc, phase, phaseProgress } = useJourney({ split: [0.12, 0.82] });
 
-  // --- Audio-reactive scalars ----------------------------------------------
+  // Overall energy opens the spin and the zoom speed through the loud middle.
   const energy = useEnergy(audio.energyCurve, { smoothingFrames: 8 });
-  const bass = useBass(audio.bassCurve, { smoothingFrames: 3 });
-  const { pulse } = useBeat(audio.beatGrid, { decay: 3.2 });
-  const onset = useOnset(audio.onsets, 150);
 
-  // Retint Rule. The artwork is cool (blue accent, oxblood glow). Push the
-  // oxblood toward Re-entry Red as the heat, keep the blue as a minor counter-
-  // accent. Gold is NOT used here — it is reserved for the One Sun.
-  const heat = palette.glow || colors.reentryRed; // oxblood → heat
-  const counter = palette.accent || "#3d6baf"; // broadcast blue → counter-accent
-  const fractalPalette = {
-    accent: heat,
-    background: palette.background || colors.deepField,
-    glow: heat,
-    ink: colors.starlightCream,
-    swatches: palette.swatches,
-  };
+  // --- THE TRAVEL ----------------------------------------------------------
+  // Continuous log-domain zoom: a base per-second fall compounded with the eased
+  // arc so the camera holds nearly still through the sparse intro and accelerates
+  // into the vortex once the journey gets going. Each unit is one e-fold deeper.
+  const perSecZoom = Math.log(1.1) * sec * (0.4 + energy * 0.9);
+  const clipZoom = Math.log(5.2) * arc;
+  const totalZoom = perSecZoom + clipZoom;
 
-  // The vortex fades in as we leave the quiet depart and fades back out at the
-  // arrival, so the fractal reads as a passage we fall through, not a backdrop.
-  const fractalOpacity = interpolate(arc, [0.05, 0.22, 0.78, 0.95], [0, 0.82, 0.82, 0], {
+  // Fold rotation (radians): slow continuous vortex twist, faster on energy.
+  const spinDegPerSec = 5 + energy * 7;
+  const foldRot = (spinDegPerSec * sec * Math.PI) / 180;
+
+  // Segments tighten as we fall inward: 6 wedges opening to 8 deep in the tunnel,
+  // so the recursion reads as "more order the deeper you go".
+  const segments = Math.round(interpolate(arc, [0, 1], [6, 8], { extrapolateRight: "clamp" }));
+
+  // --- THE ONE SUN gate ----------------------------------------------------
+  // The gold core stays withheld through the sparse intro and ignites on the
+  // drop. The drop in THIS clip lands almost immediately (clip starts at 9.95s
+  // into the track, right on the drop), so the sun rises fast and holds, then
+  // recedes a touch into the close so the gold never competes with the close-card
+  // wordmark gold. Frame-derived envelope; transients ride u_beatPulse in-shader.
+  // The sun fully extinguishes before the close card so the ONLY gold left in
+  // frame is the close-card signature (One Sun Rule: never two golds competing).
+  // The track's roller also breaks at ~17s, so a dark core at the close is the
+  // musical truth too.
+  const sunGate = interpolate(sec, [0.0, 0.6, 2.0, 13.5, 15.4], [0.0, 0.12, 1.0, 1.0, 0.0], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
 
-  // The travel itself: the tunnel pulls deeper as the drop hits. Energy widens
-  // the zoom; the spin leans faster through the loud middle.
-  const zoomPerSec = 1.1 + energy * 0.16;
-  const spinPerSec = 5 + energy * 7;
-
-  // The One Sun: a single Eclipse anchored at the vortex center. Its rim is the
-  // only Eclipse Gold light — it swells with the low end and snaps on the beat,
-  // flaring hardest on the drop. The disc breathes so it reads as alive.
-  const rimIntensity = Math.min(1, 0.4 + bass * 0.46 + pulse * 0.26);
-  const eclipseScale = 1 + bass * 0.07 + pulse * 0.05;
-  const eclipseSize = Math.min(width, height) * 0.34;
-  const sunPalette = {
-    accent: colors.eclipseGold,
-    background: palette.background || colors.deepField,
-    glow: colors.eclipseGlow,
-  };
-
-  // The sun sits at the dead center of the tunnel (the point we fall toward); it
-  // rises a touch over the clip so the journey lifts, echoing the cover figure.
-  const eclipseY = interpolate(arc, [0, 1], [0.5, 0.44], { extrapolateRight: "clamp" });
-
-  // Tower windows glow with the bass; the towers ground the quiet ends and sink
-  // into shadow as the vortex swallows the frame.
-  const windowGlow = Math.min(1.4, 0.5 + bass * 0.85 + pulse * 0.15);
-  const towerOpacity = interpolate(arc, [0.12, 0.3], [1, 0.25], {
-    extrapolateLeft: "clamp",
+  // Retint blend: cool track, so push the wedge chroma hard toward the artwork's
+  // own blue/oxblood (the Retint Rule keeps cool hues as the night's chroma while
+  // the sun stays gold). Slightly less cool at the very end so the arrive reads
+  // warmer as the tunnel decelerates.
+  const coolMix = interpolate(arc, [0, 0.85, 1], [0.82, 0.82, 0.62], {
     extrapolateRight: "clamp",
   });
-  const towerPalette = {
-    accent: colors.eclipseGold,
-    background: palette.background || colors.deepField,
-    glow: colors.eclipseGlow,
+
+  // Shader palette stops, dark -> light:
+  //   [0] warm-dark ground (Deep Field, nudged to the artwork dark)
+  //   [1] the cool accent (steely blue, the wedge mid-chroma)
+  //   [2] the oxblood glow as the heat band (Re-entry-Red-adjacent)
+  //   [3] cream ink for the brightest filaments
+  // The in-shader sun forces true Eclipse Gold/Cream for the core regardless.
+  const accentCool = palette.accent ?? colors.reentryRed;
+  const oxblood = palette.glow ?? colors.reentryRed;
+  const paletteStops: [string, string, string, string] = [
+    palette.background ?? colors.deepField,
+    accentCool,
+    oxblood,
+    colors.starlightCream,
+  ];
+
+  // Type timeline (seconds). Artist mark opens, Artist — Title rides the roller,
+  // Discovered date, then the close card on the arrive phase.
+  const T = {
+    brandIn: 0.4,
+    brandOut: 3.4,
+    metaIn: 7.0,
+    metaOut: 10.6,
+    trackIn: 3.2,
+    trackOut: 7.6,
   };
 
-  // Energy opens the cosmos: faster drift, a touch more global float.
-  const driftBoost = 1 + energy * 1.5;
   const floatBoost = 1 + energy * 0.7;
-
-  // Onset = brief exposure spike: an additive gold-veil flash + a grain kick.
-  const exposure = onset * 0.14;
-  const grainKick = onset * 0.08;
-
-  // The close-card reveal rides the arrive phase's clean 0..1.
-  const closeArc = phase === "arrive" ? phaseProgress : 0;
 
   return (
     <AbsoluteFill style={{ backgroundColor: palette.background || colors.deepField }}>
-      {/* Audio: the analysed clip window, trimmed via startFrom/endAt. */}
-      <Audio
-        src={staticFile(audio.file)}
-        startFrom={Math.round((audio.startMs / 1000) * fps)}
-        endAt={Math.round((audio.startMs / 1000) * fps) + durationInFrames}
-      />
-
-      {/* Warm radial wash centered on the sun + a bottom shadow ramp: depth
-          without a flat black field, every neutral leaning warm. */}
-      <AbsoluteFill
-        style={{
-          background: `radial-gradient(120% 80% at 50% ${eclipseY * 100}%,
-            ${withAlpha(colors.eclipseGold, 0.05)} 0%,
-            ${withAlpha(palette.background, 0)} 45%),
-            linear-gradient(180deg,
-            ${withAlpha(palette.background, 0)} 40%,
-            ${withAlpha(colors.deepField, 0.7)} 100%)`,
+      {/* The fractal vehicle: the GPU kaleidoscope tunnel. Fills the frame; all
+          grain + retint are baked in the shader (no CSS <Grain> over a shader). */}
+      <ShaderLayer
+        fragmentShader={FRACTAL_FRAG}
+        paletteStops={paletteStops}
+        seed={seed}
+        progress={progress}
+        beatGrid={audio.beatGrid}
+        beatDecay={3.0}
+        energyCurve={audio.energyCurve}
+        bassCurve={audio.bassCurve}
+        uniforms={{
+          u_coolMix: coolMix,
+          u_foldRot: foldRot,
+          u_octaves: 6,
+          u_segments: segments,
+          u_sun: sunGate,
+          u_zoom: totalZoom,
         }}
       />
 
-      {/* Starfield: the quiet night the journey departs from; drifts faster as
-          energy lifts. Always present. */}
-      <Starfield
-        seed={seed}
-        density={140}
-        depth={3}
-        drift={{ x: 0.004 * driftBoost, y: -0.011 * driftBoost }}
-        maxSize={2.6}
-        twinkle={0.4}
+      {/* A whisper of warm light only right around the gold core so it seats into
+          the warm dark (Warm Dark Rule) without becoming a cloud. Kept tight. */}
+      <AbsoluteFill
+        style={{
+          background: `radial-gradient(22% 16% at 50% 50%,
+            ${withAlpha(colors.eclipseGold, 0.05 * sunGate)} 0%,
+            ${withAlpha(colors.deepField, 0)} 70%)`,
+          mixBlendMode: "screen",
+          pointerEvents: "none",
+        }}
       />
 
-      {/* Tower blocks ground the bottom; they sink into shadow as the vortex
-          takes the frame. */}
-      <AbsoluteFill style={{ opacity: towerOpacity }}>
-        <TowerBlocks
-          palette={towerPalette}
-          seed={seed % 7919}
-          count={13}
-          litWindowDensity={0.2}
-          maxHeight={0.3}
-          windowGlow={windowGlow}
-        />
-      </AbsoluteFill>
-
-      {/* THE VEHICLE: the fractal vortex we fall through. Built from the
-          artwork's heated oxblood + a soft paint plate, mirrored into every
-          wedge; folds on the beat; spins and zooms through the loud middle.
-          Gold stays out of the fractal (Retint Rule + One Sun Rule). */}
-      <JourneyFractal
-        segments={8}
-        rings={5}
-        size={width * 1.25}
-        zoomPerSec={zoomPerSec}
-        spinPerSec={spinPerSec}
-        ringScale={0.6}
-        foldOnBeat
-        foldDegrees={14}
-        beatGrid={audio.beatGrid}
-        beatDecay={3.2}
-        palette={fractalPalette}
-        opacity={fractalOpacity}
-      >
-        {/* Paint-family wedge source: layered translucent chroma over warm dark.
-            The HEAT (oxblood → Re-entry Red) leads; the cool blue survives only as
-            a thin minor counter-accent at the wedge edge (the Retint Rule). The
-            background sits dark so warm-dark wins and the gold sun stays loudest. */}
-        <AbsoluteFill
-          style={{ background: withAlpha(palette.background || colors.deepField, 0.55) }}
-        />
-        <AbsoluteFill
-          style={{
-            background: `radial-gradient(circle at 42% 36%,
-              ${withAlpha(heat, 0.95)} 0%,
-              ${withAlpha(heat, 0.55)} 34%,
-              ${withAlpha(palette.background, 0)} 70%)`,
-          }}
-        />
-        {/* The cool counter-accent: a single restrained edge glaze, never a field. */}
-        <AbsoluteFill
-          style={{
-            background: `linear-gradient(150deg,
-              ${withAlpha(counter, 0.32)} 0%,
-              ${withAlpha(palette.background, 0)} 36%)`,
-            mixBlendMode: "screen",
-          }}
-        />
-        <DitherField
-          pattern="halftone"
-          scale={24}
-          color={heat}
-          threshold={0.4 + bass * 0.25}
-          opacity={0.6}
-          blendMode="multiply"
-        />
-      </JourneyFractal>
-
-      {/* The One Sun: a single Eclipse at the vortex center, breathing with the
-          low end. The dark warm occlusion core keeps it reading as an eclipse,
-          shrinking the lit gold area to honour The One Sun Rule. */}
-      <AbsoluteFill style={{ alignItems: "center", justifyContent: "flex-start" }}>
-        <div
-          style={{
-            left: "50%",
-            position: "absolute",
-            top: `${eclipseY * 100}%`,
-            transform: `translate(-50%, -50%) scale(${eclipseScale})`,
-          }}
-        >
-          <Eclipse
-            size={eclipseSize}
-            palette={sunPalette}
-            rimIntensity={rimIntensity}
-            grainAmount={0.16}
-            seed={seed % 1000}
-            variant="sun"
-          />
-          <div
-            style={{
-              background: `radial-gradient(circle at 50% 50%,
-                ${withAlpha(colors.deepField, 0.97)} 0%,
-                ${withAlpha(colors.deepField, 0.95)} ${52 + bass * 8}%,
-                ${withAlpha(colors.deepField, 0)} ${78 + bass * 6}%)`,
-              borderRadius: "50%",
-              inset: 0,
-              pointerEvents: "none",
-              position: "absolute",
-            }}
-          />
-        </div>
-      </AbsoluteFill>
-
-      {/* --- TYPE TIMELINE (all inside the safe inset) ------------------------ */}
+      {/* --- TYPE TIMELINE (all inside the safe inset) ----------------------- */}
       <AbsoluteFill
         style={{
           paddingBottom: SAFE_BOTTOM,
@@ -290,10 +306,10 @@ export const VisualTestFractal: React.FC<NostalgicCosmosProps> = ({
       >
         {/* 0–3s: the artist as the brand-led opening mark. */}
         <TimedBlock
-          inSec={T.artistIn}
-          outSec={T.artistOut}
+          inSec={T.brandIn}
+          outSec={T.brandOut}
           fps={fps}
-          style={{ left: MARGIN_X, position: "absolute", top: SAFE_TOP - 40 }}
+          style={{ left: MARGIN_X, position: "absolute", top: SAFE_TOP - 30 }}
         >
           <FloatingType
             variant="brandMark"
@@ -304,13 +320,14 @@ export const VisualTestFractal: React.FC<NostalgicCosmosProps> = ({
           />
         </TimedBlock>
 
-        {/* 3–6.6s: Artist — Title (the only sanctioned em dash). */}
+        {/* 3–7.6s: Artist — Title (the only sanctioned em dash). Bottom-seated so
+            it sits clear of the bright vortex core in the middle of the frame. */}
         <TimedBlock
           inSec={T.trackIn}
           outSec={T.trackOut}
           fps={fps}
           style={{
-            bottom: SAFE_BOTTOM + 150,
+            bottom: SAFE_BOTTOM + 140,
             left: MARGIN_X,
             position: "absolute",
             right: MARGIN_X,
@@ -325,12 +342,12 @@ export const VisualTestFractal: React.FC<NostalgicCosmosProps> = ({
           />
         </TimedBlock>
 
-        {/* 6.6–8.6s: Discovered date (tabular Oxanium). */}
+        {/* 7–10.6s: Discovered date (tabular Oxanium). */}
         <TimedBlock
           inSec={T.metaIn}
           outSec={T.metaOut}
           fps={fps}
-          style={{ bottom: SAFE_BOTTOM + 100, left: MARGIN_X, position: "absolute" }}
+          style={{ bottom: SAFE_BOTTOM + 96, left: MARGIN_X, position: "absolute" }}
         >
           <FloatingType
             variant="meta"
@@ -342,54 +359,48 @@ export const VisualTestFractal: React.FC<NostalgicCosmosProps> = ({
           />
         </TimedBlock>
 
-        {/* The close card: the constant ending, revealed on the arrive phase.
-            Holds the single permitted Eclipse Gold type moment (signature). */}
-        <CloseCard
-          arc={closeArc}
-          floatBoost={floatBoost}
-          style={{
-            bottom: SAFE_BOTTOM + 200,
-            left: MARGIN_X,
-            position: "absolute",
-            right: MARGIN_X,
-          }}
-        />
+        {/* The close card on the arrive phase: tagline + selector signature, the
+            one permitted gold TYPE moment (the in-shader sun has receded by now). */}
+        {phase === "arrive" ? (
+          <CloseCard
+            progress={phaseProgress}
+            floatBoost={floatBoost}
+            style={{
+              bottom: SAFE_BOTTOM + 200,
+              left: MARGIN_X,
+              position: "absolute",
+              right: MARGIN_X,
+            }}
+          />
+        ) : null}
       </AbsoluteFill>
 
-      {/* Onset exposure spike: a brief additive gold veil over the whole frame. */}
-      {exposure > 0.001 ? (
-        <AbsoluteFill
-          style={{
-            background: `radial-gradient(80% 60% at 50% ${eclipseY * 100}%,
-              ${withAlpha(colors.eclipseGlow, exposure)} 0%,
-              ${withAlpha(colors.eclipseGold, 0)} 60%)`,
-            mixBlendMode: "screen",
-            pointerEvents: "none",
-          }}
-        />
-      ) : null}
+      {/* A faint cinematic vignette to seat the type and hold the warm dark over
+          the whole frame (the shader vignettes the tunnel; this seats the type). */}
+      <AbsoluteFill
+        style={{
+          background: `radial-gradient(135% 105% at 50% 50%,
+            ${withAlpha(colors.deepField, 0)} 58%,
+            ${withAlpha(colors.deepField, 0.5)} 100%)`,
+          pointerEvents: "none",
+        }}
+      />
 
-      {/* GRAIN OVER EVERYTHING, ALWAYS. The onset kick thickens it briefly. */}
+      {/* GRAIN is baked in the shader for the vortex; a whisper of CSS Grain over
+          the TYPE keeps the type seated in the same emulsion as everything else
+          (kept low so it never double-grains the rendered tunnel). */}
       <Grain
-        opacity={0.16 + grainKick}
-        intensity={0.85}
+        opacity={0.06}
+        intensity={0.9}
         seed={(seed % 97) + 1}
         framePool={14}
         blendMode="overlay"
       />
-
-      {/* Faint cinematic vignette to seat the type and hold the warm dark. */}
-      <AbsoluteFill
-        style={{
-          background: `radial-gradient(130% 100% at 50% 46%,
-            ${withAlpha(colors.deepField, 0)} 55%,
-            ${withAlpha(colors.deepField, 0.55)} 100%)`,
-          pointerEvents: "none",
-        }}
-      />
     </AbsoluteFill>
   );
 };
+
+// --- Helpers ---------------------------------------------------------------
 
 /**
  * A block that fades + floats in/out over a [inSec, outSec) window. Pure: the

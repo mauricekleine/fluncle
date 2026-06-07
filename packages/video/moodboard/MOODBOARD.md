@@ -29,7 +29,7 @@ Every video is a journey carried by exactly ONE travelling medium (the One Vehic
 
 ### Constant
 
-- `00-founding-image.png` — the cover art, the founding document: grainy pixelated sun, floating astronaut tethered to a Discman, starfield over tower blocks with lit windows. Every video descends from this. Steal: the grain density on the sun, the warmth of the window lights, the orb-to-towers scale relationship.
+- `00-founding-image.png` — the cover art, the founding document: grainy pixelated sun, floating astronaut tethered to a Discman, starfield over tower blocks with lit windows. Every video descends from this. Steal: the grain density on the sun, the warmth of the window lights, the orb-to-towers scale relationship. Note: the tower skyline itself is a motif, not a constant — one optional earthbound pole among many, present only when the concept calls for the pull of the ground, so most videos leave it out.
 
 ### First-party — the operator's own collages (posted/, 2019-2020)
 
@@ -69,6 +69,19 @@ These are not references; Maurice made them. Full rights: any of them may be sam
 - `mirror-quilt-desert.png` — desert photo folded into a diamond quilted mirror grid; mirage-like glitched reflection. Steal: the diamond mirror-tiling of a single frame as a KaleidoMirror pattern variant. Ignore: the bright daylight palette and literal landscape.
 - `halftone-portrait-dots.png` — a face barely resolving out of a grid of blue and gold dots on near-black; spectral, intimate. Steal: the dot-matrix build of a figure emerging from darkness (echoes the cover's floating figure); strictly two-tone with gold as the lit side. Ignore: the blue cast; warm it.
 - `waveform-blinds-heat-ramp.webp` — vertical slats ramping from black into a red-to-amber wash; an equalizer rendered as venetian blinds, already on-canon warm-dark with gold/red. Steal: the vertical-bar waveform on warm dark driven by a brightness ramp; pairs with `waveform-ridge.png` as primitive fuel. Ignore: the slat regularity; vary bar heights with the energy curve. Reference-only: Shutterstock preview with an asset-ID stamp.
+
+### Stage light — Fray Studio for Foals, 2022 (reference-only)
+
+Eight frames from a tour the operator stood in: professional light design as live One-Sun practice. The show's grammar, frame after frame: commit to ONE temperature per moment, let haze make the light a solid volume, mirror the frame around a single bright core, and trust silhouette over detail. Two recurring structures map straight onto vehicles: the horizontal light-bar sandwich (figures bracketed between glowing strips; JourneyLines blinds fuel) and the central framed portal (one bright rectangle in a mirror-symmetric stage; the Eclipse-as-picture). Third-party photography: steal the lighting and staging grammar, never the pixels; everything cool-gelled takes the Retint Rule.
+
+- `foals-silhouette-heat-bars.jpg` — duotone (fluent). Musicians as flat black cutouts between horizontal bars of red-into-amber haze; heat as architecture, near-canon out of the box. Steal: hard backlight reducing figures to negative space; the red-to-gold falloff inside each bar. Ignore: the documentary pit.
+- `foals-crowdsurf-red-flag.jpg` — analog (duotone). The singer carried on the crowd, lit by one red field with an amber bar behind. Steal: a single-source wash flooding a whole human scene; cream-against-red as the only non-heat tone. Ignore: portrait literalness.
+- `foals-cloud-rays-duotone.jpg` — duotone (nebula). Cold beams raking from above, warm light pooling below, a bright framed portal centered between burning cloud banks. Steal: the strict two-temperature gel split; beam fans converging on one central glowing rectangle. Ignore: the cobalt dominance; retint.
+- `foals-blue-flame-portal.jpg` — fluent (nebula). Mirror-symmetric liquid-flame columns around a central grain-filled square portal. Steal: the bilateral liquid fold around a void; the particle field inside the frame. Ignore: the entire cyan palette; gold flame on warm dark.
+- `foals-rainbow-bars-silhouette.jpg` — duotone (fluent). Band silhouetted between two hard LED bars, the stage volume owned by one continuous gradient haze. Steal: the bar-sandwich structure and one gradient owning the whole atmosphere. Ignore: the full rainbow; collapse to a gold-to-red ramp.
+- `foals-typewall-dusk-gold.jpg` — analog (duotone). Repeated kinetic typography glowing warm against real blue-hour sky, one gold bloom at center. Steal: type-as-texture in one warm hue; the warm-stage/cool-dusk duotone nature provides. Ignore: the literal branding.
+- `foals-particle-bloom-starfield.jpg` — dither (nebula). A luminous particle-flower hovering in an LED starfield above neon bar stacks; an object made OF the dither, suspended in the cosmos. Steal: the glowing particle-built subject floating in a star field (halftone-tulip-bloom at arena scale). Ignore: the violet gels.
+- `foals-glitch-bloom-wall.jpg` — glitch (fractal). A kaleidoscopic burst exploding through visibly tiled wall panels with RGB-fringed strips. Steal: radial bloom rendered through tiled corruption; the chromatic fringe at hard edges. Ignore: the cyan field.
 
 ### Paint
 
