@@ -258,9 +258,17 @@ void main() {
   // off smoothly into transparency. Tinted to the warm glow stop, swelling with
   // the rim. This is the One Sun halo, drawn in-shader so it grains and dithers
   // with the body instead of reading as a flat CSS gradient.
+  //
+  // The exp falloff alone never reaches 0, so at the (square) layer's on-axis
+  // edge it's still ~24% bright and the hard quad clip prints a visible
+  // rectangle around the halo. Multiply by a radial edge fade that drives the
+  // glow to EXACT zero well inside the quad — by r ~= 0.95, where p reaches the
+  // shorter axis at r = 1.0 — so the halo dissolves into the field with no
+  // perceivable boundary. (radius is 0.78, leaving ample room for the falloff.)
   float outside = smoothstep(radius - 0.02, radius + 0.02, r);
   float glowFall = exp(-max(0.0, r - radius) * 6.5);
-  float glow = outside * glowFall * (0.55 + u_rim * 0.9);
+  float edgeFade = 1.0 - smoothstep(0.80, 0.96, r);
+  float glow = outside * glowFall * edgeFade * (0.55 + u_rim * 0.9);
   vec3 glowCol = mix(u_palette[2], u_palette[1], 0.35);
 
   // --- Composite ------------------------------------------------------------

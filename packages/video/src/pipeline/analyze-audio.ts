@@ -197,22 +197,50 @@ function estimateBpm(env: Float32Array): number {
   const lagMin = Math.floor(bpmToLag(searchMax));
   const lagMax = Math.ceil(bpmToLag(searchMin));
 
-  let bestLag = lagMin;
-  let bestScore = -Infinity;
-  for (let lag = lagMin; lag <= lagMax && lag < centered.length; lag++) {
+  // Cache the raw autocorrelation per lag so we can refine the peak sub-hop.
+  const corr = new Map<number, number>();
+  const autocorr = (lag: number): number => {
+    const cached = corr.get(lag);
+    if (cached !== undefined) {
+      return cached;
+    }
     let acc = 0;
     for (let i = lag; i < centered.length; i++) {
       acc += centered[i] * centered[i - lag];
     }
+    corr.set(lag, acc);
+    return acc;
+  };
+
+  let bestLag = lagMin;
+  let bestScore = -Infinity;
+  for (let lag = lagMin; lag <= lagMax && lag < centered.length; lag++) {
     // Slight bias toward shorter lags (faster tempi) to avoid octave-down errors.
-    const score = acc / lag ** 0.5;
+    const score = autocorr(lag) / lag ** 0.5;
     if (score > bestScore) {
       bestScore = score;
       bestLag = lag;
     }
   }
 
-  let bpm = (60 * (1000 / HOP_MS)) / bestLag;
+  // Parabolic (quadratic) interpolation of the autocorrelation peak: fit a parabola
+  // through r[k-1], r[k], r[k+1] and shift the lag by its vertex offset. With 50ms
+  // hops, integer lags quantize BPM coarsely (only 171.43 lands in [160,185]); the
+  // sub-hop refinement recovers the true tempo (~174 for D&B).
+  let refinedLag = bestLag;
+  if (bestLag - 1 >= lagMin && bestLag + 1 < centered.length) {
+    const rPrev = autocorr(bestLag - 1);
+    const rPeak = autocorr(bestLag);
+    const rNext = autocorr(bestLag + 1);
+    const denom = rPrev - 2 * rPeak + rNext;
+    if (Math.abs(denom) > 1e-9) {
+      let offset = (0.5 * (rPrev - rNext)) / denom;
+      offset = Math.max(-0.5, Math.min(0.5, offset));
+      refinedLag = bestLag + offset;
+    }
+  }
+
+  let bpm = (60 * (1000 / HOP_MS)) / refinedLag;
   // Fold into target range: double half-time, halve double-time.
   while (bpm < BPM_MIN) {
     bpm *= 2;

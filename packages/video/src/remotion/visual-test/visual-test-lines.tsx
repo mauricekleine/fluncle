@@ -197,7 +197,7 @@ void main() {
 
 const VisualTestLines: React.FC<NostalgicCosmosProps> = ({ track, audio, palette, seed }) => {
   const frame = useCurrentFrame();
-  const { fps, durationInFrames, width, height } = useVideoConfig();
+  const { fps, durationInFrames } = useVideoConfig();
   const sec = frame / fps;
 
   // Narrative clock: the lines field travels along this arc. A quick depart, a

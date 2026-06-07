@@ -115,9 +115,7 @@ void main() {
 `;
 
 const VisualTestOrb: React.FC<NostalgicCosmosProps> = ({ track, audio, palette, seed }) => {
-  const frame = useCurrentFrame();
   const { fps, durationInFrames, width, height } = useVideoConfig();
-  const sec = frame / fps;
 
   // Shared narrative clock: every gesture below travels on this one arc.
   const { arc, phase, phaseProgress, progress } = useJourney({ split: SPLIT });

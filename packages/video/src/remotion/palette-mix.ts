@@ -26,9 +26,10 @@ export type PaletteMixOptions = {
  *   gold; we reserve it.
  * - The Warm Dark Rule: `background` stays a warm near-black, only nudged toward
  *   the artwork's darkest swatch.
- * - Accent: if the artwork reads warm, bias the accent toward Eclipse Gold so the
- *   piece feels lit by the same sun. If it reads cool, keep the artwork's own
- *   most-chromatic swatch as accent (the sun stays reserved for `glow`).
+ * - Accent: always gold-family. The Retint Rule applies to palettes too — the
+ *   artwork's most-chromatic swatch flavors the accent, but it is always leaned
+ *   toward Eclipse Gold, and the cooler the artwork reads, the harder the lean.
+ *   A cold sleeve never gets to extinguish the sun (the Loadstar incident).
  *
  * Pure and deterministic. Falls back to the full brand palette when no swatches
  * are supplied, so placeholder props still render on-brand.
@@ -59,14 +60,11 @@ export const paletteMix = (swatches: string[], options: PaletteMixOptions = {}):
   // Background: warm near-black, gently drifted toward the artwork's darkest.
   const background = mix(colors.deepField, darkest, backgroundDrift);
 
-  // Average warmth across swatches decides the accent strategy.
+  // Average warmth across swatches decides how hard the accent leans gold:
+  // warm artwork keeps more of its own character, cool artwork gets pulled
+  // firmly into the sun's family so the accent can never read cold.
   const avgWarmth = clean.reduce((sum, s) => sum + warmth(s), 0) / clean.length;
-  const accent =
-    avgWarmth >= warmThreshold
-      ? // Warm artwork: lean the chromatic swatch toward Eclipse Gold.
-        mix(mostChromatic, colors.eclipseGold, 0.55)
-      : // Cool artwork: keep the artwork's own accent; reserve gold for the sun.
-        mostChromatic;
+  const accent = mix(mostChromatic, colors.eclipseGold, avgWarmth >= warmThreshold ? 0.55 : 0.8);
 
   // Ink: keep Starlight Cream legible; lift slightly toward the brightest swatch
   // so the type feels of-a-piece without losing the aged-paper cream.

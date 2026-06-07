@@ -1,3 +1,6 @@
+import { DancefloorHavoc } from "./dancefloor-havoc";
+import DownWithYourLove from "./down-with-your-love";
+import { FourSeasonsRidge } from "./four-seasons-ridge";
 import { GlProbe } from "./visual-test/gl-probe";
 import { Composition, type CalculateMetadataFunction } from "remotion";
 import { colors } from "@fluncle/tokens";
@@ -74,6 +77,36 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="NostalgicCosmos"
         component={NostalgicCosmos}
+        durationInFrames={Math.round((defaultProps.audio.durationMs / 1000) * FPS)}
+        fps={FPS}
+        width={WIDTH}
+        height={HEIGHT}
+        defaultProps={defaultProps}
+        calculateMetadata={calculateMetadata}
+      />
+      <Composition
+        id="FourSeasonsRidge"
+        component={FourSeasonsRidge}
+        durationInFrames={Math.round((defaultProps.audio.durationMs / 1000) * FPS)}
+        fps={FPS}
+        width={WIDTH}
+        height={HEIGHT}
+        defaultProps={defaultProps}
+        calculateMetadata={calculateMetadata}
+      />
+      <Composition
+        id="DancefloorHavoc"
+        component={DancefloorHavoc}
+        durationInFrames={Math.round((defaultProps.audio.durationMs / 1000) * FPS)}
+        fps={FPS}
+        width={WIDTH}
+        height={HEIGHT}
+        defaultProps={defaultProps}
+        calculateMetadata={calculateMetadata}
+      />
+      <Composition
+        id="DownWithYourLove"
+        component={DownWithYourLove}
         durationInFrames={Math.round((defaultProps.audio.durationMs / 1000) * FPS)}
         fps={FPS}
         width={WIDTH}

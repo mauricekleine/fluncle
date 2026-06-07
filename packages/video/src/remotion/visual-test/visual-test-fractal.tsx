@@ -183,7 +183,7 @@ export const VisualTestFractal: React.FC<NostalgicCosmosProps> = ({
   seed,
 }) => {
   const frame = useCurrentFrame();
-  const { fps, durationInFrames, width, height } = useVideoConfig();
+  const { fps } = useVideoConfig();
   const sec = frame / fps;
 
   // Shared narrative clock. A quick depart, a long fall, a settled arrive — the

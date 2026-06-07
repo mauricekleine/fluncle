@@ -42,9 +42,17 @@ export async function render(
     chromiumOptions: { gl: "angle" },
     codec: "h264",
     composition,
+    // These scenes are GLSL shaders drowned in film grain and dither — pure
+    // entropy that h264 can't dedupe, so Remotion's default crf of 18 ballooned
+    // a 20s clip to 254MB. Grain also hides compression artifacts, so we can
+    // push crf hard with no perceptible loss (social platforms re-encode anyway).
+    // crf 31 + the "slow" preset projects ~32MB for 20s, well under our 40MB
+    // budget, vs ~144MB at crf 24. "slow" buys real bytes on high-entropy frames.
+    crf: 31,
     inputProps,
     outputLocation: outputPath,
     serveUrl,
+    x264Preset: "slow",
   });
 
   return { compositionId: composition.id, outputPath };

@@ -26,19 +26,41 @@ type PaletteMixInput = {
   swatches: string[];
 };
 
+/** Relative luminance (0..1) of a #rrggbb hex, for swatch mud/blowout filtering. */
+function hexLuma(hex: string): number {
+  const r = Number.parseInt(hex.slice(1, 3), 16) / 255;
+  const g = Number.parseInt(hex.slice(3, 5), 16) / 255;
+  const b = Number.parseInt(hex.slice(5, 7), 16) / 255;
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+// The Nostalgic Cosmos canon trio — the warm, sunlit lead of every swatch set.
+// Kept first so any downstream consumer that re-derives roles from `swatches`
+// (warmth/chroma heuristics) still finds the sun, not the artwork's coldest hue.
+const CANON_SWATCHES = [colors.eclipseGold, colors.eclipseGlow, colors.reentryRed] as const;
+
 /**
- * Map artwork swatches onto the composition palette, falling back to the design
- * tokens (the Nostalgic Cosmos canon) when artwork is missing or thin.
+ * The Retint Rule applied to palettes: steal the technique, recolor to canon.
+ * Artwork flavors the scene; canon owns the roles. The four lit roles are law and
+ * always come straight from @fluncle/tokens (the Nostalgic Cosmos canon) — never
+ * from artwork — so the One Sun Rule and Warm Dark Rule hold no matter how cold a
+ * cover is: `background` is always Deep Field, `accent` always Eclipse Gold,
+ * `glow` always Eclipse Glow, `ink` always Starlight Cream. Artwork hues are
+ * confined to `swatches`, and there only as *secondary* tints: the warm canon
+ * trio leads the list, then valid artwork swatches follow (near-black/near-white
+ * ones, which would read as mud or blowout against the field, are dropped). With
+ * artwork missing or too thin, the canon trio stands alone.
  */
 function paletteMix({ swatches }: PaletteMixInput): CosmosPalette {
-  const valid = swatches.filter((s) => /^#[0-9a-fA-F]{6}$/.test(s));
+  const valid = swatches.filter(
+    (s) => /^#[0-9a-fA-F]{6}$/.test(s) && hexLuma(s) > 0.05 && hexLuma(s) < 0.95,
+  );
   return {
-    accent: valid[0] ?? colors.eclipseGold,
+    accent: colors.eclipseGold,
     background: colors.deepField,
-    glow: valid[1] ?? colors.eclipseGlow,
+    glow: colors.eclipseGlow,
     ink: colors.starlightCream,
-    swatches:
-      valid.length > 0 ? valid : [colors.eclipseGold, colors.eclipseGlow, colors.reentryRed],
+    swatches: [...CANON_SWATCHES, ...valid],
   };
 }
 

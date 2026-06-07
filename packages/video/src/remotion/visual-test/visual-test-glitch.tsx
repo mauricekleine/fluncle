@@ -46,6 +46,7 @@ import {
   paletteMix,
   useEnergy,
   useJourney,
+  withAlpha,
 } from "../cosmos";
 
 // Safe margins: keep all type inside this inset (1080x1920, platform-chrome safe).
@@ -87,6 +88,10 @@ uniform float u_resolve;
 uniform float u_ignite;
 // Per-onset corruption jolt 0..1. u_jolt.
 uniform float u_jolt;
+// 0..1 brightness lift for the corrupt depart so the dither VEHICLE reads from
+// frame one (Always-Visible Vehicle rule): high while scrambled, gone once the
+// disc has resolved in and taken over as the subject. u_corruptLift.
+uniform float u_corruptLift;
 
 // Coarse halftone dither: render a smooth value as a grid of dots whose radius
 // tracks the value. This is the DITHER family (newsprint/bitmap), the matrix the
@@ -155,14 +160,23 @@ void main() {
   // everything lands in the canon (warm dark -> Re-entry Red -> Eclipse Gold ->
   // cream). Keep the ground dominant: most of the frame is near-black dust.
   float heat =
-      dots * 0.30                        // base cream-ish dither speckle
-    + discBody * (0.34 + u_ignite * 0.26) // disc fills with heat as it ignites
-    + rimBand * (0.5 + u_ignite * 0.4);   // the thin burning rim, the gold moment
+      dots * (0.30 + u_corruptLift * 0.40) // dither speckle: lifted while corrupt
+    + discBody * (0.34 + u_ignite * 0.26)  // disc fills with heat as it ignites
+    + rimBand * (0.5 + u_ignite * 0.4);    // the thin burning rim, the gold moment
+  // While the frame is scrambled the dither IS the vehicle, so give the troughs
+  // between dots a warm ember floor too (not just the lit dots) — the corruption
+  // reads as a glowing 1-bit field from frame one, not a near-black void. This
+  // floor burns off as the disc resolves in (u_corruptLift -> 0).
+  heat += corruptAmt * u_corruptLift * 0.16;
   // A faint horizon lift so the bottom sits deeper than the sun band.
   heat += (1.0 - uv.y) * 0.05;
   heat = clamp(heat, 0.0, 1.0);
 
-  vec3 col = paletteRamp(heat * heat * 0.92);
+  // Softer tone curve while corrupt so the lifted speckle survives the squaring
+  // (heat*heat crushes a 0.3 base into near-black); the disc phase keeps the
+  // punchier curve so the resolved sun still sits in deep warm dark.
+  float toneCurve = mix(0.92, 0.70, u_corruptLift);
+  vec3 col = paletteRamp(mix(heat * heat, heat, u_corruptLift) * toneCurve);
 
   // Reserve a true Eclipse Gold burn for the thin rim only (the One Sun).
   vec3 gold = u_palette[2];
@@ -213,6 +227,16 @@ const VisualTestGlitch: React.FC<NostalgicCosmosProps> = ({ track, audio, palett
     extrapolateRight: "clamp",
   });
 
+  // Always-Visible Vehicle: the glitch vehicle IS the travelling dither
+  // corruption, so it must read as a glowing 1-bit field from frame one, not a
+  // near-black void waiting for the disc. This lift keeps the scramble luminous
+  // through the corrupt depart and burns off as the disc resolves in and takes
+  // over as the subject. Frame-derived (rides the same arc as the resolution).
+  const corruptLift = interpolate(resolve, [0, 0.55], [1, 0], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+
   // Per-onset corruption jolt: a deterministic value-noise read on the onset
   // flash so transients re-corrupt the frame briefly (the glitch tearing).
   const onsetFlash = useNearestOnset(audio.onsets, sec, fps);
@@ -242,7 +266,23 @@ const VisualTestGlitch: React.FC<NostalgicCosmosProps> = ({ track, audio, palett
         beatDecay={3.0}
         energyCurve={audio.energyCurve}
         bassCurve={audio.bassCurve}
-        uniforms={{ u_ignite: ignite, u_jolt: jolt, u_resolve: resolve }}
+        uniforms={{
+          u_corruptLift: corruptLift,
+          u_ignite: ignite,
+          u_jolt: jolt,
+          u_resolve: resolve,
+        }}
+      />
+
+      {/* Legible Sky: as the close card arrives, the ground yields — a warm-dark
+          pool rises from the bottom so the tagline and the gold signature never
+          sit on the raw face of the resolved disc. Reads as end-of-journey dusk,
+          not a box; gone entirely outside the arrive phase. */}
+      <AbsoluteFill
+        style={{
+          background: `linear-gradient(to top, ${withAlpha(colors.deepField, 0.94)} 0%, ${withAlpha(colors.deepField, 0.72)} 30%, ${withAlpha(colors.deepField, 0)} 62%)`,
+          opacity: closeArc,
+        }}
       />
 
       {/* --- TYPE TIMELINE (all inside the safe inset) ----------------------- */}
