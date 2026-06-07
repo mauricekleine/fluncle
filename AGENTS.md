@@ -69,6 +69,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - [docs/newsletter-agent.md](./docs/newsletter-agent.md) - instructions for the external Friday newsletter agent and its discovery-window contract with `/api/tracks`.
 - [packages/video/README.md](./packages/video/README.md) - Remotion social-video kit: brand grammar, primitives, hooks, inputProps contract, and the per-track composition workflow for the video agent.
 - [docs/video-agent.md](./docs/video-agent.md) - instructions for the per-track video agent: canon order, firecrawl research rules (facts vs creative fuel), composition authoring, and the still-critique loop.
+- [docs/socials.md](./docs/socials.md) - the map of social accounts, owned channels, profile assets, and bio conventions.
 
 ## Architecture
 
