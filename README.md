@@ -7,10 +7,12 @@ Fluncle publishes drum & bass tracks to Fluncle's Finest on Spotify and Telegram
 ## Monorepo Layout
 
 ```text
-apps/cli      Bun/TypeScript CLI. Thin client for public reads and admin API calls.
-apps/raycast  Raycast extension. Thin client that shells out to the CLI.
-apps/ssh      Go Wish/Bubble Tea SSH terminal behind ssh rave.fluncle.com. Thin client of the public API.
-apps/web      TanStack Start public web app and server-side Fluncle API.
+apps/cli         Bun/TypeScript CLI. Thin client for public reads and admin API calls.
+apps/raycast     Raycast extension. Thin client that shells out to the CLI.
+apps/ssh         Go Wish/Bubble Tea SSH terminal behind ssh rave.fluncle.com. Thin client of the public API.
+apps/web         TanStack Start public web app and server-side Fluncle API.
+packages/tokens  Shared design tokens (colors, typography, radii, motion) from DESIGN.md.
+packages/video   Remotion kit for per-track social videos (the Nostalgic Cosmos).
 ```
 
 The deployed web app owns the Spotify, Telegram, Turso, and Loops secrets. Public reads are served by `/api/tracks` (with `since`/`until` discovery windows), `/api/tracks/random`, and `/rss.xml`. Newsletter signups post to `/api/newsletter`, which the web app relays to Loops. Admin mutations are served by authenticated `/api/admin/*` routes. Raycast must keep calling `fluncle`.
@@ -198,6 +200,20 @@ bun run --cwd apps/web deploy
 ```
 
 After the first deploy, add `fluncle.com` in the Cloudflare Workers custom domains settings.
+
+## Social Video
+
+`packages/video` is a Remotion kit that composes per-track social videos for Fluncle's Finest: 1080×1920 vertical clips that put one banger under the burning eclipse, on-brand with DESIGN.md and VOICE.md. It is built as a kit for a future AI agent to assemble fresh scenes per track, with `NostalgicCosmos` as the exemplar composition.
+
+Render a preview for a track locally:
+
+```bash
+bun run social:preview <track-id>
+```
+
+This fetches the track, resolves and analyzes a preview clip, extracts the artwork palette, and renders to `packages/video/out/<track-id>.mp4` (props land alongside as `out/<track-id>.props.json`). Add `--skip-render` to stop after the props JSON, or run `bun run --cwd packages/video studio` to scrub the composition live.
+
+Rendering is local-only; publishing the resulting clips to any platform is out of scope. See [packages/video/README.md](./packages/video/README.md) for the primitives, hooks, inputProps contract, and the brand grammar.
 
 ## Deploy CLI To A VPS
 

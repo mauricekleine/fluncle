@@ -10,7 +10,14 @@ build/
 apps/*/dist/
 apps/*/.output/
 apps/*/.wrangler/
+.DS_Store
 
 # fluncle-ssh local dev state (host keys) and go build artifact
 apps/ssh/.local/
 apps/ssh/ssh
+
+# @fluncle/video render output and downloaded audio previews (never commit)
+packages/video/out/
+packages/video/public/*.mp3
+packages/video/public/*.m4a
+packages/video/public/*.wav

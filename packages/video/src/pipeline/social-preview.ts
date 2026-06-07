@@ -1,0 +1,167 @@
+// Entry point for the local social-preview pipeline.
+//
+//   bun src/pipeline/social-preview.ts <trackId> [--skip-render]
+//
+// fetch track -> resolve preview -> download + normalize -> analyze audio ->
+// extract palette -> assemble inputProps -> write out/<trackId>.props.json ->
+// (unless --skip-render) bundle + render out/<trackId>.mp4.
+
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+
+import { colors } from "@fluncle/tokens";
+import { Vibrant } from "node-vibrant/node";
+
+import { type CosmosPalette, type NostalgicCosmosProps } from "../remotion/types";
+import { analyzeAudio } from "./analyze-audio";
+import { downloadPreview } from "./download-preview";
+import { fetchTrack } from "./fetch-track";
+import { resolvePreview } from "./resolve-preview";
+
+const OUT_DIR = path.resolve(import.meta.dirname, "../../out");
+
+// TODO: swap for `import { paletteMix } from "../remotion/primitives"` once that
+// primitive exists. The fallback below keeps the same intent and signature.
+type PaletteMixInput = {
+  swatches: string[];
+};
+
+/**
+ * Map artwork swatches onto the composition palette, falling back to the design
+ * tokens (the Nostalgic Cosmos canon) when artwork is missing or thin.
+ */
+function paletteMix({ swatches }: PaletteMixInput): CosmosPalette {
+  const valid = swatches.filter((s) => /^#[0-9a-fA-F]{6}$/.test(s));
+  return {
+    accent: valid[0] ?? colors.eclipseGold,
+    background: colors.deepField,
+    glow: valid[1] ?? colors.eclipseGlow,
+    ink: colors.starlightCream,
+    swatches:
+      valid.length > 0 ? valid : [colors.eclipseGold, colors.eclipseGlow, colors.reentryRed],
+  };
+}
+
+/** Stable, deterministic 32-bit hash of a string -> non-negative integer seed. */
+function stableSeed(value: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < value.length; i++) {
+    h ^= value.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+async function extractSwatches(artworkUrl: string | undefined): Promise<string[]> {
+  if (!artworkUrl) {
+    return [];
+  }
+  try {
+    const palette = await Vibrant.from(artworkUrl).getPalette();
+    return Object.values(palette)
+      .filter((sw): sw is NonNullable<typeof sw> => sw != null)
+      .sort((a, b) => b.population - a.population)
+      .map((sw) => sw.hex);
+  } catch {
+    return [];
+  }
+}
+
+async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  const skipRender = args.includes("--skip-render");
+  const trackId = args.find((a) => !a.startsWith("--"));
+  if (!trackId) {
+    throw new Error("usage: bun src/pipeline/social-preview.ts <trackId> [--skip-render]");
+  }
+
+  await mkdir(OUT_DIR, { recursive: true });
+
+  console.log(`[social-preview] fetching track ${trackId}`);
+  const track = await fetchTrack(trackId);
+  console.log(`[social-preview] track: "${track.title}" by ${track.artists.join(", ")}`);
+
+  console.log(`[social-preview] resolving preview`);
+  const preview = await resolvePreview({ artists: track.artists, title: track.title });
+  if (!preview) {
+    throw new Error(
+      `[social-preview] no confident preview found for "${track.title}" by ${track.artists.join(", ")}`,
+    );
+  }
+  console.log(`[social-preview] preview: ${preview.source} (confidence ${preview.confidence})`);
+
+  console.log(`[social-preview] downloading + normalizing`);
+  const downloaded = await downloadPreview(preview.url, trackId);
+  console.log(`[social-preview] m4a -> ${downloaded.m4aPath}`);
+
+  let audio;
+  try {
+    console.log(`[social-preview] analyzing audio`);
+    audio = await analyzeAudio(downloaded.wavPath, downloaded.file);
+  } finally {
+    await rm(downloaded.tmpDir, { force: true, recursive: true });
+  }
+
+  console.log(`[social-preview] extracting palette`);
+  const swatches = await extractSwatches(track.artworkUrl);
+  const palette = paletteMix({ swatches });
+
+  const inputProps: NostalgicCosmosProps = {
+    audio,
+    palette,
+    seed: stableSeed(trackId),
+    track,
+  };
+
+  const propsPath = path.join(OUT_DIR, `${trackId}.props.json`);
+  await writeFile(propsPath, JSON.stringify(inputProps, null, 2));
+  console.log(`[social-preview] props -> ${propsPath}`);
+
+  // Summary + assertions.
+  const summary = {
+    accent: palette.accent,
+    artists: track.artists,
+    bassSamples: audio.bassCurve.length,
+    beatCount: audio.beatGrid.length,
+    bpm: audio.bpm,
+    confidence: preview.confidence,
+    durationMs: audio.durationMs,
+    energySamples: audio.energyCurve.length,
+    glow: palette.glow,
+    onsetCount: audio.onsets.length,
+    previewSource: preview.source,
+    startMs: audio.startMs,
+    swatchCount: palette.swatches.length,
+    title: track.title,
+    trackId,
+  };
+  console.log(`[social-preview] summary:\n${JSON.stringify(summary, null, 2)}`);
+
+  if (audio.bpm < 160 || audio.bpm > 185) {
+    throw new Error(`[social-preview] assertion failed: bpm ${audio.bpm} not in [160,185]`);
+  }
+  if (audio.beatGrid.length <= 20) {
+    throw new Error(
+      `[social-preview] assertion failed: beatGrid length ${audio.beatGrid.length} <= 20`,
+    );
+  }
+  if (audio.energyCurve.length === 0) {
+    throw new Error(`[social-preview] assertion failed: energyCurve is empty`);
+  }
+
+  if (skipRender) {
+    console.log(`[social-preview] --skip-render set; stopping after props json`);
+    return;
+  }
+
+  const { render } = await import("./render");
+  const outputPath = path.join(OUT_DIR, `${trackId}.mp4`);
+  console.log(`[social-preview] rendering -> ${outputPath}`);
+  const result = await render(inputProps, outputPath);
+  console.log(`[social-preview] rendered ${result.compositionId} -> ${result.outputPath}`);
+}
+
+main().catch((err) => {
+  console.error(err instanceof Error ? err.message : err);
+  process.exit(1);
+});

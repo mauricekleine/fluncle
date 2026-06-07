@@ -42,6 +42,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - CLI changes: `bun run --cwd apps/cli typecheck` and focused CLI commands such as `bun run --cwd apps/cli fluncle recent --limit 1 --json` when behavior changes.
 - Raycast changes: `bun run --cwd apps/raycast build` and `bun run --cwd apps/raycast lint`.
 - SSH app changes: `go build -C apps/ssh ./...`, `gofmt -l apps/ssh` (must list nothing), and `go vet -C apps/ssh ./...`.
+- Video package changes: `bun run --cwd packages/video typecheck`.
 - SHOULD: Run focused checks first, then broader root checks when the change has cross-package or user-facing risk.
 - SHOULD: For docs-only changes, verify formatting/readability instead of running full test suites unless docs generation is affected.
 
@@ -66,6 +67,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - [PRODUCT.md](./PRODUCT.md) - product purpose, brand direction, design principles, and accessibility.
 - [docs/track-submissions.md](./docs/track-submissions.md) - listener submission architecture and current implementation plan.
 - [docs/newsletter-agent.md](./docs/newsletter-agent.md) - instructions for the external Friday newsletter agent and its discovery-window contract with `/api/tracks`.
+- [packages/video/README.md](./packages/video/README.md) - Remotion social-video kit: brand grammar, primitives, hooks, inputProps contract, and the per-track composition workflow for the video agent.
 
 ## Architecture
 

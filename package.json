@@ -4,7 +4,8 @@
   "private": true,
   "workspaces": {
     "packages": [
-      "apps/*"
+      "apps/*",
+      "packages/*"
     ],
     "catalog": {
       "@libsql/client": "^0.15.15",
@@ -27,6 +28,7 @@
     "lint": "oxlint --ignore-path .prettierignore --type-aware",
     "lint:fix": "oxlint --fix --ignore-path .prettierignore --type-aware",
     "postinstall": "command -v husky > /dev/null 2>&1 && husky || true",
+    "social:preview": "bun run --cwd packages/video social:preview",
     "prepare": "command -v husky > /dev/null 2>&1 && husky || true",
     "typecheck": "turbo run typecheck"
   },
