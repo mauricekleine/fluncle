@@ -211,9 +211,9 @@ Render a preview for a track locally:
 bun run social:preview <track-id>
 ```
 
-This fetches the track, resolves and analyzes a preview clip, extracts the artwork palette, and renders to `packages/video/out/<track-id>.mp4` (props land alongside as `out/<track-id>.props.json`). Add `--skip-render` to stop after the props JSON, or run `bun run --cwd packages/video studio` to scrub the composition live.
+This fetches the track, resolves and analyzes a preview clip, extracts the artwork palette, and renders to `packages/video/out/<track-id>.mp4` (props land alongside as `out/<track-id>.props.json`). Add `--skip-render` to stop after the props JSON, `--composition <Id>` to render a registered composition other than the exemplar, or run `bun run --cwd packages/video studio` to scrub the composition live.
 
-Rendering is local-only; publishing the resulting clips to any platform is out of scope. See [packages/video/README.md](./packages/video/README.md) for the primitives, hooks, inputProps contract, and the brand grammar.
+Rendering is local-only; publishing the resulting clips to any platform is out of scope. See [packages/video/README.md](./packages/video/README.md) for the primitives, hooks, inputProps contract, and the brand grammar, and [docs/video-agent.md](./docs/video-agent.md) for the per-track video agent's instructions.
 
 ## Deploy CLI To A VPS
 

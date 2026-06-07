@@ -22,6 +22,7 @@ export type RenderResult = {
 export async function render(
   inputProps: NostalgicCosmosProps,
   outputPath: string,
+  compositionId: string = COMPOSITION_ID,
 ): Promise<RenderResult> {
   const serveUrl = await bundle({
     entryPoint: ENTRY_POINT,
@@ -29,7 +30,7 @@ export async function render(
   });
 
   const composition = await selectComposition({
-    id: COMPOSITION_ID,
+    id: compositionId,
     inputProps,
     serveUrl,
   });

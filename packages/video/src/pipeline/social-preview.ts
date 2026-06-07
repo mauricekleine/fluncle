@@ -1,6 +1,6 @@
 // Entry point for the local social-preview pipeline.
 //
-//   bun src/pipeline/social-preview.ts <trackId> [--skip-render]
+//   bun src/pipeline/social-preview.ts <trackId> [--skip-render] [--composition <Id>]
 //
 // fetch track -> resolve preview -> download + normalize -> analyze audio ->
 // extract palette -> assemble inputProps -> write out/<trackId>.props.json ->
@@ -70,9 +70,18 @@ async function extractSwatches(artworkUrl: string | undefined): Promise<string[]
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const skipRender = args.includes("--skip-render");
-  const trackId = args.find((a) => !a.startsWith("--"));
-  if (!trackId) {
-    throw new Error("usage: bun src/pipeline/social-preview.ts <trackId> [--skip-render]");
+  // --composition <Id> selects a registered composition; defaults to the
+  // NostalgicCosmos exemplar. The video agent authors per-track compositions
+  // and renders them through this flag.
+  const compositionFlagIndex = args.indexOf("--composition");
+  const compositionId = compositionFlagIndex >= 0 ? args[compositionFlagIndex + 1] : undefined;
+  const trackId = args.find(
+    (a, index) => !a.startsWith("--") && index !== compositionFlagIndex + 1,
+  );
+  if (!trackId || (compositionFlagIndex >= 0 && !compositionId)) {
+    throw new Error(
+      "usage: bun src/pipeline/social-preview.ts <trackId> [--skip-render] [--composition <Id>]",
+    );
   }
 
   await mkdir(OUT_DIR, { recursive: true });
@@ -157,7 +166,7 @@ async function main(): Promise<void> {
   const { render } = await import("./render");
   const outputPath = path.join(OUT_DIR, `${trackId}.mp4`);
   console.log(`[social-preview] rendering -> ${outputPath}`);
-  const result = await render(inputProps, outputPath);
+  const result = await render(inputProps, outputPath, compositionId);
   console.log(`[social-preview] rendered ${result.compositionId} -> ${result.outputPath}`);
 }
 
