@@ -11,6 +11,9 @@ import { TakeADeepBreath } from "./tracks/20260607-take-a-deep-breath";
 import { FourSeasonsRidge } from "./tracks/20260607-4-seasons";
 import { DownWithYourLove } from "./tracks/20260607-down-with-your-love";
 import { DancefloorHavoc } from "./tracks/20260607-hold-that-sucker-down";
+import { GlassHeartCurtain } from "./tracks/20260607-straight-to-your-heart";
+import { TeddysGate } from "./tracks/20260607-teddys-gate";
+import { MomentumPortal } from "./tracks/20260607-momentum";
 import { type NostalgicCosmosProps } from "./types";
 
 const FPS = 30;
@@ -68,6 +71,9 @@ const trackCompositions = [
   { component: FourSeasonsRidge, id: "FourSeasonsRidge" },
   { component: DownWithYourLove, id: "DownWithYourLove" },
   { component: DancefloorHavoc, id: "DancefloorHavoc" },
+  { component: GlassHeartCurtain, id: "GlassHeartCurtain" },
+  { component: TeddysGate, id: "TeddysGate" },
+  { component: MomentumPortal, id: "MomentumPortal" },
 ] as const;
 
 export const RemotionRoot: React.FC = () => {
