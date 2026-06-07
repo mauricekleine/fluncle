@@ -17,6 +17,7 @@ import { Route as ApiTracksRouteImport } from './routes/api/tracks'
 import { Route as ApiSubmissionsRouteImport } from './routes/api/submissions'
 import { Route as ApiSearchRouteImport } from './routes/api/search'
 import { Route as ApiNewsletterRouteImport } from './routes/api/newsletter'
+import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as ApiTracksRandomRouteImport } from './routes/api/tracks/random'
 import { Route as ApiAdminTracksRouteImport } from './routes/api/admin/tracks'
 import { Route as ApiAdminSubmissionsRouteImport } from './routes/api/admin/submissions'
@@ -64,6 +65,11 @@ const ApiSearchRoute = ApiSearchRouteImport.update({
 const ApiNewsletterRoute = ApiNewsletterRouteImport.update({
   id: '/api/newsletter',
   path: '/api/newsletter',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiHealthRoute = ApiHealthRouteImport.update({
+  id: '/api/health',
+  path: '/api/health',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiTracksRandomRoute = ApiTracksRandomRouteImport.update({
@@ -116,6 +122,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
+  '/api/health': typeof ApiHealthRoute
   '/api/newsletter': typeof ApiNewsletterRoute
   '/api/search': typeof ApiSearchRoute
   '/api/submissions': typeof ApiSubmissionsRoute
@@ -134,6 +141,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
+  '/api/health': typeof ApiHealthRoute
   '/api/newsletter': typeof ApiNewsletterRoute
   '/api/search': typeof ApiSearchRoute
   '/api/submissions': typeof ApiSubmissionsRoute
@@ -153,6 +161,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
+  '/api/health': typeof ApiHealthRoute
   '/api/newsletter': typeof ApiNewsletterRoute
   '/api/search': typeof ApiSearchRoute
   '/api/submissions': typeof ApiSubmissionsRoute
@@ -173,6 +182,7 @@ export interface FileRouteTypes {
     | '/'
     | '/rss.xml'
     | '/sitemap.xml'
+    | '/api/health'
     | '/api/newsletter'
     | '/api/search'
     | '/api/submissions'
@@ -191,6 +201,7 @@ export interface FileRouteTypes {
     | '/'
     | '/rss.xml'
     | '/sitemap.xml'
+    | '/api/health'
     | '/api/newsletter'
     | '/api/search'
     | '/api/submissions'
@@ -209,6 +220,7 @@ export interface FileRouteTypes {
     | '/'
     | '/rss.xml'
     | '/sitemap.xml'
+    | '/api/health'
     | '/api/newsletter'
     | '/api/search'
     | '/api/submissions'
@@ -228,6 +240,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   RssDotxmlRoute: typeof RssDotxmlRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
+  ApiHealthRoute: typeof ApiHealthRoute
   ApiNewsletterRoute: typeof ApiNewsletterRoute
   ApiSearchRoute: typeof ApiSearchRoute
   ApiSubmissionsRoute: typeof ApiSubmissionsRoute
@@ -295,6 +308,13 @@ declare module '@tanstack/react-router' {
       path: '/api/newsletter'
       fullPath: '/api/newsletter'
       preLoaderRoute: typeof ApiNewsletterRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/health': {
+      id: '/api/health'
+      path: '/api/health'
+      fullPath: '/api/health'
+      preLoaderRoute: typeof ApiHealthRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/tracks/random': {
@@ -402,6 +422,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   RssDotxmlRoute: RssDotxmlRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
+  ApiHealthRoute: ApiHealthRoute,
   ApiNewsletterRoute: ApiNewsletterRoute,
   ApiSearchRoute: ApiSearchRoute,
   ApiSubmissionsRoute: ApiSubmissionsRoute,

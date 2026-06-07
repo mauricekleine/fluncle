@@ -1,7 +1,20 @@
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
+import { appendAgentLinkHeaders, handleAgentDiscovery } from "./lib/server/agent-discovery";
 
 export default createServerEntry({
-  fetch(request) {
-    return handler.fetch(request);
+  async fetch(request) {
+    // Agent discovery surfaces (well-known endpoints, markdown negotiation)
+    // sit ahead of the router; everything else flows through unchanged.
+    const discovery = await handleAgentDiscovery(request);
+
+    if (discovery) {
+      return discovery;
+    }
+
+    const response = await handler.fetch(request);
+
+    // The homepage advertises machine-readable surfaces via RFC 8288 Link
+    // headers so agents can discover them without guessing paths.
+    return new URL(request.url).pathname === "/" ? appendAgentLinkHeaders(response) : response;
   },
 });

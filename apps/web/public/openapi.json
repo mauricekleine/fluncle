@@ -1,0 +1,552 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Fluncle API",
+    "version": "1.0.0",
+    "summary": "Drum & bass bangers from another dimension.",
+    "description": "The public API for Fluncle's archive. Fluncle digs and certifies the tracks; every date marks discovery, the day Fluncle first heard the tune, not the day it released. Read the archive, search Spotify candidates, and submit tracks for Fluncle to review.",
+    "contact": {
+      "name": "Fluncle",
+      "url": "https://www.fluncle.com"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://www.fluncle.com"
+    }
+  ],
+  "paths": {
+    "/api/tracks": {
+      "get": {
+        "operationId": "listTracks",
+        "summary": "List certified tracks, newest discovery first",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size. Values outside 1-48 fall back to the default.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 48,
+              "default": 16
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous response's nextCursor.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Inclusive lower bound on the discovery timestamp (ISO 8601). Invalid values are ignored.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "description": "Exclusive upper bound on the discovery timestamp (ISO 8601). Invalid values are ignored.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of the archive. Page until nextCursor disappears.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackListPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tracks/random": {
+      "get": {
+        "operationId": "getRandomTrack",
+        "summary": "Pull one random certified track from the archive",
+        "responses": {
+          "200": {
+            "description": "One pick from the archive.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["ok", "track"],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "track": {
+                      "$ref": "#/components/schemas/Track"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The archive is empty (it never is).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/search": {
+      "get": {
+        "operationId": "searchTracks",
+        "summary": "Search Spotify for track candidates",
+        "description": "Accepts a track search or a Spotify track URL. Use a result's id and spotifyUrl when submitting.",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "Track search query or Spotify track URL, minimum 2 characters.",
+            "schema": {
+              "type": "string",
+              "minLength": 2
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Candidate tracks.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["ok", "results"],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SearchResult"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Query too short.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/submissions": {
+      "post": {
+        "operationId": "submitTrack",
+        "summary": "Submit a track for Fluncle to review",
+        "description": "A submission is a recommendation, not a write. Fluncle gives it a listen before anything publishes. Rate limit: 5 submissions per connection per hour.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmissionInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Received. Fluncle will give it a listen.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["ok", "submission"],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "submission": {
+                      "$ref": "#/components/schemas/Submission"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid submission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many submissions from this connection. Try again later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/newsletter": {
+      "post": {
+        "operationId": "subscribeNewsletter",
+        "summary": "Board the mothership",
+        "description": "Subscribe an email address to the newsletter. Fresh bangers, every Friday, from Fluncle.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["email"],
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email",
+                    "maxLength": 254
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Welcome to the mothership.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["ok"],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid email.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many attempts from this connection. Try again later.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "Liveness probe",
+        "responses": {
+          "200": {
+            "description": "The ecosystem is up.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["ok"],
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Track": {
+        "type": "object",
+        "required": [
+          "trackId",
+          "spotifyUrl",
+          "title",
+          "artists",
+          "addedAt",
+          "addedToSpotify",
+          "postedToTelegram"
+        ],
+        "properties": {
+          "trackId": {
+            "type": "string",
+            "description": "Spotify track id."
+          },
+          "spotifyUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "title": {
+            "type": "string"
+          },
+          "artists": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "album": {
+            "type": "string"
+          },
+          "albumImageUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "note": {
+            "type": "string",
+            "description": "Fluncle's own line about the tune; quote it as his."
+          },
+          "addedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Discovery timestamp: the day Fluncle first heard it, not the day it released."
+          },
+          "addedToSpotify": {
+            "type": "boolean"
+          },
+          "postedToTelegram": {
+            "type": "boolean"
+          }
+        }
+      },
+      "TrackListPage": {
+        "type": "object",
+        "required": ["tracks", "totalCount"],
+        "properties": {
+          "tracks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Track"
+            }
+          },
+          "totalCount": {
+            "type": "integer",
+            "description": "Total tracks in the requested window (the whole archive when unwindowed)."
+          },
+          "nextCursor": {
+            "type": "string",
+            "description": "Opaque cursor for the next page; absent on the last page."
+          }
+        }
+      },
+      "SearchResult": {
+        "type": "object",
+        "required": ["id", "spotifyUrl", "title", "artists"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Spotify track id; becomes spotifyTrackId when submitting."
+          },
+          "spotifyUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "title": {
+            "type": "string"
+          },
+          "artists": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "album": {
+            "type": "string"
+          },
+          "artworkUrl": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      },
+      "SubmissionInput": {
+        "type": "object",
+        "required": ["spotifyTrackId", "spotifyUrl", "title", "artists", "source"],
+        "properties": {
+          "spotifyTrackId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9]{22}$",
+            "description": "From the chosen search candidate's id. Must match spotifyUrl."
+          },
+          "spotifyUrl": {
+            "type": "string",
+            "format": "uri",
+            "description": "From the chosen search candidate. Must point at spotifyTrackId."
+          },
+          "title": {
+            "type": "string"
+          },
+          "artists": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "album": {
+            "type": "string",
+            "maxLength": 160
+          },
+          "artworkUrl": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 600
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "Tell Fluncle why it's a banger."
+          },
+          "contact": {
+            "type": "string",
+            "maxLength": 120,
+            "description": "Where to reach you if Fluncle wants to talk tunes."
+          },
+          "source": {
+            "type": "string",
+            "enum": ["web", "cli", "ssh"]
+          }
+        }
+      },
+      "Submission": {
+        "type": "object",
+        "required": [
+          "id",
+          "spotifyTrackId",
+          "spotifyUrl",
+          "title",
+          "artists",
+          "source",
+          "status",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "spotifyTrackId": {
+            "type": "string"
+          },
+          "spotifyUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "title": {
+            "type": "string"
+          },
+          "artists": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "album": {
+            "type": "string"
+          },
+          "artworkUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "note": {
+            "type": "string"
+          },
+          "contact": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "enum": ["web", "cli", "ssh"]
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "approved", "rejected"]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reviewedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": ["ok", "code", "message"],
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

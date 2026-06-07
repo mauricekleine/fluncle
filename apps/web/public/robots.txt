@@ -6,4 +6,8 @@ User-agent: *
 Allow: /
 Disallow: /api/admin/
 
+# Content Signals (https://contentsignals.org/): the archive is open for
+# search, AI answers, and training. Crawl away applies to the robots too.
+Content-Signal: search=yes, ai-input=yes, ai-train=yes
+
 Sitemap: https://www.fluncle.com/sitemap.xml

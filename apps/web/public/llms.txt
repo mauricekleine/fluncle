@@ -23,6 +23,13 @@ The collection is called Fluncle's Finest. New tracks land most nights.
 - [Search API](https://www.fluncle.com/api/search): GET with a q query param (a track search or Spotify URL), returns candidates as JSON
 - [Submissions API](https://www.fluncle.com/api/submissions): POST a candidate for review; Fluncle gives it a listen before anything publishes
 
+## For agents
+
+- [OpenAPI spec](https://www.fluncle.com/openapi.json): the public API as an OpenAPI 3.1 document
+- [API catalog](https://www.fluncle.com/.well-known/api-catalog): RFC 9727 linkset
+- [Agent skills](https://www.fluncle.com/.well-known/agent-skills/index.json): the fluncle-api skill, with digest
+- Markdown homepage: GET https://www.fluncle.com/ with Accept: text/markdown
+
 ## Tools
 
 - [CLI installer](https://www.fluncle.com/cli/latest.sh): curl -fsSL https://www.fluncle.com/cli/latest.sh | sh, then try fluncle recent

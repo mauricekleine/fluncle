@@ -32,6 +32,7 @@ import { subscribeToNewsletter } from "@/lib/newsletter";
 import { listTracks } from "@/lib/server/tracks";
 import { searchTracks, submitTrack, type SearchResult } from "@/lib/submissions";
 import { fetchRandomTrack, fetchTracks, type Track } from "@/lib/tracks";
+import { registerWebMcpTools } from "@/lib/webmcp";
 
 const pageSize = 10;
 
@@ -92,6 +93,8 @@ function HomePage() {
       `%cFresh bangers, most nights. Tune in, junglist → ${telegramUrl}`,
       "color: #b7ab95; font: 13px Oxanium, sans-serif;",
     );
+    // WebMCP: hand agent-driving browsers the same controls humans get.
+    registerWebMcpTools();
   }, []);
 
   const loadMore = useCallback(async (): Promise<void> => {
