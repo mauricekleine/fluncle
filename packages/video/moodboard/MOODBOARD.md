@@ -21,9 +21,21 @@ Three independent analysis passes over this board converged on one operational r
 
 - `00-founding-image.png` — the cover art, the founding document: grainy pixelated sun, floating astronaut tethered to a Discman, starfield over tower blocks with lit windows. Every video descends from this. Steal: the grain density on the sun, the warmth of the window lights, the orb-to-towers scale relationship.
 
+### First-party — the operator's own collages (posted/, 2019-2020)
+
+These are not references; Maurice made them. Full rights: any of them may be sampled DIRECTLY into videos as plates, textures, or cutouts, unlike everything else on this board. Together they show the operator's native aesthetic predating Fluncle by seven years: a centered celestial orb in six of seven, vertical mirror-fold symmetry, a lone small figure against vastness, portal/threshold framing, heavy grain over near-black, a recurring warm gold moon (proto-Eclipse Gold) and comet-pink/fire-orange heat accents (proto-Re-entry Red). The cool-daylight pieces take the Retint Rule; the warm nocturnes are canon-native as-is.
+
+- `posted/rainy-days.jpg` — nebula (analog). The most canon-ready plate on the whole board, no retint needed: gold moon, Re-entry-Red lit mirrored peaks, warm dark, heavy grain, still-lake fold. Sample: nearly the whole image; the moon as an Eclipse plate, the grain field, the mirror fold.
+- `posted/prufung.jpg` — paint (analog). Levitating silhouettes over a surreal desert with orange-lit massifs and a luminous sphere, linen-grain over everything. Sample: the orange rim-lit rock faces (Eclipse-Gold-adjacent), the floating-figure cutouts, the canvas grain pass.
+- `posted/the-cave-ii.jpg` — nebula (paint). A hand reaches from dunes toward a torn portal revealing a moonlit world inside a starfield. Sample: the photographic Milky Way as a premium star plate, the torn-edge portal mask as a reveal device, the reaching-hand cutout.
+- `posted/the-portal.jpg` — nebula (fluent). A marbled planet with a black aperture at its core; a watching world, a vinyl-record sun. Sample: the whole orb as a centerpiece plate; the aperture prefigures the fluent portal forms.
+- `posted/infinity.jpg` — nebula (analog). A figure at the seam between starlit night and blank concrete day, tree mirrored across the boundary. Sample: the grainy moon, the starfield band, the split-world seam as a transition device.
+- `posted/plan-b-2.jpg` — nebula (paint). A comet streaks a daylit moon over mirrored snow peaks. Sample: the comet streak (retint toward Re-entry Red), the pale orb, the diamond mirror-fold. Cool mode; takes the Retint Rule.
+- `posted/terminus.jpg` — nebula (paint). A warm moon cradled in the cleft of mirrored grey peaks above a cloud sea. Sample: the warm-gold cratered moon, the cloud-band atmosphere layer. Cool mode; takes the Retint Rule.
+
 ### Nebula
 
-- (Open slot: the grainy gradient planet-limb reference discussed earlier never landed as a file; drop it in when found. `grain-liquid-heat.jpg` and `crt-mandala-burst.png` carry the nebula energy meanwhile.)
+- The nebula family is now anchored by the first-party collages above (six of seven are nebula-led); the original grainy planet-limb reference never landed as a file and is no longer missed. `grain-liquid-heat.jpg` and `crt-mandala-burst.png` carry the reference-side nebula energy.
 
 ### Analog
 
@@ -46,6 +58,7 @@ Three independent analysis passes over this board converged on one operational r
 - `gravity-type-field.png` — the word "gravity" tiled edge-to-edge, rows stretched as if pulled by the force it names; deadpan print-zine concept. Steal: typography-as-texture distorted by a force; strong for title beds. Ignore: the pink-on-grey look entirely; concept only.
 - `mirror-quilt-desert.png` — desert photo folded into a diamond quilted mirror grid; mirage-like glitched reflection. Steal: the diamond mirror-tiling of a single frame as a KaleidoMirror pattern variant. Ignore: the bright daylight palette and literal landscape.
 - `halftone-portrait-dots.png` — a face barely resolving out of a grid of blue and gold dots on near-black; spectral, intimate. Steal: the dot-matrix build of a figure emerging from darkness (echoes the cover's floating figure); strictly two-tone with gold as the lit side. Ignore: the blue cast; warm it.
+- `waveform-blinds-heat-ramp.webp` — vertical slats ramping from black into a red-to-amber wash; an equalizer rendered as venetian blinds, already on-canon warm-dark with gold/red. Steal: the vertical-bar waveform on warm dark driven by a brightness ramp; pairs with `waveform-ridge.png` as primitive fuel. Ignore: the slat regularity; vary bar heights with the energy curve. Reference-only: Shutterstock preview with an asset-ID stamp.
 
 ### Paint
 
@@ -57,6 +70,8 @@ Three independent analysis passes over this board converged on one operational r
 - `liquid-spectrum-vortex.png` — concentric liquid vortex of woven gradients with fine engraved line texture; a swirling portal. Steal: the vortex as a centerpiece portal form; the engraved line-screen over smooth gradient (keeps gradients from feeling clean/SaaS). Ignore: the full RGB rainbow and pale ground.
 - `pixel-wave-lyric-ribbons.png` — liquid ribbons of coral and violet with chunky pixelated words woven into the current; warm pixel-poster emotion. Steal: blocky pixel type embedded inside flowing gradient ribbons, the exact fluent-meets-retro-pixel overlap; the coral already reads close to Re-entry Red. Ignore: the violet/green secondaries.
 - `grain-liquid-heat.jpg` — heavily grained liquid marble of pink, coral and teal folding into bands; the single closest match to the canon's "grainy gradients". Steal: dense film grain over flowing liquid gradient, the literal DESIGN.md texture; the warm heat with one cool counter-fold. Ignore: let the teal stay a minor accent, never a field.
+- `liquid-blade-curtain-rgb.webp` — a curtain of vertical liquid blades bulging around a dark central void in shifting neon; a breathing, beat-reactive wall. Steal: the blade displacement around a void (audio-reactive backdrop with a built-in portal negative space); the wet gel falloff per ribbon. Ignore: the entire RGB palette; blades go Starlight Cream with one Eclipse Gold bulge.
+- `liquid-glass-flamefold-warm.webp` — a molten S-fold gradient behind faint glass striations; heat caught mid-flow, near-canon palette out of the box. Steal: the warm liquid fold and the glass-rib overlay that keeps gradients from feeling clean. Ignore: the glossiness; add grain. Reference-only: Shutterstock preview with an asset-ID stamp.
 
 ### Duotone
 
