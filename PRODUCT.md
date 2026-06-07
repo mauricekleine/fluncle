@@ -6,28 +6,29 @@ brand
 
 ## Users
 
-Fluncle is for people who follow Fluncle's Finest as a music feed: listeners who want the latest shared tracks, the operator who publishes them, and friends who jump between Spotify and Telegram.
+Fluncle is for the crew: the ragtag, out-of-the-ordinary-in-the-best-way drum & bass lot who follow Fluncle's Findings across surfaces — listeners who want the latest finds, the operator who publishes them, and friends who jump between Spotify and Telegram. They are travelers too; they recognise a finding when they see one.
 
 ## Product Purpose
 
-The product publishes selected drum & bass tracks to Spotify and Telegram through a server-owned admin API and a small operator CLI, then gives the public a fast archive at fluncle.com. Success means publishing stays operator-controlled while the public site feels immediate, focused, and unmistakably Fluncle.
+The product publishes selected drum & bass tracks to Spotify and Telegram through a server-owned admin API and a small operator CLI, then gives the public a fast archive at fluncle.com. That's the machine. The story it tells is the point: the public-facing whole is a traveler's logbook — Fluncle moves through time and space, and every track he certifies is a **finding** with a permanent identity (a Log ID) that names it the same way on every surface, so the scattered surfaces read as one journey, the **Galaxy**. Success means publishing stays operator-controlled while the public side feels immediate, focused, unmistakably Fluncle, and inside the fiction.
 
 ## Brand Personality
 
-Nocturnal, warm, direct, transcending. The creative north star is "The Nostalgic Cosmos" (DESIGN.md): this music projects your mind out into the cosmos, into another dimension, a parallel universe. The mood is awe and melancholy at once, "where did we come from" and "where do we go", floaty and atmospheric, never nihilist or cold. The dark is warm and inhabited, the way a city night is. The site should feel like a carefully kept playlist rather than a marketing page or a generic music startup.
+Warm, vast, direct, transcending — and crewed. The creative north star is "The Nostalgic Cosmos" (DESIGN.md): this music projects your mind out into the cosmos, another dimension, a parallel universe. Fluncle is the uncle with the good records who is also a traveler through time and space, and he doesn't travel alone — drum & bass is something the crew feels together (the crowd whose dancing looks like a fight until someone goes down and everyone stops to pick them up). The mood is awe and melancholy at once, "where did we come from" and "where do we go", floaty and atmospheric, with the occasional flicker of the new-and-scary — the nervous-confident charge of not knowing what's past the next sector, always landing on "we'll handle it, and it'll probably be a laugh." Never nihilist, never cold, never corporate. The dark is warm and inhabited, the way a city night is. The site should feel like a traveler's logbook kept as carefully as a record collection, never a marketing page or a generic music startup. And the look is authentically the operator's own — recognisable in collages he made years before Fluncle existed (the proto-eclipse gold moon, the lone figure against vastness, heavy grain over warm near-black; see the video moodboard) — which is why it reads as inevitable rather than designed. That authenticity is a brand asset, not a coincidence.
 
 ## Anti-references
 
-Avoid SaaS dashboards, bright streaming-app clones, generic landing-page hero sections, oversized marketing copy, glassy card stacks, and decorative gradients that ignore the cover art.
+Avoid SaaS dashboards, bright streaming-app clones, generic landing-page hero sections, oversized marketing copy, glassy card stacks, and decorative gradients that ignore the cover art. Avoid, equally, the cold lonely-derelict-spaceship sci-fi cliché: the Galaxy is warm and crewed, not a sterile research log.
 
 ## Design Principles
 
 - Keep publishing authority behind the authenticated admin API.
-- Put the music first: artist, title, date, note, and the Spotify open action.
+- Put the music first, framed as a finding: artist, title, the Found date, note, Log ID, and the Spotify open action. The music leads the eye; the log frames it.
 - Treat the cover art as the founding document of the visual system; every visual decision descends from it.
+- Carry the narrative on every surface, not just the deep ones: each surface is a representation of one traveler's findings, unified by the Log ID. Narrative saturation is uniform; only technical density grades by surface (VOICE.md's Depth Gradient).
 - Make the public app quiet, centered, and fast.
 - Treat Telegram and Spotify as first-class destinations.
-- DESIGN.md is the leading visual spec: where this file and DESIGN.md overlap on aesthetics, DESIGN.md wins.
+- DESIGN.md is the leading visual spec and VOICE.md the leading language spec: where this file overlaps with DESIGN.md on aesthetics, DESIGN.md wins; on language, VOICE.md wins.
 
 ## Accessibility & Inclusion
 

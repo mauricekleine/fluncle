@@ -97,9 +97,13 @@ components:
 
 This music projects your mind out into the cosmos: another dimension, a parallel universe. The cover art is the founding document of the system: a figure floating up out of the tower blocks into a starfield, tethered to a Discman by a headphone cable, under a burning eclipse. Every visual decision descends from that image. The mood is awe and melancholy at once, "where did we come from" and "where do we go", floaty, atmospheric, transcending. Never nihilist, never cold; the dark is warm and inhabited, the way a city night is.
 
-The interface is a carefully kept playlist, not a marketing page. The cover art literally sits behind every screen (a fixed, half-opacity backdrop), and the UI is built as translucent panes over it: you are always looking through the interface into the cosmos. Eclipse Gold is the single light source, the sun on the horizon and the lit windows in the towers. Starlight Cream is the print on an aged record sleeve. There are no heroes, no metrics, no pitch; the tracklist IS the page.
+The interface is a traveler's logbook, not a marketing page: Fluncle moves through time and space and logs what he finds, and every surface is one of those findings sent back across the Galaxy. The cover art literally sits behind every screen (a fixed, half-opacity backdrop), and the UI is built as translucent panes over it: you are always looking through the interface into the cosmos. Eclipse Gold is the single light source, the sun on the horizon and the lit windows in the towers. Starlight Cream is the print on an aged record sleeve. There are no heroes, no metrics, no pitch; the archive of findings IS the page.
 
-This system explicitly rejects SaaS dashboards, bright streaming-app clones, generic landing-page hero sections, oversized marketing copy, glassy card stacks, and decorative gradients that ignore the cover art (PRODUCT.md's own words). Dark-only, music-first, operator-curated.
+This system explicitly rejects SaaS dashboards, bright streaming-app clones, generic landing-page hero sections, oversized marketing copy, glassy card stacks, and decorative gradients that ignore the cover art (PRODUCT.md's own words). It rejects, equally, the cold sterile sci-fi log: the Galaxy is warm and crewed. Dark-only, music-first, operator-curated.
+
+**The Light-Years Rule.** Every artifact in this system arrives lossy because of how far it travelled: grain over the sun, compression in the video, glitch and dither, the worn edge of a recovered record. The degradation is narrative, never sloppiness — it is the cost of light-years, the reason a finding from the edge of the map looks the way it does. Grain and lossy texture are therefore load-bearing brand, not decoration; a surface rendered too clean reads as fake. (The video kit in `packages/video` is built entirely on this rule; VOICE.md borrows it for copy.)
+
+**Recurring motifs.** The system returns to a small set of forms — its visual DNA, drawn from the cover art and from the operator's own collages that predate Fluncle by years (collected in the video moodboard, `packages/video/moodboard/MOODBOARD.md`). They map straight onto the narrative: the **centered orb** (the burning eclipse, the sun the traveler moves toward); the **lone figure against vastness** (the traveler himself, the floating astronaut — alone out there, never lonely, because the crew travels with him); **portal / threshold framing** (the crossing between dimensions); **vertical mirror-fold symmetry**; the **tower skyline** as an optional earthbound pole (the home you floated up from, used only when a piece wants the pull of the ground); and **heavy grain over warm near-black** everywhere. That this imagery was already the operator's instinct years before the project is why the brand reads as inevitable, not styled.
 
 **Key Characteristics:**
 
@@ -108,6 +112,7 @@ This system explicitly rejects SaaS dashboards, bright streaming-app clones, gen
 - Glass as doctrine, not decoration; depth from translucency, never shadows
 - Oxanium speaks for the brand (numerals, marks); the system sans does the reading
 - Floaty and tactile: hovers lift gently, presses land
+- Lossy by design: grain and compression are narrative texture, not noise (The Light-Years Rule)
 
 ## 2. Colors
 
@@ -139,6 +144,8 @@ A night-sky palette lit by one sun: warm blacks, sleeve-paper cream, and a singl
 **The One Sun Rule.** Eclipse Gold is the single light source. It appears as the primary action, the focus ring, and identity moments, and on no more than roughly 10% of any screen. Two gold elements competing in one view means one of them is wrong.
 
 **The Warm Dark Rule.** Every black and every neutral leans warm (toward the cream/dust hue). Cool grays and blue-tinted darks are prohibited; the night sky of this cosmos is warm and inhabited.
+
+**The Retint Rule.** Fluncle absorbs outside visual influence by stealing the technique and recoloring it to canon. Any reference — a halftone, a scanline, a liquid gradient, a gel split, a mirror tiling — is fair game for its craft, but it arrives in off-canon hues (broadcast blue, phosphor green, candy pink) and leaves in ours: warm dark ground, Eclipse Gold as the one light, Re-entry Red as the heat accent, Starlight Cream as the ink. Cool hues survive only as minor counter-accents, never a field. The technique is the reference; the palette is always ours. (This is the operating rule of the video moodboard, `packages/video/moodboard/MOODBOARD.md`, and the visual sibling of "briefs are subordinate to canon" — take the idea, translate it into Fluncle's terms.)
 
 ## 3. Typography
 
@@ -202,7 +209,7 @@ Floaty and tactile: controls lift gently on hover (artwork scales to 1.06, caret
 
 ### Track Row (signature component)
 
-The core unit of the product. A CSS grid (`3rem 3.25rem 1fr auto`, gaining a 6.75rem date column at 640px+): Oxanium tabular index, 3.25rem album artwork (6px radius, 1px border), extrabold title over a Stardust artist line, date, and a caret. The whole row is one link to Spotify. Hover/focus washes the row in Gold Veil, heats the index to Eclipse Glow, scales the artwork to 1.06 behind a gold-tinted border, and drifts the caret 2px right. Rows separate with Dust Line borders at 72%; the last row drops its border. Artwork fallback is a gold-to-red gradient over Dust Veil, echoing the eclipse.
+The core unit of the product — a **finding**, not just a row. A CSS grid (an Oxanium tabular **Log ID** column, 3.25rem album artwork, `1fr` title block, caret; gaining a date column at 640px+): the Log ID (the finding's coordinate in the Galaxy, e.g. `241.7.3A`) stands where a plain row index used to, then 3.25rem album artwork (6px radius, 1px border), an extrabold title over a Stardust artist line, the **Found** date, and a caret. The music still leads the eye; the Log ID and the Found date frame it as an entry in Fluncle's logbook. The whole row is one link to Spotify. Hover/focus washes the row in Gold Veil, heats the Log ID to Eclipse Glow, scales the artwork to 1.06 behind a gold-tinted border, and drifts the caret 2px right. Rows separate with Dust Line borders at 72%; the last row drops its border. Artwork fallback is a gold-to-red gradient over Dust Veil, echoing the eclipse. (The Log ID column is wider than the old index; size it to the coordinate format, kept tabular so it never jitters.)
 
 Pagination lives inside the list, never below the shell: a quiet load-more row (Stardust bold text, Gold Veil hover) doubles as an intersection sentinel that auto-fetches near the bottom. It disappears when the archive is exhausted; the layout below the pane never shifts.
 
@@ -225,7 +232,9 @@ The identity anchor: the cover art wrapped in a 1px gold-tinted border and a 4px
 - **Do** ground every float under `prefers-reduced-motion: reduce`: color-only transitions, with the Gold Veil wash carrying the feedback.
 - **Do** keep body text at WCAG AA (4.5:1) against what is actually behind it, glass included (The Legible Sky Rule).
 - **Do** keep all neutrals warm; tint blacks and grays toward the cream/dust hue (#d0b990 family), never blue (The Warm Dark Rule).
-- **Do** put the music first on every surface: artist, title, date, note, and the Spotify open action before anything else.
+- **Do** put the music first on every surface: artist, title, the Found date, note, and the Spotify open action before anything else.
+- **Do** treat each row as a finding: lead with the music, frame it with its Log ID coordinate and Found date (the Track Row above; VOICE.md's Found Rule).
+- **Do** keep grain and lossy texture present; it is narrative, not noise (The Light-Years Rule). A surface rendered glassy-clean and pristine reads as fake.
 
 ### Don't:
 
