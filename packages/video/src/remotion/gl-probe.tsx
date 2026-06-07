@@ -1,6 +1,6 @@
 import { AbsoluteFill } from "remotion";
-import { GLSL } from "../journey/glsl";
-import { ShaderLayer } from "../journey/shader-layer";
+import { GLSL } from "./journey/glsl";
+import { ShaderLayer } from "./journey/shader-layer";
 
 // Smoke test for the GPU shader stack: fbm field through the Retint palette ramp,
 // finished with organic film grain, a dither pass to kill banding, and a vignette.

@@ -1,47 +1,91 @@
 ---
 name: fluncle-video
-description: "Make, render, or compose a Fluncle social video: the per-track video pipeline, social:preview, Remotion compositions for tracks, the Journey/Cosmos primitives, stills, the moodboard, and visual tests. Use whenever the task touches a Fluncle vertical clip on any surface, even small ones: authoring or registering a composition, picking a texture family or travelling vehicle, choosing a musical cut, running social:preview or remotion still, opening Remotion Studio, retinting a moodboard reference, or critiquing a render. Also use when the user mentions the One Vehicle Rule, the Retint Rule, the Eclipse, the close card, NostalgicCosmos, the video kit, or the video agent."
+description: "Make, render, or compose a Fluncle social video: the per-track video pipeline, social:preview, the archive under tracks/, Remotion compositions for tracks, the near-blank canvas (ShaderLayer + GLSL, the audio hooks, useJourney, FloatingType, CloseCard), stills, the moodboard, and visual tests. Use whenever the task touches a Fluncle vertical clip on any surface, even small ones: authoring or registering a track composition in the dated tracks/ archive, writing a scene shader, picking a texture family or travelling vehicle, choosing a musical cut, running social:preview or remotion still, opening Remotion Studio, retinting a moodboard reference, or critiquing a render. Also use when the user mentions the One Driver rule (One Vehicle Rule), the Always-Visible Vehicle, the Eclipse, the Retint Rule, the close card, NostalgicCosmos, the video kit, or the video agent."
 ---
 
 # Fluncle Video
 
-Use this skill to make Fluncle's per-track social videos: 1080×1920 vertical clips that put one banger under the burning eclipse, every one unmistakably from the same archive. This is a router. The grammar, the kit, and the operating instructions live in the repo and evolve there; this skill tells you which file to load for what and never duplicates them. If a living doc disagrees with this skill, the doc wins.
+Use this skill to make Fluncle's per-track social videos: 1080×1920 vertical clips that put one banger under the burning eclipse, every one unmistakably from the same archive, no two looking alike. **This skill is the constitution.** The package (`packages/video`) is a near-blank canvas — machinery and brand law, nothing styled — and the agent writes the scene and the shader for each track itself. More creative freedom, more diversity; the doctrine lives here.
+
+This file is a router. Read it top-down, then load the reference for the phase you are in. The doctrine below is authoritative; where a living doc in the repo adds detail, follow it, but the rulings here win on conflict.
+
+## Why this exists
+
+A styled component library made agents produce same-looking videos: identical text spots and timing, default eclipse discs, the same vehicle three runs in a row. The best output came from an agent writing its own shader from scratch. So the styled scene library is gone, the package slimmed to the core surface, and the rules that used to be enforced by components are now doctrine you uphold by hand. Diversity is the point. If your video could be swapped with the last one and nobody would notice, you have failed.
+
+## The two things that are always true
+
+1. **The video IS the archive file.** Each video is one self-contained file: `packages/video/src/remotion/tracks/YYYYMMDD-<kebab-slug-of-title>.tsx` (kebab-case, enforced by a pre-commit hook), exporting a named PascalCase component, registered in `src/remotion/root.tsx`, importing only the core from `../cosmos`. It is deterministic, so it re-renders identically forever. The archive is the collection; rendered MP4s are never committed.
+2. **You write the scene.** There are no prebuilt vehicles, no styled scene components, no static image assets (fonts excepted). You compose the scene and author the GLSL shader yourself, against the core surface. The core gives you a canvas and the brand law; the picture is yours.
 
 ## Source priority
 
 Read top-down; later sources fill in detail, earlier sources override on conflict.
 
 1. The user's current brief and the trackId they gave you.
-2. `docs/video-agent.md`: the operating instructions for the per-track video agent. Canon order, the firecrawl research split (facts that may render vs creative fuel that never does), the authoring workflow, the still-critique loop, the safety rails. This is your runbook; follow it step by step.
-3. `packages/video/README.md`: the kit and the grammar. The constants-vs-variables split, the primitives catalog (`Grain`, `Starfield`, `Eclipse`, `TowerBlocks`, `DitherField`, `FloatingType`, `KaleidoMirror`), the hooks (`useBeat`, `useOnset`, `useEnergy`, `useBass`), the `NostalgicCosmosProps` inputProps contract, and how to author and register a new composition. Import everything from `src/remotion/cosmos.ts`.
-4. `packages/video/moodboard/MOODBOARD.md`: the references, the six texture families, the travelling-vehicle index, and the Retint Rule. The first-party `posted/` collages are the only assets you may sample directly into a video; everything else is technique reference only.
+2. **This skill and its references** (`packages/skills/fluncle-video/`): the constitution. The doctrine, the technique cookbook, the workflow, the safety rails.
+3. `packages/video/README.md`: the core surface in code — exact import names, the props contract, the `ShaderLayer` header and `GLSL.*` inventory, how to register a composition. Code-of-record; if a name here disagrees with the README, the README is right about the name.
+4. `packages/video/moodboard/MOODBOARD.md`: the references, the six texture families, the Retint Rule. The first-party `posted/` collages are the only assets you may sample directly; everything else is technique reference only.
 5. `DESIGN.md` and `VOICE.md` at the repo root: the visual canon (Nostalgic Cosmos, palette doctrine, named rules) and the copy canon (every word on screen passes it).
 
-## Compressed reminders
+## The core surface (what you may import)
 
-Reminders, not the spec. The spec is the docs above.
+Everything comes from `src/remotion/cosmos.ts`. Nothing else exists to import; if you reach for a styled vehicle or a static image, it is gone on purpose.
 
-- **One Vehicle Rule.** Every video is a journey carried by exactly ONE travelling medium: orb (the Eclipse riding the beat), lines (waveform ridges, contour displacement), fractal (mirror/kaleido recursion), glass (refractive panels and ribs), or glitch (dither/pixel corruption travelling across the frame). Choose the vehicle FIRST; everything else supports it. Two competing vehicles means one is wrong.
-- **Constants vs variables.** Constants are LAW: grain over the whole frame always, exactly one Eclipse Gold sun moment, Oxanium for brand marks and numerals only, the `Artist — Title` line with the one sanctioned em dash, discovery dates (`Discovered Jun 4`, UTC, tabular, never released/added), warm darks only, and the close card to end every video. Variables are YOURS: palette blend (`paletteMix(track.swatches)`), texture family, motion energy, scene composition. If your concept fights a constant, change the concept.
-- **The Retint Rule.** Steal the reference TECHNIQUE (halftone, scanlines, line displacement, liquid folds, mirror tiling, gel split); retint everything to the canon palette: warm dark ground, Eclipse Gold as the single light source, Re-entry Red as the heat accent, Starlight Cream as ink. Cool hues survive only as minor counter-accents. Kaleido chroma comes from the artwork, never gold; gold stays the sun.
-- **kebab-case filenames.** New compositions live next to `src/remotion/nostalgic-cosmos.tsx` with kebab-case filenames (pre-commit enforces; the composition export and `Root.tsx` id stay PascalCase). Format with `bunx oxfmt --write <files>`, never prettier.
-- **Determinism.** A frame is a pure function of its inputs. Never JS built-in randomness (`Math.random()`) or wall-clock time (`Date.now()`, `new Date()` for "now") inside a composition; use Remotion's `random(seed)` and frame-derived values (`useCurrentFrame()`, `fps`) only. Derive seeded layers from the `seed` prop. Audio reactivity comes only from the `audio.*` arrays through the hooks. CPU-friendly only: SVG/CSS compositing, no WebGL, no canvas.
-- **The still-critique loop.** Render at least four stills across the timeline and look at them before paying for a render. Minimum two critique rounds: type legible inside the safe inset (`MARGIN_X` 96, `SAFE_TOP` 150, `SAFE_BOTTOM` 230), palette warm and inky, grain present, nothing blown out. Taste is part of the job.
-- **Musical cuts.** The default clip is 20s; rerun with `--duration-ms <10000-30000>` when the waveform suggests a better cut. The cut is a musical decision: end on a drop or just before a transition, never mid-build.
+- **`ShaderLayer`** + the **`GLSL`** snippet helpers — the GPU fragment-shader layer and the composable GLSL function strings. This is where you draw. See [references/cookbook.md](references/cookbook.md).
+- **Audio hooks** — `useEnergy`, `useBeat`, `useBass`, `useOnset` — the only legal source of audio reactivity (they read the `audio.*` curves).
+- **`useJourney`** — the narrative clock (`progress` / `phase` / `phaseProgress` / `arc`). One shared timeline for the whole scene.
+- **`Grain`** — the CSS film-grain overlay (the system base texture for non-shader layers).
+- **`Starfield`** — the orbital star field.
+- **`FloatingType`** — typography for the four sanctioned roles, with a built-in legibility guarantee. Use it for every word on screen.
+- **`CloseCard`** — the locked brand ending.
+- **`paletteMix`** — locks palette roles to canon (field stays Deep Field, sun stays Eclipse Gold, ink stays cream; artwork hues live only in secondary swatches).
+- **color helpers** (`withAlpha`, `mix`, `luminance`, …), **fonts**, and the **props contract** types (`NostalgicCosmosProps` and friends).
+
+That is the whole kit. The README has the exact signatures.
+
+## Doctrine
+
+Eight rulings. They are LAW. If a concept fights one, change the concept.
+
+1. **One Driver.** Exactly ONE travelling, beat-synced medium per video. orb / lines / fractal / glass / glitch are EXAMPLES, not an enum — invented vehicles are welcome, provided there is exactly one. When the vehicle is NOT an orb, the One Sun Eclipse Gold moment is expressed THROUGH the vehicle (a gold crest line igniting, a gold resolution front) — never as a second celestial body sharing the frame. Two drivers means one is wrong.
+
+2. **Always-Visible Vehicle.** The vehicle is on screen and holds the center of attention from frame one to the final frame; it may fade/scale in over the first second, transform, travel, intensify — never a late reveal, never absent waiting for the drop.
+
+3. **Vehicle diversity.** Before choosing, `ls packages/video/src/remotion/tracks/` and read the vehicle line in the most recent 2-3 archive files' header comments; do not repeat the most recent vehicle unless the music demands it. (In the last batch two of three agents independently chose the orb.)
+
+4. **Type staging is a VARIABLE.** Placement and timing of the artist mark, track line, and date are yours, chosen musically per scene — entering on a fill, riding a riser, anchored where the composition gives them room. What is LAW: legibility (use `FloatingType`), safe margins (~96px x, ~150/230px top/bottom on 1080×1920), VOICE.md for every word ("Artist — Title", "Discovered Jun 4", sentence case, no exclamation marks), and the `CloseCard` ending. The last batch placed identical text in identical spots at identical times in all three videos — that is the failure mode this rule kills.
+
+5. **Research must visibly matter.** firecrawl research yields (a) FACTS — when verified with a citable source (label, release year, album context), rendering one on screen is ENCOURAGED, not merely permitted, with the source URL in the run report; never render an unverified fact; (b) CREATIVE FUEL — the run report must name how it shaped specific visual decisions ("Armada's 'dancefloor havoc' descriptor → detonation flares on the two drops") so the operator can see the research in the pixels.
+
+6. **The quad law.** Every `ShaderLayer` must drive final color AND alpha to exactly 0.0 inside its quad bounds (a circular fade in layer space covers the corners — r reaches 1.41 there). The printed-rectangle incident happened twice.
+
+7. **Starfield law.** Positional drift is monotonic (we are in orbit); audio may drive brightness/twinkle, never position or direction.
+
+8. **Musical cut.** 20s default; choose `--duration-ms` (10–30s) from the waveform; end on a drop or just before a transition, never mid-build.
+
+## The constants you cannot touch
+
+Grain over the whole frame, always. Exactly one Eclipse Gold sun moment (expressed through the vehicle when it is not an orb). Oxanium for brand marks and numerals only. `Artist — Title` with the one sanctioned em dash. `Discovered Jun 4` dates (UTC, tabular, never released/added). Warm darks only. The `CloseCard` ending. Determinism: remotion seeded `random()` and frame-derived values only — never `Math.random` / `Date.now` / `new Date()`. The Retint Rule: artwork hues are minor counter-accents only; gold stays the sun.
+
+## References
+
+- [references/workflow.md](references/workflow.md) — the per-track runbook, end to end: trackId → props → research → concept → author → still-critique → gates → render → report. Read this when you start a video.
+- [references/cookbook.md](references/cookbook.md) — technique, not style: fbm haze fields, ridge/contour fields, dither/halftone fronts, SDF bodies, beat-mapping patterns, the `GLSL.*` inventory, palette discipline. Worked examples cite the archive files. Read this while authoring the shader.
 
 ## Commands
 
-Run from the repo root (or `bun run --cwd packages/video <script>`). Use `bun`, never npm/pnpm/yarn. The exact, current flags live in `docs/video-agent.md` and `packages/video/README.md`; check there before running.
+Run from `packages/video` (or `bun run --cwd packages/video <script>`). Use `bun`, never npm/pnpm/yarn. Exact flags live in `packages/video/README.md`.
 
-- `bun run social:preview <trackId> --skip-render` — resolve + analyze audio (BPM, beat grid, onsets, energy/bass curves), extract artwork palette, write `packages/video/out/<trackId>.props.json`. Run this first; the props file is your ground truth for energy and color.
-- `bun run social:preview <trackId>` — the full pipeline through render to `out/<trackId>.mp4`; point it at your composition per the README/agent doc when authoring a new scene.
-- `bunx remotion still ... --props=out/<trackId>.props.json --frame=N` — the stills for the critique loop (exact invocation in `docs/video-agent.md`).
-- `bun run studio` — Remotion Studio to scrub a scene live with default props.
-- `bun run --cwd packages/video typecheck` and `bunx oxlint packages/video` — the quality gates before any render.
+- `bun run social:preview <trackId> --skip-render` — resolve + analyze audio (BPM, beat grid, onsets, energy/bass curves), extract artwork palette, write `out/<trackId>.props.json`. Run first; the props file is your ground truth.
+- `bun run social:preview <trackId> --composition <CompId>` — the full pipeline through render to `out/<trackId>.mp4`, pointed at your composition.
+- `bunx remotion still src/remotion/index.ts <CompId> out/still-N.png --props=out/<trackId>.props.json --frame=N --gl=angle` — the stills for the critique loop (GPU shaders require `--gl=angle`).
+- `bun run studio` — Remotion Studio, to scrub a scene live with default props.
+- `bun run --cwd packages/video typecheck` and `bunx oxlint packages/video` — the gates before any render. Format with `bunx oxfmt --write <files>`, never prettier.
 
 ## Hard rails
 
-- **Never publish.** Rendering is local only; the artifact is the MP4 and your run report. Nothing leaves the machine; publishing to any platform is out of scope.
-- **Audio: Deezer/iTunes only.** Preview audio comes solely from the pipeline's resolver. Never source audio from YouTube or rip full tracks. No legal audio means no video; stop and report.
-- **One video per run.** Do not commit, push, or delete anything.
+- **Never publish.** Rendering is local only; the artifact is the MP4 and your run report. Nothing leaves the machine.
+- **Audio: the pipeline resolver only (Deezer/iTunes).** Never source audio from YouTube or rip full tracks. No legal audio means no video; stop and report.
+- **One video per run. Never commit, push, or delete anything.**
 - **Every fact on screen has a cited source URL; every word passes VOICE.md.** Track metadata from the props file is always safe and needs no citation; an unverified fact never renders. Drum & bass aliases collide with mainstream names: when unsure, drop the fact.

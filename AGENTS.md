@@ -67,8 +67,8 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - [PRODUCT.md](./PRODUCT.md) - product purpose, brand direction, design principles, and accessibility.
 - [docs/track-submissions.md](./docs/track-submissions.md) - listener submission architecture and current implementation plan.
 - [docs/newsletter-agent.md](./docs/newsletter-agent.md) - instructions for the external Friday newsletter agent and its discovery-window contract with `/api/tracks`.
-- [packages/video/README.md](./packages/video/README.md) - Remotion social-video kit: brand grammar, primitives, hooks, inputProps contract, and the per-track composition workflow for the video agent.
-- [docs/video-agent.md](./docs/video-agent.md) - instructions for the per-track video agent: canon order, firecrawl research rules (facts vs creative fuel), composition authoring, and the still-critique loop.
+- [packages/video/README.md](./packages/video/README.md) - Remotion video machinery + the dated, self-contained archive under `src/remotion/tracks/`: the core surface, the archive contract, and the pipeline.
+- [docs/video-agent.md](./docs/video-agent.md) - thin bootstrap for the per-track video agent (tools + safety rails); its full constitution is the fluncle-video skill at [packages/skills/fluncle-video](./packages/skills/fluncle-video).
 - [docs/socials.md](./docs/socials.md) - the map of social accounts, owned channels, profile assets, and bio conventions.
 
 ## Architecture

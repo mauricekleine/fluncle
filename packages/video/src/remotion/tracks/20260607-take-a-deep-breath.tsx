@@ -1,20 +1,16 @@
-// "VisualTestGlitch" — the GLITCH vehicle as a finished per-track scene.
+// 20260607 — Loadstar, "Take a Deep Breath" (trackId 3dtFFdZZfG4KUxIHBztaSd).
 //
-// Track: Bugwell — Everything In Its Right Place (a 171bpm DnB flip of the
-// Radiohead title). The props analysis tells the story: a quiet, low-bass intro
-// (0–~8.5s), a hard drop at ~9s, sustained high energy through ~17s, a one-bar
-// breakdown gap (~17.0–17.25s), then re-entry to the close. Cool artwork (slate
-// blue accent #3d6baf, oxblood glow #72191c) — the Retint Rule applies hard:
-// the corruption is recolored to warm dark + Eclipse Gold + Re-entry Red.
+// Archived, self-contained track composition. The canonical render is the
+// travelling dither-corruption journey: the frame DEPARTS as scattered 1-bit
+// dither noise (data decay), TRAVELS as a corruption front that resolves cell by
+// cell through the drop, and ARRIVES with everything snapped into place — a clean
+// halftone Eclipse disc with a single burning gold rim, settled over a warm-dark
+// dusk pool that carries the close card.
 //
-// CONCEPT (journey + texture): the title is the thesis — order resolving out of
-// corruption. The frame DEPARTS as scattered 1-bit dither noise (data decay),
-// TRAVELS as a corruption front that resolves cell by cell, and ARRIVES with
-// everything snapped into its right place: a clean halftone Eclipse disc with a
-// single burning gold rim. Texture family: DITHER (the halftone/bitmap matrix
-// pole, MOODBOARD halftone-tulip-bloom + dither-hourglass-glitch + green-matrix-
-// bloom, all retinted warm). The one Eclipse Gold sun moment lands on the drop,
-// when the disc resolves and the rim ignites.
+// CONCEPT (journey + texture): order resolving out of corruption. Texture family
+// DITHER (halftone/bitmap matrix), recolored warm via the Retint Rule: warm dark
+// ground, Re-entry Red, Eclipse Gold, cream. The one Eclipse Gold sun moment
+// lands on the drop, when the disc resolves and the rim ignites.
 //
 // One Vehicle Rule: GLITCH. Everything is the dither corruption travelling and
 // resolving across the frame; the type and close card stay subordinate.
@@ -45,7 +41,6 @@ import {
   ShaderLayer,
   paletteMix,
   useEnergy,
-  useJourney,
   withAlpha,
 } from "../cosmos";
 
@@ -190,7 +185,12 @@ void main() {
 }
 `;
 
-const VisualTestGlitch: React.FC<NostalgicCosmosProps> = ({ track, audio, palette, seed }) => {
+export const TakeADeepBreath: React.FC<NostalgicCosmosProps> = ({
+  track,
+  audio,
+  palette,
+  seed,
+}) => {
   const frame = useCurrentFrame();
   const { fps, durationInFrames } = useVideoConfig();
   const sec = frame / fps;
@@ -201,7 +201,7 @@ const VisualTestGlitch: React.FC<NostalgicCosmosProps> = ({ track, audio, palett
 
   // The journey clock. depart = the corrupt intro; travel = the resolving front
   // through the drop; arrive = the close. Splits matched to the drop at ~9s/20s.
-  const { phase, phaseProgress, arc } = useJourney({ split: [0.45, 0.87] });
+  const { phase, phaseProgress, arc } = useJourney(durationInFrames, frame, [0.45, 0.87]);
 
   // Energy gates the ignition: the disc/rim only burn once the drop lands (~9s).
   // The intro energy hovers ~0.45–0.6, so the threshold sits ABOVE that — the
@@ -239,7 +239,7 @@ const VisualTestGlitch: React.FC<NostalgicCosmosProps> = ({ track, audio, palett
 
   // Per-onset corruption jolt: a deterministic value-noise read on the onset
   // flash so transients re-corrupt the frame briefly (the glitch tearing).
-  const onsetFlash = useNearestOnset(audio.onsets, sec, fps);
+  const onsetFlash = useNearestOnset(audio.onsets, sec);
   const jolt = onsetFlash;
 
   const floatBoost = 1 + energy * 0.8;
@@ -370,11 +370,61 @@ const VisualTestGlitch: React.FC<NostalgicCosmosProps> = ({ track, audio, palett
 // --- Helpers ---------------------------------------------------------------
 
 /**
+ * The shared narrative clock, inlined from the (now-deleted) Journey vehicle set
+ * so this archive composition depends only on surviving core. Maps the clip's
+ * frame position to: the current `phase`, its local `phaseProgress`, and the
+ * eased `arc` used for spatial travel.
+ *
+ * `split` = [departEnd, travelEnd] fractional clip-progress boundaries: depart
+ * runs [0, departEnd], travel [departEnd, travelEnd], arrive [travelEnd, 1].
+ * `arc` is a single smoothstep over linear progress (slow-in/slow-out).
+ *
+ * Pure and deterministic: derived only from frame/durationInFrames. No random,
+ * no wall clock; safe for headless renders.
+ */
+const useJourney = (
+  durationInFrames: number,
+  frame: number,
+  split: [number, number],
+): { phase: "depart" | "travel" | "arrive"; phaseProgress: number; arc: number } => {
+  const [departEnd, travelEnd] = split;
+  const span = Math.max(1, durationInFrames - 1);
+  const progress = Math.min(1, Math.max(0, frame / span));
+
+  let phase: "depart" | "travel" | "arrive";
+  let phaseProgress: number;
+  if (progress < departEnd) {
+    phase = "depart";
+    phaseProgress = interpolate(progress, [0, departEnd], [0, 1], {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    });
+  } else if (progress < travelEnd) {
+    phase = "travel";
+    phaseProgress = interpolate(progress, [departEnd, travelEnd], [0, 1], {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    });
+  } else {
+    phase = "arrive";
+    phaseProgress = interpolate(progress, [travelEnd, 1], [0, 1], {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    });
+  }
+
+  // Classic smoothstep: 3t^2 - 2t^3, symmetric slow-in/slow-out.
+  const arc = progress * progress * (3 - 2 * progress);
+
+  return { arc, phase, phaseProgress };
+};
+
+/**
  * A deterministic 0..1 onset flash: 1 at the nearest onset, decaying linearly
  * over `windowMs`. Mirrors useOnset but inlined so the jolt uniform stays a pure
  * function of (sec, onsets). Frame-derived; no random, no wall clock.
  */
-const useNearestOnset = (onsets: number[], sec: number, _fps: number): number => {
+const useNearestOnset = (onsets: number[], sec: number): number => {
   const nowMs = sec * 1000;
   const windowMs = 160;
   let flash = 0;
@@ -417,5 +467,3 @@ const TimedBlock: React.FC<{
 
   return <div style={{ ...style, opacity, transform: `translateY(${rise}px)` }}>{children}</div>;
 };
-
-export default VisualTestGlitch;

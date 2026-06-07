@@ -1,18 +1,21 @@
-// Public API surface for the Nostalgic Cosmos video package. The exemplar comp
-// (and the agent that composes future pieces) imports everything from here.
+// The single public surface of the @fluncle/video package. This is a near-blank
+// canvas: the package ships machinery (the ShaderLayer GPU workhorse + the GLSL
+// snippet library, the audio-reactive hooks, the journey clock) and brand law
+// (Grain, Starfield, FloatingType's legibility guarantee, CloseCard, paletteMix's
+// canon lock) — and nothing else. Each track composition authors its OWN scene
+// code, inlining whatever shaders and components it needs and importing only what
+// is exported here. The creative doctrine — vehicles, texture families, type
+// staging, research — lives in the fluncle-video skill, not in this code.
 //
-// DESIGN.md is the visual canon; VOICE.md is the copy canon. These primitives
-// encode the brand grammar: grain over everything, one Eclipse Gold accent
-// moment (the Eclipse), Oxanium for brand marks and numerals, warm darks only,
-// floaty drift, "Artist — Title" em dash, "Discovered Jun 4" tabular dates.
+// DESIGN.md is the visual canon; VOICE.md is the copy canon.
 
-// Visual primitives
+// Brand-law primitives (Grain, Starfield, FloatingType)
 export * from "./primitives";
 
 // Audio-reactive hooks
 export * from "./hooks";
 
-// Journey component set (travelling vehicles, brand-law trio, narrative clock)
+// Journey machinery (ShaderLayer + GLSL, the narrative clock) and CloseCard
 export * from "./journey";
 
 // Typography font loader

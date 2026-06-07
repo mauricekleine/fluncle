@@ -1,16 +1,17 @@
-import { DancefloorHavoc } from "./dancefloor-havoc";
-import DownWithYourLove from "./down-with-your-love";
-import { FourSeasonsRidge } from "./four-seasons-ridge";
-import { GlProbe } from "./visual-test/gl-probe";
+// Composition registry. Every archived track video registers here; the archive
+// under tracks/ IS the video collection — dated, self-contained, deterministic,
+// re-renderable forever from code alone. No rendered artifact is ever committed.
+
 import { Composition, type CalculateMetadataFunction } from "remotion";
 import { colors } from "@fluncle/tokens";
-import { NostalgicCosmos } from "./nostalgic-cosmos";
+
+import { GlProbe } from "./gl-probe";
+import { NostalgicCosmos } from "./tracks/20260606-everything-in-its-right-place";
+import { TakeADeepBreath } from "./tracks/20260607-take-a-deep-breath";
+import { FourSeasonsRidge } from "./tracks/20260607-4-seasons";
+import { DownWithYourLove } from "./tracks/20260607-down-with-your-love";
+import { DancefloorHavoc } from "./tracks/20260607-hold-that-sucker-down";
 import { type NostalgicCosmosProps } from "./types";
-import VisualTestFractal from "./visual-test/visual-test-fractal";
-import VisualTestGlass from "./visual-test/visual-test-glass";
-import VisualTestGlitch from "./visual-test/visual-test-glitch";
-import VisualTestLines from "./visual-test/visual-test-lines";
-import VisualTestOrb from "./visual-test/visual-test-orb";
 
 const FPS = 30;
 const WIDTH = 1080;
@@ -32,10 +33,10 @@ const defaultProps: NostalgicCosmosProps = {
   audio: {
     // Real analysed clip from the social-preview pipeline (gitignored .m4a under
     // public/). Per-track props come from out/<trackId>.props.json; these
-    // defaults just let Studio open the exemplar with matching audio.
+    // defaults just let Studio open a composition with matching audio.
     bassCurve: [],
     beatGrid: [],
-    bpm: 171.43,
+    bpm: 174,
     durationMs: 20000,
     energyCurve: [],
     file: "0mK92Hp80kOOhn086qcDgZ.m4a",
@@ -60,61 +61,19 @@ const defaultProps: NostalgicCosmosProps = {
   },
 };
 
-// Scratch compositions for visually testing each Journey vehicle in isolation.
-// Each is owned by one agent; they share NostalgicCosmos's contract, props, and
-// metadata wiring so a vehicle scene can graduate into a real composition.
-const visualTests = [
-  { component: VisualTestOrb, id: "VisualTestOrb" },
-  { component: VisualTestLines, id: "VisualTestLines" },
-  { component: VisualTestFractal, id: "VisualTestFractal" },
-  { component: VisualTestGlass, id: "VisualTestGlass" },
-  { component: VisualTestGlitch, id: "VisualTestGlitch" },
+// The archive, newest last. One entry per file under tracks/.
+const trackCompositions = [
+  { component: NostalgicCosmos, id: "NostalgicCosmos" },
+  { component: TakeADeepBreath, id: "TakeADeepBreath" },
+  { component: FourSeasonsRidge, id: "FourSeasonsRidge" },
+  { component: DownWithYourLove, id: "DownWithYourLove" },
+  { component: DancefloorHavoc, id: "DancefloorHavoc" },
 ] as const;
 
 export const RemotionRoot: React.FC = () => {
   return (
     <>
-      <Composition
-        id="NostalgicCosmos"
-        component={NostalgicCosmos}
-        durationInFrames={Math.round((defaultProps.audio.durationMs / 1000) * FPS)}
-        fps={FPS}
-        width={WIDTH}
-        height={HEIGHT}
-        defaultProps={defaultProps}
-        calculateMetadata={calculateMetadata}
-      />
-      <Composition
-        id="FourSeasonsRidge"
-        component={FourSeasonsRidge}
-        durationInFrames={Math.round((defaultProps.audio.durationMs / 1000) * FPS)}
-        fps={FPS}
-        width={WIDTH}
-        height={HEIGHT}
-        defaultProps={defaultProps}
-        calculateMetadata={calculateMetadata}
-      />
-      <Composition
-        id="DancefloorHavoc"
-        component={DancefloorHavoc}
-        durationInFrames={Math.round((defaultProps.audio.durationMs / 1000) * FPS)}
-        fps={FPS}
-        width={WIDTH}
-        height={HEIGHT}
-        defaultProps={defaultProps}
-        calculateMetadata={calculateMetadata}
-      />
-      <Composition
-        id="DownWithYourLove"
-        component={DownWithYourLove}
-        durationInFrames={Math.round((defaultProps.audio.durationMs / 1000) * FPS)}
-        fps={FPS}
-        width={WIDTH}
-        height={HEIGHT}
-        defaultProps={defaultProps}
-        calculateMetadata={calculateMetadata}
-      />
-      {visualTests.map(({ component, id }) => (
+      {trackCompositions.map(({ component, id }) => (
         <Composition
           key={id}
           id={id}
