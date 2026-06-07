@@ -15,6 +15,16 @@ Three independent analysis passes over this board converged on one operational r
 - **fluent**: flowing liquid gradients and forms; motion lives in the surface itself.
 - **duotone**: strict two-color treatments, gel-split lighting.
 
+## Travelling vehicles
+
+Every video is a journey carried by exactly ONE travelling medium (the One Vehicle Rule in packages/video/README.md); the rest of the frame supports it. The board's entries sorted by which vehicle they fuel:
+
+- **orb**: the Eclipse pulsing/approaching on the beat — `posted/rainy-days.jpg`, `posted/terminus.jpg`, `posted/the-portal.jpg`, `crt-mandala-burst.png`, `halftone-tulip-bloom.png`.
+- **lines**: displaced line fields travelling as terrain or signal — `waveform-ridge.png`, `contour-eclipse-lines.png`, `waveform-blinds-heat-ramp.webp`, `concentric-stripe-moire.png`.
+- **fractal**: mirror/kaleido recursion folding the frame — `mirror-quilt-desert.png`, the mirror folds in `posted/plan-b-2.jpg` and `posted/rainy-days.jpg`, `liquid-spectrum-vortex.png` as a portal spiral.
+- **glass**: refractive panels and liquid ribs sweeping through — `liquid-glass-flamefold-warm.webp`, `liquid-blade-curtain-rgb.webp`, `grain-liquid-heat.jpg`.
+- **glitch**: dither/pixel corruption travelling across the image — `dither-hourglass-glitch.png`, `green-matrix-bloom.png`, `dot-matrix-runner.png`, `pixel-masked-paragraph.png`, `halftone-portrait-dots.png`.
+
 ## Entries
 
 ### Constant
