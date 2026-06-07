@@ -138,6 +138,36 @@ Audio-reactive, pure, deterministic: each computes from `useCurrentFrame()`/`fps
 - **`useBass(curve, { startMs?, smoothingFrames? })`** → `number`. Smoothed 0..1 low-end energy (default smoothing 3 frames, tighter than `useEnergy`). Drives the eclipse rim swell, tower-window brightness, the kaleidoscope breathing.
 - **`sampleCurve` / `smoothCurveAtFrame`** are the lower-level samplers behind the curve hooks if you need raw access.
 
+## Journey components
+
+The journey set (`src/remotion/journey/`, re-exported from `cosmos.ts` like the primitives) is the layer above the primitives: it encodes the One Vehicle Rule directly. Every video is a journey, and exactly one of these vehicles carries it across the clip. They share one narrative clock so an orb and a line field staged together travel on the identical arc.
+
+### The narrative clock: `useJourney(options?)`
+
+The shared timeline every vehicle reads. Returns `{ progress, phase, phaseProgress, arc }`: `progress` is linear 0..1 (raw timing); `phase` is `"depart" | "travel" | "arrive"` with a local `phaseProgress` 0..1; `arc` is the eased (smoothstep slow-in/slow-out) 0..1 that vehicles travel along for spatial motion. Options: `split` (the `[departEnd, travelEnd]` phase splits, default `[0.15, 0.85]`) and `ease` (smoothstep iterations, default `1`). Pure and frame-derived; pass the same options to two vehicles to lock them to one arc. The cover-art astronaut lifting out of the towers is the canonical depart; the close card is the arrive.
+
+### The five vehicles (One Vehicle Rule — compose exactly one)
+
+The mapping mirrors the rule in DESIGN.md / MOODBOARD.md: an orb (the sun), lines (waveform ridges / contours), a fractal (mirror/kaleido recursion), glass (refractive panels), or a glitch (dither corruption travelling across the frame). Each is semi-headless: it owns geometry, motion, and brand law, and exposes creativity through a `children` content slot and/or a function slot (`path`/`displacement`/`density`) that receives the eased `arc`. All feed `useJourney` internally and accept a `journey` options pass-through.
+
+- **`<JourneyOrb>`** — the orb/Eclipse sun riding the arc. `path` (an `OrbPath` `{from,to,scaleFrom?,scaleTo?}` or `(arc) => {x,y,scale}`; default rises from `0.5,0.66` to `0.5,0.4`), `size` (520), `variant` (`"limb" | "sun"`, default `"sun"`), `rimColor`/`rimIntensity` (Eclipse Gold, 0.85), `beatPulse`/`beatGrid` and `bassBreath`/`bassCurve` for audio swell, `palette`, and a `children` surface slot (defaults to `Eclipse`).
+- **`<JourneyLines>`** — a travelling line field (waveform ridge / contour / blinds). `mode` (`"ridge" | "contour" | "blinds"`, default `"ridge"`), `displacement` (preset `"energy" | "bass" | "onset"` or `(x, arc) => number`), `audio` (energy/bass/onset curves), `lineCount` (48), `amplitude` (0.55), `travel` (cycles over arc), `accentIndex`/`accentColor` (one gold line), `color` (Starlight Cream), `focal` (contour only).
+- **`<JourneyFractal>`** — a kaleido tunnel that flies inward. `segments` (6), `rings` (4), `zoomPerSec` (1.16, the travel), `spinPerSec` (4), `ringScale` (0.62), `foldOnBeat`/`foldDegrees`/`beatGrid`/`beatDecay` for per-beat folds, `palette` (ring tints from accent/glow, never gold), `opacity`, and a `children` wedge-source slot mirrored into every segment.
+- **`<JourneyGlass>`** — a refractive blade curtain sweeping across the frame. `bladeCount` (9), `sweep` (`"left" | "right"`) and `sweepPerSec` (0.06, the travel), `refraction` (0.6), `breathe`/`bassCurve` for per-blade bass breathing, `energyCurve` for specular brightness.
+- **`<JourneyGlitch>`** — dither corruption travelling over content. `mode` (`"sweep"` front, `"bloom"` radial, `"channel-split"` RGB tear, default `"sweep"`), `sweepAngle`, `travelPerSec` (0.07), `focal` (bloom), `feather` (0.22), `density` (preset `"energy" | "onset"` or `(frame, fps) => number`), `cellSize`/`ditherPattern` (DitherField pass-through), `splitStrength` (onset-kicked RGB split), `onsets`/`energyCurve`, `palette` (split channels default to the warm Gold/Re-entry-Red retint of RGB), and a `children` slot — the glitch travels over THIS.
+
+### The brand-law trio
+
+Three supporting pieces that enforce brand law regardless of the vehicle:
+
+- **`<Retint>`** — the Retint Rule in code: recolor any borrowed/sampled content to the canon palette. `mode` (`"duotone" | "gradient-map" | "tint"`, default `"gradient-map"`), `stops` (override the canon ramp), `strength` (0..1 mix over the original), `tintBlend` (tint mode only). Implemented as a deterministic SVG `feColorMatrix` luminance collapse → `feComponentTransfer` table gradient-map with `color-interpolation-filters="sRGB"`; filter IDs come from `useId()` so multiple instances never cross-wire.
+- **`<Plate>`** — a first-party moodboard plate as a drifting background image (sources copied to `public/plates/`). `src` (a `staticFile` path), `fit` (`"cover"`), `drift` (`PlateDrift` or `"slow-drift" | "none"`), `grainBoost` (0.12, grain baked onto the plate), `seed`, `opacity`, `blendMode`. Pair with `<Retint>` to bend a plate to the track's palette.
+- **`<CloseCard>`** — the mandatory close card (tagline in cream + selector signature in the one permitted gold type moment). Drive it with the `"arrive"` phase: pass that phase's `phaseProgress` (a clean 0..1) as `arc`/`progress` and the card reveals exactly as the journey arrives. Props: `palette` (`{ink,accent}`), `floatBoost`, `taglineSize` (30), `signatureSize` (46), `align`.
+
+### Visual-test scratch space
+
+`src/remotion/visual-test/` holds scratch compositions for visually testing each vehicle in isolation: `VisualTestOrb`, `VisualTestLines`, `VisualTestFractal`, `VisualTestGlass`, `VisualTestGlitch`, all registered in `root.tsx` with the same `calculateMetadata`/duration wiring and `NostalgicCosmosProps` contract as the exemplar. They ship as black-frame placeholders so one agent can own exactly one file without touching `root.tsx`; build a real vehicle scene there, scrub it in `bun run studio`, and graduate it into a proper composition once it reads on-brand.
+
 ## inputProps contract
 
 Every producer (the pipeline, Studio default props, the agent) must satisfy `NostalgicCosmosProps` from `src/remotion/types.ts`. Any new composition should accept the same shape so one pipeline feeds all scenes.

@@ -2,6 +2,11 @@ import { Composition, type CalculateMetadataFunction } from "remotion";
 import { colors } from "@fluncle/tokens";
 import { NostalgicCosmos } from "./nostalgic-cosmos";
 import { type NostalgicCosmosProps } from "./types";
+import VisualTestFractal from "./visual-test/visual-test-fractal";
+import VisualTestGlass from "./visual-test/visual-test-glass";
+import VisualTestGlitch from "./visual-test/visual-test-glitch";
+import VisualTestLines from "./visual-test/visual-test-lines";
+import VisualTestOrb from "./visual-test/visual-test-orb";
 
 const FPS = 30;
 const WIDTH = 1080;
@@ -51,17 +56,43 @@ const defaultProps: NostalgicCosmosProps = {
   },
 };
 
+// Scratch compositions for visually testing each Journey vehicle in isolation.
+// Each is owned by one agent; they share NostalgicCosmos's contract, props, and
+// metadata wiring so a vehicle scene can graduate into a real composition.
+const visualTests = [
+  { component: VisualTestOrb, id: "VisualTestOrb" },
+  { component: VisualTestLines, id: "VisualTestLines" },
+  { component: VisualTestFractal, id: "VisualTestFractal" },
+  { component: VisualTestGlass, id: "VisualTestGlass" },
+  { component: VisualTestGlitch, id: "VisualTestGlitch" },
+] as const;
+
 export const RemotionRoot: React.FC = () => {
   return (
-    <Composition
-      id="NostalgicCosmos"
-      component={NostalgicCosmos}
-      durationInFrames={Math.round((defaultProps.audio.durationMs / 1000) * FPS)}
-      fps={FPS}
-      width={WIDTH}
-      height={HEIGHT}
-      defaultProps={defaultProps}
-      calculateMetadata={calculateMetadata}
-    />
+    <>
+      <Composition
+        id="NostalgicCosmos"
+        component={NostalgicCosmos}
+        durationInFrames={Math.round((defaultProps.audio.durationMs / 1000) * FPS)}
+        fps={FPS}
+        width={WIDTH}
+        height={HEIGHT}
+        defaultProps={defaultProps}
+        calculateMetadata={calculateMetadata}
+      />
+      {visualTests.map(({ component, id }) => (
+        <Composition
+          key={id}
+          id={id}
+          component={component}
+          durationInFrames={Math.round((defaultProps.audio.durationMs / 1000) * FPS)}
+          fps={FPS}
+          width={WIDTH}
+          height={HEIGHT}
+          defaultProps={defaultProps}
+          calculateMetadata={calculateMetadata}
+        />
+      ))}
+    </>
   );
 };

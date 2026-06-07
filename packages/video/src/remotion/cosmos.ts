@@ -12,6 +12,9 @@ export * from "./primitives";
 // Audio-reactive hooks
 export * from "./hooks";
 
+// Journey component set (travelling vehicles, brand-law trio, narrative clock)
+export * from "./journey";
+
 // Typography font loader
 export { OXANIUM, OXANIUM_STACK, loadOxanium } from "./fonts";
 

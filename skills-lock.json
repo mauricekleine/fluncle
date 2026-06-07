@@ -22,6 +22,11 @@
       "sourceType": "local",
       "computedHash": "306bd9ce5d6ef4c09eac7d7f41136d0fdaad589ac37b332cf63047dfd6a2a402"
     },
+    "fluncle-video": {
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-video",
+      "sourceType": "local",
+      "computedHash": "ccef923cfcc7cce5e56fd99290e00f617146b0736cd9511f6da8aa9a1d045734"
+    },
     "hetzner-devbox": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/hetzner-devbox",
       "sourceType": "local",
