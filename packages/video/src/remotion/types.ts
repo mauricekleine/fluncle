@@ -22,7 +22,7 @@ export type CosmosAudio = {
   /** Filename inside packages/video/public/ for staticFile() */
   file: string;
   startMs: number;
-  /** Clip length, 15000-30000 */
+  /** Clip length, 10000-30000; 20s default, agent-overridable via --duration-ms */
   durationMs: number;
   bpm: number;
   /** ms offsets relative to clip start */

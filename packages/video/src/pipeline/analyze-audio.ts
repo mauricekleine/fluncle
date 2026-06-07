@@ -292,7 +292,14 @@ function pickOnsets(env: Float32Array): number[] {
  * Analyze a mono PCM wav into the CosmosAudio contract. `file` is the staticFile
  * filename; the caller supplies it (the analysis wav itself is not shipped).
  */
-export async function analyzeAudio(wavPath: string, file: string): Promise<CosmosAudio> {
+// targetMs is the desired clip length (default 20s); the agent may shorten it
+// based on the waveform so the clip ends on a drop or just before a transition.
+export async function analyzeAudio(
+  wavPath: string,
+  file: string,
+  targetMs: number = TARGET_WINDOW_MS,
+): Promise<CosmosAudio> {
+  const clampedTargetMs = Math.max(10_000, Math.min(30_000, targetMs));
   const buf = await readFile(wavPath);
   const decoded = decodeWav(buf);
 
@@ -312,8 +319,8 @@ export async function analyzeAudio(wavPath: string, file: string): Promise<Cosmo
 
   const bpm = estimateBpm(env);
 
-  // Window selection: best contiguous 20s scored by mean energy + 2*bass + onset density.
-  const windowMs = Math.min(TARGET_WINDOW_MS, totalMs);
+  // Window selection: best contiguous window scored by mean energy + 2*bass + onset density.
+  const windowMs = Math.min(clampedTargetMs, totalMs);
   const windowHops = Math.max(1, Math.round(windowMs / HOP_MS));
 
   const onsetsAll = pickOnsets(env);
@@ -356,7 +363,7 @@ export async function analyzeAudio(wavPath: string, file: string): Promise<Cosmo
   startMs = Math.max(0, Math.min(startMs, totalMs - windowMs));
   startMs = Math.round(startMs);
 
-  const durationMs = Math.min(TARGET_WINDOW_MS, totalMs - startMs);
+  const durationMs = Math.min(clampedTargetMs, totalMs - startMs);
   const endMs = startMs + durationMs;
 
   // Trim curves to the window, time-relative to startMs.

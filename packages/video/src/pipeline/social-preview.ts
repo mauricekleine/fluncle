@@ -1,6 +1,6 @@
 // Entry point for the local social-preview pipeline.
 //
-//   bun src/pipeline/social-preview.ts <trackId> [--skip-render] [--composition <Id>]
+//   bun src/pipeline/social-preview.ts <trackId> [--skip-render] [--composition <Id>] [--duration-ms <10000-30000>]
 //
 // fetch track -> resolve preview -> download + normalize -> analyze audio ->
 // extract palette -> assemble inputProps -> write out/<trackId>.props.json ->
@@ -75,12 +75,22 @@ async function main(): Promise<void> {
   // and renders them through this flag.
   const compositionFlagIndex = args.indexOf("--composition");
   const compositionId = compositionFlagIndex >= 0 ? args[compositionFlagIndex + 1] : undefined;
-  const trackId = args.find(
-    (a, index) => !a.startsWith("--") && index !== compositionFlagIndex + 1,
+  // --duration-ms lets the agent pick the clip length from the waveform (end on
+  // a drop or just before a transition); 20s default, clamped to the contract.
+  const durationFlagIndex = args.indexOf("--duration-ms");
+  const durationMs = durationFlagIndex >= 0 ? Number(args[durationFlagIndex + 1]) : undefined;
+  const valueIndexes = new Set(
+    [compositionFlagIndex + 1, durationFlagIndex + 1].filter((i) => i > 0),
   );
-  if (!trackId || (compositionFlagIndex >= 0 && !compositionId)) {
+  const trackId = args.find((a, index) => !a.startsWith("--") && !valueIndexes.has(index));
+  if (
+    !trackId ||
+    (compositionFlagIndex >= 0 && !compositionId) ||
+    (durationFlagIndex >= 0 &&
+      (!Number.isFinite(durationMs) || durationMs! < 10_000 || durationMs! > 30_000))
+  ) {
     throw new Error(
-      "usage: bun src/pipeline/social-preview.ts <trackId> [--skip-render] [--composition <Id>]",
+      "usage: bun src/pipeline/social-preview.ts <trackId> [--skip-render] [--composition <Id>] [--duration-ms <10000-30000>]",
     );
   }
 
@@ -106,7 +116,7 @@ async function main(): Promise<void> {
   let audio;
   try {
     console.log(`[social-preview] analyzing audio`);
-    audio = await analyzeAudio(downloaded.wavPath, downloaded.file);
+    audio = await analyzeAudio(downloaded.wavPath, downloaded.file, durationMs ?? undefined);
   } finally {
     await rm(downloaded.tmpDir, { force: true, recursive: true });
   }
