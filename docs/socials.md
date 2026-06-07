@@ -4,14 +4,14 @@ The map of where Fluncle exists off-repo: handles, links, profile assets, and bi
 
 ## Accounts
 
-| Platform           | Handle                     | Link                                                                           | Bio (current)                                                                    |
-| ------------------ | -------------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
-| Spotify (profile)  | `fluncle`                  | https://open.spotify.com/user/berry_fudge?si=5c4a9d39a3384088                  | n/a                                                                              |
-| Spotify (playlist) | Fluncle's Finest           | https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0?si=054d3c6cbcf14a36   | The product artifact; this is the link surfaces share                            |
-| TikTok             | `@fluncle`                 | https://www.tiktok.com/@fluncle                                                | none yet; recommended: the tagline                                               |
-| Telegram (channel) | `@fluncle`                 | https://t.me/fluncle                                                           | The feed every surface links to; one banger per post under the 🛸 header         |
-| Telegram (bot)     | `@fluncle_bot`             | https://web.telegram.org/k/#@fluncle_bot                                       | "Daily Drum & Bass:" (recorded as provided; appears truncated, complete it here) |
-| X                  | none (deliberate, for now) | personal cross-post via https://x.com/mauricekleine ("DM me on X" on the site) | Fluncle has no own X handle yet; the site routes DMs to Maurice                  |
+| Platform           | Handle                     | Link                                                                           | Bio (current)                                                            |
+| ------------------ | -------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| Spotify (profile)  | `fluncle`                  | https://open.spotify.com/user/berry_fudge?si=5c4a9d39a3384088                  | n/a                                                                      |
+| Spotify (playlist) | Fluncle's Finest           | https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0?si=054d3c6cbcf14a36   | The product artifact; this is the link surfaces share                    |
+| TikTok             | `@fluncle`                 | https://www.tiktok.com/@fluncle                                                | "Drum & bass bangers from another dimension."                            |
+| Telegram (channel) | `@fluncle`                 | https://t.me/fluncle                                                           | The feed every surface links to; one banger per post under the 🛸 header |
+| Telegram (bot)     | `@fluncle_bot`             | https://web.telegram.org/k/#@fluncle_bot                                       | "Drum & bass bangers from another dimension."                            |
+| X                  | none (deliberate, for now) | personal cross-post via https://x.com/mauricekleine ("DM me on X" on the site) | Fluncle has no own X handle yet; the site routes DMs to Maurice          |
 
 ## Owned channels (not accounts, same map)
 
