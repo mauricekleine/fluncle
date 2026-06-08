@@ -69,6 +69,12 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "track" && subcommand === "get") {
+    const { trackGetCommand } = await import("./commands/track");
+    await runTrackGet(rest, trackGetCommand);
+    return;
+  }
+
   if (command === "admin" && subcommand === "submissions") {
     const submissionCommands = await import("./commands/submissions");
     await runAdminSubmissions(rest, submissionCommands);
@@ -121,6 +127,44 @@ async function runAdminSubmissions(
   throw new Error(`Unknown submissions command: ${action}`);
 }
 
+async function runTrackGet(
+  args: string[],
+  trackGetCommand: typeof import("./commands/track").trackGetCommand,
+): Promise<void> {
+  const parsed = parseArgs({
+    allowPositionals: true,
+    args,
+    options: { json: { default: false, type: "boolean" } },
+  });
+
+  const idOrLogId = parsed.positionals[0];
+
+  if (!idOrLogId) {
+    throw new Error("Missing id. Usage: fluncle track get <track_id|log_id> [--json]");
+  }
+
+  const result = await trackGetCommand(idOrLogId);
+
+  if (parsed.values.json) {
+    printJson(result);
+    return;
+  }
+
+  const t = result.track;
+  console.log(`${t.logId ? `${t.logId}  ` : ""}${t.artists.join(", ")} — ${t.title}`);
+  console.log(
+    [
+      t.bpm ? `${t.bpm} bpm` : undefined,
+      t.key ?? undefined,
+      t.label ?? undefined,
+      t.tags?.length ? t.tags.join(", ") : undefined,
+      t.enrichmentStatus,
+    ]
+      .filter(Boolean)
+      .join(" · "),
+  );
+}
+
 async function runTrackUpdate(
   args: string[],
   trackUpdateCommand: typeof import("./commands/track").trackUpdateCommand,
@@ -130,11 +174,13 @@ async function runTrackUpdate(
     args,
     options: {
       bpm: { type: "string" },
+      features: { type: "string" },
       json: { default: false, type: "boolean" },
       key: { type: "string" },
       note: { type: "string" },
       status: { type: "string" },
       tag: { multiple: true, type: "string" },
+      "tag-source": { type: "string" },
       "video-url": { type: "string" },
     },
   });
@@ -145,6 +191,12 @@ async function runTrackUpdate(
     throw new Error("Missing track id. Usage: fluncle admin track update <track_id> [--tag ...]");
   }
 
+  const tagSource = parsed.values["tag-source"];
+
+  if (tagSource !== undefined && tagSource !== "auto" && tagSource !== "manual") {
+    throw new Error(`Invalid --tag-source: ${tagSource} (expected "auto" or "manual")`);
+  }
+
   const bpm = parsed.values.bpm === undefined ? undefined : Number(parsed.values.bpm);
 
   if (bpm !== undefined && !Number.isFinite(bpm)) {
@@ -153,10 +205,12 @@ async function runTrackUpdate(
 
   const result = await trackUpdateCommand(trackId, {
     bpm,
+    features: parsed.values.features,
     key: parsed.values.key,
     note: parsed.values.note,
     status: parsed.values.status,
     tags: parsed.values.tag,
+    tagsSource: tagSource,
     videoUrl: parsed.values["video-url"],
   });
 
@@ -425,7 +479,8 @@ Meta:
 
 Operator:
   fluncle admin add <spotify-url> [--note "text"] [--dry-run] [--json]
-  fluncle admin track update <track-id> [--tag t]... [--bpm n] [--key "k"] [--video-url u] [--status s] [--note "text"] [--json]
+  fluncle track get <track-id|log-id> [--json]      Look up one finding by id or Log ID
+  fluncle admin track update <track-id> [--tag t]... [--tag-source auto|manual] [--bpm n] [--key "k"] [--video-url u] [--features json] [--status s] [--note "text"] [--json]
       Certify a track into the archive
   fluncle admin submissions                          List pending submissions
   fluncle admin submissions review <submission-id>   Inspect one submission

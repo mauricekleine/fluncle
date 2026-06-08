@@ -61,6 +61,51 @@ type TrackRow = {
   posted_to_telegram: number;
 };
 
+// Columns exposed to clients (features_json is internal training data, omitted).
+const TRACK_SELECT = `track_id, spotify_url, title, album, album_image_url, artists_json,
+  bpm, duration_ms, enrichment_status, isrc, key, label, log_id, popularity,
+  preview_url, tags_json, tags_source, video_url, note, added_at,
+  added_to_spotify, posted_to_telegram`;
+
+function toTrackListItem(row: TrackRow): TrackListItem {
+  return {
+    addedAt: row.added_at,
+    addedToSpotify: Boolean(row.added_to_spotify),
+    album: row.album ?? undefined,
+    albumImageUrl: row.album_image_url ?? undefined,
+    artists: parseArtists(row.artists_json),
+    bpm: row.bpm ?? undefined,
+    durationMs: row.duration_ms,
+    enrichmentStatus: row.enrichment_status,
+    isrc: row.isrc ?? undefined,
+    key: row.key ?? undefined,
+    label: row.label ?? undefined,
+    logId: row.log_id ?? undefined,
+    note: row.note?.trim() ? row.note : undefined,
+    popularity: row.popularity ?? undefined,
+    postedToTelegram: Boolean(row.posted_to_telegram),
+    previewUrl: row.preview_url ?? undefined,
+    spotifyUrl: row.spotify_url,
+    tags: parseTags(row.tags_json),
+    tagsSource: row.tags_source ?? undefined,
+    title: row.title,
+    trackId: row.track_id,
+    videoUrl: row.video_url ?? undefined,
+  };
+}
+
+/** Fetch a single track by its Spotify trackId or its Log ID. */
+export async function getTrackByIdOrLogId(idOrLogId: string): Promise<TrackListItem | undefined> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [idOrLogId, idOrLogId],
+    sql: `select ${TRACK_SELECT} from tracks where track_id = ? or log_id = ? limit 1`,
+  });
+  const row = result.rows[0] as unknown as TrackRow | undefined;
+
+  return row ? toTrackListItem(row) : undefined;
+}
+
 type TrackCountRow = {
   total_count: number;
 };
@@ -105,29 +150,7 @@ export async function listTracks({
   const [result, countResult] = await Promise.all([
     db.execute({
       args,
-      sql: `select
-              track_id,
-              spotify_url,
-              title,
-              album,
-              album_image_url,
-              artists_json,
-              bpm,
-              duration_ms,
-              enrichment_status,
-              isrc,
-              key,
-              label,
-              log_id,
-              popularity,
-              preview_url,
-              tags_json,
-              tags_source,
-              video_url,
-              note,
-              added_at,
-              added_to_spotify,
-              posted_to_telegram
+      sql: `select ${TRACK_SELECT}
             from tracks
             ${where}
             order by added_at desc, track_id desc
@@ -158,30 +181,7 @@ export async function listTracks({
           })
         : undefined,
     totalCount,
-    tracks: visibleRows.map((row) => ({
-      addedAt: row.added_at,
-      addedToSpotify: Boolean(row.added_to_spotify),
-      album: row.album ?? undefined,
-      albumImageUrl: row.album_image_url ?? undefined,
-      artists: parseArtists(row.artists_json),
-      bpm: row.bpm ?? undefined,
-      durationMs: row.duration_ms,
-      enrichmentStatus: row.enrichment_status,
-      isrc: row.isrc ?? undefined,
-      key: row.key ?? undefined,
-      label: row.label ?? undefined,
-      logId: row.log_id ?? undefined,
-      note: row.note?.trim() ? row.note : undefined,
-      popularity: row.popularity ?? undefined,
-      postedToTelegram: Boolean(row.posted_to_telegram),
-      previewUrl: row.preview_url ?? undefined,
-      spotifyUrl: row.spotify_url,
-      tags: parseTags(row.tags_json),
-      tagsSource: row.tags_source ?? undefined,
-      title: row.title,
-      trackId: row.track_id,
-      videoUrl: row.video_url ?? undefined,
-    })),
+    tracks: visibleRows.map(toTrackListItem),
   };
 }
 

@@ -22,6 +22,11 @@
       "sourceType": "local",
       "computedHash": "306bd9ce5d6ef4c09eac7d7f41136d0fdaad589ac37b332cf63047dfd6a2a402"
     },
+    "fluncle-track-enrichment": {
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-track-enrichment",
+      "sourceType": "local",
+      "computedHash": "f130a96486b4c2cb085cba9714f2476cfc8891c516110e8a3967ae981d21f755"
+    },
     "fluncle-video": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-video",
       "sourceType": "local",

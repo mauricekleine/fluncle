@@ -10,6 +10,8 @@ import { normalizeTags } from "./tags";
 export type TrackUpdate = {
   bpm?: number;
   enrichmentStatus?: "pending" | "done" | "failed";
+  /** Raw audio feature vector as a JSON string (training data for the classifier). */
+  features?: string;
   key?: string;
   note?: string;
   tags?: string[];
@@ -48,6 +50,7 @@ export async function updateTrack(
     update.key !== undefined ||
     update.videoUrl !== undefined ||
     update.enrichmentStatus !== undefined ||
+    update.features !== undefined ||
     update.note !== undefined;
 
   if (!provided) {
@@ -88,6 +91,11 @@ export async function updateTrack(
   if (update.enrichmentStatus !== undefined) {
     sets.push("enrichment_status = ?");
     args.push(update.enrichmentStatus);
+  }
+
+  if (update.features !== undefined) {
+    sets.push("features_json = ?");
+    args.push(update.features);
   }
 
   if (update.note !== undefined) {

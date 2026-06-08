@@ -7,6 +7,7 @@ import { type TrackUpdate, updateTrack } from "../../../lib/server/track-update"
 type PatchBody = {
   bpm?: unknown;
   enrichmentStatus?: unknown;
+  features?: unknown;
   key?: unknown;
   note?: unknown;
   tags?: unknown;
@@ -44,6 +45,10 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId")({
 
           if (typeof body.key === "string") {
             update.key = body.key;
+          }
+
+          if (typeof body.features === "string") {
+            update.features = body.features;
           }
 
           if (typeof body.videoUrl === "string") {

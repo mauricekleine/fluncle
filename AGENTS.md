@@ -72,7 +72,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - [docs/track-submissions.md](./docs/track-submissions.md) - listener submission architecture and current implementation plan.
 - [docs/newsletter-agent.md](./docs/newsletter-agent.md) - instructions for the external Friday newsletter agent and its discovery-window contract with `/api/tracks`.
 - [packages/video/README.md](./packages/video/README.md) - Remotion video machinery + the dated, self-contained archive under `src/remotion/tracks/`: the core surface, the archive contract, and the pipeline.
-- [docs/video-agent.md](./docs/video-agent.md) - thin bootstrap for the per-track video agent (tools + safety rails); its full constitution is the fluncle-video skill at [packages/skills/fluncle-video](./packages/skills/fluncle-video).
+- [docs/enrichment-agent.md](./docs/enrichment-agent.md) - thin bootstrap for the track enrichment agent (runs locally or on Spinup; tools + safety rails); its full constitution is the fluncle-track-enrichment skill at [packages/skills/fluncle-track-enrichment](./packages/skills/fluncle-track-enrichment). Video render is a separate capability whose doctrine is the fluncle-video skill at [packages/skills/fluncle-video](./packages/skills/fluncle-video).
 - [docs/socials.md](./docs/socials.md) - the map of social accounts, owned channels, profile assets, and bio conventions.
 
 ## Architecture

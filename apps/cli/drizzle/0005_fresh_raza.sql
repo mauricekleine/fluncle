@@ -1,0 +1,1 @@
+ALTER TABLE `tracks` ADD `features_json` text;

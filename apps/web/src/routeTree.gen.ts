@@ -19,6 +19,7 @@ import { Route as ApiSearchRouteImport } from './routes/api/search'
 import { Route as ApiNewsletterRouteImport } from './routes/api/newsletter'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as ApiTracksRandomRouteImport } from './routes/api/tracks/random'
+import { Route as ApiTracksIdOrLogIdRouteImport } from './routes/api/tracks.$idOrLogId'
 import { Route as ApiAdminTracksRouteImport } from './routes/api/admin/tracks'
 import { Route as ApiAdminSubmissionsRouteImport } from './routes/api/admin/submissions'
 import { Route as ApiAdminTracksTrackIdRouteImport } from './routes/api/admin/tracks.$trackId'
@@ -76,6 +77,11 @@ const ApiHealthRoute = ApiHealthRouteImport.update({
 const ApiTracksRandomRoute = ApiTracksRandomRouteImport.update({
   id: '/random',
   path: '/random',
+  getParentRoute: () => ApiTracksRoute,
+} as any)
+const ApiTracksIdOrLogIdRoute = ApiTracksIdOrLogIdRouteImport.update({
+  id: '/$idOrLogId',
+  path: '/$idOrLogId',
   getParentRoute: () => ApiTracksRoute,
 } as any)
 const ApiAdminTracksRoute = ApiAdminTracksRouteImport.update({
@@ -136,6 +142,7 @@ export interface FileRoutesByFullPath {
   '/cli/latest.sh': typeof CliLatestDotshRoute
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
   '/api/admin/tracks': typeof ApiAdminTracksRouteWithChildren
+  '/api/tracks/$idOrLogId': typeof ApiTracksIdOrLogIdRoute
   '/api/tracks/random': typeof ApiTracksRandomRoute
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
   '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRoute
@@ -156,6 +163,7 @@ export interface FileRoutesByTo {
   '/cli/latest.sh': typeof CliLatestDotshRoute
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
   '/api/admin/tracks': typeof ApiAdminTracksRouteWithChildren
+  '/api/tracks/$idOrLogId': typeof ApiTracksIdOrLogIdRoute
   '/api/tracks/random': typeof ApiTracksRandomRoute
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
   '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRoute
@@ -177,6 +185,7 @@ export interface FileRoutesById {
   '/cli/latest.sh': typeof CliLatestDotshRoute
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
   '/api/admin/tracks': typeof ApiAdminTracksRouteWithChildren
+  '/api/tracks/$idOrLogId': typeof ApiTracksIdOrLogIdRoute
   '/api/tracks/random': typeof ApiTracksRandomRoute
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
   '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRoute
@@ -199,6 +208,7 @@ export interface FileRouteTypes {
     | '/cli/latest.sh'
     | '/api/admin/submissions'
     | '/api/admin/tracks'
+    | '/api/tracks/$idOrLogId'
     | '/api/tracks/random'
     | '/api/admin/submissions/$submissionId'
     | '/api/admin/tracks/$trackId'
@@ -219,6 +229,7 @@ export interface FileRouteTypes {
     | '/cli/latest.sh'
     | '/api/admin/submissions'
     | '/api/admin/tracks'
+    | '/api/tracks/$idOrLogId'
     | '/api/tracks/random'
     | '/api/admin/submissions/$submissionId'
     | '/api/admin/tracks/$trackId'
@@ -239,6 +250,7 @@ export interface FileRouteTypes {
     | '/cli/latest.sh'
     | '/api/admin/submissions'
     | '/api/admin/tracks'
+    | '/api/tracks/$idOrLogId'
     | '/api/tracks/random'
     | '/api/admin/submissions/$submissionId'
     | '/api/admin/tracks/$trackId'
@@ -336,6 +348,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiTracksRandomRouteImport
       parentRoute: typeof ApiTracksRoute
     }
+    '/api/tracks/$idOrLogId': {
+      id: '/api/tracks/$idOrLogId'
+      path: '/$idOrLogId'
+      fullPath: '/api/tracks/$idOrLogId'
+      preLoaderRoute: typeof ApiTracksIdOrLogIdRouteImport
+      parentRoute: typeof ApiTracksRoute
+    }
     '/api/admin/tracks': {
       id: '/api/admin/tracks'
       path: '/api/admin/tracks'
@@ -396,10 +415,12 @@ declare module '@tanstack/react-router' {
 }
 
 interface ApiTracksRouteChildren {
+  ApiTracksIdOrLogIdRoute: typeof ApiTracksIdOrLogIdRoute
   ApiTracksRandomRoute: typeof ApiTracksRandomRoute
 }
 
 const ApiTracksRouteChildren: ApiTracksRouteChildren = {
+  ApiTracksIdOrLogIdRoute: ApiTracksIdOrLogIdRoute,
   ApiTracksRandomRoute: ApiTracksRandomRoute,
 }
 

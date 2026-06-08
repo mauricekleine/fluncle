@@ -10,6 +10,7 @@ export const tracks = sqliteTable("tracks", {
   bpm: real("bpm"),
   durationMs: integer("duration_ms").notNull(),
   enrichmentStatus: text("enrichment_status").notNull().default("pending"),
+  featuresJson: text("features_json"),
   isrc: text("isrc"),
   key: text("key"),
   label: text("label"),
