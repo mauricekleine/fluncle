@@ -12,18 +12,15 @@ The active work: the async enrichment half of the [track lifecycle](./track-life
    - List requirements: keys/creds (Spotify, Deezer, the Fluncle admin token, the video-upload endpoint, TikTok).
    - The flow: `fluncle ... --json` to pull track details → fetch the preview from Deezer → run the spectro analysis → `fluncle admin track update` (bpm/key/tags) → render the video with Remotion (the `fluncle-video` skill is the instructions). Run it manually on a real track and confirm the whole chain works.
 
-3. **Spinup agent — the async runner.** Move the proven flow onto Spinup, triggered from the add:
-   - Add the agent's API key to Cloudflare + local `.dev.vars`.
-   - The Worker `ctx.waitUntil`s a call to the Spinup runtime API with the track ID / Log ID (fire-and-forget; never blocks the add).
-   - The agent pulls track details via the `fluncle` CLI `--json`, resolves the Deezer preview, runs the analysis, and writes bpm/key/tags back via `fluncle admin track update`.
-   - **Open question — repo/kit access.** Spinup has no file persistence, so how does the agent get `packages/video` (Remotion + the kit) to render? (Fresh checkout per run? a prebuilt image with the kit + ffmpeg? a published package?) Resolve before the video step.
-   - Renders the video (Remotion, needs `ffmpeg`) and **uploads it via a new admin API endpoint** (e.g. `POST /api/admin/tracks/:id/video`) — **the agent never holds R2 credentials; the Worker owns the R2 connection** and sets `video_url`. Upload **two** cuts: one with audio (operator review) and one without audio (TikTok).
-   - Submits a **TikTok draft**: the audio-less video + a caption with analysis-derived hashtags, standard ones like `#dnb`, and the canonical `fluncle://<log_id>` marker. Via the TikTok Content Posting API (creds needed); no music attached, no publish.
-   - Writes `video_url` (and any draft reference) back via `track update`. **Open question:** the public TikTok post URL may only exist _after_ publishing — so `track update` stays the easy path to set the post URL later.
+3. **Enrichment-analysis agent on Spinup — buildable now.** The Worker `ctx.waitUntil`s a call to the Spinup runtime API with the track ID / Log ID (fire-and-forget; never blocks the add). The agent pulls track details via the `fluncle` CLI `--json`, resolves the Deezer preview, runs the spectro analysis, and writes bpm/key/tags (as `auto`) back via `fluncle admin track update`. This half is light (ffmpeg + JS DSP) and fits Spinup's current limits (1 vCPU, 300s `/exec`); it just needs **ffmpeg pinned** in the rootfs and the agent's API key in Cloudflare + `.dev.vars`. Ships the audio-derived data autonomously.
 
-4. **Show the video on the web.** Surface the R2 video as the track's preview (Through-the-Glass / One Pane); show a "processing" state in the recovered-telemetry register until `enrichment_status` is `done`. A missing video degrades to today's layout.
+4. **Video render — needs a render-capable Spinup profile.** Software-GL (SwiftShader) is viable: benchmarked locally at **~45s per 20s clip in software vs ~30s on Metal** (≈1.45×, `concurrency: 1`), so **no GPU is required** — the real cost is per-vCPU speed, not the GL path. Needs a render rootfs (Chromium + SwiftShader/Mesa/NSS/GBM/fonts + ffmpeg), likely **more than 1 vCPU**, and a confirm against the per-run cap (300s today; raise the tier if a real on-Spinup render runs long). **Open question — repo/kit access:** Spinup has no file persistence, so how does the agent get `packages/video` (fresh checkout per run? a prebuilt image? a published package?). Then it renders **two** cuts (one with audio for review, one without for TikTok) and **uploads via a new admin endpoint** (e.g. `POST /api/admin/tracks/:id/video`) — **the agent never holds R2 credentials; the Worker owns R2** and sets `video_url`.
 
-5. **Later — the small classifier.** Train it on the accumulated `manual`-labeled tags ({audio features → sub-genre}). Gloriously, unnecessarily fun; that's the point.
+5. **TikTok draft.** Once the video exists: submit a draft (audio-less cut + caption with analysis-derived hashtags, `#dnb`, and the canonical `fluncle://<log_id>` marker) via the TikTok Content Posting API — no music attached, no publish. Write any draft/post reference back via `track update`. **Open question:** the public post URL may only exist _after_ publishing, so `track update` stays the path to set it later.
+
+6. **Show the video on the web.** Surface the R2 video as the track's preview (Through-the-Glass / One Pane); show a "processing" state in the recovered-telemetry register until `enrichment_status` is `done`. A missing video degrades to today's layout.
+
+7. **Later — the small classifier.** Train it on the accumulated `manual`-labeled tags ({audio features → sub-genre}). Gloriously, unnecessarily fun; that's the point.
 
 ---
 

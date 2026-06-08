@@ -30,6 +30,8 @@ After a successful add, the Worker fires a **Spinup agent** (via the Spinup runt
 
 This takes a while, and that's fine: the find was already live. When it finishes, the analysis fields and the video appear across the Galaxy.
 
+**Runtime split (Spinup).** The two halves have opposite resource profiles, so they can ship separately. Audio analysis is light — ffmpeg + JS DSP — and fits a microVM's current limits (it just needs `ffmpeg` pinned), so it goes first. Video rendering is heavier (headless Chromium + WebGL): Spinup has no GPU, but software rasterization (SwiftShader) is viable — a 20s clip benchmarks at ~45s software vs ~30s on Metal (~1.45×, single-threaded), so it needs a render-capable rootfs (Chromium + SwiftShader/Mesa + ffmpeg) and likely more than one vCPU, **not** a GPU. See ROADMAP.md for the build split.
+
 This same agent is the front half of the TikTok pipeline (see [ROADMAP.md](./ROADMAP.md)): once it has the video + tags, its next step is to push a TikTok draft (video without audio + a caption built from the tags). One async worker, many outputs.
 
 ## The update path
