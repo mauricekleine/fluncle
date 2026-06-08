@@ -60,7 +60,7 @@ fluncle://241.7.3A
 ```
 
 - This **subsumes the TikTok capstone's marker** — there is one identity per discovery, doing the trail and the reconciliation at once. No separate `rave://` scheme.
-- **Identifier design.** Derive it deterministically from real facts (e.g. discovery date + a sequence + a check character) so it reads "recovered, not generated" but stays reconstructable and reconcilable — better than a random code, and the date/coordinate/stardate ambiguity comes for free. Opaque to users, meaningful to the system. The exact `241.7.3A` shape and what it encodes is a design decision to settle when picked up.
+- **Identifier design — built.** The Log ID shipped as `sector.orbit.mark` (e.g. `007.8.1B`): days since the Fluncle epoch (2026-05-30) + a deterministic hash of the recording's ISRC. Permanent, stored, and surfaced across web/CLI/SSH/video (`log-id.ts`; [track-lifecycle.md](./track-lifecycle.md)). The spine exists — what's left in this section is the _surfaces_ it unlocks (below) and the co-equal canon reframe.
 - **New surfaces it implies:** `/log/<id>` pages on the web (the log as the object: observation, recovered artifact, related logs), RSS as the observation feed, and possibly Discord. The website becomes an archive you browse, not only a feed you scroll.
 
 **The canon surgery (codebase + canon still arbitrate the words).** A co-equal reframe edits the canon; it does not let the brief overrule it. When this is picked up:
