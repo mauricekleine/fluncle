@@ -118,15 +118,15 @@ export type FloatingTypeProps = {
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-/** "Discovered Jun 4" — discovery date, tabular, no leading zero (VOICE.md). */
+/** "Found Jun 4" — the found date, tabular, no leading zero (VOICE.md's Found Rule). */
 const formatDiscovered = (iso: string): string => {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) {
-    return "Discovered";
+    return "Found";
   }
   // Use UTC so the same ISO always renders the same date regardless of host TZ
   // (determinism: renders must not depend on the machine's clock/timezone).
-  return `Discovered ${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
+  return `Found ${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
 };
 
 /**
@@ -138,7 +138,7 @@ const formatDiscovered = (iso: string): string => {
  *   sans (The One Voice Rule).
  * - trackLine renders `Artist — Title` with an em dash, the ONLY sanctioned em
  *   dash in the system. Multiple artists join with ", ".
- * - meta renders the "Discovered Jun 4" discovery date, tabular.
+ * - meta renders the "Found Jun 4" found date, tabular (The Found Rule).
  * - Sentence case by default; no exclamation marks anywhere (The Dry Rule). This
  *   component never adds punctuation; it only formats what it is given.
  *

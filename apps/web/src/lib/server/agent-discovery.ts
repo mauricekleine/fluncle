@@ -139,7 +139,7 @@ async function skillDigest(): Promise<string> {
 async function markdownHomeResponse(): Promise<Response> {
   const page = await listTracks({ limit: markdownTracksLimit });
   const tracks = page.tracks.map((track) => {
-    const line = `- ${track.artists.join(", ")} — ${track.title} (discovered ${track.addedAt.slice(0, 10)})`;
+    const line = `- ${track.artists.join(", ")} — ${track.title} (found ${track.addedAt.slice(0, 10)})`;
 
     return track.note ? `${line}\n  ${track.note.trim().replaceAll("\n", " ")}` : line;
   });
@@ -148,19 +148,19 @@ async function markdownHomeResponse(): Promise<Response> {
 
 > Drum & bass bangers from another dimension.
 
-Fluncle digs and certifies the tracks, publishes them to Spotify and Telegram, and keeps the full archive here. One selector, no team. Dates mark discovery: the day Fluncle first heard the tune, not the day it released.
+Fluncle digs and certifies the tracks, publishes them to Spotify and Telegram, and keeps the full archive here. One selector, no team. Dates mark when each was found: the day Fluncle first heard the tune, not the day it released.
 
-The collection is called Fluncle's Finest. The archive holds ${page.totalCount} certified tracks; new ones land most nights.
+The collection is called Fluncle's Findings. The archive holds ${page.totalCount} certified tracks; new ones land most nights.
 
-## Latest discoveries
+## Latest findings
 
 ${tracks.join("\n")}
 
 ## Listen
 
-- [Fluncle's Finest on Spotify](${spotifyPlaylistUrl}): the playlist itself
+- [Fluncle's Findings on Spotify](${spotifyPlaylistUrl}): the playlist itself
 - [Fluncle on Telegram](${telegramUrl}): one banger per post, most nights
-- [The archive](${siteUrl}/): every certified track with discovery dates and notes
+- [The archive](${siteUrl}/): every certified track with the date it was found and notes
 
 ## Data
 
@@ -178,12 +178,12 @@ ${tracks.join("\n")}
 - [OpenAPI spec](${siteUrl}/openapi.json): the public API as an OpenAPI 3.1 document
 - [API catalog](${siteUrl}/.well-known/api-catalog): RFC 9727 linkset
 - [Agent skills](${siteUrl}/.well-known/agent-skills/index.json): the fluncle-api skill, with digest
-- [llms.txt](${siteUrl}/llms.txt): the plain-language map of the ecosystem
+- [llms.txt](${siteUrl}/llms.txt): the plain-language map of the Galaxy
 
 ## Tools
 
 - [CLI installer](${siteUrl}/cli/latest.sh): curl -fsSL ${siteUrl}/cli/latest.sh | sh, then try fluncle recent
-- The rave terminal: ssh rave.fluncle.com, the deepest room in the ecosystem
+- The rave terminal: ssh rave.fluncle.com, the deepest room in the Galaxy
 `;
 
   return new Response(markdown, {
@@ -205,16 +205,16 @@ description: Read and contribute to Fluncle's drum & bass archive over the publi
 
 # Fluncle API
 
-Fluncle digs and certifies drum & bass bangers, publishes them to Spotify and Telegram, and keeps the archive at ${siteUrl}. One selector, no team. Dates mark discovery: the day Fluncle first heard the tune, not the day it released.
+Fluncle digs and certifies drum & bass bangers, publishes them to Spotify and Telegram, and keeps the archive at ${siteUrl}. One selector, no team. Dates mark when each was found: the day Fluncle first heard the tune, not the day it released.
 
 Base URL: \`${siteUrl}\`. Everything below returns JSON. Errors look like \`{"ok": false, "code": "...", "message": "..."}\`.
 
 ## Read the archive
 
-- \`GET /api/tracks\` lists certified tracks, newest discovery first. Query params: \`limit\` (1 to 48, default 16), \`cursor\` (opaque, from \`nextCursor\`), \`since\` and \`until\` (ISO 8601 bounds on the discovery date). Response: \`{"tracks": [...], "totalCount": n, "nextCursor": "..."}\`. Page until \`nextCursor\` disappears.
+- \`GET /api/tracks\` lists certified tracks, newest found first. Query params: \`limit\` (1 to 48, default 16), \`cursor\` (opaque, from \`nextCursor\`), \`since\` and \`until\` (ISO 8601 bounds on the date found). Response: \`{"tracks": [...], "totalCount": n, "nextCursor": "..."}\`. Page until \`nextCursor\` disappears.
 - \`GET /api/tracks/random\` returns one pick from the archive: \`{"ok": true, "track": {...}}\`.
 
-Track objects carry \`trackId\`, \`title\`, \`artists\`, \`album\`, \`albumImageUrl\`, \`note\`, \`spotifyUrl\`, \`addedAt\` (the discovery timestamp), \`addedToSpotify\`, and \`postedToTelegram\`. The \`note\` is Fluncle's own line about the tune; quote it as his.
+Track objects carry \`trackId\`, \`title\`, \`artists\`, \`album\`, \`albumImageUrl\`, \`note\`, \`spotifyUrl\`, \`addedAt\` (the timestamp it was found), \`addedToSpotify\`, and \`postedToTelegram\`. The \`note\` is Fluncle's own line about the tune; quote it as his.
 
 ## Submit a track
 
@@ -231,9 +231,9 @@ Rate limit: 5 submissions per connection per hour. Over that returns 429 with co
 
 ## Everything else
 
-- \`GET /rss.xml\`: the 25 most recent discoveries as RSS.
-- \`GET /llms.txt\`: the plain-language map of the ecosystem.
+- \`GET /rss.xml\`: the 25 most recent findings as RSS.
+- \`GET /llms.txt\`: the plain-language map of the Galaxy.
 - \`GET /openapi.json\`: this API as an OpenAPI 3.1 document.
 - \`GET /api/health\`: liveness, \`{"ok": true}\`.
-- \`ssh rave.fluncle.com\`: the rave terminal, the deepest room in the ecosystem. Bring a TTY.
+- \`ssh rave.fluncle.com\`: the rave terminal, the deepest room in the Galaxy. Bring a TTY.
 `;

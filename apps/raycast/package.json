@@ -1,6 +1,6 @@
 {
   "name": "fluncle-raycast",
-  "description": "Publish tracks to Fluncle's Finest through the Fluncle CLI.",
+  "description": "Publish tracks to Fluncle's Findings through the Fluncle CLI.",
   "license": "MIT",
   "author": "mauricekleine",
   "scripts": {
@@ -49,7 +49,7 @@
       "name": "recent-tracks",
       "title": "Recent Bangers",
       "subtitle": "Fluncle",
-      "description": "Browse the bangers Fluncle discovered recently.",
+      "description": "Browse the bangers Fluncle found recently.",
       "mode": "view",
       "keywords": [
         "archive",

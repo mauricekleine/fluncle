@@ -2,7 +2,7 @@
 
 > Drum & bass bangers from another dimension.
 
-Fluncle publishes drum & bass tracks to Fluncle's Finest on Spotify and Telegram, then shows the public archive on fluncle.com.
+Fluncle publishes drum & bass tracks to Fluncle's Findings on Spotify and Telegram, then shows the public archive on fluncle.com.
 
 ## Monorepo Layout
 
@@ -133,7 +133,7 @@ go run .
 ssh -p 2222 127.0.0.1
 ```
 
-Configuration is environment-driven: `FLUNCLE_SSH_HOST` and `FLUNCLE_SSH_PORT` (defaults `127.0.0.1:2222`), `FLUNCLE_API_URL` (defaults to production), `FLUNCLE_SSH_DATA_DIR` for generated host keys (defaults to `.local`, gitignored), and optional `FLUNCLE_GEOIP_DB` pointing at a MaxMind-compatible `.mmdb` for the connected-ravers country codes (lookups render `VOID` without it).
+Configuration is environment-driven: `FLUNCLE_SSH_HOST` and `FLUNCLE_SSH_PORT` (defaults `127.0.0.1:2222`), `FLUNCLE_API_URL` (defaults to production), `FLUNCLE_SSH_DATA_DIR` for generated host keys (defaults to `.local`, gitignored), and optional `FLUNCLE_GEOIP_DB` pointing at a MaxMind-compatible `.mmdb` for the connected-crew country codes (lookups render `VOID` without it).
 
 Checks:
 
@@ -203,7 +203,7 @@ After the first deploy, add `fluncle.com` in the Cloudflare Workers custom domai
 
 ## Social Video
 
-`packages/video` is a Remotion kit that composes per-track social videos for Fluncle's Finest: 1080×1920 vertical clips that put one banger under the burning eclipse, on-brand with DESIGN.md and VOICE.md. It is built as a kit for a future AI agent to assemble fresh scenes per track, with `NostalgicCosmos` as the exemplar composition.
+`packages/video` is a Remotion kit that composes per-track social videos for Fluncle's Findings: 1080×1920 vertical clips that put one banger under the burning eclipse, on-brand with DESIGN.md and VOICE.md. It is built as a kit for a future AI agent to assemble fresh scenes per track, with `NostalgicCosmos` as the exemplar composition.
 
 Render a preview for a track locally:
 

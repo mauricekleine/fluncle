@@ -54,9 +54,9 @@ Eight rulings. They are LAW. If a concept fights one, change the concept.
 
 3. **Vehicle diversity.** Before choosing, `ls packages/video/src/remotion/tracks/` and read the vehicle line in the most recent 2-3 archive files' header comments; do not repeat the most recent vehicle unless the music demands it. (In the last batch two of three agents independently chose the orb.)
 
-4. **Type staging is a VARIABLE.** Placement and timing of the artist mark, track line, and date are yours, chosen musically per scene — entering on a fill, riding a riser, anchored where the composition gives them room. What is LAW: legibility (use `FloatingType`), safe margins (~96px x, ~150/230px top/bottom on 1080×1920), VOICE.md for every word ("Artist — Title", "Discovered Jun 4", sentence case, no exclamation marks), and the `CloseCard` ending. The last batch placed identical text in identical spots at identical times in all three videos — that is the failure mode this rule kills.
+4. **Type staging is a VARIABLE.** Placement and timing of the artist mark, track line, and date are yours, chosen musically per scene — entering on a fill, riding a riser, anchored where the composition gives them room. What is LAW: legibility (use `FloatingType`), safe margins (~96px x, ~150/230px top/bottom on 1080×1920), VOICE.md for every word ("Artist — Title", "Found Jun 4", sentence case, no exclamation marks), and the `CloseCard` ending. The last batch placed identical text in identical spots at identical times in all three videos — that is the failure mode this rule kills.
 
-5. **Research must visibly matter.** firecrawl research yields (a) FACTS — when verified with a citable source (label, release year, album context), rendering one on screen is ENCOURAGED, not merely permitted, with the source URL in the run report; never render an unverified fact; (b) CREATIVE FUEL — the run report must name how it shaped specific visual decisions ("Armada's 'dancefloor havoc' descriptor → detonation flares on the two drops") so the operator can see the research in the pixels.
+5. **Metadata must visibly matter.** Facts come from the track's Spotify metadata, surfaced in the props file — never from web search. (a) FACTS that may render on screen: release year and label (when present in the props). They are authoritative — straight from Spotify, the source of truth — so they need no citation and carry no alias-collision risk; render only fields the props actually expose, and never invent one. Rendering a verified fact is ENCOURAGED. (b) CREATIVE FUEL that never renders as text: the artwork palette the pipeline extracts, the album and label names, the track title, and the shape of the energy curve. This shapes your vehicle, texture family, palette lean, and scene concept; your run report must name how it drove specific visual decisions ("a liquid-funk label and a drifting energy curve → a glass vehicle, fluent family") so the operator can see it in the pixels. BPM is measured by the audio pipeline (beat-grid aligned, more accurate than any metadata tempo) — that is what the vehicle syncs to; musical Key, if the props expose it, is an optional DJ touch on the overlay, never required.
 
 6. **The quad law.** Every `ShaderLayer` must drive final color AND alpha to exactly 0.0 inside its quad bounds (a circular fade in layer space covers the corners — r reaches 1.41 there). The printed-rectangle incident happened twice.
 
@@ -66,11 +66,11 @@ Eight rulings. They are LAW. If a concept fights one, change the concept.
 
 ## The constants you cannot touch
 
-Grain over the whole frame, always. Exactly one Eclipse Gold sun moment (expressed through the vehicle when it is not an orb). Oxanium for brand marks and numerals only. `Artist — Title` with the one sanctioned em dash. `Discovered Jun 4` dates (UTC, tabular, never released/added). Warm darks only. The `CloseCard` ending. Determinism: remotion seeded `random()` and frame-derived values only — never `Math.random` / `Date.now` / `new Date()`. The Retint Rule: artwork hues are minor counter-accents only; gold stays the sun.
+Grain over the whole frame, always. Exactly one Eclipse Gold sun moment (expressed through the vehicle when it is not an orb). Oxanium for brand marks and numerals only. `Artist — Title` with the one sanctioned em dash. `Found Jun 4` dates (UTC, tabular, never released/added). Warm darks only. The `CloseCard` ending. Determinism: remotion seeded `random()` and frame-derived values only — never `Math.random` / `Date.now` / `new Date()`. The Retint Rule: artwork hues are minor counter-accents only; gold stays the sun.
 
 ## References
 
-- [references/workflow.md](references/workflow.md) — the per-track runbook, end to end: trackId → props → research → concept → author → still-critique → gates → render → report. Read this when you start a video.
+- [references/workflow.md](references/workflow.md) — the per-track runbook, end to end: trackId → props → metadata → concept → author → still-critique → gates → render → report. Read this when you start a video.
 - [references/cookbook.md](references/cookbook.md) — technique, not style: fbm haze fields, ridge/contour fields, dither/halftone fronts, SDF bodies, beat-mapping patterns, the `GLSL.*` inventory, palette discipline. Worked examples cite the archive files. Read this while authoring the shader.
 
 ## Commands
@@ -88,4 +88,4 @@ Run from `packages/video` (or `bun run --cwd packages/video <script>`). Use `bun
 - **Never publish.** Rendering is local only; the artifact is the MP4 and your run report. Nothing leaves the machine.
 - **Audio: the pipeline resolver only (Deezer/iTunes).** Never source audio from YouTube or rip full tracks. No legal audio means no video; stop and report.
 - **One video per run. Never commit, push, or delete anything.**
-- **Every fact on screen has a cited source URL; every word passes VOICE.md.** Track metadata from the props file is always safe and needs no citation; an unverified fact never renders. Drum & bass aliases collide with mainstream names: when unsure, drop the fact.
+- **Every fact on screen comes from the props' Spotify metadata; every word passes VOICE.md.** Release year and label are authoritative and need no citation. Render only fields the props expose — never invent a fact, never web-search for one.

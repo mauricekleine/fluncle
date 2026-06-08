@@ -15,7 +15,7 @@ Before writing a word, fetch and read the canonical voice spec in full:
 It is short and it evolves; what it says overrides everything below. The rules that most often save you, in case the fetch fails (if it fails, fall back to these, but say so in your run report):
 
 - Email register: a letter from a bruv. Open with "Ahoy cosmonauts," close with "Happy raving," then "Fluncle". First person ("I"), no "we".
-- No exclamation marks, no marketing buzzwords, never the words "transmission", "curated", or "content".
+- No exclamation marks, no marketing buzzwords, never the words "transmission", "signal" (as identity), "curated", or "content". The collection is "Fluncle's Findings"; dates are "Found".
 - "Banger" at most once per paragraph; "track" and "tune" carry repeats.
 - Track lines are `Artist — Title` (em dash); that em dash is the only one allowed.
 - Cosmos verbs are allowed as first-person testimony ("this one teleported me to a parallel universe"), never as functional labels.

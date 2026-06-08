@@ -21,13 +21,20 @@ export default function Command() {
 
   return (
     <List isLoading={isLoading} searchBarPlaceholder="Search recent bangers">
+      <List.EmptyView
+        icon={Icon.Music}
+        title="No findings logged yet"
+        description="Quiet sector tonight."
+      />
       {tracks.map((track) => (
         <List.Item
           key={track.trackId}
           icon={getTrackIcon(track)}
           title={`${track.artists.join(", ")} — ${track.title}`}
           subtitle={track.note}
-          accessories={[{ text: formatDate(track.addedAt) }]}
+          accessories={[
+            { text: formatDate(track.addedAt), tooltip: `Found ${formatDate(track.addedAt)}` },
+          ]}
           actions={<TrackActions track={track} />}
         />
       ))}

@@ -6,8 +6,7 @@ import { siteUrl } from "../lib/fluncle-links";
 import appCss from "../styles.css?url";
 
 const title = "Fluncle: drum & bass bangers from another dimension";
-const description =
-  "Drum & bass bangers from another dimension. Fluncle digs and certifies the finest tracks, publishes them to Spotify and Telegram, and keeps the archive here.";
+const description = "Drum & bass bangers from another dimension.";
 const coverUrl = `${siteUrl}/fluncle-cover.png`;
 
 export const Route = createRootRoute({
@@ -41,7 +40,7 @@ export const Route = createRootRoute({
       {
         href: "/rss.xml",
         rel: "alternate",
-        title: "Fluncle's Finest",
+        title: "Fluncle's Findings",
         type: "application/rss+xml",
       },
     ],

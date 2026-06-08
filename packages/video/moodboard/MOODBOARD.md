@@ -4,7 +4,9 @@ Visual references for the Fluncle video direction, annotated so they read as a s
 
 ## The Retint Rule
 
-Three independent analysis passes over this board converged on one operational rule: almost every reference carries off-canon cool hues (phosphor green, RGB primaries, broadcast blue, candy pink, emerald). Steal the TECHNIQUES — halftone, dot-matrix, scanlines, line displacement, liquid gradients, gel splits, mirror tiling — and retint everything into the canon: warm dark ground, Eclipse Gold as the single light source, Re-entry Red as the heat accent, Starlight Cream as the ink. Cool hues survive only as minor counter-accents. The technique is the reference; the palette is ours.
+**The rule lives in [DESIGN.md](../../../DESIGN.md) (section 2, Named Rules) — that is the source of truth.** In short: steal the technique, recolor it to canon. Read it there; do not re-litigate it here.
+
+How it applies to this board: almost every reference below carries off-canon cool hues (phosphor green, RGB primaries, broadcast blue, candy pink, emerald). Each entry's caption names the technique to steal — halftone, dot-matrix, scanlines, line displacement, liquid gradients, gel splits, mirror tiling — and the cool palette to ignore. Whatever you sample arrives in its own colors and leaves in ours: warm dark ground, Eclipse Gold as the single light source, Re-entry Red as the heat accent, Starlight Cream as the ink. Cool hues survive only as minor counter-accents.
 
 ## Texture families
 

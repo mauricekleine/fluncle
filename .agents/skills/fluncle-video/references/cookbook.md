@@ -1,6 +1,6 @@
 # Technique cookbook
 
-Technique, not style. This teaches how to draw the things Fluncle videos are made of; the *what* is yours, chosen per track. Every pattern below cites a worked example in the archive (`packages/video/src/remotion/tracks/`) — open the file and read the shader, not just the prose. The exact `GLSL.*` signatures and the `ShaderLayer` injected header live in `packages/video/README.md`; this file assumes you have read that section.
+Technique, not style. This teaches how to draw the things Fluncle videos are made of; the _what_ is yours, chosen per track. Every pattern below cites a worked example in the archive (`packages/video/src/remotion/tracks/`) — open the file and read the shader, not just the prose. The exact `GLSL.*` signatures and the `ShaderLayer` injected header live in `packages/video/README.md`; this file assumes you have read that section.
 
 The unit of drawing is one `ShaderLayer` rendering a GLSL fragment shader. Inside a shader you get the injected uniforms (`u_time`, `u_res`, `u_progress`, `u_energy`, `u_bass`, `u_beatPulse`, `u_seed`, `u_palette[4]`) and the dither helpers (`ditherValue`, `dither8`). You spread the `GLSL.*` snippet strings ahead of `void main()` and respect their dependencies (`fbm` needs `valueNoise`; `valueNoise`/`simplexNoise`/`filmGrain` need `hash`). **At the GPU level, bake grain and Retint into the shader** (`GLSL.filmGrain`, `GLSL.paletteRamp`) — do not also wrap a shader in CSS `Grain`/`Retint`. The CSS `Grain` overlay is still the base texture for the non-shader layers over the whole frame.
 
@@ -46,18 +46,18 @@ See the `drop` / `dropRise` / `cold` scalars and the `DROP_IN`/`DROP_OUT` window
 
 Spread these strings ahead of `void main()`; mind the dependency chain. (Signatures in README.)
 
-| Snippet | Provides |
-| --- | --- |
-| `hash` | `hash21` / `hash22` / `hash13` — base for all noise. |
-| `valueNoise` | smooth bilinear `valueNoise(p) -> 0..1`. Needs `hash`. |
-| `simplexNoise` | gradient noise `simplexNoise(p) -> ~-1..1`. Needs `hash`. |
-| `fbm` | domain-rotated `fbm(p, octaves) -> 0..1`. Needs `valueNoise`. |
-| `paletteRamp` | the Retint gradient-map `paletteRamp(t) -> vec3` + `retint(src)` over `u_palette`. |
-| `polarFold` | kaleidoscope wedge fold `polarFold(uv, segments)` — the fractal vehicle. |
-| `sdf` | `sdCircle` / `sdBox` + smooth union `smin`. |
-| `filmGrain` | organic emulsion grain `filmGrain(col, uv, time, intensity)`. Needs `valueNoise`+`hash`. |
-| `vignette` | radial darkening `vignette(uv, radius, softness) -> 0..1`. |
-| `chromaticAberration` | per-channel UV offset helpers `caOffsetR` / `caOffsetB` for an edge-growing RGB split. |
+| Snippet               | Provides                                                                                 |
+| --------------------- | ---------------------------------------------------------------------------------------- |
+| `hash`                | `hash21` / `hash22` / `hash13` — base for all noise.                                     |
+| `valueNoise`          | smooth bilinear `valueNoise(p) -> 0..1`. Needs `hash`.                                   |
+| `simplexNoise`        | gradient noise `simplexNoise(p) -> ~-1..1`. Needs `hash`.                                |
+| `fbm`                 | domain-rotated `fbm(p, octaves) -> 0..1`. Needs `valueNoise`.                            |
+| `paletteRamp`         | the Retint gradient-map `paletteRamp(t) -> vec3` + `retint(src)` over `u_palette`.       |
+| `polarFold`           | kaleidoscope wedge fold `polarFold(uv, segments)` — the fractal vehicle.                 |
+| `sdf`                 | `sdCircle` / `sdBox` + smooth union `smin`.                                              |
+| `filmGrain`           | organic emulsion grain `filmGrain(col, uv, time, intensity)`. Needs `valueNoise`+`hash`. |
+| `vignette`            | radial darkening `vignette(uv, radius, softness) -> 0..1`.                               |
+| `chromaticAberration` | per-channel UV offset helpers `caOffsetR` / `caOffsetB` for an edge-growing RGB split.   |
 
 Always finish a shader with `dither8(col, uv)` to kill 8-bit banding on smooth gradients.
 

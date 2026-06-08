@@ -10,7 +10,7 @@
     "copywriting-fluncle": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/copywriting-fluncle",
       "sourceType": "local",
-      "computedHash": "245f653feb899e920cf3355a37600f5305ebe9d8a198b0b4c4b411fac77a1b9d"
+      "computedHash": "a1db7de945ffa5f5484de95d942f98cdbdcd27a9d0606542281ee8c7a22005a5"
     },
     "fluncle-goal-writer": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/goal-writer",
@@ -25,7 +25,7 @@
     "fluncle-video": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-video",
       "sourceType": "local",
-      "computedHash": "46de601f6ab31806eb83f9cbc36742d5eedaf66759143b03a85794d257f0e838"
+      "computedHash": "5f5a5811ef9769da64956a96173171e0c8592e54e9d4ba2e998e198f9b9cd5f9"
     },
     "hetzner-devbox": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/hetzner-devbox",

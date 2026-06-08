@@ -424,7 +424,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.err.Error()
 			return m, nil
 		}
-		m.message = "Received. Fluncle will give it a listen before it goes live."
+		m.message = "Logged. Fluncle will give it a listen before it goes live."
 		m.screen = screenMessage
 	case subscribeMsg:
 		m.loading = false
@@ -647,7 +647,7 @@ func (m model) View() tea.View {
 func (m model) renderMenu() string {
 	// The full menu stands ~28 rows with padding; classic terminals open at
 	// 80x24. Below 30 rows the footer compacts to single lines, and below 21
-	// the figlet yields to a one-line plate, so "Connected ravers" never falls
+	// the figlet yields to a one-line plate, so "Crew aboard" never falls
 	// under the fold. Height 0 means no WindowSizeMsg yet; render full.
 	compact := m.height > 0 && m.height < 30
 	tiny := m.height > 0 && m.height < 21
@@ -688,19 +688,19 @@ func (m model) renderFooter(compact bool) string {
 	var lines []string
 
 	if compact {
-		// One line for the discovery, time inline, no breathing rows.
-		discovered := labelStyle.Render("Last discovered: ")
+		// One line for the finding, time inline, no breathing rows.
+		found := labelStyle.Render("Last found: ")
 		if m.footer == nil {
-			discovered += labelStyle.Render("scanning the archive...")
+			found += labelStyle.Render("scanning the archive...")
 		} else {
-			discovered += rowArtistStyle.Render(artistLine(m.footer.Artists)) +
+			found += rowArtistStyle.Render(artistLine(m.footer.Artists)) +
 				rowDashStyle.Render(" — ") +
 				rowTitleStyle.Render(m.footer.Title) +
 				labelStyle.Render(" · "+relativeTime(m.footer.AddedAt))
 		}
-		lines = []string{rule, discovered}
+		lines = []string{rule, found}
 	} else {
-		lines = []string{rule, "", labelStyle.Render("Last discovered:")}
+		lines = []string{rule, "", labelStyle.Render("Last found:")}
 		if m.footer == nil {
 			lines = append(lines, labelStyle.Render("Scanning the archive..."))
 		} else {
@@ -716,16 +716,16 @@ func (m model) renderFooter(compact bool) string {
 		}
 	}
 
-	ravers := readingStyle.Render(fmt.Sprintf("%d", m.app.connectedRaverCount()))
-	raverLine := labelStyle.Render("Connected ravers: ") + ravers
+	crew := readingStyle.Render(fmt.Sprintf("%d", m.app.connectedRaverCount()))
+	crewLine := crew + labelStyle.Render(" crew aboard")
 	if countries := m.app.raverCountrySummary(); countries != "" {
-		raverLine += labelStyle.Render(" (" + countries + ")")
+		crewLine += labelStyle.Render(" (" + countries + ")")
 	}
 
 	if compact {
-		lines = append(lines, raverLine)
+		lines = append(lines, crewLine)
 	} else {
-		lines = append(lines, "", raverLine)
+		lines = append(lines, "", crewLine)
 	}
 
 	return strings.Join(lines, "\n")
@@ -755,7 +755,7 @@ func (m model) renderLatest() string {
 		return errorView("Latest bangers", m.err)
 	}
 	if len(m.tracks) == 0 {
-		return statusView("Latest bangers", "No bangers discovered yet. Quiet night in this dimension.")
+		return statusView("Latest bangers", "No findings logged yet. Quiet sector tonight.")
 	}
 
 	// Indices count down from the newest: use the API total count when available,
@@ -805,7 +805,7 @@ func (m model) renderDetail() string {
 		rowTitleStyle.Render(t.Title),
 		labelStyle.Render(artistLine(t.Artists)),
 		"",
-		labelStyle.Render("Discovered: ") + readingStyle.Render(formatDate(t.AddedAt)),
+		labelStyle.Render("Found: ") + readingStyle.Render(formatDate(t.AddedAt)),
 	}
 	if note := strings.TrimSpace(t.Note); note != "" {
 		lines = append(lines,
@@ -888,7 +888,7 @@ func (m model) renderSubscribed() string {
 
 func (m model) renderInstall() string {
 	content := []string{
-		readingStyle.Render("Browse the latest bangers, submit tracks, and dig through Fluncle's Finest from your terminal."),
+		readingStyle.Render("Browse the latest bangers, submit tracks, and dig through Fluncle's Findings from your terminal."),
 		"",
 		codeFocalStyle.Render("curl -fsSL https://www.fluncle.com/cli/latest.sh | sh"),
 		"",
@@ -913,7 +913,7 @@ func (m model) renderAbout() string {
 		return labelStyle.Render(label+": ") + readingStyle.Render(terminalLink(url, url))
 	}
 	content := []string{
-		readingStyle.Width(wrapWidth).Render("Fluncle's Finest is a drum & bass collection from another dimension. This is the ecosystem you just ssh'd into."),
+		readingStyle.Width(wrapWidth).Render("Fluncle's Findings is a drum & bass collection from another dimension. This is the Galaxy you just ssh'd into."),
 		"",
 		labelStyle.Render("Bangers reach the archive through:"),
 		readingStyle.Render("- Spotify"),
@@ -940,7 +940,7 @@ func (m model) renderMessage() string {
 	wrapWidth := clamp(m.width-4, 48, 96) - 4
 	content := []string{readingStyle.Width(wrapWidth).Render(m.message)}
 	help := helpLine("q back", "ctrl+c quit")
-	return scaffold("Received", "", content, help)
+	return scaffold("Logged", "", content, help)
 }
 
 func statusView(title, message string) string {

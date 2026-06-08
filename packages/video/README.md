@@ -1,6 +1,6 @@
 # @fluncle/video
 
-Per-track social videos for Fluncle's Finest: 1080×1920 vertical clips that put one banger under the burning eclipse. This package is two things and nothing more: the **video machinery** that every clip is built on, and the **archive** of the clips themselves. It is a near-blank canvas on purpose.
+Per-track social videos for Fluncle's Findings: 1080×1920 vertical clips that put one banger under the burning eclipse. This package is two things and nothing more: the **video machinery** that every clip is built on, and the **archive** of the clips themselves. It is a near-blank canvas on purpose.
 
 The creative doctrine — the vehicles, the texture families, type staging, the research that grounds a scene in the track — does **not** live here. It lives in the **fluncle-video skill** at [`packages/skills/fluncle-video`](../skills/fluncle-video). That skill is the guideline an agent reads before it composes; this README is the reference for the kit it composes against. Read [DESIGN.md](../../DESIGN.md) (the visual canon, the Nostalgic Cosmos) and [VOICE.md](../../VOICE.md) (the copy canon) too. This README does not duplicate any of that doctrine; when it touches creative ground it points at the skill.
 
@@ -12,7 +12,7 @@ The archive **is** the video collection. Each clip is one file:
 src/remotion/tracks/YYYYMMDD-<slug>.tsx
 ```
 
-dated by discovery day, one file per video, exporting a `React.FC<NostalgicCosmosProps>` and registered in `src/remotion/root.tsx`. Each file is **self-contained**: it inlines its own scene code — its own shaders, its own components, its own scene composition — and imports **only the core surface** (`../cosmos`, or the surviving core modules by direct path). There are no shared "vehicle" components to assemble anymore; a track owns its look top to bottom.
+dated by the day it was found, one file per video, exporting a `React.FC<NostalgicCosmosProps>` and registered in `src/remotion/root.tsx`. Each file is **self-contained**: it inlines its own scene code — its own shaders, its own components, its own scene composition — and imports **only the core surface** (`../cosmos`, or the surviving core modules by direct path). There are no shared "vehicle" components to assemble anymore; a track owns its look top to bottom.
 
 Because every clip is pure code over a deterministic props contract, the archive is **re-renderable forever**: the same `tracks/*.tsx` + the same `out/<trackId>.props.json` produce the same frames on any machine, for as long as the package builds.
 
@@ -37,7 +37,7 @@ The exemplar is `tracks/20260606-everything-in-its-right-place.tsx` (composition
 
 - **`<Grain>`** (`primitives/grain.tsx`) — animated film grain via SVG `feTurbulence`. The system base texture for non-shader layers; a non-shader frame without grain is off-brand.
 - **`<Starfield>`** (`primitives/starfield.tsx`) — the founding image's starfield, with **monotonic orbital drift**: star positions advance on a steady frame-derived orbit and never reverse. Audio may drive brightness/twinkle, **never position** — the cosmos breathes, it does not jump to the beat.
-- **`<FloatingType>`** (`primitives/floating-type.tsx`) — typography for the four sanctioned roles (`brandMark`, `trackLine`, `meta`, `body`) with a **contrast/legibility guarantee** baked in, plus the em dash in `Artist — Title`, the `Discovered Jun 4` tabular UTC date format, and the One Voice font split (Oxanium for marks/numerals, system sans for copy). It formats only what it is given; it never adds punctuation.
+- **`<FloatingType>`** (`primitives/floating-type.tsx`) — typography for the four sanctioned roles (`brandMark`, `trackLine`, `meta`, `body`) with a **contrast/legibility guarantee** baked in, plus the em dash in `Artist — Title`, the `Found Jun 4` tabular UTC date format, and the One Voice font split (Oxanium for marks/numerals, system sans for copy). It formats only what it is given; it never adds punctuation.
 - **`<CloseCard>`** (`journey/close-card.tsx`) — the mandatory close card (tagline in cream + the selector signature in the one permitted gold type moment). Drive it from the `"arrive"` phase's `phaseProgress`. Every video ends here.
 - **`paletteMix`** (`palette-mix.ts`) — bends an artwork's swatches toward the brand anchors with the **canon lock** enforced in code: the field stays Deep Field, the sun stays Eclipse Gold, the ink stays cream, and the artwork's own hues live only in the secondary swatches. A loud cover can never repaint the night (the Loadstar incident).
 - **Color/font helpers** — `hexToRgb`, `rgbToHex`, `withAlpha`, `mix`, `luminance`, `warmth`, `saturation` (`color.ts`); `OXANIUM`/`OXANIUM_STACK`/`loadOxanium` (`fonts.ts`); the `NostalgicCosmosProps`/`CosmosTrack`/`CosmosAudio`/`CosmosPalette`/`EnergySample` contract types (`types.ts`).

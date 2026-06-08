@@ -63,8 +63,11 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - MUST: Keep `AGENTS.md` principle-level. Put repeatable workflows in scripts, high-risk operator flows in runbooks, and task-specific routing in skills.
 - MUST: Keep Markdown prose paragraphs on single logical lines; do not add hard line breaks mid-sentence or reflow text just to wrap at a fixed column.
 - SHOULD: Prefer deleting, merging, or linking stale docs over adding another parallel explanation.
+- MUST: Treat `docs/*-brief.md` and `docs/ROADMAP.md` as non-canonical brainstorms and planning, never specification. Where a brief deviates from the codebase or from canon (`DESIGN.md`, `PRODUCT.md`, `VOICE.md`), the codebase and canon win; translate the idea into Fluncle's terms when picking it up.
 - [README.md](./README.md) - repo overview, package layout, local dev, deployment, CLI, Raycast, and publish flow.
 - [PRODUCT.md](./PRODUCT.md) - product purpose, brand direction, design principles, and accessibility.
+- [DESIGN.md](./DESIGN.md) - the visual canon (the Nostalgic Cosmos): palette, typography, elevation, components, named visual rules.
+- [VOICE.md](./VOICE.md) - the language canon: persona, vocabulary, named voice rules, surface registers, and copy mechanics.
 - [docs/track-submissions.md](./docs/track-submissions.md) - listener submission architecture and current implementation plan.
 - [docs/newsletter-agent.md](./docs/newsletter-agent.md) - instructions for the external Friday newsletter agent and its discovery-window contract with `/api/tracks`.
 - [packages/video/README.md](./packages/video/README.md) - Remotion video machinery + the dated, self-contained archive under `src/remotion/tracks/`: the core surface, the archive contract, and the pipeline.

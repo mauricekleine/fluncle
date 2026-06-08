@@ -352,7 +352,7 @@ Listen:
   fluncle recent [--limit 10] [--json]          The latest bangers, newest first
   fluncle list [--limit 10] [--json]            Alias for recent
   fluncle open [--limit 20] [--browser|--app]   Pick a track, open it in Spotify
-  fluncle open playlist [--browser|--app]       Open Fluncle's Finest in Spotify
+  fluncle open playlist [--browser|--app]       Open Fluncle's Findings in Spotify
   fluncle open telegram [--browser|--app]       Open the Telegram feed
   fluncle random [--json]                       The archive throws one back
   fluncle subscribe [email]                     Fresh bangers, every Friday

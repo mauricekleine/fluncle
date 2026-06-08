@@ -134,5 +134,5 @@ function formatSubmissionDetail(submission: Submission): string {
 }
 
 function formatTrackLine(submission: Submission): string {
-  return `${submission.artists.join(", ")} - ${submission.title}`;
+  return `${submission.artists.join(", ")} — ${submission.title}`;
 }

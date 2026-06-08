@@ -10,12 +10,14 @@ Read that file. It is the ground truth for the music's energy and the track's co
 
 The default clip is 20s. You may rerun with `--duration-ms <10000-30000>` when the waveform suggests a better cut. **The cut is a musical decision** (doctrine 8): read the energy curve, end on a drop or just before a transition, never mid-build. Derive the drop timestamp(s) from the energy curve peaks — those are the moments your vehicle ignites.
 
-## 2. Research (firecrawl)
+## 2. Metadata (Spotify, via the props)
 
-Search for the artist, the track, the album, and the label. You are mining two different kinds of material, and **the research must visibly matter** (doctrine 5):
+No web search. The facts come from the track's Spotify metadata, surfaced in the props file, and **the metadata must visibly matter** (doctrine 5). You are mining two kinds of material:
 
-- **FACTS** that may appear on screen: release year, label name, album context. A fact renders only if you are confident it is about this exact artist (drum & bass aliases collide with mainstream names; when unsure, drop it) and you can cite the source URL in your run report. Rendering one verified fact is **encouraged**, not merely permitted. Never render an unverified fact; the track metadata from the props file is always safe and needs no citation.
-- **CREATIVE FUEL** that never renders as text: the artwork's motifs, the label's visual culture, how people describe the tune (roller, anthem, halftime, liquid, neuro), the artist's aesthetic. This shapes your vehicle, texture family, palette lean, and scene concept. Your run report must **name how it shaped specific visual decisions** so the operator can see the research in the pixels.
+- **FACTS** that may appear on screen: release year and label, when present in the props. They are authoritative — straight from Spotify, the source of truth — so they need no citation and carry no alias-collision risk. Render only fields the props actually expose; never invent one. The track metadata (title, artists, album, Found date) is always safe.
+- **CREATIVE FUEL** that never renders as text: the artwork palette the pipeline extracts, the album and label names, the track title, and the shape of the energy curve. This shapes your vehicle, texture family, palette lean, and scene concept. Your run report must **name how it drove specific visual decisions** so the operator can see it in the pixels.
+
+BPM comes from the audio analysis already in the props — measured off the actual clip, beat-grid aligned, more accurate than any metadata tempo; that is what your vehicle syncs to. Musical **Key**, if the props expose it, is an optional DJ touch on the overlay — never required, silently omitted when absent.
 
 ## 3. Concept (vehicle FIRST)
 
@@ -73,8 +75,8 @@ Output:
 - output MP4 path and composition id;
 - the **vehicle** and the **texture family**;
 - the concept in one line;
-- **every on-screen fact with its source URL** (track metadata needs none);
-- the **research-to-pixels trace** — which creative-fuel finding drove which visual decision;
+- the **on-screen facts** (release year, label) — all from the props' Spotify metadata, so no citation is needed;
+- the **metadata-to-pixels trace** — which creative-fuel finding drove which visual decision;
 - the still paths you reviewed.
 
 The operator reviews the MP4 and publishes; you never publish anywhere.

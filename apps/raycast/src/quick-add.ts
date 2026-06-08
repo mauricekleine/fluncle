@@ -21,7 +21,7 @@ export default async function Command() {
   try {
     const result = await addTrack(spotifyUrl);
     toast.style = Toast.Style.Success;
-    toast.title = "Added to Fluncle's Finest";
+    toast.title = "Logged to Fluncle's Findings";
     toast.message = `${result.track.artists.join(", ")} — ${result.track.title}`;
     await closeMainWindow();
   } catch (error) {

@@ -29,7 +29,7 @@ export async function openRecentCommand(options: OpenRecentOptions): Promise<voi
   const tracks = await recentCommand(options.limit);
 
   if (tracks.length === 0) {
-    console.log("No bangers discovered yet.");
+    console.log("No findings logged yet.");
     return;
   }
 

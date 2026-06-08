@@ -53,7 +53,7 @@ export const Route = createFileRoute("/")({
           description: "Drum & bass bangers from another dimension.",
           genre: "Drum and Bass",
           image: `${siteUrl}/fluncle-cover.png`,
-          name: "Fluncle's Finest",
+          name: "Fluncle's Findings",
           numTracks: loaderData?.totalCount,
           sameAs: [spotifyPlaylistUrl, telegramUrl],
           track: loaderData?.tracks.map((track) => ({
@@ -160,7 +160,7 @@ function HomePage() {
   return (
     <TooltipProvider>
       <main className="min-h-screen overflow-hidden text-foreground">
-        <h1 className="sr-only">Fluncle's Finest</h1>
+        <h1 className="sr-only">Fluncle's Findings</h1>
         <section className="mx-auto grid min-h-screen w-full max-w-7xl content-center gap-y-8 px-4 py-8 sm:px-6 lg:grid-cols-[minmax(240px,320px)_minmax(0,1fr)] lg:gap-x-12 lg:gap-y-10 lg:px-8">
           <div className="grid gap-x-12 gap-y-8 lg:col-span-2 lg:grid-cols-subgrid">
             <aside className="mx-auto w-full max-w-80 lg:mx-0 lg:max-w-none">
@@ -223,20 +223,20 @@ function HomePage() {
 
             <section aria-labelledby="playlist-title" className="flex min-w-0 flex-col">
               <h2 className="sr-only" id="playlist-title">
-                Latest bangers
+                Latest findings
               </h2>
               <div className="playlist-shell flex flex-1 flex-col border border-border rounded-md">
                 <div aria-hidden="true" className="playlist-header">
                   <span aria-hidden="true" />
                   <span aria-hidden="true" />
                   <span>Track</span>
-                  <span className="hidden sm:block">Discovered</span>
+                  <span className="hidden sm:block">Found</span>
                   <span aria-hidden="true" />
                 </div>
 
                 {tracks.length === 0 && !error ? (
                   <div className="px-4 py-10 text-center text-muted-foreground">
-                    No bangers discovered yet. Quiet night in this dimension.
+                    No findings logged yet. Quiet sector tonight.
                   </div>
                 ) : undefined}
 
@@ -626,7 +626,7 @@ function SubmitTrackDialog() {
 
         {didSubmit ? (
           <p className="rounded-md border border-primary/30 bg-accent px-3 py-2 text-sm text-accent-foreground">
-            Received. Fluncle will give it a listen.
+            Logged. Fluncle will give it a listen.
           </p>
         ) : undefined}
 

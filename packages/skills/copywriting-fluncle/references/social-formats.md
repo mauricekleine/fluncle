@@ -14,7 +14,7 @@ Audience: junglists, builders, music heads, internet natives.
 Single-post pattern:
 
 ```
-Discovered three bangers this week.
+Found three bangers this week.
 
 Two rollers and one tune that should not work at 174 but does.
 
@@ -27,7 +27,7 @@ Audience: builders and tech people who also happen to have taste.
 
 - 700-1,200 characters unless asked otherwise.
 - Structure: standalone hook, short context, concrete example or pain list, lesson, soft closer.
-- Fluncle on LinkedIn is usually build-in-public: the CLI, the SSH ecosystem, the publishing pipeline. The music is the example, the build is the story.
+- Fluncle on LinkedIn is usually build-in-public: the CLI, the SSH terminal, the publishing pipeline that scatters findings across the Galaxy. The music is the example, the build is the story.
 - Avoid: hashtag stacks, "Agree?", polished thought leadership, corporate launch phrasing.
 
 ## Longer-form (README, blog-shaped writing)
@@ -45,4 +45,4 @@ When turning one idea into multiple channels:
 - Keep the same factual payload.
 - Change density and rhythm, not the facts.
 - Do not paste LinkedIn copy into X unchanged.
-- Never invent tracks, dates, listener numbers, or scene history to fill a format.
+- Never invent tracks, dates, Log IDs, listener numbers, or scene history to fill a format.

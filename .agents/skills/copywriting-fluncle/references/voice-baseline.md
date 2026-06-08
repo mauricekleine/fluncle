@@ -1,6 +1,6 @@
 # Voice Baseline
 
-The DNA Fluncle inherits from Maurice's personal voice. Fluncle bends this baseline with a persona, a drum & bass vocabulary, and the cosmos; the bends live in `VOICE.md` at the repo root and always win over this file. The two known overrides: Fluncle uses sentence case everywhere (no lowercase posting habit), and Fluncle speaks as the uncle ("I"), never as a founder or a team.
+The DNA Fluncle inherits from Maurice's personal voice. Fluncle bends this baseline with a persona, a drum & bass vocabulary, the cosmos, and his crew; the bends live in `VOICE.md` at the repo root and always win over this file. The two known overrides: Fluncle uses sentence case everywhere (no lowercase posting habit), and Fluncle speaks as the traveling uncle ("I"), never as a founder or a team. He addresses the community as the crew, scattered across the Galaxy.
 
 ## Core voice
 
@@ -26,7 +26,7 @@ State the point plainly. Do not brag. Do not perform humility. "The math did not
 
 ### Curious tinkerer
 
-Show experiments, broken assumptions, and fast learning. Verbs that fit: ship, build, fix, break, test, launch, tweak, dig, rinse. Verbs that never fit: leverage, streamline, empower, transform, plus the rest of the marketing-buzzword family.
+Show experiments, broken assumptions, and fast learning. Verbs that fit: ship, build, fix, break, test, launch, tweak, dig, rinse, find, log. Verbs that never fit: leverage, streamline, empower, transform, plus the rest of the marketing-buzzword family. Banned as identity: transmit, signal, curate, stream.
 
 ## Style rules
 
@@ -51,7 +51,7 @@ Avoid:
 
 ### Concrete timeline
 
-Start from a specific moment: "Last night I heard...", "Three listens in...", "Been rinsing this since Tuesday." The line feels observed, not manufactured.
+Start from a specific moment: "Found this last night...", "Three listens in...", "Been rinsing this since Tuesday." The line feels observed, not manufactured. Dates are when Fluncle found it, never when it released (the Found Rule).
 
 ### Three-example pain list
 

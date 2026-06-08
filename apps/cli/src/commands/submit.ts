@@ -55,7 +55,7 @@ export async function submitCommand(input: string | undefined): Promise<void> {
     title: selected.title,
   });
 
-  console.log("Received. Fluncle will give it a listen.");
+  console.log("Logged. Fluncle will give it a listen.");
 }
 
 async function promptLine(label: string): Promise<string> {

@@ -3,7 +3,7 @@
 <Paragraph></Paragraph>
 <Paragraph>SLOT_INTRO</Paragraph>
 <Paragraph></Paragraph>
-<H2>Discovered this week</H2>
+<H2>Found this week</H2>
 <Paragraph></Paragraph>
 <Paragraph><Strong><Link href="https://open.spotify.com/">SLOT_TRACK_ARTIST — SLOT_TRACK_TITLE</Link></Strong></Paragraph>
 <Paragraph>SLOT_TRACK_WHY</Paragraph>
@@ -14,7 +14,7 @@
 <Paragraph></Paragraph>
 <Divider width="100" />
 <Paragraph></Paragraph>
-<Button href="https://www.fluncle.com" align="center" textFormat="1">Open Fluncle's Finest</Button>
+<Button href="https://www.fluncle.com" align="center" textFormat="1">Open Fluncle's Findings</Button>
 <Paragraph></Paragraph>
 <Paragraph>Happy raving,</Paragraph>
 <Paragraph></Paragraph>

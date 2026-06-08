@@ -294,7 +294,7 @@
         "summary": "Liveness probe",
         "responses": {
           "200": {
-            "description": "The ecosystem is up.",
+            "description": "The Galaxy is up.",
             "content": {
               "application/json": {
                 "schema": {

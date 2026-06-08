@@ -5,7 +5,7 @@ const notePrefix = "Why I'm playing it:";
 
 export function formatTelegramMessage(track: TrackMetadata, note?: string): string {
   const artistLine = `${track.artists.join(", ")} — ${track.title}`;
-  const lines = [`🛸 Fluncle's Finest`, "", artistLine];
+  const lines = [`🛸 Fluncle's Findings`, "", artistLine];
 
   if (note?.trim()) {
     lines.push(`${notePrefix} ${note.trim()}`);
