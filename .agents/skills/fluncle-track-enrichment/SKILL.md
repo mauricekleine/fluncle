@@ -34,19 +34,20 @@ The analysis script (`scripts/analyze-track.ts`) is **self-contained** — zero 
    bun scripts/analyze-track.ts --artist "<artist>" --title "<title>" [--isrc "<isrc>"]
    ```
 
-   The output: `{ bpm, key, keyConfidence, features, suggestedTags, tagsSource }`. `key` is `null` when confidence is low (atonal tracks key weakly — better null than wrong). `suggestedTags` is a **best guess** from the audio (may be empty); `features` is the raw vector.
+   The output: `{ bpm, bpmConfidence, key, keyConfidence, features, suggestedTags, tagsSource, previews }`. It resolves **multiple** previews (Deezer + iTunes are often different 30s windows of the song) and keeps the most-confident read per field. Both `bpm` and `key` are `null` when confidence is low — better null than wrong (e.g. a beatless build-up preview, or an atonal track). `suggestedTags` is a **best guess** from the audio (may be empty); `features` is the raw vector.
 
 3. **Write it back.** Use the analysis output:
 
    ```
    fluncle admin track update <trackId> \
-     --bpm <bpm> \
+     [--bpm <bpm>] \
      [--key "<key>"] \
      [--tag <tag> ...] --tag-source auto \
      --features '<features-json>' \
      --status done
    ```
 
+   - Pass `--bpm` only if the analysis returned a non-null bpm (syncopated/build-up previews can't be measured — better null than a wrong guess).
    - Pass `--key` only if the analysis returned a non-null key.
    - Pass each `suggestedTags` entry as a `--tag`, with **`--tag-source auto`** (these are audio-derived guesses). If `suggestedTags` is empty, omit tags. **Manual tags always win** — the server will not let an `auto` write overwrite an operator's `manual` tags.
    - Always pass `--features` (the JSON vector) — it is the training data for the future sub-genre classifier.

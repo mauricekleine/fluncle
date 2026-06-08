@@ -25,7 +25,7 @@
     "fluncle-track-enrichment": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-track-enrichment",
       "sourceType": "local",
-      "computedHash": "c799a8d6d8520c19d54f7f5721b6d1bb096b4ea48f34684b717b2714a2283a84"
+      "computedHash": "469020835ecf64e863c658724c355bc25a03627947f65c3009a093373df486b0"
     },
     "hetzner-devbox": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/hetzner-devbox",

@@ -45,7 +45,11 @@ if (!artist || !title) {
 const log = (message: string) => console.error(`[analyze] ${message}`);
 
 // ---------------------------------------------------------------------------
-// Preview resolution (Deezer by ISRC → Deezer search → iTunes) — HTTP only.
+// Preview resolution (Deezer by ISRC + Deezer search + iTunes) — HTTP only.
+// We gather ALL candidates rather than first-hit: the platforms often return
+// DIFFERENT 30s windows of the same track (Deezer the intro, iTunes the drop).
+// Analyzing each and keeping the most-confident read per field beats betting on
+// one clip that might be a beatless build-up.
 // ---------------------------------------------------------------------------
 
 type Preview = { source: string; url: string };
@@ -54,15 +58,22 @@ function normalize(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-async function resolvePreview(): Promise<Preview | undefined> {
+async function resolvePreviews(): Promise<Preview[]> {
+  const found: Preview[] = [];
+  const push = (source: string, url: string | undefined | null) => {
+    if (url && !found.some((p) => p.url === url)) {
+      found.push({ source, url });
+    }
+  };
+
   // 1. Deezer by ISRC — the most precise (exact recording).
   if (isrc) {
     try {
       const response = await fetch(`https://api.deezer.com/track/isrc:${encodeURIComponent(isrc)}`);
       const track = (await response.json()) as { error?: unknown; preview?: string };
 
-      if (!track.error && track.preview) {
-        return { source: "deezer:isrc", url: track.preview };
+      if (!track.error) {
+        push("deezer:isrc", track.preview);
       }
     } catch {
       // fall through
@@ -76,16 +87,12 @@ async function resolvePreview(): Promise<Preview | undefined> {
     const body = (await response.json()) as {
       data?: Array<{ artist?: { name?: string }; preview?: string; title?: string }>;
     };
-    const hit = (body.data ?? []).find((item) => item.preview);
-
-    if (hit?.preview) {
-      return { source: "deezer:search", url: hit.preview };
-    }
+    push("deezer:search", (body.data ?? []).find((item) => item.preview)?.preview);
   } catch {
     // fall through
   }
 
-  // 3. iTunes search fallback.
+  // 3. iTunes — usually a different window of the song than Deezer.
   try {
     const term = encodeURIComponent(`${artist} ${title}`);
     const response = await fetch(
@@ -97,15 +104,12 @@ async function resolvePreview(): Promise<Preview | undefined> {
     const hit = (body.results ?? []).find(
       (item) => item.previewUrl && normalize(item.artistName ?? "").includes(normalize(artist)),
     );
-
-    if (hit?.previewUrl) {
-      return { source: "itunes", url: hit.previewUrl };
-    }
+    push("itunes", hit?.previewUrl);
   } catch {
     // fall through
   }
 
-  return undefined;
+  return found;
 }
 
 // ---------------------------------------------------------------------------
@@ -358,35 +362,161 @@ function estimateKey(chroma: number[]): { confidence: number; key: string } {
 // ---------------------------------------------------------------------------
 
 const HOP_MS = 50;
+const BPM_WINDOW_S = 12; // analyze the busiest contiguous stretch, not the whole clip
+const BPM_CONFIDENCE_FLOOR = 0.15; // normalized autocorr peak; below this → null
+const BASS_CUTOFF_HZ = 150; // one-pole split: isolate the kick from pads/melody
+const MID_CUTOFF_HZ = 2000;
 
-function estimateBpm(samples: Float32Array): { bpm: number; onsetRate: number } {
+// One-pole low-pass coefficient for a given cutoff.
+function lowpassAlpha(cutoffHz: number, sampleRate: number): number {
+  const dt = 1 / sampleRate;
+  const rc = 1 / (2 * Math.PI * cutoffHz);
+
+  return dt / (rc + dt);
+}
+
+// Octave-fold a raw tempo into the D&B band — WITHOUT clamping. Returns the
+// in-band tempo, or null when no ×2^k of it lands in [160,185]. A tempo that
+// can't fold is itself a low-confidence signal: better null than a fake number
+// (the old code clamped such values to exactly 160, which read as "confident").
+function foldToBand(bpm: number): number | null {
+  for (const m of [1, 2, 0.5, 4, 0.25]) {
+    const c = bpm * m;
+
+    if (c >= 160 && c <= 185) {
+      return c;
+    }
+  }
+
+  return null;
+}
+
+function estimateBpm(samples: Float32Array): {
+  bpm: number | null;
+  bpmConfidence: number;
+  onsetRate: number;
+} {
   const hopSamples = Math.max(1, Math.round((HOP_MS / 1000) * SAMPLE_RATE));
   const hops = Math.floor(samples.length / hopSamples);
-  const energy = new Float32Array(hops);
+
+  // Split into bass/mid/high via one-pole filters (per-hop RMS). The kick lives
+  // in the bass band, so a band-summed onset envelope catches the beat even when
+  // pads dominate total energy — the trick the video pipeline uses to lock onto
+  // beats that a full-spectrum envelope misses entirely.
+  const aBass = lowpassAlpha(BASS_CUTOFF_HZ, SAMPLE_RATE);
+  const aMid = lowpassAlpha(MID_CUTOFF_HZ, SAMPLE_RATE);
+  let lpBass = 0;
+  let lpMid = 0;
+
+  const bass = new Float32Array(hops);
+  const mid = new Float32Array(hops);
+  const high = new Float32Array(hops);
 
   for (let h = 0; h < hops; h++) {
-    let sum = 0;
+    let sBass = 0;
+    let sMid = 0;
+    let sHigh = 0;
+    const start = h * hopSamples;
 
     for (let i = 0; i < hopSamples; i++) {
-      const x = samples[h * hopSamples + i] ?? 0;
-      sum += x * x;
+      const x = samples[start + i] ?? 0;
+      lpBass += aBass * (x - lpBass);
+      lpMid += aMid * (x - lpMid);
+      const bassV = lpBass;
+      const midV = lpMid - lpBass;
+      const highV = x - lpMid;
+      sBass += bassV * bassV;
+      sMid += midV * midV;
+      sHigh += highV * highV;
     }
 
-    energy[h] = Math.sqrt(sum / hopSamples);
+    bass[h] = Math.sqrt(sBass / hopSamples);
+    mid[h] = Math.sqrt(sMid / hopSamples);
+    high[h] = Math.sqrt(sHigh / hopSamples);
   }
 
-  // Half-wave-rectified energy delta = onset envelope.
+  // Band-summed, half-wave-rectified onset envelope.
   const env = new Float32Array(hops);
-  let mean = 0;
 
   for (let h = 1; h < hops; h++) {
-    env[h] = Math.max(0, energy[h] - energy[h - 1]);
-    mean += env[h];
+    env[h] =
+      Math.max(0, bass[h] - bass[h - 1]) +
+      Math.max(0, mid[h] - mid[h - 1]) +
+      Math.max(0, high[h] - high[h - 1]);
   }
 
-  mean /= Math.max(1, hops);
+  // Onset rate over the whole clip (busy-ness; jungle reads high).
+  let envMean = 0;
 
-  const centered = env.map((value) => value - mean);
+  for (let h = 0; h < hops; h++) {
+    envMean += env[h];
+  }
+
+  envMean /= Math.max(1, hops);
+  const envStd = Math.sqrt(env.reduce((s, v) => s + (v - envMean) ** 2, 0) / Math.max(1, hops));
+  const onsetThreshold = envMean + 0.6 * envStd;
+  let onsets = 0;
+
+  for (let h = 1; h < env.length - 1; h++) {
+    if (env[h] > onsetThreshold && env[h] >= env[h - 1] && env[h] >= env[h + 1]) {
+      onsets++;
+    }
+  }
+
+  const onsetRate = Number((onsets / Math.max(1e-6, (hops * HOP_MS) / 1000)).toFixed(2));
+
+  // Energy window: previews often open on a beatless build-up. Slide a window and
+  // score it by onset energy + a bass weight, so it lands on the section that has
+  // the kick rather than a busy hi-hat fill or a pad swell.
+  const winHops = Math.min(hops, Math.round((BPM_WINDOW_S * 1000) / HOP_MS));
+  let winStart = 0;
+
+  if (hops > winHops) {
+    let envMax = 1e-9;
+    let bassMax = 1e-9;
+
+    for (let h = 0; h < hops; h++) {
+      if (env[h] > envMax) {
+        envMax = env[h];
+      }
+
+      if (bass[h] > bassMax) {
+        bassMax = bass[h];
+      }
+    }
+
+    let onsetRun = 0;
+    let bassRun = 0;
+
+    for (let h = 0; h < winHops; h++) {
+      onsetRun += env[h] / envMax;
+      bassRun += bass[h] / bassMax;
+    }
+
+    let bestScore = onsetRun + 2 * bassRun;
+
+    for (let h = winHops; h < hops; h++) {
+      onsetRun += (env[h] - env[h - winHops]) / envMax;
+      bassRun += (bass[h] - bass[h - winHops]) / bassMax;
+      const score = onsetRun + 2 * bassRun;
+
+      if (score > bestScore) {
+        bestScore = score;
+        winStart = h - winHops + 1;
+      }
+    }
+  }
+
+  const win = env.subarray(winStart, winStart + winHops);
+  let winMean = 0;
+
+  for (const v of win) {
+    winMean += v;
+  }
+
+  winMean /= Math.max(1, win.length);
+  const centered = Float64Array.from(win, (v) => v - winMean);
+
   const bpmToLag = (bpm: number) => (60 / bpm) * (1000 / HOP_MS);
   const lagMin = Math.floor(bpmToLag(190));
   const lagMax = Math.ceil(bpmToLag(70));
@@ -401,6 +531,7 @@ function estimateBpm(samples: Float32Array): { bpm: number; onsetRate: number } 
     return acc;
   };
 
+  const energy0 = autocorr(0); // zero-lag = total windowed onset energy
   let bestLag = lagMin;
   let bestScore = -Infinity;
 
@@ -427,30 +558,15 @@ function estimateBpm(samples: Float32Array): { bpm: number; onsetRate: number } 
     }
   }
 
-  let bpm = (60 * (1000 / HOP_MS)) / refined;
-
-  while (bpm < 160) {
-    bpm *= 2;
-  }
-
-  while (bpm > 185) {
-    bpm /= 2;
-  }
-
-  // Onset rate: peaks above a threshold per second (busy-ness; jungle reads high).
-  const std = Math.sqrt(centered.reduce((s, v) => s + v * v, 0) / Math.max(1, centered.length));
-  const threshold = mean + 0.6 * std;
-  let onsets = 0;
-
-  for (let h = 1; h < env.length - 1; h++) {
-    if (env[h] > threshold && env[h] >= env[h - 1] && env[h] >= env[h + 1]) {
-      onsets++;
-    }
-  }
+  // Confidence = how strongly the beat period stands out (normalized peak).
+  const confidence = energy0 > 0 ? Math.max(0, autocorr(bestLag) / energy0) : 0;
+  const folded = foldToBand((60 * (1000 / HOP_MS)) / refined);
+  const reliable = folded !== null && confidence >= BPM_CONFIDENCE_FLOOR;
 
   return {
-    bpm: Number(Math.min(185, Math.max(160, bpm)).toFixed(2)),
-    onsetRate: Number((onsets / ((hops * HOP_MS) / 1000)).toFixed(2)),
+    bpm: reliable && folded !== null ? Number(folded.toFixed(2)) : null,
+    bpmConfidence: Number(confidence.toFixed(3)),
+    onsetRate,
   };
 }
 
@@ -482,40 +598,83 @@ function suggestTags(s: Spectral, onsetRate: number): string[] {
 // Run
 // ---------------------------------------------------------------------------
 
-log(`resolving preview for ${artist} — ${title}`);
-const preview = await resolvePreview();
+const KEY_CONFIDENCE_FLOOR = 0.6; // below this, the key is unreliable → null
 
-if (!preview) {
+type PreviewAnalysis = {
+  key: { confidence: number; key: string };
+  source: string;
+  spec: Spectral;
+  tempo: { bpm: number | null; bpmConfidence: number; onsetRate: number };
+};
+
+log(`resolving previews for ${artist} — ${title}`);
+const previews = await resolvePreviews();
+
+if (previews.length === 0) {
   console.error("[analyze] no preview found — cannot analyze");
   process.exit(2);
 }
 
-log(`preview: ${preview.source}`);
-const samples = await loadSamples(preview.url);
-log(`decoded ${(samples.length / SAMPLE_RATE).toFixed(1)}s @ ${SAMPLE_RATE}Hz`);
+log(`found ${previews.length} preview(s): ${previews.map((p) => p.source).join(", ")}`);
 
-const spec = spectral(samples);
-const { confidence, key } = estimateKey(spec.chroma);
-const { bpm, onsetRate } = estimateBpm(samples);
-const suggestedTags = suggestTags(spec, onsetRate);
+// Analyze every window. One clip may be a beatless build-up while another holds
+// the drop — so we measure each and keep the most-confident read per field.
+const analyses: PreviewAnalysis[] = [];
 
-// Key only above a confidence floor — atonal neuro keys weakly; better null.
-const KEY_CONFIDENCE_FLOOR = 0.6;
-const reliableKey = confidence >= KEY_CONFIDENCE_FLOOR ? key : null;
+for (const preview of previews) {
+  try {
+    const samples = await loadSamples(preview.url);
+    const spec = spectral(samples);
+    const key = estimateKey(spec.chroma);
+    const tempo = estimateBpm(samples);
+    log(
+      `${preview.source} (${(samples.length / SAMPLE_RATE).toFixed(1)}s): bpm ${tempo.bpm ?? "null"} (conf ${tempo.bpmConfidence}), key ${key.key} (conf ${key.confidence})`,
+    );
+    analyses.push({ key, source: preview.source, spec, tempo });
+  } catch (error) {
+    log(`${preview.source}: skipped — ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+if (analyses.length === 0) {
+  console.error("[analyze] every preview failed to decode — cannot analyze");
+  process.exit(2);
+}
+
+// The most beat-clear window (highest bpmConfidence) is the most rhythmically
+// defined section, so its timbre best characterises the sub-genre — read the
+// feature vector from it. BPM = the most confident NON-NULL read; key = the most
+// confident read anywhere (key is a global property, section-independent).
+const primary = [...analyses].sort((a, b) => b.tempo.bpmConfidence - a.tempo.bpmConfidence)[0];
+const bestBpm = [...analyses]
+  .sort((a, b) => b.tempo.bpmConfidence - a.tempo.bpmConfidence)
+  .find((a) => a.tempo.bpm !== null);
+const bestKey = [...analyses].sort((a, b) => b.key.confidence - a.key.confidence)[0];
+
+const reliableKey = bestKey.key.confidence >= KEY_CONFIDENCE_FLOOR ? bestKey.key.key : null;
+const suggestedTags = suggestTags(primary.spec, primary.tempo.onsetRate);
 
 const output = {
   artist,
-  bpm,
+  bpm: bestBpm?.tempo.bpm ?? null,
+  bpmConfidence: bestBpm?.tempo.bpmConfidence ?? primary.tempo.bpmConfidence,
+  bpmSource: bestBpm?.source ?? null,
   features: {
-    centroidHz: spec.centroidHz,
-    highRatio: spec.highRatio,
-    midFlatness: spec.midFlatness,
-    onsetRate,
-    subBassRatio: spec.subBassRatio,
+    centroidHz: primary.spec.centroidHz,
+    highRatio: primary.spec.highRatio,
+    midFlatness: primary.spec.midFlatness,
+    onsetRate: primary.tempo.onsetRate,
+    subBassRatio: primary.spec.subBassRatio,
   },
   key: reliableKey,
-  keyConfidence: confidence,
-  preview,
+  keyConfidence: bestKey.key.confidence,
+  keySource: reliableKey ? bestKey.source : null,
+  previews: analyses.map((a) => ({
+    bpm: a.tempo.bpm,
+    bpmConfidence: a.tempo.bpmConfidence,
+    keyConfidence: a.key.confidence,
+    source: a.source,
+  })),
   suggestedTags,
   tagsSource: "auto",
   title,
