@@ -36,7 +36,9 @@ const title = arg("title");
 const isrc = arg("isrc");
 
 if (!artist || !title) {
-  console.error('usage: bun analyze-track.ts --artist "<artist>" --title "<title>" [--isrc <isrc>]');
+  console.error(
+    'usage: bun analyze-track.ts --artist "<artist>" --title "<title>" [--isrc <isrc>]',
+  );
   process.exit(1);
 }
 
@@ -86,7 +88,9 @@ async function resolvePreview(): Promise<Preview | undefined> {
   // 3. iTunes search fallback.
   try {
     const term = encodeURIComponent(`${artist} ${title}`);
-    const response = await fetch(`https://itunes.apple.com/search?term=${term}&media=music&limit=8`);
+    const response = await fetch(
+      `https://itunes.apple.com/search?term=${term}&media=music&limit=8`,
+    );
     const body = (await response.json()) as {
       results?: Array<{ artistName?: string; previewUrl?: string; trackName?: string }>;
     };

@@ -25,12 +25,7 @@
     "fluncle-track-enrichment": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-track-enrichment",
       "sourceType": "local",
-      "computedHash": "f130a96486b4c2cb085cba9714f2476cfc8891c516110e8a3967ae981d21f755"
-    },
-    "fluncle-video": {
-      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-video",
-      "sourceType": "local",
-      "computedHash": "5f5a5811ef9769da64956a96173171e0c8592e54e9d4ba2e998e198f9b9cd5f9"
+      "computedHash": "c799a8d6d8520c19d54f7f5721b6d1bb096b4ea48f34684b717b2714a2283a84"
     },
     "hetzner-devbox": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/hetzner-devbox",

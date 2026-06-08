@@ -16,6 +16,11 @@ export type RecentTrack = {
   popularity?: number;
   previewUrl?: string;
   tags?: string[];
+  bpm?: number;
+  key?: string;
+  enrichmentStatus?: string;
+  tagsSource?: string;
+  videoUrl?: string;
   addedToSpotify: boolean;
   postedToTelegram: boolean;
 };
@@ -37,6 +42,11 @@ type TracksResponse = {
     popularity?: number;
     previewUrl?: string;
     tags?: string[];
+    bpm?: number;
+    key?: string;
+    enrichmentStatus?: string;
+    tagsSource?: string;
+    videoUrl?: string;
     addedToSpotify?: boolean;
     postedToTelegram?: boolean;
   }>;
@@ -54,8 +64,11 @@ export async function recentCommand(limit: number): Promise<RecentTrack[]> {
       album: track.album,
       albumImageUrl: track.albumImageUrl,
       artists: track.artists,
+      bpm: track.bpm,
       durationMs: track.durationMs,
+      enrichmentStatus: track.enrichmentStatus,
       isrc: track.isrc,
+      key: track.key,
       label: track.label,
       logId: track.logId,
       note: track.note,
@@ -64,8 +77,10 @@ export async function recentCommand(limit: number): Promise<RecentTrack[]> {
       previewUrl: track.previewUrl,
       spotifyUrl: track.spotifyUrl,
       tags: track.tags,
+      tagsSource: track.tagsSource,
       title: track.title,
       trackId: track.trackId,
+      videoUrl: track.videoUrl,
     };
   });
 }
