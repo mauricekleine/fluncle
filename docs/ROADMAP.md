@@ -30,6 +30,10 @@ _Unsorted below — bigger arcs and reference detail. The build sequencing lives
 
 The Friday newsletter agent ([docs/newsletter-agent.md](./newsletter-agent.md)) exists on Spinup — the "Fluncle's Newsletter" agent the enrichment agent was modelled on — but is **stopped and not fully configured**. To bring it live: enable its capabilities (the `loops` + `firecrawl` CLIs) with their secrets bound, confirm the core instructions, and wire a **schedule** so it runs each Friday. It reads the discovery window from `/api/tracks` and sends via Loops. Dry-run one issue end-to-end before letting it send. Until then, no Friday send happens from the agent.
 
+## Track add — ISRC fallback (prevents Log ID stragglers)
+
+The Log ID seeds from the recording's ISRC (falling back to the Spotify id). When Spotify's track metadata omits the ISRC at add time, the track stores a null ISRC — and if it never gets a Log ID, it shows as a bare `#NN` ordinal instead of a coordinate (e.g. Dawn Wall — Spears, backfilled by hand from Deezer's `GBIGR1531001` → `009.7.6X`). Root-cause fix: in the add flow, when Spotify returns no ISRC, look it up from Deezer (search → `/track/{id}` carries the ISRC) before computing the Log ID and enriching, so every finding stays ISRC-seeded and coordinate-bearing. (Also: the generic `track update` admin path can't set `isrc`/`logId` today — add it there too, with Log ID auto-gen when missing, so future stragglers are fixable without a direct DB write.)
+
 ## TikTok auto-pipeline (the capstone)
 
 The full vision: "Maurice discovers bangers, Fluncle does everything else." Add a track via `ssh rave.fluncle.com`, and the system resolves metadata, resolves a legal preview, analyzes the audio, renders a 9:16 video, writes a caption, and pushes a TikTok **draft** — fully automatic. The only human steps stay manual on purpose: attach the official TikTok sound (the pipeline suggests the start offset from the drop analysis), then publish. That keeps all music licensing inside TikTok's ecosystem — preview audio is for analysis only, never uploaded.
