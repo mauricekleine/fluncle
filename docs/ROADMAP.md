@@ -26,6 +26,10 @@ The active work: the async enrichment half of the [track lifecycle](./track-life
 
 _Unsorted below — bigger arcs and reference detail. The build sequencing lives in **Now** above._
 
+## Newsletter agent (Spinup) — not yet live
+
+The Friday newsletter agent ([docs/newsletter-agent.md](./newsletter-agent.md)) exists on Spinup — the "Fluncle's Newsletter" agent the enrichment agent was modelled on — but is **stopped and not fully configured**. To bring it live: enable its capabilities (the `loops` + `firecrawl` CLIs) with their secrets bound, confirm the core instructions, and wire a **schedule** so it runs each Friday. It reads the discovery window from `/api/tracks` and sends via Loops. Dry-run one issue end-to-end before letting it send. Until then, no Friday send happens from the agent.
+
 ## TikTok auto-pipeline (the capstone)
 
 The full vision: "Maurice discovers bangers, Fluncle does everything else." Add a track via `ssh rave.fluncle.com`, and the system resolves metadata, resolves a legal preview, analyzes the audio, renders a 9:16 video, writes a caption, and pushes a TikTok **draft** — fully automatic. The only human steps stay manual on purpose: attach the official TikTok sound (the pipeline suggests the start offset from the drop analysis), then publish. That keeps all music licensing inside TikTok's ecosystem — preview audio is for analysis only, never uploaded.
