@@ -227,7 +227,7 @@ function HomePage() {
               </h2>
               <div className="playlist-shell flex flex-1 flex-col border border-border rounded-md">
                 <div aria-hidden="true" className="playlist-header">
-                  <span aria-hidden="true" />
+                  <span>Log ID</span>
                   <span aria-hidden="true" />
                   <span>Track</span>
                   <span className="hidden sm:block">Found</span>
@@ -807,7 +807,9 @@ function TrackRow({ track, trackNumber }: { track: Track; trackNumber: number })
         rel="noreferrer"
         target="_blank"
       >
-        <span className="track-index">#{trackNumber.toString().padStart(2, "0")}</span>
+        <span className="track-log-id">
+          {track.logId ?? `#${trackNumber.toString().padStart(2, "0")}`}
+        </span>
         {track.albumImageUrl ? (
           <img alt="" className="track-artwork" loading="lazy" src={track.albumImageUrl} />
         ) : (
@@ -820,13 +822,16 @@ function TrackRow({ track, trackNumber }: { track: Track; trackNumber: number })
           <span className="track-artist block text-pretty [overflow-wrap:anywhere]">
             {track.artists.join(", ")}
           </span>
+          {track.label ? <span className="track-label block truncate">{track.label}</span> : null}
         </span>
-        <time
-          className="track-date hidden justify-self-end text-right sm:block"
-          dateTime={track.addedAt}
-        >
-          {formatDate(track.addedAt)}
-        </time>
+        <span className="track-meta hidden justify-self-end text-right sm:grid">
+          <time className="track-date" dateTime={track.addedAt}>
+            {formatDate(track.addedAt)}
+          </time>
+          {track.durationMs ? (
+            <span className="track-duration">{formatDuration(track.durationMs)}</span>
+          ) : null}
+        </span>
         <CaretRightIcon
           aria-hidden="true"
           className="text-muted-foreground transition-transform duration-150 ease-out group-hover/track:translate-x-0.5 group-focus-visible/track:translate-x-0.5"
@@ -836,6 +841,14 @@ function TrackRow({ track, trackNumber }: { track: Track; trackNumber: number })
       </a>
     </li>
   );
+}
+
+function formatDuration(durationMs: number): string {
+  const totalSeconds = Math.round(durationMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
 function formatDate(value: string): string {

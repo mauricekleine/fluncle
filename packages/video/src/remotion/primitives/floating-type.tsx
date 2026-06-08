@@ -4,7 +4,7 @@ import { OXANIUM_STACK } from "../fonts";
 import { withAlpha } from "../color";
 import { type CosmosTrack } from "../types";
 
-export type FloatingTypeVariant = "brandMark" | "trackLine" | "meta" | "body";
+export type FloatingTypeVariant = "brandMark" | "trackLine" | "meta" | "body" | "logId";
 
 // --- The contrast guarantee (the video sibling of DESIGN.md's Legible Sky Rule)
 //
@@ -110,10 +110,16 @@ export type FloatingTypeProps = {
   // --- variant data ---
   /** brandMark: the wordmark text. Default "Fluncle". */
   mark?: string;
-  /** trackLine / meta: the track to format. */
-  track?: Pick<CosmosTrack, "title" | "artists" | "discoveredAt">;
+  /** trackLine / meta / logId: the track to format. */
+  track?: Pick<CosmosTrack, "title" | "artists" | "discoveredAt" | "logId">;
   /** body: free text (sentence case, no exclamation marks per VOICE.md). */
   text?: string;
+  /**
+   * logId: prefix the coordinate with the `fluncle://` URI scheme. Default
+   * false — the bare coordinate (`007.8.1B`) reads cleanest as a telemetry
+   * stamp; both forms are sanctioned (VOICE.md §6).
+   */
+  uri?: boolean;
 };
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -139,6 +145,10 @@ const formatDiscovered = (iso: string): string => {
  * - trackLine renders `Artist — Title` with an em dash, the ONLY sanctioned em
  *   dash in the system. Multiple artists join with ", ".
  * - meta renders the "Found Jun 4" found date, tabular (The Found Rule).
+ * - logId renders the finding's coordinate (`007.8.1B`, or `fluncle://007.8.1B`
+ *   with `uri`) as recovered telemetry: Oxanium tabular, tracked out, dimmed to
+ *   Stardust so it stays subordinate to the music (DESIGN.md's Tabular Rule,
+ *   VOICE.md §3/§6).
  * - Sentence case by default; no exclamation marks anywhere (The Dry Rule). This
  *   component never adds punctuation; it only formats what it is given.
  *
@@ -156,6 +166,7 @@ export const FloatingType: React.FC<FloatingTypeProps> = ({
   mark = "Fluncle",
   track,
   text,
+  uri = false,
 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
@@ -211,6 +222,23 @@ export const FloatingType: React.FC<FloatingTypeProps> = ({
       letterSpacing: "-0.02em",
     };
     content = track ? formatDiscovered(track.discoveredAt) : "";
+  } else if (variant === "logId") {
+    // The finding's coordinate, set as recovered telemetry: Oxanium tabular so
+    // it never jitters (DESIGN.md's Tabular Rule), tracked out a touch like a
+    // machine designation, dimmed to Stardust so it stays subordinate to the
+    // music and the One Sun. Shown bare (`007.8.1B`) by default; `fluncle://`
+    // is the canonical URI — both sanctioned (VOICE.md §6).
+    size = fontSize ?? 22;
+    const coord = track?.logId ?? "";
+    glyph = {
+      color: color ?? colors.stardust,
+      fontFamily: OXANIUM_STACK,
+      fontSize: size,
+      fontVariantNumeric: "tabular-nums",
+      fontWeight: 500,
+      letterSpacing: "0.12em",
+    };
+    content = coord ? (uri ? `fluncle://${coord}` : coord) : "";
   } else {
     // body
     size = fontSize ?? 24;

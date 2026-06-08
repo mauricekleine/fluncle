@@ -1,4 +1,6 @@
 import { getDb } from "./db";
+import { enrichFromDeezer } from "./deezer";
+import { resolveLogId } from "./log-id";
 import { formatError, withRetries } from "./retry";
 import { addTrackToPlaylist, ApiError, fetchTrackMetadata, parseSpotifyTrackUrl } from "./spotify";
 import { formatTelegramMessage, postToTelegram } from "./telegram";
@@ -17,6 +19,12 @@ export type AddTrackResult = {
     album?: string;
     albumImageUrl?: string;
     durationMs: number;
+    logId?: string;
+    isrc?: string;
+    label?: string;
+    previewUrl?: string;
+    popularity?: number;
+    tags?: string[];
   };
   dryRun: boolean;
   addedToSpotify: boolean;
@@ -69,11 +77,29 @@ ${existing.posted_to_telegram ? "Posted to Telegram" : "Not posted to Telegram"}
 
   const track = await fetchTrackMetadata(trackId);
   const artistLine = `${track.artists.join(", ")} — ${track.title}`;
+  const nowIso = new Date().toISOString();
+
+  // The permanent Galaxy coordinate: deterministic from the found date + the
+  // recording's ISRC (Spotify id as fallback); a rare collision resolves to a
+  // fresh tail on the same sector. Computed even on dry run so the operator can
+  // preview the coordinate.
+  const logId = await resolveLogId(
+    { foundAt: nowIso, isrc: track.isrc, trackId: track.trackId },
+    async (candidate) => {
+      const taken = await db.execute({
+        args: [candidate],
+        sql: `select 1 from tracks where log_id = ? limit 1`,
+      });
+
+      return taken.rows.length > 0;
+    },
+  );
 
   if (options.dryRun) {
     const message = `Dry run
 
 ${artistLine}
+Log ID: fluncle://${logId}
 Album: ${track.album ?? "Unknown"}
 Duration: ${formatDuration(track.durationMs)}
 Spotify: ${track.spotifyUrl}
@@ -82,14 +108,25 @@ Telegram message:
 
 ${formatTelegramMessage(track, options.note)}
 
-No database, Spotify, or Telegram changes were made.`;
+No database, Spotify, or Telegram changes were made. Enrichment (label, preview, tags) runs on publish.`;
 
-    return buildAddResult(track, message, {
-      addedToSpotify: false,
-      dryRun: true,
-      postedToTelegram: false,
-    });
+    return buildAddResult(
+      track,
+      message,
+      {
+        addedToSpotify: false,
+        dryRun: true,
+        postedToTelegram: false,
+      },
+      { logId },
+    );
   }
+
+  // Sync enrichment: HTTP-only and best-effort (label + preview from Deezer), so
+  // a miss never blocks the publish. The heavy, audio-derived fields (bpm, key,
+  // tags, video) are filled later by the async enrichment agent, and tags can be
+  // set/overridden by an admin — see docs/track-lifecycle.md.
+  const deezer = await enrichFromDeezer(track.isrc);
 
   await db.execute({
     args: [
@@ -101,8 +138,14 @@ No database, Spotify, or Telegram changes were made.`;
       track.album ?? null,
       track.albumImageUrl ?? null,
       track.durationMs,
+      track.isrc ?? null,
+      deezer.label ?? null,
+      logId,
+      track.popularity ?? null,
+      deezer.previewUrl ?? null,
+      null,
       options.note ?? null,
-      new Date().toISOString(),
+      nowIso,
       0,
       0,
     ],
@@ -115,11 +158,17 @@ No database, Spotify, or Telegram changes were made.`;
         album,
         album_image_url,
         duration_ms,
+        isrc,
+        label,
+        log_id,
+        popularity,
+        preview_url,
+        tags_json,
         note,
         added_at,
         added_to_spotify,
         posted_to_telegram
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 
   try {
@@ -185,11 +234,16 @@ ${artistLine}
 Added to Spotify
 Posted to Telegram`;
 
-  return buildAddResult(track, message, {
-    addedToSpotify: true,
-    dryRun: false,
-    postedToTelegram: true,
-  });
+  return buildAddResult(
+    track,
+    message,
+    {
+      addedToSpotify: true,
+      dryRun: false,
+      postedToTelegram: true,
+    },
+    { label: deezer.label, logId, previewUrl: deezer.previewUrl },
+  );
 }
 
 function formatDuration(durationMs: number): string {
@@ -208,6 +262,7 @@ function buildAddResult(
     addedToSpotify: boolean;
     postedToTelegram: boolean;
   },
+  extra: { logId?: string; label?: string; previewUrl?: string } = {},
 ): AddTrackResult {
   return {
     addedToSpotify: status.addedToSpotify,
@@ -219,6 +274,11 @@ function buildAddResult(
       albumImageUrl: track.albumImageUrl,
       artists: track.artists,
       durationMs: track.durationMs,
+      isrc: track.isrc,
+      label: extra.label,
+      logId: extra.logId,
+      popularity: track.popularity,
+      previewUrl: extra.previewUrl,
       spotifyUrl: track.spotifyUrl,
       title: track.title,
       trackId: track.trackId,

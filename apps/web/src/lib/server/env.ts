@@ -3,6 +3,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 let didLoadLocalEnv = false;
 
 const envKeys = [
+  "FIRECRAWL_API_KEY",
   "FLUNCLE_API_TOKEN",
   "LOOPS_API_KEY",
   "LOOPS_TRANSACTIONAL_ID",

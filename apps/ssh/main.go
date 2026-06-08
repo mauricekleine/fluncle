@@ -317,11 +317,18 @@ type model struct {
 
 type track struct {
 	TrackID          string   `json:"trackId"`
+	LogID            string   `json:"logId,omitempty"`
 	SpotifyURL       string   `json:"spotifyUrl"`
 	Title            string   `json:"title"`
 	Artists          []string `json:"artists"`
 	Album            string   `json:"album,omitempty"`
 	AlbumImageURL    string   `json:"albumImageUrl,omitempty"`
+	Label            string   `json:"label,omitempty"`
+	ISRC             string   `json:"isrc,omitempty"`
+	Tags             []string `json:"tags,omitempty"`
+	DurationMs       int      `json:"durationMs,omitempty"`
+	Popularity       int      `json:"popularity,omitempty"`
+	PreviewURL       string   `json:"previewUrl,omitempty"`
 	Note             string   `json:"note,omitempty"`
 	AddedAt          string   `json:"addedAt"`
 	AddedToSpotify   bool     `json:"addedToSpotify"`
@@ -766,8 +773,13 @@ func (m model) renderLatest() string {
 	}
 	content := make([]string, 0, len(m.tracks))
 	for index, track := range m.tracks {
-		number := top - index
-		content = append(content, selectableTrackRow(index == m.selected, number, track.Artists, track.Title))
+		coord := track.LogID
+		if coord == "" {
+			// No coordinate recovered for this entry: fall back to the archive
+			// ordinal so the column never blanks out.
+			coord = fmt.Sprintf("#%02d", top-index)
+		}
+		content = append(content, selectableTrackRow(index == m.selected, coord, track.Artists, track.Title))
 	}
 	help := helpLine("↑/↓ j/k move", "enter select", "q back", "ctrl+c quit")
 	return scaffold("Latest bangers", "", content, help)
@@ -787,7 +799,10 @@ func (m model) renderSearch() string {
 	// Candidates count up #01.. (positions in the result set, not archive slots).
 	content := make([]string, 0, len(m.results))
 	for index, result := range m.results {
-		content = append(content, selectableTrackRow(index == m.selected, index+1, result.Artists, result.Title))
+		// Search candidates are Spotify rows, not findings: no Log ID yet, so
+		// they keep the plain candidate position.
+		coord := fmt.Sprintf("#%02d", index+1)
+		content = append(content, selectableTrackRow(index == m.selected, coord, result.Artists, result.Title))
 	}
 	help := helpLine("↑/↓ j/k move", "enter select", "q back", "ctrl+c quit")
 	return scaffold("Select track", "", content, help)
@@ -804,9 +819,32 @@ func (m model) renderDetail() string {
 	lines := []string{
 		rowTitleStyle.Render(t.Title),
 		labelStyle.Render(artistLine(t.Artists)),
-		"",
-		labelStyle.Render("Found: ") + readingStyle.Render(formatDate(t.AddedAt)),
 	}
+
+	// Recovered-telemetry block. SSH is the deepest surface (VOICE.md's Depth
+	// Gradient): the Log ID coordinate, record label, sub-genre tags, and
+	// duration read like fields off a recovered log entry. Each line is its
+	// own field; absent fields drop out so the block never shows blanks.
+	if coord := strings.TrimSpace(t.LogID); coord != "" {
+		lines = append(lines,
+			"",
+			labelStyle.Render("Log ID: ")+readingStyle.Render(coord),
+			labelStyle.Render("Coordinate: ")+readingStyle.Render("fluncle://"+coord),
+		)
+	} else {
+		lines = append(lines, "")
+	}
+	lines = append(lines, labelStyle.Render("Found: ")+readingStyle.Render(formatDate(t.AddedAt)))
+	if label := strings.TrimSpace(t.Label); label != "" {
+		lines = append(lines, labelStyle.Render("Pressed by: ")+readingStyle.Render(label))
+	}
+	if duration := formatDuration(t.DurationMs); duration != "" {
+		lines = append(lines, labelStyle.Render("Runtime: ")+readingStyle.Render(duration))
+	}
+	if len(t.Tags) > 0 {
+		lines = append(lines, labelStyle.Render("Reads as: ")+readingStyle.Width(wrapWidth).Render(strings.Join(t.Tags, ", ")))
+	}
+
 	if note := strings.TrimSpace(t.Note); note != "" {
 		lines = append(lines,
 			"",
@@ -1125,10 +1163,17 @@ func helpLine(segments ...string) string {
 	return strings.Join(rendered, helpSepStyle.Render(" · "))
 }
 
-// trackRow renders the signature row grammar: "#NN  Artist — Title" with a
-// muted padded index, muted artist, rule-color em dash, and a Cream bold title.
-func trackRow(index int, artists []string, title string) string {
-	idx := rowIndexStyle.Render(fmt.Sprintf("#%02d", index))
+// coordWidth is the fixed column width of the leading coordinate cell, sized to
+// hold a Log ID (e.g. "007.8.1B") with headroom for a two-digit middle segment,
+// so the artist column starts at a fixed offset. Tabular feel per DESIGN.md's
+// Tabular Rule.
+const coordWidth = 9
+
+// trackRow renders the signature row grammar: "COORD  Artist — Title" with a
+// muted left-aligned coordinate (the Log ID for findings, "#NN" for search
+// candidates), muted artist, rule-color em dash, and a Cream bold title.
+func trackRow(coord string, artists []string, title string) string {
+	idx := rowIndexStyle.Render(padRight(coord, coordWidth))
 	artist := rowArtistStyle.Render(artistLine(artists))
 	dash := rowDashStyle.Render(" — ")
 	name := rowTitleStyle.Render(title)
@@ -1136,14 +1181,26 @@ func trackRow(index int, artists []string, title string) string {
 }
 
 // selectableTrackRow renders a track row, inverting the whole line in gold when
-// selected (readability beats per-segment color there). The index argument is
-// the archive/candidate position already resolved by the caller.
-func selectableTrackRow(selected bool, index int, artists []string, title string) string {
+// selected (readability beats per-segment color there). The coord argument is
+// the finding's Log ID (or a "#NN" candidate position) already resolved by the
+// caller.
+func selectableTrackRow(selected bool, coord string, artists []string, title string) string {
 	if selected {
-		label := fmt.Sprintf("#%02d  %s — %s", index, artistLine(artists), title)
+		label := fmt.Sprintf("%s  %s — %s", padRight(coord, coordWidth), artistLine(artists), title)
 		return selectedStyle.Render("> " + label)
 	}
-	return "  " + trackRow(index, artists, title)
+	return "  " + trackRow(coord, artists, title)
+}
+
+// padRight left-aligns s in a field of width w (counted in display cells),
+// padding with spaces. Coordinates render left-aligned so the artist column
+// holds a fixed start, the way a logbook lists its entries.
+func padRight(s string, w int) string {
+	gap := w - lipgloss.Width(s)
+	if gap <= 0 {
+		return s
+	}
+	return s + strings.Repeat(" ", gap)
 }
 
 func artistLine(artists []string) string {
@@ -1157,6 +1214,18 @@ func terminalLink(label, url string) string {
 	escapedURL := strings.ReplaceAll(url, "\x1b", "")
 	escapedLabel := strings.ReplaceAll(label, "\x1b", "")
 	return "\x1b]8;;" + escapedURL + "\x1b\\" + escapedLabel + "\x1b]8;;\x1b\\"
+}
+
+// formatDuration renders a millisecond duration as "M:SS", the runtime form a
+// logbook would carry. Zero or negative input yields "" so the field drops out.
+func formatDuration(ms int) string {
+	if ms <= 0 {
+		return ""
+	}
+	totalSeconds := ms / 1000
+	minutes := totalSeconds / 60
+	seconds := totalSeconds % 60
+	return fmt.Sprintf("%d:%02d", minutes, seconds)
 }
 
 func formatDate(value string) string {

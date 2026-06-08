@@ -14,6 +14,13 @@ type ApiTrack = {
   note?: string;
   addedAt: string;
   spotifyUrl?: string;
+  logId?: string;
+  durationMs?: number;
+  label?: string;
+  isrc?: string;
+  popularity?: number;
+  previewUrl?: string;
+  tags?: string[];
 };
 
 /**
@@ -47,7 +54,11 @@ export async function fetchTrack(trackId: string): Promise<CosmosTrack> {
     artists: found.artists ?? [],
     artworkUrl: found.albumImageUrl,
     discoveredAt: found.addedAt,
+    durationMs: found.durationMs,
+    label: found.label,
+    logId: found.logId,
     note: found.note,
+    tags: found.tags,
     title: found.title,
     trackId: found.trackId,
   };

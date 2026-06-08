@@ -11,9 +11,16 @@ export type TrackListItem = {
   album?: string;
   albumImageUrl?: string;
   artists: string[];
+  durationMs: number;
+  isrc?: string;
+  label?: string;
+  logId?: string;
   note?: string;
+  popularity?: number;
   postedToTelegram: boolean;
+  previewUrl?: string;
   spotifyUrl: string;
+  tags?: string[];
   title: string;
   trackId: string;
 };
@@ -29,8 +36,15 @@ type TrackRow = {
   album: string | null;
   album_image_url: string | null;
   artists_json: string;
+  duration_ms: number;
+  isrc: string | null;
+  label: string | null;
+  log_id: string | null;
   note: string | null;
+  popularity: number | null;
+  preview_url: string | null;
   spotify_url: string;
+  tags_json: string | null;
   title: string;
   track_id: string;
   added_to_spotify: number;
@@ -88,6 +102,13 @@ export async function listTracks({
               album,
               album_image_url,
               artists_json,
+              duration_ms,
+              isrc,
+              label,
+              log_id,
+              popularity,
+              preview_url,
+              tags_json,
               note,
               added_at,
               added_to_spotify,
@@ -128,9 +149,16 @@ export async function listTracks({
       album: row.album ?? undefined,
       albumImageUrl: row.album_image_url ?? undefined,
       artists: parseArtists(row.artists_json),
+      durationMs: row.duration_ms,
+      isrc: row.isrc ?? undefined,
+      label: row.label ?? undefined,
+      logId: row.log_id ?? undefined,
       note: row.note?.trim() ? row.note : undefined,
+      popularity: row.popularity ?? undefined,
       postedToTelegram: Boolean(row.posted_to_telegram),
+      previewUrl: row.preview_url ?? undefined,
       spotifyUrl: row.spotify_url,
+      tags: parseTags(row.tags_json),
       title: row.title,
       trackId: row.track_id,
     })),
@@ -171,4 +199,24 @@ function parseArtists(value: string): string[] {
   }
 
   return [];
+}
+
+function parseTags(value: string | null): string[] | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  try {
+    const tags = JSON.parse(value) as unknown;
+
+    if (Array.isArray(tags)) {
+      const strings = tags.filter((tag): tag is string => typeof tag === "string");
+
+      return strings.length > 0 ? strings : undefined;
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
 }

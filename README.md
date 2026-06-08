@@ -78,6 +78,8 @@ bun run --cwd apps/cli db:generate
 bun run --cwd apps/cli db:migrate
 ```
 
+Local migration commands read Turso credentials from `apps/web/.dev.vars` through `apps/cli/drizzle.config.ts`. By default, local development should point at the cloned `fluncle-dev` Turso database, not production.
+
 ## Raycast
 
 ```bash
@@ -186,12 +188,14 @@ bun run --cwd apps/web wrangler secret put LOOPS_API_KEY
 bun run --cwd apps/web wrangler secret put LOOPS_TRANSACTIONAL_ID
 ```
 
-For local Worker previews and local migration commands, copy `apps/web/.dev.vars.example` to `apps/web/.dev.vars` and fill in the same values:
+For local Worker previews and local migration commands, copy `apps/web/.dev.vars.example` to `apps/web/.dev.vars` and fill in local values. The Turso pair should use `fluncle-dev` by default:
 
 ```bash
 cp apps/web/.dev.vars.example apps/web/.dev.vars
 bun run --cwd apps/web preview
 ```
+
+Production keeps using the `fluncle` Turso database through Wrangler secrets. We do not apply migrations to production automatically yet. If a data/schema change must reach production before that path exists, use the `Turso - Production` item in the Fluncle 1Password vault through the `op` CLI, then run the production migration deliberately.
 
 Deploy:
 

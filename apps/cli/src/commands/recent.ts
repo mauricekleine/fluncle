@@ -2,6 +2,7 @@ import { publicApiGet } from "../api";
 
 export type RecentTrack = {
   trackId: string;
+  logId?: string;
   spotifyUrl: string;
   title: string;
   artists: string[];
@@ -9,6 +10,12 @@ export type RecentTrack = {
   albumImageUrl?: string;
   note?: string;
   addedAt: string;
+  durationMs?: number;
+  label?: string;
+  isrc?: string;
+  popularity?: number;
+  previewUrl?: string;
+  tags?: string[];
   addedToSpotify: boolean;
   postedToTelegram: boolean;
 };
@@ -16,6 +23,7 @@ export type RecentTrack = {
 type TracksResponse = {
   tracks: Array<{
     trackId: string;
+    logId?: string;
     spotifyUrl: string;
     title: string;
     artists: string[];
@@ -23,6 +31,12 @@ type TracksResponse = {
     albumImageUrl?: string;
     note?: string;
     addedAt: string;
+    durationMs?: number;
+    label?: string;
+    isrc?: string;
+    popularity?: number;
+    previewUrl?: string;
+    tags?: string[];
     addedToSpotify?: boolean;
     postedToTelegram?: boolean;
   }>;
@@ -40,9 +54,16 @@ export async function recentCommand(limit: number): Promise<RecentTrack[]> {
       album: track.album,
       albumImageUrl: track.albumImageUrl,
       artists: track.artists,
+      durationMs: track.durationMs,
+      isrc: track.isrc,
+      label: track.label,
+      logId: track.logId,
       note: track.note,
+      popularity: track.popularity,
       postedToTelegram: track.postedToTelegram ?? true,
+      previewUrl: track.previewUrl,
       spotifyUrl: track.spotifyUrl,
+      tags: track.tags,
       title: track.title,
       trackId: track.trackId,
     };

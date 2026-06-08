@@ -9,12 +9,18 @@ type AddOptions = {
 export type AddCommandResult = {
   track: {
     trackId: string;
+    logId?: string;
     spotifyUrl: string;
     title: string;
     artists: string[];
     album?: string;
     albumImageUrl?: string;
     durationMs: number;
+    isrc?: string;
+    label?: string;
+    popularity?: number;
+    previewUrl?: string;
+    tags?: string[];
   };
   dryRun: boolean;
   addedToSpotify: boolean;
@@ -34,6 +40,13 @@ export async function addCommand(
 
   if (!options.json) {
     console.log(result.message);
+
+    // The success message ("Banger logged") omits the coordinate; surface it so
+    // the operator always leaves with the finding's Log ID. The dry-run message
+    // already carries its own `Log ID:` line, so don't double-print.
+    if (result.track.logId && !result.message.includes("Log ID:")) {
+      console.log(`Log ID: fluncle://${result.track.logId}`);
+    }
   }
 
   return result;

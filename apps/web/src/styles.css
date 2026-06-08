@@ -151,7 +151,7 @@ body::before {
   font-size: 0.76rem;
   font-weight: 800;
   gap: 0.9rem;
-  grid-template-columns: 3rem 3.25rem minmax(0, 1fr) 1.25rem;
+  grid-template-columns: 4.75rem 3.25rem minmax(0, 1fr) 1.25rem;
   letter-spacing: 0;
   padding: 0.85rem 1rem;
 }
@@ -167,7 +167,7 @@ body::before {
   cursor: pointer;
   display: grid;
   gap: 0.9rem;
-  grid-template-columns: 3rem 3.25rem minmax(0, 1fr) auto;
+  grid-template-columns: 4.75rem 3.25rem minmax(0, 1fr) auto;
   min-height: 5.25rem;
   outline: none;
   padding: 0.95rem 1rem;
@@ -182,8 +182,8 @@ body::before {
   background: var(--accent);
 }
 
-.track-row:hover .track-index,
-.track-row:focus-visible .track-index {
+.track-row:hover .track-log-id,
+.track-row:focus-visible .track-log-id {
   color: var(--accent-foreground);
 }
 
@@ -191,12 +191,13 @@ body::before {
   box-shadow: inset 0 0 0 2px var(--ring);
 }
 
-.track-index {
+.track-log-id {
+  align-self: start;
   color: var(--muted-foreground);
   font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
-  font-size: 0.98rem;
+  font-size: 0.92rem;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
   transition: color 150ms ease-out;
 }
 
@@ -244,12 +245,33 @@ body::before {
   margin-top: 0.34rem;
 }
 
+.track-label {
+  color: var(--muted-foreground);
+  font-size: 0.78rem;
+  line-height: 1.25;
+  margin-top: 0.3rem;
+  opacity: 0.78;
+}
+
+.track-meta {
+  align-self: center;
+  gap: 0.34rem;
+}
+
 .track-date {
   color: var(--muted-foreground);
   font-size: 0.82rem;
   font-variant-numeric: tabular-nums;
   font-weight: 700;
   line-height: 1;
+}
+
+.track-duration {
+  color: var(--muted-foreground);
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  opacity: 0.72;
 }
 
 .cli-command {
@@ -299,11 +321,11 @@ body::before {
 
 @media (min-width: 640px) {
   .playlist-header {
-    grid-template-columns: 3rem 3.25rem minmax(0, 1fr) 6.75rem 1.25rem;
+    grid-template-columns: 4.75rem 3.25rem minmax(0, 1fr) 6.75rem 1.25rem;
   }
 
   .track-row {
-    grid-template-columns: 3rem 3.25rem minmax(0, 1fr) 6.75rem 1.25rem;
+    grid-template-columns: 4.75rem 3.25rem minmax(0, 1fr) 6.75rem 1.25rem;
   }
 }
 
@@ -311,7 +333,7 @@ body::before {
    collapses to a color-only transition. The Gold Veil wash carries feedback. */
 @media (prefers-reduced-motion: reduce) {
   .track-row,
-  .track-index,
+  .track-log-id,
   .track-artwork {
     transition-property: background-color, border-color, color;
   }

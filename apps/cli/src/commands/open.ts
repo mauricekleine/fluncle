@@ -1,3 +1,4 @@
+import { artistTitle, coordinate } from "../format";
 import { CliError } from "../output";
 import { type RecentTrack, recentCommand } from "./recent";
 
@@ -187,11 +188,15 @@ function buildSelectorLines(
   selectedIndex: number,
   columns: number,
 ): string[] {
+  const coordWidth = tracks.reduce((width, track) => {
+    return Math.max(width, coordinate(track).length);
+  }, 0);
+
   return [
     "Select a track to open in Spotify",
     ...tracks.map((track, index) => {
       const prefix = index === selectedIndex ? "> " : "  ";
-      const label = `${track.artists.join(", ")} — ${track.title}`;
+      const label = `${coordinate(track).padEnd(coordWidth)}  ${artistTitle(track)}`;
       const line = truncate(`${prefix}${label}`, Math.max(columns, 20));
 
       return index === selectedIndex ? `\x1b[7m${line}\x1b[0m` : line;

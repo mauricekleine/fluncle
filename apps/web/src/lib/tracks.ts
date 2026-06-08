@@ -3,8 +3,12 @@ export type Track = {
   album?: string;
   albumImageUrl?: string;
   artists: string[];
+  durationMs?: number;
+  label?: string;
+  logId?: string;
   note?: string;
   spotifyUrl: string;
+  tags?: string[];
   title: string;
   trackId: string;
 };

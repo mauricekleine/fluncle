@@ -23,6 +23,7 @@ type SpotifyTrackResponse = {
   name: string;
   uri: string;
   duration_ms: number;
+  popularity?: number;
   album?: {
     images?: SpotifyImage[];
     name?: string;
@@ -30,6 +31,9 @@ type SpotifyTrackResponse = {
   artists: Array<{
     name: string;
   }>;
+  external_ids?: {
+    isrc?: string;
+  };
   external_urls?: {
     spotify?: string;
   };
@@ -56,6 +60,8 @@ export type TrackMetadata = {
   album?: string;
   albumImageUrl?: string;
   durationMs: number;
+  isrc?: string;
+  popularity?: number;
 };
 
 export type TrackSearchResult = {
@@ -145,6 +151,8 @@ export async function fetchTrackMetadata(trackId: string): Promise<TrackMetadata
     albumImageUrl: selectAlbumImageUrl(data.album?.images),
     artists: data.artists.map((artist) => artist.name),
     durationMs: data.duration_ms,
+    isrc: data.external_ids?.isrc,
+    popularity: data.popularity,
     spotifyUri: data.uri,
     spotifyUrl: data.external_urls?.spotify ?? `https://open.spotify.com/track/${data.id}`,
     title: data.name,

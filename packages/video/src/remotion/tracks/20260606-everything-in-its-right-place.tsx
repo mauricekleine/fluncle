@@ -303,6 +303,11 @@ export const NostalgicCosmos: React.FC<NostalgicCosmosProps> = ({
           width={width}
           height={height}
         />
+
+        {/* Recovered-telemetry stamp: the finding's Log ID coordinate burned
+            into the top-right corner for the whole clip (archive crop-mark, not
+            a headline). Subordinate to the music and the One Sun. */}
+        <LogIdStamp track={track} floatBoost={floatBoost} />
       </AbsoluteFill>
 
       {/* Onset exposure spike: a brief additive gold veil over the whole frame. */}
@@ -342,6 +347,73 @@ export const NostalgicCosmos: React.FC<NostalgicCosmosProps> = ({
 };
 
 // --- Helpers ---------------------------------------------------------------
+
+/**
+ * Recovered-telemetry stamp: the finding's Log ID coordinate as a small archive
+ * crop-mark in the top-right corner — a HUD designation, not a headline. It
+ * fades up early and rides the whole clip (the artifact is always stamped), held
+ * subordinate to the music and the One Sun: dimmed Stardust, Oxanium tabular via
+ * FloatingType's logId variant (which inherits the contrast guarantee). A short
+ * gold crop-tick keys it to the archive without becoming a second sun. Pure:
+ * opacity is frame-derived, no randomness. Renders nothing if there's no Log ID.
+ */
+const LogIdStamp: React.FC<{
+  track: NostalgicCosmosProps["track"];
+  floatBoost: number;
+}> = ({ track, floatBoost }) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const sec = frame / fps;
+
+  if (!track.logId) {
+    return null;
+  }
+
+  // Eases up over the first ~1.2s, then holds — recovered telemetry that stays
+  // burned into the corner of the frame for the whole clip.
+  const opacity = interpolate(sec, [0.6, 1.8], [0, 0.78], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+
+  if (opacity <= 0.001) {
+    return null;
+  }
+
+  return (
+    <div
+      style={{
+        alignItems: "flex-end",
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+        opacity,
+        position: "absolute",
+        right: MARGIN_X,
+        top: SAFE_TOP,
+      }}
+    >
+      {/* Crop-tick: a short gold corner mark keying the stamp to the archive,
+          kept tiny so it never reads as a second light source. */}
+      <div
+        style={{
+          backgroundColor: withAlpha(colors.eclipseGold, 0.55),
+          height: 2,
+          width: 22,
+        }}
+      />
+      <FloatingType
+        variant="logId"
+        track={track}
+        align="right"
+        fontSize={22}
+        drift={4 * floatBoost}
+        driftPhase={2.2}
+        color={colors.stardust}
+      />
+    </div>
+  );
+};
 
 /**
  * A block that fades + floats in/out over a [inSec, outSec) window. Pure: the

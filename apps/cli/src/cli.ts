@@ -192,7 +192,13 @@ async function runRecent(
     return;
   }
 
-  console.log(tracks.map((track) => `${track.artists.join(", ")} — ${track.title}`).join("\n"));
+  if (tracks.length === 0) {
+    console.log("No findings logged yet.");
+    return;
+  }
+
+  const { trackRows } = await import("./format");
+  console.log(trackRows(tracks).join("\n"));
 }
 
 async function runOpen(
@@ -284,7 +290,8 @@ async function runRandom(
     return;
   }
 
-  console.log(`${track.artists.join(", ")} — ${track.title}`);
+  const { trackDetailLines } = await import("./format");
+  console.log(trackDetailLines(track).join("\n"));
 
   if (track.note) {
     console.log(`Note: ${track.note}`);

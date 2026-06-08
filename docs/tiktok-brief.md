@@ -82,6 +82,12 @@ Store:
 
 ts track { spotify_id isrc title artist album release_date artwork_url }
 
+Enrich:
+
+txt label source_tags caption_tags
+
+Source tags are niche music-discovery tags gathered from trusted enrichment sources when available. They should help captions surface the track to the right scene, for example liquid funk, neurofunk, chill dnb, drum and bass, or label-specific tags.
+
 ---
 
 ## 2. Preview Audio Resolution
@@ -171,6 +177,16 @@ txt Delta Heavy Ecstasy 2014
 Generate:
 
 txt Artist Track Spotify link hashtags
+
+Use enrichment tags when available.
+
+Hashtags should combine:
+
+- stable Fluncle defaults
+- niche source tags
+- label or artist tags when useful
+
+Source tags are discovery fuel, not canonical facts. They should improve TikTok reach and scene relevance without inventing claims about the track.
 
 Example:
 

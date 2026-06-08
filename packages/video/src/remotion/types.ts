@@ -16,6 +16,18 @@ export type CosmosTrack = {
   /** ISO timestamp */
   discoveredAt: string;
   note?: string;
+  /**
+   * The finding's permanent coordinate in the Galaxy (a star designation),
+   * shown bare as `007.8.1B`; canonical URI is `fluncle://007.8.1B`. Recovered
+   * telemetry on the video stamp (VOICE.md §3/§6, DESIGN.md's Tabular Rule).
+   */
+  logId?: string;
+  /** Track duration in ms (Spotify metadata). Optional telemetry. */
+  durationMs?: number;
+  /** Record label (Spotify metadata). Authoritative, render-safe fact. */
+  label?: string;
+  /** Spotify/Deezer tags. Creative fuel; not for on-screen text. */
+  tags?: string[];
 };
 
 export type CosmosAudio = {
