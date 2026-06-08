@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const tracks = sqliteTable("tracks", {
   addedAt: text("added_at").notNull(),
@@ -7,8 +7,11 @@ export const tracks = sqliteTable("tracks", {
   album: text("album"),
   albumImageUrl: text("album_image_url"),
   artistsJson: text("artists_json").notNull(),
+  bpm: real("bpm"),
   durationMs: integer("duration_ms").notNull(),
+  enrichmentStatus: text("enrichment_status").notNull().default("pending"),
   isrc: text("isrc"),
+  key: text("key"),
   label: text("label"),
   logId: text("log_id").unique(),
   note: text("note"),
@@ -20,9 +23,11 @@ export const tracks = sqliteTable("tracks", {
   spotifyUri: text("spotify_uri").notNull(),
   spotifyUrl: text("spotify_url").notNull(),
   tagsJson: text("tags_json"),
+  tagsSource: text("tags_source"),
   telegramError: text("telegram_error"),
   title: text("title").notNull(),
   trackId: text("track_id").primaryKey(),
+  videoUrl: text("video_url"),
 });
 
 export const spotifyAuth = sqliteTable("spotify_auth", {

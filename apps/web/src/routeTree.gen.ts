@@ -21,6 +21,7 @@ import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as ApiTracksRandomRouteImport } from './routes/api/tracks/random'
 import { Route as ApiAdminTracksRouteImport } from './routes/api/admin/tracks'
 import { Route as ApiAdminSubmissionsRouteImport } from './routes/api/admin/submissions'
+import { Route as ApiAdminTracksTrackIdRouteImport } from './routes/api/admin/tracks.$trackId'
 import { Route as ApiAdminSubmissionsSubmissionIdRouteImport } from './routes/api/admin/submissions/$submissionId'
 import { Route as ApiAdminSubmissionsSubmissionIdRejectRouteImport } from './routes/api/admin/submissions/$submissionId/reject'
 import { Route as ApiAdminSubmissionsSubmissionIdApproveRouteImport } from './routes/api/admin/submissions/$submissionId/approve'
@@ -87,6 +88,11 @@ const ApiAdminSubmissionsRoute = ApiAdminSubmissionsRouteImport.update({
   path: '/api/admin/submissions',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAdminTracksTrackIdRoute = ApiAdminTracksTrackIdRouteImport.update({
+  id: '/$trackId',
+  path: '/$trackId',
+  getParentRoute: () => ApiAdminTracksRoute,
+} as any)
 const ApiAdminSubmissionsSubmissionIdRoute =
   ApiAdminSubmissionsSubmissionIdRouteImport.update({
     id: '/$submissionId',
@@ -129,9 +135,10 @@ export interface FileRoutesByFullPath {
   '/api/tracks': typeof ApiTracksRouteWithChildren
   '/cli/latest.sh': typeof CliLatestDotshRoute
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
-  '/api/admin/tracks': typeof ApiAdminTracksRoute
+  '/api/admin/tracks': typeof ApiAdminTracksRouteWithChildren
   '/api/tracks/random': typeof ApiTracksRandomRoute
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
+  '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRoute
   '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
   '/api/admin/submissions/$submissionId/approve': typeof ApiAdminSubmissionsSubmissionIdApproveRoute
@@ -148,9 +155,10 @@ export interface FileRoutesByTo {
   '/api/tracks': typeof ApiTracksRouteWithChildren
   '/cli/latest.sh': typeof CliLatestDotshRoute
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
-  '/api/admin/tracks': typeof ApiAdminTracksRoute
+  '/api/admin/tracks': typeof ApiAdminTracksRouteWithChildren
   '/api/tracks/random': typeof ApiTracksRandomRoute
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
+  '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRoute
   '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
   '/api/admin/submissions/$submissionId/approve': typeof ApiAdminSubmissionsSubmissionIdApproveRoute
@@ -168,9 +176,10 @@ export interface FileRoutesById {
   '/api/tracks': typeof ApiTracksRouteWithChildren
   '/cli/latest.sh': typeof CliLatestDotshRoute
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
-  '/api/admin/tracks': typeof ApiAdminTracksRoute
+  '/api/admin/tracks': typeof ApiAdminTracksRouteWithChildren
   '/api/tracks/random': typeof ApiTracksRandomRoute
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
+  '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRoute
   '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
   '/api/admin/submissions/$submissionId/approve': typeof ApiAdminSubmissionsSubmissionIdApproveRoute
@@ -192,6 +201,7 @@ export interface FileRouteTypes {
     | '/api/admin/tracks'
     | '/api/tracks/random'
     | '/api/admin/submissions/$submissionId'
+    | '/api/admin/tracks/$trackId'
     | '/api/admin/spotify/auth/callback'
     | '/api/admin/spotify/auth/start'
     | '/api/admin/submissions/$submissionId/approve'
@@ -211,6 +221,7 @@ export interface FileRouteTypes {
     | '/api/admin/tracks'
     | '/api/tracks/random'
     | '/api/admin/submissions/$submissionId'
+    | '/api/admin/tracks/$trackId'
     | '/api/admin/spotify/auth/callback'
     | '/api/admin/spotify/auth/start'
     | '/api/admin/submissions/$submissionId/approve'
@@ -230,6 +241,7 @@ export interface FileRouteTypes {
     | '/api/admin/tracks'
     | '/api/tracks/random'
     | '/api/admin/submissions/$submissionId'
+    | '/api/admin/tracks/$trackId'
     | '/api/admin/spotify/auth/callback'
     | '/api/admin/spotify/auth/start'
     | '/api/admin/submissions/$submissionId/approve'
@@ -247,7 +259,7 @@ export interface RootRouteChildren {
   ApiTracksRoute: typeof ApiTracksRouteWithChildren
   CliLatestDotshRoute: typeof CliLatestDotshRoute
   ApiAdminSubmissionsRoute: typeof ApiAdminSubmissionsRouteWithChildren
-  ApiAdminTracksRoute: typeof ApiAdminTracksRoute
+  ApiAdminTracksRoute: typeof ApiAdminTracksRouteWithChildren
   ApiAdminSpotifyAuthCallbackRoute: typeof ApiAdminSpotifyAuthCallbackRoute
   ApiAdminSpotifyAuthStartRoute: typeof ApiAdminSpotifyAuthStartRoute
 }
@@ -338,6 +350,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminSubmissionsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/admin/tracks/$trackId': {
+      id: '/api/admin/tracks/$trackId'
+      path: '/$trackId'
+      fullPath: '/api/admin/tracks/$trackId'
+      preLoaderRoute: typeof ApiAdminTracksTrackIdRouteImport
+      parentRoute: typeof ApiAdminTracksRoute
+    }
     '/api/admin/submissions/$submissionId': {
       id: '/api/admin/submissions/$submissionId'
       path: '/$submissionId'
@@ -418,6 +437,18 @@ const ApiAdminSubmissionsRouteChildren: ApiAdminSubmissionsRouteChildren = {
 const ApiAdminSubmissionsRouteWithChildren =
   ApiAdminSubmissionsRoute._addFileChildren(ApiAdminSubmissionsRouteChildren)
 
+interface ApiAdminTracksRouteChildren {
+  ApiAdminTracksTrackIdRoute: typeof ApiAdminTracksTrackIdRoute
+}
+
+const ApiAdminTracksRouteChildren: ApiAdminTracksRouteChildren = {
+  ApiAdminTracksTrackIdRoute: ApiAdminTracksTrackIdRoute,
+}
+
+const ApiAdminTracksRouteWithChildren = ApiAdminTracksRoute._addFileChildren(
+  ApiAdminTracksRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   RssDotxmlRoute: RssDotxmlRoute,
@@ -429,7 +460,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiTracksRoute: ApiTracksRouteWithChildren,
   CliLatestDotshRoute: CliLatestDotshRoute,
   ApiAdminSubmissionsRoute: ApiAdminSubmissionsRouteWithChildren,
-  ApiAdminTracksRoute: ApiAdminTracksRoute,
+  ApiAdminTracksRoute: ApiAdminTracksRouteWithChildren,
   ApiAdminSpotifyAuthCallbackRoute: ApiAdminSpotifyAuthCallbackRoute,
   ApiAdminSpotifyAuthStartRoute: ApiAdminSpotifyAuthStartRoute,
 }

@@ -11,8 +11,11 @@ export type TrackListItem = {
   album?: string;
   albumImageUrl?: string;
   artists: string[];
+  bpm?: number;
   durationMs: number;
+  enrichmentStatus: string;
   isrc?: string;
+  key?: string;
   label?: string;
   logId?: string;
   note?: string;
@@ -21,8 +24,10 @@ export type TrackListItem = {
   previewUrl?: string;
   spotifyUrl: string;
   tags?: string[];
+  tagsSource?: string;
   title: string;
   trackId: string;
+  videoUrl?: string;
 };
 
 export type TrackListPage = {
@@ -36,8 +41,11 @@ type TrackRow = {
   album: string | null;
   album_image_url: string | null;
   artists_json: string;
+  bpm: number | null;
   duration_ms: number;
+  enrichment_status: string;
   isrc: string | null;
+  key: string | null;
   label: string | null;
   log_id: string | null;
   note: string | null;
@@ -45,8 +53,10 @@ type TrackRow = {
   preview_url: string | null;
   spotify_url: string;
   tags_json: string | null;
+  tags_source: string | null;
   title: string;
   track_id: string;
+  video_url: string | null;
   added_to_spotify: number;
   posted_to_telegram: number;
 };
@@ -102,13 +112,18 @@ export async function listTracks({
               album,
               album_image_url,
               artists_json,
+              bpm,
               duration_ms,
+              enrichment_status,
               isrc,
+              key,
               label,
               log_id,
               popularity,
               preview_url,
               tags_json,
+              tags_source,
+              video_url,
               note,
               added_at,
               added_to_spotify,
@@ -149,8 +164,11 @@ export async function listTracks({
       album: row.album ?? undefined,
       albumImageUrl: row.album_image_url ?? undefined,
       artists: parseArtists(row.artists_json),
+      bpm: row.bpm ?? undefined,
       durationMs: row.duration_ms,
+      enrichmentStatus: row.enrichment_status,
       isrc: row.isrc ?? undefined,
+      key: row.key ?? undefined,
       label: row.label ?? undefined,
       logId: row.log_id ?? undefined,
       note: row.note?.trim() ? row.note : undefined,
@@ -159,8 +177,10 @@ export async function listTracks({
       previewUrl: row.preview_url ?? undefined,
       spotifyUrl: row.spotify_url,
       tags: parseTags(row.tags_json),
+      tagsSource: row.tags_source ?? undefined,
       title: row.title,
       trackId: row.track_id,
+      videoUrl: row.video_url ?? undefined,
     })),
   };
 }

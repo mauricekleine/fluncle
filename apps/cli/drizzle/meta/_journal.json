@@ -29,6 +29,13 @@
       "when": 1780899367507,
       "tag": "0003_cool_puppet_master",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1780910995033,
+      "tag": "0004_orange_raider",
+      "breakpoints": true
     }
   ]
 }
