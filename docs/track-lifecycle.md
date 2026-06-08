@@ -30,7 +30,7 @@ After a successful add, the Worker fires a **Spinup agent** (via the Spinup runt
 
 This takes a while, and that's fine: the find was already live. When it finishes, the analysis fields and the video appear across the Galaxy.
 
-This same agent is the front half of the [TikTok pipeline](./tiktok-brief.md) (treat that brief as intent, not spec): once it has the video + tags, its next step is to push a TikTok draft (video without audio + a caption built from the tags). One async worker, many outputs.
+This same agent is the front half of the TikTok pipeline (see [ROADMAP.md](./ROADMAP.md)): once it has the video + tags, its next step is to push a TikTok draft (video without audio + a caption built from the tags). One async worker, many outputs.
 
 ## The update path
 
