@@ -1,4 +1,4 @@
-import { adminApiPatch, adminApiPostForm, publicApiGet } from "../api";
+import { adminApiGet, adminApiPatch, adminApiPost, adminApiPostForm, publicApiGet } from "../api";
 
 export type TrackGetResult = {
   ok: true;
@@ -74,6 +74,71 @@ export async function trackVideoCommand(
     `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/video`,
     form,
   );
+}
+
+type TrackDraftResult = {
+  externalId: string;
+  ok: true;
+  platform: string;
+  status: string;
+  trackId: string;
+};
+
+// Pushes a platform draft (e.g. TikTok via Postiz) for a track's video.
+export async function trackDraftCommand(
+  idOrLogId: string,
+  platform: string,
+): Promise<TrackDraftResult> {
+  return adminApiPost(
+    `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/social/${platform}/draft`,
+  );
+}
+
+export type TrackSocialUpdateOptions = {
+  scheduledFor?: string;
+  status: string;
+  url?: string;
+};
+
+type TrackSocialUpdateResult = { ok: true; platform: string; status: string; trackId: string };
+
+// Updates a per-platform post's status after manual review/publish in-app.
+export async function trackSocialUpdateCommand(
+  idOrLogId: string,
+  platform: string,
+  options: TrackSocialUpdateOptions,
+): Promise<TrackSocialUpdateResult> {
+  const body: Record<string, unknown> = { status: options.status };
+
+  if (options.url !== undefined) {
+    body.url = options.url;
+  }
+
+  if (options.scheduledFor !== undefined) {
+    body.scheduledFor = options.scheduledFor;
+  }
+
+  return adminApiPatch(
+    `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/social/${platform}`,
+    body,
+  );
+}
+
+type TrackSocialShowResult = {
+  ok: true;
+  posts: Array<{
+    platform: string;
+    publishedAt?: string;
+    scheduledFor?: string;
+    status: string;
+    url?: string;
+  }>;
+  trackId: string;
+};
+
+// Lists a track's per-platform publication state.
+export async function trackSocialShowCommand(idOrLogId: string): Promise<TrackSocialShowResult> {
+  return adminApiGet(`/api/admin/tracks/${encodeURIComponent(idOrLogId)}/social`);
 }
 
 export async function trackUpdateCommand(

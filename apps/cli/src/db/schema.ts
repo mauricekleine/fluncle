@@ -1,4 +1,4 @@
-import { index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const tracks = sqliteTable("tracks", {
   addedAt: text("added_at").notNull(),
@@ -64,4 +64,27 @@ export const submissions = sqliteTable(
     index("submissions_spotify_track_id_idx").on(table.spotifyTrackId),
     index("submissions_submitter_hash_created_at_idx").on(table.submitterHash, table.createdAt),
   ],
+);
+
+// Per-platform publication state for a track's video. One row per (track,
+// platform); the generic track pipeline tops out at "video in R2" (video_url),
+// and publication is tracked here. Today: TikTok via Postiz (push draft → manual
+// review/publish in-app → status updated by the operator). Extensible to
+// YouTube Shorts / Instagram Reels (the `platform` enum widens — plain TEXT, no
+// migration). `external_id` holds the Postiz post id; `url` the public post URL.
+export const socialPosts = sqliteTable(
+  "social_posts",
+  {
+    createdAt: text("created_at").notNull(),
+    externalId: text("external_id"),
+    id: text("id").primaryKey(),
+    platform: text("platform", { enum: ["tiktok"] }).notNull(),
+    publishedAt: text("published_at"),
+    scheduledFor: text("scheduled_for"),
+    status: text("status", { enum: ["draft", "scheduled", "published", "failed"] }).notNull(),
+    trackId: text("track_id").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    url: text("url"),
+  },
+  (table) => [uniqueIndex("social_posts_track_platform_idx").on(table.trackId, table.platform)],
 );

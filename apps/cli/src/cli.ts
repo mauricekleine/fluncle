@@ -77,6 +77,18 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "admin" && subcommand === "track" && rest[0] === "draft") {
+    const { trackDraftCommand } = await import("./commands/track");
+    await runTrackDraft(rest.slice(1), trackDraftCommand);
+    return;
+  }
+
+  if (command === "admin" && subcommand === "track" && rest[0] === "social") {
+    const { trackSocialShowCommand, trackSocialUpdateCommand } = await import("./commands/track");
+    await runTrackSocial(rest.slice(1), trackSocialShowCommand, trackSocialUpdateCommand);
+    return;
+  }
+
   if (command === "track" && subcommand === "get") {
     const { trackGetCommand } = await import("./commands/track");
     await runTrackGet(rest, trackGetCommand);
@@ -160,6 +172,106 @@ async function runTrackVideo(
   for (const [field, url] of Object.entries(result.urls)) {
     console.log(`  ${field}: ${url}`);
   }
+}
+
+async function runTrackDraft(
+  args: string[],
+  trackDraftCommand: typeof import("./commands/track").trackDraftCommand,
+): Promise<void> {
+  const parsed = parseArgs({
+    allowPositionals: true,
+    args,
+    options: { json: { default: false, type: "boolean" }, platform: { type: "string" } },
+  });
+
+  const idOrLogId = parsed.positionals[0];
+
+  if (!idOrLogId) {
+    throw new Error(
+      "Missing id. Usage: fluncle admin track draft <track_id|log_id> [--platform tiktok]",
+    );
+  }
+
+  const platform = parsed.values.platform ?? "tiktok";
+  const result = await trackDraftCommand(idOrLogId, platform);
+
+  if (parsed.values.json) {
+    printJson(result);
+    return;
+  }
+
+  console.log(`Pushed ${platform} draft for ${result.trackId} (post ${result.externalId})`);
+}
+
+async function runTrackSocial(
+  args: string[],
+  trackSocialShowCommand: typeof import("./commands/track").trackSocialShowCommand,
+  trackSocialUpdateCommand: typeof import("./commands/track").trackSocialUpdateCommand,
+): Promise<void> {
+  const parsed = parseArgs({
+    allowPositionals: true,
+    args,
+    options: {
+      json: { default: false, type: "boolean" },
+      platform: { type: "string" },
+      "scheduled-for": { type: "string" },
+      status: { type: "string" },
+      url: { type: "string" },
+    },
+  });
+
+  const idOrLogId = parsed.positionals[0];
+
+  if (!idOrLogId) {
+    throw new Error(
+      "Missing id. Usage: fluncle admin track social <track_id|log_id> [--platform tiktok] [--status scheduled|published [--url <url>]]",
+    );
+  }
+
+  const status = parsed.values.status;
+
+  // No --status: show the track's per-platform state.
+  if (!status) {
+    const result = await trackSocialShowCommand(idOrLogId);
+
+    if (parsed.values.json) {
+      printJson(result);
+      return;
+    }
+
+    if (result.posts.length === 0) {
+      console.log("No social posts yet.");
+      return;
+    }
+
+    for (const post of result.posts) {
+      console.log(`${post.platform}: ${post.status}${post.url ? ` · ${post.url}` : ""}`);
+    }
+
+    return;
+  }
+
+  if (status !== "scheduled" && status !== "published" && status !== "failed") {
+    throw new Error(`Invalid --status: ${status} (expected scheduled, published, or failed)`);
+  }
+
+  if (status === "published" && !parsed.values.url) {
+    throw new Error("Publishing requires --url <post-url>");
+  }
+
+  const platform = parsed.values.platform ?? "tiktok";
+  const result = await trackSocialUpdateCommand(idOrLogId, platform, {
+    scheduledFor: parsed.values["scheduled-for"],
+    status,
+    url: parsed.values.url,
+  });
+
+  if (parsed.values.json) {
+    printJson(result);
+    return;
+  }
+
+  console.log(`${platform} → ${status} for ${result.trackId}`);
 }
 
 async function runAdminSubmissions(
@@ -352,6 +464,10 @@ async function runRecent(
         default: "10",
         type: "string",
       },
+      "needs-video": {
+        default: false,
+        type: "boolean",
+      },
     },
   });
 
@@ -361,7 +477,11 @@ async function runRecent(
     throw new Error("Limit must be an integer between 1 and 100");
   }
 
-  const tracks = await recentCommand(limit);
+  const fetched = await recentCommand(limit);
+  // --needs-video: only findings that don't have a rendered video yet.
+  const tracks = parsed.values["needs-video"]
+    ? fetched.filter((track) => !track.videoUrl)
+    : fetched;
 
   if (parsed.values.json) {
     printJson({
@@ -556,6 +676,10 @@ Operator:
       Certify a track into the archive
   fluncle admin track video <track-id|log-id> (--dir <dir> | --footage <f> [--footage-silent <f>] [--poster <f>] [--note <f>]) [--json]
       Upload a track's video bundle to R2 and link it
+  fluncle admin track draft <track-id|log-id> [--platform tiktok] [--json]
+      Push the video to a platform as a draft (TikTok inbox via Postiz)
+  fluncle admin track social <track-id|log-id> [--platform tiktok] [--status scheduled|published [--url u]] [--json]
+      Show or update a track's per-platform publication status
   fluncle admin submissions                          List pending submissions
   fluncle admin submissions review <submission-id>   Inspect one submission
   fluncle admin submissions reject <submission-id>   Reject a submission
