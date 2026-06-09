@@ -48,7 +48,7 @@ That is the whole kit. The README has the exact signatures.
 
 ## Doctrine
 
-Eight rulings. They are LAW. If a concept fights one, change the concept.
+Nine rulings. They are LAW. If a concept fights one, change the concept.
 
 1. **One Driver.** Exactly ONE travelling, beat-synced medium per video. orb / lines / fractal / glass / glitch are EXAMPLES, not an enum — invented vehicles are welcome, provided there is exactly one. When the vehicle is NOT an orb, the One Sun Eclipse Gold moment is expressed THROUGH the vehicle (a gold crest line igniting, a gold resolution front) — never as a second celestial body sharing the frame. Two drivers means one is wrong.
 
@@ -66,11 +66,13 @@ Eight rulings. They are LAW. If a concept fights one, change the concept.
 
 8. **Musical cut.** 20s default; choose `--duration-ms` (10–30s) from the waveform; end on a drop or just before a transition, never mid-build.
 
+9. **The music leads, the video follows.** Audio reactivity is the point, not a finishing touch — the vehicle must visibly, legibly move WITH the track: lock to the beat grid, let the drop and the onsets HIT, map the energy curve to real swings in exposure / scale / width / density. The test, applied on the rendered MP4 (not the stills): **if the motion would look the same with the audio muted, the video has failed.** This stays inside the Motion law — reactivity rides intensity, never position (doctrine 7) — but it must be FELT; ambient drift that merely coexists with the music is the failure this kills (the 06-09 batch over-smoothed into floatiness). Sharp, structured textures (below) carry this far better than soft haze.
+
 ## Failure modes from the last batch (avoid these)
 
-Not new law — the shapes of getting it wrong, so you can see them coming. The 06-08 clips drifted off-brand in three ways the rulings above don't spell out:
+Not new law — the shapes of getting it wrong, so you can see them coming. Recent clips have drifted off-brand in these ways the rulings above don't spell out:
 
-- **Diagram, not depth.** Thin, hard-edged, sparse, repeated primitives — ruled lines, bars, an equalizer of vertical shafts (`spears`) — read as a CSS chart, not the cosmos. The clips that land win on organic depth: `momentum`'s kaleidoscopic petals, `teddys-gate`'s SOFT wide glowing light columns. The same vertical motif done soft-and-layered vs hard-and-sparse is the whole difference. Favour soft falloff, width, and layered atmosphere; if a field looks like a UI, it is wrong.
+- **Lose the vehicle two ways — fog or chart.** A vehicle reads when it is STRUCTURE with DEPTH, and there are two opposite ways to lose it. A **formless fog**: soft warm gradients with no legible form (the 06-09 `straight-to-your-heart` / `teddys-gate` haze) — pretty, but nothing is actually _there_. A **flat chart**: thin, hard, sparse ruled primitives that reveal nothing (the 06-08 `spears` equalizer of shafts) — structure with no depth or meaning. The target sits between them: **structure that looks like a real thing, but only just so.** A halftone dot-screen dissolving a bloom (`moodboard/halftone-tulip-bloom.png`), a CRT/scanline raster over a subject (`crt-scanline-roses.png`), contour lines that DISPLACE to sculpt an eclipse out of an otherwise flat ruled field (`contour-eclipse-lines.png`) — all are sharp and structured AND representational and deep. **Sharp is welcome; sparse-and-empty and soft-and-formless are not.** Bonus: structure beat-syncs far more legibly than haze (doctrine 9).
 - **The copy-paste climax.** Every clip bloomed bright in the dead centre and settled — the One Sun moment landing as a centred mid-clip glow every single time. The moment is always present and always ONE (a constant), but its TIMING, PLACEMENT, and FORM are yours: ignite late, build slow and hold, sweep across as a front, sit off-centre, pulse and recede, crest at the very end. `useJourney`'s depart→travel→arrive with a centred settle is ONE option, not a mandate. If your bright moment lands where the last clip's did, move it.
 - **Copy-paste type.** Identical cream/gold lines in identical spots at identical times (doctrine 4 already forbids this). Vary placement musically AND derive the ink from the scene's own palette — a dusty rose, an artwork counter-accent — not always cream/gold. `FloatingType` carries its own contrast guarantee, so a non-cream ink still reads. Cream/gold is a default, not a requirement.
 

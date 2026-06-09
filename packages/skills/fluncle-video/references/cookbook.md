@@ -74,6 +74,7 @@ Always finish a shader with `dither8(col, uv)` to kill 8-bit banding on smooth g
 - Run `paletteMix(track.swatches)` to bend the artwork's colors toward the brand anchors; the roles are locked in code — field stays Deep Field, sun stays Eclipse Gold, ink stays cream, artwork hues live only in the secondary swatches. A loud cover can never repaint the night (the Loadstar incident: a cold blue sleeve once extinguished the sun — never again).
 - The **Retint Rule** (MOODBOARD.md): steal the reference TECHNIQUE, retint everything to canon — warm dark ground, Eclipse Gold as the single light source, Re-entry Red as the heat accent, Starlight Cream as ink. Cool hues survive only as minor counter-accents.
 - In a shader, keep the `u_palette` / `paletteStops` on the canon ramp (Deep Field → Re-entry Red → Eclipse Gold → Starlight Cream). Admit an artwork hue only as a separate minor seep uniform (see `u_cool` in `20260607-down-with-your-love.tsx`), never as a ramp stop. Gold stays the sun.
+- **Gold on a warm bed: MIX, don't ADD.** Additively blending Eclipse Gold over a warm orange/red field sums into a green/lime smear — all three 06-09 agents hit this independently. For the One Sun on a warm ground, `mix()`/lerp the colour toward a locked gold stop (optionally darkening the bed locally under the crest first) so it reads as true gold, not lime. Reserve additive blending for gold over a dark or cool ground.
 
 ## fractal / glass
 
@@ -81,3 +82,13 @@ No archive exemplar yet — an opportunity for diversity (doctrine 3).
 
 - **fractal:** `GLSL.polarFold(uv, segments)` folds the frame into N mirrored wedges; fly inward by scaling the folded coords with `u_time`/`arc` and tint the rings from the artwork accent, never gold. The One Sun moment is a gold core at the fold center.
 - **glass:** refractive vertical blades sweeping across the frame — per-blade UV refraction offsets that breathe with `u_bass`, specular brightness on `u_energy`, the sweep position travelling on the arc. The One Sun moment is one gold specular bulge.
+
+## semi-representational structure (real, but only just so)
+
+The register to reach for when a scene risks formless haze (SKILL.md failure-modes): a sharp, structured texture that abstracts a RECOGNISABLE subject — present, but only just. Three reference treatments (MOODBOARD.md), all of which beat-sync more legibly than soft haze and so satisfy doctrine 9 the easy way:
+
+- **Halftone dot-screen** (`halftone-tulip-bloom.png`) — quantise a soft form (a bloom, a body, the energy field) through a dot grid whose dot RADIUS rides the beat. The dots are sharp; the subject reads through them.
+- **CRT / scanline raster** (`crt-scanline-roses.png`) — horizontal scanlines + an RGB cell grid over a subject; jitter/roll the lines on onsets, swell the phosphor bloom on energy. Degraded broadcast, not clean UI.
+- **Contour-line displacement** (`contour-eclipse-lines.png`) — the Unknown-Pleasures motif used REPRESENTATIONALLY: a field of horizontal lines that DISPLACE around hidden forms so an eclipse/figure emerges from the warp (unlike `spears`, where flat sparse lines revealed nothing). Drive the displacement amplitude from the energy/bass curves; a single gold crest line is the One Sun.
+
+Keep the One Sun gold and the warm dark throughout — the structure is the vehicle, not a second light source.

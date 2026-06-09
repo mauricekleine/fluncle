@@ -57,11 +57,11 @@ GPU shaders require `--gl=angle`. Render at least four frames across the clip, a
 
 - **frame ~5** — verify the vehicle is present and holding center (Always-Visible Vehicle).
 - **the brightest frame** (the drop, from the energy curve) — verify type legibility and that nothing is blown out, that gold is ~10% of the frame, that the warm dark holds.
-- **a mid-travel frame** — check the field reads as organic DEPTH (soft falloff, width, layered atmosphere), not a flat diagram of thin hard primitives; check the type ink and placement are not the last clip's cream/gold-in-the-same-spot.
+- **a mid-travel frame** — check the vehicle reads as STRUCTURE WITH DEPTH — neither a flat diagram of thin hard primitives nor a formless warm fog (SKILL.md failure-modes); check the type ink and placement are not the last clip's cream/gold-in-the-same-spot.
 
 Iterate until type is legible inside the safe inset, the palette stays warm and inky, grain is present, and the vehicle reads from frame one. Two critique rounds minimum; taste is part of the job.
 
-**Stills cannot show motion jitter.** After the gates, scrub the MP4 (or render 3–4 ADJACENT frames around a beat) to confirm the vehicle FLOWS — position advances smoothly, audio only brightens/widens, nothing jumps-and-snaps on the kick (Motion law, doctrine 7). Then apply the **swap test**: set your stills beside the two most recent archive clips'. If the climax blooms in the same place, or the type sits in the same spot, or the geometry rhymes — change it before you ship.
+**Stills cannot show motion jitter or reactivity.** After the gates, scrub the MP4 (or render 3–4 ADJACENT frames around a beat) to confirm the vehicle FLOWS — position advances smoothly, audio only brightens/widens, nothing jumps-and-snaps on the kick (Motion law, doctrine 7). Then the **reactivity gate** (doctrine 9): play the MP4 against the audio — can you FEEL the kick and the drop in the picture? If the motion would look the same with the sound muted, the reactivity is too weak; push it before you ship. Finally the **swap test**: set your stills beside the two most recent archive clips'. If the climax blooms in the same place, or the type sits in the same spot, or the geometry rhymes — change it.
 
 ## 6. Gates
 
