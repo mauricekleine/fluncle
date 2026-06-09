@@ -13,6 +13,8 @@ This file is a router. Read it top-down, then load the reference for the phase y
 
 A styled component library made agents produce same-looking videos: identical text spots and timing, default eclipse discs, the same vehicle three runs in a row. The best output came from an agent writing its own shader from scratch. So the styled scene library is gone, the package slimmed to the core surface, and the rules that used to be enforced by components are now doctrine you uphold by hand. Diversity is the point. If your video could be swapped with the last one and nobody would notice, you have failed.
 
+The aesthetic is already captured and it is strong — warm dark, one burning sun, grain, the through-the-glass calm. **Trust it, and use it freely.** The rulings below fence the brand; the space inside them is wide and it is yours. Lean toward the bolder, more alive idea over the safe repeat — a render that is unmistakably Fluncle yet unlike anything in the archive is the win. The doctrine is a short list of laws plus the few failure modes that have actually bitten us, not a recipe to follow step by step.
+
 ## The two things that are always true
 
 1. **The video IS the archive file.** Each video is one self-contained file: `packages/video/src/remotion/tracks/YYYYMMDD-<kebab-slug-of-title>.tsx` (kebab-case, enforced by a pre-commit hook), exporting a named PascalCase component, registered in `src/remotion/root.tsx`, importing only the core from `../cosmos`. It is deterministic, so it re-renders identically forever. The archive is the collection; rendered MP4s are never committed.
@@ -60,9 +62,17 @@ Eight rulings. They are LAW. If a concept fights one, change the concept.
 
 6. **The quad law.** Every `ShaderLayer` must drive final color AND alpha to exactly 0.0 inside its quad bounds (a circular fade in layer space covers the corners — r reaches 1.41 there). The printed-rectangle incident happened twice.
 
-7. **Starfield law.** Positional drift is monotonic (we are in orbit); audio may drive brightness/twinkle, never position or direction.
+7. **Motion law — audio drives intensity, not position.** Anything that moves across the frame — a vehicle, a field, a streak, a star — advances MONOTONICALLY and continuously, from `u_time`, the journey `arc`, or a monotonic rise. Beat-synced and transient audio (`u_beatPulse`, onsets, energy spikes) modulates BRIGHTNESS, width, exposure, glow, or grain — never a position/flow coordinate. Subtract a snappy pulse from a position and the scene jumps forward and snaps back on every beat (the Wings glitch); feed that same pulse to brightness and it breathes. Keep procedural detail low-frequency enough (or fbm-softened) that it does not shimmer or alias as it travels. The starfield is the same law: monotonic orbital drift, audio touches twinkle only.
 
 8. **Musical cut.** 20s default; choose `--duration-ms` (10–30s) from the waveform; end on a drop or just before a transition, never mid-build.
+
+## Failure modes from the last batch (avoid these)
+
+Not new law — the shapes of getting it wrong, so you can see them coming. The 06-08 clips drifted off-brand in three ways the rulings above don't spell out:
+
+- **Diagram, not depth.** Thin, hard-edged, sparse, repeated primitives — ruled lines, bars, an equalizer of vertical shafts (`spears`) — read as a CSS chart, not the cosmos. The clips that land win on organic depth: `momentum`'s kaleidoscopic petals, `teddys-gate`'s SOFT wide glowing light columns. The same vertical motif done soft-and-layered vs hard-and-sparse is the whole difference. Favour soft falloff, width, and layered atmosphere; if a field looks like a UI, it is wrong.
+- **The copy-paste climax.** Every clip bloomed bright in the dead centre and settled — the One Sun moment landing as a centred mid-clip glow every single time. The moment is always present and always ONE (a constant), but its TIMING, PLACEMENT, and FORM are yours: ignite late, build slow and hold, sweep across as a front, sit off-centre, pulse and recede, crest at the very end. `useJourney`'s depart→travel→arrive with a centred settle is ONE option, not a mandate. If your bright moment lands where the last clip's did, move it.
+- **Copy-paste type.** Identical cream/gold lines in identical spots at identical times (doctrine 4 already forbids this). Vary placement musically AND derive the ink from the scene's own palette — a dusty rose, an artwork counter-accent — not always cream/gold. `FloatingType` carries its own contrast guarantee, so a non-cream ink still reads. Cream/gold is a default, not a requirement.
 
 ## The constants you cannot touch
 

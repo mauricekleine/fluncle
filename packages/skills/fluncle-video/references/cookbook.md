@@ -42,6 +42,14 @@ Audio reactivity comes ONLY from the curve hooks / shader audio uniforms — nev
 
 See the `drop` / `dropRise` / `cold` scalars and the `DROP_IN`/`DROP_OUT` window in `20260607-down-with-your-love.tsx` for a complete worked beat map; `20260607-hold-that-sucker-down.tsx` shows building the scene around a quiet breakdown and two late drops.
 
+## motion, depth, and the moving climax (the 06-08 lessons)
+
+Three failure modes from the last batch, with the technique to avoid each (full framing in SKILL.md):
+
+- **Position is monotonic; audio is additive.** Build any travel coordinate from `u_time` / `arc` / a monotonic rise ONLY. `float flow = radius*3.0 - u_time*0.85 - u_rise*1.4;` is right; subtracting a beat spike — `... - u_lift*0.6` — is the Wings jump-and-snap (the pattern slides forward on the kick, then recoils as the pulse decays). To make a beat "lift" the feathers, multiply their BRIGHTNESS — `plumeHeat *= 1.0 + u_lift*0.4` — never their coordinate. Keep streak frequency low (≲ a dozen) or fbm-soften it so it doesn't strobe/alias as it moves.
+- **Depth, not diagram.** Volume comes from two-layer fbm, soft radial falloff, vignette, and layered haze — not thin hard parallel primitives on a sparse field. Compare `20260607-teddys-gate.tsx` (soft wide glowing columns, atmospheric — good) with the `spears` failure (thin hard ruled shafts — a bar chart). If your field could pass for a UI element, widen it, soften the edges, and layer haze behind it until it reads as cosmos.
+- **Move the climax.** Don't gate the One Sun bloom to dead-centre on every clip. Scan `audio.energyCurve` for where the music ACTUALLY peaks and ignite there — late, early, a slow swell held to the close, an off-centre crest, a front sweeping across. The centred mid-clip glow is the template to escape, not the target.
+
 ## GLSL helper inventory
 
 Spread these strings ahead of `void main()`; mind the dependency chain. (Signatures in README.)
