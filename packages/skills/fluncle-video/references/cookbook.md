@@ -42,6 +42,8 @@ Audio reactivity comes ONLY from the curve hooks / shader audio uniforms — nev
 
 See the `drop` / `dropRise` / `cold` scalars and the `DROP_IN`/`DROP_OUT` window in `20260607-down-with-your-love.tsx` for a complete worked beat map; `20260607-hold-that-sucker-down.tsx` shows building the scene around a quiet breakdown and two late drops.
 
+- **Movement envelopes (doctrine 10):** score 2–3 movements by pinning boundary timestamps to the music's seams (a drop, a bar boundary, an energy shift), then build one 0..1 envelope per movement in React (`interpolate(sec, [boundary, boundary + ~0.8], [0, 1])`, clamped) and pass them as uniforms (`u_m2`, `u_m3`). Inside the shader each envelope shifts the REGIME of the same vehicle — lerp the palette lean, step the cell/dot/streak density or scale, tighten or break the structure, swap which term dominates — while position stays monotonic (Motion law) and the One Driver persists. Crossfade over roughly a beat: long enough to read as intentional, short enough to land ON the seam. The result: second 18 must not look like second 4 with the brightness up.
+
 ## motion, depth, and the moving climax (the 06-08 lessons)
 
 Three failure modes from the last batch, with the technique to avoid each (full framing in SKILL.md):

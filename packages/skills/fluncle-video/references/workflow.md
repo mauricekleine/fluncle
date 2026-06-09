@@ -27,6 +27,7 @@ In order:
 2. **Choose the vehicle (doctrine 1, One Driver).** Exactly one travelling beat-synced medium: orb / lines / fractal / glass / glitch, or one you invent. Everything else supports it. Decide how the one Eclipse Gold sun moment is expressed — as the orb itself, or, for any other vehicle, THROUGH the vehicle (a gold crest igniting, a gold resolution front), never as a second celestial body.
 3. **Choose the texture family** (nebula / analog / dither / paint / fluent / duotone — see MOODBOARD.md) that fits the tune. A liquid roller wants drift, nebula, or fluent; a neuro stomper wants dither, glitch, hard onset flashes; a gel-lit duotone suits the meditative ones.
 4. **Write a two-sentence journey:** from where, through what, arriving where — matched to the song's energy curve. Name where the drop lands and how the vehicle ignites there.
+5. **Score the movements (doctrine 10).** Split the clip into 2–3 movements and pin each boundary to a real musical seam — a drop, a bar boundary, a breakdown, an energy shift — by reading the beat grid and energy curve (the timestamps go in your header comment). Name what visibly changes at each boundary (palette lean, density/scale jump, reframe, a new behavior of the same vehicle): same theme, a legible shift. If you cannot say what changes at second N, the clip has one movement and will exhaust the eye.
 
 Confirm the **Always-Visible Vehicle** (doctrine 2) in the concept: the vehicle fills the frame from the first frame (a dim ember, a flat field, a scrambled matrix that is unmistakably present), never a late reveal.
 
@@ -56,7 +57,8 @@ bunx remotion still src/remotion/index.ts <CompId> out/still-N.png --props=out/<
 GPU shaders require `--gl=angle`. Render at least four frames across the clip, and ALWAYS include:
 
 - **frame ~5** — verify the vehicle is present and holding center (Always-Visible Vehicle).
-- **the brightest frame** (the drop, from the energy curve) — verify type legibility and that nothing is blown out, that gold is ~10% of the frame, that the warm dark holds.
+- **the brightest frame** (the drop, from the energy curve) — verify type legibility and that nothing is blown out, that gold is ~10% of the frame, that the warm dark holds. Verify the vehicle's FOCAL MASS sits inside the frame — off-centre is good, but the centre of attention must not be cropped out of frame (a crescent whose body lives past the edge reads as a missed framing, not a composition).
+- **one still per MOVEMENT** (doctrine 10) — put them side by side: a viewer should see at a glance that these are different passages of the same world (palette lean, density, scale, regime). If two movements' stills could be swapped without anyone noticing, the shift is too timid — push it.
 - **a mid-travel frame** — check the vehicle reads as STRUCTURE WITH DEPTH — neither a flat diagram of thin hard primitives nor a formless warm fog (SKILL.md failure-modes); check the type ink is drawn from the composition's palette (no stray brand gold — that belongs to the `CloseCard` alone) and the placement isn't the last clip's spot. Across your frames, confirm the **Log ID appears once** — subtle, then faded, in a fresh spot (doctrine 4).
 
 Iterate until type is legible inside the safe inset, the palette stays warm and inky, grain is present, and the vehicle reads from frame one. Two critique rounds minimum; taste is part of the job.

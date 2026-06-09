@@ -48,7 +48,7 @@ That is the whole kit. The README has the exact signatures.
 
 ## Doctrine
 
-Nine rulings. They are LAW. If a concept fights one, change the concept.
+Ten rulings. They are LAW. If a concept fights one, change the concept.
 
 1. **One Driver.** Exactly ONE travelling, beat-synced medium per video. orb / lines / fractal / glass / glitch are EXAMPLES, not an enum — invented vehicles are welcome, provided there is exactly one. When the vehicle is NOT an orb, the One Sun Eclipse Gold moment is expressed THROUGH the vehicle (a gold crest line igniting, a gold resolution front) — never as a second celestial body sharing the frame. Two drivers means one is wrong.
 
@@ -67,6 +67,8 @@ Nine rulings. They are LAW. If a concept fights one, change the concept.
 8. **Musical cut.** 20s default; choose `--duration-ms` (10–30s) from the waveform; end on a drop or just before a transition, never mid-build.
 
 9. **The music leads, the video follows.** Audio reactivity is the point, not a finishing touch — the vehicle must visibly, legibly move WITH the track: lock to the beat grid, let the drop and the onsets HIT, map the energy curve to real swings in exposure / scale / width / density. The test, applied on the rendered MP4 (not the stills): **if the motion would look the same with the audio muted, the video has failed.** This stays inside the Motion law — reactivity rides intensity, never position (doctrine 7) — but it must be FELT; ambient drift that merely coexists with the music is the failure this kills (the 06-09 batch over-smoothed into floatiness). Sharp, structured textures (below) carry this far better than soft haze.
+
+10. **Movements.** A pattern, however good, exhausts the eye in ~10 seconds — so a clip is 2–3 MOVEMENTS, not one texture held for 20s. Each movement boundary lands on a seam the music actually has (a drop, a bar boundary, a breakdown, an energy shift — read the beat grid and energy curve), and the shift is a legible change of regime inside the SAME theme: a palette lean, a scale or density jump, a zoom or reframe, the structure tightening or breaking open, a new behavior of the same vehicle. Nothing drastic — the One Driver persists (doctrine 1), the world doesn't change — but a viewer who has adapted to the pattern gets re-captured. A clip where second 18 looks like second 4 (just brighter) has only one movement, and that is the failure this rule kills.
 
 ## Failure modes from the last batch (avoid these)
 
