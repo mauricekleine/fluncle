@@ -58,17 +58,18 @@ The Log ID seeds from the recording's ISRC (falling back to the Spotify id). Whe
 
 ## TikTok auto-pipeline (the capstone)
 
-The full vision: "Maurice discovers bangers, Fluncle does everything else." Add a track via `ssh rave.fluncle.com`, and the system resolves metadata, resolves a legal preview, analyzes the audio, renders a 9:16 video, writes a caption, and pushes a TikTok **draft** — fully automatic. The only human steps stay manual on purpose: attach the official TikTok sound (the pipeline suggests the start offset from the drop analysis), then publish. That keeps all music licensing inside TikTok's ecosystem — preview audio is for analysis only, never uploaded.
+The full vision: "Maurice discovers bangers, Fluncle does everything else." Add a track via `ssh rave.fluncle.com`, and the system resolves metadata + a legal preview, analyzes the audio, renders a 9:16 video, writes a caption, and pushes a social **draft** — fully automatic. The only human steps stay manual on purpose: attach the official TikTok sound, then publish. Preview audio is for analysis only, never uploaded.
 
-The **Now** section above sequences the build (analysis → video → R2-via-endpoint → TikTok draft); this section is the broader vision and the parts that come _after_ a draft exists. What it adds beyond the Now sequence:
+**Built (the draft-publishing layer is live):** per-platform `social_posts` state, the **Postiz** adapter (one API key; drafts to the TikTok inbox via `content_posting_method: UPLOAD` + `SELF_ONLY`), the caption (`note.txt` — audio-derived hashtags + the `fluncle://<log-id>` marker), and the CLI (`track draft` / `track social`). See [track-lifecycle.md](./track-lifecycle.md) Phase 3 + the `fluncle-publish` skill. We chose **Postiz over a direct TikTok Content Posting API integration** — no app audit, no OAuth/token storage on our side, and YouTube/Instagram come along for free.
 
-- **Pipeline orchestration + status lifecycle.** A per-track state machine (`queued → preview_resolved → analyzed → rendering → rendered → draft_pushed → awaiting_publish → posted_verified`, plus `needs_review / stale_draft / failed`) and the `social_posts` storage to back it. Triggered from a track being added, not a manual agent run.
-- **Caption + public marker generation.** Captions in Fluncle's voice (VOICE.md) with artist/track/Spotify link/hashtags; the post carries the discovery's **canonical log identifier** (see the logbook section below) as both an on-screen/caption marker and the key for publication reconciliation. This replaces the brief's bespoke `rave://7F3A` / `transmission FLN-...` markers — there is one identity per discovery, used everywhere.
-- **TikTok Content Posting API integration.** A TikTok developer app, OAuth for `@fluncle`, draft upload (video + caption, no music, no publish), and the token storage that needs (`TIKTOK_CLIENT_ID/SECRET`, access + refresh tokens).
-- **Reconciliation agent.** An hourly check that matches recent TikTok posts to public markers and flips `social_post.status` to `posted_verified` with the live URL — so publication state is observed, not hand-tracked.
-- **Text overlays from verified facts.** Artist / track / year burned into the render (label/genre optional), reusing the video kit's facts-with-sources discipline.
+What's left to reach the fully-automatic capstone:
 
-Explicitly out of scope for V1 (per the brief): automatic publishing, Instagram, YouTube Shorts, performance/engagement analytics. The one human action stays: choose song, attach official sound, press publish.
+- **Autonomous trigger.** Today the operator runs `track video` then `track draft` by hand. The future single Spinup agent chains enrich → video → publish, fired from a track being added (`ctx.waitUntil`), not a manual run. Blocked on the Spinup render profile (see Now).
+- **Reconciliation.** An hourly check that matches recent posts to the `fluncle://<log-id>` marker and flips `social_posts.status` to `published` with the live URL — so publication state is observed, not hand-entered. Today the operator records status + URL manually via `track social`.
+- **More platforms.** YouTube Shorts / Instagram Reels — connect them in Postiz, add platform sections to the `fluncle-publish` skill; same `social_posts` table + CLI. (Verify each supports a true draft vs. auto-publish.)
+- **Text overlays from verified facts.** Artist / track / year burned into the render — a video-kit concern (the `fluncle-video` skill), reusing facts-with-sources discipline.
+
+The one human action always stays: choose song, attach official sound, press publish.
 
 ## The logbook — Fluncle as a traveler's archive
 

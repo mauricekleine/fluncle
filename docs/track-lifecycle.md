@@ -32,7 +32,7 @@ This takes a while, and that's fine: the find was already live. When it finishes
 
 **Runtime split (Spinup).** The two halves have opposite resource profiles, so they can ship separately. Audio analysis is light — ffmpeg + JS DSP — and fits a microVM's current limits (it just needs `ffmpeg` pinned), so it goes first. Video rendering is heavier (headless Chromium + WebGL): Spinup has no GPU, but software rasterization (SwiftShader) is viable — a 20s clip benchmarks at ~45s software vs ~30s on Metal (~1.45×, single-threaded), so it needs a render-capable rootfs (Chromium + SwiftShader/Mesa + ffmpeg) and likely more than one vCPU, **not** a GPU. See ROADMAP.md for the build split.
 
-This same agent is the front half of the TikTok pipeline (see [ROADMAP.md](./ROADMAP.md)): once it has the video + tags, its next step is to push a TikTok draft (video without audio + a caption built from the tags). One async worker, many outputs.
+This same worker feeds **Phase 3 — Publish** (below): once the video is in R2, the next step pushes a social draft. One async worker, many outputs.
 
 ## The update path
 
@@ -52,6 +52,33 @@ Crowd-sourced tags (Last.fm and the like) proved untrustworthy — folksonomy th
 - **`manual`** — set or confirmed by an admin via `track update`. **Manual always wins and is never overwritten by the agent.**
 
 That flag is also the **training signal**: every `manual` track is a labeled example of {audio features → sub-genre}, which later feeds a small classifier (see ROADMAP). Tags stay "best-effort discovery fuel," never canonical facts; the reliable auto-signal at add time is the `label`.
+
+## Phase 3 — Publish (per-platform, draft-first)
+
+Once a track has a video in R2, it can go to social platforms — but **as a draft, never auto-posted.** TikTok's licensed sounds attach only in-app, so the flow pushes the **audio-less cut** (`footage-silent.mp4`) + the caption (`note.txt`) as a private (`SELF_ONLY`) draft, and the operator adds the official sound and publishes natively (which also reads better to the algorithm).
+
+Drafts go through **Postiz** — one integration that already speaks TikTok / YouTube / Instagram, so the Worker holds a single `POSTIZ_API_KEY` instead of per-platform OAuth:
+
+```
+fluncle admin track draft <track_id|log_id> --platform tiktok      # → inbox draft
+fluncle admin track social <track_id|log_id> --platform tiktok --status published --url <url>
+```
+
+`POST /api/admin/tracks/:id/social/:platform/draft` uploads the R2 video to Postiz and creates the draft; the operator reviews in-app, then records the outcome (`scheduled` / `published` + the real post URL) via `PATCH …/social/:platform`. This is **not** part of the enrichment workflow — it's a separate capability (the `fluncle-publish` skill); a future single Spinup agent will chain enrich → video → publish, but they're distinct steps.
+
+## Per-platform publication (`social_posts`)
+
+Publication state is **per platform**, separate from the track's own pipeline (which tops out at "video in R2"). One row per `(track, platform)`:
+
+| Field                   | Notes                                                      |
+| ----------------------- | ---------------------------------------------------------- |
+| `platform`              | `tiktok` today; `youtube_shorts` / `instagram_reels` later |
+| `status`                | `draft` → `scheduled` \| `published` (or `failed`)         |
+| `external_id`           | the Postiz post id (for later reconciliation)              |
+| `url`                   | the public post URL — set by the operator when published   |
+| `scheduled_for`, `*_at` | timing                                                     |
+
+There is no per-track "published" flag — a track's reach is the union of its `social_posts`. Telegram stays its own auto-post boolean on `tracks` (a different, no-review model) for now.
 
 ## Data model (the enrichment fields)
 
