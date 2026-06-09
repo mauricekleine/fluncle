@@ -64,4 +64,4 @@ That's the whole loop: get → analyze → update.
 
 ## Video render (separate, requires the kit)
 
-Rendering the per-track video is **not** part of this self-contained skill — Remotion needs the `packages/video` kit present (a repo checkout / prebuilt image). When the kit is available, render + upload the MP4 via the admin video endpoint (the Worker owns R2; you never hold R2 credentials), then `fluncle admin track update <trackId> --video-url <url>`. See `packages/video/README.md` and `docs/track-lifecycle.md`.
+Rendering the per-track video is **not** part of this self-contained skill — Remotion needs the `packages/video` kit present (a repo checkout / prebuilt image). When the kit is available, its doctrine is the **`fluncle-video` skill** (and `packages/video/README.md`): render the bundle, then `fluncle admin track video <track_id|log_id> --dir out/<log-id>` uploads it and sets `video_url` (the Worker owns R2; you never hold R2 credentials). Publishing the rendered video as a social draft is a third capability — the **`fluncle-publish` skill** (`fluncle admin track draft`). The full chain is `docs/enrichment-agent.md` + `docs/track-lifecycle.md`.

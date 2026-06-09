@@ -21,12 +21,12 @@ The track is now real, listenable, and shows its identity (coordinate, label, du
 
 ## Phase 2 — Enrich (asynchronous, on a Spinup agent)
 
-After a successful add, the Worker fires a **Spinup agent** (via the Spinup runtime API) with just the `trackId`, fire-and-forget (`ctx.waitUntil`, so it never blocks the add response). The agent has what the Worker can't: a repo checkout, the admin Fluncle CLI, `ffmpeg`, Remotion, and R2 credentials. Given one track ID, it:
+After a successful add, the Worker fires a **Spinup agent** (via the Spinup runtime API) with just the `trackId`, fire-and-forget (`ctx.waitUntil`, so it never blocks the add response). The agent has what the Worker can't: a repo checkout, the admin Fluncle CLI, `ffmpeg`, and Remotion. It does **not** hold any platform secret — R2, Postiz, and Turso all live on the Worker, and the agent reaches them only through the authenticated admin API (it carries just its admin token). Given one track ID, it:
 
 1. **Resolves + analyzes the preview audio** — BPM, musical **key** (+ confidence), and spectral features (brightness, sub-bass weight, mid-band flatness) via the DSP pipeline (`packages/video/src/pipeline/analyze-audio.ts`). The audio is the trustworthy source — see "Tags" below.
 2. **Derives a sub-genre suggestion** from those features (liquid ↔ neuro ↔ jungle/dancefloor), normalized through the dnb sub-genre allow-list (`tags.ts`).
-3. **Renders the video** (the `packages/video` kit) and uploads the MP4 to **Cloudflare R2**; the public URL becomes `video_url`.
-4. **Writes everything back** through `fluncle admin track update <id>` — `bpm`, `key`, `tags` (as `auto`), `video_url`, and flips `enrichment_status` to `done`.
+3. **Renders the video** (the `packages/video` kit) and uploads the bundle through the admin video endpoint (`fluncle admin track video` → `POST /api/admin/tracks/:id/video`); the **Worker** writes it to R2 and sets `video_url` to the review cut.
+4. **Writes the analysis back** through `fluncle admin track update <id>` — `bpm`, `key`, `tags` (as `auto`) — and flips `enrichment_status` to `done`.
 
 This takes a while, and that's fine: the find was already live. When it finishes, the analysis fields and the video appear across the Galaxy.
 
