@@ -12,5 +12,5 @@
   // found.fluncle.com; the Worker owns the bucket (the agent uploads via the
   // admin endpoint and never holds R2 credentials). Keys: <log-id>/review.mp4,
   // <log-id>/social.mp4, <log-id>/poster.jpg, <log-id>/caption.txt.
-  "r2_buckets": [{ "binding": "VIDEOS", "bucket_name": "fluncle-video" }],
+  "r2_buckets": [{ "binding": "VIDEOS", "bucket_name": "fluncle-videos" }],
 }
