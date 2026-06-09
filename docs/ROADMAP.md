@@ -22,6 +22,28 @@ The active work: the async enrichment half of the [track lifecycle](./track-life
 
 5. **Later — the small classifier.** Train it on the accumulated `manual`-labeled tags ({audio features → sub-genre}) — the `features_json` vectors are already being stored for exactly this. Gloriously, unnecessarily fun; that's the point.
 
+## Now (parallel) — video render pipeline, local end-to-end (high priority)
+
+Ship per-track videos by hand to build traction now; automation lands in parallel. The video agent runs **locally** (the `fluncle-video` skill, not Spinup — render is too hardware-heavy for the microVM for now). Two halves: fix render QUALITY, then close the SHIP loop.
+
+**Quality — three regressions in the 2026-06-08 clips (`spears`, `wings`) vs the polished 06-07 batch:**
+
+1. **Flat, "HTML-like" scenes (`spears`).** _Not_ an HTML fallback — it's a real GPU shader (`dither8` + film grain + smoothstep edges all present). The flatness is the **geometry**: thin, hard-edged, repetitive vertical spear-shafts on a sparse low-contrast field read like a CSS bar-chart, not the lush layered depth of the good clips. Fix is doctrine + a taste gate — favour organic depth, soft falloff, and atmospheric layering over thin hard primitives; reject flat/CSS-like geometry before shipping (always view frames — Maurice's video taste).
+
+2. **Glitchy "dancing" motion (`wings`).** The shader subtracts a snappy, non-monotonic audio value from a **position** coordinate (`flow = radius*3 − u_time*0.85 − u_rise*1.4 − u_lift*0.6`; `u_lift` rises then decays on every beat), so the feathers jump forward and snap back — visible back-and-forth. Compounded by 21 high-frequency streaks that temporally alias as they move, and `spread = energy` wobbling the fan width. Rule to bake in: **audio reactivity modulates brightness/width/intensity, never position** — motion coordinates stay monotonic/continuous; damp or clamp audio terms; keep procedural detail low-frequency enough (or softened) to avoid temporal shimmer. Worth a shared helper (monotonic motion + additive-only audio shimmer).
+
+3. **Fixed text that fights the scene.** `FloatingType` already allows a colour override, caller-placed position, and bakes in a contrast guarantee (scrim + ink halo) — but the agent repeats the same defaults (gold/cream/stardust) and the same placements on every track, so the type neither blends with the chosen aesthetic nor varies (e.g. gold "selected by Fluncle" over the gold plume). Fix: derive the text ink from the scene's palette within DESIGN bounds (a palette-aware colour helper, still contrast-guaranteed), and vary placement within the moodboard/DESIGN safe zones — **bounded, not fixed**.
+
+**Systemic prevention:** a per-clip quality gate before "shippable" — render the key stills (ignition / mid / close), view them, and check a short list (organic depth · smooth monotonic motion · text blends + legible · inside safe margins). The video sibling of enrichment's "honest null" discipline.
+
+**Ship loop — today the pipeline renders a local MP4 only; everything after is missing:**
+
+- **Two cuts per track** — the with-audio review cut + an **audio-less** cut (the official sound is attached by hand in the TikTok app, keeping licensing inside TikTok).
+- **Upload to R2** — a new admin endpoint (e.g. `POST /api/admin/tracks/:id/video`) takes the MP4; **the Worker owns R2, the agent never holds R2 creds**. Then link it with `fluncle admin track update --video-url` (already built).
+- **Caption generation** — VOICE.md voice, analysis-derived + `#dnb` hashtags, the canonical `fluncle://<log_id>` marker.
+- **Run locally end-to-end** via the `fluncle-video` skill; surface the video on the web later (it degrades gracefully today).
+- **Optional:** auto-push the TikTok _draft_ (Content Posting API) from this machine — but the Spinup agent stays off for now; manual upload is fine to start.
+
 ---
 
 _Unsorted below — bigger arcs and reference detail. The build sequencing lives in **Now** above._
