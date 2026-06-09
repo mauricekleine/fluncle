@@ -57,7 +57,7 @@ GPU shaders require `--gl=angle`. Render at least four frames across the clip, a
 
 - **frame ~5** — verify the vehicle is present and holding center (Always-Visible Vehicle).
 - **the brightest frame** (the drop, from the energy curve) — verify type legibility and that nothing is blown out, that gold is ~10% of the frame, that the warm dark holds.
-- **a mid-travel frame** — check the vehicle reads as STRUCTURE WITH DEPTH — neither a flat diagram of thin hard primitives nor a formless warm fog (SKILL.md failure-modes); check the type ink and placement are not the last clip's cream/gold-in-the-same-spot.
+- **a mid-travel frame** — check the vehicle reads as STRUCTURE WITH DEPTH — neither a flat diagram of thin hard primitives nor a formless warm fog (SKILL.md failure-modes); check the type ink is drawn from the composition's palette (no stray brand gold — that belongs to the `CloseCard` alone) and the placement isn't the last clip's spot. Across your frames, confirm the **Log ID appears once** — subtle, then faded, in a fresh spot (doctrine 4).
 
 Iterate until type is legible inside the safe inset, the palette stays warm and inky, grain is present, and the vehicle reads from frame one. Two critique rounds minimum; taste is part of the job.
 
