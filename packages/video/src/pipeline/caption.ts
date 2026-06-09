@@ -27,9 +27,21 @@ export type CaptionTrack = {
   isrc?: string | null;
   label?: string | null;
   logId?: string | null;
+  releaseDate?: string | null;
   tags?: string[] | null;
   title: string;
 };
+
+/** Release year from a stored release_date ("2015-03-20" → 2015). Null when unset. */
+export function yearFromReleaseDate(releaseDate: string | null | undefined): number | null {
+  if (!releaseDate) {
+    return null;
+  }
+
+  const year = Number.parseInt(releaseDate.slice(0, 4), 10);
+
+  return Number.isFinite(year) ? year : null;
+}
 
 /** "Found Jun 8" — the found date, UTC, no leading zero (matches FloatingType). */
 function formatFound(iso: string): string {

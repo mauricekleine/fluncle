@@ -14,7 +14,7 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { buildCaption, type CaptionTrack, fetchReleaseYear } from "./caption";
+import { buildCaption, type CaptionTrack, fetchReleaseYear, yearFromReleaseDate } from "./caption";
 
 const OUT_DIR = path.resolve(import.meta.dirname, "../../out");
 
@@ -95,7 +95,9 @@ spawnSync(
 );
 
 log("caption.txt");
-const year = await fetchReleaseYear(track.isrc);
+// Prefer the stored release_date (from track get); fall back to Deezer for any
+// track not yet backfilled.
+const year = yearFromReleaseDate(track.releaseDate) ?? (await fetchReleaseYear(track.isrc));
 const caption = buildCaption(track, year);
 writeFileSync(captionPath, caption);
 
