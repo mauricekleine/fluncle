@@ -73,10 +73,10 @@ Iterate until type is legible inside the safe inset, the palette stays warm and 
 Once the render passes its gates, package the bundle and link it to the track. All local; the operator runs it.
 
 1. **Package** — `bun run --cwd packages/video ship <trackId|log-id>` builds `out/<log-id>/`:
-   - `review.mp4` — with audio; the web cut + your QA pass
-   - `social.mp4` — audio-less remux (`ffmpeg -c copy -an`); the cut you upload to TikTok and attach the official sound to by hand (keeps licensing inside TikTok)
+   - `footage.mp4` — with audio; the public/web cut (becomes `video_url`) + your QA pass
+   - `footage-silent.mp4` — audio-less remux (`ffmpeg -c copy -an`); the cut you upload to TikTok and attach the official sound to by hand (keeps licensing inside TikTok)
    - `poster.jpg` — a ~80% drop frame
-   - `caption.txt` — the fixed-template caption: `Artist — Title (Year)` / Label / `Found <date>: fluncle://<log-id>` / `#dnb #drumnbass #drumandbass` + sub-genre tags (lowercased, deduped)
+   - `note.txt` — the fixed-template caption that accompanies the footage: `Artist — Title (Year)` / Label / `Found <date>: fluncle://<log-id>` / `#dnb #drumnbass #drumandbass` + sub-genre tags (lowercased, deduped)
 
    The track MUST have a Log ID (no Log ID → no ship; backfill the ISRC first). Requires an existing render (`out/<trackId>.mp4`) — run step 7 first.
 
@@ -100,7 +100,7 @@ The operator reviews the MP4, runs the ship step, and posts; you never auto-publ
 ## Safety rails (also in SKILL.md; they survive even if the rest is skipped)
 
 - One video per run. The render is local; the only thing that leaves the machine is the operator-run ship step (the bundle → R2 via the admin endpoint, linked as `video_url`). No auto-publish to TikTok or any social platform — that stays manual.
-- Preview audio comes only from the pipeline's resolver (Deezer/iTunes). Never source audio from YouTube or rip full tracks. The `social.mp4` cut you ship is audio-less by design.
+- Preview audio comes only from the pipeline's resolver (Deezer/iTunes). Never source audio from YouTube or rip full tracks. The `footage-silent.mp4` cut you ship is audio-less by design.
 - The constants are not yours to restyle: if your concept fights the grammar, change the concept.
 - Every word on screen and in the caption passes VOICE.md; every fact on screen has a source; the track metadata needs none.
 - Do not commit, push, or delete anything; your artifacts are the MP4 bundle, the linked `video_url`, and your report.

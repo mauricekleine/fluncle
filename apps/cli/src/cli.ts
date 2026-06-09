@@ -106,12 +106,12 @@ async function runTrackVideo(
     allowPositionals: true,
     args,
     options: {
-      caption: { type: "string" },
       dir: { type: "string" },
+      footage: { type: "string" },
+      "footage-silent": { type: "string" },
       json: { default: false, type: "boolean" },
+      note: { type: "string" },
       poster: { type: "string" },
-      review: { type: "string" },
-      social: { type: "string" },
     },
   });
 
@@ -119,7 +119,7 @@ async function runTrackVideo(
 
   if (!idOrLogId) {
     throw new Error(
-      "Missing id. Usage: fluncle admin track video <track_id|log_id> (--dir <dir> | --review <file> [--social <file>] [--poster <file>] [--caption <file>])",
+      "Missing id. Usage: fluncle admin track video <track_id|log_id> (--dir <dir> | --footage <file> [--footage-silent <file>] [--poster <file>] [--note <file>])",
     );
   }
 
@@ -136,14 +136,16 @@ async function runTrackVideo(
   };
 
   const files = {
-    caption: parsed.values.caption ?? fromDir("caption.txt"),
+    footage: parsed.values.footage ?? fromDir("footage.mp4"),
+    footageSilent: parsed.values["footage-silent"] ?? fromDir("footage-silent.mp4"),
+    note: parsed.values.note ?? fromDir("note.txt"),
     poster: parsed.values.poster ?? fromDir("poster.jpg"),
-    review: parsed.values.review ?? fromDir("review.mp4"),
-    social: parsed.values.social ?? fromDir("social.mp4"),
   };
 
-  if (!files.review) {
-    throw new Error("A review cut is required (--review <file>, or --dir containing review.mp4)");
+  if (!files.footage) {
+    throw new Error(
+      "A footage cut is required (--footage <file>, or --dir containing footage.mp4)",
+    );
   }
 
   const result = await trackVideoCommand(idOrLogId, files);
@@ -552,7 +554,7 @@ Operator:
   fluncle track get <track-id|log-id> [--json]      Look up one finding by id or Log ID
   fluncle admin track update <track-id> [--tag t]... [--tag-source auto|manual] [--bpm n] [--key "k"] [--video-url u] [--features json] [--status s] [--note "text"] [--json]
       Certify a track into the archive
-  fluncle admin track video <track-id|log-id> (--dir <dir> | --review <f> [--social <f>] [--poster <f>] [--caption <f>]) [--json]
+  fluncle admin track video <track-id|log-id> (--dir <dir> | --footage <f> [--footage-silent <f>] [--poster <f>] [--note <f>]) [--json]
       Upload a track's video bundle to R2 and link it
   fluncle admin submissions                          List pending submissions
   fluncle admin submissions review <submission-id>   Inspect one submission

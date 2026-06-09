@@ -11,13 +11,14 @@ const FOUND_BASE = "https://found.fluncle.com";
 
 type Artifact = { contentType: string; field: string; name: string };
 
-// The bundle the ship pipeline produces under out/<log-id>/. review.mp4 is the
+// The bundle the ship pipeline produces under out/<log-id>/. footage.mp4 is the
 // canonical web cut (its URL becomes video_url); the rest are stored alongside.
+// footage-silent.mp4 is the audio-less cut for manual TikTok sound-attach.
 const ARTIFACTS: Artifact[] = [
-  { contentType: "video/mp4", field: "review", name: "review.mp4" },
-  { contentType: "video/mp4", field: "social", name: "social.mp4" },
+  { contentType: "video/mp4", field: "footage", name: "footage.mp4" },
+  { contentType: "video/mp4", field: "footage-silent", name: "footage-silent.mp4" },
   { contentType: "image/jpeg", field: "poster", name: "poster.jpg" },
-  { contentType: "text/plain; charset=utf-8", field: "caption", name: "caption.txt" },
+  { contentType: "text/plain; charset=utf-8", field: "note", name: "note.txt" },
 ];
 
 // POST /api/admin/tracks/:idOrLogId/video — multipart upload of a track's video
@@ -69,12 +70,12 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/video")({
             stored[artifact.field] = `${FOUND_BASE}/${key}`;
           }
 
-          if (!stored.review) {
-            return jsonError(400, "no_review", "A `review` cut (review.mp4) is required");
+          if (!stored.footage) {
+            return jsonError(400, "no_footage", "A `footage` cut (footage.mp4) is required");
           }
 
-          // The review (with-audio) cut is the canonical web video.
-          await updateTrack(track.trackId, { videoUrl: stored.review });
+          // The footage (with-audio) cut is the canonical web video.
+          await updateTrack(track.trackId, { videoUrl: stored.footage });
 
           return Response.json({
             logId: track.logId,

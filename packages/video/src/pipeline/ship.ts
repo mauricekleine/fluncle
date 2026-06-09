@@ -60,16 +60,16 @@ if (!existsSync(reviewSrc)) {
 const bundle = path.join(OUT_DIR, track.logId);
 mkdirSync(bundle, { recursive: true });
 
-const review = path.join(bundle, "review.mp4");
-const social = path.join(bundle, "social.mp4");
+const footage = path.join(bundle, "footage.mp4");
+const footageSilent = path.join(bundle, "footage-silent.mp4");
 const poster = path.join(bundle, "poster.jpg");
-const captionPath = path.join(bundle, "caption.txt");
+const notePath = path.join(bundle, "note.txt");
 
-log("review.mp4 (with audio)");
-copyFileSync(reviewSrc, review);
+log("footage.mp4 (with audio)");
+copyFileSync(reviewSrc, footage);
 
-log("social.mp4 (audio-less, remux)");
-const silent = spawnSync("ffmpeg", ["-y", "-i", review, "-c", "copy", "-an", social], {
+log("footage-silent.mp4 (audio-less, remux)");
+const silent = spawnSync("ffmpeg", ["-y", "-i", footage, "-c", "copy", "-an", footageSilent], {
   stdio: ["ignore", "ignore", "ignore"],
 });
 if (silent.status !== 0) {
@@ -85,24 +85,24 @@ const durProbe = spawnSync("ffprobe", [
   "format=duration",
   "-of",
   "csv=p=0",
-  review,
+  footage,
 ]);
 const duration = Number.parseFloat(durProbe.stdout.toString().trim()) || 20;
 spawnSync(
   "ffmpeg",
-  ["-y", "-ss", String(duration * 0.8), "-i", review, "-frames:v", "1", "-q:v", "3", poster],
+  ["-y", "-ss", String(duration * 0.8), "-i", footage, "-frames:v", "1", "-q:v", "3", poster],
   { stdio: ["ignore", "ignore", "ignore"] },
 );
 
-log("caption.txt");
+log("note.txt");
 // Prefer the stored release_date (from track get); fall back to Deezer for any
 // track not yet backfilled.
 const year = yearFromReleaseDate(track.releaseDate) ?? (await fetchReleaseYear(track.isrc));
-const caption = buildCaption(track, year);
-writeFileSync(captionPath, caption);
+const note = buildCaption(track, year);
+writeFileSync(notePath, note);
 
 console.error(`\n[ship] bundle ready → out/${track.logId}/`);
 console.error(
   `[ship] upload with: fluncle admin track video ${track.logId} --dir packages/video/out/${track.logId}\n`,
 );
-console.log(caption);
+console.log(note);

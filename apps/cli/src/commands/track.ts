@@ -39,10 +39,10 @@ type TrackUpdateResult = {
 };
 
 export type TrackVideoOptions = {
-  caption?: string;
+  footage?: string;
+  footageSilent?: string;
+  note?: string;
   poster?: string;
-  review?: string;
-  social?: string;
 };
 
 type TrackVideoResult = {
@@ -65,10 +65,10 @@ export async function trackVideoCommand(
     }
   };
 
-  append("review", files.review, "review.mp4");
-  append("social", files.social, "social.mp4");
+  append("footage", files.footage, "footage.mp4");
+  append("footage-silent", files.footageSilent, "footage-silent.mp4");
   append("poster", files.poster, "poster.jpg");
-  append("caption", files.caption, "caption.txt");
+  append("note", files.note, "note.txt");
 
   return adminApiPostForm<TrackVideoResult>(
     `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/video`,
