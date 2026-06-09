@@ -3,10 +3,9 @@ import { FloatingType } from "../primitives";
 
 // <CloseCard> — the constant ending every Fluncle video shares.
 //
-// Every video ends here (README.md, the brand constants): the tagline small in
-// cream, then the selector signature as the ONE permitted Eclipse Gold type
-// moment (the other gold is the eclipse rim — The One Sun Rule). Lifted out of
-// the nostalgic-cosmos exemplar into a reusable component so every scene ends
+// Every video ends here (README.md, the brand constants): the tagline small,
+// then the selector signature as the emphasis line. Lifted out of the
+// nostalgic-cosmos exemplar into a reusable component so every scene ends
 // identically.
 //
 // BRAND LAW this component owns:
@@ -15,8 +14,11 @@ import { FloatingType } from "../primitives";
 //     Sentence case, no exclamation marks. The em dash is reserved for
 //     "Artist — Title" contexts, so it never appears here.
 //   - The type roles: tagline in the system-sans body voice, signature in the
-//     Oxanium brandMark voice. The gold lives ONLY on the signature.
-//   - Palette awareness: cream/gold default to canon but follow an override.
+//     Oxanium brandMark voice.
+//   - Colour follows the COMPOSITION, not the brand: the ink and the signature's
+//     emphasis accent are scene-matched, never a fixed gold (it used to force
+//     Eclipse Gold here and clashed with non-gold scenes). Gold is the sun,
+//     never the type.
 //
 // The agent owns CREATIVITY: WHEN the card arrives. This component does NOT
 // compute its own timeline — it accepts the journey's "arrive" phase as an `arc`
@@ -37,9 +39,10 @@ export type CloseCardProps = {
   /** Alias for `arc`; pass whichever name reads better at the call site. */
   progress?: number;
   /**
-   * Palette override. `ink` colors the tagline (default Starlight Cream); `accent`
-   * colors the signature, the one gold moment (default Eclipse Gold). Pass the
-   * scene palette to stay coherent; the gold should remain a true canon gold.
+   * Scene-matched palette. `ink` colours the tagline (default Starlight Cream);
+   * `accent` colours the signature — its emphasis highlight, drawn from the
+   * composition (default: the same `ink`, so it never falls back to gold). Pass
+   * both from the scene so the close reads in-palette. Gold is the sun, not text.
    */
   palette?: { ink?: string; accent?: string };
   /** Float amplitude multiplier for the gentle drift on each line. Default 1. */
@@ -87,7 +90,11 @@ export const CloseCard: React.FC<CloseCardProps> = ({
   // Lift from slightly below as it arrives; settle at 0.
   const rise = (1 - p) * 22;
   const ink = palette?.ink ?? colors.starlightCream;
-  const accent = palette?.accent ?? colors.eclipseGold;
+  // The signature is the emphasis line; its ink follows the COMPOSITION, not a
+  // fixed gold (it used to force Eclipse Gold and clashed with non-gold scenes).
+  // Default to the tagline ink so a missing override never reintroduces gold;
+  // pass palette.accent a scene-derived highlight to emphasise it in-palette.
+  const accent = palette?.accent ?? ink;
 
   return (
     <div
@@ -111,7 +118,8 @@ export const CloseCard: React.FC<CloseCardProps> = ({
         align={align}
         color={ink}
       />
-      {/* Signature: the Oxanium brand voice in the one permitted gold moment. */}
+      {/* Signature: the Oxanium brand voice, the emphasis line — its ink follows
+          the composition (palette.accent), never a fixed gold. */}
       <FloatingType
         variant="brandMark"
         mark={SIGNATURE}
