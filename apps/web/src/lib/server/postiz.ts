@@ -2,9 +2,11 @@
 //
 // Flow (per Postiz public API): resolve the connected TikTok integration id →
 // register the video with Postiz via upload-from-url (Postiz pulls our public R2
-// URL) → create a `draft` post with content_posting_method UPLOAD + SELF_ONLY so
-// it lands in the TikTok app inbox for the operator to add the official sound and
-// publish manually. Returns the Postiz post id (stored as social_posts.external_id).
+// URL) → SEND it (post type "now") with content_posting_method UPLOAD + SELF_ONLY
+// so it lands in the TikTok app inbox as a private draft for the operator to add
+// the official sound and publish manually. (Post type "draft" would keep it in
+// Postiz and send nothing — it would never reach TikTok.) Returns the Postiz post
+// id (stored as social_posts.external_id).
 //
 // The Worker owns the Postiz key; the agent/CLI never sees it.
 
@@ -80,7 +82,12 @@ export async function pushTikTokDraft(input: {
   const media = await uploadFromUrl(input.videoUrl);
 
   const body = {
-    date: new Date().toISOString(), // ignored for type "draft", but required by the schema
+    // "now" SENDS the post to TikTok immediately; paired with content_posting_method
+    // "UPLOAD" below, "send" means "deposit in the TikTok app inbox as a SELF_ONLY
+    // draft" (never a public post — that's DIRECT_POST). type "draft" would keep it
+    // in Postiz and send nothing, so it would never reach the TikTok app.
+    date: new Date().toISOString(), // required by the schema; not a scheduled time
+
     posts: [
       {
         integration: { id: integrationId },
@@ -102,7 +109,7 @@ export async function pushTikTokDraft(input: {
     ],
     shortLink: false,
     tags: [],
-    type: "draft",
+    type: "now",
   };
 
   const response = await postizFetch("/posts", {
