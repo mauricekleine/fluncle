@@ -59,7 +59,7 @@ export type CloseCardProps = {
 
 /** The locked tagline (VOICE.md). Sentence case, no exclamation, no em dash. */
 const TAGLINE = "Drum & bass bangers from another dimension";
-/** The locked selector signature — the one permitted gold type moment. */
+/** The locked selector signature — the emphasis line; ink follows the scene. */
 const SIGNATURE = "selected by Fluncle";
 
 const clamp01 = (n: number): number => Math.min(1, Math.max(0, n));

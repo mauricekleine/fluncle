@@ -27,7 +27,8 @@ export type FloatingTypeVariant = "brandMark" | "trackLine" | "meta" | "body" | 
 //      each glyph edge, lifting the cream off any bright wisp directly behind it.
 //
 // Both scale with font size so the 26px date and the 80px mark feather alike.
-// Neither recolors or dims the ink; the type stays full-strength cream/gold.
+// Neither recolors or dims the ink; the type stays full-strength in whatever
+// scene-derived ink the composition chose (gold is the sun, never the type).
 
 /**
  * The inky glow-out halo, scaled to the glyph size. Layers of Deep-Field-toned
@@ -187,7 +188,9 @@ export const FloatingType: React.FC<FloatingTypeProps> = ({
     size = fontSize ?? 72;
     heavy = true;
     glyph = {
-      color: color ?? colors.eclipseGold,
+      // Ink follows the COMPOSITION (doctrine 4): default cream, never gold —
+      // gold is the sun, not the type. Pass `color` a scene-derived emphasis ink.
+      color: color ?? colors.starlightCream,
       fontFamily: OXANIUM_STACK,
       fontSize: size,
       fontWeight: 800,

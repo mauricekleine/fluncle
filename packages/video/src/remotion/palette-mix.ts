@@ -30,6 +30,9 @@ export type PaletteMixOptions = {
  *   artwork's most-chromatic swatch flavors the accent, but it is always leaned
  *   toward Eclipse Gold, and the cooler the artwork reads, the harder the lean.
  *   A cold sleeve never gets to extinguish the sun (the Loadstar incident).
+ *   NOTE: `accent` (and `glow`) are LIGHT MATERIAL for the vehicle/shaders —
+ *   never type ink. Type takes `ink` or a scene-derived swatch (doctrine 4:
+ *   gold is the sun, never the type).
  *
  * Pure and deterministic. Falls back to the full brand palette when no swatches
  * are supplied, so placeholder props still render on-brand.
