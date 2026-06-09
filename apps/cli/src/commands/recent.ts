@@ -18,6 +18,7 @@ export type RecentTrack = {
   tags?: string[];
   bpm?: number;
   key?: string;
+  releaseDate?: string;
   enrichmentStatus?: string;
   tagsSource?: string;
   videoUrl?: string;
@@ -44,6 +45,7 @@ type TracksResponse = {
     tags?: string[];
     bpm?: number;
     key?: string;
+    releaseDate?: string;
     enrichmentStatus?: string;
     tagsSource?: string;
     videoUrl?: string;
@@ -75,6 +77,7 @@ export async function recentCommand(limit: number): Promise<RecentTrack[]> {
       popularity: track.popularity,
       postedToTelegram: track.postedToTelegram ?? true,
       previewUrl: track.previewUrl,
+      releaseDate: track.releaseDate,
       spotifyUrl: track.spotifyUrl,
       tags: track.tags,
       tagsSource: track.tagsSource,
