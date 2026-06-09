@@ -6,6 +6,7 @@
   "scripts": {
     "studio": "remotion studio",
     "social:preview": "bun src/pipeline/social-preview.ts",
+    "ship": "bun src/pipeline/ship.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -38,6 +38,15 @@ export async function adminApiPost<T>(path: string, body?: unknown): Promise<T> 
   });
 }
 
+export async function adminApiPostForm<T>(path: string, form: FormData): Promise<T> {
+  return apiRequest<T>(path, {
+    // No Content-Type header: fetch sets multipart/form-data with the boundary.
+    body: form,
+    headers: adminHeaders(),
+    method: "POST",
+  });
+}
+
 export async function adminApiPatch<T>(path: string, body?: unknown): Promise<T> {
   return apiRequest<T>(path, {
     body: body === undefined ? undefined : JSON.stringify(body),

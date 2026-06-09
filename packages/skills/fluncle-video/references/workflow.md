@@ -68,7 +68,22 @@ Iterate until type is legible inside the safe inset, the palette stays warm and 
 
 `bun run social:preview <trackId> --composition <CompId>` and **wait for the encode to finish** — renders take minutes and the MP4 is invalid until the process exits. Confirm with `ffprobe`: 1080×1920, h264, aac audio, 15–30s.
 
-## 8. Report
+## 8. Ship (package, upload, link)
+
+Once the render passes its gates, package the bundle and link it to the track. All local; the operator runs it.
+
+1. **Package** — `bun run --cwd packages/video ship <trackId|log-id>` builds `out/<log-id>/`:
+   - `review.mp4` — with audio; the web cut + your QA pass
+   - `social.mp4` — audio-less remux (`ffmpeg -c copy -an`); the cut you upload to TikTok and attach the official sound to by hand (keeps licensing inside TikTok)
+   - `poster.jpg` — a ~80% drop frame
+   - `caption.txt` — the fixed-template caption: `Artist — Title (Year)` / Label / `Found <date>: fluncle://<log-id>` / `#dnb #drumnbass #drumandbass` + sub-genre tags (lowercased, deduped)
+
+   The track MUST have a Log ID (no Log ID → no ship; backfill the ISRC first). Requires an existing render (`out/<trackId>.mp4`) — run step 7 first.
+
+2. **Upload + link** — `fluncle admin track video <log-id> --dir packages/video/out/<log-id>` uploads the bundle to R2 under `<log-id>/` (served at `found.fluncle.com`) and sets the track's `video_url` to the review cut. The Worker owns R2; you never hold R2 credentials.
+3. **Post (manual)** — grab `social.mp4`, upload to TikTok, attach the official sound, paste the caption, post. Auto-draft is deferred.
+
+## 9. Report
 
 Output:
 
@@ -77,14 +92,15 @@ Output:
 - the concept in one line;
 - the **on-screen facts** (release year, label) — all from the props' Spotify metadata, so no citation is needed;
 - the **metadata-to-pixels trace** — which creative-fuel finding drove which visual decision;
-- the still paths you reviewed.
+- the still paths you reviewed;
+- if shipped: the `<log-id>/` bundle and the linked `video_url`.
 
-The operator reviews the MP4 and publishes; you never publish anywhere.
+The operator reviews the MP4, runs the ship step, and posts; you never auto-publish to any platform.
 
 ## Safety rails (also in SKILL.md; they survive even if the rest is skipped)
 
-- One video per run. Local render only; nothing leaves the machine.
-- Preview audio comes only from the pipeline's resolver (Deezer/iTunes). Never source audio from YouTube or rip full tracks.
+- One video per run. The render is local; the only thing that leaves the machine is the operator-run ship step (the bundle → R2 via the admin endpoint, linked as `video_url`). No auto-publish to TikTok or any social platform — that stays manual.
+- Preview audio comes only from the pipeline's resolver (Deezer/iTunes). Never source audio from YouTube or rip full tracks. The `social.mp4` cut you ship is audio-less by design.
 - The constants are not yours to restyle: if your concept fights the grammar, change the concept.
-- Every word on screen passes VOICE.md; every fact on screen has a source; the track metadata needs none.
-- Do not commit, push, or delete anything; your artifact is the MP4 and your report.
+- Every word on screen and in the caption passes VOICE.md; every fact on screen has a source; the track metadata needs none.
+- Do not commit, push, or delete anything; your artifacts are the MP4 bundle, the linked `video_url`, and your report.

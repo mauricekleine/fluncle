@@ -24,6 +24,7 @@ import { Route as ApiAdminTracksRouteImport } from './routes/api/admin/tracks'
 import { Route as ApiAdminSubmissionsRouteImport } from './routes/api/admin/submissions'
 import { Route as ApiAdminTracksTrackIdRouteImport } from './routes/api/admin/tracks.$trackId'
 import { Route as ApiAdminSubmissionsSubmissionIdRouteImport } from './routes/api/admin/submissions/$submissionId'
+import { Route as ApiAdminTracksTrackIdVideoRouteImport } from './routes/api/admin/tracks.$trackId.video'
 import { Route as ApiAdminSubmissionsSubmissionIdRejectRouteImport } from './routes/api/admin/submissions/$submissionId/reject'
 import { Route as ApiAdminSubmissionsSubmissionIdApproveRouteImport } from './routes/api/admin/submissions/$submissionId/approve'
 import { Route as ApiAdminSpotifyAuthStartRouteImport } from './routes/api/admin/spotify/auth/start'
@@ -105,6 +106,12 @@ const ApiAdminSubmissionsSubmissionIdRoute =
     path: '/$submissionId',
     getParentRoute: () => ApiAdminSubmissionsRoute,
   } as any)
+const ApiAdminTracksTrackIdVideoRoute =
+  ApiAdminTracksTrackIdVideoRouteImport.update({
+    id: '/video',
+    path: '/video',
+    getParentRoute: () => ApiAdminTracksTrackIdRoute,
+  } as any)
 const ApiAdminSubmissionsSubmissionIdRejectRoute =
   ApiAdminSubmissionsSubmissionIdRejectRouteImport.update({
     id: '/reject',
@@ -145,11 +152,12 @@ export interface FileRoutesByFullPath {
   '/api/tracks/$idOrLogId': typeof ApiTracksIdOrLogIdRoute
   '/api/tracks/random': typeof ApiTracksRandomRoute
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
-  '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRoute
+  '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRouteWithChildren
   '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
   '/api/admin/submissions/$submissionId/approve': typeof ApiAdminSubmissionsSubmissionIdApproveRoute
   '/api/admin/submissions/$submissionId/reject': typeof ApiAdminSubmissionsSubmissionIdRejectRoute
+  '/api/admin/tracks/$trackId/video': typeof ApiAdminTracksTrackIdVideoRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -166,11 +174,12 @@ export interface FileRoutesByTo {
   '/api/tracks/$idOrLogId': typeof ApiTracksIdOrLogIdRoute
   '/api/tracks/random': typeof ApiTracksRandomRoute
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
-  '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRoute
+  '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRouteWithChildren
   '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
   '/api/admin/submissions/$submissionId/approve': typeof ApiAdminSubmissionsSubmissionIdApproveRoute
   '/api/admin/submissions/$submissionId/reject': typeof ApiAdminSubmissionsSubmissionIdRejectRoute
+  '/api/admin/tracks/$trackId/video': typeof ApiAdminTracksTrackIdVideoRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -188,11 +197,12 @@ export interface FileRoutesById {
   '/api/tracks/$idOrLogId': typeof ApiTracksIdOrLogIdRoute
   '/api/tracks/random': typeof ApiTracksRandomRoute
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
-  '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRoute
+  '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRouteWithChildren
   '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
   '/api/admin/submissions/$submissionId/approve': typeof ApiAdminSubmissionsSubmissionIdApproveRoute
   '/api/admin/submissions/$submissionId/reject': typeof ApiAdminSubmissionsSubmissionIdRejectRoute
+  '/api/admin/tracks/$trackId/video': typeof ApiAdminTracksTrackIdVideoRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -216,6 +226,7 @@ export interface FileRouteTypes {
     | '/api/admin/spotify/auth/start'
     | '/api/admin/submissions/$submissionId/approve'
     | '/api/admin/submissions/$submissionId/reject'
+    | '/api/admin/tracks/$trackId/video'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -237,6 +248,7 @@ export interface FileRouteTypes {
     | '/api/admin/spotify/auth/start'
     | '/api/admin/submissions/$submissionId/approve'
     | '/api/admin/submissions/$submissionId/reject'
+    | '/api/admin/tracks/$trackId/video'
   id:
     | '__root__'
     | '/'
@@ -258,6 +270,7 @@ export interface FileRouteTypes {
     | '/api/admin/spotify/auth/start'
     | '/api/admin/submissions/$submissionId/approve'
     | '/api/admin/submissions/$submissionId/reject'
+    | '/api/admin/tracks/$trackId/video'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -383,6 +396,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminSubmissionsSubmissionIdRouteImport
       parentRoute: typeof ApiAdminSubmissionsRoute
     }
+    '/api/admin/tracks/$trackId/video': {
+      id: '/api/admin/tracks/$trackId/video'
+      path: '/video'
+      fullPath: '/api/admin/tracks/$trackId/video'
+      preLoaderRoute: typeof ApiAdminTracksTrackIdVideoRouteImport
+      parentRoute: typeof ApiAdminTracksTrackIdRoute
+    }
     '/api/admin/submissions/$submissionId/reject': {
       id: '/api/admin/submissions/$submissionId/reject'
       path: '/reject'
@@ -458,12 +478,25 @@ const ApiAdminSubmissionsRouteChildren: ApiAdminSubmissionsRouteChildren = {
 const ApiAdminSubmissionsRouteWithChildren =
   ApiAdminSubmissionsRoute._addFileChildren(ApiAdminSubmissionsRouteChildren)
 
+interface ApiAdminTracksTrackIdRouteChildren {
+  ApiAdminTracksTrackIdVideoRoute: typeof ApiAdminTracksTrackIdVideoRoute
+}
+
+const ApiAdminTracksTrackIdRouteChildren: ApiAdminTracksTrackIdRouteChildren = {
+  ApiAdminTracksTrackIdVideoRoute: ApiAdminTracksTrackIdVideoRoute,
+}
+
+const ApiAdminTracksTrackIdRouteWithChildren =
+  ApiAdminTracksTrackIdRoute._addFileChildren(
+    ApiAdminTracksTrackIdRouteChildren,
+  )
+
 interface ApiAdminTracksRouteChildren {
-  ApiAdminTracksTrackIdRoute: typeof ApiAdminTracksTrackIdRoute
+  ApiAdminTracksTrackIdRoute: typeof ApiAdminTracksTrackIdRouteWithChildren
 }
 
 const ApiAdminTracksRouteChildren: ApiAdminTracksRouteChildren = {
-  ApiAdminTracksTrackIdRoute: ApiAdminTracksTrackIdRoute,
+  ApiAdminTracksTrackIdRoute: ApiAdminTracksTrackIdRouteWithChildren,
 }
 
 const ApiAdminTracksRouteWithChildren = ApiAdminTracksRoute._addFileChildren(

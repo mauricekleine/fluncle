@@ -1,4 +1,4 @@
-import { adminApiPatch, publicApiGet } from "../api";
+import { adminApiPatch, adminApiPostForm, publicApiGet } from "../api";
 
 export type TrackGetResult = {
   ok: true;
@@ -37,6 +37,44 @@ type TrackUpdateResult = {
   ok: true;
   trackId: string;
 };
+
+export type TrackVideoOptions = {
+  caption?: string;
+  poster?: string;
+  review?: string;
+  social?: string;
+};
+
+type TrackVideoResult = {
+  logId: string;
+  ok: true;
+  trackId: string;
+  urls: Record<string, string>;
+};
+
+// Uploads a track's video bundle (multipart) to the admin endpoint, which stores
+// each artifact in R2 under <log-id>/ and links the review cut as video_url.
+export async function trackVideoCommand(
+  idOrLogId: string,
+  files: TrackVideoOptions,
+): Promise<TrackVideoResult> {
+  const form = new FormData();
+  const append = (field: string, filePath: string | undefined, name: string) => {
+    if (filePath) {
+      form.append(field, Bun.file(filePath), name);
+    }
+  };
+
+  append("review", files.review, "review.mp4");
+  append("social", files.social, "social.mp4");
+  append("poster", files.poster, "poster.jpg");
+  append("caption", files.caption, "caption.txt");
+
+  return adminApiPostForm<TrackVideoResult>(
+    `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/video`,
+    form,
+  );
+}
 
 export async function trackUpdateCommand(
   trackId: string,

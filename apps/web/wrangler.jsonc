@@ -8,4 +8,9 @@
     "VITE_FLUNCLE_SPOTIFY_PLAYLIST_URL": "https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0?si=054d3c6cbcf14a36",
     "VITE_FLUNCLE_TELEGRAM_URL": "https://t.me/fluncle",
   },
+  // R2 bucket for per-track videos. Public reads are served from
+  // found.fluncle.com; the Worker owns the bucket (the agent uploads via the
+  // admin endpoint and never holds R2 credentials). Keys: <log-id>/review.mp4,
+  // <log-id>/social.mp4, <log-id>/poster.jpg, <log-id>/caption.txt.
+  "r2_buckets": [{ "binding": "VIDEOS", "bucket_name": "fluncle-video" }],
 }

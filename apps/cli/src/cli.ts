@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { parseArgs } from "node:util";
 import { setEnvProfile } from "./env";
 import { printJson, toJsonFailure } from "./output";
@@ -69,6 +71,12 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "admin" && subcommand === "track" && rest[0] === "video") {
+    const { trackVideoCommand } = await import("./commands/track");
+    await runTrackVideo(rest.slice(1), trackVideoCommand);
+    return;
+  }
+
   if (command === "track" && subcommand === "get") {
     const { trackGetCommand } = await import("./commands/track");
     await runTrackGet(rest, trackGetCommand);
@@ -88,6 +96,68 @@ async function main(): Promise<void> {
   }
 
   throw new Error(`Unknown command: ${[command, subcommand].filter(Boolean).join(" ")}`);
+}
+
+async function runTrackVideo(
+  args: string[],
+  trackVideoCommand: typeof import("./commands/track").trackVideoCommand,
+): Promise<void> {
+  const parsed = parseArgs({
+    allowPositionals: true,
+    args,
+    options: {
+      caption: { type: "string" },
+      dir: { type: "string" },
+      json: { default: false, type: "boolean" },
+      poster: { type: "string" },
+      review: { type: "string" },
+      social: { type: "string" },
+    },
+  });
+
+  const idOrLogId = parsed.positionals[0];
+
+  if (!idOrLogId) {
+    throw new Error(
+      "Missing id. Usage: fluncle admin track video <track_id|log_id> (--dir <dir> | --review <file> [--social <file>] [--poster <file>] [--caption <file>])",
+    );
+  }
+
+  // --dir resolves the conventional bundle names; explicit flags override.
+  const dir = parsed.values.dir;
+  const fromDir = (name: string): string | undefined => {
+    if (!dir) {
+      return undefined;
+    }
+
+    const candidate = path.join(dir, name);
+
+    return existsSync(candidate) ? candidate : undefined;
+  };
+
+  const files = {
+    caption: parsed.values.caption ?? fromDir("caption.txt"),
+    poster: parsed.values.poster ?? fromDir("poster.jpg"),
+    review: parsed.values.review ?? fromDir("review.mp4"),
+    social: parsed.values.social ?? fromDir("social.mp4"),
+  };
+
+  if (!files.review) {
+    throw new Error("A review cut is required (--review <file>, or --dir containing review.mp4)");
+  }
+
+  const result = await trackVideoCommand(idOrLogId, files);
+
+  if (parsed.values.json) {
+    printJson(result);
+    return;
+  }
+
+  console.log(`Linked video to ${result.logId}`);
+
+  for (const [field, url] of Object.entries(result.urls)) {
+    console.log(`  ${field}: ${url}`);
+  }
 }
 
 async function runAdminSubmissions(
@@ -482,6 +552,8 @@ Operator:
   fluncle track get <track-id|log-id> [--json]      Look up one finding by id or Log ID
   fluncle admin track update <track-id> [--tag t]... [--tag-source auto|manual] [--bpm n] [--key "k"] [--video-url u] [--features json] [--status s] [--note "text"] [--json]
       Certify a track into the archive
+  fluncle admin track video <track-id|log-id> (--dir <dir> | --review <f> [--social <f>] [--poster <f>] [--caption <f>]) [--json]
+      Upload a track's video bundle to R2 and link it
   fluncle admin submissions                          List pending submissions
   fluncle admin submissions review <submission-id>   Inspect one submission
   fluncle admin submissions reject <submission-id>   Reject a submission
