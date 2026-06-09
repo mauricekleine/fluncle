@@ -1,0 +1,1 @@
+ALTER TABLE `tracks` ADD `release_date` text;

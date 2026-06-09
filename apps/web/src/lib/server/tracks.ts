@@ -22,6 +22,7 @@ export type TrackListItem = {
   popularity?: number;
   postedToTelegram: boolean;
   previewUrl?: string;
+  releaseDate?: string;
   spotifyUrl: string;
   tags?: string[];
   tagsSource?: string;
@@ -51,6 +52,7 @@ type TrackRow = {
   note: string | null;
   popularity: number | null;
   preview_url: string | null;
+  release_date: string | null;
   spotify_url: string;
   tags_json: string | null;
   tags_source: string | null;
@@ -64,7 +66,7 @@ type TrackRow = {
 // Columns exposed to clients (features_json is internal training data, omitted).
 const TRACK_SELECT = `track_id, spotify_url, title, album, album_image_url, artists_json,
   bpm, duration_ms, enrichment_status, isrc, key, label, log_id, popularity,
-  preview_url, tags_json, tags_source, video_url, note, added_at,
+  preview_url, release_date, tags_json, tags_source, video_url, note, added_at,
   added_to_spotify, posted_to_telegram`;
 
 function toTrackListItem(row: TrackRow): TrackListItem {
@@ -85,6 +87,7 @@ function toTrackListItem(row: TrackRow): TrackListItem {
     popularity: row.popularity ?? undefined,
     postedToTelegram: Boolean(row.posted_to_telegram),
     previewUrl: row.preview_url ?? undefined,
+    releaseDate: row.release_date ?? undefined,
     spotifyUrl: row.spotify_url,
     tags: parseTags(row.tags_json),
     tagsSource: row.tags_source ?? undefined,

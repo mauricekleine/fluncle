@@ -43,6 +43,13 @@
       "when": 1780916589906,
       "tag": "0005_fresh_raza",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1780987119269,
+      "tag": "0006_dashing_unicorn",
+      "breakpoints": true
     }
   ]
 }

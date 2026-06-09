@@ -20,6 +20,7 @@ export const tracks = sqliteTable("tracks", {
   postedToTelegram: integer("posted_to_telegram", { mode: "boolean" }).notNull().default(false),
   postedToTelegramAt: text("posted_to_telegram_at"),
   previewUrl: text("preview_url"),
+  releaseDate: text("release_date"),
   spotifyError: text("spotify_error"),
   spotifyUri: text("spotify_uri").notNull(),
   spotifyUrl: text("spotify_url").notNull(),
