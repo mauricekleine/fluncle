@@ -1,7 +1,7 @@
-// Keyboard + touch input (docs/galaxy-game.md, "Controls"). Keyboard: arrows
-// or A/D steer, space (or up/W) boosts. Touch: left/right halves steer, a
-// bottom-center zone boosts. Any key or tap doubles as the menu action
-// (launch / skip / fly again); M toggles mute.
+// Keyboard + touch input. Keyboard: arrows or A/D steer, space (or up/W)
+// boosts. Touch: left/right halves steer, a bottom-center zone boosts. Any
+// key or tap doubles as the menu action (launch / skip / fly again); M
+// toggles mute, Escape pauses.
 
 const STEER_LEFT_KEYS = new Set(["a", "arrowleft"]);
 const STEER_RIGHT_KEYS = new Set(["d", "arrowright"]);

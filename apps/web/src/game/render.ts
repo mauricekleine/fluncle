@@ -1,7 +1,7 @@
 import { palette } from "./palette";
 import { fnv1a } from "./placement";
 import { type CarrierInfo, type RadarBlip, type SimState, wrapAngle } from "./sim";
-import { SHIP_FLAME_ANCHORS, SHIP_SIZE, makeEarthSprite, makeShipSprite } from "./sprites";
+import { SHIP_SIZE, makeEarthSprite, makeShipSprite } from "./sprites";
 
 // The renderer: one low-resolution canvas (270p) upscaled with
 // image-rendering: pixelated, so every line of text and every sprite lands on
@@ -95,6 +95,57 @@ export function createRenderer(container: HTMLElement): Renderer {
   const earthSprites = new Map<number, HTMLCanvasElement>();
   const distant = makeDistantStars();
   const streaks = makeStreaks();
+
+  // Hero sprites (image-gen, curated, quantized to the canon ramp) load over
+  // the procedural placeholders; until onload fires, the fallbacks draw.
+  const heroShip = new Image();
+  const heroEarth = new Image();
+  let heroShipReady = false;
+  let heroEarthReady = false;
+
+  heroShip.onload = () => {
+    heroShipReady = true;
+  };
+  heroEarth.onload = () => {
+    heroEarthReady = true;
+  };
+  heroShip.src = "/galaxy/ship.png";
+  heroEarth.src = "/galaxy/earth.png";
+
+  type ShipSpriteInfo = {
+    /** Engine nozzle x-positions in sprite pixels. */
+    flameAnchors: [number, number];
+    height: number;
+    img: CanvasImageSource;
+    width: number;
+  };
+
+  function shipInfo(): ShipSpriteInfo {
+    return heroShipReady
+      ? { flameAnchors: [8.5, 16.5], height: 20, img: heroShip, width: 25 }
+      : { flameAnchors: [5, 10], height: 15, img: shipSprite, width: SHIP_SIZE };
+  }
+
+  /** Earth, centered at (x, y) with the given pixel diameter. */
+  function drawEarthAt(x: number, y: number, size: number): void {
+    if (heroEarthReady) {
+      const drawHeight = Math.round((size * heroEarth.naturalHeight) / heroEarth.naturalWidth);
+
+      ctx.drawImage(
+        heroEarth,
+        Math.round(x - size / 2),
+        Math.round(y - drawHeight / 2),
+        Math.round(size),
+        drawHeight,
+      );
+
+      return;
+    }
+
+    const sprite = earthSprite(size);
+
+    ctx.drawImage(sprite, Math.round(x - sprite.width / 2), Math.round(y - sprite.height / 2));
+  }
 
   let width = 480;
   let height = INTERNAL_HEIGHT;
@@ -343,15 +394,7 @@ export function createRenderer(container: HTMLElement): Renderer {
 
       if (size >= 2) {
         bodies.push({
-          draw: () => {
-            const sprite = earthSprite(size);
-
-            ctx.drawImage(
-              sprite,
-              Math.round(earth.sx - sprite.width / 2),
-              Math.round(earth.sy - sprite.height / 2),
-            );
-          },
+          draw: () => drawEarthAt(earth.sx, earth.sy, size),
           f: earth.f,
         });
       }
@@ -480,26 +523,28 @@ export function createRenderer(container: HTMLElement): Renderer {
     // Engine flames first, under the hull. Boost burns long and bright.
     const boosting = sim.ship.boosting;
     const flameBase = boosting ? 9 : 4;
+    const sprite = shipInfo();
+    const bottom = Math.round((sprite.height * scale) / 2);
 
     if (sim.phase !== "adrift") {
-      for (const anchor of SHIP_FLAME_ANCHORS) {
+      for (const anchor of sprite.flameAnchors) {
         const flicker = reducedMotion ? 0 : Math.random() * 3;
         const length = Math.round(flameBase + flicker);
-        const fx = Math.round((anchor - SHIP_SIZE / 2) * scale);
+        const fx = Math.round((anchor - sprite.width / 2) * scale);
 
         ctx.fillStyle = boosting ? palette.goldBright : palette.red;
-        ctx.fillRect(fx - 1, 15 * scale - 14, 2, length);
+        ctx.fillRect(fx - 1, bottom - 2, 2, length);
         ctx.fillStyle = boosting ? palette.red : palette.redDim;
-        ctx.fillRect(fx - 1, 15 * scale - 14 + length, 2, 2);
+        ctx.fillRect(fx - 1, bottom - 2 + length, 2, 2);
       }
     }
 
     ctx.drawImage(
-      shipSprite,
-      Math.round((-SHIP_SIZE / 2) * scale),
-      -15,
-      SHIP_SIZE * scale,
-      15 * scale,
+      sprite.img,
+      Math.round((-sprite.width / 2) * scale),
+      Math.round((-sprite.height / 2) * scale),
+      sprite.width * scale,
+      sprite.height * scale,
     );
     ctx.restore();
   }
@@ -530,11 +575,12 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     const drawOrbitShip = (): void => {
       const rotation = Math.atan2(Math.cos(theta) * 24, -Math.sin(theta) * orbitX) + Math.PI / 2;
+      const sprite = shipInfo();
 
       ctx.save();
       ctx.translate(shipX, shipY);
       ctx.rotate(rotation);
-      ctx.drawImage(shipSprite, -7, -7);
+      ctx.drawImage(sprite.img, -Math.round(sprite.width / 2), -Math.round(sprite.height / 2));
       ctx.restore();
     };
     const drawOrbitStar = (): void => drawStarBody(cx, cy, 58, view.nowS, false, false);
@@ -875,33 +921,29 @@ export function createRenderer(container: HTMLElement): Renderer {
     const earthY = height - 30 + t * 190;
 
     if (earthSize > 10 && earthY - earthSize / 2 < height) {
-      const sprite = earthSprite(earthSize);
-
-      ctx.drawImage(
-        sprite,
-        Math.round(cx - sprite.width / 2),
-        Math.round(earthY - sprite.height / 2),
-      );
+      drawEarthAt(cx, earthY, earthSize);
     }
 
     // The ship climbs into frame with a long burn.
     const shipY = height - 20 - t * 26;
     const shake = reducedMotion || t > 0.7 ? 0 : Math.round(Math.random() * 2 - 1);
+    const sprite = shipInfo();
+    const bottom = sprite.height;
 
     ctx.save();
     ctx.translate(Math.round(cx + shake), Math.round(shipY));
 
-    for (const anchor of SHIP_FLAME_ANCHORS) {
-      const fx = Math.round((anchor - SHIP_SIZE / 2) * 2);
+    for (const anchor of sprite.flameAnchors) {
+      const fx = Math.round((anchor - sprite.width / 2) * 2);
       const length = 10 + (reducedMotion ? 0 : Math.random() * 5);
 
       ctx.fillStyle = palette.goldBright;
-      ctx.fillRect(fx - 1, 16, 2, Math.round(length));
+      ctx.fillRect(fx - 1, bottom - 2, 2, Math.round(length));
       ctx.fillStyle = palette.red;
-      ctx.fillRect(fx - 1, 16 + Math.round(length), 2, 3);
+      ctx.fillRect(fx - 1, bottom - 2 + Math.round(length), 2, 3);
     }
 
-    ctx.drawImage(shipSprite, -SHIP_SIZE, -15, SHIP_SIZE * 2, 15 * 2);
+    ctx.drawImage(sprite.img, -sprite.width, -sprite.height, sprite.width * 2, sprite.height * 2);
     ctx.restore();
 
     if (t < 0.5) {

@@ -1,7 +1,7 @@
 import { type GameTrack, type Star } from "./types";
 
-// Deterministic star placement from the Log ID (docs/galaxy-game.md, "The
-// expanding galaxy"). The sector (days since the Fluncle epoch) maps to
+// Deterministic star placement from the Log ID (docs/ROADMAP.md, "The
+// expanding frontier"). The sector (days since the Fluncle epoch) maps to
 // radial distance from Earth — the oldest findings orbit close to home and
 // every new finding pushes the frontier outward, deliberately uncompressed.
 // The hash tail spreads same-day findings around their shared orbital ring.

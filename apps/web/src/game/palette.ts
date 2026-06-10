@@ -1,4 +1,4 @@
-// The canon-anchored 8-bit ramp (docs/galaxy-game.md, "Look & sound").
+// The canon-anchored 8-bit ramp.
 //
 // A small NES-style palette built from DESIGN.md: warm blacks, a Starlight
 // Cream ramp, an Eclipse Gold ramp, Re-entry Red heat, and two dim cool

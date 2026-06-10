@@ -1,7 +1,7 @@
 import { frontierRadius } from "./placement";
 import { type Star } from "./types";
 
-// The flight sim (docs/galaxy-game.md, "Confirmed decisions"). Fixed-timestep,
+// The flight sim (design notes: the Galaxy game section of docs/ROADMAP.md). Fixed-timestep,
 // pure state-in/state-out — no canvas, no audio, no DOM — so the loop is
 // testable and the renderer/audio read from it without back-pressure.
 //
@@ -91,7 +91,7 @@ export type SimInput = {
 // The ship Fluncle lends you is fit for the current frontier: burn rates are
 // tuned at boot so one tank at cruise reaches the newest finding with slack.
 // When the frontier outgrows what one tank should cover, the answer is new
-// home planets out there, not a bigger tank (docs/galaxy-game.md).
+// home planets out there, not a bigger tank (docs/ROADMAP.md, "The expanding frontier").
 export function tuneConfig(stars: Star[]): SimConfig {
   const range = Math.max(MIN_RANGE, frontierRadius(stars) * RANGE_FACTOR);
   const cruiseBurn = (CRUISE_SPEED * TANK_CAPACITY) / range;
