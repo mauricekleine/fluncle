@@ -25,7 +25,11 @@ export type InputManager = {
   touchSeen: () => boolean;
 };
 
-export function createInput(target: HTMLElement): InputManager {
+export function createInput(
+  target: HTMLElement,
+  /** Returns true when a press hit an on-canvas control and is consumed. */
+  isUiTap?: (clientX: number, clientY: number) => boolean,
+): InputManager {
   const keysDown = new Set<string>();
   const pointers = new Map<number, "boost" | "left" | "right">();
 
@@ -85,6 +89,13 @@ export function createInput(target: HTMLElement): InputManager {
     }
 
     event.preventDefault();
+
+    // On-canvas controls (the card's Spotify link) eat the press whole:
+    // no steer, no menu action, no orbit departure.
+    if (isUiTap?.(event.clientX, event.clientY)) {
+      return;
+    }
+
     target.setPointerCapture?.(event.pointerId);
     pointers.set(event.pointerId, zoneFor(event));
     actionPending = true;

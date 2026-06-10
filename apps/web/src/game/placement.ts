@@ -79,6 +79,7 @@ export function placeStars(tracks: GameTrack[]): Star[] {
         logId: placed.track.logId ?? seed,
         radius,
         sector,
+        spotifyUrl: placed.track.spotifyUrl,
         title: placed.track.title,
         trackId: placed.track.trackId,
         vOffset: (fnv1a(`${seed}#v`) % 440) - 220,

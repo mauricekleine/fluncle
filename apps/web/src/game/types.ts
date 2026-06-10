@@ -3,6 +3,7 @@ export type GameTrack = {
   addedAt: string;
   artists: string[];
   logId?: string;
+  spotifyUrl: string;
   title: string;
   trackId: string;
 };
@@ -16,6 +17,7 @@ export type Star = {
   /** Radial distance from Earth (world units). */
   radius: number;
   sector: number;
+  spotifyUrl: string;
   title: string;
   trackId: string;
   /** Render-only fake height above/below the horizon plane. */

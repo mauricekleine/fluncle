@@ -29,7 +29,16 @@ export type LogCardView = {
   artistLine: string;
   logId: string;
   refuelling: boolean;
+  spotifyUrl: string;
   title: string;
+};
+
+/** An on-canvas hit zone, in internal canvas pixels. */
+export type HitRect = {
+  h: number;
+  w: number;
+  x: number;
+  y: number;
 };
 
 export type RenderView = {
@@ -68,6 +77,8 @@ export type Renderer = {
   destroy: () => void;
   draw: (view: RenderView) => void;
   resize: (cssWidth: number, cssHeight: number) => void;
+  /** Where the card's Spotify link was drawn this frame, if anywhere. */
+  spotifyLinkRect: () => HitRect | undefined;
 };
 
 export function createRenderer(container: HTMLElement): Renderer {
@@ -150,6 +161,7 @@ export function createRenderer(container: HTMLElement): Renderer {
   let width = 480;
   let height = INTERNAL_HEIGHT;
   let lastNow = 0;
+  let spotifyRect: HitRect | undefined;
 
   // Oxanium is preloaded by the document; nudge the canvas-visible faces so
   // the first painted frame doesn't fall back to the system sans.
@@ -193,6 +205,7 @@ export function createRenderer(container: HTMLElement): Renderer {
     const dt = Math.min(0.1, Math.max(0, view.nowS - lastNow));
 
     lastNow = view.nowS;
+    spotifyRect = undefined;
 
     const { sim } = view;
     const horizon = Math.round(height * HORIZON_FRACTION);
@@ -786,7 +799,9 @@ export function createRenderer(container: HTMLElement): Renderer {
     }
 
     const cardWidth = Math.min(width - 32, 250);
-    const cardHeight = 56;
+    // Narrow screens give the Spotify link its own row.
+    const linkOnOwnRow = cardWidth < 215;
+    const cardHeight = linkOnOwnRow ? 68 : 56;
     const x = Math.round((width - cardWidth) / 2);
     const y = 24;
     const entrance = Math.min(1, card.age * 4);
@@ -813,6 +828,16 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.fillStyle = card.refuelling ? palette.goldDim : palette.creamDim;
     ctx.font = "8px ui-sans-serif, system-ui, sans-serif";
     ctx.fillText(card.refuelling ? "Banger logged · refuelling" : "Banger logged", x + 8, y + 45);
+
+    // The way out to the music itself; pressing it never steers the ship.
+    const label = "Open in Spotify";
+    const labelWidth = ctx.measureText(label).width;
+    const linkX = linkOnOwnRow ? x + 8 : x + cardWidth - 8 - labelWidth;
+    const linkY = linkOnOwnRow ? y + 57 : y + 45;
+
+    ctx.fillStyle = palette.goldBright;
+    ctx.fillText(label, linkX, linkY);
+    spotifyRect = { h: 14, w: labelWidth + 12, x: linkX - 6, y: linkY - 3 };
     ctx.globalAlpha = 1;
   }
 
@@ -1127,6 +1152,7 @@ export function createRenderer(container: HTMLElement): Renderer {
     },
     draw,
     resize,
+    spotifyLinkRect: () => spotifyRect,
   };
 }
 

@@ -60,8 +60,37 @@ type GalaxyWindow = Window & { fluncle?: FluncleConsole };
 
 export function createGame(container: HTMLElement): Game {
   const renderer = createRenderer(container);
-  const input = createInput(container);
+  const input = createInput(container, handleUiTap);
   const audio = createAudioManager();
+
+  // The card's Spotify link is canvas-drawn, so presses hit-test against the
+  // renderer's reported rect. Opening the tab auto-pauses via visibility.
+  let cardSpotifyUrl: string | undefined;
+
+  function handleUiTap(clientX: number, clientY: number): boolean {
+    const rect = renderer.spotifyLinkRect();
+
+    if (!rect || !cardSpotifyUrl) {
+      return false;
+    }
+
+    const bounds = renderer.canvas.getBoundingClientRect();
+
+    if (bounds.width === 0 || bounds.height === 0) {
+      return false;
+    }
+
+    const ix = ((clientX - bounds.left) / bounds.width) * renderer.canvas.width;
+    const iy = ((clientY - bounds.top) / bounds.height) * renderer.canvas.height;
+
+    if (ix >= rect.x && ix <= rect.x + rect.w && iy >= rect.y && iy <= rect.y + rect.h) {
+      window.open(cardSpotifyUrl, "_blank", "noopener");
+
+      return true;
+    }
+
+    return false;
+  }
 
   let destroyed = false;
   let sim: SimState | undefined;
@@ -101,6 +130,7 @@ export function createGame(container: HTMLElement): Game {
           addedAt: track.addedAt,
           artists: track.artists,
           logId: track.logId,
+          spotifyUrl: track.spotifyUrl,
           title: track.title,
           trackId: track.trackId,
         });
@@ -160,19 +190,17 @@ export function createGame(container: HTMLElement): Game {
   }
 
   function logCardView(state: SimState): LogCardView | undefined {
-    if (!card) {
-      return undefined;
-    }
-
-    // Revisiting a logged star brings its card back: the listening moment is
-    // repeatable, only the refuelling isn't.
+    // Parked on any logged star, the card is pinned to it — fresh logs and
+    // revisits alike, including revisits long after an old card expired.
     if (state.orbitIndex >= 0 && state.collected[state.orbitIndex]) {
-      if (card.starIndex !== state.orbitIndex) {
+      if (card?.starIndex !== state.orbitIndex) {
         card = { shownAt: nowS, starIndex: state.orbitIndex };
       }
-    } else if (nowS - card.shownAt > LOG_CARD_LINGER) {
+    } else if (card && nowS - card.shownAt > LOG_CARD_LINGER) {
       card = undefined;
+    }
 
+    if (!card) {
       return undefined;
     }
 
@@ -184,6 +212,7 @@ export function createGame(container: HTMLElement): Game {
       artistLine: star.artistLine,
       logId: star.logId,
       refuelling: inOrbit && state.orbitFresh && state.ship.fuel < state.config.tankCapacity - 0.5,
+      spotifyUrl: star.spotifyUrl,
       title: star.title,
     };
   }
@@ -292,6 +321,12 @@ export function createGame(container: HTMLElement): Game {
         orbitEnteredAt = nowS;
       }
 
+      // Departing resets the card's clock so it lingers a beat after a long
+      // listen instead of vanishing the moment you fly on.
+      if (!orbiting && wasOrbiting && card) {
+        card.shownAt = nowS;
+      }
+
       wasOrbiting = orbiting;
     }
 
@@ -300,11 +335,15 @@ export function createGame(container: HTMLElement): Game {
     }
 
     if (sim) {
+      const cardView = phase === "play" ? logCardView(sim) : undefined;
+
+      cardSpotifyUrl = cardView?.spotifyUrl;
+
       const view: RenderView = {
         bootT: Math.min(1, bootT),
         carrier: nearestCarrier(sim),
         endT,
-        logCard: phase === "play" ? logCardView(sim) : undefined,
+        logCard: cardView,
         muted: audio.muted(),
         nowS,
         paused: paused && phase === "play",
