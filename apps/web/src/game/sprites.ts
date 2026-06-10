@@ -1,9 +1,8 @@
 import { palette } from "./palette";
 import { fnv1a } from "./placement";
 
-// Placeholder pixel art, hand-mapped in canon colors. The hero sprites (ship,
-// Earth) get a proper image-gen pass later (docs/galaxy-game.md, "Look &
-// sound"); everything here draws once to an offscreen canvas at boot.
+// Pixel art for the two heroes (ship, Earth), hand-mapped and procedural in
+// canon colors; everything here draws once to an offscreen canvas at boot.
 
 const INK: Record<string, string> = {
   D: palette.creamDim,

@@ -1,6 +1,6 @@
 import { type SimEvent, type SimState, nearestCarrier } from "./sim";
 
-// The audio thesis (docs/galaxy-game.md): the only music in the galaxy is the
+// The audio thesis (docs/ROADMAP.md, Galaxy game section): the only music in the galaxy is the
 // findings. The nearest uncollected banger fades in by distance and pans by
 // bearing; in orbit it plays full and centered (the listening moment), and a
 // collected star still sings on revisit. Everything else is diegetic 8-bit
