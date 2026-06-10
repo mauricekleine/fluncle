@@ -1,6 +1,6 @@
 # Technique cookbook
 
-Technique, not style. This teaches how to draw the things Fluncle videos are made of; the _what_ is yours, chosen per track. Every pattern below cites a worked example in the archive (`packages/video/src/remotion/tracks/`) — open the file and read the shader, not just the prose. The exact `GLSL.*` signatures and the `ShaderLayer` injected header live in `packages/video/README.md`; this file assumes you have read that section.
+Technique, not style. This teaches how to draw the things Fluncle videos are made of; the _what_ is yours, chosen per track. The old committed track archive is intentionally gone; use these patterns as a vocabulary, and consult R2 output bundles only when the operator provides a specific historical composition. The exact `GLSL.*` signatures and the `ShaderLayer` injected header live in `packages/video/README.md`; this file assumes you have read that section.
 
 The unit of drawing is one `ShaderLayer` rendering a GLSL fragment shader. Inside a shader you get the injected uniforms (`u_time`, `u_res`, `u_progress`, `u_energy`, `u_bass`, `u_beatPulse`, `u_seed`, `u_palette[4]`) and the dither helpers (`ditherValue`, `dither8`). You spread the `GLSL.*` snippet strings ahead of `void main()` and respect their dependencies (`fbm` needs `valueNoise`; `valueNoise`/`simplexNoise`/`filmGrain` need `hash`). **At the GPU level, bake grain and Retint into the shader** (`GLSL.filmGrain`, `GLSL.paletteRamp`) — do not also wrap a shader in CSS `Grain`/`Retint`. The CSS `Grain` overlay is still the base texture for the non-shader layers over the whole frame.
 
@@ -8,19 +8,19 @@ The unit of drawing is one `ShaderLayer` rendering a GLSL fragment shader. Insid
 
 A two-layer fbm — a warp field flowing a second field — gives haze its volume so it drifts and folds like stage haze instead of scrolling. Keep time slow. Map the result low through `paletteRamp` so it barely reaches gold and never cream: the background must stay a deep warm-dark cloud so the vehicle is always the brightest thing (the One Sun). Drive the bloom width with `u_energy` / `u_drop`.
 
-**Exemplar (Maurice's favorite): `20260607-down-with-your-love.tsx`** — the GEL-SPLIT field. Two committed light temperatures share one frame (warm heat field vs the artwork's teal as a minor cool counter-accent, the Retint Rule), with a soft breathing seam; the drop floods the field warm so the cool burns off. Read `GEL_FRAG`: warp+field fbm, the seam math, the low ramp cap, the screened-in cool wisp, then `vignette` → `filmGrain` → `dither8`.
+For a GEL-SPLIT field, let two committed light temperatures share one frame: warm heat field vs a minor artwork counter-accent under the Retint Rule, with a soft breathing boundary. The drop can flood the field warm so the cool burns off. The shader recipe is warp fbm + field fbm + seam math + low ramp cap + screened-in cool wisp, then `vignette` → `filmGrain` → `dither8`.
 
 ## ridge / contour fields (the lines vehicle)
 
 Line displacement as terrain or signal — the Unknown Pleasures motif, data-as-landscape. Stack horizontal lines and displace each by a field; drive the displacement amplitude from the energy/bass/onset curves so the terrain reacts. Lines go Starlight Cream with exactly ONE Eclipse Gold crest line — that gold crest is how the One Sun moment is expressed through a non-orb vehicle (doctrine 1).
 
-**Exemplar: `20260607-4-seasons.tsx`** — `RidgeField`, a travelling waveform-ridge terrain rolling past. Read how the ridge amplitude rides the curves and where the single gold crest ignites.
+For a waveform-ridge terrain, let the stacked contour field travel monotonically and ride amplitude from broad energy plus tighter bass/onset curves. The single gold crest should ignite at the music's strongest structural moment, not automatically in the center of the clip.
 
 ## dither / halftone resolution fronts (the glitch vehicle)
 
 Order resolving out of corruption: the frame departs as scattered 1-bit dither noise, a corruption front travels across it resolving cell by cell through the drop, and arrives snapped into place — a clean halftone form with a single burning gold rim. The whole texture can be ONE shader: halftone dither, the resolving front (a smoothstep edge swept by `u_progress`/`u_drop`), the SDF body, grain, and the palette ramp all baked in. The gold ignition is the resolution front completing — the One Sun moment through the vehicle.
 
-**Exemplar: `20260607-take-a-deep-breath.tsx`** — read the single `ShaderLayer`: halftone dither + resolving front + eclipse SDF disc + gold rim, all in one fragment shader.
+Keep this as one shader when possible: halftone dither + resolving front + SDF body + gold rim, all in one `ShaderLayer`. The resolving front is the vehicle; do not add a second light source to explain it.
 
 ## SDF celestial bodies (the orb vehicle)
 
@@ -28,7 +28,7 @@ A rendered-grade body, not a flat disc: an SDF circle whose body is an fbm-textu
 
 **The quad law lives here (doctrine 6).** The exp glow falloff never reaches 0, so at the square layer's edge it prints a visible rectangle. Drive the glow to EXACT zero well inside the quad with a radial `edgeFade` (e.g. `1.0 - smoothstep(0.80, 0.96, r)`), and/or mask the layer to a circle in CSS. The printed-rectangle incident happened twice — do not skip this.
 
-**Exemplars: `20260607-down-with-your-love.tsx`** (`ORB_FRAG`, the most thoroughly commented — read the limb, core bloom, glow falloff, and the `edgeFade` + CSS radial mask combination) and **`20260607-hold-that-sucker-down.tsx`** (`InlineOrb`, an ember rising into the full limb on the drop).
+Key details: limb, shadowed body, core bloom, glow falloff, and an `edgeFade` or CSS radial mask that forces alpha to zero before the quad edge. A useful variant is a small ember that grows into the full limb on a late drop.
 
 ## beat mapping patterns
 
@@ -40,7 +40,7 @@ Audio reactivity comes ONLY from the curve hooks / shader audio uniforms — nev
 - **Slow gestures:** `useEnergy` (smoothed, broad) drives starfield drift speed, glow breadth, global float; `useBass` (tighter) drives rim swell and breathing.
 - **Deriving drop timestamps:** scan `audio.energyCurve` for the peak(s) in the chosen window; those are clip-progress positions you reuse for the drop gate and the type timing.
 
-See the `drop` / `dropRise` / `cold` scalars and the `DROP_IN`/`DROP_OUT` window in `20260607-down-with-your-love.tsx` for a complete worked beat map; `20260607-hold-that-sucker-down.tsx` shows building the scene around a quiet breakdown and two late drops.
+Build explicit beat maps with named scalars such as `drop`, `dropRise`, and `cold`, plus `DROP_IN`/`DROP_OUT` windows derived from the analyzed curve. For breakdown-led cuts, keep the vehicle visible in the quiet section and reserve the largest structural change for the late drop.
 
 - **Movement envelopes (doctrine 10):** score 2–3 movements by pinning boundary timestamps to the music's seams (a drop, a bar boundary, an energy shift), then build one 0..1 envelope per movement in React (`interpolate(sec, [boundary, boundary + ~0.8], [0, 1])`, clamped) and pass them as uniforms (`u_m2`, `u_m3`). Inside the shader each envelope shifts the REGIME of the same vehicle — lerp the palette lean, step the cell/dot/streak density or scale, tighten or break the structure, swap which term dominates — while position stays monotonic (Motion law) and the One Driver persists. Crossfade over roughly a beat: long enough to read as intentional, short enough to land ON the seam. The result: second 18 must not look like second 4 with the brightness up.
 
@@ -49,7 +49,7 @@ See the `drop` / `dropRise` / `cold` scalars and the `DROP_IN`/`DROP_OUT` window
 Three failure modes from the last batch, with the technique to avoid each (full framing in SKILL.md):
 
 - **Position is monotonic; audio is additive.** Build any travel coordinate from `u_time` / `arc` / a monotonic rise ONLY. `float flow = radius*3.0 - u_time*0.85 - u_rise*1.4;` is right; subtracting a beat spike — `... - u_lift*0.6` — is the Wings jump-and-snap (the pattern slides forward on the kick, then recoils as the pulse decays). To make a beat "lift" the feathers, multiply their BRIGHTNESS — `plumeHeat *= 1.0 + u_lift*0.4` — never their coordinate. Keep streak frequency low (≲ a dozen) or fbm-soften it so it doesn't strobe/alias as it moves.
-- **Depth, not diagram.** Volume comes from two-layer fbm, soft radial falloff, vignette, and layered haze — not thin hard parallel primitives on a sparse field. Compare `20260607-teddys-gate.tsx` (soft wide glowing columns, atmospheric — good) with the `spears` failure (thin hard ruled shafts — a bar chart). If your field could pass for a UI element, widen it, soften the edges, and layer haze behind it until it reads as cosmos.
+- **Depth, not diagram.** Volume comes from two-layer fbm, soft radial falloff, vignette, and layered haze — not thin hard parallel primitives on a sparse field. If your field could pass for a UI element, widen it, soften the edges, and layer haze behind it until it reads as cosmos.
 - **Move the climax.** Don't gate the One Sun bloom to dead-centre on every clip. Scan `audio.energyCurve` for where the music ACTUALLY peaks and ignite there — late, early, a slow swell held to the close, an off-centre crest, a front sweeping across. The centred mid-clip glow is the template to escape, not the target.
 
 ## GLSL helper inventory
@@ -75,12 +75,12 @@ Always finish a shader with `dither8(col, uv)` to kill 8-bit banding on smooth g
 
 - Run `paletteMix(track.swatches)` to bend the artwork's colors toward the brand anchors; the roles are locked in code — field stays Deep Field, sun stays Eclipse Gold, ink stays cream, artwork hues live only in the secondary swatches. A loud cover can never repaint the night (the Loadstar incident: a cold blue sleeve once extinguished the sun — never again).
 - The **Retint Rule** (MOODBOARD.md): steal the reference TECHNIQUE, retint everything to canon — warm dark ground, Eclipse Gold as the single light source, Re-entry Red as the heat accent, Starlight Cream as ink. Cool hues survive only as minor counter-accents.
-- In a shader, keep the `u_palette` / `paletteStops` on the canon ramp (Deep Field → Re-entry Red → Eclipse Gold → Starlight Cream). Admit an artwork hue only as a separate minor seep uniform (see `u_cool` in `20260607-down-with-your-love.tsx`), never as a ramp stop. Gold stays the sun.
+- In a shader, keep the `u_palette` / `paletteStops` on the canon ramp (Deep Field → Re-entry Red → Eclipse Gold → Starlight Cream). Admit an artwork hue only as a separate minor seep uniform, never as a ramp stop. Gold stays the sun.
 - **Gold on a warm bed: MIX, don't ADD.** Additively blending Eclipse Gold over a warm orange/red field sums into a green/lime smear — all three 06-09 agents hit this independently. For the One Sun on a warm ground, `mix()`/lerp the colour toward a locked gold stop (optionally darkening the bed locally under the crest first) so it reads as true gold, not lime. Reserve additive blending for gold over a dark or cool ground.
 
 ## fractal / glass
 
-No archive exemplar yet — an opportunity for diversity (doctrine 3).
+These are good diversity lanes because they avoid the local-history loop (doctrine 3).
 
 - **fractal:** `GLSL.polarFold(uv, segments)` folds the frame into N mirrored wedges; fly inward by scaling the folded coords with `u_time`/`arc` and tint the rings from the artwork accent, never gold. The One Sun moment is a gold core at the fold center.
 - **glass:** refractive vertical blades sweeping across the frame — per-blade UV refraction offsets that breathe with `u_bass`, specular brightness on `u_energy`, the sweep position travelling on the arc. The One Sun moment is one gold specular bulge.

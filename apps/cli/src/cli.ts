@@ -118,12 +118,15 @@ async function runTrackVideo(
     allowPositionals: true,
     args,
     options: {
+      composition: { type: "string" },
       dir: { type: "string" },
       footage: { type: "string" },
       "footage-silent": { type: "string" },
       json: { default: false, type: "boolean" },
       note: { type: "string" },
       poster: { type: "string" },
+      props: { type: "string" },
+      render: { type: "string" },
     },
   });
 
@@ -131,7 +134,7 @@ async function runTrackVideo(
 
   if (!idOrLogId) {
     throw new Error(
-      "Missing id. Usage: fluncle admin track video <track_id|log_id> (--dir <dir> | --footage <file> [--footage-silent <file>] [--poster <file>] [--note <file>])",
+      "Missing id. Usage: fluncle admin track video <track_id|log_id> (--dir <dir> | --footage <file> [--footage-silent <file>] [--poster <file>] [--note <file>] [--composition <file>] [--props <file>] [--render <file>])",
     );
   }
 
@@ -148,10 +151,13 @@ async function runTrackVideo(
   };
 
   const files = {
+    composition: parsed.values.composition ?? fromDir("composition.tsx"),
     footage: parsed.values.footage ?? fromDir("footage.mp4"),
     footageSilent: parsed.values["footage-silent"] ?? fromDir("footage-silent.mp4"),
     note: parsed.values.note ?? fromDir("note.txt"),
     poster: parsed.values.poster ?? fromDir("poster.jpg"),
+    props: parsed.values.props ?? fromDir("props.json"),
+    render: parsed.values.render ?? fromDir("render.json"),
   };
 
   if (!files.footage) {
@@ -674,7 +680,7 @@ Operator:
   fluncle track get <track-id|log-id> [--json]      Look up one finding by id or Log ID
   fluncle admin track update <track-id> [--tag t]... [--tag-source auto|manual] [--bpm n] [--key "k"] [--video-url u] [--features json] [--status s] [--note "text"] [--json]
       Certify a track into the archive
-  fluncle admin track video <track-id|log-id> (--dir <dir> | --footage <f> [--footage-silent <f>] [--poster <f>] [--note <f>]) [--json]
+  fluncle admin track video <track-id|log-id> (--dir <dir> | --footage <f> [--footage-silent <f>] [--poster <f>] [--note <f>] [--composition <f>] [--props <f>] [--render <f>]) [--json]
       Upload a track's video bundle to R2 and link it
   fluncle admin track draft <track-id|log-id> [--platform tiktok] [--json]
       Push the video to a platform as a draft (TikTok inbox via Postiz)

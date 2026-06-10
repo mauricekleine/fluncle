@@ -1,4 +1,4 @@
-// Bundle + render the "NostalgicCosmos" composition to an mp4 via Remotion SSR.
+// Bundle + render a registered composition to an mp4 via Remotion SSR.
 
 import path from "node:path";
 
@@ -8,8 +8,6 @@ import { renderMedia, selectComposition } from "@remotion/renderer";
 import { type NostalgicCosmosProps } from "../remotion/types";
 
 const ENTRY_POINT = path.resolve(import.meta.dirname, "../remotion/index.ts");
-const COMPOSITION_ID = "NostalgicCosmos";
-
 export type RenderResult = {
   outputPath: string;
   compositionId: string;
@@ -22,7 +20,7 @@ export type RenderResult = {
 export async function render(
   inputProps: NostalgicCosmosProps,
   outputPath: string,
-  compositionId: string = COMPOSITION_ID,
+  compositionId: string,
 ): Promise<RenderResult> {
   const serveUrl = await bundle({
     entryPoint: ENTRY_POINT,

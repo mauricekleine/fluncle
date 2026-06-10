@@ -39,10 +39,13 @@ type TrackUpdateResult = {
 };
 
 export type TrackVideoOptions = {
+  composition?: string;
   footage?: string;
   footageSilent?: string;
   note?: string;
   poster?: string;
+  props?: string;
+  render?: string;
 };
 
 type TrackVideoResult = {
@@ -69,6 +72,9 @@ export async function trackVideoCommand(
   append("footage-silent", files.footageSilent, "footage-silent.mp4");
   append("poster", files.poster, "poster.jpg");
   append("note", files.note, "note.txt");
+  append("composition", files.composition, "composition.tsx");
+  append("props", files.props, "props.json");
+  append("render", files.render, "render.json");
 
   return adminApiPostForm<TrackVideoResult>(
     `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/video`,

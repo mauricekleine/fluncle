@@ -14,11 +14,16 @@ type Artifact = { contentType: string; field: string; name: string };
 // The bundle the ship pipeline produces under out/<log-id>/. footage.mp4 is the
 // canonical web cut (its URL becomes video_url); the rest are stored alongside.
 // footage-silent.mp4 is the audio-less cut for manual TikTok sound-attach.
+// composition.tsx + props.json + render.json make the generated source
+// re-renderable without keeping per-track compositions in the codebase.
 const ARTIFACTS: Artifact[] = [
   { contentType: "video/mp4", field: "footage", name: "footage.mp4" },
   { contentType: "video/mp4", field: "footage-silent", name: "footage-silent.mp4" },
   { contentType: "image/jpeg", field: "poster", name: "poster.jpg" },
   { contentType: "text/plain; charset=utf-8", field: "note", name: "note.txt" },
+  { contentType: "text/plain; charset=utf-8", field: "composition", name: "composition.tsx" },
+  { contentType: "application/json; charset=utf-8", field: "props", name: "props.json" },
+  { contentType: "application/json; charset=utf-8", field: "render", name: "render.json" },
 ];
 
 // POST /api/admin/tracks/:idOrLogId/video — multipart upload of a track's video

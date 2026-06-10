@@ -1,22 +1,26 @@
 // Package a rendered track video into an uploadable bundle keyed by Log ID:
 //
 //   out/<log-id>/
-//     review.mp4    (with audio — the QA cut + web preview; copied from the render)
-//     social.mp4    (audio-less — the TikTok manual sound-attach cut; ffmpeg remux)
+//     footage.mp4   (with audio — the QA cut + web preview; copied from the render)
+//     footage-silent.mp4 (audio-less — the TikTok manual sound-attach cut)
 //     poster.jpg    (a late/drop frame ~80% in)
-//     caption.txt   (the fixed-template caption)
+//     note.txt      (the fixed-template caption)
+//     composition.tsx — exact temporary Remotion composition source used
+//     props.json    — analyzed props: beat grid, energy/bass curves, palette
+//     render.json   — composition id + rerender pointers
 //
 // Usage: bun src/pipeline/ship.ts <trackId|log-id>
 // Requires the render to exist already (out/<trackId>.mp4) — run social-preview
 // first if it doesn't. Upload the bundle with `fluncle admin track video`.
 
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { buildCaption, type CaptionTrack, fetchReleaseYear, yearFromReleaseDate } from "./caption";
 
 const OUT_DIR = path.resolve(import.meta.dirname, "../../out");
+const PACKAGE_ROOT = path.resolve(import.meta.dirname, "../..");
 
 const input = process.argv[2];
 if (!input) {
@@ -64,6 +68,9 @@ const footage = path.join(bundle, "footage.mp4");
 const footageSilent = path.join(bundle, "footage-silent.mp4");
 const poster = path.join(bundle, "poster.jpg");
 const notePath = path.join(bundle, "note.txt");
+const compositionPath = path.join(bundle, "composition.tsx");
+const propsOutPath = path.join(bundle, "props.json");
+const renderOutPath = path.join(bundle, "render.json");
 
 log("footage.mp4 (with audio)");
 copyFileSync(reviewSrc, footage);
@@ -100,6 +107,54 @@ log("note.txt");
 const year = yearFromReleaseDate(track.releaseDate) ?? (await fetchReleaseYear(track.isrc));
 const note = buildCaption(track, year);
 writeFileSync(notePath, note);
+
+const propsPath = path.join(OUT_DIR, `${track.trackId}.props.json`);
+if (existsSync(propsPath)) {
+  log("props.json (analyzed audio + palette)");
+  copyFileSync(propsPath, propsOutPath);
+}
+
+const renderManifestPath = path.join(OUT_DIR, `${track.trackId}.render.json`);
+let renderManifest: { compositionId?: string; compositionSource?: string; props?: string } = {};
+
+if (existsSync(renderManifestPath)) {
+  try {
+    renderManifest = JSON.parse(readFileSync(renderManifestPath, "utf8")) as typeof renderManifest;
+  } catch {
+    renderManifest = {};
+  }
+}
+
+const sourcePath =
+  typeof renderManifest.compositionSource === "string"
+    ? path.resolve(PACKAGE_ROOT, renderManifest.compositionSource)
+    : undefined;
+
+if (sourcePath && existsSync(sourcePath)) {
+  if (path.resolve(sourcePath) === path.resolve(compositionPath)) {
+    log("composition.tsx already bundled");
+  } else {
+    log("composition.tsx (render source)");
+    copyFileSync(sourcePath, compositionPath);
+  }
+} else {
+  log("composition.tsx skipped (no render manifest/source found)");
+}
+
+log("render.json");
+writeFileSync(
+  renderOutPath,
+  JSON.stringify(
+    {
+      compositionId: renderManifest.compositionId ?? null,
+      compositionSource: existsSync(compositionPath) ? "composition.tsx" : null,
+      props: existsSync(propsOutPath) ? "props.json" : null,
+      trackId: track.trackId,
+    },
+    null,
+    2,
+  ),
+);
 
 console.error(`\n[ship] bundle ready → out/${track.logId}/`);
 console.error(

@@ -1,11 +1,11 @@
 ---
 name: fluncle-video
-description: "Make, render, or compose a Fluncle social video: the per-track video pipeline, social:preview, the archive under tracks/, Remotion compositions for tracks, the near-blank canvas (ShaderLayer + GLSL, the audio hooks, useJourney, FloatingType, CloseCard), stills, the moodboard, and visual tests. Use whenever the task touches a Fluncle vertical clip on any surface, even small ones: authoring or registering a track composition in the dated tracks/ archive, writing a scene shader, picking a texture family or travelling vehicle, choosing a musical cut, running social:preview or remotion still, opening Remotion Studio, retinting a moodboard reference, or critiquing a render. Also use when the user mentions the One Driver rule (One Vehicle Rule), the Always-Visible Vehicle, the Eclipse, the Retint Rule, the close card, NostalgicCosmos, the video kit, or the video agent."
+description: "Make, render, or compose a Fluncle social video: the per-track video pipeline, social:preview, temporary Remotion compositions, the output bundle under out/<log-id>/, the near-blank canvas (ShaderLayer + GLSL, the audio hooks, useJourney, FloatingType, CloseCard), stills, the moodboard, and visual tests. Use whenever the task touches a Fluncle vertical clip on any surface, even small ones: authoring or registering a temporary track composition, writing a scene shader, picking a texture family or travelling vehicle, choosing a musical cut, running social:preview or remotion still, opening Remotion Studio, retinting a moodboard reference, critiquing a render, or packaging/uploading the video bundle. Also use when the user mentions the One Driver rule (One Vehicle Rule), the Always-Visible Vehicle, the Eclipse, the Retint Rule, the close card, NostalgicCosmos, the video kit, or the video agent."
 ---
 
 # Fluncle Video
 
-Use this skill to make Fluncle's per-track social videos: 1080×1920 vertical clips that put one banger under the burning eclipse, every one unmistakably from the same archive, no two looking alike. **This skill is the constitution.** The package (`packages/video`) is a near-blank canvas — machinery and brand law, nothing styled — and the agent writes the scene and the shader for each track itself. More creative freedom, more diversity; the doctrine lives here.
+Use this skill to make Fluncle's per-track social videos: 1080×1920 vertical clips that put one banger under the burning eclipse, every one unmistakably Fluncle, no two looking alike. **This skill is the constitution.** The package (`packages/video`) is a near-blank canvas — machinery and brand law, nothing styled — and the agent writes the scene and the shader for each track itself. More creative freedom, more diversity; the doctrine lives here.
 
 This file is a router. Read it top-down, then load the reference for the phase you are in. The doctrine below is authoritative; where a living doc in the repo adds detail, follow it, but the rulings here win on conflict.
 
@@ -13,11 +13,11 @@ This file is a router. Read it top-down, then load the reference for the phase y
 
 A styled component library made agents produce same-looking videos: identical text spots and timing, default eclipse discs, the same vehicle three runs in a row. The best output came from an agent writing its own shader from scratch. So the styled scene library is gone, the package slimmed to the core surface, and the rules that used to be enforced by components are now doctrine you uphold by hand. Diversity is the point. If your video could be swapped with the last one and nobody would notice, you have failed.
 
-The aesthetic is already captured and it is strong — warm dark, one burning sun, grain, the through-the-glass calm. **Trust it, and use it freely.** The rulings below fence the brand; the space inside them is wide and it is yours. Lean toward the bolder, more alive idea over the safe repeat — a render that is unmistakably Fluncle yet unlike anything in the archive is the win. The doctrine is a short list of laws plus the few failure modes that have actually bitten us, not a recipe to follow step by step.
+The aesthetic is already captured and it is strong — warm dark, one burning sun, grain, the through-the-glass calm. **Trust it, and use it freely.** The rulings below fence the brand; the space inside them is wide and it is yours. Lean toward the bolder, more alive idea over the safe repeat — a render that is unmistakably Fluncle yet unlike the recent output is the win. The doctrine is a short list of laws plus the few failure modes that have actually bitten us, not a recipe to follow step by step.
 
 ## The two things that are always true
 
-1. **The video IS the archive file.** Each video is one self-contained file: `packages/video/src/remotion/tracks/YYYYMMDD-<kebab-slug-of-title>.tsx` (kebab-case, enforced by a pre-commit hook), exporting a named PascalCase component, registered in `src/remotion/root.tsx`, importing only the core from `../cosmos`. It is deterministic, so it re-renders identically forever. The archive is the collection; rendered MP4s are never committed.
+1. **The video IS the output bundle.** Each video is authored as one temporary, self-contained composition source file, exporting a named PascalCase component, registered in `src/remotion/root.tsx` only long enough to render, importing only the core from `../cosmos`. After render, `ship` copies that exact source to `packages/video/out/<log-id>/composition.tsx` with `props.json`, `render.json`, and the footage; the R2 bundle is the durable archive. Generated track compositions are output, not codebase history, so remove temporary local composition files before committing.
 2. **You write the scene.** There are no prebuilt vehicles, no styled scene components, no static image assets (fonts excepted). You compose the scene and author the GLSL shader yourself, against the core surface. The core gives you a canvas and the brand law; the picture is yours.
 
 ## Source priority
@@ -35,7 +35,7 @@ Read top-down; later sources fill in detail, earlier sources override on conflic
 Everything comes from `src/remotion/cosmos.ts`. Nothing else exists to import; if you reach for a styled vehicle or a static image, it is gone on purpose.
 
 - **`ShaderLayer`** + the **`GLSL`** snippet helpers — the GPU fragment-shader layer and the composable GLSL function strings. This is where you draw. See [references/cookbook.md](references/cookbook.md).
-- **Audio hooks** — `useEnergy`, `useBeat`, `useBass`, `useOnset` — the only legal source of audio reactivity (they read the `audio.*` curves).
+- **Audio hooks** — `useAudioReactivity`, `useEnergy`, `useBeat`, `useBass`, `useOnset` — the only legal source of audio reactivity (they read the `audio.*` curves). Prefer `useAudioReactivity` for the shared bus (`hit`, `swell`, `drop`, `disturbance`, and ready shader uniforms) and then decide locally what material property those signals disturb.
 - **`useJourney`** — the narrative clock (`progress` / `phase` / `phaseProgress` / `arc`). One shared timeline for the whole scene.
 - **`Grain`** — the CSS film-grain overlay (the system base texture for non-shader layers).
 - **`Starfield`** — the orbital star field.
@@ -54,7 +54,7 @@ Ten rulings. They are LAW. If a concept fights one, change the concept.
 
 2. **Always-Visible Vehicle.** The vehicle is on screen and holds the center of attention from frame one to the final frame; it may fade/scale in over the first second, transform, travel, intensify — never a late reveal, never absent waiting for the drop.
 
-3. **Vehicle diversity.** Before choosing, `ls packages/video/src/remotion/tracks/` and read the vehicle line in the most recent 2-3 archive files' header comments; do not repeat the most recent vehicle unless the music demands it. (In the last batch two of three agents independently chose the orb.)
+3. **Vehicle diversity.** Do not consult a committed local `tracks/` archive; it is intentionally gone so it cannot bias you. Use the current brief, recent run reports or R2 composition artifacts if the operator provides them, and the known failure modes below. Do not repeat the most recent vehicle you know about unless the music demands it.
 
 4. **Type staging is a VARIABLE.** Placement and timing of the artist mark, track line, and date are yours, chosen musically per scene — entering on a fill, riding a riser, anchored where the composition gives them room. What is LAW: legibility (use `FloatingType`); safe margins (~96px x, ~150/230px top/bottom on 1080×1920); every word passes VOICE.md ("Artist — Title", "Found Jun 4", sentence case, no exclamation marks); **the type ink is drawn from the composition's own palette** — its light, a swatch, a warm or cool counter-accent, whatever matches the ambience — with emphasis welcome (a brighter or accent ink to lift a line) but always a colour FROM the scene, never a fixed brand colour; this includes the `CloseCard` signature, which takes a scene-matched emphasis ink (pass it `palette`), NOT a hard gold — gold stays the SUN, never the type; **the Log ID always appears at least once** — subtle, held for a few seconds, then faded out (never a permanent stamp), in a different, agent-chosen spot each video; and the `CloseCard` ending. The last batch placed identical text in identical spots at identical times in all three videos — that is the failure mode this rule kills.
 
@@ -66,7 +66,7 @@ Ten rulings. They are LAW. If a concept fights one, change the concept.
 
 8. **Musical cut.** 20s default; choose `--duration-ms` (10–30s) from the waveform; end on a drop or just before a transition, never mid-build.
 
-9. **The music leads, the video follows.** Audio reactivity is the point, not a finishing touch — the vehicle must visibly, legibly move WITH the track: lock to the beat grid, let the drop and the onsets HIT, map the energy curve to real swings in exposure / scale / width / density. The test, applied on the rendered MP4 (not the stills): **if the motion would look the same with the audio muted, the video has failed.** This stays inside the Motion law — reactivity rides intensity, never position (doctrine 7) — but it must be FELT; ambient drift that merely coexists with the music is the failure this kills (the 06-09 batch over-smoothed into floatiness). Sharp, structured textures (below) carry this far better than soft haze.
+9. **The music leads, the video follows.** Audio reactivity is the point, not a finishing touch — the vehicle must visibly, legibly move WITH the track: lock to the beat grid, let the drop and the onsets HIT, map the energy curve to real swings in exposure / scale / width / density. The test, applied on the rendered MP4 (not the stills): **if the motion would look the same with the audio muted, the video has failed.** This stays inside the Motion law — reactivity rides intensity, never position (doctrine 7) — but it must be FELT; ambient drift that merely coexists with the music is the failure this kills. The operating phrase: **audio disturbs the material, not just illuminates it.** At concept time, write a reactivity map with at least one structural reaction (width, density, radius, scale, threshold), one light reaction (glow, exposure, One Sun intensity), and one texture reaction (grain, dither, chroma, edge roughness). Sharp, structured textures carry this far better than soft haze.
 
 10. **Movements.** A pattern, however good, exhausts the eye in ~10 seconds — so a clip is 2–3 MOVEMENTS, not one texture held for 20s. Each movement boundary lands on a seam the music actually has (a drop, a bar boundary, a breakdown, an energy shift — read the beat grid and energy curve), and the shift is a legible change of regime inside the SAME theme: a palette lean, a scale or density jump, a zoom or reframe, the structure tightening or breaking open, a new behavior of the same vehicle. Nothing drastic — the One Driver persists (doctrine 1), the world doesn't change — but a viewer who has adapted to the pattern gets re-captured. A clip where second 18 looks like second 4 (just brighter) has only one movement, and that is the failure this rule kills.
 
@@ -85,7 +85,7 @@ Grain over the whole frame, always. Exactly one Eclipse Gold sun moment (express
 ## References
 
 - [references/workflow.md](references/workflow.md) — the per-track runbook, end to end: trackId → props → metadata → concept → author → still-critique → gates → render → report. Read this when you start a video.
-- [references/cookbook.md](references/cookbook.md) — technique, not style: fbm haze fields, ridge/contour fields, dither/halftone fronts, SDF bodies, beat-mapping patterns, the `GLSL.*` inventory, palette discipline. Worked examples cite the archive files. Read this while authoring the shader.
+- [references/cookbook.md](references/cookbook.md) — technique, not style: fbm haze fields, ridge/contour fields, dither/halftone fronts, SDF bodies, beat-mapping patterns, the `GLSL.*` inventory, palette discipline. Historical references may point to R2 output bundles when the operator provides them; do not look for a committed local `tracks/` archive. Read this while authoring the shader.
 
 ## Commands
 
@@ -99,7 +99,7 @@ Run from `packages/video` (or `bun run --cwd packages/video <script>`). Use `bun
 
 ## Hard rails
 
-- **Never publish.** Rendering is local only; the artifact is the MP4 and your run report. Nothing leaves the machine.
+- **Never publish to social.** Rendering is local unless the operator explicitly asks you to upload the R2 bundle. Social publishing is a separate, approval-gated step.
 - **Audio: the pipeline resolver only (Deezer/iTunes).** Never source audio from YouTube or rip full tracks. No legal audio means no video; stop and report.
-- **One video per run. Never commit, push, or delete anything.**
+- **One video per run. Never commit or push.** Delete only the temporary local composition you authored after it has been packaged into the output bundle.
 - **Every fact on screen comes from the props' Spotify metadata; every word passes VOICE.md.** Release year and label are authoritative and need no citation. Render only fields the props expose — never invent a fact, never web-search for one.

@@ -2,9 +2,7 @@ import { colors } from "@fluncle/tokens";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AbsoluteFill, useCurrentFrame, useVideoConfig } from "remotion";
 import { hexToRgb } from "../color";
-import { useBass } from "../hooks/use-bass";
-import { useBeat } from "../hooks/use-beat";
-import { useEnergy } from "../hooks/use-energy";
+import { useAudioReactivity, type AudioReactivityOptions } from "../hooks/use-audio-reactivity";
 import { type CosmosPalette, type EnergySample } from "../types";
 
 /**
@@ -41,10 +39,21 @@ export type ShaderLayerProps = {
   beatGrid?: number[];
   /** Exponential decay for the beat pulse (see useBeat). Default 3.2. */
   beatDecay?: number;
+  /** Onset offsets (ms) for `u_onsetPulse` and the richer audio bus. */
+  onsets?: number[];
+  /** Linear onset decay window in ms. Default 140. */
+  onsetWindowMs?: number;
   /** Energy curve for `u_energy` via useEnergy. Omitted = u_energy stays 0. */
   energyCurve?: EnergySample[];
   /** Bass curve for `u_bass` via useBass. Omitted = u_bass stays 0. */
   bassCurve?: EnergySample[];
+  /**
+   * Shared audio-reactivity profile. These uniforms are material signals, not
+   * position signals: use them for width, density, threshold, glow, grain,
+   * refraction, and exposure. Audio disturbs the material, not just illuminates
+   * it.
+   */
+  reactivity?: AudioReactivityOptions;
   /**
    * Custom uniforms keyed by name (without the `u_` you choose your own names),
    * each a float / vec2 / vec3. Declare matching `uniform`s in your shader. Set
@@ -69,6 +78,13 @@ uniform float u_progress;  // 0..1 clip progress
 uniform float u_energy;    // 0..1 smoothed overall energy
 uniform float u_bass;      // 0..1 smoothed low-end energy
 uniform float u_beatPulse; // 0..1, snaps to 1 on each beat, decays before the next
+uniform float u_onsetPulse;// 0..1, snaps on detected transients and decays linearly
+uniform float u_audioHit;  // beat + onset composite for immediate material hits
+uniform float u_audioSwell;// slower beat + bass + energy composite for organic after-pulse
+uniform float u_audioDrop; // envelope around the strongest musical moment or configured peak
+uniform float u_audioDisturbance; // hit+swell+drop, a general material disruption signal
+uniform float u_energyFast;// near-raw energy, for sharper non-positional reactions
+uniform float u_bassFast;  // near-raw bass, for pressure without smoothing lag
 uniform float u_seed;      // per-track seed
 uniform vec3  u_palette[4];// Retint ramp stops, dark -> light
 
@@ -129,8 +145,11 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
   seed = 1,
   beatGrid,
   beatDecay = 3.2,
+  onsets,
+  onsetWindowMs,
   energyCurve,
   bassCurve,
+  reactivity,
   uniforms,
   opacity = 1,
   blendMode = "normal",
@@ -142,11 +161,20 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
   const shaderKeyRef = useRef<string>("");
   const [error, setError] = useState<null | string>(null);
 
-  // Audio uniforms from the existing hooks (no-op when no curve/grid supplied).
-  const { pulse } = useBeat(beatGrid ?? [], { decay: beatDecay });
-  const beatPulse = beatGrid && beatGrid.length > 0 ? pulse : 0;
-  const energy = useEnergy(energyCurve ?? []);
-  const bass = useBass(bassCurve ?? []);
+  // Audio uniforms from the shared bus (no-op when no curve/grid supplied).
+  const audio = useAudioReactivity(
+    {
+      bassCurve: bassCurve ?? [],
+      beatGrid: beatGrid ?? [],
+      energyCurve: energyCurve ?? [],
+      onsets: onsets ?? [],
+    },
+    {
+      ...reactivity,
+      beatDecay: reactivity?.beatDecay ?? beatDecay,
+      onsetWindowMs: reactivity?.onsetWindowMs ?? onsetWindowMs,
+    },
+  );
 
   const stops = useMemo<[string, string, string, string]>(
     () =>
@@ -263,9 +291,16 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
     gl.uniform1f(u("u_time"), frame / fps);
     gl.uniform2f(u("u_res"), canvas.width, canvas.height);
     gl.uniform1f(u("u_progress"), clipProgress);
-    gl.uniform1f(u("u_energy"), energy);
-    gl.uniform1f(u("u_bass"), bass);
-    gl.uniform1f(u("u_beatPulse"), beatPulse);
+    gl.uniform1f(u("u_energy"), audio.energy);
+    gl.uniform1f(u("u_bass"), audio.bass);
+    gl.uniform1f(u("u_beatPulse"), audio.beat);
+    gl.uniform1f(u("u_onsetPulse"), audio.onset);
+    gl.uniform1f(u("u_audioHit"), audio.hit);
+    gl.uniform1f(u("u_audioSwell"), audio.swell);
+    gl.uniform1f(u("u_audioDrop"), audio.drop);
+    gl.uniform1f(u("u_audioDisturbance"), audio.uniforms.u_audioDisturbance ?? 0);
+    gl.uniform1f(u("u_energyFast"), audio.energyFast);
+    gl.uniform1f(u("u_bassFast"), audio.bassFast);
     gl.uniform1f(u("u_seed"), seed);
 
     const flatPalette = new Float32Array(stops.flatMap((hex) => toVec3(hex)));
@@ -299,7 +334,7 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
       canvas.removeEventListener("webglcontextlost", onLost, false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [frame, fragmentShader, fps, clipProgress, energy, bass, beatPulse, seed, stops, uniforms]);
+  }, [frame, fragmentShader, fps, clipProgress, audio, seed, stops, uniforms]);
 
   if (error) {
     return (

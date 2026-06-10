@@ -1,19 +1,11 @@
-// Composition registry. Every archived track video registers here; the archive
-// under tracks/ IS the video collection — dated, self-contained, deterministic,
-// re-renderable forever from code alone. No rendered artifact is ever committed.
+// Composition registry. Generated track compositions are temporary workbench
+// sources: register one here while rendering, then ship its source as
+// composition.tsx in the R2 bundle and remove the local file before commit.
 
 import { Composition, type CalculateMetadataFunction } from "remotion";
 import { colors } from "@fluncle/tokens";
 
 import { GlProbe } from "./gl-probe";
-import { NostalgicCosmos } from "./tracks/20260606-everything-in-its-right-place";
-import { TakeADeepBreath } from "./tracks/20260607-take-a-deep-breath";
-import { FourSeasonsRidge } from "./tracks/20260607-4-seasons";
-import { DownWithYourLove } from "./tracks/20260607-down-with-your-love";
-import { DancefloorHavoc } from "./tracks/20260607-hold-that-sucker-down";
-import { GlassHeartCurtain } from "./tracks/20260607-straight-to-your-heart";
-import { TeddysGate } from "./tracks/20260607-teddys-gate";
-import { MomentumPortal } from "./tracks/20260607-momentum";
 import { type NostalgicCosmosProps } from "./types";
 
 const FPS = 30;
@@ -64,17 +56,13 @@ const defaultProps: NostalgicCosmosProps = {
   },
 };
 
-// The archive, newest last. One entry per file under tracks/.
-const trackCompositions = [
-  { component: NostalgicCosmos, id: "NostalgicCosmos" },
-  { component: TakeADeepBreath, id: "TakeADeepBreath" },
-  { component: FourSeasonsRidge, id: "FourSeasonsRidge" },
-  { component: DownWithYourLove, id: "DownWithYourLove" },
-  { component: DancefloorHavoc, id: "DancefloorHavoc" },
-  { component: GlassHeartCurtain, id: "GlassHeartCurtain" },
-  { component: TeddysGate, id: "TeddysGate" },
-  { component: MomentumPortal, id: "MomentumPortal" },
-] as const;
+// Temporary generated compositions go here while rendering, then their source is
+// copied into out/<log-id>/composition.tsx by the ship pipeline and uploaded to
+// R2 with the video artifacts.
+const trackCompositions: Array<{
+  component: React.FC<NostalgicCosmosProps>;
+  id: string;
+}> = [];
 
 export const RemotionRoot: React.FC = () => {
   return (

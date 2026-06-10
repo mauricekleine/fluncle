@@ -1,12 +1,12 @@
 // Entry point for the local social-preview pipeline.
 //
-//   bun src/pipeline/social-preview.ts <trackId> [--skip-render] [--composition <Id>] [--duration-ms <10000-30000>]
+//   bun src/pipeline/social-preview.ts <trackId> [--skip-render] [--composition <Id>] [--composition-source <file>] [--duration-ms <10000-30000>]
 //
 // fetch track -> resolve preview -> download + normalize -> analyze audio ->
 // extract palette -> assemble inputProps -> write out/<trackId>.props.json ->
 // (unless --skip-render) bundle + render out/<trackId>.mp4.
 
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { colors } from "@fluncle/tokens";
@@ -19,6 +19,8 @@ import { fetchTrack } from "./fetch-track";
 import { resolvePreview } from "./resolve-preview";
 
 const OUT_DIR = path.resolve(import.meta.dirname, "../../out");
+const PACKAGE_ROOT = path.resolve(import.meta.dirname, "../..");
+const REMOTION_DIR = path.resolve(import.meta.dirname, "../remotion");
 
 // TODO: swap for `import { paletteMix } from "../remotion/primitives"` once that
 // primitive exists. The fallback below keeps the same intent and signature.
@@ -89,30 +91,80 @@ async function extractSwatches(artworkUrl: string | undefined): Promise<string[]
   }
 }
 
+async function listSourceFiles(dir: string): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const files: string[] = [];
+
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+
+    if (entry.isDirectory()) {
+      files.push(...(await listSourceFiles(full)));
+      continue;
+    }
+
+    if (entry.isFile() && /\.(ts|tsx)$/.test(entry.name)) {
+      files.push(full);
+    }
+  }
+
+  return files;
+}
+
+async function findCompositionSource(compositionId: string): Promise<string | undefined> {
+  const files = await listSourceFiles(REMOTION_DIR);
+  const matches: string[] = [];
+  const exportConst = new RegExp(`export\\s+const\\s+${compositionId}\\b`);
+  const exportFunction = new RegExp(`export\\s+function\\s+${compositionId}\\b`);
+
+  for (const file of files) {
+    const source = await readFile(file, "utf8");
+
+    if (exportConst.test(source) || exportFunction.test(source)) {
+      matches.push(file);
+    }
+  }
+
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const skipRender = args.includes("--skip-render");
-  // --composition <Id> selects a registered composition; defaults to the
-  // NostalgicCosmos exemplar. The video agent authors per-track compositions
-  // and renders them through this flag.
+  // --composition <Id> selects a registered composition. The video agent authors
+  // a temporary per-track composition and renders it through this flag.
   const compositionFlagIndex = args.indexOf("--composition");
   const compositionId = compositionFlagIndex >= 0 ? args[compositionFlagIndex + 1] : undefined;
+  // --composition-source <file> records the exact source used for the render so
+  // ship can package it as out/<log-id>/composition.tsx and upload it to R2.
+  const compositionSourceFlagIndex = args.indexOf("--composition-source");
+  const compositionSource =
+    compositionSourceFlagIndex >= 0 ? args[compositionSourceFlagIndex + 1] : undefined;
   // --duration-ms lets the agent pick the clip length from the waveform (end on
   // a drop or just before a transition); 20s default, clamped to the contract.
   const durationFlagIndex = args.indexOf("--duration-ms");
   const durationMs = durationFlagIndex >= 0 ? Number(args[durationFlagIndex + 1]) : undefined;
   const valueIndexes = new Set(
-    [compositionFlagIndex + 1, durationFlagIndex + 1].filter((i) => i > 0),
+    [compositionFlagIndex + 1, compositionSourceFlagIndex + 1, durationFlagIndex + 1].filter(
+      (i) => i > 0,
+    ),
   );
   const trackId = args.find((a, index) => !a.startsWith("--") && !valueIndexes.has(index));
   if (
     !trackId ||
     (compositionFlagIndex >= 0 && !compositionId) ||
+    (compositionSourceFlagIndex >= 0 && !compositionSource) ||
     (durationFlagIndex >= 0 &&
       (!Number.isFinite(durationMs) || durationMs! < 10_000 || durationMs! > 30_000))
   ) {
     throw new Error(
-      "usage: bun src/pipeline/social-preview.ts <trackId> [--skip-render] [--composition <Id>] [--duration-ms <10000-30000>]",
+      "usage: bun src/pipeline/social-preview.ts <trackId> [--skip-render] [--composition <Id>] [--composition-source <file>] [--duration-ms <10000-30000>]",
+    );
+  }
+
+  if (!skipRender && !compositionId) {
+    throw new Error(
+      "[social-preview] rendering now requires --composition <Id>; generated compositions are shipped as output artifacts, not kept in the codebase",
     );
   }
 
@@ -195,10 +247,32 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (!compositionId) {
+    throw new Error("[social-preview] internal error: missing composition id for render");
+  }
+
   const { render } = await import("./render");
   const outputPath = path.join(OUT_DIR, `${trackId}.mp4`);
   console.log(`[social-preview] rendering -> ${outputPath}`);
   const result = await render(inputProps, outputPath, compositionId);
+
+  const sourcePath = compositionSource
+    ? path.resolve(compositionSource)
+    : await findCompositionSource(result.compositionId);
+  const manifest = {
+    compositionId: result.compositionId,
+    compositionSource: sourcePath ? path.relative(PACKAGE_ROOT, sourcePath) : undefined,
+    props: path.relative(PACKAGE_ROOT, propsPath),
+    trackId,
+  };
+  await writeFile(path.join(OUT_DIR, `${trackId}.render.json`), JSON.stringify(manifest, null, 2));
+
+  if (!manifest.compositionSource) {
+    console.warn(
+      `[social-preview] warning: could not identify source for composition ${result.compositionId}; ship will omit composition.tsx unless a render manifest is added`,
+    );
+  }
+
   console.log(`[social-preview] rendered ${result.compositionId} -> ${result.outputPath}`);
 }
 

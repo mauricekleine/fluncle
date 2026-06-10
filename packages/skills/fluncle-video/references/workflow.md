@@ -1,6 +1,6 @@
 # Workflow: one track → one video
 
-The per-track runbook, end to end. You are given a trackId; you produce one 9:16 rendered MP4 with its own visual character, unmistakably from the same archive as every other Fluncle video, plus a run report. You work inside a checkout of the Fluncle repo. Read [SKILL.md](../SKILL.md) (the doctrine) first; this is the procedure that applies it.
+The per-track runbook, end to end. You are given a trackId; you produce one 9:16 rendered MP4 with its own visual character, plus a source-backed output bundle that can be uploaded to R2 and rerendered later. You work inside a checkout of the Fluncle repo. Read [SKILL.md](../SKILL.md) (the doctrine) first; this is the procedure that applies it.
 
 ## 1. Props (the ground truth)
 
@@ -23,17 +23,18 @@ BPM comes from the audio analysis already in the props — measured off the actu
 
 In order:
 
-1. **Diversity check (doctrine 3).** `ls packages/video/src/remotion/tracks/` and read the vehicle line in the most recent 2-3 files' header comments. Do not repeat the most recent vehicle unless the music demands it.
+1. **Diversity check (doctrine 3).** Do not read a committed local `tracks/` archive; it should not exist. Use the current brief, any recent run reports or R2 composition artifacts the operator gives you, and the known failure modes in SKILL.md. Do not repeat the most recent vehicle you know about unless the music demands it.
 2. **Choose the vehicle (doctrine 1, One Driver).** Exactly one travelling beat-synced medium: orb / lines / fractal / glass / glitch, or one you invent. Everything else supports it. Decide how the one Eclipse Gold sun moment is expressed — as the orb itself, or, for any other vehicle, THROUGH the vehicle (a gold crest igniting, a gold resolution front), never as a second celestial body.
 3. **Choose the texture family** (nebula / analog / dither / paint / fluent / duotone — see MOODBOARD.md) that fits the tune. A liquid roller wants drift, nebula, or fluent; a neuro stomper wants dither, glitch, hard onset flashes; a gel-lit duotone suits the meditative ones.
 4. **Write a two-sentence journey:** from where, through what, arriving where — matched to the song's energy curve. Name where the drop lands and how the vehicle ignites there.
 5. **Score the movements (doctrine 10).** Split the clip into 2–3 movements and pin each boundary to a real musical seam — a drop, a bar boundary, a breakdown, an energy shift — by reading the beat grid and energy curve (the timestamps go in your header comment). Name what visibly changes at each boundary (palette lean, density/scale jump, reframe, a new behavior of the same vehicle): same theme, a legible shift. If you cannot say what changes at second N, the clip has one movement and will exhaust the eye.
+6. **Write the reactivity map (doctrine 9).** Use `useAudioReactivity(audio, profile)` unless there is a specific reason not to. Name at least one structural reaction (`u_audioHit`/`u_audioSwell` changes width, density, radius, scale, threshold), one light reaction (glow, exposure, One Sun intensity), and one texture reaction (grain, dither, chroma, edge roughness). Audio disturbs the material, not just illuminates it; never feed these signals into travel position.
 
 Confirm the **Always-Visible Vehicle** (doctrine 2) in the concept: the vehicle fills the frame from the first frame (a dim ember, a flat field, a scrambled matrix that is unmistakably present), never a late reveal.
 
-## 4. Author the archive file
+## 4. Author the temporary composition
 
-Create `packages/video/src/remotion/tracks/YYYYMMDD-<kebab-slug-of-title>.tsx` (kebab-case is enforced by a pre-commit hook). Use today's date as the prefix and the kebab-cased track title as the slug.
+Create a temporary self-contained composition source file under `packages/video/src/remotion/` while you work. A dated filename is still useful for local clarity, but it is not an archive contract and must not be committed. `ship` will copy the exact source into `packages/video/out/<log-id>/composition.tsx`; R2 keeps the durable copy.
 
 - Export a named PascalCase `React.FC<NostalgicCosmosProps>` (reuse the contract unchanged so the pipeline feeds it).
 - Import ONLY from `../cosmos` (plus `remotion`, `react`, `@fluncle/tokens`). No styled vehicles, no static image assets.
@@ -42,9 +43,10 @@ Create `packages/video/src/remotion/tracks/YYYYMMDD-<kebab-slug-of-title>.tsx` (
 - Keep all type inside the safe inset via `FloatingType`; place and time it musically (doctrine 4), not in the same spots as the last video.
 - End with `CloseCard`, driven by the journey's `"arrive"` phase.
 - **Determinism:** remotion `random(seed)` and frame-derived values only. Never `Math.random` / `Date.now` / `new Date()`. Audio reactivity only through the hooks.
-- Open the file with a header comment that states, at minimum: the track and label, the **vehicle** (so the next agent's diversity check works), the texture family, and the two-sentence concept. Match the style of the existing archive headers.
+- **Reactivity bus:** prefer `useAudioReactivity` and pass its `uniforms` into `ShaderLayer` (or pass `onsets`/`reactivity` directly to `ShaderLayer` for built-in `u_audio*` uniforms). Map those uniforms to material disturbance: width, density, threshold, radius, refraction, grain, dither, glow. Do not map them to travel position.
+- Open the file with a header comment that states, at minimum: the track and label, the **vehicle** (so the next agent's diversity check works), the texture family, and the two-sentence concept. Keep it useful as future rerender context because this exact file is shipped as `composition.tsx`.
 
-Register it in `src/remotion/root.tsx`: import the component, add `{ component, id: "<PascalId>" }` to the `trackCompositions` array. The id is unique PascalCase.
+Register it in `src/remotion/root.tsx`: import the component, add `{ component, id: "<PascalId>" }` to the `trackCompositions` array. The id is unique PascalCase. This registration is temporary working state; remove it after the bundle is shipped.
 
 ## 5. Still-critique loop (minimum two rounds)
 
@@ -63,7 +65,7 @@ GPU shaders require `--gl=angle`. Render at least four frames across the clip, a
 
 Iterate until type is legible inside the safe inset, the palette stays warm and inky, grain is present, and the vehicle reads from frame one. Two critique rounds minimum; taste is part of the job.
 
-**Stills cannot show motion jitter or reactivity.** After the gates, scrub the MP4 (or render 3–4 ADJACENT frames around a beat) to confirm the vehicle FLOWS — position advances smoothly, audio only brightens/widens, nothing jumps-and-snaps on the kick (Motion law, doctrine 7). Then the **reactivity gate** (doctrine 9): play the MP4 against the audio — can you FEEL the kick and the drop in the picture? If the motion would look the same with the sound muted, the reactivity is too weak; push it before you ship. Finally the **swap test**: set your stills beside the two most recent archive clips'. If the climax blooms in the same place, or the type sits in the same spot, or the geometry rhymes — change it.
+**Stills cannot show motion jitter or reactivity.** After the gates, scrub the MP4 (or render 3–4 ADJACENT frames around a beat) to confirm the vehicle FLOWS — position advances smoothly, audio only brightens/widens, nothing jumps-and-snaps on the kick (Motion law, doctrine 7). Then the **reactivity gate** (doctrine 9): play the MP4 against the audio — can you FEEL the kick and the drop in the picture? If the motion would look the same with the sound muted, the reactivity is too weak; push it before you ship. Finally the **swap test**: compare against recent run reports, R2 composition artifacts, or operator-provided stills when available. If the climax blooms in the same place, or the type sits in the same spot, or the geometry rhymes — change it.
 
 ## 6. Gates
 
@@ -71,7 +73,7 @@ Iterate until type is legible inside the safe inset, the palette stays warm and 
 
 ## 7. Render
 
-`bun run social:preview <trackId> --composition <CompId>` and **wait for the encode to finish** — renders take minutes and the MP4 is invalid until the process exits. Confirm with `ffprobe`: 1080×1920, h264, aac audio, 15–30s.
+`bun run social:preview <trackId> --composition <CompId> --composition-source <path-to-composition.tsx>` and **wait for the encode to finish** — renders take minutes and the MP4 is invalid until the process exits. The render writes `out/<trackId>.mp4` and `out/<trackId>.render.json`. Confirm with `ffprobe`: 1080×1920, h264, aac audio, 15–30s.
 
 ## 8. Ship (package, upload, link)
 
@@ -82,11 +84,15 @@ Once the render passes its gates, package the bundle and link it to the track. A
    - `footage-silent.mp4` — audio-less remux (`ffmpeg -c copy -an`); the cut you upload to TikTok and attach the official sound to by hand (keeps licensing inside TikTok)
    - `poster.jpg` — a ~80% drop frame
    - `note.txt` — the fixed-template caption that accompanies the footage: `Artist — Title (Year)` / Label / `Found <date>: fluncle://<log-id>` / `#dnb #drumnbass #drumandbass` + sub-genre tags (lowercased, deduped)
+   - `composition.tsx` — the exact temporary Remotion source used for the render
+   - `props.json` — analyzed audio curves, beat grid, palette, and track props
+   - `render.json` — composition id plus pointers for rerendering from the bundle
 
    The track MUST have a Log ID (no Log ID → no ship; backfill the ISRC first). Requires an existing render (`out/<trackId>.mp4`) — run step 7 first.
 
 2. **Upload + link** — `fluncle admin track video <log-id> --dir packages/video/out/<log-id>` uploads the bundle to R2 under `<log-id>/` (served at `found.fluncle.com`) and sets the track's `video_url` to the review cut. The Worker owns R2; you never hold R2 credentials.
-3. **Post (manual)** — grab `social.mp4`, upload to TikTok, attach the official sound, paste the caption, post. Auto-draft is deferred.
+3. **Post (manual)** — grab `footage-silent.mp4`, upload to TikTok, attach the official sound, paste `note.txt`, post. Auto-draft is deferred.
+4. **Clean local source** — after `composition.tsx` is present in the output bundle, remove the temporary composition file and its `root.tsx` registration before committing. Generated compositions are output artifacts, not codebase history.
 
 ## 9. Report
 
