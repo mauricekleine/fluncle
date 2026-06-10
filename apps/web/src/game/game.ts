@@ -77,6 +77,7 @@ export function createGame(container: HTMLElement): Game {
   let nowS = 0;
   let wasOrbiting = false;
   let orbitEnteredAt = 0;
+  let paused = false;
 
   const telemetry: TelemetryLine[] = [];
 
@@ -227,10 +228,17 @@ export function createGame(container: HTMLElement): Game {
       audio.setMuted(!audio.muted());
     }
 
+    if (input.consumePauseToggle() && phase === "play") {
+      setPaused(!paused);
+    }
+
     const acted = input.consumeAction();
 
     if (acted) {
-      if (phase === "play") {
+      if (paused) {
+        // Any key or tap also resumes; Esc isn't the only way back.
+        setPaused(false);
+      } else if (phase === "play") {
         // In flight, keys are controls; parked on a banger, any key flies on
         // (after a beat of grace so a held boost key doesn't eject you).
         if (sim?.phase === "orbiting" && towedT <= 0 && nowS - orbitEnteredAt > DEPART_GRACE) {
@@ -257,7 +265,7 @@ export function createGame(container: HTMLElement): Game {
       towedT = Math.max(0, towedT - dt);
     }
 
-    if (phase === "play" && sim) {
+    if (phase === "play" && sim && !paused) {
       accumulator += dt;
 
       let steps = 0;
@@ -299,6 +307,7 @@ export function createGame(container: HTMLElement): Game {
         logCard: phase === "play" ? logCardView(sim) : undefined,
         muted: audio.muted(),
         nowS,
+        paused: paused && phase === "play",
         phase,
         radar: phase === "play" ? radarBlips(sim) : [],
         sim,
@@ -324,6 +333,7 @@ export function createGame(container: HTMLElement): Game {
       endT: 0,
       muted: audio.muted(),
       nowS,
+      paused: false,
       phase: "gate",
       radar: [],
       sim: holdingSim(),
@@ -354,10 +364,30 @@ export function createGame(container: HTMLElement): Game {
     renderer.resize(container.clientWidth, container.clientHeight);
   }
 
-  function onVisibility(): void {
-    if (document.hidden) {
+  function setPaused(value: boolean): void {
+    if (paused === value) {
+      return;
+    }
+
+    paused = value;
+
+    if (paused) {
       audio.suspend();
     } else if (phase !== "gate") {
+      audio.resume();
+    }
+  }
+
+  function onVisibility(): void {
+    if (document.hidden) {
+      // Leaving the tab parks the run; you come back to a pause screen,
+      // not a ship that kept burning fuel.
+      if (phase === "play") {
+        setPaused(true);
+      } else {
+        audio.suspend();
+      }
+    } else if (phase !== "gate" && !paused) {
       audio.resume();
     }
   }
