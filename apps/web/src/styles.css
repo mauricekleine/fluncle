@@ -1,5 +1,8 @@
 @import "tailwindcss";
 @import "shadcn/tailwind.css";
+/* Canon tokens (DESIGN.md → @fluncle/tokens → tokens.css); the single source of
+   the palette hexes. :root below only maps them onto the shadcn variable names. */
+@import "@fluncle/tokens/tokens.css";
 
 /* Oxanium variable font (SIL OFL), self-hosted; one file covers weights 200-800. */
 @font-face {
@@ -67,38 +70,38 @@
 }
 
 :root {
-  --radius: 0.625rem;
-  --background: #090a0b;
-  --foreground: #f4ead7;
-  --card: #10100d;
-  --card-foreground: #f4ead7;
-  --popover: #10100d;
-  --popover-foreground: #f4ead7;
-  --primary: #f5b800;
-  --primary-foreground: #151006;
-  --secondary: #171611;
-  --secondary-foreground: #f4ead7;
-  --muted: rgb(208 185 144 / 10%);
-  --muted-foreground: #b7ab95;
-  --accent: rgb(245 184 0 / 10%);
-  --accent-foreground: #ffd057;
-  --destructive: #ff6b57;
-  --border: rgb(208 185 144 / 16%);
-  --input: #171611;
-  --ring: #f5b800;
-  --chart-1: #f5b800;
-  --chart-2: #d0b990;
-  --chart-3: #ff6b57;
-  --chart-4: #ffd057;
-  --chart-5: #b7ab95;
-  --sidebar: #10100d;
-  --sidebar-foreground: #f4ead7;
-  --sidebar-primary: #f5b800;
-  --sidebar-primary-foreground: #151006;
-  --sidebar-accent: rgb(245 184 0 / 10%);
-  --sidebar-accent-foreground: #ffd057;
-  --sidebar-border: rgb(208 185 144 / 16%);
-  --sidebar-ring: #f5b800;
+  --radius: var(--rounded-lg);
+  --background: var(--deep-field);
+  --foreground: var(--starlight-cream);
+  --card: var(--sleeve-black);
+  --card-foreground: var(--starlight-cream);
+  --popover: var(--sleeve-black);
+  --popover-foreground: var(--starlight-cream);
+  --primary: var(--eclipse-gold);
+  --primary-foreground: var(--ink-on-gold);
+  --secondary: var(--tape-black);
+  --secondary-foreground: var(--starlight-cream);
+  --muted: var(--dust-veil);
+  --muted-foreground: var(--stardust);
+  --accent: var(--gold-veil);
+  --accent-foreground: var(--eclipse-glow);
+  --destructive: var(--reentry-red);
+  --border: var(--dust-line);
+  --input: var(--tape-black);
+  --ring: var(--eclipse-gold);
+  --chart-1: var(--eclipse-gold);
+  --chart-2: var(--stardust);
+  --chart-3: var(--reentry-red);
+  --chart-4: var(--eclipse-glow);
+  --chart-5: var(--stardust);
+  --sidebar: var(--sleeve-black);
+  --sidebar-foreground: var(--starlight-cream);
+  --sidebar-primary: var(--eclipse-gold);
+  --sidebar-primary-foreground: var(--ink-on-gold);
+  --sidebar-accent: var(--gold-veil);
+  --sidebar-accent-foreground: var(--eclipse-glow);
+  --sidebar-border: var(--dust-line);
+  --sidebar-ring: var(--eclipse-gold);
 }
 
 body::before {
@@ -190,7 +193,7 @@ body::after {
   font-size: 0.76rem;
   font-weight: 800;
   gap: 0.9rem;
-  grid-template-columns: 4.75rem 3.25rem minmax(0, 1fr) 1.25rem;
+  grid-template-columns: 4.75rem 3.25rem minmax(0, 1fr) auto;
   letter-spacing: 0;
   padding: 0.85rem 1rem;
 }
@@ -203,13 +206,13 @@ body::after {
   align-items: center;
   background: transparent;
   border-bottom: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
-  cursor: pointer;
   display: grid;
   gap: 0.9rem;
   grid-template-columns: 4.75rem 3.25rem minmax(0, 1fr) auto;
   min-height: 5.25rem;
   outline: none;
   padding: 0.95rem 1rem;
+  position: relative;
   transition:
     background-color 150ms ease-out,
     color 150ms ease-out,
@@ -217,17 +220,131 @@ body::after {
 }
 
 .track-row:hover,
-.track-row:focus-visible {
+.track-row:focus-within {
   background: var(--accent);
 }
 
 .track-row:hover .track-log-id,
-.track-row:focus-visible .track-log-id {
+.track-row:focus-within .track-log-id {
   color: var(--accent-foreground);
 }
 
-.track-row:focus-visible {
+/* The whole row is still one link to Spotify: the title anchor stretches over
+   the row, and the preview toggle and action links sit above it as siblings —
+   interactive controls are never nested inside the anchor. */
+.track-row-link {
+  color: inherit;
+  outline: none;
+  text-decoration: none;
+}
+
+.track-row-link::after {
+  content: "";
+  inset: 0;
+  position: absolute;
+}
+
+.track-row:has(.track-row-link:focus-visible) {
   box-shadow: inset 0 0 0 2px var(--ring);
+}
+
+.track-play,
+.track-action {
+  position: relative;
+  z-index: 1;
+}
+
+.track-play {
+  background: none;
+  border: none;
+  border-radius: var(--rounded-artwork);
+  cursor: pointer;
+  display: block;
+  padding: 0;
+}
+
+.track-play:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+  outline: none;
+}
+
+/* Glyph over a Deep Field scrim so the icon holds AA against any artwork
+   (The Legible Sky Rule). Visible on hover/focus and while playing. */
+.track-play-glyph {
+  align-items: center;
+  background: color-mix(in oklch, var(--deep-field) 55%, transparent);
+  border-radius: var(--rounded-artwork);
+  color: var(--starlight-cream);
+  display: flex;
+  font-size: 1.25rem;
+  inset: 0;
+  justify-content: center;
+  opacity: 0;
+  position: absolute;
+  transition: opacity 150ms ease-out;
+}
+
+.track-play:hover .track-play-glyph,
+.track-play:focus-visible .track-play-glyph,
+.track-play[aria-pressed="true"] .track-play-glyph {
+  opacity: 1;
+}
+
+.track-play[aria-pressed="true"] .track-artwork {
+  border-color: color-mix(in oklch, var(--primary) 60%, transparent);
+}
+
+.track-actions {
+  align-items: center;
+  display: flex;
+  gap: 0.125rem;
+  justify-self: end;
+}
+
+.track-action {
+  align-items: center;
+  border-radius: var(--rounded-sm);
+  color: var(--muted-foreground);
+  display: inline-flex;
+  padding: 0.3rem;
+  transition:
+    background-color 150ms ease-out,
+    color 150ms ease-out;
+}
+
+.track-action:hover,
+.track-action:focus-visible {
+  background: var(--muted);
+  color: var(--accent-foreground);
+}
+
+.track-action:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+  outline: none;
+}
+
+.track-caret {
+  color: var(--muted-foreground);
+  transition: transform 150ms ease-out;
+}
+
+.track-row:hover .track-caret,
+.track-row:focus-within .track-caret {
+  transform: translateX(2px);
+}
+
+/* Enrichment chips: quiet Stardust words; tempo and key read as instrument
+   numerals (Oxanium tabular, The Tabular Rule). */
+.track-chip {
+  color: var(--muted-foreground);
+  font-size: 0.72rem;
+  font-weight: 400;
+}
+
+.track-chip-numeric {
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
 }
 
 .track-log-id {
@@ -244,7 +361,7 @@ body::after {
   aspect-ratio: 1;
   background: var(--muted);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--rounded-artwork);
   display: block;
   object-fit: cover;
   transition:
@@ -360,12 +477,184 @@ body::after {
 
 @media (min-width: 640px) {
   .playlist-header {
-    grid-template-columns: 4.75rem 3.25rem minmax(0, 1fr) 6.75rem 1.25rem;
+    grid-template-columns: 4.75rem 3.25rem minmax(0, 1fr) 6.75rem auto;
   }
 
   .track-row {
-    grid-template-columns: 4.75rem 3.25rem minmax(0, 1fr) 6.75rem 1.25rem;
+    grid-template-columns: 4.75rem 3.25rem minmax(0, 1fr) 6.75rem auto;
   }
+}
+
+/* ————— Stories ————— */
+
+/* The Stories stage: one finding at a time, full-bleed on mobile, a 9:16 pane
+   centered directly on the cosmos at desktop widths (One Pane). The stage is
+   transparent on purpose: the cover-art backdrop and the grain veil carry
+   through, so the loud video sits inside the quiet logbook. */
+.stories-stage {
+  height: 100dvh;
+  inset: 0;
+  overflow: hidden;
+  position: fixed;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.stories-track {
+  height: 100%;
+  position: relative;
+  transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+}
+
+.story-slot {
+  height: 100%;
+  inset: 0;
+  position: absolute;
+}
+
+.story-view {
+  border-inline: 1px solid var(--border);
+  height: 100%;
+  margin-inline: auto;
+  overflow: hidden;
+  position: relative;
+  width: min(100vw, calc(100dvh * 9 / 16));
+}
+
+.story-footage {
+  background: var(--sleeve-black);
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+
+/* Top and bottom scrims keep the progress bar and the meta block AA-legible
+   over any frame of footage (The Legible Sky Rule). */
+.story-scrim {
+  background:
+    linear-gradient(
+      to bottom,
+      color-mix(in oklch, var(--deep-field) 70%, transparent),
+      transparent 18%
+    ),
+    linear-gradient(
+      to top,
+      color-mix(in oklch, var(--deep-field) 92%, transparent),
+      transparent 45%
+    );
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+}
+
+.story-meta {
+  bottom: 0;
+  display: grid;
+  gap: 0.4rem;
+  justify-items: start;
+  left: 0;
+  padding: 1.25rem 1.25rem calc(1.5rem + env(safe-area-inset-bottom));
+  position: absolute;
+  right: 0;
+}
+
+.story-log-id {
+  color: var(--eclipse-gold);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.92rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.story-title {
+  color: var(--starlight-cream);
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.story-artist {
+  color: var(--stardust);
+  font-size: 1rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.story-found {
+  color: var(--stardust);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.story-found-date {
+  font-variant-numeric: tabular-nums;
+}
+
+.story-spotify {
+  margin-top: 0.35rem;
+}
+
+.stories-chrome {
+  display: grid;
+  gap: 0.4rem;
+  left: 0;
+  margin-inline: auto;
+  padding: calc(0.75rem + env(safe-area-inset-top)) 0.9rem 0;
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: min(100vw, calc(100dvh * 9 / 16));
+  z-index: 2;
+}
+
+.stories-progress {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.stories-segment {
+  background: color-mix(in oklch, var(--starlight-cream) 28%, transparent);
+  border-radius: 999px;
+  flex: 1;
+  height: 2px;
+  overflow: hidden;
+}
+
+.stories-segment-fill {
+  background: var(--starlight-cream);
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+  transform: scaleX(0);
+  transform-origin: left;
+  width: 100%;
+}
+
+.stories-controls {
+  display: flex;
+  gap: 0.25rem;
+  justify-content: flex-end;
+}
+
+.stories-sound-hint {
+  background: color-mix(in oklch, var(--sleeve-black) 75%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--starlight-cream);
+  font-size: 0.82rem;
+  font-weight: 700;
+  left: 50%;
+  padding: 0.45rem 0.9rem;
+  pointer-events: none;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2;
 }
 
 /* The Grounded Floats Rule (DESIGN.md): under reduced motion, every float
@@ -393,6 +682,10 @@ body::after {
   .animate-pulse,
   .animate-spin {
     animation: none;
+  }
+
+  .stories-track {
+    transition: none;
   }
 }
 

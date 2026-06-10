@@ -7,7 +7,7 @@
     "ui": "@/components/ui",
     "utils": "@/lib/utils"
   },
-  "iconLibrary": "lucide",
+  "iconLibrary": "phosphor",
   "rsc": false,
   "style": "base-vega",
   "tailwind": {

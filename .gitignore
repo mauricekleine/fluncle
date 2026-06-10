@@ -11,6 +11,7 @@ apps/*/dist/
 apps/*/.output/
 apps/*/.wrangler/
 .DS_Store
+.claude/worktrees
 
 # fluncle-ssh local dev state (host keys) and go build artifact
 apps/ssh/.local/

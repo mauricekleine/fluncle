@@ -127,40 +127,48 @@ type TrackCountRow = {
 
 export async function listTracks({
   cursor,
+  hasVideo,
   limit,
   since,
   until,
 }: {
   cursor?: TrackCursor;
+  /** Only findings with a rendered video — the Stories feed's filter. */
+  hasVideo?: boolean;
   limit: number;
   since?: string;
   until?: string;
 }): Promise<TrackListPage> {
   const db = await getDb();
 
-  // Discovery-window filters; totalCount is scoped to the same window so a
-  // windowed caller (the newsletter agent) gets the matching count, while the
-  // homepage's unwindowed calls keep the global archive count for numbering.
-  const windowClauses: string[] = [];
-  const windowArgs: string[] = [];
+  // Discovery-window and video filters; totalCount is scoped to the same
+  // filters so a windowed caller (the newsletter agent) or the Stories feed
+  // gets the matching count, while the homepage's unfiltered calls keep the
+  // global archive count for numbering.
+  const filterClauses: string[] = [];
+  const filterArgs: string[] = [];
 
   if (since) {
-    windowClauses.push("added_at >= ?");
-    windowArgs.push(since);
+    filterClauses.push("added_at >= ?");
+    filterArgs.push(since);
   }
 
   if (until) {
-    windowClauses.push("added_at < ?");
-    windowArgs.push(until);
+    filterClauses.push("added_at < ?");
+    filterArgs.push(until);
   }
 
-  if (cursor) {
-    windowClauses.push("(added_at < ? or (added_at = ? and track_id < ?))");
+  if (hasVideo) {
+    filterClauses.push("video_url is not null");
   }
 
-  const where = windowClauses.length > 0 ? `where ${windowClauses.join(" and ")}` : "";
+  const countWhere = filterClauses.length > 0 ? `where ${filterClauses.join(" and ")}` : "";
+  const listClauses = cursor
+    ? [...filterClauses, "(added_at < ? or (added_at = ? and track_id < ?))"]
+    : filterClauses;
+  const where = listClauses.length > 0 ? `where ${listClauses.join(" and ")}` : "";
   const cursorArgs = cursor ? [cursor.addedAt, cursor.addedAt, cursor.trackId] : [];
-  const args: Array<string | number> = [...windowArgs, ...cursorArgs, limit + 1];
+  const args: Array<string | number> = [...filterArgs, ...cursorArgs, limit + 1];
 
   const [result, countResult] = await Promise.all([
     db.execute({
@@ -172,12 +180,8 @@ export async function listTracks({
             limit ?`,
     }),
     db.execute({
-      args: windowArgs,
-      sql: `select count(*) as total_count from tracks ${
-        windowArgs.length > 0
-          ? `where ${windowClauses.slice(0, windowArgs.length).join(" and ")}`
-          : ""
-      }`,
+      args: filterArgs,
+      sql: `select count(*) as total_count from tracks ${countWhere}`,
     }),
   ]);
   const rows = result.rows as unknown as TrackRow[];

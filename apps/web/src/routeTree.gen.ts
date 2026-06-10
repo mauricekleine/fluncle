@@ -12,14 +12,18 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as RssDotxmlRouteImport } from './routes/rss[.]xml'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as StoriesIndexRouteImport } from './routes/stories.index'
+import { Route as StoriesLogIdRouteImport } from './routes/stories.$logId'
 import { Route as CliLatestDotshRouteImport } from './routes/cli/latest[.]sh'
 import { Route as ApiTracksRouteImport } from './routes/api/tracks'
 import { Route as ApiSubmissionsRouteImport } from './routes/api/submissions'
+import { Route as ApiStoriesRouteImport } from './routes/api/stories'
 import { Route as ApiSearchRouteImport } from './routes/api/search'
 import { Route as ApiNewsletterRouteImport } from './routes/api/newsletter'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as ApiTracksRandomRouteImport } from './routes/api/tracks/random'
 import { Route as ApiTracksIdOrLogIdRouteImport } from './routes/api/tracks.$idOrLogId'
+import { Route as ApiPreviewIdOrLogIdRouteImport } from './routes/api/preview.$idOrLogId'
 import { Route as ApiAdminTracksRouteImport } from './routes/api/admin/tracks'
 import { Route as ApiAdminSubmissionsRouteImport } from './routes/api/admin/submissions'
 import { Route as ApiAdminTracksTrackIdRouteImport } from './routes/api/admin/tracks.$trackId'
@@ -48,6 +52,16 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const StoriesIndexRoute = StoriesIndexRouteImport.update({
+  id: '/stories/',
+  path: '/stories/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const StoriesLogIdRoute = StoriesLogIdRouteImport.update({
+  id: '/stories/$logId',
+  path: '/stories/$logId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CliLatestDotshRoute = CliLatestDotshRouteImport.update({
   id: '/cli/latest.sh',
   path: '/cli/latest.sh',
@@ -61,6 +75,11 @@ const ApiTracksRoute = ApiTracksRouteImport.update({
 const ApiSubmissionsRoute = ApiSubmissionsRouteImport.update({
   id: '/api/submissions',
   path: '/api/submissions',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiStoriesRoute = ApiStoriesRouteImport.update({
+  id: '/api/stories',
+  path: '/api/stories',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiSearchRoute = ApiSearchRouteImport.update({
@@ -87,6 +106,11 @@ const ApiTracksIdOrLogIdRoute = ApiTracksIdOrLogIdRouteImport.update({
   id: '/$idOrLogId',
   path: '/$idOrLogId',
   getParentRoute: () => ApiTracksRoute,
+} as any)
+const ApiPreviewIdOrLogIdRoute = ApiPreviewIdOrLogIdRouteImport.update({
+  id: '/api/preview/$idOrLogId',
+  path: '/api/preview/$idOrLogId',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAdminTracksRoute = ApiAdminTracksRouteImport.update({
   id: '/api/admin/tracks',
@@ -165,11 +189,15 @@ export interface FileRoutesByFullPath {
   '/api/health': typeof ApiHealthRoute
   '/api/newsletter': typeof ApiNewsletterRoute
   '/api/search': typeof ApiSearchRoute
+  '/api/stories': typeof ApiStoriesRoute
   '/api/submissions': typeof ApiSubmissionsRoute
   '/api/tracks': typeof ApiTracksRouteWithChildren
   '/cli/latest.sh': typeof CliLatestDotshRoute
+  '/stories/$logId': typeof StoriesLogIdRoute
+  '/stories/': typeof StoriesIndexRoute
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
   '/api/admin/tracks': typeof ApiAdminTracksRouteWithChildren
+  '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
   '/api/tracks/$idOrLogId': typeof ApiTracksIdOrLogIdRoute
   '/api/tracks/random': typeof ApiTracksRandomRoute
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
@@ -190,11 +218,15 @@ export interface FileRoutesByTo {
   '/api/health': typeof ApiHealthRoute
   '/api/newsletter': typeof ApiNewsletterRoute
   '/api/search': typeof ApiSearchRoute
+  '/api/stories': typeof ApiStoriesRoute
   '/api/submissions': typeof ApiSubmissionsRoute
   '/api/tracks': typeof ApiTracksRouteWithChildren
   '/cli/latest.sh': typeof CliLatestDotshRoute
+  '/stories/$logId': typeof StoriesLogIdRoute
+  '/stories': typeof StoriesIndexRoute
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
   '/api/admin/tracks': typeof ApiAdminTracksRouteWithChildren
+  '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
   '/api/tracks/$idOrLogId': typeof ApiTracksIdOrLogIdRoute
   '/api/tracks/random': typeof ApiTracksRandomRoute
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
@@ -216,11 +248,15 @@ export interface FileRoutesById {
   '/api/health': typeof ApiHealthRoute
   '/api/newsletter': typeof ApiNewsletterRoute
   '/api/search': typeof ApiSearchRoute
+  '/api/stories': typeof ApiStoriesRoute
   '/api/submissions': typeof ApiSubmissionsRoute
   '/api/tracks': typeof ApiTracksRouteWithChildren
   '/cli/latest.sh': typeof CliLatestDotshRoute
+  '/stories/$logId': typeof StoriesLogIdRoute
+  '/stories/': typeof StoriesIndexRoute
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
   '/api/admin/tracks': typeof ApiAdminTracksRouteWithChildren
+  '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
   '/api/tracks/$idOrLogId': typeof ApiTracksIdOrLogIdRoute
   '/api/tracks/random': typeof ApiTracksRandomRoute
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
@@ -243,11 +279,15 @@ export interface FileRouteTypes {
     | '/api/health'
     | '/api/newsletter'
     | '/api/search'
+    | '/api/stories'
     | '/api/submissions'
     | '/api/tracks'
     | '/cli/latest.sh'
+    | '/stories/$logId'
+    | '/stories/'
     | '/api/admin/submissions'
     | '/api/admin/tracks'
+    | '/api/preview/$idOrLogId'
     | '/api/tracks/$idOrLogId'
     | '/api/tracks/random'
     | '/api/admin/submissions/$submissionId'
@@ -268,11 +308,15 @@ export interface FileRouteTypes {
     | '/api/health'
     | '/api/newsletter'
     | '/api/search'
+    | '/api/stories'
     | '/api/submissions'
     | '/api/tracks'
     | '/cli/latest.sh'
+    | '/stories/$logId'
+    | '/stories'
     | '/api/admin/submissions'
     | '/api/admin/tracks'
+    | '/api/preview/$idOrLogId'
     | '/api/tracks/$idOrLogId'
     | '/api/tracks/random'
     | '/api/admin/submissions/$submissionId'
@@ -293,11 +337,15 @@ export interface FileRouteTypes {
     | '/api/health'
     | '/api/newsletter'
     | '/api/search'
+    | '/api/stories'
     | '/api/submissions'
     | '/api/tracks'
     | '/cli/latest.sh'
+    | '/stories/$logId'
+    | '/stories/'
     | '/api/admin/submissions'
     | '/api/admin/tracks'
+    | '/api/preview/$idOrLogId'
     | '/api/tracks/$idOrLogId'
     | '/api/tracks/random'
     | '/api/admin/submissions/$submissionId'
@@ -319,11 +367,15 @@ export interface RootRouteChildren {
   ApiHealthRoute: typeof ApiHealthRoute
   ApiNewsletterRoute: typeof ApiNewsletterRoute
   ApiSearchRoute: typeof ApiSearchRoute
+  ApiStoriesRoute: typeof ApiStoriesRoute
   ApiSubmissionsRoute: typeof ApiSubmissionsRoute
   ApiTracksRoute: typeof ApiTracksRouteWithChildren
   CliLatestDotshRoute: typeof CliLatestDotshRoute
+  StoriesLogIdRoute: typeof StoriesLogIdRoute
+  StoriesIndexRoute: typeof StoriesIndexRoute
   ApiAdminSubmissionsRoute: typeof ApiAdminSubmissionsRouteWithChildren
   ApiAdminTracksRoute: typeof ApiAdminTracksRouteWithChildren
+  ApiPreviewIdOrLogIdRoute: typeof ApiPreviewIdOrLogIdRoute
   ApiAdminSpotifyAuthCallbackRoute: typeof ApiAdminSpotifyAuthCallbackRoute
   ApiAdminSpotifyAuthStartRoute: typeof ApiAdminSpotifyAuthStartRoute
 }
@@ -351,6 +403,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/stories/': {
+      id: '/stories/'
+      path: '/stories'
+      fullPath: '/stories/'
+      preLoaderRoute: typeof StoriesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/stories/$logId': {
+      id: '/stories/$logId'
+      path: '/stories/$logId'
+      fullPath: '/stories/$logId'
+      preLoaderRoute: typeof StoriesLogIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/cli/latest.sh': {
       id: '/cli/latest.sh'
       path: '/cli/latest.sh'
@@ -370,6 +436,13 @@ declare module '@tanstack/react-router' {
       path: '/api/submissions'
       fullPath: '/api/submissions'
       preLoaderRoute: typeof ApiSubmissionsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/stories': {
+      id: '/api/stories'
+      path: '/api/stories'
+      fullPath: '/api/stories'
+      preLoaderRoute: typeof ApiStoriesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/search': {
@@ -406,6 +479,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/tracks/$idOrLogId'
       preLoaderRoute: typeof ApiTracksIdOrLogIdRouteImport
       parentRoute: typeof ApiTracksRoute
+    }
+    '/api/preview/$idOrLogId': {
+      id: '/api/preview/$idOrLogId'
+      path: '/api/preview/$idOrLogId'
+      fullPath: '/api/preview/$idOrLogId'
+      preLoaderRoute: typeof ApiPreviewIdOrLogIdRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/admin/tracks': {
       id: '/api/admin/tracks'
@@ -603,11 +683,15 @@ const rootRouteChildren: RootRouteChildren = {
   ApiHealthRoute: ApiHealthRoute,
   ApiNewsletterRoute: ApiNewsletterRoute,
   ApiSearchRoute: ApiSearchRoute,
+  ApiStoriesRoute: ApiStoriesRoute,
   ApiSubmissionsRoute: ApiSubmissionsRoute,
   ApiTracksRoute: ApiTracksRouteWithChildren,
   CliLatestDotshRoute: CliLatestDotshRoute,
+  StoriesLogIdRoute: StoriesLogIdRoute,
+  StoriesIndexRoute: StoriesIndexRoute,
   ApiAdminSubmissionsRoute: ApiAdminSubmissionsRouteWithChildren,
   ApiAdminTracksRoute: ApiAdminTracksRouteWithChildren,
+  ApiPreviewIdOrLogIdRoute: ApiPreviewIdOrLogIdRoute,
   ApiAdminSpotifyAuthCallbackRoute: ApiAdminSpotifyAuthCallbackRoute,
   ApiAdminSpotifyAuthStartRoute: ApiAdminSpotifyAuthStartRoute,
 }
