@@ -21,6 +21,9 @@ const EARTH_BODY = 170;
 
 export type MasterPhase = "boot" | "end" | "gate" | "play";
 
+/** Distance band relative to the instruments: audio range, radar range, past. */
+type StarTier = "far" | "mid" | "near";
+
 export type LogCardView = {
   age: number;
   artistLine: string;
@@ -36,6 +39,7 @@ export type RenderView = {
   logCard?: LogCardView;
   muted: boolean;
   nowS: number;
+  paused: boolean;
   phase: MasterPhase;
   radar: RadarBlip[];
   sim: SimState;
@@ -145,17 +149,26 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.fillStyle = palette.deepField;
     ctx.fillRect(0, 0, width, height);
 
+    // The film texture lands hard on the world and only whispers over the
+    // instruments: the Light-Years Rule wants the lossiness, and its own
+    // fine print wants the UI readable (degradation never breaks the HUD).
     if (view.phase === "gate") {
       drawGate(view);
-      drawFilmTexture(view.nowS);
+      drawFilmTexture(view.nowS, 0.55);
 
       return;
     }
 
     if (view.phase === "play" && sim.phase === "orbiting") {
       drawOrbitScene(view);
+      drawFilmTexture(view.nowS, 1);
       drawHud(view);
-      drawFilmTexture(view.nowS);
+
+      if (view.paused) {
+        drawPause(view);
+      }
+
+      drawFilmTexture(view.nowS, 0.3);
 
       return;
     }
@@ -172,6 +185,8 @@ export function createRenderer(container: HTMLElement): Renderer {
       drawShip(view);
     }
 
+    drawFilmTexture(view.nowS, 1);
+
     if (view.phase === "play" || view.phase === "boot") {
       drawHud(view);
     }
@@ -184,7 +199,11 @@ export function createRenderer(container: HTMLElement): Renderer {
       drawTowed(view);
     }
 
-    drawFilmTexture(view.nowS);
+    if (view.paused) {
+      drawPause(view);
+    }
+
+    drawFilmTexture(view.nowS, 0.3);
   }
 
   function makeDistantStars(): DistantStar[] {
@@ -299,10 +318,15 @@ export function createRenderer(container: HTMLElement): Renderer {
     const focal = width * 0.55;
     const horizon = height * HORIZON_FRACTION;
 
+    // The fake height saturates close-in: far stars scatter well above and
+    // below the horizon (depth cue), while an approached star glides toward
+    // eye level instead of flying off the screen edge.
+    const effectiveVOffset = vOffset * Math.min(1, f / 700);
+
     return {
       f,
       sx: width / 2 + (lateral / f) * focal,
-      sy: horizon - (vOffset / f) * focal,
+      sy: horizon - (effectiveVOffset / f) * focal,
     };
   }
 
@@ -343,7 +367,22 @@ export function createRenderer(container: HTMLElement): Renderer {
 
       const collected = sim.collected[index];
       const isCarrier = view.carrier?.starIndex === index;
-      const size = Math.min(34, Math.max(1, (width * 0.55 * STAR_BODY) / projected.f));
+      const { ship } = sim;
+      const distance = Math.hypot(star.x - ship.x, star.y - ship.y);
+
+      // Depth tiers that match the instruments: past radar range a star is a
+      // faint speck, on the scope it burns steady gold, inside audio range it
+      // pulses and swells fast. "Fat and glowing" means "on your scope."
+      const tier: StarTier =
+        distance <= sim.config.audioRange
+          ? "near"
+          : distance <= sim.config.radarRange
+            ? "mid"
+            : "far";
+      const nearBoost = tier === "near" ? 1 + (1 - distance / sim.config.audioRange) * 0.6 : 1;
+      const baseSize = ((width * 0.55 * STAR_BODY) / projected.f) * nearBoost;
+      const size =
+        tier === "far" ? Math.min(3, Math.max(1, baseSize)) : Math.min(36, Math.max(2, baseSize));
 
       bodies.push({
         draw: () =>
@@ -354,6 +393,7 @@ export function createRenderer(container: HTMLElement): Renderer {
             view.nowS,
             collected,
             isCarrier,
+            tier,
           ),
         f: projected.f,
       });
@@ -374,22 +414,40 @@ export function createRenderer(container: HTMLElement): Renderer {
     nowS: number,
     collected: boolean,
     isCarrier: boolean,
+    tier: StarTier = "near",
   ): void {
-    const pulse = reducedMotion || collected ? 0 : Math.sin(nowS * 4 + x) * Math.max(1, size * 0.1);
+    // Past the scope's reach: a faint dim speck, no pulse, no halo.
+    if (tier === "far") {
+      ctx.globalAlpha = collected ? 0.3 : 0.5;
+      pixelDiamond(
+        x,
+        y,
+        Math.max(1, Math.round(size / 2)),
+        collected ? palette.creamDim : palette.goldDim,
+      );
+      ctx.globalAlpha = 1;
+
+      return;
+    }
+
+    const near = tier === "near";
+    const pulse =
+      reducedMotion || collected || !near ? 0 : Math.sin(nowS * 4 + x) * Math.max(1, size * 0.12);
     const radius = Math.max(1, Math.round(size / 2 + pulse));
-    const core = collected ? palette.creamMuted : palette.goldBright;
-    const mid = collected ? palette.creamDim : palette.gold;
+    const core = collected ? palette.creamMuted : near ? palette.goldBright : palette.gold;
+    const mid = collected ? palette.creamDim : near ? palette.gold : palette.goldDim;
     const halo = collected ? palette.creamDim : palette.goldDim;
 
-    if (radius > 2) {
+    if (radius > 2 && near) {
       ctx.globalAlpha = collected ? 0.2 : 0.35;
       pixelDiamond(x, y, radius + 2, halo);
     }
 
-    ctx.globalAlpha = collected ? 0.7 : 0.9;
+    ctx.globalAlpha = collected ? 0.6 : near ? 0.9 : 0.75;
     pixelDiamond(x, y, radius, mid);
-    ctx.globalAlpha = 1;
+    ctx.globalAlpha = collected ? 0.8 : 1;
     pixelDiamond(x, y, Math.max(1, Math.round(radius * 0.55)), core);
+    ctx.globalAlpha = 1;
 
     if (isCarrier && !collected && radius >= 2) {
       ctx.fillStyle = palette.creamBright;
@@ -639,10 +697,10 @@ export function createRenderer(container: HTMLElement): Renderer {
   }
 
   function drawSignal(view: RenderView): void {
-    const x = width - 62;
-    const y = height - 8;
+    const x = width - 66;
+    const y = height - 9;
 
-    ctx.font = '7px "Oxanium", monospace';
+    ctx.font = '8px "Oxanium", monospace';
     ctx.textAlign = "left";
 
     const { sim } = view;
@@ -661,7 +719,7 @@ export function createRenderer(container: HTMLElement): Renderer {
   }
 
   function drawTelemetry(view: RenderView): void {
-    ctx.font = '7px "Oxanium", monospace';
+    ctx.font = "8px ui-sans-serif, system-ui, sans-serif";
     ctx.textAlign = "center";
 
     for (let index = 0; index < view.telemetry.length; index++) {
@@ -681,33 +739,34 @@ export function createRenderer(container: HTMLElement): Renderer {
       return;
     }
 
-    const cardWidth = Math.min(width - 32, 230);
+    const cardWidth = Math.min(width - 32, 250);
+    const cardHeight = 56;
     const x = Math.round((width - cardWidth) / 2);
-    const y = 26;
+    const y = 24;
     const entrance = Math.min(1, card.age * 4);
 
     ctx.globalAlpha = 0.92 * entrance;
     ctx.fillStyle = palette.dustLine;
-    ctx.fillRect(x - 1, y - 1, cardWidth + 2, 44);
+    ctx.fillRect(x - 1, y - 1, cardWidth + 2, cardHeight + 2);
     ctx.fillStyle = palette.tapeBlack;
-    ctx.fillRect(x, y, cardWidth, 42);
+    ctx.fillRect(x, y, cardWidth, cardHeight);
 
     ctx.fillStyle = palette.gold;
-    ctx.font = '8px "Oxanium", monospace';
+    ctx.font = '9px "Oxanium", monospace';
     ctx.textAlign = "left";
-    ctx.fillText(`fluncle://${card.logId}`, x + 7, y + 6);
+    ctx.fillText(`fluncle://${card.logId}`, x + 8, y + 7);
 
     ctx.fillStyle = palette.cream;
-    ctx.font = "800 9px ui-sans-serif, system-ui, sans-serif";
-    ctx.fillText(clip(card.title, cardWidth - 14), x + 7, y + 17);
+    ctx.font = "800 11px ui-sans-serif, system-ui, sans-serif";
+    ctx.fillText(clip(card.title, cardWidth - 16), x + 8, y + 19);
 
     ctx.fillStyle = palette.creamMuted;
-    ctx.font = "8px ui-sans-serif, system-ui, sans-serif";
-    ctx.fillText(clip(card.artistLine, cardWidth - 14), x + 7, y + 28);
+    ctx.font = "9px ui-sans-serif, system-ui, sans-serif";
+    ctx.fillText(clip(card.artistLine, cardWidth - 16), x + 8, y + 33);
 
     ctx.fillStyle = card.refuelling ? palette.goldDim : palette.creamDim;
-    ctx.font = '7px "Oxanium", monospace';
-    ctx.fillText(card.refuelling ? "Banger logged · refuelling" : "Banger logged", x + 7, y + 37);
+    ctx.font = "8px ui-sans-serif, system-ui, sans-serif";
+    ctx.fillText(card.refuelling ? "Banger logged · refuelling" : "Banger logged", x + 8, y + 45);
     ctx.globalAlpha = 1;
   }
 
@@ -942,9 +1001,11 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.textAlign = "left";
   }
 
-  // Scanlines, vignette, grain — the cost of light-years, on every frame.
-  function drawFilmTexture(nowS: number): void {
-    ctx.globalAlpha = 0.07;
+  // Scanlines, vignette, grain — the cost of light-years. Full intensity
+  // belongs on the world; the light pass over the HUD keeps the screen
+  // feeling like one tube without making the instruments hard to read.
+  function drawFilmTexture(nowS: number, intensity: number): void {
+    ctx.globalAlpha = 0.07 * intensity;
     ctx.fillStyle = "#000000";
 
     for (let y = 0; y < height; y += 2) {
@@ -952,6 +1013,10 @@ export function createRenderer(container: HTMLElement): Renderer {
     }
 
     ctx.globalAlpha = 1;
+
+    if (intensity < 1) {
+      return;
+    }
 
     const vignette = ctx.createRadialGradient(
       width / 2,
@@ -979,6 +1044,36 @@ export function createRenderer(container: HTMLElement): Renderer {
 
       ctx.globalAlpha = 1;
     }
+  }
+
+  /** Esc parks the run: dim the cosmos, hold everything, point the way back. */
+  function drawPause(view: RenderView): void {
+    ctx.globalAlpha = 0.72;
+    ctx.fillStyle = palette.deepField;
+    ctx.fillRect(0, 0, width, height);
+    ctx.globalAlpha = 1;
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = palette.cream;
+    ctx.font = "800 14px ui-sans-serif, system-ui, sans-serif";
+    ctx.fillText("Paused", width / 2, Math.round(height * 0.42));
+
+    ctx.fillStyle = palette.creamMuted;
+    ctx.font = "9px ui-sans-serif, system-ui, sans-serif";
+    ctx.fillText("The galaxy will wait.", width / 2, Math.round(height * 0.42) + 18);
+
+    const blink = reducedMotion ? 1 : 0.5 + 0.5 * Math.sin(view.nowS * 3);
+
+    ctx.globalAlpha = blink;
+    ctx.fillStyle = palette.goldBright;
+    ctx.font = '8px "Oxanium", monospace';
+    ctx.fillText(
+      view.touch ? "Tap to fly on" : "Esc to fly on",
+      width / 2,
+      Math.round(height * 0.42) + 36,
+    );
+    ctx.globalAlpha = 1;
+    ctx.textAlign = "left";
   }
 
   resize(container.clientWidth || window.innerWidth, container.clientHeight || window.innerHeight);

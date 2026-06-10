@@ -17,6 +17,8 @@ export type InputManager = {
   consumeAction: () => boolean;
   /** True once if M was pressed since the last call. */
   consumeMuteToggle: () => boolean;
+  /** True once if Escape was pressed since the last call. */
+  consumePauseToggle: () => boolean;
   destroy: () => void;
   state: () => InputState;
   /** Whether the player has touched the screen at all this session. */
@@ -29,6 +31,7 @@ export function createInput(target: HTMLElement): InputManager {
 
   let actionPending = false;
   let mutePending = false;
+  let pausePending = false;
   let sawTouch = false;
 
   function zoneFor(event: PointerEvent): "boost" | "left" | "right" {
@@ -52,6 +55,13 @@ export function createInput(target: HTMLElement): InputManager {
 
     if (key === "m") {
       mutePending = true;
+
+      return;
+    }
+
+    // Escape is the pause key, never a menu action.
+    if (key === "escape") {
+      pausePending = true;
 
       return;
     }
@@ -116,6 +126,13 @@ export function createInput(target: HTMLElement): InputManager {
       const pending = mutePending;
 
       mutePending = false;
+
+      return pending;
+    },
+    consumePauseToggle: () => {
+      const pending = pausePending;
+
+      pausePending = false;
 
       return pending;
     },
