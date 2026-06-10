@@ -375,16 +375,23 @@ export function createGame(container: HTMLElement): Game {
   // prints it.
   function installFlightComputer(): void {
     const fluncle: FluncleConsole = {
-      help: () =>
-        [
-          "fluncle.help()             this list",
-          "fluncle.refuel()           tank full, no questions",
-          "fluncle.log()              log the nearest carrier from the couch",
-          'fluncle.warp("004.0.1C")   jump to a coordinate',
-          'fluncle.trigger("win")     skip to the end of the story',
-          'fluncle.trigger("death")   find out what a dry tank feels like',
-          "fluncle.mute()             sound on / off",
-        ].join("\n"),
+      // The list goes through console.log: a RETURNED string renders as one
+      // escaped line in devtools; logged text keeps its line breaks.
+      help: () => {
+        console.log(
+          [
+            "%cfluncle.refuel()           %ctank full, no questions",
+            "%cfluncle.log()              %clog the nearest carrier from the couch",
+            '%cfluncle.warp("004.0.1C")   %cjump to a coordinate',
+            '%cfluncle.trigger("win")     %cskip to the end of the story',
+            '%cfluncle.trigger("death")   %cfind out what a dry tank feels like',
+            "%cfluncle.mute()             %csound on / off",
+          ].join("\n"),
+          ...Array.from({ length: 6 }, () => ["color:#f5b800", "color:#b7ab95"]).flat(),
+        );
+
+        return "Safe travels, junglist.";
+      },
       log: () => {
         if (!sim) {
           return "Still charting the galaxy.";

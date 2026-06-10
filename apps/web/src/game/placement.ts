@@ -17,7 +17,7 @@ const FIRST_RING_RADIUS = 620;
 /** Radial gap between consecutive sectors. */
 const RING_GAP = 240;
 /** Minimum arc distance between same-ring stars (keeps orbits + audio apart). */
-const MIN_ARC_SPACING = 560;
+const MIN_ARC_SPACING = 700;
 
 const LOG_ID_PATTERN = /^(\d+)\.\d\.\d[A-Z]$/;
 
@@ -81,7 +81,7 @@ export function placeStars(tracks: GameTrack[]): Star[] {
         sector,
         title: placed.track.title,
         trackId: placed.track.trackId,
-        vOffset: ((fnv1a(`${seed}#v`) % 240) - 120) * 1.1,
+        vOffset: (fnv1a(`${seed}#v`) % 440) - 220,
         x: Math.cos(placed.angle) * radius,
         y: Math.sin(placed.angle) * radius,
       });

@@ -21,6 +21,9 @@ const EARTH_BODY = 170;
 
 export type MasterPhase = "boot" | "end" | "gate" | "play";
 
+/** Distance band relative to the instruments: audio range, radar range, past. */
+type StarTier = "far" | "mid" | "near";
+
 export type LogCardView = {
   age: number;
   artistLine: string;
@@ -299,10 +302,15 @@ export function createRenderer(container: HTMLElement): Renderer {
     const focal = width * 0.55;
     const horizon = height * HORIZON_FRACTION;
 
+    // The fake height saturates close-in: far stars scatter well above and
+    // below the horizon (depth cue), while an approached star glides toward
+    // eye level instead of flying off the screen edge.
+    const effectiveVOffset = vOffset * Math.min(1, f / 700);
+
     return {
       f,
       sx: width / 2 + (lateral / f) * focal,
-      sy: horizon - (vOffset / f) * focal,
+      sy: horizon - (effectiveVOffset / f) * focal,
     };
   }
 
@@ -343,7 +351,22 @@ export function createRenderer(container: HTMLElement): Renderer {
 
       const collected = sim.collected[index];
       const isCarrier = view.carrier?.starIndex === index;
-      const size = Math.min(34, Math.max(1, (width * 0.55 * STAR_BODY) / projected.f));
+      const { ship } = sim;
+      const distance = Math.hypot(star.x - ship.x, star.y - ship.y);
+
+      // Depth tiers that match the instruments: past radar range a star is a
+      // faint speck, on the scope it burns steady gold, inside audio range it
+      // pulses and swells fast. "Fat and glowing" means "on your scope."
+      const tier: StarTier =
+        distance <= sim.config.audioRange
+          ? "near"
+          : distance <= sim.config.radarRange
+            ? "mid"
+            : "far";
+      const nearBoost = tier === "near" ? 1 + (1 - distance / sim.config.audioRange) * 0.6 : 1;
+      const baseSize = ((width * 0.55 * STAR_BODY) / projected.f) * nearBoost;
+      const size =
+        tier === "far" ? Math.min(3, Math.max(1, baseSize)) : Math.min(36, Math.max(2, baseSize));
 
       bodies.push({
         draw: () =>
@@ -354,6 +377,7 @@ export function createRenderer(container: HTMLElement): Renderer {
             view.nowS,
             collected,
             isCarrier,
+            tier,
           ),
         f: projected.f,
       });
@@ -374,22 +398,40 @@ export function createRenderer(container: HTMLElement): Renderer {
     nowS: number,
     collected: boolean,
     isCarrier: boolean,
+    tier: StarTier = "near",
   ): void {
-    const pulse = reducedMotion || collected ? 0 : Math.sin(nowS * 4 + x) * Math.max(1, size * 0.1);
+    // Past the scope's reach: a faint dim speck, no pulse, no halo.
+    if (tier === "far") {
+      ctx.globalAlpha = collected ? 0.3 : 0.5;
+      pixelDiamond(
+        x,
+        y,
+        Math.max(1, Math.round(size / 2)),
+        collected ? palette.creamDim : palette.goldDim,
+      );
+      ctx.globalAlpha = 1;
+
+      return;
+    }
+
+    const near = tier === "near";
+    const pulse =
+      reducedMotion || collected || !near ? 0 : Math.sin(nowS * 4 + x) * Math.max(1, size * 0.12);
     const radius = Math.max(1, Math.round(size / 2 + pulse));
-    const core = collected ? palette.creamMuted : palette.goldBright;
-    const mid = collected ? palette.creamDim : palette.gold;
+    const core = collected ? palette.creamMuted : near ? palette.goldBright : palette.gold;
+    const mid = collected ? palette.creamDim : near ? palette.gold : palette.goldDim;
     const halo = collected ? palette.creamDim : palette.goldDim;
 
-    if (radius > 2) {
+    if (radius > 2 && near) {
       ctx.globalAlpha = collected ? 0.2 : 0.35;
       pixelDiamond(x, y, radius + 2, halo);
     }
 
-    ctx.globalAlpha = collected ? 0.7 : 0.9;
+    ctx.globalAlpha = collected ? 0.6 : near ? 0.9 : 0.75;
     pixelDiamond(x, y, radius, mid);
-    ctx.globalAlpha = 1;
+    ctx.globalAlpha = collected ? 0.8 : 1;
     pixelDiamond(x, y, Math.max(1, Math.round(radius * 0.55)), core);
+    ctx.globalAlpha = 1;
 
     if (isCarrier && !collected && radius >= 2) {
       ctx.fillStyle = palette.creamBright;
