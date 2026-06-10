@@ -759,8 +759,10 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.font = "9px ui-sans-serif, system-ui, sans-serif";
     ctx.fillText("Every banger out there is a star.", cx, orbY + 58);
 
+    // Same face and size as the subtitle (the sans renders cleanly at this
+    // grid; 8px Oxanium doesn't); the muted ink keeps the hierarchy.
     ctx.fillStyle = palette.creamMuted;
-    ctx.font = '8px "Oxanium", monospace';
+    ctx.font = "9px ui-sans-serif, system-ui, sans-serif";
 
     const steerLine = view.touch
       ? "Touch sides to steer · hold centre to boost"
@@ -778,17 +780,18 @@ export function createRenderer(container: HTMLElement): Renderer {
         : [steerLine, restLine];
 
     for (let index = 0; index < lines.length; index++) {
-      ctx.fillText(lines[index], cx, orbY + 80 + index * 12);
+      ctx.fillText(lines[index], cx, orbY + 80 + index * 13);
     }
 
     const blink = reducedMotion ? 1 : 0.5 + 0.5 * Math.sin(view.nowS * 3);
 
     ctx.globalAlpha = blink;
     ctx.fillStyle = palette.goldBright;
+    ctx.font = '8px "Oxanium", monospace';
     ctx.fillText(
       view.touch ? "Tap to launch" : "Press any key to launch",
       cx,
-      orbY + 88 + lines.length * 12 + 8,
+      orbY + 88 + lines.length * 13 + 8,
     );
     ctx.globalAlpha = 1;
 
