@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
     "deploy": "vite build && wrangler deploy",
     "dev": "vite dev --host 127.0.0.1 --port 3000",
     "lint": "oxlint --type-aware",
@@ -21,6 +23,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dotenv": "catalog:",
+    "drizzle-orm": "catalog:",
     "lucide-react": "^0.468.0",
     "nitro": "^3.0.260522-beta",
     "react": "^19.2.1",
@@ -34,6 +37,7 @@
     "@types/react": "^19.2.3",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
+    "drizzle-kit": "catalog:",
     "typescript": "catalog:",
     "vite": "^7.2.4",
     "wrangler": "^4.50.0"

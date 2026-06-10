@@ -105,7 +105,7 @@ bunx --bun shadcn@latest add dialog
 
 ## Database
 
-- MUST: Generate SQL migrations via `bun run --cwd apps/cli db:generate`.
+- MUST: Generate SQL migrations via `bun run --cwd apps/web db:generate`.
 - MUST: Keep generated migration metadata with the schema change that caused it.
 - NEVER: Write SQL migrations by hand.
 - SHOULD: Treat Turso/libSQL as the source of persisted app data; avoid local SQLite files or checked-in ad hoc database state.

@@ -71,14 +71,14 @@ bun run --cwd apps/cli fluncle admin auth spotify
 bun run --cwd apps/cli fluncle --env local recent --json
 ```
 
-Database migrations are CLI workspace commands:
+Database migrations are web workspace commands:
 
 ```bash
-bun run --cwd apps/cli db:generate
-bun run --cwd apps/cli db:migrate
+bun run --cwd apps/web db:generate
+bun run --cwd apps/web db:migrate
 ```
 
-Local migration commands read Turso credentials from `apps/web/.dev.vars` through `apps/cli/drizzle.config.ts`. By default, local development should point at the cloned `fluncle-dev` Turso database, not production.
+Local migration commands read Turso credentials from `apps/web/.dev.vars` through `apps/web/drizzle.config.ts`. By default, local development should point at the cloned `fluncle-dev` Turso database, not production.
 
 ## Raycast
 

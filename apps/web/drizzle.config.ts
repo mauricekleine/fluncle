@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const configDir = dirname(fileURLToPath(import.meta.url));
 
-config({ path: join(configDir, "../web/.dev.vars") });
+config({ path: join(configDir, ".dev.vars") });
 
 export default defineConfig({
   dbCredentials: {
