@@ -55,9 +55,10 @@ Stars sharing a sector (found the same day) share an orbital ring, spread by the
 
 ### The listening moment
 
-- Reaching a star logs the banger: a small log card pops (`fluncle://<id>` · Artist — Title), the tally ticks.
-- **Refueling is deliberately slow** — slow enough that you sit in orbit while the tank fills, and the 30s preview loops at full volume. You collect it, then you actually hear it. Ceremony through mechanics, not a cutscene.
-- **Collected stars stay audible on revisit** (fly back and listen any time); only the radar/refuel logic ignores them. The "nearest uncollected" culling governs the hunt, not the listening.
+- Reaching a star **parks the ship and cuts to the orbit POV**: a meditative side-on scene — the banger burning big at center, the ship drifting around it in a lazy ellipse, the log card hanging above, the preview looping at full volume. No radar, no signal readout; just the tune and the way out.
+- Reaching it logs the banger (`fluncle://<id>` · Artist — Title, the tally tick, the lock chime), and a freshly logged star **pumps the tank while you sit there**. Nothing burns in orbit; stay as long as you like.
+- Departure is explicit: **any key / any tap flies on** ("Press any key to fly on" / "Tap anywhere to fly on"), with a short grace period so a key held during approach doesn't eject you.
+- **Collected stars still park and play on revisit** (fly back and listen any time); they just don't refuel. The "nearest uncollected" culling governs the hunt, not the listening.
 
 ### Win & death
 
@@ -80,6 +81,11 @@ Stars sharing a sector (found the same day) share an orbital ring, spread by the
 ### Voice
 
 - **HUD speaks instrument telemetry** even on web — the Depth Gradient says density rises as you descend, and a cockpit is deep: "carrier detected… 71%… LOCK", "tank dry in 00:43". Drier than the archive page, not as far gone as SSH. Run game copy through the copywriting-fluncle skill.
+
+### The flight computer (console easter egg)
+
+- `window.fluncle` is always installed on /galaxy, announced by an ASCII eclipse + wordmark banner in the console ("You found the flight computer, junglist."). Commands: `help()`, `refuel()`, `log()` (log the nearest carrier from the couch), `warp("004.0.1C")`, `trigger("win" | "death")`, `mute()`. Replies are returned strings, in voice, dry.
+- It doubles as the harness-test steering tap (`fluncle.sim()`): the easter egg and the test hook are one surface.
 
 ### Hosting & plumbing
 
