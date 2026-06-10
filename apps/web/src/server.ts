@@ -5,6 +5,8 @@ export default createServerEntry({
   async fetch(request) {
     // Agent discovery surfaces (well-known endpoints, markdown negotiation)
     // sit ahead of the router; everything else flows through unchanged.
+    // (galaxy.fluncle.com routing lives in the router's rewrite config, not
+    // here — it must run isomorphically or hydration undoes it.)
     const discovery = await handleAgentDiscovery(request);
 
     if (discovery) {

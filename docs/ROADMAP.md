@@ -52,9 +52,23 @@ The spine (the Log ID) already runs across surfaces; what's ahead:
 - **New surfaces:** `/log/<id>` pages (the log as object — observation, recovered artifact, related logs), RSS as the observation feed, possibly Discord. The site becomes an archive you browse, not only a feed you scroll. This subsumes the auto-pipeline's reconciliation marker — one identity does the trail and the reconciliation.
 - **Canon surgery (resolve as one decision, not piecemeal):** PRODUCT.md gains a co-primary log/observation thesis; VOICE.md formalizes the logbook register as the deep end of the Depth Gradient (SSH / archive / RSS speak as a "recovered terminal," the warm uncle still holds web / Telegram / email; "transmission" and "signal" stay banned, adopt log / observation / discovery / archive / recovered / artifact / sector; "banger" stays primary); DESIGN.md gains the log-page / archive panes (Oxanium, tabular, instrument-panel calm).
 
-### Fluncle's Galaxy — the game
+### Fluncle's Galaxy — the game (v1 live)
 
-A playable, oldskool terminal-UI space game where the galaxy is literally our findings: every banger is a star at its Log ID coordinate, you fly a ship (steer left/right, spacebar boosts, fuel drains), and you refuel by flying to a star and logging the banger. On the web the nearest star's 30s preview fades in by distance — discovery as a game loop; in SSH the same game runs audio-less with proximity as signal telemetry. Web-first, parallax pseudo-3D, 8-bit sprites (image-gen, curated), session-only state, win by collecting all current bangers. A foundation to hide more in later (asteroids, black holes, UFOs, planets). Shares the Log ID spine with the logbook reframe; motivates user accounts (below, out of scope for the MVP). Full notes + direction: [docs/galaxy-game.md](./galaxy-game.md).
+v1 shipped 2026-06-10 at [galaxy.fluncle.com](https://galaxy.fluncle.com) (same Worker, `/galaxy` route): behind-the-ship 8-bit flight where every banger is a star at its Log ID coordinate, the nearest uncollected preview fades in by distance and pans by bearing, reaching a star parks you in an orbit listening moment that refuels the tank, dry tank means towed home at `0/N`, and `N/N` opens the fly-home win with a credits roll of the full log. Touch + keyboard, Esc pause, the `window.fluncle` flight computer easter egg, audio through the same-origin `/api/preview/:idOrLogId` proxy (source-agnostic: a future R2 `preview_url` drops in unchanged). Shares the Log ID spine with the logbook reframe; the shipped design decisions live in the code and git history. What's ahead:
+
+**Near polish:**
+
+- **Meta touches:** add `/galaxy` to `sitemap.xml`; a game-specific OG image (a gate-screen still) so shared galaxy.fluncle.com links pop; announce to the crew (Telegram + the Friday letter) once the polish lands.
+- **Economy tuning from a real full clear** (10–15 min target): burn rates, refuel dwell, cruise/boost speeds — one human playthrough of all stars decides.
+- **Real-device mobile pass:** thumb zones on actual glass, safe-areas, the dynamic address bar, performance on a mid phone.
+- **SFX pass:** the square-wave kit is deliberately minimal (thrust, ping, log chime, alarm); richer 8-bit voices when it itches.
+- **Boot cinematic upgrade** (v1 is minimal + skippable) and the sprite menagerie beyond the two heroes.
+
+**The expanding frontier (the content engine):** the Log ID sector is days since the Fluncle epoch and maps to distance from Earth, deliberately uncompressed — the galaxy literally grows outward as findings land, full clears get longer, and that pressure is what future content answers: new home planets as forward bases / respawn + refuel hubs, asteroids in the long empty stretches, black holes (danger, or warps that shortcut the old sectors), aliens/UFOs, derelicts and lore nodes. The further from Earth, the stranger the universe — near space is the warm early catalogue, the frontier is the new-and-scary flicker. The world is data-driven, so entities slot in without re-architecting; expansion features should be motivated by outward growth, never bolted on.
+
+**SSH version (the flex):** the same game inside `ssh rave.fluncle.com`, audio-less by nature, with proximity rendered as signal-strength telemetry ("carrier detected… 71%… LOCK") — a lonely operator reading instruments, limitation as flavor. Confirm realtime input + frame rate over SSH before committing.
+
+**Persistence:** a player's collected bangers want to survive a refresh — that's the user-accounts item below; session-only until then.
 
 ### User accounts
 
