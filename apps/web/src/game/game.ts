@@ -12,6 +12,7 @@ import {
 } from "./render";
 import {
   createSim,
+  departOrbit,
   drainEvents,
   nearestCarrier,
   radarBlips,
@@ -32,6 +33,8 @@ const MAX_STEPS_PER_FRAME = 5;
 /** How long the log card lingers after you fly on. */
 const LOG_CARD_LINGER = 4;
 const TELEMETRY_SECONDS = 5;
+/** Grace after parking on a star, so a held key doesn't instantly eject you. */
+const DEPART_GRACE = 1.2;
 
 export type Game = {
   destroy: () => void;
@@ -41,6 +44,19 @@ type TelemetryLine = {
   line: string;
   until: number;
 };
+
+/** The console easter egg (and the harness tests' steering tap). */
+type FluncleConsole = {
+  help: () => string;
+  log: () => string;
+  mute: () => string;
+  refuel: () => string;
+  sim: () => SimState | undefined;
+  trigger: (what: "death" | "win") => string;
+  warp: (logId: string) => string;
+};
+
+type GalaxyWindow = Window & { fluncle?: FluncleConsole };
 
 export function createGame(container: HTMLElement): Game {
   const renderer = createRenderer(container);
@@ -59,6 +75,8 @@ export function createGame(container: HTMLElement): Game {
   let emptyGalaxy = false;
   let card: { shownAt: number; starIndex: number } | undefined;
   let nowS = 0;
+  let wasOrbiting = false;
+  let orbitEnteredAt = 0;
 
   const telemetry: TelemetryLine[] = [];
 
@@ -211,8 +229,16 @@ export function createGame(container: HTMLElement): Game {
 
     const acted = input.consumeAction();
 
-    if (acted && (phase !== "play" || towedT <= 0)) {
-      onAction();
+    if (acted) {
+      if (phase === "play") {
+        // In flight, keys are controls; parked on a banger, any key flies on
+        // (after a beat of grace so a held boost key doesn't eject you).
+        if (sim?.phase === "orbiting" && towedT <= 0 && nowS - orbitEnteredAt > DEPART_GRACE) {
+          departOrbit(sim);
+        }
+      } else {
+        onAction();
+      }
     }
 
     if (phase === "boot") {
@@ -251,6 +277,14 @@ export function createGame(container: HTMLElement): Game {
       }
 
       audio.update(sim);
+
+      const orbiting = sim.phase === "orbiting";
+
+      if (orbiting && !wasOrbiting) {
+        orbitEnteredAt = nowS;
+      }
+
+      wasOrbiting = orbiting;
     }
 
     while (telemetry.length > 0 && telemetry[0].until < nowS) {
@@ -334,11 +368,151 @@ export function createGame(container: HTMLElement): Game {
   document.addEventListener("visibilitychange", onVisibility);
   rafId = window.requestAnimationFrame(frame);
 
-  // Read-only instrument tap for development and harness tests (?debug).
-  if (new URLSearchParams(window.location.search).has("debug")) {
-    (window as { __galaxy?: { sim: () => SimState | undefined } }).__galaxy = {
+  installFlightComputer();
+
+  // The flight computer: a console easter egg for the crew and the harness
+  // tests' steering tap in one. Methods return their reply so the console
+  // prints it.
+  function installFlightComputer(): void {
+    const fluncle: FluncleConsole = {
+      help: () =>
+        [
+          "fluncle.help()             this list",
+          "fluncle.refuel()           tank full, no questions",
+          "fluncle.log()              log the nearest carrier from the couch",
+          'fluncle.warp("004.0.1C")   jump to a coordinate',
+          'fluncle.trigger("win")     skip to the end of the story',
+          'fluncle.trigger("death")   find out what a dry tank feels like',
+          "fluncle.mute()             sound on / off",
+        ].join("\n"),
+      log: () => {
+        if (!sim) {
+          return "Still charting the galaxy.";
+        }
+
+        const carrier = nearestCarrier(sim);
+
+        if (!carrier) {
+          return "Nothing left to log out here.";
+        }
+
+        sim.collected[carrier.starIndex] = true;
+        sim.collectedCount += 1;
+        sim.events.push({ kind: "logged", starIndex: carrier.starIndex });
+
+        if (sim.collectedCount === sim.stars.length) {
+          sim.events.push({ kind: "all-found" });
+        }
+
+        return `Logged fluncle://${sim.stars[carrier.starIndex].logId}. No flying required.`;
+      },
+      mute: () => {
+        audio.setMuted(!audio.muted());
+
+        return audio.muted() ? "Muted." : "Sound on.";
+      },
+      refuel: () => {
+        if (!sim) {
+          return "Still charting the galaxy.";
+        }
+
+        sim.ship.fuel = sim.config.tankCapacity;
+        sim.events.push({ kind: "refuelled" });
+
+        return "Tank full. Courtesy of the uncle.";
+      },
       sim: () => sim,
+      trigger: (what: "death" | "win") => {
+        if (!sim) {
+          return "Still charting the galaxy.";
+        }
+
+        if (phase !== "play") {
+          return "Launch first.";
+        }
+
+        if (what === "death") {
+          if (sim.phase === "orbiting") {
+            return "Not while parked on a banger.";
+          }
+
+          if (sim.phase !== "flying") {
+            return "Already mid-drama.";
+          }
+
+          sim.ship.fuel = Math.min(sim.ship.fuel, 0.4);
+
+          return "Mind the gauge.";
+        }
+
+        if (what === "win") {
+          sim.collected = sim.stars.map(() => true);
+          sim.collectedCount = sim.stars.length;
+          sim.events.push({ kind: "all-found" });
+          sim.phase = "flying";
+          sim.orbitFresh = false;
+          sim.orbitIndex = -1;
+          sim.ship.x = 0;
+          sim.ship.y = -380;
+          sim.ship.heading = Math.PI / 2;
+          sim.ship.fuel = sim.config.tankCapacity;
+
+          return "Course laid in for home.";
+        }
+
+        return "Unknown trigger. fluncle.help() lists the commands.";
+      },
+      warp: (logId: string) => {
+        if (!sim) {
+          return "Still charting the galaxy.";
+        }
+
+        if (phase !== "play") {
+          return "Launch first.";
+        }
+
+        const target = sim.stars.find(
+          (star) => star.logId.toLowerCase() === String(logId).toLowerCase(),
+        );
+
+        if (!target) {
+          return "No finding at that coordinate.";
+        }
+
+        const { ship } = sim;
+        const approach = Math.atan2(target.y - ship.y, target.x - ship.x);
+
+        sim.phase = "flying";
+        sim.orbitFresh = false;
+        sim.orbitIndex = -1;
+        ship.heading = approach;
+        ship.x = target.x - Math.cos(approach) * (sim.config.starOrbitRadius + 60);
+        ship.y = target.y - Math.sin(approach) * (sim.config.starOrbitRadius + 60);
+
+        return `On approach to fluncle://${target.logId}.`;
+      },
     };
+
+    (window as GalaxyWindow).fluncle = fluncle;
+
+    const gold = "color:#f5b800";
+
+    console.log(
+      [
+        "%c      ▄█▄",
+        "    ▄█████▄",
+        "  ▄█████████▄",
+        "    ▀█████▀",
+        "      ▀█▀",
+        "",
+        "%cFLUNCLE'S GALAXY",
+        "%cEvery banger out there is a star.",
+        "You found the flight computer, junglist. fluncle.help() lists the commands.",
+      ].join("\n"),
+      gold,
+      `${gold};font-weight:bold;font-size:14px`,
+      "color:#b7ab95",
+    );
   }
 
   return {
@@ -347,6 +521,7 @@ export function createGame(container: HTMLElement): Game {
       window.cancelAnimationFrame(rafId);
       resizeObserver.disconnect();
       document.removeEventListener("visibilitychange", onVisibility);
+      delete (window as GalaxyWindow).fluncle;
       input.destroy();
       audio.destroy();
       renderer.destroy();

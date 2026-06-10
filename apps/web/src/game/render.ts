@@ -70,9 +70,10 @@ export function createRenderer(container: HTMLElement): Renderer {
   const canvas = document.createElement("canvas");
 
   canvas.style.display = "block";
-  canvas.style.height = "100%";
   canvas.style.imageRendering = "pixelated";
-  canvas.style.width = "100%";
+  container.style.alignItems = "center";
+  container.style.display = "flex";
+  container.style.justifyContent = "center";
   container.appendChild(canvas);
 
   const maybeCtx = canvas.getContext("2d");
@@ -115,13 +116,21 @@ export function createRenderer(container: HTMLElement): Renderer {
     return sprite;
   }
 
+  // Strict integer upscaling: the internal grid is blown up by a whole
+  // factor and letterboxed by at most scale-1 px. Fractional nearest-
+  // neighbour scaling smears pixels unevenly — integer scaling is what
+  // keeps the 8-bit text crisp.
   function resize(cssWidth: number, cssHeight: number): void {
-    const aspect = cssWidth / Math.max(1, cssHeight);
+    const byHeight = Math.round(Math.max(1, cssHeight) / INTERNAL_HEIGHT);
+    const byWidth = Math.floor(Math.max(1, cssWidth) / 160);
+    const scale = Math.max(1, Math.min(byHeight, byWidth));
 
-    height = INTERNAL_HEIGHT;
-    width = Math.max(240, Math.min(560, Math.round((INTERNAL_HEIGHT * aspect) / 2) * 2));
+    height = Math.max(180, Math.floor(cssHeight / scale));
+    width = Math.max(160, Math.min(768, Math.floor(cssWidth / scale)));
     canvas.width = width;
     canvas.height = height;
+    canvas.style.width = `${width * scale}px`;
+    canvas.style.height = `${height * scale}px`;
     ctx.imageSmoothingEnabled = false;
   }
 
@@ -138,6 +147,14 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     if (view.phase === "gate") {
       drawGate(view);
+      drawFilmTexture(view.nowS);
+
+      return;
+    }
+
+    if (view.phase === "play" && sim.phase === "orbiting") {
+      drawOrbitScene(view);
+      drawHud(view);
       drawFilmTexture(view.nowS);
 
       return;
@@ -429,13 +446,77 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.restore();
   }
 
+  // The listening moment: a meditative side-on scene. The banger burns big at
+  // center, the ship drifts around it in a lazy ellipse, the card hangs above,
+  // and the only instruction is the way out. No radar, no signal readout.
+  function drawOrbitScene(view: RenderView): void {
+    const { sim } = view;
+    const star = sim.stars[sim.orbitIndex];
+
+    if (!star) {
+      return;
+    }
+
+    drawDistantStars(
+      sim.ship.heading + (reducedMotion ? 0 : view.nowS * 0.018),
+      Math.round(height * HORIZON_FRACTION),
+      view.nowS,
+    );
+
+    const cx = Math.round(width / 2);
+    const cy = Math.round(height * 0.5);
+    const theta = reducedMotion ? Math.PI * 0.3 : view.nowS * 0.5;
+    const orbitX = Math.min(104, Math.round(width * 0.3));
+    const shipX = Math.round(cx + Math.cos(theta) * orbitX);
+    const shipY = Math.round(cy + Math.sin(theta) * 24);
+
+    const drawOrbitShip = (): void => {
+      const rotation = Math.atan2(Math.cos(theta) * 24, -Math.sin(theta) * orbitX) + Math.PI / 2;
+
+      ctx.save();
+      ctx.translate(shipX, shipY);
+      ctx.rotate(rotation);
+      ctx.drawImage(shipSprite, -7, -7);
+      ctx.restore();
+    };
+    const drawOrbitStar = (): void => drawStarBody(cx, cy, 58, view.nowS, false, false);
+
+    // Top of the ellipse reads as the far side; the star occludes the ship.
+    if (Math.sin(theta) < 0) {
+      drawOrbitShip();
+      drawOrbitStar();
+    } else {
+      drawOrbitStar();
+      drawOrbitShip();
+    }
+
+    const blink = reducedMotion ? 1 : 0.5 + 0.5 * Math.sin(view.nowS * 3);
+
+    ctx.globalAlpha = blink;
+    ctx.textAlign = "center";
+    ctx.fillStyle = palette.goldBright;
+    ctx.font = '8px "Oxanium", monospace';
+    ctx.fillText(
+      view.touch ? "Tap anywhere to fly on" : "Press any key to fly on",
+      cx,
+      height - 10,
+    );
+    ctx.globalAlpha = 1;
+    ctx.textAlign = "left";
+  }
+
   function drawHud(view: RenderView): void {
     const { sim } = view;
+    const orbiting = sim.phase === "orbiting";
 
     drawTally(sim);
     drawFuel(sim, view.nowS);
-    drawRadar(view);
-    drawSignal(view);
+
+    if (!orbiting) {
+      drawRadar(view);
+      drawSignal(view);
+    }
+
     drawTelemetry(view);
     drawLogCard(view);
 
@@ -447,7 +528,7 @@ export function createRenderer(container: HTMLElement): Renderer {
       ctx.textAlign = "left";
     }
 
-    if (view.touch && view.phase === "play") {
+    if (view.touch && view.phase === "play" && !orbiting) {
       drawTouchHints();
     }
   }
@@ -680,20 +761,35 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     ctx.fillStyle = palette.creamMuted;
     ctx.font = '8px "Oxanium", monospace';
-    ctx.fillText(
-      view.touch
-        ? "Touch sides to steer · hold centre to boost"
-        : "Steer with arrows · hold space to boost",
-      cx,
-      orbY + 80,
-    );
-    ctx.fillText("Fly to a star to log it and refuel. Dry tank, towed home.", cx, orbY + 92);
+
+    const steerLine = view.touch
+      ? "Touch sides to steer · hold centre to boost"
+      : "Steer with arrows · hold space to boost";
+    const restLine = "Fly to a star to log it and refuel. Dry tank, towed home.";
+    const lines =
+      width < 330
+        ? [
+            ...(view.touch
+              ? ["Touch sides to steer", "Hold centre to boost"]
+              : ["Steer with arrows", "Hold space to boost"]),
+            "Fly to a star to log it and refuel.",
+            "Dry tank, towed home.",
+          ]
+        : [steerLine, restLine];
+
+    for (let index = 0; index < lines.length; index++) {
+      ctx.fillText(lines[index], cx, orbY + 80 + index * 12);
+    }
 
     const blink = reducedMotion ? 1 : 0.5 + 0.5 * Math.sin(view.nowS * 3);
 
     ctx.globalAlpha = blink;
     ctx.fillStyle = palette.goldBright;
-    ctx.fillText(view.touch ? "Tap to launch" : "Press any key to launch", cx, orbY + 112);
+    ctx.fillText(
+      view.touch ? "Tap to launch" : "Press any key to launch",
+      cx,
+      orbY + 88 + lines.length * 12 + 8,
+    );
     ctx.globalAlpha = 1;
 
     // Status line while the catalogue loads (or when the sector is quiet).

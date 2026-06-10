@@ -13,11 +13,11 @@ const EPOCH_MS = Date.UTC(2026, 4, 30);
 const DAY_MS = 86_400_000;
 
 /** Clear space around Earth before the first ring. */
-const FIRST_RING_RADIUS = 520;
+const FIRST_RING_RADIUS = 620;
 /** Radial gap between consecutive sectors. */
-const RING_GAP = 150;
+const RING_GAP = 240;
 /** Minimum arc distance between same-ring stars (keeps orbits + audio apart). */
-const MIN_ARC_SPACING = 280;
+const MIN_ARC_SPACING = 560;
 
 const LOG_ID_PATTERN = /^(\d+)\.\d\.\d[A-Z]$/;
 

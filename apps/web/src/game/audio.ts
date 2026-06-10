@@ -181,16 +181,60 @@ export function createAudioManager(): AudioManager {
       return { gain: 1, pan: 0, trackId: state.stars[state.orbitIndex].trackId };
     }
 
-    const carrier = nearestCarrier(state);
+    // Sticky carrier: between two stars the literal nearest flips constantly,
+    // so the playing tune holds focus until a challenger is clearly closer.
+    const { config, ship } = state;
+    let bestIndex = -1;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    let currentIndex = -1;
+    let currentDistance = Number.POSITIVE_INFINITY;
 
-    if (!carrier || carrier.strength <= 0) {
+    for (let index = 0; index < state.stars.length; index++) {
+      if (state.collected[index]) {
+        continue;
+      }
+
+      const star = state.stars[index];
+      const distance = Math.hypot(star.x - ship.x, star.y - ship.y);
+
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = index;
+      }
+
+      if (star.trackId === playing?.trackId) {
+        currentDistance = distance;
+        currentIndex = index;
+      }
+    }
+
+    if (
+      currentIndex >= 0 &&
+      currentIndex !== bestIndex &&
+      currentDistance < config.audioRange &&
+      bestDistance > currentDistance * 0.8
+    ) {
+      bestDistance = currentDistance;
+      bestIndex = currentIndex;
+    }
+
+    if (bestIndex < 0) {
       return undefined;
     }
 
+    const strength = Math.max(0, 1 - bestDistance / config.audioRange);
+
+    if (strength <= 0) {
+      return undefined;
+    }
+
+    const star = state.stars[bestIndex];
+    const bearing = Math.atan2(star.y - ship.y, star.x - ship.x) - ship.heading;
+
     return {
-      gain: Math.pow(carrier.strength, 1.6) * 0.9,
-      pan: Math.max(-0.85, Math.min(0.85, Math.sin(carrier.bearing) * 0.9)),
-      trackId: state.stars[carrier.starIndex].trackId,
+      gain: Math.pow(strength, 1.6) * 0.9,
+      pan: Math.max(-0.85, Math.min(0.85, Math.sin(bearing) * 0.9)),
+      trackId: star.trackId,
     };
   }
 

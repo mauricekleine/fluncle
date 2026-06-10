@@ -67,9 +67,25 @@ export function makeShipSprite(): HTMLCanvasElement {
   return canvas;
 }
 
+// Earth's own shade ramp, derived from the two sanctioned cool counter-accents
+// (the Retint Rule's one cold surface in the whole game).
+const EARTH_SHADES = {
+  landDark: "#26352f",
+  landLit: "#55806d",
+  landNight: "#141a17",
+  seaDark: "#2e3854",
+  seaLit: "#5d6c9e",
+  seaNight: "#171b29",
+} as const;
+
+function noiseAt(seed: string, x: number, y: number, cell: number): number {
+  return (fnv1a(`${seed}:${Math.floor(x / cell)},${Math.floor(y / cell)}`) % 1000) / 1000;
+}
+
 // Earth, procedurally pixeled: the one place the Retint Rule's cool blue gets
-// to be a surface. Blocky value-noise continents, a warm lit rim toward the
-// sun, the night side falling into the deep field.
+// to be a surface. Two-octave value-noise continents, a dithered terminator
+// instead of a hard shadow line, polar caps, and a thin lit limb toward the
+// sun out there.
 export function makeEarthSprite(diameter: number): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
 
@@ -83,7 +99,8 @@ export function makeEarthSprite(diameter: number): HTMLCanvasElement {
   }
 
   const radius = diameter / 2;
-  const cell = Math.max(2, Math.round(diameter / 14));
+  const coarse = Math.max(3, Math.round(diameter / 10));
+  const fine = Math.max(2, Math.round(diameter / 24));
 
   for (let y = 0; y < diameter; y++) {
     for (let x = 0; x < diameter; x++) {
@@ -95,19 +112,46 @@ export function makeEarthSprite(diameter: number): HTMLCanvasElement {
         continue;
       }
 
-      const land = fnv1a(`earth:${Math.floor(x / cell)},${Math.floor(y / cell)}`) % 100 < 38;
-      let ink: string = land ? palette.coolTeal : palette.coolBlue;
+      const elevation =
+        0.62 * noiseAt("earth1", x, y, coarse) + 0.38 * noiseAt("earth2", x, y, fine);
+      const land = elevation > 0.58;
+      const polar = Math.abs(dy) / radius > 0.82 && distance < radius - 1;
 
-      // Lit limb toward the top-right (the sun is out there); night side
-      // falling away bottom-left.
-      const lit = (dx - dy) / radius;
+      // Lit limb toward the top-right; the terminator dithers instead of
+      // cutting (checkerboard pixels across the twilight band).
+      const lit = (dx - dy) / (radius * 1.1);
+      const dither = (x + y) % 2 === 0;
 
-      if (distance > radius - 1.6 && lit > 0.2) {
+      let ink: string;
+
+      if (polar) {
+        ink = lit < -0.3 ? palette.creamDim : lit > 0.35 ? palette.creamBright : palette.cream;
+      } else if (lit > 0.4) {
+        ink = land ? EARTH_SHADES.landLit : EARTH_SHADES.seaLit;
+      } else if (lit > 0.05) {
+        ink = land ? palette.coolTeal : palette.coolBlue;
+      } else if (lit > -0.22) {
+        ink = dither
+          ? land
+            ? palette.coolTeal
+            : palette.coolBlue
+          : land
+            ? EARTH_SHADES.landDark
+            : EARTH_SHADES.seaDark;
+      } else if (lit > -0.45) {
+        ink = dither
+          ? land
+            ? EARTH_SHADES.landDark
+            : EARTH_SHADES.seaDark
+          : land
+            ? EARTH_SHADES.landNight
+            : EARTH_SHADES.seaNight;
+      } else {
+        ink = land ? EARTH_SHADES.landNight : EARTH_SHADES.seaNight;
+      }
+
+      if (distance > radius - 1.4 && lit > 0.25) {
         ink = palette.creamBright;
-      } else if (lit > 0.55 && !land) {
-        ink = palette.creamMuted;
-      } else if (lit < -0.5) {
-        ink = land ? palette.sleeveBlack : palette.tapeBlack;
       }
 
       ctx.fillStyle = ink;

@@ -42,7 +42,7 @@ export type SimConfig = {
   tankCapacity: number;
 };
 
-export type SimPhase = "adrift" | "flying" | "home";
+export type SimPhase = "adrift" | "flying" | "home" | "orbiting";
 
 /** One-shot happenings for the audio/telemetry layers to consume. */
 export type SimEvent =
@@ -97,11 +97,11 @@ export function tuneConfig(stars: Star[]): SimConfig {
   const cruiseBurn = (CRUISE_SPEED * TANK_CAPACITY) / range;
 
   return {
-    audioRange: 620,
+    audioRange: 680,
     boostBurn: cruiseBurn * BOOST_BURN_FACTOR,
     cruiseBurn,
     earthOrbitRadius: EARTH_ORBIT_RADIUS,
-    radarRange: 980,
+    radarRange: 1320,
     refuelRate: REFUEL_RATE,
     starOrbitRadius: STAR_ORBIT_RADIUS,
     tankCapacity: TANK_CAPACITY,
@@ -182,6 +182,30 @@ export function stepSim(state: SimState, input: SimInput, dt: number): void {
     return;
   }
 
+  // Parked on a banger: the listening moment. Time passes, nothing burns;
+  // a freshly logged star pumps the tank while the preview loops. The only
+  // way out is departOrbit() — any key, any tap.
+  if (state.phase === "orbiting") {
+    ship.speed = 0;
+    ship.boosting = false;
+
+    if (state.orbitFresh) {
+      const wasFull = ship.fuel >= state.config.tankCapacity;
+
+      ship.fuel = Math.min(state.config.tankCapacity, ship.fuel + state.config.refuelRate * dt);
+
+      if (!wasFull && ship.fuel >= state.config.tankCapacity) {
+        state.events.push({ kind: "refuelled" });
+      }
+
+      if (ship.fuel > state.config.tankCapacity * 0.5) {
+        state.lowFuelWarned = false;
+      }
+    }
+
+    return;
+  }
+
   // Steering and speed. Boost only answers while there's fuel to gulp.
   const boosting = input.boost && ship.fuel > 0;
 
@@ -218,26 +242,56 @@ function updateOrbit(state: SimState): void {
     }
   }
 
-  if (nearestIndex !== state.orbitIndex) {
-    state.orbitFresh = false;
-    state.orbitIndex = nearestIndex;
+  if (nearestIndex < 0) {
+    return;
+  }
 
-    if (nearestIndex >= 0 && !state.collected[nearestIndex]) {
-      state.collected[nearestIndex] = true;
-      state.collectedCount += 1;
-      state.orbitFresh = true;
-      state.events.push({ kind: "logged", starIndex: nearestIndex });
+  // Reaching any star parks the ship: fresh ones get logged and pump fuel,
+  // logged ones replay. Flying resumes via departOrbit().
+  state.orbitIndex = nearestIndex;
+  state.orbitFresh = false;
+  state.phase = "orbiting";
 
-      if (state.collectedCount === state.stars.length) {
-        state.events.push({ kind: "all-found" });
-      }
+  if (!state.collected[nearestIndex]) {
+    state.collected[nearestIndex] = true;
+    state.collectedCount += 1;
+    state.orbitFresh = true;
+    state.events.push({ kind: "logged", starIndex: nearestIndex });
+
+    if (state.collectedCount === state.stars.length) {
+      state.events.push({ kind: "all-found" });
     }
   }
 }
 
+/** Leave the listening moment: nose pointed away from the star, cruise on. */
+export function departOrbit(state: SimState): void {
+  if (state.phase !== "orbiting" || state.orbitIndex < 0) {
+    return;
+  }
+
+  const star = state.stars[state.orbitIndex];
+  const { config, ship } = state;
+  const away = Math.atan2(ship.y - star.y, ship.x - star.x);
+  const heading =
+    Number.isFinite(away) && Math.hypot(ship.x - star.x, ship.y - star.y) > 1
+      ? away
+      : ship.heading + Math.PI;
+
+  ship.heading = heading;
+  ship.x = star.x + Math.cos(heading) * (config.starOrbitRadius + 24);
+  ship.y = star.y + Math.sin(heading) * (config.starOrbitRadius + 24);
+  ship.speed = CRUISE_SPEED;
+  state.orbitFresh = false;
+  state.orbitIndex = -1;
+  state.phase = "flying";
+}
+
 function updateFuel(state: SimState, boosting: boolean, dt: number): void {
   const { config, ship } = state;
-  const refueling = state.atEarth || (state.orbitIndex >= 0 && state.orbitFresh);
+  // Star refuelling happens in the orbiting branch; in flight only Earth
+  // (home always tops you up) counts.
+  const refueling = state.atEarth;
 
   if (refueling) {
     const wasFull = ship.fuel >= config.tankCapacity;
