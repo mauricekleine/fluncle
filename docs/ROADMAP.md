@@ -17,6 +17,10 @@ Render a stack of videos so there's a schedulable backlog on TikTok: breathing r
 
 Surface the R2 video as the track's preview (Through-the-Glass / One Pane), with a "processing" state in the recovered-telemetry register until enrichment is `done`; a missing video degrades to today's layout. Build the **Stories** swipe interface on top — flick through recent findings, a clip per track. Audio is the **official Deezer/iTunes preview** (distributed by the providers for preview playback), never YouTube-sourced. Uses `footage.mp4` + `cover.jpg` as the still and the `fluncle://<log-id>` spine (each story is a log entry).
 
+### Link out to the socials
+
+We don't link to the Fluncle socials from anywhere yet — the site has no path to [@fluncle on TikTok](https://www.tiktok.com/@fluncle), now our primary channel and where the videos actually live. Surface it where it belongs (site header/footer, link previews / OG tags, maybe the CLI + SSH sign-off), and link the rest of the owned channels from [docs/socials.md](./socials.md) consistently. Trivial but load-bearing now that we're posting — land it as a quick win, or fold it into the web overhaul below.
+
 ### Track-add ISRC fallback (reliability)
 
 The Log ID seeds from the recording's ISRC. When Spotify omits the ISRC at add time the track stores a null ISRC and can end up a bare `#NN` ordinal instead of a coordinate. Fix at the source: in the add flow, when Spotify returns no ISRC, look it up from Deezer (search → `/track/{id}` carries it) before computing the Log ID. Also let the generic `track update` set `isrc`/`logId` (auto-gen the Log ID when missing) so any straggler is fixable without a direct DB write.
