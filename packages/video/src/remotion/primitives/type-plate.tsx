@@ -63,8 +63,16 @@ export type TypePlateProps = {
 
 // The shared safe inset (1080×1920, platform-chrome safe). The plate owns these
 // so compositions stop re-deriving them.
+//
+// TikTok safe zones (2026): the top band is unsafe to ~140px in the normal feed,
+// but to ~280px once the in-app "Find related content" search bar is present
+// (opening a video from a profile or search — i.e. exactly how the owner reviews
+// their own posts). The right edge carries the action rail (~120px wide) but only
+// from mid-frame down, so the UPPER-right stays clear above it. So telemetry lives
+// below the search-bar band (SAFE_TOP) and right-aligned above the rail; identity
+// sits above the bottom caption band (SAFE_BOTTOM). Verified against live posts.
 const MARGIN_X = 96;
-const SAFE_TOP = 150;
+const SAFE_TOP = 300; // clears the in-app search bar (~280px), not just the feed top bar
 const SAFE_BOTTOM = 230;
 
 const FADE = 0.8;
@@ -75,7 +83,7 @@ const FADE = 0.8;
  * caption); the year is a catalog credit beside the label, never confused with
  * Fluncle's Found date. Degrades to label-only, bare year, or nothing.
  */
-const provenanceLine = (label?: string, releaseDate?: string): string | null => {
+export const provenanceLine = (label?: string, releaseDate?: string): string | null => {
   const year = releaseDate?.slice(0, 4);
   const hasYear = year ? /^\d{4}$/.test(year) : false;
   if (label && hasYear) {

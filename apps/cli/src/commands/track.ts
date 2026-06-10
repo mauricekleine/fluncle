@@ -40,6 +40,7 @@ type TrackUpdateResult = {
 
 export type TrackVideoOptions = {
   composition?: string;
+  cover?: string;
   footage?: string;
   footageSilent?: string;
   note?: string;
@@ -71,6 +72,7 @@ export async function trackVideoCommand(
   append("footage", files.footage, "footage.mp4");
   append("footage-silent", files.footageSilent, "footage-silent.mp4");
   append("poster", files.poster, "poster.jpg");
+  append("cover", files.cover, "cover.jpg");
   append("note", files.note, "note.txt");
   append("composition", files.composition, "composition.tsx");
   append("props", files.props, "props.json");

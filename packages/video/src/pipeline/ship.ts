@@ -4,6 +4,7 @@
 //     footage.mp4   (with audio — the QA cut + web preview; copied from the render)
 //     footage-silent.mp4 (audio-less — the TikTok manual sound-attach cut)
 //     poster.jpg    (a late/drop frame ~80% in)
+//     cover.jpg     (the profile-grid cover: loud centered identity over art)
 //     note.txt      (the fixed-template caption)
 //     composition.tsx — exact temporary Remotion composition source used
 //     props.json    — analyzed props: beat grid, energy/bass curves, palette
@@ -18,6 +19,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import path from "node:path";
 
 import { buildCaption, type CaptionTrack, fetchReleaseYear, yearFromReleaseDate } from "./caption";
+import { renderCover } from "./render-cover";
 
 const OUT_DIR = path.resolve(import.meta.dirname, "../../out");
 const PACKAGE_ROOT = path.resolve(import.meta.dirname, "../..");
@@ -119,6 +121,19 @@ const propsPath = path.join(OUT_DIR, `${track.trackId}.props.json`);
 if (existsSync(propsPath)) {
   log("props.json (analyzed audio + palette)");
   copyFileSync(propsPath, propsOutPath);
+}
+
+// cover.jpg — the profile-grid cover (loud, centered identity over a clean late
+// frame). Needs props.json in the bundle; the operator AirDrops it to Photos and
+// sets it as the post's cover. Render failure is non-fatal — the rest of the
+// bundle still ships.
+if (existsSync(propsOutPath)) {
+  log("cover.jpg (profile-grid cover)");
+  try {
+    await renderCover([bundle]);
+  } catch (error) {
+    log(`cover.jpg skipped: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 const renderManifestPath = path.join(OUT_DIR, `${track.trackId}.render.json`);

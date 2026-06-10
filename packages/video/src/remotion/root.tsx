@@ -11,6 +11,7 @@
 import { Composition, type CalculateMetadataFunction } from "remotion";
 import { colors } from "@fluncle/tokens";
 
+import { Cover } from "./cover";
 import { GlProbe } from "./gl-probe";
 import { type NostalgicCosmosProps } from "./types";
 
@@ -128,6 +129,21 @@ export const RemotionRoot: React.FC = () => {
         height={1920}
         id="GlProbe"
         width={1080}
+      />
+      {/* The profile-grid cover (a still). Rendered by render-cover; real track +
+          nebula-still background arrive via inputProps. */}
+      <Composition
+        component={Cover}
+        defaultProps={{
+          dimInk: colors.stardust,
+          ink: colors.starlightCream,
+          track: defaultProps.track,
+        }}
+        durationInFrames={1}
+        fps={FPS}
+        height={HEIGHT}
+        id="Cover"
+        width={WIDTH}
       />
     </>
   );

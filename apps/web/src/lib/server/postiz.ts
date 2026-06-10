@@ -8,6 +8,12 @@
 // Postiz and send nothing — it would never reach TikTok.) Returns the Postiz post
 // id (stored as social_posts.external_id).
 //
+// Caption caveat: TikTok's inbox/UPLOAD flow accepts the video file ONLY — the
+// `value[].content` caption does NOT transfer to the app (TikTok shows a "#Postiz"
+// placeholder). The operator pastes the caption (carried in the video bundle's
+// note.txt) in-app. Only DIRECT_POST carries a caption, but that skips the manual
+// official-sound step, so we intentionally stay on UPLOAD.
+//
 // The Worker owns the Postiz key; the agent/CLI never sees it.
 
 import { readEnv, readOptionalEnv } from "./env";

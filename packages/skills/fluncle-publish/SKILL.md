@@ -27,9 +27,9 @@ TikTok's licensed/official sounds can only be attached **inside the TikTok app**
    fluncle admin track draft <track_id|log_id> --platform tiktok
    ```
 
-   This sends the track's **audio-less cut** + the **note** (caption) to the platform as a private draft via Postiz. For TikTok it lands in the @fluncle app **inbox** as `SELF_ONLY`. Records `social_posts(platform, draft)`.
+   This sends the track's **audio-less cut** to the platform as a private draft via Postiz. For TikTok it lands in the @fluncle app **inbox** as `SELF_ONLY`. Records `social_posts(platform, draft)`. Note: TikTok's inbox/upload flow accepts the **video file only** — the caption does _not_ transfer (the app shows a "#Postiz" placeholder). The caption is carried in the bundle's `note.txt` for the operator to paste in-app; this is inherent to the inbox flow, not a failure. (Only `DIRECT_POST` carries a caption, and it would skip the manual official-sound step — so we keep inbox.)
 
-2. **Hand off to the operator (manual, human-only).** The operator opens the draft in the platform app, **adds the official sound**, and publishes or schedules it. The agent does not and cannot do this step — it's where licensing + native posting happen. Stop here and report that the draft is waiting.
+2. **Hand off to the operator (manual, human-only).** The operator opens the draft in the platform app, **pastes the caption** (from `note.txt`), **adds the official sound**, and publishes or schedules it. The agent does not and cannot do this step — it's where licensing + native posting happen. Stop here and report that the draft is waiting.
 
 3. **Record the outcome** once the operator has acted:
 
