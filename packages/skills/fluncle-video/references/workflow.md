@@ -32,11 +32,11 @@ In order:
 
 Confirm the **Always-Visible Vehicle** (doctrine 2) in the concept: the vehicle fills the frame from the first frame (a dim ember, a flat field, a scrambled matrix that is unmistakably present), never a late reveal.
 
-## 4. Author the temporary composition
+## 4. Author the composition (in the gitignored workbench)
 
-Create a temporary self-contained composition source file under `packages/video/src/remotion/` while you work. A dated filename is still useful for local clarity, but it is not an archive contract and must not be committed. `ship` will copy the exact source into `packages/video/out/<log-id>/composition.tsx`; R2 keeps the durable copy.
+Create your composition at `packages/video/src/remotion/workbench/<CompId>.tsx`. `workbench/` is gitignored and `root.tsx` AUTO-REGISTERS every `.tsx` in it — **the composition id is the filename** (so `workbench/WingsKaleido.tsx` renders as `--composition WingsKaleido`). You never touch `root.tsx`, and because workbench is gitignored there is nothing to clean up and no commit hazard. `ship` copies the exact source into `packages/video/out/<log-id>/composition.tsx`; R2 keeps the durable copy.
 
-- Export a named PascalCase `React.FC<NostalgicCosmosProps>` (reuse the contract unchanged so the pipeline feeds it).
+- Pick a unique PascalCase `<CompId>` for the filename and **`export default`** your `React.FC<NostalgicCosmosProps>` (reuse the contract unchanged so the pipeline feeds it).
 - Import ONLY from `../cosmos` (plus `remotion`, `react`, `@fluncle/tokens`). No styled vehicles, no static image assets.
 - Write your scene and your GLSL shader. Lean on [cookbook.md](cookbook.md) for technique and the `GLSL.*` inventory.
 - Honor the quad law (doctrine 6): every `ShaderLayer` drives color AND alpha to 0.0 inside its quad. Starfield law (doctrine 7): monotonic drift, audio touches brightness/twinkle only.
@@ -46,7 +46,7 @@ Create a temporary self-contained composition source file under `packages/video/
 - **Reactivity bus:** prefer `useAudioReactivity` and pass its `uniforms` into `ShaderLayer` (or pass `onsets`/`reactivity` directly to `ShaderLayer` for built-in `u_audio*` uniforms). Map those uniforms to material disturbance: width, density, threshold, radius, refraction, grain, dither, glow. Do not map them to travel position.
 - Open the file with a header comment that states, at minimum: the track and label, the **vehicle** (so the next agent's diversity check works), the texture family, and the two-sentence concept. Keep it useful as future rerender context because this exact file is shipped as `composition.tsx`.
 
-Register it in `src/remotion/root.tsx`: import the component, add `{ component, id: "<PascalId>" }` to the `trackCompositions` array. The id is unique PascalCase. This registration is temporary working state; remove it after the bundle is shipped.
+No registration step — dropping the file in `workbench/` is the registration (root.tsx globs it). Nothing to add to `root.tsx`, nothing to remove afterward.
 
 ## 5. Still-critique loop (minimum two rounds)
 
@@ -73,7 +73,7 @@ Iterate until type is legible inside the safe inset, the palette stays warm and 
 
 ## 7. Render
 
-`bun run social:preview <trackId> --composition <CompId> --composition-source <path-to-composition.tsx>` and **wait for the encode to finish** — renders take minutes and the MP4 is invalid until the process exits. The render writes `out/<trackId>.mp4` and `out/<trackId>.render.json`. Confirm with `ffprobe`: 1080×1920, h264, aac audio, 15–30s.
+`bun run social:preview <trackId> --composition <CompId>` and **wait for the encode to finish** — renders take minutes and the MP4 is invalid until the process exits. (`<CompId>` is your `workbench/<CompId>.tsx` filename; the source is auto-resolved from there, so `--composition-source` is no longer needed.) The render writes `out/<trackId>.mp4` and `out/<trackId>.render.json`. Confirm with `ffprobe`: 1080×1920, h264, aac audio, 15–30s.
 
 ## 8. Ship (package, upload, link)
 
@@ -84,7 +84,7 @@ Once the render passes its gates, package the bundle and link it to the track. A
    - `footage-silent.mp4` — audio-less remux (`ffmpeg -c copy -an`); the cut you upload to TikTok and attach the official sound to by hand (keeps licensing inside TikTok)
    - `poster.jpg` — a ~80% drop frame
    - `note.txt` — the fixed-template caption that accompanies the footage: `Artist — Title (Year)` / Label / `Found <date>: fluncle://<log-id>` / `#dnb #drumnbass #drumandbass` + sub-genre tags (lowercased, deduped)
-   - `composition.tsx` — the exact temporary Remotion source used for the render
+   - `composition.tsx` — the exact Remotion source used for the render (copied from `workbench/<CompId>.tsx`)
    - `props.json` — analyzed audio curves, beat grid, palette, and track props
    - `render.json` — composition id, rerender pointers, and the `vehicle` tag (the diversity-ledger entry, read by the upload step into `video_vehicle`)
 
@@ -92,7 +92,8 @@ Once the render passes its gates, package the bundle and link it to the track. A
 
 2. **Upload + link** — `fluncle admin track video <log-id> --dir packages/video/out/<log-id>` uploads the bundle to R2 under `<log-id>/` (served at `found.fluncle.com`) and sets the track's `video_url` to the review cut. The Worker owns R2; you never hold R2 credentials.
 3. **Post (manual)** — grab `footage-silent.mp4`, upload to TikTok, attach the official sound, paste `note.txt`, post. Auto-draft is deferred.
-4. **Clean local source** — after `composition.tsx` is present in the output bundle, remove the temporary composition file and its `root.tsx` registration before committing. Generated compositions are output artifacts, not codebase history.
+
+No cleanup step: the composition lives in the gitignored `workbench/` and `root.tsx` was never edited, so there is nothing to remove and nothing can leak into a commit. The durable copy is the R2 bundle; the local `workbench/` file and `out/` render are disposable scratch (an ephemeral Spinup VM discards them; a fresh agent starts clean from source).
 
 ## 9. Report
 

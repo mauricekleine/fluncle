@@ -6,7 +6,7 @@ The creative doctrine — the vehicles, the texture families, type staging, the 
 
 ## The output contract
 
-Each clip is authored as a temporary, self-contained Remotion composition, registered in `src/remotion/root.tsx` only long enough to render. The source is not a permanent repo artifact. When the video ships, `bun run ship <trackId|log-id>` copies the exact render source into the upload bundle as:
+Each clip is authored as a self-contained Remotion composition dropped into the gitignored `src/remotion/workbench/<CompId>.tsx` (`export default` the component; the composition id is the filename). `root.tsx` auto-registers everything in `workbench/` via `import.meta.webpackContext`, so it is never hand-edited and a render leaves no tracked changes — the source is not a permanent repo artifact and there is no cleanup step. When the video ships, `bun run ship <trackId|log-id>` copies the exact render source into the upload bundle as:
 
 ```
 out/<log-id>/composition.tsx
@@ -105,4 +105,4 @@ A frame must be a pure function of its inputs; Remotion renders the same frame m
 
 ---
 
-To author a clip, read the **fluncle-video skill** first, then create a temporary self-contained composition, register it in `root.tsx`, render it with `--composition <Id> --composition-source <file>`, run `ship`, and remove the temporary local composition before committing.
+To author a clip, read the **fluncle-video skill** first, then create a self-contained composition at `src/remotion/workbench/<CompId>.tsx` (default-export it; `root.tsx` auto-registers it), render it with `--composition <CompId>`, and run `ship`. No `root.tsx` edit, no cleanup — `workbench/` is gitignored scratch.

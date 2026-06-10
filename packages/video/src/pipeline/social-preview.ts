@@ -113,6 +113,14 @@ async function listSourceFiles(dir: string): Promise<string[]> {
 }
 
 async function findCompositionSource(compositionId: string): Promise<string | undefined> {
+  // New model: the composition id IS its workbench filename (root.tsx
+  // auto-registers `workbench/<id>.tsx`). That deterministic path is the source.
+  const workbenchPath = path.join(REMOTION_DIR, "workbench", `${compositionId}.tsx`);
+  if (existsSync(workbenchPath)) {
+    return workbenchPath;
+  }
+
+  // Fallback (legacy / hand-registered): scan for a file exporting the id.
   const files = await listSourceFiles(REMOTION_DIR);
   const matches: string[] = [];
   const exportConst = new RegExp(`export\\s+const\\s+${compositionId}\\b`);

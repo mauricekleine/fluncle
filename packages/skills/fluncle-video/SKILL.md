@@ -17,7 +17,7 @@ The aesthetic is already captured and it is strong — warm dark, one burning su
 
 ## The two things that are always true
 
-1. **The video IS the output bundle.** Each video is authored as one temporary, self-contained composition source file, exporting a named PascalCase component, registered in `src/remotion/root.tsx` only long enough to render, importing only the core from `../cosmos`. After render, `ship` copies that exact source to `packages/video/out/<log-id>/composition.tsx` with `props.json`, `render.json`, and the footage; the R2 bundle is the durable archive. Generated track compositions are output, not codebase history, so remove temporary local composition files before committing.
+1. **The video IS the output bundle.** Author each video as one self-contained composition at `src/remotion/workbench/<CompId>.tsx` — `export default` the component, import only the core from `../cosmos`. `workbench/` is gitignored and `root.tsx` AUTO-REGISTERS everything in it (the composition id is the filename), so you NEVER edit `root.tsx`, a render touches no tracked file, and there is nothing to clean up. After render, `ship` copies that exact source to `packages/video/out/<log-id>/composition.tsx` with `props.json`, `render.json`, and the footage; the R2 bundle is the durable archive (the local `workbench/` file is disposable scratch).
 2. **You write the scene.** There are no prebuilt vehicles, no styled scene components, no static image assets (fonts excepted). You compose the scene and author the GLSL shader yourself, against the core surface. The core gives you a canvas and the brand law; the picture is yours.
 
 ## Source priority

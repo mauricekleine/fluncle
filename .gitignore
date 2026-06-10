@@ -21,3 +21,7 @@ packages/video/out/
 packages/video/public/*.mp3
 packages/video/public/*.m4a
 packages/video/public/*.wav
+# Generated/scratch track compositions (output, not codebase history); root.tsx
+# auto-registers these. Keep the dir (.gitkeep) so require.context resolves.
+packages/video/src/remotion/workbench/*
+!packages/video/src/remotion/workbench/.gitkeep
