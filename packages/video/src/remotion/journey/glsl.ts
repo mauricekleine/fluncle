@@ -14,7 +14,8 @@
 //       float n = fbm(uv * 3.0 + u_time * 0.1, 5);
 //       vec3 col = paletteRamp(n);
 //       col = filmGrain(col, uv, u_time, 0.08);
-//       col *= vignette(uv, 0.6, 0.45);
+//       col *= vignette(uv, 1.1, 0.6); // GENTLE corner falloff; a tight radius
+//                                      // portholes a full-bleed field (quad law)
 //       gl_FragColor = vec4(dither8(col, uv), 1.0);
 //     }`;
 //
@@ -161,7 +162,10 @@ vec3 filmGrain(vec3 col, vec2 uv, float time, float intensity) {
   return col + grain * intensity * shape;
 }`;
 
-/** vignette(vec2 uv, float radius, float softness)->0..1: darkening falloff multiplier. */
+/** vignette(vec2 uv, float radius, float softness)->0..1: radial darkening multiplier.
+ * On a FULL-BLEED field keep it GENTLE (radius ≳ 1.0): a tight radius darkens the
+ * corners into a circular porthole that crops the 9:16 frame (the quad law warns
+ * of this). Reserve aggressive radial falloff for a localized layer, not the bg. */
 const vignette = /* glsl */ `
 float vignette(vec2 uv, float radius, float softness) {
   float d = distance(uv, vec2(0.5));

@@ -50,7 +50,7 @@ These are guarantees the code makes; a track must not defeat them.
 1. **The canon lock** — `paletteMix` will not let the artwork repaint the field, sun, or ink.
 2. **The contrast guarantee** — `FloatingType` keeps every type role legible over the scene.
 3. **Monotonic orbital drift** — `Starfield` never reverses; audio drives brightness, never position.
-4. **The quad law** — every `ShaderLayer` must drive **final color AND alpha to true zero** inside its quad bounds, so the quad leaves no visible edge. A shader that returns opaque black (or any nonzero alpha) outside its intended shape prints a rectangle over the scene (the printed-rectangle incident). Fade color _and_ alpha out together at the bounds.
+4. **The quad law** — a `ShaderLayer` must never show its quad as a hard rectangle. A **full-bleed background** fills the frame (opaque, a real value into the corners) and so leaves no edge. A **localized layer** (orb/glow) fades **color AND alpha to true zero** before its bounds — a shader that returns nonzero outside its shape prints a rectangle (the printed-rectangle incident). The inverse over-correction is the **porthole**: a tight radial vignette on a full-bleed field crops the 9:16 canvas into a circle — keep background vignettes gentle (radius ≳ 1.0).
 
 ## The pipeline
 
