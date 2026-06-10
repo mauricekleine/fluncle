@@ -30,6 +30,10 @@ export const tracks = sqliteTable("tracks", {
   title: text("title").notNull(),
   trackId: text("track_id").primaryKey(),
   videoUrl: text("video_url"),
+  // The travelling vehicle of the track's video (e.g. "voronoi cellular",
+  // "caustic web"). Set when the video is uploaded; surfaced in /api/tracks so
+  // the next (ephemeral) video agent can read recent vehicles and diversify.
+  videoVehicle: text("video_vehicle"),
 });
 
 export const spotifyAuth = sqliteTable("spotify_auth", {

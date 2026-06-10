@@ -23,7 +23,7 @@ BPM comes from the audio analysis already in the props — measured off the actu
 
 In order:
 
-1. **Diversity check (doctrine 3).** Do not read a committed local `tracks/` archive; it should not exist. Use the current brief, any recent run reports or R2 composition artifacts the operator gives you, and the known failure modes in SKILL.md. Do not repeat the most recent vehicle you know about unless the music demands it.
+1. **Diversity check (doctrine 3).** Run `fluncle recent --json` and read the `videoVehicle` field of the recent findings — the diversity ledger. List the vehicles already used and choose one clearly different (the last batch all landed on voronoi/cellular with no ledger to warn them — don't repeat that). Also honor the brief and the SKILL.md failure modes.
 2. **Choose the vehicle (doctrine 1, One Driver).** Exactly one travelling beat-synced medium: orb / lines / fractal / glass / glitch, or one you invent. Everything else supports it. Decide how the one Eclipse Gold sun moment is expressed — as the orb itself, or, for any other vehicle, THROUGH the vehicle (a gold crest igniting, a gold resolution front), never as a second celestial body.
 3. **Choose the texture family** (nebula / analog / dither / paint / fluent / duotone — see MOODBOARD.md) that fits the tune. A liquid roller wants drift, nebula, or fluent; a neuro stomper wants dither, glitch, hard onset flashes; a gel-lit duotone suits the meditative ones.
 4. **Write a two-sentence journey:** from where, through what, arriving where — matched to the song's energy curve. Name where the drop lands and how the vehicle ignites there.
@@ -79,14 +79,14 @@ Iterate until type is legible inside the safe inset, the palette stays warm and 
 
 Once the render passes its gates, package the bundle and link it to the track. All local; the operator runs it.
 
-1. **Package** — `bun run --cwd packages/video ship <trackId|log-id>` builds `out/<log-id>/`:
+1. **Package** — `bun run --cwd packages/video ship <trackId|log-id> --vehicle "<your vehicle>"` builds `out/<log-id>/` (the `--vehicle` tag, e.g. `"caustic web"`, lands in `render.json` and becomes the track's diversity-ledger entry on upload):
    - `footage.mp4` — with audio; the public/web cut (becomes `video_url`) + your QA pass
    - `footage-silent.mp4` — audio-less remux (`ffmpeg -c copy -an`); the cut you upload to TikTok and attach the official sound to by hand (keeps licensing inside TikTok)
    - `poster.jpg` — a ~80% drop frame
    - `note.txt` — the fixed-template caption that accompanies the footage: `Artist — Title (Year)` / Label / `Found <date>: fluncle://<log-id>` / `#dnb #drumnbass #drumandbass` + sub-genre tags (lowercased, deduped)
    - `composition.tsx` — the exact temporary Remotion source used for the render
    - `props.json` — analyzed audio curves, beat grid, palette, and track props
-   - `render.json` — composition id plus pointers for rerendering from the bundle
+   - `render.json` — composition id, rerender pointers, and the `vehicle` tag (the diversity-ledger entry, read by the upload step into `video_vehicle`)
 
    The track MUST have a Log ID (no Log ID → no ship; backfill the ISRC first). Requires an existing render (`out/<trackId>.mp4`) — run step 7 first.
 

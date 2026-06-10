@@ -6,6 +6,7 @@
 // extract palette -> assemble inputProps -> write out/<trackId>.props.json ->
 // (unless --skip-render) bundle + render out/<trackId>.mp4.
 
+import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -256,8 +257,24 @@ async function main(): Promise<void> {
   console.log(`[social-preview] rendering -> ${outputPath}`);
   const result = await render(inputProps, outputPath, compositionId);
 
+  // --composition-source is forgiving about cwd: a path given as cwd-relative,
+  // package-relative, or repo-root-relative all resolve (the doubling bug was a
+  // package-relative path resolved against a packages/video cwd). Falls back to
+  // auto-discovery so a wrong path never silently drops composition.tsx.
+  const resolveGivenSource = (given: string): string | undefined => {
+    for (const candidate of [
+      path.resolve(given),
+      path.resolve(PACKAGE_ROOT, given),
+      path.resolve(PACKAGE_ROOT, "..", "..", given),
+    ]) {
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+    }
+    return undefined;
+  };
   const sourcePath = compositionSource
-    ? path.resolve(compositionSource)
+    ? (resolveGivenSource(compositionSource) ?? (await findCompositionSource(result.compositionId)))
     : await findCompositionSource(result.compositionId);
   const manifest = {
     compositionId: result.compositionId,

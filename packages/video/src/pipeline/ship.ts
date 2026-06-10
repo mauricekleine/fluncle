@@ -24,9 +24,16 @@ const PACKAGE_ROOT = path.resolve(import.meta.dirname, "../..");
 
 const input = process.argv[2];
 if (!input) {
-  console.error("usage: bun src/pipeline/ship.ts <trackId|log-id>");
+  console.error("usage: bun src/pipeline/ship.ts <trackId|log-id> [--vehicle <tag>]");
   process.exit(1);
 }
+
+// The travelling vehicle tag (e.g. "voronoi cellular"), written into render.json
+// so the upload step records it as the diversity ledger entry. Falls back to any
+// `vehicle` already in the render manifest.
+const vehicleFlagIndex = process.argv.indexOf("--vehicle");
+const vehicleArg =
+  vehicleFlagIndex >= 0 ? process.argv[vehicleFlagIndex + 1]?.trim() || undefined : undefined;
 
 const log = (message: string) => console.error(`[ship] ${message}`);
 
@@ -115,7 +122,12 @@ if (existsSync(propsPath)) {
 }
 
 const renderManifestPath = path.join(OUT_DIR, `${track.trackId}.render.json`);
-let renderManifest: { compositionId?: string; compositionSource?: string; props?: string } = {};
+let renderManifest: {
+  compositionId?: string;
+  compositionSource?: string;
+  props?: string;
+  vehicle?: string;
+} = {};
 
 if (existsSync(renderManifestPath)) {
   try {
@@ -150,6 +162,9 @@ writeFileSync(
       compositionSource: existsSync(compositionPath) ? "composition.tsx" : null,
       props: existsSync(propsOutPath) ? "props.json" : null,
       trackId: track.trackId,
+      // The diversity-ledger entry: the upload endpoint reads this and stores it
+      // as the track's video_vehicle (surfaced in /api/tracks for the next agent).
+      vehicle: vehicleArg ?? renderManifest.vehicle ?? null,
     },
     null,
     2,

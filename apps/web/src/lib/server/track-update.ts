@@ -18,6 +18,8 @@ export type TrackUpdate = {
   /** Provenance for the tags write. Defaults to "manual" (the operator path). */
   tagsSource?: "auto" | "manual";
   videoUrl?: string;
+  /** The video's travelling vehicle (diversity ledger; surfaced in /api/tracks). */
+  videoVehicle?: string;
 };
 
 export type TrackUpdateResult = {
@@ -51,7 +53,8 @@ export async function updateTrack(
     update.videoUrl !== undefined ||
     update.enrichmentStatus !== undefined ||
     update.features !== undefined ||
-    update.note !== undefined;
+    update.note !== undefined ||
+    update.videoVehicle !== undefined;
 
   if (!provided) {
     throw new ApiError("no_fields", "No updatable fields provided", 400);
@@ -86,6 +89,11 @@ export async function updateTrack(
   if (update.videoUrl !== undefined) {
     sets.push("video_url = ?");
     args.push(update.videoUrl);
+  }
+
+  if (update.videoVehicle !== undefined) {
+    sets.push("video_vehicle = ?");
+    args.push(update.videoVehicle);
   }
 
   if (update.enrichmentStatus !== undefined) {

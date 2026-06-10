@@ -22,6 +22,7 @@ export type RecentTrack = {
   enrichmentStatus?: string;
   tagsSource?: string;
   videoUrl?: string;
+  videoVehicle?: string;
   addedToSpotify: boolean;
   postedToTelegram: boolean;
 };
@@ -49,6 +50,7 @@ type TracksResponse = {
     enrichmentStatus?: string;
     tagsSource?: string;
     videoUrl?: string;
+    videoVehicle?: string;
     addedToSpotify?: boolean;
     postedToTelegram?: boolean;
   }>;
@@ -84,6 +86,7 @@ export async function recentCommand(limit: number): Promise<RecentTrack[]> {
       title: track.title,
       trackId: track.trackId,
       videoUrl: track.videoUrl,
+      videoVehicle: track.videoVehicle,
     };
   });
 }

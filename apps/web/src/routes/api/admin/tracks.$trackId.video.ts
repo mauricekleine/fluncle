@@ -60,6 +60,10 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/video")({
 
           const form = await request.formData();
           const stored: Record<string, string> = {};
+          // The travelling vehicle, read from the uploaded render.json (ship
+          // writes it from `--vehicle`). Stored on the track as the diversity
+          // ledger the next agent reads via /api/tracks.
+          let videoVehicle: string | undefined;
 
           for (const artifact of ARTIFACTS) {
             const value = form.get(artifact.field);
@@ -68,19 +72,38 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/video")({
               continue;
             }
 
+            const bytes = await value.arrayBuffer();
             const key = `${track.logId}/${artifact.name}`;
-            await env.VIDEOS.put(key, await value.arrayBuffer(), {
+            await env.VIDEOS.put(key, bytes, {
               httpMetadata: { contentType: artifact.contentType },
             });
             stored[artifact.field] = `${FOUND_BASE}/${key}`;
+
+            if (artifact.field === "render") {
+              try {
+                const manifest = JSON.parse(new TextDecoder().decode(bytes)) as {
+                  vehicle?: unknown;
+                };
+                if (typeof manifest.vehicle === "string" && manifest.vehicle.trim()) {
+                  videoVehicle = manifest.vehicle.trim().slice(0, 120);
+                }
+              } catch {
+                // render.json is a loose manifest; a missing/unparseable vehicle
+                // just leaves the ledger entry empty, never fails the upload.
+              }
+            }
           }
 
           if (!stored.footage) {
             return jsonError(400, "no_footage", "A `footage` cut (footage.mp4) is required");
           }
 
-          // The footage (with-audio) cut is the canonical web video.
-          await updateTrack(track.trackId, { videoUrl: stored.footage });
+          // The footage (with-audio) cut is the canonical web video; the vehicle
+          // (when present) joins it as the diversity-ledger entry.
+          await updateTrack(track.trackId, {
+            videoUrl: stored.footage,
+            ...(videoVehicle ? { videoVehicle } : {}),
+          });
 
           return Response.json({
             logId: track.logId,
