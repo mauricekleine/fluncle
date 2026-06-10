@@ -111,6 +111,45 @@ body::before {
   z-index: -2;
 }
 
+/* The Light-Years Rule (DESIGN.md): grain + lossy texture is load-bearing brand,
+   not decoration — "a surface rendered glassy-clean and pristine reads as fake."
+   A fixed, static film-grain veil over the WHOLE frame (the cosmos and the glass
+   panes alike), the web sibling of the video kit's always-on grain. It sits above
+   content but below dialogs (z 30 < the dialog layer) and is pointer-events:none,
+   so it never blocks interaction. Static (no animation) → zero main-thread cost
+   and inherently safe under reduced motion. Opacity is low enough to honour the
+   Legible Sky Rule (text stays AA). */
+body::after {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  content: "";
+  inset: 0;
+  mix-blend-mode: overlay;
+  opacity: 0.05;
+  pointer-events: none;
+  position: fixed;
+  z-index: 30;
+}
+
+/* The cosmos barely breathes — an imperceptibly slow drift on the backdrop so the
+   sky isn't a frozen JPEG (the video kit's "alive, not a static image", dialled
+   all the way down for the quiet web). Compositor-only transform (no layout), and
+   gated to no-preference so reduced motion gets a perfectly still cover. */
+@media (prefers-reduced-motion: no-preference) {
+  body::before {
+    animation: cosmos-drift 72s ease-in-out infinite alternate;
+  }
+}
+
+@keyframes cosmos-drift {
+  from {
+    transform: scale(1.02) translate3d(0, 0, 0);
+  }
+
+  to {
+    transform: scale(1.06) translate3d(-0.7%, -0.5%, 0);
+  }
+}
+
 .cover-frame {
   background: linear-gradient(
     145deg,

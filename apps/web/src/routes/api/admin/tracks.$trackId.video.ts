@@ -1,13 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { env } from "cloudflare:workers";
 
+import { FOUND_BASE } from "../../../lib/media";
 import { jsonError, requireAdmin } from "../../../lib/server/env";
 import { getTrackByIdOrLogId } from "../../../lib/server/tracks";
 import { updateTrack } from "../../../lib/server/track-update";
 
-// Public base for video reads (R2 custom domain). The Worker owns the bucket;
-// the agent uploads here with the admin token and never holds R2 credentials.
-const FOUND_BASE = "https://found.fluncle.com";
+// FOUND_BASE (the R2 custom-domain read base) is shared from lib/media — the
+// Worker owns the bucket; the agent uploads with the admin token, never holds R2
+// credentials.
 
 type Artifact = { contentType: string; field: string; name: string };
 

@@ -26,6 +26,8 @@ export type TrackListItem = {
   spotifyUrl: string;
   tags?: string[];
   tagsSource?: string;
+  /** The live TikTok post URL, if a published post exists (from social_posts). */
+  tiktokUrl?: string;
   title: string;
   trackId: string;
   videoUrl?: string;
@@ -58,6 +60,7 @@ type TrackRow = {
   spotify_url: string;
   tags_json: string | null;
   tags_source: string | null;
+  tiktok_url: string | null;
   title: string;
   track_id: string;
   video_url: string | null;
@@ -70,7 +73,11 @@ type TrackRow = {
 const TRACK_SELECT = `track_id, spotify_url, title, album, album_image_url, artists_json,
   bpm, duration_ms, enrichment_status, isrc, key, label, log_id, popularity,
   preview_url, release_date, tags_json, tags_source, video_url, video_vehicle, note, added_at,
-  added_to_spotify, posted_to_telegram`;
+  added_to_spotify, posted_to_telegram,
+  (select url from social_posts
+     where track_id = tracks.track_id and platform = 'tiktok' and status = 'published'
+       and url is not null
+     order by published_at desc limit 1) as tiktok_url`;
 
 function toTrackListItem(row: TrackRow): TrackListItem {
   return {
@@ -94,6 +101,7 @@ function toTrackListItem(row: TrackRow): TrackListItem {
     spotifyUrl: row.spotify_url,
     tags: parseTags(row.tags_json),
     tagsSource: row.tags_source ?? undefined,
+    tiktokUrl: row.tiktok_url ?? undefined,
     title: row.title,
     trackId: row.track_id,
     videoUrl: row.video_url ?? undefined,

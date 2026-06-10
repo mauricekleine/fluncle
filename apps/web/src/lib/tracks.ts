@@ -1,16 +1,29 @@
+// Mirrors the client-relevant subset of the server's TrackListItem (see
+// lib/server/tracks.ts) — /api/tracks already returns all of these. The media +
+// enrichment fields (previewUrl, videoUrl, bpm, key, …) used to be dropped here,
+// which is why the feed couldn't surface them and Stories had nothing to play.
 export type Track = {
   addedAt: string;
   album?: string;
   albumImageUrl?: string;
   artists: string[];
+  bpm?: number;
   durationMs?: number;
+  enrichmentStatus?: string;
+  isrc?: string;
+  key?: string;
   label?: string;
   logId?: string;
   note?: string;
+  previewUrl?: string;
+  releaseDate?: string;
   spotifyUrl: string;
   tags?: string[];
+  tiktokUrl?: string;
   title: string;
   trackId: string;
+  videoUrl?: string;
+  videoVehicle?: string;
 };
 
 export type TracksResponse = {
