@@ -12,6 +12,11 @@
       "sourceType": "local",
       "computedHash": "a1db7de945ffa5f5484de95d942f98cdbdcd27a9d0606542281ee8c7a22005a5"
     },
+    "fluncle-bpm-backfill": {
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-bpm-backfill",
+      "sourceType": "local",
+      "computedHash": "02282e6eeed2afb9fd4d7be51b93752f049dfede060f9fba7600ebf1be10cb60"
+    },
     "fluncle-goal-writer": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/goal-writer",
       "sourceType": "local",
@@ -22,15 +27,31 @@
       "sourceType": "local",
       "computedHash": "306bd9ce5d6ef4c09eac7d7f41136d0fdaad589ac37b332cf63047dfd6a2a402"
     },
+    "fluncle-publish": {
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-publish",
+      "sourceType": "local",
+      "computedHash": "94b278af211e11b3b16e675457d33d9161c66a933b88f17f8791f220cd86c3fb"
+    },
     "fluncle-track-enrichment": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-track-enrichment",
       "sourceType": "local",
       "computedHash": "469020835ecf64e863c658724c355bc25a03627947f65c3009a093373df486b0"
     },
+    "fluncle-video": {
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-video",
+      "sourceType": "local",
+      "computedHash": "4cde8a3e9de9056992cfec09e1d01793dfeea1f809e9b04fafa7e6e19e9f6dde"
+    },
     "hetzner-devbox": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/hetzner-devbox",
       "sourceType": "local",
       "computedHash": "3749b41b1386d44166c68bfa63470d19741f9f7dc195a41eedea27ac34bfa091"
+    },
+    "postiz": {
+      "source": "gitroomhq/postiz-agent",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "bb1a28c176a8c31305ad60b0bce66c536fe195b7943d0b7c669ae7b26f24a916"
     },
     "remotion-best-practices": {
       "source": "remotion-dev/skills",
