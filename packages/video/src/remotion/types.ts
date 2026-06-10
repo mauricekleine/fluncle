@@ -26,6 +26,12 @@ export type CosmosTrack = {
   durationMs?: number;
   /** Record label (Spotify metadata). Authoritative, render-safe fact. */
   label?: string;
+  /**
+   * Release date ("2015-12-18", Spotify metadata). Authoritative, render-safe;
+   * the on-screen plate shows only the YEAR (a catalog credit beside the label),
+   * kept distinct from Fluncle's own Found date.
+   */
+  releaseDate?: string;
   /** Spotify/Deezer tags. Creative fuel; not for on-screen text. */
   tags?: string[];
 };

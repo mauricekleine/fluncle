@@ -11,7 +11,9 @@ import { FloatingType } from "./floating-type";
 //
 //   IDENTITY (lower-left, scene ink, system sans)
 //     Artist — Title          ← the music, the reason the clip exists
-//     Label                   ← provenance, subordinate, dim
+//     Label (2018)            ← provenance: label + release YEAR, subordinate,
+//                               dim. Year in parens per VOICE.md (the caption's
+//                               convention); degrades to label-only or year-only.
 //
 //   TELEMETRY (upper-right, right-aligned, Oxanium tabular, dim)
 //     Found Jun 3             ← the logbook stamp
@@ -35,7 +37,10 @@ import { FloatingType } from "./floating-type";
 
 export type TypePlateProps = {
   /** The track whose facts are rendered. Only props-exposed fields appear. */
-  track: Pick<CosmosTrack, "title" | "artists" | "discoveredAt" | "logId" | "label">;
+  track: Pick<
+    CosmosTrack,
+    "title" | "artists" | "discoveredAt" | "logId" | "label" | "releaseDate"
+  >;
   /**
    * Primary ink for the track line — drawn from the COMPOSITION (doctrine 4),
    * default Starlight Cream. Gold is the sun, never the type.
@@ -63,6 +68,24 @@ const SAFE_TOP = 150;
 const SAFE_BOTTOM = 230;
 
 const FADE = 0.8;
+
+/**
+ * The provenance line: label and release year, the two release credits, joined
+ * as `Label (2018)`. Parens are the sanctioned year form (VOICE.md / the
+ * caption); the year is a catalog credit beside the label, never confused with
+ * Fluncle's Found date. Degrades to label-only, bare year, or nothing.
+ */
+const provenanceLine = (label?: string, releaseDate?: string): string | null => {
+  const year = releaseDate?.slice(0, 4);
+  const hasYear = year ? /^\d{4}$/.test(year) : false;
+  if (label && hasYear) {
+    return `${label} (${year})`;
+  }
+  if (label) {
+    return label;
+  }
+  return hasYear ? year! : null;
+};
 
 /** 0..1 presence envelope: eased fade in at `inSec`, hold, eased fade out. */
 const useEnvelope = (inSec: number, outSec: number): { opacity: number; rise: number } => {
@@ -99,6 +122,8 @@ export const TypePlate: React.FC<TypePlateProps> = ({
   const identity = useEnvelope(identityInSec, identityInSec + holdSec);
   const telemetry = useEnvelope(telemetryInSec, telemetryInSec + holdSec);
 
+  const provenance = provenanceLine(track.label, track.releaseDate);
+
   return (
     <>
       {/* IDENTITY — lower-left. The music first; provenance beneath, subordinate. */}
@@ -124,10 +149,10 @@ export const TypePlate: React.FC<TypePlateProps> = ({
             align="left"
             color={ink}
           />
-          {track.label ? (
+          {provenance ? (
             <FloatingType
               variant="body"
-              text={track.label}
+              text={provenance}
               fontSize={23}
               drift={5 * floatBoost}
               driftPhase={0.5}
