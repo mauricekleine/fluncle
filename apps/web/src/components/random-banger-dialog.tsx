@@ -83,7 +83,7 @@ export function RandomBangerDialog() {
                 render={<a href={track.spotifyUrl} rel="noreferrer" target="_blank" />}
               >
                 <SpotifyLogoIcon aria-hidden="true" weight="fill" />
-                Open on Spotify
+                Listen on Spotify
               </Button>
               <Button onClick={loadRandomTrack} type="button" variant="outline">
                 <ShuffleIcon aria-hidden="true" weight="bold" />

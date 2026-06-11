@@ -1,6 +1,8 @@
 import {
+  BookOpenIcon,
   CircleNotchIcon,
   FilmStripIcon,
+  InfoIcon,
   SpotifyLogoIcon,
   TelegramLogoIcon,
   TiktokLogoIcon,
@@ -220,11 +222,11 @@ function HomePage() {
 
   return (
     <TooltipProvider>
-      <main className="min-h-screen overflow-hidden px-4 text-foreground sm:px-6 lg:px-8">
+      <main className="min-h-screen overflow-x-hidden px-4 text-foreground sm:px-6 lg:flex lg:flex-col lg:justify-center lg:px-8">
         {/* A0: the page as ONE recovered logbook plate — a real masthead, the
             cover and the list mounted flat on a single document (the silhouette
             change; web-overhaul RFC §6). */}
-        <article className="home-plate mx-auto my-6 w-full max-w-7xl sm:my-8 lg:my-10">
+        <article className="home-plate mx-auto my-6 w-full max-w-7xl sm:my-8 lg:my-10 lg:grid-rows-[auto_1fr] lg:h-[calc(100dvh-7rem)] lg:overflow-hidden">
           <header className="home-masthead">
             <div>
               <h1 className="home-nameplate">Fluncle's Findings</h1>
@@ -237,8 +239,8 @@ function HomePage() {
               <RandomBangerDialog />
             </div>
           </header>
-          <section className="grid gap-y-8 lg:grid-cols-[minmax(240px,320px)_minmax(0,1fr)] lg:gap-x-10">
-            <aside className="mx-auto w-full max-w-80 lg:mx-0 lg:max-w-none">
+          <section className="grid gap-y-8 lg:min-h-0 lg:grid-cols-[minmax(240px,320px)_minmax(0,1fr)] lg:gap-x-10">
+            <aside className="mx-auto flex w-full max-w-80 flex-col lg:mx-0 lg:max-w-none">
               <div className="cover-frame border p-1 rounded-lg">
                 {/* WebP for the page; the PNG stays canonical for og:image and JSON-LD. */}
                 <picture>
@@ -273,9 +275,11 @@ function HomePage() {
                   Telegram
                 </Button>
               </div>
-              {/* Follow across the Galaxy: one quiet icon cluster (the IA
-                  regroup — destinations above, contribute below). */}
-              <div className="mt-3 flex items-center justify-center gap-2 lg:justify-start">
+              {/* Follow + explore across the Galaxy: one quiet icon cluster
+                  (the IA regroup — destinations above, contribute below). Spans
+                  the column edge-to-edge so it aligns with the buttons; /about
+                  and /the-log are crawlable homepage links too. */}
+              <div className="mt-3 flex items-center justify-between gap-1.5">
                 <Tooltip>
                   <TooltipTrigger
                     render={
@@ -347,8 +351,42 @@ function HomePage() {
                   </TooltipTrigger>
                   <TooltipContent>All stories</TooltipContent>
                 </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        aria-label="About Fluncle"
+                        nativeButton={false}
+                        render={<Link to="/about" />}
+                        size="icon-lg"
+                        variant="outline"
+                      />
+                    }
+                  >
+                    <InfoIcon aria-hidden="true" weight="bold" />
+                  </TooltipTrigger>
+                  <TooltipContent>About Fluncle</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        aria-label="The full log"
+                        nativeButton={false}
+                        render={<Link to="/log" />}
+                        size="icon-lg"
+                        variant="outline"
+                      />
+                    }
+                  >
+                    <BookOpenIcon aria-hidden="true" weight="bold" />
+                  </TooltipTrigger>
+                  <TooltipContent>The full log</TooltipContent>
+                </Tooltip>
               </div>
-              <div className="mt-3 grid gap-2">
+              {/* Contribute: pinned to the bottom of the (stretched) column on
+                  desktop so its lower edge lines up with the feed's. */}
+              <div className="mt-3 grid gap-2 lg:mt-auto">
                 <SubmitTrackDialog />
                 <div className="plate-field mt-1 grid gap-1 rounded-lg border border-border px-3.5 py-3">
                   <p className="text-xs font-extrabold text-muted-foreground">For the nerds:</p>
@@ -360,7 +398,7 @@ function HomePage() {
               </div>
             </aside>
 
-            <section aria-labelledby="playlist-title" className="flex min-w-0 flex-col">
+            <section aria-labelledby="playlist-title" className="flex min-w-0 flex-col lg:min-h-0">
               <h2 className="sr-only" id="playlist-title">
                 Latest findings
               </h2>
@@ -369,7 +407,6 @@ function HomePage() {
                   <span>Log ID</span>
                   <span aria-hidden="true" />
                   <span>Track</span>
-                  <span className="hidden sm:block">Found</span>
                   <span aria-hidden="true" />
                 </div>
 
@@ -380,7 +417,7 @@ function HomePage() {
                 ) : undefined}
 
                 {tracks.length > 0 ? (
-                  <ScrollArea className="h-[min(32rem,60dvh)] lg:h-[calc(100vh-24rem)]">
+                  <ScrollArea className="h-[min(32rem,60dvh)] lg:h-auto lg:min-h-0 lg:flex-1">
                     <ol className="grid m-0 list-none p-0 [&>li:last-child.track-row]:border-b-0">
                       {tracks.map((track, index) => (
                         <TrackRow

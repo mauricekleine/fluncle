@@ -226,7 +226,7 @@ function LogPage() {
             size="lg"
           >
             <SpotifyLogoIcon aria-hidden="true" weight="fill" />
-            Open on Spotify
+            Listen on Spotify
           </Button>
           {track.tiktokUrl ? (
             <Button

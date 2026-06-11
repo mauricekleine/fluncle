@@ -8,7 +8,7 @@ import {
 import { Link } from "@tanstack/react-router";
 import { TrackArtwork } from "@/components/track-artwork";
 import { Badge } from "@/components/ui/badge";
-import { formatDate, formatDuration } from "@/lib/format";
+import { formatDuration } from "@/lib/format";
 import { usePreviewPlayer } from "@/lib/preview-player";
 import { type Track } from "@/lib/tracks";
 
@@ -20,7 +20,16 @@ const maxTagChips = 3;
 // finding's story and TikTok post — siblings of the anchor, never nested in it.
 export function TrackRow({ track, trackNumber }: { track: Track; trackNumber: number }) {
   const storyLogId = track.videoUrl ? track.logId : undefined;
-  const trackLine = `${track.artists.join(", ")} - ${track.title}`;
+  // Artist — Title as the primary line (the em dash disambiguates titles that
+  // carry their own " - ", e.g. remixes), matching the log index and the rest
+  // of the surfaces. The record label, with the release year, reads beneath.
+  const trackLine = `${track.artists.join(", ")} — ${track.title}`;
+  const releaseYear = track.releaseDate?.slice(0, 4);
+  const labelLine = track.label
+    ? releaseYear
+      ? `${track.label} (${releaseYear})`
+      : track.label
+    : undefined;
 
   return (
     <li className="track-row">
@@ -48,31 +57,43 @@ export function TrackRow({ track, trackNumber }: { track: Track; trackNumber: nu
       )}
 
       <span className="min-w-0">
-        <a
-          aria-label={`Open ${trackLine} on Spotify`}
-          className="track-row-link"
-          href={track.spotifyUrl}
-          rel="noreferrer"
-          target="_blank"
-        >
-          <span className="track-title block text-pretty [overflow-wrap:anywhere]">
-            {track.title}
-          </span>
-        </a>
-        <span className="track-artist block text-pretty [overflow-wrap:anywhere]">
-          {track.artists.join(", ")}
-        </span>
-        {track.label ? <span className="track-label block truncate">{track.label}</span> : null}
-        <TrackChips bpm={track.bpm} musicalKey={track.key} tags={track.tags} />
-      </span>
-
-      <span className="track-meta hidden justify-self-end text-right sm:grid">
-        <time className="track-date" dateTime={track.addedAt}>
-          {formatDate(track.addedAt)}
-        </time>
-        {track.durationMs ? (
-          <span className="track-duration">{formatDuration(track.durationMs)}</span>
-        ) : null}
+        {track.logId ? (
+          // The row opens the finding's log page (we keep listeners on
+          // fluncle.com); Spotify lives on the "Listen on Spotify" button there.
+          // Stretched over the whole row via ::after; the preview toggle and the
+          // action links sit above it as siblings.
+          <Link
+            aria-label={`Open the log page for ${trackLine}`}
+            className="track-row-link"
+            params={{ logId: track.logId }}
+            to="/log/$logId"
+          >
+            <span className="track-title block text-pretty [overflow-wrap:anywhere]">
+              {trackLine}
+            </span>
+          </Link>
+        ) : (
+          // No coordinate yet (the ISRC straggler): no log page, so the row
+          // still falls back to Spotify.
+          <a
+            aria-label={`Listen to ${trackLine} on Spotify`}
+            className="track-row-link"
+            href={track.spotifyUrl}
+            rel="noreferrer"
+            target="_blank"
+          >
+            <span className="track-title block text-pretty [overflow-wrap:anywhere]">
+              {trackLine}
+            </span>
+          </a>
+        )}
+        {labelLine ? <span className="track-label block truncate">{labelLine}</span> : null}
+        <TrackChips
+          bpm={track.bpm}
+          durationMs={track.durationMs}
+          musicalKey={track.key}
+          tags={track.tags}
+        />
       </span>
 
       <span className="track-actions">
@@ -92,7 +113,7 @@ export function TrackRow({ track, trackNumber }: { track: Track; trackNumber: nu
         ) : null}
         {track.tiktokUrl ? (
           <a
-            aria-label={`Open ${trackLine} on TikTok`}
+            aria-label={`Watch ${trackLine} on TikTok`}
             className="track-action"
             href={track.tiktokUrl}
             rel="noreferrer"
@@ -134,21 +155,28 @@ function PreviewToggle({ track, trackLine }: { track: Track; trackLine: string }
 // enrichment has produced something to show.
 function TrackChips({
   bpm,
+  durationMs,
   musicalKey,
   tags,
 }: {
   bpm?: number;
+  durationMs?: number;
   musicalKey?: string;
   tags?: string[];
 }) {
   const tagChips = tags?.slice(0, maxTagChips) ?? [];
 
-  if (!bpm && !musicalKey && tagChips.length === 0) {
+  if (!durationMs && !bpm && !musicalKey && tagChips.length === 0) {
     return null;
   }
 
   return (
     <span className="mt-1.5 flex flex-wrap items-center gap-1">
+      {durationMs ? (
+        <Badge className="track-chip track-chip-numeric" variant="outline">
+          {formatDuration(durationMs)}
+        </Badge>
+      ) : null}
       {bpm ? (
         <Badge className="track-chip track-chip-numeric" variant="outline">
           {Math.round(bpm)} BPM

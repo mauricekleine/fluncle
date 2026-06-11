@@ -221,10 +221,6 @@ body::before {
   padding: 0.85rem 1rem;
 }
 
-.playlist-header span:nth-child(4) {
-  justify-self: end;
-}
-
 .track-row {
   align-items: center;
   background: transparent;
@@ -371,7 +367,7 @@ body::before {
 }
 
 .track-log-id {
-  align-self: start;
+  align-self: center;
   color: var(--muted-foreground);
   font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
   font-size: 0.92rem;
@@ -417,40 +413,12 @@ body::before {
   line-height: 1.18;
 }
 
-.track-artist {
-  color: var(--muted-foreground);
-  font-size: 0.9rem;
-  line-height: 1.25;
-  margin-top: 0.34rem;
-}
-
 .track-label {
   color: var(--muted-foreground);
   font-size: 0.78rem;
   line-height: 1.25;
   margin-top: 0.3rem;
   opacity: 0.78;
-}
-
-.track-meta {
-  align-self: center;
-  gap: 0.34rem;
-}
-
-.track-date {
-  color: var(--muted-foreground);
-  font-size: 0.82rem;
-  font-variant-numeric: tabular-nums;
-  font-weight: 700;
-  line-height: 1;
-}
-
-.track-duration {
-  color: var(--muted-foreground);
-  font-size: 0.76rem;
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-  opacity: 0.72;
 }
 
 .cli-command {
@@ -496,16 +464,6 @@ body::before {
 .cli-link:focus-visible {
   box-shadow: 0 0 0 2px color-mix(in oklch, var(--ring) 50%, transparent);
   outline: none;
-}
-
-@media (min-width: 640px) {
-  .playlist-header {
-    grid-template-columns: 4.75rem 3.25rem minmax(0, 1fr) 6.75rem auto;
-  }
-
-  .track-row {
-    grid-template-columns: 4.75rem 3.25rem minmax(0, 1fr) 6.75rem auto;
-  }
 }
 
 /* ————— Stories ————— */
@@ -651,7 +609,10 @@ body::before {
   font-variant-numeric: tabular-nums;
 }
 
-.story-spotify {
+.story-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
   margin-top: 0.35rem;
 }
 
@@ -836,8 +797,17 @@ body::before {
 .log-fields {
   display: grid;
   gap: 0.8rem 1rem;
-  grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
+  /* Two columns on mobile, a steady three across at the plate's width — the
+     logbook fields read as a tidy grid (3×2 for most findings), not a ragged
+     auto-fill that lands four-then-two. */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   margin: 0;
+}
+
+@media (min-width: 640px) {
+  .log-fields {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 .log-field dt {
@@ -912,7 +882,24 @@ body::before {
   color: var(--starlight-cream);
   display: flex;
   gap: 0.5rem;
+  /* Capped at half the row (less the gap) so a long Artist — Title can never
+     push the caret past the plate edge; the title clips inside this bound. */
+  max-width: calc(50% - 0.5rem);
+  min-width: 0;
   text-decoration: none;
+}
+
+/* The caret keeps its size; only the title clips. */
+.log-neighbor > svg {
+  flex-shrink: 0;
+}
+
+/* The label + title wrapper: clip so a long Artist — Title truncates instead
+   of wrapping the prev/next nav onto two lines. */
+.log-neighbor > span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .log-neighbor-label {
@@ -926,7 +913,10 @@ body::before {
   display: block;
   font-size: 0.9rem;
   font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
   transition: color 150ms ease-out;
+  white-space: nowrap;
 }
 
 .log-neighbor:hover .log-neighbor-line,
@@ -1004,8 +994,12 @@ body::before {
 .log-index-line {
   color: var(--starlight-cream);
   font-weight: 700;
-  overflow-wrap: anywhere;
+  /* One clean line per finding: a long Artist — Title truncates with an
+     ellipsis instead of wrapping and breaking the row rhythm. */
+  overflow: hidden;
   text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .log-index-line:hover,

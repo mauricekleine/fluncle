@@ -1,4 +1,4 @@
-import { SpotifyLogoIcon } from "@phosphor-icons/react";
+import { SpotifyLogoIcon, TiktokLogoIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { formatDate } from "@/lib/format";
@@ -85,17 +85,30 @@ export function StoryView({
             {formatDate(track.addedAt)}
           </time>
         </p>
-        <Button
-          className="story-spotify"
-          nativeButton={false}
-          render={<a href={track.spotifyUrl} rel="noreferrer" target="_blank" />}
-          size="sm"
-          tabIndex={active ? 0 : -1}
-          variant="outline"
-        >
-          <SpotifyLogoIcon aria-hidden="true" weight="fill" />
-          Open on Spotify
-        </Button>
+        <div className="story-actions">
+          <Button
+            nativeButton={false}
+            render={<a href={track.spotifyUrl} rel="noreferrer" target="_blank" />}
+            size="sm"
+            tabIndex={active ? 0 : -1}
+            variant="outline"
+          >
+            <SpotifyLogoIcon aria-hidden="true" weight="fill" />
+            Listen on Spotify
+          </Button>
+          {track.tiktokUrl ? (
+            <Button
+              nativeButton={false}
+              render={<a href={track.tiktokUrl} rel="noreferrer" target="_blank" />}
+              size="sm"
+              tabIndex={active ? 0 : -1}
+              variant="outline"
+            >
+              <TiktokLogoIcon aria-hidden="true" weight="fill" />
+              Watch on TikTok
+            </Button>
+          ) : undefined}
+        </div>
       </div>
     </div>
   );
