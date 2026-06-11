@@ -1,6 +1,6 @@
 # Web-overhaul "before" baseline — captured 2026-06-11
 
-The before/after reference for the web-overhaul RFC (docs/web-overhaul-rfc.md §9). Re-run the same probes after each unit deploys.
+The before/after reference for the web overhaul (now shipped; remaining off-site corroboration + indexing/AI-citation monitoring live in docs/ROADMAP.md → "Log IDs in search + AI answers"). Re-run the same probes to track the post-ship outcomes.
 
 ## Canonicals (live, curl)
 
