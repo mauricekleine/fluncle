@@ -228,11 +228,14 @@ function HomePage() {
 
   return (
     <TooltipProvider>
-      <main className="min-h-screen overflow-x-hidden px-4 text-foreground sm:px-6 lg:flex lg:flex-col lg:justify-center lg:px-8">
+      <main className="min-h-screen overflow-x-hidden px-4 text-foreground sm:px-6 lg:flex lg:flex-col lg:px-8">
         {/* A0: the page as ONE recovered logbook plate — a real masthead, the
             cover and the list mounted flat on a single document (the silhouette
-            change; web-overhaul RFC §6). */}
-        <article className="home-plate mx-auto my-6 w-full max-w-7xl sm:my-8 lg:my-10 lg:grid-rows-[auto_1fr] lg:h-[calc(100dvh-7rem)] lg:overflow-hidden">
+            change; DESIGN.md). The plate sizes to its taller column: the feed
+            self-bounds to a viewport and scrolls within, the left column is its
+            natural height (no scroll). my-auto centres the plate when it fits
+            and lets the page scroll when the left column makes it taller. */}
+        <article className="home-plate mx-auto my-6 w-full max-w-7xl sm:my-8 lg:my-auto">
           <header className="home-masthead">
             <div>
               <h1 className="home-nameplate">Fluncle's Findings</h1>
@@ -246,193 +249,182 @@ function HomePage() {
             </div>
           </header>
           <section className="grid gap-y-8 lg:min-h-0 lg:grid-cols-[minmax(240px,320px)_minmax(0,1fr)] lg:gap-x-10">
-            <aside className="mx-auto w-full max-w-80 lg:mx-0 lg:max-w-none lg:min-h-0">
-              {/* Same styled scrollbar as the feed: on desktop the column fills
-                  the plate and scrolls internally (the viewport is the flex
-                  column, so the bottom-align spacer still works); on mobile it
-                  flows naturally and the page scrolls. */}
-              <ScrollArea className="lg:h-full" viewportClassName="lg:flex lg:flex-col">
-                <div className="cover-frame border p-1 rounded-lg">
-                  {/* WebP for the page; the PNG stays canonical for og:image and JSON-LD. */}
-                  <picture>
-                    <source srcSet="/fluncle-cover.webp" type="image/webp" />
-                    <img
-                      alt="Fluncle cover art"
-                      className="aspect-square w-full rounded-lg object-cover"
-                      height="512"
-                      src="/fluncle-cover.png"
-                      width="512"
-                    />
-                  </picture>
-                </div>
-                {/* The hero CTA: fly into the Galaxy game. The one gold primary on
-                  the plate (One Sun), so Playlist/Telegram drop to outline. The
-                  icon is the game's own ship sprite, kept crisp (pixelated). */}
-                <Button
-                  className="mt-5 w-full"
-                  nativeButton={false}
-                  render={<a href={galaxyUrl} />}
-                  size="lg"
-                >
+            <aside className="mx-auto flex w-full max-w-80 flex-col lg:mx-0 lg:max-w-none">
+              <div className="cover-frame border p-1 rounded-lg">
+                {/* WebP for the page; the PNG stays canonical for og:image and JSON-LD. */}
+                <picture>
+                  <source srcSet="/fluncle-cover.webp" type="image/webp" />
                   <img
-                    alt=""
-                    aria-hidden="true"
-                    className="size-5 rotate-45 [image-rendering:pixelated]"
-                    src="/galaxy/ship.png"
+                    alt="Fluncle cover art"
+                    className="aspect-square w-full rounded-lg object-cover"
+                    height="512"
+                    src="/fluncle-cover.png"
+                    width="512"
                   />
-                  Enter Fluncle's Galaxy
+                </picture>
+              </div>
+              {/* The hero CTA: fly into the Galaxy game. The one gold primary on
+                  the plate (One Sun), so Playlist/Telegram drop to outline. The
+                  icon is the game's own Earth sprite, kept crisp (pixelated) —
+                  it reads on the gold where the yellow-ish ship didn't. */}
+              <Button
+                className="mt-5 w-full"
+                nativeButton={false}
+                render={<a href={galaxyUrl} />}
+                size="lg"
+              >
+                <img
+                  alt=""
+                  aria-hidden="true"
+                  className="size-5 [image-rendering:pixelated]"
+                  src="/galaxy/earth.png"
+                />
+                Enter Fluncle's Galaxy
+              </Button>
+              <div className="mt-3 flex items-center justify-center gap-2 lg:justify-start">
+                <Button
+                  className="flex-1"
+                  nativeButton={false}
+                  render={<a href={spotifyPlaylistUrl} rel="noreferrer" target="_blank" />}
+                  size="lg"
+                  variant="outline"
+                >
+                  <SpotifyLogoIcon aria-hidden="true" weight="fill" />
+                  Playlist
                 </Button>
-                <div className="mt-3 flex items-center justify-center gap-2 lg:justify-start">
-                  <Button
-                    className="flex-1"
-                    nativeButton={false}
-                    render={<a href={spotifyPlaylistUrl} rel="noreferrer" target="_blank" />}
-                    size="lg"
-                    variant="outline"
-                  >
-                    <SpotifyLogoIcon aria-hidden="true" weight="fill" />
-                    Playlist
-                  </Button>
-                  <Button
-                    className="flex-1"
-                    nativeButton={false}
-                    render={<a href={telegramUrl} rel="noreferrer" target="_blank" />}
-                    size="lg"
-                    variant="outline"
-                  >
-                    <TelegramLogoIcon aria-hidden="true" weight="fill" />
-                    Telegram
-                  </Button>
-                </div>
-                {/* Follow + explore across the Galaxy: one quiet icon cluster
+                <Button
+                  className="flex-1"
+                  nativeButton={false}
+                  render={<a href={telegramUrl} rel="noreferrer" target="_blank" />}
+                  size="lg"
+                  variant="outline"
+                >
+                  <TelegramLogoIcon aria-hidden="true" weight="fill" />
+                  Telegram
+                </Button>
+              </div>
+              {/* Follow + explore across the Galaxy: one quiet icon cluster
                   (the IA regroup — destinations above, contribute below). Spans
                   the column edge-to-edge so it aligns with the buttons; /about
                   and /the-log are crawlable homepage links too. */}
-                <div className="mt-3 flex items-center justify-between gap-1.5">
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
+              <div className="mt-3 flex items-center justify-between gap-1.5">
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        aria-label="Fluncle on TikTok"
+                        nativeButton={false}
+                        render={<a href={tiktokUrl} rel="noreferrer" target="_blank" />}
+                        size="icon-lg"
+                        variant="outline"
+                      />
+                    }
+                  >
+                    <TiktokLogoIcon aria-hidden="true" weight="fill" />
+                  </TooltipTrigger>
+                  <TooltipContent>Fluncle on TikTok</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        aria-label="DM me on X"
+                        nativeButton={false}
+                        render={
+                          <a href="https://x.com/mauricekleine" rel="noreferrer" target="_blank" />
+                        }
+                        size="icon-lg"
+                        variant="outline"
+                      />
+                    }
+                  >
+                    <XLogoIcon aria-hidden="true" weight="bold" />
+                  </TooltipTrigger>
+                  <TooltipContent>DM me on X</TooltipContent>
+                </Tooltip>
+                <SubscribeDialog compact />
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      newestStoryLogId ? (
                         <Button
-                          aria-label="Fluncle on TikTok"
-                          nativeButton={false}
-                          render={<a href={tiktokUrl} rel="noreferrer" target="_blank" />}
-                          size="icon-lg"
-                          variant="outline"
-                        />
-                      }
-                    >
-                      <TiktokLogoIcon aria-hidden="true" weight="fill" />
-                    </TooltipTrigger>
-                    <TooltipContent>Fluncle on TikTok</TooltipContent>
-                  </Tooltip>
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <Button
-                          aria-label="DM me on X"
+                          aria-label="All stories"
                           nativeButton={false}
                           render={
-                            <a
-                              href="https://x.com/mauricekleine"
-                              rel="noreferrer"
-                              target="_blank"
+                            <Link
+                              mask={{
+                                params: { logId: newestStoryLogId },
+                                to: "/log/$logId",
+                                unmaskOnReload: true,
+                              }}
+                              search={{ story: newestStoryLogId }}
+                              to="/"
                             />
                           }
                           size="icon-lg"
                           variant="outline"
                         />
-                      }
-                    >
-                      <XLogoIcon aria-hidden="true" weight="bold" />
-                    </TooltipTrigger>
-                    <TooltipContent>DM me on X</TooltipContent>
-                  </Tooltip>
-                  <SubscribeDialog compact />
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        newestStoryLogId ? (
-                          <Button
-                            aria-label="All stories"
-                            nativeButton={false}
-                            render={
-                              <Link
-                                mask={{
-                                  params: { logId: newestStoryLogId },
-                                  to: "/log/$logId",
-                                  unmaskOnReload: true,
-                                }}
-                                search={{ story: newestStoryLogId }}
-                                to="/"
-                              />
-                            }
-                            size="icon-lg"
-                            variant="outline"
-                          />
-                        ) : (
-                          <Button
-                            aria-label="All stories"
-                            nativeButton={false}
-                            render={<Link to="/log" />}
-                            size="icon-lg"
-                            variant="outline"
-                          />
-                        )
-                      }
-                    >
-                      <FilmStripIcon aria-hidden="true" weight="bold" />
-                    </TooltipTrigger>
-                    <TooltipContent>All stories</TooltipContent>
-                  </Tooltip>
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
+                      ) : (
                         <Button
-                          aria-label="About Fluncle"
-                          nativeButton={false}
-                          render={<Link to="/about" />}
-                          size="icon-lg"
-                          variant="outline"
-                        />
-                      }
-                    >
-                      <InfoIcon aria-hidden="true" weight="bold" />
-                    </TooltipTrigger>
-                    <TooltipContent>About Fluncle</TooltipContent>
-                  </Tooltip>
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <Button
-                          aria-label="The full log"
+                          aria-label="All stories"
                           nativeButton={false}
                           render={<Link to="/log" />}
                           size="icon-lg"
                           variant="outline"
                         />
-                      }
-                    >
-                      <BookOpenIcon aria-hidden="true" weight="bold" />
-                    </TooltipTrigger>
-                    <TooltipContent>The full log</TooltipContent>
-                  </Tooltip>
-                </div>
-                {/* A growing spacer bottom-aligns the contribute block with the
-                  feed when there's room, but collapses to zero (keeping the
-                  mt-3 gap) when the column is tight — so nothing crams. */}
-                <div aria-hidden="true" className="hidden lg:block lg:grow" />
-                {/* Contribute: lower edge lines up with the feed's on desktop. */}
-                <div className="mt-3 grid gap-2">
-                  <SubmitTrackDialog />
-                  <div className="plate-field mt-1 grid gap-1 rounded-lg border border-border px-3.5 py-3">
-                    <p className="text-xs font-extrabold text-muted-foreground">For the nerds:</p>
-                    <div className="grid justify-items-start">
-                      <CliInstallDialog />
-                      <TerminalRaversDialog />
-                    </div>
+                      )
+                    }
+                  >
+                    <FilmStripIcon aria-hidden="true" weight="bold" />
+                  </TooltipTrigger>
+                  <TooltipContent>All stories</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        aria-label="About Fluncle"
+                        nativeButton={false}
+                        render={<Link to="/about" />}
+                        size="icon-lg"
+                        variant="outline"
+                      />
+                    }
+                  >
+                    <InfoIcon aria-hidden="true" weight="bold" />
+                  </TooltipTrigger>
+                  <TooltipContent>About Fluncle</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        aria-label="The full log"
+                        nativeButton={false}
+                        render={<Link to="/log" />}
+                        size="icon-lg"
+                        variant="outline"
+                      />
+                    }
+                  >
+                    <BookOpenIcon aria-hidden="true" weight="bold" />
+                  </TooltipTrigger>
+                  <TooltipContent>The full log</TooltipContent>
+                </Tooltip>
+              </div>
+              {/* Contribute: directly under the icon cluster. The column is
+                    its natural height (no scroll, no bottom-align); the plate's
+                    min-height lets it grow rather than clip on short viewports. */}
+              <div className="mt-3 grid gap-2">
+                <SubmitTrackDialog />
+                <div className="plate-field mt-1 grid gap-1 rounded-lg border border-border px-3.5 py-3">
+                  <p className="text-xs font-extrabold text-muted-foreground">For the nerds:</p>
+                  <div className="grid justify-items-start">
+                    <CliInstallDialog />
+                    <TerminalRaversDialog />
                   </div>
                 </div>
-              </ScrollArea>
+              </div>
             </aside>
 
             <section aria-labelledby="playlist-title" className="flex min-w-0 flex-col lg:min-h-0">
@@ -454,7 +446,10 @@ function HomePage() {
                 ) : undefined}
 
                 {tracks.length > 0 ? (
-                  <ScrollArea className="h-[min(32rem,60dvh)] lg:h-auto lg:min-h-0 lg:flex-1">
+                  // The feed self-bounds to ~a viewport and scrolls internally, so it never
+                  // grows the plate; the plate sizes to the taller column, and the left column
+                  // is simply its natural height (no scroll), growing the plate when it needs to.
+                  <ScrollArea className="h-[min(32rem,60dvh)] lg:h-[calc(100dvh-16rem)]">
                     <ol className="grid m-0 list-none p-0 [&>li:last-child.track-row]:border-b-0">
                       {tracks.map((track, index) => (
                         <TrackRow
