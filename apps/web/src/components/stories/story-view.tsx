@@ -5,17 +5,25 @@ import { formatDate } from "@/lib/format";
 import { trackMedia } from "@/lib/media";
 import { type Track } from "@/lib/tracks";
 
-// One story: the muted-loop footage with the bundle poster, a bottom scrim
-// for legible meta (The Legible Sky Rule), and the finding's frame — Log ID,
-// title, artist, Found date, the Spotify action. Sound is not here: the player
-// owns the single preview audio graph.
+// One story: the footage (clip + poster) with a bottom scrim for legible meta
+// (The Legible Sky Rule), and the finding's frame — Log ID, title, artist,
+// Found date, the actions. The CLIP carries the sound: the active story hands
+// its <video> up to the player, which reads the clip's clock and advances when
+// it ends — so the audio is the clip's own, never a preview overlaid out of
+// sync with a shorter clip.
 export function StoryView({
   active,
+  muted,
+  onActiveVideo,
   playing,
   track,
 }: {
   /** This story is the current one (drives teardown of off-screen videos). */
   active: boolean;
+  /** Sound is off (not yet unlocked, or muted): the clip plays silent. */
+  muted: boolean;
+  /** Hand the active story's <video> to the player (its clock + its audio). */
+  onActiveVideo?: (video: HTMLVideoElement | null) => void;
   /** The footage should be running (active, not held, motion allowed). */
   playing: boolean;
   track: Track;
@@ -28,6 +36,14 @@ export function StoryView({
   const posterUrl = (!posterFailed ? media?.posterUrl : undefined) ?? track.albumImageUrl;
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
+  // The active story hands its <video> up to the player, which reads its
+  // currentTime/duration as the story clock and advances when it ends.
+  useEffect(() => {
+    if (active) {
+      onActiveVideo?.(videoRef.current);
+    }
+  }, [active, onActiveVideo, videoUrl]);
+
   useEffect(() => {
     const video = videoRef.current;
 
@@ -37,8 +53,8 @@ export function StoryView({
 
     if (playing) {
       video.play().catch(() => {
-        // Autoplay of a muted loop is allowed everywhere modern; if it still
-        // fails we quietly degrade to the poster frame.
+        // Muted autoplay is allowed; unmuting later rides the unlock gesture.
+        // A hard failure degrades to the poster frame.
       });
     } else {
       video.pause();
@@ -55,8 +71,7 @@ export function StoryView({
         <video
           aria-hidden="true"
           className="story-footage"
-          loop
-          muted
+          muted={!active || muted}
           playsInline
           poster={posterUrl}
           preload="auto"

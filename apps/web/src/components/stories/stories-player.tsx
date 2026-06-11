@@ -8,23 +8,24 @@ import {
   useState,
 } from "react";
 import { StoryView } from "@/components/stories/story-view";
-import { useStoryAudio } from "@/components/stories/use-story-audio";
 import { Button } from "@/components/ui/button";
 import { type Track } from "@/lib/tracks";
 
-// Without a preview the story runs on a timer instead of the 30s audio clock.
-const fallbackDurationMs = 15_000;
+// A story with no playable clip runs on this timer instead of the clip's clock.
+const fallbackDurationMs = 8_000;
 const swipeThresholdPx = 60;
 const tapMaxMs = 300;
 const tapMaxDriftPx = 10;
 
 // The vertical-swipe Stories player — the CINEMATIC register of a log entry
-// (the readable one is the /log/<id> plate). One story at a time: full-bleed
-// on mobile, a 9:16 pane centered with breathing room at desktop widths;
-// flicked through with a vertical swipe, arrow keys, or space; sound is the
-// official preview, fading in once the first gesture unlocks it. In "dialog"
-// presentation the Stories dialog owns the fixed frame and `onClose` returns
-// to the feed via history.back() so the feed keeps its scroll.
+// (the readable one is the /log/<id> plate). One story at a time: full-bleed on
+// mobile, a 9:16 pane centered with breathing room at desktop widths; flicked
+// through with a vertical swipe, arrow keys, or space. The CLIP carries both the
+// sound and the timing: the player reads the active <video>'s clock and advances
+// when it ends — no separate preview audio overlaid on a clip that may be
+// shorter. Sound is muted until the first gesture unlocks it (autoplay rules).
+// In "dialog" presentation the Stories dialog owns the fixed frame and `onClose`
+// returns to the feed via history.back() so the feed keeps its scroll.
 export function StoriesPlayer({
   initialLogId,
   onClose,
@@ -46,8 +47,6 @@ export function StoriesPlayer({
   tracks: Track[];
 }) {
   const navigate = useNavigate();
-  const { getClock, muted, pause, play, resume, stop, toggleMuted, unlock, unlocked } =
-    useStoryAudio();
 
   const initialIndex = initialLogId
     ? Math.max(
@@ -61,14 +60,24 @@ export function StoriesPlayer({
   const [held, setHeld] = useState(false);
   const [pausedByUser, setPausedByUser] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
+  // Sound is off until the first gesture unlocks it (autoplay-with-sound is
+  // blocked); after that the toggle controls it.
+  const [unlocked, setUnlocked] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const soundOff = !unlocked || muted;
 
   const indexRef = useRef(index);
   indexRef.current = index;
   const reducedMotionRef = useRef(false);
   const fillRef = useRef<HTMLSpanElement | null>(null);
-  // The timer clock: accumulated ms plus the running stretch since last resume.
+  // The active story's <video> — the clip clock; null for a cover-only story.
+  const activeVideoRef = useRef<HTMLVideoElement | null>(null);
+  // The fallback timer clock (clip-less stories): accumulated ms plus the
+  // running stretch since last resume.
   const timerAccumulatedRef = useRef(0);
   const timerStartedAtRef = useRef<number | undefined>(undefined);
+  // Guards a double close when the last story's end fires across frames.
+  const endedRef = useRef(false);
   const gestureRef = useRef<
     { interactive: boolean; startedLocked: boolean; t0: number; y0: number } | undefined
   >(undefined);
@@ -76,11 +85,17 @@ export function StoriesPlayer({
   const isPaused = held || pausedByUser;
   const isPausedRef = useRef(isPaused);
   isPausedRef.current = isPaused;
-  // Under reduced motion nothing moves uninvited: footage waits for the first
+  // Under reduced motion nothing moves uninvited: the clip waits for the first
   // gesture (which also unlocks sound) and stories never auto-advance.
   const playbackAllowed = !isPaused && (!reducedMotion || unlocked);
 
   const track = tracks[index];
+
+  const unlock = useCallback(() => setUnlocked(true), []);
+  // The active story hands its <video> here so the progress loop can clock it.
+  const onActiveVideo = useCallback((video: HTMLVideoElement | null) => {
+    activeVideoRef.current = video;
+  }, []);
 
   useEffect(() => {
     const query = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -110,52 +125,54 @@ export function StoriesPlayer({
     [tracks.length],
   );
 
-  // Per-story setup: reset the clock and hand the audio engine the new story.
-  // Re-runs when sound unlocks so the current story starts singing mid-view.
+  const close = useCallback(() => {
+    if (onClose) {
+      onClose();
+    } else {
+      void navigate({ to: "/" });
+    }
+  }, [navigate, onClose]);
+
+  // Per-story setup: reset the fallback timer and the progress fill. The active
+  // <video> resets/plays from StoryView and re-points activeVideoRef there.
   useEffect(() => {
     if (!track) {
       return;
     }
 
+    endedRef.current = false;
     timerAccumulatedRef.current = 0;
     timerStartedAtRef.current = isPausedRef.current ? undefined : performance.now();
     fillRef.current?.style.setProperty("transform", "scaleX(0)");
+  }, [index, track]);
 
-    play(track.trackId, () => {
-      if (!reducedMotionRef.current) {
-        goTo(indexRef.current + 1);
-      }
-    });
-  }, [index, track, unlocked, play, goTo]);
-
-  // Hold / space pause: freeze the audio and the timer clock together.
+  // Hold / space pause freezes the clip-less timer clock; the clip itself
+  // pauses through the `playing` prop.
   useEffect(() => {
     if (isPaused) {
-      pause();
-
       if (timerStartedAtRef.current !== undefined) {
         timerAccumulatedRef.current += performance.now() - timerStartedAtRef.current;
         timerStartedAtRef.current = undefined;
       }
-    } else {
-      resume();
-
-      if (timerStartedAtRef.current === undefined) {
-        timerStartedAtRef.current = performance.now();
-      }
+    } else if (timerStartedAtRef.current === undefined) {
+      timerStartedAtRef.current = performance.now();
     }
-  }, [pause, resume, isPaused]);
+  }, [isPaused]);
 
-  // The progress loop writes straight to the segment fill (no re-renders).
+  // The progress loop writes straight to the segment fill (no re-renders) and,
+  // when the clip (or timer) runs out, advances — or, on the last story, leaves
+  // the player (back to the feed / home).
   useEffect(() => {
     let frame: number;
 
     const tick = () => {
-      const clock = getClock();
+      const video = activeVideoRef.current;
       let progress: number;
+      let finished: boolean;
 
-      if (clock && clock.duration > 0) {
-        progress = clock.elapsed / clock.duration;
+      if (video && Number.isFinite(video.duration) && video.duration > 0) {
+        progress = video.currentTime / video.duration;
+        finished = video.ended || progress >= 0.999;
       } else {
         const running =
           timerStartedAtRef.current === undefined
@@ -163,18 +180,19 @@ export function StoriesPlayer({
             : performance.now() - timerStartedAtRef.current;
 
         progress = (timerAccumulatedRef.current + running) / fallbackDurationMs;
+        finished = progress >= 1;
       }
 
       progress = Math.min(1, progress);
       fillRef.current?.style.setProperty("transform", `scaleX(${progress})`);
 
-      if (
-        progress >= 1 &&
-        !reducedMotionRef.current &&
-        !isPausedRef.current &&
-        indexRef.current < tracks.length - 1
-      ) {
-        goTo(indexRef.current + 1);
+      if (finished && !reducedMotionRef.current && !isPausedRef.current) {
+        if (indexRef.current < tracks.length - 1) {
+          goTo(indexRef.current + 1);
+        } else if (!endedRef.current) {
+          endedRef.current = true;
+          close();
+        }
       }
 
       frame = requestAnimationFrame(tick);
@@ -183,15 +201,7 @@ export function StoriesPlayer({
     frame = requestAnimationFrame(tick);
 
     return () => cancelAnimationFrame(frame);
-  }, [getClock, goTo, tracks.length]);
-
-  const close = useCallback(() => {
-    if (onClose) {
-      onClose();
-    } else {
-      void navigate({ to: "/" });
-    }
-  }, [navigate, onClose]);
+  }, [close, goTo, tracks.length]);
 
   // Keep the URL on the current story so every flick is shareable.
   const onStoryChangeRef = useRef(onStoryChange);
@@ -237,9 +247,6 @@ export function StoriesPlayer({
 
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [unlock, goTo, close, ownsEscape]);
-
-  // Fade everything out when the player unmounts.
-  useEffect(() => () => stop(), [stop]);
 
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     const target = event.target as HTMLElement;
@@ -364,6 +371,8 @@ export function StoriesPlayer({
               >
                 <StoryView
                   active={storyIndex === index}
+                  muted={soundOff}
+                  onActiveVideo={onActiveVideo}
                   playing={storyIndex === index && playbackAllowed}
                   track={storyTrack}
                 />
@@ -376,26 +385,35 @@ export function StoriesPlayer({
           <div aria-hidden="true" className="stories-progress">
             {tracks.map((storyTrack, storyIndex) => (
               <span className="stories-segment" key={storyTrack.trackId}>
+                {/* Past = full, current = animated (fillRef), future = empty.
+                    Future is set explicitly (not undefined) so a segment that
+                    was once current can't keep a stale half-filled transform. */}
                 <span
                   className="stories-segment-fill"
                   ref={storyIndex === index ? fillRef : undefined}
-                  style={storyIndex < index ? { transform: "scaleX(1)" } : undefined}
+                  style={
+                    storyIndex < index
+                      ? { transform: "scaleX(1)" }
+                      : storyIndex > index
+                        ? { transform: "scaleX(0)" }
+                        : undefined
+                  }
                 />
               </span>
             ))}
           </div>
           <div className="stories-controls">
             <Button
-              aria-label={muted ? "Sound on" : "Sound off"}
-              aria-pressed={!muted}
+              aria-label={soundOff ? "Sound on" : "Sound off"}
+              aria-pressed={!soundOff}
               onClick={() => {
                 unlock();
-                toggleMuted();
+                setMuted((value) => !value);
               }}
               size="icon"
               variant="ghost"
             >
-              {muted || !unlocked ? (
+              {soundOff ? (
                 <SpeakerSimpleSlashIcon aria-hidden="true" weight="bold" />
               ) : (
                 <SpeakerSimpleHighIcon aria-hidden="true" weight="bold" />
