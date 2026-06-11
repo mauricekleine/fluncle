@@ -2,7 +2,7 @@
 
 Canonical architecture for what happens to a track from the moment Fluncle finds it. This is a **stable reference** — the durable contract the surfaces and agents build against. (Living, changeable plans live in [ROADMAP.md](./ROADMAP.md); this is not that.)
 
-The shape in one line: **adding a track is fast and synchronous; enriching it is slow and asynchronous.** A find is listenable the instant it's added; everything expensive (audio analysis, the video, sub-genre tags) arrives a little later, written back by an agent.
+The shape in one line: **adding a track is fast and synchronous; enriching it is slow and asynchronous.** A find is listenable the instant it's added; everything expensive (audio analysis, the video) arrives a little later, written back by an agent.
 
 ## Why two phases
 
@@ -27,11 +27,10 @@ The track is now real, listenable, and shows its identity (coordinate, label, du
 
 After a successful add, the Worker fires a **Spinup agent** (via the Spinup runtime API) with just the `trackId`, fire-and-forget (`ctx.waitUntil`, so it never blocks the add response). The agent has what the Worker can't: a repo checkout, the admin Fluncle CLI, `ffmpeg`, and Remotion. It does **not** hold any platform secret — R2, Postiz, and Turso all live on the Worker, and the agent reaches them only through the authenticated admin API (it carries just its admin token). Given one track ID, it:
 
-1. **Resolves + analyzes the preview audio** — BPM, musical **key** (+ confidence), and spectral features (brightness, sub-bass weight, mid-band flatness) via the DSP pipeline (`packages/video/src/pipeline/analyze-audio.ts`). The audio is the trustworthy source — see "Tags" below.
+1. **Resolves + analyzes the preview audio** — BPM, musical **key** (+ confidence), and spectral features (brightness, sub-bass weight, mid-band flatness) via the DSP pipeline (`packages/video/src/pipeline/analyze-audio.ts`). The feature vector is kept as training data for the future vibe-placement model — see "Vibe placement" below.
 2. **Stores the exact analyzed preview** through `fluncle admin track preview-archive` at an operator-only archive path in R2. This is private analysis/model-training input, not public media, not a playback source, and never a full song.
-3. **Derives a sub-genre suggestion** from those features (liquid ↔ neuro ↔ jungle/dancefloor), normalized through the dnb sub-genre allow-list (`tags.ts`).
-4. **Renders the video** (the `packages/video` kit) and uploads the bundle through the admin video endpoint (`fluncle admin track video` → `POST /api/admin/tracks/:id/video`); the **Worker** writes it to R2 and sets `video_url` to the review cut.
-5. **Writes the analysis back** through `fluncle admin track update <id>` — `bpm`, `key`, `tags` (as `auto`) — and flips `enrichment_status` to `done`.
+3. **Renders the video** (the `packages/video` kit) and uploads the bundle through the admin video endpoint (`fluncle admin track video` → `POST /api/admin/tracks/:id/video`); the **Worker** writes it to R2 and sets `video_url` to the review cut.
+4. **Writes the analysis back** through `fluncle admin track update <id>` — `bpm`, `key`, `features` — and flips `enrichment_status` to `done`.
 
 This takes a while, and that's fine: the find was already live. When it finishes, the analysis fields and the video appear across the Galaxy.
 
@@ -44,23 +43,20 @@ This same worker feeds **Phase 3 — Publish** (below): once the video is in R2,
 Phase 2 needs to write back, and the operator needs to curate — so tracks are mutable after add, through one generic, admin-only command:
 
 ```
-fluncle admin track update <track_id> --tag <t> --tag <t> --bpm <n> --key "<k>" --video-url <url> ...
+fluncle admin track update <track_id> --bpm <n> --key "<k>" --features <json> --video-url <url> ...
 ```
 
-Backed by `PATCH /api/admin/tracks/:id`. It writes an **allow-list of curation/enrichment fields only** — `tags`, `bpm`, `key`, `video_url`, `enrichment_status`, `note`. Identity fields (title, artists, Spotify ids, Log ID) are **immutable once set** — they come from Spotify and never change. The one sanctioned exception is the straggler repair: `isrc` and `logId` accept a **one-time backfill into a null slot** (`logId: "auto"` derives the coordinate the add flow would have minted from the found date + identity); a write against an already-set value is rejected. Every public content update also bumps `updated_at`. Internal preview archive writes do not bump `updated_at`, because sitemap/log lastmod should reflect visible changes only.
+Backed by `PATCH /api/admin/tracks/:id`. It writes an **allow-list of curation/enrichment fields only** — `bpm`, `key`, `features`, `video_url`, `enrichment_status`, `note`, and the vibe placement `vibe_x`/`vibe_y` (the tagging tool's write). Identity fields (title, artists, Spotify ids, Log ID) are **immutable once set** — they come from Spotify and never change. The one sanctioned exception is the straggler repair: `isrc` and `logId` accept a **one-time backfill into a null slot** (`logId: "auto"` derives the coordinate the add flow would have minted from the found date + identity); a write against an already-set value is rejected. Every public content update bumps `updated_at`; internal preview archive writes do not, because sitemap/log lastmod should reflect visible changes only.
 
 ## Preview playback vs. preview archive
 
 Public playback is live-only. `/api/preview/:idOrLogId` tries the stored Deezer `preview_url`, refreshes Deezer by ISRC if that token died, then falls back to iTunes; it never reads archived R2 previews and sends `Cache-Control: no-store` so the relay does not become an edge-cached media tier. The operator-only archive path stores exactly one official 30s preview for private analysis. New enrichments archive the exact preview used for the feature vector; backlog backfill archives a freshly resolved official preview, which is best-effort and may differ from the bytes an older enrichment analyzed. Archive metadata stays internal (`preview_archive_*`) and is not part of `/api/tracks`.
 
-## Tags & provenance
+## Vibe placement
 
-Crowd-sourced tags (Last.fm and the like) proved untrustworthy — folksonomy that conflates remixes with originals and collides on artist names — and no free API (Spotify, Discogs) reliably knows the sub-genre. So tags come from exactly two trustworthy sources, tracked by `tags_source`:
+Findings are grouped by **vibe**, not sub-genre. There's no finite, agreed drum & bass sub-genre taxonomy, and an absolute label is an argument; a _relative_ placement is answerable. The operator drops each finding on a 2D map (energy × mood) in the admin tagging tool, storing a coordinate (`vibe_x`/`vibe_y`); the quadrant is the finding's galaxy (Solar / Nebular / Lunar / Deep). This is operator-only — the enrichment agent never places a track. See [admin-tagging.md](./admin-tagging.md).
 
-- **`auto`** — the agent's audio-derived suggestion (Phase 2). Honest, from the actual signal.
-- **`manual`** — set or confirmed by an admin via `track update`. **Manual always wins and is never overwritten by the agent.**
-
-That flag is also the **training signal**: every `manual` track is a labeled example of {audio features → sub-genre}, which later feeds a small classifier (see ROADMAP). Tags stay "best-effort discovery fuel," never canonical facts; the reliable auto-signal at add time is the `label`.
+The spectral feature vector the agent stores (`features_json`) is the **training signal**: once enough findings are placed by hand, it can drive auto-placement (energy ≈ onset rate, mood ≈ brightness). Until then, placement is manual and deliberate — Fluncle's own call.
 
 ## Phase 3 — Publish (per-platform, draft-first)
 
@@ -99,12 +95,12 @@ On the `tracks` table, beyond Phase-1 identity/metadata:
 | `isrc`, `label`, `preview_url`, `popularity`, `duration_ms`                                    | Phase 1            | cheap HTTP enrichment                                                                |
 | `preview_archive_key`, `preview_archive_source`, `preview_archive_mime`, `preview_archived_at` | Phase 2 / backfill | operator-only archive path for the analyzed official preview; internal, not playback |
 | `bpm`, `key`                                                                                   | Phase 2 (agent)    | audio-derived; key carries a confidence the agent may gate on                        |
-| `tags` (`tags_json`)                                                                           | Phase 2 or admin   | dnb sub-genres only (`tags.ts` allow-list)                                           |
-| `tags_source`                                                                                  | whoever wrote tags | `auto` \| `manual`; manual wins                                                      |
+| `features_json`                                                                                | Phase 2 (agent)    | spectral vector; training data for future vibe auto-placement                        |
+| `vibe_x`, `vibe_y`                                                                             | admin (tag tool)   | energy × mood placement; the galaxy is derived from it (`admin-tagging.md`)          |
 | `video_url`                                                                                    | Phase 2 (agent)    | R2-hosted MP4; surfaced as the web preview                                           |
 | `enrichment_status`                                                                            | both               | `pending` (after add) → `done` \| `failed`                                           |
 | `updated_at`                                                                                   | every write path   | last real content change; sitemap `lastmod` reads `coalesce(updated_at, added_at)`   |
 
 ## Surfacing
 
-Surfaces show a field only when it's present, and a track whose `enrichment_status` is `pending` reads as still being analyzed (in the recovered-telemetry register, per VOICE.md — e.g. "Analysing the signal…", not a sterile spinner). Once enrichment lands, BPM, key, tags, and the video all appear. The music never waits on any of it.
+Surfaces show a field only when it's present, and a track whose `enrichment_status` is `pending` reads as still being analyzed (in the recovered-telemetry register, per VOICE.md — e.g. "Analysing the signal…", not a sterile spinner). Once enrichment lands, BPM, key, and the video all appear. The music never waits on any of it.

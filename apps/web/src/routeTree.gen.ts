@@ -25,11 +25,14 @@ import { Route as ApiStoriesRouteImport } from './routes/api/stories'
 import { Route as ApiSearchRouteImport } from './routes/api/search'
 import { Route as ApiNewsletterRouteImport } from './routes/api/newsletter'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
+import { Route as AdminTagRouteImport } from './routes/admin/tag'
+import { Route as AdminLoginRouteImport } from './routes/admin/login'
 import { Route as ApiTracksRandomRouteImport } from './routes/api/tracks/random'
 import { Route as ApiTracksIdOrLogIdRouteImport } from './routes/api/tracks.$idOrLogId'
 import { Route as ApiPreviewIdOrLogIdRouteImport } from './routes/api/preview.$idOrLogId'
 import { Route as ApiAdminTracksRouteImport } from './routes/api/admin/tracks'
 import { Route as ApiAdminSubmissionsRouteImport } from './routes/api/admin/submissions'
+import { Route as ApiAdminLogoutRouteImport } from './routes/api/admin/logout'
 import { Route as ApiAdminTracksTrackIdRouteImport } from './routes/api/admin/tracks.$trackId'
 import { Route as ApiAdminSubmissionsSubmissionIdRouteImport } from './routes/api/admin/submissions/$submissionId'
 import { Route as ApiAdminTracksTrackIdVideoRouteImport } from './routes/api/admin/tracks.$trackId.video'
@@ -38,6 +41,7 @@ import { Route as ApiAdminTracksTrackIdPreviewArchiveRouteImport } from './route
 import { Route as ApiAdminSubmissionsSubmissionIdRejectRouteImport } from './routes/api/admin/submissions/$submissionId/reject'
 import { Route as ApiAdminSubmissionsSubmissionIdApproveRouteImport } from './routes/api/admin/submissions/$submissionId/approve'
 import { Route as ApiAdminSpotifyAuthStartRouteImport } from './routes/api/admin/spotify/auth/start'
+import { Route as ApiAdminSpotifyAuthLoginRouteImport } from './routes/api/admin/spotify/auth/login'
 import { Route as ApiAdminSpotifyAuthCallbackRouteImport } from './routes/api/admin/spotify/auth/callback'
 import { Route as ApiAdminTracksTrackIdSocialPlatformRouteImport } from './routes/api/admin/tracks.$trackId.social.$platform'
 import { Route as ApiAdminTracksTrackIdSocialPlatformDraftRouteImport } from './routes/api/admin/tracks.$trackId.social.$platform.draft'
@@ -122,6 +126,16 @@ const ApiHealthRoute = ApiHealthRouteImport.update({
   path: '/api/health',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminTagRoute = AdminTagRouteImport.update({
+  id: '/admin/tag',
+  path: '/admin/tag',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminLoginRoute = AdminLoginRouteImport.update({
+  id: '/admin/login',
+  path: '/admin/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiTracksRandomRoute = ApiTracksRandomRouteImport.update({
   id: '/random',
   path: '/random',
@@ -145,6 +159,11 @@ const ApiAdminTracksRoute = ApiAdminTracksRouteImport.update({
 const ApiAdminSubmissionsRoute = ApiAdminSubmissionsRouteImport.update({
   id: '/api/admin/submissions',
   path: '/api/admin/submissions',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAdminLogoutRoute = ApiAdminLogoutRouteImport.update({
+  id: '/api/admin/logout',
+  path: '/api/admin/logout',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAdminTracksTrackIdRoute = ApiAdminTracksTrackIdRouteImport.update({
@@ -194,6 +213,12 @@ const ApiAdminSpotifyAuthStartRoute =
     path: '/api/admin/spotify/auth/start',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiAdminSpotifyAuthLoginRoute =
+  ApiAdminSpotifyAuthLoginRouteImport.update({
+    id: '/api/admin/spotify/auth/login',
+    path: '/api/admin/spotify/auth/login',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiAdminSpotifyAuthCallbackRoute =
   ApiAdminSpotifyAuthCallbackRouteImport.update({
     id: '/api/admin/spotify/auth/callback',
@@ -219,6 +244,8 @@ export interface FileRoutesByFullPath {
   '/galaxy': typeof GalaxyRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
+  '/admin/login': typeof AdminLoginRoute
+  '/admin/tag': typeof AdminTagRoute
   '/api/health': typeof ApiHealthRoute
   '/api/newsletter': typeof ApiNewsletterRoute
   '/api/search': typeof ApiSearchRoute
@@ -230,6 +257,7 @@ export interface FileRoutesByFullPath {
   '/stories/$logId': typeof StoriesLogIdRoute
   '/log/': typeof LogIndexRoute
   '/stories/': typeof StoriesIndexRoute
+  '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
   '/api/admin/tracks': typeof ApiAdminTracksRouteWithChildren
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
@@ -238,6 +266,7 @@ export interface FileRoutesByFullPath {
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
   '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRouteWithChildren
   '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
+  '/api/admin/spotify/auth/login': typeof ApiAdminSpotifyAuthLoginRoute
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
   '/api/admin/submissions/$submissionId/approve': typeof ApiAdminSubmissionsSubmissionIdApproveRoute
   '/api/admin/submissions/$submissionId/reject': typeof ApiAdminSubmissionsSubmissionIdRejectRoute
@@ -253,6 +282,8 @@ export interface FileRoutesByTo {
   '/galaxy': typeof GalaxyRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
+  '/admin/login': typeof AdminLoginRoute
+  '/admin/tag': typeof AdminTagRoute
   '/api/health': typeof ApiHealthRoute
   '/api/newsletter': typeof ApiNewsletterRoute
   '/api/search': typeof ApiSearchRoute
@@ -264,6 +295,7 @@ export interface FileRoutesByTo {
   '/stories/$logId': typeof StoriesLogIdRoute
   '/log': typeof LogIndexRoute
   '/stories': typeof StoriesIndexRoute
+  '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
   '/api/admin/tracks': typeof ApiAdminTracksRouteWithChildren
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
@@ -272,6 +304,7 @@ export interface FileRoutesByTo {
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
   '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRouteWithChildren
   '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
+  '/api/admin/spotify/auth/login': typeof ApiAdminSpotifyAuthLoginRoute
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
   '/api/admin/submissions/$submissionId/approve': typeof ApiAdminSubmissionsSubmissionIdApproveRoute
   '/api/admin/submissions/$submissionId/reject': typeof ApiAdminSubmissionsSubmissionIdRejectRoute
@@ -288,6 +321,8 @@ export interface FileRoutesById {
   '/galaxy': typeof GalaxyRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
+  '/admin/login': typeof AdminLoginRoute
+  '/admin/tag': typeof AdminTagRoute
   '/api/health': typeof ApiHealthRoute
   '/api/newsletter': typeof ApiNewsletterRoute
   '/api/search': typeof ApiSearchRoute
@@ -299,6 +334,7 @@ export interface FileRoutesById {
   '/stories/$logId': typeof StoriesLogIdRoute
   '/log/': typeof LogIndexRoute
   '/stories/': typeof StoriesIndexRoute
+  '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
   '/api/admin/tracks': typeof ApiAdminTracksRouteWithChildren
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
@@ -307,6 +343,7 @@ export interface FileRoutesById {
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
   '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRouteWithChildren
   '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
+  '/api/admin/spotify/auth/login': typeof ApiAdminSpotifyAuthLoginRoute
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
   '/api/admin/submissions/$submissionId/approve': typeof ApiAdminSubmissionsSubmissionIdApproveRoute
   '/api/admin/submissions/$submissionId/reject': typeof ApiAdminSubmissionsSubmissionIdRejectRoute
@@ -324,6 +361,8 @@ export interface FileRouteTypes {
     | '/galaxy'
     | '/rss.xml'
     | '/sitemap.xml'
+    | '/admin/login'
+    | '/admin/tag'
     | '/api/health'
     | '/api/newsletter'
     | '/api/search'
@@ -335,6 +374,7 @@ export interface FileRouteTypes {
     | '/stories/$logId'
     | '/log/'
     | '/stories/'
+    | '/api/admin/logout'
     | '/api/admin/submissions'
     | '/api/admin/tracks'
     | '/api/preview/$idOrLogId'
@@ -343,6 +383,7 @@ export interface FileRouteTypes {
     | '/api/admin/submissions/$submissionId'
     | '/api/admin/tracks/$trackId'
     | '/api/admin/spotify/auth/callback'
+    | '/api/admin/spotify/auth/login'
     | '/api/admin/spotify/auth/start'
     | '/api/admin/submissions/$submissionId/approve'
     | '/api/admin/submissions/$submissionId/reject'
@@ -358,6 +399,8 @@ export interface FileRouteTypes {
     | '/galaxy'
     | '/rss.xml'
     | '/sitemap.xml'
+    | '/admin/login'
+    | '/admin/tag'
     | '/api/health'
     | '/api/newsletter'
     | '/api/search'
@@ -369,6 +412,7 @@ export interface FileRouteTypes {
     | '/stories/$logId'
     | '/log'
     | '/stories'
+    | '/api/admin/logout'
     | '/api/admin/submissions'
     | '/api/admin/tracks'
     | '/api/preview/$idOrLogId'
@@ -377,6 +421,7 @@ export interface FileRouteTypes {
     | '/api/admin/submissions/$submissionId'
     | '/api/admin/tracks/$trackId'
     | '/api/admin/spotify/auth/callback'
+    | '/api/admin/spotify/auth/login'
     | '/api/admin/spotify/auth/start'
     | '/api/admin/submissions/$submissionId/approve'
     | '/api/admin/submissions/$submissionId/reject'
@@ -392,6 +437,8 @@ export interface FileRouteTypes {
     | '/galaxy'
     | '/rss.xml'
     | '/sitemap.xml'
+    | '/admin/login'
+    | '/admin/tag'
     | '/api/health'
     | '/api/newsletter'
     | '/api/search'
@@ -403,6 +450,7 @@ export interface FileRouteTypes {
     | '/stories/$logId'
     | '/log/'
     | '/stories/'
+    | '/api/admin/logout'
     | '/api/admin/submissions'
     | '/api/admin/tracks'
     | '/api/preview/$idOrLogId'
@@ -411,6 +459,7 @@ export interface FileRouteTypes {
     | '/api/admin/submissions/$submissionId'
     | '/api/admin/tracks/$trackId'
     | '/api/admin/spotify/auth/callback'
+    | '/api/admin/spotify/auth/login'
     | '/api/admin/spotify/auth/start'
     | '/api/admin/submissions/$submissionId/approve'
     | '/api/admin/submissions/$submissionId/reject'
@@ -427,6 +476,8 @@ export interface RootRouteChildren {
   GalaxyRoute: typeof GalaxyRoute
   RssDotxmlRoute: typeof RssDotxmlRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
+  AdminLoginRoute: typeof AdminLoginRoute
+  AdminTagRoute: typeof AdminTagRoute
   ApiHealthRoute: typeof ApiHealthRoute
   ApiNewsletterRoute: typeof ApiNewsletterRoute
   ApiSearchRoute: typeof ApiSearchRoute
@@ -438,10 +489,12 @@ export interface RootRouteChildren {
   StoriesLogIdRoute: typeof StoriesLogIdRoute
   LogIndexRoute: typeof LogIndexRoute
   StoriesIndexRoute: typeof StoriesIndexRoute
+  ApiAdminLogoutRoute: typeof ApiAdminLogoutRoute
   ApiAdminSubmissionsRoute: typeof ApiAdminSubmissionsRouteWithChildren
   ApiAdminTracksRoute: typeof ApiAdminTracksRouteWithChildren
   ApiPreviewIdOrLogIdRoute: typeof ApiPreviewIdOrLogIdRoute
   ApiAdminSpotifyAuthCallbackRoute: typeof ApiAdminSpotifyAuthCallbackRoute
+  ApiAdminSpotifyAuthLoginRoute: typeof ApiAdminSpotifyAuthLoginRoute
   ApiAdminSpotifyAuthStartRoute: typeof ApiAdminSpotifyAuthStartRoute
 }
 
@@ -559,6 +612,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiHealthRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/tag': {
+      id: '/admin/tag'
+      path: '/admin/tag'
+      fullPath: '/admin/tag'
+      preLoaderRoute: typeof AdminTagRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/login': {
+      id: '/admin/login'
+      path: '/admin/login'
+      fullPath: '/admin/login'
+      preLoaderRoute: typeof AdminLoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/tracks/random': {
       id: '/api/tracks/random'
       path: '/random'
@@ -592,6 +659,13 @@ declare module '@tanstack/react-router' {
       path: '/api/admin/submissions'
       fullPath: '/api/admin/submissions'
       preLoaderRoute: typeof ApiAdminSubmissionsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/logout': {
+      id: '/api/admin/logout'
+      path: '/api/admin/logout'
+      fullPath: '/api/admin/logout'
+      preLoaderRoute: typeof ApiAdminLogoutRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/admin/tracks/$trackId': {
@@ -648,6 +722,13 @@ declare module '@tanstack/react-router' {
       path: '/api/admin/spotify/auth/start'
       fullPath: '/api/admin/spotify/auth/start'
       preLoaderRoute: typeof ApiAdminSpotifyAuthStartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/spotify/auth/login': {
+      id: '/api/admin/spotify/auth/login'
+      path: '/api/admin/spotify/auth/login'
+      fullPath: '/api/admin/spotify/auth/login'
+      preLoaderRoute: typeof ApiAdminSpotifyAuthLoginRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/admin/spotify/auth/callback': {
@@ -785,6 +866,8 @@ const rootRouteChildren: RootRouteChildren = {
   GalaxyRoute: GalaxyRoute,
   RssDotxmlRoute: RssDotxmlRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
+  AdminLoginRoute: AdminLoginRoute,
+  AdminTagRoute: AdminTagRoute,
   ApiHealthRoute: ApiHealthRoute,
   ApiNewsletterRoute: ApiNewsletterRoute,
   ApiSearchRoute: ApiSearchRoute,
@@ -796,10 +879,12 @@ const rootRouteChildren: RootRouteChildren = {
   StoriesLogIdRoute: StoriesLogIdRoute,
   LogIndexRoute: LogIndexRoute,
   StoriesIndexRoute: StoriesIndexRoute,
+  ApiAdminLogoutRoute: ApiAdminLogoutRoute,
   ApiAdminSubmissionsRoute: ApiAdminSubmissionsRouteWithChildren,
   ApiAdminTracksRoute: ApiAdminTracksRouteWithChildren,
   ApiPreviewIdOrLogIdRoute: ApiPreviewIdOrLogIdRoute,
   ApiAdminSpotifyAuthCallbackRoute: ApiAdminSpotifyAuthCallbackRoute,
+  ApiAdminSpotifyAuthLoginRoute: ApiAdminSpotifyAuthLoginRoute,
   ApiAdminSpotifyAuthStartRoute: ApiAdminSpotifyAuthStartRoute,
 }
 export const routeTree = rootRouteImport

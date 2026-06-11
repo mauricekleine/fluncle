@@ -15,12 +15,10 @@ export type RecentTrack = {
   isrc?: string;
   popularity?: number;
   previewUrl?: string;
-  tags?: string[];
   bpm?: number;
   key?: string;
   releaseDate?: string;
   enrichmentStatus?: string;
-  tagsSource?: string;
   videoUrl?: string;
   videoVehicle?: string;
   addedToSpotify: boolean;
@@ -43,12 +41,10 @@ type TracksResponse = {
     isrc?: string;
     popularity?: number;
     previewUrl?: string;
-    tags?: string[];
     bpm?: number;
     key?: string;
     releaseDate?: string;
     enrichmentStatus?: string;
-    tagsSource?: string;
     videoUrl?: string;
     videoVehicle?: string;
     addedToSpotify?: boolean;
@@ -81,8 +77,6 @@ export async function recentCommand(limit: number): Promise<RecentTrack[]> {
       previewUrl: track.previewUrl,
       releaseDate: track.releaseDate,
       spotifyUrl: track.spotifyUrl,
-      tags: track.tags,
-      tagsSource: track.tagsSource,
       title: track.title,
       trackId: track.trackId,
       videoUrl: track.videoUrl,

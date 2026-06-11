@@ -11,7 +11,6 @@ export type TrackGetResult = {
     key?: string;
     label?: string;
     logId?: string;
-    tags?: string[];
     title: string;
     trackId: string;
   };
@@ -27,8 +26,6 @@ export type TrackUpdateOptions = {
   key?: string;
   note?: string;
   status?: string;
-  tags?: string[];
-  tagsSource?: "auto" | "manual";
   videoUrl?: string;
 };
 
@@ -153,13 +150,8 @@ export async function trackUpdateCommand(
   trackId: string,
   options: TrackUpdateOptions,
 ): Promise<TrackUpdateResult> {
-  // Provenance defaults to "manual" (the operator path); the enrichment agent
-  // passes "auto". Manual always wins server-side (auto never clobbers manual).
-  const body: Record<string, unknown> = { tagsSource: options.tagsSource ?? "manual" };
+  const body: Record<string, unknown> = {};
 
-  if (options.tags !== undefined) {
-    body.tags = options.tags;
-  }
   if (options.bpm !== undefined) {
     body.bpm = options.bpm;
   }

@@ -35,7 +35,7 @@
     "fluncle-track-enrichment": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-track-enrichment",
       "sourceType": "local",
-      "computedHash": "469020835ecf64e863c658724c355bc25a03627947f65c3009a093373df486b0"
+      "computedHash": "7ec477725a444936767a138aca253eaa9cc9557071c9245769568ca1c7ea8ea6"
     },
     "fluncle-video": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-video",

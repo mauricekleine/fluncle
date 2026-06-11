@@ -24,7 +24,6 @@ export type AddTrackResult = {
     label?: string;
     previewUrl?: string;
     popularity?: number;
-    tags?: string[];
   };
   dryRun: boolean;
   addedToSpotify: boolean;
@@ -116,7 +115,7 @@ Telegram message:
 
 ${formatTelegramMessage(track, options.note)}
 
-No database, Spotify, or Telegram changes were made. Enrichment (label, preview, tags) runs on publish.`;
+No database, Spotify, or Telegram changes were made. Enrichment (label, preview) runs on publish.`;
 
     return buildAddResult(
       track,
@@ -132,8 +131,8 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview,
 
   // Sync enrichment: HTTP-only and best-effort (label + preview from Deezer), so
   // a miss never blocks the publish. The heavy, audio-derived fields (bpm, key,
-  // tags, video) are filled later by the async enrichment agent, and tags can be
-  // set/overridden by an admin — see docs/track-lifecycle.md.
+  // video) are filled later by the async enrichment agent; the vibe placement is
+  // set by an admin in the tagging tool — see docs/track-lifecycle.md.
   const deezer = await enrichFromDeezer(track.isrc);
 
   await db.execute({
@@ -152,7 +151,6 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview,
       logId,
       track.popularity ?? null,
       deezer.previewUrl ?? null,
-      null,
       options.note ?? null,
       nowIso,
       nowIso,
@@ -174,13 +172,12 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview,
         log_id,
         popularity,
         preview_url,
-        tags_json,
         note,
         added_at,
         updated_at,
         added_to_spotify,
         posted_to_telegram
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 
   try {

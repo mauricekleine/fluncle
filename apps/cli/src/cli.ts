@@ -47,8 +47,6 @@ type TrackUpdateOptions = {
   key?: string;
   note?: string;
   status?: string;
-  tag?: string[];
-  tagSource?: string;
   videoUrl?: string;
 };
 
@@ -289,8 +287,6 @@ function addAdminCommands(program: Command): void {
     .option("--key <key>", "Musical key")
     .option("--note <text>", "Operator note")
     .option("--status <status>", "Enrichment status")
-    .option("--tag <tag>", "Repeatable tag", collect)
-    .option("--tag-source <auto|manual>", "Tag provenance")
     .option("--video-url <url>", "Rendered video URL")
     .allowExcessArguments()
     .action(async (trackId: string | undefined, options: TrackUpdateOptions) => {
@@ -654,7 +650,6 @@ async function runTrackGet(
       t.bpm ? `${t.bpm} bpm` : undefined,
       t.key ?? undefined,
       t.label ?? undefined,
-      t.tags?.length ? t.tags.join(", ") : undefined,
       t.enrichmentStatus,
     ]
       .filter(Boolean)
@@ -668,15 +663,7 @@ async function runTrackUpdate(
   trackUpdateCommand: typeof import("./commands/track").trackUpdateCommand,
 ): Promise<void> {
   if (!trackId) {
-    throw new Error("Missing track id. Usage: fluncle admin track update <track_id> [--tag ...]");
-  }
-
-  if (
-    options.tagSource !== undefined &&
-    options.tagSource !== "auto" &&
-    options.tagSource !== "manual"
-  ) {
-    throw new Error(`Invalid --tag-source: ${options.tagSource} (expected "auto" or "manual")`);
+    throw new Error("Missing track id. Usage: fluncle admin track update <track_id>");
   }
 
   const bpm = options.bpm === undefined ? undefined : Number(options.bpm);
@@ -691,8 +678,6 @@ async function runTrackUpdate(
     key: options.key,
     note: options.note,
     status: options.status,
-    tags: options.tag,
-    tagsSource: options.tagSource,
     videoUrl: options.videoUrl,
   });
 
@@ -826,10 +811,6 @@ async function runRandom(
   }
 
   console.log(track.spotifyUrl);
-}
-
-function collect(value: string, previous: string[] | undefined): string[] {
-  return [...(previous ?? []), value];
 }
 
 function rejectUnexpectedPositionals(positionals: string[]): void {
@@ -1019,8 +1000,6 @@ const stringOptions = new Set([
   "--scheduled-for",
   "--source",
   "--status",
-  "--tag",
-  "--tag-source",
   "--url",
   "--video-url",
 ]);

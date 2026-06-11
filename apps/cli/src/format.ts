@@ -41,11 +41,11 @@ export function formatDuration(durationMs: number): string {
 
 /**
  * Detail lines for a single finding: the coordinate-led header plus the
- * metadata that fits (duration, label, tags). Used by `random` and the
- * `add` result. Stays clean and parseable — `Key: value` per line.
+ * metadata that fits (duration, label). Used by `random` and the `add` result.
+ * Stays clean and parseable — `Key: value` per line.
  */
 export function trackDetailLines(
-  track: Pick<RecentTrack, "artists" | "title" | "logId" | "durationMs" | "label" | "tags">,
+  track: Pick<RecentTrack, "artists" | "title" | "logId" | "durationMs" | "label">,
 ): string[] {
   const lines = [`${coordinate(track)}  ${artistTitle(track)}`];
   const meta: string[] = [];
@@ -60,10 +60,6 @@ export function trackDetailLines(
 
   if (meta.length > 0) {
     lines.push(meta.join("  ·  "));
-  }
-
-  if (track.tags && track.tags.length > 0) {
-    lines.push(`Tags: ${track.tags.join(", ")}`);
   }
 
   return lines;

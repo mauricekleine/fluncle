@@ -24,8 +24,6 @@ export type TrackListItem = {
   previewUrl?: string;
   releaseDate?: string;
   spotifyUrl: string;
-  tags?: string[];
-  tagsSource?: string;
   /** The live TikTok post URL, if a published post exists (from social_posts). */
   tiktokUrl?: string;
   title: string;
@@ -35,6 +33,10 @@ export type TrackListItem = {
   videoUrl?: string;
   /** The video's travelling vehicle — the diversity ledger for the video agent. */
   videoVehicle?: string;
+  /** Vibe-map placement (admin tagging). Light(-1)↔Dark(+1); absent = unplaced. */
+  vibeX?: number;
+  /** Vibe-map placement. Floaty(-1)↔Driving(+1); absent = unplaced. */
+  vibeY?: number;
 };
 
 export type TrackListPage = {
@@ -60,14 +62,14 @@ type TrackRow = {
   preview_url: string | null;
   release_date: string | null;
   spotify_url: string;
-  tags_json: string | null;
-  tags_source: string | null;
   tiktok_url: string | null;
   title: string;
   track_id: string;
   updated_at: string | null;
   video_url: string | null;
   video_vehicle: string | null;
+  vibe_x: number | null;
+  vibe_y: number | null;
   added_to_spotify: number;
   posted_to_telegram: number;
 };
@@ -75,8 +77,8 @@ type TrackRow = {
 // Columns exposed to clients (features_json is internal training data, omitted).
 const TRACK_SELECT = `track_id, spotify_url, title, album, album_image_url, artists_json,
   bpm, duration_ms, enrichment_status, isrc, key, label, log_id, popularity,
-  preview_url, release_date, tags_json, tags_source, video_url, video_vehicle, note, added_at,
-  updated_at, added_to_spotify, posted_to_telegram,
+  preview_url, release_date, video_url, video_vehicle, note, added_at,
+  updated_at, vibe_x, vibe_y, added_to_spotify, posted_to_telegram,
   (select url from social_posts
      where track_id = tracks.track_id and platform = 'tiktok' and status = 'published'
        and url is not null
@@ -102,12 +104,12 @@ function toTrackListItem(row: TrackRow): TrackListItem {
     previewUrl: row.preview_url ?? undefined,
     releaseDate: row.release_date ?? undefined,
     spotifyUrl: row.spotify_url,
-    tags: parseTags(row.tags_json),
-    tagsSource: row.tags_source ?? undefined,
     tiktokUrl: row.tiktok_url ?? undefined,
     title: row.title,
     trackId: row.track_id,
     updatedAt: row.updated_at ?? undefined,
+    vibeX: row.vibe_x ?? undefined,
+    vibeY: row.vibe_y ?? undefined,
     videoUrl: row.video_url ?? undefined,
     videoVehicle: row.video_vehicle ?? undefined,
   };
@@ -178,6 +180,8 @@ export async function listTracks({
   cursor,
   hasVideo,
   limit,
+  order = "desc",
+  placement,
   since,
   until,
 }: {
@@ -185,6 +189,17 @@ export async function listTracks({
   /** Only findings with a rendered video — the Stories feed's filter. */
   hasVideo?: boolean;
   limit: number;
+  /**
+   * Found-order direction. "desc" (newest-first) is the public default; the
+   * admin tagging queue passes "asc" to work the oldest unlabelled finds first.
+   */
+  order?: "asc" | "desc";
+  /**
+   * Admin tagging cursor: "unplaced" = not yet dropped on the vibe map (needs
+   * review); "placed" = the operator has assigned a vibe coordinate. Drives the
+   * tagging queue and its toggle. Omitted for public reads.
+   */
+  placement?: "placed" | "unplaced";
   since?: string;
   until?: string;
 }): Promise<TrackListPage> {
@@ -211,10 +226,22 @@ export async function listTracks({
     filterClauses.push("video_url is not null");
   }
 
+  if (placement === "unplaced") {
+    filterClauses.push("vibe_x is null");
+  } else if (placement === "placed") {
+    filterClauses.push("vibe_x is not null");
+  }
+
+  // asc/desc are internal literals (never user strings), so they interpolate
+  // safely; the cursor comparison flips with the direction.
+  const dir = order === "asc" ? "asc" : "desc";
+  const cursorComparator =
+    dir === "asc"
+      ? "(added_at > ? or (added_at = ? and track_id > ?))"
+      : "(added_at < ? or (added_at = ? and track_id < ?))";
+
   const countWhere = filterClauses.length > 0 ? `where ${filterClauses.join(" and ")}` : "";
-  const listClauses = cursor
-    ? [...filterClauses, "(added_at < ? or (added_at = ? and track_id < ?))"]
-    : filterClauses;
+  const listClauses = cursor ? [...filterClauses, cursorComparator] : filterClauses;
   const where = listClauses.length > 0 ? `where ${listClauses.join(" and ")}` : "";
   const cursorArgs = cursor ? [cursor.addedAt, cursor.addedAt, cursor.trackId] : [];
   const args: Array<string | number> = [...filterArgs, ...cursorArgs, limit + 1];
@@ -225,7 +252,7 @@ export async function listTracks({
       sql: `select ${TRACK_SELECT}
             from tracks
             ${where}
-            order by added_at desc, track_id desc
+            order by added_at ${dir}, track_id ${dir}
             limit ?`,
     }),
     db.execute({
@@ -251,6 +278,46 @@ export async function listTracks({
     totalCount,
     tracks: visibleRows.map(toTrackListItem),
   };
+}
+
+export type VibePoint = {
+  artists: string[];
+  title: string;
+  trackId: string;
+  vibeX: number;
+  vibeY: number;
+};
+
+type VibePointRow = {
+  artists_json: string;
+  title: string;
+  track_id: string;
+  vibe_x: number;
+  vibe_y: number;
+};
+
+/**
+ * Every placed finding as a lightweight vibe-map point — the backdrop the admin
+ * tagging map draws so each new placement is judged RELATIVE to the ones before
+ * it. Whole-set fetch is fine at this scale; cluster it when the map gets busy
+ * (docs/admin-tagging.md).
+ */
+export async function listVibePoints(): Promise<VibePoint[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    sql: `select track_id, title, artists_json, vibe_x, vibe_y
+          from tracks
+          where vibe_x is not null and vibe_y is not null
+          order by added_at desc`,
+  });
+
+  return (result.rows as unknown as VibePointRow[]).map((row) => ({
+    artists: parseArtists(row.artists_json),
+    title: row.title,
+    trackId: row.track_id,
+    vibeX: row.vibe_x,
+    vibeY: row.vibe_y,
+  }));
 }
 
 export function decodeTrackCursor(value: string | null): TrackCursor | undefined {
@@ -287,24 +354,4 @@ function parseArtists(value: string): string[] {
   }
 
   return [];
-}
-
-function parseTags(value: string | null): string[] | undefined {
-  if (!value) {
-    return undefined;
-  }
-
-  try {
-    const tags = JSON.parse(value) as unknown;
-
-    if (Array.isArray(tags)) {
-      const strings = tags.filter((tag): tag is string => typeof tag === "string");
-
-      return strings.length > 0 ? strings : undefined;
-    }
-  } catch {
-    return undefined;
-  }
-
-  return undefined;
 }

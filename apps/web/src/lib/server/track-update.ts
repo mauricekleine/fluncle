@@ -9,7 +9,6 @@ import { isLogId } from "../log-id";
 import { getDb } from "./db";
 import { resolveLogId } from "./log-id";
 import { ApiError } from "./spotify";
-import { normalizeTags } from "./tags";
 
 export type TrackUpdate = {
   bpm?: number;
@@ -26,12 +25,13 @@ export type TrackUpdate = {
    */
   logId?: string;
   note?: string;
-  tags?: string[];
-  /** Provenance for the tags write. Defaults to "manual" (the operator path). */
-  tagsSource?: "auto" | "manual";
   videoUrl?: string;
   /** The video's travelling vehicle (diversity ledger; surfaced in /api/tracks). */
   videoVehicle?: string;
+  /** Vibe-map placement (the admin tagging tool). vibeX = Light↔Dark mood. */
+  vibeX?: number;
+  /** vibeY = Floaty↔Driving energy. Both set together when a track is placed. */
+  vibeY?: number;
 };
 
 export type TrackUpdateResult = {
@@ -43,7 +43,6 @@ type ExistingRow = {
   added_at: string;
   isrc: string | null;
   log_id: string | null;
-  tags_source: string | null;
 };
 
 export async function updateTrack(
@@ -53,7 +52,7 @@ export async function updateTrack(
   const db = await getDb();
   const existingResult = await db.execute({
     args: [trackId],
-    sql: `select tags_source, isrc, log_id, added_at from tracks where track_id = ? limit 1`,
+    sql: `select isrc, log_id, added_at from tracks where track_id = ? limit 1`,
   });
   const existing = existingResult.rows[0] as unknown as ExistingRow | undefined;
 
@@ -62,7 +61,6 @@ export async function updateTrack(
   }
 
   const provided =
-    update.tags !== undefined ||
     update.bpm !== undefined ||
     update.key !== undefined ||
     update.videoUrl !== undefined ||
@@ -71,7 +69,9 @@ export async function updateTrack(
     update.note !== undefined ||
     update.videoVehicle !== undefined ||
     update.isrc !== undefined ||
-    update.logId !== undefined;
+    update.logId !== undefined ||
+    update.vibeX !== undefined ||
+    update.vibeY !== undefined;
 
   if (!provided) {
     throw new ApiError("no_fields", "No updatable fields provided", 400);
@@ -79,19 +79,6 @@ export async function updateTrack(
 
   const sets: string[] = [];
   const args: Array<number | string | null> = [];
-
-  if (update.tags !== undefined) {
-    const source = update.tagsSource ?? "manual";
-
-    // Manual wins: an "auto" write (the agent) never clobbers admin-curated tags.
-    if (source === "auto" && existing.tags_source === "manual") {
-      // skip the tag write entirely
-    } else {
-      const cleaned = normalizeTags(update.tags);
-      sets.push("tags_json = ?", "tags_source = ?");
-      args.push(cleaned.length > 0 ? JSON.stringify(cleaned) : null, source);
-    }
-  }
 
   if (update.bpm !== undefined) {
     sets.push("bpm = ?");
@@ -128,6 +115,16 @@ export async function updateTrack(
   if (update.note !== undefined) {
     sets.push("note = ?");
     args.push(update.note);
+  }
+
+  if (update.vibeX !== undefined) {
+    sets.push("vibe_x = ?");
+    args.push(update.vibeX);
+  }
+
+  if (update.vibeY !== undefined) {
+    sets.push("vibe_y = ?");
+    args.push(update.vibeY);
   }
 
   if (update.isrc !== undefined) {
@@ -194,8 +191,8 @@ export async function updateTrack(
     args.push(logId);
   }
 
-  // sets can be empty when an "auto" tag write was declined by manual-wins —
-  // that's a valid no-op, not an error.
+  // Guard against an empty update (the provided-check above already ensures at
+  // least one field, so this is belt-and-suspenders).
   if (sets.length > 0) {
     sets.push("updated_at = ?");
     args.push(new Date().toISOString());

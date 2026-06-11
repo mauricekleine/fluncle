@@ -634,30 +634,6 @@ function estimateBpm(samples: Float32Array): {
 }
 
 // ---------------------------------------------------------------------------
-// Sub-genre suggestion (heuristic from the features). Best-guess, provenance
-// "auto" — a human review always overrides. Only the dnb sub-genre vocabulary.
-// ---------------------------------------------------------------------------
-
-function suggestTags(s: Spectral, onsetRate: number): string[] {
-  // Jungle: breakbeat-busy + bright top end.
-  if (onsetRate >= 7 && s.highRatio >= 0.25) {
-    return ["jungle"];
-  }
-
-  // Neuro: noisy/modulated mids (reese) + bright + aggressive top.
-  if (s.midFlatness >= 0.86 && s.centroidHz >= 3000) {
-    return ["neurofunk"];
-  }
-
-  // Liquid: dark, tonal mids, smooth top, fat sub.
-  if (s.centroidHz <= 2400 && s.midFlatness <= 0.82) {
-    return ["liquid funk"];
-  }
-
-  return [];
-}
-
-// ---------------------------------------------------------------------------
 // Run
 // ---------------------------------------------------------------------------
 
@@ -724,7 +700,6 @@ const bestBpm = [...analyses]
 const bestKey = [...analyses].sort((a, b) => b.key.confidence - a.key.confidence)[0];
 
 const reliableKey = bestKey.key.confidence >= KEY_CONFIDENCE_FLOOR ? bestKey.key.key : null;
-const suggestedTags = suggestTags(primary.spec, primary.tempo.onsetRate);
 let archivePreview:
   | {
       mime: string;
@@ -763,8 +738,6 @@ const output = {
     keyConfidence: a.key.confidence,
     source: a.source,
   })),
-  suggestedTags,
-  tagsSource: "auto",
   title,
 };
 

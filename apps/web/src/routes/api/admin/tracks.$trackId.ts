@@ -12,9 +12,9 @@ type PatchBody = {
   key?: unknown;
   logId?: unknown;
   note?: unknown;
-  tags?: unknown;
-  tagsSource?: unknown;
   videoUrl?: unknown;
+  vibeX?: unknown;
+  vibeY?: unknown;
 };
 
 export const Route = createFileRoute("/api/admin/tracks/$trackId")({
@@ -32,14 +32,6 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId")({
         try {
           const body = (await request.json()) as PatchBody;
           const update: TrackUpdate = {};
-
-          if (Array.isArray(body.tags)) {
-            update.tags = body.tags.filter((tag): tag is string => typeof tag === "string");
-          }
-
-          if (body.tagsSource === "auto" || body.tagsSource === "manual") {
-            update.tagsSource = body.tagsSource;
-          }
 
           if (typeof body.bpm === "number" && Number.isFinite(body.bpm)) {
             update.bpm = body.bpm;
@@ -67,6 +59,14 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId")({
 
           if (typeof body.note === "string") {
             update.note = body.note;
+          }
+
+          if (typeof body.vibeX === "number" && Number.isFinite(body.vibeX)) {
+            update.vibeX = body.vibeX;
+          }
+
+          if (typeof body.vibeY === "number" && Number.isFinite(body.vibeY)) {
+            update.vibeY = body.vibeY;
           }
 
           // Straggler repair: one-time backfill of identity fields into null

@@ -78,6 +78,13 @@
       "when": 1781183992888,
       "tag": "0010_cloudy_captain_midlands",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1781195871441,
+      "tag": "0011_easy_gambit",
+      "breakpoints": true
     }
   ]
 }
