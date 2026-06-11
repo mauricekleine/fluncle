@@ -228,7 +228,7 @@ function HomePage() {
 
   return (
     <TooltipProvider>
-      <main className="min-h-screen overflow-x-hidden px-4 text-foreground sm:px-6 lg:flex lg:flex-col lg:px-8">
+      <main className="min-h-screen overflow-x-hidden p-4 text-foreground sm:p-6 lg:flex lg:flex-col lg:p-8">
         {/* A0: the page as ONE recovered logbook plate — a real masthead, the
             cover and the list mounted flat on a single document (the silhouette
             change; DESIGN.md). The plate sizes to its taller column: the feed
@@ -452,7 +452,7 @@ function HomePage() {
                   // viewport; the plate sizes to the taller column and the left column is simply
                   // its natural height. On mobile the rows are wider than the screen, so it also
                   // scrolls horizontally (see .track-row min-width).
-                  <ScrollArea className="max-h-[min(32rem,60dvh)] lg:max-h-[calc(100dvh-16rem)]">
+                  <ScrollArea className="max-h-[min(32rem,60dvh)] lg:max-h-[max(calc(100dvh-24rem),38rem)]">
                     <ol className="grid m-0 list-none p-0 [&>li:last-child.track-row]:border-b-0">
                       {tracks.map((track, index) => (
                         <TrackRow
