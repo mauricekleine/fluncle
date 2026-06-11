@@ -11,7 +11,8 @@
     "dev": "vite dev --host 127.0.0.1 --port 3000",
     "lint": "oxlint --type-aware",
     "preview": "vite build && wrangler dev",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@base-ui/react": "^1.0.0-beta.4",
@@ -40,6 +41,7 @@
     "drizzle-kit": "catalog:",
     "typescript": "catalog:",
     "vite": "^7.2.4",
+    "vitest": "^4.1.8",
     "wrangler": "^4.50.0"
   }
 }

@@ -1,0 +1,75 @@
+import { describe, expect, it } from "vitest";
+import { definitionalSentences } from "./log-prose";
+import { breadcrumbsJsonLd, musicRecordingJsonLd } from "./log-schema";
+
+const track = {
+  addedAt: "2026-06-03T18:21:00.000Z",
+  album: "Nobody Else (1991 Remix)",
+  artists: ["Axwell", "1991"],
+  durationMs: 215_000,
+  isrc: "GBKCF1900759",
+  logId: "004.7.2I",
+  spotifyUrl: "https://open.spotify.com/track/abc",
+  tiktokUrl: "https://www.tiktok.com/@fluncle/video/1",
+  title: "Nobody Else - 1991 Remix",
+};
+
+describe("musicRecordingJsonLd (the log page schema)", () => {
+  const jsonLd = musicRecordingJsonLd(track, "https://img/cover.jpg") as Record<string, unknown>;
+
+  it("is a MusicRecording with the coordinate in BOTH identifier forms", () => {
+    expect(jsonLd["@type"]).toBe("MusicRecording");
+    expect(jsonLd.identifier).toEqual([
+      { "@type": "PropertyValue", propertyID: "fluncle-log-id", value: "004.7.2I" },
+      { "@type": "PropertyValue", propertyID: "fluncle-log-id", value: "fluncle://004.7.2I" },
+    ]);
+  });
+
+  it("mirrors the visible definitional prose verbatim", () => {
+    expect(jsonLd.description).toBe(definitionalSentences(track));
+    expect(jsonLd.description).toContain("004.7.2I is Fluncle's Log ID for");
+    expect(jsonLd.description).toContain("fluncle://004.7.2I");
+  });
+
+  it("carries the Found date as datePublished and an ISO-8601 duration", () => {
+    expect(jsonLd.datePublished).toBe("2026-06-03");
+    expect(jsonLd.duration).toBe("PT3M35S");
+  });
+
+  it("includes isrcCode, inAlbum, and the TikTok sameAs when present", () => {
+    expect(jsonLd.isrcCode).toBe("GBKCF1900759");
+    expect(jsonLd.inAlbum).toEqual({ "@type": "MusicAlbum", name: track.album });
+    expect(jsonLd.sameAs).toEqual([track.spotifyUrl, track.tiktokUrl]);
+    expect(jsonLd.url).toBe("https://www.fluncle.com/log/004.7.2I");
+  });
+
+  it("omits the optional fields when the finding lacks them (the degraded render)", () => {
+    const bare = musicRecordingJsonLd(
+      {
+        addedAt: track.addedAt,
+        artists: track.artists,
+        durationMs: track.durationMs,
+        logId: track.logId,
+        spotifyUrl: track.spotifyUrl,
+        title: track.title,
+      },
+      "https://img/cover.jpg",
+    ) as Record<string, unknown>;
+
+    expect(bare).not.toHaveProperty("isrcCode");
+    expect(bare).not.toHaveProperty("inAlbum");
+    expect(bare.sameAs).toEqual([track.spotifyUrl]);
+  });
+});
+
+describe("breadcrumbsJsonLd", () => {
+  it("walks Fluncle → The log → the coordinate", () => {
+    const jsonLd = breadcrumbsJsonLd("004.7.2I") as { itemListElement: Array<{ name: string }> };
+
+    expect(jsonLd.itemListElement.map((item) => item.name)).toEqual([
+      "Fluncle",
+      "The log",
+      "004.7.2I",
+    ]);
+  });
+});

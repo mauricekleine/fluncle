@@ -10,10 +10,10 @@ import { LogFootage } from "@/components/log/log-footage";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { siteUrl } from "@/lib/fluncle-links";
-import { formatDateLong, formatDuration, formatIsoDuration } from "@/lib/format";
-import { isLogId } from "@/lib/log-id";
+import { formatDateLong, formatDuration } from "@/lib/format";
+import { isLogPageParam } from "@/lib/log-page-param";
 import { artistTitleLine, definitionalSentences, splitLogId } from "@/lib/log-prose";
+import { breadcrumbsJsonLd, logPageUrl, musicRecordingJsonLd } from "@/lib/log-schema";
 import { trackMedia } from "@/lib/media";
 import {
   getTrackByIdOrLogId,
@@ -27,8 +27,6 @@ import {
 // Stories dialog over the home feed — same data, different presentation
 // (docs/web-overhaul-rfc.md §3). This page is what a crawler, an AI agent, or
 // a shared link sees at the coordinate.
-
-const SPOTIFY_TRACK_ID = /^[0-9A-Za-z]{22}$/;
 
 type LogPageData =
   | { status: "found"; newer?: TrackNeighbor; older?: TrackNeighbor; track: TrackListItem }
@@ -67,40 +65,12 @@ function logHead(loaderData: LogPageData | undefined) {
   const { track } = loaderData;
   const logId = track.logId as string;
   const media = trackMedia(logId);
-  const pageUrl = `${siteUrl}/log/${encodeURIComponent(logId)}`;
+  const pageUrl = logPageUrl(logId);
   const title = `${logId} · ${artistTitleLine(track)} · Fluncle`;
   const description = definitionalSentences({ ...track, logId });
   const imageUrl = track.albumImageUrl ?? media.coverUrl;
-  const recording = {
-    "@context": "https://schema.org",
-    "@type": "MusicRecording",
-    byArtist: track.artists.map((artist) => ({ "@type": "MusicGroup", name: artist })),
-    datePublished: track.addedAt.slice(0, 10),
-    description,
-    duration: formatIsoDuration(track.durationMs),
-    genre: "Drum and Bass",
-    // The Log ID in BOTH forms as identifiers (not alternateName): the bare
-    // coordinate and the fluncle:// URI are the retrieval tokens.
-    identifier: [
-      { "@type": "PropertyValue", propertyID: "fluncle-log-id", value: logId },
-      { "@type": "PropertyValue", propertyID: "fluncle-log-id", value: `fluncle://${logId}` },
-    ],
-    image: imageUrl,
-    ...(track.isrc ? { isrcCode: track.isrc } : {}),
-    ...(track.album ? { inAlbum: { "@type": "MusicAlbum", name: track.album } } : {}),
-    name: track.title,
-    sameAs: [track.spotifyUrl, ...(track.tiktokUrl ? [track.tiktokUrl] : [])],
-    url: pageUrl,
-  };
-  const breadcrumbs = {
-    "@context": "https://schema.org",
-    "@type": "BreadcrumbList",
-    itemListElement: [
-      { "@type": "ListItem", item: `${siteUrl}/`, name: "Fluncle", position: 1 },
-      { "@type": "ListItem", item: `${siteUrl}/log`, name: "The log", position: 2 },
-      { "@type": "ListItem", name: logId, position: 3 },
-    ],
-  };
+  const recording = musicRecordingJsonLd({ ...track, logId }, imageUrl);
+  const breadcrumbs = breadcrumbsJsonLd(logId);
 
   return {
     links: [{ href: pageUrl, rel: "canonical" }],
@@ -134,7 +104,7 @@ export const Route = createFileRoute("/log/$logId")({
   // Shape-guard BEFORE the loader: anything that is neither a coordinate nor a
   // Spotify track id (the legacy deep-link form) is a 404, no DB roundtrip.
   beforeLoad: ({ params }) => {
-    if (!isLogId(params.logId) && !SPOTIFY_TRACK_ID.test(params.logId)) {
+    if (!isLogPageParam(params.logId)) {
       throw notFound();
     }
   },
