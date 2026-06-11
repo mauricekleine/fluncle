@@ -692,6 +692,10 @@ body::before {
   border-radius: var(--rounded-lg);
   display: grid;
   gap: 1.9rem;
+  /* One column, pinned to the plate width: without this the implicit `auto`
+     column sizes to the definitional prose's max-content (one long line) and
+     overflows the plate. minmax(0, …) lets the content wrap/shrink instead. */
+  grid-template-columns: minmax(0, 1fr);
   padding: clamp(1.4rem, 4vw, 2.75rem);
   width: min(100%, 44rem);
 }
@@ -1095,6 +1099,9 @@ body::before {
   border-radius: var(--rounded-lg);
   display: grid;
   gap: 1.6rem;
+  /* Pin the single column to the plate width so no wide child (a long row
+     title, prose) can blow the auto column out past the plate (see .log-plate). */
+  grid-template-columns: minmax(0, 1fr);
   outline: 1px solid color-mix(in oklch, var(--border) 45%, transparent);
   outline-offset: 4px;
   padding: clamp(1.1rem, 3vw, 2.25rem);
