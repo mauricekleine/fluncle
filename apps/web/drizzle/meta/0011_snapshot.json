@@ -81,10 +81,7 @@
       "indexes": {
         "social_posts_track_platform_idx": {
           "name": "social_posts_track_platform_idx",
-          "columns": [
-            "track_id",
-            "platform"
-          ],
+          "columns": ["track_id", "platform"],
           "isUnique": true
         }
       },
@@ -250,25 +247,17 @@
       "indexes": {
         "submissions_status_created_at_idx": {
           "name": "submissions_status_created_at_idx",
-          "columns": [
-            "status",
-            "created_at"
-          ],
+          "columns": ["status", "created_at"],
           "isUnique": false
         },
         "submissions_spotify_track_id_idx": {
           "name": "submissions_spotify_track_id_idx",
-          "columns": [
-            "spotify_track_id"
-          ],
+          "columns": ["spotify_track_id"],
           "isUnique": false
         },
         "submissions_submitter_hash_created_at_idx": {
           "name": "submissions_submitter_hash_created_at_idx",
-          "columns": [
-            "submitter_hash",
-            "created_at"
-          ],
+          "columns": ["submitter_hash", "created_at"],
           "isUnique": false
         }
       },
@@ -532,9 +521,7 @@
       "indexes": {
         "tracks_log_id_unique": {
           "name": "tracks_log_id_unique",
-          "columns": [
-            "log_id"
-          ],
+          "columns": ["log_id"],
           "isUnique": true
         }
       },

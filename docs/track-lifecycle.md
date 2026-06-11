@@ -92,12 +92,12 @@ On the `tracks` table, beyond Phase-1 identity/metadata:
 | Field                                                                                          | Set by             | Notes                                                                                |
 | ---------------------------------------------------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------ |
 | `log_id`                                                                                       | Phase 1            | permanent Galaxy coordinate; the cross-surface marker                                |
-| `isrc`, `label`, `preview_url`, `popularity`, `duration_ms`                                    | Phase 1            | cheap HTTP enrichment                                                                 |
+| `isrc`, `label`, `preview_url`, `popularity`, `duration_ms`                                    | Phase 1            | cheap HTTP enrichment                                                                |
 | `preview_archive_key`, `preview_archive_source`, `preview_archive_mime`, `preview_archived_at` | Phase 2 / backfill | operator-only archive path for the analyzed official preview; internal, not playback |
 | `bpm`, `key`                                                                                   | Phase 2 (agent)    | audio-derived; key carries a confidence the agent may gate on                        |
-| `features_json`                                                                                | Phase 2 (agent)    | spectral vector; training data for future vibe auto-placement                         |
-| `vibe_x`, `vibe_y`                                                                             | admin (tag tool)   | energy × mood placement; the galaxy is derived from it (`admin-tagging.md`)           |
-| `video_url`                                                                                    | Phase 2 (agent)    | R2-hosted MP4; surfaced as the web preview                                            |
+| `features_json`                                                                                | Phase 2 (agent)    | spectral vector; training data for future vibe auto-placement                        |
+| `vibe_x`, `vibe_y`                                                                             | admin (tag tool)   | energy × mood placement; the galaxy is derived from it (`admin-tagging.md`)          |
+| `video_url`                                                                                    | Phase 2 (agent)    | R2-hosted MP4; surfaced as the web preview                                           |
 | `enrichment_status`                                                                            | both               | `pending` (after add) → `done` \| `failed`                                           |
 | `updated_at`                                                                                   | every write path   | last real content change; sitemap `lastmod` reads `coalesce(updated_at, added_at)`   |
 
