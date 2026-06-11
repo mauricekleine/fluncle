@@ -60,3 +60,5 @@ Captured from the GSC dashboard (sc-domain:fluncle.com, 2026-06-11):
 - **Rich Results Test: clean on both** `/log/004.7.2I` (Breadcrumbs valid, crawl OK, no errors) and `/about` (FAQ valid, no errors).
 - **Lighthouse (same methodology): LCP 5.3 s (was 5.6 s), FCP 2.0 s (was 2.6), SI 3.0 s (was 4.0), perf 0.78 (was 0.74)** — LCP element still the cover image. The gate (unchanged-or-better) passes.
 - Remaining off-site (docs/ROADMAP.md "AEO/GEO — off-site thread", owner Maurice): Cloudflare AI-crawler unblock, GSC + Bing sitemap submission, bios, MusicBrainz → Wikidata. GSC "Indexed" + bare-token retrieval are monitoring, not ship gates.
+
+**Correction (2026-06-11, from the Cloudflare AI Crawl Control dashboard):** the spoofed-UA 403s in the "before" section were Cloudflare's verified-bot spoof-detection (curl claiming to be GPTBot/ClaudeBot from a residential IP), NOT an AI-crawler block. Real, verified AI crawlers are allowed: ClaudeBot 24 allowed requests in 24h, 38 crawls answered HTTP 200, sitemap.xml the most-crawled path. No dashboard change was needed.
