@@ -63,17 +63,15 @@ export function createGame(container: HTMLElement): Game {
   const input = createInput(container, handleUiTap);
   const audio = createAudioManager();
 
+  // Per-run session seed: the galaxy's POSITIONS stay deterministic, but a few
+  // frontier choices (which black-hole slot is live) vary run to run off this.
+  const sessionSeed = Math.floor(Math.random() * 0xffffffff) >>> 0;
+
   // The card's Spotify link is canvas-drawn, so presses hit-test against the
   // renderer's reported rect. Opening the tab auto-pauses via visibility.
   let cardSpotifyUrl: string | undefined;
 
   function handleUiTap(clientX: number, clientY: number): boolean {
-    const rect = renderer.spotifyLinkRect();
-
-    if (!rect || !cardSpotifyUrl) {
-      return false;
-    }
-
     const bounds = renderer.canvas.getBoundingClientRect();
 
     if (bounds.width === 0 || bounds.height === 0) {
@@ -82,8 +80,20 @@ export function createGame(container: HTMLElement): Game {
 
     const ix = ((clientX - bounds.left) / bounds.width) * renderer.canvas.width;
     const iy = ((clientY - bounds.top) / bounds.height) * renderer.canvas.height;
+    const hit = (rect: { h: number; w: number; x: number; y: number } | undefined): boolean =>
+      !!rect && ix >= rect.x && ix <= rect.x + rect.w && iy >= rect.y && iy <= rect.y + rect.h;
 
-    if (ix >= rect.x && ix <= rect.x + rect.w && iy >= rect.y && iy <= rect.y + rect.h) {
+    // The top-right volume toggle: a tap flips the master mute (the M key does
+    // the same). Eats the press so it never steers or launches.
+    if (hit(renderer.volumeRect())) {
+      audio.setMuted(!audio.muted());
+
+      return true;
+    }
+
+    const rect = renderer.spotifyLinkRect();
+
+    if (rect && cardSpotifyUrl && hit(rect)) {
       window.open(cardSpotifyUrl, "_blank", "noopener");
 
       return true;
@@ -149,7 +159,10 @@ export function createGame(container: HTMLElement): Game {
       return;
     }
 
-    sim = createSim(placeStars(tracks));
+    sim = createSim(placeStars(tracks), {
+      frontier: { asteroids: true, blackHoles: true, setDressing: true },
+      seed: sessionSeed,
+    });
   }
 
   void loadCatalogue().catch(() => {
@@ -165,6 +178,9 @@ export function createGame(container: HTMLElement): Game {
         break;
       case "all-found":
         pushTelemetry("No carriers left in the sector. Home, junglist.");
+        break;
+      case "asteroid-hit":
+        pushTelemetry("Hull hit. Fuel knocked loose.");
         break;
       case "home":
         endT = 0;
@@ -184,6 +200,9 @@ export function createGame(container: HTMLElement): Game {
         towedT = TOWED_DURATION;
         card = undefined;
         break;
+      case "warped":
+        pushTelemetry("Pulled under. Flung across the galaxy.");
+        break;
       default:
         break;
     }
@@ -192,7 +211,7 @@ export function createGame(container: HTMLElement): Game {
   function logCardView(state: SimState): LogCardView | undefined {
     // Parked on any logged star, the card is pinned to it — fresh logs and
     // revisits alike, including revisits long after an old card expired.
-    if (state.orbitIndex >= 0 && state.collected[state.orbitIndex]) {
+    if (state.orbitIndex >= 0 && state.stars[state.orbitIndex]?.collected) {
       if (card?.starIndex !== state.orbitIndex) {
         card = { shownAt: nowS, starIndex: state.orbitIndex };
       }
@@ -224,6 +243,9 @@ export function createGame(container: HTMLElement): Game {
       }
 
       audio.resume();
+      // The amen break rides this same gesture unlock (autoplay-with-sound is
+      // blocked, so it can only start on the launch tap, never on load).
+      audio.playIntro();
       bootT = 0;
       phase = "boot";
 
@@ -472,7 +494,7 @@ export function createGame(container: HTMLElement): Game {
           return "Nothing left to log out here.";
         }
 
-        sim.collected[carrier.starIndex] = true;
+        sim.stars[carrier.starIndex].collected = true;
         sim.collectedCount += 1;
         sim.events.push({ kind: "logged", starIndex: carrier.starIndex });
 
@@ -522,7 +544,10 @@ export function createGame(container: HTMLElement): Game {
         }
 
         if (what === "win") {
-          sim.collected = sim.stars.map(() => true);
+          for (const star of sim.stars) {
+            star.collected = true;
+          }
+
           sim.collectedCount = sim.stars.length;
           sim.events.push({ kind: "all-found" });
           sim.phase = "flying";

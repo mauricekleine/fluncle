@@ -33,9 +33,9 @@
       "computedHash": "94b278af211e11b3b16e675457d33d9161c66a933b88f17f8791f220cd86c3fb"
     },
     "fluncle-track-enrichment": {
-      "source": "/Users/maurice/.superset/worktrees/5eed65e8-d27d-4e50-8b3e-2e2685c57120/admin-sub-genre-tagging/packages/skills/fluncle-track-enrichment",
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-track-enrichment",
       "sourceType": "local",
-      "computedHash": "9156dc4fb2749b5d01aad4e9a8e963599f949734700ad721b0ea5da160be1ddc"
+      "computedHash": "7ec477725a444936767a138aca253eaa9cc9557071c9245769568ca1c7ea8ea6"
     },
     "fluncle-video": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-video",

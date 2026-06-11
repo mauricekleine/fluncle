@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "79d6b607-6c90-45b2-959c-f2425a0911ed",
+  "id": "f109d011-9a91-4bc4-b902-024c49171990",
   "prevId": "f959d789-ce64-43c4-b280-6118eb73fc02",
   "tables": {
     "social_posts": {
@@ -398,6 +398,34 @@
           "notNull": false,
           "autoincrement": false
         },
+        "preview_archive_key": {
+          "name": "preview_archive_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "preview_archive_mime": {
+          "name": "preview_archive_mime",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "preview_archive_source": {
+          "name": "preview_archive_source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "preview_archived_at": {
+          "name": "preview_archived_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "preview_url": {
           "name": "preview_url",
           "type": "text",
@@ -478,20 +506,6 @@
         "video_url": {
           "name": "video_url",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "vibe_x": {
-          "name": "vibe_x",
-          "type": "real",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "vibe_y": {
-          "name": "vibe_y",
-          "type": "real",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

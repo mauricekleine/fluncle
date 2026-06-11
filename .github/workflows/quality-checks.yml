@@ -57,3 +57,6 @@ jobs:
 
       - name: Run Typecheck
         run: bun run typecheck
+
+      - name: Run Web Tests
+        run: bun run --cwd apps/web test

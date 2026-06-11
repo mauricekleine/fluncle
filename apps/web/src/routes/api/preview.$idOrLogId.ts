@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { enrichFromDeezer } from "../../lib/server/deezer";
 import { jsonError } from "../../lib/server/env";
+import { fetchLivePreview } from "../../lib/server/preview-live";
 import { getTrackByIdOrLogId } from "../../lib/server/tracks";
 
 // Streams a finding's official 30s preview (Deezer/iTunes — never YouTube;
@@ -8,9 +8,9 @@ import { getTrackByIdOrLogId } from "../../lib/server/tracks";
 // URLs carry expiring tokens and the Deezer CDN doesn't grant the CORS that
 // Web Audio's gain/pan graph needs — so we re-resolve on demand and serve the
 // bytes with open CORS. Shared by the feed's in-place preview, the Stories
-// player, and (later) the Galaxy game. Not hard-bound to Deezer: whatever
-// `preview_url`-shaped source the row carries gets streamed first, with the
-// Deezer-by-ISRC lookup as the refresh path.
+// player, and the Galaxy game. Public playback stays live-only: stored Deezer
+// URL first, refreshed Deezer by ISRC next, iTunes last. Operator-only archived
+// previews in R2 are private analysis artifacts and are never a playback source.
 
 const corsHeaders = {
   "access-control-allow-headers": "range",
@@ -31,7 +31,7 @@ export const Route = createFileRoute("/api/preview/$idOrLogId")({
             return jsonError(404, "not_found", `No track with id ${idOrLogId}`);
           }
 
-          const upstream = await fetchPreview(track.previewUrl, track.isrc, request);
+          const upstream = await fetchLivePreview(track, request);
 
           if (!upstream) {
             return jsonError(404, "no_preview", "No preview available for this finding.");
@@ -51,9 +51,9 @@ export const Route = createFileRoute("/api/preview/$idOrLogId")({
             headers.set("content-type", "audio/mpeg");
           }
 
-          // The preview for a given finding is stable content; let the edge
-          // hold it for a day so repeat plays don't re-hit Deezer.
-          headers.set("cache-control", "public, max-age=86400");
+          // Keep public playback a live relay only: no edge cache, no R2
+          // playback tier, and no durable public copy.
+          headers.set("cache-control", "no-store");
 
           return new Response(upstream.body, { headers, status: upstream.status });
         } catch (error) {
@@ -64,34 +64,3 @@ export const Route = createFileRoute("/api/preview/$idOrLogId")({
     },
   },
 });
-
-// Try the stored preview URL first; when its token has expired (Deezer answers
-// 403/410/404), re-resolve a fresh URL by ISRC and retry once.
-async function fetchPreview(
-  storedUrl: string | undefined,
-  isrc: string | undefined,
-  request: Request,
-): Promise<Response | undefined> {
-  const range = request.headers.get("range");
-  const upstreamInit: RequestInit = range ? { headers: { range } } : {};
-
-  if (storedUrl) {
-    const response = await fetch(storedUrl, upstreamInit);
-
-    if (response.ok || response.status === 206) {
-      return response;
-    }
-  }
-
-  const refreshed = await enrichFromDeezer(isrc);
-
-  if (refreshed.previewUrl && refreshed.previewUrl !== storedUrl) {
-    const response = await fetch(refreshed.previewUrl, upstreamInit);
-
-    if (response.ok || response.status === 206) {
-      return response;
-    }
-  }
-
-  return undefined;
-}

@@ -24,12 +24,21 @@ export type AudioManager = {
   destroy: () => void;
   handleEvent: (event: SimEvent, state: SimState) => void;
   muted: () => boolean;
+  /** The amen-break intro: a one-shot under the gate→boot, riding the unlock. */
+  playIntro: () => void;
   resume: () => void;
   setMuted: (value: boolean) => void;
   /** Park the context while the tab is hidden; resume() brings it back. */
   suspend: () => void;
   update: (state: SimState) => void;
 };
+
+/** The amen break births drum & bass, so it births the session: under full, fading out. */
+const INTRO_GAIN = 0.5;
+/** Seconds at level before it ducks into the ambient bed. */
+const INTRO_HOLD = 4;
+/** Fade time-constant for the duck-out (setTargetAtTime). */
+const INTRO_FADE_TC = 0.9;
 
 export function createAudioManager(): AudioManager {
   let context: AudioContext | undefined;
@@ -40,6 +49,8 @@ export function createAudioManager(): AudioManager {
   let playing: PlayingPreview | undefined;
   let isMuted = false;
   let alarmTimer: number | undefined;
+  let introBuffer: AudioBuffer | undefined;
+  let introStarted = false;
 
   const buffers = new Map<string, AudioBuffer>();
   const loading = new Set<string>();
@@ -190,11 +201,12 @@ export function createAudioManager(): AudioManager {
     let currentDistance = Number.POSITIVE_INFINITY;
 
     for (let index = 0; index < state.stars.length; index++) {
-      if (state.collected[index]) {
+      const star = state.stars[index];
+
+      if (star.collected) {
         continue;
       }
 
-      const star = state.stars[index];
       const distance = Math.hypot(star.x - ship.x, star.y - ship.y);
 
       if (distance < bestDistance) {
@@ -315,6 +327,20 @@ export function createAudioManager(): AudioManager {
         blip(880, 0.13, 0.12);
         blip(1100, 0.26, 0.3);
         break;
+      case "asteroid-hit":
+        // A low thud: the hull takes it, fuel knocks loose.
+        blip(120, 0, 0.12, 0.2);
+        blip(90, 0.1, 0.18, 0.2);
+        break;
+      case "bolt-fired":
+        // A soft pew; it fires often, so it stays quiet.
+        blip(900, 0, 0.05, 0.08);
+        break;
+      case "bolt-hit":
+        // A quick crunch as a rock breaks up.
+        blip(300, 0, 0.04, 0.14);
+        blip(160, 0.04, 0.08, 0.14);
+        break;
       case "home":
         blip(440, 0, 0.15);
         blip(550, 0.16, 0.15);
@@ -336,6 +362,14 @@ export function createAudioManager(): AudioManager {
         blip(392, 0, 0.08, 0.15);
         blip(523, 0.09, 0.12, 0.15);
         stopAlarm();
+        break;
+      case "warped":
+        // Sucked down, then spat out: a falling sweep into a rising whoosh.
+        blip(330, 0, 0.12, 0.18);
+        blip(180, 0.1, 0.14, 0.18);
+        blip(120, 0.22, 0.18, 0.2);
+        blip(440, 0.36, 0.1, 0.16);
+        blip(700, 0.44, 0.2, 0.16);
         break;
       case "towed":
         blip(196, 0, 0.25, 0.18);
@@ -367,6 +401,56 @@ export function createAudioManager(): AudioManager {
     }
   }
 
+  // The amen-break intro. Rides the gate-tap unlock (resume() already ran), so
+  // autoplay-with-sound is never the issue. Plays once per session, below full
+  // volume, ducking into the ambient bed after a few bars. Routed through the
+  // music bus so the master mute covers it. A missing/placeholder asset just
+  // stays silent — the launch still works.
+  async function playIntro(): Promise<void> {
+    const ctx = ensureContext();
+
+    if (!ctx || !musicBus || introStarted) {
+      return;
+    }
+
+    introStarted = true;
+
+    try {
+      if (!introBuffer) {
+        const response = await fetch("/galaxy/amen.mp3");
+
+        if (!response.ok) {
+          return;
+        }
+
+        introBuffer = await ctx.decodeAudioData(await response.arrayBuffer());
+      }
+
+      const source = ctx.createBufferSource();
+      const gain = ctx.createGain();
+      const now = ctx.currentTime;
+
+      source.buffer = introBuffer;
+      source.loop = false;
+      gain.gain.setValueAtTime(INTRO_GAIN, now);
+      gain.gain.setTargetAtTime(0, now + INTRO_HOLD, INTRO_FADE_TC);
+      source.connect(gain);
+      gain.connect(musicBus);
+      source.start(now);
+      source.stop(now + INTRO_HOLD + INTRO_FADE_TC * 4 + 0.5);
+      source.onended = () => {
+        try {
+          source.disconnect();
+          gain.disconnect();
+        } catch {
+          // Already torn down.
+        }
+      };
+    } catch {
+      // The amen didn't survive the trip; silence is fine, the launch holds.
+    }
+  }
+
   return {
     destroy: () => {
       stopAlarm();
@@ -377,6 +461,9 @@ export function createAudioManager(): AudioManager {
     },
     handleEvent,
     muted: () => isMuted,
+    playIntro: () => {
+      void playIntro();
+    },
     resume: () => {
       const resumed = ensureContext();
 
