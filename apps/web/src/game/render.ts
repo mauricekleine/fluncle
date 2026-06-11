@@ -1,7 +1,18 @@
 import { palette } from "./palette";
 import { fnv1a } from "./placement";
 import { type CarrierInfo, type RadarBlip, type SimState, wrapAngle } from "./sim";
-import { SHIP_SIZE, makeEarthSprite, makeShipSprite } from "./sprites";
+import {
+  ASTEROID_SIZE,
+  ROADSTER_SIZE,
+  SHIP_SIZE,
+  UFO_SIZE,
+  makeAsteroidSprite,
+  makeEarthSprite,
+  makeRoadsterSprite,
+  makeShipSprite,
+  makeUfoSprite,
+} from "./sprites";
+import { type FrontierEntity } from "./types";
 
 // The renderer: one low-resolution canvas (270p) upscaled with
 // image-rendering: pixelated, so every line of text and every sprite lands on
@@ -79,6 +90,8 @@ export type Renderer = {
   resize: (cssWidth: number, cssHeight: number) => void;
   /** Where the card's Spotify link was drawn this frame, if anywhere. */
   spotifyLinkRect: () => HitRect | undefined;
+  /** Where the top-right volume toggle was drawn this frame. */
+  volumeRect: () => HitRect | undefined;
 };
 
 export function createRenderer(container: HTMLElement): Renderer {
@@ -123,6 +136,31 @@ export function createRenderer(container: HTMLElement): Renderer {
   heroShip.src = "/galaxy/ship.png";
   heroEarth.src = "/galaxy/earth.png";
 
+  // Frontier set-dressing sprites (Unit B): bespoke Nano-Banana PNGs over the
+  // procedural fallbacks, the same hero pattern as ship/earth.
+  const roadsterSprite = makeRoadsterSprite();
+  const ufoSprite = makeUfoSprite();
+  const asteroidSprite = makeAsteroidSprite();
+  const heroRoadster = new Image();
+  const heroUfo = new Image();
+  const heroAsteroid = new Image();
+  let heroRoadsterReady = false;
+  let heroUfoReady = false;
+  let heroAsteroidReady = false;
+
+  heroRoadster.onload = () => {
+    heroRoadsterReady = true;
+  };
+  heroUfo.onload = () => {
+    heroUfoReady = true;
+  };
+  heroAsteroid.onload = () => {
+    heroAsteroidReady = true;
+  };
+  heroRoadster.src = "/galaxy/roadster.png";
+  heroUfo.src = "/galaxy/ufo.png";
+  heroAsteroid.src = "/galaxy/asteroid.png";
+
   type ShipSpriteInfo = {
     /** Engine nozzle x-positions in sprite pixels. */
     flameAnchors: [number, number];
@@ -162,6 +200,7 @@ export function createRenderer(container: HTMLElement): Renderer {
   let height = INTERNAL_HEIGHT;
   let lastNow = 0;
   let spotifyRect: HitRect | undefined;
+  let volumeRect: HitRect | undefined;
 
   // Oxanium is preloaded by the document; nudge the canvas-visible faces so
   // the first painted frame doesn't fall back to the system sans.
@@ -206,6 +245,7 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     lastNow = view.nowS;
     spotifyRect = undefined;
+    volumeRect = undefined;
 
     const { sim } = view;
     const horizon = Math.round(height * HORIZON_FRACTION);
@@ -421,7 +461,7 @@ export function createRenderer(container: HTMLElement): Renderer {
         continue;
       }
 
-      const collected = sim.collected[index];
+      const collected = star.collected;
       const isCarrier = view.carrier?.starIndex === index;
       const { ship } = sim;
       const distance = Math.hypot(star.x - ship.x, star.y - ship.y);
@@ -455,11 +495,161 @@ export function createRenderer(container: HTMLElement): Renderer {
       });
     }
 
+    // The dynamic frontier (set-dressing, hazards, bolts) shares the depth sort
+    // with the stars and Earth. Set-dressing drifts/tumbles cosmetically off
+    // nowS so the motion freezes under reduced-motion without touching the sim.
+    for (const entity of sim.entities) {
+      const sway = reducedMotion ? 0 : Math.sin(view.nowS * 0.05 + (entity.spin ?? 0)) * 18;
+      const projected = project(
+        sim,
+        entity.x + Math.cos(entity.spin ?? 0) * sway,
+        entity.y + Math.sin(entity.spin ?? 0) * sway,
+        entity.vOffset,
+      );
+
+      if (!projected) {
+        continue;
+      }
+
+      const bodyRadius = entity.bodyRadius ?? 14;
+      const size = Math.min(44, Math.max(2, (width * 0.55 * bodyRadius) / projected.f));
+      const sx = Math.round(projected.sx);
+      const sy = Math.round(projected.sy);
+
+      bodies.push({
+        draw: () => drawFrontierEntity(entity, sx, sy, size, view.nowS),
+        f: projected.f,
+      });
+    }
+
     bodies.sort((a, b) => b.f - a.f);
 
     for (const body of bodies) {
       body.draw();
     }
+  }
+
+  type FrontierSprite = { h: number; img: CanvasImageSource; w: number };
+
+  function frontierSprite(entity: FrontierEntity): FrontierSprite | undefined {
+    if (entity.kind === "roadster") {
+      return heroRoadsterReady
+        ? { h: heroRoadster.naturalHeight, img: heroRoadster, w: heroRoadster.naturalWidth }
+        : { h: roadsterSprite.height, img: roadsterSprite, w: ROADSTER_SIZE };
+    }
+
+    if (entity.kind === "ufo") {
+      return heroUfoReady
+        ? { h: heroUfo.naturalHeight, img: heroUfo, w: heroUfo.naturalWidth }
+        : { h: ufoSprite.height, img: ufoSprite, w: UFO_SIZE };
+    }
+
+    if (entity.kind === "asteroid") {
+      return heroAsteroidReady
+        ? { h: heroAsteroid.naturalHeight, img: heroAsteroid, w: heroAsteroid.naturalWidth }
+        : { h: asteroidSprite.height, img: asteroidSprite, w: ASTEROID_SIZE };
+    }
+
+    return undefined;
+  }
+
+  // Dispatch by kind. Set-dressing is atmosphere: the Roadster tumbles slowly,
+  // the UFO hovers over a dim teal underglow and bobs — placed and alive, never
+  // a static decal. (Hazards/bolts register their own draws in later units.)
+  function drawFrontierEntity(
+    entity: FrontierEntity,
+    x: number,
+    y: number,
+    size: number,
+    nowS: number,
+  ): void {
+    // The black hole: a void that bends the light around it. The cool lensing
+    // rim shimmers (frozen under reduced-motion); the gravity is gameplay, not
+    // decoration, so it never freezes (it lives in the sim).
+    if (entity.kind === "blackhole") {
+      const r = Math.max(2, Math.round(size / 2));
+      const shimmer =
+        reducedMotion || r < 3 ? 0 : Math.round(Math.sin(nowS * 3 + (entity.spin ?? 0)) * 1.5);
+
+      ctx.globalAlpha = 0.5;
+      pixelDiamond(x, y, r + 2 + shimmer, palette.coolBlue);
+      ctx.globalAlpha = 0.85;
+      pixelDiamond(x, y, r + 1, palette.creamDim);
+      ctx.globalAlpha = 1;
+      pixelDiamond(x, y, r, "#000000");
+
+      return;
+    }
+
+    // The laser bolt: a short streak of Re-entry-Red heat along its flight (not
+    // gold — gold stays the bangers and the sun, One Sun Rule).
+    if (entity.kind === "bolt") {
+      const angle = Math.atan2(entity.vy, entity.vx);
+      const length = Math.max(4, Math.round(size * 1.6));
+
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.fillStyle = palette.redBright;
+      ctx.fillRect(-Math.round(length / 2), 0, length, 1);
+      ctx.fillStyle = palette.red;
+      ctx.fillRect(-1, -1, 2, 3);
+      ctx.restore();
+
+      return;
+    }
+
+    const sprite = frontierSprite(entity);
+
+    if (!sprite) {
+      return;
+    }
+
+    const phase = entity.spin ?? 0;
+    const drawWidth = size;
+    const drawHeight = (size * sprite.h) / sprite.w;
+
+    if (entity.kind === "ufo") {
+      const bob = reducedMotion ? 0 : Math.sin(nowS * 1.3 + phase) * Math.max(1, size * 0.06);
+      const glow = reducedMotion ? 0.5 : 0.4 + 0.2 * Math.sin(nowS * 2 + phase);
+
+      ctx.globalAlpha = glow * 0.5;
+      ctx.fillStyle = palette.coolTeal;
+      pixelDiamond(
+        x,
+        Math.round(y + bob + drawHeight * 0.4),
+        Math.max(1, Math.round(size * 0.4)),
+        palette.coolTeal,
+      );
+      ctx.globalAlpha = 1;
+      drawSpriteScaled(sprite.img, x, Math.round(y + bob), drawWidth, drawHeight, 0);
+
+      return;
+    }
+
+    // Roadster: a slow tumble, frozen to a fixed lean under reduced-motion.
+    const rotation = reducedMotion ? phase : nowS * 0.4 + phase;
+
+    drawSpriteScaled(sprite.img, x, y, drawWidth, drawHeight, rotation);
+  }
+
+  function drawSpriteScaled(
+    img: CanvasImageSource,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    rotation: number,
+  ): void {
+    ctx.save();
+    ctx.translate(x, y);
+
+    if (rotation) {
+      ctx.rotate(rotation);
+    }
+
+    ctx.drawImage(img, Math.round(-w / 2), Math.round(-h / 2), Math.round(w), Math.round(h));
+    ctx.restore();
   }
 
   /** A banger star: a pulsing pixel diamond, gold while uncollected. */
@@ -636,18 +826,43 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     drawTelemetry(view);
     drawLogCard(view);
-
-    if (view.muted) {
-      ctx.fillStyle = palette.creamDim;
-      ctx.font = '7px "Oxanium", monospace';
-      ctx.textAlign = "right";
-      ctx.fillText("muted", width - 6, 8);
-      ctx.textAlign = "left";
-    }
+    drawVolumeToggle(view);
 
     if (view.touch && view.phase === "play" && !orbiting) {
       drawTouchHints();
     }
+  }
+
+  // The master volume toggle, top-right: a control, not a light (cream/dim,
+  // never gold). A speaker with sound-waves when on, a Re-entry-Red slash when
+  // muted. Reports its hit zone so taps/clicks reach handleUiTap; the M key
+  // still toggles too. Default ON (the sim starts unmuted).
+  function drawVolumeToggle(view: RenderView): void {
+    const x0 = width - 14;
+    const cy = 8;
+    const ink = palette.creamMuted;
+
+    volumeRect = { h: 14, w: 16, x: x0 - 2, y: 1 };
+
+    ctx.fillStyle = ink;
+    // The cone: a triangle widening down-right from the back.
+    ctx.fillRect(x0, cy - 1, 1, 3);
+    ctx.fillRect(x0 + 1, cy - 2, 1, 5);
+    ctx.fillRect(x0 + 2, cy - 3, 1, 7);
+
+    if (view.muted) {
+      ctx.fillStyle = palette.red;
+
+      for (let step = 0; step < 6; step++) {
+        ctx.fillRect(x0 + 4 + step, cy - 3 + step, 1, 1);
+      }
+
+      return;
+    }
+
+    // Sound waves rolling out.
+    ctx.fillRect(x0 + 4, cy - 1, 1, 3);
+    ctx.fillRect(x0 + 6, cy - 3, 1, 7);
   }
 
   function drawTally(sim: SimState): void {
@@ -935,6 +1150,7 @@ export function createRenderer(container: HTMLElement): Renderer {
     }
 
     ctx.textAlign = "left";
+    drawVolumeToggle(view);
   }
 
   function drawBoot(view: RenderView, horizon: number): void {
@@ -1153,6 +1369,7 @@ export function createRenderer(container: HTMLElement): Renderer {
     draw,
     resize,
     spotifyLinkRect: () => spotifyRect,
+    volumeRect: () => volumeRect,
   };
 }
 

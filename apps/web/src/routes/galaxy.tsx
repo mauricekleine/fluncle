@@ -38,6 +38,26 @@ export const Route = createFileRoute("/galaxy")({
         content: `${siteUrl}/galaxy`,
         property: "og:url",
       },
+      {
+        content: `${siteUrl}/galaxy/og.png`,
+        property: "og:image",
+      },
+      {
+        content: "1200",
+        property: "og:image:width",
+      },
+      {
+        content: "630",
+        property: "og:image:height",
+      },
+      {
+        content: "Fluncle's Galaxy — every banger out there is a star.",
+        property: "og:image:alt",
+      },
+      {
+        content: "summary_large_image",
+        name: "twitter:card",
+      },
     ],
   }),
 });

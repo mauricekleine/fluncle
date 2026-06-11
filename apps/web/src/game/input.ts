@@ -6,9 +6,13 @@
 const STEER_LEFT_KEYS = new Set(["a", "arrowleft"]);
 const STEER_RIGHT_KEYS = new Set(["d", "arrowright"]);
 const BOOST_KEYS = new Set([" ", "arrowup", "w"]);
+// Optional manual fire (Unit D). The laser auto-clears the path; F is a desktop
+// blip on demand. No touch fire verb — auto-fire covers glass.
+const FIRE_KEYS = new Set(["f"]);
 
 export type InputState = {
   boost: boolean;
+  fire: boolean;
   steer: number;
 };
 
@@ -170,6 +174,7 @@ export function createInput(
       }
 
       let boost = [...keysDown].some((key) => BOOST_KEYS.has(key));
+      const fire = [...keysDown].some((key) => FIRE_KEYS.has(key));
 
       for (const zone of pointers.values()) {
         if (zone === "left") {
@@ -181,7 +186,7 @@ export function createInput(
         }
       }
 
-      return { boost, steer: Math.max(-1, Math.min(1, steer)) };
+      return { boost, fire, steer: Math.max(-1, Math.min(1, steer)) };
     },
     touchSeen: () => sawTouch,
   };
