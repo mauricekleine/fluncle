@@ -87,8 +87,10 @@ export async function updateTrack(
   }
 
   if (update.videoUrl !== undefined) {
+    // Empty string clears the video (the "remove an off-direction video" path) —
+    // null, not "", so the `video_url is not null` hasVideo filter drops it.
     sets.push("video_url = ?");
-    args.push(update.videoUrl);
+    args.push(update.videoUrl === "" ? null : update.videoUrl);
   }
 
   if (update.videoVehicle !== undefined) {

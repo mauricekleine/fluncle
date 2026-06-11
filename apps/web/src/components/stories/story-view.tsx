@@ -21,13 +21,9 @@ export function StoryView({
   track: Track;
 }) {
   const media = track.logId ? trackMedia(track.logId) : undefined;
-  // The conventional bundle URL first (media.ts is the source of that
-  // convention); the stored video_url as fallback for rows that predate it.
-  const videoSources = [media?.videoUrl, track.videoUrl].filter(
-    (url, index, all): url is string => Boolean(url) && all.indexOf(url) === index,
-  );
-  const [videoSourceIndex, setVideoSourceIndex] = useState(0);
-  const videoUrl = videoSources[videoSourceIndex];
+  // The stored video_url is the source of truth — the upload sets it to the
+  // bundle's footage.mp4. media.ts only derives the poster/cover (no DB column).
+  const videoUrl = track.videoUrl;
   const [posterFailed, setPosterFailed] = useState(false);
   const posterUrl = (!posterFailed ? media?.posterUrl : undefined) ?? track.albumImageUrl;
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -61,7 +57,6 @@ export function StoryView({
           className="story-footage"
           loop
           muted
-          onError={() => setVideoSourceIndex((current) => current + 1)}
           playsInline
           poster={posterUrl}
           preload="auto"
