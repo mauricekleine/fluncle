@@ -33,6 +33,10 @@ const fetchInitialTracks = createServerFn({ method: "GET" }).handler(() =>
 export const Route = createFileRoute("/")({
   component: HomePage,
   head: ({ loaderData }) => ({
+    // The self-referencing canonical lives on each leaf: TanStack merges the
+    // root's and the leaf's `links` without deduping by rel, so a canonical in
+    // __root.tsx would emit a duplicate on every other page.
+    links: [{ href: `${siteUrl}/`, rel: "canonical" }],
     scripts: [
       {
         children: JSON.stringify({

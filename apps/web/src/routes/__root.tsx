@@ -34,10 +34,6 @@ export const Route = createRootRoute({
         rel: "apple-touch-icon",
       },
       {
-        href: `${siteUrl}/`,
-        rel: "canonical",
-      },
-      {
         href: "/rss.xml",
         rel: "alternate",
         title: "Fluncle's Findings",
