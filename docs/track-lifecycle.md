@@ -13,7 +13,7 @@ The shape in one line: **adding a track is fast and synchronous; enriching it is
 Triggered by `fluncle admin add <spotify-url>` → `POST /api/admin/tracks` → `publishTrack()` (`apps/web/src/lib/server/publish.ts`). Everything here is cheap HTTP, so the track is in the playlist and visible within one request:
 
 - **Spotify** metadata: title, artists, album, artwork, `duration_ms`, `isrc`, `popularity` (`spotify.ts`).
-- **Deezer** (by ISRC, best-effort): record `label` + a `preview_url` (`deezer.ts`).
+- **Deezer** (by ISRC, best-effort): record `label` + a live `preview_url` (`deezer.ts`). This is a fallback pointer for `/api/preview`, not a durable media artifact.
 - **Log ID**: the permanent Galaxy coordinate, generated and stored (`log-id.ts`). This is the cross-surface marker — `fluncle://<id>` — used everywhere (web `/log/<id>`, SSH, CLI, TikTok). It supersedes any ad-hoc post marker. When Spotify omits the ISRC, the add flow looks it up on Deezer (search by artist + title, duration-confirmed) **before** the coordinate is computed, so the hash seeds from the recording's real identity; the Spotify id remains the last-resort seed.
 - Publish to the Spotify playlist + Telegram.
 
@@ -28,9 +28,10 @@ The track is now real, listenable, and shows its identity (coordinate, label, du
 After a successful add, the Worker fires a **Spinup agent** (via the Spinup runtime API) with just the `trackId`, fire-and-forget (`ctx.waitUntil`, so it never blocks the add response). The agent has what the Worker can't: a repo checkout, the admin Fluncle CLI, `ffmpeg`, and Remotion. It does **not** hold any platform secret — R2, Postiz, and Turso all live on the Worker, and the agent reaches them only through the authenticated admin API (it carries just its admin token). Given one track ID, it:
 
 1. **Resolves + analyzes the preview audio** — BPM, musical **key** (+ confidence), and spectral features (brightness, sub-bass weight, mid-band flatness) via the DSP pipeline (`packages/video/src/pipeline/analyze-audio.ts`). The audio is the trustworthy source — see "Tags" below.
-2. **Derives a sub-genre suggestion** from those features (liquid ↔ neuro ↔ jungle/dancefloor), normalized through the dnb sub-genre allow-list (`tags.ts`).
-3. **Renders the video** (the `packages/video` kit) and uploads the bundle through the admin video endpoint (`fluncle admin track video` → `POST /api/admin/tracks/:id/video`); the **Worker** writes it to R2 and sets `video_url` to the review cut.
-4. **Writes the analysis back** through `fluncle admin track update <id>` — `bpm`, `key`, `tags` (as `auto`) — and flips `enrichment_status` to `done`.
+2. **Stores the exact analyzed preview** through `fluncle admin track preview-archive` at an operator-only archive path in R2. This is private analysis/model-training input, not public media, not a playback source, and never a full song.
+3. **Derives a sub-genre suggestion** from those features (liquid ↔ neuro ↔ jungle/dancefloor), normalized through the dnb sub-genre allow-list (`tags.ts`).
+4. **Renders the video** (the `packages/video` kit) and uploads the bundle through the admin video endpoint (`fluncle admin track video` → `POST /api/admin/tracks/:id/video`); the **Worker** writes it to R2 and sets `video_url` to the review cut.
+5. **Writes the analysis back** through `fluncle admin track update <id>` — `bpm`, `key`, `tags` (as `auto`) — and flips `enrichment_status` to `done`.
 
 This takes a while, and that's fine: the find was already live. When it finishes, the analysis fields and the video appear across the Galaxy.
 
@@ -46,7 +47,11 @@ Phase 2 needs to write back, and the operator needs to curate — so tracks are 
 fluncle admin track update <track_id> --tag <t> --tag <t> --bpm <n> --key "<k>" --video-url <url> ...
 ```
 
-Backed by `PATCH /api/admin/tracks/:id`. It writes an **allow-list of curation/enrichment fields only** — `tags`, `bpm`, `key`, `video_url`, `enrichment_status`, `note`. Identity fields (title, artists, Spotify ids, Log ID) are **immutable once set** — they come from Spotify and never change. The one sanctioned exception is the straggler repair: `isrc` and `logId` accept a **one-time backfill into a null slot** (`logId: "auto"` derives the coordinate the add flow would have minted from the found date + identity); a write against an already-set value is rejected. Every update also bumps `updated_at`.
+Backed by `PATCH /api/admin/tracks/:id`. It writes an **allow-list of curation/enrichment fields only** — `tags`, `bpm`, `key`, `video_url`, `enrichment_status`, `note`. Identity fields (title, artists, Spotify ids, Log ID) are **immutable once set** — they come from Spotify and never change. The one sanctioned exception is the straggler repair: `isrc` and `logId` accept a **one-time backfill into a null slot** (`logId: "auto"` derives the coordinate the add flow would have minted from the found date + identity); a write against an already-set value is rejected. Every public content update also bumps `updated_at`. Internal preview archive writes do not bump `updated_at`, because sitemap/log lastmod should reflect visible changes only.
+
+## Preview playback vs. preview archive
+
+Public playback is live-only. `/api/preview/:idOrLogId` tries the stored Deezer `preview_url`, refreshes Deezer by ISRC if that token died, then falls back to iTunes; it never reads archived R2 previews and sends `Cache-Control: no-store` so the relay does not become an edge-cached media tier. The operator-only archive path stores exactly one official 30s preview for private analysis. New enrichments archive the exact preview used for the feature vector; backlog backfill archives a freshly resolved official preview, which is best-effort and may differ from the bytes an older enrichment analyzed. Archive metadata stays internal (`preview_archive_*`) and is not part of `/api/tracks`.
 
 ## Tags & provenance
 
@@ -88,16 +93,17 @@ There is no per-track "published" flag — a track's reach is the union of its `
 
 On the `tracks` table, beyond Phase-1 identity/metadata:
 
-| Field                                                       | Set by             | Notes                                                                              |
-| ----------------------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------- |
-| `log_id`                                                    | Phase 1            | permanent Galaxy coordinate; the cross-surface marker                              |
-| `isrc`, `label`, `preview_url`, `popularity`, `duration_ms` | Phase 1            | cheap HTTP enrichment                                                              |
-| `bpm`, `key`                                                | Phase 2 (agent)    | audio-derived; key carries a confidence the agent may gate on                      |
-| `tags` (`tags_json`)                                        | Phase 2 or admin   | dnb sub-genres only (`tags.ts` allow-list)                                         |
-| `tags_source`                                               | whoever wrote tags | `auto` \| `manual`; manual wins                                                    |
-| `video_url`                                                 | Phase 2 (agent)    | R2-hosted MP4; surfaced as the web preview                                         |
-| `enrichment_status`                                         | both               | `pending` (after add) → `done` \| `failed`                                         |
-| `updated_at`                                                | every write path   | last real content change; sitemap `lastmod` reads `coalesce(updated_at, added_at)` |
+| Field                                                                                          | Set by             | Notes                                                                                |
+| ---------------------------------------------------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------ |
+| `log_id`                                                                                       | Phase 1            | permanent Galaxy coordinate; the cross-surface marker                                |
+| `isrc`, `label`, `preview_url`, `popularity`, `duration_ms`                                    | Phase 1            | cheap HTTP enrichment                                                                |
+| `preview_archive_key`, `preview_archive_source`, `preview_archive_mime`, `preview_archived_at` | Phase 2 / backfill | operator-only archive path for the analyzed official preview; internal, not playback |
+| `bpm`, `key`                                                                                   | Phase 2 (agent)    | audio-derived; key carries a confidence the agent may gate on                        |
+| `tags` (`tags_json`)                                                                           | Phase 2 or admin   | dnb sub-genres only (`tags.ts` allow-list)                                           |
+| `tags_source`                                                                                  | whoever wrote tags | `auto` \| `manual`; manual wins                                                      |
+| `video_url`                                                                                    | Phase 2 (agent)    | R2-hosted MP4; surfaced as the web preview                                           |
+| `enrichment_status`                                                                            | both               | `pending` (after add) → `done` \| `failed`                                           |
+| `updated_at`                                                                                   | every write path   | last real content change; sitemap `lastmod` reads `coalesce(updated_at, added_at)`   |
 
 ## Surfacing
 

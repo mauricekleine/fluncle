@@ -18,9 +18,19 @@ It does **not** need a checkout of this repo. The enrichment skill is self-conta
 
 **The full operating instructions are the `fluncle-track-enrichment` skill, not this doc.** Read it and follow it step by step:
 
-- `packages/skills/fluncle-track-enrichment/SKILL.md` — the get → analyze → update loop, the rules (key honesty, never invent data, manual tags always win), and its self-contained `scripts/analyze-track.ts`.
+- `packages/skills/fluncle-track-enrichment/SKILL.md` — the get → analyze → archive → update loop, the rules (key honesty, never invent data, manual tags always win), and its self-contained `scripts/analyze-track.ts`.
 - Install standalone (e.g. on Spinup): `npx skills add https://github.com/mauricekleine/fluncle/tree/main/packages/skills/fluncle-track-enrichment`. The analysis script has zero npm dependencies and no Fluncle imports, so it runs wherever the skill is installed.
 - `docs/track-lifecycle.md` is the canonical architecture (sync add vs async enrich, the Worker/ffmpeg constraint, the feature vector, R2 ownership).
+
+## Preview archive (private analysis only)
+
+The enrichment script may export the exact official 30s preview used for the feature vector. Store that file with:
+
+```
+fluncle admin track preview-archive <track_id|log_id> --file <file> --source <source> --mime <mime>
+```
+
+This writes to an operator-only archive path in the existing R2 bucket and records internal `preview_archive_*` metadata. It is for private analysis/model training only: the archive key is not exposed through public DTOs, never appears in UI/RSS/sitemaps, and `/api/preview` never reads it. Public playback stays live-only through Deezer with iTunes fallback and `Cache-Control: no-store`. Never archive full songs. New enrichments archive the exact analyzed bytes; backlog backfill is best-effort and archives the freshly re-resolved official preview.
 
 ## Video render (separate, requires the kit)
 
@@ -51,6 +61,7 @@ The agent never holds the Postiz key — the Worker owns it, same pattern as R2.
 
 - One track per run.
 - Preview audio comes only from the analysis script's resolver (Deezer/iTunes). Never source audio from YouTube or rip full tracks. No legal preview means no analysis; stop and report (`--status failed`).
+- Archive only the exact official preview used for analysis, through the operator-only archive path. It is not public media and not a playback source.
 - Never invent data. Write only what the audio yielded; respect the script's `null` key (atonal tracks key weakly — better null than wrong). The sub-genre is a **suggestion** stored as `auto`; a human `manual` tag overrides it and must never be clobbered.
 - On-screen video copy passes VOICE.md; every on-screen fact comes from the track's props, which is authoritative. Render only fields the props expose; never invent one.
 - The brand constants are not the agent's to restyle: if a concept fights the grammar, change the concept.

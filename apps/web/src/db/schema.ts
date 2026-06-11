@@ -19,6 +19,13 @@ export const tracks = sqliteTable("tracks", {
   popularity: integer("popularity"),
   postedToTelegram: integer("posted_to_telegram", { mode: "boolean" }).notNull().default(false),
   postedToTelegramAt: text("posted_to_telegram_at"),
+  // Operator-only archive path for the one official 30s preview preserved for
+  // private analysis/model training. Never exposed through public DTOs and
+  // never used by /api/preview playback.
+  previewArchiveKey: text("preview_archive_key"),
+  previewArchiveMime: text("preview_archive_mime"),
+  previewArchiveSource: text("preview_archive_source"),
+  previewArchivedAt: text("preview_archived_at"),
   previewUrl: text("preview_url"),
   releaseDate: text("release_date"),
   spotifyError: text("spotify_error"),

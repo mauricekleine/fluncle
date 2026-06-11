@@ -17,7 +17,7 @@
 // Output (stdout): a single JSON object. Diagnostics go to stderr.
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -34,6 +34,7 @@ function arg(name: string): string | undefined {
 const artist = arg("artist");
 const title = arg("title");
 const isrc = arg("isrc");
+const archiveDir = arg("archive-dir");
 
 if (!artist || !title) {
   console.error(
@@ -151,14 +152,21 @@ function decodeWav(buf: Buffer): Float32Array {
   return samples;
 }
 
-async function loadSamples(previewUrl: string): Promise<Float32Array> {
+type LoadedPreview = {
+  bytes: Buffer;
+  mime: string;
+  samples: Float32Array;
+};
+
+async function loadPreview(previewUrl: string): Promise<LoadedPreview> {
   const dir = mkdtempSync(join(tmpdir(), "fluncle-analyze-"));
 
   try {
     const mp3Path = join(dir, "preview.mp3");
     const wavPath = join(dir, "preview.wav");
     const response = await fetch(previewUrl);
-    writeFileSync(mp3Path, Buffer.from(await response.arrayBuffer()));
+    const bytes = Buffer.from(await response.arrayBuffer());
+    writeFileSync(mp3Path, bytes);
 
     const result = spawnSync(
       "ffmpeg",
@@ -170,10 +178,65 @@ async function loadSamples(previewUrl: string): Promise<Float32Array> {
       throw new Error("ffmpeg decode failed (is ffmpeg installed and on PATH?)");
     }
 
-    return decodeWav(readFileSync(wavPath));
+    return {
+      bytes,
+      mime:
+        normalizePreviewMime(response.headers.get("content-type") ?? "") ??
+        inferPreviewMime(previewUrl) ??
+        "audio/mpeg",
+      samples: decodeWav(readFileSync(wavPath)),
+    };
   } finally {
     rmSync(dir, { force: true, recursive: true });
   }
+}
+
+function normalizePreviewMime(value: string): string | undefined {
+  const mime = value.split(";")[0]?.trim().toLowerCase();
+
+  if (mime === "audio/mpeg" || mime === "audio/mp3") {
+    return "audio/mpeg";
+  }
+
+  if (mime === "audio/mp4" || mime === "audio/x-m4a" || mime === "audio/m4a") {
+    return "audio/mp4";
+  }
+
+  if (mime === "audio/aac") {
+    return "audio/aac";
+  }
+
+  return undefined;
+}
+
+function inferPreviewMime(url: string): string | undefined {
+  const pathname = new URL(url).pathname.toLowerCase();
+
+  if (pathname.endsWith(".mp3")) {
+    return "audio/mpeg";
+  }
+
+  if (pathname.endsWith(".m4a")) {
+    return "audio/mp4";
+  }
+
+  if (pathname.endsWith(".aac")) {
+    return "audio/aac";
+  }
+
+  return undefined;
+}
+
+function previewExtension(mime: string): string {
+  if (mime === "audio/mp4") {
+    return "m4a";
+  }
+
+  if (mime === "audio/aac") {
+    return "aac";
+  }
+
+  return "mp3";
 }
 
 // ---------------------------------------------------------------------------
@@ -601,7 +664,9 @@ function suggestTags(s: Spectral, onsetRate: number): string[] {
 const KEY_CONFIDENCE_FLOOR = 0.6; // below this, the key is unreliable → null
 
 type PreviewAnalysis = {
+  bytes: Buffer;
   key: { confidence: number; key: string };
+  mime: string;
   source: string;
   spec: Spectral;
   tempo: { bpm: number | null; bpmConfidence: number; onsetRate: number };
@@ -623,14 +688,21 @@ const analyses: PreviewAnalysis[] = [];
 
 for (const preview of previews) {
   try {
-    const samples = await loadSamples(preview.url);
-    const spec = spectral(samples);
+    const loaded = await loadPreview(preview.url);
+    const spec = spectral(loaded.samples);
     const key = estimateKey(spec.chroma);
-    const tempo = estimateBpm(samples);
+    const tempo = estimateBpm(loaded.samples);
     log(
-      `${preview.source} (${(samples.length / SAMPLE_RATE).toFixed(1)}s): bpm ${tempo.bpm ?? "null"} (conf ${tempo.bpmConfidence}), key ${key.key} (conf ${key.confidence})`,
+      `${preview.source} (${(loaded.samples.length / SAMPLE_RATE).toFixed(1)}s): bpm ${tempo.bpm ?? "null"} (conf ${tempo.bpmConfidence}), key ${key.key} (conf ${key.confidence})`,
     );
-    analyses.push({ key, source: preview.source, spec, tempo });
+    analyses.push({
+      bytes: loaded.bytes,
+      key,
+      mime: loaded.mime,
+      source: preview.source,
+      spec,
+      tempo,
+    });
   } catch (error) {
     log(`${preview.source}: skipped — ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -653,8 +725,24 @@ const bestKey = [...analyses].sort((a, b) => b.key.confidence - a.key.confidence
 
 const reliableKey = bestKey.key.confidence >= KEY_CONFIDENCE_FLOOR ? bestKey.key.key : null;
 const suggestedTags = suggestTags(primary.spec, primary.tempo.onsetRate);
+let archivePreview:
+  | {
+      mime: string;
+      path: string;
+      source: string;
+    }
+  | undefined;
+
+if (archiveDir) {
+  mkdirSync(archiveDir, { recursive: true });
+  const path = join(archiveDir, `preview.${previewExtension(primary.mime)}`);
+  writeFileSync(path, primary.bytes);
+  archivePreview = { mime: primary.mime, path, source: primary.source };
+  log(`archive preview -> ${path}`);
+}
 
 const output = {
+  archivePreview,
   artist,
   bpm: bestBpm?.tempo.bpm ?? null,
   bpmConfidence: bestBpm?.tempo.bpmConfidence ?? primary.tempo.bpmConfidence,

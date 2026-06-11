@@ -78,6 +78,19 @@ type TrackSocialOptions = {
   url?: string;
 };
 
+type TrackPreviewArchiveOptions = {
+  file?: string;
+  json: boolean;
+  mime?: string;
+  source?: string;
+};
+
+type PreviewArchiveBackfillOptions = {
+  dryRun: boolean;
+  json: boolean;
+  limit?: string;
+};
+
 export function createProgram(): Command {
   const program = configureCommand(new Command());
 
@@ -332,6 +345,20 @@ function addAdminCommands(program: Command): void {
       await runTrackSocial(idOrLogId, options, trackSocialShowCommand, trackSocialUpdateCommand);
     });
 
+  adminTrack
+    .command("preview-archive")
+    .description("Store one official preview at the operator-only archive path for analysis")
+    .argument("[idOrLogId]")
+    .option("--file <file>", "Preview audio file to archive")
+    .option("--mime <mime>", "MIME type of the preview audio")
+    .option("--source <source>", "Provenance label for the archived preview")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (idOrLogId: string | undefined, options: TrackPreviewArchiveOptions) => {
+      const { previewArchiveUploadCommand } = await import("./commands/preview-archive");
+      await runTrackPreviewArchive(idOrLogId, options, previewArchiveUploadCommand);
+    });
+
   const submissions = configureCommand(
     admin.command("submissions").description("Review listener submissions"),
   );
@@ -389,6 +416,82 @@ function addAdminCommands(program: Command): void {
       const { authSpotifyCommand } = await import("./commands/auth");
       await authSpotifyCommand();
     });
+
+  const backfill = configureCommand(
+    admin.command("backfill").description("Backfill operator-only archives"),
+  );
+
+  backfill.action(() => {
+    backfill.outputHelp();
+  });
+
+  backfill
+    .command("previews")
+    .description("Archive missing official previews for analysis")
+    .option("--dry-run", "Archive nothing; just report what would be archived", false)
+    .option("--limit <limit>", "Maximum number of previews to archive")
+    .option("--json", "Print JSON", false)
+    .action(async (options: PreviewArchiveBackfillOptions) => {
+      const { previewArchiveBackfillCommand } = await import("./commands/preview-archive");
+      await runPreviewArchiveBackfill(options, previewArchiveBackfillCommand);
+    });
+}
+
+async function runTrackPreviewArchive(
+  idOrLogId: string | undefined,
+  options: TrackPreviewArchiveOptions,
+  previewArchiveUploadCommand: typeof import("./commands/preview-archive").previewArchiveUploadCommand,
+): Promise<void> {
+  if (!idOrLogId || !options.file || !options.source || !options.mime) {
+    throw new Error(
+      "Usage: fluncle admin track preview-archive <track_id|log_id> --file <file> --source <source> --mime <mime> [--json]",
+    );
+  }
+
+  const result = await previewArchiveUploadCommand(idOrLogId, {
+    file: options.file,
+    mime: options.mime,
+    source: options.source,
+  });
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  console.log(`Archived preview for ${result.logId}`);
+  console.log(`  key: ${result.key}`);
+  console.log(`  source: ${result.source}`);
+  console.log(`  mime: ${result.mime}`);
+}
+
+async function runPreviewArchiveBackfill(
+  options: PreviewArchiveBackfillOptions,
+  previewArchiveBackfillCommand: typeof import("./commands/preview-archive").previewArchiveBackfillCommand,
+): Promise<void> {
+  const limit = options.limit === undefined ? undefined : Number.parseInt(options.limit, 10);
+
+  if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+    throw new Error("Limit must be a positive integer");
+  }
+
+  const result = await previewArchiveBackfillCommand({
+    dryRun: options.dryRun,
+    limit,
+  });
+
+  if (options.json) {
+    printJson({ ok: true, ...result });
+    return;
+  }
+
+  const verb = result.dryRun ? "Would archive" : "Archived";
+  console.log(`${verb} ${result.archived.length} preview(s).`);
+  console.log(`Skipped ${result.skipped.length}; failed ${result.failed.length}.`);
+
+  for (const item of result.archived) {
+    console.log(`  ${item.logId}: ${item.source}`);
+  }
 }
 
 async function runTrackVideo(
@@ -902,16 +1005,19 @@ const stringOptions = new Set([
   "--cover",
   "--dir",
   "--features",
+  "--file",
   "--footage",
   "--footage-silent",
   "--key",
   "--limit",
+  "--mime",
   "--note",
   "--platform",
   "--poster",
   "--props",
   "--render",
   "--scheduled-for",
+  "--source",
   "--status",
   "--tag",
   "--tag-source",
