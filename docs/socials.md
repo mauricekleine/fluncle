@@ -1,6 +1,14 @@
 # Social Accounts & Channels
 
-The map of where Fluncle exists off-repo: handles, links, profile assets, and bios. Bios are copy surfaces and follow VOICE.md; the canonical short bio is the tagline, "Drum & bass bangers from another dimension." The shared profile image is `apps/web/public/fluncle.png` (1180×1180) everywhere.
+The map of where Fluncle exists off-repo: handles, links, profile assets, and bios. Bios are copy surfaces and follow VOICE.md; the canonical platform bio (set 2026-06-11, mirrored as `fluncleBio` in `apps/web/src/lib/identity.ts`) is the tagline plus the address on its own line:
+
+```
+Drum & bass bangers from another dimension.
+
+www.fluncle.com
+```
+
+The shared profile image is `apps/web/public/fluncle.png` (1180×1180) everywhere.
 
 ## Accounts
 
@@ -33,6 +41,6 @@ The video pipeline (packages/video) will eventually want vertical-video homes be
 ## Conventions
 
 - One profile image everywhere (`apps/web/public/fluncle.png`); update it in one commit when it changes.
-- Bios are Fluncle speaking: sentence case, no exclamation marks, banned words apply (no "curated"). When in doubt, the tagline.
+- Bios are Fluncle speaking: sentence case, no exclamation marks, banned words apply (no "curated"). When in doubt, the canonical bio above; where a platform is too tight for both lines, the tagline alone.
 - Emoji policy holds per platform register: Telegram may use the sanctioned set (🛸 🎧); other platform bios stay typographically clean unless the platform's culture demands otherwise, which is a VOICE.md amendment conversation, not an ad-hoc choice.
 - Record every new account here in the same commit that creates its first content.
