@@ -657,6 +657,382 @@ body::after {
   z-index: 2;
 }
 
+/* ————— The log plate (the /log/<id> page, the log index, /about) —————
+
+   The archival register: a finding's standalone page reads as a designed log
+   entry — coordinate as masthead, the footage as one element, metadata as
+   logbook fields — not a full-bleed reel (that's the Stories dialog) and not
+   an SEO basement. One pane, sitting directly on the cosmos. */
+
+.log-plate-stage {
+  display: grid;
+  justify-items: center;
+  padding: clamp(1.5rem, 4vw, 3.5rem) 1rem 4rem;
+}
+
+.log-plate {
+  background: color-mix(in oklch, var(--card) 86%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-lg);
+  display: grid;
+  gap: 1.9rem;
+  padding: clamp(1.4rem, 4vw, 2.75rem);
+  width: min(100%, 44rem);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .log-plate {
+    -webkit-backdrop-filter: blur(18px) saturate(125%);
+    backdrop-filter: blur(18px) saturate(125%);
+    background: color-mix(in oklch, var(--card) 48%, transparent);
+  }
+}
+
+.log-masthead {
+  display: grid;
+  gap: 0.3rem;
+  justify-items: start;
+}
+
+.log-nameplate {
+  color: var(--muted-foreground);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.log-coordinate {
+  color: var(--starlight-cream);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: clamp(1.9rem, 6vw, 2.6rem);
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+}
+
+.log-coordinate-uri {
+  color: var(--muted-foreground);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.92rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.log-footage {
+  margin: 0 auto;
+  position: relative;
+  width: min(100%, 19rem);
+}
+
+.log-footage-media {
+  aspect-ratio: 9 / 16;
+  background: var(--sleeve-black);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-lg);
+  display: block;
+  object-fit: cover;
+  width: 100%;
+}
+
+.log-footage-preview {
+  bottom: 0.7rem;
+  position: absolute;
+  right: 0.7rem;
+}
+
+.log-definition {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.log-track-title {
+  color: var(--starlight-cream);
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.log-track-artist {
+  color: var(--stardust);
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.log-definition-prose {
+  color: var(--starlight-cream);
+  font-size: 0.95rem;
+  line-height: 1.55;
+  margin-top: 0.4rem;
+}
+
+.log-note {
+  border-left: 2px solid color-mix(in oklch, var(--primary) 45%, transparent);
+  color: var(--stardust);
+  font-size: 0.95rem;
+  font-style: italic;
+  line-height: 1.5;
+  padding-left: 0.9rem;
+}
+
+.log-fields {
+  display: grid;
+  gap: 0.8rem 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
+  margin: 0;
+}
+
+.log-field dt {
+  color: var(--muted-foreground);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.log-field dd {
+  color: var(--starlight-cream);
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.log-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.log-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.log-decode {
+  color: var(--stardust);
+  display: grid;
+  font-size: 0.9rem;
+  gap: 0.4rem;
+  line-height: 1.55;
+}
+
+.log-decode h2,
+.log-about-definitions h2,
+.log-about-faq h2 {
+  color: var(--starlight-cream);
+  font-size: 1.02rem;
+  font-weight: 800;
+}
+
+.log-decode-part {
+  color: var(--starlight-cream);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.log-decode a,
+.log-plate-footer a {
+  color: var(--accent-foreground);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.log-neighbors {
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding-top: 1.2rem;
+}
+
+.log-neighbor {
+  align-items: center;
+  color: var(--starlight-cream);
+  display: flex;
+  gap: 0.5rem;
+  text-decoration: none;
+}
+
+.log-neighbor-label {
+  color: var(--muted-foreground);
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.log-neighbor-line {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 700;
+  transition: color 150ms ease-out;
+}
+
+.log-neighbor:hover .log-neighbor-line,
+.log-neighbor:focus-visible .log-neighbor-line {
+  color: var(--accent-foreground);
+}
+
+.log-neighbor-older {
+  margin-left: auto;
+  text-align: right;
+}
+
+.log-plate-footer {
+  border-top: 1px solid var(--border);
+  display: flex;
+  font-size: 0.85rem;
+  gap: 1.25rem;
+  justify-content: space-between;
+  padding-top: 1.1rem;
+}
+
+/* The log index */
+
+.log-index-title {
+  font-variant-numeric: normal;
+}
+
+.log-index-intro {
+  color: var(--stardust);
+  font-size: 0.95rem;
+  margin-top: 0.4rem;
+}
+
+.log-index-empty {
+  color: var(--muted-foreground);
+  padding: 2rem 0;
+  text-align: center;
+}
+
+.log-index-list {
+  display: grid;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.log-index-row {
+  align-items: baseline;
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
+  display: grid;
+  gap: 0.2rem 0.9rem;
+  grid-template-columns: 5.2rem minmax(0, 1fr);
+  padding: 0.7rem 0;
+}
+
+.log-index-list li:last-child {
+  border-bottom: 0;
+}
+
+.log-index-id {
+  color: var(--muted-foreground);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.92rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+  transition: color 150ms ease-out;
+}
+
+.log-index-id:hover,
+.log-index-id:focus-visible {
+  color: var(--accent-foreground);
+}
+
+.log-index-line {
+  color: var(--starlight-cream);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.log-index-line:hover,
+.log-index-line:focus-visible {
+  color: var(--accent-foreground);
+}
+
+.log-index-date {
+  color: var(--muted-foreground);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  grid-column: 2;
+}
+
+@media (min-width: 640px) {
+  .log-index-row {
+    grid-template-columns: 5.2rem minmax(0, 1fr) auto;
+  }
+
+  .log-index-date {
+    grid-column: auto;
+  }
+}
+
+/* About */
+
+.log-about-story {
+  color: var(--starlight-cream);
+  display: grid;
+  font-size: 0.98rem;
+  gap: 0.9rem;
+  line-height: 1.6;
+}
+
+.log-about-definitions dl {
+  display: grid;
+  gap: 1.1rem;
+  margin: 0.9rem 0 0;
+}
+
+.log-about-definition dt {
+  color: var(--starlight-cream);
+  font-size: 0.95rem;
+  font-weight: 800;
+}
+
+.log-about-definition dd {
+  color: var(--stardust);
+  font-size: 0.92rem;
+  line-height: 1.55;
+  margin: 0.25rem 0 0;
+}
+
+.log-about-faq {
+  display: grid;
+  gap: 1rem;
+}
+
+.log-about-question h3 {
+  color: var(--starlight-cream);
+  font-size: 0.98rem;
+  font-weight: 800;
+}
+
+.log-about-question p {
+  color: var(--stardust);
+  font-size: 0.92rem;
+  line-height: 1.55;
+  margin-top: 0.3rem;
+}
+
+/* The feed's coordinate link */
+
+.track-log-id-link {
+  text-decoration: none;
+}
+
+.track-log-id-link:hover,
+.track-log-id-link:focus-visible {
+  color: var(--accent-foreground);
+}
+
 /* The Grounded Floats Rule (DESIGN.md): under reduced motion, every float
    collapses to a color-only transition. The Gold Veil wash carries feedback. */
 @media (prefers-reduced-motion: reduce) {

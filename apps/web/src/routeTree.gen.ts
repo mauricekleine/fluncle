@@ -12,9 +12,12 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as RssDotxmlRouteImport } from './routes/rss[.]xml'
 import { Route as GalaxyRouteImport } from './routes/galaxy'
+import { Route as AboutRouteImport } from './routes/about'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as StoriesIndexRouteImport } from './routes/stories.index'
+import { Route as LogIndexRouteImport } from './routes/log.index'
 import { Route as StoriesLogIdRouteImport } from './routes/stories.$logId'
+import { Route as LogLogIdRouteImport } from './routes/log.$logId'
 import { Route as CliLatestDotshRouteImport } from './routes/cli/latest[.]sh'
 import { Route as ApiTracksRouteImport } from './routes/api/tracks'
 import { Route as ApiSubmissionsRouteImport } from './routes/api/submissions'
@@ -53,6 +56,11 @@ const GalaxyRoute = GalaxyRouteImport.update({
   path: '/galaxy',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AboutRoute = AboutRouteImport.update({
+  id: '/about',
+  path: '/about',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -63,9 +71,19 @@ const StoriesIndexRoute = StoriesIndexRouteImport.update({
   path: '/stories/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const LogIndexRoute = LogIndexRouteImport.update({
+  id: '/log/',
+  path: '/log/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const StoriesLogIdRoute = StoriesLogIdRouteImport.update({
   id: '/stories/$logId',
   path: '/stories/$logId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LogLogIdRoute = LogLogIdRouteImport.update({
+  id: '/log/$logId',
+  path: '/log/$logId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CliLatestDotshRoute = CliLatestDotshRouteImport.update({
@@ -190,6 +208,7 @@ const ApiAdminTracksTrackIdSocialPlatformDraftRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/about': typeof AboutRoute
   '/galaxy': typeof GalaxyRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
@@ -200,7 +219,9 @@ export interface FileRoutesByFullPath {
   '/api/submissions': typeof ApiSubmissionsRoute
   '/api/tracks': typeof ApiTracksRouteWithChildren
   '/cli/latest.sh': typeof CliLatestDotshRoute
+  '/log/$logId': typeof LogLogIdRoute
   '/stories/$logId': typeof StoriesLogIdRoute
+  '/log/': typeof LogIndexRoute
   '/stories/': typeof StoriesIndexRoute
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
   '/api/admin/tracks': typeof ApiAdminTracksRouteWithChildren
@@ -220,6 +241,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/about': typeof AboutRoute
   '/galaxy': typeof GalaxyRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
@@ -230,7 +252,9 @@ export interface FileRoutesByTo {
   '/api/submissions': typeof ApiSubmissionsRoute
   '/api/tracks': typeof ApiTracksRouteWithChildren
   '/cli/latest.sh': typeof CliLatestDotshRoute
+  '/log/$logId': typeof LogLogIdRoute
   '/stories/$logId': typeof StoriesLogIdRoute
+  '/log': typeof LogIndexRoute
   '/stories': typeof StoriesIndexRoute
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
   '/api/admin/tracks': typeof ApiAdminTracksRouteWithChildren
@@ -251,6 +275,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/about': typeof AboutRoute
   '/galaxy': typeof GalaxyRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
@@ -261,7 +286,9 @@ export interface FileRoutesById {
   '/api/submissions': typeof ApiSubmissionsRoute
   '/api/tracks': typeof ApiTracksRouteWithChildren
   '/cli/latest.sh': typeof CliLatestDotshRoute
+  '/log/$logId': typeof LogLogIdRoute
   '/stories/$logId': typeof StoriesLogIdRoute
+  '/log/': typeof LogIndexRoute
   '/stories/': typeof StoriesIndexRoute
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
   '/api/admin/tracks': typeof ApiAdminTracksRouteWithChildren
@@ -283,6 +310,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/about'
     | '/galaxy'
     | '/rss.xml'
     | '/sitemap.xml'
@@ -293,7 +321,9 @@ export interface FileRouteTypes {
     | '/api/submissions'
     | '/api/tracks'
     | '/cli/latest.sh'
+    | '/log/$logId'
     | '/stories/$logId'
+    | '/log/'
     | '/stories/'
     | '/api/admin/submissions'
     | '/api/admin/tracks'
@@ -313,6 +343,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/about'
     | '/galaxy'
     | '/rss.xml'
     | '/sitemap.xml'
@@ -323,7 +354,9 @@ export interface FileRouteTypes {
     | '/api/submissions'
     | '/api/tracks'
     | '/cli/latest.sh'
+    | '/log/$logId'
     | '/stories/$logId'
+    | '/log'
     | '/stories'
     | '/api/admin/submissions'
     | '/api/admin/tracks'
@@ -343,6 +376,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/about'
     | '/galaxy'
     | '/rss.xml'
     | '/sitemap.xml'
@@ -353,7 +387,9 @@ export interface FileRouteTypes {
     | '/api/submissions'
     | '/api/tracks'
     | '/cli/latest.sh'
+    | '/log/$logId'
     | '/stories/$logId'
+    | '/log/'
     | '/stories/'
     | '/api/admin/submissions'
     | '/api/admin/tracks'
@@ -374,6 +410,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AboutRoute: typeof AboutRoute
   GalaxyRoute: typeof GalaxyRoute
   RssDotxmlRoute: typeof RssDotxmlRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
@@ -384,7 +421,9 @@ export interface RootRouteChildren {
   ApiSubmissionsRoute: typeof ApiSubmissionsRoute
   ApiTracksRoute: typeof ApiTracksRouteWithChildren
   CliLatestDotshRoute: typeof CliLatestDotshRoute
+  LogLogIdRoute: typeof LogLogIdRoute
   StoriesLogIdRoute: typeof StoriesLogIdRoute
+  LogIndexRoute: typeof LogIndexRoute
   StoriesIndexRoute: typeof StoriesIndexRoute
   ApiAdminSubmissionsRoute: typeof ApiAdminSubmissionsRouteWithChildren
   ApiAdminTracksRoute: typeof ApiAdminTracksRouteWithChildren
@@ -416,6 +455,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof GalaxyRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/about': {
+      id: '/about'
+      path: '/about'
+      fullPath: '/about'
+      preLoaderRoute: typeof AboutRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -430,11 +476,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof StoriesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/log/': {
+      id: '/log/'
+      path: '/log'
+      fullPath: '/log/'
+      preLoaderRoute: typeof LogIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/stories/$logId': {
       id: '/stories/$logId'
       path: '/stories/$logId'
       fullPath: '/stories/$logId'
       preLoaderRoute: typeof StoriesLogIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/log/$logId': {
+      id: '/log/$logId'
+      path: '/log/$logId'
+      fullPath: '/log/$logId'
+      preLoaderRoute: typeof LogLogIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/cli/latest.sh': {
@@ -698,6 +758,7 @@ const ApiAdminTracksRouteWithChildren = ApiAdminTracksRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AboutRoute: AboutRoute,
   GalaxyRoute: GalaxyRoute,
   RssDotxmlRoute: RssDotxmlRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
@@ -708,7 +769,9 @@ const rootRouteChildren: RootRouteChildren = {
   ApiSubmissionsRoute: ApiSubmissionsRoute,
   ApiTracksRoute: ApiTracksRouteWithChildren,
   CliLatestDotshRoute: CliLatestDotshRoute,
+  LogLogIdRoute: LogLogIdRoute,
   StoriesLogIdRoute: StoriesLogIdRoute,
+  LogIndexRoute: LogIndexRoute,
   StoriesIndexRoute: StoriesIndexRoute,
   ApiAdminSubmissionsRoute: ApiAdminSubmissionsRouteWithChildren,
   ApiAdminTracksRoute: ApiAdminTracksRouteWithChildren,

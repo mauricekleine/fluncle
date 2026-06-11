@@ -24,9 +24,22 @@ export function TrackRow({ track, trackNumber }: { track: Track; trackNumber: nu
 
   return (
     <li className="track-row">
-      <span className="track-log-id">
-        {track.logId ?? `#${trackNumber.toString().padStart(2, "0")}`}
-      </span>
+      {track.logId ? (
+        // The coordinate links to its log page — the crawlable exact-match
+        // anchor that keeps /log/<id> pages from being orphans.
+        <Link
+          aria-label={`Open the log page for ${trackLine}`}
+          className="track-log-id track-log-id-link"
+          params={{ logId: track.logId }}
+          to="/log/$logId"
+        >
+          {track.logId}
+        </Link>
+      ) : (
+        // No coordinate yet (the ISRC straggler case): a bare ordinal, no log
+        // page to link until it's backfilled.
+        <span className="track-log-id">{`#${trackNumber.toString().padStart(2, "0")}`}</span>
+      )}
 
       {track.previewUrl ? (
         <PreviewToggle track={track} trackLine={trackLine} />
@@ -68,7 +81,7 @@ export function TrackRow({ track, trackNumber }: { track: Track; trackNumber: nu
             aria-label={`Watch the story for ${trackLine}`}
             className="track-action"
             params={{ logId: storyLogId }}
-            to="/stories/$logId"
+            to="/log/$logId"
           >
             <FilmStripIcon aria-hidden="true" size={18} weight="bold" />
           </Link>

@@ -1,6 +1,6 @@
 # Fluncle
 
-> Drum & bass bangers from another dimension. Fluncle digs and certifies the tracks, publishes them to Spotify and Telegram, and keeps the full archive at fluncle.com.
+> Drum & bass bangers from another dimension. Fluncle digs and certifies every track, publishes them to Spotify and Telegram, and keeps the full archive of his findings at fluncle.com.
 
 Fluncle is a single selector, not a team. Every track in the archive is one he found, listened to, and certified. Dates mark when he found it: the day Fluncle first heard the tune, not the day it released.
 
@@ -11,6 +11,8 @@ The collection is called Fluncle's Findings. New tracks land most nights.
 - [Fluncle's Findings on Spotify](https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0): the playlist itself
 - [Fluncle on Telegram](https://t.me/fluncle): one banger per post, most nights
 - [The archive](https://www.fluncle.com/): every certified track with the date Fluncle found it and notes
+- [The log](https://www.fluncle.com/log): every finding's coordinate page, one per Log ID (e.g. https://www.fluncle.com/log/004.7.2I)
+- [About Fluncle](https://www.fluncle.com/about): who Fluncle is, what the Galaxy is, and how to read a Log ID like fluncle://004.7.2I
 
 ## Data
 

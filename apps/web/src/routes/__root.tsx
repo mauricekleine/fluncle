@@ -3,10 +3,11 @@
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
 import { type ReactNode } from "react";
 import { siteUrl } from "../lib/fluncle-links";
+import { fluncleDescription } from "../lib/identity";
 import appCss from "../styles.css?url";
 
 const title = "Fluncle: drum & bass bangers from another dimension";
-const description = "Drum & bass bangers from another dimension.";
+const description = fluncleDescription;
 const coverUrl = `${siteUrl}/fluncle-cover.png`;
 
 export const Route = createRootRoute({
@@ -60,7 +61,7 @@ export const Route = createRootRoute({
         property: "og:title",
       },
       {
-        content: "Drum & bass bangers from another dimension.",
+        content: description,
         property: "og:description",
       },
       {
@@ -100,7 +101,7 @@ export const Route = createRootRoute({
         name: "twitter:title",
       },
       {
-        content: "Drum & bass bangers from another dimension.",
+        content: description,
         name: "twitter:description",
       },
       {

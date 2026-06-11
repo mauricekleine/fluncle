@@ -125,6 +125,51 @@ export async function getTrackByIdOrLogId(idOrLogId: string): Promise<TrackListI
   return row ? toTrackListItem(row) : undefined;
 }
 
+export type TrackNeighbor = {
+  artists: string[];
+  logId: string;
+  title: string;
+};
+
+type NeighborRow = {
+  artists_json: string;
+  log_id: string;
+  title: string;
+};
+
+/**
+ * The adjacent coordinate-bearing findings in found order — the log page's
+ * newer/older links (crawlable adjacency through the whole archive).
+ */
+export async function getTrackNeighbors(track: {
+  addedAt: string;
+  trackId: string;
+}): Promise<{ newer?: TrackNeighbor; older?: TrackNeighbor }> {
+  const db = await getDb();
+  const select = `select log_id, title, artists_json from tracks where log_id is not null`;
+  const [newerResult, olderResult] = await Promise.all([
+    db.execute({
+      args: [track.addedAt, track.addedAt, track.trackId],
+      sql: `${select} and (added_at > ? or (added_at = ? and track_id > ?))
+            order by added_at asc, track_id asc limit 1`,
+    }),
+    db.execute({
+      args: [track.addedAt, track.addedAt, track.trackId],
+      sql: `${select} and (added_at < ? or (added_at = ? and track_id < ?))
+            order by added_at desc, track_id desc limit 1`,
+    }),
+  ]);
+  const toNeighbor = (row: NeighborRow | undefined): TrackNeighbor | undefined =>
+    row
+      ? { artists: parseArtists(row.artists_json), logId: row.log_id, title: row.title }
+      : undefined;
+
+  return {
+    newer: toNeighbor(newerResult.rows[0] as unknown as NeighborRow | undefined),
+    older: toNeighbor(olderResult.rows[0] as unknown as NeighborRow | undefined),
+  };
+}
+
 type TrackCountRow = {
   total_count: number;
 };

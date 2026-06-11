@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { siteUrl, spotifyPlaylistUrl, telegramUrl } from "@/lib/fluncle-links";
+import { fluncleDescription } from "@/lib/identity";
 import { listTracks } from "@/lib/server/tracks";
 import { fetchTracks, type Track } from "@/lib/tracks";
 import { registerWebMcpTools } from "@/lib/webmcp";
@@ -39,10 +40,22 @@ export const Route = createFileRoute("/")({
     links: [{ href: `${siteUrl}/`, rel: "canonical" }],
     scripts: [
       {
+        // The site-level entity block (no SearchAction: there is no search
+        // results page, and schema must mirror what the page actually does).
+        children: JSON.stringify({
+          "@context": "https://schema.org",
+          "@type": "WebSite",
+          description: fluncleDescription,
+          name: "Fluncle",
+          url: `${siteUrl}/`,
+        }),
+        type: "application/ld+json",
+      },
+      {
         children: JSON.stringify({
           "@context": "https://schema.org",
           "@type": "MusicPlaylist",
-          description: "Drum & bass bangers from another dimension.",
+          description: fluncleDescription,
           genre: "Drum and Bass",
           image: `${siteUrl}/fluncle-cover.png`,
           name: "Fluncle's Findings",
