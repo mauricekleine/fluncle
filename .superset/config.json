@@ -1,0 +1,5 @@
+{
+  "setup": ["bun install", "cp \"$SUPERSET_ROOT_PATH/apps/web/.dev.vars\" apps/web/.dev.vars"],
+  "teardown": [],
+  "run": []
+}
