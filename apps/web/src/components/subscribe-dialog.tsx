@@ -12,9 +12,11 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { subscribeToNewsletter } from "@/lib/newsletter";
 
-export function SubscribeDialog() {
+/** `compact` renders the trigger as a tooltip'd icon for the socials cluster. */
+export function SubscribeDialog({ compact = false }: { compact?: boolean } = {}) {
   const [email, setEmail] = useState("");
   const [website, setWebsite] = useState("");
   const [error, setError] = useState<string | undefined>();
@@ -47,10 +49,27 @@ export function SubscribeDialog() {
 
   return (
     <Dialog>
-      <DialogTrigger render={<Button size="lg" variant="outline" />}>
-        <EnvelopeSimpleIcon aria-hidden="true" weight="bold" />
-        Get the weekly newsletter
-      </DialogTrigger>
+      {compact ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <DialogTrigger
+                render={
+                  <Button aria-label="Get the weekly newsletter" size="icon-lg" variant="outline" />
+                }
+              />
+            }
+          >
+            <EnvelopeSimpleIcon aria-hidden="true" weight="bold" />
+          </TooltipTrigger>
+          <TooltipContent>Get the weekly newsletter</TooltipContent>
+        </Tooltip>
+      ) : (
+        <DialogTrigger render={<Button size="lg" variant="outline" />}>
+          <EnvelopeSimpleIcon aria-hidden="true" weight="bold" />
+          Get the weekly newsletter
+        </DialogTrigger>
+      )}
       <DialogContent>
         <DialogHeader>
           <DialogTitle>The weekly newsletter</DialogTitle>

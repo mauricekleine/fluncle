@@ -77,11 +77,15 @@ export function TrackRow({ track, trackNumber }: { track: Track; trackNumber: nu
 
       <span className="track-actions">
         {storyLogId ? (
+          // Opens the story as a dialog over the feed; the mask shows (and
+          // crawlers see) the standalone /log/<id> URL, which is also what a
+          // refresh or share lands on.
           <Link
             aria-label={`Watch the story for ${trackLine}`}
             className="track-action"
-            params={{ logId: storyLogId }}
-            to="/log/$logId"
+            mask={{ params: { logId: storyLogId }, to: "/log/$logId", unmaskOnReload: true }}
+            search={{ story: storyLogId }}
+            to="/"
           >
             <FilmStripIcon aria-hidden="true" size={18} weight="bold" />
           </Link>

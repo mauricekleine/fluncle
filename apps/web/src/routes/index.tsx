@@ -1,29 +1,43 @@
 import {
   CircleNotchIcon,
+  FilmStripIcon,
   SpotifyLogoIcon,
   TelegramLogoIcon,
+  TiktokLogoIcon,
   XLogoIcon,
 } from "@phosphor-icons/react";
-import { createFileRoute } from "@tanstack/react-router";
+import {
+  Link,
+  createFileRoute,
+  useCanGoBack,
+  useNavigate,
+  useRouter,
+} from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { colors } from "@fluncle/tokens";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CliInstallDialog } from "@/components/cli-install-dialog";
 import { RandomBangerDialog } from "@/components/random-banger-dialog";
+import { StoriesDialog } from "@/components/stories/stories-dialog";
 import { SubmitTrackDialog } from "@/components/submit-track-dialog";
 import { SubscribeDialog } from "@/components/subscribe-dialog";
 import { TerminalRaversDialog } from "@/components/terminal-ravers-dialog";
 import { TrackRow } from "@/components/track-row";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import { siteUrl, spotifyPlaylistUrl, telegramUrl } from "@/lib/fluncle-links";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { siteUrl, spotifyPlaylistUrl, telegramUrl, tiktokUrl } from "@/lib/fluncle-links";
 import { fluncleDescription } from "@/lib/identity";
 import { listTracks } from "@/lib/server/tracks";
 import { fetchTracks, type Track } from "@/lib/tracks";
 import { registerWebMcpTools } from "@/lib/webmcp";
 
 const pageSize = 10;
+
+type HomeSearch = {
+  /** The Log ID of the story open in the dialog (masked to /log/<id>). */
+  story?: string;
+};
 
 // Server-rendering the first page keeps the archive readable for crawlers
 // (search engines and AI agents alike) that never execute JavaScript.
@@ -78,16 +92,58 @@ export const Route = createFileRoute("/")({
     ],
   }),
   loader: () => fetchInitialTracks(),
+  // Opening/closing the Stories dialog is a search-param change on this same
+  // route; the feed's loader must not re-run per open (a reload would remount
+  // the list and lose the scroll the dialog is supposed to preserve).
+  shouldReload: false,
+  validateSearch: (search: Record<string, unknown>): HomeSearch => ({
+    story: typeof search.story === "string" && search.story.length > 0 ? search.story : undefined,
+  }),
 });
 
 function HomePage() {
   const initialPage = Route.useLoaderData();
+  const { story } = Route.useSearch();
+  const navigate = useNavigate();
+  const router = useRouter();
+  const canGoBack = useCanGoBack();
   const [cursor, setCursor] = useState<string | undefined>();
   const [error, setError] = useState<string | undefined>();
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | undefined>(initialPage.nextCursor);
   const [totalCount, setTotalCount] = useState(initialPage.totalCount);
   const [tracks, setTracks] = useState<Track[]>(initialPage.tracks);
+
+  // Close the dialog by going BACK to the feed's history entry: a fresh
+  // navigate({ to: "/" }) would mint a new entry and scroll the feed to top.
+  // The fallback covers a direct /?story= load where there is nothing behind.
+  const closeStory = useCallback(() => {
+    if (canGoBack) {
+      router.history.back();
+    } else {
+      void navigate({ replace: true, search: {}, to: "/" });
+    }
+  }, [canGoBack, navigate, router]);
+
+  // Per-flick URL sync: a masked REPLACE navigation (never a raw
+  // replaceState, which would wipe the mask's __tempLocation state and swap
+  // the screen to the standalone route). shouldReload: false on this route
+  // keeps the loader quiet, so the flick stays cheap.
+  const handleStoryChange = useCallback(
+    (logId: string) => {
+      void navigate({
+        mask: { params: { logId }, to: "/log/$logId", unmaskOnReload: true },
+        replace: true,
+        resetScroll: false,
+        search: { story: logId },
+        to: "/",
+      });
+    },
+    [navigate],
+  );
+
+  // The "all stories" entry opens at the newest finding with footage.
+  const newestStoryLogId = tracks.find((candidate) => candidate.videoUrl && candidate.logId)?.logId;
 
   useEffect(() => {
     console.log(
@@ -204,18 +260,83 @@ function HomePage() {
                 </Button>
                 <RandomBangerDialog />
               </div>
+              {/* Follow across the Galaxy: one quiet icon cluster (the IA
+                  regroup — destinations above, contribute below). */}
+              <div className="mt-3 flex items-center justify-center gap-2 lg:justify-start">
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        aria-label="Fluncle on TikTok"
+                        nativeButton={false}
+                        render={<a href={tiktokUrl} rel="noreferrer" target="_blank" />}
+                        size="icon-lg"
+                        variant="outline"
+                      />
+                    }
+                  >
+                    <TiktokLogoIcon aria-hidden="true" weight="fill" />
+                  </TooltipTrigger>
+                  <TooltipContent>Fluncle on TikTok</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        aria-label="DM me on X"
+                        nativeButton={false}
+                        render={
+                          <a href="https://x.com/mauricekleine" rel="noreferrer" target="_blank" />
+                        }
+                        size="icon-lg"
+                        variant="outline"
+                      />
+                    }
+                  >
+                    <XLogoIcon aria-hidden="true" weight="bold" />
+                  </TooltipTrigger>
+                  <TooltipContent>DM me on X</TooltipContent>
+                </Tooltip>
+                <SubscribeDialog compact />
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      newestStoryLogId ? (
+                        <Button
+                          aria-label="All stories"
+                          nativeButton={false}
+                          render={
+                            <Link
+                              mask={{
+                                params: { logId: newestStoryLogId },
+                                to: "/log/$logId",
+                                unmaskOnReload: true,
+                              }}
+                              search={{ story: newestStoryLogId }}
+                              to="/"
+                            />
+                          }
+                          size="icon-lg"
+                          variant="outline"
+                        />
+                      ) : (
+                        <Button
+                          aria-label="All stories"
+                          nativeButton={false}
+                          render={<Link to="/log" />}
+                          size="icon-lg"
+                          variant="outline"
+                        />
+                      )
+                    }
+                  >
+                    <FilmStripIcon aria-hidden="true" weight="bold" />
+                  </TooltipTrigger>
+                  <TooltipContent>All stories</TooltipContent>
+                </Tooltip>
+              </div>
               <div className="mt-3 grid gap-2">
                 <SubmitTrackDialog />
-                <SubscribeDialog />
-                <Button
-                  nativeButton={false}
-                  render={<a href="https://x.com/mauricekleine" rel="noreferrer" target="_blank" />}
-                  size="lg"
-                  variant="outline"
-                >
-                  <XLogoIcon aria-hidden="true" weight="bold" />
-                  DM me on X
-                </Button>
                 <div className="playlist-shell mt-1 grid gap-1 rounded-lg border border-border px-3.5 py-3">
                   <p className="text-xs font-extrabold text-muted-foreground">For the nerds:</p>
                   <div className="grid justify-items-start">
@@ -285,6 +406,13 @@ function HomePage() {
             </section>
           </div>
         </section>
+
+        <StoriesDialog
+          initialLogId={story}
+          onClose={closeStory}
+          onStoryChange={handleStoryChange}
+          open={Boolean(story)}
+        />
       </main>
     </TooltipProvider>
   );

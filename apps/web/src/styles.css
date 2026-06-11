@@ -488,17 +488,44 @@ body::after {
 /* ————— Stories ————— */
 
 /* The Stories stage: one finding at a time, full-bleed on mobile, a 9:16 pane
-   centered directly on the cosmos at desktop widths (One Pane). The stage is
-   transparent on purpose: the cover-art backdrop and the grain veil carry
-   through, so the loud video sits inside the quiet logbook. */
+   centered directly on the cosmos at desktop widths (One Pane) — WITH vertical
+   breathing room: the pane is sized from the padded stage height via
+   --stories-pane-height, and the viewport/chrome/swipe all key off the same
+   var so they move together. The stage is transparent on purpose: the
+   cover-art backdrop and the grain veil carry through, so the loud video sits
+   inside the quiet logbook. In dialog presentation the DialogContent owns the
+   fixed full-screen frame, so the stage drops position:fixed. */
 .stories-stage {
+  --stories-pane-height: 100dvh;
+  display: grid;
   height: 100dvh;
   inset: 0;
   overflow: hidden;
+  place-items: center;
   position: fixed;
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
+}
+
+.stories-stage[data-presentation="dialog"] {
+  height: 100%;
+  position: relative;
+}
+
+@media (min-width: 768px) {
+  .stories-stage {
+    --stories-pane-height: calc(100dvh - 4.5rem);
+    padding-block: 2.25rem;
+  }
+}
+
+/* The pane: clips the translating track to the (padded) 9:16 slot. */
+.stories-viewport {
+  height: var(--stories-pane-height);
+  overflow: hidden;
+  position: relative;
+  width: min(100vw, calc(var(--stories-pane-height) * 9 / 16));
 }
 
 .stories-track {
@@ -517,10 +544,16 @@ body::after {
 .story-view {
   border-inline: 1px solid var(--border);
   height: 100%;
-  margin-inline: auto;
   overflow: hidden;
   position: relative;
-  width: min(100vw, calc(100dvh * 9 / 16));
+  width: 100%;
+}
+
+@media (min-width: 768px) {
+  .story-view {
+    border: 1px solid var(--border);
+    border-radius: var(--rounded-lg);
+  }
 }
 
 .story-footage {
@@ -603,12 +636,11 @@ body::after {
   display: grid;
   gap: 0.4rem;
   left: 0;
-  margin-inline: auto;
   padding: calc(0.75rem + env(safe-area-inset-top)) 0.9rem 0;
   position: absolute;
   right: 0;
   top: 0;
-  width: min(100vw, calc(100dvh * 9 / 16));
+  width: 100%;
   z-index: 2;
 }
 
