@@ -1,6 +1,6 @@
 # RFC: fluncle.com — discoverability, the log page, routed-dialog Stories, and the aesthetic overhaul
 
-**Status:** Final (research → /taste → 4-reviewer adversarial panel synthesized, 2026-06-11) — completeness standard applied: the whole thing, tested + documented, no deferrals.
+**Status:** SHIPPED 2026-06-11 (same day): all units + Track A live on main, tests + docs landed, before/after in `docs/baselines/web-overhaul-baseline-2026-06-11.md`; the off-site remainder lives in ROADMAP's AEO/GEO thread. Originally: Final (research → /taste → 4-reviewer adversarial panel synthesized, 2026-06-11) — completeness standard applied.
 **For:** a fresh build session + sub-agents.
 **Canon:** DESIGN.md / PRODUCT.md / VOICE.md and the codebase arbitrate. This is planning, not spec.
 

@@ -12,14 +12,16 @@ The shared profile image is `apps/web/public/fluncle.png` (1180×1180) everywher
 
 ## Accounts
 
-| Platform           | Handle                     | Link                                                                           | Bio (current)                                                            |
-| ------------------ | -------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
-| Spotify (profile)  | `fluncle`                  | https://open.spotify.com/user/berry_fudge?si=5c4a9d39a3384088                  | n/a                                                                      |
-| Spotify (playlist) | Fluncle's Findings         | https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0?si=054d3c6cbcf14a36   | The product artifact; this is the link surfaces share                    |
-| TikTok             | `@fluncle`                 | https://www.tiktok.com/@fluncle                                                | "Drum & bass bangers from another dimension."                            |
-| Telegram (channel) | `@fluncle`                 | https://t.me/fluncle                                                           | The feed every surface links to; one banger per post under the 🛸 header |
-| Telegram (bot)     | `@fluncle_bot`             | https://web.telegram.org/k/#@fluncle_bot                                       | "Drum & bass bangers from another dimension."                            |
-| X                  | none (deliberate, for now) | personal cross-post via https://x.com/mauricekleine ("DM me on X" on the site) | Fluncle has no own X handle yet; the site routes DMs to Maurice          |
+| Platform           | Handle                     | Link                                                                           | Bio (current)                                                                               |
+| ------------------ | -------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| Spotify (profile)  | `fluncle`                  | https://open.spotify.com/user/berry_fudge?si=5c4a9d39a3384088                  | n/a                                                                                         |
+| Spotify (playlist) | Fluncle's Findings         | https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0?si=054d3c6cbcf14a36   | The product artifact; this is the link surfaces share                                       |
+| TikTok             | `@fluncle`                 | https://www.tiktok.com/@fluncle                                                | "Drum & bass bangers from another dimension."                                               |
+| Telegram (channel) | `@fluncle`                 | https://t.me/fluncle                                                           | The feed every surface links to; one banger per post under the 🛸 header                    |
+| MusicBrainz        | artist entry               | https://musicbrainz.org/artist/53346748-1357-45c0-a847-9d248b65d655            | The corroboration anchor (Person, "drum & bass selector, Fluncle's Findings"); no bio field |
+| Wikidata           | `Q140169844`               | https://www.wikidata.org/wiki/Q140169844                                       | The knowledge-graph item; cites the MusicBrainz ID, site, TikTok + Telegram                 |
+| Telegram (bot)     | `@fluncle_bot`             | https://web.telegram.org/k/#@fluncle_bot                                       | "Drum & bass bangers from another dimension."                                               |
+| X                  | none (deliberate, for now) | personal cross-post via https://x.com/mauricekleine ("DM me on X" on the site) | Fluncle has no own X handle yet; the site routes DMs to Maurice                             |
 
 ## Owned channels (not accounts, same map)
 

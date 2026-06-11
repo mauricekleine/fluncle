@@ -55,4 +55,4 @@ Before returning copy, verify against VOICE.md:
 - CLI and SSH output stays clean and parseable when it is data; jokes live in help text, welcomes, and empty states, not in machine-readable lines.
 - Any lossy texture is narrative, never broken UI (the Light-Years Rule).
 - Every claim is real: no invented tracks, dates, Log IDs, stats, or scene history. The Log ID coordinate is a deferred feature — never fabricate one to fill a layout.
-- Meta descriptions, OG, and link-preview / social descriptions use the tagline verbatim: "Drum & bass bangers from another dimension."
+- Identity strings come from `apps/web/src/lib/identity.ts` and are reused verbatim, never paraphrased: meta descriptions, OG, and link-preview descriptions use the canonical description (tagline-led: "Drum & bass bangers from another dimension. Fluncle digs and certifies every track, …"); platform bios use the bio (the tagline plus `www.fluncle.com` on its own line; docs/socials.md). Both open with the tagline.

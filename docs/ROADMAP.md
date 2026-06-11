@@ -106,6 +106,10 @@ Persistent per-user state — the thing that unlocks saved progress (e.g. a play
 
 - **Moodboard → canon audit (video-side remainder)** — the web overhaul resolved the web half (the logbook plate, ignition hovers, the grain architecture, and the archive grammar are in DESIGN.md now). Still open per concept: whether the video-kit proofs (texture families' full grammar, vehicle grammar, One-Sun-through-the-vehicle) get promoted into canon or stay video-local; cross-link, don't duplicate.
 
+### Link the log pages where hyperlinks exist
+
+Every finding now has a permanent URL (`https://www.fluncle.com/log/<log-id>`) — surfaces that can carry real links should use it: the Friday newsletter (per-track links to the log page instead of/alongside Spotify), Telegram posts (a quiet log-page link under the banger), and CLI/SSH output where a URL prints. TikTok captions stay bare-coordinate (`fluncle://<id>`) on purpose — no hyperlinks there, and the coordinate-to-site retrieval is the AEO play.
+
 ### Newsletter agent (Spinup)
 
 The Friday newsletter agent ([docs/newsletter-agent.md](./newsletter-agent.md)) exists on Spinup but is stopped and unconfigured. To go live: enable its capabilities (the `loops` + `firecrawl` CLIs with their secrets), confirm the core instructions, and wire a Friday schedule; it reads the discovery window from `/api/tracks` and sends via Loops. Dry-run one issue end-to-end before letting it send.
