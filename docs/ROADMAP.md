@@ -25,9 +25,9 @@ The on-site layer shipped (per-finding `/log/<id>` pages with definitional prose
 
 The web side shipped (the socials cluster on the home plate, TikTok links on the log pages and feed rows). Remaining: the CLI + SSH sign-offs and any other non-web surface that should point at [@fluncle on TikTok](https://www.tiktok.com/@fluncle) and the rest of [docs/socials.md](./socials.md).
 
-### Self-hosted preview audio in R2 (reliability + speed)
+### Private preview archive for analysis
 
-Today previews stream straight from Deezer (iTunes fallback) through the same-origin `/api/preview/:idOrLogId` proxy — and Deezer preview URLs carry expiring `hdnea` tokens plus a third-party hop. Store the **official 30s preview in R2** at enrichment time and read it from our own archive instead: no expiry breakage, no play-time dependency on Deezer, and faster, cacheable, same-origin loads (which Web Audio's gain fade wants anyway). Make the API source-agnostic — a stored R2 `preview_url` is preferred, Deezer/iTunes stays the live fallback — exactly what the Galaxy game's `/api/preview` proxy already anticipates ("a future R2 `preview_url` drops in unchanged"). **Fold it into the enrichment flow:** enrich pulls the preview from Deezer (iTunes fallback), stores it in R2 under the `<log-id>/` media convention (e.g. `preview.mp3` via `lib/media.ts`), runs the analysis on that file, then writes `preview_url` back through the admin API. Backfill the existing archive the same way. Note: this is the official preview (the same bytes we already proxy), **not** full-song audio — consistent with the audio policy (full audio stays internal-analysis-only).
+Public preview playback stays live-only through `/api/preview/:idOrLogId`: stored Deezer URL, refreshed Deezer by ISRC, then iTunes fallback, with `Cache-Control: no-store`. Do **not** make R2 the playback source and do not write an R2 URL into `preview_url`. Instead, preserve the exact official 30s preview used for the enrichment feature vector at an operator-only archive path in R2. The archive is private analysis/model-training input for the future sub-genre classifier, not public media, not downloadable, not streamed, and never full-song audio. Backfill can archive one freshly resolved preview per existing finding as a best-effort backlog repair; it may differ from the bytes an older enrichment analyzed.
 
 ### Admin sub-genre tagging UI (the classifier's training data)
 
@@ -62,7 +62,7 @@ The spine (the Log ID) already runs across surfaces; what's ahead:
 
 ### Fluncle's Galaxy — the game (v1 live)
 
-v1 shipped 2026-06-10 at [galaxy.fluncle.com](https://galaxy.fluncle.com) (same Worker, `/galaxy` route): behind-the-ship 8-bit flight where every banger is a star at its Log ID coordinate, the nearest uncollected preview fades in by distance and pans by bearing, reaching a star parks you in an orbit listening moment that refuels the tank, dry tank means towed home at `0/N`, and `N/N` opens the fly-home win with a credits roll of the full log. Touch + keyboard, Esc pause, the `window.fluncle` flight computer easter egg, audio through the same-origin `/api/preview/:idOrLogId` proxy (source-agnostic: a future R2 `preview_url` drops in unchanged). Shares the Log ID spine with the logbook reframe; the shipped design decisions live in the code and git history. What's ahead:
+v1 shipped 2026-06-10 at [galaxy.fluncle.com](https://galaxy.fluncle.com) (same Worker, `/galaxy` route): behind-the-ship 8-bit flight where every banger is a star at its Log ID coordinate, the nearest uncollected preview fades in by distance and pans by bearing, reaching a star parks you in an orbit listening moment that refuels the tank, dry tank means towed home at `0/N`, and `N/N` opens the fly-home win with a credits roll of the full log. Touch + keyboard, Esc pause, the `window.fluncle` flight computer easter egg, audio through the same-origin `/api/preview/:idOrLogId` proxy (live Deezer/iTunes only; archived previews are not a playback source). Shares the Log ID spine with the logbook reframe; the shipped design decisions live in the code and git history. What's ahead:
 
 **Near polish:**
 

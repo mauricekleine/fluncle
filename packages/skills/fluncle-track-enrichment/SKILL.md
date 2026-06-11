@@ -28,15 +28,23 @@ The analysis script (`scripts/analyze-track.ts`) is **self-contained** — zero 
 
    Keep the `trackId`, `artists`, `title`, and `isrc` from the result. (You write back by `trackId`.)
 
-2. **Analyze the preview.** It downloads a legal preview, decodes it, and emits an analysis JSON on stdout:
+2. **Analyze the preview.** It downloads legal previews, decodes them, and emits an analysis JSON on stdout. Pass `--archive-dir` when you also need to preserve the exact preview used for the feature vector:
 
    ```
-   bun scripts/analyze-track.ts --artist "<artist>" --title "<title>" [--isrc "<isrc>"]
+   bun scripts/analyze-track.ts --artist "<artist>" --title "<title>" [--isrc "<isrc>"] --archive-dir /tmp/fluncle-preview
    ```
 
-   The output: `{ bpm, bpmConfidence, key, keyConfidence, features, suggestedTags, tagsSource, previews }`. It resolves **multiple** previews (Deezer + iTunes are often different 30s windows of the song) and keeps the most-confident read per field. Both `bpm` and `key` are `null` when confidence is low — better null than wrong (e.g. a beatless build-up preview, or an atonal track). `suggestedTags` is a **best guess** from the audio (may be empty); `features` is the raw vector.
+   The output: `{ archivePreview, bpm, bpmConfidence, key, keyConfidence, features, suggestedTags, tagsSource, previews }`. It resolves **multiple** previews (Deezer + iTunes are often different 30s windows of the song) and keeps the most-confident read per field. The exported `archivePreview` is exactly the preview used for the feature vector; it is an operator-only archive path input for private analysis/model training, not public playback media. Both `bpm` and `key` are `null` when confidence is low — better null than wrong (e.g. a beatless build-up preview, or an atonal track). `suggestedTags` is a **best guess** from the audio (may be empty); `features` is the raw vector.
 
-3. **Write it back.** Use the analysis output:
+3. **Archive the analysis preview.** If `archivePreview` is present, store that one official 30s preview through the admin API:
+
+   ```
+   fluncle admin track preview-archive <trackId> --file "<archivePreview.path>" --source "<archivePreview.source>" --mime "<archivePreview.mime>"
+   ```
+
+   The Worker writes the bytes to R2 under an operator-only archive path and stores internal metadata. This copy is never linked, downloaded, streamed, or used by `/api/preview`; public playback stays live-only through Deezer/iTunes. Never archive full songs.
+
+4. **Write it back.** Use the analysis output:
 
    ```
    fluncle admin track update <trackId> \
@@ -53,12 +61,13 @@ The analysis script (`scripts/analyze-track.ts`) is **self-contained** — zero 
    - Always pass `--features` (the JSON vector) — it is the training data for the future sub-genre classifier.
    - Set `--status done`.
 
-That's the whole loop: get → analyze → update.
+That's the whole loop: get → analyze → archive → update.
 
 ## Rules
 
 - **The sub-genre is a suggestion, not a fact.** It's stored as `auto`; a human review (`manual`) overrides it and is never clobbered. Don't oversell it.
 - **Never invent data.** If no preview resolves, report it and stop — don't guess BPM/key/tags. Set `--status failed` if you want the operator to see it.
+- **Archive only the analysis preview.** Store one official 30s preview, the one behind `archivePreview`, for private analysis/model training. It is not a playback source.
 - **Key honesty.** Only write a key the analysis was confident about (the script already gates this; respect the `null`).
 - One track per run.
 

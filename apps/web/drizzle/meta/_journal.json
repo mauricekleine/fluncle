@@ -71,6 +71,13 @@
       "when": 1781157947766,
       "tag": "0009_public_switch",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1781183992888,
+      "tag": "0010_cloudy_captain_midlands",
+      "breakpoints": true
     }
   ]
 }

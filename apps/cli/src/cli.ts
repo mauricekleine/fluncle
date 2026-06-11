@@ -77,6 +77,18 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "admin" && subcommand === "track" && rest[0] === "preview-archive") {
+    const { previewArchiveUploadCommand } = await import("./commands/preview-archive");
+    await runTrackPreviewArchive(rest.slice(1), previewArchiveUploadCommand);
+    return;
+  }
+
+  if (command === "admin" && subcommand === "backfill" && rest[0] === "previews") {
+    const { previewArchiveBackfillCommand } = await import("./commands/preview-archive");
+    await runPreviewArchiveBackfill(rest.slice(1), previewArchiveBackfillCommand);
+    return;
+  }
+
   if (command === "admin" && subcommand === "track" && rest[0] === "draft") {
     const { trackDraftCommand } = await import("./commands/track");
     await runTrackDraft(rest.slice(1), trackDraftCommand);
@@ -108,6 +120,85 @@ async function main(): Promise<void> {
   }
 
   throw new Error(`Unknown command: ${[command, subcommand].filter(Boolean).join(" ")}`);
+}
+
+async function runTrackPreviewArchive(
+  args: string[],
+  previewArchiveUploadCommand: typeof import("./commands/preview-archive").previewArchiveUploadCommand,
+): Promise<void> {
+  const parsed = parseArgs({
+    allowPositionals: true,
+    args,
+    options: {
+      file: { type: "string" },
+      json: { default: false, type: "boolean" },
+      mime: { type: "string" },
+      source: { type: "string" },
+    },
+  });
+
+  const idOrLogId = parsed.positionals[0];
+
+  if (!idOrLogId || !parsed.values.file || !parsed.values.source || !parsed.values.mime) {
+    throw new Error(
+      "Usage: fluncle admin track preview-archive <track_id|log_id> --file <file> --source <source> --mime <mime> [--json]",
+    );
+  }
+
+  const result = await previewArchiveUploadCommand(idOrLogId, {
+    file: parsed.values.file,
+    mime: parsed.values.mime,
+    source: parsed.values.source,
+  });
+
+  if (parsed.values.json) {
+    printJson(result);
+    return;
+  }
+
+  console.log(`Archived preview for ${result.logId}`);
+  console.log(`  key: ${result.key}`);
+  console.log(`  source: ${result.source}`);
+  console.log(`  mime: ${result.mime}`);
+}
+
+async function runPreviewArchiveBackfill(
+  args: string[],
+  previewArchiveBackfillCommand: typeof import("./commands/preview-archive").previewArchiveBackfillCommand,
+): Promise<void> {
+  const parsed = parseArgs({
+    allowPositionals: false,
+    args,
+    options: {
+      "dry-run": { default: false, type: "boolean" },
+      json: { default: false, type: "boolean" },
+      limit: { type: "string" },
+    },
+  });
+  const limit =
+    parsed.values.limit === undefined ? undefined : Number.parseInt(parsed.values.limit, 10);
+
+  if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+    throw new Error("Limit must be a positive integer");
+  }
+
+  const result = await previewArchiveBackfillCommand({
+    dryRun: parsed.values["dry-run"],
+    limit,
+  });
+
+  if (parsed.values.json) {
+    printJson({ ok: true, ...result });
+    return;
+  }
+
+  const verb = result.dryRun ? "Would archive" : "Archived";
+  console.log(`${verb} ${result.archived.length} preview(s).`);
+  console.log(`Skipped ${result.skipped.length}; failed ${result.failed.length}.`);
+
+  for (const item of result.archived) {
+    console.log(`  ${item.logId}: ${item.source}`);
+  }
 }
 
 async function runTrackVideo(
@@ -684,6 +775,10 @@ Operator:
       Certify a track into the archive
   fluncle admin track video <track-id|log-id> (--dir <dir> | --footage <f> [--footage-silent <f>] [--poster <f>] [--cover <f>] [--note <f>] [--composition <f>] [--props <f>] [--render <f>]) [--json]
       Upload a track's video bundle to R2 and link it
+  fluncle admin track preview-archive <track-id|log-id> --file <f> --source <s> --mime <m> [--json]
+      Store one official preview at the operator-only archive path for analysis
+  fluncle admin backfill previews [--dry-run] [--limit n] [--json]
+      Archive missing official previews for analysis
   fluncle admin track draft <track-id|log-id> [--platform tiktok] [--json]
       Push the video to a platform as a draft (TikTok inbox via Postiz)
   fluncle admin track social <track-id|log-id> [--platform tiktok] [--status scheduled|published [--url u]] [--json]
