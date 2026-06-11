@@ -8,13 +8,45 @@ const INK: Record<string, string> = {
   D: palette.creamDim,
   G: palette.goldBright,
   R: palette.redDim,
+  b: palette.coolBlue,
   c: palette.cream,
   d: palette.creamMuted,
   g: palette.gold,
   k: palette.tapeBlack,
   o: palette.sleeveBlack,
   r: palette.red,
+  t: palette.coolTeal,
 };
+
+// Paint a char-grid sprite onto a fresh canvas; '.' is transparent, every
+// other char maps through INK. Width is the first row's length (all rows
+// share it). The shared maker for the procedural fallbacks below.
+function makeSprite(map: string[]): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  const w = map[0]?.length ?? 1;
+
+  canvas.width = w;
+  canvas.height = map.length;
+
+  const ctx = canvas.getContext("2d");
+
+  if (!ctx) {
+    return canvas;
+  }
+
+  for (let y = 0; y < map.length; y++) {
+    for (let x = 0; x < w; x++) {
+      const ink = INK[map[y][x]];
+
+      if (ink) {
+        ctx.fillStyle = ink;
+        ctx.fillRect(x, y, 1, 1);
+      }
+    }
+  }
+
+  return canvas;
+}
 
 // The ship, seen from behind: cream hull, gold canopy, red wingtips, twin
 // engine pods. 15x15 so the fuselage owns a true center column.
@@ -64,6 +96,69 @@ export function makeShipSprite(): HTMLCanvasElement {
   }
 
   return canvas;
+}
+
+// Frontier set-dressing fallbacks (Unit B). Bespoke Nano-Banana PNGs load over
+// these from /galaxy/roadster.png and /galaxy/ufo.png the same way the ship and
+// Earth heroes do; until those land (or if they fail), these procedural sprites
+// draw. The Roadster: a cream wedge with a Re-entry-Red accent (the Retint Rule
+// keeps "Tesla red" our red), dark wheels — a derelict tumbling by.
+const ROADSTER_MAP = [
+  "................",
+  "......rrrr......",
+  "....cccccccc....",
+  "...cccccccccc...",
+  "..cddddddddddc..",
+  ".cddddddddddddc.",
+  ".cddddddddddddc.",
+  "..o.oo....oo.o..",
+  "...oo......oo...",
+];
+
+export const ROADSTER_SIZE = 16;
+
+export function makeRoadsterSprite(): HTMLCanvasElement {
+  return makeSprite(ROADSTER_MAP);
+}
+
+// The UFO: a cream saucer with a dim coolTeal underglow — the one sanctioned
+// cool counter-accent (Retint Rule), used sparingly. No competing gold bloom
+// (One Sun Rule): the gold stays the bangers and the sun.
+const UFO_MAP = [
+  "......cccc......",
+  "....cddddddc....",
+  ".cccccccccccccc.",
+  "cddddddddddddddc",
+  ".dddddddddddddd.",
+  "..tttttttttttt..",
+  "...t..t..t..t...",
+];
+
+export const UFO_SIZE = 16;
+
+export function makeUfoSprite(): HTMLCanvasElement {
+  return makeSprite(UFO_MAP);
+}
+
+// A lumpy pixel rock, cream-dust ramp with a shadow side and a couple of lit
+// chips. Tumbles in render; the per-entity body radius varies the size so a
+// wave doesn't read as one rock cloned (Maurice's "never same-y" gate).
+const ASTEROID_MAP = [
+  "....dddddd....",
+  "..ddddddDddd..",
+  ".dddddddddddd.",
+  "ddddcdddddDddd",
+  "dddddddddddddd",
+  "dddDddddddcddd",
+  ".ddddddDddddd.",
+  "..dddddddddd..",
+  "....ddDddd....",
+];
+
+export const ASTEROID_SIZE = 14;
+
+export function makeAsteroidSprite(): HTMLCanvasElement {
+  return makeSprite(ASTEROID_MAP);
 }
 
 // Earth's own shade ramp, derived from the two sanctioned cool counter-accents

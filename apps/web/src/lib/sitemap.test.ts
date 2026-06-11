@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { siteUrl } from "./fluncle-links";
 import { buildSitemapXml } from "./sitemap";
 
 describe("buildSitemapXml (sitemap enumeration)", () => {
@@ -17,6 +18,11 @@ describe("buildSitemapXml (sitemap enumeration)", () => {
     expect(xml).toContain("<loc>https://www.fluncle.com/log/011.6.8K</loc>");
     expect(xml).toContain("<loc>https://www.fluncle.com/log/004.7.2I</loc>");
     expect(xml.match(/<loc>/g)).toHaveLength(4 + pages.length);
+  });
+
+  it("always includes the /galaxy surface", () => {
+    expect(buildSitemapXml(pages)).toContain(`<loc>${siteUrl}/galaxy</loc>`);
+    expect(buildSitemapXml([])).toContain(`<loc>${siteUrl}/galaxy</loc>`);
   });
 
   it("uses the per-finding lastmod, never a build stamp", () => {

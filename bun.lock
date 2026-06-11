@@ -82,6 +82,25 @@
         "wrangler": "^4.50.0",
       },
     },
+    "packages/media": {
+      "name": "@fluncle/media",
+      "version": "0.1.0",
+      "dependencies": {
+        "@fluncle/tokens": "workspace:*",
+        "@remotion/bundler": "^4.0.473",
+        "@remotion/cli": "^4.0.473",
+        "@remotion/fonts": "^4.0.473",
+        "@remotion/renderer": "^4.0.473",
+        "react": "^19.2.7",
+        "react-dom": "^19.2.7",
+        "remotion": "^4.0.473",
+      },
+      "devDependencies": {
+        "@types/react": "^19.2.17",
+        "@types/react-dom": "^19.2.3",
+        "typescript": "catalog:",
+      },
+    },
     "packages/tokens": {
       "name": "@fluncle/tokens",
       "version": "0.1.0",
@@ -300,6 +319,8 @@
     "@floating-ui/utils": ["@floating-ui/utils@0.2.11", "", {}, "sha512-RiB/yIh78pcIxl6lLMG0CgBXAZ2Y0eVHqMPYugu+9U0AeT6YBeiJpf7lbdJNIugFP5SIjwNRgo4DhR1Qxi26Gg=="],
 
     "@fluncle/cli": ["@fluncle/cli@workspace:apps/cli"],
+
+    "@fluncle/media": ["@fluncle/media@workspace:packages/media"],
 
     "@fluncle/ssh": ["@fluncle/ssh@workspace:apps/ssh"],
 
