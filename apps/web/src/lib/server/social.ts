@@ -61,6 +61,20 @@ export async function upsertDraft(
           on conflict(track_id, platform) do update set
             status = 'draft', external_id = excluded.external_id, updated_at = excluded.updated_at`,
   });
+
+  await touchTrack(trackId, now);
+}
+
+// A social-post change alters what the track's public surfaces show (the
+// tiktok_url join in TRACK_SELECT), so it counts as a content change for the
+// track record too — sitemap lastmod reads tracks.updated_at.
+async function touchTrack(trackId: string, now: string): Promise<void> {
+  const db = await getDb();
+
+  await db.execute({
+    args: [now, trackId],
+    sql: `update tracks set updated_at = ? where track_id = ?`,
+  });
 }
 
 /** Update a platform post after the operator reviews/publishes in-app. Returns
@@ -92,6 +106,10 @@ export async function updateSocialStatus(
             updated_at = ?
           where track_id = ? and platform = ?`,
   });
+
+  if (result.rowsAffected > 0) {
+    await touchTrack(trackId, now);
+  }
 
   return result.rowsAffected > 0;
 }

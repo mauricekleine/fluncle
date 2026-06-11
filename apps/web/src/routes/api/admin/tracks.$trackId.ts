@@ -8,7 +8,9 @@ type PatchBody = {
   bpm?: unknown;
   enrichmentStatus?: unknown;
   features?: unknown;
+  isrc?: unknown;
   key?: unknown;
+  logId?: unknown;
   note?: unknown;
   tags?: unknown;
   tagsSource?: unknown;
@@ -65,6 +67,16 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId")({
 
           if (typeof body.note === "string") {
             update.note = body.note;
+          }
+
+          // Straggler repair: one-time backfill of identity fields into null
+          // slots (updateTrack enforces immutability once set).
+          if (typeof body.isrc === "string") {
+            update.isrc = body.isrc;
+          }
+
+          if (typeof body.logId === "string") {
+            update.logId = body.logId;
           }
 
           const result = await updateTrack(trackId, update);

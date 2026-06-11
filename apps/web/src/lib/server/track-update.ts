@@ -1,9 +1,13 @@
 // Generic admin track update — the write-back path for both the async enrichment
 // agent and manual operator curation (see docs/track-lifecycle.md). Writes an
 // ALLOW-LIST of curation/enrichment fields only; identity fields (title, artists,
-// Spotify ids, Log ID) are immutable. Backs PATCH /api/admin/tracks/:id.
+// Spotify ids, Log ID) are immutable once set — isrc/logId accept a one-time
+// backfill into a null slot (the ISRC-fallback straggler repair), never a
+// change. Backs PATCH /api/admin/tracks/:id.
 
+import { isLogId } from "../log-id";
 import { getDb } from "./db";
+import { resolveLogId } from "./log-id";
 import { ApiError } from "./spotify";
 import { normalizeTags } from "./tags";
 
@@ -12,7 +16,15 @@ export type TrackUpdate = {
   enrichmentStatus?: "pending" | "done" | "failed";
   /** Raw audio feature vector as a JSON string (training data for the classifier). */
   features?: string;
+  /** One-time backfill into a null isrc slot; rejected when one is already set. */
+  isrc?: string;
   key?: string;
+  /**
+   * One-time backfill into a null log_id slot: "auto" derives the coordinate
+   * from the found date + isrc (Spotify id fallback), or pass an explicit
+   * coordinate. Rejected when one is already set — coordinates are permanent.
+   */
+  logId?: string;
   note?: string;
   tags?: string[];
   /** Provenance for the tags write. Defaults to "manual" (the operator path). */
@@ -28,6 +40,9 @@ export type TrackUpdateResult = {
 };
 
 type ExistingRow = {
+  added_at: string;
+  isrc: string | null;
+  log_id: string | null;
   tags_source: string | null;
 };
 
@@ -38,7 +53,7 @@ export async function updateTrack(
   const db = await getDb();
   const existingResult = await db.execute({
     args: [trackId],
-    sql: `select tags_source from tracks where track_id = ? limit 1`,
+    sql: `select tags_source, isrc, log_id, added_at from tracks where track_id = ? limit 1`,
   });
   const existing = existingResult.rows[0] as unknown as ExistingRow | undefined;
 
@@ -54,7 +69,9 @@ export async function updateTrack(
     update.enrichmentStatus !== undefined ||
     update.features !== undefined ||
     update.note !== undefined ||
-    update.videoVehicle !== undefined;
+    update.videoVehicle !== undefined ||
+    update.isrc !== undefined ||
+    update.logId !== undefined;
 
   if (!provided) {
     throw new ApiError("no_fields", "No updatable fields provided", 400);
@@ -113,9 +130,75 @@ export async function updateTrack(
     args.push(update.note);
   }
 
+  if (update.isrc !== undefined) {
+    if (existing.isrc?.trim()) {
+      throw new ApiError("immutable", "isrc is already set; identity fields never change", 409);
+    }
+
+    if (!update.isrc.trim()) {
+      throw new ApiError("invalid_isrc", "isrc must be a non-empty string", 400);
+    }
+
+    sets.push("isrc = ?");
+    args.push(update.isrc.trim());
+  }
+
+  if (update.logId !== undefined) {
+    if (existing.log_id?.trim()) {
+      throw new ApiError("immutable", "log_id is already set; coordinates are permanent", 409);
+    }
+
+    let logId: string;
+
+    if (update.logId === "auto") {
+      // Backfill the coordinate the add flow would have minted: found date +
+      // the recording's identity (the just-provided isrc wins over the stored
+      // one, Spotify id as last resort).
+      logId = await resolveLogId(
+        {
+          foundAt: existing.added_at,
+          isrc: update.isrc?.trim() || existing.isrc,
+          trackId,
+        },
+        async (candidate) => {
+          const taken = await db.execute({
+            args: [candidate],
+            sql: `select 1 from tracks where log_id = ? limit 1`,
+          });
+
+          return taken.rows.length > 0;
+        },
+      );
+    } else {
+      if (!isLogId(update.logId)) {
+        throw new ApiError(
+          "invalid_log_id",
+          `"${update.logId}" is not a Log ID coordinate (expected sector.orbit.mark, e.g. 004.7.2I, or "auto")`,
+          400,
+        );
+      }
+
+      const taken = await db.execute({
+        args: [update.logId],
+        sql: `select 1 from tracks where log_id = ? limit 1`,
+      });
+
+      if (taken.rows.length > 0) {
+        throw new ApiError("log_id_taken", `${update.logId} already names another finding`, 409);
+      }
+
+      logId = update.logId;
+    }
+
+    sets.push("log_id = ?");
+    args.push(logId);
+  }
+
   // sets can be empty when an "auto" tag write was declined by manual-wins —
   // that's a valid no-op, not an error.
   if (sets.length > 0) {
+    sets.push("updated_at = ?");
+    args.push(new Date().toISOString());
     args.push(trackId);
     await db.execute({
       args,

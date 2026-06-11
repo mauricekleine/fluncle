@@ -29,6 +29,10 @@ export const tracks = sqliteTable("tracks", {
   telegramError: text("telegram_error"),
   title: text("title").notNull(),
   trackId: text("track_id").primaryKey(),
+  // Last content change to the finding's record: every write path (publish,
+  // curation/enrichment update, social-post state) bumps it. Null for rows that
+  // predate the column; readers fall back to added_at (sitemap lastmod).
+  updatedAt: text("updated_at"),
   videoUrl: text("video_url"),
   // The travelling vehicle of the track's video (e.g. "voronoi cellular",
   // "caustic web"). Set when the video is uploaded; surfaced in /api/tracks so

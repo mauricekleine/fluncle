@@ -30,6 +30,8 @@ export type TrackListItem = {
   tiktokUrl?: string;
   title: string;
   trackId: string;
+  /** Last content change to the record; absent for rows predating the column. */
+  updatedAt?: string;
   videoUrl?: string;
   /** The video's travelling vehicle — the diversity ledger for the video agent. */
   videoVehicle?: string;
@@ -63,6 +65,7 @@ type TrackRow = {
   tiktok_url: string | null;
   title: string;
   track_id: string;
+  updated_at: string | null;
   video_url: string | null;
   video_vehicle: string | null;
   added_to_spotify: number;
@@ -73,7 +76,7 @@ type TrackRow = {
 const TRACK_SELECT = `track_id, spotify_url, title, album, album_image_url, artists_json,
   bpm, duration_ms, enrichment_status, isrc, key, label, log_id, popularity,
   preview_url, release_date, tags_json, tags_source, video_url, video_vehicle, note, added_at,
-  added_to_spotify, posted_to_telegram,
+  updated_at, added_to_spotify, posted_to_telegram,
   (select url from social_posts
      where track_id = tracks.track_id and platform = 'tiktok' and status = 'published'
        and url is not null
@@ -104,6 +107,7 @@ function toTrackListItem(row: TrackRow): TrackListItem {
     tiktokUrl: row.tiktok_url ?? undefined,
     title: row.title,
     trackId: row.track_id,
+    updatedAt: row.updated_at ?? undefined,
     videoUrl: row.video_url ?? undefined,
     videoVehicle: row.video_vehicle ?? undefined,
   };

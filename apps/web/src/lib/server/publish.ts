@@ -1,5 +1,5 @@
 import { getDb } from "./db";
-import { enrichFromDeezer } from "./deezer";
+import { enrichFromDeezer, lookupIsrcFromDeezer } from "./deezer";
 import { resolveLogId } from "./log-id";
 import { formatError, withRetries } from "./retry";
 import { addTrackToPlaylist, ApiError, fetchTrackMetadata, parseSpotifyTrackUrl } from "./spotify";
@@ -79,6 +79,14 @@ ${existing.posted_to_telegram ? "Posted to Telegram" : "Not posted to Telegram"}
   const artistLine = `${track.artists.join(", ")} — ${track.title}`;
   const nowIso = new Date().toISOString();
 
+  // ISRC fallback (the track-add gap, docs/ROADMAP.md): Spotify occasionally
+  // omits the ISRC; Deezer usually carries it. Looked up BEFORE the Log ID is
+  // computed so the coordinate hashes from the recording's real identity, and
+  // the Deezer enrichment below (label + preview, keyed by ISRC) works too.
+  if (!track.isrc?.trim()) {
+    track.isrc = await lookupIsrcFromDeezer(track);
+  }
+
   // The permanent Galaxy coordinate: deterministic from the found date + the
   // recording's ISRC (Spotify id as fallback); a rare collision resolves to a
   // fresh tail on the same sector. Computed even on dry run so the operator can
@@ -147,6 +155,7 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview,
       null,
       options.note ?? null,
       nowIso,
+      nowIso,
       0,
       0,
     ],
@@ -168,9 +177,10 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview,
         tags_json,
         note,
         added_at,
+        updated_at,
         added_to_spotify,
         posted_to_telegram
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 
   try {
@@ -178,8 +188,8 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview,
   } catch (error) {
     const message = formatError(error);
     await db.execute({
-      args: [message, track.trackId],
-      sql: `update tracks set spotify_error = ? where track_id = ?`,
+      args: [message, new Date().toISOString(), track.trackId],
+      sql: `update tracks set spotify_error = ?, updated_at = ? where track_id = ?`,
     });
 
     throw new ApiError("spotify_failed", `Spotify failed. Telegram was not posted.\n${message}`);
@@ -187,11 +197,12 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview,
 
   try {
     await db.execute({
-      args: [new Date().toISOString(), track.trackId],
+      args: [new Date().toISOString(), new Date().toISOString(), track.trackId],
       sql: `update tracks
         set added_to_spotify = 1,
           added_to_spotify_at = ?,
-          spotify_error = null
+          spotify_error = null,
+          updated_at = ?
         where track_id = ?`,
     });
   } catch (error) {
@@ -206,8 +217,8 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview,
   } catch (error) {
     const message = formatError(error);
     await db.execute({
-      args: [message, track.trackId],
-      sql: `update tracks set telegram_error = ? where track_id = ?`,
+      args: [message, new Date().toISOString(), track.trackId],
+      sql: `update tracks set telegram_error = ?, updated_at = ? where track_id = ?`,
     });
 
     throw new ApiError("telegram_failed", `Spotify succeeded, but Telegram failed.\n${message}`);
@@ -215,11 +226,12 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview,
 
   try {
     await db.execute({
-      args: [new Date().toISOString(), track.trackId],
+      args: [new Date().toISOString(), new Date().toISOString(), track.trackId],
       sql: `update tracks
         set posted_to_telegram = 1,
           posted_to_telegram_at = ?,
-          telegram_error = null
+          telegram_error = null,
+          updated_at = ?
         where track_id = ?`,
     });
   } catch (error) {

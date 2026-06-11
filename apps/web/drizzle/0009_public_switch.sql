@@ -1,0 +1,1 @@
+ALTER TABLE `tracks` ADD `updated_at` text;
