@@ -63,7 +63,7 @@ components:
     height: "2.25rem"
     padding: "0 0.625rem"
   button-primary-hover:
-    backgroundColor: "#f5b800cc"
+    backgroundColor: "{colors.eclipse-glow}"
   button-outline:
     backgroundColor: "#1716114d"
     textColor: "{colors.starlight-cream}"
@@ -102,6 +102,8 @@ The interface is a traveler's logbook, not a marketing page: Fluncle moves throu
 This system explicitly rejects SaaS dashboards, bright streaming-app clones, generic landing-page hero sections, oversized marketing copy, glassy card stacks, and decorative gradients that ignore the cover art (PRODUCT.md's own words). It rejects, equally, the cold sterile sci-fi log: the Galaxy is warm and crewed. Dark-only, music-first, operator-curated.
 
 **The Light-Years Rule.** Every artifact in this system arrives lossy because of how far it travelled: grain over the sun, compression in the video, glitch and dither, the worn edge of a recovered record. The degradation is narrative, never sloppiness — it is the cost of light-years, the reason a finding from the edge of the map looks the way it does. Grain and lossy texture are therefore load-bearing brand, not decoration; a surface rendered too clean reads as fake. (The video kit in `packages/video` is built entirely on this rule; VOICE.md borrows it for copy.)
+
+**The grain architecture.** Dense grain lives UNDER content, never as a veil over reading text: baked into the cosmos backdrop (overlay-blended into the cover image), as pane-tooth on plate surfaces (a whisper under the content layer), and at full density only where there is no text to protect (the cover-frame mat, the artwork fallback's halftone, scanlined empty/loading states). One shared inline-SVG noise tile (`--grain-tile`) feeds every layer — zero network requests. AA (4.5:1) is verified against what is actually behind the text, texture included (The Legible Sky Rule).
 
 **Recurring motifs.** The system returns to a small set of forms — its visual DNA, drawn from the cover art and from the operator's own collages that predate Fluncle by years (collected in the video moodboard, `packages/video/moodboard/MOODBOARD.md`). They map straight onto the narrative: the **centered orb** (the burning eclipse, the sun the traveler moves toward); the **lone figure against vastness** (the traveler himself, the floating astronaut — alone out there, never lonely, because the crew travels with him); **portal / threshold framing** (the crossing between dimensions); **vertical mirror-fold symmetry**; the **tower skyline** as an optional earthbound pole (the home you floated up from, used only when a piece wants the pull of the ground); and **heavy grain over warm near-black** everywhere. That this imagery was already the operator's instinct years before the project is why the brand reads as inevitable, not styled.
 
@@ -145,6 +147,8 @@ A night-sky palette lit by one sun: warm blacks, sleeve-paper cream, and a singl
 
 **The Warm Dark Rule.** Every black and every neutral leans warm (toward the cream/dust hue). Cool grays and blue-tinted darks are prohibited; the night sky of this cosmos is warm and inhabited.
 
+**The Ignition Rule.** Gold is placed like light, never applied like paint — and interaction HEATS it. One directional Eclipse-Gold bloom anchors where the cover's sun sits (under every pane, breathing imperceptibly over ~48s, reduced-motion-gated); frame edges are lit from the sun side; hovers ignite toward Eclipse Glow (the primary button brightens, quiet controls catch the Gold Veil and their text glows). A control that DIMS on hover is wrong: the sun does not dim when you reach for it. The One Sun budget (~10% of any screen) still governs the total.
+
 **The Retint Rule.** Fluncle absorbs outside visual influence by stealing the technique and recoloring it to canon. Any reference — a halftone, a scanline, a liquid gradient, a gel split, a mirror tiling — is fair game for its craft, but it arrives in off-canon hues (broadcast blue, phosphor green, candy pink) and leaves in ours: warm dark ground, Eclipse Gold as the one light, Re-entry Red as the heat accent, Starlight Cream as the ink. Cool hues survive only as minor counter-accents, never a field. The technique is the reference; the palette is always ours. (This is the operating rule of the video moodboard, `packages/video/moodboard/MOODBOARD.md`, and the visual sibling of "briefs are subordinate to canon" — take the idea, translate it into Fluncle's terms.)
 
 ## 3. Typography
@@ -156,7 +160,7 @@ A night-sky palette lit by one sun: warm blacks, sleeve-paper cream, and a singl
 
 ### Hierarchy
 
-- **Display** (800, ad hoc sizes, -0.02em): Oxanium, reserved for brand marks (the console wordmark easter egg). There is deliberately no large on-page heading; the cover art is the hero.
+- **Display** (800, ad hoc sizes, -0.02em): Oxanium, reserved for brand marks and the plate mastheads. The one sanctioned large on-page heading is a masthead nameplate (a brand-mark plate: the stamped FLUNCLE'S FINDINGS lockup on the home plate, the coordinate on a log plate); body headings stay quiet, and the cover art remains the hero image.
 - **Numeric** (400, 0.98rem, -0.02em, tabular-nums): Oxanium track indices (#01, #02). Always tabular.
 - **Title** (800, 1.02rem, 1.18, -0.01em): Track titles. Extrabold cream against the dark; the loudest text on the page.
 - **Body** (400, 0.9rem, 1.25): Artist lines, descriptions, form text in Stardust or Starlight Cream.
@@ -177,20 +181,20 @@ Depth in this system comes from translucency, not shadows: every raised surface 
 
 **The Through-the-Glass Rule.** Surfaces are windows onto the cosmos. A surface that fully occludes the backdrop (opaque, blurless) must justify itself; a surface with a drop shadow is prohibited outright.
 
-**The One Pane Rule.** Glass does not stack on glass. Every pane sits directly on the cosmos, never on another pane (PRODUCT.md bans "glassy card stacks" by name); content inside a pane sits flat on it. The cover frame, the playlist shell, and the nerd card are each panes; none of them nest.
+**The One Pane Rule.** Glass does not stack on glass. Every pane sits directly on the cosmos, never on another pane (PRODUCT.md bans "glassy card stacks" by name); content inside a pane sits flat on it. On the web the pane is **the plate** (below): one document per page, with the cover frame, the list, and the nerd card mounted flat on it as printed fields — none of them carries its own glass.
 
 **The Legible Sky Rule.** Text never sits on the raw backdrop. Every text surface is a pane that dims what it covers enough to hold WCAG AA (4.5:1 for body text), even where the burning sun sits behind the glass. If a bright backdrop region breaks contrast, the pane gets more opaque, not the text dimmer.
 
 ## 5. Components
 
-Floaty and tactile: controls lift gently on hover (artwork scales to 1.06, carets drift 2px), and land on press (buttons translate down 1px). Motion is 150–180ms, eased out. Under `prefers-reduced-motion: reduce`, the floats are grounded: no scale, no drift, no press-down; every state change collapses to a color-only transition. The Gold Veil wash and index heat carry the feedback on their own.
+Floaty and tactile: controls lift gently on hover (artwork scales to 1.06, carets drift 2px), and land on press (buttons translate down 1px). Motion is 150–180ms, eased out. The ambient budget is exactly two movements, both imperceptible and both gated to `prefers-reduced-motion: no-preference`: the 72s cosmos drift and the ~48s sun-bloom breath (The Ignition Rule) — "quiet" is not a frozen JPEG, and nothing else moves uninvited. Under `prefers-reduced-motion: reduce`, the floats are grounded and the ambient pair stops: no scale, no drift, no press-down, no breath; every state change collapses to a color-only transition. The Gold Veil wash and index heat carry the feedback on their own.
 
 ### Buttons
 
 - **Shape:** Gently rounded (0.5rem radius), 2.25rem tall (h-9), small text (0.875rem, weight 500), icon + label with 0.375rem gap
-- **Primary:** Eclipse Gold fill with Ink on Gold text; hover dims the gold to 80% opacity
-- **Outline:** Dust Line border over translucent Tape Black (30%); hover fills with Dust Veil
-- **Ghost:** Transparent; hover fills with Dust Veil
+- **Primary:** Eclipse Gold fill with Ink on Gold text; hover ignites to Eclipse Glow (The Ignition Rule — never a dim)
+- **Outline:** Dust Line border over translucent Tape Black (30%); hover catches the Gold Veil, heats the border toward gold, and ignites the text to Eclipse Glow
+- **Ghost:** Transparent; hover catches the Gold Veil with Eclipse Glow text
 - **Destructive:** Re-entry Red at 10–20% fill with Re-entry Red text, never a solid red slab
 - **Hover / Focus / Active:** Focus is a 3px Eclipse Gold ring at 50% with a gold border; active presses the button down 1px (the tactile landing)
 
@@ -217,9 +221,13 @@ Pagination lives inside the list, never below the shell: a quiet load-more row (
 
 Literal terminal content in a quiet box: mono text (0.82rem) on Tape Black with a Dust Line border (0.5rem radius). Long commands scroll horizontally behind a thin Dust Line scrollbar (`scrollbar-width: thin; scrollbar-color` themed), never a native white one. A copy action (outline icon button) sits beside the install command; the check-mark confirmation flashes Eclipse Gold.
 
+### The Plate (signature surface)
+
+The page itself: a recovered logbook plate, one printed document per surface (the home archive, a `/log/<id>` entry, the log index, About). Its grammar: a **masthead** with the stamped nameplate (Oxanium caps, the brand-mark plate) and a quiet tagline; a rotated gold **FOUND stamp** carrying the archive count; **crop-mark corner brackets** and a **register cross** printed just inside the edge (pure background gradients — zero DOM); a **double-rule frame** (border + offset outline, the printed edge); and **pane-tooth grain** on the surface, under the content. Fields on the plate (the list, the nerd box) are flat translucent panels, not nested glass. The dialog (Stories) is the one surface that floats above a plate.
+
 ### Cover Frame (signature component)
 
-The identity anchor: the cover art wrapped in a 1px gold-tinted border and a 4px glass mat (16px backdrop blur over a gold-to-red `color-mix` gradient at ~14%/12%). The eclipse colors bleed into the frame; the artwork stays untouched.
+The identity anchor: the cover art mounted flat on the plate, wrapped in a frame whose edge is LIT from the sun side (top/left border heated toward gold) over a bent warm gradient (a radial falloff from the sun corner, gold into Re-entry Red) with grain blended in. The eclipse colors bleed into the frame; the artwork stays untouched. No glass of its own (One Pane).
 
 ## 6. Do's and Don'ts
 

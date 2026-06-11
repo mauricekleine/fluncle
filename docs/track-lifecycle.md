@@ -14,8 +14,12 @@ Triggered by `fluncle admin add <spotify-url>` → `POST /api/admin/tracks` → 
 
 - **Spotify** metadata: title, artists, album, artwork, `duration_ms`, `isrc`, `popularity` (`spotify.ts`).
 - **Deezer** (by ISRC, best-effort): record `label` + a `preview_url` (`deezer.ts`).
-- **Log ID**: the permanent Galaxy coordinate, generated and stored (`log-id.ts`). This is the cross-surface marker — `fluncle://<id>` — used everywhere (web `/log/<id>`, SSH, CLI, TikTok). It supersedes any ad-hoc post marker.
+- **Log ID**: the permanent Galaxy coordinate, generated and stored (`log-id.ts`). This is the cross-surface marker — `fluncle://<id>` — used everywhere (web `/log/<id>`, SSH, CLI, TikTok). It supersedes any ad-hoc post marker. When Spotify omits the ISRC, the add flow looks it up on Deezer (search by artist + title, duration-confirmed) **before** the coordinate is computed, so the hash seeds from the recording's real identity; the Spotify id remains the last-resort seed.
 - Publish to the Spotify playlist + Telegram.
+
+### The log page (`/log/<id>`)
+
+Every coordinate-bearing finding has a permanent web surface at `https://www.fluncle.com/log/<log-id>` — the archival-plate register: server-rendered definitional prose (the coordinate as subject, in both the bare and `fluncle://` forms), the decode, logbook fields, the finding's footage, and `MusicRecording` JSON-LD carrying the Log ID as two `identifier` PropertyValues. The full enumeration lives at `/log` and in `sitemap.xml` (per-finding `lastmod` from `coalesce(updated_at, added_at)`). The cinematic register of the same entry is the Stories dialog over the home feed (route-masked to the same URL); `/stories/<id>` 301s here. **No Log ID → no log page**: a straggler shows a bare `#NN` in the feed until its coordinate is backfilled (below).
 
 The track is now real, listenable, and shows its identity (coordinate, label, duration). The audio-derived fields are not set yet — they show as "processing" until Phase 2 lands.
 
@@ -42,7 +46,7 @@ Phase 2 needs to write back, and the operator needs to curate — so tracks are 
 fluncle admin track update <track_id> --tag <t> --tag <t> --bpm <n> --key "<k>" --video-url <url> ...
 ```
 
-Backed by `PATCH /api/admin/tracks/:id`. It writes an **allow-list of curation/enrichment fields only** — `tags`, `bpm`, `key`, `video_url`, `enrichment_status`, `note`. Identity fields (title, artists, Spotify ids, Log ID) are **immutable** — they come from Spotify and never change.
+Backed by `PATCH /api/admin/tracks/:id`. It writes an **allow-list of curation/enrichment fields only** — `tags`, `bpm`, `key`, `video_url`, `enrichment_status`, `note`. Identity fields (title, artists, Spotify ids, Log ID) are **immutable once set** — they come from Spotify and never change. The one sanctioned exception is the straggler repair: `isrc` and `logId` accept a **one-time backfill into a null slot** (`logId: "auto"` derives the coordinate the add flow would have minted from the found date + identity); a write against an already-set value is rejected. Every update also bumps `updated_at`.
 
 ## Tags & provenance
 
@@ -84,15 +88,16 @@ There is no per-track "published" flag — a track's reach is the union of its `
 
 On the `tracks` table, beyond Phase-1 identity/metadata:
 
-| Field                                                       | Set by             | Notes                                                         |
-| ----------------------------------------------------------- | ------------------ | ------------------------------------------------------------- |
-| `log_id`                                                    | Phase 1            | permanent Galaxy coordinate; the cross-surface marker         |
-| `isrc`, `label`, `preview_url`, `popularity`, `duration_ms` | Phase 1            | cheap HTTP enrichment                                         |
-| `bpm`, `key`                                                | Phase 2 (agent)    | audio-derived; key carries a confidence the agent may gate on |
-| `tags` (`tags_json`)                                        | Phase 2 or admin   | dnb sub-genres only (`tags.ts` allow-list)                    |
-| `tags_source`                                               | whoever wrote tags | `auto` \| `manual`; manual wins                               |
-| `video_url`                                                 | Phase 2 (agent)    | R2-hosted MP4; surfaced as the web preview                    |
-| `enrichment_status`                                         | both               | `pending` (after add) → `done` \| `failed`                    |
+| Field                                                       | Set by             | Notes                                                                              |
+| ----------------------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------- |
+| `log_id`                                                    | Phase 1            | permanent Galaxy coordinate; the cross-surface marker                              |
+| `isrc`, `label`, `preview_url`, `popularity`, `duration_ms` | Phase 1            | cheap HTTP enrichment                                                              |
+| `bpm`, `key`                                                | Phase 2 (agent)    | audio-derived; key carries a confidence the agent may gate on                      |
+| `tags` (`tags_json`)                                        | Phase 2 or admin   | dnb sub-genres only (`tags.ts` allow-list)                                         |
+| `tags_source`                                               | whoever wrote tags | `auto` \| `manual`; manual wins                                                    |
+| `video_url`                                                 | Phase 2 (agent)    | R2-hosted MP4; surfaced as the web preview                                         |
+| `enrichment_status`                                         | both               | `pending` (after add) → `done` \| `failed`                                         |
+| `updated_at`                                                | every write path   | last real content change; sitemap `lastmod` reads `coalesce(updated_at, added_at)` |
 
 ## Surfacing
 

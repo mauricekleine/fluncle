@@ -13,31 +13,18 @@ Render a stack of videos so there's a schedulable backlog on TikTok: breathing r
 
 ## Next — surface what we make, and tidy reliability
 
-### Web aesthetic overhaul (moodboard-driven — the real one)
+### Log IDs in search + AI answers (AEO/GEO) — off-site thread
 
-What shipped so far was an **architecture** overhaul: `index.tsx` componentized, `@fluncle/tokens` wired, the feed gained bpm/key/tag badges + per-row story/TikTok buttons, plus the Light-Years grain + faint drift. The surface still looks much as it did. The **actual aesthetic overhaul from `packages/video/moodboard/MOODBOARD.md` has not happened yet** — pull fluncle.com up to where the video kit's visual language landed: the texture families (nebula / analog / dither / fluent / duotone), the Retint Rule, the first-party collages, the One-Sun stage-light grammar — all within DESIGN.md (evolution, not a second system). The grain + drift is the floor, not the overhaul.
+The on-site layer shipped (per-finding `/log/<id>` pages with definitional prose + `MusicRecording` identifiers, the `/log` index, sitemap enumeration, the `/about` entity/FAQ surface, one canonical description everywhere). What remains is off-site and slower:
 
-### Homepage & Stories refinements
+- **Unblock AI crawlers at Cloudflare.** Live probe (2026-06-11): GPTBot / ClaudeBot / PerplexityBot / OAI-SearchBot get 403 while Googlebot/Bingbot pass — Cloudflare's default AI-crawler block overrides robots.txt. Flip it in the dashboard (AI Crawl Control / WAF), then add a recurring live-`/robots.txt` + crawler-UA regression check (it can re-flip silently).
+- **Submit + monitor.** Sitemap to GSC and Bing Webmaster Tools; watch the _set_ of log pages move to Indexed (count ≈ archive size); verify bare-token retrieval (`004.7.2I`, `fluncle://004.7.2I`) lands the log page. Check Fluncle is present in Brave Search. Indexing and AI citation are weeks-out outcomes — monitoring, not ship gates.
+- **Third-party corroboration (the highest GEO lever).** Sequenced: a MusicBrainz entry for the selector/playlist first (the structural anchor), then a Wikidata item citing it (a bare self-made item risks deletion), then authentic presence where dnb lives (r/DnB and friends — participate, don't fabricate). Update the `/about` `sameAs` set as each lands.
+- **Bios.** Paste the canonical description (`apps/web/src/lib/identity.ts`) verbatim into the Spotify / Telegram / TikTok bios so the entity reads identically everywhere.
 
-Concrete gaps surfaced once Stories went live (video on the web + the Stories reel themselves shipped — these are the follow-ons):
+### Link out to the socials — CLI + SSH remainder
 
-- **A TikTok button** in the homepage action list — link to [@fluncle](https://www.tiktok.com/@fluncle) (pairs with "Link out to the socials" below).
-- **A "view all stories" button** in that same action list — the entry point to the Stories reel.
-- **Stories as routed dialogs over the homepage**, not full-page transitions. Keep the deep-linkable per-finding pages, but on-site they open as a dialog on top of the feed; only a direct/shared open renders the standalone page — which needs **vertical margin** added (today it's edge-to-edge top and bottom).
-- **The track's TikTok link on the story page** too, when a published post exists (`tiktokUrl`) — matching the per-row link on the feed.
-- **The Log ID is the URL.** `/stories/<id>` is the wrong path; the finding should live at `/logs/<id>` or just `/<id>` (the Log ID as a top-level URL). Unify with the logbook reframe's `/log/<id>` pages — Stories is the cinematic view of that same log entry, not a separate route. Decide `/<id>` vs `/logs/<id>`.
-
-### Log IDs in search + AI answers (AEO/GEO)
-
-Now that the `fluncle://<log-id>` breadcrumb rides every TikTok caption, make those coordinates **discoverable** — get search engines AND AI scrapers to index per-log pages (the `/<id>` pages above) for both `fluncle://004.7.2I` and the bare `004.7.2I`: structured data (MusicRecording + the Log ID as an identifier), sitemap entries per finding, and answer-engine-friendly copy on the page. The goal: someone asks ChatGPT / Claude "what is `fluncle://004.7.2I`?" or "what does `004.7.2I` stand for?" and the answer is "a star in Fluncle's Galaxy — Fluncle is an intergalactic explorer who…". Pairs with the logbook reframe (the log pages are the indexable surface) and the `ai-seo` / `seo-audit` skills.
-
-### Link out to the socials
-
-We don't link to the Fluncle socials from anywhere yet — the site has no path to [@fluncle on TikTok](https://www.tiktok.com/@fluncle), now our primary channel and where the videos actually live. Surface it where it belongs (site header/footer, link previews / OG tags, maybe the CLI + SSH sign-off), and link the rest of the owned channels from [docs/socials.md](./socials.md) consistently. Trivial but load-bearing now that we're posting — land it as a quick win, or fold it into the web overhaul below.
-
-### Track-add ISRC fallback (reliability)
-
-The Log ID seeds from the recording's ISRC. When Spotify omits the ISRC at add time the track stores a null ISRC and can end up a bare `#NN` ordinal instead of a coordinate. Fix at the source: in the add flow, when Spotify returns no ISRC, look it up from Deezer (search → `/track/{id}` carries it) before computing the Log ID. Also let the generic `track update` set `isrc`/`logId` (auto-gen the Log ID when missing) so any straggler is fixable without a direct DB write.
+The web side shipped (the socials cluster on the home plate, TikTok links on the log pages and feed rows). Remaining: the CLI + SSH sign-offs and any other non-web surface that should point at [@fluncle on TikTok](https://www.tiktok.com/@fluncle) and the rest of [docs/socials.md](./socials.md).
 
 ### TikTok audio line-up (build only when a track breaks)
 
@@ -109,7 +96,7 @@ Persistent per-user state — the thing that unlocks saved progress (e.g. a play
 
 ### Brand & canon
 
-- **Moodboard → canon audit** — decide per concept whether moodboard / video-kit proofs (texture families, Retint Rule, vehicle grammar, One-Sun-through-the-vehicle) get promoted into DESIGN.md / PRODUCT.md / VOICE.md or stay video-local; cross-link, don't duplicate. Resolve the logbook reframe above as part of this same audit. (The fluncle.com visual overhaul itself moved up to **Next → Web aesthetic overhaul**.)
+- **Moodboard → canon audit (video-side remainder)** — the web overhaul resolved the web half (the logbook plate, ignition hovers, the grain architecture, and the archive grammar are in DESIGN.md now). Still open per concept: whether the video-kit proofs (texture families' full grammar, vehicle grammar, One-Sun-through-the-vehicle) get promoted into canon or stay video-local; cross-link, don't duplicate.
 
 ### Newsletter agent (Spinup)
 
