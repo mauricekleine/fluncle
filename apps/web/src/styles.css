@@ -4,6 +4,14 @@
    the palette hexes. :root below only maps them onto the shadcn variable names. */
 @import "@fluncle/tokens/tokens.css";
 
+/* Fluncle is dark-only: the palette lives once in :root (no second theme).
+   Tailwind v4's default would make `dark:` track `prefers-color-scheme`, so
+   shadcn components' `dark:` overrides fired only on OS-dark devices and diverged
+   the render (e.g. outline buttons lost their border). Bind `dark:` to a `.dark`
+   ancestor instead — one we never add — so every `dark:` utility stays inert and
+   the single intended theme renders identically on every device. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* Oxanium variable font (SIL OFL), self-hosted; one file covers weights 200-800. */
 @font-face {
   font-family: "Oxanium";
@@ -70,6 +78,9 @@
 }
 
 :root {
+  /* Dark-only: keep UA-rendered chrome (scrollbars, form controls, autofill)
+     dark regardless of the device's OS appearance setting. */
+  color-scheme: dark;
   --radius: var(--rounded-lg);
   --background: var(--deep-field);
   --foreground: var(--starlight-cream);
