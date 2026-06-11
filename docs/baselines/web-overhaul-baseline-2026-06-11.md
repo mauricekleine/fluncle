@@ -50,3 +50,13 @@ Captured from the GSC dashboard (sc-domain:fluncle.com, 2026-06-11):
 - **Performance, last 3 months: 1 click, 1 impression total.** The site is effectively invisible in Google search.
 - **Page indexing: "Processing data, please check again in a day or so"** — the domain property has no coverage report yet (recently added). Re-check after Unit 0 deploys; expected interim state per RFC: "Duplicate, Google chose different canonical".
 - Bing Webmaster Tools: not checked (no session); submit sitemap there as part of Unit 1 rollout.
+
+## After (same day, post-deploy e294e73 — verified 2026-06-11 ~10:00 CEST)
+
+- **Canonicals: exactly one self-referencing canonical per page per host** (www `/`, `/log/004.7.2I`, `/log`, `/about`, `/galaxy`; galaxy.fluncle.com pages canonicalize to their www equivalents).
+- **301s verified with curl -I:** `/stories/004.7.2I` → `/log/004.7.2I` (one hop, no chain), `/stories` → `/log`. Bad params (`/log/garbage!!`, unknown `/log/999.9.9Z`) → 404.
+- **Sitemap: 26 locs** (4 static + 22 log pages, per-finding lastmod).
+- **SSR payload:** both Log-ID forms (×6) + the definitional block; JSON-LD = MusicRecording (2 identifier PropertyValues) + BreadcrumbList per log page; MusicGroup + FAQPage (5 Q/As) on /about.
+- **Rich Results Test: clean on both** `/log/004.7.2I` (Breadcrumbs valid, crawl OK, no errors) and `/about` (FAQ valid, no errors).
+- **Lighthouse (same methodology): LCP 5.3 s (was 5.6 s), FCP 2.0 s (was 2.6), SI 3.0 s (was 4.0), perf 0.78 (was 0.74)** — LCP element still the cover image. The gate (unchanged-or-better) passes.
+- Remaining off-site (docs/ROADMAP.md "AEO/GEO — off-site thread", owner Maurice): Cloudflare AI-crawler unblock, GSC + Bing sitemap submission, bios, MusicBrainz → Wikidata. GSC "Indexed" + bare-token retrieval are monitoring, not ship gates.
