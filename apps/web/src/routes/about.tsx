@@ -1,5 +1,12 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
-import { siteUrl, spotifyPlaylistUrl, telegramUrl, tiktokUrl } from "@/lib/fluncle-links";
+import {
+  musicbrainzUrl,
+  siteUrl,
+  spotifyPlaylistUrl,
+  telegramUrl,
+  tiktokUrl,
+  wikidataUrl,
+} from "@/lib/fluncle-links";
 import { fluncleDescription } from "@/lib/identity";
 
 // The entity and answer surface (web-overhaul RFC §4): the Galaxy lore in
@@ -50,7 +57,7 @@ function aboutHead() {
     genre: "Drum and Bass",
     image: `${siteUrl}/fluncle-cover.png`,
     name: "Fluncle",
-    sameAs: [spotifyPlaylistUrl, telegramUrl, tiktokUrl],
+    sameAs: [spotifyPlaylistUrl, telegramUrl, tiktokUrl, musicbrainzUrl, wikidataUrl],
     url: `${siteUrl}/`,
   };
   const faqPage = {
