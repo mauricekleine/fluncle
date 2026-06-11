@@ -9,6 +9,9 @@ export const telegramUrl = import.meta.env.VITE_FLUNCLE_TELEGRAM_URL ?? "https:/
 // The owned channels (docs/socials.md): TikTok is the primary video channel.
 export const tiktokUrl = "https://www.tiktok.com/@fluncle";
 
+// The Galaxy game (same Worker, galaxy. subdomain): fly to every banger.
+export const galaxyUrl = "https://galaxy.fluncle.com";
+
 // Third-party corroboration anchors (created 2026-06-11): the independent,
 // machine-readable identities the entity schema points at via sameAs.
 export const musicbrainzUrl = "https://musicbrainz.org/artist/53346748-1357-45c0-a847-9d248b65d655";

@@ -28,7 +28,13 @@ import { TrackRow } from "@/components/track-row";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { siteUrl, spotifyPlaylistUrl, telegramUrl, tiktokUrl } from "@/lib/fluncle-links";
+import {
+  galaxyUrl,
+  siteUrl,
+  spotifyPlaylistUrl,
+  telegramUrl,
+  tiktokUrl,
+} from "@/lib/fluncle-links";
 import { fluncleDescription } from "@/lib/identity";
 import { listTracks } from "@/lib/server/tracks";
 import { fetchTracks, type Track } from "@/lib/tracks";
@@ -240,7 +246,7 @@ function HomePage() {
             </div>
           </header>
           <section className="grid gap-y-8 lg:min-h-0 lg:grid-cols-[minmax(240px,320px)_minmax(0,1fr)] lg:gap-x-10">
-            <aside className="mx-auto flex w-full max-w-80 flex-col lg:mx-0 lg:max-w-none">
+            <aside className="mx-auto flex w-full max-w-80 flex-col lg:mx-0 lg:max-w-none lg:min-h-0 lg:overflow-y-auto">
               <div className="cover-frame border p-1 rounded-lg">
                 {/* WebP for the page; the PNG stays canonical for og:image and JSON-LD. */}
                 <picture>
@@ -254,12 +260,30 @@ function HomePage() {
                   />
                 </picture>
               </div>
-              <div className="mt-5 flex items-center justify-center gap-2 lg:justify-start">
+              {/* The hero CTA: fly into the Galaxy game. The one gold primary on
+                  the plate (One Sun), so Playlist/Telegram drop to outline. The
+                  icon is the game's own ship sprite, kept crisp (pixelated). */}
+              <Button
+                className="mt-5 w-full"
+                nativeButton={false}
+                render={<a href={galaxyUrl} />}
+                size="lg"
+              >
+                <img
+                  alt=""
+                  aria-hidden="true"
+                  className="size-5 [image-rendering:pixelated]"
+                  src="/galaxy/ship.png"
+                />
+                Enter Fluncle's Galaxy
+              </Button>
+              <div className="mt-3 flex items-center justify-center gap-2 lg:justify-start">
                 <Button
                   className="flex-1"
                   nativeButton={false}
                   render={<a href={spotifyPlaylistUrl} rel="noreferrer" target="_blank" />}
                   size="lg"
+                  variant="outline"
                 >
                   <SpotifyLogoIcon aria-hidden="true" weight="fill" />
                   Playlist
@@ -384,9 +408,12 @@ function HomePage() {
                   <TooltipContent>The full log</TooltipContent>
                 </Tooltip>
               </div>
-              {/* Contribute: pinned to the bottom of the (stretched) column on
-                  desktop so its lower edge lines up with the feed's. */}
-              <div className="mt-3 grid gap-2 lg:mt-auto">
+              {/* A growing spacer bottom-aligns the contribute block with the
+                  feed when there's room, but collapses to zero (keeping the
+                  mt-3 gap) when the column is tight — so nothing crams. */}
+              <div aria-hidden="true" className="hidden lg:block lg:grow" />
+              {/* Contribute: lower edge lines up with the feed's on desktop. */}
+              <div className="mt-3 grid gap-2">
                 <SubmitTrackDialog />
                 <div className="plate-field mt-1 grid gap-1 rounded-lg border border-border px-3.5 py-3">
                   <p className="text-xs font-extrabold text-muted-foreground">For the nerds:</p>
