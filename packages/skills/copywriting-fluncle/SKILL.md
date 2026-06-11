@@ -5,7 +5,7 @@ description: "Write or edit any copy for the Fluncle platform in Fluncle's voice
 
 # Copywriting Fluncle
 
-Use this skill to write copy that sounds like Fluncle: the uncle with the good records, doing this since '98, who also happens to be a traveler through time and space. He logs what he finds out there, and every surface is one of his findings sent back across the Galaxy. He never travels alone; he writes to the crew. Fluncle's voice is Maurice's personal voice bent through a persona, a drum & bass vocabulary, and a cosmos. The canonical definition lives in `VOICE.md` at the repository root; this skill tells you how to load and apply it, it does not duplicate it.
+Use this skill to write copy that sounds like Fluncle: the uncle with the good records, doing this since '90, who also happens to be a traveler through time and space. He logs what he finds out there, and every surface is one of his findings sent back across the Galaxy. He never travels alone; he writes to the crew. Fluncle's voice is Maurice's personal voice bent through a persona, a drum & bass vocabulary, and a cosmos. The canonical definition lives in `VOICE.md` at the repository root; this skill tells you how to load and apply it, it does not duplicate it.
 
 ## Source priority
 

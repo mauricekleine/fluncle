@@ -6,7 +6,7 @@
 
 ## 1. Who's talking
 
-Fluncle himself. The uncle with the good records, doing this since '98 — who also happens to be a traveler through time and space. He went out there with a Discman and kept the cable plugged in, and he's been logging what he finds ever since. Every surface is one of his findings, sent back across the Galaxy. Maurice stays behind the curtain (the operator, never the narrator).
+Fluncle himself. The uncle with the good records, doing this since '90 — who also happens to be a traveler through time and space. He went out there with a Discman and kept the cable plugged in, and he's been logging what he finds ever since. Every surface is one of his findings, sent back across the Galaxy. Maurice stays behind the curtain (the operator, never the narrator).
 
 He is warm AND vast, and that collision is the whole character. Not the lonely astronaut of every space-log cliché — the uncle who travels with a crew. Drum & bass, to him, is something you feel together: a ragtag lot from everywhere, a little out of the ordinary in the best way, the kind of crowd where the dancing looks like a fight until someone goes down and everyone stops to pick them up. The Galaxy carries that warmth. It is fun, curious, generous; never lonely, never nihilist, never cold.
 
@@ -65,7 +65,7 @@ Four pillars, in priority order:
 
 **The Banger Budget.** "Banger" lands once per breath. If a paragraph needs the word twice, the second one becomes track or tune. Scarcity keeps the certification meaningful.
 
-**The Found Rule.** (Formerly the Discovery Rule.) Every date in the system is the day Fluncle found it — the day he first heard it and went "fuck yeah" — not the day it released or the day a row hit the database. Copy around dates honours that: "Found", never "Added" or "Released". find / found / findings is the surface family for it.
+**The Found Rule.** (Formerly the Discovery Rule.) Every date in the system is the day Fluncle found it — the day he first heard it and went "fuck yeah" — not the day it released or the day a row hit the database. Copy around dates honours that: "Found", never "Added" or "Released". find / found / findings is the surface family for it. The Log ID already carries the Found date inside its coordinate (the sector is days since the epoch), so the compact feed row leads with the coordinate alone and drops the explicit date; the labelled "Found Jun 4" lives where the record is permanent — the finding's log page and the log index — not on every feed row.
 
 **The Mosh Pit Rule.** The Galaxy looks aggressive and lands warm. Drum & bass is hard, fast, a little feral — and the crew is the crowd that stops the second someone goes down and picks them up. Copy can be dry, deadpan, even a touch unhinged, but it is never cynical, never punching down, never cold; nobody gets left on the floor. This is the warmth guardrail for the whole voice.
 

@@ -23,7 +23,7 @@ const title = "About Fluncle: the Galaxy, Log IDs, and the findings";
 const faq: Array<{ answer: string; question: string }> = [
   {
     answer:
-      "Fluncle is the selector behind Fluncle's Findings: one uncle with the good records, no team, digging drum & bass since '98. He went out there with a Discman, kept the cable plugged in, and has been logging what he finds ever since. Every track in the archive is one he heard in full and certified before it published.",
+      "Fluncle is the selector behind Fluncle's Findings: one uncle with the good records, no team, digging drum & bass since '90. He went out there with a Discman, kept the cable plugged in, and has been logging what he finds ever since. Every track in the archive is one he heard in full and certified before it published.",
     question: "Who is Fluncle?",
   },
   {
@@ -103,7 +103,7 @@ function AboutPage() {
 
         <section aria-label="The story" className="log-about-story">
           <p>
-            I'm Fluncle: the uncle with the good records, doing this since '98. Somewhere along the
+            I'm Fluncle: the uncle with the good records, doing this since '90. Somewhere along the
             way the record bag became a ship's hold. I travel, I listen, and when a tune stops me
             mid-sector I log it and send it back. That's the whole machine.
           </p>
