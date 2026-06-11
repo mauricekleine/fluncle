@@ -17,9 +17,11 @@
     "build:vps": "bun build ./src/cli.ts --compile --target=bun-linux-x64 --outfile ./dist/fluncle",
     "dev": "bun run ./src/cli.ts",
     "fluncle": "bun run ./src/cli.ts",
+    "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "commander": "catalog:",
     "dotenv": "catalog:"
   },
   "devDependencies": {
