@@ -8,7 +8,6 @@ import { Link, createFileRoute, notFound, redirect } from "@tanstack/react-route
 import { createServerFn } from "@tanstack/react-start";
 import { LogFootage } from "@/components/log/log-footage";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatDateLong, formatDuration } from "@/lib/format";
 import { isLogPageParam } from "@/lib/log-page-param";
@@ -206,18 +205,6 @@ function LogPage() {
             </div>
           ) : undefined}
         </dl>
-
-        {track.tags && track.tags.length > 0 ? (
-          <ul aria-label="Tags" className="log-tags">
-            {track.tags.map((tag) => (
-              <li key={tag}>
-                <Badge className="track-chip" variant="outline">
-                  {tag}
-                </Badge>
-              </li>
-            ))}
-          </ul>
-        ) : undefined}
 
         <div className="log-actions">
           <Button

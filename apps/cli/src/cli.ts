@@ -349,7 +349,6 @@ async function runTrackGet(
       t.bpm ? `${t.bpm} bpm` : undefined,
       t.key ?? undefined,
       t.label ?? undefined,
-      t.tags?.length ? t.tags.join(", ") : undefined,
       t.enrichmentStatus,
     ]
       .filter(Boolean)
@@ -371,8 +370,6 @@ async function runTrackUpdate(
       key: { type: "string" },
       note: { type: "string" },
       status: { type: "string" },
-      tag: { multiple: true, type: "string" },
-      "tag-source": { type: "string" },
       "video-url": { type: "string" },
     },
   });
@@ -380,13 +377,7 @@ async function runTrackUpdate(
   const trackId = parsed.positionals[0];
 
   if (!trackId) {
-    throw new Error("Missing track id. Usage: fluncle admin track update <track_id> [--tag ...]");
-  }
-
-  const tagSource = parsed.values["tag-source"];
-
-  if (tagSource !== undefined && tagSource !== "auto" && tagSource !== "manual") {
-    throw new Error(`Invalid --tag-source: ${tagSource} (expected "auto" or "manual")`);
+    throw new Error("Missing track id. Usage: fluncle admin track update <track_id> [--bpm ...]");
   }
 
   const bpm = parsed.values.bpm === undefined ? undefined : Number(parsed.values.bpm);
@@ -401,8 +392,6 @@ async function runTrackUpdate(
     key: parsed.values.key,
     note: parsed.values.note,
     status: parsed.values.status,
-    tags: parsed.values.tag,
-    tagsSource: tagSource,
     videoUrl: parsed.values["video-url"],
   });
 
@@ -680,7 +669,7 @@ Meta:
 Operator:
   fluncle admin add <spotify-url> [--note "text"] [--dry-run] [--json]
   fluncle track get <track-id|log-id> [--json]      Look up one finding by id or Log ID
-  fluncle admin track update <track-id> [--tag t]... [--tag-source auto|manual] [--bpm n] [--key "k"] [--video-url u] [--features json] [--status s] [--note "text"] [--json]
+  fluncle admin track update <track-id> [--bpm n] [--key "k"] [--video-url u] [--features json] [--status s] [--note "text"] [--json]
       Certify a track into the archive
   fluncle admin track video <track-id|log-id> (--dir <dir> | --footage <f> [--footage-silent <f>] [--poster <f>] [--cover <f>] [--note <f>] [--composition <f>] [--props <f>] [--render <f>]) [--json]
       Upload a track's video bundle to R2 and link it

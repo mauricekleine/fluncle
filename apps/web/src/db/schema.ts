@@ -24,8 +24,6 @@ export const tracks = sqliteTable("tracks", {
   spotifyError: text("spotify_error"),
   spotifyUri: text("spotify_uri").notNull(),
   spotifyUrl: text("spotify_url").notNull(),
-  tagsJson: text("tags_json"),
-  tagsSource: text("tags_source"),
   telegramError: text("telegram_error"),
   title: text("title").notNull(),
   trackId: text("track_id").primaryKey(),
@@ -33,6 +31,13 @@ export const tracks = sqliteTable("tracks", {
   // curation/enrichment update, social-post state) bumps it. Null for rows that
   // predate the column; readers fall back to added_at (sitemap lastmod).
   updatedAt: text("updated_at"),
+  // The finding's place in vibe-space (the admin tagging map; see
+  // docs/admin-tagging.md): vibeX = Light(-1)↔Dark(+1) mood, vibeY =
+  // Floaty(-1)↔Driving(+1) energy, each roughly -1..1. The quadrant is the
+  // finding's galaxy (Solar/Nebular/Lunar/Deep). Null = not yet placed; the
+  // operator drops it on the map. Replaces sub-genre tags as the grouping.
+  vibeX: real("vibe_x"),
+  vibeY: real("vibe_y"),
   videoUrl: text("video_url"),
   // The travelling vehicle of the track's video (e.g. "voronoi cellular",
   // "caustic web"). Set when the video is uploaded; surfaced in /api/tracks so

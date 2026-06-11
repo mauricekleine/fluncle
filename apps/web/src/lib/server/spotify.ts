@@ -4,6 +4,9 @@ import { readEnvs } from "./env";
 const spotifyAccountsBaseUrl = "https://accounts.spotify.com";
 const spotifyApiBaseUrl = "https://api.spotify.com/v1";
 const spotifyScopes = ["playlist-modify-public", "playlist-modify-private"];
+// Admin web login asks for identity only — never the playlist-write scopes the
+// publish flow uses. The login exchange reads /v1/me and discards the tokens.
+const spotifyLoginScopes = ["user-read-email"];
 
 type SpotifyTokenResponse = {
   access_token: string;
@@ -76,16 +79,60 @@ export type TrackSearchResult = {
 };
 
 export async function buildSpotifyAuthUrl(state: string): Promise<string> {
+  return buildAuthorizeUrl(state, spotifyScopes);
+}
+
+// The admin-login authorize URL: identity scopes, the SAME registered redirect
+// URI as the publish flow (the shared callback branches on state.purpose).
+export async function buildSpotifyLoginUrl(state: string): Promise<string> {
+  return buildAuthorizeUrl(state, spotifyLoginScopes);
+}
+
+async function buildAuthorizeUrl(state: string, scopes: string[]): Promise<string> {
   const env = await readEnvs(["SPOTIFY_CLIENT_ID", "SPOTIFY_REDIRECT_URI"]);
   const params = new URLSearchParams({
     client_id: env.SPOTIFY_CLIENT_ID,
     redirect_uri: env.SPOTIFY_REDIRECT_URI,
     response_type: "code",
-    scope: spotifyScopes.join(" "),
+    scope: scopes.join(" "),
     state,
   });
 
   return `${spotifyAccountsBaseUrl}/authorize?${params.toString()}`;
+}
+
+export type SpotifyProfile = {
+  displayName?: string;
+  email?: string;
+  id: string;
+};
+
+type SpotifyProfileResponse = {
+  display_name?: string;
+  email?: string;
+  id: string;
+};
+
+/**
+ * Exchange an admin-login auth code for the caller's Spotify identity and throw
+ * the tokens away. This is the LOGIN path — it must never touch spotify_auth (the
+ * publish refresh token lives there); it only proves who is at the browser.
+ */
+export async function fetchSpotifyProfile(code: string): Promise<SpotifyProfile> {
+  const env = await readEnvs(["SPOTIFY_REDIRECT_URI"]);
+  const token = await requestToken({
+    code,
+    grant_type: "authorization_code",
+    redirect_uri: env.SPOTIFY_REDIRECT_URI,
+  });
+  const response = await spotifyFetch("/me", token.access_token);
+  const data = (await response.json()) as SpotifyProfileResponse;
+
+  return {
+    displayName: data.display_name,
+    email: data.email,
+    id: data.id,
+  };
 }
 
 export function parseSpotifyTrackUrl(input: string): string {

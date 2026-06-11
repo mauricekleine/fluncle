@@ -72,19 +72,61 @@ export async function readEnvs<const T extends readonly EnvKey[]>(
   ) as Record<T[number], string>;
 }
 
+// One admin identity, two carriers (see docs/admin-tagging.md): the CLI/agent
+// send the token as a Bearer header; the browser sends a signed grant COOKIE
+// (the token is the signing key, never the transported value — admin-auth.ts).
+// requireAdmin accepts either, so every existing /api/admin/* route is reachable
+// from the browser tagging UI without forking per-carrier logic.
+export const ADMIN_COOKIE_NAME = "fluncle_admin";
+// The browser session window. Deliberately NOT the OAuth state window: a 10-min
+// cookie would log the single operator out mid-session.
+export const ADMIN_GRANT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const OAUTH_STATE_MAX_AGE_MS = 10 * 60 * 1000;
+
 export async function requireAdmin(request: Request): Promise<Response | undefined> {
   const expectedToken = await readEnv("FLUNCLE_API_TOKEN");
   const header = request.headers.get("Authorization");
   const prefix = "Bearer ";
 
-  if (!header?.startsWith(prefix)) {
-    return unauthorized();
+  if (header?.startsWith(prefix) && constantTimeEqual(header.slice(prefix.length), expectedToken)) {
+    return undefined;
   }
 
-  const actualToken = header.slice(prefix.length);
+  if (await hasValidAdminCookie(request)) {
+    return undefined;
+  }
 
-  if (!constantTimeEqual(actualToken, expectedToken)) {
-    return unauthorized();
+  return unauthorized();
+}
+
+async function hasValidAdminCookie(request: Request): Promise<boolean> {
+  const value = readCookie(request.headers.get("cookie"), ADMIN_COOKIE_NAME);
+
+  if (!value) {
+    return false;
+  }
+
+  try {
+    const payload = await verifySignedState(value, ADMIN_GRANT_MAX_AGE_MS);
+
+    return payload.role === "admin";
+  } catch {
+    return false;
+  }
+}
+
+function readCookie(header: string | null, name: string): string | undefined {
+  if (!header) {
+    return undefined;
+  }
+
+  for (const part of header.split(/;\s*/)) {
+    // Split on the FIRST '=' only — base64url grant values can contain '='.
+    const eq = part.indexOf("=");
+
+    if (eq !== -1 && part.slice(0, eq) === name) {
+      return part.slice(eq + 1);
+    }
   }
 
   return undefined;
@@ -109,7 +151,14 @@ export async function signState(payload: Record<string, string | number>): Promi
   return `${body}.${signature}`;
 }
 
-export async function verifyState(state: string): Promise<Record<string, unknown>> {
+// The HMAC verify primitive, shared by the OAuth state path and the admin
+// session cookie. The two carriers differ ONLY in their freshness window, so it
+// is a parameter — the OAuth path keeps its tight 10-min window while the admin
+// session gets a 30-day one, off one signing implementation.
+export async function verifySignedState(
+  state: string,
+  maxAgeMs: number,
+): Promise<Record<string, unknown>> {
   const token = await readEnv("FLUNCLE_API_TOKEN");
   const [body, signature] = state.split(".");
 
@@ -128,7 +177,6 @@ export async function verifyState(state: string): Promise<Record<string, unknown
     unknown
   >;
   const issuedAt = typeof parsed.iat === "number" ? parsed.iat : 0;
-  const maxAgeMs = 10 * 60 * 1000;
 
   if (Date.now() - issuedAt > maxAgeMs) {
     throw new Error("Expired state");
@@ -137,11 +185,15 @@ export async function verifyState(state: string): Promise<Record<string, unknown
   return parsed;
 }
 
+export async function verifyState(state: string): Promise<Record<string, unknown>> {
+  return verifySignedState(state, OAUTH_STATE_MAX_AGE_MS);
+}
+
 function unauthorized(): Response {
   return jsonError(401, "unauthorized", "Missing or invalid admin token");
 }
 
-function constantTimeEqual(left: string, right: string): boolean {
+export function constantTimeEqual(left: string, right: string): boolean {
   const leftBuffer = Buffer.from(left);
   const rightBuffer = Buffer.from(right);
 

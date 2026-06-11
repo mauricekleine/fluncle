@@ -71,6 +71,20 @@
       "when": 1781157947766,
       "tag": "0009_public_switch",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1781188452847,
+      "tag": "0010_light_vermin",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1781191425360,
+      "tag": "0011_awesome_red_shift",
+      "breakpoints": true
     }
   ]
 }

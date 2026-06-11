@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { grantCookie, isAllowedSpotifyUser, signGrant } from "../../../../../lib/server/admin-auth";
 import { jsonError, verifyState } from "../../../../../lib/server/env";
-import { exchangeCodeForToken } from "../../../../../lib/server/spotify";
+import { exchangeCodeForToken, fetchSpotifyProfile } from "../../../../../lib/server/spotify";
 
 export const Route = createFileRoute("/api/admin/spotify/auth/callback")({
   server: {
@@ -21,6 +22,25 @@ export const Route = createFileRoute("/api/admin/spotify/auth/callback")({
 
         try {
           const statePayload = await verifyState(state);
+
+          // Admin web login: read the caller's Spotify identity, discard the
+          // tokens (never touch the publish refresh token), and — if it's the
+          // allow-listed operator — hand the browser the signed grant cookie.
+          if (statePayload.purpose === "admin-login") {
+            const profile = await fetchSpotifyProfile(code);
+
+            if (!isAllowedSpotifyUser(profile)) {
+              return new Response(null, {
+                headers: { Location: "/admin/login?error=denied" },
+                status: 302,
+              });
+            }
+
+            return new Response(null, {
+              headers: { Location: "/admin/tag", "Set-Cookie": grantCookie(await signGrant()) },
+              status: 302,
+            });
+          }
 
           if (statePayload.purpose !== "spotify-auth") {
             return jsonError(400, "invalid_state", "Invalid state");
