@@ -220,12 +220,26 @@ function HomePage() {
 
   return (
     <TooltipProvider>
-      <main className="min-h-screen overflow-hidden text-foreground">
-        <h1 className="sr-only">Fluncle's Findings</h1>
-        <section className="mx-auto grid min-h-screen w-full max-w-7xl content-center gap-y-8 px-4 py-8 sm:px-6 lg:grid-cols-[minmax(240px,320px)_minmax(0,1fr)] lg:gap-x-12 lg:gap-y-10 lg:px-8">
-          <div className="grid gap-x-12 gap-y-8 lg:col-span-2 lg:grid-cols-subgrid">
+      <main className="min-h-screen overflow-hidden px-4 text-foreground sm:px-6 lg:px-8">
+        {/* A0: the page as ONE recovered logbook plate — a real masthead, the
+            cover and the list mounted flat on a single document (the silhouette
+            change; web-overhaul RFC §6). */}
+        <article className="home-plate mx-auto my-6 w-full max-w-7xl sm:my-8 lg:my-10">
+          <header className="home-masthead">
+            <div>
+              <h1 className="home-nameplate">Fluncle's Findings</h1>
+              <p className="home-tagline">Drum & bass bangers from another dimension.</p>
+            </div>
+            <div className="home-masthead-actions">
+              <span aria-label={`${totalCount} findings logged`} className="home-stamp">
+                Found · {totalCount}
+              </span>
+              <RandomBangerDialog />
+            </div>
+          </header>
+          <section className="grid gap-y-8 lg:grid-cols-[minmax(240px,320px)_minmax(0,1fr)] lg:gap-x-10">
             <aside className="mx-auto w-full max-w-80 lg:mx-0 lg:max-w-none">
-              <div className="cover-frame border border-primary/40 p-1 rounded-lg">
+              <div className="cover-frame border p-1 rounded-lg">
                 {/* WebP for the page; the PNG stays canonical for og:image and JSON-LD. */}
                 <picture>
                   <source srcSet="/fluncle-cover.webp" type="image/webp" />
@@ -258,7 +272,6 @@ function HomePage() {
                   <TelegramLogoIcon aria-hidden="true" weight="fill" />
                   Telegram
                 </Button>
-                <RandomBangerDialog />
               </div>
               {/* Follow across the Galaxy: one quiet icon cluster (the IA
                   regroup — destinations above, contribute below). */}
@@ -337,7 +350,7 @@ function HomePage() {
               </div>
               <div className="mt-3 grid gap-2">
                 <SubmitTrackDialog />
-                <div className="playlist-shell mt-1 grid gap-1 rounded-lg border border-border px-3.5 py-3">
+                <div className="plate-field mt-1 grid gap-1 rounded-lg border border-border px-3.5 py-3">
                   <p className="text-xs font-extrabold text-muted-foreground">For the nerds:</p>
                   <div className="grid justify-items-start">
                     <CliInstallDialog />
@@ -351,7 +364,7 @@ function HomePage() {
               <h2 className="sr-only" id="playlist-title">
                 Latest findings
               </h2>
-              <div className="playlist-shell flex flex-1 flex-col border border-border rounded-md">
+              <div className="plate-field flex flex-1 flex-col border border-border rounded-md">
                 <div aria-hidden="true" className="playlist-header">
                   <span>Log ID</span>
                   <span aria-hidden="true" />
@@ -361,13 +374,13 @@ function HomePage() {
                 </div>
 
                 {tracks.length === 0 && !error ? (
-                  <div className="px-4 py-10 text-center text-muted-foreground">
+                  <div className="empty-scanlines px-4 py-10 text-center text-muted-foreground">
                     No findings logged yet. Quiet sector tonight.
                   </div>
                 ) : undefined}
 
                 {tracks.length > 0 ? (
-                  <ScrollArea className="h-[min(32rem,65dvh)] lg:h-[calc(100vh-8rem)]">
+                  <ScrollArea className="h-[min(32rem,60dvh)] lg:h-[calc(100vh-24rem)]">
                     <ol className="grid m-0 list-none p-0 [&>li:last-child.track-row]:border-b-0">
                       {tracks.map((track, index) => (
                         <TrackRow
@@ -404,8 +417,8 @@ function HomePage() {
 
               {cursor ? <span className="sr-only">Loaded through cursor {cursor}</span> : undefined}
             </section>
-          </div>
-        </section>
+          </section>
+        </article>
 
         <StoriesDialog
           initialLogId={story}

@@ -74,7 +74,9 @@ function LogIndexPage() {
         </header>
 
         {entries.length === 0 ? (
-          <p className="log-index-empty">No findings logged yet. Quiet sector tonight.</p>
+          <p className="log-index-empty empty-scanlines">
+            No findings logged yet. Quiet sector tonight.
+          </p>
         ) : (
           <ol className="log-index-list">
             {entries.map((track) => (

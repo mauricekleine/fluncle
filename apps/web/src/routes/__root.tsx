@@ -125,6 +125,9 @@ function RootLayout(): ReactNode {
         <HeadContent />
       </head>
       <body>
+        {/* The one directional Eclipse-Gold bloom under every pane (gold as
+            ignition; breath gated to no-preference in CSS). */}
+        <div aria-hidden="true" className="sun-bloom" />
         <Outlet />
         <Scripts />
       </body>

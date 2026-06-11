@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 function StoriesState({ children, heading }: { children: string; heading: string }) {
   return (
     <main className="flex min-h-dvh items-center justify-center px-6 text-foreground">
-      <div className="playlist-shell grid max-w-md gap-3 rounded-lg border border-border px-6 py-7 text-center">
+      <div className="playlist-shell empty-scanlines grid max-w-md gap-3 rounded-lg border border-border px-6 py-7 text-center">
         <h1 className="text-lg font-extrabold">{heading}</h1>
         <p className="text-sm text-muted-foreground">{children}</p>
         <Button

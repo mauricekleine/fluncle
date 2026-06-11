@@ -104,8 +104,19 @@
   --sidebar-ring: var(--eclipse-gold);
 }
 
+/* The Light-Years grain architecture (web-overhaul RFC §6): dense grain lives
+   UNDER content — baked into the cosmos backdrop here and into the panes'
+   own surfaces below — never as a veil over reading text. The one shared
+   noise tile (inline SVG, zero network) is --grain-tile. */
+:root {
+  --grain-tile: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
 body::before {
-  background: url("/fluncle-cover-no-text.webp") center / cover no-repeat;
+  background:
+    var(--grain-tile) repeat,
+    url("/fluncle-cover-no-text.webp") center / cover no-repeat;
+  background-blend-mode: overlay, normal;
   content: "";
   inset: -1%;
   pointer-events: none;
@@ -114,23 +125,36 @@ body::before {
   z-index: -2;
 }
 
-/* The Light-Years Rule (DESIGN.md): grain + lossy texture is load-bearing brand,
-   not decoration — "a surface rendered glassy-clean and pristine reads as fake."
-   A fixed, static film-grain veil over the WHOLE frame (the cosmos and the glass
-   panes alike), the web sibling of the video kit's always-on grain. It sits above
-   content but below dialogs (z 30 < the dialog layer) and is pointer-events:none,
-   so it never blocks interaction. Static (no animation) → zero main-thread cost
-   and inherently safe under reduced motion. Opacity is low enough to honour the
-   Legible Sky Rule (text stays AA). */
-body::after {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  content: "";
+/* Gold as ignition, not fill: ONE directional Eclipse-Gold bloom, anchored
+   where the cover's sun sits in the layout (upper left), under every pane.
+   It breathes imperceptibly (the one sanctioned motion beyond the 72s drift,
+   reduced-motion-gated) so the textured page never reads as a frozen JPEG. */
+.sun-bloom {
+  background: radial-gradient(
+    58% 46% at 16% 12%,
+    color-mix(in oklch, var(--eclipse-gold) 13%, transparent),
+    transparent 72%
+  );
   inset: 0;
-  mix-blend-mode: overlay;
-  opacity: 0.05;
   pointer-events: none;
   position: fixed;
-  z-index: 30;
+  z-index: -1;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .sun-bloom {
+    animation: bloom-breath 48s ease-in-out infinite alternate;
+  }
+}
+
+@keyframes bloom-breath {
+  from {
+    opacity: 0.78;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 /* The cosmos barely breathes — an imperceptibly slow drift on the backdrop so the
@@ -153,24 +177,23 @@ body::after {
   }
 }
 
+/* The cover frame — the founding document, mounted on the plate: grain over a
+   BENT warm gradient (the sun's falloff, not a straight SaaS sweep) with the
+   frame edge lit from the sun side. It sits flat on the home plate (One Pane:
+   no glass on glass), so the old backdrop blur is gone. */
 .cover-frame {
-  background: linear-gradient(
-    145deg,
-    color-mix(in oklch, var(--primary) 24%, transparent),
-    color-mix(in oklch, var(--destructive) 20%, transparent)
-  );
-}
-
-@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .cover-frame {
-    -webkit-backdrop-filter: blur(16px) saturate(125%);
-    backdrop-filter: blur(16px) saturate(125%);
-    background: linear-gradient(
-      145deg,
-      color-mix(in oklch, var(--primary) 14%, transparent),
-      color-mix(in oklch, var(--destructive) 12%, transparent)
+  background:
+    var(--grain-tile) repeat,
+    radial-gradient(
+      130% 130% at 18% 12%,
+      color-mix(in oklch, var(--primary) 26%, transparent) 0%,
+      color-mix(in oklch, var(--destructive) 16%, transparent) 58%,
+      color-mix(in oklch, var(--destructive) 8%, transparent) 100%
     );
-  }
+  background-blend-mode: overlay, normal;
+  border-color: color-mix(in oklch, var(--primary) 26%, transparent);
+  border-left-color: color-mix(in oklch, var(--primary) 52%, transparent);
+  border-top-color: color-mix(in oklch, var(--primary) 68%, transparent);
 }
 
 .playlist-shell {
@@ -1063,6 +1086,182 @@ body::after {
 .track-log-id-link:hover,
 .track-log-id-link:focus-visible {
   color: var(--accent-foreground);
+}
+
+/* ————— Track A: the recovered logbook plate (A0) —————
+
+   The page is ONE printed document sent back across the Galaxy: a real
+   masthead, archive grammar (crop marks, a register cross, a FOUND stamp,
+   a double-rule worn frame), pane-tooth grain under the content, and gold
+   placed like light. The home plate and the log plates share the grammar. */
+
+.home-plate {
+  background: color-mix(in oklch, var(--card) 86%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-lg);
+  display: grid;
+  gap: 1.6rem;
+  outline: 1px solid color-mix(in oklch, var(--border) 45%, transparent);
+  outline-offset: 4px;
+  padding: clamp(1.1rem, 3vw, 2.25rem);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .home-plate {
+    -webkit-backdrop-filter: blur(18px) saturate(125%);
+    backdrop-filter: blur(18px) saturate(125%);
+    background: color-mix(in oklch, var(--card) 52%, transparent);
+  }
+}
+
+/* The double rule on the log plates too — the same printed frame. */
+.log-plate {
+  outline: 1px solid color-mix(in oklch, var(--border) 45%, transparent);
+  outline-offset: 4px;
+}
+
+/* Pane-tooth: a whisper of grain ON the plate surface, under the content
+   (never a veil over text — the painting order puts a negative-z pseudo
+   above the pane's background and below everything in flow). */
+.home-plate,
+.log-plate {
+  isolation: isolate;
+  position: relative;
+}
+
+.home-plate::before,
+.log-plate::before {
+  background: var(--grain-tile) repeat;
+  border-radius: inherit;
+  content: "";
+  inset: 0;
+  mix-blend-mode: overlay;
+  opacity: 0.16;
+  pointer-events: none;
+  position: absolute;
+  z-index: -1;
+}
+
+/* Archive grammar: crop-mark corner brackets + a register cross, printed
+   just inside the plate edge. Pure background gradients; zero DOM, zero
+   requests, static by construction. */
+.home-plate::after,
+.log-plate::after {
+  --crop: color-mix(in oklch, var(--stardust) 55%, transparent);
+  background:
+    linear-gradient(var(--crop), var(--crop)) left 0 top 0 / 0.9rem 1px,
+    linear-gradient(var(--crop), var(--crop)) left 0 top 0 / 1px 0.9rem,
+    linear-gradient(var(--crop), var(--crop)) right 0 top 0 / 0.9rem 1px,
+    linear-gradient(var(--crop), var(--crop)) right 0 top 0 / 1px 0.9rem,
+    linear-gradient(var(--crop), var(--crop)) left 0 bottom 0 / 0.9rem 1px,
+    linear-gradient(var(--crop), var(--crop)) left 0 bottom 0 / 1px 0.9rem,
+    linear-gradient(var(--crop), var(--crop)) right 0 bottom 0 / 0.9rem 1px,
+    linear-gradient(var(--crop), var(--crop)) right 0 bottom 0 / 1px 0.9rem,
+    linear-gradient(var(--crop), var(--crop)) center top / 0.55rem 1px,
+    linear-gradient(var(--crop), var(--crop)) center top / 1px 0.55rem;
+  background-repeat: no-repeat;
+  content: "";
+  inset: 0.45rem;
+  pointer-events: none;
+  position: absolute;
+}
+
+/* The masthead: the page finally has a name. The nameplate is a brand-mark
+   plate (cover-art territory: Oxanium caps with a lockup), not running copy. */
+.home-masthead {
+  align-items: flex-start;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem 1.5rem;
+  justify-content: space-between;
+  padding-bottom: 1.2rem;
+}
+
+.home-nameplate {
+  color: var(--starlight-cream);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: clamp(1.45rem, 4vw, 2.05rem);
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  line-height: 1.05;
+  text-transform: uppercase;
+}
+
+.home-tagline {
+  color: var(--stardust);
+  font-size: 0.9rem;
+  margin-top: 0.35rem;
+}
+
+.home-masthead-actions {
+  align-items: center;
+  display: flex;
+  gap: 0.9rem;
+}
+
+/* The FOUND stamp: inked once, slightly off-square, counting the log. */
+.home-stamp {
+  border: 1.5px solid color-mix(in oklch, var(--eclipse-gold) 60%, transparent);
+  border-radius: 2px;
+  color: var(--eclipse-gold);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  padding: 0.3rem 0.55rem;
+  text-transform: uppercase;
+  transform: rotate(-3deg);
+}
+
+/* Fields ON the plate (the list, the nerd box): flat printed panels, not
+   nested glass (One Pane — the plate is the pane). */
+.plate-field {
+  background: color-mix(in oklch, var(--tape-black) 42%, transparent);
+  overflow: hidden;
+}
+
+/* De-pilled chips: stamped catalog marks, square-cornered and quiet. */
+.track-chip {
+  border-color: color-mix(in oklch, var(--stardust) 32%, transparent);
+  border-radius: 2px;
+}
+
+/* The artwork fallback — the one sanctioned halftone moment (Retint Rule):
+   a dot screen over the eclipse gradient, no text to protect. */
+.track-artwork-fallback {
+  background:
+    radial-gradient(
+        circle,
+        color-mix(in oklch, var(--starlight-cream) 26%, transparent) 1px,
+        transparent 1.4px
+      )
+      0 0 / 5px 5px,
+    radial-gradient(
+      120% 120% at 25% 20%,
+      color-mix(in oklch, var(--primary) 22%, transparent),
+      color-mix(in oklch, var(--destructive) 12%, transparent)
+    ),
+    var(--muted);
+}
+
+/* Empty and loading states: the contained scanline moment — degradation as
+   narrative where there is no reading text to protect. */
+.empty-scanlines {
+  background: repeating-linear-gradient(
+    0deg,
+    transparent 0 3px,
+    color-mix(in oklch, var(--starlight-cream) 4%, transparent) 3px 4px
+  );
+}
+
+/* Ignition: the Log ID coordinate heats toward the Glow on hover (the feed
+   cells and the log index already key off accent-foreground); links on the
+   plates underline-ignite the same way. */
+.log-decode a:hover,
+.log-plate-footer a:hover {
+  color: var(--eclipse-glow);
 }
 
 /* The Grounded Floats Rule (DESIGN.md): under reduced motion, every float
