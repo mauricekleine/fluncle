@@ -446,10 +446,13 @@ function HomePage() {
                 ) : undefined}
 
                 {tracks.length > 0 ? (
-                  // The feed self-bounds to ~a viewport and scrolls internally, so it never
-                  // grows the plate; the plate sizes to the taller column, and the left column
-                  // is simply its natural height (no scroll), growing the plate when it needs to.
-                  <ScrollArea className="h-[min(32rem,60dvh)] lg:h-[calc(100dvh-16rem)]">
+                  // The feed sizes to its content but never taller than ~a viewport (max-height,
+                  // not a fixed height — so a short list doesn't leave empty padding below it),
+                  // scrolling internally past that. It therefore never grows the plate beyond a
+                  // viewport; the plate sizes to the taller column and the left column is simply
+                  // its natural height. On mobile the rows are wider than the screen, so it also
+                  // scrolls horizontally (see .track-row min-width).
+                  <ScrollArea className="max-h-[min(32rem,60dvh)] lg:max-h-[calc(100dvh-16rem)]">
                     <ol className="grid m-0 list-none p-0 [&>li:last-child.track-row]:border-b-0">
                       {tracks.map((track, index) => (
                         <TrackRow

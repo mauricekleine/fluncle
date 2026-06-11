@@ -238,6 +238,20 @@ body::before {
     transform 150ms ease-out;
 }
 
+/* Mobile: scroll the feed horizontally instead of cramming the columns (the
+   title would otherwise wrap to many lines). The rows keep a comfortable
+   min-width and overflow the viewport; the decorative header is dropped since
+   it sits outside the scroller and can't track the rows. */
+@media (max-width: 639px) {
+  .playlist-header {
+    display: none;
+  }
+
+  .track-row {
+    min-width: 26rem;
+  }
+}
+
 .track-row:hover,
 .track-row:focus-within {
   background: var(--accent);
