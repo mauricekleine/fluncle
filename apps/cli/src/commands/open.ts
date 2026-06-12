@@ -1,4 +1,5 @@
 import { artistTitle, coordinate } from "../format";
+import { selectWithKeyboard, truncateTerminalLine } from "../interactive";
 import { CliError } from "../output";
 import { type RecentTrack, recentCommand } from "./recent";
 
@@ -7,6 +8,8 @@ const SPOTIFY_PLAYLIST_URL =
 const TELEGRAM_URL = "https://t.me/fluncle";
 
 const TELEGRAM_APP_URI = "tg://resolve?domain=fluncle";
+const SELECT_NON_INTERACTIVE_MESSAGE =
+  "fluncle open requires an interactive terminal. Use fluncle recent to list tracks.";
 
 export type OpenMode = "app" | "browser" | "default";
 
@@ -45,7 +48,7 @@ export async function openRecentCommand(options: OpenRecentOptions): Promise<voi
   await openExternal(target);
 }
 
-export function spotifyPlaylistUrlToAppUri(playlistUrl: string): string {
+function spotifyPlaylistUrlToAppUri(playlistUrl: string): string {
   const playlistId = playlistUrl.match(/open\.spotify\.com\/playlist\/([^/?#]+)/)?.[1];
 
   if (!playlistId) {
@@ -94,93 +97,10 @@ function platformOpenCommand(): string | undefined {
 }
 
 async function selectRecentTrack(tracks: RecentTrack[]): Promise<RecentTrack | undefined> {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    throw new CliError(
-      "not_interactive",
-      "fluncle open requires an interactive terminal. Use fluncle recent to list tracks.",
-    );
-  }
-
-  let selectedIndex = 0;
-  let renderedLines = 0;
-  let done = false;
-
-  const stdin = process.stdin;
-  const stdout = process.stdout;
-  const wasRaw = stdin.isRaw === true;
-
-  return await new Promise<RecentTrack | undefined>((resolve) => {
-    function cleanup(): void {
-      if (done) {
-        return;
-      }
-
-      done = true;
-      stdin.off("data", onData);
-      stdin.setRawMode(wasRaw);
-      stdin.pause();
-      stdout.write("\x1b[?25h");
-    }
-
-    function finish(track?: RecentTrack): void {
-      cleanup();
-      stdout.write(renderedLines > 0 ? "\n" : "");
-      resolve(track);
-    }
-
-    function cancel(): void {
-      cleanup();
-      clearRendered(stdout, renderedLines);
-      stdout.write("Cancelled.\n");
-      resolve(undefined);
-    }
-
-    function render(): void {
-      clearRendered(stdout, renderedLines);
-      const lines = buildSelectorLines(tracks, selectedIndex, stdout.columns ?? 80);
-      renderedLines = lines.length;
-      stdout.write(`${lines.join("\n")}\n`);
-    }
-
-    function onData(chunk: Buffer): void {
-      const input = chunk.toString("utf8");
-
-      if (input === "\u0003" || input === "\u001b" || input === "q") {
-        cancel();
-        return;
-      }
-
-      if (input === "\r" || input === "\n") {
-        finish(tracks[selectedIndex]);
-        return;
-      }
-
-      if (input === "\u001b[A" || input === "k") {
-        selectedIndex = selectedIndex === 0 ? tracks.length - 1 : selectedIndex - 1;
-        render();
-        return;
-      }
-
-      if (input === "\u001b[B" || input === "j") {
-        selectedIndex = selectedIndex === tracks.length - 1 ? 0 : selectedIndex + 1;
-        render();
-      }
-    }
-
-    stdout.write("\x1b[?25l");
-    stdin.setRawMode(true);
-    stdin.resume();
-    stdin.on("data", onData);
-    render();
+  return await selectWithKeyboard(tracks, {
+    nonInteractiveMessage: SELECT_NON_INTERACTIVE_MESSAGE,
+    renderLines: buildSelectorLines,
   });
-}
-
-function clearRendered(stdout: NodeJS.WriteStream, lineCount: number): void {
-  if (lineCount === 0) {
-    return;
-  }
-
-  stdout.write(`\x1b[${lineCount}F\x1b[J`);
 }
 
 function buildSelectorLines(
@@ -197,19 +117,11 @@ function buildSelectorLines(
     ...tracks.map((track, index) => {
       const prefix = index === selectedIndex ? "> " : "  ";
       const label = `${coordinate(track).padEnd(coordWidth)}  ${artistTitle(track)}`;
-      const line = truncate(`${prefix}${label}`, Math.max(columns, 20));
+      const line = truncateTerminalLine(`${prefix}${label}`, Math.max(columns, 20));
 
       return index === selectedIndex ? `\x1b[7m${line}\x1b[0m` : line;
     }),
     "",
     "Enter: open  Up/k Down/j  q/Esc: cancel",
   ];
-}
-
-function truncate(value: string, maxLength: number): string {
-  if (value.length <= maxLength) {
-    return value;
-  }
-
-  return `${value.slice(0, Math.max(maxLength - 3, 0))}...`;
 }

@@ -16,7 +16,7 @@ export function TerminalRaversDialog() {
     <Dialog>
       <DialogTrigger className="cli-link">
         <TerminalIcon aria-hidden="true" size={14} weight="bold" />
-        ssh rave.fluncle.com
+        <span style={{ transform: "translateY(1px)" }}>ssh rave.fluncle.com</span>
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>

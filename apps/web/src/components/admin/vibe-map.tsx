@@ -29,7 +29,7 @@ export function vibeQuadrant(x: number, y: number): VibeQuadrant {
   return x < 0 ? "lunar" : "deep";
 }
 
-export type VibePointInput = {
+type VibePointInput = {
   artists?: string[];
   title: string;
   trackId: string;

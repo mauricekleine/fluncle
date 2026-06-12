@@ -1,4 +1,5 @@
-import { getDb } from "./db";
+import { parseArtistsJson } from "./artists";
+import { getDb, typedRow, typedRows } from "./db";
 
 export type TrackCursor = {
   addedAt: string;
@@ -90,7 +91,7 @@ function toTrackListItem(row: TrackRow): TrackListItem {
     addedToSpotify: Boolean(row.added_to_spotify),
     album: row.album ?? undefined,
     albumImageUrl: row.album_image_url ?? undefined,
-    artists: parseArtists(row.artists_json),
+    artists: parseArtistsJson(row.artists_json),
     bpm: row.bpm ?? undefined,
     durationMs: row.duration_ms,
     enrichmentStatus: row.enrichment_status,
@@ -122,7 +123,7 @@ export async function getTrackByIdOrLogId(idOrLogId: string): Promise<TrackListI
     args: [idOrLogId, idOrLogId],
     sql: `select ${TRACK_SELECT} from tracks where track_id = ? or log_id = ? limit 1`,
   });
-  const row = result.rows[0] as unknown as TrackRow | undefined;
+  const row = typedRow<TrackRow>(result.rows);
 
   return row ? toTrackListItem(row) : undefined;
 }
@@ -163,12 +164,12 @@ export async function getTrackNeighbors(track: {
   ]);
   const toNeighbor = (row: NeighborRow | undefined): TrackNeighbor | undefined =>
     row
-      ? { artists: parseArtists(row.artists_json), logId: row.log_id, title: row.title }
+      ? { artists: parseArtistsJson(row.artists_json), logId: row.log_id, title: row.title }
       : undefined;
 
   return {
-    newer: toNeighbor(newerResult.rows[0] as unknown as NeighborRow | undefined),
-    older: toNeighbor(olderResult.rows[0] as unknown as NeighborRow | undefined),
+    newer: toNeighbor(typedRow<NeighborRow>(newerResult.rows)),
+    older: toNeighbor(typedRow<NeighborRow>(olderResult.rows)),
   };
 }
 
@@ -260,8 +261,8 @@ export async function listTracks({
       sql: `select count(*) as total_count from tracks ${countWhere}`,
     }),
   ]);
-  const rows = result.rows as unknown as TrackRow[];
-  const countRows = countResult.rows as unknown as TrackCountRow[];
+  const rows = typedRows<TrackRow>(result.rows);
+  const countRows = typedRows<TrackCountRow>(countResult.rows);
   const visibleRows = rows.slice(0, limit);
   const hasMore = rows.length > limit;
   const lastVisibleRow = visibleRows.at(-1);
@@ -311,8 +312,8 @@ export async function listVibePoints(): Promise<VibePoint[]> {
           order by added_at desc`,
   });
 
-  return (result.rows as unknown as VibePointRow[]).map((row) => ({
-    artists: parseArtists(row.artists_json),
+  return typedRows<VibePointRow>(result.rows).map((row) => ({
+    artists: parseArtistsJson(row.artists_json),
     title: row.title,
     trackId: row.track_id,
     vibeX: row.vibe_x,
@@ -340,18 +341,4 @@ export function decodeTrackCursor(value: string | null): TrackCursor | undefined
 
 function encodeTrackCursor(cursor: TrackCursor): string {
   return Buffer.from(JSON.stringify(cursor)).toString("base64url");
-}
-
-function parseArtists(value: string): string[] {
-  try {
-    const artists = JSON.parse(value) as unknown;
-
-    if (Array.isArray(artists)) {
-      return artists.filter((artist): artist is string => typeof artist === "string");
-    }
-  } catch {
-    return [];
-  }
-
-  return [];
 }

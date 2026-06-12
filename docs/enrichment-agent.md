@@ -1,6 +1,6 @@
 # Track Agent Bootstrap (enrich → video → publish)
 
-Fluncle is Maurice's drum & bass publishing brand. The enrichment agent is the **async half of the track lifecycle**: the fast metadata add already happened (the track is live and listenable), and the agent fills in the rest a little later — first the analysis (**BPM, musical key, a spectral feature vector, and a best-guess sub-genre**), then — when the video kit is present — the **per-track video**, and finally the **social draft**. The agent does not exist as a runtime yet; this doc is the bootstrap that points it at its real instructions.
+Fluncle is Maurice's drum & bass publishing brand. The enrichment agent is the **async half of the track lifecycle**: the fast metadata add already happened (the track is live and listenable), and the agent fills in the rest a little later — first the analysis (**BPM, musical key, and a spectral feature vector**), then — when the video kit is present — the **per-track video**, and finally the **social draft**. The agent does not exist as a runtime yet; this doc is the bootstrap that points it at its real instructions.
 
 These are three capabilities, each its own skill, run in order: **enrich → video → publish**. Today they run as distinct steps — the analysis is buildable on Spinup now and ships autonomously; video + publish run by hand (locally). The target is a **single Spinup agent that chains all three**, fired by `ctx.waitUntil` when a track is added (see [track-lifecycle.md](./track-lifecycle.md) for the three phases and [ROADMAP.md](./ROADMAP.md) for the capstone + what blocks it — the render-capable Spinup profile). Whatever runs it, the contract is the same: the agent reads/writes only through the authenticated **`fluncle` CLI** (a thin client over the admin API); the Worker owns every secret (R2, Postiz, Turso) and the agent holds only its admin token.
 
@@ -18,7 +18,7 @@ It does **not** need a checkout of this repo. The enrichment skill is self-conta
 
 **The full operating instructions are the `fluncle-track-enrichment` skill, not this doc.** Read it and follow it step by step:
 
-- `packages/skills/fluncle-track-enrichment/SKILL.md` — the get → analyze → archive → update loop, the rules (key honesty, never invent data, manual tags always win), and its self-contained `scripts/analyze-track.ts`.
+- `packages/skills/fluncle-track-enrichment/SKILL.md` — the get → analyze → archive → update loop, the rules (key honesty, never invent data, and the operator owns vibe placement), and its self-contained `scripts/analyze-track.ts`.
 - Install standalone (e.g. on Spinup): `npx skills add https://github.com/mauricekleine/fluncle/tree/main/packages/skills/fluncle-track-enrichment`. The analysis script has zero npm dependencies and no Fluncle imports, so it runs wherever the skill is installed.
 - `docs/track-lifecycle.md` is the canonical architecture (sync add vs async enrich, the Worker/ffmpeg constraint, the feature vector, R2 ownership).
 
@@ -62,7 +62,7 @@ The agent never holds the Postiz key — the Worker owns it, same pattern as R2.
 - One track per run.
 - Preview audio comes only from the analysis script's resolver (Deezer/iTunes). Never source audio from YouTube or rip full tracks. No legal preview means no analysis; stop and report (`--status failed`).
 - Archive only the exact official preview used for analysis, through the operator-only archive path. It is not public media and not a playback source.
-- Never invent data. Write only what the audio yielded; respect the script's `null` key (atonal tracks key weakly — better null than wrong). The sub-genre is a **suggestion** stored as `auto`; a human `manual` tag overrides it and must never be clobbered.
+- Never invent data. Write only what the audio yielded; respect the script's `null` key (atonal tracks key weakly — better null than wrong). The agent writes analysis, not vibe placement; the operator owns the map in `/admin/tag`.
 - On-screen video copy passes VOICE.md; every on-screen fact comes from the track's props, which is authoritative. Render only fields the props expose; never invent one.
 - The brand constants are not the agent's to restyle: if a concept fights the grammar, change the concept.
 - The agent's outputs are the written-back metadata, the uploaded video bundle, a **private** social draft, and a run report — nothing public. **Never publish, never attach a sound, never delete.** `track draft` is `SELF_ONLY`/`UPLOAD` by construction; the operator reviews in-app, attaches the official sound, and presses publish — then a human records the outcome with `track social --status published --url …`.

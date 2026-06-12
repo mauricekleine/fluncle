@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { getDb } from "./db";
+import { parseArtistsJson } from "./artists";
+import { getDb, typedRow, typedRows } from "./db";
 import { readOptionalEnv } from "./env";
 import { ApiError, fetchTrackMetadata, parseSpotifyTrackUrl } from "./spotify";
 
@@ -11,8 +12,8 @@ const rateLimitMaxSubmissions = 5;
 const submissionSources = ["web", "cli", "ssh"] as const;
 const submissionStatuses = ["pending", "approved", "rejected"] as const;
 
-export type SubmissionSource = (typeof submissionSources)[number];
-export type SubmissionStatus = (typeof submissionStatuses)[number];
+type SubmissionSource = (typeof submissionSources)[number];
+type SubmissionStatus = (typeof submissionStatuses)[number];
 
 export type SubmissionInput = {
   spotifyTrackId?: unknown;
@@ -86,7 +87,7 @@ export async function createSubmission(
       where submitter_hash = ?
         and created_at >= ?`,
   });
-  const rateRows = rateResult.rows as unknown as CountRow[];
+  const rateRows = typedRows<CountRow>(rateResult.rows);
   const submissionCount = Number(rateRows[0]?.submission_count ?? 0);
 
   if (submissionCount >= rateLimitMaxSubmissions) {
@@ -180,7 +181,7 @@ export async function listPendingSubmissions(): Promise<Submission[]> {
       order by created_at asc`,
   });
 
-  return (result.rows as unknown as SubmissionRow[]).map(rowToSubmission);
+  return typedRows<SubmissionRow>(result.rows).map(rowToSubmission);
 }
 
 export async function getSubmission(id: string): Promise<Submission> {
@@ -205,7 +206,7 @@ export async function getSubmission(id: string): Promise<Submission> {
       where id = ?
       limit 1`,
   });
-  const row = result.rows[0] as unknown as SubmissionRow | undefined;
+  const row = typedRow<SubmissionRow>(result.rows);
 
   if (!row) {
     throw new ApiError("submission_not_found", "Submission not found", 404);
@@ -241,7 +242,7 @@ export async function approveSubmission(id: string): Promise<Submission> {
       where track_id = ?
       limit 1`,
   });
-  const published = publishedResult.rows[0] as unknown as PublishedTrackRow | undefined;
+  const published = typedRow<PublishedTrackRow>(publishedResult.rows);
 
   if (!published || !published.added_to_spotify || !published.posted_to_telegram) {
     throw new ApiError(
@@ -387,20 +388,6 @@ function rowToSubmission(row: SubmissionRow): Submission {
     status: row.status,
     title: row.title,
   };
-}
-
-function parseArtistsJson(value: string): string[] {
-  try {
-    const parsed = JSON.parse(value) as unknown;
-
-    if (Array.isArray(parsed)) {
-      return parsed.filter((artist): artist is string => typeof artist === "string");
-    }
-  } catch {
-    return [];
-  }
-
-  return [];
 }
 
 export function hashSubmitter(request: Request): string {

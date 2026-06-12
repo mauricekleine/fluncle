@@ -10,6 +10,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { colors } from "@fluncle/tokens";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  siGithub,
   siInstagram,
   siMixcloud,
   siSpotify,
@@ -33,6 +34,7 @@ import {
   galaxyUrl,
   instagramUrl,
   mixcloudUrl,
+  repoUrl,
   siteUrl,
   spotifyPlaylistUrl,
   telegramUrl,
@@ -40,7 +42,7 @@ import {
   xUrl,
   youtubeUrl,
 } from "@/lib/fluncle-links";
-import { fluncleDescription } from "@/lib/identity";
+import { fluncleAsciiLogo, fluncleDescription } from "@/lib/identity";
 import { listTracks } from "@/lib/server/tracks";
 import { fetchTracks, type Track } from "@/lib/tracks";
 import { registerWebMcpTools } from "@/lib/webmcp";
@@ -203,8 +205,8 @@ function HomePage() {
 
   useEffect(() => {
     console.log(
-      "%cFLUNCLE",
-      `font: 800 24px Oxanium, sans-serif; letter-spacing: -0.02em; color: ${colors.eclipseGold};`,
+      `%c${fluncleAsciiLogo}`,
+      `font: 800 10px ui-monospace, SFMono-Regular, Menlo, monospace; line-height: 1; color: ${colors.eclipseGold};`,
     );
     console.log(
       `%cFresh bangers, most nights. Tune in, junglist → ${telegramUrl}`,
@@ -360,13 +362,27 @@ function HomePage() {
                     lets it grow rather than clip on short viewports. */}
               <div className="mt-3 grid gap-2">
                 <SubmitTrackDialog />
-                <div className="plate-field mt-1 grid gap-1 rounded-lg border border-border px-3.5 py-3">
-                  <p className="text-xs font-extrabold text-muted-foreground">For the nerds:</p>
-                  <div className="grid justify-items-start">
+                {/* The label breaks the top border — an old-school terminal
+                    faceplate. The fieldset reclaims the heading's row so the
+                    git breadcrumb fits without pushing the column past the
+                    cover/playlist. */}
+                <fieldset className="nerds-field mt-1">
+                  <legend>for the nerds</legend>
+                  <div className="grid justify-items-start gap-1">
                     <CliInstallDialog />
+                    <a className="cli-link" href={repoUrl} rel="noreferrer" target="_blank">
+                      <BrandIcon className="size-3.5" icon={siGithub} />
+                      <span
+                        style={{
+                          transform: "translateY(1px)",
+                        }}
+                      >
+                        fluncle.git
+                      </span>
+                    </a>
                     <TerminalRaversDialog />
                   </div>
-                </div>
+                </fieldset>
               </div>
               {/* Fluncle elsewhere: a quiet ghost row of platforms (alphabetical),
                   the off-site tier of the IA. Brand glyphs from simple-icons;
@@ -443,7 +459,7 @@ function HomePage() {
                   // viewport; the plate sizes to the taller column and the left column is simply
                   // its natural height. On mobile the rows are wider than the screen, so it also
                   // scrolls horizontally (see .track-row min-width).
-                  <ScrollArea className="max-h-[min(32rem,60dvh)] lg:max-h-[max(calc(100dvh-24rem),38rem)]">
+                  <ScrollArea className="max-h-[min(32rem,60dvh)] lg:max-h-[max(calc(100dvh-24rem),39rem)]">
                     <ol className="grid m-0 list-none p-0 [&>li:last-child.track-row]:border-b-0">
                       {tracks.map((track, index) => (
                         <TrackRow

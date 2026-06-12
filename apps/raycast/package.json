@@ -1,7 +1,7 @@
 {
   "name": "fluncle-raycast",
   "description": "Publish tracks to Fluncle's Findings through the Fluncle CLI.",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "author": "mauricekleine",
   "scripts": {
     "build": "ray build",

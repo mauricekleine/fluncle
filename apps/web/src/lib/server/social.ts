@@ -2,7 +2,7 @@
 // (track, platform). The generic track pipeline tops out at video-in-R2; this
 // tracks where that video went and its state on each platform.
 
-import { getDb } from "./db";
+import { getDb, typedRows } from "./db";
 
 export type SocialPostItem = {
   createdAt: string;
@@ -21,7 +21,18 @@ export type SocialStatusUpdate = {
   url?: string;
 };
 
-const str = (value: unknown): string | undefined =>
+type SocialPostRow = {
+  created_at: string;
+  external_id: string | null;
+  platform: string;
+  published_at: string | null;
+  scheduled_for: string | null;
+  status: string;
+  updated_at: string;
+  url: string | null;
+};
+
+const str = (value: string | null): string | undefined =>
   typeof value === "string" && value.length > 0 ? value : undefined;
 
 /** All platform posts for a track. */
@@ -33,14 +44,14 @@ export async function listSocialPosts(trackId: string): Promise<SocialPostItem[]
           from social_posts where track_id = ? order by platform`,
   });
 
-  return result.rows.map((row) => ({
-    createdAt: row.created_at as string,
+  return typedRows<SocialPostRow>(result.rows).map((row) => ({
+    createdAt: row.created_at,
     externalId: str(row.external_id),
-    platform: row.platform as string,
+    platform: row.platform,
     publishedAt: str(row.published_at),
     scheduledFor: str(row.scheduled_for),
-    status: row.status as string,
-    updatedAt: row.updated_at as string,
+    status: row.status,
+    updatedAt: row.updated_at,
     url: str(row.url),
   }));
 }

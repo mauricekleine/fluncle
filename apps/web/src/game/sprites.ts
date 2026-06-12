@@ -68,8 +68,6 @@ const SHIP_MAP = [
   "...oko...oko...",
 ];
 
-/** Engine nozzle x-positions in sprite pixels; flames render below these. */
-export const SHIP_FLAME_ANCHORS = [5, 10];
 export const SHIP_SIZE = 15;
 
 export function makeShipSprite(): HTMLCanvasElement {

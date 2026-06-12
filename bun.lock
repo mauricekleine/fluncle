@@ -117,8 +117,6 @@
         "@remotion/bundler": "~4.0.474",
         "@remotion/cli": "~4.0.474",
         "@remotion/fonts": "~4.0.474",
-        "@remotion/media-utils": "~4.0.474",
-        "@remotion/motion-blur": "4.0.473",
         "@remotion/renderer": "~4.0.474",
         "node-vibrant": "~4.0.4",
         "react": "~19.2.7",
@@ -674,8 +672,6 @@
     "@remotion/media-parser": ["@remotion/media-parser@4.0.474", "", {}, "sha512-/MN8Hy2MGdRv2Oj3i43IxJTi7V5FXTFsmcu6NM0zXZBE9Crd620hnnTkmY1MVmNZ6dzJvPOFrGIQPu+Zr5rkng=="],
 
     "@remotion/media-utils": ["@remotion/media-utils@4.0.474", "", { "dependencies": { "mediabunny": "1.45.0", "remotion": "4.0.474" }, "peerDependencies": { "react": ">=16.8.0", "react-dom": ">=16.8.0" } }, "sha512-bAPPMTOqrX/CWrKhG37f+V07cX8SeHrHKaSIrwoXZHNnyrzi+as/X7OzohNH5pCIP+Irq5Yr8DNN4ljL3L/SFw=="],
-
-    "@remotion/motion-blur": ["@remotion/motion-blur@4.0.473", "", { "dependencies": { "remotion": "4.0.473" }, "peerDependencies": { "react": ">=16.8.0", "react-dom": ">=16.8.0" } }, "sha512-SmeTVJT0sYrpKvaWKTEfgAdQRGaR/LqbHWMe9bQhtSQasBxwZ44v9m8d5u6chZ90SCYYI99WL4TaZleqjzaCiQ=="],
 
     "@remotion/player": ["@remotion/player@4.0.474", "", { "dependencies": { "remotion": "4.0.474" }, "peerDependencies": { "react": ">=16.8.0", "react-dom": ">=16.8.0" } }, "sha512-BjV6anyFGXVazRVn8O61OoeUbuyRJzoS2A6EPa0EUpSJUyjFkIio6hNzaPDPn/W2+d9+EpLX8hdjSsmOzxfnbg=="],
 
@@ -2154,8 +2150,6 @@
     "@raycast/api/react": ["react@19.0.0", "", {}, "sha512-V8AVnmPIICiWpGfm6GLzCR/W5FXLchHop40W4nXBmdlEceh16rCN8O8LNWm5bh5XUX91fh7KpA+W0TgMKmgTpQ=="],
 
     "@remotion/cli/dotenv": ["dotenv@17.3.1", "", {}, "sha512-IO8C/dzEb6O3F9/twg6ZLXz164a2fhTnEWb95H23Dm4OuN+92NmEAlTrupP9VW6Jm3sO26tQlqyvyi4CsnY9GA=="],
-
-    "@remotion/motion-blur/remotion": ["remotion@4.0.473", "", { "peerDependencies": { "react": ">=16.8.0", "react-dom": ">=16.8.0" } }, "sha512-Li2u4cVxlbxWgxQPn5oBpUlmNKYFpLUmpE9OHMP7QurvOMfvVK1tcC7utxVEwYFZf18tXwqIPBwmuFvdzMu+YA=="],
 
     "@remotion/studio/open": ["open@8.4.2", "", { "dependencies": { "define-lazy-prop": "^2.0.0", "is-docker": "^2.1.1", "is-wsl": "^2.2.0" } }, "sha512-7x81NCL719oNbsq/3mh+hVrAWmFuEYUqrq/Iw3kUzH8ReypT9QQ0BLoJS7/G9k6N81XjW4qHWtjWwe/9eLy1EQ=="],
 

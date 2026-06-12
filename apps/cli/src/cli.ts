@@ -3,6 +3,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { Command, CommanderError } from "commander";
+import { fluncleAsciiLogo, fluncleTagline } from "./brand";
 import { setEnvProfile } from "./env";
 import { printJson, toJsonFailure } from "./output";
 import { formatError } from "./retry";
@@ -94,7 +95,7 @@ export function createProgram(): Command {
 
   program
     .name("fluncle")
-    .description("drum & bass bangers from another dimension")
+    .description(fluncleTagline.toLowerCase())
     .option("--env <local|production>", "Config profile to load (default: production)")
     .showSuggestionAfterError(false)
     .addHelpCommand("help [command]", "display help for command")
@@ -102,6 +103,7 @@ export function createProgram(): Command {
       const options = actionCommand.optsWithGlobals() as GlobalOptions;
       setEnvProfile(options.env);
     })
+    .addHelpText("before", `\n${fluncleAsciiLogo}\n`)
     .addHelpText("after", rootHelpSections);
 
   addListenCommands(program);

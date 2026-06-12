@@ -23,7 +23,13 @@ export function CliInstallDialog() {
     <Dialog>
       <DialogTrigger className="cli-link">
         <DownloadSimpleIcon aria-hidden="true" size={14} weight="bold" />
-        install CLI
+        <span
+          style={{
+            transform: "translateY(1px)",
+          }}
+        >
+          install CLI
+        </span>
       </DialogTrigger>
       <DialogContent className="sm:max-w-[32rem]">
         <DialogHeader>

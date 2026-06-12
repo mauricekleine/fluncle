@@ -66,7 +66,7 @@ function sectorOf(track: GameTrack): number {
   return Number.isNaN(found) ? 0 : Math.max(0, Math.floor((found - EPOCH_MS) / DAY_MS));
 }
 
-export function ringRadius(sector: number): number {
+function ringRadius(sector: number): number {
   return FIRST_RING_RADIUS + sector * RING_GAP;
 }
 
@@ -217,7 +217,7 @@ const FRONTIER_INNER = 900;
 // renderer can freeze it under reduced-motion without touching the sim. They
 // live in the frontier array, never the star list, so they can never read as a
 // carrier or a radar blip.
-export function placeSetDressing(stars: Star[]): FrontierEntity[] {
+function placeSetDressing(stars: Star[]): FrontierEntity[] {
   const frontier = frontierRadius(stars);
 
   if (frontier <= FRONTIER_INNER) {
@@ -274,7 +274,7 @@ const STARS_PER_BLACKHOLE = 50;
 /** Enough findings for a frontier worth the danger — a system shows before 50. */
 const MIN_STARS_FOR_BLACKHOLE = 12;
 /** Event-horizon radius (crossing it warps you); also the visual body size. */
-export const BLACKHOLE_HORIZON = 34;
+const BLACKHOLE_HORIZON = 34;
 /** Keep holes off the bangers so a slot never sits on the route to a star. */
 const BLACKHOLE_MIN_STAR_GAP = 220;
 

@@ -2,7 +2,7 @@ import { isLogId } from "./log-id";
 
 // A legacy deep-link form: the 22-char base-62 Spotify track id (the /log
 // loader 301s it to the finding's coordinate).
-export const SPOTIFY_TRACK_ID_PATTERN = /^[0-9A-Za-z]{22}$/;
+const SPOTIFY_TRACK_ID_PATTERN = /^[0-9A-Za-z]{22}$/;
 
 /**
  * The /log/$logId shape guard: a param is either a Log ID coordinate or a

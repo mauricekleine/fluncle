@@ -3,7 +3,7 @@
 // the admin backfill validation, so "what counts as a coordinate" is written
 // down once: `sector.orbit.mark`, e.g. "004.7.2I" (sector widens to 4 digits
 // around 2029-02-22).
-export const LOG_ID_PATTERN = /^\d{3,4}\.\d\.\d[A-Z]$/;
+const LOG_ID_PATTERN = /^\d{3,4}\.\d\.\d[A-Z]$/;
 
 /** Whether a string is a well-formed Log ID coordinate (bare form, no scheme). */
 export function isLogId(value: string): boolean {

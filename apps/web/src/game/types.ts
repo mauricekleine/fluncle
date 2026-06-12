@@ -20,7 +20,7 @@ export type GameTrack = {
 // index is a durable handle and selectors over it need no per-frame filter);
 // the frontier list churns (bolts spawn, asteroids/holes are seeded per run).
 
-export type EntityKind = "asteroid" | "blackhole" | "bolt" | "roadster" | "star" | "ufo";
+type EntityKind = "asteroid" | "blackhole" | "bolt" | "roadster" | "star" | "ufo";
 
 /** The frontier kinds: everything that is not a banger star. */
 export type FrontierKind = Exclude<EntityKind, "star">;
@@ -34,7 +34,7 @@ type EntityBase = {
   /** Drift velocity, world units/second; 0 for static bodies. */
   vx: number;
   vy: number;
-  /** Render-only fake height above/below the horizon plane. */
+  /** Render-only apparent height above/below the horizon plane. */
   vOffset: number;
   x: number;
   y: number;

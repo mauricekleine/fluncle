@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { getDb } from "../../../lib/server/db";
+import { parseArtistsJson } from "../../../lib/server/artists";
+import { getDb, typedRow } from "../../../lib/server/db";
 
 type TrackRow = {
   added_at: string;
@@ -35,7 +36,7 @@ export const Route = createFileRoute("/api/tracks/random")({
             order by random()
             limit 1`,
         });
-        const row = result.rows[0] as unknown as TrackRow | undefined;
+        const row = typedRow<TrackRow>(result.rows);
 
         if (!row) {
           return Response.json(
@@ -55,7 +56,7 @@ export const Route = createFileRoute("/api/tracks/random")({
             addedToSpotify: Boolean(row.added_to_spotify),
             album: row.album ?? undefined,
             albumImageUrl: row.album_image_url ?? undefined,
-            artists: parseArtists(row.artists_json),
+            artists: parseArtistsJson(row.artists_json),
             note: row.note?.trim() ? row.note : undefined,
             postedToTelegram: Boolean(row.posted_to_telegram),
             spotifyUrl: row.spotify_url,
@@ -67,17 +68,3 @@ export const Route = createFileRoute("/api/tracks/random")({
     },
   },
 });
-
-function parseArtists(value: string): string[] {
-  try {
-    const artists = JSON.parse(value) as unknown;
-
-    if (Array.isArray(artists)) {
-      return artists.filter((artist): artist is string => typeof artist === "string");
-    }
-  } catch {
-    return [];
-  }
-
-  return [];
-}

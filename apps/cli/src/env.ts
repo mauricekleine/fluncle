@@ -7,7 +7,7 @@ const defaultEnvProfile = "production";
 
 const optionalKeys = ["FLUNCLE_API_BASE_URL", "FLUNCLE_API_TOKEN"] as const;
 
-export type EnvProfile = (typeof envProfiles)[number];
+type EnvProfile = (typeof envProfiles)[number];
 export type EnvKey = (typeof optionalKeys)[number];
 
 let loadedProfile: EnvProfile | undefined;

@@ -30,5 +30,3 @@ export const palette = {
   sleeveBlack: "#10100d",
   tapeBlack: "#171611",
 } as const;
-
-export type PaletteColor = (typeof palette)[keyof typeof palette];

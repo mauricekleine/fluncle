@@ -147,8 +147,8 @@ let renderManifest: {
 if (existsSync(renderManifestPath)) {
   try {
     renderManifest = JSON.parse(readFileSync(renderManifestPath, "utf8")) as typeof renderManifest;
-  } catch {
-    renderManifest = {};
+  } catch (error) {
+    log(`render.json ignored: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 

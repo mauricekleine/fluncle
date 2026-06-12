@@ -19,6 +19,11 @@ export const youtubeUrl = "https://www.youtube.com/@fluncle";
 // Fluncle has no own X handle yet; the social row routes DMs to Maurice.
 export const xUrl = "https://x.com/mauricekleine";
 
+// The open-source repo: an operator breadcrumb for the curious, not a Fluncle
+// identity — kept out of the entity sameAs, surfaced only in the "for the
+// nerds" panel (docs/socials/).
+export const repoUrl = "https://github.com/mauricekleine/fluncle";
+
 // The Galaxy game (same Worker, galaxy. subdomain): fly to every banger.
 export const galaxyUrl = "https://galaxy.fluncle.com";
 

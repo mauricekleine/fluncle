@@ -22,7 +22,7 @@ const envKeys = [
 
 export type EnvKey = (typeof envKeys)[number];
 
-export async function loadLocalEnv(): Promise<void> {
+async function loadLocalEnv(): Promise<void> {
   if (!import.meta.env.DEV || didLoadLocalEnv) {
     return;
   }
@@ -193,7 +193,7 @@ function unauthorized(): Response {
   return jsonError(401, "unauthorized", "Missing or invalid admin token");
 }
 
-export function constantTimeEqual(left: string, right: string): boolean {
+function constantTimeEqual(left: string, right: string): boolean {
   const leftBuffer = Buffer.from(left);
   const rightBuffer = Buffer.from(right);
 

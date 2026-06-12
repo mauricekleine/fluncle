@@ -35,6 +35,15 @@ type TrackUpdateResult = {
   trackId: string;
 };
 
+type TrackUpdateBody = {
+  bpm?: number;
+  enrichmentStatus?: string;
+  features?: string;
+  key?: string;
+  note?: string;
+  videoUrl?: string;
+};
+
 export type TrackVideoOptions = {
   composition?: string;
   cover?: string;
@@ -107,13 +116,19 @@ export type TrackSocialUpdateOptions = {
 
 type TrackSocialUpdateResult = { ok: true; platform: string; status: string; trackId: string };
 
+type TrackSocialUpdateBody = {
+  scheduledFor?: string;
+  status: string;
+  url?: string;
+};
+
 // Updates a per-platform post's status after manual review/publish in-app.
 export async function trackSocialUpdateCommand(
   idOrLogId: string,
   platform: string,
   options: TrackSocialUpdateOptions,
 ): Promise<TrackSocialUpdateResult> {
-  const body: Record<string, unknown> = { status: options.status };
+  const body: TrackSocialUpdateBody = { status: options.status };
 
   if (options.url !== undefined) {
     body.url = options.url;
@@ -150,7 +165,7 @@ export async function trackUpdateCommand(
   trackId: string,
   options: TrackUpdateOptions,
 ): Promise<TrackUpdateResult> {
-  const body: Record<string, unknown> = {};
+  const body: TrackUpdateBody = {};
 
   if (options.bpm !== undefined) {
     body.bpm = options.bpm;

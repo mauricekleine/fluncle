@@ -24,14 +24,6 @@ function StoriesState({ children, heading }: { children: string; heading: string
   );
 }
 
-export function StoriesEmptyState() {
-  return (
-    <StoriesState heading="No stories yet">
-      The footage is still crossing the Galaxy. The findings themselves are safe in the archive.
-    </StoriesState>
-  );
-}
-
 export function StoryNotFoundState() {
   return (
     <StoriesState heading="Nothing at this coordinate">
