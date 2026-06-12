@@ -1,0 +1,1428 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fluncle · Flight Plan</title>
+    <meta
+      name="description"
+      content="A living companion to docs/ROADMAP.md — see what's upcoming, check off next steps, and leave your calls where the work needs them."
+    />
+    <style>
+      /* ————— Canon tokens (packages/tokens/src/tokens.css → DESIGN.md) ————— */
+      :root {
+        --deep-field: #090a0b;
+        --sleeve-black: #10100d;
+        --tape-black: #171611;
+        --starlight-cream: #f4ead7;
+        --stardust: #b7ab95;
+        --eclipse-gold: #f5b800;
+        --eclipse-glow: #ffd057;
+        --reentry-red: #ff6b57;
+        --ink-on-gold: #151006;
+        --dust-line: #d0b99029;
+        --rule-dark: #3a342a;
+        --gold-veil: #f5b8001a;
+        --rounded-lg: 0.625rem;
+        --rounded-sm: 0.375rem;
+        --grain-tile: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+        color-scheme: dark;
+      }
+
+      /* Oxanium (SIL OFL), self-hosted in the repo — relative from docs/. */
+      @font-face {
+        font-family: "Oxanium";
+        font-style: normal;
+        font-weight: 200 800;
+        font-display: swap;
+        src: url("../apps/web/public/fonts/oxanium-latin.woff2") format("woff2");
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        -webkit-text-size-adjust: 100%;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--deep-field);
+        color: var(--starlight-cream);
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+        font-size: 16px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* The cosmos backdrop: grain over the founding cover, baked under content. */
+      body::before {
+        content: "";
+        position: fixed;
+        inset: -1%;
+        z-index: -2;
+        opacity: 0.5;
+        pointer-events: none;
+        background:
+          var(--grain-tile) repeat,
+          url("../apps/web/public/fluncle-cover-no-text.webp") center / cover no-repeat;
+        background-blend-mode: overlay, normal;
+      }
+
+      /* One Sun: a single directional Eclipse-Gold bloom, upper-left, breathing. */
+      .sun-bloom {
+        position: fixed;
+        inset: 0;
+        z-index: -1;
+        pointer-events: none;
+        background: radial-gradient(
+          58% 46% at 16% 12%,
+          color-mix(in oklch, var(--eclipse-gold) 13%, transparent),
+          transparent 72%
+        );
+      }
+
+      @media (prefers-reduced-motion: no-preference) {
+        body::before {
+          animation: cosmos-drift 72s ease-in-out infinite alternate;
+        }
+        .sun-bloom {
+          animation: bloom-breath 48s ease-in-out infinite alternate;
+        }
+      }
+
+      @keyframes cosmos-drift {
+        from {
+          transform: scale(1.02) translate3d(0, 0, 0);
+        }
+        to {
+          transform: scale(1.06) translate3d(-0.7%, -0.5%, 0);
+        }
+      }
+
+      @keyframes bloom-breath {
+        from {
+          opacity: 0.78;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+
+      .ox {
+        font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+      }
+
+      .num {
+        font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: -0.01em;
+      }
+
+      .wrap {
+        width: min(100% - 2rem, 60rem);
+        margin: 0 auto;
+        padding: clamp(1.5rem, 4vw, 3rem) 0 8rem;
+      }
+
+      /* ————— Plates (One Pane: flat printed panels on the cosmos) ————— */
+      .plate {
+        position: relative;
+        isolation: isolate;
+        background: color-mix(in oklch, var(--sleeve-black) 86%, transparent);
+        border: 1px solid var(--dust-line);
+        border-radius: var(--rounded-lg);
+        outline: 1px solid color-mix(in oklch, var(--dust-line) 60%, transparent);
+        outline-offset: 4px;
+      }
+
+      @supports (backdrop-filter: blur(1px)) {
+        .plate {
+          backdrop-filter: blur(18px) saturate(125%);
+          -webkit-backdrop-filter: blur(18px) saturate(125%);
+          background: color-mix(in oklch, var(--sleeve-black) 58%, transparent);
+        }
+      }
+
+      /* Pane-tooth grain, under the content. */
+      .plate::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: -1;
+        border-radius: inherit;
+        background: var(--grain-tile) repeat;
+        mix-blend-mode: overlay;
+        opacity: 0.16;
+        pointer-events: none;
+      }
+
+      /* Archive grammar: crop-mark corners + a top register cross. */
+      .crop::after {
+        --crop: color-mix(in oklch, var(--stardust) 55%, transparent);
+        content: "";
+        position: absolute;
+        inset: 0.45rem;
+        pointer-events: none;
+        background:
+          linear-gradient(var(--crop), var(--crop)) left 0 top 0 / 0.9rem 1px,
+          linear-gradient(var(--crop), var(--crop)) left 0 top 0 / 1px 0.9rem,
+          linear-gradient(var(--crop), var(--crop)) right 0 top 0 / 0.9rem 1px,
+          linear-gradient(var(--crop), var(--crop)) right 0 top 0 / 1px 0.9rem,
+          linear-gradient(var(--crop), var(--crop)) left 0 bottom 0 / 0.9rem 1px,
+          linear-gradient(var(--crop), var(--crop)) left 0 bottom 0 / 1px 0.9rem,
+          linear-gradient(var(--crop), var(--crop)) right 0 bottom 0 / 0.9rem 1px,
+          linear-gradient(var(--crop), var(--crop)) right 0 bottom 0 / 1px 0.9rem,
+          linear-gradient(var(--crop), var(--crop)) center top / 0.55rem 1px,
+          linear-gradient(var(--crop), var(--crop)) center top / 1px 0.55rem;
+        background-repeat: no-repeat;
+      }
+
+      /* ————— Masthead ————— */
+      .masthead {
+        padding: clamp(1.3rem, 3.5vw, 2.25rem);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem 1.5rem;
+        align-items: flex-start;
+        justify-content: space-between;
+      }
+
+      .nameplate {
+        margin: 0;
+        font-weight: 800;
+        font-size: clamp(1.5rem, 5vw, 2.4rem);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        line-height: 1;
+      }
+
+      .nameplate .ignite {
+        color: var(--eclipse-gold);
+      }
+
+      .coordinate {
+        margin: 0.55rem 0 0;
+        color: var(--stardust);
+        font-size: 0.92rem;
+      }
+
+      .tagline {
+        margin: 0.35rem 0 0;
+        color: var(--stardust);
+        font-size: 0.92rem;
+        max-width: 34rem;
+      }
+
+      .stamp {
+        flex-shrink: 0;
+        align-self: center;
+        border: 1.5px solid color-mix(in oklch, var(--eclipse-gold) 60%, transparent);
+        border-radius: 2px;
+        color: var(--eclipse-gold);
+        font-weight: 800;
+        font-size: 0.72rem;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+        padding: 0.45rem 0.7rem;
+        transform: rotate(-3deg);
+        text-align: center;
+        line-height: 1.3;
+      }
+
+      .stamp .big {
+        display: block;
+        font-size: 1.15rem;
+      }
+
+      /* ————— Phase sectors ————— */
+      .sector {
+        margin-top: 2.75rem;
+      }
+
+      .sector-head {
+        display: flex;
+        align-items: baseline;
+        gap: 0.9rem;
+        padding-bottom: 0.6rem;
+        border-bottom: 1px solid color-mix(in oklch, var(--eclipse-gold) 26%, transparent);
+      }
+
+      .sector-name {
+        margin: 0;
+        font-weight: 800;
+        font-size: 1.05rem;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--starlight-cream);
+      }
+
+      .sector-tag {
+        color: var(--stardust);
+        font-size: 0.86rem;
+      }
+
+      .sector-grid {
+        display: grid;
+        gap: 1rem;
+        margin-top: 1rem;
+      }
+
+      /* ————— Item cards ————— */
+      .card {
+        padding: 1.25rem 1.35rem 1.4rem;
+      }
+
+      .card-top {
+        display: flex;
+        gap: 0.75rem 1rem;
+        align-items: flex-start;
+        justify-content: space-between;
+      }
+
+      .card-title {
+        margin: 0;
+        font-size: 1.1rem;
+        font-weight: 800;
+        letter-spacing: -0.01em;
+        line-height: 1.2;
+      }
+
+      .card-blurb {
+        margin: 0.55rem 0 0;
+        color: var(--stardust);
+        font-size: 0.92rem;
+        line-height: 1.55;
+      }
+
+      .card-blurb a {
+        color: var(--eclipse-glow);
+        text-underline-offset: 0.2em;
+      }
+
+      /* Status chip: square, stamped catalog mark. */
+      .chip {
+        flex-shrink: 0;
+        border: 1px solid var(--dust-line);
+        border-radius: 2px;
+        color: var(--stardust);
+        font-size: 0.66rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        padding: 0.28rem 0.5rem;
+        white-space: nowrap;
+      }
+      .chip[data-tone="gold"] {
+        color: var(--eclipse-gold);
+        border-color: color-mix(in oklch, var(--eclipse-gold) 45%, transparent);
+      }
+      .chip[data-tone="glow"] {
+        color: var(--eclipse-glow);
+        border-color: color-mix(in oklch, var(--eclipse-glow) 38%, transparent);
+      }
+      .chip[data-tone="cream"] {
+        color: var(--starlight-cream);
+      }
+
+      .block-label {
+        margin: 1.15rem 0 0.55rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.7rem;
+        font-weight: 800;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--stardust);
+      }
+
+      .your-call {
+        color: var(--eclipse-gold);
+        font-size: 0.66rem;
+        letter-spacing: 0.08em;
+      }
+
+      .your-call::before {
+        content: "▸ ";
+      }
+
+      /* Steps (checkboxes) */
+      .steps {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 0.1rem;
+      }
+
+      .step {
+        display: flex;
+        gap: 0.6rem;
+        align-items: flex-start;
+        padding: 0.35rem 0.4rem;
+        border-radius: var(--rounded-sm);
+        cursor: pointer;
+        transition: background-color 150ms ease-out;
+      }
+      .step:hover {
+        background: var(--gold-veil);
+      }
+
+      .step input {
+        appearance: none;
+        -webkit-appearance: none;
+        margin: 0.18rem 0 0;
+        flex-shrink: 0;
+        width: 1.05rem;
+        height: 1.05rem;
+        border: 1px solid color-mix(in oklch, var(--stardust) 50%, transparent);
+        border-radius: 2px;
+        background: var(--tape-black);
+        display: grid;
+        place-content: center;
+        cursor: pointer;
+        transition:
+          border-color 150ms ease-out,
+          background-color 150ms ease-out;
+      }
+      .step input::after {
+        content: "";
+        width: 0.55rem;
+        height: 0.3rem;
+        border: 2px solid var(--ink-on-gold);
+        border-top: 0;
+        border-right: 0;
+        transform: rotate(-45deg) translateY(-1px);
+        opacity: 0;
+      }
+      .step input:checked {
+        background: var(--eclipse-gold);
+        border-color: var(--eclipse-gold);
+      }
+      .step input:checked::after {
+        opacity: 1;
+      }
+      .step input:focus-visible {
+        outline: none;
+        box-shadow: 0 0 0 2px color-mix(in oklch, var(--eclipse-gold) 60%, transparent);
+      }
+      .step span {
+        font-size: 0.92rem;
+        line-height: 1.45;
+        transition:
+          color 150ms ease-out,
+          opacity 150ms ease-out;
+      }
+      .step input:checked + span {
+        color: var(--stardust);
+        text-decoration: line-through;
+        text-decoration-color: color-mix(in oklch, var(--stardust) 60%, transparent);
+        opacity: 0.75;
+      }
+
+      /* Decisions (inputs) */
+      .decisions {
+        display: grid;
+        gap: 0.9rem;
+      }
+
+      .field {
+        display: grid;
+        gap: 0.3rem;
+      }
+
+      .field > label {
+        font-size: 0.86rem;
+        font-weight: 700;
+        color: var(--starlight-cream);
+      }
+
+      .field .help {
+        font-size: 0.78rem;
+        color: var(--stardust);
+      }
+
+      .field select,
+      .field input,
+      .field textarea {
+        font-family: inherit;
+        font-size: 0.9rem;
+        color: var(--starlight-cream);
+        background: var(--tape-black);
+        border: 1px solid var(--dust-line);
+        border-radius: var(--rounded-sm);
+        padding: 0.5rem 0.6rem;
+        width: 100%;
+        transition:
+          border-color 150ms ease-out,
+          box-shadow 150ms ease-out;
+      }
+      .field input.num-input {
+        font-variant-numeric: tabular-nums;
+        max-width: 9rem;
+      }
+      .field textarea {
+        resize: vertical;
+        min-height: 4.5rem;
+        line-height: 1.5;
+      }
+      .field select:focus,
+      .field input:focus,
+      .field textarea:focus {
+        outline: none;
+        border-color: color-mix(in oklch, var(--eclipse-gold) 55%, transparent);
+        box-shadow: 0 0 0 2px color-mix(in oklch, var(--eclipse-gold) 30%, transparent);
+      }
+      /* an answered control gets a quiet gold tick on its left edge */
+      .field[data-answered="true"] > label::after {
+        content: " ·";
+        color: var(--eclipse-gold);
+      }
+      select option {
+        background: var(--sleeve-black);
+        color: var(--starlight-cream);
+      }
+
+      /* ————— Toolbar ————— */
+      .toolbar {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 10;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem 1rem;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.75rem clamp(1rem, 4vw, 2rem);
+        background: color-mix(in oklch, var(--sleeve-black) 88%, transparent);
+        border-top: 1px solid var(--dust-line);
+        backdrop-filter: blur(14px) saturate(120%);
+        -webkit-backdrop-filter: blur(14px) saturate(120%);
+      }
+
+      .meter {
+        display: flex;
+        gap: 1.25rem;
+        font-size: 0.82rem;
+        color: var(--stardust);
+      }
+      .meter b {
+        color: var(--starlight-cream);
+        font-variant-numeric: tabular-nums;
+      }
+      .meter .open b {
+        color: var(--eclipse-gold);
+      }
+
+      .toolbar-actions {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+      }
+
+      button.act {
+        font-family: inherit;
+        font-size: 0.82rem;
+        font-weight: 700;
+        cursor: pointer;
+        border-radius: var(--rounded-sm);
+        padding: 0.5rem 0.85rem;
+        border: 1px solid var(--dust-line);
+        background: var(--tape-black);
+        color: var(--starlight-cream);
+        transition:
+          background-color 150ms ease-out,
+          border-color 150ms ease-out,
+          color 150ms ease-out;
+      }
+      button.act:hover {
+        border-color: color-mix(in oklch, var(--eclipse-gold) 45%, transparent);
+        color: var(--eclipse-glow);
+      }
+      button.act:focus-visible {
+        outline: none;
+        box-shadow: 0 0 0 2px color-mix(in oklch, var(--eclipse-gold) 50%, transparent);
+      }
+      button.act.primary {
+        background: var(--eclipse-gold);
+        border-color: var(--eclipse-gold);
+        color: var(--ink-on-gold);
+      }
+      button.act.primary:hover {
+        background: var(--eclipse-glow);
+        border-color: var(--eclipse-glow);
+        color: var(--ink-on-gold);
+      }
+      button.act.ghost {
+        color: var(--stardust);
+      }
+
+      .saved {
+        font-size: 0.74rem;
+        color: var(--stardust);
+        align-self: center;
+      }
+      .saved b {
+        color: var(--eclipse-gold);
+      }
+
+      .footnote {
+        margin-top: 2.5rem;
+        color: var(--stardust);
+        font-size: 0.8rem;
+        line-height: 1.55;
+      }
+      .footnote code {
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        color: var(--starlight-cream);
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          animation: none !important;
+          transition: none !important;
+        }
+      }
+
+      @media (max-width: 520px) {
+        .toolbar {
+          flex-direction: column;
+          align-items: stretch;
+        }
+        .toolbar-actions {
+          justify-content: stretch;
+        }
+        button.act {
+          flex: 1;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="sun-bloom" aria-hidden="true"></div>
+
+    <main class="wrap">
+      <header class="plate crop masthead">
+        <div>
+          <h1 class="nameplate ox">FLUNCLE <span class="ignite">FLIGHT PLAN</span></h1>
+          <p class="coordinate num">fluncle://roadmap · a living companion to docs/ROADMAP.md</p>
+          <p class="tagline">
+            What's upcoming across the Galaxy. Check off the steps as they land, and where the work
+            needs your call, leave it here — it saves to this browser, and you can hand the whole
+            thing back as Markdown anytime.
+          </p>
+        </div>
+        <div class="stamp ox" id="stamp">
+          LOG
+          <span class="big num" id="stampCount">—</span>
+          ITEMS
+        </div>
+      </header>
+
+      <div id="sectors"></div>
+
+      <p class="footnote">
+        Not canon — a planning companion. The roadmap itself is <code>docs/ROADMAP.md</code>; the
+        words are arbitrated by DESIGN.md / PRODUCT.md / VOICE.md. Your answers live in this
+        browser's <code>localStorage</code> under <code>fluncle-flightplan-v1</code>; the
+        <b>Download .md</b> button is how they get back to Fluncle.
+      </p>
+    </main>
+
+    <div class="toolbar">
+      <div class="meter">
+        <span>steps <b id="mSteps">0/0</b></span>
+        <span>decisions <b id="mDecisions">0/0</b></span>
+        <span class="open">your call open <b id="mOpen">0</b></span>
+      </div>
+      <div class="toolbar-actions">
+        <span class="saved" id="savedHint">autosaving to this browser</span>
+        <button class="act ghost" id="btnReset" type="button">Reset</button>
+        <button class="act" id="btnCopy" type="button">Copy as Markdown</button>
+        <button class="act primary" id="btnDownload" type="button">Download .md</button>
+      </div>
+    </div>
+
+    <script>
+      // ————— The flight plan (mirrors docs/ROADMAP.md + the SSH RFC) —————
+      const PHASES = [
+        { key: "now", label: "Now", tag: "In flight — the active loop." },
+        { key: "next", label: "Next", tag: "On deck — surface what we make, tidy reliability." },
+        { key: "later", label: "Later", tag: "The bigger arcs — parked with intent." },
+      ];
+
+      // status tones: gold (your-call / scoped), glow (fun), cream (active/arc), default stardust
+      const ITEMS = [
+        {
+          id: "content-backlog",
+          phase: "now",
+          title: "Content backlog",
+          status: "in flight",
+          tone: "gold",
+          blurb:
+            "Render a diverse stack of videos so there's a schedulable TikTok backlog — breathing room to ship features without the feed going quiet. Built local loop, no new code.",
+          steps: [
+            "List every track with no video (fluncle recent --needs-video --json)",
+            "Render a diverse batch — distinct visual family per render, spread vehicles via the ledger",
+            "Per track: ship --vehicle → fluncle admin track video → fluncle admin track draft",
+            "Finish each by hand in the app (caption, official sound, cover, schedule)",
+          ],
+          decisions: [
+            {
+              key: "queue-count",
+              label: "How many to queue this week?",
+              type: "number",
+              placeholder: "e.g. 8",
+            },
+            {
+              key: "vehicle-steer",
+              label: "Any vehicle / visual family you want to steer toward?",
+              type: "text",
+              placeholder: "leave blank to let the batch diversify",
+            },
+          ],
+        },
+        {
+          id: "aeo-offsite",
+          phase: "next",
+          title: "Log IDs in search + AI answers (AEO/GEO) — off-site thread",
+          status: "active",
+          tone: "cream",
+          blurb:
+            "On-site shipped (per-finding /log pages, /log index, /about entity surface, sitemap). What remains is off-site and slower: indexing, AI citation, and authentic presence where dnb lives.",
+          steps: [
+            "Recurring check: live /robots.txt + Cloudflare AI Crawl Control policies",
+            "Watch GSC + Bing move the set of /log pages to Indexed",
+            "Verify bare-token retrieval (004.7.2I, fluncle://004.7.2I) lands the log page",
+            "Check Fluncle is present in Brave Search",
+            "Enrich the Wikidata item (Q140169844) as facts accumulate",
+          ],
+          decisions: [
+            {
+              key: "rdnb",
+              label: "r/DnB & friends — how do we show up authentically (not fabricated)?",
+              type: "textarea",
+              placeholder: "where, as who, what cadence…",
+              yourCall: true,
+            },
+            {
+              key: "aeo-status",
+              label: "Where's this thread at?",
+              type: "select",
+              options: ["monitoring", "needs a push", "parked for now"],
+            },
+          ],
+        },
+        {
+          id: "dj-mix",
+          phase: "next",
+          title: "A Fluncle DJ mix — breadcrumbs + a real MusicBrainz release",
+          status: "for fun",
+          tone: "glow",
+          blurb:
+            "A one-night hour-long mix of the findings: Mixcloud as the licensed home, YouTube for reach, the tracklist as fluncle:// breadcrumbs, and a DJ-mix release that makes the MusicBrainz artist substantial. Not urgent.",
+          steps: [
+            "Record ~1h mix of the findings",
+            "Mixcloud (licensed home) — mind the ≤4-per-artist / ≤3-per-album limits + tracklist",
+            "Mirror to YouTube for reach (accept Content ID; fluncle:// tracklist in the description)",
+            "Add as a DJ-mix release on MusicBrainz (Fluncle as mix artist)",
+          ],
+          decisions: [
+            {
+              key: "mix-priority",
+              label: "How keen are you to do this soon?",
+              type: "select",
+              options: ["someday / no rush", "this month", "on deck — clear a night"],
+            },
+            {
+              key: "mix-tracklist",
+              label: "Any tracks / vibe you already want in it?",
+              type: "textarea",
+              placeholder: "rough tracklist or just a mood…",
+            },
+          ],
+        },
+        {
+          id: "socials-remainder",
+          phase: "next",
+          title: "Link out to the socials — CLI + SSH remainder",
+          status: "on deck",
+          tone: "stardust",
+          blurb:
+            "Web shipped (socials cluster, TikTok links on log pages + feed). Remaining: the non-web sign-offs.",
+          steps: [
+            "CLI sign-off line → @fluncle on TikTok",
+            "SSH footer link",
+            "Audit other non-web surfaces against docs/socials/",
+          ],
+          decisions: [],
+        },
+        {
+          id: "private-bucket",
+          phase: "next",
+          title: "Private preview archive — move to a non-public bucket",
+          status: "your call",
+          tone: "gold",
+          blurb:
+            "Shipped in PR #6, but the operator-only analysis archive currently lives in the public fluncle-videos bucket — privacy rests only on the unguessable key. The columns stay inert until the first archive write, so there's runway to move it first.",
+          steps: [
+            "Create a dedicated non-public R2 bucket",
+            "Point archivePreview writes at the new bucket",
+            "Confirm no archived objects exist yet to migrate (inert so far)",
+          ],
+          decisions: [
+            {
+              key: "bucket-go",
+              label: "Go ahead and add a dedicated private bucket?",
+              type: "select",
+              options: ["yes — do it before first write", "not yet", "let's discuss"],
+              yourCall: true,
+            },
+            {
+              key: "bucket-name",
+              label: "Bucket name",
+              type: "text",
+              placeholder: "e.g. fluncle-analysis",
+            },
+          ],
+        },
+        {
+          id: "tiktok-audio",
+          phase: "next",
+          title: "TikTok audio line-up (build only when a track breaks)",
+          status: "standby",
+          tone: "stardust",
+          blurb:
+            "The video is beat-matched to a 30s preview; TikTok's attachable sound usually covers it. Build the deeper line-up only when a track can't be matched by ear.",
+          steps: [
+            "Stage 0 (now): by-ear line-up",
+            "Stage 1 (on break): full-track audio for analysis via Apify, stream→ffmpeg→analyze→discard",
+            "Stage 2: pick the best ~20s window, render to it, write the start offset into render.json",
+          ],
+          decisions: [
+            {
+              key: "audio-trigger",
+              label: "Status",
+              type: "select",
+              options: ["standby — by-ear is fine", "a track broke — build Stage 1"],
+            },
+          ],
+        },
+        {
+          id: "logbook-reframe",
+          phase: "later",
+          title: "Fluncle's Galaxy — the logbook reframe",
+          status: "the big arc",
+          tone: "cream",
+          blurb:
+            "The co-equal reframe: the log becomes as central as the music. The spine (Log ID) already runs across surfaces; what's left is new surfaces + canon surgery.",
+          steps: [
+            "New surfaces: /log pages (shipped), RSS as the observation feed, maybe Discord",
+            "Canon surgery as ONE decision — PRODUCT (co-primary log thesis), VOICE (logbook register), DESIGN (archive panes)",
+          ],
+          decisions: [
+            {
+              key: "canon-when",
+              label: "When do we do the canon surgery?",
+              type: "select",
+              options: ["not yet — let it settle", "next up", "now — it's earned"],
+              yourCall: true,
+            },
+            { key: "canon-notes", label: "Notes", type: "textarea", placeholder: "" },
+          ],
+        },
+        {
+          id: "galaxy-game",
+          phase: "later",
+          title: "Fluncle's Galaxy — the game (v1 live)",
+          status: "live · polishing",
+          tone: "gold",
+          blurb:
+            "Live at galaxy.fluncle.com; the data-driven entity spine landed in PR #7 (set-dressing, black-hole teleport network, asteroids + laser, amen intro, OG image). Near-polish remains.",
+          steps: [
+            "Announce to the crew (Telegram + the Friday letter)",
+            "Bespoke sprites (Roadster / UFO / asteroid) via the Nano-Banana workflow",
+            "Economy tuning from a real full clear (10–15 min target)",
+            "Real-device mobile pass (thumb zones, safe-areas, mid phone)",
+            "SFX pass (warp / bolt / asteroid voices added; richer when it itches)",
+            "Boot cinematic upgrade",
+          ],
+          decisions: [
+            {
+              key: "fullclear",
+              label: "Have you done a real full-clear playthrough yet (for economy tuning)?",
+              type: "select",
+              options: ["not yet", "yes — notes below"],
+            },
+            {
+              key: "fullclear-notes",
+              label: "Tuning notes from the playthrough",
+              type: "textarea",
+              placeholder: "burn rates, refuel dwell, speeds, black-hole pull, wave density…",
+            },
+            {
+              key: "announce",
+              label: "Announce the game now, or wait for polish?",
+              type: "select",
+              options: ["wait for near-polish", "announce now"],
+            },
+          ],
+        },
+        {
+          id: "ssh-galaxy",
+          phase: "later",
+          title: "SSH galaxy — the flex (RFC scoped)",
+          status: "scoped · your call",
+          tone: "gold",
+          blurb:
+            'Scoped in docs/galaxy-ssh-rfc.md — the same sim inside ssh rave.fluncle.com via WASM (one literal source of truth), a scope renderer, the read-the-log orbit card, audio-less as flavor. Gated on two PASS/KILL spikes <a href="./galaxy-ssh-rfc.md">(read the RFC)</a>.',
+          steps: [
+            "Gate 0 · spike 1: SSH input latency (echo P95, initial-repeat delay, frame bandwidth)",
+            "Gate 0 · spike 2: persisted-QuickJS engine model (boot→tick→tick→projection = N)",
+            "Then: WASM bridge (parity tests) → scope renderer → input + tuning → canon copy",
+          ],
+          decisions: [
+            {
+              key: "spike-latency",
+              label: "Gate-0 latency spike result",
+              type: "select",
+              options: ["not run yet", "PASS", "KILL — needs replan"],
+              yourCall: true,
+            },
+            {
+              key: "spike-engine",
+              label: "Gate-0 engine-model spike result",
+              type: "select",
+              options: ["not run yet", "PASS", "KILL — custom Javy plugin"],
+              yourCall: true,
+            },
+            {
+              key: "simconfig",
+              label:
+                "OK to refactor the 4 control consts into SimConfig (a ~6-site change, behavior-identical on web)?",
+              type: "select",
+              options: ["yes", "let's discuss"],
+            },
+            {
+              key: "mlp-scope",
+              label: "MLP scope confirmed (QR / Kitty-input / ambient-crew = fast-follow)?",
+              type: "select",
+              options: ["yes — ship the MLP first", "change the first-ship scope"],
+            },
+            { key: "ssh-notes", label: "Notes", type: "textarea", placeholder: "" },
+          ],
+        },
+        {
+          id: "user-accounts",
+          phase: "later",
+          title: "User accounts",
+          status: "deferred",
+          tone: "stardust",
+          blurb:
+            "Persistent per-user state — the thing that lets a player's collected bangers survive a refresh. A known home for features that want persistence to defer to.",
+          steps: [],
+          decisions: [
+            {
+              key: "accounts-priority",
+              label: "Priority",
+              type: "select",
+              options: ["deferred — no MVP needs it yet", "start scoping it"],
+            },
+          ],
+        },
+        {
+          id: "auto-pipeline",
+          phase: "later",
+          title: "TikTok auto-pipeline (the capstone) + Spinup automation",
+          status: "the capstone",
+          tone: "cream",
+          blurb:
+            '"Maurice discovers bangers, Fluncle does everything else." Add a track via SSH → enrich → render → caption → draft, automatically. The human steps stay manual on purpose.',
+          steps: [
+            "Render-capable Spinup profile (SwiftShader, render rootfs, >1 vCPU)",
+            "Enrichment-analysis agent on Spinup (lighter; ffmpeg + JS DSP)",
+            "Autonomous trigger — the Worker ctx.waitUntil's the chain on add",
+            "Reconciliation — hourly post→fluncle://<id> match flips social_posts.status",
+            "More platforms — YouTube Shorts / Instagram Reels via Postiz",
+          ],
+          decisions: [
+            {
+              key: "kit-delivery",
+              label:
+                "Open question: how does the Spinup agent get the packages/video kit (no persistence)?",
+              type: "select",
+              options: [
+                "undecided",
+                "fresh checkout per run",
+                "prebuilt image",
+                "published package",
+              ],
+              yourCall: true,
+            },
+          ],
+        },
+        {
+          id: "brand-canon",
+          phase: "later",
+          title: "Brand & canon — moodboard → canon audit (video remainder)",
+          status: "open",
+          tone: "stardust",
+          blurb:
+            "The web half resolved (logbook plate, ignition hovers, grain architecture in DESIGN.md). Open: whether the video-kit proofs get promoted into canon or stay video-local.",
+          steps: [],
+          decisions: [
+            {
+              key: "video-canon",
+              label:
+                "Promote the video-kit proofs (texture/vehicle grammar, One-Sun-through-the-vehicle) into canon?",
+              type: "select",
+              options: ["undecided", "promote to DESIGN.md", "keep video-local + cross-link"],
+              yourCall: true,
+            },
+            { key: "brand-notes", label: "Notes", type: "textarea", placeholder: "" },
+          ],
+        },
+        {
+          id: "link-logpages",
+          phase: "later",
+          title: "Link the log pages where hyperlinks exist",
+          status: "on deck",
+          tone: "stardust",
+          blurb:
+            "Every finding has a permanent /log/<id> URL — surfaces that carry real links should use it. (TikTok captions stay bare-coordinate on purpose.)",
+          steps: [
+            "Newsletter: per-track /log links alongside Spotify",
+            "Telegram: a quiet log-page link under the banger",
+            "CLI / SSH output where a URL prints",
+          ],
+          decisions: [],
+        },
+        {
+          id: "newsletter",
+          phase: "later",
+          title: "Newsletter agent (Spinup)",
+          status: "stopped · ready to wire",
+          tone: "cream",
+          blurb:
+            "The Friday newsletter agent exists on Spinup but is stopped and unconfigured. It reads the discovery window from /api/tracks and sends via Loops.",
+          steps: [
+            "Enable capabilities (loops + firecrawl CLIs with secrets)",
+            "Confirm the core instructions",
+            "Wire a Friday schedule",
+            "Dry-run one issue end-to-end before letting it send",
+          ],
+          decisions: [
+            {
+              key: "newsletter-go",
+              label: "Ready to take it live?",
+              type: "select",
+              options: ["not yet", "do a dry-run first", "go live"],
+              yourCall: true,
+            },
+          ],
+        },
+        {
+          id: "vibe-model",
+          phase: "later",
+          title: "Vibe-placement model (auto-tag the map)",
+          status: "collecting data",
+          tone: "cream",
+          blurb:
+            "The admin tagging tool shipped (PR #8); each placement is a clean features_json → (vibe_x, vibe_y) training row. Collect manual labels first — a pre-filled suggestion would anchor the operator and bias the very labels the model needs.",
+          steps: [
+            "Label the backlog by hand, oldest-first",
+            "Revisit at ~50–100 placements",
+            "Train a small model features → (vibe_x, vibe_y) (kNN or ridge; no infra)",
+            "Once confident: suggest-then-verify inside the enrichment skill",
+          ],
+          decisions: [
+            {
+              key: "placements",
+              label: "How many findings have you placed so far?",
+              type: "number",
+              placeholder: "26 findings exist as of 2026-06-11",
+              help: "Revisit / start training around 50–100.",
+            },
+            {
+              key: "vibe-notes",
+              label: "Early read — do the audio features feel like they carry the signal?",
+              type: "textarea",
+              placeholder: "",
+            },
+          ],
+        },
+      ];
+
+      const STORAGE_KEY = "fluncle-flightplan-v1";
+      const state = loadState();
+
+      function loadState() {
+        try {
+          return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+        } catch (_) {
+          return {};
+        }
+      }
+      function saveState() {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        } catch (_) {}
+        flashSaved();
+        refreshMeters();
+      }
+
+      const TONE = {
+        gold: "gold",
+        glow: "glow",
+        cream: "cream",
+        stardust: "",
+      };
+
+      function el(tag, cls, text) {
+        const n = document.createElement(tag);
+        if (cls) n.className = cls;
+        if (text != null) n.textContent = text;
+        return n;
+      }
+
+      function stepKey(item, i) {
+        return "step:" + item.id + ":" + i;
+      }
+      function decKey(item, d) {
+        return "dec:" + item.id + ":" + d.key;
+      }
+
+      function render() {
+        const root = document.getElementById("sectors");
+        let itemCount = 0;
+
+        PHASES.forEach((phase) => {
+          const items = ITEMS.filter((it) => it.phase === phase.key);
+          if (!items.length) return;
+          itemCount += items.length;
+
+          const sector = el("section", "sector");
+          const head = el("div", "sector-head");
+          head.appendChild(el("h2", "sector-name ox", phase.label));
+          head.appendChild(el("span", "sector-tag", phase.tag));
+          sector.appendChild(head);
+
+          const grid = el("div", "sector-grid");
+          items.forEach((item) => grid.appendChild(renderCard(item)));
+          sector.appendChild(grid);
+          root.appendChild(sector);
+        });
+
+        document.getElementById("stampCount").textContent = String(itemCount);
+        refreshMeters();
+      }
+
+      function renderCard(item) {
+        const card = el("article", "plate card");
+
+        const top = el("div", "card-top");
+        const titleWrap = el("div");
+        titleWrap.appendChild(el("h3", "card-title", item.title));
+        top.appendChild(titleWrap);
+        const chip = el("span", "chip", item.status);
+        if (TONE[item.tone]) chip.dataset.tone = TONE[item.tone];
+        top.appendChild(chip);
+        card.appendChild(top);
+
+        if (item.blurb) {
+          const blurb = el("p", "card-blurb");
+          blurb.innerHTML = item.blurb; // trusted, authored strings (one <a> in the SSH item)
+          card.appendChild(blurb);
+        }
+
+        if (item.steps && item.steps.length) {
+          card.appendChild(makeBlockLabel("Next steps"));
+          const ul = el("ul", "steps");
+          item.steps.forEach((s, i) => {
+            const li = el("li", "step");
+            const label = el("label", "step");
+            label.style.padding = "0";
+            const cb = el("input");
+            cb.type = "checkbox";
+            const k = stepKey(item, i);
+            cb.checked = !!state[k];
+            cb.addEventListener("change", () => {
+              state[k] = cb.checked;
+              saveState();
+            });
+            const span = el("span", null, s);
+            li.appendChild(cb);
+            li.appendChild(span);
+            // make the whole row toggle
+            li.addEventListener("click", (e) => {
+              if (e.target !== cb) {
+                cb.checked = !cb.checked;
+                cb.dispatchEvent(new Event("change"));
+              }
+            });
+            ul.appendChild(li);
+          });
+          card.appendChild(ul);
+        }
+
+        if (item.decisions && item.decisions.length) {
+          const anyCall = item.decisions.some((d) => d.yourCall);
+          card.appendChild(makeBlockLabel("Your input", anyCall));
+          const box = el("div", "decisions");
+          item.decisions.forEach((d) => box.appendChild(renderField(item, d)));
+          card.appendChild(box);
+        }
+
+        return card;
+      }
+
+      function makeBlockLabel(text, yourCall) {
+        const lab = el("div", "block-label");
+        lab.appendChild(el("span", null, text));
+        if (yourCall) lab.appendChild(el("span", "your-call", "your call"));
+        return lab;
+      }
+
+      function markAnswered(field, control, type) {
+        const v = control.value;
+        const answered = type === "select" ? control.selectedIndex > 0 : !!String(v).trim();
+        field.dataset.answered = answered ? "true" : "false";
+      }
+
+      function renderField(item, d) {
+        const field = el("div", "field");
+        const k = decKey(item, d);
+        const id = "f-" + item.id + "-" + d.key;
+
+        const label = el("label", null, d.label);
+        label.setAttribute("for", id);
+        field.appendChild(label);
+        if (d.help) field.appendChild(el("div", "help", d.help));
+
+        let control;
+        if (d.type === "select") {
+          control = el("select");
+          const ph = el("option", null, "— choose —");
+          ph.value = "";
+          control.appendChild(ph);
+          d.options.forEach((o) => {
+            const opt = el("option", null, o);
+            opt.value = o;
+            control.appendChild(opt);
+          });
+        } else if (d.type === "textarea") {
+          control = el("textarea");
+          if (d.placeholder) control.placeholder = d.placeholder;
+        } else {
+          control = el("input");
+          control.type = d.type === "number" ? "number" : "text";
+          if (d.type === "number") control.className = "num-input";
+          if (d.placeholder) control.placeholder = d.placeholder;
+        }
+        control.id = id;
+        if (state[k] != null) control.value = state[k];
+        markAnswered(field, control, d.type);
+
+        control.addEventListener("input", () => {
+          state[k] = control.value;
+          markAnswered(field, control, d.type);
+          saveState();
+        });
+        control.addEventListener("change", () => {
+          state[k] = control.value;
+          markAnswered(field, control, d.type);
+          saveState();
+        });
+
+        field.appendChild(control);
+        return field;
+      }
+
+      // ————— Meters —————
+      function counts() {
+        let totalSteps = 0,
+          doneSteps = 0,
+          totalDec = 0,
+          doneDec = 0,
+          openCall = 0;
+        ITEMS.forEach((item) => {
+          (item.steps || []).forEach((_, i) => {
+            totalSteps++;
+            if (state[stepKey(item, i)]) doneSteps++;
+          });
+          (item.decisions || []).forEach((d) => {
+            totalDec++;
+            const v = state[decKey(item, d)];
+            const answered = v != null && String(v).trim() !== "";
+            if (answered) doneDec++;
+            if (d.yourCall && !answered) openCall++;
+          });
+        });
+        return { totalSteps, doneSteps, totalDec, doneDec, openCall };
+      }
+
+      function refreshMeters() {
+        const c = counts();
+        document.getElementById("mSteps").textContent = c.doneSteps + "/" + c.totalSteps;
+        document.getElementById("mDecisions").textContent = c.doneDec + "/" + c.totalDec;
+        document.getElementById("mOpen").textContent = String(c.openCall);
+      }
+
+      let savedTimer;
+      function flashSaved() {
+        const hint = document.getElementById("savedHint");
+        hint.innerHTML = "<b>saved</b> to this browser";
+        clearTimeout(savedTimer);
+        savedTimer = setTimeout(() => {
+          hint.textContent = "autosaving to this browser";
+        }, 1400);
+      }
+
+      // ————— Markdown export —————
+      function buildMarkdown() {
+        const c = counts();
+        const now = new Date();
+        const lines = [];
+        lines.push("# Fluncle Flight Plan — companion responses");
+        lines.push("");
+        lines.push(
+          "_Exported " +
+            now.toISOString().slice(0, 16).replace("T", " ") +
+            " · steps " +
+            c.doneSteps +
+            "/" +
+            c.totalSteps +
+            " · decisions " +
+            c.doneDec +
+            "/" +
+            c.totalDec +
+            " · your-call open " +
+            c.openCall +
+            "_",
+        );
+        lines.push("");
+
+        PHASES.forEach((phase) => {
+          const items = ITEMS.filter((it) => it.phase === phase.key);
+          if (!items.length) return;
+          lines.push("## " + phase.label.toUpperCase());
+          lines.push("");
+          items.forEach((item) => {
+            lines.push("### " + item.title + " — [" + item.status + "]");
+            const steps = item.steps || [];
+            if (steps.length) {
+              steps.forEach((s, i) => {
+                lines.push("- [" + (state[stepKey(item, i)] ? "x" : " ") + "] " + s);
+              });
+            }
+            const decs = item.decisions || [];
+            const answered = decs.filter((d) => {
+              const v = state[decKey(item, d)];
+              return v != null && String(v).trim() !== "";
+            });
+            if (decs.length) {
+              lines.push("");
+              lines.push("_Your input:_");
+              decs.forEach((d) => {
+                const v = state[decKey(item, d)];
+                const val = v != null && String(v).trim() !== "" ? String(v).trim() : "—";
+                lines.push(
+                  "- " +
+                    (d.yourCall ? "▸ " : "") +
+                    d.label +
+                    " **" +
+                    val.replace(/\n/g, " ") +
+                    "**",
+                );
+              });
+            }
+            lines.push("");
+          });
+        });
+
+        // open calls summary at the top of the operator's attention
+        const open = [];
+        ITEMS.forEach((item) => {
+          (item.decisions || []).forEach((d) => {
+            if (!d.yourCall) return;
+            const v = state[decKey(item, d)];
+            if (v == null || String(v).trim() === "")
+              open.push("- " + item.title + " → " + d.label);
+          });
+        });
+        if (open.length) {
+          lines.push("---");
+          lines.push("");
+          lines.push("## Still your call (" + open.length + ")");
+          lines.push("");
+          open.forEach((o) => lines.push(o));
+          lines.push("");
+        }
+
+        return lines.join("\n");
+      }
+
+      function download() {
+        const md = buildMarkdown();
+        const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        const stamp = new Date().toISOString().slice(0, 10);
+        a.href = url;
+        a.download = "fluncle-flight-plan-" + stamp + ".md";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      }
+
+      async function copyMd() {
+        const md = buildMarkdown();
+        const btn = document.getElementById("btnCopy");
+        try {
+          await navigator.clipboard.writeText(md);
+          const prev = btn.textContent;
+          btn.textContent = "Copied ✓";
+          setTimeout(() => (btn.textContent = prev), 1400);
+        } catch (_) {
+          // fallback: select-all in a throwaway textarea
+          const ta = document.createElement("textarea");
+          ta.value = md;
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand("copy");
+          ta.remove();
+          btn.textContent = "Copied ✓";
+          setTimeout(() => (btn.textContent = "Copy as Markdown"), 1400);
+        }
+      }
+
+      function reset() {
+        if (!confirm("Clear every check and answer in this browser? (Your downloaded files stay.)"))
+          return;
+        for (const k of Object.keys(state)) delete state[k];
+        try {
+          localStorage.removeItem(STORAGE_KEY);
+        } catch (_) {}
+        document.getElementById("sectors").innerHTML = "";
+        render();
+      }
+
+      document.getElementById("btnDownload").addEventListener("click", download);
+      document.getElementById("btnCopy").addEventListener("click", copyMd);
+      document.getElementById("btnReset").addEventListener("click", reset);
+
+      render();
+    </script>
+  </body>
+</html>

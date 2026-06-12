@@ -7,7 +7,7 @@
 // - fluncleBio: the PLATFORM bio (Spotify, Telegram, TikTok, MusicBrainz,
 //   Wikidata, …) — the tagline plus the address, set by Maurice on every
 //   platform. Kept here so the convention is written down; the platforms
-//   themselves are updated by hand (docs/socials.md is the map).
+//   themselves are updated by hand (docs/socials/ is the map).
 //
 // Both open with the tagline, so the entity reads identically everywhere.
 export const fluncleTagline = "Drum & bass bangers from another dimension.";

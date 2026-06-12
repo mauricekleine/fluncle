@@ -1,13 +1,4 @@
-import {
-  BookOpenIcon,
-  CircleNotchIcon,
-  FilmStripIcon,
-  InfoIcon,
-  SpotifyLogoIcon,
-  TelegramLogoIcon,
-  TiktokLogoIcon,
-  XLogoIcon,
-} from "@phosphor-icons/react";
+import { CircleNotchIcon, PlayIcon } from "@phosphor-icons/react";
 import {
   Link,
   createFileRoute,
@@ -18,6 +9,16 @@ import {
 import { createServerFn } from "@tanstack/react-start";
 import { colors } from "@fluncle/tokens";
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  siInstagram,
+  siMixcloud,
+  siSpotify,
+  siTelegram,
+  siTiktok,
+  siX,
+  siYoutube,
+} from "simple-icons";
+import { BrandIcon } from "@/components/brand-icon";
 import { CliInstallDialog } from "@/components/cli-install-dialog";
 import { RandomBangerDialog } from "@/components/random-banger-dialog";
 import { StoriesDialog } from "@/components/stories/stories-dialog";
@@ -30,10 +31,14 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   galaxyUrl,
+  instagramUrl,
+  mixcloudUrl,
   siteUrl,
   spotifyPlaylistUrl,
   telegramUrl,
   tiktokUrl,
+  xUrl,
+  youtubeUrl,
 } from "@/lib/fluncle-links";
 import { fluncleDescription } from "@/lib/identity";
 import { listTracks } from "@/lib/server/tracks";
@@ -42,16 +47,36 @@ import { registerWebMcpTools } from "@/lib/webmcp";
 
 const pageSize = 10;
 
+// Fluncle off-site, alphabetical (docs/socials/). The quiet ghost row under the
+// nerds field; Spotify stays the Playlist button, so it's not duplicated here.
+const socialLinks = [
+  { href: instagramUrl, icon: siInstagram, label: "Fluncle on Instagram" },
+  { href: mixcloudUrl, icon: siMixcloud, label: "Fluncle on Mixcloud" },
+  { href: telegramUrl, icon: siTelegram, label: "Fluncle on Telegram" },
+  { href: tiktokUrl, icon: siTiktok, label: "Fluncle on TikTok" },
+  { href: xUrl, icon: siX, label: "DM me on X" },
+  { href: youtubeUrl, icon: siYoutube, label: "Fluncle on YouTube" },
+];
+
 type HomeSearch = {
   /** The Log ID of the story open in the dialog (masked to /log/<id>). */
   story?: string;
 };
 
 // Server-rendering the first page keeps the archive readable for crawlers
-// (search engines and AI agents alike) that never execute JavaScript.
-const fetchInitialTracks = createServerFn({ method: "GET" }).handler(() =>
-  listTracks({ limit: pageSize }),
-);
+// (search engines and AI agents alike) that never execute JavaScript. Alongside
+// it we resolve the newest finding WITH footage across the whole archive, so the
+// cover's story ring opens the viewer at the latest story even when that story
+// isn't on the first page (it usually isn't, once newer findings land before
+// their footage does). Same ordering as the stories feed, so it lines up.
+const fetchHomeData = createServerFn({ method: "GET" }).handler(async () => {
+  const [page, latestStory] = await Promise.all([
+    listTracks({ limit: pageSize }),
+    listTracks({ hasVideo: true, limit: 1 }),
+  ]);
+
+  return { ...page, newestStoryLogId: latestStory.tracks[0]?.logId };
+});
 
 export const Route = createFileRoute("/")({
   component: HomePage,
@@ -99,7 +124,7 @@ export const Route = createFileRoute("/")({
       },
     ],
   }),
-  loader: () => fetchInitialTracks(),
+  loader: () => fetchHomeData(),
   // Opening/closing the Stories dialog is a search-param change on this same
   // route; the feed's loader must not re-run per open (a reload would remount
   // the list and lose the scroll the dialog is supposed to preserve).
@@ -150,8 +175,31 @@ function HomePage() {
     [navigate],
   );
 
-  // The "all stories" entry opens at the newest finding with footage.
-  const newestStoryLogId = tracks.find((candidate) => candidate.videoUrl && candidate.logId)?.logId;
+  // The stories entry opens at the newest finding with footage — resolved on
+  // the server across the whole archive (above), not just this first page.
+  const newestStoryLogId = initialPage.newestStoryLogId;
+
+  // The cover's inner art, shared by both story-link targets below.
+  const coverArt = (
+    <>
+      <span className="cover-story-gap">
+        {/* WebP for the page; the PNG stays canonical for og:image and JSON-LD. */}
+        <picture>
+          <source srcSet="/fluncle-cover.webp" type="image/webp" />
+          <img
+            alt="Fluncle cover art"
+            className="aspect-square w-full object-cover"
+            height="512"
+            src="/fluncle-cover.png"
+            width="512"
+          />
+        </picture>
+      </span>
+      <span aria-hidden="true" className="cover-story-badge">
+        <PlayIcon className="size-3.5 translate-x-px" weight="fill" />
+      </span>
+    </>
+  );
 
   useEffect(() => {
     console.log(
@@ -248,21 +296,31 @@ function HomePage() {
               <RandomBangerDialog />
             </div>
           </header>
-          <section className="grid gap-y-8 lg:min-h-0 lg:grid-cols-[minmax(240px,320px)_minmax(0,1fr)] lg:gap-x-10">
+          <section className="grid gap-y-8 lg:min-h-0 lg:grid-cols-[minmax(240px,280px)_minmax(0,1fr)] lg:gap-x-10">
             <aside className="mx-auto flex w-full max-w-80 flex-col lg:mx-0 lg:max-w-none">
-              <div className="cover-frame border p-1 rounded-lg">
-                {/* WebP for the page; the PNG stays canonical for og:image and JSON-LD. */}
-                <picture>
-                  <source srcSet="/fluncle-cover.webp" type="image/webp" />
-                  <img
-                    alt="Fluncle cover art"
-                    className="aspect-square w-full rounded-lg object-cover"
-                    height="512"
-                    src="/fluncle-cover.png"
-                    width="512"
-                  />
-                </picture>
-              </div>
+              {/* The cover IS the stories entry: a breathing gold ring + play
+                  badge (the Instagram-story cue, Eclipse Gold only — One Sun).
+                  Opens the viewer at the newest finding with footage; when none
+                  has loaded yet it falls back to the full log, where they live. */}
+              {newestStoryLogId ? (
+                <Link
+                  aria-label="Open Fluncle stories"
+                  className="cover-story"
+                  mask={{
+                    params: { logId: newestStoryLogId },
+                    to: "/log/$logId",
+                    unmaskOnReload: true,
+                  }}
+                  search={{ story: newestStoryLogId }}
+                  to="/"
+                >
+                  {coverArt}
+                </Link>
+              ) : (
+                <Link aria-label="Open Fluncle stories" className="cover-story" to="/log">
+                  {coverArt}
+                </Link>
+              )}
               {/* The hero CTA: fly into the Galaxy game. The one gold primary on
                   the plate (One Sun), so Playlist/Telegram drop to outline. The
                   icon is the game's own Earth sprite, kept crisp (pixelated) —
@@ -281,6 +339,9 @@ function HomePage() {
                 />
                 Enter Fluncle's Galaxy
               </Button>
+              {/* The two quiet companions to the Galaxy CTA: the playlist (the
+                  product artifact) and the Friday newsletter, in place of the
+                  old Telegram button — Telegram drops to the social row below. */}
               <div className="mt-3 flex items-center justify-center gap-2 lg:justify-start">
                 <Button
                   className="flex-1"
@@ -289,132 +350,14 @@ function HomePage() {
                   size="lg"
                   variant="outline"
                 >
-                  <SpotifyLogoIcon aria-hidden="true" weight="fill" />
+                  <BrandIcon icon={siSpotify} />
                   Playlist
                 </Button>
-                <Button
-                  className="flex-1"
-                  nativeButton={false}
-                  render={<a href={telegramUrl} rel="noreferrer" target="_blank" />}
-                  size="lg"
-                  variant="outline"
-                >
-                  <TelegramLogoIcon aria-hidden="true" weight="fill" />
-                  Telegram
-                </Button>
+                <SubscribeDialog className="flex-1" label="Newsletter" />
               </div>
-              {/* Follow + explore across the Galaxy: one quiet icon cluster
-                  (the IA regroup — destinations above, contribute below). Spans
-                  the column edge-to-edge so it aligns with the buttons; /about
-                  and /the-log are crawlable homepage links too. */}
-              <div className="mt-3 flex items-center justify-between gap-1.5">
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        aria-label="Fluncle on TikTok"
-                        nativeButton={false}
-                        render={<a href={tiktokUrl} rel="noreferrer" target="_blank" />}
-                        size="icon-lg"
-                        variant="outline"
-                      />
-                    }
-                  >
-                    <TiktokLogoIcon aria-hidden="true" weight="fill" />
-                  </TooltipTrigger>
-                  <TooltipContent>Fluncle on TikTok</TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        aria-label="DM me on X"
-                        nativeButton={false}
-                        render={
-                          <a href="https://x.com/mauricekleine" rel="noreferrer" target="_blank" />
-                        }
-                        size="icon-lg"
-                        variant="outline"
-                      />
-                    }
-                  >
-                    <XLogoIcon aria-hidden="true" weight="bold" />
-                  </TooltipTrigger>
-                  <TooltipContent>DM me on X</TooltipContent>
-                </Tooltip>
-                <SubscribeDialog compact />
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      newestStoryLogId ? (
-                        <Button
-                          aria-label="All stories"
-                          nativeButton={false}
-                          render={
-                            <Link
-                              mask={{
-                                params: { logId: newestStoryLogId },
-                                to: "/log/$logId",
-                                unmaskOnReload: true,
-                              }}
-                              search={{ story: newestStoryLogId }}
-                              to="/"
-                            />
-                          }
-                          size="icon-lg"
-                          variant="outline"
-                        />
-                      ) : (
-                        <Button
-                          aria-label="All stories"
-                          nativeButton={false}
-                          render={<Link to="/log" />}
-                          size="icon-lg"
-                          variant="outline"
-                        />
-                      )
-                    }
-                  >
-                    <FilmStripIcon aria-hidden="true" weight="bold" />
-                  </TooltipTrigger>
-                  <TooltipContent>All stories</TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        aria-label="About Fluncle"
-                        nativeButton={false}
-                        render={<Link to="/about" />}
-                        size="icon-lg"
-                        variant="outline"
-                      />
-                    }
-                  >
-                    <InfoIcon aria-hidden="true" weight="bold" />
-                  </TooltipTrigger>
-                  <TooltipContent>About Fluncle</TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        aria-label="The full log"
-                        nativeButton={false}
-                        render={<Link to="/log" />}
-                        size="icon-lg"
-                        variant="outline"
-                      />
-                    }
-                  >
-                    <BookOpenIcon aria-hidden="true" weight="bold" />
-                  </TooltipTrigger>
-                  <TooltipContent>The full log</TooltipContent>
-                </Tooltip>
-              </div>
-              {/* Contribute: directly under the icon cluster. The column is
-                    its natural height (no scroll, no bottom-align); the plate's
-                    min-height lets it grow rather than clip on short viewports. */}
+              {/* Contribute: directly under the CTAs. The column is its natural
+                    height (no scroll, no bottom-align); the plate's min-height
+                    lets it grow rather than clip on short viewports. */}
               <div className="mt-3 grid gap-2">
                 <SubmitTrackDialog />
                 <div className="plate-field mt-1 grid gap-1 rounded-lg border border-border px-3.5 py-3">
@@ -425,6 +368,54 @@ function HomePage() {
                   </div>
                 </div>
               </div>
+              {/* Fluncle elsewhere: a quiet ghost row of platforms (alphabetical),
+                  the off-site tier of the IA. Brand glyphs from simple-icons;
+                  the platform name carries on the label + tooltip. */}
+              <nav
+                aria-label="Fluncle on other platforms"
+                className="mt-3 flex items-center justify-between gap-1.5"
+              >
+                {socialLinks.map((social) => (
+                  <Tooltip key={social.label}>
+                    <TooltipTrigger
+                      render={
+                        <Button
+                          aria-label={social.label}
+                          className="text-muted-foreground"
+                          nativeButton={false}
+                          render={<a href={social.href} rel="noreferrer" target="_blank" />}
+                          size="icon-lg"
+                          variant="ghost"
+                        />
+                      }
+                    >
+                      <BrandIcon className="size-5" icon={social.icon} />
+                    </TooltipTrigger>
+                    <TooltipContent>{social.label}</TooltipContent>
+                  </Tooltip>
+                ))}
+              </nav>
+              {/* The tertiary, crawlable links: About and the full log. */}
+              <nav
+                aria-label="More from Fluncle"
+                className="mt-2 flex items-center justify-center gap-3 text-sm"
+              >
+                <Link
+                  className="font-semibold text-muted-foreground transition-colors hover:text-accent-foreground"
+                  to="/about"
+                >
+                  About
+                </Link>
+                <span aria-hidden="true" className="text-muted-foreground/55">
+                  ·
+                </span>
+                <Link
+                  className="font-semibold text-muted-foreground transition-colors hover:text-accent-foreground"
+                  to="/log"
+                >
+                  Full log
+                </Link>
+              </nav>
             </aside>
 
             <section aria-labelledby="playlist-title" className="flex min-w-0 flex-col lg:min-h-0">

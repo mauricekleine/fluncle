@@ -48,7 +48,7 @@ const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
 });
 
 const fetchQueue = createServerFn({ method: "GET" })
-  .inputValidator((data: { cursor?: string; placement: Placement }) => data)
+  .validator((data: { cursor?: string; placement: Placement }) => data)
   .handler(async ({ data }): Promise<QueuePage> => {
     if (!(await isAdminRequest())) {
       throw redirect({ to: "/admin/login" });

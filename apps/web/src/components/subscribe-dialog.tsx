@@ -15,8 +15,16 @@ import { Label } from "@/components/ui/label";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { subscribeToNewsletter } from "@/lib/newsletter";
 
-/** `compact` renders the trigger as a tooltip'd icon for the socials cluster. */
-export function SubscribeDialog({ compact = false }: { compact?: boolean } = {}) {
+/**
+ * `compact` renders the trigger as a tooltip'd icon. Otherwise it's a full
+ * outline button; pass `className` (e.g. `flex-1`) and a shorter `label` to sit
+ * it in the home plate's button row beside Playlist.
+ */
+export function SubscribeDialog({
+  compact = false,
+  className,
+  label = "Get the weekly newsletter",
+}: { compact?: boolean; className?: string; label?: string } = {}) {
   const [email, setEmail] = useState("");
   const [website, setWebsite] = useState("");
   const [error, setError] = useState<string | undefined>();
@@ -65,9 +73,9 @@ export function SubscribeDialog({ compact = false }: { compact?: boolean } = {})
           <TooltipContent>Get the weekly newsletter</TooltipContent>
         </Tooltip>
       ) : (
-        <DialogTrigger render={<Button size="lg" variant="outline" />}>
+        <DialogTrigger render={<Button className={className} size="lg" variant="outline" />}>
           <EnvelopeSimpleIcon aria-hidden="true" weight="bold" />
-          Get the weekly newsletter
+          {label}
         </DialogTrigger>
       )}
       <DialogContent>

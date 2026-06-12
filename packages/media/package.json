@@ -2,25 +2,27 @@
   "name": "@fluncle/media",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "studio": "remotion studio",
     "render:og": "bun src/render/render-og.ts",
+    "render:socials": "bun src/render/render-socials.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@fluncle/tokens": "workspace:*",
-    "@remotion/bundler": "^4.0.473",
-    "@remotion/cli": "^4.0.473",
-    "@remotion/fonts": "^4.0.473",
-    "@remotion/renderer": "^4.0.473",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "remotion": "^4.0.473"
+    "@remotion/bundler": "~4.0.474",
+    "@remotion/cli": "~4.0.474",
+    "@remotion/fonts": "~4.0.474",
+    "@remotion/renderer": "~4.0.474",
+    "react": "~19.2.7",
+    "react-dom": "~19.2.7",
+    "remotion": "~4.0.474"
   },
   "devDependencies": {
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
+    "@types/react": "~19.2.17",
+    "@types/react-dom": "~19.2.3",
     "typescript": "catalog:"
   }
 }

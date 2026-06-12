@@ -2,6 +2,7 @@
   "name": "@fluncle/ssh",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "scripts": {
     "build": "go build -o dist/fluncle-ssh .",
     "build:linux-x64": "GOOS=linux GOARCH=amd64 go build -o dist/fluncle-ssh-linux-x64 .",

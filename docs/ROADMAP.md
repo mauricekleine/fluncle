@@ -6,7 +6,7 @@ Forward-facing, roughly prioritized list of open work — what we pick from next
 
 Render a stack of videos so there's a schedulable backlog on TikTok: breathing room to roll out features without the feed going quiet. Uses the built local loop end-to-end; no new code.
 
-- Find every track with no video (`fluncle recent --json`, `video_url` null).
+- Find every track with no video (`fluncle recent --needs-video --json`).
 - Render a **diverse** batch — spread vehicles via the ledger and assign a distinct visual family per render (parallel renders converge on a shared attractor; broaden refs, don't let them).
 - Per track: `ship --vehicle` → `fluncle admin track video` (R2, incl. `cover.jpg`) → `fluncle admin track draft` (TikTok inbox).
 - The operator finishes each by hand in the app — paste caption (`note.txt`), add the official sound, set the cover, schedule. The backlog is a queue of ready inbox drafts to space out over days.
@@ -27,7 +27,7 @@ Maurice DJs, so a one-night hour-long mix of the findings is low-effort, on-bran
 
 ### Link out to the socials — CLI + SSH remainder
 
-The web side shipped (the socials cluster on the home plate, TikTok links on the log pages and feed rows). Remaining: the CLI + SSH sign-offs and any other non-web surface that should point at [@fluncle on TikTok](https://www.tiktok.com/@fluncle) and the rest of [docs/socials.md](./socials.md).
+The web side shipped (the socials cluster on the home plate, TikTok links on the log pages and feed rows). Remaining: the CLI + SSH sign-offs and any other non-web surface that should point at [@fluncle on TikTok](https://www.tiktok.com/@fluncle) and the rest of [docs/socials/](./socials/).
 
 ### Private preview archive — move to a non-public bucket
 
