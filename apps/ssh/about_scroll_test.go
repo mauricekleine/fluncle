@@ -3,8 +3,35 @@ package main
 import (
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
+
+// The mouse wheel must drive the same scroll as the keyboard on About, clamped
+// both ways, and do nothing off the About screen (where mouse capture is off).
+func TestAboutWheelScroll(t *testing.T) {
+	m := model{width: 80, height: 24, screen: screenAbout}
+	for i := 0; i < 100; i++ {
+		updated, _ := m.handleWheel(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+		m = updated.(model)
+	}
+	if m.scroll != m.aboutMaxScroll() {
+		t.Errorf("wheel-down scroll %d != max %d", m.scroll, m.aboutMaxScroll())
+	}
+	for i := 0; i < 100; i++ {
+		updated, _ := m.handleWheel(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+		m = updated.(model)
+	}
+	if m.scroll != 0 {
+		t.Errorf("wheel-up scroll %d != 0 (top)", m.scroll)
+	}
+
+	off := model{width: 80, height: 24, screen: screenMenu}
+	updated, _ := off.handleWheel(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	if updated.(model).scroll != 0 {
+		t.Error("wheel should not scroll when off the About screen")
+	}
+}
 
 // The About surface must never render taller than the terminal — the regression
 // that prompted scrolling was its full link map running off a default 24-row

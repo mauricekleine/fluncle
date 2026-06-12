@@ -454,10 +454,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.input = ""
 		m.screen = screenSubscribed
+	case tea.MouseWheelMsg:
+		return m.handleWheel(msg)
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
 
+	return m, nil
+}
+
+// handleWheel lets the mouse/trackpad scroll the same surfaces the keyboard
+// does. Mouse capture is enabled per-screen in View() (only where content can
+// run past the viewport), so the terminal no longer owns the wheel there — which
+// is what made the page repeat in the terminal's own scrollback.
+func (m model) handleWheel(msg tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
+	if m.screen != screenAbout {
+		return m, nil
+	}
+	switch msg.Button {
+	case tea.MouseWheelUp:
+		m.scroll = clamp(m.scroll-3, 0, m.aboutMaxScroll())
+	case tea.MouseWheelDown:
+		m.scroll = clamp(m.scroll+3, 0, m.aboutMaxScroll())
+	}
 	return m, nil
 }
 
@@ -664,6 +683,12 @@ func (m model) View() tea.View {
 
 	view := tea.NewView(pageStyle.Width(clamp(m.width-4, 48, 96)).Render(content))
 	view.AltScreen = true
+	// Capture the wheel only on the scrollable About surface, so the app drives
+	// the scroll instead of the terminal scrolling its own scrollback (which
+	// showed the page repeated). Other screens keep native text selection.
+	if m.screen == screenAbout {
+		view.MouseMode = tea.MouseModeCellMotion
+	}
 	return view
 }
 
