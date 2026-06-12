@@ -325,6 +325,7 @@ type model struct {
 	message  string
 	loading  bool
 	err      string
+	scroll   int
 }
 
 type track struct {
@@ -472,7 +473,9 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handleMenuKey(key)
 	case screenLatest, screenSearch:
 		return m.handleListKey(key)
-	case screenDetail, screenInstall, screenAbout, screenMessage, screenSubscribed:
+	case screenAbout:
+		return m.handleAboutKey(key)
+	case screenDetail, screenInstall, screenMessage, screenSubscribed:
 		if key == "q" || key == "esc" || key == "backspace" || key == "b" {
 			m.screen = screenMenu
 			m.selected = 0
@@ -519,6 +522,7 @@ func (m model) handleMenuKey(key string) (tea.Model, tea.Cmd) {
 			m.screen = screenInstall
 		case "about":
 			m.screen = screenAbout
+			m.scroll = 0
 		case "quit":
 			return m, tea.Quit
 		}
@@ -957,7 +961,38 @@ func (m model) renderInstall() string {
 	return scaffold("Install CLI", "", content, help)
 }
 
-func (m model) renderAbout() string {
+// handleAboutKey scrolls the About surface (its full link map runs past a
+// default 24-row terminal) and handles the back-to-menu keys. Scroll is clamped
+// against the live content height so it can never run past the ends.
+func (m model) handleAboutKey(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "q", "esc", "backspace", "b":
+		m.screen = screenMenu
+		m.selected = 0
+		m.scroll = 0
+	case "up", "k":
+		m.scroll = clamp(m.scroll-1, 0, m.aboutMaxScroll())
+	case "down", "j":
+		m.scroll = clamp(m.scroll+1, 0, m.aboutMaxScroll())
+	case "pgup":
+		m.scroll = clamp(m.scroll-m.aboutViewport(), 0, m.aboutMaxScroll())
+	case "pgdown", " ", "f":
+		m.scroll = clamp(m.scroll+m.aboutViewport(), 0, m.aboutMaxScroll())
+	case "g", "home":
+		m.scroll = 0
+	case "G", "end":
+		m.scroll = m.aboutMaxScroll()
+	}
+	return m, nil
+}
+
+// aboutContent is the About body as logical entries (some wrap to several
+// rows). Shared by the renderer and the scroll-extent math so they agree.
+//
+// Warm-uncle register: Fluncle introducing himself, not the deep telemetry.
+// This is a long-form surface, so the cosmos may drive the verb (the Garnish
+// Rule's carve-out for testimony). Still no exclamation marks.
+func (m model) aboutContent() []string {
 	wrapWidth := clamp(m.width-4, 48, 96) - 4
 
 	// One link line: muted label, then the URL as an OSC-8 hyperlink. The label
@@ -966,10 +1001,7 @@ func (m model) renderAbout() string {
 		return labelStyle.Render(padRight(label, 13)) + readingStyle.Render(terminalLink(url, url))
 	}
 
-	// Warm-uncle register: Fluncle introducing himself, not the deep telemetry.
-	// This is a long-form surface, so the cosmos may drive the verb (the Garnish
-	// Rule's carve-out for testimony). Still no exclamation marks.
-	content := []string{
+	return []string{
 		readingStyle.Width(wrapWidth).Render("I'm Fluncle. Been digging since '90, only now I do it across the Galaxy — every banger I find gets logged and sent back. This terminal is one of the places it lands."),
 		"",
 		labelStyle.Render("Where to listen"),
@@ -994,8 +1026,62 @@ func (m model) renderAbout() string {
 		"",
 		labelStyle.Render("IP geolocation by ") + readingStyle.Render(terminalLink(dbipURL, dbipURL)),
 	}
-	help := helpLine("q back", "ctrl+c quit")
-	return scaffold("About", "", content, help)
+}
+
+// aboutBodyLines expands the content to actual visual rows (a wrapped paragraph
+// becomes several lines), the unit the scroll window operates on.
+func (m model) aboutBodyLines() []string {
+	return strings.Split(strings.Join(m.aboutContent(), "\n"), "\n")
+}
+
+// aboutViewport is how many body rows fit: the terminal height minus the page
+// padding (2), the pinned title + its blank (2), the blank + help (2), and the
+// scroll-hint block — a blank + the hint line (2). A non-positive height (no
+// size yet) shows the whole body.
+func (m model) aboutViewport() int {
+	if m.height <= 0 {
+		return len(m.aboutBodyLines())
+	}
+	h := m.height - 8
+	if h < 4 {
+		h = 4
+	}
+	return h
+}
+
+func (m model) aboutMaxScroll() int {
+	return clamp(len(m.aboutBodyLines())-m.aboutViewport(), 0, len(m.aboutBodyLines()))
+}
+
+func (m model) renderAbout() string {
+	body := m.aboutBodyLines()
+	vp := m.aboutViewport()
+	scroll := clamp(m.scroll, 0, m.aboutMaxScroll())
+
+	end := scroll + vp
+	if end > len(body) {
+		end = len(body)
+	}
+	visible := append([]string{}, body[scroll:end]...)
+
+	// Show a scroll cue only when the body is taller than one screenful, in the
+	// deep instrument register (no exclamation marks, VOICE.md §6).
+	if len(body) > vp {
+		more := len(body) - end
+		var hint string
+		switch {
+		case scroll == 0:
+			hint = fmt.Sprintf("↓ %d more lines · j/k to scroll", more)
+		case end >= len(body):
+			hint = "↑ scroll up with k · q back"
+		default:
+			hint = fmt.Sprintf("↑/↓ scroll · %d more below", more)
+		}
+		visible = append(visible, "", labelStyle.Render(hint))
+	}
+
+	help := helpLine("↑/↓ j/k scroll", "q back", "ctrl+c quit")
+	return scaffold("About", "", visible, help)
 }
 
 func (m model) renderMessage() string {
