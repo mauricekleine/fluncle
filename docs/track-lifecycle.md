@@ -29,7 +29,7 @@ After a successful add, the Worker fires a **Spinup agent** (via the Spinup runt
 
 1. **Resolves + analyzes the preview audio** — BPM, musical **key** (+ confidence), and spectral features (brightness, sub-bass weight, mid-band flatness) via the DSP pipeline (`packages/video/src/pipeline/analyze-audio.ts`). The feature vector is kept as training data for the future vibe-placement model — see "Vibe placement" below.
 2. **Stores the exact analyzed preview** through `fluncle admin track preview-archive` at an operator-only archive path in R2. This is private analysis/model-training input, not public media, not a playback source, and never a full song.
-3. **Renders the video** (the `packages/video` kit) and uploads the bundle through the admin video endpoint (`fluncle admin track video` → `POST /api/admin/tracks/:id/video`); the **Worker** writes it to R2 and sets `video_url` to the review cut.
+3. **Renders the video** (the `packages/video` kit) and uploads the bundle with `fluncle admin track video`. The CLI uploads each artifact **directly to R2** via short-lived presigned PUT URLs the Worker signs (`POST .../video/uploads` → PUT to R2 → `POST .../video/finalize`), so large cuts bypass Cloudflare's ~100MB edge body limit; the **Worker** signs the URLs and sets `video_url` to the review cut, and never hands R2 credentials to the agent. (A small bundle can still use the legacy single multipart `POST /api/admin/tracks/:id/video`.)
 4. **Writes the analysis back** through `fluncle admin track update <id>` — `bpm`, `key`, `features` — and flips `enrichment_status` to `done`.
 
 This takes a while, and that's fine: the find was already live. When it finishes, the analysis fields and the video appear across the Galaxy.

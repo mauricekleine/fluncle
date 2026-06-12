@@ -512,25 +512,36 @@ async function runTrackVideo(
   }
 
   // --dir resolves the conventional bundle names; explicit flags override.
+  // Resolve against process.cwd() up front so a relative --dir (e.g. out/<id>)
+  // becomes an absolute path — Bun.file then never depends on the cwd at PUT time.
+  const dir = options.dir ? path.resolve(process.cwd(), options.dir) : undefined;
   const fromDir = (name: string): string | undefined => {
-    if (!options.dir) {
+    if (!dir) {
       return undefined;
     }
 
-    const candidate = path.join(options.dir, name);
+    const candidate = path.join(dir, name);
 
     return existsSync(candidate) ? candidate : undefined;
   };
 
+  const resolveFile = (explicit: string | undefined, name: string): string | undefined => {
+    if (explicit) {
+      return path.resolve(process.cwd(), explicit);
+    }
+
+    return fromDir(name);
+  };
+
   const files = {
-    composition: options.composition ?? fromDir("composition.tsx"),
-    cover: options.cover ?? fromDir("cover.jpg"),
-    footage: options.footage ?? fromDir("footage.mp4"),
-    footageSilent: options.footageSilent ?? fromDir("footage-silent.mp4"),
-    note: options.note ?? fromDir("note.txt"),
-    poster: options.poster ?? fromDir("poster.jpg"),
-    props: options.props ?? fromDir("props.json"),
-    render: options.render ?? fromDir("render.json"),
+    composition: resolveFile(options.composition, "composition.tsx"),
+    cover: resolveFile(options.cover, "cover.jpg"),
+    footage: resolveFile(options.footage, "footage.mp4"),
+    footageSilent: resolveFile(options.footageSilent, "footage-silent.mp4"),
+    note: resolveFile(options.note, "note.txt"),
+    poster: resolveFile(options.poster, "poster.jpg"),
+    props: resolveFile(options.props, "props.json"),
+    render: resolveFile(options.render, "render.json"),
   };
 
   if (!files.footage) {
@@ -539,7 +550,10 @@ async function runTrackVideo(
     );
   }
 
-  const result = await trackVideoCommand(idOrLogId, files);
+  // Progress per file as the bytes go straight to R2 (suppressed under --json so
+  // the output stays a single parseable object).
+  const onProgress = options.json ? undefined : (message: string) => console.log(message);
+  const result = await trackVideoCommand(idOrLogId, files, onProgress);
 
   if (options.json) {
     printJson(result);
