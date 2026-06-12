@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { buildSitemapXml } from "../lib/sitemap";
-import { getDb } from "../lib/server/db";
+import { getDb, typedRows } from "../lib/server/db";
 
 // One <loc> per coordinate-bearing finding plus the static surfaces; lastmod
 // is the finding's real coalesce(updated_at, added_at) (lib/sitemap.ts).
@@ -21,7 +21,7 @@ export const Route = createFileRoute("/sitemap.xml")({
                 where log_id is not null
                 order by added_at desc`,
         });
-        const rows = result.rows as unknown as LogPageRow[];
+        const rows = typedRows<LogPageRow>(result.rows);
         const xml = buildSitemapXml(
           rows.map((row) => ({ lastmod: row.lastmod, logId: row.log_id })),
         );

@@ -10,8 +10,7 @@ import { listTracks, type TrackListPage } from "@/lib/server/tracks";
 // being orphans (web-overhaul RFC §3). Text-first on purpose; the cover-led
 // archive stays the homepage.
 
-// One page for now (the archive is in the tens); revisit pagination when the
-// log outgrows a single readable plate.
+// Keep the log single-page while it fits in one readable plate.
 const logIndexLimit = 500;
 
 const fetchLog = createServerFn({ method: "GET" }).handler(() =>

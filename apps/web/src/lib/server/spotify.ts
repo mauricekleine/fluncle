@@ -1,4 +1,4 @@
-import { getDb } from "./db";
+import { getDb, typedRow } from "./db";
 import { readEnvs } from "./env";
 
 const spotifyAccountsBaseUrl = "https://accounts.spotify.com";
@@ -167,7 +167,7 @@ export function parseSpotifyTrackUrl(input: string): string {
   return trackId;
 }
 
-export function tryParseSpotifyTrackUrl(input: string): string | undefined {
+function tryParseSpotifyTrackUrl(input: string): string | undefined {
   try {
     return parseSpotifyTrackUrl(input);
   } catch {
@@ -295,7 +295,7 @@ async function getSpotifyAccessToken(): Promise<string> {
       where service = ?
       limit 1`,
   });
-  const auth = result.rows[0] as unknown as SpotifyAuthRow | undefined;
+  const auth = typedRow<SpotifyAuthRow>(result.rows);
 
   if (!auth) {
     throw new ApiError("spotify_not_authenticated", "Spotify is not authenticated", 400);

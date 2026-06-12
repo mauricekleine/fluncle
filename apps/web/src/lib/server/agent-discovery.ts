@@ -10,7 +10,7 @@ const markdownTracksLimit = 25;
 
 // RFC 8288 Link header advertised on the homepage so agents can find the
 // machine-readable surfaces without guessing well-known paths.
-export const agentLinkHeader = [
+const agentLinkHeader = [
   '</.well-known/api-catalog>; rel="api-catalog"',
   '</openapi.json>; rel="service-desc"; type="application/openapi+json"',
   '</llms.txt>; rel="service-doc"; type="text/markdown"',

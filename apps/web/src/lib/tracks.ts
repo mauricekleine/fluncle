@@ -1,38 +1,13 @@
-// Mirrors the client-relevant subset of the server's TrackListItem (see
-// lib/server/tracks.ts) — /api/tracks already returns all of these. The media +
-// enrichment fields (previewUrl, videoUrl, bpm, key, …) used to be dropped here,
-// which is why the feed couldn't surface them and Stories had nothing to play.
-export type Track = {
-  addedAt: string;
-  album?: string;
-  albumImageUrl?: string;
-  artists: string[];
-  bpm?: number;
-  durationMs?: number;
-  enrichmentStatus?: string;
-  isrc?: string;
-  key?: string;
-  label?: string;
-  logId?: string;
-  note?: string;
-  previewUrl?: string;
-  releaseDate?: string;
-  spotifyUrl: string;
-  tags?: string[];
-  tiktokUrl?: string;
-  title: string;
-  trackId: string;
-  videoUrl?: string;
-  videoVehicle?: string;
-};
+import { type TrackListItem, type TrackListPage } from "./server/tracks";
 
-export type TracksResponse = {
-  nextCursor?: string;
-  totalCount: number;
-  tracks: Track[];
-};
+// Client reads use the public /api/tracks contract produced by lib/server/tracks.ts.
+// tags is kept as optional compatibility slack for older UI/pipeline callers; the
+// current API does not select a tags field.
+export type Track = TrackListItem & { tags?: string[] };
 
-export type RandomTrackResponse = {
+export type TracksResponse = Omit<TrackListPage, "tracks"> & { tracks: Track[] };
+
+type RandomTrackResponse = {
   ok: true;
   track: Track;
 };

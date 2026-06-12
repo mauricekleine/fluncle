@@ -2,7 +2,7 @@
 // Deezer is tried first (exact-ish artist match -> high confidence); iTunes is
 // the fuzzy fallback. Returns null when nothing clears the confidence floor.
 
-export type PreviewSource = "deezer" | "itunes";
+type PreviewSource = "deezer" | "itunes";
 
 export type ResolvedPreview = {
   source: PreviewSource;

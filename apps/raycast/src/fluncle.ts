@@ -45,7 +45,7 @@ type FluncleFailure = {
   message: string;
 };
 
-export class FluncleCommandError extends Error {
+class FluncleCommandError extends Error {
   code: string;
 
   constructor(code: string, message: string) {
@@ -55,7 +55,7 @@ export class FluncleCommandError extends Error {
   }
 }
 
-export function getFlunclePath(): string {
+function getFlunclePath(): string {
   return getPreferenceValues<Preferences>().flunclePath;
 }
 
@@ -73,14 +73,6 @@ export async function getRecentTracks(limit = 20): Promise<RecentTrack[]> {
   const result = await runFluncleJson<RecentResult>(["recent", "--limit", String(limit), "--json"]);
 
   return result.tracks;
-}
-
-export function isSpotifyTrackInput(input: string | undefined): boolean {
-  if (!input) {
-    return false;
-  }
-
-  return parseSpotifyTrackInput(input) !== undefined;
 }
 
 export function parseSpotifyTrackInput(input: string): string | undefined {
@@ -153,10 +145,5 @@ function execFluncle(args: string[]): Promise<{ stdout: string; stderr: string }
 }
 
 function isFailure(value: unknown): value is FluncleFailure {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "ok" in value &&
-    (value as { ok: unknown }).ok === false
-  );
+  return typeof value === "object" && value !== null && "ok" in value && value.ok === false;
 }

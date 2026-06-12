@@ -1,7 +1,7 @@
-import { getDb } from "./db";
+import { getDb, typedRow } from "./db";
 import { ApiError } from "./spotify";
 
-export type PreviewArchiveTrack = {
+type PreviewArchiveTrack = {
   logId?: string;
   trackId: string;
 };
@@ -40,7 +40,7 @@ const mimeToExtension: Record<string, string> = {
   "audio/x-m4a": "m4a",
 };
 
-export function normalizePreviewMime(value: string): string | undefined {
+function normalizePreviewMime(value: string): string | undefined {
   const mime = value.split(";")[0]?.trim().toLowerCase();
 
   if (!mime) {
@@ -62,7 +62,7 @@ export function normalizePreviewMime(value: string): string | undefined {
   return undefined;
 }
 
-export function previewExtensionForMime(mime: string): string {
+function previewExtensionForMime(mime: string): string {
   const normalized = normalizePreviewMime(mime);
 
   if (!normalized) {
@@ -152,7 +152,7 @@ export async function getPreviewArchiveMetadata(
           where track_id = ? or log_id = ?
           limit 1`,
   });
-  const row = result.rows[0] as unknown as ArchiveRow | undefined;
+  const row = typedRow<ArchiveRow>(result.rows);
 
   if (!row) {
     return undefined;

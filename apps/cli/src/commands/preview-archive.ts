@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import { adminApiGet, adminApiPostForm, publicApiGet } from "../api";
+import { type RecentTrack } from "./recent";
 
 type PreviewArchiveResult = {
   archivedAt: string;
@@ -18,14 +19,7 @@ type PreviewArchiveStatus = {
   trackId: string;
 };
 
-type Track = {
-  artists: string[];
-  isrc?: string;
-  logId?: string;
-  previewUrl?: string;
-  title: string;
-  trackId: string;
-};
+type Track = Pick<RecentTrack, "artists" | "isrc" | "logId" | "previewUrl" | "title" | "trackId">;
 
 type TracksResponse = {
   nextCursor?: string;

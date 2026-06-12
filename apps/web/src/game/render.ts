@@ -45,7 +45,7 @@ export type LogCardView = {
 };
 
 /** An on-canvas hit zone, in internal canvas pixels. */
-export type HitRect = {
+type HitRect = {
   h: number;
   w: number;
   x: number;
@@ -422,7 +422,7 @@ export function createRenderer(container: HTMLElement): Renderer {
     const focal = width * 0.55;
     const horizon = height * HORIZON_FRACTION;
 
-    // The fake height saturates close-in: far stars scatter well above and
+    // Apparent height saturates close-in: far stars scatter well above and
     // below the horizon (depth cue), while an approached star glides toward
     // eye level instead of flying off the screen edge.
     const effectiveVOffset = vOffset * Math.min(1, f / 700);
@@ -555,7 +555,7 @@ export function createRenderer(container: HTMLElement): Renderer {
 
   // Dispatch by kind. Set-dressing is atmosphere: the Roadster tumbles slowly,
   // the UFO hovers over a dim teal underglow and bobs — placed and alive, never
-  // a static decal. (Hazards/bolts register their own draws in later units.)
+  // a static decal. Hazards and bolts use their own draw paths.
   function drawFrontierEntity(
     entity: FrontierEntity,
     x: number,

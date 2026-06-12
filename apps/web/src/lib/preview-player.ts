@@ -8,7 +8,7 @@
 
 import { useCallback, useSyncExternalStore } from "react";
 
-export function previewProxyUrl(idOrLogId: string): string {
+function previewProxyUrl(idOrLogId: string): string {
   return `/api/preview/${encodeURIComponent(idOrLogId)}`;
 }
 

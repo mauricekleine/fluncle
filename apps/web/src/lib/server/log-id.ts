@@ -59,7 +59,7 @@ function tail(seed: string, attempt: number): string {
 }
 
 /** The deterministic candidate Log ID for a finding (attempt 0 is canonical). */
-export function logIdCandidate(input: LogIdInput, attempt = 0): string {
+function logIdCandidate(input: LogIdInput, attempt = 0): string {
   const seed = input.isrc?.trim() || input.trackId;
 
   return `${sector(input.foundAt)}.${tail(seed, attempt)}`;

@@ -31,7 +31,7 @@ export function trackRows(tracks: RecentTrack[]): string[] {
 }
 
 /** `3:42` from milliseconds; omitted upstream when duration is unknown. */
-export function formatDuration(durationMs: number): string {
+function formatDuration(durationMs: number): string {
   const totalSeconds = Math.round(durationMs / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;

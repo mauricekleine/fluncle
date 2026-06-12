@@ -59,7 +59,7 @@ const SHIP_HIT_RADIUS = 10;
 /** Fuel a hull-hit costs — pressure, not death (the tow stays the only end). */
 const ASTEROID_FUEL_COST = 12;
 
-export type SimConfig = {
+type SimConfig = {
   audioRange: number;
   boostBurn: number;
   cruiseBurn: number;
@@ -70,7 +70,7 @@ export type SimConfig = {
   tankCapacity: number;
 };
 
-export type SimPhase = "adrift" | "flying" | "home" | "orbiting";
+type SimPhase = "adrift" | "flying" | "home" | "orbiting";
 
 /** One-shot happenings for the audio/telemetry layers to consume. */
 export type SimEvent =
@@ -86,7 +86,7 @@ export type SimEvent =
   | { kind: "towed" }
   | { kind: "warped" };
 
-export type ShipState = {
+type ShipState = {
   boosting: boolean;
   fuel: number;
   heading: number;
@@ -153,7 +153,7 @@ export function registerBehavior(kind: FrontierKind, behavior: EntityBehavior): 
 // tuned at boot so one tank at cruise reaches the newest finding with slack.
 // When the frontier outgrows what one tank should cover, the answer is new
 // home planets out there, not a bigger tank (docs/ROADMAP.md, "The expanding frontier").
-export function tuneConfig(stars: Star[]): SimConfig {
+function tuneConfig(stars: Star[]): SimConfig {
   const range = Math.max(MIN_RANGE, frontierRadius(stars) * RANGE_FACTOR);
   const cruiseBurn = (CRUISE_SPEED * TANK_CAPACITY) / range;
 
@@ -540,7 +540,7 @@ function updateFuel(state: SimState, boosting: boolean, dt: number): void {
 }
 
 /** Spend fuel on a hazard glance (asteroid hull-hit); never below empty. */
-export function drainFuel(state: SimState, amount: number): void {
+function drainFuel(state: SimState, amount: number): void {
   state.ship.fuel = Math.max(0, state.ship.fuel - amount);
 }
 
@@ -561,7 +561,7 @@ export function drainEvents(state: SimState): SimEvent[] {
 }
 
 /** Relative bearing from the ship's nose to a world point, [-PI, PI]. */
-export function bearingTo(ship: ShipState, x: number, y: number): number {
+function bearingTo(ship: ShipState, x: number, y: number): number {
   const absolute = Math.atan2(y - ship.y, x - ship.x);
 
   return wrapAngle(absolute - ship.heading);

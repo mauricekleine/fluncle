@@ -1,4 +1,4 @@
-import { getDb } from "./db";
+import { getDb, typedRow } from "./db";
 import { enrichFromDeezer, lookupIsrcFromDeezer } from "./deezer";
 import { resolveLogId } from "./log-id";
 import { formatError, withRetries } from "./retry";
@@ -52,7 +52,7 @@ export async function publishTrack(
       where track_id = ?
       limit 1`,
   });
-  const existing = existingResult.rows[0] as unknown as TrackRow | undefined;
+  const existing = typedRow<TrackRow>(existingResult.rows);
 
   if (existing) {
     const existingArtists = JSON.parse(existing.artists_json) as string[];

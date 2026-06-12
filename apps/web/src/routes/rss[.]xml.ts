@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { getDb } from "../lib/server/db";
+import { parseArtistsJson } from "../lib/server/artists";
+import { getDb, typedRows } from "../lib/server/db";
 
 type TrackRow = {
   track_id: string;
@@ -28,10 +29,10 @@ export const Route = createFileRoute("/rss.xml")({
             order by added_at desc, track_id desc
             limit ?`,
         });
-        const rows = result.rows as unknown as TrackRow[];
+        const rows = typedRows<TrackRow>(result.rows);
         const newestDate = rows[0]?.added_at;
         const items = rows.map((row) => {
-          const artists = parseArtists(row.artists_json);
+          const artists = parseArtistsJson(row.artists_json);
           const title = `${artists.join(", ")} - ${row.title}`;
           const description = row.note?.trim()
             ? `${artists.join(", ")} - ${row.title}\n\n${row.note.trim()}`
@@ -65,20 +66,6 @@ ${items.join("\n")}
     },
   },
 });
-
-function parseArtists(value: string): string[] {
-  try {
-    const artists = JSON.parse(value) as unknown;
-
-    if (Array.isArray(artists)) {
-      return artists.filter((artist): artist is string => typeof artist === "string");
-    }
-  } catch {
-    return [];
-  }
-
-  return [];
-}
 
 function escapeXml(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");

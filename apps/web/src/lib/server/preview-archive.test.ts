@@ -6,6 +6,8 @@ const execute = vi.hoisted(() => vi.fn());
 
 vi.mock("./db", () => ({
   getDb: async () => ({ execute }),
+  typedRow: <T extends object>(rows: T[]) => rows[0],
+  typedRows: <T extends object>(rows: T[]) => rows,
 }));
 
 describe("preview archive helpers", () => {

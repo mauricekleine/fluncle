@@ -73,9 +73,7 @@ export async function fetchReleaseYear(isrc: string | null | undefined): Promise
       return null;
     }
 
-    const year = Number.parseInt(track.release_date.slice(0, 4), 10);
-
-    return Number.isFinite(year) ? year : null;
+    return yearFromReleaseDate(track.release_date);
   } catch {
     return null;
   }

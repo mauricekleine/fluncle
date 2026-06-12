@@ -41,7 +41,7 @@ typography:
     fontSize: "0.76rem"
     fontWeight: 800
   mono:
-    fontFamily: "ui-monospace, SF Mono, Menlo, monospace"
+    fontFamily: "Monaspace Krypton, ui-monospace, SF Mono, Menlo, monospace"
     fontSize: "0.82rem"
     fontWeight: 400
     lineHeight: 1.5
@@ -155,8 +155,9 @@ A night-sky palette lit by one sun: warm blacks, sleeve-paper cream, and a singl
 
 **Display Font:** Oxanium (with ui-sans-serif, system-ui fallback), weights 400–800
 **Body Font:** System sans stack (Tailwind default ui-sans-serif)
+**Mono Font:** Monaspace Krypton (GitHub Next's mechanical mono, SIL OFL, self-hosted; with ui-monospace, SF Mono fallback), weights 400 + 700
 
-**Character:** Oxanium is the voice of the artifact: a squared, techy face that reads like the printing on a Discman, used for the wordmark, track numerals, and brand moments. The body runs on the quiet system sans so the music metadata reads instantly. The pairing is "machine label + plain reading", not a typographic performance.
+**Character:** Oxanium is the voice of the artifact: a squared, techy face that reads like the printing on a Discman, used for the wordmark, track numerals, and brand moments. The body runs on the quiet system sans so the music metadata reads instantly. Monaspace Krypton is the machine's own voice on the terminal surfaces (the "for the nerds" faceplate, the CLI/SSH dialogs): a mechanical mono that signals "real tool" without shouting. The pairing is "machine label + plain reading + terminal", not a typographic performance.
 
 ### Hierarchy
 
@@ -165,7 +166,7 @@ A night-sky palette lit by one sun: warm blacks, sleeve-paper cream, and a singl
 - **Title** (800, 1.02rem, 1.18, -0.01em): Track titles. Extrabold cream against the dark; the loudest text on the page.
 - **Body** (400, 0.9rem, 1.25): Artist lines, descriptions, form text in Stardust or Starlight Cream.
 - **Label** (800, 0.76rem): Column headers and form labels. Bold and small, never uppercase-tracked.
-- **Mono** (400, 0.82rem, 1.5): System mono stack, reserved for literal terminal content: the CLI install command and command examples. The machine's own voice, quoted verbatim.
+- **Mono** (400/700, 0.82rem, 1.5): Monaspace Krypton, reserved for the terminal surfaces: the "for the nerds" faceplate legend (700) and its items, the CLI install command, and command examples. The machine's own voice, quoted verbatim.
 
 ### Named Rules
 

@@ -6,7 +6,7 @@
 // change. Backs PATCH /api/admin/tracks/:id.
 
 import { isLogId } from "../log-id";
-import { getDb } from "./db";
+import { getDb, typedRow } from "./db";
 import { resolveLogId } from "./log-id";
 import { ApiError } from "./spotify";
 
@@ -54,7 +54,7 @@ export async function updateTrack(
     args: [trackId],
     sql: `select isrc, log_id, added_at from tracks where track_id = ? limit 1`,
   });
-  const existing = existingResult.rows[0] as unknown as ExistingRow | undefined;
+  const existing = typedRow<ExistingRow>(existingResult.rows);
 
   if (!existing) {
     throw new ApiError("not_found", `No track with id ${trackId}`, 404);

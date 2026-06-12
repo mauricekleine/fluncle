@@ -7,10 +7,9 @@
 //
 // Given an artist + title (the agent gets these from `fluncle track get --json`),
 // it resolves a legal preview clip, decodes it, and emits an analysis JSON on
-// stdout: BPM, musical key (+confidence), spectral features, and a best-guess
-// drum & bass sub-genre. The agent then writes the result back with
-// `fluncle admin track update`. The sub-genre is a SUGGESTION (provenance "auto");
-// a human review always wins.
+// stdout: BPM, musical key (+confidence), and spectral features. The agent then
+// writes the result back with `fluncle admin track update`; vibe placement stays
+// with the operator in `/admin/tag`.
 //
 //   bun analyze-track.ts --artist "Loadstar" --title "Take a Deep Breath" [--isrc GB5KW1701923]
 //
@@ -690,9 +689,9 @@ if (analyses.length === 0) {
 }
 
 // The most beat-clear window (highest bpmConfidence) is the most rhythmically
-// defined section, so its timbre best characterises the sub-genre — read the
-// feature vector from it. BPM = the most confident NON-NULL read; key = the most
-// confident read anywhere (key is a global property, section-independent).
+// defined section, so its timbre best characterises the feature vector. BPM =
+// the most confident NON-NULL read; key = the most confident read anywhere (key
+// is a global property, section-independent).
 const primary = [...analyses].sort((a, b) => b.tempo.bpmConfidence - a.tempo.bpmConfidence)[0];
 const bestBpm = [...analyses]
   .sort((a, b) => b.tempo.bpmConfidence - a.tempo.bpmConfidence)

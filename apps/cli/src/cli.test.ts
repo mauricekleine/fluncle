@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { fluncleAsciiLogo } from "./brand";
 
 const cliPath = new URL("./cli.ts", import.meta.url).pathname;
 
@@ -47,6 +48,7 @@ describe("fluncle CLI parsing and JSON output", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");
+    expect(result.stdout.startsWith(`\n${fluncleAsciiLogo}`)).toBe(true);
     expect(result.stdout).toContain("recent|list [options]");
     expect(result.stdout).toContain("submit [searchOrSpotifyUrl...]");
     expect(result.stdout).toContain("fluncle version [--check] [--json]");
@@ -62,14 +64,17 @@ describe("fluncle CLI parsing and JSON output", () => {
     const adminHelp = await runCli(["admin", "help"]);
 
     expect(rootHelp.exitCode).toBe(0);
+    expect(rootHelp.stdout.startsWith(`\n${fluncleAsciiLogo}`)).toBe(true);
     expect(rootHelp.stdout).toContain("Usage: fluncle [options] [command]");
     expect(rootHelp.stdout).not.toContain("Operator:");
 
     expect(adminDefault.exitCode).toBe(0);
+    expect(adminDefault.stdout).not.toContain(fluncleAsciiLogo);
     expect(adminDefault.stdout).toContain("Usage: fluncle admin [options] [command]");
 
     expect(adminHelp.exitCode).toBe(0);
     expect(adminHelp.stderr).toBe("");
+    expect(adminHelp.stdout).not.toContain(fluncleAsciiLogo);
     expect(adminHelp.stdout).toContain("Usage: fluncle admin [options] [command]");
     expect(adminHelp.stdout).toContain("add [options] [spotifyUrl]");
     expect(adminHelp.stdout).toContain("submissions");

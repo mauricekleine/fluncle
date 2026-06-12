@@ -1,7 +1,3 @@
-export type JsonSuccess<T> = {
-  ok: true;
-} & T;
-
 export type JsonFailure = {
   ok: false;
   code: string;

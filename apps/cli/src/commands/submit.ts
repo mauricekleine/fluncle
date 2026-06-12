@@ -1,5 +1,5 @@
-import { createInterface } from "node:readline/promises";
 import { publicApiGet, publicApiPost } from "../api";
+import { promptLine, selectWithKeyboard, truncateTerminalLine } from "../interactive";
 import { CliError } from "../output";
 
 type SearchResponse = {
@@ -11,7 +11,7 @@ type SubmitResponse = {
   ok: true;
 };
 
-export type SearchCandidate = {
+type SearchCandidate = {
   id: string;
   spotifyUrl: string;
   title: string;
@@ -20,8 +20,14 @@ export type SearchCandidate = {
   artworkUrl?: string;
 };
 
+const PROMPT_NON_INTERACTIVE_MESSAGE =
+  "fluncle submit requires an interactive terminal for prompts.";
+const SELECT_NON_INTERACTIVE_MESSAGE =
+  "fluncle submit requires an interactive terminal to confirm a track.";
+
 export async function submitCommand(input: string | undefined): Promise<void> {
-  const query = input?.trim() || (await promptLine("Search or Spotify URL: "));
+  const query =
+    input?.trim() || (await promptLine("Search or Spotify URL: ", PROMPT_NON_INTERACTIVE_MESSAGE));
 
   if (!query) {
     throw new CliError("missing_query", "Missing search input");
@@ -39,8 +45,8 @@ export async function submitCommand(input: string | undefined): Promise<void> {
     return;
   }
 
-  const note = await promptLine("Note (optional): ");
-  const contact = await promptLine("Contact (optional): ");
+  const note = await promptLine("Note (optional): ", PROMPT_NON_INTERACTIVE_MESSAGE);
+  const contact = await promptLine("Contact (optional): ", PROMPT_NON_INTERACTIVE_MESSAGE);
 
   await publicApiPost<SubmitResponse>("/api/submissions", {
     album: selected.album,
@@ -58,107 +64,12 @@ export async function submitCommand(input: string | undefined): Promise<void> {
   console.log("Logged. Fluncle will give it a listen.");
 }
 
-async function promptLine(label: string): Promise<string> {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    throw new CliError(
-      "not_interactive",
-      "fluncle submit requires an interactive terminal for prompts.",
-    );
-  }
-
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  try {
-    return (await rl.question(label)).trim();
-  } finally {
-    rl.close();
-  }
-}
-
 async function selectCandidate(
   candidates: SearchCandidate[],
 ): Promise<SearchCandidate | undefined> {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    throw new CliError(
-      "not_interactive",
-      "fluncle submit requires an interactive terminal to confirm a track.",
-    );
-  }
-
-  let selectedIndex = 0;
-  let renderedLines = 0;
-  let done = false;
-
-  const stdin = process.stdin;
-  const stdout = process.stdout;
-  const wasRaw = stdin.isRaw === true;
-
-  return await new Promise<SearchCandidate | undefined>((resolve) => {
-    function cleanup(): void {
-      if (done) {
-        return;
-      }
-
-      done = true;
-      stdin.off("data", onData);
-      stdin.setRawMode(wasRaw);
-      stdin.pause();
-      stdout.write("\x1b[?25h");
-    }
-
-    function finish(candidate?: SearchCandidate): void {
-      cleanup();
-      stdout.write(renderedLines > 0 ? "\n" : "");
-      resolve(candidate);
-    }
-
-    function cancel(): void {
-      cleanup();
-      clearRendered(stdout, renderedLines);
-      stdout.write("Cancelled.\n");
-      resolve(undefined);
-    }
-
-    function render(): void {
-      clearRendered(stdout, renderedLines);
-      const lines = buildSelectorLines(candidates, selectedIndex, stdout.columns ?? 80);
-      renderedLines = lines.length;
-      stdout.write(`${lines.join("\n")}\n`);
-    }
-
-    function onData(chunk: Buffer): void {
-      const value = chunk.toString("utf8");
-
-      if (value === "\u0003" || value === "\u001b" || value === "q") {
-        cancel();
-        return;
-      }
-
-      if (value === "\r" || value === "\n") {
-        finish(candidates[selectedIndex]);
-        return;
-      }
-
-      if (value === "\u001b[A" || value === "k") {
-        selectedIndex = selectedIndex === 0 ? candidates.length - 1 : selectedIndex - 1;
-        render();
-        return;
-      }
-
-      if (value === "\u001b[B" || value === "j") {
-        selectedIndex = selectedIndex === candidates.length - 1 ? 0 : selectedIndex + 1;
-        render();
-      }
-    }
-
-    stdout.write("\x1b[?25l");
-    stdin.setRawMode(true);
-    stdin.resume();
-    stdin.on("data", onData);
-    render();
+  return await selectWithKeyboard(candidates, {
+    nonInteractiveMessage: SELECT_NON_INTERACTIVE_MESSAGE,
+    renderLines: buildSelectorLines,
   });
 }
 
@@ -172,7 +83,7 @@ function buildSelectorLines(
     ...candidates.map((candidate, index) => {
       const prefix = index === selectedIndex ? "> " : "  ";
       const label = `${candidate.artists.join(", ")} — ${candidate.title}`;
-      const line = truncate(`${prefix}${label}`, Math.max(columns, 20));
+      const line = truncateTerminalLine(`${prefix}${label}`, Math.max(columns, 20));
 
       return index === selectedIndex ? `\x1b[7m${line}\x1b[0m` : line;
     }),
@@ -180,20 +91,4 @@ function buildSelectorLines(
     "Press enter to submit",
     "Up/k Down/j  q/Esc: cancel",
   ];
-}
-
-function clearRendered(stdout: NodeJS.WriteStream, lineCount: number): void {
-  if (lineCount === 0) {
-    return;
-  }
-
-  stdout.write(`\x1b[${lineCount}F\x1b[J`);
-}
-
-function truncate(value: string, maxLength: number): string {
-  if (value.length <= maxLength) {
-    return value;
-  }
-
-  return `${value.slice(0, Math.max(maxLength - 3, 0))}...`;
 }

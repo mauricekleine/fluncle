@@ -25,31 +25,13 @@ export type RecentTrack = {
   postedToTelegram: boolean;
 };
 
+type ApiRecentTrack = Omit<RecentTrack, "addedToSpotify" | "postedToTelegram"> & {
+  addedToSpotify?: boolean;
+  postedToTelegram?: boolean;
+};
+
 type TracksResponse = {
-  tracks: Array<{
-    trackId: string;
-    logId?: string;
-    spotifyUrl: string;
-    title: string;
-    artists: string[];
-    album?: string;
-    albumImageUrl?: string;
-    note?: string;
-    addedAt: string;
-    durationMs?: number;
-    label?: string;
-    isrc?: string;
-    popularity?: number;
-    previewUrl?: string;
-    bpm?: number;
-    key?: string;
-    releaseDate?: string;
-    enrichmentStatus?: string;
-    videoUrl?: string;
-    videoVehicle?: string;
-    addedToSpotify?: boolean;
-    postedToTelegram?: boolean;
-  }>;
+  tracks: ApiRecentTrack[];
   totalCount: number;
   nextCursor?: string;
 };

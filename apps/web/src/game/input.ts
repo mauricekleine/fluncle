@@ -10,7 +10,7 @@ const BOOST_KEYS = new Set([" ", "arrowup", "w"]);
 // blip on demand. No touch fire verb — auto-fire covers glass.
 const FIRE_KEYS = new Set(["f"]);
 
-export type InputState = {
+type InputState = {
   boost: boolean;
   fire: boolean;
   steer: number;

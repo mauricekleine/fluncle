@@ -1,13 +1,16 @@
-import { createInterface } from "node:readline/promises";
 import { publicApiPost } from "../api";
+import { promptLine } from "../interactive";
 import { CliError, printJson } from "../output";
 
 type SubscribeResponse = {
   ok: true;
 };
 
+const PROMPT_NON_INTERACTIVE_MESSAGE =
+  "fluncle subscribe requires an email argument or an interactive terminal.";
+
 export async function subscribeCommand(email?: string, json?: boolean): Promise<void> {
-  const address = email?.trim() || (await promptLine("Email: "));
+  const address = email?.trim() || (await promptLine("Email: ", PROMPT_NON_INTERACTIVE_MESSAGE));
 
   if (!address) {
     throw new CliError("invalid_email", "Enter a valid email address.");
@@ -25,24 +28,4 @@ export async function subscribeCommand(email?: string, json?: boolean): Promise<
   }
 
   console.log("You're on the list.");
-}
-
-async function promptLine(label: string): Promise<string> {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    throw new CliError(
-      "not_interactive",
-      "fluncle subscribe requires an email argument or an interactive terminal.",
-    );
-  }
-
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  try {
-    return (await rl.question(label)).trim();
-  } finally {
-    rl.close();
-  }
 }
