@@ -32,11 +32,23 @@ import (
 )
 
 const defaultAPIURL = "https://www.fluncle.com"
-const spotifyPlaylistURL = "https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0?si=054d3c6cbcf14a36"
-const telegramURL = "https://t.me/fluncle"
-const websiteURL = "https://www.fluncle.com"
-const xURL = "https://x.com/mauricekleine"
-const dbipURL = "https://db-ip.com"
+
+// The Galaxy's link map (docs/socials/). URLs are verbatim; the handle is
+// lowercase fluncle everywhere (VOICE.md §6). Surfaced on the About screen.
+const (
+	websiteURL         = "https://www.fluncle.com"
+	galaxyURL          = "https://galaxy.fluncle.com"
+	sshConnect         = "ssh rave.fluncle.com"
+	spotifyPlaylistURL = "https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0"
+	mixcloudURL        = "https://www.mixcloud.com/fluncle/"
+	youtubeURL         = "https://www.youtube.com/@fluncle"
+	tiktokURL          = "https://www.tiktok.com/@fluncle"
+	instagramURL       = "https://www.instagram.com/fluncle/"
+	telegramURL        = "https://t.me/fluncle"
+	rssURL             = "https://www.fluncle.com/rss.xml"
+	sourceURL          = "https://github.com/mauricekleine/fluncle"
+	dbipURL            = "https://db-ip.com"
+)
 
 type config struct {
 	apiURL      string
@@ -947,28 +959,40 @@ func (m model) renderInstall() string {
 
 func (m model) renderAbout() string {
 	wrapWidth := clamp(m.width-4, 48, 96) - 4
+
+	// One link line: muted label, then the URL as an OSC-8 hyperlink. The label
+	// holds a fixed column so the URLs line up like a logbook's index.
 	link := func(label, url string) string {
-		return labelStyle.Render(label+": ") + readingStyle.Render(terminalLink(url, url))
+		return labelStyle.Render(padRight(label, 13)) + readingStyle.Render(terminalLink(url, url))
 	}
+
+	// Warm-uncle register: Fluncle introducing himself, not the deep telemetry.
+	// This is a long-form surface, so the cosmos may drive the verb (the Garnish
+	// Rule's carve-out for testimony). Still no exclamation marks.
 	content := []string{
-		readingStyle.Width(wrapWidth).Render("Fluncle's Findings is a drum & bass collection from another dimension. This is the Galaxy you just ssh'd into."),
+		readingStyle.Width(wrapWidth).Render("I'm Fluncle. Been digging since '90, only now I do it across the Galaxy — every banger I find gets logged and sent back. This terminal is one of the places it lands."),
 		"",
-		labelStyle.Render("Bangers reach the archive through:"),
-		readingStyle.Render("- Spotify"),
-		readingStyle.Render("- Telegram"),
-		readingStyle.Render("- Web"),
-		readingStyle.Render("- CLI"),
-		readingStyle.Render("- Raycast"),
-		readingStyle.Render("- SSH, apparently"),
+		labelStyle.Render("Where to listen"),
+		link("Spotify", spotifyPlaylistURL),
+		link("Mixcloud", mixcloudURL),
+		link("YouTube", youtubeURL),
 		"",
-		readingStyle.Width(wrapWidth).Render("Built by Maurice because drum & bass deserves infrastructure."),
+		labelStyle.Render("Follow the crew"),
+		link("TikTok", tiktokURL),
+		link("Instagram", instagramURL),
+		link("Telegram", telegramURL),
 		"",
-		labelStyle.Render("Links:"),
-		link("Spotify playlist", spotifyPlaylistURL),
-		link("Telegram channel", telegramURL),
-		link("Website", websiteURL),
-		link("DM me on X", xURL),
-		link("IP geolocation by DB-IP", dbipURL),
+		labelStyle.Render("The mothership"),
+		link("Web", websiteURL),
+		link("RSS", rssURL),
+		readingStyle.Width(wrapWidth).Render("Newsletter: fresh bangers, every Friday, from Fluncle — board it at the site."),
+		"",
+		labelStyle.Render("For the nerds"),
+		link("The Galaxy", galaxyURL),
+		labelStyle.Render(padRight("SSH", 13)) + readingStyle.Render(sshConnect),
+		link("Source", sourceURL),
+		"",
+		labelStyle.Render("IP geolocation by ") + readingStyle.Render(terminalLink(dbipURL, dbipURL)),
 	}
 	help := helpLine("q back", "ctrl+c quit")
 	return scaffold("About", "", content, help)
