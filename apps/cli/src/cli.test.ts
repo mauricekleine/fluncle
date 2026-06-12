@@ -43,6 +43,29 @@ describe("fluncle CLI parsing and JSON output", () => {
 `);
   });
 
+  test("admin track video requires a footage cut before any upload", async () => {
+    // A --dir with no footage.mp4 fails the local validation before the presign
+    // request, so this runs without a server or admin token.
+    const result = await runCli([
+      "admin",
+      "track",
+      "video",
+      "004.7.2I",
+      "--dir",
+      "/tmp/fluncle-no-such-bundle",
+      "--json",
+    ]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe(`{
+  "code": "error",
+  "message": "A footage cut is required (--footage <file>, or --dir containing footage.mp4)",
+  "ok": false
+}
+`);
+  });
+
   test("keeps root help listener-facing", async () => {
     const result = await runCli([]);
 

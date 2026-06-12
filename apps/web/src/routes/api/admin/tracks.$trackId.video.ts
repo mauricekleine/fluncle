@@ -5,34 +5,19 @@ import { FOUND_BASE } from "../../../lib/media";
 import { jsonError, requireAdmin } from "../../../lib/server/env";
 import { getTrackByIdOrLogId } from "../../../lib/server/tracks";
 import { updateTrack } from "../../../lib/server/track-update";
+import { VIDEO_ARTIFACTS, vehicleFromRenderJson } from "../../../lib/server/video-bundle";
 
 // FOUND_BASE (the R2 custom-domain read base) is shared from lib/media — the
 // Worker owns the bucket; the agent uploads with the admin token, never holds R2
 // credentials.
 
-type Artifact = { contentType: string; field: string; name: string };
-
-// The bundle the ship pipeline produces under out/<log-id>/. footage.mp4 is the
-// canonical web cut (its URL becomes video_url); the rest are stored alongside.
-// footage-silent.mp4 is the audio-less cut for manual TikTok sound-attach.
-// cover.jpg is the profile-grid cover (operator sets it as the post cover);
-// retrieved by convention at <log-id>/cover.jpg, no dedicated column.
-// composition.tsx + props.json + render.json make the generated source
-// re-renderable without keeping per-track compositions in the codebase.
-const ARTIFACTS: Artifact[] = [
-  { contentType: "video/mp4", field: "footage", name: "footage.mp4" },
-  { contentType: "video/mp4", field: "footage-silent", name: "footage-silent.mp4" },
-  { contentType: "image/jpeg", field: "poster", name: "poster.jpg" },
-  { contentType: "image/jpeg", field: "cover", name: "cover.jpg" },
-  { contentType: "text/plain; charset=utf-8", field: "note", name: "note.txt" },
-  { contentType: "text/plain; charset=utf-8", field: "composition", name: "composition.tsx" },
-  { contentType: "application/json; charset=utf-8", field: "props", name: "props.json" },
-  { contentType: "application/json; charset=utf-8", field: "render", name: "render.json" },
-];
-
 // POST /api/admin/tracks/:idOrLogId/video — multipart upload of a track's video
 // bundle. Stores each artifact at <log-id>/<name> in R2 and sets video_url to
 // the review cut. Requires the track to have a Log ID (one identity everywhere).
+//
+// This is the SMALL-BUNDLE fallback: it streams the whole bundle through the
+// Worker, so Cloudflare's ~100MB edge body limit caps it. Large (crf-20) cuts
+// use the presigned direct-to-R2 flow at .../video/uploads + .../video/finalize.
 export const Route = createFileRoute("/api/admin/tracks/$trackId/video")({
   server: {
     handlers: {
@@ -64,12 +49,9 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/video")({
 
           const form = await request.formData();
           const stored: Record<string, string> = {};
-          // The travelling vehicle, read from the uploaded render.json (ship
-          // writes it from `--vehicle`). Stored on the track as the diversity
-          // ledger the next agent reads via /api/tracks.
           let videoVehicle: string | undefined;
 
-          for (const artifact of ARTIFACTS) {
+          for (const artifact of VIDEO_ARTIFACTS) {
             const value = form.get(artifact.field);
 
             if (!(value instanceof File)) {
@@ -84,17 +66,7 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/video")({
             stored[artifact.field] = `${FOUND_BASE}/${key}`;
 
             if (artifact.field === "render") {
-              try {
-                const manifest = JSON.parse(new TextDecoder().decode(bytes)) as {
-                  vehicle?: unknown;
-                };
-                if (typeof manifest.vehicle === "string" && manifest.vehicle.trim()) {
-                  videoVehicle = manifest.vehicle.trim().slice(0, 120);
-                }
-              } catch {
-                // render.json is a loose manifest; a missing/unparseable vehicle
-                // just leaves the ledger entry empty, never fails the upload.
-              }
+              videoVehicle = vehicleFromRenderJson(new TextDecoder().decode(bytes));
             }
           }
 
