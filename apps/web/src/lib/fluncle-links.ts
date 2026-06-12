@@ -6,8 +6,18 @@ export const spotifyPlaylistUrl =
 
 export const telegramUrl = import.meta.env.VITE_FLUNCLE_TELEGRAM_URL ?? "https://t.me/fluncle";
 
-// The owned channels (docs/socials.md): TikTok is the primary video channel.
+// The owned channels (docs/socials/): TikTok is the primary video channel.
 export const tiktokUrl = "https://www.tiktok.com/@fluncle";
+
+export const instagramUrl = "https://www.instagram.com/fluncle/";
+
+// The licensed home for the DJ mix (docs/socials/).
+export const mixcloudUrl = "https://www.mixcloud.com/fluncle/";
+
+export const youtubeUrl = "https://www.youtube.com/@fluncle";
+
+// Fluncle has no own X handle yet; the social row routes DMs to Maurice.
+export const xUrl = "https://x.com/mauricekleine";
 
 // The Galaxy game (same Worker, galaxy. subdomain): fly to every banger.
 export const galaxyUrl = "https://galaxy.fluncle.com";

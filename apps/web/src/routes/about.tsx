@@ -1,11 +1,14 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
 import {
+  instagramUrl,
+  mixcloudUrl,
   musicbrainzUrl,
   siteUrl,
   spotifyPlaylistUrl,
   telegramUrl,
   tiktokUrl,
   wikidataUrl,
+  youtubeUrl,
 } from "@/lib/fluncle-links";
 import { fluncleDescription } from "@/lib/identity";
 
@@ -57,7 +60,16 @@ function aboutHead() {
     genre: "Drum and Bass",
     image: `${siteUrl}/fluncle-cover.png`,
     name: "Fluncle",
-    sameAs: [spotifyPlaylistUrl, telegramUrl, tiktokUrl, musicbrainzUrl, wikidataUrl],
+    sameAs: [
+      spotifyPlaylistUrl,
+      telegramUrl,
+      tiktokUrl,
+      instagramUrl,
+      youtubeUrl,
+      mixcloudUrl,
+      musicbrainzUrl,
+      wikidataUrl,
+    ],
     url: `${siteUrl}/`,
   };
   const faqPage = {

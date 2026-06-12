@@ -18,6 +18,12 @@ packages/video   Remotion kit for per-track social videos (the Nostalgic Cosmos)
 The deployed web app owns the Spotify, Telegram, Turso, and Loops secrets. Public reads are served by `/api/tracks` (with `since`/`until` discovery windows), `/api/tracks/random`, and `/rss.xml`. Newsletter signups post to `/api/newsletter`, which the web app relays to Loops. Admin mutations are served by authenticated `/api/admin/*` routes. Raycast must keep calling `fluncle`.
 Listener submissions are accepted through public `/api/search` and `/api/submissions` routes, then reviewed through authenticated admin submission routes. Approval still publishes only through the existing admin add flow.
 
+## License
+
+Project source code and documentation are licensed under the [Apache License 2.0](./LICENSE), with attribution notices in [NOTICE](./NOTICE).
+
+The Fluncle name, logo, visual identity, social/profile artwork, generated media assets, track curation data, playlist identity, and other brand assets are not licensed for reuse except where explicitly stated.
+
 ## Root Workflows
 
 ```bash

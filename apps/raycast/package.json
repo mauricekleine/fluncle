@@ -1,7 +1,7 @@
 {
   "name": "fluncle-raycast",
   "description": "Publish tracks to Fluncle's Findings through the Fluncle CLI.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "author": "mauricekleine",
   "scripts": {
     "build": "ray build",
@@ -10,13 +10,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@raycast/api": "^1.104.19",
-    "react": "^19.2.1"
+    "@raycast/api": "~1.104.19",
+    "react": "~19.2.7"
   },
   "devDependencies": {
-    "@raycast/eslint-config": "^2.0.4",
+    "@raycast/eslint-config": "~2.1.1",
     "@types/node": "catalog:",
-    "@types/react": "^19.2.3",
+    "@types/react": "~19.2.17",
     "typescript": "catalog:"
   },
   "icon": "icon.png",

@@ -8,9 +8,17 @@ Reusable **image-asset** rendering for Fluncle. Where [`@fluncle/video`](../vide
 
 It renders to `apps/web/public/galaxy/og.png`, which is a **committed static asset** — it is NOT built at deploy time. The `/galaxy` route's `head()` points `og:image` at `/galaxy/og.png`. Regenerate and commit it when the card's design changes.
 
+## Social banners & covers
+
+`src/remotion/cosmos-banner.tsx` is the shared banner/cover for the social profiles — one `CosmosBanner` renders the **floating cosmonaut** (`public/fluncle-cosmonaut.png`, the founding figure) against a warm Deep Field cosmos (a single Eclipse-Gold sun, a seeded starfield, a grain + scanline wash) at any frame size. Banners are **wordless** — the platform shows the channel name as text, and the `FLUNCLE` wordmark lives on the cover art, not here. Per-platform dimensions, formats, and safe areas live in `src/remotion/socials-specs.ts` — the single source of truth, shared by the registry (`root.tsx` maps it to `<Still>`s) and the render script.
+
+The **safe-area contract**: platforms crop a banner differently across devices, so each spec's `safe` box is the centered region the platform always shows (YouTube's is just 1235×338 of its 2048×1152). The cosmonaut is sized off that box's height so the hard mobile crop still catches the figure, and the cosmos bleeds to the edges.
+
+`bun run render:socials` writes the claimed accounts (`render: true`) to `docs/socials/banners/` — drop each straight into the platform's profile uploader. The current set: YouTube channel banner (2048×1152 PNG) and Mixcloud cover (2048×512 PNG). SoundCloud (2480×520) and X (1500×500) are wired in with `render: false` — previewable in Studio, written once those accounts exist. The Spotify playlist cover is the founding cover art, **not** generated here. The spec table + the brand asset map live in [docs/socials/README.md](../../docs/socials/README.md).
+
 ## Conventions (mirrors `@fluncle/video`)
 
-- **Code-generated, deterministic.** Everything on screen is generated from code — CSS, SVG, transforms — so a render is reproducible from source alone. Fonts are the only bitmap exception (Oxanium woff2 under `public/fonts`, loaded at module scope in `src/remotion/fonts.ts`, byte-identical to the `apps/web` copies). No `Math.random()` and no wall-clock time inside a composition; seed any procedural layer via Remotion's `random()`.
+- **Code-generated, deterministic.** Everything on screen is generated from code — CSS, SVG, transforms — so a render is reproducible from source alone. The bitmap exceptions are the fonts (Oxanium woff2 under `public/fonts`, byte-identical to the `apps/web` copies) and the cosmonaut cutout (`public/fluncle-cosmonaut.png`, Maurice's founding artwork — the one image we composite rather than re-draw). No `Math.random()` and no wall-clock time inside a composition; seed any procedural layer via Remotion's `random()`.
 - **Tokens, not hex literals chosen by hand.** Colors come from [`@fluncle/tokens`](../tokens) (`colors.deepField`, `colors.eclipseGold`, …), which mirrors DESIGN.md.
 - **ANGLE GL.** `remotion.config.ts` and the render script set `gl: "angle"` (Metal on Apple Silicon) so any WebGL-backed layer has a real headless context, matching `@fluncle/video`.
 
@@ -19,7 +27,8 @@ It renders to `apps/web/public/galaxy/og.png`, which is a **committed static ass
 Run from `packages/media` (or with `bun run --cwd packages/media …`). Use **bun**, never npm/pnpm/yarn.
 
 ```bash
-bun run render:og   # bundles, selects GalaxyOg, renders apps/web/public/galaxy/og.png at 1200×630
+bun run render:og        # bundles, selects GalaxyOg, renders apps/web/public/galaxy/og.png at 1200×630
+bun run render:socials   # renders the claimed social banners/covers into docs/socials/banners/
 bun run studio      # Remotion Studio — live scrub the asset while editing
 bun run typecheck   # tsc --noEmit, the quality check for any change here
 ```

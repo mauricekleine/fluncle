@@ -33,7 +33,7 @@ type LogPageData =
   | { status: "moved"; logId: string };
 
 const fetchLogPage = createServerFn({ method: "GET" })
-  .inputValidator((data: { logId: string }) => data)
+  .validator((data: { logId: string }) => data)
   .handler(async ({ data: { logId } }): Promise<LogPageData> => {
     const track = await getTrackByIdOrLogId(logId);
 

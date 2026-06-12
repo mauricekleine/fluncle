@@ -25,7 +25,14 @@ describe("/about schema", () => {
     expect(entity?.name).toBe("Fluncle");
     expect(entity?.description).toBe(fluncleDescription);
     expect(entity?.sameAs).toEqual(
-      expect.arrayContaining([expect.stringContaining("tiktok.com/@fluncle")]),
+      expect.arrayContaining([
+        expect.stringContaining("tiktok.com/@fluncle"),
+        expect.stringContaining("instagram.com/fluncle"),
+        expect.stringContaining("youtube.com/@fluncle"),
+        expect.stringContaining("mixcloud.com/fluncle"),
+        expect.stringContaining("musicbrainz.org/artist/"),
+        expect.stringContaining("wikidata.org/wiki/Q140169844"),
+      ]),
     );
   });
 
