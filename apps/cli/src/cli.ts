@@ -214,6 +214,14 @@ function addShareCommands(program: Command): void {
 
 function addMetaCommands(program: Command): void {
   program
+    .command("about")
+    .description("Fluncle, and where to find him")
+    .action(async () => {
+      const { aboutCommand } = await import("./commands/about");
+      aboutCommand();
+    });
+
+  program
     .command("version")
     .description("Print or check the version")
     .option("--check", "Check the latest GitHub release", false)
@@ -844,7 +852,11 @@ function assertParseArgsCompatiblePositionals(args: string[]): void {
   const [command, subcommand, third, fourth, fifth] = positionals;
 
   if (
-    (command === "recent" || command === "list" || command === "random" || command === "version") &&
+    (command === "recent" ||
+      command === "list" ||
+      command === "random" ||
+      command === "version" ||
+      command === "about") &&
     subcommand
   ) {
     rejectUnexpectedPositionals([subcommand]);
@@ -1035,7 +1047,15 @@ Share:
   fluncle submit [search-or-spotify-url]   Send a track for review
 
 Meta:
-  fluncle version [--check] [--json]   Print or check the version`;
+  fluncle about                        Fluncle, and where to find him
+  fluncle version [--check] [--json]   Print or check the version
+
+Fluncle elsewhere:
+  Web        https://www.fluncle.com
+  Spotify    https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0
+  TikTok     https://www.tiktok.com/@fluncle
+  Telegram   https://t.me/fluncle
+  More       fluncle about`;
 
 if (import.meta.main) {
   await main();
