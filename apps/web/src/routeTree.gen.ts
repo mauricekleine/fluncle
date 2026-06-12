@@ -43,6 +43,8 @@ import { Route as ApiAdminSubmissionsSubmissionIdApproveRouteImport } from './ro
 import { Route as ApiAdminSpotifyAuthStartRouteImport } from './routes/api/admin/spotify/auth/start'
 import { Route as ApiAdminSpotifyAuthLoginRouteImport } from './routes/api/admin/spotify/auth/login'
 import { Route as ApiAdminSpotifyAuthCallbackRouteImport } from './routes/api/admin/spotify/auth/callback'
+import { Route as ApiAdminTracksTrackIdVideoUploadsRouteImport } from './routes/api/admin/tracks.$trackId.video.uploads'
+import { Route as ApiAdminTracksTrackIdVideoFinalizeRouteImport } from './routes/api/admin/tracks.$trackId.video.finalize'
 import { Route as ApiAdminTracksTrackIdSocialPlatformRouteImport } from './routes/api/admin/tracks.$trackId.social.$platform'
 import { Route as ApiAdminTracksTrackIdSocialPlatformDraftRouteImport } from './routes/api/admin/tracks.$trackId.social.$platform.draft'
 
@@ -225,6 +227,18 @@ const ApiAdminSpotifyAuthCallbackRoute =
     path: '/api/admin/spotify/auth/callback',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiAdminTracksTrackIdVideoUploadsRoute =
+  ApiAdminTracksTrackIdVideoUploadsRouteImport.update({
+    id: '/uploads',
+    path: '/uploads',
+    getParentRoute: () => ApiAdminTracksTrackIdVideoRoute,
+  } as any)
+const ApiAdminTracksTrackIdVideoFinalizeRoute =
+  ApiAdminTracksTrackIdVideoFinalizeRouteImport.update({
+    id: '/finalize',
+    path: '/finalize',
+    getParentRoute: () => ApiAdminTracksTrackIdVideoRoute,
+  } as any)
 const ApiAdminTracksTrackIdSocialPlatformRoute =
   ApiAdminTracksTrackIdSocialPlatformRouteImport.update({
     id: '/$platform',
@@ -272,8 +286,10 @@ export interface FileRoutesByFullPath {
   '/api/admin/submissions/$submissionId/reject': typeof ApiAdminSubmissionsSubmissionIdRejectRoute
   '/api/admin/tracks/$trackId/preview-archive': typeof ApiAdminTracksTrackIdPreviewArchiveRoute
   '/api/admin/tracks/$trackId/social': typeof ApiAdminTracksTrackIdSocialRouteWithChildren
-  '/api/admin/tracks/$trackId/video': typeof ApiAdminTracksTrackIdVideoRoute
+  '/api/admin/tracks/$trackId/video': typeof ApiAdminTracksTrackIdVideoRouteWithChildren
   '/api/admin/tracks/$trackId/social/$platform': typeof ApiAdminTracksTrackIdSocialPlatformRouteWithChildren
+  '/api/admin/tracks/$trackId/video/finalize': typeof ApiAdminTracksTrackIdVideoFinalizeRoute
+  '/api/admin/tracks/$trackId/video/uploads': typeof ApiAdminTracksTrackIdVideoUploadsRoute
   '/api/admin/tracks/$trackId/social/$platform/draft': typeof ApiAdminTracksTrackIdSocialPlatformDraftRoute
 }
 export interface FileRoutesByTo {
@@ -310,8 +326,10 @@ export interface FileRoutesByTo {
   '/api/admin/submissions/$submissionId/reject': typeof ApiAdminSubmissionsSubmissionIdRejectRoute
   '/api/admin/tracks/$trackId/preview-archive': typeof ApiAdminTracksTrackIdPreviewArchiveRoute
   '/api/admin/tracks/$trackId/social': typeof ApiAdminTracksTrackIdSocialRouteWithChildren
-  '/api/admin/tracks/$trackId/video': typeof ApiAdminTracksTrackIdVideoRoute
+  '/api/admin/tracks/$trackId/video': typeof ApiAdminTracksTrackIdVideoRouteWithChildren
   '/api/admin/tracks/$trackId/social/$platform': typeof ApiAdminTracksTrackIdSocialPlatformRouteWithChildren
+  '/api/admin/tracks/$trackId/video/finalize': typeof ApiAdminTracksTrackIdVideoFinalizeRoute
+  '/api/admin/tracks/$trackId/video/uploads': typeof ApiAdminTracksTrackIdVideoUploadsRoute
   '/api/admin/tracks/$trackId/social/$platform/draft': typeof ApiAdminTracksTrackIdSocialPlatformDraftRoute
 }
 export interface FileRoutesById {
@@ -349,8 +367,10 @@ export interface FileRoutesById {
   '/api/admin/submissions/$submissionId/reject': typeof ApiAdminSubmissionsSubmissionIdRejectRoute
   '/api/admin/tracks/$trackId/preview-archive': typeof ApiAdminTracksTrackIdPreviewArchiveRoute
   '/api/admin/tracks/$trackId/social': typeof ApiAdminTracksTrackIdSocialRouteWithChildren
-  '/api/admin/tracks/$trackId/video': typeof ApiAdminTracksTrackIdVideoRoute
+  '/api/admin/tracks/$trackId/video': typeof ApiAdminTracksTrackIdVideoRouteWithChildren
   '/api/admin/tracks/$trackId/social/$platform': typeof ApiAdminTracksTrackIdSocialPlatformRouteWithChildren
+  '/api/admin/tracks/$trackId/video/finalize': typeof ApiAdminTracksTrackIdVideoFinalizeRoute
+  '/api/admin/tracks/$trackId/video/uploads': typeof ApiAdminTracksTrackIdVideoUploadsRoute
   '/api/admin/tracks/$trackId/social/$platform/draft': typeof ApiAdminTracksTrackIdSocialPlatformDraftRoute
 }
 export interface FileRouteTypes {
@@ -391,6 +411,8 @@ export interface FileRouteTypes {
     | '/api/admin/tracks/$trackId/social'
     | '/api/admin/tracks/$trackId/video'
     | '/api/admin/tracks/$trackId/social/$platform'
+    | '/api/admin/tracks/$trackId/video/finalize'
+    | '/api/admin/tracks/$trackId/video/uploads'
     | '/api/admin/tracks/$trackId/social/$platform/draft'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -429,6 +451,8 @@ export interface FileRouteTypes {
     | '/api/admin/tracks/$trackId/social'
     | '/api/admin/tracks/$trackId/video'
     | '/api/admin/tracks/$trackId/social/$platform'
+    | '/api/admin/tracks/$trackId/video/finalize'
+    | '/api/admin/tracks/$trackId/video/uploads'
     | '/api/admin/tracks/$trackId/social/$platform/draft'
   id:
     | '__root__'
@@ -467,6 +491,8 @@ export interface FileRouteTypes {
     | '/api/admin/tracks/$trackId/social'
     | '/api/admin/tracks/$trackId/video'
     | '/api/admin/tracks/$trackId/social/$platform'
+    | '/api/admin/tracks/$trackId/video/finalize'
+    | '/api/admin/tracks/$trackId/video/uploads'
     | '/api/admin/tracks/$trackId/social/$platform/draft'
   fileRoutesById: FileRoutesById
 }
@@ -738,6 +764,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminSpotifyAuthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/admin/tracks/$trackId/video/uploads': {
+      id: '/api/admin/tracks/$trackId/video/uploads'
+      path: '/uploads'
+      fullPath: '/api/admin/tracks/$trackId/video/uploads'
+      preLoaderRoute: typeof ApiAdminTracksTrackIdVideoUploadsRouteImport
+      parentRoute: typeof ApiAdminTracksTrackIdVideoRoute
+    }
+    '/api/admin/tracks/$trackId/video/finalize': {
+      id: '/api/admin/tracks/$trackId/video/finalize'
+      path: '/finalize'
+      fullPath: '/api/admin/tracks/$trackId/video/finalize'
+      preLoaderRoute: typeof ApiAdminTracksTrackIdVideoFinalizeRouteImport
+      parentRoute: typeof ApiAdminTracksTrackIdVideoRoute
+    }
     '/api/admin/tracks/$trackId/social/$platform': {
       id: '/api/admin/tracks/$trackId/social/$platform'
       path: '/$platform'
@@ -829,10 +869,28 @@ const ApiAdminTracksTrackIdSocialRouteWithChildren =
     ApiAdminTracksTrackIdSocialRouteChildren,
   )
 
+interface ApiAdminTracksTrackIdVideoRouteChildren {
+  ApiAdminTracksTrackIdVideoFinalizeRoute: typeof ApiAdminTracksTrackIdVideoFinalizeRoute
+  ApiAdminTracksTrackIdVideoUploadsRoute: typeof ApiAdminTracksTrackIdVideoUploadsRoute
+}
+
+const ApiAdminTracksTrackIdVideoRouteChildren: ApiAdminTracksTrackIdVideoRouteChildren =
+  {
+    ApiAdminTracksTrackIdVideoFinalizeRoute:
+      ApiAdminTracksTrackIdVideoFinalizeRoute,
+    ApiAdminTracksTrackIdVideoUploadsRoute:
+      ApiAdminTracksTrackIdVideoUploadsRoute,
+  }
+
+const ApiAdminTracksTrackIdVideoRouteWithChildren =
+  ApiAdminTracksTrackIdVideoRoute._addFileChildren(
+    ApiAdminTracksTrackIdVideoRouteChildren,
+  )
+
 interface ApiAdminTracksTrackIdRouteChildren {
   ApiAdminTracksTrackIdPreviewArchiveRoute: typeof ApiAdminTracksTrackIdPreviewArchiveRoute
   ApiAdminTracksTrackIdSocialRoute: typeof ApiAdminTracksTrackIdSocialRouteWithChildren
-  ApiAdminTracksTrackIdVideoRoute: typeof ApiAdminTracksTrackIdVideoRoute
+  ApiAdminTracksTrackIdVideoRoute: typeof ApiAdminTracksTrackIdVideoRouteWithChildren
 }
 
 const ApiAdminTracksTrackIdRouteChildren: ApiAdminTracksTrackIdRouteChildren = {
@@ -840,7 +898,7 @@ const ApiAdminTracksTrackIdRouteChildren: ApiAdminTracksTrackIdRouteChildren = {
     ApiAdminTracksTrackIdPreviewArchiveRoute,
   ApiAdminTracksTrackIdSocialRoute:
     ApiAdminTracksTrackIdSocialRouteWithChildren,
-  ApiAdminTracksTrackIdVideoRoute: ApiAdminTracksTrackIdVideoRoute,
+  ApiAdminTracksTrackIdVideoRoute: ApiAdminTracksTrackIdVideoRouteWithChildren,
 }
 
 const ApiAdminTracksTrackIdRouteWithChildren =

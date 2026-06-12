@@ -9,6 +9,13 @@ const envKeys = [
   "LOOPS_TRANSACTIONAL_ID",
   "POSTIZ_API_KEY",
   "POSTIZ_API_URL",
+  // R2 S3-API credentials for presigned direct-to-bucket uploads (the video
+  // bundle bypasses the Worker body limit). The Worker owns these; the CLI only
+  // ever holds the admin token + the short-lived presigned URLs they sign.
+  "R2_ACCESS_KEY_ID",
+  "R2_SECRET_ACCESS_KEY",
+  // Non-secret: the Cloudflare account id, wired as a plain var in wrangler.jsonc.
+  "R2_ACCOUNT_ID",
   "SPOTIFY_CLIENT_ID",
   "SPOTIFY_CLIENT_SECRET",
   "SPOTIFY_REDIRECT_URI",
