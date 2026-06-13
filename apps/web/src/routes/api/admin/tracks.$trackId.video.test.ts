@@ -111,7 +111,7 @@ describe("POST .../video/uploads (presign)", () => {
 });
 
 describe("POST .../video/finalize", () => {
-  it("sets video_url to the footage cut and stores the vehicle + model", async () => {
+  it("sets video_url to the footage cut and stores the vehicle + model + reasoning", async () => {
     getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
     updateTrack.mockResolvedValueOnce({ fields: [], trackId: TRACK.trackId });
 
@@ -121,6 +121,7 @@ describe("POST .../video/finalize", () => {
     const response = await POST({
       request: adminPost("https://www.fluncle.com/api/admin/tracks/004.7.2I/video/finalize", {
         videoModel: "anthropic/claude-sonnet-4-5",
+        videoModelReasoning: "medium",
         videoVehicle: "submarine",
       }),
     });
@@ -132,12 +133,13 @@ describe("POST .../video/finalize", () => {
 
     expect(updateTrack).toHaveBeenCalledWith(TRACK.trackId, {
       videoModel: "anthropic/claude-sonnet-4-5",
+      videoModelReasoning: "medium",
       videoUrl: "https://found.fluncle.com/004.7.2I/footage.mp4",
       videoVehicle: "submarine",
     });
   });
 
-  it("defaults the model to anthropic/claude-opus-4-8 when absent", async () => {
+  it("defaults the model to anthropic/claude-opus-4-8 and reasoning to high when absent", async () => {
     getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
     updateTrack.mockResolvedValueOnce({ fields: [], trackId: TRACK.trackId });
 
@@ -154,6 +156,7 @@ describe("POST .../video/finalize", () => {
 
     expect(updateTrack).toHaveBeenCalledWith(TRACK.trackId, {
       videoModel: "anthropic/claude-opus-4-8",
+      videoModelReasoning: "high",
       videoUrl: "https://found.fluncle.com/004.7.2I/footage.mp4",
       videoVehicle: "submarine",
     });

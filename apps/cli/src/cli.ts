@@ -62,6 +62,7 @@ type TrackVideoOptions = {
   note?: string;
   poster?: string;
   props?: string;
+  reasoning?: string;
   render?: string;
 };
 
@@ -319,6 +320,7 @@ function addAdminCommands(program: Command): void {
     .option("--note <file>", "Note file")
     .option("--poster <file>", "Poster image")
     .option("--props <file>", "Render props JSON")
+    .option("--reasoning <level>", "Authoring model reasoning effort (e.g. high)")
     .option("--render <file>", "Render metadata JSON")
     .allowExcessArguments()
     .action(async (idOrLogId: string | undefined, options: TrackVideoOptions) => {
@@ -544,6 +546,7 @@ async function runTrackVideo(
     note: resolveFile(options.note, "note.txt"),
     poster: resolveFile(options.poster, "poster.jpg"),
     props: resolveFile(options.props, "props.json"),
+    reasoning: options.reasoning,
     render: resolveFile(options.render, "render.json"),
   };
 

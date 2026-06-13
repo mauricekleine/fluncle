@@ -49,6 +49,11 @@ export const tracks = sqliteTable("tracks", {
   // (e.g. "anthropic/claude-opus-4-8"). Set when the video is uploaded; surfaced
   // in /api/tracks alongside the vehicle. Defaults so existing rows backfill.
   videoModel: text("video_model").default("anthropic/claude-opus-4-8"),
+  // The reasoning/thinking effort the authoring model ran at (e.g. "high",
+  // "medium", "low"). Set when the video is uploaded; surfaced in /api/tracks so
+  // we can compare model × thinking level. Defaults to "high" — the existing
+  // videos were authored at high reasoning, so existing rows backfill.
+  videoModelReasoning: text("video_model_reasoning").default("high"),
   videoUrl: text("video_url"),
   // The travelling vehicle of the track's video (e.g. "voronoi cellular",
   // "caustic web"). Set when the video is uploaded; surfaced in /api/tracks so

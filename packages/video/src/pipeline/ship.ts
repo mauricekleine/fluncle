@@ -27,7 +27,7 @@ const PACKAGE_ROOT = path.resolve(import.meta.dirname, "../..");
 const input = process.argv[2];
 if (!input) {
   console.error(
-    "usage: bun src/pipeline/ship.ts <trackId|log-id> [--vehicle <tag>] [--model <provider/model>]",
+    "usage: bun src/pipeline/ship.ts <trackId|log-id> [--vehicle <tag>] [--model <provider/model>] [--reasoning <level>]",
   );
   process.exit(1);
 }
@@ -46,6 +46,14 @@ const DEFAULT_VIDEO_MODEL = "anthropic/claude-opus-4-8";
 const modelFlagIndex = process.argv.indexOf("--model");
 const modelArg =
   modelFlagIndex >= 0 ? process.argv[modelFlagIndex + 1]?.trim() || undefined : undefined;
+
+// The reasoning/thinking effort the authoring model ran at (e.g. "high"), written
+// into render.json so the upload step records it alongside the model. Falls back
+// to any `reasoning` already in the render manifest, then to the default.
+const DEFAULT_VIDEO_REASONING = "high";
+const reasoningFlagIndex = process.argv.indexOf("--reasoning");
+const reasoningArg =
+  reasoningFlagIndex >= 0 ? process.argv[reasoningFlagIndex + 1]?.trim() || undefined : undefined;
 
 const log = (message: string) => console.error(`[ship] ${message}`);
 
@@ -152,6 +160,7 @@ let renderManifest: {
   compositionSource?: string;
   model?: string;
   props?: string;
+  reasoning?: string;
   vehicle?: string;
 } = {};
 
@@ -190,6 +199,9 @@ writeFileSync(
       // the track's video_model (surfaced in /api/tracks alongside the vehicle).
       model: modelArg ?? renderManifest.model ?? DEFAULT_VIDEO_MODEL,
       props: existsSync(propsOutPath) ? "props.json" : null,
+      // The authoring model's reasoning effort: the upload endpoint reads this and
+      // stores it as the track's video_model_reasoning (surfaced in /api/tracks).
+      reasoning: reasoningArg ?? renderManifest.reasoning ?? DEFAULT_VIDEO_REASONING,
       trackId: track.trackId,
       // The diversity-ledger entry: the upload endpoint reads this and stores it
       // as the track's video_vehicle (surfaced in /api/tracks for the next agent).

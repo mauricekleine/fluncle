@@ -27,6 +27,8 @@ export type TrackUpdate = {
   note?: string;
   /** The AI model that authored the video, in <provider>/<model> notation. */
   videoModel?: string;
+  /** The reasoning/thinking effort the authoring model ran at (e.g. "high"). */
+  videoModelReasoning?: string;
   videoUrl?: string;
   /** The video's travelling vehicle (diversity ledger; surfaced in /api/tracks). */
   videoVehicle?: string;
@@ -71,6 +73,7 @@ export async function updateTrack(
     update.note !== undefined ||
     update.videoVehicle !== undefined ||
     update.videoModel !== undefined ||
+    update.videoModelReasoning !== undefined ||
     update.isrc !== undefined ||
     update.logId !== undefined ||
     update.vibeX !== undefined ||
@@ -108,6 +111,11 @@ export async function updateTrack(
   if (update.videoModel !== undefined) {
     sets.push("video_model = ?");
     args.push(update.videoModel);
+  }
+
+  if (update.videoModelReasoning !== undefined) {
+    sets.push("video_model_reasoning = ?");
+    args.push(update.videoModelReasoning);
   }
 
   if (update.enrichmentStatus !== undefined) {

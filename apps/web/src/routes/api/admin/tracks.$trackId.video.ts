@@ -8,6 +8,7 @@ import { updateTrack } from "../../../lib/server/track-update";
 import {
   VIDEO_ARTIFACTS,
   modelFromRenderJson,
+  reasoningFromRenderJson,
   vehicleFromRenderJson,
 } from "../../../lib/server/video-bundle";
 
@@ -55,6 +56,7 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/video")({
           const stored: Record<string, string> = {};
           let videoVehicle: string | undefined;
           let videoModel: string | undefined;
+          let videoModelReasoning: string | undefined;
 
           for (const artifact of VIDEO_ARTIFACTS) {
             const value = form.get(artifact.field);
@@ -74,6 +76,7 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/video")({
               const renderJson = new TextDecoder().decode(bytes);
               videoVehicle = vehicleFromRenderJson(renderJson);
               videoModel = modelFromRenderJson(renderJson);
+              videoModelReasoning = reasoningFromRenderJson(renderJson);
             }
           }
 
@@ -83,9 +86,10 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/video")({
 
           // The footage (with-audio) cut is the canonical web video; the vehicle
           // (when present) joins it as the diversity-ledger entry, and the
-          // authoring model defaults when render.json omits it.
+          // authoring model + reasoning default when render.json omits them.
           await updateTrack(track.trackId, {
             videoModel: videoModel ?? "anthropic/claude-opus-4-8",
+            videoModelReasoning: videoModelReasoning ?? "high",
             videoUrl: stored.footage,
             ...(videoVehicle ? { videoVehicle } : {}),
           });

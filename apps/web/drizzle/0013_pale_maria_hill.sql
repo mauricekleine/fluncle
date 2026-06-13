@@ -1,0 +1,1 @@
+ALTER TABLE `tracks` ADD `video_model_reasoning` text DEFAULT 'high';
