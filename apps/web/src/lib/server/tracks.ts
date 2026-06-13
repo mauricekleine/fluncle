@@ -33,6 +33,8 @@ export type TrackListItem = {
   updatedAt?: string;
   /** The AI model that authored the video, in <provider>/<model> notation. */
   videoModel?: string;
+  /** The reasoning/thinking effort the authoring model ran at (e.g. "high"). */
+  videoModelReasoning?: string;
   videoUrl?: string;
   /** The video's travelling vehicle — the diversity ledger for the video agent. */
   videoVehicle?: string;
@@ -70,6 +72,7 @@ type TrackRow = {
   track_id: string;
   updated_at: string | null;
   video_model: string | null;
+  video_model_reasoning: string | null;
   video_url: string | null;
   video_vehicle: string | null;
   vibe_x: number | null;
@@ -81,7 +84,7 @@ type TrackRow = {
 // Columns exposed to clients (features_json is internal training data, omitted).
 const TRACK_SELECT = `track_id, spotify_url, title, album, album_image_url, artists_json,
   bpm, duration_ms, enrichment_status, isrc, key, label, log_id, popularity,
-  preview_url, release_date, video_url, video_vehicle, video_model, note, added_at,
+  preview_url, release_date, video_url, video_vehicle, video_model, video_model_reasoning, note, added_at,
   updated_at, vibe_x, vibe_y, added_to_spotify, posted_to_telegram,
   (select url from social_posts
      where track_id = tracks.track_id and platform = 'tiktok' and status = 'published'
@@ -115,6 +118,7 @@ function toTrackListItem(row: TrackRow): TrackListItem {
     vibeX: row.vibe_x ?? undefined,
     vibeY: row.vibe_y ?? undefined,
     videoModel: row.video_model ?? undefined,
+    videoModelReasoning: row.video_model_reasoning ?? undefined,
     videoUrl: row.video_url ?? undefined,
     videoVehicle: row.video_vehicle ?? undefined,
   };

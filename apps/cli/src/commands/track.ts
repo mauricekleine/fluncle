@@ -54,12 +54,17 @@ export type TrackVideoOptions = {
   note?: string;
   poster?: string;
   props?: string;
+  reasoning?: string;
   render?: string;
 };
 
 // The authoring AI model recorded for a video, in <provider>/<model> notation.
 // The default when neither --model nor render.json supplies one.
 const DEFAULT_VIDEO_MODEL = "anthropic/claude-opus-4-8";
+
+// The reasoning/thinking effort recorded for a video (e.g. "high"). The default
+// when neither --reasoning nor render.json supplies one.
+const DEFAULT_VIDEO_REASONING = "high";
 
 export type TrackVideoResult = {
   logId: string;
@@ -160,9 +165,13 @@ export async function trackVideoCommand(
     files.model?.trim().slice(0, 120) ||
     (files.render ? await readModel(files.render) : undefined) ||
     DEFAULT_VIDEO_MODEL;
+  const videoModelReasoning =
+    files.reasoning?.trim().slice(0, 120) ||
+    (files.render ? await readReasoning(files.render) : undefined) ||
+    DEFAULT_VIDEO_REASONING;
   const finalize = await adminApiPost<FinalizeResponse>(
     `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/video/finalize`,
-    { videoModel, ...(videoVehicle ? { videoVehicle } : {}) },
+    { videoModel, videoModelReasoning, ...(videoVehicle ? { videoVehicle } : {}) },
   );
 
   return { logId: finalize.logId, ok: true, trackId: finalize.trackId, urls };
@@ -192,6 +201,23 @@ async function readModel(renderPath: string): Promise<string | undefined> {
 
     if (typeof manifest.model === "string" && manifest.model.trim()) {
       return manifest.model.trim().slice(0, 120);
+    }
+  } catch {
+    // Loose manifest; ignore.
+  }
+
+  return undefined;
+}
+
+// Reads the authoring model's reasoning effort from the bundle's render.json. A
+// missing or unparseable value just leaves it empty (the caller defaults), never
+// fails.
+async function readReasoning(renderPath: string): Promise<string | undefined> {
+  try {
+    const manifest = (await Bun.file(renderPath).json()) as { reasoning?: unknown };
+
+    if (typeof manifest.reasoning === "string" && manifest.reasoning.trim()) {
+      return manifest.reasoning.trim().slice(0, 120);
     }
   } catch {
     // Loose manifest; ignore.

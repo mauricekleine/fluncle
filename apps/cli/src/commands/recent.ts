@@ -20,6 +20,7 @@ export type RecentTrack = {
   releaseDate?: string;
   enrichmentStatus?: string;
   videoModel?: string;
+  videoModelReasoning?: string;
   videoUrl?: string;
   videoVehicle?: string;
   addedToSpotify: boolean;
@@ -63,6 +64,7 @@ export async function recentCommand(limit: number): Promise<RecentTrack[]> {
       title: track.title,
       trackId: track.trackId,
       videoModel: track.videoModel,
+      videoModelReasoning: track.videoModelReasoning,
       videoUrl: track.videoUrl,
       videoVehicle: track.videoVehicle,
     };

@@ -58,3 +58,21 @@ export function modelFromRenderJson(raw: string): string | undefined {
 
   return undefined;
 }
+
+// The reasoning/thinking effort the authoring model ran at, read from render.json
+// (ship writes it from `--reasoning`), e.g. "high". Stored on the track alongside
+// the model. A missing/unparseable value just leaves the field empty (the caller
+// defaults).
+export function reasoningFromRenderJson(raw: string): string | undefined {
+  try {
+    const manifest = JSON.parse(raw) as { reasoning?: unknown };
+
+    if (typeof manifest.reasoning === "string" && manifest.reasoning.trim()) {
+      return manifest.reasoning.trim().slice(0, 120);
+    }
+  } catch {
+    // render.json is a loose manifest; never fail the upload on a bad reasoning.
+  }
+
+  return undefined;
+}

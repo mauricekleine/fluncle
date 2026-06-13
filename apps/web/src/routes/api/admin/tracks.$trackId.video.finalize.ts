@@ -42,7 +42,7 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/video/finalize"
           }
 
           const body = (await request.json().catch(() => undefined)) as
-            | { videoVehicle?: unknown; videoModel?: unknown }
+            | { videoVehicle?: unknown; videoModel?: unknown; videoModelReasoning?: unknown }
             | undefined;
           const videoVehicle =
             typeof body?.videoVehicle === "string" && body.videoVehicle.trim()
@@ -52,11 +52,16 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/video/finalize"
             typeof body?.videoModel === "string" && body.videoModel.trim()
               ? body.videoModel.trim().slice(0, 120)
               : "anthropic/claude-opus-4-8";
+          const videoModelReasoning =
+            typeof body?.videoModelReasoning === "string" && body.videoModelReasoning.trim()
+              ? body.videoModelReasoning.trim().slice(0, 120)
+              : "high";
 
           const videoUrl = `${FOUND_BASE}/${track.logId}/footage.mp4`;
 
           await updateTrack(track.trackId, {
             videoModel,
+            videoModelReasoning,
             videoUrl,
             ...(videoVehicle ? { videoVehicle } : {}),
           });
