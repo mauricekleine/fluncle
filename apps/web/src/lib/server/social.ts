@@ -150,28 +150,36 @@ export async function updateSocialStatus(
   const publishedAt = update.status === "published" ? now : null;
   const db = await getDb();
 
-  const result = await db.execute({
+  // Upsert: the operator may record a post that was published manually (or
+  // pushed from another environment), so a prior draft row isn't guaranteed.
+  await db.execute({
     args: [
+      crypto.randomUUID(),
+      trackId,
+      platform,
       update.status,
       update.url ?? null,
       update.scheduledFor ?? null,
       publishedAt,
       now,
-      trackId,
-      platform,
+      now,
+      update.status,
+      update.url ?? null,
+      update.scheduledFor ?? null,
+      publishedAt,
+      now,
     ],
-    sql: `update social_posts set
+    sql: `insert into social_posts (id, track_id, platform, status, url, scheduled_for, published_at, created_at, updated_at)
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          on conflict(track_id, platform) do update set
             status = ?,
-            url = coalesce(?, url),
-            scheduled_for = coalesce(?, scheduled_for),
-            published_at = coalesce(?, published_at),
-            updated_at = ?
-          where track_id = ? and platform = ?`,
+            url = coalesce(?, social_posts.url),
+            scheduled_for = coalesce(?, social_posts.scheduled_for),
+            published_at = coalesce(?, social_posts.published_at),
+            updated_at = ?`,
   });
 
-  if (result.rowsAffected > 0) {
-    await touchTrack(trackId, now);
-  }
+  await touchTrack(trackId, now);
 
-  return result.rowsAffected > 0;
+  return true;
 }
