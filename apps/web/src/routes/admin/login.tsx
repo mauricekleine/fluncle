@@ -1,5 +1,6 @@
-import { SpotifyLogoIcon } from "@phosphor-icons/react";
 import { createFileRoute } from "@tanstack/react-router";
+import { siSpotify } from "simple-icons";
+import { BrandIcon } from "@/components/brand-icon";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -39,7 +40,7 @@ function AdminLoginPage() {
             render={<a href="/api/admin/spotify/auth/login" />}
             size="lg"
           >
-            <SpotifyLogoIcon aria-hidden="true" weight="fill" />
+            <BrandIcon icon={siSpotify} />
             Log in with Spotify
           </Button>
         </CardContent>

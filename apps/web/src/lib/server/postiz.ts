@@ -1,18 +1,18 @@
-// Postiz public-API adapter — pushes a TikTok DRAFT for a track's video.
+// Postiz public-API adapter — pushes a track's video to a connected channel.
 //
-// Flow (per Postiz public API): resolve the connected TikTok integration id →
-// register the video with Postiz via upload-from-url (Postiz pulls our public R2
-// URL) → SEND it (post type "now") with content_posting_method UPLOAD + SELF_ONLY
-// so it lands in the TikTok app inbox as a private draft for the operator to add
-// the official sound and publish manually. (Post type "draft" would keep it in
-// Postiz and send nothing — it would never reach TikTok.) Returns the Postiz post
-// id (stored as social_posts.external_id).
+// Three flows, one shape: resolve the connected integration id → register the
+// media with Postiz via upload-from-url (Postiz pulls our public R2 URL) → POST
+// the post with type "now" and per-platform settings.
 //
-// Caption caveat: TikTok's inbox/UPLOAD flow accepts the video file ONLY — the
-// `value[].content` caption does NOT transfer to the app (TikTok shows a "#Postiz"
-// placeholder). The operator pastes the caption (carried in the video bundle's
-// note.txt) in-app. Only DIRECT_POST carries a caption, but that skips the manual
-// official-sound step, so we intentionally stay on UPLOAD.
+// - TikTok: content_posting_method UPLOAD + SELF_ONLY → lands in the @fluncle app
+//   inbox as a private draft; the operator adds the official sound (licensed
+//   sounds attach only in-app) and the caption (the inbox/UPLOAD flow drops
+//   value[].content), then publishes manually. Type "draft" would keep it in
+//   Postiz and send nothing, so it would never reach TikTok.
+// - Instagram Reel & YouTube Short: the API carries caption + the video's own
+//   (baked-in) audio, and YouTube also takes a custom thumbnail, so these post
+//   DIRECTLY (no inbox, no manual finish) per the operator's choice. We push the
+//   with-audio cut, not the silent one. See docs/track-lifecycle.md (Phase 3).
 //
 // The Worker owns the Postiz key; the agent/CLI never sees it.
 
@@ -21,6 +21,9 @@ import { ApiError } from "./spotify";
 
 const DEFAULT_BASE = "https://api.postiz.com/public/v1";
 
+// YouTube enforces a 2–100 char title.
+const YT_TITLE_MAX = 100;
+
 type Integration = {
   disabled?: boolean;
   id: string;
@@ -28,6 +31,8 @@ type Integration = {
   name?: string;
   profile?: string;
 };
+
+type Media = { id: string; path: string };
 
 async function postizFetch(path: string, init: RequestInit): Promise<Response> {
   const key = await readEnv("POSTIZ_API_KEY");
@@ -40,8 +45,14 @@ async function postizFetch(path: string, init: RequestInit): Promise<Response> {
   });
 }
 
-/** The connected channel id for a platform (Postiz `identifier`, e.g. "tiktok"). */
-async function resolveIntegrationId(platform: string): Promise<string> {
+/**
+ * The connected channel id for a platform. `candidates` are the Postiz
+ * `identifier`s to accept, in priority order — a platform can surface under more
+ * than one (e.g. Instagram standalone vs. Facebook-business), so we take the
+ * first connected match. On a miss we name what *is* connected, to make a
+ * mis-set identifier obvious from the error alone.
+ */
+async function resolveIntegrationId(candidates: string[]): Promise<string> {
   const response = await postizFetch("/integrations", { method: "GET" });
 
   if (!response.ok) {
@@ -53,17 +64,27 @@ async function resolveIntegrationId(platform: string): Promise<string> {
   }
 
   const list = (await response.json()) as Integration[];
-  const match = list.find((item) => item.identifier === platform && !item.disabled);
+  const live = list.filter((item) => !item.disabled);
 
-  if (!match) {
-    throw new ApiError("no_integration", `No connected ${platform} channel in Postiz`, 400);
+  for (const candidate of candidates) {
+    const match = live.find((item) => item.identifier === candidate);
+
+    if (match) {
+      return match.id;
+    }
   }
 
-  return match.id;
+  const connected = live.map((item) => item.identifier).join(", ") || "none";
+
+  throw new ApiError(
+    "no_integration",
+    `No connected ${candidates[0]} channel in Postiz (looked for ${candidates.join("/")}; connected: ${connected})`,
+    400,
+  );
 }
 
-/** Register a public HTTPS video URL with Postiz (it pulls it). Returns the media ref. */
-async function uploadFromUrl(url: string): Promise<{ id: string; path: string }> {
+/** Register a public HTTPS media URL with Postiz (it pulls it). Returns the ref. */
+async function uploadFromUrl(url: string): Promise<Media> {
   const response = await postizFetch("/upload-from-url", {
     body: JSON.stringify({ url }),
     headers: { "Content-Type": "application/json" },
@@ -74,43 +95,28 @@ async function uploadFromUrl(url: string): Promise<{ id: string; path: string }>
     throw new ApiError("postiz_upload", `Postiz upload-from-url failed (${response.status})`, 502);
   }
 
-  const media = (await response.json()) as { id: string; path: string };
+  const media = (await response.json()) as Media;
 
   return { id: media.id, path: media.path };
 }
 
-/** Push a TikTok draft (video to the app inbox). Returns the Postiz post id. */
-export async function pushTikTokDraft(input: {
-  caption: string;
-  videoUrl: string;
+/** Create a Postiz post. `type: "now"` sends it; the settings decide the platform. */
+async function createPost(input: {
+  content: string;
+  integrationId: string;
+  media: Media;
+  settings: Record<string, unknown>;
 }): Promise<{ postId: string }> {
-  const integrationId = await resolveIntegrationId("tiktok");
-  const media = await uploadFromUrl(input.videoUrl);
-
   const body = {
-    // "now" SENDS the post to TikTok immediately; paired with content_posting_method
-    // "UPLOAD" below, "send" means "deposit in the TikTok app inbox as a SELF_ONLY
-    // draft" (never a public post — that's DIRECT_POST). type "draft" would keep it
-    // in Postiz and send nothing, so it would never reach the TikTok app.
-    date: new Date().toISOString(), // required by the schema; not a scheduled time
-
+    // Required by the schema; for type "now" it's not a scheduled time.
+    date: new Date().toISOString(),
     posts: [
       {
-        integration: { id: integrationId },
-        settings: {
-          __type: "tiktok",
-          autoAddMusic: "no",
-          brand_content_toggle: false,
-          brand_organic_toggle: false,
-          comment: false,
-          content_posting_method: "UPLOAD", // TikTok inbox draft, not DIRECT_POST
-          duet: false,
-          privacy_level: "SELF_ONLY",
-          stitch: false,
-          title: "",
-          video_made_with_ai: false,
-        },
-        value: [{ content: input.caption, image: [{ id: media.id, path: media.path }] }],
+        integration: { id: input.integrationId },
+        settings: input.settings,
+        value: [
+          { content: input.content, image: [{ id: input.media.id, path: input.media.path }] },
+        ],
       },
     ],
     shortLink: false,
@@ -125,7 +131,7 @@ export async function pushTikTokDraft(input: {
   });
 
   if (!response.ok) {
-    throw new ApiError("postiz_post", `Postiz draft create failed (${response.status})`, 502);
+    throw new ApiError("postiz_post", `Postiz post create failed (${response.status})`, 502);
   }
 
   const created = (await response.json()) as Array<{ integration: string; postId: string }>;
@@ -136,4 +142,64 @@ export async function pushTikTokDraft(input: {
   }
 
   return { postId };
+}
+
+/** Push a TikTok draft (video to the app inbox, SELF_ONLY). Returns the post id. */
+export async function pushTikTokDraft(input: {
+  caption: string;
+  videoUrl: string;
+}): Promise<{ postId: string }> {
+  const integrationId = await resolveIntegrationId(["tiktok"]);
+  const media = await uploadFromUrl(input.videoUrl);
+
+  return createPost({
+    content: input.caption,
+    integrationId,
+    media,
+    settings: {
+      __type: "tiktok",
+      autoAddMusic: "no",
+      brand_content_toggle: false,
+      brand_organic_toggle: false,
+      comment: false,
+      content_posting_method: "UPLOAD", // TikTok inbox draft, not DIRECT_POST
+      duet: false,
+      privacy_level: "SELF_ONLY",
+      stitch: false,
+      title: "",
+      video_made_with_ai: false,
+    },
+  });
+}
+
+// Instagram is intentionally not wired: there's no legitimate automated audio
+// path. Baking the master into a Reel gets muted/removed on a business/creator
+// account, and IG's licensed library is app-only (and locked for business), so
+// it can't mirror TikTok's add-sound-in-app flow. IG presence is a manual,
+// in-app post. See docs/track-lifecycle.md (Phase 3) and the fluncle-publish skill.
+
+/** Upload a YouTube Short directly (public), with a custom thumbnail. */
+export async function pushYouTubeShort(input: {
+  coverUrl?: string;
+  description: string;
+  title: string;
+  videoUrl: string;
+}): Promise<{ postId: string }> {
+  const integrationId = await resolveIntegrationId(["youtube"]);
+  const media = await uploadFromUrl(input.videoUrl);
+  const thumbnail = input.coverUrl ? await uploadFromUrl(input.coverUrl) : undefined;
+
+  return createPost({
+    content: input.description,
+    integrationId,
+    media,
+    settings: {
+      __type: "youtube",
+      selfDeclaredMadeForKids: "no",
+      tags: [],
+      thumbnail: thumbnail ? { id: thumbnail.id, path: thumbnail.path } : null,
+      title: input.title.slice(0, YT_TITLE_MAX),
+      type: "public",
+    },
+  });
 }

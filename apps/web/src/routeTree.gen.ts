@@ -26,6 +26,7 @@ import { Route as ApiSearchRouteImport } from './routes/api/search'
 import { Route as ApiNewsletterRouteImport } from './routes/api/newsletter'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as AdminTagRouteImport } from './routes/admin/tag'
+import { Route as AdminPostsRouteImport } from './routes/admin/posts'
 import { Route as AdminLoginRouteImport } from './routes/admin/login'
 import { Route as ApiTracksRandomRouteImport } from './routes/api/tracks/random'
 import { Route as ApiTracksIdOrLogIdRouteImport } from './routes/api/tracks.$idOrLogId'
@@ -131,6 +132,11 @@ const ApiHealthRoute = ApiHealthRouteImport.update({
 const AdminTagRoute = AdminTagRouteImport.update({
   id: '/admin/tag',
   path: '/admin/tag',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminPostsRoute = AdminPostsRouteImport.update({
+  id: '/admin/posts',
+  path: '/admin/posts',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminLoginRoute = AdminLoginRouteImport.update({
@@ -259,6 +265,7 @@ export interface FileRoutesByFullPath {
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/admin/login': typeof AdminLoginRoute
+  '/admin/posts': typeof AdminPostsRoute
   '/admin/tag': typeof AdminTagRoute
   '/api/health': typeof ApiHealthRoute
   '/api/newsletter': typeof ApiNewsletterRoute
@@ -299,6 +306,7 @@ export interface FileRoutesByTo {
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/admin/login': typeof AdminLoginRoute
+  '/admin/posts': typeof AdminPostsRoute
   '/admin/tag': typeof AdminTagRoute
   '/api/health': typeof ApiHealthRoute
   '/api/newsletter': typeof ApiNewsletterRoute
@@ -340,6 +348,7 @@ export interface FileRoutesById {
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/admin/login': typeof AdminLoginRoute
+  '/admin/posts': typeof AdminPostsRoute
   '/admin/tag': typeof AdminTagRoute
   '/api/health': typeof ApiHealthRoute
   '/api/newsletter': typeof ApiNewsletterRoute
@@ -382,6 +391,7 @@ export interface FileRouteTypes {
     | '/rss.xml'
     | '/sitemap.xml'
     | '/admin/login'
+    | '/admin/posts'
     | '/admin/tag'
     | '/api/health'
     | '/api/newsletter'
@@ -422,6 +432,7 @@ export interface FileRouteTypes {
     | '/rss.xml'
     | '/sitemap.xml'
     | '/admin/login'
+    | '/admin/posts'
     | '/admin/tag'
     | '/api/health'
     | '/api/newsletter'
@@ -462,6 +473,7 @@ export interface FileRouteTypes {
     | '/rss.xml'
     | '/sitemap.xml'
     | '/admin/login'
+    | '/admin/posts'
     | '/admin/tag'
     | '/api/health'
     | '/api/newsletter'
@@ -503,6 +515,7 @@ export interface RootRouteChildren {
   RssDotxmlRoute: typeof RssDotxmlRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   AdminLoginRoute: typeof AdminLoginRoute
+  AdminPostsRoute: typeof AdminPostsRoute
   AdminTagRoute: typeof AdminTagRoute
   ApiHealthRoute: typeof ApiHealthRoute
   ApiNewsletterRoute: typeof ApiNewsletterRoute
@@ -643,6 +656,13 @@ declare module '@tanstack/react-router' {
       path: '/admin/tag'
       fullPath: '/admin/tag'
       preLoaderRoute: typeof AdminTagRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/posts': {
+      id: '/admin/posts'
+      path: '/admin/posts'
+      fullPath: '/admin/posts'
+      preLoaderRoute: typeof AdminPostsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/login': {
@@ -925,6 +945,7 @@ const rootRouteChildren: RootRouteChildren = {
   RssDotxmlRoute: RssDotxmlRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   AdminLoginRoute: AdminLoginRoute,
+  AdminPostsRoute: AdminPostsRoute,
   AdminTagRoute: AdminTagRoute,
   ApiHealthRoute: ApiHealthRoute,
   ApiNewsletterRoute: ApiNewsletterRoute,

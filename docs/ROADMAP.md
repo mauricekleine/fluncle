@@ -10,6 +10,7 @@ Render a stack of videos so there's a schedulable backlog on TikTok: breathing r
 - Render a **diverse** batch — spread vehicles via the ledger and assign a distinct visual family per render (parallel renders converge on a shared attractor; broaden refs, don't let them).
 - Per track: `ship --vehicle` → `fluncle admin track video` (R2, incl. `cover.jpg`) → `fluncle admin track draft` (TikTok inbox).
 - The operator finishes each by hand in the app — paste caption (`note.txt`), add the official sound, set the cover, schedule. The backlog is a queue of ready inbox drafts to space out over days.
+- **Hard cap: ≤ 5 inbox drafts per 24h (TikTok-side).** TikTok rejects the 6th pending (`SELF_ONLY`) post in any rolling 24-hour window; the failure is asynchronous (the CLI + Postiz report success, TikTok bounces it downstream, surfaced only as a Postiz error). So draft at most 5/day, push the rest on following days, and re-push any that bounced after 24h. Unpublished drafts sitting in the inbox count against the budget — the operator publishing/clearing them frees it. (Full detail in the `fluncle-publish` skill.)
 
 ## Next — surface what we make, and tidy reliability
 
@@ -36,6 +37,10 @@ Shipped (PR #6): enrichment stores the exact official 30s preview used for the f
 ### TikTok audio line-up (build only when a track breaks)
 
 On standby — most relevant during the content backlog. The video is beat-matched to a Deezer/iTunes 30s preview (a fixed mid-song segment); TikTok's attachable sound is usually — not always — the song's first ~60s, trimmable to any start within the span it exposes. When the preview segment isn't reachable there and the track has no obvious section to line up by ear, the visuals pulse to beats that aren't playing. **Stage 0 (now):** by-ear line-up. **Stage 1 (on break):** full-track audio for analysis only via Apify `apidojo/youtube-scraper` (stream URL → ffmpeg → analyze → discard, never stored or served). **Stage 2:** pick the best ~20s window inside the first ~55s, render to it, write the absolute start offset into `render.json` + surface it ("start the sound at 0:42"). Audio policy: YouTube audio is internal-analysis-only; published audio uses official previews. AcousticBrainz-by-ISRC is frozen (~2022/24), so it is not a BPM fallback for new tracks.
+
+### Track the authoring model per video
+
+Store which model authored each finding's video, so over time we learn which models are particularly good at this creative work. Mirror `videoVehicle`: a `model` field in the bundle's `render.json` plus a `videoModel` track column set on upload (a `--model` flag on `fluncle admin track video`, set by the orchestrator that assigns the agent — not self-reported), surfaced on `/api/tracks` as a provenance ledger. Notation is **`<provider>/<model>`** — e.g. `anthropic/claude-opus-4-8`, `openai/gpt-5.5`, `openrouter/moonshotai/kimi-k2.6`. The current batch of 10 is entirely `anthropic/claude-opus-4-8` (backfill them). In-session render agents can run Claude tiers (Opus / Fable / Sonnet / Haiku) via the Agent model override; non-Claude models (GPT, open-weight) route through the Spinup enrichment agent or a manual pipeline. Once tagged, A/B the same track across models for the first comparison data point.
 
 ## Later — the bigger arcs
 

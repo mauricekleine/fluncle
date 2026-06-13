@@ -1,5 +1,6 @@
-import { SpotifyLogoIcon, TiktokLogoIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
+import { siSpotify, siTiktok } from "simple-icons";
+import { BrandIcon } from "@/components/brand-icon";
 import { Button } from "@/components/ui/button";
 import { formatDate } from "@/lib/format";
 import { trackMedia } from "@/lib/media";
@@ -108,7 +109,7 @@ export function StoryView({
             tabIndex={active ? 0 : -1}
             variant="outline"
           >
-            <SpotifyLogoIcon aria-hidden="true" weight="fill" />
+            <BrandIcon icon={siSpotify} />
             Listen on Spotify
           </Button>
           {track.tiktokUrl ? (
@@ -119,7 +120,7 @@ export function StoryView({
               tabIndex={active ? 0 : -1}
               variant="outline"
             >
-              <TiktokLogoIcon aria-hidden="true" weight="fill" />
+              <BrandIcon icon={siTiktok} />
               Watch on TikTok
             </Button>
           ) : undefined}

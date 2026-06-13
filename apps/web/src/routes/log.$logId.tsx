@@ -1,11 +1,8 @@
-import {
-  CaretLeftIcon,
-  CaretRightIcon,
-  SpotifyLogoIcon,
-  TiktokLogoIcon,
-} from "@phosphor-icons/react";
+import { CaretLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
 import { Link, createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
+import { siSpotify, siTiktok } from "simple-icons";
+import { BrandIcon } from "@/components/brand-icon";
 import { LogFootage } from "@/components/log/log-footage";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { Button } from "@/components/ui/button";
@@ -212,7 +209,7 @@ function LogPage() {
             render={<a href={track.spotifyUrl} rel="noreferrer" target="_blank" />}
             size="lg"
           >
-            <SpotifyLogoIcon aria-hidden="true" weight="fill" />
+            <BrandIcon icon={siSpotify} />
             Listen on Spotify
           </Button>
           {track.tiktokUrl ? (
@@ -222,7 +219,7 @@ function LogPage() {
               size="lg"
               variant="outline"
             >
-              <TiktokLogoIcon aria-hidden="true" weight="fill" />
+              <BrandIcon icon={siTiktok} />
               Watch on TikTok
             </Button>
           ) : undefined}

@@ -1,11 +1,7 @@
-import {
-  CaretRightIcon,
-  FilmStripIcon,
-  PauseIcon,
-  PlayIcon,
-  TiktokLogoIcon,
-} from "@phosphor-icons/react";
+import { CaretRightIcon, PauseIcon, PlayIcon, PlayCircleIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
+import { siTiktok } from "simple-icons";
+import { BrandIcon } from "@/components/brand-icon";
 import { TrackArtwork } from "@/components/track-artwork";
 import { Badge } from "@/components/ui/badge";
 import { formatDuration } from "@/lib/format";
@@ -108,7 +104,7 @@ export function TrackRow({ track, trackNumber }: { track: Track; trackNumber: nu
             search={{ story: storyLogId }}
             to="/"
           >
-            <FilmStripIcon aria-hidden="true" size={18} weight="bold" />
+            <PlayCircleIcon aria-hidden="true" size={18} weight="fill" />
           </Link>
         ) : null}
         {track.tiktokUrl ? (
@@ -119,7 +115,7 @@ export function TrackRow({ track, trackNumber }: { track: Track; trackNumber: nu
             rel="noreferrer"
             target="_blank"
           >
-            <TiktokLogoIcon aria-hidden="true" size={18} weight="bold" />
+            <BrandIcon className="size-3.5" icon={siTiktok} />
           </a>
         ) : null}
         <CaretRightIcon aria-hidden="true" className="track-caret" size={18} weight="bold" />

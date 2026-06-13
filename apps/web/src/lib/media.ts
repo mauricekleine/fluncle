@@ -13,6 +13,8 @@ export const FOUND_BASE = "https://found.fluncle.com";
 export type TrackMedia = {
   /** The profile-grid cover: loud centered identity. Also the OG image + video loading still. */
   coverUrl: string;
+  /** The fixed-template caption (Fluncle's voice) — what the operator pastes in-app. */
+  noteUrl: string;
   /** A late drop frame; the video element's poster. */
   posterUrl: string;
   /** The with-audio review cut (matches the stored `video_url`). */
@@ -27,6 +29,7 @@ export function trackMedia(logId: string): TrackMedia {
 
   return {
     coverUrl: `${base}/cover.jpg`,
+    noteUrl: `${base}/note.txt`,
     posterUrl: `${base}/poster.jpg`,
     silentVideoUrl: `${base}/footage-silent.mp4`,
     videoUrl: `${base}/footage.mp4`,

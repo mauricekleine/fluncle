@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/netip"
@@ -27,6 +28,7 @@ import (
 	"charm.land/wish/v2/activeterm"
 	"charm.land/wish/v2/bubbletea"
 	"charm.land/wish/v2/logging"
+	sshgalaxy "fluncle/apps/ssh/internal/galaxy"
 	"github.com/charmbracelet/ssh"
 	"github.com/oschwald/maxminddb-golang/v2"
 )
@@ -290,29 +292,82 @@ const (
 	screenConfirm      screen = "confirm"
 	screenSubscribe    screen = "subscribe"
 	screenSubscribed   screen = "subscribed"
+	screenGalaxy       screen = "galaxy"
 	screenInstall      screen = "install"
 	screenAbout        screen = "about"
 	screenMessage      screen = "message"
 )
 
+type galaxyTickMsg time.Time
+
 type model struct {
-	app      *app
-	width    int
-	height   int
-	screen   screen
-	selected int
-	tracks   []track
-	total    int
-	footer   *track
-	results  []searchResult
-	current  *track
-	pending  *searchResult
-	input    string
-	note     string
-	contact  string
-	message  string
-	loading  bool
-	err      string
+	app        *app
+	width      int
+	height     int
+	screen     screen
+	selected   int
+	tracks     []track
+	total      int
+	footer     *track
+	results    []searchResult
+	current    *track
+	detailBack screen
+	pending    *searchResult
+	input      string
+	note       string
+	contact    string
+	message    string
+	galaxy     galaxyState
+	loading    bool
+	err        string
+}
+
+type galaxyState struct {
+	boostUntil     time.Time
+	cargoOpen      bool
+	cargoRow       int
+	input          sshgalaxy.SimInput
+	lastTick       time.Time
+	logIndex       int
+	showLog        bool
+	sim            sshgalaxy.SimState
+	simAccumulator float64
+	status         string
+	statusUntil    time.Time
+	steer          float64
+	steerUntil     time.Time
+	tracks         []track
+	trail          []galaxyPoint
+}
+
+type galaxyPoint struct {
+	x float64
+	y float64
+}
+
+type galaxyCarrier struct {
+	id        string
+	collected bool
+	track     track
+	x         float64
+	y         float64
+}
+
+type galaxyCarrierSignal struct {
+	bearing  float64
+	carrier  galaxyCarrier
+	distance float64
+	index    int
+	locked   bool
+	ok       bool
+	strength int
+}
+
+type galaxyHazardSignal struct {
+	id       string
+	kind     sshgalaxy.ProjectionKind
+	distance float64
+	ok       bool
 }
 
 type track struct {
@@ -360,6 +415,11 @@ type randomMsg struct {
 	err   error
 }
 
+type galaxyTracksMsg struct {
+	tracks []track
+	err    error
+}
+
 type searchMsg struct {
 	results []searchResult
 	err     error
@@ -379,6 +439,7 @@ func newModel(app *app, width, height int) model {
 		width:  width,
 		height: height,
 		screen: screenMenu,
+		galaxy: newGalaxyState(),
 	}
 }
 
@@ -415,7 +476,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.current = &msg.track
+		m.detailBack = ""
 		m.screen = screenDetail
+	case galaxyTracksMsg:
+		if m.screen != screenGalaxy {
+			return m, nil
+		}
+		m.loading = false
+		if msg.err != nil {
+			m.err = "Receiver fallback: " + msg.err.Error()
+			return m, nil
+		}
+		m.err = ""
+		m.galaxy = m.galaxy.withTracks(msg.tracks)
 	case searchMsg:
 		m.loading = false
 		if msg.err != nil {
@@ -425,6 +498,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.results = msg.results
 		m.selected = 0
 		m.screen = screenSearch
+	case galaxyTickMsg:
+		if m.screen != screenGalaxy {
+			return m, nil
+		}
+		m.galaxy = m.galaxy.step(time.Time(msg))
+		return m, galaxyTick()
 	case submitMsg:
 		m.loading = false
 		if msg.err != nil {
@@ -460,8 +539,18 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handleMenuKey(key)
 	case screenLatest, screenSearch:
 		return m.handleListKey(key)
+	case screenGalaxy:
+		return m.handleGalaxyKey(key)
 	case screenDetail, screenInstall, screenAbout, screenMessage, screenSubscribed:
 		if key == "q" || key == "esc" || key == "backspace" || key == "b" {
+			if m.screen == screenDetail && m.detailBack != "" {
+				m.screen = m.detailBack
+				m.detailBack = ""
+				if m.screen == screenGalaxy {
+					return m, galaxyTick()
+				}
+				return m, nil
+			}
 			m.screen = screenMenu
 			m.selected = 0
 			return m, nil
@@ -486,6 +575,12 @@ func (m model) handleMenuKey(key string) (tea.Model, tea.Cmd) {
 		m.selected = wrap(m.selected+1, len(items))
 	case "enter":
 		switch items[m.selected].id {
+		case "galaxy":
+			m.screen = screenGalaxy
+			m.galaxy = newGalaxyState()
+			m.loading = true
+			m.err = ""
+			return m, tea.Batch(galaxyTick(), m.fetchGalaxyTracks())
 		case "latest":
 			m.screen = screenLatest
 			m.loading = true
@@ -539,6 +634,7 @@ func (m model) handleListKey(key string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.current = &m.tracks[m.selected]
+		m.detailBack = ""
 		m.screen = screenDetail
 	}
 
@@ -553,7 +649,7 @@ func (m model) handleInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.input = ""
 	case "backspace":
 		if len(m.input) > 0 {
-			m.input = m.input[:len(m.input)-1]
+			m.input = dropLastRune(m.input)
 		}
 	case "enter":
 		value := strings.TrimSpace(m.input)
@@ -615,6 +711,60 @@ func (m model) handleConfirmKey(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) handleGalaxyKey(key string) (tea.Model, tea.Cmd) {
+	now := time.Now()
+	if m.galaxy.showLog || m.galaxy.sim.Phase == sshgalaxy.PhaseOrbiting {
+		m.galaxy.showLog = false
+		sshgalaxy.DepartOrbit(&m.galaxy.sim)
+		return m, nil
+	}
+	if m.galaxy.cargoOpen {
+		switch key {
+		case "q", "esc", "backspace", "b":
+			m.galaxy.cargoOpen = false
+		case "tab", "c":
+			m.galaxy.cargoOpen = false
+		case "up", "k":
+			m.galaxy.cargoRow = wrap(m.galaxy.cargoRow-1, len(m.galaxy.recoveredCarriers()))
+		case "down", "j":
+			m.galaxy.cargoRow = wrap(m.galaxy.cargoRow+1, len(m.galaxy.recoveredCarriers()))
+		case "enter":
+			carriers := m.galaxy.recoveredCarriers()
+			if len(carriers) == 0 {
+				return m, nil
+			}
+			m.galaxy.cargoRow = clamp(m.galaxy.cargoRow, 0, len(carriers)-1)
+			track := carriers[m.galaxy.cargoRow].track
+			m.current = &track
+			m.detailBack = screenGalaxy
+			m.screen = screenDetail
+		}
+		return m, nil
+	}
+
+	switch key {
+	case "q", "esc", "backspace", "b":
+		m.screen = screenMenu
+		m.selected = 0
+	case "tab", "c":
+		m.galaxy.cargoOpen = true
+		m.galaxy.cargoRow = clamp(m.galaxy.cargoRow, 0, max(0, len(m.galaxy.recoveredCarriers())-1))
+	case "left", "a", "h":
+		m.galaxy.steer = -1
+		m.galaxy.steerUntil = now.Add(galaxyHoldWindow)
+	case "right", "d", "l":
+		m.galaxy.steer = 1
+		m.galaxy.steerUntil = now.Add(galaxyHoldWindow)
+	case "up", "w", "space":
+		m.galaxy.boostUntil = now.Add(galaxyHoldWindow)
+	case "down", "s":
+		m.galaxy.boostUntil = time.Time{}
+	case "enter":
+		m.galaxy = m.galaxy.logNearestCarrier()
+	}
+	return m, nil
+}
+
 func (m model) View() tea.View {
 	var content string
 	switch m.screen {
@@ -638,6 +788,8 @@ func (m model) View() tea.View {
 		content = m.renderSubscribe()
 	case screenSubscribed:
 		content = m.renderSubscribed()
+	case screenGalaxy:
+		content = m.renderGalaxy()
 	case screenInstall:
 		content = m.renderInstall()
 	case screenAbout:
@@ -648,6 +800,9 @@ func (m model) View() tea.View {
 
 	view := tea.NewView(pageStyle.Width(clamp(m.width-4, 48, 96)).Render(content))
 	view.AltScreen = true
+	if m.screen == screenGalaxy {
+		view.KeyboardEnhancements.ReportEventTypes = true
+	}
 	return view
 }
 
@@ -924,6 +1079,209 @@ func (m model) renderSubscribed() string {
 	return scaffold("Subscribe", "", content, help)
 }
 
+func (m model) renderGalaxy() string {
+	if m.height > 0 && m.height < 18 {
+		return statusView("Galaxy", "Scope needs more room.")
+	}
+	if m.galaxy.showLog || m.galaxy.sim.Phase == sshgalaxy.PhaseOrbiting {
+		return m.renderGalaxyLog()
+	}
+	if m.galaxy.cargoOpen {
+		return m.renderGalaxyCargo()
+	}
+
+	contentWidth := clamp(m.width-4, 48, 96) - 4 // page width minus horizontal padding
+	gridWidth := clamp(contentWidth-2, 32, 80)   // scope border adds two cells
+	telemetry := m.renderGalaxyTelemetry()
+	gridHeight := clamp(m.height-8-lipgloss.Height(telemetry), 8, 22)
+	content := []string{
+		m.renderGalaxyScope(gridWidth, gridHeight),
+		"",
+		telemetry,
+	}
+	help := helpLine("+ carrier", "a/d steer", "w/space boost", "fly to log", "c cargo")
+	return scaffold("Galaxy", "Recovered flight log · instruments only", content, help)
+}
+
+func (m model) renderGalaxyLog() string {
+	index := m.galaxy.logIndex
+	if index < 0 {
+		index = m.galaxy.sim.OrbitIndex
+	}
+	carrier, ok := m.galaxy.carrier(index)
+	if !ok {
+		return scaffold("Galaxy", "Recovered flight log", []string{readingStyle.Render("Carrier logged.")}, helpLine("any key depart"))
+	}
+
+	content := m.renderGalaxyCargoDetail(carrier.track)
+	if carrier.track.SpotifyURL != "" {
+		content = append(content, "", readingStyle.Render(terminalLink("Play back on Earth", carrier.track.SpotifyURL)))
+	}
+	content = append(content, "", labelStyle.Render("The audio didn't survive the trip out here. It's still playing back on Earth."))
+	return scaffold("Galaxy", "Recovered flight log", content, helpLine("any key depart"))
+}
+
+func (m model) renderGalaxyCargo() string {
+	carriers := m.galaxy.recoveredCarriers()
+	if len(carriers) == 0 {
+		content := []string{
+			readingStyle.Render("Cargo hold empty."),
+			labelStyle.Render("Recover a locked carrier from the scope first."),
+		}
+		help := helpLine("c scope", "q scope", "ctrl+c quit")
+		return scaffold("Cargo", "Recovered flight log", content, help)
+	}
+
+	row := clamp(m.galaxy.cargoRow, 0, len(carriers)-1)
+	visibleRows := clamp(m.height-13, 3, 8)
+	start := 0
+	if row >= visibleRows {
+		start = row - visibleRows + 1
+	}
+	end := clamp(start+visibleRows, 0, len(carriers))
+
+	content := make([]string, 0, visibleRows+6)
+	for index := start; index < end; index++ {
+		carrier := carriers[index]
+		coord := carrier.id
+		if carrier.track.LogID != "" {
+			coord = carrier.track.LogID
+		}
+		content = append(content, selectableTrackRow(index == row, coord, carrier.track.Artists, carrier.track.Title))
+	}
+
+	selected := carriers[row]
+	content = append(content, "")
+	content = append(content, m.renderGalaxyCargoDetail(selected.track)...)
+
+	help := helpLine("↑/↓ j/k move", "enter details", "c scope", "q scope")
+	return scaffold("Cargo", "Recovered flight log", content, help)
+}
+
+func (m model) renderGalaxyCargoDetail(track track) []string {
+	wrapWidth := clamp(m.width-4, 48, 96) - 4
+	lines := []string{
+		labelStyle.Render("Selected: ") + rowArtistStyle.Render(artistLine(track.Artists)) +
+			rowDashStyle.Render(" — ") +
+			rowTitleStyle.Render(track.Title),
+	}
+	if track.LogID != "" {
+		lines = append(lines, labelStyle.Render("Coordinate: ")+readingStyle.Render("fluncle://"+track.LogID))
+	}
+	if track.AddedAt != "" {
+		lines = append(lines, labelStyle.Render("Found: ")+readingStyle.Render(formatDate(track.AddedAt)))
+	}
+	if track.Label != "" {
+		lines = append(lines, labelStyle.Render("Pressed by: ")+readingStyle.Render(track.Label))
+	}
+	if len(track.Tags) > 0 {
+		lines = append(lines, labelStyle.Render("Reads as: ")+readingStyle.Width(wrapWidth).Render(strings.Join(track.Tags, ", ")))
+	}
+	return lines
+}
+
+func (m model) renderGalaxyScope(width, height int) string {
+	if width < 1 || height < 1 {
+		return ""
+	}
+
+	centerX := width / 2
+	centerY := height / 2
+	cells := m.galaxy.projectScopeCells(width, height)
+	var lines []string
+	for y := 0; y < height; y++ {
+		var row strings.Builder
+		for x := 0; x < width; x++ {
+			nx := float64(x-centerX) / float64(centerX)
+			ny := float64(y-centerY) / math.Max(1, float64(centerY))
+			radius := math.Hypot(nx, ny)
+			if radius > 1 {
+				row.WriteByte(' ')
+				continue
+			}
+			if x == centerX && y == centerY {
+				row.WriteString(galaxyShipGlyph(m.galaxy.sim.Ship.Heading))
+				continue
+			}
+			if cell, ok := cells[galaxyCellKey(x, y)]; ok {
+				row.WriteString(galaxyScopeGlyph(cell))
+				continue
+			}
+			if m.galaxy.trailAt(x, y, centerX, centerY) {
+				row.WriteString(labelStyle.Render("."))
+				continue
+			}
+			if ring := galaxyRingGlyph(radius); ring != "" {
+				row.WriteString(ring)
+				continue
+			}
+			wx, wy := m.galaxy.scopeWorldAt(x, y, centerX, centerY)
+			row.WriteString(galaxySpaceGlyph(wx, wy))
+		}
+		lines = append(lines, row.String())
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m model) renderGalaxyTelemetry() string {
+	boosting := m.galaxy.sim.Ship.Boosting || time.Now().Before(m.galaxy.boostUntil)
+	throttle := "cruise"
+	if boosting {
+		throttle = "boost"
+	}
+	if m.galaxy.sim.Phase == sshgalaxy.PhaseAdrift {
+		throttle = "adrift"
+	}
+	steer := "hold"
+	if time.Now().Before(m.galaxy.steerUntil) {
+		if m.galaxy.steer < 0 {
+			steer = "port"
+		} else if m.galaxy.steer > 0 {
+			steer = "starboard"
+		}
+	}
+	signal := m.galaxy.nearestCarrier()
+	carrierLine := labelStyle.Render("Carrier +: ") + readingStyle.Render("none")
+	targetLine := ""
+	hazardLine := labelStyle.Render("Hazard o/0: ") + readingStyle.Render("none")
+	if signal.ok {
+		status := fmt.Sprintf("%02d%% · bearing %03.0f°", signal.strength, signal.bearing)
+		if signal.locked {
+			status = "LOCK"
+		}
+		carrierLine = labelStyle.Render("Carrier +: ") + readingStyle.Render(signal.carrier.id) + labelStyle.Render(" · "+status)
+		targetLine = labelStyle.Render("Target: ") + rowArtistStyle.Render(artistLine(signal.carrier.track.Artists)) +
+			rowDashStyle.Render(" — ") +
+			rowTitleStyle.Render(signal.carrier.track.Title)
+	}
+	if hazard := m.galaxy.nearestHazard(); hazard.ok {
+		hazardLine = labelStyle.Render("Hazard o/0: ") + readingStyle.Render(hazard.id) + labelStyle.Render(" · "+string(hazard.kind))
+	}
+	logged, total := m.galaxy.loggedCount()
+	lines := []string{
+		labelStyle.Render("Heading: ") + readingStyle.Render(fmt.Sprintf("%03.0f°", normalizeDegrees(m.galaxy.sim.Ship.Heading))),
+		labelStyle.Render("Speed: ") + readingStyle.Render(fmt.Sprintf("%.1f", m.galaxy.sim.Ship.Speed)) + labelStyle.Render(" · "+throttle+" · "+steer),
+		labelStyle.Render("Fuel: ") + readingStyle.Render(fmt.Sprintf("%03.0f%%", m.galaxy.sim.Ship.Fuel)),
+		carrierLine,
+		hazardLine,
+	}
+	if targetLine != "" {
+		lines = append(lines, targetLine)
+	}
+	lines = append(lines, labelStyle.Render("Logged: ")+readingStyle.Render(fmt.Sprintf("%d/%d", logged, total)))
+	if m.loading {
+		lines = append(lines, labelStyle.Render("Receiver: ")+readingStyle.Render("syncing latest bangers"))
+	}
+	if m.err != "" {
+		lines = append(lines, labelStyle.Render("Receiver: ")+readingStyle.Render(m.err))
+	}
+	lines = append(lines, labelStyle.Render("Coordinate: ")+readingStyle.Render(fmt.Sprintf("x %.0f · y %.0f", m.galaxy.sim.Ship.X, m.galaxy.sim.Ship.Y)))
+	if status := m.galaxy.currentStatus(); status != "" {
+		lines = append(lines, labelStyle.Render("Status: ")+readingStyle.Render(status))
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (m model) renderInstall() string {
 	content := []string{
 		readingStyle.Render("Browse the latest bangers, submit tracks, and dig through Fluncle's Findings from your terminal."),
@@ -1027,6 +1385,31 @@ func (m model) fetchRandom() tea.Cmd {
 	}
 }
 
+func (m model) fetchGalaxyTracks() tea.Cmd {
+	return func() tea.Msg {
+		tracks := []track{}
+		cursor := ""
+		for {
+			path := "/api/tracks?limit=48"
+			if cursor != "" {
+				path += "&cursor=" + url.QueryEscape(cursor)
+			}
+			var response struct {
+				Tracks     []track `json:"tracks"`
+				NextCursor string  `json:"nextCursor,omitempty"`
+			}
+			if err := m.app.getJSON(path, &response); err != nil {
+				return galaxyTracksMsg{tracks: tracks, err: err}
+			}
+			tracks = append(tracks, response.Tracks...)
+			if response.NextCursor == "" {
+				return galaxyTracksMsg{tracks: tracks}
+			}
+			cursor = response.NextCursor
+		}
+	}
+}
+
 func (m model) search(query string) tea.Cmd {
 	return func() tea.Msg {
 		var response struct {
@@ -1121,6 +1504,7 @@ type menuItem struct {
 
 func menuItems() []menuItem {
 	return []menuItem{
+		{id: "galaxy", label: "Enter the Galaxy"},
 		{id: "latest", label: "Latest bangers"},
 		{id: "random", label: "Random banger"},
 		{id: "submit", label: "Submit a track"},
@@ -1214,6 +1598,432 @@ func terminalLink(label, url string) string {
 	escapedURL := strings.ReplaceAll(url, "\x1b", "")
 	escapedLabel := strings.ReplaceAll(label, "\x1b", "")
 	return "\x1b]8;;" + escapedURL + "\x1b\\" + escapedLabel + "\x1b]8;;\x1b\\"
+}
+
+const (
+	galaxyFrame       = time.Second / 15
+	galaxyHoldWindow  = 575 * time.Millisecond
+	galaxySimStep     = 1.0 / 60.0
+	galaxyTrailLength = 28
+)
+
+func newGalaxyState() galaxyState {
+	now := time.Now()
+	tracks := galaxyFallbackTracks()
+	return galaxyState{
+		lastTick: now,
+		logIndex: -1,
+		sim:      createGalaxySim(tracks),
+		tracks:   tracks,
+	}
+}
+
+func (g galaxyState) withTracks(tracks []track) galaxyState {
+	if len(tracks) == 0 {
+		return g
+	}
+	if logged, _ := g.loggedCount(); logged > 0 {
+		g.status = "receiver synced; keeping current cargo"
+		g.statusUntil = time.Now().Add(2 * time.Second)
+		return g
+	}
+	g.sim = createGalaxySim(tracks)
+	g.tracks = tracks
+	g.cargoOpen = false
+	g.cargoRow = 0
+	g.logIndex = -1
+	g.showLog = false
+	g.trail = nil
+	g.status = "receiver synced latest bangers"
+	g.statusUntil = time.Now().Add(2 * time.Second)
+	return g
+}
+
+func createGalaxySim(tracks []track) sshgalaxy.SimState {
+	return sshgalaxy.CreateSim(sshgalaxy.PlaceStars(galaxyGameTracks(tracks)), sshgalaxy.SimOptions{
+		Frontier: sshgalaxy.FrontierConfig{Asteroids: true, BlackHoles: true},
+		Seed:     uint32(time.Now().UnixNano()),
+	})
+}
+
+func galaxyFallbackTracks() []track {
+	tracks := make([]track, 0, 8)
+	for index := 1; index <= 8; index++ {
+		id := fmt.Sprintf("SIM-%02d", index)
+		tracks = append(tracks, track{
+			TrackID: id,
+			LogID:   id,
+			Title:   "Recovered carrier",
+			Artists: []string{"Fluncle receiver"},
+			AddedAt: time.Now().UTC().Format(time.RFC3339),
+		})
+	}
+	return tracks
+}
+
+func galaxyGameTracks(tracks []track) []sshgalaxy.GameTrack {
+	gameTracks := make([]sshgalaxy.GameTrack, 0, len(tracks))
+	for _, track := range tracks {
+		gameTracks = append(gameTracks, sshgalaxy.GameTrack{
+			AddedAt:    track.AddedAt,
+			Artists:    track.Artists,
+			LogID:      track.LogID,
+			SpotifyURL: track.SpotifyURL,
+			Title:      track.Title,
+			TrackID:    track.TrackID,
+		})
+	}
+	return gameTracks
+}
+
+func galaxyTick() tea.Cmd {
+	return tea.Tick(galaxyFrame, func(t time.Time) tea.Msg {
+		return galaxyTickMsg(t)
+	})
+}
+
+func (g galaxyState) step(now time.Time) galaxyState {
+	if g.lastTick.IsZero() {
+		g.lastTick = now
+		return g
+	}
+	dt := now.Sub(g.lastTick).Seconds()
+	if dt < 0 {
+		dt = 0
+	}
+	if dt > 0.2 {
+		dt = 0.2
+	}
+	g.lastTick = now
+	g.trail = append(g.trail, galaxyPoint{x: g.sim.Ship.X, y: g.sim.Ship.Y})
+	if len(g.trail) > galaxyTrailLength {
+		g.trail = g.trail[len(g.trail)-galaxyTrailLength:]
+	}
+
+	input := sshgalaxy.SimInput{}
+	if now.Before(g.steerUntil) {
+		input.Steer = g.steer
+	}
+	if now.Before(g.boostUntil) {
+		input.Boost = true
+	}
+	g.input = input
+	g.simAccumulator += dt
+	if g.simAccumulator > 0.25 {
+		g.simAccumulator = 0.25
+	}
+	for g.simAccumulator >= galaxySimStep {
+		sshgalaxy.StepSim(&g.sim, input, galaxySimStep)
+		g = g.applyGalaxyEvents(sshgalaxy.DrainEvents(&g.sim))
+		g.simAccumulator -= galaxySimStep
+	}
+	return g
+}
+
+func (g galaxyState) logNearestCarrier() galaxyState {
+	signal := g.nearestCarrier()
+	if !signal.ok {
+		g.status = "No carrier in scan range."
+		g.statusUntil = time.Now().Add(1200 * time.Millisecond)
+		return g
+	}
+	if !signal.locked {
+		g.status = fmt.Sprintf("No lock: %s bearing %03.0f.", signal.carrier.id, signal.bearing)
+		g.statusUntil = time.Now().Add(1200 * time.Millisecond)
+		return g
+	}
+	g.showLog = true
+	g.logIndex = signal.index
+	return g
+}
+
+func (g galaxyState) applyGalaxyEvents(events []sshgalaxy.SimEvent) galaxyState {
+	for _, event := range events {
+		switch event.Kind {
+		case "logged":
+			g.logIndex = event.StarIndex
+			g.showLog = true
+			g.status = "Logged " + g.carrierID(event.StarIndex) + "."
+			g.statusUntil = time.Now().Add(2500 * time.Millisecond)
+		case "refuelled":
+			g.status = "Tank full."
+			g.statusUntil = time.Now().Add(1800 * time.Millisecond)
+		case "low-fuel":
+			g.status = "Tank low."
+			g.statusUntil = time.Now().Add(1800 * time.Millisecond)
+		case "adrift":
+			g.status = "Tank dry. Adrift."
+			g.statusUntil = time.Now().Add(2200 * time.Millisecond)
+		case "towed":
+			g.status = "Recovered adrift. Towed home."
+			g.statusUntil = time.Now().Add(2200 * time.Millisecond)
+			g.showLog = false
+			g.logIndex = -1
+		case "warped":
+			g.status = "Pulled under. Flung across the galaxy."
+			g.statusUntil = time.Now().Add(2500 * time.Millisecond)
+		case "asteroid-hit":
+			g.status = "Hull hit. Fuel knocked loose."
+			g.statusUntil = time.Now().Add(2200 * time.Millisecond)
+		case "all-found":
+			g.status = "No carriers left in the sector. Home, junglist."
+			g.statusUntil = time.Now().Add(2800 * time.Millisecond)
+		case "home":
+			g.status = "Earth re-acquired. Welcome back, junglist."
+			g.statusUntil = time.Now().Add(2800 * time.Millisecond)
+		}
+	}
+	g.cargoRow = clamp(g.cargoRow, 0, max(0, len(g.recoveredCarriers())-1))
+	return g
+}
+
+func (g galaxyState) currentStatus() string {
+	if g.status == "" || time.Now().After(g.statusUntil) {
+		return ""
+	}
+	return g.status
+}
+
+func (g galaxyState) nearestCarrier() galaxyCarrierSignal {
+	best := galaxyCarrierSignal{index: -1}
+	info, ok := sshgalaxy.NearestCarrier(g.sim)
+	if !ok || info.Distance > g.sim.Config.RadarRange {
+		return best
+	}
+	carrier, carrierOK := g.carrier(info.StarIndex)
+	if !carrierOK {
+		return best
+	}
+	strength := int(math.Round(math.Max(0, math.Min(1, info.Strength)) * 99))
+	locked := info.Distance <= g.sim.Config.StarOrbitRadius || g.sim.Phase == sshgalaxy.PhaseOrbiting
+	if locked {
+		strength = 100
+	}
+	return galaxyCarrierSignal{
+		bearing:  normalizeDegrees(g.sim.Ship.Heading + info.Bearing),
+		carrier:  carrier,
+		distance: info.Distance,
+		index:    info.StarIndex,
+		locked:   locked,
+		ok:       true,
+		strength: strength,
+	}
+}
+
+func (g galaxyState) nearestHazard() galaxyHazardSignal {
+	best := galaxyHazardSignal{}
+	for _, contact := range sshgalaxy.ScopeContacts(g.sim) {
+		if !best.ok || contact.Distance < best.distance {
+			kind := sshgalaxy.ProjectionAsteroid
+			if contact.Kind == "blackhole" {
+				kind = sshgalaxy.ProjectionBlackhole
+			}
+			best = galaxyHazardSignal{
+				id:       contact.ID,
+				kind:     kind,
+				distance: contact.Distance,
+				ok:       true,
+			}
+		}
+	}
+	return best
+}
+
+func (g galaxyState) loggedCount() (int, int) {
+	return g.sim.CollectedCount, len(g.sim.Stars)
+}
+
+func (g galaxyState) recoveredCarriers() []galaxyCarrier {
+	carriers := make([]galaxyCarrier, 0, len(g.sim.Stars))
+	for index, star := range g.sim.Stars {
+		if !star.Collected {
+			continue
+		}
+		if carrier, ok := g.carrier(index); ok {
+			carriers = append(carriers, carrier)
+		}
+	}
+	return carriers
+}
+
+func (g galaxyState) carrier(index int) (galaxyCarrier, bool) {
+	if index < 0 || index >= len(g.sim.Stars) || index >= len(g.tracks) {
+		return galaxyCarrier{}, false
+	}
+	star := g.sim.Stars[index]
+	track := g.tracks[index]
+	id := strings.TrimSpace(track.LogID)
+	if id == "" {
+		id = star.LogID
+	}
+	return galaxyCarrier{
+		id:        id,
+		collected: star.Collected,
+		track:     track,
+		x:         star.X,
+		y:         star.Y,
+	}, true
+}
+
+func (g galaxyState) carrierID(index int) string {
+	if carrier, ok := g.carrier(index); ok {
+		return "fluncle://" + carrier.id
+	}
+	return "carrier"
+}
+
+func (g galaxyState) projectScopeCells(width, height int) map[string]sshgalaxy.ScopeCell {
+	projection := sshgalaxy.ProjectScope(g.sim, width, height)
+	cells := make(map[string]sshgalaxy.ScopeCell, len(projection.Cells))
+	for _, cell := range projection.Cells {
+		if cell.Kind == sshgalaxy.ProjectionShip {
+			continue
+		}
+		cells[galaxyCellKey(cell.X, cell.Y)] = cell
+	}
+	return cells
+}
+
+func (c galaxyCarrier) recoverySummary() string {
+	parts := []string{artistLine(c.track.Artists), c.track.Title}
+	summary := strings.TrimSpace(strings.Join(nonEmpty(parts), " — "))
+	if summary == "" {
+		summary = c.id
+	}
+	if c.track.LogID != "" {
+		summary += " · fluncle://" + c.track.LogID
+	}
+	return summary
+}
+
+func (g galaxyState) scopeWorldAt(x, y, centerX, centerY int) (float64, float64) {
+	cellWidth, cellHeight := g.scopeCellSize(centerX, centerY)
+	dx := float64(x-centerX) * cellWidth
+	dy := float64(y-centerY) * cellHeight
+	rightX := math.Cos(g.sim.Ship.Heading + math.Pi/2)
+	rightY := math.Sin(g.sim.Ship.Heading + math.Pi/2)
+	forwardX := math.Cos(g.sim.Ship.Heading)
+	forwardY := math.Sin(g.sim.Ship.Heading)
+	return g.sim.Ship.X + rightX*dx - forwardX*dy, g.sim.Ship.Y + rightY*dx - forwardY*dy
+}
+
+func (g galaxyState) trailAt(x, y, centerX, centerY int) bool {
+	for index, point := range g.trail {
+		if index%2 != 0 {
+			continue
+		}
+		tx, ty, ok := g.worldToScope(point.x, point.y, centerX, centerY)
+		if ok && tx == x && ty == y {
+			return true
+		}
+	}
+	return false
+}
+
+func (g galaxyState) worldToScope(x, y float64, centerX, centerY int) (int, int, bool) {
+	cellWidth, cellHeight := g.scopeCellSize(centerX, centerY)
+	dx := x - g.sim.Ship.X
+	dy := y - g.sim.Ship.Y
+	rightX := math.Cos(g.sim.Ship.Heading + math.Pi/2)
+	rightY := math.Sin(g.sim.Ship.Heading + math.Pi/2)
+	forwardX := math.Cos(g.sim.Ship.Heading)
+	forwardY := math.Sin(g.sim.Ship.Heading)
+	screenX := (dx*rightX + dy*rightY) / cellWidth
+	screenY := -(dx*forwardX + dy*forwardY) / cellHeight
+	tx := centerX + int(math.Round(screenX))
+	ty := centerY + int(math.Round(screenY))
+	nx := float64(tx-centerX) / math.Max(1, float64(centerX))
+	ny := float64(ty-centerY) / math.Max(1, float64(centerY))
+	return tx, ty, math.Hypot(nx, ny) <= 1
+}
+
+func (g galaxyState) scopeCellSize(centerX, centerY int) (float64, float64) {
+	cellWidth := g.sim.Config.RadarRange / math.Max(1, float64(centerX-1))
+	cellHeight := g.sim.Config.RadarRange / math.Max(1, float64(centerY-1))
+	return cellWidth, cellHeight
+}
+
+func galaxyCellKey(x, y int) string {
+	return fmt.Sprintf("%d:%d", x, y)
+}
+
+func galaxyShipGlyph(heading float64) string {
+	return readingStyle.Render("^")
+}
+
+func galaxyScopeGlyph(cell sshgalaxy.ScopeCell) string {
+	switch cell.Kind {
+	case sshgalaxy.ProjectionStar:
+		return titleStyle.Render("+")
+	case sshgalaxy.ProjectionEarth:
+		return readingStyle.Render("E")
+	case sshgalaxy.ProjectionBlackhole, sshgalaxy.ProjectionAsteroid:
+		return galaxyHazardGlyph(cell.Kind)
+	default:
+		return labelStyle.Render("x")
+	}
+}
+
+func galaxyHazardGlyph(kind sshgalaxy.ProjectionKind) string {
+	switch kind {
+	case sshgalaxy.ProjectionBlackhole:
+		return readingStyle.Render("0")
+	case sshgalaxy.ProjectionAsteroid:
+		return labelStyle.Render("o")
+	default:
+		return labelStyle.Render("x")
+	}
+}
+
+func galaxyRingGlyph(radius float64) string {
+	for _, ring := range []float64{0.33, 0.66, 0.92} {
+		if math.Abs(radius-ring) < 0.018 {
+			return ruleStyle.Render(".")
+		}
+	}
+	return ""
+}
+
+func galaxySpaceGlyph(x, y float64) string {
+	cellX := int(math.Floor(x / 90))
+	cellY := int(math.Floor(y / 90))
+	hash := uint32(cellX*73856093) ^ uint32(cellY*19349663)
+	hash ^= hash >> 13
+	hash *= 0x5bd1e995
+	if hash%53 == 0 {
+		return ruleStyle.Render(".")
+	}
+	if hash%149 == 0 {
+		return labelStyle.Render(".")
+	}
+	return " "
+}
+
+func normalizeDegrees(radians float64) float64 {
+	degrees := math.Mod(radians*180/math.Pi+90, 360)
+	if degrees < 0 {
+		degrees += 360
+	}
+	return degrees
+}
+
+func nonEmpty(values []string) []string {
+	filtered := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			filtered = append(filtered, value)
+		}
+	}
+	return filtered
+}
+
+func dropLastRune(value string) string {
+	runes := []rune(value)
+	if len(runes) == 0 {
+		return ""
+	}
+	return string(runes[:len(runes)-1])
 }
 
 // formatDuration renders a millisecond duration as "M:SS", the runtime form a
