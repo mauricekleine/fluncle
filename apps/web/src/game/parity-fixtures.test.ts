@@ -72,7 +72,9 @@ type FrontierFixture = {
 
 const frontierFixture = JSON.parse(
   readFileSync(
-    fileURLToPath(new URL("../../../ssh/internal/galaxy/testdata/frontier_contacts.json", import.meta.url)),
+    fileURLToPath(
+      new URL("../../../ssh/internal/galaxy/testdata/frontier_contacts.json", import.meta.url),
+    ),
     "utf8",
   ),
 ) as FrontierFixture;
@@ -121,27 +123,16 @@ describe("SSH star-flight sim parity fixture", () => {
       const carrier = nearestCarrier(sim);
 
       snapshots.push({
-        label,
-        phase: sim.phase,
-        time: sim.time,
-        collectedCount: sim.collectedCount,
-        orbitIndex: sim.orbitIndex,
-        orbitFresh: sim.orbitFresh,
         atEarth: sim.atEarth,
+        collected: sim.stars.map((star) => star.collected),
+        collectedCount: sim.collectedCount,
         deaths: sim.deaths,
         events: sim.events.map((event) =>
-          event.kind === "logged" ? { kind: event.kind, starIndex: event.starIndex } : { kind: event.kind },
+          event.kind === "logged"
+            ? { kind: event.kind, starIndex: event.starIndex }
+            : { kind: event.kind },
         ),
-        ship: {
-          x: sim.ship.x,
-          y: sim.ship.y,
-          heading: sim.ship.heading,
-          speed: sim.ship.speed,
-          fuel: sim.ship.fuel,
-          boosting: sim.ship.boosting,
-          vx: sim.ship.vx,
-          vy: sim.ship.vy,
-        },
+        label,
         nearestCarrier: carrier
           ? {
               bearing: carrier.bearing,
@@ -150,8 +141,21 @@ describe("SSH star-flight sim parity fixture", () => {
               strength: carrier.strength,
             }
           : null,
+        orbitFresh: sim.orbitFresh,
+        orbitIndex: sim.orbitIndex,
+        phase: sim.phase,
         radarBlips: radarBlips(sim),
-        collected: sim.stars.map((star) => star.collected),
+        ship: {
+          boosting: sim.ship.boosting,
+          fuel: sim.ship.fuel,
+          heading: sim.ship.heading,
+          speed: sim.ship.speed,
+          vx: sim.ship.vx,
+          vy: sim.ship.vy,
+          x: sim.ship.x,
+          y: sim.ship.y,
+        },
+        time: sim.time,
       });
     }
 
@@ -197,20 +201,22 @@ describe("SSH frontier contacts parity fixture", () => {
 
     function snapshot(label: string): void {
       snapshots.push({
-        label,
-        ship: {
-          x: sim.ship.x,
-          y: sim.ship.y,
-          heading: sim.ship.heading,
-          vx: sim.ship.vx,
-          vy: sim.ship.vy,
-          fuel: sim.ship.fuel,
-          speed: sim.ship.speed,
-        },
         contacts: scopeContacts(sim),
         events: drainEvents(sim).map((event) =>
-          event.kind === "logged" ? { kind: event.kind, starIndex: event.starIndex } : { kind: event.kind },
+          event.kind === "logged"
+            ? { kind: event.kind, starIndex: event.starIndex }
+            : { kind: event.kind },
         ),
+        label,
+        ship: {
+          fuel: sim.ship.fuel,
+          heading: sim.ship.heading,
+          speed: sim.ship.speed,
+          vx: sim.ship.vx,
+          vy: sim.ship.vy,
+          x: sim.ship.x,
+          y: sim.ship.y,
+        },
       });
     }
 

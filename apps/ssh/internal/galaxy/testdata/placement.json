@@ -4,18 +4,11 @@
     "track-d": 332611813,
     "0.0.1A#v": 2335785502
   },
-  "rng1234": [
-    0.07329497812315822,
-    0.7034119898453355,
-    0.9028560190927237
-  ],
+  "rng1234": [0.07329497812315822, 0.7034119898453355, 0.9028560190927237],
   "tracks": [
     {
       "addedAt": "2026-05-30T00:00:00.000Z",
-      "artists": [
-        "Artist One",
-        "Artist Two"
-      ],
+      "artists": ["Artist One", "Artist Two"],
       "logId": "0.0.1A",
       "spotifyUrl": "https://open.spotify.com/track/a",
       "title": "First Banger",
@@ -23,9 +16,7 @@
     },
     {
       "addedAt": "2026-06-01T00:00:00.000Z",
-      "artists": [
-        "Artist Three"
-      ],
+      "artists": ["Artist Three"],
       "logId": "2.0.1B",
       "spotifyUrl": "https://open.spotify.com/track/b",
       "title": "Second Banger",
@@ -33,9 +24,7 @@
     },
     {
       "addedAt": "2026-06-01T12:00:00.000Z",
-      "artists": [
-        "Artist Four"
-      ],
+      "artists": ["Artist Four"],
       "logId": "2.0.2C",
       "spotifyUrl": "https://open.spotify.com/track/c",
       "title": "Third Banger",
@@ -43,9 +32,7 @@
     },
     {
       "addedAt": "2026-06-05T00:00:00.000Z",
-      "artists": [
-        "Fallback Artist"
-      ],
+      "artists": ["Fallback Artist"],
       "spotifyUrl": "https://open.spotify.com/track/d",
       "title": "Fallback Banger",
       "trackId": "track-d"

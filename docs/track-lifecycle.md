@@ -64,11 +64,11 @@ Once a track has a video in R2, it can go to social platforms — **never auto-p
 
 The deciding question per platform is: **can the API carry the caption, the cover, and the audio?** A platform needs the manual inbox/draft hand-off **only when it can't** — which makes TikTok the exception, not the template. If direct post carries all three, we push directly (or schedule) and skip the draft entirely.
 
-| Platform                    | Cut pushed           | Caption          | Cover                          | Audio                              | Flow                                                                                                                                                                                              |
-| --------------------------- | -------------------- | ---------------- | ------------------------------ | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **TikTok** (live)           | `footage-silent.mp4` | ✗ inbox drops it | ✗ set in-app                   | ✗ licensed sound attaches only in-app | **Draft → manual finish.** Lands in the @fluncle app **inbox** (`SELF_ONLY`); the operator pastes the caption from `note.txt`, sets the cover, adds the official sound, and publishes natively. |
-| **YouTube Shorts** (live)   | `footage.mp4`        | ✓ title + description | ✓ custom thumbnail (`cover.jpg`) | ✓ the video's own (baked-in) audio | **Direct public upload** (Data API v3) on the push — title/description/thumbnail all carry. Content ID typically *claims* (rights holder monetizes, we don't) rather than blocks short clips — accepted. No in-app step. |
-| **Instagram Reels** (not automated) | — | — | — | ✗ a baked-in master gets **muted/removed** on a business/creator account; IG's licensed library is app-only and locked for business | **Manual, in-app only.** No legitimate API path that respects the music, so the pipeline doesn't post to Instagram — any IG presence is a hand-made post. |
+| Platform                            | Cut pushed           | Caption               | Cover                            | Audio                                                                                                                               | Flow                                                                                                                                                                                                                     |
+| ----------------------------------- | -------------------- | --------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **TikTok** (live)                   | `footage-silent.mp4` | ✗ inbox drops it      | ✗ set in-app                     | ✗ licensed sound attaches only in-app                                                                                               | **Draft → manual finish.** Lands in the @fluncle app **inbox** (`SELF_ONLY`); the operator pastes the caption from `note.txt`, sets the cover, adds the official sound, and publishes natively.                          |
+| **YouTube Shorts** (live)           | `footage.mp4`        | ✓ title + description | ✓ custom thumbnail (`cover.jpg`) | ✓ the video's own (baked-in) audio                                                                                                  | **Direct public upload** (Data API v3) on the push — title/description/thumbnail all carry. Content ID typically _claims_ (rights holder monetizes, we don't) rather than blocks short clips — accepted. No in-app step. |
+| **Instagram Reels** (not automated) | —                    | —                     | —                                | ✗ a baked-in master gets **muted/removed** on a business/creator account; IG's licensed library is app-only and locked for business | **Manual, in-app only.** No legitimate API path that respects the music, so the pipeline doesn't post to Instagram — any IG presence is a hand-made post.                                                                |
 
 So TikTok keeps the `draft` step because the inbox is the only way a human can supply the caption, cover, and licensed sound; **YouTube posts directly and publicly** the moment the operator pushes (its API carries caption + cover + the video's own audio; Content ID may claim it — we accept that, the goal is reach not revenue). **Instagram is deliberately left out**: baking the master into a Reel gets muted/removed on our account type, and there's no API route to its licensed audio, so there's no clean automated path — Instagram is a manual in-app post (see the `fluncle-publish` skill).
 
@@ -84,13 +84,13 @@ fluncle admin track social <track_id|log_id> --platform tiktok --status publishe
 
 Publication state is **per platform**, separate from the track's own pipeline (which tops out at "video in R2"). One row per `(track, platform)`:
 
-| Field                   | Notes                                                      |
-| ----------------------- | ---------------------------------------------------------- |
+| Field                   | Notes                                                       |
+| ----------------------- | ----------------------------------------------------------- |
 | `platform`              | `tiktok`, `youtube` (Instagram is manual, not tracked here) |
-| `status`                | `draft` → `scheduled` \| `published` (or `failed`)         |
-| `external_id`           | the Postiz post id (for later reconciliation)              |
-| `url`                   | the public post URL — set by the operator when published   |
-| `scheduled_for`, `*_at` | timing                                                     |
+| `status`                | `draft` → `scheduled` \| `published` (or `failed`)          |
+| `external_id`           | the Postiz post id (for later reconciliation)               |
+| `url`                   | the public post URL — set by the operator when published    |
+| `scheduled_for`, `*_at` | timing                                                      |
 
 `status` reflects the per-platform flow: a TikTok inbox push sits at `draft` (not yet public — the operator finishes it in-app); a YouTube push posts directly, landing straight at `published` (with no `url` until the operator records the public link).
 

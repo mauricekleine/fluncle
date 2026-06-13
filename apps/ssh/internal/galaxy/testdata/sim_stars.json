@@ -2,10 +2,7 @@
   "tracks": [
     {
       "addedAt": "2026-05-30T00:00:00.000Z",
-      "artists": [
-        "Artist One",
-        "Artist Two"
-      ],
+      "artists": ["Artist One", "Artist Two"],
       "logId": "0.0.1A",
       "spotifyUrl": "https://open.spotify.com/track/a",
       "title": "First Banger",
@@ -13,9 +10,7 @@
     },
     {
       "addedAt": "2026-06-01T00:00:00.000Z",
-      "artists": [
-        "Artist Three"
-      ],
+      "artists": ["Artist Three"],
       "logId": "2.0.1B",
       "spotifyUrl": "https://open.spotify.com/track/b",
       "title": "Second Banger",
@@ -23,9 +18,7 @@
     },
     {
       "addedAt": "2026-06-01T12:00:00.000Z",
-      "artists": [
-        "Artist Four"
-      ],
+      "artists": ["Artist Four"],
       "logId": "2.0.2C",
       "spotifyUrl": "https://open.spotify.com/track/c",
       "title": "Third Banger",
@@ -33,9 +26,7 @@
     },
     {
       "addedAt": "2026-06-05T00:00:00.000Z",
-      "artists": [
-        "Fallback Artist"
-      ],
+      "artists": ["Fallback Artist"],
       "spotifyUrl": "https://open.spotify.com/track/d",
       "title": "Fallback Banger",
       "trackId": "track-d"
@@ -96,12 +87,7 @@
           "starIndex": -1
         }
       ],
-      "collected": [
-        false,
-        false,
-        false,
-        false
-      ]
+      "collected": [false, false, false, false]
     },
     {
       "label": "cruise-1s",
@@ -155,12 +141,7 @@
           "starIndex": -1
         }
       ],
-      "collected": [
-        false,
-        false,
-        false,
-        false
-      ]
+      "collected": [false, false, false, false]
     },
     {
       "label": "boost-turn-0.5s",
@@ -214,12 +195,7 @@
           "starIndex": -1
         }
       ],
-      "collected": [
-        false,
-        false,
-        false,
-        false
-      ]
+      "collected": [false, false, false, false]
     },
     {
       "label": "orbit-first-star",
@@ -269,12 +245,7 @@
           "starIndex": -1
         }
       ],
-      "collected": [
-        true,
-        false,
-        false,
-        false
-      ]
+      "collected": [true, false, false, false]
     },
     {
       "label": "orbit-refuel-2s",
@@ -316,12 +287,7 @@
           "starIndex": -1
         }
       ],
-      "collected": [
-        true,
-        false,
-        false,
-        false
-      ]
+      "collected": [true, false, false, false]
     },
     {
       "label": "depart-first-star",
@@ -363,12 +329,7 @@
           "starIndex": -1
         }
       ],
-      "collected": [
-        true,
-        false,
-        false,
-        false
-      ]
+      "collected": [true, false, false, false]
     },
     {
       "label": "reset",
@@ -422,12 +383,7 @@
           "starIndex": -1
         }
       ],
-      "collected": [
-        false,
-        false,
-        false,
-        false
-      ]
+      "collected": [false, false, false, false]
     }
   ]
 }
