@@ -41,3 +41,20 @@ export function vehicleFromRenderJson(raw: string): string | undefined {
 
   return undefined;
 }
+
+// The authoring AI model, read from render.json (ship writes it from `--model`),
+// in <provider>/<model> notation. Stored on the track alongside the vehicle.
+// A missing/unparseable model just leaves the field empty (the caller defaults).
+export function modelFromRenderJson(raw: string): string | undefined {
+  try {
+    const manifest = JSON.parse(raw) as { model?: unknown };
+
+    if (typeof manifest.model === "string" && manifest.model.trim()) {
+      return manifest.model.trim().slice(0, 120);
+    }
+  } catch {
+    // render.json is a loose manifest; never fail the upload on a bad model.
+  }
+
+  return undefined;
+}

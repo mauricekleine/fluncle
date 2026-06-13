@@ -50,11 +50,16 @@ export type TrackVideoOptions = {
   cover?: string;
   footage?: string;
   footageSilent?: string;
+  model?: string;
   note?: string;
   poster?: string;
   props?: string;
   render?: string;
 };
+
+// The authoring AI model recorded for a video, in <provider>/<model> notation.
+// The default when neither --model nor render.json supplies one.
+const DEFAULT_VIDEO_MODEL = "anthropic/claude-opus-4-8";
 
 export type TrackVideoResult = {
   logId: string;
@@ -148,11 +153,16 @@ export async function trackVideoCommand(
   }
 
   // Phase 3: finalize — link the footage cut as video_url and record the vehicle
-  // read from the bundle's render.json (the diversity ledger).
+  // read from the bundle's render.json (the diversity ledger). The authoring
+  // model comes from --model, else render.json, else the default.
   const videoVehicle = files.render ? await readVehicle(files.render) : undefined;
+  const videoModel =
+    files.model?.trim().slice(0, 120) ||
+    (files.render ? await readModel(files.render) : undefined) ||
+    DEFAULT_VIDEO_MODEL;
   const finalize = await adminApiPost<FinalizeResponse>(
     `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/video/finalize`,
-    videoVehicle ? { videoVehicle } : {},
+    { videoModel, ...(videoVehicle ? { videoVehicle } : {}) },
   );
 
   return { logId: finalize.logId, ok: true, trackId: finalize.trackId, urls };
@@ -166,6 +176,22 @@ async function readVehicle(renderPath: string): Promise<string | undefined> {
 
     if (typeof manifest.vehicle === "string" && manifest.vehicle.trim()) {
       return manifest.vehicle.trim().slice(0, 120);
+    }
+  } catch {
+    // Loose manifest; ignore.
+  }
+
+  return undefined;
+}
+
+// Reads the authoring AI model from the bundle's render.json. A missing or
+// unparseable model just leaves it empty (the caller defaults), never fails.
+async function readModel(renderPath: string): Promise<string | undefined> {
+  try {
+    const manifest = (await Bun.file(renderPath).json()) as { model?: unknown };
+
+    if (typeof manifest.model === "string" && manifest.model.trim()) {
+      return manifest.model.trim().slice(0, 120);
     }
   } catch {
     // Loose manifest; ignore.

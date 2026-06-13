@@ -1,0 +1,1 @@
+ALTER TABLE `tracks` ADD `video_model` text DEFAULT 'anthropic/claude-opus-4-8';

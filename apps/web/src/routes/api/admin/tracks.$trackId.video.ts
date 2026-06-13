@@ -5,7 +5,11 @@ import { FOUND_BASE } from "../../../lib/media";
 import { jsonError, requireAdmin } from "../../../lib/server/env";
 import { getTrackByIdOrLogId } from "../../../lib/server/tracks";
 import { updateTrack } from "../../../lib/server/track-update";
-import { VIDEO_ARTIFACTS, vehicleFromRenderJson } from "../../../lib/server/video-bundle";
+import {
+  VIDEO_ARTIFACTS,
+  modelFromRenderJson,
+  vehicleFromRenderJson,
+} from "../../../lib/server/video-bundle";
 
 // FOUND_BASE (the R2 custom-domain read base) is shared from lib/media — the
 // Worker owns the bucket; the agent uploads with the admin token, never holds R2
@@ -50,6 +54,7 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/video")({
           const form = await request.formData();
           const stored: Record<string, string> = {};
           let videoVehicle: string | undefined;
+          let videoModel: string | undefined;
 
           for (const artifact of VIDEO_ARTIFACTS) {
             const value = form.get(artifact.field);
@@ -66,7 +71,9 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/video")({
             stored[artifact.field] = `${FOUND_BASE}/${key}`;
 
             if (artifact.field === "render") {
-              videoVehicle = vehicleFromRenderJson(new TextDecoder().decode(bytes));
+              const renderJson = new TextDecoder().decode(bytes);
+              videoVehicle = vehicleFromRenderJson(renderJson);
+              videoModel = modelFromRenderJson(renderJson);
             }
           }
 
@@ -75,8 +82,10 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/video")({
           }
 
           // The footage (with-audio) cut is the canonical web video; the vehicle
-          // (when present) joins it as the diversity-ledger entry.
+          // (when present) joins it as the diversity-ledger entry, and the
+          // authoring model defaults when render.json omits it.
           await updateTrack(track.trackId, {
+            videoModel: videoModel ?? "anthropic/claude-opus-4-8",
             videoUrl: stored.footage,
             ...(videoVehicle ? { videoVehicle } : {}),
           });

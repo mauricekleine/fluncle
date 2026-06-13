@@ -7,6 +7,7 @@ import {
   DownloadSimpleIcon,
   FilmSlateIcon,
   PaperPlaneTiltIcon,
+  PlayIcon,
   TiktokLogoIcon,
   YoutubeLogoIcon,
 } from "@phosphor-icons/react";
@@ -14,6 +15,7 @@ import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type ComponentType, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AdminNav } from "@/components/admin/admin-nav";
+import { StoriesPlayer } from "@/components/stories/stories-player";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -147,6 +149,7 @@ function AdminPostsPage() {
   const [publish, setPublish] = useState<PublishTarget | null>(null);
   const [publishUrl, setPublishUrl] = useState("");
   const [assets, setAssets] = useState<BoardRow | null>(null);
+  const [preview, setPreview] = useState<BoardRow | null>(null);
   const [copiedId, setCopiedId] = useState<string | undefined>();
 
   const postFor = (row: BoardRow, platform: string) =>
@@ -433,11 +436,35 @@ function AdminPostsPage() {
                   >
                     {/* Finding */}
                     <div className="flex min-w-0 items-center gap-3">
-                      <img
-                        alt=""
-                        className="size-11 shrink-0 rounded-md object-cover"
-                        src={row.albumImageUrl ?? "/fluncle-cover.png"}
-                      />
+                      {row.videoUrl ? (
+                        // Has a clip → the gold story-ring cue + play badge; opens
+                        // a single-clip preview (loads only on open). One Sun gold.
+                        <button
+                          aria-label={`Preview ${row.title} clip`}
+                          className="group relative size-11 shrink-0 rounded-md shadow-[0_0_14px_-3px_var(--eclipse-gold)] outline-none ring-2 ring-primary transition-transform hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--eclipse-glow)]"
+                          onClick={() => setPreview(row)}
+                          title="Preview clip"
+                          type="button"
+                        >
+                          <img
+                            alt=""
+                            className="size-full rounded-md object-cover"
+                            src={row.albumImageUrl ?? "/fluncle-cover.png"}
+                          />
+                          <span
+                            aria-hidden="true"
+                            className="absolute -right-1 -bottom-1 flex size-4 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm"
+                          >
+                            <PlayIcon className="size-2.5 translate-x-px" weight="fill" />
+                          </span>
+                        </button>
+                      ) : (
+                        <img
+                          alt=""
+                          className="size-11 shrink-0 rounded-md object-cover"
+                          src={row.albumImageUrl ?? "/fluncle-cover.png"}
+                        />
+                      )}
                       <div className="min-w-0">
                         <p className="truncate text-sm font-medium">{row.title}</p>
                         <p className="truncate text-xs text-muted-foreground">
@@ -632,6 +659,34 @@ function AdminPostsPage() {
               </Button>
             ))}
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Single-clip preview — the same Stories UI as /log/<id>, but one post
+          (no swipe). Loads the clip only when opened; a no-op onStoryChange
+          keeps the admin URL put. Handy for lining up the TikTok sound. */}
+      <Dialog
+        onOpenChange={(open) => {
+          if (!open) {
+            setPreview(null);
+          }
+        }}
+        open={preview !== null}
+      >
+        <DialogContent
+          aria-label="Clip preview"
+          className="inset-0 top-0 left-0 block h-dvh w-full max-w-none translate-x-0 translate-y-0 rounded-none border-0 bg-transparent p-0 ring-0 sm:max-w-none"
+          showCloseButton={false}
+        >
+          {preview ? (
+            <StoriesPlayer
+              initialLogId={preview.logId ?? undefined}
+              onClose={() => setPreview(null)}
+              onStoryChange={() => {}}
+              presentation="dialog"
+              tracks={[preview]}
+            />
+          ) : undefined}
         </DialogContent>
       </Dialog>
     </main>
