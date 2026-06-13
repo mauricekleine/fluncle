@@ -45,6 +45,10 @@ export const tracks = sqliteTable("tracks", {
   // operator drops it on the map. Replaces sub-genre tags as the grouping.
   vibeX: real("vibe_x"),
   vibeY: real("vibe_y"),
+  // The AI model that authored the track's video, in <provider>/<model> notation
+  // (e.g. "anthropic/claude-opus-4-8"). Set when the video is uploaded; surfaced
+  // in /api/tracks alongside the vehicle. Defaults so existing rows backfill.
+  videoModel: text("video_model").default("anthropic/claude-opus-4-8"),
   videoUrl: text("video_url"),
   // The travelling vehicle of the track's video (e.g. "voronoi cellular",
   // "caustic web"). Set when the video is uploaded; surfaced in /api/tracks so

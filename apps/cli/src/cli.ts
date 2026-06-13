@@ -58,6 +58,7 @@ type TrackVideoOptions = {
   footage?: string;
   footageSilent?: string;
   json: boolean;
+  model?: string;
   note?: string;
   poster?: string;
   props?: string;
@@ -314,6 +315,7 @@ function addAdminCommands(program: Command): void {
     .option("--footage <file>", "Video footage")
     .option("--footage-silent <file>", "Silent video footage")
     .option("--json", "Print JSON", false)
+    .option("--model <model>", "Authoring AI model (<provider>/<model>)")
     .option("--note <file>", "Note file")
     .option("--poster <file>", "Poster image")
     .option("--props <file>", "Render props JSON")
@@ -538,6 +540,7 @@ async function runTrackVideo(
     cover: resolveFile(options.cover, "cover.jpg"),
     footage: resolveFile(options.footage, "footage.mp4"),
     footageSilent: resolveFile(options.footageSilent, "footage-silent.mp4"),
+    model: options.model,
     note: resolveFile(options.note, "note.txt"),
     poster: resolveFile(options.poster, "poster.jpg"),
     props: resolveFile(options.props, "props.json"),

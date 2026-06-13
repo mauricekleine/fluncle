@@ -85,6 +85,13 @@
       "when": 1781195871441,
       "tag": "0011_easy_gambit",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1781351995615,
+      "tag": "0012_narrow_alex_power",
+      "breakpoints": true
     }
   ]
 }
