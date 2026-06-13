@@ -75,10 +75,41 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("recent|list [options]");
     expect(result.stdout).toContain("submit [searchOrSpotifyUrl...]");
     expect(result.stdout).toContain("fluncle version [--check] [--json]");
+    expect(result.stdout).toContain("Fluncle elsewhere:");
+    expect(result.stdout).toContain("https://www.tiktok.com/@fluncle");
     expect(result.stdout).not.toContain("admin");
     expect(result.stdout).not.toContain("[unexpected");
     expect(result.stdout).not.toContain("[extra");
     expect(result.stdout).not.toContain("Operator:");
+  });
+
+  test("about prints the wordmark, the intro, and the grouped link map", async () => {
+    const result = await runCli(["about"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain(fluncleAsciiLogo);
+    expect(result.stdout).toContain("Drum & bass bangers from another dimension");
+    expect(result.stdout).toContain("I'm Fluncle.");
+    // No exclamation marks anywhere (VOICE.md's Dry Rule).
+    expect(result.stdout).not.toContain("!");
+    // The grouped link map, verbatim canonical URLs.
+    expect(result.stdout).toContain("Where to listen:");
+    expect(result.stdout).toContain("Follow the crew:");
+    expect(result.stdout).toContain("The mothership:");
+    expect(result.stdout).toContain("For the nerds:");
+    expect(result.stdout).toContain("https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0");
+    expect(result.stdout).toContain("https://www.mixcloud.com/fluncle/");
+    expect(result.stdout).toContain("https://galaxy.fluncle.com");
+    expect(result.stdout).toContain("ssh rave.fluncle.com");
+    expect(result.stdout).toContain("https://github.com/mauricekleine/fluncle");
+  });
+
+  test("about takes no positional argument", async () => {
+    const result = await runCli(["about", "extra"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("Unexpected argument 'extra'");
   });
 
   test("supports help commands at root and admin levels", async () => {
