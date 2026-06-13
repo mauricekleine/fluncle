@@ -58,30 +58,41 @@ Findings are grouped by **vibe**, not sub-genre. There's no finite, agreed drum 
 
 The spectral feature vector the agent stores (`features_json`) is the **training signal**: once enough findings are placed by hand, it can drive auto-placement (energy ≈ onset rate, mood ≈ brightness). Until then, placement is manual and deliberate — Fluncle's own call.
 
-## Phase 3 — Publish (per-platform, draft-first)
+## Phase 3 — Publish (per-platform)
 
-Once a track has a video in R2, it can go to social platforms — but **as a draft, never auto-posted.** TikTok's licensed sounds attach only in-app, so the flow pushes the **audio-less cut** (`footage-silent.mp4`) + the caption (`note.txt`) as a private (`SELF_ONLY`) draft, and the operator adds the official sound and publishes natively (which also reads better to the algorithm).
+Once a track has a video in R2, it can go to social platforms — **never auto-posted to a public feed without a human gate.** Everything goes through **Postiz** (one integration that speaks TikTok / Instagram / YouTube), so the Worker holds a single `POSTIZ_API_KEY` instead of per-platform OAuth.
 
-Drafts go through **Postiz** — one integration that already speaks TikTok / YouTube / Instagram, so the Worker holds a single `POSTIZ_API_KEY` instead of per-platform OAuth:
+The deciding question per platform is: **can the API carry the caption, the cover, and the audio?** A platform needs the manual inbox/draft hand-off **only when it can't** — which makes TikTok the exception, not the template. If direct post carries all three, we push directly (or schedule) and skip the draft entirely.
+
+| Platform                            | Cut pushed           | Caption               | Cover                            | Audio                                                                                                                               | Flow                                                                                                                                                                                                                     |
+| ----------------------------------- | -------------------- | --------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **TikTok** (live)                   | `footage-silent.mp4` | ✗ inbox drops it      | ✗ set in-app                     | ✗ licensed sound attaches only in-app                                                                                               | **Draft → manual finish.** Lands in the @fluncle app **inbox** (`SELF_ONLY`); the operator pastes the caption from `note.txt`, sets the cover, adds the official sound, and publishes natively.                          |
+| **YouTube Shorts** (live)           | `footage.mp4`        | ✓ title + description | ✓ custom thumbnail (`cover.jpg`) | ✓ the video's own (baked-in) audio                                                                                                  | **Direct public upload** (Data API v3) on the push — title/description/thumbnail all carry. Content ID typically _claims_ (rights holder monetizes, we don't) rather than blocks short clips — accepted. No in-app step. |
+| **Instagram Reels** (not automated) | —                    | —                     | —                                | ✗ a baked-in master gets **muted/removed** on a business/creator account; IG's licensed library is app-only and locked for business | **Manual, in-app only.** No legitimate API path that respects the music, so the pipeline doesn't post to Instagram — any IG presence is a hand-made post.                                                                |
+
+So TikTok keeps the `draft` step because the inbox is the only way a human can supply the caption, cover, and licensed sound; **YouTube posts directly and publicly** the moment the operator pushes (its API carries caption + cover + the video's own audio; Content ID may claim it — we accept that, the goal is reach not revenue). **Instagram is deliberately left out**: baking the master into a Reel gets muted/removed on our account type, and there's no API route to its licensed audio, so there's no clean automated path — Instagram is a manual in-app post (see the `fluncle-publish` skill).
 
 ```
-fluncle admin track draft <track_id|log_id> --platform tiktok      # → inbox draft
+fluncle admin track draft  <track_id|log_id> --platform tiktok       # TikTok: inbox draft
+fluncle admin track draft  <track_id|log_id> --platform youtube      # YouTube: direct public Short
 fluncle admin track social <track_id|log_id> --platform tiktok --status published --url <url>
 ```
 
-`POST /api/admin/tracks/:id/social/:platform/draft` uploads the R2 video to Postiz and creates the draft; the operator reviews in-app, then records the outcome (`scheduled` / `published` + the real post URL) via `PATCH …/social/:platform`. This is **not** part of the enrichment workflow — it's a separate capability (the `fluncle-publish` skill); a future single Spinup agent will chain enrich → video → publish, but they're distinct steps.
+`POST /api/admin/tracks/:id/social/:platform/draft` is the single push endpoint, branching by platform (`tiktok`, `youtube`): TikTok uploads `footage-silent.mp4` to the app inbox (status `draft`); YouTube uploads `footage.mp4` as a Short with the track title + `cover.jpg` thumbnail, directly and publicly (status `published`). (The `draft` verb in the path is TikTok-shaped; for YouTube the same call publishes.) Postiz doesn't return the public post URL on create, so the operator fills it (or marks `failed`) afterward via `PATCH …/social/:platform`, or from the `/admin/posts` board. This is **not** part of the enrichment workflow — it's a separate capability (the `fluncle-publish` skill); a future single Spinup agent will chain enrich → video → publish, but they're distinct steps.
 
 ## Per-platform publication (`social_posts`)
 
 Publication state is **per platform**, separate from the track's own pipeline (which tops out at "video in R2"). One row per `(track, platform)`:
 
-| Field                   | Notes                                                      |
-| ----------------------- | ---------------------------------------------------------- |
-| `platform`              | `tiktok` today; `youtube_shorts` / `instagram_reels` later |
-| `status`                | `draft` → `scheduled` \| `published` (or `failed`)         |
-| `external_id`           | the Postiz post id (for later reconciliation)              |
-| `url`                   | the public post URL — set by the operator when published   |
-| `scheduled_for`, `*_at` | timing                                                     |
+| Field                   | Notes                                                       |
+| ----------------------- | ----------------------------------------------------------- |
+| `platform`              | `tiktok`, `youtube` (Instagram is manual, not tracked here) |
+| `status`                | `draft` → `scheduled` \| `published` (or `failed`)          |
+| `external_id`           | the Postiz post id (for later reconciliation)               |
+| `url`                   | the public post URL — set by the operator when published    |
+| `scheduled_for`, `*_at` | timing                                                      |
+
+`status` reflects the per-platform flow: a TikTok inbox push sits at `draft` (not yet public — the operator finishes it in-app); a YouTube push posts directly, landing straight at `published` (with no `url` until the operator records the public link).
 
 There is no per-track "published" flag — a track's reach is the union of its `social_posts`. Telegram stays its own auto-post boolean on `tracks` (a different, no-review model) for now.
 

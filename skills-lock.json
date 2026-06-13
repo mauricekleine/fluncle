@@ -30,7 +30,7 @@
     "fluncle-publish": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-publish",
       "sourceType": "local",
-      "computedHash": "94b278af211e11b3b16e675457d33d9161c66a933b88f17f8791f220cd86c3fb"
+      "computedHash": "e3dd9a79df700b927ae1127d6b6b73379720b4b62449c08dca98aa4e712a50d5"
     },
     "fluncle-track-enrichment": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-track-enrichment",
@@ -40,7 +40,7 @@
     "fluncle-video": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-video",
       "sourceType": "local",
-      "computedHash": "669494865837564bfe336f0f9487c87bd581cbdd708c5331bcfec7e803e5f87a"
+      "computedHash": "b561ff6e1cd572be7c7195337a522d6829f17a927dabe446a7e923281d53e2aa"
     },
     "hetzner-devbox": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/hetzner-devbox",

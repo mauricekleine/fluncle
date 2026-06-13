@@ -34,22 +34,31 @@ export async function render(
     id: compositionId,
     inputProps,
     serveUrl,
+    // The eager Oxanium load is a delayRender; under several concurrent renders
+    // (a batch of agents) the machine oversubscribes and the default ~28s window
+    // trips. Give font load room — it's I/O wait, not compute.
+    timeoutInMilliseconds: 120_000,
   });
 
   await renderMedia({
     chromiumOptions: { gl: "angle" },
     codec: "h264",
     composition,
-    // These scenes are GLSL shaders drowned in film grain and dither — pure
-    // entropy that h264 can't dedupe, so Remotion's default crf of 18 ballooned
-    // a 20s clip to 254MB. Grain also hides compression artifacts, so we can
-    // push crf hard with no perceptible loss (social platforms re-encode anyway).
-    // crf 31 + the "slow" preset projects ~32MB for 20s, well under our 40MB
-    // budget, vs ~144MB at crf 24. "slow" buys real bytes on high-entropy frames.
-    crf: 31,
+    // These scenes are GLSL shaders over film grain — high entropy h264 can't
+    // dedupe. crf 31 kept files tiny but the compression was visible (blocking in
+    // the gradients, mushy grain); the operator's eye caught it. Quality wins over
+    // bytes here: TikTok/IG re-encode from a clean source far better than from a
+    // pre-degraded one. So crf 20 + lossless PNG intermediate frames (the JPEG
+    // default baked banding in BEFORE the h264 pass). Files run larger (hundreds
+    // of MB for 20s), still well inside the upload flow's limits.
+    crf: 20,
+    imageFormat: "png",
     inputProps,
     outputLocation: outputPath,
     serveUrl,
+    // Same delayRender headroom as selectComposition (see above) — concurrent
+    // batch renders oversubscribe and the default font-load window trips.
+    timeoutInMilliseconds: 120_000,
     x264Preset: "slow",
   });
 

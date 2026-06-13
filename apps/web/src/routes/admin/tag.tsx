@@ -1,13 +1,8 @@
-import {
-  CheckCircleIcon,
-  CircleNotchIcon,
-  PauseIcon,
-  PlayIcon,
-  SignOutIcon,
-} from "@phosphor-icons/react";
+import { CheckCircleIcon, CircleNotchIcon, PauseIcon, PlayIcon } from "@phosphor-icons/react";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { AdminNav } from "@/components/admin/admin-nav";
 import { VibeMap, VIBE_QUADRANTS, vibeQuadrant } from "@/components/admin/vibe-map";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -312,15 +307,7 @@ function AdminTagPage() {
                 L
               </kbd>
             </Button>
-            <Button
-              aria-label="Sign out"
-              nativeButton={false}
-              render={<a href="/api/admin/logout" />}
-              size="icon-sm"
-              variant="ghost"
-            >
-              <SignOutIcon aria-hidden="true" />
-            </Button>
+            <AdminNav current="tag" />
           </div>
         </header>
 

@@ -623,6 +623,15 @@ export type RadarBlip = {
   starIndex: number;
 };
 
+export type ScopeContact = {
+  bearing: number;
+  bodyRadius: number;
+  distance: number;
+  id: string;
+  influenceRadius?: number;
+  kind: "asteroid" | "blackhole";
+};
+
 // Every uncollected star in radar range — multi-blip on purpose, so route
 // choice is a real decision. Earth joins the scope when it's in range, and
 // becomes the only blip once the galaxy is logged (the final carrier home).
@@ -664,6 +673,34 @@ export function radarBlips(state: SimState): RadarBlip[] {
   }
 
   return blips;
+}
+
+export function scopeContacts(state: SimState): ScopeContact[] {
+  const { config, ship } = state;
+  const contacts: ScopeContact[] = [];
+
+  for (const entity of state.entities) {
+    if (entity.kind !== "asteroid" && entity.kind !== "blackhole") {
+      continue;
+    }
+
+    const distance = Math.hypot(entity.x - ship.x, entity.y - ship.y);
+
+    if (distance > config.radarRange) {
+      continue;
+    }
+
+    contacts.push({
+      bearing: bearingTo(ship, entity.x, entity.y),
+      bodyRadius: entity.bodyRadius ?? (entity.kind === "blackhole" ? 34 : 16),
+      distance,
+      id: entity.id,
+      influenceRadius: entity.kind === "blackhole" ? BLACKHOLE_INFLUENCE : undefined,
+      kind: entity.kind,
+    });
+  }
+
+  return contacts;
 }
 
 function ease(current: number, target: number, t: number): number {

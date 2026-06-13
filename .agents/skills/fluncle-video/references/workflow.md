@@ -23,30 +23,31 @@ BPM comes from the audio analysis already in the props — measured off the actu
 
 In order:
 
-1. **Diversity check (doctrine 3).** Do not read a committed local `tracks/` archive; it should not exist. Use the current brief, any recent run reports or R2 composition artifacts the operator gives you, and the known failure modes in SKILL.md. Do not repeat the most recent vehicle you know about unless the music demands it.
-2. **Choose the vehicle (doctrine 1, One Driver).** Exactly one travelling beat-synced medium: orb / lines / fractal / glass / glitch, or one you invent. Everything else supports it. Decide how the one Eclipse Gold sun moment is expressed — as the orb itself, or, for any other vehicle, THROUGH the vehicle (a gold crest igniting, a gold resolution front), never as a second celestial body.
+1. **Diversity check (doctrine 3).** Run `fluncle recent --json` and read the `videoVehicle` field of the recent findings — the diversity ledger. List the vehicles already used and choose one clearly different; parallel runs converge on the same idea (voronoi/cellular, horizontal lines) unless each deliberately diverges. Also honor the brief and the SKILL.md failure modes.
+2. **Choose the vehicle (doctrine 1, One Driver).** Exactly one travelling beat-synced medium: orb / lines / fractal / glass / glitch, or one you invent. Everything else supports it. Decide how the one committed climax is expressed — the vehicle's OWN material intensifying in the SCENE's palette (a crest igniting, a resolution front completing, a body's limb surging), never a second celestial body and never a bolted-on gold/yellow sun. Eclipse Gold is optional, reached only when the vehicle's own material genuinely runs hot; a cool scene climaxes cool.
 3. **Choose the texture family** (nebula / analog / dither / paint / fluent / duotone — see MOODBOARD.md) that fits the tune. A liquid roller wants drift, nebula, or fluent; a neuro stomper wants dither, glitch, hard onset flashes; a gel-lit duotone suits the meditative ones.
 4. **Write a two-sentence journey:** from where, through what, arriving where — matched to the song's energy curve. Name where the drop lands and how the vehicle ignites there.
 5. **Score the movements (doctrine 10).** Split the clip into 2–3 movements and pin each boundary to a real musical seam — a drop, a bar boundary, a breakdown, an energy shift — by reading the beat grid and energy curve (the timestamps go in your header comment). Name what visibly changes at each boundary (palette lean, density/scale jump, reframe, a new behavior of the same vehicle): same theme, a legible shift. If you cannot say what changes at second N, the clip has one movement and will exhaust the eye.
-6. **Write the reactivity map (doctrine 9).** Use `useAudioReactivity(audio, profile)` unless there is a specific reason not to. Name at least one structural reaction (`u_audioHit`/`u_audioSwell` changes width, density, radius, scale, threshold), one light reaction (glow, exposure, One Sun intensity), and one texture reaction (grain, dither, chroma, edge roughness). Audio disturbs the material, not just illuminates it; never feed these signals into travel position.
+6. **Write the reactivity map (doctrine 9).** Use `useAudioReactivity(audio, profile)` unless there is a specific reason not to. Name at least one structural reaction (`u_audioHit`/`u_audioSwell` changes width, density, radius, scale, threshold), one light reaction (glow, exposure, climax intensity), and one texture reaction (grain, dither, chroma, edge roughness). Audio disturbs the material, not just illuminates it; never feed these signals into travel position.
 
 Confirm the **Always-Visible Vehicle** (doctrine 2) in the concept: the vehicle fills the frame from the first frame (a dim ember, a flat field, a scrambled matrix that is unmistakably present), never a late reveal.
 
-## 4. Author the temporary composition
+## 4. Author the composition (in the gitignored workbench)
 
-Create a temporary self-contained composition source file under `packages/video/src/remotion/` while you work. A dated filename is still useful for local clarity, but it is not an archive contract and must not be committed. `ship` will copy the exact source into `packages/video/out/<log-id>/composition.tsx`; R2 keeps the durable copy.
+Create your composition at `packages/video/src/remotion/workbench/<CompId>.tsx`. `workbench/` is gitignored and `root.tsx` AUTO-REGISTERS every `.tsx` in it — **the composition id is the filename** (so `workbench/CausticWeave.tsx` renders as `--composition CausticWeave`). You never touch `root.tsx`, and because workbench is gitignored there is nothing to clean up and no commit hazard. `ship` copies the exact source into `packages/video/out/<log-id>/composition.tsx`; R2 keeps the durable copy.
 
-- Export a named PascalCase `React.FC<NostalgicCosmosProps>` (reuse the contract unchanged so the pipeline feeds it).
+- Pick a unique PascalCase `<CompId>` for the filename and **`export default`** your `React.FC<NostalgicCosmosProps>` (reuse the contract unchanged so the pipeline feeds it).
 - Import ONLY from `../cosmos` (plus `remotion`, `react`, `@fluncle/tokens`). No styled vehicles, no static image assets.
 - Write your scene and your GLSL shader. Lean on [cookbook.md](cookbook.md) for technique and the `GLSL.*` inventory.
 - Honor the quad law (doctrine 6): every `ShaderLayer` drives color AND alpha to 0.0 inside its quad. Starfield law (doctrine 7): monotonic drift, audio touches brightness/twinkle only.
 - Render the facts through `TypePlate` (doctrine 4): one drop-in, fixed homes, prescriptive timing — pass scene-derived `ink`/`dimInk`, and nudge `identityInSec`/`telemetryInSec` onto a musical seam if the intro asks. Never hand-place the facts with raw `FloatingType`.
 - End with `CloseCard`, driven by the journey's `"arrive"` phase — it owns its lower-left home; pass it the scene `palette` for ink + emphasis accent.
+- **Play the audio (MANDATORY):** drop `<TrackAudio audio={audio} />` in once. The hooks drive only the VISUALS; this is what makes the render carry SOUND. Omit it and the cut is silent (the render fails on a silence check). `ship` strips audio separately for the `footage-silent.mp4` TikTok cut — your review `footage.mp4` keeps it.
 - **Determinism:** remotion `random(seed)` and frame-derived values only. Never `Math.random` / `Date.now` / `new Date()`. Audio reactivity only through the hooks.
 - **Reactivity bus:** prefer `useAudioReactivity` and pass its `uniforms` into `ShaderLayer` (or pass `onsets`/`reactivity` directly to `ShaderLayer` for built-in `u_audio*` uniforms). Map those uniforms to material disturbance: width, density, threshold, radius, refraction, grain, dither, glow. Do not map them to travel position.
 - Open the file with a header comment that states, at minimum: the track and label, the **vehicle** (so the next agent's diversity check works), the texture family, and the two-sentence concept. Keep it useful as future rerender context because this exact file is shipped as `composition.tsx`.
 
-Register it in `src/remotion/root.tsx`: import the component, add `{ component, id: "<PascalId>" }` to the `trackCompositions` array. The id is unique PascalCase. This registration is temporary working state; remove it after the bundle is shipped.
+No registration step — dropping the file in `workbench/` is the registration (root.tsx globs it). Nothing to add to `root.tsx`, nothing to remove afterward.
 
 ## 5. Still-critique loop (minimum two rounds)
 
@@ -59,13 +60,13 @@ bunx remotion still src/remotion/index.ts <CompId> out/still-N.png --props=out/<
 GPU shaders require `--gl=angle`. Render at least four frames across the clip, and ALWAYS include:
 
 - **frame ~5** — verify the vehicle is present and holding center (Always-Visible Vehicle).
-- **the brightest frame** (the drop, from the energy curve) — verify type legibility and that nothing is blown out, that gold is ~10% of the frame, that the warm dark holds. Verify the vehicle's FOCAL MASS sits inside the frame — off-centre is good, but the centre of attention must not be cropped out of frame (a crescent whose body lives past the edge reads as a missed framing, not a composition).
-- **one still per MOVEMENT** (doctrine 10) — put them side by side: a viewer should see at a glance that these are different passages of the same world (palette lean, density, scale, regime). If two movements' stills could be swapped without anyone noticing, the shift is too timid — push it.
+- **the brightest frame** (the drop, from the energy curve) — verify type legibility and that nothing is blown out, that the warm dark holds. Verify the vehicle's FOCAL MASS sits inside the frame — off-centre is good, but the centre of attention must not be cropped out of frame (a crescent whose body lives past the edge reads as a missed framing). Check the corners: the full-bleed field must reach all four — if the frame reads as a circle/porthole, the background vignette is too tight (doctrine 6).
+- **one still per MOVEMENT** (doctrine 10) — put them side by side: a viewer should see at a glance that these are different passages of the same world (palette lean, density, scale, regime). If two movements' stills could be swapped without anyone noticing, the shift is too timid — push it. Composition check (doctrine 11): if the vehicle is symmetric/radial, the symmetry holds in EVERY movement (centre doesn't wander off-axis); if it has a single focal mass, that mass is dead-centre or decisively off-centre, never _slightly_ off. (A translational/continuous vehicle is exempt from both.)
 - **a mid-travel frame** — check the vehicle reads as STRUCTURE WITH DEPTH — neither a flat diagram of thin hard primitives nor a formless warm fog (SKILL.md failure-modes); check the type ink is drawn from the composition's palette and there is NO gold type anywhere. Across your frames, confirm the `TypePlate` blocks sit in their fixed homes (identity lower-left, telemetry upper-right with the Log ID), both legible over the scene and both gone before the drop; check the movement boundaries read as a passage arriving over ~a bar, not a cut (doctrine 10).
 
 Iterate until type is legible inside the safe inset, the palette stays warm and inky, grain is present, and the vehicle reads from frame one. Two critique rounds minimum; taste is part of the job.
 
-**Stills cannot show motion jitter or reactivity.** After the gates, scrub the MP4 (or render 3–4 ADJACENT frames around a beat) to confirm the vehicle FLOWS — position advances smoothly, audio only brightens/widens, nothing jumps-and-snaps on the kick (Motion law, doctrine 7). Then the **reactivity gate** (doctrine 9): play the MP4 against the audio — can you FEEL the kick and the drop in the picture? If the motion would look the same with the sound muted, the reactivity is too weak; push it before you ship. Finally the **swap test**: compare against recent run reports, R2 composition artifacts, or operator-provided stills when available. If the climax blooms in the same place, or the type sits in the same spot, or the geometry rhymes — change it.
+**Stills cannot show motion jitter or reactivity.** After the gates, scrub the MP4 (or render 3–4 ADJACENT frames around a beat) to confirm the vehicle FLOWS — position advances smoothly, audio only brightens/widens, nothing jumps-and-snaps on the kick (Motion law, doctrine 7). Then the **reactivity gate** (doctrine 9): play the MP4 against the audio — first confirm it HAS audible audio at all (the render's silence check guards this, but listen), then ask: can you FEEL the kick and the drop in the picture? If the motion would look the same with the sound muted, the reactivity is too weak; push it. But the motion itself must stay SMOOTH — if the picture jitters/lurches on the beat, audio is wrongly driving speed or position; move that reactivity into brightness/size/thickness/curvature instead (doctrine 7). Also scrub each movement boundary: the transition should EASE in (slow-in/slow-out over ~a bar), not slide linearly (doctrine 10). And the climax check (doctrine 1): the bright moment must read as the VEHICLE igniting (its own material intensifying in the scene's palette), not a round sun-glow layered on top — and if the scene is cool, the climax stays cool, with no gold/yellow reached for. Deleting the vehicle should delete the bright moment. Finally the **swap test**: compare against recent run reports, R2 composition artifacts, or operator-provided stills when available. If the climax blooms in the same place, or the type sits in the same spot, or the geometry rhymes — change it.
 
 ## 6. Gates
 
@@ -73,26 +74,27 @@ Iterate until type is legible inside the safe inset, the palette stays warm and 
 
 ## 7. Render
 
-`bun run social:preview <trackId> --composition <CompId> --composition-source <path-to-composition.tsx>` and **wait for the encode to finish** — renders take minutes and the MP4 is invalid until the process exits. The render writes `out/<trackId>.mp4` and `out/<trackId>.render.json`. Confirm with `ffprobe`: 1080×1920, h264, aac audio, 15–30s.
+`bun run social:preview <trackId> --composition <CompId>` and **wait for the encode to finish** — renders take minutes and the MP4 is invalid until the process exits. (`<CompId>` is your `workbench/<CompId>.tsx` filename; the source is auto-resolved from there, so `--composition-source` is no longer needed.) The render writes `out/<trackId>.mp4` and `out/<trackId>.render.json`. Confirm with `ffprobe`: 1080×1920, h264, aac audio, 15–30s.
 
 ## 8. Ship (package, upload, link)
 
 Once the render passes its gates, package the bundle and link it to the track. All local; the operator runs it.
 
-1. **Package** — `bun run --cwd packages/video ship <trackId|log-id>` builds `out/<log-id>/`:
+1. **Package** — `bun run --cwd packages/video ship <trackId|log-id> --vehicle "<your vehicle>"` builds `out/<log-id>/` (the `--vehicle` tag, e.g. `"caustic web"`, lands in `render.json` and becomes the track's diversity-ledger entry on upload):
    - `footage.mp4` — with audio; the public/web cut (becomes `video_url`) + your QA pass
    - `footage-silent.mp4` — audio-less remux (`ffmpeg -c copy -an`); the cut you upload to TikTok and attach the official sound to by hand (keeps licensing inside TikTok)
    - `poster.jpg` — a ~80% drop frame
    - `note.txt` — the fixed-template caption that accompanies the footage: `Artist — Title (Year)` / Label / `Found <date>: fluncle://<log-id>` / `#dnb #drumnbass #drumandbass` + sub-genre tags (lowercased, deduped)
-   - `composition.tsx` — the exact temporary Remotion source used for the render
+   - `composition.tsx` — the exact Remotion source used for the render (copied from `workbench/<CompId>.tsx`)
    - `props.json` — analyzed audio curves, beat grid, palette, and track props
-   - `render.json` — composition id plus pointers for rerendering from the bundle
+   - `render.json` — composition id, rerender pointers, and the `vehicle` tag (the diversity-ledger entry, read by the upload step into `video_vehicle`)
 
    The track MUST have a Log ID (no Log ID → no ship; backfill the ISRC first). Requires an existing render (`out/<trackId>.mp4`) — run step 7 first.
 
 2. **Upload + link** — `fluncle admin track video <log-id> --dir packages/video/out/<log-id>` uploads the bundle to R2 under `<log-id>/` (served at `found.fluncle.com`) and sets the track's `video_url` to the review cut. The Worker owns R2; you never hold R2 credentials.
 3. **Post (manual)** — grab `footage-silent.mp4`, upload to TikTok, attach the official sound, paste `note.txt`, post. Auto-draft is deferred.
-4. **Clean local source** — after `composition.tsx` is present in the output bundle, remove the temporary composition file and its `root.tsx` registration before committing. Generated compositions are output artifacts, not codebase history.
+
+No cleanup step: the composition lives in the gitignored `workbench/` and `root.tsx` was never edited, so there is nothing to remove and nothing can leak into a commit. The durable copy is the R2 bundle; the local `workbench/` file and `out/` render are disposable scratch (an ephemeral Spinup VM discards them; a fresh agent starts clean from source).
 
 ## 9. Report
 

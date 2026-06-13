@@ -1,5 +1,7 @@
-import { CircleNotchIcon, ShuffleIcon, SpotifyLogoIcon } from "@phosphor-icons/react";
+import { CircleNotchIcon, ShuffleIcon } from "@phosphor-icons/react";
 import { useState } from "react";
+import { siSpotify } from "simple-icons";
+import { BrandIcon } from "@/components/brand-icon";
 import { TrackSummary } from "@/components/track-summary";
 import { Button } from "@/components/ui/button";
 import {
@@ -82,7 +84,7 @@ export function RandomBangerDialog() {
                 nativeButton={false}
                 render={<a href={track.spotifyUrl} rel="noreferrer" target="_blank" />}
               >
-                <SpotifyLogoIcon aria-hidden="true" weight="fill" />
+                <BrandIcon icon={siSpotify} />
                 Listen on Spotify
               </Button>
               <Button onClick={loadRandomTrack} type="button" variant="outline">
