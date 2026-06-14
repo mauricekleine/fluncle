@@ -102,10 +102,13 @@ vec3 dither8(vec3 col, vec2 uv) {
 
 const VERT = `attribute vec2 p;void main(){gl_Position=vec4(p,0.0,1.0);}`;
 
+// Neutral warm-dark ramp — the fallback when a layer is given no palette. Kept
+// colourless ON PURPOSE (only the Warm Dark Rule is imposed): a real scene
+// passes its own stops from the artwork palette, so no gold/red is forced here.
 const DEFAULT_STOPS: [string, string, string, string] = [
   colors.deepField,
-  colors.reentryRed,
-  colors.eclipseGold,
+  colors.tapeBlack,
+  colors.stardust,
   colors.starlightCream,
 ];
 
