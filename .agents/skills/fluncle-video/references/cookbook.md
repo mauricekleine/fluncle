@@ -114,9 +114,14 @@ These are good diversity lanes because they avoid the local-history loop (doctri
 - **fractal:** `GLSL.polarFold(uv, segments)` folds the frame into N mirrored wedges; fly inward by scaling the folded coords with `u_time`/`arc` and tint the rings from the artwork accent. The climax is the fold center intensifying in the scene's palette — a hot core whose colour is the scene's (gold only when that core genuinely runs hot, never reached for by default).
 - **glass:** refractive vertical blades sweeping across the frame — per-blade UV refraction offsets that breathe with `u_bass`, specular brightness on `u_energy`, the sweep position travelling on the arc. The climax is one specular bulge surging — its colour the scene's own (a steel/teal/blue surge for a cool scene; gold only when the blade's own highlight genuinely runs hot).
 
-## semi-representational structure (real, but only just so)
+## the two registers: fully abstract OR recognizably real (never the middle)
 
-The register to reach for when a scene risks formless haze (SKILL.md failure-modes): a sharp, structured texture that abstracts a RECOGNISABLE subject — present, but only just. Three reference treatments (MOODBOARD.md), all of which beat-sync more legibly than soft haze and so satisfy doctrine 9 the easy way:
+The whole-frame law (SKILL.md) gives you exactly two registers; pick ONE per render and make the whole canvas commit to it. The failure is the **uncanny middle** — a half-real shape that reads as neither (blobs-with-lines that look like nothing).
+
+- **Fully abstract** — the texture/field IS the image, edge to edge: an fbm/curl haze, a voronoi cell-wall screen, a caustic field, a dense stipple swarm that owns the canvas. No subject; the surface is alive and that is enough. (This is what `sonnet-plain`'s vein-screen got right — the field WAS the frame.)
+- **Recognizably real, shown abstractly** — the eye must NAME it. This only works if you build on the subject's ACTUAL structure, not a vague impression of it: a real murmuration is streaming rivers with dark lanes and frayed edges (not a fuzzy cloud); real flowers are petals with form (see the moodboard's `halftone-tulip-bloom.png`, `crt-scanline-roses.png`, `dreamy-blurred-wildflowers.png` — real flora, abstracted but legible); a wing has ordered veins. If you can't make it read as the thing, drop to fully abstract — "almost real" is worse than "clearly abstract."
+
+When you DO go representational, these treatments keep it sharp, legible, and beat-syncing more easily than soft haze (so doctrine 9 comes for free). Three reference treatments (MOODBOARD.md):
 
 - **Halftone dot-screen** (`halftone-tulip-bloom.png`) — quantise a soft form (a bloom, a body, the energy field) through a dot grid whose dot RADIUS rides the beat. The dots are sharp; the subject reads through them.
 - **CRT / scanline raster** (`crt-scanline-roses.png`) — horizontal scanlines + an RGB cell grid over a subject; jitter/roll the lines on onsets, swell the phosphor bloom on energy. Degraded broadcast, not clean UI.
