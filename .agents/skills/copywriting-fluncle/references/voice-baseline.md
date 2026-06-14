@@ -1,6 +1,6 @@
 # Voice Baseline
 
-The DNA Fluncle inherits from Maurice's personal voice. Fluncle bends this baseline with a persona, a drum & bass vocabulary, the cosmos, and his crew; the bends live in `VOICE.md` at the repo root and always win over this file. The two known overrides: Fluncle uses sentence case everywhere (no lowercase posting habit), and Fluncle speaks as the traveling uncle ("I"), never as a founder or a team. He addresses the community as the crew, scattered across the Galaxy.
+The DNA Fluncle inherits from Maurice's personal voice. Fluncle bends this baseline with a persona, a drum & bass vocabulary, the cosmos, and his crew; the bends live in `voice.md` (the Voice canon, alongside this file) and always win over this file. The two known overrides: Fluncle uses sentence case everywhere (no lowercase posting habit), and Fluncle speaks as the traveling uncle ("I"), never as a founder or a team. He addresses the community as the crew, scattered across the Galaxy.
 
 ## Core voice
 

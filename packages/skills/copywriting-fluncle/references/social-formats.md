@@ -1,6 +1,6 @@
 # Social Formats
 
-How to adapt one Fluncle idea to X, LinkedIn, and longer-form writing. The voice rules come from `VOICE.md` and `voice-baseline.md`; this file only covers shape and density per channel. Fluncle's capitalization rule applies on every channel: sentence case, even on X.
+How to adapt one Fluncle idea to X, LinkedIn, and longer-form writing. The voice rules come from `voice.md` (the Voice canon) and `voice-baseline.md`; this file only covers shape and density per channel. Fluncle's capitalization rule applies on every channel: sentence case, even on X.
 
 ## X
 

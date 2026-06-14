@@ -5,29 +5,29 @@ description: "Write or edit any copy for the Fluncle platform in Fluncle's voice
 
 # Copywriting Fluncle
 
-Use this skill to write copy that sounds like Fluncle: the uncle with the good records, doing this since '90, who also happens to be a traveler through time and space. He logs what he finds out there, and every surface is one of his findings sent back across the Galaxy. He never travels alone; he writes to the crew. Fluncle's voice is Maurice's personal voice bent through a persona, a drum & bass vocabulary, and a cosmos. The canonical definition lives in `VOICE.md` at the repository root; this skill tells you how to load and apply it, it does not duplicate it.
+Use this skill to write copy that sounds like Fluncle: the uncle with the good records, doing this since '90, who also happens to be a traveler through time and space. He logs what he finds out there, and every surface is one of his findings sent back across the Galaxy. He never travels alone; he writes to the crew. Fluncle's voice is Maurice's personal voice bent through a persona, a drum & bass vocabulary, and a cosmos. The canonical definition lives in `references/voice.md` inside this skill; this skill tells you how to load and apply it. This skill is self-contained — everything it needs ships in `references/`.
 
 ## Source priority
 
 1. The user's current brief and facts.
-2. `VOICE.md` at the repo root: narrator, vocabulary, named rules, surface registers, mechanics, and the rewrite table. Read it before writing anything. If it is missing, stop and ask rather than improvising the voice.
+2. `references/voice.md`: the Voice canon — narrator, vocabulary, named rules, surface registers, mechanics, and the rewrite table. Read it before writing anything.
 3. `references/voice-baseline.md` for the inherited baseline (proof over hype, understated confidence, short lines, no em dashes, signature patterns).
 4. `references/social-formats.md` when the copy is a social post or longer-form writing (X, LinkedIn, README, blog-shaped) rather than product UI.
-5. `PRODUCT.md` and `DESIGN.md` for strategy and visual-system context when copy must align with a surface's design (for example empty states inside the playlist shell).
+5. Surface context, inlined below (no external files needed): Fluncle is a drum & bass banger archive — the uncle digs, certifies, and logs findings; the product is music-first, quiet, and fast. The visual mood is the Nostalgic Cosmos: awe and melancholy under a burning eclipse, warm and crewed, never cold or corporate. Match copy to that mood and to the surface's design (for example, empty states inside the playlist shell stay quiet and in-fiction). When working inside the Fluncle repo, `PRODUCT.md` and `DESIGN.md` carry the full strategy and visual system if deeper context is needed.
 
-Where sources disagree on language, `VOICE.md` wins. The two known divergences from the baseline: Fluncle uses sentence case everywhere (never the lowercase X habit), and Fluncle speaks as a persona ("I" = the uncle), not as a founder.
+Where sources disagree on language, `references/voice.md` wins. The two known divergences from the baseline: Fluncle uses sentence case everywhere (never the lowercase X habit), and Fluncle speaks as a persona ("I" = the uncle), not as a founder.
 
 ## Workflow
 
-1. Identify the surface: web UI, Telegram, CLI, SSH, README/meta, or social. The surface sets the register via VOICE.md's Depth Gradient: narrative saturation is uniform (fully in-fiction everywhere, the warm web included), and only technical density grades by altitude — web and Telegram stay low and warm; CLI is drier; SSH is the most technical and referential, a recovered terminal from a research vessel, borderline Ready Player One at the prompt.
-2. Read `VOICE.md` in full. It is short by design; do not skim it from memory of a previous session, because the vocabulary and rules evolve there first.
+1. Identify the surface: web UI, Telegram, CLI, SSH, README/meta, or social. The surface sets the register via the Depth Gradient in `references/voice.md`: narrative saturation is uniform (fully in-fiction everywhere, the warm web included), and only technical density grades by altitude — web and Telegram stay low and warm; CLI is drier; SSH is the most technical and referential, a recovered terminal from a research vessel, borderline Ready Player One at the prompt.
+2. Read `references/voice.md` in full. It is short by design; do not skim it from memory of a previous session, because the vocabulary and rules evolve there first.
 3. Extract the factual payload before writing: what happened (a banger was found, a submission arrived, an error occurred), what the reader should do next, and which facts are real. Never invent tracks, artists, dates, Log IDs, listener counts, or scene credentials.
 4. Draft in the register of the surface, then tighten against the named rules.
 5. Run the final checks below.
 
 ## Writing the voice, compressed
 
-These are reminders, not the spec; the spec is VOICE.md.
+These are reminders, not the spec; the spec is `references/voice.md`.
 
 - Fluncle says "I", addresses the listener as "you", and the community as the crew; at identity moments he names a person in it: junglist, raver, fam, cosmonaut. There is no "we" as a company; there is no team, there's an uncle and his crew.
 - The unit is a **finding**: one log entry, a track Fluncle found out there. A finding carries a banger; it is not itself the music. The collection of them all is **Fluncle's Findings** (the literal Spotify artifact stays "Playlist"). The whole of Fluncle across surfaces is **the Galaxy**.
@@ -41,7 +41,7 @@ These are reminders, not the spec; the spec is VOICE.md.
 
 ## Final checks
 
-Before returning copy, verify against VOICE.md:
+Before returning copy, verify against `references/voice.md`:
 
 - No banned identity words: "transmission(s)", "signal(s)", "anomaly", "curated / curation", "content", "stream / streaming" as identity, or marketing buzzwords. (📻 is retired with "transmission".) Fluncle finds and logs; he does not transmit, pick up signals, or curate.
 - Canon names are current: "Fluncle's Findings" (not "Fluncle's Finest"), "the Galaxy" (not "the ecosystem"), "the crew" for the community, "Found" for dates (not "Added" / "Discovered").
@@ -55,4 +55,7 @@ Before returning copy, verify against VOICE.md:
 - CLI and SSH output stays clean and parseable when it is data; jokes live in help text, welcomes, and empty states, not in machine-readable lines.
 - Any lossy texture is narrative, never broken UI (the Light-Years Rule).
 - Every claim is real: no invented tracks, dates, Log IDs, stats, or scene history. The Log ID coordinate is a deferred feature — never fabricate one to fill a layout.
-- Identity strings come from `apps/web/src/lib/identity.ts` and are reused verbatim, never paraphrased: meta descriptions, OG, and link-preview descriptions use the canonical description (tagline-led: "Drum & bass bangers from another dimension. Fluncle digs and certifies every track, …"); platform bios use the bio (the tagline plus `www.fluncle.com` on its own line; docs/socials/). Both open with the tagline.
+- Identity strings are fixed and reused verbatim, never paraphrased. Both open with the tagline ("Drum & bass bangers from another dimension."), so the entity reads identically everywhere:
+  - **Canonical entity description** (meta descriptions, OG, link-preview descriptions, llms.txt, glossary, schema): "Drum & bass bangers from another dimension. Fluncle digs and certifies every track, publishes them to Spotify and Telegram, and keeps the full archive of his findings at fluncle.com."
+  - **Platform bio** (Spotify, Telegram, TikTok, MusicBrainz, Wikidata, …): the tagline, then a blank line, then `www.fluncle.com` on its own line.
+  - When working inside the Fluncle repo, the description and bio are sourced from `apps/web/src/lib/identity.ts` (edit there or nowhere), and `docs/socials/` maps which platforms carry the bio. Outside the repo, treat the strings above as authoritative.
