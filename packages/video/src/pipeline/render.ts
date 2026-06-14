@@ -45,13 +45,22 @@ export async function render(
     codec: "h264",
     composition,
     // These scenes are GLSL shaders over film grain — high entropy h264 can't
-    // dedupe. crf 31 kept files tiny but the compression was visible (blocking in
-    // the gradients, mushy grain); the operator's eye caught it. Quality wins over
-    // bytes here: TikTok/IG re-encode from a clean source far better than from a
-    // pre-degraded one. So crf 20 + lossless PNG intermediate frames (the JPEG
-    // default baked banding in BEFORE the h264 pass). Files run larger (hundreds
-    // of MB for 20s), still well inside the upload flow's limits.
-    crf: 20,
+    // dedupe, so grain saturates whatever bitrate it's given. crf 31 was blocky
+    // (mushy grain, banding in the gradients); uncapped crf 20 fixed the look but
+    // ballooned a 20s clip to ~200MB. The size lever for this content isn't crf,
+    // it's a VBV CAP: encodingMaxRate bounds the peak the grain can spend, so the
+    // file size is predictable regardless of how busy the frame is.
+    //
+    // 32 Mbit/s × 20s ≈ 80MB — comfortably under the 100MB ceiling that unlocks
+    // Cloudflare Media Transformations (the on-the-fly web rendition off the R2
+    // master). lossless PNG intermediates stay (JPEG baked banding in BEFORE the
+    // h264 pass). crf is the quality target under the cap; both crf and the cap
+    // are first-pass values to A/B-verify by eye on the next render batch (grain
+    // is load-bearing — the Light-Years Rule — so the cap can't go so low it
+    // re-introduces blocking).
+    crf: 23,
+    encodingBufferSize: "64M",
+    encodingMaxRate: "32M",
     imageFormat: "png",
     inputProps,
     outputLocation: outputPath,

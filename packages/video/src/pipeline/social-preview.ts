@@ -151,12 +151,14 @@ async function main(): Promise<void> {
     durationMs: audio.durationMs,
     energySamples: audio.energyCurve.length,
     glow: palette.glow,
+    midSamples: audio.midCurve.length,
     onsetCount: audio.onsets.length,
     previewSource: preview.source,
     startMs: audio.startMs,
     swatchCount: palette.swatches.length,
     title: track.title,
     trackId,
+    trebleSamples: audio.trebleCurve.length,
   };
   console.log(`[social-preview] summary:\n${JSON.stringify(summary, null, 2)}`);
 

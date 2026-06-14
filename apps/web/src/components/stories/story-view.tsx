@@ -75,7 +75,13 @@ export function StoryView({
           muted={!active || muted}
           playsInline
           poster={posterUrl}
-          preload="auto"
+          // Only the active story buffers ahead. The ±1 neighbours mount (for
+          // instant swipe) but fetch metadata only — without this they each
+          // `preload="auto"` and pull the WHOLE clip, so a single view eagerly
+          // downloads ~3 full files. The footage is faststart h264 and R2 serves
+          // range requests, so a neighbour streams progressively the moment it
+          // becomes active; no need to have the bytes already.
+          preload={active ? "auto" : "metadata"}
           ref={videoRef}
           src={videoUrl}
         />

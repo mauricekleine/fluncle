@@ -22,6 +22,12 @@ drum & bass previews are beatless build-ups, so the analyzer honestly returns
 `null` (or, from older clamping code, a fake `160`). This skill exists to fix
 those specific tracks using sources the automated path deliberately avoids.
 
+## Requirements
+
+- The **`fluncle` CLI** installed on PATH and, for the write step, authenticated (`FLUNCLE_API_TOKEN`). Reads (`fluncle track get` / `fluncle recent`) are public. All commands below call the installed binary, not a repo checkout, so the skill runs wherever it's installed.
+- **`bun`** (runs the bundled `scripts/analyze-local.ts`).
+- For the tier-2 fallback only: **`yt-dlp`** and **`ffmpeg`** on PATH. Local-only — never on the microVM.
+
 ## When this runs (and when it must NOT)
 
 This is an **exception path**, not a pipeline step. Run it only when a human
@@ -65,12 +71,12 @@ whole list automatically.
 
 ```bash
 # A specific track:
-bun run --cwd apps/cli fluncle track get <trackId|logId> --json
+fluncle track get <trackId|logId> --json
 
 # Discovery: tracks worth re-checking are bpm == null, or an exact clamp value
 # (160.00 / 185.00) that the old code produced. Exact-160 is SUSPECT, not proven
 # fake — a track can legitimately be 160 — so always re-derive and compare.
-bun run --cwd apps/cli fluncle recent --json --limit 100
+fluncle recent --json --limit 100
 ```
 
 From the track record, capture: `trackId`, `isrc`, `artists`, `title`,
@@ -174,7 +180,7 @@ disagree, surface it and let the human decide rather than picking silently.
 On approval, write it:
 
 ```bash
-bun run --cwd apps/cli fluncle admin track update <trackId> --bpm <value>
+fluncle admin track update <trackId> --bpm <value>
 ```
 
 Then state the provenance plainly in your summary (e.g. "wrote 172.27, source:

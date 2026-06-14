@@ -34,6 +34,23 @@ export type CosmosTrack = {
   releaseDate?: string;
   /** Spotify/Deezer tags. Creative fuel; not for on-screen text. */
   tags?: string[];
+  /**
+   * Enrichment's track-level spectral summary (creative fuel — steers the
+   * vehicle, texture, and which band drives what; NOT per-frame reactivity, that
+   * is the audio analysis). Absent until the track is enriched.
+   */
+  features?: {
+    /** Spectral centroid in Hz — overall brightness (low = dark/warm, high = bright/airy). */
+    centroidHz?: number;
+    /** Fraction of energy >5kHz — treble/air. 0..1. */
+    highRatio?: number;
+    /** Spectral flatness of the mids — tonal (low) vs noisy (high). 0..1. */
+    midFlatness?: number;
+    /** Onsets per second — rhythmic busyness. */
+    onsetRate?: number;
+    /** Fraction of energy <120Hz — sub-bass weight. 0..1. */
+    subBassRatio?: number;
+  };
 };
 
 export type CosmosAudio = {
@@ -48,7 +65,12 @@ export type CosmosAudio = {
   /** ms offsets relative to clip start */
   onsets: number[];
   energyCurve: EnergySample[];
+  /** Low band, <150Hz (kick/sub). 0..1, normalized. */
   bassCurve: EnergySample[];
+  /** Mid band, 150Hz-2kHz (lead/vocal/snare body). 0..1, normalized. */
+  midCurve: EnergySample[];
+  /** High band, >2kHz (hats/cymbals/air). 0..1, normalized. */
+  trebleCurve: EnergySample[];
 };
 
 export type CosmosPalette = {

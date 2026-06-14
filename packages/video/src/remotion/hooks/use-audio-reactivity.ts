@@ -4,9 +4,14 @@ import { type CosmosAudio, type EnergySample } from "../types";
 import { useBass } from "./use-bass";
 import { useBeat } from "./use-beat";
 import { useEnergy, type UseCurveOptions } from "./use-energy";
+import { useMid } from "./use-mid";
 import { useOnset } from "./use-onset";
+import { useTreble } from "./use-treble";
 
-type AudioReactivityInput = Pick<CosmosAudio, "bassCurve" | "beatGrid" | "energyCurve" | "onsets">;
+type AudioReactivityInput = Pick<
+  CosmosAudio,
+  "bassCurve" | "beatGrid" | "energyCurve" | "midCurve" | "onsets" | "trebleCurve"
+>;
 
 export type DropEnvelopeOptions = {
   /** Defaults to the strongest energy sample in the clip. */
@@ -27,8 +32,12 @@ export type AudioReactivityOptions = {
   onsetWindowMs?: number;
   energy?: UseCurveOptions;
   bass?: UseCurveOptions;
+  mid?: UseCurveOptions;
+  treble?: UseCurveOptions;
   fastEnergy?: UseCurveOptions;
   fastBass?: UseCurveOptions;
+  fastMid?: UseCurveOptions;
+  fastTreble?: UseCurveOptions;
   hitBeatWeight?: number;
   hitOnsetWeight?: number;
   swellBeatWeight?: number;
@@ -40,12 +49,20 @@ export type AudioReactivityOptions = {
 export type AudioReactivity = {
   /** Smoothed global energy, for broad exposure and material pressure. */
   energy: number;
-  /** Tighter low-end energy, for thickness, refraction, body, and glow breadth. */
+  /** Tighter low-end energy (kick/sub), for thickness, refraction, body, glow breadth. */
   bass: number;
+  /** Mid-band energy (150Hz-2kHz: lead/vocal/snare). Map to a DIFFERENT element than bass. */
+  mid: number;
+  /** Treble-band energy (>2kHz: hats/cymbals/air). The liveliest band — fine detail/sparkle. */
+  treble: number;
   /** Near-raw energy, useful for sharper but non-positional material disruption. */
   energyFast: number;
   /** Near-raw bass, useful for pressure changes without waiting on smoothing. */
   bassFast: number;
+  /** Near-raw mid, for snappier lead-driven material reactions. */
+  midFast: number;
+  /** Near-raw treble, for snappy hat/cymbal-driven sparkle. */
+  trebleFast: number;
   /** Beat-grid pulse, snap-to-one and exponential decay. */
   beat: number;
   /** Onset transient pulse, usually shorter than beat. */
@@ -113,10 +130,13 @@ const dropEnvelope = (
 /**
  * A shared audio-reactivity bus for track compositions.
  *
- * The doctrine stays strict: audio must not rewrite travel position. These
- * signals are meant to disturb the vehicle's material: width, density, radius,
- * threshold, exposure, grain, refraction, and glow. In short: audio disturbs the
- * material, not just illuminates it.
+ * These signals disturb the vehicle's MATERIAL (width, density, radius,
+ * threshold, exposure, grain, refraction, glow) on the immediate beat, and may
+ * also drive its MOTION (travel, flow, convergence) — but motion only through a
+ * SMOOTHED value (use `swell`/`drop`/`energy`, or smooth `hit` with attack/decay
+ * yourself), never the raw per-beat transient, so movement glides and never
+ * snaps (Motion law, doctrine 7). In short: audio disturbs the material AND
+ * moves the picture, never just illuminates it.
  */
 export const useAudioReactivity = (
   audio: AudioReactivityInput,
@@ -128,6 +148,8 @@ export const useAudioReactivity = (
 
   const energy = useEnergy(audio.energyCurve, options.energy);
   const bass = useBass(audio.bassCurve, options.bass);
+  const mid = useMid(audio.midCurve, options.mid);
+  const treble = useTreble(audio.trebleCurve, options.treble);
   const energyFast = useEnergy(audio.energyCurve, {
     smoothingFrames: 1,
     ...options.fastEnergy,
@@ -135,6 +157,14 @@ export const useAudioReactivity = (
   const bassFast = useBass(audio.bassCurve, {
     smoothingFrames: 1,
     ...options.fastBass,
+  });
+  const midFast = useMid(audio.midCurve, {
+    smoothingFrames: 1,
+    ...options.fastMid,
+  });
+  const trebleFast = useTreble(audio.trebleCurve, {
+    smoothingFrames: 1,
+    ...options.fastTreble,
   });
   const { pulse: beat } = useBeat(audio.beatGrid, { decay: options.beatDecay ?? 3.2 });
   const { pulse: swellBeat } = useBeat(audio.beatGrid, { decay: options.swellDecay ?? 1.25 });
@@ -161,9 +191,13 @@ export const useAudioReactivity = (
     energy,
     energyFast,
     hit,
+    mid,
+    midFast,
     onset,
     peakTimeMs,
     swell,
+    treble,
+    trebleFast,
     uniforms: {
       u_audioBeat: beat,
       u_audioDisturbance: disturbance,
@@ -173,6 +207,8 @@ export const useAudioReactivity = (
       u_audioSwell: swell,
       u_bassFast: bassFast,
       u_energyFast: energyFast,
+      u_midFast: midFast,
+      u_trebleFast: trebleFast,
     },
   };
 };

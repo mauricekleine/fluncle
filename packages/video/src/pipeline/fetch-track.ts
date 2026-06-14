@@ -22,6 +22,13 @@ type ApiTrack = {
   popularity?: number;
   previewUrl?: string;
   tags?: string[];
+  features?: {
+    centroidHz?: number;
+    highRatio?: number;
+    midFlatness?: number;
+    onsetRate?: number;
+    subBassRatio?: number;
+  };
 };
 
 /**
@@ -56,6 +63,7 @@ export async function fetchTrack(trackId: string): Promise<CosmosTrack> {
     artworkUrl: found.albumImageUrl,
     discoveredAt: found.addedAt,
     durationMs: found.durationMs,
+    features: found.features,
     label: found.label,
     logId: found.logId,
     note: found.note,

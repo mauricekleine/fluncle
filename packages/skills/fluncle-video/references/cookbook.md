@@ -2,7 +2,7 @@
 
 Technique, not style. This teaches how to draw the things Fluncle videos are made of; the _what_ is yours, chosen per track. There is no committed track archive — use these patterns as a vocabulary, and consult R2 output bundles only when the operator provides a specific historical composition. The exact `GLSL.*` signatures and the `ShaderLayer` injected header live in `packages/video/README.md`; this file assumes you have read that section.
 
-The unit of drawing is one `ShaderLayer` rendering a GLSL fragment shader. Inside a shader you get the injected uniforms (`u_time`, `u_res`, `u_progress`, `u_energy`, `u_bass`, `u_beatPulse`, `u_seed`, `u_palette[4]`) and the dither helpers (`ditherValue`, `dither8`). You spread the `GLSL.*` snippet strings ahead of `void main()` and respect their dependencies (`fbm` needs `valueNoise`; `valueNoise`/`simplexNoise`/`filmGrain` need `hash`). **At the GPU level, bake grain and the palette ramp into the shader** (`GLSL.filmGrain`, `GLSL.paletteRamp`). The core ships NO CSS `Grain` overlay — the recovered-footage grain is yours, in-shader, on every frame, and varied per video (the Light-Years Rule).
+The unit of drawing is one `ShaderLayer` rendering a GLSL fragment shader. Inside a shader you get the injected uniforms (`u_time`, `u_res`, `u_progress`, `u_energy`, `u_bass`, `u_mid`, `u_treble`, `u_beatPulse`, `u_seed`, `u_palette[4]`, plus the `*Fast` and `u_audio*` variants — full list in README) and the dither helpers (`ditherValue`, `dither8`). You spread the `GLSL.*` snippet strings ahead of `void main()` and respect their dependencies (`fbm` needs `valueNoise`; `valueNoise`/`simplexNoise`/`filmGrain` need `hash`). **At the GPU level, bake grain and the palette ramp into the shader** (`GLSL.filmGrain`, `GLSL.paletteRamp`). The core ships NO CSS `Grain` overlay — the recovered-footage grain is yours, in-shader, on every frame, and varied per video (the Light-Years Rule).
 
 ## fbm haze / smoke fields
 
@@ -38,17 +38,19 @@ Audio reactivity comes ONLY from the curve hooks / shader audio uniforms — nev
 - **Energy gates for drops:** derive the drop window from the energy curve's peak timestamps, then build a `drop` scalar (an `interpolate` ramp across `[dropIn, dropOut]`, optionally floored so the intro is never stone-cold). Gate ignition, field warmth, and exposure on it so the material peak and the visual peak land together.
 - **Onset flashes:** `useOnset(onsets, windowMs)` → a 0..1 spike per transient. Use for grain kicks, a dither threshold jolt, a chromatic-aberration shudder, a star twinkle — supporting accents, never the vehicle.
 - **Slow gestures:** `useEnergy` (smoothed, broad) drives starfield drift speed, glow breadth, global float; `useBass` (tighter) drives rim swell and breathing.
+- **Frequency bands — map instruments to elements (the music-driven win):** three bands are analysed and fed as uniforms (`u_bass` <150Hz kick/sub, `u_mid` 150Hz-2kHz lead/vocal/snare, `u_treble` >2kHz hats/cymbals/air) and React hooks (`useBass` / `useMid` / `useTreble`, plus `*Fast` near-raw variants on the bus: `bassFast`/`midFast`/`trebleFast`). Drive DIFFERENT elements off DIFFERENT bands — the kick swells the core, the lead bends the flow, the hats sparkle the grain. Reacting to one `energy` scalar reads as "moves with the music"; splitting the bands reads as "plays the music." Pick the band that matches what each element should feel. (For the track's OVERALL character — bassy vs bright vs busy — read `track.features` from props, the enrichment spectral summary: it tells you which band leads and how heavy/sparkly the whole vehicle should be before you even look at the per-frame curves.)
+- **Kick emphasis (power-scaling):** `pow(u_bass, 4.0)` in-shader makes only strong kicks approach 1 (a real hit has to build before it reads) — the standard audio-reactive trick for a punchy, non-mushy response. Temporal smoothing lives in the hooks (`smoothingFrames`, attack/decay) and in the pre-smoothed `swell`/`drop` busses: a fragment shader has no previous frame to lerp against (Remotion renders frames independently), so accumulate-over-time smoothing happens in React, not the shader.
 - **Deriving drop timestamps:** scan `audio.energyCurve` for the peak(s) in the chosen window; those are clip-progress positions you reuse for the drop gate and the type timing.
 
 Build explicit beat maps with named scalars such as `drop`, `dropRise`, and `cold`, plus `DROP_IN`/`DROP_OUT` windows derived from the analyzed curve. For breakdown-led cuts, keep the vehicle visible in the quiet section and reserve the largest structural change for the late drop.
 
-- **Movement envelopes (doctrine 10):** score 2–3 movements by pinning boundary timestamps to the music's seams (a drop, a bar boundary, an energy shift), then build one 0..1 envelope per movement in React and pass them as uniforms (`u_m2`, `u_m3`). **Ease the envelope — never linear:** `interpolate(sec, [boundary, boundary + ~2], [0, 1], { easing: Easing.inOut(Easing.cubic), extrapolateLeft: "clamp", extrapolateRight: "clamp" })`. A raw linear ramp makes a zoom/stretch/pan read as a mechanical slide; the slow-in/slow-out curve is what makes it feel like a polished transition, not a tween. Inside the shader each envelope shifts the REGIME of the same vehicle — lerp the palette lean, step the cell/dot/streak density or scale, tighten or break the structure, swap which term dominates — while position stays monotonic (Motion law) and the One Driver persists. **Crossfade over a BAR, not a beat** (~1.4–2.8s at 172 BPM; `interpolate(sec, [boundary, boundary + ~2], …)`): START the transition on the seam and let the new regime arrive like weather rolling in, not a cut — snapping between movements too fast makes the shift read as a glitch instead of a passage. The destination regime should land fully a couple of seconds after the seam. The result: second 18 must not look like second 4 with the brightness up — but no single frame should look like a scene change either.
+- **Movement envelopes (doctrine 10):** score 2–3 movements by pinning boundary timestamps to the music's seams (a drop, a bar boundary, an energy shift), then build one 0..1 envelope per movement in React and pass them as uniforms (`u_m2`, `u_m3`). **Ease the envelope — never linear:** `interpolate(sec, [boundary, boundary + ~2], [0, 1], { easing: Easing.inOut(Easing.cubic), extrapolateLeft: "clamp", extrapolateRight: "clamp" })`. A raw linear ramp makes a zoom/stretch/pan read as a mechanical slide; the slow-in/slow-out curve is what makes it feel like a polished transition, not a tween. Inside the shader each envelope shifts the REGIME of the same vehicle — lerp the palette lean, step the cell/dot/streak density or scale, tighten or break the structure, swap which term dominates — while motion stays SMOOTH (a baseline glide that audio may bend only through smoothed envelopes, never a raw-beat snap — Motion law) and the One Driver persists. **Crossfade over a BAR, not a beat** (~1.4–2.8s at 172 BPM; `interpolate(sec, [boundary, boundary + ~2], …)`): START the transition on the seam and let the new regime arrive like weather rolling in, not a cut — snapping between movements too fast makes the shift read as a glitch instead of a passage. The destination regime should land fully a couple of seconds after the seam. The result: second 18 must not look like second 4 with the brightness up — but no single frame should look like a scene change either.
 
 ## motion, depth, and the moving climax
 
 Three recurring failure modes, with the technique to avoid each (full framing in SKILL.md):
 
-- **Audio modulates material, never motion (doctrine 7).** Build any travel coordinate AND any animation speed from `u_time` / `arc` / a monotonic rise ONLY — keep them audio-free so the motion glides. `float flow = radius*3.0 - u_time*0.85 - u_rise*1.4;` is right; subtracting a beat spike — `... - u_lift*0.6` — causes a jump-and-snap, and multiplying `u_time` by a beat value makes the whole field lurch on the kick. The equalizer punch goes into MATERIAL: `brightness *= 1.0 + u_hit*0.5`, `thickness *= 1.0 + u_bass*0.4`, `curvature += u_swell*k`, `radius *= 1.0 + u_hit*0.3`. So a kick makes a filament brighter / fatter / more curved, never faster and never displaced. Keep streak frequency low (≲ a dozen) or fbm-soften it so it doesn't strobe as it moves.
+- **Audio may drive motion — but only SMOOTHED (doctrine 7).** A baseline of travel / flow / speed comes from `u_time` / `arc` / a steady rise; audio may then BEND it, as long as the signal driving the motion is SMOOTHED — the energy envelope, a bar swell, the drop, or a beat run through an attack/decay — never the raw per-beat transient. RIGHT: `float flow = radius*3.0 - u_time*0.85 - u_rise*1.4 - u_swell*0.6;` (a smoothed swell eases the flow faster on the build), or `pos += dir * u_drop * 0.04;` (the mass surges on the drop envelope), or a flock contracting on `u_swell` and dispersing as it falls. WRONG: `... - u_hit*0.6` on a travel term, or `u_time * (1.0 + u_beatPulse)` on a speed term — the bare kick on position/speed jump-and-snaps the whole field every beat. Want per-beat life in the MOTION? Smooth the beat first (attack/decay into a swell), then drive position with the smoothed value. MATERIAL still takes the immediate punch freely: `brightness *= 1.0 + u_hit*0.5`, `thickness *= 1.0 + u_bass*0.4`, `curvature += u_swell*k`, `radius *= 1.0 + u_hit*0.3`. So a kick makes a filament brighter / fatter at once AND, as a smoothed swell, eases the whole field's drift faster; it never jumps the field a step per kick. Keep streak frequency low (≲ a dozen) or fbm-soften it so it doesn't strobe as it moves.
 - **The climax is the vehicle igniting, not a sun glued on (doctrine 1).** Don't add a separate radial gold/colour bloom or halo behind or over the vehicle — drive the vehicle's OWN material to its hottest stop at the climax, in the scene's palette: lerp the filament/blade/node/crest colour toward the scene's peak-heat hue where it's hottest (gate on the drop envelope). When that hue is genuinely gold, lerp toward `u_palette[2]`; when the scene is cool, the climax brightens in ITS OWN colour and reaching for yellow is the error. If deleting the vehicle would delete the bright moment, you've got it right.
 - **Depth, not diagram.** Volume comes from two-layer fbm, soft radial falloff, vignette, and layered haze — not thin hard parallel primitives on a sparse field. If your field could pass for a UI element, widen it, soften the edges, and layer haze behind it until it reads as cosmos.
 - **Move the climax.** Don't gate the climax to dead-centre on every clip. Scan `audio.energyCurve` for where the music ACTUALLY peaks and ignite there — late, early, a slow swell held to the close, an off-centre crest, a front sweeping across. The centred mid-clip glow is the template to escape, not the target.
@@ -57,20 +59,46 @@ Three recurring failure modes, with the technique to avoid each (full framing in
 
 Spread these strings ahead of `void main()`; mind the dependency chain. (Signatures in README.)
 
-| Snippet               | Provides                                                                                 |
-| --------------------- | ---------------------------------------------------------------------------------------- |
-| `hash`                | `hash21` / `hash22` / `hash13` — base for all noise.                                     |
-| `valueNoise`          | smooth bilinear `valueNoise(p) -> 0..1`. Needs `hash`.                                   |
-| `simplexNoise`        | gradient noise `simplexNoise(p) -> ~-1..1`. Needs `hash`.                                |
-| `fbm`                 | domain-rotated `fbm(p, octaves) -> 0..1`. Needs `valueNoise`.                            |
-| `paletteRamp`         | the Retint gradient-map `paletteRamp(t) -> vec3` + `retint(src)` over `u_palette`.       |
-| `polarFold`           | kaleidoscope wedge fold `polarFold(uv, segments)` — the fractal vehicle.                 |
-| `sdf`                 | `sdCircle` / `sdBox` + smooth union `smin`.                                              |
-| `filmGrain`           | organic emulsion grain `filmGrain(col, uv, time, intensity)`. Needs `valueNoise`+`hash`. |
-| `vignette`            | radial darkening `vignette(uv, radius, softness) -> 0..1`.                               |
-| `chromaticAberration` | per-channel UV offset helpers `caOffsetR` / `caOffsetB` for an edge-growing RGB split.   |
+| Snippet               | Provides                                                                                                 |
+| --------------------- | -------------------------------------------------------------------------------------------------------- |
+| `hash`                | `hash21` / `hash22` / `hash13` — base for all noise.                                                     |
+| `valueNoise`          | smooth bilinear `valueNoise(p) -> 0..1`. Needs `hash`.                                                   |
+| `simplexNoise`        | gradient noise `simplexNoise(p) -> ~-1..1`. Needs `hash`.                                                |
+| `fbm`                 | domain-rotated `fbm(p, octaves) -> 0..1`. Needs `valueNoise`.                                            |
+| `curlNoise`           | divergence-free 2D flow `curlNoise(p) -> vec2` — organic advection (flocks/smoke). Needs `valueNoise`.   |
+| `domainWarp`          | IQ domain warp `domainWarp(p, octaves) -> 0..1` — marbled, never-gridded fields. Needs `fbm`.            |
+| `voronoi`             | cellular/worley `voronoi(p) -> vec3` (F1, F2, cellHash); walls = `smoothstep(F2-F1)`. Needs `hash`.      |
+| `dotField`            | dense AA stipple/particle screen `dotField(uv, res, cells, radius, jitter, seed) -> 0..1`. Needs `hash`. |
+| `paletteRamp`         | the Retint gradient-map `paletteRamp(t) -> vec3` + `retint(src)` over `u_palette`.                       |
+| `polarFold`           | kaleidoscope wedge fold `polarFold(uv, segments)` — the fractal vehicle.                                 |
+| `sdf`                 | `sdCircle` / `sdBox` + smooth union `smin`.                                                              |
+| `sdf3d`               | 3D primitives `sdSphere3` / `sdBox3` / `sdTorus3` + `rot2`, for raymarched scenes.                       |
+| `raymarch`            | sphere-tracer `raymarch(ro, rd, tmax)` + `calcNormal`; you define `float map(vec3 p)`.                   |
+| `filmGrain`           | organic emulsion grain `filmGrain(col, uv, time, intensity)`. Needs `valueNoise`+`hash`.                 |
+| `vignette`            | radial darkening `vignette(uv, radius, softness) -> 0..1`.                                               |
+| `chromaticAberration` | per-channel UV offset helpers `caOffsetR` / `caOffsetB` for an edge-growing RGB split.                   |
 
 Always finish a shader with `dither8(col, uv)` to kill 8-bit banding on smooth gradients.
+
+## organic fields: curl flow, cells, domain warp
+
+The fluid/organic/alive north star now has helpers — reach for these before hand-rolling:
+
+- **`curlNoise(p)`** — a divergence-free flow field. Advect a coordinate by it (`p += curlNoise(p * f) * amt`) for swirling, smoke-like, never-diverging motion: flocks, embers, ink, dust. Scale `p` for eddy size; evolve it on `u_time` and bend the strength with a smoothed band (Motion law).
+- **`voronoi(p)`** — cellular / worley, the cellular-crackle vehicle the board calls for. Cell WALLS = `smoothstep(0.06, 0.0, vor.y - vor.x)` (cracked glaze, dry lakebed, cell membranes); cell FILL = `vor.z` (per-cell hash for varied tone). Breathe the cells on the bass; widen the walls on the drop.
+- **`domainWarp(p, octaves)`** — fbm-of-fbm. Marbled, flowing fields that never read as gridded; the antidote to clean noise. Use as a base field or warp another field's coordinates through it.
+
+## raymarched 3D (volumetric)
+
+For a volumetric or solid vehicle (a tumbling relic, a smoke volume, a metaball mass), `sdf3d` + `raymarch` give a 3D pipeline inside the fragment shader: define `float map(vec3 p)` from `sdSphere3` / `sdBox3` / `sdTorus3` (+ `smin` from `sdf` for smooth unions, `rot2` to tumble), then `raymarch(ro, rd, tmax)` and shade off `calcNormal`. Keep the step count modest — it runs per pixel. CRITICAL: a clean raymarched solid is the polished-CGI failure (SKILL.md) — soak it in `filmGrain`, break the edges, and warp the surface with `fbm` / `domainWarp` so it reads as recovered footage, not a 3D render. Pairs naturally with `bloom` for an emissive core.
+
+## bloom — real emission glow (opt-in)
+
+`<ShaderLayer bloom={{ threshold, intensity, radius }} />` adds a real multi-pass bloom: the bright pixels of YOUR shader are isolated, blurred at half-res, and added back, so hot material reads as genuinely luminous halation — not a flat bright patch. Off unless you pass the prop (the render path is otherwise unchanged).
+
+- **Bloom the vehicle's OWN hot material, never a glued-on orb (doctrine 1).** Bloom amplifies whatever is already bright, so make the bright thing the vehicle's crest / core / filaments going hot — not a separate gradient circle. A clean bright disc plus bloom is still the banned fake-glow, just blurrier; texture the hot material (grain, broken edges) so the bloom reads as recovered-footage halation.
+- **Tuning:** `threshold` (default 0.7) is the luminance cut — raise it so only the true climax blooms; `intensity` (0.8) is how much is added back; `radius` (1.0) is the spread. Drive your shader's hot pixels with the drop envelope and the bloom blooms hardest exactly when the music peaks.
+- **No feedback trails.** Bloom is single-frame. Cross-frame GPU feedback (motion echoes sampled from the previous frame) is NOT possible — Remotion renders frames independently, so a shader can't read frame N-1. Fake trails with in-shader history instead (sample your field at a few `u_time - k` offsets and sum).
 
 ## palette discipline (paletteMix + the Retint Rule)
 
@@ -97,3 +125,27 @@ The register to reach for when a scene risks formless haze (SKILL.md failure-mod
 **Vary the axis and the primitive.** Those three references all happen to be horizontal-line / raster motifs — left unchecked, agents converge on "horizontal lines + a horizontal gold bar." The register is far wider; reach past lines for: a **dot / stipple screen** (halftone as DOTS, or a particle/ember field quantised to a grid, dot radius riding the beat), a **woven mesh or moiré** interference, a **cellular / voronoi crackle** (cracked glaze, a dry lakebed, cell walls breathing on the bass), **caustics / refraction** (light bent through water or glass, the hot focus swelling on energy), an **emulsion / chemical bloom**. Pick a structure whose axis and primitive differ from the recent archive (read the `videoVehicle` ledger via `fluncle recent --json`), and let the climax take the form that structure implies — a brightening cell, a caustic hot-spot, a sweeping shimmer, a single dot that blooms — in the scene's own colour, **not always a horizontal bar, not a default circular sun, and not forced to gold** (doctrine 1: one committed climax, free form and free colour).
 
 Keep the warm dark throughout — the structure is the vehicle, not a second light source. Any gold is one accent among the scene's palette, present only when the vehicle's own material genuinely runs hot, never bolted on as a sun.
+
+### Density: dots, particles, flocks (the sparse-flock fix)
+
+A dot/stipple/particle/swarm vehicle lives or dies on COUNT. The recurring miss: an agent hand-rolls a coarse one-dot-per-cell grid at ~80–120 cells, which is only a few hundred dots once gated to a body — so a "vast murmuration" renders as scattered confetti, the **flat-chart failure** (SKILL.md). The concept it was chasing has THOUSANDS of points. The canvas renders at full 1080×1920 and a cell grid costs the same per pixel no matter how many cells, so density is free — there is no reason to come out sparse.
+
+Use **`GLSL.dotField`** and think in HUNDREDS of cells:
+
+```glsl
+${GLSL.hash} ${GLSL.fbm} ${GLSL.dotField}
+// ... in main(), after you have a 0..1 `body` density field (fbm membrane, SDF,
+// energy field — the shape the flock occupies) and a per-pixel cell id:
+float dots = max(
+  dotField(uv, u_res, 240.0, 0.0022, 0.7, u_seed),        // base octave
+  dotField(uv, u_res, 360.0, 0.0016, 0.8, u_seed + 19.0)  // finer octave → sub-grid density
+);
+// gate the dots to the BODY so they form an organism, not confetti:
+float present = step(hash21(floor(uv * u_res / 6.0)), smoothstep(0.15, 0.6, body));
+dots *= present * smoothstep(0.1, 0.5, body);
+```
+
+- **Count is the cell number, not the radius.** 240–360 cells across the height gives thousands of legible points; ~100 reads as static. Keep the dot `radius` ≥ ~0.0015 (≈3px) and AA'd (the helper does this) or h264 eats the fine ones.
+- **Body-gate every dot.** Multiply by a density field + a membership `step()` so the dots have a shape with edges and depth — never an even scatter across the frame (that's the formless/confetti failure).
+- **Reactivity rides the dots' MATERIAL** per the Motion law (doctrine 7): dot radius swells on the hit, the membership threshold / glow lifts on the energy swell, grain kicks on onsets. What audio may do to the flock's MOTION is governed by doctrine 7 — read it and stay inside it.
+- For a true sense of a living mass, layer 2–3 octaves at different cell counts and let the densest core read as depth (a faint diffuse haze of the body underneath the dots sells "one organism," not loose points).

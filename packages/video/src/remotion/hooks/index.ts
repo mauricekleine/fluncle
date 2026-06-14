@@ -6,6 +6,8 @@ export { useBeat, type BeatState, type UseBeatOptions } from "./use-beat";
 export { useOnset } from "./use-onset";
 export { useEnergy, type UseCurveOptions } from "./use-energy";
 export { useBass } from "./use-bass";
+export { useMid } from "./use-mid";
+export { useTreble } from "./use-treble";
 export {
   useAudioReactivity,
   type AudioReactivity,

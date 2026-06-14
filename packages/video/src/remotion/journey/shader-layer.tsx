@@ -45,13 +45,19 @@ export type ShaderLayerProps = {
   onsetWindowMs?: number;
   /** Energy curve for `u_energy` via useEnergy. Omitted = u_energy stays 0. */
   energyCurve?: EnergySample[];
-  /** Bass curve for `u_bass` via useBass. Omitted = u_bass stays 0. */
+  /** Bass curve (<150Hz) for `u_bass` via useBass. Omitted = u_bass stays 0. */
   bassCurve?: EnergySample[];
+  /** Mid curve (150Hz-2kHz) for `u_mid` via useMid. Omitted = u_mid stays 0. */
+  midCurve?: EnergySample[];
+  /** Treble curve (>2kHz) for `u_treble` via useTreble. Omitted = u_treble stays 0. */
+  trebleCurve?: EnergySample[];
   /**
-   * Shared audio-reactivity profile. These uniforms are material signals, not
-   * position signals: use them for width, density, threshold, glow, grain,
-   * refraction, and exposure. Audio disturbs the material, not just illuminates
-   * it.
+   * Shared audio-reactivity profile. Use these to disturb MATERIAL (width,
+   * density, threshold, glow, grain, refraction, exposure) on the immediate
+   * beat, and to drive MOTION (travel, flow, convergence) too — but motion only
+   * through a SMOOTHED signal (an envelope, or a beat run through attack/decay),
+   * never the raw transient, so movement glides and never snaps on the kick
+   * (Motion law, doctrine 7). Audio disturbs the material AND moves the picture.
    */
   reactivity?: AudioReactivityOptions;
   /**
@@ -64,6 +70,12 @@ export type ShaderLayerProps = {
   opacity?: number;
   /** Blend mode of the layer over its parent. Default "normal". */
   blendMode?: React.CSSProperties["mixBlendMode"];
+  /**
+   * Opt-in real emission bloom (multi-pass: bright-pass + separable blur, added
+   * back). Omit and the render path is unchanged. Bloom the vehicle's OWN hot
+   * material — NOT a licence for the banned bolted-on glow-orb (doctrine 1).
+   */
+  bloom?: BloomOptions;
 };
 
 // The standard header injected ahead of every fragmentShader body. Anything an
@@ -76,7 +88,9 @@ uniform float u_time;      // seconds since clip start (frame / fps)
 uniform vec2  u_res;       // canvas resolution in px
 uniform float u_progress;  // 0..1 clip progress
 uniform float u_energy;    // 0..1 smoothed overall energy
-uniform float u_bass;      // 0..1 smoothed low-end energy
+uniform float u_bass;      // 0..1 smoothed low band <150Hz (kick/sub)
+uniform float u_mid;       // 0..1 smoothed mid band 150Hz-2kHz (lead/vocal/snare)
+uniform float u_treble;    // 0..1 smoothed high band >2kHz (hats/cymbals/air)
 uniform float u_beatPulse; // 0..1, snaps to 1 on each beat, decays before the next
 uniform float u_onsetPulse;// 0..1, snaps on detected transients and decays linearly
 uniform float u_audioHit;  // beat + onset composite for immediate material hits
@@ -85,6 +99,8 @@ uniform float u_audioDrop; // envelope around the strongest musical moment or co
 uniform float u_audioDisturbance; // hit+swell+drop, a general material disruption signal
 uniform float u_energyFast;// near-raw energy, for sharper non-positional reactions
 uniform float u_bassFast;  // near-raw bass, for pressure without smoothing lag
+uniform float u_midFast;   // near-raw mid, snappier lead-driven reactions
+uniform float u_trebleFast;// near-raw treble, snappy hat/cymbal sparkle
 uniform float u_seed;      // per-track seed
 uniform vec3  u_palette[4];// Retint ramp stops, dark -> light
 
@@ -115,6 +131,212 @@ const DEFAULT_STOPS: [string, string, string, string] = [
 const toVec3 = (hex: string): [number, number, number] => {
   const { r, g, b } = hexToRgb(hex);
   return [r / 255, g / 255, b / 255];
+};
+
+// --- Bloom: opt-in real emission glow (multi-pass) ---------------------------
+// Render the scene to a texture, isolate the bright pixels, separable-gaussian
+// blur them at half resolution, and add them back. Single-frame and fully
+// deterministic — there is NO cross-frame feedback (Remotion renders frames
+// independently, so frame N cannot read frame N-1's GPU state; feedback trails
+// are intentionally out of scope). Off by default: the render path below is
+// untouched unless a `bloom` prop is passed. DOCTRINE: this blooms the vehicle's
+// OWN hot material; it is not a licence for the banned bolted-on glow-orb.
+
+export type BloomOptions = {
+  /** Luminance above which a pixel blooms, 0..1. Default 0.7. */
+  threshold?: number;
+  /** How strongly the blurred bloom is added back, ~0..2. Default 0.8. */
+  intensity?: number;
+  /** Blur spread per tap in half-res pixels (wider = more halation). Default 1. */
+  radius?: number;
+};
+
+const BLOOM_BRIGHT_FRAG = `precision highp float;
+uniform sampler2D u_tex;
+uniform vec2 u_res;
+uniform float u_threshold;
+void main() {
+  vec2 uv = gl_FragCoord.xy / u_res;
+  vec3 c = texture2D(u_tex, uv).rgb;
+  float l = dot(c, vec3(0.299, 0.587, 0.114));
+  float k = smoothstep(u_threshold, u_threshold + 0.25, l);
+  gl_FragColor = vec4(c * k, 1.0);
+}`;
+
+const BLOOM_BLUR_FRAG = `precision highp float;
+uniform sampler2D u_tex;
+uniform vec2 u_res;
+uniform vec2 u_dir;
+void main() {
+  vec2 uv = gl_FragCoord.xy / u_res;
+  vec2 px = u_dir / u_res;
+  vec3 sum = texture2D(u_tex, uv).rgb * 0.227027;
+  sum += texture2D(u_tex, uv + px * 1.3846).rgb * 0.316216;
+  sum += texture2D(u_tex, uv - px * 1.3846).rgb * 0.316216;
+  sum += texture2D(u_tex, uv + px * 3.2307).rgb * 0.070270;
+  sum += texture2D(u_tex, uv - px * 3.2307).rgb * 0.070270;
+  gl_FragColor = vec4(sum, 1.0);
+}`;
+
+const BLOOM_COMPOSITE_FRAG = `precision highp float;
+uniform sampler2D u_scene;
+uniform sampler2D u_bloom;
+uniform vec2 u_res;
+uniform float u_intensity;
+void main() {
+  vec2 uv = gl_FragCoord.xy / u_res;
+  vec3 scene = texture2D(u_scene, uv).rgb;
+  vec3 bloom = texture2D(u_bloom, uv).rgb;
+  gl_FragColor = vec4(scene + bloom * u_intensity, 1.0);
+}`;
+
+type RenderTarget = { tex: WebGLTexture; fbo: WebGLFramebuffer };
+type BloomGl = {
+  bright: WebGLProgram;
+  blur: WebGLProgram;
+  composite: WebGLProgram;
+  scene: RenderTarget;
+  ping: RenderTarget;
+  pong: RenderTarget;
+  halfW: number;
+  halfH: number;
+  key: string;
+};
+
+/** Compile VERT + a helper fragment into a linked program (null on failure). */
+const compileFrag = (gl: WebGLRenderingContext, fragSrc: string): WebGLProgram | null => {
+  const vs = gl.createShader(gl.VERTEX_SHADER);
+  const fs = gl.createShader(gl.FRAGMENT_SHADER);
+  if (!vs || !fs) {
+    return null;
+  }
+  gl.shaderSource(vs, VERT);
+  gl.compileShader(vs);
+  gl.shaderSource(fs, fragSrc);
+  gl.compileShader(fs);
+  if (
+    !gl.getShaderParameter(vs, gl.COMPILE_STATUS) ||
+    !gl.getShaderParameter(fs, gl.COMPILE_STATUS)
+  ) {
+    return null;
+  }
+  const program = gl.createProgram();
+  if (!program) {
+    return null;
+  }
+  gl.attachShader(program, vs);
+  gl.attachShader(program, fs);
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    return null;
+  }
+  return program;
+};
+
+/** An RGBA8 texture + framebuffer at (w,h), LINEAR + clamp (null on failure). */
+const makeTarget = (gl: WebGLRenderingContext, w: number, h: number): RenderTarget | null => {
+  const tex = gl.createTexture();
+  const fbo = gl.createFramebuffer();
+  if (!tex || !fbo) {
+    return null;
+  }
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  return { fbo, tex };
+};
+
+/** Build the bloom programs + targets for a (w,h). Null if any step fails. */
+const buildBloomGl = (gl: WebGLRenderingContext, w: number, h: number): BloomGl | null => {
+  const bright = compileFrag(gl, BLOOM_BRIGHT_FRAG);
+  const blur = compileFrag(gl, BLOOM_BLUR_FRAG);
+  const composite = compileFrag(gl, BLOOM_COMPOSITE_FRAG);
+  const halfW = Math.max(1, Math.floor(w / 2));
+  const halfH = Math.max(1, Math.floor(h / 2));
+  const scene = makeTarget(gl, w, h);
+  const ping = makeTarget(gl, halfW, halfH);
+  const pong = makeTarget(gl, halfW, halfH);
+  if (!bright || !blur || !composite || !scene || !ping || !pong) {
+    return null;
+  }
+  return { blur, bright, composite, halfH, halfW, key: `${w}x${h}`, ping, pong, scene };
+};
+
+/**
+ * Run bright -> separable-blur -> composite. The scene must already be rendered
+ * into `b.scene`; composites scene + blurred bloom to the default framebuffer.
+ */
+const runBloom = (
+  gl: WebGLRenderingContext,
+  b: BloomGl,
+  buffer: WebGLBuffer,
+  fullW: number,
+  fullH: number,
+  opts: Required<BloomOptions>,
+): void => {
+  const pass = (
+    program: WebGLProgram,
+    target: WebGLFramebuffer | null,
+    vw: number,
+    vh: number,
+    setup: (p: WebGLProgram) => void,
+  ): void => {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target);
+    gl.viewport(0, 0, vw, vh);
+    gl.useProgram(program);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    const attrib = gl.getAttribLocation(program, "p");
+    gl.enableVertexAttribArray(attrib);
+    gl.vertexAttribPointer(attrib, 2, gl.FLOAT, false, 0, 0);
+    setup(program);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  };
+  const U = (p: WebGLProgram, n: string): WebGLUniformLocation | null =>
+    gl.getUniformLocation(p, n);
+
+  // Bright-pass: scene (full) -> ping (half).
+  pass(b.bright, b.ping.fbo, b.halfW, b.halfH, (p) => {
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, b.scene.tex);
+    gl.uniform1i(U(p, "u_tex"), 0);
+    gl.uniform2f(U(p, "u_res"), b.halfW, b.halfH);
+    gl.uniform1f(U(p, "u_threshold"), opts.threshold);
+  });
+
+  // Separable gaussian, a few iterations for spread (ping -H-> pong -V-> ping).
+  for (let i = 0; i < 5; i++) {
+    pass(b.blur, b.pong.fbo, b.halfW, b.halfH, (p) => {
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, b.ping.tex);
+      gl.uniform1i(U(p, "u_tex"), 0);
+      gl.uniform2f(U(p, "u_res"), b.halfW, b.halfH);
+      gl.uniform2f(U(p, "u_dir"), opts.radius, 0);
+    });
+    pass(b.blur, b.ping.fbo, b.halfW, b.halfH, (p) => {
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, b.pong.tex);
+      gl.uniform1i(U(p, "u_tex"), 0);
+      gl.uniform2f(U(p, "u_res"), b.halfW, b.halfH);
+      gl.uniform2f(U(p, "u_dir"), 0, opts.radius);
+    });
+  }
+
+  // Composite scene + blurred bloom -> default framebuffer (the canvas).
+  pass(b.composite, null, fullW, fullH, (p) => {
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, b.scene.tex);
+    gl.uniform1i(U(p, "u_scene"), 0);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, b.ping.tex);
+    gl.uniform1i(U(p, "u_bloom"), 1);
+    gl.uniform2f(U(p, "u_res"), fullW, fullH);
+    gl.uniform1f(U(p, "u_intensity"), opts.intensity);
+  });
 };
 
 type GlBundle = {
@@ -152,15 +374,19 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
   onsetWindowMs,
   energyCurve,
   bassCurve,
+  midCurve,
+  trebleCurve,
   reactivity,
   uniforms,
   opacity = 1,
   blendMode = "normal",
+  bloom,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height, durationInFrames } = useVideoConfig();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const bundleRef = useRef<GlBundle | null>(null);
+  const bloomGlRef = useRef<BloomGl | null>(null);
   const shaderKeyRef = useRef<string>("");
   const [error, setError] = useState<null | string>(null);
 
@@ -170,7 +396,9 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
       bassCurve: bassCurve ?? [],
       beatGrid: beatGrid ?? [],
       energyCurve: energyCurve ?? [],
+      midCurve: midCurve ?? [],
       onsets: onsets ?? [],
+      trebleCurve: trebleCurve ?? [],
     },
     {
       ...reactivity,
@@ -272,6 +500,7 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
     const onLost = (e: Event) => {
       e.preventDefault();
       bundleRef.current = null;
+      bloomGlRef.current = null;
       shaderKeyRef.current = "";
     };
     canvas.addEventListener("webglcontextlost", onLost, false);
@@ -282,6 +511,21 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
       return;
     }
     const { gl, program, buffer } = bundle;
+
+    // Build bloom resources first (once per size, cached) so the scene-program
+    // vertex/uniform state set below is the last thing bound before we draw.
+    let bloomGl: BloomGl | null = null;
+    if (bloom) {
+      const bloomKey = `${canvas.width}x${canvas.height}`;
+      bloomGl = bloomGlRef.current;
+      if (!bloomGl || bloomGl.key !== bloomKey) {
+        bloomGl = buildBloomGl(gl, canvas.width, canvas.height);
+        bloomGlRef.current = bloomGl;
+        if (!bloomGl) {
+          setError("Bloom setup failed (framebuffer or helper shader).");
+        }
+      }
+    }
 
     gl.useProgram(program);
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
@@ -296,6 +540,8 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
     gl.uniform1f(u("u_progress"), clipProgress);
     gl.uniform1f(u("u_energy"), audio.energy);
     gl.uniform1f(u("u_bass"), audio.bass);
+    gl.uniform1f(u("u_mid"), audio.mid);
+    gl.uniform1f(u("u_treble"), audio.treble);
     gl.uniform1f(u("u_beatPulse"), audio.beat);
     gl.uniform1f(u("u_onsetPulse"), audio.onset);
     gl.uniform1f(u("u_audioHit"), audio.hit);
@@ -304,6 +550,8 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
     gl.uniform1f(u("u_audioDisturbance"), audio.uniforms.u_audioDisturbance ?? 0);
     gl.uniform1f(u("u_energyFast"), audio.energyFast);
     gl.uniform1f(u("u_bassFast"), audio.bassFast);
+    gl.uniform1f(u("u_midFast"), audio.midFast);
+    gl.uniform1f(u("u_trebleFast"), audio.trebleFast);
     gl.uniform1f(u("u_seed"), seed);
 
     const flatPalette = new Float32Array(stops.flatMap((hex) => toVec3(hex)));
@@ -327,17 +575,32 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
       }
     }
 
-    gl.viewport(0, 0, canvas.width, canvas.height);
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    const drawScene = (target: WebGLFramebuffer | null): void => {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, target);
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    };
+
+    if (bloom && bloomGl) {
+      // Scene -> its texture, then bright/blur/composite to the canvas.
+      drawScene(bloomGl.scene.fbo);
+      runBloom(gl, bloomGl, buffer, canvas.width, canvas.height, {
+        intensity: bloom.intensity ?? 0.8,
+        radius: bloom.radius ?? 1,
+        threshold: bloom.threshold ?? 0.7,
+      });
+    } else {
+      drawScene(null);
+    }
     gl.flush();
 
     return () => {
       canvas.removeEventListener("webglcontextlost", onLost, false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [frame, fragmentShader, fps, clipProgress, audio, seed, stops, uniforms]);
+  }, [frame, fragmentShader, fps, clipProgress, audio, seed, stops, uniforms, bloom]);
 
   if (error) {
     return (

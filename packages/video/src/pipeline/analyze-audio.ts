@@ -336,11 +336,18 @@ export async function analyzeAudio(
 
   const totalMs = bands.hopCount * HOP_MS;
 
-  // Normalized full-energy and bass curves (per hop), for windowing + output.
+  // Normalized full-energy + per-band curves (per hop), for windowing + output.
+  // bass = <150Hz (kick/sub), mid = 150Hz-2kHz (lead/vocal/snare body),
+  // treble = >2kHz (hats/cymbals/air) — so a scene can map different instruments
+  // to different elements (the music-driven win).
   const energyHop = new Float32Array(bands.full);
   const bassHop = new Float32Array(bands.bass);
+  const midHop = new Float32Array(bands.mid);
+  const trebleHop = new Float32Array(bands.high);
   normalizeInPlace(energyHop);
   normalizeInPlace(bassHop);
+  normalizeInPlace(midHop);
+  normalizeInPlace(trebleHop);
 
   const onsetEnvNorm = new Float32Array(env);
   normalizeInPlace(onsetEnvNorm);
@@ -397,12 +404,16 @@ export async function analyzeAudio(
   // Trim curves to the window, time-relative to startMs.
   const energyCurve: EnergySample[] = [];
   const bassCurve: EnergySample[] = [];
+  const midCurve: EnergySample[] = [];
+  const trebleCurve: EnergySample[] = [];
   const startHop = Math.round(startMs / HOP_MS);
   const endHop = Math.round(endMs / HOP_MS);
   for (let h = startHop; h < endHop && h < bands.hopCount; h++) {
     const timeMs = h * HOP_MS - startMs;
     energyCurve.push({ energy: Number((energyHop[h] ?? 0).toFixed(4)), timeMs });
     bassCurve.push({ energy: Number((bassHop[h] ?? 0).toFixed(4)), timeMs });
+    midCurve.push({ energy: Number((midHop[h] ?? 0).toFixed(4)), timeMs });
+    trebleCurve.push({ energy: Number((trebleHop[h] ?? 0).toFixed(4)), timeMs });
   }
 
   // Beat grid across full clip, then trimmed/relative to the window.
@@ -422,7 +433,9 @@ export async function analyzeAudio(
     durationMs,
     energyCurve,
     file,
+    midCurve,
     onsets,
     startMs,
+    trebleCurve,
   };
 }

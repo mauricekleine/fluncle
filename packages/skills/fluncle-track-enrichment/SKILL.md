@@ -56,7 +56,7 @@ The analysis script (`scripts/analyze-track.ts`) is **self-contained** — zero 
 
    - Pass `--bpm` only if the analysis returned a non-null bpm (syncopated/build-up previews can't be measured — better null than a wrong guess).
    - Pass `--key` only if the analysis returned a non-null key.
-   - Always pass `--features` (the JSON vector) — it is the training data for the future vibe-placement model (energy ≈ onset rate, mood ≈ brightness; see docs/admin-tagging.md). The agent does NOT place a track on the vibe map; that's the operator's call in the tagging tool.
+   - Always pass `--features` (the JSON vector) — it is the training data for the future vibe-placement model (energy ≈ onset rate, mood ≈ brightness; in the Fluncle repo, `docs/admin-tagging.md` has the full vibe-map mapping). The agent does NOT place a track on the vibe map; that's the operator's call in the tagging tool.
    - Set `--status done`.
 
 That's the whole loop: get → analyze → archive → update.
@@ -70,4 +70,4 @@ That's the whole loop: get → analyze → archive → update.
 
 ## Video render (separate, requires the kit)
 
-Rendering the per-track video is **not** part of this self-contained skill — Remotion needs the `packages/video` kit present (a repo checkout / prebuilt image). When the kit is available, its doctrine is the **`fluncle-video` skill** (and `packages/video/README.md`): render the bundle, then `fluncle admin track video <track_id|log_id> --dir out/<log-id>` uploads it and sets `video_url` (the Worker owns R2; you never hold R2 credentials). Publishing the rendered video as a social draft is a third capability — the **`fluncle-publish` skill** (`fluncle admin track draft`). The full chain is `docs/enrichment-agent.md` + `docs/track-lifecycle.md`.
+Rendering the per-track video is **not** part of this self-contained skill — Remotion needs the Fluncle `packages/video` kit present (a repo checkout / prebuilt image). When the kit is available, its doctrine is the **`fluncle-video` skill**: render the bundle, then `fluncle admin track video <track_id|log_id> --dir out/<log-id>` uploads it and sets `video_url` (the Worker owns R2; you never hold R2 credentials). Publishing the rendered video as a social draft is a third capability — the **`fluncle-publish` skill** (`fluncle admin track draft`). Inside the Fluncle repo, the full chain and the kit's README are documented under `docs/` (`enrichment-agent.md`, `track-lifecycle.md`) and `packages/video/README.md`.

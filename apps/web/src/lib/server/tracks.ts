@@ -6,6 +6,25 @@ export type TrackCursor = {
   trackId: string;
 };
 
+/**
+ * Enrichment's track-level spectral summary (from `features_json`), surfaced as
+ * creative fuel for the video agent — it steers concept choices (vehicle,
+ * texture, which band drives what), never per-frame reactivity (that is the
+ * Remotion pipeline's own analysis). Absent until a track is enriched.
+ */
+export type TrackFeatures = {
+  /** Spectral centroid in Hz — overall brightness. */
+  centroidHz?: number;
+  /** Fraction of energy >5kHz — treble/air. 0..1. */
+  highRatio?: number;
+  /** Spectral flatness of the mids — tonal (low) vs noisy (high). 0..1. */
+  midFlatness?: number;
+  /** Onsets per second — rhythmic busyness. */
+  onsetRate?: number;
+  /** Fraction of energy <120Hz — sub-bass weight. 0..1. */
+  subBassRatio?: number;
+};
+
 export type TrackListItem = {
   addedAt: string;
   addedToSpotify: boolean;
@@ -15,6 +34,8 @@ export type TrackListItem = {
   bpm?: number;
   durationMs: number;
   enrichmentStatus: string;
+  /** Track-level spectral descriptors (creative fuel); absent until enriched. */
+  features?: TrackFeatures;
   isrc?: string;
   key?: string;
   label?: string;
@@ -58,6 +79,7 @@ type TrackRow = {
   bpm: number | null;
   duration_ms: number;
   enrichment_status: string;
+  features_json: string | null;
   isrc: string | null;
   key: string | null;
   label: string | null;
@@ -81,15 +103,41 @@ type TrackRow = {
   posted_to_telegram: number;
 };
 
-// Columns exposed to clients (features_json is internal training data, omitted).
+// Columns exposed to clients. `features_json` is the enrichment spectral summary,
+// surfaced (parsed) as creative fuel for the video agent.
 const TRACK_SELECT = `track_id, spotify_url, title, album, album_image_url, artists_json,
-  bpm, duration_ms, enrichment_status, isrc, key, label, log_id, popularity,
+  bpm, duration_ms, enrichment_status, features_json, isrc, key, label, log_id, popularity,
   preview_url, release_date, video_url, video_vehicle, video_model, video_model_reasoning, note, added_at,
   updated_at, vibe_x, vibe_y, added_to_spotify, posted_to_telegram,
   (select url from social_posts
      where track_id = tracks.track_id and platform = 'tiktok' and status = 'published'
        and url is not null
      order by published_at desc limit 1) as tiktok_url`;
+
+/** A finite number, or undefined — for tolerant parsing of stored feature JSON. */
+function finiteOrUndefined(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/** Parse the enrichment `features_json` into a typed spectral summary, or undefined. */
+function parseFeatures(json: string | null): TrackFeatures | undefined {
+  if (!json) {
+    return undefined;
+  }
+  try {
+    const raw = JSON.parse(json) as Record<string, unknown>;
+    const features: TrackFeatures = {
+      centroidHz: finiteOrUndefined(raw.centroidHz),
+      highRatio: finiteOrUndefined(raw.highRatio),
+      midFlatness: finiteOrUndefined(raw.midFlatness),
+      onsetRate: finiteOrUndefined(raw.onsetRate),
+      subBassRatio: finiteOrUndefined(raw.subBassRatio),
+    };
+    return Object.values(features).some((v) => v !== undefined) ? features : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function toTrackListItem(row: TrackRow): TrackListItem {
   return {
@@ -101,6 +149,7 @@ function toTrackListItem(row: TrackRow): TrackListItem {
     bpm: row.bpm ?? undefined,
     durationMs: row.duration_ms,
     enrichmentStatus: row.enrichment_status,
+    features: parseFeatures(row.features_json),
     isrc: row.isrc ?? undefined,
     key: row.key ?? undefined,
     label: row.label ?? undefined,

@@ -60,8 +60,10 @@ const defaultProps: NostalgicCosmosProps = {
     durationMs: 20000,
     energyCurve: [],
     file: "0mK92Hp80kOOhn086qcDgZ.m4a",
+    midCurve: [],
     onsets: [],
     startMs: 9950,
+    trebleCurve: [],
   },
   palette: {
     accent: colors.eclipseGold,

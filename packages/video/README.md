@@ -29,9 +29,11 @@ Two hard rules guard the output:
 
 ### Machinery
 
-- **`<ShaderLayer>` + `GLSL`** (`journey/shader-layer.tsx`, `journey/glsl.ts`) — the GPU workhorse. `ShaderLayer` renders a fullscreen-triangle fragment shader via raw WebGL, compiling once and pushing uniforms + drawing synchronously per frame. It injects a standard header (`u_time`, `u_res`, `u_progress`, `u_energy`, `u_bass`, `u_beatPulse`, `u_onsetPulse`, `u_audioHit`, `u_audioSwell`, `u_audioDrop`, `u_audioDisturbance`, `u_energyFast`, `u_bassFast`, `u_seed`, `u_palette[4]`, plus `ditherValue`/`dither8`) so a shader body can rely on it. `GLSL` is a library of composable function strings (`hash`, `valueNoise`, `simplexNoise`, `fbm`, `paletteRamp`/`retint`, `polarFold`, `sdf`, `filmGrain`, `vignette`, `chromaticAberration`) you spread into a fragment shader ahead of `void main()`. This is where grain and the palette ramp live — bake them into the shader (`filmGrain`, `paletteRamp`). There is no CSS `Grain` overlay; the recovered-footage grain is yours, in-shader, varied per video.
-- **Audio hooks** (`hooks/`) — `useAudioReactivity`, `useBeat`, `useOnset`, `useEnergy`, `useBass`, and the lower-level `sampleCurve`/`smoothCurveAtFrame`. Pure, deterministic, audio-reactive: each computes from `useCurrentFrame()`/`fps` and the `audio.*` arrays only. `useAudioReactivity` is the default bus for stronger musical unity: audio disturbs the material, not just illuminates it.
+- **`<ShaderLayer>` + `GLSL`** (`journey/shader-layer.tsx`, `journey/glsl.ts`) — the GPU workhorse. `ShaderLayer` renders a fullscreen-triangle fragment shader via raw WebGL, compiling once and pushing uniforms + drawing synchronously per frame. It injects a standard header (`u_time`, `u_res`, `u_progress`, `u_energy`, `u_bass`, `u_mid`, `u_treble`, `u_beatPulse`, `u_onsetPulse`, `u_audioHit`, `u_audioSwell`, `u_audioDrop`, `u_audioDisturbance`, `u_energyFast`, `u_bassFast`, `u_midFast`, `u_trebleFast`, `u_seed`, `u_palette[4]`, plus `ditherValue`/`dither8`) so a shader body can rely on it. The three bands (`u_bass` <150Hz, `u_mid` 150Hz-2kHz, `u_treble` >2kHz) let a scene map different instruments to different elements — the music-driven win. `GLSL` is a library of composable function strings (`hash`, `valueNoise`, `simplexNoise`, `fbm`, `curlNoise`, `domainWarp`, `voronoi`, `dotField`, `paletteRamp`/`retint`, `polarFold`, `sdf`, `sdf3d`, `raymarch`, `filmGrain`, `vignette`, `chromaticAberration`) you spread into a fragment shader ahead of `void main()`. `dotField` is the dense AA stipple/particle screen (flocks/swarms/halftone — dense, not sparse); `curlNoise`/`voronoi`/`domainWarp` are the fluid/cellular/marbled field helpers; `sdf3d`+`raymarch` are the 3D/volumetric pipeline. This is where grain and the palette ramp live — bake them into the shader (`filmGrain`, `paletteRamp`). There is no CSS `Grain` overlay; the recovered-footage grain is yours, in-shader, varied per video.
+- **Opt-in bloom** — `<ShaderLayer bloom={{ threshold, intensity, radius }} />` adds a real multi-pass emission glow (bright-pass + separable blur + add, single-frame and deterministic). Off by default. Bloom the vehicle's OWN hot material, never a glued-on glow-orb (doctrine 1). No cross-frame feedback exists (Remotion renders frames independently), so motion-trail effects must use in-shader history, not GPU feedback.
+- **Audio hooks** (`hooks/`) — `useAudioReactivity`, `useBeat`, `useOnset`, `useEnergy`, `useBass`, `useMid`, `useTreble`, and the lower-level `sampleCurve`/`smoothCurveAtFrame`. Pure, deterministic, audio-reactive: each computes from `useCurrentFrame()`/`fps` and the `audio.*` arrays only. `useAudioReactivity` is the default bus (exposes `energy`/`bass`/`mid`/`treble` + `*Fast` + `hit`/`swell`/`drop`): audio disturbs the material and may move the picture too — motion only through a smoothed signal (Motion law, doctrine 7), never the raw beat.
 - **The journey clock** — `useJourney(options?)` (`journey/use-journey.ts`). The shared narrative timeline: returns `{ progress, phase, phaseProgress, arc }`, where `phase` is `"depart" | "travel" | "arrive"` and `arc` is the eased 0..1 a scene travels along. Pure and frame-derived.
+- **`@remotion/three` — escape hatch, not wired in.** `@remotion/three`, `@react-three/fiber`, and `three` are installed and available if a concept genuinely needs a full 3D / React-Three-Fiber scene, but **nothing in the core uses or enforces them** — the default surface is the raw-WebGL `ShaderLayer` above (leaner, deterministic, headless via ANGLE). Reach for R3F only when even `sdf3d`+`raymarch` inside `ShaderLayer` can't express the idea; you own the determinism + grain if you do.
 
 ### The fixed layer + scene-led palette (rules that live in code)
 
@@ -49,7 +51,7 @@ These are guarantees the code makes; a track must not defeat them.
 
 1. **Warm Dark** — `paletteMix` keeps the field a warm near-black (nudged toward the artwork's darkest); `accent`/`glow`/`ink` are scene-led, no imposed gold.
 2. **The contrast guarantee** — `FloatingType` keeps every type role legible over the scene.
-3. **Monotonic drift (doctrine, not a component)** — any background/field you author advances on a steady frame-derived path and never reverses; audio drives brightness, never position. (The core no longer ships a `Starfield`.)
+3. **Smooth motion (doctrine, not a component)** — any background/field you author has a smooth baseline drift (frame-derived); audio MAY bend its motion (travel, flow, convergence), but only through a smoothed envelope, never the raw per-beat transient that would snap it (Motion law, doctrine 7). (The core no longer ships a `Starfield`.)
 4. **The quad law** — a `ShaderLayer` must never show its quad as a hard rectangle. A **full-bleed background** fills the frame (opaque, a real value into the corners) and so leaves no edge. A **localized layer** (orb/glow) fades **color AND alpha to true zero** before its bounds — a shader that returns nonzero outside its shape prints a rectangle (the printed-rectangle incident). The inverse over-correction is the **porthole**: a tight radial vignette on a full-bleed field crops the 9:16 canvas into a circle — keep background vignettes gentle (radius ≳ 1.0).
 
 ## The pipeline
@@ -75,8 +77,8 @@ Every producer (pipeline, Studio defaults, the agent) satisfies `NostalgicCosmos
 
 ```ts
 type NostalgicCosmosProps = {
-  track: CosmosTrack;
-  audio: CosmosAudio; // file, startMs, durationMs (10000–30000), bpm, beatGrid[], onsets[], energyCurve[], bassCurve[]
+  track: CosmosTrack; // + optional track.features (enrichment spectral summary, creative fuel)
+  audio: CosmosAudio; // file, startMs, durationMs (10000–30000), bpm, beatGrid[], onsets[], energyCurve[], bassCurve[], midCurve[], trebleCurve[]
   palette: CosmosPalette; // background, ink, accent, glow, swatches[]
   seed: number;
 };
@@ -84,9 +86,11 @@ type NostalgicCosmosProps = {
 
 `durationInFrames` is derived from `audio.durationMs` in `root.tsx` via `calculateMetadata`, so the clip length always matches the audio. The pipeline writes real props to `out/<trackId>.props.json`; `ship` copies those props to `out/<log-id>/props.json`.
 
+**`track.features`** (optional) is the enrichment skill's track-level spectral summary — `{ centroidHz, subBassRatio, highRatio, midFlatness, onsetRate }` — fetched from the public API and passed through as CREATIVE FUEL: it steers the vehicle/texture/band-mapping at concept time, never per-frame reactivity (that is `audio.*`). Absent until a track is enriched, so treat it as optional. This is the enrichment → video handoff; the two analyses run alongside each other (track-level direction vs per-frame animation), neither replaces the other.
+
 ### Encode settings rationale
 
-`h264`, **`crf: 20`** with **lossless PNG intermediate frames**, `x264Preset: "slow"`. crf 31 kept files tiny but the compression was visibly blocking on these grain-heavy shaders, and lossy JPEG intermediates baked banding in before h264 even ran; crf 20 + PNG intermediates render the grain/degradation cleanly (the texture is the composition's job, never the encoder's). Files are large (~120–200MB for 20s) — fine for the upload flow (platforms re-encode anyway).
+`h264`, **`crf: 23`** under a **VBV bitrate cap** (`encodingMaxRate: "32M"`, `encodingBufferSize: "64M"`), with **lossless PNG intermediate frames**, `x264Preset: "slow"`. The grain is high-entropy, so it saturates whatever bitrate you give it — crf alone is the wrong lever (crf 31 was blocky; uncapped crf 20 rendered cleanly but ballooned a 20s clip to ~200MB). The cap is what bounds size: 32 Mbit/s × 20s ≈ 80MB, comfortably under the **100MB** input ceiling for Cloudflare Media Transformations (so the master can drive an on-the-fly web rendition off R2). PNG intermediates stay — JPEG baked banding in before the h264 pass. crf and the cap are tuned by eye on each render batch; grain is load-bearing (the Light-Years Rule), so the cap can't go so low it re-introduces blocking.
 
 ### GPU / ANGLE note
 
