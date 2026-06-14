@@ -57,14 +57,12 @@ export type CosmosPalette = {
   /** Type-safe scene ink (cream-family). The only palette role meant for text. */
   ink: string;
   /**
-   * The vehicle's heat accent — gold-leaned BY DESIGN (paletteMix reserves the
-   * sun's family). LIGHT MATERIAL for shaders/glows, never type ink: piping
-   * `accent` into FloatingType/CloseCard smuggles near-gold text back in
-   * (doctrine 4: gold is the sun, never the type). For type emphasis, pick from
-   * `swatches` or derive from the scene.
+   * The vehicle's heat accent — the artwork's OWN most-chromatic swatch,
+   * scene-led (no gold lean). LIGHT MATERIAL for shaders/glows, never type ink.
+   * For type emphasis, pick from `swatches` or derive from the scene.
    */
   accent: string;
-  /** The reserved One Sun glow (gold-family always). Light material, never type ink. */
+  /** The scene's hot light — the accent lifted toward the brightest swatch. Light material, never type ink. */
   glow: string;
   /** Artwork-derived hexes */
   swatches: string[];

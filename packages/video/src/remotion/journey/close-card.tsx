@@ -77,7 +77,7 @@ const clamp01 = (n: number): number => Math.min(1, Math.max(0, n));
  * passes (the journey's arrive phase), then holds. Returns null until the reveal
  * begins so it never costs layout earlier in the clip.
  *
- * Composes over any scene: drop it last, inside the safe inset, above <Grain>.
+ * Composes over any scene: drop it last, inside the safe inset, above the scene.
  */
 // The shared lower-left anchor — the TypePlate's identity slot. The sign-off
 // lands where the credits were (one predictable home for predictable words).

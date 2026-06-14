@@ -1,6 +1,6 @@
 import { colors } from "@fluncle/tokens";
 import { type CosmosPalette } from "./types";
-import { luminance, mix, saturation, warmth } from "./color";
+import { luminance, mix, saturation } from "./color";
 
 export type PaletteMixOptions = {
   /**
@@ -9,37 +9,33 @@ export type PaletteMixOptions = {
    * stays a warm near-black. 0..1, default 0.18.
    */
   backgroundDrift?: number;
-  /**
-   * Warmth threshold above which the artwork is "warm enough" to let the accent
-   * lean to Eclipse Gold. Default 0.12.
-   */
-  warmThreshold?: number;
 };
 
 /**
- * Blends artwork swatches toward the brand anchors to produce the composition
- * palette (CosmosPalette).
+ * Derives the composition palette (CosmosPalette) from the artwork swatches.
  *
- * Brand rules encoded here (DESIGN.md):
- * - The One Sun Rule: Eclipse Gold is the single light source. `glow` is always
- *   gold-family, reserved for the one-sun moment. We never hand the artwork the
- *   gold; we reserve it.
- * - The Warm Dark Rule: `background` stays a warm near-black, only nudged toward
- *   the artwork's darkest swatch.
- * - Accent: always gold-family. The Retint Rule applies to palettes too — the
- *   artwork's most-chromatic swatch flavors the accent, but it is always leaned
- *   toward Eclipse Gold, and the cooler the artwork reads, the harder the lean.
- *   A cold sleeve never gets to extinguish the sun (the Loadstar incident).
- *   NOTE: `accent` (and `glow`) are LIGHT MATERIAL for the vehicle/shaders —
- *   never type ink. Type takes `ink` or a scene-derived swatch (doctrine 4:
- *   gold is the sun, never the type).
+ * SCENE-LED, not brand-locked. The ONE rule still encoded is the Warm Dark Rule:
+ * `background` stays a warm near-black, only nudged toward the artwork's darkest
+ * swatch. Everything else comes from the artwork:
+ * - `accent` is the artwork's OWN most-chromatic swatch — NO gold lean. A cool
+ *   sleeve yields a cool accent; a warm one yields a warm accent. (This replaces
+ *   the old "always lean to Eclipse Gold / One Sun" rule, which forced a gold
+ *   pop onto every climax regardless of palette.)
+ * - `glow` is that accent lifted toward the artwork's brightest swatch — the
+ *   scene's own hot light, not a reserved gold.
+ * - `ink` keeps Starlight Cream legible, lifted slightly toward the brightest.
  *
- * Pure and deterministic. Falls back to the full brand palette when no swatches
- * are supplied, so placeholder props still render on-brand.
+ * `accent` and `glow` are LIGHT MATERIAL for the vehicle/shaders — never type ink
+ * (type takes `ink` or a scene-derived swatch). Gold is no longer special here:
+ * if the artwork is warm/gold, the accent reads gold on its own; it is never
+ * imposed.
+ *
+ * Pure and deterministic. Falls back to the brand palette ONLY when no swatches
+ * are supplied (placeholder props with no artwork), so the empty state still
+ * renders on-brand.
  */
 export const paletteMix = (swatches: string[], options: PaletteMixOptions = {}): CosmosPalette => {
   const backgroundDrift = options.backgroundDrift ?? 0.18;
-  const warmThreshold = options.warmThreshold ?? 0.12;
 
   const clean = swatches.filter((s) => typeof s === "string" && s.trim().length > 0);
 
@@ -57,24 +53,22 @@ export const paletteMix = (swatches: string[], options: PaletteMixOptions = {}):
   const darkest = sorted[0]!;
   const brightest = sorted[sorted.length - 1]!;
 
-  // Most chromatic swatch is the artwork's natural accent candidate.
+  // Most chromatic swatch is the artwork's natural accent.
   const mostChromatic = [...clean].sort((a, b) => saturation(b) - saturation(a))[0]!;
 
   // Background: warm near-black, gently drifted toward the artwork's darkest.
   const background = mix(colors.deepField, darkest, backgroundDrift);
 
-  // Average warmth across swatches decides how hard the accent leans gold:
-  // warm artwork keeps more of its own character, cool artwork gets pulled
-  // firmly into the sun's family so the accent can never read cold.
-  const avgWarmth = clean.reduce((sum, s) => sum + warmth(s), 0) / clean.length;
-  const accent = mix(mostChromatic, colors.eclipseGold, avgWarmth >= warmThreshold ? 0.55 : 0.8);
+  // Accent: the scene's own chroma, no gold lean.
+  const accent = mostChromatic;
+
+  // Glow: the accent's hot light — lifted toward the artwork's brightest, so it
+  // reads as the scene's own light, not a reserved gold sun.
+  const glow = mix(accent, brightest, 0.6);
 
   // Ink: keep Starlight Cream legible; lift slightly toward the brightest swatch
   // so the type feels of-a-piece without losing the aged-paper cream.
   const ink = mix(colors.starlightCream, brightest, 0.12);
-
-  // Glow stays gold-family always: the reserved one-sun light.
-  const glow = colors.eclipseGlow;
 
   return {
     accent,

@@ -39,7 +39,7 @@ Create your composition at `packages/video/src/remotion/workbench/<CompId>.tsx`.
 - Pick a unique PascalCase `<CompId>` for the filename and **`export default`** your `React.FC<NostalgicCosmosProps>` (reuse the contract unchanged so the pipeline feeds it).
 - Import ONLY from `../cosmos` (plus `remotion`, `react`, `@fluncle/tokens`). No styled vehicles, no static image assets.
 - Write your scene and your GLSL shader. Lean on [cookbook.md](cookbook.md) for technique and the `GLSL.*` inventory.
-- Honor the quad law (doctrine 6): every `ShaderLayer` drives color AND alpha to 0.0 inside its quad. Starfield law (doctrine 7): monotonic drift, audio touches brightness/twinkle only.
+- Honor the quad law (doctrine 6): every `ShaderLayer` drives color AND alpha to 0.0 inside its quad. Motion law (doctrine 7) for any background/field you author yourself (a star drift, motes — the core ships no Starfield): monotonic drift, audio touches brightness/twinkle only.
 - Render the facts through `TypePlate` (doctrine 4): one drop-in, fixed homes, prescriptive timing — pass scene-derived `ink`/`dimInk`, and nudge `identityInSec`/`telemetryInSec` onto a musical seam if the intro asks. Never hand-place the facts with raw `FloatingType`.
 - End with `CloseCard`, driven by the journey's `"arrive"` phase — it owns its lower-left home; pass it the scene `palette` for ink + emphasis accent.
 - **Play the audio (MANDATORY):** drop `<TrackAudio audio={audio} />` in once. The hooks drive only the VISUALS; this is what makes the render carry SOUND. Omit it and the cut is silent (the render fails on a silence check). `ship` strips audio separately for the `footage-silent.mp4` TikTok cut — your review `footage.mp4` keeps it.
