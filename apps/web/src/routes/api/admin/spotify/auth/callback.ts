@@ -37,7 +37,7 @@ export const Route = createFileRoute("/api/admin/spotify/auth/callback")({
             }
 
             return new Response(null, {
-              headers: { Location: "/admin/tag", "Set-Cookie": grantCookie(await signGrant()) },
+              headers: { Location: "/admin", "Set-Cookie": grantCookie(await signGrant()) },
               status: 302,
             });
           }

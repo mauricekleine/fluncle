@@ -1,6 +1,6 @@
 // Single source of truth for the four galaxies — the vibe-map quadrants by which
 // findings are grouped (docs/admin-tagging.md). The NAMES are provisional: rename
-// them HERE and every surface follows — /admin/tag, the newsletter (via the
+// them HERE and every surface follows — the /admin board, the newsletter (via the
 // `galaxy` field on /api/tracks), and the game.
 //
 // vibe_x = Light(-1)↔Dark(+1) mood; vibe_y = Floaty(-1)↔Driving(+1) energy. The

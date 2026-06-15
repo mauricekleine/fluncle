@@ -13,9 +13,11 @@ import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as RssDotxmlRouteImport } from './routes/rss[.]xml'
 import { Route as GalaxyRouteImport } from './routes/galaxy'
 import { Route as AboutRouteImport } from './routes/about'
+import { Route as AdminRouteRouteImport } from './routes/admin/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as StoriesIndexRouteImport } from './routes/stories.index'
 import { Route as LogIndexRouteImport } from './routes/log.index'
+import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as StoriesLogIdRouteImport } from './routes/stories.$logId'
 import { Route as LogLogIdRouteImport } from './routes/log.$logId'
 import { Route as CliLatestDotshRouteImport } from './routes/cli/latest[.]sh'
@@ -25,8 +27,6 @@ import { Route as ApiStoriesRouteImport } from './routes/api/stories'
 import { Route as ApiSearchRouteImport } from './routes/api/search'
 import { Route as ApiNewsletterRouteImport } from './routes/api/newsletter'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
-import { Route as AdminTagRouteImport } from './routes/admin/tag'
-import { Route as AdminPostsRouteImport } from './routes/admin/posts'
 import { Route as AdminLoginRouteImport } from './routes/admin/login'
 import { Route as ApiTracksRandomRouteImport } from './routes/api/tracks/random'
 import { Route as ApiTracksIdOrLogIdRouteImport } from './routes/api/tracks.$idOrLogId'
@@ -69,6 +69,11 @@ const AboutRoute = AboutRouteImport.update({
   path: '/about',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminRouteRoute = AdminRouteRouteImport.update({
+  id: '/admin',
+  path: '/admin',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -83,6 +88,11 @@ const LogIndexRoute = LogIndexRouteImport.update({
   id: '/log/',
   path: '/log/',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AdminIndexRoute = AdminIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AdminRouteRoute,
 } as any)
 const StoriesLogIdRoute = StoriesLogIdRouteImport.update({
   id: '/stories/$logId',
@@ -129,20 +139,10 @@ const ApiHealthRoute = ApiHealthRouteImport.update({
   path: '/api/health',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AdminTagRoute = AdminTagRouteImport.update({
-  id: '/admin/tag',
-  path: '/admin/tag',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AdminPostsRoute = AdminPostsRouteImport.update({
-  id: '/admin/posts',
-  path: '/admin/posts',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const AdminLoginRoute = AdminLoginRouteImport.update({
-  id: '/admin/login',
-  path: '/admin/login',
-  getParentRoute: () => rootRouteImport,
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => AdminRouteRoute,
 } as any)
 const ApiTracksRandomRoute = ApiTracksRandomRouteImport.update({
   id: '/random',
@@ -260,13 +260,12 @@ const ApiAdminTracksTrackIdSocialPlatformDraftRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/admin': typeof AdminRouteRouteWithChildren
   '/about': typeof AboutRoute
   '/galaxy': typeof GalaxyRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/admin/login': typeof AdminLoginRoute
-  '/admin/posts': typeof AdminPostsRoute
-  '/admin/tag': typeof AdminTagRoute
   '/api/health': typeof ApiHealthRoute
   '/api/newsletter': typeof ApiNewsletterRoute
   '/api/search': typeof ApiSearchRoute
@@ -276,6 +275,7 @@ export interface FileRoutesByFullPath {
   '/cli/latest.sh': typeof CliLatestDotshRoute
   '/log/$logId': typeof LogLogIdRoute
   '/stories/$logId': typeof StoriesLogIdRoute
+  '/admin/': typeof AdminIndexRoute
   '/log/': typeof LogIndexRoute
   '/stories/': typeof StoriesIndexRoute
   '/api/admin/logout': typeof ApiAdminLogoutRoute
@@ -306,8 +306,6 @@ export interface FileRoutesByTo {
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/admin/login': typeof AdminLoginRoute
-  '/admin/posts': typeof AdminPostsRoute
-  '/admin/tag': typeof AdminTagRoute
   '/api/health': typeof ApiHealthRoute
   '/api/newsletter': typeof ApiNewsletterRoute
   '/api/search': typeof ApiSearchRoute
@@ -317,6 +315,7 @@ export interface FileRoutesByTo {
   '/cli/latest.sh': typeof CliLatestDotshRoute
   '/log/$logId': typeof LogLogIdRoute
   '/stories/$logId': typeof StoriesLogIdRoute
+  '/admin': typeof AdminIndexRoute
   '/log': typeof LogIndexRoute
   '/stories': typeof StoriesIndexRoute
   '/api/admin/logout': typeof ApiAdminLogoutRoute
@@ -343,13 +342,12 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/admin': typeof AdminRouteRouteWithChildren
   '/about': typeof AboutRoute
   '/galaxy': typeof GalaxyRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/admin/login': typeof AdminLoginRoute
-  '/admin/posts': typeof AdminPostsRoute
-  '/admin/tag': typeof AdminTagRoute
   '/api/health': typeof ApiHealthRoute
   '/api/newsletter': typeof ApiNewsletterRoute
   '/api/search': typeof ApiSearchRoute
@@ -359,6 +357,7 @@ export interface FileRoutesById {
   '/cli/latest.sh': typeof CliLatestDotshRoute
   '/log/$logId': typeof LogLogIdRoute
   '/stories/$logId': typeof StoriesLogIdRoute
+  '/admin/': typeof AdminIndexRoute
   '/log/': typeof LogIndexRoute
   '/stories/': typeof StoriesIndexRoute
   '/api/admin/logout': typeof ApiAdminLogoutRoute
@@ -386,13 +385,12 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/admin'
     | '/about'
     | '/galaxy'
     | '/rss.xml'
     | '/sitemap.xml'
     | '/admin/login'
-    | '/admin/posts'
-    | '/admin/tag'
     | '/api/health'
     | '/api/newsletter'
     | '/api/search'
@@ -402,6 +400,7 @@ export interface FileRouteTypes {
     | '/cli/latest.sh'
     | '/log/$logId'
     | '/stories/$logId'
+    | '/admin/'
     | '/log/'
     | '/stories/'
     | '/api/admin/logout'
@@ -432,8 +431,6 @@ export interface FileRouteTypes {
     | '/rss.xml'
     | '/sitemap.xml'
     | '/admin/login'
-    | '/admin/posts'
-    | '/admin/tag'
     | '/api/health'
     | '/api/newsletter'
     | '/api/search'
@@ -443,6 +440,7 @@ export interface FileRouteTypes {
     | '/cli/latest.sh'
     | '/log/$logId'
     | '/stories/$logId'
+    | '/admin'
     | '/log'
     | '/stories'
     | '/api/admin/logout'
@@ -468,13 +466,12 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/admin'
     | '/about'
     | '/galaxy'
     | '/rss.xml'
     | '/sitemap.xml'
     | '/admin/login'
-    | '/admin/posts'
-    | '/admin/tag'
     | '/api/health'
     | '/api/newsletter'
     | '/api/search'
@@ -484,6 +481,7 @@ export interface FileRouteTypes {
     | '/cli/latest.sh'
     | '/log/$logId'
     | '/stories/$logId'
+    | '/admin/'
     | '/log/'
     | '/stories/'
     | '/api/admin/logout'
@@ -510,13 +508,11 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AdminRouteRoute: typeof AdminRouteRouteWithChildren
   AboutRoute: typeof AboutRoute
   GalaxyRoute: typeof GalaxyRoute
   RssDotxmlRoute: typeof RssDotxmlRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
-  AdminLoginRoute: typeof AdminLoginRoute
-  AdminPostsRoute: typeof AdminPostsRoute
-  AdminTagRoute: typeof AdminTagRoute
   ApiHealthRoute: typeof ApiHealthRoute
   ApiNewsletterRoute: typeof ApiNewsletterRoute
   ApiSearchRoute: typeof ApiSearchRoute
@@ -567,6 +563,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AboutRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin': {
+      id: '/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AdminRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -587,6 +590,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/log/'
       preLoaderRoute: typeof LogIndexRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/admin/': {
+      id: '/admin/'
+      path: '/'
+      fullPath: '/admin/'
+      preLoaderRoute: typeof AdminIndexRouteImport
+      parentRoute: typeof AdminRouteRoute
     }
     '/stories/$logId': {
       id: '/stories/$logId'
@@ -651,26 +661,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiHealthRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin/tag': {
-      id: '/admin/tag'
-      path: '/admin/tag'
-      fullPath: '/admin/tag'
-      preLoaderRoute: typeof AdminTagRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/posts': {
-      id: '/admin/posts'
-      path: '/admin/posts'
-      fullPath: '/admin/posts'
-      preLoaderRoute: typeof AdminPostsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/admin/login': {
       id: '/admin/login'
-      path: '/admin/login'
+      path: '/login'
       fullPath: '/admin/login'
       preLoaderRoute: typeof AdminLoginRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof AdminRouteRoute
     }
     '/api/tracks/random': {
       id: '/api/tracks/random'
@@ -815,6 +811,20 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface AdminRouteRouteChildren {
+  AdminLoginRoute: typeof AdminLoginRoute
+  AdminIndexRoute: typeof AdminIndexRoute
+}
+
+const AdminRouteRouteChildren: AdminRouteRouteChildren = {
+  AdminLoginRoute: AdminLoginRoute,
+  AdminIndexRoute: AdminIndexRoute,
+}
+
+const AdminRouteRouteWithChildren = AdminRouteRoute._addFileChildren(
+  AdminRouteRouteChildren,
+)
+
 interface ApiTracksRouteChildren {
   ApiTracksIdOrLogIdRoute: typeof ApiTracksIdOrLogIdRoute
   ApiTracksRandomRoute: typeof ApiTracksRandomRoute
@@ -940,13 +950,11 @@ const ApiAdminTracksRouteWithChildren = ApiAdminTracksRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AdminRouteRoute: AdminRouteRouteWithChildren,
   AboutRoute: AboutRoute,
   GalaxyRoute: GalaxyRoute,
   RssDotxmlRoute: RssDotxmlRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
-  AdminLoginRoute: AdminLoginRoute,
-  AdminPostsRoute: AdminPostsRoute,
-  AdminTagRoute: AdminTagRoute,
   ApiHealthRoute: ApiHealthRoute,
   ApiNewsletterRoute: ApiNewsletterRoute,
   ApiSearchRoute: ApiSearchRoute,

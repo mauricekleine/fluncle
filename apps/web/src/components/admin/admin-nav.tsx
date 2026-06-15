@@ -1,17 +1,15 @@
 import { SignOutIcon } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 
-// Shared chrome for the authenticated admin surfaces (the posting board, the
-// tagging tool): jump between them and sign out, consistent on every page. Kept
-// as a component rather than a layout route because the admin pages have very
-// different bodies (a scrollable table vs. a full-height three-pane tool), so a
-// single imposed shell would fight them.
-const LINKS = [
-  { key: "posts", label: "Posts", to: "/admin/posts" },
-  { key: "tag", label: "Tag", to: "/admin/tag" },
-] as const;
+// Shared chrome for the authenticated admin surface: the board is `/admin` (the
+// operator's home, the pipeline view of every finding — it absorbed the old Posts
+// and Tag pages, so it's the only surface now), plus sign out. Rendered inside
+// AdminShell's header.
+const LINKS = [{ key: "board", label: "Board", to: "/admin" }] as const;
 
-export function AdminNav({ current }: { current: "posts" | "tag" }) {
+export type AdminNavCurrent = (typeof LINKS)[number]["key"];
+
+export function AdminNav({ current }: { current: AdminNavCurrent }) {
   return (
     <nav aria-label="Admin" className="flex shrink-0 items-center gap-1">
       {LINKS.map((link) => (
