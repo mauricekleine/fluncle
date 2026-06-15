@@ -1,6 +1,6 @@
 // Entry point for the local social-preview pipeline.
 //
-//   bun src/pipeline/social-preview.ts <trackId> [--skip-render] [--composition <Id>] [--composition-source <file>] [--duration-ms <10000-30000>]
+//   bun src/pipeline/social-preview.ts <trackId> [--skip-render] [--composition <Id>] [--composition-source <file>] [--duration-ms <10000-30000>] [--draft]
 //
 // fetch track -> resolve preview -> download + normalize -> analyze audio ->
 // extract palette -> assemble inputProps -> write out/<trackId>.props.json ->
@@ -61,6 +61,10 @@ function findCompositionSource(compositionId: string): string | undefined {
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const skipRender = args.includes("--skip-render");
+  // --draft renders a fast, half-res, NON-SHIPPABLE proof (out/<trackId>.draft.mp4)
+  // for checking direction + motion + reactivity (and running the beat-pull gate)
+  // before the slow ship render. See render.ts.
+  const draft = args.includes("--draft");
   // --composition <Id> selects a registered composition. The video agent authors
   // a temporary per-track composition and renders it through this flag.
   const compositionFlagIndex = args.indexOf("--composition");
@@ -88,7 +92,7 @@ async function main(): Promise<void> {
       (!Number.isFinite(durationMs) || durationMs! < 10_000 || durationMs! > 30_000))
   ) {
     throw new Error(
-      "usage: bun src/pipeline/social-preview.ts <trackId> [--skip-render] [--composition <Id>] [--composition-source <file>] [--duration-ms <10000-30000>]",
+      "usage: bun src/pipeline/social-preview.ts <trackId> [--skip-render] [--composition <Id>] [--composition-source <file>] [--duration-ms <10000-30000>] [--draft]",
     );
   }
 
@@ -184,9 +188,14 @@ async function main(): Promise<void> {
   }
 
   const { render } = await import("./render");
-  const outputPath = path.join(OUT_DIR, `${trackId}.mp4`);
+  const outputPath = path.join(OUT_DIR, draft ? `${trackId}.draft.mp4` : `${trackId}.mp4`);
+  if (draft) {
+    console.log(
+      `[social-preview] DRAFT render: half-res, fast, NO VBV cap — a NON-SHIPPABLE proof for direction + motion only (run without --draft for the ship-quality master)`,
+    );
+  }
   console.log(`[social-preview] rendering -> ${outputPath}`);
-  const result = await render(inputProps, outputPath, compositionId);
+  const result = await render(inputProps, outputPath, compositionId, { draft });
 
   // Silence guard: the audio HOOKS only drive visuals — the composition must
   // include <TrackAudio audio={audio} /> for the render to carry sound. Remotion
@@ -204,6 +213,15 @@ async function main(): Promise<void> {
     );
   }
   console.log(`[social-preview] audio level ok (mean_volume ${meanVolume} dB)`);
+
+  if (draft) {
+    // Verify-only: no render.json manifest (that's the ship pointer). Gate the
+    // draft directly — the beat-pull gate runs on any clip, half-res included.
+    console.log(
+      `[social-preview] DRAFT done -> ${outputPath} (NON-SHIPPABLE). Eyeball direction + motion, and gate it:\n  bun run --cwd packages/video detect-beat-pull ${path.relative(PACKAGE_ROOT, outputPath)}\nRun without --draft for the ship-quality master.`,
+    );
+    return;
+  }
 
   // --composition-source is forgiving about cwd: a path given as cwd-relative,
   // package-relative, or repo-root-relative all resolve. If omitted or wrong,

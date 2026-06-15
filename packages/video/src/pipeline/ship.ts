@@ -81,9 +81,17 @@ if (!track.logId) {
 // 2. The render must already exist (renders are slow; keep ship fast + idempotent).
 const reviewSrc = path.join(OUT_DIR, `${track.trackId}.mp4`);
 if (!existsSync(reviewSrc)) {
-  console.error(
-    `[ship] no render at ${reviewSrc} — run: bun src/pipeline/social-preview.ts ${track.trackId}`,
-  );
+  // A draft is a half-res/jpeg proof with the load-bearing grain hidden — it must
+  // never reach R2. If only a draft exists, say so explicitly.
+  if (existsSync(path.join(OUT_DIR, `${track.trackId}.draft.mp4`))) {
+    console.error(
+      `[ship] only a DRAFT render exists (${track.trackId}.draft.mp4). Drafts are half-res/jpeg proofs and are NOT shippable — run a full render first: bun src/pipeline/social-preview.ts ${track.trackId} --composition <Id>`,
+    );
+  } else {
+    console.error(
+      `[ship] no render at ${reviewSrc} — run: bun src/pipeline/social-preview.ts ${track.trackId}`,
+    );
+  }
   process.exit(1);
 }
 
