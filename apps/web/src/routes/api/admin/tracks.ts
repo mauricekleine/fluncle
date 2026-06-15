@@ -3,6 +3,7 @@ import { jsonError, requireAdmin } from "../../../lib/server/env";
 import { publishTrack } from "../../../lib/server/publish";
 import { triggerEnrichment } from "../../../lib/server/spinup";
 import { ApiError } from "../../../lib/server/spotify";
+import { decodeTrackCursor, listTracks } from "../../../lib/server/tracks";
 
 type AddTrackBody = {
   spotifyUrl?: unknown;
@@ -10,9 +11,36 @@ type AddTrackBody = {
   dryRun?: unknown;
 };
 
+// Admin list page size mirrors the public /api/tracks cap (48) — callers page
+// through with the cursor rather than asking for a huge single fetch.
+const adminDefaultLimit = 16;
+const adminMaxLimit = 48;
+
 export const Route = createFileRoute("/api/admin/tracks")({
   server: {
     handlers: {
+      // Admin-only archive query: the same listTracks the web app uses, but with
+      // order + hasVideo exposed so the CLI can ask the DB directly for "oldest
+      // finding without a video" (the render queue) or "recent finding WITH a
+      // video" (the vehicle ledger). Filtering happens in SQL, not client-side.
+      GET: async ({ request }) => {
+        const unauthorized = await requireAdmin(request);
+
+        if (unauthorized) {
+          return unauthorized;
+        }
+
+        const url = new URL(request.url);
+
+        return Response.json(
+          await listTracks({
+            cursor: decodeTrackCursor(url.searchParams.get("cursor")),
+            hasVideo: parseBoolean(url.searchParams.get("hasVideo")),
+            limit: parseAdminLimit(url.searchParams.get("limit")),
+            order: url.searchParams.get("order") === "asc" ? "asc" : "desc",
+          }),
+        );
+      },
       POST: async ({ request }) => {
         const unauthorized = await requireAdmin(request);
 
@@ -53,3 +81,31 @@ export const Route = createFileRoute("/api/admin/tracks")({
     },
   },
 });
+
+// `hasVideo` is tri-state: "true" → only findings with a video, "false" → only
+// those without, absent → no video filter.
+function parseBoolean(value: string | null): boolean | undefined {
+  if (value === "true") {
+    return true;
+  }
+
+  if (value === "false") {
+    return false;
+  }
+
+  return undefined;
+}
+
+function parseAdminLimit(value: string | null): number {
+  if (!value) {
+    return adminDefaultLimit;
+  }
+
+  const limit = Number.parseInt(value, 10);
+
+  if (!Number.isInteger(limit) || limit < 1) {
+    return adminDefaultLimit;
+  }
+
+  return Math.min(limit, adminMaxLimit);
+}

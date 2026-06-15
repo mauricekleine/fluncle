@@ -6,7 +6,7 @@ Forward-facing, roughly prioritized list of open work — what we pick from next
 
 Render a stack of videos so there's a schedulable backlog on TikTok: breathing room to roll out features without the feed going quiet. Uses the built local loop end-to-end; no new code.
 
-- Find every track with no video (`fluncle recent --needs-video --json`).
+- Find every track with no video, oldest first (`fluncle admin queue --json`) — the render queue.
 - Render a **diverse** batch — spread vehicles via the ledger and assign a distinct visual family per render (parallel renders converge on a shared attractor; broaden refs, don't let them).
 - Per track: `ship --vehicle` → `fluncle admin track video` (R2, incl. `cover.jpg`) → `fluncle admin track draft` (TikTok inbox).
 - The operator finishes each by hand in the app — paste caption (`note.txt`), add the official sound, set the cover, schedule. The backlog is a queue of ready inbox drafts to space out over days. Drive it from the **`/admin/posts` board** (shipped, PR #13): per-platform status, push/re-push, copy-caption, mark published/failed, and asset downloads (cover + cuts) for AirDrop — built to use one-handed on a phone.

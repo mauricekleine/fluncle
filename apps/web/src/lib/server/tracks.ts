@@ -293,8 +293,10 @@ export async function listTracks({
     filterArgs.push(until);
   }
 
-  if (hasVideo) {
+  if (hasVideo === true) {
     filterClauses.push("video_url is not null");
+  } else if (hasVideo === false) {
+    filterClauses.push("video_url is null");
   }
 
   if (placement === "unplaced") {

@@ -27,46 +27,76 @@ export type RecentTrack = {
   postedToTelegram: boolean;
 };
 
-type ApiRecentTrack = Omit<RecentTrack, "addedToSpotify" | "postedToTelegram"> & {
+export type ApiRecentTrack = Omit<RecentTrack, "addedToSpotify" | "postedToTelegram"> & {
   addedToSpotify?: boolean;
   postedToTelegram?: boolean;
 };
 
-type TracksResponse = {
+export type TracksResponse = {
   tracks: ApiRecentTrack[];
   totalCount: number;
   nextCursor?: string;
 };
 
-export async function recentCommand(limit: number): Promise<RecentTrack[]> {
-  const response = await publicApiGet<TracksResponse>(`/api/tracks?limit=${limit}`);
+// /api/tracks caps a single page at 48. `recent` only ever wants the newest few,
+// but an explicit `--limit` above the page cap pages through with the cursor so
+// the requested count is honoured rather than silently clipped at one page.
+const pageSize = 48;
 
-  return response.tracks.map((track) => {
-    return {
-      addedAt: track.addedAt,
-      addedToSpotify: track.addedToSpotify ?? true,
-      album: track.album,
-      albumImageUrl: track.albumImageUrl,
-      artists: track.artists,
-      bpm: track.bpm,
-      durationMs: track.durationMs,
-      enrichmentStatus: track.enrichmentStatus,
-      isrc: track.isrc,
-      key: track.key,
-      label: track.label,
-      logId: track.logId,
-      note: track.note,
-      popularity: track.popularity,
-      postedToTelegram: track.postedToTelegram ?? true,
-      previewUrl: track.previewUrl,
-      releaseDate: track.releaseDate,
-      spotifyUrl: track.spotifyUrl,
-      title: track.title,
-      trackId: track.trackId,
-      videoModel: track.videoModel,
-      videoModelReasoning: track.videoModelReasoning,
-      videoUrl: track.videoUrl,
-      videoVehicle: track.videoVehicle,
-    };
-  });
+export function mapTrack(track: ApiRecentTrack): RecentTrack {
+  return {
+    addedAt: track.addedAt,
+    addedToSpotify: track.addedToSpotify ?? true,
+    album: track.album,
+    albumImageUrl: track.albumImageUrl,
+    artists: track.artists,
+    bpm: track.bpm,
+    durationMs: track.durationMs,
+    enrichmentStatus: track.enrichmentStatus,
+    isrc: track.isrc,
+    key: track.key,
+    label: track.label,
+    logId: track.logId,
+    note: track.note,
+    popularity: track.popularity,
+    postedToTelegram: track.postedToTelegram ?? true,
+    previewUrl: track.previewUrl,
+    releaseDate: track.releaseDate,
+    spotifyUrl: track.spotifyUrl,
+    title: track.title,
+    trackId: track.trackId,
+    videoModel: track.videoModel,
+    videoModelReasoning: track.videoModelReasoning,
+    videoUrl: track.videoUrl,
+    videoVehicle: track.videoVehicle,
+  };
+}
+
+// The latest findings, newest first. Pages through with the cursor only when
+// `limit` exceeds one API page; the common small `limit` is a single request.
+export async function recentCommand(limit: number): Promise<RecentTrack[]> {
+  const results: RecentTrack[] = [];
+  let cursor: string | undefined;
+
+  do {
+    const params = new URLSearchParams({ limit: String(pageSize) });
+
+    if (cursor) {
+      params.set("cursor", cursor);
+    }
+
+    const response = await publicApiGet<TracksResponse>(`/api/tracks?${params.toString()}`);
+
+    for (const apiTrack of response.tracks) {
+      results.push(mapTrack(apiTrack));
+
+      if (results.length >= limit) {
+        return results;
+      }
+    }
+
+    cursor = response.nextCursor;
+  } while (cursor);
+
+  return results;
 }

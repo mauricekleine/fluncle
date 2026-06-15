@@ -20,8 +20,12 @@ type AddOptions = {
 
 type RecentOptions = {
   json: boolean;
-  limit: string;
-  needsVideo: boolean;
+  limit?: string;
+};
+
+type AdminListOptions = {
+  json: boolean;
+  limit?: string;
 };
 
 type OpenOptions = {
@@ -162,7 +166,6 @@ function addListenCommands(program: Command): void {
     .description("The latest bangers, newest first")
     .option("--limit <limit>", "Number of tracks to fetch", "10")
     .option("--json", "Print JSON", false)
-    .option("--needs-video", "Only findings that do not have a rendered video yet", false)
     .action(async (options: RecentOptions) => {
       const { recentCommand } = await import("./commands/recent");
       await runRecent(options, recentCommand);
@@ -281,6 +284,26 @@ function addAdminCommands(program: Command): void {
     .action(async (spotifyUrl: string | undefined, options: AddOptions) => {
       const { addCommand } = await import("./commands/add");
       await runAdd(spotifyUrl, options, addCommand);
+    });
+
+  admin
+    .command("queue")
+    .description("Findings awaiting a video, oldest first (the next to film is first)")
+    .option("--limit <limit>", "Number of findings to show", "10")
+    .option("--json", "Print JSON", false)
+    .action(async (options: AdminListOptions) => {
+      const { queueCommand } = await import("./commands/admin-tracks");
+      await runAdminQueue(options, queueCommand);
+    });
+
+  admin
+    .command("vehicles")
+    .description("Recent video vehicles, newest first — the style ledger for diversity")
+    .option("--limit <limit>", "Number of vehicles to show", "10")
+    .option("--json", "Print JSON", false)
+    .action(async (options: AdminListOptions) => {
+      const { vehiclesCommand } = await import("./commands/admin-tracks");
+      await runAdminVehicles(options, vehiclesCommand);
     });
 
   const adminTrack = configureCommand(admin.command("track").description("Track admin commands"));
@@ -746,15 +769,8 @@ async function runRecent(
   options: RecentOptions,
   recentCommand: typeof import("./commands/recent").recentCommand,
 ): Promise<void> {
-  const limit = Number.parseInt(options.limit ?? "10", 10);
-
-  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
-    throw new Error("Limit must be an integer between 1 and 100");
-  }
-
-  const fetched = await recentCommand(limit);
-  // --needs-video: only findings that don't have a rendered video yet.
-  const tracks = options.needsVideo ? fetched.filter((track) => !track.videoUrl) : fetched;
+  const limit = parseListLimit(options.limit);
+  const tracks = await recentCommand(limit);
 
   if (options.json) {
     printJson({
@@ -771,6 +787,69 @@ async function runRecent(
 
   const { trackRows } = await import("./format");
   console.log(trackRows(tracks).join("\n"));
+}
+
+// Shared limit parse for the listing commands (recent, admin queue, admin
+// vehicles): 1-100, default 10. Throws a CLI-friendly error before any fetch.
+function parseListLimit(value: string | undefined): number {
+  const limit = Number.parseInt(value ?? "10", 10);
+
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error("Limit must be an integer between 1 and 100");
+  }
+
+  return limit;
+}
+
+async function runAdminQueue(
+  options: AdminListOptions,
+  queueCommand: typeof import("./commands/admin-tracks").queueCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const tracks = await queueCommand(limit);
+
+  if (options.json) {
+    printJson({
+      ok: true,
+      tracks,
+    });
+    return;
+  }
+
+  if (tracks.length === 0) {
+    console.log("Every finding has a video. Nothing in the render queue.");
+    return;
+  }
+
+  const { trackRows } = await import("./format");
+  const noun = tracks.length === 1 ? "finding" : "findings";
+  console.log(`${tracks.length} ${noun} awaiting a video, oldest first:`);
+  console.log(trackRows(tracks).join("\n"));
+}
+
+async function runAdminVehicles(
+  options: AdminListOptions,
+  vehiclesCommand: typeof import("./commands/admin-tracks").vehiclesCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const vehicles = await vehiclesCommand(limit);
+
+  if (options.json) {
+    printJson({
+      ok: true,
+      vehicles,
+    });
+    return;
+  }
+
+  if (vehicles.length === 0) {
+    console.log("No videos rendered yet.");
+    return;
+  }
+
+  const { vehicleRows } = await import("./format");
+  console.log("Recent video vehicles, newest first:");
+  console.log(vehicleRows(vehicles).join("\n"));
 }
 
 async function runOpen(

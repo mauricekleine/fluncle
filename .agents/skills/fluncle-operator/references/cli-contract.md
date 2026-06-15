@@ -6,9 +6,13 @@ The deployed web app owns Fluncle server-side API routes. The CLI is a thin HTTP
 
 ```bash
 bun run --cwd apps/cli fluncle recent [--limit 10] [--json]
+bun run --cwd apps/cli fluncle admin queue [--limit 10] [--json]
+bun run --cwd apps/cli fluncle admin vehicles [--limit 10] [--json]
 bun run --cwd apps/cli fluncle admin add <spotify-url-or-uri> [--note "text"] [--dry-run] [--json]
 bun run --cwd apps/cli fluncle admin auth spotify
 ```
+
+`recent` is the public feed (newest first; raise `--limit` to fetch more). The two admin reads query the archive directly — the order and no-video filters are applied in SQL and paged with a cursor, so they never undercount: `admin queue` lists findings with no video yet, oldest first (the first row is the next to film); `admin vehicles` lists recent `<logId> <date> <vehicle>` entries, newest first — the diversity ledger a video agent reads before choosing a vehicle.
 
 Supported track inputs:
 

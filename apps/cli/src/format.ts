@@ -30,6 +30,29 @@ export function trackRows(tracks: RecentTrack[]): string[] {
   });
 }
 
+/** A finding's "Found" date as `YYYY-MM-DD`, sliced from the ISO `addedAt`. */
+export function foundDate(addedAt: string): string {
+  return addedAt.slice(0, 10);
+}
+
+/**
+ * The recent-vehicle ledger, one finding per line:
+ *   007.8.1B  2026-06-06  caustic membrane
+ * Coordinate column padded to the widest; a finding with no recorded vehicle
+ * shows the em-dash fallback.
+ */
+export function vehicleRows(
+  rows: Array<{ addedAt: string; logId?: string; vehicle?: string }>,
+): string[] {
+  const coordWidth = rows.reduce((width, row) => {
+    return Math.max(width, coordinate(row).length);
+  }, 0);
+
+  return rows.map((row) => {
+    return `${coordinate(row).padEnd(coordWidth)}  ${foundDate(row.addedAt)}  ${row.vehicle ?? COORD_FALLBACK}`;
+  });
+}
+
 /** `3:42` from milliseconds; omitted upstream when duration is unknown. */
 function formatDuration(durationMs: number): string {
   const totalSeconds = Math.round(durationMs / 1000);

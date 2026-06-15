@@ -43,6 +43,22 @@ describe("fluncle CLI parsing and JSON output", () => {
 `);
   });
 
+  test("admin queue validates --limit before fetching", async () => {
+    const result = await runCli(["admin", "queue", "--limit", "0", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
+  });
+
+  test("admin vehicles validates --limit before fetching", async () => {
+    const result = await runCli(["admin", "vehicles", "--limit", "0", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
+  });
+
   test("admin track video requires a footage cut before any upload", async () => {
     // A --dir with no footage.mp4 fails the local validation before the presign
     // request, so this runs without a server or admin token.
