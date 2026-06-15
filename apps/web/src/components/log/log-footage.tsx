@@ -1,9 +1,10 @@
 import { PauseIcon, PlayIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { trackMedia } from "@/lib/media";
+import { trackMedia, videoPoster, videoRendition } from "@/lib/media";
 import { usePreviewPlayer } from "@/lib/preview-player";
 import { type Track } from "@/lib/tracks";
+import { useResponsiveWidth } from "@/lib/use-responsive-width";
 
 // The log page's media element: the finding's footage as ONE element of the
 // archival plate (the page register), not a full-bleed reel — the cinematic
@@ -12,11 +13,43 @@ import { type Track } from "@/lib/tracks";
 // preview player, same as the feed's artwork toggle.
 export function LogFootage({ track }: { track: Track }) {
   const media = track.logId ? trackMedia(track.logId) : undefined;
-  const videoUrl = track.videoUrl;
-  const [posterFailed, setPosterFailed] = useState(false);
-  const posterUrl = (!posterFailed ? media?.posterUrl : undefined) ?? track.albumImageUrl;
+  const masterVideoUrl = track.videoUrl;
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const preview = usePreviewPlayer(track.trackId);
+
+  // Same-zone Media Transformations rendition sized to the log-page pane (a
+  // thumbnail, not full-bleed — so it wants far less than the 1080 master) once
+  // measured; the raw master holds SSR/first paint. A one-shot onError drops
+  // back to the master for any straggler the edge can't transform.
+  const renditionWidth = useResponsiveWidth(videoRef);
+  const [renditionFailed, setRenditionFailed] = useState(false);
+  const videoUrl =
+    masterVideoUrl && track.logId && renditionWidth && !renditionFailed
+      ? videoRendition(track.logId, { width: renditionWidth })
+      : masterVideoUrl;
+
+  const [posterFailed, setPosterFailed] = useState(false);
+  const [framePosterFailed, setFramePosterFailed] = useState(false);
+  // A cheap edge-extracted opening frame; falls back to the bundle poster, then
+  // album art. The poster attribute has no error event, so an Image() probe
+  // validates the frame transform.
+  const framePoster = track.logId && !framePosterFailed ? videoPoster(track.logId) : undefined;
+  const posterUrl =
+    framePoster ?? (!posterFailed ? media?.posterUrl : undefined) ?? track.albumImageUrl;
+
+  useEffect(() => {
+    if (!framePoster) {
+      return;
+    }
+
+    const probe = new Image();
+    probe.onerror = () => setFramePosterFailed(true);
+    probe.src = framePoster;
+
+    return () => {
+      probe.onerror = null;
+    };
+  }, [framePoster]);
 
   // Autoplay the muted loop only when motion is welcome; under reduced motion
   // the poster holds the frame until the preview toggle (a gesture) starts it.
@@ -50,12 +83,19 @@ export function LogFootage({ track }: { track: Track }) {
 
   return (
     <figure className="log-footage">
-      {videoUrl ? (
+      {masterVideoUrl ? (
         <video
           aria-hidden="true"
           className="log-footage-media"
           loop
           muted
+          // One-shot fallback to the raw master if the edge rendition fails
+          // (a >100MB source straggler, or any transform error).
+          onError={() => {
+            if (!renditionFailed && videoUrl !== masterVideoUrl) {
+              setRenditionFailed(true);
+            }
+          }}
           playsInline
           poster={posterUrl}
           preload="metadata"

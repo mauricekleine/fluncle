@@ -35,3 +35,61 @@ export function trackMedia(logId: string): TrackMedia {
     videoUrl: `${base}/footage.mp4`,
   };
 }
+
+// ── Cloudflare Media Transformations ─────────────────────────────────────────
+//
+// Playback surfaces (Stories, the log footage) don't fetch the raw 1080×1920
+// master — that's a heavy file on a phone over cellular. Instead they request a
+// same-zone Media Transformations rendition: Cloudflare resizes/transcodes the
+// master on the edge and caches it. The master keeps being the source of truth
+// (admin, OG, JSON-LD all read `trackMedia()` untouched); these helpers only
+// build the transform URL that points BACK at that master.
+//
+// URL shape (https://developers.cloudflare.com/stream/transform-videos/):
+//   https://<zone>/cdn-cgi/media/<OPTIONS>/<SOURCE-URL>
+// `<zone>` must be the fluncle.com zone with Transformations enabled (an
+// operator step — see wrangler.jsonc). The source is the master on the SAME
+// zone (found.fluncle.com), so the transform never crosses an origin.
+//
+// Constraints worth remembering: the source must be a full https URL, and
+// Cloudflare rejects sources larger than 100MB. Stragglers above that ceiling
+// (or any edge error) fall back to the raw master via a one-shot `onError` on
+// the <video>/<img>, so playback is safe regardless of the transform's verdict.
+
+/** The /cdn-cgi/media base on the found.fluncle.com zone (same zone as the master). */
+const MEDIA_TRANSFORM_BASE = `${FOUND_BASE}/cdn-cgi/media`;
+
+/**
+ * The intrinsic width Cloudflare transcodes a rendition to. The list is sparse
+ * on purpose — each distinct width is a separately-cached transform, so we snap
+ * the viewport to a small ladder instead of minting a per-pixel rendition.
+ */
+export type RenditionWidth = 360 | 480 | 720 | 1080;
+
+/**
+ * Build a same-zone Media Transformations URL for a footage rendition.
+ *
+ * `mode=video,width=N` resizes the master's `footage.mp4` to `width` px wide
+ * (height follows the source aspect), transcoded and cached at Cloudflare's
+ * edge. Falls back to the raw master on any edge error via the caller's
+ * one-shot `onError`.
+ */
+export function videoRendition(logId: string, { width }: { width: RenditionWidth }): string {
+  const source = `${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`;
+
+  return `${MEDIA_TRANSFORM_BASE}/mode=video,width=${width}/${source}`;
+}
+
+/**
+ * Build a same-zone Media Transformations URL for a cheap poster frame.
+ *
+ * `mode=frame` pulls a single still from the master instead of shipping the
+ * 1080-wide `poster.jpg`; `time=0s,format=jpg` takes the opening frame as a
+ * JPEG. Used as the <video> poster so the first paint is a light edge-cached
+ * image, not the full poster asset.
+ */
+export function videoPoster(logId: string): string {
+  const source = `${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`;
+
+  return `${MEDIA_TRANSFORM_BASE}/mode=frame,time=0s,format=jpg/${source}`;
+}

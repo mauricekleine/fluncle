@@ -3,8 +3,9 @@ import { siSpotify, siTiktok } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
 import { Button } from "@/components/ui/button";
 import { formatDate } from "@/lib/format";
-import { trackMedia } from "@/lib/media";
+import { trackMedia, videoPoster, videoRendition } from "@/lib/media";
 import { type Track } from "@/lib/tracks";
+import { useResponsiveWidth } from "@/lib/use-responsive-width";
 
 // One story: the footage (clip + poster) with a bottom scrim for legible meta
 // (The Legible Sky Rule), and the finding's frame — Log ID, title, artist,
@@ -32,10 +33,45 @@ export function StoryView({
   const media = track.logId ? trackMedia(track.logId) : undefined;
   // The stored video_url is the source of truth — the upload sets it to the
   // bundle's footage.mp4. media.ts only derives the poster/cover (no DB column).
-  const videoUrl = track.videoUrl;
-  const [posterFailed, setPosterFailed] = useState(false);
-  const posterUrl = (!posterFailed ? media?.posterUrl : undefined) ?? track.albumImageUrl;
+  const masterVideoUrl = track.videoUrl;
   const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  // Play a same-zone Media Transformations rendition sized to the pane, not the
+  // 1080-wide master, once the pane is measured (undefined on the server / first
+  // paint, where we hold the master). A one-shot onError drops back to the raw
+  // master, so a straggler above Cloudflare's 100MB source ceiling — or any edge
+  // error — still plays.
+  const renditionWidth = useResponsiveWidth(videoRef);
+  const [renditionFailed, setRenditionFailed] = useState(false);
+  const videoUrl =
+    masterVideoUrl && track.logId && renditionWidth && !renditionFailed
+      ? videoRendition(track.logId, { width: renditionWidth })
+      : masterVideoUrl;
+
+  const [posterFailed, setPosterFailed] = useState(false);
+  // A cheap edge-extracted opening frame for the poster; falls back to the
+  // bundle's poster.jpg, then the album art, as each upstream fails. The
+  // <video> poster attribute has no error event, so an Image() probe validates
+  // the frame transform and flips to the bundle poster if the edge can't make
+  // it (e.g. a >100MB source straggler).
+  const [framePosterFailed, setFramePosterFailed] = useState(false);
+  const framePoster = track.logId && !framePosterFailed ? videoPoster(track.logId) : undefined;
+  const posterUrl =
+    framePoster ?? (!posterFailed ? media?.posterUrl : undefined) ?? track.albumImageUrl;
+
+  useEffect(() => {
+    if (!framePoster) {
+      return;
+    }
+
+    const probe = new Image();
+    probe.onerror = () => setFramePosterFailed(true);
+    probe.src = framePoster;
+
+    return () => {
+      probe.onerror = null;
+    };
+  }, [framePoster]);
 
   // The active story hands its <video> up to the player, which reads its
   // currentTime/duration as the story clock and advances when it ends.
@@ -68,11 +104,19 @@ export function StoryView({
 
   return (
     <div className="story-view">
-      {videoUrl ? (
+      {masterVideoUrl ? (
         <video
           aria-hidden="true"
           className="story-footage"
           muted={!active || muted}
+          // A one-shot fallback: if the edge rendition can't be made (a source
+          // over Cloudflare's 100MB ceiling, or any transform error) the element
+          // re-points at the raw master and plays that instead.
+          onError={() => {
+            if (!renditionFailed && videoUrl !== masterVideoUrl) {
+              setRenditionFailed(true);
+            }
+          }}
           playsInline
           poster={posterUrl}
           // Only the active story buffers ahead. The ±1 neighbours mount (for
