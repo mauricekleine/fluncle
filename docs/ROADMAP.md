@@ -113,11 +113,11 @@ Every finding now has a permanent URL (`https://www.fluncle.com/log/<log-id>`) �
 
 ### Newsletter agent (Spinup)
 
-The Friday newsletter agent ([docs/newsletter-agent.md](./newsletter-agent.md)) exists on Spinup but is stopped and unconfigured. To go live: enable its capabilities (the `loops` + `firecrawl` CLIs with their secrets), confirm the core instructions, and wire a Friday schedule; it reads the discovery window from `/api/tracks` and sends via Loops. Dry-run one issue end-to-end before letting it send.
+The Friday newsletter agent ([docs/newsletter-agent.md](./newsletter-agent.md)) is configured on Spinup (slug `fluncle-s-newsletter-97bwtd`, hermes harness, `~anthropic/claude-haiku-latest`) and produces a complete draft: it reads the discovery window from `/api/tracks`, groups the finds by galaxy (Solar → Nebular → Lunar → Astral; unplaced finds under "Also found"), gathers scene tidbits via firecrawl, and stages a Loops campaign. **The send stays a manual operator step by design — Loops has no programmatic campaign-send (CLI / SDK / API / docs all confirm; dashboard-only), so this is not a gap to close.** Remaining: confirm the Friday cadence, and keep enough findings tagged (see the vibe-placement item) that the galaxy grouping isn't all "Also found."
 
 ### Vibe-placement model (auto-tag the map)
 
-Findings are grouped by **vibe**, not sub-genre — the admin tagging tool (shipped; [docs/admin-tagging.md](./admin-tagging.md)) places each one on a 2-axis map stored as a coordinate: `vibe_x` = Light↔Dark mood, `vibe_y` = Floaty↔Driving energy; the quadrant is the finding's galaxy (Solar / Nebular / Lunar / Deep). Those coordinates are the **training labels** for a small model that will eventually auto-place new finds.
+Findings are grouped by **vibe**, not sub-genre — the admin tagging tool (shipped; [docs/admin-tagging.md](./admin-tagging.md)) places each one on a 2-axis map stored as a coordinate: `vibe_x` = Light↔Dark mood, `vibe_y` = Floaty↔Driving energy; the quadrant is the finding's galaxy (Solar / Nebular / Lunar / Astral). Those coordinates are the **training labels** for a small model that will eventually auto-place new finds.
 
 The dataset is already self-assembling: every placed finding is a clean row of `features_json` (the spectral vector the enrichment agent already stores — `centroidHz`, `highRatio`, `midFlatness`, `onsetRate`, `subBassRatio`) → `(vibe_x, vibe_y)`. Inputs and labels are both captured today; nothing extra is needed to build it.
 
