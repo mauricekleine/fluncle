@@ -2,9 +2,34 @@
 
 Forward-facing, roughly prioritized list of open work — what we pick from next. Not a changelog: shipped work lives in git history, so this doc carries only what's still ahead. A living reference; add freely, move an item into a PR when it's picked up. Canon (DESIGN.md / PRODUCT.md / VOICE.md) arbitrates the words — this is planning, not spec.
 
-## Now — content backlog
+## Now — run the production loop
 
-Render a stack of videos so there's a schedulable backlog on TikTok: breathing room to roll out features without the feed going quiet. Uses the built local loop end-to-end; no new code.
+The active push: keep findings flowing from add → live on TikTok + YouTube, with one operator cockpit that shows every stage and the heavy render step automated on the laptop. Three slices that parallelize cleanly — the **pipeline board** (web admin), **hands-off rendering** (a Superset automation), and the **manual backlog** itself (ops).
+
+### The pipeline board — every finding's stage at a glance
+
+The operator runs the whole show from `/admin`, but the stages live on separate screens with different chrome (`/admin/tag` is full-bleed, `/admin/posts` is a centered box — that inconsistency is the first thing to kill). The unblock is one **pipeline view**: every finding a row, its **stage derived from its own columns**, so `/admin` reads as a todo — what's done, what's next, what's stuck — on the desktop and on the phone where the TikTok finish happens.
+
+The stages, each derivable from data already stored (no new state):
+
+1. **Added** — on the Spotify playlist + Telegram (the synchronous add).
+2. **Enriched** — `enrichmentStatus` (`pending` → `processing` → `done` / `failed`); the Spinup agent's `admin track update`.
+3. **Tagged** — `vibe_x`/`vibe_y` placed (manual; the galaxy is derived). Stays a human step until the vibe-placement model lands.
+4. **Filmed** — `videoUrl` set (render → R2; soon hands-off, see below).
+5. **YouTube** — the `social_posts` YouTube row (one-tap public upload, no manual finish).
+6. **TikTok** — the `social_posts` TikTok row (the in-app finish: licensed audio, the pasted caption, the cover photo).
+
+The public surfaces — web, the game, `ssh rave.fluncle.com`, `fluncle recent`, RSS — carry no stage; they reflect Turso the instant a track lands. The pipeline only tracks the operator's manual + async steps between add and published.
+
+Slice (web-only; independent of the render + playback slices):
+
+- **A derived stage model** (server): one `trackStage(track) → { stage, blockedOn }`, reused by the board and the worklists. Pure + tested.
+- **One responsive admin shell.** Unify `/admin/tag` and `/admin/posts` under shared chrome / width / nav (Shadcn, the DESIGN.md dark cosmos, WCAG AA, reduced-motion). Desktop-first, but the TikTok publish row must be thumb-usable on iOS glass.
+- **Stage worklists.** Filter/group the board by stage — "needs tagging", "needs a video", "ready for YouTube", "ready for TikTok" — so each stage is a one-screen todo. `/admin/posts` (the publish stages) folds in; `/admin/tag` keeps its focused placement loop but shares the shell.
+
+### The content backlog
+
+Render a stack of videos so there's a schedulable backlog on TikTok: breathing room to roll out features without the feed going quiet. Uses the built local loop end-to-end — the render step is being automated (see "Hands-off rendering" below).
 
 - Find every track with no video, oldest first (`fluncle admin queue --json`) — the render queue.
 - Render a **diverse** batch — spread vehicles via the ledger and assign a distinct visual family per render (parallel renders converge on a shared attractor; broaden refs, don't let them).
@@ -12,6 +37,14 @@ Render a stack of videos so there's a schedulable backlog on TikTok: breathing r
 - The operator finishes each by hand in the app — paste caption (`note.txt`), add the official sound, set the cover, schedule. The backlog is a queue of ready inbox drafts to space out over days. Drive it from the **`/admin/posts` board** (shipped, PR #13): per-platform status, push/re-push, copy-caption, mark published/failed, and asset downloads (cover + cuts) for AirDrop — built to use one-handed on a phone.
 - **Hard cap: ≤ 5 inbox drafts per 24h (TikTok-side).** TikTok rejects the 6th pending (`SELF_ONLY`) post in any rolling 24-hour window; the failure is asynchronous (the CLI + Postiz report success, TikTok bounces it downstream, surfaced only as a Postiz error). So draft at most 5/day, push the rest on following days, and re-push any that bounced after 24h. Unpublished drafts sitting in the inbox count against the budget — the operator publishing/clearing them frees it. (Full detail in the `fluncle-publish` skill.)
 - **YouTube Shorts runs alongside (live, no manual finish, no daily cap).** The same finding posts to YouTube as a direct public Short — title + caption + `cover.jpg` thumbnail all carry through the API, so it goes up hands-off (one tap on the board, or `--platform youtube`). A second distribution surface for the same backlog; only TikTok needs the in-app finish + the 5/24h ceiling. (Content ID typically _claims_ short clips — they stay up, the rights holder monetizes — accepted; reach over revenue.)
+
+### Hands-off rendering — a Superset Automation on the laptop
+
+The render step (fluncle-video + Remotion + R2) is too heavyweight for Spinup right now, so automate it where the GPU already is: an hourly **Superset Automation** on the MacBook. Superset automations are schedule-driven agent sessions (an RRule, e.g. `FREQ=HOURLY`) that fire on a designated device and silently mark `skipped_offline` when the laptop is asleep — exactly the "run it when my machine is on, otherwise no-op" shape, no server to pay for and the M-series GPU put to work in the background.
+
+The automation runs a Claude (opus-4.8) prompt, not a raw script — and because Superset delivery is at-least-once, the prompt must be idempotent, which `admin queue` makes trivial: "Run `fluncle admin queue --json`; if a finding has no video, render + upload one with the `@fluncle-video` skill, then stop; if the queue is empty, stop." Queue-gated, so an empty queue is a clean no-op and a busy queue advances the backlog one finding per tick. Define it with `superset automations create --rrule "FREQ=HOURLY" --agent claude --prompt-file <prompt>` (model set under Settings → Agents).
+
+Slice (a Superset automation + a committed prompt file; leans on the existing `fluncle-video` skill and `admin queue`; no web changes). This is the near-term answer to the capstone's render step — the server-side Spinup render profile stays deferred (see "TikTok auto-pipeline" in Later).
 
 ## Next — surface what we make, and tidy reliability
 
@@ -34,6 +67,15 @@ Shipped (PR #6): enrichment stores the exact official 30s preview used for the f
 ### TikTok audio line-up (build only when a track breaks)
 
 On standby — most relevant during the content backlog. The video is beat-matched to a Deezer/iTunes 30s preview (a fixed mid-song segment); TikTok's attachable sound is usually — not always — the song's first ~60s, trimmable to any start within the span it exposes. When the preview segment isn't reachable there and the track has no obvious section to line up by ear, the visuals pulse to beats that aren't playing. **Stage 0 (now):** by-ear line-up. **Stage 1 (on break):** full-track audio for analysis only via Apify `apidojo/youtube-scraper` (stream URL → ffmpeg → analyze → discard, never stored or served). **Stage 2:** pick the best ~20s window inside the first ~55s, render to it, write the absolute start offset into `render.json` + surface it ("start the sound at 0:42"). Audio policy: YouTube audio is internal-analysis-only; published audio uses official previews. AcousticBrainz-by-ISRC is frozen (~2022/24), so it is not a BPM fallback for new tracks.
+
+### Re-render oversized clips, then optimize web playback
+
+Two linked steps; the second depends on the first.
+
+- **Re-render the >100 MB clips.** Cloudflare's media-transformation APIs only touch assets **under 100 MB**; the higher-CRF render pass now lands comfortably below that, but some early videos in R2 are still too big. Re-render those findings with the current pipeline and replace them in the `fluncle-videos` bucket at the same `<log-id>/footage.mp4` keys, so every clip becomes transform-eligible. (Same tooling as the content-backlog render loop, different target — re-film existing oversized videos vs film missing ones — so it can ride the same Superset automation or run as a one-off batch.)
+- **Then optimize how fluncle.com loads clips.** With every asset under the limit, lean on Cloudflare media transforms + streaming: responsive sizes, a cheap poster/first-frame, lazy-load below the fold, and HLS/range streaming for the Stories player instead of whole-file fetches. Measure before/after on a real mobile connection.
+
+Slice: step 1 is video-pipeline + R2 ops (no web code); step 2 is `apps/web` (the feed + Stories player) and waits on step 1.
 
 ## Later — the bigger arcs
 
@@ -93,7 +135,7 @@ Persistent per-user state — the thing that unlocks saved progress (e.g. a play
 
 "Maurice discovers bangers, Fluncle does everything else." Add a track via `ssh rave.fluncle.com` and the system enriches → renders → captions → pushes a draft automatically; the human steps stay manual on purpose (attach the official sound, finish, publish). The draft-publishing layer runs today by hand — now through the **`/admin/posts` board** (per-platform status, push, copy-caption, asset downloads). What's left to make it autonomous:
 
-- **Render-capable Spinup profile.** Software-GL (SwiftShader) is viable (~1.45× Metal, no GPU needed); needs a render rootfs (Chromium + SwiftShader / Mesa / fonts + ffmpeg), likely >1 vCPU, and a check against the per-run cap. **Open question:** how the agent gets the `packages/video` kit, since Spinup has no persistence — fresh checkout per run, a prebuilt image, or a published package?
+- **Render: Superset on the laptop now, Spinup later.** Rendering runs hands-off via the hourly **Superset Automation** on the MacBook (see Now → "Hands-off rendering") — too heavyweight for Spinup today, and the laptop's GPU is free. The fully-server-side **render-capable Spinup profile** stays deferred: software-GL (SwiftShader) is viable (~1.45× Metal, no GPU needed) but needs a render rootfs (Chromium + SwiftShader / Mesa / fonts + ffmpeg), likely >1 vCPU, a check against the per-run cap, and an answer to how an ephemeral agent gets the `packages/video` kit (fresh checkout per run, a prebuilt image, or a published package). Pursue it only when laptop-bound rendering becomes the bottleneck.
 - **Autonomous trigger — the enrich step is live (commit `05a3f81`).** The enrichment-analysis agent runs on Spinup (hermes harness; `analyze-track` is a self-contained skill, no repo checkout — ffmpeg + the `fluncle` CLI bound), and the Worker fires its async `runs.create` on track-add: admin-gated, Worker-only, via `@getspinup/sdk` (inline `await`, since this TanStack version doesn't expose Cloudflare's `ctx.waitUntil`; sets `enrichmentStatus: processing`). Extending the chain to **render → publish** is the remaining autonomy, gated on the render-capable Spinup profile above.
 - **Reconciliation.** Recording an outcome by hand works for any post now — the status endpoint **upserts** (PR #14), so a manually-published or cross-environment post can be marked `published` (with the live URL) even without a prior draft row. Still open: the **automatic** version — an hourly check matching recent posts to the `fluncle://<log-id>` marker and flipping `social_posts.status` itself, observed not hand-entered.
 - **More platforms — YouTube done, the autopilot-ready channel; Instagram closed.** YouTube Shorts ships now (PR #13): a direct public upload (title + caption + `cover.jpg` thumbnail) via the per-platform push, recorded in `social_posts`. Because it needs **no manual finish** (unlike TikTok's in-app official sound), YouTube is the one channel that can run **fully on autopilot** — once the autonomous trigger above chains enrich → render → publish, YouTube publishes hands-off with nothing left for the human. (Flagged, not urgent.) Instagram is **intentionally not automated**: there's no legitimate API audio path (the master gets muted on a business/creator account, and IG's licensed audio is app-only), so it stays a manual in-app post. Per-platform doctrine lives in `docs/track-lifecycle.md` (Phase 3) + the `fluncle-publish` skill.
