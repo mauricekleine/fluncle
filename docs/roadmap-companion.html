@@ -672,7 +672,7 @@
           blurb:
             "Render a diverse stack of videos so there's a schedulable TikTok backlog — breathing room to ship features without the feed going quiet. Built local loop, no new code.",
           steps: [
-            "List every track with no video (fluncle recent --needs-video --json)",
+            "List every track with no video, oldest first (fluncle admin queue --json)",
             "Render a diverse batch — distinct visual family per render, spread vehicles via the ledger",
             "Per track: ship --vehicle → fluncle admin track video → fluncle admin track draft",
             "Finish each by hand in the app (caption, official sound, cover, schedule)",
