@@ -56,7 +56,7 @@ Everything comes from `src/remotion/cosmos.ts`. Nothing else exists to import; i
 
 That is the whole kit. The README has the exact signatures.
 
-**Escape hatch (not part of the kit, not enforced):** `@remotion/three` + `@react-three/fiber` + `three` are installed and available IF a concept genuinely needs a full 3D / React-Three-Fiber scene that even `sdf3d`+`raymarch` inside `ShaderLayer` cannot express. Nothing in the core uses or enforces them — the raw-WebGL `ShaderLayer` is the default and almost always the right tool. If you reach for R3F, you own determinism and the grain / Light-Years degradation yourself.
+**Escape hatch (not part of the kit, not installed, not enforced):** if a concept genuinely needs a full 3D / React-Three-Fiber scene that even `sdf3d`+`raymarch` inside `ShaderLayer` cannot express, you can add `@remotion/three` + `@react-three/fiber` + `three` yourself — they are deliberately kept out of the kit. The raw-WebGL `ShaderLayer` is the default and almost always the right tool. If you reach for R3F, you own the install, determinism, and the grain / Light-Years degradation yourself.
 
 ## See what's already been made (your live reference)
 

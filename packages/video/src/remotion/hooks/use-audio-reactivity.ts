@@ -69,7 +69,7 @@ export type AudioReactivity = {
   onset: number;
   /** Beat + onset composite for immediate material hits. */
   hit: number;
-  /** Slower beat + bass + energy composite for organic after-pulse. */
+  /** Bass/energy-led motion signal (no per-beat by default). The safe driver for travel/flow/convergence — it glides, it never per-beat snaps. */
   swell: number;
   /** Peak envelope, usually around the strongest musical moment in the cut. */
   drop: number;
@@ -137,6 +137,11 @@ const dropEnvelope = (
  * yourself), never the raw per-beat transient, so movement glides and never
  * snaps (Motion law, doctrine 7). In short: audio disturbs the material AND
  * moves the picture, never just illuminates it.
+ *
+ * Why `swell` is safe for motion: it is bass/energy-led and carries NO per-beat by
+ * default (`swellBeatWeight` is 0). Do NOT raise that weight or route `beat` /
+ * `hit` / `u_beatPulse` into motion to "make it dance" — at high BPM that is the
+ * exact source of per-1/4-note jitter. The beat belongs in MATERIAL (`hit`).
  */
 export const useAudioReactivity = (
   audio: AudioReactivityInput,
@@ -167,7 +172,10 @@ export const useAudioReactivity = (
     ...options.fastTreble,
   });
   const { pulse: beat } = useBeat(audio.beatGrid, { decay: options.beatDecay ?? 3.2 });
-  const { pulse: swellBeat } = useBeat(audio.beatGrid, { decay: options.swellDecay ?? 1.25 });
+  // swellBeat feeds MOTION, so it decays slowly: at high BPM a fast decay leaves a
+  // per-beat sawtooth that makes movement lurch. A slow decay blurs consecutive
+  // beats into a continuous breath instead.
+  const { pulse: swellBeat } = useBeat(audio.beatGrid, { decay: options.swellDecay ?? 0.8 });
   const onset = useOnset(audio.onsets, options.onsetWindowMs ?? 140);
 
   const peakTimeMs = useMemo(() => findPeakTimeMs(audio.energyCurve), [audio.energyCurve]);
@@ -176,8 +184,15 @@ export const useAudioReactivity = (
   const hit = clamp01(
     beat * (options.hitBeatWeight ?? 0.62) + onset * (options.hitOnsetWeight ?? 0.5),
   );
+  // swell drives MOTION, so it is purely bass/energy-led: the per-beat term
+  // (swellBeatWeight) defaults to 0. ANY beat weight here makes the picture surge
+  // on every 1/4 note, which reads as jitter at high BPM — proven on the 173 BPM
+  // D&B tracks, where even 0.14 still ticked and 0 looked markedly smoother. Keep
+  // motion gliding on the bass/energy envelopes; let `hit` (not swell) carry the
+  // sharp on-beat MATERIAL. Only raise this for a slow track where a faint
+  // motional beat-lock genuinely won't strobe.
   const swell = clamp01(
-    swellBeat * (options.swellBeatWeight ?? 0.42) +
+    swellBeat * (options.swellBeatWeight ?? 0) +
       bass * (options.swellBassWeight ?? 0.42) +
       energy * (options.swellEnergyWeight ?? 0.22),
   );
