@@ -8,8 +8,6 @@ import { formatDuration } from "@/lib/format";
 import { usePreviewPlayer } from "@/lib/preview-player";
 import { type Track } from "@/lib/tracks";
 
-const maxTagChips = 3;
-
 // The signature component (DESIGN.md): a finding, not just a row. The whole
 // row still reads as one link to Spotify (a stretched link), but the artwork
 // doubles as the in-place preview toggle and the actions cell links out to the
@@ -84,12 +82,7 @@ export function TrackRow({ track, trackNumber }: { track: Track; trackNumber: nu
           </a>
         )}
         {labelLine ? <span className="track-label block truncate">{labelLine}</span> : null}
-        <TrackChips
-          bpm={track.bpm}
-          durationMs={track.durationMs}
-          musicalKey={track.key}
-          tags={track.tags}
-        />
+        <TrackChips bpm={track.bpm} durationMs={track.durationMs} musicalKey={track.key} />
       </span>
 
       <span className="track-actions">
@@ -147,22 +140,18 @@ function PreviewToggle({ track, trackLine }: { track: Track; trackLine: string }
 }
 
 // Enrichment metadata as quiet chips: tempo and key read as instrument-panel
-// numerals (Oxanium, tabular); tags stay plain words. Nothing renders until
-// enrichment has produced something to show.
+// numerals (Oxanium, tabular). Nothing renders until enrichment has produced
+// something to show.
 function TrackChips({
   bpm,
   durationMs,
   musicalKey,
-  tags,
 }: {
   bpm?: number;
   durationMs?: number;
   musicalKey?: string;
-  tags?: string[];
 }) {
-  const tagChips = tags?.slice(0, maxTagChips) ?? [];
-
-  if (!durationMs && !bpm && !musicalKey && tagChips.length === 0) {
+  if (!durationMs && !bpm && !musicalKey) {
     return null;
   }
 
@@ -183,11 +172,6 @@ function TrackChips({
           {musicalKey}
         </Badge>
       ) : null}
-      {tagChips.map((tag) => (
-        <Badge className="track-chip" key={tag} variant="outline">
-          {tag}
-        </Badge>
-      ))}
     </span>
   );
 }

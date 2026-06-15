@@ -1,9 +1,7 @@
 import { type TrackListItem, type TrackListPage } from "./server/tracks";
 
 // Client reads use the public /api/tracks contract produced by lib/server/tracks.ts.
-// tags is kept as optional compatibility slack for older UI/pipeline callers; the
-// current API does not select a tags field.
-export type Track = TrackListItem & { tags?: string[] };
+export type Track = TrackListItem;
 
 export type TracksResponse = Omit<TrackListPage, "tracks"> & { tracks: Track[] };
 

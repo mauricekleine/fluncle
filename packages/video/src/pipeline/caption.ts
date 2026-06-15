@@ -6,7 +6,7 @@
 //
 //   Found Jun 8: fluncle://<log-id>
 //
-//   #dnb #drumnbass #drumandbass #<subgenre>…
+//   #dnb #drumnbass #drumandbass
 //
 // - `Artist — Title` is the only sanctioned em dash (VOICE.md §6); multi-artist
 //   joins with ", ". Year and Label degrade gracefully when unknown.
@@ -14,8 +14,8 @@
 //   zero — matching the on-screen FloatingType stamp exactly (the Found Rule).
 // - The `(Year)` is the RELEASE year (a catalog credit, like the label); the
 //   explicit "Found" label keeps it distinct from Fluncle's own date.
-// - Hashtags: a fixed D&B base + the track's sub-genre tags, lowercased,
-//   stripped to alphanumerics, and deduped.
+// - Hashtags: a fixed D&B base. Per-track sub-genre tags were removed in fbad929
+//   (grouping is now the vibe-map); the caption carries the base set only.
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -28,7 +28,6 @@ export type CaptionTrack = {
   label?: string | null;
   logId?: string | null;
   releaseDate?: string | null;
-  tags?: string[] | null;
   title: string;
 };
 
@@ -52,11 +51,6 @@ function formatFound(iso: string): string {
   }
 
   return `Found ${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
-}
-
-/** A tag → bare hashtag token: lowercase, alphanumerics only ("liquid funk" → "liquidfunk"). */
-function toHashtag(tag: string): string {
-  return tag.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 /** The release YEAR for a track from Deezer (by ISRC). Null when unresolved. */
@@ -98,8 +92,7 @@ export function buildCaption(track: CaptionTrack, year: number | null): string {
 
   lines.push("", `${formatFound(track.addedAt)}: fluncle://${track.logId}`, "");
 
-  const tags = (track.tags ?? []).map(toHashtag).filter(Boolean);
-  const hashtags = [...new Set([...BASE_HASHTAGS, ...tags])].map((t) => `#${t}`).join(" ");
+  const hashtags = BASE_HASHTAGS.map((t) => `#${t}`).join(" ");
   lines.push(hashtags);
 
   return `${lines.join("\n")}\n`;

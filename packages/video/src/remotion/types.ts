@@ -32,8 +32,6 @@ export type CosmosTrack = {
    * kept distinct from Fluncle's own Found date.
    */
   releaseDate?: string;
-  /** Spotify/Deezer tags. Creative fuel; not for on-screen text. */
-  tags?: string[];
   /**
    * Enrichment's track-level spectral summary (creative fuel — steers the
    * vehicle, texture, and which band drives what; NOT per-frame reactivity, that

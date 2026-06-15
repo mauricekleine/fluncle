@@ -21,7 +21,6 @@ type ApiTrack = {
   isrc?: string;
   popularity?: number;
   previewUrl?: string;
-  tags?: string[];
   features?: {
     centroidHz?: number;
     highRatio?: number;
@@ -68,7 +67,6 @@ export async function fetchTrack(trackId: string): Promise<CosmosTrack> {
     logId: found.logId,
     note: found.note,
     releaseDate: found.releaseDate,
-    tags: found.tags,
     title: found.title,
     trackId: found.trackId,
   };
