@@ -80,9 +80,21 @@ export async function render(
     // batch renders oversubscribe and the default font-load window trips.
     timeoutInMilliseconds: 120_000,
     x264Preset: draft ? "veryfast" : "slow",
-    // Ship: the VBV cap that keeps the master under 100MB. Draft: half-res
-    // (the big speed win) and no cap. The ship path is unchanged.
-    ...(draft ? { scale: 0.5 } : { encodingBufferSize: "64M", encodingMaxRate: "32M" }),
+    // Ship adds two things draft skips (draft is a throwaway proof): the VBV cap
+    // that keeps the master under 100MB, and explicit bt709 colour. bt709 is
+    // verified-applied (output is yuv420p limited-range, not the old full-range
+    // yuvj420p default of 4.0.x) and removes a silent brightness/colour drift vs
+    // what TikTok/YouTube assume on re-encode — which also shifts how the grain
+    // reads. NOTE on grain: Remotion exposes only crf + x264Preset (no x264
+    // `tune`/custom params — `overrideFfmpegCommand` is discouraged AND doesn't
+    // reach the per-chunk video encode; verified: spliced params don't take), so
+    // grain preservation here is bounded by crf + this cap. The grain SMEAR seen
+    // on the phase-1 clips came from a lossy-on-lossy TRANSCODE under-bitting the
+    // grain, NOT from this render path — restore it by RE-RENDERING from source
+    // (clean PNG → x264), never by re-transcoding.
+    ...(draft
+      ? { scale: 0.5 }
+      : { colorSpace: "bt709" as const, encodingBufferSize: "64M", encodingMaxRate: "32M" }),
   });
 
   return { compositionId: composition.id, outputPath };
