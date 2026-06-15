@@ -9,6 +9,10 @@ Use this skill to make Fluncle's per-track social videos: 1080×1920 vertical cl
 
 This file is a router. Read it top-down, then load the reference for the phase you are in. The doctrine below is authoritative; where a living doc in the repo adds detail, follow it, but the rulings here win on conflict.
 
+## The soul — each video is a log entry
+
+Before any craft, know what you are making. A Fluncle video is NOT a music visualizer or a motion-graphics loop — it is a **LOG ENTRY**. The traveller is far out, alone, keeping a diary of a run through deep space and other dimensions; each banger is a FINDING, and the clip is the page where ONE thing witnessed out there is recorded — a phenomenon **observed, logged, and felt**. The Log ID (lower-left, via `TypePlate`) is the entry's coordinate; the `CloseCard` signs it off; the grain is the proof it travelled to reach us. The register is **observational and emotional** — wonder, vast solitude, the sublime, a little melancholy — never hype, never a UI demo. So stage ONE phenomenon (the vehicle) as a thing genuinely SEEN through degraded glass at the edge of the map, and let the music be its OWN pulse: the picture RESPONDS to the sound the way a real thing breathes with a force passing through it — organically, smoothly. (This is the Motion law felt as soul, not rule: it sways and surges WITH the music; it never twitches TO it.) One phenomenon, observed, logged, alive. If the clip reads as a reactive-shader demo rather than a page torn from a logbook, it has missed the soul — fix that before anything else.
+
 ## Why this exists
 
 A styled component library makes agents produce same-looking videos: identical text spots and timing, default eclipse discs, the same vehicle run after run. The best output comes from an agent writing its own shader from scratch. So there is no styled scene library — the package is the core surface, and the rules that components used to enforce are doctrine you uphold by hand. Diversity is the point. If your video could be swapped with another and nobody would notice, you have failed.

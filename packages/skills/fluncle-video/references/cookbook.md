@@ -92,6 +92,30 @@ The fluid/organic/alive north star now has helpers — reach for these before ha
 - **ridged turbulence → glowing FILAMENTS** (liquid-fire / plasma / veins / lightning / molten tendrils) — the robust go-to when you want a dense, alive field. Warp an fbm field `n` (`domainWarp`, or `fbm` of curl-advected coords), RIDGE it — `float ridges = pow(1.0 - abs(2.0 * n - 1.0), 2.7);` (k ≈ 2.5–3) — then THRESHOLD so only strong ridges survive as thin tendrils on a near-black field: `float fil = smoothstep(thr, thr + w, ridges * detail);`. Why it beats dots/haze: brightness comes from the CONTINUOUS field (no coverage trilemma — see the dots note below), structure from the ridges (never foggy, never flat), and warm-dark dominance is AUTOMATIC — everything under `thr` stays the void. Grade it with a `dotField` multiply + heavy `filmGrain` for recovered-footage texture (no moiré-driving grid). Climax (doctrine 1): the filament CORES igniting — a tightly-gated core term `smoothstep(0.72, 1.0, fire)`, CAPPED (`tone = min(tone, 0.90)`) so it never washes to flat cream, plus `bloom` on those hot cores. Do NOT drop `thr` enough to flood the frame — that's the pale-wash blowout. Movements via an eased regime scalar: a churning network in M1, dying back to near-black embers in the breakdown, the network flooding back and the cores flaring on the drop.
   - GLSL gotchas that cost rounds: don't reuse a header-injected name or re-declare one already in scope (e.g. a local `float t` after `t = u_time`) → fragment-shader `redefinition` → the ShaderLayer ERROR OVERLAY (tell: a ~1MB output file). Diagonalize a near-vertical advection vector to avoid vertical streaking.
 
+## smear: velocity written into the frame (the smear family)
+
+The moodboard's smear region — long-exposure / intentional-camera-movement, where motion ITSELF is the texture (the headlong, re-entry-velocity feel). No GLSL helper and no framework shortcut: `@remotion/motion-blur` (`Trail`/`CameraMotionBlur`) is DOM compositing that re-renders the whole subtree 10–50× per frame — a crippling tax over a fullscreen shader. Do it IN-SHADER (~1× cost, full control):
+
+- **Directional long-exposure.** Put your field in a function `vec3 field(vec2 uv, float t)`, then average a few taps stepped BACK IN TIME along the travel direction:
+  ```glsl
+  vec3 smear(vec2 uv) {
+    vec3 acc = vec3(0.0); float wsum = 0.0;
+    const int N = 6;
+    for (int i = 0; i < N; i++) {
+      float k = float(i) / float(N);                 // 0..1 back in time
+      float w = 1.0 - k;                              // newer taps weigh more
+      vec2 off = u_travelDir * k * u_smearLen;        // and back along the motion axis
+      acc += field(uv - off, u_time - k * u_smearMs) * w;
+      wsum += w;
+    }
+    return acc / wsum;
+  }
+  ```
+  The field is a pure function of (uv, t), so sampling it at earlier t IS its past — a true motion trail with no frame feedback (Remotion can't read frame N-1; this is the sanctioned way to fake trails).
+- **Drive the smear length on a SMOOTHED signal** (Motion law): `u_smearMs`/`u_smearLen` rise with `u_audioSwell` / energy / the drop, so the frame streaks harder as the music surges and settles between — velocity that breathes, never a per-kick snap. Keep the baseline tiny so calm passages stay legible.
+- **Diagonalize** the travel vector off true-vertical/horizontal to avoid axis streaking artifacts.
+- It doubles as a SMOOTHER: even a 2–3 tap temporal average softens the hard 30fps time-sampling on fast motion, reading more cinematic and organic than a naked frame — reach for a light version on any fast vehicle, not only an explicit smear clip. (Don't push N high; it's per-pixel cost ×N.)
+
 ## raymarched 3D (volumetric)
 
 For a volumetric or solid vehicle (a tumbling relic, a smoke volume, a metaball mass), `sdf3d` + `raymarch` give a 3D pipeline inside the fragment shader: define `float map(vec3 p)` from `sdSphere3` / `sdBox3` / `sdTorus3` (+ `smin` from `sdf` for smooth unions, `rot2` to tumble), then `raymarch(ro, rd, tmax)` and shade off `calcNormal`. Keep the step count modest — it runs per pixel. CRITICAL: a clean raymarched solid is the polished-CGI failure (SKILL.md) — soak it in `filmGrain`, break the edges, and warp the surface with `fbm` / `domainWarp` so it reads as recovered footage, not a 3D render. Pairs naturally with `bloom` for an emissive core.
@@ -134,6 +158,16 @@ When you DO go representational, these treatments keep it sharp, legible, and be
 **Vary the axis and the primitive.** Those three references all happen to be horizontal-line / raster motifs — left unchecked, agents converge on "horizontal lines + a horizontal gold bar." The register is far wider; reach past lines for: a **dot / stipple screen** (halftone as DOTS, or a particle/ember field quantised to a grid, dot radius riding the beat), a **woven mesh or moiré** interference, a **cellular / voronoi crackle** (cracked glaze, a dry lakebed, cell walls breathing on the bass), **caustics / refraction** (light bent through water or glass, the hot focus swelling on energy), an **emulsion / chemical bloom**. Pick a structure whose axis and primitive differ from the recent archive (read the vehicle ledger via `fluncle admin vehicles --json`), and let the climax take the form that structure implies — a brightening cell, a caustic hot-spot, a sweeping shimmer, a single dot that blooms — in the scene's own colour, **not always a horizontal bar, not a default circular sun, and not forced to gold** (doctrine 1: one committed climax, free form and free colour).
 
 Keep the warm dark throughout — the structure is the vehicle, not a second light source. Any gold is one accent among the scene's palette, present only when the vehicle's own material genuinely runs hot, never bolted on as a sun.
+
+## Framing devices: how the finding is HELD (the log feel)
+
+The moodboard names three ways to HOLD the finding that cut across texture families — reach for one deliberately when the concept wants "a thing observed/held," to deepen the diary register (the soul) and break the centred-orb default:
+
+- **portal / threshold** — a framed window onto the warm side standing inside the dark (a mirror propped in foliage, a receding doorway, a dye-bleed aperture). The finding as a picture in a frame, brightening on the beat: a bright field masked to an aperture shape over a warm-dark surround, the heat gathered at the aperture edge.
+- **floating plate** — the finding as a discrete object in the void, a thing you could pick up and turn over: a bounded soft-edged panel (an sdf rect) holding the vehicle on near-black, with a faint mirrored falloff below it.
+- **sleeve-as-logbook** — a recovered record sleeve whose print marginalia (side, title, runtime, catalog stamp) survives as archive typography while the image decays. The found object IS the HUD — let `TypePlate`'s telemetry read as the sleeve's own catalog print up a margin.
+
+Most clips need NO device — the field IS the frame, and that's the strongest default. But a portal/plate/sleeve, used sparingly, makes the clip feel like a page from the logbook rather than a loop.
 
 ### Density: dots, particles, flocks (the sparse-flock fix)
 
