@@ -1,9 +1,10 @@
 import { CheckCircleIcon, CircleNotchIcon, PauseIcon, PlayIcon } from "@phosphor-icons/react";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AdminNav } from "@/components/admin/admin-nav";
-import { VibeMap, VIBE_QUADRANTS, vibeQuadrant } from "@/components/admin/vibe-map";
+import { VibeMap } from "@/components/admin/vibe-map";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { isAdminRequest } from "@/lib/server/admin-auth";
@@ -14,6 +15,7 @@ import {
   type TrackListItem,
   type VibePoint,
 } from "@/lib/server/tracks";
+import { GALAXIES, galaxyForVibe } from "@/lib/galaxies";
 import { usePreviewPlayer } from "@/lib/preview-player";
 import { cn } from "@/lib/utils";
 
@@ -33,6 +35,12 @@ type QueuePage = {
   nextCursor?: string;
   tracks: TrackListItem[];
 };
+
+// react-query cache keys. The queue is keyed by placement so the two lists cache
+// independently (switching is instant once each is loaded); points is one shared
+// entry that the save patches optimistically + refetches on window focus.
+const queueKey = (placement: Placement) => ["admin", "tag", "queue", placement] as const;
+const POINTS_KEY = ["admin", "tag", "points"] as const;
 
 // A beforeLoad/server-function guard only protects the page render, not the RPC
 // behind a server function — so every admin server function re-checks the grant.
@@ -88,16 +96,46 @@ const clamp = (n: number) => Math.max(-1, Math.min(1, n));
 
 function AdminTagPage() {
   const initial = Route.useLoaderData();
+  const queryClient = useQueryClient();
   const [placement, setPlacement] = useState<Placement>("unplaced");
-  const [tracks, setTracks] = useState<TrackListItem[]>(initial.queue.tracks);
-  const [nextCursor, setNextCursor] = useState<string | undefined>(initial.queue.nextCursor);
-  const [points, setPoints] = useState<VibePoint[]>(initial.points);
   const [index, setIndex] = useState(0);
   const [pos, setPos] = useState<Pos | null>(null);
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | undefined>();
+
+  // The queue reads through react-query, keyed by placement. Only the initial
+  // ("unplaced") list is seeded from the SSR loader; switching to "placed"
+  // fetches lazily on first view and caches thereafter.
+  const {
+    data: queueData,
+    error: queueError,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
+    initialData:
+      placement === "unplaced" ? { pageParams: [undefined], pages: [initial.queue] } : undefined,
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) => fetchQueue({ data: { cursor: pageParam, placement } }),
+    queryKey: queueKey(placement),
+  });
+
+  // The placed points (map context) refetch on window focus, so tabbing back
+  // after placing tracks elsewhere keeps the constellation current.
+  const { data: points, error: pointsError } = useQuery({
+    initialData: initial.points,
+    queryFn: fetchPoints,
+    queryKey: POINTS_KEY,
+    refetchOnWindowFocus: true,
+  });
+
+  const tracks = useMemo(() => queueData?.pages.flatMap((page) => page.tracks) ?? [], [queueData]);
+  const loadError = queueError ?? pointsError;
+  const shownError =
+    error ??
+    (loadError ? (loadError instanceof Error ? loadError.message : String(loadError)) : undefined);
 
   const track = tracks[index];
 
@@ -113,40 +151,27 @@ function AdminTagPage() {
     setError(undefined);
   }, [track]);
 
-  const switchQueue = useCallback(async (next: Placement) => {
+  // Switching lists just flips the query key — react-query serves the cached
+  // list or fetches it. Reset the cursor into the new list (index/saved marks).
+  const switchQueue = useCallback((next: Placement) => {
     setError(undefined);
     setPlacement(next);
-
-    try {
-      const page = await fetchQueue({ data: { placement: next } });
-      setTracks(page.tracks);
-      setNextCursor(page.nextCursor);
-      setIndex(0);
-      setSavedIds(new Set());
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-    }
+    setIndex(0);
+    setSavedIds(new Set());
   }, []);
 
+  // Pull the next page; report whether it actually grew the list so goTo knows
+  // if it can advance past the current end.
   const loadMore = useCallback(async (): Promise<boolean> => {
-    if (!nextCursor || loadingMore) {
+    if (!hasNextPage || isFetchingNextPage) {
       return false;
     }
 
-    setLoadingMore(true);
+    const result = await fetchNextPage();
+    const pages = result.data?.pages ?? [];
 
-    try {
-      const page = await fetchQueue({ data: { cursor: nextCursor, placement } });
-      setTracks((current) => [...current, ...page.tracks]);
-      setNextCursor(page.nextCursor);
-      return page.tracks.length > 0;
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-      return false;
-    } finally {
-      setLoadingMore(false);
-    }
-  }, [loadingMore, nextCursor, placement]);
+    return (pages[pages.length - 1]?.tracks.length ?? 0) > 0;
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
 
   const goTo = useCallback(
     async (target: number) => {
@@ -195,7 +220,7 @@ function AdminTagPage() {
         throw new Error(`Save failed (${response.status})`);
       }
 
-      setPoints((current) => [
+      queryClient.setQueryData<VibePoint[]>(POINTS_KEY, (current = []) => [
         ...current.filter((point) => point.trackId !== track.trackId),
         {
           artists: track.artists,
@@ -213,7 +238,7 @@ function AdminTagPage() {
     } finally {
       setSaving(false);
     }
-  }, [goTo, index, pos, saving, track]);
+  }, [goTo, index, pos, queryClient, saving, track]);
 
   const player = usePreviewPlayer(track?.trackId ?? "");
 
@@ -260,7 +285,7 @@ function AdminTagPage() {
           break;
         case "l":
           event.preventDefault();
-          void switchQueue(placement === "unplaced" ? "placed" : "unplaced");
+          switchQueue(placement === "unplaced" ? "placed" : "unplaced");
           break;
         default:
           break;
@@ -279,7 +304,7 @@ function AdminTagPage() {
     () => points.filter((point) => point.trackId !== track?.trackId),
     [points, track],
   );
-  const quadrant = pos ? vibeQuadrant(pos.x, pos.y) : undefined;
+  const quadrant = pos ? galaxyForVibe(pos.x, pos.y) : undefined;
   const total = tracks.length;
 
   return (
@@ -292,13 +317,13 @@ function AdminTagPage() {
             <h1 className="text-sm font-bold">Tag tracks</h1>
             <p className="text-xs text-muted-foreground">
               {placement === "unplaced" ? "Needs review" : "Placed"}
-              {track ? ` · ${index + 1} of ${total}${nextCursor ? "+" : ""}` : ""} · {remaining}{" "}
+              {track ? ` · ${index + 1} of ${total}${hasNextPage ? "+" : ""}` : ""} · {remaining}{" "}
               left
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <Button
-              onClick={() => void switchQueue(placement === "unplaced" ? "placed" : "unplaced")}
+              onClick={() => switchQueue(placement === "unplaced" ? "placed" : "unplaced")}
               size="sm"
               variant="outline"
             >
@@ -311,9 +336,9 @@ function AdminTagPage() {
           </div>
         </header>
 
-        {error ? (
+        {shownError ? (
           <p className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive sm:px-5">
-            {error}
+            {shownError}
           </p>
         ) : undefined}
 
@@ -380,9 +405,9 @@ function AdminTagPage() {
                       <span
                         aria-hidden="true"
                         className="size-2.5 rounded-full"
-                        style={{ background: VIBE_QUADRANTS[quadrant].color }}
+                        style={{ background: GALAXIES[quadrant].color }}
                       />
-                      Placing in {VIBE_QUADRANTS[quadrant].label}
+                      Placing in {GALAXIES[quadrant].name}
                     </>
                   ) : (
                     "Click the map to place this banger"
@@ -434,15 +459,15 @@ function AdminTagPage() {
                       </button>
                     </li>
                   ))}
-                  {nextCursor ? (
+                  {hasNextPage ? (
                     <li>
                       <button
                         className="w-full px-4 py-2.5 text-center text-xs font-bold text-muted-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent disabled:opacity-50 sm:px-5"
-                        disabled={loadingMore}
+                        disabled={isFetchingNextPage}
                         onClick={() => void loadMore()}
                         type="button"
                       >
-                        {loadingMore ? "Loading…" : "Load more"}
+                        {isFetchingNextPage ? "Loading…" : "Load more"}
                       </button>
                     </li>
                   ) : undefined}

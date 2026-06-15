@@ -22,3 +22,11 @@ VITE_FLUNCLE_TELEGRAM_URL=https://t.me/fluncle
 # Loops newsletter (transactional id is the published confirmation email)
 LOOPS_API_KEY=
 LOOPS_TRANSACTIONAL_ID=
+
+# Spinup agents — each agent has its OWN scoped runtime key (sk_agent_…) carrying
+# the runs:create permission. Async track enrichment fires on add via runs.create.
+SPINUP_ENRICH_AGENT_ID=
+SPINUP_ENRICH_AGENT_KEY=
+# Vibe-placement classifier agent (future; dormant until that agent exists).
+SPINUP_CLASSIFY_AGENT_ID=
+SPINUP_CLASSIFY_AGENT_KEY=

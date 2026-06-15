@@ -1,4 +1,5 @@
 import { CircleNotchIcon, ShuffleIcon } from "@phosphor-icons/react";
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { siSpotify } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
@@ -17,33 +18,26 @@ import { fetchRandomTrack, type Track } from "@/lib/tracks";
 
 export function RandomBangerDialog() {
   const [open, setOpen] = useState(false);
-  const [track, setTrack] = useState<Track | undefined>();
-  const [error, setError] = useState<string | undefined>();
-  const [isLoading, setIsLoading] = useState(false);
 
-  async function loadRandomTrack(): Promise<void> {
-    setError(undefined);
-    setIsLoading(true);
+  // Fetch one banger when the dialog first opens, then hold it across re-opens
+  // (staleTime: Infinity — no focus refetch, no second roll on reopen). "Another
+  // one" forces a fresh pull via refetch().
+  const {
+    data: track,
+    error,
+    isFetching,
+    refetch,
+  } = useQuery<Track>({
+    enabled: open,
+    queryFn: fetchRandomTrack,
+    queryKey: ["random-banger"],
+    staleTime: Infinity,
+  });
 
-    try {
-      setTrack(await fetchRandomTrack());
-    } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : String(caughtError));
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
-  function handleOpenChange(nextOpen: boolean): void {
-    setOpen(nextOpen);
-
-    if (nextOpen && !track && !isLoading) {
-      void loadRandomTrack();
-    }
-  }
+  const isLoading = isFetching || (!track && !error);
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
+    <Dialog open={open} onOpenChange={setOpen}>
       <Tooltip>
         <TooltipTrigger
           render={
@@ -87,7 +81,7 @@ export function RandomBangerDialog() {
                 <BrandIcon icon={siSpotify} />
                 Listen on Spotify
               </Button>
-              <Button onClick={loadRandomTrack} type="button" variant="outline">
+              <Button onClick={() => void refetch()} type="button" variant="outline">
                 <ShuffleIcon aria-hidden="true" weight="bold" />
                 Another one
               </Button>
@@ -95,7 +89,11 @@ export function RandomBangerDialog() {
           </div>
         ) : undefined}
 
-        {error ? <p className="text-sm text-destructive">{error}</p> : undefined}
+        {error ? (
+          <p className="text-sm text-destructive">
+            {error instanceof Error ? error.message : String(error)}
+          </p>
+        ) : undefined}
       </DialogContent>
     </Dialog>
   );

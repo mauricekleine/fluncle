@@ -1,7 +1,8 @@
 /// <reference types="vite/client" />
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
-import { type ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { siteUrl } from "../lib/fluncle-links";
 import { fluncleDescription } from "../lib/identity";
 import appCss from "../styles.css?url";
@@ -119,6 +120,11 @@ export const Route = createRootRoute({
 });
 
 function RootLayout(): ReactNode {
+  // One QueryClient per app instance (created once via useState so it survives
+  // re-renders). Admin boards read through it so they refetch on window focus —
+  // handy when the operator tabs back from TikTok/YouTube.
+  const [queryClient] = useState(() => new QueryClient());
+
   return (
     <html lang="en">
       <head>
@@ -128,7 +134,9 @@ function RootLayout(): ReactNode {
         {/* The one directional Eclipse-Gold bloom under every pane (gold as
             ignition; breath gated to no-preference in CSS). */}
         <div aria-hidden="true" className="sun-bloom" />
-        <Outlet />
+        <QueryClientProvider client={queryClient}>
+          <Outlet />
+        </QueryClientProvider>
         <Scripts />
       </body>
     </html>

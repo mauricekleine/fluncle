@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { jsonError, requireAdmin } from "../../../lib/server/env";
 import { publishTrack } from "../../../lib/server/publish";
+import { triggerEnrichment } from "../../../lib/server/spinup";
 import { ApiError } from "../../../lib/server/spotify";
 
 type AddTrackBody = {
@@ -30,6 +31,12 @@ export const Route = createFileRoute("/api/admin/tracks")({
             dryRun: body.dryRun === true,
             note: typeof body.note === "string" ? body.note : undefined,
           });
+
+          // Kick off async enrichment on Spinup — a fast enqueue (the work runs
+          // durably on Spinup, not in the Worker). triggerEnrichment never throws.
+          if (!result.dryRun && result.track.logId) {
+            await triggerEnrichment(result.track.trackId, result.track.logId);
+          }
 
           return Response.json({
             ok: true,

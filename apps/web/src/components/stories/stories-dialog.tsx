@@ -1,9 +1,8 @@
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { StoriesPlayer } from "@/components/stories/stories-player";
 import { StoriesSkeleton } from "@/components/stories/stories-skeleton";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { fetchStories } from "@/lib/story-feed";
-import { type Track } from "@/lib/tracks";
 
 // Stories as a routed dialog over the home feed: the feed stays mounted (and
 // keeps its scroll) underneath while the player runs full-screen on top. The
@@ -22,26 +21,15 @@ export function StoriesDialog({
   onStoryChange: (logId: string) => void;
   open: boolean;
 }) {
-  const [tracks, setTracks] = useState<Track[] | undefined>();
-
-  // Fetch the stories feed on first open; keep it for re-opens this session.
-  useEffect(() => {
-    if (!open || tracks) {
-      return;
-    }
-
-    let cancelled = false;
-
-    void fetchStories().then((page) => {
-      if (!cancelled) {
-        setTracks(page.tracks);
-      }
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [open, tracks]);
+  // Fetch the stories feed on first open; keep it for re-opens this session
+  // (staleTime: Infinity — the feed is fetched lazily, never refetched on focus).
+  const { data: tracks } = useQuery({
+    enabled: open,
+    queryFn: fetchStories,
+    queryKey: ["stories-feed"],
+    select: (page) => page.tracks,
+    staleTime: Infinity,
+  });
 
   return (
     <Dialog

@@ -12,7 +12,7 @@ import { ApiError } from "./spotify";
 
 export type TrackUpdate = {
   bpm?: number;
-  enrichmentStatus?: "pending" | "done" | "failed";
+  enrichmentStatus?: "pending" | "processing" | "done" | "failed";
   /** Raw audio feature vector as a JSON string (training data for the classifier). */
   features?: string;
   /** One-time backfill into a null isrc slot; rejected when one is already set. */

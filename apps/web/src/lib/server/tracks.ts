@@ -1,3 +1,4 @@
+import { type Galaxy, GALAXIES, galaxyForVibe } from "../galaxies";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 
@@ -36,6 +37,8 @@ export type TrackListItem = {
   enrichmentStatus: string;
   /** Track-level spectral descriptors (creative fuel); absent until enriched. */
   features?: TrackFeatures;
+  /** Derived vibe galaxy (the four quadrants); absent until placed. See lib/galaxies. */
+  galaxy?: { key: Galaxy; name: string };
   isrc?: string;
   key?: string;
   label?: string;
@@ -139,6 +142,15 @@ function parseFeatures(json: string | null): TrackFeatures | undefined {
   }
 }
 
+function galaxyOf(x: number | null, y: number | null): { key: Galaxy; name: string } | undefined {
+  if (x == null || y == null) {
+    return undefined;
+  }
+
+  const key = galaxyForVibe(x, y);
+  return { key, name: GALAXIES[key].name };
+}
+
 function toTrackListItem(row: TrackRow): TrackListItem {
   return {
     addedAt: row.added_at,
@@ -150,6 +162,7 @@ function toTrackListItem(row: TrackRow): TrackListItem {
     durationMs: row.duration_ms,
     enrichmentStatus: row.enrichment_status,
     features: parseFeatures(row.features_json),
+    galaxy: galaxyOf(row.vibe_x, row.vibe_y),
     isrc: row.isrc ?? undefined,
     key: row.key ?? undefined,
     label: row.label ?? undefined,

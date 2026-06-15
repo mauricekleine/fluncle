@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import { GALAXIES, galaxyForVibe } from "@/lib/galaxies";
 import { cn } from "@/lib/utils";
 
 // The vibe map: a 2D field where the operator drops a banger relative to the
@@ -7,27 +8,6 @@ import { cn } from "@/lib/utils";
 // its own colour. Placement is relative, not absolute — that's what makes review
 // fast. Position is never CSS-animated (it tracks the pointer), so reduced-motion
 // has nothing to suppress here.
-
-export type VibeQuadrant = "deep" | "lunar" | "nebular" | "solar";
-
-export const VIBE_QUADRANTS: Record<VibeQuadrant, { color: string; label: string }> = {
-  // bottom-right: floaty + dark
-  deep: { color: "oklch(0.64 0.16 295)", label: "Deep" },
-  // bottom-left: floaty + light
-  lunar: { color: "oklch(0.72 0.12 230)", label: "Lunar" },
-  // top-right: driving + dark
-  nebular: { color: "oklch(0.62 0.21 25)", label: "Nebular" },
-  // top-left: driving + light
-  solar: { color: "oklch(0.8 0.13 85)", label: "Solar" },
-};
-
-export function vibeQuadrant(x: number, y: number): VibeQuadrant {
-  if (y >= 0) {
-    return x < 0 ? "solar" : "nebular";
-  }
-
-  return x < 0 ? "lunar" : "deep";
-}
 
 type VibePointInput = {
   artists?: string[];
@@ -109,7 +89,7 @@ export function VibeMap({ onChange, points, value }: VibeMapProps) {
     dragging.current = false;
   }, []);
 
-  const activeQuadrant = value ? vibeQuadrant(value.x, value.y) : undefined;
+  const activeQuadrant = value ? galaxyForVibe(value.x, value.y) : undefined;
 
   return (
     <div
@@ -124,11 +104,11 @@ export function VibeMap({ onChange, points, value }: VibeMapProps) {
     >
       {/* Quadrant tints */}
       <div className="absolute inset-0 grid grid-cols-2 grid-rows-2">
-        {(["solar", "nebular", "lunar", "deep"] as const).map((key) => (
+        {(["solar", "nebular", "lunar", "astral"] as const).map((key) => (
           <div
             key={key}
             style={{
-              background: `radial-gradient(120% 120% at 50% 50%, color-mix(in oklch, ${VIBE_QUADRANTS[key].color} 14%, transparent), transparent 78%)`,
+              background: `radial-gradient(120% 120% at 50% 50%, color-mix(in oklch, ${GALAXIES[key].color} 14%, transparent), transparent 78%)`,
             }}
           />
         ))}
@@ -158,15 +138,15 @@ export function VibeMap({ onChange, points, value }: VibeMapProps) {
           ["solar", "left-2.5 top-6"],
           ["nebular", "right-2.5 top-6 text-right"],
           ["lunar", "bottom-6 left-2.5"],
-          ["deep", "bottom-6 right-2.5 text-right"],
+          ["astral", "bottom-6 right-2.5 text-right"],
         ] as const
       ).map(([key, pos]) => (
         <span
           className={cn("pointer-events-none absolute text-xs font-bold", pos)}
           key={key}
-          style={{ color: VIBE_QUADRANTS[key].color, opacity: activeQuadrant === key ? 0.95 : 0.4 }}
+          style={{ color: GALAXIES[key].color, opacity: activeQuadrant === key ? 0.95 : 0.4 }}
         >
-          {VIBE_QUADRANTS[key].label}
+          {GALAXIES[key].name}
         </span>
       ))}
 
@@ -176,7 +156,7 @@ export function VibeMap({ onChange, points, value }: VibeMapProps) {
       {points.map((point) => {
         const left = leftPct(point.vibeX);
         const top = topPct(point.vibeY);
-        const quadrant = vibeQuadrant(point.vibeX, point.vibeY);
+        const quadrant = galaxyForVibe(point.vibeX, point.vibeY);
 
         return (
           <span
@@ -192,7 +172,7 @@ export function VibeMap({ onChange, points, value }: VibeMapProps) {
           >
             <span
               className="pointer-events-none size-2 rounded-full opacity-60 transition-transform duration-150 ease-out group-hover:scale-150 group-hover:opacity-100 motion-reduce:transition-none"
-              style={{ background: VIBE_QUADRANTS[quadrant].color }}
+              style={{ background: GALAXIES[quadrant].color }}
             />
           </span>
         );
@@ -220,9 +200,9 @@ export function VibeMap({ onChange, points, value }: VibeMapProps) {
         <span
           className="pointer-events-none absolute z-10 size-4 -translate-x-1/2 -translate-y-1/2 rounded-full ring-2 ring-background"
           style={{
-            background: activeQuadrant ? VIBE_QUADRANTS[activeQuadrant].color : undefined,
+            background: activeQuadrant ? GALAXIES[activeQuadrant].color : undefined,
             boxShadow: activeQuadrant
-              ? `0 0 0 6px color-mix(in oklch, ${VIBE_QUADRANTS[activeQuadrant].color} 22%, transparent)`
+              ? `0 0 0 6px color-mix(in oklch, ${GALAXIES[activeQuadrant].color} 22%, transparent)`
               : undefined,
             left: leftPct(value.x),
             top: topPct(value.y),

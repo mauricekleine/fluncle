@@ -45,6 +45,9 @@
     "turbo": "~2.9.16",
     "typescript": "catalog:"
   },
+  "overrides": {
+    "@getspinup/constants": "0.4.0"
+  },
   "lint-staged": {
     "*": [
       "oxlint --fix --no-error-on-unmatched-pattern",

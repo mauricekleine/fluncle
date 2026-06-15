@@ -12,6 +12,10 @@
     // token (R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY, Object Read & Write on
     // fluncle-videos) is set as a secret, never checked in.
     "R2_ACCOUNT_ID": "0651fd3b33d9e0b2fe72a5f13e5cf65d",
+    // Non-secret Spinup enrichment agent id (the async track-enrichment trigger,
+    // lib/server/spinup.ts). The matching runtime key SPINUP_ENRICH_AGENT_KEY
+    // (an sk_agent_… key with the runs:create permission) is a secret, never checked in.
+    "SPINUP_ENRICH_AGENT_ID": "agent_857b6b85-029b-42bd-a79a-47a23d83a42e",
   },
   // R2 bucket for per-track videos and private analysis artifacts. Public reads are served from
   // found.fluncle.com; the Worker owns the bucket (the agent uploads via the

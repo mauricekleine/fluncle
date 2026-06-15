@@ -1,4 +1,5 @@
 import { CircleNotchIcon, PlayIcon } from "@phosphor-icons/react";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import {
   Link,
   createFileRoute,
@@ -8,7 +9,7 @@ import {
 } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { colors } from "@fluncle/tokens";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import {
   siGithub,
   siInstagram,
@@ -44,7 +45,7 @@ import {
 } from "@/lib/fluncle-links";
 import { fluncleAsciiLogo, fluncleDescription } from "@/lib/identity";
 import { listTracks } from "@/lib/server/tracks";
-import { fetchTracks, type Track } from "@/lib/tracks";
+import { fetchTracks, type TracksResponse } from "@/lib/tracks";
 import { registerWebMcpTools } from "@/lib/webmcp";
 
 const pageSize = 10;
@@ -142,12 +143,38 @@ function HomePage() {
   const navigate = useNavigate();
   const router = useRouter();
   const canGoBack = useCanGoBack();
-  const [cursor, setCursor] = useState<string | undefined>();
-  const [error, setError] = useState<string | undefined>();
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [nextCursor, setNextCursor] = useState<string | undefined>(initialPage.nextCursor);
-  const [totalCount, setTotalCount] = useState(initialPage.totalCount);
-  const [tracks, setTracks] = useState<Track[]>(initialPage.tracks);
+
+  // The feed reads through react-query so "Load more" pages stay cached. Seeded
+  // with the SSR loader's first page (instant first paint, no fetch on mount).
+  // Focus-refetch is intentionally OFF: the archive barely changes minute to
+  // minute, and refetching every loaded page on tab-back would waste bandwidth
+  // and risk a scroll jump for someone reading deep in the list.
+  const {
+    data,
+    error: loadError,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
+    // The loader's first page carries an extra newestStoryLogId (read separately
+    // below); narrow it to the plain feed page the queryFn returns.
+    initialData: { pageParams: [undefined], pages: [initialPage as TracksResponse] },
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) => fetchTracks({ cursor: pageParam, limit: pageSize }),
+    queryKey: ["home-feed"],
+    refetchOnWindowFocus: false,
+  });
+
+  const tracks = data.pages.flatMap((page) => page.tracks);
+  const totalCount = data.pages.at(-1)?.totalCount ?? initialPage.totalCount;
+  // The last consumed cursor, for the sr-only progress note below.
+  const cursor = data.pageParams.at(-1) as string | undefined;
+  const error = loadError
+    ? loadError instanceof Error
+      ? loadError.message
+      : String(loadError)
+    : undefined;
 
   // Close the dialog by going BACK to the feed's history entry: a fresh
   // navigate({ to: "/" }) would mint a new entry and scroll the feed to top.
@@ -216,31 +243,6 @@ function HomePage() {
     registerWebMcpTools();
   }, []);
 
-  const loadMore = useCallback(async (): Promise<void> => {
-    if (!nextCursor || isLoadingMore) {
-      return;
-    }
-
-    setError(undefined);
-    setIsLoadingMore(true);
-
-    try {
-      const result = await fetchTracks({
-        cursor: nextCursor,
-        limit: pageSize,
-      });
-
-      setCursor(nextCursor);
-      setNextCursor(result.nextCursor);
-      setTotalCount(result.totalCount);
-      setTracks((currentTracks) => [...currentTracks, ...result.tracks]);
-    } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : String(caughtError));
-    } finally {
-      setIsLoadingMore(false);
-    }
-  }, [isLoadingMore, nextCursor]);
-
   const loadMoreSentinelRef = useRef<HTMLLIElement | null>(null);
 
   // Auto-fetch when the load-more row drifts near the viewport bottom. The row
@@ -251,14 +253,14 @@ function HomePage() {
   useEffect(() => {
     const sentinel = loadMoreSentinelRef.current;
 
-    if (!sentinel || !nextCursor || isLoadingMore || error) {
+    if (!sentinel || !hasNextPage || isFetchingNextPage || error) {
       return;
     }
 
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) {
-          void loadMore();
+          void fetchNextPage();
         }
       },
       {
@@ -272,7 +274,7 @@ function HomePage() {
     return () => {
       observer.disconnect();
     };
-  }, [error, isLoadingMore, loadMore, nextCursor]);
+  }, [error, fetchNextPage, hasNextPage, isFetchingNextPage]);
 
   const trackNumberBase = totalCount || tracks.length;
 
@@ -468,22 +470,22 @@ function HomePage() {
                           trackNumber={trackNumberBase - index}
                         />
                       ))}
-                      {nextCursor ? (
+                      {hasNextPage ? (
                         <li ref={loadMoreSentinelRef}>
                           <button
                             className="flex min-h-14 w-full cursor-pointer items-center justify-center gap-2 text-sm font-bold text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset disabled:cursor-default"
-                            disabled={isLoadingMore}
-                            onClick={loadMore}
+                            disabled={isFetchingNextPage}
+                            onClick={() => void fetchNextPage()}
                             type="button"
                           >
-                            {isLoadingMore ? (
+                            {isFetchingNextPage ? (
                               <CircleNotchIcon
                                 aria-hidden="true"
                                 className="animate-spin"
                                 weight="bold"
                               />
                             ) : undefined}
-                            {isLoadingMore ? "Loading more tracks" : "Load more"}
+                            {isFetchingNextPage ? "Loading more tracks" : "Load more"}
                           </button>
                         </li>
                       ) : undefined}

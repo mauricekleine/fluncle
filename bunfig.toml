@@ -1,4 +1,5 @@
 [install]
 # Only install package versions published at least 3 days ago
 minimumReleaseAge = 259200
-minimumReleaseAgeExcludes = [""]
+# Our own Spinup packages — trusted, and we adopt them as soon as they publish.
+minimumReleaseAgeExcludes = ["@getspinup/sdk", "@getspinup/constants"]

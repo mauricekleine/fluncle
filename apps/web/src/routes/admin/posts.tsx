@@ -11,6 +11,7 @@ import {
   TiktokLogoIcon,
   YoutubeLogoIcon,
 } from "@phosphor-icons/react";
+import { type InfiniteData, useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type ComponentType, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -42,6 +43,10 @@ import { cn } from "@/lib/utils";
 // phone. Reads + writes go through the same gated admin API the CLI uses.
 
 const PAGE_SIZE = 50;
+
+// The board's react-query cache key. Stable (no params) — the cursor lives in the
+// infinite-query page params, and optimistic post updates patch this same entry.
+const BOARD_KEY = ["admin", "posts", "board"] as const;
 
 // Platforms shown as columns. `directPost` distinguishes the push shapes: TikTok
 // pushes a private inbox DRAFT (the operator finishes in-app), YouTube posts
@@ -141,9 +146,31 @@ type PublishTarget = {
 
 function AdminPostsPage() {
   const initial = Route.useLoaderData();
-  const [rows, setRows] = useState<BoardRow[]>(initial.tracks);
-  const [nextCursor, setNextCursor] = useState<string | undefined>(initial.nextCursor);
-  const [loadingMore, setLoadingMore] = useState(false);
+  const queryClient = useQueryClient();
+
+  // The board reads through react-query so it refetches on window focus — when
+  // the operator tabs back from TikTok/YouTube, the per-platform statuses come
+  // back fresh without a manual reload. Seeded with the SSR loader page so the
+  // first paint is instant and no client fetch fires on mount. Window-focus
+  // refetch re-runs every loaded page, so optimistic patches converge to truth.
+  const {
+    data,
+    error: queryError,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
+    initialData: { pageParams: [undefined], pages: [initial] },
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) => fetchBoard({ data: { cursor: pageParam } }),
+    queryKey: BOARD_KEY,
+    refetchOnWindowFocus: true,
+  });
+
+  const rows = useMemo(() => data?.pages.flatMap((page) => page.tracks) ?? [], [data]);
+  const totalCount = data?.pages[0]?.totalCount ?? initial.totalCount;
+
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | undefined>();
   const [publish, setPublish] = useState<PublishTarget | null>(null);
@@ -151,6 +178,15 @@ function AdminPostsPage() {
   const [assets, setAssets] = useState<BoardRow | null>(null);
   const [preview, setPreview] = useState<BoardRow | null>(null);
   const [copiedId, setCopiedId] = useState<string | undefined>();
+
+  // A failed load-more shouldn't be swallowed; surface it next to mutation errors
+  // and use it to pause the infinite-scroll observer until a manual retry.
+  const loadError = queryError
+    ? queryError instanceof Error
+      ? queryError.message
+      : String(queryError)
+    : undefined;
+  const shownError = error ?? loadError;
 
   const postFor = (row: BoardRow, platform: string) =>
     row.posts.find((post) => post.platform === platform);
@@ -184,30 +220,44 @@ function AdminPostsPage() {
   );
 
   // Merge a platform post into a row after a successful mutation, so the board
-  // reflects the new state without a full refetch.
+  // reflects the new state without a full refetch. Patches the cached infinite
+  // pages directly; the next window-focus refetch reconciles with the server.
   const applyPost = useCallback(
     (trackId: string, platform: string, patch: Partial<SocialPostItem>) => {
       const now = new Date().toISOString();
 
-      setRows((current) =>
-        current.map((row) => {
-          if (row.trackId !== trackId) {
-            return row;
+      queryClient.setQueryData<InfiniteData<BoardPage, string | undefined>>(
+        BOARD_KEY,
+        (current) => {
+          if (!current) {
+            return current;
           }
 
-          const existing = row.posts.find((post) => post.platform === platform);
-          const merged: SocialPostItem = existing
-            ? { ...existing, ...patch, updatedAt: now }
-            : { createdAt: now, platform, status: "draft", updatedAt: now, ...patch };
-
           return {
-            ...row,
-            posts: [...row.posts.filter((post) => post.platform !== platform), merged],
+            ...current,
+            pages: current.pages.map((page) => ({
+              ...page,
+              tracks: page.tracks.map((row) => {
+                if (row.trackId !== trackId) {
+                  return row;
+                }
+
+                const existing = row.posts.find((post) => post.platform === platform);
+                const merged: SocialPostItem = existing
+                  ? { ...existing, ...patch, updatedAt: now }
+                  : { createdAt: now, platform, status: "draft", updatedAt: now, ...patch };
+
+                return {
+                  ...row,
+                  posts: [...row.posts.filter((post) => post.platform !== platform), merged],
+                };
+              }),
+            })),
           };
-        }),
+        },
       );
     },
-    [],
+    [queryClient],
   );
 
   const run = useCallback(async (key: string, fn: () => Promise<void>) => {
@@ -269,41 +319,22 @@ function AdminPostsPage() {
     [applyPost, run],
   );
 
-  const loadMore = useCallback(async () => {
-    if (!nextCursor || loadingMore) {
-      return;
-    }
-
-    setLoadingMore(true);
-    setError(undefined);
-
-    try {
-      const page = await fetchBoard({ data: { cursor: nextCursor } });
-      setRows((current) => [...current, ...page.tracks]);
-      setNextCursor(page.nextCursor);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setLoadingMore(false);
-    }
-  }, [loadingMore, nextCursor]);
-
   // Infinite scroll: auto-load when the sentinel nears the viewport bottom (the
-  // home feed's pattern). The button stays as a manual fallback; after an error,
-  // auto mode pauses until a manual retry clears it.
+  // home feed's pattern). The button stays as a manual fallback; after a load
+  // error, auto mode pauses until a manual retry (the button) clears it.
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
 
-    if (!sentinel || !nextCursor || loadingMore || error) {
+    if (!sentinel || !hasNextPage || isFetchingNextPage || loadError) {
       return;
     }
 
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) {
-          void loadMore();
+          void fetchNextPage();
         }
       },
       { rootMargin: "320px" },
@@ -312,7 +343,7 @@ function AdminPostsPage() {
     observer.observe(sentinel);
 
     return () => observer.disconnect();
-  }, [error, loadingMore, loadMore, nextCursor]);
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage, loadError]);
 
   const confirmPublish = useCallback(async () => {
     if (!publish) {
@@ -379,7 +410,7 @@ function AdminPostsPage() {
           <div className="min-w-0">
             <h1 className="text-sm font-bold">Posts</h1>
             <p className="text-xs text-muted-foreground">
-              {initial.totalCount} findings · newest first
+              {totalCount} findings · newest first
               {tiktokDrafts > 0 ? (
                 <>
                   {" · "}
@@ -394,9 +425,9 @@ function AdminPostsPage() {
           <AdminNav current="posts" />
         </header>
 
-        {error ? (
+        {shownError ? (
           <p className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive sm:px-5">
-            {error}
+            {shownError}
           </p>
         ) : undefined}
 
@@ -540,18 +571,18 @@ function AdminPostsPage() {
                 ))}
               </ul>
 
-              {nextCursor ? (
+              {hasNextPage ? (
                 <div className="border-t border-border p-3 text-center sm:p-4" ref={sentinelRef}>
                   <Button
-                    disabled={loadingMore}
-                    onClick={() => void loadMore()}
+                    disabled={isFetchingNextPage}
+                    onClick={() => void fetchNextPage()}
                     size="sm"
                     variant="outline"
                   >
-                    {loadingMore ? (
+                    {isFetchingNextPage ? (
                       <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
                     ) : undefined}
-                    {loadingMore ? "Loading…" : "Load more"}
+                    {isFetchingNextPage ? "Loading…" : "Load more"}
                   </Button>
                 </div>
               ) : undefined}
