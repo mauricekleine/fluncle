@@ -72,6 +72,31 @@ export function mapTrack(track: ApiRecentTrack): RecentTrack {
   };
 }
 
+export type RecentPage = {
+  nextCursor?: string;
+  totalCount: number;
+  tracks: RecentTrack[];
+};
+
+// One page for the interactive pager: the findings at `cursor` (newest first
+// from the start), plus the cursor for the page after and the archive total so
+// the pager can show "11–20 of 26".
+export async function fetchRecentPage(cursor?: string, limit = 10): Promise<RecentPage> {
+  const params = new URLSearchParams({ limit: String(limit) });
+
+  if (cursor) {
+    params.set("cursor", cursor);
+  }
+
+  const response = await publicApiGet<TracksResponse>(`/api/tracks?${params.toString()}`);
+
+  return {
+    nextCursor: response.nextCursor,
+    totalCount: response.totalCount,
+    tracks: response.tracks.map(mapTrack),
+  };
+}
+
 // The latest findings, newest first. Pages through with the cursor only when
 // `limit` exceeds one API page; the common small `limit` is a single request.
 export async function recentCommand(limit: number): Promise<RecentTrack[]> {

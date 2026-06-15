@@ -124,6 +124,152 @@ export async function selectWithKeyboard<T>(
   });
 }
 
+type PagerPage = {
+  lines: string[];
+  nextCursor?: string;
+  total: number;
+};
+
+type PaginateOptions = {
+  emptyMessage: string;
+  fetchPage: (cursor?: string) => Promise<PagerPage>;
+  input?: KeyboardInput;
+  nonInteractiveMessage: string;
+  output?: KeyboardOutput;
+};
+
+/**
+ * A keyboard-driven pager: shows one page of pre-rendered lines, then →/l/space
+ * load the next page (fetched on demand via the cursor, then cached so ←/h is
+ * instant), and q/Esc/Ctrl-C quit — leaving the last page on screen. Lines are
+ * truncated to the terminal width so the in-place redraw never miscounts. Throws
+ * `not_interactive` off a TTY; callers fall back to a plain print there.
+ */
+export async function paginateWithKeyboard(options: PaginateOptions): Promise<void> {
+  const stdin = options.input ?? process.stdin;
+  const stdout = options.output ?? process.stdout;
+
+  if (!stdin.isTTY || !stdout.isTTY) {
+    throw new CliError("not_interactive", options.nonInteractiveMessage);
+  }
+
+  const first = await options.fetchPage(undefined);
+
+  if (first.lines.length === 0) {
+    stdout.write(`${options.emptyMessage}\n`);
+    return;
+  }
+
+  const pages: PagerPage[] = [first];
+  let index = 0;
+  let renderedLines = 0;
+  let busy = false;
+  let done = false;
+
+  const wasRaw = stdin.isRaw === true;
+
+  return await new Promise<void>((resolve) => {
+    function cleanup(): void {
+      if (done) {
+        return;
+      }
+
+      done = true;
+      stdin.off("data", onData);
+      stdin.setRawMode(wasRaw);
+      stdin.pause();
+      stdout.write("\x1b[?25h");
+    }
+
+    function finish(): void {
+      cleanup();
+      stdout.write("\n");
+      resolve();
+    }
+
+    function render(): void {
+      clearRendered(stdout, renderedLines);
+
+      const columns = stdout.columns ?? 80;
+      const before = pages.slice(0, index).reduce((count, page) => count + page.lines.length, 0);
+      const page = pages[index];
+      const start = before + 1;
+      const end = before + page.lines.length;
+      const loading = busy ? "  ·  loading…" : "";
+      const footer = `${start}–${end} of ${page.total}   ←/→ page · q quit${loading}`;
+      const lines = [...page.lines, "", footer].map((line) => truncateTerminalLine(line, columns));
+
+      renderedLines = lines.length;
+      stdout.write(`${lines.join("\n")}\n`);
+    }
+
+    function loadNext(): void {
+      const cursor = pages[index].nextCursor;
+
+      if (cursor === undefined) {
+        return;
+      }
+
+      busy = true;
+      render();
+
+      void options
+        .fetchPage(cursor)
+        .then((next) => {
+          busy = false;
+
+          if (next.lines.length > 0) {
+            pages.push(next);
+            index += 1;
+          }
+
+          render();
+        })
+        .catch(() => {
+          busy = false;
+          render();
+        });
+    }
+
+    function onData(chunk: Buffer): void {
+      if (busy) {
+        return;
+      }
+
+      const input = chunk.toString("utf8");
+
+      if (input === "\u0003" || input === "\u001b" || input === "q") {
+        finish();
+        return;
+      }
+
+      if (input === "\u001b[C" || input === "l" || input === " ") {
+        if (index < pages.length - 1) {
+          index += 1;
+          render();
+          return;
+        }
+
+        loadNext();
+        return;
+      }
+
+      if (input === "\u001b[D" || input === "h") {
+        if (index > 0) {
+          index -= 1;
+          render();
+        }
+      }
+    }
+
+    stdout.write("\x1b[?25l");
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.on("data", onData);
+    render();
+  });
+}
+
 export function truncateTerminalLine(value: string, maxLength: number): string {
   if (value.length <= maxLength) {
     return value;

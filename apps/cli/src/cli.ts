@@ -164,7 +164,7 @@ function addListenCommands(program: Command): void {
     .command("recent")
     .alias("list")
     .description("The latest bangers, newest first")
-    .option("--limit <limit>", "Number of tracks to fetch", "10")
+    .option("--limit <limit>", "Number of tracks to fetch")
     .option("--json", "Print JSON", false)
     .action(async (options: RecentOptions) => {
       const { recentCommand } = await import("./commands/recent");
@@ -769,6 +769,35 @@ async function runRecent(
   options: RecentOptions,
   recentCommand: typeof import("./commands/recent").recentCommand,
 ): Promise<void> {
+  // Bare `recent` in a terminal is an interactive ←/→ pager (10 at a time).
+  // `--json`, an explicit `--limit`, or a non-TTY (piped) fall through to a plain
+  // newest-first print, so every scripted consumer is untouched.
+  if (
+    options.limit === undefined &&
+    !options.json &&
+    process.stdout.isTTY === true &&
+    process.stdin.isTTY === true
+  ) {
+    const { fetchRecentPage } = await import("./commands/recent");
+    const { paginateWithKeyboard } = await import("./interactive");
+    const { trackRows } = await import("./format");
+
+    await paginateWithKeyboard({
+      emptyMessage: "No findings logged yet.",
+      fetchPage: async (cursor) => {
+        const page = await fetchRecentPage(cursor, 10);
+
+        return {
+          lines: trackRows(page.tracks),
+          nextCursor: page.nextCursor,
+          total: page.totalCount,
+        };
+      },
+      nonInteractiveMessage: "recent needs an interactive terminal; use --json or --limit",
+    });
+    return;
+  }
+
   const limit = parseListLimit(options.limit);
   const tracks = await recentCommand(limit);
 

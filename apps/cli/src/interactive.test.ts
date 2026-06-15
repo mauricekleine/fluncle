@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { selectWithKeyboard } from "./interactive";
+import { paginateWithKeyboard, selectWithKeyboard } from "./interactive";
+
+const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 class FakeInput {
   isRaw = false;
@@ -105,5 +107,67 @@ describe("selectWithKeyboard", () => {
     expect(output.text()).toContain("\x1b[1F\x1b[J");
     expect(input.rawModes).toEqual([true, false]);
     expect(input.listenerCount()).toBe(0);
+  });
+});
+
+describe("paginateWithKeyboard", () => {
+  test("pages forward (fetch), back (cached), and restores the terminal on quit", async () => {
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const calls: (string | undefined)[] = [];
+
+    const done = paginateWithKeyboard({
+      emptyMessage: "empty",
+      fetchPage: async (cursor) => {
+        calls.push(cursor);
+
+        return cursor === "c1"
+          ? { lines: ["b1", "b2"], total: 4 }
+          : { lines: ["a1", "a2"], nextCursor: "c1", total: 4 };
+      },
+      input,
+      nonInteractiveMessage: "nope",
+      output,
+    });
+
+    await flush();
+    expect(input.rawModes).toEqual([true]);
+    expect(input.resumed).toBe(true);
+    expect(output.text()).toContain("a1");
+    expect(output.text()).toContain("1–2 of 4");
+
+    input.emitData("\u001b[C");
+    await flush();
+    expect(calls).toEqual([undefined, "c1"]);
+    expect(output.text()).toContain("b1");
+    expect(output.text()).toContain("3–4 of 4");
+
+    input.emitData("\u001b[D");
+    await flush();
+    expect(calls).toEqual([undefined, "c1"]);
+    expect(output.text()).toContain("1–2 of 4");
+
+    input.emitData("q");
+    await done;
+    expect(input.rawModes).toEqual([true, false]);
+    expect(input.paused).toBe(true);
+    expect(input.listenerCount()).toBe(0);
+    expect(output.text()).toContain("\x1b[?25h");
+  });
+
+  test("shows the empty message and never enters raw mode for an empty archive", async () => {
+    const input = new FakeInput();
+    const output = new FakeOutput();
+
+    await paginateWithKeyboard({
+      emptyMessage: "No findings logged yet.",
+      fetchPage: async () => ({ lines: [], total: 0 }),
+      input,
+      nonInteractiveMessage: "nope",
+      output,
+    });
+
+    expect(output.text()).toContain("No findings logged yet.");
+    expect(input.rawModes).toEqual([]);
   });
 });
