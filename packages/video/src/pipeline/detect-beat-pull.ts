@@ -17,6 +17,13 @@
 //     (drift, a forward surge); →1 = it came back where it started (oscillation).
 //   - brightness-normalised (each frame's mean luma removed first) so an ALLOWED
 //     beat-locked glow/exposure pulse doesn't read as motion.
+//   - temporally pre-smoothed (a short box low-pass) so FILM GRAIN doesn't read as
+//     motion. Grain reseeds at ~24Hz; over a low-motion clip that per-frame flicker
+//     would otherwise dominate the reversal ratio (a real clip measured ~40% of its
+//     raw score as grain). The beat is ~3Hz, well below the smoother's cutoff, so
+//     the structural motion survives and the grain is removed. This matters: without
+//     it, slowing the grain clock alone "passes" the gate while a real motion pull
+//     remains — a false fix.
 // A beat-locked SURGE modulates motion strongly but reverses little; a beat-PULL
 // reverses on every kick. Mean reversal separates them — measured directly, not via
 // the beat grid (the symptom is the jitter itself, whatever drives it), so the gate
@@ -41,6 +48,13 @@ export type BeatPullOptions = {
   threshold?: number;
   /** Minimum frames required to judge; fewer → inconclusive (passes). */
   minFrames?: number;
+  /**
+   * Temporal smoothing half-window (frames) applied BEFORE measuring reversal.
+   * This is the grain fence: film grain reseeds at ~24Hz, the beat is ~3Hz, so a
+   * short box low-pass removes the per-frame grain flicker that would otherwise be
+   * scored as snap-back, leaving structural MOTION. 0 disables it.
+   */
+  smoothFrames?: number;
 };
 
 export type BeatPullResult = {
@@ -60,10 +74,13 @@ const DEFAULTS = {
   fps: DEFAULT_FPS,
   lagMs: 67, // ~2 frames at 30fps — the fast-jitter band where snap-back lives
   minFrames: 30,
-  // Calibrated against rendered clips (see detect-beat-pull.test.ts). Clean clips
-  // cluster at reversal ~0.20-0.24; operator-confirmed pulls sit at 0.42-0.48, a
-  // wide gap. 0.35 flags the clear pulls and clears the clean ones with margin.
-  threshold: 0.35,
+  smoothFrames: 1, // ±1 → 3-frame box low-pass; kills ~24Hz grain, keeps ~3Hz beat motion
+  // Calibrated against rendered clips on the GRAIN-HARDENED signal (3-frame
+  // pre-smooth — see detect-beat-pull.test.ts). Without it the metric is dominated
+  // by film-grain flicker on low-motion clips (a clip's raw 0.42 was ~40% grain).
+  // Hardened, clean clips cluster at ~0.10 and operator-confirmed motion pulls sit
+  // at 0.24+; 0.17 splits the gap and correctly rejects a grain-only "fix".
+  threshold: 0.17,
 };
 
 const meanAbsDiff = (a: Float32Array, b: Float32Array): number => {
@@ -135,6 +152,7 @@ export function scoreBeatPull(
   const lagMs = options.lagMs ?? DEFAULTS.lagMs;
   const threshold = options.threshold ?? DEFAULTS.threshold;
   const minFrames = options.minFrames ?? DEFAULTS.minFrames;
+  const smoothFrames = options.smoothFrames ?? DEFAULTS.smoothFrames;
 
   const lag = Math.max(1, Math.round((lagMs / 1000) * fps));
   const n = rawFrames.length;
@@ -152,7 +170,7 @@ export function scoreBeatPull(
 
   // Brightness-normalise: subtract each frame's mean so a uniform glow/exposure
   // pulse leaves no motion behind, only structural movement does.
-  const frames = rawFrames.map((f) => {
+  const normalised = rawFrames.map((f) => {
     let sum = 0;
     for (let p = 0; p < f.length; p++) {
       sum += f[p]!;
@@ -164,6 +182,30 @@ export function scoreBeatPull(
     }
     return out;
   });
+
+  // The grain fence: a temporal box low-pass over ±smoothFrames. Film grain
+  // reseeds every frame or two (~24Hz); smoothing it out leaves the slower
+  // structural motion (the beat is ~3Hz), so the reversal below scores MOTION
+  // snap-back, not grain flicker. Without this the metric is grain-dominated on
+  // low-motion clips and a grain-only "fix" passes a real motion pull.
+  const frames =
+    smoothFrames > 0
+      ? normalised.map((_, i) => {
+          const out = new Float32Array(normalised[0]!.length);
+          const lo = Math.max(0, i - smoothFrames);
+          const hi = Math.min(n - 1, i + smoothFrames);
+          for (let j = lo; j <= hi; j++) {
+            for (let p = 0; p < out.length; p++) {
+              out[p] += normalised[j]![p]!;
+            }
+          }
+          const w = hi - lo + 1;
+          for (let p = 0; p < out.length; p++) {
+            out[p] /= w;
+          }
+          return out;
+        })
+      : normalised;
 
   // Consecutive-frame motion (the path travelled per step).
   const step: number[] = [];

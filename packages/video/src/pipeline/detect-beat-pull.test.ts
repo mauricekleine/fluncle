@@ -1,20 +1,25 @@
 // Self-running check for the beat-pull scorer's MATH — no GPU, no ffmpeg, no test
 // framework. Builds synthetic frame sequences (a 1-D gray strip with a moving bump)
-// and asserts the scorer flags only the one that jitters back and forth:
-//   - DRIFT : the bump glides across → low reversal → passes.
-//   - JITTER: the bump snaps between two spots every couple frames → high reversal → FAILS.
-//   - SURGE : the bump glides AND the whole strip flashes bright on a beat → the
-//             brightness is normalised away, motion is still a glide → passes. This
-//             is the false positive the first (modulation-based) metric got wrong:
-//             a crisp on-beat hit that advances and flows is what doctrine 9 wants.
+// and asserts the hardened scorer's three locked behaviours:
+//   - DRIFT  : the bump glides → low reversal → passes.
+//   - JITTER : the bump oscillates back and forth → high reversal, survives the
+//              temporal smooth → fails.
+//   - GRAIN  : a glide buried in per-frame speckle reads as snap-back WITHOUT the
+//              fence (raw fails), and the temporal smooth removes a large chunk of
+//              it. (The synthetic grain is harsher than real grain, which the gate's
+//              48px spatial downscale also averages — so on real footage the fence
+//              clears it fully; see the calibration note below.)
 // Run: `bun src/pipeline/detect-beat-pull.test.ts` (exits non-zero on failure).
 //
-// Threshold calibration (real rendered clips, mean short-lag reversal):
-//   clean cluster  004.7.2I 0.20 · 004.4.3L 0.21 · 004.0.1C 0.24   (incl. 004.4.3L,
-//                  which HITS hard on the beat but does not snap back — operator-clean)
-//   borderline     004.4.8B 0.33
-//   pulls          004.6.0K 0.42 (operator-confirmed) · 004.6.0Q 0.48
-// A wide gap → threshold 0.35 flags the clear pulls and clears the clean ones.
+// Threshold calibration (real rendered clips, GRAIN-HARDENED reversal — 3-frame
+// temporal pre-smooth, the default):
+//   clean cluster  004.4.3L 0.10 · 004.7.2I 0.09          (operator-confirmed clean)
+//   motion pulls   004.6.0K 0.24 · 004.6.0Q 0.28 · 004.9.2Q 0.34  (operator-confirmed)
+//   the false fix  004.6.0K with only its grain clock slowed → 0.21 → still FAILS
+// Without the fence those same clips score ~0.20 (clean) to ~0.42-0.57 (pulls), but
+// ~40% of a pull's raw score is film-grain flicker, not motion — so a grain-only
+// tweak "passes" the raw gate while the motion pull remains. The fence fixes that;
+// threshold 0.17 splits clean (~0.10) from real motion pulls (0.24+).
 
 import assert from "node:assert/strict";
 
@@ -24,47 +29,62 @@ const N = 64; // pixels across the strip
 const FRAMES = 300;
 const SIGMA = 6;
 
-// A gray strip with a bright gaussian bump at `pos`, over a flat `baseline`.
-const strip = (pos: number, baseline: number): Float32Array => {
+const bump = (pos: number, x: number): number =>
+  200 * Math.exp(-((x - pos) ** 2) / (2 * SIGMA * SIGMA));
+
+// Per-pixel speckle reseeded every ~1.25 frames, matching GLSL.filmGrain's
+// floor(time*24) at 30fps. Deterministic (hash of pixel + reseeded frame).
+const speckle = (x: number, t: number, amp: number): number => {
+  const h = ((x * 374761393) ^ (Math.floor(t / 1.25) * 668265263)) >>> 0;
+  return ((h % 1000) / 1000 - 0.5) * amp;
+};
+
+const strip = (pos: number, t: number, grain: number): Float32Array => {
   const f = new Float32Array(N);
   for (let x = 0; x < N; x++) {
-    f[x] = baseline + 200 * Math.exp(-((x - pos) ** 2) / (2 * SIGMA * SIGMA));
+    f[x] = 30 + bump(pos, x) + (grain ? speckle(x, t, grain) : 0);
   }
   return f;
 };
 
-const drift = Array.from({ length: FRAMES }, (_, t) => strip(12 + (40 * t) / FRAMES, 30));
-
-// Snaps between two positions every 2 frames — pure back-and-forth.
+// DRIFT: a smooth glide across the strip. Directed motion, no grain.
+const drift = Array.from({ length: FRAMES }, (_, t) => strip(12 + (40 * t) / FRAMES, t, 0));
+// JITTER: the bump oscillates back and forth (period 5 frames) — the artifact.
 const jitter = Array.from({ length: FRAMES }, (_, t) =>
-  strip(Math.floor(t / 2) % 2 === 0 ? 26 : 40, 30),
+  strip(32 + 12 * Math.sin((2 * Math.PI * t) / 5), t, 0),
 );
-
-// Same glide as drift, plus a full-strip brightness flash every 10 frames (an
-// on-beat material pulse). Normalisation must remove the flash, leaving a glide.
-const surge = Array.from({ length: FRAMES }, (_, t) =>
-  strip(12 + (40 * t) / FRAMES, t % 10 < 2 ? 200 : 30),
-);
+// GRAIN: the same glide as drift, buried in heavy per-frame speckle.
+const grainy = Array.from({ length: FRAMES }, (_, t) => strip(12 + (40 * t) / FRAMES, t, 80));
 
 const driftR = scoreBeatPull(drift);
 const jitterR = scoreBeatPull(jitter);
-const surgeR = scoreBeatPull(surge);
+const grainHard = scoreBeatPull(grainy); // default: temporal fence on
+const grainRaw = scoreBeatPull(grainy, { smoothFrames: 0 }); // fence off
 
-console.log("drift :", JSON.stringify(driftR));
-console.log("jitter:", JSON.stringify(jitterR));
-console.log("surge :", JSON.stringify(surgeR));
+console.log("drift     :", JSON.stringify(driftR));
+console.log("jitter    :", JSON.stringify(jitterR));
+console.log("grain raw :", JSON.stringify(grainRaw), " hardened:", JSON.stringify(grainHard));
 
+// A smooth glide passes.
 assert.equal(driftR.beatLocked, false, "a smooth glide must pass");
-assert.equal(jitterR.beatLocked, true, "back-and-forth snapping must fail");
-assert.equal(surgeR.beatLocked, false, "an on-beat brightness pulse over a glide must pass");
+assert.ok(driftR.score < 0.05, "a smooth glide has near-zero reversal");
 
-assert.ok(jitterR.score > driftR.score, "jitter must reverse more than a glide");
-assert.ok(jitterR.score > surgeR.score, "jitter must reverse more than a flashing glide");
-assert.ok(surgeR.score < 0.35, "the flash must normalise away, leaving low reversal");
+// Back-and-forth motion fails, and survives the temporal smooth (it's structural,
+// not grain).
+assert.equal(jitterR.beatLocked, true, "oscillating motion must fail");
+assert.ok(jitterR.score > 0.3, "oscillating motion has deep reversal");
+
+// Grain flicker reads as snap-back WITHOUT the fence, and the fence removes a large
+// chunk of it (on real footage the 48px downscale clears the rest — see header).
+assert.equal(grainRaw.beatLocked, true, "raw (un-smoothed) scores grain flicker as jitter");
+assert.ok(
+  grainRaw.score - grainHard.score > 0.1,
+  "the temporal fence must materially cut grain-driven reversal",
+);
 
 // Too few frames → inconclusive (passes rather than guessing).
 const sparse = scoreBeatPull(jitter.slice(0, 6));
 assert.ok(sparse.inconclusive, "a handful of frames is inconclusive");
 assert.equal(sparse.beatLocked, false, "inconclusive never fails the gate");
 
-console.log("✓ beat-pull scorer: glide & flashing-glide pass, back-and-forth fails");
+console.log("✓ beat-pull scorer: drift passes, oscillation fails, the grain fence cuts flicker");
