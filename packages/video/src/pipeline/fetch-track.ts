@@ -3,7 +3,7 @@
 
 import { type CosmosTrack } from "../remotion/types";
 
-const TRACKS_ENDPOINT = "https://www.fluncle.com/api/tracks?limit=48";
+const TRACK_ENDPOINT = "https://www.fluncle.com/api/tracks";
 
 type ApiTrack = {
   trackId: string;
@@ -31,29 +31,27 @@ type ApiTrack = {
 };
 
 /**
- * Fetch a track by id from the public track list and map it onto CosmosTrack.
- * Throws clearly if the track is not present in the discovery window.
+ * Fetch a track by its Spotify trackId OR its Log ID and map it onto CosmosTrack.
+ * Uses the single-track endpoint, so it resolves any finding in the archive — not
+ * just the recent discovery window — which is what lets the pipeline re-render an
+ * older clip (pass its Log ID, e.g. "004.6.0K"). Throws clearly on 404.
  */
-export async function fetchTrack(trackId: string): Promise<CosmosTrack> {
-  const res = await fetch(TRACKS_ENDPOINT, {
+export async function fetchTrack(idOrLogId: string): Promise<CosmosTrack> {
+  const url = `${TRACK_ENDPOINT}/${encodeURIComponent(idOrLogId)}`;
+  const res = await fetch(url, {
     headers: { accept: "application/json" },
   });
+  if (res.status === 404) {
+    throw new Error(`fetchTrack: no track with id "${idOrLogId}" (GET ${url} -> 404)`);
+  }
   if (!res.ok) {
-    throw new Error(
-      `fetchTrack: GET ${TRACKS_ENDPOINT} failed with ${res.status} ${res.statusText}`,
-    );
+    throw new Error(`fetchTrack: GET ${url} failed with ${res.status} ${res.statusText}`);
   }
 
-  const payload = (await res.json()) as ApiTrack[] | { tracks?: ApiTrack[]; data?: ApiTrack[] };
-  const list: ApiTrack[] = Array.isArray(payload)
-    ? payload
-    : (payload.tracks ?? payload.data ?? []);
-
-  const found = list.find((t) => t.trackId === trackId);
+  const payload = (await res.json()) as { ok?: boolean; track?: ApiTrack };
+  const found = payload.track;
   if (!found) {
-    throw new Error(
-      `fetchTrack: trackId "${trackId}" not found in ${TRACKS_ENDPOINT} (${list.length} tracks in window)`,
-    );
+    throw new Error(`fetchTrack: response for "${idOrLogId}" contained no track`);
   }
 
   const track: CosmosTrack = {

@@ -1,6 +1,9 @@
 // Entry point for the local social-preview pipeline.
 //
-//   bun src/pipeline/social-preview.ts <trackId> [--skip-render] [--composition <Id>] [--composition-source <file>] [--duration-ms <10000-30000>] [--draft]
+//   bun src/pipeline/social-preview.ts <trackId|logId> [--skip-render] [--composition <Id>] [--composition-source <file>] [--duration-ms <10000-30000>] [--draft]
+//
+// The positional id is a Spotify trackId or a Log ID (e.g. 004.6.0K) — the
+// latter lets you re-render an older clip that's aged out of the feed window.
 //
 // fetch track -> resolve preview -> download + normalize -> analyze audio ->
 // extract palette -> assemble inputProps -> write out/<trackId>.props.json ->
@@ -92,7 +95,7 @@ async function main(): Promise<void> {
       (!Number.isFinite(durationMs) || durationMs! < 10_000 || durationMs! > 30_000))
   ) {
     throw new Error(
-      "usage: bun src/pipeline/social-preview.ts <trackId> [--skip-render] [--composition <Id>] [--composition-source <file>] [--duration-ms <10000-30000>] [--draft]",
+      "usage: bun src/pipeline/social-preview.ts <trackId|logId> [--skip-render] [--composition <Id>] [--composition-source <file>] [--duration-ms <10000-30000>] [--draft]",
     );
   }
 
