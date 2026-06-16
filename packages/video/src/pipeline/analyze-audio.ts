@@ -1,7 +1,8 @@
 // Offline audio analysis for the "NostalgicCosmos" composition.
 //
 // Reads a mono PCM wav, derives RMS energy at 50ms hops, splits into 3 bands via
-// simple one-pole filters, builds an onset envelope, estimates BPM via
+// a Hann-windowed STFT (bass/mid/treble by bin frequency), builds an onset
+// envelope, estimates BPM via
 // autocorrelation constrained to 160-185 (half-time D&B/trap is doubled), lays a
 // best-phase beat grid, picks the best contiguous 20s window, and trims/normalizes
 // everything relative to that window's start.
@@ -9,6 +10,7 @@
 import { readFile } from "node:fs/promises";
 
 import { type CosmosAudio, type EnergySample } from "../remotion/types";
+import { fftInPlace, hannWindow, nextPow2 } from "./fft";
 
 const HOP_MS = 50;
 const TARGET_WINDOW_MS = 20000;
@@ -86,15 +88,8 @@ function decodeWav(buf: Buffer): DecodedWav {
   return { sampleRate, samples };
 }
 
-/** One-pole low-pass coefficient for a given cutoff. */
-function lowpassAlpha(cutoffHz: number, sampleRate: number): number {
-  const dt = 1 / sampleRate;
-  const rc = 1 / (2 * Math.PI * cutoffHz);
-  return dt / (rc + dt);
-}
-
-type Bands = {
-  /** Per-hop RMS for each band, aligned arrays. */
+export type Bands = {
+  /** Per-hop overall RMS (time-domain) + per-band magnitude, aligned arrays. */
   full: Float32Array;
   bass: Float32Array;
   mid: Float32Array;
@@ -102,18 +97,37 @@ type Bands = {
   hopCount: number;
 };
 
-function computeBands(decoded: DecodedWav): Bands {
+/**
+ * Per-hop band magnitudes via STFT. `full` is the time-domain RMS (unchanged, so
+ * the energy curve / u_energy / the drop envelope are identical); the bands come
+ * from a Hann-windowed FFT split by bin frequency — a clean spectral separation,
+ * replacing the old one-pole filters whose 6dB/oct rolloff bled a kick into mid
+ * and a snare into bass+treble. Mean power PER BIN per band (not the raw sum) so
+ * the three bands stay comparable regardless of how many bins each spans — else
+ * treble's ~800 bins would dwarf bass's ~13 and skew the onset envelope.
+ *
+ * Exported for fft.test.ts. Pure + deterministic.
+ */
+export function computeBands(decoded: DecodedWav): Bands {
   const { samples, sampleRate } = decoded;
-  const aBass = lowpassAlpha(BASS_CUTOFF_HZ, sampleRate);
-  const aMid = lowpassAlpha(MID_CUTOFF_HZ, sampleRate);
-
-  // One-pole low-pass states: lpBass isolates bass; lpMid (<2k) minus bass = mid;
-  // full minus lpMid = high.
-  let lpBass = 0;
-  let lpMid = 0;
-
   const hopSamples = Math.max(1, Math.round((HOP_MS / 1000) * sampleRate));
   const hopCount = Math.floor(samples.length / hopSamples);
+
+  // STFT frame ~93ms, power of two (2048 at 22050Hz → ~10.8Hz/bin → ~14 bins
+  // below the 150Hz bass cutoff; scales with the rate if it ever changes).
+  const fftSize = nextPow2(Math.round(sampleRate * 0.09));
+  const half = fftSize >> 1;
+  const win = hannWindow(fftSize);
+  const binHz = sampleRate / fftSize;
+  const bassMaxBin = Math.max(1, Math.floor(BASS_CUTOFF_HZ / binHz));
+  const midMaxBin = Math.max(bassMaxBin + 1, Math.floor(MID_CUTOFF_HZ / binHz));
+  // Bin counts per band (DC bin 0 excluded), for the mean-per-bin scaling above.
+  const bassBins = bassMaxBin;
+  const midBins = Math.max(1, midMaxBin - bassMaxBin);
+  const highBins = Math.max(1, half - midMaxBin);
+
+  const re = new Float64Array(fftSize);
+  const im = new Float64Array(fftSize);
 
   const full = new Float32Array(hopCount);
   const bass = new Float32Array(hopCount);
@@ -121,27 +135,41 @@ function computeBands(decoded: DecodedWav): Bands {
   const high = new Float32Array(hopCount);
 
   for (let h = 0; h < hopCount; h++) {
-    let sFull = 0;
-    let sBass = 0;
-    let sMid = 0;
-    let sHigh = 0;
     const start = h * hopSamples;
+
+    // Overall energy: time-domain RMS over the hop (identical to before).
+    let sFull = 0;
     for (let i = 0; i < hopSamples; i++) {
       const x = samples[start + i] ?? 0;
-      lpBass += aBass * (x - lpBass);
-      lpMid += aMid * (x - lpMid);
-      const bassV = lpBass;
-      const midV = lpMid - lpBass;
-      const highV = x - lpMid;
       sFull += x * x;
-      sBass += bassV * bassV;
-      sMid += midV * midV;
-      sHigh += highV * highV;
     }
     full[h] = Math.sqrt(sFull / hopSamples);
-    bass[h] = Math.sqrt(sBass / hopSamples);
-    mid[h] = Math.sqrt(sMid / hopSamples);
-    high[h] = Math.sqrt(sHigh / hopSamples);
+
+    // Bands: Hann-windowed FFT over a frame centred on the hop.
+    const frameStart = start + (hopSamples >> 1) - half;
+    for (let i = 0; i < fftSize; i++) {
+      const s = frameStart + i;
+      re[i] = (s >= 0 && s < samples.length ? samples[s]! : 0) * win[i]!;
+      im[i] = 0;
+    }
+    fftInPlace(re, im);
+
+    let pBass = 0;
+    let pMid = 0;
+    let pHigh = 0;
+    for (let k = 1; k <= half; k++) {
+      const p = re[k]! * re[k]! + im[k]! * im[k]!;
+      if (k <= bassMaxBin) {
+        pBass += p;
+      } else if (k <= midMaxBin) {
+        pMid += p;
+      } else {
+        pHigh += p;
+      }
+    }
+    bass[h] = Math.sqrt(pBass / bassBins);
+    mid[h] = Math.sqrt(pMid / midBins);
+    high[h] = Math.sqrt(pHigh / highBins);
   }
 
   return { bass, full, high, hopCount, mid };
