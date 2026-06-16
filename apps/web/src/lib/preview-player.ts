@@ -90,3 +90,24 @@ export function usePreviewPlayer(trackId: string): {
     toggle: useCallback(() => toggle(trackId), [trackId]),
   };
 }
+
+// For a surface with MANY previewable items (e.g. the vibe map's placed dots):
+// subscribe once and compare the active id per item, instead of one hook per row.
+// `toggle` is the shared singleton, so starting one preview stops any other.
+export function usePreviewControls(): {
+  loadingTrackId: string | undefined;
+  playingTrackId: string | undefined;
+  toggle: (trackId: string) => void;
+} {
+  const snapshot = useSyncExternalStore(
+    subscribe,
+    () => state,
+    () => idleState,
+  );
+
+  return {
+    loadingTrackId: snapshot.status === "loading" ? snapshot.trackId : undefined,
+    playingTrackId: snapshot.status === "idle" ? undefined : snapshot.trackId,
+    toggle,
+  };
+}

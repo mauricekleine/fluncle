@@ -1,5 +1,7 @@
-import { useCallback, useRef, useState } from "react";
+import { CircleNotchIcon, PauseIcon, PlayIcon } from "@phosphor-icons/react";
+import { useCallback, useRef } from "react";
 import { GALAXIES, galaxyForVibe } from "@/lib/galaxies";
+import { usePreviewControls } from "@/lib/preview-player";
 import { cn } from "@/lib/utils";
 
 // The vibe map: a 2D field where the operator drops a banger relative to the
@@ -17,13 +19,6 @@ type VibePointInput = {
   vibeY: number;
 };
 
-type HoveredPoint = {
-  artists?: string[];
-  left: string;
-  title: string;
-  top: string;
-};
-
 type VibeMapProps = {
   // Already-placed findings, drawn faint for relative context.
   points: VibePointInput[];
@@ -39,7 +34,7 @@ const topPct = (y: number) => `${((1 - y) / 2) * 100}%`;
 export function VibeMap({ onChange, points, value }: VibeMapProps) {
   const boxRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
-  const [hovered, setHovered] = useState<HoveredPoint | null>(null);
+  const { loadingTrackId, playingTrackId, toggle } = usePreviewControls();
 
   const positionFromEvent = useCallback((event: React.PointerEvent) => {
     const box = boxRef.current;
@@ -150,50 +145,69 @@ export function VibeMap({ onChange, points, value }: VibeMapProps) {
         </span>
       ))}
 
-      {/* Context dots: the already-placed findings. Each sits in a larger
-          transparent hit-area so it's comfortable to hover; clicks still bubble
-          to the map so you can place a new marker right on top of one. */}
+      {/* Context dots: the already-placed findings, drawn faint. Hover reveals a
+          card with the title + a play button, so you can hear an anchor and place
+          the new marker relative to it. The dot stays click-through (drop a marker
+          on top of one); only the card swallows the pointer so play never places. */}
       {points.map((point) => {
         const left = leftPct(point.vibeX);
         const top = topPct(point.vibeY);
         const quadrant = galaxyForVibe(point.vibeX, point.vibeY);
+        const isPlaying = playingTrackId === point.trackId;
+        const isLoading = loadingTrackId === point.trackId;
 
         return (
           <span
             className="group absolute flex size-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center"
             key={point.trackId}
-            onMouseEnter={() =>
-              setHovered({ artists: point.artists, left, title: point.title, top })
-            }
-            onMouseLeave={() =>
-              setHovered((current) => (current?.title === point.title ? null : current))
-            }
             style={{ left, top }}
           >
             <span
-              className="pointer-events-none size-2 rounded-full opacity-60 transition-transform duration-150 ease-out group-hover:scale-150 group-hover:opacity-100 motion-reduce:transition-none"
+              className={cn(
+                "pointer-events-none size-2 rounded-full transition-transform duration-150 ease-out group-hover:scale-150 group-hover:opacity-100 motion-reduce:transition-none",
+                isPlaying ? "scale-150 opacity-100" : "opacity-60",
+              )}
               style={{ background: GALAXIES[quadrant].color }}
             />
+
+            {/* Hover card — interactive only while hovered (group-hover flips on
+                pointer-events); a descendant of the dot, so moving onto it keeps
+                the hover. stopPropagation keeps the map from placing a marker. */}
+            <div
+              className="pointer-events-none absolute bottom-full left-1/2 z-20 -translate-x-1/2 pb-2 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 motion-reduce:transition-none"
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              <div className="flex max-w-52 items-center gap-2 rounded-md border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md">
+                <button
+                  aria-label={isPlaying ? `Pause ${point.title}` : `Preview ${point.title}`}
+                  className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-foreground transition-colors hover:bg-muted/70"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    toggle(point.trackId);
+                  }}
+                  type="button"
+                >
+                  {isLoading ? (
+                    <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+                  ) : isPlaying ? (
+                    <PauseIcon aria-hidden="true" weight="fill" />
+                  ) : (
+                    <PlayIcon aria-hidden="true" weight="fill" />
+                  )}
+                </button>
+                <span className="min-w-0">
+                  <span className="block truncate font-medium">{point.title}</span>
+                  {point.artists?.length ? (
+                    <span className="block truncate text-muted-foreground">
+                      {point.artists.join(", ")}
+                    </span>
+                  ) : null}
+                </span>
+              </div>
+            </div>
           </span>
         );
       })}
-
-      {/* Hover popover for a context dot */}
-      {hovered ? (
-        <div
-          className="pointer-events-none absolute z-20 -translate-x-1/2 -translate-y-full pb-2"
-          style={{ left: hovered.left, top: hovered.top }}
-        >
-          <div className="max-w-44 rounded-md border border-border bg-popover px-2 py-1 text-xs text-popover-foreground">
-            <span className="block truncate font-medium">{hovered.title}</span>
-            {hovered.artists?.length ? (
-              <span className="block truncate text-muted-foreground">
-                {hovered.artists.join(", ")}
-              </span>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
 
       {/* Current marker */}
       {value ? (
