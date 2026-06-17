@@ -32,7 +32,8 @@
     "postinstall": "command -v husky > /dev/null 2>&1 && husky || true",
     "social:preview": "bun run --cwd packages/video social:preview",
     "prepare": "command -v husky > /dev/null 2>&1 && husky || true",
-    "typecheck": "turbo run typecheck"
+    "typecheck": "turbo run typecheck",
+    "doctor": "npx react-doctor@latest"
   },
   "devDependencies": {
     "@types/bun": "catalog:",
@@ -42,6 +43,7 @@
     "oxfmt": "~0.48.0",
     "oxlint": "~1.69.0",
     "oxlint-tsgolint": "~0.22.1",
+    "react-doctor": "^0.5.1",
     "turbo": "~2.9.16",
     "typescript": "catalog:"
   },
