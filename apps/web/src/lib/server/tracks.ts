@@ -198,6 +198,17 @@ export async function getTrackByIdOrLogId(idOrLogId: string): Promise<TrackListI
   return row ? toTrackListItem(row) : undefined;
 }
 
+/** One random certified track, mapped like every other list item. */
+export async function getRandomTrack(): Promise<TrackListItem | undefined> {
+  const db = await getDb();
+  const result = await db.execute({
+    sql: `select ${TRACK_SELECT} from tracks order by random() limit 1`,
+  });
+  const row = typedRow<TrackRow>(result.rows);
+
+  return row ? toTrackListItem(row) : undefined;
+}
+
 export type TrackNeighbor = {
   artists: string[];
   logId: string;

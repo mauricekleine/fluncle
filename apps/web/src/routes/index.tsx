@@ -22,6 +22,7 @@ import {
 } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
 import { CliInstallDialog } from "@/components/cli-install-dialog";
+import { McpConnectDialog } from "@/components/mcp-connect-dialog";
 import { RandomBangerDialog } from "@/components/random-banger-dialog";
 import { StoriesDialog } from "@/components/stories/stories-dialog";
 import { SubmitTrackDialog } from "@/components/submit-track-dialog";
@@ -424,6 +425,10 @@ function HomePage() {
                 >
                   About
                 </Link>
+                <span aria-hidden="true" className="text-muted-foreground/55">
+                  ·
+                </span>
+                <McpConnectDialog />
                 <span aria-hidden="true" className="text-muted-foreground/55">
                   ·
                 </span>

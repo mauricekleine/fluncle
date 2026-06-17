@@ -4,7 +4,7 @@
     "title": "Fluncle API",
     "version": "1.0.0",
     "summary": "Drum & bass bangers from another dimension.",
-    "description": "The public API for Fluncle's archive. Fluncle digs and certifies the tracks; every date marks discovery, the day Fluncle first heard the tune, not the day it released. Read the archive, search Spotify candidates, and submit tracks for Fluncle to review.",
+    "description": "The public API for Fluncle's Findings, a drum & bass archive from another dimension. Fluncle digs and certifies every track; each date marks when he found it, the day he first heard the tune, not the day it released. Read the archive, search Spotify candidates, and submit tracks for Fluncle to review.",
     "contact": {
       "name": "Fluncle",
       "url": "https://www.fluncle.com"

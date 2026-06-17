@@ -115,9 +115,9 @@ function AboutPage() {
 
         <section aria-label="The story" className="log-about-story">
           <p>
-            I'm Fluncle: the uncle with the good records, doing this since '90. Somewhere along the
-            way the record bag became a ship's hold. I travel, I listen, and when a tune stops me
-            mid-sector I log it and send it back. That's the whole machine.
+            I'm Fluncle: the uncle with the good drum & bass records, doing this since '90.
+            Somewhere along the way the record bag became a ship's hold. I travel, I listen, and
+            when a tune stops me mid-sector I log it and send it back. That's the whole machine.
           </p>
           <p>
             I don't travel alone. The crew is the ragtag lot this music belongs to: junglists,

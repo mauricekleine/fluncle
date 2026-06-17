@@ -1,4 +1,5 @@
 import { siteUrl, spotifyPlaylistUrl, telegramUrl } from "../fluncle-links";
+import { fluncleDescription } from "../identity";
 import { listTracks } from "./tracks";
 
 // Agent-facing discovery surfaces served ahead of the TanStack router:
@@ -146,11 +147,9 @@ async function markdownHomeResponse(): Promise<Response> {
 
   const markdown = `# Fluncle
 
-> Drum & bass bangers from another dimension.
+> ${fluncleDescription}
 
-Fluncle digs and certifies the tracks, publishes them to Spotify and Telegram, and keeps the full archive here. One selector, no team. Dates mark when each was found: the day Fluncle first heard the tune, not the day it released.
-
-The collection is called Fluncle's Findings. The archive holds ${page.totalCount} certified tracks; new ones land most nights.
+One selector, no team, digging drum & bass since '90. Dates mark when each was found: the day Fluncle first heard the tune, not the day it released. The collection is called Fluncle's Findings; the archive holds ${page.totalCount} certified tracks, and new ones land most nights.
 
 ## Latest findings
 
@@ -176,6 +175,8 @@ ${tracks.join("\n")}
 ## For agents
 
 - [OpenAPI spec](${siteUrl}/openapi.json): the public API as an OpenAPI 3.1 document
+- [MCP server](${siteUrl}/mcp): the same archive as Model Context Protocol tools (Streamable HTTP, no auth)
+- [MCP server card](${siteUrl}/.well-known/mcp/server-card.json): SEP-2127 discovery card for the MCP endpoint
 - [API catalog](${siteUrl}/.well-known/api-catalog): RFC 9727 linkset
 - [Agent skills](${siteUrl}/.well-known/agent-skills/index.json): the fluncle-api skill, with digest
 - [llms.txt](${siteUrl}/llms.txt): the plain-language map of the Galaxy
@@ -228,6 +229,10 @@ Rate limit: 5 submissions per connection per hour. Over that returns 429 with co
 ## Board the mothership
 
 \`POST /api/newsletter\` with \`{"email": "..."}\` subscribes to the newsletter. Fresh bangers, every Friday, from Fluncle.
+
+## Model Context Protocol
+
+The same tools are available over MCP (Streamable HTTP, no auth) at \`${siteUrl}/mcp\`: \`get_recent_tracks\`, \`get_random_track\`, \`search_tracks\`, \`submit_track\`, and \`subscribe_newsletter\`. The server card (SEP-2127) is at \`${siteUrl}/.well-known/mcp/server-card.json\`.
 
 ## Everything else
 

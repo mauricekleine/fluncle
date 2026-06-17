@@ -4,6 +4,21 @@
 
 Fluncle publishes drum & bass tracks to Fluncle's Findings on Spotify and Telegram, then shows the public archive on fluncle.com.
 
+## Public Surfaces
+
+The same archive, reachable however you like. Every surface reads the same public API and shares the same Log IDs.
+
+| Surface    | Where                                                    | What                                                                              |
+| ---------- | -------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Web        | <https://www.fluncle.com>                                | The public archive: cover-led, dark, fast. Also `/about`, `/log`, `/log/<id>`     |
+| Galaxy     | <https://galaxy.fluncle.com>                             | The game: every finding is a star you can fly to                                  |
+| Public API | `https://www.fluncle.com/api/*`                          | JSON reads and submissions (see [Web](#web), [Submission Flow](#submission-flow)) |
+| CLI        | `curl -fsSL https://www.fluncle.com/cli/latest.sh \| sh` | The archive in your terminal (see [CLI](#cli))                                    |
+| SSH        | `ssh rave.fluncle.com`                                   | The rave terminal, a Wish/Bubble Tea app (see [SSH](#ssh))                        |
+| MCP        | `https://www.fluncle.com/mcp`                            | The archive as agent tools, Streamable HTTP, no auth (see [MCP](#mcp))            |
+
+Machine-readable and discovery surfaces (all under <https://www.fluncle.com>): `/rss.xml`, `/robots.txt`, `/sitemap.xml`, `/llms.txt`, `/openapi.json`, `/.well-known/api-catalog`, `/.well-known/agent-skills/index.json`, and `/.well-known/mcp/server-card.json`.
+
 ## Monorepo Layout
 
 ```text
@@ -174,7 +189,7 @@ bun run --cwd apps/web preview
 bun run --cwd apps/web deploy
 ```
 
-The public app is dark-only and centered around the Fluncle cover art. The first page of tracks is server-rendered for crawlers; further pages load from `/api/tracks` with limit/cursor pagination. Track rows open Spotify directly and use Spotify album artwork when available. The public RSS feed is available at `/rss.xml`; crawler surfaces are `/robots.txt`, `/sitemap.xml`, and `/llms.txt`.
+The public app is dark-only and centered around the Fluncle cover art. The first page of tracks is server-rendered for crawlers; further pages load from `/api/tracks` with limit/cursor pagination. Track rows open Spotify directly and use Spotify album artwork when available. The public RSS feed is available at `/rss.xml`; crawler and agent surfaces are `/robots.txt`, `/sitemap.xml`, `/llms.txt`, `/openapi.json`, `/.well-known/api-catalog`, `/.well-known/agent-skills/index.json`, and `/.well-known/mcp/server-card.json`. These discovery surfaces and the markdown homepage are served ahead of the router in `apps/web/src/lib/server/agent-discovery.ts`.
 
 ### Deploy Web To Cloudflare
 
@@ -212,6 +227,24 @@ bun run --cwd apps/web deploy
 ```
 
 After the first deploy, add `fluncle.com` in the Cloudflare Workers custom domains settings.
+
+## MCP
+
+The web Worker also serves a small, stateless [Model Context Protocol](https://modelcontextprotocol.io) server at `https://www.fluncle.com/mcp` (Streamable HTTP, no sessions, no auth): the same archive the public API exposes, handed to agents as tools. It is a thin layer over the internal functions the `/api` routes already use, so validation, the submission rate limit, and the submitter hash stay identical.
+
+Tools: `get_recent_tracks`, `get_random_track`, `search_tracks`, `submit_track`, `subscribe_newsletter`.
+
+The MCP Server Card (SEP-2127) for agent discovery is at `/.well-known/mcp/server-card.json`. The endpoint is intercepted ahead of the router in `apps/web/src/server.ts`; the server lives in `apps/web/src/lib/server/mcp.ts`. The browser-side WebMCP surface (`apps/web/src/lib/webmcp.ts`) mirrors the same tools for agent-driving browsers; keep the two in step.
+
+Point any MCP client at the endpoint, for example:
+
+```json
+{
+  "mcpServers": {
+    "fluncle": { "type": "http", "url": "https://www.fluncle.com/mcp" }
+  }
+}
+```
 
 ## Social Video
 
