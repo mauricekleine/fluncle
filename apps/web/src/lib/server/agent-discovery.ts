@@ -1,13 +1,19 @@
 import { siteUrl, spotifyPlaylistUrl, telegramUrl } from "../fluncle-links";
 import { fluncleDescription } from "../identity";
-import { listTracks } from "./tracks";
+import { type TrackCursor, type TrackListItem, decodeTrackCursor, listTracks } from "./tracks";
 
 // Agent-facing discovery surfaces served ahead of the TanStack router:
-// the RFC 9727 API catalog, the Agent Skills Discovery index, and a
-// text/markdown rendering of the homepage for Accept-negotiating agents
-// (the router's SSR handler otherwise 500s on non-HTML Accept headers).
+// the RFC 9727 API catalog, the Agent Skills Discovery index, a text/markdown
+// rendering of the homepage for Accept-negotiating agents (the router's SSR
+// handler otherwise 500s on non-HTML Accept headers), and llms-full.txt — the
+// entire archive with notes as one ingestible document.
 
 const markdownTracksLimit = 25;
+
+// llms-full.txt page size and a runaway backstop; if the archive ever exceeds
+// the cap we render up to it and say so (never a silent truncation).
+const llmsFullPageSize = 100;
+const llmsFullMaxFindings = 2000;
 
 // RFC 8288 Link header advertised on the homepage so agents can find the
 // machine-readable surfaces without guessing well-known paths.
@@ -15,6 +21,7 @@ const agentLinkHeader = [
   '</.well-known/api-catalog>; rel="api-catalog"',
   '</openapi.json>; rel="service-desc"; type="application/openapi+json"',
   '</llms.txt>; rel="service-doc"; type="text/markdown"',
+  '</llms-full.txt>; rel="service-doc"; type="text/markdown"',
   '</rss.xml>; rel="alternate"; type="application/rss+xml"',
 ].join(", ");
 
@@ -41,6 +48,8 @@ export async function handleAgentDiscovery(request: Request): Promise<Response |
       return skillsIndexResponse();
     case "/.well-known/agent-skills/fluncle-api/SKILL.md":
       return skillResponse();
+    case "/llms-full.txt":
+      return llmsFullResponse();
     case "/":
       return prefersMarkdown(request) ? markdownHomeResponse() : undefined;
     default:
@@ -180,6 +189,7 @@ ${tracks.join("\n")}
 - [API catalog](${siteUrl}/.well-known/api-catalog): RFC 9727 linkset
 - [Agent skills](${siteUrl}/.well-known/agent-skills/index.json): the fluncle-api skill, with digest
 - [llms.txt](${siteUrl}/llms.txt): the plain-language map of the Galaxy
+- [llms-full.txt](${siteUrl}/llms-full.txt): the entire archive in one document, every finding with its note
 
 ## Tools
 
@@ -189,6 +199,96 @@ ${tracks.join("\n")}
 
   return new Response(markdown, {
     headers: {
+      "Content-Type": "text/markdown; charset=utf-8",
+      Link: agentLinkHeader,
+      Vary: "Accept",
+      "x-markdown-tokens": String(Math.ceil(markdown.length / 4)),
+    },
+  });
+}
+
+// /llms-full.txt: the entire archive as one ingestible markdown document — the
+// lore plus every finding with Fluncle's note. The notes are the
+// differentiated, citable content (nobody else has Fluncle's take on each
+// track), so this is the surface most aimed at getting cited on drum & bass.
+// Pure renderer, exported for tests; the response wraps it.
+export function renderLlmsFull(tracks: TrackListItem[], totalCount: number): string {
+  const findings = tracks.map(renderFinding).join("\n");
+  const omitted = totalCount - tracks.length;
+
+  return `# Fluncle — the full archive
+
+> ${fluncleDescription}
+
+Fluncle is a single drum & bass selector, not a team — drum & bass end to end, rollers to jungle to neurofunk. Every finding below is a track he found, heard in full, and certified. Dates mark when he found it: the day Fluncle first heard the tune, not the day it released. The collection is Fluncle's Findings.
+
+## How to read a Log ID
+
+Every finding has a permanent coordinate, a Log ID, written sector.orbit.mark — for example 004.7.2I, full form fluncle://004.7.2I. The sector counts the days from the epoch (2026-05-30) to the day Fluncle found the tune; the tail is a stable signature derived from the recording itself. Each one is minted once, never reassigned, and resolves to a log page at ${siteUrl}/log/<id>.
+
+## The findings (${totalCount})
+
+${findings}
+${omitted > 0 ? `\n_${omitted} older findings omitted here; page the rest at ${siteUrl}/api/tracks._\n` : ""}
+## More
+
+- The map: ${siteUrl}/llms.txt
+- The playlist: ${spotifyPlaylistUrl}
+- The Telegram feed: ${telegramUrl}
+- The JSON API: ${siteUrl}/api/tracks
+- The MCP server: ${siteUrl}/mcp
+`;
+}
+
+// One finding: the coordinate-led header, Fluncle's note (the why), then the
+// dry facts. Present fields only; the note leads because it is the payload.
+function renderFinding(track: TrackListItem): string {
+  const coordinate = track.logId ? `fluncle://${track.logId}` : "uncoordinated";
+  const lines = [
+    `- **${track.artists.join(", ")} — ${track.title}** (found ${track.addedAt.slice(0, 10)}, ${coordinate})`,
+  ];
+
+  if (track.note?.trim()) {
+    lines.push(`  ${track.note.trim().replaceAll("\n", " ")}`);
+  }
+
+  const facts: string[] = [];
+
+  if (track.bpm) {
+    facts.push(`${Math.round(track.bpm)} BPM`);
+  }
+
+  if (track.key) {
+    facts.push(track.key);
+  }
+
+  if (track.galaxy) {
+    facts.push(`${track.galaxy.name} galaxy`);
+  }
+
+  facts.push(track.spotifyUrl);
+  lines.push(`  ${facts.join(" · ")}`);
+
+  return lines.join("\n");
+}
+
+async function llmsFullResponse(): Promise<Response> {
+  const all: TrackListItem[] = [];
+  let cursor: TrackCursor | undefined;
+  let totalCount = 0;
+
+  do {
+    const page = await listTracks({ cursor, limit: llmsFullPageSize });
+    totalCount = page.totalCount;
+    all.push(...page.tracks);
+    cursor = page.nextCursor ? decodeTrackCursor(page.nextCursor) : undefined;
+  } while (cursor && all.length < llmsFullMaxFindings);
+
+  const markdown = renderLlmsFull(all, totalCount);
+
+  return new Response(markdown, {
+    headers: {
+      "Cache-Control": "public, max-age=3600",
       "Content-Type": "text/markdown; charset=utf-8",
       Link: agentLinkHeader,
       Vary: "Accept",
