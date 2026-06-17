@@ -22,6 +22,13 @@ export const fluncleAsciiLogo = `███████╗██╗     ██╗
 export const fluncleDescription =
   "Drum & bass bangers from another dimension. Fluncle digs and certifies every track, publishes them to Spotify and Telegram, and keeps the full archive of his findings at fluncle.com.";
 
+// The ≤155-char version for SERP <meta name="description"> / og / twitter tags.
+// The full fluncleDescription above is the canonical ENTITY description (JSON-LD,
+// manifest, /about prose) and runs long for a snippet, which Bing/Google flag +
+// truncate. This trimmed line is used only in head meta.
+export const fluncleMetaDescription =
+  "Drum & bass bangers from another dimension — Fluncle digs, certifies, and publishes each find to Spotify & Telegram. Full archive at fluncle.com.";
+
 export const fluncleBio = `${fluncleTagline}
 
 www.fluncle.com`;

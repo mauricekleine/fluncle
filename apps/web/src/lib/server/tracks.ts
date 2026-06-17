@@ -254,6 +254,39 @@ export async function getTrackNeighbors(track: {
   };
 }
 
+/**
+ * Other coordinate-bearing findings in the SAME vibe-map galaxy — the quadrant is
+ * the sign of each vibe axis (galaxyForVibe is inclusive toward dark/driving:
+ * x>=0, y>=0). Powers the log page's "more in this galaxy" cluster: crawlable
+ * TOPICAL adjacency, not just the linear newer/older chain. Empty for a finding
+ * that isn't placed on the map yet.
+ */
+export async function getRelatedTracks(
+  track: { trackId: string; vibeX?: number; vibeY?: number },
+  limit = 6,
+): Promise<TrackNeighbor[]> {
+  if (track.vibeX === undefined || track.vibeY === undefined) {
+    return [];
+  }
+
+  const db = await getDb();
+  const xCond = track.vibeX < 0 ? "vibe_x < 0" : "vibe_x >= 0";
+  const yCond = track.vibeY < 0 ? "vibe_y < 0" : "vibe_y >= 0";
+  const result = await db.execute({
+    args: [track.trackId, limit],
+    sql: `select log_id, title, artists_json from tracks
+          where log_id is not null and vibe_x is not null and vibe_y is not null
+            and ${xCond} and ${yCond} and track_id != ?
+          order by added_at desc, track_id desc limit ?`,
+  });
+
+  return typedRows<NeighborRow>(result.rows).map((row) => ({
+    artists: parseArtistsJson(row.artists_json),
+    logId: row.log_id,
+    title: row.title,
+  }));
+}
+
 type TrackCountRow = {
   total_count: number;
 };

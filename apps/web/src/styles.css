@@ -1008,6 +1008,55 @@ body::before {
   text-underline-offset: 0.2em;
 }
 
+.log-related {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.log-related h2 {
+  color: var(--starlight-cream);
+  font-size: 1.02rem;
+  font-weight: 800;
+}
+
+.log-related-list {
+  display: grid;
+  gap: 0.35rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.log-related-list a {
+  align-items: baseline;
+  color: var(--stardust);
+  display: flex;
+  gap: 0.6rem;
+  text-decoration: none;
+}
+
+.log-related-list a:hover {
+  color: var(--starlight-cream);
+}
+
+.log-related-coordinate {
+  color: var(--accent-foreground);
+  flex-shrink: 0;
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.log-related-line {
+  font-size: 0.9rem;
+  font-weight: 700;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .log-neighbors {
   border-top: 1px solid var(--border);
   display: flex;

@@ -1,6 +1,6 @@
 import { siteUrl } from "./fluncle-links";
 import { formatIsoDuration } from "./format";
-import { definitionalSentences, type LogProseInput } from "./log-prose";
+import { definitionalProse, type LogProseInput } from "./log-prose";
 
 // The log page's JSON-LD, pure: the route's head() reads from here, and the
 // schema's description is the SAME string as the visible definitional block
@@ -26,7 +26,7 @@ export function musicRecordingJsonLd(track: LogSchemaInput, imageUrl: string): o
     "@type": "MusicRecording",
     byArtist: track.artists.map((artist) => ({ "@type": "MusicGroup", name: artist })),
     datePublished: track.addedAt.slice(0, 10),
-    description: definitionalSentences(track),
+    description: definitionalProse(track),
     duration: formatIsoDuration(track.durationMs),
     genre: "Drum and Bass",
     // The Log ID in BOTH forms as identifiers (not alternateName): the bare

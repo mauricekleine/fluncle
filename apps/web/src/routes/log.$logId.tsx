@@ -8,10 +8,16 @@ import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { Button } from "@/components/ui/button";
 import { formatDateLong, formatDuration } from "@/lib/format";
 import { isLogPageParam } from "@/lib/log-page-param";
-import { artistTitleLine, definitionalSentences, splitLogId } from "@/lib/log-prose";
+import {
+  artistTitleLine,
+  definitionalProse,
+  definitionalSentences,
+  splitLogId,
+} from "@/lib/log-prose";
 import { breadcrumbsJsonLd, logPageUrl, musicRecordingJsonLd } from "@/lib/log-schema";
 import { trackMedia } from "@/lib/media";
 import {
+  getRelatedTracks,
   getTrackByIdOrLogId,
   getTrackNeighbors,
   type TrackListItem,
@@ -25,7 +31,13 @@ import {
 // a shared link sees at the coordinate.
 
 type LogPageData =
-  | { status: "found"; newer?: TrackNeighbor; older?: TrackNeighbor; track: TrackListItem }
+  | {
+      status: "found";
+      newer?: TrackNeighbor;
+      older?: TrackNeighbor;
+      related: TrackNeighbor[];
+      track: TrackListItem;
+    }
   | { status: "missing" }
   | { status: "moved"; logId: string };
 
@@ -45,9 +57,12 @@ const fetchLogPage = createServerFn({ method: "GET" })
       return { logId: track.logId, status: "moved" };
     }
 
-    const neighbors = await getTrackNeighbors(track);
+    const [neighbors, related] = await Promise.all([
+      getTrackNeighbors(track),
+      getRelatedTracks(track),
+    ]);
 
-    return { ...neighbors, status: "found", track };
+    return { ...neighbors, related, status: "found", track };
   });
 
 // Typed helper outside the route options: an inline head() that reads
@@ -136,7 +151,7 @@ function LogPage() {
     return null;
   }
 
-  const { newer, older, track } = data;
+  const { newer, older, related, track } = data;
   const logId = track.logId as string;
   const { sector, tail } = splitLogId(logId);
 
@@ -154,7 +169,7 @@ function LogPage() {
         <section aria-label="The finding" className="log-definition">
           <h2 className="log-track-title">{track.title}</h2>
           <p className="log-track-artist">{track.artists.join(", ")}</p>
-          <p className="log-definition-prose">{definitionalSentences({ ...track, logId })}</p>
+          <p className="log-definition-prose">{definitionalProse({ ...track, logId })}</p>
         </section>
 
         {track.note ? (
@@ -238,6 +253,22 @@ function LogPage() {
             <Link to="/about">More on Log IDs and the Galaxy</Link>.
           </p>
         </section>
+
+        {track.galaxy && related.length > 0 ? (
+          <section aria-label={`More in the ${track.galaxy.name} galaxy`} className="log-related">
+            <h2>More in the {track.galaxy.name} galaxy</h2>
+            <ul className="log-related-list">
+              {related.map((finding) => (
+                <li key={finding.logId}>
+                  <Link params={{ logId: finding.logId }} to="/log/$logId">
+                    <span className="log-related-coordinate">{finding.logId}</span>
+                    <span className="log-related-line">{artistTitleLine(finding)}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : undefined}
 
         <nav aria-label="Adjacent findings" className="log-neighbors">
           {newer ? (

@@ -10,7 +10,7 @@ import {
   wikidataUrl,
   youtubeUrl,
 } from "@/lib/fluncle-links";
-import { fluncleDescription } from "@/lib/identity";
+import { fluncleDescription, fluncleMetaDescription } from "@/lib/identity";
 
 // The entity and answer surface (web-overhaul RFC §4): the Galaxy lore in
 // Fluncle's own voice, the four definition blocks, the Log-ID decode with a
@@ -86,9 +86,9 @@ function aboutHead() {
     links: [{ href: pageUrl, rel: "canonical" }],
     meta: [
       { title },
-      { content: fluncleDescription, name: "description" },
+      { content: fluncleMetaDescription, name: "description" },
       { content: title, property: "og:title" },
-      { content: fluncleDescription, property: "og:description" },
+      { content: fluncleMetaDescription, property: "og:description" },
       { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
       { content: pageUrl, property: "og:url" },
     ],

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { definitionalSentences } from "./log-prose";
+import { definitionalProse } from "./log-prose";
 import { breadcrumbsJsonLd, musicRecordingJsonLd } from "./log-schema";
 
 const track = {
@@ -26,7 +26,7 @@ describe("musicRecordingJsonLd (the log page schema)", () => {
   });
 
   it("mirrors the visible definitional prose verbatim", () => {
-    expect(jsonLd.description).toBe(definitionalSentences(track));
+    expect(jsonLd.description).toBe(definitionalProse(track));
     expect(jsonLd.description).toContain("004.7.2I is Fluncle's Log ID for");
     expect(jsonLd.description).toContain("fluncle://004.7.2I");
   });

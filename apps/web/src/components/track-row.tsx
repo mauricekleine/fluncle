@@ -47,7 +47,7 @@ export function TrackRow({ track, trackNumber }: { track: Track; trackNumber: nu
       {track.previewUrl ? (
         <PreviewToggle track={track} trackLine={trackLine} />
       ) : (
-        <TrackArtwork src={track.albumImageUrl} />
+        <TrackArtwork alt={`${trackLine} cover art`} src={track.albumImageUrl} />
       )}
 
       <span className="min-w-0">
@@ -131,7 +131,7 @@ function PreviewToggle({ track, trackLine }: { track: Track; trackLine: string }
       onClick={preview.toggle}
       type="button"
     >
-      <TrackArtwork src={track.albumImageUrl} />
+      <TrackArtwork alt={`${trackLine} cover art`} src={track.albumImageUrl} />
       <span aria-hidden="true" className="track-play-glyph">
         {preview.isActive ? <PauseIcon weight="fill" /> : <PlayIcon weight="fill" />}
       </span>

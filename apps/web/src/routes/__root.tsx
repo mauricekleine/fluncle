@@ -4,11 +4,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
 import { siteUrl } from "../lib/fluncle-links";
-import { fluncleDescription } from "../lib/identity";
+import { fluncleMetaDescription } from "../lib/identity";
 import appCss from "../styles.css?url";
 
 const title = "Fluncle: drum & bass bangers from another dimension";
-const description = fluncleDescription;
+// The site-wide <meta>/og/twitter description (every page inherits it unless it
+// sets its own, e.g. the log pages). Kept ≤155 chars for the SERP snippet.
+const description = fluncleMetaDescription;
 const coverUrl = `${siteUrl}/fluncle-cover.png`;
 
 export const Route = createRootRoute({
