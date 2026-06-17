@@ -1,4 +1,10 @@
-import { CircleNotchIcon, PauseIcon, PlayIcon } from "@phosphor-icons/react";
+import {
+  CheckIcon,
+  CircleNotchIcon,
+  PauseIcon,
+  PencilSimpleIcon,
+  PlayIcon,
+} from "@phosphor-icons/react";
 import { useCallback, useRef } from "react";
 import { GALAXIES, galaxyForVibe } from "@/lib/galaxies";
 import { usePreviewControls } from "@/lib/preview-player";
@@ -24,6 +30,16 @@ type VibeMapProps = {
   points: VibePointInput[];
   value: { x: number; y: number } | null;
   onChange: (x: number, y: number) => void;
+  // Edit-in-place: when set, the active marker IS this placed finding (not the row
+  // being tagged), so it gets a pinned save-card instead of a hover one. The dot's
+  // own context point is dropped by the caller while it's the active marker.
+  editing?: { artists?: string[]; title: string; trackId: string } | null;
+  editSaving?: boolean;
+  // Edit a placed dot in place — promotes it to the active marker. Omit to hide the
+  // per-dot edit button (the map is then placement-only).
+  onEditPoint?: (point: VibePointInput) => void;
+  // Save the dot currently being edited at its dragged position.
+  onSaveEdit?: () => void;
 };
 
 const clamp = (n: number) => Math.max(-1, Math.min(1, n));
@@ -31,7 +47,15 @@ const clamp = (n: number) => Math.max(-1, Math.min(1, n));
 const leftPct = (x: number) => `${((x + 1) / 2) * 100}%`;
 const topPct = (y: number) => `${((1 - y) / 2) * 100}%`;
 
-export function VibeMap({ onChange, points, value }: VibeMapProps) {
+export function VibeMap({
+  editing,
+  editSaving,
+  onChange,
+  onEditPoint,
+  onSaveEdit,
+  points,
+  value,
+}: VibeMapProps) {
   const boxRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
   const { loadingTrackId, playingTrackId, toggle } = usePreviewControls();
@@ -158,7 +182,7 @@ export function VibeMap({ onChange, points, value }: VibeMapProps) {
 
         return (
           <span
-            className="group absolute flex size-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center"
+            className="group absolute flex size-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center hover:z-30"
             key={point.trackId}
             style={{ left, top }}
           >
@@ -195,6 +219,19 @@ export function VibeMap({ onChange, points, value }: VibeMapProps) {
                     <PlayIcon aria-hidden="true" weight="fill" />
                   )}
                 </button>
+                {onEditPoint ? (
+                  <button
+                    aria-label={`Move ${point.title}`}
+                    className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-foreground transition-colors hover:bg-muted/70"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onEditPoint(point);
+                    }}
+                    type="button"
+                  >
+                    <PencilSimpleIcon aria-hidden="true" weight="bold" />
+                  </button>
+                ) : null}
                 <span className="min-w-0">
                   <span className="block truncate font-medium">{point.title}</span>
                   {point.artists?.length ? (
@@ -227,6 +264,69 @@ export function VibeMap({ onChange, points, value }: VibeMapProps) {
           Click to place
         </span>
       )}
+
+      {/* Pinned save-card — while editing a placed dot, the active marker carries
+          its own always-open card (play + save) so you can drag it, hear it, and
+          commit the new spot. stopPropagation keeps clicks on it off the map. */}
+      {editing && value ? (
+        <span
+          className="absolute z-40 size-4 -translate-x-1/2 -translate-y-1/2"
+          style={{ left: leftPct(value.x), top: topPct(value.y) }}
+        >
+          <div
+            className="absolute bottom-full left-1/2 -translate-x-1/2 pb-2"
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <div className="flex max-w-52 items-center gap-2 rounded-md border border-primary/40 bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md ring-1 ring-primary/30">
+              <button
+                aria-label={
+                  playingTrackId === editing.trackId
+                    ? `Pause ${editing.title}`
+                    : `Preview ${editing.title}`
+                }
+                className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-foreground transition-colors hover:bg-muted/70"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  toggle(editing.trackId);
+                }}
+                type="button"
+              >
+                {loadingTrackId === editing.trackId ? (
+                  <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+                ) : playingTrackId === editing.trackId ? (
+                  <PauseIcon aria-hidden="true" weight="fill" />
+                ) : (
+                  <PlayIcon aria-hidden="true" weight="fill" />
+                )}
+              </button>
+              <button
+                aria-label={`Save ${editing.title} here`}
+                className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition-colors hover:bg-primary/85 disabled:opacity-60"
+                disabled={editSaving}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onSaveEdit?.();
+                }}
+                type="button"
+              >
+                {editSaving ? (
+                  <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+                ) : (
+                  <CheckIcon aria-hidden="true" weight="bold" />
+                )}
+              </button>
+              <span className="min-w-0">
+                <span className="block truncate font-medium">{editing.title}</span>
+                {editing.artists?.length ? (
+                  <span className="block truncate text-muted-foreground">
+                    {editing.artists.join(", ")}
+                  </span>
+                ) : null}
+              </span>
+            </div>
+          </div>
+        </span>
+      ) : null}
     </div>
   );
 }

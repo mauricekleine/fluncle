@@ -375,6 +375,34 @@ function AdminBoardPage() {
     [patchRow, queryClient, tagRow],
   );
 
+  // Re-place an already-placed neighbour from inside the Tag dialog (edit-in-place).
+  // Same write as saveTag, but for any trackId, and it throws on failure so the
+  // dialog can surface the error + keep the marker live. Optimistically refreshes
+  // both the map backdrop (POINTS_KEY) and the board row if it's loaded.
+  const savePoint = useCallback(
+    async (trackId: string, x: number, y: number) => {
+      const response = await fetch(`/api/admin/tracks/${trackId}`, {
+        body: JSON.stringify({ vibeX: x, vibeY: y }),
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        method: "PATCH",
+      });
+
+      if (!response.ok) {
+        throw new Error(`Save failed (${response.status})`);
+      }
+
+      const key = galaxyForVibe(x, y);
+      patchRow(trackId, { galaxy: { key, name: GALAXIES[key].name }, vibeX: x, vibeY: y });
+      queryClient.setQueryData<VibePoint[]>(POINTS_KEY, (current = []) =>
+        current.map((point) =>
+          point.trackId === trackId ? { ...point, vibeX: x, vibeY: y } : point,
+        ),
+      );
+    },
+    [patchRow, queryClient],
+  );
+
   const runEnrichment = useCallback(async () => {
     if (!enrichRow?.logId) {
       return;
@@ -580,6 +608,7 @@ function AdminBoardPage() {
         error={tagError}
         onOpenChange={(open) => !open && setTagId(undefined)}
         onSave={saveTag}
+        onSavePoint={savePoint}
         points={points}
         row={tagRow ?? null}
         saving={tagSaving}

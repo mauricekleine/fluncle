@@ -6,15 +6,15 @@ Forward-facing, roughly prioritized list of open work — what we pick from next
 
 The active push: keep findings flowing from add → live on TikTok + YouTube, with one operator cockpit that shows every stage and the heavy render step automated on the laptop. Three slices that parallelize cleanly — the **pipeline board** (web admin), **hands-off rendering** (a Superset automation), and the **manual backlog** itself (ops).
 
-### Immediate — finish the re-film pass + make the tag grid editable
+### Immediate — finish the re-film pass
 
 The near-term punch-list, roughly in order:
 
 1. **Ship the 4 finished re-films.** `012.1.0A` (liquid chrome), `005.9.9L` (refraction caustic pool), `011.2.1Z` (magma), `011.1.6E` (helix) are rendered, gate-passing, and operator-approved in `packages/video/out/`. For each: `ship.ts <id>` → `fluncle admin track video` (run sandbox-disabled — the Bash sandbox throttles the upload), then purge the Cloudflare cache for the footage / footage-silent / poster / cover URLs.
 2. **Re-render `004.1.9E`.** The style is a keeper — preserve it, but smooth the animation on the refined doctrine (Motion law: motion on smoothed signals only; one continuous evolution; verify the glide by eye, not the gate number).
 3. **Re-render `011.1.3X` + `012.2.4L`.** Both still off: `011.1.3X` has a fast texture-glitch plus an elastic jitter in the flow (its 0.23 gate was honest); `012.2.4L`'s caustic-glide pass went too plain/dark. Their renders are parked in `out/` to riff from.
-4. **Deploy the tag-grid play button.** Built: a hover-card play button on each placed dot (`vibe-map.tsx`) driven by a new multi-track `usePreviewControls()` (`preview-player.ts`), so the operator can hear an anchor before placing relative to it. Typecheck `apps/web`, commit, push.
-5. **Make the tag grid editable — drag existing dots.** From the same placement view, let the operator reposition already-placed findings (not just the new marker), each saved via `PATCH /api/admin/tracks/:id`. Sliding a new finding in then becomes: nudge the neighbours, drop the newcomer — the grid stays a living, always-re-balanceable field rather than a one-shot placement.
+
+Shipped: the tag grid is now editable — each placed dot's hover card carries play + a pencil that promotes it to the active draggable marker with a pinned save-card; saving reverts to the track you were placing, so the field is always re-balanceable.
 
 ### The pipeline board — every finding's stage at a glance
 

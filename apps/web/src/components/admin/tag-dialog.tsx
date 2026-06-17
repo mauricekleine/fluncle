@@ -21,22 +21,44 @@ import { usePreviewPlayer } from "@/lib/preview-player";
 
 type Point = { artists?: string[]; title: string; trackId: string; vibeX: number; vibeY: number };
 type Pos = { x: number; y: number };
+// A neighbour being re-placed in the same session: its working position plus the
+// label for the pinned save-card. Null = the active marker is the row being tagged.
+type Editing = { artists?: string[]; pos: Pos; title: string; trackId: string };
 
 type TagDialogProps = {
   error?: string;
   onOpenChange: (open: boolean) => void;
   onSave: (x: number, y: number) => Promise<void> | void;
+  /** Re-place an already-placed neighbour: PATCH its (vibe_x, vibe_y). Throws on failure. */
+  onSavePoint: (trackId: string, x: number, y: number) => Promise<void>;
   /** Already-placed findings (excluding this one), drawn faint for relative context. */
   points: Point[];
   row: BoardRow | null;
   saving: boolean;
 };
 
-export function TagDialog({ error, onOpenChange, onSave, points, row, saving }: TagDialogProps) {
+export function TagDialog({
+  error,
+  onOpenChange,
+  onSave,
+  onSavePoint,
+  points,
+  row,
+  saving,
+}: TagDialogProps) {
+  // The row's own placement marker. While editing a neighbour this stays put (held)
+  // and the active marker becomes the neighbour — saving the neighbour reverts here.
   const [pos, setPos] = useState<Pos | null>(null);
+  const [editing, setEditing] = useState<Editing | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string | undefined>();
 
   // Seed the marker from the stored placement so re-tagging shows where it sits.
+  // A new row also drops any in-flight neighbour edit.
   useEffect(() => {
+    setEditing(null);
+    setEditError(undefined);
+
     if (row && row.vibeX !== undefined && row.vibeY !== undefined) {
       setPos({ x: row.vibeX, y: row.vibeY });
     } else {
@@ -45,8 +67,32 @@ export function TagDialog({ error, onOpenChange, onSave, points, row, saving }: 
   }, [row]);
 
   const player = usePreviewPlayer(row?.trackId ?? "");
-  const quadrant = pos ? galaxyForVibe(pos.x, pos.y) : undefined;
-  const context = points.filter((point) => point.trackId !== row?.trackId);
+  // The active marker is the neighbour while editing, otherwise the row's marker.
+  const activePos = editing ? editing.pos : pos;
+  const quadrant = activePos ? galaxyForVibe(activePos.x, activePos.y) : undefined;
+  // Drop both the row and the neighbour-under-edit from the faint context dots —
+  // the neighbour is the active marker now, not a backdrop dot.
+  const context = points.filter(
+    (point) => point.trackId !== row?.trackId && point.trackId !== editing?.trackId,
+  );
+
+  const saveEdit = async () => {
+    if (!editing) {
+      return;
+    }
+
+    setEditSaving(true);
+    setEditError(undefined);
+
+    try {
+      await onSavePoint(editing.trackId, editing.pos.x, editing.pos.y);
+      setEditing(null); // revert the active marker to the row being tagged
+    } catch (caught) {
+      setEditError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setEditSaving(false);
+    }
+  };
 
   return (
     <Dialog onOpenChange={onOpenChange} open={row !== null}>
@@ -60,10 +106,29 @@ export function TagDialog({ error, onOpenChange, onSave, points, row, saving }: 
         </DialogHeader>
 
         <div className="flex justify-center">
-          <VibeMap onChange={(x, y) => setPos({ x, y })} points={context} value={pos} />
+          <VibeMap
+            editing={editing}
+            editSaving={editSaving}
+            onChange={(x, y) =>
+              editing ? setEditing({ ...editing, pos: { x, y } }) : setPos({ x, y })
+            }
+            onEditPoint={(point) =>
+              setEditing({
+                artists: point.artists,
+                pos: { x: point.vibeX, y: point.vibeY },
+                title: point.title,
+                trackId: point.trackId,
+              })
+            }
+            onSaveEdit={() => void saveEdit()}
+            points={context}
+            value={activePos}
+          />
         </div>
 
-        {error ? <p className="text-sm text-destructive">{error}</p> : undefined}
+        {(error ?? editError) ? (
+          <p className="text-sm text-destructive">{error ?? editError}</p>
+        ) : undefined}
 
         <div className="flex items-center justify-between gap-3">
           <Button disabled={!row?.previewUrl} onClick={player.toggle} size="sm" variant="outline">
@@ -78,7 +143,9 @@ export function TagDialog({ error, onOpenChange, onSave, points, row, saving }: 
           </Button>
 
           <span className="flex items-center gap-2 text-xs text-muted-foreground">
-            {quadrant ? (
+            {editing ? (
+              `Moving ${editing.title} — save it on the map`
+            ) : quadrant ? (
               <>
                 <span
                   aria-hidden="true"
@@ -92,7 +159,10 @@ export function TagDialog({ error, onOpenChange, onSave, points, row, saving }: 
             )}
           </span>
 
-          <Button disabled={saving || !pos} onClick={() => pos && void onSave(pos.x, pos.y)}>
+          <Button
+            disabled={saving || !pos || editing !== null}
+            onClick={() => pos && void onSave(pos.x, pos.y)}
+          >
             {saving ? "Saving…" : "Save placement"}
           </Button>
         </div>
