@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { NOTE_MAX_LENGTH } from "../../../lib/log-prose";
 import { jsonError, requireAdmin } from "../../../lib/server/env";
 import { publishTrack } from "../../../lib/server/publish";
 import { triggerEnrichment } from "../../../lib/server/spinup";
@@ -55,9 +56,26 @@ export const Route = createFileRoute("/api/admin/tracks")({
             return jsonError(400, "invalid_request", "Missing Spotify track URL");
           }
 
+          // The note rides into the Telegram post AND the stored editorial note,
+          // so cap it here on the add path too — same 280 budget as the PATCH.
+          let note: string | undefined;
+          if (typeof body.note === "string") {
+            const trimmed = body.note.trim();
+
+            if (trimmed.length > NOTE_MAX_LENGTH) {
+              return jsonError(
+                422,
+                "note_too_long",
+                `Note must be ${NOTE_MAX_LENGTH} characters or less`,
+              );
+            }
+
+            note = trimmed || undefined;
+          }
+
           const result = await publishTrack(body.spotifyUrl, {
             dryRun: body.dryRun === true,
-            note: typeof body.note === "string" ? body.note : undefined,
+            note,
           });
 
           // Kick off async enrichment on Spinup — a fast enqueue (the work runs

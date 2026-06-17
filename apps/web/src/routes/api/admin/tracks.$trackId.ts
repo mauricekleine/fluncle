@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
+import { NOTE_MAX_LENGTH } from "../../../lib/log-prose";
 import { jsonError, requireAdmin } from "../../../lib/server/env";
 import { ApiError } from "../../../lib/server/spotify";
 import { type TrackUpdate, updateTrack } from "../../../lib/server/track-update";
@@ -58,7 +59,17 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId")({
           }
 
           if (typeof body.note === "string") {
-            update.note = body.note;
+            const note = body.note.trim();
+
+            if (note.length > NOTE_MAX_LENGTH) {
+              throw new ApiError(
+                "note_too_long",
+                `Note must be ${NOTE_MAX_LENGTH} characters or less`,
+                422,
+              );
+            }
+
+            update.note = note;
           }
 
           if (typeof body.vibeX === "number" && Number.isFinite(body.vibeX)) {

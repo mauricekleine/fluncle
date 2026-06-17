@@ -933,15 +933,6 @@ body::before {
   margin-top: 0.4rem;
 }
 
-.log-note {
-  border-left: 2px solid color-mix(in oklch, var(--primary) 45%, transparent);
-  color: var(--stardust);
-  font-size: 0.95rem;
-  font-style: italic;
-  line-height: 1.5;
-  padding-left: 0.9rem;
-}
-
 .log-fields {
   display: grid;
   gap: 0.8rem 1rem;

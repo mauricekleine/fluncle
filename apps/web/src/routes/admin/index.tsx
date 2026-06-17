@@ -1,4 +1,10 @@
-import { CircleNotchIcon, CrosshairIcon, PlayIcon, WaveformIcon } from "@phosphor-icons/react";
+import {
+  CircleNotchIcon,
+  CrosshairIcon,
+  NotePencilIcon,
+  PlayIcon,
+  WaveformIcon,
+} from "@phosphor-icons/react";
 import {
   type InfiniteData,
   useInfiniteQuery,
@@ -10,6 +16,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { EnrichDialog } from "@/components/admin/enrich-dialog";
+import { NoteDialog } from "@/components/admin/note-dialog";
 import { type PlatformConfig, PLATFORMS } from "@/components/admin/platform-cell";
 import { PushDialog } from "@/components/admin/push-dialog";
 import { StageCell, type StageState } from "@/components/admin/stage-cell";
@@ -82,7 +89,7 @@ const WORKLIST_KEYS = new Set(WORKLISTS.map((worklist) => worklist.key));
 // the four equal stage cells. Horizontal-scroll wrapper so a phone scrolls
 // sideways rather than cramming.
 const GRID =
-  "grid grid-cols-[5.5rem_minmax(11rem,1fr)_repeat(4,minmax(7.5rem,9rem))] items-center gap-x-3";
+  "grid grid-cols-[5.5rem_minmax(11rem,1fr)_repeat(5,minmax(7rem,9rem))] items-center gap-x-3";
 
 const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
   if (!(await isAdminRequest())) {
@@ -217,6 +224,9 @@ function AdminBoardPage() {
   const [tagError, setTagError] = useState<string | undefined>();
   const [enrichBusy, setEnrichBusy] = useState(false);
   const [enrichError, setEnrichError] = useState<string | undefined>();
+  const [noteId, setNoteId] = useState<string | undefined>();
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [noteError, setNoteError] = useState<string | undefined>();
 
   const rowFor = useCallback(
     (trackId?: string) => (trackId ? rows.find((row) => row.trackId === trackId) : undefined),
@@ -224,6 +234,7 @@ function AdminBoardPage() {
   );
   const tagRow = rowFor(tagId);
   const enrichRow = rowFor(enrichId);
+  const noteRow = rowFor(noteId);
   const pushRow = rowFor(push?.trackId);
   const pushPlatform = push
     ? (PLATFORMS.find((platform) => platform.key === push.platformKey) ?? null)
@@ -334,8 +345,19 @@ function AdminBoardPage() {
     refetchOnWindowFocus: true,
   });
 
+  // The next finding in the current worklist — powers "Save & next" in the Tag and
+  // Note dialogs so a batch is one sitting. Undefined at the end of the list, which
+  // closes the dialog.
+  const nextVisibleTrackId = useCallback(
+    (currentTrackId: string): string | undefined => {
+      const index = visible.findIndex((entry) => entry.row.trackId === currentTrackId);
+      return index >= 0 && index + 1 < visible.length ? visible[index + 1]?.row.trackId : undefined;
+    },
+    [visible],
+  );
+
   const saveTag = useCallback(
-    async (x: number, y: number) => {
+    async (x: number, y: number, advance?: boolean) => {
       if (!tagRow) {
         return;
       }
@@ -368,14 +390,48 @@ function AdminBoardPage() {
             vibeY: y,
           },
         ]);
-        setTagId(undefined);
+        setTagId(advance ? nextVisibleTrackId(tagRow.trackId) : undefined);
       } catch (caught) {
         setTagError(caught instanceof Error ? caught.message : String(caught));
       } finally {
         setTagSaving(false);
       }
     },
-    [patchRow, queryClient, tagRow],
+    [nextVisibleTrackId, patchRow, queryClient, tagRow],
+  );
+
+  // Save the finding's note (the editorial "why" that feeds its log-page prose +
+  // schema). Optimistically patches the row; "Save & next" walks the worklist.
+  const saveNote = useCallback(
+    async (note: string, advance?: boolean) => {
+      if (!noteRow) {
+        return;
+      }
+
+      setNoteSaving(true);
+      setNoteError(undefined);
+
+      try {
+        const response = await fetch(`/api/admin/tracks/${noteRow.trackId}`, {
+          body: JSON.stringify({ note }),
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          method: "PATCH",
+        });
+
+        if (!response.ok) {
+          throw new Error(`Save failed (${response.status})`);
+        }
+
+        patchRow(noteRow.trackId, { note: note.trim() || undefined });
+        setNoteId(advance ? nextVisibleTrackId(noteRow.trackId) : undefined);
+      } catch (caught) {
+        setNoteError(caught instanceof Error ? caught.message : String(caught));
+      } finally {
+        setNoteSaving(false);
+      }
+    },
+    [nextVisibleTrackId, noteRow, patchRow],
   );
 
   // Re-place an already-placed neighbour from inside the Tag dialog (edit-in-place).
@@ -529,7 +585,7 @@ function AdminBoardPage() {
         />
       ) : (
         <div className="overflow-x-auto">
-          <div className="min-w-[56rem]">
+          <div className="min-w-[64rem]">
             {/* Column header */}
             <div
               className={cn(
@@ -553,6 +609,10 @@ function AdminBoardPage() {
                   {platform.label}
                 </span>
               ))}
+              <span className="flex items-center gap-1.5">
+                <NotePencilIcon className="size-3.5" weight="bold" />
+                Note
+              </span>
             </div>
 
             <ul className="m-0 list-none p-0">
@@ -576,6 +636,7 @@ function AdminBoardPage() {
                       row={row}
                     />
                   ))}
+                  <NoteStageCell onOpen={() => setNoteId(row.trackId)} row={row} />
                 </li>
               ))}
             </ul>
@@ -609,12 +670,24 @@ function AdminBoardPage() {
 
       <TagDialog
         error={tagError}
+        hasNext={tagRow ? nextVisibleTrackId(tagRow.trackId) !== undefined : false}
         onOpenChange={(open) => !open && setTagId(undefined)}
-        onSave={saveTag}
+        onSave={(x, y) => void saveTag(x, y)}
+        onSaveAndNext={(x, y) => void saveTag(x, y, true)}
         onSavePoint={savePoint}
         points={points}
         row={tagRow ?? null}
         saving={tagSaving}
+      />
+
+      <NoteDialog
+        error={noteError}
+        hasNext={noteRow ? nextVisibleTrackId(noteRow.trackId) !== undefined : false}
+        onOpenChange={(open) => !open && setNoteId(undefined)}
+        onSave={(note) => void saveNote(note)}
+        onSaveAndNext={(note) => void saveNote(note, true)}
+        row={noteRow ?? null}
+        saving={noteSaving}
       />
 
       <PushDialog
@@ -753,6 +826,24 @@ function TagStageCell({ onOpen, row }: { onOpen: () => void; row: BoardRow }) {
       onClick={onOpen}
       state={tagged ? "done" : "open"}
       title="Place on the vibe map"
+    />
+  );
+}
+
+// The note cell — optional, the last column. A note isn't a pipeline stage; it's
+// the editorial "why" that feeds the finding's log-page prose + schema. The detail
+// line shows a snippet of the note when one exists.
+function NoteStageCell({ onOpen, row }: { onOpen: () => void; row: BoardRow }) {
+  const note = row.note?.trim();
+
+  return (
+    <StageCell
+      detail={note || undefined}
+      icon={<NotePencilIcon className="size-4" weight={note ? "fill" : "regular"} />}
+      label={note ? "Noted" : "Note"}
+      onClick={onOpen}
+      state={note ? "done" : "open"}
+      title="The finding's note — shows on its log page"
     />
   );
 }

@@ -27,8 +27,12 @@ type Editing = { artists?: string[]; pos: Pos; title: string; trackId: string };
 
 type TagDialogProps = {
   error?: string;
+  /** Whether a next finding exists in the worklist (gates "Save & next"). */
+  hasNext: boolean;
   onOpenChange: (open: boolean) => void;
   onSave: (x: number, y: number) => Promise<void> | void;
+  /** Save this placement, then advance the dialog to the next finding in the worklist. */
+  onSaveAndNext: (x: number, y: number) => Promise<void> | void;
   /** Re-place an already-placed neighbour: PATCH its (vibe_x, vibe_y). Throws on failure. */
   onSavePoint: (trackId: string, x: number, y: number) => Promise<void>;
   /** Already-placed findings (excluding this one), drawn faint for relative context. */
@@ -53,7 +57,9 @@ export function TagDialog({ onOpenChange, row, ...rest }: TagDialogProps) {
 
 function TagDialogBody({
   error,
+  hasNext,
   onSave,
+  onSaveAndNext,
   onSavePoint,
   points,
   row,
@@ -164,12 +170,23 @@ function TagDialogBody({
           )}
         </span>
 
-        <Button
-          disabled={saving || !pos || editing !== null}
-          onClick={() => pos && void onSave(pos.x, pos.y)}
-        >
-          {saving ? "Saving…" : "Save placement"}
-        </Button>
+        <div className="flex items-center gap-2">
+          {hasNext ? (
+            <Button
+              disabled={saving || !pos || editing !== null}
+              onClick={() => pos && void onSaveAndNext(pos.x, pos.y)}
+              variant="secondary"
+            >
+              Save & next
+            </Button>
+          ) : undefined}
+          <Button
+            disabled={saving || !pos || editing !== null}
+            onClick={() => pos && void onSave(pos.x, pos.y)}
+          >
+            {saving ? "Saving…" : "Save placement"}
+          </Button>
+        </div>
       </div>
     </>
   );

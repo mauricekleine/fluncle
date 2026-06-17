@@ -172,12 +172,6 @@ function LogPage() {
           <p className="log-definition-prose">{definitionalProse({ ...track, logId })}</p>
         </section>
 
-        {track.note ? (
-          <section aria-label="Log note" className="log-note">
-            <p>{track.note}</p>
-          </section>
-        ) : undefined}
-
         <dl className="log-fields">
           <div className="log-field">
             <dt>Found</dt>

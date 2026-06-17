@@ -6,6 +6,14 @@
 import { formatDateLong } from "./format";
 import { GALAXIES, type Galaxy } from "./galaxies";
 
+/**
+ * The editorial note's length budget. A note is SEO/AEO fuel, not a free-text
+ * field: it lands inside the definitional prose + JSON-LD, so it stays a tight
+ * one-or-two-sentence take rather than an essay. Enforced in the board dialog
+ * (textarea) and the admin PATCH validator.
+ */
+export const NOTE_MAX_LENGTH = 280;
+
 export type LogProseInput = {
   addedAt: string;
   artists: string[];
@@ -15,6 +23,8 @@ export type LogProseInput = {
   key?: string;
   label?: string;
   logId: string;
+  /** The editorial "why" — woven into the prose (and thus JSON-LD) when present. */
+  note?: string;
   releaseDate?: string;
   title: string;
 };
@@ -77,6 +87,16 @@ export function definitionalProse(track: LogProseInput): string {
     sentences.push(
       `It sits in the ${track.galaxy.name} galaxy — the ${meta.energy}, ${meta.mood} quarter of Fluncle's vibe map.`,
     );
+  }
+
+  // The editorial note (the human "why") rides here — the one finding-specific
+  // line that makes this page's prose unlike any other's. Dropped in verbatim
+  // (it's already in Fluncle's voice), with terminal punctuation ensured so it
+  // reads as its own sentence before the coordinate closer.
+  const note = track.note?.trim();
+  if (note) {
+    const sentence = note[0].toUpperCase() + note.slice(1);
+    sentences.push(/[.!?…]$/.test(sentence) ? sentence : `${sentence}.`);
   }
 
   sentences.push(
