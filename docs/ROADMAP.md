@@ -12,6 +12,46 @@ The add → live pipeline is operational end to end:
 
 What's left of the loop is ongoing operation, not build work. The fully-autonomous, server-side version — chaining enrich → render → publish without the laptop in the loop — lives in **Later → TikTok auto-pipeline**.
 
+### The autonomy ladder
+
+The full path a finding travels, top to bottom: one human act, then how far it propagates on its own. `[x]` = automated today, `[ ]` = a manual/operator step (some manual by design, like the add and TikTok). A final group is **deferred** — surfaces we could reach but deliberately leave dark for now (no box, because nothing happens there yet).
+
+**0 · Find + add** — the one irreducible human act ("Maurice discovers, Fluncle does the rest"):
+
+- [ ] Maurice finds the banger and adds it (`fluncle admin add`, the `/admin` board, or `ssh rave.fluncle.com`). Manual by design — this is the whole point.
+
+**1 · Synchronous fan-out** — instant, the moment the Worker writes the finding and assigns its Log ID it is everywhere the spine reaches:
+
+- [x] **Spotify** — added to the Fluncle's Findings playlist
+- [x] **Telegram** — posted to the crew channel
+- [x] **Web** — live in the feed and at its `/log/<id>` page
+- [x] **CLI** — `fluncle recent`, `fluncle log <id>`
+- [x] **API** — `/api/tracks`, `/api/tracks/<idOrLogId>`
+- [x] **MCP** — the Model Context Protocol server
+- [x] **RSS** — `/rss.xml`, the observation feed
+- [x] **SSH rave terminal** — `ssh rave.fluncle.com`
+- [x] **Galaxy game (web)** — a collectible star at its Log ID coordinate
+- [x] **Galaxy game (SSH)** — the same star in the terminal galaxy
+
+**2 · Async, automated** — no laptop-tap, no human; they just run:
+
+- [x] **Enrichment (Spinup)** — BPM, key, and the `features_json` spectral vector; fired on add (`enrichmentStatus: processing → done`). See _Later → TikTok auto-pipeline → Autonomous trigger_.
+- [x] **Render (local Claude routine)** — the hourly "Fluncle video queue" films the oldest queued finding end to end and uploads to R2; idle when the queue is empty. See _Now → Hands-off rendering_.
+
+**3 · The manual tail** — what still needs a hand, roughly in order, and where each one automates:
+
+- [ ] **Tag** the vibe (`vibe_x`/`vibe_y` → galaxy) on the board. Automates via the _Vibe-placement model_ (gated on ~50–100 labels).
+- [ ] **Note** the editorial "why". Automates via _Auto-drafted finding notes_ (downstream of the vibe model + a notes corpus).
+- [ ] **YouTube** Shorts — the operator triggers the push today (the upload itself is hands-off: title + caption + `cover.jpg` thumbnail). Goes fully auto when the server-side chain extends — the one channel that needs no in-app finish. See _Later → TikTok auto-pipeline → More platforms_.
+- [ ] **TikTok** — drafted to the inbox from the board; the operator finishes in-app (attach the official sound, publish). Manual by design — no legitimate API audio path. The last per-finding beat. See _Later → TikTok auto-pipeline_.
+- [ ] **Newsletter (Friday)** — the Spinup agent drafts the weekly letter on its own (finds grouped by galaxy, scene tidbits via firecrawl), but the **send is a manual tap** in Loops (no campaign-send API). The one weekly-cadence step; everything above it is per-finding. See _Later → Newsletter agent_.
+
+**4 · Deferred (on purpose)** — a surface we could reach but are choosing to leave dark for now:
+
+- **Instagram** (`@fluncle`) — the account exists, but we're not posting yet. The music-licensing exposure isn't worth it: there's no legitimate API audio path (the master gets muted on a business/creator account, and IG's licensed audio is app-only), so it would mean either silent clips or manual in-app posts under that licensing risk. Parked, not closed. See _Later → TikTok auto-pipeline → More platforms_.
+
+**The shape:** one human add → instant parallel fan-out to ~10 surfaces → two automated async agents (enrich, render) → a shrinking manual tail. Of that tail, tag + note fall to the vibe model and YouTube to the server-side chain; TikTok and the Friday newsletter send stay deliberate human taps, each blocked by an external platform limit, not by us.
+
 ## Next — surface what we make, and tidy reliability
 
 ### Log IDs in search + AI answers (AEO/GEO) — off-site thread
@@ -19,7 +59,7 @@ What's left of the loop is ongoing operation, not build work. The fully-autonomo
 The on-site layer shipped (per-finding `/log/<id>` pages with definitional prose + `MusicRecording` identifiers, the `/log` index, sitemap enumeration, the `/about` entity/FAQ surface, one canonical description everywhere). What remains is off-site and slower:
 
 - **AI crawlers: verified allowed (2026-06-11), keep the regression check.** The dashboard confirms verified AI crawlers pass (ClaudeBot 24 allowed requests, 38 crawls answered 200, the sitemap the most-crawled path); the earlier 403s were Cloudflare's spoof-detection rejecting fake-UA probes, not a block. Managed robots.txt is OFF. Still worth a recurring check of the live `/robots.txt` + the AI Crawl Control crawler policies (Cloudflare can re-flip defaults silently).
-- **Submit + monitor.** Sitemap submitted to GSC and Bing (2026-06-11); watch the _set_ of log pages move to Indexed (count ≈ archive size); verify bare-token retrieval (`004.7.2I`, `fluncle://004.7.2I`) lands the log page. Check Fluncle is present in Brave Search. Indexing and AI citation are weeks-out outcomes — monitoring, not ship gates.
+- **Submit + monitor.** Sitemap submitted to GSC and Bing (2026-06-11); watch the _set_ of log pages move to Indexed (count ≈ archive size); verify bare-token retrieval (`004.7.2I`, `fluncle://004.7.2I`) lands the log page. Check Fluncle is present in Brave Search. **First retrieval confirmed (2026-06-17), faster than the "weeks-out" estimate:** a bare `"004.6.0Q"` Google query returns the owned `fluncle.com/log` surface (#2), the YouTube Short caption (#1, with the coordinate + `Found Jun 3` rendered verbatim), and the gate-screen OG card (`packages/media`) in Images — within ~3 days of publish. Remaining granular milestones: the per-finding `/log/<id>` pages moving to Indexed in GSC (today the bare coordinate lands the `/log` _index_, not yet the individual page), and confirming an individual page ranks for its own coordinate. Indexing and AI citation are still ongoing outcomes — monitoring, not ship gates.
 - **Third-party corroboration: the anchors exist (2026-06-11).** MusicBrainz artist `53346748-1357-45c0-a847-9d248b65d655` (Person, homepage/TikTok/Telegram links) and Wikidata item `Q140169844` (instance of human, official website, MusicBrainz artist ID, TikTok + Telegram usernames); both are in the `/about` `sameAs` set. Remaining: authentic presence where dnb lives (r/DnB and friends — participate, don't fabricate), and enrich the Wikidata item as facts accumulate.
 
 ### A Fluncle DJ mix — breadcrumbs + a real MusicBrainz release
@@ -88,7 +128,7 @@ v1 shipped 2026-06-10 at [galaxy.fluncle.com](https://galaxy.fluncle.com) (same 
 - **Other planets / forward bases** — future, tied to persistence (refuel hubs / respawn points out on the frontier).
 - **The bespoke sprite menagerie** beyond the heroes (see Near polish).
 
-**SSH version (the flex)** — scoped in [docs/galaxy-ssh-rfc.md](./galaxy-ssh-rfc.md); **landed in code (PR #13)**. The approach pivoted: instead of compiling `sim.ts` to WASM (Javy/QuickJS → wazero), the SSH galaxy is a **Go port** of the sim (`apps/ssh/internal/galaxy` — engine/placement/projection) kept in lockstep by **parity tests** against the JS source (`apps/web/src/game/parity-fixtures.test.ts` + testdata), wired into the terminal (`screenGalaxy` / `handleGalaxyKey` in `apps/ssh/main.go`). The same _sim_ inside `ssh rave.fluncle.com`, then: a top-down scope renderer, the read-the-log orbit card with an OSC-8 Spotify link, audio-less as flavor ("the audio didn't survive the trip out here — it's still playing back on Earth"), telemetry in the deepest Depth-Gradient register taken from the shipped strings ("Pulled under. Flung across the galaxy." · "Home, junglist."). Map knowledge is portable across surfaces — the Log ID spine paying off. The working Go port + parity harness resolve the old PASS/KILL spikes (SSH input latency; the engine model) and the "confirm realtime input + frame rate" question. Remaining is the SSH experience polish + the deploy to rave.fluncle.com (the SSH app's own step); the Minimum Lovable galaxy ships whole, with QR / Kitty-input / ambient-crew as named fast-follows.
+**SSH version (the flex)** — scoped in [docs/galaxy-ssh-rfc.md](./galaxy-ssh-rfc.md); **landed in code and deployed live (PR #13)**. The approach pivoted: instead of compiling `sim.ts` to WASM (Javy/QuickJS → wazero), the SSH galaxy is a **Go port** of the sim (`apps/ssh/internal/galaxy` — engine/placement/projection) kept in lockstep by **parity tests** against the JS source (`apps/web/src/game/parity-fixtures.test.ts` + testdata), wired into the terminal (`screenGalaxy` / `handleGalaxyKey` in `apps/ssh/main.go`). The same _sim_ inside `ssh rave.fluncle.com`, then: a top-down scope renderer, the read-the-log orbit card with an OSC-8 Spotify link, audio-less as flavor ("the audio didn't survive the trip out here — it's still playing back on Earth"), telemetry in the deepest Depth-Gradient register taken from the shipped strings ("Pulled under. Flung across the galaxy." · "Home, junglist."). Map knowledge is portable across surfaces — the Log ID spine paying off. The working Go port + parity harness resolve the old PASS/KILL spikes (SSH input latency; the engine model) and the "confirm realtime input + frame rate" question. **Deployed and live at `rave.fluncle.com` (2026-06-17)** — the Minimum Lovable galaxy shipped whole, the same _sim_ inside the terminal. Remaining are named fast-follows: SSH experience polish, QR / Kitty-input / ambient-crew.
 
 **Persistence:** a player's collected bangers want to survive a refresh — that's the user-accounts item below; session-only until then.
 
@@ -103,7 +143,7 @@ Persistent per-user state — the thing that unlocks saved progress (e.g. a play
 - **Render: Superset on the laptop now, Spinup later.** Rendering runs hands-off via the hourly **Superset Automation** on the MacBook (see Now → "Hands-off rendering") — too heavyweight for Spinup today, and the laptop's GPU is free. The fully-server-side **render-capable Spinup profile** stays deferred: software-GL (SwiftShader) is viable (~1.45× Metal, no GPU needed) but needs a render rootfs (Chromium + SwiftShader / Mesa / fonts + ffmpeg), likely >1 vCPU, a check against the per-run cap, and an answer to how an ephemeral agent gets the `packages/video` kit (fresh checkout per run, a prebuilt image, or a published package). Pursue it only when laptop-bound rendering becomes the bottleneck.
 - **Autonomous trigger — the enrich step is live (commit `05a3f81`).** The enrichment-analysis agent runs on Spinup (hermes harness; `analyze-track` is a self-contained skill, no repo checkout — ffmpeg + the `fluncle` CLI bound), and the Worker fires its async `runs.create` on track-add: admin-gated, Worker-only, via `@getspinup/sdk` (inline `await`, since this TanStack version doesn't expose Cloudflare's `ctx.waitUntil`; sets `enrichmentStatus: processing`). Extending the chain to **render → publish** is the remaining autonomy, gated on the render-capable Spinup profile above.
 - **Reconciliation.** Recording an outcome by hand works for any post now — the status endpoint **upserts** (PR #14), so a manually-published or cross-environment post can be marked `published` (with the live URL) even without a prior draft row. Still open: the **automatic** version — an hourly check matching recent posts to the `fluncle://<log-id>` marker and flipping `social_posts.status` itself, observed not hand-entered.
-- **More platforms — YouTube done, the autopilot-ready channel; Instagram closed.** YouTube Shorts ships now (PR #13): a direct public upload (title + caption + `cover.jpg` thumbnail) via the per-platform push, recorded in `social_posts`. Because it needs **no manual finish** (unlike TikTok's in-app official sound), YouTube is the one channel that can run **fully on autopilot** — once the autonomous trigger above chains enrich → render → publish, YouTube publishes hands-off with nothing left for the human. (Flagged, not urgent.) Instagram is **intentionally not automated**: there's no legitimate API audio path (the master gets muted on a business/creator account, and IG's licensed audio is app-only), so it stays a manual in-app post. Per-platform doctrine lives in `docs/track-lifecycle.md` (Phase 3) + the `fluncle-publish` skill.
+- **More platforms — YouTube done, the autopilot-ready channel; Instagram closed.** YouTube Shorts ships now (PR #13): a direct public upload (title + caption + `cover.jpg` thumbnail) via the per-platform push, recorded in `social_posts`. Because it needs **no manual finish** (unlike TikTok's in-app official sound), YouTube is the one channel that can run **fully on autopilot** — once the autonomous trigger above chains enrich → render → publish, YouTube publishes hands-off with nothing left for the human. (Flagged, not urgent.) Instagram is **deferred — not posting yet** (the `@fluncle` account exists, but the music-licensing exposure isn't worth it for now): there's no legitimate API audio path (the master gets muted on a business/creator account, and IG's licensed audio is app-only), so it would mean silent clips or manual in-app posts under that risk. Parked, not closed; see the autonomy ladder's _Deferred_ group. Per-platform doctrine lives in `docs/track-lifecycle.md` (Phase 3) + the `fluncle-publish` skill.
 
 ### Brand & canon
 
