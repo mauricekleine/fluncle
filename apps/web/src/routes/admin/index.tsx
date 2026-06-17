@@ -89,7 +89,7 @@ const WORKLIST_KEYS = new Set(WORKLISTS.map((worklist) => worklist.key));
 // the four equal stage cells. Horizontal-scroll wrapper so a phone scrolls
 // sideways rather than cramming.
 const GRID =
-  "grid grid-cols-[5.5rem_minmax(11rem,1fr)_repeat(5,minmax(7rem,9rem))] items-center gap-x-3";
+  "grid grid-cols-[5.5rem_minmax(13rem,1fr)_repeat(5,minmax(6.5rem,8rem))] items-center gap-x-3";
 
 const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
   if (!(await isAdminRequest())) {
