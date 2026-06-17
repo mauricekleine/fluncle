@@ -4,7 +4,7 @@
   "description": "Drum & bass bangers from another dimension. Fluncle digs and certifies every track, publishes them to Spotify and Telegram, and keeps the full archive of his findings at fluncle.com.",
   "display": "standalone",
   "icons": [
-    { "sizes": "64x64", "src": "/favicon.png", "type": "image/png" },
+    { "sizes": "96x96", "src": "/favicon.png", "type": "image/png" },
     { "purpose": "any", "sizes": "180x180", "src": "/apple-touch-icon.png", "type": "image/png" },
     { "purpose": "any", "sizes": "1180x1180", "src": "/fluncle.png", "type": "image/png" }
   ],
