@@ -20,14 +20,14 @@ export const fluncleAsciiLogo = `███████╗██╗     ██╗
 ╚═╝     ╚══════╝ ╚═════╝ ╚═╝  ╚═══╝ ╚═════╝╚══════╝╚══════╝`;
 
 export const fluncleDescription =
-  "Drum & bass bangers from another dimension. Fluncle digs and certifies every track, publishes them to Spotify and Telegram, and keeps the full archive of his findings at fluncle.com.";
+  "Drum & bass bangers from another dimension. Fluncle digs and certifies every track, logs each as a finding, and keeps the full archive across the Galaxy, from the web to the rave terminal. fluncle.com is home base.";
 
 // The ≤155-char version for SERP <meta name="description"> / og / twitter tags.
 // The full fluncleDescription above is the canonical ENTITY description (JSON-LD,
 // manifest, /about prose) and runs long for a snippet, which Bing/Google flag +
 // truncate. This trimmed line is used only in head meta.
 export const fluncleMetaDescription =
-  "Drum & bass bangers from another dimension — Fluncle digs, certifies, and publishes each find to Spotify & Telegram. Full archive at fluncle.com.";
+  "Drum & bass bangers from another dimension. Fluncle digs, certifies, and logs every find, with the full archive across the Galaxy at fluncle.com.";
 
 export const fluncleBio = `${fluncleTagline}
 

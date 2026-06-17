@@ -2,7 +2,7 @@
 
 > Drum & bass bangers from another dimension.
 
-Fluncle publishes drum & bass tracks to Fluncle's Findings on Spotify and Telegram, then shows the public archive on fluncle.com.
+Fluncle digs and certifies drum & bass bangers, logs each as a finding, and keeps the full archive across the Galaxy, with fluncle.com as home base.
 
 ## Public Surfaces
 
