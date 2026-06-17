@@ -26,7 +26,7 @@ describe("renderLlmsFull", () => {
     expect(doc).toContain("## The findings (0)");
   });
 
-  it("renders a finding with its coordinate, note, and present facts", () => {
+  it("renders a finding with its coordinate and present facts", () => {
     const doc = renderLlmsFull(
       [
         finding({
@@ -34,7 +34,6 @@ describe("renderLlmsFull", () => {
           galaxy: { key: "nebular", name: "Nebular" },
           key: "F minor",
           logId: "012.8.0A",
-          note: "Absolute roller.",
         }),
       ],
       1,
@@ -43,7 +42,6 @@ describe("renderLlmsFull", () => {
     expect(doc).toContain(
       "**Camo & Krooked — Test Banger** (found 2026-06-15, fluncle://012.8.0A)",
     );
-    expect(doc).toContain("Absolute roller.");
     expect(doc).toContain(
       "173 BPM · F minor · Nebular galaxy · https://open.spotify.com/track/abc",
     );

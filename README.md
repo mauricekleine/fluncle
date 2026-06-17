@@ -18,7 +18,7 @@ The same archive, reachable however you like. Every surface reads the same publi
 | SSH        | `ssh rave.fluncle.com`                                   | The rave terminal, a Wish/Bubble Tea app (see [SSH](#ssh))                        |
 | MCP        | `https://www.fluncle.com/mcp`                            | The archive as agent tools, Streamable HTTP, no auth (see [MCP](#mcp))            |
 
-Crawler and discovery surfaces (all under <https://www.fluncle.com>): `/robots.txt`, `/sitemap.xml`, `/llms.txt`, `/llms-full.txt` (the whole archive, with notes, in one doc), `/openapi.json`, `/.well-known/api-catalog`, `/.well-known/agent-skills/index.json`, and `/.well-known/mcp/server-card.json`. Public pages also carry schema.org JSON-LD (`WebSite`, `MusicPlaylist`, `MusicGroup`, `FAQPage`, and per-finding `MusicRecording` with the Log ID).
+Crawler and discovery surfaces (all under <https://www.fluncle.com>): `/robots.txt`, `/sitemap.xml`, `/llms.txt`, `/llms-full.txt` (the whole archive in one doc), `/openapi.json`, `/.well-known/api-catalog`, `/.well-known/agent-skills/index.json`, and `/.well-known/mcp/server-card.json`. Public pages also carry schema.org JSON-LD (`WebSite`, `MusicPlaylist`, `MusicGroup`, `FAQPage`, and per-finding `MusicRecording` with the Log ID).
 
 ## Monorepo Layout
 

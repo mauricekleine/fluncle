@@ -14,7 +14,7 @@ Every finding has a permanent coordinate, a Log ID, written sector.orbit.mark â€
 
 - [Fluncle's Findings on Spotify](https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0): the playlist itself
 - [Fluncle on Telegram](https://t.me/fluncle): one banger per post, most nights
-- [The archive](https://www.fluncle.com/): every certified track with the date Fluncle found it and notes
+- [The archive](https://www.fluncle.com/): every certified track with the date Fluncle found it
 - [The log](https://www.fluncle.com/log): every finding's coordinate page, one per Log ID (e.g. https://www.fluncle.com/log/004.7.2I)
 - [About Fluncle](https://www.fluncle.com/about): who Fluncle is, what the Galaxy is, and how to read a Log ID like fluncle://004.7.2I
 
@@ -36,7 +36,7 @@ Every finding has a permanent coordinate, a Log ID, written sector.orbit.mark â€
 - [MCP server card](https://www.fluncle.com/.well-known/mcp/server-card.json): SEP-2127 discovery card for the MCP endpoint
 - [API catalog](https://www.fluncle.com/.well-known/api-catalog): RFC 9727 linkset
 - [Agent skills](https://www.fluncle.com/.well-known/agent-skills/index.json): the fluncle-api skill, with digest
-- [llms-full.txt](https://www.fluncle.com/llms-full.txt): the entire archive in one document, every finding with its note
+- [llms-full.txt](https://www.fluncle.com/llms-full.txt): the entire archive in one document, every finding
 - Markdown homepage: GET https://www.fluncle.com/ with Accept: text/markdown
 
 ## Tools

@@ -6,7 +6,7 @@ import { type TrackCursor, type TrackListItem, decodeTrackCursor, listTracks } f
 // the RFC 9727 API catalog, the Agent Skills Discovery index, a text/markdown
 // rendering of the homepage for Accept-negotiating agents (the router's SSR
 // handler otherwise 500s on non-HTML Accept headers), and llms-full.txt — the
-// entire archive with notes as one ingestible document.
+// entire archive as one ingestible document.
 
 const markdownTracksLimit = 25;
 
@@ -148,11 +148,10 @@ async function skillDigest(): Promise<string> {
 
 async function markdownHomeResponse(): Promise<Response> {
   const page = await listTracks({ limit: markdownTracksLimit });
-  const tracks = page.tracks.map((track) => {
-    const line = `- ${track.artists.join(", ")} — ${track.title} (found ${track.addedAt.slice(0, 10)})`;
-
-    return track.note ? `${line}\n  ${track.note.trim().replaceAll("\n", " ")}` : line;
-  });
+  const tracks = page.tracks.map(
+    (track) =>
+      `- ${track.artists.join(", ")} — ${track.title} (found ${track.addedAt.slice(0, 10)})`,
+  );
 
   const markdown = `# Fluncle
 
@@ -168,7 +167,7 @@ ${tracks.join("\n")}
 
 - [Fluncle's Findings on Spotify](${spotifyPlaylistUrl}): the playlist itself
 - [Fluncle on Telegram](${telegramUrl}): one banger per post, most nights
-- [The archive](${siteUrl}/): every certified track with the date it was found and notes
+- [The archive](${siteUrl}/): every certified track with the date it was found
 
 ## Data
 
@@ -189,7 +188,7 @@ ${tracks.join("\n")}
 - [API catalog](${siteUrl}/.well-known/api-catalog): RFC 9727 linkset
 - [Agent skills](${siteUrl}/.well-known/agent-skills/index.json): the fluncle-api skill, with digest
 - [llms.txt](${siteUrl}/llms.txt): the plain-language map of the Galaxy
-- [llms-full.txt](${siteUrl}/llms-full.txt): the entire archive in one document, every finding with its note
+- [llms-full.txt](${siteUrl}/llms-full.txt): the entire archive in one document, every finding
 
 ## Tools
 
@@ -208,10 +207,9 @@ ${tracks.join("\n")}
 }
 
 // /llms-full.txt: the entire archive as one ingestible markdown document — the
-// lore plus every finding with Fluncle's note. The notes are the
-// differentiated, citable content (nobody else has Fluncle's take on each
-// track), so this is the surface most aimed at getting cited on drum & bass.
-// Pure renderer, exported for tests; the response wraps it.
+// lore plus every finding (coordinate, found date, BPM/key/galaxy, Spotify),
+// so an LLM can read the whole archive in a single fetch. Pure renderer,
+// exported for tests; the response wraps it.
 export function renderLlmsFull(tracks: TrackListItem[], totalCount: number): string {
   const findings = tracks.map(renderFinding).join("\n");
   const omitted = totalCount - tracks.length;
@@ -240,17 +238,13 @@ ${omitted > 0 ? `\n_${omitted} older findings omitted here; page the rest at ${s
 `;
 }
 
-// One finding: the coordinate-led header, Fluncle's note (the why), then the
-// dry facts. Present fields only; the note leads because it is the payload.
+// One finding: the coordinate-led header, then the dry facts (present fields
+// only).
 function renderFinding(track: TrackListItem): string {
   const coordinate = track.logId ? `fluncle://${track.logId}` : "uncoordinated";
   const lines = [
     `- **${track.artists.join(", ")} — ${track.title}** (found ${track.addedAt.slice(0, 10)}, ${coordinate})`,
   ];
-
-  if (track.note?.trim()) {
-    lines.push(`  ${track.note.trim().replaceAll("\n", " ")}`);
-  }
 
   const facts: string[] = [];
 
