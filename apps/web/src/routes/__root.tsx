@@ -36,6 +36,14 @@ export const Route = createRootRoute({
         rel: "apple-touch-icon",
       },
       {
+        href: "/manifest.webmanifest",
+        rel: "manifest",
+      },
+      {
+        href: "/humans.txt",
+        rel: "author",
+      },
+      {
         href: "/rss.xml",
         rel: "alternate",
         title: "Fluncle's Findings",
@@ -49,6 +57,10 @@ export const Route = createRootRoute({
       {
         content: "width=device-width, initial-scale=1",
         name: "viewport",
+      },
+      {
+        content: "#090a0b",
+        name: "theme-color",
       },
       {
         title,

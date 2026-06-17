@@ -1,0 +1,12 @@
+/* TEAM */
+  Selector & operator: Maurice Kleine
+  Contact: hey [at] fluncle.com
+  Source: https://github.com/mauricekleine/fluncle
+
+/* THANKS */
+  The crew. Every junglist who sent a tune.
+
+/* SITE */
+  Doing this since '90. Drum & bass bangers from another dimension.
+  Standards: HTML5, schema.org, RSS, llms.txt, MCP
+  Built with: TanStack Start, React, Cloudflare Workers, Turso, Remotion

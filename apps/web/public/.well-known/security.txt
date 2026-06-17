@@ -1,0 +1,5 @@
+# Spotted a crack in the hull? Send it here before you tell the void.
+Contact: mailto:hey@fluncle.com
+Expires: 2027-06-18T00:00:00.000Z
+Preferred-Languages: en
+Canonical: https://www.fluncle.com/.well-known/security.txt

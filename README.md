@@ -13,11 +13,12 @@ The same archive, reachable however you like. Every surface reads the same publi
 | Web        | <https://www.fluncle.com>                                | The public archive: cover-led, dark, fast. Also `/about`, `/log`, `/log/<id>`     |
 | Galaxy     | <https://galaxy.fluncle.com>                             | The game: every finding is a star you can fly to                                  |
 | Public API | `https://www.fluncle.com/api/*`                          | JSON reads and submissions (see [Web](#web), [Submission Flow](#submission-flow)) |
+| RSS        | <https://www.fluncle.com/rss.xml>                        | The 25 most recent findings, for feed readers                                     |
 | CLI        | `curl -fsSL https://www.fluncle.com/cli/latest.sh \| sh` | The archive in your terminal (see [CLI](#cli))                                    |
 | SSH        | `ssh rave.fluncle.com`                                   | The rave terminal, a Wish/Bubble Tea app (see [SSH](#ssh))                        |
 | MCP        | `https://www.fluncle.com/mcp`                            | The archive as agent tools, Streamable HTTP, no auth (see [MCP](#mcp))            |
 
-Machine-readable and discovery surfaces (all under <https://www.fluncle.com>): `/rss.xml`, `/robots.txt`, `/sitemap.xml`, `/llms.txt`, `/openapi.json`, `/.well-known/api-catalog`, `/.well-known/agent-skills/index.json`, and `/.well-known/mcp/server-card.json`.
+Crawler and discovery surfaces (all under <https://www.fluncle.com>): `/robots.txt`, `/sitemap.xml`, `/llms.txt`, `/openapi.json`, `/.well-known/api-catalog`, `/.well-known/agent-skills/index.json`, and `/.well-known/mcp/server-card.json`. Public pages also carry schema.org JSON-LD (`WebSite`, `MusicPlaylist`, `MusicGroup`, `FAQPage`, and per-finding `MusicRecording` with the Log ID).
 
 ## Monorepo Layout
 
