@@ -2,49 +2,15 @@
 
 Forward-facing, roughly prioritized list of open work — what we pick from next. Not a changelog: shipped work lives in git history, so this doc carries only what's still ahead. A living reference; add freely, move an item into a PR when it's picked up. Canon (DESIGN.md / PRODUCT.md / VOICE.md) arbitrates the words — this is planning, not spec.
 
-## Now — run the production loop
+## Now — the production loop is running
 
-The active push: keep findings flowing from add → live on TikTok + YouTube, with one operator cockpit that shows every stage and the heavy render step automated on the laptop. Three slices that parallelize cleanly — the **pipeline board** (web admin), **hands-off rendering** (a Superset automation), and the **manual backlog** itself (ops).
+The add → live pipeline is operational end to end:
 
-### The pipeline board — every finding's stage at a glance
+- **One `/admin` cockpit** — every finding is a row with its derived stage (Enrich · Tag · YouTube · TikTok), stage worklists, and the publish controls; the old `/admin/tag` + `/admin/posts` pages folded into it.
+- **Hands-off rendering** — a Claude scheduled **routine** ("Fluncle video queue") fires hourly on the Mac, films exactly the oldest queued finding end to end with the `fluncle-video` skill, then stops (queue-gated, one finding per tick; a no-op when the queue is empty or the laptop's asleep). The backlog is essentially full — 25 of 26 findings have a clip.
+- **Publishing** — driven from the board: YouTube Shorts hands-off (title + caption + `cover.jpg` thumbnail via the API), TikTok as a drafted inbox post the operator finishes in-app. The in-app sound/cover/schedule flow and the ≤ 5-drafts/24h TikTok cadence live in the `fluncle-publish` skill.
 
-The operator runs the whole show from `/admin`, but the stages live on separate screens with different chrome (`/admin/tag` is full-bleed, `/admin/posts` is a centered box — that inconsistency is the first thing to kill). The unblock is one **pipeline view**: every finding a row, its **stage derived from its own columns**, so `/admin` reads as a todo — what's done, what's next, what's stuck — on the desktop and on the phone where the TikTok finish happens.
-
-The stages, each derivable from data already stored (no new state):
-
-1. **Added** — on the Spotify playlist + Telegram (the synchronous add).
-2. **Enriched** — `enrichmentStatus` (`pending` → `processing` → `done` / `failed`); the Spinup agent's `admin track update`.
-3. **Tagged** — `vibe_x`/`vibe_y` placed (manual; the galaxy is derived). Stays a human step until the vibe-placement model lands.
-4. **Filmed** — `videoUrl` set (render → R2; soon hands-off, see below).
-5. **YouTube** — the `social_posts` YouTube row (one-tap public upload, no manual finish).
-6. **TikTok** — the `social_posts` TikTok row (the in-app finish: licensed audio, the pasted caption, the cover photo).
-
-The public surfaces — web, the game, `ssh rave.fluncle.com`, `fluncle recent`, RSS — carry no stage; they reflect Turso the instant a track lands. The pipeline only tracks the operator's manual + async steps between add and published.
-
-Slice (web-only; independent of the render + playback slices):
-
-- **A derived stage model** (server): one `trackStage(track) → { stage, blockedOn }`, reused by the board and the worklists. Pure + tested.
-- **One responsive admin shell.** Unify `/admin/tag` and `/admin/posts` under shared chrome / width / nav (Shadcn, the DESIGN.md dark cosmos, WCAG AA, reduced-motion). Desktop-first, but the TikTok publish row must be thumb-usable on iOS glass.
-- **Stage worklists.** Filter/group the board by stage — "needs tagging", "needs a video", "ready for YouTube", "ready for TikTok" — so each stage is a one-screen todo. `/admin/posts` (the publish stages) folds in; `/admin/tag` keeps its focused placement loop but shares the shell.
-
-### The content backlog
-
-Render a stack of videos so there's a schedulable backlog on TikTok: breathing room to roll out features without the feed going quiet. Uses the built local loop end-to-end — the render step is being automated (see "Hands-off rendering" below).
-
-- Find every track with no video, oldest first (`fluncle admin queue --json`) — the render queue.
-- Render a **diverse** batch — spread vehicles via the ledger and assign a distinct visual family per render (parallel renders converge on a shared attractor; broaden refs, don't let them).
-- Per track: `ship --vehicle` → `fluncle admin track video` (R2, incl. `cover.jpg`) → `fluncle admin track draft` (TikTok inbox).
-- The operator finishes each by hand in the app — paste caption (`note.txt`), add the official sound, set the cover, schedule. The backlog is a queue of ready inbox drafts to space out over days. Drive it from the **`/admin` board**: per-platform status, push/re-push, copy-caption, mark published/failed, and asset downloads (cover + cuts) for AirDrop — built to use one-handed on a phone.
-- **Hard cap: ≤ 5 inbox drafts per 24h (TikTok-side).** TikTok rejects the 6th pending (`SELF_ONLY`) post in any rolling 24-hour window; the failure is asynchronous (the CLI + Postiz report success, TikTok bounces it downstream, surfaced only as a Postiz error). So draft at most 5/day, push the rest on following days, and re-push any that bounced after 24h. Unpublished drafts sitting in the inbox count against the budget — the operator publishing/clearing them frees it. (Full detail in the `fluncle-publish` skill.)
-- **YouTube Shorts runs alongside (live, no manual finish, no daily cap).** The same finding posts to YouTube as a direct public Short — title + caption + `cover.jpg` thumbnail all carry through the API, so it goes up hands-off (one tap on the board, or `--platform youtube`). A second distribution surface for the same backlog; only TikTok needs the in-app finish + the 5/24h ceiling. (Content ID typically _claims_ short clips — they stay up, the rights holder monetizes — accepted; reach over revenue.)
-
-### Hands-off rendering — a Superset Automation on the laptop
-
-The render step (fluncle-video + Remotion + R2) is too heavyweight for Spinup right now, so automate it where the GPU already is: an hourly **Superset Automation** on the MacBook. Superset automations are schedule-driven agent sessions (an RRule, e.g. `FREQ=HOURLY`) that fire on a designated device and silently mark `skipped_offline` when the laptop is asleep — exactly the "run it when my machine is on, otherwise no-op" shape, no server to pay for and the M-series GPU put to work in the background.
-
-The automation runs a Claude (opus-4.8) prompt, not a raw script — and because Superset delivery is at-least-once, the prompt must be idempotent, which `admin queue` makes trivial: "Run `fluncle admin queue --json`; if a finding has no video, render + upload one with the `@fluncle-video` skill, then stop; if the queue is empty, stop." Queue-gated, so an empty queue is a clean no-op and a busy queue advances the backlog one finding per tick. Define it with `superset automations create --rrule "FREQ=HOURLY" --agent claude --prompt-file <prompt>` (model set under Settings → Agents).
-
-Slice (a Superset automation + a committed prompt file; leans on the existing `fluncle-video` skill and `admin queue`; no web changes). This is the near-term answer to the capstone's render step — the server-side Spinup render profile stays deferred (see "TikTok auto-pipeline" in Later).
+What's left of the loop is ongoing operation, not build work. The fully-autonomous, server-side version — chaining enrich → render → publish without the laptop in the loop — lives in **Later → TikTok auto-pipeline**.
 
 ## Next — surface what we make, and tidy reliability
 
