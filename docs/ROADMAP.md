@@ -6,16 +6,6 @@ Forward-facing, roughly prioritized list of open work — what we pick from next
 
 The active push: keep findings flowing from add → live on TikTok + YouTube, with one operator cockpit that shows every stage and the heavy render step automated on the laptop. Three slices that parallelize cleanly — the **pipeline board** (web admin), **hands-off rendering** (a Superset automation), and the **manual backlog** itself (ops).
 
-### Immediate — finish the re-film pass
-
-The near-term punch-list, roughly in order:
-
-1. **Ship the 4 finished re-films.** `012.1.0A` (liquid chrome), `005.9.9L` (refraction caustic pool), `011.2.1Z` (magma), `011.1.6E` (helix) are rendered, gate-passing, and operator-approved in `packages/video/out/`. For each: `ship.ts <id>` → `fluncle admin track video` (run sandbox-disabled — the Bash sandbox throttles the upload), then purge the Cloudflare cache for the footage / footage-silent / poster / cover URLs.
-2. **Re-render `004.1.9E`.** The style is a keeper — preserve it, but smooth the animation on the refined doctrine (Motion law: motion on smoothed signals only; one continuous evolution; verify the glide by eye, not the gate number).
-3. **Re-render `011.1.3X` + `012.2.4L`.** Both still off: `011.1.3X` has a fast texture-glitch plus an elastic jitter in the flow (its 0.23 gate was honest); `012.2.4L`'s caustic-glide pass went too plain/dark. Their renders are parked in `out/` to riff from.
-
-Shipped: the tag grid is now editable — each placed dot's hover card carries play + a pencil that promotes it to the active draggable marker with a pinned save-card; saving reverts to the track you were placing, so the field is always re-balanceable.
-
 ### The pipeline board — every finding's stage at a glance
 
 The operator runs the whole show from `/admin`, but the stages live on separate screens with different chrome (`/admin/tag` is full-bleed, `/admin/posts` is a centered box — that inconsistency is the first thing to kill). The unblock is one **pipeline view**: every finding a row, its **stage derived from its own columns**, so `/admin` reads as a todo — what's done, what's next, what's stuck — on the desktop and on the phone where the TikTok finish happens.
@@ -78,14 +68,13 @@ Shipped (PR #6): enrichment stores the exact official 30s preview used for the f
 
 On standby — most relevant during the content backlog. The video is beat-matched to a Deezer/iTunes 30s preview (a fixed mid-song segment); TikTok's attachable sound is usually — not always — the song's first ~60s, trimmable to any start within the span it exposes. When the preview segment isn't reachable there and the track has no obvious section to line up by ear, the visuals pulse to beats that aren't playing. **Stage 0 (now):** by-ear line-up. **Stage 1 (on break):** full-track audio for analysis only via Apify `apidojo/youtube-scraper` (stream URL → ffmpeg → analyze → discard, never stored or served). **Stage 2:** pick the best ~20s window inside the first ~55s, render to it, write the absolute start offset into `render.json` + surface it ("start the sound at 0:42"). Audio policy: YouTube audio is internal-analysis-only; published audio uses official previews. AcousticBrainz-by-ISRC is frozen (~2022/24), so it is not a BPM fallback for new tracks.
 
-### Re-render oversized clips, then optimize web playback
+### Optimize web playback (clips are all transform-eligible now)
 
-Two linked steps; the second depends on the first.
+Re-rendering the oversized clips is **done** — every R2 footage file, with-audio and silent, is under Cloudflare's 100 MB transform ceiling (verified 2026-06-17; largest ~95 MB, a few sit close so watch the pipeline's CRF doesn't drift back up). The core playback layer also shipped: `apps/web/src/lib/media.ts` serves same-zone Media Transformation renditions (a 360/480/720/1080 width ladder via `videoRendition`) + a cheap `mode=frame` poster (`videoPoster`), with a one-shot `onError` fallback to the raw master.
 
-- **Re-render the >100 MB clips.** Cloudflare's media-transformation APIs only touch assets **under 100 MB**; the higher-CRF render pass now lands comfortably below that, but some early videos in R2 are still too big. Re-render those findings with the current pipeline and replace them in the `fluncle-videos` bucket at the same `<log-id>/footage.mp4` keys, so every clip becomes transform-eligible. (Same tooling as the content-backlog render loop, different target — re-film existing oversized videos vs film missing ones — so it can ride the same Superset automation or run as a one-off batch.)
-- **Then optimize how fluncle.com loads clips.** With every asset under the limit, lean on Cloudflare media transforms + streaming: responsive sizes, a cheap poster/first-frame, lazy-load below the fold, and HLS/range streaming for the Stories player instead of whole-file fetches. Measure before/after on a real mobile connection.
+What's left is playback polish on `apps/web` (the feed + Stories player): lazy-load clips below the fold, range/HLS streaming for the Stories player instead of whole-file fetches, and a real before/after measurement on a mobile connection.
 
-Slice: step 1 is video-pipeline + R2 ops (no web code); step 2 is `apps/web` (the feed + Stories player) and waits on step 1.
+Re-ship caveat (for the content-backlog loop too): replacing a clip at the same `<log-id>/footage.mp4` key needs the transform renditions purged, not just the master — they cache under separate keys, and purge propagation lags per-colo (the `mode=frame` poster clears slower than the `mode=video` rendition, so check from the affected location before assuming it's stuck). To force an instant flip, version the transform source in `media.ts` (`?v=N` on the `footage.mp4` source).
 
 ## Later — the bigger arcs
 
