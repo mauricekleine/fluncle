@@ -51,10 +51,13 @@ function logIndexHead(loaderData: TrackListPage | undefined) {
   };
 }
 
+// Route options follow TanStack's create-route-property-order (each step feeds the
+// next's inferred types), which isn't alphabetical — so sort-keys is off here.
+// oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/log/")({
-  component: LogIndexPage,
-  head: ({ loaderData }: { loaderData?: TrackListPage }) => logIndexHead(loaderData),
   loader: () => fetchLog(),
+  head: ({ loaderData }: { loaderData?: TrackListPage }) => logIndexHead(loaderData),
+  component: LogIndexPage,
 });
 
 function LogIndexPage() {

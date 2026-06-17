@@ -72,10 +72,14 @@ export function PushDialog({
   const [url, setUrl] = useState("");
   const post = row && platform ? row.posts.find((p) => p.platform === platform.key) : undefined;
 
-  // Seed the URL field from any recorded live URL whenever the target changes.
+  // Re-seed the URL field on every target change (platform + finding) and on close
+  // — NOT just when the recorded url value changes. Keying on `post?.url` alone
+  // leaks an unsaved edit into the next dialog when both posts share the same url
+  // (e.g. both have none): the effect never re-runs, so the typed-but-unsaved text
+  // carries over. The identity deps reset it (platform/trackId go null on close).
   useEffect(() => {
     setUrl(post?.url ?? "");
-  }, [post?.url]);
+  }, [platform?.key, row?.trackId, post?.url]);
 
   const open = Boolean(row && platform);
   const pushed = Boolean(post && post.status !== "failed");

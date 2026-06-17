@@ -82,8 +82,18 @@ const fetchHomeData = createServerFn({ method: "GET" }).handler(async () => {
   return { ...page, newestStoryLogId: latestStory.tracks[0]?.logId };
 });
 
+// Route options follow TanStack's create-route-property-order (each step feeds the
+// next's inferred types), which isn't alphabetical — so sort-keys is off here.
+// oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/")({
-  component: HomePage,
+  validateSearch: (search: Record<string, unknown>): HomeSearch => ({
+    story: typeof search.story === "string" && search.story.length > 0 ? search.story : undefined,
+  }),
+  loader: () => fetchHomeData(),
+  // Opening/closing the Stories dialog is a search-param change on this same
+  // route; the feed's loader must not re-run per open (a reload would remount
+  // the list and lose the scroll the dialog is supposed to preserve).
+  shouldReload: false,
   head: ({ loaderData }) => ({
     // The self-referencing canonical lives on each leaf: TanStack merges the
     // root's and the leaf's `links` without deduping by rel, so a canonical in
@@ -128,14 +138,7 @@ export const Route = createFileRoute("/")({
       },
     ],
   }),
-  loader: () => fetchHomeData(),
-  // Opening/closing the Stories dialog is a search-param change on this same
-  // route; the feed's loader must not re-run per open (a reload would remount
-  // the list and lose the scroll the dialog is supposed to preserve).
-  shouldReload: false,
-  validateSearch: (search: Record<string, unknown>): HomeSearch => ({
-    story: typeof search.story === "string" && search.story.length > 0 ? search.story : undefined,
-  }),
+  component: HomePage,
 });
 
 function HomePage() {

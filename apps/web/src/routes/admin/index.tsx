@@ -158,18 +158,21 @@ const triggerEnrichmentFn = createServerFn({ method: "POST" })
 
 type BoardSearch = { stage: Worklist };
 
+// Route options follow TanStack's create-route-property-order (each step feeds the
+// next's inferred types), which isn't alphabetical — so sort-keys is off here.
+// oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/admin/")({
-  beforeLoad: async () => {
-    await ensureAdmin();
-  },
-  component: AdminBoardPage,
-  loader: async () => fetchBoard({ data: {} }),
   validateSearch: (search: Record<string, unknown>): BoardSearch => ({
     stage:
       typeof search.stage === "string" && WORKLIST_KEYS.has(search.stage as Worklist)
         ? (search.stage as Worklist)
         : "all",
   }),
+  beforeLoad: async () => {
+    await ensureAdmin();
+  },
+  loader: async () => fetchBoard({ data: {} }),
+  component: AdminBoardPage,
 });
 
 function AdminBoardPage() {
@@ -765,22 +768,31 @@ function PublishStageCell({
 }) {
   const post = row.posts.find((entry) => entry.platform === platform.key);
   const status = post?.status;
+  // The live public URL is the last step of the circuit: YouTube auto-publishes but
+  // records no URL, and TikTok is finished in-app — both land "published" with the
+  // link still missing. That's a PARTIAL (open circuit, dashed), not done; only a
+  // recorded URL closes the cell. Click the partial to paste the live URL.
+  const hasLiveUrl = Boolean(post?.url);
   const state: StageState =
     status === "published"
-      ? "done"
+      ? hasLiveUrl
+        ? "done"
+        : "partial"
       : status === "draft" || status === "scheduled"
         ? "partial"
         : "open";
   const label =
-    state === "done"
-      ? "Live"
-      : state === "partial"
-        ? status === "scheduled"
-          ? "Scheduled"
-          : "Drafted"
-        : status === "failed"
-          ? "Retry"
-          : "Push";
+    status === "published"
+      ? hasLiveUrl
+        ? "Live"
+        : "Add link"
+      : status === "scheduled"
+        ? "Scheduled"
+        : status === "draft"
+          ? "Drafted"
+          : status === "failed"
+            ? "Retry"
+            : "Push";
 
   return (
     <StageCell

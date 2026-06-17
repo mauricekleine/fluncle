@@ -96,6 +96,9 @@ function logHead(loaderData: LogPageData | undefined) {
   };
 }
 
+// Route options follow TanStack's create-route-property-order (each step feeds the
+// next's inferred types), which isn't alphabetical — so sort-keys is off here.
+// oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/log/$logId")({
   // Shape-guard BEFORE the loader: anything that is neither a coordinate nor a
   // Spotify track id (the legacy deep-link form) is a 404, no DB roundtrip.
@@ -104,8 +107,6 @@ export const Route = createFileRoute("/log/$logId")({
       throw notFound();
     }
   },
-  component: LogPage,
-  head: ({ loaderData }: { loaderData?: LogPageData }) => logHead(loaderData),
   loader: async ({ params }): Promise<LogPageData> => {
     const data = await fetchLogPage({ data: { logId: params.logId } });
 
@@ -123,6 +124,8 @@ export const Route = createFileRoute("/log/$logId")({
 
     return data;
   },
+  head: ({ loaderData }: { loaderData?: LogPageData }) => logHead(loaderData),
+  component: LogPage,
   notFoundComponent: StoryNotFoundState,
 });
 
