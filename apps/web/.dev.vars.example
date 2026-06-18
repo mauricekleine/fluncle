@@ -1,5 +1,10 @@
 FLUNCLE_API_TOKEN=
 
+# Admin allow-list for "Login with Spotify" (the operator identity). Comma-separated.
+# ADMIN_ALLOWED_EMAILS is required; ADMIN_ALLOWED_SPOTIFY_IDS is optional (exact match).
+ADMIN_ALLOWED_EMAILS=
+ADMIN_ALLOWED_SPOTIFY_IDS=
+
 FIRECRAWL_API_KEY=
 
 POSTIZ_API_KEY=

@@ -1,3 +1,5 @@
+import { ApiError } from "./spotify";
+
 export async function withRetries<T>(
   label: string,
   fn: () => Promise<T>,
@@ -10,6 +12,13 @@ export async function withRetries<T>(
       return await fn();
     } catch (error) {
       lastError = error;
+
+      // ApiError is a deterministic app-level failure (bad input, expired auth) —
+      // retrying can't change the outcome, so surface it at once and keep its type
+      // and code intact for the caller to branch on.
+      if (error instanceof ApiError) {
+        throw error;
+      }
 
       if (attempt < attempts) {
         await new Promise((resolve) => setTimeout(resolve, 500 * attempt));

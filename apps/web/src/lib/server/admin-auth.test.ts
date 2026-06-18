@@ -103,18 +103,25 @@ describe("requireAdmin accepts either carrier (one identity, two carriers)", () 
   });
 });
 
-describe("isAllowedSpotifyUser (the one-operator allow-list)", () => {
-  it("allows the operator by email, case-insensitively", () => {
-    expect(isAllowedSpotifyUser({ email: "kleine.m.r@gmail.com", id: "anything" })).toBe(true);
-    expect(isAllowedSpotifyUser({ email: "Kleine.M.R@Gmail.com", id: "anything" })).toBe(true);
+describe("isAllowedSpotifyUser (the operator allow-list, from env)", () => {
+  // Synthetic values — the real operator identity lives only in the deployed
+  // env, never in the repo. dotenv won't override these already-set vars.
+  beforeAll(() => {
+    process.env.ADMIN_ALLOWED_EMAILS = "operator@example.com";
+    process.env.ADMIN_ALLOWED_SPOTIFY_IDS = "test_operator";
   });
 
-  it("allows the operator by Spotify id even without an email", () => {
-    expect(isAllowedSpotifyUser({ id: "berry_fudge" })).toBe(true);
+  it("allows the operator by email, case-insensitively", async () => {
+    expect(await isAllowedSpotifyUser({ email: "operator@example.com", id: "x" })).toBe(true);
+    expect(await isAllowedSpotifyUser({ email: "Operator@Example.com", id: "x" })).toBe(true);
   });
 
-  it("rejects anyone else", () => {
-    expect(isAllowedSpotifyUser({ email: "someone@else.com", id: "rando" })).toBe(false);
-    expect(isAllowedSpotifyUser({ id: "rando" })).toBe(false);
+  it("allows the operator by Spotify id even without an email", async () => {
+    expect(await isAllowedSpotifyUser({ id: "test_operator" })).toBe(true);
+  });
+
+  it("rejects anyone else", async () => {
+    expect(await isAllowedSpotifyUser({ email: "someone@else.com", id: "rando" })).toBe(false);
+    expect(await isAllowedSpotifyUser({ id: "rando" })).toBe(false);
   });
 });

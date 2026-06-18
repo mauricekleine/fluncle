@@ -77,7 +77,6 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - [docs/galaxy-sprites.md](./docs/galaxy-sprites.md) - how the Galaxy game's 8-bit sprite + audio assets are made: the canon ramp, the Nano-Banana (Gemini) workflow, the procedural-fallback contract, and the amen placeholder.
 - [docs/enrichment-agent.md](./docs/enrichment-agent.md) - thin bootstrap for the async track agent (the enrich → video → publish chain; runs locally or on Spinup; tools + safety rails); its full constitution is the fluncle-track-enrichment skill at [packages/skills/fluncle-track-enrichment](./packages/skills/fluncle-track-enrichment). Video render is a separate capability whose doctrine is the fluncle-video skill at [packages/skills/fluncle-video](./packages/skills/fluncle-video); publishing rendered videos to social platforms as drafts is the fluncle-publish skill at [packages/skills/fluncle-publish](./packages/skills/fluncle-publish).
 - [docs/socials/](./docs/socials/) - the map of social accounts, owned channels, profile assets, bio conventions, and the generated banners.
-- [docs/providers.md](./docs/providers.md) - ledger of third-party providers we pay for or depend on: purpose, plan/cost, account, and billing (no secrets — keys live in 1Password).
 
 ## Architecture
 

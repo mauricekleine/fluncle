@@ -35,7 +35,7 @@ The four quadrants are the four galaxies (the galaxy is _derived_ from the coord
 
 Auth is **one identity, two carriers**: the CLI/agent send `FLUNCLE_API_TOKEN` as a `Bearer` header; the browser carries a signed grant **cookie** (`{ role: "admin" }` HMAC'd with the same token — the token is the signing key, never the cookie value). `requireAdmin` accepts either.
 
-The browser proves identity with **Login with Spotify**, allow-listed to the operator account (email `kleine.m.r@gmail.com`, or Spotify id `berry_fudge` — see `admin-auth.ts`). The login reuses the Spotify app's already-registered redirect URI (`/api/admin/spotify/auth/callback`, which branches on `state.purpose`); it exchanges the code only to read `/v1/me` and **discards the tokens** — it never touches the publish refresh token in `spotify_auth`. On success it sets the grant cookie (`Path=/`, 30-day window) and redirects to `/admin`. The gate is active in dev too (just without `Secure` on localhost).
+The browser proves identity with **Login with Spotify**, allow-listed to the operator account (the allow-list lives in `admin-auth.ts`). The login reuses the Spotify app's already-registered redirect URI (`/api/admin/spotify/auth/callback`, which branches on `state.purpose`); it exchanges the code only to read `/v1/me` and **discards the tokens** — it never touches the publish refresh token in `spotify_auth`. On success it sets the grant cookie (`Path=/`, 30-day window) and redirects to `/admin`. The gate is active in dev too (just without `Secure` on localhost).
 
 ## Data model & what's next
 

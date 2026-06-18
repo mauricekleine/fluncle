@@ -18,18 +18,30 @@ const cliExamples = [
   { command: "fluncle submit", description: "Send a track for review" },
 ];
 
-export function CliInstallDialog() {
+// Defaults to the mono `cli-link` trigger ("install CLI" + icon); pass `label` +
+// `className` to render it as a plain text link instead (the home link hub uses
+// a short "CLI" label styled like the other footer links).
+export function CliInstallDialog({
+  className,
+  label,
+}: { className?: string; label?: string } = {}) {
   return (
     <Dialog>
-      <DialogTrigger className="cli-link">
-        <DownloadSimpleIcon aria-hidden="true" size={14} weight="bold" />
-        <span
-          style={{
-            transform: "translateY(1px)",
-          }}
-        >
-          install CLI
-        </span>
+      <DialogTrigger className={className ?? "cli-link"}>
+        {label ? (
+          label
+        ) : (
+          <>
+            <DownloadSimpleIcon aria-hidden="true" size={14} weight="bold" />
+            <span
+              style={{
+                transform: "translateY(1px)",
+              }}
+            >
+              install CLI
+            </span>
+          </>
+        )}
       </DialogTrigger>
       <DialogContent className="sm:max-w-[32rem]">
         <DialogHeader>

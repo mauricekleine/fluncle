@@ -55,6 +55,40 @@ type SpotifyAuthRow = {
   expires_at: string;
 };
 
+// The ApiError code for "the stored Spotify authorization is gone — an operator
+// must reconnect". Callers (the search route, publish) branch on this to show the
+// reconnect affordance instead of a generic failure.
+export const SPOTIFY_REAUTH_REQUIRED = "spotify_reauth_required";
+
+// Spotify ages user refresh tokens out six months after issue (announced for
+// 2026-07-20). We flag a token as stale well before that so the operator can
+// reconnect on their own schedule rather than mid-publish. The clock is the
+// stored row's last write — every successful refresh rewrites it, so this tracks
+// the freshest token Spotify has handed us, not necessarily its true issue date.
+const spotifyTokenStaleDays = 150;
+
+export type SpotifyAuthStatus = {
+  /** A row exists in spotify_auth (cleared the moment a refresh hits invalid_grant). */
+  connected: boolean;
+  /** Days since the stored token was last written; undefined when disconnected. */
+  ageDays?: number;
+  /** Connected but old enough to warrant a proactive reconnect. */
+  stale: boolean;
+};
+
+// A typed token-endpoint failure carrying Spotify's machine-readable error code
+// (e.g. "invalid_grant" when a refresh token has expired or been revoked), so the
+// refresh path can tell "reconnect needed" apart from a transient outage.
+class SpotifyTokenError extends Error {
+  spotifyError?: string;
+
+  constructor(message: string, spotifyError?: string) {
+    super(message);
+    this.name = "SpotifyTokenError";
+    this.spotifyError = spotifyError;
+  }
+}
+
 export type TrackMetadata = {
   trackId: string;
   spotifyUrl: string;
@@ -308,15 +342,69 @@ async function getSpotifyAccessToken(): Promise<string> {
     return auth.access_token;
   }
 
-  const data = await requestToken({
-    grant_type: "refresh_token",
-    refresh_token: auth.refresh_token,
-  });
+  let data: SpotifyTokenResponse;
+
+  try {
+    data = await requestToken({
+      grant_type: "refresh_token",
+      refresh_token: auth.refresh_token,
+    });
+  } catch (error) {
+    // A six-month-old refresh token ages out (Spotify, from 2026-07-20) or is
+    // revoked: the token endpoint answers 400 invalid_grant. Spotify's guidance
+    // is to discard the dead token rather than retry it, then send the operator
+    // back through sign-in. We drop the row and surface a reconnect signal; the
+    // next /admin focus reads "disconnected" and shows Reconnect Spotify.
+    if (error instanceof SpotifyTokenError && error.spotifyError === "invalid_grant") {
+      await clearSpotifyAuth();
+
+      throw new ApiError(
+        SPOTIFY_REAUTH_REQUIRED,
+        "Spotify needs reconnecting — its saved authorization expired. Reconnect from the board.",
+        401,
+      );
+    }
+
+    throw error;
+  }
 
   const refreshToken = data.refresh_token ?? auth.refresh_token;
   await upsertSpotifyAuth(data.access_token, refreshToken, data.expires_in, data.scope);
 
   return data.access_token;
+}
+
+// The board's connection light — read-only, no refresh side effect. A missing row
+// means "reconnect" (we clear it on invalid_grant); a present row reports its age
+// so the operator gets a heads-up before the six-month expiry, not a surprise.
+export async function getSpotifyAuthStatus(): Promise<SpotifyAuthStatus> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: ["spotify"],
+    sql: `select updated_at from spotify_auth where service = ? limit 1`,
+  });
+  const row = typedRow<{ updated_at: string }>(result.rows);
+
+  if (!row) {
+    return { connected: false, stale: false };
+  }
+
+  const ageDays = Math.floor((Date.now() - new Date(row.updated_at).getTime()) / 86_400_000);
+
+  return {
+    ageDays,
+    connected: true,
+    stale: ageDays >= spotifyTokenStaleDays,
+  };
+}
+
+async function clearSpotifyAuth(): Promise<void> {
+  const db = await getDb();
+
+  await db.execute({
+    args: ["spotify"],
+    sql: `delete from spotify_auth where service = ?`,
+  });
 }
 
 async function requestToken(params: Record<string, string>): Promise<SpotifyTokenResponse> {
@@ -331,10 +419,31 @@ async function requestToken(params: Record<string, string>): Promise<SpotifyToke
   });
 
   if (!response.ok) {
-    throw new Error(await readApiError(response, "Spotify token request failed"));
+    const body = await response.text();
+    const detail = body
+      ? `${response.status} ${response.statusText} - ${body}`
+      : `${response.status} ${response.statusText}`;
+
+    throw new SpotifyTokenError(`Spotify token request failed: ${detail}`, parseTokenError(body));
   }
 
   return (await response.json()) as SpotifyTokenResponse;
+}
+
+// The token endpoint reports failures as { error: "invalid_grant", ... }. Pull
+// that machine-readable code out so the refresh path can act on it.
+function parseTokenError(body: string): string | undefined {
+  if (!body) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(body) as { error?: unknown };
+
+    return typeof parsed.error === "string" ? parsed.error : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function upsertSpotifyAuth(

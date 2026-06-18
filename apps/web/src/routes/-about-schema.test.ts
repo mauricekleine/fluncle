@@ -30,6 +30,8 @@ describe("/about schema", () => {
         expect.stringContaining("instagram.com/fluncle"),
         expect.stringContaining("youtube.com/@fluncle"),
         expect.stringContaining("mixcloud.com/fluncle"),
+        expect.stringContaining("soundcloud.com/fluncle"),
+        expect.stringContaining("twitch.tv/flunclelive"),
         expect.stringContaining("musicbrainz.org/artist/"),
         expect.stringContaining("wikidata.org/wiki/Q140169844"),
       ]),

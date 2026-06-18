@@ -31,6 +31,7 @@ import { isAdminRequest } from "@/lib/server/admin-auth";
 import { readCaptions } from "@/lib/server/captions";
 import { listSocialPostsForTracks } from "@/lib/server/social";
 import { triggerEnrichment } from "@/lib/server/spinup";
+import { getSpotifyAuthStatus, type SpotifyAuthStatus } from "@/lib/server/spotify";
 import { type BlockedOn, trackStage } from "@/lib/server/track-stage";
 import { decodeTrackCursor, listTracks, listVibePoints, type VibePoint } from "@/lib/server/tracks";
 import { cn } from "@/lib/utils";
@@ -59,6 +60,8 @@ const PAGE_SIZE = 50;
 const BOARD_KEY = ["admin", "posts", "board"] as const;
 // The placed-findings cache for the Tag dialog's map backdrop.
 const POINTS_KEY = ["admin", "tag", "points"] as const;
+// The Spotify connection-status cache for the reconnect banner.
+const SPOTIFY_STATUS_KEY = ["admin", "spotify", "status"] as const;
 
 // The two publish platforms, in pipeline order (YouTube posts public directly,
 // TikTok lands as a draft you finish in-app). PLATFORMS is keyed the other way for
@@ -135,6 +138,19 @@ const fetchCaption = createServerFn({ method: "GET" })
 
     return { caption: captions[data.logId] ?? "" };
   });
+
+// The Spotify connection light. Read-only (no token refresh) and focus-refetched,
+// so the moment a publish/search trips invalid_grant and clears the stored token,
+// tabbing back to the board surfaces the Reconnect banner. See spotify.ts.
+const fetchSpotifyStatus = createServerFn({ method: "GET" }).handler(
+  async (): Promise<SpotifyAuthStatus> => {
+    if (!(await isAdminRequest())) {
+      throw redirect({ to: "/admin/login" });
+    }
+
+    return getSpotifyAuthStatus();
+  },
+);
 
 // The placed-findings backdrop for the Tag dialog's map — lazily fetched the first
 // time a Tag cell is opened (no preload), then cached + focus-refetched.
@@ -337,6 +353,33 @@ function AdminBoardPage() {
     [markCopied, setError],
   );
 
+  // The Spotify connection light — polled on focus so an expired authorization
+  // (cleared server-side on invalid_grant) surfaces the moment the operator tabs
+  // back. Reconnecting hands the browser to the gated auth-start, which returns the
+  // Spotify authorize URL; the callback lands back on the board.
+  const { data: spotifyStatus } = useQuery({
+    queryFn: fetchSpotifyStatus,
+    queryKey: SPOTIFY_STATUS_KEY,
+    refetchOnWindowFocus: true,
+  });
+
+  const reconnectSpotify = useCallback(async () => {
+    setError(undefined);
+
+    try {
+      const response = await fetch("/api/admin/spotify/auth/start", { credentials: "same-origin" });
+      const data = (await response.json()) as { authUrl?: string };
+
+      if (!response.ok || !data.authUrl) {
+        throw new Error("Couldn't start the Spotify reconnect.");
+      }
+
+      window.location.href = data.authUrl;
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, [setError]);
+
   // The Tag dialog's map backdrop — fetched on first open, then cached.
   const { data: points = [] } = useQuery({
     enabled: tagId !== undefined,
@@ -536,6 +579,7 @@ function AdminBoardPage() {
 
   const subheader = (
     <>
+      <SpotifyStatusBanner onReconnect={() => void reconnectSpotify()} status={spotifyStatus} />
       <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-4 py-2.5 sm:px-5">
         {WORKLISTS.map((worklist) => {
           const isActive = worklist.key === activeWorklist;
@@ -726,6 +770,44 @@ function AdminBoardPage() {
         </DialogContent>
       </Dialog>
     </AdminShell>
+  );
+}
+
+// The Spotify connection banner — shown only when there's something to act on:
+// disconnected (the stored authorization is gone, so search + publishing are
+// paused) or stale (still working, but old enough to reconnect before the
+// six-month expiry). A quiet strip under the header with one Reconnect action.
+function SpotifyStatusBanner({
+  onReconnect,
+  status,
+}: {
+  onReconnect: () => void;
+  status?: SpotifyAuthStatus;
+}) {
+  if (!status || (status.connected && !status.stale)) {
+    return null;
+  }
+
+  const disconnected = !status.connected;
+
+  return (
+    <div
+      className={cn(
+        "flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2 text-sm sm:px-5",
+        disconnected
+          ? "border-destructive/30 bg-destructive/10 text-destructive"
+          : "border-primary/30 bg-primary/10 text-primary",
+      )}
+    >
+      <span>
+        {disconnected
+          ? "Spotify isn’t connected — search and publishing are paused until you reconnect."
+          : `Spotify authorization is ${status.ageDays} days old and will expire — reconnect to avoid disruption.`}
+      </span>
+      <Button onClick={onReconnect} size="sm" variant={disconnected ? "destructive" : "secondary"}>
+        Reconnect Spotify
+      </Button>
+    </div>
   );
 }
 

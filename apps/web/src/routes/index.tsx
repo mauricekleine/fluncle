@@ -10,57 +10,19 @@ import {
 import { createServerFn } from "@tanstack/react-start";
 import { colors } from "@fluncle/tokens";
 import { useCallback, useEffect, useRef } from "react";
-import {
-  siGithub,
-  siInstagram,
-  siMixcloud,
-  siSpotify,
-  siTelegram,
-  siTiktok,
-  siX,
-  siYoutube,
-} from "simple-icons";
-import { BrandIcon } from "@/components/brand-icon";
-import { CliInstallDialog } from "@/components/cli-install-dialog";
-import { McpConnectDialog } from "@/components/mcp-connect-dialog";
+import { HomeLinkHub } from "@/components/home/link-hub";
 import { RandomBangerDialog } from "@/components/random-banger-dialog";
 import { StoriesDialog } from "@/components/stories/stories-dialog";
-import { SubmitTrackDialog } from "@/components/submit-track-dialog";
-import { SubscribeDialog } from "@/components/subscribe-dialog";
-import { TerminalRaversDialog } from "@/components/terminal-ravers-dialog";
 import { TrackRow } from "@/components/track-row";
-import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  galaxyUrl,
-  instagramUrl,
-  mixcloudUrl,
-  repoUrl,
-  siteUrl,
-  spotifyPlaylistUrl,
-  telegramUrl,
-  tiktokUrl,
-  xUrl,
-  youtubeUrl,
-} from "@/lib/fluncle-links";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { siteUrl, spotifyPlaylistUrl, telegramUrl } from "@/lib/fluncle-links";
 import { fluncleAsciiLogo, fluncleDescription } from "@/lib/identity";
 import { listTracks } from "@/lib/server/tracks";
 import { fetchTracks, type TracksResponse } from "@/lib/tracks";
 import { registerWebMcpTools } from "@/lib/webmcp";
 
 const pageSize = 10;
-
-// Fluncle off-site, alphabetical (docs/socials/). The quiet ghost row under the
-// nerds field; Spotify stays the Playlist button, so it's not duplicated here.
-const socialLinks = [
-  { href: instagramUrl, icon: siInstagram, label: "Fluncle on Instagram" },
-  { href: mixcloudUrl, icon: siMixcloud, label: "Fluncle on Mixcloud" },
-  { href: telegramUrl, icon: siTelegram, label: "Fluncle on Telegram" },
-  { href: tiktokUrl, icon: siTiktok, label: "Fluncle on TikTok" },
-  { href: xUrl, icon: siX, label: "DM me on X" },
-  { href: youtubeUrl, icon: siYoutube, label: "Fluncle on YouTube" },
-];
 
 type HomeSearch = {
   /** The Log ID of the story open in the dialog (masked to /log/<id>). */
@@ -329,119 +291,9 @@ function HomePage() {
                   {coverArt}
                 </Link>
               )}
-              {/* The hero CTA: fly into the Galaxy game. The one gold primary on
-                  the plate (One Sun), so Playlist/Telegram drop to outline. The
-                  icon is the game's own Earth sprite, kept crisp (pixelated) —
-                  it reads on the gold where the yellow-ish ship didn't. */}
-              <Button
-                className="mt-5 w-full"
-                nativeButton={false}
-                render={<a href={galaxyUrl} />}
-                size="lg"
-              >
-                <img
-                  alt=""
-                  aria-hidden="true"
-                  className="size-5 [image-rendering:pixelated]"
-                  src="/galaxy/earth.png"
-                />
-                Enter Fluncle's Galaxy
-              </Button>
-              {/* The two quiet companions to the Galaxy CTA: the playlist (the
-                  product artifact) and the Friday newsletter, in place of the
-                  old Telegram button — Telegram drops to the social row below. */}
-              <div className="mt-3 flex items-center justify-center gap-2 lg:justify-start">
-                <Button
-                  className="flex-1"
-                  nativeButton={false}
-                  render={<a href={spotifyPlaylistUrl} rel="noreferrer" target="_blank" />}
-                  size="lg"
-                  variant="outline"
-                >
-                  <BrandIcon icon={siSpotify} />
-                  Playlist
-                </Button>
-                <SubscribeDialog className="flex-1" label="Newsletter" />
-              </div>
-              {/* Contribute: directly under the CTAs. The column is its natural
-                    height (no scroll, no bottom-align); the plate's min-height
-                    lets it grow rather than clip on short viewports. */}
-              <div className="mt-3 grid gap-2">
-                <SubmitTrackDialog />
-                {/* The label breaks the top border — an old-school terminal
-                    faceplate. The fieldset reclaims the heading's row so the
-                    git breadcrumb fits without pushing the column past the
-                    cover/playlist. */}
-                <fieldset className="nerds-field mt-1">
-                  <legend>for the nerds</legend>
-                  <div className="grid justify-items-start gap-1">
-                    <CliInstallDialog />
-                    <a className="cli-link" href={repoUrl} rel="noreferrer" target="_blank">
-                      <BrandIcon className="size-3.5" icon={siGithub} />
-                      <span
-                        style={{
-                          transform: "translateY(1px)",
-                        }}
-                      >
-                        fluncle.git
-                      </span>
-                    </a>
-                    <TerminalRaversDialog />
-                  </div>
-                </fieldset>
-              </div>
-              {/* Fluncle elsewhere: a quiet ghost row of platforms (alphabetical),
-                  the off-site tier of the IA. Brand glyphs from simple-icons;
-                  the platform name carries on the label + tooltip. */}
-              <nav
-                aria-label="Fluncle on other platforms"
-                className="mt-3 flex items-center justify-between gap-1.5"
-              >
-                {socialLinks.map((social) => (
-                  <Tooltip key={social.label}>
-                    <TooltipTrigger
-                      render={
-                        <Button
-                          aria-label={social.label}
-                          className="text-muted-foreground"
-                          nativeButton={false}
-                          render={<a href={social.href} rel="noreferrer" target="_blank" />}
-                          size="icon-lg"
-                          variant="ghost"
-                        />
-                      }
-                    >
-                      <BrandIcon className="size-5" icon={social.icon} />
-                    </TooltipTrigger>
-                    <TooltipContent>{social.label}</TooltipContent>
-                  </Tooltip>
-                ))}
-              </nav>
-              {/* The tertiary, crawlable links: About and the full log. */}
-              <nav
-                aria-label="More from Fluncle"
-                className="mt-2 flex items-center justify-center gap-3 text-sm"
-              >
-                <Link
-                  className="font-semibold text-muted-foreground transition-colors hover:text-accent-foreground"
-                  to="/about"
-                >
-                  About
-                </Link>
-                <span aria-hidden="true" className="text-muted-foreground/55">
-                  ·
-                </span>
-                <McpConnectDialog />
-                <span aria-hidden="true" className="text-muted-foreground/55">
-                  ·
-                </span>
-                <Link
-                  className="font-semibold text-muted-foreground transition-colors hover:text-accent-foreground"
-                  to="/log"
-                >
-                  Full log
-                </Link>
-              </nav>
+              {/* The link hub: actions, then the quiet links pushed to the
+                  bottom of the column. */}
+              <HomeLinkHub />
             </aside>
 
             <section aria-labelledby="playlist-title" className="flex min-w-0 flex-col lg:min-h-0">

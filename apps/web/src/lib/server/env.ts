@@ -3,6 +3,11 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 let didLoadLocalEnv = false;
 
 const envKeys = [
+  // Admin "Login with Spotify" allow-list — the operator identity, kept out of
+  // this public repo. ADMIN_ALLOWED_EMAILS is required; ADMIN_ALLOWED_SPOTIFY_IDS
+  // is optional. Both are comma-separated (see admin-auth.ts).
+  "ADMIN_ALLOWED_EMAILS",
+  "ADMIN_ALLOWED_SPOTIFY_IDS",
   "FIRECRAWL_API_KEY",
   "FLUNCLE_API_TOKEN",
   "LOOPS_API_KEY",

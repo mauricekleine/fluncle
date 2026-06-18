@@ -7,19 +7,39 @@
 // OR the CLI's Bearer token — one identity, two carriers.
 
 import { getCookie } from "@tanstack/react-start/server";
-import { ADMIN_COOKIE_NAME, ADMIN_GRANT_MAX_AGE_MS, signState, verifySignedState } from "./env";
+import {
+  ADMIN_COOKIE_NAME,
+  ADMIN_GRANT_MAX_AGE_MS,
+  readEnv,
+  readOptionalEnv,
+  signState,
+  verifySignedState,
+} from "./env";
 import { type SpotifyProfile } from "./spotify";
 
-// The single operator. Email (via user-read-email) is the reliable check; the
-// Spotify account id is a belt-and-suspenders second match in case the display
-// name differs from the stable id.
-const ALLOWED_EMAILS = new Set(["kleine.m.r@gmail.com"]);
-const ALLOWED_SPOTIFY_IDS = new Set(["berry_fudge"]);
+// The operator allow-list comes from required env, never hardcoded in this public
+// repo. ADMIN_ALLOWED_EMAILS is required (comma-separated, case-insensitive — the
+// reliable check via user-read-email); ADMIN_ALLOWED_SPOTIFY_IDS is optional
+// (comma-separated, exact — a belt-and-suspenders match when the email scope or
+// display differs from the stable id).
+function parseAllowList(value: string, lowercase: boolean): Set<string> {
+  return new Set(
+    value
+      .split(",")
+      .map((entry) => (lowercase ? entry.trim().toLowerCase() : entry.trim()))
+      .filter(Boolean),
+  );
+}
 
-export function isAllowedSpotifyUser(profile: SpotifyProfile): boolean {
+export async function isAllowedSpotifyUser(profile: SpotifyProfile): Promise<boolean> {
+  const allowedEmails = parseAllowList(await readEnv("ADMIN_ALLOWED_EMAILS"), true);
+  const allowedIds = parseAllowList(
+    (await readOptionalEnv("ADMIN_ALLOWED_SPOTIFY_IDS")) ?? "",
+    false,
+  );
   const email = profile.email?.trim().toLowerCase();
 
-  return (email !== undefined && ALLOWED_EMAILS.has(email)) || ALLOWED_SPOTIFY_IDS.has(profile.id);
+  return (email !== undefined && allowedEmails.has(email)) || allowedIds.has(profile.id);
 }
 
 export async function signGrant(): Promise<string> {

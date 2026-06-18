@@ -52,17 +52,27 @@ export const SOCIAL_SPECS: SocialSpec[] = [
     safe: { height: 380, width: 1600 },
     width: 2048,
   },
-  // Future — specs ready for when the account is claimed.
   {
     figure: 0.95,
     file: "soundcloud.png",
     format: "png",
     height: 520,
     id: "SoundcloudHeader",
-    render: false,
+    render: true,
     safe: { height: 460, width: 1480 },
     width: 2480,
   },
+  {
+    figure: 0.92,
+    file: "twitch.png",
+    format: "png",
+    height: 480,
+    id: "TwitchBanner",
+    render: true,
+    safe: { height: 420, width: 1040 },
+    width: 1200,
+  },
+  // Future — specs ready for when the account is claimed.
   {
     figure: 0.95,
     file: "x.png",

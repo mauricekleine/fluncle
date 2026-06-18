@@ -11,12 +11,24 @@ import {
 
 const sshCommand = "ssh rave.fluncle.com";
 
-export function TerminalRaversDialog() {
+// Defaults to the mono `cli-link` trigger ("ssh rave.fluncle.com" + icon); pass
+// `label` + `className` to render a plain text link instead (the home link hub
+// uses a short "SSH" label styled like the other footer links).
+export function TerminalRaversDialog({
+  className,
+  label,
+}: { className?: string; label?: string } = {}) {
   return (
     <Dialog>
-      <DialogTrigger className="cli-link">
-        <TerminalIcon aria-hidden="true" size={14} weight="bold" />
-        <span style={{ transform: "translateY(1px)" }}>ssh rave.fluncle.com</span>
+      <DialogTrigger className={className ?? "cli-link"}>
+        {label ? (
+          label
+        ) : (
+          <>
+            <TerminalIcon aria-hidden="true" size={14} weight="bold" />
+            <span style={{ transform: "translateY(1px)" }}>ssh rave.fluncle.com</span>
+          </>
+        )}
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>

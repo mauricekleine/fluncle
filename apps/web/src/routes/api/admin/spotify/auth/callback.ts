@@ -29,7 +29,7 @@ export const Route = createFileRoute("/api/admin/spotify/auth/callback")({
           if (statePayload.purpose === "admin-login") {
             const profile = await fetchSpotifyProfile(code);
 
-            if (!isAllowedSpotifyUser(profile)) {
+            if (!(await isAllowedSpotifyUser(profile))) {
               return new Response(null, {
                 headers: { Location: "/admin/login?error=denied" },
                 status: 302,
@@ -48,10 +48,11 @@ export const Route = createFileRoute("/api/admin/spotify/auth/callback")({
 
           await exchangeCodeForToken(code);
 
-          return new Response("Spotify auth stored in Turso.", {
-            headers: {
-              "Content-Type": "text/plain; charset=utf-8",
-            },
+          // Close the loop back to the board's reconnect banner rather than a dead
+          // text page — the board re-reads the connection status on focus.
+          return new Response(null, {
+            headers: { Location: "/admin?spotify=connected" },
+            status: 302,
           });
         } catch (authError) {
           return jsonError(

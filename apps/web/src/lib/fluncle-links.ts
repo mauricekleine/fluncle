@@ -14,7 +14,13 @@ export const instagramUrl = "https://www.instagram.com/fluncle/";
 // The licensed home for the DJ mix (docs/socials/).
 export const mixcloudUrl = "https://www.mixcloud.com/fluncle/";
 
+// SoundCloud profile (docs/socials/) — profile presence; not a content host yet.
+export const soundcloudUrl = "https://soundcloud.com/fluncle";
+
 export const youtubeUrl = "https://www.youtube.com/@fluncle";
+
+// Twitch live channel (docs/socials/) — `flunclelive`; `fluncle` was taken there.
+export const twitchUrl = "https://www.twitch.tv/flunclelive";
 
 // Fluncle has no own X handle yet; the social row routes DMs to Maurice.
 export const xUrl = "https://x.com/mauricekleine";

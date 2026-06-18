@@ -2,7 +2,13 @@ import { getDb, typedRow } from "./db";
 import { enrichFromDeezer, lookupIsrcFromDeezer } from "./deezer";
 import { resolveLogId } from "./log-id";
 import { formatError, withRetries } from "./retry";
-import { addTrackToPlaylist, ApiError, fetchTrackMetadata, parseSpotifyTrackUrl } from "./spotify";
+import {
+  addTrackToPlaylist,
+  ApiError,
+  fetchTrackMetadata,
+  parseSpotifyTrackUrl,
+  SPOTIFY_REAUTH_REQUIRED,
+} from "./spotify";
 import { formatTelegramMessage, postToTelegram } from "./telegram";
 
 type AddOptions = {
@@ -188,6 +194,12 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
       args: [message, new Date().toISOString(), track.trackId],
       sql: `update tracks set spotify_error = ?, updated_at = ? where track_id = ?`,
     });
+
+    // An expired Spotify authorization is an actionable "reconnect", not a generic
+    // failure — pass it through verbatim so the operator sees the reconnect path.
+    if (error instanceof ApiError && error.code === SPOTIFY_REAUTH_REQUIRED) {
+      throw error;
+    }
 
     throw new ApiError("spotify_failed", `Spotify failed. Telegram was not posted.\n${message}`);
   }

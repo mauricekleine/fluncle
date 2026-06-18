@@ -15,9 +15,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { searchTracks, submitTrack, type SearchResult } from "@/lib/submissions";
 
-export function SubmitTrackDialog() {
+/**
+ * Defaults to a full outline "Submit a track" button. Pass `className` (e.g.
+ * `w-full` or `flex-1`) to size it within a row; `compact` renders a tooltip'd
+ * icon trigger for the tightest layouts.
+ */
+export function SubmitTrackDialog({
+  className,
+  compact = false,
+}: { className?: string; compact?: boolean } = {}) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -93,10 +102,25 @@ export function SubmitTrackDialog() {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger render={<Button size="lg" variant="outline" />}>
-        <PaperPlaneTiltIcon aria-hidden="true" weight="bold" />
-        Submit a track
-      </DialogTrigger>
+      {compact ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <DialogTrigger
+                render={<Button aria-label="Submit a track" size="icon-lg" variant="outline" />}
+              />
+            }
+          >
+            <PaperPlaneTiltIcon aria-hidden="true" weight="bold" />
+          </TooltipTrigger>
+          <TooltipContent>Submit a track</TooltipContent>
+        </Tooltip>
+      ) : (
+        <DialogTrigger render={<Button className={className} size="lg" variant="outline" />}>
+          <PaperPlaneTiltIcon aria-hidden="true" weight="bold" />
+          Submit a track
+        </DialogTrigger>
+      )}
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Submit a track</DialogTitle>
