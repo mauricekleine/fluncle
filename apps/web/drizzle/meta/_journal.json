@@ -99,6 +99,13 @@
       "when": 1781357379443,
       "tag": "0013_pale_maria_hill",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1781797109109,
+      "tag": "0014_kind_shotgun",
+      "breakpoints": true
     }
   ]
 }

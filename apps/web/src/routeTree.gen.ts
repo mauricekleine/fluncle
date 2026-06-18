@@ -16,6 +16,7 @@ import { Route as AboutRouteImport } from './routes/about'
 import { Route as AdminRouteRouteImport } from './routes/admin/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as StoriesIndexRouteImport } from './routes/stories.index'
+import { Route as MixtapesIndexRouteImport } from './routes/mixtapes.index'
 import { Route as LogIndexRouteImport } from './routes/log.index'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as StoriesLogIdRouteImport } from './routes/stories.$logId'
@@ -26,7 +27,9 @@ import { Route as ApiSubmissionsRouteImport } from './routes/api/submissions'
 import { Route as ApiStoriesRouteImport } from './routes/api/stories'
 import { Route as ApiSearchRouteImport } from './routes/api/search'
 import { Route as ApiNewsletterRouteImport } from './routes/api/newsletter'
+import { Route as ApiMixtapesRouteImport } from './routes/api/mixtapes'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
+import { Route as AdminMixtapesRouteImport } from './routes/admin/mixtapes'
 import { Route as AdminLoginRouteImport } from './routes/admin/login'
 import { Route as ApiTracksRandomRouteImport } from './routes/api/tracks/random'
 import { Route as ApiTracksIdOrLogIdRouteImport } from './routes/api/tracks.$idOrLogId'
@@ -34,9 +37,11 @@ import { Route as ApiPreviewIdOrLogIdRouteImport } from './routes/api/preview.$i
 import { Route as ApiOgLogIdRouteImport } from './routes/api/og.$logId'
 import { Route as ApiAdminTracksRouteImport } from './routes/api/admin/tracks'
 import { Route as ApiAdminSubmissionsRouteImport } from './routes/api/admin/submissions'
+import { Route as ApiAdminMixtapesRouteImport } from './routes/api/admin/mixtapes'
 import { Route as ApiAdminLogoutRouteImport } from './routes/api/admin/logout'
 import { Route as ApiAdminTracksTrackIdRouteImport } from './routes/api/admin/tracks.$trackId'
 import { Route as ApiAdminSubmissionsSubmissionIdRouteImport } from './routes/api/admin/submissions/$submissionId'
+import { Route as ApiAdminMixtapesMixtapeIdRouteImport } from './routes/api/admin/mixtapes.$mixtapeId'
 import { Route as ApiAdminTracksTrackIdVideoRouteImport } from './routes/api/admin/tracks.$trackId.video'
 import { Route as ApiAdminTracksTrackIdSocialRouteImport } from './routes/api/admin/tracks.$trackId.social'
 import { Route as ApiAdminTracksTrackIdPreviewArchiveRouteImport } from './routes/api/admin/tracks.$trackId.preview-archive'
@@ -45,6 +50,8 @@ import { Route as ApiAdminSubmissionsSubmissionIdApproveRouteImport } from './ro
 import { Route as ApiAdminSpotifyAuthStartRouteImport } from './routes/api/admin/spotify/auth/start'
 import { Route as ApiAdminSpotifyAuthLoginRouteImport } from './routes/api/admin/spotify/auth/login'
 import { Route as ApiAdminSpotifyAuthCallbackRouteImport } from './routes/api/admin/spotify/auth/callback'
+import { Route as ApiAdminMixtapesMixtapeIdPublishRouteImport } from './routes/api/admin/mixtapes.$mixtapeId.publish'
+import { Route as ApiAdminMixtapesMixtapeIdMembersRouteImport } from './routes/api/admin/mixtapes.$mixtapeId.members'
 import { Route as ApiAdminTracksTrackIdVideoUploadsRouteImport } from './routes/api/admin/tracks.$trackId.video.uploads'
 import { Route as ApiAdminTracksTrackIdVideoFinalizeRouteImport } from './routes/api/admin/tracks.$trackId.video.finalize'
 import { Route as ApiAdminTracksTrackIdSocialPlatformRouteImport } from './routes/api/admin/tracks.$trackId.social.$platform'
@@ -83,6 +90,11 @@ const IndexRoute = IndexRouteImport.update({
 const StoriesIndexRoute = StoriesIndexRouteImport.update({
   id: '/stories/',
   path: '/stories/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MixtapesIndexRoute = MixtapesIndexRouteImport.update({
+  id: '/mixtapes/',
+  path: '/mixtapes/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LogIndexRoute = LogIndexRouteImport.update({
@@ -135,10 +147,20 @@ const ApiNewsletterRoute = ApiNewsletterRouteImport.update({
   path: '/api/newsletter',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiMixtapesRoute = ApiMixtapesRouteImport.update({
+  id: '/api/mixtapes',
+  path: '/api/mixtapes',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiHealthRoute = ApiHealthRouteImport.update({
   id: '/api/health',
   path: '/api/health',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AdminMixtapesRoute = AdminMixtapesRouteImport.update({
+  id: '/mixtapes',
+  path: '/mixtapes',
+  getParentRoute: () => AdminRouteRoute,
 } as any)
 const AdminLoginRoute = AdminLoginRouteImport.update({
   id: '/login',
@@ -175,6 +197,11 @@ const ApiAdminSubmissionsRoute = ApiAdminSubmissionsRouteImport.update({
   path: '/api/admin/submissions',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAdminMixtapesRoute = ApiAdminMixtapesRouteImport.update({
+  id: '/api/admin/mixtapes',
+  path: '/api/admin/mixtapes',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAdminLogoutRoute = ApiAdminLogoutRouteImport.update({
   id: '/api/admin/logout',
   path: '/api/admin/logout',
@@ -190,6 +217,12 @@ const ApiAdminSubmissionsSubmissionIdRoute =
     id: '/$submissionId',
     path: '/$submissionId',
     getParentRoute: () => ApiAdminSubmissionsRoute,
+  } as any)
+const ApiAdminMixtapesMixtapeIdRoute =
+  ApiAdminMixtapesMixtapeIdRouteImport.update({
+    id: '/$mixtapeId',
+    path: '/$mixtapeId',
+    getParentRoute: () => ApiAdminMixtapesRoute,
   } as any)
 const ApiAdminTracksTrackIdVideoRoute =
   ApiAdminTracksTrackIdVideoRouteImport.update({
@@ -239,6 +272,18 @@ const ApiAdminSpotifyAuthCallbackRoute =
     path: '/api/admin/spotify/auth/callback',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiAdminMixtapesMixtapeIdPublishRoute =
+  ApiAdminMixtapesMixtapeIdPublishRouteImport.update({
+    id: '/publish',
+    path: '/publish',
+    getParentRoute: () => ApiAdminMixtapesMixtapeIdRoute,
+  } as any)
+const ApiAdminMixtapesMixtapeIdMembersRoute =
+  ApiAdminMixtapesMixtapeIdMembersRouteImport.update({
+    id: '/members',
+    path: '/members',
+    getParentRoute: () => ApiAdminMixtapesMixtapeIdRoute,
+  } as any)
 const ApiAdminTracksTrackIdVideoUploadsRoute =
   ApiAdminTracksTrackIdVideoUploadsRouteImport.update({
     id: '/uploads',
@@ -272,7 +317,9 @@ export interface FileRoutesByFullPath {
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/admin/login': typeof AdminLoginRoute
+  '/admin/mixtapes': typeof AdminMixtapesRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/mixtapes': typeof ApiMixtapesRoute
   '/api/newsletter': typeof ApiNewsletterRoute
   '/api/search': typeof ApiSearchRoute
   '/api/stories': typeof ApiStoriesRoute
@@ -283,16 +330,21 @@ export interface FileRoutesByFullPath {
   '/stories/$logId': typeof StoriesLogIdRoute
   '/admin/': typeof AdminIndexRoute
   '/log/': typeof LogIndexRoute
+  '/mixtapes/': typeof MixtapesIndexRoute
   '/stories/': typeof StoriesIndexRoute
   '/api/admin/logout': typeof ApiAdminLogoutRoute
+  '/api/admin/mixtapes': typeof ApiAdminMixtapesRouteWithChildren
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
   '/api/admin/tracks': typeof ApiAdminTracksRouteWithChildren
   '/api/og/$logId': typeof ApiOgLogIdRoute
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
   '/api/tracks/$idOrLogId': typeof ApiTracksIdOrLogIdRoute
   '/api/tracks/random': typeof ApiTracksRandomRoute
+  '/api/admin/mixtapes/$mixtapeId': typeof ApiAdminMixtapesMixtapeIdRouteWithChildren
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
   '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRouteWithChildren
+  '/api/admin/mixtapes/$mixtapeId/members': typeof ApiAdminMixtapesMixtapeIdMembersRoute
+  '/api/admin/mixtapes/$mixtapeId/publish': typeof ApiAdminMixtapesMixtapeIdPublishRoute
   '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
   '/api/admin/spotify/auth/login': typeof ApiAdminSpotifyAuthLoginRoute
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
@@ -313,7 +365,9 @@ export interface FileRoutesByTo {
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/admin/login': typeof AdminLoginRoute
+  '/admin/mixtapes': typeof AdminMixtapesRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/mixtapes': typeof ApiMixtapesRoute
   '/api/newsletter': typeof ApiNewsletterRoute
   '/api/search': typeof ApiSearchRoute
   '/api/stories': typeof ApiStoriesRoute
@@ -324,16 +378,21 @@ export interface FileRoutesByTo {
   '/stories/$logId': typeof StoriesLogIdRoute
   '/admin': typeof AdminIndexRoute
   '/log': typeof LogIndexRoute
+  '/mixtapes': typeof MixtapesIndexRoute
   '/stories': typeof StoriesIndexRoute
   '/api/admin/logout': typeof ApiAdminLogoutRoute
+  '/api/admin/mixtapes': typeof ApiAdminMixtapesRouteWithChildren
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
   '/api/admin/tracks': typeof ApiAdminTracksRouteWithChildren
   '/api/og/$logId': typeof ApiOgLogIdRoute
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
   '/api/tracks/$idOrLogId': typeof ApiTracksIdOrLogIdRoute
   '/api/tracks/random': typeof ApiTracksRandomRoute
+  '/api/admin/mixtapes/$mixtapeId': typeof ApiAdminMixtapesMixtapeIdRouteWithChildren
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
   '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRouteWithChildren
+  '/api/admin/mixtapes/$mixtapeId/members': typeof ApiAdminMixtapesMixtapeIdMembersRoute
+  '/api/admin/mixtapes/$mixtapeId/publish': typeof ApiAdminMixtapesMixtapeIdPublishRoute
   '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
   '/api/admin/spotify/auth/login': typeof ApiAdminSpotifyAuthLoginRoute
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
@@ -356,7 +415,9 @@ export interface FileRoutesById {
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/admin/login': typeof AdminLoginRoute
+  '/admin/mixtapes': typeof AdminMixtapesRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/mixtapes': typeof ApiMixtapesRoute
   '/api/newsletter': typeof ApiNewsletterRoute
   '/api/search': typeof ApiSearchRoute
   '/api/stories': typeof ApiStoriesRoute
@@ -367,16 +428,21 @@ export interface FileRoutesById {
   '/stories/$logId': typeof StoriesLogIdRoute
   '/admin/': typeof AdminIndexRoute
   '/log/': typeof LogIndexRoute
+  '/mixtapes/': typeof MixtapesIndexRoute
   '/stories/': typeof StoriesIndexRoute
   '/api/admin/logout': typeof ApiAdminLogoutRoute
+  '/api/admin/mixtapes': typeof ApiAdminMixtapesRouteWithChildren
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
   '/api/admin/tracks': typeof ApiAdminTracksRouteWithChildren
   '/api/og/$logId': typeof ApiOgLogIdRoute
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
   '/api/tracks/$idOrLogId': typeof ApiTracksIdOrLogIdRoute
   '/api/tracks/random': typeof ApiTracksRandomRoute
+  '/api/admin/mixtapes/$mixtapeId': typeof ApiAdminMixtapesMixtapeIdRouteWithChildren
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
   '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRouteWithChildren
+  '/api/admin/mixtapes/$mixtapeId/members': typeof ApiAdminMixtapesMixtapeIdMembersRoute
+  '/api/admin/mixtapes/$mixtapeId/publish': typeof ApiAdminMixtapesMixtapeIdPublishRoute
   '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
   '/api/admin/spotify/auth/login': typeof ApiAdminSpotifyAuthLoginRoute
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
@@ -400,7 +466,9 @@ export interface FileRouteTypes {
     | '/rss.xml'
     | '/sitemap.xml'
     | '/admin/login'
+    | '/admin/mixtapes'
     | '/api/health'
+    | '/api/mixtapes'
     | '/api/newsletter'
     | '/api/search'
     | '/api/stories'
@@ -411,16 +479,21 @@ export interface FileRouteTypes {
     | '/stories/$logId'
     | '/admin/'
     | '/log/'
+    | '/mixtapes/'
     | '/stories/'
     | '/api/admin/logout'
+    | '/api/admin/mixtapes'
     | '/api/admin/submissions'
     | '/api/admin/tracks'
     | '/api/og/$logId'
     | '/api/preview/$idOrLogId'
     | '/api/tracks/$idOrLogId'
     | '/api/tracks/random'
+    | '/api/admin/mixtapes/$mixtapeId'
     | '/api/admin/submissions/$submissionId'
     | '/api/admin/tracks/$trackId'
+    | '/api/admin/mixtapes/$mixtapeId/members'
+    | '/api/admin/mixtapes/$mixtapeId/publish'
     | '/api/admin/spotify/auth/callback'
     | '/api/admin/spotify/auth/login'
     | '/api/admin/spotify/auth/start'
@@ -441,7 +514,9 @@ export interface FileRouteTypes {
     | '/rss.xml'
     | '/sitemap.xml'
     | '/admin/login'
+    | '/admin/mixtapes'
     | '/api/health'
+    | '/api/mixtapes'
     | '/api/newsletter'
     | '/api/search'
     | '/api/stories'
@@ -452,16 +527,21 @@ export interface FileRouteTypes {
     | '/stories/$logId'
     | '/admin'
     | '/log'
+    | '/mixtapes'
     | '/stories'
     | '/api/admin/logout'
+    | '/api/admin/mixtapes'
     | '/api/admin/submissions'
     | '/api/admin/tracks'
     | '/api/og/$logId'
     | '/api/preview/$idOrLogId'
     | '/api/tracks/$idOrLogId'
     | '/api/tracks/random'
+    | '/api/admin/mixtapes/$mixtapeId'
     | '/api/admin/submissions/$submissionId'
     | '/api/admin/tracks/$trackId'
+    | '/api/admin/mixtapes/$mixtapeId/members'
+    | '/api/admin/mixtapes/$mixtapeId/publish'
     | '/api/admin/spotify/auth/callback'
     | '/api/admin/spotify/auth/login'
     | '/api/admin/spotify/auth/start'
@@ -483,7 +563,9 @@ export interface FileRouteTypes {
     | '/rss.xml'
     | '/sitemap.xml'
     | '/admin/login'
+    | '/admin/mixtapes'
     | '/api/health'
+    | '/api/mixtapes'
     | '/api/newsletter'
     | '/api/search'
     | '/api/stories'
@@ -494,16 +576,21 @@ export interface FileRouteTypes {
     | '/stories/$logId'
     | '/admin/'
     | '/log/'
+    | '/mixtapes/'
     | '/stories/'
     | '/api/admin/logout'
+    | '/api/admin/mixtapes'
     | '/api/admin/submissions'
     | '/api/admin/tracks'
     | '/api/og/$logId'
     | '/api/preview/$idOrLogId'
     | '/api/tracks/$idOrLogId'
     | '/api/tracks/random'
+    | '/api/admin/mixtapes/$mixtapeId'
     | '/api/admin/submissions/$submissionId'
     | '/api/admin/tracks/$trackId'
+    | '/api/admin/mixtapes/$mixtapeId/members'
+    | '/api/admin/mixtapes/$mixtapeId/publish'
     | '/api/admin/spotify/auth/callback'
     | '/api/admin/spotify/auth/login'
     | '/api/admin/spotify/auth/start'
@@ -526,6 +613,7 @@ export interface RootRouteChildren {
   RssDotxmlRoute: typeof RssDotxmlRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   ApiHealthRoute: typeof ApiHealthRoute
+  ApiMixtapesRoute: typeof ApiMixtapesRoute
   ApiNewsletterRoute: typeof ApiNewsletterRoute
   ApiSearchRoute: typeof ApiSearchRoute
   ApiStoriesRoute: typeof ApiStoriesRoute
@@ -535,8 +623,10 @@ export interface RootRouteChildren {
   LogLogIdRoute: typeof LogLogIdRoute
   StoriesLogIdRoute: typeof StoriesLogIdRoute
   LogIndexRoute: typeof LogIndexRoute
+  MixtapesIndexRoute: typeof MixtapesIndexRoute
   StoriesIndexRoute: typeof StoriesIndexRoute
   ApiAdminLogoutRoute: typeof ApiAdminLogoutRoute
+  ApiAdminMixtapesRoute: typeof ApiAdminMixtapesRouteWithChildren
   ApiAdminSubmissionsRoute: typeof ApiAdminSubmissionsRouteWithChildren
   ApiAdminTracksRoute: typeof ApiAdminTracksRouteWithChildren
   ApiOgLogIdRoute: typeof ApiOgLogIdRoute
@@ -595,6 +685,13 @@ declare module '@tanstack/react-router' {
       path: '/stories'
       fullPath: '/stories/'
       preLoaderRoute: typeof StoriesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/mixtapes/': {
+      id: '/mixtapes/'
+      path: '/mixtapes'
+      fullPath: '/mixtapes/'
+      preLoaderRoute: typeof MixtapesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/log/': {
@@ -667,12 +764,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiNewsletterRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/mixtapes': {
+      id: '/api/mixtapes'
+      path: '/api/mixtapes'
+      fullPath: '/api/mixtapes'
+      preLoaderRoute: typeof ApiMixtapesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/health': {
       id: '/api/health'
       path: '/api/health'
       fullPath: '/api/health'
       preLoaderRoute: typeof ApiHealthRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/admin/mixtapes': {
+      id: '/admin/mixtapes'
+      path: '/mixtapes'
+      fullPath: '/admin/mixtapes'
+      preLoaderRoute: typeof AdminMixtapesRouteImport
+      parentRoute: typeof AdminRouteRoute
     }
     '/admin/login': {
       id: '/admin/login'
@@ -723,6 +834,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminSubmissionsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/admin/mixtapes': {
+      id: '/api/admin/mixtapes'
+      path: '/api/admin/mixtapes'
+      fullPath: '/api/admin/mixtapes'
+      preLoaderRoute: typeof ApiAdminMixtapesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/admin/logout': {
       id: '/api/admin/logout'
       path: '/api/admin/logout'
@@ -743,6 +861,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/admin/submissions/$submissionId'
       preLoaderRoute: typeof ApiAdminSubmissionsSubmissionIdRouteImport
       parentRoute: typeof ApiAdminSubmissionsRoute
+    }
+    '/api/admin/mixtapes/$mixtapeId': {
+      id: '/api/admin/mixtapes/$mixtapeId'
+      path: '/$mixtapeId'
+      fullPath: '/api/admin/mixtapes/$mixtapeId'
+      preLoaderRoute: typeof ApiAdminMixtapesMixtapeIdRouteImport
+      parentRoute: typeof ApiAdminMixtapesRoute
     }
     '/api/admin/tracks/$trackId/video': {
       id: '/api/admin/tracks/$trackId/video'
@@ -800,6 +925,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminSpotifyAuthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/admin/mixtapes/$mixtapeId/publish': {
+      id: '/api/admin/mixtapes/$mixtapeId/publish'
+      path: '/publish'
+      fullPath: '/api/admin/mixtapes/$mixtapeId/publish'
+      preLoaderRoute: typeof ApiAdminMixtapesMixtapeIdPublishRouteImport
+      parentRoute: typeof ApiAdminMixtapesMixtapeIdRoute
+    }
+    '/api/admin/mixtapes/$mixtapeId/members': {
+      id: '/api/admin/mixtapes/$mixtapeId/members'
+      path: '/members'
+      fullPath: '/api/admin/mixtapes/$mixtapeId/members'
+      preLoaderRoute: typeof ApiAdminMixtapesMixtapeIdMembersRouteImport
+      parentRoute: typeof ApiAdminMixtapesMixtapeIdRoute
+    }
     '/api/admin/tracks/$trackId/video/uploads': {
       id: '/api/admin/tracks/$trackId/video/uploads'
       path: '/uploads'
@@ -833,11 +972,13 @@ declare module '@tanstack/react-router' {
 
 interface AdminRouteRouteChildren {
   AdminLoginRoute: typeof AdminLoginRoute
+  AdminMixtapesRoute: typeof AdminMixtapesRoute
   AdminIndexRoute: typeof AdminIndexRoute
 }
 
 const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminLoginRoute: AdminLoginRoute,
+  AdminMixtapesRoute: AdminMixtapesRoute,
   AdminIndexRoute: AdminIndexRoute,
 }
 
@@ -858,6 +999,35 @@ const ApiTracksRouteChildren: ApiTracksRouteChildren = {
 const ApiTracksRouteWithChildren = ApiTracksRoute._addFileChildren(
   ApiTracksRouteChildren,
 )
+
+interface ApiAdminMixtapesMixtapeIdRouteChildren {
+  ApiAdminMixtapesMixtapeIdMembersRoute: typeof ApiAdminMixtapesMixtapeIdMembersRoute
+  ApiAdminMixtapesMixtapeIdPublishRoute: typeof ApiAdminMixtapesMixtapeIdPublishRoute
+}
+
+const ApiAdminMixtapesMixtapeIdRouteChildren: ApiAdminMixtapesMixtapeIdRouteChildren =
+  {
+    ApiAdminMixtapesMixtapeIdMembersRoute:
+      ApiAdminMixtapesMixtapeIdMembersRoute,
+    ApiAdminMixtapesMixtapeIdPublishRoute:
+      ApiAdminMixtapesMixtapeIdPublishRoute,
+  }
+
+const ApiAdminMixtapesMixtapeIdRouteWithChildren =
+  ApiAdminMixtapesMixtapeIdRoute._addFileChildren(
+    ApiAdminMixtapesMixtapeIdRouteChildren,
+  )
+
+interface ApiAdminMixtapesRouteChildren {
+  ApiAdminMixtapesMixtapeIdRoute: typeof ApiAdminMixtapesMixtapeIdRouteWithChildren
+}
+
+const ApiAdminMixtapesRouteChildren: ApiAdminMixtapesRouteChildren = {
+  ApiAdminMixtapesMixtapeIdRoute: ApiAdminMixtapesMixtapeIdRouteWithChildren,
+}
+
+const ApiAdminMixtapesRouteWithChildren =
+  ApiAdminMixtapesRoute._addFileChildren(ApiAdminMixtapesRouteChildren)
 
 interface ApiAdminSubmissionsSubmissionIdRouteChildren {
   ApiAdminSubmissionsSubmissionIdApproveRoute: typeof ApiAdminSubmissionsSubmissionIdApproveRoute
@@ -976,6 +1146,7 @@ const rootRouteChildren: RootRouteChildren = {
   RssDotxmlRoute: RssDotxmlRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   ApiHealthRoute: ApiHealthRoute,
+  ApiMixtapesRoute: ApiMixtapesRoute,
   ApiNewsletterRoute: ApiNewsletterRoute,
   ApiSearchRoute: ApiSearchRoute,
   ApiStoriesRoute: ApiStoriesRoute,
@@ -985,8 +1156,10 @@ const rootRouteChildren: RootRouteChildren = {
   LogLogIdRoute: LogLogIdRoute,
   StoriesLogIdRoute: StoriesLogIdRoute,
   LogIndexRoute: LogIndexRoute,
+  MixtapesIndexRoute: MixtapesIndexRoute,
   StoriesIndexRoute: StoriesIndexRoute,
   ApiAdminLogoutRoute: ApiAdminLogoutRoute,
+  ApiAdminMixtapesRoute: ApiAdminMixtapesRouteWithChildren,
   ApiAdminSubmissionsRoute: ApiAdminSubmissionsRouteWithChildren,
   ApiAdminTracksRoute: ApiAdminTracksRouteWithChildren,
   ApiOgLogIdRoute: ApiOgLogIdRoute,

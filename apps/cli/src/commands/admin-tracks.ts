@@ -28,7 +28,13 @@ async function fetchAdminTracks(options: {
     const response = await adminApiGet<TracksResponse>(`/api/admin/tracks?${params.toString()}`);
 
     for (const apiTrack of response.tracks) {
-      results.push(mapTrack(apiTrack));
+      const track = mapTrack(apiTrack);
+
+      if (track.type === "mixtape") {
+        continue;
+      }
+
+      results.push(track);
 
       if (results.length >= max) {
         return results;

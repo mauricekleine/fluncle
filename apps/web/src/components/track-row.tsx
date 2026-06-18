@@ -13,14 +13,56 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { siteUrl } from "@/lib/fluncle-links";
-import { formatDuration } from "@/lib/format";
+import { formatAlbumDuration, formatDuration } from "@/lib/format";
+import { type FeedItem } from "@/lib/mixtapes";
 import { type Track } from "@/lib/tracks";
 
 // The signature component (DESIGN.md): a finding, not just a row. The whole row
 // reads as one link to its log page (a stretched link); the artwork doubles as
 // the story opener (the play affordance) when there's footage, and a single
 // links menu sits beside the caret — siblings of the stretched link, above it.
-export function TrackRow({ track, trackNumber }: { track: Track; trackNumber: number }) {
+export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber: number }) {
+  if (track.type === "mixtape") {
+    const logId = track.logId as string;
+    const meta = [
+      `${track.memberCount} ${track.memberCount === 1 ? "finding" : "findings"}`,
+      track.durationMs ? formatAlbumDuration(track.durationMs) : undefined,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+
+    return (
+      <li className="track-row track-row-checkpoint">
+        <Link
+          aria-label={`Open the log page for ${track.title}`}
+          className="track-log-id track-log-id-link"
+          params={{ logId }}
+          to="/log/$logId"
+        >
+          {logId}
+        </Link>
+        <TrackArtwork alt={`${track.title} cover art`} src={track.coverImageUrl} />
+        <span className="min-w-0">
+          <Link
+            aria-label={`Open the log page for ${track.title}`}
+            className="track-row-link"
+            params={{ logId }}
+            to="/log/$logId"
+          >
+            <span className="track-title block text-pretty [overflow-wrap:anywhere]">
+              {track.title}
+            </span>
+          </Link>
+          {meta ? <span className="track-label mt-1 block truncate">{meta}</span> : null}
+        </span>
+        <span className="track-actions">
+          <MixtapeLinksMenu track={track} />
+          <CaretRightIcon aria-hidden="true" className="track-caret" size={18} weight="bold" />
+        </span>
+      </li>
+    );
+  }
+
   // The artwork opens the story only when the finding has footage; otherwise the
   // cover is inert and the stretched row link carries the click to the log page.
   const storyLogId = track.videoUrl ? track.logId : undefined;
@@ -112,6 +154,52 @@ export function TrackRow({ track, trackNumber }: { track: Track; trackNumber: nu
         <CaretRightIcon aria-hidden="true" className="track-caret" size={18} weight="bold" />
       </span>
     </li>
+  );
+}
+
+function MixtapeLinksMenu({ track }: { track: Extract<FeedItem, { type: "mixtape" }> }) {
+  const shareUrl = track.logId ? `${siteUrl}/log/${track.logId}` : siteUrl;
+  const externalLinks = [
+    track.externalUrls.mixcloud ? { href: track.externalUrls.mixcloud, label: "Mixcloud" } : null,
+    track.externalUrls.youtube ? { href: track.externalUrls.youtube, label: "YouTube" } : null,
+    track.externalUrls.soundcloud
+      ? { href: track.externalUrls.soundcloud, label: "SoundCloud" }
+      : null,
+  ].filter((link): link is { href: string; label: string } => Boolean(link));
+
+  const share = useCallback(() => {
+    if (typeof navigator === "undefined") {
+      return;
+    }
+
+    if (navigator.share) {
+      void navigator.share({ title: track.title, url: shareUrl }).catch(() => {});
+    } else {
+      void navigator.clipboard?.writeText(shareUrl);
+    }
+  }, [shareUrl, track.title]);
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger aria-label={`Links for ${track.title}`} className="track-action">
+        <DotsThreeIcon aria-hidden="true" size={18} weight="bold" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-40">
+        {externalLinks.map((link) => (
+          <DropdownMenuItem
+            key={link.label}
+            render={<a href={link.href} rel="noreferrer" target="_blank" />}
+          >
+            {link.label}
+          </DropdownMenuItem>
+        ))}
+        {externalLinks.length > 0 ? <DropdownMenuSeparator /> : null}
+        <DropdownMenuItem onClick={share}>
+          <ShareNetworkIcon aria-hidden="true" className="size-4" />
+          Share
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

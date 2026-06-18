@@ -30,7 +30,9 @@ export async function openTelegramCommand(mode: OpenMode): Promise<void> {
 }
 
 export async function openRecentCommand(options: OpenRecentOptions): Promise<void> {
-  const tracks = await recentCommand(options.limit);
+  const tracks = (await recentCommand(options.limit)).filter(
+    (item): item is RecentTrack => item.type !== "mixtape",
+  );
 
   if (tracks.length === 0) {
     console.log("No findings logged yet.");

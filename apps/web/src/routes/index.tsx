@@ -18,6 +18,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { siteUrl, spotifyPlaylistUrl, telegramUrl } from "@/lib/fluncle-links";
 import { fluncleAsciiLogo, fluncleDescription } from "@/lib/identity";
+import { type FeedItem } from "@/lib/mixtapes";
 import { listTracks } from "@/lib/server/tracks";
 import { fetchTracks, type TracksResponse } from "@/lib/tracks";
 import { registerWebMcpTools } from "@/lib/webmcp";
@@ -37,7 +38,7 @@ type HomeSearch = {
 // their footage does). Same ordering as the stories feed, so it lines up.
 const fetchHomeData = createServerFn({ method: "GET" }).handler(async () => {
   const [page, latestStory] = await Promise.all([
-    listTracks({ limit: pageSize }),
+    listTracks({ includeMixtapes: true, limit: pageSize }),
     listTracks({ hasVideo: true, limit: 1 }),
   ]);
 
@@ -84,16 +85,24 @@ export const Route = createFileRoute("/")({
           name: "Fluncle's Findings",
           numTracks: loaderData?.totalCount,
           sameAs: [spotifyPlaylistUrl, telegramUrl],
-          track: loaderData?.tracks.map((track) => ({
-            "@type": "MusicRecording",
-            byArtist: track.artists.map((artist) => ({
-              "@type": "MusicGroup",
-              name: artist,
-            })),
-            ...(track.album ? { inAlbum: { "@type": "MusicAlbum", name: track.album } } : {}),
-            name: track.title,
-            url: track.spotifyUrl,
-          })),
+          track: loaderData?.tracks.flatMap((track) => {
+            if (track.type === "mixtape") {
+              return [];
+            }
+
+            return [
+              {
+                "@type": "MusicRecording",
+                byArtist: track.artists.map((artist) => ({
+                  "@type": "MusicGroup",
+                  name: artist,
+                })),
+                ...(track.album ? { inAlbum: { "@type": "MusicAlbum", name: track.album } } : {}),
+                name: track.title,
+                url: track.spotifyUrl,
+              },
+            ];
+          }),
           url: `${siteUrl}/`,
         }),
         type: "application/ld+json",
@@ -325,9 +334,9 @@ function HomePage() {
                     <ol className="grid m-0 list-none p-0 [&>li:last-child.track-row]:border-b-0">
                       {tracks.map((track, index) => (
                         <TrackRow
-                          key={track.trackId}
+                          key={track.type === "mixtape" ? (track.logId ?? track.id) : track.trackId}
                           track={track}
-                          trackNumber={trackNumberBase - index}
+                          trackNumber={fallbackFindingNumber(tracks, index, trackNumberBase)}
                         />
                       ))}
                       {hasNextPage ? (
@@ -370,4 +379,14 @@ function HomePage() {
       </main>
     </TooltipProvider>
   );
+}
+
+function fallbackFindingNumber(tracks: FeedItem[], index: number, trackNumberBase: number): number {
+  if (tracks[index]?.type === "mixtape") {
+    return trackNumberBase;
+  }
+
+  const findingsBefore = tracks.slice(0, index).filter((track) => track.type !== "mixtape").length;
+
+  return trackNumberBase - findingsBefore;
 }

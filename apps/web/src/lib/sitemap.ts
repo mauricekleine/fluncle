@@ -25,6 +25,7 @@ export function buildSitemapXml(logPages: SitemapLogPage[]): string {
   const entries = [
     urlEntry(`${siteUrl}/`, latest),
     urlEntry(`${siteUrl}/log`, latest),
+    urlEntry(`${siteUrl}/mixtapes`, latest),
     urlEntry(`${siteUrl}/about`),
     urlEntry(`${siteUrl}/galaxy`),
     ...logPages.map((page) =>

@@ -6,6 +6,10 @@ Fluncle is a single drum & bass selector, not a team. It is drum & bass end to e
 
 The collection is called Fluncle's Findings. New tracks land most nights.
 
+## Mixtapes
+
+Fluncle also logs his own DJ mixtapes. A mixtape is a checkpoint: one long set made from existing findings, with its own Log ID and its own /log page. It is not a finding and does not increase the found count. Mixtape coordinates use the same sector.mark shape, but the middle slot is the literal F, for example 019.F.1A. A finding has a digit there; a mixtape has F.
+
 ## Reading a Log ID
 
 Every finding has a permanent coordinate, a Log ID, written sector.orbit.mark â€” for example 004.7.2I, full form fluncle://004.7.2I. The sector counts the days from the epoch (2026-05-30) to the day Fluncle found the tune; the tail is a stable signature derived from the recording itself. Each one is minted once, never reassigned, and resolves to a log page at https://www.fluncle.com/log/004.7.2I. So a code like 004.7.2I is a single finding in Fluncle's Findings.
@@ -16,12 +20,14 @@ Every finding has a permanent coordinate, a Log ID, written sector.orbit.mark â€
 - [Fluncle on Telegram](https://t.me/fluncle): one banger per post, most nights
 - [The archive](https://www.fluncle.com/): every certified track with the date Fluncle found it
 - [The log](https://www.fluncle.com/log): every finding's coordinate page, one per Log ID (e.g. https://www.fluncle.com/log/004.7.2I)
+- [Mixtapes](https://www.fluncle.com/mixtapes): Fluncle's own DJ mixtapes, each a checkpoint with a Log ID such as https://www.fluncle.com/log/019.F.1A
 - [About Fluncle](https://www.fluncle.com/about): who Fluncle is, what the Galaxy is, and how to read a Log ID like fluncle://004.7.2I
 
 ## Data
 
-- [RSS feed](https://www.fluncle.com/rss.xml): the 25 most recent tracks
+- [RSS feed](https://www.fluncle.com/rss.xml): the 25 most recent findings and mixtapes
 - [Tracks API](https://www.fluncle.com/api/tracks): the archive as JSON, cursor-paginated; accepts limit (max 48) and cursor query params
+- [Mixtapes API](https://www.fluncle.com/api/mixtapes): published mixtapes as JSON
 - [Random track](https://www.fluncle.com/api/tracks/random): one pick from the archive, as JSON
 
 ## Submit

@@ -1,5 +1,6 @@
 import { siteUrl, spotifyPlaylistUrl, telegramUrl } from "../fluncle-links";
 import { fluncleDescription } from "../identity";
+import { type FeedItem } from "../mixtapes";
 import { type TrackCursor, type TrackListItem, decodeTrackCursor, listTracks } from "./tracks";
 
 // Agent-facing discovery surfaces served ahead of the TanStack router:
@@ -147,11 +148,14 @@ async function skillDigest(): Promise<string> {
 }
 
 async function markdownHomeResponse(): Promise<Response> {
-  const page = await listTracks({ limit: markdownTracksLimit });
-  const tracks = page.tracks.map(
-    (track) =>
-      `- ${track.artists.join(", ")} — ${track.title} (found ${track.addedAt.slice(0, 10)})`,
-  );
+  const page = await listTracks({ includeMixtapes: true, limit: markdownTracksLimit });
+  const tracks = page.tracks.map((track) => {
+    if (track.type === "mixtape") {
+      return `- ${track.title} (${track.logId ?? "draft checkpoint"})`;
+    }
+
+    return `- ${track.artists.join(", ")} — ${track.title} (found ${track.addedAt.slice(0, 10)})`;
+  });
 
   const markdown = `# Fluncle
 
@@ -210,8 +214,10 @@ ${tracks.join("\n")}
 // lore plus every finding (coordinate, found date, BPM/key/galaxy, Spotify),
 // so an LLM can read the whole archive in a single fetch. Pure renderer,
 // exported for tests; the response wraps it.
-export function renderLlmsFull(tracks: TrackListItem[], totalCount: number): string {
-  const findings = tracks.map(renderFinding).join("\n");
+export function renderLlmsFull(tracks: FeedItem[], totalCount: number): string {
+  const findings = tracks
+    .map((track) => (track.type === "mixtape" ? renderMixtape(track) : renderFinding(track)))
+    .join("\n");
   const omitted = totalCount - tracks.length;
 
   return `# Fluncle — the full archive
@@ -266,13 +272,23 @@ function renderFinding(track: TrackListItem): string {
   return lines.join("\n");
 }
 
+function renderMixtape(track: Extract<FeedItem, { type: "mixtape" }>): string {
+  const coordinate = track.logId ? `fluncle://${track.logId}` : "uncoordinated";
+  const facts = [
+    `${track.memberCount} ${track.memberCount === 1 ? "finding" : "findings"}`,
+    track.externalUrls.mixcloud ?? track.externalUrls.youtube ?? track.externalUrls.soundcloud,
+  ].filter(Boolean);
+
+  return [`- **${track.title}** (${coordinate})`, `  ${facts.join(" · ")}`].join("\n");
+}
+
 async function llmsFullResponse(): Promise<Response> {
-  const all: TrackListItem[] = [];
+  const all: FeedItem[] = [];
   let cursor: TrackCursor | undefined;
   let totalCount = 0;
 
   do {
-    const page = await listTracks({ cursor, limit: llmsFullPageSize });
+    const page = await listTracks({ cursor, includeMixtapes: true, limit: llmsFullPageSize });
     totalCount = page.totalCount;
     all.push(...page.tracks);
     cursor = page.nextCursor ? decodeTrackCursor(page.nextCursor) : undefined;

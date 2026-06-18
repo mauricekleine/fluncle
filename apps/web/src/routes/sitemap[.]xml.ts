@@ -19,7 +19,11 @@ export const Route = createFileRoute("/sitemap.xml")({
           sql: `select log_id, coalesce(updated_at, added_at) as lastmod
                 from tracks
                 where log_id is not null
-                order by added_at desc`,
+                union all
+                select log_id, coalesce(updated_at, added_at) as lastmod
+                from mixtapes
+                where status = 'published' and log_id is not null and added_at is not null
+                order by lastmod desc`,
         });
         const rows = typedRows<LogPageRow>(result.rows);
         const xml = buildSitemapXml(

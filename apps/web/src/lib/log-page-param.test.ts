@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isLogId } from "./log-id";
+import { isLogId, isMixtapeLogId } from "./log-id";
 import { isLogPageParam } from "./log-page-param";
 
 // The /log/$logId shape guard: the route's beforeLoad 404s anything this
@@ -20,6 +20,13 @@ describe("isLogPageParam (the /log param guard)", () => {
 
   it("accepts a legacy Spotify track id deep link (the loader 301s it)", () => {
     expect(isLogPageParam("6Y44zcYp0vUkmKCBve1Epr")).toBe(true);
+  });
+
+  it("accepts a mixtape coordinate with the F marker", () => {
+    expect(isMixtapeLogId("019.F.1A")).toBe(true);
+    expect(isLogPageParam("019.F.1A")).toBe(true);
+    expect(isMixtapeLogId("019.1.1A")).toBe(false);
+    expect(isLogId("019.F.1A")).toBe(false);
   });
 
   it("rejects garbage, paths, and the scheme-prefixed form", () => {

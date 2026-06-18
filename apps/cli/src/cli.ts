@@ -172,6 +172,15 @@ function addListenCommands(program: Command): void {
     });
 
   program
+    .command("mixtapes")
+    .description("Fluncle's checkpoint sets")
+    .option("--json", "Print JSON", false)
+    .action(async (options: JsonOptions) => {
+      const { mixtapesCommand } = await import("./commands/mixtapes");
+      await runMixtapes(options, mixtapesCommand);
+    });
+
+  program
     .command("open")
     .description("Pick a track, open it in Spotify")
     .argument("[target]")
@@ -696,7 +705,30 @@ async function runTrackGet(
     return;
   }
 
+  const mixtape = result.mixtape;
+
+  if (mixtape) {
+    console.log(`${mixtape.logId ? `${mixtape.logId}  ` : ""}${mixtape.title}`);
+    console.log(
+      [
+        `${mixtape.memberCount} ${mixtape.memberCount === 1 ? "finding" : "findings"}`,
+        mixtape.durationMs ? `${Math.round(mixtape.durationMs / 60_000)} min` : undefined,
+        mixtape.externalUrls.mixcloud ??
+          mixtape.externalUrls.youtube ??
+          mixtape.externalUrls.soundcloud,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    );
+    return;
+  }
+
   const t = result.track;
+
+  if (!t) {
+    throw new Error("Track lookup returned no finding or mixtape");
+  }
+
   console.log(`${t.logId ? `${t.logId}  ` : ""}${t.artists.join(", ")} — ${t.title}`);
   console.log(
     [
@@ -816,6 +848,26 @@ async function runRecent(
 
   const { trackRows } = await import("./format");
   console.log(trackRows(tracks).join("\n"));
+}
+
+async function runMixtapes(
+  options: JsonOptions,
+  mixtapesCommand: typeof import("./commands/mixtapes").mixtapesCommand,
+): Promise<void> {
+  const mixtapes = await mixtapesCommand();
+
+  if (options.json) {
+    printJson({ mixtapes, ok: true });
+    return;
+  }
+
+  if (mixtapes.length === 0) {
+    console.log("No mixtapes logged yet.");
+    return;
+  }
+
+  const { trackRows } = await import("./format");
+  console.log(trackRows(mixtapes).join("\n"));
 }
 
 // Shared limit parse for the listing commands (recent, admin queue, admin

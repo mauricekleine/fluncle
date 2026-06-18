@@ -1,4 +1,4 @@
-import { type RecentTrack } from "./commands/recent";
+import { type RecentItem, type RecentTrack } from "./commands/recent";
 
 const COORD_FALLBACK = "—";
 
@@ -6,12 +6,12 @@ const COORD_FALLBACK = "—";
  * A finding's coordinate, shown bare (e.g. `007.8.1B`) in tight columns.
  * Falls back to an em dash when a finding predates the Log ID backfill.
  */
-export function coordinate(track: Pick<RecentTrack, "logId">): string {
+export function coordinate(track: Pick<RecentItem, "logId">): string {
   return track.logId ?? COORD_FALLBACK;
 }
 
 /** `Artist, Artist — Title` — the only sanctioned em dash (VOICE.md). */
-export function artistTitle(track: Pick<RecentTrack, "artists" | "title">): string {
+export function artistTitle(track: Pick<RecentItem, "artists" | "title">): string {
   return `${track.artists.join(", ")} — ${track.title}`;
 }
 
@@ -20,7 +20,9 @@ export function artistTitle(track: Pick<RecentTrack, "artists" | "title">): stri
  *   007.8.1B  Artist — Title
  * The coordinate column is padded to the widest coordinate in the set.
  */
-export function trackRows(tracks: RecentTrack[]): string[] {
+export function trackRows(
+  tracks: Array<Pick<RecentItem, "artists" | "logId" | "title">>,
+): string[] {
   const coordWidth = tracks.reduce((width, track) => {
     return Math.max(width, coordinate(track).length);
   }, 0);

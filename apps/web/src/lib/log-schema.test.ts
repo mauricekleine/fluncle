@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { definitionalProse } from "./log-prose";
-import { breadcrumbsJsonLd, musicRecordingJsonLd } from "./log-schema";
+import { breadcrumbsJsonLd, mixtapeAlbumJsonLd, musicRecordingJsonLd } from "./log-schema";
 
 const track = {
   addedAt: "2026-06-03T18:21:00.000Z",
@@ -71,5 +71,48 @@ describe("breadcrumbsJsonLd", () => {
       "The log",
       "004.7.2I",
     ]);
+  });
+});
+
+describe("mixtapeAlbumJsonLd", () => {
+  it("renders a DJMixAlbum-shaped MusicAlbum with member log URLs", () => {
+    const jsonLd = mixtapeAlbumJsonLd({
+      addedAt: "2026-06-18T21:00:00.000Z",
+      artists: ["Fluncle"],
+      durationMs: 3_480_000,
+      externalUrls: { mixcloud: "https://mixcloud.com/fluncle/test" },
+      logId: "019.F.1A",
+      memberCount: 1,
+      members: [
+        {
+          ...track,
+          addedToSpotify: true,
+          enrichmentStatus: "done",
+          postedToTelegram: true,
+          trackId: "abc",
+        },
+      ],
+      note: "A checkpoint in the archive.",
+      title: "Checkpoint one",
+      type: "mixtape",
+    }) as Record<string, unknown>;
+
+    expect(jsonLd["@type"]).toBe("MusicAlbum");
+    expect(jsonLd.albumProductionType).toBe("https://schema.org/DJMixAlbum");
+    expect(jsonLd.identifier).toEqual([
+      { "@type": "PropertyValue", propertyID: "fluncle-log-id", value: "019.F.1A" },
+      { "@type": "PropertyValue", propertyID: "fluncle-log-id", value: "fluncle://019.F.1A" },
+    ]);
+    expect(jsonLd.url).toBe("https://www.fluncle.com/log/019.F.1A");
+    expect(jsonLd.track).toMatchObject({
+      "@type": "ItemList",
+      itemListElement: [
+        {
+          "@type": "ListItem",
+          item: { url: "https://www.fluncle.com/log/004.7.2I" },
+          position: 1,
+        },
+      ],
+    });
   });
 });

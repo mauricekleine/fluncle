@@ -136,6 +136,10 @@ export function createGame(container: HTMLElement): Game {
       const page = await fetchTracks({ cursor, limit: 48 });
 
       for (const track of page.tracks) {
+        if (track.type === "mixtape") {
+          continue;
+        }
+
         tracks.push({
           addedAt: track.addedAt,
           artists: track.artists,

@@ -3,12 +3,13 @@ import { parseArtistsJson } from "../lib/server/artists";
 import { getDb, typedRows } from "../lib/server/db";
 
 type TrackRow = {
-  track_id: string;
-  spotify_url: string;
-  title: string;
   artists_json: string;
+  item_type: "finding" | "mixtape";
   note: string | null;
   added_at: string;
+  spotify_url: string | null;
+  title: string;
+  track_id: string;
 };
 
 export const Route = createFileRoute("/rss.xml")({
@@ -18,7 +19,9 @@ export const Route = createFileRoute("/rss.xml")({
         const db = await getDb();
         const result = await db.execute({
           args: [25],
-          sql: `select
+          sql: `select * from (
+            select
+              'finding' as item_type,
               track_id,
               spotify_url,
               title,
@@ -26,6 +29,18 @@ export const Route = createFileRoute("/rss.xml")({
               note,
               added_at
             from tracks
+            union all
+            select
+              'mixtape' as item_type,
+              log_id as track_id,
+              null as spotify_url,
+              title,
+              '["Fluncle"]' as artists_json,
+              note,
+              added_at
+            from mixtapes
+            where status = 'published' and log_id is not null and added_at is not null
+          )
             order by added_at desc, track_id desc
             limit ?`,
         });
@@ -33,16 +48,20 @@ export const Route = createFileRoute("/rss.xml")({
         const newestDate = rows[0]?.added_at;
         const items = rows.map((row) => {
           const artists = parseArtistsJson(row.artists_json);
-          const title = `${artists.join(", ")} - ${row.title}`;
-          const description = row.note?.trim()
-            ? `${artists.join(", ")} - ${row.title}\n\n${row.note.trim()}`
-            : `${artists.join(", ")} - ${row.title}`;
+          const title =
+            row.item_type === "mixtape" ? row.title : `${artists.join(", ")} - ${row.title}`;
+          const description = row.note?.trim() ? `${title}\n\n${row.note.trim()}` : title;
+          const link =
+            row.item_type === "mixtape"
+              ? `https://www.fluncle.com/log/${encodeURIComponent(row.track_id)}`
+              : (row.spotify_url as string);
 
           return `<item>
   <title>${escapeXml(title)}</title>
-  <link>${escapeXml(row.spotify_url)}</link>
+  <link>${escapeXml(link)}</link>
   <guid isPermaLink="false">${escapeXml(row.track_id)}</guid>
   <pubDate>${new Date(row.added_at).toUTCString()}</pubDate>
+  ${row.item_type === "mixtape" ? '<category domain="https://www.fluncle.com/ns/object-type">mixtape</category>' : ""}
   <description>${escapeXml(description)}</description>
 </item>`;
         });

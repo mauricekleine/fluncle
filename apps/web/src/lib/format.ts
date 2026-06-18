@@ -6,6 +6,12 @@ export function formatDuration(durationMs: number): string {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
+export function formatAlbumDuration(durationMs: number): string {
+  const totalMinutes = Math.max(1, Math.round(durationMs / 60_000));
+
+  return `${totalMinutes} min`;
+}
+
 export function formatDate(value: string): string {
   // Pinned locale and timezone so the server-rendered date matches hydration
   // on every client; VOICE.md's tabular convention is "Jun 4".
