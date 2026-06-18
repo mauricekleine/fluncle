@@ -86,6 +86,13 @@ Re-ship caveat (for the content-backlog loop too): replacing a clip at the same 
 
 Two `@fluncle` SoundClouds exist: the main `soundcloud.com/fluncle` (the clean URL — cosmonaut avatar and "Fluncle" name already set) and a bare auto-suffixed duplicate `soundcloud.com/fluncle-646915409`. The profile is up: `/fluncle` has the cosmonaut avatar, the generated header (`docs/socials/banners/soundcloud.png`, 2480×520), and the canonical bio with the site link — wired into the home social row and the entity `sameAs` on-site, and recorded in the `docs/socials/` map (sign-in `hey@fluncle.com`). Remaining, operator-side: resolve the bare duplicate `fluncle-646915409` (consolidate on `/fluncle`), and add the reciprocal off-site anchors so the identity graph links both ways — the **SoundCloud ID** property (`P3040` = `fluncle`) on Wikidata `Q140169844`, and a **SoundCloud URL relationship** on the MusicBrainz artist. Profile presence only; hosting actual audio there is the separate, licensing-gated question the [mixtapes runbook](./fluncle-mixtapes-runbook.md) owns (SoundCloud is a takedown-risk secondary mirror). Small, manual, no code.
 
+### YouTube thumbnails — backfill the back catalogue + guard the missing cover
+
+Custom YouTube thumbnails are wired and on by default: the per-platform push derives `<log-id>/cover.jpg` from the footage path and `pushYouTubeShort` uploads it as `settings.thumbnail` (`apps/web/src/lib/server/postiz.ts`). It's been live since the admin posting board (`b16a5db`, 2026-06-13), so every Short pushed since carries the Fluncle plate; the Shorts published before it still show YouTube's auto-picked video frame. Two follow-ups, both operator-side and low-priority (nothing is broken — new pushes are covered):
+
+- **Backfill the pre-`b16a5db` Shorts.** Postiz's create-post flow makes a _new_ video and has no "edit an existing video's thumbnail" call, so the live Shorts can't be retro-fixed through our path. Options: set each one's thumbnail manually in YouTube Studio (~7 videos, no code), or a one-off **YouTube Data API `thumbnails.set`** script that uploads `cover.jpg` per published Short (reusable, but needs a YouTube OAuth token with upload scope — Postiz holds its own auth, we have no direct YouTube credential in the repo today).
+- **Guard the missing cover.** `coverUrl` is passed unconditionally, but older bundles may lack a `cover.jpg` in R2 (the known stories-media quirk); if it's absent, `uploadFromUrl` throws and the **whole push 502s** instead of posting without a thumbnail. Probe the cover first and skip the thumbnail if it's missing, so a missing cover never blocks a publish.
+
 ## Later — the bigger arcs
 
 ### Fluncle's Galaxy — the logbook reframe
