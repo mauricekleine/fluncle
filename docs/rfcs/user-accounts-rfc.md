@@ -93,16 +93,18 @@ Future public marginalia slices are not part of this RFC. If pursued, they need 
 
 ## 5. Better Auth contract
 
-Use Better Auth for public accounts. Do not use Spotify OAuth for public accounts; the existing Spotify app remains admin/login-to-admin and playlist-publishing infrastructure only.
+Use Better Auth for optional public listener accounts. The account system is separate from admin auth and uses Better Auth email/password plus the username plugin on the existing Turso/libSQL Drizzle SQLite adapter. The username is the private Galaxy identity; email is only for auth and recovery.
 
 Server setup:
 
-- `apps/web/src/lib/server/auth.ts` exports the Better Auth instance.
+- `apps/web/src/lib/server/public-auth.ts`: Better Auth server setup, username validation, session lookup, CSRF/origin checks, current-user lookup.
 - Use Better Auth’s Drizzle adapter with provider `sqlite` against the repo’s Turso/libSQL-backed Drizzle setup.
 - Enable `emailAndPassword`.
 - Add `username()` from `better-auth/plugins`. Configure username validation for the Galaxy identity: lowercase normalized `username`, preserve `displayUsername`, allow only a conservative character set such as letters, numbers, `_`, and `-`, and reserve Fluncle/admin/system terms.
-- Add the Better Auth client with `usernameClient()` so the UI can call username sign-in. Better Auth’s username plugin signs in with `client.signIn.username({ username, password })`; sign-up uses the email sign-up flow with a `username` property.
+- `apps/web/src/lib/auth-client.ts`: Better Auth browser client with `usernameClient()` so the UI can call username sign-in. Better Auth’s username plugin signs in with `client.signIn.username({ username, password })`; sign-up uses the email sign-up flow with a `username` property.
+- `apps/web/src/routes/api/auth/$.ts`: Better Auth catch-all route plus Fluncle durable signup/signin rate limits.
 - The email is an auth/recovery credential, not the user’s Fluncle identity. Public and private UI should identify the user by username.
+- These modules must not import `requireAdmin`, admin cookie constants, `signState`, `verifyState`, or the admin OAuth callback helpers.
 
 Boundaries:
 
@@ -110,13 +112,31 @@ Boundaries:
 - Admin auth must remain exactly separate: `requireAdmin`, `fluncle_admin`, `FLUNCLE_API_TOKEN`, `spotify_auth`, and the Spotify admin/publish callback are not public-account primitives.
 - Public account deletion/export reads Better Auth user/session/account data through the supported Better Auth/DB shape, not through copied custom session logic.
 - CLI/SSH bearer/device-token auth is not in the first web cut. If it ships later, design it as a Better Auth-compatible extension or separate token table that still cannot satisfy admin auth.
+- `BETTER_AUTH_SECRET` is required outside local development. Local dev may use a clearly named dev-only fallback.
+- `BETTER_AUTH_URL` should match the deployed origin when Better Auth cannot infer it from the request.
 
 Mutation protection:
 
 - Use Better Auth’s session primitives for browser auth and add Fluncle route-level origin/content-type checks for non-Better-Auth account mutations such as saved findings, Galaxy progress, export, and deletion.
-- Durable `rate_limit_events` remain required for sign-up/sign-in attempts, saved finding writes, Galaxy progress writes, submissions, export, and deletion.
+- Better Auth owns session cookies under the `fluncle_user` cookie prefix and persists session rows through the Better Auth schema tables.
+- `/api/me` must return `user: null` anonymously and only private account fields when signed in: `id`, `username`, `displayUsername`, `createdAt`, and feature flags.
+- `/api/me/csrf` issues a signed, short-lived mutation token for the current private user.
 
-Tests must prove Better Auth public sessions fail `requireAdmin()`, admin bearer/cookie fails `/api/me`, admin Spotify callback cannot create a public user, and Better Auth routes cannot write `spotify_auth`.
+Bearer/device tokens:
+
+Do not add public bearer/device auth in this slice. CLI and SSH remain anonymous submission/read surfaces unless a future RFC adds device login.
+
+OAuth:
+
+Do not add public Spotify OAuth in this slice. Spotify OAuth remains admin/publish-only; public auth routes never write `spotify_auth`, call publish-token exchange helpers, request playlist scopes, or branch through admin callbacks.
+
+CSRF/origin:
+
+- Add `requireJsonMutation(request, user)`.
+- Cookie-authenticated private account POST/PATCH/PUT/DELETE must validate same-origin `Origin` or `Referer`, require JSON content type unless explicitly form-based, and require the `/api/me/csrf` token in `x-fluncle-csrf`.
+- Signup, signin, account mutations, progress, saves, submissions, export, and deletion must write durable `rate_limit_events` rows.
+
+Tests must prove Better Auth sessions fail `requireAdmin()`, admin bearer/cookie fails `/api/me`, Better Auth routes never write `spotify_auth`, and admin Spotify callbacks cannot create public users.
 
 ## 6. Route file map
 
@@ -124,8 +144,9 @@ Use exact TanStack route file names during implementation. URL notation with `:p
 
 Initial web/API files:
 
-- `apps/web/src/routes/api/auth/$.ts` or the repo-equivalent Better Auth catch-all route → Better Auth handler for `/api/auth/*`; choose the exact TanStack file shape during implementation and verify route generation.
+- `apps/web/src/routes/api/auth/$.ts` → Better Auth catch-all under `/api/auth/*`
 - `apps/web/src/routes/api/me.ts` → `GET /api/me`
+- `apps/web/src/routes/api/me/csrf.ts` → `GET /api/me/csrf`
 - `apps/web/src/routes/api/me/profile.ts` → `PATCH /api/me/profile`
 - `apps/web/src/routes/api/me/galaxy-progress.ts` → `GET /api/me/galaxy-progress`, `PUT /api/me/galaxy-progress`
 - `apps/web/src/routes/api/me/galaxy-progress/logs.ts` → `POST /api/me/galaxy-progress/logs`

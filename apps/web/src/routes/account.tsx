@@ -1,0 +1,417 @@
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { useEffect, useMemo, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { authClient } from "@/lib/auth-client";
+import { siteUrl } from "@/lib/fluncle-links";
+
+type Me = {
+  ok: true;
+  user: null | {
+    createdAt: string;
+    displayUsername?: string;
+    id: string;
+    username?: string;
+  };
+};
+
+type Progress = {
+  collectedLogIds: string[];
+  deaths: number;
+  wins: number;
+};
+
+type SavedFinding = {
+  artists: string[];
+  logId: string;
+  note?: string;
+  savedAt: string;
+  title: string;
+  trackId: string;
+};
+
+type Submission = {
+  artists: string[];
+  createdAt: string;
+  id: string;
+  status: string;
+  title: string;
+};
+
+export const Route = createFileRoute("/account")({
+  component: AccountPage,
+  head: () => ({
+    links: [{ href: `${siteUrl}/account`, rel: "canonical" }],
+    meta: [
+      { title: "Your place in the Galaxy" },
+      {
+        content:
+          "Private Fluncle account settings, Galaxy progress, saved findings, and submissions.",
+        name: "description",
+      },
+    ],
+  }),
+});
+
+function AccountPage() {
+  const [me, setMe] = useState<Me | undefined>();
+  const [progress, setProgress] = useState<Progress | undefined>();
+  const [saved, setSaved] = useState<SavedFinding[]>([]);
+  const [submissions, setSubmissions] = useState<Submission[]>([]);
+  const [csrfToken, setCsrfToken] = useState("");
+  const [message, setMessage] = useState("");
+  const signedIn = !!me?.user;
+
+  async function refresh() {
+    const nextMe = (await fetch("/api/me").then((res) => res.json())) as Me;
+
+    setMe(nextMe);
+
+    if (!nextMe.user) {
+      setProgress(undefined);
+      setSaved([]);
+      setSubmissions([]);
+      setCsrfToken("");
+      return;
+    }
+
+    const [progressResponse, savedResponse, submissionsResponse, csrfResponse] = await Promise.all([
+      fetch("/api/me/galaxy-progress").then((res) => res.json() as Promise<Progress>),
+      fetch("/api/me/saved-findings").then(
+        (res) => res.json() as Promise<{ savedFindings?: SavedFinding[] }>,
+      ),
+      fetch("/api/me/submissions").then(
+        (res) => res.json() as Promise<{ submissions?: Submission[] }>,
+      ),
+      fetch("/api/me/csrf").then((res) => res.json() as Promise<{ csrfToken?: string }>),
+    ]);
+
+    setProgress(progressResponse as Progress);
+    setSaved((savedResponse.savedFindings ?? []) as SavedFinding[]);
+    setSubmissions((submissionsResponse.submissions ?? []) as Submission[]);
+    setCsrfToken(csrfResponse.csrfToken ?? "");
+  }
+
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  const name = me?.user?.displayUsername ?? me?.user?.username ?? "cosmonaut";
+
+  return (
+    <main className="min-h-screen overflow-x-hidden p-4 text-foreground sm:p-6 lg:p-8">
+      <article className="home-plate account-plate mx-auto my-6 w-full max-w-3xl sm:my-8">
+        <header className="home-masthead">
+          <div>
+            <h1 className="home-nameplate">Your place in the Galaxy</h1>
+            <p className="home-tagline">Private progress, saved findings, and submissions.</p>
+          </div>
+          <Link
+            className="text-sm font-semibold text-muted-foreground hover:text-accent-foreground"
+            to="/"
+          >
+            Back to findings
+          </Link>
+        </header>
+
+        {me === undefined ? (
+          <p className="account-muted">Checking the manifest…</p>
+        ) : signedIn && me.user ? (
+          <SignedInAccount
+            message={message}
+            name={name}
+            progress={progress}
+            refresh={refresh}
+            saved={saved}
+            csrfToken={csrfToken}
+            setMessage={setMessage}
+            submissions={submissions}
+            user={me.user}
+          />
+        ) : (
+          <AuthForms refresh={refresh} setMessage={setMessage} />
+        )}
+      </article>
+    </main>
+  );
+}
+
+function AuthForms({
+  refresh,
+  setMessage,
+}: {
+  refresh: () => Promise<void>;
+  setMessage: (message: string) => void;
+}) {
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setMessage("");
+
+    try {
+      const result =
+        mode === "signup"
+          ? await authClient.signUp.email({
+              email,
+              name: username,
+              password,
+              username,
+            })
+          : await authClient.signIn.username({
+              password,
+              username,
+            });
+
+      if (result.error) {
+        setMessage(result.error.message ?? "Could not sign in.");
+        return;
+      }
+
+      await refresh();
+      setMessage("Aboard. Your private Galaxy state is ready.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not sign in.");
+    }
+  }
+
+  return (
+    <form className="account-stack" onSubmit={(event) => void submit(event)}>
+      <div className="account-row">
+        <Button
+          type="button"
+          variant={mode === "signin" ? "default" : "outline"}
+          onClick={() => setMode("signin")}
+        >
+          Sign in
+        </Button>
+        <Button
+          type="button"
+          variant={mode === "signup" ? "default" : "outline"}
+          onClick={() => setMode("signup")}
+        >
+          Create account
+        </Button>
+      </div>
+      {mode === "signup" ? (
+        <Field label="Email">
+          <Input
+            autoComplete="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+          />
+        </Field>
+      ) : null}
+      <Field label="Username">
+        <Input
+          autoComplete="username"
+          value={username}
+          onChange={(event) => setUsername(event.target.value)}
+        />
+      </Field>
+      <Field label="Password">
+        <Input
+          autoComplete={mode === "signin" ? "current-password" : "new-password"}
+          type="password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+        />
+      </Field>
+      <Button type="submit">{mode === "signup" ? "Create private account" : "Sign in"}</Button>
+    </form>
+  );
+}
+
+function SignedInAccount({
+  csrfToken,
+  message,
+  name,
+  progress,
+  refresh,
+  saved,
+  setMessage,
+  submissions,
+  user,
+}: {
+  csrfToken: string;
+  message: string;
+  name: string;
+  progress?: Progress;
+  refresh: () => Promise<void>;
+  saved: SavedFinding[];
+  setMessage: (message: string) => void;
+  submissions: Submission[];
+  user: NonNullable<Me["user"]>;
+}) {
+  const [username, setUsername] = useState(user.username ?? "");
+  const [displayUsername, setDisplayUsername] = useState(
+    user.displayUsername ?? user.username ?? "",
+  );
+  const [exportText, setExportText] = useState("");
+  const joined = useMemo(() => new Date(user.createdAt).toLocaleDateString(), [user.createdAt]);
+
+  async function patchProfile(event: React.FormEvent) {
+    event.preventDefault();
+    const response = await fetch("/api/me/profile", {
+      body: JSON.stringify({ displayUsername, username }),
+      headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
+      method: "PATCH",
+    });
+
+    setMessage(
+      response.ok ? "Username updated." : ((await response.json()) as { message: string }).message,
+    );
+    await refresh();
+  }
+
+  async function exportData() {
+    const response = await fetch("/api/me/export", {
+      body: "{}",
+      headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
+      method: "POST",
+    });
+    const data = (await response.json()) as { export?: unknown };
+
+    setExportText(JSON.stringify(data.export ?? data, null, 2));
+  }
+
+  async function deleteData() {
+    const response = await fetch("/api/me/delete", {
+      body: "{}",
+      headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
+      method: "POST",
+    });
+
+    setMessage(
+      response.ok ? "Account deleted. Anonymous mode is still here." : "Could not delete account.",
+    );
+    await refresh();
+  }
+
+  async function signOut() {
+    await authClient.signOut();
+    await refresh();
+  }
+
+  return (
+    <div className="account-stack">
+      <section className="account-section">
+        <p className="account-kicker">Signed in as {name}</p>
+        <p className="account-muted">
+          Joined {joined}. Email stays private and never appears in public Fluncle surfaces.
+        </p>
+      </section>
+
+      <section className="account-grid">
+        <Metric label="Lifetime logs" value={progress?.collectedLogIds.length ?? 0} />
+        <Metric label="Runs home" value={progress?.wins ?? 0} />
+        <Metric label="Tows" value={progress?.deaths ?? 0} />
+      </section>
+
+      <section className="account-section">
+        <h2>Saved findings</h2>
+        <ListEmpty items={saved} empty="No saved findings yet.">
+          {saved.map((finding) => (
+            <li key={finding.trackId}>
+              <Link to="/log/$logId" params={{ logId: finding.logId }}>
+                {finding.artists.join(", ")} — {finding.title}
+              </Link>
+            </li>
+          ))}
+        </ListEmpty>
+      </section>
+
+      <section className="account-section">
+        <h2>Your submissions</h2>
+        <ListEmpty items={submissions} empty="No submissions from this account yet.">
+          {submissions.map((submission) => (
+            <li key={submission.id}>
+              {submission.artists.join(", ")} — {submission.title} <span>{submission.status}</span>
+            </li>
+          ))}
+        </ListEmpty>
+      </section>
+
+      <form className="account-section" onSubmit={(event) => void patchProfile(event)}>
+        <h2>Settings</h2>
+        <Field label="Username">
+          <Input value={username} onChange={(event) => setUsername(event.target.value)} />
+        </Field>
+        <Field label="Display name">
+          <Input
+            value={displayUsername}
+            onChange={(event) => setDisplayUsername(event.target.value)}
+          />
+        </Field>
+        <Button type="submit" variant="outline">
+          Update settings
+        </Button>
+      </form>
+
+      <section className="account-section">
+        <h2>Export and deletion</h2>
+        <p className="account-muted">
+          Export includes private progress, saved findings, and signed-in submissions. Deletion
+          removes private progress and saves, revokes sessions, and unlinks submissions from this
+          account.
+        </p>
+        <div className="account-row">
+          <Button type="button" variant="outline" onClick={() => void exportData()}>
+            Export data
+          </Button>
+          <Button type="button" variant="destructive" onClick={() => void deleteData()}>
+            Delete account
+          </Button>
+          <Button type="button" variant="ghost" onClick={() => void signOut()}>
+            Sign out
+          </Button>
+        </div>
+        {exportText ? (
+          <Textarea readOnly className="min-h-48 font-mono text-xs" value={exportText} />
+        ) : null}
+      </section>
+      {message ? <p className="account-muted">{message}</p> : null}
+    </div>
+  );
+}
+
+function Field({ children, label }: { children: React.ReactNode; label: string }) {
+  const id = label.toLowerCase().replaceAll(" ", "-");
+
+  return (
+    <div className="account-field">
+      <Label htmlFor={id}>{label}</Label>
+      {children}
+    </div>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="account-metric">
+      <strong>{value}</strong>
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function ListEmpty<T>({
+  children,
+  empty,
+  items,
+}: {
+  children: React.ReactNode;
+  empty: string;
+  items: T[];
+}) {
+  return items.length > 0 ? (
+    <ul className="account-list">{children}</ul>
+  ) : (
+    <p className="account-muted">{empty}</p>
+  );
+}

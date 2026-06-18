@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as RssDotxmlRouteImport } from './routes/rss[.]xml'
 import { Route as GalaxyRouteImport } from './routes/galaxy'
+import { Route as AccountRouteImport } from './routes/account'
 import { Route as AboutRouteImport } from './routes/about'
 import { Route as AdminRouteRouteImport } from './routes/admin/route'
 import { Route as IndexRouteImport } from './routes/index'
@@ -28,6 +29,7 @@ import { Route as ApiStoriesRouteImport } from './routes/api/stories'
 import { Route as ApiSearchRouteImport } from './routes/api/search'
 import { Route as ApiNewsletterRouteImport } from './routes/api/newsletter'
 import { Route as ApiMixtapesRouteImport } from './routes/api/mixtapes'
+import { Route as ApiMeRouteImport } from './routes/api/me'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as AdminMixtapesRouteImport } from './routes/admin/mixtapes'
 import { Route as AdminLoginRouteImport } from './routes/admin/login'
@@ -35,10 +37,21 @@ import { Route as ApiTracksRandomRouteImport } from './routes/api/tracks/random'
 import { Route as ApiTracksIdOrLogIdRouteImport } from './routes/api/tracks.$idOrLogId'
 import { Route as ApiPreviewIdOrLogIdRouteImport } from './routes/api/preview.$idOrLogId'
 import { Route as ApiOgLogIdRouteImport } from './routes/api/og.$logId'
+import { Route as ApiMeSubmissionsRouteImport } from './routes/api/me/submissions'
+import { Route as ApiMeSavedFindingsRouteImport } from './routes/api/me/saved-findings'
+import { Route as ApiMeProfileRouteImport } from './routes/api/me/profile'
+import { Route as ApiMeGalaxyProgressRouteImport } from './routes/api/me/galaxy-progress'
+import { Route as ApiMeExportRouteImport } from './routes/api/me/export'
+import { Route as ApiMeDeleteRouteImport } from './routes/api/me/delete'
+import { Route as ApiMeCsrfRouteImport } from './routes/api/me/csrf'
+import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiAdminTracksRouteImport } from './routes/api/admin/tracks'
 import { Route as ApiAdminSubmissionsRouteImport } from './routes/api/admin/submissions'
 import { Route as ApiAdminMixtapesRouteImport } from './routes/api/admin/mixtapes'
 import { Route as ApiAdminLogoutRouteImport } from './routes/api/admin/logout'
+import { Route as ApiMeSavedFindingsTrackIdRouteImport } from './routes/api/me/saved-findings.$trackId'
+import { Route as ApiMeGalaxyProgressLogsRouteImport } from './routes/api/me/galaxy-progress/logs'
+import { Route as ApiMeExportExportIdRouteImport } from './routes/api/me/export.$exportId'
 import { Route as ApiAdminTracksTrackIdRouteImport } from './routes/api/admin/tracks.$trackId'
 import { Route as ApiAdminSubmissionsSubmissionIdRouteImport } from './routes/api/admin/submissions/$submissionId'
 import { Route as ApiAdminMixtapesMixtapeIdRouteImport } from './routes/api/admin/mixtapes.$mixtapeId'
@@ -70,6 +83,11 @@ const RssDotxmlRoute = RssDotxmlRouteImport.update({
 const GalaxyRoute = GalaxyRouteImport.update({
   id: '/galaxy',
   path: '/galaxy',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AccountRoute = AccountRouteImport.update({
+  id: '/account',
+  path: '/account',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AboutRoute = AboutRouteImport.update({
@@ -152,6 +170,11 @@ const ApiMixtapesRoute = ApiMixtapesRouteImport.update({
   path: '/api/mixtapes',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiMeRoute = ApiMeRouteImport.update({
+  id: '/api/me',
+  path: '/api/me',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiHealthRoute = ApiHealthRouteImport.update({
   id: '/api/health',
   path: '/api/health',
@@ -187,6 +210,46 @@ const ApiOgLogIdRoute = ApiOgLogIdRouteImport.update({
   path: '/api/og/$logId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiMeSubmissionsRoute = ApiMeSubmissionsRouteImport.update({
+  id: '/submissions',
+  path: '/submissions',
+  getParentRoute: () => ApiMeRoute,
+} as any)
+const ApiMeSavedFindingsRoute = ApiMeSavedFindingsRouteImport.update({
+  id: '/saved-findings',
+  path: '/saved-findings',
+  getParentRoute: () => ApiMeRoute,
+} as any)
+const ApiMeProfileRoute = ApiMeProfileRouteImport.update({
+  id: '/profile',
+  path: '/profile',
+  getParentRoute: () => ApiMeRoute,
+} as any)
+const ApiMeGalaxyProgressRoute = ApiMeGalaxyProgressRouteImport.update({
+  id: '/galaxy-progress',
+  path: '/galaxy-progress',
+  getParentRoute: () => ApiMeRoute,
+} as any)
+const ApiMeExportRoute = ApiMeExportRouteImport.update({
+  id: '/export',
+  path: '/export',
+  getParentRoute: () => ApiMeRoute,
+} as any)
+const ApiMeDeleteRoute = ApiMeDeleteRouteImport.update({
+  id: '/delete',
+  path: '/delete',
+  getParentRoute: () => ApiMeRoute,
+} as any)
+const ApiMeCsrfRoute = ApiMeCsrfRouteImport.update({
+  id: '/csrf',
+  path: '/csrf',
+  getParentRoute: () => ApiMeRoute,
+} as any)
+const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
+  id: '/api/auth/$',
+  path: '/api/auth/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAdminTracksRoute = ApiAdminTracksRouteImport.update({
   id: '/api/admin/tracks',
   path: '/api/admin/tracks',
@@ -206,6 +269,22 @@ const ApiAdminLogoutRoute = ApiAdminLogoutRouteImport.update({
   id: '/api/admin/logout',
   path: '/api/admin/logout',
   getParentRoute: () => rootRouteImport,
+} as any)
+const ApiMeSavedFindingsTrackIdRoute =
+  ApiMeSavedFindingsTrackIdRouteImport.update({
+    id: '/$trackId',
+    path: '/$trackId',
+    getParentRoute: () => ApiMeSavedFindingsRoute,
+  } as any)
+const ApiMeGalaxyProgressLogsRoute = ApiMeGalaxyProgressLogsRouteImport.update({
+  id: '/logs',
+  path: '/logs',
+  getParentRoute: () => ApiMeGalaxyProgressRoute,
+} as any)
+const ApiMeExportExportIdRoute = ApiMeExportExportIdRouteImport.update({
+  id: '/$exportId',
+  path: '/$exportId',
+  getParentRoute: () => ApiMeExportRoute,
 } as any)
 const ApiAdminTracksTrackIdRoute = ApiAdminTracksTrackIdRouteImport.update({
   id: '/$trackId',
@@ -313,12 +392,14 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteRouteWithChildren
   '/about': typeof AboutRoute
+  '/account': typeof AccountRoute
   '/galaxy': typeof GalaxyRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/me': typeof ApiMeRouteWithChildren
   '/api/mixtapes': typeof ApiMixtapesRoute
   '/api/newsletter': typeof ApiNewsletterRoute
   '/api/search': typeof ApiSearchRoute
@@ -336,6 +417,14 @@ export interface FileRoutesByFullPath {
   '/api/admin/mixtapes': typeof ApiAdminMixtapesRouteWithChildren
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
   '/api/admin/tracks': typeof ApiAdminTracksRouteWithChildren
+  '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/me/csrf': typeof ApiMeCsrfRoute
+  '/api/me/delete': typeof ApiMeDeleteRoute
+  '/api/me/export': typeof ApiMeExportRouteWithChildren
+  '/api/me/galaxy-progress': typeof ApiMeGalaxyProgressRouteWithChildren
+  '/api/me/profile': typeof ApiMeProfileRoute
+  '/api/me/saved-findings': typeof ApiMeSavedFindingsRouteWithChildren
+  '/api/me/submissions': typeof ApiMeSubmissionsRoute
   '/api/og/$logId': typeof ApiOgLogIdRoute
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
   '/api/tracks/$idOrLogId': typeof ApiTracksIdOrLogIdRoute
@@ -343,6 +432,9 @@ export interface FileRoutesByFullPath {
   '/api/admin/mixtapes/$mixtapeId': typeof ApiAdminMixtapesMixtapeIdRouteWithChildren
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
   '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRouteWithChildren
+  '/api/me/export/$exportId': typeof ApiMeExportExportIdRoute
+  '/api/me/galaxy-progress/logs': typeof ApiMeGalaxyProgressLogsRoute
+  '/api/me/saved-findings/$trackId': typeof ApiMeSavedFindingsTrackIdRoute
   '/api/admin/mixtapes/$mixtapeId/members': typeof ApiAdminMixtapesMixtapeIdMembersRoute
   '/api/admin/mixtapes/$mixtapeId/publish': typeof ApiAdminMixtapesMixtapeIdPublishRoute
   '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
@@ -361,12 +453,14 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
+  '/account': typeof AccountRoute
   '/galaxy': typeof GalaxyRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/me': typeof ApiMeRouteWithChildren
   '/api/mixtapes': typeof ApiMixtapesRoute
   '/api/newsletter': typeof ApiNewsletterRoute
   '/api/search': typeof ApiSearchRoute
@@ -384,6 +478,14 @@ export interface FileRoutesByTo {
   '/api/admin/mixtapes': typeof ApiAdminMixtapesRouteWithChildren
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
   '/api/admin/tracks': typeof ApiAdminTracksRouteWithChildren
+  '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/me/csrf': typeof ApiMeCsrfRoute
+  '/api/me/delete': typeof ApiMeDeleteRoute
+  '/api/me/export': typeof ApiMeExportRouteWithChildren
+  '/api/me/galaxy-progress': typeof ApiMeGalaxyProgressRouteWithChildren
+  '/api/me/profile': typeof ApiMeProfileRoute
+  '/api/me/saved-findings': typeof ApiMeSavedFindingsRouteWithChildren
+  '/api/me/submissions': typeof ApiMeSubmissionsRoute
   '/api/og/$logId': typeof ApiOgLogIdRoute
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
   '/api/tracks/$idOrLogId': typeof ApiTracksIdOrLogIdRoute
@@ -391,6 +493,9 @@ export interface FileRoutesByTo {
   '/api/admin/mixtapes/$mixtapeId': typeof ApiAdminMixtapesMixtapeIdRouteWithChildren
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
   '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRouteWithChildren
+  '/api/me/export/$exportId': typeof ApiMeExportExportIdRoute
+  '/api/me/galaxy-progress/logs': typeof ApiMeGalaxyProgressLogsRoute
+  '/api/me/saved-findings/$trackId': typeof ApiMeSavedFindingsTrackIdRoute
   '/api/admin/mixtapes/$mixtapeId/members': typeof ApiAdminMixtapesMixtapeIdMembersRoute
   '/api/admin/mixtapes/$mixtapeId/publish': typeof ApiAdminMixtapesMixtapeIdPublishRoute
   '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
@@ -411,12 +516,14 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteRouteWithChildren
   '/about': typeof AboutRoute
+  '/account': typeof AccountRoute
   '/galaxy': typeof GalaxyRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/me': typeof ApiMeRouteWithChildren
   '/api/mixtapes': typeof ApiMixtapesRoute
   '/api/newsletter': typeof ApiNewsletterRoute
   '/api/search': typeof ApiSearchRoute
@@ -434,6 +541,14 @@ export interface FileRoutesById {
   '/api/admin/mixtapes': typeof ApiAdminMixtapesRouteWithChildren
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
   '/api/admin/tracks': typeof ApiAdminTracksRouteWithChildren
+  '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/me/csrf': typeof ApiMeCsrfRoute
+  '/api/me/delete': typeof ApiMeDeleteRoute
+  '/api/me/export': typeof ApiMeExportRouteWithChildren
+  '/api/me/galaxy-progress': typeof ApiMeGalaxyProgressRouteWithChildren
+  '/api/me/profile': typeof ApiMeProfileRoute
+  '/api/me/saved-findings': typeof ApiMeSavedFindingsRouteWithChildren
+  '/api/me/submissions': typeof ApiMeSubmissionsRoute
   '/api/og/$logId': typeof ApiOgLogIdRoute
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
   '/api/tracks/$idOrLogId': typeof ApiTracksIdOrLogIdRoute
@@ -441,6 +556,9 @@ export interface FileRoutesById {
   '/api/admin/mixtapes/$mixtapeId': typeof ApiAdminMixtapesMixtapeIdRouteWithChildren
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
   '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRouteWithChildren
+  '/api/me/export/$exportId': typeof ApiMeExportExportIdRoute
+  '/api/me/galaxy-progress/logs': typeof ApiMeGalaxyProgressLogsRoute
+  '/api/me/saved-findings/$trackId': typeof ApiMeSavedFindingsTrackIdRoute
   '/api/admin/mixtapes/$mixtapeId/members': typeof ApiAdminMixtapesMixtapeIdMembersRoute
   '/api/admin/mixtapes/$mixtapeId/publish': typeof ApiAdminMixtapesMixtapeIdPublishRoute
   '/api/admin/spotify/auth/callback': typeof ApiAdminSpotifyAuthCallbackRoute
@@ -462,12 +580,14 @@ export interface FileRouteTypes {
     | '/'
     | '/admin'
     | '/about'
+    | '/account'
     | '/galaxy'
     | '/rss.xml'
     | '/sitemap.xml'
     | '/admin/login'
     | '/admin/mixtapes'
     | '/api/health'
+    | '/api/me'
     | '/api/mixtapes'
     | '/api/newsletter'
     | '/api/search'
@@ -485,6 +605,14 @@ export interface FileRouteTypes {
     | '/api/admin/mixtapes'
     | '/api/admin/submissions'
     | '/api/admin/tracks'
+    | '/api/auth/$'
+    | '/api/me/csrf'
+    | '/api/me/delete'
+    | '/api/me/export'
+    | '/api/me/galaxy-progress'
+    | '/api/me/profile'
+    | '/api/me/saved-findings'
+    | '/api/me/submissions'
     | '/api/og/$logId'
     | '/api/preview/$idOrLogId'
     | '/api/tracks/$idOrLogId'
@@ -492,6 +620,9 @@ export interface FileRouteTypes {
     | '/api/admin/mixtapes/$mixtapeId'
     | '/api/admin/submissions/$submissionId'
     | '/api/admin/tracks/$trackId'
+    | '/api/me/export/$exportId'
+    | '/api/me/galaxy-progress/logs'
+    | '/api/me/saved-findings/$trackId'
     | '/api/admin/mixtapes/$mixtapeId/members'
     | '/api/admin/mixtapes/$mixtapeId/publish'
     | '/api/admin/spotify/auth/callback'
@@ -510,12 +641,14 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/about'
+    | '/account'
     | '/galaxy'
     | '/rss.xml'
     | '/sitemap.xml'
     | '/admin/login'
     | '/admin/mixtapes'
     | '/api/health'
+    | '/api/me'
     | '/api/mixtapes'
     | '/api/newsletter'
     | '/api/search'
@@ -533,6 +666,14 @@ export interface FileRouteTypes {
     | '/api/admin/mixtapes'
     | '/api/admin/submissions'
     | '/api/admin/tracks'
+    | '/api/auth/$'
+    | '/api/me/csrf'
+    | '/api/me/delete'
+    | '/api/me/export'
+    | '/api/me/galaxy-progress'
+    | '/api/me/profile'
+    | '/api/me/saved-findings'
+    | '/api/me/submissions'
     | '/api/og/$logId'
     | '/api/preview/$idOrLogId'
     | '/api/tracks/$idOrLogId'
@@ -540,6 +681,9 @@ export interface FileRouteTypes {
     | '/api/admin/mixtapes/$mixtapeId'
     | '/api/admin/submissions/$submissionId'
     | '/api/admin/tracks/$trackId'
+    | '/api/me/export/$exportId'
+    | '/api/me/galaxy-progress/logs'
+    | '/api/me/saved-findings/$trackId'
     | '/api/admin/mixtapes/$mixtapeId/members'
     | '/api/admin/mixtapes/$mixtapeId/publish'
     | '/api/admin/spotify/auth/callback'
@@ -559,12 +703,14 @@ export interface FileRouteTypes {
     | '/'
     | '/admin'
     | '/about'
+    | '/account'
     | '/galaxy'
     | '/rss.xml'
     | '/sitemap.xml'
     | '/admin/login'
     | '/admin/mixtapes'
     | '/api/health'
+    | '/api/me'
     | '/api/mixtapes'
     | '/api/newsletter'
     | '/api/search'
@@ -582,6 +728,14 @@ export interface FileRouteTypes {
     | '/api/admin/mixtapes'
     | '/api/admin/submissions'
     | '/api/admin/tracks'
+    | '/api/auth/$'
+    | '/api/me/csrf'
+    | '/api/me/delete'
+    | '/api/me/export'
+    | '/api/me/galaxy-progress'
+    | '/api/me/profile'
+    | '/api/me/saved-findings'
+    | '/api/me/submissions'
     | '/api/og/$logId'
     | '/api/preview/$idOrLogId'
     | '/api/tracks/$idOrLogId'
@@ -589,6 +743,9 @@ export interface FileRouteTypes {
     | '/api/admin/mixtapes/$mixtapeId'
     | '/api/admin/submissions/$submissionId'
     | '/api/admin/tracks/$trackId'
+    | '/api/me/export/$exportId'
+    | '/api/me/galaxy-progress/logs'
+    | '/api/me/saved-findings/$trackId'
     | '/api/admin/mixtapes/$mixtapeId/members'
     | '/api/admin/mixtapes/$mixtapeId/publish'
     | '/api/admin/spotify/auth/callback'
@@ -609,10 +766,12 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRouteRoute: typeof AdminRouteRouteWithChildren
   AboutRoute: typeof AboutRoute
+  AccountRoute: typeof AccountRoute
   GalaxyRoute: typeof GalaxyRoute
   RssDotxmlRoute: typeof RssDotxmlRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   ApiHealthRoute: typeof ApiHealthRoute
+  ApiMeRoute: typeof ApiMeRouteWithChildren
   ApiMixtapesRoute: typeof ApiMixtapesRoute
   ApiNewsletterRoute: typeof ApiNewsletterRoute
   ApiSearchRoute: typeof ApiSearchRoute
@@ -629,6 +788,7 @@ export interface RootRouteChildren {
   ApiAdminMixtapesRoute: typeof ApiAdminMixtapesRouteWithChildren
   ApiAdminSubmissionsRoute: typeof ApiAdminSubmissionsRouteWithChildren
   ApiAdminTracksRoute: typeof ApiAdminTracksRouteWithChildren
+  ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiOgLogIdRoute: typeof ApiOgLogIdRoute
   ApiPreviewIdOrLogIdRoute: typeof ApiPreviewIdOrLogIdRoute
   ApiAdminSpotifyAuthCallbackRoute: typeof ApiAdminSpotifyAuthCallbackRoute
@@ -657,6 +817,13 @@ declare module '@tanstack/react-router' {
       path: '/galaxy'
       fullPath: '/galaxy'
       preLoaderRoute: typeof GalaxyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/account': {
+      id: '/account'
+      path: '/account'
+      fullPath: '/account'
+      preLoaderRoute: typeof AccountRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/about': {
@@ -771,6 +938,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiMixtapesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/me': {
+      id: '/api/me'
+      path: '/api/me'
+      fullPath: '/api/me'
+      preLoaderRoute: typeof ApiMeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/health': {
       id: '/api/health'
       path: '/api/health'
@@ -820,6 +994,62 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiOgLogIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/me/submissions': {
+      id: '/api/me/submissions'
+      path: '/submissions'
+      fullPath: '/api/me/submissions'
+      preLoaderRoute: typeof ApiMeSubmissionsRouteImport
+      parentRoute: typeof ApiMeRoute
+    }
+    '/api/me/saved-findings': {
+      id: '/api/me/saved-findings'
+      path: '/saved-findings'
+      fullPath: '/api/me/saved-findings'
+      preLoaderRoute: typeof ApiMeSavedFindingsRouteImport
+      parentRoute: typeof ApiMeRoute
+    }
+    '/api/me/profile': {
+      id: '/api/me/profile'
+      path: '/profile'
+      fullPath: '/api/me/profile'
+      preLoaderRoute: typeof ApiMeProfileRouteImport
+      parentRoute: typeof ApiMeRoute
+    }
+    '/api/me/galaxy-progress': {
+      id: '/api/me/galaxy-progress'
+      path: '/galaxy-progress'
+      fullPath: '/api/me/galaxy-progress'
+      preLoaderRoute: typeof ApiMeGalaxyProgressRouteImport
+      parentRoute: typeof ApiMeRoute
+    }
+    '/api/me/export': {
+      id: '/api/me/export'
+      path: '/export'
+      fullPath: '/api/me/export'
+      preLoaderRoute: typeof ApiMeExportRouteImport
+      parentRoute: typeof ApiMeRoute
+    }
+    '/api/me/delete': {
+      id: '/api/me/delete'
+      path: '/delete'
+      fullPath: '/api/me/delete'
+      preLoaderRoute: typeof ApiMeDeleteRouteImport
+      parentRoute: typeof ApiMeRoute
+    }
+    '/api/me/csrf': {
+      id: '/api/me/csrf'
+      path: '/csrf'
+      fullPath: '/api/me/csrf'
+      preLoaderRoute: typeof ApiMeCsrfRouteImport
+      parentRoute: typeof ApiMeRoute
+    }
+    '/api/auth/$': {
+      id: '/api/auth/$'
+      path: '/api/auth/$'
+      fullPath: '/api/auth/$'
+      preLoaderRoute: typeof ApiAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/admin/tracks': {
       id: '/api/admin/tracks'
       path: '/api/admin/tracks'
@@ -847,6 +1077,27 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/admin/logout'
       preLoaderRoute: typeof ApiAdminLogoutRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/api/me/saved-findings/$trackId': {
+      id: '/api/me/saved-findings/$trackId'
+      path: '/$trackId'
+      fullPath: '/api/me/saved-findings/$trackId'
+      preLoaderRoute: typeof ApiMeSavedFindingsTrackIdRouteImport
+      parentRoute: typeof ApiMeSavedFindingsRoute
+    }
+    '/api/me/galaxy-progress/logs': {
+      id: '/api/me/galaxy-progress/logs'
+      path: '/logs'
+      fullPath: '/api/me/galaxy-progress/logs'
+      preLoaderRoute: typeof ApiMeGalaxyProgressLogsRouteImport
+      parentRoute: typeof ApiMeGalaxyProgressRoute
+    }
+    '/api/me/export/$exportId': {
+      id: '/api/me/export/$exportId'
+      path: '/$exportId'
+      fullPath: '/api/me/export/$exportId'
+      preLoaderRoute: typeof ApiMeExportExportIdRouteImport
+      parentRoute: typeof ApiMeExportRoute
     }
     '/api/admin/tracks/$trackId': {
       id: '/api/admin/tracks/$trackId'
@@ -985,6 +1236,62 @@ const AdminRouteRouteChildren: AdminRouteRouteChildren = {
 const AdminRouteRouteWithChildren = AdminRouteRoute._addFileChildren(
   AdminRouteRouteChildren,
 )
+
+interface ApiMeExportRouteChildren {
+  ApiMeExportExportIdRoute: typeof ApiMeExportExportIdRoute
+}
+
+const ApiMeExportRouteChildren: ApiMeExportRouteChildren = {
+  ApiMeExportExportIdRoute: ApiMeExportExportIdRoute,
+}
+
+const ApiMeExportRouteWithChildren = ApiMeExportRoute._addFileChildren(
+  ApiMeExportRouteChildren,
+)
+
+interface ApiMeGalaxyProgressRouteChildren {
+  ApiMeGalaxyProgressLogsRoute: typeof ApiMeGalaxyProgressLogsRoute
+}
+
+const ApiMeGalaxyProgressRouteChildren: ApiMeGalaxyProgressRouteChildren = {
+  ApiMeGalaxyProgressLogsRoute: ApiMeGalaxyProgressLogsRoute,
+}
+
+const ApiMeGalaxyProgressRouteWithChildren =
+  ApiMeGalaxyProgressRoute._addFileChildren(ApiMeGalaxyProgressRouteChildren)
+
+interface ApiMeSavedFindingsRouteChildren {
+  ApiMeSavedFindingsTrackIdRoute: typeof ApiMeSavedFindingsTrackIdRoute
+}
+
+const ApiMeSavedFindingsRouteChildren: ApiMeSavedFindingsRouteChildren = {
+  ApiMeSavedFindingsTrackIdRoute: ApiMeSavedFindingsTrackIdRoute,
+}
+
+const ApiMeSavedFindingsRouteWithChildren =
+  ApiMeSavedFindingsRoute._addFileChildren(ApiMeSavedFindingsRouteChildren)
+
+interface ApiMeRouteChildren {
+  ApiMeCsrfRoute: typeof ApiMeCsrfRoute
+  ApiMeDeleteRoute: typeof ApiMeDeleteRoute
+  ApiMeExportRoute: typeof ApiMeExportRouteWithChildren
+  ApiMeGalaxyProgressRoute: typeof ApiMeGalaxyProgressRouteWithChildren
+  ApiMeProfileRoute: typeof ApiMeProfileRoute
+  ApiMeSavedFindingsRoute: typeof ApiMeSavedFindingsRouteWithChildren
+  ApiMeSubmissionsRoute: typeof ApiMeSubmissionsRoute
+}
+
+const ApiMeRouteChildren: ApiMeRouteChildren = {
+  ApiMeCsrfRoute: ApiMeCsrfRoute,
+  ApiMeDeleteRoute: ApiMeDeleteRoute,
+  ApiMeExportRoute: ApiMeExportRouteWithChildren,
+  ApiMeGalaxyProgressRoute: ApiMeGalaxyProgressRouteWithChildren,
+  ApiMeProfileRoute: ApiMeProfileRoute,
+  ApiMeSavedFindingsRoute: ApiMeSavedFindingsRouteWithChildren,
+  ApiMeSubmissionsRoute: ApiMeSubmissionsRoute,
+}
+
+const ApiMeRouteWithChildren = ApiMeRoute._addFileChildren(ApiMeRouteChildren)
 
 interface ApiTracksRouteChildren {
   ApiTracksIdOrLogIdRoute: typeof ApiTracksIdOrLogIdRoute
@@ -1142,10 +1449,12 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRouteRoute: AdminRouteRouteWithChildren,
   AboutRoute: AboutRoute,
+  AccountRoute: AccountRoute,
   GalaxyRoute: GalaxyRoute,
   RssDotxmlRoute: RssDotxmlRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   ApiHealthRoute: ApiHealthRoute,
+  ApiMeRoute: ApiMeRouteWithChildren,
   ApiMixtapesRoute: ApiMixtapesRoute,
   ApiNewsletterRoute: ApiNewsletterRoute,
   ApiSearchRoute: ApiSearchRoute,
@@ -1162,6 +1471,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAdminMixtapesRoute: ApiAdminMixtapesRouteWithChildren,
   ApiAdminSubmissionsRoute: ApiAdminSubmissionsRouteWithChildren,
   ApiAdminTracksRoute: ApiAdminTracksRouteWithChildren,
+  ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiOgLogIdRoute: ApiOgLogIdRoute,
   ApiPreviewIdOrLogIdRoute: ApiPreviewIdOrLogIdRoute,
   ApiAdminSpotifyAuthCallbackRoute: ApiAdminSpotifyAuthCallbackRoute,

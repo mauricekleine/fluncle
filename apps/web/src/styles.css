@@ -1449,6 +1449,100 @@ body::before {
   color: var(--eclipse-glow);
 }
 
+.account-plate {
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+}
+
+.account-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.account-section {
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding-top: 1rem;
+}
+
+.account-section h2 {
+  color: var(--starlight-cream);
+  font-size: 0.95rem;
+  font-weight: 800;
+}
+
+.account-kicker {
+  color: var(--eclipse-gold);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-weight: 800;
+}
+
+.account-muted {
+  color: var(--stardust);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.account-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.account-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.account-metric {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+}
+
+.account-metric strong {
+  color: var(--starlight-cream);
+  display: block;
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 1.25rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.account-metric span,
+.account-list span {
+  color: var(--stardust);
+  font-size: 0.78rem;
+}
+
+.account-list {
+  color: var(--starlight-cream);
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.account-list a:hover {
+  color: var(--eclipse-glow);
+}
+
+.account-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+@media (max-width: 520px) {
+  .account-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* The Grounded Floats Rule (DESIGN.md): under reduced motion, every float
    collapses to a color-only transition. The Gold Veil wash carries feedback. */
 @media (prefers-reduced-motion: reduce) {

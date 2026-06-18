@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 import { readOptionalEnv } from "./env";
+import { getPublicSession } from "./public-auth";
 import { ApiError, fetchTrackMetadata, parseSpotifyTrackUrl } from "./spotify";
 
 const noteMaxLength = 500;
@@ -77,6 +78,7 @@ export async function createSubmission(
   const input = validateSubmissionInput(body);
   const db = await getDb();
   const submitterHash = hashSubmitter(request);
+  const publicUser = await getPublicSession(request);
   const createdAt = new Date().toISOString();
   const windowStart = new Date(Date.now() - rateLimitWindowMs).toISOString();
 
@@ -130,6 +132,7 @@ export async function createSubmission(
       submission.createdAt,
       null,
       submitterHash,
+      publicUser?.id ?? null,
     ],
     sql: `insert into submissions (
         id,
@@ -145,8 +148,9 @@ export async function createSubmission(
         status,
         created_at,
         reviewed_at,
-        submitter_hash
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        submitter_hash,
+        user_id
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 
   try {

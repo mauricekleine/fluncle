@@ -32,7 +32,7 @@ packages/video   Remotion kit for per-track social videos (the Nostalgic Cosmos)
 ```
 
 The deployed web app owns the Spotify, Telegram, Turso, and Loops secrets. Public reads are served by `/api/tracks` (with `since`/`until` discovery windows), `/api/tracks/random`, and `/rss.xml`. Newsletter signups post to `/api/newsletter`, which the web app relays to Loops. Admin mutations are served by authenticated `/api/admin/*` routes. Raycast must keep calling `fluncle`.
-Listener submissions are accepted through public `/api/search` and `/api/submissions` routes, then reviewed through authenticated admin submission routes. Approval still publishes only through the existing admin add flow.
+Listener submissions are accepted through public `/api/search` and `/api/submissions` routes, then reviewed through authenticated admin submission routes. Approval still publishes only through the existing admin add flow. Optional web accounts are private overlays on the same Log ID spine: signed-in listeners can sync Galaxy lifetime progress, save findings, see their own submissions, export data, and delete the account without changing anonymous Fluncle.
 
 ## License
 
@@ -190,7 +190,9 @@ bun run --cwd apps/web preview
 bun run --cwd apps/web deploy
 ```
 
-The public app is dark-only and centered around the Fluncle cover art. The first page of tracks is server-rendered for crawlers; further pages load from `/api/tracks` with limit/cursor pagination. Track rows open Spotify directly and use Spotify album artwork when available. The public RSS feed is available at `/rss.xml`; crawler and agent surfaces are `/robots.txt`, `/sitemap.xml`, `/llms.txt`, `/openapi.json`, `/.well-known/api-catalog`, `/.well-known/agent-skills/index.json`, and `/.well-known/mcp/server-card.json`. These discovery surfaces and the markdown homepage are served ahead of the router in `apps/web/src/lib/server/agent-discovery.ts`.
+The public app is dark-only and centered around the Fluncle cover art. The first page of tracks is server-rendered for crawlers; further pages load from `/api/tracks` with limit/cursor pagination. Track rows open Spotify directly and use Spotify album artwork when available. Optional private accounts live at `/account` and use Better Auth email/password plus a username; email is auth/recovery only, while username is the private Galaxy identity. The public RSS feed is available at `/rss.xml`; crawler and agent surfaces are `/robots.txt`, `/sitemap.xml`, `/llms.txt`, `/openapi.json`, `/.well-known/api-catalog`, `/.well-known/agent-skills/index.json`, and `/.well-known/mcp/server-card.json`. These discovery surfaces and the markdown homepage are served ahead of the router in `apps/web/src/lib/server/agent-discovery.ts`.
+
+Private account endpoints are intentionally separate from anonymous archive DTOs: `/api/me` returns `{ ok: true, user: null }` when signed out and only `id`, `username`, `displayUsername`, `createdAt`, and feature flags when signed in. `/api/me/csrf` issues the short-lived `x-fluncle-csrf` token required by cookie-authenticated private account mutations. `/api/me/galaxy-progress`, `/api/me/saved-findings`, `/api/me/submissions`, `/api/me/export`, and `/api/me/delete` require a Better Auth session and use DB-backed rate limits. Account deletion revokes sessions, deletes Better Auth credentials plus private progress and saves, marks the user deleted, and unlinks signed-in submissions while keeping the submission rows as anonymized review history. Discord/Loops copies may have their own processor retention windows.
 
 ### Deploy Web To Cloudflare
 
@@ -199,6 +201,8 @@ The web app deploys as a Cloudflare Worker through Wrangler. Keep secrets out of
 ```bash
 bun run --cwd apps/web wrangler login
 bun run --cwd apps/web wrangler secret put FLUNCLE_API_TOKEN
+bun run --cwd apps/web wrangler secret put BETTER_AUTH_SECRET
+bun run --cwd apps/web wrangler secret put BETTER_AUTH_URL
 bun run --cwd apps/web wrangler secret put TURSO_DATABASE_URL
 bun run --cwd apps/web wrangler secret put TURSO_AUTH_TOKEN
 bun run --cwd apps/web wrangler secret put SPOTIFY_CLIENT_ID
@@ -301,7 +305,7 @@ fluncle submit "Camo & Crooked"
 fluncle submit "https://open.spotify.com/track/..."
 ```
 
-Both clients call `GET /api/search?q=...`, select a visible candidate, then post the selected track to `POST /api/submissions`. Submissions are stored as pending rows with hashed rate-limit keys; rejected rows are kept.
+Both clients call `GET /api/search?q=...`, select a visible candidate, then post the selected track to `POST /api/submissions`. Submissions are stored as pending rows with hashed rate-limit keys; rejected rows are kept. Web, CLI, and SSH submissions remain anonymous-compatible; when a browser carries a valid private Better Auth session, the Worker attaches `user_id` server-side so the account can show its own submission history.
 
 Operators review with:
 

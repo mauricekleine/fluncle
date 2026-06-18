@@ -4,6 +4,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { siSpotify, siTiktok, siYoutube } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
 import { LogFootage } from "@/components/log/log-footage";
+import { SaveFindingButton } from "@/components/save-finding-button";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { Button } from "@/components/ui/button";
 import { siteUrl } from "@/lib/fluncle-links";
@@ -284,6 +285,7 @@ function LogPage() {
             <BrandIcon icon={siSpotify} />
             Listen on Spotify
           </Button>
+          <SaveFindingButton logId={logId} trackId={track.trackId} />
           {track.tiktokUrl ? (
             <Button
               nativeButton={false}

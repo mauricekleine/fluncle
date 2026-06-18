@@ -31,7 +31,7 @@ Required fields:
   artworkUrl: string | null;
   note: string | null;
   contact: string | null;
-  source: "web" | "cli";
+  source: "web" | "cli" | "ssh";
   status: "pending" | "approved" | "rejected";
   createdAt: string;
   reviewedAt: string | null;
@@ -101,7 +101,7 @@ Body:
 Validation:
 
 - Require selected track fields.
-- `source` must be `web` or `cli`.
+- `source` must be `web`, `cli`, or `ssh`.
 - Honeypot must be empty.
 - Enforce max note length and max contact length.
 - Apply basic rate limiting by IP-derived key. Prefer hashed keys or an internal DB field.
@@ -111,6 +111,8 @@ On success:
 1. Insert pending submission.
 2. Send Discord webhook notification.
 3. Return JSON success.
+
+If the browser request carries a valid private Better Auth session, the server attaches `user_id` to the row. Clients must never send `user_id`, and anonymous submissions keep the existing hashed submitter key, contact field, honeypot, and rate limit behavior.
 
 Discord message:
 

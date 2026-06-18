@@ -1,4 +1,6 @@
 FLUNCLE_API_TOKEN=
+BETTER_AUTH_SECRET=
+BETTER_AUTH_URL=http://127.0.0.1:3000
 
 # Admin allow-list for "Login with Spotify" (the operator identity). Comma-separated.
 # ADMIN_ALLOWED_EMAILS is required; ADMIN_ALLOWED_SPOTIFY_IDS is optional (exact match).
