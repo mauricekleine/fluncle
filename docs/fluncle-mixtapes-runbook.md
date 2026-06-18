@@ -159,7 +159,7 @@ A mixtape sits at its sector, which the Galaxy game maps to a distance from Eart
 
 ## Open questions / build tasks
 
-> **Internal plumbing shipped:** the implementation from **[docs/rfcs/fluncle-mixtapes-plumbing-rfc.md](./rfcs/fluncle-mixtapes-plumbing-rfc.md)** is now built through increments A–D against the dev Turso DB: separate `mixtapes` / `mixtape_tracks` tables, draft→publish lifecycle, publish-time `XXX.F.ZZ` minting, admin create/edit/member/publish routes, `/log/<id>` mixtape resolution, quiet feed inclusion, `/mixtapes`, `/api/mixtapes`, `fluncle mixtapes`, MCP inclusion, RSS category, sitemap entries, `DJMixAlbum` JSON-LD, and `llms.txt` awareness. A mixtape is still not a finding, does not increment `FOUND`, and stays out of the admin board, tag queue, Stories feed, and newsletter windows.
+> **Internal plumbing shipped** (PRs #18 / #20 / #21): separate `mixtapes` / `mixtape_tracks` tables, the draft→publish lifecycle, publish-time `XXX.F.ZZ` minting, admin create/edit/member/publish routes, `/log/<id>` mixtape resolution, quiet feed inclusion, `/mixtapes`, `/api/mixtapes`, `fluncle mixtapes`, MCP inclusion, RSS category, sitemap entries, `DJMixAlbum` JSON-LD, and `llms.txt` awareness. A mixtape is still not a finding, does not increment `FOUND`, and stays out of the admin board, tag queue, Stories feed, and newsletter windows. (The design RFC that scoped this has been retired now that it's built; remaining follow-ups live in `ROADMAP.md` → _Fluncle's own mixtapes_.)
 
 - **Member tracks that aren't findings yet:** add them as findings first, or allow non-finding members in a mixtape's tracklist.
 - **SSH mixtapes view:** the web/API/CLI/MCP front doors exist; the rave terminal view is still a future surface.
