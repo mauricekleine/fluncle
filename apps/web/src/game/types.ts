@@ -47,6 +47,8 @@ export type Star = EntityBase & {
   artistLine: string;
   /** Logged on the visit that reaches it (folds the old parallel collected[]). */
   collected: boolean;
+  /** Previously logged in the signed-in lifetime collection; never active cargo. */
+  lifetimeLogged?: boolean;
   kind: "star";
   logId: string;
   sector: number;

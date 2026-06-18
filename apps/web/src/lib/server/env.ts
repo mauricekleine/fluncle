@@ -8,6 +8,8 @@ const envKeys = [
   // is optional. Both are comma-separated (see admin-auth.ts).
   "ADMIN_ALLOWED_EMAILS",
   "ADMIN_ALLOWED_SPOTIFY_IDS",
+  "BETTER_AUTH_SECRET",
+  "BETTER_AUTH_URL",
   "FIRECRAWL_API_KEY",
   "FLUNCLE_API_TOKEN",
   "LOOPS_API_KEY",

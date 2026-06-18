@@ -288,6 +288,108 @@
         }
       }
     },
+    "/api/me": {
+      "get": {
+        "operationId": "getCurrentPrivateUser",
+        "summary": "Get the optional private account session",
+        "description": "Returns user:null anonymously. A signed-in response is intentionally minimal and never exposes email, provider subjects, session metadata, saved findings, private progress, or submissions.",
+        "responses": {
+          "200": {
+            "description": "Anonymous or signed-in account state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/me/csrf": {
+      "get": {
+        "operationId": "getPrivateMutationToken",
+        "summary": "Get a private account mutation token",
+        "description": "Returns the short-lived x-fluncle-csrf token required for cookie-authenticated private account POST, PUT, PATCH, and DELETE requests."
+      }
+    },
+    "/api/me/galaxy-progress": {
+      "get": {
+        "operationId": "getPrivateGalaxyProgress",
+        "summary": "Get signed-in lifetime Galaxy progress",
+        "responses": {
+          "200": {
+            "description": "Lifetime progress for the signed-in account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GalaxyProgress"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign-in required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "mergePrivateGalaxyProgress",
+        "summary": "Merge lifetime Galaxy progress",
+        "description": "Requires x-fluncle-csrf. Union semantics: submitted Log IDs are added idempotently. This never sets active-run cargo.",
+        "responses": {
+          "200": {
+            "description": "Merged progress.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GalaxyProgress"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/me/saved-findings": {
+      "get": {
+        "operationId": "listPrivateSavedFindings",
+        "summary": "List private saved findings"
+      },
+      "post": {
+        "operationId": "savePrivateFinding",
+        "summary": "Save a finding privately",
+        "description": "Requires x-fluncle-csrf."
+      }
+    },
+    "/api/me/submissions": {
+      "get": {
+        "operationId": "listPrivateSubmissions",
+        "summary": "List the signed-in account's submissions"
+      }
+    },
+    "/api/me/export": {
+      "post": {
+        "operationId": "exportPrivateAccountData",
+        "summary": "Export private account data",
+        "description": "Requires x-fluncle-csrf. Returns structured account data: private user fields, Galaxy lifetime progress, saved findings, and signed-in submissions."
+      }
+    },
+    "/api/me/delete": {
+      "post": {
+        "operationId": "deletePrivateAccount",
+        "summary": "Delete the private account",
+        "description": "Requires x-fluncle-csrf. Revokes sessions, deletes Better Auth credentials plus private progress and saves, marks the account deleted, and unlinks signed-in submissions while keeping anonymized review history."
+      }
+    },
     "/api/health": {
       "get": {
         "operationId": "getHealth",
@@ -316,6 +418,74 @@
   },
   "components": {
     "schemas": {
+      "MeResponse": {
+        "type": "object",
+        "required": ["ok", "user"],
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
+          "user": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": ["id", "createdAt", "featureFlags"],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "displayUsername": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "featureFlags": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "GalaxyProgress": {
+        "type": "object",
+        "required": ["ok", "collectedLogIds", "deaths", "wins"],
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
+          "collectedLogIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deaths": {
+            "type": "integer"
+          },
+          "wins": {
+            "type": "integer"
+          }
+        }
+      },
       "Track": {
         "type": "object",
         "required": [

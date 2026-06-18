@@ -482,7 +482,8 @@ export function createRenderer(container: HTMLElement): Renderer {
 
       bodies.push({
         draw: () =>
-          drawStarBody(
+          drawStarWithLifetime(
+            star.lifetimeLogged === true,
             Math.round(projected.sx),
             Math.round(projected.sy),
             size,
@@ -650,6 +651,27 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     ctx.drawImage(img, Math.round(-w / 2), Math.round(-h / 2), Math.round(w), Math.round(h));
     ctx.restore();
+  }
+
+  function drawStarWithLifetime(
+    lifetimeLogged: boolean,
+    x: number,
+    y: number,
+    size: number,
+    nowS: number,
+    collected: boolean,
+    isCarrier: boolean,
+    tier: StarTier,
+  ): void {
+    drawStarBody(x, y, size, nowS, collected, isCarrier, tier);
+
+    if (!lifetimeLogged || collected || tier === "far") {
+      return;
+    }
+
+    ctx.globalAlpha = 0.55;
+    pixelDiamond(x, y, Math.max(2, Math.round(size / 2) + 3), palette.creamDim);
+    ctx.globalAlpha = 1;
   }
 
   /** A banger star: a pulsing pixel diamond, gold while uncollected. */

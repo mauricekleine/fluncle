@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const tracks = sqliteTable("tracks", {
@@ -81,17 +82,199 @@ export const submissions = sqliteTable(
     id: text("id").primaryKey(),
     note: text("note"),
     reviewedAt: text("reviewed_at"),
-    source: text("source", { enum: ["web", "cli"] }).notNull(),
+    source: text("source", { enum: ["web", "cli", "ssh"] }).notNull(),
     spotifyTrackId: text("spotify_track_id").notNull(),
     spotifyUrl: text("spotify_url").notNull(),
     status: text("status", { enum: ["pending", "approved", "rejected"] }).notNull(),
     submitterHash: text("submitter_hash").notNull(),
     title: text("title").notNull(),
+    userId: text("user_id"),
   },
   (table) => [
     index("submissions_status_created_at_idx").on(table.status, table.createdAt),
     index("submissions_spotify_track_id_idx").on(table.spotifyTrackId),
     index("submissions_submitter_hash_created_at_idx").on(table.submitterHash, table.createdAt),
+    index("submissions_user_id_created_at_idx").on(table.userId, table.createdAt),
+  ],
+);
+
+export const user = sqliteTable("user", {
+  createdAt: integer("created_at", { mode: "timestamp_ms" })
+    .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+    .notNull(),
+  deletedAt: integer("deleted_at", { mode: "timestamp_ms" }),
+  displayUsername: text("display_username"),
+  email: text("email").notNull().unique(),
+  emailVerified: integer("email_verified", { mode: "boolean" }).default(false).notNull(),
+  id: text("id").primaryKey(),
+  image: text("image"),
+  lastSeenAt: integer("last_seen_at", { mode: "timestamp_ms" }),
+  name: text("name").notNull(),
+  status: text("status", { enum: ["active", "suspended", "deleted"] })
+    .default("active")
+    .notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+    .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+    .$onUpdate(() => new Date())
+    .notNull(),
+  username: text("username").unique(),
+});
+
+export const session = sqliteTable(
+  "session",
+  {
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    id: text("id").primaryKey(),
+    ipAddress: text("ip_address"),
+    token: text("token").notNull().unique(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+      .$onUpdate(() => new Date())
+      .notNull(),
+    userAgent: text("user_agent"),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+  },
+  (table) => [index("session_user_id_idx").on(table.userId)],
+);
+
+export const account = sqliteTable(
+  "account",
+  {
+    accessToken: text("access_token"),
+    accessTokenExpiresAt: integer("access_token_expires_at", { mode: "timestamp_ms" }),
+    accountId: text("account_id").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .notNull(),
+    id: text("id").primaryKey(),
+    idToken: text("id_token"),
+    password: text("password"),
+    providerId: text("provider_id").notNull(),
+    refreshToken: text("refresh_token"),
+    refreshTokenExpiresAt: integer("refresh_token_expires_at", { mode: "timestamp_ms" }),
+    scope: text("scope"),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+      .$onUpdate(() => new Date())
+      .notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+  },
+  (table) => [index("account_user_id_idx").on(table.userId)],
+);
+
+export const verification = sqliteTable(
+  "verification",
+  {
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    id: text("id").primaryKey(),
+    identifier: text("identifier").notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .$onUpdate(() => new Date())
+      .notNull(),
+    value: text("value").notNull(),
+  },
+  (table) => [index("verification_identifier_idx").on(table.identifier)],
+);
+
+export const rateLimitEvents = sqliteTable(
+  "rate_limit_events",
+  {
+    action: text("action").notNull(),
+    bucket: text("bucket").notNull(),
+    createdAt: text("created_at").notNull(),
+    id: text("id").primaryKey(),
+    ipHash: text("ip_hash"),
+    userAgentHash: text("user_agent_hash"),
+    userId: text("user_id"),
+  },
+  (table) => [
+    index("rate_limit_action_bucket_created_at_idx").on(
+      table.action,
+      table.bucket,
+      table.createdAt,
+    ),
+    index("rate_limit_user_action_created_at_idx").on(table.userId, table.action, table.createdAt),
+    index("rate_limit_ip_action_created_at_idx").on(table.ipHash, table.action, table.createdAt),
+  ],
+);
+
+export const userGalaxyState = sqliteTable("user_galaxy_state", {
+  createdAt: text("created_at").notNull(),
+  deaths: integer("deaths").notNull().default(0),
+  lastPlayedAt: text("last_played_at"),
+  schemaVersion: integer("schema_version").notNull().default(1),
+  updatedAt: text("updated_at").notNull(),
+  userId: text("user_id").primaryKey(),
+  wins: integer("wins").notNull().default(0),
+});
+
+export const userGalaxyCollections = sqliteTable(
+  "user_galaxy_collections",
+  {
+    firstCollectedAt: text("first_collected_at").notNull(),
+    id: text("id").primaryKey(),
+    lastCollectedAt: text("last_collected_at").notNull(),
+    logId: text("log_id").notNull(),
+    sourceSurface: text("source_surface", { enum: ["web", "cli", "ssh", "mcp"] }).notNull(),
+    trackId: text("track_id").notNull(),
+    userId: text("user_id").notNull(),
+  },
+  (table) => [
+    uniqueIndex("user_galaxy_collections_user_track_idx").on(table.userId, table.trackId),
+    index("user_galaxy_collections_user_first_idx").on(table.userId, table.firstCollectedAt),
+    index("user_galaxy_collections_track_first_idx").on(table.trackId, table.firstCollectedAt),
+  ],
+);
+
+export const userSavedFindings = sqliteTable(
+  "user_saved_findings",
+  {
+    id: text("id").primaryKey(),
+    logId: text("log_id").notNull(),
+    note: text("note"),
+    savedAt: text("saved_at").notNull(),
+    trackId: text("track_id").notNull(),
+    userId: text("user_id").notNull(),
+  },
+  (table) => [uniqueIndex("user_saved_findings_user_track_idx").on(table.userId, table.trackId)],
+);
+
+export const userDataExports = sqliteTable(
+  "user_data_exports",
+  {
+    completedAt: text("completed_at"),
+    expiresAt: text("expires_at").notNull(),
+    id: text("id").primaryKey(),
+    r2Key: text("r2_key"),
+    requestedAt: text("requested_at").notNull(),
+    status: text("status", { enum: ["pending", "completed", "failed"] }).notNull(),
+    userId: text("user_id").notNull(),
+  },
+  (table) => [index("user_data_exports_user_requested_idx").on(table.userId, table.requestedAt)],
+);
+
+export const userDeletionRequests = sqliteTable(
+  "user_deletion_requests",
+  {
+    completedAt: text("completed_at"),
+    id: text("id").primaryKey(),
+    mode: text("mode", { enum: ["delete"] }).notNull(),
+    requestedAt: text("requested_at").notNull(),
+    status: text("status", { enum: ["pending", "completed", "failed"] }).notNull(),
+    summaryJson: text("summary_json").notNull(),
+    userId: text("user_id").notNull(),
+  },
+  (table) => [
+    index("user_deletion_requests_user_requested_idx").on(table.userId, table.requestedAt),
   ],
 );
 

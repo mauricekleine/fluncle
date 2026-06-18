@@ -142,6 +142,10 @@ export function HomeLinkHub() {
           <Link className={linkClassName} to="/log">
             All logs
           </Link>
+          <Dot />
+          <Link className={linkClassName} to="/account">
+            Your place
+          </Link>
         </nav>
 
         <nav

@@ -3,6 +3,12 @@ import { createAudioManager } from "./audio";
 import { createInput } from "./input";
 import { placeStars } from "./placement";
 import {
+  applyLifetimeMarkers,
+  fetchLifetimeProgress,
+  persistLoggedLogId,
+  persistProgressCounters,
+} from "./progress";
+import {
   BOOT_DURATION,
   TOWED_DURATION,
   createRenderer,
@@ -163,7 +169,19 @@ export function createGame(container: HTMLElement): Game {
       return;
     }
 
-    sim = createSim(placeStars(tracks), {
+    const stars = placeStars(tracks);
+
+    try {
+      const lifetime = await fetchLifetimeProgress();
+
+      if (lifetime) {
+        applyLifetimeMarkers(stars, lifetime.collectedLogIds);
+      }
+    } catch {
+      // Anonymous play and a live flight always win over sync trouble.
+    }
+
+    sim = createSim(stars, {
       frontier: { asteroids: true, blackHoles: true, setDressing: true },
       seed: sessionSeed,
     });
@@ -187,11 +205,14 @@ export function createGame(container: HTMLElement): Game {
         pushTelemetry("Hull hit. Fuel knocked loose.");
         break;
       case "home":
+        persistProgressCounters({ wins: 1 });
         endT = 0;
         phase = "end";
         break;
       case "logged":
         card = { shownAt: nowS, starIndex: event.starIndex };
+        state.stars[event.starIndex].lifetimeLogged = true;
+        persistLoggedLogId(state.stars[event.starIndex].logId);
         pushTelemetry(`Logged fluncle://${state.stars[event.starIndex].logId}.`);
         break;
       case "low-fuel":
@@ -201,6 +222,7 @@ export function createGame(container: HTMLElement): Game {
         pushTelemetry("Tank full.");
         break;
       case "towed":
+        persistProgressCounters({ deaths: 1 });
         towedT = TOWED_DURATION;
         card = undefined;
         break;
