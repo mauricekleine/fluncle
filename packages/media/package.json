@@ -8,6 +8,7 @@
     "studio": "remotion studio",
     "render:og": "bun src/render/render-og.ts",
     "render:socials": "bun src/render/render-socials.ts",
+    "render:mixtape-cover": "bun src/render/render-mixtape-cover.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
