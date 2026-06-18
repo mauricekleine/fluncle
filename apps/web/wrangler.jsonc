@@ -4,6 +4,12 @@
   "compatibility_date": "2026-06-03",
   "compatibility_flags": ["nodejs_compat"],
   "main": "./src/server.ts",
+  "observability": {
+    "logs": {
+      "enabled": false,
+      "invocation_logs": true,
+    },
+  },
   "vars": {
     "VITE_FLUNCLE_SPOTIFY_PLAYLIST_URL": "https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0?si=054d3c6cbcf14a36",
     "VITE_FLUNCLE_TELEGRAM_URL": "https://t.me/fluncle",
