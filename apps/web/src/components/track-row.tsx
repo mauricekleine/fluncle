@@ -1,7 +1,7 @@
 import { CaretRightIcon, DotsThreeIcon, PlayIcon, ShareNetworkIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import { useCallback } from "react";
-import { siSpotify, siTiktok, siYoutube } from "simple-icons";
+import { siMixcloud, siSoundcloud, siSpotify, siTiktok, siYoutube } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
 import { TrackArtwork } from "@/components/track-artwork";
 import { Badge } from "@/components/ui/badge";
@@ -24,12 +24,7 @@ import { type Track } from "@/lib/tracks";
 export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber: number }) {
   if (track.type === "mixtape") {
     const logId = track.logId as string;
-    const meta = [
-      `${track.memberCount} ${track.memberCount === 1 ? "finding" : "findings"}`,
-      track.durationMs ? formatAlbumDuration(track.durationMs) : undefined,
-    ]
-      .filter(Boolean)
-      .join(" · ");
+    const findingsLabel = `${track.memberCount} ${track.memberCount === 1 ? "finding" : "findings"}`;
 
     return (
       <li className="track-row track-row-checkpoint">
@@ -53,7 +48,16 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
               {track.title}
             </span>
           </Link>
-          {meta ? <span className="track-label mt-1 block truncate">{meta}</span> : null}
+          <span className="track-label mt-1 block truncate">{findingsLabel}</span>
+          {/* The run time as a badge — mirrors a finding's duration chip, so a
+              checkpoint row stands the same height as the rows around it. */}
+          {track.durationMs ? (
+            <span className="mt-1.5 flex flex-wrap items-center gap-1">
+              <Badge className="track-chip track-chip-numeric" variant="outline">
+                {formatAlbumDuration(track.durationMs)}
+              </Badge>
+            </span>
+          ) : null}
         </span>
         <span className="track-actions">
           <MixtapeLinksMenu track={track} />
@@ -160,12 +164,18 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
 function MixtapeLinksMenu({ track }: { track: Extract<FeedItem, { type: "mixtape" }> }) {
   const shareUrl = track.logId ? `${siteUrl}/log/${track.logId}` : siteUrl;
   const externalLinks = [
-    track.externalUrls.mixcloud ? { href: track.externalUrls.mixcloud, label: "Mixcloud" } : null,
-    track.externalUrls.youtube ? { href: track.externalUrls.youtube, label: "YouTube" } : null,
-    track.externalUrls.soundcloud
-      ? { href: track.externalUrls.soundcloud, label: "SoundCloud" }
+    track.externalUrls.mixcloud
+      ? { href: track.externalUrls.mixcloud, icon: siMixcloud, label: "Mixcloud" }
       : null,
-  ].filter((link): link is { href: string; label: string } => Boolean(link));
+    track.externalUrls.youtube
+      ? { href: track.externalUrls.youtube, icon: siYoutube, label: "YouTube" }
+      : null,
+    track.externalUrls.soundcloud
+      ? { href: track.externalUrls.soundcloud, icon: siSoundcloud, label: "SoundCloud" }
+      : null,
+  ].filter((link): link is { href: string; icon: typeof siMixcloud; label: string } =>
+    Boolean(link),
+  );
 
   const share = useCallback(() => {
     if (typeof navigator === "undefined") {
@@ -190,6 +200,7 @@ function MixtapeLinksMenu({ track }: { track: Extract<FeedItem, { type: "mixtape
             key={link.label}
             render={<a href={link.href} rel="noreferrer" target="_blank" />}
           >
+            <BrandIcon className="size-4" icon={link.icon} />
             {link.label}
           </DropdownMenuItem>
         ))}

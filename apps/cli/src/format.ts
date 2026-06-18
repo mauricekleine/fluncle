@@ -16,19 +16,41 @@ export function artistTitle(track: Pick<RecentItem, "artists" | "title">): strin
 }
 
 /**
+ * The label after the coordinate. A finding reads "Artist — Title". A mixtape
+ * reads just its title, with the redundant " | <coord>" suffix stripped — the
+ * artist is always Fluncle and the coordinate already leads the line, so the
+ * platform title's "Fluncle … | <coord>" would otherwise say both twice.
+ */
+export function rowLabel(track: Pick<RecentItem, "artists" | "logId" | "title" | "type">): string {
+  return track.type === "mixtape"
+    ? stripCoordinateSuffix(track.title, track.logId)
+    : artistTitle(track);
+}
+
+function stripCoordinateSuffix(title: string, logId?: string): string {
+  if (!logId) {
+    return title;
+  }
+
+  const suffix = ` | ${logId}`;
+
+  return title.endsWith(suffix) ? title.slice(0, -suffix.length).trimEnd() : title;
+}
+
+/**
  * Tabular rows led by the Log ID coordinate instead of an ordinal:
  *   007.8.1B  Artist — Title
  * The coordinate column is padded to the widest coordinate in the set.
  */
 export function trackRows(
-  tracks: Array<Pick<RecentItem, "artists" | "logId" | "title">>,
+  tracks: Array<Pick<RecentItem, "artists" | "logId" | "title" | "type">>,
 ): string[] {
   const coordWidth = tracks.reduce((width, track) => {
     return Math.max(width, coordinate(track).length);
   }, 0);
 
   return tracks.map((track) => {
-    return `${coordinate(track).padEnd(coordWidth)}  ${artistTitle(track)}`;
+    return `${coordinate(track).padEnd(coordWidth)}  ${rowLabel(track)}`;
   });
 }
 

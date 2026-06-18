@@ -855,7 +855,7 @@ function FindingCell({ onPreview, row }: { onPreview: () => void; row: BoardRow 
             aria-hidden="true"
             className="absolute -right-1 -bottom-1 flex size-4 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm"
           >
-            <PlayIcon className="size-2.5 translate-x-px" weight="fill" />
+            <PlayIcon className="size-2.5" weight="fill" />
           </span>
         </button>
       ) : (

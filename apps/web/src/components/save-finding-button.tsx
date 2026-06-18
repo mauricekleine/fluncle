@@ -29,7 +29,7 @@ export function SaveFindingButton({ logId, trackId }: { logId: string; trackId: 
   }
 
   return (
-    <Button type="button" variant="outline" onClick={() => void save()}>
+    <Button size="lg" type="button" variant="outline" onClick={() => void save()}>
       <BookmarkSimpleIcon className="size-4" weight="bold" />
       {label}
     </Button>
