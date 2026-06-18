@@ -36,7 +36,8 @@
     "shadcn": "~4.11.0",
     "simple-icons": "~16.23.0",
     "tailwind-merge": "~3.6.0",
-    "tailwindcss": "~4.3.0"
+    "tailwindcss": "~4.3.0",
+    "workers-og": "^0.0.27"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "~1.40.0",

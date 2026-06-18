@@ -6,6 +6,7 @@ import { BrandIcon } from "@/components/brand-icon";
 import { LogFootage } from "@/components/log/log-footage";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { Button } from "@/components/ui/button";
+import { siteUrl } from "@/lib/fluncle-links";
 import { formatDateLong, formatDuration } from "@/lib/format";
 import { isLogPageParam } from "@/lib/log-page-param";
 import {
@@ -81,6 +82,13 @@ function logHead(loaderData: LogPageData | undefined) {
   const description = definitionalSentences({ ...track, logId });
   const imageUrl = track.albumImageUrl ?? media.coverUrl;
   const recording = musicRecordingJsonLd({ ...track, logId }, imageUrl);
+  // The social card: the per-finding OG image (the poster frame + treatment),
+  // versioned by `updatedAt` so a re-enriched finding re-renders (the /api/og
+  // response is immutable + edge-cached). The JSON-LD `image` above stays the
+  // square album cover — the right shape for a MusicRecording.
+  const ogVersion = track.updatedAt ? Date.parse(track.updatedAt) : Number.NaN;
+  const ogQuery = Number.isFinite(ogVersion) ? `?v=${ogVersion}` : "";
+  const ogImage = `${siteUrl}/api/og/${encodeURIComponent(logId)}${ogQuery}`;
   const breadcrumbs = breadcrumbsJsonLd(logId);
 
   return {
@@ -90,7 +98,10 @@ function logHead(loaderData: LogPageData | undefined) {
       { content: description, name: "description" },
       { content: title, property: "og:title" },
       { content: description, property: "og:description" },
-      { content: imageUrl, property: "og:image" },
+      { content: ogImage, property: "og:image" },
+      { content: "1200", property: "og:image:width" },
+      { content: "630", property: "og:image:height" },
+      { content: "image/png", property: "og:image:type" },
       { content: pageUrl, property: "og:url" },
       { content: track.videoUrl ? "video.other" : "music.song", property: "og:type" },
       ...(track.videoUrl
@@ -102,7 +113,7 @@ function logHead(loaderData: LogPageData | undefined) {
       { content: "summary_large_image", name: "twitter:card" },
       { content: title, name: "twitter:title" },
       { content: description, name: "twitter:description" },
-      { content: imageUrl, name: "twitter:image" },
+      { content: ogImage, name: "twitter:image" },
     ],
     scripts: [
       { children: JSON.stringify(recording), type: "application/ld+json" },

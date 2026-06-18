@@ -31,6 +31,7 @@ import { Route as AdminLoginRouteImport } from './routes/admin/login'
 import { Route as ApiTracksRandomRouteImport } from './routes/api/tracks/random'
 import { Route as ApiTracksIdOrLogIdRouteImport } from './routes/api/tracks.$idOrLogId'
 import { Route as ApiPreviewIdOrLogIdRouteImport } from './routes/api/preview.$idOrLogId'
+import { Route as ApiOgLogIdRouteImport } from './routes/api/og.$logId'
 import { Route as ApiAdminTracksRouteImport } from './routes/api/admin/tracks'
 import { Route as ApiAdminSubmissionsRouteImport } from './routes/api/admin/submissions'
 import { Route as ApiAdminLogoutRouteImport } from './routes/api/admin/logout'
@@ -159,6 +160,11 @@ const ApiPreviewIdOrLogIdRoute = ApiPreviewIdOrLogIdRouteImport.update({
   path: '/api/preview/$idOrLogId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiOgLogIdRoute = ApiOgLogIdRouteImport.update({
+  id: '/api/og/$logId',
+  path: '/api/og/$logId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAdminTracksRoute = ApiAdminTracksRouteImport.update({
   id: '/api/admin/tracks',
   path: '/api/admin/tracks',
@@ -281,6 +287,7 @@ export interface FileRoutesByFullPath {
   '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
   '/api/admin/tracks': typeof ApiAdminTracksRouteWithChildren
+  '/api/og/$logId': typeof ApiOgLogIdRoute
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
   '/api/tracks/$idOrLogId': typeof ApiTracksIdOrLogIdRoute
   '/api/tracks/random': typeof ApiTracksRandomRoute
@@ -321,6 +328,7 @@ export interface FileRoutesByTo {
   '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
   '/api/admin/tracks': typeof ApiAdminTracksRouteWithChildren
+  '/api/og/$logId': typeof ApiOgLogIdRoute
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
   '/api/tracks/$idOrLogId': typeof ApiTracksIdOrLogIdRoute
   '/api/tracks/random': typeof ApiTracksRandomRoute
@@ -363,6 +371,7 @@ export interface FileRoutesById {
   '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
   '/api/admin/tracks': typeof ApiAdminTracksRouteWithChildren
+  '/api/og/$logId': typeof ApiOgLogIdRoute
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
   '/api/tracks/$idOrLogId': typeof ApiTracksIdOrLogIdRoute
   '/api/tracks/random': typeof ApiTracksRandomRoute
@@ -406,6 +415,7 @@ export interface FileRouteTypes {
     | '/api/admin/logout'
     | '/api/admin/submissions'
     | '/api/admin/tracks'
+    | '/api/og/$logId'
     | '/api/preview/$idOrLogId'
     | '/api/tracks/$idOrLogId'
     | '/api/tracks/random'
@@ -446,6 +456,7 @@ export interface FileRouteTypes {
     | '/api/admin/logout'
     | '/api/admin/submissions'
     | '/api/admin/tracks'
+    | '/api/og/$logId'
     | '/api/preview/$idOrLogId'
     | '/api/tracks/$idOrLogId'
     | '/api/tracks/random'
@@ -487,6 +498,7 @@ export interface FileRouteTypes {
     | '/api/admin/logout'
     | '/api/admin/submissions'
     | '/api/admin/tracks'
+    | '/api/og/$logId'
     | '/api/preview/$idOrLogId'
     | '/api/tracks/$idOrLogId'
     | '/api/tracks/random'
@@ -527,6 +539,7 @@ export interface RootRouteChildren {
   ApiAdminLogoutRoute: typeof ApiAdminLogoutRoute
   ApiAdminSubmissionsRoute: typeof ApiAdminSubmissionsRouteWithChildren
   ApiAdminTracksRoute: typeof ApiAdminTracksRouteWithChildren
+  ApiOgLogIdRoute: typeof ApiOgLogIdRoute
   ApiPreviewIdOrLogIdRoute: typeof ApiPreviewIdOrLogIdRoute
   ApiAdminSpotifyAuthCallbackRoute: typeof ApiAdminSpotifyAuthCallbackRoute
   ApiAdminSpotifyAuthLoginRoute: typeof ApiAdminSpotifyAuthLoginRoute
@@ -687,6 +700,13 @@ declare module '@tanstack/react-router' {
       path: '/api/preview/$idOrLogId'
       fullPath: '/api/preview/$idOrLogId'
       preLoaderRoute: typeof ApiPreviewIdOrLogIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/og/$logId': {
+      id: '/api/og/$logId'
+      path: '/api/og/$logId'
+      fullPath: '/api/og/$logId'
+      preLoaderRoute: typeof ApiOgLogIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/admin/tracks': {
@@ -969,6 +989,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAdminLogoutRoute: ApiAdminLogoutRoute,
   ApiAdminSubmissionsRoute: ApiAdminSubmissionsRouteWithChildren,
   ApiAdminTracksRoute: ApiAdminTracksRouteWithChildren,
+  ApiOgLogIdRoute: ApiOgLogIdRoute,
   ApiPreviewIdOrLogIdRoute: ApiPreviewIdOrLogIdRoute,
   ApiAdminSpotifyAuthCallbackRoute: ApiAdminSpotifyAuthCallbackRoute,
   ApiAdminSpotifyAuthLoginRoute: ApiAdminSpotifyAuthLoginRoute,

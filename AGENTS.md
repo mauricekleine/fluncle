@@ -77,6 +77,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - [docs/galaxy-sprites.md](./docs/galaxy-sprites.md) - how the Galaxy game's 8-bit sprite + audio assets are made: the canon ramp, the Nano-Banana (Gemini) workflow, the procedural-fallback contract, and the amen placeholder.
 - [docs/enrichment-agent.md](./docs/enrichment-agent.md) - thin bootstrap for the async track agent (the enrich → video → publish chain; runs locally or on Spinup; tools + safety rails); its full constitution is the fluncle-track-enrichment skill at [packages/skills/fluncle-track-enrichment](./packages/skills/fluncle-track-enrichment). Video render is a separate capability whose doctrine is the fluncle-video skill at [packages/skills/fluncle-video](./packages/skills/fluncle-video); publishing rendered videos to social platforms as drafts is the fluncle-publish skill at [packages/skills/fluncle-publish](./packages/skills/fluncle-publish).
 - [docs/socials/](./docs/socials/) - the map of social accounts, owned channels, profile assets, bio conventions, and the generated banners.
+- [docs/fluncle-mixtapes-runbook.md](./docs/fluncle-mixtapes-runbook.md) - publishing Fluncle's own DJ mixtapes: the mixtape as a spine-native object (Fluncle dreaming, a checkpoint; its own Log ID with the literal `F` marker + a mixtape number, a `/log` page, a `/mixtapes` surface, mixtape-aware schema/RSS/llms.txt, surface fan-out), the hosting/MusicBrainz/Wikidata map, and the repeatable per-mixtape runbook.
 
 ## Architecture
 

@@ -218,6 +218,10 @@ The core unit of the product — a **finding**, not just a row. A CSS grid (an O
 
 Pagination lives inside the list, never below the shell: a quiet load-more row (Stardust bold text, Gold Veil hover) doubles as an intersection sentinel that auto-fetches near the bottom. It disappears when the archive is exhausted; the layout below the pane never shifts.
 
+### Checkpoint Row (the mixtape)
+
+A **mixtape** — a recovered DJ set, Fluncle dreaming (PRODUCT.md; the [mixtapes runbook](./docs/fluncle-mixtapes-runbook.md)) — renders as a quiet variant of the Track Row, not a new component. Same grid skeleton: the Oxanium tabular **Log ID** column (its middle slot is the literal `F`, never a digit — the only tell, and the mark keeps the finding's `<digit><letter>` shape), the artwork tile, the `1fr` content block, the caret. But it reads as a **checkpoint, not a finding**: its own mixtape cover, and a title block of the mixtape name over a Stardust line carrying the member count and run time (`12 findings · 58 min`) in place of the BPM/key/tags chip row. It stands apart without shouting — the ground is a darker, more transparent pane that lets more of the cosmos starfield show through than a finding row does (deeper out, a still point), held to the Warm Dark and Legible Sky rules, with no second sun and no louder gold. It sits flat on the plate with no glass of its own (One Pane), and it does not count toward the rotated FOUND stamp. Hover/focus matches the Track Row (Gold Veil wash, the Log ID heats to Eclipse Glow, the caret drifts 2px); the whole row links to the mixtape's `/log/<id>` compilation page.
+
 ### CLI Command
 
 Literal terminal content in a quiet box: mono text (0.82rem) on Tape Black with a Dust Line border (0.5rem radius). Long commands scroll horizontally behind a thin Dust Line scrollbar (`scrollbar-width: thin; scrollbar-color` themed), never a native white one. A copy action (outline icon button) sits beside the install command; the check-mark confirmation flashes Eclipse Gold.
