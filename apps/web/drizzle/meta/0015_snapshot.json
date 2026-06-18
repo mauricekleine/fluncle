@@ -103,9 +103,7 @@
       "indexes": {
         "account_user_id_idx": {
           "name": "account_user_id_idx",
-          "columns": [
-            "user_id"
-          ],
+          "columns": ["user_id"],
           "isUnique": false
         }
       },
@@ -114,12 +112,8 @@
           "name": "account_user_id_user_id_fk",
           "tableFrom": "account",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -156,25 +150,17 @@
       "indexes": {
         "mixtape_tracks_mixtape_id_idx": {
           "name": "mixtape_tracks_mixtape_id_idx",
-          "columns": [
-            "mixtape_id"
-          ],
+          "columns": ["mixtape_id"],
           "isUnique": false
         },
         "mixtape_tracks_mixtape_position_idx": {
           "name": "mixtape_tracks_mixtape_position_idx",
-          "columns": [
-            "mixtape_id",
-            "position"
-          ],
+          "columns": ["mixtape_id", "position"],
           "isUnique": true
         },
         "mixtape_tracks_mixtape_track_idx": {
           "name": "mixtape_tracks_mixtape_track_idx",
-          "columns": [
-            "mixtape_id",
-            "track_id"
-          ],
+          "columns": ["mixtape_id", "track_id"],
           "isUnique": true
         }
       },
@@ -303,16 +289,12 @@
       "indexes": {
         "mixtapes_log_id_unique": {
           "name": "mixtapes_log_id_unique",
-          "columns": [
-            "log_id"
-          ],
+          "columns": ["log_id"],
           "isUnique": true
         },
         "mixtapes_sequence_number_unique": {
           "name": "mixtapes_sequence_number_unique",
-          "columns": [
-            "sequence_number"
-          ],
+          "columns": ["sequence_number"],
           "isUnique": true
         }
       },
@@ -377,29 +359,17 @@
       "indexes": {
         "rate_limit_action_bucket_created_at_idx": {
           "name": "rate_limit_action_bucket_created_at_idx",
-          "columns": [
-            "action",
-            "bucket",
-            "created_at"
-          ],
+          "columns": ["action", "bucket", "created_at"],
           "isUnique": false
         },
         "rate_limit_user_action_created_at_idx": {
           "name": "rate_limit_user_action_created_at_idx",
-          "columns": [
-            "user_id",
-            "action",
-            "created_at"
-          ],
+          "columns": ["user_id", "action", "created_at"],
           "isUnique": false
         },
         "rate_limit_ip_action_created_at_idx": {
           "name": "rate_limit_ip_action_created_at_idx",
-          "columns": [
-            "ip_hash",
-            "action",
-            "created_at"
-          ],
+          "columns": ["ip_hash", "action", "created_at"],
           "isUnique": false
         }
       },
@@ -472,16 +442,12 @@
       "indexes": {
         "session_token_unique": {
           "name": "session_token_unique",
-          "columns": [
-            "token"
-          ],
+          "columns": ["token"],
           "isUnique": true
         },
         "session_user_id_idx": {
           "name": "session_user_id_idx",
-          "columns": [
-            "user_id"
-          ],
+          "columns": ["user_id"],
           "isUnique": false
         }
       },
@@ -490,12 +456,8 @@
           "name": "session_user_id_user_id_fk",
           "tableFrom": "session",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -581,10 +543,7 @@
       "indexes": {
         "social_posts_track_platform_idx": {
           "name": "social_posts_track_platform_idx",
-          "columns": [
-            "track_id",
-            "platform"
-          ],
+          "columns": ["track_id", "platform"],
           "isUnique": true
         }
       },
@@ -757,33 +716,22 @@
       "indexes": {
         "submissions_status_created_at_idx": {
           "name": "submissions_status_created_at_idx",
-          "columns": [
-            "status",
-            "created_at"
-          ],
+          "columns": ["status", "created_at"],
           "isUnique": false
         },
         "submissions_spotify_track_id_idx": {
           "name": "submissions_spotify_track_id_idx",
-          "columns": [
-            "spotify_track_id"
-          ],
+          "columns": ["spotify_track_id"],
           "isUnique": false
         },
         "submissions_submitter_hash_created_at_idx": {
           "name": "submissions_submitter_hash_created_at_idx",
-          "columns": [
-            "submitter_hash",
-            "created_at"
-          ],
+          "columns": ["submitter_hash", "created_at"],
           "isUnique": false
         },
         "submissions_user_id_created_at_idx": {
           "name": "submissions_user_id_created_at_idx",
-          "columns": [
-            "user_id",
-            "created_at"
-          ],
+          "columns": ["user_id", "created_at"],
           "isUnique": false
         }
       },
@@ -1063,9 +1011,7 @@
       "indexes": {
         "tracks_log_id_unique": {
           "name": "tracks_log_id_unique",
-          "columns": [
-            "log_id"
-          ],
+          "columns": ["log_id"],
           "isUnique": true
         }
       },
@@ -1169,16 +1115,12 @@
       "indexes": {
         "user_email_unique": {
           "name": "user_email_unique",
-          "columns": [
-            "email"
-          ],
+          "columns": ["email"],
           "isUnique": true
         },
         "user_username_unique": {
           "name": "user_username_unique",
-          "columns": [
-            "username"
-          ],
+          "columns": ["username"],
           "isUnique": true
         }
       },
@@ -1243,10 +1185,7 @@
       "indexes": {
         "user_data_exports_user_requested_idx": {
           "name": "user_data_exports_user_requested_idx",
-          "columns": [
-            "user_id",
-            "requested_at"
-          ],
+          "columns": ["user_id", "requested_at"],
           "isUnique": false
         }
       },
@@ -1311,10 +1250,7 @@
       "indexes": {
         "user_deletion_requests_user_requested_idx": {
           "name": "user_deletion_requests_user_requested_idx",
-          "columns": [
-            "user_id",
-            "requested_at"
-          ],
+          "columns": ["user_id", "requested_at"],
           "isUnique": false
         }
       },
@@ -1379,26 +1315,17 @@
       "indexes": {
         "user_galaxy_collections_user_track_idx": {
           "name": "user_galaxy_collections_user_track_idx",
-          "columns": [
-            "user_id",
-            "track_id"
-          ],
+          "columns": ["user_id", "track_id"],
           "isUnique": true
         },
         "user_galaxy_collections_user_first_idx": {
           "name": "user_galaxy_collections_user_first_idx",
-          "columns": [
-            "user_id",
-            "first_collected_at"
-          ],
+          "columns": ["user_id", "first_collected_at"],
           "isUnique": false
         },
         "user_galaxy_collections_track_first_idx": {
           "name": "user_galaxy_collections_track_first_idx",
-          "columns": [
-            "track_id",
-            "first_collected_at"
-          ],
+          "columns": ["track_id", "first_collected_at"],
           "isUnique": false
         }
       },
@@ -1518,10 +1445,7 @@
       "indexes": {
         "user_saved_findings_user_track_idx": {
           "name": "user_saved_findings_user_track_idx",
-          "columns": [
-            "user_id",
-            "track_id"
-          ],
+          "columns": ["user_id", "track_id"],
           "isUnique": true
         }
       },
@@ -1581,9 +1505,7 @@
       "indexes": {
         "verification_identifier_idx": {
           "name": "verification_identifier_idx",
-          "columns": [
-            "identifier"
-          ],
+          "columns": ["identifier"],
           "isUnique": false
         }
       },
