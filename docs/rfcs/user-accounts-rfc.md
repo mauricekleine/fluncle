@@ -15,9 +15,9 @@ Nothing in the private account layer is deferred: auth isolation, schema, migrat
 ## 0. Summary / the reframe
 
 - The unifying simplification: **an account is a private overlay on the immutable Log ID spine**. It remembers a person around existing findings; it never authors Fluncle’s log, changes what a finding is, affects publishing, or changes anonymous access.
-- The smallest beautiful version is whole: sign in, sync lifetime Galaxy progress, save findings, attach signed-in submissions, view own submission history, export data, delete the account, and keep anonymous mode intact.
+- The smallest beautiful version is whole: sign up with a Galaxy username, sign in, sync lifetime Galaxy progress, save findings, attach signed-in submissions, view own submission history, export data, delete the account, and keep anonymous mode intact.
 - Keep canonical account data in **Turso/libSQL through the existing Drizzle migration workflow**. Cloudflare D1 is Cloudflare’s SQLite platform and is viable, but here it would be a platform migration. Durable Objects are for future live presence/rooms/write serialization, not private profiles/progress/submissions.
-- Public auth is hard-separated from admin auth: separate env secrets, routes, cookies, sessions, bearer tokens, state rows, modules, and tests. Public auth must never import or reuse `requireAdmin`, admin cookie names, or admin signing helpers.
+- Public auth is **Better Auth**, email/password plus the `username` plugin. It is hard-separated from admin auth: separate routes, cookies, session handling, schema, and tests. Public auth must never import or reuse `requireAdmin`, admin cookie names, admin signing helpers, `FLUNCLE_API_TOKEN`, or `spotify_auth`.
 - Persist **lifetime collection** separately from **active run cargo**. The current Galaxy clears per-run cargo on tow/reset; account persistence must not erase the game’s stakes.
 - Public crew cards, public submission credit, and crew notes are designed only as future gates. If they ship later, they must remain tertiary to the finding and pass a separate moderation/privacy review.
 
@@ -25,7 +25,7 @@ Nothing in the private account layer is deferred: auth isolation, schema, migrat
 
 Fluncle is already a multi-surface archive: every finding has a `tracks` row, a Log ID, a web page, API reads, CLI/SSH/MCP representations, RSS, social captions, and Galaxy placement. `docs/ROADMAP.md` calls out user accounts because the Galaxy currently keeps collected bangers only in runtime state.
 
-The goal is to let a person sign in so Fluncle remembers their private place in the Galaxy without turning the product into a social app. Signed-out visitors still browse, play, submit, subscribe, use APIs, and open platform links.
+The goal is to let a person sign up with a Galaxy username and sign in so Fluncle remembers their private place in the Galaxy without turning the product into a social app. Signed-out visitors still browse, play, submit, subscribe, use APIs, and open platform links.
 
 Non-goals for this RFC: follower graphs, public likes, leaderboards, crowd tagging, public vibe voting, public profiles, generic forums, DMs, open comments, app-style notifications, and any weakening of operator-owned publishing.
 
@@ -35,6 +35,7 @@ The public logbook belongs to Fluncle. The account layer should not call the use
 
 Private account use cases in scope:
 
+- **Galaxy username:** the user’s normalized Better Auth `username` is their identity inside the private Galaxy layer; `displayUsername` preserves presentation.
 - **Lifetime Galaxy progress:** the set of findings a user has ever logged, plus first/last played time and aggregate deaths/wins.
 - **Saved findings:** private saves for tracks the user wants to revisit, separate from game progress.
 - **Submission ownership:** signed-in submissions are attached server-side to the user, while anonymous submissions continue to work.
@@ -47,7 +48,7 @@ Public-account adjacent ideas out of scope for this RFC:
 - **Public crew cards:** possible later, private by default, no follower graph or activity feed.
 - **Crew notes:** possible later as one-note-per-finding marginalia, not comments; no replies, votes, feeds, links, or composer above the canonical log content.
 
-Public copy terms: Sign in, Save, Saved findings, Galaxy progress, Your submissions, sent for review, logged, passed on, export, delete. Keep profile, thread, notification, community, bio, avatar, and moderation as internal terms unless VOICE explicitly canonizes them.
+Public copy terms: Sign up, Sign in, Sign out, username, Save, Saved findings, Galaxy progress, Your submissions, sent for review, logged, passed on, export, delete. Keep profile, thread, notification, community, bio, avatar, and moderation as internal terms unless VOICE explicitly canonizes them.
 
 ## 3. Data platform decision
 
@@ -67,18 +68,18 @@ Slice 0 must land first because it fixes an existing mismatch:
 
 - Widen `submissions.source` typing to include `ssh` everywhere: `apps/web/src/db/schema.ts`, `apps/web/src/lib/server/submissions.ts`, CLI submission admin types, and tests. The server already accepts `ssh`, and `apps/ssh/main.go` posts it.
 
-Slice 1: auth/session foundation:
+Slice 1: Better Auth foundation:
 
-- `users`: `id`, `created_at`, `updated_at`, `last_seen_at`, `status` (`active`, `suspended`, `deleted`), `deleted_at`.
-- `user_identities`: `id`, `user_id`, `provider`, `provider_subject`, `provider_username`, `provider_email`, `provider_email_hash`, `created_at`, `last_used_at`; unique `(provider, provider_subject)`.
-- `user_sessions`: `id_hash`, `user_id`, `surface` (`web`, `cli`, `ssh`, `mcp`), `created_at`, `last_seen_at`, `expires_at`, `revoked_at`, `ip_hash`, `user_agent_hash`; indexes `(user_id, expires_at)` and `(expires_at)`.
-- `user_auth_states`: `id_hash`, `purpose`, `provider`, `redirect_uri`, `code_verifier_hash`, `expires_at`, `consumed_at`, `ip_hash`, `user_agent_hash`; index `(purpose, expires_at)`.
-- `user_device_codes`: `id_hash`, `user_id`, `surface`, `expires_at`, `consumed_at`, `created_at`, `ip_hash`, `user_agent_hash`; only needed when CLI/SSH login ships.
-- `rate_limit_events`: `id`, `action`, `bucket`, `user_id`, `ip_hash`, `user_agent_hash`, `created_at`; indexes `(action, bucket, created_at)`, `(user_id, action, created_at)`, `(ip_hash, action, created_at)`.
+- Add `better-auth` and wire `apps/web/src/lib/server/auth.ts` with `betterAuth({ database: drizzleAdapter(db, { provider: "sqlite" }), emailAndPassword: { enabled: true }, plugins: [username(...)] })`.
+- Add the minimal runtime Drizzle client Better Auth needs, backed by the existing Turso/libSQL connection. The repo already uses Drizzle for schema/migrations but raw libSQL for most runtime queries, so this is a deliberate auth-local addition, not a repo-wide query rewrite.
+- Better Auth owns the auth tables it generates for the configured Drizzle/SQLite adapter: user, session, account, and verification equivalents. Keep those tables aligned with Better Auth’s generated schema instead of hand-rolling incompatible session or verification tables.
+- The Better Auth user table must include the username plugin fields: `username` (unique normalized identity) and `displayUsername` (presentation). This username is the user’s private Galaxy identity.
+- Use Better Auth’s schema/migration generation as input, then integrate through the repo’s generated Drizzle migration workflow. Do not hand-write auth SQL. If Better Auth’s generated auth-table timestamp conventions differ from Fluncle-owned ISO-string tables, keep Better Auth compatible and isolate that difference to auth tables.
+- Add `rate_limit_events`: `id`, `action`, `bucket`, `user_id`, `ip_hash`, `user_agent_hash`, `created_at`; indexes `(action, bucket, created_at)`, `(user_id, action, created_at)`, `(ip_hash, action, created_at)`.
 
 Slice 2: private persistence:
 
-- `user_galaxy_state`: `user_id`, `created_at`, `updated_at`, `last_played_at`, `deaths`, `wins`, `schema_version`.
+- `user_galaxy_state`: `user_id` (Better Auth user id), `created_at`, `updated_at`, `last_played_at`, `deaths`, `wins`, `schema_version`.
 - `user_galaxy_collections`: `id`, `user_id`, `track_id`, `log_id`, `first_collected_at`, `last_collected_at`, `source_surface`; unique `(user_id, track_id)`, indexes `(user_id, first_collected_at)` and `(track_id, first_collected_at)`.
 - `user_saved_findings`: `id`, `user_id`, `track_id`, `log_id`, `saved_at`, `note`; unique `(user_id, track_id)`.
 
@@ -90,51 +91,32 @@ Slice 3: submission ownership and data rights:
 
 Future public marginalia slices are not part of this RFC. If pursued, they need a separate RFC before adding public profile, credit, crew-note, report, or moderation tables.
 
-## 5. Auth token contract
+## 5. Better Auth contract
 
-Build a small Worker-native public auth layer instead of adopting Auth.js by default. Auth.js has Drizzle/SQLite adapter and WebAuthn support, but the repo has no Auth.js dependency and the app is TanStack Start on Cloudflare Workers. Add it only after a spike proves it fits this runtime better than the small custom layer.
+Use Better Auth for public accounts. Do not use Spotify OAuth for public accounts; the existing Spotify app remains admin/login-to-admin and playlist-publishing infrastructure only.
 
-Public auth modules:
+Server setup:
 
-- `apps/web/src/lib/server/public-auth.ts`: session parsing, cookie issue/clear, bearer token parsing, CSRF/origin checks, current-user lookup.
-- `apps/web/src/lib/server/public-oauth.ts`: public Spotify OAuth start/callback helpers, separate from admin/publish auth.
-- These modules must not import `requireAdmin`, admin cookie constants, `signState`, `verifyState`, or the admin OAuth callback helpers.
+- `apps/web/src/lib/server/auth.ts` exports the Better Auth instance.
+- Use Better Auth’s Drizzle adapter with provider `sqlite` against the repo’s Turso/libSQL-backed Drizzle setup.
+- Enable `emailAndPassword`.
+- Add `username()` from `better-auth/plugins`. Configure username validation for the Galaxy identity: lowercase normalized `username`, preserve `displayUsername`, allow only a conservative character set such as letters, numbers, `_`, and `-`, and reserve Fluncle/admin/system terms.
+- Add the Better Auth client with `usernameClient()` so the UI can call username sign-in. Better Auth’s username plugin signs in with `client.signIn.username({ username, password })`; sign-up uses the email sign-up flow with a `username` property.
+- The email is an auth/recovery credential, not the user’s Fluncle identity. Public and private UI should identify the user by username.
 
-Public env keys:
+Boundaries:
 
-- `PUBLIC_SESSION_SECRET`
-- `PUBLIC_OAUTH_STATE_SECRET`
-- `PUBLIC_TOKEN_PEPPER`
-- Prefer a separate public Spotify OAuth app. Minimum env split: `PUBLIC_SPOTIFY_CLIENT_ID`, `PUBLIC_SPOTIFY_CLIENT_SECRET`, `PUBLIC_SPOTIFY_REDIRECT_URI`.
+- Better Auth public sessions must never authenticate `/api/admin/*`.
+- Admin auth must remain exactly separate: `requireAdmin`, `fluncle_admin`, `FLUNCLE_API_TOKEN`, `spotify_auth`, and the Spotify admin/publish callback are not public-account primitives.
+- Public account deletion/export reads Better Auth user/session/account data through the supported Better Auth/DB shape, not through copied custom session logic.
+- CLI/SSH bearer/device-token auth is not in the first web cut. If it ships later, design it as a Better Auth-compatible extension or separate token table that still cannot satisfy admin auth.
 
-Browser sessions:
+Mutation protection:
 
-- Production cookie: `__Host-fluncle_session`; local dev may use `fluncle_session`.
-- Attributes: `HttpOnly`, `Secure` in production, `SameSite=Lax` or `Strict`, `Path=/`, no `Domain`.
-- Cookie value: opaque high-entropy random token. Store only an HMAC/hash in `user_sessions`.
-- Rotate session ID after login, identity linking, and privilege-sensitive changes.
+- Use Better Auth’s session primitives for browser auth and add Fluncle route-level origin/content-type checks for non-Better-Auth account mutations such as saved findings, Galaxy progress, export, and deletion.
+- Durable `rate_limit_events` remain required for sign-up/sign-in attempts, saved finding writes, Galaxy progress writes, submissions, export, and deletion.
 
-Bearer/device tokens:
-
-- Prefix public user tokens visibly, e.g. `fluncle_user_`.
-- Generate high-entropy random tokens; store only an HMAC/hash with `PUBLIC_TOKEN_PEPPER`.
-- Record `surface`, expiry, revocation, created/last-used metadata, and optional scope.
-- Never return a token again after creation.
-- Device codes for CLI/SSH are short-lived, single-use, rate-limited, and bound to a pending device row.
-
-OAuth:
-
-- Public Spotify OAuth uses Authorization Code with PKCE (`S256`) and identity scopes only.
-- Public OAuth state is stored in `user_auth_states`, consumed exactly once, expires quickly, and is bound to provider, purpose, redirect URI, code verifier metadata, IP/user-agent hashes where appropriate.
-- Public callbacks never write `spotify_auth`, never call publish-token exchange helpers, never request playlist scopes, and never branch through the admin callback.
-
-CSRF/origin:
-
-- Add `requirePublicMutationProtection(request, session)`.
-- Cookie-authenticated POST/PATCH/DELETE must validate same-origin `Origin` or `Referer`, require JSON content type unless explicitly form-based, and require a CSRF token.
-- Bearer-auth API calls do not use CSRF but still require JSON content type and rate limits.
-
-Tests must prove public cookies/tokens fail `requireAdmin()`, admin bearer/cookie fails `/api/me`, public OAuth state cannot be accepted by admin callbacks, and admin state cannot be accepted by public callbacks.
+Tests must prove Better Auth public sessions fail `requireAdmin()`, admin bearer/cookie fails `/api/me`, admin Spotify callback cannot create a public user, and Better Auth routes cannot write `spotify_auth`.
 
 ## 6. Route file map
 
@@ -142,9 +124,7 @@ Use exact TanStack route file names during implementation. URL notation with `:p
 
 Initial web/API files:
 
-- `apps/web/src/routes/api/auth/spotify/start.ts` → `POST /api/auth/spotify/start`
-- `apps/web/src/routes/api/auth/spotify/callback.ts` → `GET /api/auth/spotify/callback`
-- `apps/web/src/routes/api/auth/logout.ts` → `POST /api/auth/logout`
+- `apps/web/src/routes/api/auth/$.ts` or the repo-equivalent Better Auth catch-all route → Better Auth handler for `/api/auth/*`; choose the exact TanStack file shape during implementation and verify route generation.
 - `apps/web/src/routes/api/me.ts` → `GET /api/me`
 - `apps/web/src/routes/api/me/profile.ts` → `PATCH /api/me/profile`
 - `apps/web/src/routes/api/me/galaxy-progress.ts` → `GET /api/me/galaxy-progress`, `PUT /api/me/galaxy-progress`
@@ -163,7 +143,7 @@ Do not add `/crew/:handle`, public crew-note routes, or moderation routes in thi
 
 Public archive contracts remain anonymous and byte-compatible. Do not add private user state to `/api/tracks`; use `/api/me/*`.
 
-`GET /api/me` returns `{ ok: true, user: null }` anonymously. When signed in, it returns a minimal private DTO: `id`, optional display handle later, `createdAt`, and feature flags. It must not expose provider subjects, email, session metadata, saved findings, submissions, or moderation state.
+`GET /api/me` returns `{ ok: true, user: null }` anonymously. When signed in, it returns a minimal private DTO: `id`, `username`, `displayUsername`, `createdAt`, and feature flags. It must not expose email, password-account metadata, session metadata, saved findings, submissions, or moderation state.
 
 `GET /api/me/galaxy-progress` returns authenticated lifetime progress: `{ collectedLogIds, updatedAt, deaths, wins }`. Anonymous clients receive `401 auth_required` and continue local/session play.
 
@@ -259,7 +239,7 @@ Durable rate limiting ships with the private account foundation. Do not rely on 
 
 Rate-limit actions:
 
-- OAuth start/callback failures by IP hash, provider subject where known, and time bucket.
+- Sign-up/sign-in failures by IP hash, username/email where known, and time bucket.
 - Session creation, logout churn, device-code creation/verification.
 - Saved finding writes, Galaxy progress writes, submission writes, export requests, deletion requests, profile edits if profile fields ship.
 - Newsletter linking if account email linking is added.
@@ -270,14 +250,14 @@ Public writing abuse controls are reserved for the public marginalia RFC.
 
 ## 12. Privacy, deletion, export
 
-Private accounts introduce personal data: provider identity, email if available, session metadata, music taste/progress, saved findings, submissions, export requests, deletion requests, and rate-limit metadata.
+Private accounts introduce personal data: username, email, password-auth account metadata, session metadata, music taste/progress, saved findings, submissions, export requests, deletion requests, and rate-limit metadata.
 
 Data handling matrix:
 
 | Data                                           | Export                             | Delete/anonymize                                                     | Retain                                    |
 | ---------------------------------------------- | ---------------------------------- | -------------------------------------------------------------------- | ----------------------------------------- |
 | User/profile private fields                    | Yes                                | Delete or mark deleted                                               | Minimal deleted account tombstone         |
-| Provider identity/email                        | Yes                                | Delete on account deletion                                           | None unless abuse/legal retention applies |
+| Better Auth user/account/email                 | Yes                                | Delete on account deletion                                           | None unless abuse/legal retention applies |
 | Sessions/tokens                                | Metadata only                      | Revoke and delete hashes after retention                             | Short security retention                  |
 | Galaxy lifetime progress                       | Yes                                | Delete                                                               | None                                      |
 | Saved findings                                 | Yes                                | Delete                                                               | None                                      |
@@ -292,7 +272,7 @@ Privacy defaults:
 
 - Account data is private by default.
 - Account creation never implies newsletter consent.
-- Public DTOs never expose provider subject, email, session metadata, saved findings, private progress, private submissions, rate-limit data, or deletion/export records.
+- Public DTOs never expose email, password-account metadata, session metadata, saved findings, private progress, private submissions, rate-limit data, or deletion/export records.
 - Deletion revokes sessions immediately.
 
 The privacy policy and account UI must explain what is stored, how export/delete works, and which third-party processors are involved.
@@ -315,7 +295,7 @@ Hard default if that RFC is not written: no public profiles, no public notes, no
 ## 14. Sequencing & ownership
 
 1. **Fix existing source mismatch:** widen submission source typing to include `ssh`; update CLI/admin types and tests.
-2. **Auth foundation:** schema slice 1, public auth modules, env keys, public Spotify OAuth with PKCE, `/api/me`, CSRF/origin helper, durable rate limits, admin-boundary tests.
+2. **Auth foundation:** Better Auth dependency/config, generated auth schema, username plugin, `/api/me`, mutation protection for Fluncle-owned account routes, durable rate limits, admin-boundary tests.
 3. **Private persistence:** schema slice 2, Galaxy lifetime-progress APIs, saved findings APIs, web account plate, Galaxy lifetime markers, anonymous regression tests.
 4. **Submission ownership:** schema slice 3, signed-in submission attachment, `/api/me/submissions`, anonymous submission regression tests.
 5. **Data rights:** export/delete implementation, retention policy docs, privacy copy.
@@ -327,7 +307,7 @@ The critical path is auth/session isolation plus the Galaxy lifetime-vs-active s
 ## Decisions needed BEFORE handoff
 
 1. Confirm platform choice: **Turso for canonical private account data**, no D1 split, no Durable Objects.
-2. Confirm first auth carrier: **public Spotify OAuth with a separate public app/client if possible**, schema room for verified email and passkeys.
+2. Confirm auth carrier: **Better Auth email/password with the username plugin**, no public Spotify OAuth.
 3. Confirm account UI name: recommended **Your place** / **Saved findings**, not “Your logbook” as a primary nav label.
 4. Confirm Galaxy semantics: lifetime collection persists; active run cargo still resets on tow/manual restart.
 5. Confirm data deletion policy in the matrix, especially signed-in submissions and Discord/Loops limitations.
@@ -336,9 +316,9 @@ The critical path is auth/session isolation plus the Galaxy lifetime-vs-active s
 ## Acceptance criteria
 
 - Existing anonymous routes still work without auth: `/`, `/about`, `/galaxy`, `/log`, `/log/<id>`, `/api/tracks`, `/api/tracks/<idOrLogId>`, `/api/tracks/random`, `/api/search`, `/api/submissions`, `/api/newsletter`, `/rss.xml`, `/mcp`, and agent discovery surfaces.
-- Public auth cannot satisfy admin auth. Tests prove public cookies/tokens fail `requireAdmin()`, admin bearer/cookie fails `/api/me`, and public/admin OAuth state cannot cross callbacks.
-- `spotify_auth` remains publish-only; public Spotify login never writes it or requests playlist scopes.
-- Public OAuth state is one-time, stored, expiring, purpose-bound, provider-bound, redirect-bound, and PKCE-bound.
+- Public auth cannot satisfy admin auth. Tests prove Better Auth sessions fail `requireAdmin()`, admin bearer/cookie fails `/api/me`, and Better Auth routes never touch `spotify_auth`.
+- Better Auth is configured with Drizzle `sqlite`, email/password, username plugin, username client plugin, conservative username validation, and reserved username handling.
+- Better Auth generated schema/migrations include the username plugin’s `username` and `displayUsername` fields; Fluncle-owned tables reference Better Auth user ids.
 - Drizzle schema and generated migrations land in small slices; `ssh` submission source mismatch is fixed first.
 - `/api/me` returns `user:null` anonymously and a minimal private DTO when signed in.
 - Galaxy lifetime progress never counts as active run cargo. Tests cover launch, fresh log, tow, manual reset, win, catalogue growth, stale Log IDs, local merge, and SSH parity when SSH sync ships.
@@ -395,6 +375,6 @@ Current docs checked:
 - Cloudflare Durable Objects storage docs: Durable Objects provide object-local storage and SQLite-backed storage for new namespaces; appropriate for coordination and live state. https://developers.cloudflare.com/durable-objects/best-practices/access-durable-objects-storage/
 - Cloudflare Turnstile docs: server-side Siteverify validation is mandatory; tokens expire after five minutes and are single-use. https://developers.cloudflare.com/turnstile/get-started/server-side-validation/
 - Drizzle docs: Drizzle supports Cloudflare D1 via `drizzle-orm/d1` and Durable Object SQLite via `drizzle-orm/durable-sqlite`. https://orm.drizzle.team/
-- Auth.js docs: Drizzle adapters, SQLite adapter shape, and WebAuthn/passkey provider support exist, but framework/runtime fit must be proven in this repo before adoption. https://authjs.dev/
-- Spotify authorization docs: public login should use Authorization Code with PKCE and identity scopes only. https://developer.spotify.com/documentation/web-api/
+- Better Auth installation docs: configure `betterAuth`, use the Drizzle adapter with provider `sqlite`, enable email/password, and generate the auth schema/migration. https://better-auth.com/llms.txt/docs/installation.md
+- Better Auth username plugin docs: add `username()` and `usernameClient()`, add `username` and `displayUsername` fields, sign in with `client.signIn.username`, and sign up through email sign-up with a `username` property. https://better-auth.com/llms.txt/docs/plugins/username.md
 - OWASP Session Management and CSRF cheat sheets for cookie, session, and CSRF guidance. https://cheatsheetseries.owasp.org/
