@@ -362,13 +362,30 @@ body::before {
   background: var(--accent);
 }
 
+/* The checkpoint row reads as a deeper window onto the cosmos: a darker ground
+   than a finding row, scattered with a quiet starfield so a mixtape stands apart
+   without shouting (DESIGN.md). The stars are sparse Starlight-Cream dots, kept
+   faint so the title + label still hold WCAG AA over them (Legible Sky). */
 .track-row-checkpoint {
-  background: color-mix(in oklch, var(--background) 42%, transparent);
+  --checkpoint-star: rgb(244 234 215 / 0.55);
+  background-color: color-mix(in oklch, var(--background) 32%, transparent);
+  background-image:
+    radial-gradient(1.5px 1.5px at 9% 26%, var(--checkpoint-star) 50%, transparent 52%),
+    radial-gradient(1px 1px at 21% 66%, var(--checkpoint-star) 50%, transparent 52%),
+    radial-gradient(1.5px 1.5px at 34% 40%, var(--checkpoint-star) 50%, transparent 52%),
+    radial-gradient(1px 1px at 47% 78%, var(--checkpoint-star) 50%, transparent 52%),
+    radial-gradient(1.5px 1.5px at 62% 30%, var(--checkpoint-star) 50%, transparent 52%),
+    radial-gradient(1px 1px at 74% 62%, var(--checkpoint-star) 50%, transparent 52%),
+    radial-gradient(1px 1px at 86% 36%, var(--checkpoint-star) 50%, transparent 52%),
+    radial-gradient(1.5px 1.5px at 95% 72%, var(--checkpoint-star) 50%, transparent 52%);
+  background-repeat: no-repeat;
 }
 
+/* Keep the starfield image on hover (set background-color only, not the
+   shorthand, which would reset background-image) and wash the Gold Veil over it. */
 .track-row-checkpoint:hover,
 .track-row-checkpoint:focus-within {
-  background: color-mix(in oklch, var(--accent) 72%, var(--background) 28%);
+  background-color: color-mix(in oklch, var(--accent) 72%, var(--background) 28%);
 }
 
 .track-row:hover .track-log-id,
@@ -1453,6 +1470,13 @@ body::before {
   display: flex;
   flex-direction: column;
   gap: 1.2rem;
+}
+
+/* The masthead already draws a divider beneath the header, so the first stacked
+   section drops its own top rule to avoid a double line. */
+.account-stack > .account-section:first-child {
+  border-top: 0;
+  padding-top: 0;
 }
 
 .account-stack {

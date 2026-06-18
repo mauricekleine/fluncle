@@ -1,7 +1,7 @@
 import { CaretLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
 import { Link, createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { siSpotify, siTiktok, siYoutube } from "simple-icons";
+import { siMixcloud, siSoundcloud, siSpotify, siTiktok, siYoutube } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
 import { LogFootage } from "@/components/log/log-footage";
 import { SaveFindingButton } from "@/components/save-finding-button";
@@ -449,6 +449,7 @@ function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
               render={<a href={mixtape.externalUrls.mixcloud} rel="noreferrer" target="_blank" />}
               size="lg"
             >
+              <BrandIcon icon={siMixcloud} />
               Listen on Mixcloud
             </Button>
           ) : undefined}
@@ -459,6 +460,7 @@ function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
               size="lg"
               variant="outline"
             >
+              <BrandIcon icon={siYoutube} />
               Watch on YouTube
             </Button>
           ) : undefined}
@@ -469,6 +471,7 @@ function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
               size="lg"
               variant="outline"
             >
+              <BrandIcon icon={siSoundcloud} />
               Listen on SoundCloud
             </Button>
           ) : undefined}
