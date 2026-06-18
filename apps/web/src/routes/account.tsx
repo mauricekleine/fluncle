@@ -1,8 +1,9 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { cloneElement, isValidElement, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { authClient } from "@/lib/auth-client";
 import { siteUrl } from "@/lib/fluncle-links";
@@ -182,22 +183,18 @@ function AuthForms({
 
   return (
     <form className="account-stack" onSubmit={(event) => void submit(event)}>
-      <div className="account-row">
-        <Button
-          type="button"
-          variant={mode === "signin" ? "default" : "outline"}
-          onClick={() => setMode("signin")}
-        >
-          Sign in
-        </Button>
-        <Button
-          type="button"
-          variant={mode === "signup" ? "default" : "outline"}
-          onClick={() => setMode("signup")}
-        >
-          Create account
-        </Button>
-      </div>
+      <Tabs
+        value={mode}
+        onValueChange={(value) => {
+          setMode(value as "signin" | "signup");
+          setMessage("");
+        }}
+      >
+        <TabsList className="w-full">
+          <TabsTrigger value="signin">Sign in</TabsTrigger>
+          <TabsTrigger value="signup">Create account</TabsTrigger>
+        </TabsList>
+      </Tabs>
       {mode === "signup" ? (
         <Field label="Email">
           <Input
@@ -380,13 +377,19 @@ function SignedInAccount({
   );
 }
 
-function Field({ children, label }: { children: React.ReactNode; label: string }) {
+function Field({
+  children,
+  label,
+}: {
+  children: React.ReactElement<{ id?: string }>;
+  label: string;
+}) {
   const id = label.toLowerCase().replaceAll(" ", "-");
 
   return (
     <div className="account-field">
       <Label htmlFor={id}>{label}</Label>
-      {children}
+      {isValidElement(children) ? cloneElement(children, { id }) : children}
     </div>
   );
 }

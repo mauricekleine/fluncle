@@ -200,7 +200,7 @@ function HomePage() {
         </picture>
       </span>
       <span aria-hidden="true" className="cover-story-badge">
-        <PlayIcon className="size-3.5 translate-x-px" weight="fill" />
+        <PlayIcon className="size-3.5" weight="fill" />
       </span>
     </>
   );

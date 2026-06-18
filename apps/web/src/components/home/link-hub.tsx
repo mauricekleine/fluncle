@@ -144,7 +144,7 @@ export function HomeLinkHub() {
           </Link>
           <Dot />
           <Link className={linkClassName} to="/account">
-            Your place
+            Join the Crew
           </Link>
         </nav>
 

@@ -397,7 +397,7 @@ function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
           </p>
         </section>
 
-        <section aria-label="Mixtape audio" className="empty-scanlines log-mixtape-embed">
+        <section aria-label="Mixtape audio" className="log-mixtape-embed">
           {hasAudioLink
             ? "Audio recovered. Pick a deck below."
             : "Audio lands when this checkpoint publishes."}

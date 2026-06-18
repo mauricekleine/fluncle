@@ -448,13 +448,6 @@ body::before {
   transition: opacity 150ms ease-out;
 }
 
-/* A right-pointing play triangle's visual mass sits left of its bounding box, so
-   geometric centering reads left-heavy. Nudge the glyph toward the point so it
-   optically centers in the circle (em-relative, scales with the icon size). */
-.track-play-glyph svg {
-  transform: translateX(0.07em);
-}
-
 .track-play:hover .track-play-glyph,
 .track-play:focus-visible .track-play-glyph,
 .track-play[aria-pressed="true"] .track-play-glyph {

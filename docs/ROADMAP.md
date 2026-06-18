@@ -145,7 +145,15 @@ v1 shipped 2026-06-10 at [galaxy.fluncle.com](https://galaxy.fluncle.com) (same 
 
 ### User accounts
 
-The private web account layer shipped from [docs/rfcs/user-accounts-rfc.md](./rfcs/user-accounts-rfc.md): Better Auth email/password + username, `/account`, private Galaxy lifetime progress, saved findings, signed-in submission ownership, export/delete, durable DB-backed rate limits, and hard separation from admin auth. Anonymous browse, submit, RSS, MCP, CLI, SSH, and Galaxy play remain unchanged. Future account work is deliberately outside this slice: CLI/SSH device login, authenticated MCP tools, public crew cards, public credit, crew notes, reports, or moderation all need their own RFC before implementation.
+The private web account layer shipped in PR #19: Better Auth email/password + username, `/account`, private Galaxy lifetime progress, saved findings, signed-in submission ownership, export/delete, durable DB-backed rate limits, CSRF-bound account mutations, and hard separation from admin auth. Anonymous browse, submit, RSS, MCP, CLI, SSH, and Galaxy play remain unchanged.
+
+Follow-ups are deliberately separate from the first private web slice:
+
+- **Cross-surface account login:** CLI/SSH device login for synced Galaxy lifetime markers, saved findings, and own submissions. User tokens must stay separate from `FLUNCLE_API_TOKEN`, and SSH stays anonymous by default.
+- **Authenticated MCP tools:** only if there is a concrete agent use case; keep the existing MCP server/card anonymous until a dedicated auth contract, CORS/header behavior, and failure model exist.
+- **Public marginalia RFC:** public crew cards, public submission credit, crew notes, reports, moderation, and profile-like surfaces need their own RFC before implementation. Hard default remains no public writing.
+- **Email/password hardening:** decide verification/reset policy, abuse thresholds, disposable-email handling, and support copy once real usage shows the pressure points.
+- **Account ops polish:** keep the account env vars prominent (`BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`) and do a real-data privacy pass on export/delete after a few accounts exist.
 
 ### TikTok auto-pipeline (the capstone) + Spinup automation
 
