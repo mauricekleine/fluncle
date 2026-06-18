@@ -1,9 +1,10 @@
 import { type TrackListItem, type TrackListPage } from "./server/tracks";
+import { type FeedItem } from "./mixtapes";
 
 // Client reads use the public /api/tracks contract produced by lib/server/tracks.ts.
 export type Track = TrackListItem;
 
-export type TracksResponse = Omit<TrackListPage, "tracks"> & { tracks: Track[] };
+export type TracksResponse = Omit<TrackListPage, "tracks"> & { tracks: FeedItem[] };
 
 type RandomTrackResponse = {
   ok: true;

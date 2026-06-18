@@ -117,3 +117,38 @@ export const socialPosts = sqliteTable(
   },
   (table) => [uniqueIndex("social_posts_track_platform_idx").on(table.trackId, table.platform)],
 );
+
+export const mixtapes = sqliteTable("mixtapes", {
+  addedAt: text("added_at"),
+  coverImageUrl: text("cover_image_url"),
+  createdAt: text("created_at").notNull(),
+  durationMs: integer("duration_ms"),
+  id: text("id").primaryKey(),
+  logId: text("log_id").unique(),
+  mixcloudUrl: text("mixcloud_url"),
+  note: text("note"),
+  publishedAt: text("published_at"),
+  recordedAt: text("recorded_at"),
+  sequenceNumber: integer("sequence_number").unique(),
+  soundcloudUrl: text("soundcloud_url"),
+  status: text("status", { enum: ["draft", "published"] })
+    .notNull()
+    .default("draft"),
+  title: text("title").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  youtubeUrl: text("youtube_url"),
+});
+
+export const mixtapeTracks = sqliteTable(
+  "mixtape_tracks",
+  {
+    mixtapeId: text("mixtape_id").notNull(),
+    position: integer("position").notNull(),
+    trackId: text("track_id").notNull(),
+  },
+  (table) => [
+    index("mixtape_tracks_mixtape_id_idx").on(table.mixtapeId),
+    uniqueIndex("mixtape_tracks_mixtape_position_idx").on(table.mixtapeId, table.position),
+    uniqueIndex("mixtape_tracks_mixtape_track_idx").on(table.mixtapeId, table.trackId),
+  ],
+);

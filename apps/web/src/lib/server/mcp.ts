@@ -57,8 +57,8 @@ type McpTool = {
 const tools: McpTool[] = [
   {
     description:
-      "List the most recent findings in Fluncle's drum & bass archive, newest first. Dates mark when each was found: the day Fluncle first heard the tune.",
-    execute: async (args) => listTracks({ limit: clampLimit(args.limit) }),
+      "List the most recent findings and mixtapes in Fluncle's drum & bass archive, newest first. Dates mark when each was found or published into the spine.",
+    execute: async (args) => listTracks({ includeMixtapes: true, limit: clampLimit(args.limit) }),
     inputSchema: {
       properties: {
         limit: {

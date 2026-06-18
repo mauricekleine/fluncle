@@ -7,7 +7,7 @@ import { LogFootage } from "@/components/log/log-footage";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { Button } from "@/components/ui/button";
 import { siteUrl } from "@/lib/fluncle-links";
-import { formatDateLong, formatDuration } from "@/lib/format";
+import { formatAlbumDuration, formatDateLong, formatDuration } from "@/lib/format";
 import { isLogPageParam } from "@/lib/log-page-param";
 import {
   artistTitleLine,
@@ -15,11 +15,17 @@ import {
   definitionalSentences,
   splitLogId,
 } from "@/lib/log-prose";
-import { breadcrumbsJsonLd, logPageUrl, musicRecordingJsonLd } from "@/lib/log-schema";
+import {
+  breadcrumbsJsonLd,
+  logPageUrl,
+  mixtapeAlbumJsonLd,
+  musicRecordingJsonLd,
+} from "@/lib/log-schema";
 import { trackMedia } from "@/lib/media";
+import { hasExternalUrl, type MixtapeDTO } from "@/lib/mixtapes";
+import { resolveLogPageTarget } from "@/lib/server/log-resolver";
 import {
   getRelatedTracks,
-  getTrackByIdOrLogId,
   getTrackNeighbors,
   type TrackListItem,
   type TrackNeighbor,
@@ -39,17 +45,31 @@ type LogPageData =
       related: TrackNeighbor[];
       track: TrackListItem;
     }
+  | {
+      mixtape: MixtapeDTO;
+      status: "found-mixtape";
+    }
   | { status: "missing" }
   | { status: "moved"; logId: string };
 
 const fetchLogPage = createServerFn({ method: "GET" })
   .validator((data: { logId: string }) => data)
   .handler(async ({ data: { logId } }): Promise<LogPageData> => {
-    const track = await getTrackByIdOrLogId(logId);
+    const target = await resolveLogPageTarget(logId);
 
     // No Log ID → no log page: a finding without a coordinate isn't a log
     // entry yet (the feed shows its bare #NN until it's backfilled).
-    if (!track?.logId) {
+    if (!target) {
+      return { status: "missing" };
+    }
+
+    if (target.kind === "mixtape") {
+      return { mixtape: target.mixtape, status: "found-mixtape" };
+    }
+
+    const { track } = target;
+
+    if (!track.logId) {
       return { status: "missing" };
     }
 
@@ -70,8 +90,33 @@ const fetchLogPage = createServerFn({ method: "GET" })
 // loaderData makes the route's own type inference circular (same pattern as
 // the old stories route).
 function logHead(loaderData: LogPageData | undefined) {
-  if (loaderData?.status !== "found") {
+  if (loaderData?.status !== "found" && loaderData?.status !== "found-mixtape") {
     return {};
+  }
+
+  if (loaderData.status === "found-mixtape") {
+    const { mixtape } = loaderData;
+    const logId = mixtape.logId as string;
+    const pageUrl = logPageUrl(logId);
+    const title = `${logId} · ${mixtape.title} · Fluncle`;
+    const description = mixtape.note ?? "A checkpoint in Fluncle's Findings.";
+
+    return {
+      links: [{ href: pageUrl, rel: "canonical" }],
+      meta: [
+        { title },
+        { content: description, name: "description" },
+        { content: title, property: "og:title" },
+        { content: description, property: "og:description" },
+        { content: mixtape.coverImageUrl ?? `${siteUrl}/fluncle-cover.png`, property: "og:image" },
+        { content: pageUrl, property: "og:url" },
+        { content: "music.album", property: "og:type" },
+      ],
+      scripts: [
+        { children: JSON.stringify(mixtapeAlbumJsonLd(mixtape)), type: "application/ld+json" },
+        { children: JSON.stringify(breadcrumbsJsonLd(logId)), type: "application/ld+json" },
+      ],
+    };
   }
 
   const { track } = loaderData;
@@ -159,6 +204,10 @@ function LogPage() {
   const data = Route.useLoaderData();
 
   if (data.status !== "found") {
+    if (data.status === "found-mixtape") {
+      return <MixtapeLogPage mixtape={data.mixtape} />;
+    }
+
     return null;
   }
 
@@ -317,6 +366,125 @@ function LogPage() {
 
         <footer className="log-plate-footer">
           <Link to="/log">The full log</Link>
+          <Link to="/">Back to the archive</Link>
+        </footer>
+      </article>
+    </main>
+  );
+}
+
+function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
+  const logId = mixtape.logId as string;
+  const { sector, tail } = splitLogId(logId);
+  const hasAudioLink = hasExternalUrl(mixtape.externalUrls);
+
+  return (
+    <main className="log-plate-stage">
+      <article className="log-plate">
+        <header className="log-masthead">
+          <p className="log-nameplate">Mixtape No. {mixtape.sequenceNumber ?? 1}</p>
+          <h1 className="log-coordinate">{logId}</h1>
+          <p className="log-coordinate-uri">fluncle://{logId}</p>
+        </header>
+
+        <section aria-label="The checkpoint" className="log-definition">
+          <h2 className="log-track-title">{mixtape.title}</h2>
+          <p className="log-track-artist">Fluncle</p>
+          <p className="log-definition-prose">
+            {mixtape.note ?? "A checkpoint in the archive. The longer dream made from findings."}
+          </p>
+        </section>
+
+        <section aria-label="Mixtape audio" className="empty-scanlines log-mixtape-embed">
+          {hasAudioLink
+            ? "Audio recovered. Pick a deck below."
+            : "Audio lands when this checkpoint publishes."}
+        </section>
+
+        <dl className="log-fields">
+          {mixtape.recordedAt ? (
+            <div className="log-field">
+              <dt>Recorded</dt>
+              <dd>
+                <time dateTime={mixtape.recordedAt}>{formatDateLong(mixtape.recordedAt)}</time>
+              </dd>
+            </div>
+          ) : undefined}
+          {mixtape.durationMs ? (
+            <div className="log-field">
+              <dt>Runtime</dt>
+              <dd>{formatAlbumDuration(mixtape.durationMs)}</dd>
+            </div>
+          ) : undefined}
+          <div className="log-field">
+            <dt>Findings</dt>
+            <dd>{mixtape.memberCount}</dd>
+          </div>
+        </dl>
+
+        <section aria-label="Mixtape tracklist" className="log-related">
+          <h2>Tracklist</h2>
+          <ol className="log-related-list">
+            {mixtape.members.map((member, index) =>
+              member.logId ? (
+                <li key={member.trackId}>
+                  <Link params={{ logId: member.logId }} to="/log/$logId">
+                    <span className="log-related-coordinate">
+                      {String(index + 1).padStart(2, "0")} · {member.logId}
+                    </span>
+                    <span className="log-related-line">{artistTitleLine(member)}</span>
+                  </Link>
+                </li>
+              ) : null,
+            )}
+          </ol>
+        </section>
+
+        <div className="log-actions">
+          {mixtape.externalUrls.mixcloud ? (
+            <Button
+              nativeButton={false}
+              render={<a href={mixtape.externalUrls.mixcloud} rel="noreferrer" target="_blank" />}
+              size="lg"
+            >
+              Listen on Mixcloud
+            </Button>
+          ) : undefined}
+          {mixtape.externalUrls.youtube ? (
+            <Button
+              nativeButton={false}
+              render={<a href={mixtape.externalUrls.youtube} rel="noreferrer" target="_blank" />}
+              size="lg"
+              variant="outline"
+            >
+              Watch on YouTube
+            </Button>
+          ) : undefined}
+          {mixtape.externalUrls.soundcloud ? (
+            <Button
+              nativeButton={false}
+              render={<a href={mixtape.externalUrls.soundcloud} rel="noreferrer" target="_blank" />}
+              size="lg"
+              variant="outline"
+            >
+              Listen on SoundCloud
+            </Button>
+          ) : undefined}
+        </div>
+
+        <section aria-label="How to read a Log ID" className="log-decode">
+          <h2>How to read the coordinate</h2>
+          <p>
+            <span className="log-decode-part">{sector}</span> is the sector: the days between the
+            epoch, 2026-05-30, and the day this set was recorded.{" "}
+            <span className="log-decode-part">F</span> marks a mixtape.{" "}
+            <span className="log-decode-part">{tail}</span> is its checkpoint number, minted once
+            and never changed. <Link to="/about">More on Log IDs and the Galaxy</Link>.
+          </p>
+        </section>
+
+        <footer className="log-plate-footer">
+          <Link to="/mixtapes">Mixtapes</Link>
           <Link to="/">Back to the archive</Link>
         </footer>
       </article>

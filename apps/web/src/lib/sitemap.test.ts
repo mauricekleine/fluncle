@@ -13,11 +13,12 @@ describe("buildSitemapXml (sitemap enumeration)", () => {
 
     expect(xml).toContain("<loc>https://www.fluncle.com/</loc>");
     expect(xml).toContain("<loc>https://www.fluncle.com/log</loc>");
+    expect(xml).toContain("<loc>https://www.fluncle.com/mixtapes</loc>");
     expect(xml).toContain("<loc>https://www.fluncle.com/about</loc>");
     expect(xml).toContain("<loc>https://www.fluncle.com/galaxy</loc>");
     expect(xml).toContain("<loc>https://www.fluncle.com/log/011.6.8K</loc>");
     expect(xml).toContain("<loc>https://www.fluncle.com/log/004.7.2I</loc>");
-    expect(xml.match(/<loc>/g)).toHaveLength(4 + pages.length);
+    expect(xml.match(/<loc>/g)).toHaveLength(5 + pages.length);
   });
 
   it("always includes the /galaxy surface", () => {
@@ -43,6 +44,6 @@ describe("buildSitemapXml (sitemap enumeration)", () => {
     const xml = buildSitemapXml([]);
 
     expect(xml).not.toContain("<lastmod>");
-    expect(xml.match(/<loc>/g)).toHaveLength(4);
+    expect(xml.match(/<loc>/g)).toHaveLength(5);
   });
 });

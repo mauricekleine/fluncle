@@ -1,4 +1,5 @@
 import { type Galaxy, GALAXIES, galaxyForVibe } from "../galaxies";
+import { type FeedItem, rowToMixtape } from "../mixtapes";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 
@@ -68,12 +69,17 @@ export type TrackListItem = {
   vibeX?: number;
   /** Vibe-map placement. Floaty(-1)↔Driving(+1); absent = unplaced. */
   vibeY?: number;
+  type?: "finding";
 };
 
 export type TrackListPage = {
   nextCursor?: string;
   totalCount: number;
   tracks: TrackListItem[];
+};
+
+export type FeedListPage = Omit<TrackListPage, "tracks"> & {
+  tracks: FeedItem[];
 };
 
 type TrackRow = {
@@ -107,6 +113,22 @@ type TrackRow = {
   vibe_y: number | null;
   added_to_spotify: number;
   posted_to_telegram: number;
+};
+
+type MixtapeFeedRow = {
+  added_at: string;
+  cover_image_url: string | null;
+  duration_ms: number | null;
+  id: string;
+  log_id: string;
+  member_count: number;
+  mixcloud_url: string | null;
+  note: string | null;
+  sequence_number: number | null;
+  soundcloud_url: string | null;
+  title: string;
+  updated_at: string | null;
+  youtube_url: string | null;
 };
 
 // Columns exposed to clients. `features_json` is the enrichment spectral summary,
@@ -183,6 +205,7 @@ function toTrackListItem(row: TrackRow): TrackListItem {
     tiktokUrl: row.tiktok_url ?? undefined,
     title: row.title,
     trackId: row.track_id,
+    type: "finding",
     updatedAt: row.updated_at ?? undefined,
     vibeX: row.vibe_x ?? undefined,
     vibeY: row.vibe_y ?? undefined,
@@ -204,6 +227,24 @@ export async function getTrackByIdOrLogId(idOrLogId: string): Promise<TrackListI
   const row = typedRow<TrackRow>(result.rows);
 
   return row ? toTrackListItem(row) : undefined;
+}
+
+export async function getTracksForMixtape(mixtapeId: string): Promise<TrackListItem[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [mixtapeId, mixtapeId],
+    sql: `select ${TRACK_SELECT}
+          from tracks
+          where track_id in (
+            select track_id from mixtape_tracks where mixtape_id = ?
+          )
+          order by (
+            select position from mixtape_tracks
+            where mixtape_id = ? and track_id = tracks.track_id
+          ) asc`,
+  });
+
+  return typedRows<TrackRow>(result.rows).map(toTrackListItem);
 }
 
 /** One random certified track, mapped like every other list item. */
@@ -299,18 +340,11 @@ type TrackCountRow = {
   total_count: number;
 };
 
-export async function listTracks({
-  cursor,
-  hasVideo,
-  limit,
-  order = "desc",
-  placement,
-  since,
-  until,
-}: {
+type ListTracksOptions = {
   cursor?: TrackCursor;
   /** Only findings with a rendered video — the Stories feed's filter. */
   hasVideo?: boolean;
+  includeMixtapes?: boolean;
   limit: number;
   /**
    * Found-order direction. "desc" (newest-first) is the public default; the
@@ -325,7 +359,22 @@ export async function listTracks({
   placement?: "placed" | "unplaced";
   since?: string;
   until?: string;
-}): Promise<TrackListPage> {
+};
+
+export function listTracks(
+  options: ListTracksOptions & { includeMixtapes: true },
+): Promise<FeedListPage>;
+export function listTracks(options: ListTracksOptions): Promise<TrackListPage>;
+export async function listTracks({
+  cursor,
+  hasVideo,
+  includeMixtapes = false,
+  limit,
+  order = "desc",
+  placement,
+  since,
+  until,
+}: ListTracksOptions): Promise<FeedListPage | TrackListPage> {
   const db = await getDb();
 
   // Discovery-window and video filters; totalCount is scoped to the same
@@ -386,11 +435,38 @@ export async function listTracks({
     }),
   ]);
   const rows = typedRows<TrackRow>(result.rows);
+  const feedRows =
+    includeMixtapes && !since && !until && hasVideo === undefined && placement === undefined
+      ? await listPublishedMixtapeFeedRows(db, cursor, cursorComparator, cursorArgs, dir, limit)
+      : undefined;
+  const feedItems = feedRows
+    ? [...rows.map(toTrackListItem), ...feedRows.map((row) => rowToMixtape(row))]
+        .sort((left, right) => compareFeedItems(left, right, dir))
+        .slice(0, limit + 1)
+    : undefined;
   const countRows = typedRows<TrackCountRow>(countResult.rows);
+  const totalCount = Number(countRows[0]?.total_count ?? rows.length);
+
+  if (feedItems) {
+    const visibleItems = feedItems.slice(0, limit);
+    const lastVisibleItem = visibleItems.at(-1);
+
+    return {
+      nextCursor:
+        feedItems.length > limit && lastVisibleItem
+          ? encodeTrackCursor({
+              addedAt: lastVisibleItem.addedAt ?? "",
+              trackId: itemCursorId(lastVisibleItem),
+            })
+          : undefined,
+      totalCount,
+      tracks: visibleItems,
+    };
+  }
+
   const visibleRows = rows.slice(0, limit);
   const hasMore = rows.length > limit;
   const lastVisibleRow = visibleRows.at(-1);
-  const totalCount = Number(countRows[0]?.total_count ?? visibleRows.length);
 
   return {
     nextCursor:
@@ -403,6 +479,69 @@ export async function listTracks({
     totalCount,
     tracks: visibleRows.map(toTrackListItem),
   };
+}
+
+async function listPublishedMixtapeFeedRows(
+  db: Awaited<ReturnType<typeof getDb>>,
+  cursor: TrackCursor | undefined,
+  cursorComparator: string,
+  cursorArgs: string[],
+  dir: "asc" | "desc",
+  limit: number,
+): Promise<MixtapeFeedRow[]> {
+  const result = await db.execute({
+    args: [...cursorArgs, limit + 1],
+    sql: `select
+            m.id,
+            m.log_id,
+            m.sequence_number,
+            m.title,
+            m.cover_image_url,
+            m.duration_ms,
+            m.note,
+            m.mixcloud_url,
+            m.youtube_url,
+            m.soundcloud_url,
+            m.added_at,
+            m.updated_at,
+            (select count(*) from mixtape_tracks mt where mt.mixtape_id = m.id) as member_count
+          from mixtapes m
+          where m.status = 'published'
+            and m.log_id is not null
+            and m.added_at is not null
+            ${cursor ? `and ${cursorComparator.replaceAll("track_id", "log_id")}` : ""}
+          order by m.added_at ${dir}, m.log_id ${dir}
+          limit ?`,
+  });
+
+  return typedRows<MixtapeFeedRow>(result.rows);
+}
+
+function itemCursorId(item: FeedItem): string {
+  return item.type === "mixtape" ? (item.logId as string) : item.trackId;
+}
+
+function compareFeedItems(left: FeedItem, right: FeedItem, dir: "asc" | "desc"): number {
+  const direction = dir === "asc" ? 1 : -1;
+  const byDate = binaryCompare(left.addedAt ?? "", right.addedAt ?? "");
+
+  if (byDate !== 0) {
+    return byDate * direction;
+  }
+
+  return binaryCompare(itemCursorId(left), itemCursorId(right)) * direction;
+}
+
+function binaryCompare(left: string, right: string): number {
+  if (left < right) {
+    return -1;
+  }
+
+  if (left > right) {
+    return 1;
+  }
+
+  return 0;
 }
 
 export type VibePoint = {

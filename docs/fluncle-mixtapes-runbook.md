@@ -141,16 +141,13 @@ A mixtape sits at its sector, which the Galaxy game maps to a distance from Eart
 
 ## Open questions / build tasks
 
-> **Build plan:** the internal plumbing is now scoped in **[docs/rfcs/fluncle-mixtapes-plumbing-rfc.md](./rfcs/fluncle-mixtapes-plumbing-rfc.md)** (research + /taste + a 4-role adversarial panel, sequenced into increments A–D, all shipping in one PR built A→D, merge-gated on the first real mixtape). The list below is the raw task inventory it draws from; several entries are resolved there (e.g. the union shape, the resolver path, the mint atomicity).
+> **Internal plumbing shipped:** the implementation from **[docs/rfcs/fluncle-mixtapes-plumbing-rfc.md](./rfcs/fluncle-mixtapes-plumbing-rfc.md)** is now built through increments A–D against the dev Turso DB: separate `mixtapes` / `mixtape_tracks` tables, draft→publish lifecycle, publish-time `XXX.F.ZZ` minting, admin create/edit/member/publish routes, `/log/<id>` mixtape resolution, quiet feed inclusion, `/mixtapes`, `/api/mixtapes`, `fluncle mixtapes`, MCP inclusion, RSS category, sitemap entries, `DJMixAlbum` JSON-LD, and `llms.txt` awareness. A mixtape is still not a finding, does not increment `FOUND`, and stays out of the admin board, tag queue, Stories feed, and newsletter windows.
 
-- **Data model (decided):** a separate `mixtapes` table, unioned into the track surfaces for the quiet inclusion and queried alone for the `/mixtapes` front door. Keeps mixtapes out of the finding queries, the `FOUND` count, and the enrichment/stage columns, and the table doubles as the mixtape-number counter (see Identity). Open sub-question: the exact shape of the union (a view, a merged query, or a typed DTO at the surface).
 - **Member tracks that aren't findings yet:** add them as findings first, or allow non-finding members in a mixtape's tracklist.
-- **Log ID minting:** where the global mixtape counter lives (the Worker, like a finding's mint), and how the `F` marker + sequence number are assigned.
-- **Admin board:** a Mixtapes view with its own stage flow (record → Mixcloud → YouTube → MusicBrainz → announce), or manage mixtapes outside the board.
-- **`/mixtapes` surfaces:** the web index, `/api/mixtapes`, `fluncle mixtapes`, the SSH view.
+- **SSH mixtapes view:** the web/API/CLI/MCP front doors exist; the rave terminal view is still a future surface.
 - **Clip-of-a-mixtape pipeline:** how teaser clips get cut, captioned, and pushed.
 - **OG image:** a per-mixtape `/log` page OG card, reusing `packages/media` (the same idea as the per-finding OG item on the roadmap).
-- **schema.org type:** confirm `DJMixAlbum` vs `MixtapeAlbum` as the `albumProductionType` at build.
+- **External publishing chain:** Mixcloud upload, YouTube mirror, optional SoundCloud mirror, MusicBrainz DJ-mix release, Wikidata loop, and announce posts remain out of this plumbing build.
 
 ## Cross-links
 

@@ -5,7 +5,10 @@ import { Button } from "@/components/ui/button";
 // operator's home, the pipeline view of every finding — it absorbed the old Posts
 // and Tag pages, so it's the only surface now), plus sign out. Rendered inside
 // AdminShell's header.
-const LINKS = [{ key: "board", label: "Board", to: "/admin" }] as const;
+const LINKS = [
+  { key: "board", label: "Board", to: "/admin" },
+  { key: "mixtapes", label: "Mixtapes", to: "/admin/mixtapes" },
+] as const;
 
 export type AdminNavCurrent = (typeof LINKS)[number]["key"];
 

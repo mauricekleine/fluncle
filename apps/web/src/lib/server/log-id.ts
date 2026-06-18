@@ -40,7 +40,7 @@ function fnv1a(value: string): number {
   return hash >>> 0;
 }
 
-function sector(foundAt: string): string {
+export function sector(foundAt: string): string {
   const found = new Date(foundAt).getTime();
   const days = Math.max(0, Math.floor((found - EPOCH_MS) / DAY_MS));
 

@@ -1,6 +1,7 @@
 import { publicApiGet } from "../api";
 
 export type RecentTrack = {
+  type?: "finding";
   trackId: string;
   logId?: string;
   spotifyUrl: string;
@@ -27,13 +28,34 @@ export type RecentTrack = {
   postedToTelegram: boolean;
 };
 
+export type RecentMixtape = {
+  addedAt?: string;
+  artists: ["Fluncle"];
+  coverImageUrl?: string;
+  durationMs?: number;
+  externalUrls: {
+    mixcloud?: string;
+    soundcloud?: string;
+    youtube?: string;
+  };
+  id?: string;
+  logId?: string;
+  memberCount: number;
+  members?: RecentTrack[];
+  note?: string;
+  title: string;
+  type: "mixtape";
+};
+
 export type ApiRecentTrack = Omit<RecentTrack, "addedToSpotify" | "postedToTelegram"> & {
   addedToSpotify?: boolean;
   postedToTelegram?: boolean;
 };
 
+export type RecentItem = RecentTrack | RecentMixtape;
+
 export type TracksResponse = {
-  tracks: ApiRecentTrack[];
+  tracks: Array<ApiRecentTrack | RecentMixtape>;
   totalCount: number;
   nextCursor?: string;
 };
@@ -43,7 +65,11 @@ export type TracksResponse = {
 // the requested count is honoured rather than silently clipped at one page.
 const pageSize = 48;
 
-export function mapTrack(track: ApiRecentTrack): RecentTrack {
+export function mapTrack(track: ApiRecentTrack | RecentMixtape): RecentItem {
+  if (track.type === "mixtape") {
+    return track;
+  }
+
   return {
     addedAt: track.addedAt,
     addedToSpotify: track.addedToSpotify ?? true,
@@ -65,6 +91,7 @@ export function mapTrack(track: ApiRecentTrack): RecentTrack {
     spotifyUrl: track.spotifyUrl,
     title: track.title,
     trackId: track.trackId,
+    type: "finding",
     videoModel: track.videoModel,
     videoModelReasoning: track.videoModelReasoning,
     videoUrl: track.videoUrl,
@@ -75,7 +102,7 @@ export function mapTrack(track: ApiRecentTrack): RecentTrack {
 export type RecentPage = {
   nextCursor?: string;
   totalCount: number;
-  tracks: RecentTrack[];
+  tracks: RecentItem[];
 };
 
 // One page for the interactive pager: the findings at `cursor` (newest first
@@ -99,8 +126,8 @@ export async function fetchRecentPage(cursor?: string, limit = 10): Promise<Rece
 
 // The latest findings, newest first. Pages through with the cursor only when
 // `limit` exceeds one API page; the common small `limit` is a single request.
-export async function recentCommand(limit: number): Promise<RecentTrack[]> {
-  const results: RecentTrack[] = [];
+export async function recentCommand(limit: number): Promise<RecentItem[]> {
+  const results: RecentItem[] = [];
   let cursor: string | undefined;
 
   do {

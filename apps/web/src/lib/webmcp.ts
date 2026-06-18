@@ -51,7 +51,7 @@ export function registerWebMcpTools(): void {
 const tools: WebMcpTool[] = [
   {
     description:
-      "List the most recent findings in Fluncle's drum & bass archive, newest first. Dates mark when each was found: the day Fluncle first heard the tune.",
+      "List the most recent findings and mixtapes in Fluncle's drum & bass archive, newest first.",
     execute: async (input) => {
       const limit = typeof input.limit === "number" ? input.limit : 10;
       const params = new URLSearchParams({ limit: String(limit) });

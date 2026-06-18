@@ -362,6 +362,15 @@ body::before {
   background: var(--accent);
 }
 
+.track-row-checkpoint {
+  background: color-mix(in oklch, var(--background) 42%, transparent);
+}
+
+.track-row-checkpoint:hover,
+.track-row-checkpoint:focus-within {
+  background: color-mix(in oklch, var(--accent) 72%, var(--background) 28%);
+}
+
 .track-row:hover .track-log-id,
 .track-row:focus-within .track-log-id {
   color: var(--accent-foreground);

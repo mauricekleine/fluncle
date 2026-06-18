@@ -14,7 +14,15 @@ export const Route = createFileRoute("/api/tracks")({
         const since = parseTimestamp(url.searchParams.get("since"));
         const until = parseTimestamp(url.searchParams.get("until"));
 
-        return Response.json(await listTracks({ cursor, limit, since, until }));
+        return Response.json(
+          await listTracks({
+            cursor,
+            includeMixtapes: since === undefined && until === undefined,
+            limit,
+            since,
+            until,
+          }),
+        );
       },
     },
   },

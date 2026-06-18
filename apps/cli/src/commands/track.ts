@@ -2,8 +2,17 @@ import { adminApiGet, adminApiPatch, adminApiPost, publicApiGet } from "../api";
 import { CliError } from "../output";
 
 export type TrackGetResult = {
+  mixtape?: {
+    artists: ["Fluncle"];
+    durationMs?: number;
+    externalUrls: { mixcloud?: string; soundcloud?: string; youtube?: string };
+    logId?: string;
+    memberCount: number;
+    title: string;
+    type: "mixtape";
+  };
   ok: true;
-  track: {
+  track?: {
     artists: string[];
     bpm?: number;
     durationMs: number;
@@ -14,6 +23,7 @@ export type TrackGetResult = {
     logId?: string;
     title: string;
     trackId: string;
+    type?: "finding";
   };
 };
 
