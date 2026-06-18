@@ -1,18 +1,28 @@
-import { CaretRightIcon, PauseIcon, PlayIcon, PlayCircleIcon } from "@phosphor-icons/react";
+import { CaretRightIcon, DotsThreeIcon, PlayIcon, ShareNetworkIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
-import { siTiktok } from "simple-icons";
+import { useCallback } from "react";
+import { siSpotify, siTiktok, siYoutube } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
 import { TrackArtwork } from "@/components/track-artwork";
 import { Badge } from "@/components/ui/badge";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { siteUrl } from "@/lib/fluncle-links";
 import { formatDuration } from "@/lib/format";
-import { usePreviewPlayer } from "@/lib/preview-player";
 import { type Track } from "@/lib/tracks";
 
-// The signature component (DESIGN.md): a finding, not just a row. The whole
-// row still reads as one link to Spotify (a stretched link), but the artwork
-// doubles as the in-place preview toggle and the actions cell links out to the
-// finding's story and TikTok post — siblings of the anchor, never nested in it.
+// The signature component (DESIGN.md): a finding, not just a row. The whole row
+// reads as one link to its log page (a stretched link); the artwork doubles as
+// the story opener (the play affordance) when there's footage, and a single
+// links menu sits beside the caret — siblings of the stretched link, above it.
 export function TrackRow({ track, trackNumber }: { track: Track; trackNumber: number }) {
+  // The artwork opens the story only when the finding has footage; otherwise the
+  // cover is inert and the stretched row link carries the click to the log page.
   const storyLogId = track.videoUrl ? track.logId : undefined;
   // Artist — Title as the primary line (the em dash disambiguates titles that
   // carry their own " - ", e.g. remixes), matching the log index and the rest
@@ -44,8 +54,21 @@ export function TrackRow({ track, trackNumber }: { track: Track; trackNumber: nu
         <span className="track-log-id">{`#${trackNumber.toString().padStart(2, "0")}`}</span>
       )}
 
-      {track.previewUrl ? (
-        <PreviewToggle track={track} trackLine={trackLine} />
+      {storyLogId ? (
+        // The artwork IS the play affordance: it opens the story over the feed
+        // (the mask shows — and crawlers see — the standalone /log/<id> URL).
+        <Link
+          aria-label={`Watch the story for ${trackLine}`}
+          className="track-play"
+          mask={{ params: { logId: storyLogId }, to: "/log/$logId", unmaskOnReload: true }}
+          search={{ story: storyLogId }}
+          to="/"
+        >
+          <TrackArtwork alt={`${trackLine} cover art`} src={track.albumImageUrl} />
+          <span aria-hidden="true" className="track-play-glyph">
+            <PlayIcon weight="fill" />
+          </span>
+        </Link>
       ) : (
         <TrackArtwork alt={`${trackLine} cover art`} src={track.albumImageUrl} />
       )}
@@ -53,9 +76,8 @@ export function TrackRow({ track, trackNumber }: { track: Track; trackNumber: nu
       <span className="min-w-0">
         {track.logId ? (
           // The row opens the finding's log page (we keep listeners on
-          // fluncle.com); Spotify lives on the "Listen on Spotify" button there.
-          // Stretched over the whole row via ::after; the preview toggle and the
-          // action links sit above it as siblings.
+          // fluncle.com). Stretched over the whole row via ::after; the artwork
+          // and the links menu sit above it as siblings.
           <Link
             aria-label={`Open the log page for ${trackLine}`}
             className="track-row-link"
@@ -86,56 +108,61 @@ export function TrackRow({ track, trackNumber }: { track: Track; trackNumber: nu
       </span>
 
       <span className="track-actions">
-        {storyLogId ? (
-          // Opens the story as a dialog over the feed; the mask shows (and
-          // crawlers see) the standalone /log/<id> URL, which is also what a
-          // refresh or share lands on.
-          <Link
-            aria-label={`Watch the story for ${trackLine}`}
-            className="track-action"
-            mask={{ params: { logId: storyLogId }, to: "/log/$logId", unmaskOnReload: true }}
-            search={{ story: storyLogId }}
-            to="/"
-          >
-            <PlayCircleIcon aria-hidden="true" size={18} weight="fill" />
-          </Link>
-        ) : null}
-        {track.tiktokUrl ? (
-          <a
-            aria-label={`Watch ${trackLine} on TikTok`}
-            className="track-action"
-            href={track.tiktokUrl}
-            rel="noreferrer"
-            target="_blank"
-          >
-            <BrandIcon className="size-3.5" icon={siTiktok} />
-          </a>
-        ) : null}
+        <TrackLinksMenu track={track} trackLine={trackLine} />
         <CaretRightIcon aria-hidden="true" className="track-caret" size={18} weight="bold" />
       </span>
     </li>
   );
 }
 
-// The artwork as the play/pause toggle for the official 30s preview.
-function PreviewToggle({ track, trackLine }: { track: Track; trackLine: string }) {
-  const preview = usePreviewPlayer(track.trackId);
+// The single, scalable links affordance: one overflow button (left of the caret)
+// opening a menu of the platforms this finding actually has — Spotify always,
+// TikTok/YouTube when a published post exists — plus Share. New platforms slot in
+// here without changing the row's layout.
+function TrackLinksMenu({ track, trackLine }: { track: Track; trackLine: string }) {
+  const shareUrl = track.logId ? `${siteUrl}/log/${track.logId}` : track.spotifyUrl;
+
+  const share = useCallback(() => {
+    if (typeof navigator === "undefined") {
+      return;
+    }
+
+    if (navigator.share) {
+      void navigator.share({ title: trackLine, url: shareUrl }).catch(() => {});
+    } else {
+      void navigator.clipboard?.writeText(shareUrl);
+    }
+  }, [shareUrl, trackLine]);
 
   return (
-    <button
-      aria-label={
-        preview.isActive ? `Stop the preview of ${trackLine}` : `Play a preview of ${trackLine}`
-      }
-      aria-pressed={preview.isActive}
-      className="track-play"
-      onClick={preview.toggle}
-      type="button"
-    >
-      <TrackArtwork alt={`${trackLine} cover art`} src={track.albumImageUrl} />
-      <span aria-hidden="true" className="track-play-glyph">
-        {preview.isActive ? <PauseIcon weight="fill" /> : <PlayIcon weight="fill" />}
-      </span>
-    </button>
+    <DropdownMenu>
+      <DropdownMenuTrigger aria-label={`Links for ${trackLine}`} className="track-action">
+        <DotsThreeIcon aria-hidden="true" size={18} weight="bold" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-40">
+        <DropdownMenuItem render={<a href={track.spotifyUrl} rel="noreferrer" target="_blank" />}>
+          <BrandIcon className="size-4" icon={siSpotify} />
+          Spotify
+        </DropdownMenuItem>
+        {track.tiktokUrl ? (
+          <DropdownMenuItem render={<a href={track.tiktokUrl} rel="noreferrer" target="_blank" />}>
+            <BrandIcon className="size-4" icon={siTiktok} />
+            TikTok
+          </DropdownMenuItem>
+        ) : null}
+        {track.youtubeUrl ? (
+          <DropdownMenuItem render={<a href={track.youtubeUrl} rel="noreferrer" target="_blank" />}>
+            <BrandIcon className="size-4" icon={siYoutube} />
+            YouTube
+          </DropdownMenuItem>
+        ) : null}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={share}>
+          <ShareNetworkIcon aria-hidden="true" className="size-4" />
+          Share
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

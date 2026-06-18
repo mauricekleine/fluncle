@@ -51,6 +51,8 @@ export type TrackListItem = {
   spotifyUrl: string;
   /** The live TikTok post URL, if a published post exists (from social_posts). */
   tiktokUrl?: string;
+  /** The live YouTube post URL, if a published post exists (from social_posts). */
+  youtubeUrl?: string;
   title: string;
   trackId: string;
   /** Last content change to the record; absent for rows predating the column. */
@@ -93,6 +95,7 @@ type TrackRow = {
   release_date: string | null;
   spotify_url: string;
   tiktok_url: string | null;
+  youtube_url: string | null;
   title: string;
   track_id: string;
   updated_at: string | null;
@@ -115,7 +118,11 @@ const TRACK_SELECT = `track_id, spotify_url, title, album, album_image_url, arti
   (select url from social_posts
      where track_id = tracks.track_id and platform = 'tiktok' and status = 'published'
        and url is not null
-     order by published_at desc limit 1) as tiktok_url`;
+     order by published_at desc limit 1) as tiktok_url,
+  (select url from social_posts
+     where track_id = tracks.track_id and platform = 'youtube' and status = 'published'
+       and url is not null
+     order by published_at desc limit 1) as youtube_url`;
 
 /** A finite number, or undefined — for tolerant parsing of stored feature JSON. */
 function finiteOrUndefined(value: unknown): number | undefined {
@@ -183,6 +190,7 @@ function toTrackListItem(row: TrackRow): TrackListItem {
     videoModelReasoning: row.video_model_reasoning ?? undefined,
     videoUrl: row.video_url ?? undefined,
     videoVehicle: row.video_vehicle ?? undefined,
+    youtubeUrl: row.youtube_url ?? undefined,
   };
 }
 

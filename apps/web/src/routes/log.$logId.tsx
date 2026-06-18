@@ -1,7 +1,7 @@
 import { CaretLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
 import { Link, createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { siSpotify, siTiktok } from "simple-icons";
+import { siSpotify, siTiktok, siYoutube } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
 import { LogFootage } from "@/components/log/log-footage";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
@@ -233,6 +233,17 @@ function LogPage() {
             >
               <BrandIcon icon={siTiktok} />
               Watch on TikTok
+            </Button>
+          ) : undefined}
+          {track.youtubeUrl ? (
+            <Button
+              nativeButton={false}
+              render={<a href={track.youtubeUrl} rel="noreferrer" target="_blank" />}
+              size="lg"
+              variant="outline"
+            >
+              <BrandIcon icon={siYoutube} />
+              Watch on YouTube
             </Button>
           ) : undefined}
         </div>

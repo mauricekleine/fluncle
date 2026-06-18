@@ -94,6 +94,38 @@ export function HomeLinkHub() {
           <SubscribeDialog className="flex-1" label="Newsletter" />
         </div>
         <SubmitTrackDialog className="w-full" />
+
+        <div className="mt-1 flex items-center gap-3">
+          <span aria-hidden="true" className="h-px flex-1 bg-border" />
+          <span className="text-sm font-semibold tracking-wide text-muted-foreground">
+            Follow Fluncle
+          </span>
+          <span aria-hidden="true" className="h-px flex-1 bg-border" />
+        </div>
+        <nav
+          aria-label="Fluncle on other platforms"
+          className="flex items-center justify-center gap-0.5"
+        >
+          {socialLinks.map((social) => (
+            <Tooltip key={social.label}>
+              <TooltipTrigger
+                render={
+                  <Button
+                    aria-label={social.label}
+                    className="text-muted-foreground size-8"
+                    nativeButton={false}
+                    render={<a href={social.href} rel="noreferrer" target="_blank" />}
+                    size="icon"
+                    variant="ghost"
+                  />
+                }
+              >
+                <BrandIcon className="size-4 md:size-4.5" icon={social.icon} />
+              </TooltipTrigger>
+              <TooltipContent>{social.label}</TooltipContent>
+            </Tooltip>
+          ))}
+        </nav>
       </div>
 
       {/* The quiet links sink to the bottom of the column (mt-auto): site links,
@@ -108,13 +140,13 @@ export function HomeLinkHub() {
           </Link>
           <Dot />
           <Link className={linkClassName} to="/log">
-            Full log
+            All logs
           </Link>
         </nav>
 
         <nav
           aria-label="Developer tools and connections"
-          className="flex items-center justify-center gap-3 text-sm"
+          className="flex items-center justify-center gap-3 text-[13px] font-mono border-t pt-4"
         >
           <CliInstallDialog className={linkClassName} label="CLI" />
           <Dot />
@@ -125,31 +157,6 @@ export function HomeLinkHub() {
           <McpConnectDialog />
           <Dot />
           <TerminalRaversDialog className={linkClassName} label="SSH" />
-        </nav>
-
-        <nav
-          aria-label="Fluncle on other platforms"
-          className="flex items-center justify-center gap-1"
-        >
-          {socialLinks.map((social) => (
-            <Tooltip key={social.label}>
-              <TooltipTrigger
-                render={
-                  <Button
-                    aria-label={social.label}
-                    className="size-6 text-muted-foreground"
-                    nativeButton={false}
-                    render={<a href={social.href} rel="noreferrer" target="_blank" />}
-                    size="icon-sm"
-                    variant="ghost"
-                  />
-                }
-              >
-                <BrandIcon className="size-4" icon={social.icon} />
-              </TooltipTrigger>
-              <TooltipContent>{social.label}</TooltipContent>
-            </Tooltip>
-          ))}
         </nav>
       </div>
     </div>
