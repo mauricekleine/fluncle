@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { hasExternalUrl, type MixtapeDTO, type MixtapeStatus, rowToMixtape } from "../mixtapes";
+import {
+  hasExternalUrl,
+  type MixtapeDTO,
+  type MixtapeExternalUrls,
+  type MixtapeStatus,
+  rowToMixtape,
+} from "../mixtapes";
 import { getDb, typedRow, typedRows } from "./db";
 import { mixtapeLogId } from "./mixtape-log-id";
 import { ApiError } from "./spotify";
@@ -84,9 +90,37 @@ export async function createMixtape(input: MixtapeInput): Promise<MixtapeDTO> {
 }
 
 export async function updateMixtape(id: string, input: MixtapeInput): Promise<MixtapeDTO> {
-  await assertDraftMixtape(id);
-
+  // A published mixtape stays editable — title, note, cover, and the external links
+  // can change over time — but its minted coordinate freezes two things: the recorded
+  // date the sector was derived from, and the rule that it always keeps somewhere to
+  // listen. Drafts have no such limits. (Members stay draft-only; see setMixtapeMembers.)
+  const current = await getMixtapeById(id, { includeDrafts: true });
   const fields = validateMixtapeInput(input, { requireTitle: false });
+
+  if (current.status === "published") {
+    if (fields.recordedAt !== undefined) {
+      throw new ApiError(
+        "recorded_at_immutable",
+        "The recorded date is locked once a mixtape is published",
+        409,
+      );
+    }
+
+    const nextUrls: MixtapeExternalUrls = {
+      mixcloud: resolveUrlUpdate(fields.mixcloudUrl, current.externalUrls.mixcloud),
+      soundcloud: resolveUrlUpdate(fields.soundcloudUrl, current.externalUrls.soundcloud),
+      youtube: resolveUrlUpdate(fields.youtubeUrl, current.externalUrls.youtube),
+    };
+
+    if (!hasExternalUrl(nextUrls)) {
+      throw new ApiError(
+        "missing_external_url",
+        "A published mixtape must keep at least one Mixcloud, YouTube, or SoundCloud link",
+        409,
+      );
+    }
+  }
+
   const sets: string[] = [];
   const args: Array<number | string | null> = [];
 
@@ -114,16 +148,26 @@ export async function updateMixtape(id: string, input: MixtapeInput): Promise<Mi
   args.push(new Date().toISOString(), id);
 
   const db = await getDb();
-  const result = await db.execute({
+  await db.execute({
     args,
     sql: `update mixtapes set ${sets.join(", ")} where id = ?`,
   });
 
-  if (result.rowsAffected === 0) {
-    throw new ApiError("mixtape_not_found", "Mixtape not found", 404);
+  return getMixtapeById(id, { includeDrafts: true });
+}
+
+// undefined means the field was not part of this update (keep the current value); a
+// string or null is the new value (null clears the link). Used to confirm a published
+// mixtape never loses its last listenable link.
+function resolveUrlUpdate(
+  update: string | null | undefined,
+  current: string | undefined,
+): string | undefined {
+  if (update === undefined) {
+    return current;
   }
 
-  return getMixtapeById(id, { includeDrafts: true });
+  return update ?? undefined;
 }
 
 export async function setMixtapeMembers(

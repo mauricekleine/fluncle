@@ -69,6 +69,24 @@ Crawlers, bots, and AI answer engines must read a mixtape **as a DJ mixtape**, n
 - **SoundCloud — secondary mirror.** Patchier (takedown risk). Profile presence is the separate roadmap item; hosting actual audio there is the licensing-gated question this runbook owns.
 - **Teaser clips.** Short clips cut from the set go to the social surfaces (TikTok / Shorts / IG) the same way a finding's clip does — the clip is a trailer for the mixtape, captioned with the mixtape's `fluncle://<id>` coordinate. (Clip-of-a-mixtape has no pipeline yet; see Open questions.)
 
+## Titles + covers
+
+- **Title — the same string everywhere** (the spine `title` on `/log`, Mixcloud, YouTube, SoundCloud): `Fluncle Drum & Bass Mixtape #N | XXX.F.ZZ`. Searchable genre up front, the coordinate as the unique tail. The title stays plain and consistent; the **dream note** carries the cryptic/evocative weight (and doubles as the platform descriptions).
+- **Covers** are rendered from `packages/media` (the Remotion image kit) — one parametrized composition (`mixtape-cover.tsx`) at the three sizes a mixtape needs:
+  - **Square 1500×1500** → Mixcloud + SoundCloud artwork, and the mixtape's `coverImageUrl` on `/log`.
+  - **16:9 1280×720** → the YouTube thumbnail.
+  - **1200×630** → the `/log` link-preview (OG) card.
+  - Run: `bun run --cwd packages/media render:mixtape-cover -- --number N --coordinate XXX.F.ZZ` → writes them under `packages/media/out/mixtapes/<coordinate>/`. Scaffolded and canon-correct (deep field, the One-Sun eclipse, grain); iterate the art with the `fluncle-video` kit (e.g. drop the cosmonaut figure in).
+
+## Editing after publish
+
+Publishing is the irreversible-ish step, but only the **coordinate** is truly frozen (enforced in `updateMixtape`):
+
+- **Publish requires ≥ 1 external link** (Mixcloud / YouTube / SoundCloud) — no empty, substance-less mixtape goes live.
+- **After publish you can still edit** the title, note, cover, and the external links — add YouTube after Mixcloud, swap a cover, add SoundCloud later.
+- **You can never remove the last link** — a published mixtape must always keep somewhere to listen.
+- **Frozen once published:** the Log ID + sequence number, the `recordedAt` (its sector is baked into the coordinate), and the **tracklist** (members stay draft-only — the published set is the record).
+
 ## Tracklist — the breadcrumb
 
 The required tracklist **is the breadcrumb**, and the AEO/SEO play. Write each track as its finding: `Artist — Title`, its `fluncle://<log-id>` coordinate, and a `/log/<id>` link (Mixcloud tracklist; YouTube description + chapters). Owned surfaces and authentic scene presence pointing back at fluncle.com — directly advancing the off-site thread's "authentic presence where dnb lives". A member track that isn't a finding yet is an open question below (add it as a finding first, or allow non-finding members).
