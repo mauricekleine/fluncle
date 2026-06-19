@@ -84,16 +84,21 @@ async function resolveIntegrationId(candidates: string[]): Promise<string> {
 }
 
 /**
- * Whether a public HTTPS URL resolves (HEAD 2xx). Used to probe an optional R2
- * object before asking Postiz to pull it — older bundles can lack a cover.jpg,
- * and we'd rather post thumbnail-less than 502 the whole push. A non-2xx or a
- * network error both read as "absent" (treat the asset as missing, continue).
+ * Whether a HEAD probe *proves* a public object is gone — only an explicit
+ * 404/410 counts. Used to probe an optional R2 object before asking Postiz to
+ * pull it: older bundles can lack a cover.jpg, and a confirmed not-found should
+ * degrade to a thumbnail-less push rather than 502 the whole thing. Anything
+ * else is inconclusive — a 2xx says present, and a 403, a 5xx, a HEAD-averse
+ * CDN, or a network blip must NOT be read as absence (that would hide a real
+ * cover-delivery problem behind a silent success). On "not proven gone" the
+ * caller falls through to the normal upload path, which surfaces a genuine
+ * failure as the existing 502.
  */
-async function urlExists(url: string): Promise<boolean> {
+async function isConfirmedAbsent(url: string): Promise<boolean> {
   try {
     const response = await fetch(url, { method: "HEAD" });
 
-    return response.ok;
+    return response.status === 404 || response.status === 410;
   } catch {
     return false;
   }
@@ -204,18 +209,22 @@ export async function pushYouTubeShort(input: {
   const integrationId = await resolveIntegrationId(["youtube"]);
   const media = await uploadFromUrl(input.videoUrl);
 
-  // The cover is optional: older bundles can lack a cover.jpg in R2. Probe it
-  // first, so a missing cover degrades to a thumbnail-less Short instead of
-  // 502-ing the whole push. A real upload error (cover present but Postiz
-  // rejects the pull) still surfaces from uploadFromUrl.
+  // The cover is optional: older bundles can lack a cover.jpg in R2. Skip the
+  // thumbnail only on a *confirmed* absence (404/410), so a genuinely missing
+  // cover degrades to a thumbnail-less Short. Any other probe result falls
+  // through to uploadFromUrl — a present cover uploads, and a real
+  // cover-delivery problem (403/5xx/etc.) surfaces as the existing 502 rather
+  // than being silently dropped.
   let thumbnail: Media | undefined;
 
-  if (input.coverUrl && (await urlExists(input.coverUrl))) {
-    thumbnail = await uploadFromUrl(input.coverUrl);
-  } else if (input.coverUrl) {
-    console.warn(
-      `postiz: cover not found, posting YouTube Short without thumbnail (${input.coverUrl})`,
-    );
+  if (input.coverUrl) {
+    if (await isConfirmedAbsent(input.coverUrl)) {
+      console.warn(
+        `postiz: cover missing (404/410), posting YouTube Short without thumbnail (${input.coverUrl})`,
+      );
+    } else {
+      thumbnail = await uploadFromUrl(input.coverUrl);
+    }
   }
 
   return createPost({
