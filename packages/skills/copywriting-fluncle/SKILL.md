@@ -36,6 +36,11 @@ These are reminders, not the spec; the spec is `references/voice.md`.
 - The Found Rule: every date is the day Fluncle found it (the moment he first heard it and went "fuck yeah"), never release or database insertion. The label is "Found", never "Added" or "Released"; find / found / findings is the family.
 - The Garnish Rule: the cosmos modifies, it never replaces the verb. "Banger found three dimensions sideways" works because "found" still does the job; "Beam up a track" is banned cosplay. Functional labels stay literal; garnish rides a trailing clause, never inside compact controls. Carve-out: long-form first-person speech (email, Telegram prose, About) may let the cosmos drive the verb as testimony.
 - The Light-Years Rule: findings arrive lossy from the distance travelled. In copy this is sparing texture (a partial note, "the rest of this one didn't survive the trip"), never broken or unreadable UI.
+- The stack (the engine; full spec in `references/voice.md` §4). Every line is a reaction escaping a body, never a description of Fluncle from outside:
+  - The Reality Rule + active voice: every line sits on something Fluncle actually experiences (he hears the tune, rewinds the drop, throws his gun fingers up, mutters "oof"), and Fluncle is the subject of an active verb ("I dig them up", "I send them back"). Agentless passive is the ghost's tell ("the findings hold it together", "lands somewhere") — put Fluncle back as the doer.
+  - The Oof Test: a finding is a thing that got an involuntary "oof" out of a real body; if a line couldn't earn one, there's no body in it. Lead with the bodily reaction, not a description of the music.
+  - The Selector's Rule: Fluncle plays to see the hands go up. Start in his body (what it did to him), turn to the crew (what he hopes it does to you). Three beats — the hit, the pass, the address ("…hope it gets an oof out of you too. Enjoy, cosmonauts"). This is the shape of a finding note and a Telegram post.
+  - The Sauce: the cosmos is a unit measuring how hard a tune hit or how far it threw you, never a free-floating subject. Strip Test: delete the space-words; a true, active, bodily sentence must remain. Keep it scientific (physics, the future, consciousness, simulation), never spiritual/hippie (ayahuasca, meditation, nirvana). The body keeps the transcendence honest.
 - Scene vocabulary is used confidently and never explained: tune, roller, rinse, rewind, dubplate, selector, 174, junglist.
 - Log ID is a finding's permanent coordinate (`fluncle://241.7.3A`, bare `241.7.3A` in tight columns). It is the deferred identifier feature — name a finding's coordinate in copy only where the value actually exists; never invent one.
 
@@ -50,6 +55,10 @@ Before returning copy, verify against `references/voice.md`:
 - Sentence case for UI copy, headings, buttons, and labels; ALL CAPS only quotes the cover art or a sanctioned brand-mark plate (e.g. "RAVE TERMINAL" under the SSH figlet logo).
 - Emoji only on Telegram, only from the sanctioned set (🛸, 🎧).
 - Cosmos garnish modifies a working earth verb; it never replaces one, and it never appears inside compact controls (the Garnish Rule), with the long-form first-person carve-out.
+- Active voice: Fluncle is the subject doing the verb. No agentless passives ("the findings hold it together", "mixed down into one long one", "everything lands somewhere") — the ghost's tell.
+- The Strip Test: delete the cosmos words; a true, active, bodily sentence must remain. If nothing solid is left, the sauce was covering for an empty line.
+- A human-facing line leads with a real bodily reaction (the Oof Test) and turns to the crew (the Selector's Rule); the sauce stays scientific (physics, the future, consciousness), never spiritual/hippie (ayahuasca, meditation, nirvana).
+- Narrator: human surfaces are first-person Fluncle turned to the crew; machine-facing entity/SEO strings stay honestly-plain active third-person, no faked warmth (the voice lands there through the injected first-person note).
 - Narrative is fully in-fiction on every surface (uniform saturation); only technical density grades by altitude — quiet and warm on web, emoji-warm on Telegram, drier on CLI, most technical and referential on SSH (the Depth Gradient).
 - Warmth holds: dry and deadpan, never cynical or cold, nobody left on the floor (the Mosh Pit Rule).
 - CLI and SSH output stays clean and parseable when it is data; jokes live in help text, welcomes, and empty states, not in machine-readable lines.
