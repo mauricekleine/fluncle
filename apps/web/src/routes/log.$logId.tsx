@@ -442,16 +442,8 @@ function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
               <dd>{formatAlbumDuration(mixtape.durationMs)}</dd>
             </div>
           ) : undefined}
-          {mixtape.publishedAt ? (
-            <div className="log-field">
-              <dt>Published</dt>
-              <dd>
-                <time dateTime={mixtape.publishedAt}>{formatDateLong(mixtape.publishedAt)}</time>
-              </dd>
-            </div>
-          ) : undefined}
           <div className="log-field">
-            <dt>Findings</dt>
+            <dt>Bangers</dt>
             <dd>{mixtape.memberCount}</dd>
           </div>
         </dl>
