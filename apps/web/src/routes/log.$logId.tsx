@@ -22,7 +22,7 @@ import {
   mixtapeAlbumJsonLd,
   musicRecordingJsonLd,
 } from "@/lib/log-schema";
-import { trackMedia } from "@/lib/media";
+import { FOUND_BASE, trackMedia } from "@/lib/media";
 import { hasExternalUrl, type MixtapeDTO } from "@/lib/mixtapes";
 import { resolveLogPageTarget } from "@/lib/server/log-resolver";
 import {
@@ -101,6 +101,12 @@ function logHead(loaderData: LogPageData | undefined) {
     const pageUrl = logPageUrl(logId);
     const title = `${logId} · ${mixtape.title} · Fluncle`;
     const description = mixtape.note ?? "A checkpoint in Fluncle's Findings.";
+    // The per-mixtape 1200×630 OG card on R2 (rendered + uploaded by the
+    // runbook's render:mixtape-cover step). Falls back to the square cover,
+    // then the site default — matching the finding branch's graceful degrade.
+    const ogImageUrl = mixtape.logId
+      ? `${FOUND_BASE}/${logId}/og.png`
+      : (mixtape.coverImageUrl ?? `${siteUrl}/fluncle-cover.png`);
 
     return {
       links: [{ href: pageUrl, rel: "canonical" }],
@@ -109,9 +115,16 @@ function logHead(loaderData: LogPageData | undefined) {
         { content: description, name: "description" },
         { content: title, property: "og:title" },
         { content: description, property: "og:description" },
-        { content: mixtape.coverImageUrl ?? `${siteUrl}/fluncle-cover.png`, property: "og:image" },
+        { content: ogImageUrl, property: "og:image" },
+        { content: "1200", property: "og:image:width" },
+        { content: "630", property: "og:image:height" },
+        { content: "image/png", property: "og:image:type" },
         { content: pageUrl, property: "og:url" },
         { content: "music.album", property: "og:type" },
+        { content: "summary_large_image", name: "twitter:card" },
+        { content: title, name: "twitter:title" },
+        { content: description, name: "twitter:description" },
+        { content: ogImageUrl, name: "twitter:image" },
       ],
       scripts: [
         { children: JSON.stringify(mixtapeAlbumJsonLd(mixtape)), type: "application/ld+json" },
