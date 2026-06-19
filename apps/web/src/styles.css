@@ -371,6 +371,10 @@ body::before {
   /* Deeper than the plate — a darker window into space, the starfield popping
      against it (var(--background) is the darkest token, the deep field). */
   background-color: color-mix(in oklch, var(--background) 85%, #000);
+  /* Keep the dark fill inside the border so the translucent bottom hairline
+     composites over the plate (like the row-above's top hairline) instead of the
+     dark fill — otherwise the bottom border reads dimmer than the top. */
+  background-clip: padding-box;
   background-image:
     radial-gradient(1.5px 1.5px at 9% 26%, var(--checkpoint-star) 50%, transparent 52%),
     radial-gradient(1px 1px at 21% 66%, var(--checkpoint-star) 50%, transparent 52%),
