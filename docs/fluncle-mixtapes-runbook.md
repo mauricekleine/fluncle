@@ -71,8 +71,8 @@ Crawlers, bots, and AI answer engines must read a mixtape **as a DJ mixtape**, n
 
 ## Titles + covers
 
-- **Title — the same string everywhere** (the spine `title` on `/log`, Mixcloud, YouTube, SoundCloud): `Fluncle Drum & Bass Mixtape #N | XXX.F.ZZ`. Searchable genre up front, the coordinate as the unique tail. Auto-set at publish (`publishMixtape` canonicalizes the draft stub once the number + coordinate exist; a title the operator typed is left as-is). The title stays plain and consistent; the **dream note** carries the cryptic/evocative weight (and doubles as the platform descriptions).
-- **Covers render on the fly** — no per-mixtape render step. `GET /api/mixtape-cover/<logId>?size=square|og|wide` is an edge route (`workers-og`/Satori, same path as the finding OG card) that stamps `MIXTAPE #N` + the coordinate over a fixed Deep-Field background. At publish, an empty cover is filled with the `size=square` URL automatically; the operator can still paste a custom `coverImageUrl` to override.
+- **Title — the same string everywhere** (the spine `title` on `/log`, Mixcloud, YouTube, SoundCloud): `Fluncle Drum & Bass Mixtape #N | XXX.F.ZZ`. Searchable genre up front, the coordinate as the unique tail. It's an **output, not an input** — `publishMixtape` mints it from the number + coordinate; there's no title field on the draft. The `title` column stays so a future non-"Mixtape #N" series can carry its own name (publish leaves a non-stub title untouched). The title stays plain and consistent; the **dream note** carries the cryptic/evocative weight (and doubles as the platform descriptions).
+- **Covers render on the fly, fully derived** — no per-mixtape render step, no stored cover, no input. `GET /api/mixtape-cover/<logId>?size=square|og|wide` is an edge route (`workers-og`/Satori, same path as the finding OG card) that stamps `MIXTAPE #N` + the coordinate over a fixed Deep-Field background. A published mixtape's cover URL is derived from its Log ID (`mixtapeCoverUrl`); the `cover_image_url` column was dropped.
   - **Square 1500×1500** (`size=square`) → Mixcloud + SoundCloud artwork, and the mixtape's `coverImageUrl` on `/log`.
   - **16:9 1280×720** (`size=wide`) → the YouTube thumbnail.
   - **1200×630** (`size=og`) → the `/log` link-preview (OG) card.
@@ -82,10 +82,10 @@ Crawlers, bots, and AI answer engines must read a mixtape **as a DJ mixtape**, n
 
 Publishing is the irreversible-ish step, but only the **coordinate** is truly frozen (enforced in `updateMixtape`):
 
-- **Publish requires ≥ 1 external link** (Mixcloud / YouTube / SoundCloud) — no empty, substance-less mixtape goes live.
-- **After publish you can still edit** the title, note, cover, and the external links — add YouTube after Mixcloud, swap a cover, add SoundCloud later.
+- **Publish requires the full set** — a recorded date, a dream note, a duration, ≥ 1 external link (Mixcloud / YouTube / SoundCloud), and ≥ 1 tracklist member. A draft is just the operator-authored subset; publish verifies it's complete, then mints the Log ID + number and the title. No empty, substance-less mixtape goes live.
+- **After publish you can still edit** the note and the external links — add YouTube after Mixcloud, add SoundCloud later. (Title and cover are derived from the coordinate, so there's nothing to edit there.)
 - **You can never remove the last link** — a published mixtape must always keep somewhere to listen.
-- **Frozen once published:** the Log ID + sequence number, the `recordedAt` (its sector is baked into the coordinate), and the **tracklist** (members stay draft-only — the published set is the record).
+- **Frozen once published:** the Log ID + sequence number, the title + cover derived from them, the `recordedAt` (its sector is baked into the coordinate), and the **tracklist** (members stay draft-only — the published set is the record).
 
 ## Tracklist — the breadcrumb
 
