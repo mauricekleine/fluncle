@@ -2,7 +2,7 @@
 
 > Drum & bass bangers from another dimension.
 
-Fluncle digs and certifies drum & bass bangers, logs each as a finding, and keeps the full archive across the Galaxy, with fluncle.com as home base.
+Fluncle discovers and certifies drum & bass bangers, logs each as a finding, and keeps the full archive across the Galaxy, with fluncle.com as home base.
 
 ## Public Surfaces
 

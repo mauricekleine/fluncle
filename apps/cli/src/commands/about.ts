@@ -21,7 +21,7 @@ export const linkGroups: LinkGroup[] = [
     heading: "Where to listen",
     links: [
       {
-        label: "Spotify — Fluncle's Findings",
+        label: "Spotify: Fluncle's Findings",
         url: "https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0",
       },
       { label: "Mixcloud", url: "https://www.mixcloud.com/fluncle/" },
@@ -39,9 +39,9 @@ export const linkGroups: LinkGroup[] = [
   {
     heading: "The mothership",
     links: [
-      { label: "Web — the archive", url: "https://www.fluncle.com" },
-      { label: "Newsletter", url: "Fresh bangers, every Friday — sign up at www.fluncle.com" },
-      { label: "RSS — the feed", url: "https://www.fluncle.com/rss.xml" },
+      { label: "Web: the archive", url: "https://www.fluncle.com" },
+      { label: "Newsletter", url: "Fresh bangers, every Friday. Sign up at www.fluncle.com" },
+      { label: "RSS: the feed", url: "https://www.fluncle.com/rss.xml" },
     ],
   },
   {
@@ -69,8 +69,8 @@ export function aboutLines(): string[] {
     "",
     fluncleTagline,
     "",
-    "I'm Fluncle. Been digging since '90, only now I do it across the Galaxy — every banger I",
-    "find gets logged and sent back. Here's where the findings land, and where the crew gathers.",
+    "I'm Fluncle. Been digging since '90, only now I do it across the Galaxy. Every banger I find,",
+    "I log and send back. Here's where the findings land, and where the crew gathers.",
   ];
 
   for (const group of linkGroups) {

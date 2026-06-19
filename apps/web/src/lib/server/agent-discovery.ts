@@ -220,15 +220,15 @@ export function renderLlmsFull(tracks: FeedItem[], totalCount: number): string {
     .join("\n");
   const omitted = totalCount - tracks.length;
 
-  return `# Fluncle — the full archive
+  return `# Fluncle: the full archive
 
 > ${fluncleDescription}
 
-Fluncle is a single drum & bass selector, not a team — drum & bass end to end, rollers to jungle to neurofunk. Every finding below is a track he found, heard in full, and certified. Dates mark when he found it: the day Fluncle first heard the tune, not the day it released. The collection is Fluncle's Findings.
+Fluncle is a single drum & bass selector, not a team: drum & bass end to end, rollers to jungle to neurofunk. Every finding below is a track he found, heard in full, and certified. Dates mark when he found it: the day Fluncle first heard the tune, not the day it released. The collection is Fluncle's Findings.
 
 ## How to read a Log ID
 
-Every finding has a permanent coordinate, a Log ID, written sector.orbit.mark — for example 004.7.2I, full form fluncle://004.7.2I. The sector counts the days from the epoch (2026-05-30) to the day Fluncle found the tune; the tail is a stable signature derived from the recording itself. Each one is minted once, never reassigned, and resolves to a log page at ${siteUrl}/log/<id>.
+Every finding has a permanent coordinate, a Log ID, written sector.orbit.mark, for example 004.7.2I, full form fluncle://004.7.2I. The sector counts the days from the epoch (2026-05-30) to the day Fluncle found the tune; the tail is a stable signature derived from the recording itself. Each one is minted once, never reassigned, and resolves to a log page at ${siteUrl}/log/<id>.
 
 ## The findings (${totalCount})
 
@@ -316,7 +316,7 @@ description: Read and contribute to Fluncle's drum & bass archive over the publi
 
 # Fluncle API
 
-Fluncle digs and certifies drum & bass bangers, logs each as a finding, and keeps the full archive across the Galaxy, with ${siteUrl} as home base. One selector, no team. Dates mark when each was found: the day Fluncle first heard the tune, not the day it released.
+Fluncle discovers and certifies drum & bass bangers, logs each as a finding, and keeps the full archive across the Galaxy, with ${siteUrl} as home base. One selector, no team. Dates mark when each was found: the day Fluncle first heard the tune, not the day it released.
 
 Base URL: \`${siteUrl}\`. Everything below returns JSON. Errors look like \`{"ok": false, "code": "...", "message": "..."}\`.
 

@@ -406,14 +406,15 @@ function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
           <h2 className="log-track-title">{mixtape.title}</h2>
           <p className="log-track-artist">Fluncle</p>
           <p className="log-definition-prose">
-            {mixtape.note ?? "A checkpoint in the archive. The longer dream made from findings."}
+            {mixtape.note ??
+              "A checkpoint in the archive: I mixed these findings into one long dream."}
           </p>
         </section>
 
         <section aria-label="Mixtape audio" className="log-mixtape-embed">
           {hasAudioLink
             ? "Audio recovered. Pick a deck below."
-            : "Audio lands when this checkpoint publishes."}
+            : "I'll wire up the audio once this checkpoint publishes."}
         </section>
 
         <dl className="log-fields">

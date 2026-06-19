@@ -1266,7 +1266,7 @@ func (m model) renderSubscribe() string {
 
 func (m model) renderSubscribed() string {
 	wrapWidth := clamp(m.width-4, 48, 96) - 4
-	content := []string{readingStyle.Width(wrapWidth).Render("You're on the list.")}
+	content := []string{readingStyle.Width(wrapWidth).Render("You're aboard the mothership. It departs every Friday with fresh bangers, junglist.")}
 	help := helpLine("q back", "ctrl+c quit")
 	return scaffold("Subscribe", "", content, help)
 }

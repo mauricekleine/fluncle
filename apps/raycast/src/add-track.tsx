@@ -32,7 +32,7 @@ export default function Command() {
 
     const toast = await showToast({
       style: Toast.Style.Animated,
-      title: "Publishing track",
+      title: "Logging track",
     });
 
     try {
@@ -42,7 +42,7 @@ export default function Command() {
       toast.message = `${result.track.artists.join(", ")} — ${result.track.title}`;
     } catch (error) {
       toast.style = Toast.Style.Failure;
-      toast.title = "Failed to publish track";
+      toast.title = "Failed to log track";
       toast.message = error instanceof Error ? error.message : String(error);
     }
   }

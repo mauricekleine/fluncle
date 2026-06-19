@@ -27,5 +27,5 @@ export async function subscribeCommand(email?: string, json?: boolean): Promise<
     return;
   }
 
-  console.log("You're on the list.");
+  console.log("Welcome to the mothership.");
 }

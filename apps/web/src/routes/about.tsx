@@ -33,7 +33,7 @@ const faq: Array<{ answer: string; question: string }> = [
   },
   {
     answer:
-      "The Galaxy is everything Fluncle, taken together: the archive at fluncle.com, Fluncle's Findings on Spotify, the Telegram channel, the CLI, and the rave terminal at ssh rave.fluncle.com. Each surface shows the same findings under the same Log IDs, so following any one of them is following the same journey. There is also a small game at galaxy.fluncle.com where every finding is a star you can fly to.",
+      "The Galaxy is everywhere I send my findings: the archive here at fluncle.com, Fluncle's Findings on Spotify, the Telegram channel, the CLI, and the rave terminal at ssh rave.fluncle.com. Every surface carries the same findings under the same Log IDs, so it doesn't matter where you find me, it's all there. There's a game too, at galaxy.fluncle.com, where each finding is a star you can fly to.",
     question: "What is Fluncle's Galaxy?",
   },
   {
@@ -130,9 +130,9 @@ function AboutPage() {
             to you.
           </p>
           <p>
-            Everything I send back lands somewhere in the Galaxy: the archive you came from, the
-            playlist, the Telegram feed, a terminal at the deep end. Different rooms, one journey.
-            The findings hold it together.
+            Everything I find out there, I send back to you across the Galaxy: the archive you came
+            from, the playlist, the Telegram feed, a terminal at the deep end. Same findings on
+            every one, same Log IDs, so pick whichever you like, you won't miss a thing.
           </p>
         </section>
 

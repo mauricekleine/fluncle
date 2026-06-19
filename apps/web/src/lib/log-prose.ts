@@ -85,7 +85,7 @@ export function definitionalProse(track: LogProseInput): string {
   if (track.galaxy) {
     const meta = GALAXIES[track.galaxy.key];
     sentences.push(
-      `It sits in the ${track.galaxy.name} galaxy — the ${meta.energy}, ${meta.mood} quarter of Fluncle's vibe map.`,
+      `It sits in the ${track.galaxy.name} galaxy: the ${meta.energy}, ${meta.mood} quarter of Fluncle's vibe map.`,
     );
   }
 
@@ -100,7 +100,7 @@ export function definitionalProse(track: LogProseInput): string {
   }
 
   sentences.push(
-    `The coordinate fluncle://${track.logId} names this finding on every surface of the Galaxy — the web log, the RSS feed, and the fluncle CLI.`,
+    `The coordinate fluncle://${track.logId} names this finding on every surface of the Galaxy: the web log, the RSS feed, and the fluncle CLI.`,
   );
 
   return sentences.join(" ");

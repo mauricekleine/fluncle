@@ -341,7 +341,7 @@ function addAdminCommands(program: Command): void {
 
   admin
     .command("vehicles")
-    .description("Recent video vehicles, newest first — the style ledger for diversity")
+    .description("Recent video vehicles, newest first (the style ledger for diversity)")
     .option("--limit <limit>", "Number of vehicles to show", "10")
     .option("--json", "Print JSON", false)
     .action(async (options: AdminListOptions) => {
@@ -922,7 +922,7 @@ async function runMixtapeCreate(
     return;
   }
 
-  console.log(`Logged draft ${result.mixtape.id} — it's a draft until you publish it.`);
+  console.log(`Logged draft ${result.mixtape.id}. It stays a draft until you publish it.`);
 }
 
 async function runMixtapeUpdate(
@@ -965,7 +965,9 @@ async function runMixtapeMembers(
     return;
   }
 
-  console.log(`Tracklist saved — ${result.mixtape.memberCount} findings on ${result.mixtape.id}.`);
+  console.log(
+    `Saved the tracklist: ${result.mixtape.memberCount} findings on ${result.mixtape.id}.`,
+  );
 }
 
 async function runMixtapePublish(
@@ -984,7 +986,7 @@ async function runMixtapePublish(
     return;
   }
 
-  console.log(`Published ${result.mixtape.logId} — fluncle://${result.mixtape.logId}`);
+  console.log(`Published ${result.mixtape.logId} (fluncle://${result.mixtape.logId}).`);
 }
 
 async function runMixtapeDelete(
@@ -997,7 +999,7 @@ async function runMixtapeDelete(
   }
 
   if (!options.yes) {
-    throw new Error("Pass --yes to confirm the discard — published mixtapes can't be deleted.");
+    throw new Error("Pass --yes to confirm the discard. Published mixtapes can't be deleted.");
   }
 
   await mixtapeDeleteCommand(id);

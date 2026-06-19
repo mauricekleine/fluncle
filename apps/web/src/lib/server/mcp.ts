@@ -306,7 +306,7 @@ async function dispatch(message: unknown, request: Request): Promise<JsonRpcResp
       return success(id, {
         capabilities: { tools: { listChanged: false } },
         instructions:
-          "Fluncle's drum & bass archive as tools: list recent findings, pull a random one, search Spotify candidates, submit a track for review, or board the newsletter. A submission is a recommendation, not a publish — Fluncle listens before anything goes out.",
+          "Fluncle's drum & bass archive as tools: list recent findings, pull a random one, search Spotify candidates, submit a track for review, or board the newsletter. A submission is a recommendation, not a publish; Fluncle listens before anything goes out.",
         protocolVersion: requested || PROTOCOL_VERSION,
         serverInfo: { name: SERVER_NAME, title: "Fluncle", version: SERVER_VERSION },
       });

@@ -53,7 +53,7 @@ function MixtapesPage() {
           <p className="log-nameplate">Fluncle's Findings</p>
           <h1 className="log-coordinate log-index-title">Mixtapes</h1>
           <p className="log-index-intro">
-            Checkpoints from the archive, long dreams made from findings.
+            Checkpoints from the archive: I mix the findings into one long dream.
           </p>
         </header>
 

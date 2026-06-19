@@ -1,7 +1,7 @@
 {
   "background_color": "#090a0b",
   "categories": ["music"],
-  "description": "Drum & bass bangers from another dimension. Fluncle digs and certifies every track, logs each as a finding, and keeps the full archive across the Galaxy, from the web to the rave terminal. fluncle.com is home base.",
+  "description": "Drum & bass bangers from another dimension. Fluncle discovers and certifies every track, logs each as a finding, and keeps the full archive across the Galaxy, from the web to the rave terminal. fluncle.com is home base.",
   "display": "standalone",
   "icons": [
     { "sizes": "96x96", "src": "/favicon.png", "type": "image/png" },
