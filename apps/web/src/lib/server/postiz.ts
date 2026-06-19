@@ -83,6 +83,22 @@ async function resolveIntegrationId(candidates: string[]): Promise<string> {
   );
 }
 
+/**
+ * Whether a public HTTPS URL resolves (HEAD 2xx). Used to probe an optional R2
+ * object before asking Postiz to pull it — older bundles can lack a cover.jpg,
+ * and we'd rather post thumbnail-less than 502 the whole push. A non-2xx or a
+ * network error both read as "absent" (treat the asset as missing, continue).
+ */
+async function urlExists(url: string): Promise<boolean> {
+  try {
+    const response = await fetch(url, { method: "HEAD" });
+
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 /** Register a public HTTPS media URL with Postiz (it pulls it). Returns the ref. */
 async function uploadFromUrl(url: string): Promise<Media> {
   const response = await postizFetch("/upload-from-url", {
@@ -187,7 +203,20 @@ export async function pushYouTubeShort(input: {
 }): Promise<{ postId: string }> {
   const integrationId = await resolveIntegrationId(["youtube"]);
   const media = await uploadFromUrl(input.videoUrl);
-  const thumbnail = input.coverUrl ? await uploadFromUrl(input.coverUrl) : undefined;
+
+  // The cover is optional: older bundles can lack a cover.jpg in R2. Probe it
+  // first, so a missing cover degrades to a thumbnail-less Short instead of
+  // 502-ing the whole push. A real upload error (cover present but Postiz
+  // rejects the pull) still surfaces from uploadFromUrl.
+  let thumbnail: Media | undefined;
+
+  if (input.coverUrl && (await urlExists(input.coverUrl))) {
+    thumbnail = await uploadFromUrl(input.coverUrl);
+  } else if (input.coverUrl) {
+    console.warn(
+      `postiz: cover not found, posting YouTube Short without thumbnail (${input.coverUrl})`,
+    );
+  }
 
   return createPost({
     content: input.description,
