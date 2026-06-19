@@ -432,6 +432,14 @@ function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
               <dd>{formatAlbumDuration(mixtape.durationMs)}</dd>
             </div>
           ) : undefined}
+          {mixtape.publishedAt ? (
+            <div className="log-field">
+              <dt>Published</dt>
+              <dd>
+                <time dateTime={mixtape.publishedAt}>{formatDateLong(mixtape.publishedAt)}</time>
+              </dd>
+            </div>
+          ) : undefined}
           <div className="log-field">
             <dt>Findings</dt>
             <dd>{mixtape.memberCount}</dd>
@@ -449,6 +457,9 @@ function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
                       {String(index + 1).padStart(2, "0")} · {member.logId}
                     </span>
                     <span className="log-related-line">{artistTitleLine(member)}</span>
+                    {member.startMs !== undefined ? (
+                      <span className="log-mixtape-cue">{formatDuration(member.startMs)}</span>
+                    ) : undefined}
                   </Link>
                 </li>
               ) : null,

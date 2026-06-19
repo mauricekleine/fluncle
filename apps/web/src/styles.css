@@ -1074,6 +1074,15 @@ body::before {
   white-space: nowrap;
 }
 
+.log-mixtape-cue {
+  color: var(--muted-foreground);
+  flex-shrink: 0;
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+}
+
 .log-neighbors {
   border-top: 1px solid var(--border);
   display: flex;
