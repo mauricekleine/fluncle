@@ -23,7 +23,7 @@ import {
   musicRecordingJsonLd,
 } from "@/lib/log-schema";
 import { trackMedia } from "@/lib/media";
-import { type MixtapeDTO, mixtapeCoverUrl } from "@/lib/mixtapes";
+import { type MixtapeDTO, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { resolveLogPageTarget } from "@/lib/server/log-resolver";
 import {
   getRelatedTracks,
@@ -391,15 +391,10 @@ function LogPage() {
 function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
   const logId = mixtape.logId as string;
   const { sector, tail } = splitLogId(logId);
-  // The full canonical title — "Fluncle Drum & Bass Mixtape #N | XXX.F.ZZ" — still
-  // rides into <title>, og:title, and the JSON-LD (see logHead). On the plate the
-  // number lives in the nameplate and the coordinate is the h1, so show just the
-  // series name here and stop repeating both. (A custom-series title with neither
-  // suffix passes through unchanged.)
-  const displayTitle = mixtape.title
-    .replace(/\s*\|\s*\S+$/, "")
-    .replace(/\s*#\d+\s*$/, "")
-    .trim();
+  // Drop the " | <coordinate>" suffix (the coordinate is the h1 right above); the
+  // full canonical title still rides into <title>, og:title, and the JSON-LD.
+  // Same helper across the feed row + /mixtapes index, so the title never drifts.
+  const displayTitle = mixtapeDisplayTitle(mixtape.title);
 
   return (
     <main className="log-plate-stage">

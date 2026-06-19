@@ -13,6 +13,17 @@ export type { MixtapeDTO, MixtapeExternalUrls, MixtapeMember, MixtapeStatus };
 export type MixtapeCoverSize = "og" | "square" | "wide";
 
 /**
+ * The title for on-site display (feed row, /mixtapes index, /log plate): the
+ * canonical title minus its " | <coordinate>" suffix, since the Log ID is shown
+ * right beside it everywhere. Keeps "#N". The full canonical title still rides
+ * into <title>, og:title, and the JSON-LD. (A custom-series title with no " | "
+ * passes through unchanged.)
+ */
+export function mixtapeDisplayTitle(title: string): string {
+  return title.split(" | ")[0];
+}
+
+/**
  * Bumped whenever the shared cover background or the stamp layout changes. The
  * cover endpoint serves `immutable, max-age=1y`, so this `?v=` is the cache key —
  * raise it to bust every cached cover after a re-bake (e.g. the R2-background

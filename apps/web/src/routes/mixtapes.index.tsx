@@ -2,7 +2,7 @@ import { Link, createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { siteUrl } from "@/lib/fluncle-links";
 import { formatAlbumDuration } from "@/lib/format";
-import { type MixtapeDTO, mixtapeCoverUrl } from "@/lib/mixtapes";
+import { type MixtapeDTO, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { listMixtapes } from "@/lib/server/mixtapes";
 
 const fetchMixtapes = createServerFn({ method: "GET" }).handler(() => listMixtapes());
@@ -94,7 +94,7 @@ function MixtapesPage() {
                     params={{ logId: mixtape.logId as string }}
                     to="/log/$logId"
                   >
-                    {mixtape.title.split(" | ")[0]}
+                    {mixtapeDisplayTitle(mixtape.title)}
                   </Link>
                   <span className="log-index-date">
                     {mixtape.memberCount} bangers

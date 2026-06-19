@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { siteUrl } from "@/lib/fluncle-links";
 import { formatAlbumDuration, formatDuration } from "@/lib/format";
-import { type FeedItem } from "@/lib/mixtapes";
+import { type FeedItem, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { type Track } from "@/lib/tracks";
 
 // The signature component (DESIGN.md): a finding, not just a row. The whole row
@@ -45,7 +45,7 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
             to="/log/$logId"
           >
             <span className="track-title block text-pretty [overflow-wrap:anywhere]">
-              {track.title}
+              {mixtapeDisplayTitle(track.title)}
             </span>
           </Link>
           <span className="track-label mt-1 block truncate">{bangersLabel}</span>
