@@ -37,6 +37,7 @@ import { Route as ApiTracksRandomRouteImport } from './routes/api/tracks/random'
 import { Route as ApiTracksIdOrLogIdRouteImport } from './routes/api/tracks.$idOrLogId'
 import { Route as ApiPreviewIdOrLogIdRouteImport } from './routes/api/preview.$idOrLogId'
 import { Route as ApiOgLogIdRouteImport } from './routes/api/og.$logId'
+import { Route as ApiMixtapeCoverLogIdRouteImport } from './routes/api/mixtape-cover.$logId'
 import { Route as ApiMeSubmissionsRouteImport } from './routes/api/me/submissions'
 import { Route as ApiMeSavedFindingsRouteImport } from './routes/api/me/saved-findings'
 import { Route as ApiMeProfileRouteImport } from './routes/api/me/profile'
@@ -208,6 +209,11 @@ const ApiPreviewIdOrLogIdRoute = ApiPreviewIdOrLogIdRouteImport.update({
 const ApiOgLogIdRoute = ApiOgLogIdRouteImport.update({
   id: '/api/og/$logId',
   path: '/api/og/$logId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiMixtapeCoverLogIdRoute = ApiMixtapeCoverLogIdRouteImport.update({
+  id: '/api/mixtape-cover/$logId',
+  path: '/api/mixtape-cover/$logId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiMeSubmissionsRoute = ApiMeSubmissionsRouteImport.update({
@@ -425,6 +431,7 @@ export interface FileRoutesByFullPath {
   '/api/me/profile': typeof ApiMeProfileRoute
   '/api/me/saved-findings': typeof ApiMeSavedFindingsRouteWithChildren
   '/api/me/submissions': typeof ApiMeSubmissionsRoute
+  '/api/mixtape-cover/$logId': typeof ApiMixtapeCoverLogIdRoute
   '/api/og/$logId': typeof ApiOgLogIdRoute
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
   '/api/tracks/$idOrLogId': typeof ApiTracksIdOrLogIdRoute
@@ -486,6 +493,7 @@ export interface FileRoutesByTo {
   '/api/me/profile': typeof ApiMeProfileRoute
   '/api/me/saved-findings': typeof ApiMeSavedFindingsRouteWithChildren
   '/api/me/submissions': typeof ApiMeSubmissionsRoute
+  '/api/mixtape-cover/$logId': typeof ApiMixtapeCoverLogIdRoute
   '/api/og/$logId': typeof ApiOgLogIdRoute
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
   '/api/tracks/$idOrLogId': typeof ApiTracksIdOrLogIdRoute
@@ -549,6 +557,7 @@ export interface FileRoutesById {
   '/api/me/profile': typeof ApiMeProfileRoute
   '/api/me/saved-findings': typeof ApiMeSavedFindingsRouteWithChildren
   '/api/me/submissions': typeof ApiMeSubmissionsRoute
+  '/api/mixtape-cover/$logId': typeof ApiMixtapeCoverLogIdRoute
   '/api/og/$logId': typeof ApiOgLogIdRoute
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
   '/api/tracks/$idOrLogId': typeof ApiTracksIdOrLogIdRoute
@@ -613,6 +622,7 @@ export interface FileRouteTypes {
     | '/api/me/profile'
     | '/api/me/saved-findings'
     | '/api/me/submissions'
+    | '/api/mixtape-cover/$logId'
     | '/api/og/$logId'
     | '/api/preview/$idOrLogId'
     | '/api/tracks/$idOrLogId'
@@ -674,6 +684,7 @@ export interface FileRouteTypes {
     | '/api/me/profile'
     | '/api/me/saved-findings'
     | '/api/me/submissions'
+    | '/api/mixtape-cover/$logId'
     | '/api/og/$logId'
     | '/api/preview/$idOrLogId'
     | '/api/tracks/$idOrLogId'
@@ -736,6 +747,7 @@ export interface FileRouteTypes {
     | '/api/me/profile'
     | '/api/me/saved-findings'
     | '/api/me/submissions'
+    | '/api/mixtape-cover/$logId'
     | '/api/og/$logId'
     | '/api/preview/$idOrLogId'
     | '/api/tracks/$idOrLogId'
@@ -789,6 +801,7 @@ export interface RootRouteChildren {
   ApiAdminSubmissionsRoute: typeof ApiAdminSubmissionsRouteWithChildren
   ApiAdminTracksRoute: typeof ApiAdminTracksRouteWithChildren
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiMixtapeCoverLogIdRoute: typeof ApiMixtapeCoverLogIdRoute
   ApiOgLogIdRoute: typeof ApiOgLogIdRoute
   ApiPreviewIdOrLogIdRoute: typeof ApiPreviewIdOrLogIdRoute
   ApiAdminSpotifyAuthCallbackRoute: typeof ApiAdminSpotifyAuthCallbackRoute
@@ -992,6 +1005,13 @@ declare module '@tanstack/react-router' {
       path: '/api/og/$logId'
       fullPath: '/api/og/$logId'
       preLoaderRoute: typeof ApiOgLogIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/mixtape-cover/$logId': {
+      id: '/api/mixtape-cover/$logId'
+      path: '/api/mixtape-cover/$logId'
+      fullPath: '/api/mixtape-cover/$logId'
+      preLoaderRoute: typeof ApiMixtapeCoverLogIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/me/submissions': {
@@ -1472,6 +1492,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAdminSubmissionsRoute: ApiAdminSubmissionsRouteWithChildren,
   ApiAdminTracksRoute: ApiAdminTracksRouteWithChildren,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiMixtapeCoverLogIdRoute: ApiMixtapeCoverLogIdRoute,
   ApiOgLogIdRoute: ApiOgLogIdRoute,
   ApiPreviewIdOrLogIdRoute: ApiPreviewIdOrLogIdRoute,
   ApiAdminSpotifyAuthCallbackRoute: ApiAdminSpotifyAuthCallbackRoute,

@@ -1,6 +1,20 @@
+import { siteUrl } from "./fluncle-links";
 import { type TrackListItem } from "./server/tracks";
 
 export type MixtapeStatus = "draft" | "published";
+
+/** The aspects the on-the-fly cover endpoint renders (api/mixtape-cover.$logId.ts). */
+export type MixtapeCoverSize = "og" | "square" | "wide";
+
+/**
+ * The cover URL for a published mixtape, rendered on the fly by the cover
+ * endpoint (Satori over the baked Deep-Field background). square backs the
+ * coverImageUrl + Mixcloud/SoundCloud artwork, og the /log link-preview, wide
+ * the YouTube thumbnail. There's no render step — the cover just exists here.
+ */
+export function mixtapeCoverUrl(logId: string, size: MixtapeCoverSize = "square"): string {
+  return `${siteUrl}/api/mixtape-cover/${encodeURIComponent(logId)}?size=${size}`;
+}
 
 export type MixtapeExternalUrls = {
   mixcloud?: string;

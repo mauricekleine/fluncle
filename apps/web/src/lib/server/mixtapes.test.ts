@@ -75,7 +75,9 @@ describe("publishMixtape — canonicalization at mint", () => {
     const published = await publishMixtape("draft-id");
 
     expect(published.title).toBe("Fluncle Drum & Bass Mixtape #1 | 020.F.1A");
-    expect(published.coverImageUrl).toBe("https://found.fluncle.com/020.F.1A/cover-square.png");
+    expect(published.coverImageUrl).toBe(
+      "https://www.fluncle.com/api/mixtape-cover/020.F.1A?size=square",
+    );
   });
 
   it("leaves a custom title and custom cover untouched", async () => {

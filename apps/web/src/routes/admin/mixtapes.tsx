@@ -73,10 +73,6 @@ const MIXTAPES_KEY = ["admin", "mixtapes"] as const;
 // The genre stub the server canonicalizes into the real title at publish time.
 const DRAFT_TITLE = "Fluncle Drum & Bass Mixtape";
 
-// Operator-only convenience: the R2 bucket the cover render lands in.
-const R2_ACCOUNT_ID = "0651fd3b33d9e0b2fe72a5f13e5cf65d";
-const R2_BUCKET = "fluncle-videos";
-
 // The cover-render row is the minimal slice of a finding the builder keeps.
 type MemberRef = {
   albumImageUrl?: string;
@@ -485,32 +481,19 @@ function MixtapeEditor({
             <MembersBuilder members={members} published={published} onChange={setMembers} />
           </div>
 
-          {published ? (
+          {published && mixtape.logId ? (
             <div className="plate-field mt-4 rounded-lg p-3">
               <p className="text-xs font-bold text-muted-foreground">Cover</p>
               <div className="mt-2 flex gap-3">
-                {coverImageUrl ? (
-                  <img
-                    alt=""
-                    className="size-16 shrink-0 rounded-md border border-border object-cover"
-                    src={coverImageUrl}
-                  />
-                ) : (
-                  <div className="track-artwork-fallback size-16 shrink-0 rounded-md border border-border" />
-                )}
-                <div className="min-w-0 space-y-1.5">
-                  <a
-                    className="block text-xs text-muted-foreground underline-offset-2 hover:underline"
-                    href={r2BucketUrl(mixtape.logId)}
-                    rel="noreferrer"
-                    target="_blank"
-                  >
-                    Open in R2 bucket →
-                  </a>
-                  <code className="block font-mono text-xs break-all text-muted-foreground">
-                    {renderCoverCommand(mixtape.sequenceNumber, mixtape.logId)}
-                  </code>
-                </div>
+                <img
+                  alt=""
+                  className="size-24 shrink-0 rounded-md border border-border object-cover"
+                  src={coverPreviewSrc(mixtape.logId, coverImageUrl)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Rendered on the fly — no upload needed. Set a Cover image URL above only to
+                  override it.
+                </p>
               </div>
             </div>
           ) : null}
@@ -990,13 +973,14 @@ function isHttpUrl(value: string): boolean {
   }
 }
 
-function r2BucketUrl(logId?: string): string {
-  const prefix = logId ? encodeURIComponent(`${logId}/`) : "";
-  return `https://dash.cloudflare.com/${R2_ACCOUNT_ID}/r2/default/buckets/${R2_BUCKET}?prefix=${prefix}`;
-}
-
-function renderCoverCommand(sequenceNumber?: number, logId?: string): string {
-  return `bun run --cwd packages/media render:mixtape-cover -- --number ${sequenceNumber ?? "?"} --coordinate ${logId ?? "?"}`;
+// The live cover preview: a same-origin render of the cover endpoint (so it
+// shows in dev too), unless the operator set a custom override.
+function coverPreviewSrc(logId: string, override: string): string {
+  const custom = override.trim();
+  if (custom && !custom.includes("/api/mixtape-cover")) {
+    return custom;
+  }
+  return `/api/mixtape-cover/${encodeURIComponent(logId)}?size=square`;
 }
 
 async function readError(response: Response): Promise<string> {

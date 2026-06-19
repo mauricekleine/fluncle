@@ -4,9 +4,9 @@ import {
   type MixtapeDTO,
   type MixtapeExternalUrls,
   type MixtapeStatus,
+  mixtapeCoverUrl,
   rowToMixtape,
 } from "../mixtapes";
-import { FOUND_BASE } from "../media";
 import { getDb, typedRow, typedRows } from "./db";
 import { mixtapeLogId } from "./mixtape-log-id";
 import { ApiError } from "./spotify";
@@ -18,9 +18,9 @@ const urlMaxLength = 500;
 
 // The draft stub a mixtape starts life with. At publish — once the Log ID and
 // sequence number exist — a stub title is canonicalized to the real format and
-// an empty cover is filled with the conventional square R2 render. A custom
-// title or cover the operator set is left untouched. ("Untitled mixtape" is the
-// legacy stub, still canonicalized for old drafts.)
+// an empty cover is filled with the on-the-fly cover endpoint URL (Satori; see
+// mixtapeCoverUrl). A custom title or cover the operator set is left untouched.
+// ("Untitled mixtape" is the legacy stub, still canonicalized for old drafts.)
 export const DEFAULT_MIXTAPE_TITLE = "Fluncle Drum & Bass Mixtape";
 const LEGACY_MIXTAPE_TITLE = "Untitled mixtape";
 
@@ -304,7 +304,7 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
     await db.execute({
       args: [
         setTitle ? canonicalTitle : draft.title,
-        setCover ? `${FOUND_BASE}/${row.log_id}/cover-square.png` : (draft.coverImageUrl ?? null),
+        setCover ? mixtapeCoverUrl(row.log_id, "square") : (draft.coverImageUrl ?? null),
         now,
         id,
       ],
