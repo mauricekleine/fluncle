@@ -392,10 +392,27 @@ function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
   const logId = mixtape.logId as string;
   const { sector, tail } = splitLogId(logId);
   const hasAudioLink = hasExternalUrl(mixtape.externalUrls);
+  // The full canonical title — "Fluncle Drum & Bass Mixtape #N | XXX.F.ZZ" — still
+  // rides into <title>, og:title, and the JSON-LD (see logHead). On the plate the
+  // number lives in the nameplate and the coordinate is the h1, so show just the
+  // series name here and stop repeating both. (A custom-series title with neither
+  // suffix passes through unchanged.)
+  const displayTitle = mixtape.title
+    .replace(/\s*\|\s*\S+$/, "")
+    .replace(/\s*#\d+\s*$/, "")
+    .trim();
 
   return (
     <main className="log-plate-stage">
       <article className="log-plate">
+        <img
+          alt={mixtape.title}
+          className="log-mixtape-cover"
+          height={1500}
+          src={mixtapeCoverUrl(logId, "square")}
+          width={1500}
+        />
+
         <header className="log-masthead">
           <p className="log-nameplate">Mixtape No. {mixtape.sequenceNumber ?? 1}</p>
           <h1 className="log-coordinate">{logId}</h1>
@@ -403,7 +420,7 @@ function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
         </header>
 
         <section aria-label="The checkpoint" className="log-definition">
-          <h2 className="log-track-title">{mixtape.title}</h2>
+          <h2 className="log-track-title">{displayTitle}</h2>
           <p className="log-track-artist">Fluncle</p>
           <p className="log-definition-prose">
             {mixtape.note ??
