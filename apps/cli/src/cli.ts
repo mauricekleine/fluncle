@@ -876,6 +876,10 @@ async function runTrackGet(
       .filter(Boolean)
       .join(" · "),
   );
+
+  if (t.logPageUrl) {
+    console.log(`Log: ${t.logPageUrl}`);
+  }
 }
 
 async function runTrackUpdate(
@@ -1306,7 +1310,10 @@ async function runRandom(
     console.log(`Note: ${track.note}`);
   }
 
-  console.log(track.spotifyUrl);
+  console.log(`Spotify: ${track.spotifyUrl}`);
+  if (track.logPageUrl) {
+    console.log(`Log: ${track.logPageUrl}`);
+  }
 }
 
 function rejectUnexpectedPositionals(positionals: string[]): void {

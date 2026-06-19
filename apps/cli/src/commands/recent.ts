@@ -4,6 +4,7 @@ export type RecentTrack = {
   type?: "finding";
   trackId: string;
   logId?: string;
+  logPageUrl?: string;
   spotifyUrl: string;
   title: string;
   artists: string[];

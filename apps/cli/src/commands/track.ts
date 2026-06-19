@@ -21,6 +21,7 @@ export type TrackGetResult = {
     key?: string;
     label?: string;
     logId?: string;
+    logPageUrl?: string;
     title: string;
     trackId: string;
     type?: "finding";

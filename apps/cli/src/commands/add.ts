@@ -10,6 +10,7 @@ export type AddCommandResult = {
   track: {
     trackId: string;
     logId?: string;
+    logPageUrl?: string;
     spotifyUrl: string;
     title: string;
     artists: string[];
@@ -46,6 +47,11 @@ export async function addCommand(
     // already carries its own `Log ID:` line, so don't double-print.
     if (result.track.logId && !result.message.includes("Log ID:")) {
       console.log(`Log ID: fluncle://${result.track.logId}`);
+    }
+
+    // The finding's permanent home, alongside the coordinate.
+    if (result.track.logPageUrl) {
+      console.log(`Log: ${result.track.logPageUrl}`);
     }
   }
 

@@ -1,7 +1,11 @@
-import { siteUrl } from "./fluncle-links";
+import { logPageUrl, siteUrl } from "./fluncle-links";
 import { formatIsoDuration } from "./format";
 import { definitionalProse, type LogProseInput } from "./log-prose";
 import { type MixtapeDTO } from "./mixtapes";
+
+// Re-exported for callers that have always reached the log-URL builder through
+// the log schema; the canonical definition now lives in fluncle-links.
+export { logPageUrl };
 
 // The log page's JSON-LD, pure: the route's head() reads from here, and the
 // schema's description is the SAME string as the visible definitional block
@@ -16,10 +20,6 @@ export type LogSchemaInput = LogProseInput & {
   tiktokUrl?: string;
   title: string;
 };
-
-export function logPageUrl(logId: string): string {
-  return `${siteUrl}/log/${encodeURIComponent(logId)}`;
-}
 
 export function musicRecordingJsonLd(track: LogSchemaInput, imageUrl: string): object {
   return {

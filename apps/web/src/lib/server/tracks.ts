@@ -1,3 +1,4 @@
+import { logPageUrl } from "../fluncle-links";
 import { type Galaxy, GALAXIES, galaxyForVibe } from "../galaxies";
 import { type FeedItem, type MixtapeMember, rowToMixtape } from "../mixtapes";
 import { parseArtistsJson } from "./artists";
@@ -44,6 +45,8 @@ export type TrackListItem = {
   key?: string;
   label?: string;
   logId?: string;
+  /** The finding's permanent log page on fluncle.com; absent until a Log ID exists. */
+  logPageUrl?: string;
   note?: string;
   popularity?: number;
   postedToTelegram: boolean;
@@ -196,6 +199,7 @@ function toTrackListItem(row: TrackRow): TrackListItem {
     key: row.key ?? undefined,
     label: row.label ?? undefined,
     logId: row.log_id ?? undefined,
+    logPageUrl: row.log_id ? logPageUrl(row.log_id) : undefined,
     note: row.note?.trim() ? row.note : undefined,
     popularity: row.popularity ?? undefined,
     postedToTelegram: Boolean(row.posted_to_telegram),
