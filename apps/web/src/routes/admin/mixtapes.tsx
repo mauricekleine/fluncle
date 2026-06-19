@@ -235,7 +235,11 @@ function MixtapeEditor({
   const [notice, setNotice] = useAutoNotice();
   const [busy, setBusy] = useState(false);
 
-  const published = mixtape.status === "published";
+  // "minted" = the coordinate is committed: a `distributing` mixtape (assets
+  // uploading) or a fully public `published` one. Both lock the draft-only edits
+  // (members, recorded date) and show the Log ID + cover; only a real draft offers
+  // Publish / Discard. The server enforces the same (assertDraftMixtape).
+  const minted = mixtape.status !== "draft";
 
   const stateRef = useRef({
     durationField,
@@ -335,7 +339,7 @@ function MixtapeEditor({
       // only when this is a draft with a non-empty list that differs from the
       // server's current tracklist.
       const serverRefs = mixtape.members.map(toMemberRef);
-      if (!published && members.length > 0 && !membersRefsEqual(members, serverRefs)) {
+      if (!minted && members.length > 0 && !membersRefsEqual(members, serverRefs)) {
         await replaceMembers(id, members);
       }
     }, "Mixtape saved.");
@@ -385,7 +389,7 @@ function MixtapeEditor({
         <span className="shrink-0 font-mono text-xs tracking-tight text-muted-foreground tabular-nums">
           {mixtape.logId ?? "draft"}
         </span>
-        <Badge className="shrink-0" variant={published ? "default" : "outline"}>
+        <Badge className="shrink-0" variant={minted ? "default" : "outline"}>
           {mixtape.status ?? "draft"}
         </Badge>
         <span className="min-w-0 flex-1 truncate text-sm font-bold">
@@ -401,7 +405,7 @@ function MixtapeEditor({
         <div className="px-4 pb-4 sm:px-5" id={bodyId} role="region">
           <div className="grid gap-3 md:grid-cols-2">
             <Field
-              disabled={published}
+              disabled={minted}
               label="Recorded"
               type="date"
               value={recordedAt}
@@ -450,10 +454,10 @@ function MixtapeEditor({
           </div>
 
           <div className="mt-3">
-            <MembersBuilder members={members} published={published} onChange={setMembers} />
+            <MembersBuilder members={members} published={minted} onChange={setMembers} />
           </div>
 
-          {published && mixtape.logId ? (
+          {minted && mixtape.logId ? (
             <div className="plate-field mt-4 rounded-lg p-3">
               <p className="text-xs font-bold text-muted-foreground">Cover</p>
               <div className="mt-2 flex gap-3">
@@ -476,7 +480,7 @@ function MixtapeEditor({
               ) : undefined}
               {busy ? "Saving…" : "Save"}
             </Button>
-            {published ? null : (
+            {minted ? null : (
               <Button
                 disabled={busy || missingToPublish.length > 0}
                 onClick={publish}
@@ -485,7 +489,7 @@ function MixtapeEditor({
                 Publish mixtape
               </Button>
             )}
-            {published ? null : (
+            {minted ? null : (
               <AlertDialog>
                 <AlertDialogTrigger
                   render={
@@ -519,7 +523,7 @@ function MixtapeEditor({
               </AlertDialog>
             )}
           </div>
-          {!published && missingToPublish.length > 0 ? (
+          {!minted && missingToPublish.length > 0 ? (
             <p className="mt-2 text-xs text-muted-foreground">
               Add {missingToPublish.join(", ")} to publish.
             </p>

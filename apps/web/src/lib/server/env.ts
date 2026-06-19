@@ -27,6 +27,12 @@ const envKeys = [
   "SPOTIFY_CLIENT_SECRET",
   "SPOTIFY_REDIRECT_URI",
   "SPOTIFY_PLAYLIST_ID",
+  // Our own YouTube OAuth (mixtape video distribution), mirroring Spotify. The
+  // Worker holds the durable refresh token in youtube_auth and mints a short-lived
+  // access token for the CLI's resumable upload PUT.
+  "YOUTUBE_CLIENT_ID",
+  "YOUTUBE_CLIENT_SECRET",
+  "YOUTUBE_REDIRECT_URI",
   "TELEGRAM_BOT_TOKEN",
   "TELEGRAM_CHANNEL_ID",
   "DISCORD_WEBHOOK_URL",

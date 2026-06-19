@@ -313,13 +313,41 @@ export const mixtapes = sqliteTable("mixtapes", {
   recordedAt: text("recorded_at"),
   sequenceNumber: integer("sequence_number").unique(),
   soundcloudUrl: text("soundcloud_url"),
-  status: text("status", { enum: ["draft", "published"] })
+  // "distributing" is the minted-but-uploading state between draft and published
+  // (see MixtapeStatus in @fluncle/contracts). Plain TEXT, the enum only narrows
+  // the type.
+  status: text("status", { enum: ["draft", "distributing", "published"] })
     .notNull()
     .default("draft"),
   title: text("title").notNull(),
   updatedAt: text("updated_at").notNull(),
   youtubeUrl: text("youtube_url"),
 });
+
+// Per-platform distribution state for a mixtape's audio/video, mirroring
+// `social_posts` for findings: one row per (mixtape, platform). The CLI moves the
+// bytes (the Worker can't proxy multi-GB media); the Worker records the outcome
+// here and dual-writes the public URL into `mixtapes.{youtube,mixcloud}_url`.
+// `platform` is plain TEXT — adding "soundcloud" later needs no migration.
+// `external_id` holds the YouTube videoId / Mixcloud cloudcast key; `url` the
+// public URL.
+export const mixtapeSocialPosts = sqliteTable(
+  "mixtape_social_posts",
+  {
+    createdAt: text("created_at").notNull(),
+    externalId: text("external_id"),
+    id: text("id").primaryKey(),
+    mixtapeId: text("mixtape_id").notNull(),
+    platform: text("platform", { enum: ["youtube", "mixcloud"] }).notNull(),
+    publishedAt: text("published_at"),
+    status: text("status", { enum: ["uploading", "published", "failed"] }).notNull(),
+    updatedAt: text("updated_at").notNull(),
+    url: text("url"),
+  },
+  (table) => [
+    uniqueIndex("mixtape_social_posts_mixtape_platform_idx").on(table.mixtapeId, table.platform),
+  ],
+);
 
 export const mixtapeTracks = sqliteTable(
   "mixtape_tracks",

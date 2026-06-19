@@ -95,7 +95,10 @@ export type TrackListPage = {
 
 // ── Mixtape ──────────────────────────────────────────────────────────────────
 
-export type MixtapeStatus = "draft" | "published";
+// "distributing" = minted (Log ID + title committed, cover renders) but assets are
+// still uploading to the platforms; not yet public. The first successful platform
+// link flips it to "published". So a published mixtape always has ≥1 listen link.
+export type MixtapeStatus = "distributing" | "draft" | "published";
 
 export type MixtapeExternalUrls = {
   mixcloud?: string;
@@ -156,6 +159,38 @@ export type MixtapeCreateResponse = Ok<{ mixtape: MixtapeDTO }>;
 export type MixtapeUpdateResponse = Ok<{ mixtape: MixtapeDTO }>;
 export type MixtapePublishResponse = Ok<{ mixtape: MixtapeDTO }>;
 export type MixtapeDeleteResponse = Ok<{}>;
+
+// ── Mixtape distribution (audio→Mixcloud, video→YouTube) ─────────────────────
+// One CLI command mints a mixtape into `distributing`, moves the local bytes to
+// each platform, and records the outcome here. `platform` is a plain string so
+// "soundcloud" can join later with no contract churn.
+
+/** A per-platform distribution row (the `mixtape_social_posts` table). */
+export type MixtapeSocialPostItem = {
+  createdAt: string;
+  externalId?: string;
+  platform: string;
+  publishedAt?: string;
+  status: string;
+  updatedAt: string;
+  url?: string;
+};
+
+/** `/api/admin/mixtapes/:id/social` response: the mixtape's per-platform distribution rows. */
+export type MixtapeSocialShowResponse = Ok<{ mixtapeId: string; posts: MixtapeSocialPostItem[] }>;
+
+/** A distribution finalize (any platform): the mixtape after the link was recorded. */
+export type MixtapeDistributeFinalizeResponse = Ok<{ mixtape: MixtapeDTO; platform: string }>;
+
+/** `/api/admin/youtube/auth/start` response (mirrors the Spotify shape). */
+export type YouTubeAuthStartResponse = Ok<{ authUrl: string }>;
+
+/**
+ * `/api/admin/mixtapes/:id/youtube/initiate` response: the resumable session URI
+ * AND a short-lived access token — the YouTube data PUT is NOT self-authorizing,
+ * so the CLI needs the Bearer token alongside the URI.
+ */
+export type MixtapeYouTubeInitiateResponse = Ok<{ accessToken: string; sessionUri: string }>;
 
 // ── Submission ───────────────────────────────────────────────────────────────
 

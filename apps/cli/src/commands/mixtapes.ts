@@ -115,6 +115,91 @@ export async function mixtapeGetCommand(idOrLogId: string): Promise<MixtapeListI
   return match;
 }
 
+export type MixtapeDistributeOptions = {
+  audio?: string;
+  json: boolean;
+  mixcloud?: boolean;
+  video?: string;
+  youtube?: boolean;
+};
+
+export type MixtapeDistributeResult = {
+  logId: string;
+  mixtapeId: string;
+  results: { platform: string; url: string }[];
+};
+
+/**
+ * Distribute a mixtape end to end: mint the coordinate if it's still a draft, then
+ * move the local bytes to each requested platform (video→YouTube, audio→Mixcloud).
+ * With neither --youtube nor --mixcloud, does both. The first successful platform
+ * link flips the mixtape `distributing → published` (server-side, in each finalize).
+ * Idempotent: re-running resumes a `distributing` mixtape, reusing its Log ID.
+ */
+export async function mixtapeDistributeCommand(
+  idOrLogId: string,
+  options: MixtapeDistributeOptions,
+  onProgress: (message: string) => void = () => {},
+): Promise<MixtapeDistributeResult> {
+  const mixtape = await mixtapeGetCommand(idOrLogId);
+
+  if (!mixtape.id) {
+    throw new CliError("mixtape_not_found", `No mixtape with id or log id ${idOrLogId}`);
+  }
+
+  const both = !options.youtube && !options.mixcloud;
+  const doYoutube = both || Boolean(options.youtube);
+  const doMixcloud = both || Boolean(options.mixcloud);
+
+  if (doYoutube && !options.video) {
+    throw new CliError("missing_video", "YouTube distribution needs --video <mp4>");
+  }
+  if (doMixcloud && !options.audio) {
+    throw new CliError("missing_audio", "Mixcloud distribution needs --audio <file>");
+  }
+
+  const mixtapeId = mixtape.id;
+  let logId = mixtape.logId;
+
+  // Mint first: the cover endpoint and the uploaded assets must embed the real Log
+  // ID, so it has to exist BEFORE upload. A draft mints to `distributing`; an
+  // already-minted mixtape reuses its committed coordinate.
+  if (mixtape.status === "draft") {
+    onProgress("Minting the coordinate…");
+    const published = await mixtapePublishCommand(mixtapeId);
+    logId = published.mixtape.logId;
+    onProgress(`Minted ${logId}.`);
+  } else if (mixtape.status === "published") {
+    onProgress(`Already published (${logId}); re-distributing.`);
+  } else {
+    onProgress(`Resuming distribution for ${logId}.`);
+  }
+
+  if (!logId) {
+    throw new CliError("mint_failed", "The mixtape has no Log ID after minting");
+  }
+
+  const results: { platform: string; url: string }[] = [];
+
+  if (doYoutube) {
+    onProgress("YouTube: uploading video…");
+    const { distributeYoutube } = await import("./mixtape-youtube");
+    const result = await distributeYoutube(mixtapeId, options.video!, onProgress);
+    results.push({ platform: "youtube", url: result.url });
+    onProgress(`YouTube: ${result.url}`);
+  }
+
+  if (doMixcloud) {
+    onProgress("Mixcloud: uploading audio…");
+    const { distributeMixcloud } = await import("./mixtape-mixcloud");
+    const result = await distributeMixcloud(mixtapeId, options.audio!, onProgress);
+    results.push({ platform: "mixcloud", url: result.url });
+    onProgress(`Mixcloud: ${result.url}`);
+  }
+
+  return { logId, mixtapeId, results };
+}
+
 function buildBody(options: MixtapeCreateOptions | MixtapeUpdateOptions): MixtapeRequestBody {
   const body: MixtapeRequestBody = {};
 

@@ -236,11 +236,24 @@ export async function setMixtapeMembers(
   return getMixtapeById(id, { includeDrafts: true });
 }
 
+// Mint a draft into the spine: commit its sequence number, Log ID, and canonical
+// title, moving it from `draft` to `distributing`. This is the FIRST half of
+// publishing — the coordinate now exists (so the cover endpoint and the platform
+// assets can embed the real Log ID), but the mixtape is NOT yet public. It becomes
+// `published` only when the first platform link lands (finalizeMixtapeDistribution).
+// The `hasExternalUrl` gate is intentionally gone: distribution supplies the link.
 export async function publishMixtape(id: string): Promise<MixtapeDTO> {
   const draft = await getMixtapeById(id, { includeDrafts: true });
 
   if (draft.status === "published") {
     throw new ApiError("already_published", "Published mixtapes keep their coordinate", 409);
+  }
+  if (draft.status === "distributing") {
+    throw new ApiError(
+      "already_minted",
+      "This mixtape already has its coordinate — distribution is in progress",
+      409,
+    );
   }
 
   // Everything a published mixtape needs must be present — the draft is just the
@@ -254,15 +267,14 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
   if (!draft.durationMs) {
     throw new ApiError("missing_duration", "Set the duration before publishing", 409);
   }
-  if (!hasExternalUrl(draft.externalUrls)) {
-    throw new ApiError(
-      "missing_external_url",
-      "Publishing needs a Mixcloud, YouTube, or SoundCloud link",
-      409,
-    );
-  }
   if (draft.memberCount < 1) {
     throw new ApiError("missing_members", "Add at least one finding before publishing", 409);
+  }
+
+  // Fail before any upload starts if the spine is full (54 = 9 sectors × 6 letters).
+  // The mint CTE re-checks this atomically; this is the early, legible error.
+  if ((await nextMixtapeSequence()) > 54) {
+    throw new ApiError("mixtape_cap_reached", "The mixtape spine is full (54)", 409);
   }
 
   const recordedAt = draft.recordedAt;
@@ -272,7 +284,7 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
   const [publishResult] = await db.batch(
     [
       {
-        args: [sectorPrefix, now, recordedAt, now, now, id],
+        args: [sectorPrefix, recordedAt, now, now, id],
         sql: `with next_sequence(n) as (
                 select coalesce(max(sequence_number), 0) + 1
                 from mixtapes
@@ -283,8 +295,7 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
                 sequence_number = (select n from next_sequence),
                 log_id = ? || cast(((select n from next_sequence) - 1) / 6 + 1 as integer)
                   || substr('ABCDEF', ((select n from next_sequence) - 1) % 6 + 1, 1),
-                status = 'published',
-                published_at = ?,
+                status = 'distributing',
                 recorded_at = ?,
                 added_at = ?,
                 updated_at = ?
@@ -299,7 +310,7 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
   const row = typedRow<PublishRow>(publishResult.rows);
 
   if (!row) {
-    throw new ApiError("publish_failed", "Mixtape could not be published", 409);
+    throw new ApiError("publish_failed", "Mixtape could not be minted", 409);
   }
 
   // The Log ID and sequence number only exist now — canonicalize the title from
@@ -318,22 +329,18 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
     });
   }
 
-  const published = await getMixtapeByLogId(row.log_id);
-
-  if (!published) {
-    throw new ApiError("publish_failed", "Published mixtape could not be read", 500);
-  }
-
-  return published;
+  // Read back through the draft-inclusive path: the row is `distributing` now, so
+  // getMixtapeByLogId (published-only) would not return it.
+  return getMixtapeById(id, { includeDrafts: true });
 }
 
 export async function deleteMixtape(id: string): Promise<void> {
   const mixtape = await getMixtapeById(id, { includeDrafts: true });
 
-  if (mixtape.status === "published") {
+  if (mixtape.status !== "draft") {
     throw new ApiError(
       "published_not_deletable",
-      "A published mixtape keeps its coordinate and can't be deleted",
+      "A minted mixtape keeps its coordinate and can't be deleted",
       409,
     );
   }
@@ -357,6 +364,37 @@ export async function getMixtapeByLogId(logId: string): Promise<MixtapeDTO | und
   const row = typedRow<MixtapeRow>(result.rows);
 
   return row ? hydrateMixtape(row) : undefined;
+}
+
+/**
+ * A mixtape for ASSET RENDERING (the on-the-fly cover endpoint). Unlike
+ * getMixtapeByLogId (published-only — the public read), this also admits a
+ * `distributing` mixtape: its coordinate is committed and the cover must render
+ * while the platform uploads run. NEVER use this for a public surface — a
+ * distributing mixtape has no live link yet.
+ */
+export async function getMixtapeForRender(logId: string): Promise<MixtapeDTO | undefined> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [logId],
+    sql: `${MIXTAPE_SELECT} where m.log_id = ? and m.status in ('published', 'distributing') limit 1`,
+  });
+  const row = typedRow<MixtapeRow>(result.rows);
+
+  return row ? hydrateMixtape(row) : undefined;
+}
+
+// The sequence number the next mint will claim (1-based). Used for the cap
+// pre-check before publish; the mint CTE re-derives this atomically.
+async function nextMixtapeSequence(): Promise<number> {
+  const db = await getDb();
+  const result = await db.execute({
+    sql: `select coalesce(max(sequence_number), 0) + 1 as n
+          from mixtapes where sequence_number is not null`,
+  });
+  const row = typedRow<{ n: number }>(result.rows);
+
+  return Number(row?.n ?? 1);
 }
 
 export async function getMixtapeById(

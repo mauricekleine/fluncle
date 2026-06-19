@@ -1,15 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_MIXTAPE_TITLE, publishMixtape } from "./mixtapes";
 
-// publishMixtape's DB choreography: getMixtapeById (a MIXTAPE_SELECT execute) →
-// the mint batch (returning log_id + sequence_number) → an optional title update
-// execute → getMixtapeByLogId (another MIXTAPE_SELECT execute). We back it with a
-// single mutable row and answer each query by its SQL shape — enough to prove the
-// publish gate + canonicalization without a real libsql instance.
+// publishMixtape's DB choreography: getMixtapeById (a MIXTAPE_SELECT execute) → the
+// cap pre-check (a max(sequence_number) execute) → the mint batch (returning log_id
+// + sequence_number, status → 'distributing') → an optional title update execute →
+// a final getMixtapeById readback. We back it with a single mutable row and answer
+// each query by its SQL shape — enough to prove the gate + mint-to-distributing +
+// canonicalization without a real libsql instance.
 
 type Row = Record<string, unknown>;
 
-const state = vi.hoisted(() => ({ row: {} as Row }));
+const state = vi.hoisted(() => ({ nextSequence: 1, row: {} as Row }));
 
 const execute = vi.hoisted(() =>
   vi.fn(async (query: { args: unknown[]; sql: string }) => {
@@ -19,16 +20,22 @@ const execute = vi.hoisted(() =>
       return { rows: [] };
     }
 
-    // Both getMixtapeById and getMixtapeByLogId run a MIXTAPE_SELECT; return the
-    // current row state (the select projects member_count, default it to 1).
+    // The cap pre-check (nextMixtapeSequence).
+    if (query.sql.includes("coalesce(max(sequence_number), 0) + 1")) {
+      return { rows: [{ n: state.nextSequence }] };
+    }
+
+    // getMixtapeById runs a MIXTAPE_SELECT; return the current row state (the select
+    // projects member_count, default it to 1).
     return { rows: [{ member_count: 1, ...state.row }] };
   }),
 );
 
 const batch = vi.hoisted(() =>
   vi.fn(async () => {
-    // The mint batch stamps the published coordinate onto the row and returns it.
-    state.row.status = "published";
+    // The mint batch stamps the minted coordinate onto the row (status →
+    // 'distributing', NOT 'published' — the first platform link publishes it later).
+    state.row.status = "distributing";
     state.row.log_id = "020.F.1A";
     state.row.sequence_number = 1;
     return [{ rows: [{ log_id: "020.F.1A", sequence_number: 1 }] }];
@@ -46,8 +53,10 @@ vi.mock("./tracks", () => ({
   getTracksForMixtape: async () => [],
 }));
 
-// A complete, publishable draft. Individual tests blank a field to prove the gate.
+// A complete, mintable draft. Individual tests blank a field to prove the gate.
+// Note: NO external link — distribution supplies it, so the gate no longer requires one.
 function seedDraft(overrides: Partial<Row> = {}): void {
+  state.nextSequence = 1;
   state.row = {
     created_at: "2026-06-19T00:00:00.000Z",
     duration_ms: 3_480_000,
@@ -60,24 +69,32 @@ function seedDraft(overrides: Partial<Row> = {}): void {
     status: "draft",
     title: "",
     updated_at: "2026-06-19T00:00:00.000Z",
-    youtube_url: "https://youtube.com/watch?v=abc",
     ...overrides,
   };
 }
 
-describe("publishMixtape — mint + canonicalization", () => {
+describe("publishMixtape — mint into distributing", () => {
   beforeEach(() => {
     execute.mockClear();
     batch.mockClear();
   });
 
+  it("mints a draft into 'distributing' — not yet public — with no external link", async () => {
+    seedDraft();
+
+    const minted = await publishMixtape("draft-id");
+
+    expect(minted.status).toBe("distributing");
+    expect(minted.logId).toBe("020.F.1A");
+  });
+
   it("canonicalizes the stub title and derives the cover from the minted Log ID", async () => {
     seedDraft();
 
-    const published = await publishMixtape("draft-id");
+    const minted = await publishMixtape("draft-id");
 
-    expect(published.title).toBe("Fluncle Drum & Bass Mixtape #1 | 020.F.1A");
-    expect(published.coverImageUrl).toBe(
+    expect(minted.title).toBe("Fluncle Drum & Bass Mixtape #1 | 020.F.1A");
+    expect(minted.coverImageUrl).toBe(
       "https://www.fluncle.com/api/mixtape-cover/020.F.1A?size=square&v=2",
     );
   });
@@ -85,24 +102,24 @@ describe("publishMixtape — mint + canonicalization", () => {
   it("treats the DEFAULT stub title as canonicalizable", async () => {
     seedDraft({ title: DEFAULT_MIXTAPE_TITLE });
 
-    const published = await publishMixtape("draft-id");
+    const minted = await publishMixtape("draft-id");
 
-    expect(published.title).toBe("Fluncle Drum & Bass Mixtape #1 | 020.F.1A");
+    expect(minted.title).toBe("Fluncle Drum & Bass Mixtape #1 | 020.F.1A");
   });
 
   it("leaves an operator-set (future-series) title untouched, cover still derived", async () => {
     seedDraft({ title: "Fluncle Ambient Mixtape" });
 
-    const published = await publishMixtape("draft-id");
+    const minted = await publishMixtape("draft-id");
 
-    expect(published.title).toBe("Fluncle Ambient Mixtape");
-    expect(published.coverImageUrl).toBe(
+    expect(minted.title).toBe("Fluncle Ambient Mixtape");
+    expect(minted.coverImageUrl).toBe(
       "https://www.fluncle.com/api/mixtape-cover/020.F.1A?size=square&v=2",
     );
   });
 });
 
-describe("publishMixtape — required fields", () => {
+describe("publishMixtape — required fields + cap", () => {
   beforeEach(() => {
     execute.mockClear();
     batch.mockClear();
@@ -123,13 +140,24 @@ describe("publishMixtape — required fields", () => {
     await expect(publishMixtape("draft-id")).rejects.toThrow(/duration/i);
   });
 
-  it("rejects no external link", async () => {
-    seedDraft({ youtube_url: null });
-    await expect(publishMixtape("draft-id")).rejects.toThrow(/Mixcloud, YouTube, or SoundCloud/i);
+  it("mints even with no external link (distribution supplies it)", async () => {
+    seedDraft();
+    await expect(publishMixtape("draft-id")).resolves.toMatchObject({ status: "distributing" });
   });
 
   it("rejects an empty tracklist", async () => {
     seedDraft({ member_count: 0 });
     await expect(publishMixtape("draft-id")).rejects.toThrow(/finding/i);
+  });
+
+  it("rejects re-minting a mixtape already distributing", async () => {
+    seedDraft({ status: "distributing" });
+    await expect(publishMixtape("draft-id")).rejects.toThrow(/in progress/i);
+  });
+
+  it("rejects when the spine is full (sequence would exceed 54)", async () => {
+    seedDraft();
+    state.nextSequence = 55;
+    await expect(publishMixtape("draft-id")).rejects.toThrow(/full/i);
   });
 });

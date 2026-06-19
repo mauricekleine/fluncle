@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { ImageResponse, loadGoogleFont } from "workers-og";
 import { FOUND_BASE } from "@/lib/media";
-import { getMixtapeByLogId } from "@/lib/server/mixtapes";
+import { getMixtapeForRender } from "@/lib/server/mixtapes";
 
 // On-the-fly mixtape cover, rendered on the edge with workers-og (Satori + resvg
 // WASM — the same path as the per-finding OG card in og.$logId.ts). The cover is
@@ -70,7 +70,9 @@ export const Route = createFileRoute("/api/mixtape-cover/$logId")({
         const size = (requested in SIZES ? requested : "square") as SizeKey;
         const { background, height, width } = SIZES[size];
 
-        const mixtape = await getMixtapeByLogId(logId);
+        // getMixtapeForRender (not getMixtapeByLogId) so the cover renders while a
+        // mixtape is still `distributing` — the thumbnail the upload needs.
+        const mixtape = await getMixtapeForRender(logId);
 
         if (!mixtape || mixtape.sequenceNumber === undefined) {
           return new Response("Not found", { status: 404 });

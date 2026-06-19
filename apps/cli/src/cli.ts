@@ -127,6 +127,14 @@ type MixtapeDeleteOptions = {
   yes: boolean;
 };
 
+type MixtapeDistributeOptions = {
+  audio?: string;
+  json: boolean;
+  mixcloud?: boolean;
+  video?: string;
+  youtube?: boolean;
+};
+
 export function createProgram(): Command {
   const program = configureCommand(new Command());
 
@@ -530,6 +538,32 @@ function addAdminCommands(program: Command): void {
       await runMixtapeGet(idOrLogId, options, mixtapeGetCommand);
     });
 
+  adminMixtapes
+    .command("distribute")
+    .description("Mint + push a mixtape to YouTube (video) and Mixcloud (audio)")
+    .argument("[idOrLogId]")
+    .option("--video <file>", "Video file for YouTube")
+    .option("--audio <file>", "Audio file for Mixcloud")
+    .option("--youtube", "Only distribute to YouTube")
+    .option("--mixcloud", "Only distribute to Mixcloud")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (idOrLogId: string | undefined, options: MixtapeDistributeOptions) => {
+      const { mixtapeDistributeCommand } = await import("./commands/mixtapes");
+      await runMixtapeDistribute(idOrLogId, options, mixtapeDistributeCommand);
+    });
+
+  adminMixtapes
+    .command("publish-youtube")
+    .description("Flip a distributed mixtape's YouTube video from unlisted to public")
+    .argument("[idOrLogId]")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (idOrLogId: string | undefined, options: { json: boolean }) => {
+      const { publishYoutubeCommand } = await import("./commands/mixtape-youtube");
+      await runMixtapePublishYoutube(idOrLogId, options, publishYoutubeCommand);
+    });
+
   const submissions = configureCommand(
     admin.command("submissions").description("Review listener submissions"),
   );
@@ -586,6 +620,22 @@ function addAdminCommands(program: Command): void {
     .action(async () => {
       const { authSpotifyCommand } = await import("./commands/auth");
       await authSpotifyCommand();
+    });
+
+  auth
+    .command("youtube")
+    .description("Authorize YouTube access (mixtape video distribution)")
+    .action(async () => {
+      const { authYoutubeCommand } = await import("./commands/mixtape-youtube");
+      await authYoutubeCommand();
+    });
+
+  auth
+    .command("mixcloud")
+    .description("Authorize Mixcloud access (mixtape audio distribution)")
+    .action(async () => {
+      const { authMixcloudCommand } = await import("./commands/mixtape-mixcloud");
+      await authMixcloudCommand();
     });
 
   const backfill = configureCommand(
@@ -972,7 +1022,54 @@ async function runMixtapePublish(
     return;
   }
 
-  console.log(`Published ${result.mixtape.logId} (fluncle://${result.mixtape.logId}).`);
+  console.log(
+    `Minted ${result.mixtape.logId} (fluncle://${result.mixtape.logId}) — distributing. ` +
+      "Run `distribute` to push it to the platforms.",
+  );
+}
+
+async function runMixtapeDistribute(
+  idOrLogId: string | undefined,
+  options: MixtapeDistributeOptions,
+  mixtapeDistributeCommand: typeof import("./commands/mixtapes").mixtapeDistributeCommand,
+): Promise<void> {
+  if (!idOrLogId) {
+    throw new Error(
+      "Missing mixtape id. Usage: fluncle admin mixtapes distribute <idOrLogId> --video <mp4> --audio <file>",
+    );
+  }
+
+  const onProgress = options.json ? () => {} : (message: string) => console.log(message);
+  const result = await mixtapeDistributeCommand(idOrLogId, options, onProgress);
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  const links = result.results.map((r) => `  ${r.platform}: ${r.url}`).join("\n");
+  console.log(`Distributed ${result.logId} (fluncle://${result.logId}).\n${links}`);
+}
+
+async function runMixtapePublishYoutube(
+  idOrLogId: string | undefined,
+  options: { json: boolean },
+  publishYoutubeCommand: typeof import("./commands/mixtape-youtube").publishYoutubeCommand,
+): Promise<void> {
+  if (!idOrLogId) {
+    throw new Error(
+      "Missing mixtape id. Usage: fluncle admin mixtapes publish-youtube <idOrLogId>",
+    );
+  }
+
+  const result = await publishYoutubeCommand(idOrLogId);
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  console.log(`YouTube video is now public: ${result.url}`);
 }
 
 async function runMixtapeDelete(

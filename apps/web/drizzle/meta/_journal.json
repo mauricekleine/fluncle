@@ -127,6 +127,13 @@
       "when": 1781864010644,
       "tag": "0017_yummy_malice",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1781879553022,
+      "tag": "0018_unknown_cobalt_man",
+      "breakpoints": true
     }
   ]
 }
