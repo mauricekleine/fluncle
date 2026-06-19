@@ -1189,12 +1189,37 @@ body::before {
 }
 
 .log-index-row {
-  align-items: baseline;
+  align-items: center;
   border-bottom: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
+  display: flex;
+  gap: 0.9rem;
+  padding: 0.7rem 0;
+}
+
+.log-index-cover-link {
+  display: block;
+  flex-shrink: 0;
+  line-height: 0;
+}
+
+.log-index-cover {
+  aspect-ratio: 1 / 1;
+  background: var(--sleeve-black);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: block;
+  height: 3rem;
+  object-fit: cover;
+  width: 3rem;
+}
+
+.log-index-body {
+  align-items: baseline;
   display: grid;
+  flex: 1;
   gap: 0.2rem 0.9rem;
   grid-template-columns: 5.2rem minmax(0, 1fr);
-  padding: 0.7rem 0;
+  min-width: 0;
 }
 
 .log-index-list li:last-child {
@@ -1240,7 +1265,7 @@ body::before {
 }
 
 @media (min-width: 640px) {
-  .log-index-row {
+  .log-index-body {
     grid-template-columns: 5.2rem minmax(0, 1fr) auto;
   }
 

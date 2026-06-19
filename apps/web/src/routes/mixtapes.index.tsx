@@ -2,7 +2,7 @@ import { Link, createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { siteUrl } from "@/lib/fluncle-links";
 import { formatAlbumDuration } from "@/lib/format";
-import { type MixtapeDTO } from "@/lib/mixtapes";
+import { type MixtapeDTO, mixtapeCoverUrl } from "@/lib/mixtapes";
 import { listMixtapes } from "@/lib/server/mixtapes";
 
 const fetchMixtapes = createServerFn({ method: "GET" }).handler(() => listMixtapes());
@@ -66,23 +66,41 @@ function MixtapesPage() {
             {mixtapes.map((mixtape) => (
               <li className="log-index-row" key={mixtape.logId}>
                 <Link
-                  className="log-index-id"
+                  aria-hidden="true"
+                  className="log-index-cover-link"
                   params={{ logId: mixtape.logId as string }}
+                  tabIndex={-1}
                   to="/log/$logId"
                 >
-                  {mixtape.logId}
+                  <img
+                    alt=""
+                    className="log-index-cover"
+                    height={1500}
+                    loading="lazy"
+                    src={mixtapeCoverUrl(mixtape.logId as string, "square")}
+                    width={1500}
+                  />
                 </Link>
-                <Link
-                  className="log-index-line"
-                  params={{ logId: mixtape.logId as string }}
-                  to="/log/$logId"
-                >
-                  {mixtape.title}
-                </Link>
-                <span className="log-index-date">
-                  {mixtape.memberCount} bangers
-                  {mixtape.durationMs ? ` · ${formatAlbumDuration(mixtape.durationMs)}` : ""}
-                </span>
+                <div className="log-index-body">
+                  <Link
+                    className="log-index-id"
+                    params={{ logId: mixtape.logId as string }}
+                    to="/log/$logId"
+                  >
+                    {mixtape.logId}
+                  </Link>
+                  <Link
+                    className="log-index-line"
+                    params={{ logId: mixtape.logId as string }}
+                    to="/log/$logId"
+                  >
+                    {mixtape.title.split(" | ")[0]}
+                  </Link>
+                  <span className="log-index-date">
+                    {mixtape.memberCount} bangers
+                    {mixtape.durationMs ? ` · ${formatAlbumDuration(mixtape.durationMs)}` : ""}
+                  </span>
+                </div>
               </li>
             ))}
           </ol>
