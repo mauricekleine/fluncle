@@ -70,7 +70,7 @@ import { type TrackListItem } from "@/lib/server/tracks";
 
 const MIXTAPES_KEY = ["admin", "mixtapes"] as const;
 
-// The cover-render row is the minimal slice of a finding the builder keeps.
+// The cover-render row is the minimal slice of a banger the builder keeps.
 type MemberRef = {
   albumImageUrl?: string;
   artists: string[];
@@ -185,7 +185,7 @@ function AdminMixtapesPage() {
 
         {mixtapes.length === 0 ? (
           <EmptyState
-            body="Log a draft to start a checkpoint — Fluncle dreaming, made from findings."
+            body="Log a draft to start a checkpoint — Fluncle dreaming, made from bangers."
             title="No checkpoints yet"
           />
         ) : (
@@ -308,7 +308,7 @@ function MixtapeEditor({
     note.trim().length === 0 ? "a note" : undefined,
     parsedDurationMs === null ? "a duration" : undefined,
     !hasLink ? "a platform link" : undefined,
-    members.length === 0 ? "a finding" : undefined,
+    members.length === 0 ? "a banger" : undefined,
   ].filter((label): label is string => label !== undefined);
 
   const save = () => {
@@ -391,7 +391,7 @@ function MixtapeEditor({
           {mixtape.logId ? mixtape.title : "Mixtape draft"}
         </span>
         <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-          {mixtape.memberCount} finding{mixtape.memberCount === 1 ? "" : "s"}
+          {mixtape.memberCount} banger{mixtape.memberCount === 1 ? "" : "s"}
           {mixtape.durationMs ? ` · ${formatAlbumDuration(mixtape.durationMs)}` : ""}
         </span>
       </button>
@@ -588,7 +588,7 @@ function MembersBuilder({
     [onChange],
   );
 
-  const countLabel = `${members.length} finding${members.length === 1 ? "" : "s"}`;
+  const countLabel = `${members.length} banger${members.length === 1 ? "" : "s"}`;
 
   if (published) {
     return (
@@ -599,7 +599,7 @@ function MembersBuilder({
         </div>
         <div className="plate-field divide-y divide-border rounded-lg">
           {members.length === 0 ? (
-            <p className="px-3 py-4 text-sm text-muted-foreground">No findings logged.</p>
+            <p className="px-3 py-4 text-sm text-muted-foreground">No bangers logged.</p>
           ) : (
             members.map((member) => (
               <div key={member.trackId} className="flex items-center gap-3 px-3 py-2">
@@ -638,7 +638,7 @@ function MembersBuilder({
       <div className="plate-field rounded-lg">
         {members.length === 0 ? (
           <p className="px-3 py-4 text-sm text-muted-foreground">
-            Search a finding to start the tracklist.
+            Search a banger to start the tracklist.
           </p>
         ) : (
           <DndContext collisionDetection={closestCenter} onDragEnd={onDragEnd} sensors={sensors}>
@@ -750,7 +750,7 @@ function MemberSearch({
       <PopoverTrigger
         render={
           <Button className="w-full justify-start" variant="outline">
-            Add a finding…
+            Add a banger…
           </Button>
         }
       />
@@ -764,7 +764,7 @@ function MemberSearch({
           <CommandList>
             {trimmed.length === 0 ? (
               <p className="py-6 text-center text-sm text-muted-foreground">
-                Type to find a finding.
+                Type to find a banger.
               </p>
             ) : isFetching && results.length === 0 ? (
               <p className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
@@ -773,7 +773,7 @@ function MemberSearch({
               </p>
             ) : (
               <>
-                <CommandEmpty>No findings match.</CommandEmpty>
+                <CommandEmpty>No bangers match.</CommandEmpty>
                 {results.map((track) => (
                   <CommandItem
                     key={track.trackId}

@@ -1,6 +1,8 @@
 .env
 .env.local
 .dev.vars
+# Per-worktree local dev database + snapshot (turso dev). See docs/local-database.md.
+apps/web/.dev/
 .turbo/
 .wrangler/
 node_modules/

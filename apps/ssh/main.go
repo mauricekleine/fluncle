@@ -1132,11 +1132,11 @@ func (m model) renderMixtapes() string {
 	return scaffold("Mixtape archive", "", content, help)
 }
 
-// mixtapeMeta renders the compact one-line summary for a list row: "N findings
+// mixtapeMeta renders the compact one-line summary for a list row: "N bangers
 // · 72m". Minutes (not M:SS) because the list is the compact scan; the detail
 // carries the precise runtime.
 func mixtapeMeta(mx mixtape) string {
-	meta := fmt.Sprintf("%d findings", mx.MemberCount)
+	meta := fmt.Sprintf("%d bangers", mx.MemberCount)
 	if mx.DurationMs > 0 {
 		minutes := mx.DurationMs / 60000
 		if minutes > 0 {
@@ -1174,7 +1174,7 @@ func (m model) renderMixtapeDetail() string {
 		lines = append(lines, labelStyle.Render("Recorded: ")+readingStyle.Render(formatDate(mx.RecordedAt)))
 	}
 	if mx.MemberCount > 0 {
-		lines = append(lines, labelStyle.Render("Members: ")+readingStyle.Render(fmt.Sprintf("%d", mx.MemberCount)))
+		lines = append(lines, labelStyle.Render("Bangers: ")+readingStyle.Render(fmt.Sprintf("%d", mx.MemberCount)))
 	}
 	if duration := formatDuration(mx.DurationMs); duration != "" {
 		lines = append(lines, labelStyle.Render("Duration: ")+readingStyle.Render(duration))

@@ -80,7 +80,7 @@ function MixtapesPage() {
                   {mixtape.title}
                 </Link>
                 <span className="log-index-date">
-                  {mixtape.memberCount} findings
+                  {mixtape.memberCount} bangers
                   {mixtape.durationMs ? ` · ${formatAlbumDuration(mixtape.durationMs)}` : ""}
                 </span>
               </li>
