@@ -367,8 +367,10 @@ body::before {
    without shouting (DESIGN.md). The stars are sparse Starlight-Cream dots, kept
    faint so the title + label still hold WCAG AA over them (Legible Sky). */
 .track-row-checkpoint {
-  --checkpoint-star: rgb(244 234 215 / 0.55);
-  background-color: color-mix(in oklch, var(--background) 32%, transparent);
+  --checkpoint-star: rgb(244 234 215 / 0.7);
+  /* Deeper than the plate — a darker window into space, the starfield popping
+     against it (var(--background) is the darkest token, the deep field). */
+  background-color: color-mix(in oklch, var(--background) 85%, #000);
   background-image:
     radial-gradient(1.5px 1.5px at 9% 26%, var(--checkpoint-star) 50%, transparent 52%),
     radial-gradient(1px 1px at 21% 66%, var(--checkpoint-star) 50%, transparent 52%),
