@@ -6,6 +6,7 @@ import {
   type MixtapeStatus,
   rowToMixtape,
 } from "../mixtapes";
+import { FOUND_BASE } from "../media";
 import { getDb, typedRow, typedRows } from "./db";
 import { mixtapeLogId } from "./mixtape-log-id";
 import { ApiError } from "./spotify";
@@ -14,6 +15,14 @@ import { getTrackByIdOrLogId, getTracksForMixtape } from "./tracks";
 const titleMaxLength = 160;
 const noteMaxLength = 1_200;
 const urlMaxLength = 500;
+
+// The draft stub a mixtape starts life with. At publish — once the Log ID and
+// sequence number exist — a stub title is canonicalized to the real format and
+// an empty cover is filled with the conventional square R2 render. A custom
+// title or cover the operator set is left untouched. ("Untitled mixtape" is the
+// legacy stub, still canonicalized for old drafts.)
+export const DEFAULT_MIXTAPE_TITLE = "Fluncle Drum & Bass Mixtape";
+const LEGACY_MIXTAPE_TITLE = "Untitled mixtape";
 
 type MixtapeRow = {
   added_at: string | null;
@@ -282,6 +291,25 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
 
   if (!row) {
     throw new ApiError("publish_failed", "Mixtape could not be published", 409);
+  }
+
+  // The Log ID and sequence number only exist now — canonicalize a stub title
+  // and fill an empty cover from them, while leaving any operator-set value be.
+  const canonicalTitle = `Fluncle Drum & Bass Mixtape #${row.sequence_number} | ${row.log_id}`;
+  const currentTitle = draft.title.trim();
+  const setTitle = currentTitle === DEFAULT_MIXTAPE_TITLE || currentTitle === LEGACY_MIXTAPE_TITLE;
+  const setCover = !draft.coverImageUrl;
+
+  if (setTitle || setCover) {
+    await db.execute({
+      args: [
+        setTitle ? canonicalTitle : draft.title,
+        setCover ? `${FOUND_BASE}/${row.log_id}/cover-square.png` : (draft.coverImageUrl ?? null),
+        now,
+        id,
+      ],
+      sql: `update mixtapes set title = ?, cover_image_url = ?, updated_at = ? where id = ?`,
+    });
   }
 
   const published = await getMixtapeByLogId(row.log_id);
