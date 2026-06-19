@@ -1,13 +1,24 @@
 // Bake the SHARED mixtape cover background (the cosmonaut on the Deep Field, sans
-// markers) at the three sizes a mixtape ships at, into apps/web/public. Run once,
-// or again whenever the cover art changes:
+// markers) at the three sizes a mixtape ships at. Run once, or again whenever the
+// cover art changes:
 //
 //   bun run render:mixtape-bg
+//   → writes packages/media/out/mixtape-bg/bg-{square,wide,og}.jpg
 //
-// The per-mixtape "MIXTAPE #N" + coordinate text is no longer baked here — it's
-// stamped over these backgrounds on the fly by the cover endpoint
+// Then upload the three to R2 (served at found.fluncle.com/mixtape/bg-<size>.jpg —
+// the cover endpoint fetches them CROSS-ORIGIN; they must not live on www, or a
+// Worker self-fetch loops back to the SPA fallback and the cover renders black):
+//
+//   for s in square wide og; do
+//     bunx wrangler r2 object put fluncle-videos/mixtape/bg-$s.jpg \
+//       --file packages/media/out/mixtape-bg/bg-$s.jpg --content-type=image/jpeg --remote
+//   done
+//
+// The per-mixtape "MIXTAPE #N" + coordinate text is NOT baked here — it's stamped
+// over these backgrounds on the fly by the cover endpoint
 // (apps/web/src/routes/api/mixtape-cover.$logId.ts, Satori/workers-og), so
 // publishing needs no render step. Remotion stays only as this one-time bg tool.
+// JPEG (no transparency in the full-frame cosmos) keeps the files small + decode-safe.
 
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -21,15 +32,15 @@ import { MIXTAPE_COVER_SPECS } from "../remotion/mixtape-cover-specs";
 // field is identical (the uniqueness lives in the stamped text).
 const SEED = "fluncle-mixtape-bg";
 
-// Composition id -> the static asset the cover endpoint fetches for that size.
+// Composition id -> the R2 asset filename the cover endpoint fetches for that size.
 const OUTPUT_FOR_ID: Record<string, string> = {
-  MixtapeCoverOg: "mixtape-bg-og.png",
-  MixtapeCoverSquare: "mixtape-bg-square.png",
-  MixtapeCoverWide: "mixtape-bg-wide.png",
+  MixtapeCoverOg: "bg-og.jpg",
+  MixtapeCoverSquare: "bg-square.jpg",
+  MixtapeCoverWide: "bg-wide.jpg",
 };
 
 const ENTRY_POINT = path.resolve(import.meta.dirname, "../remotion/index.ts");
-const OUT_DIR = path.resolve(import.meta.dirname, "../../../../apps/web/public");
+const OUT_DIR = path.resolve(import.meta.dirname, "../../out/mixtape-bg");
 
 async function renderMixtapeBackgrounds(): Promise<void> {
   await mkdir(OUT_DIR, { recursive: true });
@@ -60,8 +71,9 @@ async function renderMixtapeBackgrounds(): Promise<void> {
       chromiumOptions: { gl: "angle" },
       composition,
       frame: 0,
-      imageFormat: "png",
+      imageFormat: "jpeg",
       inputProps,
+      jpegQuality: 88,
       output,
       serveUrl,
     });

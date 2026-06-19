@@ -1,24 +1,34 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { ImageResponse, loadGoogleFont } from "workers-og";
+import { FOUND_BASE } from "@/lib/media";
 import { getMixtapeByLogId } from "@/lib/server/mixtapes";
 
 // On-the-fly mixtape cover, rendered on the edge with workers-og (Satori + resvg
 // WASM — the same path as the per-finding OG card in og.$logId.ts). The cover is
-// a fixed Deep-Field background (the cosmonaut, baked once by
-// `bun run --cwd packages/media render:mixtape-bg` into /public/mixtape-bg-*.png)
-// with the only per-mixtape marks — "MIXTAPE #N" and the Log ID coordinate —
-// stamped over it here. No Remotion render, no R2 upload: a published mixtape's
-// cover simply exists at this URL, so publishing needs no cover step.
+// the shared Deep-Field background (the cosmonaut) with the only per-mixtape marks —
+// "MIXTAPE #N" and the Log ID coordinate — stamped over it here. No Remotion render
+// at request time, no per-mixtape upload: a published mixtape's cover simply exists
+// at this URL, so publishing needs no cover step.
+//
+// The background is baked once (`bun run --cwd packages/media render:mixtape-bg`) and
+// hosted on R2 at found.fluncle.com/mixtape/bg-<size>.jpg — fetched CROSS-ORIGIN
+// below. It must NOT live on www.fluncle.com: a Worker fetching its own origin loops
+// back to the SPA fallback (HTML, not the asset), which is exactly how the cover
+// rendered black before. og.$logId.ts embeds the found.fluncle.com poster for the
+// same reason. Re-upload after re-baking:
+//   wrangler r2 object put fluncle-videos/mixtape/bg-<size>.jpg --file=… --content-type=image/jpeg --remote
 //
 // `?size=` picks the aspect: square (Mixcloud/SoundCloud + the /log coverImageUrl),
 // og (the /log link-preview), or wide (the YouTube thumbnail). The mixtape's
 // coverImageUrl points here, versioned by `?v=<updatedAt>` so an edit re-renders
 // while each version stays immutable + edge-cached.
 
+const BG_BASE = `${FOUND_BASE}/mixtape`;
+
 const SIZES = {
-  og: { background: "/mixtape-bg-og.png", height: 630, width: 1200 },
-  square: { background: "/mixtape-bg-square.png", height: 1500, width: 1500 },
-  wide: { background: "/mixtape-bg-wide.png", height: 720, width: 1280 },
+  og: { background: `${BG_BASE}/bg-og.jpg`, height: 630, width: 1200 },
+  square: { background: `${BG_BASE}/bg-square.jpg`, height: 1500, width: 1500 },
+  wide: { background: `${BG_BASE}/bg-wide.jpg`, height: 720, width: 1280 },
 } as const;
 
 type SizeKey = keyof typeof SIZES;
@@ -66,7 +76,7 @@ export const Route = createFileRoute("/api/mixtape-cover/$logId")({
           return new Response("Not found", { status: 404 });
         }
 
-        const bg = await fetchImageDataUri(new URL(background, request.url).toString());
+        const bg = await fetchImageDataUri(background);
 
         // Mirror the Remotion composition's lower-band typography (vmin-based), so
         // the stamped text matches mixtape-cover.tsx at every aspect.

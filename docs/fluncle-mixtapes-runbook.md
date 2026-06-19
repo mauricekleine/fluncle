@@ -77,7 +77,7 @@ Crawlers, bots, and AI answer engines must read a mixtape **as a DJ mixtape**, n
   - **Square 1500×1500** (`size=square`) → Mixcloud + SoundCloud artwork, and the mixtape's `coverImageUrl` on `/log`.
   - **16:9 1280×720** (`size=wide`) → the YouTube thumbnail.
   - **1200×630** (`size=og`) → the `/log` link-preview (OG) card.
-  - The shared background (cosmonaut on the One-Sun Deep Field, grain) is baked once by `bun run --cwd packages/media render:mixtape-bg` into `apps/web/public/mixtape-bg-{square,wide,og}.png` (the `<MixtapeCover>` composition with `markers: false`). Re-run only when the art changes; iterate it with the `fluncle-video` kit. Remotion is no longer in the publish path.
+  - The shared background (cosmonaut on the One-Sun Deep Field, grain) is baked once by `bun run --cwd packages/media render:mixtape-bg` (the `<MixtapeCover>` composition with `markers: false`) and **hosted on R2 at `found.fluncle.com/mixtape/bg-{square,wide,og}.jpg`** — the cover endpoint fetches it **cross-origin** (it must not live on `www`, or a Worker self-fetch loops to the SPA fallback and the cover renders black). The render script writes the jpgs to `packages/media/out/mixtape-bg/` and prints the `wrangler r2 object put` upload recipe. Re-run + re-upload only when the art changes; iterate it with the `fluncle-video` kit. Remotion is no longer in the publish path.
 
 ## Editing after publish
 
