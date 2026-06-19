@@ -1,11 +1,8 @@
 import { artistTitle, coordinate } from "../format";
 import { selectWithKeyboard, truncateTerminalLine } from "../interactive";
+import { spotifyPlaylistUrl, telegramUrl } from "../links";
 import { CliError } from "../output";
 import { type RecentTrack, recentCommand } from "./recent";
-
-const SPOTIFY_PLAYLIST_URL =
-  "https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0?si=054d3c6cbcf14a36";
-const TELEGRAM_URL = "https://t.me/fluncle";
 
 const TELEGRAM_APP_URI = "tg://resolve?domain=fluncle";
 const SELECT_NON_INTERACTIVE_MESSAGE =
@@ -20,12 +17,12 @@ type OpenRecentOptions = {
 
 export async function openPlaylistCommand(mode: OpenMode): Promise<void> {
   const target =
-    mode === "browser" ? SPOTIFY_PLAYLIST_URL : spotifyPlaylistUrlToAppUri(SPOTIFY_PLAYLIST_URL);
+    mode === "browser" ? spotifyPlaylistUrl : spotifyPlaylistUrlToAppUri(spotifyPlaylistUrl);
   await openExternal(target);
 }
 
 export async function openTelegramCommand(mode: OpenMode): Promise<void> {
-  const target = mode === "browser" ? TELEGRAM_URL : TELEGRAM_APP_URI;
+  const target = mode === "browser" ? telegramUrl : TELEGRAM_APP_URI;
   await openExternal(target);
 }
 

@@ -7,7 +7,9 @@
 // four quadrants map to the four galaxies; the axes are inclusive toward
 // dark/driving (x>=0, y>=0) so every coordinate lands in exactly one.
 
-export type Galaxy = "astral" | "lunar" | "nebular" | "solar";
+import { type Galaxy } from "@fluncle/contracts";
+
+export type { Galaxy };
 
 export type GalaxyMeta = {
   color: string;

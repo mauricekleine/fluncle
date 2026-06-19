@@ -1,8 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { NOTE_MAX_LENGTH } from "../../../lib/log-prose";
-import { jsonError, requireAdmin } from "../../../lib/server/env";
-import { ApiError } from "../../../lib/server/spotify";
+import { requireAdmin } from "../../../lib/server/env";
+import { apiErrorResponse, parseEditorialNote } from "../../../lib/server/http-errors";
 import { type TrackUpdate, updateTrack } from "../../../lib/server/track-update";
 
 type PatchBody = {
@@ -21,14 +20,14 @@ type PatchBody = {
 export const Route = createFileRoute("/api/admin/tracks/$trackId")({
   server: {
     handlers: {
-      PATCH: async ({ request }) => {
+      PATCH: async ({ params, request }) => {
         const unauthorized = await requireAdmin(request);
 
         if (unauthorized) {
           return unauthorized;
         }
 
-        const trackId = new URL(request.url).pathname.split("/").filter(Boolean).pop() ?? "";
+        const trackId = params.trackId;
 
         try {
           const body = (await request.json()) as PatchBody;
@@ -58,17 +57,9 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId")({
             update.enrichmentStatus = body.enrichmentStatus;
           }
 
-          if (typeof body.note === "string") {
-            const note = body.note.trim();
+          const note = parseEditorialNote(body.note);
 
-            if (note.length > NOTE_MAX_LENGTH) {
-              throw new ApiError(
-                "note_too_long",
-                `Note must be ${NOTE_MAX_LENGTH} characters or less`,
-                422,
-              );
-            }
-
+          if (note !== undefined) {
             update.note = note;
           }
 
@@ -94,11 +85,7 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId")({
 
           return Response.json({ ok: true, ...result });
         } catch (error) {
-          if (error instanceof ApiError) {
-            return jsonError(error.status, error.code, error.message);
-          }
-
-          return jsonError(500, "error", error instanceof Error ? error.message : String(error));
+          return apiErrorResponse(error);
         }
       },
     },

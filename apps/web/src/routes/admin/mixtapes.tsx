@@ -65,6 +65,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { formatAlbumDuration, formatDurationField, parseDuration } from "@/lib/format";
 import { hasExternalUrl, type MixtapeDTO } from "@/lib/mixtapes";
 import { isAdminRequest } from "@/lib/server/admin-auth";
+import { type MixtapeInput } from "@/lib/server/mixtapes";
 import { listMixtapes } from "@/lib/server/mixtapes";
 import { type TrackListItem } from "@/lib/server/tracks";
 
@@ -969,7 +970,7 @@ async function searchAdminTracks(q: string): Promise<TrackListItem[]> {
   return body.tracks ?? [];
 }
 
-async function saveMixtape(id: string, body: Record<string, unknown>) {
+async function saveMixtape(id: string, body: MixtapeInput) {
   const response = await fetch(`/api/admin/mixtapes/${encodeURIComponent(id)}`, {
     body: JSON.stringify(body),
     headers: { "Content-Type": "application/json" },

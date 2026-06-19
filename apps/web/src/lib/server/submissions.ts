@@ -1,3 +1,7 @@
+import { type Submission, type SubmissionSource, type SubmissionStatus } from "@fluncle/contracts";
+
+export type { Submission };
+
 import { createHash, randomUUID } from "node:crypto";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
@@ -10,12 +14,6 @@ const contactMaxLength = 120;
 const rateLimitWindowMs = 60 * 60 * 1000;
 const rateLimitMaxSubmissions = 5;
 
-const submissionSources = ["web", "cli", "ssh"] as const;
-const submissionStatuses = ["pending", "approved", "rejected"] as const;
-
-type SubmissionSource = (typeof submissionSources)[number];
-type SubmissionStatus = (typeof submissionStatuses)[number];
-
 export type SubmissionInput = {
   spotifyTrackId?: unknown;
   spotifyUrl?: unknown;
@@ -27,22 +25,6 @@ export type SubmissionInput = {
   contact?: unknown;
   source?: unknown;
   honeypot?: unknown;
-};
-
-export type Submission = {
-  id: string;
-  spotifyTrackId: string;
-  spotifyUrl: string;
-  title: string;
-  artists: string[];
-  album?: string;
-  artworkUrl?: string;
-  note?: string;
-  contact?: string;
-  source: SubmissionSource;
-  status: SubmissionStatus;
-  createdAt: string;
-  reviewedAt?: string;
 };
 
 type SubmissionRow = {

@@ -25,54 +25,37 @@ export function artifactByField(field: string): VideoArtifact | undefined {
   return VIDEO_ARTIFACTS.find((artifact) => artifact.field === field);
 }
 
-// The travelling vehicle, read from render.json (ship writes it from `--vehicle`).
-// Stored on the track as the diversity ledger the next agent reads via
-// /api/tracks. A missing/unparseable vehicle just leaves the ledger empty.
+// render.json is a loose manifest the ship pipeline writes (vehicle, model,
+// reasoning). Each field is read independently: a missing/unparseable value
+// just leaves that field empty (the caller defaults), never failing an upload.
+type RenderManifestField = "model" | "reasoning" | "vehicle";
+
+function stringFromManifest(raw: string, key: RenderManifestField): string | undefined {
+  try {
+    const manifest = JSON.parse(raw) as Record<RenderManifestField, unknown>;
+    const value = manifest[key];
+
+    if (typeof value === "string" && value.trim()) {
+      return value.trim().slice(0, 120);
+    }
+  } catch {
+    // Loose manifest; never fail the upload on a bad field.
+  }
+
+  return undefined;
+}
+
+/** The travelling vehicle (ship writes it from `--vehicle`) — the diversity ledger. */
 export function vehicleFromRenderJson(raw: string): string | undefined {
-  try {
-    const manifest = JSON.parse(raw) as { vehicle?: unknown };
-
-    if (typeof manifest.vehicle === "string" && manifest.vehicle.trim()) {
-      return manifest.vehicle.trim().slice(0, 120);
-    }
-  } catch {
-    // render.json is a loose manifest; never fail the upload on a bad vehicle.
-  }
-
-  return undefined;
+  return stringFromManifest(raw, "vehicle");
 }
 
-// The authoring AI model, read from render.json (ship writes it from `--model`),
-// in <provider>/<model> notation. Stored on the track alongside the vehicle.
-// A missing/unparseable model just leaves the field empty (the caller defaults).
+/** The authoring AI model (ship writes it from `--model`), in `<provider>/<model>` notation. */
 export function modelFromRenderJson(raw: string): string | undefined {
-  try {
-    const manifest = JSON.parse(raw) as { model?: unknown };
-
-    if (typeof manifest.model === "string" && manifest.model.trim()) {
-      return manifest.model.trim().slice(0, 120);
-    }
-  } catch {
-    // render.json is a loose manifest; never fail the upload on a bad model.
-  }
-
-  return undefined;
+  return stringFromManifest(raw, "model");
 }
 
-// The reasoning/thinking effort the authoring model ran at, read from render.json
-// (ship writes it from `--reasoning`), e.g. "high". Stored on the track alongside
-// the model. A missing/unparseable value just leaves the field empty (the caller
-// defaults).
+/** The reasoning/thinking effort the authoring model ran at (ship writes it from `--reasoning`). */
 export function reasoningFromRenderJson(raw: string): string | undefined {
-  try {
-    const manifest = JSON.parse(raw) as { reasoning?: unknown };
-
-    if (typeof manifest.reasoning === "string" && manifest.reasoning.trim()) {
-      return manifest.reasoning.trim().slice(0, 120);
-    }
-  } catch {
-    // render.json is a loose manifest; never fail the upload on a bad reasoning.
-  }
-
-  return undefined;
+  return stringFromManifest(raw, "reasoning");
 }

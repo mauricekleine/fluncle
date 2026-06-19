@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { jsonError, requireAdmin } from "../../../lib/server/env";
+import { requireAdmin } from "../../../lib/server/env";
+import { apiErrorResponse } from "../../../lib/server/http-errors";
 import { listPendingSubmissions } from "../../../lib/server/submissions";
 
 export const Route = createFileRoute("/api/admin/submissions")({
@@ -20,7 +21,7 @@ export const Route = createFileRoute("/api/admin/submissions")({
             submissions,
           });
         } catch (error) {
-          return jsonError(500, "error", error instanceof Error ? error.message : String(error));
+          return apiErrorResponse(error);
         }
       },
     },

@@ -1723,19 +1723,32 @@ func (m model) search(query string) tea.Cmd {
 	}
 }
 
+type submissionRequest struct {
+	Album          string   `json:"album"`
+	Artists        []string `json:"artists"`
+	ArtworkURL     string   `json:"artworkUrl"`
+	Contact        string   `json:"contact"`
+	Honeypot       string   `json:"honeypot"`
+	Note           string   `json:"note"`
+	Source         string   `json:"source"`
+	SpotifyTrackID string   `json:"spotifyTrackId"`
+	SpotifyURL     string   `json:"spotifyUrl"`
+	Title          string   `json:"title"`
+}
+
 func (m model) submit() tea.Cmd {
 	pending := *m.pending
-	body := map[string]any{
-		"album":          pending.Album,
-		"artists":        pending.Artists,
-		"artworkUrl":     pending.ArtworkURL,
-		"contact":        m.contact,
-		"honeypot":       "",
-		"note":           m.note,
-		"source":         "ssh",
-		"spotifyTrackId": pending.ID,
-		"spotifyUrl":     pending.SpotifyURL,
-		"title":          pending.Title,
+	body := submissionRequest{
+		Album:          pending.Album,
+		Artists:        pending.Artists,
+		ArtworkURL:     pending.ArtworkURL,
+		Contact:        m.contact,
+		Honeypot:       "",
+		Note:           m.note,
+		Source:         "ssh",
+		SpotifyTrackID: pending.ID,
+		SpotifyURL:     pending.SpotifyURL,
+		Title:          pending.Title,
 	}
 	return func() tea.Msg {
 		err := m.app.postJSON("/api/submissions", body, nil)
@@ -1743,8 +1756,12 @@ func (m model) submit() tea.Cmd {
 	}
 }
 
+type newsletterRequest struct {
+	Email string `json:"email"`
+}
+
 func (m model) subscribe(email string) tea.Cmd {
-	body := map[string]any{"email": email}
+	body := newsletterRequest{Email: email}
 	return func() tea.Msg {
 		err := m.app.postJSON("/api/newsletter", body, nil)
 		return subscribeMsg{err: err}

@@ -22,6 +22,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@fluncle/contracts": "workspace:*",
     "commander": "catalog:",
     "dotenv": "catalog:"
   },

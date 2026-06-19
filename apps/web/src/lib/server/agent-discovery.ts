@@ -1,6 +1,7 @@
 import { siteUrl, spotifyPlaylistUrl, telegramUrl } from "../fluncle-links";
 import { fluncleDescription } from "../identity";
 import { type FeedItem } from "../mixtapes";
+import { sha256Hex } from "./hash";
 import { type TrackCursor, type TrackListItem, decodeTrackCursor, listTracks } from "./tracks";
 
 // Agent-facing discovery surfaces served ahead of the TanStack router:
@@ -135,11 +136,7 @@ let cachedSkillDigest: string | undefined;
 
 async function skillDigest(): Promise<string> {
   if (!cachedSkillDigest) {
-    const bytes = new TextEncoder().encode(skillMarkdown);
-    const hash = await crypto.subtle.digest("SHA-256", bytes);
-    const hex = Array.from(new Uint8Array(hash))
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
+    const hex = await sha256Hex(new TextEncoder().encode(skillMarkdown));
 
     cachedSkillDigest = `sha256:${hex}`;
   }

@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { type InValue } from "@libsql/client/web";
+import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 import { jsonError } from "./env";
 import {
   hashRequestPart,
   isAllowedDisplayUsername,
   isAllowedUsername,
+  requireJsonMutation,
+  requirePublicUser,
   type PublicUser,
 } from "./public-auth";
 
@@ -71,16 +74,7 @@ type SqlStatement = {
 
 export type MeResponse = {
   ok: true;
-  user:
-    | null
-    | (PublicUser & {
-        featureFlags: {
-          exportDelete: true;
-          galaxyProgress: true;
-          savedFindings: true;
-          signedInSubmissions: true;
-        };
-      });
+  user: null | PublicUser;
 };
 
 export async function meResponse(request: Request): Promise<MeResponse> {
@@ -89,17 +83,7 @@ export async function meResponse(request: Request): Promise<MeResponse> {
 
   return {
     ok: true,
-    user: user
-      ? {
-          ...user,
-          featureFlags: {
-            exportDelete: true,
-            galaxyProgress: true,
-            savedFindings: true,
-            signedInSubmissions: true,
-          },
-        }
-      : null,
+    user: user ?? null,
   };
 }
 
@@ -151,6 +135,42 @@ export async function enforceRateLimit({
   });
 
   return undefined;
+}
+
+/**
+ * The shared `me/` mutation preamble: a signed-in public user, a JSON mutation
+ * guard (content-type + origin + CSRF), and a rate-limit check. Returns the
+ * user on success or a `Response` (401/415/403/429) for any guard failure —
+ * handlers return it directly. `windowMs` defaults to one hour (the common
+ * account-write window); pass 24h for the delete/export daily windows.
+ */
+export async function requireAccountMutation(
+  request: Request,
+  {
+    action,
+    limit,
+    windowMs = 60 * 60 * 1000,
+  }: { action: string; limit: number; windowMs?: number },
+): Promise<PublicUser | Response> {
+  const user = await requirePublicUser(request);
+
+  if (user instanceof Response) {
+    return user;
+  }
+
+  const guard = requireJsonMutation(request, user);
+
+  if (guard) {
+    return guard;
+  }
+
+  const limited = await enforceRateLimit({ action, limit, request, userId: user.id, windowMs });
+
+  if (limited) {
+    return limited;
+  }
+
+  return user;
 }
 
 export async function updatePrivateUsername(
@@ -307,7 +327,7 @@ export async function listSavedFindings(user: PublicUser) {
   return {
     ok: true,
     savedFindings: typedRows<SavedRow>(result.rows).map((row) => ({
-      artists: JSON.parse(row.artists_json) as string[],
+      artists: parseArtistsJson(row.artists_json),
       logId: row.log_id,
       note: row.note ?? undefined,
       savedAt: row.saved_at,
@@ -391,7 +411,7 @@ export async function listUserSubmissions(user: PublicUser) {
   return {
     ok: true,
     submissions: typedRows<SubmissionRow>(result.rows).map((row) => ({
-      artists: JSON.parse(row.artists_json) as string[],
+      artists: parseArtistsJson(row.artists_json),
       createdAt: row.created_at,
       id: row.id,
       note: row.note ?? undefined,

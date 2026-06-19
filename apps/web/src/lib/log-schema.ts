@@ -21,7 +21,10 @@ export type LogSchemaInput = LogProseInput & {
   title: string;
 };
 
-export function musicRecordingJsonLd(track: LogSchemaInput, imageUrl: string): object {
+export function musicRecordingJsonLd(
+  track: LogSchemaInput,
+  imageUrl: string,
+): Record<string, unknown> {
   return {
     "@context": "https://schema.org",
     "@type": "MusicRecording",
@@ -45,7 +48,7 @@ export function musicRecordingJsonLd(track: LogSchemaInput, imageUrl: string): o
   };
 }
 
-export function mixtapeAlbumJsonLd(mixtape: MixtapeDTO): object {
+export function mixtapeAlbumJsonLd(mixtape: MixtapeDTO): Record<string, unknown> {
   const logId = mixtape.logId as string;
 
   return {
@@ -82,7 +85,7 @@ export function mixtapeAlbumJsonLd(mixtape: MixtapeDTO): object {
   };
 }
 
-export function breadcrumbsJsonLd(logId: string): object {
+export function breadcrumbsJsonLd(logId: string): Record<string, unknown> {
   return {
     "@context": "https://schema.org",
     "@type": "BreadcrumbList",

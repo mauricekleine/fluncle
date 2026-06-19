@@ -1,3 +1,4 @@
+import { type AddTrackResult } from "@fluncle/contracts";
 import { adminApiPost } from "../api";
 
 type AddOptions = {
@@ -6,28 +7,7 @@ type AddOptions = {
   json?: boolean;
 };
 
-export type AddCommandResult = {
-  track: {
-    trackId: string;
-    logId?: string;
-    logPageUrl?: string;
-    spotifyUrl: string;
-    title: string;
-    artists: string[];
-    album?: string;
-    albumImageUrl?: string;
-    durationMs: number;
-    isrc?: string;
-    label?: string;
-    popularity?: number;
-    previewUrl?: string;
-    tags?: string[];
-  };
-  dryRun: boolean;
-  addedToSpotify: boolean;
-  postedToTelegram: boolean;
-  message: string;
-};
+export type AddCommandResult = AddTrackResult;
 
 export async function addCommand(
   spotifyUrl: string,

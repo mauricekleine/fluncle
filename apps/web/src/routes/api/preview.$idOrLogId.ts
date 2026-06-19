@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { jsonError } from "../../lib/server/env";
+import { apiErrorResponse, trackNotFoundResponse } from "../../lib/server/http-errors";
 import { fetchLivePreview } from "../../lib/server/preview-live";
 import { getTrackByIdOrLogId } from "../../lib/server/tracks";
 
@@ -21,14 +22,14 @@ const corsHeaders = {
 export const Route = createFileRoute("/api/preview/$idOrLogId")({
   server: {
     handlers: {
-      GET: async ({ request }) => {
-        const idOrLogId = new URL(request.url).pathname.split("/").filter(Boolean).pop() ?? "";
+      GET: async ({ params, request }) => {
+        const idOrLogId = params.idOrLogId;
 
         try {
           const track = await getTrackByIdOrLogId(idOrLogId);
 
           if (!track) {
-            return jsonError(404, "not_found", `No track with id ${idOrLogId}`);
+            return trackNotFoundResponse(idOrLogId);
           }
 
           const upstream = await fetchLivePreview(track, request);
@@ -57,7 +58,7 @@ export const Route = createFileRoute("/api/preview/$idOrLogId")({
 
           return new Response(upstream.body, { headers, status: upstream.status });
         } catch (error) {
-          return jsonError(500, "error", error instanceof Error ? error.message : String(error));
+          return apiErrorResponse(error);
         }
       },
       OPTIONS: () => new Response(undefined, { headers: corsHeaders, status: 204 }),

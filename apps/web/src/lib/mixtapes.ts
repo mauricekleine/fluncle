@@ -1,7 +1,13 @@
+import {
+  type MixtapeDTO,
+  type MixtapeExternalUrls,
+  type MixtapeMember,
+  type MixtapeStatus,
+  type TrackListItem,
+} from "@fluncle/contracts";
 import { siteUrl } from "./fluncle-links";
-import { type TrackListItem } from "./server/tracks";
 
-export type MixtapeStatus = "draft" | "published";
+export type { MixtapeDTO, MixtapeExternalUrls, MixtapeMember, MixtapeStatus };
 
 /** The aspects the on-the-fly cover endpoint renders (api/mixtape-cover.$logId.ts). */
 export type MixtapeCoverSize = "og" | "square" | "wide";
@@ -16,38 +22,7 @@ export function mixtapeCoverUrl(logId: string, size: MixtapeCoverSize = "square"
   return `${siteUrl}/api/mixtape-cover/${encodeURIComponent(logId)}?size=${size}`;
 }
 
-export type MixtapeExternalUrls = {
-  mixcloud?: string;
-  soundcloud?: string;
-  youtube?: string;
-};
-
-export type MixtapeMember = TrackListItem & {
-  startMs?: number;
-};
-
-export type MixtapeDTO = {
-  addedAt?: string;
-  artists: ["Fluncle"];
-  coverImageUrl?: string;
-  createdAt?: string;
-  durationMs?: number;
-  externalUrls: MixtapeExternalUrls;
-  id?: string;
-  logId?: string;
-  memberCount: number;
-  members: MixtapeMember[];
-  note?: string;
-  publishedAt?: string;
-  recordedAt?: string;
-  sequenceNumber?: number;
-  status?: MixtapeStatus;
-  title: string;
-  type: "mixtape";
-  updatedAt?: string;
-};
-
-export type FeedItem = TrackListItem | MixtapeDTO;
+export type FeedItem = MixtapeDTO | TrackListItem;
 
 export type MixtapeRowLike = {
   added_at?: string | null;
@@ -94,7 +69,7 @@ export function rowToMixtape(row: MixtapeRowLike, members: MixtapeMember[] = [])
     publishedAt: row.published_at ?? undefined,
     recordedAt: row.recorded_at ?? undefined,
     sequenceNumber: row.sequence_number ?? undefined,
-    status: row.status ?? undefined,
+    status: row.status ?? "draft",
     title: row.title,
     type: "mixtape",
     updatedAt: row.updated_at ?? undefined,

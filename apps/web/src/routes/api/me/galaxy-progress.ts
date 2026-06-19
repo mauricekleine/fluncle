@@ -1,10 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import {
-  enforceRateLimit,
   getGalaxyProgress,
   mergeGalaxyProgress,
+  requireAccountMutation,
 } from "../../../lib/server/account-data";
-import { requireJsonMutation, requirePublicUser } from "../../../lib/server/public-auth";
+import { parseJsonBody } from "../../../lib/server/http-errors";
+import { requirePublicUser } from "../../../lib/server/public-auth";
 
 export const Route = createFileRoute("/api/me/galaxy-progress")({
   server: {
@@ -15,31 +16,22 @@ export const Route = createFileRoute("/api/me/galaxy-progress")({
         return user instanceof Response ? user : Response.json(await getGalaxyProgress(user));
       },
       PUT: async ({ request }) => {
-        const user = await requirePublicUser(request);
+        const user = await requireAccountMutation(request, {
+          action: "account.galaxy.merge",
+          limit: 30,
+        });
 
         if (user instanceof Response) {
           return user;
         }
 
-        const guard = requireJsonMutation(request, user);
+        const parsed = await parseJsonBody(request);
 
-        if (guard) {
-          return guard;
+        if (parsed instanceof Response) {
+          return parsed;
         }
 
-        const limited = await enforceRateLimit({
-          action: "account.galaxy.merge",
-          limit: 30,
-          request,
-          userId: user.id,
-          windowMs: 60 * 60 * 1000,
-        });
-
-        if (limited) {
-          return limited;
-        }
-
-        const result = await mergeGalaxyProgress(user, await request.json());
+        const result = await mergeGalaxyProgress(user, parsed.json);
 
         return result instanceof Response ? result : Response.json(result);
       },

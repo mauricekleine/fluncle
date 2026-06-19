@@ -1,3 +1,7 @@
+import { type TrackUpdateResult } from "@fluncle/contracts";
+
+export type { TrackUpdateResult };
+
 // Generic admin track update — the write-back path for both the async enrichment
 // agent and manual operator curation (see docs/track-lifecycle.md). Writes an
 // ALLOW-LIST of curation/enrichment fields only; identity fields (title, artists,
@@ -38,11 +42,6 @@ export type TrackUpdate = {
   vibeY?: number;
 };
 
-export type TrackUpdateResult = {
-  fields: string[];
-  trackId: string;
-};
-
 type ExistingRow = {
   added_at: string;
   isrc: string | null;
@@ -62,25 +61,6 @@ export async function updateTrack(
 
   if (!existing) {
     throw new ApiError("not_found", `No track with id ${trackId}`, 404);
-  }
-
-  const provided =
-    update.bpm !== undefined ||
-    update.key !== undefined ||
-    update.videoUrl !== undefined ||
-    update.enrichmentStatus !== undefined ||
-    update.features !== undefined ||
-    update.note !== undefined ||
-    update.videoVehicle !== undefined ||
-    update.videoModel !== undefined ||
-    update.videoModelReasoning !== undefined ||
-    update.isrc !== undefined ||
-    update.logId !== undefined ||
-    update.vibeX !== undefined ||
-    update.vibeY !== undefined;
-
-  if (!provided) {
-    throw new ApiError("no_fields", "No updatable fields provided", 400);
   }
 
   const sets: string[] = [];
@@ -207,17 +187,17 @@ export async function updateTrack(
     args.push(logId);
   }
 
-  // Guard against an empty update (the provided-check above already ensures at
-  // least one field, so this is belt-and-suspenders).
-  if (sets.length > 0) {
-    sets.push("updated_at = ?");
-    args.push(new Date().toISOString());
-    args.push(trackId);
-    await db.execute({
-      args,
-      sql: `update tracks set ${sets.join(", ")} where track_id = ?`,
-    });
+  if (sets.length === 0) {
+    throw new ApiError("no_fields", "No updatable fields provided", 400);
   }
+
+  sets.push("updated_at = ?");
+  args.push(new Date().toISOString());
+  args.push(trackId);
+  await db.execute({
+    args,
+    sql: `update tracks set ${sets.join(", ")} where track_id = ?`,
+  });
 
   return { fields: sets.map((set) => set.split(" ")[0]), trackId };
 }

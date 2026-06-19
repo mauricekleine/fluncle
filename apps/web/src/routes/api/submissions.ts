@@ -1,7 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { jsonError } from "../../lib/server/env";
+import { apiErrorResponse } from "../../lib/server/http-errors";
 import { createSubmission, type SubmissionInput } from "../../lib/server/submissions";
-import { ApiError } from "../../lib/server/spotify";
 
 export const Route = createFileRoute("/api/submissions")({
   server: {
@@ -16,11 +15,7 @@ export const Route = createFileRoute("/api/submissions")({
             submission,
           });
         } catch (error) {
-          if (error instanceof ApiError) {
-            return jsonError(error.status, error.code, error.message);
-          }
-
-          return jsonError(500, "error", error instanceof Error ? error.message : String(error));
+          return apiErrorResponse(error);
         }
       },
     },

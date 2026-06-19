@@ -15,8 +15,8 @@
 // survives any later change to this algorithm or epoch. resolveLogId() handles
 // the astronomically-rare collision deterministically (same sector, fresh tail).
 
-const EPOCH_MS = Date.UTC(2026, 4, 30); // 2026-05-30 = day 0
-const DAY_MS = 86_400_000;
+import { fnv1a, sectorDay } from "../log-id-shared";
+
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 export type LogIdInput = {
@@ -28,23 +28,8 @@ export type LogIdInput = {
   trackId: string;
 };
 
-/** Stable 32-bit FNV-1a hash → non-negative integer. */
-function fnv1a(value: string): number {
-  let hash = 0x811c9dc5;
-
-  for (let index = 0; index < value.length; index++) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-
-  return hash >>> 0;
-}
-
 export function sector(foundAt: string): string {
-  const found = new Date(foundAt).getTime();
-  const days = Math.max(0, Math.floor((found - EPOCH_MS) / DAY_MS));
-
-  return String(days).padStart(3, "0");
+  return String(sectorDay(foundAt)).padStart(3, "0");
 }
 
 // orbit + mark from decorrelated slices of one hash. `attempt` salts the seed so

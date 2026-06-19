@@ -1,4 +1,5 @@
 import { fluncleAsciiLogo, fluncleTagline } from "../brand";
+import { spotifyPlaylistUrl, telegramUrl } from "../links";
 
 type Link = {
   label: string;
@@ -22,7 +23,7 @@ export const linkGroups: LinkGroup[] = [
     links: [
       {
         label: "Spotify: Fluncle's Findings",
-        url: "https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0",
+        url: spotifyPlaylistUrl,
       },
       { label: "Mixcloud", url: "https://www.mixcloud.com/fluncle/" },
       { label: "YouTube", url: "https://www.youtube.com/@fluncle" },
@@ -33,7 +34,7 @@ export const linkGroups: LinkGroup[] = [
     links: [
       { label: "TikTok", url: "https://www.tiktok.com/@fluncle" },
       { label: "Instagram", url: "https://www.instagram.com/fluncle/" },
-      { label: "Telegram", url: "https://t.me/fluncle" },
+      { label: "Telegram", url: telegramUrl },
     ],
   },
   {

@@ -1,11 +1,5 @@
 import { getApiBaseUrl, loadEnv } from "./env";
-import { CliError } from "./output";
-
-type ApiFailure = {
-  ok?: false;
-  code?: string;
-  message?: string;
-};
+import { CliError, type JsonFailure } from "./output";
 
 export async function publicApiGet<T>(path: string): Promise<T> {
   return apiRequest<T>(path);
@@ -90,7 +84,7 @@ async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const data = parseJson(text);
 
   if (!response.ok) {
-    const failure = data as ApiFailure | undefined;
+    const failure = data as JsonFailure | undefined;
     throw new CliError(
       failure?.code ?? `http_${response.status}`,
       failure?.message ?? `${response.status} ${response.statusText}`,

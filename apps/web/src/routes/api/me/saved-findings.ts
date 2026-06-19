@@ -1,6 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { enforceRateLimit, listSavedFindings, saveFinding } from "../../../lib/server/account-data";
-import { requireJsonMutation, requirePublicUser } from "../../../lib/server/public-auth";
+import {
+  listSavedFindings,
+  requireAccountMutation,
+  saveFinding,
+} from "../../../lib/server/account-data";
+import { parseJsonBody } from "../../../lib/server/http-errors";
+import { requirePublicUser } from "../../../lib/server/public-auth";
 
 export const Route = createFileRoute("/api/me/saved-findings")({
   server: {
@@ -11,31 +16,22 @@ export const Route = createFileRoute("/api/me/saved-findings")({
         return user instanceof Response ? user : Response.json(await listSavedFindings(user));
       },
       POST: async ({ request }) => {
-        const user = await requirePublicUser(request);
+        const user = await requireAccountMutation(request, {
+          action: "account.saved.write",
+          limit: 90,
+        });
 
         if (user instanceof Response) {
           return user;
         }
 
-        const guard = requireJsonMutation(request, user);
+        const parsed = await parseJsonBody(request);
 
-        if (guard) {
-          return guard;
+        if (parsed instanceof Response) {
+          return parsed;
         }
 
-        const limited = await enforceRateLimit({
-          action: "account.saved.write",
-          limit: 90,
-          request,
-          userId: user.id,
-          windowMs: 60 * 60 * 1000,
-        });
-
-        if (limited) {
-          return limited;
-        }
-
-        const result = await saveFinding(user, await request.json());
+        const result = await saveFinding(user, parsed.json);
 
         return result instanceof Response ? result : Response.json(result);
       },

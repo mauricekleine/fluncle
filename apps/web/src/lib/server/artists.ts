@@ -5,7 +5,8 @@ export function parseArtistsJson(value: string): string[] {
     if (Array.isArray(artists)) {
       return artists.filter((artist): artist is string => typeof artist === "string");
     }
-  } catch {
+  } catch (error) {
+    console.warn("parseArtistsJson: malformed artists_json column", error);
     return [];
   }
 
