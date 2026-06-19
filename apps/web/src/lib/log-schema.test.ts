@@ -15,7 +15,7 @@ const track = {
 };
 
 describe("musicRecordingJsonLd (the log page schema)", () => {
-  const jsonLd = musicRecordingJsonLd(track, "https://img/cover.jpg") as Record<string, unknown>;
+  const jsonLd = musicRecordingJsonLd(track, "https://img/cover.jpg");
 
   it("is a MusicRecording with the coordinate in BOTH identifier forms", () => {
     expect(jsonLd["@type"]).toBe("MusicRecording");
@@ -54,7 +54,7 @@ describe("musicRecordingJsonLd (the log page schema)", () => {
         title: track.title,
       },
       "https://img/cover.jpg",
-    ) as Record<string, unknown>;
+    );
 
     expect(bare).not.toHaveProperty("isrcCode");
     expect(bare).not.toHaveProperty("inAlbum");
@@ -93,9 +93,10 @@ describe("mixtapeAlbumJsonLd", () => {
         },
       ],
       note: "A checkpoint in the archive.",
+      status: "draft",
       title: "Checkpoint one",
       type: "mixtape",
-    }) as Record<string, unknown>;
+    });
 
     expect(jsonLd["@type"]).toBe("MusicAlbum");
     expect(jsonLd.albumProductionType).toBe("https://schema.org/DJMixAlbum");

@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { jsonError } from "../../lib/server/env";
+import { apiErrorResponse, trackNotFoundResponse } from "../../lib/server/http-errors";
 import { resolveLogPageTarget } from "../../lib/server/log-resolver";
 
 // Public read of a single finding by its Spotify trackId OR its Log ID — the
@@ -8,14 +8,14 @@ import { resolveLogPageTarget } from "../../lib/server/log-resolver";
 export const Route = createFileRoute("/api/tracks/$idOrLogId")({
   server: {
     handlers: {
-      GET: async ({ request }) => {
-        const idOrLogId = new URL(request.url).pathname.split("/").filter(Boolean).pop() ?? "";
+      GET: async ({ params }) => {
+        const idOrLogId = params.idOrLogId;
 
         try {
           const target = await resolveLogPageTarget(idOrLogId);
 
           if (!target) {
-            return jsonError(404, "not_found", `No track with id ${idOrLogId}`);
+            return trackNotFoundResponse(idOrLogId);
           }
 
           return Response.json(
@@ -24,7 +24,7 @@ export const Route = createFileRoute("/api/tracks/$idOrLogId")({
               : { ok: true, track: target.track },
           );
         } catch (error) {
-          return jsonError(500, "error", error instanceof Error ? error.message : String(error));
+          return apiErrorResponse(error);
         }
       },
     },

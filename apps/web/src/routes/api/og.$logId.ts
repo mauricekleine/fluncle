@@ -52,10 +52,8 @@ async function fetchImageDataUri(url: string): Promise<string | undefined> {
 export const Route = createFileRoute("/api/og/$logId")({
   server: {
     handlers: {
-      GET: async ({ request }) => {
-        const logId = decodeURIComponent(
-          new URL(request.url).pathname.split("/").filter(Boolean).pop() ?? "",
-        );
+      GET: async ({ params }) => {
+        const logId = params.logId;
 
         const track = await getTrackByIdOrLogId(logId);
 

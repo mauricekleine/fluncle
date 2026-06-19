@@ -1,32 +1,15 @@
+import {
+  type FinalizeResponse,
+  type PresignResponse,
+  type TrackGetResponse,
+  type TrackSocialShowResponse,
+  type TrackSocialUpdateResponse,
+  type TrackUpdateResponse,
+} from "@fluncle/contracts";
 import { adminApiGet, adminApiPatch, adminApiPost, publicApiGet } from "../api";
 import { CliError } from "../output";
 
-export type TrackGetResult = {
-  mixtape?: {
-    artists: ["Fluncle"];
-    durationMs?: number;
-    externalUrls: { mixcloud?: string; soundcloud?: string; youtube?: string };
-    logId?: string;
-    memberCount: number;
-    title: string;
-    type: "mixtape";
-  };
-  ok: true;
-  track?: {
-    artists: string[];
-    bpm?: number;
-    durationMs: number;
-    enrichmentStatus: string;
-    isrc?: string;
-    key?: string;
-    label?: string;
-    logId?: string;
-    logPageUrl?: string;
-    title: string;
-    trackId: string;
-    type?: "finding";
-  };
-};
+export type TrackGetResult = TrackGetResponse;
 
 export async function trackGetCommand(idOrLogId: string): Promise<TrackGetResult> {
   return publicApiGet<TrackGetResult>(`/api/tracks/${encodeURIComponent(idOrLogId)}`);
@@ -39,12 +22,6 @@ export type TrackUpdateOptions = {
   note?: string;
   status?: string;
   videoUrl?: string;
-};
-
-type TrackUpdateResult = {
-  fields: string[];
-  ok: true;
-  trackId: string;
 };
 
 type TrackUpdateBody = {
@@ -100,18 +77,6 @@ const VIDEO_FIELDS: ReadonlyArray<{ field: string; option: keyof TrackVideoOptio
   { field: "props", option: "props" },
   { field: "render", option: "render" },
 ];
-
-type PresignResponse = {
-  logId: string;
-  trackId: string;
-  uploads: Array<{ contentType: string; field: string; key: string; url: string }>;
-};
-
-type FinalizeResponse = {
-  logId: string;
-  trackId: string;
-  videoUrl: string;
-};
 
 // Uploads a track's video bundle DIRECTLY to R2 via short-lived presigned PUT
 // URLs the Worker signs. The bytes go straight to R2's S3 endpoint, not through
@@ -171,70 +136,48 @@ export async function trackVideoCommand(
   // Phase 3: finalize — link the footage cut as video_url and record the vehicle
   // read from the bundle's render.json (the diversity ledger). The authoring
   // model comes from --model, else render.json, else the default.
-  const videoVehicle = files.render ? await readVehicle(files.render) : undefined;
-  const videoModel =
-    files.model?.trim().slice(0, 120) ||
-    (files.render ? await readModel(files.render) : undefined) ||
-    DEFAULT_VIDEO_MODEL;
+  const manifest = files.render ? await readManifestFields(files.render) : {};
+  const videoModel = files.model?.trim().slice(0, 120) || manifest.model || DEFAULT_VIDEO_MODEL;
   const videoModelReasoning =
-    files.reasoning?.trim().slice(0, 120) ||
-    (files.render ? await readReasoning(files.render) : undefined) ||
-    DEFAULT_VIDEO_REASONING;
+    files.reasoning?.trim().slice(0, 120) || manifest.reasoning || DEFAULT_VIDEO_REASONING;
   const finalize = await adminApiPost<FinalizeResponse>(
     `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/video/finalize`,
-    { videoModel, videoModelReasoning, ...(videoVehicle ? { videoVehicle } : {}) },
+    {
+      videoModel,
+      videoModelReasoning,
+      ...(manifest.vehicle ? { videoVehicle: manifest.vehicle } : {}),
+    },
   );
 
   return { logId: finalize.logId, ok: true, trackId: finalize.trackId, urls };
 }
 
-// Reads the travelling vehicle from the bundle's render.json. A missing or
-// unparseable vehicle just leaves the ledger entry empty, never fails the upload.
-async function readVehicle(renderPath: string): Promise<string | undefined> {
-  try {
-    const manifest = (await Bun.file(renderPath).json()) as { vehicle?: unknown };
+// Reads the bundle's render.json once and returns the three string fields the
+// finalize call needs (vehicle/model/reasoning). A missing or unparseable value
+// just leaves that field absent (the caller defaults), never fails the upload.
+type RenderManifestField = "model" | "reasoning" | "vehicle";
 
-    if (typeof manifest.vehicle === "string" && manifest.vehicle.trim()) {
-      return manifest.vehicle.trim().slice(0, 120);
+async function readManifestFields(
+  renderPath: string,
+): Promise<Partial<Record<RenderManifestField, string>>> {
+  try {
+    const manifest = (await Bun.file(renderPath).json()) as Record<RenderManifestField, unknown>;
+    const result: Partial<Record<RenderManifestField, string>> = {};
+
+    for (const key of ["vehicle", "model", "reasoning"] as const) {
+      const value = manifest[key];
+
+      if (typeof value === "string" && value.trim()) {
+        result[key] = value.trim().slice(0, 120);
+      }
     }
+
+    return result;
   } catch {
     // Loose manifest; ignore.
   }
 
-  return undefined;
-}
-
-// Reads the authoring AI model from the bundle's render.json. A missing or
-// unparseable model just leaves it empty (the caller defaults), never fails.
-async function readModel(renderPath: string): Promise<string | undefined> {
-  try {
-    const manifest = (await Bun.file(renderPath).json()) as { model?: unknown };
-
-    if (typeof manifest.model === "string" && manifest.model.trim()) {
-      return manifest.model.trim().slice(0, 120);
-    }
-  } catch {
-    // Loose manifest; ignore.
-  }
-
-  return undefined;
-}
-
-// Reads the authoring model's reasoning effort from the bundle's render.json. A
-// missing or unparseable value just leaves it empty (the caller defaults), never
-// fails.
-async function readReasoning(renderPath: string): Promise<string | undefined> {
-  try {
-    const manifest = (await Bun.file(renderPath).json()) as { reasoning?: unknown };
-
-    if (typeof manifest.reasoning === "string" && manifest.reasoning.trim()) {
-      return manifest.reasoning.trim().slice(0, 120);
-    }
-  } catch {
-    // Loose manifest; ignore.
-  }
-
-  return undefined;
+  return {};
 }
 
 type TrackDraftResult = {
@@ -261,8 +204,6 @@ export type TrackSocialUpdateOptions = {
   url?: string;
 };
 
-type TrackSocialUpdateResult = { ok: true; platform: string; status: string; trackId: string };
-
 type TrackSocialUpdateBody = {
   scheduledFor?: string;
   status: string;
@@ -274,7 +215,7 @@ export async function trackSocialUpdateCommand(
   idOrLogId: string,
   platform: string,
   options: TrackSocialUpdateOptions,
-): Promise<TrackSocialUpdateResult> {
+): Promise<TrackSocialUpdateResponse> {
   const body: TrackSocialUpdateBody = { status: options.status };
 
   if (options.url !== undefined) {
@@ -291,27 +232,15 @@ export async function trackSocialUpdateCommand(
   );
 }
 
-type TrackSocialShowResult = {
-  ok: true;
-  posts: Array<{
-    platform: string;
-    publishedAt?: string;
-    scheduledFor?: string;
-    status: string;
-    url?: string;
-  }>;
-  trackId: string;
-};
-
 // Lists a track's per-platform publication state.
-export async function trackSocialShowCommand(idOrLogId: string): Promise<TrackSocialShowResult> {
+export async function trackSocialShowCommand(idOrLogId: string): Promise<TrackSocialShowResponse> {
   return adminApiGet(`/api/admin/tracks/${encodeURIComponent(idOrLogId)}/social`);
 }
 
 export async function trackUpdateCommand(
   trackId: string,
   options: TrackUpdateOptions,
-): Promise<TrackUpdateResult> {
+): Promise<TrackUpdateResponse> {
   const body: TrackUpdateBody = {};
 
   if (options.bpm !== undefined) {
@@ -333,5 +262,8 @@ export async function trackUpdateCommand(
     body.note = options.note;
   }
 
-  return adminApiPatch<TrackUpdateResult>(`/api/admin/tracks/${encodeURIComponent(trackId)}`, body);
+  return adminApiPatch<TrackUpdateResponse>(
+    `/api/admin/tracks/${encodeURIComponent(trackId)}`,
+    body,
+  );
 }

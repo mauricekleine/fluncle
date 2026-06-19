@@ -1,4 +1,5 @@
 import { type FrontierEntity, type GameTrack, type Star, type Vec2 } from "./types";
+import { fnv1a, sectorDay } from "../lib/log-id-shared";
 
 // Deterministic star placement from the Log ID (docs/ROADMAP.md, "The
 // expanding frontier"). The sector (days since the Fluncle epoch) maps to
@@ -8,9 +9,9 @@ import { type FrontierEntity, type GameTrack, type Star, type Vec2 } from "./typ
 // Pure function of the catalogue, so every run is the same galaxy: map
 // knowledge carrying across deaths is the skill curve.
 
-/** Mirrors the server's Fluncle epoch (apps/web/src/lib/server/log-id.ts). */
-const EPOCH_MS = Date.UTC(2026, 4, 30);
-const DAY_MS = 86_400_000;
+// Re-exported so sim/render/sprites and the parity fixtures keep importing
+// fnv1a from here (the canonical copy now lives in lib/log-id-shared).
+export { fnv1a };
 
 /** Clear space around Earth before the first ring. */
 const FIRST_RING_RADIUS = 620;
@@ -20,18 +21,6 @@ const RING_GAP = 240;
 const MIN_ARC_SPACING = 700;
 
 const LOG_ID_PATTERN = /^(\d+)\.\d\.\d[A-Z]$/;
-
-/** Stable 32-bit FNV-1a hash, same as the server's Log ID tail. */
-export function fnv1a(value: string): number {
-  let hash = 0x811c9dc5;
-
-  for (let index = 0; index < value.length; index++) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-
-  return hash >>> 0;
-}
 
 // A tiny seeded PRNG (mulberry32). The galaxy's POSITIONS stay deterministic
 // off fnv1a (every run is the same map), but a few frontier choices — which of
@@ -61,9 +50,7 @@ function sectorOf(track: GameTrack): number {
 
   // Stragglers without a coordinate (pre-Log-ID rows) derive their sector the
   // same way the server would have: days since the epoch, from the found date.
-  const found = new Date(track.addedAt).getTime();
-
-  return Number.isNaN(found) ? 0 : Math.max(0, Math.floor((found - EPOCH_MS) / DAY_MS));
+  return sectorDay(track.addedAt);
 }
 
 function ringRadius(sector: number): number {

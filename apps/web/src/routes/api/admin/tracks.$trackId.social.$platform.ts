@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { jsonError, requireAdmin } from "../../../lib/server/env";
+import { apiErrorResponse, trackNotFoundResponse } from "../../../lib/server/http-errors";
 import { type SocialStatusUpdate, updateSocialStatus } from "../../../lib/server/social";
 import { getTrackByIdOrLogId } from "../../../lib/server/tracks";
 
@@ -12,17 +13,15 @@ type PatchBody = { scheduledFor?: unknown; status?: unknown; url?: unknown };
 export const Route = createFileRoute("/api/admin/tracks/$trackId/social/$platform")({
   server: {
     handlers: {
-      PATCH: async ({ request }) => {
+      PATCH: async ({ params, request }) => {
         const unauthorized = await requireAdmin(request);
 
         if (unauthorized) {
           return unauthorized;
         }
 
-        // .../tracks/<idOrLogId>/social/<platform>
-        const parts = new URL(request.url).pathname.split("/").filter(Boolean);
-        const idOrLogId = parts[parts.length - 3] ?? "";
-        const platform = parts[parts.length - 1] ?? "";
+        const idOrLogId = params.trackId;
+        const platform = params.platform;
 
         try {
           const body = (await request.json()) as PatchBody;
@@ -49,7 +48,7 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/social/$platfor
           const track = await getTrackByIdOrLogId(idOrLogId);
 
           if (!track) {
-            return jsonError(404, "not_found", `No track with id ${idOrLogId}`);
+            return trackNotFoundResponse(idOrLogId);
           }
 
           const updated = await updateSocialStatus(track.trackId, platform, update);
@@ -64,7 +63,7 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/social/$platfor
 
           return Response.json({ ok: true, platform, status, trackId: track.trackId });
         } catch (error) {
-          return jsonError(500, "error", error instanceof Error ? error.message : String(error));
+          return apiErrorResponse(error);
         }
       },
     },

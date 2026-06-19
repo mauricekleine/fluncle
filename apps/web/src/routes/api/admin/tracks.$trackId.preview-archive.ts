@@ -2,11 +2,11 @@ import { createFileRoute } from "@tanstack/react-router";
 import { env } from "cloudflare:workers";
 
 import { jsonError, requireAdmin } from "../../../lib/server/env";
+import { apiErrorResponse, trackNotFoundResponse } from "../../../lib/server/http-errors";
 import {
   archivePreviewForTrack,
   getPreviewArchiveMetadata,
 } from "../../../lib/server/preview-archive";
-import { ApiError } from "../../../lib/server/spotify";
 import { getTrackByIdOrLogId } from "../../../lib/server/tracks";
 
 // POST /api/admin/tracks/:idOrLogId/preview-archive — stores one official 30s
@@ -15,20 +15,20 @@ import { getTrackByIdOrLogId } from "../../../lib/server/tracks";
 export const Route = createFileRoute("/api/admin/tracks/$trackId/preview-archive")({
   server: {
     handlers: {
-      GET: async ({ request }) => {
+      GET: async ({ params, request }) => {
         const unauthorized = await requireAdmin(request);
 
         if (unauthorized) {
           return unauthorized;
         }
 
-        const idOrLogId = idSegment(request.url);
+        const idOrLogId = params.trackId;
 
         try {
           const archive = await getPreviewArchiveMetadata(idOrLogId);
 
           if (!archive) {
-            return jsonError(404, "not_found", `No track with id ${idOrLogId}`);
+            return trackNotFoundResponse(idOrLogId);
           }
 
           return Response.json({
@@ -42,23 +42,23 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/preview-archive
             trackId: archive.trackId,
           });
         } catch (error) {
-          return jsonError(500, "error", error instanceof Error ? error.message : String(error));
+          return apiErrorResponse(error);
         }
       },
-      POST: async ({ request }) => {
+      POST: async ({ params, request }) => {
         const unauthorized = await requireAdmin(request);
 
         if (unauthorized) {
           return unauthorized;
         }
 
-        const idOrLogId = idSegment(request.url);
+        const idOrLogId = params.trackId;
 
         try {
           const track = await getTrackByIdOrLogId(idOrLogId);
 
           if (!track) {
-            return jsonError(404, "not_found", `No track with id ${idOrLogId}`);
+            return trackNotFoundResponse(idOrLogId);
           }
 
           const form = await request.formData();
@@ -93,22 +93,12 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/preview-archive
             trackId: track.trackId,
           });
         } catch (error) {
-          if (error instanceof ApiError) {
-            return jsonError(error.status, error.code, error.message);
-          }
-
-          return jsonError(500, "error", error instanceof Error ? error.message : String(error));
+          return apiErrorResponse(error);
         }
       },
     },
   },
 });
-
-function idSegment(url: string): string {
-  const parts = new URL(url).pathname.split("/").filter(Boolean);
-
-  return parts[parts.length - 2] ?? "";
-}
 
 function stringField(form: FormData, name: string): string | undefined {
   const value = form.get(name);

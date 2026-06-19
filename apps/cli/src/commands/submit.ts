@@ -1,24 +1,14 @@
+import {
+  type SearchResponse,
+  type SubmissionRequest,
+  type SubmissionResponse,
+  type TrackSearchResult,
+} from "@fluncle/contracts";
 import { publicApiGet, publicApiPost } from "../api";
 import { promptLine, selectWithKeyboard, truncateTerminalLine } from "../interactive";
 import { CliError } from "../output";
 
-type SearchResponse = {
-  ok: true;
-  results: SearchCandidate[];
-};
-
-type SubmitResponse = {
-  ok: true;
-};
-
-type SearchCandidate = {
-  id: string;
-  spotifyUrl: string;
-  title: string;
-  artists: string[];
-  album?: string;
-  artworkUrl?: string;
-};
+export type SearchCandidate = TrackSearchResult;
 
 const PROMPT_NON_INTERACTIVE_MESSAGE =
   "fluncle submit requires an interactive terminal for prompts.";
@@ -48,7 +38,7 @@ export async function submitCommand(input: string | undefined): Promise<void> {
   const note = await promptLine("Note (optional): ", PROMPT_NON_INTERACTIVE_MESSAGE);
   const contact = await promptLine("Contact (optional): ", PROMPT_NON_INTERACTIVE_MESSAGE);
 
-  await publicApiPost<SubmitResponse>("/api/submissions", {
+  await publicApiPost<SubmissionResponse>("/api/submissions", {
     album: selected.album,
     artists: selected.artists,
     artworkUrl: selected.artworkUrl,
@@ -59,7 +49,7 @@ export async function submitCommand(input: string | undefined): Promise<void> {
     spotifyTrackId: selected.id,
     spotifyUrl: selected.spotifyUrl,
     title: selected.title,
-  });
+  } satisfies SubmissionRequest);
 
   console.log("Logged. Fluncle will give it a listen.");
 }

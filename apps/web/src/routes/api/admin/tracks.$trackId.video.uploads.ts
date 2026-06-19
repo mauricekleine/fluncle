@@ -1,6 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { jsonError, requireAdmin } from "../../../lib/server/env";
+import {
+  apiErrorResponse,
+  noLogIdResponse,
+  trackNotFoundResponse,
+} from "../../../lib/server/http-errors";
 import { VIDEOS_BUCKET, presignUploads } from "../../../lib/server/r2-presign";
 import { getTrackByIdOrLogId } from "../../../lib/server/tracks";
 import { artifactByField } from "../../../lib/server/video-bundle";
@@ -16,30 +21,24 @@ import { artifactByField } from "../../../lib/server/video-bundle";
 export const Route = createFileRoute("/api/admin/tracks/$trackId/video/uploads")({
   server: {
     handlers: {
-      POST: async ({ request }) => {
+      POST: async ({ params, request }) => {
         const unauthorized = await requireAdmin(request);
 
         if (unauthorized) {
           return unauthorized;
         }
 
-        // .../tracks/<idOrLogId>/video/uploads — id is two segments before the tail.
-        const parts = new URL(request.url).pathname.split("/").filter(Boolean);
-        const idOrLogId = parts[parts.length - 3] ?? "";
+        const idOrLogId = params.trackId;
 
         try {
           const track = await getTrackByIdOrLogId(idOrLogId);
 
           if (!track) {
-            return jsonError(404, "not_found", `No track with id ${idOrLogId}`);
+            return trackNotFoundResponse(idOrLogId);
           }
 
           if (!track.logId) {
-            return jsonError(
-              400,
-              "no_log_id",
-              "Track has no Log ID; every video needs a coordinate. Backfill the ISRC/Log ID first.",
-            );
+            return noLogIdResponse();
           }
 
           const body = (await request.json().catch(() => undefined)) as
@@ -88,7 +87,7 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/video/uploads")
 
           return Response.json({ logId: track.logId, ok: true, trackId: track.trackId, uploads });
         } catch (error) {
-          return jsonError(500, "error", error instanceof Error ? error.message : String(error));
+          return apiErrorResponse(error);
         }
       },
     },

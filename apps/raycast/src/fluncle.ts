@@ -1,3 +1,4 @@
+import { type AddTrackResponse, type ApiFailure, type TrackListItem } from "@fluncle/contracts";
 import { getPreferenceValues } from "@raycast/api";
 import { execFile } from "node:child_process";
 
@@ -5,44 +6,25 @@ type Preferences = {
   flunclePath: string;
 };
 
-export type AddResult = {
-  ok: true;
-  track: {
-    trackId: string;
-    spotifyUrl: string;
-    title: string;
-    artists: string[];
-    album?: string;
-    durationMs: number;
-  };
-  dryRun: boolean;
-  addedToSpotify: boolean;
-  postedToTelegram: boolean;
-  message: string;
-};
+export type AddResult = AddTrackResponse;
 
-export type RecentTrack = {
-  trackId: string;
-  spotifyUrl: string;
-  title: string;
-  artists: string[];
-  album?: string;
-  albumImageUrl?: string;
-  note?: string;
-  addedAt: string;
-  addedToSpotify: boolean;
-  postedToTelegram: boolean;
-};
+export type RecentTrack = Pick<
+  TrackListItem,
+  | "addedAt"
+  | "addedToSpotify"
+  | "album"
+  | "albumImageUrl"
+  | "artists"
+  | "note"
+  | "postedToTelegram"
+  | "spotifyUrl"
+  | "title"
+  | "trackId"
+>;
 
 type RecentResult = {
   ok: true;
   tracks: RecentTrack[];
-};
-
-type FluncleFailure = {
-  ok: false;
-  code: string;
-  message: string;
 };
 
 class FluncleCommandError extends Error {
@@ -108,10 +90,10 @@ async function runFluncleJson<T>(args: string[]): Promise<T> {
     throw new FluncleCommandError("empty_output", "Fluncle did not return any output");
   }
 
-  let parsed: T | FluncleFailure;
+  let parsed: ApiFailure | T;
 
   try {
-    parsed = JSON.parse(output) as T | FluncleFailure;
+    parsed = JSON.parse(output) as ApiFailure | T;
   } catch {
     throw new FluncleCommandError("invalid_output", output);
   }
@@ -144,6 +126,6 @@ function execFluncle(args: string[]): Promise<{ stdout: string; stderr: string }
   });
 }
 
-function isFailure(value: unknown): value is FluncleFailure {
+function isFailure(value: unknown): value is ApiFailure {
   return typeof value === "object" && value !== null && "ok" in value && value.ok === false;
 }

@@ -1,9 +1,5 @@
+import { type SpotifyAuthStartResponse } from "@fluncle/contracts";
 import { adminApiGet } from "../api";
-
-type SpotifyAuthStartResponse = {
-  ok: true;
-  authUrl: string;
-};
 
 export async function authSpotifyCommand(): Promise<void> {
   const response = await adminApiGet<SpotifyAuthStartResponse>("/api/admin/spotify/auth/start");

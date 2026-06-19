@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { jsonError, requireAdmin, signState } from "../../../../../lib/server/env";
+import { requireAdmin, signState } from "../../../../../lib/server/env";
+import { apiErrorResponse } from "../../../../../lib/server/http-errors";
 import { buildSpotifyAuthUrl } from "../../../../../lib/server/spotify";
 
 export const Route = createFileRoute("/api/admin/spotify/auth/start")({
@@ -25,7 +26,7 @@ export const Route = createFileRoute("/api/admin/spotify/auth/start")({
             ok: true,
           });
         } catch (error) {
-          return jsonError(500, "error", error instanceof Error ? error.message : String(error));
+          return apiErrorResponse(error);
         }
       },
     },

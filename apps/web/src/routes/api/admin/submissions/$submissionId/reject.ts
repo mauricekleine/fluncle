@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { jsonError, requireAdmin } from "../../../../../lib/server/env";
+import { requireAdmin } from "../../../../../lib/server/env";
+import { apiErrorResponse } from "../../../../../lib/server/http-errors";
 import { rejectSubmission } from "../../../../../lib/server/submissions";
-import { ApiError } from "../../../../../lib/server/spotify";
 
 export const Route = createFileRoute("/api/admin/submissions/$submissionId/reject")({
   server: {
@@ -21,11 +21,7 @@ export const Route = createFileRoute("/api/admin/submissions/$submissionId/rejec
             submission,
           });
         } catch (error) {
-          if (error instanceof ApiError) {
-            return jsonError(error.status, error.code, error.message);
-          }
-
-          return jsonError(500, "error", error instanceof Error ? error.message : String(error));
+          return apiErrorResponse(error);
         }
       },
     },

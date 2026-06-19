@@ -1,3 +1,15 @@
+import {
+  type CueEntry,
+  type MixtapeCreateResponse,
+  type MixtapeDeleteResponse,
+  type MixtapeDTO,
+  type MixtapeMember,
+  type MixtapeMembersRequest,
+  type MixtapePublishResponse,
+  type MixtapeRequestBody,
+  type MixtapeUpdateResponse,
+  type MixtapesResponse,
+} from "@fluncle/contracts";
 import { existsSync, readFileSync } from "node:fs";
 import {
   adminApiDelete,
@@ -9,39 +21,8 @@ import {
 } from "../api";
 import { CliError } from "../output";
 
-export type MixtapeMemberItem = {
-  albumImageUrl?: string;
-  artists: string[];
-  durationMs: number;
-  logId?: string;
-  startMs?: number;
-  title: string;
-  trackId: string;
-};
-
-export type MixtapeListItem = {
-  addedAt?: string;
-  artists: ["Fluncle"];
-  coverImageUrl?: string;
-  createdAt?: string;
-  durationMs?: number;
-  externalUrls: {
-    mixcloud?: string;
-    soundcloud?: string;
-    youtube?: string;
-  };
-  id?: string;
-  logId?: string;
-  memberCount: number;
-  members: MixtapeMemberItem[];
-  note?: string;
-  recordedAt?: string;
-  sequenceNumber?: number;
-  status?: "draft" | "published";
-  title: string;
-  type: "mixtape";
-  updatedAt?: string;
-};
+export type MixtapeListItem = MixtapeDTO;
+export type MixtapeMemberItem = MixtapeMember;
 
 export type MixtapeCreateOptions = {
   durationMs?: string;
@@ -67,41 +48,6 @@ export type MixtapeMembersOptions = {
   from?: string;
   json: boolean;
 };
-
-type MixtapesResponse = {
-  mixtapes: MixtapeListItem[];
-  ok: true;
-};
-
-type MixtapeCreateResponse = {
-  mixtape: MixtapeListItem;
-  ok: true;
-};
-
-type MixtapeUpdateResponse = {
-  mixtape: MixtapeListItem;
-  ok: true;
-};
-
-type MixtapePublishResponse = {
-  mixtape: MixtapeListItem;
-  ok: true;
-};
-
-type MixtapeDeleteResponse = {
-  ok: true;
-};
-
-type MixtapeBody = {
-  durationMs?: number;
-  mixcloudUrl?: string;
-  note?: string;
-  recordedAt?: string;
-  soundcloudUrl?: string;
-  youtubeUrl?: string;
-};
-
-type CueEntry = { ref: string; startMs?: number };
 
 export async function mixtapesCommand(): Promise<MixtapeListItem[]> {
   const response = await publicApiGet<MixtapesResponse>("/api/mixtapes");
@@ -138,7 +84,7 @@ export async function mixtapeMembersCommand(
 
   return adminApiPut<MixtapeUpdateResponse>(
     `/api/admin/mixtapes/${encodeURIComponent(id)}/members`,
-    { members },
+    { members } satisfies MixtapeMembersRequest,
   );
 }
 
@@ -169,8 +115,8 @@ export async function mixtapeGetCommand(idOrLogId: string): Promise<MixtapeListI
   return match;
 }
 
-function buildBody(options: MixtapeCreateOptions | MixtapeUpdateOptions): MixtapeBody {
-  const body: MixtapeBody = {};
+function buildBody(options: MixtapeCreateOptions | MixtapeUpdateOptions): MixtapeRequestBody {
+  const body: MixtapeRequestBody = {};
 
   if (options.note !== undefined) {
     body.note = options.note;

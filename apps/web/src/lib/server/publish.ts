@@ -1,4 +1,10 @@
+import { type AddTrackResult } from "@fluncle/contracts";
+
+export type { AddTrackResult };
+
 import { logPageUrl } from "../fluncle-links";
+import { formatDuration } from "../format";
+import { parseArtistsJson } from "./artists";
 import { getDb, typedRow } from "./db";
 import { enrichFromDeezer, lookupIsrcFromDeezer } from "./deezer";
 import { resolveLogId } from "./log-id";
@@ -15,29 +21,6 @@ import { formatTelegramMessage, postToTelegram } from "./telegram";
 type AddOptions = {
   note?: string;
   dryRun?: boolean;
-};
-
-export type AddTrackResult = {
-  track: {
-    trackId: string;
-    spotifyUrl: string;
-    title: string;
-    artists: string[];
-    album?: string;
-    albumImageUrl?: string;
-    durationMs: number;
-    logId?: string;
-    /** The finding's permanent log page on fluncle.com; absent until a Log ID exists. */
-    logPageUrl?: string;
-    isrc?: string;
-    label?: string;
-    previewUrl?: string;
-    popularity?: number;
-  };
-  dryRun: boolean;
-  addedToSpotify: boolean;
-  postedToTelegram: boolean;
-  message: string;
 };
 
 type TrackRow = {
@@ -64,7 +47,7 @@ export async function publishTrack(
   const existing = typedRow<TrackRow>(existingResult.rows);
 
   if (existing) {
-    const existingArtists = JSON.parse(existing.artists_json) as string[];
+    const existingArtists = parseArtistsJson(existing.artists_json);
     const existingLine = `${existingArtists.join(", ")} — ${existing.title}`;
 
     if (existing.added_to_spotify && existing.posted_to_telegram) {
@@ -270,14 +253,6 @@ Posted to Telegram`;
     },
     { label: deezer.label, logId, previewUrl: deezer.previewUrl },
   );
-}
-
-function formatDuration(durationMs: number): string {
-  const totalSeconds = Math.round(durationMs / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
 function buildAddResult(

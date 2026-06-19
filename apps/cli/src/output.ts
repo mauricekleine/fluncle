@@ -1,8 +1,6 @@
-export type JsonFailure = {
-  ok: false;
-  code: string;
-  message: string;
-};
+import { type ApiFailure } from "@fluncle/contracts";
+
+export type { ApiFailure as JsonFailure };
 
 export class CliError extends Error {
   code: string;
@@ -18,7 +16,7 @@ export function printJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
 }
 
-export function toJsonFailure(error: unknown): JsonFailure {
+export function toJsonFailure(error: unknown): ApiFailure {
   if (error instanceof CliError) {
     return {
       code: error.code,

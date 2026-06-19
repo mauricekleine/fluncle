@@ -36,10 +36,16 @@ function adminPost(url: string, body: unknown): Request {
 
 async function postHandler(routeModule: {
   Route: unknown;
-}): Promise<(opts: { request: Request }) => Promise<Response>> {
+}): Promise<(opts: { params: Record<string, string>; request: Request }) => Promise<Response>> {
   // The file-route options object carries the server handlers we registered.
   const route = routeModule.Route as {
-    options: { server: { handlers: { POST: (opts: { request: Request }) => Promise<Response> } } };
+    options: {
+      server: {
+        handlers: {
+          POST: (opts: { params: Record<string, string>; request: Request }) => Promise<Response>;
+        };
+      };
+    };
   };
 
   return route.options.server.handlers.POST;
@@ -53,6 +59,7 @@ describe("POST .../video/uploads (presign)", () => {
     const POST = await postHandler({ Route });
 
     const response = await POST({
+      params: { trackId: "004.7.2I" },
       request: adminPost("https://www.fluncle.com/api/admin/tracks/004.7.2I/video/uploads", {
         fields: ["footage", "cover"],
       }),
@@ -84,6 +91,7 @@ describe("POST .../video/uploads (presign)", () => {
     const POST = await postHandler({ Route });
 
     const response = await POST({
+      params: { trackId: "004.7.2I" },
       request: new Request("https://www.fluncle.com/api/admin/tracks/004.7.2I/video/uploads", {
         body: JSON.stringify({ fields: ["footage"] }),
         method: "POST",
@@ -100,6 +108,7 @@ describe("POST .../video/uploads (presign)", () => {
     const POST = await postHandler({ Route });
 
     const response = await POST({
+      params: { trackId: "004.7.2I" },
       request: adminPost("https://www.fluncle.com/api/admin/tracks/004.7.2I/video/uploads", {
         fields: ["cover"],
       }),
@@ -119,6 +128,7 @@ describe("POST .../video/finalize", () => {
     const POST = await postHandler({ Route });
 
     const response = await POST({
+      params: { trackId: "004.7.2I" },
       request: adminPost("https://www.fluncle.com/api/admin/tracks/004.7.2I/video/finalize", {
         videoModel: "anthropic/claude-sonnet-4-5",
         videoModelReasoning: "medium",
@@ -147,6 +157,7 @@ describe("POST .../video/finalize", () => {
     const POST = await postHandler({ Route });
 
     const response = await POST({
+      params: { trackId: "004.7.2I" },
       request: adminPost("https://www.fluncle.com/api/admin/tracks/004.7.2I/video/finalize", {
         videoVehicle: "submarine",
       }),

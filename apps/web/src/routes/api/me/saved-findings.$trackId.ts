@@ -1,33 +1,17 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { deleteSavedFinding, enforceRateLimit } from "../../../lib/server/account-data";
-import { requireJsonMutation, requirePublicUser } from "../../../lib/server/public-auth";
+import { deleteSavedFinding, requireAccountMutation } from "../../../lib/server/account-data";
 
 export const Route = createFileRoute("/api/me/saved-findings/$trackId")({
   server: {
     handlers: {
       DELETE: async ({ params, request }) => {
-        const user = await requirePublicUser(request);
+        const user = await requireAccountMutation(request, {
+          action: "account.saved.delete",
+          limit: 90,
+        });
 
         if (user instanceof Response) {
           return user;
-        }
-
-        const guard = requireJsonMutation(request, user);
-
-        if (guard) {
-          return guard;
-        }
-
-        const limited = await enforceRateLimit({
-          action: "account.saved.delete",
-          limit: 90,
-          request,
-          userId: user.id,
-          windowMs: 60 * 60 * 1000,
-        });
-
-        if (limited) {
-          return limited;
         }
 
         const result = await deleteSavedFinding(user, params.trackId);

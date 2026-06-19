@@ -1,3 +1,7 @@
+import { type TrackSearchResult } from "@fluncle/contracts";
+
+export type { TrackSearchResult };
+
 import { getDb, typedRow } from "./db";
 import { readEnvs } from "./env";
 
@@ -101,15 +105,6 @@ export type TrackMetadata = {
   isrc?: string;
   popularity?: number;
   releaseDate?: string;
-};
-
-export type TrackSearchResult = {
-  id: string;
-  spotifyUrl: string;
-  title: string;
-  artists: string[];
-  album?: string;
-  artworkUrl?: string;
 };
 
 export async function buildSpotifyAuthUrl(state: string): Promise<string> {

@@ -1,31 +1,13 @@
+import {
+  type Submission,
+  type SubmissionResponse,
+  type SubmissionsResponse,
+} from "@fluncle/contracts";
 import { createInterface } from "node:readline/promises";
 import { adminApiGet, adminApiPost } from "../api";
 import { addCommand } from "./add";
 
-type Submission = {
-  id: string;
-  spotifyTrackId: string;
-  spotifyUrl: string;
-  title: string;
-  artists: string[];
-  album?: string;
-  note?: string;
-  contact?: string;
-  source: "web" | "cli" | "ssh";
-  status: "pending" | "approved" | "rejected";
-  createdAt: string;
-  reviewedAt?: string;
-};
-
-type SubmissionsResponse = {
-  ok: true;
-  submissions: Submission[];
-};
-
-type SubmissionResponse = {
-  ok: true;
-  submission: Submission;
-};
+export type { Submission };
 
 export async function listSubmissionsCommand(): Promise<void> {
   const response = await adminApiGet<SubmissionsResponse>("/api/admin/submissions");

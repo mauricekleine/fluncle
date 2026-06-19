@@ -3,6 +3,11 @@ import { env } from "cloudflare:workers";
 
 import { FOUND_BASE } from "../../../lib/media";
 import { jsonError, requireAdmin } from "../../../lib/server/env";
+import {
+  apiErrorResponse,
+  noLogIdResponse,
+  trackNotFoundResponse,
+} from "../../../lib/server/http-errors";
 import { getTrackByIdOrLogId } from "../../../lib/server/tracks";
 import { updateTrack } from "../../../lib/server/track-update";
 import {
@@ -26,30 +31,24 @@ import {
 export const Route = createFileRoute("/api/admin/tracks/$trackId/video")({
   server: {
     handlers: {
-      POST: async ({ request }) => {
+      POST: async ({ params, request }) => {
         const unauthorized = await requireAdmin(request);
 
         if (unauthorized) {
           return unauthorized;
         }
 
-        // .../tracks/<idOrLogId>/video — the id is the segment before "video".
-        const parts = new URL(request.url).pathname.split("/").filter(Boolean);
-        const idOrLogId = parts[parts.length - 2] ?? "";
+        const idOrLogId = params.trackId;
 
         try {
           const track = await getTrackByIdOrLogId(idOrLogId);
 
           if (!track) {
-            return jsonError(404, "not_found", `No track with id ${idOrLogId}`);
+            return trackNotFoundResponse(idOrLogId);
           }
 
           if (!track.logId) {
-            return jsonError(
-              400,
-              "no_log_id",
-              "Track has no Log ID; every video needs a coordinate. Backfill the ISRC/Log ID first.",
-            );
+            return noLogIdResponse();
           }
 
           const form = await request.formData();
@@ -101,7 +100,7 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/video")({
             urls: stored,
           });
         } catch (error) {
-          return jsonError(500, "error", error instanceof Error ? error.message : String(error));
+          return apiErrorResponse(error);
         }
       },
     },

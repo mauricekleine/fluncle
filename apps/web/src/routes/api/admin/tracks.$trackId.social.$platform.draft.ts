@@ -2,9 +2,13 @@ import { createFileRoute } from "@tanstack/react-router";
 
 import { readCaptions } from "../../../lib/server/captions";
 import { jsonError, requireAdmin } from "../../../lib/server/env";
+import {
+  apiErrorResponse,
+  noLogIdResponse,
+  trackNotFoundResponse,
+} from "../../../lib/server/http-errors";
 import { pushTikTokDraft, pushYouTubeShort } from "../../../lib/server/postiz";
 import { upsertPost } from "../../../lib/server/social";
-import { ApiError } from "../../../lib/server/spotify";
 import { getTrackByIdOrLogId } from "../../../lib/server/tracks";
 
 // POST /api/admin/tracks/:idOrLogId/social/:platform/draft
@@ -15,23 +19,22 @@ import { getTrackByIdOrLogId } from "../../../lib/server/tracks";
 //   - youtube → Short uploaded directly (public) with title + custom thumbnail;
 //               lands as `published` (Content ID may claim it — accepted).
 // Instagram is intentionally absent: no legitimate automated audio path (see
-// postiz.ts / docs). The route keeps the `/draft` path for back-compat.
+// postiz.ts / docs). The `/draft` verb is TikTok-shaped; it is the single push
+// endpoint, not a back-compat path.
 const SUPPORTED = new Set(["tiktok", "youtube"]);
 
 export const Route = createFileRoute("/api/admin/tracks/$trackId/social/$platform/draft")({
   server: {
     handlers: {
-      POST: async ({ request }) => {
+      POST: async ({ params, request }) => {
         const unauthorized = await requireAdmin(request);
 
         if (unauthorized) {
           return unauthorized;
         }
 
-        // .../tracks/<idOrLogId>/social/<platform>/draft
-        const parts = new URL(request.url).pathname.split("/").filter(Boolean);
-        const idOrLogId = parts[parts.length - 4] ?? "";
-        const platform = parts[parts.length - 2] ?? "";
+        const idOrLogId = params.trackId;
+        const platform = params.platform;
 
         if (!SUPPORTED.has(platform)) {
           return jsonError(400, "unsupported_platform", `Unsupported platform: ${platform}`);
@@ -41,19 +44,22 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/social/$platfor
           const track = await getTrackByIdOrLogId(idOrLogId);
 
           if (!track) {
-            return jsonError(404, "not_found", `No track with id ${idOrLogId}`);
+            return trackNotFoundResponse(idOrLogId);
           }
 
           if (!track.logId) {
-            return jsonError(400, "no_log_id", "Track has no Log ID");
+            return noLogIdResponse();
           }
 
           if (!track.videoUrl) {
             return jsonError(400, "no_video", "Track has no video; render + upload it first");
           }
 
-          // video_url is the with-audio review cut (…/footage.mp4); TikTok needs
-          // the silent sibling, the direct-post platforms use the audio cut.
+          // video_url is the with-audio review cut (…/footage.mp4). TikTok needs
+          // the silent sibling; YouTube uses the audio cut + the cover thumbnail.
+          // Derive all three from the STORED video_url so they agree even when a
+          // row's video_url is non-canonical (the silent/cover siblings ride
+          // alongside the footage by convention — same path, different filename).
           const footage = track.videoUrl;
           // Read the caption from the public note.txt (works in dev too — the
           // VIDEOS binding is an empty local bucket there).
@@ -88,11 +94,7 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/social/$platfor
             trackId: track.trackId,
           });
         } catch (error) {
-          if (error instanceof ApiError) {
-            return jsonError(error.status, error.code, error.message);
-          }
-
-          return jsonError(500, "error", error instanceof Error ? error.message : String(error));
+          return apiErrorResponse(error);
         }
       },
     },

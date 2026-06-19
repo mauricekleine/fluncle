@@ -1,37 +1,28 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { collectLogId, enforceRateLimit } from "../../../../lib/server/account-data";
-import { requireJsonMutation, requirePublicUser } from "../../../../lib/server/public-auth";
+import { collectLogId, requireAccountMutation } from "../../../../lib/server/account-data";
 import { jsonError } from "../../../../lib/server/env";
+import { parseJsonBody } from "../../../../lib/server/http-errors";
 
 export const Route = createFileRoute("/api/me/galaxy-progress/logs")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        const user = await requirePublicUser(request);
+        const user = await requireAccountMutation(request, {
+          action: "account.galaxy.log",
+          limit: 120,
+        });
 
         if (user instanceof Response) {
           return user;
         }
 
-        const guard = requireJsonMutation(request, user);
+        const parsed = await parseJsonBody(request);
 
-        if (guard) {
-          return guard;
+        if (parsed instanceof Response) {
+          return parsed;
         }
 
-        const limited = await enforceRateLimit({
-          action: "account.galaxy.log",
-          limit: 120,
-          request,
-          userId: user.id,
-          windowMs: 60 * 60 * 1000,
-        });
-
-        if (limited) {
-          return limited;
-        }
-
-        const body = (await request.json()) as { logId?: unknown };
+        const body = parsed.json as { logId?: unknown };
 
         if (typeof body.logId !== "string") {
           return jsonError(400, "invalid_request", "Missing Log ID");

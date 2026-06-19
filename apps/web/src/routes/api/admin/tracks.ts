@@ -1,9 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { NOTE_MAX_LENGTH } from "../../../lib/log-prose";
 import { jsonError, requireAdmin } from "../../../lib/server/env";
+import { apiErrorResponse, parseEditorialNote } from "../../../lib/server/http-errors";
 import { publishTrack } from "../../../lib/server/publish";
 import { triggerEnrichment } from "../../../lib/server/spinup";
-import { ApiError } from "../../../lib/server/spotify";
 import { decodeTrackCursor, listTracks, searchTracks } from "../../../lib/server/tracks";
 
 type AddTrackBody = {
@@ -72,24 +71,12 @@ export const Route = createFileRoute("/api/admin/tracks")({
 
           // The note rides into the Telegram post AND the stored editorial note,
           // so cap it here on the add path too — same 280 budget as the PATCH.
-          let note: string | undefined;
-          if (typeof body.note === "string") {
-            const trimmed = body.note.trim();
-
-            if (trimmed.length > NOTE_MAX_LENGTH) {
-              return jsonError(
-                422,
-                "note_too_long",
-                `Note must be ${NOTE_MAX_LENGTH} characters or less`,
-              );
-            }
-
-            note = trimmed || undefined;
-          }
+          // On add, an empty note means "no note" (omit it); PATCH treats "" as a clear.
+          const note = parseEditorialNote(body.note);
 
           const result = await publishTrack(body.spotifyUrl, {
             dryRun: body.dryRun === true,
-            note,
+            note: note || undefined,
           });
 
           // Kick off async enrichment on Spinup — a fast enqueue (the work runs
@@ -103,11 +90,7 @@ export const Route = createFileRoute("/api/admin/tracks")({
             ...result,
           });
         } catch (error) {
-          if (error instanceof ApiError) {
-            return jsonError(error.status, error.code, error.message);
-          }
-
-          return jsonError(500, "error", error instanceof Error ? error.message : String(error));
+          return apiErrorResponse(error);
         }
       },
     },

@@ -2,24 +2,11 @@
 // (track, platform). The generic track pipeline tops out at video-in-R2; this
 // tracks where that video went and its state on each platform.
 
+import { type SocialPostItem, type SocialStatusUpdate } from "@fluncle/contracts";
+
+export type { SocialPostItem, SocialStatusUpdate };
+
 import { getDb, typedRows } from "./db";
-
-export type SocialPostItem = {
-  createdAt: string;
-  externalId?: string;
-  platform: string;
-  publishedAt?: string;
-  scheduledFor?: string;
-  status: string;
-  updatedAt: string;
-  url?: string;
-};
-
-export type SocialStatusUpdate = {
-  scheduledFor?: string;
-  status: "scheduled" | "published" | "failed";
-  url?: string;
-};
 
 type SocialPostRow = {
   created_at: string;
@@ -116,15 +103,6 @@ export async function upsertPost(
   });
 
   await touchTrack(trackId, now);
-}
-
-/** The TikTok inbox push records a draft. */
-export async function upsertDraft(
-  trackId: string,
-  platform: string,
-  externalId: string,
-): Promise<void> {
-  await upsertPost(trackId, platform, "draft", externalId);
 }
 
 // A social-post change alters what the track's public surfaces show (the

@@ -5,6 +5,7 @@ import path from "node:path";
 import { Command, CommanderError } from "commander";
 import { fluncleAsciiLogo, fluncleTagline } from "./brand";
 import { setEnvProfile } from "./env";
+import { spotifyPlaylistUrl, telegramUrl } from "./links";
 import { printJson, toJsonFailure } from "./output";
 import { formatError } from "./retry";
 
@@ -833,9 +834,8 @@ async function runTrackGet(
     return;
   }
 
-  const mixtape = result.mixtape;
-
-  if (mixtape) {
+  if ("mixtape" in result) {
+    const mixtape = result.mixtape;
     console.log(`${mixtape.logId ? `${mixtape.logId}  ` : ""}${mixtape.title}`);
     console.log(
       [
@@ -853,18 +853,9 @@ async function runTrackGet(
 
   const t = result.track;
 
-  if (!t) {
-    throw new Error("Track lookup returned no finding or mixtape");
-  }
-
   console.log(`${t.logId ? `${t.logId}  ` : ""}${t.artists.join(", ")} — ${t.title}`);
   console.log(
-    [
-      t.bpm ? `${t.bpm} bpm` : undefined,
-      t.key ?? undefined,
-      t.label ?? undefined,
-      t.enrichmentStatus,
-    ]
+    [t.bpm ? `${t.bpm} bpm` : undefined, t.key, t.label, t.enrichmentStatus]
       .filter(Boolean)
       .join(" · "),
   );
@@ -1528,9 +1519,9 @@ Meta:
 
 Fluncle elsewhere:
   Web        https://www.fluncle.com
-  Spotify    https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0
+  Spotify    ${spotifyPlaylistUrl}
   TikTok     https://www.tiktok.com/@fluncle
-  Telegram   https://t.me/fluncle
+  Telegram   ${telegramUrl}
   More       fluncle about`;
 
 if (import.meta.main) {

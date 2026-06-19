@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { jsonError, requireAdmin } from "../../../lib/server/env";
+import { requireAdmin } from "../../../lib/server/env";
+import { apiErrorResponse, trackNotFoundResponse } from "../../../lib/server/http-errors";
 import { listSocialPosts } from "../../../lib/server/social";
 import { getTrackByIdOrLogId } from "../../../lib/server/tracks";
 
@@ -9,29 +10,27 @@ import { getTrackByIdOrLogId } from "../../../lib/server/tracks";
 export const Route = createFileRoute("/api/admin/tracks/$trackId/social")({
   server: {
     handlers: {
-      GET: async ({ request }) => {
+      GET: async ({ params, request }) => {
         const unauthorized = await requireAdmin(request);
 
         if (unauthorized) {
           return unauthorized;
         }
 
-        // .../tracks/<idOrLogId>/social
-        const parts = new URL(request.url).pathname.split("/").filter(Boolean);
-        const idOrLogId = parts[parts.length - 2] ?? "";
+        const idOrLogId = params.trackId;
 
         try {
           const track = await getTrackByIdOrLogId(idOrLogId);
 
           if (!track) {
-            return jsonError(404, "not_found", `No track with id ${idOrLogId}`);
+            return trackNotFoundResponse(idOrLogId);
           }
 
           const posts = await listSocialPosts(track.trackId);
 
           return Response.json({ ok: true, posts, trackId: track.trackId });
         } catch (error) {
-          return jsonError(500, "error", error instanceof Error ? error.message : String(error));
+          return apiErrorResponse(error);
         }
       },
     },

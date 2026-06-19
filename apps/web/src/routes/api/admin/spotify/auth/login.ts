@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { jsonError, signState } from "../../../../../lib/server/env";
+import { signState } from "../../../../../lib/server/env";
+import { apiErrorResponse } from "../../../../../lib/server/http-errors";
 import { buildSpotifyLoginUrl } from "../../../../../lib/server/spotify";
 
 // The admin web login front door — PUBLIC by design (this is how you prove who
@@ -25,7 +26,7 @@ export const Route = createFileRoute("/api/admin/spotify/auth/login")({
             status: 302,
           });
         } catch (error) {
-          return jsonError(500, "error", error instanceof Error ? error.message : String(error));
+          return apiErrorResponse(error);
         }
       },
     },

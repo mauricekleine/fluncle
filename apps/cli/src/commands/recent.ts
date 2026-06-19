@@ -1,79 +1,25 @@
+import { type MixtapeDTO, type TracksResponse, type TrackListItem } from "@fluncle/contracts";
 import { publicApiGet } from "../api";
 
-export type RecentTrack = {
-  type?: "finding";
-  trackId: string;
-  logId?: string;
-  logPageUrl?: string;
-  spotifyUrl: string;
-  title: string;
-  artists: string[];
-  album?: string;
-  albumImageUrl?: string;
-  note?: string;
-  addedAt: string;
-  durationMs?: number;
-  label?: string;
-  isrc?: string;
-  popularity?: number;
-  previewUrl?: string;
-  bpm?: number;
-  key?: string;
-  releaseDate?: string;
-  enrichmentStatus?: string;
-  videoModel?: string;
-  videoModelReasoning?: string;
-  videoUrl?: string;
-  videoVehicle?: string;
-  addedToSpotify: boolean;
-  postedToTelegram: boolean;
-};
+export type RecentTrack = TrackListItem;
+export type RecentMixtape = MixtapeDTO;
+export type RecentItem = MixtapeDTO | TrackListItem;
 
-export type RecentMixtape = {
-  addedAt?: string;
-  artists: ["Fluncle"];
-  coverImageUrl?: string;
-  durationMs?: number;
-  externalUrls: {
-    mixcloud?: string;
-    soundcloud?: string;
-    youtube?: string;
-  };
-  id?: string;
-  logId?: string;
-  memberCount: number;
-  members?: RecentTrack[];
-  note?: string;
-  title: string;
-  type: "mixtape";
-};
-
-export type ApiRecentTrack = Omit<RecentTrack, "addedToSpotify" | "postedToTelegram"> & {
-  addedToSpotify?: boolean;
-  postedToTelegram?: boolean;
-};
-
-export type RecentItem = RecentTrack | RecentMixtape;
-
-export type TracksResponse = {
-  tracks: Array<ApiRecentTrack | RecentMixtape>;
-  totalCount: number;
-  nextCursor?: string;
-};
+export type { TracksResponse };
 
 // /api/tracks caps a single page at 48. `recent` only ever wants the newest few,
 // but an explicit `--limit` above the page cap pages through with the cursor so
 // the requested count is honoured rather than silently clipped at one page.
 const pageSize = 48;
 
-export function mapTrack(track: ApiRecentTrack | RecentMixtape): RecentItem {
+export function mapTrack(track: RecentTrack | RecentMixtape): RecentItem {
   if (track.type === "mixtape") {
     return track;
   }
 
   return {
     addedAt: track.addedAt,
-    addedToSpotify: track.addedToSpotify ?? true,
+    addedToSpotify: track.addedToSpotify,
     album: track.album,
     albumImageUrl: track.albumImageUrl,
     artists: track.artists,
@@ -86,7 +32,7 @@ export function mapTrack(track: ApiRecentTrack | RecentMixtape): RecentItem {
     logId: track.logId,
     note: track.note,
     popularity: track.popularity,
-    postedToTelegram: track.postedToTelegram ?? true,
+    postedToTelegram: track.postedToTelegram,
     previewUrl: track.previewUrl,
     releaseDate: track.releaseDate,
     spotifyUrl: track.spotifyUrl,

@@ -1,4 +1,5 @@
 import { getDb, typedRow } from "./db";
+import { sha256Hex } from "./hash";
 import { ApiError } from "./spotify";
 
 type PreviewArchiveTrack = {
@@ -182,10 +183,4 @@ export async function getPreviewArchiveMetadata(
     source: row.preview_archive_source,
     trackId: row.track_id,
   };
-}
-
-async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }

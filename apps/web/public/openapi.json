@@ -433,7 +433,7 @@
               },
               {
                 "type": "object",
-                "required": ["id", "createdAt", "featureFlags"],
+                "required": ["id", "createdAt"],
                 "properties": {
                   "id": {
                     "type": "string"
@@ -447,12 +447,6 @@
                   "createdAt": {
                     "type": "string",
                     "format": "date-time"
-                  },
-                  "featureFlags": {
-                    "type": "object",
-                    "additionalProperties": {
-                      "type": "boolean"
-                    }
                   }
                 }
               }

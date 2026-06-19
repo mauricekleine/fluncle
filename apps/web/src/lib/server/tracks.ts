@@ -1,89 +1,18 @@
+import {
+  type FeedListPage,
+  type Galaxy,
+  type TrackCursor,
+  type TrackFeatures,
+  type TrackListPage,
+  type TrackListItem,
+} from "@fluncle/contracts";
 import { logPageUrl } from "../fluncle-links";
-import { type Galaxy, GALAXIES, galaxyForVibe } from "../galaxies";
+import { GALAXIES, galaxyForVibe } from "../galaxies";
 import { type FeedItem, type MixtapeMember, rowToMixtape } from "../mixtapes";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 
-export type TrackCursor = {
-  addedAt: string;
-  trackId: string;
-};
-
-/**
- * Enrichment's track-level spectral summary (from `features_json`), surfaced as
- * creative fuel for the video agent — it steers concept choices (vehicle,
- * texture, which band drives what), never per-frame reactivity (that is the
- * Remotion pipeline's own analysis). Absent until a track is enriched.
- */
-export type TrackFeatures = {
-  /** Spectral centroid in Hz — overall brightness. */
-  centroidHz?: number;
-  /** Fraction of energy >5kHz — treble/air. 0..1. */
-  highRatio?: number;
-  /** Spectral flatness of the mids — tonal (low) vs noisy (high). 0..1. */
-  midFlatness?: number;
-  /** Onsets per second — rhythmic busyness. */
-  onsetRate?: number;
-  /** Fraction of energy <120Hz — sub-bass weight. 0..1. */
-  subBassRatio?: number;
-};
-
-export type TrackListItem = {
-  addedAt: string;
-  addedToSpotify: boolean;
-  album?: string;
-  albumImageUrl?: string;
-  artists: string[];
-  bpm?: number;
-  durationMs: number;
-  enrichmentStatus: string;
-  /** Track-level spectral descriptors (creative fuel); absent until enriched. */
-  features?: TrackFeatures;
-  /** Derived vibe galaxy (the four quadrants); absent until placed. See lib/galaxies. */
-  galaxy?: { key: Galaxy; name: string };
-  isrc?: string;
-  key?: string;
-  label?: string;
-  logId?: string;
-  /** The finding's permanent log page on fluncle.com; absent until a Log ID exists. */
-  logPageUrl?: string;
-  note?: string;
-  popularity?: number;
-  postedToTelegram: boolean;
-  previewUrl?: string;
-  releaseDate?: string;
-  spotifyUrl: string;
-  /** The live TikTok post URL, if a published post exists (from social_posts). */
-  tiktokUrl?: string;
-  /** The live YouTube post URL, if a published post exists (from social_posts). */
-  youtubeUrl?: string;
-  title: string;
-  trackId: string;
-  /** Last content change to the record; absent for rows predating the column. */
-  updatedAt?: string;
-  /** The AI model that authored the video, in <provider>/<model> notation. */
-  videoModel?: string;
-  /** The reasoning/thinking effort the authoring model ran at (e.g. "high"). */
-  videoModelReasoning?: string;
-  videoUrl?: string;
-  /** The video's travelling vehicle — the diversity ledger for the video agent. */
-  videoVehicle?: string;
-  /** Vibe-map placement (admin tagging). Light(-1)↔Dark(+1); absent = unplaced. */
-  vibeX?: number;
-  /** Vibe-map placement. Floaty(-1)↔Driving(+1); absent = unplaced. */
-  vibeY?: number;
-  type?: "finding";
-};
-
-export type TrackListPage = {
-  nextCursor?: string;
-  totalCount: number;
-  tracks: TrackListItem[];
-};
-
-export type FeedListPage = Omit<TrackListPage, "tracks"> & {
-  tracks: FeedItem[];
-};
+export type { FeedListPage, TrackCursor, TrackFeatures, TrackListPage, TrackListItem };
 
 type TrackRow = {
   added_at: string;
@@ -168,7 +97,8 @@ function parseFeatures(json: string | null): TrackFeatures | undefined {
       subBassRatio: finiteOrUndefined(raw.subBassRatio),
     };
     return Object.values(features).some((v) => v !== undefined) ? features : undefined;
-  } catch {
+  } catch (error) {
+    console.warn("parseFeatures: malformed features_json column", error);
     return undefined;
   }
 }

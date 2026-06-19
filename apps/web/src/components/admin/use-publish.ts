@@ -13,15 +13,6 @@ import { type TrackListItem } from "@/lib/server/tracks";
 export type BoardRow = TrackListItem & { posts: SocialPostItem[] };
 export type BoardPage = { nextCursor?: string; totalCount: number; tracks: BoardRow[] };
 
-/** What the manage-status dialog is operating on. */
-export type PublishTarget = {
-  currentStatus?: string;
-  platform: string;
-  platformLabel: string;
-  title: string;
-  trackId: string;
-};
-
 export function usePublish(boardKey: readonly unknown[]) {
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState<Record<string, boolean>>({});

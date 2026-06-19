@@ -31,6 +31,7 @@ function makeMixtape(addedAt: string, logId: string): MixtapeDTO {
     logId,
     memberCount: 12,
     members: [],
+    status: "draft",
     title: `Checkpoint ${logId}`,
     type: "mixtape",
   };
