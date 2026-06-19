@@ -168,7 +168,7 @@ describe("preview archive helpers", () => {
       throw new Error("expected a mixtape feed item");
     }
     expect(mixtape.coverImageUrl).toBe(
-      "https://www.fluncle.com/api/mixtape-cover/020.F.1A?size=square",
+      "https://www.fluncle.com/api/mixtape-cover/020.F.1A?size=square&v=2",
     );
   });
 });
