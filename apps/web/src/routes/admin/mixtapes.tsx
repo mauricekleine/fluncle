@@ -316,7 +316,7 @@ function MixtapeEditor({
             {mixtape.logId ?? "draft"}
           </h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            {mixtape.memberCount} findings
+            {mixtape.memberCount} bangers
             {mixtape.durationMs ? ` · ${formatAlbumDuration(mixtape.durationMs)}` : ""}
           </p>
         </div>
@@ -351,7 +351,7 @@ function MixtapeEditor({
           <Textarea id={noteId} value={note} onChange={(event) => setNote(event.target.value)} />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor={membersId}>Members</Label>
+          <Label htmlFor={membersId}>Bangers</Label>
           <Textarea
             id={membersId}
             placeholder="One Log ID or track ID per line"
@@ -456,7 +456,7 @@ function MixtapeEditor({
             ) : null}
             <h3 className="truncate text-sm font-bold">{title || "Untitled mixtape"}</h3>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              {previewMemberCount} findings
+              {previewMemberCount} bangers
               {parsedDurationMs ? ` · ${formatAlbumDuration(parsedDurationMs)}` : ""}
             </p>
           </div>

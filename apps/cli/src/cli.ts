@@ -847,7 +847,7 @@ async function runTrackGet(
     console.log(`${mixtape.logId ? `${mixtape.logId}  ` : ""}${mixtape.title}`);
     console.log(
       [
-        `${mixtape.memberCount} ${mixtape.memberCount === 1 ? "finding" : "findings"}`,
+        `${mixtape.memberCount} ${mixtape.memberCount === 1 ? "banger" : "bangers"}`,
         mixtape.durationMs ? `${Math.round(mixtape.durationMs / 60_000)} min` : undefined,
         mixtape.externalUrls.mixcloud ??
           mixtape.externalUrls.youtube ??
@@ -966,7 +966,7 @@ async function runMixtapeMembers(
   }
 
   console.log(
-    `Saved the tracklist: ${result.mixtape.memberCount} findings on ${result.mixtape.id}.`,
+    `Saved the tracklist: ${result.mixtape.memberCount} bangers on ${result.mixtape.id}.`,
   );
 }
 
@@ -1031,7 +1031,7 @@ async function runMixtapeList(
   for (const mixtape of mixtapes) {
     const status = mixtape.status ?? "draft";
     const coordinate = mixtape.logId ?? "draft";
-    console.log(`${coordinate}\t${status}\t${mixtape.memberCount} findings\t${mixtape.title}`);
+    console.log(`${coordinate}\t${status}\t${mixtape.memberCount} bangers\t${mixtape.title}`);
   }
 }
 
@@ -1054,7 +1054,7 @@ async function runMixtapeGet(
   const coordinate = mixtape.logId ?? "draft";
   const status = mixtape.status ?? "draft";
   console.log(`${mixtape.title}`);
-  console.log(`  ${coordinate} · ${status} · ${mixtape.memberCount} findings`);
+  console.log(`  ${coordinate} · ${status} · ${mixtape.memberCount} bangers`);
   if (mixtape.note) {
     console.log(`  ${mixtape.note}`);
   }

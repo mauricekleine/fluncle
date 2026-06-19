@@ -24,7 +24,7 @@ import { type Track } from "@/lib/tracks";
 export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber: number }) {
   if (track.type === "mixtape") {
     const logId = track.logId as string;
-    const findingsLabel = `${track.memberCount} ${track.memberCount === 1 ? "finding" : "findings"}`;
+    const bangersLabel = `${track.memberCount} ${track.memberCount === 1 ? "banger" : "bangers"}`;
 
     return (
       <li className="track-row track-row-checkpoint">
@@ -48,7 +48,7 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
               {track.title}
             </span>
           </Link>
-          <span className="track-label mt-1 block truncate">{findingsLabel}</span>
+          <span className="track-label mt-1 block truncate">{bangersLabel}</span>
           {/* The run time as a badge — mirrors a finding's duration chip, so a
               checkpoint row stands the same height as the rows around it. */}
           {track.durationMs ? (
