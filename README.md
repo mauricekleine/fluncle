@@ -62,7 +62,7 @@ Root scripts are orchestrated with Turborepo. `oxlint` and `oxfmt` run from the 
 Fluncle now has two env surfaces:
 
 - Operator machines: optional `~/.config/fluncle/.env.production` for production CLI admin commands and `~/.config/fluncle/.env.local` for local development.
-- Web/API: Wrangler secrets in production, and `apps/web/.dev.vars` for local Worker previews.
+- Web/API: Wrangler secrets in production, and a local `apps/web/.dev.vars` rendered from `apps/web/.dev.vars.tpl` with 1Password for local Worker previews.
 
 The public CLI defaults to `https://www.fluncle.com` and the `production` profile. Admin CLI commands need `FLUNCLE_API_TOKEN`. Set `FLUNCLE_API_BASE_URL` only when pointing the CLI at a non-production API.
 
@@ -216,10 +216,10 @@ bun run --cwd apps/web wrangler secret put LOOPS_API_KEY
 bun run --cwd apps/web wrangler secret put LOOPS_TRANSACTIONAL_ID
 ```
 
-For local Worker previews and local migration commands, copy `apps/web/.dev.vars.example` to `apps/web/.dev.vars` and fill in local values. Leave the `TURSO_DATABASE_URL` pair blank — `db:refresh-dev` seeds a local libSQL database from a production snapshot and points that pair at the local server. The snapshot is pulled by `db:pull-prod`, which reads production credentials from the `Turso Production Credentials` item in the Fluncle 1Password vault (so `op` must be unlocked); see [docs/local-database.md](./docs/local-database.md):
+For local Worker previews and local migration commands, render `apps/web/.dev.vars` from the committed `apps/web/.dev.vars.tpl` template. Local web secrets live in a Fluncle 1Password item with fields named exactly like the env vars; the item path is supplied by `FLUNCLE_1PASSWORD_ENV_ITEM` so the public template does not expose vault names. Set `FLUNCLE_1PASSWORD_ACCOUNT` and `FLUNCLE_1PASSWORD_ENV_ITEM` in your shell, keep the 1Password desktop app unlocked, then run `db:secrets`. Leave the `TURSO_DATABASE_URL` pair to `db:refresh-dev` — it seeds a local libSQL database from a production snapshot and points that pair at the local server. The snapshot is pulled by `db:pull-prod`, which reads production credentials from the `Turso Production Credentials` item in the Fluncle 1Password vault (so `op` must be unlocked); see [docs/local-database.md](./docs/local-database.md):
 
 ```bash
-cp apps/web/.dev.vars.example apps/web/.dev.vars
+bun run --cwd apps/web db:secrets
 bun run --cwd apps/web db:refresh-dev
 bun run --cwd apps/web preview
 ```

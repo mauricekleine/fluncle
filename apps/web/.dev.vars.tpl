@@ -1,0 +1,51 @@
+FLUNCLE_API_TOKEN=op://$FLUNCLE_1PASSWORD_ENV_ITEM/FLUNCLE_API_TOKEN
+BETTER_AUTH_SECRET=op://$FLUNCLE_1PASSWORD_ENV_ITEM/BETTER_AUTH_SECRET
+BETTER_AUTH_URL=http://127.0.0.1:3000
+
+# Admin allow-list for "Login with Spotify" (the operator identity). Comma-separated.
+# ADMIN_ALLOWED_EMAILS is required; ADMIN_ALLOWED_SPOTIFY_IDS is optional (exact match).
+ADMIN_ALLOWED_EMAILS=op://$FLUNCLE_1PASSWORD_ENV_ITEM/ADMIN_ALLOWED_EMAILS
+ADMIN_ALLOWED_SPOTIFY_IDS=op://$FLUNCLE_1PASSWORD_ENV_ITEM/ADMIN_ALLOWED_SPOTIFY_IDS
+
+FIRECRAWL_API_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/FIRECRAWL_API_KEY
+
+POSTIZ_API_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/POSTIZ_API_KEY
+POSTIZ_API_URL=
+
+# Everyday local dev talks to a private libSQL server (turso dev) backed by
+# apps/web/.dev/local.db. `bun run db:refresh-dev` seeds that db and rewrites
+# these two lines to a local http://127.0.0.1:<port> URL with a dummy token.
+# Leave them blank here; they are filled in locally. Real Turso credentials are
+# never stored here -- production creds live in 1Password and are read by
+# `bun run db:pull-prod` (the `Turso Production Credentials` item, Fluncle vault).
+# See docs/local-database.md.
+TURSO_DATABASE_URL=
+TURSO_AUTH_TOKEN=
+
+SPOTIFY_CLIENT_ID=op://$FLUNCLE_1PASSWORD_ENV_ITEM/SPOTIFY_CLIENT_ID
+SPOTIFY_CLIENT_SECRET=op://$FLUNCLE_1PASSWORD_ENV_ITEM/SPOTIFY_CLIENT_SECRET
+SPOTIFY_REDIRECT_URI=http://127.0.0.1:3000/api/admin/spotify/auth/callback
+SPOTIFY_PLAYLIST_ID=op://$FLUNCLE_1PASSWORD_ENV_ITEM/SPOTIFY_PLAYLIST_ID
+
+TELEGRAM_BOT_TOKEN=op://$FLUNCLE_1PASSWORD_ENV_ITEM/TELEGRAM_BOT_TOKEN
+TELEGRAM_CHANNEL_ID=op://$FLUNCLE_1PASSWORD_ENV_ITEM/TELEGRAM_CHANNEL_ID
+DISCORD_WEBHOOK_URL=op://$FLUNCLE_1PASSWORD_ENV_ITEM/DISCORD_WEBHOOK_URL
+
+VITE_FLUNCLE_SPOTIFY_PLAYLIST_URL=https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0?si=054d3c6cbcf14a36
+VITE_FLUNCLE_TELEGRAM_URL=https://t.me/fluncle
+
+# R2 S3 API credentials for presigned direct-to-bucket uploads. R2_ACCOUNT_ID is
+# non-secret and also lives in wrangler.jsonc for production, but local scripts
+# read it from .dev.vars.
+R2_ACCESS_KEY_ID=op://$FLUNCLE_1PASSWORD_ENV_ITEM/R2_ACCESS_KEY_ID
+R2_SECRET_ACCESS_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/R2_SECRET_ACCESS_KEY
+R2_ACCOUNT_ID=0651fd3b33d9e0b2fe72a5f13e5cf65d
+
+# Loops newsletter (transactional id is the published confirmation email)
+LOOPS_API_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/LOOPS_API_KEY
+LOOPS_TRANSACTIONAL_ID=op://$FLUNCLE_1PASSWORD_ENV_ITEM/LOOPS_TRANSACTIONAL_ID
+
+# Spinup agents -- each agent has its OWN scoped runtime key (sk_agent_...) carrying
+# the runs:create permission. Async track enrichment fires on add via runs.create.
+SPINUP_ENRICH_AGENT_ID=agent_857b6b85-029b-42bd-a79a-47a23d83a42e
+SPINUP_ENRICH_AGENT_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/SPINUP_ENRICH_AGENT_KEY

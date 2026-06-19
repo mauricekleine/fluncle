@@ -1,7 +1,7 @@
 {
   "setup": [
     "bun install",
-    "cp \"$SUPERSET_ROOT_PATH/apps/web/.dev.vars\" apps/web/.dev.vars",
+    "bun run --cwd apps/web db:secrets",
     "bun run --cwd apps/web db:refresh-dev"
   ],
   "teardown": [],

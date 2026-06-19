@@ -5,7 +5,7 @@
 // `exec:invoke`). See docs/track-lifecycle.md (Phase 2) + the spinup memory.
 //
 // ADMIN-GATED, WORKER-ONLY: server code; every Spinup trigger runs solely from an
-// admin-authenticated route (the add endpoint today; future re-enrich/classify).
+// admin-authenticated route (the add endpoint today; future re-enrich).
 // The Worker is the sole Spinup-trigger authority — the sk_agent_… keys are Worker
 // secrets, never held by the CLI or Raycast (which reach Spinup via the admin API).
 
@@ -14,9 +14,6 @@ import { type EnvKey, readEnvs } from "./env";
 import { updateTrack } from "./track-update";
 
 const AGENTS = {
-  // Vibe-placement classifier — dormant until that agent exists (the registry
-  // shape is here so wiring it later is one call).
-  classify: { idVar: "SPINUP_CLASSIFY_AGENT_ID", keyVar: "SPINUP_CLASSIFY_AGENT_KEY" },
   enrich: { idVar: "SPINUP_ENRICH_AGENT_ID", keyVar: "SPINUP_ENRICH_AGENT_KEY" },
 } as const satisfies Record<string, { idVar: EnvKey; keyVar: EnvKey }>;
 

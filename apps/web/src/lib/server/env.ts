@@ -33,11 +33,9 @@ const envKeys = [
   "TURSO_DATABASE_URL",
   "TURSO_AUTH_TOKEN",
   // Spinup agents: each has its own scoped runtime key (sk_agent_…) + id. Async
-  // track enrichment fires on add via runs.create; classify is a future agent.
+  // track enrichment fires on add via runs.create.
   "SPINUP_ENRICH_AGENT_ID",
   "SPINUP_ENRICH_AGENT_KEY",
-  "SPINUP_CLASSIFY_AGENT_ID",
-  "SPINUP_CLASSIFY_AGENT_KEY",
 ] as const;
 
 export type EnvKey = (typeof envKeys)[number];
