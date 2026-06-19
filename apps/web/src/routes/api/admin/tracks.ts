@@ -4,7 +4,7 @@ import { jsonError, requireAdmin } from "../../../lib/server/env";
 import { publishTrack } from "../../../lib/server/publish";
 import { triggerEnrichment } from "../../../lib/server/spinup";
 import { ApiError } from "../../../lib/server/spotify";
-import { decodeTrackCursor, listTracks } from "../../../lib/server/tracks";
+import { decodeTrackCursor, listTracks, searchTracks } from "../../../lib/server/tracks";
 
 type AddTrackBody = {
   spotifyUrl?: unknown;
@@ -32,6 +32,20 @@ export const Route = createFileRoute("/api/admin/tracks")({
         }
 
         const url = new URL(request.url);
+
+        // Free-text search path: an admin UI looks a finding up by Log ID,
+        // track ID, title, or artist. Returns the same TrackListItem shape, just
+        // without the cursor/totalCount envelope (search is a flat result set).
+        const q = url.searchParams.get("q")?.trim();
+
+        if (q) {
+          return Response.json({
+            tracks: await searchTracks({
+              limit: parseAdminLimit(url.searchParams.get("limit")),
+              q,
+            }),
+          });
+        }
 
         return Response.json(
           await listTracks({
