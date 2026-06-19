@@ -33,6 +33,41 @@ export function formatDateLong(value: string): string {
   }).format(new Date(value));
 }
 
+export function formatDurationField(durationMs?: number | null): string {
+  return durationMs ? formatDuration(durationMs) : "";
+}
+
+export function parseDuration(input: string): number | null {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.includes(":")) {
+    const parts = trimmed.split(":");
+    if (parts.length !== 2 && parts.length !== 3) {
+      return null;
+    }
+    const nums = parts.map((part) => Number(part));
+    if (nums.some((n) => !Number.isFinite(n) || n < 0)) {
+      return null;
+    }
+    if (parts.length === 3) {
+      const [hours, minutes, seconds] = nums;
+      if (minutes >= 60 || seconds >= 60) {
+        return null;
+      }
+      return Math.round((hours * 3600 + minutes * 60 + seconds) * 1000);
+    }
+    const [minutes, seconds] = nums;
+    if (seconds >= 60) {
+      return null;
+    }
+    return Math.round((minutes * 60 + seconds) * 1000);
+  }
+  const value = Number(trimmed);
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
 export function formatIsoDuration(durationMs: number): string {
   // schema.org duration (ISO-8601), e.g. "PT3M37S".
   const totalSeconds = Math.round(durationMs / 1000);

@@ -1,0 +1,1 @@
+ALTER TABLE `mixtape_tracks` ADD `start_ms` integer;

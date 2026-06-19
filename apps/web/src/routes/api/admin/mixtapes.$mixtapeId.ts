@@ -1,11 +1,26 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { requireAdmin } from "../../../lib/server/env";
 import { apiErrorResponse } from "../../../lib/server/http-errors";
-import { updateMixtape } from "../../../lib/server/mixtapes";
+import { deleteMixtape, updateMixtape } from "../../../lib/server/mixtapes";
 
 export const Route = createFileRoute("/api/admin/mixtapes/$mixtapeId")({
   server: {
     handlers: {
+      DELETE: async ({ params, request }) => {
+        const unauthorized = await requireAdmin(request);
+
+        if (unauthorized) {
+          return unauthorized;
+        }
+
+        try {
+          await deleteMixtape(params.mixtapeId);
+
+          return Response.json({ ok: true });
+        } catch (error) {
+          return apiErrorResponse(error);
+        }
+      },
       PATCH: async ({ params, request }) => {
         const unauthorized = await requireAdmin(request);
 

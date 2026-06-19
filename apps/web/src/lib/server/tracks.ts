@@ -1,5 +1,5 @@
 import { type Galaxy, GALAXIES, galaxyForVibe } from "../galaxies";
-import { type FeedItem, rowToMixtape } from "../mixtapes";
+import { type FeedItem, type MixtapeMember, rowToMixtape } from "../mixtapes";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 
@@ -229,22 +229,20 @@ export async function getTrackByIdOrLogId(idOrLogId: string): Promise<TrackListI
   return row ? toTrackListItem(row) : undefined;
 }
 
-export async function getTracksForMixtape(mixtapeId: string): Promise<TrackListItem[]> {
+export async function getTracksForMixtape(mixtapeId: string): Promise<MixtapeMember[]> {
   const db = await getDb();
   const result = await db.execute({
-    args: [mixtapeId, mixtapeId],
-    sql: `select ${TRACK_SELECT}
+    args: [mixtapeId],
+    sql: `select ${TRACK_SELECT}, mt.start_ms as start_ms
           from tracks
-          where track_id in (
-            select track_id from mixtape_tracks where mixtape_id = ?
-          )
-          order by (
-            select position from mixtape_tracks
-            where mixtape_id = ? and track_id = tracks.track_id
-          ) asc`,
+          join mixtape_tracks mt on mt.track_id = tracks.track_id and mt.mixtape_id = ?
+          order by mt.position asc`,
   });
 
-  return typedRows<TrackRow>(result.rows).map(toTrackListItem);
+  return typedRows<TrackRow & { start_ms: number | null }>(result.rows).map((row) => ({
+    ...toTrackListItem(row),
+    startMs: row.start_ms ?? undefined,
+  }));
 }
 
 /** One random certified track, mapped like every other list item. */

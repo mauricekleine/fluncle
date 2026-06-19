@@ -1,4 +1,23 @@
-import { publicApiGet } from "../api";
+import { existsSync, readFileSync } from "node:fs";
+import {
+  adminApiDelete,
+  adminApiGet,
+  adminApiPost,
+  adminApiPut,
+  adminApiPatch,
+  publicApiGet,
+} from "../api";
+import { CliError } from "../output";
+
+export type MixtapeMemberItem = {
+  albumImageUrl?: string;
+  artists: string[];
+  durationMs: number;
+  logId?: string;
+  startMs?: number;
+  title: string;
+  trackId: string;
+};
 
 export type MixtapeListItem = {
   addedAt?: string;
@@ -14,7 +33,7 @@ export type MixtapeListItem = {
   id?: string;
   logId?: string;
   memberCount: number;
-  members: unknown[];
+  members: MixtapeMemberItem[];
   note?: string;
   recordedAt?: string;
   sequenceNumber?: number;
@@ -24,13 +43,276 @@ export type MixtapeListItem = {
   updatedAt?: string;
 };
 
+export type MixtapeCreateOptions = {
+  coverUrl?: string;
+  durationMs?: string;
+  json: boolean;
+  mixcloudUrl?: string;
+  note?: string;
+  recordedAt?: string;
+  soundcloudUrl?: string;
+  title?: string;
+  youtubeUrl?: string;
+};
+
+export type MixtapeUpdateOptions = {
+  coverUrl?: string;
+  durationMs?: string;
+  json: boolean;
+  mixcloudUrl?: string;
+  note?: string;
+  recordedAt?: string;
+  soundcloudUrl?: string;
+  title?: string;
+  youtubeUrl?: string;
+};
+
+export type MixtapeMembersOptions = {
+  from?: string;
+  json: boolean;
+};
+
 type MixtapesResponse = {
   mixtapes: MixtapeListItem[];
   ok: true;
 };
 
+type MixtapeCreateResponse = {
+  mixtape: MixtapeListItem;
+  ok: true;
+};
+
+type MixtapeUpdateResponse = {
+  mixtape: MixtapeListItem;
+  ok: true;
+};
+
+type MixtapePublishResponse = {
+  mixtape: MixtapeListItem;
+  ok: true;
+};
+
+type MixtapeDeleteResponse = {
+  ok: true;
+};
+
+type MixtapeBody = {
+  coverImageUrl?: string;
+  durationMs?: number;
+  mixcloudUrl?: string;
+  note?: string;
+  recordedAt?: string;
+  soundcloudUrl?: string;
+  title?: string;
+  youtubeUrl?: string;
+};
+
+type CueEntry = { ref: string; startMs?: number };
+
 export async function mixtapesCommand(): Promise<MixtapeListItem[]> {
   const response = await publicApiGet<MixtapesResponse>("/api/mixtapes");
 
   return response.mixtapes;
+}
+
+export async function mixtapeCreateCommand(
+  title: string | undefined,
+  options: MixtapeCreateOptions,
+): Promise<MixtapeCreateResponse> {
+  return adminApiPost<MixtapeCreateResponse>("/api/admin/mixtapes", buildBody(title, options));
+}
+
+export async function mixtapeUpdateCommand(
+  id: string,
+  options: MixtapeUpdateOptions,
+): Promise<MixtapeUpdateResponse> {
+  return adminApiPatch<MixtapeUpdateResponse>(
+    `/api/admin/mixtapes/${encodeURIComponent(id)}`,
+    buildBody(undefined, options),
+  );
+}
+
+export async function mixtapeMembersCommand(
+  id: string,
+  refs: string[],
+  options: MixtapeMembersOptions,
+): Promise<MixtapeUpdateResponse> {
+  const members: CueEntry[] = refs.map((ref) => ({ ref }));
+
+  if (options.from) {
+    members.push(...parseCueFile(options.from));
+  }
+
+  return adminApiPut<MixtapeUpdateResponse>(
+    `/api/admin/mixtapes/${encodeURIComponent(id)}/members`,
+    { members },
+  );
+}
+
+export async function mixtapePublishCommand(id: string): Promise<MixtapePublishResponse> {
+  return adminApiPost<MixtapePublishResponse>(
+    `/api/admin/mixtapes/${encodeURIComponent(id)}/publish`,
+  );
+}
+
+export async function mixtapeDeleteCommand(id: string): Promise<MixtapeDeleteResponse> {
+  return adminApiDelete<MixtapeDeleteResponse>(`/api/admin/mixtapes/${encodeURIComponent(id)}`);
+}
+
+export async function mixtapeListCommand(): Promise<MixtapeListItem[]> {
+  const response = await adminApiGet<MixtapesResponse>("/api/admin/mixtapes");
+
+  return response.mixtapes;
+}
+
+export async function mixtapeGetCommand(idOrLogId: string): Promise<MixtapeListItem> {
+  const mixtapes = await mixtapeListCommand();
+  const match = mixtapes.find((mixtape) => mixtape.id === idOrLogId || mixtape.logId === idOrLogId);
+
+  if (!match) {
+    throw new CliError("mixtape_not_found", `No mixtape with id or log id ${idOrLogId}`);
+  }
+
+  return match;
+}
+
+function buildBody(
+  title: string | undefined,
+  options: MixtapeCreateOptions | MixtapeUpdateOptions,
+): MixtapeBody {
+  const body: MixtapeBody = {};
+
+  if (title !== undefined) {
+    body.title = title;
+  }
+  if (options.title !== undefined) {
+    body.title = options.title;
+  }
+  if (options.note !== undefined) {
+    body.note = options.note;
+  }
+  if (options.recordedAt !== undefined) {
+    body.recordedAt = options.recordedAt;
+  }
+  if (options.coverUrl !== undefined) {
+    body.coverImageUrl = options.coverUrl;
+  }
+  if (options.mixcloudUrl !== undefined) {
+    body.mixcloudUrl = options.mixcloudUrl;
+  }
+  if (options.youtubeUrl !== undefined) {
+    body.youtubeUrl = options.youtubeUrl;
+  }
+  if (options.soundcloudUrl !== undefined) {
+    body.soundcloudUrl = options.soundcloudUrl;
+  }
+  if (options.durationMs !== undefined) {
+    const parsed = parseDuration(options.durationMs);
+    if (parsed === null) {
+      throw new CliError(
+        "invalid_duration",
+        "Duration must be mm:ss or h:mm:ss, or a millisecond count",
+      );
+    }
+    body.durationMs = parsed;
+  }
+
+  return body;
+}
+
+function parseCueFile(filePath: string): CueEntry[] {
+  if (!existsSync(filePath)) {
+    throw new CliError("file_not_found", `Cue file not found: ${filePath}`);
+  }
+
+  const text = readFileSync(filePath, "utf-8");
+  const trimmed = text.trim();
+
+  if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (!Array.isArray(parsed)) {
+        throw new Error("not an array");
+      }
+      return (parsed as unknown[]).map((entry, index) => {
+        if (typeof entry === "string") {
+          return { ref: entry.trim() };
+        }
+        const obj = entry as Record<string, unknown>;
+        if (typeof obj?.ref !== "string") {
+          throw new CliError("invalid_cue_json", `Entry ${index + 1} missing "ref" string`);
+        }
+        const cue: CueEntry = { ref: obj.ref.trim() };
+        if (typeof obj.startMs === "number" && Number.isInteger(obj.startMs) && obj.startMs >= 0) {
+          cue.startMs = obj.startMs;
+        }
+        return cue;
+      });
+    } catch (error) {
+      if (error instanceof CliError) {
+        throw error;
+      }
+      throw new CliError(
+        "invalid_cue_json",
+        `Cue JSON parse failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  return parseCueSheet(text);
+}
+
+function parseCueSheet(text: string): CueEntry[] {
+  const entries: CueEntry[] = [];
+
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+
+    const match = trimmed.match(/^(\d{1,2}:\d{2}(?::\d{2})?)\s+(.+)$/);
+    if (match) {
+      const startMs = parseDuration(match[1]);
+      if (startMs === null) {
+        continue;
+      }
+      entries.push({ ref: match[2].trim(), startMs });
+    } else {
+      entries.push({ ref: trimmed });
+    }
+  }
+
+  return entries;
+}
+
+function parseDuration(input: string): number | null {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.includes(":")) {
+    const parts = trimmed.split(":");
+    if (parts.length !== 2 && parts.length !== 3) {
+      return null;
+    }
+    const nums = parts.map((part) => Number(part));
+    if (nums.some((n) => !Number.isFinite(n) || n < 0)) {
+      return null;
+    }
+    if (parts.length === 3) {
+      const [hours, minutes, seconds] = nums;
+      if (minutes >= 60 || seconds >= 60) {
+        return null;
+      }
+      return Math.round((hours * 3600 + minutes * 60 + seconds) * 1000);
+    }
+    const [minutes, seconds] = nums;
+    if (seconds >= 60) {
+      return null;
+    }
+    return Math.round((minutes * 60 + seconds) * 1000);
+  }
+  const value = Number(trimmed);
+  return Number.isFinite(value) && value >= 0 ? value : null;
 }

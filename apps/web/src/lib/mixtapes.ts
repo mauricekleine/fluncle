@@ -8,6 +8,10 @@ export type MixtapeExternalUrls = {
   youtube?: string;
 };
 
+export type MixtapeMember = TrackListItem & {
+  startMs?: number;
+};
+
 export type MixtapeDTO = {
   addedAt?: string;
   artists: ["Fluncle"];
@@ -18,7 +22,7 @@ export type MixtapeDTO = {
   id?: string;
   logId?: string;
   memberCount: number;
-  members: TrackListItem[];
+  members: MixtapeMember[];
   note?: string;
   recordedAt?: string;
   sequenceNumber?: number;
@@ -53,7 +57,7 @@ export function hasExternalUrl(urls: MixtapeExternalUrls): boolean {
   return Boolean(urls.mixcloud || urls.soundcloud || urls.youtube);
 }
 
-export function rowToMixtape(row: MixtapeRowLike, members: TrackListItem[] = []): MixtapeDTO {
+export function rowToMixtape(row: MixtapeRowLike, members: MixtapeMember[] = []): MixtapeDTO {
   return {
     addedAt: row.added_at ?? undefined,
     artists: ["Fluncle"],

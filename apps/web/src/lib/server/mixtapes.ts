@@ -56,7 +56,7 @@ export type MixtapeInput = {
 };
 
 export type MixtapeMemberInput = {
-  members?: unknown;
+  members?: Array<string | { ref: string; startMs?: number }>;
 };
 
 export async function createMixtape(input: MixtapeInput): Promise<MixtapeDTO> {
@@ -181,10 +181,24 @@ export async function setMixtapeMembers(
   }
 
   const seen = new Set<string>();
-  const trackIds: string[] = [];
+  const entries: { startMs: number | null; trackId: string }[] = [];
 
   for (const raw of input.members) {
-    const value = requireText(raw, "member", 80);
+    const ref = typeof raw === "string" ? raw : raw?.ref;
+    const startMs = typeof raw === "string" ? undefined : raw?.startMs;
+
+    const value = requireText(ref, "member", 80);
+
+    if (startMs !== undefined) {
+      if (typeof startMs !== "number" || !Number.isInteger(startMs) || startMs < 0) {
+        throw new ApiError(
+          "invalid_start_ms",
+          "Cue timestamps must be non-negative integers (ms)",
+          400,
+        );
+      }
+    }
+
     const track = await getTrackByIdOrLogId(value);
 
     if (!track) {
@@ -196,16 +210,16 @@ export async function setMixtapeMembers(
     }
 
     seen.add(track.trackId);
-    trackIds.push(track.trackId);
+    entries.push({ startMs: startMs ?? null, trackId: track.trackId });
   }
 
   const db = await getDb();
   await db.batch(
     [
       { args: [id], sql: `delete from mixtape_tracks where mixtape_id = ?` },
-      ...trackIds.map((trackId, index) => ({
-        args: [id, trackId, index + 1],
-        sql: `insert into mixtape_tracks (mixtape_id, track_id, position) values (?, ?, ?)`,
+      ...entries.map((entry, index) => ({
+        args: [id, entry.trackId, index + 1, entry.startMs],
+        sql: `insert into mixtape_tracks (mixtape_id, track_id, position, start_ms) values (?, ?, ?, ?)`,
       })),
       {
         args: [new Date().toISOString(), id],
@@ -277,6 +291,27 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
   }
 
   return published;
+}
+
+export async function deleteMixtape(id: string): Promise<void> {
+  const mixtape = await getMixtapeById(id, { includeDrafts: true });
+
+  if (mixtape.status === "published") {
+    throw new ApiError(
+      "published_not_deletable",
+      "A published mixtape keeps its coordinate and can't be deleted",
+      409,
+    );
+  }
+
+  const db = await getDb();
+  await db.batch(
+    [
+      { args: [id], sql: `delete from mixtape_tracks where mixtape_id = ?` },
+      { args: [id], sql: `delete from mixtapes where id = ?` },
+    ],
+    "write",
+  );
 }
 
 export async function getMixtapeByLogId(logId: string): Promise<MixtapeDTO | undefined> {

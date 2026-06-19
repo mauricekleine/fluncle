@@ -58,6 +58,24 @@ export async function adminApiPatch<T>(path: string, body?: unknown): Promise<T>
   });
 }
 
+export async function adminApiPut<T>(path: string, body?: unknown): Promise<T> {
+  return apiRequest<T>(path, {
+    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: {
+      ...adminHeaders(),
+      "Content-Type": "application/json",
+    },
+    method: "PUT",
+  });
+}
+
+export async function adminApiDelete<T>(path: string): Promise<T> {
+  return apiRequest<T>(path, {
+    headers: adminHeaders(),
+    method: "DELETE",
+  });
+}
+
 function adminHeaders(): Record<string, string> {
   const env = loadEnv(["FLUNCLE_API_TOKEN"]);
 

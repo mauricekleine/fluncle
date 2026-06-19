@@ -96,6 +96,40 @@ type PreviewArchiveBackfillOptions = {
   limit?: string;
 };
 
+type MixtapeCreateOptions = {
+  coverUrl?: string;
+  durationMs?: string;
+  json: boolean;
+  mixcloudUrl?: string;
+  note?: string;
+  recordedAt?: string;
+  soundcloudUrl?: string;
+  title?: string;
+  youtubeUrl?: string;
+};
+
+type MixtapeUpdateOptions = {
+  coverUrl?: string;
+  durationMs?: string;
+  json: boolean;
+  mixcloudUrl?: string;
+  note?: string;
+  recordedAt?: string;
+  soundcloudUrl?: string;
+  title?: string;
+  youtubeUrl?: string;
+};
+
+type MixtapeMembersOptions = {
+  from?: string;
+  json: boolean;
+};
+
+type MixtapeDeleteOptions = {
+  json: boolean;
+  yes: boolean;
+};
+
 export function createProgram(): Command {
   const program = configureCommand(new Command());
 
@@ -399,6 +433,108 @@ function addAdminCommands(program: Command): void {
     .action(async (idOrLogId: string | undefined, options: TrackPreviewArchiveOptions) => {
       const { previewArchiveUploadCommand } = await import("./commands/preview-archive");
       await runTrackPreviewArchive(idOrLogId, options, previewArchiveUploadCommand);
+    });
+
+  const adminMixtapes = configureCommand(
+    admin.command("mixtapes").description("Mixtape admin commands"),
+  );
+
+  adminMixtapes.action(() => {
+    adminMixtapes.outputHelp();
+  });
+
+  adminMixtapes
+    .command("create")
+    .description("Log a new mixtape draft")
+    .argument("[title]")
+    .option("--cover-url <url>", "Cover image URL")
+    .option("--duration-ms <duration>", "Duration (mm:ss, h:mm:ss, or ms)")
+    .option("--json", "Print JSON", false)
+    .option("--mixcloud-url <url>", "Mixcloud URL")
+    .option("--note <text>", "Operator note")
+    .option("--recorded-at <date>", "Recorded date (ISO)")
+    .option("--soundcloud-url <url>", "SoundCloud URL")
+    .option("--youtube-url <url>", "YouTube URL")
+    .allowExcessArguments()
+    .action(async (title: string | undefined, options: MixtapeCreateOptions) => {
+      const { mixtapeCreateCommand } = await import("./commands/mixtapes");
+      await runMixtapeCreate(title, options, mixtapeCreateCommand);
+    });
+
+  adminMixtapes
+    .command("update")
+    .description("Update a mixtape's fields")
+    .argument("[id]")
+    .option("--cover-url <url>", "Cover image URL")
+    .option("--duration-ms <duration>", "Duration (mm:ss, h:mm:ss, or ms)")
+    .option("--json", "Print JSON", false)
+    .option("--mixcloud-url <url>", "Mixcloud URL")
+    .option("--note <text>", "Operator note")
+    .option("--recorded-at <date>", "Recorded date (ISO)")
+    .option("--soundcloud-url <url>", "SoundCloud URL")
+    .option("--title <title>", "Mixtape title")
+    .option("--youtube-url <url>", "YouTube URL")
+    .allowExcessArguments()
+    .action(async (id: string | undefined, options: MixtapeUpdateOptions) => {
+      const { mixtapeUpdateCommand } = await import("./commands/mixtapes");
+      await runMixtapeUpdate(id, options, mixtapeUpdateCommand);
+    });
+
+  adminMixtapes
+    .command("members")
+    .description("Set a mixtape's tracklist (refs and/or a cue-sheet file)")
+    .argument("[id]")
+    .argument("[refs...]")
+    .option("--from <file>", "Cue-sheet or JSON file with members")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (id: string | undefined, refs: string[], options: MixtapeMembersOptions) => {
+      const { mixtapeMembersCommand } = await import("./commands/mixtapes");
+      await runMixtapeMembers(id, refs, options, mixtapeMembersCommand);
+    });
+
+  adminMixtapes
+    .command("publish")
+    .description("Publish a mixtape draft")
+    .argument("[id]")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (id: string | undefined, options: { json: boolean }) => {
+      const { mixtapePublishCommand } = await import("./commands/mixtapes");
+      await runMixtapePublish(id, options, mixtapePublishCommand);
+    });
+
+  adminMixtapes
+    .command("delete")
+    .description("Discard a mixtape draft (published mixtapes can't be deleted)")
+    .argument("[id]")
+    .option("--json", "Print JSON", false)
+    .option("--yes", "Skip confirmation", false)
+    .allowExcessArguments()
+    .action(async (id: string | undefined, options: MixtapeDeleteOptions) => {
+      const { mixtapeDeleteCommand } = await import("./commands/mixtapes");
+      await runMixtapeDelete(id, options, mixtapeDeleteCommand);
+    });
+
+  adminMixtapes
+    .command("list")
+    .description("List all mixtapes (including drafts)")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: { json: boolean }) => {
+      const { mixtapeListCommand } = await import("./commands/mixtapes");
+      await runMixtapeList(options, mixtapeListCommand);
+    });
+
+  adminMixtapes
+    .command("get")
+    .description("Show one mixtape by id or log id")
+    .argument("[idOrLogId]")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (idOrLogId: string | undefined, options: { json: boolean }) => {
+      const { mixtapeGetCommand } = await import("./commands/mixtapes");
+      await runMixtapeGet(idOrLogId, options, mixtapeGetCommand);
     });
 
   const submissions = configureCommand(
@@ -772,6 +908,174 @@ async function runTrackUpdate(
   }
 
   console.log(`Updated ${result.trackId}: ${result.fields.join(", ")}`);
+}
+
+async function runMixtapeCreate(
+  title: string | undefined,
+  options: MixtapeCreateOptions,
+  mixtapeCreateCommand: typeof import("./commands/mixtapes").mixtapeCreateCommand,
+): Promise<void> {
+  const result = await mixtapeCreateCommand(title, options);
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  console.log(`Logged draft ${result.mixtape.id} — it's a draft until you publish it.`);
+}
+
+async function runMixtapeUpdate(
+  id: string | undefined,
+  options: MixtapeUpdateOptions,
+  mixtapeUpdateCommand: typeof import("./commands/mixtapes").mixtapeUpdateCommand,
+): Promise<void> {
+  if (!id) {
+    throw new Error("Missing mixtape id. Usage: fluncle admin mixtapes update <id>");
+  }
+
+  const result = await mixtapeUpdateCommand(id, options);
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  console.log(`Saved ${result.mixtape.id}.`);
+}
+
+async function runMixtapeMembers(
+  id: string | undefined,
+  refs: string[],
+  options: MixtapeMembersOptions,
+  mixtapeMembersCommand: typeof import("./commands/mixtapes").mixtapeMembersCommand,
+): Promise<void> {
+  if (!id) {
+    throw new Error("Missing mixtape id. Usage: fluncle admin mixtapes members <id> [refs...]");
+  }
+
+  if (refs.length === 0 && !options.from) {
+    throw new Error("Provide refs as arguments or a cue-sheet file with --from");
+  }
+
+  const result = await mixtapeMembersCommand(id, refs, options);
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  console.log(`Tracklist saved — ${result.mixtape.memberCount} findings on ${result.mixtape.id}.`);
+}
+
+async function runMixtapePublish(
+  id: string | undefined,
+  options: { json: boolean },
+  mixtapePublishCommand: typeof import("./commands/mixtapes").mixtapePublishCommand,
+): Promise<void> {
+  if (!id) {
+    throw new Error("Missing mixtape id. Usage: fluncle admin mixtapes publish <id>");
+  }
+
+  const result = await mixtapePublishCommand(id);
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  console.log(`Published ${result.mixtape.logId} — fluncle://${result.mixtape.logId}`);
+}
+
+async function runMixtapeDelete(
+  id: string | undefined,
+  options: MixtapeDeleteOptions,
+  mixtapeDeleteCommand: typeof import("./commands/mixtapes").mixtapeDeleteCommand,
+): Promise<void> {
+  if (!id) {
+    throw new Error("Missing mixtape id. Usage: fluncle admin mixtapes delete <id> --yes");
+  }
+
+  if (!options.yes) {
+    throw new Error("Pass --yes to confirm the discard — published mixtapes can't be deleted.");
+  }
+
+  await mixtapeDeleteCommand(id);
+
+  if (options.json) {
+    printJson({ id, ok: true });
+    return;
+  }
+
+  console.log(`Discarded draft ${id}.`);
+}
+
+async function runMixtapeList(
+  options: { json: boolean },
+  mixtapeListCommand: typeof import("./commands/mixtapes").mixtapeListCommand,
+): Promise<void> {
+  const mixtapes = await mixtapeListCommand();
+
+  if (options.json) {
+    printJson({ mixtapes, ok: true });
+    return;
+  }
+
+  if (mixtapes.length === 0) {
+    console.log("No mixtapes yet.");
+    return;
+  }
+
+  for (const mixtape of mixtapes) {
+    const status = mixtape.status ?? "draft";
+    const coordinate = mixtape.logId ?? "draft";
+    console.log(`${coordinate}\t${status}\t${mixtape.memberCount} findings\t${mixtape.title}`);
+  }
+}
+
+async function runMixtapeGet(
+  idOrLogId: string | undefined,
+  options: { json: boolean },
+  mixtapeGetCommand: typeof import("./commands/mixtapes").mixtapeGetCommand,
+): Promise<void> {
+  if (!idOrLogId) {
+    throw new Error("Missing mixtape id or log id. Usage: fluncle admin mixtapes get <id|logId>");
+  }
+
+  const mixtape = await mixtapeGetCommand(idOrLogId);
+
+  if (options.json) {
+    printJson(mixtape);
+    return;
+  }
+
+  const coordinate = mixtape.logId ?? "draft";
+  const status = mixtape.status ?? "draft";
+  console.log(`${mixtape.title}`);
+  console.log(`  ${coordinate} · ${status} · ${mixtape.memberCount} findings`);
+  if (mixtape.note) {
+    console.log(`  ${mixtape.note}`);
+  }
+  if (mixtape.members.length > 0) {
+    console.log("  Tracklist:");
+    for (const member of mixtape.members) {
+      const cue = member.startMs !== undefined ? formatCue(member.startMs) + "  " : "";
+      console.log(
+        `    ${cue}${member.logId ?? member.trackId}\t${member.artists.join(", ")} — ${member.title}`,
+      );
+    }
+  }
+}
+
+function formatCue(ms: number): string {
+  const totalSeconds = Math.round(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+  }
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
 async function runAdd(
@@ -1178,24 +1482,32 @@ const stringOptions = new Set([
   "--bpm",
   "--composition",
   "--cover",
+  "--cover-url",
   "--dir",
+  "--duration-ms",
   "--features",
   "--file",
   "--footage",
   "--footage-silent",
+  "--from",
   "--key",
   "--limit",
   "--mime",
+  "--mixcloud-url",
   "--note",
   "--platform",
   "--poster",
   "--props",
+  "--recorded-at",
   "--render",
   "--scheduled-for",
+  "--soundcloud-url",
   "--source",
   "--status",
+  "--title",
   "--url",
   "--video-url",
+  "--youtube-url",
 ]);
 
 const rootHelpSections = `

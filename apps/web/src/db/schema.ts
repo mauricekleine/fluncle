@@ -327,6 +327,7 @@ export const mixtapeTracks = sqliteTable(
   {
     mixtapeId: text("mixtape_id").notNull(),
     position: integer("position").notNull(),
+    startMs: integer("start_ms"),
     trackId: text("track_id").notNull(),
   },
   (table) => [
