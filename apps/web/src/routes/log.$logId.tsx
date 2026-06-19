@@ -22,8 +22,8 @@ import {
   mixtapeAlbumJsonLd,
   musicRecordingJsonLd,
 } from "@/lib/log-schema";
-import { FOUND_BASE, trackMedia } from "@/lib/media";
-import { hasExternalUrl, type MixtapeDTO } from "@/lib/mixtapes";
+import { trackMedia } from "@/lib/media";
+import { hasExternalUrl, type MixtapeDTO, mixtapeCoverUrl } from "@/lib/mixtapes";
 import { resolveLogPageTarget } from "@/lib/server/log-resolver";
 import {
   getRelatedTracks,
@@ -101,11 +101,11 @@ function logHead(loaderData: LogPageData | undefined) {
     const pageUrl = logPageUrl(logId);
     const title = `${logId} · ${mixtape.title} · Fluncle`;
     const description = mixtape.note ?? "A checkpoint in Fluncle's Findings.";
-    // The per-mixtape 1200×630 OG card on R2 (rendered + uploaded by the
-    // runbook's render:mixtape-cover step). Falls back to the square cover,
-    // then the site default — matching the finding branch's graceful degrade.
+    // The per-mixtape 1200×630 link-preview, rendered on the fly by the cover
+    // endpoint (Satori). Falls back to an operator-set cover, then the site
+    // default — matching the finding branch's graceful degrade.
     const ogImageUrl = mixtape.logId
-      ? `${FOUND_BASE}/${logId}/og.png`
+      ? mixtapeCoverUrl(logId, "og")
       : (mixtape.coverImageUrl ?? `${siteUrl}/fluncle-cover.png`);
 
     return {

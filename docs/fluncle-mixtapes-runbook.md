@@ -71,21 +71,22 @@ Crawlers, bots, and AI answer engines must read a mixtape **as a DJ mixtape**, n
 
 ## Titles + covers
 
-- **Title — the same string everywhere** (the spine `title` on `/log`, Mixcloud, YouTube, SoundCloud): `Fluncle Drum & Bass Mixtape #N | XXX.F.ZZ`. Searchable genre up front, the coordinate as the unique tail. The title stays plain and consistent; the **dream note** carries the cryptic/evocative weight (and doubles as the platform descriptions).
-- **Covers** are rendered from `packages/media` (the Remotion image kit) — one parametrized composition (`mixtape-cover.tsx`) at the three sizes a mixtape needs:
-  - **Square 1500×1500** → Mixcloud + SoundCloud artwork, and the mixtape's `coverImageUrl` on `/log`.
-  - **16:9 1280×720** → the YouTube thumbnail.
-  - **1200×630** → the `/log` link-preview (OG) card.
-  - Run: `bun run --cwd packages/media render:mixtape-cover -- --number N --coordinate XXX.F.ZZ` → writes them under `packages/media/out/mixtapes/<coordinate>/`. Scaffolded and canon-correct (deep field, the One-Sun eclipse, grain); iterate the art with the `fluncle-video` kit (e.g. drop the cosmonaut figure in).
+- **Title — the same string everywhere** (the spine `title` on `/log`, Mixcloud, YouTube, SoundCloud): `Fluncle Drum & Bass Mixtape #N | XXX.F.ZZ`. Searchable genre up front, the coordinate as the unique tail. It's an **output, not an input** — `publishMixtape` mints it from the number + coordinate; there's no title field on the draft. The `title` column stays so a future non-"Mixtape #N" series can carry its own name (publish leaves a non-stub title untouched). The title stays plain and consistent; the **dream note** carries the cryptic/evocative weight.
+- **The note → the description, with a `fluncle://` breadcrumb (external only).** The dream note doubles as the YouTube / Mixcloud description, with the mixtape's `fluncle://<logId>` coordinate appended as a derived suffix (the note, a blank line, then `fluncle://<logId>`). The marker is **never stored in the `note` column** and is **appended only when the description is built for the platforms at upload**. Internally, `/log` shows the clean stored note — the coordinate is already on the page as the mixtape's identity, so no marker there. The breadcrumb points the external platforms (where the spine isn't otherwise visible) back to fluncle.com.
+- **Covers render on the fly, fully derived** — no per-mixtape render step, no stored cover, no input. `GET /api/mixtape-cover/<logId>?size=square|og|wide` is an edge route (`workers-og`/Satori, same path as the finding OG card) that stamps `MIXTAPE #N` + the coordinate over a fixed Deep-Field background. A published mixtape's cover URL is derived from its Log ID (`mixtapeCoverUrl`); the `cover_image_url` column was dropped.
+  - **Square 1500×1500** (`size=square`) → Mixcloud + SoundCloud artwork, and the mixtape's `coverImageUrl` on `/log`.
+  - **16:9 1280×720** (`size=wide`) → the YouTube thumbnail.
+  - **1200×630** (`size=og`) → the `/log` link-preview (OG) card.
+  - The shared background (cosmonaut on the One-Sun Deep Field, grain) is baked once by `bun run --cwd packages/media render:mixtape-bg` into `apps/web/public/mixtape-bg-{square,wide,og}.png` (the `<MixtapeCover>` composition with `markers: false`). Re-run only when the art changes; iterate it with the `fluncle-video` kit. Remotion is no longer in the publish path.
 
 ## Editing after publish
 
 Publishing is the irreversible-ish step, but only the **coordinate** is truly frozen (enforced in `updateMixtape`):
 
-- **Publish requires ≥ 1 external link** (Mixcloud / YouTube / SoundCloud) — no empty, substance-less mixtape goes live.
-- **After publish you can still edit** the title, note, cover, and the external links — add YouTube after Mixcloud, swap a cover, add SoundCloud later.
+- **Publish requires the full set** — a recorded date, a dream note, a duration, ≥ 1 external link (Mixcloud / YouTube / SoundCloud), and ≥ 1 tracklist member. A draft is just the operator-authored subset; publish verifies it's complete, then mints the Log ID + number and the title. No empty, substance-less mixtape goes live.
+- **After publish you can still edit** the note and the external links — add YouTube after Mixcloud, add SoundCloud later. (Title and cover are derived from the coordinate, so there's nothing to edit there.)
 - **You can never remove the last link** — a published mixtape must always keep somewhere to listen.
-- **Frozen once published:** the Log ID + sequence number, the `recordedAt` (its sector is baked into the coordinate), and the **tracklist** (members stay draft-only — the published set is the record).
+- **Frozen once published:** the Log ID + sequence number, the title + cover derived from them, the `recordedAt` (its sector is baked into the coordinate), and the **tracklist** (members stay draft-only — the published set is the record).
 
 ## Tracklist — the breadcrumb
 
@@ -164,7 +165,7 @@ A mixtape sits at its sector, which the Galaxy game maps to a distance from Eart
 - **Member tracks that aren't findings yet:** add them as findings first, or allow non-finding members in a mixtape's tracklist.
 - **SSH mixtapes view:** the web/API/CLI/MCP front doors exist; the rave terminal view is still a future surface.
 - **Clip-of-a-mixtape pipeline:** how teaser clips get cut, captioned, and pushed.
-- **OG image:** a per-mixtape `/log` page OG card, reusing `packages/media` (the same idea as the per-finding OG item on the roadmap).
+- ~~**OG image:** a per-mixtape `/log` page OG card.~~ Shipped: `/api/mixtape-cover/<logId>?size=og` renders it on the fly (see Titles + covers).
 - **External publishing chain:** Mixcloud upload, YouTube mirror, optional SoundCloud mirror, MusicBrainz DJ-mix release, Wikidata loop, and announce posts remain out of this plumbing build.
 
 ## Cross-links

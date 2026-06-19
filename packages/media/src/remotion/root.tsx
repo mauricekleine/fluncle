@@ -31,10 +31,11 @@ export const RemotionRoot: React.FC = () => {
         />
       ))}
 
-      {/* Mixtape covers — one <MixtapeCover> per size (square / 16:9 / OG), from
-          mixtape-cover-specs.ts. `bun run render:mixtape-cover -- --number N
-          --coordinate XXX.F.ZZ` writes them to packages/media/out/mixtapes/<coord>/.
-          The defaults below are previewable in Studio; the render script overrides them. */}
+      {/* Mixtape cover — one <MixtapeCover> per size (square / 16:9 / OG), from
+          mixtape-cover-specs.ts. The per-mixtape text is now stamped on the fly by
+          the web cover endpoint (Satori); `bun run render:mixtape-bg` bakes the
+          shared, text-free background (markers:false) into apps/web/public. The
+          defaults below stay previewable in Studio with the markers on. */}
       {MIXTAPE_COVER_SPECS.map((spec) => (
         <Still
           component={MixtapeCover}

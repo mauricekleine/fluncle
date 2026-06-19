@@ -233,6 +233,48 @@ export async function getTrackByIdOrLogId(idOrLogId: string): Promise<TrackListI
   return row ? toTrackListItem(row) : undefined;
 }
 
+const SEARCH_DEFAULT_LIMIT = 20;
+const SEARCH_MAX_LIMIT = 50;
+
+/**
+ * Admin free-text search over the findings archive — matches `q` (case-insensitive,
+ * substring) against track_id, log_id, title, or any stored artist. Newest-first to
+ * mirror listTracks. The artists are stored as a JSON array string (`artists_json`),
+ * so we match the raw JSON text — good enough to find an artist by name without
+ * unpacking the array. Bound args only; `q` is never interpolated into SQL.
+ */
+export async function searchTracks(options: {
+  q: string;
+  limit?: number;
+}): Promise<TrackListItem[]> {
+  const q = options.q.trim();
+
+  if (!q) {
+    return [];
+  }
+
+  const limit = Math.min(
+    Math.max(Math.trunc(options.limit ?? SEARCH_DEFAULT_LIMIT) || SEARCH_DEFAULT_LIMIT, 1),
+    SEARCH_MAX_LIMIT,
+  );
+  const needle = q.toLowerCase();
+
+  const db = await getDb();
+  const result = await db.execute({
+    args: [needle, needle, needle, needle, limit],
+    sql: `select ${TRACK_SELECT}
+          from tracks
+          where lower(tracks.track_id) like '%' || ? || '%'
+             or lower(tracks.log_id) like '%' || ? || '%'
+             or lower(tracks.title) like '%' || ? || '%'
+             or lower(tracks.artists_json) like '%' || ? || '%'
+          order by tracks.added_at desc, tracks.track_id desc
+          limit ?`,
+  });
+
+  return typedRows<TrackRow>(result.rows).map(toTrackListItem);
+}
+
 export async function getTracksForMixtape(mixtapeId: string): Promise<MixtapeMember[]> {
   const db = await getDb();
   const result = await db.execute({

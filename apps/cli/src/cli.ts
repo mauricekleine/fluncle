@@ -97,26 +97,22 @@ type PreviewArchiveBackfillOptions = {
 };
 
 type MixtapeCreateOptions = {
-  coverUrl?: string;
   durationMs?: string;
   json: boolean;
   mixcloudUrl?: string;
   note?: string;
   recordedAt?: string;
   soundcloudUrl?: string;
-  title?: string;
   youtubeUrl?: string;
 };
 
 type MixtapeUpdateOptions = {
-  coverUrl?: string;
   durationMs?: string;
   json: boolean;
   mixcloudUrl?: string;
   note?: string;
   recordedAt?: string;
   soundcloudUrl?: string;
-  title?: string;
   youtubeUrl?: string;
 };
 
@@ -446,8 +442,6 @@ function addAdminCommands(program: Command): void {
   adminMixtapes
     .command("create")
     .description("Log a new mixtape draft")
-    .argument("[title]")
-    .option("--cover-url <url>", "Cover image URL")
     .option("--duration-ms <duration>", "Duration (mm:ss, h:mm:ss, or ms)")
     .option("--json", "Print JSON", false)
     .option("--mixcloud-url <url>", "Mixcloud URL")
@@ -456,23 +450,21 @@ function addAdminCommands(program: Command): void {
     .option("--soundcloud-url <url>", "SoundCloud URL")
     .option("--youtube-url <url>", "YouTube URL")
     .allowExcessArguments()
-    .action(async (title: string | undefined, options: MixtapeCreateOptions) => {
+    .action(async (options: MixtapeCreateOptions) => {
       const { mixtapeCreateCommand } = await import("./commands/mixtapes");
-      await runMixtapeCreate(title, options, mixtapeCreateCommand);
+      await runMixtapeCreate(options, mixtapeCreateCommand);
     });
 
   adminMixtapes
     .command("update")
     .description("Update a mixtape's fields")
     .argument("[id]")
-    .option("--cover-url <url>", "Cover image URL")
     .option("--duration-ms <duration>", "Duration (mm:ss, h:mm:ss, or ms)")
     .option("--json", "Print JSON", false)
     .option("--mixcloud-url <url>", "Mixcloud URL")
     .option("--note <text>", "Operator note")
     .option("--recorded-at <date>", "Recorded date (ISO)")
     .option("--soundcloud-url <url>", "SoundCloud URL")
-    .option("--title <title>", "Mixtape title")
     .option("--youtube-url <url>", "YouTube URL")
     .allowExcessArguments()
     .action(async (id: string | undefined, options: MixtapeUpdateOptions) => {
@@ -915,11 +907,10 @@ async function runTrackUpdate(
 }
 
 async function runMixtapeCreate(
-  title: string | undefined,
   options: MixtapeCreateOptions,
   mixtapeCreateCommand: typeof import("./commands/mixtapes").mixtapeCreateCommand,
 ): Promise<void> {
-  const result = await mixtapeCreateCommand(title, options);
+  const result = await mixtapeCreateCommand(options);
 
   if (options.json) {
     printJson(result);
@@ -1491,7 +1482,6 @@ const stringOptions = new Set([
   "--bpm",
   "--composition",
   "--cover",
-  "--cover-url",
   "--dir",
   "--duration-ms",
   "--features",
@@ -1513,7 +1503,6 @@ const stringOptions = new Set([
   "--soundcloud-url",
   "--source",
   "--status",
-  "--title",
   "--url",
   "--video-url",
   "--youtube-url",

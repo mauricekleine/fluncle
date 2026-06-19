@@ -11,13 +11,18 @@ import { mixtapeLogId } from "./mixtape-log-id";
 import { ApiError } from "./spotify";
 import { getTrackByIdOrLogId, getTracksForMixtape } from "./tracks";
 
-const titleMaxLength = 160;
 const noteMaxLength = 1_200;
 const urlMaxLength = 500;
 
+// The title stub a draft carries until publish. Once the Log ID + sequence number
+// exist, a stub title (empty or this default) is canonicalized to the real format;
+// an operator-set title (a future custom series) is left untouched. The cover is
+// derived from the Log ID, never stored. ("Untitled mixtape" is the legacy stub.)
+export const DEFAULT_MIXTAPE_TITLE = "Fluncle Drum & Bass Mixtape";
+const LEGACY_MIXTAPE_TITLE = "Untitled mixtape";
+
 type MixtapeRow = {
   added_at: string | null;
-  cover_image_url: string | null;
   created_at: string;
   duration_ms: number | null;
   id: string;
@@ -44,14 +49,14 @@ type StatusRow = {
   status: MixtapeStatus;
 };
 
+// A draft is the operator-authored subset of a mixtape. The title (auto-set at
+// publish) and cover (derived from the Log ID) are outputs, not inputs.
 export type MixtapeInput = {
-  coverImageUrl?: unknown;
   durationMs?: unknown;
   mixcloudUrl?: unknown;
   note?: unknown;
   recordedAt?: unknown;
   soundcloudUrl?: unknown;
-  title?: unknown;
   youtubeUrl?: unknown;
 };
 
@@ -60,17 +65,18 @@ export type MixtapeMemberInput = {
 };
 
 export async function createMixtape(input: MixtapeInput): Promise<MixtapeDTO> {
-  const fields = validateMixtapeInput(input, { requireTitle: true });
+  const fields = validateMixtapeInput(input);
   const now = new Date().toISOString();
   const id = randomUUID();
   const db = await getDb();
 
+  // Title is empty until publish canonicalizes it; the column stays NOT NULL (and
+  // open for a future custom-series title), so seed it with an empty string.
   await db.execute({
     args: [
       id,
       "draft",
-      fields.title as string,
-      fields.coverImageUrl ?? null,
+      "",
       fields.durationMs ?? null,
       fields.note ?? null,
       fields.mixcloudUrl ?? null,
@@ -81,21 +87,21 @@ export async function createMixtape(input: MixtapeInput): Promise<MixtapeDTO> {
       now,
     ],
     sql: `insert into mixtapes (
-        id, status, title, cover_image_url, duration_ms, note,
+        id, status, title, duration_ms, note,
         mixcloud_url, youtube_url, soundcloud_url, recorded_at, created_at, updated_at
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 
   return getMixtapeById(id, { includeDrafts: true });
 }
 
 export async function updateMixtape(id: string, input: MixtapeInput): Promise<MixtapeDTO> {
-  // A published mixtape stays editable — title, note, cover, and the external links
-  // can change over time — but its minted coordinate freezes two things: the recorded
-  // date the sector was derived from, and the rule that it always keeps somewhere to
+  // A published mixtape stays editable — the note and external links can change
+  // over time — but its minted coordinate freezes two things: the recorded date
+  // the sector was derived from, and the rule that it always keeps somewhere to
   // listen. Drafts have no such limits. (Members stay draft-only; see setMixtapeMembers.)
   const current = await getMixtapeById(id, { includeDrafts: true });
-  const fields = validateMixtapeInput(input, { requireTitle: false });
+  const fields = validateMixtapeInput(input);
 
   if (current.status === "published") {
     if (fields.recordedAt !== undefined) {
@@ -125,8 +131,6 @@ export async function updateMixtape(id: string, input: MixtapeInput): Promise<Mi
   const args: Array<number | string | null> = [];
 
   for (const [column, value] of [
-    ["title", fields.title],
-    ["cover_image_url", fields.coverImageUrl],
     ["duration_ms", fields.durationMs],
     ["note", fields.note],
     ["mixcloud_url", fields.mixcloudUrl],
@@ -239,6 +243,17 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
     throw new ApiError("already_published", "Published mixtapes keep their coordinate", 409);
   }
 
+  // Everything a published mixtape needs must be present — the draft is just the
+  // operator-authored subset; title + Log ID + cover are minted/derived from here.
+  if (!draft.recordedAt) {
+    throw new ApiError("missing_recorded_at", "Set the recorded date before publishing", 409);
+  }
+  if (!draft.note?.trim()) {
+    throw new ApiError("missing_note", "Write the dream note before publishing", 409);
+  }
+  if (!draft.durationMs) {
+    throw new ApiError("missing_duration", "Set the duration before publishing", 409);
+  }
   if (!hasExternalUrl(draft.externalUrls)) {
     throw new ApiError(
       "missing_external_url",
@@ -246,8 +261,11 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
       409,
     );
   }
+  if (draft.memberCount < 1) {
+    throw new ApiError("missing_members", "Add at least one finding before publishing", 409);
+  }
 
-  const recordedAt = draft.recordedAt ?? new Date().toISOString();
+  const recordedAt = draft.recordedAt;
   const sectorPrefix = mixtapeLogId(recordedAt, 1).slice(0, -2);
   const now = new Date().toISOString();
   const db = await getDb();
@@ -282,6 +300,22 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
 
   if (!row) {
     throw new ApiError("publish_failed", "Mixtape could not be published", 409);
+  }
+
+  // The Log ID and sequence number only exist now — canonicalize the title from
+  // them. A title an operator set (a future custom series) is left untouched; the
+  // empty/stub title every draft carries today gets the standard format.
+  const currentTitle = draft.title.trim();
+  const isStub =
+    currentTitle === "" ||
+    currentTitle === DEFAULT_MIXTAPE_TITLE ||
+    currentTitle === LEGACY_MIXTAPE_TITLE;
+
+  if (isStub) {
+    await db.execute({
+      args: [`Fluncle Drum & Bass Mixtape #${row.sequence_number} | ${row.log_id}`, now, id],
+      sql: `update mixtapes set title = ?, updated_at = ? where id = ?`,
+    });
   }
 
   const published = await getMixtapeByLogId(row.log_id);
@@ -374,7 +408,6 @@ const MIXTAPE_SELECT = `select
   m.log_id,
   m.sequence_number,
   m.title,
-  m.cover_image_url,
   m.duration_ms,
   m.note,
   m.mixcloud_url,
@@ -413,29 +446,20 @@ async function assertDraftMixtape(id: string): Promise<void> {
   }
 }
 
-function validateMixtapeInput(
-  input: MixtapeInput,
-  options: { requireTitle: boolean },
-): {
-  coverImageUrl?: string | null;
+function validateMixtapeInput(input: MixtapeInput): {
   durationMs?: number | null;
   mixcloudUrl?: string | null;
   note?: string | null;
   recordedAt?: string | null;
   soundcloudUrl?: string | null;
-  title?: string;
   youtubeUrl?: string | null;
 } {
   return {
-    coverImageUrl: optionalUrl(input.coverImageUrl),
     durationMs: optionalInteger(input.durationMs, "durationMs"),
     mixcloudUrl: optionalUrl(input.mixcloudUrl),
     note: optionalText(input.note, noteMaxLength),
     recordedAt: optionalIsoDate(input.recordedAt),
     soundcloudUrl: optionalUrl(input.soundcloudUrl),
-    title: options.requireTitle
-      ? requireText(input.title, "title", titleMaxLength)
-      : (optionalText(input.title, titleMaxLength) ?? undefined),
     youtubeUrl: optionalUrl(input.youtubeUrl),
   };
 }

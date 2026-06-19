@@ -1,6 +1,20 @@
+import { siteUrl } from "./fluncle-links";
 import { type TrackListItem } from "./server/tracks";
 
 export type MixtapeStatus = "draft" | "published";
+
+/** The aspects the on-the-fly cover endpoint renders (api/mixtape-cover.$logId.ts). */
+export type MixtapeCoverSize = "og" | "square" | "wide";
+
+/**
+ * The cover URL for a published mixtape, rendered on the fly by the cover
+ * endpoint (Satori over the baked Deep-Field background). square backs the
+ * coverImageUrl + Mixcloud/SoundCloud artwork, og the /log link-preview, wide
+ * the YouTube thumbnail. There's no render step — the cover just exists here.
+ */
+export function mixtapeCoverUrl(logId: string, size: MixtapeCoverSize = "square"): string {
+  return `${siteUrl}/api/mixtape-cover/${encodeURIComponent(logId)}?size=${size}`;
+}
 
 export type MixtapeExternalUrls = {
   mixcloud?: string;
@@ -37,7 +51,6 @@ export type FeedItem = TrackListItem | MixtapeDTO;
 
 export type MixtapeRowLike = {
   added_at?: string | null;
-  cover_image_url?: string | null;
   created_at?: string | null;
   duration_ms?: number | null;
   id?: string | null;
@@ -63,7 +76,9 @@ export function rowToMixtape(row: MixtapeRowLike, members: MixtapeMember[] = [])
   return {
     addedAt: row.added_at ?? undefined,
     artists: ["Fluncle"],
-    coverImageUrl: row.cover_image_url ?? undefined,
+    // The cover is derived, never stored: a published mixtape's Log ID resolves
+    // to the on-the-fly cover endpoint (mixtapeCoverUrl); a draft has no cover yet.
+    coverImageUrl: row.log_id ? mixtapeCoverUrl(row.log_id, "square") : undefined,
     createdAt: row.created_at ?? undefined,
     durationMs: row.duration_ms ?? undefined,
     externalUrls: {

@@ -44,26 +44,22 @@ export type MixtapeListItem = {
 };
 
 export type MixtapeCreateOptions = {
-  coverUrl?: string;
   durationMs?: string;
   json: boolean;
   mixcloudUrl?: string;
   note?: string;
   recordedAt?: string;
   soundcloudUrl?: string;
-  title?: string;
   youtubeUrl?: string;
 };
 
 export type MixtapeUpdateOptions = {
-  coverUrl?: string;
   durationMs?: string;
   json: boolean;
   mixcloudUrl?: string;
   note?: string;
   recordedAt?: string;
   soundcloudUrl?: string;
-  title?: string;
   youtubeUrl?: string;
 };
 
@@ -97,13 +93,11 @@ type MixtapeDeleteResponse = {
 };
 
 type MixtapeBody = {
-  coverImageUrl?: string;
   durationMs?: number;
   mixcloudUrl?: string;
   note?: string;
   recordedAt?: string;
   soundcloudUrl?: string;
-  title?: string;
   youtubeUrl?: string;
 };
 
@@ -116,10 +110,9 @@ export async function mixtapesCommand(): Promise<MixtapeListItem[]> {
 }
 
 export async function mixtapeCreateCommand(
-  title: string | undefined,
   options: MixtapeCreateOptions,
 ): Promise<MixtapeCreateResponse> {
-  return adminApiPost<MixtapeCreateResponse>("/api/admin/mixtapes", buildBody(title, options));
+  return adminApiPost<MixtapeCreateResponse>("/api/admin/mixtapes", buildBody(options));
 }
 
 export async function mixtapeUpdateCommand(
@@ -128,7 +121,7 @@ export async function mixtapeUpdateCommand(
 ): Promise<MixtapeUpdateResponse> {
   return adminApiPatch<MixtapeUpdateResponse>(
     `/api/admin/mixtapes/${encodeURIComponent(id)}`,
-    buildBody(undefined, options),
+    buildBody(options),
   );
 }
 
@@ -176,26 +169,14 @@ export async function mixtapeGetCommand(idOrLogId: string): Promise<MixtapeListI
   return match;
 }
 
-function buildBody(
-  title: string | undefined,
-  options: MixtapeCreateOptions | MixtapeUpdateOptions,
-): MixtapeBody {
+function buildBody(options: MixtapeCreateOptions | MixtapeUpdateOptions): MixtapeBody {
   const body: MixtapeBody = {};
 
-  if (title !== undefined) {
-    body.title = title;
-  }
-  if (options.title !== undefined) {
-    body.title = options.title;
-  }
   if (options.note !== undefined) {
     body.note = options.note;
   }
   if (options.recordedAt !== undefined) {
     body.recordedAt = options.recordedAt;
-  }
-  if (options.coverUrl !== undefined) {
-    body.coverImageUrl = options.coverUrl;
   }
   if (options.mixcloudUrl !== undefined) {
     body.mixcloudUrl = options.mixcloudUrl;
