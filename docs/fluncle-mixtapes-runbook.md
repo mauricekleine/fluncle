@@ -71,12 +71,12 @@ Crawlers, bots, and AI answer engines must read a mixtape **as a DJ mixtape**, n
 
 ## Titles + covers
 
-- **Title — the same string everywhere** (the spine `title` on `/log`, Mixcloud, YouTube, SoundCloud): `Fluncle Drum & Bass Mixtape #N | XXX.F.ZZ`. Searchable genre up front, the coordinate as the unique tail. The title stays plain and consistent; the **dream note** carries the cryptic/evocative weight (and doubles as the platform descriptions).
-- **Covers** are rendered from `packages/media` (the Remotion image kit) — one parametrized composition (`mixtape-cover.tsx`) at the three sizes a mixtape needs:
-  - **Square 1500×1500** → Mixcloud + SoundCloud artwork, and the mixtape's `coverImageUrl` on `/log`.
-  - **16:9 1280×720** → the YouTube thumbnail.
-  - **1200×630** → the `/log` link-preview (OG) card.
-  - Run: `bun run --cwd packages/media render:mixtape-cover -- --number N --coordinate XXX.F.ZZ` → writes them under `packages/media/out/mixtapes/<coordinate>/`. Scaffolded and canon-correct (deep field, the One-Sun eclipse, grain); iterate the art with the `fluncle-video` kit (e.g. drop the cosmonaut figure in).
+- **Title — the same string everywhere** (the spine `title` on `/log`, Mixcloud, YouTube, SoundCloud): `Fluncle Drum & Bass Mixtape #N | XXX.F.ZZ`. Searchable genre up front, the coordinate as the unique tail. Auto-set at publish (`publishMixtape` canonicalizes the draft stub once the number + coordinate exist; a title the operator typed is left as-is). The title stays plain and consistent; the **dream note** carries the cryptic/evocative weight (and doubles as the platform descriptions).
+- **Covers render on the fly** — no per-mixtape render step. `GET /api/mixtape-cover/<logId>?size=square|og|wide` is an edge route (`workers-og`/Satori, same path as the finding OG card) that stamps `MIXTAPE #N` + the coordinate over a fixed Deep-Field background. At publish, an empty cover is filled with the `size=square` URL automatically; the operator can still paste a custom `coverImageUrl` to override.
+  - **Square 1500×1500** (`size=square`) → Mixcloud + SoundCloud artwork, and the mixtape's `coverImageUrl` on `/log`.
+  - **16:9 1280×720** (`size=wide`) → the YouTube thumbnail.
+  - **1200×630** (`size=og`) → the `/log` link-preview (OG) card.
+  - The shared background (cosmonaut on the One-Sun Deep Field, grain) is baked once by `bun run --cwd packages/media render:mixtape-bg` into `apps/web/public/mixtape-bg-{square,wide,og}.png` (the `<MixtapeCover>` composition with `markers: false`). Re-run only when the art changes; iterate it with the `fluncle-video` kit. Remotion is no longer in the publish path.
 
 ## Editing after publish
 
@@ -164,7 +164,7 @@ A mixtape sits at its sector, which the Galaxy game maps to a distance from Eart
 - **Member tracks that aren't findings yet:** add them as findings first, or allow non-finding members in a mixtape's tracklist.
 - **SSH mixtapes view:** the web/API/CLI/MCP front doors exist; the rave terminal view is still a future surface.
 - **Clip-of-a-mixtape pipeline:** how teaser clips get cut, captioned, and pushed.
-- **OG image:** a per-mixtape `/log` page OG card, reusing `packages/media` (the same idea as the per-finding OG item on the roadmap).
+- ~~**OG image:** a per-mixtape `/log` page OG card.~~ Shipped: `/api/mixtape-cover/<logId>?size=og` renders it on the fly (see Titles + covers).
 - **External publishing chain:** Mixcloud upload, YouTube mirror, optional SoundCloud mirror, MusicBrainz DJ-mix release, Wikidata loop, and announce posts remain out of this plumbing build.
 
 ## Cross-links
