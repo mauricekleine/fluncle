@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { trackMedia, videoPoster, videoRendition } from "@/lib/media";
 import { usePreviewPlayer } from "@/lib/preview-player";
 import { type Track } from "@/lib/tracks";
+import { useInViewport } from "@/lib/use-in-viewport";
 import { useResponsiveWidth } from "@/lib/use-responsive-width";
 
 // The log page's media element: the finding's footage as ONE element of the
@@ -17,14 +18,20 @@ export function LogFootage({ track }: { track: Track }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const preview = usePreviewPlayer(track.trackId);
 
+  // Lazy gate: a clip below the fold fetches nothing (preload="none" + no
+  // rendition) until the reader is about to reach it, then arms in one step.
+  // The poster — a cheap edge frame — always holds the pane meanwhile.
+  const nearViewport = useInViewport(videoRef);
+
   // Same-zone Media Transformations rendition sized to the log-page pane (a
   // thumbnail, not full-bleed — so it wants far less than the 1080 master) once
-  // measured; the raw master holds SSR/first paint. A one-shot onError drops
-  // back to the master for any straggler the edge can't transform.
+  // measured AND near the viewport; the raw master holds SSR/first paint. A
+  // one-shot onError drops back to the master for any straggler the edge can't
+  // transform.
   const renditionWidth = useResponsiveWidth(videoRef);
   const [renditionFailed, setRenditionFailed] = useState(false);
   const videoUrl =
-    masterVideoUrl && track.logId && renditionWidth && !renditionFailed
+    masterVideoUrl && track.logId && renditionWidth && nearViewport && !renditionFailed
       ? videoRendition(track.logId, { width: renditionWidth })
       : masterVideoUrl;
 
@@ -51,12 +58,14 @@ export function LogFootage({ track }: { track: Track }) {
     };
   }, [framePoster]);
 
-  // Autoplay the muted loop only when motion is welcome; under reduced motion
-  // the poster holds the frame until the preview toggle (a gesture) starts it.
+  // Autoplay the muted loop only when motion is welcome AND the clip has reached
+  // the viewport; under reduced motion the poster holds the frame until the
+  // preview toggle (a gesture) starts it. Off-screen the poster stands in and
+  // nothing decodes.
   useEffect(() => {
     const video = videoRef.current;
 
-    if (!video) {
+    if (!video || !nearViewport) {
       return;
     }
 
@@ -65,7 +74,7 @@ export function LogFootage({ track }: { track: Track }) {
         // Autoplay denied: the poster frame stands in.
       });
     }
-  }, [videoUrl]);
+  }, [nearViewport, videoUrl]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -98,7 +107,10 @@ export function LogFootage({ track }: { track: Track }) {
           }}
           playsInline
           poster={posterUrl}
-          preload="metadata"
+          // Off-screen: fetch nothing (the poster holds the pane). Once reached,
+          // metadata only — play() then streams the clip progressively (R2 +
+          // faststart h264 serve range requests), no whole-file pull up front.
+          preload={nearViewport ? "metadata" : "none"}
           ref={videoRef}
           src={videoUrl}
         />
