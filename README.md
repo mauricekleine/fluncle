@@ -102,7 +102,7 @@ bun run --cwd apps/web db:generate
 bun run --cwd apps/web db:migrate
 ```
 
-Local migration commands read Turso credentials from `apps/web/.dev.vars` through `apps/web/drizzle.config.ts`. By default, local development should point at the cloned `fluncle-dev` Turso database, not production.
+Local migration commands read Turso credentials from `apps/web/.dev.vars` through `apps/web/drizzle.config.ts`. Everyday local dev runs against a per-worktree local libSQL server (`turso dev`) seeded from a production snapshot, so `db:migrate` only ever touches your own worktree's data. See [docs/local-database.md](./docs/local-database.md) for the full picture (`dev`, `db:refresh-dev`, `db:pull-prod`, and the worktree flow).
 
 ## Raycast
 
@@ -216,16 +216,17 @@ bun run --cwd apps/web wrangler secret put LOOPS_API_KEY
 bun run --cwd apps/web wrangler secret put LOOPS_TRANSACTIONAL_ID
 ```
 
-For local Worker previews and local migration commands, copy `apps/web/.dev.vars.example` to `apps/web/.dev.vars` and fill in local values. The Turso pair should use `fluncle-dev` by default:
+For local Worker previews and local migration commands, copy `apps/web/.dev.vars.example` to `apps/web/.dev.vars` and fill in local values. Leave the `TURSO_DATABASE_URL` pair blank — `db:refresh-dev` seeds a local libSQL database from a production snapshot and points that pair at the local server. The snapshot is pulled by `db:pull-prod`, which reads production credentials from the `Turso Production Credentials` item in the Fluncle 1Password vault (so `op` must be unlocked); see [docs/local-database.md](./docs/local-database.md):
 
 ```bash
 cp apps/web/.dev.vars.example apps/web/.dev.vars
+bun run --cwd apps/web db:refresh-dev
 bun run --cwd apps/web preview
 ```
 
-Production keeps using the `fluncle` Turso database through Wrangler secrets. We do not apply migrations to production automatically yet. If a data/schema change must reach production before that path exists, use the `Turso - Production` item in the Fluncle 1Password vault through the `op` CLI, then run the production migration deliberately.
+Production keeps using the `fluncle` Turso database through Wrangler secrets. Deploys run through Cloudflare Workers Builds on push to `main`, and migrations apply as part of the deploy step: the Cloudflare **Deploy command** is `bun run --cwd apps/web deploy:cf`, which is the committed script `db:migrate && wrangler deploy`. Prod Turso credentials come from the Cloudflare build/deploy environment, so `db:migrate` runs against `fluncle`. To run a production migration by hand instead, use the `Turso - Production` item in the Fluncle 1Password vault through the `op` CLI, then run `db:migrate` deliberately.
 
-Deploy:
+To deploy manually from a checkout (builds locally, no migrate):
 
 ```bash
 bun run --cwd apps/web deploy

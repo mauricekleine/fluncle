@@ -68,6 +68,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - [PRODUCT.md](./PRODUCT.md) - product purpose, brand direction, design principles, and accessibility.
 - [DESIGN.md](./DESIGN.md) - the visual canon (the Nostalgic Cosmos): palette, typography, elevation, components, named visual rules.
 - [VOICE.md](./VOICE.md) - the language canon: persona, vocabulary, named voice rules, surface registers, and copy mechanics.
+- [docs/local-database.md](./docs/local-database.md) - how databases work across prod, dev, and worktrees: prod/dev both Turso, everyday dev on a per-worktree local libSQL server (`turso dev` + `.dev/local.db`) seeded from `fluncle-dev`, the `dev`/`db:refresh-dev`/`db:pull-remote` scripts, Superset worktree provisioning, and the committed `deploy:cf` migrate step.
 - [docs/track-lifecycle.md](./docs/track-lifecycle.md) - canonical architecture for a track's life: fast synchronous add (Worker) + async agent enrichment (audio analysis, video, R2), the generic admin update path, tag provenance, and the enrichment data model.
 - [docs/track-submissions.md](./docs/track-submissions.md) - listener submission architecture and current implementation plan.
 - [docs/admin-tagging.md](./docs/admin-tagging.md) - the admin-gated `/admin/tag` vibe-map tagging tool: place each finding by energy×mood (the four galaxies), web admin auth (one identity, two carriers; Login with Spotify), the queue, the keyboard loop, and the `vibe_x`/`vibe_y` data model.
@@ -111,7 +112,7 @@ bunx --bun shadcn@latest add dialog
 - MUST: Generate SQL migrations via `bun run --cwd apps/web db:generate`.
 - MUST: Keep generated migration metadata with the schema change that caused it.
 - NEVER: Write SQL migrations by hand.
-- SHOULD: Treat Turso/libSQL as the source of persisted app data; avoid local SQLite files or checked-in ad hoc database state.
+- SHOULD: Treat Turso/libSQL as the source of persisted app data. Everyday local dev runs against a per-worktree local libSQL server (see [docs/local-database.md](./docs/local-database.md)); never commit database files or ad hoc database state (the local db lives under the gitignored `apps/web/.dev/`).
 
 ## Dependencies
 
