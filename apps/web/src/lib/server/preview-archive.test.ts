@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { archivePreviewForTrack, buildPreviewArchiveKey } from "./preview-archive";
 import { listTracks } from "./tracks";
 
@@ -11,6 +11,10 @@ vi.mock("./db", () => ({
 }));
 
 describe("preview archive helpers", () => {
+  beforeEach(() => {
+    execute.mockReset();
+  });
+
   it("builds a less obvious Log-ID-based operator-only archive path", async () => {
     const key = await buildPreviewArchiveKey({
       bytes: Uint8Array.from([1, 2, 3]).buffer,
@@ -120,5 +124,51 @@ describe("preview archive helpers", () => {
     expect(publicJson).toContain("previewUrl");
     expect(publicJson).not.toContain("preview_archive");
     expect(publicJson).not.toContain("previewArchive");
+  });
+
+  it("keeps dropped mixtape cover columns out of the public feed query", async () => {
+    const queries: string[] = [];
+    execute.mockImplementation(async (query: { sql: string }) => {
+      queries.push(query.sql);
+
+      if (query.sql.includes("from mixtapes m")) {
+        return {
+          rows: [
+            {
+              added_at: "2026-06-19T10:00:00.000Z",
+              duration_ms: 3_480_000,
+              id: "mixtape-id",
+              log_id: "020.F.1A",
+              member_count: 12,
+              mixcloud_url: "https://mixcloud.com/fluncle/test",
+              note: "A checkpoint.",
+              sequence_number: 1,
+              soundcloud_url: null,
+              title: "Fluncle Drum & Bass Mixtape #1 | 020.F.1A",
+              updated_at: null,
+              youtube_url: null,
+            },
+          ],
+        };
+      }
+
+      if (query.sql.includes("count(*)")) {
+        return { rows: [{ total_count: 0 }] };
+      }
+
+      return { rows: [] };
+    });
+
+    const page = await listTracks({ includeMixtapes: true, limit: 1 });
+    const mixtape = page.tracks[0];
+
+    expect(queries.join("\n")).not.toContain("cover_image_url");
+    expect(mixtape?.type).toBe("mixtape");
+    if (mixtape?.type !== "mixtape") {
+      throw new Error("expected a mixtape feed item");
+    }
+    expect(mixtape.coverImageUrl).toBe(
+      "https://www.fluncle.com/api/mixtape-cover/020.F.1A?size=square",
+    );
   });
 });

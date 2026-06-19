@@ -120,7 +120,6 @@ type TrackRow = {
 
 type MixtapeFeedRow = {
   added_at: string;
-  cover_image_url: string | null;
   duration_ms: number | null;
   id: string;
   log_id: string;
@@ -536,7 +535,6 @@ async function listPublishedMixtapeFeedRows(
             m.log_id,
             m.sequence_number,
             m.title,
-            m.cover_image_url,
             m.duration_ms,
             m.note,
             m.mixcloud_url,
