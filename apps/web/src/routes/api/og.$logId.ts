@@ -53,7 +53,7 @@ export const Route = createFileRoute("/api/og/$logId")({
   server: {
     handlers: {
       GET: async ({ params }) => {
-        const logId = decodeURIComponent(params.logId);
+        const logId = params.logId;
 
         const track = await getTrackByIdOrLogId(logId);
 

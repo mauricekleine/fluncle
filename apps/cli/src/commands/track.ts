@@ -136,56 +136,48 @@ export async function trackVideoCommand(
   // Phase 3: finalize — link the footage cut as video_url and record the vehicle
   // read from the bundle's render.json (the diversity ledger). The authoring
   // model comes from --model, else render.json, else the default.
-  const videoVehicle = files.render ? await readVehicle(files.render) : undefined;
-  const videoModel =
-    files.model?.trim().slice(0, 120) ||
-    (files.render ? await readModel(files.render) : undefined) ||
-    DEFAULT_VIDEO_MODEL;
+  const manifest = files.render ? await readManifestFields(files.render) : {};
+  const videoModel = files.model?.trim().slice(0, 120) || manifest.model || DEFAULT_VIDEO_MODEL;
   const videoModelReasoning =
-    files.reasoning?.trim().slice(0, 120) ||
-    (files.render ? await readReasoning(files.render) : undefined) ||
-    DEFAULT_VIDEO_REASONING;
+    files.reasoning?.trim().slice(0, 120) || manifest.reasoning || DEFAULT_VIDEO_REASONING;
   const finalize = await adminApiPost<FinalizeResponse>(
     `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/video/finalize`,
-    { videoModel, videoModelReasoning, ...(videoVehicle ? { videoVehicle } : {}) },
+    {
+      videoModel,
+      videoModelReasoning,
+      ...(manifest.vehicle ? { videoVehicle: manifest.vehicle } : {}),
+    },
   );
 
   return { logId: finalize.logId, ok: true, trackId: finalize.trackId, urls };
 }
 
-// Reads a single string field (vehicle/model/reasoning) from the bundle's
-// render.json. A missing or unparseable value just leaves the field empty (the
-// caller defaults), never fails the upload.
+// Reads the bundle's render.json once and returns the three string fields the
+// finalize call needs (vehicle/model/reasoning). A missing or unparseable value
+// just leaves that field absent (the caller defaults), never fails the upload.
 type RenderManifestField = "model" | "reasoning" | "vehicle";
 
-async function readManifestField(
+async function readManifestFields(
   renderPath: string,
-  key: RenderManifestField,
-): Promise<string | undefined> {
+): Promise<Partial<Record<RenderManifestField, string>>> {
   try {
     const manifest = (await Bun.file(renderPath).json()) as Record<RenderManifestField, unknown>;
-    const value = manifest[key];
+    const result: Partial<Record<RenderManifestField, string>> = {};
 
-    if (typeof value === "string" && value.trim()) {
-      return value.trim().slice(0, 120);
+    for (const key of ["vehicle", "model", "reasoning"] as const) {
+      const value = manifest[key];
+
+      if (typeof value === "string" && value.trim()) {
+        result[key] = value.trim().slice(0, 120);
+      }
     }
+
+    return result;
   } catch {
     // Loose manifest; ignore.
   }
 
-  return undefined;
-}
-
-async function readVehicle(renderPath: string): Promise<string | undefined> {
-  return readManifestField(renderPath, "vehicle");
-}
-
-async function readModel(renderPath: string): Promise<string | undefined> {
-  return readManifestField(renderPath, "model");
-}
-
-async function readReasoning(renderPath: string): Promise<string | undefined> {
-  return readManifestField(renderPath, "reasoning");
+  return {};
 }
 
 type TrackDraftResult = {

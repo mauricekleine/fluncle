@@ -40,9 +40,14 @@ export async function parseJsonBody(request: Request): Promise<Response | { json
 
 /**
  * Parse + validate an editorial note from an untrusted request body. Returns the
- * trimmed note (or `undefined` when absent/empty); throws `ApiError("note_too_long",
+ * trimmed note (including `""`, which means "clear the note"); returns `undefined`
+ * only when the field is absent (not a string). Throws `ApiError("note_too_long",
  * …, 422)` when it exceeds the budget. Call inside a try block whose catch uses
  * `apiErrorResponse` so the throw becomes a clean 422.
+ *
+ * Semantics differ by caller: the add path treats `""` as "no note" (omit it);
+ * the PATCH path treats `""` as "clear the stored note" (set it). Gate on
+ * `typeof value === "string"` at the call site to distinguish present-from-absent.
  */
 export function parseEditorialNote(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -55,5 +60,5 @@ export function parseEditorialNote(value: unknown): string | undefined {
     throw new ApiError("note_too_long", `Note must be ${NOTE_MAX_LENGTH} characters or less`, 422);
   }
 
-  return trimmed || undefined;
+  return trimmed;
 }

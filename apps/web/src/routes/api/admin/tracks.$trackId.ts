@@ -57,10 +57,10 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId")({
             update.enrichmentStatus = body.enrichmentStatus;
           }
 
-          const note = parseEditorialNote(body.note);
-
-          if (note !== undefined) {
-            update.note = note;
+          // A present note sets it (including "" which clears the stored note);
+          // an absent note leaves it untouched. parseEditorialNote throws on too-long.
+          if (typeof body.note === "string") {
+            update.note = parseEditorialNote(body.note);
           }
 
           if (typeof body.vibeX === "number" && Number.isFinite(body.vibeX)) {

@@ -71,11 +71,12 @@ export const Route = createFileRoute("/api/admin/tracks")({
 
           // The note rides into the Telegram post AND the stored editorial note,
           // so cap it here on the add path too — same 280 budget as the PATCH.
+          // On add, an empty note means "no note" (omit it); PATCH treats "" as a clear.
           const note = parseEditorialNote(body.note);
 
           const result = await publishTrack(body.spotifyUrl, {
             dryRun: body.dryRun === true,
-            note,
+            note: note || undefined,
           });
 
           // Kick off async enrichment on Spinup — a fast enqueue (the work runs

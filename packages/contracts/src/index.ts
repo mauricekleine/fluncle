@@ -9,6 +9,12 @@
 // `publicApiGet<T>`/`adminApiPost<T>`; Raycast imports them for CLI-stdout parsing.
 // Request DTOs are the clean typed bodies the CLI sends — the web keeps its own
 // `unknown`-typed validators that narrow untrusted input at the boundary.
+//
+// Caveat: the Go SSH app (apps/ssh) is outside this single source of truth — it
+// hand-mirrors the request DTOs (`submissionRequest`, `newsletterRequest` in
+// main.go) because Go can't import a TS types package. If a request DTO here
+// changes shape, update the Go structs to match (a code-gen step could close
+// this gap later).
 
 // ── Common ───────────────────────────────────────────────────────────────────
 
