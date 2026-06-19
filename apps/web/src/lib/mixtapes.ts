@@ -7,13 +7,21 @@ export type MixtapeStatus = "draft" | "published";
 export type MixtapeCoverSize = "og" | "square" | "wide";
 
 /**
+ * Bumped whenever the shared cover background or the stamp layout changes. The
+ * cover endpoint serves `immutable, max-age=1y`, so this `?v=` is the cache key —
+ * raise it to bust every cached cover after a re-bake (e.g. the R2-background
+ * fetch fix that replaced the black render).
+ */
+const COVER_VERSION = 2;
+
+/**
  * The cover URL for a published mixtape, rendered on the fly by the cover
  * endpoint (Satori over the baked Deep-Field background). square backs the
  * coverImageUrl + Mixcloud/SoundCloud artwork, og the /log link-preview, wide
  * the YouTube thumbnail. There's no render step — the cover just exists here.
  */
 export function mixtapeCoverUrl(logId: string, size: MixtapeCoverSize = "square"): string {
-  return `${siteUrl}/api/mixtape-cover/${encodeURIComponent(logId)}?size=${size}`;
+  return `${siteUrl}/api/mixtape-cover/${encodeURIComponent(logId)}?size=${size}&v=${COVER_VERSION}`;
 }
 
 export type MixtapeExternalUrls = {

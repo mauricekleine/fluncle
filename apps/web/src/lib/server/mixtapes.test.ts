@@ -78,7 +78,7 @@ describe("publishMixtape — mint + canonicalization", () => {
 
     expect(published.title).toBe("Fluncle Drum & Bass Mixtape #1 | 020.F.1A");
     expect(published.coverImageUrl).toBe(
-      "https://www.fluncle.com/api/mixtape-cover/020.F.1A?size=square",
+      "https://www.fluncle.com/api/mixtape-cover/020.F.1A?size=square&v=2",
     );
   });
 
@@ -97,7 +97,7 @@ describe("publishMixtape — mint + canonicalization", () => {
 
     expect(published.title).toBe("Fluncle Ambient Mixtape");
     expect(published.coverImageUrl).toBe(
-      "https://www.fluncle.com/api/mixtape-cover/020.F.1A?size=square",
+      "https://www.fluncle.com/api/mixtape-cover/020.F.1A?size=square&v=2",
     );
   });
 });
