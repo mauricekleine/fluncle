@@ -70,9 +70,6 @@ import { type TrackListItem } from "@/lib/server/tracks";
 
 const MIXTAPES_KEY = ["admin", "mixtapes"] as const;
 
-// The genre stub the server canonicalizes into the real title at publish time.
-const DRAFT_TITLE = "Fluncle Drum & Bass Mixtape";
-
 // The cover-render row is the minimal slice of a finding the builder keeps.
 type MemberRef = {
   albumImageUrl?: string;
@@ -139,7 +136,7 @@ function AdminMixtapesPage() {
     setError(undefined);
     try {
       const response = await fetch("/api/admin/mixtapes", {
-        body: JSON.stringify({ title: DRAFT_TITLE }),
+        body: JSON.stringify({}),
         headers: { "Content-Type": "application/json" },
         method: "POST",
       });
@@ -226,15 +223,12 @@ function MixtapeEditor({
   const noteId = useId();
   const headerId = useId();
   const bodyId = useId();
-  const titleId = useId();
-  const [title, setTitle] = useState(mixtape.title);
   const [note, setNote] = useState(mixtape.note ?? "");
   const [recordedAt, setRecordedAt] = useState(mixtape.recordedAt?.slice(0, 10) ?? "");
   const [durationField, setDurationField] = useState(formatDurationField(mixtape.durationMs));
   const [mixcloudUrl, setMixcloudUrl] = useState(mixtape.externalUrls.mixcloud ?? "");
   const [youtubeUrl, setYoutubeUrl] = useState(mixtape.externalUrls.youtube ?? "");
   const [soundcloudUrl, setSoundcloudUrl] = useState(mixtape.externalUrls.soundcloud ?? "");
-  const [coverImageUrl, setCoverImageUrl] = useState(mixtape.coverImageUrl ?? "");
   const [members, setMembers] = useState<MemberRef[]>(() => mixtape.members.map(toMemberRef));
   const [error, setError] = useAutoNotice();
   const [notice, setNotice] = useAutoNotice();
@@ -243,26 +237,22 @@ function MixtapeEditor({
   const published = mixtape.status === "published";
 
   const stateRef = useRef({
-    coverImageUrl,
     durationField,
     members,
     mixcloudUrl,
     note,
     recordedAt,
     soundcloudUrl,
-    title,
     youtubeUrl,
   });
   useEffect(() => {
     stateRef.current = {
-      coverImageUrl,
       durationField,
       members,
       mixcloudUrl,
       note,
       recordedAt,
       soundcloudUrl,
-      title,
       youtubeUrl,
     };
   });
@@ -273,9 +263,6 @@ function MixtapeEditor({
   useEffect(() => {
     const local = stateRef.current;
     const prev = lastServer.current;
-    if (local.title === prev.title) {
-      setTitle(mixtape.title);
-    }
     if (local.note === (prev.note ?? "")) {
       setNote(mixtape.note ?? "");
     }
@@ -294,9 +281,6 @@ function MixtapeEditor({
     if (local.soundcloudUrl === (prev.externalUrls.soundcloud ?? "")) {
       setSoundcloudUrl(mixtape.externalUrls.soundcloud ?? "");
     }
-    if (local.coverImageUrl === (prev.coverImageUrl ?? "")) {
-      setCoverImageUrl(mixtape.coverImageUrl ?? "");
-    }
     if (membersRefsEqual(local.members, prev.members.map(toMemberRef))) {
       setMembers(mixtape.members.map(toMemberRef));
     }
@@ -305,13 +289,11 @@ function MixtapeEditor({
 
   const parsedDurationMs = parseDuration(durationField);
   const durationInvalid = durationField.trim().length > 0 && parsedDurationMs === null;
-  const titleInvalid = title.trim().length === 0;
   const urlInvalid =
-    !isOptionalHttpUrl(coverImageUrl) ||
     !isOptionalHttpUrl(mixcloudUrl) ||
     !isOptionalHttpUrl(youtubeUrl) ||
     !isOptionalHttpUrl(soundcloudUrl);
-  const saveDisabled = busy || durationInvalid || titleInvalid || urlInvalid;
+  const saveDisabled = busy || durationInvalid || urlInvalid;
 
   const hasLink = hasExternalUrl({
     mixcloud: mixcloudUrl.trim() || undefined,
@@ -319,11 +301,17 @@ function MixtapeEditor({
     youtube: youtubeUrl.trim() || undefined,
   });
 
+  // Publishing canonicalizes the title and derives the cover, but everything
+  // else must be present first. Gate the button on the live editor state.
+  const missingToPublish = [
+    recordedAt.trim().length === 0 ? "a recorded date" : undefined,
+    note.trim().length === 0 ? "a note" : undefined,
+    parsedDurationMs === null ? "a duration" : undefined,
+    !hasLink ? "a platform link" : undefined,
+    members.length === 0 ? "a finding" : undefined,
+  ].filter((label): label is string => label !== undefined);
+
   const save = () => {
-    if (titleInvalid) {
-      setError("A checkpoint needs a title.");
-      return;
-    }
     if (durationInvalid) {
       setError("Duration must be mm:ss or h:mm:ss, or a millisecond count.");
       return;
@@ -335,13 +323,11 @@ function MixtapeEditor({
     void run(async () => {
       const id = mixtape.id as string;
       await saveMixtape(id, {
-        coverImageUrl,
         durationMs: parsedDurationMs,
         mixcloudUrl,
         note,
         recordedAt,
         soundcloudUrl,
-        title,
         youtubeUrl,
       });
       // Members are draft-only and the endpoint rejects empty arrays, so push
@@ -402,7 +388,7 @@ function MixtapeEditor({
           {mixtape.status ?? "draft"}
         </Badge>
         <span className="min-w-0 flex-1 truncate text-sm font-bold">
-          {mixtape.title || "Untitled mixtape"}
+          {mixtape.logId ? mixtape.title : "Mixtape draft"}
         </span>
         <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
           {mixtape.memberCount} finding{mixtape.memberCount === 1 ? "" : "s"}
@@ -413,14 +399,6 @@ function MixtapeEditor({
       {expanded ? (
         <div className="px-4 pb-4 sm:px-5" id={bodyId} role="region">
           <div className="grid gap-3 md:grid-cols-2">
-            <Field
-              hint={titleInvalid ? "A checkpoint needs a title." : undefined}
-              id={titleId}
-              invalid={titleInvalid}
-              label="Title"
-              value={title}
-              onChange={setTitle}
-            />
             <Field
               disabled={published}
               label="Recorded"
@@ -441,13 +419,6 @@ function MixtapeEditor({
               placeholder="mm:ss or h:mm:ss"
               value={durationField}
               onChange={setDurationField}
-            />
-            <Field
-              hint={isOptionalHttpUrl(coverImageUrl) ? undefined : "Must be a full http(s) URL."}
-              invalid={!isOptionalHttpUrl(coverImageUrl)}
-              label="Cover image URL"
-              value={coverImageUrl}
-              onChange={setCoverImageUrl}
             />
             <Field
               hint={isOptionalHttpUrl(mixcloudUrl) ? undefined : "Must be a full http(s) URL."}
@@ -488,11 +459,10 @@ function MixtapeEditor({
                 <img
                   alt=""
                   className="size-24 shrink-0 rounded-md border border-border object-cover"
-                  src={coverPreviewSrc(mixtape.logId, coverImageUrl)}
+                  src={`/api/mixtape-cover/${encodeURIComponent(mixtape.logId)}?size=square`}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Rendered on the fly — no upload needed. Set a Cover image URL above only to
-                  override it.
+                  Rendered on the fly — no upload needed.
                 </p>
               </div>
             </div>
@@ -506,7 +476,11 @@ function MixtapeEditor({
               {busy ? "Saving…" : "Save"}
             </Button>
             {published ? null : (
-              <Button disabled={busy || !hasLink} onClick={publish} variant="outline">
+              <Button
+                disabled={busy || missingToPublish.length > 0}
+                onClick={publish}
+                variant="outline"
+              >
                 Publish mixtape
               </Button>
             )}
@@ -544,9 +518,9 @@ function MixtapeEditor({
               </AlertDialog>
             )}
           </div>
-          {!published && !hasLink ? (
+          {!published && missingToPublish.length > 0 ? (
             <p className="mt-2 text-xs text-muted-foreground">
-              Add a Mixcloud, YouTube, or SoundCloud link to enable publish.
+              Add {missingToPublish.join(", ")} to publish.
             </p>
           ) : null}
           {error ? (
@@ -971,16 +945,6 @@ function isHttpUrl(value: string): boolean {
   } catch {
     return false;
   }
-}
-
-// The live cover preview: a same-origin render of the cover endpoint (so it
-// shows in dev too), unless the operator set a custom override.
-function coverPreviewSrc(logId: string, override: string): string {
-  const custom = override.trim();
-  if (custom && !custom.includes("/api/mixtape-cover")) {
-    return custom;
-  }
-  return `/api/mixtape-cover/${encodeURIComponent(logId)}?size=square`;
 }
 
 async function readError(response: Response): Promise<string> {
