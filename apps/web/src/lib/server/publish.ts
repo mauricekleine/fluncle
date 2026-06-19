@@ -1,3 +1,4 @@
+import { logPageUrl } from "../fluncle-links";
 import { getDb, typedRow } from "./db";
 import { enrichFromDeezer, lookupIsrcFromDeezer } from "./deezer";
 import { resolveLogId } from "./log-id";
@@ -26,6 +27,8 @@ export type AddTrackResult = {
     albumImageUrl?: string;
     durationMs: number;
     logId?: string;
+    /** The finding's permanent log page on fluncle.com; absent until a Log ID exists. */
+    logPageUrl?: string;
     isrc?: string;
     label?: string;
     previewUrl?: string;
@@ -119,7 +122,7 @@ Spotify: ${track.spotifyUrl}
 
 Telegram message:
 
-${formatTelegramMessage(track, options.note)}
+${formatTelegramMessage(track, options.note, logId)}
 
 No database, Spotify, or Telegram changes were made. Enrichment (label, preview) runs on publish.`;
 
@@ -222,7 +225,7 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
   }
 
   try {
-    await withRetries("Telegram post", () => postToTelegram(track, options.note));
+    await withRetries("Telegram post", () => postToTelegram(track, options.note, logId));
   } catch (error) {
     const message = formatError(error);
     await db.execute({
@@ -300,6 +303,7 @@ function buildAddResult(
       isrc: track.isrc,
       label: extra.label,
       logId: extra.logId,
+      logPageUrl: extra.logId ? logPageUrl(extra.logId) : undefined,
       popularity: track.popularity,
       previewUrl: extra.previewUrl,
       spotifyUrl: track.spotifyUrl,

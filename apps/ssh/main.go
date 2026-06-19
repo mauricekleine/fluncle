@@ -1099,6 +1099,9 @@ func (m model) renderDetail() string {
 		)
 	}
 	lines = append(lines, "", readingStyle.Render(terminalLink(t.SpotifyURL, t.SpotifyURL)))
+	if coord := strings.TrimSpace(t.LogID); coord != "" {
+		lines = append(lines, readingStyle.Render(terminalLink("Read the log", logPageURL(coord))))
+	}
 	lines = append(lines, "", helpLine("q back", "ctrl+c quit"))
 	return strings.Join(lines, "\n")
 }
@@ -1308,6 +1311,9 @@ func (m model) renderGalaxyLog() string {
 	content := m.renderGalaxyCargoDetail(carrier.track)
 	if carrier.track.SpotifyURL != "" {
 		content = append(content, "", readingStyle.Render(terminalLink("Play back on Earth", carrier.track.SpotifyURL)))
+	}
+	if coord := strings.TrimSpace(carrier.track.LogID); coord != "" {
+		content = append(content, "", readingStyle.Render(terminalLink("Read the log", logPageURL(coord))))
 	}
 	content = append(content, "", labelStyle.Render("The audio didn't survive the trip out here. It's still playing back on Earth."))
 	return scaffold("Galaxy", "Recovered flight log", content, helpLine("any key depart"))
@@ -1896,6 +1902,13 @@ func terminalLink(label, url string) string {
 	escapedURL := strings.ReplaceAll(url, "\x1b", "")
 	escapedLabel := strings.ReplaceAll(label, "\x1b", "")
 	return "\x1b]8;;" + escapedURL + "\x1b\\" + escapedLabel + "\x1b]8;;\x1b\\"
+}
+
+// logPageURL is a finding's permanent home on the web, derived from its Log ID
+// coordinate. Mirrors logPageUrl() on the web (apps/web/src/lib/fluncle-links.ts);
+// Log IDs are URL-safe (alphanumerics and dots), so no escaping is needed.
+func logPageURL(logID string) string {
+	return websiteURL + "/log/" + url.PathEscape(logID)
 }
 
 const (

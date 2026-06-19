@@ -68,8 +68,6 @@ The mixtape spine is **live** (PRs #18 plumbing, #20 editable-after-publish + co
 
 Most of the original follow-up set shipped this round (2026-06-19): the B-increment feed-union regression tests, the SSH rave-terminal mixtapes view (deployed), the dedicated 1200×630 OG card, the admin mixtapes CLI (create/update/members/publish/delete — no cookie handoff) with draft delete and cue timestamps (`start_ms`, migration 0016), the MusicBrainz DJ-mix release ([`fc818504`](https://musicbrainz.org/release/fc818504-6c01-4565-be1e-d1b3657f8a7c)), and the voice sweep (incl. the `bangers` track-count relabel). What's left:
 
-- **Cue-point display on `/log`.** Cue timestamps are stored (`start_ms`) and the CLI `get` prints them, but the `/log/<id>` mixtape tracklist doesn't render them yet (the `MixtapeDTO` members already carry `startMs`). Wire the cues into the page.
-- **Cosmetic.** Surface `publishedAt` on the `MixtapeDTO` (the column is set).
 - **Off-site (low priority).** Enrich Wikidata `Q140169844` as facts accumulate (the MusicBrainz release + the SoundCloud anchors; also tracked in the off-site thread).
 
 Out of scope until needed: a teaser-clip-of-a-mixtape pipeline, and the Galaxy-game checkpoint body at the mixtape's sector.
@@ -86,7 +84,7 @@ On standby — most relevant during the content backlog. The video is beat-match
 
 Re-rendering the oversized clips is **done** — every R2 footage file, with-audio and silent, is under Cloudflare's 100 MB transform ceiling (verified 2026-06-17; largest ~95 MB, a few sit close so watch the pipeline's CRF doesn't drift back up). The core playback layer also shipped: `apps/web/src/lib/media.ts` serves same-zone Media Transformation renditions (a 360/480/720/1080 width ladder via `videoRendition`) + a cheap `mode=frame` poster (`videoPoster`), with a one-shot `onError` fallback to the raw master.
 
-What's left is playback polish on `apps/web` (the feed + Stories player): lazy-load clips below the fold, range/HLS streaming for the Stories player instead of whole-file fetches, and a real before/after measurement on a mobile connection.
+What's left is a real before/after measurement on a mobile connection: throttled-mobile bytes-on-load and time-to-first-frame on real glass. The playback paths are in place around it — the feed carries no video, the Stories player streams via range requests, and the log-page footage defers its fetch until it nears the viewport — so the open item is verifying the win, not building more deferral.
 
 Re-ship caveat (for the content-backlog loop too): replacing a clip at the same `<log-id>/footage.mp4` key needs the transform renditions purged, not just the master — they cache under separate keys, and purge propagation lags per-colo (the `mode=frame` poster clears slower than the `mode=video` rendition, so check from the affected location before assuming it's stuck). To force an instant flip, version the transform source in `media.ts` (`?v=N` on the `footage.mp4` source).
 
@@ -96,10 +94,9 @@ Two `@fluncle` SoundClouds exist: the main `soundcloud.com/fluncle` (the clean U
 
 ### YouTube thumbnails — backfill the back catalogue + guard the missing cover
 
-Custom YouTube thumbnails are wired and on by default: the per-platform push derives `<log-id>/cover.jpg` from the footage path and `pushYouTubeShort` uploads it as `settings.thumbnail` (`apps/web/src/lib/server/postiz.ts`). It's been live since the admin posting board (`b16a5db`, 2026-06-13), so every Short pushed since carries the Fluncle plate; the Shorts published before it still show YouTube's auto-picked video frame. Two follow-ups, both operator-side and low-priority (nothing is broken — new pushes are covered):
+Custom YouTube thumbnails are wired and on by default: the per-platform push derives `<log-id>/cover.jpg` from the footage path and `pushYouTubeShort` uploads it as `settings.thumbnail` (`apps/web/src/lib/server/postiz.ts`). It's been live since the admin posting board (`b16a5db`, 2026-06-13), so every Short pushed since carries the Fluncle plate; the Shorts published before it still show YouTube's auto-picked video frame. One follow-up, operator-side and low-priority (nothing is broken — new pushes are covered, and a missing cover degrades to a thumbnail-less push rather than failing):
 
 - **Backfill the pre-`b16a5db` Shorts.** Postiz's create-post flow makes a _new_ video and has no "edit an existing video's thumbnail" call, so the live Shorts can't be retro-fixed through our path. Options: set each one's thumbnail manually in YouTube Studio (~7 videos, no code), or a one-off **YouTube Data API `thumbnails.set`** script that uploads `cover.jpg` per published Short (reusable, but needs a YouTube OAuth token with upload scope — Postiz holds its own auth, we have no direct YouTube credential in the repo today).
-- **Guard the missing cover.** `coverUrl` is passed unconditionally, but older bundles may lack a `cover.jpg` in R2 (the known stories-media quirk); if it's absent, `uploadFromUrl` throws and the **whole push 502s** instead of posting without a thumbnail. Probe the cover first and skip the thumbnail if it's missing, so a missing cover never blocks a publish.
 
 ### Secrets in 1Password — render `.dev.vars` from a template
 
@@ -191,10 +188,6 @@ Gated on nothing structural — it's net-new surface plumbing, sized as a single
 ### Brand & canon
 
 - **Moodboard → canon audit (video-side remainder)** — the web overhaul resolved the web half (the logbook plate, ignition hovers, the grain architecture, and the archive grammar are in DESIGN.md now). Still open per concept: whether the video-kit proofs (texture families' full grammar, vehicle grammar, One-Sun-through-the-vehicle) get promoted into canon or stay video-local; cross-link, don't duplicate.
-
-### Link the log pages where hyperlinks exist
-
-Every finding now has a permanent URL (`https://www.fluncle.com/log/<log-id>`) — surfaces that can carry real links should use it: the Friday newsletter (per-track links to the log page instead of/alongside Spotify), Telegram posts (a quiet log-page link under the banger), and CLI/SSH output where a URL prints. TikTok captions stay bare-coordinate (`fluncle://<id>`) on purpose — no hyperlinks there, and the coordinate-to-site retrieval is the AEO play.
 
 ### Newsletter agent (Spinup)
 

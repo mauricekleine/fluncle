@@ -1,5 +1,12 @@
 export const siteUrl = "https://www.fluncle.com";
 
+// A finding's permanent home: its own log page. The canonical builder, reused
+// wherever a hyperlink-capable surface points at a finding (log JSON-LD, the
+// public API DTO, Telegram posts).
+export function logPageUrl(logId: string): string {
+  return `${siteUrl}/log/${encodeURIComponent(logId)}`;
+}
+
 export const spotifyPlaylistUrl =
   import.meta.env.VITE_FLUNCLE_SPOTIFY_PLAYLIST_URL ??
   "https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0?si=054d3c6cbcf14a36";

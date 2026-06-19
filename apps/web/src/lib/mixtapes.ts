@@ -24,6 +24,7 @@ export type MixtapeDTO = {
   memberCount: number;
   members: MixtapeMember[];
   note?: string;
+  publishedAt?: string;
   recordedAt?: string;
   sequenceNumber?: number;
   status?: MixtapeStatus;
@@ -44,6 +45,7 @@ export type MixtapeRowLike = {
   member_count?: number | null;
   mixcloud_url?: string | null;
   note?: string | null;
+  published_at?: string | null;
   recorded_at?: string | null;
   sequence_number?: number | null;
   soundcloud_url?: string | null;
@@ -74,6 +76,7 @@ export function rowToMixtape(row: MixtapeRowLike, members: MixtapeMember[] = [])
     memberCount: Number(row.member_count ?? members.length),
     members,
     note: row.note?.trim() ? row.note : undefined,
+    publishedAt: row.published_at ?? undefined,
     recordedAt: row.recorded_at ?? undefined,
     sequenceNumber: row.sequence_number ?? undefined,
     status: row.status ?? undefined,

@@ -34,7 +34,7 @@ It is short and it evolves; what it says overrides everything below. The rules t
 
     You fill word-slots; you never alter the `<Style>` element, the component structure, the button, the greeting, or the sign-off. Never write `{braces}` in LMX content; Loops treats braces as template variables and rejects them. The slots:
     - `SLOT_INTRO`: 1-3 sentences, the week in one breath, first person.
-    - The track block (the `SLOT_TRACK_*` paragraph pair) repeats once per track, newest first: replace the placeholder `href` with the track's `spotifyUrl`, fill artist and title inside the existing `<Strong><Link>` wrapper (`Artist — Title`, em dash), then the why as its own paragraph.
+    - The track block (the `SLOT_TRACK_*` paragraph pair) repeats once per track, newest first: point the title `<Link>` at the finding's log page (the `logPageUrl` field; if a track ever lacks one, fall back to `spotifyUrl`), fill artist and title inside the existing `<Strong><Link>` wrapper (`Artist — Title`, em dash), then the why as its own paragraph. The log page is the finding's permanent home; close the why with a quiet inline Spotify `<Link>` (its `spotifyUrl`) so both are one tap away — for example, a trailing "Hear it on Spotify." Both links per track; never alter the component structure to add them.
     - `SLOT_TIDBIT`: one paragraph per surviving tidbit with its source as an inline `<Link>`. If no tidbits survived step 5, delete the entire "Meanwhile, in the scene" section including its `<H2>`.
       Subject line: short, dry, specific to this week's contents; sentence case; no exclamation marks.
 
