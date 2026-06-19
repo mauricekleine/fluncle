@@ -133,10 +133,10 @@ type MixtapeFeedRow = {
 
 // Columns exposed to clients. `features_json` is the enrichment spectral summary,
 // surfaced (parsed) as creative fuel for the video agent.
-const TRACK_SELECT = `track_id, spotify_url, title, album, album_image_url, artists_json,
-  bpm, duration_ms, enrichment_status, features_json, isrc, key, label, log_id, popularity,
-  preview_url, release_date, video_url, video_vehicle, video_model, video_model_reasoning, note, added_at,
-  updated_at, vibe_x, vibe_y, added_to_spotify, posted_to_telegram,
+const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.title, tracks.album, tracks.album_image_url, tracks.artists_json,
+  tracks.bpm, tracks.duration_ms, tracks.enrichment_status, tracks.features_json, tracks.isrc, tracks.key, tracks.label, tracks.log_id, tracks.popularity,
+  tracks.preview_url, tracks.release_date, tracks.video_url, tracks.video_vehicle, tracks.video_model, tracks.video_model_reasoning, tracks.note, tracks.added_at,
+  tracks.updated_at, tracks.vibe_x, tracks.vibe_y, tracks.added_to_spotify, tracks.posted_to_telegram,
   (select url from social_posts
      where track_id = tracks.track_id and platform = 'tiktok' and status = 'published'
        and url is not null
