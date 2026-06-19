@@ -64,8 +64,8 @@ Crawlers, bots, and AI answer engines must read a mixtape **as a DJ mixtape**, n
 
 ## Hosting — where the audio and video go
 
-- **Mixcloud — primary home.** Properly licensed (direct deals with the majors + indies like Ninja Tune / XL via Merlin): it plays legally and pays the featured artists, within the Featured-Artist / SRPC limits (≤ 4 tracks per artist, ≤ 3 per album, tracklist required — trivial for a varied D&B set).
-- **YouTube — reach mirror.** Content ID claims it: the video stays up but the labels monetize it. Good for reach, not revenue, with a minor regional-block / strike risk. The **mixtape video** lives here.
+- **Mixcloud — primary home.** Properly licensed (direct deals with the majors + indies like Ninja Tune / XL via Merlin): it plays legally and pays the featured artists, within the Featured-Artist / SRPC limits. Two failure tiers to stay clear of: exceeding the consecutive rule (≤ 3 per artist consecutive, ≤ 2 per release consecutive) makes the show **regionally unavailable**; **4–8 tracks from one artist makes the whole show Premium / subscriber-only globally** (a hard paywall). The curator waiver doesn't apply. Trivial for a varied D&B set — observe, don't pre-lint; if a show ever gets gated it's visible on Mixcloud and fixable by hand (audio can't be swapped — delete + re-upload). Upload is **CLI-direct** with the operator's own token.
+- **YouTube — reach mirror.** Content ID claims it: the video stays up but the labels monetize it. Good for reach, not revenue. The **mixtape video** lives here, uploaded via Fluncle's own OAuth (`youtube_auth`) — published unlisted, flipped public by the operator.
 - **SoundCloud — secondary mirror.** Patchier (takedown risk). Profile presence is the separate roadmap item; hosting actual audio there is the licensing-gated question this runbook owns.
 - **Teaser clips.** Short clips cut from the set go to the social surfaces (TikTok / Shorts / IG) the same way a finding's clip does — the clip is a trailer for the mixtape, captioned with the mixtape's `fluncle://<id>` coordinate. (Clip-of-a-mixtape has no pipeline yet; see Open questions.)
 
@@ -83,10 +83,11 @@ Crawlers, bots, and AI answer engines must read a mixtape **as a DJ mixtape**, n
 
 Publishing is the irreversible-ish step, but only the **coordinate** is truly frozen (enforced in `updateMixtape`):
 
-- **Publish requires the full set** — a recorded date, a dream note, a duration, ≥ 1 external link (Mixcloud / YouTube / SoundCloud), and ≥ 1 tracklist member. A draft is just the operator-authored subset; publish verifies it's complete, then mints the Log ID + number and the title. No empty, substance-less mixtape goes live.
+- **Minting requires the substance, not the links** — a recorded date, a dream note, a duration, and ≥ 1 tracklist member. A draft is just the operator-authored subset; `publishMixtape` verifies it, then mints the Log ID + number + title into the `distributing` state. The external link is **not** a mint gate — distribution supplies it (the mint-first reshape; see [the autopublish RFC](./rfcs/mixtape-autopublish-rfc.md)). No empty, substance-less mixtape goes live.
+- **The lifecycle:** `draft` → (mint) `distributing` (coordinate committed, cover renders, hidden from public) → (first platform link) `published`. A `distributing` mixtape is edit-locked like a published one and can't be deleted (it owns a committed coordinate); a totally failed distribution leaves it `distributing` with its Log ID held for retry, never a linkless public mixtape.
 - **After publish you can still edit** the note and the external links — add YouTube after Mixcloud, add SoundCloud later. (Title and cover are derived from the coordinate, so there's nothing to edit there.)
 - **You can never remove the last link** — a published mixtape must always keep somewhere to listen.
-- **Frozen once published:** the Log ID + sequence number, the title + cover derived from them, the `recordedAt` (its sector is baked into the coordinate), and the **tracklist** (members stay draft-only — the published set is the record).
+- **Frozen once minted:** the Log ID + sequence number, the title + cover derived from them, the `recordedAt` (its sector is baked into the coordinate), and the **tracklist** (members stay draft-only — the minted set is the record).
 
 ## Tracklist — the breadcrumb
 
@@ -136,15 +137,22 @@ Once a mixtape is live on the spine, make the crew aware of it on Fluncle's own 
 
 - The data model, Log ID minting (the `mixtapes` table is the counter), the `/log/<id>` mixtape flavor, the `/mixtapes` surfaces, the `DJMixAlbum` schema/RSS/llms.txt awareness, and the per-surface rendering from the fan-out map above.
 
-**Phase C — Publish:**
+**Phase C — Publish:** one CLI command distributes a mixtape's video→YouTube + audio→Mixcloud and records the links (see [the autopublish RFC](./rfcs/mixtape-autopublish-rfc.md)). The CLI moves the bytes (the Worker can't proxy a multi-GB master); the Worker mints the coordinate and records the outcome. The flow is **mint-first**: `publishMixtape` mints the draft into a non-public **`distributing`** state (the cover renders, public surfaces stay hidden), the uploads carry the committed Log ID, and the **first successful platform link flips it `published`** — so a public mixtape always has somewhere to listen.
 
-1. Mint the mixtape Log ID (sector = today; `F` marker; the next sequence number).
-2. Upload to Mixcloud with the tracklist breadcrumbs.
-3. Mirror the video to YouTube (description + chapters carry the breadcrumbs).
-4. (Optional) SoundCloud mirror.
-5. MusicBrainz DJ-mix release, then the Wikidata loop.
-6. Confirm the spine entry is live: feed checkpoint row, `/mixtapes` index, the `/log` page, and the API / RSS / MCP / CLI / SSH resolvers.
-7. Update `llms.txt` (the Mixtapes section).
+_One-time setup (per machine):_
+
+- `fluncle admin auth youtube` — opens Google's consent screen; the durable refresh token is stored server-side in `youtube_auth` (the dashboard "Make public" button + the resumable upload both ride on it). Precondition: the `@fluncle` channel is phone-verified (done) — without it, uploads over 15 min fail at insert.
+- `fluncle admin auth mixcloud` — prints a Mixcloud authorize URL; approve, then paste the redirected `code` (or full URL) back. The CLI exchanges it for `MIXCLOUD_ACCESS_TOKEN` and writes it into the active profile's dotenv (`--env local|production`). It's your personal Mixcloud credential and never touches the Worker; revocable — re-run if a later upload reports an invalid token.
+
+_Per mixtape, from the Mac where the assets live:_
+
+1. **Distribute.** `fluncle admin mixtapes distribute <idOrLogId> --video <mixtape>.mp4 --audio <master>` (omit a flag to target one platform). The CLI mints the coordinate if it's still a draft, then: streams the video to YouTube (**unlisted**, title + description ending in `fluncle://<logId>` + the cued chapter block, the wide cover set best-effort as the thumbnail; resumes on a mid-upload token expiry or dropped session), and POSTs the full-quality master to Mixcloud (name + description + square cover + a per-track `sections[]` tracklist from cued members, published **listed** directly). Each leg records into `mixtape_social_posts`, dual-writes `mixtapes.{youtube,mixcloud}_url`, and flips the mixtape public on the first link.
+2. **Make YouTube public** (the recurring human gate — one action): the `/admin/mixtapes` **Make YouTube public** button, or `fluncle admin mixtapes publish-youtube <idOrLogId>`. Server-side `videos.update` (the Worker holds the token).
+3. **(Optional) SoundCloud mirror** — manual for now (API registration is externally gated); paste the link via the editor. The data model accepts it with no rework.
+4. **MusicBrainz DJ-mix release**, then the Wikidata loop.
+5. **Confirm + retry.** Watch the `/admin/mixtapes` Distribution strip; a failed leg stays retryable (re-run `distribute` — idempotent per platform, reuses the committed Log ID). Confirm the spine entry is live: feed checkpoint row, `/mixtapes` index, the `/log` page, and the API / RSS / MCP / CLI / SSH resolvers, and the `llms.txt` Mixtapes section.
+
+_Limits + crash recovery._ YouTube `videos.insert` is metered in the separate **Video Uploads bucket (~100/day** post-Dec-2025), 256 GB / 12 h per video — a non-issue at this cadence; Content ID will claim the mix (it stays up, labels monetize). Because the Log ID is committed before upload, a crash between a successful PUT and finalize leaves a live unlisted video with the right coordinate; re-running may create a duplicate unlisted video to delete in YouTube Studio.
 
 **Phase D — Announce:** Telegram → newsletter → home → CLI/SSH line.
 

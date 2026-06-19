@@ -23,6 +23,7 @@ import {
   TrashIcon,
   XIcon,
 } from "@phosphor-icons/react";
+import { type MixtapeSocialPostItem } from "@fluncle/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
@@ -473,6 +474,10 @@ function MixtapeEditor({
             </div>
           ) : null}
 
+          {minted && mixtape.id ? (
+            <DistributionStrip mixtapeId={mixtape.id} status={mixtape.status} />
+          ) : null}
+
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <Button disabled={saveDisabled} onClick={save}>
               {busy ? (
@@ -541,6 +546,117 @@ function MixtapeEditor({
         </div>
       ) : null}
     </section>
+  );
+}
+
+// The per-platform distribution status for a minted mixtape: one row per platform
+// (uploading / published / failed), a link once published, and the recurring
+// unlisted→public flip for YouTube while the mixtape is still `distributing`. Read
+// from /api/admin/mixtapes/:id/social with focus-refetch ON (admin convention) so
+// the operator watches a CLI distribute run land without a manual reload.
+function DistributionStrip({ mixtapeId, status }: { mixtapeId: string; status: string }) {
+  const queryClient = useQueryClient();
+  const queryKey = ["admin", "mixtape-social", mixtapeId] as const;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useAutoNotice();
+  const [notice, setNotice] = useAutoNotice();
+
+  const { data: posts } = useQuery({
+    queryFn: () => fetchMixtapeSocial(mixtapeId),
+    queryKey,
+    refetchOnWindowFocus: true,
+  });
+
+  const youtube = posts?.find((post) => post.platform === "youtube");
+  const canMakePublic = status === "distributing" && youtube !== undefined;
+
+  const makePublic = async () => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      const response = await fetch(
+        `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/youtube/publish`,
+        { method: "POST" },
+      );
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+      setNotice("YouTube video is public.");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey }),
+        queryClient.invalidateQueries({ queryKey: MIXTAPES_KEY }),
+      ]);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="plate-field mt-4 rounded-lg p-3">
+      <p className="text-xs font-bold text-muted-foreground">Distribution</p>
+      {posts && posts.length > 0 ? (
+        <div className="mt-2 divide-y divide-border">
+          {posts.map((post) => (
+            <div key={post.platform} className="flex items-center gap-3 py-2">
+              <span className="w-20 shrink-0 text-sm capitalize">{post.platform}</span>
+              <DistributionStatusBadge status={post.status} />
+              {post.url ? (
+                <a
+                  className="min-w-0 flex-1 truncate text-xs text-muted-foreground underline-offset-2 hover:underline focus-visible:underline focus-visible:outline-2 focus-visible:outline-ring"
+                  href={post.url}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  {post.url}
+                </a>
+              ) : (
+                <span className="min-w-0 flex-1" />
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-2 text-xs text-muted-foreground">
+          No platforms yet. Run <code className="font-mono">fluncle admin mixtapes distribute</code>{" "}
+          from the CLI.
+        </p>
+      )}
+
+      {canMakePublic ? (
+        <div className="mt-3">
+          <Button disabled={busy} onClick={() => void makePublic()} variant="outline">
+            {busy ? (
+              <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+            ) : undefined}
+            {busy ? "Publishing…" : "Make YouTube public"}
+          </Button>
+        </div>
+      ) : null}
+
+      {error ? (
+        <p role="alert" className="mt-2 text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
+      {notice ? (
+        <p aria-live="polite" className="mt-2 text-sm text-muted-foreground">
+          {notice}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function DistributionStatusBadge({ status }: { status: string }) {
+  const variant =
+    status === "published" ? "default" : status === "failed" ? "destructive" : "outline";
+
+  return (
+    <Badge className="shrink-0 capitalize" variant={variant}>
+      {status}
+    </Badge>
   );
 }
 
@@ -972,6 +1088,15 @@ async function searchAdminTracks(q: string): Promise<TrackListItem[]> {
   }
   const body = (await response.json()) as { tracks?: TrackListItem[] };
   return body.tracks ?? [];
+}
+
+async function fetchMixtapeSocial(id: string): Promise<MixtapeSocialPostItem[]> {
+  const response = await fetch(`/api/admin/mixtapes/${encodeURIComponent(id)}/social`);
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  const body = (await response.json()) as { posts?: MixtapeSocialPostItem[] };
+  return body.posts ?? [];
 }
 
 async function saveMixtape(id: string, body: MixtapeInput) {

@@ -53,9 +53,12 @@ import { Route as ApiAdminLogoutRouteImport } from './routes/api/admin/logout'
 import { Route as ApiMeSavedFindingsTrackIdRouteImport } from './routes/api/me/saved-findings.$trackId'
 import { Route as ApiMeGalaxyProgressLogsRouteImport } from './routes/api/me/galaxy-progress/logs'
 import { Route as ApiMeExportExportIdRouteImport } from './routes/api/me/export.$exportId'
+import { Route as ApiAdminYoutubeTokenRouteImport } from './routes/api/admin/youtube/token'
 import { Route as ApiAdminTracksTrackIdRouteImport } from './routes/api/admin/tracks.$trackId'
 import { Route as ApiAdminSubmissionsSubmissionIdRouteImport } from './routes/api/admin/submissions/$submissionId'
 import { Route as ApiAdminMixtapesMixtapeIdRouteImport } from './routes/api/admin/mixtapes.$mixtapeId'
+import { Route as ApiAdminYoutubeAuthStartRouteImport } from './routes/api/admin/youtube/auth/start'
+import { Route as ApiAdminYoutubeAuthCallbackRouteImport } from './routes/api/admin/youtube/auth/callback'
 import { Route as ApiAdminTracksTrackIdVideoRouteImport } from './routes/api/admin/tracks.$trackId.video'
 import { Route as ApiAdminTracksTrackIdSocialRouteImport } from './routes/api/admin/tracks.$trackId.social'
 import { Route as ApiAdminTracksTrackIdPreviewArchiveRouteImport } from './routes/api/admin/tracks.$trackId.preview-archive'
@@ -70,6 +73,10 @@ import { Route as ApiAdminMixtapesMixtapeIdMembersRouteImport } from './routes/a
 import { Route as ApiAdminTracksTrackIdVideoUploadsRouteImport } from './routes/api/admin/tracks.$trackId.video.uploads'
 import { Route as ApiAdminTracksTrackIdVideoFinalizeRouteImport } from './routes/api/admin/tracks.$trackId.video.finalize'
 import { Route as ApiAdminTracksTrackIdSocialPlatformRouteImport } from './routes/api/admin/tracks.$trackId.social.$platform'
+import { Route as ApiAdminMixtapesMixtapeIdYoutubePublishRouteImport } from './routes/api/admin/mixtapes.$mixtapeId.youtube.publish'
+import { Route as ApiAdminMixtapesMixtapeIdYoutubeInitiateRouteImport } from './routes/api/admin/mixtapes.$mixtapeId.youtube.initiate'
+import { Route as ApiAdminMixtapesMixtapeIdYoutubeFinalizeRouteImport } from './routes/api/admin/mixtapes.$mixtapeId.youtube.finalize'
+import { Route as ApiAdminMixtapesMixtapeIdMixcloudFinalizeRouteImport } from './routes/api/admin/mixtapes.$mixtapeId.mixcloud.finalize'
 import { Route as ApiAdminTracksTrackIdSocialPlatformDraftRouteImport } from './routes/api/admin/tracks.$trackId.social.$platform.draft'
 
 const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
@@ -293,6 +300,11 @@ const ApiMeExportExportIdRoute = ApiMeExportExportIdRouteImport.update({
   path: '/$exportId',
   getParentRoute: () => ApiMeExportRoute,
 } as any)
+const ApiAdminYoutubeTokenRoute = ApiAdminYoutubeTokenRouteImport.update({
+  id: '/api/admin/youtube/token',
+  path: '/api/admin/youtube/token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAdminTracksTrackIdRoute = ApiAdminTracksTrackIdRouteImport.update({
   id: '/$trackId',
   path: '/$trackId',
@@ -309,6 +321,18 @@ const ApiAdminMixtapesMixtapeIdRoute =
     id: '/$mixtapeId',
     path: '/$mixtapeId',
     getParentRoute: () => ApiAdminMixtapesRoute,
+  } as any)
+const ApiAdminYoutubeAuthStartRoute =
+  ApiAdminYoutubeAuthStartRouteImport.update({
+    id: '/api/admin/youtube/auth/start',
+    path: '/api/admin/youtube/auth/start',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiAdminYoutubeAuthCallbackRoute =
+  ApiAdminYoutubeAuthCallbackRouteImport.update({
+    id: '/api/admin/youtube/auth/callback',
+    path: '/api/admin/youtube/auth/callback',
+    getParentRoute: () => rootRouteImport,
   } as any)
 const ApiAdminTracksTrackIdVideoRoute =
   ApiAdminTracksTrackIdVideoRouteImport.update({
@@ -394,6 +418,30 @@ const ApiAdminTracksTrackIdSocialPlatformRoute =
     path: '/$platform',
     getParentRoute: () => ApiAdminTracksTrackIdSocialRoute,
   } as any)
+const ApiAdminMixtapesMixtapeIdYoutubePublishRoute =
+  ApiAdminMixtapesMixtapeIdYoutubePublishRouteImport.update({
+    id: '/youtube/publish',
+    path: '/youtube/publish',
+    getParentRoute: () => ApiAdminMixtapesMixtapeIdRoute,
+  } as any)
+const ApiAdminMixtapesMixtapeIdYoutubeInitiateRoute =
+  ApiAdminMixtapesMixtapeIdYoutubeInitiateRouteImport.update({
+    id: '/youtube/initiate',
+    path: '/youtube/initiate',
+    getParentRoute: () => ApiAdminMixtapesMixtapeIdRoute,
+  } as any)
+const ApiAdminMixtapesMixtapeIdYoutubeFinalizeRoute =
+  ApiAdminMixtapesMixtapeIdYoutubeFinalizeRouteImport.update({
+    id: '/youtube/finalize',
+    path: '/youtube/finalize',
+    getParentRoute: () => ApiAdminMixtapesMixtapeIdRoute,
+  } as any)
+const ApiAdminMixtapesMixtapeIdMixcloudFinalizeRoute =
+  ApiAdminMixtapesMixtapeIdMixcloudFinalizeRouteImport.update({
+    id: '/mixcloud/finalize',
+    path: '/mixcloud/finalize',
+    getParentRoute: () => ApiAdminMixtapesMixtapeIdRoute,
+  } as any)
 const ApiAdminTracksTrackIdSocialPlatformDraftRoute =
   ApiAdminTracksTrackIdSocialPlatformDraftRouteImport.update({
     id: '/draft',
@@ -446,6 +494,7 @@ export interface FileRoutesByFullPath {
   '/api/admin/mixtapes/$mixtapeId': typeof ApiAdminMixtapesMixtapeIdRouteWithChildren
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
   '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRouteWithChildren
+  '/api/admin/youtube/token': typeof ApiAdminYoutubeTokenRoute
   '/api/me/export/$exportId': typeof ApiMeExportExportIdRoute
   '/api/me/galaxy-progress/logs': typeof ApiMeGalaxyProgressLogsRoute
   '/api/me/saved-findings/$trackId': typeof ApiMeSavedFindingsTrackIdRoute
@@ -460,6 +509,12 @@ export interface FileRoutesByFullPath {
   '/api/admin/tracks/$trackId/preview-archive': typeof ApiAdminTracksTrackIdPreviewArchiveRoute
   '/api/admin/tracks/$trackId/social': typeof ApiAdminTracksTrackIdSocialRouteWithChildren
   '/api/admin/tracks/$trackId/video': typeof ApiAdminTracksTrackIdVideoRouteWithChildren
+  '/api/admin/youtube/auth/callback': typeof ApiAdminYoutubeAuthCallbackRoute
+  '/api/admin/youtube/auth/start': typeof ApiAdminYoutubeAuthStartRoute
+  '/api/admin/mixtapes/$mixtapeId/mixcloud/finalize': typeof ApiAdminMixtapesMixtapeIdMixcloudFinalizeRoute
+  '/api/admin/mixtapes/$mixtapeId/youtube/finalize': typeof ApiAdminMixtapesMixtapeIdYoutubeFinalizeRoute
+  '/api/admin/mixtapes/$mixtapeId/youtube/initiate': typeof ApiAdminMixtapesMixtapeIdYoutubeInitiateRoute
+  '/api/admin/mixtapes/$mixtapeId/youtube/publish': typeof ApiAdminMixtapesMixtapeIdYoutubePublishRoute
   '/api/admin/tracks/$trackId/social/$platform': typeof ApiAdminTracksTrackIdSocialPlatformRouteWithChildren
   '/api/admin/tracks/$trackId/video/finalize': typeof ApiAdminTracksTrackIdVideoFinalizeRoute
   '/api/admin/tracks/$trackId/video/uploads': typeof ApiAdminTracksTrackIdVideoUploadsRoute
@@ -509,6 +564,7 @@ export interface FileRoutesByTo {
   '/api/admin/mixtapes/$mixtapeId': typeof ApiAdminMixtapesMixtapeIdRouteWithChildren
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
   '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRouteWithChildren
+  '/api/admin/youtube/token': typeof ApiAdminYoutubeTokenRoute
   '/api/me/export/$exportId': typeof ApiMeExportExportIdRoute
   '/api/me/galaxy-progress/logs': typeof ApiMeGalaxyProgressLogsRoute
   '/api/me/saved-findings/$trackId': typeof ApiMeSavedFindingsTrackIdRoute
@@ -523,6 +579,12 @@ export interface FileRoutesByTo {
   '/api/admin/tracks/$trackId/preview-archive': typeof ApiAdminTracksTrackIdPreviewArchiveRoute
   '/api/admin/tracks/$trackId/social': typeof ApiAdminTracksTrackIdSocialRouteWithChildren
   '/api/admin/tracks/$trackId/video': typeof ApiAdminTracksTrackIdVideoRouteWithChildren
+  '/api/admin/youtube/auth/callback': typeof ApiAdminYoutubeAuthCallbackRoute
+  '/api/admin/youtube/auth/start': typeof ApiAdminYoutubeAuthStartRoute
+  '/api/admin/mixtapes/$mixtapeId/mixcloud/finalize': typeof ApiAdminMixtapesMixtapeIdMixcloudFinalizeRoute
+  '/api/admin/mixtapes/$mixtapeId/youtube/finalize': typeof ApiAdminMixtapesMixtapeIdYoutubeFinalizeRoute
+  '/api/admin/mixtapes/$mixtapeId/youtube/initiate': typeof ApiAdminMixtapesMixtapeIdYoutubeInitiateRoute
+  '/api/admin/mixtapes/$mixtapeId/youtube/publish': typeof ApiAdminMixtapesMixtapeIdYoutubePublishRoute
   '/api/admin/tracks/$trackId/social/$platform': typeof ApiAdminTracksTrackIdSocialPlatformRouteWithChildren
   '/api/admin/tracks/$trackId/video/finalize': typeof ApiAdminTracksTrackIdVideoFinalizeRoute
   '/api/admin/tracks/$trackId/video/uploads': typeof ApiAdminTracksTrackIdVideoUploadsRoute
@@ -574,6 +636,7 @@ export interface FileRoutesById {
   '/api/admin/mixtapes/$mixtapeId': typeof ApiAdminMixtapesMixtapeIdRouteWithChildren
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
   '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRouteWithChildren
+  '/api/admin/youtube/token': typeof ApiAdminYoutubeTokenRoute
   '/api/me/export/$exportId': typeof ApiMeExportExportIdRoute
   '/api/me/galaxy-progress/logs': typeof ApiMeGalaxyProgressLogsRoute
   '/api/me/saved-findings/$trackId': typeof ApiMeSavedFindingsTrackIdRoute
@@ -588,6 +651,12 @@ export interface FileRoutesById {
   '/api/admin/tracks/$trackId/preview-archive': typeof ApiAdminTracksTrackIdPreviewArchiveRoute
   '/api/admin/tracks/$trackId/social': typeof ApiAdminTracksTrackIdSocialRouteWithChildren
   '/api/admin/tracks/$trackId/video': typeof ApiAdminTracksTrackIdVideoRouteWithChildren
+  '/api/admin/youtube/auth/callback': typeof ApiAdminYoutubeAuthCallbackRoute
+  '/api/admin/youtube/auth/start': typeof ApiAdminYoutubeAuthStartRoute
+  '/api/admin/mixtapes/$mixtapeId/mixcloud/finalize': typeof ApiAdminMixtapesMixtapeIdMixcloudFinalizeRoute
+  '/api/admin/mixtapes/$mixtapeId/youtube/finalize': typeof ApiAdminMixtapesMixtapeIdYoutubeFinalizeRoute
+  '/api/admin/mixtapes/$mixtapeId/youtube/initiate': typeof ApiAdminMixtapesMixtapeIdYoutubeInitiateRoute
+  '/api/admin/mixtapes/$mixtapeId/youtube/publish': typeof ApiAdminMixtapesMixtapeIdYoutubePublishRoute
   '/api/admin/tracks/$trackId/social/$platform': typeof ApiAdminTracksTrackIdSocialPlatformRouteWithChildren
   '/api/admin/tracks/$trackId/video/finalize': typeof ApiAdminTracksTrackIdVideoFinalizeRoute
   '/api/admin/tracks/$trackId/video/uploads': typeof ApiAdminTracksTrackIdVideoUploadsRoute
@@ -640,6 +709,7 @@ export interface FileRouteTypes {
     | '/api/admin/mixtapes/$mixtapeId'
     | '/api/admin/submissions/$submissionId'
     | '/api/admin/tracks/$trackId'
+    | '/api/admin/youtube/token'
     | '/api/me/export/$exportId'
     | '/api/me/galaxy-progress/logs'
     | '/api/me/saved-findings/$trackId'
@@ -654,6 +724,12 @@ export interface FileRouteTypes {
     | '/api/admin/tracks/$trackId/preview-archive'
     | '/api/admin/tracks/$trackId/social'
     | '/api/admin/tracks/$trackId/video'
+    | '/api/admin/youtube/auth/callback'
+    | '/api/admin/youtube/auth/start'
+    | '/api/admin/mixtapes/$mixtapeId/mixcloud/finalize'
+    | '/api/admin/mixtapes/$mixtapeId/youtube/finalize'
+    | '/api/admin/mixtapes/$mixtapeId/youtube/initiate'
+    | '/api/admin/mixtapes/$mixtapeId/youtube/publish'
     | '/api/admin/tracks/$trackId/social/$platform'
     | '/api/admin/tracks/$trackId/video/finalize'
     | '/api/admin/tracks/$trackId/video/uploads'
@@ -703,6 +779,7 @@ export interface FileRouteTypes {
     | '/api/admin/mixtapes/$mixtapeId'
     | '/api/admin/submissions/$submissionId'
     | '/api/admin/tracks/$trackId'
+    | '/api/admin/youtube/token'
     | '/api/me/export/$exportId'
     | '/api/me/galaxy-progress/logs'
     | '/api/me/saved-findings/$trackId'
@@ -717,6 +794,12 @@ export interface FileRouteTypes {
     | '/api/admin/tracks/$trackId/preview-archive'
     | '/api/admin/tracks/$trackId/social'
     | '/api/admin/tracks/$trackId/video'
+    | '/api/admin/youtube/auth/callback'
+    | '/api/admin/youtube/auth/start'
+    | '/api/admin/mixtapes/$mixtapeId/mixcloud/finalize'
+    | '/api/admin/mixtapes/$mixtapeId/youtube/finalize'
+    | '/api/admin/mixtapes/$mixtapeId/youtube/initiate'
+    | '/api/admin/mixtapes/$mixtapeId/youtube/publish'
     | '/api/admin/tracks/$trackId/social/$platform'
     | '/api/admin/tracks/$trackId/video/finalize'
     | '/api/admin/tracks/$trackId/video/uploads'
@@ -767,6 +850,7 @@ export interface FileRouteTypes {
     | '/api/admin/mixtapes/$mixtapeId'
     | '/api/admin/submissions/$submissionId'
     | '/api/admin/tracks/$trackId'
+    | '/api/admin/youtube/token'
     | '/api/me/export/$exportId'
     | '/api/me/galaxy-progress/logs'
     | '/api/me/saved-findings/$trackId'
@@ -781,6 +865,12 @@ export interface FileRouteTypes {
     | '/api/admin/tracks/$trackId/preview-archive'
     | '/api/admin/tracks/$trackId/social'
     | '/api/admin/tracks/$trackId/video'
+    | '/api/admin/youtube/auth/callback'
+    | '/api/admin/youtube/auth/start'
+    | '/api/admin/mixtapes/$mixtapeId/mixcloud/finalize'
+    | '/api/admin/mixtapes/$mixtapeId/youtube/finalize'
+    | '/api/admin/mixtapes/$mixtapeId/youtube/initiate'
+    | '/api/admin/mixtapes/$mixtapeId/youtube/publish'
     | '/api/admin/tracks/$trackId/social/$platform'
     | '/api/admin/tracks/$trackId/video/finalize'
     | '/api/admin/tracks/$trackId/video/uploads'
@@ -817,9 +907,12 @@ export interface RootRouteChildren {
   ApiMixtapeCoverLogIdRoute: typeof ApiMixtapeCoverLogIdRoute
   ApiOgLogIdRoute: typeof ApiOgLogIdRoute
   ApiPreviewIdOrLogIdRoute: typeof ApiPreviewIdOrLogIdRoute
+  ApiAdminYoutubeTokenRoute: typeof ApiAdminYoutubeTokenRoute
   ApiAdminSpotifyAuthCallbackRoute: typeof ApiAdminSpotifyAuthCallbackRoute
   ApiAdminSpotifyAuthLoginRoute: typeof ApiAdminSpotifyAuthLoginRoute
   ApiAdminSpotifyAuthStartRoute: typeof ApiAdminSpotifyAuthStartRoute
+  ApiAdminYoutubeAuthCallbackRoute: typeof ApiAdminYoutubeAuthCallbackRoute
+  ApiAdminYoutubeAuthStartRoute: typeof ApiAdminYoutubeAuthStartRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -1132,6 +1225,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiMeExportExportIdRouteImport
       parentRoute: typeof ApiMeExportRoute
     }
+    '/api/admin/youtube/token': {
+      id: '/api/admin/youtube/token'
+      path: '/api/admin/youtube/token'
+      fullPath: '/api/admin/youtube/token'
+      preLoaderRoute: typeof ApiAdminYoutubeTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/admin/tracks/$trackId': {
       id: '/api/admin/tracks/$trackId'
       path: '/$trackId'
@@ -1152,6 +1252,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/admin/mixtapes/$mixtapeId'
       preLoaderRoute: typeof ApiAdminMixtapesMixtapeIdRouteImport
       parentRoute: typeof ApiAdminMixtapesRoute
+    }
+    '/api/admin/youtube/auth/start': {
+      id: '/api/admin/youtube/auth/start'
+      path: '/api/admin/youtube/auth/start'
+      fullPath: '/api/admin/youtube/auth/start'
+      preLoaderRoute: typeof ApiAdminYoutubeAuthStartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/youtube/auth/callback': {
+      id: '/api/admin/youtube/auth/callback'
+      path: '/api/admin/youtube/auth/callback'
+      fullPath: '/api/admin/youtube/auth/callback'
+      preLoaderRoute: typeof ApiAdminYoutubeAuthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/admin/tracks/$trackId/video': {
       id: '/api/admin/tracks/$trackId/video'
@@ -1250,6 +1364,34 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/admin/tracks/$trackId/social/$platform'
       preLoaderRoute: typeof ApiAdminTracksTrackIdSocialPlatformRouteImport
       parentRoute: typeof ApiAdminTracksTrackIdSocialRoute
+    }
+    '/api/admin/mixtapes/$mixtapeId/youtube/publish': {
+      id: '/api/admin/mixtapes/$mixtapeId/youtube/publish'
+      path: '/youtube/publish'
+      fullPath: '/api/admin/mixtapes/$mixtapeId/youtube/publish'
+      preLoaderRoute: typeof ApiAdminMixtapesMixtapeIdYoutubePublishRouteImport
+      parentRoute: typeof ApiAdminMixtapesMixtapeIdRoute
+    }
+    '/api/admin/mixtapes/$mixtapeId/youtube/initiate': {
+      id: '/api/admin/mixtapes/$mixtapeId/youtube/initiate'
+      path: '/youtube/initiate'
+      fullPath: '/api/admin/mixtapes/$mixtapeId/youtube/initiate'
+      preLoaderRoute: typeof ApiAdminMixtapesMixtapeIdYoutubeInitiateRouteImport
+      parentRoute: typeof ApiAdminMixtapesMixtapeIdRoute
+    }
+    '/api/admin/mixtapes/$mixtapeId/youtube/finalize': {
+      id: '/api/admin/mixtapes/$mixtapeId/youtube/finalize'
+      path: '/youtube/finalize'
+      fullPath: '/api/admin/mixtapes/$mixtapeId/youtube/finalize'
+      preLoaderRoute: typeof ApiAdminMixtapesMixtapeIdYoutubeFinalizeRouteImport
+      parentRoute: typeof ApiAdminMixtapesMixtapeIdRoute
+    }
+    '/api/admin/mixtapes/$mixtapeId/mixcloud/finalize': {
+      id: '/api/admin/mixtapes/$mixtapeId/mixcloud/finalize'
+      path: '/mixcloud/finalize'
+      fullPath: '/api/admin/mixtapes/$mixtapeId/mixcloud/finalize'
+      preLoaderRoute: typeof ApiAdminMixtapesMixtapeIdMixcloudFinalizeRouteImport
+      parentRoute: typeof ApiAdminMixtapesMixtapeIdRoute
     }
     '/api/admin/tracks/$trackId/social/$platform/draft': {
       id: '/api/admin/tracks/$trackId/social/$platform/draft'
@@ -1351,6 +1493,10 @@ interface ApiAdminMixtapesMixtapeIdRouteChildren {
   ApiAdminMixtapesMixtapeIdMembersRoute: typeof ApiAdminMixtapesMixtapeIdMembersRoute
   ApiAdminMixtapesMixtapeIdPublishRoute: typeof ApiAdminMixtapesMixtapeIdPublishRoute
   ApiAdminMixtapesMixtapeIdSocialRoute: typeof ApiAdminMixtapesMixtapeIdSocialRoute
+  ApiAdminMixtapesMixtapeIdMixcloudFinalizeRoute: typeof ApiAdminMixtapesMixtapeIdMixcloudFinalizeRoute
+  ApiAdminMixtapesMixtapeIdYoutubeFinalizeRoute: typeof ApiAdminMixtapesMixtapeIdYoutubeFinalizeRoute
+  ApiAdminMixtapesMixtapeIdYoutubeInitiateRoute: typeof ApiAdminMixtapesMixtapeIdYoutubeInitiateRoute
+  ApiAdminMixtapesMixtapeIdYoutubePublishRoute: typeof ApiAdminMixtapesMixtapeIdYoutubePublishRoute
 }
 
 const ApiAdminMixtapesMixtapeIdRouteChildren: ApiAdminMixtapesMixtapeIdRouteChildren =
@@ -1360,6 +1506,14 @@ const ApiAdminMixtapesMixtapeIdRouteChildren: ApiAdminMixtapesMixtapeIdRouteChil
     ApiAdminMixtapesMixtapeIdPublishRoute:
       ApiAdminMixtapesMixtapeIdPublishRoute,
     ApiAdminMixtapesMixtapeIdSocialRoute: ApiAdminMixtapesMixtapeIdSocialRoute,
+    ApiAdminMixtapesMixtapeIdMixcloudFinalizeRoute:
+      ApiAdminMixtapesMixtapeIdMixcloudFinalizeRoute,
+    ApiAdminMixtapesMixtapeIdYoutubeFinalizeRoute:
+      ApiAdminMixtapesMixtapeIdYoutubeFinalizeRoute,
+    ApiAdminMixtapesMixtapeIdYoutubeInitiateRoute:
+      ApiAdminMixtapesMixtapeIdYoutubeInitiateRoute,
+    ApiAdminMixtapesMixtapeIdYoutubePublishRoute:
+      ApiAdminMixtapesMixtapeIdYoutubePublishRoute,
   }
 
 const ApiAdminMixtapesMixtapeIdRouteWithChildren =
@@ -1517,9 +1671,12 @@ const rootRouteChildren: RootRouteChildren = {
   ApiMixtapeCoverLogIdRoute: ApiMixtapeCoverLogIdRoute,
   ApiOgLogIdRoute: ApiOgLogIdRoute,
   ApiPreviewIdOrLogIdRoute: ApiPreviewIdOrLogIdRoute,
+  ApiAdminYoutubeTokenRoute: ApiAdminYoutubeTokenRoute,
   ApiAdminSpotifyAuthCallbackRoute: ApiAdminSpotifyAuthCallbackRoute,
   ApiAdminSpotifyAuthLoginRoute: ApiAdminSpotifyAuthLoginRoute,
   ApiAdminSpotifyAuthStartRoute: ApiAdminSpotifyAuthStartRoute,
+  ApiAdminYoutubeAuthCallbackRoute: ApiAdminYoutubeAuthCallbackRoute,
+  ApiAdminYoutubeAuthStartRoute: ApiAdminYoutubeAuthStartRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

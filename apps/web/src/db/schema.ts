@@ -71,6 +71,19 @@ export const spotifyAuth = sqliteTable("spotify_auth", {
   updatedAt: text("updated_at").notNull(),
 });
 
+// Our own YouTube OAuth for mixtape video distribution — same shape as
+// spotify_auth. The Worker holds the durable refresh token here and mints a
+// short-lived access token for the CLI's resumable upload PUT + the server-side
+// unlisted→public flip (videos.update). Single row, service PK = "youtube".
+export const youtubeAuth = sqliteTable("youtube_auth", {
+  accessToken: text("access_token").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  refreshToken: text("refresh_token").notNull(),
+  scope: text("scope").notNull(),
+  service: text("service").primaryKey(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 export const submissions = sqliteTable(
   "submissions",
   {
