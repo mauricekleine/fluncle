@@ -294,45 +294,49 @@ func normalizeCountryCode(code string) string {
 type screen string
 
 const (
-	screenMenu         screen = "menu"
-	screenLatest       screen = "latest"
-	screenDetail       screen = "detail"
-	screenSearchInput  screen = "search-input"
-	screenSearch       screen = "search"
-	screenNoteInput    screen = "note-input"
-	screenContactInput screen = "contact-input"
-	screenConfirm      screen = "confirm"
-	screenSubscribe    screen = "subscribe"
-	screenSubscribed   screen = "subscribed"
-	screenGalaxy       screen = "galaxy"
-	screenInstall      screen = "install"
-	screenAbout        screen = "about"
-	screenMessage      screen = "message"
+	screenMenu          screen = "menu"
+	screenLatest        screen = "latest"
+	screenDetail        screen = "detail"
+	screenMixtapes      screen = "mixtapes"
+	screenMixtapeDetail screen = "mixtape-detail"
+	screenSearchInput   screen = "search-input"
+	screenSearch        screen = "search"
+	screenNoteInput     screen = "note-input"
+	screenContactInput  screen = "contact-input"
+	screenConfirm       screen = "confirm"
+	screenSubscribe     screen = "subscribe"
+	screenSubscribed    screen = "subscribed"
+	screenGalaxy        screen = "galaxy"
+	screenInstall       screen = "install"
+	screenAbout         screen = "about"
+	screenMessage       screen = "message"
 )
 
 type galaxyTickMsg time.Time
 
 type model struct {
-	app        *app
-	width      int
-	height     int
-	screen     screen
-	selected   int
-	tracks     []track
-	total      int
-	footer     *track
-	results    []searchResult
-	current    *track
-	detailBack screen
-	pending    *searchResult
-	input      string
-	note       string
-	contact    string
-	message    string
-	galaxy     galaxyState
-	loading    bool
-	err        string
-	scroll     int
+	app            *app
+	width          int
+	height         int
+	screen         screen
+	selected       int
+	tracks         []track
+	mixtapes       []mixtape
+	total          int
+	footer         *track
+	results        []searchResult
+	current        *track
+	currentMixtape *mixtape
+	detailBack     screen
+	pending        *searchResult
+	input          string
+	note           string
+	contact        string
+	message        string
+	galaxy         galaxyState
+	loading        bool
+	err            string
+	scroll         int
 }
 
 type galaxyState struct {
@@ -403,6 +407,22 @@ type track struct {
 	PostedToTelegram bool     `json:"postedToTelegram"`
 }
 
+type mixtape struct {
+	LogID         string `json:"logId,omitempty"`
+	Title         string `json:"title"`
+	Note          string `json:"note,omitempty"`
+	CoverImageURL string `json:"coverImageUrl,omitempty"`
+	DurationMs    int    `json:"durationMs,omitempty"`
+	MemberCount   int    `json:"memberCount"`
+	RecordedAt    string `json:"recordedAt,omitempty"`
+	AddedAt       string `json:"addedAt,omitempty"`
+	ExternalUrls  struct {
+		Mixcloud   string `json:"mixcloud,omitempty"`
+		Soundcloud string `json:"soundcloud,omitempty"`
+		Youtube    string `json:"youtube,omitempty"`
+	} `json:"externalUrls"`
+}
+
 type searchResult struct {
 	ID         string   `json:"id"`
 	SpotifyURL string   `json:"spotifyUrl"`
@@ -416,6 +436,11 @@ type tracksMsg struct {
 	tracks []track
 	total  int
 	err    error
+}
+
+type mixtapesMsg struct {
+	mixtapes []mixtape
+	err      error
 }
 
 type footerMsg struct {
@@ -477,6 +502,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(msg.tracks) > 0 {
 			m.footer = &msg.tracks[0]
 		}
+	case mixtapesMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.err = msg.err.Error()
+			return m, nil
+		}
+		m.mixtapes = msg.mixtapes
+		m.selected = 0
 	case footerMsg:
 		if msg.err != nil {
 			return m, nil
@@ -569,15 +602,15 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch m.screen {
 	case screenMenu:
 		return m.handleMenuKey(key)
-	case screenLatest, screenSearch:
+	case screenLatest, screenSearch, screenMixtapes:
 		return m.handleListKey(key)
 	case screenGalaxy:
 		return m.handleGalaxyKey(key)
 	case screenAbout:
 		return m.handleAboutKey(key)
-	case screenDetail, screenInstall, screenMessage, screenSubscribed:
+	case screenDetail, screenInstall, screenMessage, screenSubscribed, screenMixtapeDetail:
 		if key == "q" || key == "esc" || key == "backspace" || key == "b" {
-			if m.screen == screenDetail && m.detailBack != "" {
+			if (m.screen == screenDetail || m.screen == screenMixtapeDetail) && m.detailBack != "" {
 				m.screen = m.detailBack
 				m.detailBack = ""
 				if m.screen == screenGalaxy {
@@ -620,6 +653,11 @@ func (m model) handleMenuKey(key string) (tea.Model, tea.Cmd) {
 			m.loading = true
 			m.err = ""
 			return m, m.fetchLatest()
+		case "mixtapes":
+			m.screen = screenMixtapes
+			m.loading = true
+			m.err = ""
+			return m, m.fetchMixtapes()
 		case "random":
 			m.loading = true
 			m.err = ""
@@ -648,6 +686,8 @@ func (m model) handleListKey(key string) (tea.Model, tea.Cmd) {
 	length := len(m.tracks)
 	if m.screen == screenSearch {
 		length = len(m.results)
+	} else if m.screen == screenMixtapes {
+		length = len(m.mixtapes)
 	}
 
 	switch key {
@@ -666,6 +706,12 @@ func (m model) handleListKey(key string) (tea.Model, tea.Cmd) {
 			m.pending = &m.results[m.selected]
 			m.screen = screenNoteInput
 			m.input = ""
+			return m, nil
+		}
+		if m.screen == screenMixtapes {
+			m.currentMixtape = &m.mixtapes[m.selected]
+			m.detailBack = screenMixtapes
+			m.screen = screenMixtapeDetail
 			return m, nil
 		}
 		m.current = &m.tracks[m.selected]
@@ -809,6 +855,10 @@ func (m model) View() tea.View {
 		content = m.renderLatest()
 	case screenDetail:
 		content = m.renderDetail()
+	case screenMixtapes:
+		content = m.renderMixtapes()
+	case screenMixtapeDetail:
+		content = m.renderMixtapeDetail()
 	case screenSearchInput:
 		content = m.renderInput("Search Spotify", "Spotify URL or track search")
 	case screenSearch:
@@ -1049,6 +1099,107 @@ func (m model) renderDetail() string {
 		)
 	}
 	lines = append(lines, "", readingStyle.Render(terminalLink(t.SpotifyURL, t.SpotifyURL)))
+	lines = append(lines, "", helpLine("q back", "ctrl+c quit"))
+	return strings.Join(lines, "\n")
+}
+
+func (m model) renderMixtapes() string {
+	if m.loading {
+		return statusView("Mixtape archive", "Scanning the archive...")
+	}
+	if m.err != "" {
+		return errorView("Mixtape archive", m.err)
+	}
+	if len(m.mixtapes) == 0 {
+		return statusView("Mixtape archive", "No checkpoints logged yet.")
+	}
+
+	content := make([]string, 0, len(m.mixtapes))
+	for index, mx := range m.mixtapes {
+		coord := padRight(mx.LogID, coordWidth)
+		meta := mixtapeMeta(mx)
+		if index == m.selected {
+			label := fmt.Sprintf("%s  %s  %s", coord, mx.Title, meta)
+			content = append(content, selectedStyle.Render("> "+label))
+		} else {
+			idx := rowIndexStyle.Render(coord)
+			title := rowTitleStyle.Render(mx.Title)
+			info := labelStyle.Render(meta)
+			content = append(content, fmt.Sprintf("  %s  %s  %s", idx, title, info))
+		}
+	}
+	help := helpLine("↑/↓ j/k move", "enter select", "q back", "ctrl+c quit")
+	return scaffold("Mixtape archive", "", content, help)
+}
+
+// mixtapeMeta renders the compact one-line summary for a list row: "N findings
+// · 72m". Minutes (not M:SS) because the list is the compact scan; the detail
+// carries the precise runtime.
+func mixtapeMeta(mx mixtape) string {
+	meta := fmt.Sprintf("%d findings", mx.MemberCount)
+	if mx.DurationMs > 0 {
+		minutes := mx.DurationMs / 60000
+		if minutes > 0 {
+			meta += fmt.Sprintf(" · %dm", minutes)
+		}
+	}
+	return meta
+}
+
+func (m model) renderMixtapeDetail() string {
+	if m.currentMixtape == nil {
+		return statusView("Mixtape archive", "No checkpoint selected.")
+	}
+	mx := *m.currentMixtape
+	wrapWidth := clamp(m.width-4, 48, 96) - 4
+	// Same Cream-bold header as a finding's detail: the mixtape is the subject,
+	// not the screen. "Fluncle" stands in for the artist line.
+	lines := []string{
+		rowTitleStyle.Render(mx.Title),
+		labelStyle.Render("Fluncle"),
+	}
+
+	// Recovered-telemetry block — the checkpoint's log entry. Each field on its
+	// own line; absent fields drop out so the block never shows blanks.
+	if coord := strings.TrimSpace(mx.LogID); coord != "" {
+		lines = append(lines,
+			"",
+			labelStyle.Render("Log ID: ")+readingStyle.Render(coord),
+			labelStyle.Render("Coordinate: ")+readingStyle.Render("fluncle://"+coord),
+		)
+	} else {
+		lines = append(lines, "")
+	}
+	if mx.RecordedAt != "" {
+		lines = append(lines, labelStyle.Render("Recorded: ")+readingStyle.Render(formatDate(mx.RecordedAt)))
+	}
+	if mx.MemberCount > 0 {
+		lines = append(lines, labelStyle.Render("Members: ")+readingStyle.Render(fmt.Sprintf("%d", mx.MemberCount)))
+	}
+	if duration := formatDuration(mx.DurationMs); duration != "" {
+		lines = append(lines, labelStyle.Render("Duration: ")+readingStyle.Render(duration))
+	}
+
+	if note := strings.TrimSpace(mx.Note); note != "" {
+		lines = append(lines,
+			"",
+			labelStyle.Render("The dream:"),
+			readingStyle.Width(wrapWidth).Render(note),
+		)
+	}
+
+	// Listen links. Unlike the galaxy (where the audio didn't survive the trip
+	// out here), mixtapes carry their audio — surface every deck that has one.
+	if mx.ExternalUrls.Mixcloud != "" {
+		lines = append(lines, "", readingStyle.Render(terminalLink("Hear it on Mixcloud", mx.ExternalUrls.Mixcloud)))
+	}
+	if mx.ExternalUrls.Youtube != "" {
+		lines = append(lines, "", readingStyle.Render(terminalLink("Watch on YouTube", mx.ExternalUrls.Youtube)))
+	}
+	if mx.ExternalUrls.Soundcloud != "" {
+		lines = append(lines, "", readingStyle.Render(terminalLink("Hear it on SoundCloud", mx.ExternalUrls.Soundcloud)))
+	}
+
 	lines = append(lines, "", helpLine("q back", "ctrl+c quit"))
 	return strings.Join(lines, "\n")
 }
@@ -1497,6 +1648,17 @@ func (m model) fetchLatest() tea.Cmd {
 	}
 }
 
+func (m model) fetchMixtapes() tea.Cmd {
+	return func() tea.Msg {
+		var response struct {
+			Mixtapes []mixtape `json:"mixtapes"`
+			OK       bool      `json:"ok"`
+		}
+		err := m.app.getJSON("/api/mixtapes", &response)
+		return mixtapesMsg{mixtapes: response.Mixtapes, err: err}
+	}
+}
+
 func (m model) fetchFooter() tea.Cmd {
 	return func() tea.Msg {
 		var response struct {
@@ -1641,6 +1803,7 @@ func menuItems() []menuItem {
 	return []menuItem{
 		{id: "galaxy", label: "Enter the Galaxy"},
 		{id: "latest", label: "Latest bangers"},
+		{id: "mixtapes", label: "Mixtape archive"},
 		{id: "random", label: "Random banger"},
 		{id: "submit", label: "Submit a track"},
 		{id: "subscribe", label: "Subscribe"},
