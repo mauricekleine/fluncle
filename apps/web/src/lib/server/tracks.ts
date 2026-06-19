@@ -439,28 +439,24 @@ export async function listTracks({
     includeMixtapes && !since && !until && hasVideo === undefined && placement === undefined
       ? await listPublishedMixtapeFeedRows(db, cursor, cursorComparator, cursorArgs, dir, limit)
       : undefined;
-  const feedItems = feedRows
-    ? [...rows.map(toTrackListItem), ...feedRows.map((row) => rowToMixtape(row))]
-        .sort((left, right) => compareFeedItems(left, right, dir))
-        .slice(0, limit + 1)
-    : undefined;
   const countRows = typedRows<TrackCountRow>(countResult.rows);
-  const totalCount = Number(countRows[0]?.total_count ?? rows.length);
+  const totalCount = feedFindingsCount(countRows[0]?.total_count, rows.length);
 
-  if (feedItems) {
-    const visibleItems = feedItems.slice(0, limit);
-    const lastVisibleItem = visibleItems.at(-1);
-
+  if (feedRows) {
+    const {
+      items,
+      hasMore,
+      nextCursor: nextRawCursor,
+    } = mergeFeedPage(
+      rows.map(toTrackListItem),
+      feedRows.map((row) => rowToMixtape(row)),
+      dir,
+      limit,
+    );
     return {
-      nextCursor:
-        feedItems.length > limit && lastVisibleItem
-          ? encodeTrackCursor({
-              addedAt: lastVisibleItem.addedAt ?? "",
-              trackId: itemCursorId(lastVisibleItem),
-            })
-          : undefined,
+      nextCursor: hasMore && nextRawCursor ? encodeTrackCursor(nextRawCursor) : undefined,
       totalCount,
-      tracks: visibleItems,
+      tracks: items,
     };
   }
 
@@ -542,6 +538,100 @@ function binaryCompare(left: string, right: string): number {
   }
 
   return 0;
+}
+
+// The JS mirror of the SQL cursor comparator. The feed fetches findings and
+// mixtapes in two separate queries (each filtered by the same cursor and
+// limited to limit+1), then merges in JS. This helper reproduces the cursor
+// filter so mergeFeedPage can be tested end-to-end without a database.
+function isAfterCursor(item: FeedItem, cursor: TrackCursor, dir: "asc" | "desc"): boolean {
+  const itemAddedAt = item.addedAt ?? "";
+  const itemId = itemCursorId(item);
+  const byDate = binaryCompare(itemAddedAt, cursor.addedAt);
+
+  if (dir === "desc") {
+    if (byDate < 0) {
+      return true;
+    }
+    if (byDate === 0) {
+      return binaryCompare(itemId, cursor.trackId) < 0;
+    }
+    return false;
+  }
+
+  if (byDate > 0) {
+    return true;
+  }
+  if (byDate === 0) {
+    return binaryCompare(itemId, cursor.trackId) > 0;
+  }
+  return false;
+}
+
+/**
+ * Merge findings and mixtapes into a single feed page. Both tables are fetched
+ * separately (each over-fetching by one), then concatenated, sorted by
+ * `addedAt` (tiebreak: the cursor id — `trackId` for findings, `logId` for
+ * mixtapes), and sliced to `limit+1`. The first `limit` items are the visible
+ * page; the extra item signals `hasMore` and seeds the next cursor.
+ *
+ * When `cursor` is provided, each array is filtered by the same comparator the
+ * SQL cursor uses (so the function can simulate full paging in tests without a
+ * database). `listTracks` calls this WITHOUT a cursor — the SQL already
+ * filtered — so the filter is a no-op in production and only exercised by tests.
+ *
+ * Each table is sorted before slicing to `limit+1` — the JS mirror of the SQL
+ * `order by ... limit ?`. In production the SQL already sorted the rows, so the
+ * sort is a cheap no-op; it makes the function self-contained for tests that
+ * pass unsorted fixtures.
+ */
+export function mergeFeedPage(
+  findings: FeedItem[],
+  mixtapes: FeedItem[],
+  dir: "asc" | "desc",
+  limit: number,
+  cursor?: TrackCursor,
+): { items: FeedItem[]; hasMore: boolean; nextCursor?: TrackCursor } {
+  const filteredFindings = cursor
+    ? findings.filter((item) => isAfterCursor(item, cursor, dir))
+    : findings.slice();
+  const filteredMixtapes = cursor
+    ? mixtapes.filter((item) => isAfterCursor(item, cursor, dir))
+    : mixtapes.slice();
+
+  // Over-fetch limit+1 from each table (matches the SQL `limit ?` with limit+1).
+  const findingsPage = filteredFindings
+    .sort((left, right) => compareFeedItems(left, right, dir))
+    .slice(0, limit + 1);
+  const mixtapesPage = filteredMixtapes
+    .sort((left, right) => compareFeedItems(left, right, dir))
+    .slice(0, limit + 1);
+
+  const merged = [...findingsPage, ...mixtapesPage]
+    .sort((left, right) => compareFeedItems(left, right, dir))
+    .slice(0, limit + 1);
+
+  const items = merged.slice(0, limit);
+  const hasMore = merged.length > limit;
+  const lastVisible = items.at(-1);
+  const nextCursor =
+    hasMore && lastVisible
+      ? { addedAt: lastVisible.addedAt ?? "", trackId: itemCursorId(lastVisible) }
+      : undefined;
+
+  return { hasMore, items, nextCursor };
+}
+
+/**
+ * The feed's "Found · N" counter is findings-only by design: mixtapes join the
+ * feed stream without inflating the finding count. `listTracks` passes the
+ * dedicated `count(*) from tracks` result (and the findings row count as
+ * fallback); mixtapes never enter the count. Extracting this as a named helper
+ * makes the invariant explicit and testable — a future change that unions
+ * mixtapes into the count would have to touch this function and its tests.
+ */
+export function feedFindingsCount(sqlCount: number | undefined, fallback: number): number {
+  return Number(sqlCount ?? fallback);
 }
 
 export type VibePoint = {
