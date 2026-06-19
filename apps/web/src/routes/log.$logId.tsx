@@ -23,7 +23,7 @@ import {
   musicRecordingJsonLd,
 } from "@/lib/log-schema";
 import { trackMedia } from "@/lib/media";
-import { hasExternalUrl, type MixtapeDTO, mixtapeCoverUrl } from "@/lib/mixtapes";
+import { type MixtapeDTO, mixtapeCoverUrl } from "@/lib/mixtapes";
 import { resolveLogPageTarget } from "@/lib/server/log-resolver";
 import {
   getRelatedTracks,
@@ -391,7 +391,6 @@ function LogPage() {
 function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
   const logId = mixtape.logId as string;
   const { sector, tail } = splitLogId(logId);
-  const hasAudioLink = hasExternalUrl(mixtape.externalUrls);
   // The full canonical title — "Fluncle Drum & Bass Mixtape #N | XXX.F.ZZ" — still
   // rides into <title>, og:title, and the JSON-LD (see logHead). On the plate the
   // number lives in the nameplate and the coordinate is the h1, so show just the
@@ -426,12 +425,6 @@ function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
             {mixtape.note ??
               "A checkpoint in the archive: I mixed these findings into one long dream."}
           </p>
-        </section>
-
-        <section aria-label="Mixtape audio" className="log-mixtape-embed">
-          {hasAudioLink
-            ? "Audio recovered. Pick a deck below."
-            : "I'll wire up the audio once this checkpoint publishes."}
         </section>
 
         <dl className="log-fields">
