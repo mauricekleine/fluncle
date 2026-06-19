@@ -303,7 +303,6 @@ export const socialPosts = sqliteTable(
 
 export const mixtapes = sqliteTable("mixtapes", {
   addedAt: text("added_at"),
-  coverImageUrl: text("cover_image_url"),
   createdAt: text("created_at").notNull(),
   durationMs: integer("duration_ms"),
   id: text("id").primaryKey(),

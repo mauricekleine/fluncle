@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_MIXTAPE_TITLE, publishMixtape } from "./mixtapes";
 
 // publishMixtape's DB choreography: getMixtapeById (a MIXTAPE_SELECT execute) →
-// the mint batch (returning log_id + sequence_number) → an optional title/cover
-// update execute → getMixtapeByLogId (another MIXTAPE_SELECT execute). We back
-// it with a single mutable row and answer each query by its SQL shape — enough
-// to prove the canonicalization branch without a real libsql instance.
+// the mint batch (returning log_id + sequence_number) → an optional title update
+// execute → getMixtapeByLogId (another MIXTAPE_SELECT execute). We back it with a
+// single mutable row and answer each query by its SQL shape — enough to prove the
+// publish gate + canonicalization without a real libsql instance.
 
 type Row = Record<string, unknown>;
 
@@ -14,9 +14,8 @@ const state = vi.hoisted(() => ({ row: {} as Row }));
 const execute = vi.hoisted(() =>
   vi.fn(async (query: { args: unknown[]; sql: string }) => {
     if (query.sql.includes("update mixtapes set title = ?")) {
-      const [title, cover] = query.args as [string, string | null];
+      const [title] = query.args as [string];
       state.row.title = title;
-      state.row.cover_image_url = cover;
       return { rows: [] };
     }
 
@@ -47,29 +46,32 @@ vi.mock("./tracks", () => ({
   getTracksForMixtape: async () => [],
 }));
 
+// A complete, publishable draft. Individual tests blank a field to prove the gate.
 function seedDraft(overrides: Partial<Row> = {}): void {
   state.row = {
-    cover_image_url: null,
     created_at: "2026-06-19T00:00:00.000Z",
+    duration_ms: 3_480_000,
     id: "draft-id",
     log_id: null,
+    member_count: 1,
+    note: "A late checkpoint, dreamt.",
     recorded_at: "2026-06-19T00:00:00.000Z",
     sequence_number: null,
     status: "draft",
-    title: DEFAULT_MIXTAPE_TITLE,
+    title: "",
     updated_at: "2026-06-19T00:00:00.000Z",
     youtube_url: "https://youtube.com/watch?v=abc",
     ...overrides,
   };
 }
 
-describe("publishMixtape — canonicalization at mint", () => {
+describe("publishMixtape — mint + canonicalization", () => {
   beforeEach(() => {
     execute.mockClear();
     batch.mockClear();
   });
 
-  it("canonicalizes a stub title and fills an empty cover from the minted Log ID", async () => {
+  it("canonicalizes the stub title and derives the cover from the minted Log ID", async () => {
     seedDraft();
 
     const published = await publishMixtape("draft-id");
@@ -80,15 +82,54 @@ describe("publishMixtape — canonicalization at mint", () => {
     );
   });
 
-  it("leaves a custom title and custom cover untouched", async () => {
-    seedDraft({
-      cover_image_url: "https://example.com/my-cover.png",
-      title: "My Special Mixtape",
-    });
+  it("treats the DEFAULT stub title as canonicalizable", async () => {
+    seedDraft({ title: DEFAULT_MIXTAPE_TITLE });
 
     const published = await publishMixtape("draft-id");
 
-    expect(published.title).toBe("My Special Mixtape");
-    expect(published.coverImageUrl).toBe("https://example.com/my-cover.png");
+    expect(published.title).toBe("Fluncle Drum & Bass Mixtape #1 | 020.F.1A");
+  });
+
+  it("leaves an operator-set (future-series) title untouched, cover still derived", async () => {
+    seedDraft({ title: "Fluncle Ambient Mixtape" });
+
+    const published = await publishMixtape("draft-id");
+
+    expect(published.title).toBe("Fluncle Ambient Mixtape");
+    expect(published.coverImageUrl).toBe(
+      "https://www.fluncle.com/api/mixtape-cover/020.F.1A?size=square",
+    );
+  });
+});
+
+describe("publishMixtape — required fields", () => {
+  beforeEach(() => {
+    execute.mockClear();
+    batch.mockClear();
+  });
+
+  it("rejects a missing recorded date", async () => {
+    seedDraft({ recorded_at: null });
+    await expect(publishMixtape("draft-id")).rejects.toThrow(/recorded date/i);
+  });
+
+  it("rejects a missing note", async () => {
+    seedDraft({ note: "   " });
+    await expect(publishMixtape("draft-id")).rejects.toThrow(/note/i);
+  });
+
+  it("rejects a missing duration", async () => {
+    seedDraft({ duration_ms: null });
+    await expect(publishMixtape("draft-id")).rejects.toThrow(/duration/i);
+  });
+
+  it("rejects no external link", async () => {
+    seedDraft({ youtube_url: null });
+    await expect(publishMixtape("draft-id")).rejects.toThrow(/Mixcloud, YouTube, or SoundCloud/i);
+  });
+
+  it("rejects an empty tracklist", async () => {
+    seedDraft({ member_count: 0 });
+    await expect(publishMixtape("draft-id")).rejects.toThrow(/finding/i);
   });
 });

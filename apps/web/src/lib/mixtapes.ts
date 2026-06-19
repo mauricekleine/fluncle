@@ -50,7 +50,6 @@ export type FeedItem = TrackListItem | MixtapeDTO;
 
 export type MixtapeRowLike = {
   added_at?: string | null;
-  cover_image_url?: string | null;
   created_at?: string | null;
   duration_ms?: number | null;
   id?: string | null;
@@ -75,7 +74,9 @@ export function rowToMixtape(row: MixtapeRowLike, members: MixtapeMember[] = [])
   return {
     addedAt: row.added_at ?? undefined,
     artists: ["Fluncle"],
-    coverImageUrl: row.cover_image_url ?? undefined,
+    // The cover is derived, never stored: a published mixtape's Log ID resolves
+    // to the on-the-fly cover endpoint (mixtapeCoverUrl); a draft has no cover yet.
+    coverImageUrl: row.log_id ? mixtapeCoverUrl(row.log_id, "square") : undefined,
     createdAt: row.created_at ?? undefined,
     durationMs: row.duration_ms ?? undefined,
     externalUrls: {

@@ -1,0 +1,1 @@
+ALTER TABLE `mixtapes` DROP COLUMN `cover_image_url`;
