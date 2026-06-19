@@ -21,6 +21,13 @@ import { OXANIUM_STACK } from "./fonts";
 export type MixtapeCoverProps = {
   /** The Log ID coordinate, e.g. "019.F.1A". Also seeds the starfield. */
   coordinate: string;
+  /**
+   * Draw the "MIXTAPE #N" + coordinate markers. Default true for Studio preview
+   * and the legacy full-cover render; the on-the-fly cover endpoint bakes the
+   * background with `markers: false` and stamps the text in Satori instead
+   * (apps/web/src/routes/api/mixtape-cover.$logId.ts).
+   */
+  markers?: boolean;
   /** The mixtape sequence number, e.g. "1". */
   number: string;
 };
@@ -49,7 +56,11 @@ function buildStarfield(seed: string, count: number): Star[] {
   return stars;
 }
 
-export const MixtapeCover: React.FC<MixtapeCoverProps> = ({ coordinate, number }) => {
+export const MixtapeCover: React.FC<MixtapeCoverProps> = ({
+  coordinate,
+  markers = true,
+  number,
+}) => {
   const { height } = useVideoConfig();
   const stars = buildStarfield(coordinate, 170);
   // The figure fills ~42% of the frame height, leaving the lower band for the
@@ -109,46 +120,49 @@ export const MixtapeCover: React.FC<MixtapeCoverProps> = ({ coordinate, number }
         />
       </AbsoluteFill>
 
-      {/* The two markers — the only thing that makes this cover unique. */}
-      <AbsoluteFill
-        style={{
-          alignItems: "center",
-          display: "flex",
-          flexDirection: "column",
-          justifyContent: "flex-end",
-          paddingBottom: "8%",
-          textAlign: "center",
-        }}
-      >
-        <div
+      {/* The two markers — the only thing that makes this cover unique. Skipped
+          when baking the shared background; the cover endpoint stamps them in Satori. */}
+      {markers ? (
+        <AbsoluteFill
           style={{
-            color: colors.starlightCream,
-            fontFamily: OXANIUM_STACK,
-            fontSize: "6.4vmin",
-            fontWeight: 800,
-            letterSpacing: "0.06em",
-            lineHeight: 1,
-            textShadow: `0 2px 22px ${colors.deepField}, 0 0 1px ${colors.deepField}`,
+            alignItems: "center",
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "flex-end",
+            paddingBottom: "8%",
+            textAlign: "center",
           }}
         >
-          MIXTAPE #{number}
-        </div>
-        <div
-          style={{
-            color: colors.starlightCream,
-            fontFamily: OXANIUM_STACK,
-            fontSize: "3.4vmin",
-            fontVariantNumeric: "tabular-nums",
-            fontWeight: 400,
-            letterSpacing: "0.22em",
-            marginTop: "2.4vmin",
-            opacity: 0.72,
-            textShadow: `0 1px 14px ${colors.deepField}`,
-          }}
-        >
-          {coordinate}
-        </div>
-      </AbsoluteFill>
+          <div
+            style={{
+              color: colors.starlightCream,
+              fontFamily: OXANIUM_STACK,
+              fontSize: "6.4vmin",
+              fontWeight: 800,
+              letterSpacing: "0.06em",
+              lineHeight: 1,
+              textShadow: `0 2px 22px ${colors.deepField}, 0 0 1px ${colors.deepField}`,
+            }}
+          >
+            MIXTAPE #{number}
+          </div>
+          <div
+            style={{
+              color: colors.starlightCream,
+              fontFamily: OXANIUM_STACK,
+              fontSize: "3.4vmin",
+              fontVariantNumeric: "tabular-nums",
+              fontWeight: 400,
+              letterSpacing: "0.22em",
+              marginTop: "2.4vmin",
+              opacity: 0.72,
+              textShadow: `0 1px 14px ${colors.deepField}`,
+            }}
+          >
+            {coordinate}
+          </div>
+        </AbsoluteFill>
+      ) : null}
 
       {/* Light-Years: faint scanlines + a film-grain wash over the frame. */}
       <AbsoluteFill
