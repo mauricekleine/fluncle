@@ -71,10 +71,13 @@ API_KEY="$(op read 'op://Fluncle/Cloudflare DNS/CLOUDFLARE_API_KEY')"
 # Optional: only present when the secret is a Global API Key.
 CF_EMAIL="$(op read 'op://Fluncle/Cloudflare DNS/CLOUDFLARE_EMAIL' 2>/dev/null || true)"
 
-if [[ -z "$ACCOUNT_ID" || -z "$API_KEY" ]]; then
-  echo "error: missing Cloudflare account id or api key in 1Password" >&2
+if [[ -z "$API_KEY" ]]; then
+  echo "error: missing Cloudflare api key in 1Password" >&2
   exit 1
 fi
+# ACCOUNT_ID is optional — the zone is resolved by name (and the API token must
+# be scoped to it anyway). Passing a malformed account.id filter to the API
+# returns a hard 400, so we deliberately do not filter zones by account.
 
 # Pick the auth scheme. A scoped API Token uses Bearer; a Global API Key needs
 # the account email and the legacy X-Auth-* headers.
@@ -89,8 +92,11 @@ auth_headers() {
 cf() {
   # cf METHOD PATH [JSON_BODY]
   local method="$1" path="$2" body="${3:-}"
-  local -a hdrs
-  mapfile -t hdrs < <(auth_headers)
+  local -a hdrs=()
+  local line
+  while IFS= read -r line; do
+    hdrs+=("$line")
+  done < <(auth_headers)
   if [[ -n "$body" ]]; then
     curl -fsS -X "$method" "${API}${path}" \
       "${hdrs[@]}" -H "Content-Type: application/json" --data "$body"
@@ -99,14 +105,22 @@ cf() {
   fi
 }
 
-echo "Resolving zone id for ${ZONE_NAME}…" >&2
-ZONE_ID="$(cf GET "/zones?name=${ZONE_NAME}&account.id=${ACCOUNT_ID}" \
-  | jq -r '.result[0].id // empty')"
-if [[ -z "$ZONE_ID" ]]; then
-  echo "error: could not find zone ${ZONE_NAME} (check creds + account)" >&2
-  exit 1
+# A CLOUDFLARE_ZONE_ID env override skips the name lookup entirely — useful when
+# the token has DNS:Edit but not Zone:Read (it can write records by zone id
+# without being able to list zones by name).
+if [[ -n "${CLOUDFLARE_ZONE_ID:-}" ]]; then
+  ZONE_ID="$CLOUDFLARE_ZONE_ID"
+  echo "Using CLOUDFLARE_ZONE_ID override: ${ZONE_ID}" >&2
+else
+  echo "Resolving zone id for ${ZONE_NAME}…" >&2
+  ZONE_ID="$(cf GET "/zones?name=${ZONE_NAME}" | jq -r '.result[0].id // empty')"
+  if [[ -z "$ZONE_ID" ]]; then
+    echo "error: could not find zone ${ZONE_NAME}. The API token must have" >&2
+    echo "       Zone:Read + DNS:Edit on ${ZONE_NAME}, or pass CLOUDFLARE_ZONE_ID." >&2
+    exit 1
+  fi
+  echo "  zone id: ${ZONE_ID}" >&2
 fi
-echo "  zone id: ${ZONE_ID}" >&2
 
 # upsert TYPE NAME CONTENT — create the record, or update it if it already
 # exists (matched on name+type), so the script is safe to re-run.
