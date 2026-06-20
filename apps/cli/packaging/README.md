@@ -89,15 +89,33 @@ release), so edit it here.
 
 ## One-time setup to turn on npm + Homebrew
 
-The workflow ships all three channels at the release version, but the npm + tap
-steps **skip until their secret exists** (so the existing GitHub Release keeps
-working unchanged). To enable them:
+The workflow ships all three channels at the release version. The npm + tap steps
+stay dormant until you enable them:
 
-- **npm**: add an `NPM_TOKEN` repo secret (an npm automation token; the account
-  owns the unclaimed `fluncle` name).
-- **Homebrew**: create the empty public `mauricekleine/homebrew-fluncle` repo and
-  add a `HOMEBREW_TAP_TOKEN` repo secret (a PAT with contents:write on it). The
-  workflow creates `Formula/fluncle.rb` on the first release.
+**npm — OIDC trusted publishing (no long-lived token):**
 
-Once both are set, the next CLI release (an `apps/cli/**` change merged to `main`)
-publishes `fluncle@<version>` to npm and bumps the tap to match the GitHub Release.
+1. Create the package once, locally (OIDC needs an existing package to attach a
+   publisher to):
+   ```sh
+   FLUNCLE_CLI_VERSION=<latest> bun run --cwd apps/cli build:npm
+   cd apps/cli/dist-npm && npm publish --access public   # your `npm login`
+   ```
+2. Attach the trusted publisher as the package owner:
+   ```sh
+   npm trust github fluncle --file cli-release.yml --repo mauricekleine/fluncle --allow-publish -y
+   ```
+   (or npmjs.com → the `fluncle` package → Settings → Trusted Publisher → GitHub
+   Actions: repo `mauricekleine/fluncle`, workflow `cli-release.yml`).
+3. Flip the workflow on: set the repo **variable** `NPM_TRUSTED_PUBLISHER=true`
+   (`gh variable set NPM_TRUSTED_PUBLISHER --body true`).
+
+Thereafter every release publishes via OIDC with provenance — no `NPM_TOKEN`
+anywhere. Requires npm >= 11.5.1 / Node >= 22.14 (the workflow uses Node 24 +
+`npm@latest`).
+
+**Homebrew:** create the empty public `mauricekleine/homebrew-fluncle` repo and add
+a `HOMEBREW_TAP_TOKEN` repo secret (a PAT with contents:write on it). The workflow
+creates `Formula/fluncle.rb` on the first release.
+
+Once set, the next CLI release (an `apps/cli/**` change merged to `main`) publishes
+`fluncle@<version>` via OIDC and bumps the tap to match the GitHub Release.
