@@ -1,6 +1,6 @@
 # The mixtape spine model
 
-The object model behind Fluncle's own mixtapes: what a mixtape *is*, how its identity works, where it lives, and the per-surface build map. The `SKILL.md` is the operator workflow; this is the background you read once to understand the object. Canon (DESIGN.md / PRODUCT.md / VOICE.md) arbitrates the words and the look; this carries the model. Scoped to DJ mixtapes — if originals, edits, or guest sets ever appear, generalize into "own publications" then, not before. ("Mixtape" is the canonical term; "mix" is the casual synonym.)
+The object model behind Fluncle's own mixtapes: what a mixtape _is_, how its identity works, where it lives, and the per-surface build map. The `SKILL.md` is the operator workflow; this is the background you read once to understand the object. Canon (DESIGN.md / PRODUCT.md / VOICE.md) arbitrates the words and the look; this carries the model. Scoped to DJ mixtapes — if originals, edits, or guest sets ever appear, generalize into "own publications" then, not before. ("Mixtape" is the canonical term; "mix" is the casual synonym.)
 
 ## The concept
 
@@ -36,7 +36,7 @@ What this scheme buys:
 Notes:
 
 - **Cap: 54** (9 digits × 6 letters). Past that, extend the alphabet or the digit range — a bridge to cross then.
-- **Minting:** the separate `mixtapes` table *is* the counter: the next number is `max(existing) + 1`, encoded into `<digit><letter>` (number N → digit `floor((N-1)/6)+1`, letter `A–F` at index `(N-1) mod 6`). No separate counter primitive needed. Same shape as a finding (sector = day, tail = the identifying signature), but the tail is a sequence here, not a content hash.
+- **Minting:** the separate `mixtapes` table _is_ the counter: the next number is `max(existing) + 1`, encoded into `<digit><letter>` (number N → digit `floor((N-1)/6)+1`, letter `A–F` at index `(N-1) mod 6`). No separate counter primitive needed. Same shape as a finding (sector = day, tail = the identifying signature), but the tail is a sequence here, not a content hash.
 - A mixtape Log ID is **minted once, never reassigned**, same contract as a finding's.
 
 ## URL — one universal resolver
@@ -62,7 +62,7 @@ Crawlers, bots, and AI answer engines must read a mixtape **as a DJ mixtape**, n
 
 ## Hosting — where the audio and video go
 
-- **Mixcloud — primary home.** Properly licensed (direct deals with the majors + indies like Ninja Tune / XL via Merlin): it plays legally and pays the featured artists, within the Featured-Artist / SRPC limits. Two failure tiers to stay clear of: exceeding the consecutive rule (≤ 3 per artist consecutive, ≤ 2 per release consecutive) makes the show **regionally unavailable**; **4–8 tracks from one artist makes the whole show Premium / subscriber-only globally** (a hard paywall). The curator waiver doesn't apply. Trivial for a varied D&B set — observe, don't pre-lint; if a show ever gets gated it's visible on Mixcloud and fixable by hand (audio can't be swapped — delete + re-upload). Upload is **CLI-direct** (the Worker can't proxy a multi-GB master) but the **token is server-side** (`mixcloud_auth`); the CLI fetches it just-in-time. One length caveat: a **full-length mixtape is a licensed *show***, but a **short single clip is classified as an unlicensed *track* and copyright-blocked** — so test with real-length audio, not a short clip.
+- **Mixcloud — primary home.** Properly licensed (direct deals with the majors + indies like Ninja Tune / XL via Merlin): it plays legally and pays the featured artists, within the Featured-Artist / SRPC limits. Two failure tiers to stay clear of: exceeding the consecutive rule (≤ 3 per artist consecutive, ≤ 2 per release consecutive) makes the show **regionally unavailable**; **4–8 tracks from one artist makes the whole show Premium / subscriber-only globally** (a hard paywall). The curator waiver doesn't apply. Trivial for a varied D&B set — observe, don't pre-lint; if a show ever gets gated it's visible on Mixcloud and fixable by hand (audio can't be swapped — delete + re-upload). Upload is **CLI-direct** (the Worker can't proxy a multi-GB master) but the **token is server-side** (`mixcloud_auth`); the CLI fetches it just-in-time. One length caveat: a **full-length mixtape is a licensed _show_**, but a **short single clip is classified as an unlicensed _track_ and copyright-blocked** — so test with real-length audio, not a short clip.
 - **YouTube — reach mirror.** Content ID claims it: the video stays up but the labels monetize it. Good for reach, not revenue. The **mixtape video** lives here, uploaded via `youtube_auth` — published unlisted, flipped public by the operator.
 - **SoundCloud — secondary mirror.** Patchier (takedown risk). Profile presence is a separate roadmap item; hosting actual audio there is the licensing-gated question.
 - **Teaser clips.** Short clips cut from the set go to the social surfaces (TikTok / Shorts / IG) the same way a finding's clip does — the clip is a trailer, captioned with the mixtape's `fluncle://<id>` coordinate. (Clip-of-a-mixtape has no pipeline yet; see Open questions.)
@@ -119,7 +119,7 @@ A mixtape sits at its sector, which the Galaxy game maps to a distance from Eart
 
 ## Open questions / build tasks
 
-The internal plumbing and the external distribution chain are **shipped**. Remaining follow-ups (also tracked in `docs/ROADMAP.md` → *Fluncle's own mixtapes*):
+The internal plumbing and the external distribution chain are **shipped**. Remaining follow-ups (also tracked in `docs/ROADMAP.md` → _Fluncle's own mixtapes_):
 
 - **Member tracks that aren't findings yet:** add them as findings first, or allow non-finding members in a mixtape's tracklist.
 - **SSH mixtapes view:** the web/API/CLI/MCP front doors exist; the rave terminal view is still future.
@@ -129,5 +129,4 @@ The internal plumbing and the external distribution chain are **shipped**. Remai
 ## Cross-links
 
 - **Canon:** PRODUCT.md (Mixtapes — Fluncle dreaming), DESIGN.md (Checkpoint Row), the Voice canon (the `mixtape` vocabulary entry + the `F` Log ID marker).
-- **Distribution design:** `docs/rfcs/mixtape-autopublish-rfc.md` (retired planning doc, kept for the rationale).
 - **Roadmap:** the SoundCloud profile item and the off-site MusicBrainz/Wikidata thread stay on `docs/ROADMAP.md` and cross-link here.

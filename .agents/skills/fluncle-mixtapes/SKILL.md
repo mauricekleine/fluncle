@@ -67,7 +67,7 @@ fluncle admin mixtapes distribute <idOrLogId> --video <mixtape>.mp4 --audio <mas
 Omit a flag to target one platform. The command is **mint-first**: a `draft` mints the `XXX.F.ZZ` Log ID + number + title into a non-public `distributing` state (the cover renders, public surfaces stay hidden), the uploads carry the committed Log ID, and the **first successful platform link flips it `published`** — so a public mixtape always has somewhere to listen. It is **idempotent per platform**: re-running resumes a `distributing` mixtape and reuses its Log ID.
 
 - **YouTube** always lands **unlisted** (made public in a separate gate); title + description ending in `fluncle://<logId>` + a cued chapter block; the wide cover set best-effort as the thumbnail; resumes on a mid-upload token expiry or dropped session.
-- **Mixcloud** publishes **listed/public immediately**; full-quality master, square cover, a per-track `sections[]` tracklist from members. Add `--unlisted` to keep it private (a test run, or a cautious first upload to flip by hand). **Test with real-length audio**: a full mixtape is a licensed *show*, but a short clip is classified as an unlicensed *track* and copyright-blocked. Watch the Featured-Artist / SRPC limits (see the spine model's Hosting section); observe, don't pre-lint.
+- **Mixcloud** publishes **listed/public immediately**; full-quality master, square cover, a per-track `sections[]` tracklist from members. Add `--unlisted` to keep it private (a test run, or a cautious first upload to flip by hand). **Test with real-length audio**: a full mixtape is a licensed _show_, but a short clip is classified as an unlicensed _track_ and copyright-blocked. Watch the Featured-Artist / SRPC limits (see the spine model's Hosting section); observe, don't pre-lint.
 
 Each leg records into `mixtape_social_posts` and dual-writes `mixtapes.{youtube,mixcloud}_url`.
 
@@ -96,6 +96,5 @@ YouTube `videos.insert` is metered in the **Video Uploads bucket (~100/day)**, 2
 ## Pointers
 
 - Object model, identity, hosting/licensing, covers, lifecycle, the fan-out map, open questions: **[references/spine-model.md](references/spine-model.md)**.
-- Distribution design + the mint-first reshape: `docs/rfcs/mixtape-autopublish-rfc.md` (retired planning doc, kept for the rationale).
 - Voice for titles, notes, and announce copy: the `copywriting-fluncle` skill.
 - Cover art iteration: the `fluncle-video` kit; backgrounds rendered by `bun run --cwd packages/media render:mixtape-bg`.
