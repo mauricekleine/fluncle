@@ -1,3 +1,4 @@
+import { getInputProps } from "remotion";
 import { colors } from "@fluncle/tokens";
 import { FloatingType } from "../primitives";
 
@@ -97,6 +98,14 @@ export const CloseCard: React.FC<CloseCardProps> = ({
   const p = clamp01(arc ?? progress ?? 0);
 
   if (p <= 0.001) {
+    return null;
+  }
+
+  // The text-free cut (radio.fluncle.com): suppress the baked-in sign-off so a
+  // host UI owns the metadata. Read from inputProps so it gates every
+  // self-contained composition without touching the composition. CloseCard has no
+  // hooks, so an early return here is safe.
+  if ((getInputProps() as { hideOverlay?: boolean }).hideOverlay) {
     return null;
   }
 
