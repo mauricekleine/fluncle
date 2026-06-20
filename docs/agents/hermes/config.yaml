@@ -4,8 +4,9 @@
 # docs/agents/hermes-agent.md.
 #
 # Model: OpenRouter BYO key. Must be >=64k context and pinned (a smaller window
-# takes the whole gateway down at startup). deepseek-v4-flash = 1M context, cheap;
-# a flash model, so it must clear the voice gate before the bot goes public.
+# takes the whole gateway down at startup). Sonnet 4.6 chosen for voice adherence
+# — flash/generic models slip the deadpan + first-person Fluncle voice. Haiku 4.5
+# (anthropic/claude-haiku-4.5) is the cheaper fallback if traffic ever bites.
 model:
   provider: openrouter
-  default: deepseek/deepseek-v4-flash
+  default: anthropic/claude-sonnet-4.6

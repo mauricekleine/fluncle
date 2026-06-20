@@ -72,9 +72,15 @@ The Worker owns every platform secret (R2, Postiz, Turso, YouTube, Mixcloud, Las
 
 ## Model
 
-BYO key via OpenRouter (`config.yaml` `provider: custom`, OpenRouter base URL, `OPENROUTER_API_KEY`). Must be ≥64k context and pinned. Current: `deepseek/deepseek-v4-flash` (1M context; cheap) — chosen for setup/bring-up. Swapping the model is a one-line config change + restart, no rebuild.
+BYO key via OpenRouter (`config.yaml` `model.provider: openrouter`, `model.default: <slug>`, `OPENROUTER_API_KEY` read from the env). Must be ≥64k context and pinned. Current: `anthropic/claude-sonnet-4.6`. Swapping the model is a one-line config change + restart, no rebuild — the versioned baseline is [`docs/agents/hermes/config.yaml`](./hermes/config.yaml).
 
-> A flash/generic model is the _precise anti-Fluncle_ in voice. Do not flip the bot **public** until whatever model is pinned passes the voice gate (below).
+> Model choice is a **voice** decision, not just cost. A flash/generic model is the _precise anti-Fluncle_ — it slips into third-person "fluncle", prose em-dashes, and chirpy register. Sonnet 4.6 holds the deadpan reliably; `anthropic/claude-haiku-4.5` is the cheaper fallback if traffic ever bites. Whatever is pinned must pass the voice gate (below) before the bot goes public.
+
+## Voice
+
+The agent's identity is **Fluncle**, set always-on via `~/.hermes/SOUL.md` (Hermes personality slot #1, replacing the default identity) — versioned at [`docs/agents/hermes/SOUL.md`](./hermes/SOUL.md). SOUL.md is the thin always-on layer (the cardinal mechanical rules + the Discord/crew-feed register); it **delegates depth** to the `copywriting-fluncle` skill (the full voice canon), which is installed in the agent's skills dir (`/opt/data/skills/`). The skill loads on demand when the agent writes copy-shaped output (a finding note, a recap), so casual replies ride SOUL.md and authored copy pulls the canon.
+
+To change the voice: edit `SOUL.md` (or the `copywriting-fluncle` skill) in the repo, redeploy to `~/.hermes/SOUL.md` / the skills dir, restart, retest. Voice lives in git, never the agent's self-improve loop.
 
 ## Run
 
@@ -107,7 +113,7 @@ When the gateway is live, repeat the gate check **through the agent** ("run `flu
 
 ### Voice gate (hard requirement before the bot goes public)
 
-A chat reply is a live Fluncle surface. Before public exposure, the pinned model + persona must pass a fixed voice probe: leads with the bodily reaction not a bpm/key description (Oof Test), turns to the crew (Selector's Rule), dry (no `!`, no service-desk register, no "we"-as-company), sentence case, emoji only from the sanctioned set, and a human "would the uncle say this out loud over a tune?" sign-off. The `copywriting-fluncle` skill + persona are mounted **read-only** so the self-improve loop can't sand the voice; voice changes go through git.
+A chat reply is a live Fluncle surface. Before public exposure, the pinned model + `SOUL.md` must pass a fixed voice probe: leads with the bodily reaction not a bpm/key description (Oof Test), turns to the crew (Selector's Rule), dry (no `!`, no service-desk register, no "we"-as-company, no third-person "fluncle"), sentence case, emoji only from the sanctioned set and never on data rows, no prose em-dashes (only the `Artist — Title` separator), and a human "would the uncle say this out loud over a tune?" sign-off. Probe by DMing/@mentioning the bot ("what did you find this week?", a greeting, a publish-class command that must be refused in voice, an off-topic question). Voice changes go through git (`SOUL.md` + the skill), never the agent's self-improve loop.
 
 ## Security posture & limits
 
