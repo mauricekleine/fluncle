@@ -27,6 +27,7 @@ export function buildSitemapXml(logPages: SitemapLogPage[]): string {
     urlEntry(`${siteUrl}/log`, latest),
     urlEntry(`${siteUrl}/mixtapes`, latest),
     urlEntry(`${siteUrl}/about`),
+    urlEntry(`${siteUrl}/privacy`),
     urlEntry(`${siteUrl}/galaxy`),
     ...logPages.map((page) =>
       urlEntry(`${siteUrl}/log/${encodeURIComponent(page.logId)}`, page.lastmod),

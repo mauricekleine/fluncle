@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as RssDotxmlRouteImport } from './routes/rss[.]xml'
+import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as PodcastDotxmlRouteImport } from './routes/podcast[.]xml'
 import { Route as GalaxyRouteImport } from './routes/galaxy'
 import { Route as FeedDotjsonRouteImport } from './routes/feed[.]json'
@@ -163,6 +164,11 @@ const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
 const RssDotxmlRoute = RssDotxmlRouteImport.update({
   id: '/rss.xml',
   path: '/rss.xml',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PrivacyRoute = PrivacyRouteImport.update({
+  id: '/privacy',
+  path: '/privacy',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PodcastDotxmlRoute = PodcastDotxmlRouteImport.update({
@@ -950,6 +956,7 @@ export interface FileRoutesByFullPath {
   '/feed.json': typeof FeedDotjsonRoute
   '/galaxy': typeof GalaxyRoute
   '/podcast.xml': typeof PodcastDotxmlRoute
+  '/privacy': typeof PrivacyRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/admin/login': typeof AdminLoginRoute
@@ -1095,6 +1102,7 @@ export interface FileRoutesByTo {
   '/feed.json': typeof FeedDotjsonRoute
   '/galaxy': typeof GalaxyRoute
   '/podcast.xml': typeof PodcastDotxmlRoute
+  '/privacy': typeof PrivacyRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/admin/login': typeof AdminLoginRoute
@@ -1243,6 +1251,7 @@ export interface FileRoutesById {
   '/feed.json': typeof FeedDotjsonRoute
   '/galaxy': typeof GalaxyRoute
   '/podcast.xml': typeof PodcastDotxmlRoute
+  '/privacy': typeof PrivacyRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/admin/login': typeof AdminLoginRoute
@@ -1392,6 +1401,7 @@ export interface FileRouteTypes {
     | '/feed.json'
     | '/galaxy'
     | '/podcast.xml'
+    | '/privacy'
     | '/rss.xml'
     | '/sitemap.xml'
     | '/admin/login'
@@ -1537,6 +1547,7 @@ export interface FileRouteTypes {
     | '/feed.json'
     | '/galaxy'
     | '/podcast.xml'
+    | '/privacy'
     | '/rss.xml'
     | '/sitemap.xml'
     | '/admin/login'
@@ -1684,6 +1695,7 @@ export interface FileRouteTypes {
     | '/feed.json'
     | '/galaxy'
     | '/podcast.xml'
+    | '/privacy'
     | '/rss.xml'
     | '/sitemap.xml'
     | '/admin/login'
@@ -1832,6 +1844,7 @@ export interface RootRouteChildren {
   FeedDotjsonRoute: typeof FeedDotjsonRoute
   GalaxyRoute: typeof GalaxyRoute
   PodcastDotxmlRoute: typeof PodcastDotxmlRoute
+  PrivacyRoute: typeof PrivacyRoute
   RssDotxmlRoute: typeof RssDotxmlRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   ApiHealthRoute: typeof ApiHealthRoute
@@ -1913,6 +1926,13 @@ declare module '@tanstack/react-router' {
       path: '/rss.xml'
       fullPath: '/rss.xml'
       preLoaderRoute: typeof RssDotxmlRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/privacy': {
+      id: '/privacy'
+      path: '/privacy'
+      fullPath: '/privacy'
+      preLoaderRoute: typeof PrivacyRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/podcast.xml': {
@@ -3416,6 +3436,7 @@ const rootRouteChildren: RootRouteChildren = {
   FeedDotjsonRoute: FeedDotjsonRoute,
   GalaxyRoute: GalaxyRoute,
   PodcastDotxmlRoute: PodcastDotxmlRoute,
+  PrivacyRoute: PrivacyRoute,
   RssDotxmlRoute: RssDotxmlRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   ApiHealthRoute: ApiHealthRoute,
