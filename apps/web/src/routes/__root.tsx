@@ -57,6 +57,24 @@ export const Route = createRootRoute({
         title: "Fluncle's Findings",
         type: "application/rss+xml",
       },
+      {
+        href: "/feed.json",
+        rel: "alternate",
+        title: "Fluncle's Findings",
+        type: "application/feed+json",
+      },
+      {
+        href: "/atom.xml",
+        rel: "alternate",
+        title: "Fluncle's Findings",
+        type: "application/atom+xml",
+      },
+      {
+        href: "/podcast.xml",
+        rel: "alternate",
+        title: "Fluncle's Mixtapes",
+        type: "application/rss+xml",
+      },
     ],
     meta: [
       {

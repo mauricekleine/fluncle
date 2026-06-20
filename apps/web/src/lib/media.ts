@@ -10,6 +10,11 @@
 
 export const FOUND_BASE = "https://found.fluncle.com";
 
+/** The mixtape's episode audio on R2 (the podcast enclosure), by its Log ID. */
+export function mixtapeAudioUrl(logId: string): string {
+  return `${FOUND_BASE}/${encodeURIComponent(logId)}/mixtape.m4a`;
+}
+
 export type TrackMedia = {
   /** The profile-grid cover: loud centered identity. Also the OG image + video loading still. */
   coverUrl: string;
