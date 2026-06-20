@@ -64,6 +64,16 @@ export type MixtapeMemberInput = {
   members?: Array<string | { ref: string; startMs?: number }>;
 };
 
+// A finding's membership in one mixtape — the spine link the admin board reads to
+// mark which bangers are already spoken for (a published checkpoint) or pencilled
+// into a draft. Keyed by trackId; a finding can sit in more than one.
+export type MixtapeMembership = {
+  logId?: string;
+  mixtapeId: string;
+  status: MixtapeStatus;
+  title: string;
+};
+
 export async function createMixtape(input: MixtapeInput): Promise<MixtapeDTO> {
   const fields = validateMixtapeInput(input);
   const now = new Date().toISOString();
@@ -236,6 +246,130 @@ export async function setMixtapeMembers(
   return getMixtapeById(id, { includeDrafts: true });
 }
 
+// Append findings to a draft's tracklist, keeping the existing order — the board's
+// "Add to mixtape" path, where setMixtapeMembers (a full replace) would clobber the
+// tracklist. Findings already in the tape, or repeated in the input, are skipped
+// silently (a bulk add can overlap), so this is idempotent; a request resolving to
+// no new findings is a no-op, not an error. Draft-only, like every member edit.
+export async function addTracksToMixtape(
+  id: string,
+  input: MixtapeMemberInput,
+): Promise<MixtapeDTO> {
+  await assertDraftMixtape(id);
+
+  if (!Array.isArray(input.members) || input.members.length === 0) {
+    throw new ApiError("invalid_members", "Add at least one finding to the mixtape", 400);
+  }
+
+  const db = await getDb();
+  const existing = await db.execute({
+    args: [id],
+    sql: `select track_id, position from mixtape_tracks where mixtape_id = ?`,
+  });
+  const present = new Set(
+    typedRows<{ position: number; track_id: string }>(existing.rows).map((row) => row.track_id),
+  );
+  let position = typedRows<{ position: number; track_id: string }>(existing.rows).reduce(
+    (max, row) => Math.max(max, row.position),
+    0,
+  );
+
+  const seen = new Set<string>();
+  const inserts: { startMs: number | null; trackId: string }[] = [];
+
+  for (const raw of input.members) {
+    const ref = typeof raw === "string" ? raw : raw?.ref;
+    const startMs = typeof raw === "string" ? undefined : raw?.startMs;
+    const value = requireText(ref, "member", 80);
+
+    if (startMs !== undefined) {
+      if (typeof startMs !== "number" || !Number.isInteger(startMs) || startMs < 0) {
+        throw new ApiError(
+          "invalid_start_ms",
+          "Cue timestamps must be non-negative integers (ms)",
+          400,
+        );
+      }
+    }
+
+    const track = await getTrackByIdOrLogId(value);
+
+    if (!track) {
+      throw new ApiError("member_not_found", `No finding with id ${value}`, 400);
+    }
+
+    // Already in this tape, or a repeat within this request — skip it.
+    if (present.has(track.trackId) || seen.has(track.trackId)) {
+      continue;
+    }
+
+    seen.add(track.trackId);
+    inserts.push({ startMs: startMs ?? null, trackId: track.trackId });
+  }
+
+  if (inserts.length > 0) {
+    await db.batch(
+      [
+        ...inserts.map((entry) => {
+          position += 1;
+          return {
+            args: [id, entry.trackId, position, entry.startMs],
+            sql: `insert into mixtape_tracks (mixtape_id, track_id, position, start_ms) values (?, ?, ?, ?)`,
+          };
+        }),
+        {
+          args: [new Date().toISOString(), id],
+          sql: `update mixtapes set updated_at = ? where id = ?`,
+        },
+      ],
+      "write",
+    );
+  }
+
+  return getMixtapeById(id, { includeDrafts: true });
+}
+
+// Which mixtapes each of these findings sits in, keyed by trackId — one query, no
+// N+1, mirroring listSocialPostsForTracks. The board reads this for a page of
+// findings to mark what's already spoken for; a finding in no mixtape is absent.
+export async function listMixtapeMembershipsForTracks(
+  trackIds: string[],
+): Promise<Record<string, MixtapeMembership[]>> {
+  if (trackIds.length === 0) {
+    return {};
+  }
+
+  const db = await getDb();
+  const placeholders = trackIds.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: trackIds,
+    sql: `select mt.track_id, m.id as mixtape_id, m.log_id, m.title, m.status
+          from mixtape_tracks mt
+          join mixtapes m on m.id = mt.mixtape_id
+          where mt.track_id in (${placeholders})
+          order by m.sequence_number, m.created_at`,
+  });
+
+  const byTrack: Record<string, MixtapeMembership[]> = {};
+
+  for (const row of typedRows<{
+    log_id: string | null;
+    mixtape_id: string;
+    status: MixtapeStatus;
+    title: string;
+    track_id: string;
+  }>(result.rows)) {
+    (byTrack[row.track_id] ??= []).push({
+      logId: row.log_id ?? undefined,
+      mixtapeId: row.mixtape_id,
+      status: row.status,
+      title: row.title,
+    });
+  }
+
+  return byTrack;
+}
+
 // Mint a draft into the spine: commit its sequence number, Log ID, and canonical
 // title, moving it from `draft` to `distributing`. This is the FIRST half of
 // publishing — the coordinate now exists (so the cover endpoint and the platform
@@ -256,17 +390,11 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
     );
   }
 
-  // Everything a published mixtape needs must be present — the draft is just the
-  // operator-authored subset; title + Log ID + cover are minted/derived from here.
-  if (!draft.recordedAt) {
-    throw new ApiError("missing_recorded_at", "Set the recorded date before publishing", 409);
-  }
-  if (!draft.note?.trim()) {
-    throw new ApiError("missing_note", "Write the dream note before publishing", 409);
-  }
-  if (!draft.durationMs) {
-    throw new ApiError("missing_duration", "Set the duration before publishing", 409);
-  }
+  // A draft is just the tracklist — that's the only hard requirement to mint. The
+  // recorded date defaults to today (set it on the draft only to backdate the
+  // coordinate's sector); the dream note is written later via the post-publish edit;
+  // the duration is derived from the upload by `distribute`. Title + Log ID + cover
+  // are minted/derived here.
   if (draft.memberCount < 1) {
     throw new ApiError("missing_members", "Add at least one finding before publishing", 409);
   }
@@ -277,7 +405,7 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
     throw new ApiError("mixtape_cap_reached", "The mixtape spine is full (54)", 409);
   }
 
-  const recordedAt = draft.recordedAt;
+  const recordedAt = draft.recordedAt ?? new Date().toISOString();
   const sectorPrefix = mixtapeLogId(recordedAt, 1).slice(0, -2);
   const now = new Date().toISOString();
   const db = await getDb();

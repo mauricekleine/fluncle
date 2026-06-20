@@ -162,6 +162,19 @@ export async function mixtapeDistributeCommand(
   const mixtapeId = mixtape.id;
   let logId = mixtape.logId;
 
+  // Derive the run-time from the upload if the draft has no duration — a draft is
+  // just the tracklist, so duration isn't an input. Display-only, best-effort
+  // (skipped if ffprobe isn't on PATH).
+  if (!mixtape.durationMs) {
+    const source = options.audio ?? options.video;
+    const durationMs = source ? await probeDurationMs(source) : undefined;
+
+    if (durationMs) {
+      await mixtapeUpdateCommand(mixtapeId, { durationMs: String(durationMs), json: false });
+      onProgress(`Duration: ${Math.round(durationMs / 60_000)} min (from the upload).`);
+    }
+  }
+
   // Mint first: the cover endpoint and the uploaded assets must embed the real Log
   // ID, so it has to exist BEFORE upload. A draft mints to `distributing`; an
   // already-minted mixtape reuses its committed coordinate.
@@ -204,6 +217,23 @@ export async function mixtapeDistributeCommand(
   }
 
   return { logId, mixtapeId, results };
+}
+
+// The media run-time in ms via ffprobe, or undefined if it isn't available/parseable.
+async function probeDurationMs(filePath: string): Promise<number | undefined> {
+  try {
+    const proc = Bun.spawn(
+      ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", filePath],
+      { stderr: "ignore", stdout: "pipe" },
+    );
+    const out = await new Response(proc.stdout).text();
+    await proc.exited;
+    const seconds = Number.parseFloat(out.trim());
+
+    return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function buildBody(options: MixtapeCreateOptions | MixtapeUpdateOptions): MixtapeRequestBody {

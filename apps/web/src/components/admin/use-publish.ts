@@ -1,5 +1,6 @@
 import { type InfiniteData, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
+import { type MixtapeMembership } from "@/lib/server/mixtapes";
 import { type SocialPostItem } from "@/lib/server/social";
 import { type TrackListItem } from "@/lib/server/tracks";
 
@@ -9,8 +10,11 @@ import { type TrackListItem } from "@/lib/server/tracks";
 // here. The board passes its react-query key; the hook patches that cache in place
 // after each mutation and the next window-focus refetch reconciles with the server.
 
-/** A page row: a finding plus its per-platform posts. */
-export type BoardRow = TrackListItem & { posts: SocialPostItem[] };
+/** A page row: a finding plus its per-platform posts and mixtape memberships. */
+export type BoardRow = TrackListItem & {
+  mixtapes: MixtapeMembership[];
+  posts: SocialPostItem[];
+};
 export type BoardPage = { nextCursor?: string; totalCount: number; tracks: BoardRow[] };
 
 export function usePublish(boardKey: readonly unknown[]) {
