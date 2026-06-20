@@ -87,9 +87,5 @@ printf 'Streaming %s hardening script to root@%s\n' "${PROFILE}" "${SERVER_IPV4}
   cat "${BOOTSTRAP_SCRIPT}"
 } | ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 "root@${SERVER_IPV4}" 'bash -s'
 
-printf '\nBootstrap complete. Verify with:\n'
-if [[ "${PROFILE}" == "private" ]]; then
-  printf '  ssh %s@%s\n' "${USERNAME}" "${TS_HOSTNAME}"
-else
-  printf '  ssh -p 2222 %s@%s\n' "${USERNAME}" "${TS_HOSTNAME}"
-fi
+printf '\nBootstrap complete. Verify with (plain sshd over the tailnet, both profiles):\n'
+printf '  ssh -p %s %s@%s\n' "${ADMIN_SSH_PORT:-2222}" "${USERNAME}" "${TS_HOSTNAME}"

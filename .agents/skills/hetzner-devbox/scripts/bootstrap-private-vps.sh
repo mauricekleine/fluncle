@@ -3,6 +3,19 @@ set -Eeuo pipefail
 
 USERNAME="${USERNAME:-admin}"
 TS_HOSTNAME="${TS_HOSTNAME:-$(hostname)}"
+# Admin reaches this box with plain OpenSSH on this port over the tailnet
+# (ssh -p ${ADMIN_SSH_PORT} admin@<tailscale-ip>). We deliberately do NOT use
+# Tailscale SSH (--ssh): it intercepts :22 and, on a tailnet whose ACL sets the
+# SSH action to "check", forces a per-session browser re-auth that blocks every
+# headless/agent connection. Plain sshd on a non-22 port tunnels through
+# WireGuard (UDP 41641, the one firewall-open port) and is never intercepted —
+# the same admin path the rave box already uses.
+ADMIN_SSH_PORT="${ADMIN_SSH_PORT:-2222}"
+# Optional ACL tag (e.g. tag:server). Tag-owned nodes are exempt from Tailscale
+# key expiry by construction — the durable fix for "no public fallback = key
+# expiry is total lockout". Needs the auth key + ACL tagOwners to permit the tag;
+# if left unset, disable key expiry manually in the Tailscale admin.
+TS_TAGS="${TS_TAGS:-}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   printf 'bootstrap-private-vps.sh must run as root\n' >&2
@@ -45,21 +58,33 @@ if ! command -v tailscale >/dev/null 2>&1; then
 fi
 systemctl enable --now tailscaled
 
-log "Bringing Tailscale online"
-tailscale up \
-  --auth-key="${TS_AUTHKEY}" \
-  --hostname="${TS_HOSTNAME}" \
-  --ssh \
+log "Bringing Tailscale online (plain sshd over the tailnet; no Tailscale SSH)"
+ts_args=(
+  --auth-key="${TS_AUTHKEY}"
+  --hostname="${TS_HOSTNAME}"
   --accept-dns=true
+)
+if [[ -n "${TS_TAGS}" ]]; then
+  ts_args+=(--advertise-tags="${TS_TAGS}")
+fi
+tailscale up "${ts_args[@]}"
 
-log "Hardening SSH daemon"
+log "Hardening SSH daemon (admin on port ${ADMIN_SSH_PORT}, key-only)"
 sshd_config="/etc/ssh/sshd_config.d/99-devbox-hardening.conf"
-cat >"${sshd_config}" <<'SSHD'
+cat >"${sshd_config}" <<SSHD
+Port ${ADMIN_SSH_PORT}
 PasswordAuthentication no
 PermitRootLogin prohibit-password
 KbdInteractiveAuthentication no
 SSHD
-systemctl reload ssh || systemctl restart ssh
+# Ubuntu 23.04+ ships OpenSSH socket-activated: ssh.socket binds :22 and the
+# sshd_config Port directive is silently ignored (sshd -T still reports the
+# configured port — misleading). Defeat socket activation so admin sshd actually
+# moves to ${ADMIN_SSH_PORT}; otherwise it stays on :22 and the Tailscale-only
+# firewall + UFW leave no way in.
+systemctl disable --now ssh.socket 2>/dev/null || true
+systemctl enable ssh.service
+systemctl restart ssh.service
 
 log "Configuring UFW"
 ufw --force reset
@@ -69,5 +94,9 @@ ufw allow in on tailscale0
 ufw --force enable
 
 log "Bootstrap complete"
-printf 'Tailscale SSH should now work with: ssh %s@%s\n' "${USERNAME}" "${TS_HOSTNAME}"
+printf 'Admin over the tailnet (plain sshd, key-only, no Tailscale-SSH check):\n'
+printf '  ssh -p %s %s@%s\n' "${ADMIN_SSH_PORT}" "${USERNAME}" "${TS_HOSTNAME}"
+if [[ -z "${TS_TAGS}" ]]; then
+  printf 'Reminder: disable Tailscale key expiry for this node (no public fallback) in the admin console (Machines -> ... -> Disable key expiry), or re-run with TS_TAGS set.\n'
+fi
 

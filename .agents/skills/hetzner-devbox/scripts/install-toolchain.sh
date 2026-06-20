@@ -22,6 +22,10 @@ fi
 
 SERVER_NAME="${SERVER_NAME:-agent-devbox-01}"
 USERNAME="${USERNAME:-admin}"
+# Admin sshd listens on this port over the tailnet (see bootstrap-*-vps.sh). Plain
+# OpenSSH on :2222, NOT Tailscale SSH on :22, so headless installs never hit a
+# Tailscale-SSH "check" re-auth prompt.
+ADMIN_SSH_PORT="${ADMIN_SSH_PORT:-2222}"
 BUN_VERSION="${BUN_VERSION:-1.2.15}"
 
 INSTALL_DOCKER="${INSTALL_DOCKER:-1}"
@@ -44,7 +48,7 @@ remote_env=$(printf 'BUN_VERSION=%q INSTALL_DOCKER=%q INSTALL_GH=%q INSTALL_BUN=
   "${INSTALL_CLAUDE}" \
   "${INSTALL_REMOTION_LIBS}")
 
-ssh -o BatchMode=yes -o ConnectTimeout=30 "${USERNAME}@${SERVER_NAME}" "${remote_env} bash -s" <<'REMOTE'
+ssh -o BatchMode=yes -o ConnectTimeout=30 -p "${ADMIN_SSH_PORT}" "${USERNAME}@${SERVER_NAME}" "${remote_env} bash -s" <<'REMOTE'
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
