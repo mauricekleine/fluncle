@@ -79,3 +79,55 @@ jobs:
             --target "${{ github.sha }}" \
             --title "${{ steps.version.outputs.tag }}" \
             --notes "Automated CLI release for ${{ github.sha }}."
+
+      # One source of truth (the release version above) -> npm + Homebrew, the
+      # same version as the GitHub Release. Each step no-ops until its secret
+      # exists, so this is safe to ship before npm / the tap are set up.
+      - name: Set up Node for npm publish
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Publish to npm (fluncle)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          FLUNCLE_CLI_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "No NPM_TOKEN secret - skipping npm publish. Add it to enable."
+            exit 0
+          fi
+          bun run --cwd apps/cli build:npm
+          cd apps/cli/dist-npm
+          npm publish --access public
+
+      - name: Bump the Homebrew tap formula
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAP_TOKEN:-}" ]; then
+            echo "No HOMEBREW_TAP_TOKEN secret - skipping tap bump. Add it + create the tap to enable."
+            exit 0
+          fi
+          sha_da=$(shasum -a 256 apps/cli/dist/fluncle-darwin-arm64 | cut -d' ' -f1)
+          sha_dx=$(shasum -a 256 apps/cli/dist/fluncle-darwin-x64  | cut -d' ' -f1)
+          sha_la=$(shasum -a 256 apps/cli/dist/fluncle-linux-arm64 | cut -d' ' -f1)
+          sha_lx=$(shasum -a 256 apps/cli/dist/fluncle-linux-x64   | cut -d' ' -f1)
+          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/mauricekleine/homebrew-fluncle.git" tap
+          mkdir -p tap/Formula
+          sed -e "s/^  version \".*\"/  version \"${VERSION}\"/" \
+              -e "s/REPLACE_WITH_SHA256_OF_fluncle-darwin-arm64/${sha_da}/" \
+              -e "s/REPLACE_WITH_SHA256_OF_fluncle-darwin-x64/${sha_dx}/" \
+              -e "s/REPLACE_WITH_SHA256_OF_fluncle-linux-arm64/${sha_la}/" \
+              -e "s/REPLACE_WITH_SHA256_OF_fluncle-linux-x64/${sha_lx}/" \
+              apps/cli/packaging/homebrew/fluncle.rb > tap/Formula/fluncle.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/fluncle.rb
+          git commit -m "fluncle ${VERSION}" || { echo "no formula change"; exit 0; }
+          git push

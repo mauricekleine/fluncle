@@ -22,8 +22,10 @@ so the two never collide and the workspace is untouched.
 Build + publish:
 
 ```sh
-# version comes from FLUNCLE_CLI_VERSION, else apps/cli/package.json version
-FLUNCLE_CLI_VERSION=0.2.0 bun run --cwd apps/cli build:npm
+# The version MUST be passed (build:npm errors without it) so a manual publish
+# can't ship a stale version. Use the latest from
+# github.com/mauricekleine/fluncle/releases. (CI passes it automatically.)
+FLUNCLE_CLI_VERSION=0.33.0 bun run --cwd apps/cli build:npm
 
 # inspect the tarball first (3 files: bin/fluncle.mjs, package.json, README.md)
 cd apps/cli/dist-npm && npm pack --dry-run
@@ -76,11 +78,26 @@ brew install fluncle
 
 4. Commit and push.
 
-### Bumping on each release
+### Bumping on each release — automated
 
-Re-run the checksum loop above for the new tag and update `version` + the four
-`sha256` lines, or use `brew bump-formula-pr --version=X.Y.Z mauricekleine/fluncle/fluncle`.
+The `CLI Release` workflow (`.github/workflows/cli-release.yml`) now does this on
+every release: it computes the four binary checksums, fills `version` + the
+`sha256` lines from this canonical formula, and pushes `Formula/fluncle.rb` to the
+tap repo — at the **same version** as the GitHub Release and the npm publish. No
+manual bumping; this formula stays the canonical template (placeholders filled per
+release), so edit it here.
 
-> Future automation: the `CLI Release` workflow could append a job that copies
-> this formula into the tap repo with checksums filled and pushes it. Left manual
-> for now (the tap repo doesn't exist yet, and the push is a gated external effect).
+## One-time setup to turn on npm + Homebrew
+
+The workflow ships all three channels at the release version, but the npm + tap
+steps **skip until their secret exists** (so the existing GitHub Release keeps
+working unchanged). To enable them:
+
+- **npm**: add an `NPM_TOKEN` repo secret (an npm automation token; the account
+  owns the unclaimed `fluncle` name).
+- **Homebrew**: create the empty public `mauricekleine/homebrew-fluncle` repo and
+  add a `HOMEBREW_TAP_TOKEN` repo secret (a PAT with contents:write on it). The
+  workflow creates `Formula/fluncle.rb` on the first release.
+
+Once both are set, the next CLI release (an `apps/cli/**` change merged to `main`)
+publishes `fluncle@<version>` to npm and bumps the tap to match the GitHub Release.

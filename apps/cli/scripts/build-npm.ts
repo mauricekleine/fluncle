@@ -65,9 +65,13 @@ function readVersion(): string {
     return fromEnv;
   }
 
-  const pkg = require(join(cliRoot, "package.json")) as { version?: string };
-
-  return pkg.version ?? "0.1.0";
+  // The CLI version is sourced from the GitHub release tag — the cli-release
+  // workflow passes it automatically. Require it explicitly for manual builds so
+  // we can never publish the stale package.json version. Latest release:
+  // github.com/mauricekleine/fluncle/releases.
+  throw new Error(
+    "FLUNCLE_CLI_VERSION is required (e.g. FLUNCLE_CLI_VERSION=0.33.0). The cli-release workflow sets it from the release tag.",
+  );
 }
 
 function buildPackageJson(): Record<string, unknown> {
