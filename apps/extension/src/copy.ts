@@ -48,8 +48,12 @@ export const COPY = {
   /** Popup empty state — quiet, in-fiction, matches the web empty state. */
   emptyState: "No findings on this page. Quiet sector.",
 
-  /** Hover card / popup error when the API read didn't come back. */
-  metaError: "Couldn't recover this one. The link still works.",
+  /**
+   * Hover card / popup state when the coordinate resolved (the link works) but the
+   * enrichment read didn't come back. Not a failure — a finding that arrived lossy
+   * (the Light-Years Rule). Harmonizes with the "Recovering…" loading register.
+   */
+  metaError: "The details didn't survive the trip. The link still lands.",
 
   /** Hover card / popup while the metadata read is in flight. */
   metaLoading: "Recovering this finding…",
