@@ -4,7 +4,7 @@ import { colors } from "@fluncle/tokens";
 import { OXANIUM_STACK } from "./fonts";
 
 // <MixtapeCover> — cover art for a Fluncle mixtape (a checkpoint / "Fluncle
-// dreaming"; see docs/fluncle-mixtapes-runbook.md). One code-generated still,
+// dreaming"; see packages/skills/fluncle-mixtapes). One code-generated still,
 // parametrized by the mixtape number and its Log ID coordinate, rendered at three
 // aspect ratios from this one component (mixtape-cover-specs.ts): square for
 // Mixcloud / SoundCloud + the /log coverImageUrl, 16:9 for the YouTube thumbnail,

@@ -22,6 +22,11 @@
       "sourceType": "local",
       "computedHash": "ab3290ff51f3a3fdf0a9ce690da460f45090664bca4b93987814a4502cf0b8f4"
     },
+    "fluncle-mixtapes": {
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-mixtapes",
+      "sourceType": "local",
+      "computedHash": "09b27ef18ea90b4a03a88892d32b8806f3de03f4eb61463bb88f0da36bc54ca0"
+    },
     "fluncle-operator": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-operator",
       "sourceType": "local",

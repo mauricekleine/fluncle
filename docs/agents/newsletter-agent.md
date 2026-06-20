@@ -31,7 +31,7 @@ It is short and it evolves; what it says overrides everything below. The rules t
 6.  **Tidbits (optional, strict).** For artists in this window, use the firecrawl CLI to look for recent, concrete news: album or EP announcements, tours, label signings. Include at most 2-3, each with its source link, and only when you are confident it is the same artist (drum & bass aliases collide with mainstream names; when unsure, drop it). Nothing found means the section simply does not appear. Never fabricate or embellish news.
 7.  **Compose inside the template.** Fetch the canonical LMX template:
 
-        https://raw.githubusercontent.com/mauricekleine/fluncle/refs/heads/main/docs/newsletter-template.lmx
+        https://raw.githubusercontent.com/mauricekleine/fluncle/refs/heads/main/docs/agents/newsletter-template.lmx
 
     You fill word-slots; you never alter the `<Style>` element, the component structure, the button, the greeting, or the sign-off. Never write `{braces}` in LMX content; Loops treats braces as template variables and rejects them. The slots:
     - `SLOT_INTRO`: 1-3 sentences, the week in one breath, first person.
