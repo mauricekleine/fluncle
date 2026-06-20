@@ -14,6 +14,7 @@ import { Route as RssDotxmlRouteImport } from './routes/rss[.]xml'
 import { Route as PodcastDotxmlRouteImport } from './routes/podcast[.]xml'
 import { Route as GalaxyRouteImport } from './routes/galaxy'
 import { Route as FeedDotjsonRouteImport } from './routes/feed[.]json'
+import { Route as DocsRouteImport } from './routes/docs'
 import { Route as AtomDotxmlRouteImport } from './routes/atom[.]xml'
 import { Route as AccountRouteImport } from './routes/account'
 import { Route as AboutRouteImport } from './routes/about'
@@ -22,9 +23,12 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as StoriesIndexRouteImport } from './routes/stories.index'
 import { Route as MixtapesIndexRouteImport } from './routes/mixtapes.index'
 import { Route as LogIndexRouteImport } from './routes/log.index'
+import { Route as DocsIndexRouteImport } from './routes/docs.index'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as StoriesLogIdRouteImport } from './routes/stories.$logId'
 import { Route as LogLogIdRouteImport } from './routes/log.$logId'
+import { Route as DocsApiRouteImport } from './routes/docs.api'
+import { Route as DocsSplatRouteImport } from './routes/docs.$'
 import { Route as CliLatestDotshRouteImport } from './routes/cli/latest[.]sh'
 import { Route as ApiTracksRouteImport } from './routes/api/tracks'
 import { Route as ApiSubmissionsRouteImport } from './routes/api/submissions'
@@ -166,6 +170,11 @@ const FeedDotjsonRoute = FeedDotjsonRouteImport.update({
   path: '/feed.json',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DocsRoute = DocsRouteImport.update({
+  id: '/docs',
+  path: '/docs',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AtomDotxmlRoute = AtomDotxmlRouteImport.update({
   id: '/atom.xml',
   path: '/atom.xml',
@@ -206,6 +215,11 @@ const LogIndexRoute = LogIndexRouteImport.update({
   path: '/log/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DocsIndexRoute = DocsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => DocsRoute,
+} as any)
 const AdminIndexRoute = AdminIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -220,6 +234,16 @@ const LogLogIdRoute = LogLogIdRouteImport.update({
   id: '/log/$logId',
   path: '/log/$logId',
   getParentRoute: () => rootRouteImport,
+} as any)
+const DocsApiRoute = DocsApiRouteImport.update({
+  id: '/api',
+  path: '/api',
+  getParentRoute: () => DocsRoute,
+} as any)
+const DocsSplatRoute = DocsSplatRouteImport.update({
+  id: '/$',
+  path: '/$',
+  getParentRoute: () => DocsRoute,
 } as any)
 const CliLatestDotshRoute = CliLatestDotshRouteImport.update({
   id: '/cli/latest.sh',
@@ -856,6 +880,7 @@ export interface FileRoutesByFullPath {
   '/about': typeof AboutRoute
   '/account': typeof AccountRoute
   '/atom.xml': typeof AtomDotxmlRoute
+  '/docs': typeof DocsRouteWithChildren
   '/feed.json': typeof FeedDotjsonRoute
   '/galaxy': typeof GalaxyRoute
   '/podcast.xml': typeof PodcastDotxmlRoute
@@ -872,9 +897,12 @@ export interface FileRoutesByFullPath {
   '/api/submissions': typeof ApiSubmissionsRoute
   '/api/tracks': typeof ApiTracksRouteWithChildren
   '/cli/latest.sh': typeof CliLatestDotshRoute
+  '/docs/$': typeof DocsSplatRoute
+  '/docs/api': typeof DocsApiRoute
   '/log/$logId': typeof LogLogIdRoute
   '/stories/$logId': typeof StoriesLogIdRoute
   '/admin/': typeof AdminIndexRoute
+  '/docs/': typeof DocsIndexRoute
   '/log/': typeof LogIndexRoute
   '/mixtapes/': typeof MixtapesIndexRoute
   '/stories/': typeof StoriesIndexRoute
@@ -1004,9 +1032,12 @@ export interface FileRoutesByTo {
   '/api/submissions': typeof ApiSubmissionsRoute
   '/api/tracks': typeof ApiTracksRouteWithChildren
   '/cli/latest.sh': typeof CliLatestDotshRoute
+  '/docs/$': typeof DocsSplatRoute
+  '/docs/api': typeof DocsApiRoute
   '/log/$logId': typeof LogLogIdRoute
   '/stories/$logId': typeof StoriesLogIdRoute
   '/admin': typeof AdminIndexRoute
+  '/docs': typeof DocsIndexRoute
   '/log': typeof LogIndexRoute
   '/mixtapes': typeof MixtapesIndexRoute
   '/stories': typeof StoriesIndexRoute
@@ -1122,6 +1153,7 @@ export interface FileRoutesById {
   '/about': typeof AboutRoute
   '/account': typeof AccountRoute
   '/atom.xml': typeof AtomDotxmlRoute
+  '/docs': typeof DocsRouteWithChildren
   '/feed.json': typeof FeedDotjsonRoute
   '/galaxy': typeof GalaxyRoute
   '/podcast.xml': typeof PodcastDotxmlRoute
@@ -1138,9 +1170,12 @@ export interface FileRoutesById {
   '/api/submissions': typeof ApiSubmissionsRoute
   '/api/tracks': typeof ApiTracksRouteWithChildren
   '/cli/latest.sh': typeof CliLatestDotshRoute
+  '/docs/$': typeof DocsSplatRoute
+  '/docs/api': typeof DocsApiRoute
   '/log/$logId': typeof LogLogIdRoute
   '/stories/$logId': typeof StoriesLogIdRoute
   '/admin/': typeof AdminIndexRoute
+  '/docs/': typeof DocsIndexRoute
   '/log/': typeof LogIndexRoute
   '/mixtapes/': typeof MixtapesIndexRoute
   '/stories/': typeof StoriesIndexRoute
@@ -1257,6 +1292,7 @@ export interface FileRouteTypes {
     | '/about'
     | '/account'
     | '/atom.xml'
+    | '/docs'
     | '/feed.json'
     | '/galaxy'
     | '/podcast.xml'
@@ -1273,9 +1309,12 @@ export interface FileRouteTypes {
     | '/api/submissions'
     | '/api/tracks'
     | '/cli/latest.sh'
+    | '/docs/$'
+    | '/docs/api'
     | '/log/$logId'
     | '/stories/$logId'
     | '/admin/'
+    | '/docs/'
     | '/log/'
     | '/mixtapes/'
     | '/stories/'
@@ -1405,9 +1444,12 @@ export interface FileRouteTypes {
     | '/api/submissions'
     | '/api/tracks'
     | '/cli/latest.sh'
+    | '/docs/$'
+    | '/docs/api'
     | '/log/$logId'
     | '/stories/$logId'
     | '/admin'
+    | '/docs'
     | '/log'
     | '/mixtapes'
     | '/stories'
@@ -1522,6 +1564,7 @@ export interface FileRouteTypes {
     | '/about'
     | '/account'
     | '/atom.xml'
+    | '/docs'
     | '/feed.json'
     | '/galaxy'
     | '/podcast.xml'
@@ -1538,9 +1581,12 @@ export interface FileRouteTypes {
     | '/api/submissions'
     | '/api/tracks'
     | '/cli/latest.sh'
+    | '/docs/$'
+    | '/docs/api'
     | '/log/$logId'
     | '/stories/$logId'
     | '/admin/'
+    | '/docs/'
     | '/log/'
     | '/mixtapes/'
     | '/stories/'
@@ -1656,6 +1702,7 @@ export interface RootRouteChildren {
   AboutRoute: typeof AboutRoute
   AccountRoute: typeof AccountRoute
   AtomDotxmlRoute: typeof AtomDotxmlRoute
+  DocsRoute: typeof DocsRouteWithChildren
   FeedDotjsonRoute: typeof FeedDotjsonRoute
   GalaxyRoute: typeof GalaxyRoute
   PodcastDotxmlRoute: typeof PodcastDotxmlRoute
@@ -1756,6 +1803,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof FeedDotjsonRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/docs': {
+      id: '/docs'
+      path: '/docs'
+      fullPath: '/docs'
+      preLoaderRoute: typeof DocsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/atom.xml': {
       id: '/atom.xml'
       path: '/atom.xml'
@@ -1812,6 +1866,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LogIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/docs/': {
+      id: '/docs/'
+      path: '/'
+      fullPath: '/docs/'
+      preLoaderRoute: typeof DocsIndexRouteImport
+      parentRoute: typeof DocsRoute
+    }
     '/admin/': {
       id: '/admin/'
       path: '/'
@@ -1832,6 +1893,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/log/$logId'
       preLoaderRoute: typeof LogLogIdRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/docs/api': {
+      id: '/docs/api'
+      path: '/api'
+      fullPath: '/docs/api'
+      preLoaderRoute: typeof DocsApiRouteImport
+      parentRoute: typeof DocsRoute
+    }
+    '/docs/$': {
+      id: '/docs/$'
+      path: '/$'
+      fullPath: '/docs/$'
+      preLoaderRoute: typeof DocsSplatRouteImport
+      parentRoute: typeof DocsRoute
     }
     '/cli/latest.sh': {
       id: '/cli/latest.sh'
@@ -2657,6 +2732,20 @@ const AdminRouteRouteWithChildren = AdminRouteRoute._addFileChildren(
   AdminRouteRouteChildren,
 )
 
+interface DocsRouteChildren {
+  DocsSplatRoute: typeof DocsSplatRoute
+  DocsApiRoute: typeof DocsApiRoute
+  DocsIndexRoute: typeof DocsIndexRoute
+}
+
+const DocsRouteChildren: DocsRouteChildren = {
+  DocsSplatRoute: DocsSplatRoute,
+  DocsApiRoute: DocsApiRoute,
+  DocsIndexRoute: DocsIndexRoute,
+}
+
+const DocsRouteWithChildren = DocsRoute._addFileChildren(DocsRouteChildren)
+
 interface ApiMeExportRouteChildren {
   ApiMeExportExportIdRoute: typeof ApiMeExportExportIdRoute
 }
@@ -3115,6 +3204,7 @@ const rootRouteChildren: RootRouteChildren = {
   AboutRoute: AboutRoute,
   AccountRoute: AccountRoute,
   AtomDotxmlRoute: AtomDotxmlRoute,
+  DocsRoute: DocsRouteWithChildren,
   FeedDotjsonRoute: FeedDotjsonRoute,
   GalaxyRoute: GalaxyRoute,
   PodcastDotxmlRoute: PodcastDotxmlRoute,

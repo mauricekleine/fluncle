@@ -1,0 +1,46 @@
+---
+title: The CLI
+description: The archive in your terminal — recent, random, search, submit.
+---
+
+The `fluncle` CLI is the archive in your terminal: a thin client over the public API, with no secrets of its own. Browse recent findings, pull a random one, search for a track, or submit one for review.
+
+## Install
+
+One line, no clone:
+
+```bash
+curl -fsSL https://www.fluncle.com/cli/latest.sh | sh
+```
+
+It picks the right binary for your machine (macOS and Linux, arm64 and x64) and drops it at `~/.local/bin/fluncle`. Make sure that's on your `PATH`.
+
+## Commands
+
+```bash
+# The latest findings, newest first
+fluncle recent --limit 3
+
+# Same, as JSON for scripts and agents
+fluncle recent --limit 3 --json
+
+# A finding pulled at random
+fluncle random
+
+# Search Spotify for a candidate
+fluncle search "Camo & Crooked"
+
+# Recommend a track for review
+fluncle submit
+fluncle submit "https://open.spotify.com/track/..."
+```
+
+Every read command takes `--json` for clean machine output. Without it you get the terminal-native rendering, in Fluncle's own voice.
+
+## Submitting
+
+`fluncle submit` is a **recommendation, not a publish**. It sends a track to the queue; Fluncle listens before anything joins the archive. A submission with no argument walks you through it; pass a Spotify URL or a search query to skip ahead.
+
+## Under the hood
+
+The CLI only ever talks to the public [API](/docs/api-overview) — the same endpoints the web app and the [rave terminal](/docs/ssh) read. It owns no database and no credentials, so what you see in the terminal is exactly what's in the archive.

@@ -2,8 +2,10 @@ import { cloudflare } from "@cloudflare/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
+import mdx from "fumadocs-mdx/vite";
 import { resolve } from "node:path";
 import { defineConfig, type Plugin, type Rollup } from "vite";
+import * as docsConfig from "./source.config";
 
 // A crawler-facing banner prepended to every built JS chunk. The hashed
 // /assets/*.js chunks are among the most-crawled paths by AI bots, so this is
@@ -52,6 +54,10 @@ function crawlerBannerPlugin(): Plugin {
 
 export default defineConfig({
   plugins: [
+    // Fumadocs MDX: compiles content/docs/*.mdx for the /docs hub and emits the
+    // generated .source index the docs routes read. Runs before tanstackStart
+    // so the virtual collections resolve during route compilation.
+    mdx(docsConfig),
     cloudflare({ viteEnvironment: { name: "ssr" } }),
     tailwindcss(),
     tanstackStart(),

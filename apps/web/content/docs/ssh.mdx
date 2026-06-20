@@ -1,0 +1,25 @@
+---
+title: The rave terminal
+description: The archive over SSH — no install, no account, just a resolver and a terminal.
+---
+
+The rave terminal is the archive over SSH. No install, no account, no client to download — if you have `ssh`, you're already holding everything you need.
+
+```bash
+ssh rave.fluncle.com
+```
+
+## What's in there
+
+A small terminal app (Go, built on [Wish](https://github.com/charmbracelet/wish) and [Bubble Tea](https://github.com/charmbracelet/bubbletea)) serving the same public archive as every other surface:
+
+- Browse the latest findings
+- Submit a track for review
+- Board the mothership (the [newsletter](/docs/feeds))
+- Grab the [CLI](/docs/cli) install line
+
+It reads the same public [API](/docs/api-overview) as the CLI and the web app, and it owns no secrets. Quit any time with `q` or `Ctrl-C`.
+
+## Why it exists
+
+Because a finding should be reachable from wherever you're already standing. You don't always have a browser; you almost always have a terminal. The rave terminal is one more door into the same room — the archive, dressed for SSH.

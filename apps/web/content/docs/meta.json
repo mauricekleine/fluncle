@@ -1,0 +1,14 @@
+{
+  "title": "Docs",
+  "pages": [
+    "index",
+    "log-id",
+    "cli",
+    "ssh",
+    "mcp",
+    "api-overview",
+    "[API reference](/docs/api)",
+    "dig",
+    "feeds"
+  ]
+}

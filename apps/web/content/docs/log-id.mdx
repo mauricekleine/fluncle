@@ -1,0 +1,38 @@
+---
+title: The Log ID
+description: A finding's permanent coordinate in the Galaxy, and how to read it.
+---
+
+Every finding has a **Log ID**: its permanent identity and its coordinate in the Galaxy, the way a star gets a designation. The same ID names the finding on every surface — the web, the CLI, the rave terminal, the API, DNS. It looks like this:
+
+```
+fluncle://241.7.3A
+```
+
+The `fluncle://` scheme is the full address. In most places you'll see just the coordinate, `241.7.3A`.
+
+## Reading the coordinate
+
+A coordinate is three fields, dotted: `<sector>.<marker>.<entry>`.
+
+| Field      | Example | What it is                                                                     |
+| ---------- | ------- | ------------------------------------------------------------------------------ |
+| **Sector** | `241`   | The block Fluncle was travelling through when he found it.                     |
+| **Marker** | `7`     | A digit for a finding. The literal `F` marks a [mixtape](/docs/feeds) instead. |
+| **Entry**  | `3A`    | The finding's place in that block — a digit and a letter.                      |
+
+The coordinate already carries _when_ Fluncle found it (the day he first heard the tune, not the day it released), so a compact row never repeats the date. It lives on the finding's log page.
+
+A mixtape — Fluncle dreaming, a checkpoint closing a chapter — keeps the same shape but puts the literal `F` in the marker slot: `019.F.1A`. That's the only tell.
+
+## Where it takes you
+
+Every Log ID resolves to a canonical log page:
+
+```
+https://www.fluncle.com/log/241.7.3A
+```
+
+That page is the finding's home: the banger, the artist and title, BPM and key, the day it was found, and the way to play it. Point any surface at the coordinate and you land back here.
+
+The coordinate's trailing letter is case-insensitive where it matters most — DNS, for one — so `241.7.3a` and `241.7.3A` reach the same finding.

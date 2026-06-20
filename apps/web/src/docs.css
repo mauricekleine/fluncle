@@ -1,0 +1,46 @@
+/* The /docs hub stylesheet, loaded only on the docs routes (linked from the
+   docs layout route). Fumadocs UI ships a fully prebuilt Tailwind stylesheet,
+   so we import it directly — no extra Tailwind source scanning — then retint
+   its theme tokens to the Nostalgic Cosmos (DESIGN.md, the Retint Rule). The
+   main app keeps styles.css; this file never touches it. */
+@import "fumadocs-ui/style.css";
+
+/* Fluncle is dark-only. RootProvider is pinned to dark (theme.enabled:false),
+   so the .dark class is always present; we map Fumadocs' --color-fd-* tokens
+   onto the canon palette there. Values mirror tokens.css / styles.css. */
+.dark {
+  --color-fd-background: #090a0b; /* Deep Field */
+  --color-fd-foreground: #f4ead7; /* Starlight Cream */
+  --color-fd-muted: #171611; /* Tape Black */
+  --color-fd-muted-foreground: #b7ab95; /* Stardust */
+  --color-fd-popover: #10100d; /* Sleeve Black */
+  --color-fd-popover-foreground: #f4ead7;
+  --color-fd-card: #10100d; /* Sleeve Black */
+  --color-fd-card-foreground: #f4ead7;
+  --color-fd-border: #d0b99029; /* Dust Line */
+  --color-fd-primary: #f5b800; /* Eclipse Gold — the one sun */
+  --color-fd-primary-foreground: #151006; /* Ink on Gold */
+  --color-fd-secondary: #171611; /* Tape Black */
+  --color-fd-secondary-foreground: #f4ead7;
+  --color-fd-accent: #f5b8001a; /* Gold Veil — the hover wash */
+  --color-fd-accent-foreground: #ffd057; /* Eclipse Glow */
+  --color-fd-ring: #f5b800; /* Eclipse Gold focus ring */
+  --color-fd-error: #ff6b57; /* Re-entry Red */
+  --color-fd-warning: #ffd057;
+  --color-fd-success: #f5b800;
+  --color-fd-info: #ffd057;
+  --color-fd-overlay: #090a0bcc;
+}
+
+/* Let the cosmos backdrop and sun-bloom (rendered by __root, behind every
+   page) show through the docs surface, same as the rest of Fluncle: the docs
+   chrome rides on the night sky, not on an opaque slab. */
+#nd-docs-layout,
+[data-docs] {
+  background: transparent;
+}
+
+/* The brand wordmark in the docs nav uses Oxanium, like everywhere else. */
+.font-display {
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+}

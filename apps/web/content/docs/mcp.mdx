@@ -1,0 +1,42 @@
+---
+title: The MCP server
+description: The archive handed to agents as Model Context Protocol tools.
+---
+
+Fluncle serves a small, stateless [Model Context Protocol](https://modelcontextprotocol.io) server: the same archive the public API exposes, handed to agents as tools. Streamable HTTP, no sessions, no auth.
+
+```
+https://www.fluncle.com/mcp
+```
+
+## Connect
+
+Point any MCP client at the endpoint. For a client that reads a config block:
+
+```json
+{
+  "mcpServers": {
+    "fluncle": { "type": "http", "url": "https://www.fluncle.com/mcp" }
+  }
+}
+```
+
+## Tools
+
+The archive, as five tools:
+
+| Tool                   | Does                                          |
+| ---------------------- | --------------------------------------------- |
+| `get_recent_tracks`    | The latest findings, newest first.            |
+| `get_random_track`     | One finding, pulled at random.                |
+| `search_tracks`        | Search Spotify for a candidate.               |
+| `submit_track`         | Recommend a track for review (not a publish). |
+| `subscribe_newsletter` | Board the mothership.                         |
+
+`submit_track` is a recommendation, like the [CLI](/docs/cli)'s submit: it queues a track, and Fluncle listens before anything joins the archive.
+
+## How it's built
+
+The MCP server is a thin layer over the same internal functions the [`/api`](/docs/api-overview) routes use, so validation, the submission rate limit, and the submitter hash all stay identical to every other surface. An agent and a human reach the same archive, the same way.
+
+For discovery, the MCP Server Card lives at [`/.well-known/mcp/server-card.json`](https://www.fluncle.com/.well-known/mcp/server-card.json).
