@@ -11,6 +11,7 @@ import { GALAXIES, galaxyForVibe } from "../galaxies";
 import { type FeedItem, type MixtapeMember, rowToMixtape } from "../mixtapes";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
+import { discogsReleaseUrl } from "./discogs";
 
 export type { FeedListPage, TrackCursor, TrackFeatures, TrackListPage, TrackListItem };
 
@@ -23,6 +24,7 @@ type TrackRow = {
   duration_ms: number;
   enrichment_status: string;
   features_json: string | null;
+  in_release_id: number | null;
   isrc: string | null;
   key: string | null;
   label: string | null;
@@ -68,7 +70,7 @@ type MixtapeFeedRow = {
 // Columns exposed to clients. `features_json` is the enrichment spectral summary,
 // surfaced (parsed) as creative fuel for the video agent.
 const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.title, tracks.album, tracks.album_image_url, tracks.artists_json,
-  tracks.bpm, tracks.duration_ms, tracks.enrichment_status, tracks.features_json, tracks.isrc, tracks.key, tracks.label, tracks.log_id, tracks.popularity,
+  tracks.bpm, tracks.duration_ms, tracks.enrichment_status, tracks.features_json, tracks.in_release_id, tracks.isrc, tracks.key, tracks.label, tracks.log_id, tracks.popularity,
   tracks.preview_url, tracks.release_date, tracks.video_url, tracks.video_vehicle, tracks.video_model, tracks.video_model_reasoning, tracks.note, tracks.added_at,
   tracks.updated_at, tracks.vibe_x, tracks.vibe_y, tracks.added_to_spotify, tracks.posted_to_telegram,
   tracks.observation_audio_url, tracks.observation_duration_ms, tracks.observation_generated_at,
@@ -124,6 +126,7 @@ function toTrackListItem(row: TrackRow): TrackListItem {
     albumImageUrl: row.album_image_url ?? undefined,
     artists: parseArtistsJson(row.artists_json),
     bpm: row.bpm ?? undefined,
+    discogsReleaseUrl: row.in_release_id ? discogsReleaseUrl(row.in_release_id) : undefined,
     durationMs: row.duration_ms,
     enrichmentStatus: row.enrichment_status,
     features: parseFeatures(row.features_json),
