@@ -78,7 +78,9 @@ const MIXTAPES_KEY = ["admin", "mixtapes"] as const;
 type MemberRef = {
   albumImageUrl?: string;
   artists: string[];
+  bpm?: number;
   durationMs: number;
+  key?: string;
   logId?: string;
   title: string;
   trackId: string;
@@ -853,6 +855,7 @@ function MembersBuilder({
                 <span className="min-w-0 flex-1 truncate text-sm">
                   {member.artists.join(", ")} — {member.title}
                 </span>
+                <MemberMeta bpm={member.bpm} musicalKey={member.key} />
                 {member.logId ? (
                   <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
                     {member.logId}
@@ -941,6 +944,7 @@ function SortableMemberRow({
       <span className="min-w-0 flex-1 truncate text-sm">
         {member.artists.join(", ")} — {member.title}
       </span>
+      <MemberMeta bpm={member.bpm} musicalKey={member.key} />
       {member.logId ? (
         <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
           {member.logId}
@@ -1042,6 +1046,7 @@ function MemberSearch({
                       >
                         {track.artists.join(", ")} — {track.title}
                       </span>
+                      <MemberMeta bpm={track.bpm} musicalKey={track.key} />
                       <MemberTapeBadge memberships={otherTapes} />
                       <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
                         {track.logId ?? track.trackId}
@@ -1055,6 +1060,19 @@ function MemberSearch({
         </Command>
       </PopoverContent>
     </Popover>
+  );
+}
+
+// Tempo + key as one quiet line — the match-up signal when ordering a tape (a 174
+// banger reads next to its neighbours). Tabular numerals like the Log ID column;
+// nothing renders until enrichment has produced a BPM or a key.
+function MemberMeta({ bpm, musicalKey }: { bpm?: number; musicalKey?: string }) {
+  const parts = [bpm ? `${Math.round(bpm)} BPM` : undefined, musicalKey].filter(Boolean);
+  if (parts.length === 0) {
+    return null;
+  }
+  return (
+    <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{parts.join(" · ")}</span>
   );
 }
 
@@ -1259,7 +1277,9 @@ function toMemberRef(member: MixtapeDTO["members"][number]): MemberRef {
   return {
     albumImageUrl: member.albumImageUrl,
     artists: member.artists,
+    bpm: member.bpm,
     durationMs: member.durationMs,
+    key: member.key,
     logId: member.logId,
     title: member.title,
     trackId: member.trackId,
@@ -1270,7 +1290,9 @@ function toTrackRef(track: TrackListItem): MemberRef {
   return {
     albumImageUrl: track.albumImageUrl,
     artists: track.artists,
+    bpm: track.bpm,
     durationMs: track.durationMs,
+    key: track.key,
     logId: track.logId,
     title: track.title,
     trackId: track.trackId,
