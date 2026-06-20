@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { requireAdmin } from "../../../lib/server/env";
 import { apiErrorResponse, parseJsonBody } from "../../../lib/server/http-errors";
+import { renderMixtapeCover } from "../../../lib/server/mixtape-cover";
 import { finalizeMixtapeDistribution } from "../../../lib/server/mixtape-social";
-import { getMixtapeById } from "../../../lib/server/mixtapes";
 import { ApiError } from "../../../lib/server/spotify";
 import { getYouTubeAccessToken } from "../../../lib/server/youtube";
 
@@ -44,10 +44,11 @@ export const Route = createFileRoute("/api/admin/mixtapes/$mixtapeId/youtube/fin
             url: `https://youtu.be/${videoId}`,
           });
 
-          // Best-effort custom thumbnail (the wide cover). Self-origin fetch of the
-          // cover render: if it loops back to the SPA fallback or returns non-image
-          // in the Worker, we log and continue — finalize must not fail on it.
-          await trySetThumbnail(request, videoId).catch((error) => {
+          // Best-effort custom thumbnail (the wide cover, rendered in-process — a
+          // Worker can't HTTP-fetch its own cover route without looping to the SPA
+          // fallback). A thumbnail failure must not fail finalize; the unlisted video
+          // is already live with its real coordinate.
+          await trySetThumbnail(mixtape.logId, videoId).catch((error) => {
             console.warn(
               `[mixtape ${params.mixtapeId}] YouTube thumbnail set failed (non-fatal):`,
               error instanceof Error ? error.message : String(error),
@@ -63,32 +64,20 @@ export const Route = createFileRoute("/api/admin/mixtapes/$mixtapeId/youtube/fin
   },
 });
 
-async function trySetThumbnail(request: Request, videoId: string): Promise<void> {
-  // Re-read the mixtape just for its committed logId (the finalize call above
-  // returned the DTO but we keep the thumbnail path self-contained and tolerant).
-  const url = new URL(request.url);
-  const mixtapeId = url.pathname.split("/").slice(-2, -1)[0];
-  const mixtape = await getMixtapeById(mixtapeId, { includeDrafts: true });
-
-  if (!mixtape.logId) {
+async function trySetThumbnail(logId: string | undefined, videoId: string): Promise<void> {
+  if (!logId) {
     return;
   }
 
-  const coverUrl = `${url.origin}/api/mixtape-cover/${encodeURIComponent(mixtape.logId)}?size=wide`;
-  const coverResponse = await fetch(coverUrl);
+  // Render the wide cover IN-PROCESS (no HTTP self-fetch — that loops to the SPA
+  // fallback in the Worker and the thumbnail silently never attaches).
+  const cover = await renderMixtapeCover(logId, "wide");
 
-  if (!coverResponse.ok) {
-    throw new Error(`cover render returned ${coverResponse.status}`);
+  if (!cover) {
+    return;
   }
 
-  const contentType = coverResponse.headers.get("content-type") ?? "";
-
-  if (!contentType.startsWith("image/")) {
-    // Worker self-origin loop returned HTML (the SPA fallback), not the image.
-    throw new Error(`cover render returned non-image content-type "${contentType}"`);
-  }
-
-  const image = await coverResponse.arrayBuffer();
+  const image = await cover.arrayBuffer();
 
   if (image.byteLength > THUMBNAIL_MAX_BYTES) {
     throw new Error(`cover PNG is ${image.byteLength} bytes (> 2MB cap)`);
@@ -101,7 +90,7 @@ async function trySetThumbnail(request: Request, videoId: string): Promise<void>
       body: image,
       headers: {
         Authorization: `Bearer ${accessToken}`,
-        "Content-Type": contentType,
+        "Content-Type": "image/png",
       },
       method: "POST",
     },
