@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { requireAdmin, signState } from "../../../../../lib/server/env";
 import { apiErrorResponse } from "../../../../../lib/server/http-errors";
-import { buildMixcloudAuthUrl } from "../../../../../lib/server/mixcloud";
+import { buildMixcloudAuthUrl, mixcloudRedirectUri } from "../../../../../lib/server/mixcloud";
 
 // Admin-gated start of our own Mixcloud OAuth (mixtape audio distribution).
 // Mirrors the Spotify/YouTube start route; the callback verifies the same signed
@@ -23,7 +23,8 @@ export const Route = createFileRoute("/api/admin/mixcloud/auth/start")({
             nonce: crypto.randomUUID(),
             purpose: "mixcloud-auth",
           });
-          const authUrl = await buildMixcloudAuthUrl(state);
+          const redirectUri = mixcloudRedirectUri(new URL(request.url).origin);
+          const authUrl = await buildMixcloudAuthUrl(state, redirectUri);
 
           return Response.json({
             authUrl,

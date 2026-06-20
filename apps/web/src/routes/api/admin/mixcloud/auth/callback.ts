@@ -1,6 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { jsonError, verifyState } from "../../../../../lib/server/env";
-import { exchangeCodeForMixcloudToken } from "../../../../../lib/server/mixcloud";
+import {
+  exchangeCodeForMixcloudToken,
+  mixcloudRedirectUri,
+} from "../../../../../lib/server/mixcloud";
 
 // Mixcloud redirects here after the consent screen. We verify the signed state
 // (purpose mixcloud-auth), exchange the code for the access token, store it in
@@ -30,7 +33,7 @@ export const Route = createFileRoute("/api/admin/mixcloud/auth/callback")({
             return jsonError(400, "invalid_state", "Invalid state");
           }
 
-          await exchangeCodeForMixcloudToken(code);
+          await exchangeCodeForMixcloudToken(code, mixcloudRedirectUri(url.origin));
 
           return new Response(null, {
             headers: { Location: "/admin?mixcloud=connected" },
