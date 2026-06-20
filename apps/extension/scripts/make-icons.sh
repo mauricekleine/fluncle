@@ -40,13 +40,13 @@ mkdir -p "$VARIANTS" "$ICONS"
 # (the disc) inside 16px transparent padding.
 build_a() {
   magick "$COSMONAUT" -trim +repage \
-    -resize 72x72 -background none -gravity center -extent 84x84 \
+    -resize 84x84 -background none -gravity center -extent 96x96 \
     "$VARIANTS/_fig.png"
 
   magick -size 96x96 xc:none \
-    -fill "$DEEP_FIELD" -draw "circle 48,48 48,4" \
+    -fill "$DEEP_FIELD" -draw "circle 48,48 48,1" \
     \( -size 96x96 xc:none -fill none -stroke "#f5b80077" -strokewidth 2 \
-       -draw "circle 48,48 48,6" \) -compose over -composite \
+       -draw "circle 48,48 48,3" \) -compose over -composite \
     "$VARIANTS/_disc.png"
 
   magick "$VARIANTS/_disc.png" "$VARIANTS/_fig.png" -gravity center -compose over -composite \
