@@ -97,6 +97,13 @@ function pruneRegistry(): boolean {
 
   for (const id of dead) {
     registry.delete(id);
+
+    // The hover card lives on <body> (not inside the link), so a pruned link leaves
+    // its card orphaned. Remove it here so SPA route changes don't leak detached
+    // cards into the DOM.
+    for (const card of document.querySelectorAll(`[${HOVER_ATTR}="${cssEscape(id)}"]`)) {
+      card.remove();
+    }
   }
 
   return dead.length > 0;
@@ -438,6 +445,40 @@ function buildActions(finding: DetectedFinding): HTMLElement {
   return actions;
 }
 
+/**
+ * Places the fixed-position hover card next to its coordinate, fully on-screen.
+ * The card defaults below the coordinate, but flips above it when there isn't room
+ * below (the bottom-of-viewport clip seen on TikTok), and clamps to the left/right
+ * edges with an 8px margin. Reads the card's measured size, so it must run while the
+ * card is visible (hidden = false) and laid out.
+ */
+function positionCard(link: HTMLElement, card: HTMLElement): void {
+  const margin = 8;
+  const gap = 6;
+  const anchor = link.getBoundingClientRect();
+  const { offsetWidth: cardW, offsetHeight: cardH } = card;
+  const viewportW = document.documentElement.clientWidth;
+  const viewportH = document.documentElement.clientHeight;
+
+  // Vertical: below by default; flip above when the card would overflow the bottom
+  // and there's more room above than below.
+  const roomBelow = viewportH - anchor.bottom;
+  const roomAbove = anchor.top;
+  const flipUp = roomBelow < cardH + gap + margin && roomAbove > roomBelow;
+  let top = flipUp ? anchor.top - cardH - gap : anchor.bottom + gap;
+
+  // Final clamp so it never leaves the viewport even when neither side fits.
+  top = Math.max(margin, Math.min(top, viewportH - cardH - margin));
+
+  // Horizontal: align to the coordinate's left, then clamp within the edges.
+  let left = anchor.left;
+
+  left = Math.max(margin, Math.min(left, viewportW - cardW - margin));
+
+  card.style.top = `${Math.round(top)}px`;
+  card.style.left = `${Math.round(left)}px`;
+}
+
 /** Attaches a lazily-rendered hover card to a linkified coordinate. */
 function attachHoverCard(link: HTMLAnchorElement, id: string): void {
   const card = document.createElement("span");
@@ -446,11 +487,16 @@ function attachHoverCard(link: HTMLAnchorElement, id: string): void {
   card.className = "fluncle-lens-card";
   card.hidden = true;
 
-  link.append(card);
+  // The fixed card is positioned against the viewport, so it must escape the link's
+  // inline flow — append it to <body> rather than nesting it inside the <a>.
+  (document.body ?? document.documentElement).append(card);
 
   let painted = false;
+  let hideTimer: ReturnType<typeof setTimeout> | undefined;
 
-  link.addEventListener("mouseenter", () => {
+  const show = (): void => {
+    clearTimeout(hideTimer);
+
     const finding = registry.get(id);
 
     if (finding && !painted) {
@@ -459,11 +505,24 @@ function attachHoverCard(link: HTMLAnchorElement, id: string): void {
     }
 
     card.hidden = false;
-  });
+    positionCard(link, card);
+  };
 
-  link.addEventListener("mouseleave", () => {
-    card.hidden = true;
-  });
+  // The card now lives on <body>, not inside the <a>, so moving the pointer from the
+  // coordinate onto the card crosses a gap. A short grace delay lets the pointer
+  // travel to the card (to click an action) without the card vanishing; entering the
+  // card cancels the hide.
+  const scheduleHide = (): void => {
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => {
+      card.hidden = true;
+    }, 160);
+  };
+
+  link.addEventListener("mouseenter", show);
+  link.addEventListener("mouseleave", scheduleHide);
+  card.addEventListener("mouseenter", () => clearTimeout(hideTimer));
+  card.addEventListener("mouseleave", scheduleHide);
 }
 
 // ── Dynamic pages ────────────────────────────────────────────────────────────

@@ -1,7 +1,17 @@
 /* Shared styles for the popup and options surfaces. Dark-only Nostalgic Cosmos,
    matching the web app: deep field ground, eclipse gold accent, Oxanium for the
-   coordinate and numbers. The Oxanium webfont isn't bundled, so coordinates fall
-   back to the platform sans with tabular numerals — still tidy, still on-brand. */
+   wordmark, coordinates, and numbers. Oxanium is bundled (fonts/oxanium-latin.woff2,
+   the same self-hosted SIL OFL file the web app uses) so the brand face renders even
+   offline; it still falls back to the platform sans with tabular numerals. */
+
+/* Oxanium variable font (SIL OFL), bundled — the brand's display face. */
+@font-face {
+  font-family: "Oxanium";
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url("fonts/oxanium-latin.woff2") format("woff2");
+}
 
 :root {
   color-scheme: dark;
@@ -39,29 +49,55 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 2px;
+  margin-bottom: 4px;
+}
+
+.lens-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.lens-mark {
+  display: block;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  flex: 0 0 auto;
 }
 
 .lens-wordmark {
   font-family: Oxanium, ui-sans-serif, system-ui, sans-serif;
   font-weight: 800;
   font-size: 1rem;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
   color: var(--starlight-cream);
 }
 
 .lens-gear {
   all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
   color: var(--stardust);
-  font-size: 1.4rem;
-  line-height: 1;
-  padding: 0 6px;
+  width: 28px;
+  height: 28px;
   border-radius: 0.375rem;
+  transition:
+    color 150ms ease-out,
+    background-color 150ms ease-out;
+}
+
+.lens-gear-icon {
+  width: 16px;
+  height: 16px;
 }
 
 .lens-gear:hover {
   color: var(--eclipse-glow);
+  background-color: var(--gold-veil);
 }
 
 .lens-gear:focus-visible {
@@ -156,7 +192,19 @@ body {
 .lens-options {
   max-width: 520px;
   margin: 0 auto;
-  padding: 28px 24px 40px;
+  padding: 36px 24px 48px;
+}
+
+.lens-options-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 28px;
+}
+
+.lens-mark-lg {
+  width: 32px;
+  height: 32px;
 }
 
 .lens-options h1 {
@@ -164,11 +212,11 @@ body {
   font-weight: 800;
   font-size: 1.4rem;
   letter-spacing: -0.02em;
-  margin: 0 0 4px;
+  margin: 0 0 2px;
 }
 
 .lens-options .lens-tagline {
-  margin: 0 0 24px;
+  margin: 0;
   color: var(--stardust);
   font-size: 0.9rem;
 }

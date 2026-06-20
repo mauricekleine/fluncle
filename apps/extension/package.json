@@ -7,7 +7,9 @@
   "type": "module",
   "scripts": {
     "build": "bun run ./scripts/build.ts",
+    "bundle": "bun run ./scripts/bundle.ts",
     "dev": "bun run ./scripts/build.ts --watch",
+    "icons": "bash ./scripts/make-icons.sh",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },

@@ -54,6 +54,8 @@ async function copyStatic(): Promise<void> {
   }
 
   await cp(join(ROOT, "icons"), join(DIST, "icons"), { recursive: true });
+  // The bundled Oxanium woff2 (the brand display face), referenced by ui.css.
+  await cp(join(ROOT, "src/fonts"), join(DIST, "fonts"), { recursive: true });
 }
 
 async function build(): Promise<void> {
