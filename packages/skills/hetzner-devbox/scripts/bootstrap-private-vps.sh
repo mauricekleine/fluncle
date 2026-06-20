@@ -77,7 +77,14 @@ PasswordAuthentication no
 PermitRootLogin prohibit-password
 KbdInteractiveAuthentication no
 SSHD
-systemctl restart ssh
+# Ubuntu 23.04+ ships OpenSSH socket-activated: ssh.socket binds :22 and the
+# sshd_config Port directive is silently ignored (sshd -T still reports the
+# configured port — misleading). Defeat socket activation so admin sshd actually
+# moves to ${ADMIN_SSH_PORT}; otherwise it stays on :22 and the Tailscale-only
+# firewall + UFW leave no way in.
+systemctl disable --now ssh.socket 2>/dev/null || true
+systemctl enable ssh.service
+systemctl restart ssh.service
 
 log "Configuring UFW"
 ufw --force reset
