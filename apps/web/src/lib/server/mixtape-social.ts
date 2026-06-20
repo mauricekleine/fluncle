@@ -1,10 +1,10 @@
 // Per-platform distribution state for a mixtape (the `mixtape_social_posts`
-// table), one row per (mixtape, platform). Mirrors `social.ts` for findings: the
-// CLI moves the bytes (the Worker can't proxy multi-GB media), the Worker records
-// the outcome here. On a successful publish this also DUAL-WRITES the public URL
-// into `mixtapes.{youtube,mixcloud}_url` (the public contract) and flips the
-// mixtape `distributing → published` on its first link — so a published mixtape
-// always has somewhere to listen.
+// table), one row per (mixtape, platform) — the SINGLE source of truth for a
+// mixtape's listen links. Mirrors `social.ts` for findings: the CLI moves the bytes
+// (the Worker can't proxy multi-GB media), the Worker records the outcome here. On a
+// successful publish this flips the mixtape `distributing → published` on its first
+// link; the public URL lives only on the row (the public DTO derives `externalUrls`
+// from these via MIXTAPE_SELECT — no `mixtapes.*_url` columns).
 
 import { type MixtapeSocialPostItem } from "@fluncle/contracts";
 import { type MixtapeDTO } from "../mixtapes";
@@ -14,15 +14,6 @@ import { getMixtapeById } from "./mixtapes";
 export type { MixtapeSocialPostItem };
 
 export type MixtapePlatform = "mixcloud" | "youtube";
-
-// The public `mixtapes.*_url` column each platform dual-writes. Whitelisted so the
-// column name is never interpolated from caller input. `soundcloud` joins here when
-// its API gate lifts — no migration, no schema change.
-const URL_COLUMN: Record<string, string> = {
-  mixcloud: "mixcloud_url",
-  soundcloud: "soundcloud_url",
-  youtube: "youtube_url",
-};
 
 type MixtapeSocialPostRow = {
   created_at: string;
@@ -88,23 +79,17 @@ export async function markMixtapeDistribution(
 }
 
 /**
- * The terminal success path: record the platform post as `published`, dual-write
- * the public URL into the matching `mixtapes.*_url` column, and flip the mixtape
- * `distributing → published` if this is its first live link. Idempotent on
- * (mixtape, platform) and on the flip — a retry after a crash-before-finalize
- * reconciles to the same state. Returns the updated mixtape.
+ * The terminal success path: record the platform post as `published` (its `url` is
+ * the public listen link) and flip the mixtape `distributing → published` if this is
+ * its first live link. Idempotent on (mixtape, platform) and on the flip — a retry
+ * after a crash-before-finalize reconciles to the same state. Returns the updated
+ * mixtape.
  */
 export async function finalizeMixtapeDistribution(
   mixtapeId: string,
   platform: MixtapePlatform,
   result: { externalId?: string; url: string },
 ): Promise<MixtapeDTO> {
-  const urlColumn = URL_COLUMN[platform];
-
-  if (!urlColumn) {
-    throw new Error(`Unknown mixtape distribution platform: ${platform}`);
-  }
-
   const now = new Date().toISOString();
   const db = await getDb();
 
@@ -134,12 +119,11 @@ export async function finalizeMixtapeDistribution(
                 updated_at = excluded.updated_at`,
       },
       {
-        // Dual-write the public URL + flip distributing → published on the first
-        // link. A re-run leaves an already-published mixtape published (the CASE is
-        // a no-op) and refreshes the URL/updated_at (so the cover cache-buster moves).
-        args: [result.url, now, now, mixtapeId],
+        // Flip distributing → published on the first link. A re-run leaves an
+        // already-published mixtape published (the CASE is a no-op) and refreshes
+        // updated_at (so the cover cache-buster moves).
+        args: [now, now, mixtapeId],
         sql: `update mixtapes set
-                ${urlColumn} = ?,
                 status = case when status = 'distributing' then 'published' else status end,
                 published_at = coalesce(published_at, ?),
                 updated_at = ?
@@ -152,7 +136,7 @@ export async function finalizeMixtapeDistribution(
   return getMixtapeById(mixtapeId, { includeDrafts: true });
 }
 
-// A distribution change alters the mixtape's public surfaces (the *_url columns
+// A distribution change alters the mixtape's public surfaces (the published rows
 // feed /log, RSS, llms.txt) and the on-the-fly cover's `?v=<updatedAt>` cache key,
 // so it counts as a content change — bump updated_at.
 async function touchMixtape(mixtapeId: string, now: string): Promise<void> {

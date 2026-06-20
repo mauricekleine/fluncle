@@ -325,13 +325,16 @@ export const socialPosts = sqliteTable(
   (table) => [uniqueIndex("social_posts_track_platform_idx").on(table.trackId, table.platform)],
 );
 
+// Distribution links no longer live here — they are the single source of truth in
+// `mixtape_social_posts` (one row per platform, with status + external_id). The
+// public DTO's `externalUrls` is derived from the published rows via a subquery in
+// MIXTAPE_SELECT; nothing is dual-written onto the mixtape row.
 export const mixtapes = sqliteTable("mixtapes", {
   addedAt: text("added_at"),
   createdAt: text("created_at").notNull(),
   durationMs: integer("duration_ms"),
   id: text("id").primaryKey(),
   logId: text("log_id").unique(),
-  mixcloudUrl: text("mixcloud_url"),
   note: text("note"),
   // The scheduled date/time (ISO) of an upcoming live session this mixtape is the
   // draft of — distinct from `recorded_at` (which is what publish derives the Log
@@ -341,7 +344,6 @@ export const mixtapes = sqliteTable("mixtapes", {
   publishedAt: text("published_at"),
   recordedAt: text("recorded_at"),
   sequenceNumber: integer("sequence_number").unique(),
-  soundcloudUrl: text("soundcloud_url"),
   // "distributing" is the minted-but-uploading state between draft and published
   // (see MixtapeStatus in @fluncle/contracts). Plain TEXT, the enum only narrows
   // the type.
@@ -350,14 +352,14 @@ export const mixtapes = sqliteTable("mixtapes", {
     .default("draft"),
   title: text("title").notNull(),
   updatedAt: text("updated_at").notNull(),
-  youtubeUrl: text("youtube_url"),
 });
 
 // Per-platform distribution state for a mixtape's audio/video, mirroring
-// `social_posts` for findings: one row per (mixtape, platform). The CLI moves the
-// bytes (the Worker can't proxy multi-GB media); the Worker records the outcome
-// here and dual-writes the public URL into `mixtapes.{youtube,mixcloud}_url`.
-// `platform` is plain TEXT — adding "soundcloud" later needs no migration.
+// `social_posts` for findings: one row per (mixtape, platform). This is the SINGLE
+// source of truth for a mixtape's listen links — the public DTO's `externalUrls`
+// derives from the `published` rows here (no `mixtapes.*_url` columns). YouTube +
+// Mixcloud are recorded by the CLI `distribute` flow (it moves the multi-GB bytes
+// the Worker can't proxy); SoundCloud is set manually from the admin editor.
 // `external_id` holds the YouTube videoId / Mixcloud cloudcast key; `url` the
 // public URL.
 export const mixtapeSocialPosts = sqliteTable(
@@ -367,7 +369,7 @@ export const mixtapeSocialPosts = sqliteTable(
     externalId: text("external_id"),
     id: text("id").primaryKey(),
     mixtapeId: text("mixtape_id").notNull(),
-    platform: text("platform", { enum: ["youtube", "mixcloud"] }).notNull(),
+    platform: text("platform", { enum: ["youtube", "mixcloud", "soundcloud"] }).notNull(),
     publishedAt: text("published_at"),
     status: text("status", { enum: ["uploading", "published", "failed"] }).notNull(),
     updatedAt: text("updated_at").notNull(),

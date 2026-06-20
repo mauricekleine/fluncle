@@ -366,11 +366,11 @@ export type TrackSocialUpdateRequest = {
 
 export type MixtapeRequestBody = {
   durationMs?: number;
-  mixcloudUrl?: string;
   note?: string;
   recordedAt?: string;
+  // YouTube + Mixcloud links come from `distribute` (mixtape_social_posts); only the
+  // manual SoundCloud link is settable here (it too becomes a distribution row).
   soundcloudUrl?: string;
-  youtubeUrl?: string;
 };
 
 export type CueEntry = { ref: string; startMs?: number };

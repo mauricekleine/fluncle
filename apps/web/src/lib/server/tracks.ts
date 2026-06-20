@@ -467,9 +467,15 @@ async function listPublishedMixtapeFeedRows(
             m.title,
             m.duration_ms,
             m.note,
-            m.mixcloud_url,
-            m.youtube_url,
-            m.soundcloud_url,
+            (select url from mixtape_social_posts s
+               where s.mixtape_id = m.id and s.platform = 'mixcloud' and s.status = 'published' and s.url is not null
+               order by published_at desc limit 1) as mixcloud_url,
+            (select url from mixtape_social_posts s
+               where s.mixtape_id = m.id and s.platform = 'youtube' and s.status = 'published' and s.url is not null
+               order by published_at desc limit 1) as youtube_url,
+            (select url from mixtape_social_posts s
+               where s.mixtape_id = m.id and s.platform = 'soundcloud' and s.status = 'published' and s.url is not null
+               order by published_at desc limit 1) as soundcloud_url,
             m.added_at,
             m.updated_at,
             (select count(*) from mixtape_tracks mt where mt.mixtape_id = m.id) as member_count

@@ -20,9 +20,11 @@
 - [x] Track Twitter/X cards
 - [x] robots.txt
 - [ ] Public changelog
-- [ ] Public docs
+- [x] Public docs
 
 ## Subdomains
+
+_Dropped (2026-06-20): per-coordinate web subdomains add nothing over `/log/<id>` and were the only thing requiring Cloudflare for SaaS — superseded by the `dig` surface below. Recorded here as the decision, not a TODO._
 
 - [ ] `241-7-3a.fluncle.com`
 - [ ] `random.fluncle.com`
@@ -35,13 +37,13 @@
 
 ## DNS / dig
 
-- [ ] TXT record for track IDs
-- [ ] TXT record for random track
-- [ ] TXT record for latest track
+- [x] TXT record for track IDs
+- [x] TXT record for random track
+- [x] TXT record for latest track
 - [ ] TXT record for today’s track
-- [ ] `dig` documentation
-- [ ] DNS metadata response format
-- [ ] Optional custom authoritative DNS server
+- [x] `dig` documentation
+- [x] DNS metadata response format
+- [x] Optional custom authoritative DNS server
 
 ## API / dev
 
@@ -49,11 +51,11 @@
 - [x] CLI
 - [x] MCP
 - [x] OpenAPI
-- [ ] API docs/playground
-- [ ] JSON Feed
-- [ ] Atom feed
-- [ ] npm package
-- [ ] Homebrew tap
+- [x] API docs/playground
+- [x] JSON Feed
+- [x] Atom feed
+- [x] npm package
+- [x] Homebrew tap
 - [ ] Docker image
 - [ ] Postman collection
 - [x] Raycast extension
@@ -62,9 +64,9 @@
 ## SSH
 
 - [x] SSH terminal
-- [ ] `ssh rave.fluncle.com latest`
-- [ ] `ssh rave.fluncle.com random`
-- [ ] `ssh rave.fluncle.com <id>`
+- [x] `ssh rave.fluncle.com latest`
+- [x] `ssh rave.fluncle.com random`
+- [x] `ssh rave.fluncle.com <id>`
 - [ ] Inline artwork
 - [ ] ANSI/Braille fallback
 - [ ] Sixel/Kitty/iTerm image support
@@ -86,10 +88,10 @@
 - [x] RSS
 - [x] Newsletter
 - [x] Telegram
-- [ ] JSON Feed
-- [ ] Atom
-- [ ] Podcast RSS
-- [ ] Calendar feed
+- [x] JSON Feed
+- [x] Atom
+- [x] Podcast RSS
+- [x] Calendar feed
 - [ ] WebSub
 - [ ] PWA push notifications
 
@@ -143,7 +145,7 @@
 - [ ] CLI/tool directories
 - [ ] Raycast Store
 - [ ] Homebrew formula
-- [ ] npm
+- [x] npm
 - [ ] Docker/GHCR
 - [ ] Podcast directories
 - [ ] Newsletter directories

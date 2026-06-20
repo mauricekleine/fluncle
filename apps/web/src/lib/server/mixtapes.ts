@@ -1,11 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  hasExternalUrl,
-  type MixtapeDTO,
-  type MixtapeExternalUrls,
-  type MixtapeStatus,
-  rowToMixtape,
-} from "../mixtapes";
+import { type MixtapeDTO, type MixtapeStatus, rowToMixtape } from "../mixtapes";
 import { getDb, typedRow, typedRows } from "./db";
 import { mixtapeLogId } from "./mixtape-log-id";
 import { ApiError } from "./spotify";
@@ -51,15 +45,16 @@ type StatusRow = {
 };
 
 // A draft is the operator-authored subset of a mixtape. The title (auto-set at
-// publish) and cover (derived from the Log ID) are outputs, not inputs.
+// publish) and cover (derived from the Log ID) are outputs, not inputs. YouTube +
+// Mixcloud links are recorded by `distribute` (mixtape_social_posts), never set
+// here; only the manual SoundCloud link is editable, and it too writes a
+// mixtape_social_posts row (see setMixtapeSoundcloud).
 export type MixtapeInput = {
   durationMs?: unknown;
-  mixcloudUrl?: unknown;
   note?: unknown;
   plannedFor?: unknown;
   recordedAt?: unknown;
   soundcloudUrl?: unknown;
-  youtubeUrl?: unknown;
 };
 
 export type MixtapeMemberInput = {
@@ -91,9 +86,6 @@ export async function createMixtape(input: MixtapeInput): Promise<MixtapeDTO> {
       "",
       fields.durationMs ?? null,
       fields.note ?? null,
-      fields.mixcloudUrl ?? null,
-      fields.youtubeUrl ?? null,
-      fields.soundcloudUrl ?? null,
       fields.recordedAt ?? null,
       fields.plannedFor ?? null,
       now,
@@ -101,43 +93,33 @@ export async function createMixtape(input: MixtapeInput): Promise<MixtapeDTO> {
     ],
     sql: `insert into mixtapes (
         id, status, title, duration_ms, note,
-        mixcloud_url, youtube_url, soundcloud_url, recorded_at, planned_for, created_at, updated_at
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        recorded_at, planned_for, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
+
+  // A manual SoundCloud link given at creation becomes a published distribution row.
+  if (fields.soundcloudUrl) {
+    await setMixtapeSoundcloud(id, fields.soundcloudUrl);
+  }
 
   return getMixtapeById(id, { includeDrafts: true });
 }
 
 export async function updateMixtape(id: string, input: MixtapeInput): Promise<MixtapeDTO> {
-  // A published mixtape stays editable — the note and external links can change
-  // over time — but its minted coordinate freezes two things: the recorded date
-  // the sector was derived from, and the rule that it always keeps somewhere to
-  // listen. Drafts have no such limits. (Members stay draft-only; see setMixtapeMembers.)
+  // A published mixtape stays editable — the note, links, and duration can change
+  // over time — but its minted coordinate freezes the recorded date the sector was
+  // derived from. Drafts have no such limit. (Members stay draft-only; see
+  // setMixtapeMembers. The YouTube/Mixcloud links live in mixtape_social_posts via
+  // `distribute`; the manual SoundCloud link is handled below.)
   const current = await getMixtapeById(id, { includeDrafts: true });
   const fields = validateMixtapeInput(input);
 
-  if (current.status === "published") {
-    if (fields.recordedAt !== undefined) {
-      throw new ApiError(
-        "recorded_at_immutable",
-        "The recorded date is locked once a mixtape is published",
-        409,
-      );
-    }
-
-    const nextUrls: MixtapeExternalUrls = {
-      mixcloud: resolveUrlUpdate(fields.mixcloudUrl, current.externalUrls.mixcloud),
-      soundcloud: resolveUrlUpdate(fields.soundcloudUrl, current.externalUrls.soundcloud),
-      youtube: resolveUrlUpdate(fields.youtubeUrl, current.externalUrls.youtube),
-    };
-
-    if (!hasExternalUrl(nextUrls)) {
-      throw new ApiError(
-        "missing_external_url",
-        "A published mixtape must keep at least one Mixcloud, YouTube, or SoundCloud link",
-        409,
-      );
-    }
+  if (current.status === "published" && fields.recordedAt !== undefined) {
+    throw new ApiError(
+      "recorded_at_immutable",
+      "The recorded date is locked once a mixtape is published",
+      409,
+    );
   }
 
   const sets: string[] = [];
@@ -146,9 +128,6 @@ export async function updateMixtape(id: string, input: MixtapeInput): Promise<Mi
   for (const [column, value] of [
     ["duration_ms", fields.durationMs],
     ["note", fields.note],
-    ["mixcloud_url", fields.mixcloudUrl],
-    ["youtube_url", fields.youtubeUrl],
-    ["soundcloud_url", fields.soundcloudUrl],
     ["recorded_at", fields.recordedAt],
     ["planned_for", fields.plannedFor],
   ] as const) {
@@ -158,34 +137,59 @@ export async function updateMixtape(id: string, input: MixtapeInput): Promise<Mi
     }
   }
 
-  if (sets.length === 0) {
+  if (sets.length === 0 && fields.soundcloudUrl === undefined) {
     throw new ApiError("no_fields", "No updatable fields provided", 400);
   }
 
-  sets.push("updated_at = ?");
-  args.push(new Date().toISOString(), id);
+  if (sets.length > 0) {
+    sets.push("updated_at = ?");
+    args.push(new Date().toISOString(), id);
 
-  const db = await getDb();
-  await db.execute({
-    args,
-    sql: `update mixtapes set ${sets.join(", ")} where id = ?`,
-  });
+    const db = await getDb();
+    await db.execute({
+      args,
+      sql: `update mixtapes set ${sets.join(", ")} where id = ?`,
+    });
+  }
+
+  // The manual SoundCloud link is a distribution row, not a column; `null`/"" clears it.
+  if (fields.soundcloudUrl !== undefined) {
+    await setMixtapeSoundcloud(id, fields.soundcloudUrl);
+  }
 
   return getMixtapeById(id, { includeDrafts: true });
 }
 
-// undefined means the field was not part of this update (keep the current value); a
-// string or null is the new value (null clears the link). Used to confirm a published
-// mixtape never loses its last listenable link.
-function resolveUrlUpdate(
-  update: string | null | undefined,
-  current: string | undefined,
-): string | undefined {
-  if (update === undefined) {
-    return current;
+// The manual SoundCloud link as a `mixtape_social_posts` row (the single source of
+// truth for listen links). A non-empty URL upserts a `published` row; null/"" removes
+// it. Inlined here rather than calling mixtape-social to avoid an import cycle. Bumps
+// the mixtape's updated_at — the link changes its public surface + cover cache key.
+async function setMixtapeSoundcloud(mixtapeId: string, url: string | null): Promise<void> {
+  const now = new Date().toISOString();
+  const db = await getDb();
+
+  if (url) {
+    await db.execute({
+      args: [randomUUID(), mixtapeId, url, now, now, now, url, now],
+      sql: `insert into mixtape_social_posts (id, mixtape_id, platform, status, url, published_at, created_at, updated_at)
+            values (?, ?, 'soundcloud', 'published', ?, ?, ?, ?)
+            on conflict(mixtape_id, platform) do update set
+              status = 'published',
+              url = ?,
+              published_at = coalesce(mixtape_social_posts.published_at, ?),
+              updated_at = excluded.updated_at`,
+    });
+  } else {
+    await db.execute({
+      args: [mixtapeId],
+      sql: `delete from mixtape_social_posts where mixtape_id = ? and platform = 'soundcloud'`,
+    });
   }
 
-  return update ?? undefined;
+  await db.execute({
+    args: [now, mixtapeId],
+    sql: `update mixtapes set updated_at = ? where id = ?`,
+  });
 }
 
 export async function setMixtapeMembers(
@@ -378,8 +382,8 @@ export async function listMixtapeMembershipsForTracks(
 // title, moving it from `draft` to `distributing`. This is the FIRST half of
 // publishing — the coordinate now exists (so the cover endpoint and the platform
 // assets can embed the real Log ID), but the mixtape is NOT yet public. It becomes
-// `published` only when the first platform link lands (finalizeMixtapeDistribution).
-// The `hasExternalUrl` gate is intentionally gone: distribution supplies the link.
+// `published` only when the first platform link lands (finalizeMixtapeDistribution),
+// which supplies the listen link — there is no link requirement to mint.
 export async function publishMixtape(id: string): Promise<MixtapeDTO> {
   const draft = await getMixtapeById(id, { includeDrafts: true });
 
@@ -606,9 +610,15 @@ const MIXTAPE_SELECT = `select
   m.title,
   m.duration_ms,
   m.note,
-  m.mixcloud_url,
-  m.youtube_url,
-  m.soundcloud_url,
+  (select url from mixtape_social_posts s
+     where s.mixtape_id = m.id and s.platform = 'mixcloud' and s.status = 'published' and s.url is not null
+     order by published_at desc limit 1) as mixcloud_url,
+  (select url from mixtape_social_posts s
+     where s.mixtape_id = m.id and s.platform = 'youtube' and s.status = 'published' and s.url is not null
+     order by published_at desc limit 1) as youtube_url,
+  (select url from mixtape_social_posts s
+     where s.mixtape_id = m.id and s.platform = 'soundcloud' and s.status = 'published' and s.url is not null
+     order by published_at desc limit 1) as soundcloud_url,
   m.added_at,
   m.recorded_at,
   m.planned_for,
@@ -645,21 +655,17 @@ async function assertDraftMixtape(id: string): Promise<void> {
 
 function validateMixtapeInput(input: MixtapeInput): {
   durationMs?: number | null;
-  mixcloudUrl?: string | null;
   note?: string | null;
   plannedFor?: string | null;
   recordedAt?: string | null;
   soundcloudUrl?: string | null;
-  youtubeUrl?: string | null;
 } {
   return {
     durationMs: optionalInteger(input.durationMs, "durationMs"),
-    mixcloudUrl: optionalUrl(input.mixcloudUrl),
     note: optionalText(input.note, noteMaxLength),
     plannedFor: optionalIsoDate(input.plannedFor, "plannedFor"),
     recordedAt: optionalIsoDate(input.recordedAt, "recordedAt"),
     soundcloudUrl: optionalUrl(input.soundcloudUrl),
-    youtubeUrl: optionalUrl(input.youtubeUrl),
   };
 }
 

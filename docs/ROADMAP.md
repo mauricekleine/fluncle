@@ -62,6 +62,19 @@ The on-site layer shipped (per-finding `/log/<id>` pages with definitional prose
 - **Submit + monitor.** Sitemap submitted to GSC and Bing (2026-06-11); watch the _set_ of log pages move to Indexed (count ≈ archive size); verify bare-token retrieval (`004.7.2I`, `fluncle://004.7.2I`) lands the log page. Check Fluncle is present in Brave Search. **First retrieval confirmed (2026-06-17), faster than the "weeks-out" estimate:** a bare `"004.6.0Q"` Google query returns the owned `fluncle.com/log` surface (#2), the YouTube Short caption (#1, with the coordinate + `Found Jun 3` rendered verbatim), and the gate-screen OG card (`packages/media`) in Images — within ~3 days of publish. Remaining granular milestones: the per-finding `/log/<id>` pages moving to Indexed in GSC (today the bare coordinate lands the `/log` _index_, not yet the individual page), and confirming an individual page ranks for its own coordinate. Indexing and AI citation are still ongoing outcomes — monitoring, not ship gates.
 - **Third-party corroboration: the anchors exist (2026-06-11).** MusicBrainz artist `53346748-1357-45c0-a847-9d248b65d655` (Person, homepage/TikTok/Telegram links) and Wikidata item `Q140169844` (instance of human, official website, MusicBrainz artist ID, TikTok + Telegram usernames); both are in the `/about` `sameAs` set. Remaining: authentic presence where dnb lives (r/DnB and friends — participate, don't fabricate), and enrich the Wikidata item as facts accumulate.
 
+### Developer & discovery surfaces — dig, versioned API, docs hub, feeds, CLI distribution (shipped)
+
+The machine- and developer-facing reach of `docs/public-surfaces-checklist.md` landed (2026-06-20):
+
+- **`dig.fluncle.com`** — a custom Go authoritative DNS server on the rave VPS, under a delegated zone, answers `dig <coord>.dig.fluncle.com TXT` plus the `random` / `latest` labels, returning a finding's metadata as a `v=fluncle1` TXT line. The delightful-obsession surface, ~free on the box; documented in the `/docs` dig guide. (`today` label still open; coordinate **web** subdomains were dropped — they add nothing over `/log/<id>` and were the only thing needing Cloudflare for SaaS, so `dig` carries the per-coordinate novelty instead.)
+- **API v1** — every route mounts at `/api/v1/*` with `/api/*` kept as permanent back-compat aliases (shared handlers, not redirects, so POST bodies survive); spec at `/api/v1/openapi.json`.
+- **`/docs` hub** — a Fumadocs site (CLI / SSH / MCP / dig / feeds / Log-ID / API-overview guides) with the **Scalar** API reference embedded at `/docs/api`.
+- **Feeds** — JSON Feed (`/feed.json`), Atom (`/atom.xml`), the mixtape Podcast RSS (`/podcast.xml`), and `/calendar.ics` of planned live sessions.
+- **CLI distribution** — the one CLI source ships three ways at one CI-aligned version (**0.33.0**): the public npm package `fluncle` (OIDC trusted publishing, no token), a Homebrew tap (`mauricekleine/homebrew-fluncle`), and GitHub Release binaries — all bumped together by `cli-release.yml` on any `apps/cli/**` change.
+- **SSH deep-links** — `ssh rave.fluncle.com latest | random | <coord>` jump straight to a finding in the terminal.
+
+What's left is the non-gating long tail in the checklist: the `today` dig label, a public changelog, a Docker image / Postman collection, broader data-graph anchors (Discogs, Last.fm, ListenBrainz), and directory listings (Product Hunt, Internet Archive, a Hugging Face dataset). Pick from `docs/public-surfaces-checklist.md` when one earns its keep.
+
 ### Fluncle's own mixtapes — spine + admin + autopublish shipped
 
 The mixtape spine is **live** and the admin + cover + draft model were overhauled (PR #22, 2026-06-19, on top of the #18/#20/#21 plumbing). A mixtape is a spine-native object — Fluncle dreaming, a checkpoint — with its own `F`-marked Log ID, a `/log/<id>` compilation page, a `/mixtapes` front door, quiet feed / `recent` / MCP inclusion (without inflating `Found · N`), `DJMixAlbum` JSON-LD, an RSS `<category>`, sitemap entries, and an llms.txt Mixtapes section. Runbook + spine model: **[packages/skills/fluncle-mixtapes](../packages/skills/fluncle-mixtapes)**.
@@ -171,7 +184,7 @@ Follow-ups are deliberately separate from the first private web slice:
 
 ### Live on Twitch — the "on the decks" callout across surfaces
 
-When Maurice goes live on Twitch to mix, the Galaxy should light up: a live callout that fans out across the surfaces while the stream is on and clears itself the moment it ends. The one loud moment in an otherwise quiet, cover-led product — Fluncle's in the booth, the crew gathers, then it's gone. Twitch presence is already wired (`twitchUrl` in `fluncle-links`, the home social row, the entity `sameAs`, the `docs/socials/` map); this is the live-state layer on top.
+When Maurice goes live on Twitch to mix, the Galaxy should light up: a live callout that fans out across the surfaces while the stream is on and clears itself the moment it ends. The one loud moment in an otherwise quiet, cover-led product — Fluncle's in the booth, the crew gathers, then it's gone. Twitch presence is already wired (`twitchUrl` in `fluncle-links`, the home social row, the entity `sameAs`, the `docs/socials/` map); this is the live-state layer on top. The scheduled-ahead half also shipped: `/calendar.ics` publishes any mixtape's `plannedFor` as a Twitch-linked VEVENT (subscribe before it happens), so what remains here is specifically the **live-now** callout, not the calendar.
 
 The shape:
 

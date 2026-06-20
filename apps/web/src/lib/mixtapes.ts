@@ -63,10 +63,6 @@ export type MixtapeRowLike = {
   youtube_url?: string | null;
 };
 
-export function hasExternalUrl(urls: MixtapeExternalUrls): boolean {
-  return Boolean(urls.mixcloud || urls.soundcloud || urls.youtube);
-}
-
 export function rowToMixtape(row: MixtapeRowLike, members: MixtapeMember[] = []): MixtapeDTO {
   return {
     addedAt: row.added_at ?? undefined,

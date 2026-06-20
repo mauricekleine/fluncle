@@ -27,21 +27,17 @@ export type MixtapeMemberItem = MixtapeMember;
 export type MixtapeCreateOptions = {
   durationMs?: string;
   json: boolean;
-  mixcloudUrl?: string;
   note?: string;
   recordedAt?: string;
   soundcloudUrl?: string;
-  youtubeUrl?: string;
 };
 
 export type MixtapeUpdateOptions = {
   durationMs?: string;
   json: boolean;
-  mixcloudUrl?: string;
   note?: string;
   recordedAt?: string;
   soundcloudUrl?: string;
-  youtubeUrl?: string;
 };
 
 export type MixtapeMembersOptions = {
@@ -244,12 +240,6 @@ function buildBody(options: MixtapeCreateOptions | MixtapeUpdateOptions): Mixtap
   }
   if (options.recordedAt !== undefined) {
     body.recordedAt = options.recordedAt;
-  }
-  if (options.mixcloudUrl !== undefined) {
-    body.mixcloudUrl = options.mixcloudUrl;
-  }
-  if (options.youtubeUrl !== undefined) {
-    body.youtubeUrl = options.youtubeUrl;
   }
   if (options.soundcloudUrl !== undefined) {
     body.soundcloudUrl = options.soundcloudUrl;

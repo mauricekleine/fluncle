@@ -69,7 +69,7 @@ Omit a flag to target one platform. The command is **mint-first**: a `draft` min
 - **YouTube** always lands **unlisted** (made public in a separate gate); title + description ending in `fluncle://<logId>` + a cued chapter block; the wide cover set best-effort as the thumbnail; resumes on a mid-upload token expiry or dropped session.
 - **Mixcloud** publishes **listed/public immediately**; full-quality master, square cover, a per-track `sections[]` tracklist from members. Add `--unlisted` to keep it private (a test run, or a cautious first upload to flip by hand). **Test with real-length audio**: a full mixtape is a licensed _show_, but a short clip is classified as an unlicensed _track_ and copyright-blocked. Watch the Featured-Artist / SRPC limits (see the spine model's Hosting section); observe, don't pre-lint.
 
-Each leg records into `mixtape_social_posts` and dual-writes `mixtapes.{youtube,mixcloud}_url`.
+Each leg records into `mixtape_social_posts` — the single source of truth for a mixtape's listen links. The public `externalUrls` (mixcloud/youtube/soundcloud) derives from the `published` rows there; there are no `mixtapes.*_url` columns. SoundCloud has no `distribute` leg — set it manually from the admin editor (it too becomes a `mixtape_social_posts` row).
 
 ### D. Make YouTube public
 

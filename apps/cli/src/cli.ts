@@ -100,21 +100,17 @@ type PreviewArchiveBackfillOptions = {
 type MixtapeCreateOptions = {
   durationMs?: string;
   json: boolean;
-  mixcloudUrl?: string;
   note?: string;
   recordedAt?: string;
   soundcloudUrl?: string;
-  youtubeUrl?: string;
 };
 
 type MixtapeUpdateOptions = {
   durationMs?: string;
   json: boolean;
-  mixcloudUrl?: string;
   note?: string;
   recordedAt?: string;
   soundcloudUrl?: string;
-  youtubeUrl?: string;
 };
 
 type MixtapeMembersOptions = {
@@ -454,11 +450,12 @@ function addAdminCommands(program: Command): void {
     .description("Log a new mixtape draft")
     .option("--duration-ms <duration>", "Duration (mm:ss, h:mm:ss, or ms)")
     .option("--json", "Print JSON", false)
-    .option("--mixcloud-url <url>", "Mixcloud URL")
     .option("--note <text>", "Operator note")
     .option("--recorded-at <date>", "Recorded date (ISO)")
-    .option("--soundcloud-url <url>", "SoundCloud URL")
-    .option("--youtube-url <url>", "YouTube URL")
+    .option(
+      "--soundcloud-url <url>",
+      "SoundCloud URL (manual; YouTube + Mixcloud come from distribute)",
+    )
     .allowExcessArguments()
     .action(async (options: MixtapeCreateOptions) => {
       const { mixtapeCreateCommand } = await import("./commands/mixtapes");
@@ -471,11 +468,12 @@ function addAdminCommands(program: Command): void {
     .argument("[id]")
     .option("--duration-ms <duration>", "Duration (mm:ss, h:mm:ss, or ms)")
     .option("--json", "Print JSON", false)
-    .option("--mixcloud-url <url>", "Mixcloud URL")
     .option("--note <text>", "Operator note")
     .option("--recorded-at <date>", "Recorded date (ISO)")
-    .option("--soundcloud-url <url>", "SoundCloud URL")
-    .option("--youtube-url <url>", "YouTube URL")
+    .option(
+      "--soundcloud-url <url>",
+      "SoundCloud URL (manual; YouTube + Mixcloud come from distribute)",
+    )
     .allowExcessArguments()
     .action(async (id: string | undefined, options: MixtapeUpdateOptions) => {
       const { mixtapeUpdateCommand } = await import("./commands/mixtapes");
@@ -1585,7 +1583,6 @@ const stringOptions = new Set([
   "--key",
   "--limit",
   "--mime",
-  "--mixcloud-url",
   "--note",
   "--platform",
   "--poster",
@@ -1598,7 +1595,6 @@ const stringOptions = new Set([
   "--status",
   "--url",
   "--video-url",
-  "--youtube-url",
 ]);
 
 const rootHelpSections = `

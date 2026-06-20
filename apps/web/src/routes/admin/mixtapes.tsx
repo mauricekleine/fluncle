@@ -278,8 +278,8 @@ function MixtapeEditor({
   const [recordedAt, setRecordedAt] = useState(mixtape.recordedAt?.slice(0, 10) ?? "");
   const [plannedFor, setPlannedFor] = useState(toLocalDateTime(mixtape.plannedFor));
   const [durationField, setDurationField] = useState(formatDurationField(mixtape.durationMs));
-  const [mixcloudUrl, setMixcloudUrl] = useState(mixtape.externalUrls.mixcloud ?? "");
-  const [youtubeUrl, setYoutubeUrl] = useState(mixtape.externalUrls.youtube ?? "");
+  // SoundCloud is the one manual link (YouTube + Mixcloud are recorded by `distribute`
+  // and shown read-only in the Distribution strip).
   const [soundcloudUrl, setSoundcloudUrl] = useState(mixtape.externalUrls.soundcloud ?? "");
   const [members, setMembers] = useState<MemberRef[]>(() => mixtape.members.map(toMemberRef));
   const [error, setError] = useAutoNotice();
@@ -295,23 +295,19 @@ function MixtapeEditor({
   const stateRef = useRef({
     durationField,
     members,
-    mixcloudUrl,
     note,
     plannedFor,
     recordedAt,
     soundcloudUrl,
-    youtubeUrl,
   });
   useEffect(() => {
     stateRef.current = {
       durationField,
       members,
-      mixcloudUrl,
       note,
       plannedFor,
       recordedAt,
       soundcloudUrl,
-      youtubeUrl,
     };
   });
 
@@ -340,12 +336,10 @@ function MixtapeEditor({
     const noUnsavedEdits =
       fieldsSignature({
         durationMs: parseDuration(local.durationField),
-        mixcloudUrl: local.mixcloudUrl,
         note: local.note,
         plannedFor: local.plannedFor,
         recordedAt: local.recordedAt,
         soundcloudUrl: local.soundcloudUrl,
-        youtubeUrl: local.youtubeUrl,
       }) === fieldsSignature(serverFieldValues(prev)) &&
       membersSignature(local.members) === membersSignature(prev.members.map(toMemberRef));
     if (noUnsavedEdits) {
@@ -353,8 +347,6 @@ function MixtapeEditor({
       setRecordedAt(mixtape.recordedAt?.slice(0, 10) ?? "");
       setPlannedFor(toLocalDateTime(mixtape.plannedFor));
       setDurationField(formatDurationField(mixtape.durationMs));
-      setMixcloudUrl(mixtape.externalUrls.mixcloud ?? "");
-      setYoutubeUrl(mixtape.externalUrls.youtube ?? "");
       setSoundcloudUrl(mixtape.externalUrls.soundcloud ?? "");
       setMembers(mixtape.members.map(toMemberRef));
       setSavedFieldsSig(fieldsSignature(serverFieldValues(mixtape)));
@@ -365,20 +357,15 @@ function MixtapeEditor({
 
   const parsedDurationMs = parseDuration(durationField);
   const durationInvalid = durationField.trim().length > 0 && parsedDurationMs === null;
-  const urlInvalid =
-    !isOptionalHttpUrl(mixcloudUrl) ||
-    !isOptionalHttpUrl(youtubeUrl) ||
-    !isOptionalHttpUrl(soundcloudUrl);
+  const urlInvalid = !isOptionalHttpUrl(soundcloudUrl);
   const fieldsValid = !durationInvalid && !urlInvalid;
 
   const currentFieldsSig = fieldsSignature({
     durationMs: parsedDurationMs,
-    mixcloudUrl,
     note,
     plannedFor,
     recordedAt,
     soundcloudUrl,
-    youtubeUrl,
   });
   const currentMembersSig = membersSignature(members);
   // Members are draft-only and the endpoint rejects empty arrays, so an emptied
@@ -401,12 +388,10 @@ function MixtapeEditor({
     try {
       await saveMixtape(id, {
         durationMs: parsedDurationMs,
-        mixcloudUrl,
         note,
         plannedFor: fromLocalDateTime(plannedFor),
         recordedAt,
         soundcloudUrl,
-        youtubeUrl,
       });
       if (saveMembers) {
         await replaceMembers(id, members);
@@ -1297,23 +1282,19 @@ function toTrackRef(track: TrackListItem): MemberRef {
 // equal, matching what the server stores.
 type FieldValues = {
   durationMs: number | null;
-  mixcloudUrl: string;
   note: string;
   plannedFor: string;
   recordedAt: string;
   soundcloudUrl: string;
-  youtubeUrl: string;
 };
 
 function fieldsSignature(values: FieldValues): string {
   return JSON.stringify([
     values.durationMs,
-    values.mixcloudUrl,
     values.note,
     values.plannedFor,
     values.recordedAt,
     values.soundcloudUrl,
-    values.youtubeUrl,
   ]);
 }
 
@@ -1329,12 +1310,10 @@ function membersSignature(members: MemberRef[]): string {
 function serverFieldValues(mixtape: MixtapeDTO): FieldValues {
   return {
     durationMs: parseDuration(formatDurationField(mixtape.durationMs)),
-    mixcloudUrl: mixtape.externalUrls.mixcloud ?? "",
     note: mixtape.note ?? "",
     plannedFor: toLocalDateTime(mixtape.plannedFor),
     recordedAt: mixtape.recordedAt?.slice(0, 10) ?? "",
     soundcloudUrl: mixtape.externalUrls.soundcloud ?? "",
-    youtubeUrl: mixtape.externalUrls.youtube ?? "",
   };
 }
 
