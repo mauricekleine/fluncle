@@ -641,6 +641,17 @@ function addAdminCommands(program: Command): void {
       await authMixcloudCommand();
     });
 
+  auth
+    .command("lastfm")
+    .description(
+      "Authorize Last.fm access (love-on-add). Run once for the URL, then again with --token",
+    )
+    .option("--token <token>", "The approved request token, to mint the session key")
+    .action(async (options: { token?: string }) => {
+      const { authLastfmCommand } = await import("./commands/auth-lastfm");
+      await authLastfmCommand(options);
+    });
+
   const backfill = configureCommand(
     admin.command("backfill").description("Backfill operator-only archives"),
   );

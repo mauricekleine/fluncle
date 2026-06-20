@@ -190,6 +190,20 @@ export type YouTubeAuthStartResponse = Ok<{ authUrl: string }>;
 /** `/api/admin/mixcloud/auth/start` response. */
 export type MixcloudAuthStartResponse = Ok<{ authUrl: string }>;
 
+/**
+ * `/api/admin/lastfm/auth/start` response: the Last.fm desktop-auth request token
+ * plus the authorize URL to approve it in-browser (logged in as `fluncle`). The
+ * token is then handed to `/api/admin/lastfm/auth/session` to mint the session key.
+ */
+export type LastfmAuthStartResponse = Ok<{ authUrl: string; token: string }>;
+
+/**
+ * `/api/admin/lastfm/auth/session` response: the durable (non-expiring) session
+ * key Maurice sets as the LASTFM_SESSION_KEY Worker secret, plus the authenticated
+ * Last.fm username.
+ */
+export type LastfmAuthSessionResponse = Ok<{ name: string; sessionKey: string }>;
+
 /** `/api/admin/mixcloud/token` response: the access token for the CLI-direct upload. */
 export type MixcloudTokenResponse = Ok<{ accessToken: string }>;
 
