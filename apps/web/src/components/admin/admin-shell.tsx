@@ -1,5 +1,6 @@
 import { type ReactNode } from "react";
 import { AdminNav, type AdminNavCurrent } from "@/components/admin/admin-nav";
+import { ConnectedToast } from "@/components/admin/connected-toast";
 import { cn } from "@/lib/utils";
 
 // The unified admin shell — one contained plate over the ambient cosmos, shared
@@ -71,6 +72,7 @@ export function AdminShell({
 
         {children}
       </div>
+      <ConnectedToast />
     </main>
   );
 }
