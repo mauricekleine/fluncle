@@ -709,7 +709,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.err.Error()
 			return m, nil
 		}
-		m.message = "Logged. Fluncle will give it a listen before it goes live."
+		m.message = "Logged. I'll give it a listen before it goes live."
 		m.screen = screenMessage
 	case subscribeMsg:
 		m.loading = false
