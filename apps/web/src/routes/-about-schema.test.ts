@@ -34,6 +34,8 @@ describe("/about schema", () => {
         expect.stringContaining("twitch.tv/flunclelive"),
         expect.stringContaining("musicbrainz.org/artist/"),
         expect.stringContaining("wikidata.org/wiki/Q140169844"),
+        expect.stringContaining("last.fm/user/fluncle"),
+        expect.stringContaining("discogs.com/user/fluncle"),
       ]),
     );
   });

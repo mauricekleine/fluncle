@@ -49,3 +49,10 @@ export const mcpUrl = `${siteUrl}/mcp`;
 export const musicbrainzUrl = "https://musicbrainz.org/artist/53346748-1357-45c0-a847-9d248b65d655";
 
 export const wikidataUrl = "https://www.wikidata.org/wiki/Q140169844";
+
+// Music-graph profiles (created 2026-06-20): the same corroboration role as
+// MusicBrainz/Wikidata, kept in sameAs. Any write-side sync (Last.fm love,
+// Discogs List) is scoped in docs/rfcs/lastfm-discogs-sync.md, not here.
+export const lastfmUrl = "https://www.last.fm/user/fluncle";
+
+export const discogsUrl = "https://www.discogs.com/user/fluncle";

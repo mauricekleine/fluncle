@@ -7,7 +7,7 @@
 - [x] Canonical API object for every track
 - [x] Canonical metadata schema
 - [x] MusicBrainz/Wikidata IDs where available
-- [ ] Discogs ID
+- [ ] Discogs ID — read-only release-ID enrichment scoped in [the RFC](rfcs/lastfm-discogs-sync.md) (needs a `discogs_release_id` column; no secret)
 
 ## Web
 
@@ -126,9 +126,9 @@ _Dropped (2026-06-20): per-coordinate web subdomains add nothing over `/log/<id>
 
 - [x] MusicBrainz
 - [x] Wikidata
-- [ ] Last.fm
+- [x] Last.fm — profile `fluncle` claimed + in `sameAs`; write-side sync (love-on-add) scoped in [the RFC](rfcs/lastfm-discogs-sync.md), pending Maurice's key/secret + decision
 - [ ] ListenBrainz
-- [ ] Discogs
+- [x] Discogs — profile `fluncle` claimed + in `sameAs`; release-ID enrichment + a findings List scoped in [the RFC](rfcs/lastfm-discogs-sync.md)
 - [ ] 1001Tracklists
 - [ ] Rate Your Music
 - [ ] Bandcamp
