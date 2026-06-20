@@ -99,7 +99,7 @@ func main() {
 			activeterm.Middleware(),
 			bubbletea.Middleware(app.teaHandler),
 			app.sessionCountMiddleware,
-			app.rejectCommandsMiddleware,
+			app.routeCommandMiddleware,
 		),
 	)
 	if err != nil {
@@ -141,14 +141,100 @@ func env(key, fallback string) string {
 	return value
 }
 
-func (a *app) rejectCommandsMiddleware(next ssh.Handler) ssh.Handler {
+// bootKind is the deep-link the SSH command argument resolves to: which opening
+// screen the terminal lands on instead of the menu.
+type bootKind int
+
+const (
+	bootMenu    bootKind = iota // no command: the interactive menu (unchanged)
+	bootLatest                  // `latest`: the latest finding's detail
+	bootRandom                  // `random`: a random finding's detail
+	bootCoord                   // `<coord>`: a Log ID's finding (or mixtape) detail
+	bootUnknown                 // anything else: a deep-register line, then the menu
+)
+
+// bootCommand is the parsed boot target carried from the SSH command args to the
+// model. coord holds the requested Log ID for bootCoord; raw is the original
+// argument, surfaced in the unknown-command line.
+type bootCommand struct {
+	kind  bootKind
+	coord string
+	raw   string
+}
+
+// parseBootCommand reads the SSH command args (everything after the host) and
+// resolves the opening screen. The deep links are `latest`, `random`, and a bare
+// Log ID coordinate (e.g. 004.7.2I, or the F-marked 019.F.1A). Empty args keep
+// the menu; anything else is unknown.
+func parseBootCommand(args []string) bootCommand {
+	raw := strings.TrimSpace(strings.Join(args, " "))
+	if raw == "" {
+		return bootCommand{kind: bootMenu}
+	}
+	switch strings.ToLower(raw) {
+	case "latest":
+		return bootCommand{kind: bootLatest, raw: raw}
+	case "random":
+		return bootCommand{kind: bootRandom, raw: raw}
+	}
+	if looksLikeLogID(raw) {
+		return bootCommand{kind: bootCoord, coord: raw, raw: raw}
+	}
+	return bootCommand{kind: bootUnknown, raw: raw}
+}
+
+// looksLikeLogID is the on-sight test for a Log ID coordinate: the XXX.Y.ZZ
+// shape (three dot-separated parts, alphanumerics only). The middle slot may be
+// the literal F marker of a mixtape; the resolver decides finding vs mixtape.
+func looksLikeLogID(s string) bool {
+	parts := strings.Split(s, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		for _, r := range part {
+			isDigit := r >= '0' && r <= '9'
+			isUpper := r >= 'A' && r <= 'Z'
+			isLower := r >= 'a' && r <= 'z'
+			if !isDigit && !isUpper && !isLower {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// routeCommandMiddleware turns the SSH command argument into a deep link. With a
+// PTY (ssh -t host latest) the args ride into teaHandler and boot the interactive
+// TUI on the requested screen. Without a PTY (bare ssh host latest) the TUI has no
+// terminal to draw on, so the same page renders once as a clean printed view and
+// the session closes. A bare connection with no args falls through to the menu.
+func (a *app) routeCommandMiddleware(next ssh.Handler) ssh.Handler {
 	return func(sess ssh.Session) {
-		if len(sess.Command()) > 0 {
-			_, _ = io.WriteString(sess, "No shell here. Connect without a command: ssh rave.fluncle.com\n")
+		boot := parseBootCommand(sess.Command())
+		_, _, hasPTY := sess.Pty()
+		if boot.kind != bootMenu && !hasPTY {
+			a.renderNonInteractive(sess, boot)
 			return
 		}
 		next(sess)
 	}
+}
+
+// renderNonInteractive prints one clean page for a deep link when there's no PTY
+// to run the TUI on (bare ssh host latest). It fetches the same finding/mixtape
+// the interactive boot would and writes the printed detail, then returns so the
+// session closes. Recovered-terminal register, no exclamation marks (VOICE.md).
+func (a *app) renderNonInteractive(sess ssh.Session, boot bootCommand) {
+	width := 80
+	if pty, _, ok := sess.Pty(); ok && pty.Window.Width > 0 {
+		width = pty.Window.Width
+	}
+	m := newModelWithBoot(a, width, 0, boot)
+	_, _ = io.WriteString(sess, m.renderPrinted()+"\n")
 }
 
 func (a *app) sessionCountMiddleware(next ssh.Handler) ssh.Handler {
@@ -161,7 +247,8 @@ func (a *app) sessionCountMiddleware(next ssh.Handler) ssh.Handler {
 
 func (a *app) teaHandler(sess ssh.Session) (tea.Model, []tea.ProgramOption) {
 	pty, _, _ := sess.Pty()
-	model := newModel(a, pty.Window.Width, pty.Window.Height)
+	boot := parseBootCommand(sess.Command())
+	model := newModelWithBoot(a, pty.Window.Width, pty.Window.Height, boot)
 	return model, []tea.ProgramOption{}
 }
 
@@ -316,6 +403,7 @@ type galaxyTickMsg time.Time
 
 type model struct {
 	app            *app
+	boot           bootCommand
 	width          int
 	height         int
 	screen         screen
@@ -453,6 +541,20 @@ type randomMsg struct {
 	err   error
 }
 
+// detailMsg opens a finding's detail on boot (the `latest` deep link, and a
+// `<coord>` that resolves to a finding).
+type detailMsg struct {
+	track track
+	err   error
+}
+
+// mixtapeDetailMsg opens a mixtape's detail on boot (a `<coord>` whose middle
+// slot is the F marker, resolved by the API to a mixtape).
+type mixtapeDetailMsg struct {
+	mixtape mixtape
+	err     error
+}
+
 type galaxyTracksMsg struct {
 	tracks []track
 	err    error
@@ -472,16 +574,49 @@ type subscribeMsg struct {
 }
 
 func newModel(app *app, width, height int) model {
-	return model{
+	return newModelWithBoot(app, width, height, bootCommand{kind: bootMenu})
+}
+
+// newModelWithBoot builds the model with an opening deep link. The boot kind
+// decides the opening screen and the fetch Init fires; bootMenu is the plain
+// interactive menu.
+func newModelWithBoot(app *app, width, height int, boot bootCommand) model {
+	m := model{
 		app:    app,
 		width:  width,
 		height: height,
 		screen: screenMenu,
 		galaxy: newGalaxyState(),
+		boot:   boot,
 	}
+	switch boot.kind {
+	case bootLatest, bootRandom, bootCoord:
+		m.screen = screenDetail
+		m.loading = true
+	case bootUnknown:
+		m.err = unknownCommandLine(boot.raw)
+	}
+	return m
+}
+
+// unknownCommandLine is the deep-register line for a command the terminal can't
+// place. Names the bad coordinate, points home, no exclamation marks (VOICE.md).
+func unknownCommandLine(raw string) string {
+	return "No coordinate reads " + raw + ". Try latest, random, or a Log ID like 004.7.2I."
 }
 
 func (m model) Init() tea.Cmd {
+	switch m.boot.kind {
+	case bootLatest:
+		return m.fetchLatestDetail()
+	case bootRandom:
+		return m.fetchRandom()
+	case bootCoord:
+		return m.fetchByCoord(m.boot.coord)
+	case bootUnknown:
+		// The deep-register line is already set; the menu still wants its footer.
+		return m.fetchFooter()
+	}
 	return m.fetchFooter()
 }
 
@@ -524,6 +659,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.current = &msg.track
 		m.detailBack = ""
 		m.screen = screenDetail
+	case detailMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.err = msg.err.Error()
+			return m, nil
+		}
+		m.current = &msg.track
+		m.detailBack = ""
+		m.screen = screenDetail
+	case mixtapeDetailMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.err = msg.err.Error()
+			return m, nil
+		}
+		m.currentMixtape = &msg.mixtape
+		m.detailBack = ""
+		m.screen = screenMixtapeDetail
 	case galaxyTracksMsg:
 		if m.screen != screenGalaxy {
 			return m, nil
@@ -920,6 +1073,9 @@ func (m model) renderMenu() string {
 			"",
 		}
 	}
+	if m.err != "" {
+		lines = append(lines, labelStyle.Render(m.err), "")
+	}
 	for index, item := range menuItems() {
 		prefix := "  "
 		style := menuStyle
@@ -1055,8 +1211,14 @@ func (m model) renderSearch() string {
 }
 
 func (m model) renderDetail() string {
+	if m.loading {
+		return statusView("Finding", "Pulling the coordinate...")
+	}
 	if m.current == nil {
-		return statusView("Track", "No track selected.")
+		if m.err != "" {
+			return errorView("Finding", m.err)
+		}
+		return statusView("Finding", "No track selected.")
 	}
 	t := *m.current
 	wrapWidth := clamp(m.width-4, 48, 96) - 4
@@ -1624,6 +1786,67 @@ func (m model) renderAbout() string {
 	return scaffold("About", "", visible, help)
 }
 
+// renderPrinted is the clean, non-interactive view of a deep link for sessions
+// with no PTY (bare ssh host latest). It runs the same boot fetch the TUI would,
+// folds the result into the model with Update, then renders the resulting detail
+// once with the help line stripped (there's no keyboard out here). The page style
+// frames it the same way the interactive surface does.
+func (m model) renderPrinted() string {
+	// Only the detail deep links need a fetch out here; an unknown command is just
+	// the printed line, so it skips the network entirely.
+	if m.boot.kind != bootUnknown {
+		if cmd := m.Init(); cmd != nil {
+			if msg := cmd(); msg != nil {
+				updated, _ := m.Update(msg)
+				m = updated.(model)
+			}
+		}
+	}
+
+	var body string
+	switch m.screen {
+	case screenMixtapeDetail:
+		body = m.renderMixtapeDetail()
+	case screenMenu:
+		// Unknown command with no PTY: the deep-register line alone, no menu (a
+		// menu needs a keyboard). Points back to the interactive way in.
+		line := m.err
+		if line == "" {
+			line = unknownCommandLine(m.boot.raw)
+		}
+		body = scaffold("Rave terminal", "", []string{
+			labelStyle.Render(line),
+			"",
+			readingStyle.Render("Open the terminal: " + sshConnect),
+		}, "")
+	default:
+		body = m.renderDetail()
+	}
+
+	// Strip the interactive help line (the last two rows: a blank then the keys).
+	body = stripHelpLine(body)
+	return pageStyle.Width(clamp(m.width-4, 48, 96)).Render(body)
+}
+
+// stripHelpLine drops the trailing help row (and the blank above it) that the
+// interactive scaffolds end with — meaningless on a one-shot printed page.
+func stripHelpLine(body string) string {
+	lines := strings.Split(body, "\n")
+	for len(lines) > 0 {
+		last := strings.TrimSpace(lines[len(lines)-1])
+		if last == "" {
+			lines = lines[:len(lines)-1]
+			continue
+		}
+		if strings.Contains(last, "ctrl+c") || strings.Contains(last, "q back") || strings.Contains(last, "any key") {
+			lines = lines[:len(lines)-1]
+			continue
+		}
+		break
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (m model) renderMessage() string {
 	wrapWidth := clamp(m.width-4, 48, 96) - 4
 	content := []string{readingStyle.Width(wrapWidth).Render(m.message)}
@@ -1685,6 +1908,45 @@ func (m model) fetchRandom() tea.Cmd {
 		}
 		err := m.app.getJSON("/api/tracks/random", &response)
 		return randomMsg{track: response.Track, err: err}
+	}
+}
+
+// fetchLatestDetail pulls the single newest finding and opens its detail — the
+// `latest` deep link. Distinct from fetchLatest (the scrollable list).
+func (m model) fetchLatestDetail() tea.Cmd {
+	return func() tea.Msg {
+		var response struct {
+			Tracks []track `json:"tracks"`
+		}
+		if err := m.app.getJSON("/api/tracks?limit=1", &response); err != nil {
+			return detailMsg{err: err}
+		}
+		if len(response.Tracks) == 0 {
+			return detailMsg{err: errors.New("No findings logged yet. Quiet sector tonight.")}
+		}
+		return detailMsg{track: response.Tracks[0]}
+	}
+}
+
+// fetchByCoord resolves a Log ID to its finding (or mixtape) detail — the
+// `<coord>` deep link. The public endpoint resolves both shapes off one
+// coordinate, returning a mixtape for an F-marked ID and a finding otherwise.
+func (m model) fetchByCoord(coord string) tea.Cmd {
+	return func() tea.Msg {
+		var response struct {
+			Track   *track   `json:"track"`
+			Mixtape *mixtape `json:"mixtape"`
+		}
+		if err := m.app.getJSON("/api/tracks/"+url.PathEscape(coord), &response); err != nil {
+			return detailMsg{err: errors.New("No coordinate reads " + coord + ". " + err.Error())}
+		}
+		if response.Mixtape != nil {
+			return mixtapeDetailMsg{mixtape: *response.Mixtape}
+		}
+		if response.Track != nil {
+			return detailMsg{track: *response.Track}
+		}
+		return detailMsg{err: errors.New("No coordinate reads " + coord + " in the archive.")}
 	}
 }
 
