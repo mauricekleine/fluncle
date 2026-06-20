@@ -108,6 +108,12 @@ type PreviewArchiveBackfillOptions = {
   limit?: string;
 };
 
+type BackfillSyncOptions = {
+  dryRun: boolean;
+  json: boolean;
+  limit?: string;
+};
+
 type MixtapeCreateOptions = {
   durationMs?: string;
   json: boolean;
@@ -722,6 +728,36 @@ function addAdminCommands(program: Command): void {
       const { previewArchiveBackfillCommand } = await import("./commands/preview-archive");
       await runPreviewArchiveBackfill(options, previewArchiveBackfillCommand);
     });
+
+  backfill
+    .command("lastfm")
+    .description(
+      "Love already-published findings on Last.fm (idempotent; a no-op until configured)",
+    )
+    .option(
+      "--dry-run",
+      "Resolve the set but fire no loves; just report what would be loved",
+      false,
+    )
+    .option("--limit <limit>", "Max findings to love", "50")
+    .option("--json", "Print JSON", false)
+    .action(async (options: BackfillSyncOptions) => {
+      const { backfillLastfmCommand } = await import("./commands/admin-tracks");
+      await runBackfillLastfm(options, backfillLastfmCommand);
+    });
+
+  backfill
+    .command("discogs")
+    .description(
+      "Resolve missing Discogs release ids for published findings (high-confidence only)",
+    )
+    .option("--dry-run", "Resolve but write nothing; just report what would be resolved", false)
+    .option("--limit <limit>", "Max findings to resolve", "50")
+    .option("--json", "Print JSON", false)
+    .action(async (options: BackfillSyncOptions) => {
+      const { backfillDiscogsCommand } = await import("./commands/admin-tracks");
+      await runBackfillDiscogs(options, backfillDiscogsCommand);
+    });
 }
 
 async function runTrackPreviewArchive(
@@ -830,6 +866,53 @@ async function runPreviewArchiveBackfill(
 
   for (const item of result.archived) {
     console.log(`  ${item.logId}: ${item.source}`);
+  }
+}
+
+async function runBackfillLastfm(
+  options: BackfillSyncOptions,
+  backfillLastfmCommand: typeof import("./commands/admin-tracks").backfillLastfmCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const result = await backfillLastfmCommand(limit, options.dryRun);
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  const verb = result.dryRun ? "Would love" : "Loved";
+  console.log(`${verb} ${result.lovedCount} finding(s) on Last.fm; ${result.failedCount} failed.`);
+
+  for (const logId of result.loved) {
+    console.log(`  ${logId}`);
+  }
+
+  for (const item of result.failed) {
+    console.log(`  ${item.logId}: ${item.error}`);
+  }
+}
+
+async function runBackfillDiscogs(
+  options: BackfillSyncOptions,
+  backfillDiscogsCommand: typeof import("./commands/admin-tracks").backfillDiscogsCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const result = await backfillDiscogsCommand(limit, options.dryRun);
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  const verb = result.dryRun ? "Would resolve" : "Resolved";
+  console.log(
+    `${verb} ${result.resolvedCount} Discogs release id(s); ${result.unresolvedCount} unresolved.`,
+  );
+
+  for (const item of result.resolved) {
+    const master = item.masterId ? ` (master ${item.masterId})` : "";
+    console.log(`  ${item.logId}: release ${item.releaseId}${master}`);
   }
 }
 

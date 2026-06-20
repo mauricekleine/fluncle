@@ -87,6 +87,50 @@ export async function enrichSweepCommand(limit: number): Promise<EnrichSweepResu
   return adminApiPost<EnrichSweepResult>(`/api/admin/enrich-sweep?limit=${limit}`);
 }
 
+export type LastfmBackfillResult = {
+  dryRun: boolean;
+  failed: Array<{ error: string; logId: string }>;
+  failedCount: number;
+  loved: string[];
+  lovedCount: number;
+  ok: boolean;
+};
+
+// Back-fill Last.fm loves over published findings via the admin API — the Worker
+// holds the LASTFM_* secrets and makes every signed call; the CLI stays a thin
+// client. Idempotent (loving twice is a no-op) and a safe no-op until the session
+// key is provisioned. `--dry-run` reports the set without firing.
+export async function backfillLastfmCommand(
+  limit: number,
+  dryRun: boolean,
+): Promise<LastfmBackfillResult> {
+  return adminApiPost<LastfmBackfillResult>(
+    `/api/admin/backfill/lastfm?limit=${limit}&dryRun=${dryRun}`,
+  );
+}
+
+export type DiscogsBackfillResult = {
+  dryRun: boolean;
+  ok: boolean;
+  resolved: Array<{ logId: string; masterId?: number; releaseId: number; source: string }>;
+  resolvedCount: number;
+  unresolved: string[];
+  unresolvedCount: number;
+};
+
+// Back-fill Discogs release ids over published findings missing one, via the admin
+// API — the Worker resolves (MB bridge + gated search) and writes in_release_id /
+// in_master_id server-side. Rows that already have an id are skipped (idempotent).
+// `--dry-run` resolves but writes nothing.
+export async function backfillDiscogsCommand(
+  limit: number,
+  dryRun: boolean,
+): Promise<DiscogsBackfillResult> {
+  return adminApiPost<DiscogsBackfillResult>(
+    `/api/admin/backfill/discogs?limit=${limit}&dryRun=${dryRun}`,
+  );
+}
+
 export type VehicleEntry = {
   addedAt: string;
   artists: string[];
