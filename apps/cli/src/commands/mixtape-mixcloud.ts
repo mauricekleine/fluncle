@@ -1,28 +1,26 @@
-// Mixcloud distribution (mixtape audio). CLI-direct: the Worker can't proxy
-// multi-GB media, so the operator's own MIXCLOUD_ACCESS_TOKEN lives CLI-side (like
-// FLUNCLE_API_TOKEN) and the CLI POSTs the local master straight to Mixcloud. The
-// Worker still owns authority — it records the result via the finalize route.
+// Mixcloud distribution (mixtape audio). The BYTES are CLI-direct (the Worker can't
+// proxy a multi-GB master), but the CREDENTIAL is not: the token lives server-side
+// (mixcloud_auth) and the CLI fetches it just-in-time from the Worker for the upload
+// — the CLI stays a thin client, mirroring YouTube. The Worker owns authority: it
+// runs the OAuth exchange and records the result via the finalize route.
 //
 //   distributeMixcloud(mixtapeId, audioPath, onProgress?) → fetch the mixtape,
 //     build the multipart body (mp3 + name + description + picture + tags +
 //     sections), POST /upload/, read the cloudcast key back via /<user>/cloudcasts/,
 //     then POST the resolved URL to /api/admin/mixtapes/:id/mixcloud/finalize.
 //
-//   authMixcloudCommand() → the paste helper: print the /oauth/authorize URL,
-//     prompt for the redirected code/URL, exchange it for a token, and write
-//     MIXCLOUD_ACCESS_TOKEN into the active-profile dotenv (getEnvFilePath()).
+//   authMixcloudCommand() → a thin trigger (like auth youtube): GET the admin
+//     start route and print the consent URL. The OAuth code exchange + token
+//     storage happen server-side; the CLI never holds the durable credential.
 
-import { adminApiPost } from "../api";
-import { getEnvFilePath, loadEnv } from "../env";
-import { promptLine } from "../interactive";
+import { type MixcloudAuthStartResponse, type MixcloudTokenResponse } from "@fluncle/contracts";
+import { adminApiGet, adminApiPost } from "../api";
 import { CliError } from "../output";
 import { type MixtapeListItem, mixtapeGetCommand } from "./mixtapes";
 
 export type MixcloudDistributeResult = { url: string };
 
 const MIXCLOUD_API = "https://api.mixcloud.com";
-const MIXCLOUD_OAUTH = "https://www.mixcloud.com/oauth";
-const REDIRECT_URI = "http://localhost:8910/mixcloud/callback";
 // Mixcloud's documented description cap; the fluncle:// breadcrumb adds ~25 chars.
 const DESCRIPTION_MAX = 1000;
 // Mixcloud caps the cover at 10MB; the 1500² square PNG may exceed it.
@@ -36,7 +34,7 @@ export async function distributeMixcloud(
   audioPath: string,
   onProgress?: (message: string) => void,
 ): Promise<MixcloudDistributeResult> {
-  const token = loadMixcloudToken();
+  const token = await fetchMixcloudToken();
   const mixtape = await mixtapeGetCommand(mixtapeId);
   const logId = mixtape.logId;
 
@@ -115,77 +113,16 @@ export async function distributeMixcloud(
   return { url };
 }
 
-// ── Auth (paste helper) ──────────────────────────────────────────────────────
+// ── Auth (thin trigger) ──────────────────────────────────────────────────────
 
 export async function authMixcloudCommand(): Promise<void> {
-  if (process.env.MIXCLOUD_ACCESS_TOKEN) {
-    console.log("MIXCLOUD_ACCESS_TOKEN is already set for the active env. Nothing to do.");
-    return;
-  }
-
-  const { MIXCLOUD_CLIENT_ID, MIXCLOUD_CLIENT_SECRET } = loadEnv([
-    "MIXCLOUD_CLIENT_ID",
-    "MIXCLOUD_CLIENT_SECRET",
-  ]);
-
-  const authorizeUrl = `${MIXCLOUD_OAUTH}/authorize/?client_id=${encodeURIComponent(
-    MIXCLOUD_CLIENT_ID,
-  )}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}`;
+  const response = await adminApiGet<MixcloudAuthStartResponse>("/api/admin/mixcloud/auth/start");
 
   console.log(`Open this Mixcloud authorization URL:
 
-${authorizeUrl}
+${response.authUrl}
 
-After approving, Mixcloud redirects to ${REDIRECT_URI}?code=… (the page will fail
-to load — that's expected). Copy the "code" value (or paste the whole redirected URL).`);
-
-  const pasted = await promptLine(
-    "Paste the code or redirected URL: ",
-    "Mixcloud auth needs an interactive terminal to paste the code.",
-  );
-
-  const code = extractCode(pasted);
-
-  if (!code) {
-    throw new CliError("mixcloud_no_code", "Could not find a code in the pasted value");
-  }
-
-  const exchangeUrl =
-    `${MIXCLOUD_OAUTH}/access_token/` +
-    `?client_id=${encodeURIComponent(MIXCLOUD_CLIENT_ID)}` +
-    `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
-    `&client_secret=${encodeURIComponent(MIXCLOUD_CLIENT_SECRET)}` +
-    `&code=${encodeURIComponent(code)}`;
-
-  const response = await fetch(exchangeUrl);
-  const text = await response.text();
-
-  if (!response.ok) {
-    throw new CliError(
-      "mixcloud_exchange_failed",
-      `Mixcloud rejected the code with ${response.status} ${response.statusText}${
-        text ? `: ${text.slice(0, 300)}` : ""
-      }`,
-    );
-  }
-
-  let token: string | undefined;
-  try {
-    token = (JSON.parse(text) as { access_token?: string }).access_token;
-  } catch {
-    throw new CliError(
-      "mixcloud_exchange_failed",
-      `Mixcloud returned a non-JSON token response: ${text.slice(0, 300)}`,
-    );
-  }
-
-  if (!token) {
-    throw new CliError("mixcloud_exchange_failed", "Mixcloud's token response had no access_token");
-  }
-
-  await writeEnvToken(token);
-
-  console.log(`Saved MIXCLOUD_ACCESS_TOKEN to ${getEnvFilePath()}.`);
+After approving access, Mixcloud returns to the Fluncle admin callback and stores the access token server-side.`);
 }
 
 // ── Pure helpers ─────────────────────────────────────────────────────────────
@@ -234,13 +171,17 @@ function mixtapeTags(_mixtape: MixtapeListItem): string[] {
 
 // ── Internal IO helpers ──────────────────────────────────────────────────────
 
-function loadMixcloudToken(): string {
+// The Mixcloud token lives server-side (mixcloud_auth); the CLI fetches it just-in-
+// time for the direct upload. A 400 means Mixcloud isn't connected yet.
+async function fetchMixcloudToken(): Promise<string> {
   try {
-    return loadEnv(["MIXCLOUD_ACCESS_TOKEN"]).MIXCLOUD_ACCESS_TOKEN;
+    const response = await adminApiPost<MixcloudTokenResponse>("/api/admin/mixcloud/token");
+
+    return response.accessToken;
   } catch {
     throw new CliError(
-      "mixcloud_no_token",
-      "MIXCLOUD_ACCESS_TOKEN is not set. Run `fluncle admin auth mixcloud` to provision it.",
+      "mixcloud_not_connected",
+      "Mixcloud is not connected. Run `fluncle admin auth mixcloud` to authorize it.",
     );
   }
 }
@@ -330,28 +271,6 @@ function slugify(value: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-function extractCode(pasted: string): string | undefined {
-  const trimmed = pasted.trim();
-
-  if (!trimmed) {
-    return undefined;
-  }
-
-  if (trimmed.includes("code=") || trimmed.startsWith("http")) {
-    try {
-      const url = new URL(trimmed, REDIRECT_URI);
-      const code = url.searchParams.get("code");
-      if (code) {
-        return code;
-      }
-    } catch {
-      // Fall through — treat the paste as the raw code.
-    }
-  }
-
-  return trimmed;
-}
-
 function throwMixcloudError(status: number, body: string): never {
   if (body.includes("An invalid access token was provided")) {
     throw new CliError(
@@ -364,26 +283,4 @@ function throwMixcloudError(status: number, body: string): never {
     "mixcloud_request_failed",
     `Mixcloud responded ${status}${body ? `: ${body.slice(0, 300)}` : ""}`,
   );
-}
-
-// Append or update MIXCLOUD_ACCESS_TOKEN in the active-profile dotenv. Preserves
-// the rest of the file; honors --env via getEnvFilePath().
-async function writeEnvToken(token: string): Promise<void> {
-  const path = getEnvFilePath();
-  const file = Bun.file(path);
-  const existing = (await file.exists()) ? await file.text() : "";
-  const line = `MIXCLOUD_ACCESS_TOKEN=${token}`;
-  const lines = existing.split("\n");
-  const index = lines.findIndex((entry) => entry.startsWith("MIXCLOUD_ACCESS_TOKEN="));
-
-  if (index >= 0) {
-    lines[index] = line;
-  } else {
-    if (existing.length > 0 && !existing.endsWith("\n")) {
-      lines.push("");
-    }
-    lines.push(line);
-  }
-
-  await Bun.write(path, lines.join("\n").replace(/\n+$/, "\n"));
 }

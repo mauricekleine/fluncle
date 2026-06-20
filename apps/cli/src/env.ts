@@ -5,17 +5,7 @@ import { join } from "node:path";
 const envProfiles = ["local", "production"] as const;
 const defaultEnvProfile = "production";
 
-// Mixcloud distribution is CLI-direct (the Worker can't proxy multi-GB media), so
-// the operator's own Mixcloud credentials live here, in the CLI env, exactly like
-// FLUNCLE_API_TOKEN — they never touch the Worker. Provisioned via
-// `fluncle admin auth mixcloud`.
-const optionalKeys = [
-  "FLUNCLE_API_BASE_URL",
-  "FLUNCLE_API_TOKEN",
-  "MIXCLOUD_ACCESS_TOKEN",
-  "MIXCLOUD_CLIENT_ID",
-  "MIXCLOUD_CLIENT_SECRET",
-] as const;
+const optionalKeys = ["FLUNCLE_API_BASE_URL", "FLUNCLE_API_TOKEN"] as const;
 
 type EnvProfile = (typeof envProfiles)[number];
 export type EnvKey = (typeof optionalKeys)[number];
@@ -50,11 +40,6 @@ export function getApiBaseUrl(): string {
   loadConfig();
 
   return (process.env.FLUNCLE_API_BASE_URL ?? "https://www.fluncle.com").replace(/\/+$/, "");
-}
-
-/** The dotenv file backing the active profile — where `auth mixcloud` writes the token. */
-export function getEnvFilePath(): string {
-  return join(homedir(), `.config/fluncle/.env.${getEnvProfile()}`);
 }
 
 function loadConfig(): void {

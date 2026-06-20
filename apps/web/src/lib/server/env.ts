@@ -33,6 +33,13 @@ const envKeys = [
   "YOUTUBE_CLIENT_ID",
   "YOUTUBE_CLIENT_SECRET",
   "YOUTUBE_REDIRECT_URI",
+  // Our own Mixcloud OAuth (mixtape audio distribution). The Worker runs the code
+  // exchange + stores the durable token in mixcloud_auth, then hands it to the CLI
+  // just-in-time for the CLI-direct upload (the bytes are CLI-direct; the token is
+  // not — the CLI stays a thin client).
+  "MIXCLOUD_CLIENT_ID",
+  "MIXCLOUD_CLIENT_SECRET",
+  "MIXCLOUD_REDIRECT_URI",
   "TELEGRAM_BOT_TOKEN",
   "TELEGRAM_CHANNEL_ID",
   "DISCORD_WEBHOOK_URL",

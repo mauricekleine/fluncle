@@ -141,6 +141,13 @@
       "when": 1781880812016,
       "tag": "0019_supreme_paladin",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1781935161654,
+      "tag": "0020_jazzy_otto_octavius",
+      "breakpoints": true
     }
   ]
 }

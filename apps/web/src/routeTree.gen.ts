@@ -57,6 +57,7 @@ import { Route as ApiAdminYoutubeTokenRouteImport } from './routes/api/admin/you
 import { Route as ApiAdminTracksTrackIdRouteImport } from './routes/api/admin/tracks.$trackId'
 import { Route as ApiAdminSubmissionsSubmissionIdRouteImport } from './routes/api/admin/submissions/$submissionId'
 import { Route as ApiAdminMixtapesMixtapeIdRouteImport } from './routes/api/admin/mixtapes.$mixtapeId'
+import { Route as ApiAdminMixcloudTokenRouteImport } from './routes/api/admin/mixcloud/token'
 import { Route as ApiAdminYoutubeAuthStartRouteImport } from './routes/api/admin/youtube/auth/start'
 import { Route as ApiAdminYoutubeAuthCallbackRouteImport } from './routes/api/admin/youtube/auth/callback'
 import { Route as ApiAdminTracksTrackIdVideoRouteImport } from './routes/api/admin/tracks.$trackId.video'
@@ -70,6 +71,8 @@ import { Route as ApiAdminSpotifyAuthCallbackRouteImport } from './routes/api/ad
 import { Route as ApiAdminMixtapesMixtapeIdSocialRouteImport } from './routes/api/admin/mixtapes.$mixtapeId.social'
 import { Route as ApiAdminMixtapesMixtapeIdPublishRouteImport } from './routes/api/admin/mixtapes.$mixtapeId.publish'
 import { Route as ApiAdminMixtapesMixtapeIdMembersRouteImport } from './routes/api/admin/mixtapes.$mixtapeId.members'
+import { Route as ApiAdminMixcloudAuthStartRouteImport } from './routes/api/admin/mixcloud/auth/start'
+import { Route as ApiAdminMixcloudAuthCallbackRouteImport } from './routes/api/admin/mixcloud/auth/callback'
 import { Route as ApiAdminTracksTrackIdVideoUploadsRouteImport } from './routes/api/admin/tracks.$trackId.video.uploads'
 import { Route as ApiAdminTracksTrackIdVideoFinalizeRouteImport } from './routes/api/admin/tracks.$trackId.video.finalize'
 import { Route as ApiAdminTracksTrackIdSocialPlatformRouteImport } from './routes/api/admin/tracks.$trackId.social.$platform'
@@ -322,6 +325,11 @@ const ApiAdminMixtapesMixtapeIdRoute =
     path: '/$mixtapeId',
     getParentRoute: () => ApiAdminMixtapesRoute,
   } as any)
+const ApiAdminMixcloudTokenRoute = ApiAdminMixcloudTokenRouteImport.update({
+  id: '/api/admin/mixcloud/token',
+  path: '/api/admin/mixcloud/token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAdminYoutubeAuthStartRoute =
   ApiAdminYoutubeAuthStartRouteImport.update({
     id: '/api/admin/youtube/auth/start',
@@ -399,6 +407,18 @@ const ApiAdminMixtapesMixtapeIdMembersRoute =
     id: '/members',
     path: '/members',
     getParentRoute: () => ApiAdminMixtapesMixtapeIdRoute,
+  } as any)
+const ApiAdminMixcloudAuthStartRoute =
+  ApiAdminMixcloudAuthStartRouteImport.update({
+    id: '/api/admin/mixcloud/auth/start',
+    path: '/api/admin/mixcloud/auth/start',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiAdminMixcloudAuthCallbackRoute =
+  ApiAdminMixcloudAuthCallbackRouteImport.update({
+    id: '/api/admin/mixcloud/auth/callback',
+    path: '/api/admin/mixcloud/auth/callback',
+    getParentRoute: () => rootRouteImport,
   } as any)
 const ApiAdminTracksTrackIdVideoUploadsRoute =
   ApiAdminTracksTrackIdVideoUploadsRouteImport.update({
@@ -491,6 +511,7 @@ export interface FileRoutesByFullPath {
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
   '/api/tracks/$idOrLogId': typeof ApiTracksIdOrLogIdRoute
   '/api/tracks/random': typeof ApiTracksRandomRoute
+  '/api/admin/mixcloud/token': typeof ApiAdminMixcloudTokenRoute
   '/api/admin/mixtapes/$mixtapeId': typeof ApiAdminMixtapesMixtapeIdRouteWithChildren
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
   '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRouteWithChildren
@@ -498,6 +519,8 @@ export interface FileRoutesByFullPath {
   '/api/me/export/$exportId': typeof ApiMeExportExportIdRoute
   '/api/me/galaxy-progress/logs': typeof ApiMeGalaxyProgressLogsRoute
   '/api/me/saved-findings/$trackId': typeof ApiMeSavedFindingsTrackIdRoute
+  '/api/admin/mixcloud/auth/callback': typeof ApiAdminMixcloudAuthCallbackRoute
+  '/api/admin/mixcloud/auth/start': typeof ApiAdminMixcloudAuthStartRoute
   '/api/admin/mixtapes/$mixtapeId/members': typeof ApiAdminMixtapesMixtapeIdMembersRoute
   '/api/admin/mixtapes/$mixtapeId/publish': typeof ApiAdminMixtapesMixtapeIdPublishRoute
   '/api/admin/mixtapes/$mixtapeId/social': typeof ApiAdminMixtapesMixtapeIdSocialRoute
@@ -561,6 +584,7 @@ export interface FileRoutesByTo {
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
   '/api/tracks/$idOrLogId': typeof ApiTracksIdOrLogIdRoute
   '/api/tracks/random': typeof ApiTracksRandomRoute
+  '/api/admin/mixcloud/token': typeof ApiAdminMixcloudTokenRoute
   '/api/admin/mixtapes/$mixtapeId': typeof ApiAdminMixtapesMixtapeIdRouteWithChildren
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
   '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRouteWithChildren
@@ -568,6 +592,8 @@ export interface FileRoutesByTo {
   '/api/me/export/$exportId': typeof ApiMeExportExportIdRoute
   '/api/me/galaxy-progress/logs': typeof ApiMeGalaxyProgressLogsRoute
   '/api/me/saved-findings/$trackId': typeof ApiMeSavedFindingsTrackIdRoute
+  '/api/admin/mixcloud/auth/callback': typeof ApiAdminMixcloudAuthCallbackRoute
+  '/api/admin/mixcloud/auth/start': typeof ApiAdminMixcloudAuthStartRoute
   '/api/admin/mixtapes/$mixtapeId/members': typeof ApiAdminMixtapesMixtapeIdMembersRoute
   '/api/admin/mixtapes/$mixtapeId/publish': typeof ApiAdminMixtapesMixtapeIdPublishRoute
   '/api/admin/mixtapes/$mixtapeId/social': typeof ApiAdminMixtapesMixtapeIdSocialRoute
@@ -633,6 +659,7 @@ export interface FileRoutesById {
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
   '/api/tracks/$idOrLogId': typeof ApiTracksIdOrLogIdRoute
   '/api/tracks/random': typeof ApiTracksRandomRoute
+  '/api/admin/mixcloud/token': typeof ApiAdminMixcloudTokenRoute
   '/api/admin/mixtapes/$mixtapeId': typeof ApiAdminMixtapesMixtapeIdRouteWithChildren
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
   '/api/admin/tracks/$trackId': typeof ApiAdminTracksTrackIdRouteWithChildren
@@ -640,6 +667,8 @@ export interface FileRoutesById {
   '/api/me/export/$exportId': typeof ApiMeExportExportIdRoute
   '/api/me/galaxy-progress/logs': typeof ApiMeGalaxyProgressLogsRoute
   '/api/me/saved-findings/$trackId': typeof ApiMeSavedFindingsTrackIdRoute
+  '/api/admin/mixcloud/auth/callback': typeof ApiAdminMixcloudAuthCallbackRoute
+  '/api/admin/mixcloud/auth/start': typeof ApiAdminMixcloudAuthStartRoute
   '/api/admin/mixtapes/$mixtapeId/members': typeof ApiAdminMixtapesMixtapeIdMembersRoute
   '/api/admin/mixtapes/$mixtapeId/publish': typeof ApiAdminMixtapesMixtapeIdPublishRoute
   '/api/admin/mixtapes/$mixtapeId/social': typeof ApiAdminMixtapesMixtapeIdSocialRoute
@@ -706,6 +735,7 @@ export interface FileRouteTypes {
     | '/api/preview/$idOrLogId'
     | '/api/tracks/$idOrLogId'
     | '/api/tracks/random'
+    | '/api/admin/mixcloud/token'
     | '/api/admin/mixtapes/$mixtapeId'
     | '/api/admin/submissions/$submissionId'
     | '/api/admin/tracks/$trackId'
@@ -713,6 +743,8 @@ export interface FileRouteTypes {
     | '/api/me/export/$exportId'
     | '/api/me/galaxy-progress/logs'
     | '/api/me/saved-findings/$trackId'
+    | '/api/admin/mixcloud/auth/callback'
+    | '/api/admin/mixcloud/auth/start'
     | '/api/admin/mixtapes/$mixtapeId/members'
     | '/api/admin/mixtapes/$mixtapeId/publish'
     | '/api/admin/mixtapes/$mixtapeId/social'
@@ -776,6 +808,7 @@ export interface FileRouteTypes {
     | '/api/preview/$idOrLogId'
     | '/api/tracks/$idOrLogId'
     | '/api/tracks/random'
+    | '/api/admin/mixcloud/token'
     | '/api/admin/mixtapes/$mixtapeId'
     | '/api/admin/submissions/$submissionId'
     | '/api/admin/tracks/$trackId'
@@ -783,6 +816,8 @@ export interface FileRouteTypes {
     | '/api/me/export/$exportId'
     | '/api/me/galaxy-progress/logs'
     | '/api/me/saved-findings/$trackId'
+    | '/api/admin/mixcloud/auth/callback'
+    | '/api/admin/mixcloud/auth/start'
     | '/api/admin/mixtapes/$mixtapeId/members'
     | '/api/admin/mixtapes/$mixtapeId/publish'
     | '/api/admin/mixtapes/$mixtapeId/social'
@@ -847,6 +882,7 @@ export interface FileRouteTypes {
     | '/api/preview/$idOrLogId'
     | '/api/tracks/$idOrLogId'
     | '/api/tracks/random'
+    | '/api/admin/mixcloud/token'
     | '/api/admin/mixtapes/$mixtapeId'
     | '/api/admin/submissions/$submissionId'
     | '/api/admin/tracks/$trackId'
@@ -854,6 +890,8 @@ export interface FileRouteTypes {
     | '/api/me/export/$exportId'
     | '/api/me/galaxy-progress/logs'
     | '/api/me/saved-findings/$trackId'
+    | '/api/admin/mixcloud/auth/callback'
+    | '/api/admin/mixcloud/auth/start'
     | '/api/admin/mixtapes/$mixtapeId/members'
     | '/api/admin/mixtapes/$mixtapeId/publish'
     | '/api/admin/mixtapes/$mixtapeId/social'
@@ -907,7 +945,10 @@ export interface RootRouteChildren {
   ApiMixtapeCoverLogIdRoute: typeof ApiMixtapeCoverLogIdRoute
   ApiOgLogIdRoute: typeof ApiOgLogIdRoute
   ApiPreviewIdOrLogIdRoute: typeof ApiPreviewIdOrLogIdRoute
+  ApiAdminMixcloudTokenRoute: typeof ApiAdminMixcloudTokenRoute
   ApiAdminYoutubeTokenRoute: typeof ApiAdminYoutubeTokenRoute
+  ApiAdminMixcloudAuthCallbackRoute: typeof ApiAdminMixcloudAuthCallbackRoute
+  ApiAdminMixcloudAuthStartRoute: typeof ApiAdminMixcloudAuthStartRoute
   ApiAdminSpotifyAuthCallbackRoute: typeof ApiAdminSpotifyAuthCallbackRoute
   ApiAdminSpotifyAuthLoginRoute: typeof ApiAdminSpotifyAuthLoginRoute
   ApiAdminSpotifyAuthStartRoute: typeof ApiAdminSpotifyAuthStartRoute
@@ -1253,6 +1294,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminMixtapesMixtapeIdRouteImport
       parentRoute: typeof ApiAdminMixtapesRoute
     }
+    '/api/admin/mixcloud/token': {
+      id: '/api/admin/mixcloud/token'
+      path: '/api/admin/mixcloud/token'
+      fullPath: '/api/admin/mixcloud/token'
+      preLoaderRoute: typeof ApiAdminMixcloudTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/admin/youtube/auth/start': {
       id: '/api/admin/youtube/auth/start'
       path: '/api/admin/youtube/auth/start'
@@ -1343,6 +1391,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/admin/mixtapes/$mixtapeId/members'
       preLoaderRoute: typeof ApiAdminMixtapesMixtapeIdMembersRouteImport
       parentRoute: typeof ApiAdminMixtapesMixtapeIdRoute
+    }
+    '/api/admin/mixcloud/auth/start': {
+      id: '/api/admin/mixcloud/auth/start'
+      path: '/api/admin/mixcloud/auth/start'
+      fullPath: '/api/admin/mixcloud/auth/start'
+      preLoaderRoute: typeof ApiAdminMixcloudAuthStartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/mixcloud/auth/callback': {
+      id: '/api/admin/mixcloud/auth/callback'
+      path: '/api/admin/mixcloud/auth/callback'
+      fullPath: '/api/admin/mixcloud/auth/callback'
+      preLoaderRoute: typeof ApiAdminMixcloudAuthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/admin/tracks/$trackId/video/uploads': {
       id: '/api/admin/tracks/$trackId/video/uploads'
@@ -1671,7 +1733,10 @@ const rootRouteChildren: RootRouteChildren = {
   ApiMixtapeCoverLogIdRoute: ApiMixtapeCoverLogIdRoute,
   ApiOgLogIdRoute: ApiOgLogIdRoute,
   ApiPreviewIdOrLogIdRoute: ApiPreviewIdOrLogIdRoute,
+  ApiAdminMixcloudTokenRoute: ApiAdminMixcloudTokenRoute,
   ApiAdminYoutubeTokenRoute: ApiAdminYoutubeTokenRoute,
+  ApiAdminMixcloudAuthCallbackRoute: ApiAdminMixcloudAuthCallbackRoute,
+  ApiAdminMixcloudAuthStartRoute: ApiAdminMixcloudAuthStartRoute,
   ApiAdminSpotifyAuthCallbackRoute: ApiAdminSpotifyAuthCallbackRoute,
   ApiAdminSpotifyAuthLoginRoute: ApiAdminSpotifyAuthLoginRoute,
   ApiAdminSpotifyAuthStartRoute: ApiAdminSpotifyAuthStartRoute,

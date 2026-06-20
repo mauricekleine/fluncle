@@ -185,6 +185,12 @@ export type MixtapeDistributeFinalizeResponse = Ok<{ mixtape: MixtapeDTO; platfo
 /** `/api/admin/youtube/auth/start` response (mirrors the Spotify shape). */
 export type YouTubeAuthStartResponse = Ok<{ authUrl: string }>;
 
+/** `/api/admin/mixcloud/auth/start` response. */
+export type MixcloudAuthStartResponse = Ok<{ authUrl: string }>;
+
+/** `/api/admin/mixcloud/token` response: the access token for the CLI-direct upload. */
+export type MixcloudTokenResponse = Ok<{ accessToken: string }>;
+
 /**
  * `/api/admin/mixtapes/:id/youtube/initiate` response: the resumable session URI
  * AND a short-lived access token — the YouTube data PUT is NOT self-authorizing,

@@ -142,7 +142,7 @@ Once a mixtape is live on the spine, make the crew aware of it on Fluncle's own 
 _One-time setup (per machine):_
 
 - `fluncle admin auth youtube` — opens Google's consent screen; the durable refresh token is stored server-side in `youtube_auth` (the dashboard "Make public" button + the resumable upload both ride on it). Precondition: the `@fluncle` channel is phone-verified (done) — without it, uploads over 15 min fail at insert.
-- `fluncle admin auth mixcloud` — prints a Mixcloud authorize URL; approve, then paste the redirected `code` (or full URL) back. The CLI exchanges it for `MIXCLOUD_ACCESS_TOKEN` and writes it into the active profile's dotenv (`--env local|production`). It's your personal Mixcloud credential and never touches the Worker; revocable — re-run if a later upload reports an invalid token.
+- `fluncle admin auth mixcloud` — prints a Mixcloud authorize URL (same shape as `auth youtube`); approve, and Mixcloud returns to the admin callback which exchanges the code and stores the token server-side in `mixcloud_auth`. The durable credential never touches the CLI — at upload time the CLI fetches it just-in-time from the Worker for the CLI-direct POST (only the bytes are CLI-side). Token revocable; re-run if a later upload reports an invalid token. (Secrets live on Cloudflare: `MIXCLOUD_CLIENT_ID/SECRET/REDIRECT_URI`.)
 
 _Per mixtape, from the Mac where the assets live:_
 

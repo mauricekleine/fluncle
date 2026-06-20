@@ -84,6 +84,17 @@ export const youtubeAuth = sqliteTable("youtube_auth", {
   updatedAt: text("updated_at").notNull(),
 });
 
+// Our own Mixcloud OAuth for mixtape audio distribution — kept server-side like
+// spotify_auth / youtube_auth (the CLI stays a thin client). Mixcloud tokens don't
+// expire and there's no refresh token, so the table is just the durable access
+// token; the Worker hands it to the CLI just-in-time for the direct upload (the
+// bytes are CLI-direct; the credential is not). Single row, service PK = "mixcloud".
+export const mixcloudAuth = sqliteTable("mixcloud_auth", {
+  accessToken: text("access_token").notNull(),
+  service: text("service").primaryKey(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 export const submissions = sqliteTable(
   "submissions",
   {
