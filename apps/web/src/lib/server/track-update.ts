@@ -11,6 +11,7 @@ export type { TrackUpdateResult };
 
 import { isLogId } from "../log-id";
 import { getDb, typedRow } from "./db";
+import { purgeLogCache } from "./edge-cache";
 import { resolveLogId } from "./log-id";
 import { ApiError } from "./spotify";
 
@@ -65,6 +66,9 @@ export async function updateTrack(
 
   const sets: string[] = [];
   const args: Array<number | string | null> = [];
+  // The coordinate whose cached log surfaces this write stales: the existing one,
+  // or the freshly-minted one on a one-time backfill (set below).
+  let effectiveLogId = existing.log_id;
 
   if (update.bpm !== undefined) {
     sets.push("bpm = ?");
@@ -185,6 +189,7 @@ export async function updateTrack(
 
     sets.push("log_id = ?");
     args.push(logId);
+    effectiveLogId = logId;
   }
 
   if (sets.length === 0) {
@@ -198,6 +203,11 @@ export async function updateTrack(
     args,
     sql: `update tracks set ${sets.join(", ")} where track_id = ?`,
   });
+
+  // The finding changed (enrichment, re-tag, video link, note edit, a backfilled
+  // coordinate): drop its cached `/log/<id>` page + the `/log` index so the next
+  // request re-renders. Fire-and-forget — never blocks the write.
+  purgeLogCache(effectiveLogId);
 
   return { fields: sets.map((set) => set.split(" ")[0]), trackId };
 }

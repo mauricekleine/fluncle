@@ -1,9 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { type MixtapeDTO, type MixtapeStatus, rowToMixtape } from "../mixtapes";
 import { getDb, typedRow, typedRows } from "./db";
+import { purgeLogCache } from "./edge-cache";
 import { mixtapeLogId } from "./mixtape-log-id";
 import { ApiError } from "./spotify";
 import { getTrackByIdOrLogId, getTracksForMixtape } from "./tracks";
+
+// A mixtape is also a finding with a `/log/<F-id>` page (and a row in the `/log`
+// index). Any write that changes its published surface must drop those from the
+// edge cache. `purgeLogCache` no-ops on a draft (no coordinate yet), so it is safe
+// to call after every member/metadata edit too.
+function purgeMixtapeLogCache(mixtape: MixtapeDTO): MixtapeDTO {
+  purgeLogCache(mixtape.logId);
+
+  return mixtape;
+}
 
 const noteMaxLength = 1_200;
 const urlMaxLength = 500;
@@ -157,7 +168,7 @@ export async function updateMixtape(id: string, input: MixtapeInput): Promise<Mi
     await setMixtapeSoundcloud(id, fields.soundcloudUrl);
   }
 
-  return getMixtapeById(id, { includeDrafts: true });
+  return purgeMixtapeLogCache(await getMixtapeById(id, { includeDrafts: true }));
 }
 
 // The manual SoundCloud link as a `mixtape_social_posts` row (the single source of
@@ -251,7 +262,7 @@ export async function setMixtapeMembers(
     "write",
   );
 
-  return getMixtapeById(id, { includeDrafts: true });
+  return purgeMixtapeLogCache(await getMixtapeById(id, { includeDrafts: true }));
 }
 
 // Append findings to a draft's tracklist, keeping the existing order — the board's
@@ -334,7 +345,7 @@ export async function addTracksToMixtape(
     );
   }
 
-  return getMixtapeById(id, { includeDrafts: true });
+  return purgeMixtapeLogCache(await getMixtapeById(id, { includeDrafts: true }));
 }
 
 // Which mixtapes each of these findings sits in, keyed by trackId — one query, no
@@ -466,8 +477,9 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
   }
 
   // Read back through the draft-inclusive path: the row is `distributing` now, so
-  // getMixtapeByLogId (published-only) would not return it.
-  return getMixtapeById(id, { includeDrafts: true });
+  // getMixtapeByLogId (published-only) would not return it. The coordinate now
+  // exists, so its `/log` page + the index need to re-render.
+  return purgeMixtapeLogCache(await getMixtapeById(id, { includeDrafts: true }));
 }
 
 export async function deleteMixtape(id: string): Promise<void> {
