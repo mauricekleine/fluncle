@@ -36,21 +36,23 @@ mkdir -p "$VARIANTS" "$ICONS"
 
 # ── Variant A: the cosmonaut mark, gold deep-field disc ───────────────────────
 # The transparent cosmonaut, trimmed and centered on a circular deep-field disc
-# with a faint gold rim — the floating-uncle brand mark as a clean coin. 96px art
-# (the disc) inside 16px transparent padding.
+# with a faint gold rim — the floating-uncle brand mark as a clean coin. The
+# 96px-art / 16px-padding rule is for SQUARE icons; a circular coin's corners are
+# transparent anyway, so it runs nearly edge to edge — the disc is ~120px with a
+# small safety margin, the figure scaled to fill it.
 build_a() {
   magick "$COSMONAUT" -trim +repage \
-    -resize 84x84 -background none -gravity center -extent 96x96 \
+    -resize 104x104 -background none -gravity center -extent 120x120 \
     "$VARIANTS/_fig.png"
 
-  magick -size 96x96 xc:none \
-    -fill "$DEEP_FIELD" -draw "circle 48,48 48,1" \
-    \( -size 96x96 xc:none -fill none -stroke "#f5b80077" -strokewidth 2 \
-       -draw "circle 48,48 48,3" \) -compose over -composite \
+  magick -size 128x128 xc:none \
+    -fill "$DEEP_FIELD" -draw "circle 64,64 64,4" \
+    \( -size 128x128 xc:none -fill none -stroke "#f5b80077" -strokewidth 2 \
+       -draw "circle 64,64 64,7" \) -compose over -composite \
     "$VARIANTS/_disc.png"
 
   magick "$VARIANTS/_disc.png" "$VARIANTS/_fig.png" -gravity center -compose over -composite \
-    -background none -gravity center -extent 128x128 PNG32:"$VARIANTS/icon128-a.png"
+    PNG32:"$VARIANTS/icon128-a.png"
 
   rm -f "$VARIANTS/_fig.png" "$VARIANTS/_disc.png"
 }
