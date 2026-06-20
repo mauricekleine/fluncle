@@ -107,11 +107,22 @@ export async function distributeMixcloud(
     throwMixcloudError(uploadResponse.status, uploadText);
   }
 
-  // The success body is undocumented and carries no URL/key. Read the authoritative
-  // key back from the account's cloudcasts feed (the freshest cast is this upload).
-  onProgress?.("Mixcloud: reading back the cloudcast key…");
-  const url = await resolveCloudcastUrl(token, mixtape.title);
-  const externalId = cloudcastKeyFromUrl(url);
+  // Mixcloud returns HTTP 200 even on a validation failure — the body carries the
+  // real outcome: `{ result: { success, message, key } }`. On success the key
+  // (`/fluncle/<slug>/`) is authoritative and immediate, so we use it directly
+  // rather than polling /me/cloudcasts/ (which lags behind Mixcloud's processing and
+  // would return a stale cast right after upload).
+  const result = parseUploadResult(uploadText);
+
+  if (!result.success || !result.key) {
+    throw new CliError(
+      "mixcloud_upload_rejected",
+      `Mixcloud rejected the upload: ${result.message ?? uploadText.slice(0, 300)}`,
+    );
+  }
+
+  const externalId = result.key;
+  const url = `https://www.mixcloud.com${result.key}`;
 
   onProgress?.("Mixcloud: recording the link…");
   await adminApiPost(`/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/mixcloud/finalize`, {
@@ -215,69 +226,22 @@ async function fetchCover(logId: string): Promise<Blob | undefined> {
   return undefined;
 }
 
-// The Mixcloud account that owns the access token, e.g. "fluncle".
-async function fetchUsername(token: string): Promise<string> {
-  const response = await fetch(`${MIXCLOUD_API}/me/?access_token=${encodeURIComponent(token)}`);
-  const text = await response.text();
-
-  if (!response.ok) {
-    throwMixcloudError(response.status, text);
-  }
-
-  const username = (JSON.parse(text) as { username?: string }).username;
-
-  if (!username) {
-    throw new CliError("mixcloud_no_username", "Mixcloud /me/ returned no username");
-  }
-
-  return username;
-}
-
-// Read the authoritative cloudcast URL back from the account feed. The just-uploaded
-// cast is the freshest; match on the title's slug as a guard, else take the newest.
-async function resolveCloudcastUrl(token: string, name: string): Promise<string> {
-  const username = await fetchUsername(token);
-  const response = await fetch(
-    `${MIXCLOUD_API}/${encodeURIComponent(username)}/cloudcasts/?access_token=${encodeURIComponent(token)}`,
-  );
-  const text = await response.text();
-
-  if (!response.ok) {
-    throwMixcloudError(response.status, text);
-  }
-
-  const data = JSON.parse(text) as { data?: { slug?: string; url?: string }[] };
-  const casts = data.data ?? [];
-
-  if (casts.length === 0) {
-    throw new CliError("mixcloud_no_cloudcast", "Mixcloud returned no cloudcasts after the upload");
-  }
-
-  const wantSlug = slugify(name);
-  const match = casts.find((cast) => cast.slug === wantSlug) ?? casts[0];
-
-  if (!match.url) {
-    throw new CliError("mixcloud_no_url", "Mixcloud cloudcast has no url");
-  }
-
-  return match.url;
-}
-
-// "https://www.mixcloud.com/fluncle/<slug>/" → the API key "/fluncle/<slug>/".
-function cloudcastKeyFromUrl(url: string): string | undefined {
+// Mixcloud's upload endpoint answers 200 with `{ result: { success, message, key } }`
+// (verified live). `key` is the authoritative cloudcast key (`/fluncle/<slug>/`).
+function parseUploadResult(body: string): { key?: string; message?: string; success: boolean } {
   try {
-    return new URL(url).pathname || undefined;
-  } catch {
-    return undefined;
-  }
-}
+    const data = JSON.parse(body) as {
+      result?: { key?: string; message?: string; success?: boolean };
+    };
 
-function slugify(value: string): string {
-  return value
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+    return {
+      key: data.result?.key,
+      message: data.result?.message,
+      success: data.result?.success === true,
+    };
+  } catch {
+    return { message: body.slice(0, 300), success: false };
+  }
 }
 
 function throwMixcloudError(status: number, body: string): never {
