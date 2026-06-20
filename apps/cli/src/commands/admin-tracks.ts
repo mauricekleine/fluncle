@@ -1,16 +1,17 @@
-import { adminApiGet } from "../api";
+import { adminApiGet, adminApiPost } from "../api";
 import { mapTrack, type RecentTrack, type TracksResponse } from "./recent";
 
-// Mirrors the /api/admin/tracks page cap. The order + hasVideo filters are
-// applied in SQL by listTracks; the CLI just pages through the matching rows.
+// Mirrors the /api/admin/tracks page cap. The order + hasVideo + status filters
+// are applied in SQL by listTracks; the CLI just pages through the matching rows.
 const pageSize = 48;
 
 async function fetchAdminTracks(options: {
   hasVideo?: boolean;
   max: number;
   order: "asc" | "desc";
+  status?: string;
 }): Promise<RecentTrack[]> {
-  const { hasVideo, max, order } = options;
+  const { hasVideo, max, order, status } = options;
   const results: RecentTrack[] = [];
   let cursor: string | undefined;
 
@@ -19,6 +20,10 @@ async function fetchAdminTracks(options: {
 
     if (hasVideo !== undefined) {
       params.set("hasVideo", String(hasVideo));
+    }
+
+    if (status !== undefined) {
+      params.set("status", status);
     }
 
     if (cursor) {
@@ -51,6 +56,35 @@ async function fetchAdminTracks(options: {
 // the next finding to film (oldest-first is how the backlog is worked down).
 export async function queueCommand(limit: number): Promise<RecentTrack[]> {
   return fetchAdminTracks({ hasVideo: false, max: limit, order: "asc" });
+}
+
+// The ENRICHMENT queue (distinct from the VIDEO queue above): findings needing
+// (re-)enrichment — pending ∪ failed ∪ stale processing — oldest first. The
+// sweep re-fires these; this read just surfaces what's stuck.
+export async function enrichQueueCommand(limit: number): Promise<RecentTrack[]> {
+  return fetchAdminTracks({ max: limit, order: "asc", status: "queue" });
+}
+
+export type EnrichSweepEntry = {
+  logId: string;
+  status: string;
+  trackId: string;
+};
+
+export type EnrichSweepResult = {
+  ok: boolean;
+  reEnriched: EnrichSweepEntry[];
+  reEnrichedCount: number;
+  skipped: EnrichSweepEntry[];
+  skippedCount: number;
+};
+
+// Trigger the self-healing sweep via the admin API — the Worker queries the
+// enrich-queue and re-fires triggerEnrichment for each (idempotent on
+// `enrich:${logId}`, so re-running never duplicates an in-flight run). The CLI
+// stays a thin client: it holds the admin token, never the Spinup key.
+export async function enrichSweepCommand(limit: number): Promise<EnrichSweepResult> {
+  return adminApiPost<EnrichSweepResult>(`/api/admin/enrich-sweep?limit=${limit}`);
 }
 
 export type VehicleEntry = {

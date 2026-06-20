@@ -4,7 +4,13 @@ import { jsonError, requireAdmin } from "../../../lib/server/env";
 import { apiErrorResponse, parseEditorialNote } from "../../../lib/server/http-errors";
 import { publishTrack } from "../../../lib/server/publish";
 import { triggerEnrichment } from "../../../lib/server/spinup";
-import { decodeTrackCursor, listTracks, searchTracks } from "../../../lib/server/tracks";
+import {
+  type EnrichmentStatusFilter,
+  ENRICHMENT_STATUS_FILTERS,
+  decodeTrackCursor,
+  listTracks,
+  searchTracks,
+} from "../../../lib/server/tracks";
 
 type AddTrackBody = {
   spotifyUrl?: unknown;
@@ -51,6 +57,7 @@ export const serverHandlers: ApiHandlers = {
         hasVideo: parseBoolean(url.searchParams.get("hasVideo")),
         limit: parseAdminLimit(url.searchParams.get("limit")),
         order: url.searchParams.get("order") === "asc" ? "asc" : "desc",
+        status: parseEnrichmentStatus(url.searchParams.get("status")),
       }),
     );
   },
@@ -110,6 +117,15 @@ function parseBoolean(value: string | null): boolean | undefined {
   }
 
   return undefined;
+}
+
+// The enrichment-state filter, validated against the allowed set (the four real
+// statuses + "queue", the pending ∪ failed ∪ stale-processing meta-filter the
+// enrich-queue/sweep read). Anything else (or absent) → no status filter.
+function parseEnrichmentStatus(value: string | null): EnrichmentStatusFilter | undefined {
+  return value && (ENRICHMENT_STATUS_FILTERS as readonly string[]).includes(value)
+    ? (value as EnrichmentStatusFilter)
+    : undefined;
 }
 
 function parseAdminLimit(value: string | null): number {

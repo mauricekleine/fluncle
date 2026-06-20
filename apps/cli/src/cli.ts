@@ -353,6 +353,26 @@ function addAdminCommands(program: Command): void {
     });
 
   admin
+    .command("enrich-queue")
+    .description("Findings needing (re-)enrichment: pending, failed, or stuck processing")
+    .option("--limit <limit>", "Number of findings to show", "10")
+    .option("--json", "Print JSON", false)
+    .action(async (options: AdminListOptions) => {
+      const { enrichQueueCommand } = await import("./commands/admin-tracks");
+      await runAdminEnrichQueue(options, enrichQueueCommand);
+    });
+
+  admin
+    .command("enrich-sweep")
+    .description("Re-fire enrichment for everything in the enrich-queue (idempotent self-heal)")
+    .option("--limit <limit>", "Max findings to re-trigger", "25")
+    .option("--json", "Print JSON", false)
+    .action(async (options: AdminListOptions) => {
+      const { enrichSweepCommand } = await import("./commands/admin-tracks");
+      await runAdminEnrichSweep(options, enrichSweepCommand);
+    });
+
+  admin
     .command("vehicles")
     .description("Recent video vehicles, newest first (the style ledger for diversity)")
     .option("--limit <limit>", "Number of vehicles to show", "10")
@@ -1393,6 +1413,67 @@ async function runAdminQueue(
   const noun = tracks.length === 1 ? "finding" : "findings";
   console.log(`${tracks.length} ${noun} awaiting a video, oldest first:`);
   console.log(trackRows(tracks).join("\n"));
+}
+
+async function runAdminEnrichQueue(
+  options: AdminListOptions,
+  enrichQueueCommand: typeof import("./commands/admin-tracks").enrichQueueCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const tracks = await enrichQueueCommand(limit);
+
+  if (options.json) {
+    printJson({
+      ok: true,
+      tracks,
+    });
+    return;
+  }
+
+  if (tracks.length === 0) {
+    console.log("Nothing awaiting enrichment. Every finding is enriched.");
+    return;
+  }
+
+  const { trackRows } = await import("./format");
+  const noun = tracks.length === 1 ? "finding" : "findings";
+  console.log(`${tracks.length} ${noun} needing (re-)enrichment, oldest first:`);
+  console.log(trackRows(tracks).join("\n"));
+}
+
+async function runAdminEnrichSweep(
+  options: AdminListOptions,
+  enrichSweepCommand: typeof import("./commands/admin-tracks").enrichSweepCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const result = await enrichSweepCommand(limit);
+
+  if (options.json) {
+    printJson({
+      ok: true,
+      reEnriched: result.reEnriched,
+      reEnrichedCount: result.reEnrichedCount,
+      skipped: result.skipped,
+      skippedCount: result.skippedCount,
+    });
+    return;
+  }
+
+  if (result.reEnrichedCount === 0 && result.skippedCount === 0) {
+    console.log("Nothing to sweep. The enrich-queue is empty.");
+    return;
+  }
+
+  const noun = result.reEnrichedCount === 1 ? "finding" : "findings";
+  console.log(`Re-fired enrichment for ${result.reEnrichedCount} ${noun}.`);
+
+  for (const entry of result.reEnriched) {
+    console.log(`  ${entry.logId || entry.trackId} (was ${entry.status})`);
+  }
+
+  if (result.skippedCount > 0) {
+    console.log(`Skipped ${result.skippedCount} with no Log ID yet.`);
+  }
 }
 
 async function runAdminVehicles(

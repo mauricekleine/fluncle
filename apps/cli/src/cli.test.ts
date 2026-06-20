@@ -59,6 +59,32 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
+  test("admin enrich-queue validates --limit before fetching", async () => {
+    const result = await runCli(["admin", "enrich-queue", "--limit", "0", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
+  });
+
+  test("admin enrich-sweep validates --limit before any sweep", async () => {
+    const result = await runCli(["admin", "enrich-sweep", "--limit", "0", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
+  });
+
+  test("admin enrich-queue and enrich-sweep show in admin help (distinct from the video queue)", async () => {
+    const adminHelp = await runCli(["admin", "help"]);
+
+    expect(adminHelp.exitCode).toBe(0);
+    expect(adminHelp.stdout).toContain("enrich-queue");
+    expect(adminHelp.stdout).toContain("enrich-sweep");
+    // The video render queue stays its own command.
+    expect(adminHelp.stdout).toContain("queue");
+  });
+
   test("admin track video requires a footage cut before any upload", async () => {
     // A --dir with no footage.mp4 fails the local validation before the presign
     // request, so this runs without a server or admin token.
