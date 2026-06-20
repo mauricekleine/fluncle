@@ -10,9 +10,18 @@ import { getMixtapeForRender } from "@/lib/server/mixtapes";
 
 const BG_BASE = `${FOUND_BASE}/mixtape`;
 
+// `square` (1500²) is the canonical artwork used for the actual distribution
+// uploads (Mixcloud/SoundCloud); never shrink it. `card` and `thumb` are
+// display-only square renditions for the on-site cover slots — both reuse the
+// square background and the same vmin-proportional stamp, so they read identically
+// to `square` at a fraction of the bytes (a 1500² Satori PNG is ~1 MB into a 52px
+// row; a 128² thumb is a few kB). `card` (640²) covers the /log plate at @2x
+// (min(100%, 20rem) = 320px); `thumb` (160²) covers the feed/index rows at @2x.
 const SIZES = {
+  card: { background: `${BG_BASE}/bg-square.jpg`, height: 640, width: 640 },
   og: { background: `${BG_BASE}/bg-og.jpg`, height: 630, width: 1200 },
   square: { background: `${BG_BASE}/bg-square.jpg`, height: 1500, width: 1500 },
+  thumb: { background: `${BG_BASE}/bg-square.jpg`, height: 160, width: 160 },
   wide: { background: `${BG_BASE}/bg-wide.jpg`, height: 720, width: 1280 },
 } as const;
 

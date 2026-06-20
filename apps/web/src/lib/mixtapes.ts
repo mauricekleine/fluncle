@@ -9,8 +9,14 @@ import { siteUrl } from "./fluncle-links";
 
 export type { MixtapeDTO, MixtapeExternalUrls, MixtapeMember, MixtapeStatus };
 
-/** The aspects the on-the-fly cover endpoint renders (api/mixtape-cover.$logId.ts). */
-export type MixtapeCoverSize = "og" | "square" | "wide";
+/**
+ * The renditions the on-the-fly cover endpoint serves (api/mixtape-cover.$logId.ts).
+ * Aspects for distribution/link-previews: `square` (1500², the uploaded artwork),
+ * `og` (the /log card), `wide` (the YouTube thumbnail). Display-only square
+ * renditions for the on-site cover slots, right-sized to keep a 1 MB render out of
+ * a 52px row: `card` (the /log plate), `thumb` (the feed + /mixtapes rows).
+ */
+export type MixtapeCoverSize = "card" | "og" | "square" | "thumb" | "wide";
 
 /**
  * The title for on-site display (feed row, /mixtapes index, /log plate): the

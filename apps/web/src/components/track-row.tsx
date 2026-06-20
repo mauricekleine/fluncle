@@ -14,7 +14,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { siteUrl } from "@/lib/fluncle-links";
 import { formatAlbumDuration, formatDuration } from "@/lib/format";
-import { type FeedItem, mixtapeDisplayTitle } from "@/lib/mixtapes";
+import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { type FeedItem, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { type Track } from "@/lib/tracks";
 
 // The signature component (DESIGN.md): a finding, not just a row. The whole row
@@ -36,7 +37,12 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
         >
           {logId}
         </Link>
-        <TrackArtwork alt={`${track.title} cover art`} src={track.coverImageUrl} />
+        {/* The row slot is 52px (104px @2x): request the small `thumb` rendition,
+            not the 1500² `square` that backs coverImageUrl (distribution artwork). */}
+        <TrackArtwork
+          alt={`${track.title} cover art`}
+          src={logId ? mixtapeCoverUrl(logId, "thumb") : track.coverImageUrl}
+        />
         <span className="min-w-0">
           <Link
             aria-label={`Open the log page for ${track.title}`}
@@ -110,13 +116,19 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
           search={{ story: storyLogId }}
           to="/"
         >
-          <TrackArtwork alt={`${trackLine} cover art`} src={track.albumImageUrl} />
+          <TrackArtwork
+            alt={`${trackLine} cover art`}
+            src={spotifyAlbumImageAtSize(track.albumImageUrl, "small")}
+          />
           <span aria-hidden="true" className="track-play-glyph">
             <PlayIcon weight="fill" />
           </span>
         </Link>
       ) : (
-        <TrackArtwork alt={`${trackLine} cover art`} src={track.albumImageUrl} />
+        <TrackArtwork
+          alt={`${trackLine} cover art`}
+          src={spotifyAlbumImageAtSize(track.albumImageUrl, "small")}
+        />
       )}
 
       <span className="min-w-0">
