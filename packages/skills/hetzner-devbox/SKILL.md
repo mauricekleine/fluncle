@@ -57,7 +57,7 @@ Set `SERVER_NAME`, `SERVER_TYPE`, `LOCATION`, `IMAGE`, or `HCLOUD_SSH_KEY_NAME` 
 SERVER_IPV4=<public-ip> skills/hetzner-devbox/scripts/bootstrap-hardening.sh
 ```
 
-This streams the vendored `scripts/bootstrap-private-vps.sh` over SSH, passes `TS_AUTHKEY` without putting the key on the command line, and configures the server as Tailscale-only. After it finishes, verify `ssh admin@<tailscale-hostname>` works before relying on the firewall.
+This streams the vendored `scripts/bootstrap-private-vps.sh` over SSH, passes `TS_AUTHKEY` without putting the key on the command line, and configures the server as Tailscale-only. Admin access is **plain OpenSSH on `:2222`** reached over the tailnet (tunneled through WireGuard/UDP `41641`), **not** Tailscale SSH on `:22`. Tailscale SSH (`--ssh`) is deliberately NOT used: on a tailnet whose ACL sets the SSH `action` to `"check"`, it forces a per-session browser re-auth that blocks every headless/agent connection — plain sshd avoids it, and key-only auth + tailnet membership remain the two factors (no public exposure either way). After it finishes, verify `ssh -p 2222 admin@<tailscale-hostname>` works before relying on the firewall. **Disable Tailscale key expiry for the node** (admin console → Machines → ⋯ → Disable key expiry), or pass `TS_TAGS=tag:server` so the node joins tag-owned and is exempt from expiry — a private box has no public fallback, so an expired key is a total lockout.
 
 4. Apply the Hetzner provider firewall:
 
@@ -82,7 +82,7 @@ Use this for `ssh rave.fluncle.com`-style services. Prefer a dedicated small VPS
 1. Create the server with public-app naming:
 
 ```sh
-SERVER_NAME=fluncle-rave-01 SERVER_TYPE=cx22 skills/hetzner-devbox/scripts/create-server.sh
+SERVER_NAME=fluncle-rave-01 SERVER_TYPE=cx23 skills/hetzner-devbox/scripts/create-server.sh
 ```
 
 2. Bootstrap the host for a public SSH app:
@@ -160,7 +160,7 @@ If provisioning from scratch, create the updater and timer on the host, download
 After setup, verify from a fresh local shell:
 
 ```sh
-ssh admin@agent-devbox-01 'bash -lc "id -nG; docker ps; bun --version; uv --version; node --version; gh --version | head -n 1; codex --version; claude --version"'
+ssh -p 2222 admin@agent-devbox-01 'bash -lc "id -nG; docker ps; bun --version; uv --version; node --version; gh --version | head -n 1; codex --version; claude --version"'
 ```
 
 Also verify:
