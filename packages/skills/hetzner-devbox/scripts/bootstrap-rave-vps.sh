@@ -86,7 +86,13 @@ AllowTcpForwarding no
 AllowAgentForwarding no
 PermitTunnel no
 SSHD
-systemctl restart ssh
+# Ubuntu 23.04+ ships OpenSSH socket-activated: ssh.socket binds :22 and the
+# sshd_config Port directive is silently ignored. Defeat socket activation so
+# admin sshd moves to ${ADMIN_SSH_PORT} and :22 is freed for the public SSH app
+# (otherwise ssh.socket holds :22 and the app can't bind it).
+systemctl disable --now ssh.socket 2>/dev/null || true
+systemctl enable ssh.service
+systemctl restart ssh.service
 
 log "Configuring UFW"
 ufw --force reset
