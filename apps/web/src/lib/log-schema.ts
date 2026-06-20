@@ -14,6 +14,9 @@ export { logPageUrl };
 export type LogSchemaInput = LogProseInput & {
   album?: string;
   albumImageUrl?: string;
+  // The finding's Discogs release URL — a per-track `sameAs` (distinct from the
+  // artist-level sameAs on /about). Present only when the Discogs lookup resolved.
+  discogsReleaseUrl?: string;
   durationMs: number;
   isrc?: string;
   spotifyUrl: string;
@@ -43,7 +46,11 @@ export function musicRecordingJsonLd(
     ...(track.isrc ? { isrcCode: track.isrc } : {}),
     ...(track.album ? { inAlbum: { "@type": "MusicAlbum", name: track.album } } : {}),
     name: track.title,
-    sameAs: [track.spotifyUrl, ...(track.tiktokUrl ? [track.tiktokUrl] : [])],
+    sameAs: [
+      track.spotifyUrl,
+      ...(track.tiktokUrl ? [track.tiktokUrl] : []),
+      ...(track.discogsReleaseUrl ? [track.discogsReleaseUrl] : []),
+    ],
     url: logPageUrl(track.logId),
   };
 }

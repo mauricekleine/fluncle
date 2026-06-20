@@ -7,6 +7,7 @@ import { formatDuration } from "../format";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow } from "./db";
 import { enrichFromDeezer, lookupIsrcFromDeezer } from "./deezer";
+import { discogsResolveRelease } from "./discogs";
 import { purgeLogCache } from "./edge-cache";
 import { lastfmLove } from "./lastfm";
 import { resolveLogId } from "./log-id";
@@ -129,6 +130,25 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
   // set by an admin in the tagging tool — see docs/track-lifecycle.md.
   const deezer = await enrichFromDeezer(track.isrc);
 
+  // Read-only Discogs release-ID enrichment (best-effort, alongside the Deezer
+  // label/preview it most resembles — both cheap HTTP, Worker-safe). A scored
+  // cascade with a tracklist-confirm gate (MusicBrainz ISRC bridge first, then a
+  // gated Discogs search): it stores an id ONLY on a high-confidence match and
+  // leaves the ids null otherwise — a wrong id is worse than a missing one. The
+  // `discogs.com/release/{id}` URL becomes a per-finding `sameAs`.
+  // discogsResolveRelease swallows its own errors and no-ops without the token, so
+  // a miss never blocks the add — same side-channel discipline as Deezer. The
+  // Deezer label feeds the labelSim signal. See docs/track-lifecycle.md /
+  // docs/rfcs/lastfm-discogs-sync.md §2.
+  const discogs = await discogsResolveRelease({
+    album: track.album,
+    artists: track.artists,
+    isrc: track.isrc,
+    label: deezer.label,
+    releaseDate: track.releaseDate,
+    title: track.title,
+  });
+
   await db.execute({
     args: [
       track.trackId,
@@ -145,6 +165,8 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
       logId,
       track.popularity ?? null,
       deezer.previewUrl ?? null,
+      discogs.releaseId ?? null,
+      discogs.masterId ?? null,
       options.note ?? null,
       nowIso,
       nowIso,
@@ -166,12 +188,14 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
         log_id,
         popularity,
         preview_url,
+        in_release_id,
+        in_master_id,
         note,
         added_at,
         updated_at,
         added_to_spotify,
         posted_to_telegram
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 
   try {

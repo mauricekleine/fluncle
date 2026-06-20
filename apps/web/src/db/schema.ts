@@ -18,6 +18,14 @@ export const tracks = sqliteTable("tracks", {
   durationMs: integer("duration_ms").notNull(),
   enrichmentStatus: text("enrichment_status").notNull().default("pending"),
   featuresJson: text("features_json"),
+  // The Discogs release the finding resolves to (read-only enrichment, best-effort,
+  // matched by artist + title since Discogs has no ISRC search). inMasterId is the
+  // master that groups a release's versions (Discogs returns it on the search hit);
+  // inReleaseId is the specific release. The `discogs.com/release/{inReleaseId}` URL
+  // is a per-finding `sameAs` for the track (distinct from the artist-level sameAs).
+  // Both null until a confident match writes them on add. See docs/track-lifecycle.md.
+  inMasterId: integer("in_master_id"),
+  inReleaseId: integer("in_release_id"),
   isrc: text("isrc"),
   key: text("key"),
   label: text("label"),

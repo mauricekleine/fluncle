@@ -169,6 +169,13 @@
       "when": 1781987077304,
       "tag": "0023_tense_whizzer",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1781989183028,
+      "tag": "0024_mysterious_hercules",
+      "breakpoints": true
     }
   ]
 }

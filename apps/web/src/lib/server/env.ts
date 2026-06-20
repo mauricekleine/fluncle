@@ -60,6 +60,11 @@ const envKeys = [
   "LASTFM_API_KEY",
   "LASTFM_SHARED_SECRET",
   "LASTFM_SESSION_KEY",
+  // Discogs read-only release-ID enrichment (lib/server/discogs.ts): a personal
+  // access token created in the `fluncle` Discogs developer settings. It lifts the
+  // rate limit to ~60 req/min and is read via readOptionalEnv, so the lookup
+  // no-ops (in_release_id/in_master_id stay inert) until the secret is set.
+  "DISCOGS_USER_TOKEN",
   "TELEGRAM_BOT_TOKEN",
   "TELEGRAM_CHANNEL_ID",
   "DISCORD_WEBHOOK_URL",

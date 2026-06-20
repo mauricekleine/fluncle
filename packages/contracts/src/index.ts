@@ -50,6 +50,8 @@ export type TrackListItem = {
   albumImageUrl?: string;
   artists: string[];
   bpm?: number;
+  /** The finding's `discogs.com/release/{id}` URL — a per-track `sameAs`; absent until resolved. */
+  discogsReleaseUrl?: string;
   durationMs: number;
   enrichmentStatus: string;
   features?: TrackFeatures;
