@@ -320,6 +320,34 @@ type TrackCountRow = {
   total_count: number;
 };
 
+/**
+ * How long a track may sit in `processing` before the enrich-queue treats it as
+ * stuck (the box rebooted mid-run, etc.) and re-picks it. Enrichment is a
+ * multi-minute job, so 30 min is comfortably longer than a healthy run; a row
+ * that's been "processing" past it is presumed dead, not in-flight. The
+ * idempotency key (`enrich:${logId}`) makes a wrongly-early re-pick harmless —
+ * an in-flight run is de-duped rather than duplicated.
+ */
+export const ENRICH_STALE_PROCESSING_MS = 30 * 60 * 1000;
+
+/**
+ * Enrichment state filters. The four are the real `enrichment_status` values;
+ * `"queue"` is the SELF-HEALING meta-filter the sweep uses: tracks NEEDING
+ * (re-)enrichment = pending ∪ failed ∪ STALE processing (a `processing` row
+ * older than ENRICH_STALE_PROCESSING_MS, including rows with no updated_at).
+ * Filtering on only pending/failed would never re-pick a box-rebooted
+ * `processing` track — the most common failure — so "queue" must include it.
+ */
+export type EnrichmentStatusFilter = "pending" | "processing" | "done" | "failed" | "queue";
+
+export const ENRICHMENT_STATUS_FILTERS: readonly EnrichmentStatusFilter[] = [
+  "pending",
+  "processing",
+  "done",
+  "failed",
+  "queue",
+];
+
 type ListTracksOptions = {
   cursor?: TrackCursor;
   /** Only findings with a rendered video — the Stories feed's filter. */
@@ -338,6 +366,13 @@ type ListTracksOptions = {
    */
   placement?: "placed" | "unplaced";
   since?: string;
+  /**
+   * Enrichment-state filter (admin only). A bare status matches that exact
+   * `enrichment_status`; "queue" matches everything needing (re-)enrichment —
+   * pending ∪ failed ∪ stale processing — and is what the enrich-queue + sweep
+   * read. Omitted for public reads.
+   */
+  status?: EnrichmentStatusFilter;
   until?: string;
 };
 
@@ -353,6 +388,7 @@ export async function listTracks({
   order = "desc",
   placement,
   since,
+  status,
   until,
 }: ListTracksOptions): Promise<FeedListPage | TrackListPage> {
   const db = await getDb();
@@ -386,6 +422,22 @@ export async function listTracks({
     filterClauses.push("vibe_x is not null");
   }
 
+  if (status === "queue") {
+    // The self-healing enrich-queue: pending ∪ failed ∪ STALE processing. A
+    // `processing` row counts as stuck once it's older than the staleness
+    // threshold (updated_at is bumped to the processing transition — enrichment
+    // status is a visible field in track-update.ts) OR has a null updated_at
+    // (predates the column). Bound arg only; never string-concatenated.
+    const staleCutoff = new Date(Date.now() - ENRICH_STALE_PROCESSING_MS).toISOString();
+    filterClauses.push(
+      "(enrichment_status in ('pending', 'failed') or (enrichment_status = 'processing' and (updated_at is null or updated_at < ?)))",
+    );
+    filterArgs.push(staleCutoff);
+  } else if (status) {
+    filterClauses.push("enrichment_status = ?");
+    filterArgs.push(status);
+  }
+
   // asc/desc are internal literals (never user strings), so they interpolate
   // safely; the cursor comparison flips with the direction.
   const dir = order === "asc" ? "asc" : "desc";
@@ -416,7 +468,12 @@ export async function listTracks({
   ]);
   const rows = typedRows<TrackRow>(result.rows);
   const feedRows =
-    includeMixtapes && !since && !until && hasVideo === undefined && placement === undefined
+    includeMixtapes &&
+    !since &&
+    !until &&
+    hasVideo === undefined &&
+    placement === undefined &&
+    status === undefined
       ? await listPublishedMixtapeFeedRows(db, cursor, cursorComparator, cursorArgs, dir, limit)
       : undefined;
   const countRows = typedRows<TrackCountRow>(countResult.rows);
