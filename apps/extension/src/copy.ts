@@ -14,6 +14,11 @@ export function findingsLabel(count: number): string {
   return count === 1 ? "1 finding" : `${count} findings`;
 }
 
+/** Pluralizes "banger" for a mixtape's member count (the set's tracklist length). */
+export function bangersLabel(count: number): string {
+  return count === 1 ? "1 banger" : `${count} bangers`;
+}
+
 export const COPY = {
   /** Hover-card and popup row actions (functional labels — literal, no garnish). */
   actions: {

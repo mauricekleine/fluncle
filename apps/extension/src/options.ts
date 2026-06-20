@@ -2,7 +2,7 @@
 // script reacts live (onSettingsChanged), so nothing here needs a reload.
 
 import { COPY } from "./copy";
-import { loadSettings, saveSettings } from "./settings";
+import { type LinkTarget, loadSettings, saveSettings } from "./settings";
 
 const scan = document.getElementById("scan") as HTMLInputElement;
 const cards = document.getElementById("cards") as HTMLInputElement;
@@ -39,7 +39,9 @@ async function init(): Promise<void> {
   });
 
   target.addEventListener("change", () => {
-    saveSettings({ linkTarget: "web" }).catch(() => {});
+    // Only "web" ships today, but persist the control's actual value so adding an
+    // option to the <select> needs no second change here.
+    saveSettings({ linkTarget: target.value as LinkTarget }).catch(() => {});
   });
 }
 

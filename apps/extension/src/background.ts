@@ -24,6 +24,8 @@ chrome.runtime.onMessage.addListener((message: BadgeMessage, sender) => {
   chrome.action.setBadgeText({ tabId, text }).catch(() => {});
   chrome.action.setBadgeBackgroundColor({ color: BADGE_BG, tabId }).catch(() => {});
 
-  // setBadgeTextColor lands on recent Chrome; ignore where unsupported.
-  chrome.action.setBadgeTextColor?.({ color: BADGE_TEXT, tabId }).catch(() => {});
+  // setBadgeTextColor lands on recent Chrome; ignore where unsupported. The `?.`
+  // before the call guards a missing method; the `?.` before `.catch` guards the
+  // undefined that short-circuit returns (otherwise `.catch` throws a TypeError).
+  chrome.action.setBadgeTextColor?.({ color: BADGE_TEXT, tabId })?.catch(() => {});
 });

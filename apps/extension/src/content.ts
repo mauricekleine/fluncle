@@ -6,8 +6,8 @@
 // www.fluncle.com — never page text, URLs, or DOM.
 
 import { fetchFinding } from "./api";
-import { COORDINATE_PATTERN, digCommand, sshCommand, webUrl } from "./coordinate";
-import { COPY } from "./copy";
+import { COORDINATE_PATTERN, digCommand, safeHref, sshCommand, webUrl } from "./coordinate";
+import { bangersLabel, COPY } from "./copy";
 import { type LensSettings, loadSettings, onSettingsChanged } from "./settings";
 import {
   type DetectedFinding,
@@ -74,6 +74,32 @@ function pushBadge(): void {
   chrome.runtime.sendMessage({ count: registry.size, type: "lens:badge" }).catch(() => {
     // The worker may be asleep or the tab backgrounded; the badge is best-effort.
   });
+}
+
+/**
+ * Drops registry entries whose linkified node has left the DOM. SPA route changes
+ * (YouTube, TikTok, …) swap out whole subtrees without a reload, so the coordinates
+ * the lens linkified on the old view are gone but their ids would otherwise linger —
+ * inflating the badge count and the popup list with dead entries. An id stays only
+ * while at least one of its `[data-fluncle-lens="<id>"]` links is still connected.
+ * Returns true when it removed anything, so the caller can repaint the badge.
+ */
+function pruneRegistry(): boolean {
+  const dead: string[] = [];
+
+  for (const id of registry.keys()) {
+    const link = document.querySelector(`[${LENS_ATTR}="${cssEscape(id)}"]`);
+
+    if (!link?.isConnected) {
+      dead.push(id);
+    }
+  }
+
+  for (const id of dead) {
+    registry.delete(id);
+  }
+
+  return dead.length > 0;
 }
 
 // ── Metadata ─────────────────────────────────────────────────────────────────
@@ -315,16 +341,14 @@ function fillCard(card: HTMLElement, finding: DetectedFinding): void {
   card.append(buildActions(finding));
 }
 
-/** The metadata block: artist — title, then the tabular facts. */
-function renderMeta(body: HTMLElement, meta: FindingMeta): void {
-  const title = document.createElement("div");
-
-  title.className = "fluncle-lens-title";
-
-  const artist = meta.artists?.join(", ");
-
-  title.textContent = [artist, meta.title].filter(Boolean).join(" — ") || "Untitled finding";
-  body.append(title);
+/**
+ * The facts line: for a track, the release/label/tempo facts; for a mixtape, the
+ * set's banger count (it has no album/tempo/key — those live on its members).
+ */
+function factsFor(meta: FindingMeta): string[] {
+  if (meta.kind === "mixtape") {
+    return typeof meta.memberCount === "number" ? [bangersLabel(meta.memberCount)] : [];
+  }
 
   const facts: string[] = [];
 
@@ -347,6 +371,22 @@ function renderMeta(body: HTMLElement, meta: FindingMeta): void {
   if (meta.key) {
     facts.push(meta.key);
   }
+
+  return facts;
+}
+
+/** The metadata block: artist — title, then the tabular facts. */
+function renderMeta(body: HTMLElement, meta: FindingMeta): void {
+  const title = document.createElement("div");
+
+  title.className = "fluncle-lens-title";
+
+  const artist = meta.artists?.join(", ");
+
+  title.textContent = [artist, meta.title].filter(Boolean).join(" — ") || "Untitled finding";
+  body.append(title);
+
+  const facts = factsFor(meta);
 
   if (facts.length > 0) {
     const line = document.createElement("div");
@@ -379,16 +419,19 @@ function formatFound(iso: string): string {
 /** The card's action row. */
 function buildActions(finding: DetectedFinding): HTMLElement {
   const actions = document.createElement("div");
+  const target = safeHref(finding.meta?.webUrl, finding.id);
 
   actions.className = "fluncle-lens-actions";
-  actions.append(linkAction(COPY.actions.open, finding.meta?.webUrl ?? webUrl(finding.id)));
+  actions.append(linkAction(COPY.actions.open, target));
 
   if (finding.meta?.spotifyUrl) {
-    actions.append(linkAction(COPY.actions.openSpotify, finding.meta.spotifyUrl));
+    actions.append(
+      linkAction(COPY.actions.openSpotify, safeHref(finding.meta.spotifyUrl, finding.id)),
+    );
   }
 
   actions.append(copyButton(COPY.actions.copyCoordinate, finding.raw));
-  actions.append(copyButton(COPY.actions.copyWebUrl, finding.meta?.webUrl ?? webUrl(finding.id)));
+  actions.append(copyButton(COPY.actions.copyWebUrl, target));
   actions.append(copyButton(COPY.actions.copyDig, digCommand(finding.id)));
   actions.append(copyButton(COPY.actions.copySsh, sshCommand(finding.id)));
 
@@ -468,6 +511,54 @@ function observe(): void {
   });
 }
 
+/**
+ * Watches for SPA route changes and reconciles the registry. `history.pushState` /
+ * `replaceState` don't fire any event, so they're patched to emit one; `popstate`
+ * covers back/forward. On a URL change the old view's coordinates are pruned (their
+ * nodes have left the DOM) and the fresh view is rescanned, keeping the badge count
+ * and popup list honest across navigations without a reload.
+ */
+function observeNavigation(): void {
+  let lastHref = location.href;
+
+  const onNavigate = (): void => {
+    if (location.href === lastHref) {
+      return;
+    }
+
+    lastHref = location.href;
+
+    // Let the SPA swap its DOM in before reconciling.
+    setTimeout(() => {
+      const pruned = pruneRegistry();
+
+      if (document.body) {
+        scan(document.body);
+      }
+
+      // `scan` only repaints the badge when it adds findings; a route that only
+      // removed them still needs a repaint.
+      if (pruned) {
+        pushBadge();
+      }
+    }, 250);
+  };
+
+  for (const method of ["pushState", "replaceState"] as const) {
+    const original = history[method];
+
+    history[method] = function patched(this: History, ...args: Parameters<History[typeof method]>) {
+      const result = original.apply(this, args);
+
+      onNavigate();
+
+      return result;
+    } as History[typeof method];
+  }
+
+  window.addEventListener("popstate", onNavigate);
+}
+
 // ── Popup channel ────────────────────────────────────────────────────────────
 
 function answerPopup(): void {
@@ -491,6 +582,7 @@ async function boot(): Promise<void> {
   if (document.body) {
     scan(document.body);
     observe();
+    observeNavigation();
   }
 
   // React to a toggle flip without a reload: a fresh scan covers turning scanning

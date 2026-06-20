@@ -2,7 +2,7 @@
 // each finding with its open/copy actions. No network of its own — the content
 // script already holds the (locally detected, optionally enriched) registry.
 
-import { digCommand, sshCommand, webUrl } from "./coordinate";
+import { digCommand, safeHref, sshCommand } from "./coordinate";
 import { COPY } from "./copy";
 import { type DetectedFinding, type FindingsResponse, type GetFindingsMessage } from "./types";
 
@@ -91,12 +91,14 @@ function renderRow(finding: DetectedFinding): HTMLLIElement {
 
   actions.className = "lens-actions";
 
-  const target = finding.meta?.webUrl ?? webUrl(finding.id);
+  const target = safeHref(finding.meta?.webUrl, finding.id);
 
   actions.append(linkButton(COPY.actions.open, target));
 
   if (finding.meta?.spotifyUrl) {
-    actions.append(linkButton(COPY.actions.openSpotify, finding.meta.spotifyUrl));
+    actions.append(
+      linkButton(COPY.actions.openSpotify, safeHref(finding.meta.spotifyUrl, finding.id)),
+    );
   }
 
   actions.append(copyButton(COPY.actions.copyCoordinate, finding.raw));

@@ -4,17 +4,31 @@
 // fields the hover card and popup actually render, so we mirror just those here
 // rather than pulling the web package (and its DOM/TanStack deps) into the bundle.
 
-/** The finding metadata Fluncle Lens shows, narrowed from the public API's track. */
+/**
+ * A finding's kind. A coordinate resolves to either a single track (the common
+ * case) or one of Fluncle's own mixtapes (`F` in the middle slot) — the two render
+ * a different facts line, so the kind rides along with the metadata.
+ */
+export type FindingKind = "mixtape" | "track";
+
+/**
+ * The finding metadata Fluncle Lens shows, narrowed from the public API's track or
+ * mixtape DTO. Track-only fields (`album`, `bpm`, `key`, `spotifyUrl`, …) sit beside
+ * mixtape-only fields (`memberCount`) — `kind` says which set is populated.
+ */
 export type FindingMeta = {
   album?: string;
   albumImageUrl?: string;
   artists?: string[];
   bpm?: number;
-  /** ISO date Fluncle found it. */
+  /** ISO date Fluncle found it (track addedAt, or a mixtape's recorded/found date). */
   foundAt?: string;
   key?: string;
+  kind: FindingKind;
   label?: string;
   logId?: string;
+  /** Mixtape only: how many bangers ride in the set. */
+  memberCount?: number;
   spotifyUrl?: string;
   title?: string;
   webUrl?: string;

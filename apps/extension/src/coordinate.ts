@@ -4,18 +4,22 @@
 // there is one place that owns the format and the casing rules.
 
 /**
- * Matches a `fluncle://` coordinate anywhere in a run of text. Mirrors the brief's
- * shape: three digits, a dot, one digit (or `F` for a mixtape), a dot, then one or
- * more alphanumerics. Case-insensitive and global so a single text node can carry
- * several. The capture group is the bare Log ID (no scheme).
+ * Matches a `fluncle://` coordinate anywhere in a run of text. Mirrors the canon
+ * Log-ID shape (`apps/web/src/lib/log-id.ts`): a 3-or-4-digit sector (it widens to
+ * four around 2029-02-22), a dot, then either a track's `digit.digit-letter`
+ * (`\d\.\d[A-Z]`) or a mixtape's `F.digit-letter-A-through-F` (`F\.\d[A-F]`). The
+ * mark is exactly two characters — a digit then a single letter — so the pattern
+ * rejects the malformed run-ons the old `[0-9A-Z]+` over-matched. Case-insensitive
+ * and global so a single text node can carry several. The capture group is the bare
+ * Log ID (no scheme).
  *
  * The literal `fluncle://` prefix anchors the front; a negative lookahead for
  * `[0-9A-Z]` marks the end so the final segment can't run on into a longer word. A
- * trailing `.` is deliberately allowed past the boundary — the third segment never
- * contains a dot, so a `.` after it is sentence punctuation ("…fluncle://007.0.0Z."),
- * not part of the coordinate.
+ * trailing `.` is deliberately allowed past the boundary — the mark never contains a
+ * dot, so a `.` after it is sentence punctuation ("…fluncle://007.0.0Z."), not part
+ * of the coordinate.
  */
-export const COORDINATE_PATTERN = /fluncle:\/\/([0-9]{3}\.[0-9A-Z]\.[0-9A-Z]+)(?![0-9A-Z])/gi;
+export const COORDINATE_PATTERN = /fluncle:\/\/(\d{3,4}\.(?:\d\.\d[A-Z]|F\.\d[A-F]))(?![0-9A-Z])/gi;
 
 /** A coordinate found in the page: the text exactly as written, plus its bare Log ID. */
 export type Coordinate = {
@@ -42,14 +46,23 @@ export function findCoordinates(text: string): Coordinate[] {
   return found;
 }
 
-/** The finding's permanent log page on fluncle.com. */
+/**
+ * The finding's permanent log page on fluncle.com. The Log ID is uppercased: the
+ * stored `log_id` is canonical-cased (`241.7.3A`) and the `/log/$logId` lookup is
+ * case-sensitive, so a lowercase-written coordinate must be normalized to resolve.
+ * Only the URL is uppercased — the coordinate stays exactly as written on the page.
+ */
 export function webUrl(id: string): string {
-  return `https://www.fluncle.com/log/${id}`;
+  return `https://www.fluncle.com/log/${id.toUpperCase()}`;
 }
 
-/** The public API read for a single finding by its Log ID. */
+/**
+ * The public API read for a single finding by its Log ID. Uppercased for the same
+ * reason as `webUrl`: `where log_id = ?` is case-sensitive against the canonical
+ * stored casing, so `241.7.3a` would 404 unless normalized first.
+ */
 export function apiUrl(id: string): string {
-  return `https://www.fluncle.com/api/tracks/${id}`;
+  return `https://www.fluncle.com/api/tracks/${id.toUpperCase()}`;
 }
 
 /**
@@ -64,4 +77,24 @@ export function digCommand(id: string): string {
 /** The rave-terminal lookup for a finding, keyed by the coordinate as written. */
 export function sshCommand(id: string): string {
   return `ssh rave.fluncle.com ${id}`;
+}
+
+/**
+ * Guards an API-provided href before it becomes a link target. The lens trusts the
+ * Log ID it detected, not the strings the API returns for it — a `spotifyUrl` or
+ * `webUrl` that isn't a plain `https:` URL (e.g. `javascript:`, `data:`, a relative
+ * path, or garbage) falls back to the finding's own log page, which is always safe.
+ */
+export function safeHref(href: string | undefined, id: string): string {
+  if (href) {
+    try {
+      if (new URL(href).protocol === "https:") {
+        return href;
+      }
+    } catch {
+      // Not an absolute URL — fall through to the safe log-page default.
+    }
+  }
+
+  return webUrl(id);
 }
