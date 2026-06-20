@@ -38,16 +38,26 @@ function DocsRoute() {
 
   return (
     <RootProvider
-      // Dark-only, like the rest of Fluncle. Keep next-themes ENABLED but force
-      // dark: `forcedTheme` pins the `.dark` class onto <html> on every render,
-      // so Fumadocs resolves its `.dark` token set (retinted in docs.css)
-      // instead of its light `:root` default. The old `enabled: false` mounted
-      // no ThemeProvider at all, so `.dark` never landed and the docs rendered
-      // light on every device. The sun/moon toggle is removed separately via
-      // `themeSwitch.enabled: false` in docsBaseOptions — the cosmos never flips.
-      theme={{ enabled: true, forcedTheme: "dark" }}
+      // Dark-only, like the rest of Fluncle — but next-themes is DISABLED here, so
+      // it never touches <html>. `forcedTheme` would pin `.dark` onto <html>, and
+      // in the TanStack Start SPA that class PERSISTS after navigating away from
+      // /docs — flipping the public app's `dark:` utilities on (the stock shadcn
+      // outline button swaps to `dark:bg-input/30`, etc.) and restyling the
+      // homepage. Instead `.dark` is scoped to the docs container below, and
+      // docs.css retints Fumadocs' tokens on BOTH `:root` and `.dark`, so the
+      // cosmos paints on the very first SSR pass with no theme JS and nothing to
+      // flip. The sun/moon toggle is already off via `themeSwitch.enabled: false`.
+      theme={{ enabled: false }}
     >
-      <DocsLayout {...docsBaseOptions()} tree={tree}>
+      <DocsLayout
+        {...docsBaseOptions()}
+        // Scope the dark theme to the docs subtree: `.dark` lands on
+        // #nd-docs-layout (not <html>), so Fumadocs' `.dark`-keyed rules (Shiki
+        // syntax colors, the sidebar pane) resolve inside /docs only, and the
+        // public app's single intended theme is never disturbed.
+        containerProps={{ className: "dark" }}
+        tree={tree}
+      >
         <Outlet />
       </DocsLayout>
     </RootProvider>

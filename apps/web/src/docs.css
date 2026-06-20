@@ -1,9 +1,20 @@
 /* The /docs hub stylesheet, loaded only on the docs routes (linked from the
    docs layout route). Fumadocs UI ships a fully prebuilt Tailwind stylesheet,
    so we import it directly — no extra Tailwind source scanning — then retint
-   its theme tokens to the Nostalgic Cosmos (DESIGN.md, the Retint Rule). The
-   main app keeps styles.css; this file never touches it. */
-@import "fumadocs-ui/style.css";
+   its theme tokens to the Nostalgic Cosmos (DESIGN.md, the Retint Rule).
+
+   It rides in the `fumadocs` cascade layer (order pinned in styles.css, lowest
+   priority). This stylesheet's <link> persists in the SPA document after you
+   leave /docs, and Fumadocs' prebuilt sheet carries its own Tailwind preflight
+   (`button`, `*`, …) and utilities under the SAME layer names Fluncle uses
+   (`base`/`utilities`) — un-layered they would MERGE and win by source order,
+   restyling the homepage's buttons. Boxed in `fumadocs`, every Fluncle rule
+   (layered or not) outranks them, so the docs styles only apply where Fluncle
+   has no competing rule: inside the docs subtree. The retint rules below stay
+   un-layered on purpose — they must win over this import inside /docs, and they
+   only touch docs-scoped selectors (#nd-…, [data-card], .docs-page-actions) or
+   already-canon globals (.font-display = Oxanium, :root color-scheme: dark). */
+@import "fumadocs-ui/style.css" layer(fumadocs);
 
 /* Fluncle is dark-only. The RootProvider forces the theme dark (forcedTheme),
    so next-themes pins `.dark` onto <html>. But the SSR pass paints before the
@@ -63,6 +74,34 @@
 .bg-fd-background,
 .bg-fd-card {
   background: transparent;
+}
+
+/* ————— The reading column as a pane (The Legible Sky Rule) ————— */
+
+/* The dense prose is the one docs surface that can't ride on raw sky: over the
+   cover's bright zones (the sun-bloom, the planet/disc lower-right) Stardust
+   body copy dropped under WCAG AA (~4.1:1). So the article gets the same warm
+   translucent pane the rest of fluncle.com uses — a Sleeve-Black scrim with a
+   Dust Line edge and a backdrop blur — giving every line a steady dark ground
+   while the cosmos still reads through the glass and around the pane (the
+   sidebar, the TOC rail, the margins). The blur softens bright spots further;
+   the measured worst case lands ~4.9:1 muted / ~7.8:1 body, AA with margin. */
+#nd-page {
+  background: color-mix(in oklch, #10100d 80%, transparent);
+  border: 1px solid var(--color-fd-border);
+  border-radius: var(--radius-lg, 0.75rem);
+  margin-block: 1.25rem;
+  padding: clamp(1.5rem, 3vw, 2.5rem);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  #nd-page {
+    -webkit-backdrop-filter: blur(18px) saturate(125%);
+    backdrop-filter: blur(18px) saturate(125%);
+    /* With the blur softening bright backdrop spots, a lighter scrim keeps the
+       cosmos more present while still holding AA (see the measured ~4.9:1). */
+    background: color-mix(in oklch, #10100d 62%, transparent);
+  }
 }
 
 /* ————— Sidebar + nav as a quiet pane ————— */
