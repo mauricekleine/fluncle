@@ -56,6 +56,15 @@ const envKeys = [
   // track enrichment fires on add via runs.create.
   "SPINUP_ENRICH_AGENT_ID",
   "SPINUP_ENRICH_AGENT_KEY",
+  // Cloudflare cache purge-by-URL (lib/server/edge-cache.ts): when a finding is
+  // published or updated, the Worker drops its `/log/<id>` page + the `/log` index
+  // from the edge cache globally. Both OPTIONAL — absent, the purge degrades to a
+  // local (this-data-center) eviction plus the short fresh window. CF_CACHE_PURGE_ZONE_ID
+  // is the fluncle.com zone id (non-secret); CF_CACHE_PURGE_TOKEN is an API token
+  // scoped to Zone → Cache Purge on that zone (a secret). Read off the Worker `env`
+  // binding directly in edge-cache.ts, not via readEnv (they may be unset).
+  "CF_CACHE_PURGE_ZONE_ID",
+  "CF_CACHE_PURGE_TOKEN",
 ] as const;
 
 export type EnvKey = (typeof envKeys)[number];
