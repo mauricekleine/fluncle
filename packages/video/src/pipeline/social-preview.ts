@@ -1,6 +1,6 @@
 // Entry point for the local social-preview pipeline.
 //
-//   bun src/pipeline/social-preview.ts <trackId|logId> [--skip-render] [--composition <Id>] [--composition-source <file>] [--duration-ms <10000-30000>] [--draft]
+//   bun src/pipeline/social-preview.ts <trackId|logId> [--skip-render] [--composition <Id>] [--composition-source <file>] [--duration-ms <10000-30000>] [--draft] [--no-overlay] [--aspect <portrait|landscape>] [--landscape]
 //
 // The positional id is a Spotify trackId or a Log ID (e.g. 004.6.0K) — the
 // latter lets you re-render an older clip that's aged out of the feed window.
@@ -16,7 +16,7 @@ import path from "node:path";
 import { Vibrant } from "node-vibrant/node";
 
 import { paletteMix } from "../remotion/palette-mix";
-import { type NostalgicCosmosProps } from "../remotion/types";
+import { type CosmosAspect, type NostalgicCosmosProps } from "../remotion/types";
 import { analyzeAudio } from "./analyze-audio";
 import { downloadPreview } from "./download-preview";
 import { fetchTrack } from "./fetch-track";
@@ -81,21 +81,37 @@ async function main(): Promise<void> {
   // a drop or just before a transition); 20s default, clamped to the contract.
   const durationFlagIndex = args.indexOf("--duration-ms");
   const durationMs = durationFlagIndex >= 0 ? Number(args[durationFlagIndex + 1]) : undefined;
+  // --no-overlay renders the text-free cut (radio.fluncle.com): the scene shader
+  // with NO baked-in TypePlate/CloseCard, so a host UI can draw its own metadata
+  // over clean footage. Threaded as props.hideOverlay (gated inside the
+  // primitives via getInputProps, so no composition edit is needed).
+  const hideOverlay = args.includes("--no-overlay");
+  // --aspect <portrait|landscape> (or the --landscape shorthand) selects the
+  // output dimensions. Portrait (1080×1920) stays the default; landscape
+  // (1920×1080) is the radio full-screen cut — the 9:16 shaders reflow under it.
+  const aspectFlagIndex = args.indexOf("--aspect");
+  const aspectArg = aspectFlagIndex >= 0 ? args[aspectFlagIndex + 1] : undefined;
+  const aspect: CosmosAspect =
+    args.includes("--landscape") || aspectArg === "landscape" ? "landscape" : "portrait";
   const valueIndexes = new Set(
-    [compositionFlagIndex + 1, compositionSourceFlagIndex + 1, durationFlagIndex + 1].filter(
-      (i) => i > 0,
-    ),
+    [
+      compositionFlagIndex + 1,
+      compositionSourceFlagIndex + 1,
+      durationFlagIndex + 1,
+      aspectFlagIndex + 1,
+    ].filter((i) => i > 0),
   );
   const trackId = args.find((a, index) => !a.startsWith("--") && !valueIndexes.has(index));
   if (
     !trackId ||
     (compositionFlagIndex >= 0 && !compositionId) ||
     (compositionSourceFlagIndex >= 0 && !compositionSource) ||
+    (aspectFlagIndex >= 0 && aspectArg !== "portrait" && aspectArg !== "landscape") ||
     (durationFlagIndex >= 0 &&
       (!Number.isFinite(durationMs) || durationMs! < 10_000 || durationMs! > 30_000))
   ) {
     throw new Error(
-      "usage: bun src/pipeline/social-preview.ts <trackId|logId> [--skip-render] [--composition <Id>] [--composition-source <file>] [--duration-ms <10000-30000>] [--draft]",
+      "usage: bun src/pipeline/social-preview.ts <trackId|logId> [--skip-render] [--composition <Id>] [--composition-source <file>] [--duration-ms <10000-30000>] [--draft] [--no-overlay] [--aspect <portrait|landscape>] [--landscape]",
     );
   }
 
@@ -141,9 +157,20 @@ async function main(): Promise<void> {
     palette,
     seed: stableSeed(trackId),
     track,
+    // Variant flags are written only when non-default so a normal portrait/overlay
+    // render produces the same props.json it always has.
+    ...(hideOverlay ? { hideOverlay: true } : {}),
+    ...(aspect === "landscape" ? { aspect } : {}),
   };
 
-  const propsPath = path.join(OUT_DIR, `${trackId}.props.json`);
+  // Variant renders write to suffixed files so they never clobber the canonical
+  // `<trackId>.{props.json,mp4}` portrait+overlay master that ship reads. `.notext`
+  // for the text-free cut, `.landscape` for the 16:9 cut (combinable). An empty
+  // suffix is the unchanged default path.
+  const variantSuffix = `${hideOverlay ? ".notext" : ""}${aspect === "landscape" ? ".landscape" : ""}`;
+  const isVariant = variantSuffix.length > 0;
+
+  const propsPath = path.join(OUT_DIR, `${trackId}${variantSuffix}.props.json`);
   await writeFile(propsPath, JSON.stringify(inputProps, null, 2));
   console.log(`[social-preview] props -> ${propsPath}`);
 
@@ -191,7 +218,10 @@ async function main(): Promise<void> {
   }
 
   const { render } = await import("./render");
-  const outputPath = path.join(OUT_DIR, draft ? `${trackId}.draft.mp4` : `${trackId}.mp4`);
+  const outputPath = path.join(
+    OUT_DIR,
+    draft ? `${trackId}.draft.mp4` : `${trackId}${variantSuffix}.mp4`,
+  );
   if (draft) {
     console.log(
       `[social-preview] DRAFT render: half-res, fast, NO VBV cap — a NON-SHIPPABLE proof for direction + motion only (run without --draft for the ship-quality master)`,
@@ -222,6 +252,16 @@ async function main(): Promise<void> {
     // draft directly — the beat-pull gate runs on any clip, half-res included.
     console.log(
       `[social-preview] DRAFT done -> ${outputPath} (NON-SHIPPABLE). Eyeball direction + motion, and gate it:\n  bun run --cwd packages/video detect-beat-pull ${path.relative(PACKAGE_ROOT, outputPath)}\nRun without --draft for the ship-quality master.`,
+    );
+    return;
+  }
+
+  if (isVariant) {
+    // The text-free / landscape cuts are staging-only radio.fluncle.com variants:
+    // no render.json (that's the ship pointer for the canonical portrait master,
+    // and ship has no R2 key scheme for variants yet). Eyeball the suffixed file.
+    console.log(
+      `[social-preview] VARIANT done -> ${outputPath} (staging only; no ship pointer written).`,
     );
     return;
   }

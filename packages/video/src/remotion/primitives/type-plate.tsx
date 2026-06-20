@@ -1,4 +1,4 @@
-import { useCurrentFrame, useVideoConfig } from "remotion";
+import { getInputProps, useCurrentFrame, useVideoConfig } from "remotion";
 import { interpolate } from "remotion";
 import { type CosmosTrack } from "../types";
 import { FloatingType } from "./floating-type";
@@ -129,6 +129,13 @@ export const TypePlate: React.FC<TypePlateProps> = ({
 }) => {
   const identity = useEnvelope(identityInSec, identityInSec + holdSec);
   const telemetry = useEnvelope(telemetryInSec, telemetryInSec + holdSec);
+
+  // The text-free cut (radio.fluncle.com): a host UI draws its own metadata over
+  // clean footage. Read from inputProps so it gates every self-contained
+  // composition without touching the composition. Hooks run first (stable order).
+  if ((getInputProps() as { hideOverlay?: boolean }).hideOverlay) {
+    return null;
+  }
 
   const provenance = provenanceLine(track.label, track.releaseDate);
 

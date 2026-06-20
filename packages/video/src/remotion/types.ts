@@ -88,9 +88,34 @@ export type CosmosPalette = {
   swatches: string[];
 };
 
+/**
+ * Render aspect. `portrait` is the unchanged 1080×1920 default (every clip to
+ * date). `landscape` is 1920×1080 for the full-screen radio.fluncle.com surface;
+ * the bespoke 9:16 shaders reflow under it (expected — landscape is scaffold, not
+ * a polished catalogue pass). Resolved to concrete dimensions in `root.tsx`'s
+ * `calculateMetadata`; portrait stays the default when the prop is absent.
+ */
+export type CosmosAspect = "portrait" | "landscape";
+
 export type NostalgicCosmosProps = {
   track: CosmosTrack;
   audio: CosmosAudio;
   palette: CosmosPalette;
   seed: number;
+  /**
+   * Suppress the BAKED-IN information overlay (the TypePlate identity/telemetry
+   * blocks AND the CloseCard sign-off) so a host UI can draw its own metadata
+   * over clean footage — the radio.fluncle.com text-free cut. The scene shader is
+   * untouched; only the type layer is gated. Read at render time via
+   * `getInputProps()` inside TypePlate/CloseCard, so it applies to every
+   * (self-contained) workbench composition without touching the composition.
+   * Default false — the overlay renders as it always has.
+   */
+  hideOverlay?: boolean;
+  /**
+   * Output aspect. Default `portrait` (1080×1920). `landscape` (1920×1080) is the
+   * radio full-screen cut. Consumed by `calculateMetadata`; scenes may read it via
+   * `getInputProps()` if they want to reflow deliberately.
+   */
+  aspect?: CosmosAspect;
 };
