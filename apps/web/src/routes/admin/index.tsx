@@ -29,6 +29,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { GALAXIES, galaxyForVibe } from "@/lib/galaxies";
+import { spotifyAlbumImageAtSize } from "@/lib/media";
 import { type MixtapeDTO, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { readCaptions } from "@/lib/server/captions";
@@ -980,7 +981,7 @@ function FindingCell({ onPreview, row }: { onPreview: () => void; row: BoardRow 
           <img
             alt=""
             className="size-full rounded-md object-cover"
-            src={row.albumImageUrl ?? "/fluncle-cover.png"}
+            src={spotifyAlbumImageAtSize(row.albumImageUrl, "small") ?? "/fluncle-cover.png"}
           />
           <span
             aria-hidden="true"
@@ -993,7 +994,7 @@ function FindingCell({ onPreview, row }: { onPreview: () => void; row: BoardRow 
         <img
           alt=""
           className="size-11 shrink-0 rounded-md object-cover"
-          src={row.albumImageUrl ?? "/fluncle-cover.png"}
+          src={spotifyAlbumImageAtSize(row.albumImageUrl, "small") ?? "/fluncle-cover.png"}
         />
       )}
       <div className="min-w-0">

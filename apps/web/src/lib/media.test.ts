@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { FOUND_BASE, trackMedia, videoPoster, videoRendition } from "./media";
+import {
+  FOUND_BASE,
+  spotifyAlbumImageAtSize,
+  trackMedia,
+  videoPoster,
+  videoRendition,
+} from "./media";
 
 // The Media Transformations URLs are same-zone: the /cdn-cgi/media prefix lives
 // on the found.fluncle.com zone and the source is the master on that same zone,
@@ -41,6 +47,54 @@ describe("videoPoster", () => {
     expect(videoPoster("a/b c")).toBe(
       `${FOUND_BASE}/cdn-cgi/media/mode=frame,time=0s,format=jpg/${FOUND_BASE}/a%2Fb%20c/footage.mp4`,
     );
+  });
+});
+
+// Spotify encodes the pixel size in the image-id PREFIX (ab67616d0000b273 = 640²,
+// ab67616d00001e02 = 300², ab67616d00004851 = 64²). The helper swaps that prefix
+// to right-size a stored cover; these tests pin the codes (verified to resolve on
+// i.scdn.co) and guard the pass-through so a non-Spotify URL is never mangled.
+describe("spotifyAlbumImageAtSize", () => {
+  const HASH = "18c0fd64aad5d4fb51a499b0";
+  const stored = `https://i.scdn.co/image/ab67616d00001e02${HASH}`; // the 300² we store
+
+  it("rewrites the size-code prefix to the small (64²) rendition", () => {
+    expect(spotifyAlbumImageAtSize(stored, "small")).toBe(
+      `https://i.scdn.co/image/ab67616d00004851${HASH}`,
+    );
+  });
+
+  it("rewrites to the large (640²) rendition", () => {
+    expect(spotifyAlbumImageAtSize(stored, "large")).toBe(
+      `https://i.scdn.co/image/ab67616d0000b273${HASH}`,
+    );
+  });
+
+  it("rewrites to the medium (300²) rendition", () => {
+    expect(spotifyAlbumImageAtSize(stored, "medium")).toBe(
+      `https://i.scdn.co/image/ab67616d00001e02${HASH}`,
+    );
+  });
+
+  it("re-sizes whatever source code is stored, not just the 300² variant", () => {
+    const big = `https://i.scdn.co/image/ab67616d0000b273${HASH}`;
+    expect(spotifyAlbumImageAtSize(big, "small")).toBe(
+      `https://i.scdn.co/image/ab67616d00004851${HASH}`,
+    );
+  });
+
+  it("passes a non-Spotify URL through untouched", () => {
+    const deezer = "https://e-cdns-images.dzcdn.net/images/cover/abc/250x250-000000-80-0-0.jpg";
+    expect(spotifyAlbumImageAtSize(deezer, "small")).toBe(deezer);
+  });
+
+  it("passes an unparseable Spotify URL through untouched", () => {
+    const odd = "https://i.scdn.co/image/not-a-cover-id";
+    expect(spotifyAlbumImageAtSize(odd, "small")).toBe(odd);
+  });
+
+  it("returns undefined for an undefined input", () => {
+    expect(spotifyAlbumImageAtSize(undefined, "small")).toBeUndefined();
   });
 });
 

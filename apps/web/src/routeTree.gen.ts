@@ -116,6 +116,8 @@ import { Route as ApiAdminMixtapesMixtapeIdPublishRouteImport } from './routes/a
 import { Route as ApiAdminMixtapesMixtapeIdMembersRouteImport } from './routes/api/admin/mixtapes.$mixtapeId.members'
 import { Route as ApiAdminMixcloudAuthStartRouteImport } from './routes/api/admin/mixcloud/auth/start'
 import { Route as ApiAdminMixcloudAuthCallbackRouteImport } from './routes/api/admin/mixcloud/auth/callback'
+import { Route as ApiAdminLastfmAuthStartRouteImport } from './routes/api/admin/lastfm/auth/start'
+import { Route as ApiAdminLastfmAuthSessionRouteImport } from './routes/api/admin/lastfm/auth/session'
 import { Route as ApiV1AdminYoutubeAuthStartRouteImport } from './routes/api/v1/admin/youtube/auth/start'
 import { Route as ApiV1AdminYoutubeAuthCallbackRouteImport } from './routes/api/v1/admin/youtube/auth/callback'
 import { Route as ApiV1AdminTracksTrackIdVideoRouteImport } from './routes/api/v1/admin/tracks.$trackId.video'
@@ -132,6 +134,8 @@ import { Route as ApiV1AdminMixtapesMixtapeIdPublishRouteImport } from './routes
 import { Route as ApiV1AdminMixtapesMixtapeIdMembersRouteImport } from './routes/api/v1/admin/mixtapes.$mixtapeId.members'
 import { Route as ApiV1AdminMixcloudAuthStartRouteImport } from './routes/api/v1/admin/mixcloud/auth/start'
 import { Route as ApiV1AdminMixcloudAuthCallbackRouteImport } from './routes/api/v1/admin/mixcloud/auth/callback'
+import { Route as ApiV1AdminLastfmAuthStartRouteImport } from './routes/api/v1/admin/lastfm/auth/start'
+import { Route as ApiV1AdminLastfmAuthSessionRouteImport } from './routes/api/v1/admin/lastfm/auth/session'
 import { Route as ApiAdminTracksTrackIdVideoUploadsRouteImport } from './routes/api/admin/tracks.$trackId.video.uploads'
 import { Route as ApiAdminTracksTrackIdVideoFinalizeRouteImport } from './routes/api/admin/tracks.$trackId.video.finalize'
 import { Route as ApiAdminTracksTrackIdSocialPlatformRouteImport } from './routes/api/admin/tracks.$trackId.social.$platform'
@@ -707,6 +711,17 @@ const ApiAdminMixcloudAuthCallbackRoute =
     path: '/api/admin/mixcloud/auth/callback',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiAdminLastfmAuthStartRoute = ApiAdminLastfmAuthStartRouteImport.update({
+  id: '/api/admin/lastfm/auth/start',
+  path: '/api/admin/lastfm/auth/start',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAdminLastfmAuthSessionRoute =
+  ApiAdminLastfmAuthSessionRouteImport.update({
+    id: '/api/admin/lastfm/auth/session',
+    path: '/api/admin/lastfm/auth/session',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiV1AdminYoutubeAuthStartRoute =
   ApiV1AdminYoutubeAuthStartRouteImport.update({
     id: '/api/v1/admin/youtube/auth/start',
@@ -801,6 +816,18 @@ const ApiV1AdminMixcloudAuthCallbackRoute =
   ApiV1AdminMixcloudAuthCallbackRouteImport.update({
     id: '/api/v1/admin/mixcloud/auth/callback',
     path: '/api/v1/admin/mixcloud/auth/callback',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiV1AdminLastfmAuthStartRoute =
+  ApiV1AdminLastfmAuthStartRouteImport.update({
+    id: '/api/v1/admin/lastfm/auth/start',
+    path: '/api/v1/admin/lastfm/auth/start',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiV1AdminLastfmAuthSessionRoute =
+  ApiV1AdminLastfmAuthSessionRouteImport.update({
+    id: '/api/v1/admin/lastfm/auth/session',
+    path: '/api/v1/admin/lastfm/auth/session',
     getParentRoute: () => rootRouteImport,
   } as any)
 const ApiAdminTracksTrackIdVideoUploadsRoute =
@@ -984,6 +1011,8 @@ export interface FileRoutesByFullPath {
   '/api/v1/preview/$idOrLogId': typeof ApiV1PreviewIdOrLogIdRoute
   '/api/v1/tracks/$idOrLogId': typeof ApiV1TracksIdOrLogIdRoute
   '/api/v1/tracks/random': typeof ApiV1TracksRandomRoute
+  '/api/admin/lastfm/auth/session': typeof ApiAdminLastfmAuthSessionRoute
+  '/api/admin/lastfm/auth/start': typeof ApiAdminLastfmAuthStartRoute
   '/api/admin/mixcloud/auth/callback': typeof ApiAdminMixcloudAuthCallbackRoute
   '/api/admin/mixcloud/auth/start': typeof ApiAdminMixcloudAuthStartRoute
   '/api/admin/mixtapes/$mixtapeId/members': typeof ApiAdminMixtapesMixtapeIdMembersRoute
@@ -1015,6 +1044,8 @@ export interface FileRoutesByFullPath {
   '/api/admin/tracks/$trackId/social/$platform': typeof ApiAdminTracksTrackIdSocialPlatformRouteWithChildren
   '/api/admin/tracks/$trackId/video/finalize': typeof ApiAdminTracksTrackIdVideoFinalizeRoute
   '/api/admin/tracks/$trackId/video/uploads': typeof ApiAdminTracksTrackIdVideoUploadsRoute
+  '/api/v1/admin/lastfm/auth/session': typeof ApiV1AdminLastfmAuthSessionRoute
+  '/api/v1/admin/lastfm/auth/start': typeof ApiV1AdminLastfmAuthStartRoute
   '/api/v1/admin/mixcloud/auth/callback': typeof ApiV1AdminMixcloudAuthCallbackRoute
   '/api/v1/admin/mixcloud/auth/start': typeof ApiV1AdminMixcloudAuthStartRoute
   '/api/v1/admin/mixtapes/$mixtapeId/members': typeof ApiV1AdminMixtapesMixtapeIdMembersRoute
@@ -1123,6 +1154,8 @@ export interface FileRoutesByTo {
   '/api/v1/preview/$idOrLogId': typeof ApiV1PreviewIdOrLogIdRoute
   '/api/v1/tracks/$idOrLogId': typeof ApiV1TracksIdOrLogIdRoute
   '/api/v1/tracks/random': typeof ApiV1TracksRandomRoute
+  '/api/admin/lastfm/auth/session': typeof ApiAdminLastfmAuthSessionRoute
+  '/api/admin/lastfm/auth/start': typeof ApiAdminLastfmAuthStartRoute
   '/api/admin/mixcloud/auth/callback': typeof ApiAdminMixcloudAuthCallbackRoute
   '/api/admin/mixcloud/auth/start': typeof ApiAdminMixcloudAuthStartRoute
   '/api/admin/mixtapes/$mixtapeId/members': typeof ApiAdminMixtapesMixtapeIdMembersRoute
@@ -1154,6 +1187,8 @@ export interface FileRoutesByTo {
   '/api/admin/tracks/$trackId/social/$platform': typeof ApiAdminTracksTrackIdSocialPlatformRouteWithChildren
   '/api/admin/tracks/$trackId/video/finalize': typeof ApiAdminTracksTrackIdVideoFinalizeRoute
   '/api/admin/tracks/$trackId/video/uploads': typeof ApiAdminTracksTrackIdVideoUploadsRoute
+  '/api/v1/admin/lastfm/auth/session': typeof ApiV1AdminLastfmAuthSessionRoute
+  '/api/v1/admin/lastfm/auth/start': typeof ApiV1AdminLastfmAuthStartRoute
   '/api/v1/admin/mixcloud/auth/callback': typeof ApiV1AdminMixcloudAuthCallbackRoute
   '/api/v1/admin/mixcloud/auth/start': typeof ApiV1AdminMixcloudAuthStartRoute
   '/api/v1/admin/mixtapes/$mixtapeId/members': typeof ApiV1AdminMixtapesMixtapeIdMembersRoute
@@ -1265,6 +1300,8 @@ export interface FileRoutesById {
   '/api/v1/preview/$idOrLogId': typeof ApiV1PreviewIdOrLogIdRoute
   '/api/v1/tracks/$idOrLogId': typeof ApiV1TracksIdOrLogIdRoute
   '/api/v1/tracks/random': typeof ApiV1TracksRandomRoute
+  '/api/admin/lastfm/auth/session': typeof ApiAdminLastfmAuthSessionRoute
+  '/api/admin/lastfm/auth/start': typeof ApiAdminLastfmAuthStartRoute
   '/api/admin/mixcloud/auth/callback': typeof ApiAdminMixcloudAuthCallbackRoute
   '/api/admin/mixcloud/auth/start': typeof ApiAdminMixcloudAuthStartRoute
   '/api/admin/mixtapes/$mixtapeId/members': typeof ApiAdminMixtapesMixtapeIdMembersRoute
@@ -1296,6 +1333,8 @@ export interface FileRoutesById {
   '/api/admin/tracks/$trackId/social/$platform': typeof ApiAdminTracksTrackIdSocialPlatformRouteWithChildren
   '/api/admin/tracks/$trackId/video/finalize': typeof ApiAdminTracksTrackIdVideoFinalizeRoute
   '/api/admin/tracks/$trackId/video/uploads': typeof ApiAdminTracksTrackIdVideoUploadsRoute
+  '/api/v1/admin/lastfm/auth/session': typeof ApiV1AdminLastfmAuthSessionRoute
+  '/api/v1/admin/lastfm/auth/start': typeof ApiV1AdminLastfmAuthStartRoute
   '/api/v1/admin/mixcloud/auth/callback': typeof ApiV1AdminMixcloudAuthCallbackRoute
   '/api/v1/admin/mixcloud/auth/start': typeof ApiV1AdminMixcloudAuthStartRoute
   '/api/v1/admin/mixtapes/$mixtapeId/members': typeof ApiV1AdminMixtapesMixtapeIdMembersRoute
@@ -1408,6 +1447,8 @@ export interface FileRouteTypes {
     | '/api/v1/preview/$idOrLogId'
     | '/api/v1/tracks/$idOrLogId'
     | '/api/v1/tracks/random'
+    | '/api/admin/lastfm/auth/session'
+    | '/api/admin/lastfm/auth/start'
     | '/api/admin/mixcloud/auth/callback'
     | '/api/admin/mixcloud/auth/start'
     | '/api/admin/mixtapes/$mixtapeId/members'
@@ -1439,6 +1480,8 @@ export interface FileRouteTypes {
     | '/api/admin/tracks/$trackId/social/$platform'
     | '/api/admin/tracks/$trackId/video/finalize'
     | '/api/admin/tracks/$trackId/video/uploads'
+    | '/api/v1/admin/lastfm/auth/session'
+    | '/api/v1/admin/lastfm/auth/start'
     | '/api/v1/admin/mixcloud/auth/callback'
     | '/api/v1/admin/mixcloud/auth/start'
     | '/api/v1/admin/mixtapes/$mixtapeId/members'
@@ -1547,6 +1590,8 @@ export interface FileRouteTypes {
     | '/api/v1/preview/$idOrLogId'
     | '/api/v1/tracks/$idOrLogId'
     | '/api/v1/tracks/random'
+    | '/api/admin/lastfm/auth/session'
+    | '/api/admin/lastfm/auth/start'
     | '/api/admin/mixcloud/auth/callback'
     | '/api/admin/mixcloud/auth/start'
     | '/api/admin/mixtapes/$mixtapeId/members'
@@ -1578,6 +1623,8 @@ export interface FileRouteTypes {
     | '/api/admin/tracks/$trackId/social/$platform'
     | '/api/admin/tracks/$trackId/video/finalize'
     | '/api/admin/tracks/$trackId/video/uploads'
+    | '/api/v1/admin/lastfm/auth/session'
+    | '/api/v1/admin/lastfm/auth/start'
     | '/api/v1/admin/mixcloud/auth/callback'
     | '/api/v1/admin/mixcloud/auth/start'
     | '/api/v1/admin/mixtapes/$mixtapeId/members'
@@ -1688,6 +1735,8 @@ export interface FileRouteTypes {
     | '/api/v1/preview/$idOrLogId'
     | '/api/v1/tracks/$idOrLogId'
     | '/api/v1/tracks/random'
+    | '/api/admin/lastfm/auth/session'
+    | '/api/admin/lastfm/auth/start'
     | '/api/admin/mixcloud/auth/callback'
     | '/api/admin/mixcloud/auth/start'
     | '/api/admin/mixtapes/$mixtapeId/members'
@@ -1719,6 +1768,8 @@ export interface FileRouteTypes {
     | '/api/admin/tracks/$trackId/social/$platform'
     | '/api/admin/tracks/$trackId/video/finalize'
     | '/api/admin/tracks/$trackId/video/uploads'
+    | '/api/v1/admin/lastfm/auth/session'
+    | '/api/v1/admin/lastfm/auth/start'
     | '/api/v1/admin/mixcloud/auth/callback'
     | '/api/v1/admin/mixcloud/auth/start'
     | '/api/v1/admin/mixtapes/$mixtapeId/members'
@@ -1800,6 +1851,8 @@ export interface RootRouteChildren {
   ApiV1MixtapeCoverLogIdRoute: typeof ApiV1MixtapeCoverLogIdRoute
   ApiV1OgLogIdRoute: typeof ApiV1OgLogIdRoute
   ApiV1PreviewIdOrLogIdRoute: typeof ApiV1PreviewIdOrLogIdRoute
+  ApiAdminLastfmAuthSessionRoute: typeof ApiAdminLastfmAuthSessionRoute
+  ApiAdminLastfmAuthStartRoute: typeof ApiAdminLastfmAuthStartRoute
   ApiAdminMixcloudAuthCallbackRoute: typeof ApiAdminMixcloudAuthCallbackRoute
   ApiAdminMixcloudAuthStartRoute: typeof ApiAdminMixcloudAuthStartRoute
   ApiAdminSpotifyAuthCallbackRoute: typeof ApiAdminSpotifyAuthCallbackRoute
@@ -1809,6 +1862,8 @@ export interface RootRouteChildren {
   ApiAdminYoutubeAuthStartRoute: typeof ApiAdminYoutubeAuthStartRoute
   ApiV1AdminMixcloudTokenRoute: typeof ApiV1AdminMixcloudTokenRoute
   ApiV1AdminYoutubeTokenRoute: typeof ApiV1AdminYoutubeTokenRoute
+  ApiV1AdminLastfmAuthSessionRoute: typeof ApiV1AdminLastfmAuthSessionRoute
+  ApiV1AdminLastfmAuthStartRoute: typeof ApiV1AdminLastfmAuthStartRoute
   ApiV1AdminMixcloudAuthCallbackRoute: typeof ApiV1AdminMixcloudAuthCallbackRoute
   ApiV1AdminMixcloudAuthStartRoute: typeof ApiV1AdminMixcloudAuthStartRoute
   ApiV1AdminSpotifyAuthCallbackRoute: typeof ApiV1AdminSpotifyAuthCallbackRoute
@@ -2569,6 +2624,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminMixcloudAuthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/admin/lastfm/auth/start': {
+      id: '/api/admin/lastfm/auth/start'
+      path: '/api/admin/lastfm/auth/start'
+      fullPath: '/api/admin/lastfm/auth/start'
+      preLoaderRoute: typeof ApiAdminLastfmAuthStartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/lastfm/auth/session': {
+      id: '/api/admin/lastfm/auth/session'
+      path: '/api/admin/lastfm/auth/session'
+      fullPath: '/api/admin/lastfm/auth/session'
+      preLoaderRoute: typeof ApiAdminLastfmAuthSessionRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/v1/admin/youtube/auth/start': {
       id: '/api/v1/admin/youtube/auth/start'
       path: '/api/v1/admin/youtube/auth/start'
@@ -2679,6 +2748,20 @@ declare module '@tanstack/react-router' {
       path: '/api/v1/admin/mixcloud/auth/callback'
       fullPath: '/api/v1/admin/mixcloud/auth/callback'
       preLoaderRoute: typeof ApiV1AdminMixcloudAuthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/admin/lastfm/auth/start': {
+      id: '/api/v1/admin/lastfm/auth/start'
+      path: '/api/v1/admin/lastfm/auth/start'
+      fullPath: '/api/v1/admin/lastfm/auth/start'
+      preLoaderRoute: typeof ApiV1AdminLastfmAuthStartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/admin/lastfm/auth/session': {
+      id: '/api/v1/admin/lastfm/auth/session'
+      path: '/api/v1/admin/lastfm/auth/session'
+      fullPath: '/api/v1/admin/lastfm/auth/session'
+      preLoaderRoute: typeof ApiV1AdminLastfmAuthSessionRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/admin/tracks/$trackId/video/uploads': {
@@ -3336,6 +3419,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiV1MixtapeCoverLogIdRoute: ApiV1MixtapeCoverLogIdRoute,
   ApiV1OgLogIdRoute: ApiV1OgLogIdRoute,
   ApiV1PreviewIdOrLogIdRoute: ApiV1PreviewIdOrLogIdRoute,
+  ApiAdminLastfmAuthSessionRoute: ApiAdminLastfmAuthSessionRoute,
+  ApiAdminLastfmAuthStartRoute: ApiAdminLastfmAuthStartRoute,
   ApiAdminMixcloudAuthCallbackRoute: ApiAdminMixcloudAuthCallbackRoute,
   ApiAdminMixcloudAuthStartRoute: ApiAdminMixcloudAuthStartRoute,
   ApiAdminSpotifyAuthCallbackRoute: ApiAdminSpotifyAuthCallbackRoute,
@@ -3345,6 +3430,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAdminYoutubeAuthStartRoute: ApiAdminYoutubeAuthStartRoute,
   ApiV1AdminMixcloudTokenRoute: ApiV1AdminMixcloudTokenRoute,
   ApiV1AdminYoutubeTokenRoute: ApiV1AdminYoutubeTokenRoute,
+  ApiV1AdminLastfmAuthSessionRoute: ApiV1AdminLastfmAuthSessionRoute,
+  ApiV1AdminLastfmAuthStartRoute: ApiV1AdminLastfmAuthStartRoute,
   ApiV1AdminMixcloudAuthCallbackRoute: ApiV1AdminMixcloudAuthCallbackRoute,
   ApiV1AdminMixcloudAuthStartRoute: ApiV1AdminMixcloudAuthStartRoute,
   ApiV1AdminSpotifyAuthCallbackRoute: ApiV1AdminSpotifyAuthCallbackRoute,

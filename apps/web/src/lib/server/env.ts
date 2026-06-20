@@ -47,6 +47,13 @@ const envKeys = [
   // runtime, so it's derived from the request origin (mixcloudRedirectUri).
   "MIXCLOUD_CLIENT_ID",
   "MIXCLOUD_CLIENT_SECRET",
+  // Last.fm write side (love-on-add). API_KEY + SHARED_SECRET come from the
+  // Last.fm API application; SESSION_KEY (durable, non-expiring) comes from
+  // running `fluncle admin auth lastfm`. All three are Worker secrets. The love
+  // hook no-ops when SESSION_KEY is absent, so the publish path works unprovisioned.
+  "LASTFM_API_KEY",
+  "LASTFM_SHARED_SECRET",
+  "LASTFM_SESSION_KEY",
   "TELEGRAM_BOT_TOKEN",
   "TELEGRAM_CHANNEL_ID",
   "DISCORD_WEBHOOK_URL",
@@ -56,6 +63,15 @@ const envKeys = [
   // track enrichment fires on add via runs.create.
   "SPINUP_ENRICH_AGENT_ID",
   "SPINUP_ENRICH_AGENT_KEY",
+  // Cloudflare cache purge-by-URL (lib/server/edge-cache.ts): when a finding is
+  // published or updated, the Worker drops its `/log/<id>` page + the `/log` index
+  // from the edge cache globally. Both OPTIONAL — absent, the purge degrades to a
+  // local (this-data-center) eviction plus the short fresh window. CF_CACHE_PURGE_ZONE_ID
+  // is the fluncle.com zone id (non-secret); CF_CACHE_PURGE_TOKEN is an API token
+  // scoped to Zone → Cache Purge on that zone (a secret). Read off the Worker `env`
+  // binding directly in edge-cache.ts, not via readEnv (they may be unset).
+  "CF_CACHE_PURGE_ZONE_ID",
+  "CF_CACHE_PURGE_TOKEN",
 ] as const;
 
 export type EnvKey = (typeof envKeys)[number];

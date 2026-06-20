@@ -9,6 +9,7 @@
 import { type MixtapeSocialPostItem } from "@fluncle/contracts";
 import { type MixtapeDTO } from "../mixtapes";
 import { getDb, typedRows } from "./db";
+import { purgeLogCache } from "./edge-cache";
 import { getMixtapeById } from "./mixtapes";
 
 export type { MixtapeSocialPostItem };
@@ -133,7 +134,11 @@ export async function finalizeMixtapeDistribution(
     "write",
   );
 
-  return getMixtapeById(mixtapeId, { includeDrafts: true });
+  // A new listen link changes the published mixtape's `/log` page; drop it from cache.
+  const mixtape = await getMixtapeById(mixtapeId, { includeDrafts: true });
+  purgeLogCache(mixtape.logId);
+
+  return mixtape;
 }
 
 // A distribution change alters the mixtape's public surfaces (the published rows

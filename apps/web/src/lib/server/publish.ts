@@ -7,6 +7,8 @@ import { formatDuration } from "../format";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow } from "./db";
 import { enrichFromDeezer, lookupIsrcFromDeezer } from "./deezer";
+import { purgeLogCache } from "./edge-cache";
+import { lastfmLove } from "./lastfm";
 import { resolveLogId } from "./log-id";
 import { formatError, withRetries } from "./retry";
 import {
@@ -235,6 +237,15 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
       `Telegram posted, but the database update failed.\n${formatError(error)}`,
     );
   }
+
+  // A new finding now sits at the top of the `/log` index (and owns its own
+  // coordinate page): drop both from the edge cache so they re-render with it.
+  purgeLogCache(logId);
+  // Best-effort endorsement: love the finding on Last.fm (a Loved Track, not a
+  // scrobble — see lastfm.ts / the RFC). A single signed HTTPS call, Worker-safe.
+  // Never blocks or fails the add — same side-channel discipline as Deezer/Telegram:
+  // lastfmLove swallows its own errors and no-ops when Last.fm isn't provisioned.
+  await lastfmLove(track.artists[0] ?? track.artists.join(", "), track.title);
 
   const message = `Banger logged
 

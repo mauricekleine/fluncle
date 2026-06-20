@@ -3,7 +3,7 @@ import { siSpotify, siTiktok } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
 import { Button } from "@/components/ui/button";
 import { formatDate } from "@/lib/format";
-import { trackMedia, videoPoster, videoRendition } from "@/lib/media";
+import { spotifyAlbumImageAtSize, trackMedia, videoPoster, videoRendition } from "@/lib/media";
 import { type Track } from "@/lib/tracks";
 import { useResponsiveWidth } from "@/lib/use-responsive-width";
 
@@ -57,7 +57,9 @@ export function StoryView({
   const [framePosterFailed, setFramePosterFailed] = useState(false);
   const framePoster = track.logId && !framePosterFailed ? videoPoster(track.logId) : undefined;
   const posterUrl =
-    framePoster ?? (!posterFailed ? media?.posterUrl : undefined) ?? track.albumImageUrl;
+    framePoster ??
+    (!posterFailed ? media?.posterUrl : undefined) ??
+    spotifyAlbumImageAtSize(track.albumImageUrl, "large");
 
   useEffect(() => {
     if (!framePoster) {

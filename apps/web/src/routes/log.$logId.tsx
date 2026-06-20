@@ -23,7 +23,7 @@ import {
   mixtapeAlbumJsonLd,
   musicRecordingJsonLd,
 } from "@/lib/log-schema";
-import { trackMedia } from "@/lib/media";
+import { spotifyAlbumImageAtSize, trackMedia } from "@/lib/media";
 import { type MixtapeDTO, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { resolveLogPageTarget } from "@/lib/server/log-resolver";
 import {
@@ -140,7 +140,7 @@ function logHead(loaderData: LogPageData | undefined) {
   const pageUrl = logPageUrl(logId);
   const title = `${logId} · ${artistTitleLine(track)} · Fluncle`;
   const description = definitionalSentences({ ...track, logId });
-  const imageUrl = track.albumImageUrl ?? media.coverUrl;
+  const imageUrl = spotifyAlbumImageAtSize(track.albumImageUrl, "large") ?? media.coverUrl;
   const recording = musicRecordingJsonLd({ ...track, logId }, imageUrl);
   // The social card: the per-finding OG image (the poster frame + treatment),
   // versioned by `updatedAt` so a re-enriched finding re-renders (the /api/og
@@ -410,9 +410,9 @@ function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
         <img
           alt={mixtape.title}
           className="log-mixtape-cover"
-          height={1500}
-          src={mixtapeCoverUrl(logId, "square")}
-          width={1500}
+          height={640}
+          src={mixtapeCoverUrl(logId, "card")}
+          width={640}
         />
 
         <header className="log-masthead">
