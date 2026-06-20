@@ -131,6 +131,7 @@ type MixtapeDistributeOptions = {
   audio?: string;
   json: boolean;
   mixcloud?: boolean;
+  unlisted?: boolean;
   video?: string;
   youtube?: boolean;
 };
@@ -546,6 +547,10 @@ function addAdminCommands(program: Command): void {
     .option("--audio <file>", "Audio file for Mixcloud")
     .option("--youtube", "Only distribute to YouTube")
     .option("--mixcloud", "Only distribute to Mixcloud")
+    .option(
+      "--unlisted",
+      "Keep Mixcloud private too (YouTube is always unlisted until publish-youtube)",
+    )
     .option("--json", "Print JSON", false)
     .allowExcessArguments()
     .action(async (idOrLogId: string | undefined, options: MixtapeDistributeOptions) => {

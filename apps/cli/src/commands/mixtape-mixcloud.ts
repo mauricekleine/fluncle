@@ -33,6 +33,7 @@ export async function distributeMixcloud(
   mixtapeId: string,
   audioPath: string,
   onProgress?: (message: string) => void,
+  unlisted = false,
 ): Promise<MixcloudDistributeResult> {
   const token = await fetchMixcloudToken();
   const mixtape = await mixtapeGetCommand(mixtapeId);
@@ -71,6 +72,14 @@ export async function distributeMixcloud(
     form.append(`sections-${index}-artist`, section.artist);
     form.append(`sections-${index}-song`, section.song);
     form.append(`sections-${index}-start_time`, String(section.start_time));
+  }
+
+  // Mixcloud's default is a public (listed) cloudcast — the licensed home publishes
+  // listed. `--unlisted` keeps it private (for a test run, or a cautious first
+  // upload to flip live by hand afterward).
+  if (unlisted) {
+    form.append("unlisted", "1");
+    onProgress?.("Mixcloud: uploading UNLISTED (private).");
   }
 
   const cuelessCount = mixtape.members.length - sections.length;

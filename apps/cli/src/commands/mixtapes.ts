@@ -119,6 +119,7 @@ export type MixtapeDistributeOptions = {
   audio?: string;
   json: boolean;
   mixcloud?: boolean;
+  unlisted?: boolean;
   video?: string;
   youtube?: boolean;
 };
@@ -192,7 +193,12 @@ export async function mixtapeDistributeCommand(
   if (doMixcloud) {
     onProgress("Mixcloud: uploading audio…");
     const { distributeMixcloud } = await import("./mixtape-mixcloud");
-    const result = await distributeMixcloud(mixtapeId, options.audio!, onProgress);
+    const result = await distributeMixcloud(
+      mixtapeId,
+      options.audio!,
+      onProgress,
+      options.unlisted,
+    );
     results.push({ platform: "mixcloud", url: result.url });
     onProgress(`Mixcloud: ${result.url}`);
   }
