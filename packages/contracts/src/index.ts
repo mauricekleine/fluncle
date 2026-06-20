@@ -124,6 +124,8 @@ export type MixtapeDTO = {
   memberCount: number;
   members: MixtapeMember[];
   note?: string;
+  /** Scheduled date/time (ISO) of an upcoming live session; surfaces in /calendar.ics. */
+  plannedFor?: string;
   publishedAt?: string;
   recordedAt?: string;
   sequenceNumber?: number;

@@ -1,0 +1,1 @@
+ALTER TABLE `mixtapes` ADD `planned_for` text;

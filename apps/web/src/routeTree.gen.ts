@@ -15,6 +15,7 @@ import { Route as PodcastDotxmlRouteImport } from './routes/podcast[.]xml'
 import { Route as GalaxyRouteImport } from './routes/galaxy'
 import { Route as FeedDotjsonRouteImport } from './routes/feed[.]json'
 import { Route as DocsRouteImport } from './routes/docs'
+import { Route as CalendarDoticsRouteImport } from './routes/calendar[.]ics'
 import { Route as AtomDotxmlRouteImport } from './routes/atom[.]xml'
 import { Route as AccountRouteImport } from './routes/account'
 import { Route as AboutRouteImport } from './routes/about'
@@ -173,6 +174,11 @@ const FeedDotjsonRoute = FeedDotjsonRouteImport.update({
 const DocsRoute = DocsRouteImport.update({
   id: '/docs',
   path: '/docs',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CalendarDoticsRoute = CalendarDoticsRouteImport.update({
+  id: '/calendar.ics',
+  path: '/calendar.ics',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AtomDotxmlRoute = AtomDotxmlRouteImport.update({
@@ -880,6 +886,7 @@ export interface FileRoutesByFullPath {
   '/about': typeof AboutRoute
   '/account': typeof AccountRoute
   '/atom.xml': typeof AtomDotxmlRoute
+  '/calendar.ics': typeof CalendarDoticsRoute
   '/docs': typeof DocsRouteWithChildren
   '/feed.json': typeof FeedDotjsonRoute
   '/galaxy': typeof GalaxyRoute
@@ -1016,6 +1023,7 @@ export interface FileRoutesByTo {
   '/about': typeof AboutRoute
   '/account': typeof AccountRoute
   '/atom.xml': typeof AtomDotxmlRoute
+  '/calendar.ics': typeof CalendarDoticsRoute
   '/feed.json': typeof FeedDotjsonRoute
   '/galaxy': typeof GalaxyRoute
   '/podcast.xml': typeof PodcastDotxmlRoute
@@ -1153,6 +1161,7 @@ export interface FileRoutesById {
   '/about': typeof AboutRoute
   '/account': typeof AccountRoute
   '/atom.xml': typeof AtomDotxmlRoute
+  '/calendar.ics': typeof CalendarDoticsRoute
   '/docs': typeof DocsRouteWithChildren
   '/feed.json': typeof FeedDotjsonRoute
   '/galaxy': typeof GalaxyRoute
@@ -1292,6 +1301,7 @@ export interface FileRouteTypes {
     | '/about'
     | '/account'
     | '/atom.xml'
+    | '/calendar.ics'
     | '/docs'
     | '/feed.json'
     | '/galaxy'
@@ -1428,6 +1438,7 @@ export interface FileRouteTypes {
     | '/about'
     | '/account'
     | '/atom.xml'
+    | '/calendar.ics'
     | '/feed.json'
     | '/galaxy'
     | '/podcast.xml'
@@ -1564,6 +1575,7 @@ export interface FileRouteTypes {
     | '/about'
     | '/account'
     | '/atom.xml'
+    | '/calendar.ics'
     | '/docs'
     | '/feed.json'
     | '/galaxy'
@@ -1702,6 +1714,7 @@ export interface RootRouteChildren {
   AboutRoute: typeof AboutRoute
   AccountRoute: typeof AccountRoute
   AtomDotxmlRoute: typeof AtomDotxmlRoute
+  CalendarDoticsRoute: typeof CalendarDoticsRoute
   DocsRoute: typeof DocsRouteWithChildren
   FeedDotjsonRoute: typeof FeedDotjsonRoute
   GalaxyRoute: typeof GalaxyRoute
@@ -1808,6 +1821,13 @@ declare module '@tanstack/react-router' {
       path: '/docs'
       fullPath: '/docs'
       preLoaderRoute: typeof DocsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/calendar.ics': {
+      id: '/calendar.ics'
+      path: '/calendar.ics'
+      fullPath: '/calendar.ics'
+      preLoaderRoute: typeof CalendarDoticsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/atom.xml': {
@@ -3204,6 +3224,7 @@ const rootRouteChildren: RootRouteChildren = {
   AboutRoute: AboutRoute,
   AccountRoute: AccountRoute,
   AtomDotxmlRoute: AtomDotxmlRoute,
+  CalendarDoticsRoute: CalendarDoticsRoute,
   DocsRoute: DocsRouteWithChildren,
   FeedDotjsonRoute: FeedDotjsonRoute,
   GalaxyRoute: GalaxyRoute,

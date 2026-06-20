@@ -333,6 +333,11 @@ export const mixtapes = sqliteTable("mixtapes", {
   logId: text("log_id").unique(),
   mixcloudUrl: text("mixcloud_url"),
   note: text("note"),
+  // The scheduled date/time (ISO) of an upcoming live session this mixtape is the
+  // draft of — distinct from `recorded_at` (which is what publish derives the Log
+  // ID sector from). A future `planned_for` surfaces the mixtape as an upcoming
+  // event in the subscribe-able /calendar.ics, even while it's still a draft.
+  plannedFor: text("planned_for"),
   publishedAt: text("published_at"),
   recordedAt: text("recorded_at"),
   sequenceNumber: integer("sequence_number").unique(),

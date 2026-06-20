@@ -30,6 +30,7 @@ type MixtapeRow = {
   member_count: number | null;
   mixcloud_url: string | null;
   note: string | null;
+  planned_for: string | null;
   published_at: string | null;
   recorded_at: string | null;
   sequence_number: number | null;
@@ -55,6 +56,7 @@ export type MixtapeInput = {
   durationMs?: unknown;
   mixcloudUrl?: unknown;
   note?: unknown;
+  plannedFor?: unknown;
   recordedAt?: unknown;
   soundcloudUrl?: unknown;
   youtubeUrl?: unknown;
@@ -83,13 +85,14 @@ export async function createMixtape(input: MixtapeInput): Promise<MixtapeDTO> {
       fields.youtubeUrl ?? null,
       fields.soundcloudUrl ?? null,
       fields.recordedAt ?? null,
+      fields.plannedFor ?? null,
       now,
       now,
     ],
     sql: `insert into mixtapes (
         id, status, title, duration_ms, note,
-        mixcloud_url, youtube_url, soundcloud_url, recorded_at, created_at, updated_at
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        mixcloud_url, youtube_url, soundcloud_url, recorded_at, planned_for, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 
   return getMixtapeById(id, { includeDrafts: true });
@@ -137,6 +140,7 @@ export async function updateMixtape(id: string, input: MixtapeInput): Promise<Mi
     ["youtube_url", fields.youtubeUrl],
     ["soundcloud_url", fields.soundcloudUrl],
     ["recorded_at", fields.recordedAt],
+    ["planned_for", fields.plannedFor],
   ] as const) {
     if (value !== undefined) {
       sets.push(`${column} = ?`);
@@ -440,6 +444,32 @@ export async function listMixtapes({
     : rows.map((row) => rowToMixtape(row));
 }
 
+/**
+ * The mixtapes the subscribe-able /calendar.ics surfaces:
+ *   - every `published` mixtape (a past event, dated by recorded_at), and
+ *   - any mixtape with a FUTURE `planned_for` — including drafts, which is the
+ *     intended teaser: an upcoming live session announced before it's recorded.
+ *
+ * A draft WITHOUT `planned_for` stays fully hidden (it's neither published nor
+ * future-planned), so the calendar never leaks unannounced drafts. Members are
+ * hydrated so the .ics description can carry the tracklist.
+ */
+export async function listCalendarMixtapes(nowIso: string): Promise<MixtapeDTO[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [nowIso],
+    sql: `${MIXTAPE_SELECT}
+          where m.status = 'published'
+             or (m.planned_for is not null and m.planned_for > ?)
+          order by coalesce(m.planned_for, m.recorded_at, m.added_at, m.created_at) asc, m.id asc
+          limit 108`,
+  });
+
+  const rows = typedRows<MixtapeRow>(result.rows);
+
+  return Promise.all(rows.map(hydrateMixtape));
+}
+
 const MIXTAPE_SELECT = `select
   m.id,
   m.status,
@@ -453,6 +483,7 @@ const MIXTAPE_SELECT = `select
   m.soundcloud_url,
   m.added_at,
   m.recorded_at,
+  m.planned_for,
   m.published_at,
   m.created_at,
   m.updated_at,
@@ -488,6 +519,7 @@ function validateMixtapeInput(input: MixtapeInput): {
   durationMs?: number | null;
   mixcloudUrl?: string | null;
   note?: string | null;
+  plannedFor?: string | null;
   recordedAt?: string | null;
   soundcloudUrl?: string | null;
   youtubeUrl?: string | null;
@@ -496,7 +528,8 @@ function validateMixtapeInput(input: MixtapeInput): {
     durationMs: optionalInteger(input.durationMs, "durationMs"),
     mixcloudUrl: optionalUrl(input.mixcloudUrl),
     note: optionalText(input.note, noteMaxLength),
-    recordedAt: optionalIsoDate(input.recordedAt),
+    plannedFor: optionalIsoDate(input.plannedFor, "plannedFor"),
+    recordedAt: optionalIsoDate(input.recordedAt, "recordedAt"),
     soundcloudUrl: optionalUrl(input.soundcloudUrl),
     youtubeUrl: optionalUrl(input.youtubeUrl),
   };
@@ -548,7 +581,7 @@ function optionalInteger(value: unknown, field: string): number | null | undefin
   return number;
 }
 
-function optionalIsoDate(value: unknown): string | null | undefined {
+function optionalIsoDate(value: unknown, field: string): string | null | undefined {
   const text = optionalText(value, 80);
 
   if (text === undefined || text === null) {
@@ -558,7 +591,7 @@ function optionalIsoDate(value: unknown): string | null | undefined {
   const date = new Date(text);
 
   if (Number.isNaN(date.getTime())) {
-    throw new ApiError("invalid_date", "recordedAt must be a valid date", 400);
+    throw new ApiError("invalid_date", `${field} must be a valid date`, 400);
   }
 
   return date.toISOString();

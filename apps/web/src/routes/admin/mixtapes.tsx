@@ -227,6 +227,7 @@ function MixtapeEditor({
   const bodyId = useId();
   const [note, setNote] = useState(mixtape.note ?? "");
   const [recordedAt, setRecordedAt] = useState(mixtape.recordedAt?.slice(0, 10) ?? "");
+  const [plannedFor, setPlannedFor] = useState(toLocalDateTime(mixtape.plannedFor));
   const [durationField, setDurationField] = useState(formatDurationField(mixtape.durationMs));
   const [mixcloudUrl, setMixcloudUrl] = useState(mixtape.externalUrls.mixcloud ?? "");
   const [youtubeUrl, setYoutubeUrl] = useState(mixtape.externalUrls.youtube ?? "");
@@ -247,6 +248,7 @@ function MixtapeEditor({
     members,
     mixcloudUrl,
     note,
+    plannedFor,
     recordedAt,
     soundcloudUrl,
     youtubeUrl,
@@ -257,6 +259,7 @@ function MixtapeEditor({
       members,
       mixcloudUrl,
       note,
+      plannedFor,
       recordedAt,
       soundcloudUrl,
       youtubeUrl,
@@ -274,6 +277,9 @@ function MixtapeEditor({
     }
     if (local.recordedAt === (prev.recordedAt?.slice(0, 10) ?? "")) {
       setRecordedAt(mixtape.recordedAt?.slice(0, 10) ?? "");
+    }
+    if (local.plannedFor === toLocalDateTime(prev.plannedFor)) {
+      setPlannedFor(toLocalDateTime(mixtape.plannedFor));
     }
     if (local.durationField === formatDurationField(prev.durationMs)) {
       setDurationField(formatDurationField(mixtape.durationMs));
@@ -332,6 +338,7 @@ function MixtapeEditor({
         durationMs: parsedDurationMs,
         mixcloudUrl,
         note,
+        plannedFor: fromLocalDateTime(plannedFor),
         recordedAt,
         soundcloudUrl,
         youtubeUrl,
@@ -411,6 +418,13 @@ function MixtapeEditor({
               type="date"
               value={recordedAt}
               onChange={setRecordedAt}
+            />
+            <Field
+              hint="Set a future live session to announce it on /calendar.ics. Clear to hide."
+              label="Live session"
+              type="datetime-local"
+              value={plannedFor}
+              onChange={setPlannedFor}
             />
             <Field
               hint={
@@ -1020,6 +1034,31 @@ function usePrefersReducedMotion(): boolean {
     return () => media.removeEventListener("change", onChange);
   }, []);
   return reduced;
+}
+
+// An ISO instant → the `datetime-local` input's value (local wall-clock, no zone,
+// minute precision). Empty string when unset.
+function toLocalDateTime(iso?: string): string {
+  if (!iso) {
+    return "";
+  }
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+// The `datetime-local` value (local wall-clock) → an ISO instant for the API.
+// Empty string clears the field (server stores null).
+function fromLocalDateTime(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return "";
+  }
+  const date = new Date(trimmed);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
 }
 
 function toMemberRef(member: MixtapeDTO["members"][number]): MemberRef {

@@ -148,6 +148,13 @@
       "when": 1781935161654,
       "tag": "0020_jazzy_otto_octavius",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1781948970565,
+      "tag": "0021_deep_giant_man",
+      "breakpoints": true
     }
   ]
 }
