@@ -11,11 +11,8 @@ import {
   siYoutube,
 } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
-import { CliInstallDialog } from "@/components/cli-install-dialog";
-import { McpConnectDialog } from "@/components/mcp-connect-dialog";
 import { SubmitTrackDialog } from "@/components/submit-track-dialog";
 import { SubscribeDialog } from "@/components/subscribe-dialog";
-import { TerminalRaversDialog } from "@/components/terminal-ravers-dialog";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -51,8 +48,8 @@ const socialLinks = [
   { href: youtubeUrl, icon: siYoutube, label: "Fluncle on YouTube" },
 ];
 
-// The shared treatment for every quiet text link at the bottom (About, Full log,
-// CLI, GIT, SSH — and MCP, which carries the same style itself).
+// The shared treatment for every quiet text link at the bottom (About, Logs,
+// Docs, Join the Crew — and the developer row: CLI, GIT, MCP, SSH).
 const linkClassName =
   "font-semibold text-muted-foreground transition-colors hover:text-accent-foreground";
 
@@ -131,6 +128,10 @@ export function HomeLinkHub() {
       {/* The quiet links sink to the bottom of the column (mt-auto): site links,
           the developer/connection links as plain text, then the social strip. */}
       <div className="mt-auto flex flex-col items-center gap-3 pt-8">
+        {/* About · Logs · Docs stay an inline row; Docs is the new /docs entry.
+            "Join the Crew" gets its own quiet button below: the four-item inline
+            row wraps "Join the Crew" onto a second line in the narrow cover
+            column (240–280px desktop aside), so it sits on its own instead. */}
         <nav
           aria-label="More from Fluncle"
           className="flex items-center justify-center gap-3 text-sm"
@@ -140,27 +141,44 @@ export function HomeLinkHub() {
           </Link>
           <Dot />
           <Link className={linkClassName} to="/log">
-            All logs
+            Logs
           </Link>
           <Dot />
-          <Link className={linkClassName} to="/account">
-            Join the Crew
+          <Link className={linkClassName} to="/docs">
+            Docs
           </Link>
         </nav>
+        <Button
+          className="w-full"
+          nativeButton={false}
+          render={<Link to="/account" />}
+          size="sm"
+          variant="outline"
+        >
+          Join the Crew
+        </Button>
 
         <nav
           aria-label="Developer tools and connections"
           className="flex items-center justify-center gap-3 text-[13px] font-mono border-t pt-4"
         >
-          <CliInstallDialog className={linkClassName} label="CLI" />
+          {/* CLI/MCP/SSH are docs pages served by the /docs/$ catch-all, so
+              they navigate via the splat param (exact URLs /docs/cli etc.). */}
+          <Link className={linkClassName} params={{ _splat: "cli" }} to="/docs/$">
+            CLI
+          </Link>
           <Dot />
           <a className={linkClassName} href={repoUrl} rel="noreferrer" target="_blank">
             GIT
           </a>
           <Dot />
-          <McpConnectDialog />
+          <Link className={linkClassName} params={{ _splat: "mcp" }} to="/docs/$">
+            MCP
+          </Link>
           <Dot />
-          <TerminalRaversDialog className={linkClassName} label="SSH" />
+          <Link className={linkClassName} params={{ _splat: "ssh" }} to="/docs/$">
+            SSH
+          </Link>
         </nav>
       </div>
     </div>
