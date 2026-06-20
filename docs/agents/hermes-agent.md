@@ -124,4 +124,4 @@ A chat reply is a live Fluncle surface. Before public exposure, the pinned model
 
 ## Status
 
-Done: pinned image with the `fluncle` CLI behind the command gate; secrets via `op` → `/etc/hermes.env`; gate verified (deny + allow + live token). Not yet: model wired in `config.yaml`; the Discord app (bot token, both privileged intents, allow-list); the voice persona + voice gate; non-root hardening; sweep scheduling.
+Live for the internal crew: pinned image with the `fluncle` CLI behind the command gate; secrets via `op` → `/etc/hermes.env`; Discord app online (both privileged intents, a tight allow-list); model pinned (`anthropic/claude-sonnet-4.6`); Fluncle voice via `SOUL.md` + the `copywriting-fluncle` skill, voice-gated. Open (the public-readiness arc — tracked in [ROADMAP.md](../ROADMAP.md)): non-root-in-container hardening + server-side publish confirmation before any wider exposure, and scheduling the enrich-sweep.

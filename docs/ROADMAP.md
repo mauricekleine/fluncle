@@ -73,18 +73,27 @@ The pipeline is live and proven end-to-end (first render: `020.0.5L` — Ownglow
 - **Finetune the Recovered-audio voice guide.** The VOICE.md §5 register + the script craft are a first draft. Tighten the writing guide for the _spoken_ observation: the arc (sensory → mood → connection → log ID → artist/title), line length and pacing for a heard surface (a clunky line can't be skimmed past), `<break>` use, how hard the cosmos-sauce should ride out loud, and where "too purple" begins. Fold Maurice's notes from the first renders back into `observation-agent.md` + VOICE.md §5.
 - **Find or create Fluncle's voice.** The current `ELEVENLABS_VOICE_ID` (`EkK5I93…`) is a stock ElevenLabs default — fine for the proof, too generic to ship. Find a better-fitting ElevenLabs voice, or create a bespoke one (Maurice records a sample → ElevenLabs voice clone/design), then swap the `ELEVENLABS_VOICE_ID` secret. **This is the gate before backfilling observations** — anything rendered in the placeholder would need re-rendering, so lock the voice first.
 
-### radio.fluncle.com needs a video backfill (landscape + text-free portrait)
+### radio.fluncle.com — stand up the station (+ its video backfill)
 
-Standing up `radio.fluncle.com` (Unit B of the audio-observation RFC, `docs/rfcs/radio-observations.md`) — a station that plays each finding's video under its observation audio — surfaces two video gaps the current clips don't cover, both requiring a re-render of the catalogue on the `packages/video` side:
+`radio.fluncle.com` is **Unit B of the audio-observation RFC** (`docs/rfcs/radio-observations.md`) and an unbuilt surface: a station that plays each finding's video under its observation audio, a continuous lean-back stream of the archive. The RFC scopes the build (the host-rewrite surface, the DTO, the player UI); the audio half rides the same observation pipeline + voice gate as `/log`, so it's gated on the same thing — Fluncle's real voice (above) — before it's worth filling. Size it as its own arc once the observation backfill is underway.
+
+Standing it up also surfaces two **video** gaps the current clips don't cover, both a re-render of the catalogue on the `packages/video` side:
 
 - **Landscape renders per track** — for full-screen radio mode; today every clip is portrait (the RFC already parks landscape behind this).
 - **Portrait renders without the text overlay** — so the radio UI draws its own metadata over clean footage instead of fighting the baked-in Log ID / caption.
 
-So radio isn't only the audio backfill — it needs a **video backfill** too. Scope it alongside the radio surface; noted here so it isn't forgotten.
+So radio isn't only the audio backfill — it needs a **video backfill** too. Scope both alongside the surface; noted here so neither is forgotten.
 
 ### CLI + admin-command naming polish
 
 The `fluncle admin …` surface grew fast across these slices and the new commands are dash-separated ad hoc (`auth-lastfm`, `track observe`, the coming `track observe-context`, …). Once all the in-flight slices land, do one pass to make the command tree consistent and read well — group/verb/noun structure, naming, help text — so the CLI feels designed, not accreted. Cosmetic, low-risk, deliberately deferred until the surface stops moving.
+
+### Hermes chat agent — hardening + sweep scheduling
+
+The Hermes chat agent is **live for the internal crew** — a self-hosted Nous Hermes gateway on a private Tailscale-only box, fronting Discord (allow-listed), acting on the archive only through the `fluncle` CLI behind a deny-by-default command gate, in Fluncle's voice (`SOUL.md` + the `copywriting-fluncle` skill). Operating doc + runbook: [docs/agents/hermes-agent.md](./agents/hermes-agent.md); build context in `docs/agents/hermes/`. Two open items:
+
+- **Security hardening — the gate to public / a wider allow-list.** The agent runs as root in-container with the admin token in its env, so the command gate is bypassable by a determined prompt-injection (`printenv` + raw `curl`, or calling `fluncle-real` directly). Before exposing the bot beyond a few trusted people: run the agent as a **non-root** user with the admin token out of its readable env (a privileged helper invokes the gated CLI), and/or add **server-side human-confirm** on publish-class admin endpoints. Until then, keep the allow-list tiny and trusted. (PRODUCT.md tension: a public, chatty conversational bot fights "quiet / operator-controlled" — the public-Discord question stays deferred behind this hardening and a demonstrated need.)
+- **Schedule the enrich-sweep.** The self-healing `fluncle admin enrich-sweep` (`POST /api/admin/enrich-sweep`; `pending ∪ failed ∪ stale-processing`, idempotent on `enrich:${logId}`) is built but runs only on-demand. Wire it to a fixed interval — a Cloudflare Worker cron, a Spinup cron, or the on-add trigger gaining a retry — to fully close the original fire-and-forget gap. Hermes-independent.
 
 ### Log IDs in search + AI answers (AEO/GEO) — off-site thread
 
@@ -106,6 +115,20 @@ The machine- and developer-facing reach of `docs/public-surfaces-checklist.md` l
 - **SSH deep-links** — `ssh rave.fluncle.com latest | random | <coord>` jump straight to a finding in the terminal.
 
 What's left is the non-gating long tail in the checklist: the `today` dig label, a public changelog, a Docker image / Postman collection, broader data-graph anchors (Discogs, Last.fm, ListenBrainz), and directory listings (Product Hunt, Internet Archive, a Hugging Face dataset). Pick from `docs/public-surfaces-checklist.md` when one earns its keep.
+
+### Fluncle Lens (Chrome extension) — submitted, in review
+
+Fluncle Lens (`apps/extension`) — an MV3 extension that detects `fluncle://<coord>` Log IDs anywhere on the web and turns each into a link to its `/log/<coord>` page — was **submitted to the Chrome Web Store and is in compliance review** (2026-06-21). It's the first browser surface riding the Log ID spine. The `<all_urls>` content-script match triggers a **"Broad Host Permissions" in-depth review** — expected and justified (a coordinate can appear on any page), so the review runs long by design. Listing specifics (category Entertainment, privacy policy at the real `/privacy` route, the bundle/icon/screenshot pointers, and the privacy-form answers that recur on every version update) are captured operator-side.
+
+Open:
+
+- **Post-approval announce + fan-out.** When it clears review, fold it into the surface map — a quiet line to the crew (Telegram / the Friday letter), a mention on `/about` and the `/docs` developer surfaces. It's a net-new public surface the autonomy-ladder §1 fan-out list doesn't yet name.
+- **Future features.** The non-canonical source brainstorm is `docs/rfcs/chrome-extension-brief.md`; translate it into Fluncle's terms when picked up (the brief leans on banned words like "signals" — canon wins per `AGENTS.md`).
+- **Run-from-source meanwhile.** Pre-approval Maurice is the only user, running it unpacked from `apps/extension/dist/` — fine until it's live; the store build is `bun run --cwd apps/extension bundle`.
+
+### Tor `.onion` surfaces (RFC final) — stand up the onion
+
+`docs/rfcs/tor-surfaces.md` is **final** (researched, /taste'd, 3-role adversarial panel) but has no build slot — a **principled novelty**: one Tor daemon on the rave VPS, two onion identities (a web onion proxying `www.fluncle.com`, carrying API/RSS/MCP as free riders, and a rave onion → the SSH terminal), opening **zero new inbound ports**. The cheap, high-signal half is just the `Onion-Location` response header (the ".onion available" pill in Tor Browser); the one real build is the onionspray web onion (Unit A), whose only non-obvious cost is a Cloudflare WAF/IP bypass so the proxy's origin fetch isn't blocked. Closes the six Tor boxes in `docs/public-surfaces-checklist.md`. A tasteful flex riding existing infra at ~$0 marginal — size it when the novelty earns its keep, the way `dig.fluncle.com` did. Owner decisions (SSH-onion-in-v1, key custody) are listed in the RFC.
 
 ### Database latency — evaluate Turso → Cloudflare D1
 
