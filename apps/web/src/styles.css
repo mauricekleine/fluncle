@@ -1404,6 +1404,20 @@ body::before {
   margin: 0.25rem 0 0;
 }
 
+.log-privacy-intro {
+  color: var(--stardust);
+  font-size: 0.92rem;
+  line-height: 1.55;
+  margin: 0.4rem 0 0;
+}
+
+.log-privacy-heading {
+  color: var(--starlight-cream);
+  font-size: 1.02rem;
+  font-weight: 800;
+  margin: 0 0 0.5rem;
+}
+
 .log-about-faq {
   display: grid;
   gap: 1rem;

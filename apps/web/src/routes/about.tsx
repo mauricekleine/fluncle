@@ -204,6 +204,7 @@ function AboutPage() {
         <footer className="log-plate-footer">
           <Link to="/">Back to the archive</Link>
           <Link to="/log">The full log</Link>
+          <Link to="/privacy">Privacy</Link>
         </footer>
       </article>
     </main>
