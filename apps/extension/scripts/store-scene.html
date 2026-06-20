@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- Loaded from dist/ at screenshot time, so these resolve next to the page. -->
+    <link rel="stylesheet" href="ui.css" />
+    <link rel="stylesheet" href="content.css" />
+    <style>
+      html,
+      body {
+        margin: 0;
+      }
+      .frame {
+        width: 1280px;
+        height: 800px;
+        box-sizing: border-box;
+        overflow: hidden;
+        background:
+          radial-gradient(120% 90% at 78% -10%, #4a1d05 0%, rgba(74, 29, 5, 0) 42%),
+          radial-gradient(140% 120% at 80% -20%, #f5b80022 0%, rgba(245, 184, 0, 0) 30%), #090a0b;
+        position: relative;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+        color: #f4ead7;
+      }
+      .stars {
+        position: absolute;
+        inset: 0;
+        opacity: 0.5;
+        background-image:
+          radial-gradient(1px 1px at 20% 30%, #fff6, transparent),
+          radial-gradient(1px 1px at 60% 70%, #fff4, transparent),
+          radial-gradient(1px 1px at 80% 20%, #fff5, transparent),
+          radial-gradient(1px 1px at 35% 80%, #fff3, transparent),
+          radial-gradient(1px 1px at 90% 60%, #fff4, transparent),
+          radial-gradient(1px 1px at 12% 65%, #fff3, transparent);
+      }
+      .head {
+        position: absolute;
+        top: 84px;
+        left: 96px;
+        right: 96px;
+      }
+      .kicker {
+        font-family: Oxanium, system-ui;
+        font-weight: 800;
+        letter-spacing: -0.01em;
+        font-size: 16px;
+        color: #f5b800;
+        margin: 0 0 16px;
+      }
+      .title {
+        font-family: Oxanium, system-ui;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        font-size: 54px;
+        line-height: 1.05;
+        margin: 0;
+        max-width: 800px;
+      }
+      .sub {
+        font-size: 21px;
+        color: #b7ab95;
+        margin: 20px 0 0;
+        max-width: 660px;
+        line-height: 1.45;
+      }
+      .popup-shell {
+        position: absolute;
+        right: 110px;
+        bottom: 84px;
+        border-radius: 14px;
+        box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+        overflow: hidden;
+        border: 1px solid #2a2620;
+      }
+      .article {
+        position: absolute;
+        left: 96px;
+        top: 320px;
+        width: 640px;
+        background: #14130f;
+        border: 1px solid #2a2620;
+        border-radius: 12px;
+        padding: 28px 30px;
+        line-height: 1.7;
+        color: #d9cdb6;
+        font-size: 17px;
+      }
+      .article p {
+        margin: 0 0 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="frame" id="frame"></div>
+    <script src="_store.js"></script>
+  </body>
+</html>

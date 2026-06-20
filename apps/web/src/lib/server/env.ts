@@ -8,6 +8,12 @@ const envKeys = [
   // is optional. Both are comma-separated (see admin-auth.ts).
   "ADMIN_ALLOWED_EMAILS",
   "ADMIN_ALLOWED_SPOTIFY_IDS",
+  // HMAC signing key for admin-session cookies AND OAuth state (signState /
+  // verifySignedState). DELIBERATELY SEPARATE from FLUNCLE_API_TOKEN (the API
+  // Bearer carrier): the agent box holds the API token, so sharing one secret
+  // would let a token leak forge {role:"admin"} session cookies. Splitting them
+  // means a leaked Bearer token cannot mint web sessions.
+  "ADMIN_SESSION_SECRET",
   "BETTER_AUTH_SECRET",
   "BETTER_AUTH_URL",
   // ElevenLabs TTS for the audio-observation render (Worker-side; the agent never
@@ -132,8 +138,10 @@ export async function readEnvs<const T extends readonly EnvKey[]>(
 }
 
 // One admin identity, two carriers (see docs/admin-tagging.md): the CLI/agent
-// send the token as a Bearer header; the browser sends a signed grant COOKIE
-// (the token is the signing key, never the transported value — admin-auth.ts).
+// send FLUNCLE_API_TOKEN as a Bearer header (requireAdmin compares it directly);
+// the browser sends a signed grant COOKIE whose HMAC signing key is the SEPARATE
+// ADMIN_SESSION_SECRET (admin-auth.ts), never a transported value. The two
+// secrets are split so a leaked Bearer token cannot forge session cookies.
 // requireAdmin accepts either, so every existing /api/admin/* route is reachable
 // from the browser tagging UI without forking per-carrier logic.
 export const ADMIN_COOKIE_NAME = "fluncle_admin";
@@ -203,9 +211,9 @@ export function jsonError(status: number, code: string, message: string): Respon
 }
 
 export async function signState(payload: Record<string, string | number>): Promise<string> {
-  const token = await readEnv("FLUNCLE_API_TOKEN");
+  const secret = await readEnv("ADMIN_SESSION_SECRET");
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  const signature = createHmac("sha256", token).update(body).digest("base64url");
+  const signature = createHmac("sha256", secret).update(body).digest("base64url");
 
   return `${body}.${signature}`;
 }
@@ -218,14 +226,14 @@ export async function verifySignedState(
   state: string,
   maxAgeMs: number,
 ): Promise<Record<string, unknown>> {
-  const token = await readEnv("FLUNCLE_API_TOKEN");
+  const secret = await readEnv("ADMIN_SESSION_SECRET");
   const [body, signature] = state.split(".");
 
   if (!body || !signature) {
     throw new Error("Invalid state");
   }
 
-  const expected = createHmac("sha256", token).update(body).digest("base64url");
+  const expected = createHmac("sha256", secret).update(body).digest("base64url");
 
   if (!constantTimeEqual(signature, expected)) {
     throw new Error("Invalid state");

@@ -54,6 +54,38 @@ The full path a finding travels, top to bottom: one human act, then how far it p
 
 ## Next — surface what we make, and tidy reliability
 
+### Backfill the new per-finding enrichments across the catalogue
+
+The just-shipped enrichments only fire **going forward** — `publishTrack` loves on Last.fm + resolves the Discogs release, and the `/observe` endpoint renders an audio observation, all on new adds/enriches. The existing catalogue (~26 findings) needs a one-time backfill — which doubles as the **end-to-end test** that each new pipeline actually works against real findings:
+
+- **Last.fm loves** — sweep every published finding and `track.love` it on the `fluncle` account (love-on-add only catches new publishes). Free, fast, idempotent; gated only on the three `LASTFM_*` Worker secrets being set.
+- **Context notes** (`context_note`) — firecrawl-derived facts per finding; **produced inside the observation render** (`/observe` fetches the context as it renders), so not a separate free pass. The pipeline still needs a **context-prep step** to be truly autonomous: the doctrine says the agent writes the script _from_ these facts, but the agent holds only `FLUNCLE_API_TOKEN` (firecrawl is Worker-only) and the Worker fetches context only _during_ the render — so the script can't yet be grounded in the facts it's meant to use. Fix: a Worker `observe-context` endpoint + CLI that runs the firecrawl search and **returns the facts to the agent** (keeping firecrawl Worker-side), so the flow is context → script → render. (For the first manual proof we run the local `firecrawl` CLI in its place.)
+- **Audio observations** — render the ElevenLabs observation per finding via `POST /api/admin/tracks/:id/observe`. Costs ElevenLabs credits and the voice is still the placeholder (`EkK5I93…`), so do this **after** the voice is dialed in — but a handful now is the real test of the pipeline + the `/log` audio control.
+- **Discogs release IDs** — resolve + store `in_release_id` for existing findings once that enrichment lands.
+- **(If it ships)** album-art → R2 ingestion, same sweep shape.
+
+Shape: a one-shot, idempotent admin sweep (a `fluncle admin … backfill` command or a script over the catalogue) — skip already-done rows, respect rate limits (Discogs ~60/min) and vendor cost (ElevenLabs), best-effort per finding. The only truly-free pass is the **Last.fm loves**; the context note is coupled to the (paid) observation render, so do a handful of observations once the voice is tuned. Needs the relevant Worker secrets set and the build deployed first.
+
+### Audio observation — voice guide + Fluncle's own voice
+
+The pipeline is live and proven end-to-end (first render: `020.0.5L` — Ownglow "Do U?", a real grounded observation on its `/log` page). Two things gate doing it for real, both about the _voice_:
+
+- **Finetune the Recovered-audio voice guide.** The VOICE.md §5 register + the script craft are a first draft. Tighten the writing guide for the _spoken_ observation: the arc (sensory → mood → connection → log ID → artist/title), line length and pacing for a heard surface (a clunky line can't be skimmed past), `<break>` use, how hard the cosmos-sauce should ride out loud, and where "too purple" begins. Fold Maurice's notes from the first renders back into `observation-agent.md` + VOICE.md §5.
+- **Find or create Fluncle's voice.** The current `ELEVENLABS_VOICE_ID` (`EkK5I93…`) is a stock ElevenLabs default — fine for the proof, too generic to ship. Find a better-fitting ElevenLabs voice, or create a bespoke one (Maurice records a sample → ElevenLabs voice clone/design), then swap the `ELEVENLABS_VOICE_ID` secret. **This is the gate before backfilling observations** — anything rendered in the placeholder would need re-rendering, so lock the voice first.
+
+### radio.fluncle.com needs a video backfill (landscape + text-free portrait)
+
+Standing up `radio.fluncle.com` (Unit B of the audio-observation RFC, `docs/rfcs/radio-observations.md`) — a station that plays each finding's video under its observation audio — surfaces two video gaps the current clips don't cover, both requiring a re-render of the catalogue on the `packages/video` side:
+
+- **Landscape renders per track** — for full-screen radio mode; today every clip is portrait (the RFC already parks landscape behind this).
+- **Portrait renders without the text overlay** — so the radio UI draws its own metadata over clean footage instead of fighting the baked-in Log ID / caption.
+
+So radio isn't only the audio backfill — it needs a **video backfill** too. Scope it alongside the radio surface; noted here so it isn't forgotten.
+
+### CLI + admin-command naming polish
+
+The `fluncle admin …` surface grew fast across these slices and the new commands are dash-separated ad hoc (`auth-lastfm`, `track observe`, the coming `track observe-context`, …). Once all the in-flight slices land, do one pass to make the command tree consistent and read well — group/verb/noun structure, naming, help text — so the CLI feels designed, not accreted. Cosmetic, low-risk, deliberately deferred until the surface stops moving.
+
 ### Log IDs in search + AI answers (AEO/GEO) — off-site thread
 
 The on-site layer shipped (per-finding `/log/<id>` pages with definitional prose + `MusicRecording` identifiers, the `/log` index, sitemap enumeration, the `/about` entity/FAQ surface, one canonical description everywhere). What remains is off-site and slower:
@@ -74,6 +106,12 @@ The machine- and developer-facing reach of `docs/public-surfaces-checklist.md` l
 - **SSH deep-links** — `ssh rave.fluncle.com latest | random | <coord>` jump straight to a finding in the terminal.
 
 What's left is the non-gating long tail in the checklist: the `today` dig label, a public changelog, a Docker image / Postman collection, broader data-graph anchors (Discogs, Last.fm, ListenBrainz), and directory listings (Product Hunt, Internet Archive, a Hugging Face dataset). Pick from `docs/public-surfaces-checklist.md` when one earns its keep.
+
+### Database latency — evaluate Turso → Cloudflare D1
+
+Turso (libSQL) is the source of truth, hosted in **Ireland**, so every Worker→DB read pays a cross-region hop — a real chunk of the `/log/<id>` ~896 ms cold TTFB (the Worker runs at the edge near the reader; the database doesn't). Cloudflare-native **D1** co-locates with Workers and would shrink that roundtrip. The catch is migration cost: D1 is SQLite with its own ceilings (database-size and write-throughput limits, no libSQL-only features), and the whole Drizzle data layer, migration history, and the per-worktree local-dev story (`turso dev` + `.dev/local.db`, see `docs/local-database.md`) would move with it — a real arc, not a config flip.
+
+Near-term the cheaper win is **edge-caching the `/log` HTML** (short TTL + stale-while-revalidate + purge-on-publish) — scoped separately. Treat D1 as the deeper structural lever: pursue it when DB latency (not render time or asset weight) is the proven bottleneck. Spike it first — confirm D1's limits fit the catalogue and access patterns, and that nothing in the current libSQL usage is load-bearing — before committing to the migration.
 
 ### Fluncle's own mixtapes — spine + admin + autopublish shipped
 

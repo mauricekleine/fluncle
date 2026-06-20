@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { beforeAll, describe, expect, it } from "vitest";
 import { isAllowedSpotifyUser, signGrant, verifyGrant } from "./admin-auth";
 import {
@@ -9,16 +10,21 @@ import {
 } from "./env";
 
 const TOKEN = "test-token-admin-auth";
+const SESSION_SECRET = "test-session-secret-admin-auth";
 
 function adminRequest(headers: Record<string, string>): Request {
   return new Request("https://fluncle.com/api/admin/tracks/abc", { headers, method: "PATCH" });
 }
 
-// Pin a deterministic signing key. readEnv reads process.env at call time (not
-// import time), and loadLocalEnv's dotenv never overrides an already-set value,
-// so this wins over .dev.vars and keeps the suite independent of local secrets.
+// Pin deterministic secrets. readEnv reads process.env at call time (not import
+// time), and loadLocalEnv's dotenv never overrides an already-set value, so
+// these win over .dev.vars and keep the suite independent of local secrets. The
+// Bearer carrier (FLUNCLE_API_TOKEN) and the cookie/state signing key
+// (ADMIN_SESSION_SECRET) are DELIBERATELY different values here — they are
+// separate secrets in production too.
 beforeAll(() => {
   process.env.FLUNCLE_API_TOKEN = TOKEN;
+  process.env.ADMIN_SESSION_SECRET = SESSION_SECRET;
 });
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -100,6 +106,50 @@ describe("requireAdmin accepts either carrier (one identity, two carriers)", () 
     expect(
       (await requireAdmin(adminRequest({ cookie: `${ADMIN_COOKIE_NAME}=${tampered}` })))?.status,
     ).toBe(401);
+  });
+});
+
+// The whole point of the secret split: a session/state signed with the API
+// Bearer token (FLUNCLE_API_TOKEN) must NOT verify — only ADMIN_SESSION_SECRET
+// does. So a leaked Bearer token can never forge a {role:"admin"} cookie.
+describe("admin-session signing key is split from the API Bearer token", () => {
+  // Hand-forge a "<base64url body>.<base64url HMAC>" state signed with `key`,
+  // mirroring signState's wire format so we can sign with an arbitrary secret.
+  function forgeState(payload: Record<string, string | number>, key: string): string {
+    const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+    const signature = createHmac("sha256", key).update(body).digest("base64url");
+
+    return `${body}.${signature}`;
+  }
+
+  it("rejects a grant cookie forged with the API token (the old signing key)", async () => {
+    const forged = forgeState({ iat: Date.now(), role: "admin" }, TOKEN);
+
+    // The cookie carrier rejects it...
+    expect(await verifyGrant(forged)).toBe(false);
+    // ...and so does the route gate that consumes the same cookie.
+    expect(
+      (await requireAdmin(adminRequest({ cookie: `${ADMIN_COOKIE_NAME}=${forged}` })))?.status,
+    ).toBe(401);
+  });
+
+  it("rejects an OAuth state forged with the API token", async () => {
+    const forged = forgeState({ iat: Date.now(), purpose: "spotify-auth" }, TOKEN);
+
+    await expect(verifyState(forged)).rejects.toThrow();
+  });
+
+  it("accepts a grant/state signed with ADMIN_SESSION_SECRET", async () => {
+    // signState uses ADMIN_SESSION_SECRET; an equivalent hand-forge with the same
+    // secret must verify — proving the split moved the key, not broke signing.
+    const grant = await signGrant();
+    expect(await verifyGrant(grant)).toBe(true);
+
+    const forgedWithSecret = forgeState({ iat: Date.now(), role: "admin" }, SESSION_SECRET);
+    expect(await verifyGrant(forgedWithSecret)).toBe(true);
+    expect(
+      await requireAdmin(adminRequest({ cookie: `${ADMIN_COOKIE_NAME}=${forgedWithSecret}` })),
+    ).toBeUndefined();
   });
 });
 

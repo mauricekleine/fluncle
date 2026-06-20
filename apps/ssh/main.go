@@ -683,7 +683,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.loading = false
 		if msg.err != nil {
-			m.err = "Receiver fallback: " + msg.err.Error()
+			m.err = "Archive fallback: " + msg.err.Error()
 			return m, nil
 		}
 		m.err = ""
@@ -709,7 +709,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.err.Error()
 			return m, nil
 		}
-		m.message = "Logged. Fluncle will give it a listen before it goes live."
+		m.message = "Logged. I'll give it a listen before it goes live."
 		m.screen = screenMessage
 	case subscribeMsg:
 		m.loading = false
@@ -1630,10 +1630,10 @@ func (m model) renderGalaxyTelemetry() string {
 	}
 	lines = append(lines, labelStyle.Render("Logged: ")+readingStyle.Render(fmt.Sprintf("%d/%d", logged, total)))
 	if m.loading {
-		lines = append(lines, labelStyle.Render("Receiver: ")+readingStyle.Render("syncing latest bangers"))
+		lines = append(lines, labelStyle.Render("Archive: ")+readingStyle.Render("syncing latest bangers"))
 	}
 	if m.err != "" {
-		lines = append(lines, labelStyle.Render("Receiver: ")+readingStyle.Render(m.err))
+		lines = append(lines, labelStyle.Render("Archive: ")+readingStyle.Render(m.err))
 	}
 	lines = append(lines, labelStyle.Render("Coordinate: ")+readingStyle.Render(fmt.Sprintf("x %.0f · y %.0f", m.galaxy.sim.Ship.X, m.galaxy.sim.Ship.Y)))
 	if status := m.galaxy.currentStatus(); status != "" {
@@ -2213,7 +2213,7 @@ func (g galaxyState) withTracks(tracks []track) galaxyState {
 		return g
 	}
 	if logged, _ := g.loggedCount(); logged > 0 {
-		g.status = "receiver synced; keeping current cargo"
+		g.status = "Archive synced; keeping current cargo."
 		g.statusUntil = time.Now().Add(2 * time.Second)
 		return g
 	}
@@ -2224,7 +2224,7 @@ func (g galaxyState) withTracks(tracks []track) galaxyState {
 	g.logIndex = -1
 	g.showLog = false
 	g.trail = nil
-	g.status = "receiver synced latest bangers"
+	g.status = "Archive synced latest bangers."
 	g.statusUntil = time.Now().Add(2 * time.Second)
 	return g
 }
@@ -2244,7 +2244,7 @@ func galaxyFallbackTracks() []track {
 			TrackID: id,
 			LogID:   id,
 			Title:   "Recovered carrier",
-			Artists: []string{"Fluncle receiver"},
+			Artists: []string{"Fluncle"},
 			AddedAt: time.Now().UTC().Format(time.RFC3339),
 		})
 	}

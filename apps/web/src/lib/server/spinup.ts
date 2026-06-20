@@ -11,6 +11,7 @@
 
 import { createSpinupClient } from "@getspinup/sdk";
 import { type EnvKey, readEnvs } from "./env";
+import { listTracks } from "./tracks";
 import { updateTrack } from "./track-update";
 
 const AGENTS = {
@@ -55,4 +56,53 @@ export async function triggerEnrichment(trackId: string, logId: string): Promise
   } catch (error) {
     console.error(`[enrich] failed to queue enrichment for ${logId}:`, error);
   }
+}
+
+export type EnrichSweepEntry = {
+  logId: string;
+  status: string;
+  trackId: string;
+};
+
+export type EnrichSweepResult = {
+  /** The findings re-triggered this run (status they were picked up in). */
+  reEnriched: EnrichSweepEntry[];
+  /** Queued findings with no Log ID yet (can't enrich without the R2 key). */
+  skipped: EnrichSweepEntry[];
+};
+
+// The self-healing sweep: query the enrich-queue (pending ∪ failed ∪ stale
+// processing, oldest first) and re-fire enrichment for each finding. Because
+// triggerEnrichment keys every run by `enrich:${logId}`, re-sweeping an
+// in-flight track de-dupes on Spinup's side rather than spawning a duplicate
+// run — so a cron can call this on a fixed interval safely. Worker-only and
+// admin-gated (its route carries the auth); the CLI/Raycast reach it via that
+// admin endpoint, never holding the sk_agent_… key. NEVER throws per track —
+// one bad finding must not abort the rest of the sweep.
+export async function sweepEnrichmentQueue(limit: number): Promise<EnrichSweepResult> {
+  const { tracks } = await listTracks({ limit, order: "asc", status: "queue" });
+  const reEnriched: EnrichSweepEntry[] = [];
+  const skipped: EnrichSweepEntry[] = [];
+
+  for (const track of tracks) {
+    if (track.type !== "finding") {
+      continue;
+    }
+
+    const entry: EnrichSweepEntry = {
+      logId: track.logId ?? "",
+      status: track.enrichmentStatus,
+      trackId: track.trackId,
+    };
+
+    if (!track.logId) {
+      skipped.push(entry);
+      continue;
+    }
+
+    await triggerEnrichment(track.trackId, track.logId);
+    reEnriched.push(entry);
+  }
+
+  return { reEnriched, skipped };
 }

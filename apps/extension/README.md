@@ -34,9 +34,15 @@ src/ui.css          Shared popup/options styles.
 src/settings.ts     chrome.storage.sync read/write + change subscription.
 src/copy.ts         Every human-facing string, in Fluncle's voice, in one reviewable place.
 src/types.ts        Shapes passed between content script, popup, and background.
+src/fonts/          The bundled Oxanium woff2 (the brand display face) for popup + options.
 manifest.json       MV3 manifest (source; copied into dist/).
-icons/              16/32/48/128 PNGs, derived from the Fluncle cosmonaut mark.
-scripts/build.ts    bun build of the entry points + static-asset copy into dist/.
+icons/              The wired 16/32/48/128 PNGs the manifest loads (generated; see make-icons.sh).
+icons-variants/     The three 128 store-icon candidates (a/b/c) for review.
+store-assets/       The 1280×800 Web Store listing screenshots (1/2/3).
+scripts/build.ts    bun build of the entry points + static-asset copy (icons, fonts) into dist/.
+scripts/bundle.ts   Builds, then zips dist/ into the ready-to-upload web-store/ .zip.
+scripts/make-icons.sh       Regenerates the icon variants + the wired set from the source art.
+scripts/make-screenshots.sh Regenerates the 1280×800 store screenshots from the built CSS.
 ```
 
 ## Develop
@@ -49,6 +55,34 @@ bun run --cwd apps/extension test
 ```
 
 Load it in Chrome: `chrome://extensions` → enable Developer mode → **Load unpacked** → select `apps/extension/dist`.
+
+## Package for the Chrome Web Store
+
+```bash
+bun run --cwd apps/extension bundle    # builds, then zips → apps/extension/web-store/fluncle-lens-<version>.zip
+```
+
+One command. It runs a fresh build and zips the **contents** of `dist/` (so `manifest.json` sits at the archive root) with the full icon set and fonts inside — then upload that `.zip` at `chrome.google.com/webstore/devconsole`. The icon set is part of the zip, so the store picks it up (an earlier upload missed the icon because it wasn't in the zip).
+
+## Icons
+
+```bash
+bun run --cwd apps/extension icons     # → icons-variants/icon128-{a,b,c}.png + wires icons/ to the default
+```
+
+`scripts/make-icons.sh` (ImageMagick) regenerates three 128×128 store-icon candidates from the source art and fans the chosen one (default `a`; pass `a`/`b`/`c`) out to the `16/32/48/128` set the manifest loads. Each candidate is 96×96 of art inside 16px of transparent padding (the store guideline):
+
+- **a** — the cosmonaut mark on a gold-rimmed deep-field disc (clean brand coin; the wired default).
+- **b** — a circular crop of the cover (eclipse + cosmonaut porthole).
+- **c** — a rounded-square crop of the cover (album-tile read).
+
+## Store screenshots
+
+```bash
+bun run --cwd apps/extension build && bash apps/extension/scripts/make-screenshots.sh
+```
+
+Drives headless Chrome over the extension's own CSS to capture three 1280×800 listing shots (24-bit PNG, no alpha) into `store-assets/` — so the shots can't drift from the product.
 
 ## A note on "signals"
 

@@ -51,7 +51,7 @@ export async function submitCommand(input: string | undefined): Promise<void> {
     title: selected.title,
   } satisfies SubmissionRequest);
 
-  console.log("Logged. Fluncle will give it a listen.");
+  console.log("Logged. I'll give it a listen.");
 }
 
 async function selectCandidate(

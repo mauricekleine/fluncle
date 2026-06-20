@@ -208,7 +208,7 @@ export function SubmitTrackDialog({
 
         {didSubmit ? (
           <p className="rounded-md border border-primary/30 bg-accent px-3 py-2 text-sm text-accent-foreground">
-            Logged. Fluncle will give it a listen.
+            Logged. I'll give it a listen.
           </p>
         ) : undefined}
 

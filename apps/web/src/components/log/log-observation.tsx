@@ -69,9 +69,9 @@ export function LogObservation({
   };
 
   return (
-    <section aria-label="Fluncle's observation" className="log-observation">
+    <section aria-label="Recovered observation" className="log-observation">
       <Button
-        aria-label={playing ? "Stop the observation" : "Hear Fluncle's observation"}
+        aria-label={playing ? "Stop the observation" : "Hear the observation"}
         aria-pressed={playing}
         className="log-observation-toggle"
         onClick={toggle}
@@ -91,7 +91,7 @@ export function LogObservation({
           Recovered observation
         </p>
         <p className="log-observation-hint">
-          {playing ? "Fluncle, on the tune" : "What Fluncle logged, in his own voice"}
+          {playing ? "Talking you through it" : "What I logged out here, in my own voice"}
           {seconds ? ` · ${seconds}s` : ""}
         </p>
       </div>

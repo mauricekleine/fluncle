@@ -182,7 +182,7 @@
         },
         "responses": {
           "200": {
-            "description": "Received. Fluncle will give it a listen.",
+            "description": "Received. I'll give it a listen.",
             "content": {
               "application/json": {
                 "schema": {
