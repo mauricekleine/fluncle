@@ -12,6 +12,7 @@ dist/
 build/
 .output/
 apps/*/dist/
+apps/*/dist-npm/
 apps/*/.output/
 apps/*/.wrangler/
 .DS_Store
