@@ -1,0 +1,51 @@
+[Unit]
+Description=fluncle-dns — authoritative DNS for dig.fluncle.com
+Documentation=https://github.com/fluncle (docs/dig.md)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Drop the binary at /opt/fluncle-dns/fluncle-dns (see docs/dig.md).
+ExecStart=/opt/fluncle-dns/fluncle-dns
+Restart=on-failure
+RestartSec=2
+
+# Bind :53 (a privileged port) without running as root.
+User=fluncle-dns
+Group=fluncle-dns
+DynamicUser=true
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# Configuration. Override any of these (e.g. point at a staging API or move
+# off :53 for a local test) with a drop-in:
+#   systemctl edit fluncle-dns
+Environment=FLUNCLE_DNS_LISTEN=:53
+Environment=FLUNCLE_DNS_ZONE=dig.fluncle.com
+Environment=FLUNCLE_DNS_NS=ns1.dig.fluncle.com
+Environment=FLUNCLE_DNS_MBOX=hostmaster.fluncle.com
+Environment=FLUNCLE_DNS_API_BASE=https://www.fluncle.com
+Environment=FLUNCLE_DNS_TTL=300
+Environment=FLUNCLE_DNS_NEGATIVE_TTL=60
+Environment=FLUNCLE_DNS_CACHE_TTL=60
+Environment=FLUNCLE_DNS_API_TIMEOUT=5
+
+# Hardening — this process only needs the network and its own binary.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target
