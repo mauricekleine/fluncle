@@ -30,6 +30,7 @@ import { Route as StoriesLogIdRouteImport } from './routes/stories.$logId'
 import { Route as LogLogIdRouteImport } from './routes/log.$logId'
 import { Route as DocsApiRouteImport } from './routes/docs.api'
 import { Route as DocsSplatRouteImport } from './routes/docs.$'
+import { Route as DocsDotmdSplatRouteImport } from './routes/docs[.]md.$'
 import { Route as CliLatestDotshRouteImport } from './routes/cli/latest[.]sh'
 import { Route as ApiTracksRouteImport } from './routes/api/tracks'
 import { Route as ApiSubmissionsRouteImport } from './routes/api/submissions'
@@ -250,6 +251,11 @@ const DocsSplatRoute = DocsSplatRouteImport.update({
   id: '/$',
   path: '/$',
   getParentRoute: () => DocsRoute,
+} as any)
+const DocsDotmdSplatRoute = DocsDotmdSplatRouteImport.update({
+  id: '/docs.md/$',
+  path: '/docs.md/$',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const CliLatestDotshRoute = CliLatestDotshRouteImport.update({
   id: '/cli/latest.sh',
@@ -904,6 +910,7 @@ export interface FileRoutesByFullPath {
   '/api/submissions': typeof ApiSubmissionsRoute
   '/api/tracks': typeof ApiTracksRouteWithChildren
   '/cli/latest.sh': typeof CliLatestDotshRoute
+  '/docs.md/$': typeof DocsDotmdSplatRoute
   '/docs/$': typeof DocsSplatRoute
   '/docs/api': typeof DocsApiRoute
   '/log/$logId': typeof LogLogIdRoute
@@ -1040,6 +1047,7 @@ export interface FileRoutesByTo {
   '/api/submissions': typeof ApiSubmissionsRoute
   '/api/tracks': typeof ApiTracksRouteWithChildren
   '/cli/latest.sh': typeof CliLatestDotshRoute
+  '/docs.md/$': typeof DocsDotmdSplatRoute
   '/docs/$': typeof DocsSplatRoute
   '/docs/api': typeof DocsApiRoute
   '/log/$logId': typeof LogLogIdRoute
@@ -1179,6 +1187,7 @@ export interface FileRoutesById {
   '/api/submissions': typeof ApiSubmissionsRoute
   '/api/tracks': typeof ApiTracksRouteWithChildren
   '/cli/latest.sh': typeof CliLatestDotshRoute
+  '/docs.md/$': typeof DocsDotmdSplatRoute
   '/docs/$': typeof DocsSplatRoute
   '/docs/api': typeof DocsApiRoute
   '/log/$logId': typeof LogLogIdRoute
@@ -1319,6 +1328,7 @@ export interface FileRouteTypes {
     | '/api/submissions'
     | '/api/tracks'
     | '/cli/latest.sh'
+    | '/docs.md/$'
     | '/docs/$'
     | '/docs/api'
     | '/log/$logId'
@@ -1455,6 +1465,7 @@ export interface FileRouteTypes {
     | '/api/submissions'
     | '/api/tracks'
     | '/cli/latest.sh'
+    | '/docs.md/$'
     | '/docs/$'
     | '/docs/api'
     | '/log/$logId'
@@ -1593,6 +1604,7 @@ export interface FileRouteTypes {
     | '/api/submissions'
     | '/api/tracks'
     | '/cli/latest.sh'
+    | '/docs.md/$'
     | '/docs/$'
     | '/docs/api'
     | '/log/$logId'
@@ -1730,6 +1742,7 @@ export interface RootRouteChildren {
   ApiSubmissionsRoute: typeof ApiSubmissionsRoute
   ApiTracksRoute: typeof ApiTracksRouteWithChildren
   CliLatestDotshRoute: typeof CliLatestDotshRoute
+  DocsDotmdSplatRoute: typeof DocsDotmdSplatRoute
   LogLogIdRoute: typeof LogLogIdRoute
   StoriesLogIdRoute: typeof StoriesLogIdRoute
   LogIndexRoute: typeof LogIndexRoute
@@ -1927,6 +1940,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/docs/$'
       preLoaderRoute: typeof DocsSplatRouteImport
       parentRoute: typeof DocsRoute
+    }
+    '/docs.md/$': {
+      id: '/docs.md/$'
+      path: '/docs.md/$'
+      fullPath: '/docs.md/$'
+      preLoaderRoute: typeof DocsDotmdSplatRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/cli/latest.sh': {
       id: '/cli/latest.sh'
@@ -3240,6 +3260,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiSubmissionsRoute: ApiSubmissionsRoute,
   ApiTracksRoute: ApiTracksRouteWithChildren,
   CliLatestDotshRoute: CliLatestDotshRoute,
+  DocsDotmdSplatRoute: DocsDotmdSplatRoute,
   LogLogIdRoute: LogLogIdRoute,
   StoriesLogIdRoute: StoriesLogIdRoute,
   LogIndexRoute: LogIndexRoute,
