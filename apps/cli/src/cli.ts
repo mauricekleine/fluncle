@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { Command, CommanderError } from "commander";
 import { fluncleAsciiLogo, fluncleTagline } from "./brand";
@@ -89,6 +89,17 @@ type TrackPreviewArchiveOptions = {
   json: boolean;
   mime?: string;
   source?: string;
+};
+
+type TrackObserveOptions = {
+  contextNote?: string;
+  durationMs?: string;
+  durationTargetSec?: string;
+  json: boolean;
+  model?: string;
+  script?: string;
+  scriptFile?: string;
+  voiceId?: string;
 };
 
 type PreviewArchiveBackfillOptions = {
@@ -437,6 +448,27 @@ function addAdminCommands(program: Command): void {
       await runTrackPreviewArchive(idOrLogId, options, previewArchiveUploadCommand);
     });
 
+  adminTrack
+    .command("observe")
+    .description("Render Fluncle's spoken field observation for a track (ElevenLabs, Worker-side)")
+    .argument("[idOrLogId]")
+    .option("--script <text>", "The voice-gated observation script (the spoken text)")
+    .option(
+      "--script-file <file>",
+      "Read the observation script from a file (e.g. observation.txt)",
+    )
+    .option("--voice-id <id>", "Override the configured ElevenLabs voice id")
+    .option("--model <model>", "TTS model (eleven_multilingual_v2 | eleven_v3)")
+    .option("--duration-ms <ms>", "Probed audio duration in ms (the agent runs ffprobe)")
+    .option("--duration-target-sec <sec>", "Target observation length in seconds (20–45)")
+    .option("--context-note <text>", "Pre-fetched factual context (else the Worker firecrawls)")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (idOrLogId: string | undefined, options: TrackObserveOptions) => {
+      const { trackObserveCommand } = await import("./commands/track");
+      await runTrackObserve(idOrLogId, options, trackObserveCommand);
+    });
+
   const adminMixtapes = configureCommand(
     admin.command("mixtapes").description("Mixtape admin commands"),
   );
@@ -698,6 +730,58 @@ async function runTrackPreviewArchive(
   console.log(`  key: ${result.key}`);
   console.log(`  source: ${result.source}`);
   console.log(`  mime: ${result.mime}`);
+}
+
+async function runTrackObserve(
+  idOrLogId: string | undefined,
+  options: TrackObserveOptions,
+  trackObserveCommand: typeof import("./commands/track").trackObserveCommand,
+): Promise<void> {
+  const script = options.scriptFile ? readFileSync(options.scriptFile, "utf8") : options.script;
+
+  if (!idOrLogId || !script || !script.trim()) {
+    throw new Error(
+      "Usage: fluncle admin track observe <track_id|log_id> (--script <text> | --script-file <file>) [--voice-id <id>] [--model <model>] [--duration-ms <ms>] [--context-note <text>] [--json]",
+    );
+  }
+
+  const durationMs =
+    options.durationMs === undefined ? undefined : Number.parseInt(options.durationMs, 10);
+
+  if (durationMs !== undefined && (!Number.isInteger(durationMs) || durationMs < 1)) {
+    throw new Error("--duration-ms must be a positive integer");
+  }
+
+  const durationTargetSec =
+    options.durationTargetSec === undefined
+      ? undefined
+      : Number.parseInt(options.durationTargetSec, 10);
+
+  if (
+    durationTargetSec !== undefined &&
+    (!Number.isInteger(durationTargetSec) || durationTargetSec < 1)
+  ) {
+    throw new Error("--duration-target-sec must be a positive integer");
+  }
+
+  const result = await trackObserveCommand(idOrLogId, {
+    contextNote: options.contextNote,
+    durationMs,
+    durationTargetSec,
+    model: options.model,
+    script: script.trim(),
+    voiceId: options.voiceId,
+  });
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  console.log(`Recorded observation for ${result.logId}`);
+  console.log(`  audio: ${result.audioUrl}`);
+  console.log(`  length: ${Math.round(result.durationMs / 1000)}s`);
+  console.log(`  voice: ${result.voiceId}`);
 }
 
 async function runPreviewArchiveBackfill(

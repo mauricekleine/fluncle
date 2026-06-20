@@ -17,6 +17,12 @@ import { ApiError } from "./spotify";
 
 export type TrackUpdate = {
   bpm?: number;
+  /**
+   * Firecrawl-derived FACTUAL context (creative fuel for the observation script
+   * + video agent). Internal only — never on /log, never in JSON-LD/RSS. Writing
+   * it alone does NOT bump updated_at (it moves no public surface).
+   */
+  contextNote?: string;
   enrichmentStatus?: "pending" | "processing" | "done" | "failed";
   /** Raw audio feature vector as a JSON string (training data for the classifier). */
   features?: string;
@@ -30,6 +36,12 @@ export type TrackUpdate = {
    */
   logId?: string;
   note?: string;
+  /** Fluncle's spoken observation R2 url (<log-id>/observation.mp3); visible field. */
+  observationAudioUrl?: string;
+  /** The observation's length in ms (probed by the agent at render time). */
+  observationDurationMs?: number;
+  /** When the observation was rendered (ISO). */
+  observationGeneratedAt?: string;
   /** The AI model that authored the video, in <provider>/<model> notation. */
   videoModel?: string;
   /** The reasoning/thinking effort the authoring model ran at (e.g. "high"). */
@@ -42,6 +54,29 @@ export type TrackUpdate = {
   /** vibeY = Floaty↔Driving energy. Both set together when a track is placed. */
   vibeY?: number;
 };
+
+// The fields whose write changes a PUBLIC surface, so it should move the
+// sitemap/log `lastmod` (updated_at). Everything else (features, contextNote) is
+// internal training/creative fuel: written by the enrichment agent, never
+// rendered, so it must not bump lastmod. isrc/logId backfills are identity
+// repairs that DO surface (the coordinate appears everywhere), so they count.
+const VISIBLE_FIELDS = new Set<keyof TrackUpdate>([
+  "bpm",
+  "enrichmentStatus",
+  "isrc",
+  "key",
+  "logId",
+  "note",
+  "observationAudioUrl",
+  "observationDurationMs",
+  "observationGeneratedAt",
+  "videoModel",
+  "videoModelReasoning",
+  "videoUrl",
+  "videoVehicle",
+  "vibeX",
+  "vibeY",
+]);
 
 type ExistingRow = {
   added_at: string;
@@ -115,6 +150,28 @@ export async function updateTrack(
   if (update.note !== undefined) {
     sets.push("note = ?");
     args.push(update.note);
+  }
+
+  if (update.contextNote !== undefined) {
+    sets.push("context_note = ?");
+    args.push(update.contextNote);
+  }
+
+  if (update.observationAudioUrl !== undefined) {
+    // Empty string clears the observation (re-render path) — null, not "", so the
+    // `observation_audio_url is not null` radio-eligibility filter drops it.
+    sets.push("observation_audio_url = ?");
+    args.push(update.observationAudioUrl === "" ? null : update.observationAudioUrl);
+  }
+
+  if (update.observationDurationMs !== undefined) {
+    sets.push("observation_duration_ms = ?");
+    args.push(update.observationDurationMs);
+  }
+
+  if (update.observationGeneratedAt !== undefined) {
+    sets.push("observation_generated_at = ?");
+    args.push(update.observationGeneratedAt);
   }
 
   if (update.vibeX !== undefined) {
@@ -196,8 +253,20 @@ export async function updateTrack(
     throw new ApiError("no_fields", "No updatable fields provided", 400);
   }
 
-  sets.push("updated_at = ?");
-  args.push(new Date().toISOString());
+  // Only bump updated_at (the sitemap/log lastmod source) when the write touches a
+  // field that changes a PUBLIC surface. Internal training/fuel fields (features,
+  // contextNote) move no visible surface, so they must not move lastmod — mirrors
+  // the preview-archive precedent (internal writes don't bump). The observation
+  // AUDIO is playable, so it counts as visible.
+  const touchesVisible = (Object.keys(update) as Array<keyof TrackUpdate>).some((field) =>
+    VISIBLE_FIELDS.has(field),
+  );
+
+  if (touchesVisible) {
+    sets.push("updated_at = ?");
+    args.push(new Date().toISOString());
+  }
+
   args.push(trackId);
   await db.execute({
     args,

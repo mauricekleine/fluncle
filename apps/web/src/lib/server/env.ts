@@ -10,6 +10,13 @@ const envKeys = [
   "ADMIN_ALLOWED_SPOTIFY_IDS",
   "BETTER_AUTH_SECRET",
   "BETTER_AUTH_URL",
+  // ElevenLabs TTS for the audio-observation render (Worker-side; the agent never
+  // holds it). ELEVENLABS_API_KEY is a secret; ELEVENLABS_VOICE_ID is a swappable
+  // config var (a stock library voice today; the bespoke Fluncle voice drops in by
+  // swapping it). The voice id is read via readOptionalEnv so a missing one is a
+  // clean 400, not a thrown Missing.
+  "ELEVENLABS_API_KEY",
+  "ELEVENLABS_VOICE_ID",
   "FIRECRAWL_API_KEY",
   "FLUNCLE_API_TOKEN",
   "LOOPS_API_KEY",

@@ -61,6 +61,12 @@ export type TrackListItem = {
   /** The finding's permanent log page on fluncle.com; absent until a Log ID exists. */
   logPageUrl?: string;
   note?: string;
+  /** Fluncle's spoken field observation (R2 mp3); present only when rendered. */
+  observationAudioUrl?: string;
+  /** The observation's length in milliseconds (probed at render time). */
+  observationDurationMs?: number;
+  /** When the observation was rendered (ISO); present only when rendered. */
+  observationGeneratedAt?: string;
   popularity?: number;
   postedToTelegram: boolean;
   previewUrl?: string;

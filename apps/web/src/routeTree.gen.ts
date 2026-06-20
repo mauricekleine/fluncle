@@ -105,6 +105,7 @@ import { Route as ApiAdminYoutubeAuthCallbackRouteImport } from './routes/api/ad
 import { Route as ApiAdminTracksTrackIdVideoRouteImport } from './routes/api/admin/tracks.$trackId.video'
 import { Route as ApiAdminTracksTrackIdSocialRouteImport } from './routes/api/admin/tracks.$trackId.social'
 import { Route as ApiAdminTracksTrackIdPreviewArchiveRouteImport } from './routes/api/admin/tracks.$trackId.preview-archive'
+import { Route as ApiAdminTracksTrackIdObserveRouteImport } from './routes/api/admin/tracks.$trackId.observe'
 import { Route as ApiAdminSubmissionsSubmissionIdRejectRouteImport } from './routes/api/admin/submissions/$submissionId/reject'
 import { Route as ApiAdminSubmissionsSubmissionIdApproveRouteImport } from './routes/api/admin/submissions/$submissionId/approve'
 import { Route as ApiAdminSpotifyAuthStartRouteImport } from './routes/api/admin/spotify/auth/start'
@@ -122,6 +123,7 @@ import { Route as ApiV1AdminYoutubeAuthCallbackRouteImport } from './routes/api/
 import { Route as ApiV1AdminTracksTrackIdVideoRouteImport } from './routes/api/v1/admin/tracks.$trackId.video'
 import { Route as ApiV1AdminTracksTrackIdSocialRouteImport } from './routes/api/v1/admin/tracks.$trackId.social'
 import { Route as ApiV1AdminTracksTrackIdPreviewArchiveRouteImport } from './routes/api/v1/admin/tracks.$trackId.preview-archive'
+import { Route as ApiV1AdminTracksTrackIdObserveRouteImport } from './routes/api/v1/admin/tracks.$trackId.observe'
 import { Route as ApiV1AdminSubmissionsSubmissionIdRejectRouteImport } from './routes/api/v1/admin/submissions/$submissionId/reject'
 import { Route as ApiV1AdminSubmissionsSubmissionIdApproveRouteImport } from './routes/api/v1/admin/submissions/$submissionId/approve'
 import { Route as ApiV1AdminSpotifyAuthStartRouteImport } from './routes/api/v1/admin/spotify/auth/start'
@@ -643,6 +645,12 @@ const ApiAdminTracksTrackIdPreviewArchiveRoute =
     path: '/preview-archive',
     getParentRoute: () => ApiAdminTracksTrackIdRoute,
   } as any)
+const ApiAdminTracksTrackIdObserveRoute =
+  ApiAdminTracksTrackIdObserveRouteImport.update({
+    id: '/observe',
+    path: '/observe',
+    getParentRoute: () => ApiAdminTracksTrackIdRoute,
+  } as any)
 const ApiAdminSubmissionsSubmissionIdRejectRoute =
   ApiAdminSubmissionsSubmissionIdRejectRouteImport.update({
     id: '/reject',
@@ -742,6 +750,12 @@ const ApiV1AdminTracksTrackIdPreviewArchiveRoute =
   ApiV1AdminTracksTrackIdPreviewArchiveRouteImport.update({
     id: '/preview-archive',
     path: '/preview-archive',
+    getParentRoute: () => ApiV1AdminTracksTrackIdRoute,
+  } as any)
+const ApiV1AdminTracksTrackIdObserveRoute =
+  ApiV1AdminTracksTrackIdObserveRouteImport.update({
+    id: '/observe',
+    path: '/observe',
     getParentRoute: () => ApiV1AdminTracksTrackIdRoute,
   } as any)
 const ApiV1AdminSubmissionsSubmissionIdRejectRoute =
@@ -1009,6 +1023,7 @@ export interface FileRoutesByFullPath {
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
   '/api/admin/submissions/$submissionId/approve': typeof ApiAdminSubmissionsSubmissionIdApproveRoute
   '/api/admin/submissions/$submissionId/reject': typeof ApiAdminSubmissionsSubmissionIdRejectRoute
+  '/api/admin/tracks/$trackId/observe': typeof ApiAdminTracksTrackIdObserveRoute
   '/api/admin/tracks/$trackId/preview-archive': typeof ApiAdminTracksTrackIdPreviewArchiveRoute
   '/api/admin/tracks/$trackId/social': typeof ApiAdminTracksTrackIdSocialRouteWithChildren
   '/api/admin/tracks/$trackId/video': typeof ApiAdminTracksTrackIdVideoRouteWithChildren
@@ -1041,6 +1056,7 @@ export interface FileRoutesByFullPath {
   '/api/v1/admin/spotify/auth/start': typeof ApiV1AdminSpotifyAuthStartRoute
   '/api/v1/admin/submissions/$submissionId/approve': typeof ApiV1AdminSubmissionsSubmissionIdApproveRoute
   '/api/v1/admin/submissions/$submissionId/reject': typeof ApiV1AdminSubmissionsSubmissionIdRejectRoute
+  '/api/v1/admin/tracks/$trackId/observe': typeof ApiV1AdminTracksTrackIdObserveRoute
   '/api/v1/admin/tracks/$trackId/preview-archive': typeof ApiV1AdminTracksTrackIdPreviewArchiveRoute
   '/api/v1/admin/tracks/$trackId/social': typeof ApiV1AdminTracksTrackIdSocialRouteWithChildren
   '/api/v1/admin/tracks/$trackId/video': typeof ApiV1AdminTracksTrackIdVideoRouteWithChildren
@@ -1150,6 +1166,7 @@ export interface FileRoutesByTo {
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
   '/api/admin/submissions/$submissionId/approve': typeof ApiAdminSubmissionsSubmissionIdApproveRoute
   '/api/admin/submissions/$submissionId/reject': typeof ApiAdminSubmissionsSubmissionIdRejectRoute
+  '/api/admin/tracks/$trackId/observe': typeof ApiAdminTracksTrackIdObserveRoute
   '/api/admin/tracks/$trackId/preview-archive': typeof ApiAdminTracksTrackIdPreviewArchiveRoute
   '/api/admin/tracks/$trackId/social': typeof ApiAdminTracksTrackIdSocialRouteWithChildren
   '/api/admin/tracks/$trackId/video': typeof ApiAdminTracksTrackIdVideoRouteWithChildren
@@ -1182,6 +1199,7 @@ export interface FileRoutesByTo {
   '/api/v1/admin/spotify/auth/start': typeof ApiV1AdminSpotifyAuthStartRoute
   '/api/v1/admin/submissions/$submissionId/approve': typeof ApiV1AdminSubmissionsSubmissionIdApproveRoute
   '/api/v1/admin/submissions/$submissionId/reject': typeof ApiV1AdminSubmissionsSubmissionIdRejectRoute
+  '/api/v1/admin/tracks/$trackId/observe': typeof ApiV1AdminTracksTrackIdObserveRoute
   '/api/v1/admin/tracks/$trackId/preview-archive': typeof ApiV1AdminTracksTrackIdPreviewArchiveRoute
   '/api/v1/admin/tracks/$trackId/social': typeof ApiV1AdminTracksTrackIdSocialRouteWithChildren
   '/api/v1/admin/tracks/$trackId/video': typeof ApiV1AdminTracksTrackIdVideoRouteWithChildren
@@ -1294,6 +1312,7 @@ export interface FileRoutesById {
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
   '/api/admin/submissions/$submissionId/approve': typeof ApiAdminSubmissionsSubmissionIdApproveRoute
   '/api/admin/submissions/$submissionId/reject': typeof ApiAdminSubmissionsSubmissionIdRejectRoute
+  '/api/admin/tracks/$trackId/observe': typeof ApiAdminTracksTrackIdObserveRoute
   '/api/admin/tracks/$trackId/preview-archive': typeof ApiAdminTracksTrackIdPreviewArchiveRoute
   '/api/admin/tracks/$trackId/social': typeof ApiAdminTracksTrackIdSocialRouteWithChildren
   '/api/admin/tracks/$trackId/video': typeof ApiAdminTracksTrackIdVideoRouteWithChildren
@@ -1326,6 +1345,7 @@ export interface FileRoutesById {
   '/api/v1/admin/spotify/auth/start': typeof ApiV1AdminSpotifyAuthStartRoute
   '/api/v1/admin/submissions/$submissionId/approve': typeof ApiV1AdminSubmissionsSubmissionIdApproveRoute
   '/api/v1/admin/submissions/$submissionId/reject': typeof ApiV1AdminSubmissionsSubmissionIdRejectRoute
+  '/api/v1/admin/tracks/$trackId/observe': typeof ApiV1AdminTracksTrackIdObserveRoute
   '/api/v1/admin/tracks/$trackId/preview-archive': typeof ApiV1AdminTracksTrackIdPreviewArchiveRoute
   '/api/v1/admin/tracks/$trackId/social': typeof ApiV1AdminTracksTrackIdSocialRouteWithChildren
   '/api/v1/admin/tracks/$trackId/video': typeof ApiV1AdminTracksTrackIdVideoRouteWithChildren
@@ -1439,6 +1459,7 @@ export interface FileRouteTypes {
     | '/api/admin/spotify/auth/start'
     | '/api/admin/submissions/$submissionId/approve'
     | '/api/admin/submissions/$submissionId/reject'
+    | '/api/admin/tracks/$trackId/observe'
     | '/api/admin/tracks/$trackId/preview-archive'
     | '/api/admin/tracks/$trackId/social'
     | '/api/admin/tracks/$trackId/video'
@@ -1471,6 +1492,7 @@ export interface FileRouteTypes {
     | '/api/v1/admin/spotify/auth/start'
     | '/api/v1/admin/submissions/$submissionId/approve'
     | '/api/v1/admin/submissions/$submissionId/reject'
+    | '/api/v1/admin/tracks/$trackId/observe'
     | '/api/v1/admin/tracks/$trackId/preview-archive'
     | '/api/v1/admin/tracks/$trackId/social'
     | '/api/v1/admin/tracks/$trackId/video'
@@ -1580,6 +1602,7 @@ export interface FileRouteTypes {
     | '/api/admin/spotify/auth/start'
     | '/api/admin/submissions/$submissionId/approve'
     | '/api/admin/submissions/$submissionId/reject'
+    | '/api/admin/tracks/$trackId/observe'
     | '/api/admin/tracks/$trackId/preview-archive'
     | '/api/admin/tracks/$trackId/social'
     | '/api/admin/tracks/$trackId/video'
@@ -1612,6 +1635,7 @@ export interface FileRouteTypes {
     | '/api/v1/admin/spotify/auth/start'
     | '/api/v1/admin/submissions/$submissionId/approve'
     | '/api/v1/admin/submissions/$submissionId/reject'
+    | '/api/v1/admin/tracks/$trackId/observe'
     | '/api/v1/admin/tracks/$trackId/preview-archive'
     | '/api/v1/admin/tracks/$trackId/social'
     | '/api/v1/admin/tracks/$trackId/video'
@@ -1723,6 +1747,7 @@ export interface FileRouteTypes {
     | '/api/admin/spotify/auth/start'
     | '/api/admin/submissions/$submissionId/approve'
     | '/api/admin/submissions/$submissionId/reject'
+    | '/api/admin/tracks/$trackId/observe'
     | '/api/admin/tracks/$trackId/preview-archive'
     | '/api/admin/tracks/$trackId/social'
     | '/api/admin/tracks/$trackId/video'
@@ -1755,6 +1780,7 @@ export interface FileRouteTypes {
     | '/api/v1/admin/spotify/auth/start'
     | '/api/v1/admin/submissions/$submissionId/approve'
     | '/api/v1/admin/submissions/$submissionId/reject'
+    | '/api/v1/admin/tracks/$trackId/observe'
     | '/api/v1/admin/tracks/$trackId/preview-archive'
     | '/api/v1/admin/tracks/$trackId/social'
     | '/api/v1/admin/tracks/$trackId/video'
@@ -2521,6 +2547,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminTracksTrackIdPreviewArchiveRouteImport
       parentRoute: typeof ApiAdminTracksTrackIdRoute
     }
+    '/api/admin/tracks/$trackId/observe': {
+      id: '/api/admin/tracks/$trackId/observe'
+      path: '/observe'
+      fullPath: '/api/admin/tracks/$trackId/observe'
+      preLoaderRoute: typeof ApiAdminTracksTrackIdObserveRouteImport
+      parentRoute: typeof ApiAdminTracksTrackIdRoute
+    }
     '/api/admin/submissions/$submissionId/reject': {
       id: '/api/admin/submissions/$submissionId/reject'
       path: '/reject'
@@ -2638,6 +2671,13 @@ declare module '@tanstack/react-router' {
       path: '/preview-archive'
       fullPath: '/api/v1/admin/tracks/$trackId/preview-archive'
       preLoaderRoute: typeof ApiV1AdminTracksTrackIdPreviewArchiveRouteImport
+      parentRoute: typeof ApiV1AdminTracksTrackIdRoute
+    }
+    '/api/v1/admin/tracks/$trackId/observe': {
+      id: '/api/v1/admin/tracks/$trackId/observe'
+      path: '/observe'
+      fullPath: '/api/v1/admin/tracks/$trackId/observe'
+      preLoaderRoute: typeof ApiV1AdminTracksTrackIdObserveRouteImport
       parentRoute: typeof ApiV1AdminTracksTrackIdRoute
     }
     '/api/v1/admin/submissions/$submissionId/reject': {
@@ -3061,12 +3101,14 @@ const ApiAdminTracksTrackIdVideoRouteWithChildren =
   )
 
 interface ApiAdminTracksTrackIdRouteChildren {
+  ApiAdminTracksTrackIdObserveRoute: typeof ApiAdminTracksTrackIdObserveRoute
   ApiAdminTracksTrackIdPreviewArchiveRoute: typeof ApiAdminTracksTrackIdPreviewArchiveRoute
   ApiAdminTracksTrackIdSocialRoute: typeof ApiAdminTracksTrackIdSocialRouteWithChildren
   ApiAdminTracksTrackIdVideoRoute: typeof ApiAdminTracksTrackIdVideoRouteWithChildren
 }
 
 const ApiAdminTracksTrackIdRouteChildren: ApiAdminTracksTrackIdRouteChildren = {
+  ApiAdminTracksTrackIdObserveRoute: ApiAdminTracksTrackIdObserveRoute,
   ApiAdminTracksTrackIdPreviewArchiveRoute:
     ApiAdminTracksTrackIdPreviewArchiveRoute,
   ApiAdminTracksTrackIdSocialRoute:
@@ -3290,6 +3332,7 @@ const ApiV1AdminTracksTrackIdVideoRouteWithChildren =
   )
 
 interface ApiV1AdminTracksTrackIdRouteChildren {
+  ApiV1AdminTracksTrackIdObserveRoute: typeof ApiV1AdminTracksTrackIdObserveRoute
   ApiV1AdminTracksTrackIdPreviewArchiveRoute: typeof ApiV1AdminTracksTrackIdPreviewArchiveRoute
   ApiV1AdminTracksTrackIdSocialRoute: typeof ApiV1AdminTracksTrackIdSocialRouteWithChildren
   ApiV1AdminTracksTrackIdVideoRoute: typeof ApiV1AdminTracksTrackIdVideoRouteWithChildren
@@ -3297,6 +3340,7 @@ interface ApiV1AdminTracksTrackIdRouteChildren {
 
 const ApiV1AdminTracksTrackIdRouteChildren: ApiV1AdminTracksTrackIdRouteChildren =
   {
+    ApiV1AdminTracksTrackIdObserveRoute: ApiV1AdminTracksTrackIdObserveRoute,
     ApiV1AdminTracksTrackIdPreviewArchiveRoute:
       ApiV1AdminTracksTrackIdPreviewArchiveRoute,
     ApiV1AdminTracksTrackIdSocialRoute:

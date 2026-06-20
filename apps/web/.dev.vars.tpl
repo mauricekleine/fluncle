@@ -9,6 +9,12 @@ ADMIN_ALLOWED_SPOTIFY_IDS=op://$FLUNCLE_1PASSWORD_ENV_ITEM/ADMIN_ALLOWED_SPOTIFY
 
 FIRECRAWL_API_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/FIRECRAWL_API_KEY
 
+# ElevenLabs TTS for the audio-observation render. The API key is a standalone
+# Fluncle-vault item; the voice id is a non-secret swappable config var (a stock
+# library voice today — the bespoke Fluncle voice drops in by changing it).
+ELEVENLABS_API_KEY=op://Fluncle/ELEVENLABS_API_KEY/credential
+ELEVENLABS_VOICE_ID=EkK5I93UQWFDigLMpZcX
+
 POSTIZ_API_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/POSTIZ_API_KEY
 POSTIZ_API_URL=
 

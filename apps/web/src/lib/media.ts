@@ -20,6 +20,12 @@ export type TrackMedia = {
   coverUrl: string;
   /** The fixed-template caption (Fluncle's voice) — what the operator pastes in-app. */
   noteUrl: string;
+  /** Fluncle's spoken field observation (the recovered-audio artifact). */
+  observationAudioUrl: string;
+  /** The spoken observation's text (re-render source; may render under the /log audio control). */
+  observationTextUrl: string;
+  /** The structured observation artifact + render metadata (provenance; internal). */
+  observationJsonUrl: string;
   /** A late drop frame; the video element's poster. */
   posterUrl: string;
   /** The with-audio review cut (matches the stored `video_url`). */
@@ -35,6 +41,9 @@ export function trackMedia(logId: string): TrackMedia {
   return {
     coverUrl: `${base}/cover.jpg`,
     noteUrl: `${base}/note.txt`,
+    observationAudioUrl: `${base}/observation.mp3`,
+    observationJsonUrl: `${base}/observation.json`,
+    observationTextUrl: `${base}/observation.txt`,
     posterUrl: `${base}/poster.jpg`,
     silentVideoUrl: `${base}/footage-silent.mp4`,
     videoUrl: `${base}/footage.mp4`,
