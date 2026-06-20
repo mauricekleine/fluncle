@@ -1,53 +1,21 @@
-/* The /docs hub stylesheet, loaded only on the docs routes (linked from the
-   docs layout route). Fumadocs UI ships a fully prebuilt Tailwind stylesheet,
-   so we import it directly — no extra Tailwind source scanning — then retint
-   its theme tokens to the Nostalgic Cosmos (DESIGN.md, the Retint Rule).
+/* The /docs hub RETINT sheet, loaded only on the docs routes (linked from the
+   docs layout route). The Fumadocs framework CSS itself — its preflight,
+   utilities, layout/header/#nd-page structure — lives in the single global
+   styles.css now (folded in the Spinup way, with the `--color-fd-*` token
+   bridge), so it is compiled once and present site-wide without a docs-only
+   <link> that could leak after an SPA nav away from /docs.
 
-   It rides in the `fumadocs` cascade layer (order pinned in styles.css, lowest
-   priority). This stylesheet's <link> persists in the SPA document after you
-   leave /docs, and Fumadocs' prebuilt sheet carries its own Tailwind preflight
-   (`button`, `*`, …) and utilities under the SAME layer names Fluncle uses
-   (`base`/`utilities`) — un-layered they would MERGE and win by source order,
-   restyling the homepage's buttons. Boxed in `fumadocs`, every Fluncle rule
-   (layered or not) outranks them, so the docs styles only apply where Fluncle
-   has no competing rule: inside the docs subtree. The retint rules below stay
-   un-layered on purpose — they must win over this import inside /docs, and they
-   only touch docs-scoped selectors (#nd-…, [data-card], .docs-page-actions) or
-   already-canon globals (.font-display = Oxanium, :root color-scheme: dark). */
-@import "fumadocs-ui/style.css" layer(fumadocs);
-
-/* Fluncle is dark-only. The RootProvider forces the theme dark (forcedTheme),
-   so next-themes pins `.dark` onto <html>. But the SSR pass paints before the
-   theme class lands, and Fumadocs' own light `:root` default would flash white
-   in that window — so we map the canon palette onto BOTH `:root` and `.dark`.
-   The docs render the Nostalgic Cosmos on the very first paint, on every device
-   and OS appearance, with nothing to flip. Values mirror tokens.css /
-   styles.css. */
-:root,
-.dark {
-  color-scheme: dark;
-  --color-fd-background: #090a0b; /* Deep Field */
-  --color-fd-foreground: #f4ead7; /* Starlight Cream */
-  --color-fd-muted: #171611; /* Tape Black */
-  --color-fd-muted-foreground: #b7ab95; /* Stardust */
-  --color-fd-popover: #10100d; /* Sleeve Black */
-  --color-fd-popover-foreground: #f4ead7;
-  --color-fd-card: #10100d; /* Sleeve Black */
-  --color-fd-card-foreground: #f4ead7;
-  --color-fd-border: #d0b99029; /* Dust Line */
-  --color-fd-primary: #f5b800; /* Eclipse Gold — the one sun */
-  --color-fd-primary-foreground: #151006; /* Ink on Gold */
-  --color-fd-secondary: #171611; /* Tape Black */
-  --color-fd-secondary-foreground: #f4ead7;
-  --color-fd-accent: #f5b8001a; /* Gold Veil — the hover wash */
-  --color-fd-accent-foreground: #ffd057; /* Eclipse Glow */
-  --color-fd-ring: #f5b800; /* Eclipse Gold focus ring */
-  --color-fd-error: #ff6b57; /* Re-entry Red */
-  --color-fd-warning: #ffd057;
-  --color-fd-success: #f5b800;
-  --color-fd-info: #ffd057;
-  --color-fd-overlay: #090a0bcc;
-}
+   What stays HERE are the Retint Rules: the Nostalgic-Cosmos overrides that
+   dress Fumadocs' structure to canon (DESIGN.md). Every selector below is
+   docs-scoped — `#nd-…`, `[data-card]`, `.docs-page-actions` — or an already-
+   canon global (`.font-display` = Oxanium). They are un-layered on purpose and
+   win over the global framework rules inside the docs subtree by `#nd-…`
+   specificity. Because they only ever match elements that exist inside /docs
+   (or restate a brand global), this sheet's <link> persisting in the SPA after
+   you leave /docs touches nothing on the public app. The `.dark` container
+   (#nd-docs-layout, set via containerProps in docs.tsx) keys Fumadocs' dark
+   Shiki + sidebar rules; the `--color-fd-*` palette is bridged globally in
+   styles.css, so there is nothing to re-declare here. */
 
 /* The terminal voice (DESIGN: The One Voice Rule) — code is the machine's own
    word, set in Monaspace Krypton like the CLI/SSH surfaces. The reading body
@@ -105,6 +73,17 @@
 }
 
 /* ————— Sidebar + nav as a quiet pane ————— */
+
+/* Fumadocs' neutral preset (imported globally) ships a `.dark #nd-sidebar`
+   block that re-points `--color-fd-muted`/`-secondary`/`-muted-foreground` to
+   neutral grays inside the sidebar. The docs container carries `.dark`, so re-
+   bridge those three back onto canon here (same specificity, later source) so
+   the sidebar stays Nostalgic Cosmos, not neutral gray. */
+.dark #nd-sidebar {
+  --color-fd-muted: #171611; /* Tape Black */
+  --color-fd-muted-foreground: #b7ab95; /* Stardust */
+  --color-fd-secondary: #171611; /* Tape Black */
+}
 
 /* One translucent pane over the cosmos (One Pane): a whisper of Sleeve Black
    with a Dust Line edge and a backdrop blur, so the starfield reads behind the
