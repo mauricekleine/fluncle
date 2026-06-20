@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fluncle Lens — Settings</title>
+    <link rel="stylesheet" href="ui.css" />
+  </head>
+  <body>
+    <main class="lens-options">
+      <h1>Fluncle Lens</h1>
+      <p class="lens-tagline">Findings hidden across the web.</p>
+
+      <div class="lens-field">
+        <div class="lens-field-text">
+          <div class="lens-field-label" id="scan-label">Scan all websites</div>
+          <div class="lens-field-hint" id="scan-hint"></div>
+        </div>
+        <label class="lens-switch">
+          <input id="scan" type="checkbox" aria-labelledby="scan-label scan-hint" />
+          <span class="lens-switch-track" aria-hidden="true"></span>
+        </label>
+      </div>
+
+      <div class="lens-field">
+        <div class="lens-field-text">
+          <div class="lens-field-label" id="cards-label">Show hover cards</div>
+          <div class="lens-field-hint" id="cards-hint"></div>
+        </div>
+        <label class="lens-switch">
+          <input id="cards" type="checkbox" aria-labelledby="cards-label cards-hint" />
+          <span class="lens-switch-track" aria-hidden="true"></span>
+        </label>
+      </div>
+
+      <div class="lens-field">
+        <div class="lens-field-text">
+          <div class="lens-field-label" id="target-label">Open findings on</div>
+          <div class="lens-field-hint" id="target-hint"></div>
+        </div>
+        <select id="target" class="lens-select" aria-labelledby="target-label target-hint">
+          <option value="web">fluncle.com</option>
+        </select>
+      </div>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "name": "@fluncle/extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Fluncle Lens — surface the findings hidden across the web.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "bun run ./scripts/build.ts",
+    "dev": "bun run ./scripts/build.ts --watch",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "@types/chrome": "~0.1.43",
+    "typescript": "catalog:"
+  }
+}

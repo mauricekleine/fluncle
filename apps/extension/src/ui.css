@@ -1,0 +1,274 @@
+/* Shared styles for the popup and options surfaces. Dark-only Nostalgic Cosmos,
+   matching the web app: deep field ground, eclipse gold accent, Oxanium for the
+   coordinate and numbers. The Oxanium webfont isn't bundled, so coordinates fall
+   back to the platform sans with tabular numerals — still tidy, still on-brand. */
+
+:root {
+  color-scheme: dark;
+  --deep-field: #090a0b;
+  --sleeve-black: #10100d;
+  --tape-black: #171611;
+  --rule-dark: #3a342a;
+  --starlight-cream: #f4ead7;
+  --stardust: #b7ab95;
+  --eclipse-gold: #f5b800;
+  --eclipse-glow: #ffd057;
+  --gold-veil: #f5b8001a;
+  --ink-on-gold: #151006;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background-color: var(--deep-field);
+  color: var(--starlight-cream);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.lens-popup {
+  width: 340px;
+  padding: 14px 14px 16px;
+}
+
+.lens-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+
+.lens-wordmark {
+  font-family: Oxanium, ui-sans-serif, system-ui, sans-serif;
+  font-weight: 800;
+  font-size: 1rem;
+  letter-spacing: -0.02em;
+  color: var(--starlight-cream);
+}
+
+.lens-gear {
+  all: unset;
+  cursor: pointer;
+  color: var(--stardust);
+  font-size: 1.4rem;
+  line-height: 1;
+  padding: 0 6px;
+  border-radius: 0.375rem;
+}
+
+.lens-gear:hover {
+  color: var(--eclipse-glow);
+}
+
+.lens-gear:focus-visible {
+  outline: 2px solid var(--eclipse-glow);
+  outline-offset: 1px;
+}
+
+.lens-count {
+  margin: 0 0 12px;
+  font-size: 0.82rem;
+  color: var(--stardust);
+}
+
+.lens-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lens-empty {
+  color: var(--stardust);
+  font-size: 0.86rem;
+  padding: 6px 0 2px;
+}
+
+.lens-row {
+  border: 1px solid var(--rule-dark);
+  border-radius: 0.5rem;
+  background-color: var(--sleeve-black);
+  padding: 10px 11px;
+}
+
+.lens-row-coordinate {
+  font-family: Oxanium, ui-sans-serif, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.84rem;
+  letter-spacing: -0.02em;
+  color: var(--eclipse-glow);
+}
+
+.lens-row-title {
+  margin-top: 3px;
+  font-weight: 800;
+  font-size: 0.88rem;
+  color: var(--starlight-cream);
+}
+
+.lens-row-meta {
+  margin-top: 2px;
+  font-size: 0.78rem;
+  color: var(--stardust);
+}
+
+.lens-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.lens-action {
+  all: unset;
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: var(--starlight-cream);
+  background-color: var(--tape-black);
+  border: 1px solid var(--rule-dark);
+  border-radius: 0.375rem;
+  padding: 4px 8px;
+  text-decoration: none;
+  transition:
+    border-color 150ms ease-out,
+    background-color 150ms ease-out;
+}
+
+.lens-action:hover {
+  border-color: var(--eclipse-gold);
+  background-color: var(--gold-veil);
+}
+
+.lens-action:focus-visible {
+  outline: 2px solid var(--eclipse-glow);
+  outline-offset: 1px;
+}
+
+/* ── Options ─────────────────────────────────────────────────────────────── */
+
+.lens-options {
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 28px 24px 40px;
+}
+
+.lens-options h1 {
+  font-family: Oxanium, ui-sans-serif, system-ui, sans-serif;
+  font-weight: 800;
+  font-size: 1.4rem;
+  letter-spacing: -0.02em;
+  margin: 0 0 4px;
+}
+
+.lens-options .lens-tagline {
+  margin: 0 0 24px;
+  color: var(--stardust);
+  font-size: 0.9rem;
+}
+
+.lens-field {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 0;
+  border-top: 1px solid var(--rule-dark);
+}
+
+.lens-field-text {
+  flex: 1;
+}
+
+.lens-field-label {
+  font-weight: 800;
+  font-size: 0.92rem;
+}
+
+.lens-field-hint {
+  margin-top: 3px;
+  color: var(--stardust);
+  font-size: 0.8rem;
+}
+
+/* Accessible toggle switch built on a checkbox. */
+.lens-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 24px;
+}
+
+.lens-switch input {
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+
+.lens-switch-track {
+  position: absolute;
+  inset: 0;
+  background-color: var(--tape-black);
+  border: 1px solid var(--rule-dark);
+  border-radius: 999px;
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out;
+  pointer-events: none;
+}
+
+.lens-switch-track::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background-color: var(--stardust);
+  transition:
+    transform 150ms ease-out,
+    background-color 150ms ease-out;
+}
+
+.lens-switch input:checked + .lens-switch-track {
+  background-color: var(--gold-veil);
+  border-color: var(--eclipse-gold);
+}
+
+.lens-switch input:checked + .lens-switch-track::after {
+  transform: translateX(18px);
+  background-color: var(--eclipse-gold);
+}
+
+.lens-switch input:focus-visible + .lens-switch-track {
+  outline: 2px solid var(--eclipse-glow);
+  outline-offset: 2px;
+}
+
+.lens-select {
+  background-color: var(--tape-black);
+  color: var(--starlight-cream);
+  border: 1px solid var(--rule-dark);
+  border-radius: 0.375rem;
+  padding: 6px 10px;
+  font-size: 0.82rem;
+  font-family: inherit;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lens-action,
+  .lens-switch-track,
+  .lens-switch-track::after {
+    transition: none;
+  }
+}

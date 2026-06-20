@@ -24,6 +24,7 @@ Crawler and discovery surfaces (all under <https://www.fluncle.com>): `/robots.t
 
 ```text
 apps/cli         Bun/TypeScript CLI. Thin client for public reads and admin API calls.
+apps/extension   Fluncle Lens, an MV3 Chrome extension. Linkifies fluncle:// coordinates on any page.
 apps/raycast     Raycast extension. Thin client that shells out to the CLI.
 apps/ssh         Go Wish/Bubble Tea SSH terminal behind ssh rave.fluncle.com. Thin client of the public API.
 apps/web         TanStack Start public web app and server-side Fluncle API.
