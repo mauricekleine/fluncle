@@ -1082,6 +1082,13 @@ body::before {
   letter-spacing: -0.01em;
 }
 
+/* On the mixtape tracklist the leading column reads `NN · <coordinate>`, whose
+   width varies with the sector/tail length. Pin it to a consistent width (The
+   Tabular Rule) so every row's Artist — Title starts at the same x. */
+.log-tracklist .log-related-coordinate {
+  min-width: 7.5rem;
+}
+
 .log-related-line {
   font-size: 0.9rem;
   font-weight: 700;

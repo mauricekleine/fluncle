@@ -445,7 +445,7 @@ function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
 
         <section aria-label="Mixtape tracklist" className="log-related">
           <h2>Tracklist</h2>
-          <ol className="log-related-list">
+          <ol className="log-related-list log-tracklist">
             {mixtape.members.map((member, index) =>
               member.logId ? (
                 <li key={member.trackId}>
