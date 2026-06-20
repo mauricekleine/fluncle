@@ -106,12 +106,9 @@ stay dormant until you enable them:
    ```
    (or npmjs.com → the `fluncle` package → Settings → Trusted Publisher → GitHub
    Actions: repo `mauricekleine/fluncle`, workflow `cli-release.yml`).
-3. Flip the workflow on: set the repo **variable** `NPM_TRUSTED_PUBLISHER=true`
-   (`gh variable set NPM_TRUSTED_PUBLISHER --body true`).
-
-Thereafter every release publishes via OIDC with provenance — no `NPM_TOKEN`
-anywhere. Requires npm >= 11.5.1 / Node >= 22.14 (the workflow uses Node 24 +
-`npm@latest`).
+   Once the trusted publisher is attached, every release publishes via OIDC with
+   provenance automatically — no token, no toggle. Requires npm >= 11.5.1 /
+   Node >= 22.14 (the workflow uses Node 24 + `npm@latest`).
 
 **Homebrew:** create the empty public `mauricekleine/homebrew-fluncle` repo and add
 a `HOMEBREW_TAP_TOKEN` repo secret (a PAT with contents:write on it). The workflow

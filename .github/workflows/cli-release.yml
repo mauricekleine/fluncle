@@ -82,9 +82,9 @@ jobs:
             --notes "Automated CLI release for ${{ github.sha }}."
 
       # One source of truth (the release version above) -> npm + Homebrew, the
-      # same version as the GitHub Release. npm uses OIDC trusted publishing (no
-      # token); the tap step no-ops until its secret exists. Both are dormant
-      # until enabled, so this is safe to ship before npm / the tap are set up.
+      # same version as the GitHub Release. npm publishes via OIDC trusted
+      # publishing (no token; the publisher is configured for this repo). The tap
+      # step no-ops until its secret exists.
       - name: Set up Node for npm publish
         uses: actions/setup-node@v4
         with:
@@ -92,10 +92,8 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: Publish to npm (fluncle, OIDC trusted publishing)
-        # No token: OIDC. Enable by setting the repo variable
-        # NPM_TRUSTED_PUBLISHER=true once the package exists + its trusted
-        # publisher is configured (see apps/cli/packaging/README.md).
-        if: ${{ vars.NPM_TRUSTED_PUBLISHER == 'true' }}
+        # No token: OIDC. The `fluncle` package's trusted publisher is configured
+        # for this repo + workflow (see apps/cli/packaging/README.md).
         env:
           FLUNCLE_CLI_VERSION: ${{ steps.version.outputs.version }}
         run: |
