@@ -1,6 +1,8 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
 import {
+  discogsUrl,
   instagramUrl,
+  lastfmUrl,
   mixcloudUrl,
   musicbrainzUrl,
   siteUrl,
@@ -73,6 +75,8 @@ function aboutHead() {
       twitchUrl,
       musicbrainzUrl,
       wikidataUrl,
+      lastfmUrl,
+      discogsUrl,
     ],
     url: `${siteUrl}/`,
   };
