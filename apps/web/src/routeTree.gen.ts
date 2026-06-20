@@ -95,6 +95,8 @@ import { Route as ApiAdminTracksTrackIdRouteImport } from './routes/api/admin/tr
 import { Route as ApiAdminSubmissionsSubmissionIdRouteImport } from './routes/api/admin/submissions/$submissionId'
 import { Route as ApiAdminMixtapesMixtapeIdRouteImport } from './routes/api/admin/mixtapes.$mixtapeId'
 import { Route as ApiAdminMixcloudTokenRouteImport } from './routes/api/admin/mixcloud/token'
+import { Route as ApiAdminBackfillLastfmRouteImport } from './routes/api/admin/backfill.lastfm'
+import { Route as ApiAdminBackfillDiscogsRouteImport } from './routes/api/admin/backfill.discogs'
 import { Route as ApiV1MeSavedFindingsTrackIdRouteImport } from './routes/api/v1/me/saved-findings.$trackId'
 import { Route as ApiV1MeGalaxyProgressLogsRouteImport } from './routes/api/v1/me/galaxy-progress/logs'
 import { Route as ApiV1MeExportExportIdRouteImport } from './routes/api/v1/me/export.$exportId'
@@ -103,6 +105,8 @@ import { Route as ApiV1AdminTracksTrackIdRouteImport } from './routes/api/v1/adm
 import { Route as ApiV1AdminSubmissionsSubmissionIdRouteImport } from './routes/api/v1/admin/submissions/$submissionId'
 import { Route as ApiV1AdminMixtapesMixtapeIdRouteImport } from './routes/api/v1/admin/mixtapes.$mixtapeId'
 import { Route as ApiV1AdminMixcloudTokenRouteImport } from './routes/api/v1/admin/mixcloud/token'
+import { Route as ApiV1AdminBackfillLastfmRouteImport } from './routes/api/v1/admin/backfill.lastfm'
+import { Route as ApiV1AdminBackfillDiscogsRouteImport } from './routes/api/v1/admin/backfill.discogs'
 import { Route as ApiAdminYoutubeAuthStartRouteImport } from './routes/api/admin/youtube/auth/start'
 import { Route as ApiAdminYoutubeAuthCallbackRouteImport } from './routes/api/admin/youtube/auth/callback'
 import { Route as ApiAdminTracksTrackIdVideoRouteImport } from './routes/api/admin/tracks.$trackId.video'
@@ -589,6 +593,16 @@ const ApiAdminMixcloudTokenRoute = ApiAdminMixcloudTokenRouteImport.update({
   path: '/api/admin/mixcloud/token',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAdminBackfillLastfmRoute = ApiAdminBackfillLastfmRouteImport.update({
+  id: '/api/admin/backfill/lastfm',
+  path: '/api/admin/backfill/lastfm',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAdminBackfillDiscogsRoute = ApiAdminBackfillDiscogsRouteImport.update({
+  id: '/api/admin/backfill/discogs',
+  path: '/api/admin/backfill/discogs',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiV1MeSavedFindingsTrackIdRoute =
   ApiV1MeSavedFindingsTrackIdRouteImport.update({
     id: '/$trackId',
@@ -633,6 +647,18 @@ const ApiV1AdminMixcloudTokenRoute = ApiV1AdminMixcloudTokenRouteImport.update({
   path: '/api/v1/admin/mixcloud/token',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiV1AdminBackfillLastfmRoute =
+  ApiV1AdminBackfillLastfmRouteImport.update({
+    id: '/api/v1/admin/backfill/lastfm',
+    path: '/api/v1/admin/backfill/lastfm',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiV1AdminBackfillDiscogsRoute =
+  ApiV1AdminBackfillDiscogsRouteImport.update({
+    id: '/api/v1/admin/backfill/discogs',
+    path: '/api/v1/admin/backfill/discogs',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiAdminYoutubeAuthStartRoute =
   ApiAdminYoutubeAuthStartRouteImport.update({
     id: '/api/admin/youtube/auth/start',
@@ -1007,6 +1033,8 @@ export interface FileRoutesByFullPath {
   '/api/v1/stories': typeof ApiV1StoriesRoute
   '/api/v1/submissions': typeof ApiV1SubmissionsRoute
   '/api/v1/tracks': typeof ApiV1TracksRouteWithChildren
+  '/api/admin/backfill/discogs': typeof ApiAdminBackfillDiscogsRoute
+  '/api/admin/backfill/lastfm': typeof ApiAdminBackfillLastfmRoute
   '/api/admin/mixcloud/token': typeof ApiAdminMixcloudTokenRoute
   '/api/admin/mixtapes/$mixtapeId': typeof ApiAdminMixtapesMixtapeIdRouteWithChildren
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
@@ -1050,6 +1078,8 @@ export interface FileRoutesByFullPath {
   '/api/admin/tracks/$trackId/video': typeof ApiAdminTracksTrackIdVideoRouteWithChildren
   '/api/admin/youtube/auth/callback': typeof ApiAdminYoutubeAuthCallbackRoute
   '/api/admin/youtube/auth/start': typeof ApiAdminYoutubeAuthStartRoute
+  '/api/v1/admin/backfill/discogs': typeof ApiV1AdminBackfillDiscogsRoute
+  '/api/v1/admin/backfill/lastfm': typeof ApiV1AdminBackfillLastfmRoute
   '/api/v1/admin/mixcloud/token': typeof ApiV1AdminMixcloudTokenRoute
   '/api/v1/admin/mixtapes/$mixtapeId': typeof ApiV1AdminMixtapesMixtapeIdRouteWithChildren
   '/api/v1/admin/submissions/$submissionId': typeof ApiV1AdminSubmissionsSubmissionIdRouteWithChildren
@@ -1153,6 +1183,8 @@ export interface FileRoutesByTo {
   '/api/v1/stories': typeof ApiV1StoriesRoute
   '/api/v1/submissions': typeof ApiV1SubmissionsRoute
   '/api/v1/tracks': typeof ApiV1TracksRouteWithChildren
+  '/api/admin/backfill/discogs': typeof ApiAdminBackfillDiscogsRoute
+  '/api/admin/backfill/lastfm': typeof ApiAdminBackfillLastfmRoute
   '/api/admin/mixcloud/token': typeof ApiAdminMixcloudTokenRoute
   '/api/admin/mixtapes/$mixtapeId': typeof ApiAdminMixtapesMixtapeIdRouteWithChildren
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
@@ -1196,6 +1228,8 @@ export interface FileRoutesByTo {
   '/api/admin/tracks/$trackId/video': typeof ApiAdminTracksTrackIdVideoRouteWithChildren
   '/api/admin/youtube/auth/callback': typeof ApiAdminYoutubeAuthCallbackRoute
   '/api/admin/youtube/auth/start': typeof ApiAdminYoutubeAuthStartRoute
+  '/api/v1/admin/backfill/discogs': typeof ApiV1AdminBackfillDiscogsRoute
+  '/api/v1/admin/backfill/lastfm': typeof ApiV1AdminBackfillLastfmRoute
   '/api/v1/admin/mixcloud/token': typeof ApiV1AdminMixcloudTokenRoute
   '/api/v1/admin/mixtapes/$mixtapeId': typeof ApiV1AdminMixtapesMixtapeIdRouteWithChildren
   '/api/v1/admin/submissions/$submissionId': typeof ApiV1AdminSubmissionsSubmissionIdRouteWithChildren
@@ -1302,6 +1336,8 @@ export interface FileRoutesById {
   '/api/v1/stories': typeof ApiV1StoriesRoute
   '/api/v1/submissions': typeof ApiV1SubmissionsRoute
   '/api/v1/tracks': typeof ApiV1TracksRouteWithChildren
+  '/api/admin/backfill/discogs': typeof ApiAdminBackfillDiscogsRoute
+  '/api/admin/backfill/lastfm': typeof ApiAdminBackfillLastfmRoute
   '/api/admin/mixcloud/token': typeof ApiAdminMixcloudTokenRoute
   '/api/admin/mixtapes/$mixtapeId': typeof ApiAdminMixtapesMixtapeIdRouteWithChildren
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
@@ -1345,6 +1381,8 @@ export interface FileRoutesById {
   '/api/admin/tracks/$trackId/video': typeof ApiAdminTracksTrackIdVideoRouteWithChildren
   '/api/admin/youtube/auth/callback': typeof ApiAdminYoutubeAuthCallbackRoute
   '/api/admin/youtube/auth/start': typeof ApiAdminYoutubeAuthStartRoute
+  '/api/v1/admin/backfill/discogs': typeof ApiV1AdminBackfillDiscogsRoute
+  '/api/v1/admin/backfill/lastfm': typeof ApiV1AdminBackfillLastfmRoute
   '/api/v1/admin/mixcloud/token': typeof ApiV1AdminMixcloudTokenRoute
   '/api/v1/admin/mixtapes/$mixtapeId': typeof ApiV1AdminMixtapesMixtapeIdRouteWithChildren
   '/api/v1/admin/submissions/$submissionId': typeof ApiV1AdminSubmissionsSubmissionIdRouteWithChildren
@@ -1452,6 +1490,8 @@ export interface FileRouteTypes {
     | '/api/v1/stories'
     | '/api/v1/submissions'
     | '/api/v1/tracks'
+    | '/api/admin/backfill/discogs'
+    | '/api/admin/backfill/lastfm'
     | '/api/admin/mixcloud/token'
     | '/api/admin/mixtapes/$mixtapeId'
     | '/api/admin/submissions/$submissionId'
@@ -1495,6 +1535,8 @@ export interface FileRouteTypes {
     | '/api/admin/tracks/$trackId/video'
     | '/api/admin/youtube/auth/callback'
     | '/api/admin/youtube/auth/start'
+    | '/api/v1/admin/backfill/discogs'
+    | '/api/v1/admin/backfill/lastfm'
     | '/api/v1/admin/mixcloud/token'
     | '/api/v1/admin/mixtapes/$mixtapeId'
     | '/api/v1/admin/submissions/$submissionId'
@@ -1598,6 +1640,8 @@ export interface FileRouteTypes {
     | '/api/v1/stories'
     | '/api/v1/submissions'
     | '/api/v1/tracks'
+    | '/api/admin/backfill/discogs'
+    | '/api/admin/backfill/lastfm'
     | '/api/admin/mixcloud/token'
     | '/api/admin/mixtapes/$mixtapeId'
     | '/api/admin/submissions/$submissionId'
@@ -1641,6 +1685,8 @@ export interface FileRouteTypes {
     | '/api/admin/tracks/$trackId/video'
     | '/api/admin/youtube/auth/callback'
     | '/api/admin/youtube/auth/start'
+    | '/api/v1/admin/backfill/discogs'
+    | '/api/v1/admin/backfill/lastfm'
     | '/api/v1/admin/mixcloud/token'
     | '/api/v1/admin/mixtapes/$mixtapeId'
     | '/api/v1/admin/submissions/$submissionId'
@@ -1746,6 +1792,8 @@ export interface FileRouteTypes {
     | '/api/v1/stories'
     | '/api/v1/submissions'
     | '/api/v1/tracks'
+    | '/api/admin/backfill/discogs'
+    | '/api/admin/backfill/lastfm'
     | '/api/admin/mixcloud/token'
     | '/api/admin/mixtapes/$mixtapeId'
     | '/api/admin/submissions/$submissionId'
@@ -1789,6 +1837,8 @@ export interface FileRouteTypes {
     | '/api/admin/tracks/$trackId/video'
     | '/api/admin/youtube/auth/callback'
     | '/api/admin/youtube/auth/start'
+    | '/api/v1/admin/backfill/discogs'
+    | '/api/v1/admin/backfill/lastfm'
     | '/api/v1/admin/mixcloud/token'
     | '/api/v1/admin/mixtapes/$mixtapeId'
     | '/api/v1/admin/submissions/$submissionId'
@@ -1880,6 +1930,8 @@ export interface RootRouteChildren {
   ApiV1StoriesRoute: typeof ApiV1StoriesRoute
   ApiV1SubmissionsRoute: typeof ApiV1SubmissionsRoute
   ApiV1TracksRoute: typeof ApiV1TracksRouteWithChildren
+  ApiAdminBackfillDiscogsRoute: typeof ApiAdminBackfillDiscogsRoute
+  ApiAdminBackfillLastfmRoute: typeof ApiAdminBackfillLastfmRoute
   ApiAdminMixcloudTokenRoute: typeof ApiAdminMixcloudTokenRoute
   ApiAdminYoutubeTokenRoute: typeof ApiAdminYoutubeTokenRoute
   ApiV1AdminEnrichSweepRoute: typeof ApiV1AdminEnrichSweepRoute
@@ -1899,6 +1951,8 @@ export interface RootRouteChildren {
   ApiAdminSpotifyAuthStartRoute: typeof ApiAdminSpotifyAuthStartRoute
   ApiAdminYoutubeAuthCallbackRoute: typeof ApiAdminYoutubeAuthCallbackRoute
   ApiAdminYoutubeAuthStartRoute: typeof ApiAdminYoutubeAuthStartRoute
+  ApiV1AdminBackfillDiscogsRoute: typeof ApiV1AdminBackfillDiscogsRoute
+  ApiV1AdminBackfillLastfmRoute: typeof ApiV1AdminBackfillLastfmRoute
   ApiV1AdminMixcloudTokenRoute: typeof ApiV1AdminMixcloudTokenRoute
   ApiV1AdminYoutubeTokenRoute: typeof ApiV1AdminYoutubeTokenRoute
   ApiV1AdminLastfmAuthSessionRoute: typeof ApiV1AdminLastfmAuthSessionRoute
@@ -2516,6 +2570,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminMixcloudTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/admin/backfill/lastfm': {
+      id: '/api/admin/backfill/lastfm'
+      path: '/api/admin/backfill/lastfm'
+      fullPath: '/api/admin/backfill/lastfm'
+      preLoaderRoute: typeof ApiAdminBackfillLastfmRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/backfill/discogs': {
+      id: '/api/admin/backfill/discogs'
+      path: '/api/admin/backfill/discogs'
+      fullPath: '/api/admin/backfill/discogs'
+      preLoaderRoute: typeof ApiAdminBackfillDiscogsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/v1/me/saved-findings/$trackId': {
       id: '/api/v1/me/saved-findings/$trackId'
       path: '/$trackId'
@@ -2570,6 +2638,20 @@ declare module '@tanstack/react-router' {
       path: '/api/v1/admin/mixcloud/token'
       fullPath: '/api/v1/admin/mixcloud/token'
       preLoaderRoute: typeof ApiV1AdminMixcloudTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/admin/backfill/lastfm': {
+      id: '/api/v1/admin/backfill/lastfm'
+      path: '/api/v1/admin/backfill/lastfm'
+      fullPath: '/api/v1/admin/backfill/lastfm'
+      preLoaderRoute: typeof ApiV1AdminBackfillLastfmRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/admin/backfill/discogs': {
+      id: '/api/v1/admin/backfill/discogs'
+      path: '/api/v1/admin/backfill/discogs'
+      fullPath: '/api/v1/admin/backfill/discogs'
+      preLoaderRoute: typeof ApiV1AdminBackfillDiscogsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/admin/youtube/auth/start': {
@@ -3472,6 +3554,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiV1StoriesRoute: ApiV1StoriesRoute,
   ApiV1SubmissionsRoute: ApiV1SubmissionsRoute,
   ApiV1TracksRoute: ApiV1TracksRouteWithChildren,
+  ApiAdminBackfillDiscogsRoute: ApiAdminBackfillDiscogsRoute,
+  ApiAdminBackfillLastfmRoute: ApiAdminBackfillLastfmRoute,
   ApiAdminMixcloudTokenRoute: ApiAdminMixcloudTokenRoute,
   ApiAdminYoutubeTokenRoute: ApiAdminYoutubeTokenRoute,
   ApiV1AdminEnrichSweepRoute: ApiV1AdminEnrichSweepRoute,
@@ -3491,6 +3575,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAdminSpotifyAuthStartRoute: ApiAdminSpotifyAuthStartRoute,
   ApiAdminYoutubeAuthCallbackRoute: ApiAdminYoutubeAuthCallbackRoute,
   ApiAdminYoutubeAuthStartRoute: ApiAdminYoutubeAuthStartRoute,
+  ApiV1AdminBackfillDiscogsRoute: ApiV1AdminBackfillDiscogsRoute,
+  ApiV1AdminBackfillLastfmRoute: ApiV1AdminBackfillLastfmRoute,
   ApiV1AdminMixcloudTokenRoute: ApiV1AdminMixcloudTokenRoute,
   ApiV1AdminYoutubeTokenRoute: ApiV1AdminYoutubeTokenRoute,
   ApiV1AdminLastfmAuthSessionRoute: ApiV1AdminLastfmAuthSessionRoute,
