@@ -1,0 +1,11 @@
+# Fluncle Hermes gateway config. Non-secret only — secrets come from the env via
+# `--env-file /etc/hermes.env` (OPENROUTER_API_KEY, FLUNCLE_API_TOKEN, the Discord
+# bot token). Deployed to ~/.hermes/config.yaml on the devbox. See
+# docs/agents/hermes-agent.md.
+#
+# Model: OpenRouter BYO key. Must be >=64k context and pinned (a smaller window
+# takes the whole gateway down at startup). deepseek-v4-flash = 1M context, cheap;
+# a flash model, so it must clear the voice gate before the bot goes public.
+model:
+  provider: openrouter
+  default: deepseek/deepseek-v4-flash
