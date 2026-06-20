@@ -1,0 +1,32 @@
+# Cloudflare Workers static-asset headers (honored from the deployed asset dir).
+# The framework default for built assets is `max-age=0, must-revalidate`, which
+# makes every navigation revalidate even content-hashed files. These rules give
+# fingerprinted output a long immutable cache and the unhashed static files a
+# long (mutable) cache, so repeat visits and same-session navigations skip the
+# revalidation round-trip. The HTML documents are served by the Worker, not as
+# static assets, so they are unaffected and stay fresh.
+
+# Content-hashed build output (e.g. /assets/index-CkMwHc4n.css): the hash in the
+# filename changes whenever the bytes change, so these are safe to freeze.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Self-hosted fonts are named per-face and only change when the face changes.
+/fonts/*
+  Cache-Control: public, max-age=31536000
+
+# Galaxy game sprite/audio assets.
+/galaxy/*
+  Cache-Control: public, max-age=604800
+
+# Brand/cover imagery and icons (unhashed names): cache for a week so they stop
+# revalidating on every load, while still rolling over within a reasonable window.
+# Paths must begin with `/`; the leading `*` splat matches any directory depth.
+/*.webp
+  Cache-Control: public, max-age=604800
+/*.png
+  Cache-Control: public, max-age=604800
+/*.jpg
+  Cache-Control: public, max-age=604800
+/*.ico
+  Cache-Control: public, max-age=604800

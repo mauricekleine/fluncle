@@ -61,7 +61,20 @@ export const Route = createFileRoute("/")({
     // The self-referencing canonical lives on each leaf: TanStack merges the
     // root's and the leaf's `links` without deduping by rel, so a canonical in
     // __root.tsx would emit a duplicate on every other page.
-    links: [{ href: `${siteUrl}/`, rel: "canonical" }],
+    links: [
+      { href: `${siteUrl}/`, rel: "canonical" },
+      // Preload the cover — the homepage LCP element. Without this the browser
+      // discovers it at Medium priority mid-parse; preloading at high priority
+      // lets the fetch start immediately. The WebP variant is preloaded to match
+      // the <picture> the page actually renders (the PNG stays the og: fallback).
+      {
+        as: "image",
+        fetchPriority: "high",
+        href: "/fluncle-cover.webp",
+        rel: "preload",
+        type: "image/webp",
+      },
+    ],
     scripts: [
       {
         // The site-level entity block (no SearchAction: there is no search
@@ -193,7 +206,10 @@ function HomePage() {
           <img
             alt="Fluncle cover art"
             className="aspect-square w-full object-cover"
+            // The LCP element: fetch it at high priority and never lazy-load it.
+            fetchPriority="high"
             height="512"
+            loading="eager"
             src="/fluncle-cover.png"
             width="512"
           />
