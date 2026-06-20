@@ -1,12 +1,18 @@
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { DocsPage } from "./-docs-page";
+import { DocsPage, preloadDocsPage } from "./-docs-page";
 
 // The /docs landing page — renders content/docs/index.mdx through the same
 // pipeline as every other doc.
 export const Route = createFileRoute("/docs/")({
   component: Page,
-  loader: async () => resolveIndex(),
+  loader: async () => {
+    const { path } = await resolveIndex();
+    // Warm the compiled MDX before render (same as /docs/$) so navigating back
+    // to the index swaps in synchronously without blanking the content column.
+    await preloadDocsPage(path);
+    return { path };
+  },
 });
 
 const resolveIndex = createServerFn({ method: "GET" }).handler(async () => {

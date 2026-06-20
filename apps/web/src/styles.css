@@ -1,3 +1,13 @@
+/* Cascade-layer order, pinned document-wide from the FIRST stylesheet the app
+   loads. `fumadocs` is declared first, so it ranks BELOW every Fluncle layer —
+   and below Fluncle's unlayered rules, which beat all layers (MDN: unlayered
+   author styles win over layered ones). The /docs hub imports the whole
+   prebuilt Fumadocs stylesheet INTO this layer (`@import … layer(fumadocs)` in
+   docs.css), so its Tailwind preflight + utilities can never override Fluncle's
+   own styles once its <link> persists in the SPA document after leaving /docs.
+   Tailwind appends its own `theme, base, components, utilities` after this line;
+   naming them here too keeps a single authoritative order. */
+@layer fumadocs, theme, base, components, utilities;
 @import "tailwindcss";
 @import "shadcn/tailwind.css";
 /* Canon tokens (DESIGN.md → @fluncle/tokens → tokens.css); the single source of

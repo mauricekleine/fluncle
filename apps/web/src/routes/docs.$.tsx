@@ -1,6 +1,6 @@
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { DocsPage } from "./-docs-page";
+import { DocsPage, preloadDocsPage } from "./-docs-page";
 
 // Every /docs/<slug...> human page. The MDX is compiled at build time; the
 // server fn resolves the slug to a content path (404 on a miss) and the client
@@ -10,7 +10,11 @@ export const Route = createFileRoute("/docs/$")({
   component: Page,
   loader: async ({ params }) => {
     const slugs = params._splat ? params._splat.split("/") : [];
-    return resolvePage({ data: slugs });
+    const { path } = await resolvePage({ data: slugs });
+    // Warm the compiled MDX before render so the page swaps in synchronously —
+    // the shared DocsLayout stays mounted, no content blank, no flicker.
+    await preloadDocsPage(path);
+    return { path };
   },
 });
 
