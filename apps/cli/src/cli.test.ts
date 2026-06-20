@@ -82,6 +82,16 @@ describe("fluncle CLI parsing and JSON output", () => {
 `);
   });
 
+  test("admin track observe requires a script before any render", async () => {
+    // No --script / --script-file fails local validation before the API call,
+    // so this runs without a server or admin token (and never spends a render).
+    const result = await runCli(["admin", "track", "observe", "004.7.2I", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: fluncle admin track observe");
+  });
+
   test("keeps root help listener-facing", async () => {
     const result = await runCli([]);
 

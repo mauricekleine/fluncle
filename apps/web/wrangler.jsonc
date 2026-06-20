@@ -22,6 +22,11 @@
     // lib/server/spinup.ts). The matching runtime key SPINUP_ENRICH_AGENT_KEY
     // (an sk_agent_… key with the runs:create permission) is a secret, never checked in.
     "SPINUP_ENRICH_AGENT_ID": "agent_857b6b85-029b-42bd-a79a-47a23d83a42e",
+    // Non-secret ElevenLabs voice id for the audio-observation render (a swappable
+    // config var, not a credential). A stock library voice today; the bespoke
+    // Fluncle voice drops in by changing this var. The matching ELEVENLABS_API_KEY
+    // is a secret the operator sets with `wrangler secret put`, never checked in.
+    "ELEVENLABS_VOICE_ID": "EkK5I93UQWFDigLMpZcX",
   },
   // OPERATOR OPS STEP — Media Transformations (playback renditions):
   // The web playback surfaces (Stories, the log-page footage) request same-zone

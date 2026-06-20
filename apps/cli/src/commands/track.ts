@@ -267,3 +267,67 @@ export async function trackUpdateCommand(
     body,
   );
 }
+
+// `fluncle admin track observe <id|logId>` — mint the audio-observation artifact.
+// The agent authors + voice-gates the spoken script (it holds copywriting-fluncle)
+// and passes it here; the Worker fetches the factual context, re-scans the script,
+// renders it with ElevenLabs, uploads observation.{mp3,txt,json} to R2, and writes
+// the observation fields back. The CLI stays a thin relay — no vendor logic.
+export type TrackObserveOptions = {
+  contextNote?: string;
+  durationMs?: number;
+  durationTargetSec?: number;
+  model?: string;
+  /** The spoken script (read from --script-file by the caller, or passed inline). */
+  script: string;
+  voiceId?: string;
+};
+
+type ObserveBody = {
+  contextNote?: string;
+  durationMs?: number;
+  durationTargetSec?: number;
+  model?: string;
+  script: string;
+  voiceId?: string;
+};
+
+export type TrackObserveResult = {
+  audioUrl: string;
+  durationMs: number;
+  generatedAt: string;
+  jsonUrl: string;
+  logId: string;
+  ok: true;
+  textUrl: string;
+  trackId: string;
+  voiceId: string;
+};
+
+export async function trackObserveCommand(
+  idOrLogId: string,
+  options: TrackObserveOptions,
+): Promise<TrackObserveResult> {
+  const body: ObserveBody = { script: options.script };
+
+  if (options.voiceId !== undefined) {
+    body.voiceId = options.voiceId;
+  }
+  if (options.model !== undefined) {
+    body.model = options.model;
+  }
+  if (options.durationMs !== undefined) {
+    body.durationMs = options.durationMs;
+  }
+  if (options.durationTargetSec !== undefined) {
+    body.durationTargetSec = options.durationTargetSec;
+  }
+  if (options.contextNote !== undefined) {
+    body.contextNote = options.contextNote;
+  }
+
+  return adminApiPost<TrackObserveResult>(
+    `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/observe`,
+    body,
+  );
+}

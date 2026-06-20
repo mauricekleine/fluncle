@@ -9,6 +9,12 @@ export const tracks = sqliteTable("tracks", {
   albumImageUrl: text("album_image_url"),
   artistsJson: text("artists_json").notNull(),
   bpm: real("bpm"),
+  // Firecrawl-derived FACTUAL context about the track (label/year/release
+  // context/artist background), gathered during the observe step as CREATIVE
+  // FUEL for the observation script and the video agent. Internal only: never
+  // rendered on /log, never in JSON-LD/RSS/llms.txt, never quotes lyrics. This
+  // is NOT the editorial `note` (the operator's public "why").
+  contextNote: text("context_note"),
   durationMs: integer("duration_ms").notNull(),
   enrichmentStatus: text("enrichment_status").notNull().default("pending"),
   featuresJson: text("features_json"),
@@ -17,6 +23,15 @@ export const tracks = sqliteTable("tracks", {
   label: text("label"),
   logId: text("log_id").unique(),
   note: text("note"),
+  // The audio observation (Fluncle's recovered field observation, spoken).
+  // observationAudioUrl is the R2 read URL for <log-id>/observation.mp3 — set
+  // when the render is uploaded; its presence is the "has observation" flag. The
+  // script (observation.txt) and the structured artifact + render metadata
+  // (observation.json) live by CONVENTION at <log-id>/<name> with no column,
+  // exactly like poster.jpg / footage-silent.mp4 (see lib/media.ts).
+  observationAudioUrl: text("observation_audio_url"),
+  observationDurationMs: integer("observation_duration_ms"),
+  observationGeneratedAt: text("observation_generated_at"),
   popularity: integer("popularity"),
   postedToTelegram: integer("posted_to_telegram", { mode: "boolean" }).notNull().default(false),
   postedToTelegramAt: text("posted_to_telegram_at"),

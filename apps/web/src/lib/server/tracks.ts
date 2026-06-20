@@ -28,6 +28,9 @@ type TrackRow = {
   label: string | null;
   log_id: string | null;
   note: string | null;
+  observation_audio_url: string | null;
+  observation_duration_ms: number | null;
+  observation_generated_at: string | null;
   popularity: number | null;
   preview_url: string | null;
   release_date: string | null;
@@ -68,6 +71,7 @@ const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.title, tracks.
   tracks.bpm, tracks.duration_ms, tracks.enrichment_status, tracks.features_json, tracks.isrc, tracks.key, tracks.label, tracks.log_id, tracks.popularity,
   tracks.preview_url, tracks.release_date, tracks.video_url, tracks.video_vehicle, tracks.video_model, tracks.video_model_reasoning, tracks.note, tracks.added_at,
   tracks.updated_at, tracks.vibe_x, tracks.vibe_y, tracks.added_to_spotify, tracks.posted_to_telegram,
+  tracks.observation_audio_url, tracks.observation_duration_ms, tracks.observation_generated_at,
   (select url from social_posts
      where track_id = tracks.track_id and platform = 'tiktok' and status = 'published'
        and url is not null
@@ -130,6 +134,9 @@ function toTrackListItem(row: TrackRow): TrackListItem {
     logId: row.log_id ?? undefined,
     logPageUrl: row.log_id ? logPageUrl(row.log_id) : undefined,
     note: row.note?.trim() ? row.note : undefined,
+    observationAudioUrl: row.observation_audio_url ?? undefined,
+    observationDurationMs: row.observation_duration_ms ?? undefined,
+    observationGeneratedAt: row.observation_generated_at ?? undefined,
     popularity: row.popularity ?? undefined,
     postedToTelegram: Boolean(row.posted_to_telegram),
     previewUrl: row.preview_url ?? undefined,

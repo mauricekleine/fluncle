@@ -4,6 +4,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { siMixcloud, siSoundcloud, siSpotify, siTiktok, siYoutube } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
 import { LogFootage } from "@/components/log/log-footage";
+import { LogObservation } from "@/components/log/log-observation";
 import { SaveFindingButton } from "@/components/save-finding-button";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { Button } from "@/components/ui/button";
@@ -239,6 +240,13 @@ function LogPage() {
         </header>
 
         <LogFootage track={track} />
+
+        {track.observationAudioUrl ? (
+          <LogObservation
+            audioUrl={track.observationAudioUrl}
+            durationMs={track.observationDurationMs}
+          />
+        ) : undefined}
 
         <section aria-label="The finding" className="log-definition">
           <h2 className="log-track-title">{track.title}</h2>
