@@ -18,6 +18,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   CaretDownIcon,
   CaretRightIcon,
+  CassetteTapeIcon,
   CircleNotchIcon,
   DotsSixVerticalIcon,
   TrashIcon,
@@ -64,11 +65,12 @@ import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
 import { formatAlbumDuration, formatDurationField, parseDuration } from "@/lib/format";
-import { hasExternalUrl, type MixtapeDTO } from "@/lib/mixtapes";
+import { type MixtapeDTO, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { isAdminRequest } from "@/lib/server/admin-auth";
-import { type MixtapeInput } from "@/lib/server/mixtapes";
+import { type MixtapeInput, type MixtapeMembership } from "@/lib/server/mixtapes";
 import { listMixtapes } from "@/lib/server/mixtapes";
 import { type TrackListItem } from "@/lib/server/tracks";
+import { cn } from "@/lib/utils";
 
 const MIXTAPES_KEY = ["admin", "mixtapes"] as const;
 
@@ -116,6 +118,35 @@ function AdminMixtapesPage() {
     refetchOnWindowFocus: true,
   });
 
+  // Every finding already on a tape, keyed by trackId — built from the loaded
+  // mixtapes (members are hydrated), so the track search can flag a banger that's
+  // already spoken for. We want mixtapes largely unique; this is a soft cue, not a
+  // block. (See the same MixtapeMembership the board reads.)
+  const membershipByTrack = useMemo(() => {
+    const map = new Map<string, MixtapeMembership[]>();
+    for (const mixtape of mixtapes) {
+      for (const member of mixtape.members) {
+        const list = map.get(member.trackId) ?? [];
+        list.push({
+          logId: mixtape.logId,
+          mixtapeId: mixtape.id ?? "",
+          status: mixtape.status ?? "draft",
+          title: mixtape.title,
+        });
+        map.set(member.trackId, list);
+      }
+    }
+    return map;
+  }, [mixtapes]);
+
+  // Drafts ride on top — the operator is here to build the open one, not admire the
+  // published ones. Stable sort keeps the published order (newest coordinate first)
+  // intact below.
+  const sortedMixtapes = useMemo(
+    () => [...mixtapes].sort((a, b) => draftRank(a.status) - draftRank(b.status)),
+    [mixtapes],
+  );
+
   const refresh = useCallback(
     () => queryClient.invalidateQueries({ queryKey: MIXTAPES_KEY }),
     [queryClient],
@@ -162,42 +193,53 @@ function AdminMixtapesPage() {
   return (
     <AdminShell
       current="mixtapes"
-      subtitle={`${mixtapes.length} checkpoint${mixtapes.length === 1 ? "" : "s"}`}
+      headerActions={
+        <Button disabled={creating} onClick={() => void createDraft()} size="sm">
+          {creating ? (
+            <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+          ) : undefined}
+          {creating ? (
+            "Logging…"
+          ) : (
+            <>
+              <span className="sm:hidden">New draft</span>
+              <span className="hidden sm:inline">New mixtape draft</span>
+            </>
+          )}
+        </Button>
+      }
       title="Mixtapes"
     >
       <div className="p-4 sm:p-5">
-        <div className="mb-4 flex flex-wrap items-center gap-3">
-          <Button disabled={creating} onClick={() => void createDraft()}>
-            {creating ? (
-              <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
-            ) : undefined}
-            {creating ? "Logging…" : "New mixtape draft"}
-          </Button>
-          {error ? (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-          ) : null}
-          {notice ? (
-            <p aria-live="polite" className="text-sm text-muted-foreground">
-              {notice}
-            </p>
-          ) : null}
-        </div>
+        {error || notice ? (
+          <div className="mb-4 flex flex-wrap items-center gap-3">
+            {error ? (
+              <p role="alert" className="text-sm text-destructive">
+                {error}
+              </p>
+            ) : null}
+            {notice ? (
+              <p aria-live="polite" className="text-sm text-muted-foreground">
+                {notice}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
 
         {mixtapes.length === 0 ? (
           <EmptyState
-            body="Log a draft to start a checkpoint — Fluncle dreaming, made from bangers."
+            body="Log a draft to start a checkpoint: Fluncle dreaming, made from bangers."
             title="No checkpoints yet"
           />
         ) : (
-          <div className="plate-field overflow-hidden rounded-lg">
-            {mixtapes.map((mixtape) => {
+          <div className="overflow-hidden rounded-lg border border-border">
+            {sortedMixtapes.map((mixtape) => {
               const id = mixtape.id ?? mixtape.title;
               return (
                 <MixtapeEditor
                   key={id}
                   expanded={expanded.has(id)}
+                  membershipByTrack={membershipByTrack}
                   mixtape={mixtape}
                   onToggle={() => toggleExpanded(id)}
                   refresh={refresh}
@@ -211,13 +253,20 @@ function AdminMixtapesPage() {
   );
 }
 
+// Pure drafts sort above everything minted (distributing / published).
+function draftRank(status?: string): number {
+  return status === "draft" ? 0 : 1;
+}
+
 function MixtapeEditor({
   expanded,
+  membershipByTrack,
   mixtape,
   onToggle,
   refresh,
 }: {
   expanded: boolean;
+  membershipByTrack: Map<string, MixtapeMembership[]>;
   mixtape: MixtapeDTO;
   onToggle: () => void;
   refresh: () => Promise<void>;
@@ -266,35 +315,50 @@ function MixtapeEditor({
     };
   });
 
-  // Re-adopt server values after a refresh only when the local value still
-  // equals the previously-seen server value, so unsaved edits aren't clobbered.
+  // The draft persists itself. A signature of the savable fields (and, for a
+  // draft, the tracklist) drives the dirty check; we compare against the value we
+  // last persisted, not the possibly-stale server prop, so a successful autosave
+  // clears the dirty flag without forcing a refetch.
   const lastServer = useRef(mixtape);
+  const [savedFieldsSig, setSavedFieldsSig] = useState(() =>
+    fieldsSignature(serverFieldValues(mixtape)),
+  );
+  const [savedMembersSig, setSavedMembersSig] = useState(() =>
+    membersSignature(mixtape.members.map(toMemberRef)),
+  );
+  const [autosaveStatus, setAutosaveStatus] = useState<"idle" | "saving" | "error">("idle");
+  const [autosaveError, setAutosaveError] = useState<string>();
+  const autosaveInFlight = useRef(false);
+
+  // Adopt an incoming server snapshot only when there are no unsaved local edits
+  // (the whole local state still matches the snapshot we last saw). With autosave
+  // that window is sub-second, so a focus refetch never clobbers work in progress;
+  // when it does adopt, the saved-signatures reset to the new snapshot.
   useEffect(() => {
     const local = stateRef.current;
     const prev = lastServer.current;
-    if (local.note === (prev.note ?? "")) {
+    const noUnsavedEdits =
+      fieldsSignature({
+        durationMs: parseDuration(local.durationField),
+        mixcloudUrl: local.mixcloudUrl,
+        note: local.note,
+        plannedFor: local.plannedFor,
+        recordedAt: local.recordedAt,
+        soundcloudUrl: local.soundcloudUrl,
+        youtubeUrl: local.youtubeUrl,
+      }) === fieldsSignature(serverFieldValues(prev)) &&
+      membersSignature(local.members) === membersSignature(prev.members.map(toMemberRef));
+    if (noUnsavedEdits) {
       setNote(mixtape.note ?? "");
-    }
-    if (local.recordedAt === (prev.recordedAt?.slice(0, 10) ?? "")) {
       setRecordedAt(mixtape.recordedAt?.slice(0, 10) ?? "");
-    }
-    if (local.plannedFor === toLocalDateTime(prev.plannedFor)) {
       setPlannedFor(toLocalDateTime(mixtape.plannedFor));
-    }
-    if (local.durationField === formatDurationField(prev.durationMs)) {
       setDurationField(formatDurationField(mixtape.durationMs));
-    }
-    if (local.mixcloudUrl === (prev.externalUrls.mixcloud ?? "")) {
       setMixcloudUrl(mixtape.externalUrls.mixcloud ?? "");
-    }
-    if (local.youtubeUrl === (prev.externalUrls.youtube ?? "")) {
       setYoutubeUrl(mixtape.externalUrls.youtube ?? "");
-    }
-    if (local.soundcloudUrl === (prev.externalUrls.soundcloud ?? "")) {
       setSoundcloudUrl(mixtape.externalUrls.soundcloud ?? "");
-    }
-    if (membersRefsEqual(local.members, prev.members.map(toMemberRef))) {
       setMembers(mixtape.members.map(toMemberRef));
+      setSavedFieldsSig(fieldsSignature(serverFieldValues(mixtape)));
+      setSavedMembersSig(membersSignature(mixtape.members.map(toMemberRef)));
     }
     lastServer.current = mixtape;
   }, [mixtape]);
@@ -305,35 +369,36 @@ function MixtapeEditor({
     !isOptionalHttpUrl(mixcloudUrl) ||
     !isOptionalHttpUrl(youtubeUrl) ||
     !isOptionalHttpUrl(soundcloudUrl);
-  const saveDisabled = busy || durationInvalid || urlInvalid;
+  const fieldsValid = !durationInvalid && !urlInvalid;
 
-  const hasLink = hasExternalUrl({
-    mixcloud: mixcloudUrl.trim() || undefined,
-    soundcloud: soundcloudUrl.trim() || undefined,
-    youtube: youtubeUrl.trim() || undefined,
+  const currentFieldsSig = fieldsSignature({
+    durationMs: parsedDurationMs,
+    mixcloudUrl,
+    note,
+    plannedFor,
+    recordedAt,
+    soundcloudUrl,
+    youtubeUrl,
   });
+  const currentMembersSig = membersSignature(members);
+  // Members are draft-only and the endpoint rejects empty arrays, so an emptied
+  // tracklist is never autosaved (matching the server's own constraint).
+  const membersChanged = !minted && members.length > 0 && currentMembersSig !== savedMembersSig;
+  const dirty = currentFieldsSig !== savedFieldsSig || membersChanged;
+  const canAutosave = dirty && fieldsValid && !busy && Boolean(mixtape.id);
 
-  // Publishing canonicalizes the title and derives the cover, but everything
-  // else must be present first. Gate the button on the live editor state.
-  const missingToPublish = [
-    recordedAt.trim().length === 0 ? "a recorded date" : undefined,
-    note.trim().length === 0 ? "a note" : undefined,
-    parsedDurationMs === null ? "a duration" : undefined,
-    !hasLink ? "a platform link" : undefined,
-    members.length === 0 ? "a banger" : undefined,
-  ].filter((label): label is string => label !== undefined);
-
-  const save = () => {
-    if (durationInvalid) {
-      setError("Duration must be mm:ss or h:mm:ss, or a millisecond count.");
+  const autosave = async () => {
+    if (autosaveInFlight.current || !mixtape.id) {
       return;
     }
-    if (urlInvalid) {
-      setError("Links must be full http(s) URLs.");
-      return;
-    }
-    void run(async () => {
-      const id = mixtape.id as string;
+    autosaveInFlight.current = true;
+    setAutosaveStatus("saving");
+    setAutosaveError(undefined);
+    const id = mixtape.id;
+    const fieldsSnapshot = currentFieldsSig;
+    const membersSnapshot = currentMembersSig;
+    const saveMembers = membersChanged;
+    try {
       await saveMixtape(id, {
         durationMs: parsedDurationMs,
         mixcloudUrl,
@@ -343,21 +408,38 @@ function MixtapeEditor({
         soundcloudUrl,
         youtubeUrl,
       });
-      // Members are draft-only and the endpoint rejects empty arrays, so push
-      // only when this is a draft with a non-empty list that differs from the
-      // server's current tracklist.
-      const serverRefs = mixtape.members.map(toMemberRef);
-      if (!minted && members.length > 0 && !membersRefsEqual(members, serverRefs)) {
+      if (saveMembers) {
         await replaceMembers(id, members);
       }
-    }, "Mixtape saved.");
+      setSavedFieldsSig(fieldsSnapshot);
+      if (saveMembers) {
+        setSavedMembersSig(membersSnapshot);
+      }
+      setAutosaveStatus("idle");
+    } catch (caught) {
+      setAutosaveError(caught instanceof Error ? caught.message : String(caught));
+      setAutosaveStatus("error");
+    } finally {
+      autosaveInFlight.current = false;
+    }
   };
 
-  const publish = () => {
-    void run(async () => {
-      await publishMixtape(mixtape.id as string);
-    }, "Mixtape published.");
-  };
+  // Keep a live handle to autosave so the debounce effect fires the latest closure
+  // without re-subscribing (and resetting the timer) on every render.
+  const autosaveRef = useRef(autosave);
+  useEffect(() => {
+    autosaveRef.current = autosave;
+  });
+
+  // Debounced autosave: re-armed whenever the savable content changes, so a burst
+  // of edits collapses into one write ~700ms after the operator stops typing.
+  useEffect(() => {
+    if (!canAutosave) {
+      return;
+    }
+    const timer = window.setTimeout(() => void autosaveRef.current(), 700);
+    return () => window.clearTimeout(timer);
+  }, [canAutosave, currentFieldsSig, currentMembersSig]);
 
   const discard = () => {
     void run(async () => {
@@ -394,159 +476,197 @@ function MixtapeEditor({
         ) : (
           <CaretRightIcon aria-hidden="true" className="shrink-0 text-muted-foreground" />
         )}
-        <span className="shrink-0 font-mono text-xs tracking-tight text-muted-foreground tabular-nums">
-          {mixtape.logId ?? "draft"}
-        </span>
+        {mixtape.logId ? (
+          <span className="shrink-0 font-mono text-xs tracking-tight text-muted-foreground tabular-nums">
+            {mixtape.logId}
+          </span>
+        ) : null}
         <Badge className="shrink-0" variant={minted ? "default" : "outline"}>
           {mixtape.status ?? "draft"}
         </Badge>
         <span className="min-w-0 flex-1 truncate text-sm font-bold">
-          {mixtape.logId ? mixtape.title : "Mixtape draft"}
+          {mixtape.logId ? mixtapeDisplayTitle(mixtape.title) : "Untitled mixtape"}
         </span>
         <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-          {mixtape.memberCount} banger{mixtape.memberCount === 1 ? "" : "s"}
+          {members.length} banger{members.length === 1 ? "" : "s"}
           {mixtape.durationMs ? ` · ${formatAlbumDuration(mixtape.durationMs)}` : ""}
         </span>
       </button>
 
       {expanded ? (
-        <div className="px-4 pb-4 sm:px-5" id={bodyId} role="region">
-          <div className="grid gap-3 md:grid-cols-2">
-            <Field
-              disabled={minted}
-              label="Recorded"
-              type="date"
-              value={recordedAt}
-              onChange={setRecordedAt}
-            />
-            <Field
-              hint="Set a future live session to announce it on /calendar.ics. Clear to hide."
-              label="Live session"
-              type="datetime-local"
-              value={plannedFor}
-              onChange={setPlannedFor}
-            />
-            <Field
-              hint={
-                durationInvalid
-                  ? "Must be mm:ss or h:mm:ss, or a millisecond count."
-                  : parsedDurationMs !== null && durationField
-                    ? formatAlbumDuration(parsedDurationMs)
-                    : undefined
-              }
-              invalid={durationInvalid}
-              label="Duration"
-              placeholder="mm:ss or h:mm:ss"
-              value={durationField}
-              onChange={setDurationField}
-            />
-            <Field
-              hint={isOptionalHttpUrl(mixcloudUrl) ? undefined : "Must be a full http(s) URL."}
-              invalid={!isOptionalHttpUrl(mixcloudUrl)}
-              label="Mixcloud URL"
-              value={mixcloudUrl}
-              onChange={setMixcloudUrl}
-            />
-            <Field
-              hint={isOptionalHttpUrl(youtubeUrl) ? undefined : "Must be a full http(s) URL."}
-              invalid={!isOptionalHttpUrl(youtubeUrl)}
-              label="YouTube URL"
-              value={youtubeUrl}
-              onChange={setYoutubeUrl}
-            />
-            <Field
-              hint={isOptionalHttpUrl(soundcloudUrl) ? undefined : "Must be a full http(s) URL."}
-              invalid={!isOptionalHttpUrl(soundcloudUrl)}
-              label="SoundCloud URL"
-              value={soundcloudUrl}
-              onChange={setSoundcloudUrl}
-            />
-          </div>
+        <div
+          aria-labelledby={headerId}
+          className="px-4 pb-4 pt-2 sm:px-5"
+          id={bodyId}
+          role="region"
+        >
+          {minted ? (
+            // A published checkpoint is read-only — a clean summary, not the editor:
+            // the tracklist, where it's live, the dream note, and the public page.
+            <div className="space-y-4">
+              <MembersBuilder
+                currentMixtapeId={mixtape.id}
+                members={members}
+                membershipByTrack={membershipByTrack}
+                onChange={setMembers}
+                published
+              />
 
-          <div className="mt-3 space-y-1.5">
-            <Label htmlFor={noteId}>Note</Label>
-            <Textarea id={noteId} value={note} onChange={(event) => setNote(event.target.value)} />
-          </div>
+              {mixtape.id ? (
+                <DistributionStrip mixtapeId={mixtape.id} status={mixtape.status} />
+              ) : null}
 
-          <div className="mt-3">
-            <MembersBuilder members={members} published={minted} onChange={setMembers} />
-          </div>
+              {note.trim() ? (
+                <div className="space-y-1.5">
+                  <Label>Note</Label>
+                  <p className="max-w-prose whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
+                    {note}
+                  </p>
+                </div>
+              ) : null}
 
-          {minted && mixtape.logId ? (
-            <div className="plate-field mt-4 rounded-lg p-3">
-              <p className="text-xs font-bold text-muted-foreground">Cover</p>
-              <div className="mt-2 flex gap-3">
-                <img
-                  alt=""
-                  className="size-24 shrink-0 rounded-md border border-border object-cover"
-                  src={`/api/mixtape-cover/${encodeURIComponent(mixtape.logId)}?size=square`}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Rendered on the fly — no upload needed.
-                </p>
-              </div>
+              {mixtape.logId ? (
+                <div className="flex items-center gap-3 border-t border-border pt-4">
+                  <img
+                    alt=""
+                    className="size-12 shrink-0 rounded-md border border-border object-cover"
+                    src={`/api/mixtape-cover/${encodeURIComponent(mixtape.logId)}?size=square`}
+                  />
+                  <a
+                    className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:underline focus-visible:outline-2 focus-visible:outline-ring"
+                    href={`/log/${encodeURIComponent(mixtape.logId)}`}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    View the public log page ↗
+                  </a>
+                </div>
+              ) : null}
             </div>
-          ) : null}
+          ) : (
+            // A draft is the editor: the tracklist (the centerpiece) plus the deferred
+            // details and the CLI publish help.
+            <>
+              <MembersBuilder
+                currentMixtapeId={mixtape.id}
+                members={members}
+                membershipByTrack={membershipByTrack}
+                onChange={setMembers}
+                published={false}
+              />
 
-          {minted && mixtape.id ? (
-            <DistributionStrip mixtapeId={mixtape.id} status={mixtape.status} />
-          ) : null}
+              <details className="mt-4 rounded-lg border border-border px-3 py-2">
+                <summary className="cursor-pointer text-sm font-medium text-muted-foreground">
+                  Details
+                </summary>
+                <div className="mt-3 space-y-3">
+                  <Field
+                    hint="Defaults to the day you distribute; set it only to backdate the coordinate's sector."
+                    label="Recorded"
+                    type="date"
+                    value={recordedAt}
+                    onChange={setRecordedAt}
+                  />
+                  <Field
+                    hint="Set a future live session to announce it on /calendar.ics. Clear to hide."
+                    label="Live session"
+                    type="datetime-local"
+                    value={plannedFor}
+                    onChange={setPlannedFor}
+                  />
+                  <div className="space-y-1.5">
+                    <Label htmlFor={noteId}>Note</Label>
+                    <Textarea
+                      id={noteId}
+                      value={note}
+                      onChange={(event) => setNote(event.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      The dream note. Write it now or after publishing; it becomes the platform
+                      descriptions and the /log prose.
+                    </p>
+                  </div>
+                  <Field
+                    hint={
+                      isOptionalHttpUrl(soundcloudUrl)
+                        ? "Optional — paste after a manual SoundCloud upload."
+                        : "Must be a full http(s) URL."
+                    }
+                    invalid={!isOptionalHttpUrl(soundcloudUrl)}
+                    label="SoundCloud URL"
+                    value={soundcloudUrl}
+                    onChange={setSoundcloudUrl}
+                  />
+                </div>
+              </details>
 
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            <Button disabled={saveDisabled} onClick={save}>
-              {busy ? (
-                <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
-              ) : undefined}
-              {busy ? "Saving…" : "Save"}
-            </Button>
-            {minted ? null : (
-              <Button
-                disabled={busy || missingToPublish.length > 0}
-                onClick={publish}
-                variant="outline"
-              >
-                Publish mixtape
-              </Button>
-            )}
-            {minted ? null : (
-              <AlertDialog>
-                <AlertDialogTrigger
-                  render={
-                    <Button disabled={busy} variant="destructive">
-                      <TrashIcon aria-hidden="true" />
-                      Discard draft
-                    </Button>
-                  }
+              <details className="mt-3 rounded-lg border border-border px-3 py-2">
+                <summary className="cursor-pointer text-sm font-medium text-muted-foreground">
+                  How to publish this mixtape
+                </summary>
+                <div className="mt-2 space-y-2 text-xs text-muted-foreground">
+                  <p>
+                    A draft is just the tracklist. Publishing — minting the Log ID and cover, then
+                    uploading to YouTube and Mixcloud — runs from the CLI, where your audio and
+                    video files live:
+                  </p>
+                  <pre className="overflow-x-auto rounded bg-background/60 p-2 font-mono text-[11px] leading-relaxed">
+                    {`# mint + upload (YouTube unlisted, Mixcloud listed), flips it published
+fluncle admin mixtapes distribute ${mixtape.id ?? "<id>"} --video <mp4> --audio <m4a>
+
+# make the YouTube video public when you're ready
+fluncle admin mixtapes publish-youtube ${mixtape.id ?? "<id>"}`}
+                  </pre>
+                  <p>
+                    Add <code className="font-mono">--unlisted</code> to keep Mixcloud private for a
+                    test run.
+                  </p>
+                </div>
+              </details>
+
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <AutosaveStatus
+                  dirty={dirty}
+                  error={autosaveError}
+                  fieldsValid={fieldsValid}
+                  onRetry={() => void autosave()}
+                  status={autosaveStatus}
                 />
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>Discard this draft?</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      The draft and its tracklist will be permanently removed. This can't be undone.
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel disabled={busy}>Keep draft</AlertDialogCancel>
-                    <AlertDialogAction disabled={busy} onClick={discard} variant="destructive">
-                      {busy ? (
-                        <CircleNotchIcon
-                          aria-hidden="true"
-                          className="animate-spin"
-                          weight="bold"
-                        />
-                      ) : undefined}
-                      {busy ? "Discarding…" : "Discard draft"}
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
-            )}
-          </div>
-          {!minted && missingToPublish.length > 0 ? (
-            <p className="mt-2 text-xs text-muted-foreground">
-              Add {missingToPublish.join(", ")} to publish.
-            </p>
-          ) : null}
+                <AlertDialog>
+                  <AlertDialogTrigger
+                    render={
+                      <Button className="ml-auto" disabled={busy} size="sm" variant="destructive">
+                        <TrashIcon aria-hidden="true" />
+                        Discard draft
+                      </Button>
+                    }
+                  />
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Discard this draft?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        The draft and its tracklist will be permanently removed. This can't be
+                        undone.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel disabled={busy}>Keep draft</AlertDialogCancel>
+                      <AlertDialogAction disabled={busy} onClick={discard} variant="destructive">
+                        {busy ? (
+                          <CircleNotchIcon
+                            aria-hidden="true"
+                            className="animate-spin"
+                            weight="bold"
+                          />
+                        ) : undefined}
+                        {busy ? "Discarding…" : "Discard draft"}
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </div>
+            </>
+          )}
           {error ? (
             <p role="alert" className="mt-2 text-sm text-destructive">
               {error}
@@ -568,6 +688,13 @@ function MixtapeEditor({
 // unlisted→public flip for YouTube while the mixtape is still `distributing`. Read
 // from /api/admin/mixtapes/:id/social with focus-refetch ON (admin convention) so
 // the operator watches a CLI distribute run land without a manual reload.
+// Proper platform names — CSS `capitalize` would render "Youtube", not "YouTube".
+const PLATFORM_LABELS: Record<string, string> = {
+  mixcloud: "Mixcloud",
+  soundcloud: "SoundCloud",
+  youtube: "YouTube",
+};
+
 function DistributionStrip({ mixtapeId, status }: { mixtapeId: string; status: string }) {
   const queryClient = useQueryClient();
   const queryKey = ["admin", "mixtape-social", mixtapeId] as const;
@@ -608,13 +735,15 @@ function DistributionStrip({ mixtapeId, status }: { mixtapeId: string; status: s
   };
 
   return (
-    <div className="plate-field mt-4 rounded-lg p-3">
-      <p className="text-xs font-bold text-muted-foreground">Distribution</p>
+    <div className="space-y-2">
+      <Label>Distribution</Label>
       {posts && posts.length > 0 ? (
-        <div className="mt-2 divide-y divide-border">
+        <div className="divide-y divide-border">
           {posts.map((post) => (
             <div key={post.platform} className="flex items-center gap-3 py-2">
-              <span className="w-20 shrink-0 text-sm capitalize">{post.platform}</span>
+              <span className="w-20 shrink-0 text-sm">
+                {PLATFORM_LABELS[post.platform] ?? post.platform}
+              </span>
               <DistributionStatusBadge status={post.status} />
               {post.url ? (
                 <a
@@ -632,30 +761,28 @@ function DistributionStrip({ mixtapeId, status }: { mixtapeId: string; status: s
           ))}
         </div>
       ) : (
-        <p className="mt-2 text-xs text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           No platforms yet. Run <code className="font-mono">fluncle admin mixtapes distribute</code>{" "}
           from the CLI.
         </p>
       )}
 
       {canMakePublic ? (
-        <div className="mt-3">
-          <Button disabled={busy} onClick={() => void makePublic()} variant="outline">
-            {busy ? (
-              <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
-            ) : undefined}
-            {busy ? "Publishing…" : "Make YouTube public"}
-          </Button>
-        </div>
+        <Button disabled={busy} onClick={() => void makePublic()} size="sm" variant="outline">
+          {busy ? (
+            <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+          ) : undefined}
+          {busy ? "Publishing…" : "Make YouTube public"}
+        </Button>
       ) : null}
 
       {error ? (
-        <p role="alert" className="mt-2 text-sm text-destructive">
+        <p role="alert" className="text-sm text-destructive">
           {error}
         </p>
       ) : null}
       {notice ? (
-        <p aria-live="polite" className="mt-2 text-sm text-muted-foreground">
+        <p aria-live="polite" className="text-sm text-muted-foreground">
           {notice}
         </p>
       ) : null}
@@ -675,11 +802,15 @@ function DistributionStatusBadge({ status }: { status: string }) {
 }
 
 function MembersBuilder({
+  currentMixtapeId,
   members,
+  membershipByTrack,
   onChange,
   published,
 }: {
+  currentMixtapeId?: string;
   members: MemberRef[];
+  membershipByTrack: Map<string, MixtapeMembership[]>;
   onChange: Dispatch<SetStateAction<MemberRef[]>>;
   published: boolean;
 }) {
@@ -723,21 +854,16 @@ function MembersBuilder({
     [onChange],
   );
 
-  const countLabel = `${members.length} banger${members.length === 1 ? "" : "s"}`;
-
   if (published) {
     return (
       <div className="space-y-1.5">
-        <div className="flex items-center justify-between">
-          <Label>Tracklist</Label>
-          <span className="text-xs text-muted-foreground tabular-nums">{countLabel}</span>
-        </div>
-        <div className="plate-field divide-y divide-border rounded-lg">
+        <Label>Tracklist</Label>
+        <div className="divide-y divide-border">
           {members.length === 0 ? (
-            <p className="px-3 py-4 text-sm text-muted-foreground">No bangers logged.</p>
+            <p className="py-2 text-sm text-muted-foreground">No bangers logged.</p>
           ) : (
             members.map((member) => (
-              <div key={member.trackId} className="flex items-center gap-3 px-3 py-2">
+              <div key={member.trackId} className="flex items-center gap-3 py-2">
                 <MemberThumb src={member.albumImageUrl} />
                 <span className="min-w-0 flex-1 truncate text-sm">
                   {member.artists.join(", ")} — {member.title}
@@ -756,45 +882,40 @@ function MembersBuilder({
             ))
           )}
         </div>
-        <p className="text-xs text-muted-foreground">
-          The tracklist locks once a checkpoint is published.
-        </p>
       </div>
     );
   }
 
   return (
     <div className="space-y-1.5">
-      <div className="flex items-center justify-between">
-        <Label>Tracklist</Label>
-        <span className="text-xs text-muted-foreground tabular-nums">{countLabel}</span>
-      </div>
-      <MemberSearch onSelect={add} selected={members} />
-      <div className="plate-field rounded-lg">
-        {members.length === 0 ? (
-          <p className="px-3 py-4 text-sm text-muted-foreground">
-            Search a banger to start the tracklist.
-          </p>
-        ) : (
-          <DndContext collisionDetection={closestCenter} onDragEnd={onDragEnd} sensors={sensors}>
-            <SortableContext
-              items={members.map((member) => member.trackId)}
-              strategy={verticalListSortingStrategy}
-            >
-              <ul className="divide-y divide-border">
-                {members.map((member) => (
-                  <SortableMemberRow
-                    key={member.trackId}
-                    member={member}
-                    onRemove={remove}
-                    reducedMotion={reducedMotion}
-                  />
-                ))}
-              </ul>
-            </SortableContext>
-          </DndContext>
-        )}
-      </div>
+      <Label>Tracklist</Label>
+      {members.length === 0 ? (
+        <p className="text-sm text-muted-foreground">Search a banger to start the tracklist.</p>
+      ) : (
+        <DndContext collisionDetection={closestCenter} onDragEnd={onDragEnd} sensors={sensors}>
+          <SortableContext
+            items={members.map((member) => member.trackId)}
+            strategy={verticalListSortingStrategy}
+          >
+            <ul className="divide-y divide-border">
+              {members.map((member) => (
+                <SortableMemberRow
+                  key={member.trackId}
+                  member={member}
+                  onRemove={remove}
+                  reducedMotion={reducedMotion}
+                />
+              ))}
+            </ul>
+          </SortableContext>
+        </DndContext>
+      )}
+      <MemberSearch
+        currentMixtapeId={currentMixtapeId}
+        membershipByTrack={membershipByTrack}
+        onSelect={add}
+        selected={members}
+      />
     </div>
   );
 }
@@ -818,13 +939,13 @@ function SortableMemberRow({
 
   return (
     <li
-      className={`flex items-center gap-2 px-2 py-2 ${isDragging ? "relative z-10 bg-muted" : ""}`}
+      className={`flex items-center gap-2 py-2 ${isDragging ? "relative z-10 bg-muted" : ""}`}
       ref={setNodeRef}
       style={style}
     >
       <button
         aria-label={`Reorder ${member.title}`}
-        className="shrink-0 cursor-grab touch-none rounded-sm p-1 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+        className="inline-flex size-9 shrink-0 cursor-grab touch-none items-center justify-center rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
         type="button"
         {...attributes}
         {...listeners}
@@ -847,7 +968,7 @@ function SortableMemberRow({
       ) : null}
       <button
         aria-label={`Remove ${member.title}`}
-        className="shrink-0 rounded-sm p-1 text-muted-foreground hover:text-destructive focus-visible:outline-2 focus-visible:outline-ring"
+        className="inline-flex size-9 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-destructive focus-visible:outline-2 focus-visible:outline-ring"
         onClick={() => onRemove(member.trackId)}
         type="button"
       >
@@ -858,9 +979,13 @@ function SortableMemberRow({
 }
 
 function MemberSearch({
+  currentMixtapeId,
+  membershipByTrack,
   onSelect,
   selected,
 }: {
+  currentMixtapeId?: string;
+  membershipByTrack: Map<string, MixtapeMembership[]>;
   onSelect: (track: MemberRef) => void;
   selected: MemberRef[];
 }) {
@@ -909,22 +1034,36 @@ function MemberSearch({
             ) : (
               <>
                 <CommandEmpty>No bangers match.</CommandEmpty>
-                {results.map((track) => (
-                  <CommandItem
-                    key={track.trackId}
-                    disabled={selectedIds.has(track.trackId)}
-                    onSelect={() => onSelect(toTrackRef(track))}
-                    value={track.trackId}
-                  >
-                    <MemberThumb src={track.albumImageUrl} />
-                    <span className="min-w-0 flex-1 truncate">
-                      {track.artists.join(", ")} — {track.title}
-                    </span>
-                    <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
-                      {track.logId ?? track.trackId}
-                    </span>
-                  </CommandItem>
-                ))}
+                {results.map((track) => {
+                  // Tapes OTHER than the one being edited — the soft "already used"
+                  // cue. Membership in the current draft is handled by selectedIds.
+                  const otherTapes = (membershipByTrack.get(track.trackId) ?? []).filter(
+                    (membership) => membership.mixtapeId !== currentMixtapeId,
+                  );
+
+                  return (
+                    <CommandItem
+                      key={track.trackId}
+                      disabled={selectedIds.has(track.trackId)}
+                      onSelect={() => onSelect(toTrackRef(track))}
+                      value={track.trackId}
+                    >
+                      <MemberThumb src={track.albumImageUrl} />
+                      <span
+                        className={cn(
+                          "min-w-0 flex-1 truncate",
+                          otherTapes.length > 0 ? "text-muted-foreground" : "",
+                        )}
+                      >
+                        {track.artists.join(", ")} — {track.title}
+                      </span>
+                      <MemberTapeBadge memberships={otherTapes} />
+                      <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
+                        {track.logId ?? track.trackId}
+                      </span>
+                    </CommandItem>
+                  );
+                })}
               </>
             )}
           </CommandList>
@@ -945,6 +1084,32 @@ function MemberThumb({ src }: { src?: string }) {
     );
   }
   return <div className="track-artwork-fallback size-8 shrink-0 rounded-sm border border-border" />;
+}
+
+// The "already on a tape" cue in the track search — keeps mixtapes largely unique
+// without blocking a deliberate re-use. A gold cassette chip listing the other
+// tapes (count when more than one); absent for a fresh banger.
+function MemberTapeBadge({ memberships }: { memberships: MixtapeMembership[] }) {
+  if (memberships.length === 0) {
+    return null;
+  }
+
+  const titles = memberships
+    .map((membership) => {
+      const name = mixtapeDisplayTitle(membership.title) || "Draft";
+      return membership.logId ? `${membership.logId} · ${name}` : name;
+    })
+    .join("\n");
+
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-[0.65rem] font-medium text-primary tabular-nums"
+      title={titles}
+    >
+      <CassetteTapeIcon className="size-3" weight="fill" />
+      {memberships.length > 1 ? memberships.length : null}
+    </span>
+  );
 }
 
 function Field({
@@ -997,6 +1162,50 @@ function EmptyState({ body, title }: { body: string; title: string }) {
       <p className="font-medium">{title}</p>
       <p className="text-sm text-muted-foreground">{body}</p>
     </div>
+  );
+}
+
+// The draft's only "save" surface: it persists continuously, so this just reports
+// where that stands — saving, saved, blocked by a field error, or failed with a
+// retry. A focused field error is surfaced inline; this stays a quiet summary.
+function AutosaveStatus({
+  dirty,
+  error,
+  fieldsValid,
+  onRetry,
+  status,
+}: {
+  dirty: boolean;
+  error?: string;
+  fieldsValid: boolean;
+  onRetry: () => void;
+  status: "idle" | "saving" | "error";
+}) {
+  if (status === "error") {
+    return (
+      <span className="flex flex-wrap items-center gap-2 text-xs text-destructive">
+        <span role="alert">Couldn't save{error ? `: ${error}` : "."}</span>
+        <Button onClick={onRetry} size="sm" variant="outline">
+          Retry save
+        </Button>
+      </span>
+    );
+  }
+  if (dirty && !fieldsValid) {
+    return <span className="text-xs text-muted-foreground">Unsaved. Fix the errors above.</span>;
+  }
+  if (status === "saving" || dirty) {
+    return (
+      <span aria-live="polite" className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+        Saving…
+      </span>
+    );
+  }
+  return (
+    <span aria-live="polite" className="text-xs text-muted-foreground">
+      All changes saved.
+    </span>
   );
 }
 
@@ -1083,14 +1292,50 @@ function toTrackRef(track: TrackListItem): MemberRef {
   };
 }
 
-function membersRefsEqual(a: MemberRef[], b: MemberRef[]): boolean {
-  if (a.length !== b.length) {
-    return false;
-  }
-  return a.every((member, index) => {
-    const other = b[index];
-    return (member.logId ?? member.trackId) === (other.logId ?? other.trackId);
-  });
+// The savable scalar fields, normalized for change detection. Duration is keyed by
+// its parsed millisecond value (not the raw field text) so "1:00" and "60" read as
+// equal, matching what the server stores.
+type FieldValues = {
+  durationMs: number | null;
+  mixcloudUrl: string;
+  note: string;
+  plannedFor: string;
+  recordedAt: string;
+  soundcloudUrl: string;
+  youtubeUrl: string;
+};
+
+function fieldsSignature(values: FieldValues): string {
+  return JSON.stringify([
+    values.durationMs,
+    values.mixcloudUrl,
+    values.note,
+    values.plannedFor,
+    values.recordedAt,
+    values.soundcloudUrl,
+    values.youtubeUrl,
+  ]);
+}
+
+// The tracklist's identity is its ordered Log IDs (falling back to trackId), so a
+// reorder or add/remove changes the signature but a re-fetch of the same set does
+// not.
+function membersSignature(members: MemberRef[]): string {
+  return members.map((member) => member.logId ?? member.trackId).join("\n");
+}
+
+// The server's view of a mixtape as FieldValues. Duration round-trips through the
+// same format/parse the editor uses, so an untouched draft reads as not-dirty.
+function serverFieldValues(mixtape: MixtapeDTO): FieldValues {
+  return {
+    durationMs: parseDuration(formatDurationField(mixtape.durationMs)),
+    mixcloudUrl: mixtape.externalUrls.mixcloud ?? "",
+    note: mixtape.note ?? "",
+    plannedFor: toLocalDateTime(mixtape.plannedFor),
+    recordedAt: mixtape.recordedAt?.slice(0, 10) ?? "",
+    soundcloudUrl: mixtape.externalUrls.soundcloud ?? "",
+    youtubeUrl: mixtape.externalUrls.youtube ?? "",
+  };
 }
 
 function isOptionalHttpUrl(value: string): boolean {
@@ -1156,15 +1401,6 @@ async function replaceMembers(id: string, members: MemberRef[]) {
     }),
     headers: { "Content-Type": "application/json" },
     method: "PUT",
-  });
-  if (!response.ok) {
-    throw new Error(await readError(response));
-  }
-}
-
-async function publishMixtape(id: string) {
-  const response = await fetch(`/api/admin/mixtapes/${encodeURIComponent(id)}/publish`, {
-    method: "POST",
   });
   if (!response.ok) {
     throw new Error(await readError(response));

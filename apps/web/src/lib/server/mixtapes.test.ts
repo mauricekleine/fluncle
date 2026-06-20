@@ -119,25 +119,28 @@ describe("publishMixtape — mint into distributing", () => {
   });
 });
 
-describe("publishMixtape — required fields + cap", () => {
+describe("publishMixtape — mint guards + cap", () => {
   beforeEach(() => {
     execute.mockClear();
     batch.mockClear();
   });
 
-  it("rejects a missing recorded date", async () => {
+  // A draft is just the tracklist — that's the only hard requirement to mint.
+  // The recorded date defaults to today, the dream note is written via the
+  // post-publish edit, and the duration is derived from the upload by distribute.
+  it("mints without a recorded date — it defaults to today", async () => {
     seedDraft({ recorded_at: null });
-    await expect(publishMixtape("draft-id")).rejects.toThrow(/recorded date/i);
+    await expect(publishMixtape("draft-id")).resolves.toMatchObject({ status: "distributing" });
   });
 
-  it("rejects a missing note", async () => {
+  it("mints without a note — the dream note is written after publishing", async () => {
     seedDraft({ note: "   " });
-    await expect(publishMixtape("draft-id")).rejects.toThrow(/note/i);
+    await expect(publishMixtape("draft-id")).resolves.toMatchObject({ status: "distributing" });
   });
 
-  it("rejects a missing duration", async () => {
+  it("mints without a duration — distribution derives it from the upload", async () => {
     seedDraft({ duration_ms: null });
-    await expect(publishMixtape("draft-id")).rejects.toThrow(/duration/i);
+    await expect(publishMixtape("draft-id")).resolves.toMatchObject({ status: "distributing" });
   });
 
   it("mints even with no external link (distribution supplies it)", async () => {

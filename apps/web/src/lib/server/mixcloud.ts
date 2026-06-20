@@ -17,28 +17,36 @@ type MixcloudTokenResponse = { access_token?: string };
 
 type MixcloudAuthRow = { access_token: string };
 
-export async function buildMixcloudAuthUrl(state: string): Promise<string> {
-  const env = await readEnvs(["MIXCLOUD_CLIENT_ID", "MIXCLOUD_REDIRECT_URI"]);
+// Unlike Google (which requires a pre-registered, exact-match redirect URI),
+// Mixcloud takes the redirect_uri purely at runtime — it only has to match between
+// the authorize call and the token exchange. So we derive it from the request
+// origin (the start + callback routes share this), which needs no env var and works
+// for local (127.0.0.1:3000) and prod (www.fluncle.com) alike.
+export function mixcloudRedirectUri(origin: string): string {
+  return `${origin}/api/admin/mixcloud/auth/callback`;
+}
+
+export async function buildMixcloudAuthUrl(state: string, redirectUri: string): Promise<string> {
+  const env = await readEnvs(["MIXCLOUD_CLIENT_ID"]);
   const params = new URLSearchParams({
     client_id: env.MIXCLOUD_CLIENT_ID,
-    redirect_uri: env.MIXCLOUD_REDIRECT_URI,
+    redirect_uri: redirectUri,
     state,
   });
 
   return `${mixcloudAuthorizeUrl}?${params.toString()}`;
 }
 
-export async function exchangeCodeForMixcloudToken(code: string): Promise<void> {
-  const env = await readEnvs([
-    "MIXCLOUD_CLIENT_ID",
-    "MIXCLOUD_CLIENT_SECRET",
-    "MIXCLOUD_REDIRECT_URI",
-  ]);
+export async function exchangeCodeForMixcloudToken(
+  code: string,
+  redirectUri: string,
+): Promise<void> {
+  const env = await readEnvs(["MIXCLOUD_CLIENT_ID", "MIXCLOUD_CLIENT_SECRET"]);
   const params = new URLSearchParams({
     client_id: env.MIXCLOUD_CLIENT_ID,
     client_secret: env.MIXCLOUD_CLIENT_SECRET,
     code,
-    redirect_uri: env.MIXCLOUD_REDIRECT_URI,
+    redirect_uri: redirectUri,
   });
 
   // Mixcloud's token endpoint is a GET with query params, returning { access_token }.

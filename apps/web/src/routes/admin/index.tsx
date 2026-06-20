@@ -1,4 +1,5 @@
 import {
+  CassetteTapeIcon,
   CircleNotchIcon,
   CrosshairIcon,
   NotePencilIcon,
@@ -14,6 +15,7 @@ import {
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AddToMixtapeDialog } from "@/components/admin/add-to-mixtape-dialog";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { EnrichDialog } from "@/components/admin/enrich-dialog";
 import { NoteDialog } from "@/components/admin/note-dialog";
@@ -27,8 +29,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { GALAXIES, galaxyForVibe } from "@/lib/galaxies";
+import { type MixtapeDTO, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { readCaptions } from "@/lib/server/captions";
+import { listMixtapeMembershipsForTracks, listMixtapes } from "@/lib/server/mixtapes";
 import { listSocialPostsForTracks } from "@/lib/server/social";
 import { triggerEnrichment } from "@/lib/server/spinup";
 import { getSpotifyAuthStatus, type SpotifyAuthStatus } from "@/lib/server/spotify";
@@ -62,6 +66,8 @@ const BOARD_KEY = ["admin", "posts", "board"] as const;
 const POINTS_KEY = ["admin", "tag", "points"] as const;
 // The Spotify connection-status cache for the reconnect banner.
 const SPOTIFY_STATUS_KEY = ["admin", "spotify", "status"] as const;
+// The draft-mixtape targets for the "Add to mixtape" sheet.
+const DRAFT_MIXTAPES_KEY = ["admin", "mixtapes", "drafts"] as const;
 
 // The two publish platforms, in pipeline order (YouTube posts public directly,
 // TikTok lands as a draft you finish in-app). PLATFORMS is keyed the other way for
@@ -76,23 +82,51 @@ const PUBLISH_PLATFORMS: PlatformConfig[] = ["youtube", "tiktok"].map(
 // narrows the rows to a focus ("show me everything still needing a video").
 type Worklist = "all" | "needs-tagging" | "needs-video" | "ready-youtube" | "ready-tiktok" | "done";
 
+// The worklists kept to the ones actually worked from: everything, the only manual
+// gate (tagging), and the terminal "Live" bucket. The render/publish-readiness
+// buckets were dropped as noise — each stage's own cell already shows its state, and
+// the per-stage worklists went unused. ?stage values stay back-compatible: an old
+// link to a dropped bucket validates back to "all" (WORKLIST_KEYS no longer has it).
 const WORKLISTS: { blockedOn?: BlockedOn; key: Worklist; label: string }[] = [
   { key: "all", label: "All" },
   { blockedOn: "needs tagging", key: "needs-tagging", label: "Needs tagging" },
-  { blockedOn: "needs a video", key: "needs-video", label: "Needs a video" },
-  { blockedOn: "ready for YouTube", key: "ready-youtube", label: "Ready for YouTube" },
-  { blockedOn: "ready for TikTok", key: "ready-tiktok", label: "Ready for TikTok" },
   { blockedOn: null, key: "done", label: "Live" },
 ];
 
 const WORKLIST_KEYS = new Set(WORKLISTS.map((worklist) => worklist.key));
+
+// The mixtape lens — a SECOND filter axis, ANDed with the worklist. A finding is
+// "on a tape" once it lands in a published/distributing checkpoint, "in a draft"
+// while it only sits in a draft, and "open" when it's in no mixtape yet. Powers the
+// "show me what I haven't used yet, to build a tape around it" view; deep-linked via
+// ?mix so it survives reload.
+type MixState = "draft" | "open" | "tape";
+type MixFilter = "all" | MixState;
+
+const MIX_FILTERS: { key: MixFilter; label: string }[] = [
+  { key: "all", label: "Any tape" },
+  { key: "open", label: "Not on a tape" },
+  { key: "draft", label: "In a draft" },
+  { key: "tape", label: "On a tape" },
+];
+
+const MIX_FILTER_KEYS = new Set(MIX_FILTERS.map((filter) => filter.key));
+
+// A finding is "on a tape" the moment it's in a minted checkpoint (distributing or
+// published — the coordinate is committed); "draft" while it only sits in drafts.
+function mixtapeStateOf(row: BoardRow): MixState {
+  if (row.mixtapes.some((m) => m.status === "published" || m.status === "distributing")) {
+    return "tape";
+  }
+  return row.mixtapes.length > 0 ? "draft" : "open";
+}
 
 // Column template shared by the header + every row so they align: the Log ID
 // (the finding's permanent identity, its own scannable column), the finding, then
 // the four equal stage cells. Horizontal-scroll wrapper so a phone scrolls
 // sideways rather than cramming.
 const GRID =
-  "grid grid-cols-[5.5rem_minmax(13rem,1fr)_repeat(5,minmax(6.5rem,8rem))] items-center gap-x-3";
+  "grid grid-cols-[5.5rem_minmax(13rem,1fr)_repeat(6,minmax(6.5rem,8rem))] items-center gap-x-3";
 
 const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
   if (!(await isAdminRequest())) {
@@ -114,15 +148,39 @@ const fetchBoard = createServerFn({ method: "GET" })
       limit: PAGE_SIZE,
       order: "desc",
     });
-    // The batch social-post fetch — one query for the whole page, no N+1.
-    const posts = await listSocialPostsForTracks(page.tracks.map((track) => track.trackId));
+    const trackIds = page.tracks.map((track) => track.trackId);
+    // Batch fetches — one query each for the whole page, no N+1: the per-platform
+    // posts and the mixtape memberships (which tapes each finding is already on).
+    const [posts, mixtapes] = await Promise.all([
+      listSocialPostsForTracks(trackIds),
+      listMixtapeMembershipsForTracks(trackIds),
+    ]);
 
     return {
       nextCursor: page.nextCursor,
       totalCount: page.totalCount,
-      tracks: page.tracks.map((track) => ({ ...track, posts: posts[track.trackId] ?? [] })),
+      tracks: page.tracks.map((track) => ({
+        ...track,
+        mixtapes: mixtapes[track.trackId] ?? [],
+        posts: posts[track.trackId] ?? [],
+      })),
     };
   });
+
+// The draft mixtapes the board's "Add to mixtape" sheet can drop findings into —
+// drafts only (the member edit is draft-only), lightest projection (no member
+// hydration). Lazily fetched the first time the sheet opens, then cached.
+const fetchDraftMixtapes = createServerFn({ method: "GET" }).handler(
+  async (): Promise<MixtapeDTO[]> => {
+    if (!(await isAdminRequest())) {
+      throw redirect({ to: "/admin/login" });
+    }
+
+    const all = await listMixtapes({ includeDrafts: true });
+
+    return all.filter((mixtape) => mixtape.status === "draft");
+  },
+);
 
 // Lazy caption read — only when the operator copies a finding's caption, never
 // preloaded for the whole page. Reads the public note.txt server-side (no CORS;
@@ -179,13 +237,17 @@ const triggerEnrichmentFn = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
-type BoardSearch = { stage: Worklist };
+type BoardSearch = { mix: MixFilter; stage: Worklist };
 
 // Route options follow TanStack's create-route-property-order (each step feeds the
 // next's inferred types), which isn't alphabetical — so sort-keys is off here.
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/admin/")({
   validateSearch: (search: Record<string, unknown>): BoardSearch => ({
+    mix:
+      typeof search.mix === "string" && MIX_FILTER_KEYS.has(search.mix as MixFilter)
+        ? (search.mix as MixFilter)
+        : "all",
     stage:
       typeof search.stage === "string" && WORKLIST_KEYS.has(search.stage as Worklist)
         ? (search.stage as Worklist)
@@ -200,7 +262,7 @@ export const Route = createFileRoute("/admin/")({
 
 function AdminBoardPage() {
   const initial = Route.useLoaderData();
-  const { stage: activeWorklist } = Route.useSearch();
+  const { mix: activeMix, stage: activeWorklist } = Route.useSearch();
   const navigate = Route.useNavigate();
   const queryClient = useQueryClient();
 
@@ -270,22 +332,51 @@ function AdminBoardPage() {
   const staged = useMemo(() => rows.map((row) => ({ ...trackStage(row), row })), [rows]);
 
   const worklistDef = WORKLISTS.find((worklist) => worklist.key === activeWorklist) ?? WORKLISTS[0];
+  // Both filters AND together: the worklist narrows by pipeline stage, the mixtape
+  // lens by tape membership. In-memory, like the worklist — fine at current scale.
   const visible = useMemo(
     () =>
-      worklistDef.key === "all"
-        ? staged
-        : staged.filter((entry) => entry.blockedOn === worklistDef.blockedOn),
+      staged.filter(
+        (entry) =>
+          (worklistDef.key === "all" || entry.blockedOn === worklistDef.blockedOn) &&
+          (activeMix === "all" || mixtapeStateOf(entry.row) === activeMix),
+      ),
+    [activeMix, staged, worklistDef],
+  );
+
+  // Each axis's pill counts reflect the OTHER axis's active filter, so a pill's
+  // number is exactly how many rows you'd see if you clicked it. Worklist counts are
+  // taken over the mixtape-filtered set; mix counts over the worklist-filtered set.
+  const byMix = useMemo(
+    () => staged.filter((entry) => activeMix === "all" || mixtapeStateOf(entry.row) === activeMix),
+    [activeMix, staged],
+  );
+  const byWorklist = useMemo(
+    () =>
+      staged.filter(
+        (entry) => worklistDef.key === "all" || entry.blockedOn === worklistDef.blockedOn,
+      ),
     [staged, worklistDef],
   );
 
   const counts = useMemo(() => {
     const byBlocked = new Map<BlockedOn, number>();
-    for (const entry of staged) {
+    for (const entry of byMix) {
       byBlocked.set(entry.blockedOn, (byBlocked.get(entry.blockedOn) ?? 0) + 1);
     }
     return (worklist: (typeof WORKLISTS)[number]) =>
-      worklist.key === "all" ? staged.length : (byBlocked.get(worklist.blockedOn ?? null) ?? 0);
-  }, [staged]);
+      worklist.key === "all" ? byMix.length : (byBlocked.get(worklist.blockedOn ?? null) ?? 0);
+  }, [byMix]);
+
+  const mixCounts = useMemo(() => {
+    const byState = new Map<MixState, number>();
+    for (const entry of byWorklist) {
+      const state = mixtapeStateOf(entry.row);
+      byState.set(state, (byState.get(state) ?? 0) + 1);
+    }
+    return (filter: MixFilter) =>
+      filter === "all" ? byWorklist.length : (byState.get(filter) ?? 0);
+  }, [byWorklist]);
 
   // Advisory pending-draft count among loaded rows — surfaced inside the TikTok
   // push dialog (cap 5/24h), not in the header.
@@ -303,6 +394,33 @@ function AdminBoardPage() {
     },
     [navigate],
   );
+
+  const setMix = useCallback(
+    (next: MixFilter) => {
+      void navigate({ search: (prev) => ({ ...prev, mix: next }) });
+    },
+    [navigate],
+  );
+
+  // The Mixtape stage cell opens a per-finding picker (keyed by trackId, like the
+  // other dialogs). The draft targets load lazily the first time it opens.
+  const [mixtapeId, setMixtapeId] = useState<string | undefined>();
+  const mixtapeRow = rowFor(mixtapeId);
+
+  const { data: draftMixtapes = [], isFetching: draftsFetching } = useQuery({
+    enabled: mixtapeId !== undefined,
+    queryFn: fetchDraftMixtapes,
+    queryKey: DRAFT_MIXTAPES_KEY,
+    refetchOnWindowFocus: true,
+  });
+
+  // After a successful add: close the picker and refresh both the board (the Mixtape
+  // cell's state) and the draft list (member counts changed).
+  const onAddedToMixtape = useCallback(() => {
+    setMixtapeId(undefined);
+    void queryClient.invalidateQueries({ queryKey: BOARD_KEY });
+    void queryClient.invalidateQueries({ queryKey: DRAFT_MIXTAPES_KEY });
+  }, [queryClient]);
 
   // Patch one row's own fields in the board cache (the publish hook patches posts;
   // this is for the track-level fields tagging + enrichment change).
@@ -580,30 +698,34 @@ function AdminBoardPage() {
   const subheader = (
     <>
       <SpotifyStatusBanner onReconnect={() => void reconnectSpotify()} status={spotifyStatus} />
+      {/* One filter strip, two axes: the pipeline worklist, then — past a divider —
+          the mixtape lens (the cassette glyph marks the group; every pill says
+          "tape"). Wraps to two lines on a phone. */}
       <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-4 py-2.5 sm:px-5">
-        {WORKLISTS.map((worklist) => {
-          const isActive = worklist.key === activeWorklist;
-
-          return (
-            <Button
-              key={worklist.key}
-              onClick={() => setWorklist(worklist.key)}
-              size="sm"
-              variant={isActive ? "secondary" : "ghost"}
-            >
-              {worklist.label}
-              <Badge
-                className={cn(
-                  "ml-1 tabular-nums",
-                  isActive ? "border-primary/40 bg-primary/10 text-primary" : "",
-                )}
-                variant={isActive ? "outline" : "secondary"}
-              >
-                {counts(worklist)}
-              </Badge>
-            </Button>
-          );
-        })}
+        {WORKLISTS.map((worklist) => (
+          <FilterPill
+            active={worklist.key === activeWorklist}
+            count={counts(worklist)}
+            key={worklist.key}
+            label={worklist.label}
+            onClick={() => setWorklist(worklist.key)}
+          />
+        ))}
+        <span aria-hidden="true" className="mx-1 h-5 w-px bg-border" />
+        <CassetteTapeIcon
+          aria-hidden="true"
+          className="mr-0.5 size-3.5 text-muted-foreground"
+          weight="fill"
+        />
+        {MIX_FILTERS.map((filter) => (
+          <FilterPill
+            active={filter.key === activeMix}
+            count={mixCounts(filter.key)}
+            key={filter.key}
+            label={filter.label}
+            onClick={() => setMix(filter.key)}
+          />
+        ))}
       </div>
       {shownError ? (
         <p className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive sm:px-5">
@@ -614,22 +736,17 @@ function AdminBoardPage() {
   );
 
   return (
-    <AdminShell
-      current="board"
-      subheader={subheader}
-      subtitle={`${totalCount} findings`}
-      title="Board"
-    >
+    <AdminShell current="board" subheader={subheader} title="Board">
       {rows.length === 0 ? (
         <EmptyState body="Logged bangers will show up here." title="No findings yet" />
       ) : visible.length === 0 ? (
         <EmptyState
-          body={`Every loaded finding is past “${worklistDef.label.toLowerCase()}”.`}
-          title="Nothing in this worklist"
+          body="No loaded findings match these filters — widen the worklist or the mixtape lens."
+          title="Nothing in this view"
         />
       ) : (
         <div className="overflow-x-auto">
-          <div className="min-w-[64rem]">
+          <div className="min-w-[66rem]">
             {/* Column header */}
             <div
               className={cn(
@@ -657,6 +774,10 @@ function AdminBoardPage() {
                 <NotePencilIcon className="size-3.5" weight="bold" />
                 Note
               </span>
+              <span className="flex items-center gap-1.5">
+                <CassetteTapeIcon className="size-3.5" weight="fill" />
+                Mixtape
+              </span>
             </div>
 
             <ul className="m-0 list-none p-0">
@@ -681,6 +802,7 @@ function AdminBoardPage() {
                     />
                   ))}
                   <NoteStageCell onOpen={() => setNoteId(row.trackId)} row={row} />
+                  <MixtapeStageCell onOpen={() => setMixtapeId(row.trackId)} row={row} />
                 </li>
               ))}
             </ul>
@@ -769,6 +891,15 @@ function AdminBoardPage() {
           ) : undefined}
         </DialogContent>
       </Dialog>
+
+      <AddToMixtapeDialog
+        drafts={draftMixtapes}
+        draftsLoading={draftsFetching && draftMixtapes.length === 0}
+        memberships={mixtapeRow?.mixtapes ?? []}
+        onAdded={onAddedToMixtape}
+        onOpenChange={(open) => !open && setMixtapeId(undefined)}
+        track={mixtapeRow ?? null}
+      />
     </AdminShell>
   );
 }
@@ -873,6 +1004,35 @@ function FindingCell({ onPreview, row }: { onPreview: () => void; row: BoardRow 
   );
 }
 
+// One filter pill — a worklist or mixtape lens, with its live count. Shared by both
+// groups in the filter strip so they read identically.
+function FilterPill({
+  active,
+  count,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  count: number;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <Button onClick={onClick} size="sm" variant={active ? "secondary" : "ghost"}>
+      {label}
+      <Badge
+        className={cn(
+          "ml-1 tabular-nums",
+          active ? "border-primary/40 bg-primary/10 text-primary" : "",
+        )}
+        variant={active ? "outline" : "secondary"}
+      >
+        {count}
+      </Badge>
+    </Button>
+  );
+}
+
 function EnrichStageCell({ onOpen, row }: { onOpen: () => void; row: BoardRow }) {
   const status = row.enrichmentStatus;
   const state: StageState =
@@ -926,6 +1086,37 @@ function NoteStageCell({ onOpen, row }: { onOpen: () => void; row: BoardRow }) {
       onClick={onOpen}
       state={note ? "done" : "open"}
       title="The finding's note — shows on its log page"
+    />
+  );
+}
+
+// The Mixtape cell — the last column, after Note (a mixtape is the least-common
+// step). State mirrors membership and reads by shape like every other cell: solid
+// (on a minted checkpoint — "there's a tape for this"), dashed (in a draft, not yet
+// published), or hollow ("add it"). Clicking always opens the picker — a banger can
+// ride more than one tape — and the title lists the tapes it's already on.
+function MixtapeStageCell({ onOpen, row }: { onOpen: () => void; row: BoardRow }) {
+  const mixState = mixtapeStateOf(row);
+  const state: StageState =
+    mixState === "tape" ? "done" : mixState === "draft" ? "partial" : "open";
+  const label = mixState === "tape" ? "On a tape" : mixState === "draft" ? "In a draft" : "Add";
+  const title =
+    row.mixtapes.length > 0
+      ? row.mixtapes
+          .map((mixtape) => {
+            const name = mixtapeDisplayTitle(mixtape.title) || "Draft";
+            return mixtape.logId ? `${mixtape.logId} · ${name}` : name;
+          })
+          .join("\n")
+      : "Add this finding to a mixtape";
+
+  return (
+    <StageCell
+      icon={<CassetteTapeIcon className="size-4" weight={state === "open" ? "regular" : "fill"} />}
+      label={label}
+      onClick={onOpen}
+      state={state}
+      title={title}
     />
   );
 }
