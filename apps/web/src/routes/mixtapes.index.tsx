@@ -75,10 +75,10 @@ function MixtapesPage() {
                   <img
                     alt=""
                     className="log-index-cover"
-                    height={1500}
+                    height={160}
                     loading="lazy"
-                    src={mixtapeCoverUrl(mixtape.logId as string, "square")}
-                    width={1500}
+                    src={mixtapeCoverUrl(mixtape.logId as string, "thumb")}
+                    width={160}
                   />
                 </Link>
                 <div className="log-index-body">
