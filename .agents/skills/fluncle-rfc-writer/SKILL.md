@@ -1,5 +1,5 @@
 ---
-name: rfc-forge
+name: fluncle-rfc-writer
 description: >-
   Produce a rigorous, build-ready RFC / design doc for a substantial or multi-faceted change by orchestrating sub-agents through divergence → convergence → taste → adversarial review → completeness, then writing the final RFC to ./docs. Use this whenever the user wants to scope, research, plan, or "turn an idea into something we can hand off" — an RFC, design doc, technical proposal, architecture/feature spec, or research that must become a plan — ESPECIALLY work spanning both the codebase and current external/web practice, or work meant to hand off to a fresh session or a team of agents. Trigger even when the user doesn't say "RFC": "research how we'd do X and write it up", "scope this properly before we build", "plan out the overhaul", "turn these ideas into a handoff", "figure out the best approach to X", or "do a research pass and give me a doc" should all pull this in. Not for trivial, single-file, or already-decided changes — just do those directly.
 ---

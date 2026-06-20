@@ -16,7 +16,7 @@ Ground in BOTH:
 Deliver a structured markdown findings report covering: <the 3–5 questions this thread must answer>. Flag the constraints and the open decisions you surface. Your final message IS the data (not a human-facing note).
 ```
 
-Good threads are **non-overlapping** (no two agents chasing the same files/topic) and **answerable independently**. Typical splits: one per subsystem, one per concern (data / routing / UI), one per external domain (SEO / a vendor API / a spec). Tell each agent what the *others* are covering so they stay in their lane.
+Good threads are **non-overlapping** (no two agents chasing the same files/topic) and **answerable independently**. Typical splits: one per subsystem, one per concern (data / routing / UI), one per external domain (SEO / a vendor API / a spec). Tell each agent what the _others_ are covering so they stay in their lane.
 
 ## Phase 5 — adversarial reviewer (one per role)
 
@@ -33,13 +33,16 @@ Return a structured, prioritized critique with concrete fixes/additions for the 
 ```
 
 ### Choosing roles
+
 Pick the lenses the work actually has stakes in. A safe default quartet for product/web work:
+
 - **Staff engineer** — does the approach actually work in the installed versions; the concrete component/route/data structure; what's underspecified enough to block a builder; the riskiest single change.
-- **Design / brand** — does it deliver the intended change or just polish; canon conflicts; information architecture; what it should *look* like.
+- **Design / brand** — does it deliver the intended change or just polish; canon conflicts; information architecture; what it should _look_ like.
 - **Domain specialist** (SEO/GEO, security, performance, a11y, data) — the deep correctness of the specialized claims; what the draft oversells or misses; realistic horizons.
 - **Product / scope** — decompose vs bundle; sequencing; what to do first; what's gold-plating; whether it serves the real goal.
 
 Swap roles to fit: an API change wants security + DX + reliability lenses; a data migration wants a DBA + a correctness reviewer + a rollback skeptic.
 
 ### Why "verify live" matters
+
 The reviewers that earn their keep don't just opine — they `curl` the page and find the draft claimed two bugs when there's one, or read the lockfile and find the version pinned in the RFC is wrong, or run the build and find both feature sets compile together. Demand evidence, not opinion. A panel that only theorizes is a worse version of the author.

@@ -37,6 +37,11 @@
       "sourceType": "local",
       "computedHash": "e3dd9a79df700b927ae1127d6b6b73379720b4b62449c08dca98aa4e712a50d5"
     },
+    "fluncle-rfc-writer": {
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-rfc-writer",
+      "sourceType": "local",
+      "computedHash": "baae9dd979cd98d1d7c6ee5fd6eef91541950e054e4d01482b16ab716031ee46"
+    },
     "fluncle-track-enrichment": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-track-enrichment",
       "sourceType": "local",
@@ -63,11 +68,6 @@
       "sourceType": "github",
       "skillPath": "skills/remotion/SKILL.md",
       "computedHash": "006f8413941b59eff54a7ce64851b8a2fb79e7a3a5f1a895e97a48f01482553d"
-    },
-    "rfc-forge": {
-      "source": "/Users/maurice/Projects/fluncle/packages/skills/rfc-forge",
-      "sourceType": "local",
-      "computedHash": "11cc205f3b56461dd6a1f65a42a055fe192ae7e902f767414f1392a8531efba9"
     },
     "seo-audit": {
       "source": "coreyhaines31/marketingskills",
