@@ -43,10 +43,11 @@ function DocsRoute() {
       // in the TanStack Start SPA that class PERSISTS after navigating away from
       // /docs — flipping the public app's `dark:` utilities on (the stock shadcn
       // outline button swaps to `dark:bg-input/30`, etc.) and restyling the
-      // homepage. Instead `.dark` is scoped to the docs container below, and
-      // docs.css retints Fumadocs' tokens on BOTH `:root` and `.dark`, so the
-      // cosmos paints on the very first SSR pass with no theme JS and nothing to
-      // flip. The sun/moon toggle is already off via `themeSwitch.enabled: false`.
+      // homepage. Instead `.dark` is scoped to the docs container below, and the
+      // `--color-fd-*` token bridge in styles.css (with docs.css re-bridging the
+      // `.dark #nd-sidebar` tokens) maps Fumadocs onto Fluncle's canon palette, so
+      // the cosmos paints on the very first SSR pass with no theme JS and nothing
+      // to flip. The sun/moon toggle is already off via `themeSwitch.enabled: false`.
       theme={{ enabled: false }}
     >
       <DocsLayout
