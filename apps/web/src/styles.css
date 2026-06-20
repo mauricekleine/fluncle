@@ -1,18 +1,57 @@
-/* Cascade-layer order, pinned document-wide from the FIRST stylesheet the app
-   loads. `fumadocs` is declared first, so it ranks BELOW every Fluncle layer —
-   and below Fluncle's unlayered rules, which beat all layers (MDN: unlayered
-   author styles win over layered ones). The /docs hub imports the whole
-   prebuilt Fumadocs stylesheet INTO this layer (`@import … layer(fumadocs)` in
-   docs.css), so its Tailwind preflight + utilities can never override Fluncle's
-   own styles once its <link> persists in the SPA document after leaving /docs.
-   Tailwind appends its own `theme, base, components, utilities` after this line;
-   naming them here too keeps a single authoritative order. */
-@layer fumadocs, theme, base, components, utilities;
 @import "tailwindcss";
 @import "shadcn/tailwind.css";
 /* Canon tokens (DESIGN.md → @fluncle/tokens → tokens.css); the single source of
    the palette hexes. :root below only maps them onto the shadcn variable names. */
 @import "@fluncle/tokens/tokens.css";
+
+/* Fumadocs UI, folded into THIS one global stylesheet (the only sheet the app
+   links, from __root) and compiled by the single @tailwindcss/vite instance —
+   the Spinup pattern. We import the two prebuilt sheets DIRECTLY (`neutral.css`
+   + `preset.css`), never `fumadocs-ui/style.css`: that entry re-runs
+   `@import "tailwindcss"`, a second Tailwind preflight that would restyle the
+   public app's `button`/`*`/headings. Imported plain (no `layer(...)`), the
+   framework's own `@layer base`/utilities merge into Tailwind's matching layers
+   at equal priority, so the docs subtree gets its full structure (header,
+   #nd-page layout/padding, headings, code) while the only cross-surface rules
+   Fumadocs' preflight emits — `body { background/color: var(--color-fd-*) }` and
+   the `* { border-color: var(--color-fd-border) }` reset — resolve through the
+   token bridge below to canon values, harmless on the homepage. Because this is
+   the single global sheet (not a docs-only <link>), nothing persists into the
+   SPA to leak after leaving /docs. The docs-scoped retints + `.dark`-keyed
+   panes live in docs.css (loaded on /docs only) and win by `#nd-…` specificity
+   inside the docs subtree (DESIGN.md, the Retint Rule). */
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+
+/* The token bridge: re-point every `--color-fd-*` onto Fluncle's canon palette
+   (DESIGN.md, the Nostalgic Cosmos). This `:root` block follows neutral.css in
+   source order, so it overrides Fumadocs' default LIGHT `:root` palette — which
+   would otherwise paint the homepage body light through the global preflight
+   above. The `.dark` container (docs.css / #nd-docs-layout) refines a few of
+   these; the values mirror tokens.css. */
+:root {
+  --color-fd-background: #090a0b; /* Deep Field */
+  --color-fd-foreground: #f4ead7; /* Starlight Cream */
+  --color-fd-muted: #171611; /* Tape Black */
+  --color-fd-muted-foreground: #b7ab95; /* Stardust */
+  --color-fd-popover: #10100d; /* Sleeve Black */
+  --color-fd-popover-foreground: #f4ead7;
+  --color-fd-card: #10100d; /* Sleeve Black */
+  --color-fd-card-foreground: #f4ead7;
+  --color-fd-border: #d0b99029; /* Dust Line */
+  --color-fd-primary: #f5b800; /* Eclipse Gold — the one sun */
+  --color-fd-primary-foreground: #151006; /* Ink on Gold */
+  --color-fd-secondary: #171611; /* Tape Black */
+  --color-fd-secondary-foreground: #f4ead7;
+  --color-fd-accent: #f5b8001a; /* Gold Veil — the hover wash */
+  --color-fd-accent-foreground: #ffd057; /* Eclipse Glow */
+  --color-fd-ring: #f5b800; /* Eclipse Gold focus ring */
+  --color-fd-error: #ff6b57; /* Re-entry Red */
+  --color-fd-warning: #ffd057;
+  --color-fd-success: #f5b800;
+  --color-fd-info: #ffd057;
+  --color-fd-overlay: #090a0bcc;
+}
 
 /* Fluncle is dark-only: the palette lives once in :root (no second theme).
    Tailwind v4's default would make `dark:` track `prefers-color-scheme`, so
