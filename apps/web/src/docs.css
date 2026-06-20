@@ -5,10 +5,16 @@
    main app keeps styles.css; this file never touches it. */
 @import "fumadocs-ui/style.css";
 
-/* Fluncle is dark-only. RootProvider is pinned to dark (theme.enabled:false),
-   so the .dark class is always present; we map Fumadocs' --color-fd-* tokens
-   onto the canon palette there. Values mirror tokens.css / styles.css. */
+/* Fluncle is dark-only. The RootProvider forces the theme dark (forcedTheme),
+   so next-themes pins `.dark` onto <html>. But the SSR pass paints before the
+   theme class lands, and Fumadocs' own light `:root` default would flash white
+   in that window — so we map the canon palette onto BOTH `:root` and `.dark`.
+   The docs render the Nostalgic Cosmos on the very first paint, on every device
+   and OS appearance, with nothing to flip. Values mirror tokens.css /
+   styles.css. */
+:root,
 .dark {
+  color-scheme: dark;
   --color-fd-background: #090a0b; /* Deep Field */
   --color-fd-foreground: #f4ead7; /* Starlight Cream */
   --color-fd-muted: #171611; /* Tape Black */
@@ -32,15 +38,137 @@
   --color-fd-overlay: #090a0bcc;
 }
 
-/* Let the cosmos backdrop and sun-bloom (rendered by __root, behind every
-   page) show through the docs surface, same as the rest of Fluncle: the docs
-   chrome rides on the night sky, not on an opaque slab. */
+/* The terminal voice (DESIGN: The One Voice Rule) — code is the machine's own
+   word, set in Monaspace Krypton like the CLI/SSH surfaces. The reading body
+   stays on the system sans Fumadocs already uses. */
+#nd-docs-layout {
+  --fd-font-mono: "Monaspace Krypton", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+/* ————— The cosmos shows through ————— */
+
+/* Let the fixed cover-art backdrop + sun-bloom (rendered by __root behind every
+   page) carry through the docs, same as the rest of fluncle.com: the chrome
+   rides on the night sky, never on an opaque slab (The Through-the-Glass Rule).
+   The body/layout/article and Fumadocs' own background helpers are all cleared
+   to transparent; the panes below (sidebar, cards, code) supply their own warm
+   translucent fills. */
 #nd-docs-layout,
-[data-docs] {
+#nd-sidebar,
+#nd-toc,
+#nd-subnav,
+#nd-nav,
+#nd-tocnav,
+[data-docs],
+.bg-fd-background,
+.bg-fd-card {
   background: transparent;
 }
 
-/* The brand wordmark in the docs nav uses Oxanium, like everywhere else. */
+/* ————— Sidebar + nav as a quiet pane ————— */
+
+/* One translucent pane over the cosmos (One Pane): a whisper of Sleeve Black
+   with a Dust Line edge and a backdrop blur, so the starfield reads behind the
+   navigation without breaking legibility (The Legible Sky Rule). */
+#nd-sidebar {
+  border-right: 1px solid var(--color-fd-border);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  #nd-sidebar {
+    -webkit-backdrop-filter: blur(18px) saturate(125%);
+    backdrop-filter: blur(18px) saturate(125%);
+    background: color-mix(in oklch, #10100d 42%, transparent);
+  }
+}
+
+/* The brand nameplate in the nav: Oxanium, like everywhere else (DESIGN: The
+   One Voice Rule — Oxanium speaks for the brand). */
 .font-display {
   font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Sidebar links: quiet Stardust, igniting to the Glow on hover/active — the
+   Ignition Rule, never a dim. */
+#nd-sidebar a[data-active="true"] {
+  color: var(--color-fd-primary);
+  font-weight: 600;
+}
+
+/* ————— Headings in the brand voice ————— */
+
+/* The page masthead — the title — is a brand moment: Oxanium, tight tracking,
+   the loudest cream on the page (DESIGN: Display / Title). Section headings
+   stay on the quiet sans so the manual reads instantly (The One Voice Rule). */
+#nd-page h1,
+#nd-docs-layout article h1 {
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+/* ————— Links: the one sun on the page ————— */
+
+#nd-docs-layout article a {
+  color: var(--color-fd-accent-foreground);
+  text-decoration-color: color-mix(in oklch, #f5b800 40%, transparent);
+  text-underline-offset: 0.2em;
+}
+
+#nd-docs-layout article a:hover {
+  color: var(--color-fd-primary);
+}
+
+/* ————— Cards: panes on the cosmos, not light slabs ————— */
+
+/* The <Cards>/<Card> grid (the index "surfaces" + cross-links) is the docs'
+   signature surface. Retint Fumadocs' default card to canon: a warm translucent
+   Sleeve-Black pane with a Dust Line edge that ignites toward gold on hover —
+   the artwork-row treatment, translated for docs (One Pane, The Ignition Rule).
+   No drop shadow; depth is the sky behind the glass. */
+#nd-docs-layout article a[data-card],
+#nd-docs-layout a[data-card] {
+  background: color-mix(in oklch, #10100d 55%, transparent);
+  border: 1px solid var(--color-fd-border);
+  border-radius: 0.625rem;
+  box-shadow: none;
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out,
+    transform 150ms ease-out;
+}
+
+#nd-docs-layout a[data-card]:hover {
+  background: color-mix(in oklch, #f5b800 8%, color-mix(in oklch, #10100d 55%, transparent));
+  border-color: color-mix(in oklch, #f5b800 38%, transparent);
+}
+
+/* The card title heats to the Glow on hover (it follows the link color). */
+#nd-docs-layout a[data-card]:hover :where(p, h2, h3) {
+  color: var(--color-fd-accent-foreground);
+}
+
+/* ————— Code: the machine's own word ————— */
+
+/* Code blocks and inline code sit in a quiet Tape-Black box with a Dust Line
+   edge, mono type — the CLI Command treatment (DESIGN.md). */
+#nd-docs-layout article pre,
+#nd-docs-layout figure[data-rehype-pretty-code-figure] pre {
+  background: color-mix(in oklch, #171611 70%, transparent);
+  border: 1px solid var(--color-fd-border);
+}
+
+#nd-docs-layout article :not(pre) > code {
+  background: color-mix(in oklch, #171611 60%, transparent);
+  border: 1px solid var(--color-fd-border);
+  color: var(--color-fd-foreground);
+}
+
+/* ————— The page-actions row (Copy page / LLM affordance) ————— */
+
+/* Sits under the title/description, above the body. The border-b prints a Dust
+   Line rule; the buttons inherit Fumadocs' secondary style, already retinted by
+   the tokens above. Keep it quiet — it is a tool, not a banner. */
+.docs-page-actions {
+  border-color: var(--color-fd-border);
 }

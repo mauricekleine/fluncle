@@ -38,9 +38,14 @@ function DocsRoute() {
 
   return (
     <RootProvider
-      // Dark-only, like the rest of Fluncle: pin Fumadocs' theme to dark and
-      // drop its light/dark toggle so the Nostalgic Cosmos never flips.
-      theme={{ defaultTheme: "dark", enabled: false }}
+      // Dark-only, like the rest of Fluncle. Keep next-themes ENABLED but force
+      // dark: `forcedTheme` pins the `.dark` class onto <html> on every render,
+      // so Fumadocs resolves its `.dark` token set (retinted in docs.css)
+      // instead of its light `:root` default. The old `enabled: false` mounted
+      // no ThemeProvider at all, so `.dark` never landed and the docs rendered
+      // light on every device. The sun/moon toggle is removed separately via
+      // `themeSwitch.enabled: false` in docsBaseOptions — the cosmos never flips.
+      theme={{ enabled: true, forcedTheme: "dark" }}
     >
       <DocsLayout {...docsBaseOptions()} tree={tree}>
         <Outlet />

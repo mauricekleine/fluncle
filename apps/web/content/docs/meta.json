@@ -3,11 +3,11 @@
   "pages": [
     "index",
     "log-id",
-    "cli",
-    "ssh",
-    "mcp",
     "api-overview",
     "[API reference](/docs/api)",
+    "cli",
+    "mcp",
+    "ssh",
     "dig",
     "feeds"
   ]

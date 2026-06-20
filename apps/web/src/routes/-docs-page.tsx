@@ -5,6 +5,7 @@ import {
   DocsTitle,
 } from "fumadocs-ui/layouts/docs/page";
 import { getDocsMdxComponents } from "@/components/docs-mdx";
+import { DocsPageActions } from "@/components/docs-page-actions";
 // The generated browser collection: lazy MDX modules keyed by content path.
 import browserCollections from "../../.source/browser";
 
@@ -20,6 +21,7 @@ const clientLoader = browserCollections.docs.createClientLoader({
         {frontmatter.description ? (
           <DocsDescription>{frontmatter.description}</DocsDescription>
         ) : null}
+        <DocsPageActions />
         <DocsBody>
           <MDX components={getDocsMdxComponents()} />
         </DocsBody>

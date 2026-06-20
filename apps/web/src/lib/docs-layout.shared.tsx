@@ -6,14 +6,13 @@ import { type BaseLayoutProps } from "fumadocs-ui/layouts/shared";
 export function docsBaseOptions(): BaseLayoutProps {
   return {
     githubUrl: undefined,
+    // One link back to the music. "API reference" used to live here too, but it
+    // already sits in the sidebar tree under "The API" (meta.json), so a second
+    // copy at the top was a duplicate — kept to a single entry now.
     links: [
       {
         text: "Findings",
         url: "/",
-      },
-      {
-        text: "API reference",
-        url: "/docs/api",
       },
     ],
     nav: {
@@ -23,6 +22,11 @@ export function docsBaseOptions(): BaseLayoutProps {
         </span>
       ),
       url: "/docs",
+    },
+    // Dark-only: drop Fumadocs' sun/moon theme switch. The theme is forced dark
+    // by the RootProvider (docs.tsx); there is nothing to toggle.
+    themeSwitch: {
+      enabled: false,
     },
   };
 }
