@@ -55,7 +55,7 @@
     "hetzner-devbox": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/hetzner-devbox",
       "sourceType": "local",
-      "computedHash": "3749b41b1386d44166c68bfa63470d19741f9f7dc195a41eedea27ac34bfa091"
+      "computedHash": "a84d188f8f823624e2892e93b0b67bf09e61c468bf2d109a338138c12e90699d"
     },
     "postiz": {
       "source": "gitroomhq/postiz-agent",
