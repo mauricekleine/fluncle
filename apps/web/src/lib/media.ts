@@ -41,6 +41,49 @@ export function trackMedia(logId: string): TrackMedia {
   };
 }
 
+// ── Spotify album-art renditions ─────────────────────────────────────────────
+//
+// `album_image_url` stores a Spotify CDN URL (i.scdn.co). Spotify encodes the
+// pixel size in the image-id PREFIX, not query params: `ab67616d0000b273` = 640²,
+// `ab67616d00001e02` = 300², `ab67616d00004851` = 64². We store the 300² variant
+// (selectAlbumImageUrl picks width >= 300), which is a ~20 KB JPEG — far too heavy
+// for a 52px feed row. Swapping the prefix requests a right-sized rendition of the
+// SAME cover (64² ≈ 2.7 KB for a row, 640² for the full-bleed /log poster). Any
+// non-Spotify or unrecognized URL passes through untouched.
+
+const SPOTIFY_IMAGE_SIZE_CODE = {
+  large: "ab67616d0000b273", // 640²
+  medium: "ab67616d00001e02", // 300²
+  small: "ab67616d00004851", // 64²
+} as const;
+
+export type SpotifyImageSize = keyof typeof SPOTIFY_IMAGE_SIZE_CODE;
+
+// The Spotify album-art id is the 16-char size code + a 24-char (hex) cover hash.
+const SPOTIFY_ALBUM_IMAGE_RE = /^(https:\/\/i\.scdn\.co\/image\/)ab67616d[0-9a-f]{8}([0-9a-f]+)$/;
+
+/**
+ * Rewrite a stored Spotify album-art URL to the requested rendition size, leaving
+ * any non-Spotify URL (or unparseable id) untouched. `small` for the feed/index
+ * rows, `large` for the full-bleed /log poster (the stored 300² would upscale).
+ */
+export function spotifyAlbumImageAtSize(
+  url: string | undefined,
+  size: SpotifyImageSize,
+): string | undefined {
+  if (!url) {
+    return url;
+  }
+
+  const match = SPOTIFY_ALBUM_IMAGE_RE.exec(url);
+
+  if (!match) {
+    return url;
+  }
+
+  return `${match[1]}${SPOTIFY_IMAGE_SIZE_CODE[size]}${match[2]}`;
+}
+
 // ── Cloudflare Media Transformations ─────────────────────────────────────────
 //
 // Playback surfaces (Stories, the log footage) don't fetch the raw 1080×1920

@@ -1,7 +1,7 @@
 import { PauseIcon, PlayIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { trackMedia, videoPoster, videoRendition } from "@/lib/media";
+import { spotifyAlbumImageAtSize, trackMedia, videoPoster, videoRendition } from "@/lib/media";
 import { usePreviewPlayer } from "@/lib/preview-player";
 import { type Track } from "@/lib/tracks";
 import { useInViewport } from "@/lib/use-in-viewport";
@@ -42,7 +42,9 @@ export function LogFootage({ track }: { track: Track }) {
   // validates the frame transform.
   const framePoster = track.logId && !framePosterFailed ? videoPoster(track.logId) : undefined;
   const posterUrl =
-    framePoster ?? (!posterFailed ? media?.posterUrl : undefined) ?? track.albumImageUrl;
+    framePoster ??
+    (!posterFailed ? media?.posterUrl : undefined) ??
+    spotifyAlbumImageAtSize(track.albumImageUrl, "large");
 
   useEffect(() => {
     if (!framePoster) {

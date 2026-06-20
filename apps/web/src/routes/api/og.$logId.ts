@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { ImageResponse, loadGoogleFont } from "workers-og";
 import { formatDateLong } from "@/lib/format";
 import { GALAXIES, galaxyForVibe } from "@/lib/galaxies";
-import { trackMedia } from "@/lib/media";
+import { spotifyAlbumImageAtSize, trackMedia } from "@/lib/media";
 import { getTrackByIdOrLogId } from "@/lib/server/tracks";
 
 // Per-finding Open Graph card (1200×630), rendered on the edge with workers-og
@@ -65,7 +65,7 @@ export const Route = createFileRoute("/api/og/$logId")({
         // album cover.
         const bgSource = track.videoUrl
           ? trackMedia(track.logId ?? logId).posterUrl
-          : track.albumImageUrl;
+          : spotifyAlbumImageAtSize(track.albumImageUrl, "large");
         const background = bgSource ? await fetchImageDataUri(bgSource) : undefined;
 
         const galaxy =

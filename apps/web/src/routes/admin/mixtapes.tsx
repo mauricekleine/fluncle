@@ -65,6 +65,7 @@ import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
 import { formatAlbumDuration, formatDurationField, parseDuration } from "@/lib/format";
+import { spotifyAlbumImageAtSize } from "@/lib/media";
 import { type MixtapeDTO, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { type MixtapeInput, type MixtapeMembership } from "@/lib/server/mixtapes";
@@ -517,7 +518,7 @@ function MixtapeEditor({
                   <img
                     alt=""
                     className="size-12 shrink-0 rounded-md border border-border object-cover"
-                    src={`/api/mixtape-cover/${encodeURIComponent(mixtape.logId)}?size=square`}
+                    src={`/api/mixtape-cover/${encodeURIComponent(mixtape.logId)}?size=thumb`}
                   />
                   <a
                     className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:underline focus-visible:outline-2 focus-visible:outline-ring"
@@ -1082,7 +1083,7 @@ function MemberThumb({ src }: { src?: string }) {
       <img
         alt=""
         className="size-8 shrink-0 rounded-sm border border-border object-cover"
-        src={src}
+        src={spotifyAlbumImageAtSize(src, "small")}
       />
     );
   }

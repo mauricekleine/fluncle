@@ -40,6 +40,13 @@ const envKeys = [
   // runtime, so it's derived from the request origin (mixcloudRedirectUri).
   "MIXCLOUD_CLIENT_ID",
   "MIXCLOUD_CLIENT_SECRET",
+  // Last.fm write side (love-on-add). API_KEY + SHARED_SECRET come from the
+  // Last.fm API application; SESSION_KEY (durable, non-expiring) comes from
+  // running `fluncle admin auth lastfm`. All three are Worker secrets. The love
+  // hook no-ops when SESSION_KEY is absent, so the publish path works unprovisioned.
+  "LASTFM_API_KEY",
+  "LASTFM_SHARED_SECRET",
+  "LASTFM_SESSION_KEY",
   "TELEGRAM_BOT_TOKEN",
   "TELEGRAM_CHANNEL_ID",
   "DISCORD_WEBHOOK_URL",

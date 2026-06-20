@@ -13,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { spotifyAlbumImageAtSize } from "@/lib/media";
 import { mixtapeDisplayTitle, type MixtapeDTO } from "@/lib/mixtapes";
 import { type MixtapeMembership } from "@/lib/server/mixtapes";
 
@@ -101,7 +102,7 @@ export function AddToMixtapeDialog({
                 <img
                   alt=""
                   className="size-9 shrink-0 rounded-sm border border-border object-cover"
-                  src={track.albumImageUrl}
+                  src={spotifyAlbumImageAtSize(track.albumImageUrl, "small")}
                 />
               ) : (
                 <div className="track-artwork-fallback size-9 shrink-0 rounded-sm border border-border" />
