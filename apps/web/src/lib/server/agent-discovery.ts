@@ -36,6 +36,43 @@ export function appendAgentLinkHeaders(response: Response): Response {
   return linked;
 }
 
+// The web onion's v3 hostname (without scheme or the trailing `.onion`). Empty
+// until the onion exists: Unit A of the Tor RFC stands up the onionspray mirror
+// on the rave VPS, which generates the address. Filling this in and pushing is
+// the whole of Unit C's go-live — see docs/tor.md. While it is empty,
+// appendOnionLocation is a no-op, so this ships inert.
+const WEB_ONION_HOSTNAME = "";
+
+// Advertise the onion twin via the Onion-Location response header (Tor Browser
+// desktop shows a ".onion available" pill that one-clicks to the mirror). Unlike
+// the homepage-only Link header, this is per-path: a Tor user on /log/<id> lands
+// on that finding's onion page. The hostname is a parameter so tests can exercise
+// the "set" state without a real address baked into source; production passes the
+// module constant. Gated to text/html responses — the pill does nothing on the
+// JSON/XML surfaces (/api/v1/*, /rss.xml, /mcp), where the header would be noise.
+export function appendOnionLocation(
+  response: Response,
+  url: URL,
+  onionHostname: string = WEB_ONION_HOSTNAME,
+): Response {
+  if (onionHostname === "") {
+    return response;
+  }
+
+  if (!(response.headers.get("content-type")?.includes("text/html") ?? false)) {
+    return response;
+  }
+
+  // Worker responses arrive with immutable headers; re-wrap to mutate.
+  const located = new Response(response.body, response);
+  located.headers.set(
+    "Onion-Location",
+    `http://${onionHostname}.onion${url.pathname}${url.search}`,
+  );
+
+  return located;
+}
+
 export async function handleAgentDiscovery(request: Request): Promise<Response | undefined> {
   if (request.method !== "GET" && request.method !== "HEAD") {
     return undefined;

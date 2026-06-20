@@ -1,6 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { renderLlmsFull } from "./agent-discovery";
+import { appendOnionLocation, renderLlmsFull } from "./agent-discovery";
 import { type TrackListItem } from "./tracks";
+
+// A stand-in v3 onion hostname (56 base32 chars, correct shape, not a real
+// address) so the test exercises the "set" state without an address in source.
+const testOnion = "examplefluncleonionaddressplaceholder0000000000000000aaaa";
+
+function htmlResponse(): Response {
+  return new Response("<!doctype html><title>finding</title>", {
+    headers: { "Content-Type": "text/html; charset=utf-8" },
+  });
+}
+
+function jsonResponse(): Response {
+  return new Response('{"ok":true}', {
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
 function finding(overrides: Partial<TrackListItem>): TrackListItem {
   return {
@@ -59,5 +75,42 @@ describe("renderLlmsFull", () => {
     const doc = renderLlmsFull([finding({ logId: "012.8.0A" })], 30);
 
     expect(doc).toContain("29 older findings omitted");
+  });
+});
+
+describe("appendOnionLocation", () => {
+  it("points an HTML response at the onion with the request's exact path", () => {
+    const url = new URL("https://www.fluncle.com/log/241.7.3A");
+    const located = appendOnionLocation(htmlResponse(), url, testOnion);
+
+    expect(located.headers.get("Onion-Location")).toBe(`http://${testOnion}.onion/log/241.7.3A`);
+  });
+
+  it("preserves the query string on the onion URL", () => {
+    const url = new URL("https://www.fluncle.com/log?page=2");
+    const located = appendOnionLocation(htmlResponse(), url, testOnion);
+
+    expect(located.headers.get("Onion-Location")).toBe(`http://${testOnion}.onion/log?page=2`);
+  });
+
+  it("does not advertise the onion on a JSON/XML response", () => {
+    const url = new URL("https://www.fluncle.com/rss.xml");
+    const located = appendOnionLocation(jsonResponse(), url, testOnion);
+
+    expect(located.headers.get("Onion-Location")).toBeNull();
+  });
+
+  it("is inert when the onion hostname is unset, regardless of content type", () => {
+    const url = new URL("https://www.fluncle.com/log/241.7.3A");
+
+    expect(appendOnionLocation(htmlResponse(), url, "").headers.get("Onion-Location")).toBeNull();
+    expect(appendOnionLocation(jsonResponse(), url, "").headers.get("Onion-Location")).toBeNull();
+  });
+
+  it("defaults to the inert module constant (ships with no onion advertised)", () => {
+    const url = new URL("https://www.fluncle.com/log/241.7.3A");
+    const located = appendOnionLocation(htmlResponse(), url);
+
+    expect(located.headers.get("Onion-Location")).toBeNull();
   });
 });

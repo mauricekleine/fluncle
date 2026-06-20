@@ -1,5 +1,9 @@
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
-import { appendAgentLinkHeaders, handleAgentDiscovery } from "./lib/server/agent-discovery";
+import {
+  appendAgentLinkHeaders,
+  appendOnionLocation,
+  handleAgentDiscovery,
+} from "./lib/server/agent-discovery";
 import { isCacheableLogPath, withEdgeCache } from "./lib/server/edge-cache";
 import { ADMIN_COOKIE_NAME } from "./lib/server/env";
 import { handleMcp } from "./lib/server/mcp";
@@ -37,14 +41,23 @@ export default createServerEntry({
       !hasAdminCookie(request) &&
       (request.headers.get("accept")?.includes("text/html") ?? false)
     ) {
-      return withEdgeCache(request, async () => handler.fetch(request));
+      const cached = await withEdgeCache(request, async () => handler.fetch(request));
+
+      // The per-path .onion pill is most valuable here: a Tor user on /log/<id>
+      // should land on that exact finding's onion page. Inert until the onion
+      // exists (appendOnionLocation no-ops on an empty hostname).
+      return appendOnionLocation(cached, url);
     }
 
     const response = await handler.fetch(request);
 
     // The homepage advertises machine-readable surfaces via RFC 8288 Link
-    // headers so agents can discover them without guessing paths.
-    return url.pathname === "/" ? appendAgentLinkHeaders(response) : response;
+    // headers so agents can discover them without guessing paths; every HTML
+    // response also advertises its onion twin via Onion-Location (per-path,
+    // HTML-only, inert until WEB_ONION_HOSTNAME is set — see agent-discovery.ts).
+    const located = appendOnionLocation(response, url);
+
+    return url.pathname === "/" ? appendAgentLinkHeaders(located) : located;
   },
 });
 
