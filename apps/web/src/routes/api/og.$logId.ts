@@ -124,3 +124,5 @@ export const Route = createFileRoute("/api/og/$logId")({
     },
   },
 });
+
+export const serverHandlers = Route.options.server!.handlers;

@@ -27,3 +27,5 @@ export const Route = createFileRoute("/api/admin/submissions")({
     },
   },
 });
+
+export const serverHandlers = Route.options.server!.handlers;

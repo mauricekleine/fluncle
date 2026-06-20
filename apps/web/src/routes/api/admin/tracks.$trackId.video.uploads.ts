@@ -18,6 +18,7 @@ import { artifactByField } from "../../../lib/server/video-bundle";
 //
 // The Worker owns the R2 credentials; the CLI only ever holds the admin token +
 // these expiring URLs. Requires the track to have a Log ID (one identity).
+
 export const Route = createFileRoute("/api/admin/tracks/$trackId/video/uploads")({
   server: {
     handlers: {
@@ -93,3 +94,5 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/video/uploads")
     },
   },
 });
+
+export const serverHandlers = Route.options.server!.handlers;

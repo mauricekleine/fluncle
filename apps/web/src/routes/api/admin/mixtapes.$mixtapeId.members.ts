@@ -24,3 +24,5 @@ export const Route = createFileRoute("/api/admin/mixtapes/$mixtapeId/members")({
     },
   },
 });
+
+export const serverHandlers = Route.options.server!.handlers;

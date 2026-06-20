@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { type ApiHandlers, aliasHandlers } from "../-alias";
 
 import { trackMedia } from "../../../lib/media";
 import { requireAdmin } from "../../../lib/server/env";
@@ -17,64 +18,64 @@ import { updateTrack } from "../../../lib/server/track-update";
 // ledger — exactly what the legacy multipart route did after storing.
 //
 // Requires the track to have a Log ID (one identity everywhere).
-export const Route = createFileRoute("/api/admin/tracks/$trackId/video/finalize")({
-  server: {
-    handlers: {
-      POST: async ({ params, request }) => {
-        const unauthorized = await requireAdmin(request);
+export const serverHandlers: ApiHandlers = {
+  POST: async ({ params, request }) => {
+    const unauthorized = await requireAdmin(request);
 
-        if (unauthorized) {
-          return unauthorized;
-        }
+    if (unauthorized) {
+      return unauthorized;
+    }
 
-        const idOrLogId = params.trackId;
+    const idOrLogId = params.trackId;
 
-        try {
-          const track = await getTrackByIdOrLogId(idOrLogId);
+    try {
+      const track = await getTrackByIdOrLogId(idOrLogId);
 
-          if (!track) {
-            return trackNotFoundResponse(idOrLogId);
-          }
+      if (!track) {
+        return trackNotFoundResponse(idOrLogId);
+      }
 
-          if (!track.logId) {
-            return noLogIdResponse();
-          }
+      if (!track.logId) {
+        return noLogIdResponse();
+      }
 
-          const body = (await request.json().catch(() => undefined)) as
-            | { videoVehicle?: unknown; videoModel?: unknown; videoModelReasoning?: unknown }
-            | undefined;
-          const videoVehicle =
-            typeof body?.videoVehicle === "string" && body.videoVehicle.trim()
-              ? body.videoVehicle.trim().slice(0, 120)
-              : undefined;
-          const videoModel =
-            typeof body?.videoModel === "string" && body.videoModel.trim()
-              ? body.videoModel.trim().slice(0, 120)
-              : "anthropic/claude-opus-4-8";
-          const videoModelReasoning =
-            typeof body?.videoModelReasoning === "string" && body.videoModelReasoning.trim()
-              ? body.videoModelReasoning.trim().slice(0, 120)
-              : "high";
+      const body = (await request.json().catch(() => undefined)) as
+        | { videoVehicle?: unknown; videoModel?: unknown; videoModelReasoning?: unknown }
+        | undefined;
+      const videoVehicle =
+        typeof body?.videoVehicle === "string" && body.videoVehicle.trim()
+          ? body.videoVehicle.trim().slice(0, 120)
+          : undefined;
+      const videoModel =
+        typeof body?.videoModel === "string" && body.videoModel.trim()
+          ? body.videoModel.trim().slice(0, 120)
+          : "anthropic/claude-opus-4-8";
+      const videoModelReasoning =
+        typeof body?.videoModelReasoning === "string" && body.videoModelReasoning.trim()
+          ? body.videoModelReasoning.trim().slice(0, 120)
+          : "high";
 
-          const videoUrl = trackMedia(track.logId).videoUrl;
+      const videoUrl = trackMedia(track.logId).videoUrl;
 
-          await updateTrack(track.trackId, {
-            videoModel,
-            videoModelReasoning,
-            videoUrl,
-            ...(videoVehicle ? { videoVehicle } : {}),
-          });
+      await updateTrack(track.trackId, {
+        videoModel,
+        videoModelReasoning,
+        videoUrl,
+        ...(videoVehicle ? { videoVehicle } : {}),
+      });
 
-          return Response.json({
-            logId: track.logId,
-            ok: true,
-            trackId: track.trackId,
-            videoUrl,
-          });
-        } catch (error) {
-          return apiErrorResponse(error);
-        }
-      },
-    },
+      return Response.json({
+        logId: track.logId,
+        ok: true,
+        trackId: track.trackId,
+        videoUrl,
+      });
+    } catch (error) {
+      return apiErrorResponse(error);
+    }
   },
+};
+
+export const Route = createFileRoute("/api/admin/tracks/$trackId/video/finalize")({
+  server: { handlers: aliasHandlers(serverHandlers) },
 });

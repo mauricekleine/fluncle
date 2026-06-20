@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { type ApiHandlers, aliasHandlers } from "./-alias";
 import { decodeTrackCursor, listTracks } from "../../lib/server/tracks";
 
 // The Stories feed: findings that have a rendered video, newest first. A thin
@@ -6,18 +7,18 @@ import { decodeTrackCursor, listTracks } from "../../lib/server/tracks";
 const defaultLimit = 16;
 const maxLimit = 48;
 
-export const Route = createFileRoute("/api/stories")({
-  server: {
-    handlers: {
-      GET: async ({ request }) => {
-        const url = new URL(request.url);
-        const limit = parseLimit(url.searchParams.get("limit"));
-        const cursor = decodeTrackCursor(url.searchParams.get("cursor"));
+export const serverHandlers: ApiHandlers = {
+  GET: async ({ request }) => {
+    const url = new URL(request.url);
+    const limit = parseLimit(url.searchParams.get("limit"));
+    const cursor = decodeTrackCursor(url.searchParams.get("cursor"));
 
-        return Response.json(await listTracks({ cursor, hasVideo: true, limit }));
-      },
-    },
+    return Response.json(await listTracks({ cursor, hasVideo: true, limit }));
   },
+};
+
+export const Route = createFileRoute("/api/stories")({
+  server: { handlers: aliasHandlers(serverHandlers) },
 });
 
 function parseLimit(value: string | null): number {

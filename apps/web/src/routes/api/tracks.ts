@@ -54,3 +54,5 @@ function parseTimestamp(value: string | null): string | undefined {
 
   return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
 }
+
+export const serverHandlers = Route.options.server!.handlers;

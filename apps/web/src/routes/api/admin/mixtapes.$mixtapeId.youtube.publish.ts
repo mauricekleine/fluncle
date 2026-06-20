@@ -9,6 +9,7 @@ import { getYouTubeAccessToken } from "../../../lib/server/youtube";
 // videos.update (the Worker holds the refresh token via youtube_auth), so neither
 // the CLI nor the dashboard needs a local file or a token. Resolves the video id
 // from the mixtape's youtube distribution row.
+
 export const Route = createFileRoute("/api/admin/mixtapes/$mixtapeId/youtube/publish")({
   server: {
     handlers: {
@@ -70,3 +71,5 @@ export const Route = createFileRoute("/api/admin/mixtapes/$mixtapeId/youtube/pub
     },
   },
 });
+
+export const serverHandlers = Route.options.server!.handlers;

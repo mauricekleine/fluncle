@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { type ApiHandlers, aliasHandlers } from "../../../-alias";
 import { requireAdmin, signState } from "../../../../../lib/server/env";
 import { apiErrorResponse } from "../../../../../lib/server/http-errors";
 import { buildMixcloudAuthUrl } from "../../../../../lib/server/mixcloud";
@@ -7,32 +8,32 @@ import { buildMixcloudAuthUrl } from "../../../../../lib/server/mixcloud";
 // Mirrors the Spotify/YouTube start route; the callback verifies the same signed
 // state. The token is provisioned + stored server-side — the CLI never holds the
 // durable credential.
-export const Route = createFileRoute("/api/admin/mixcloud/auth/start")({
-  server: {
-    handlers: {
-      GET: async ({ request }) => {
-        const unauthorized = await requireAdmin(request);
+export const serverHandlers: ApiHandlers = {
+  GET: async ({ request }) => {
+    const unauthorized = await requireAdmin(request);
 
-        if (unauthorized) {
-          return unauthorized;
-        }
+    if (unauthorized) {
+      return unauthorized;
+    }
 
-        try {
-          const state = await signState({
-            iat: Date.now(),
-            nonce: crypto.randomUUID(),
-            purpose: "mixcloud-auth",
-          });
-          const authUrl = await buildMixcloudAuthUrl(state);
+    try {
+      const state = await signState({
+        iat: Date.now(),
+        nonce: crypto.randomUUID(),
+        purpose: "mixcloud-auth",
+      });
+      const authUrl = await buildMixcloudAuthUrl(state);
 
-          return Response.json({
-            authUrl,
-            ok: true,
-          });
-        } catch (error) {
-          return apiErrorResponse(error);
-        }
-      },
-    },
+      return Response.json({
+        authUrl,
+        ok: true,
+      });
+    } catch (error) {
+      return apiErrorResponse(error);
+    }
   },
+};
+
+export const Route = createFileRoute("/api/admin/mixcloud/auth/start")({
+  server: { handlers: aliasHandlers(serverHandlers) },
 });

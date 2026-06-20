@@ -12,11 +12,11 @@
   },
   "servers": [
     {
-      "url": "https://www.fluncle.com"
+      "url": "https://www.fluncle.com/api/v1"
     }
   ],
   "paths": {
-    "/api/tracks": {
+    "/tracks": {
       "get": {
         "operationId": "listTracks",
         "summary": "List certified tracks, newest discovery first",
@@ -73,7 +73,7 @@
         }
       }
     },
-    "/api/tracks/random": {
+    "/tracks/random": {
       "get": {
         "operationId": "getRandomTrack",
         "summary": "Pull one random certified track from the archive",
@@ -111,7 +111,7 @@
         }
       }
     },
-    "/api/search": {
+    "/search": {
       "get": {
         "operationId": "searchTracks",
         "summary": "Search Spotify for track candidates",
@@ -165,7 +165,7 @@
         }
       }
     },
-    "/api/submissions": {
+    "/submissions": {
       "post": {
         "operationId": "submitTrack",
         "summary": "Submit a track for Fluncle to review",
@@ -224,7 +224,7 @@
         }
       }
     },
-    "/api/newsletter": {
+    "/newsletter": {
       "post": {
         "operationId": "subscribeNewsletter",
         "summary": "Board the mothership",
@@ -288,7 +288,7 @@
         }
       }
     },
-    "/api/me": {
+    "/me": {
       "get": {
         "operationId": "getCurrentPrivateUser",
         "summary": "Get the optional private account session",
@@ -307,14 +307,14 @@
         }
       }
     },
-    "/api/me/csrf": {
+    "/me/csrf": {
       "get": {
         "operationId": "getPrivateMutationToken",
         "summary": "Get a private account mutation token",
         "description": "Returns the short-lived x-fluncle-csrf token required for cookie-authenticated private account POST, PUT, PATCH, and DELETE requests."
       }
     },
-    "/api/me/galaxy-progress": {
+    "/me/galaxy-progress": {
       "get": {
         "operationId": "getPrivateGalaxyProgress",
         "summary": "Get signed-in lifetime Galaxy progress",
@@ -359,7 +359,7 @@
         }
       }
     },
-    "/api/me/saved-findings": {
+    "/me/saved-findings": {
       "get": {
         "operationId": "listPrivateSavedFindings",
         "summary": "List private saved findings"
@@ -370,27 +370,27 @@
         "description": "Requires x-fluncle-csrf."
       }
     },
-    "/api/me/submissions": {
+    "/me/submissions": {
       "get": {
         "operationId": "listPrivateSubmissions",
         "summary": "List the signed-in account's submissions"
       }
     },
-    "/api/me/export": {
+    "/me/export": {
       "post": {
         "operationId": "exportPrivateAccountData",
         "summary": "Export private account data",
         "description": "Requires x-fluncle-csrf. Returns structured account data: private user fields, Galaxy lifetime progress, saved findings, and signed-in submissions."
       }
     },
-    "/api/me/delete": {
+    "/me/delete": {
       "post": {
         "operationId": "deletePrivateAccount",
         "summary": "Delete the private account",
         "description": "Requires x-fluncle-csrf. Revokes sessions, deletes Better Auth credentials plus private progress and saves, marks the account deleted, and unlinks signed-in submissions while keeping anonymized review history."
       }
     },
-    "/api/health": {
+    "/health": {
       "get": {
         "operationId": "getHealth",
         "summary": "Liveness probe",

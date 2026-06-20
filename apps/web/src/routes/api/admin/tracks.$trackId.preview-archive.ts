@@ -12,6 +12,7 @@ import { getTrackByIdOrLogId } from "../../../lib/server/tracks";
 // POST /api/admin/tracks/:idOrLogId/preview-archive — stores one official 30s
 // preview at an operator-only archive path for later analysis/model training.
 // It is never a playback source and is never exposed through public DTOs.
+
 export const Route = createFileRoute("/api/admin/tracks/$trackId/preview-archive")({
   server: {
     handlers: {
@@ -105,3 +106,5 @@ function stringField(form: FormData, name: string): string | undefined {
 
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
+
+export const serverHandlers = Route.options.server!.handlers;

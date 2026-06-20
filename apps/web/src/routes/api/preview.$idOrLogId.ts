@@ -65,3 +65,5 @@ export const Route = createFileRoute("/api/preview/$idOrLogId")({
     },
   },
 });
+
+export const serverHandlers = Route.options.server!.handlers;

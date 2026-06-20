@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { type ApiHandlers, aliasHandlers } from "../-alias";
 import { requireAdmin } from "../../../lib/server/env";
 import { apiErrorResponse, parseJsonBody } from "../../../lib/server/http-errors";
 import { renderMixtapeCover } from "../../../lib/server/mixtape-cover";
@@ -15,53 +16,53 @@ const THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024;
 // flip distributing→published on the first link, and best-effort set the custom
 // thumbnail from the on-the-fly cover. A thumbnail failure never fails finalize —
 // the unlisted video is already live with its real coordinate.
-export const Route = createFileRoute("/api/admin/mixtapes/$mixtapeId/youtube/finalize")({
-  server: {
-    handlers: {
-      POST: async ({ params, request }) => {
-        const unauthorized = await requireAdmin(request);
+export const serverHandlers: ApiHandlers = {
+  POST: async ({ params, request }) => {
+    const unauthorized = await requireAdmin(request);
 
-        if (unauthorized) {
-          return unauthorized;
-        }
+    if (unauthorized) {
+      return unauthorized;
+    }
 
-        try {
-          const parsed = await parseJsonBody(request);
+    try {
+      const parsed = await parseJsonBody(request);
 
-          if (parsed instanceof Response) {
-            return parsed;
-          }
+      if (parsed instanceof Response) {
+        return parsed;
+      }
 
-          const body = parsed.json as { videoId?: unknown };
-          const videoId = typeof body.videoId === "string" ? body.videoId.trim() : "";
+      const body = parsed.json as { videoId?: unknown };
+      const videoId = typeof body.videoId === "string" ? body.videoId.trim() : "";
 
-          if (!videoId) {
-            throw new ApiError("invalid_request", "videoId is required", 400);
-          }
+      if (!videoId) {
+        throw new ApiError("invalid_request", "videoId is required", 400);
+      }
 
-          const mixtape = await finalizeMixtapeDistribution(params.mixtapeId, "youtube", {
-            externalId: videoId,
-            url: `https://youtu.be/${videoId}`,
-          });
+      const mixtape = await finalizeMixtapeDistribution(params.mixtapeId, "youtube", {
+        externalId: videoId,
+        url: `https://youtu.be/${videoId}`,
+      });
 
-          // Best-effort custom thumbnail (the wide cover, rendered in-process — a
-          // Worker can't HTTP-fetch its own cover route without looping to the SPA
-          // fallback). A thumbnail failure must not fail finalize; the unlisted video
-          // is already live with its real coordinate.
-          await trySetThumbnail(mixtape.logId, videoId).catch((error) => {
-            console.warn(
-              `[mixtape ${params.mixtapeId}] YouTube thumbnail set failed (non-fatal):`,
-              error instanceof Error ? error.message : String(error),
-            );
-          });
+      // Best-effort custom thumbnail (the wide cover, rendered in-process — a
+      // Worker can't HTTP-fetch its own cover route without looping to the SPA
+      // fallback). A thumbnail failure must not fail finalize; the unlisted video
+      // is already live with its real coordinate.
+      await trySetThumbnail(mixtape.logId, videoId).catch((error) => {
+        console.warn(
+          `[mixtape ${params.mixtapeId}] YouTube thumbnail set failed (non-fatal):`,
+          error instanceof Error ? error.message : String(error),
+        );
+      });
 
-          return Response.json({ mixtape, ok: true, platform: "youtube" });
-        } catch (error) {
-          return apiErrorResponse(error);
-        }
-      },
-    },
+      return Response.json({ mixtape, ok: true, platform: "youtube" });
+    } catch (error) {
+      return apiErrorResponse(error);
+    }
   },
+};
+
+export const Route = createFileRoute("/api/admin/mixtapes/$mixtapeId/youtube/finalize")({
+  server: { handlers: aliasHandlers(serverHandlers) },
 });
 
 async function trySetThumbnail(logId: string | undefined, videoId: string): Promise<void> {

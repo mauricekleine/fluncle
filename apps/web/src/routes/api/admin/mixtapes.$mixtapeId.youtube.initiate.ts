@@ -11,6 +11,7 @@ import { getYouTubeAccessToken } from "../../../lib/server/youtube";
 // the COMMITTED coordinate, opens a resumable session, and hands the CLI BOTH the
 // session URI and a short-lived access token for the PUT. The CLI moves the bytes
 // (the Worker can't proxy multi-GB media).
+
 export const Route = createFileRoute("/api/admin/mixtapes/$mixtapeId/youtube/initiate")({
   server: {
     handlers: {
@@ -114,3 +115,5 @@ export const Route = createFileRoute("/api/admin/mixtapes/$mixtapeId/youtube/ini
     },
   },
 });
+
+export const serverHandlers = Route.options.server!.handlers;

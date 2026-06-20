@@ -8,3 +8,5 @@ export const Route = createFileRoute("/api/me")({
     },
   },
 });
+
+export const serverHandlers = Route.options.server!.handlers;

@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { type ApiHandlers, aliasHandlers } from "../../../-alias";
 import { signState } from "../../../../../lib/server/env";
 import { apiErrorResponse } from "../../../../../lib/server/http-errors";
 import { buildSpotifyLoginUrl } from "../../../../../lib/server/spotify";
@@ -9,26 +10,26 @@ import { buildSpotifyLoginUrl } from "../../../../../lib/server/spotify";
 // the shared callback branches on purpose to verify the account and set the
 // grant cookie. Reuses the already-registered redirect URI — no Spotify
 // dashboard change needed.
-export const Route = createFileRoute("/api/admin/spotify/auth/login")({
-  server: {
-    handlers: {
-      GET: async () => {
-        try {
-          const state = await signState({
-            iat: Date.now(),
-            nonce: crypto.randomUUID(),
-            purpose: "admin-login",
-          });
-          const authUrl = await buildSpotifyLoginUrl(state);
+export const serverHandlers: ApiHandlers = {
+  GET: async () => {
+    try {
+      const state = await signState({
+        iat: Date.now(),
+        nonce: crypto.randomUUID(),
+        purpose: "admin-login",
+      });
+      const authUrl = await buildSpotifyLoginUrl(state);
 
-          return new Response(null, {
-            headers: { Location: authUrl },
-            status: 302,
-          });
-        } catch (error) {
-          return apiErrorResponse(error);
-        }
-      },
-    },
+      return new Response(null, {
+        headers: { Location: authUrl },
+        status: 302,
+      });
+    } catch (error) {
+      return apiErrorResponse(error);
+    }
   },
+};
+
+export const Route = createFileRoute("/api/admin/spotify/auth/login")({
+  server: { handlers: aliasHandlers(serverHandlers) },
 });

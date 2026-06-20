@@ -21,7 +21,7 @@ const llmsFullMaxFindings = 2000;
 // machine-readable surfaces without guessing well-known paths.
 const agentLinkHeader = [
   '</.well-known/api-catalog>; rel="api-catalog"',
-  '</openapi.json>; rel="service-desc"; type="application/openapi+json"',
+  '</api/v1/openapi.json>; rel="service-desc"; type="application/openapi+json"',
   '</llms.txt>; rel="service-doc"; type="text/markdown"',
   '</llms-full.txt>; rel="service-doc"; type="text/markdown"',
   '</rss.xml>; rel="alternate"; type="application/rss+xml"',
@@ -68,10 +68,10 @@ function apiCatalogResponse(): Response {
   const catalog = {
     linkset: [
       {
-        anchor: `${siteUrl}/api`,
+        anchor: `${siteUrl}/api/v1`,
         "service-desc": [
           {
-            href: `${siteUrl}/openapi.json`,
+            href: `${siteUrl}/api/v1/openapi.json`,
             type: "application/openapi+json",
           },
         ],
@@ -83,7 +83,7 @@ function apiCatalogResponse(): Response {
         ],
         status: [
           {
-            href: `${siteUrl}/api/health`,
+            href: `${siteUrl}/api/v1/health`,
           },
         ],
       },
@@ -173,17 +173,17 @@ ${tracks.join("\n")}
 ## Data
 
 - [RSS feed](${siteUrl}/rss.xml): the 25 most recent tracks
-- [Tracks API](${siteUrl}/api/tracks): the archive as JSON, cursor-paginated; accepts limit (max 48) and cursor query params
-- [Random track](${siteUrl}/api/tracks/random): one pick from the archive, as JSON
+- [Tracks API](${siteUrl}/api/v1/tracks): the archive as JSON, cursor-paginated; accepts limit (max 48) and cursor query params
+- [Random track](${siteUrl}/api/v1/tracks/random): one pick from the archive, as JSON
 
 ## Submit
 
-- [Search API](${siteUrl}/api/search): GET with a q query param (a track search or Spotify URL), returns candidates as JSON
-- [Submissions API](${siteUrl}/api/submissions): POST a candidate for review; Fluncle gives it a listen before anything publishes
+- [Search API](${siteUrl}/api/v1/search): GET with a q query param (a track search or Spotify URL), returns candidates as JSON
+- [Submissions API](${siteUrl}/api/v1/submissions): POST a candidate for review; Fluncle gives it a listen before anything publishes
 
 ## For agents
 
-- [OpenAPI spec](${siteUrl}/openapi.json): the public API as an OpenAPI 3.1 document
+- [OpenAPI spec](${siteUrl}/api/v1/openapi.json): the public API as an OpenAPI 3.1 document
 - [MCP server](${siteUrl}/mcp): the same archive as Model Context Protocol tools (Streamable HTTP, no auth)
 - [MCP server card](${siteUrl}/.well-known/mcp/server-card.json): SEP-2127 discovery card for the MCP endpoint
 - [API catalog](${siteUrl}/.well-known/api-catalog): RFC 9727 linkset
@@ -230,13 +230,13 @@ Every finding has a permanent coordinate, a Log ID, written sector.orbit.mark, f
 ## The findings (${totalCount})
 
 ${findings}
-${omitted > 0 ? `\n_${omitted} older findings omitted here; page the rest at ${siteUrl}/api/tracks._\n` : ""}
+${omitted > 0 ? `\n_${omitted} older findings omitted here; page the rest at ${siteUrl}/api/v1/tracks._\n` : ""}
 ## More
 
 - The map: ${siteUrl}/llms.txt
 - The playlist: ${spotifyPlaylistUrl}
 - The Telegram feed: ${telegramUrl}
-- The JSON API: ${siteUrl}/api/tracks
+- The JSON API: ${siteUrl}/api/v1/tracks
 - The MCP server: ${siteUrl}/mcp
 `;
 }
@@ -319,8 +319,8 @@ Base URL: \`${siteUrl}\`. Everything below returns JSON. Errors look like \`{"ok
 
 ## Read the archive
 
-- \`GET /api/tracks\` lists certified tracks, newest found first. Query params: \`limit\` (1 to 48, default 16), \`cursor\` (opaque, from \`nextCursor\`), \`since\` and \`until\` (ISO 8601 bounds on the date found). Response: \`{"tracks": [...], "totalCount": n, "nextCursor": "..."}\`. Page until \`nextCursor\` disappears.
-- \`GET /api/tracks/random\` returns one pick from the archive: \`{"ok": true, "track": {...}}\`.
+- \`GET /api/v1/tracks\` lists certified tracks, newest found first. Query params: \`limit\` (1 to 48, default 16), \`cursor\` (opaque, from \`nextCursor\`), \`since\` and \`until\` (ISO 8601 bounds on the date found). Response: \`{"tracks": [...], "totalCount": n, "nextCursor": "..."}\`. Page until \`nextCursor\` disappears.
+- \`GET /api/v1/tracks/random\` returns one pick from the archive: \`{"ok": true, "track": {...}}\`.
 
 Track objects carry \`trackId\`, \`title\`, \`artists\`, \`album\`, \`albumImageUrl\`, \`note\`, \`spotifyUrl\`, \`addedAt\` (the timestamp it was found), \`addedToSpotify\`, and \`postedToTelegram\`. The \`note\` is Fluncle's own line about the tune; quote it as his.
 
@@ -328,14 +328,14 @@ Track objects carry \`trackId\`, \`title\`, \`artists\`, \`album\`, \`albumImage
 
 Two steps. Fluncle listens before anything publishes; a submission is a recommendation, not a write.
 
-1. \`GET /api/search?q=...\` with a track name or a Spotify track URL (minimum 2 characters). Returns \`{"ok": true, "results": [...]}\` where each candidate has \`id\`, \`spotifyUrl\`, \`title\`, \`artists\`, \`album\`, and \`artworkUrl\`.
-2. \`POST /api/submissions\` with a JSON body: \`spotifyTrackId\` and \`spotifyUrl\` (both from the chosen candidate; they must agree), \`title\`, \`artists\` (string array), \`source\` (one of "web", "cli", "ssh"), plus optional \`note\` (max 500 characters, tell Fluncle why it's a banger) and \`contact\` (max 120 characters). Response: \`{"ok": true, "submission": {...}}\` with \`status: "pending"\`.
+1. \`GET /api/v1/search?q=...\` with a track name or a Spotify track URL (minimum 2 characters). Returns \`{"ok": true, "results": [...]}\` where each candidate has \`id\`, \`spotifyUrl\`, \`title\`, \`artists\`, \`album\`, and \`artworkUrl\`.
+2. \`POST /api/v1/submissions\` with a JSON body: \`spotifyTrackId\` and \`spotifyUrl\` (both from the chosen candidate; they must agree), \`title\`, \`artists\` (string array), \`source\` (one of "web", "cli", "ssh"), plus optional \`note\` (max 500 characters, tell Fluncle why it's a banger) and \`contact\` (max 120 characters). Response: \`{"ok": true, "submission": {...}}\` with \`status: "pending"\`.
 
 Rate limit: 5 submissions per connection per hour. Over that returns 429 with code \`rate_limited\`.
 
 ## Board the mothership
 
-\`POST /api/newsletter\` with \`{"email": "..."}\` subscribes to the newsletter. Fresh bangers, every Friday, from Fluncle.
+\`POST /api/v1/newsletter\` with \`{"email": "..."}\` subscribes to the newsletter. Fresh bangers, every Friday, from Fluncle.
 
 ## Model Context Protocol
 
@@ -345,7 +345,7 @@ The same tools are available over MCP (Streamable HTTP, no auth) at \`${siteUrl}
 
 - \`GET /rss.xml\`: the 25 most recent findings as RSS.
 - \`GET /llms.txt\`: the plain-language map of the Galaxy.
-- \`GET /openapi.json\`: this API as an OpenAPI 3.1 document.
-- \`GET /api/health\`: liveness, \`{"ok": true}\`.
+- \`GET /api/v1/openapi.json\`: this API as an OpenAPI 3.1 document.
+- \`GET /api/v1/health\`: liveness, \`{"ok": true}\`.
 - \`ssh rave.fluncle.com\`: the rave terminal, the deepest room in the Galaxy. Bring a TTY.
 `;

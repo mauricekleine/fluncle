@@ -91,3 +91,5 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId")({
     },
   },
 });
+
+export const serverHandlers = Route.options.server!.handlers;

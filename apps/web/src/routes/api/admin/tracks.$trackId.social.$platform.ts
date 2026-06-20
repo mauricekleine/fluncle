@@ -10,6 +10,7 @@ type PatchBody = { scheduledFor?: unknown; status?: unknown; url?: unknown };
 // PATCH /api/admin/tracks/:idOrLogId/social/:platform
 // The manual-review feedback: after the operator reviews the draft in-app and
 // schedules/publishes it, update the per-platform status (+ the public URL).
+
 export const Route = createFileRoute("/api/admin/tracks/$trackId/social/$platform")({
   server: {
     handlers: {
@@ -69,3 +70,5 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/social/$platfor
     },
   },
 });
+
+export const serverHandlers = Route.options.server!.handlers;

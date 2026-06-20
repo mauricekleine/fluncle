@@ -8,15 +8,15 @@ Fluncle discovers and certifies drum & bass bangers, logs each as a finding, and
 
 The same archive, reachable however you like. Every surface reads the same public API and shares the same Log IDs.
 
-| Surface    | Where                                                    | What                                                                              |
-| ---------- | -------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| Web        | <https://www.fluncle.com>                                | The public archive: cover-led, dark, fast. Also `/about`, `/log`, `/log/<id>`     |
-| Galaxy     | <https://galaxy.fluncle.com>                             | The game: every finding is a star you can fly to                                  |
-| Public API | `https://www.fluncle.com/api/*`                          | JSON reads and submissions (see [Web](#web), [Submission Flow](#submission-flow)) |
-| RSS        | <https://www.fluncle.com/rss.xml>                        | The 25 most recent findings, for feed readers                                     |
-| CLI        | `curl -fsSL https://www.fluncle.com/cli/latest.sh \| sh` | The archive in your terminal (see [CLI](#cli))                                    |
-| SSH        | `ssh rave.fluncle.com`                                   | The rave terminal, a Wish/Bubble Tea app (see [SSH](#ssh))                        |
-| MCP        | `https://www.fluncle.com/mcp`                            | The archive as agent tools, Streamable HTTP, no auth (see [MCP](#mcp))            |
+| Surface    | Where                                                    | What                                                                                                                   |
+| ---------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Web        | <https://www.fluncle.com>                                | The public archive: cover-led, dark, fast. Also `/about`, `/log`, `/log/<id>`                                          |
+| Galaxy     | <https://galaxy.fluncle.com>                             | The game: every finding is a star you can fly to                                                                       |
+| Public API | `https://www.fluncle.com/api/v1/*`                       | JSON reads and submissions; `/api/*` stays as a permanent alias (see [Web](#web), [Submission Flow](#submission-flow)) |
+| RSS        | <https://www.fluncle.com/rss.xml>                        | The 25 most recent findings, for feed readers                                                                          |
+| CLI        | `curl -fsSL https://www.fluncle.com/cli/latest.sh \| sh` | The archive in your terminal (see [CLI](#cli))                                                                         |
+| SSH        | `ssh rave.fluncle.com`                                   | The rave terminal, a Wish/Bubble Tea app (see [SSH](#ssh))                                                             |
+| MCP        | `https://www.fluncle.com/mcp`                            | The archive as agent tools, Streamable HTTP, no auth (see [MCP](#mcp))                                                 |
 
 Crawler and discovery surfaces (all under <https://www.fluncle.com>): `/robots.txt`, `/sitemap.xml`, `/llms.txt`, `/llms-full.txt` (the whole archive in one doc), `/openapi.json`, `/.well-known/api-catalog`, `/.well-known/agent-skills/index.json`, and `/.well-known/mcp/server-card.json`. Public pages also carry schema.org JSON-LD (`WebSite`, `MusicPlaylist`, `MusicGroup`, `FAQPage`, and per-finding `MusicRecording` with the Log ID).
 
@@ -31,8 +31,8 @@ packages/tokens  Shared design tokens (colors, typography, radii, motion) from D
 packages/video   Remotion kit for per-track social videos (the Nostalgic Cosmos).
 ```
 
-The deployed web app owns the Spotify, Telegram, Turso, and Loops secrets. Public reads are served by `/api/tracks` (with `since`/`until` discovery windows), `/api/tracks/random`, and `/rss.xml`. Newsletter signups post to `/api/newsletter`, which the web app relays to Loops. Admin mutations are served by authenticated `/api/admin/*` routes. Raycast must keep calling `fluncle`.
-Listener submissions are accepted through public `/api/search` and `/api/submissions` routes, then reviewed through authenticated admin submission routes. Approval still publishes only through the existing admin add flow. Optional web accounts are private overlays on the same Log ID spine: signed-in listeners can sync Galaxy lifetime progress, save findings, see their own submissions, export data, and delete the account without changing anonymous Fluncle.
+The deployed web app owns the Spotify, Telegram, Turso, and Loops secrets. Every API route is served canonically under `/api/v1/*`, with the bare `/api/*` path kept as a permanent back-compat alias (a shared handler mounted at both paths, not a redirect, so POST bodies survive). Public reads are served by `/api/v1/tracks` (with `since`/`until` discovery windows), `/api/v1/tracks/random`, and `/rss.xml`. Newsletter signups post to `/api/v1/newsletter`, which the web app relays to Loops. Admin mutations are served by authenticated `/api/v1/admin/*` routes. Raycast must keep calling `fluncle`.
+Listener submissions are accepted through public `/api/v1/search` and `/api/v1/submissions` routes, then reviewed through authenticated admin submission routes. Approval still publishes only through the existing admin add flow. Optional web accounts are private overlays on the same Log ID spine: signed-in listeners can sync Galaxy lifetime progress, save findings, see their own submissions, export data, and delete the account without changing anonymous Fluncle.
 
 ## License
 
@@ -190,9 +190,9 @@ bun run --cwd apps/web preview
 bun run --cwd apps/web deploy
 ```
 
-The public app is dark-only and centered around the Fluncle cover art. The first page of tracks is server-rendered for crawlers; further pages load from `/api/tracks` with limit/cursor pagination. Track rows open Spotify directly and use Spotify album artwork when available. Optional private accounts live at `/account` and use Better Auth email/password plus a username; email is auth/recovery only, while username is the private Galaxy identity. The public RSS feed is available at `/rss.xml`; crawler and agent surfaces are `/robots.txt`, `/sitemap.xml`, `/llms.txt`, `/openapi.json`, `/.well-known/api-catalog`, `/.well-known/agent-skills/index.json`, and `/.well-known/mcp/server-card.json`. These discovery surfaces and the markdown homepage are served ahead of the router in `apps/web/src/lib/server/agent-discovery.ts`.
+The public app is dark-only and centered around the Fluncle cover art. The first page of tracks is server-rendered for crawlers; further pages load from `/api/v1/tracks` with limit/cursor pagination. Track rows open Spotify directly and use Spotify album artwork when available. Optional private accounts live at `/account` and use Better Auth email/password plus a username; email is auth/recovery only, while username is the private Galaxy identity. The public RSS feed is available at `/rss.xml`; crawler and agent surfaces are `/robots.txt`, `/sitemap.xml`, `/llms.txt`, `/openapi.json`, `/.well-known/api-catalog`, `/.well-known/agent-skills/index.json`, and `/.well-known/mcp/server-card.json`. These discovery surfaces and the markdown homepage are served ahead of the router in `apps/web/src/lib/server/agent-discovery.ts`.
 
-Private account endpoints are intentionally separate from anonymous archive DTOs: `/api/me` returns `{ ok: true, user: null }` when signed out and only `id`, `username`, `displayUsername`, `createdAt`, and feature flags when signed in. `/api/me/csrf` issues the short-lived `x-fluncle-csrf` token required by cookie-authenticated private account mutations. `/api/me/galaxy-progress`, `/api/me/saved-findings`, `/api/me/submissions`, `/api/me/export`, and `/api/me/delete` require a Better Auth session and use DB-backed rate limits. Account deletion revokes sessions, deletes Better Auth credentials plus private progress and saves, marks the user deleted, and unlinks signed-in submissions while keeping the submission rows as anonymized review history. Discord/Loops copies may have their own processor retention windows.
+Private account endpoints are intentionally separate from anonymous archive DTOs: `/api/v1/me` returns `{ ok: true, user: null }` when signed out and only `id`, `username`, `displayUsername`, `createdAt`, and feature flags when signed in. `/api/v1/me/csrf` issues the short-lived `x-fluncle-csrf` token required by cookie-authenticated private account mutations. `/api/v1/me/galaxy-progress`, `/api/v1/me/saved-findings`, `/api/v1/me/submissions`, `/api/v1/me/export`, and `/api/v1/me/delete` require a Better Auth session and use DB-backed rate limits. Account deletion revokes sessions, deletes Better Auth credentials plus private progress and saves, marks the user deleted, and unlinks signed-in submissions while keeping the submission rows as anonymized review history. Discord/Loops copies may have their own processor retention windows.
 
 ### Deploy Web To Cloudflare
 
@@ -292,7 +292,7 @@ fluncle recent --limit 1 --json
 
 ## Publish Flow
 
-`fluncle admin add` calls `POST /api/admin/tracks` with `Authorization: Bearer <FLUNCLE_API_TOKEN>`. The server checks Turso for duplicates by case-sensitive Spotify track id. It inserts a pending row first, then adds the track to Spotify, then posts to Telegram. Each external operation is retried three times.
+`fluncle admin add` calls `POST /api/v1/admin/tracks` with `Authorization: Bearer <FLUNCLE_API_TOKEN>`. The server checks Turso for duplicates by case-sensitive Spotify track id. It inserts a pending row first, then adds the track to Spotify, then posts to Telegram. Each external operation is retried three times.
 
 If Spotify fails, Telegram is not posted. If Spotify succeeds but Telegram fails, the database row is kept with `posted_to_telegram = false` for later inspection or recovery.
 
@@ -306,7 +306,7 @@ fluncle submit "Camo & Crooked"
 fluncle submit "https://open.spotify.com/track/..."
 ```
 
-Both clients call `GET /api/search?q=...`, select a visible candidate, then post the selected track to `POST /api/submissions`. Submissions are stored as pending rows with hashed rate-limit keys; rejected rows are kept. Web, CLI, and SSH submissions remain anonymous-compatible; when a browser carries a valid private Better Auth session, the Worker attaches `user_id` server-side so the account can show its own submission history.
+Both clients call `GET /api/v1/search?q=...`, select a visible candidate, then post the selected track to `POST /api/v1/submissions`. Submissions are stored as pending rows with hashed rate-limit keys; rejected rows are kept. Web, CLI, and SSH submissions remain anonymous-compatible; when a browser carries a valid private Better Auth session, the Worker attaches `user_id` server-side so the account can show its own submission history.
 
 Operators review with:
 

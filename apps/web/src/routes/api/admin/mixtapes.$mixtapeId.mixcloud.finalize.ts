@@ -8,6 +8,7 @@ import { ApiError } from "../../../lib/server/spotify";
 // multi-GB media), then POSTs the resolved cloudcast URL here. The Worker records
 // the published post, dual-writes `mixtapes.mixcloud_url`, and flips the mixtape
 // `distributing → published` on its first live link.
+
 export const Route = createFileRoute("/api/admin/mixtapes/$mixtapeId/mixcloud/finalize")({
   server: {
     handlers: {
@@ -38,3 +39,5 @@ export const Route = createFileRoute("/api/admin/mixtapes/$mixtapeId/mixcloud/fi
     },
   },
 });
+
+export const serverHandlers = Route.options.server!.handlers;

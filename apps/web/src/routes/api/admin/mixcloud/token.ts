@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { type ApiHandlers, aliasHandlers } from "../../-alias";
 import { requireAdmin } from "../../../../lib/server/env";
 import { apiErrorResponse } from "../../../../lib/server/http-errors";
 import { getMixcloudAccessToken } from "../../../../lib/server/mixcloud";
@@ -7,24 +8,24 @@ import { getMixcloudAccessToken } from "../../../../lib/server/mixcloud";
 // upload (the bytes can't go through the Worker, but the credential lives server-
 // side — mirroring the YouTube token route). The durable token stays in
 // mixcloud_auth; the CLI holds it only transiently for the one upload.
-export const Route = createFileRoute("/api/admin/mixcloud/token")({
-  server: {
-    handlers: {
-      POST: async ({ request }) => {
-        const unauthorized = await requireAdmin(request);
+export const serverHandlers: ApiHandlers = {
+  POST: async ({ request }) => {
+    const unauthorized = await requireAdmin(request);
 
-        if (unauthorized) {
-          return unauthorized;
-        }
+    if (unauthorized) {
+      return unauthorized;
+    }
 
-        try {
-          const accessToken = await getMixcloudAccessToken();
+    try {
+      const accessToken = await getMixcloudAccessToken();
 
-          return Response.json({ accessToken, ok: true });
-        } catch (error) {
-          return apiErrorResponse(error);
-        }
-      },
-    },
+      return Response.json({ accessToken, ok: true });
+    } catch (error) {
+      return apiErrorResponse(error);
+    }
   },
+};
+
+export const Route = createFileRoute("/api/admin/mixcloud/token")({
+  server: { handlers: aliasHandlers(serverHandlers) },
 });
