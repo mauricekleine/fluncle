@@ -10,3 +10,11 @@
 export { FloatingType, type FloatingTypeProps, type FloatingTypeVariant } from "./floating-type";
 export { TypePlate, type TypePlateProps } from "./type-plate";
 export { TrackAudio } from "./track-audio";
+
+// LEGACY, opt-in only. Restored solely so pre-d662c44 findings — whose blessed
+// compositions `import { Grain, Starfield } from "../cosmos"` — still re-render
+// for the square backfill. The core imposes NO look: new compositions bake their
+// own grain/background into their shader (the Light-Years Rule). Do not reach for
+// these in new work.
+export { Grain, type GrainProps } from "./grain";
+export { Starfield, type StarfieldProps } from "./starfield";
