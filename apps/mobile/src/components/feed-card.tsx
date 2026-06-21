@@ -1,8 +1,8 @@
 // One finding, full-screen (RFC Unit 2). Per-cell player, the media ladder, the
 // native overlay (shared across rungs), the cover-card eclipse drift, and the
 // background-pause rule. The de-risk spike target.
-import { useCallback, useEffect } from "react";
-import { Linking, Share, Text, View, useWindowDimensions } from "react-native";
+import { useCallback, useEffect, useState } from "react";
+import { Linking, Pressable, Share, Text, View, useWindowDimensions } from "react-native";
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -15,12 +15,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useVideoPlayer, VideoView } from "expo-video";
-import { useAudioPlayer } from "expo-audio";
+import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
 import { type TrackListItem } from "@fluncle/contracts";
 import { resolveCardMedia } from "@/lib/media";
 import { useBackgroundPause } from "@/audio/session";
 import { HeatButton } from "@/components/heat-button";
-import { color, font } from "@/theme/tokens";
+import { color, font, radius } from "@/theme/tokens";
 
 type Props = {
   finding: TrackListItem;
@@ -48,23 +48,70 @@ export function FeedCard({ finding, active, soundOn, onToggleSound }: Props) {
     media.kind === "cover" && media.previewUrl ? media.previewUrl : null,
   );
 
-  // Only the visible card plays; sound follows the global toggle.
+  // The recovered observation (VOICE.md's first-heard surface): Fluncle's own
+  // voice over the finding. Its own audio artifact, played through a dedicated
+  // player so it never collides with the card's video/preview track. Only loaded
+  // when the finding actually has one (most don't).
+  const observationUrl = finding.observationAudioUrl ?? null;
+  const observation = useAudioPlayer(observationUrl);
+  const observationStatus = useAudioPlayerStatus(observation);
+  const [observing, setObserving] = useState(false);
+
+  // Only the visible card plays; sound follows the global toggle. While the
+  // observation is playing it owns the one sound source — keep the card media
+  // silent so the two never overlap.
   useEffect(() => {
     if (media.kind === "video") {
-      player.muted = !soundOn;
-      if (active) {
+      player.muted = !soundOn || observing;
+      if (active && !observing) {
         player.play();
       } else {
         player.pause();
       }
     } else if (media.previewUrl) {
-      if (active && soundOn) {
+      if (active && soundOn && !observing) {
         audio.play();
       } else {
         audio.pause();
       }
     }
-  }, [active, soundOn, media.kind]);
+  }, [active, soundOn, media.kind, observing]);
+
+  // The observation stops itself when the clip ends; we resume nothing
+  // automatically — tapping again (or the card scrolling away) just stops.
+  useEffect(() => {
+    if (observationStatus.didJustFinish) {
+      setObserving(false);
+    }
+  }, [observationStatus.didJustFinish]);
+
+  // Scrolling the card away stops a playing observation (visible-card-only rule).
+  useEffect(() => {
+    if (!active && observing) {
+      observation.pause();
+      setObserving(false);
+    }
+  }, [active, observing]);
+
+  const stopObservation = useCallback(() => {
+    observation.pause();
+    setObserving(false);
+  }, [observation]);
+
+  const toggleObservation = useCallback(() => {
+    if (observing) {
+      stopObservation();
+      return;
+    }
+    // The observation takes the one sound source: silence the card media first
+    // (the effect above also re-asserts this when `observing` flips), then play
+    // from the top.
+    player.pause();
+    audio.pause();
+    observation.seekTo(0);
+    observation.play();
+    setObserving(true);
+  }, [observing, stopObservation, player, audio, observation]);
 
   // No background audio (reinforces the session rule; covers calls / route changes).
   const pauseAll = useCallback(() => {
@@ -73,7 +120,11 @@ export function FeedCard({ finding, active, soundOn, onToggleSound }: Props) {
     } else {
       audio.pause();
     }
-  }, [media.kind]);
+    if (observing) {
+      observation.pause();
+      setObserving(false);
+    }
+  }, [media.kind, observing, observation]);
   useBackgroundPause(pauseAll);
 
   // Cover rung: a slow eclipse drift (The Light-Years cover card is alive, not static).
@@ -141,6 +192,42 @@ export function FeedCard({ finding, active, soundOn, onToggleSound }: Props) {
           </Text>
         ) : null}
         <Text style={[font.body, { color: color.stardust }]}>{foundLabel(finding.addedAt)}</Text>
+
+        {observationUrl ? (
+          <Pressable
+            accessibilityLabel={observing ? "Stop the observation" : "Hear the observation"}
+            accessibilityRole="button"
+            accessibilityState={{ selected: observing }}
+            onPress={toggleObservation}
+            style={({ pressed }) => ({
+              alignItems: "center",
+              alignSelf: "flex-start",
+              backgroundColor: observing ? color.goldVeil : color.dustVeil,
+              borderColor: observing ? color.eclipseGold : color.dustLine,
+              borderRadius: radius.sm,
+              borderWidth: 1,
+              flexDirection: "row",
+              gap: 7,
+              marginTop: 6,
+              opacity: pressed ? 0.85 : 1,
+              paddingHorizontal: 11,
+              paddingVertical: 6,
+              transform: pressed && !reduced ? [{ translateY: 1 }] : [],
+            })}
+          >
+            <View
+              style={{
+                backgroundColor: observing ? color.eclipseGold : color.stardust,
+                borderRadius: 999,
+                height: 7,
+                width: 7,
+              }}
+            />
+            <Text style={[font.label, { color: observing ? color.eclipseGlow : color.stardust }]}>
+              {observing ? "Playing the observation" : "Hear Fluncle's note"}
+            </Text>
+          </Pressable>
+        ) : null}
 
         <View style={{ flexDirection: "row", gap: 10, marginTop: 8 }}>
           <HeatButton

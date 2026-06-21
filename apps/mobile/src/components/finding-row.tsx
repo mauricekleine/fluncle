@@ -4,12 +4,15 @@ import { useRouter } from "expo-router";
 import { type TrackListItem } from "@fluncle/contracts";
 import { color, font, radius } from "@/theme/tokens";
 
-// A finding as an archive row (RFC Unit 3): Log ID coordinate, artwork, the music,
-// quiet chips. The whole row links to the log page.
-export function FindingRow({ finding }: { finding: TrackListItem }) {
+// A finding as an archive row (RFC Unit 3): the Log ID coordinate leads as the
+// finding's identity, then album artwork, the music, and a quiet meta line.
+// Rows separate with a 1px Dust Line divider; the last row drops it (the Track
+// Row spec, DESIGN.md). Press washes the row in the Gold Veil (The Ignition
+// Rule). The whole row links to the finding's /log/<id> page.
+export function FindingRow({ finding, isLast }: { finding: TrackListItem; isLast?: boolean }) {
   const router = useRouter();
   const id = finding.logId ?? finding.trackId;
-  const chips = [
+  const meta = [
     finding.bpm ? `${Math.round(finding.bpm)} BPM` : null,
     finding.key ?? null,
     finding.galaxy?.name ?? null,
@@ -21,30 +24,36 @@ export function FindingRow({ finding }: { finding: TrackListItem }) {
       style={({ pressed }) => ({
         alignItems: "center",
         backgroundColor: pressed ? color.goldVeil : "transparent",
-        borderBottomColor: color.dustLine,
-        borderBottomWidth: 1,
+        borderBottomColor: isLast ? "transparent" : color.dustLine,
+        borderBottomWidth: isLast ? 0 : 1,
         flexDirection: "row",
-        gap: 12,
+        gap: 14,
         paddingHorizontal: 16,
-        paddingVertical: 12,
+        paddingVertical: 15,
       })}
     >
       {finding.logId ? (
-        <Text style={[font.numeric, { color: color.eclipseGlow, width: 64 }]}>{finding.logId}</Text>
+        <Text style={[font.numeric, { color: color.eclipseGlow, width: 56 }]}>{finding.logId}</Text>
       ) : null}
       <Image
         source={finding.albumImageUrl}
-        style={{ borderRadius: radius.artwork, height: 44, width: 44 }}
+        style={{
+          borderColor: color.dustLine,
+          borderRadius: radius.artwork,
+          borderWidth: 1,
+          height: 52,
+          width: 52,
+        }}
         contentFit="cover"
         transition={200}
       />
-      <View style={{ flex: 1, gap: 2 }}>
+      <View style={{ flex: 1, gap: 5 }}>
         <Text style={[font.title, { color: color.starlightCream }]} numberOfLines={1}>
           {finding.artists.join(", ")} — {finding.title}
         </Text>
-        {chips.length ? (
+        {meta.length ? (
           <Text style={[font.body, { color: color.stardust }]} numberOfLines={1}>
-            {chips.join("  ·  ")}
+            {meta.join("  ·  ")}
           </Text>
         ) : null}
       </View>

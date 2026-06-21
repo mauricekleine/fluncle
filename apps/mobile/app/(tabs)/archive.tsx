@@ -49,7 +49,16 @@ export default function ArchiveScreen() {
             <Text style={[font.label, { color: color.stardust }]}>Pings</Text>
           </Pressable>
         </View>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, padding: 16 }}>
+        <View
+          style={{
+            flexDirection: "row",
+            flexWrap: "wrap",
+            gap: 8,
+            paddingBottom: 16,
+            paddingHorizontal: 16,
+            paddingTop: 18,
+          }}
+        >
           <GalaxyChip label="All" active={galaxy === null} onPress={() => setGalaxy(null)} />
           {galaxies.map((g) => (
             <GalaxyChip
@@ -63,7 +72,9 @@ export default function ArchiveScreen() {
         <FlashList
           data={shown}
           keyExtractor={(f) => f.logId ?? f.trackId}
-          renderItem={({ item }) => <FindingRow finding={item} />}
+          renderItem={({ index, item }) => (
+            <FindingRow finding={item} isLast={index === shown.length - 1} />
+          )}
           ListEmptyComponent={
             <Text style={[font.body, { color: color.stardust, padding: 16 }]}>
               No findings logged in this galaxy yet. Quiet sector.
