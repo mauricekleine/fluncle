@@ -11,6 +11,7 @@ import {
 import { usePreviewPlayer } from "@/lib/preview-player";
 import { type Track } from "@/lib/tracks";
 import { useInViewport } from "@/lib/use-in-viewport";
+import { DESKTOP_QUERY, useMediaQuery } from "@/lib/use-media-query";
 import { useResponsiveWidth } from "@/lib/use-responsive-width";
 
 // The log page's media element: the finding's footage as ONE element of the
@@ -24,10 +25,16 @@ export function LogFootage({ track }: { track: Track }) {
   // The /log page owns its chrome (Log ID, prose, metadata), so it plays the
   // CLEAN footage, not the baked-text social cut. Under the two-master layout
   // (videoSquaredAt set) footage.mp4 is the clean square master, so /log requests
-  // an MT centre-crop to the 9:16 pane (the desktop-landscape "show off" arrives
-  // with the radio surface). A legacy finding (no signal) keeps playing
-  // footage.mp4 as today's portrait+text cut (docs/video-variants.md).
+  // an MT centre-crop to the pane the viewport wants: a 16:9 landscape on desktop
+  // (the deliberate "show off the asset" moment) and a 9:16 portrait on mobile.
+  // A legacy finding (no signal) keeps playing footage.mp4 as today's
+  // portrait+text cut (docs/video-variants.md). NEVER footage.social.mp4 — that
+  // baked-text cut is the homepage Stories format; /log + radio stay clean.
   const squared = Boolean(track.videoSquaredAt);
+  // The desktop verdict drives BOTH the requested crop and the pane aspect (the
+  // `--squared` class flips 9:16 → 16:9 at the same min-width: 768px boundary).
+  // `false` until mounted, so SSR/first paint is the mobile-first portrait pane.
+  const isDesktop = useMediaQuery(DESKTOP_QUERY);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const preview = usePreviewPlayer(track.trackId);
 
@@ -46,8 +53,9 @@ export function LogFootage({ track }: { track: Track }) {
   const videoUrl =
     masterVideoUrl && track.logId && nearViewport && !renditionFailed
       ? squared
-        ? // Two-master: a clean portrait centre-crop off the square master.
-          videoCrop(track.logId, "portrait")
+        ? // Two-master: a clean centre-crop off the square master — landscape on
+          // desktop, portrait on mobile, matching the responsive pane.
+          videoCrop(track.logId, isDesktop ? "landscape" : "portrait")
         : // Legacy: a width-ladder rendition off the portrait footage.mp4.
           renditionWidth
           ? videoRendition(track.logId, { width: renditionWidth })
@@ -116,7 +124,7 @@ export function LogFootage({ track }: { track: Track }) {
       {masterVideoUrl ? (
         <video
           aria-hidden="true"
-          className="log-footage-media"
+          className={squared ? "log-footage-media log-footage-media--squared" : "log-footage-media"}
           loop
           muted
           // One-shot fallback to the raw master if the edge rendition fails
