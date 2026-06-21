@@ -140,6 +140,33 @@ export const PublicUserSchema = z
   })
   .meta({ id: "PublicUser" });
 
+/** A per-platform publication row (`SocialPostItem` in ../index.ts; `social_posts`). */
+export const SocialPostItemSchema = z
+  .object({
+    createdAt: z.string(),
+    externalId: z.string().optional(),
+    platform: z.string(),
+    publishedAt: z.string().optional(),
+    scheduledFor: z.string().optional(),
+    status: z.string(),
+    updatedAt: z.string(),
+    url: z.string().optional(),
+  })
+  .meta({ id: "SocialPostItem" });
+
+/** A mixtape per-platform distribution row (`MixtapeSocialPostItem`; `mixtape_social_posts`). */
+export const MixtapeSocialPostItemSchema = z
+  .object({
+    createdAt: z.string(),
+    externalId: z.string().optional(),
+    platform: z.string(),
+    publishedAt: z.string().optional(),
+    status: z.string(),
+    updatedAt: z.string(),
+    url: z.string().optional(),
+  })
+  .meta({ id: "MixtapeSocialPostItem" });
+
 /** A finding submission as `/api/submissions` records it (`Submission` in ../index.ts). */
 export const SubmissionSchema = z
   .object({

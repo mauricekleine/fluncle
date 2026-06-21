@@ -22,11 +22,16 @@ export async function adminApiGet<T>(path: string): Promise<T> {
 }
 
 export async function adminApiPost<T>(path: string, body?: unknown): Promise<T> {
+  // A bodyless POST (the query-only admin ops: backfills, enrich-sweep, the token
+  // mints, publish) must NOT claim a JSON content-type — an empty body with
+  // `Content-Type: application/json` is malformed, and the oRPC handler rejects it
+  // as `invalid_request` (it tries to JSON-parse the empty body). Send the header
+  // only when there is a body to type.
   return apiRequest<T>(path, {
     body: body === undefined ? undefined : JSON.stringify(body),
     headers: {
       ...adminHeaders(),
-      "Content-Type": "application/json",
+      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
     },
     method: "POST",
   });
