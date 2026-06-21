@@ -9,14 +9,14 @@ Related: the live agent's architecture + security model is [docs/agents/hermes-a
 - **The operator/agent auth spine** — `apps/web/src/lib/server/orpc-auth.ts`: `adminAuth` middleware injects a typed `context.role`; `adminProcedure` is the agent-allowed tier; `operatorProcedure` / `operatorGuard` is operator-only (403s the agent); field-level checks read `context.role` in-handler. A verbatim port of the live `env.ts` role model. **This is the foundation every role-flip below now rides** — flips are a procedure-tier change, not a guard swap.
 - **The admin oRPC migration** — the #75 pilot + the #77 fan-out drain the admin coverage net's PENDING list to carve-outs only. The Hermes-relevant ops land on the exact tiers we designed (real contract names in the table below).
 - **Convention B ratified** (`docs/naming-conventions.md`, 2026-06-21). The contract registry (`packages/contracts/src/orpc/`) is the enforced source of truth — a route without a contract is a build failure.
-- **Fluncle's real voice locked** (#73/#74) — bespoke ElevenLabs voice, tuned settings, recovered-audio delivery guide finalized. The observation-automation voice gate is **resolved**.
+- **Fluncle's real voice locked** (#73/#74) — bespoke ElevenLabs voice, tuned settings, recovered-audio delivery guide finalized. And the agent now runs **`claude-sonnet-4.6`** (verified on-brand on its Discord newsletter post), so the observation **script-authoring** runs on Hermes too — not just the voice gate but the creative authoring is resolved. No Opus / laptop escape is needed for it; the only compute that still escapes to the Mac is video render (below).
 
 ## The one principle everything hangs on
 
 The Hermes agent wears two hats — **chat** (reads untrusted Discord messages and browses untrusted web) and **cron** (trusted, scheduled, no untrusted input per run). They share one process and one `agent`-scoped token, so **whatever the agent _can_ do is what a prompt-injection can do.** Therefore:
 
 - Hand off a task to the agent **only if it fits under the agent-safe ceiling** (reversible / internal / no public footprint). Never raise the ceiling to operator-level just to make a cron run — an injection would inherit it.
-- **Hermes orchestrates; it does not compute.** It schedules, reads a queue via the `fluncle` CLI, and either calls a Worker endpoint that does the work server-side or triggers heavy compute elsewhere (Spinup enrichment, the laptop render routine). Hermes never needs ffmpeg, a vendor key, or operator power.
+- **Hermes is the cloud home for the agent brain; only heavy render escapes it.** Running `claude-sonnet-4.6`, it drains queues via the `fluncle` CLI and does the work itself wherever the compute is light or server-side: the deterministic vendor steps (Last.fm, Discogs, context-note Firecrawl — Worker-side), the **observation** (Sonnet authors the recovered-audio script, the Worker renders ElevenLabs), and **audio analysis** (`ffmpeg` + JS DSP, once `ffmpeg` is in its image — replacing Spinup). The single exception is **video render** (headless Chromium + WebGL): too heavy for the current 2-vCPU / 4-GB box, so it stays a Claude automation on the operator's Mac that pulls the render queue — a deliberate compute escape hatch, moved to Hermes only on a box upgrade (a last resort). Hermes still holds no vendor key and no operator power.
 - **Publish-class stays operator** (Maurice) and is not handoffable regardless.
 
 This works because **every task worth automating already fits (or fits with guards) under the agent ceiling** — none need operator power. The upgrade path, if the bot ever broadens toward public: split a second, no-untrusted-input automation principal holding a broader token, so cron authority is never injection-reachable. Not needed for the current private/trusted allow-list.
@@ -107,10 +107,11 @@ Move the contract from the operator tier to the admin tier (agent-allowed) — `
 
 ## Setup / mechanism
 
-Hermes [cron jobs](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron), each a small "read a queue → act per item, idempotently" loop over the `fluncle` CLI:
+**No on-add push — everything is a cron.** The Worker's on-add work ends at `enrichment_status = pending`; there is no fire-and-forget trigger to Spinup or Hermes. Every step below is a Hermes [cron job](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron) — a small "read a queue → act per item, idempotently" loop over the `fluncle` CLI. A new find is caught on the next tick; the same loop drains backfills. (Hermes also exposes an [API server](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server) for an on-demand trigger, but the cron is the durable backbone and the default.)
 
 - **Hourly:** the enrichment self-heal (the on-add trigger already fires enrichment; this is the backstop for the ones that slipped).
-- **Hourly, queue-gated:** read the observation queue (`hasObservation=false`), render the next finding's observation (idempotent per Log ID; no-op when empty).
+- **Hourly, queue-gated — context note:** read the `hasContext=false` queue and fetch the Firecrawl facts for the next finding (Worker-side). This is now its **own step**, distinct from the observation that consumes it — so context can fill in parallel and the observation never holds Firecrawl. Idempotent per Log ID.
+- **Hourly, queue-gated — observation:** read the `context present AND hasObservation=false` queue, author the recovered-audio script (Sonnet + the `copywriting-fluncle` skill) from the context note, and render it via the Worker. Idempotent per Log ID; no-op when empty.
 - **Daily:** the Last.fm love backfill (free, idempotent, now targeted).
 - **Weekly / on-demand:** the Discogs backfill (rate-limited; `--retry-unmatched` rarer still).
 - **Friday:** draft the newsletter edition (per the RFC) → **post a Discord reminder** to the operator → operator reviews and sends. The agent drafts and nudges; it never sends (publish-class).
