@@ -75,7 +75,7 @@ export default function ArchiveScreen() {
           renderItem={({ index, item }) => (
             <FindingRow finding={item} isLast={index === shown.length - 1} />
           )}
-          contentContainerStyle={{ paddingBottom: insets.bottom + 56 }}
+          contentContainerStyle={{ paddingBottom: insets.bottom + 20 }}
           onEndReached={() => {
             if (hasNextPage && !isFetchingNextPage) {
               fetchNextPage();

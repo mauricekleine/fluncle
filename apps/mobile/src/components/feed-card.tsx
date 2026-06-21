@@ -184,7 +184,7 @@ export function FeedCard({ finding, active, soundOn, onToggleSound }: Props) {
                 name={observing ? "chatbubble-ellipses" : "chatbubble-ellipses-outline"}
                 size={28}
                 color={observing ? color.eclipseGold : color.starlightCream}
-                style={styles.icon}
+                style={[styles.icon, styles.noteNudge]}
               />
             }
             label={observing ? "Playing" : "Note"}
@@ -290,6 +290,8 @@ const styles = StyleSheet.create({
     textShadowOffset: { height: 1, width: 0 },
     textShadowRadius: 6,
   },
+  // The chatbubble glyph's ink sits left of its advance box; nudge it onto the rail axis.
+  noteNudge: { transform: [{ translateX: 2 }] },
   rail: { alignItems: "center", gap: 16, position: "absolute", right: 6 },
   railIcon: { alignItems: "center", height: 36, justifyContent: "center", width: 36 },
   railItem: { alignItems: "center", gap: 3, width: 60 },
@@ -303,7 +305,6 @@ const styles = StyleSheet.create({
   },
   railLabelActive: { color: color.eclipseGold },
   railPressed: { opacity: 0.6 },
-  // The FontAwesome spotify glyph sits left of its advance box; nudge it onto the
-  // rail axis (optical alignment, the Ionicons glyphs don't need it).
+  // The FontAwesome spotify glyph also sits left of its advance box (optical alignment).
   spotifyNudge: { transform: [{ translateX: 3 }] },
 });
