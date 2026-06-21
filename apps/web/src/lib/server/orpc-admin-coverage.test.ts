@@ -21,10 +21,17 @@ import { CONTRACT_OPERATION_NAMES } from "@fluncle/contracts/orpc";
 // pending (the pending list must shrink as routes convert), and a pending entry
 // must map to a real route (no stale names).
 //
-// This PILOT converts the pattern-complete `admin-tracks` set (the field-level
-// role guard + the operator-tier observe + the JSON video control-plane); every
-// other admin route stays PENDING for its later wave (backfills, submissions-
-// review, mixtapes-admin, tagging, the social ops).
+// The admin PILOT converted the pattern-complete `admin-tracks` set (the
+// field-level role guard + the operator-tier observe + the JSON video
+// control-plane). The admin WAVE then fanned out the rest onto that exact pattern:
+// the backfills + enrich-sweep (`admin-backfills`), the submission-review queue
+// (`admin-submissions`), the mixtape authoring + distribution control plane
+// (`admin-mixtapes`), the per-finding social ops (`admin-social`), the
+// just-in-time credential reads + Last.fm desktop-auth JSON exchange
+// (`admin-tokens`), and the admin board list/add folded back into `admin-tracks`.
+// After the wave the PENDING list is EMPTY — every admin route is converted except
+// the carve-outs (the OAuth redirects, the admin `logout` redirect, and the two
+// multipart-file routes), which stay on TanStack by design.
 
 // Each admin API route, keyed by its `/api/v1`-relative `METHOD /path`, mapped to
 // the canonical Convention-B `verb_noun` op it should be served by — or the
@@ -32,47 +39,44 @@ import { CONTRACT_OPERATION_NAMES } from "@fluncle/contracts/orpc";
 // registry the coverage net is drawn over.
 const PENDING = "__pending__" as const;
 
-// Keyed `METHOD /path`, sorted (the linter's sort-keys); the CONVERTED four are
-// this pilot's `admin-tracks` set, everything else is PENDING for a later wave:
-//   - converted: PATCH /admin/tracks/{trackId} (update_track), POST …/observe
-//     (observe_track), POST …/video/uploads (presign_track_video_uploads), POST
-//     …/video/finalize (finalize_track_video);
-//   - pending: the rest of admin-tracks (list/add/social), enrich-sweep, the
-//     backfills, submissions-review, the mixtapes-admin tier, and the
-//     non-redirect admin session/token writes (logout, the Last.fm session
-//     exchange, the Mixcloud/YouTube token reads — JSON, so convertible).
+// Keyed `METHOD /path`, sorted (the linter's sort-keys). After the admin wave
+// every route maps to its canonical converted op; the PENDING sentinel is retained
+// for future admin routes (a new route lands here as PENDING until it converts).
 const ADMIN_ROUTE_OPS: Record<string, string> = {
-  "DELETE /admin/mixtapes/{mixtapeId}": PENDING,
-  "GET /admin/logout": PENDING,
-  "GET /admin/mixtapes": PENDING,
-  "GET /admin/mixtapes/{mixtapeId}/social": PENDING,
-  "GET /admin/submissions": PENDING,
-  "GET /admin/submissions/{submissionId}": PENDING,
-  "GET /admin/tracks": PENDING,
-  "GET /admin/tracks/{trackId}/social": PENDING,
-  "PATCH /admin/mixtapes/{mixtapeId}": PENDING,
+  "DELETE /admin/mixtapes/{mixtapeId}": "delete_mixtape",
+  "GET /admin/lastfm/auth/start": "start_lastfm_auth",
+  "GET /admin/mixtapes": "list_mixtapes_admin",
+  "GET /admin/mixtapes/{mixtapeId}/social": "get_mixtape_social",
+  "GET /admin/submissions": "list_submissions",
+  "GET /admin/submissions/{submissionId}": "get_submission",
+  "GET /admin/tracks": "list_tracks_admin",
+  "GET /admin/tracks/{trackId}/social": "list_track_social",
+  "PATCH /admin/mixtapes/{mixtapeId}": "update_mixtape",
   "PATCH /admin/tracks/{trackId}": "update_track",
-  "PATCH /admin/tracks/{trackId}/social/{platform}": PENDING,
-  "POST /admin/backfill/discogs": PENDING,
-  "POST /admin/backfill/lastfm": PENDING,
-  "POST /admin/enrich-sweep": PENDING,
-  "POST /admin/lastfm/auth/session": PENDING,
-  "POST /admin/mixcloud/token": PENDING,
-  "POST /admin/mixtapes": PENDING,
-  "POST /admin/mixtapes/{mixtapeId}/members": PENDING,
-  "POST /admin/mixtapes/{mixtapeId}/mixcloud/finalize": PENDING,
-  "POST /admin/mixtapes/{mixtapeId}/publish": PENDING,
-  "POST /admin/mixtapes/{mixtapeId}/youtube/finalize": PENDING,
-  "POST /admin/mixtapes/{mixtapeId}/youtube/initiate": PENDING,
-  "POST /admin/mixtapes/{mixtapeId}/youtube/publish": PENDING,
-  "POST /admin/submissions/{submissionId}/approve": PENDING,
-  "POST /admin/submissions/{submissionId}/reject": PENDING,
-  "POST /admin/tracks": PENDING,
+  "PATCH /admin/tracks/{trackId}/social/{platform}": "update_track_social",
+  "POST /admin/backfill/discogs": "backfill_discogs",
+  "POST /admin/backfill/lastfm": "backfill_lastfm",
+  "POST /admin/enrich-sweep": "sweep_enrichment",
+  "POST /admin/lastfm/auth/session": "exchange_lastfm_session",
+  "POST /admin/mixcloud/token": "mint_mixcloud_token",
+  "POST /admin/mixtapes": "create_mixtape",
+  "POST /admin/mixtapes/{mixtapeId}/members": "add_mixtape_members",
+  "POST /admin/mixtapes/{mixtapeId}/mixcloud/finalize": "finalize_mixtape_mixcloud",
+  "POST /admin/mixtapes/{mixtapeId}/publish": "publish_mixtape",
+  "POST /admin/mixtapes/{mixtapeId}/youtube/finalize": "finalize_mixtape_youtube",
+  "POST /admin/mixtapes/{mixtapeId}/youtube/initiate": "initiate_mixtape_youtube",
+  "POST /admin/mixtapes/{mixtapeId}/youtube/publish": "publish_mixtape_youtube",
+  "POST /admin/submissions/{submissionId}/approve": "approve_submission",
+  "POST /admin/submissions/{submissionId}/reject": "reject_submission",
+  "POST /admin/tracks": "add_track",
   "POST /admin/tracks/{trackId}/observe": "observe_track",
-  "POST /admin/tracks/{trackId}/social/{platform}/draft": PENDING,
+  "POST /admin/tracks/{trackId}/social/{platform}/draft": "draft_track_social",
   "POST /admin/tracks/{trackId}/video/finalize": "finalize_track_video",
   "POST /admin/tracks/{trackId}/video/uploads": "presign_track_video_uploads",
-  "POST /admin/youtube/token": PENDING,
+  "POST /admin/youtube/token": "mint_youtube_token",
+  // The PUT shares the `members` file/path with the POST above (append vs replace);
+  // oRPC routes the two methods to distinct ops, so each gets its own entry.
+  "PUT /admin/mixtapes/{mixtapeId}/members": "set_mixtape_members",
 };
 
 // Routes that stay on TanStack by design (docs/orpc-migration-brief.md
@@ -80,22 +84,22 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
 // route dir). NOT counted against coverage — they will never have a contract —
 // but listed so the enumeration is total and a new carve-out is a deliberate edit.
 //
-//   - OAuth browser-redirect callbacks/starts (Spotify / YouTube / Mixcloud /
-//     Last.fm `*/auth/*`): they return 302 redirects, not RPC JSON. Permanent.
+//   - OAuth browser-redirect callbacks/starts (Spotify / YouTube / Mixcloud
+//     `*/auth/*`): they return 302 redirects, not RPC JSON. Permanent. (Last.fm's
+//     `auth/start` + `auth/session` are NOT redirects — they return RPC JSON — so
+//     they are CONVERTED, not carved out, in the admin wave.)
+//   - The admin `logout` (GET): a 302 that expires the grant cookie and bounces to
+//     /admin/login. Not RPC JSON, so it stays on TanStack like the OAuth redirects.
 //   - The multipart-FILE routes (`preview-archive`; the legacy multipart
 //     `…/video.ts` POST, superseded by the converted presign/finalize JSON
 //     control-plane): they take `request.formData()` with a `File` part. Per the
 //     brief, oRPC's multipart-file-body ergonomics on workerd are not adopted for
 //     this pilot — these single irregular routes stay on TanStack, not the model
 //     for the wave. CARVED OUT (the decision the brief asks for at kickoff).
-const ADMIN_CARVE_OUT_ROUTE_PREFIXES = [
-  "spotify/auth/",
-  "youtube/auth/",
-  "mixcloud/auth/",
-  "lastfm/auth/",
-];
+const ADMIN_CARVE_OUT_ROUTE_PREFIXES = ["spotify/auth/", "youtube/auth/", "mixcloud/auth/"];
 
 const ADMIN_CARVE_OUT_ROUTES = new Set([
+  "logout", // a 302 redirect (expire the grant cookie, bounce to /admin/login), not RPC JSON.
   "tracks.$trackId.preview-archive", // multipart-file body (formData → File).
   "tracks.$trackId.video", // the legacy multipart upload, superseded by presign/finalize.
 ]);

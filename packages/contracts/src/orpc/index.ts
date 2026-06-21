@@ -21,6 +21,11 @@
 // OpenAPI `operationId` (`get_track` → `getTrack`). The REST path mirrors the
 // live route; resources are plural, the op noun stays singular.
 
+import { adminBackfillsContract } from "./admin-backfills";
+import { adminMixtapesContract } from "./admin-mixtapes";
+import { adminSocialContract } from "./admin-social";
+import { adminSubmissionsContract } from "./admin-submissions";
+import { adminTokensContract } from "./admin-tokens";
 import { adminTracksContract } from "./admin-tracks";
 import { healthContract } from "./health";
 import { meContract } from "./me";
@@ -35,8 +40,38 @@ import { tracksContract } from "./tracks";
 
 // Re-export the per-op contracts so existing importers (and the typed client)
 // keep their entrypoints.
+export { backfillDiscogs, backfillLastfm, sweepEnrichment } from "./admin-backfills";
 export {
+  addMixtapeMembers,
+  createMixtape,
+  deleteMixtape,
+  finalizeMixtapeMixcloud,
+  finalizeMixtapeYoutube,
+  getMixtapeSocial,
+  initiateMixtapeYoutube,
+  listMixtapesAdmin,
+  publishMixtape,
+  publishMixtapeYoutube,
+  setMixtapeMembers,
+  updateMixtape,
+} from "./admin-mixtapes";
+export { draftTrackSocial, listTrackSocial, updateTrackSocial } from "./admin-social";
+export {
+  approveSubmission,
+  getSubmission,
+  listSubmissions,
+  rejectSubmission,
+} from "./admin-submissions";
+export {
+  exchangeLastfmSession,
+  mintMixcloudToken,
+  mintYoutubeToken,
+  startLastfmAuth,
+} from "./admin-tokens";
+export {
+  addTrack,
   finalizeTrackVideo,
+  listTracksAdmin,
   observeTrack,
   presignTrackVideoUploads,
   updateTrack,
@@ -65,7 +100,9 @@ export { submitTrack } from "./submissions";
 export { getRandomTrack, getTrack, listTracks } from "./tracks";
 export {
   MixtapeDTOSchema,
+  MixtapeSocialPostItemSchema,
   PublicUserSchema,
+  SocialPostItemSchema,
   SubmissionSchema,
   TrackListItemSchema,
   TrackSearchResultSchema,
@@ -82,6 +119,11 @@ export {
  * a domain joins the registry.
  */
 export const contract = {
+  ...adminBackfillsContract,
+  ...adminMixtapesContract,
+  ...adminSocialContract,
+  ...adminSubmissionsContract,
+  ...adminTokensContract,
   ...adminTracksContract,
   ...healthContract,
   ...meContract,

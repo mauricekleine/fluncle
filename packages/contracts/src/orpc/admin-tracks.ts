@@ -23,6 +23,7 @@
 
 import { oc } from "@orpc/contract";
 import * as z from "zod";
+import { FeedItemSchema, TrackListItemSchema } from "./_shared";
 
 /**
  * The PATCH /admin/tracks/{trackId} body — the generic admin track update. LOOSE
@@ -208,9 +209,111 @@ export const finalizeTrackVideo = oc
     }),
   );
 
+/**
+ * The add-track result (`AddTrackResult` in ../index.ts). The `POST /admin/tracks`
+ * body — `publishTrack`'s envelope, reused for `add_track`'s output.
+ */
+const AddTrackResultSchema = z
+  .object({
+    addedToSpotify: z.boolean(),
+    dryRun: z.boolean(),
+    message: z.string(),
+    postedToTelegram: z.boolean(),
+    track: z.object({
+      album: z.string().optional(),
+      albumImageUrl: z.string().optional(),
+      artists: z.array(z.string()),
+      durationMs: z.number(),
+      isrc: z.string().optional(),
+      label: z.string().optional(),
+      logId: z.string().optional(),
+      logPageUrl: z.string().optional(),
+      popularity: z.number().optional(),
+      previewUrl: z.string().optional(),
+      spotifyUrl: z.string(),
+      title: z.string(),
+      trackId: z.string(),
+    }),
+  })
+  .meta({ id: "AddTrackResult" });
+
+/**
+ * `list_tracks_admin` → `GET /admin/tracks` (operationId `listTracksAdmin`).
+ *
+ * The admin board's archive query (live `requireAdmin` — a read, agent-allowed).
+ * Two shapes off one route, both preserved byte-for-byte:
+ *   - the `?q=` free-text SEARCH branch returns a flat `{ tracks }` (no
+ *     cursor/totalCount envelope);
+ *   - otherwise the paginated LIST page (the `FeedListPage`/`TrackListPage` body
+ *     itself, no `ok` envelope), filtered by `order`/`hasVideo`/`status`.
+ * Every query param is a tolerant optional string — the live route parses + clamps
+ * in-handler and never 400s — so the contract stays permissive. The output is the
+ * union of the two live bodies.
+ */
+export const listTracksAdmin = oc
+  .route({
+    method: "GET",
+    operationId: "listTracksAdmin",
+    path: "/admin/tracks",
+    summary: "Query the admin archive board (search or paginated list)",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      cursor: z.string().optional(),
+      hasVideo: z.string().optional(),
+      limit: z.string().optional(),
+      order: z.string().optional(),
+      q: z.string().optional(),
+      status: z.string().optional(),
+    }),
+  )
+  .output(
+    // The LIST page arm is FIRST: it carries the required `totalCount`, so a list
+    // response matches it (and keeps `nextCursor`/`totalCount`). The SEARCH arm is
+    // a strict subset (`{ tracks }` only); if it were first, Zod's union would
+    // match a list page against it and strip the cursor/count. A search response
+    // (no `totalCount`) falls through to the second arm.
+    z.union([
+      z.object({
+        nextCursor: z.string().optional(),
+        totalCount: z.number(),
+        tracks: z.array(FeedItemSchema),
+      }),
+      z.object({ tracks: z.array(TrackListItemSchema) }),
+    ]),
+  );
+
+/**
+ * `add_track` → `POST /admin/tracks` (operationId `addTrack`).
+ *
+ * Add (publish) a finding from a Spotify URL: certify it, post to Telegram, kick
+ * off async enrichment. Operator tier (live `requireOperator`). LOOSE body — the
+ * live route validates `spotifyUrl` itself (`invalid_request`/400) and caps the
+ * note (`note_too_long`). Preserves the `{ ok: true, ...AddTrackResult }` envelope.
+ */
+export const addTrack = oc
+  .route({
+    method: "POST",
+    operationId: "addTrack",
+    path: "/admin/tracks",
+    summary: "Add (publish) a finding from a Spotify URL",
+    tags: ["Admin"],
+  })
+  .input(
+    z.looseObject({
+      dryRun: z.unknown().optional(),
+      note: z.unknown().optional(),
+      spotifyUrl: z.unknown().optional(),
+    }),
+  )
+  .output(AddTrackResultSchema.extend({ ok: z.literal(true) }));
+
 /** The `admin-tracks` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminTracksContract = {
+  add_track: addTrack,
   finalize_track_video: finalizeTrackVideo,
+  list_tracks_admin: listTracksAdmin,
   observe_track: observeTrack,
   presign_track_video_uploads: presignTrackVideoUploads,
   update_track: updateTrack,

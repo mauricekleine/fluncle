@@ -22,6 +22,10 @@ const put = vi.fn();
 const renderObservation = vi.fn();
 const fetchTrackContext = vi.fn();
 const presignUploads = vi.fn();
+const listTracks = vi.fn();
+const searchTracks = vi.fn();
+const publishTrack = vi.fn();
+const triggerEnrichment = vi.fn();
 
 vi.mock("cloudflare:workers", () => ({
   env: { VIDEOS: { put: (...args: unknown[]) => put(...args) } },
@@ -31,8 +35,25 @@ vi.mock("./track-update", () => ({
   updateTrack: (...args: unknown[]) => updateTrack(...args),
 }));
 
-vi.mock("./tracks", () => ({
-  getTrackByIdOrLogId: (id: string) => getTrackByIdOrLogId(id),
+vi.mock("./tracks", async (importOriginal) => {
+  // Keep the REAL cursor decoder + the enrichment-status filter set (the admin
+  // board's parse logic uses them); fake only the DB reads.
+  const actual = await importOriginal<typeof import("./tracks")>();
+
+  return {
+    ...actual,
+    getTrackByIdOrLogId: (id: string) => getTrackByIdOrLogId(id),
+    listTracks: (...args: unknown[]) => listTracks(...args),
+    searchTracks: (...args: unknown[]) => searchTracks(...args),
+  };
+});
+
+vi.mock("./publish", () => ({
+  publishTrack: (...args: unknown[]) => publishTrack(...args),
+}));
+
+vi.mock("./spinup", () => ({
+  triggerEnrichment: (...args: unknown[]) => triggerEnrichment(...args),
 }));
 
 vi.mock("./r2-presign", async (importOriginal) => {
@@ -73,6 +94,20 @@ const TRACK = {
 const GOOD_SCRIPT =
   "Arrived on the dark side of the sector and this one moved at a hard, even pace. Knees went up before I clocked the coordinate. Logged it as fluncle://004.7.2I. Hope it gets an oof out of you, fam.";
 
+// A schema-complete `TrackListItem` for the list/search output (oRPC validates the
+// response body against the contract, so a partial row would 500).
+const LIST_ITEM = {
+  addedAt: "2026-06-01T00:00:00.000Z",
+  addedToSpotify: true,
+  artists: ["Calibre"],
+  durationMs: 300000,
+  enrichmentStatus: "done",
+  postedToTelegram: true,
+  spotifyUrl: "https://open.spotify.com/track/x",
+  title: "Mr Right On",
+  trackId: TRACK_ID,
+};
+
 beforeAll(() => {
   process.env.FLUNCLE_API_TOKEN = OPERATOR_TOKEN;
   process.env.FLUNCLE_AGENT_TOKEN = AGENT_TOKEN;
@@ -88,6 +123,10 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ bytes: new ArrayBuffer(512), voiceId: "voice-stock-1" });
   fetchTrackContext.mockResolvedValue({ contextNote: "Signature Records, 2008.", sources: [] });
+  listTracks.mockReset();
+  searchTracks.mockReset();
+  publishTrack.mockReset();
+  triggerEnrichment.mockReset();
 });
 
 function patch(token: string | undefined, body: unknown): Request {
@@ -388,5 +427,158 @@ describe("oRPC finalize_track_video (POST .../video/finalize)", () => {
     expect(response?.status).toBe(404);
     expect(((await response?.json()) as { code: string }).code).toBe("not_found");
     expect(updateTrack).not.toHaveBeenCalled();
+  });
+});
+
+// ── list_tracks_admin — admin tier (the board query) ─────────────────────────
+function adminGet(query: string, token: string | undefined): Request {
+  const headers: Record<string, string> = {};
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  return new Request(`https://www.fluncle.com/api/v1/admin/tracks${query}`, { headers });
+}
+
+describe("oRPC list_tracks_admin (GET /admin/tracks)", () => {
+  it("401s with no admin token", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(adminGet("", undefined));
+
+    expect(response?.status).toBe(401);
+    expect(listTracks).not.toHaveBeenCalled();
+  });
+
+  it("lets the AGENT read the paginated list page (no `ok` envelope)", async () => {
+    listTracks.mockResolvedValueOnce({ nextCursor: "cur", totalCount: 2, tracks: [] });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      adminGet("?order=asc&hasVideo=false&status=pending", AGENT_TOKEN),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(await response?.json()).toEqual({ nextCursor: "cur", totalCount: 2, tracks: [] });
+    // The filters parsed in-handler (order asc, hasVideo false, status pending).
+    const [opts] = listTracks.mock.calls[0] as [Record<string, unknown>];
+    expect(opts.order).toBe("asc");
+    expect(opts.hasVideo).toBe(false);
+    expect(opts.status).toBe("pending");
+    expect(searchTracks).not.toHaveBeenCalled();
+  });
+
+  it("takes the `?q=` SEARCH branch and returns the flat `{ tracks }` body", async () => {
+    searchTracks.mockResolvedValueOnce([LIST_ITEM]);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(adminGet("?q=calibre&limit=5", OPERATOR_TOKEN));
+
+    expect(response?.status).toBe(200);
+    expect(await response?.json()).toEqual({ tracks: [LIST_ITEM] });
+    expect(searchTracks).toHaveBeenCalledWith({ limit: 5, q: "calibre" });
+    expect(listTracks).not.toHaveBeenCalled();
+  });
+});
+
+// ── add_track — operator tier (publish from a Spotify URL) ───────────────────
+describe("oRPC add_track (POST /admin/tracks)", () => {
+  it("403s the AGENT (operator-only)", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      new Request("https://www.fluncle.com/api/v1/admin/tracks", {
+        body: JSON.stringify({ spotifyUrl: "https://open.spotify.com/track/x" }),
+        headers: { Authorization: `Bearer ${AGENT_TOKEN}`, "Content-Type": "application/json" },
+        method: "POST",
+      }),
+    );
+
+    expect(response?.status).toBe(403);
+    expect(publishTrack).not.toHaveBeenCalled();
+  });
+
+  it("400s `invalid_request` for a missing Spotify URL", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      new Request("https://www.fluncle.com/api/v1/admin/tracks", {
+        body: JSON.stringify({}),
+        headers: { Authorization: `Bearer ${OPERATOR_TOKEN}`, "Content-Type": "application/json" },
+        method: "POST",
+      }),
+    );
+
+    expect(response?.status).toBe(400);
+    expect(((await response?.json()) as { code: string }).code).toBe("invalid_request");
+    expect(publishTrack).not.toHaveBeenCalled();
+  });
+
+  it("publishes for the operator, triggers enrichment, returns the live envelope", async () => {
+    publishTrack.mockResolvedValueOnce({
+      addedToSpotify: true,
+      dryRun: false,
+      message: "Added",
+      postedToTelegram: true,
+      track: {
+        artists: ["Calibre"],
+        durationMs: 300000,
+        logId: "004.7.2I",
+        spotifyUrl: "https://open.spotify.com/track/x",
+        title: "Mr Right On",
+        trackId: TRACK_ID,
+      },
+    });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      new Request("https://www.fluncle.com/api/v1/admin/tracks", {
+        body: JSON.stringify({ note: "a take", spotifyUrl: "https://open.spotify.com/track/x" }),
+        headers: { Authorization: `Bearer ${OPERATOR_TOKEN}`, "Content-Type": "application/json" },
+        method: "POST",
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    const data = (await response?.json()) as { ok: boolean; addedToSpotify: boolean };
+    expect(data.ok).toBe(true);
+    expect(data.addedToSpotify).toBe(true);
+    expect(publishTrack).toHaveBeenCalledWith("https://open.spotify.com/track/x", {
+      dryRun: false,
+      note: "a take",
+    });
+    // A live (non-dry) add with a Log ID kicks off async enrichment.
+    expect(triggerEnrichment).toHaveBeenCalledWith(TRACK_ID, "004.7.2I");
+  });
+
+  it("does NOT trigger enrichment on a dry run", async () => {
+    publishTrack.mockResolvedValueOnce({
+      addedToSpotify: false,
+      dryRun: true,
+      message: "Dry run",
+      postedToTelegram: false,
+      track: {
+        artists: ["Calibre"],
+        durationMs: 300000,
+        logId: "004.7.2I",
+        spotifyUrl: "https://open.spotify.com/track/x",
+        title: "Mr Right On",
+        trackId: TRACK_ID,
+      },
+    });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      new Request("https://www.fluncle.com/api/v1/admin/tracks", {
+        body: JSON.stringify({ dryRun: true, spotifyUrl: "https://open.spotify.com/track/x" }),
+        headers: { Authorization: `Bearer ${OPERATOR_TOKEN}`, "Content-Type": "application/json" },
+        method: "POST",
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(publishTrack).toHaveBeenCalledWith("https://open.spotify.com/track/x", {
+      dryRun: true,
+      note: undefined,
+    });
+    expect(triggerEnrichment).not.toHaveBeenCalled();
   });
 });

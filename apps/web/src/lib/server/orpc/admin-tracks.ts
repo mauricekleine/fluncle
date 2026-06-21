@@ -21,6 +21,7 @@ import { env } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
 import { FOUND_BASE, trackMedia } from "../../media";
 import { parseEditorialNote } from "../http-errors";
+import { publishTrack } from "../publish";
 import {
   DEFAULT_OBSERVATION_MODEL,
   DEFAULT_VOICE_SETTINGS,
@@ -34,8 +35,16 @@ import {
 } from "../observation";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { VIDEOS_BUCKET, presignUploads } from "../r2-presign";
+import { triggerEnrichment } from "../spinup";
 import { type TrackUpdate, updateTrack } from "../track-update";
-import { getTrackByIdOrLogId } from "../tracks";
+import {
+  type EnrichmentStatusFilter,
+  ENRICHMENT_STATUS_FILTERS,
+  decodeTrackCursor,
+  getTrackByIdOrLogId,
+  listTracks,
+  searchTracks,
+} from "../tracks";
 import { type VideoArtifact, artifactByField } from "../video-bundle";
 import { apiFault, type Implementer } from "./_shared";
 
@@ -97,6 +106,43 @@ function resolveVoiceSettings(value: unknown): ObservationVoiceSettings {
     stability: num("stability", DEFAULT_VOICE_SETTINGS.stability),
     style: num("style", DEFAULT_VOICE_SETTINGS.style),
   };
+}
+
+// Admin board list page-size bounds, ported verbatim from the live GET route.
+const ADMIN_LIST_DEFAULT_LIMIT = 16;
+const ADMIN_LIST_MAX_LIMIT = 48;
+
+// `hasVideo` is tri-state, ported verbatim from the live route.
+function parseHasVideo(value: string | undefined): boolean | undefined {
+  if (value === "true") {
+    return true;
+  }
+
+  if (value === "false") {
+    return false;
+  }
+
+  return undefined;
+}
+
+function parseEnrichmentStatus(value: string | undefined): EnrichmentStatusFilter | undefined {
+  return value && (ENRICHMENT_STATUS_FILTERS as readonly string[]).includes(value)
+    ? (value as EnrichmentStatusFilter)
+    : undefined;
+}
+
+function parseAdminLimit(value: string | undefined): number {
+  if (!value) {
+    return ADMIN_LIST_DEFAULT_LIMIT;
+  }
+
+  const limit = Number.parseInt(value, 10);
+
+  if (!Number.isInteger(limit) || limit < 1) {
+    return ADMIN_LIST_DEFAULT_LIMIT;
+  }
+
+  return Math.min(limit, ADMIN_LIST_MAX_LIMIT);
 }
 
 function resolveDurationTargetSec(value: unknown): number {
@@ -206,6 +252,72 @@ export function adminTracksHandlers(os: Implementer) {
       throw toFault(error);
     }
   });
+
+  // GET /admin/tracks — admin tier (live `requireAdmin`). The admin board query:
+  // a `?q=` free-text search (flat `{ tracks }`) OR the paginated list page (the
+  // page body itself, filtered by order/hasVideo/status). Both shapes preserved.
+  const listTracksAdminHandler = os.list_tracks_admin.use(adminAuth).handler(async ({ input }) => {
+    try {
+      const q = input.q?.trim();
+
+      if (q) {
+        return {
+          tracks: await searchTracks({
+            limit: parseAdminLimit(input.limit),
+            q,
+          }),
+        };
+      }
+
+      return await listTracks({
+        cursor: decodeTrackCursor(input.cursor ?? null),
+        hasVideo: parseHasVideo(input.hasVideo),
+        limit: parseAdminLimit(input.limit),
+        order: input.order === "asc" ? "asc" : "desc",
+        status: parseEnrichmentStatus(input.status),
+      });
+    } catch (error) {
+      throw toFault(error);
+    }
+  });
+
+  // POST /admin/tracks — operator tier (live `requireOperator`). Add (publish) a
+  // finding from a Spotify URL, then kick off async enrichment.
+  const addTrackHandler = os.add_track
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const body = input as { dryRun?: unknown; note?: unknown; spotifyUrl?: unknown };
+
+        if (typeof body.spotifyUrl !== "string") {
+          throw new ORPCError("BAD_REQUEST", {
+            data: { apiCode: "invalid_request", apiMessage: "Missing Spotify track URL" },
+            message: "Missing Spotify track URL",
+            status: 400,
+          });
+        }
+
+        // The note rides into the Telegram post AND the stored editorial note, so
+        // cap it on the add path too. On add, an empty note means "no note".
+        const note = parseEditorialNote(body.note);
+
+        const result = await publishTrack(body.spotifyUrl, {
+          dryRun: body.dryRun === true,
+          note: note || undefined,
+        });
+
+        // Fast enqueue — the work runs durably on Spinup. triggerEnrichment never
+        // throws.
+        if (!result.dryRun && result.track.logId) {
+          await triggerEnrichment(result.track.trackId, result.track.logId);
+        }
+
+        return { ok: true as const, ...result };
+      } catch (error) {
+        throw toFault(error);
+      }
+    });
 
   // POST /admin/tracks/{trackId}/observe — operator tier (live `requireOperator`).
   const observeTrackHandler = os.observe_track
@@ -506,7 +618,9 @@ export function adminTracksHandlers(os: Implementer) {
     });
 
   return {
+    add_track: addTrackHandler,
     finalize_track_video: finalizeVideoHandler,
+    list_tracks_admin: listTracksAdminHandler,
     observe_track: observeTrackHandler,
     presign_track_video_uploads: presignVideoUploadsHandler,
     update_track: updateTrackHandler,
