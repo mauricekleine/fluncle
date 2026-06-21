@@ -14,6 +14,11 @@ import { apiErrorResponse } from "../../../lib/server/http-errors";
 // NOTE: lastfmLove NO-OPS silently without LASTFM_SESSION_KEY, so until that
 // secret is confirmed set, even a non-dry run is a safe no-op (it walks the
 // findings and reports them "loved", but the Last.fm call short-circuits).
+//
+// BATCHED: one request handles a bounded pass of eligible findings and returns
+// `nextCursor` (the feed cursor to resume from, or null when the archive is
+// drained). The CLI loops `?cursor=` until null so a full sweep never exceeds
+// the Worker request budget.
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 500;
@@ -49,6 +54,7 @@ export const serverHandlers: ApiHandlers = {
       const result = await backfillLastfmLoves(
         parseLimit(url.searchParams.get("limit")),
         parseBool(url.searchParams.get("dryRun")),
+        url.searchParams.get("cursor") ?? undefined,
       );
 
       return Response.json({
@@ -57,6 +63,7 @@ export const serverHandlers: ApiHandlers = {
         failedCount: result.failedCount,
         loved: result.loved,
         lovedCount: result.lovedCount,
+        nextCursor: result.nextCursor,
         ok: true,
       });
     } catch (error) {

@@ -737,6 +737,6 @@ export function decodeTrackCursor(value: string | null): TrackCursor | undefined
   return undefined;
 }
 
-function encodeTrackCursor(cursor: TrackCursor): string {
+export function encodeTrackCursor(cursor: TrackCursor): string {
   return Buffer.from(JSON.stringify(cursor)).toString("base64url");
 }

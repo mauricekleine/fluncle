@@ -2,7 +2,7 @@ import { printJson } from "./output";
 
 declare const FLUNCLE_CLI_VERSION: string | undefined;
 
-const currentVersion =
+export const currentVersion =
   typeof FLUNCLE_CLI_VERSION === "string" && FLUNCLE_CLI_VERSION.trim()
     ? FLUNCLE_CLI_VERSION.trim()
     : "0.1.0";
@@ -85,11 +85,11 @@ async function buildVersionCheck(): Promise<VersionResult> {
   };
 }
 
-function normalizeVersion(version: string | undefined): string | undefined {
+export function normalizeVersion(version: string | undefined): string | undefined {
   return version?.trim().replace(/^v/i, "");
 }
 
-function compareVersions(left: string, right: string): number {
+export function compareVersions(left: string, right: string): number {
   const leftParts = parseVersion(left);
   const rightParts = parseVersion(right);
 
