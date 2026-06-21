@@ -9,6 +9,9 @@ type HeadResult = {
   scripts?: Array<{ children: string; type: string }>;
 };
 
+// JSON-LD is emitted via `jsonLdScript`, which HTML-escapes the serialized JSON
+// (`<`/`>`/`&`/U+2028/U+2029 → `\uXXXX`). Those escapes are still valid JSON, so
+// `JSON.parse` reads the original object back — the structured data is unchanged.
 function aboutSchemas(): Array<Record<string, unknown>> {
   const head = AboutRoute.options.head?.({} as never) as HeadResult;
 

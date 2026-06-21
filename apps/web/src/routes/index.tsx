@@ -18,6 +18,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { siteUrl, spotifyPlaylistUrl, telegramUrl } from "@/lib/fluncle-links";
 import { fluncleAsciiLogo, fluncleDescription } from "@/lib/identity";
+import { jsonLdScript } from "@/lib/json-ld";
 import { type FeedItem } from "@/lib/mixtapes";
 import { listTracks } from "@/lib/server/tracks";
 import { fetchTracks, type TracksResponse } from "@/lib/tracks";
@@ -75,51 +76,49 @@ export const Route = createFileRoute("/")({
         type: "image/webp",
       },
     ],
+    // JSON-LD goes through `jsonLdScript`, which HTML-escapes the serialized
+    // payload before it reaches the inline <script>'s `children` (rendered raw
+    // via dangerouslySetInnerHTML), so untrusted Spotify titles/artists/album
+    // can't break out of the <script> (stored-XSS sink, security review).
     scripts: [
-      {
-        // The site-level entity block (no SearchAction: there is no search
-        // results page, and schema must mirror what the page actually does).
-        children: JSON.stringify({
-          "@context": "https://schema.org",
-          "@type": "WebSite",
-          description: fluncleDescription,
-          name: "Fluncle",
-          url: `${siteUrl}/`,
-        }),
-        type: "application/ld+json",
-      },
-      {
-        children: JSON.stringify({
-          "@context": "https://schema.org",
-          "@type": "MusicPlaylist",
-          description: fluncleDescription,
-          genre: "Drum and Bass",
-          image: `${siteUrl}/fluncle-cover.png`,
-          name: "Fluncle's Findings",
-          numTracks: loaderData?.totalCount,
-          sameAs: [spotifyPlaylistUrl, telegramUrl],
-          track: loaderData?.tracks.flatMap((track) => {
-            if (track.type === "mixtape") {
-              return [];
-            }
+      // The site-level entity block (no SearchAction: there is no search results
+      // page, and schema must mirror what the page actually does).
+      jsonLdScript({
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        description: fluncleDescription,
+        name: "Fluncle",
+        url: `${siteUrl}/`,
+      }),
+      jsonLdScript({
+        "@context": "https://schema.org",
+        "@type": "MusicPlaylist",
+        description: fluncleDescription,
+        genre: "Drum and Bass",
+        image: `${siteUrl}/fluncle-cover.png`,
+        name: "Fluncle's Findings",
+        numTracks: loaderData?.totalCount,
+        sameAs: [spotifyPlaylistUrl, telegramUrl],
+        track: loaderData?.tracks.flatMap((track) => {
+          if (track.type === "mixtape") {
+            return [];
+          }
 
-            return [
-              {
-                "@type": "MusicRecording",
-                byArtist: track.artists.map((artist) => ({
-                  "@type": "MusicGroup",
-                  name: artist,
-                })),
-                ...(track.album ? { inAlbum: { "@type": "MusicAlbum", name: track.album } } : {}),
-                name: track.title,
-                url: track.spotifyUrl,
-              },
-            ];
-          }),
-          url: `${siteUrl}/`,
+          return [
+            {
+              "@type": "MusicRecording",
+              byArtist: track.artists.map((artist) => ({
+                "@type": "MusicGroup",
+                name: artist,
+              })),
+              ...(track.album ? { inAlbum: { "@type": "MusicAlbum", name: track.album } } : {}),
+              name: track.title,
+              url: track.spotifyUrl,
+            },
+          ];
         }),
-        type: "application/ld+json",
-      },
+        url: `${siteUrl}/`,
+      }),
     ],
   }),
   component: HomePage,
