@@ -93,24 +93,38 @@ export type LastfmBackfillResult = {
   failedCount: number;
   loved: string[];
   lovedCount: number;
+  // The feed cursor to resume from on the next pass, or null when the archive is
+  // drained. The endpoint handles only a bounded pass per request (each love runs
+  // under a rate limiter), so the CLI loops this until null.
+  nextCursor: string | null;
   ok: boolean;
 };
 
-// Back-fill Last.fm loves over published findings via the admin API — the Worker
+// One bounded pass of the Last.fm love backfill via the admin API — the Worker
 // holds the LASTFM_* secrets and makes every signed call; the CLI stays a thin
 // client. Idempotent (loving twice is a no-op) and a safe no-op until the session
-// key is provisioned. `--dry-run` reports the set without firing.
+// key is provisioned. `--dry-run` reports the set without firing. Pass the prior
+// pass's `nextCursor` to resume; the CLI loops until it comes back null.
 export async function backfillLastfmCommand(
   limit: number,
   dryRun: boolean,
+  cursor?: string,
 ): Promise<LastfmBackfillResult> {
-  return adminApiPost<LastfmBackfillResult>(
-    `/api/admin/backfill/lastfm?limit=${limit}&dryRun=${dryRun}`,
-  );
+  const params = new URLSearchParams({ dryRun: String(dryRun), limit: String(limit) });
+
+  if (cursor) {
+    params.set("cursor", cursor);
+  }
+
+  return adminApiPost<LastfmBackfillResult>(`/api/admin/backfill/lastfm?${params.toString()}`);
 }
 
 export type DiscogsBackfillResult = {
   dryRun: boolean;
+  // The feed cursor to resume from on the next pass, or null when the archive is
+  // drained. The endpoint handles only a bounded pass per request (each resolve
+  // runs under a rate limiter), so the CLI loops this until null.
+  nextCursor: string | null;
   ok: boolean;
   resolved: Array<{ logId: string; masterId?: number; releaseId: number; source: string }>;
   resolvedCount: number;
@@ -118,17 +132,23 @@ export type DiscogsBackfillResult = {
   unresolvedCount: number;
 };
 
-// Back-fill Discogs release ids over published findings missing one, via the admin
-// API — the Worker resolves (MB bridge + gated search) and writes in_release_id /
+// One bounded pass of the Discogs release-id backfill via the admin API — the
+// Worker resolves (MB bridge + gated search) and writes in_release_id /
 // in_master_id server-side. Rows that already have an id are skipped (idempotent).
-// `--dry-run` resolves but writes nothing.
+// `--dry-run` resolves but writes nothing. Pass the prior pass's `nextCursor` to
+// resume; the CLI loops until it comes back null.
 export async function backfillDiscogsCommand(
   limit: number,
   dryRun: boolean,
+  cursor?: string,
 ): Promise<DiscogsBackfillResult> {
-  return adminApiPost<DiscogsBackfillResult>(
-    `/api/admin/backfill/discogs?limit=${limit}&dryRun=${dryRun}`,
-  );
+  const params = new URLSearchParams({ dryRun: String(dryRun), limit: String(limit) });
+
+  if (cursor) {
+    params.set("cursor", cursor);
+  }
+
+  return adminApiPost<DiscogsBackfillResult>(`/api/admin/backfill/discogs?${params.toString()}`);
 }
 
 export type VehicleEntry = {
