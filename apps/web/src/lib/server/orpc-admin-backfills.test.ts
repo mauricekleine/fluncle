@@ -7,8 +7,10 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 //   - backfill_discogs / backfill_lastfm — operator tier (live `requireOperator`):
 //     401 no token, 403 agent, the operator passes; the live `?limit/dryRun/cursor`
 //     query params parse in-handler and the success envelope is byte-for-byte.
-//   - sweep_enrichment — ADMIN tier (live `requireAdmin`): the agent PASSES (200),
-//     a non-admin is a 401. VERIFIED: enrich-sweep is requireAdmin, NOT operator.
+//   - enrich_track — ADMIN tier (live `requireAdmin`): the agent PASSES (200), a
+//     non-admin is a 401. VERIFIED: the enrich sweep is requireAdmin, NOT operator.
+//     Served at /admin/tracks/enrich (Convention B); the old /admin/enrich-sweep
+//     path stays a TanStack alias (covered at the bottom of this file).
 
 const backfillDiscogsIds = vi.fn();
 const backfillLastfmLoves = vi.fn();
@@ -137,11 +139,11 @@ describe("oRPC backfill_lastfm (POST /admin/backfill/lastfm)", () => {
   });
 });
 
-// ── sweep_enrichment — ADMIN tier (the agent is allowed) ─────────────────────
-describe("oRPC sweep_enrichment (POST /admin/enrich-sweep)", () => {
+// ── enrich_track — ADMIN tier (the agent is allowed) ─────────────────────────
+describe("oRPC enrich_track (POST /admin/tracks/enrich)", () => {
   it("401s with no admin token", async () => {
     const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(post("/admin/enrich-sweep", undefined));
+    const response = await handleOrpc(post("/admin/tracks/enrich", undefined));
 
     expect(response?.status).toBe(401);
     expect(sweepEnrichmentQueue).not.toHaveBeenCalled();
@@ -154,7 +156,7 @@ describe("oRPC sweep_enrichment (POST /admin/enrich-sweep)", () => {
     });
 
     const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(post("/admin/enrich-sweep?limit=5", AGENT_TOKEN));
+    const response = await handleOrpc(post("/admin/tracks/enrich?limit=5", AGENT_TOKEN));
 
     expect(response?.status).toBe(200);
     expect(await response?.json()).toEqual({
@@ -171,9 +173,49 @@ describe("oRPC sweep_enrichment (POST /admin/enrich-sweep)", () => {
     sweepEnrichmentQueue.mockResolvedValueOnce({ reEnriched: [], skipped: [] });
 
     const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(post("/admin/enrich-sweep", OPERATOR_TOKEN));
+    const response = await handleOrpc(post("/admin/tracks/enrich", OPERATOR_TOKEN));
 
     expect(response?.status).toBe(200);
     expect(sweepEnrichmentQueue).toHaveBeenCalledWith(25); // default limit
+  });
+});
+
+// ── the back-compat alias: POST /admin/enrich-sweep stays live ───────────────
+// The op's canonical oRPC path moved to /admin/tracks/enrich, so oRPC no longer
+// matches the old /admin/enrich-sweep path (handleOrpc returns null → fall
+// through). The TanStack route file at routes/api/admin/enrich-sweep.ts is the
+// permanent alias: invoke its exported handler directly to prove the old path
+// (the cron's stable name) still hits the same sweep with the same envelope.
+describe("enrich-sweep back-compat alias (POST /admin/enrich-sweep)", () => {
+  it("is no longer matched by oRPC (the path moved to /admin/tracks/enrich)", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(post("/admin/enrich-sweep", AGENT_TOKEN));
+
+    // null = oRPC matched nothing; the request falls through to TanStack.
+    expect(response).toBeNull();
+    expect(sweepEnrichmentQueue).not.toHaveBeenCalled();
+  });
+
+  it("the TanStack alias route still serves the sweep (same live envelope)", async () => {
+    sweepEnrichmentQueue.mockResolvedValueOnce({
+      reEnriched: [{ logId: "004.7.2I", status: "failed", trackId: "t1" }],
+      skipped: [],
+    });
+
+    const { serverHandlers } = await import("../../routes/api/admin/enrich-sweep");
+    const response = await serverHandlers.POST?.({
+      params: {},
+      request: post("/admin/enrich-sweep?limit=5", AGENT_TOKEN),
+    });
+
+    expect(response?.status).toBe(200);
+    expect(await response?.json()).toEqual({
+      ok: true,
+      reEnriched: [{ logId: "004.7.2I", status: "failed", trackId: "t1" }],
+      reEnrichedCount: 1,
+      skipped: [],
+      skippedCount: 0,
+    });
+    expect(sweepEnrichmentQueue).toHaveBeenCalledWith(5);
   });
 });

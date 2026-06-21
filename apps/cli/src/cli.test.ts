@@ -83,7 +83,23 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
-  test("admin tracks enrich-sweep validates --limit before any sweep", async () => {
+  test("admin tracks enrich --all validates --limit before any sweep", async () => {
+    const result = await runCli(["admin", "tracks", "enrich", "--all", "--limit", "0", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
+  });
+
+  test("admin tracks enrich requires --all (bare enrich errors, never a silent sweep)", async () => {
+    const result = await runCli(["admin", "tracks", "enrich", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("fluncle admin tracks enrich --all");
+  });
+
+  test("admin tracks enrich-sweep (back-compat alias) still resolves to enrich --all", async () => {
     const result = await runCli(["admin", "tracks", "enrich-sweep", "--limit", "0", "--json"]);
 
     expect(result.exitCode).toBe(1);
@@ -104,7 +120,9 @@ describe("fluncle CLI parsing and JSON output", () => {
 
     expect(tracksHelp.exitCode).toBe(0);
     expect(tracksHelp.stdout).toContain("enrich-queue");
-    expect(tracksHelp.stdout).toContain("enrich-sweep");
+    // The canonical sweep verb is visible; the `enrich-sweep` alias is hidden.
+    expect(tracksHelp.stdout).toContain("enrich ");
+    expect(tracksHelp.stdout).not.toContain("enrich-sweep");
     expect(tracksHelp.stdout).toContain("queue");
     expect(tracksHelp.stdout).toContain("publish");
     expect(tracksHelp.stdout).toContain("vehicles");

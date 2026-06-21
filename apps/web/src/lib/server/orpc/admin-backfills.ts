@@ -5,8 +5,10 @@
 //
 //   - `backfill_discogs` / `backfill_lastfm` — operator tier (live
 //     `requireOperator`): `adminAuth` + `operatorGuard`.
-//   - `sweep_enrichment` — admin tier (live `requireAdmin`): `adminAuth` only, so
-//     the agent role authenticates too. VERIFIED against the live handler.
+//   - `enrich_track` — admin tier (live `requireAdmin`): `adminAuth` only, so the
+//     agent role authenticates too. VERIFIED against the live handler. Routed at
+//     `POST /admin/tracks/enrich` (Convention B); the old `/admin/enrich-sweep`
+//     path stays a back-compat alias on its TanStack route.
 //
 // The live routes read `limit`/`dryRun`/`cursor` off the QUERY string of a
 // bodyless POST. oRPC's compact input mode sources a POST's input from the body,
@@ -104,9 +106,9 @@ export function adminBackfillsHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/enrich-sweep — ADMIN tier (live `requireAdmin`; the agent role
+  // POST /admin/tracks/enrich — ADMIN tier (live `requireAdmin`; the agent role
   // authenticates too). `adminAuth` only, NO operatorGuard.
-  const sweepEnrichmentHandler = os.sweep_enrichment.use(adminAuth).handler(async ({ input }) => {
+  const enrichTrackHandler = os.enrich_track.use(adminAuth).handler(async ({ input }) => {
     try {
       const result = await sweepEnrichmentQueue(
         parseLimit(input.query.limit, SWEEP_DEFAULT_LIMIT, SWEEP_MAX_LIMIT),
@@ -127,6 +129,6 @@ export function adminBackfillsHandlers(os: Implementer) {
   return {
     backfill_discogs: backfillDiscogsHandler,
     backfill_lastfm: backfillLastfmHandler,
-    sweep_enrichment: sweepEnrichmentHandler,
+    enrich_track: enrichTrackHandler,
   };
 }

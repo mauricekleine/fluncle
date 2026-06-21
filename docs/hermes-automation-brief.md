@@ -27,7 +27,7 @@ Tiers and op names are the **landed oRPC contracts** (#75 / #77). "Flip" = move 
 
 | Task (oRPC op)                                 | Queue ready?                          | oRPC tier today                       | Work to enable                                                                                                                                                                                                                                         |
 | ---------------------------------------------- | ------------------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Enrichment self-heal** (`sweep_enrichment`)  | ✅ enrich-queue (`status=queue`)      | ✅ **admin** (agent-allowed)          | wire the Hermes cron — the endpoint is already on the agent tier. Only gate: the CLI command name (rename step).                                                                                                                                       |
+| **Enrichment self-heal** (`enrich_track`)      | ✅ enrich-queue (`status=queue`)      | ✅ **admin** (agent-allowed)          | wire the Hermes cron — the endpoint is already on the agent tier. The CLI name has settled: `fluncle admin tracks enrich --all`.                                                                                                                       |
 | **Audio observations** (`observe_track`)       | ❌ needs a `hasObservation` filter    | operator (#75) → **flip**             | flip to `adminProcedure` + `observe:${logId}` idempotency key + Firecrawl untrusted-input boundary; add `hasObservation` on `list_tracks_admin`; add an `observe-context` contract (script _from_ facts without holding Firecrawl). Voice ✅ resolved. |
 | **Discogs ID backfill** (`backfill_discogs`)   | ✅ targeted (`in_release_id IS NULL`) | operator (#77) → **flip**             | the `discogsStatus` reliability column (below) + resolver refactor + tier flip.                                                                                                                                                                        |
 | **Last.fm loves backfill** (`backfill_lastfm`) | ⚠️ re-loves all (no unloved filter)   | operator (#77) → **flip**             | the `lastfmLovedAt` reliability column (below) + tier flip.                                                                                                                                                                                            |
@@ -57,9 +57,9 @@ A cron agent needs a "give me the next batch needing X" query per step, off the 
 
 ## Two reliability columns (the self-heal made precise)
 
-Both love-on-add and discogs-resolve-on-add are **best-effort** (verified: each swallows its own errors and never blocks or fails an `add`). That is correct — but it means a transient failure is silent and permanent unless something re-attempts it. The backfill commands _are_ that re-attempt (the same role `sweep_enrichment` plays for enrichment), so they are infrastructure, not throwaway scripts. Two columns make them targeted instead of brute-force.
+Both love-on-add and discogs-resolve-on-add are **best-effort** (verified: each swallows its own errors and never blocks or fails an `add`). That is correct — but it means a transient failure is silent and permanent unless something re-attempts it. The backfill commands _are_ that re-attempt (the same role `enrich_track` plays for enrichment), so they are infrastructure, not throwaway scripts. Two columns make them targeted instead of brute-force.
 
-Conventions that make this clean (from the schema + DTO): the public DTO is an explicit SQL whitelist (`TRACK_SELECT` + a row-mapper), so a column that isn't added there **never surfaces** — "internal only" is free. Listing orders by `added_at`, not `updated_at`, so these writes won't reshuffle the feed; but `updatedAt` _is_ surfaced (freshness / lastmod) and the enrich-sweep stale clock reads it, so both new columns must be written **quietly** (touch only their own column, don't bump `updated_at`).
+Conventions that make this clean (from the schema + DTO): the public DTO is an explicit SQL whitelist (`TRACK_SELECT` + a row-mapper), so a column that isn't added there **never surfaces** — "internal only" is free. Listing orders by `added_at`, not `updated_at`, so these writes won't reshuffle the feed; but `updatedAt` _is_ surfaced (freshness / lastmod) and the enrich sweep's stale clock reads it, so both new columns must be written **quietly** (touch only their own column, don't bump `updated_at`).
 
 ### `lastfmLovedAt` (`lastfm_loved_at`, `text` ISO, nullable)
 
@@ -103,7 +103,7 @@ Move the contract from the operator tier to the admin tier (agent-allowed) — `
 - `backfill_discogs` (operator → admin)
 - `observe_track` (operator → admin) — **plus** the `observe:${logId}` idempotency key + the Firecrawl untrusted-input boundary
 
-`sweep_enrichment` is **already on the admin tier** (#77 set it there deliberately as the external-cron tier) — no flip needed, it's cron-ready. Newsletter `draft` is agent-allowed and `send` stays operator (per the RFC + the Discord-nudge gate).
+`enrich_track` is **already on the admin tier** (#77 set it there deliberately as the external-cron tier) — no flip needed, it's cron-ready. Newsletter `draft` is agent-allowed and `send` stays operator (per the RFC + the Discord-nudge gate).
 
 ## Setup / mechanism
 
@@ -118,7 +118,7 @@ Move the contract from the operator tier to the admin tier (agent-allowed) — `
 
 ## Build order
 
-1. **Enrichment self-heal cron** — the cheapest win; `sweep_enrichment` is already on the agent tier, so this is just the cron once CLI names settle. Proves the cron pattern.
+1. **Enrichment self-heal cron** — the cheapest win; `enrich_track` is already on the agent tier and the CLI name has settled (`fluncle admin tracks enrich --all`), so this is just the cron. Proves the cron pattern.
 2. **Reliability columns + backfill tier flips** — `lastfmLovedAt`, `discogsStatus` + the resolver refactor; flip `backfill_lastfm` / `backfill_discogs` to the admin tier; then the daily / weekly crons.
 3. **Observation automation** — voice ✅; flip `observe_track` to the admin tier + idempotency, add the `hasObservation` filter on `list_tracks_admin`, add the `observe-context` contract; then the queue-gated cron.
 4. **Newsletter** — rides [newsletter-own-the-stack.md](./rfcs/newsletter-own-the-stack.md); once its send lands, add the draft-then-Discord-nudge tiering. (That RFC moves on its own timeline; this is the Hermes hook on top.)

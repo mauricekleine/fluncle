@@ -82,9 +82,11 @@ export type EnrichSweepResult = {
 // Trigger the self-healing sweep via the admin API — the Worker queries the
 // enrich-queue and re-fires triggerEnrichment for each (idempotent on
 // `enrich:${logId}`, so re-running never duplicates an in-flight run). The CLI
-// stays a thin client: it holds the admin token, never the Spinup key.
+// stays a thin client: it holds the admin token, never the Spinup key. Hits the
+// canonical Convention-B path (`POST /admin/tracks/enrich`); the old
+// `/admin/enrich-sweep` path stays a back-compat alias on the Worker.
 export async function enrichSweepCommand(limit: number): Promise<EnrichSweepResult> {
-  return adminApiPost<EnrichSweepResult>(`/api/admin/enrich-sweep?limit=${limit}`);
+  return adminApiPost<EnrichSweepResult>(`/api/admin/tracks/enrich?limit=${limit}`);
 }
 
 export type LastfmBackfillResult = {
