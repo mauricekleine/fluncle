@@ -107,10 +107,12 @@ describe("appendOnionLocation", () => {
     expect(appendOnionLocation(jsonResponse(), url, "").headers.get("Onion-Location")).toBeNull();
   });
 
-  it("defaults to the inert module constant (ships with no onion advertised)", () => {
+  it("defaults to the live module constant (advertises the web onion per-path)", () => {
     const url = new URL("https://www.fluncle.com/log/241.7.3A");
     const located = appendOnionLocation(htmlResponse(), url);
 
-    expect(located.headers.get("Onion-Location")).toBeNull();
+    expect(located.headers.get("Onion-Location")).toMatch(
+      /^http:\/\/[a-z2-7]{56}\.onion\/log\/241\.7\.3A$/,
+    );
   });
 });

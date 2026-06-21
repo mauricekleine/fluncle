@@ -36,12 +36,12 @@ export function appendAgentLinkHeaders(response: Response): Response {
   return linked;
 }
 
-// The web onion's v3 hostname (without scheme or the trailing `.onion`). Empty
-// until the onion exists: Unit A of the Tor RFC stands up the onionspray mirror
-// on the rave VPS, which generates the address. Filling this in and pushing is
-// the whole of Unit C's go-live — see docs/tor.md. While it is empty,
-// appendOnionLocation is a no-op, so this ships inert.
-const WEB_ONION_HOSTNAME = "";
+// The web onion's v3 hostname (without scheme or the trailing `.onion`). This is
+// the live address minted by the onionspray mirror on the rave VPS (Unit A of
+// the Tor RFC); setting it and pushing is the whole of Unit C's go-live — see
+// docs/tor.md. Once set, appendOnionLocation advertises the onion twin on every
+// HTML response. The private key is custodied in 1Password (op://Fluncle/Tor).
+const WEB_ONION_HOSTNAME = "p53pc2uzfu2tnih4cd6wd42ok6zup2uttj6xdmjdccy5kqo33fyppkqd";
 
 // Advertise the onion twin via the Onion-Location response header (Tor Browser
 // desktop shows a ".onion available" pill that one-clicks to the mirror). Unlike
