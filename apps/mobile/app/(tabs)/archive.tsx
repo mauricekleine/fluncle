@@ -1,7 +1,6 @@
 import { useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { FlatList, Pressable, Text, View } from "react-native";
 import { useRouter } from "expo-router";
-import { FlashList } from "@shopify/flash-list";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { type Galaxy } from "@fluncle/contracts";
 import { flattenFeed, useFindingsFeed } from "@/api/hooks";
@@ -69,7 +68,7 @@ export default function ArchiveScreen() {
             />
           ))}
         </View>
-        <FlashList
+        <FlatList
           data={shown}
           keyExtractor={(f) => f.logId ?? f.trackId}
           renderItem={({ index, item }) => (

@@ -304,8 +304,8 @@ const styles = StyleSheet.create({
     textShadowOffset: { height: 1, width: 0 },
     textShadowRadius: 6,
   },
-  rail: { alignItems: "center", gap: 20, position: "absolute", right: 14 },
-  railItem: { alignItems: "center", gap: 4 },
+  rail: { alignItems: "center", gap: 18, position: "absolute", right: 8 },
+  railItem: { alignItems: "center", gap: 5, width: 62 },
   railLabel: {
     color: color.starlightCream,
     textShadowColor: "rgba(0, 0, 0, 0.55)",
