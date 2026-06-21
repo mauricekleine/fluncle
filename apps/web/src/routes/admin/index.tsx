@@ -1,13 +1,4 @@
-import {
-  CassetteTapeIcon,
-  CircleNotchIcon,
-  CrosshairIcon,
-  FileTextIcon,
-  MicrophoneIcon,
-  NotePencilIcon,
-  PlayIcon,
-  WaveformIcon,
-} from "@phosphor-icons/react";
+import { CassetteTapeIcon, CircleNotchIcon } from "@phosphor-icons/react";
 import {
   type InfiniteData,
   useInfiniteQuery,
@@ -19,12 +10,17 @@ import { createServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AddToMixtapeDialog } from "@/components/admin/add-to-mixtape-dialog";
 import { AdminShell } from "@/components/admin/admin-shell";
+import {
+  type BoardActions,
+  type BoardEntry,
+  boardSteps,
+} from "@/components/admin/pipeline/board-model";
+import { PipelineBoard } from "@/components/admin/pipeline/pipeline-board";
 import { EnrichDialog } from "@/components/admin/enrich-dialog";
 import { NoteDialog } from "@/components/admin/note-dialog";
 import { ContextDialog, ObservationDialog } from "@/components/admin/observation-dialogs";
-import { type PlatformConfig, PLATFORMS } from "@/components/admin/platform-cell";
+import { PLATFORMS } from "@/components/admin/platform-cell";
 import { PushDialog } from "@/components/admin/push-dialog";
-import { StageCell, type StageState } from "@/components/admin/stage-cell";
 import { TagDialog } from "@/components/admin/tag-dialog";
 import { type BoardPage, type BoardRow, usePublish } from "@/components/admin/use-publish";
 import { StoriesPlayer } from "@/components/stories/stories-player";
@@ -32,8 +28,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { GALAXIES, galaxyForVibe } from "@/lib/galaxies";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
-import { type MixtapeDTO, mixtapeDisplayTitle } from "@/lib/mixtapes";
+import { type MixtapeDTO } from "@/lib/mixtapes";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { readCaptions } from "@/lib/server/captions";
 import { listMixtapeMembershipsForTracks, listMixtapes } from "@/lib/server/mixtapes";
@@ -45,22 +40,19 @@ import { type BlockedOn, trackStage } from "@/lib/server/track-stage";
 import { decodeTrackCursor, listTracks, listVibePoints, type VibePoint } from "@/lib/server/tracks";
 import { cn } from "@/lib/utils";
 
-// The pipeline checklist — the operator's `/admin` home. Every finding is a row;
-// every PIPELINE STAGE is a column (Enrich · Tag · YouTube · TikTok), and each
-// cell is binary-legible: done, or the button that does it. The stages aren't a
-// strict chain (tagging doesn't gate publishing, the two platforms go in either
-// order), so each cell stands alone and carries its own state by SHAPE — hollow
-// (open) → dashed (in flight / pushed-not-live) → solid (done) — see StageCell.
+// The operator's `/admin` home. This route owns the data (the social-joined
+// infinite query), the filters (worklist + mixtape lens), and every stage dialog;
+// the rendering is the PipelineBoard grid (components/admin/pipeline). Each finding
+// is a row, each pipeline step a cell, the steps split into two column groups —
+// Agents (an agent does it) and Yours (your hands) — because the pipeline isn't a
+// strict chain: steps run in parallel, fail, and retry. A cell reads by SHAPE
+// (round = agent, square = yours) and FILL (open → in-flight → done), and clicking
+// it opens that step's dialog (Tag → the vibe map; Enrich → the Spinup agent;
+// YouTube/TikTok → the publish loop). The board derives its steps from a pure model
+// (pipeline/board-model) and wires every cell back to the dialogs through `actions`.
 //
-// Rendering isn't a column: a finding either has a video (the cover wears the gold
-// story-ring + play badge) or it doesn't ("no video"). That status lives in the
-// Finding cell, where it already reads at a glance.
-//
-// Clicking a cell opens its stage dialog: Tag → the vibe map; Enrich → trigger the
-// Spinup agent; YouTube/TikTok → the publish loop (copy caption + cover, push, then
-// paste the live URL). Reads + writes go through the same gated admin API the CLI
-// uses. This board is now the single admin surface — it folded in the old Posts and
-// Tag pages.
+// Reads + writes go through the same gated admin API the CLI uses. This board is the
+// single admin surface — it folded in the old Posts and Tag pages.
 
 const PAGE_SIZE = 50;
 
@@ -75,13 +67,6 @@ const SPOTIFY_STATUS_KEY = ["admin", "spotify", "status"] as const;
 const DRAFT_MIXTAPES_KEY = ["admin", "mixtapes", "drafts"] as const;
 // The lazily-read context_note for the Context cell's view dialog, keyed by trackId.
 const CONTEXT_NOTE_KEY = ["admin", "context-note"] as const;
-
-// The two publish platforms, in pipeline order (YouTube posts public directly,
-// TikTok lands as a draft you finish in-app). PLATFORMS is keyed the other way for
-// the posting view; we pin the column order here.
-const PUBLISH_PLATFORMS: PlatformConfig[] = ["youtube", "tiktok"].map(
-  (key) => PLATFORMS.find((platform) => platform.key === key) as PlatformConfig,
-);
 
 // The worklists — a `blockedOn` filter (the next action) plus "all" and a "done"
 // terminal bucket. The active one lives in `?stage` so it's deep-linkable and
@@ -127,15 +112,6 @@ function mixtapeStateOf(row: BoardRow): MixState {
   }
   return row.mixtapes.length > 0 ? "draft" : "open";
 }
-
-// Column template shared by the header + every row so they align: the Log ID
-// (the finding's permanent identity, its own scannable column), the finding (a
-// min-width floor so title + artist never crush), then the equal stage cells
-// (Enrich · Tag · YouTube · TikTok · Context · Observation · Note · Mixtape). The
-// table is wider than a viewport now, so the whole grid lives in a horizontal-scroll
-// wrapper (header + body together) rather than squashing the cells.
-const GRID =
-  "grid grid-cols-[5.5rem_minmax(15rem,1fr)_repeat(8,minmax(6.5rem,8rem))] items-center gap-x-3";
 
 const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
   if (!(await isAdminRequest())) {
@@ -313,7 +289,6 @@ function AdminBoardPage() {
   });
 
   const rows = useMemo(() => data?.pages.flatMap((page) => page.tracks) ?? [], [data]);
-  const totalCount = data?.pages[0]?.totalCount ?? initial.totalCount;
 
   const { busy, error, pushDraft, setError, setStatus } = usePublish(BOARD_KEY);
 
@@ -377,6 +352,20 @@ function AdminBoardPage() {
           (activeMix === "all" || mixtapeStateOf(entry.row) === activeMix),
       ),
     [activeMix, staged, worklistDef],
+  );
+
+  // The board entries every variant reads — the filtered findings plus their derived
+  // lifecycle position and full step list (the shared model). One derivation feeds
+  // the table, the constellation, the lanes, all of them.
+  const entries = useMemo<BoardEntry[]>(
+    () =>
+      visible.map(({ blockedOn, row, stage }) => ({
+        blockedOn,
+        row,
+        stage,
+        steps: boardSteps(row),
+      })),
+    [visible],
   );
 
   // Each axis's pill counts reflect the OTHER axis's active filter, so a pill's
@@ -739,6 +728,23 @@ function AdminBoardPage() {
     return () => observer.disconnect();
   }, [fetchNextPage, hasNextPage, isFetchingNextPage, loadError]);
 
+  // The single action surface every variant opens its dialogs through — each maps a
+  // finding to the right keyed-by-identity dialog the page already owns. Setters are
+  // stable, so this never re-creates.
+  const actions = useMemo<BoardActions>(
+    () => ({
+      onContext: (row) => setContextId(row.trackId),
+      onEnrich: (row) => setEnrichId(row.trackId),
+      onMixtape: (row) => setMixtapeId(row.trackId),
+      onNote: (row) => setNoteId(row.trackId),
+      onObservation: (row) => setObservationId(row.trackId),
+      onPreview: (row) => setPreview(row),
+      onPush: (row, platformKey) => setPush({ platformKey, trackId: row.trackId }),
+      onTag: (row) => setTagId(row.trackId),
+    }),
+    [],
+  );
+
   const subheader = (
     <>
       <SpotifyStatusBanner onReconnect={() => void reconnectSpotify()} status={spotifyStatus} />
@@ -789,95 +795,24 @@ function AdminBoardPage() {
           title="Nothing in this view"
         />
       ) : (
-        <div className="overflow-x-auto">
-          <div className="min-w-[80rem]">
-            {/* Column header */}
-            <div
-              className={cn(
-                GRID,
-                "border-b border-border px-4 py-2 text-xs font-bold text-muted-foreground sm:px-5",
-              )}
-            >
-              <span>Log ID</span>
-              <span>Finding</span>
-              <span className="flex items-center gap-1.5">
-                <WaveformIcon className="size-3.5" weight="fill" />
-                Enrich
-              </span>
-              <span className="flex items-center gap-1.5">
-                <CrosshairIcon className="size-3.5" weight="bold" />
-                Tag
-              </span>
-              {PUBLISH_PLATFORMS.map((platform) => (
-                <span className="flex items-center gap-1.5" key={platform.key}>
-                  <platform.Icon className="size-3.5" weight="fill" />
-                  {platform.label}
-                </span>
-              ))}
-              <span className="flex items-center gap-1.5">
-                <FileTextIcon className="size-3.5" weight="fill" />
-                Context
-              </span>
-              <span className="flex items-center gap-1.5">
-                <MicrophoneIcon className="size-3.5" weight="fill" />
-                Observation
-              </span>
-              <span className="flex items-center gap-1.5">
-                <NotePencilIcon className="size-3.5" weight="bold" />
-                Note
-              </span>
-              <span className="flex items-center gap-1.5">
-                <CassetteTapeIcon className="size-3.5" weight="fill" />
-                Mixtape
-              </span>
+        <>
+          <PipelineBoard actions={actions} entries={entries} />
+          {hasNextPage ? (
+            <div className="border-t border-border p-3 text-center sm:p-4" ref={sentinelRef}>
+              <Button
+                disabled={isFetchingNextPage}
+                onClick={() => void fetchNextPage()}
+                size="sm"
+                variant="outline"
+              >
+                {isFetchingNextPage ? (
+                  <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+                ) : undefined}
+                {isFetchingNextPage ? "Loading…" : "Load more"}
+              </Button>
             </div>
-
-            <ul className="m-0 list-none p-0">
-              {visible.map(({ row }) => (
-                <li
-                  className={cn(
-                    GRID,
-                    "border-b border-border px-4 py-3 transition-colors last:border-b-0 hover:bg-primary/5 sm:px-5",
-                  )}
-                  key={row.trackId}
-                >
-                  <LogIdCell logId={row.logId} />
-                  <FindingCell onPreview={() => setPreview(row)} row={row} />
-                  <EnrichStageCell onOpen={() => setEnrichId(row.trackId)} row={row} />
-                  <TagStageCell onOpen={() => setTagId(row.trackId)} row={row} />
-                  {PUBLISH_PLATFORMS.map((platform) => (
-                    <PublishStageCell
-                      key={platform.key}
-                      onOpen={() => setPush({ platformKey: platform.key, trackId: row.trackId })}
-                      platform={platform}
-                      row={row}
-                    />
-                  ))}
-                  <ContextStageCell onOpen={() => setContextId(row.trackId)} row={row} />
-                  <ObservationStageCell onOpen={() => setObservationId(row.trackId)} row={row} />
-                  <NoteStageCell onOpen={() => setNoteId(row.trackId)} row={row} />
-                  <MixtapeStageCell onOpen={() => setMixtapeId(row.trackId)} row={row} />
-                </li>
-              ))}
-            </ul>
-
-            {hasNextPage ? (
-              <div className="border-t border-border p-3 text-center sm:p-4" ref={sentinelRef}>
-                <Button
-                  disabled={isFetchingNextPage}
-                  onClick={() => void fetchNextPage()}
-                  size="sm"
-                  variant="outline"
-                >
-                  {isFetchingNextPage ? (
-                    <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
-                  ) : undefined}
-                  {isFetchingNextPage ? "Loading…" : "Load more"}
-                </Button>
-              </div>
-            ) : undefined}
-          </div>
-        </div>
+          ) : undefined}
+        </>
       )}
 
       <EnrichDialog
@@ -1017,59 +952,6 @@ function EmptyState({ body, title }: { body: string; title: string }) {
   );
 }
 
-// The finding's permanent identity (sector.orbit.mark), in its own scannable
-// column. Quiet warm mono — Oxanium-family numerals carry the brand without
-// spending the One Sun gold down the whole list.
-function LogIdCell({ logId }: { logId?: string }) {
-  return (
-    <span className="truncate font-mono text-xs tracking-tight text-muted-foreground tabular-nums">
-      {logId ?? ""}
-    </span>
-  );
-}
-
-// The finding: its cover (the only place rendering status lives — a clip wears the
-// gold story-ring + play badge; no badge means no video) plus title + artists.
-function FindingCell({ onPreview, row }: { onPreview: () => void; row: BoardRow }) {
-  return (
-    <div className="flex min-w-0 items-center gap-3">
-      {row.videoUrl ? (
-        // Has a clip → the gold story-ring cue + play badge; opens a single-clip
-        // preview. The One Sun gold, spent on the live artifact.
-        <button
-          aria-label={`Preview ${row.title} clip`}
-          className="group relative size-11 shrink-0 rounded-md shadow-[0_0_14px_-3px_var(--eclipse-gold)] outline-none ring-2 ring-primary transition-transform hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--eclipse-glow)] motion-reduce:transition-none"
-          onClick={onPreview}
-          title="Preview clip"
-          type="button"
-        >
-          <img
-            alt=""
-            className="size-full rounded-md object-cover"
-            src={spotifyAlbumImageAtSize(row.albumImageUrl, "small") ?? "/fluncle-cover.png"}
-          />
-          <span
-            aria-hidden="true"
-            className="absolute -right-1 -bottom-1 flex size-4 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm"
-          >
-            <PlayIcon className="size-2.5" weight="fill" />
-          </span>
-        </button>
-      ) : (
-        <img
-          alt=""
-          className="size-11 shrink-0 rounded-md object-cover"
-          src={spotifyAlbumImageAtSize(row.albumImageUrl, "small") ?? "/fluncle-cover.png"}
-        />
-      )}
-      <div className="min-w-0">
-        <p className="truncate text-sm font-medium">{row.title}</p>
-        <p className="truncate text-xs text-muted-foreground">{row.artists.join(", ")}</p>
-      </div>
-    </div>
-  );
-}
-
 // One filter pill — a worklist or mixtape lens, with its live count. Shared by both
 // groups in the filter strip so they read identically.
 function FilterPill({
@@ -1096,192 +978,5 @@ function FilterPill({
         {count}
       </Badge>
     </Button>
-  );
-}
-
-function EnrichStageCell({ onOpen, row }: { onOpen: () => void; row: BoardRow }) {
-  const status = row.enrichmentStatus;
-  const state: StageState =
-    status === "done" ? "done" : status === "processing" ? "running" : "open";
-  // No detail line — the cell stays single-line (matching the others); the full
-  // BPM + key live in the Enrich dialog.
-
-  return (
-    <StageCell
-      icon={<WaveformIcon className="size-4" weight={state === "open" ? "regular" : "fill"} />}
-      label={state === "done" ? "Enriched" : state === "running" ? "Enriching…" : "Enrich"}
-      onClick={onOpen}
-      state={state}
-      title="Audio analysis on the Spinup agent"
-    />
-  );
-}
-
-function TagStageCell({ onOpen, row }: { onOpen: () => void; row: BoardRow }) {
-  const tagged = row.vibeX !== undefined && row.vibeY !== undefined;
-  const galaxy = row.galaxy?.key ?? (tagged ? galaxyForVibe(row.vibeX!, row.vibeY!) : undefined);
-
-  return (
-    <StageCell
-      icon={
-        galaxy ? (
-          <span className="size-2.5 rounded-full" style={{ background: GALAXIES[galaxy].color }} />
-        ) : (
-          <CrosshairIcon className="size-4" weight="bold" />
-        )
-      }
-      label={tagged ? (galaxy ? GALAXIES[galaxy].name : "Tagged") : "Tag"}
-      onClick={onOpen}
-      state={tagged ? "done" : "open"}
-      title="Place on the vibe map"
-    />
-  );
-}
-
-// The note cell — optional, the last column. A note isn't a pipeline stage; it's
-// the editorial "why" that feeds the finding's log-page prose + schema. The detail
-// line shows a snippet of the note when one exists.
-function NoteStageCell({ onOpen, row }: { onOpen: () => void; row: BoardRow }) {
-  const note = row.note?.trim();
-
-  return (
-    <StageCell
-      detail={note || undefined}
-      icon={<NotePencilIcon className="size-4" weight={note ? "fill" : "regular"} />}
-      label={note ? "Noted" : "Note"}
-      onClick={onOpen}
-      state={note ? "done" : "open"}
-      title="The finding's note — shows on its log page"
-    />
-  );
-}
-
-// The Context cell — the firecrawl-derived context_note that fuels the observation
-// script (internal fuel, docs/agents/observation-agent.md). Binary by shape: solid
-// + a check when a note exists ("facts gathered"), hollow when not. Clicking opens
-// the view dialog (the note text, lazily read). It's not a partial state on its own
-// — a note is either there or it isn't.
-function ContextStageCell({ onOpen, row }: { onOpen: () => void; row: BoardRow }) {
-  const has = row.hasContextNote;
-
-  return (
-    <StageCell
-      icon={<FileTextIcon className="size-4" weight={has ? "fill" : "regular"} />}
-      label={has ? "Context" : "No context"}
-      onClick={onOpen}
-      state={has ? "done" : "open"}
-      title={has ? "View the finding's context note" : "No context note gathered yet"}
-    />
-  );
-}
-
-// The Observation cell — Fluncle's spoken observation.mp3 (the third enrichment
-// artifact). Reads by shape across THREE states: solid + check when the audio is
-// rendered ("there's an observation"); a dashed PARTIAL when the context note is
-// gathered but the audio isn't voiced yet (the real in-between — facts in hand,
-// script un-rendered); hollow when neither exists. Clicking opens the view dialog
-// (plays the clip if rendered). Authoring/rendering is agent-only (the observe
-// endpoint) — this cell is view + status, not a generate trigger.
-function ObservationStageCell({ onOpen, row }: { onOpen: () => void; row: BoardRow }) {
-  const rendered = Boolean(row.observationAudioUrl);
-  const state: StageState = rendered ? "done" : row.hasContextNote ? "partial" : "open";
-  const label = rendered ? "Heard" : row.hasContextNote ? "Context ready" : "No clip";
-
-  return (
-    <StageCell
-      icon={<MicrophoneIcon className="size-4" weight={state === "open" ? "regular" : "fill"} />}
-      label={label}
-      onClick={onOpen}
-      state={state}
-      title={
-        rendered
-          ? "Play the spoken observation"
-          : row.hasContextNote
-            ? "Context gathered — observation not voiced yet"
-            : "No observation rendered yet"
-      }
-    />
-  );
-}
-
-// The Mixtape cell — the last column, after Note (a mixtape is the least-common
-// step). State mirrors membership and reads by shape like every other cell: solid
-// (on a minted checkpoint — "there's a tape for this"), dashed (in a draft, not yet
-// published), or hollow ("add it"). Clicking always opens the picker — a banger can
-// ride more than one tape — and the title lists the tapes it's already on.
-function MixtapeStageCell({ onOpen, row }: { onOpen: () => void; row: BoardRow }) {
-  const mixState = mixtapeStateOf(row);
-  const state: StageState =
-    mixState === "tape" ? "done" : mixState === "draft" ? "partial" : "open";
-  const label = mixState === "tape" ? "On a tape" : mixState === "draft" ? "In a draft" : "Add";
-  const title =
-    row.mixtapes.length > 0
-      ? row.mixtapes
-          .map((mixtape) => {
-            const name = mixtapeDisplayTitle(mixtape.title) || "Draft";
-            return mixtape.logId ? `${mixtape.logId} · ${name}` : name;
-          })
-          .join("\n")
-      : "Add this finding to a mixtape";
-
-  return (
-    <StageCell
-      icon={<CassetteTapeIcon className="size-4" weight={state === "open" ? "regular" : "fill"} />}
-      label={label}
-      onClick={onOpen}
-      state={state}
-      title={title}
-    />
-  );
-}
-
-function PublishStageCell({
-  onOpen,
-  platform,
-  row,
-}: {
-  onOpen: () => void;
-  platform: PlatformConfig;
-  row: BoardRow;
-}) {
-  const post = row.posts.find((entry) => entry.platform === platform.key);
-  const status = post?.status;
-  // The live public URL is the last step of the circuit: YouTube auto-publishes but
-  // records no URL, and TikTok is finished in-app — both land "published" with the
-  // link still missing. That's a PARTIAL (open circuit, dashed), not done; only a
-  // recorded URL closes the cell. Click the partial to paste the live URL.
-  const hasLiveUrl = Boolean(post?.url);
-  const state: StageState =
-    status === "published"
-      ? hasLiveUrl
-        ? "done"
-        : "partial"
-      : status === "draft" || status === "scheduled"
-        ? "partial"
-        : "open";
-  const label =
-    status === "published"
-      ? hasLiveUrl
-        ? "Live"
-        : "Add link"
-      : status === "scheduled"
-        ? "Scheduled"
-        : status === "draft"
-          ? "Drafted"
-          : status === "failed"
-            ? "Retry"
-            : "Push";
-
-  return (
-    <StageCell
-      detail={status === "failed" ? "push failed" : undefined}
-      // Without a video there's nothing to push yet; the cell waits on the render.
-      disabled={!row.videoUrl && !post}
-      icon={<platform.Icon className="size-4" weight={state === "open" ? "regular" : "fill"} />}
-      label={label}
-      onClick={onOpen}
-      state={state}
-      title={!row.videoUrl && !post ? "No video yet — render first" : `${platform.label} publish`}
-    />
   );
 }
