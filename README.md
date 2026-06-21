@@ -8,15 +8,16 @@ Fluncle discovers and certifies drum & bass bangers, logs each as a finding, and
 
 The same archive, reachable however you like. Every surface reads the same public API and shares the same Log IDs.
 
-| Surface    | Where                                                    | What                                                                                                                   |
-| ---------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Web        | <https://www.fluncle.com>                                | The public archive: cover-led, dark, fast. Also `/about`, `/log`, `/log/<id>`                                          |
-| Galaxy     | <https://galaxy.fluncle.com>                             | The game: every finding is a star you can fly to                                                                       |
-| Public API | `https://www.fluncle.com/api/v1/*`                       | JSON reads and submissions; `/api/*` stays as a permanent alias (see [Web](#web), [Submission Flow](#submission-flow)) |
-| RSS        | <https://www.fluncle.com/rss.xml>                        | The 25 most recent findings, for feed readers                                                                          |
-| CLI        | `curl -fsSL https://www.fluncle.com/cli/latest.sh \| sh` | The archive in your terminal (see [CLI](#cli))                                                                         |
-| SSH        | `ssh rave.fluncle.com`                                   | The rave terminal, a Wish/Bubble Tea app (see [SSH](#ssh))                                                             |
-| MCP        | `https://www.fluncle.com/mcp`                            | The archive as agent tools, Streamable HTTP, no auth (see [MCP](#mcp))                                                 |
+| Surface    | Where                                                                   | What                                                                                                                    |
+| ---------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Web        | <https://www.fluncle.com>                                               | The public archive: cover-led, dark, fast. Also `/about`, `/log`, `/log/<id>`                                           |
+| Galaxy     | <https://galaxy.fluncle.com>                                            | The game: every finding is a star you can fly to                                                                        |
+| Public API | `https://www.fluncle.com/api/v1/*`                                      | JSON reads and submissions; `/api/*` stays as a permanent alias (see [Web](#web), [Submission Flow](#submission-flow))  |
+| RSS        | <https://www.fluncle.com/rss.xml>                                       | The 25 most recent findings, for feed readers                                                                           |
+| CLI        | `curl -fsSL https://www.fluncle.com/cli/latest.sh \| sh`                | The archive in your terminal (see [CLI](#cli))                                                                          |
+| SSH        | `ssh rave.fluncle.com`                                                  | The rave terminal, a Wish/Bubble Tea app (see [SSH](#ssh))                                                              |
+| MCP        | `https://www.fluncle.com/mcp`                                           | The archive as agent tools, Streamable HTTP, no auth (see [MCP](#mcp))                                                  |
+| Tor        | `http://p53pc2uzfu2tnih4cd6wd42ok6zup2uttj6xdmjdccy5kqo33fyppkqd.onion` | The whole site mirrored onto Tor, off the grid: the archive plus the API, RSS, and MCP (see [docs/tor.md](docs/tor.md)) |
 
 Crawler and discovery surfaces (all under <https://www.fluncle.com>): `/robots.txt`, `/sitemap.xml`, `/llms.txt`, `/llms-full.txt` (the whole archive in one doc), `/openapi.json`, `/.well-known/api-catalog`, `/.well-known/agent-skills/index.json`, and `/.well-known/mcp/server-card.json`. Public pages also carry schema.org JSON-LD (`WebSite`, `MusicPlaylist`, `MusicGroup`, `FAQPage`, and per-finding `MusicRecording` with the Log ID).
 
