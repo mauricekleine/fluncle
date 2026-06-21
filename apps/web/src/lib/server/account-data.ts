@@ -77,6 +77,47 @@ export type MeResponse = {
   user: null | PublicUser;
 };
 
+// The success shapes of the `/me` read/write helpers. These are RETURN-TYPE
+// annotations only (no behavior change): TypeScript widens a bare `ok: true`
+// sibling of a computed property to `boolean` (and a ternary status to `string`),
+// which the oRPC contract outputs (`z.literal(true)`, the status enum) reject.
+// Pinning the shapes here keeps the wire body byte-identical AND lets the
+// contract stay honest (`ok` literal, status enum), so the handlers can return
+// these helpers' results directly. The Zod mirrors live in
+// `@fluncle/contracts/orpc` (`GalaxyProgress`, `SavedFinding`, `PrivateSubmission`).
+
+/** The Galaxy-progress body (`getGalaxyProgress`). `ok` pinned `true`. */
+export type GalaxyProgressResult = {
+  collectedLogIds: string[];
+  deaths: number;
+  lastPlayedAt?: string;
+  ok: true;
+  updatedAt?: string;
+  wins: number;
+};
+
+/** One saved finding as the list returns it (`listSavedFindings`). */
+export type SavedFindingItem = {
+  artists: string[];
+  logId: string;
+  note?: string;
+  savedAt: string;
+  title: string;
+  trackId: string;
+};
+
+/** One submission as the signed-in user sees it (`listUserSubmissions`). */
+export type PrivateSubmissionItem = {
+  artists: string[];
+  createdAt: string;
+  id: string;
+  note?: string;
+  source: string;
+  spotifyUrl: string;
+  status: "logged" | "passed_on" | "pending_review";
+  title: string;
+};
+
 export async function meResponse(request: Request): Promise<MeResponse> {
   const { getPublicSession } = await import("./public-auth");
   const user = await getPublicSession(request);
@@ -214,7 +255,7 @@ export async function updatePrivateUsername(
   };
 }
 
-export async function getGalaxyProgress(user: PublicUser) {
+export async function getGalaxyProgress(user: PublicUser): Promise<GalaxyProgressResult> {
   await ensureGalaxyState(user.id);
   const db = await getDb();
   const [stateResult, logsResult] = await Promise.all([
@@ -243,7 +284,10 @@ export async function getGalaxyProgress(user: PublicUser) {
   };
 }
 
-export async function mergeGalaxyProgress(user: PublicUser, body: unknown) {
+export async function mergeGalaxyProgress(
+  user: PublicUser,
+  body: unknown,
+): Promise<GalaxyProgressResult | Response> {
   if (!isRecord(body)) {
     return jsonError(400, "invalid_request", "Invalid Galaxy progress");
   }
@@ -267,7 +311,7 @@ export async function collectLogId(
   user: PublicUser,
   logId: string,
   sourceSurface: "cli" | "mcp" | "ssh" | "web" = "web",
-) {
+): Promise<Response | { logId: string; ok: true }> {
   const track = await findTrackByTrackOrLog(logId);
 
   if (!track?.log_id) {
@@ -312,7 +356,9 @@ export async function incrementGalaxyCounters(
   });
 }
 
-export async function listSavedFindings(user: PublicUser) {
+export async function listSavedFindings(
+  user: PublicUser,
+): Promise<{ ok: true; savedFindings: SavedFindingItem[] }> {
   const result = await (
     await getDb()
   ).execute({
@@ -337,7 +383,13 @@ export async function listSavedFindings(user: PublicUser) {
   };
 }
 
-export async function saveFinding(user: PublicUser, body: unknown) {
+export async function saveFinding(
+  user: PublicUser,
+  body: unknown,
+): Promise<
+  | Response
+  | { ok: true; savedFinding: { logId: string; note?: string; savedAt: string; trackId: string } }
+> {
   if (!isRecord(body)) {
     return jsonError(400, "invalid_request", "Invalid saved finding");
   }
@@ -381,7 +433,10 @@ export async function saveFinding(user: PublicUser, body: unknown) {
   };
 }
 
-export async function deleteSavedFinding(user: PublicUser, trackIdOrLogId: string) {
+export async function deleteSavedFinding(
+  user: PublicUser,
+  trackIdOrLogId: string,
+): Promise<Response | { ok: true }> {
   const track = await findTrackByTrackOrLog(trackIdOrLogId);
 
   if (!track) {
@@ -398,7 +453,9 @@ export async function deleteSavedFinding(user: PublicUser, trackIdOrLogId: strin
   return { ok: true };
 }
 
-export async function listUserSubmissions(user: PublicUser) {
+export async function listUserSubmissions(
+  user: PublicUser,
+): Promise<{ ok: true; submissions: PrivateSubmissionItem[] }> {
   const result = await (
     await getDb()
   ).execute({
@@ -428,7 +485,18 @@ export async function listUserSubmissions(user: PublicUser) {
   };
 }
 
-export async function exportAccountData(user: PublicUser) {
+export async function exportAccountData(user: PublicUser): Promise<{
+  export: {
+    account: PublicUser;
+    generatedAt: string;
+    id: string;
+    privacyNotes: string[];
+    progress: GalaxyProgressResult;
+    savedFindings: SavedFindingItem[];
+    submissions: PrivateSubmissionItem[];
+  };
+  ok: true;
+}> {
   const requestedAt = new Date().toISOString();
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   const exportId = randomUUID();
@@ -464,7 +532,22 @@ export async function exportAccountData(user: PublicUser) {
   };
 }
 
-export async function getAccountExport(user: PublicUser, exportId: string) {
+export async function getAccountExport(
+  user: PublicUser,
+  exportId: string,
+): Promise<
+  | Response
+  | {
+      export: {
+        completedAt?: string;
+        expiresAt: string;
+        id: string;
+        requestedAt: string;
+        status: string;
+      };
+      ok: true;
+    }
+> {
   const result = await (
     await getDb()
   ).execute({
@@ -492,7 +575,18 @@ export async function getAccountExport(user: PublicUser, exportId: string) {
   };
 }
 
-export async function deleteAccount(user: PublicUser) {
+export async function deleteAccount(user: PublicUser): Promise<{
+  ok: true;
+  summary: {
+    credentials: string;
+    galaxyProgress: string;
+    savedFindings: string;
+    sessions: string;
+    submissions: string;
+    user: string;
+    verifications: string;
+  };
+}> {
   const db = await getDb();
   const requestedAt = new Date().toISOString();
   const requestId = randomUUID();

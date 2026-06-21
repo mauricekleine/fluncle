@@ -22,6 +22,9 @@
 // live route; resources are plural, the op noun stays singular.
 
 import { healthContract } from "./health";
+import { meContract } from "./me";
+import { meGalaxyContract } from "./me-galaxy";
+import { meSavedContract } from "./me-saved";
 import { mixtapesContract } from "./mixtapes";
 import { newsletterContract } from "./newsletter";
 import { searchContract } from "./search";
@@ -32,6 +35,21 @@ import { tracksContract } from "./tracks";
 // Re-export the per-op contracts so existing importers (and the typed client)
 // keep their entrypoints.
 export { getHealth } from "./health";
+export {
+  deletePrivateAccount,
+  exportPrivateAccountData,
+  getCurrentPrivateUser,
+  getPrivateAccountExport,
+  getPrivateMutationToken,
+  listPrivateSubmissions,
+  updatePrivateProfile,
+} from "./me";
+export {
+  collectPrivateGalaxyLog,
+  getPrivateGalaxyProgress,
+  mergePrivateGalaxyProgress,
+} from "./me-galaxy";
+export { listPrivateSavedFindings, savePrivateFinding, unsavePrivateFinding } from "./me-saved";
 export { listMixtapes } from "./mixtapes";
 export { subscribeNewsletter } from "./newsletter";
 export { searchTracks } from "./search";
@@ -40,6 +58,7 @@ export { submitTrack } from "./submissions";
 export { getRandomTrack, getTrack, listTracks } from "./tracks";
 export {
   MixtapeDTOSchema,
+  PublicUserSchema,
   SubmissionSchema,
   TrackListItemSchema,
   TrackSearchResultSchema,
@@ -57,6 +76,9 @@ export {
  */
 export const contract = {
   ...healthContract,
+  ...meContract,
+  ...meGalaxyContract,
+  ...meSavedContract,
   ...mixtapesContract,
   ...newsletterContract,
   ...searchContract,
