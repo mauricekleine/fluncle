@@ -35,13 +35,15 @@ export type ObservationVoiceSettings = {
   style: number;
 };
 
-// A measured, sparse read for a quiet field observation: high stability (steady),
-// modest style, speed just under 1 so the <break/>s breathe.
+// A measured read for a quiet field observation, tuned by ear for the bespoke
+// Fluncle voice: stability steady-but-not-flat (lower than before, so the read
+// keeps some life), a touch more style for colour, speed just under 1 so the
+// <break/>s breathe.
 export const DEFAULT_VOICE_SETTINGS: ObservationVoiceSettings = {
   similarityBoost: 0.75,
-  speed: 0.92,
-  stability: 0.6,
-  style: 0.15,
+  speed: 0.88,
+  stability: 0.48,
+  style: 0.3,
 };
 
 /** The structured observation the agent authors and posts to /observe. */
