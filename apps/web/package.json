@@ -31,6 +31,10 @@
     "@fluncle/tokens": "workspace:*",
     "@getspinup/sdk": "1.1.1",
     "@libsql/client": "catalog:",
+    "@orpc/contract": "1.14.6",
+    "@orpc/openapi": "1.14.6",
+    "@orpc/server": "1.14.6",
+    "@orpc/zod": "1.14.6",
     "@phosphor-icons/react": "~2.1.10",
     "@scalar/api-reference-react": "^0.9.46",
     "@tailwindcss/vite": "~4.3.0",
@@ -54,7 +58,8 @@
     "sonner": "^2.0.7",
     "tailwind-merge": "~3.6.0",
     "tailwindcss": "~4.3.0",
-    "workers-og": "^0.0.27"
+    "workers-og": "^0.0.27",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "~1.40.0",

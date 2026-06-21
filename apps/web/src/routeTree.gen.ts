@@ -46,6 +46,7 @@ import { Route as AdminLoginRouteImport } from './routes/admin/login'
 import { Route as ApiV1TracksRouteImport } from './routes/api/v1/tracks'
 import { Route as ApiV1SubmissionsRouteImport } from './routes/api/v1/submissions'
 import { Route as ApiV1StoriesRouteImport } from './routes/api/v1/stories'
+import { Route as ApiV1SpikeOrpcOpenapiDotjsonRouteImport } from './routes/api/v1/spike-orpc-openapi[.]json'
 import { Route as ApiV1SearchRouteImport } from './routes/api/v1/search'
 import { Route as ApiV1PostmanDotjsonRouteImport } from './routes/api/v1/postman[.]json'
 import { Route as ApiV1OpenapiDotjsonRouteImport } from './routes/api/v1/openapi[.]json'
@@ -346,6 +347,12 @@ const ApiV1StoriesRoute = ApiV1StoriesRouteImport.update({
   path: '/api/v1/stories',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiV1SpikeOrpcOpenapiDotjsonRoute =
+  ApiV1SpikeOrpcOpenapiDotjsonRouteImport.update({
+    id: '/api/v1/spike-orpc-openapi.json',
+    path: '/api/v1/spike-orpc-openapi.json',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiV1SearchRoute = ApiV1SearchRouteImport.update({
   id: '/api/v1/search',
   path: '/api/v1/search',
@@ -1037,6 +1044,7 @@ export interface FileRoutesByFullPath {
   '/api/v1/openapi.json': typeof ApiV1OpenapiDotjsonRoute
   '/api/v1/postman.json': typeof ApiV1PostmanDotjsonRoute
   '/api/v1/search': typeof ApiV1SearchRoute
+  '/api/v1/spike-orpc-openapi.json': typeof ApiV1SpikeOrpcOpenapiDotjsonRoute
   '/api/v1/stories': typeof ApiV1StoriesRoute
   '/api/v1/submissions': typeof ApiV1SubmissionsRoute
   '/api/v1/tracks': typeof ApiV1TracksRouteWithChildren
@@ -1188,6 +1196,7 @@ export interface FileRoutesByTo {
   '/api/v1/openapi.json': typeof ApiV1OpenapiDotjsonRoute
   '/api/v1/postman.json': typeof ApiV1PostmanDotjsonRoute
   '/api/v1/search': typeof ApiV1SearchRoute
+  '/api/v1/spike-orpc-openapi.json': typeof ApiV1SpikeOrpcOpenapiDotjsonRoute
   '/api/v1/stories': typeof ApiV1StoriesRoute
   '/api/v1/submissions': typeof ApiV1SubmissionsRoute
   '/api/v1/tracks': typeof ApiV1TracksRouteWithChildren
@@ -1342,6 +1351,7 @@ export interface FileRoutesById {
   '/api/v1/openapi.json': typeof ApiV1OpenapiDotjsonRoute
   '/api/v1/postman.json': typeof ApiV1PostmanDotjsonRoute
   '/api/v1/search': typeof ApiV1SearchRoute
+  '/api/v1/spike-orpc-openapi.json': typeof ApiV1SpikeOrpcOpenapiDotjsonRoute
   '/api/v1/stories': typeof ApiV1StoriesRoute
   '/api/v1/submissions': typeof ApiV1SubmissionsRoute
   '/api/v1/tracks': typeof ApiV1TracksRouteWithChildren
@@ -1497,6 +1507,7 @@ export interface FileRouteTypes {
     | '/api/v1/openapi.json'
     | '/api/v1/postman.json'
     | '/api/v1/search'
+    | '/api/v1/spike-orpc-openapi.json'
     | '/api/v1/stories'
     | '/api/v1/submissions'
     | '/api/v1/tracks'
@@ -1648,6 +1659,7 @@ export interface FileRouteTypes {
     | '/api/v1/openapi.json'
     | '/api/v1/postman.json'
     | '/api/v1/search'
+    | '/api/v1/spike-orpc-openapi.json'
     | '/api/v1/stories'
     | '/api/v1/submissions'
     | '/api/v1/tracks'
@@ -1801,6 +1813,7 @@ export interface FileRouteTypes {
     | '/api/v1/openapi.json'
     | '/api/v1/postman.json'
     | '/api/v1/search'
+    | '/api/v1/spike-orpc-openapi.json'
     | '/api/v1/stories'
     | '/api/v1/submissions'
     | '/api/v1/tracks'
@@ -1940,6 +1953,7 @@ export interface RootRouteChildren {
   ApiV1OpenapiDotjsonRoute: typeof ApiV1OpenapiDotjsonRoute
   ApiV1PostmanDotjsonRoute: typeof ApiV1PostmanDotjsonRoute
   ApiV1SearchRoute: typeof ApiV1SearchRoute
+  ApiV1SpikeOrpcOpenapiDotjsonRoute: typeof ApiV1SpikeOrpcOpenapiDotjsonRoute
   ApiV1StoriesRoute: typeof ApiV1StoriesRoute
   ApiV1SubmissionsRoute: typeof ApiV1SubmissionsRoute
   ApiV1TracksRoute: typeof ApiV1TracksRouteWithChildren
@@ -2238,6 +2252,13 @@ declare module '@tanstack/react-router' {
       path: '/api/v1/stories'
       fullPath: '/api/v1/stories'
       preLoaderRoute: typeof ApiV1StoriesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/spike-orpc-openapi.json': {
+      id: '/api/v1/spike-orpc-openapi.json'
+      path: '/api/v1/spike-orpc-openapi.json'
+      fullPath: '/api/v1/spike-orpc-openapi.json'
+      preLoaderRoute: typeof ApiV1SpikeOrpcOpenapiDotjsonRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/v1/search': {
@@ -3572,6 +3593,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiV1OpenapiDotjsonRoute: ApiV1OpenapiDotjsonRoute,
   ApiV1PostmanDotjsonRoute: ApiV1PostmanDotjsonRoute,
   ApiV1SearchRoute: ApiV1SearchRoute,
+  ApiV1SpikeOrpcOpenapiDotjsonRoute: ApiV1SpikeOrpcOpenapiDotjsonRoute,
   ApiV1StoriesRoute: ApiV1StoriesRoute,
   ApiV1SubmissionsRoute: ApiV1SubmissionsRoute,
   ApiV1TracksRoute: ApiV1TracksRouteWithChildren,

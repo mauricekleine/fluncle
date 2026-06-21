@@ -7,9 +7,19 @@ import {
 import { isCacheableLogPath, withEdgeCache } from "./lib/server/edge-cache";
 import { ADMIN_COOKIE_NAME } from "./lib/server/env";
 import { handleMcp } from "./lib/server/mcp";
+import { handleOrpc } from "./lib/server/orpc";
 
 export default createServerEntry({
   async fetch(request) {
+    // SPIKE: oRPC owns `/api/{v1,}/orpc/*`. It returns null when no procedure
+    // matched (the `matched: false` fall-through), so every other request flows
+    // on to the existing handlers unchanged — the incremental-migration seam.
+    const orpc = await handleOrpc(request);
+
+    if (orpc) {
+      return orpc;
+    }
+
     // The MCP endpoint and its server card (the agent tool surface) sit ahead
     // of the router, as do the agent discovery surfaces (well-known endpoints,
     // markdown negotiation); everything else flows through unchanged.
