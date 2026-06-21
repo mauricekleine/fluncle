@@ -20,7 +20,7 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { FontAwesome, Ionicons } from "@expo/vector-icons";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useVideoPlayer, VideoView } from "expo-video";
@@ -193,11 +193,11 @@ export function FeedCard({ finding, active, soundOn, onToggleSound }: Props) {
         ) : null}
         <RailAction
           icon={
-            <FontAwesome
+            <MaterialCommunityIcons
               name="spotify"
-              size={29}
+              size={30}
               color={color.starlightCream}
-              style={[styles.icon, styles.spotifyNudge]}
+              style={styles.icon}
             />
           }
           label="Spotify"
@@ -303,6 +303,4 @@ const styles = StyleSheet.create({
   },
   railLabelActive: { color: color.eclipseGold },
   railPressed: { opacity: 0.6 },
-  // The FontAwesome spotify glyph also sits left of its advance box (optical alignment).
-  spotifyNudge: { transform: [{ translateX: 4 }] },
 });
