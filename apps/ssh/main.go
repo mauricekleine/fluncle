@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -721,6 +722,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = screenSubscribed
 	case tea.MouseWheelMsg:
 		return m.handleWheel(msg)
+	case tea.PasteMsg:
+		return m.handlePaste(msg.Content)
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -917,13 +920,37 @@ func (m model) handleInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "space":
 		m.input += " "
 	default:
-		text := key
-		if len(text) == 1 && text >= " " && text <= "~" {
-			m.input += text
-		}
+		// A printable keypress carries its rune(s) in msg.Text; control keys
+		// (arrows, function keys) leave it empty and are dropped.
+		m.input += sanitizeInput(msg.Text)
 	}
 
 	return m, nil
+}
+
+// handlePaste appends bracketed-paste text to the active input field, so a
+// junglist can paste a Spotify URL (or an email) instead of typing it. Pastes
+// outside an input screen are ignored.
+func (m model) handlePaste(content string) (tea.Model, tea.Cmd) {
+	switch m.screen {
+	case screenSearchInput, screenNoteInput, screenContactInput, screenSubscribe:
+		m.input += sanitizeInput(content)
+	}
+	return m, nil
+}
+
+// sanitizeInput keeps the printable, single-line characters a typed or pasted
+// field can hold and drops control characters (newlines from a multi-line paste,
+// stray escape bytes), so a pasted URL lands clean.
+func sanitizeInput(text string) string {
+	var b strings.Builder
+	for _, r := range text {
+		if unicode.IsControl(r) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 func (m model) handleConfirmKey(key string) (tea.Model, tea.Cmd) {
@@ -1950,11 +1977,17 @@ func (m model) fetchByCoord(coord string) tea.Cmd {
 	}
 }
 
+// maxGalaxyPages caps the catalogue load so a misbehaving endpoint (a
+// non-advancing or repeating cursor) charts what it can and stops, instead of
+// looping forever. 48 pages of 48 covers far more findings than exist.
+const maxGalaxyPages = 48
+
 func (m model) fetchGalaxyTracks() tea.Cmd {
 	return func() tea.Msg {
 		tracks := []track{}
 		cursor := ""
-		for {
+		seen := map[string]bool{}
+		for page := 0; page < maxGalaxyPages; page++ {
 			path := "/api/tracks?limit=48"
 			if cursor != "" {
 				path += "&cursor=" + url.QueryEscape(cursor)
@@ -1967,11 +2000,13 @@ func (m model) fetchGalaxyTracks() tea.Cmd {
 				return galaxyTracksMsg{tracks: tracks, err: err}
 			}
 			tracks = append(tracks, response.Tracks...)
-			if response.NextCursor == "" {
-				return galaxyTracksMsg{tracks: tracks}
+			if response.NextCursor == "" || seen[response.NextCursor] {
+				break
 			}
+			seen[response.NextCursor] = true
 			cursor = response.NextCursor
 		}
+		return galaxyTracksMsg{tracks: tracks}
 	}
 }
 
