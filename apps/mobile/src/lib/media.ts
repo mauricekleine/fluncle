@@ -43,14 +43,24 @@ export function previewProxy(idOrLogId: string) {
 
 /**
  * The per-card media ladder (RFC §0):
- * - clean square master present → portrait crop + native overlay  (rung a)
- * - else → the cover card under preview audio                     (rung b)
- * - cover with no preview → a beautiful silent cover              (rung c)
+ * - clean square master present → square master, view-cropped to portrait (rung a)
+ * - else → the cover card under preview audio                              (rung b)
+ * - cover with no preview → a beautiful silent cover                       (rung c)
  * Legacy findings (videoUrl set but videoSquaredAt absent) deliberately take the
  * cover rung, NOT the baked-text portrait, so the native overlay never double-prints.
+ *
+ * NATIVE PLAYBACK NOTE (verified 2026-06-21): iOS AVPlayer requires HTTP Range
+ * (it probes a 2-byte range first). Cloudflare Media Transformations video URLs
+ * (videoCrop / videoRendition) return 200 with the FULL body — no range — so
+ * AVPlayer fails with CoreMediaError -12939 "byte range length mismatch / server
+ * not correctly configured". Only the RAW masters on found.fluncle.com honor range
+ * (206). So the feed plays the raw square `footage.mp4` and crops to portrait via
+ * VideoView `contentFit="cover"`. (Browsers tolerate the 200 MT crop — this is a
+ * native-only constraint. Tradeoff: the square master is larger than a width
+ * rendition; a range-capable portrait rendition is a Phase-1 backend follow-up.)
  */
 export type CardMedia =
-  | { kind: "video"; videoUrl: string; posterUrl: string; rawUrl: string; hasAudio: true }
+  | { kind: "video"; videoUrl: string; posterUrl: string; hasAudio: true }
   | { kind: "cover"; coverUrl: string | undefined; previewUrl: string | undefined };
 
 export function resolveCardMedia(f: TrackListItem): CardMedia {
@@ -60,8 +70,7 @@ export function resolveCardMedia(f: TrackListItem): CardMedia {
       hasAudio: true,
       kind: "video",
       posterUrl: videoPoster(f.logId),
-      rawUrl: videoMaster(f.logId),
-      videoUrl: videoCrop(f.logId, "portrait"),
+      videoUrl: videoMaster(f.logId),
     };
   }
   return {
