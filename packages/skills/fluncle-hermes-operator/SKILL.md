@@ -33,8 +33,9 @@ If you remember nothing else: **the publish boundary is server-side.** Reaching 
 | Bump the upstream pin or the bundled `fluncle` CLI                             | `docs/agents/hermes/Dockerfile`                                                                                 | rebuild the image on the box + restart + smoke test.                           |
 | Rotate / add a secret (e.g. the agent token)                                   | follow the doc's § Secrets procedure (secret store → env → restart)                                             | re-populate the env from the secret store + restart.                           |
 | Change who may talk to the bot (the allow-list)                                | the Discord allowed-users env (doc § Run / ops notes)                                                           | update the env + restart.                                                      |
+| Add / change an automation cron (enrich self-heal, context-note, observation)  | `docs/agents/hermes/cron/jobs.json` (+ its `README.md`) — the canonical source                                  | recreate each job on the box via Hermes' `cronjob` tool (not hand-edited). See § Crons below. |
 
-The doc's section headings mirror this table (§ The image, § Changing what the agent may do, § Model, § Voice, § Secrets, § Run), so once you know the lever you know where to read.
+The doc's section headings mirror this table (§ The image, § Changing what the agent may do, § Model, § Voice, § Secrets, § Run), so once you know the lever you know where to read. The automation crons live in the build context at `docs/agents/hermes/cron/` (see § Crons below).
 
 ## Invariants (the why, so you don't fight the design)
 
@@ -51,6 +52,16 @@ The doc's section headings mirror this table (§ The image, § Changing what the
 3. **Verify.** Run the doc's § Verify smoke test (CLI present; an agent-allowed read returns `{ok:true}`; a publish-class command is refused with a 403). For a voice or model change, also run the **voice gate** (doc § Voice gate) and confirm it through the live bot in Discord, not just the container. For a Worker role change, confirm the agent token now gets the new allow/deny against the deployed API.
 4. **Quality checks for Worker changes.** Per `AGENTS.md`, run the `apps/web` typecheck / lint / build before pushing — a push to `main` is a production deploy.
 
+## Crons (automation) — prepared, not yet deployed
+
+Hermes is also Fluncle's automation orchestrator (`docs/hermes-automation-brief.md`): hourly, trusted, no-untrusted-input loops over the `fluncle` CLI. The first three crons are **drafted in the repo but not wired on the box** — canonical source at `docs/agents/hermes/cron/` (`jobs.json` + a `README.md` that holds the operator's wire-on-the-box runbook + the verified mechanism). **Nothing is live until the operator wires it.**
+
+- **The three (all hourly, idempotent queue drains):** enrichment self-heal (`tracks enrich --all`), context-note (drain `hasContext=false`, Worker-side Firecrawl), observation (drain `hasContext=true AND hasObservation=false`, author the recovered-audio script with `copywriting-fluncle`, then `observe --script`). All sit under the agent ceiling — reversible, internal, no public footprint — so scheduling them raises no authority an injection could abuse. Backfills and the newsletter are **not** in this set.
+- **Mechanism (verified upstream):** jobs live in `~/.hermes/cron/jobs.json` (**not** `config.yaml`); the gateway ticks every 60 s and runs each due job in a fresh, self-contained agent session. Created via Hermes' `cronjob` tool (`hermes cron create`, chat `/cron add`, conversation) — **not** by hand-copying `jobs.json` onto the box. The repo file is the source of truth; recreate from it.
+- **Gate before wiring:** the CLI admin naming rename must land first (the brief's sole green-light; sibling PR `cli/observe-context-crons`). The context-note job carries a `TODO(cli-rename)` marker — pin the real verb after the rename, then recreate that job. Smoke-test each command by hand on the box before scheduling it, and watch the first ticks (`~/.hermes/cron/output/` + `~/.hermes/logs/`); the observation cron spends ElevenLabs credits per render.
+
+The change still goes through git: edit `docs/agents/hermes/cron/jobs.json`, commit, then recreate on the box. The box is the deploy target, the repo is canonical — same invariant as everything else here.
+
 ## When the bot misbehaves
 
 - Runtime logs live under the agent's state dir (`~/.hermes/logs/`, root-owned); the container's stdout shows init + the banner + warnings, not the full agent log.
@@ -59,4 +70,4 @@ The doc's section headings mirror this table (§ The image, § Changing what the
 
 ---
 
-This skill mirrors `docs/agents/hermes-agent.md`; keep them in step when either changes. When the Hermes-automation work lands (`docs/hermes-automation-brief.md` — scheduled crons, the backfill/observe role flips, the newsletter `draft`/`send` commands), update this skill with the new levers.
+This skill mirrors `docs/agents/hermes-agent.md`; keep them in step when either changes. The first automation crons (enrich self-heal, context-note, observation) are **drafted** (§ Crons, `docs/agents/hermes/cron/`) and the `observe`/agent-tier flips have landed; still to come as the rest of `docs/hermes-automation-brief.md` ships: the Last.fm / Discogs backfill role flips + crons (gated on their reliability columns) and the newsletter `draft`/`send` commands. Add those levers here when they land.
