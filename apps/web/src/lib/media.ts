@@ -203,10 +203,16 @@ export function videoPoster(logId: string, master = "footage.mp4"): string {
 /** Crop orientation for the square master: portrait (mobile) or landscape (desktop). */
 export type CropOrientation = "landscape" | "portrait";
 
-const CROP_DIMENSIONS: Record<CropOrientation, { height: number; width: number }> = {
-  // 16:9 full-screen radio/desktop; 9:16 mobile. Both native off the 1920² square.
-  landscape: { height: 1080, width: 1920 },
-  portrait: { height: 1080 * (16 / 9), width: 1080 },
+// The native crop width per orientation AND the height ratio (height ÷ width)
+// the centre-crop preserves at any requested width. The square master is 1920²:
+// a 9:16 portrait crops to 1080×1920 (ratio 16/9), a 16:9 landscape to 1920×1080
+// (ratio 9/16). When a caller asks for a narrower width (the Stories resolution
+// ladder) height follows the SAME ratio, so the crop stays the exact
+// portrait/landscape aspect — just smaller and lighter on the wire.
+const CROP_GEOMETRY: Record<CropOrientation, { nativeWidth: number; ratio: number }> = {
+  // 16:9 full-screen radio/desktop; 9:16 mobile. Native off the 1920² square.
+  landscape: { nativeWidth: 1920, ratio: 9 / 16 },
+  portrait: { nativeWidth: 1080, ratio: 16 / 9 },
 };
 
 /**
@@ -217,12 +223,39 @@ const CROP_DIMENSIONS: Record<CropOrientation, { height: number; width: number }
  * the only crop-to-fill fit Cloudflare video MT accepts — `crop` 400s.) Only
  * valid for a finding under the two-master layout (its `footage.mp4` is the clean
  * square) — callers gate on `videoSquaredAt`.
+ *
+ * `width` snaps the crop to a resolution-ladder rung (Stories sizes the crop to
+ * the measured pane, not the native 1080/1920); height follows the orientation's
+ * aspect so the crop stays exactly portrait/landscape. Defaults to the native
+ * width, so the fixed-resolution caller (/log) reads the same URL as before.
  */
-export function videoCrop(logId: string, orientation: CropOrientation): string {
+export function videoCrop(logId: string, orientation: CropOrientation, width?: number): string {
   const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`);
-  const { height, width } = CROP_DIMENSIONS[orientation];
+  const { nativeWidth, ratio } = CROP_GEOMETRY[orientation];
+  const cropWidth = width ?? nativeWidth;
+  const cropHeight = Math.round(cropWidth * ratio);
 
-  return `${MEDIA_TRANSFORM_BASE}/fit=cover,width=${width},height=${height}/${source}`;
+  return `${MEDIA_TRANSFORM_BASE}/fit=cover,width=${cropWidth},height=${cropHeight}/${source}`;
+}
+
+/**
+ * The poster twin of `videoCrop`: a single opening frame, CENTRE-CROPPED to
+ * `orientation` off the square master. Cloudflare MT accepts `fit=cover` combined
+ * with `mode=frame` (verified 200 on a live portrait crop), so the squared poster
+ * matches the cropped clip's aspect instead of a square loading frame. Same
+ * gating as `videoCrop` — only valid under the two-master layout.
+ */
+export function videoCropPoster(
+  logId: string,
+  orientation: CropOrientation,
+  width?: number,
+): string {
+  const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`);
+  const { nativeWidth, ratio } = CROP_GEOMETRY[orientation];
+  const cropWidth = width ?? nativeWidth;
+  const cropHeight = Math.round(cropWidth * ratio);
+
+  return `${MEDIA_TRANSFORM_BASE}/fit=cover,width=${cropWidth},height=${cropHeight},mode=frame,time=0s,format=jpg/${source}`;
 }
 
 /**

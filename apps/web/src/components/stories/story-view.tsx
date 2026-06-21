@@ -3,7 +3,14 @@ import { siSpotify, siTiktok } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
 import { Button } from "@/components/ui/button";
 import { formatDate } from "@/lib/format";
-import { spotifyAlbumImageAtSize, trackMedia, videoPoster, videoRendition } from "@/lib/media";
+import {
+  spotifyAlbumImageAtSize,
+  trackMedia,
+  videoCrop,
+  videoCropPoster,
+  videoPoster,
+  videoRendition,
+} from "@/lib/media";
 import { type Track } from "@/lib/tracks";
 import { useResponsiveWidth } from "@/lib/use-responsive-width";
 
@@ -31,26 +38,35 @@ export function StoryView({
   track: Track;
 }) {
   const media = track.logId ? trackMedia(track.logId) : undefined;
-  // Stories is a social-post format: it always plays the PORTRAIT baked-text cut.
-  // Under the two-master layout (videoSquaredAt set) that is footage.social.mp4 —
-  // the stored video_url is then the clean square crop source, which Stories must
-  // NOT play. A legacy finding (no signal) keeps playing footage.mp4 (its old
-  // portrait+text cut), so un-migrated tracks are unchanged (docs/video-variants.md).
+  // Stories renders the finding's frame (Log ID, title, artist) over the video in
+  // the DOM, so it must NOT also burn the baked-text social cut underneath — that
+  // doubles the text. Under the two-master layout (videoSquaredAt set) footage.mp4
+  // is the CLEAN square master, so Stories requests an MT centre-crop to portrait
+  // off it — the same clean crop /log + radio play, sized to the pane. A legacy
+  // finding (no signal) has no clean square; it keeps playing its old footage.mp4
+  // portrait+text cut (with the baked text), so un-migrated tracks are unchanged
+  // (docs/video-variants.md).
   const squared = Boolean(track.videoSquaredAt);
-  const masterName = squared ? "footage.social.mp4" : "footage.mp4";
-  const masterVideoUrl = squared ? (media?.socialVideoUrl ?? track.videoUrl) : track.videoUrl;
+  // Both layouts use footage.mp4 as the master: squared findings centre-crop it
+  // to portrait; legacy findings play it as-is (its old portrait+text cut). It is
+  // also the onError fallback the <video> re-points at if the edge transform fails.
+  const masterVideoUrl = track.videoUrl;
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   // Play a same-zone Media Transformations rendition sized to the pane, not the
   // 1080-wide master, once the pane is measured (undefined on the server / first
   // paint, where we hold the master). A one-shot onError drops back to the raw
   // master, so a straggler above Cloudflare's 100MB source ceiling — or any edge
-  // error — still plays.
+  // error — still plays. Squared findings request a clean portrait centre-crop
+  // off the square master at the same ladder width; legacy findings a plain
+  // width-ladder rendition off the portrait footage.mp4.
   const renditionWidth = useResponsiveWidth(videoRef);
   const [renditionFailed, setRenditionFailed] = useState(false);
   const videoUrl =
     masterVideoUrl && track.logId && renditionWidth && !renditionFailed
-      ? videoRendition(track.logId, { master: masterName, width: renditionWidth })
+      ? squared
+        ? videoCrop(track.logId, "portrait", renditionWidth)
+        : videoRendition(track.logId, { width: renditionWidth })
       : masterVideoUrl;
 
   const [posterFailed, setPosterFailed] = useState(false);
@@ -58,10 +74,16 @@ export function StoryView({
   // bundle's poster.jpg, then the album art, as each upstream fails. The
   // <video> poster attribute has no error event, so an Image() probe validates
   // the frame transform and flips to the bundle poster if the edge can't make
-  // it (e.g. a >100MB source straggler).
+  // it (e.g. a >100MB source straggler). For squared findings the frame is
+  // portrait-cropped to match the cropped clip (Cloudflare MT accepts
+  // fit=cover + mode=frame); legacy findings take the plain opening frame.
   const [framePosterFailed, setFramePosterFailed] = useState(false);
   const framePoster =
-    track.logId && !framePosterFailed ? videoPoster(track.logId, masterName) : undefined;
+    track.logId && !framePosterFailed
+      ? squared
+        ? videoCropPoster(track.logId, "portrait", renditionWidth)
+        : videoPoster(track.logId)
+      : undefined;
   const posterUrl =
     framePoster ??
     (!posterFailed ? media?.posterUrl : undefined) ??

@@ -5,6 +5,7 @@ import {
   trackMedia,
   videoAudioStripped,
   videoCrop,
+  videoCropPoster,
   videoPoster,
   videoRendition,
 } from "./media";
@@ -69,6 +70,52 @@ describe("videoCrop", () => {
 
   it("encodes the Log ID in the source URL", () => {
     expect(videoCrop("a/b c", "portrait")).toContain(`${FOUND_BASE}/a%2Fb%20c/footage.mp4`);
+  });
+
+  it("snaps the crop to a ladder width, deriving height from the portrait aspect (16/9)", () => {
+    // Stories sizes the crop to the measured pane (a 720-rung phone), not the
+    // native 1080. Height follows the 16/9 portrait ratio: round(720 * 16/9) = 1280.
+    expect(videoCrop("ABC123", "portrait", 720)).toBe(
+      `${FOUND_BASE}/cdn-cgi/media/fit=cover,width=720,height=1280/${FOUND_BASE}/ABC123/footage.mp4?v=1`,
+    );
+  });
+
+  it("derives the landscape height from the 9/16 ratio at a requested width", () => {
+    // round(1280 * 9/16) = 720.
+    expect(videoCrop("ABC123", "landscape", 1280)).toBe(
+      `${FOUND_BASE}/cdn-cgi/media/fit=cover,width=1280,height=720/${FOUND_BASE}/ABC123/footage.mp4?v=1`,
+    );
+  });
+
+  it("falls back to the native width when none is given (the /log caller is unchanged)", () => {
+    expect(videoCrop("ABC123", "portrait")).toBe(videoCrop("ABC123", "portrait", 1080));
+    expect(videoCrop("ABC123", "landscape")).toBe(videoCrop("ABC123", "landscape", 1920));
+  });
+});
+
+// The squared poster twin: a single opening frame, centre-cropped to the same
+// orientation as videoCrop (Cloudflare MT accepts fit=cover + mode=frame —
+// verified 200 on a live portrait crop), so the squared <video> poster matches
+// the cropped clip instead of a square loading frame.
+describe("videoCropPoster", () => {
+  it("builds a fit=cover + mode=frame portrait poster off the square master", () => {
+    expect(videoCropPoster("ABC123", "portrait")).toBe(
+      `${FOUND_BASE}/cdn-cgi/media/fit=cover,width=1080,height=1920,mode=frame,time=0s,format=jpg/${FOUND_BASE}/ABC123/footage.mp4?v=1`,
+    );
+  });
+
+  it("snaps to a ladder width with height from the portrait aspect", () => {
+    expect(videoCropPoster("ABC123", "portrait", 720)).toBe(
+      `${FOUND_BASE}/cdn-cgi/media/fit=cover,width=720,height=1280,mode=frame,time=0s,format=jpg/${FOUND_BASE}/ABC123/footage.mp4?v=1`,
+    );
+  });
+
+  it("rides the cache-bust token so a re-rendered master re-keys the poster", () => {
+    expect(videoCropPoster("ABC123", "portrait")).toContain("/footage.mp4?v=");
+  });
+
+  it("encodes the Log ID in the source URL", () => {
+    expect(videoCropPoster("a/b c", "portrait")).toContain(`${FOUND_BASE}/a%2Fb%20c/footage.mp4`);
   });
 });
 
