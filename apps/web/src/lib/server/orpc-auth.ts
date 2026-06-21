@@ -67,17 +67,26 @@ export const adminAuth = base.middleware(async ({ context, next }) => {
 // then branch on `context.role` in-handler.
 export const adminProcedure = base.use(adminAuth);
 
-// `operatorProcedure` — operator only. A valid `agent` token gets a 403 (it
-// authenticated fine, it just lacks the role); a non-admin a 401 (from
-// `adminAuth`, which runs first). Use on every publish-/irreversible-class op.
-// ORPCError("FORBIDDEN") maps to HTTP 403.
-export const operatorProcedure = adminProcedure.use(({ context, next }) => {
+// `operatorGuard` — the operator-only check as a standalone MIDDLEWARE (the fine
+// half of `operatorProcedure`). It assumes `adminAuth` has already run (so
+// `context.role` is non-null): a valid `agent` token gets a 403 (it authenticated
+// fine, it just lacks the role). A contract op implements the operator tier by
+// applying BOTH — `os.<op>.use(adminAuth).use(operatorGuard)` — because a contract
+// op `.use()`s middleware rather than building off `operatorProcedure` (which is a
+// standalone procedure for `call()`/tests). ORPCError("FORBIDDEN") maps to HTTP 403.
+export const operatorGuard = os.$context<AdminContext>().middleware(({ context, next }) => {
   if (context.role !== "operator") {
     throw new ORPCError("FORBIDDEN", { message: "This action requires the operator role" });
   }
 
   return next();
 });
+
+// `operatorProcedure` — operator only. A valid `agent` token gets a 403 (it
+// authenticated fine, it just lacks the role); a non-admin a 401 (from
+// `adminAuth`, which runs first). Use on every publish-/irreversible-class op.
+// ORPCError("FORBIDDEN") maps to HTTP 403.
+export const operatorProcedure = adminProcedure.use(operatorGuard);
 
 // ── The private-user auth tier (the `/me` cookie-session spine) ───────────────
 // The analogue of the admin spine above, for the OTHER identity: the logged-in
