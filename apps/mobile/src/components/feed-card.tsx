@@ -286,12 +286,15 @@ function RailAction({
 }) {
   return (
     <Pressable
-      hitSlop={8}
+      hitSlop={6}
       onPress={onPress}
-      style={({ pressed }) => [styles.railItem, pressed ? { opacity: 0.6 } : null]}
+      style={({ pressed }) => [styles.railItem, pressed ? styles.railPressed : null]}
     >
-      {icon}
-      <Text style={[font.label, styles.railLabel, active ? { color: color.eclipseGold } : null]}>
+      <View style={styles.railIcon}>{icon}</View>
+      <Text
+        style={[font.label, styles.railLabel, active ? styles.railLabelActive : null]}
+        numberOfLines={1}
+      >
         {label}
       </Text>
     </Pressable>
@@ -304,12 +307,17 @@ const styles = StyleSheet.create({
     textShadowOffset: { height: 1, width: 0 },
     textShadowRadius: 6,
   },
-  rail: { alignItems: "center", gap: 18, position: "absolute", right: 8 },
-  railItem: { alignItems: "center", gap: 5, width: 62 },
+  rail: { alignItems: "center", gap: 16, position: "absolute", right: 6 },
+  railIcon: { alignItems: "center", height: 36, justifyContent: "center", width: 36 },
+  railItem: { alignItems: "center", gap: 3, width: 60 },
   railLabel: {
     color: color.starlightCream,
+    fontSize: 11,
+    textAlign: "center",
     textShadowColor: "rgba(0, 0, 0, 0.55)",
     textShadowOffset: { height: 1, width: 0 },
     textShadowRadius: 6,
   },
+  railLabelActive: { color: color.eclipseGold },
+  railPressed: { opacity: 0.6 },
 });
