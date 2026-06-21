@@ -121,11 +121,18 @@ describe("videoCropPoster", () => {
 });
 
 describe("videoAudioStripped", () => {
-  it("wraps a same-zone source in an audio=false transform", () => {
+  it("strips audio at the native 1080 portrait width (≥720p for TikTok)", () => {
     const source = `${FOUND_BASE}/ABC123/footage.social.mp4`;
     expect(videoAudioStripped(source)).toBe(
-      `${FOUND_BASE}/cdn-cgi/media/audio=false/${source}?v=1`,
+      `${FOUND_BASE}/cdn-cgi/media/mode=video,audio=false,width=1080/${source}?v=1`,
     );
+  });
+
+  // audio=false ALONE collapses to Cloudflare MT's ~202px default — a sub-720p
+  // cut TikTok rejects. The width is the load-bearing part of the fix, so pin it.
+  it("requests an explicit width so the rendition is never the degenerate MT default", () => {
+    const source = `${FOUND_BASE}/ABC123/footage.social.mp4`;
+    expect(videoAudioStripped(source)).toContain("width=1080");
   });
 });
 

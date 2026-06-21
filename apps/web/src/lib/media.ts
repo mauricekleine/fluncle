@@ -298,12 +298,25 @@ export function videoCropPoster(
 }
 
 /**
- * Strip the audio track from any same-zone master via `audio=false`. The TikTok
- * push reaches for this off `footage.social.mp4` so the operator attaches the
- * licensed sound in-app — replacing the stored `footage-silent.mp4` cut, which
- * is retired under the two-master model. `source` must be a full found.fluncle.com
- * URL (same zone as the transform base).
+ * The native portrait width the audio-stripped social cut is emitted at. The
+ * source `footage.social.mp4` is a 1080×1920 portrait, so requesting 1080 keeps
+ * the rendition full-resolution (no upscale) — and ≥720p, which TikTok requires.
+ */
+const AUDIO_STRIPPED_WIDTH = 1080;
+
+/**
+ * Strip the audio track from a same-zone portrait master via `audio=false`. The
+ * TikTok push reaches for this off `footage.social.mp4` so the operator attaches
+ * the licensed sound in-app — replacing the stored `footage-silent.mp4` cut,
+ * which is retired under the two-master model. `source` must be a full
+ * found.fluncle.com URL (same zone as the transform base).
+ *
+ * `mode=video,width=1080` is REQUIRED, not decorative: `audio=false` ALONE is a
+ * degenerate transform — with no width, Cloudflare MT falls back to its tiny
+ * default (~202px wide, verified by ffprobe), which TikTok rejects with "Video
+ * must be at least 720p". Pinning the native 1080 portrait width emits a proper
+ * ≥720p H264 cut with the audio dropped.
  */
 export function videoAudioStripped(source: string): string {
-  return `${MEDIA_TRANSFORM_BASE}/audio=false/${versionedSource(source)}`;
+  return `${MEDIA_TRANSFORM_BASE}/mode=video,audio=false,width=${AUDIO_STRIPPED_WIDTH}/${versionedSource(source)}`;
 }
