@@ -28,6 +28,11 @@
       "sourceType": "local",
       "computedHash": "ab3290ff51f3a3fdf0a9ce690da460f45090664bca4b93987814a4502cf0b8f4"
     },
+    "fluncle-hermes-operator": {
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-hermes-operator",
+      "sourceType": "local",
+      "computedHash": "aaf7a0cc299806a39be9b769639895f394ebad177fe7fdcaf5e5a8e22de43e3f"
+    },
     "fluncle-mixtapes": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-mixtapes",
       "sourceType": "local",
