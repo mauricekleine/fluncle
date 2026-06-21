@@ -21,9 +21,9 @@ import { OpenAPIGenerator } from "@orpc/openapi";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { implement, ORPCError } from "@orpc/server";
 import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
-import { apiErrorResponse } from "./http-errors";
 import { resolveLogPageTarget } from "./log-resolver";
 import { type OrpcContext } from "./orpc-auth";
+import { ApiError } from "./spotify";
 
 // The contract implementer, pinned to the same request-carrying context the admin
 // spine uses (./orpc-auth), so one OpenAPIHandler routes public + admin ops off a
@@ -52,16 +52,15 @@ const getTrack = os.get_track.handler(async ({ input }) => {
       ? ({ mixtape: target.mixtape, ok: true } as const)
       : ({ ok: true, track: target.track } as const);
   } catch (error) {
-    // Re-throw oRPC's own errors (the 404 above) so it shapes the response;
-    // anything else is an unexpected fault — map it through the shared API error
-    // shape's status so behavior matches the TanStack route it replaces.
+    // Re-throw oRPC's own errors (the 404 above) so the rails encoder shapes the
+    // response; anything else is an unexpected fault — convert it through the
+    // shared `apiFault` helper so its status, code, and message match the
+    // TanStack route it replaces.
     if (error instanceof ORPCError) {
       throw error;
     }
 
-    const response = apiErrorResponse(error);
-
-    throw new ORPCError("INTERNAL_SERVER_ERROR", { status: response.status });
+    throw apiFault(error);
   }
 });
 
@@ -75,10 +74,100 @@ export const router = os.router({
 /** The router type a client imports (`import type { Router }`) to derive a fully typed client. */
 export type Router = typeof router;
 
+// ── Error wire-shape parity ──────────────────────────────────────────────────
+// Every converted route inherits this. oRPC's default error body is its own
+// envelope (`{ defined, code, status, message, data }`); the live API speaks the
+// `jsonError` shape — body `{ code, message, ok: false }` with the status on the
+// Response (apps/web/src/lib/server/env.ts → http-errors.ts). Public consumers
+// (the CLI, the enrichment agent, the web app) read `{ ok: false, code, message }`,
+// so we re-encode every thrown `ORPCError` into that shape here, at the rails, and
+// every fan-out route is wire-compatible by construction. oRPC still drives the
+// HTTP status off `error.status`; the encoder only rewrites the body.
+
+// The API `code`/`message` an `ORPCError` can carry through to the wire when the
+// thrown code itself can't say them. Faults converted from an `ApiError` (e.g.
+// `note_too_long` at 422) or a generic 500 stash their legacy `{ code, message }`
+// here so the encoder reproduces the exact `jsonError` body, not a lossy mapping.
+type ApiFaultData = { apiCode: string; apiMessage: string };
+
+function isApiFaultData(data: unknown): data is ApiFaultData {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    typeof (data as ApiFaultData).apiCode === "string" &&
+    typeof (data as ApiFaultData).apiMessage === "string"
+  );
+}
+
+// oRPC codes are SCREAMING_SNAKE; the API's `code` field is lower_snake. Map the
+// load-bearing ones to the exact codes the legacy routes emit; everything else
+// lower-cases by convention so a new code never leaks the oRPC spelling.
+const ORPC_CODE_TO_API_CODE: Record<string, string> = {
+  // oRPC raises BAD_REQUEST for input (Zod) validation failures; the API's own
+  // bad-body path is `invalid_request` (http-errors.ts → parseJsonBody).
+  BAD_REQUEST: "invalid_request",
+  // A generic fault that reached the rails as a bare 500 → `error` (http-errors.ts).
+  INTERNAL_SERVER_ERROR: "error",
+  // `trackNotFoundResponse` → `not_found` (http-errors.ts).
+  NOT_FOUND: "not_found",
+};
+
+function orpcCodeToApiCode(code: string): string {
+  return ORPC_CODE_TO_API_CODE[code] ?? code.toLowerCase();
+}
+
+/**
+ * Convert an unexpected (non-`ORPCError`) fault into an `ORPCError` whose status,
+ * code, and message match the legacy `apiErrorResponse` (http-errors.ts): an
+ * `ApiError` keeps its own status/code/message; anything else is a 500 with code
+ * `error`. The legacy `{ code, message }` ride along in `data` so the rails
+ * encoder reproduces the exact `jsonError` body. Shared so every converted
+ * handler's catch can `throw apiFault(error)` for one wire-compatible 500 path.
+ */
+function apiFault(error: unknown): ORPCError<string, ApiFaultData> {
+  const apiCode = error instanceof ApiError ? error.code : "error";
+  const apiMessage = error instanceof Error ? error.message : String(error);
+  const status = error instanceof ApiError ? error.status : 500;
+
+  return new ORPCError("INTERNAL_SERVER_ERROR", {
+    data: { apiCode, apiMessage },
+    message: apiMessage,
+    status,
+  });
+}
+
+/**
+ * Re-encode a thrown `ORPCError` into the legacy `jsonError` body shape
+ * (`{ code, message, ok: false }`). Returned to `OpenAPIHandler` as the response
+ * body; the HTTP status stays `error.status`, so a 404 stays 404, a 500 stays 500.
+ * A fault carrying `ApiFaultData` (from `apiFault`) wins so a converted `ApiError`
+ * keeps its exact code/message; otherwise the code maps off the oRPC code.
+ */
+function encodeErrorBody(error: ORPCError<string, unknown>) {
+  if (isApiFaultData(error.data)) {
+    return {
+      code: error.data.apiCode,
+      message: error.data.apiMessage,
+      ok: false as const,
+    };
+  }
+
+  return {
+    code: orpcCodeToApiCode(error.code),
+    message: error.message,
+    ok: false as const,
+  };
+}
+
 // One handler instance, reused across requests. Dual-mounted under `/api/v1` and
 // `/api` to preserve the permanent back-compat alias for every migrated route:
 // each request is tried against the canonical prefix first, then the bare one.
-const handler = new OpenAPIHandler(router);
+// `customErrorResponseBodyEncoder` rewrites every thrown error into the legacy
+// `jsonError` body (see above), so error-shape parity is a rails concern, not a
+// per-handler one.
+const handler = new OpenAPIHandler(router, {
+  customErrorResponseBodyEncoder: encodeErrorBody,
+});
 
 const PRIMARY_PREFIX = "/api/v1";
 const ALIAS_PREFIX = "/api";

@@ -89,13 +89,35 @@ describe("oRPC proof route — GET /tracks/{idOrLogId} (get_track)", () => {
     expect(await response?.json()).toEqual({ mixtape: MIXTAPE, ok: true });
   });
 
-  it("404s when nothing resolves", async () => {
+  it("404s when nothing resolves — body parity with the legacy jsonError shape", async () => {
     resolveLogPageTarget.mockResolvedValueOnce(undefined);
 
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(get("https://www.fluncle.com/api/v1/tracks/nope"));
 
     expect(response?.status).toBe(404);
+    // Byte-shape parity with trackNotFoundResponse → jsonError(404, "not_found", …):
+    // `{ code: "not_found", message: <string>, ok: false }`, nothing else.
+    expect(await response?.json()).toEqual({
+      code: "not_found",
+      message: expect.any(String),
+      ok: false,
+    });
+  });
+
+  it("500s an unexpected fault as { code: 'error', message, ok: false }", async () => {
+    resolveLogPageTarget.mockRejectedValueOnce(new Error("turso fell over"));
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(get("https://www.fluncle.com/api/v1/tracks/abc"));
+
+    expect(response?.status).toBe(500);
+    // Parity with apiErrorResponse's generic arm → jsonError(500, "error", message).
+    expect(await response?.json()).toEqual({
+      code: "error",
+      message: "turso fell over",
+      ok: false,
+    });
   });
 });
 
