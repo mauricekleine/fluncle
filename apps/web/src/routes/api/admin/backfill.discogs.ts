@@ -11,8 +11,13 @@ import { apiErrorResponse } from "../../../lib/server/http-errors";
 // on a confident match the ids are written SERVER-SIDE (the same columns
 // publishTrack sets), never through the generic PATCH endpoint, which doesn't
 // expose them. Admin-gated + Worker-only (the Worker holds DISCOGS_USER_TOKEN);
-// rows that already have a release id are skipped (idempotent). The CLI's
-// `fluncle admin backfill discogs` is a thin client over this.
+// rows that already have a release id are skipped (idempotent).
+//
+// BATCHED: each resolve runs under a ~1.1s rate limiter, so one request handles
+// only a bounded pass of eligible findings and returns `nextCursor` (the feed
+// cursor to resume from, or null when the archive is drained). The CLI's
+// `fluncle admin backfill discogs` loops `?cursor=` until null — this is what
+// keeps a full sweep from exceeding the Worker request budget.
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 500;
@@ -48,10 +53,12 @@ export const serverHandlers: ApiHandlers = {
       const result = await backfillDiscogsIds(
         parseLimit(url.searchParams.get("limit")),
         parseBool(url.searchParams.get("dryRun")),
+        url.searchParams.get("cursor") ?? undefined,
       );
 
       return Response.json({
         dryRun: result.dryRun,
+        nextCursor: result.nextCursor,
         ok: true,
         resolved: result.resolved,
         resolvedCount: result.resolvedCount,

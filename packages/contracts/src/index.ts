@@ -81,6 +81,15 @@ export type TrackListItem = {
   updatedAt?: string;
   videoModel?: string;
   videoModelReasoning?: string;
+  /**
+   * When the SQUARE crop-source master was uploaded (ISO). Its PRESENCE is the
+   * two-master layout signal (docs/video-variants.md): set → `footage.mp4` is the
+   * clean 1920×1920 master archive surfaces MT-crop on the fly, with a baked
+   * portrait `footage.social.mp4` alongside; absent → the legacy single-file
+   * layout (`footage.mp4` is the old portrait+text cut). Consumers fall back to
+   * today's behavior when it's absent.
+   */
+  videoSquaredAt?: string;
   videoUrl?: string;
   videoVehicle?: string;
   vibeX?: number;

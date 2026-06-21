@@ -1,6 +1,6 @@
 // Entry point for the local social-preview pipeline.
 //
-//   bun src/pipeline/social-preview.ts <trackId|logId> [--skip-render] [--composition <Id>] [--composition-source <file>] [--duration-ms <10000-30000>] [--draft] [--no-overlay] [--aspect <portrait|landscape>] [--landscape]
+//   bun src/pipeline/social-preview.ts <trackId|logId> [--skip-render] [--composition <Id>] [--composition-source <file>] [--duration-ms <10000-30000>] [--draft] [--no-overlay] [--aspect <portrait|landscape|square>] [--landscape]
 //
 // The positional id is a Spotify trackId or a Log ID (e.g. 004.6.0K) — the
 // latter lets you re-render an older clip that's aged out of the feed window.
@@ -86,13 +86,19 @@ async function main(): Promise<void> {
   // over clean footage. Threaded as props.hideOverlay (gated inside the
   // primitives via getInputProps, so no composition edit is needed).
   const hideOverlay = args.includes("--no-overlay");
-  // --aspect <portrait|landscape> (or the --landscape shorthand) selects the
-  // output dimensions. Portrait (1080×1920) stays the default; landscape
-  // (1920×1080) is the radio full-screen cut — the 9:16 shaders reflow under it.
+  // --aspect <portrait|landscape|square> (or the --landscape shorthand) selects
+  // the output dimensions. Portrait (1080×1920) stays the default; landscape
+  // (1920×1080) is the radio full-screen cut; square (1920×1920) is the clean
+  // source master MT crops to either orientation on the fly — the 9:16 shaders
+  // reflow under landscape/square (see docs/video-variants.md).
   const aspectFlagIndex = args.indexOf("--aspect");
   const aspectArg = aspectFlagIndex >= 0 ? args[aspectFlagIndex + 1] : undefined;
   const aspect: CosmosAspect =
-    args.includes("--landscape") || aspectArg === "landscape" ? "landscape" : "portrait";
+    args.includes("--landscape") || aspectArg === "landscape"
+      ? "landscape"
+      : aspectArg === "square"
+        ? "square"
+        : "portrait";
   const valueIndexes = new Set(
     [
       compositionFlagIndex + 1,
@@ -106,12 +112,15 @@ async function main(): Promise<void> {
     !trackId ||
     (compositionFlagIndex >= 0 && !compositionId) ||
     (compositionSourceFlagIndex >= 0 && !compositionSource) ||
-    (aspectFlagIndex >= 0 && aspectArg !== "portrait" && aspectArg !== "landscape") ||
+    (aspectFlagIndex >= 0 &&
+      aspectArg !== "portrait" &&
+      aspectArg !== "landscape" &&
+      aspectArg !== "square") ||
     (durationFlagIndex >= 0 &&
       (!Number.isFinite(durationMs) || durationMs! < 10_000 || durationMs! > 30_000))
   ) {
     throw new Error(
-      "usage: bun src/pipeline/social-preview.ts <trackId|logId> [--skip-render] [--composition <Id>] [--composition-source <file>] [--duration-ms <10000-30000>] [--draft] [--no-overlay] [--aspect <portrait|landscape>] [--landscape]",
+      "usage: bun src/pipeline/social-preview.ts <trackId|logId> [--skip-render] [--composition <Id>] [--composition-source <file>] [--duration-ms <10000-30000>] [--draft] [--no-overlay] [--aspect <portrait|landscape|square>] [--landscape]",
     );
   }
 
@@ -160,14 +169,15 @@ async function main(): Promise<void> {
     // Variant flags are written only when non-default so a normal portrait/overlay
     // render produces the same props.json it always has.
     ...(hideOverlay ? { hideOverlay: true } : {}),
-    ...(aspect === "landscape" ? { aspect } : {}),
+    ...(aspect !== "portrait" ? { aspect } : {}),
   };
 
   // Variant renders write to suffixed files so they never clobber the canonical
   // `<trackId>.{props.json,mp4}` portrait+overlay master that ship reads. `.notext`
-  // for the text-free cut, `.landscape` for the 16:9 cut (combinable). An empty
-  // suffix is the unchanged default path.
-  const variantSuffix = `${hideOverlay ? ".notext" : ""}${aspect === "landscape" ? ".landscape" : ""}`;
+  // for the text-free cut, `.landscape` for the 16:9 cut, `.square` for the
+  // 1:1 crop source (combinable). An empty suffix is the unchanged default path.
+  const aspectSuffix = aspect === "landscape" ? ".landscape" : aspect === "square" ? ".square" : "";
+  const variantSuffix = `${hideOverlay ? ".notext" : ""}${aspectSuffix}`;
   const isVariant = variantSuffix.length > 0;
 
   const propsPath = path.join(OUT_DIR, `${trackId}${variantSuffix}.props.json`);

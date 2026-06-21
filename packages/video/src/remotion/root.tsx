@@ -35,26 +35,33 @@ declare global {
 
 const FPS = 30;
 // Portrait is the unchanged default for every clip to date. Landscape is the
-// 1920×1080 radio.fluncle.com full-screen cut, selected per-render via the
-// `aspect` prop (the bespoke 9:16 shaders reflow under it — expected, scaffold
-// not catalogue). WIDTH/HEIGHT remain the portrait Composition defaults so Studio
-// and any aspect-less producer stay exactly as before.
+// 1920×1080 radio.fluncle.com full-screen cut; square is the 1920×1920 clean
+// source master MT crops to either orientation on the fly (docs/video-variants.md).
+// Each is selected per-render via the `aspect` prop (the bespoke 9:16 shaders
+// reflow under landscape/square — expected, scaffold not catalogue). WIDTH/HEIGHT
+// remain the portrait Composition defaults so Studio and any aspect-less producer
+// stay exactly as before.
 const WIDTH = 1080;
 const HEIGHT = 1920;
 const LANDSCAPE_WIDTH = 1920;
 const LANDSCAPE_HEIGHT = 1080;
+const SQUARE_SIZE = 1920;
 
 // durationInFrames is derived from audio.durationMs so the video always matches
 // the audio clip length regardless of the default placeholder duration. Width and
-// height follow `props.aspect` (default portrait), so one composition renders both
-// the vertical social cut and the landscape radio cut.
+// height follow `props.aspect` (default portrait), so one composition renders the
+// vertical social cut, the landscape radio cut, and the square crop source.
 const calculateMetadata: CalculateMetadataFunction<NostalgicCosmosProps> = ({ props }) => {
-  const landscape = props.aspect === "landscape";
+  const dimensions =
+    props.aspect === "landscape"
+      ? { height: LANDSCAPE_HEIGHT, width: LANDSCAPE_WIDTH }
+      : props.aspect === "square"
+        ? { height: SQUARE_SIZE, width: SQUARE_SIZE }
+        : { height: HEIGHT, width: WIDTH };
   return {
     durationInFrames: Math.max(1, Math.round((props.audio.durationMs / 1000) * FPS)),
     fps: FPS,
-    height: landscape ? LANDSCAPE_HEIGHT : HEIGHT,
-    width: landscape ? LANDSCAPE_WIDTH : WIDTH,
+    ...dimensions,
   };
 };
 

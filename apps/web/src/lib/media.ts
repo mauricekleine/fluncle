@@ -28,8 +28,19 @@ export type TrackMedia = {
   observationJsonUrl: string;
   /** A late drop frame; the video element's poster. */
   posterUrl: string;
-  /** The with-audio review cut (matches the stored `video_url`). */
+  /**
+   * The stored `video_url` master. Under the two-master layout (videoSquaredAt
+   * set) this is the CLEAN square 1920×1920 crop source; under the legacy layout
+   * it is the old portrait+text cut. Surfaces choose by the layout signal.
+   */
   videoUrl: string;
+  /**
+   * The portrait, baked-text social cut (footage.social.mp4): the playable cut
+   * for Stories + YouTube, and (audio-stripped via MT) TikTok. Present once a
+   * finding has any video — new renders ship it, and the migration backfills it
+   * for legacy findings. Surfaces fall back to `videoUrl` when it's absent.
+   */
+  socialVideoUrl: string;
   /** The audio-less cut — what Stories plays muted, since sound is the official preview. */
   silentVideoUrl: string;
 };
@@ -46,6 +57,7 @@ export function trackMedia(logId: string): TrackMedia {
     observationTextUrl: `${base}/observation.txt`,
     posterUrl: `${base}/poster.jpg`,
     silentVideoUrl: `${base}/footage-silent.mp4`,
+    socialVideoUrl: `${base}/footage.social.mp4`,
     videoUrl: `${base}/footage.mp4`,
   };
 }
@@ -131,8 +143,11 @@ export type RenditionWidth = 360 | 480 | 720 | 1080;
  * edge. Falls back to the raw master on any edge error via the caller's
  * one-shot `onError`.
  */
-export function videoRendition(logId: string, { width }: { width: RenditionWidth }): string {
-  const source = `${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`;
+export function videoRendition(
+  logId: string,
+  { master = "footage.mp4", width }: { master?: string; width: RenditionWidth },
+): string {
+  const source = `${FOUND_BASE}/${encodeURIComponent(logId)}/${master}`;
 
   return `${MEDIA_TRANSFORM_BASE}/mode=video,width=${width}/${source}`;
 }
@@ -145,8 +160,54 @@ export function videoRendition(logId: string, { width }: { width: RenditionWidth
  * JPEG. Used as the <video> poster so the first paint is a light edge-cached
  * image, not the full poster asset.
  */
-export function videoPoster(logId: string): string {
-  const source = `${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`;
+export function videoPoster(logId: string, master = "footage.mp4"): string {
+  const source = `${FOUND_BASE}/${encodeURIComponent(logId)}/${master}`;
 
   return `${MEDIA_TRANSFORM_BASE}/mode=frame,time=0s,format=jpg/${source}`;
+}
+
+// ── Two-master crops (docs/video-variants.md) ────────────────────────────────
+//
+// Under the two-master layout (videoSquaredAt set), `footage.mp4` is the CLEAN
+// square 1920×1920 source master. The archive surfaces (/log, radio) never play
+// the square — they request an on-the-fly MT centre-crop to the orientation the
+// viewport wants. `fit=crop` is a CENTRE crop, so a 1920×1920 master yields both
+// a native-resolution 1080×1920 portrait and 1920×1080 landscape with no upscale
+// (only the centre "plus" of the square is ever seen — compositions destined to
+// be cropped keep their centre of gravity centered). These ONLY apply when the
+// finding carries the square master; a legacy finding still plays `footage.mp4`
+// as-is, so callers gate on `videoSquaredAt` before reaching for a crop.
+
+/** Crop orientation for the square master: portrait (mobile) or landscape (desktop). */
+export type CropOrientation = "landscape" | "portrait";
+
+const CROP_DIMENSIONS: Record<CropOrientation, { height: number; width: number }> = {
+  // 16:9 full-screen radio/desktop; 9:16 mobile. Both native off the 1920² square.
+  landscape: { height: 1080, width: 1920 },
+  portrait: { height: 1080 * (16 / 9), width: 1080 },
+};
+
+/**
+ * Build a same-zone Media Transformations URL that CENTRE-CROPS the square
+ * `footage.mp4` master to `orientation`. `fit=crop,width=W,height=H` resizes +
+ * crops in one op; the result is edge-cached like the resolution-ladder
+ * renditions. Only valid for a finding under the two-master layout (its
+ * `footage.mp4` is the clean square) — callers gate on `videoSquaredAt`.
+ */
+export function videoCrop(logId: string, orientation: CropOrientation): string {
+  const source = `${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`;
+  const { height, width } = CROP_DIMENSIONS[orientation];
+
+  return `${MEDIA_TRANSFORM_BASE}/fit=crop,width=${width},height=${height}/${source}`;
+}
+
+/**
+ * Strip the audio track from any same-zone master via `audio=false`. The TikTok
+ * push reaches for this off `footage.social.mp4` so the operator attaches the
+ * licensed sound in-app — replacing the stored `footage-silent.mp4` cut, which
+ * is retired under the two-master model. `source` must be a full found.fluncle.com
+ * URL (same zone as the transform base).
+ */
+export function videoAudioStripped(source: string): string {
+  return `${MEDIA_TRANSFORM_BASE}/audio=false/${source}`;
 }
