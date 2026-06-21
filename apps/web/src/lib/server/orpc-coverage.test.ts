@@ -17,10 +17,13 @@ import { CONTRACT_OPERATION_NAMES } from "@fluncle/contracts/orpc";
 // converted AND pending (the pending list must shrink as routes convert), and a
 // pending entry must correspond to a real route (no stale names).
 //
-// Phase 1 converted one route (`get_track`); the fan-out pilot adds the three
-// public-unauth reads (`get_health`, `list_tracks`, `get_random_track`).
-// Everything else stays PENDING. As later waves convert routes, move each off
-// PENDING — the test stays green only while the list shrinks honestly.
+// Phase 1 converted one route (`get_track`); the fan-out pilot added the three
+// public-unauth reads (`get_health`, `list_tracks`, `get_random_track`); fan-out
+// Wave A converts the five remaining public-unauthenticated ops (`list_mixtapes`,
+// `search_tracks`, `list_stories`, `submit_track`, `subscribe_newsletter`),
+// leaving only the `/me` private tier PENDING (Wave B). As later waves convert
+// routes, move each off PENDING — the test stays green only while the list
+// shrinks honestly.
 
 // Each public API route, keyed by its `/api/v1`-relative path, mapped to the
 // canonical Convention-B `verb_noun` op name it should be served by. This is the
@@ -89,11 +92,6 @@ const PENDING_PUBLIC_OPS = new Set([
   "save_private_finding",
   "unsave_private_finding",
   "list_private_submissions",
-  "list_mixtapes",
-  "subscribe_newsletter",
-  "search_tracks",
-  "list_stories",
-  "submit_track",
 ]);
 
 const V1_DIR = fileURLToPath(new URL("../../routes/api/v1", import.meta.url));
@@ -136,9 +134,19 @@ function isCarvedOut(basename: string): boolean {
 describe("oRPC public-route contract coverage", () => {
   const converted = new Set<string>(CONTRACT_OPERATION_NAMES);
 
-  it("converts the proof route plus the fan-out pilot's public reads", () => {
+  it("converts every public-unauthenticated op (proof + pilot + Wave A)", () => {
     expect([...converted].sort()).toEqual(
-      ["get_health", "get_random_track", "get_track", "list_tracks"].sort(),
+      [
+        "get_health",
+        "get_random_track",
+        "get_track",
+        "list_mixtapes",
+        "list_stories",
+        "list_tracks",
+        "search_tracks",
+        "submit_track",
+        "subscribe_newsletter",
+      ].sort(),
     );
   });
 

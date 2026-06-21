@@ -31,6 +31,11 @@ import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
 import { type OrpcContext } from "./orpc-auth";
 import { isApiFaultData } from "./orpc/_shared";
 import { healthHandlers } from "./orpc/health";
+import { mixtapesHandlers } from "./orpc/mixtapes";
+import { newsletterHandlers } from "./orpc/newsletter";
+import { searchHandlers } from "./orpc/search";
+import { storiesHandlers } from "./orpc/stories";
+import { submissionsHandlers } from "./orpc/submissions";
 import { tracksHandlers } from "./orpc/tracks";
 
 // The contract implementer, pinned to the same request-carrying context the admin
@@ -49,6 +54,11 @@ const os = implement(contract).$context<OrpcContext>();
 // Add a domain: import its `*Handlers(os)` factory and spread it here.
 export const router = os.router({
   ...healthHandlers(os),
+  ...mixtapesHandlers(os),
+  ...newsletterHandlers(os),
+  ...searchHandlers(os),
+  ...storiesHandlers(os),
+  ...submissionsHandlers(os),
   ...tracksHandlers(os),
 });
 
