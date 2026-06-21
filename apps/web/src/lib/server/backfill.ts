@@ -37,8 +37,12 @@ const DISCOGS_DELAY_MS = 1200;
 // processes at most this many eligible findings and returns a resume cursor; the
 // CLI loops the cursor until the archive is exhausted. Keep this small enough
 // that one pass stays comfortably inside the request budget even when every
-// finding needs a resolve. A caller may request fewer via `limit`.
-const MAX_BATCH = 10;
+// finding needs a resolve. An UNRESOLVED Discogs finding is the worst case — it
+// fans out into ~10 rate-limited (~1.1s) lookups (3 search variants + their
+// candidate release fetches + the MB bridge) ≈ 12s, so 3/pass ≈ 36s stays well
+// under the ~100s gateway ceiling that the all-at-once sweep blew. A caller may
+// request fewer via `limit`.
+const MAX_BATCH = 3;
 
 // The cursor to resume from on the next pass, or null once the archive is
 // exhausted. The CLI loops until this is null.
