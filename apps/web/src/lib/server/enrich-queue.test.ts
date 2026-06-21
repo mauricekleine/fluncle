@@ -191,3 +191,45 @@ describe('listTracks status: "queue" (the self-healing filter)', () => {
     ]);
   });
 });
+
+// The observation-pipeline queues (Build order #3): hasContext / hasObservation
+// gate which findings the context + observation crons pull. They are pure WHERE
+// clauses, so assert the generated SQL (the archive mock above ignores them).
+describe("listTracks hasContext / hasObservation filters (the observation queues)", () => {
+  function lastListSql(): string {
+    const listCall = execute.mock.calls.find(
+      (c) => !(c[0] as { sql: string }).sql.includes("count(*)"),
+    )?.[0] as { sql: string };
+
+    return listCall.sql;
+  }
+
+  it("the context queue (hasContext=false) filters `context_note is null`", async () => {
+    await listTracks({ hasContext: false, limit: 50 });
+    expect(lastListSql()).toContain("context_note is null");
+  });
+
+  it("hasContext=true filters `context_note is not null`", async () => {
+    await listTracks({ hasContext: true, limit: 50 });
+    expect(lastListSql()).toContain("context_note is not null");
+  });
+
+  it("the observation queue (hasContext=true AND hasObservation=false) ANDs both clauses", async () => {
+    await listTracks({ hasContext: true, hasObservation: false, limit: 50 });
+    const sql = lastListSql();
+    expect(sql).toContain("context_note is not null");
+    expect(sql).toContain("observation_audio_url is null");
+  });
+
+  it("hasObservation=true filters `observation_audio_url is not null`", async () => {
+    await listTracks({ hasObservation: true, limit: 50 });
+    expect(lastListSql()).toContain("observation_audio_url is not null");
+  });
+
+  it("omits both clauses when neither filter is passed", async () => {
+    await listTracks({ limit: 50 });
+    const sql = lastListSql();
+    expect(sql).not.toContain("context_note");
+    expect(sql).not.toContain("observation_audio_url is");
+  });
+});

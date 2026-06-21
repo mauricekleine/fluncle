@@ -182,6 +182,25 @@ export async function getTrackByIdOrLogId(idOrLogId: string): Promise<TrackListI
   return row ? toTrackListItem(row) : undefined;
 }
 
+/**
+ * Read the INTERNAL `context_note` for a track (the Firecrawl-derived facts).
+ * `context_note` is deliberately OUTSIDE `TRACK_SELECT` (internal-only fuel,
+ * never surfaced through `toTrackListItem`), so the observe steps read it
+ * directly: the `observe-context` step skips when it is already present
+ * (idempotent no-op), and `observe_track` reads it as the stored fuel it no
+ * longer fetches itself. Returns `null` when the track is missing or unset.
+ */
+export async function getTrackContextNote(idOrLogId: string): Promise<string | null> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [idOrLogId, idOrLogId],
+    sql: `select context_note from tracks where track_id = ? or log_id = ? limit 1`,
+  });
+  const row = typedRow<{ context_note: string | null }>(result.rows);
+
+  return row ? (row.context_note ?? null) : null;
+}
+
 const SEARCH_DEFAULT_LIMIT = 20;
 const SEARCH_MAX_LIMIT = 50;
 
@@ -389,6 +408,19 @@ export const ENRICHMENT_STATUS_FILTERS: readonly EnrichmentStatusFilter[] = [
 
 type ListTracksOptions = {
   cursor?: TrackCursor;
+  /**
+   * Context-note presence (admin only) — the `observe-context` queue's filter.
+   * `false` = `context_note IS NULL` (needs the Firecrawl facts fetched); `true`
+   * = already has them. Internal field, never surfaced; omitted for public reads.
+   */
+  hasContext?: boolean;
+  /**
+   * Observation presence (admin only) — the observation queue's filter.
+   * `false` = `observation_audio_url IS NULL` (no spoken observation yet);
+   * `true` = already minted. The observation queue is `hasContext=true AND
+   * hasObservation=false`. Omitted for public reads.
+   */
+  hasObservation?: boolean;
   /** Only findings with a rendered video — the Stories feed's filter. */
   hasVideo?: boolean;
   includeMixtapes?: boolean;
@@ -421,6 +453,8 @@ export function listTracks(
 export function listTracks(options: ListTracksOptions): Promise<TrackListPage>;
 export async function listTracks({
   cursor,
+  hasContext,
+  hasObservation,
   hasVideo,
   includeMixtapes = false,
   limit,
@@ -453,6 +487,21 @@ export async function listTracks({
     filterClauses.push("video_url is not null");
   } else if (hasVideo === false) {
     filterClauses.push("video_url is null");
+  }
+
+  // The observe-context queue: `context_note IS NULL` (facts not fetched yet).
+  if (hasContext === true) {
+    filterClauses.push("context_note is not null");
+  } else if (hasContext === false) {
+    filterClauses.push("context_note is null");
+  }
+
+  // The observation queue: `observation_audio_url IS NULL` (no spoken
+  // observation). Paired with hasContext=true it is the "ready to observe" queue.
+  if (hasObservation === true) {
+    filterClauses.push("observation_audio_url is not null");
+  } else if (hasObservation === false) {
+    filterClauses.push("observation_audio_url is null");
   }
 
   if (placement === "unplaced") {
