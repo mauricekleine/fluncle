@@ -5,7 +5,7 @@ import { BrandIcon } from "@/components/brand-icon";
 import { Button } from "@/components/ui/button";
 import { siteUrl } from "@/lib/fluncle-links";
 import { formatDateLong } from "@/lib/format";
-import { videoAudioStripped, videoCrop, videoCropPoster } from "@/lib/media";
+import { videoCrop, videoCropPoster } from "@/lib/media";
 import { fetchRandomRadioTrack, type Track } from "@/lib/tracks";
 import { DESKTOP_QUERY, useMediaQuery } from "@/lib/use-media-query";
 
@@ -62,7 +62,8 @@ function silentVideoUrl(track: Track, desktop: boolean): string | undefined {
     return undefined;
   }
 
-  return videoAudioStripped(videoCrop(track.logId, desktop ? "landscape" : "portrait"));
+  // ONE combined transform (crop + audio-strip), not nested transforms — see videoCrop.
+  return videoCrop(track.logId, desktop ? "landscape" : "portrait", undefined, true);
 }
 
 /** The cheap cropped opening frame, matching the clip's orientation. */

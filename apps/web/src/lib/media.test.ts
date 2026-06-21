@@ -92,6 +92,18 @@ describe("videoCrop", () => {
     expect(videoCrop("ABC123", "portrait")).toBe(videoCrop("ABC123", "portrait", 1080));
     expect(videoCrop("ABC123", "landscape")).toBe(videoCrop("ABC123", "landscape", 1920));
   });
+
+  it("folds audio=false into the SAME transform when silent (radio — never nested, one ?v)", () => {
+    // radio plays the observation over a silent cut. The crop + strip MUST be one
+    // combined transform; `videoAudioStripped(videoCrop(...))` nests a transform in
+    // a transform (Cloudflare 400s it) and double-appends `?v`. Verified 200 live.
+    const url = videoCrop("ABC123", "landscape", undefined, true);
+    expect(url).toBe(
+      `${FOUND_BASE}/cdn-cgi/media/fit=cover,width=1920,height=1080,audio=false/${FOUND_BASE}/ABC123/footage.mp4?v=1`,
+    );
+    expect(url.match(/cdn-cgi\/media/g)).toHaveLength(1); // one transform, not nested
+    expect(url.match(/\?v=/g)).toHaveLength(1); // one version token, not doubled
+  });
 });
 
 // The squared poster twin: a single opening frame, centre-cropped to the same

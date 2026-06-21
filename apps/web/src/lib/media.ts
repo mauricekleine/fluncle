@@ -268,13 +268,23 @@ const CROP_GEOMETRY: Record<CropOrientation, { nativeWidth: number; ratio: numbe
  * aspect so the crop stays exactly portrait/landscape. Defaults to the native
  * width, so the fixed-resolution caller (/log) reads the same URL as before.
  */
-export function videoCrop(logId: string, orientation: CropOrientation, width?: number): string {
+export function videoCrop(
+  logId: string,
+  orientation: CropOrientation,
+  width?: number,
+  silent = false,
+): string {
   const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`);
   const { nativeWidth, ratio } = CROP_GEOMETRY[orientation];
   const cropWidth = width ?? nativeWidth;
   const cropHeight = Math.round(cropWidth * ratio);
+  // `silent` folds the audio-strip into the SAME `fit=cover` transform (radio
+  // plays the observation over a genuinely silent cut). It must be ONE combined
+  // transform — never `videoAudioStripped(videoCrop(...))`, which nests a
+  // transform inside a transform (Cloudflare 400s it) and double-appends `?v`.
+  const audio = silent ? ",audio=false" : "";
 
-  return `${MEDIA_TRANSFORM_BASE}/fit=cover,width=${cropWidth},height=${cropHeight}/${source}`;
+  return `${MEDIA_TRANSFORM_BASE}/fit=cover,width=${cropWidth},height=${cropHeight}${audio}/${source}`;
 }
 
 /**
