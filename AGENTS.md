@@ -51,6 +51,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - MUST: Ask before destructive operations, production deploys, paid infrastructure changes, bulk sends, credential rotations, or changes that publish to Spotify, Telegram, Discord, or Cloudflare.
 - MUST: Report when required validation depends on external services and could not be run locally.
 - NEVER: Invent secrets, credentials, listener data, analytics data, or production state.
+- MUST: Treat a push to `main` as a production deploy — Cloudflare Workers Builds rebuilds `apps/web` on every push; rapid successive pushes/merges coalesce and can drop an intermediate build, so space deploy-triggering merges and confirm a build ran on the final commit.
 
 ## Library and API Docs
 
@@ -73,12 +74,15 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - [docs/admin-tagging.md](./docs/admin-tagging.md) - the admin-gated `/admin/tag` vibe-map tagging tool: place each finding by energy×mood (the four galaxies), web admin auth (one identity, two carriers; Login with Spotify), the queue, the keyboard loop, and the `vibe_x`/`vibe_y` data model.
 - [docs/agents/newsletter-agent.md](./docs/agents/newsletter-agent.md) - instructions for the external Friday newsletter agent and its discovery-window contract with `/api/tracks`.
 - [packages/video/README.md](./packages/video/README.md) - Remotion video machinery + the dated, self-contained archive under `src/remotion/tracks/`: the core surface, the archive contract, and the pipeline.
+- [docs/video-variants.md](./docs/video-variants.md) - the two-master video model: a clean square `footage.mp4` source + a portrait baked-text `footage.social.mp4`, with Cloudflare Media Transformations deriving every other orientation/audio variant on the fly; the surface map and the one-time migration.
 - [packages/media/README.md](./packages/media/README.md) - Remotion image-asset rendering; the Galaxy gate-screen OG card is the first asset, with room to grow.
 - [docs/galaxy-sprites.md](./docs/galaxy-sprites.md) - how the Galaxy game's 8-bit sprite + audio assets are made: the canon ramp, the Nano-Banana (Gemini) workflow, the procedural-fallback contract, and the amen placeholder.
 - [docs/agents/enrichment-agent.md](./docs/agents/enrichment-agent.md) - thin bootstrap for the async track agent (the enrich → video → publish chain; runs locally or on Spinup; tools + safety rails); its full constitution is the fluncle-track-enrichment skill at [packages/skills/fluncle-track-enrichment](./packages/skills/fluncle-track-enrichment). Video render is a separate capability whose doctrine is the fluncle-video skill at [packages/skills/fluncle-video](./packages/skills/fluncle-video); publishing rendered videos to social platforms as drafts is the fluncle-publish skill at [packages/skills/fluncle-publish](./packages/skills/fluncle-publish).
 - [docs/agents/hermes-agent.md](./docs/agents/hermes-agent.md) - the chat-presence agent (self-hosted Nous Hermes gateway, Discord-first): the server-side operator/agent role model (the box holds an `agent`-scoped token; the Worker is the publish boundary), secrets via `op`, model/voice gates, and the build/run/verify runbook. Build context (Dockerfile) lives at [docs/agents/hermes/](./docs/agents/hermes/).
 - [docs/socials/](./docs/socials/) - the map of social accounts, owned channels, profile assets, bio conventions, and the generated banners.
 - [packages/skills/fluncle-mixtapes](./packages/skills/fluncle-mixtapes) - the skill for publishing Fluncle's own DJ mixtapes: the repeatable per-mixtape runbook (build draft + tracklist, distribute video→YouTube + audio→Mixcloud, flip public, announce), a Rekordbox ordered-tracklist extraction script, and the spine model in `references/spine-model.md` (the mixtape as a spine-native object — Fluncle dreaming, a checkpoint; its `F`-marked Log ID, the `/log` + `/mixtapes` surfaces, mixtape-aware schema/RSS/llms.txt, the hosting/MusicBrainz/Wikidata map, surface fan-out).
+- [docs/naming-conventions.md](./docs/naming-conventions.md) - the ratified cross-surface `verb_noun` naming convention (Convention B): one operation, one name across CLI / API / MCP / SSH, with the registry as the source of truth for new features.
+- [packages/skills/agent-orchestration](./packages/skills/agent-orchestration) - the orchestrator-and-reviewer workflow doctrine: decompose into independent slices, delegate to sub-agents in git worktrees that open PRs, review the diffs, ping-pong to clean, merge one at a time; plus pilot-before-fan-out, sliding-window pools, de-risk spikes, and resume-memory for long ops.
 
 ## Architecture
 
@@ -87,6 +91,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - MUST: Keep Raycast commands calling the `fluncle` CLI rather than reimplementing Spotify, Telegram, Turso, or HTTP API behavior.
 - MUST: Keep publishing authority behind the authenticated admin API.
 - SHOULD: Preserve existing server module boundaries under `apps/web/src/lib/server` and API route handlers under `apps/web/src/routes/api`.
+- SHOULD: Name new public surfaces (CLI / API / MCP / SSH) per the cross-surface `verb_noun` convention in [docs/naming-conventions.md](./docs/naming-conventions.md), so one operation reads the same everywhere.
 
 ## UI Components
 
