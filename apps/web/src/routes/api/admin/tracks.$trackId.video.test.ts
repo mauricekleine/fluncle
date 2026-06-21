@@ -172,4 +172,42 @@ describe("POST .../video/finalize", () => {
       videoVehicle: "submarine",
     });
   });
+
+  it("stamps video_squared_at when squared:true (the two-master upload signal)", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+    updateTrack.mockResolvedValueOnce({ fields: [], trackId: TRACK.trackId });
+
+    const { Route } = await import("./tracks.$trackId.video.finalize");
+    const POST = await postHandler({ Route });
+
+    const response = await POST({
+      params: { trackId: "004.7.2I" },
+      request: adminPost("https://www.fluncle.com/api/admin/tracks/004.7.2I/video/finalize", {
+        squared: true,
+      }),
+    });
+
+    expect(response.status).toBe(200);
+
+    const call = updateTrack.mock.calls.at(-1) as [string, { videoSquaredAt?: string }];
+    expect(call[0]).toBe(TRACK.trackId);
+    expect(typeof call[1].videoSquaredAt).toBe("string");
+    expect(Number.isNaN(Date.parse(call[1].videoSquaredAt!))).toBe(false);
+  });
+
+  it("does NOT stamp video_squared_at when squared is absent (legacy single-file upload)", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+    updateTrack.mockResolvedValueOnce({ fields: [], trackId: TRACK.trackId });
+
+    const { Route } = await import("./tracks.$trackId.video.finalize");
+    const POST = await postHandler({ Route });
+
+    await POST({
+      params: { trackId: "004.7.2I" },
+      request: adminPost("https://www.fluncle.com/api/admin/tracks/004.7.2I/video/finalize", {}),
+    });
+
+    const call = updateTrack.mock.calls.at(-1) as [string, { videoSquaredAt?: string }];
+    expect(call[1].videoSquaredAt).toBeUndefined();
+  });
 });

@@ -3,6 +3,8 @@ import {
   FOUND_BASE,
   spotifyAlbumImageAtSize,
   trackMedia,
+  videoAudioStripped,
+  videoCrop,
   videoPoster,
   videoRendition,
 } from "./media";
@@ -33,6 +35,40 @@ describe("videoRendition", () => {
   it("targets the same master that trackMedia() returns", () => {
     const logId = "ABC123";
     expect(videoRendition(logId, { width: 720 })).toContain(trackMedia(logId).videoUrl);
+  });
+
+  it("points the rendition at the social cut when that master is named (Stories two-master)", () => {
+    expect(videoRendition("ABC123", { master: "footage.social.mp4", width: 720 })).toBe(
+      `${FOUND_BASE}/cdn-cgi/media/mode=video,width=720/${FOUND_BASE}/ABC123/footage.social.mp4`,
+    );
+  });
+});
+
+// The two-master crops + audio-strip (docs/video-variants.md). The square master
+// centre-crops to native-resolution portrait/landscape; TikTok strips audio off
+// the social cut via audio=false rather than a stored footage-silent.mp4.
+describe("videoCrop", () => {
+  it("builds a centre-crop to portrait off the square master", () => {
+    expect(videoCrop("ABC123", "portrait")).toBe(
+      `${FOUND_BASE}/cdn-cgi/media/fit=crop,width=1080,height=1920/${FOUND_BASE}/ABC123/footage.mp4`,
+    );
+  });
+
+  it("builds a centre-crop to landscape off the square master", () => {
+    expect(videoCrop("ABC123", "landscape")).toBe(
+      `${FOUND_BASE}/cdn-cgi/media/fit=crop,width=1920,height=1080/${FOUND_BASE}/ABC123/footage.mp4`,
+    );
+  });
+
+  it("encodes the Log ID in the source URL", () => {
+    expect(videoCrop("a/b c", "portrait")).toContain(`${FOUND_BASE}/a%2Fb%20c/footage.mp4`);
+  });
+});
+
+describe("videoAudioStripped", () => {
+  it("wraps a same-zone source in an audio=false transform", () => {
+    const source = `${FOUND_BASE}/ABC123/footage.social.mp4`;
+    expect(videoAudioStripped(source)).toBe(`${FOUND_BASE}/cdn-cgi/media/audio=false/${source}`);
   });
 });
 
@@ -105,8 +141,10 @@ describe("trackMedia (unchanged contract)", () => {
     const media = trackMedia("ABC123");
 
     expect(media.videoUrl).toBe(`${FOUND_BASE}/ABC123/footage.mp4`);
+    expect(media.socialVideoUrl).toBe(`${FOUND_BASE}/ABC123/footage.social.mp4`);
     expect(media.posterUrl).toBe(`${FOUND_BASE}/ABC123/poster.jpg`);
     expect(media.videoUrl).not.toContain("/cdn-cgi/media");
+    expect(media.socialVideoUrl).not.toContain("/cdn-cgi/media");
     expect(media.posterUrl).not.toContain("/cdn-cgi/media");
   });
 });
