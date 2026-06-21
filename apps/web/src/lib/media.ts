@@ -129,6 +129,26 @@ export function spotifyAlbumImageAtSize(
 const MEDIA_TRANSFORM_BASE = `${FOUND_BASE}/cdn-cgi/media`;
 
 /**
+ * Cache-bust token for Media Transformations. Each rendition is edge-cached
+ * keyed on its transform URL (which embeds the source master URL), so when a
+ * master is overwritten in place at the same R2 key — e.g. the square-footage
+ * backfill re-rendered every finding's `footage.mp4` (docs/video-variants.md) —
+ * the cached renditions keep serving the OLD master until their edge entry
+ * expires. Riding this token on every transform source as `?v=N` re-keys the
+ * whole catalogue's renditions in a single deploy; bump it whenever masters are
+ * overwritten in bulk. R2 ignores the query (the master resolves byte-identically,
+ * verified), so only the transform cache key changes — never the bytes fetched.
+ * This mirrors the `?n=<version>` cache-bust the OG/cover images already use on
+ * this zone.
+ */
+const TRANSFORM_VERSION = 1;
+
+/** Append the cache-bust token to a transform's source master URL. */
+function versionedSource(source: string): string {
+  return `${source}?v=${TRANSFORM_VERSION}`;
+}
+
+/**
  * The intrinsic width Cloudflare transcodes a rendition to. The list is sparse
  * on purpose — each distinct width is a separately-cached transform, so we snap
  * the viewport to a small ladder instead of minting a per-pixel rendition.
@@ -147,7 +167,7 @@ export function videoRendition(
   logId: string,
   { master = "footage.mp4", width }: { master?: string; width: RenditionWidth },
 ): string {
-  const source = `${FOUND_BASE}/${encodeURIComponent(logId)}/${master}`;
+  const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/${master}`);
 
   return `${MEDIA_TRANSFORM_BASE}/mode=video,width=${width}/${source}`;
 }
@@ -161,7 +181,7 @@ export function videoRendition(
  * image, not the full poster asset.
  */
 export function videoPoster(logId: string, master = "footage.mp4"): string {
-  const source = `${FOUND_BASE}/${encodeURIComponent(logId)}/${master}`;
+  const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/${master}`);
 
   return `${MEDIA_TRANSFORM_BASE}/mode=frame,time=0s,format=jpg/${source}`;
 }
@@ -195,7 +215,7 @@ const CROP_DIMENSIONS: Record<CropOrientation, { height: number; width: number }
  * `footage.mp4` is the clean square) — callers gate on `videoSquaredAt`.
  */
 export function videoCrop(logId: string, orientation: CropOrientation): string {
-  const source = `${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`;
+  const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`);
   const { height, width } = CROP_DIMENSIONS[orientation];
 
   return `${MEDIA_TRANSFORM_BASE}/fit=crop,width=${width},height=${height}/${source}`;
@@ -209,5 +229,5 @@ export function videoCrop(logId: string, orientation: CropOrientation): string {
  * URL (same zone as the transform base).
  */
 export function videoAudioStripped(source: string): string {
-  return `${MEDIA_TRANSFORM_BASE}/audio=false/${source}`;
+  return `${MEDIA_TRANSFORM_BASE}/audio=false/${versionedSource(source)}`;
 }
