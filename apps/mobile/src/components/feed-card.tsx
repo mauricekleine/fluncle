@@ -181,7 +181,7 @@ export function FeedCard({ finding, active, soundOn, onToggleSound }: Props) {
               name="spotify"
               size={29}
               color={color.starlightCream}
-              style={styles.icon}
+              style={[styles.icon, styles.spotifyNudge]}
             />
           }
           label="Spotify"
@@ -320,4 +320,7 @@ const styles = StyleSheet.create({
   },
   railLabelActive: { color: color.eclipseGold },
   railPressed: { opacity: 0.6 },
+  // The FontAwesome spotify glyph sits left of its advance box; nudge it onto the
+  // rail axis (optical alignment, the Ionicons glyphs don't need it).
+  spotifyNudge: { transform: [{ translateX: 3 }] },
 });
