@@ -72,9 +72,13 @@ Stops overloading `in_release_id IS NULL`, which today conflates "never ran" wit
 
 Migration: add both columns to `src/db/schema.ts`, then `bun run --cwd apps/web db:generate` (never hand-written, per `AGENTS.md`); Cloudflare auto-migrates on deploy.
 
+## Build these as oRPC contracts (admin is on oRPC now)
+
+Every endpoint this brief adds or touches is admin (`/api/admin/*`) — the newsletter draft, observe-context, the backfills, the new queue filters, and the role flips. The [oRPC migration](./orpc-migration-brief.md) now brings the admin surface onto oRPC (admin auth is a typed `context.role` tier via `adminProcedure` / `operatorProcedure`, not per-handler `requireAdmin` / `requireOperator` calls). Since that slice lands first (see Blocked on), build this brief's endpoints as **oRPC contracts on the right procedure tier**, not as TanStack add-ons: the new `…/newsletter/draft` and `observe-context` ops get contracts in the registry; the new `/api/admin/tracks` filter params extend the existing tracks-list contract.
+
 ## Role flips
 
-To run on a Hermes cron, these routes move `requireOperator → requireAdmin` (agent-allowed). Each is defensible — idempotent and reversible, the Worker owns the keys, and an injected trigger's blast radius is "a few extra free / rate-limited vendor calls":
+To run on a Hermes cron, these routes move from the operator tier to the admin tier (agent-allowed) — a **procedure-tier change** (`operatorProcedure → adminProcedure`) now that admin is on oRPC, not swapping a guard call. Each is defensible — idempotent and reversible, the Worker owns the keys, and an injected trigger's blast radius is "a few extra free / rate-limited vendor calls":
 
 - `POST /api/admin/backfill/lastfm`
 - `POST /api/admin/backfill/discogs`
