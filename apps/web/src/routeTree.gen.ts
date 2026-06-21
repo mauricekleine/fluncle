@@ -48,6 +48,7 @@ import { Route as ApiV1SubmissionsRouteImport } from './routes/api/v1/submission
 import { Route as ApiV1StoriesRouteImport } from './routes/api/v1/stories'
 import { Route as ApiV1SearchRouteImport } from './routes/api/v1/search'
 import { Route as ApiV1PostmanDotjsonRouteImport } from './routes/api/v1/postman[.]json'
+import { Route as ApiV1OrpcOpenapiDotjsonRouteImport } from './routes/api/v1/orpc-openapi[.]json'
 import { Route as ApiV1OpenapiDotjsonRouteImport } from './routes/api/v1/openapi[.]json'
 import { Route as ApiV1NewsletterRouteImport } from './routes/api/v1/newsletter'
 import { Route as ApiV1MixtapesRouteImport } from './routes/api/v1/mixtapes'
@@ -354,6 +355,11 @@ const ApiV1SearchRoute = ApiV1SearchRouteImport.update({
 const ApiV1PostmanDotjsonRoute = ApiV1PostmanDotjsonRouteImport.update({
   id: '/api/v1/postman.json',
   path: '/api/v1/postman.json',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiV1OrpcOpenapiDotjsonRoute = ApiV1OrpcOpenapiDotjsonRouteImport.update({
+  id: '/api/v1/orpc-openapi.json',
+  path: '/api/v1/orpc-openapi.json',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiV1OpenapiDotjsonRoute = ApiV1OpenapiDotjsonRouteImport.update({
@@ -1035,6 +1041,7 @@ export interface FileRoutesByFullPath {
   '/api/v1/mixtapes': typeof ApiV1MixtapesRoute
   '/api/v1/newsletter': typeof ApiV1NewsletterRoute
   '/api/v1/openapi.json': typeof ApiV1OpenapiDotjsonRoute
+  '/api/v1/orpc-openapi.json': typeof ApiV1OrpcOpenapiDotjsonRoute
   '/api/v1/postman.json': typeof ApiV1PostmanDotjsonRoute
   '/api/v1/search': typeof ApiV1SearchRoute
   '/api/v1/stories': typeof ApiV1StoriesRoute
@@ -1186,6 +1193,7 @@ export interface FileRoutesByTo {
   '/api/v1/mixtapes': typeof ApiV1MixtapesRoute
   '/api/v1/newsletter': typeof ApiV1NewsletterRoute
   '/api/v1/openapi.json': typeof ApiV1OpenapiDotjsonRoute
+  '/api/v1/orpc-openapi.json': typeof ApiV1OrpcOpenapiDotjsonRoute
   '/api/v1/postman.json': typeof ApiV1PostmanDotjsonRoute
   '/api/v1/search': typeof ApiV1SearchRoute
   '/api/v1/stories': typeof ApiV1StoriesRoute
@@ -1340,6 +1348,7 @@ export interface FileRoutesById {
   '/api/v1/mixtapes': typeof ApiV1MixtapesRoute
   '/api/v1/newsletter': typeof ApiV1NewsletterRoute
   '/api/v1/openapi.json': typeof ApiV1OpenapiDotjsonRoute
+  '/api/v1/orpc-openapi.json': typeof ApiV1OrpcOpenapiDotjsonRoute
   '/api/v1/postman.json': typeof ApiV1PostmanDotjsonRoute
   '/api/v1/search': typeof ApiV1SearchRoute
   '/api/v1/stories': typeof ApiV1StoriesRoute
@@ -1495,6 +1504,7 @@ export interface FileRouteTypes {
     | '/api/v1/mixtapes'
     | '/api/v1/newsletter'
     | '/api/v1/openapi.json'
+    | '/api/v1/orpc-openapi.json'
     | '/api/v1/postman.json'
     | '/api/v1/search'
     | '/api/v1/stories'
@@ -1646,6 +1656,7 @@ export interface FileRouteTypes {
     | '/api/v1/mixtapes'
     | '/api/v1/newsletter'
     | '/api/v1/openapi.json'
+    | '/api/v1/orpc-openapi.json'
     | '/api/v1/postman.json'
     | '/api/v1/search'
     | '/api/v1/stories'
@@ -1799,6 +1810,7 @@ export interface FileRouteTypes {
     | '/api/v1/mixtapes'
     | '/api/v1/newsletter'
     | '/api/v1/openapi.json'
+    | '/api/v1/orpc-openapi.json'
     | '/api/v1/postman.json'
     | '/api/v1/search'
     | '/api/v1/stories'
@@ -1938,6 +1950,7 @@ export interface RootRouteChildren {
   ApiV1MixtapesRoute: typeof ApiV1MixtapesRoute
   ApiV1NewsletterRoute: typeof ApiV1NewsletterRoute
   ApiV1OpenapiDotjsonRoute: typeof ApiV1OpenapiDotjsonRoute
+  ApiV1OrpcOpenapiDotjsonRoute: typeof ApiV1OrpcOpenapiDotjsonRoute
   ApiV1PostmanDotjsonRoute: typeof ApiV1PostmanDotjsonRoute
   ApiV1SearchRoute: typeof ApiV1SearchRoute
   ApiV1StoriesRoute: typeof ApiV1StoriesRoute
@@ -2252,6 +2265,13 @@ declare module '@tanstack/react-router' {
       path: '/api/v1/postman.json'
       fullPath: '/api/v1/postman.json'
       preLoaderRoute: typeof ApiV1PostmanDotjsonRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/orpc-openapi.json': {
+      id: '/api/v1/orpc-openapi.json'
+      path: '/api/v1/orpc-openapi.json'
+      fullPath: '/api/v1/orpc-openapi.json'
+      preLoaderRoute: typeof ApiV1OrpcOpenapiDotjsonRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/v1/openapi.json': {
@@ -3570,6 +3590,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiV1MixtapesRoute: ApiV1MixtapesRoute,
   ApiV1NewsletterRoute: ApiV1NewsletterRoute,
   ApiV1OpenapiDotjsonRoute: ApiV1OpenapiDotjsonRoute,
+  ApiV1OrpcOpenapiDotjsonRoute: ApiV1OrpcOpenapiDotjsonRoute,
   ApiV1PostmanDotjsonRoute: ApiV1PostmanDotjsonRoute,
   ApiV1SearchRoute: ApiV1SearchRoute,
   ApiV1StoriesRoute: ApiV1StoriesRoute,

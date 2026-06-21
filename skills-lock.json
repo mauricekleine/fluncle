@@ -12,6 +12,12 @@
       "sourceType": "local",
       "computedHash": "00b0717003135c26830a931a980a555740c80c879283fd000f3345459eca8cb2"
     },
+    "email-best-practices": {
+      "source": "resend/resend-skills",
+      "sourceType": "github",
+      "skillPath": "skills/email-best-practices/SKILL.md",
+      "computedHash": "c7218333381fa335b8a912bd55b3bb58b5b567a174f9e1d8b41940ff82f1a6b6"
+    },
     "fluncle-bpm-backfill": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-bpm-backfill",
       "sourceType": "local",
@@ -63,11 +69,29 @@
       "skillPath": "SKILL.md",
       "computedHash": "bb1a28c176a8c31305ad60b0bce66c536fe195b7943d0b7c669ae7b26f24a916"
     },
+    "react-email": {
+      "source": "resend/resend-skills",
+      "sourceType": "github",
+      "skillPath": "skills/react-email/SKILL.md",
+      "computedHash": "070a814e7ae89542250de27a0b03d8020ca1e8c57abf6304ecff527057c70256"
+    },
     "remotion-best-practices": {
       "source": "remotion-dev/skills",
       "sourceType": "github",
       "skillPath": "skills/remotion/SKILL.md",
       "computedHash": "006f8413941b59eff54a7ce64851b8a2fb79e7a3a5f1a895e97a48f01482553d"
+    },
+    "resend": {
+      "source": "resend/resend-skills",
+      "sourceType": "github",
+      "skillPath": "skills/resend/SKILL.md",
+      "computedHash": "9de632cf0e2a3f68b458f66ce95bb26999122277d126d53e7eafa6f0cdd0f013"
+    },
+    "resend-cli": {
+      "source": "resend/resend-skills",
+      "sourceType": "github",
+      "skillPath": "skills/resend-cli/SKILL.md",
+      "computedHash": "d3514da9f8e21c77697afcf4a499150e327d0277fb8c7b25b74340f98a4118a9"
     },
     "seo-audit": {
       "source": "coreyhaines31/marketingskills",

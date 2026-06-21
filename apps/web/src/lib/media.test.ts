@@ -5,6 +5,7 @@ import {
   trackMedia,
   videoAudioStripped,
   videoCrop,
+  videoCropPoster,
   videoPoster,
   videoRendition,
 } from "./media";
@@ -17,8 +18,15 @@ import {
 describe("videoRendition", () => {
   it("builds a same-zone mode=video transform pointing at the master footage", () => {
     expect(videoRendition("ABC123", { width: 720 })).toBe(
-      `${FOUND_BASE}/cdn-cgi/media/mode=video,width=720/${FOUND_BASE}/ABC123/footage.mp4`,
+      `${FOUND_BASE}/cdn-cgi/media/mode=video,width=720/${FOUND_BASE}/ABC123/footage.mp4?v=1`,
     );
+  });
+
+  it("rides the cache-bust token on the source so a re-rendered master re-keys the edge rendition", () => {
+    // docs/video-variants.md: masters are overwritten in place (the square
+    // backfill), so the transform URL must carry a version or the edge keeps
+    // serving the stale rendition. Guard that the token is never silently dropped.
+    expect(videoRendition("ABC123", { width: 720 })).toContain("/footage.mp4?v=");
   });
 
   it("carries the requested rung into the width option", () => {
@@ -28,7 +36,7 @@ describe("videoRendition", () => {
 
   it("encodes the Log ID in the source URL", () => {
     expect(videoRendition("a/b c", { width: 480 })).toBe(
-      `${FOUND_BASE}/cdn-cgi/media/mode=video,width=480/${FOUND_BASE}/a%2Fb%20c/footage.mp4`,
+      `${FOUND_BASE}/cdn-cgi/media/mode=video,width=480/${FOUND_BASE}/a%2Fb%20c/footage.mp4?v=1`,
     );
   });
 
@@ -39,7 +47,7 @@ describe("videoRendition", () => {
 
   it("points the rendition at the social cut when that master is named (Stories two-master)", () => {
     expect(videoRendition("ABC123", { master: "footage.social.mp4", width: 720 })).toBe(
-      `${FOUND_BASE}/cdn-cgi/media/mode=video,width=720/${FOUND_BASE}/ABC123/footage.social.mp4`,
+      `${FOUND_BASE}/cdn-cgi/media/mode=video,width=720/${FOUND_BASE}/ABC123/footage.social.mp4?v=1`,
     );
   });
 });
@@ -50,38 +58,86 @@ describe("videoRendition", () => {
 describe("videoCrop", () => {
   it("builds a centre-crop to portrait off the square master", () => {
     expect(videoCrop("ABC123", "portrait")).toBe(
-      `${FOUND_BASE}/cdn-cgi/media/fit=crop,width=1080,height=1920/${FOUND_BASE}/ABC123/footage.mp4`,
+      `${FOUND_BASE}/cdn-cgi/media/fit=cover,width=1080,height=1920/${FOUND_BASE}/ABC123/footage.mp4?v=1`,
     );
   });
 
   it("builds a centre-crop to landscape off the square master", () => {
     expect(videoCrop("ABC123", "landscape")).toBe(
-      `${FOUND_BASE}/cdn-cgi/media/fit=crop,width=1920,height=1080/${FOUND_BASE}/ABC123/footage.mp4`,
+      `${FOUND_BASE}/cdn-cgi/media/fit=cover,width=1920,height=1080/${FOUND_BASE}/ABC123/footage.mp4?v=1`,
     );
   });
 
   it("encodes the Log ID in the source URL", () => {
     expect(videoCrop("a/b c", "portrait")).toContain(`${FOUND_BASE}/a%2Fb%20c/footage.mp4`);
   });
+
+  it("snaps the crop to a ladder width, deriving height from the portrait aspect (16/9)", () => {
+    // Stories sizes the crop to the measured pane (a 720-rung phone), not the
+    // native 1080. Height follows the 16/9 portrait ratio: round(720 * 16/9) = 1280.
+    expect(videoCrop("ABC123", "portrait", 720)).toBe(
+      `${FOUND_BASE}/cdn-cgi/media/fit=cover,width=720,height=1280/${FOUND_BASE}/ABC123/footage.mp4?v=1`,
+    );
+  });
+
+  it("derives the landscape height from the 9/16 ratio at a requested width", () => {
+    // round(1280 * 9/16) = 720.
+    expect(videoCrop("ABC123", "landscape", 1280)).toBe(
+      `${FOUND_BASE}/cdn-cgi/media/fit=cover,width=1280,height=720/${FOUND_BASE}/ABC123/footage.mp4?v=1`,
+    );
+  });
+
+  it("falls back to the native width when none is given (the /log caller is unchanged)", () => {
+    expect(videoCrop("ABC123", "portrait")).toBe(videoCrop("ABC123", "portrait", 1080));
+    expect(videoCrop("ABC123", "landscape")).toBe(videoCrop("ABC123", "landscape", 1920));
+  });
+});
+
+// The squared poster twin: a single opening frame, centre-cropped to the same
+// orientation as videoCrop (Cloudflare MT accepts fit=cover + mode=frame —
+// verified 200 on a live portrait crop), so the squared <video> poster matches
+// the cropped clip instead of a square loading frame.
+describe("videoCropPoster", () => {
+  it("builds a fit=cover + mode=frame portrait poster off the square master", () => {
+    expect(videoCropPoster("ABC123", "portrait")).toBe(
+      `${FOUND_BASE}/cdn-cgi/media/fit=cover,width=1080,height=1920,mode=frame,time=0s,format=jpg/${FOUND_BASE}/ABC123/footage.mp4?v=1`,
+    );
+  });
+
+  it("snaps to a ladder width with height from the portrait aspect", () => {
+    expect(videoCropPoster("ABC123", "portrait", 720)).toBe(
+      `${FOUND_BASE}/cdn-cgi/media/fit=cover,width=720,height=1280,mode=frame,time=0s,format=jpg/${FOUND_BASE}/ABC123/footage.mp4?v=1`,
+    );
+  });
+
+  it("rides the cache-bust token so a re-rendered master re-keys the poster", () => {
+    expect(videoCropPoster("ABC123", "portrait")).toContain("/footage.mp4?v=");
+  });
+
+  it("encodes the Log ID in the source URL", () => {
+    expect(videoCropPoster("a/b c", "portrait")).toContain(`${FOUND_BASE}/a%2Fb%20c/footage.mp4`);
+  });
 });
 
 describe("videoAudioStripped", () => {
   it("wraps a same-zone source in an audio=false transform", () => {
     const source = `${FOUND_BASE}/ABC123/footage.social.mp4`;
-    expect(videoAudioStripped(source)).toBe(`${FOUND_BASE}/cdn-cgi/media/audio=false/${source}`);
+    expect(videoAudioStripped(source)).toBe(
+      `${FOUND_BASE}/cdn-cgi/media/audio=false/${source}?v=1`,
+    );
   });
 });
 
 describe("videoPoster", () => {
   it("builds a same-zone mode=frame transform for a cheap opening still", () => {
     expect(videoPoster("ABC123")).toBe(
-      `${FOUND_BASE}/cdn-cgi/media/mode=frame,time=0s,format=jpg/${FOUND_BASE}/ABC123/footage.mp4`,
+      `${FOUND_BASE}/cdn-cgi/media/mode=frame,time=0s,format=jpg/${FOUND_BASE}/ABC123/footage.mp4?v=1`,
     );
   });
 
   it("encodes the Log ID in the source URL", () => {
     expect(videoPoster("a/b c")).toBe(
-      `${FOUND_BASE}/cdn-cgi/media/mode=frame,time=0s,format=jpg/${FOUND_BASE}/a%2Fb%20c/footage.mp4`,
+      `${FOUND_BASE}/cdn-cgi/media/mode=frame,time=0s,format=jpg/${FOUND_BASE}/a%2Fb%20c/footage.mp4?v=1`,
     );
   });
 });

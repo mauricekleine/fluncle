@@ -5,10 +5,15 @@
   "license": "Apache-2.0",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./orpc": "./src/orpc/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@orpc/contract": "1.14.6",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "typescript": "catalog:"

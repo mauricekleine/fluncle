@@ -12,6 +12,10 @@ import { type TrackListItem } from "@/lib/server/tracks";
 
 /** A page row: a finding plus its per-platform posts and mixtape memberships. */
 export type BoardRow = TrackListItem & {
+  // Whether the finding carries an internal `context_note` (the firecrawl-derived
+  // facts that fuel the observation script). Pulled through the admin-only board
+  // path, never the public `TrackListItem` contract — see observation-board.ts.
+  hasContextNote: boolean;
   mixtapes: MixtapeMembership[];
   posts: SocialPostItem[];
 };

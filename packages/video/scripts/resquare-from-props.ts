@@ -43,6 +43,7 @@ import path from "node:path";
 
 import { render } from "../src/pipeline/render";
 import { type NostalgicCosmosProps } from "../src/remotion/types";
+import { buildVariants } from "../src/remotion/variants";
 
 const PACKAGE_ROOT = path.resolve(import.meta.dirname, "..");
 const OUT_DIR = path.join(PACKAGE_ROOT, "out");
@@ -180,6 +181,11 @@ async function main(): Promise<void> {
         compositionSource: "composition.tsx",
         props: "props.json",
         trackId: renderManifest.trackId,
+        // Both masters ship from here: footage.mp4 is the freshly re-rendered
+        // square/clean cut, footage.social.mp4 is the preserved original
+        // portrait/text cut. Record each one's render flags so a later clean
+        // re-render reproduces the right cut. See docs/video-variants.md.
+        variants: buildVariants(),
         ...(renderManifest.vehicle != null ? { vehicle: renderManifest.vehicle } : {}),
       },
       null,

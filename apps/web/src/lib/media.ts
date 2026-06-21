@@ -129,6 +129,26 @@ export function spotifyAlbumImageAtSize(
 const MEDIA_TRANSFORM_BASE = `${FOUND_BASE}/cdn-cgi/media`;
 
 /**
+ * Cache-bust token for Media Transformations. Each rendition is edge-cached
+ * keyed on its transform URL (which embeds the source master URL), so when a
+ * master is overwritten in place at the same R2 key — e.g. the square-footage
+ * backfill re-rendered every finding's `footage.mp4` (docs/video-variants.md) —
+ * the cached renditions keep serving the OLD master until their edge entry
+ * expires. Riding this token on every transform source as `?v=N` re-keys the
+ * whole catalogue's renditions in a single deploy; bump it whenever masters are
+ * overwritten in bulk. R2 ignores the query (the master resolves byte-identically,
+ * verified), so only the transform cache key changes — never the bytes fetched.
+ * This mirrors the `?n=<version>` cache-bust the OG/cover images already use on
+ * this zone.
+ */
+const TRANSFORM_VERSION = 1;
+
+/** Append the cache-bust token to a transform's source master URL. */
+function versionedSource(source: string): string {
+  return `${source}?v=${TRANSFORM_VERSION}`;
+}
+
+/**
  * The intrinsic width Cloudflare transcodes a rendition to. The list is sparse
  * on purpose — each distinct width is a separately-cached transform, so we snap
  * the viewport to a small ladder instead of minting a per-pixel rendition.
@@ -147,7 +167,7 @@ export function videoRendition(
   logId: string,
   { master = "footage.mp4", width }: { master?: string; width: RenditionWidth },
 ): string {
-  const source = `${FOUND_BASE}/${encodeURIComponent(logId)}/${master}`;
+  const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/${master}`);
 
   return `${MEDIA_TRANSFORM_BASE}/mode=video,width=${width}/${source}`;
 }
@@ -161,7 +181,7 @@ export function videoRendition(
  * image, not the full poster asset.
  */
 export function videoPoster(logId: string, master = "footage.mp4"): string {
-  const source = `${FOUND_BASE}/${encodeURIComponent(logId)}/${master}`;
+  const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/${master}`);
 
   return `${MEDIA_TRANSFORM_BASE}/mode=frame,time=0s,format=jpg/${source}`;
 }
@@ -171,8 +191,10 @@ export function videoPoster(logId: string, master = "footage.mp4"): string {
 // Under the two-master layout (videoSquaredAt set), `footage.mp4` is the CLEAN
 // square 1920×1920 source master. The archive surfaces (/log, radio) never play
 // the square — they request an on-the-fly MT centre-crop to the orientation the
-// viewport wants. `fit=crop` is a CENTRE crop, so a 1920×1920 master yields both
-// a native-resolution 1080×1920 portrait and 1920×1080 landscape with no upscale
+// viewport wants. `fit=cover` scales-to-fill then centre-crops the overflow (the
+// only crop-to-fill `fit` Cloudflare video MT supports — bare `crop` is rejected
+// with a 400), so a 1920×1920 master yields both a native-resolution 1080×1920
+// portrait and 1920×1080 landscape with no upscale
 // (only the centre "plus" of the square is ever seen — compositions destined to
 // be cropped keep their centre of gravity centered). These ONLY apply when the
 // finding carries the square master; a legacy finding still plays `footage.mp4`
@@ -181,24 +203,59 @@ export function videoPoster(logId: string, master = "footage.mp4"): string {
 /** Crop orientation for the square master: portrait (mobile) or landscape (desktop). */
 export type CropOrientation = "landscape" | "portrait";
 
-const CROP_DIMENSIONS: Record<CropOrientation, { height: number; width: number }> = {
-  // 16:9 full-screen radio/desktop; 9:16 mobile. Both native off the 1920² square.
-  landscape: { height: 1080, width: 1920 },
-  portrait: { height: 1080 * (16 / 9), width: 1080 },
+// The native crop width per orientation AND the height ratio (height ÷ width)
+// the centre-crop preserves at any requested width. The square master is 1920²:
+// a 9:16 portrait crops to 1080×1920 (ratio 16/9), a 16:9 landscape to 1920×1080
+// (ratio 9/16). When a caller asks for a narrower width (the Stories resolution
+// ladder) height follows the SAME ratio, so the crop stays the exact
+// portrait/landscape aspect — just smaller and lighter on the wire.
+const CROP_GEOMETRY: Record<CropOrientation, { nativeWidth: number; ratio: number }> = {
+  // 16:9 full-screen radio/desktop; 9:16 mobile. Native off the 1920² square.
+  landscape: { nativeWidth: 1920, ratio: 9 / 16 },
+  portrait: { nativeWidth: 1080, ratio: 16 / 9 },
 };
 
 /**
  * Build a same-zone Media Transformations URL that CENTRE-CROPS the square
- * `footage.mp4` master to `orientation`. `fit=crop,width=W,height=H` resizes +
- * crops in one op; the result is edge-cached like the resolution-ladder
- * renditions. Only valid for a finding under the two-master layout (its
- * `footage.mp4` is the clean square) — callers gate on `videoSquaredAt`.
+ * `footage.mp4` master to `orientation`. `fit=cover,width=W,height=H` scales the
+ * source to fill the box then crops the overflow from the centre, in one op; the
+ * result is edge-cached like the resolution-ladder renditions. (`fit=cover` is
+ * the only crop-to-fill fit Cloudflare video MT accepts — `crop` 400s.) Only
+ * valid for a finding under the two-master layout (its `footage.mp4` is the clean
+ * square) — callers gate on `videoSquaredAt`.
+ *
+ * `width` snaps the crop to a resolution-ladder rung (Stories sizes the crop to
+ * the measured pane, not the native 1080/1920); height follows the orientation's
+ * aspect so the crop stays exactly portrait/landscape. Defaults to the native
+ * width, so the fixed-resolution caller (/log) reads the same URL as before.
  */
-export function videoCrop(logId: string, orientation: CropOrientation): string {
-  const source = `${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`;
-  const { height, width } = CROP_DIMENSIONS[orientation];
+export function videoCrop(logId: string, orientation: CropOrientation, width?: number): string {
+  const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`);
+  const { nativeWidth, ratio } = CROP_GEOMETRY[orientation];
+  const cropWidth = width ?? nativeWidth;
+  const cropHeight = Math.round(cropWidth * ratio);
 
-  return `${MEDIA_TRANSFORM_BASE}/fit=crop,width=${width},height=${height}/${source}`;
+  return `${MEDIA_TRANSFORM_BASE}/fit=cover,width=${cropWidth},height=${cropHeight}/${source}`;
+}
+
+/**
+ * The poster twin of `videoCrop`: a single opening frame, CENTRE-CROPPED to
+ * `orientation` off the square master. Cloudflare MT accepts `fit=cover` combined
+ * with `mode=frame` (verified 200 on a live portrait crop), so the squared poster
+ * matches the cropped clip's aspect instead of a square loading frame. Same
+ * gating as `videoCrop` — only valid under the two-master layout.
+ */
+export function videoCropPoster(
+  logId: string,
+  orientation: CropOrientation,
+  width?: number,
+): string {
+  const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`);
+  const { nativeWidth, ratio } = CROP_GEOMETRY[orientation];
+  const cropWidth = width ?? nativeWidth;
+  const cropHeight = Math.round(cropWidth * ratio);
+
+  return `${MEDIA_TRANSFORM_BASE}/fit=cover,width=${cropWidth},height=${cropHeight},mode=frame,time=0s,format=jpg/${source}`;
 }
 
 /**
@@ -209,5 +266,5 @@ export function videoCrop(logId: string, orientation: CropOrientation): string {
  * URL (same zone as the transform base).
  */
 export function videoAudioStripped(source: string): string {
-  return `${MEDIA_TRANSFORM_BASE}/audio=false/${source}`;
+  return `${MEDIA_TRANSFORM_BASE}/audio=false/${versionedSource(source)}`;
 }
