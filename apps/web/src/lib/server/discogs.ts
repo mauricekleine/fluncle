@@ -205,6 +205,9 @@ async function mbFetch<T>(path: string): Promise<T | undefined> {
   });
 
   if (!response.ok) {
+    // Surface the status — a swallowed 503 (MB rate-limit) or 403 (bad User-Agent)
+    // is otherwise indistinguishable from a genuine no-match. Visible in `wrangler tail`.
+    console.warn(`[musicbrainz] ${response.status} ${response.statusText} for ${path}`);
     return undefined;
   }
 
@@ -367,6 +370,10 @@ async function discogsFetch<T>(path: string, token: string): Promise<T | undefin
   });
 
   if (!response.ok) {
+    // Surface the status — a swallowed 401 (bad/expired token) or 429 (rate-limit)
+    // looks exactly like a no-match downstream, so a wrong prod token reads as a
+    // clean "0 resolved". Visible in `wrangler tail`.
+    console.warn(`[discogs] ${response.status} ${response.statusText} for ${path}`);
     return undefined;
   }
 
