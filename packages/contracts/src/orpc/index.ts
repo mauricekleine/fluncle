@@ -22,13 +22,28 @@
 // live route; resources are plural, the op noun stays singular.
 
 import { healthContract } from "./health";
+import { mixtapesContract } from "./mixtapes";
+import { newsletterContract } from "./newsletter";
+import { searchContract } from "./search";
+import { storiesContract } from "./stories";
+import { submissionsContract } from "./submissions";
 import { tracksContract } from "./tracks";
 
 // Re-export the per-op contracts so existing importers (and the typed client)
 // keep their entrypoints.
 export { getHealth } from "./health";
+export { listMixtapes } from "./mixtapes";
+export { subscribeNewsletter } from "./newsletter";
+export { searchTracks } from "./search";
+export { listStories } from "./stories";
+export { submitTrack } from "./submissions";
 export { getRandomTrack, getTrack, listTracks } from "./tracks";
-export { MixtapeDTOSchema, TrackListItemSchema } from "./_shared";
+export {
+  MixtapeDTOSchema,
+  SubmissionSchema,
+  TrackListItemSchema,
+  TrackSearchResultSchema,
+} from "./_shared";
 
 /**
  * The Fluncle API contract router. A flat map keyed by the canonical `verb_noun`
@@ -42,6 +57,11 @@ export { MixtapeDTOSchema, TrackListItemSchema } from "./_shared";
  */
 export const contract = {
   ...healthContract,
+  ...mixtapesContract,
+  ...newsletterContract,
+  ...searchContract,
+  ...storiesContract,
+  ...submissionsContract,
   ...tracksContract,
 };
 

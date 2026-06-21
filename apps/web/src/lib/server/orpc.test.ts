@@ -69,8 +69,9 @@ describe("oRPC rails — handleOrpc", () => {
   it("falls through (null) for an /api route with no contract yet", async () => {
     const { handleOrpc } = await import("./orpc");
 
-    // /mixtapes is not converted yet — oRPC must not claim it, it falls through.
-    expect(await handleOrpc(get("https://www.fluncle.com/api/v1/mixtapes"))).toBeNull();
+    // /me/profile is the private (`/me`) tier — Wave B, not converted yet — so
+    // oRPC must not claim it; it falls through to TanStack.
+    expect(await handleOrpc(get("https://www.fluncle.com/api/v1/me/profile"))).toBeNull();
   });
 });
 

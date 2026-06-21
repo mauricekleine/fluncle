@@ -112,3 +112,34 @@ export const MixtapeDTOSchema = z
 export const FeedItemSchema = z
   .union([TrackListItemSchema, MixtapeDTOSchema])
   .meta({ id: "FeedItem" });
+
+/** A Spotify search candidate (`TrackSearchResult` in ../index.ts; `/api/search`). */
+export const TrackSearchResultSchema = z
+  .object({
+    album: z.string().optional(),
+    artists: z.array(z.string()),
+    artworkUrl: z.string().optional(),
+    id: z.string(),
+    spotifyUrl: z.string(),
+    title: z.string(),
+  })
+  .meta({ id: "TrackSearchResult" });
+
+/** A finding submission as `/api/submissions` records it (`Submission` in ../index.ts). */
+export const SubmissionSchema = z
+  .object({
+    album: z.string().optional(),
+    artists: z.array(z.string()),
+    artworkUrl: z.string().optional(),
+    contact: z.string().optional(),
+    createdAt: z.string(),
+    id: z.string(),
+    note: z.string().optional(),
+    reviewedAt: z.string().optional(),
+    source: z.enum(["cli", "ssh", "web"]),
+    spotifyTrackId: z.string(),
+    spotifyUrl: z.string(),
+    status: z.enum(["approved", "pending", "rejected"]),
+    title: z.string(),
+  })
+  .meta({ id: "Submission" });
