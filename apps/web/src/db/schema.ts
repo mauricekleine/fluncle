@@ -78,6 +78,15 @@ export const tracks = sqliteTable("tracks", {
   // we can compare model × thinking level. Defaults to "high" — the existing
   // videos were authored at high reasoning, so existing rows backfill.
   videoModelReasoning: text("video_model_reasoning").default("high"),
+  // The two-master video layout signal (see docs/video-variants.md). NON-NULL once
+  // the SQUARE crop source has been uploaded as footage.mp4 — i.e. this finding's
+  // footage.mp4 is now the clean 1920×1920 master MT crops on the fly, and a baked
+  // portrait footage.social.mp4 rides alongside. NULL = the legacy single-file
+  // layout (footage.mp4 is still the old portrait+text cut); consumers fall back to
+  // today's behavior. Set by the video finalize/upload path, never by the
+  // footage.mp4 → footage.social.mp4 R2 rename migration (that copy alone doesn't
+  // make footage.mp4 square). The presence of the timestamp is the only thing read.
+  videoSquaredAt: text("video_squared_at"),
   videoUrl: text("video_url"),
   // The travelling vehicle of the track's video (e.g. "voronoi cellular",
   // "caustic web"). Set when the video is uploaded; surfaced in /api/tracks so

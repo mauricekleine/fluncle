@@ -82,13 +82,17 @@ export const serverHandlers: ApiHandlers = {
         return jsonError(400, "no_footage", "A `footage` cut (footage.mp4) is required");
       }
 
-      // The footage (with-audio) cut is the canonical web video; the vehicle
-      // (when present) joins it as the diversity-ledger entry, and the
-      // authoring model + reasoning default when render.json omits them.
+      // footage.mp4 is the canonical web video; the vehicle (when present) joins
+      // it as the diversity-ledger entry, and the authoring model + reasoning
+      // default when render.json omits them. When the bundle also carried the
+      // portrait footage.social.mp4, footage.mp4 is the clean square crop source,
+      // so stamp the two-master layout signal (docs/video-variants.md).
+      const squared = Boolean(stored["footage-social"]);
       await updateTrack(track.trackId, {
         videoModel: videoModel ?? "anthropic/claude-opus-4-8",
         videoModelReasoning: videoModelReasoning ?? "high",
         videoUrl: stored.footage,
+        ...(squared ? { videoSquaredAt: new Date().toISOString() } : {}),
         ...(videoVehicle ? { videoVehicle } : {}),
       });
 

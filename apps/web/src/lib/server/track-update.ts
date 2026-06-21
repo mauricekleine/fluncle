@@ -46,6 +46,13 @@ export type TrackUpdate = {
   videoModel?: string;
   /** The reasoning/thinking effort the authoring model ran at (e.g. "high"). */
   videoModelReasoning?: string;
+  /**
+   * The two-master layout signal (docs/video-variants.md): an ISO timestamp set
+   * when the SQUARE crop source ships as footage.mp4. Its presence flips archive
+   * surfaces to MT crops; absent, they fall back to the legacy portrait footage.
+   * Empty string clears it (back to legacy). Idempotent re-ships re-stamp it.
+   */
+  videoSquaredAt?: string;
   videoUrl?: string;
   /** The video's travelling vehicle (diversity ledger; surfaced in /api/tracks). */
   videoVehicle?: string;
@@ -72,6 +79,7 @@ const VISIBLE_FIELDS = new Set<keyof TrackUpdate>([
   "observationGeneratedAt",
   "videoModel",
   "videoModelReasoning",
+  "videoSquaredAt",
   "videoUrl",
   "videoVehicle",
   "vibeX",
@@ -135,6 +143,14 @@ export async function updateTrack(
   if (update.videoModelReasoning !== undefined) {
     sets.push("video_model_reasoning = ?");
     args.push(update.videoModelReasoning);
+  }
+
+  if (update.videoSquaredAt !== undefined) {
+    // Empty string clears the signal (back to the legacy single-file layout);
+    // any value stamps the two-master layout. null, not "", so a cleared row is
+    // treated as un-squared by the `video_squared_at is not null` reads.
+    sets.push("video_squared_at = ?");
+    args.push(update.videoSquaredAt === "" ? null : update.videoSquaredAt);
   }
 
   if (update.enrichmentStatus !== undefined) {

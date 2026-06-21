@@ -38,6 +38,7 @@ export type TrackVideoOptions = {
   cover?: string;
   footage?: string;
   footageSilent?: string;
+  footageSocial?: string;
   model?: string;
   note?: string;
   poster?: string;
@@ -69,6 +70,7 @@ const FOUND_BASE = "https://found.fluncle.com";
 // signature; we just echo it back on the request.
 const VIDEO_FIELDS: ReadonlyArray<{ field: string; option: keyof TrackVideoOptions }> = [
   { field: "footage", option: "footage" },
+  { field: "footage-social", option: "footageSocial" },
   { field: "footage-silent", option: "footageSilent" },
   { field: "poster", option: "poster" },
   { field: "cover", option: "cover" },
@@ -135,16 +137,21 @@ export async function trackVideoCommand(
 
   // Phase 3: finalize — link the footage cut as video_url and record the vehicle
   // read from the bundle's render.json (the diversity ledger). The authoring
-  // model comes from --model, else render.json, else the default.
+  // model comes from --model, else render.json, else the default. When the bundle
+  // carried BOTH the square footage.mp4 and the portrait footage.social.mp4,
+  // footage.mp4 is the clean square crop source, so signal `squared` to stamp the
+  // two-master layout (docs/video-variants.md).
   const manifest = files.render ? await readManifestFields(files.render) : {};
   const videoModel = files.model?.trim().slice(0, 120) || manifest.model || DEFAULT_VIDEO_MODEL;
   const videoModelReasoning =
     files.reasoning?.trim().slice(0, 120) || manifest.reasoning || DEFAULT_VIDEO_REASONING;
+  const squared = Boolean(urls["footage"] && urls["footage-social"]);
   const finalize = await adminApiPost<FinalizeResponse>(
     `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/video/finalize`,
     {
       videoModel,
       videoModelReasoning,
+      ...(squared ? { squared: true } : {}),
       ...(manifest.vehicle ? { videoVehicle: manifest.vehicle } : {}),
     },
   );

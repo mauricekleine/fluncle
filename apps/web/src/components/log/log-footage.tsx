@@ -1,7 +1,13 @@
 import { PauseIcon, PlayIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { spotifyAlbumImageAtSize, trackMedia, videoPoster, videoRendition } from "@/lib/media";
+import {
+  spotifyAlbumImageAtSize,
+  trackMedia,
+  videoCrop,
+  videoPoster,
+  videoRendition,
+} from "@/lib/media";
 import { usePreviewPlayer } from "@/lib/preview-player";
 import { type Track } from "@/lib/tracks";
 import { useInViewport } from "@/lib/use-in-viewport";
@@ -15,6 +21,13 @@ import { useResponsiveWidth } from "@/lib/use-responsive-width";
 export function LogFootage({ track }: { track: Track }) {
   const media = track.logId ? trackMedia(track.logId) : undefined;
   const masterVideoUrl = track.videoUrl;
+  // The /log page owns its chrome (Log ID, prose, metadata), so it plays the
+  // CLEAN footage, not the baked-text social cut. Under the two-master layout
+  // (videoSquaredAt set) footage.mp4 is the clean square master, so /log requests
+  // an MT centre-crop to the 9:16 pane (the desktop-landscape "show off" arrives
+  // with the radio surface). A legacy finding (no signal) keeps playing
+  // footage.mp4 as today's portrait+text cut (docs/video-variants.md).
+  const squared = Boolean(track.videoSquaredAt);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const preview = usePreviewPlayer(track.trackId);
 
@@ -31,8 +44,14 @@ export function LogFootage({ track }: { track: Track }) {
   const renditionWidth = useResponsiveWidth(videoRef);
   const [renditionFailed, setRenditionFailed] = useState(false);
   const videoUrl =
-    masterVideoUrl && track.logId && renditionWidth && nearViewport && !renditionFailed
-      ? videoRendition(track.logId, { width: renditionWidth })
+    masterVideoUrl && track.logId && nearViewport && !renditionFailed
+      ? squared
+        ? // Two-master: a clean portrait centre-crop off the square master.
+          videoCrop(track.logId, "portrait")
+        : // Legacy: a width-ladder rendition off the portrait footage.mp4.
+          renditionWidth
+          ? videoRendition(track.logId, { width: renditionWidth })
+          : masterVideoUrl
       : masterVideoUrl;
 
   const [posterFailed, setPosterFailed] = useState(false);
