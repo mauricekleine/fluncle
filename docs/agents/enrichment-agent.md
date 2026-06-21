@@ -27,7 +27,7 @@ It does **not** need a checkout of this repo. The enrichment skill is self-conta
 The enrichment script may export the exact official 30s preview used for the feature vector. Store that file with:
 
 ```
-fluncle admin track preview-archive <track_id|log_id> --file <file> --source <source> --mime <mime>
+fluncle admin tracks preview <track_id|log_id> --file <file> --source <source> --mime <mime>
 ```
 
 This writes to an operator-only archive path in the existing R2 bucket and records internal `preview_archive_*` metadata. It is for private analysis/model training only: the archive key is not exposed through public DTOs, never appears in UI/RSS/sitemaps, and `/api/preview` never reads it. Public playback stays live-only through Deezer with iTunes fallback and `Cache-Control: no-store`. Never archive full songs. New enrichments archive the exact analyzed bytes; backlog backfill is best-effort and archives the freshly re-resolved official preview.
@@ -37,7 +37,7 @@ This writes to an operator-only archive path in the existing R2 bucket and recor
 Rendering the per-track video is a **separate capability** — Remotion needs the `packages/video` kit present (a repo checkout / prebuilt image), which the self-contained enrichment skill deliberately does not carry. Its doctrine lives in the **`fluncle-video` skill** (`packages/skills/fluncle-video/SKILL.md` + `references/`); `packages/video/README.md` is the code-of-record for the surface and props contract. The kit's ship step produces a bundle under `out/<log-id>/`: `footage.mp4` (the review cut, with audio), `footage-silent.mp4` (the audio-less cut for manual TikTok sound-attach), `poster.jpg`, and `note.txt` (the caption). Upload the whole bundle in one call:
 
 ```
-fluncle admin track video <track_id|log_id> --dir out/<log-id>
+fluncle admin tracks video <track_id|log_id> --dir out/<log-id>
 ```
 
 The CLI uploads each artifact **directly to R2** via short-lived presigned PUT URLs the Worker signs (`POST .../video/uploads` → PUT each file to its R2 S3 URL → `POST .../video/finalize`), so the bytes never traverse the Worker and a large (crf-20, ~99MB/cut) bundle bypasses Cloudflare's ~100MB edge body limit. Each artifact lands at `<log-id>/<name>` on R2 (`found.fluncle.com`) and `video_url` is set to the review cut. **The Worker owns R2; the agent uploads with its admin token and never holds R2 credentials** — it only ever sees the expiring presigned URLs. Requires the track to have a Log ID (one identity everywhere). (Small bundles can still use the legacy single multipart `POST /api/admin/tracks/:id/video`.)
@@ -47,9 +47,9 @@ The CLI uploads each artifact **directly to R2** via short-lived presigned PUT U
 Once the bundle is in R2, the track can go to social platforms — **as a draft, never auto-posted.** The official sound attaches only in-app, so the agent pushes the **audio-less** cut + the caption as a private (`SELF_ONLY`) draft and the operator adds the sound and publishes natively. Doctrine is the **`fluncle-publish` skill** (`packages/skills/fluncle-publish/SKILL.md`); the model is [track-lifecycle.md](../track-lifecycle.md) Phase 3 + the per-platform `social_posts` table. Drafts go through **Postiz** — one `POSTIZ_API_KEY` on the Worker, no per-platform OAuth:
 
 ```
-fluncle admin track draft  <track_id|log_id> [--platform tiktok]                                  # → inbox draft
-fluncle admin track social <track_id|log_id> [--platform tiktok]                                  # show status
-fluncle admin track social <track_id|log_id> --platform tiktok --status published --url <url>     # record outcome
+fluncle admin tracks draft  <track_id|log_id> [--platform tiktok]                                  # → inbox draft
+fluncle admin tracks social <track_id|log_id> [--platform tiktok]                                  # show status
+fluncle admin tracks social <track_id|log_id> --platform tiktok --status published --url <url>     # record outcome
 ```
 
 - `track draft` → `POST /api/admin/tracks/:id/social/:platform/draft`: the Worker uploads the silent cut to Postiz and creates a `content_posting_method: UPLOAD` + `SELF_ONLY` post, sent immediately, which lands in the TikTok app **Inbox** (the `tiktok.com/messages` notification — _not_ Create → Drafts). Returns the Postiz post id, recorded in `social_posts`.
@@ -62,7 +62,7 @@ The agent never holds the Postiz key — the Worker owns it, same pattern as R2.
 Once a track has its enrichment and (for the spoken script's creative fuel) ideally its video, the agent can mint the **audio observation** — Fluncle's spoken field observation, rendered with ElevenLabs and stored beside the video bundle at `<log-id>/observation.{mp3,txt,json}`. The agent authors + voice-gates the script (it holds `copywriting-fluncle`); the Worker fetches the factual context, re-scans, renders, uploads, and writes back. One command:
 
 ```
-fluncle admin track observe <track_id|log_id> --script-file observation.txt --duration-ms <probed>
+fluncle admin tracks observe <track_id|log_id> --script-file observation.txt --duration-ms <probed>
 ```
 
 Its full doctrine is **[observation-agent.md](./observation-agent.md)** (the two artifacts, the voice gate, the safety rails — facts only, no lyrics, no commercial track audio). `observe` is auto-allowed but spends a paid render per call, so de-dupe per Log ID. The Worker owns the firecrawl + ElevenLabs secrets; the agent holds only its admin token.

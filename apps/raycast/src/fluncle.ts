@@ -42,7 +42,7 @@ function getFlunclePath(): string {
 }
 
 export async function addTrack(url: string, note?: string): Promise<AddResult> {
-  const args = ["admin", "add", url, "--json"];
+  const args = ["admin", "tracks", "publish", url, "--json"];
 
   if (note?.trim()) {
     args.push("--note", note.trim());

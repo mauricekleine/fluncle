@@ -8,7 +8,7 @@
 // Given an artist + title (the agent gets these from `fluncle track get --json`),
 // it resolves a legal preview clip, decodes it, and emits an analysis JSON on
 // stdout: BPM, musical key (+confidence), and spectral features. The agent then
-// writes the result back with `fluncle admin track update`; vibe placement stays
+// writes the result back with `fluncle admin tracks update`; vibe placement stays
 // with the operator in `/admin/tag`.
 //
 //   bun analyze-track.ts --artist "Loadstar" --title "Take a Deep Breath" [--isrc GB5KW1701923]

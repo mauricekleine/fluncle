@@ -16,7 +16,7 @@ Do not import Turso/libSQL, Spotify clients, Telegram APIs, or web API clients i
 
 Current commands:
 
-- `quick-add`: no-view command; reads clipboard and runs `fluncle admin add <url> --json`.
+- `quick-add`: no-view command; reads clipboard and runs `fluncle admin tracks publish <url> --json`.
 - `add-track`: form command; Spotify URL plus optional note.
 - `recent-tracks`: list command titled "Recent Bangers"; runs `fluncle recent --json`.
 

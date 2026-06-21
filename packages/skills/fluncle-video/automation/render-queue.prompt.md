@@ -9,9 +9,9 @@ This is the entire task. Do not batch. Do not "catch up" the backlog. One findin
 `fluncle` is installed as a pinned standalone binary on `PATH` (`~/.local/bin/fluncle`), wired to **production**. Every `fluncle` command below is that binary, run **plainly** — no wrapper, no pipe:
 
 ```
-fluncle admin queue --limit 1 --json
-fluncle admin vehicles --json
-fluncle admin track video <log-id> --dir packages/video/out/<log-id>
+fluncle admin tracks queue --limit 1 --json
+fluncle admin tracks vehicles --json
+fluncle admin tracks video <log-id> --dir packages/video/out/<log-id>
 ```
 
 - **NEVER run the CLI from source.** Do not use `bun run --cwd apps/cli fluncle …` or `bun run ./src/cli.ts …`. The from-source run loads a **different env profile — the wrong DB / wrong API target** — and on top of that reflects uncommitted local CLI edits instead of the pinned binary, recompiles on every call, and prints a `$ bun run …` banner. The automation must hit the same production endpoint every tick: that is the installed binary, full stop.
@@ -20,7 +20,7 @@ fluncle admin track video <log-id> --dir packages/video/out/<log-id>
 
 ## The one invariant that makes re-runs safe
 
-Claude Code delivery is **at-least-once** — this prompt may fire more than once for the same tick, or overlap a slow run. Do **not** add your own locks or state. Safety comes from the queue itself: `fluncle admin queue` returns only findings whose `video_url` is unset, oldest first. The moment a finding is shipped, `fluncle admin track video` sets its `video_url`, so it **leaves the queue** and the next run cannot pick it again. So:
+Claude Code delivery is **at-least-once** — this prompt may fire more than once for the same tick, or overlap a slow run. Do **not** add your own locks or state. Safety comes from the queue itself: `fluncle admin tracks queue` returns only findings whose `video_url` is unset, oldest first. The moment a finding is shipped, `fluncle admin tracks video` sets its `video_url`, so it **leaves the queue** and the next run cannot pick it again. So:
 
 - Always re-read the queue at the START of the run. Never trust a finding id from a previous run.
 - A finding is "claimed" the instant its `video_url` is set (the ship step). Until then it is fair game; after then it is invisible to the queue. There is no intermediate lock — and you do not need one, because you film at most one per run and the queue gates it.
@@ -33,7 +33,7 @@ Run from the root of a Fluncle repo checkout. `bun` runs the video kit (never np
 ### 1. Read the queue head
 
 ```
-fluncle admin queue --limit 1 --json
+fluncle admin tracks queue --limit 1 --json
 ```
 
 This returns `{ "ok": true, "tracks": [ ... ] }`. Each entry has `trackId`, `logId`, `title`, `artists`, and (for queue items) no `videoUrl`.
@@ -46,7 +46,7 @@ A finding with no `logId` cannot be shipped (ship requires a Log ID). If `tracks
 ### 2. Diversity check (do not skip)
 
 ```
-fluncle admin vehicles --json
+fluncle admin tracks vehicles --json
 ```
 
 This returns `{ "ok": true, "vehicles": [ ... ] }`, recently-used vehicles newest first — the diversity ledger (doctrine 3 of the `@fluncle-video` skill). Read the recent `vehicle` values and pick a medium/primitive clearly DIFFERENT from the last few; also fetch a couple of recent posters as the skill describes. Never repeat the most-recent vehicle unless the music genuinely demands it.
@@ -71,7 +71,7 @@ Per the skill's ship step:
 
 ```
 bun run --cwd packages/video ship <log-id> --vehicle "<your vehicle>"
-fluncle admin track video <log-id> --dir packages/video/out/<log-id>
+fluncle admin tracks video <log-id> --dir packages/video/out/<log-id>
 ```
 
 The `track video` upload sets the finding's `video_url`. **This is the act that removes the finding from the queue** and makes this run idempotent. Confirm it succeeded before you consider the run complete.

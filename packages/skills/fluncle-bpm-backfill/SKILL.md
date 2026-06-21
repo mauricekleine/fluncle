@@ -180,7 +180,7 @@ disagree, surface it and let the human decide rather than picking silently.
 On approval, write it:
 
 ```bash
-fluncle admin track update <trackId> --bpm <value>
+fluncle admin tracks update <trackId> --bpm <value>
 ```
 
 Then state the provenance plainly in your summary (e.g. "wrote 172.27, source:
