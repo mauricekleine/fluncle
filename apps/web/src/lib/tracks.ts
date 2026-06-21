@@ -44,3 +44,21 @@ export async function fetchRandomTrack(): Promise<Track> {
 
   return data.track;
 }
+
+/**
+ * One random RADIO-ELIGIBLE finding (a squared master + an observation) for the
+ * cycling station. Served by the `get_random_radio_track` oRPC op under the
+ * versioned prefix; the page builds the per-orientation silent video URLs from
+ * the returned `logId`.
+ */
+export async function fetchRandomRadioTrack(): Promise<Track> {
+  const response = await fetch("/api/v1/radio/random");
+
+  if (!response.ok) {
+    throw new Error(`Failed to load radio track: ${response.status}`);
+  }
+
+  const data = (await response.json()) as RandomTrackResponse;
+
+  return data.track;
+}

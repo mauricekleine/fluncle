@@ -1778,6 +1778,115 @@ body::before {
   }
 }
 
+/* radio.fluncle.com — the cycling observation station (RFC Unit B). Full-screen,
+   dark, cover-led: the finding's clean footage runs full-bleed (landscape on
+   desktop, portrait on mobile via the MT crop the JS picks), the spoken
+   observation over it, metadata legible at the bottom over a scrim. */
+.radio-stage {
+  background: var(--sleeve-black);
+  inset: 0;
+  overflow: hidden;
+  position: fixed;
+}
+
+.radio-footage {
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+
+/* The Legible Sky Rule: a bottom scrim keeps the metadata AA-legible over any
+   frame of footage. */
+.radio-scrim {
+  background: linear-gradient(
+    to top,
+    color-mix(in oklch, var(--deep-field) 92%, transparent),
+    transparent 45%
+  );
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+}
+
+.radio-meta {
+  bottom: 0;
+  display: grid;
+  gap: 0.4rem;
+  justify-items: start;
+  left: 0;
+  margin-inline: auto;
+  max-width: 64rem;
+  padding: 1.25rem 1.25rem calc(1.5rem + env(safe-area-inset-bottom));
+  position: absolute;
+  right: 0;
+}
+
+.radio-log-id {
+  color: var(--eclipse-gold);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.92rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.radio-title {
+  color: var(--starlight-cream);
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.radio-artist {
+  color: var(--stardust);
+  font-size: 1.05rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.radio-facts {
+  color: var(--stardust);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.radio-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+/* The begin-gate + status messages: centered, quiet, dark. */
+.radio-gate {
+  align-items: center;
+  background: var(--deep-field);
+  display: grid;
+  gap: 1rem;
+  inset: 0;
+  justify-items: center;
+  padding: 2rem;
+  place-content: center;
+  position: fixed;
+  text-align: center;
+}
+
+.radio-gate-title {
+  color: var(--starlight-cream);
+  font-size: 1.75rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.radio-gate-subtitle {
+  color: var(--stardust);
+  font-size: 1rem;
+  line-height: 1.4;
+  max-width: 34rem;
+}
+
 @theme {
   --font-display: "Oxanium", ui-sans-serif, system-ui, sans-serif;
   /* The terminal voice: every "for the nerds" / CLI surface speaks in this
