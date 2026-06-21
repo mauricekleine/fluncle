@@ -16,21 +16,40 @@ This works because **every task worth automating already fits (or fits with guar
 
 ## What's handoffable
 
-| Task                                                 | Queue ready?                                 | Agent-allowed today?                    | Agent needs a vendor key?                                          | Work to enable                                                                                                                                                                                                                                |
-| ---------------------------------------------------- | -------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Enrichment self-heal** (today `enrich-sweep`)      | ✅ enrich-queue (`status=queue`)             | ✅ yes                                  | none (Worker re-fires Spinup)                                      | schedule a Hermes cron — no new code beyond the naming pass.                                                                                                                                                                                  |
-| **Audio observations** (today `track observe`)       | ❌ needs a `hasObservation` filter           | ❌ operator-only → flip **with guards** | none (ElevenLabs + Firecrawl already Worker-side via `/observe`)   | add `hasObservation` filter + an `observe-context` endpoint (so the agent scripts _from_ facts without holding Firecrawl) + flip `observe` to agent-allowed behind the `observe:${logId}` idempotency key. **Gated on Fluncle's real voice.** |
-| **Newsletter draft** (Friday)                        | ✅ time window via `/api/tracks?since&until` | ❌ no command yet                       | 🔴 **YES today** — holds `LOOPS_API_KEY` + `FIRECRAWL_API_KEY` raw | wrap Loops + Firecrawl in `POST /api/admin/newsletter/draft` + a CLI command; fold the Spinup newsletter agent into a Hermes Friday cron. The send stays a manual operator tap (Loops has no send API).                                       |
-| **Discogs ID backfill** (today `backfill discogs`)   | ✅ targeted (`in_release_id IS NULL`)        | ❌ operator-only → flip                 | none (Worker-side)                                                 | the `discogsStatus` reliability column (below) + role flip.                                                                                                                                                                                   |
-| **Last.fm loves backfill** (today `backfill lastfm`) | ⚠️ re-loves all (no unloved filter)          | ❌ operator-only → flip                 | none (Worker-side)                                                 | the `lastfmLovedAt` reliability column (below) + role flip.                                                                                                                                                                                   |
+| Task                                                 | Queue ready?                                 | Agent-allowed today?                    | Agent needs a vendor key?                                               | Work to enable                                                                                                                                                                                                                                                                              |
+| ---------------------------------------------------- | -------------------------------------------- | --------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Enrichment self-heal** (today `enrich-sweep`)      | ✅ enrich-queue (`status=queue`)             | ✅ yes                                  | none (Worker re-fires Spinup)                                           | schedule a Hermes cron — no new code beyond the naming pass.                                                                                                                                                                                                                                |
+| **Audio observations** (today `track observe`)       | ❌ needs a `hasObservation` filter           | ❌ operator-only → flip **with guards** | none (ElevenLabs + Firecrawl already Worker-side via `/observe`)        | add `hasObservation` filter + an `observe-context` endpoint (so the agent scripts _from_ facts without holding Firecrawl) + flip `observe` to agent-allowed behind the `observe:${logId}` idempotency key. **Gated on Fluncle's real voice.**                                               |
+| **Newsletter — end-to-end** (Friday)                 | ✅ time window via `/api/tracks?since&until` | ❌ no command yet                       | 🔴 **YES today** — host holds `LOOPS_API_KEY` + `FIRECRAWL_API_KEY` raw | migrate Loops → **Resend** (list + subscribe + template), wrap Resend + Firecrawl behind `newsletter draft` (agent) + `newsletter send` (operator); the Friday cron drafts then **pings the operator on Discord** to review & send. See [§ Newsletter](#newsletter--end-to-end-via-resend). |
+| **Discogs ID backfill** (today `backfill discogs`)   | ✅ targeted (`in_release_id IS NULL`)        | ❌ operator-only → flip                 | none (Worker-side)                                                      | the `discogsStatus` reliability column (below) + role flip.                                                                                                                                                                                                                                 |
+| **Last.fm loves backfill** (today `backfill lastfm`) | ⚠️ re-loves all (no unloved filter)          | ❌ operator-only → flip                 | none (Worker-side)                                                      | the `lastfmLovedAt` reliability column (below) + role flip.                                                                                                                                                                                                                                 |
 
 **Not handoffable** (stay operator / human / compute, correctly): `add` (the one human act); **tag** and **note** (editorial judgment, gated on the vibe-placement model — and `note` is Fluncle's voice, operator-only by design); **render** (the laptop routine, not the agent); **YouTube / TikTok / mixtape publish + distribute** (public, irreversible); `submissions approve/reject` (editorial); all `auth` flows.
 
 ## The secrets invariant — the newsletter is the only breach
 
-Audit result: the "agent holds only its admin token; the Worker owns every vendor key" invariant holds **everywhere except the newsletter agent**. ElevenLabs, Discogs, Last.fm, and Postiz are all already wrapped behind `fluncle` commands (the Worker holds the keys). The newsletter agent is the lone exception — it calls the `loops` and `firecrawl` CLIs directly, so it must keep both raw keys on its host.
+Audit result: the "agent holds only its admin token; the Worker owns every vendor key" invariant holds **everywhere except the newsletter agent**. ElevenLabs, Discogs, Last.fm, and Postiz are all already wrapped behind `fluncle` commands (the Worker holds the keys). The newsletter agent is the lone exception — it calls the `loops` and `firecrawl` CLIs directly, so it holds both raw keys on its host. The newsletter is **also moving off Loops onto Resend** (next section), so the key-exposure fix and the platform swap land together: wrap Resend + Firecrawl behind `fluncle` commands so the agent holds only its admin token, like everything else. Closing this is the highest-value piece of the brief — it removes the last raw vendor key _and_ folds the last external agent into Hermes.
 
-**The fix:** a Worker endpoint `POST /api/admin/newsletter/draft` that (a) pulls the week's finds + mixtapes, (b) runs the Firecrawl tidbit searches behind their domain allow-list + lyric-marker guards, and (c) creates/updates the Loops **draft** campaign — exposed as `fluncle admin newsletter draft --since … --until …`. The newsletter host then drops both keys and both CLIs and holds only the agent token, like every other task, and folds into Hermes. **This is the highest-value piece:** it closes the last key exposure _and_ unblocks consolidation in one move. (Send stays manual — unchanged.)
+## Newsletter — end-to-end via Resend
+
+The newsletter moves from Loops to **Resend** (account + domains already configured). This is the standout task: it's the one handoffable step that now goes **fully closed-loop**, because Resend has a programmatic send (Loops did not — its dashboard-only send was what forced the manual tap).
+
+It's a **Loops → Resend migration, not an add-on** — Resend takes all three jobs Loops did today:
+
+- **Subscriber list** — `subscribeToNewsletter` (`POST /api/newsletter`, `contacts/create`) repoints to a Resend **Audience** + `contacts.create`; the existing Loops list is a one-time export → Resend Audience.
+- **Confirmation email** on subscribe — the Loops transactional (`LOOPS_TRANSACTIONAL_ID`) becomes a Resend transactional `emails.send`.
+- **The weekly campaign** — a Resend **Broadcast**, created/updated _and_ sent by API. The LMX template ports to a Resend Broadcast template (triple-`{{{VAR}}}` syntax) or a React Email render.
+
+Two Worker endpoints / commands, on different role tiers:
+
+- `fluncle admin newsletter draft --since … --until …` (**agent-allowed**) — Worker pulls the window's finds + mixtapes, runs the Firecrawl tidbits behind the domain allow-list + lyric-marker guards, and creates/updates the Resend Broadcast **draft**.
+- `fluncle admin newsletter send` (**operator-only**) — Worker sends the drafted Broadcast.
+
+**The send gate — agent drafts, then nudges; operator sends.** Sending to the real subscriber list is publish-class (public, un-sendable-back, reputation-bearing), so it stays operator-only per the role model and PRODUCT.md ("publishing operator-controlled"). The Friday cron has the agent **draft the Broadcast and then post a Discord message to the operator** — subject, find count, any mixtape, the tidbits + sources, and the review/send command — using its existing Discord presence as the reminder channel. The operator reviews and fires `newsletter send`. The agent never sends. (Upgrade path if a hands-off cadence is ever wanted: the agent schedules the Broadcast via Resend `scheduled_at` with an operator veto window — explicitly a later choice, not the default.)
+
+**Secrets:** `RESEND_API_KEY` is Worker-owned; the agent holds neither it nor Firecrawl. Retire `LOOPS_API_KEY` + `LOOPS_TRANSACTIONAL_ID` and the `loops`/`firecrawl` CLI deps when this lands.
+
+**Resend gotchas to bake into the spec:** use a **full-access** API key (a sending-only restricted key 401s on the contacts/broadcasts endpoints); put an **idempotency key** on the send (a retried send must not double-blast the list); the `from` must match a verified domain; Broadcasts carry the **unsubscribe link + suppression** automatically (covers the CAN-SPAM/compliance side); mind **domain warm-up** volume limits on the first sends.
 
 ## Queue gaps
 
@@ -85,7 +104,7 @@ To run on a Hermes cron, these routes move from the operator tier to the admin t
 - `POST /api/admin/tracks/:id/observe` (with the `observe:${logId}` idempotency key + the Firecrawl untrusted-input boundary)
 - the new `POST /api/admin/newsletter/draft`
 
-`enrich-sweep` is already agent-allowed.
+`enrich-sweep` is already agent-allowed. The new `POST /api/admin/newsletter/send` **stays operator-tier** (publish-class) — the agent drafts and pings; only the operator sends.
 
 ## Setup / mechanism
 
@@ -95,12 +114,12 @@ Hermes [cron jobs](https://hermes-agent.nousresearch.com/docs/user-guide/feature
 - **Hourly, queue-gated:** read the observation queue, render the next finding's observation (idempotent per Log ID; no-op when empty) — _after_ the voice lands.
 - **Daily:** the Last.fm love backfill (free, idempotent, now targeted).
 - **Weekly / on-demand:** the Discogs backfill (rate-limited; `--retry-unmatched` rarer still).
-- **Friday:** the newsletter draft → report the draft link to the operator for the send.
+- **Friday:** draft the newsletter (Resend Broadcast, Worker-side) → **post a Discord reminder** to the operator (subject, find count, review/send command) → operator reviews and fires `newsletter send`. The agent drafts and nudges; it never sends (publish-class).
 
 ## Build order
 
 1. **Enrichment self-heal cron** — the cheapest win; proves the cron pattern. (No code beyond the naming pass.)
-2. **Newsletter wrap + fold-in** — biggest win (closes the last key breach + the consolidation); independent of the voice gate.
+2. **Newsletter → Resend, end-to-end** — biggest win (closes the last key breach + the consolidation, and goes fully closed-loop). Includes the Loops→Resend migration (list export → Audience, subscribe repoint, LMX → Broadcast template), the `draft` (agent) / `send` (operator) commands, and the Friday cron's Discord review nudge. Independent of the voice gate. `docs/agents/newsletter-agent.md` gets a full rewrite here (it's deeply Loops-shaped).
 3. **Reliability columns + backfill role flips** — `lastfmLovedAt`, `discogsStatus` + the resolver refactor; then daily / weekly crons.
 4. **Observation automation** — after Fluncle's real voice; needs the `hasObservation` filter + `observe-context` endpoint + the guarded `observe` flip.
 
