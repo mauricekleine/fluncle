@@ -23,6 +23,19 @@ Per finding, in `found.fluncle.com/<log-id>/`:
 
 `cover.jpg` (profile-grid cover) and `poster.jpg` are unchanged; the `/log` poster can also be derived from a master via MT `mode=frame`.
 
+### Render-flag provenance (`render.json` `variants`)
+
+The two masters are the **same composition + props** rendered with **different flags** — `footage.mp4` is `{ aspect: "square", hideOverlay: true }` and `footage.social.mp4` is the portrait default `{ aspect: "portrait", hideOverlay: false }`. Those flags live in the render scripts, not the bundle, so the stored bundle alone would naively re-render the portrait cut. The bundle `render.json` therefore records a `variants` map keyed by output filename → its render flags:
+
+```jsonc
+"variants": {
+  "footage.mp4":        { "aspect": "square",   "hideOverlay": true },
+  "footage.social.mp4": { "aspect": "portrait", "hideOverlay": false }
+}
+```
+
+This makes `render.json` self-describing: a future clean re-render from source is `render(composition, props, variants["footage.mp4"])` for the square master (and `variants["footage.social.mp4"]` for the social cut), so it can't accidentally reproduce the wrong cut. Every writer of the bundle `render.json` derives `variants` from one shared helper (`buildVariants()` in `packages/video/src/remotion/variants.ts`) so the canonical flags can't drift; a writer that produces only one master records only that master's entry.
+
 ## What MT derives on the fly
 
 All from the square `footage.mp4` master unless noted. URL construction lives in `apps/web/src/lib/server/media.ts` (the existing resolution-ladder + poster deriver extends to these); option strings:
