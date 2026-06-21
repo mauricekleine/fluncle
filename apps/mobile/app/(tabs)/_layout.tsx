@@ -1,50 +1,31 @@
-import { View } from "react-native";
-import { Tabs } from "expo-router";
+import { NativeTabs } from "expo-router/unstable-native-tabs";
 import { color } from "@/theme/tokens";
 
-// Working tab labels (RFC D9: "Stories" is a TikTok-ism flagged for a voice pass;
-// "Feed"/"Archive" are the placeholders until copywriting-fluncle lands the names).
+// Native tab bar (real UITabBar on iOS / Material on Android). Warm-dark canon via
+// the token adapter; Eclipse Gold is the selected accent (One Sun). Working labels
+// (RFC D9: "Stories" is a TikTok-ism flagged for a voice pass). NativeTabs renders
+// in a dev client / native build, not plain Expo Go.
 export default function TabsLayout() {
   return (
-    <Tabs
-      screenOptions={{
-        headerShown: false,
-        sceneStyle: { backgroundColor: color.deepField },
-        tabBarActiveTintColor: color.eclipseGold,
-        tabBarInactiveTintColor: color.stardust,
-        tabBarStyle: {
-          backgroundColor: color.sleeveBlack,
-          borderTopColor: color.dustLine,
-        },
-      }}
+    <NativeTabs
+      backgroundColor={color.sleeveBlack}
+      labelStyle={{ color: color.stardust }}
+      tintColor={color.eclipseGold}
     >
-      <Tabs.Screen
-        name="index"
-        options={{
-          tabBarIcon: ({ color: c, size }) => (
-            <View
-              style={{
-                backgroundColor: c,
-                borderRadius: 99,
-                height: size * 0.5,
-                width: size * 0.5,
-              }}
-            />
-          ),
-          title: "Feed",
-        }}
-      />
-      <Tabs.Screen
-        name="archive"
-        options={{
-          tabBarIcon: ({ color: c, size }) => (
-            <View
-              style={{ borderColor: c, borderWidth: 2, height: size * 0.5, width: size * 0.5 }}
-            />
-          ),
-          title: "Archive",
-        }}
-      />
-    </Tabs>
+      <NativeTabs.Trigger name="index">
+        <NativeTabs.Trigger.Label>Feed</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Icon
+          md="movie"
+          sf={{ default: "play.rectangle", selected: "play.rectangle.fill" }}
+        />
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="archive">
+        <NativeTabs.Trigger.Label>Archive</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Icon
+          md="inventory_2"
+          sf={{ default: "square.stack", selected: "square.stack.fill" }}
+        />
+      </NativeTabs.Trigger>
+    </NativeTabs>
   );
 }
