@@ -869,26 +869,60 @@ async function runPreviewArchiveBackfill(
   }
 }
 
+// `--limit` caps the TOTAL findings processed across the whole loop (a bounded
+// probe), not a single request. Each endpoint pass is server-clamped to a small
+// batch (so it stays inside the Worker budget) and returns a resume cursor; the
+// CLI loops the cursor — stopping when the archive is drained (cursor null) or
+// the total cap is reached — aggregating the per-pass results.
 async function runBackfillLastfm(
   options: BackfillSyncOptions,
   backfillLastfmCommand: typeof import("./commands/admin-tracks").backfillLastfmCommand,
 ): Promise<void> {
   const limit = parseListLimit(options.limit);
-  const result = await backfillLastfmCommand(limit, options.dryRun);
+  const loved: string[] = [];
+  const failed: Array<{ error: string; logId: string }> = [];
+  let cursor: string | undefined;
+  let dryRun = options.dryRun;
+
+  while (loved.length + failed.length < limit) {
+    const remaining = limit - (loved.length + failed.length);
+    const result = await backfillLastfmCommand(remaining, options.dryRun, cursor);
+    dryRun = result.dryRun;
+    loved.push(...result.loved);
+    failed.push(...result.failed);
+
+    if (!options.json) {
+      const verb = result.dryRun ? "Would love" : "Loved";
+      console.log(`  …${verb.toLowerCase()} ${result.lovedCount}; ${result.failedCount} failed`);
+    }
+
+    if (result.nextCursor === null) {
+      break;
+    }
+
+    cursor = result.nextCursor;
+  }
 
   if (options.json) {
-    printJson(result);
+    printJson({
+      dryRun,
+      failed,
+      failedCount: failed.length,
+      loved,
+      lovedCount: loved.length,
+      ok: true,
+    });
     return;
   }
 
-  const verb = result.dryRun ? "Would love" : "Loved";
-  console.log(`${verb} ${result.lovedCount} finding(s) on Last.fm; ${result.failedCount} failed.`);
+  const verb = dryRun ? "Would love" : "Loved";
+  console.log(`${verb} ${loved.length} finding(s) on Last.fm; ${failed.length} failed.`);
 
-  for (const logId of result.loved) {
+  for (const logId of loved) {
     console.log(`  ${logId}`);
   }
 
-  for (const item of result.failed) {
+  for (const item of failed) {
     console.log(`  ${item.logId}: ${item.error}`);
   }
 }
@@ -898,19 +932,47 @@ async function runBackfillDiscogs(
   backfillDiscogsCommand: typeof import("./commands/admin-tracks").backfillDiscogsCommand,
 ): Promise<void> {
   const limit = parseListLimit(options.limit);
-  const result = await backfillDiscogsCommand(limit, options.dryRun);
+  const resolved: Array<{ logId: string; masterId?: number; releaseId: number; source: string }> =
+    [];
+  const unresolved: string[] = [];
+  let cursor: string | undefined;
+  let dryRun = options.dryRun;
+
+  while (resolved.length + unresolved.length < limit) {
+    const remaining = limit - (resolved.length + unresolved.length);
+    const result = await backfillDiscogsCommand(remaining, options.dryRun, cursor);
+    dryRun = result.dryRun;
+    resolved.push(...result.resolved);
+    unresolved.push(...result.unresolved);
+
+    if (!options.json) {
+      const verb = result.dryRun ? "would resolve" : "resolved";
+      console.log(`  …${verb} ${result.resolvedCount}; ${result.unresolvedCount} unresolved`);
+    }
+
+    if (result.nextCursor === null) {
+      break;
+    }
+
+    cursor = result.nextCursor;
+  }
 
   if (options.json) {
-    printJson(result);
+    printJson({
+      dryRun,
+      ok: true,
+      resolved,
+      resolvedCount: resolved.length,
+      unresolved,
+      unresolvedCount: unresolved.length,
+    });
     return;
   }
 
-  const verb = result.dryRun ? "Would resolve" : "Resolved";
-  console.log(
-    `${verb} ${result.resolvedCount} Discogs release id(s); ${result.unresolvedCount} unresolved.`,
-  );
+  const verb = dryRun ? "Would resolve" : "Resolved";
+  console.log(`${verb} ${resolved.length} Discogs release id(s); ${unresolved.length} unresolved.`);
 
-  for (const item of result.resolved) {
+  for (const item of resolved) {
     const master = item.masterId ? ` (master ${item.masterId})` : "";
     console.log(`  ${item.logId}: release ${item.releaseId}${master}`);
   }
