@@ -1,22 +1,29 @@
-// Package a rendered track video into an uploadable bundle keyed by Log ID:
+// Package a rendered track video into an uploadable two-master bundle keyed by
+// Log ID (see docs/video-variants.md):
 //
 //   out/<log-id>/
-//     footage.mp4   (with audio — the QA cut + web preview; copied from the render)
-//     footage-silent.mp4 (audio-less — the TikTok manual sound-attach cut)
-//     poster.jpg    (a late/drop frame ~80% in)
-//     cover.jpg     (the profile-grid cover: loud centered identity over art)
-//     note.txt      (the fixed-template caption)
+//     footage.mp4        (square 1920×1920, audio, CLEAN — the crop source master;
+//                         MT crops it to portrait/landscape + strips audio on demand)
+//     footage.social.mp4 (portrait 1080×1920, audio, BAKED TEXT — the playable
+//                         social cut: Stories, YouTube as-is, TikTok via audio=false MT)
+//     poster.jpg         (a late/drop frame ~80% in)
+//     cover.jpg          (the profile-grid cover: loud centered identity over art)
+//     note.txt           (the fixed-template caption)
 //     composition.tsx — exact temporary Remotion composition source used
 //     props.json    — analyzed props: beat grid, energy/bass curves, palette
 //     render.json   — composition id + rerender pointers
 //
 // Usage: bun src/pipeline/ship.ts <trackId|log-id>
-// Requires the render to exist already (out/<trackId>.mp4) — run social-preview
-// first if it doesn't. Upload the bundle with `fluncle admin track video`.
+// Requires the PORTRAIT render to exist already (out/<trackId>.mp4) — run
+// social-preview first if it doesn't. The SQUARE crop source (out/<trackId>.square.mp4)
+// is rendered here in-process from the same composition + props if it's missing
+// (one composition, two renders). Upload the bundle with `fluncle admin track video`.
 
 import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+
+import { type NostalgicCosmosProps } from "../remotion/types";
 
 import { buildCaption, type CaptionTrack, fetchReleaseYear, yearFromReleaseDate } from "./caption";
 import { renderCover } from "./render-cover";
@@ -100,24 +107,68 @@ const bundle = path.join(OUT_DIR, track.logId);
 mkdirSync(bundle, { recursive: true });
 
 const footage = path.join(bundle, "footage.mp4");
-const footageSilent = path.join(bundle, "footage-silent.mp4");
+const footageSocial = path.join(bundle, "footage.social.mp4");
 const poster = path.join(bundle, "poster.jpg");
 const notePath = path.join(bundle, "note.txt");
 const compositionPath = path.join(bundle, "composition.tsx");
 const propsOutPath = path.join(bundle, "props.json");
 const renderOutPath = path.join(bundle, "render.json");
 
-log("footage.mp4 (with audio)");
-copyFileSync(reviewSrc, footage);
+// The render manifest (composition id + the props the portrait master rendered
+// from) is read up front: the square crop source re-renders that same
+// composition + props with aspect=square, hideOverlay=true.
+const renderManifestPath = path.join(OUT_DIR, `${track.trackId}.render.json`);
+let renderManifest: {
+  compositionId?: string;
+  compositionSource?: string;
+  model?: string;
+  props?: string;
+  reasoning?: string;
+  vehicle?: string;
+} = {};
 
-log("footage-silent.mp4 (audio-less, remux)");
-const silent = spawnSync("ffmpeg", ["-y", "-i", footage, "-c", "copy", "-an", footageSilent], {
-  stdio: ["ignore", "ignore", "ignore"],
-});
-if (silent.status !== 0) {
-  console.error("[ship] ffmpeg failed creating the silent cut");
-  process.exit(1);
+if (existsSync(renderManifestPath)) {
+  try {
+    renderManifest = JSON.parse(readFileSync(renderManifestPath, "utf8")) as typeof renderManifest;
+  } catch (error) {
+    log(`render.json ignored: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
+
+// footage.social.mp4 — the portrait, text, audio social cut: exactly today's
+// review render (out/<trackId>.mp4). It is the playable cut for Stories, YouTube,
+// and (audio-stripped via MT) TikTok.
+log("footage.social.mp4 (portrait, text, audio — the social cut)");
+copyFileSync(reviewSrc, footageSocial);
+
+// footage.mp4 — the SQUARE crop source: 1920×1920, audio, CLEAN (no overlay). MT
+// centre-crops it to portrait/landscape on the fly, so this is the one stored
+// orientation master. Re-render it from the same composition + props with
+// aspect=square + hideOverlay; cache it at out/<trackId>.square.mp4 so a re-ship
+// is fast and idempotent.
+const squareSrc = path.join(OUT_DIR, `${track.trackId}.square.mp4`);
+if (existsSync(squareSrc)) {
+  log("footage.mp4 (square crop source — cached render)");
+} else {
+  const propsInPath = path.join(OUT_DIR, `${track.trackId}.props.json`);
+  if (!renderManifest.compositionId || !existsSync(propsInPath)) {
+    console.error(
+      `[ship] cannot render the square crop source: missing ${!renderManifest.compositionId ? "composition id (out/<trackId>.render.json)" : "props (out/<trackId>.props.json)"}. Render the portrait master with social-preview first, or render the square directly:\n  bun src/pipeline/social-preview.ts ${track.trackId} --composition <Id> --aspect square --no-overlay`,
+    );
+    process.exit(1);
+  }
+
+  log("footage.mp4 (square crop source — rendering 1920×1920, clean)");
+  const portraitProps = JSON.parse(readFileSync(propsInPath, "utf8")) as NostalgicCosmosProps;
+  const squareProps: NostalgicCosmosProps = {
+    ...portraitProps,
+    aspect: "square",
+    hideOverlay: true,
+  };
+  const { render } = await import("./render");
+  await render(squareProps, squareSrc, renderManifest.compositionId);
+}
+copyFileSync(squareSrc, footage);
 
 log("poster.jpg (~80% in)");
 const durProbe = spawnSync("ffprobe", [
@@ -159,24 +210,6 @@ if (existsSync(propsOutPath)) {
     await renderCover([bundle]);
   } catch (error) {
     log(`cover.jpg skipped: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-const renderManifestPath = path.join(OUT_DIR, `${track.trackId}.render.json`);
-let renderManifest: {
-  compositionId?: string;
-  compositionSource?: string;
-  model?: string;
-  props?: string;
-  reasoning?: string;
-  vehicle?: string;
-} = {};
-
-if (existsSync(renderManifestPath)) {
-  try {
-    renderManifest = JSON.parse(readFileSync(renderManifestPath, "utf8")) as typeof renderManifest;
-  } catch (error) {
-    log(`render.json ignored: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 

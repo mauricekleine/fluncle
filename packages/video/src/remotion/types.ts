@@ -92,10 +92,15 @@ export type CosmosPalette = {
  * Render aspect. `portrait` is the unchanged 1080×1920 default (every clip to
  * date). `landscape` is 1920×1080 for the full-screen radio.fluncle.com surface;
  * the bespoke 9:16 shaders reflow under it (expected — landscape is scaffold, not
- * a polished catalogue pass). Resolved to concrete dimensions in `root.tsx`'s
- * `calculateMetadata`; portrait stays the default when the prop is absent.
+ * a polished catalogue pass). `square` is 1920×1920 — the clean source master MT
+ * centre-crops to portrait (1080×1920) and landscape (1920×1080) on the fly, so
+ * one render feeds both archive orientations (see docs/video-variants.md). Square
+ * compositions must read at 1:1 and keep their centre of gravity centered, since
+ * only the centre "plus" of the square survives either crop. Resolved to concrete
+ * dimensions in `root.tsx`'s `calculateMetadata`; portrait stays the default when
+ * the prop is absent.
  */
-export type CosmosAspect = "portrait" | "landscape";
+export type CosmosAspect = "portrait" | "landscape" | "square";
 
 export type NostalgicCosmosProps = {
   track: CosmosTrack;
@@ -114,8 +119,9 @@ export type NostalgicCosmosProps = {
   hideOverlay?: boolean;
   /**
    * Output aspect. Default `portrait` (1080×1920). `landscape` (1920×1080) is the
-   * radio full-screen cut. Consumed by `calculateMetadata`; scenes may read it via
-   * `getInputProps()` if they want to reflow deliberately.
+   * radio full-screen cut. `square` (1920×1920) is the clean source master MT
+   * crops to either orientation on the fly. Consumed by `calculateMetadata`;
+   * scenes may read it via `getInputProps()` if they want to reflow deliberately.
    */
   aspect?: CosmosAspect;
 };

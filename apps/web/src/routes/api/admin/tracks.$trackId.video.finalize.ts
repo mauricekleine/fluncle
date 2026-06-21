@@ -40,7 +40,12 @@ export const serverHandlers: ApiHandlers = {
       }
 
       const body = (await request.json().catch(() => undefined)) as
-        | { videoVehicle?: unknown; videoModel?: unknown; videoModelReasoning?: unknown }
+        | {
+            squared?: unknown;
+            videoVehicle?: unknown;
+            videoModel?: unknown;
+            videoModelReasoning?: unknown;
+          }
         | undefined;
       const videoVehicle =
         typeof body?.videoVehicle === "string" && body.videoVehicle.trim()
@@ -56,11 +61,17 @@ export const serverHandlers: ApiHandlers = {
           : "high";
 
       const videoUrl = trackMedia(track.logId).videoUrl;
+      // `squared` (the CLI sends it when it uploaded BOTH the square footage.mp4
+      // and the portrait footage.social.mp4) flips the two-master layout on:
+      // footage.mp4 is now the clean square crop source. Stamp the signal so the
+      // archive surfaces start MT-cropping this finding (docs/video-variants.md).
+      const squared = body?.squared === true;
 
       await updateTrack(track.trackId, {
         videoModel,
         videoModelReasoning,
         videoUrl,
+        ...(squared ? { videoSquaredAt: new Date().toISOString() } : {}),
         ...(videoVehicle ? { videoVehicle } : {}),
       });
 

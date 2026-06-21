@@ -981,6 +981,21 @@ body::before {
   width: 100%;
 }
 
+/* Two-master findings (videoSquaredAt set) play a clean MT centre-crop: a 9:16
+   portrait on mobile (the default pane), and a 16:9 landscape on desktop — the
+   deliberate "show off the asset" moment. The breakpoint mirrors the JS verdict
+   (useMediaQuery(DESKTOP_QUERY)) that picks the landscape crop URL, so the pane
+   and the fetched source flip together at exactly min-width: 768px. */
+@media (min-width: 768px) {
+  .log-footage:has(.log-footage-media--squared) {
+    width: 100%;
+  }
+
+  .log-footage-media--squared {
+    aspect-ratio: 16 / 9;
+  }
+}
+
 .log-footage-preview {
   bottom: 0.7rem;
   position: absolute;

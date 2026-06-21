@@ -31,9 +31,14 @@ export function StoryView({
   track: Track;
 }) {
   const media = track.logId ? trackMedia(track.logId) : undefined;
-  // The stored video_url is the source of truth — the upload sets it to the
-  // bundle's footage.mp4. media.ts only derives the poster/cover (no DB column).
-  const masterVideoUrl = track.videoUrl;
+  // Stories is a social-post format: it always plays the PORTRAIT baked-text cut.
+  // Under the two-master layout (videoSquaredAt set) that is footage.social.mp4 —
+  // the stored video_url is then the clean square crop source, which Stories must
+  // NOT play. A legacy finding (no signal) keeps playing footage.mp4 (its old
+  // portrait+text cut), so un-migrated tracks are unchanged (docs/video-variants.md).
+  const squared = Boolean(track.videoSquaredAt);
+  const masterName = squared ? "footage.social.mp4" : "footage.mp4";
+  const masterVideoUrl = squared ? (media?.socialVideoUrl ?? track.videoUrl) : track.videoUrl;
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   // Play a same-zone Media Transformations rendition sized to the pane, not the
@@ -45,7 +50,7 @@ export function StoryView({
   const [renditionFailed, setRenditionFailed] = useState(false);
   const videoUrl =
     masterVideoUrl && track.logId && renditionWidth && !renditionFailed
-      ? videoRendition(track.logId, { width: renditionWidth })
+      ? videoRendition(track.logId, { master: masterName, width: renditionWidth })
       : masterVideoUrl;
 
   const [posterFailed, setPosterFailed] = useState(false);
@@ -55,7 +60,8 @@ export function StoryView({
   // the frame transform and flips to the bundle poster if the edge can't make
   // it (e.g. a >100MB source straggler).
   const [framePosterFailed, setFramePosterFailed] = useState(false);
-  const framePoster = track.logId && !framePosterFailed ? videoPoster(track.logId) : undefined;
+  const framePoster =
+    track.logId && !framePosterFailed ? videoPoster(track.logId, masterName) : undefined;
   const posterUrl =
     framePoster ??
     (!posterFailed ? media?.posterUrl : undefined) ??

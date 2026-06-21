@@ -61,12 +61,21 @@ A center-crop is **not** the bespoke 16:9 reflow a dedicated landscape render pr
 - **Crop is centered only** — no focal/gravity control is confirmed for video MT, so off-centre action means a re-render, not a crop.
 - **Square comps must read at 1:1** — the square render has to look composed as a square, not a stretched portrait, for the crops to hold.
 
-## Migration (the one-time cutover)
+## Migration (the gradual, per-finding cutover)
 
-Today's `footage.mp4` is already exactly `footage.social.mp4`'s spec (portrait, text, audio), so the rename is free and no re-render is needed for the social cut. Order matters:
+Redefining `footage.mp4` from portrait to square is **stateful and gradual** — the square backfill renders per-track over time, so at any moment some findings carry the old portrait `footage.mp4` and some carry the new square. A finding's layout is therefore a **per-finding signal**, not a global flag: the `video_squared_at` column on `tracks` (an ISO timestamp). Set → `footage.mp4` is the clean square master and `footage.social.mp4` rides alongside; null → the legacy single-file layout (`footage.mp4` is the old portrait+text cut). The video finalize/upload path stamps it when a bundle carries BOTH the square `footage.mp4` and the portrait `footage.social.mp4` (the CLI signals `squared`); the footage→social rename migration never stamps it, because that copy alone doesn't make `footage.mp4` square.
 
-1. **Throwaway script:** for every finding, R2-copy `footage.mp4` → `footage.social.mp4` (no re-render).
-2. **Repoint consumers** to `footage.social.mp4` for the portrait playable: `apps/web/src/lib/server/media.ts`, the `/log` + Stories players, and the `VIDEO_ARTIFACTS` presign allow-list in `apps/web/src/lib/server/video-bundle.ts` (add `footage.social`; redefine `footage.mp4` as the square; drop `footage-silent`).
-3. **Only then** render the square into `footage.mp4` (the catalogue backfill) and point `/log` + radio at the MT crops.
+Consumers read the signal and fall back, so deploying the consumer code changes nothing for un-migrated findings:
 
-Step 3 must not land before steps 1–2, or a player briefly serves a square it expects to be portrait. The migration script is throwaway and runs once against the catalogue before the slice merges to `main`.
+- `media.ts` exposes the square-crop helpers (`videoCrop` → `fit=crop` portrait/landscape) + `videoAudioStripped` (`audio=false`) + `socialVideoUrl`; callers reach for the crops/social cut **only when `videoSquaredAt` is set**.
+- `/log` (and the future radio surface): squared → an MT centre-crop of the square (clean, page owns the chrome); un-squared → today's `footage.mp4` portrait rendition.
+- Stories / YouTube / TikTok: squared → `footage.social.mp4` (TikTok via `audio=false` MT); un-squared → `footage.mp4` (its old portrait+text cut) + `footage-silent.mp4`.
+
+The ordered rollout (run, don't merge-and-pray):
+
+1. **Throwaway script** (`apps/web/scripts/migrate-footage-social.ts`, `--dry-run` first): for every finding with a video, server-side R2-copy `footage.mp4` → `footage.social.mp4` (no re-render — today's `footage.mp4` is already the social cut's spec). Idempotent; does NOT set `video_squared_at`.
+2. **Deploy the consumer code** (this slice): the signal-gated `media.ts` + players + publish push + the `footage.social` presign allow-list entry. With every finding now carrying a `footage.social.mp4` but no `video_squared_at`, every consumer still serves the legacy path — a no-op deploy by design.
+3. **Backfill the squares**, per-track over time: re-render each finding's square (`aspect=square`, clean) and `fluncle admin track video` it alongside the portrait social cut, which stamps `video_squared_at`. Each finding lights up the new layout the moment its square lands; the catalogue converts gradually with zero broken intermediate states.
+4. **Cutover cleanup** (after the catalogue is fully squared): drop `footage-silent.mp4` from the presign allow-list + stop shipping it, and retire the legacy fallback branches.
+
+The presign allow-list keeps `footage-silent` accepted through steps 1–3 (back-compat for legacy bundles + pre-cutover ships); it's removed only at step 4.
