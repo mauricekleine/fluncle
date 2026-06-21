@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { FlatList, Pressable, Text, View } from "react-native";
 import { useRouter } from "expo-router";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { type Galaxy } from "@fluncle/contracts";
 import { flattenFeed, useFindingsFeed } from "@/api/hooks";
 import { FindingRow } from "@/components/finding-row";
@@ -13,7 +13,8 @@ import { color, font, galaxies } from "@/theme/tokens";
 // Phase 1 adds the server-side galaxy= param.
 export default function ArchiveScreen() {
   const router = useRouter();
-  const { data } = useFindingsFeed();
+  const insets = useSafeAreaInsets();
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage } = useFindingsFeed();
   const all = flattenFeed(data?.pages);
   const [galaxy, setGalaxy] = useState<Galaxy | null>(null);
   const shown = galaxy ? all.filter((f) => f.galaxy?.key === galaxy) : all;
@@ -74,6 +75,13 @@ export default function ArchiveScreen() {
           renderItem={({ index, item }) => (
             <FindingRow finding={item} isLast={index === shown.length - 1} />
           )}
+          contentContainerStyle={{ paddingBottom: insets.bottom + 56 }}
+          onEndReached={() => {
+            if (hasNextPage && !isFetchingNextPage) {
+              fetchNextPage();
+            }
+          }}
+          onEndReachedThreshold={0.5}
           ListEmptyComponent={
             <Text style={[font.body, { color: color.stardust, padding: 16 }]}>
               No findings logged in this galaxy yet. Quiet sector.

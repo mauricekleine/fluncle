@@ -13,16 +13,28 @@ const idOf = (f: TrackListItem) => f.logId ?? f.trackId;
 // Android device; FlatList pagingEnabled is the documented fallback.
 export default function FeedScreen() {
   const { height } = useWindowDimensions();
-  const { data, fetchNextPage, hasNextPage } = useFindingsFeed();
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage } = useFindingsFeed();
   const findings = flattenFeed(data?.pages);
 
   const [activeId, setActiveId] = useState<string | null>(null);
   const [soundOn, setSoundOn] = useState(false);
 
+  // The viewability callback must keep a stable identity (RN warns otherwise), so
+  // it reads live pagination state through a ref refreshed each render.
+  const stateRef = useRef({ fetchNextPage, findings, hasNextPage, isFetchingNextPage });
+  stateRef.current = { fetchNextPage, findings, hasNextPage, isFetchingNextPage };
+
   const onViewable = useRef(({ viewableItems }: { viewableItems: ViewToken<TrackListItem>[] }) => {
-    const first = viewableItems[0]?.item;
-    if (first) {
-      setActiveId(idOf(first));
+    const token = viewableItems[0];
+    if (token?.item) {
+      setActiveId(idOf(token.item));
+    }
+    // Prefetch older findings before the user reaches the end. onEndReached is
+    // unreliable on a paging feed, so drive it off the visible index instead.
+    const idx = token?.index ?? -1;
+    const s = stateRef.current;
+    if (idx >= 0 && idx >= s.findings.length - 3 && s.hasNextPage && !s.isFetchingNextPage) {
+      s.fetchNextPage();
     }
   }).current;
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 80 }).current;

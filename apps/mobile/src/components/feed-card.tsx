@@ -28,7 +28,7 @@ import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
 import { type TrackListItem } from "@fluncle/contracts";
 import { resolveCardMedia } from "@/lib/media";
 import { useBackgroundPause } from "@/audio/session";
-import { color, font, radius } from "@/theme/tokens";
+import { color, font } from "@/theme/tokens";
 
 type Props = {
   finding: TrackListItem;
@@ -175,6 +175,22 @@ export function FeedCard({ finding, active, soundOn, onToggleSound }: Props) {
       {/* Right action rail (TikTok-style). Icons stay legible on any background via
           a drop shadow; gold marks the active sound state (Ignition). */}
       <View style={[styles.rail, { bottom: insets.bottom + 28 }]}>
+        {observationUrl ? (
+          <RailAction
+            accessibilityLabel={observing ? "Stop the observation" : "Hear Fluncle's note"}
+            active={observing}
+            icon={
+              <Ionicons
+                name={observing ? "chatbubble-ellipses" : "chatbubble-ellipses-outline"}
+                size={28}
+                color={observing ? color.eclipseGold : color.starlightCream}
+                style={styles.icon}
+              />
+            }
+            label={observing ? "Playing" : "Note"}
+            onPress={toggleObservation}
+          />
+        ) : null}
         <RailAction
           icon={
             <FontAwesome
@@ -230,62 +246,29 @@ export function FeedCard({ finding, active, soundOn, onToggleSound }: Props) {
           </Text>
         ) : null}
         <Text style={[font.body, { color: color.stardust }]}>{foundLabel(finding.addedAt)}</Text>
-
-        {observationUrl ? (
-          <Pressable
-            accessibilityLabel={observing ? "Stop the observation" : "Hear the observation"}
-            accessibilityRole="button"
-            accessibilityState={{ selected: observing }}
-            onPress={toggleObservation}
-            style={({ pressed }) => [
-              {
-                alignItems: "center",
-                alignSelf: "flex-start",
-                backgroundColor: observing ? color.goldVeil : color.dustVeil,
-                borderColor: observing ? color.eclipseGold : color.dustLine,
-                borderRadius: radius.sm,
-                borderWidth: 1,
-                flexDirection: "row",
-                gap: 7,
-                marginTop: 6,
-                paddingHorizontal: 11,
-                paddingVertical: 6,
-              },
-              pressed ? { opacity: 0.85 } : null,
-              pressed && !reduced ? { transform: [{ translateY: 1 }] } : null,
-            ]}
-          >
-            <View
-              style={{
-                backgroundColor: observing ? color.eclipseGold : color.stardust,
-                borderRadius: 999,
-                height: 7,
-                width: 7,
-              }}
-            />
-            <Text style={[font.label, { color: observing ? color.eclipseGlow : color.stardust }]}>
-              {observing ? "Playing the observation" : "Hear Fluncle's note"}
-            </Text>
-          </Pressable>
-        ) : null}
       </View>
     </View>
   );
 }
 
 function RailAction({
+  accessibilityLabel,
   icon,
   label,
   onPress,
   active,
 }: {
+  accessibilityLabel?: string;
+  active?: boolean;
   icon: ReactNode;
   label: string;
   onPress: () => void;
-  active?: boolean;
 }) {
   return (
     <Pressable
+      accessibilityLabel={accessibilityLabel}
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
       hitSlop={6}
       onPress={onPress}
       style={({ pressed }) => [styles.railItem, pressed ? styles.railPressed : null]}
