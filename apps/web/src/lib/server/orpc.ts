@@ -190,20 +190,50 @@ export async function handleOrpc(request: Request): Promise<Response | null> {
 }
 
 // The spec, generated from the router — the same contracts that serve the
-// requests. In a later phase this replaces the hand-maintained
-// `apps/web/public/openapi.json`; for now it is exposed at a diffable temp route
-// (see routes/api/v1/orpc-openapi[.]json.ts) so the generated fragment can be
-// compared against the static spec before the flip.
+// requests. This is the document served at /api/v1/openapi.json (Scalar + Postman
+// read it); it replaced the hand-maintained `apps/web/public/openapi.json`, so the
+// spec can never drift from the handlers that implement it.
 const generator = new OpenAPIGenerator({
   schemaConverters: [new ZodToJsonSchemaConverter()],
 });
 
+// The PUBLIC spec exposes ONLY the public operations; the admin tier stays OFF the
+// public OpenAPI document (docs/orpc-migration-brief.md — "Admin reads/writes stay
+// OFF the public OpenAPI spec"). The single `contract` router holds BOTH public and
+// admin ops (one OpenAPIHandler serves them all), so the generated public doc is
+// drawn from the same router with a path-prefix `filter`: every admin op lives
+// under `/admin/*` (the structural truth that also drives routing), so excluding
+// that prefix yields exactly the public surface. A new admin op is invisible to the
+// public spec by construction — it cannot leak by a forgotten tag.
+const ADMIN_PATH_PREFIX = "/admin/";
+
+/** True when an oRPC contract procedure's REST path is under the admin tier. */
+function isAdminPath(path: string | undefined): boolean {
+  return path !== undefined && (path === "/admin" || path.startsWith(ADMIN_PATH_PREFIX));
+}
+
+/**
+ * The PUBLIC OpenAPI 3.1 document, generated from the contract router with the
+ * admin tier filtered out. Served at /api/v1/openapi.json (+ the /api alias) and
+ * consumed by Scalar (/docs/api) and the Postman route. The richer `info`
+ * (summary/description/contact) and the absolute server URL are carried over from
+ * the retired static `public/openapi.json` so the published surface keeps its
+ * prose.
+ */
 export async function generateOpenApiDocument() {
   return generator.generate(router, {
+    filter: ({ contract }) => !isAdminPath(contract["~orpc"].route.path),
     info: {
+      contact: {
+        name: "Fluncle",
+        url: "https://www.fluncle.com",
+      },
+      description:
+        "The public API for Fluncle's Findings, a drum & bass archive from another dimension. Fluncle discovers and certifies every track; each date marks when he found it, the day he first heard the tune, not the day it released. Read the archive, search Spotify candidates, and submit tracks for Fluncle to review.",
+      summary: "Drum & bass bangers from another dimension.",
       title: "Fluncle API",
       version: "1.0.0",
     },
-    servers: [{ url: "/api/v1" }],
+    servers: [{ url: "https://www.fluncle.com/api/v1" }],
   });
 }

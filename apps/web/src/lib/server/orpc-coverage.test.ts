@@ -73,7 +73,6 @@ const CARVE_OUT_ROUTES = new Set([
   "preview.$idOrLogId",
   // The generated-spec + tooling surfaces are documents, not API operations.
   "openapi[.]json",
-  "orpc-openapi[.]json",
   "postman[.]json",
 ]);
 

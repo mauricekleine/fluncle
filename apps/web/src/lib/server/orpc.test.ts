@@ -271,20 +271,106 @@ describe("oRPC public read — GET /tracks/random (get_random_track)", () => {
   });
 });
 
-describe("oRPC OpenAPI generation", () => {
-  it("generates a 3.1 document with the get_track operation", async () => {
+// The generated PUBLIC OpenAPI document — the spec served at /api/v1/openapi.json
+// (Scalar + Postman read it) since the spec flip retired the static
+// public/openapi.json. The load-bearing constraint: it carries EVERY public op and
+// ZERO admin ops (docs/orpc-migration-brief.md — admin stays OFF the public spec).
+type GeneratedSpec = {
+  openapi: string;
+  info: { title: string; version: string; summary?: string; description?: string };
+  servers?: { url: string }[];
+  paths: Record<string, Record<string, { operationId?: string }>>;
+};
+
+// Every public op's operationId (the camelCase projection of its verb_noun key),
+// derived from the same registry the public coverage net is drawn over. The
+// generated public spec must contain exactly these — no more (no admin leak), no
+// fewer (no dropped public op).
+const PUBLIC_OPERATION_IDS = [
+  "collectPrivateGalaxyLog",
+  "deletePrivateAccount",
+  "exportPrivateAccountData",
+  "getCurrentPrivateUser",
+  "getHealth",
+  "getPrivateAccountExport",
+  "getPrivateGalaxyProgress",
+  "getPrivateMutationToken",
+  "getRandomTrack",
+  "getTrack",
+  "listMixtapes",
+  "listPrivateSavedFindings",
+  "listPrivateSubmissions",
+  "listStories",
+  "listTracks",
+  "mergePrivateGalaxyProgress",
+  "savePrivateFinding",
+  "searchTracks",
+  "submitTrack",
+  "subscribeNewsletter",
+  "unsavePrivateFinding",
+  "updatePrivateProfile",
+];
+
+function collectOperationIds(spec: GeneratedSpec): {
+  ids: string[];
+  paths: string[];
+} {
+  const ids: string[] = [];
+  const paths: string[] = [];
+
+  for (const [path, item] of Object.entries(spec.paths)) {
+    for (const operation of Object.values(item)) {
+      if (operation.operationId !== undefined) {
+        ids.push(operation.operationId);
+        paths.push(path);
+      }
+    }
+  }
+
+  return { ids, paths };
+}
+
+describe("oRPC OpenAPI generation — the public spec (the flip)", () => {
+  it("generates a valid OpenAPI 3.1 document with the published info + server", async () => {
     const { generateOpenApiDocument } = await import("./orpc");
-    const document = (await generateOpenApiDocument()) as {
-      openapi: string;
-      info: { title: string; version: string };
-      paths: Record<string, Record<string, { operationId?: string }>>;
-    };
+    const document = (await generateOpenApiDocument()) as GeneratedSpec;
 
     expect(document.openapi).toMatch(/^3\.1/);
-    expect(document.info).toEqual({ title: "Fluncle API", version: "1.0.0" });
+    expect(document.info.title).toBe("Fluncle API");
+    expect(document.info.version).toBe("1.0.0");
+    // The published prose carried over from the retired static spec.
+    expect(document.info.summary).toBe("Drum & bass bangers from another dimension.");
+    expect(document.info.description).toContain("The public API for Fluncle's Findings");
+    expect(document.servers?.[0]?.url).toBe("https://www.fluncle.com/api/v1");
+  });
 
-    const op = document.paths["/tracks/{idOrLogId}"]?.get;
+  it("contains EVERY public op with its correct operationId", async () => {
+    const { generateOpenApiDocument } = await import("./orpc");
+    const document = (await generateOpenApiDocument()) as GeneratedSpec;
+    const { ids } = collectOperationIds(document);
 
-    expect(op?.operationId).toBe("getTrack");
+    for (const operationId of PUBLIC_OPERATION_IDS) {
+      expect(ids, `public operationId "${operationId}" missing from the generated spec`).toContain(
+        operationId,
+      );
+    }
+
+    // The proof route is still wired (regression guard).
+    expect(document.paths["/tracks/{idOrLogId}"]?.get?.operationId).toBe("getTrack");
+  });
+
+  it("contains ZERO admin ops — no path under /admin leaks onto the public spec", async () => {
+    const { generateOpenApiDocument } = await import("./orpc");
+    const document = (await generateOpenApiDocument()) as GeneratedSpec;
+    const { ids, paths } = collectOperationIds(document);
+
+    // No path under the admin tier.
+    const adminPaths = paths.filter((path) => path === "/admin" || path.startsWith("/admin/"));
+    expect(adminPaths, `admin paths leaked onto the public spec: ${adminPaths.join(", ")}`).toEqual(
+      [],
+    );
+
+    // And the op set is EXACTLY the public surface — nothing extra, nothing missing.
+    expect(new Set(ids)).toEqual(new Set(PUBLIC_OPERATION_IDS));
   });
 });
