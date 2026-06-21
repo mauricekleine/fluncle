@@ -1,6 +1,6 @@
-# Naming Conventions (proposal)
+# Naming Conventions
 
-Status: **PROPOSAL — not yet ratified.** This doc audits Fluncle's public verb/noun vocabulary across every public surface, surfaces the inconsistencies, and proposes a convention so that one operation has one predictable name everywhere. Nothing here is implemented; no renames have happened. Maurice picks the final pattern, then we land it surface by surface.
+Status: **Ratified 2026-06-21 — Convention B (§4) is the adopted convention.** This doc audits Fluncle's public verb/noun vocabulary across every public surface, surfaces the inconsistencies, and adopts a convention so that one operation has one predictable name everywhere. The convention is encoded and enforced by the oRPC migration — the contract registry is the source of truth, and a route without a contract/name becomes a build failure (see [docs/orpc-migration-brief.md](./orpc-migration-brief.md)). Renames land surface by surface from there; the alternatives (Conventions A and C) are kept below as the considered-and-rejected record.
 
 The scope is the _names a human or agent types or reads_: CLI commands and flags, HTTP API route paths and OpenAPI `operationId`s, MCP/WebMCP tool names, the SSH terminal's deep-link commands and menu, and the admin board's user-facing action verbs. It is not about internal function names, database columns, or component names — except where those leak into a public name.
 
