@@ -121,6 +121,16 @@ function PrivacyPage() {
                 There is no advertising or cross-site tracking.
               </dd>
             </div>
+            <div className="log-about-definition">
+              <dt>Push notifications (the app)</dt>
+              <dd>
+                If you turn on notifications in the Fluncle app, your device's push token is stored
+                so the app can tell you when a new finding or mixtape lands. It is a device
+                identifier used only to deliver those notifications, never sold or used to track
+                you. Turn notifications off in the app to remove it; tokens that go quiet are pruned
+                on their own.
+              </dd>
+            </div>
           </dl>
         </section>
 

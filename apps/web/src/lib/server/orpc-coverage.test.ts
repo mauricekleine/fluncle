@@ -30,6 +30,11 @@ import { CONTRACT_OPERATION_NAMES } from "@fluncle/contracts/orpc";
 // public-surface registry the coverage net is drawn over; admin + carve-outs are
 // listed separately so the net's edges are explicit, not accidental.
 const PUBLIC_ROUTE_OPS: Record<string, string> = {
+  // The devices domain is contract-only oRPC (no TanStack route file under
+  // /api/v1) — the mobile app's push-device registry, authored contract-first
+  // (docs/rfcs/mobile-app.md §7). It has no file-enumeration entry; it lives here
+  // so the "every public op is converted" check covers it.
+  "DELETE /devices/{token}": "deregister_device",
   "DELETE /me/saved-findings/{trackId}": "unsave_private_finding",
   "GET /health": "get_health",
   "GET /me": "get_current_private_user",
@@ -50,6 +55,7 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   "GET /tracks/random": "get_random_track",
   "GET /tracks/{idOrLogId}": "get_track",
   "PATCH /me/profile": "update_private_profile",
+  "POST /devices": "register_device",
   "POST /me/delete": "delete_private_account",
   "POST /me/export": "export_private_account_data",
   // The only `/me/galaxy-progress/logs` route is this POST collect-one (the game's

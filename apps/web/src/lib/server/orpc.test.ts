@@ -322,6 +322,7 @@ type GeneratedSpec = {
 const PUBLIC_OPERATION_IDS = [
   "collectPrivateGalaxyLog",
   "deletePrivateAccount",
+  "deregisterDevice",
   "exportPrivateAccountData",
   "getCurrentPrivateUser",
   "getHealth",
@@ -337,6 +338,7 @@ const PUBLIC_OPERATION_IDS = [
   "listStories",
   "listTracks",
   "mergePrivateGalaxyProgress",
+  "registerDevice",
   "savePrivateFinding",
   "searchTracks",
   "submitTrack",

@@ -70,6 +70,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/mixtapes/{mixtapeId}/youtube/finalize": "finalize_mixtape_youtube",
   "POST /admin/mixtapes/{mixtapeId}/youtube/initiate": "initiate_mixtape_youtube",
   "POST /admin/mixtapes/{mixtapeId}/youtube/publish": "publish_mixtape_youtube",
+  // The push receipts sweep is a contract-only admin op (no TanStack route file —
+  // the whole devices domain is contract-first oRPC), so it has no file-enumeration
+  // entry; it lives here only to satisfy the "registry holds EXACTLY this map's
+  // ops" check. An EXTERNAL cron calls it (TanStack has no `scheduled()`).
+  "POST /admin/push/sweep-receipts": "sweep_push_receipts",
   "POST /admin/submissions/{submissionId}/approve": "approve_submission",
   "POST /admin/submissions/{submissionId}/reject": "reject_submission",
   "POST /admin/tracks": "add_track",
@@ -207,6 +212,8 @@ describe("oRPC admin-route contract coverage", () => {
       "delete_private",
       "export_private",
       "update_private",
+      "register_device",
+      "deregister_device",
     ];
     const isPublicOp = (op: string) => PUBLIC_OP_PREFIXES.some((p) => op.startsWith(p));
 

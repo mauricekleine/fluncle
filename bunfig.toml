@@ -1,4 +1,8 @@
 [install]
+# Hoisted node_modules layout: required by the Expo/Metro bundler in apps/mobile
+# (Metro/Babel can't resolve plugins across bun's isolated .bun/ store). The other
+# apps (Vite/TanStack) are unaffected.
+linker = "hoisted"
 # Only install package versions published at least 3 days ago
 minimumReleaseAge = 259200
 # Our own Spinup packages — trusted, and we adopt them as soon as they publish.

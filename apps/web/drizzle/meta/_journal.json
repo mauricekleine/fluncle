@@ -183,6 +183,13 @@
       "when": 1782022787310,
       "tag": "0025_sudden_killmonger",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1782060300054,
+      "tag": "0026_amazing_smiling_tiger",
+      "breakpoints": true
     }
   ]
 }

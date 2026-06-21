@@ -11,6 +11,7 @@ import { discogsResolveRelease } from "./discogs";
 import { purgeLogCache } from "./edge-cache";
 import { lastfmLove } from "./lastfm";
 import { resolveLogId } from "./log-id";
+import { notifyNewFinding } from "./push";
 import { formatError, withRetries } from "./retry";
 import {
   addTrackToPlaylist,
@@ -270,6 +271,12 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
   // Never blocks or fails the add — same side-channel discipline as Deezer/Telegram:
   // lastfmLove swallows its own errors and no-ops when Last.fm isn't provisioned.
   await lastfmLove(track.artists[0] ?? track.artists.join(", "), track.title);
+  // Best-effort: notify the mobile crew a fresh banger is live (push.ts). Gated on
+  // EXPO_ACCESS_TOKEN — a NO-OP until configured — and fire-and-forget (waitUntil):
+  // it NEVER throws and NEVER blocks/fails the publish, same discipline as above.
+  // The duplicate/incomplete_duplicate guards above throw before this hook, so a
+  // retry can't re-reach it — no extra gate needed.
+  notifyNewFinding(track, logId);
 
   const message = `Banger logged
 

@@ -17,6 +17,7 @@ Triggered by `fluncle admin tracks publish <spotify-url>` → `POST /api/admin/t
 - **Discogs** (read-only, best-effort): resolve the finding to its Discogs release id (`in_release_id` + `in_master_id`) by artist + title — Discogs has no ISRC search (`discogs.ts`). The `discogs.com/release/{id}` URL becomes a per-finding `sameAs` on `/log`. No-ops without `DISCOGS_USER_TOKEN`; a miss never blocks the add.
 - **Log ID**: the permanent Galaxy coordinate, generated and stored (`log-id.ts`). This is the cross-surface marker — `fluncle://<id>` — used everywhere (web `/log/<id>`, SSH, CLI, TikTok). It supersedes any ad-hoc post marker. When Spotify omits the ISRC, the add flow looks it up on Deezer (search by artist + title, duration-confirmed) **before** the coordinate is computed, so the hash seeds from the recording's real identity; the Spotify id remains the last-resort seed.
 - Publish to the Spotify playlist + Telegram.
+- **Push** (best-effort, gated): after the Telegram post lands, `publishTrack` fires `notifyNewFinding` (`push.ts`) so the mobile crew gets a notification a fresh banger is live. Same side-channel discipline as the Last.fm love and the edge-cache purge — fire-and-forget on `waitUntil`, never throws, never blocks the add, and a **NO-OP until `EXPO_ACCESS_TOKEN` is set** (the mobile push backend, [docs/rfcs/mobile-app.md](rfcs/mobile-app.md) §7). A new mixtape fires the same way on its `distributing→published` flip (`mixtape-social.ts`, transition-guarded so the per-platform finalize can't double-notify).
 
 ### The log page (`/log/<id>`)
 

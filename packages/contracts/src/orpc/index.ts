@@ -27,6 +27,7 @@ import { adminSocialContract } from "./admin-social";
 import { adminSubmissionsContract } from "./admin-submissions";
 import { adminTokensContract } from "./admin-tokens";
 import { adminTracksContract } from "./admin-tracks";
+import { devicesContract } from "./devices";
 import { healthContract } from "./health";
 import { meContract } from "./me";
 import { meGalaxyContract } from "./me-galaxy";
@@ -57,6 +58,7 @@ export {
   updateMixtape,
 } from "./admin-mixtapes";
 export { draftTrackSocial, listTrackSocial, updateTrackSocial } from "./admin-social";
+export { deregisterDevice, registerDevice, sweepPushReceipts } from "./devices";
 export {
   approveSubmission,
   getSubmission,
@@ -127,6 +129,7 @@ export const contract = {
   ...adminSubmissionsContract,
   ...adminTokensContract,
   ...adminTracksContract,
+  ...devicesContract,
   ...healthContract,
   ...meContract,
   ...meGalaxyContract,
