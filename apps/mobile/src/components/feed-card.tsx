@@ -304,5 +304,5 @@ const styles = StyleSheet.create({
   railLabelActive: { color: color.eclipseGold },
   railPressed: { opacity: 0.6 },
   // The FontAwesome spotify glyph also sits left of its advance box (optical alignment).
-  spotifyNudge: { transform: [{ translateX: 5 }] },
+  spotifyNudge: { transform: [{ translateX: 4 }] },
 });
