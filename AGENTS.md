@@ -127,7 +127,7 @@ bunx --bun shadcn@latest add dialog
 
 ## Git
 
-- SHOULD: Use the right mode for the work — your own edits go **directly on `main`** (no feature branch, no PR); **delegated sub-agent fan-out** runs in git worktrees and opens PRs that the orchestrator reviews and merges (`gh pr merge --squash --admin --delete-branch`). See the `agent-orchestration` skill. Either way, a push to `main` auto-deploys (mind the coalescing note under External Effects).
+- SHOULD: Two git modes, decided by **where the work runs**, not by who is running it. Work in the **main checkout** commits straight on `main` — no feature branch, no PR. Work running in a **delegated sub-agent's isolated worktree is delivered as a PR**: a worktree sub-agent opens a PR and does **not** push to `main` (unless its brief says otherwise); the orchestrating session reviews the diff and merges it (`gh pr merge --squash --admin --delete-branch`). See the `agent-orchestration` skill. Either way, a push to `main` auto-deploys (mind the coalescing note under External Effects).
 - MUST: If `git commit` fails because Git cannot write commit metadata or access signing helpers, retry the commit with elevated permissions before changing Git config.
 - NEVER: Disable commit signing with `commit.gpgsign=false` unless the user explicitly asks for an unsigned commit.
 
