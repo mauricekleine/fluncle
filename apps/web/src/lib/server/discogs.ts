@@ -44,6 +44,49 @@ export const CONFIDENCE_THRESHOLD = 0.9;
 // is one release lookup; a couple per finding stays well inside the rate limit.
 const MAX_CANDIDATES = 4;
 
+// Discogs (authed) and MusicBrainz both cap at ~1 request/second; a single finding
+// fans out into several calls (search variants + per-candidate release fetches; the
+// ISRC lookup + per-release + per-release-group detail), so pacing only BETWEEN
+// findings bursts straight past the ceiling and earns a wall of 429/503. Serialize
+// every call to a service through its own gate, spaced by this floor.
+// The pacing floor. Mutable only via the test seam below, so the resolver's unit
+// tests run instantly instead of incurring real multi-second waits.
+let rateLimitIntervalMs = 1100;
+
+/**
+ * Test seam: set the pacing floor (and, at 0, the retry backoff) to run the
+ * resolver without real timers. Production never calls this.
+ */
+export function __setRateLimitForTests(ms: number): void {
+  rateLimitIntervalMs = ms;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// A per-service serializer: each call runs after the previous one settles plus a
+// fixed gap, so concurrent callers (a backfill sweep + an on-add publish) still
+// share one honest rate budget. Module-level, so it spans requests in an isolate.
+function makeRateLimiter() {
+  let tail: Promise<unknown> = Promise.resolve();
+
+  return <T>(call: () => Promise<T>): Promise<T> => {
+    const result = tail.then(call, call);
+    // Advance the gate past this call + the gap, swallowing its result/error so one
+    // failure never wedges the chain.
+    tail = result.then(
+      () => delay(rateLimitIntervalMs),
+      () => delay(rateLimitIntervalMs),
+    );
+
+    return result;
+  };
+}
+
+const throttleDiscogs = makeRateLimiter();
+const throttleMb = makeRateLimiter();
+
 export type DiscogsEnrichment = {
   masterId?: number;
   releaseId?: number;
@@ -198,20 +241,34 @@ type MbIsrcLookup = {
 type MbReleaseLookup = MbRelease & { error?: unknown };
 type MbReleaseGroupLookup = MbRelease & { error?: unknown };
 
-async function mbFetch<T>(path: string): Promise<T | undefined> {
+function mbFetch<T>(path: string): Promise<T | undefined> {
   const separator = path.includes("?") ? "&" : "?";
-  const response = await fetch(`${MUSICBRAINZ_API_ROOT}${path}${separator}fmt=json`, {
-    headers: { "User-Agent": USER_AGENT },
-  });
+  const url = `${MUSICBRAINZ_API_ROOT}${path}${separator}fmt=json`;
 
-  if (!response.ok) {
-    // Surface the status — a swallowed 503 (MB rate-limit) or 403 (bad User-Agent)
-    // is otherwise indistinguishable from a genuine no-match. Visible in `wrangler tail`.
-    console.warn(`[musicbrainz] ${response.status} ${response.statusText} for ${path}`);
+  return throttleMb(async () => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
+
+      // 503 is MB's "slow down"; honour Retry-After and try again within this slot.
+      if (response.status === 503 && attempt < 2) {
+        const retryAfter = Number(response.headers.get("Retry-After")) || 2;
+        console.warn(`[musicbrainz] 503 for ${path} — retry ${attempt + 1}/2 after ${retryAfter}s`);
+        await delay(rateLimitIntervalMs === 0 ? 0 : retryAfter * 1000);
+        continue;
+      }
+
+      if (!response.ok) {
+        // Surface the status — a swallowed 400 (bad inc) or 403 (bad User-Agent) is
+        // otherwise indistinguishable from a genuine no-match. Visible in `wrangler tail`.
+        console.warn(`[musicbrainz] ${response.status} ${response.statusText} for ${path}`);
+        return undefined;
+      }
+
+      return (await response.json()) as T;
+    }
+
     return undefined;
-  }
-
-  return (await response.json()) as T;
+  });
 }
 
 /** First curated Discogs relation in a relations array, parsed to ids. */
@@ -258,8 +315,10 @@ async function resolveViaMusicBrainz(
   }
 
   // One call: the recording(s) for this ISRC, with their releases + url relations.
+  // `release-groups` is dropped here — combined with releases+url-rels on a recording
+  // it 400s, and the code reads release-groups off the per-release detail below anyway.
   const lookup = await mbFetch<MbIsrcLookup>(
-    `/isrc/${encodeURIComponent(isrc)}?inc=releases+url-rels+release-groups`,
+    `/isrc/${encodeURIComponent(isrc)}?inc=releases+url-rels`,
   );
 
   if (!lookup || lookup.error || !Array.isArray(lookup.recordings)) {
@@ -361,23 +420,37 @@ type ScoredCandidate = {
   score: number;
 };
 
-async function discogsFetch<T>(path: string, token: string): Promise<T | undefined> {
-  const response = await fetch(`${DISCOGS_API_ROOT}${path}`, {
-    headers: {
-      Authorization: `Discogs token=${token}`,
-      "User-Agent": USER_AGENT,
-    },
-  });
+function discogsFetch<T>(path: string, token: string): Promise<T | undefined> {
+  return throttleDiscogs(async () => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await fetch(`${DISCOGS_API_ROOT}${path}`, {
+        headers: {
+          Authorization: `Discogs token=${token}`,
+          "User-Agent": USER_AGENT,
+        },
+      });
 
-  if (!response.ok) {
-    // Surface the status — a swallowed 401 (bad/expired token) or 429 (rate-limit)
-    // looks exactly like a no-match downstream, so a wrong prod token reads as a
-    // clean "0 resolved". Visible in `wrangler tail`.
-    console.warn(`[discogs] ${response.status} ${response.statusText} for ${path}`);
+      // 429 is the rate-limit; honour Retry-After and try again within this slot.
+      if (response.status === 429 && attempt < 2) {
+        const retryAfter = Number(response.headers.get("Retry-After")) || 2;
+        console.warn(`[discogs] 429 for ${path} — retry ${attempt + 1}/2 after ${retryAfter}s`);
+        await delay(rateLimitIntervalMs === 0 ? 0 : retryAfter * 1000);
+        continue;
+      }
+
+      if (!response.ok) {
+        // Surface the status — a swallowed 401 (bad/expired token) or an exhausted 429
+        // looks exactly like a no-match downstream, so a wrong prod token reads as a
+        // clean "0 resolved". Visible in `wrangler tail`.
+        console.warn(`[discogs] ${response.status} ${response.statusText} for ${path}`);
+        return undefined;
+      }
+
+      return (await response.json()) as T;
+    }
+
     return undefined;
-  }
-
-  return (await response.json()) as T;
+  });
 }
 
 /**

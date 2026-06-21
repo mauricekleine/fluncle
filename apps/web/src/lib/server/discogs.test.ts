@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { discogsReleaseUrl, discogsResolveRelease } from "@/lib/server/discogs";
+import {
+  __setRateLimitForTests,
+  discogsReleaseUrl,
+  discogsResolveRelease,
+} from "@/lib/server/discogs";
 
 describe("discogsReleaseUrl", () => {
   it("builds the public release URL the per-track sameAs points at", () => {
@@ -43,10 +47,13 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
 
   beforeEach(() => {
     process.env.DISCOGS_USER_TOKEN = "test-token";
+    // Run the rate limiter + retry backoff with zero real waits.
+    __setRateLimitForTests(0);
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    __setRateLimitForTests(1100);
 
     if (ORIGINAL_TOKEN === undefined) {
       delete process.env.DISCOGS_USER_TOKEN;
