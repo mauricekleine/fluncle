@@ -190,6 +190,10 @@ Depth in this system comes from translucency, not shadows: every raised surface 
 
 Floaty and tactile: controls lift gently on hover (artwork scales to 1.06, carets drift 2px), and land on press (buttons translate down 1px). Motion is 150–180ms, eased out. The ambient budget is exactly two movements, both imperceptible and both gated to `prefers-reduced-motion: no-preference`: the 72s cosmos drift and the ~48s sun-bloom breath (The Ignition Rule) — "quiet" is not a frozen JPEG, and nothing else moves uninvited. Under `prefers-reduced-motion: reduce`, the floats are grounded and the ambient pair stops: no scale, no drift, no press-down, no breath; every state change collapses to a color-only transition. The Gold Veil wash and index heat carry the feedback on their own.
 
+### Iconography
+
+Two icon families, split by role and never crossed. **Interface icons** — actions, status, navigation, affordances, the board's step glyphs — come from **Phosphor**, the system's single interface set; they're sized to the text and take a weight that matches their state (regular when idle, fill when active). **Platform logos** — Spotify, YouTube, TikTok, and every third-party brand mark — come from **`simple-icons`**, the official marks, rendered through `BrandIcon` inline (as the Spotify mark is) or a small wrapper component (`@/components/platform-icons`) where an icon-component slot expects one. A platform's identity is its own: we quote the real mark, never a Phosphor lookalike and never a hand-redraw. Brand marks have one fixed form — they fill `currentColor` and ignore weight — so they still inherit the surface's ink and obey the One Sun budget like every other glyph.
+
 ### Buttons
 
 - **Shape:** Gently rounded (0.5rem radius), 2.25rem tall (h-9), small text (0.875rem, weight 500), icon + label with 0.375rem gap
@@ -248,6 +252,7 @@ The identity anchor: the cover art mounted flat on the plate, wrapped in a frame
 - **Do** put the music first on every surface: artist, title, the Found date, note, and the Spotify open action before anything else.
 - **Do** treat each row as a finding: lead with the music, frame it with its Log ID coordinate (which carries the Found date, so the compact row needn't repeat it; the Track Row above; VOICE.md's Found Rule).
 - **Do** keep grain and lossy texture present; it is narrative, not noise (The Light-Years Rule). A surface rendered glassy-clean and pristine reads as fake.
+- **Do** draw interface icons from Phosphor and platform logos from `simple-icons` (Spotify, YouTube, TikTok, …), via `BrandIcon` or `@/components/platform-icons` (Iconography).
 
 ### Don't:
 
@@ -257,3 +262,4 @@ The identity anchor: the cover art mounted flat on the plate, wrapped in a frame
 - **Don't** use box-shadows for depth; depth is what shows through the glass.
 - **Don't** set body copy in Oxanium (The One Voice Rule), and don't add uppercase-tracked eyebrow labels; labels are bold and small, not tracked-out.
 - **Don't** introduce a light theme, cool grays, or a second accent hue; the system is dark-only with one sun.
+- **Don't** stand in a Phosphor lookalike for a third-party platform; quote the official `simple-icons` brand mark (Iconography).

@@ -103,6 +103,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - MUST: Use Shadcn components by their canonical generated exports; do not add local aliases or wrappers when an exact Shadcn component exists.
 - NEVER: Import headless primitives such as `@base-ui/react/*` directly in app code.
 - NEVER: Bypass the design system with ad hoc headless primitive usage in feature code.
+- MUST: Draw interface icons from Phosphor and third-party platform logos (Spotify, YouTube, TikTok, …) from `simple-icons` — via `BrandIcon` or `@/components/platform-icons`; never a Phosphor logo glyph for a brand mark (DESIGN.md "Iconography").
 - SHOULD: Avoid SaaS dashboards, bright streaming-app clones, generic landing-page hero sections, oversized marketing copy, glassy card stacks, and decorative gradients that ignore the cover art.
 - When a Shadcn component is missing, add it through the Shadcn CLI before using it, for example:
 
