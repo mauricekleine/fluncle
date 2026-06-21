@@ -40,10 +40,6 @@ export const repoUrl = "https://github.com/mauricekleine/fluncle";
 // The Galaxy game (same Worker, galaxy. subdomain): fly to every banger.
 export const galaxyUrl = "https://galaxy.fluncle.com";
 
-// The Model Context Protocol endpoint (Streamable HTTP, no auth): the archive
-// as agent tools. The server card is at /.well-known/mcp/server-card.json.
-export const mcpUrl = `${siteUrl}/mcp`;
-
 // The Tor onion: an onionspray mirror of www.fluncle.com, so it carries the
 // same archive plus the API, RSS, and MCP — off the grid, still in the Galaxy.
 // Tor Browser advertises it via the Onion-Location pill; this is the on-site
