@@ -1,19 +1,10 @@
 // Typed TanStack Query hooks — the only thing the UI imports for data. Phase 1:
-// these wrap the live oRPC client (`orpc.tracks.*` from ./orpc.ts) over the same
-// public contract the web serves. The hook names + return shapes are stable, so
-// no UI file changes.
+// these wrap the live oRPC client (the flat `orpc.*` ops from ./orpc.ts) over the
+// same public contract the web serves. The hook names + return shapes are stable,
+// so no UI file changes.
 import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
 import { type FeedItem, type TrackListItem } from "@fluncle/contracts";
 import { orpc } from "@/api/orpc";
-
-// Phase 1 (slice B) replaces this with the real `devices` contract op. Kept as a
-// typed stub so the push consent UX (app/notifications.tsx) stays wired.
-export type RegisterDeviceRequest = {
-  appVersion?: string;
-  mutedCategories?: ("finding" | "mixtape")[];
-  platform: "android" | "ios";
-  token: string;
-};
 
 /** A feed page as the contract emits it (findings + published mixtapes interleaved). */
 type FeedPage = { nextCursor?: string; tracks: FeedItem[] };
@@ -58,15 +49,12 @@ export function useFinding(idOrLogId: string) {
   );
 }
 
+/**
+ * Register this device's Expo push token for new-finding / new-mixtape pushes —
+ * the live `register_device` op (POST /api/v1/devices), an idempotent upsert. The
+ * token comes from the consent flow (src/push/notifications.ts); the actual send
+ * stays dark until the server's EXPO_ACCESS_TOKEN is set.
+ */
 export function useRegisterDevice() {
-  return useMutation({
-    // TODO(slice B): call the real `devices` contract op (POST /api/v1/devices)
-    // once it lands; until then this is a no-op so the consent UX is testable.
-    mutationFn: async (req: RegisterDeviceRequest): Promise<{ ok: true }> => {
-      if (__DEV__) {
-        console.log("[push] registerDevice (stub):", req.platform);
-      }
-      return { ok: true };
-    },
-  });
+  return useMutation(orpc.register_device.mutationOptions());
 }
