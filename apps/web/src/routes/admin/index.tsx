@@ -2,6 +2,8 @@ import {
   CassetteTapeIcon,
   CircleNotchIcon,
   CrosshairIcon,
+  FileTextIcon,
+  MicrophoneIcon,
   NotePencilIcon,
   PlayIcon,
   WaveformIcon,
@@ -19,6 +21,7 @@ import { AddToMixtapeDialog } from "@/components/admin/add-to-mixtape-dialog";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { EnrichDialog } from "@/components/admin/enrich-dialog";
 import { NoteDialog } from "@/components/admin/note-dialog";
+import { ContextDialog, ObservationDialog } from "@/components/admin/observation-dialogs";
 import { type PlatformConfig, PLATFORMS } from "@/components/admin/platform-cell";
 import { PushDialog } from "@/components/admin/push-dialog";
 import { StageCell, type StageState } from "@/components/admin/stage-cell";
@@ -34,6 +37,7 @@ import { type MixtapeDTO, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { readCaptions } from "@/lib/server/captions";
 import { listMixtapeMembershipsForTracks, listMixtapes } from "@/lib/server/mixtapes";
+import { getContextNote, listContextNotePresenceForTracks } from "@/lib/server/observation-board";
 import { listSocialPostsForTracks } from "@/lib/server/social";
 import { triggerEnrichment } from "@/lib/server/spinup";
 import { getSpotifyAuthStatus, type SpotifyAuthStatus } from "@/lib/server/spotify";
@@ -69,6 +73,8 @@ const POINTS_KEY = ["admin", "tag", "points"] as const;
 const SPOTIFY_STATUS_KEY = ["admin", "spotify", "status"] as const;
 // The draft-mixtape targets for the "Add to mixtape" sheet.
 const DRAFT_MIXTAPES_KEY = ["admin", "mixtapes", "drafts"] as const;
+// The lazily-read context_note for the Context cell's view dialog, keyed by trackId.
+const CONTEXT_NOTE_KEY = ["admin", "context-note"] as const;
 
 // The two publish platforms, in pipeline order (YouTube posts public directly,
 // TikTok lands as a draft you finish in-app). PLATFORMS is keyed the other way for
@@ -123,11 +129,13 @@ function mixtapeStateOf(row: BoardRow): MixState {
 }
 
 // Column template shared by the header + every row so they align: the Log ID
-// (the finding's permanent identity, its own scannable column), the finding, then
-// the four equal stage cells. Horizontal-scroll wrapper so a phone scrolls
-// sideways rather than cramming.
+// (the finding's permanent identity, its own scannable column), the finding (a
+// min-width floor so title + artist never crush), then the equal stage cells
+// (Enrich · Tag · YouTube · TikTok · Context · Observation · Note · Mixtape). The
+// table is wider than a viewport now, so the whole grid lives in a horizontal-scroll
+// wrapper (header + body together) rather than squashing the cells.
 const GRID =
-  "grid grid-cols-[5.5rem_minmax(13rem,1fr)_repeat(6,minmax(6.5rem,8rem))] items-center gap-x-3";
+  "grid grid-cols-[5.5rem_minmax(15rem,1fr)_repeat(8,minmax(6.5rem,8rem))] items-center gap-x-3";
 
 const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
   if (!(await isAdminRequest())) {
@@ -151,10 +159,13 @@ const fetchBoard = createServerFn({ method: "GET" })
     });
     const trackIds = page.tracks.map((track) => track.trackId);
     // Batch fetches — one query each for the whole page, no N+1: the per-platform
-    // posts and the mixtape memberships (which tapes each finding is already on).
-    const [posts, mixtapes] = await Promise.all([
+    // posts, the mixtape memberships (which tapes each finding is already on), and
+    // which findings carry an internal context_note (the Context column status —
+    // pulled admin-only since context_note never rides the public track contract).
+    const [posts, mixtapes, contextNotes] = await Promise.all([
       listSocialPostsForTracks(trackIds),
       listMixtapeMembershipsForTracks(trackIds),
+      listContextNotePresenceForTracks(trackIds),
     ]);
 
     return {
@@ -162,6 +173,7 @@ const fetchBoard = createServerFn({ method: "GET" })
       totalCount: page.totalCount,
       tracks: page.tracks.map((track) => ({
         ...track,
+        hasContextNote: contextNotes.has(track.trackId),
         mixtapes: mixtapes[track.trackId] ?? [],
         posts: posts[track.trackId] ?? [],
       })),
@@ -196,6 +208,20 @@ const fetchCaption = createServerFn({ method: "GET" })
     const captions = await readCaptions([data.logId]);
 
     return { caption: captions[data.logId] ?? "" };
+  });
+
+// Lazy context-note read — only when the operator opens a finding's Context cell to
+// view the firecrawl-derived facts that fuel its observation script. Internal fuel
+// (docs/agents/observation-agent.md), so it stays on this gated admin path and off
+// the public track contract; never preloaded for the whole page.
+const fetchContextNote = createServerFn({ method: "GET" })
+  .validator((data: { trackId: string }) => data)
+  .handler(async ({ data }): Promise<{ contextNote: string }> => {
+    if (!(await isAdminRequest())) {
+      throw redirect({ to: "/admin/login" });
+    }
+
+    return { contextNote: await getContextNote(data.trackId) };
   });
 
 // The Spotify connection light. Read-only (no token refresh) and focus-refetched,
@@ -306,6 +332,12 @@ function AdminBoardPage() {
   const [noteId, setNoteId] = useState<string | undefined>();
   const [noteSaving, setNoteSaving] = useState(false);
   const [noteError, setNoteError] = useState<string | undefined>();
+  // The two audio-observation view cells (Context · Observation). View-only for now
+  // — backfill (authoring + the observe render) needs an agent-authored script via
+  // the observe endpoint, so the board reflects status and lets the operator read
+  // the context note / play the observation; generating is left to the agent.
+  const [contextId, setContextId] = useState<string | undefined>();
+  const [observationId, setObservationId] = useState<string | undefined>();
 
   const rowFor = useCallback(
     (trackId?: string) => (trackId ? rows.find((row) => row.trackId === trackId) : undefined),
@@ -314,6 +346,8 @@ function AdminBoardPage() {
   const tagRow = rowFor(tagId);
   const enrichRow = rowFor(enrichId);
   const noteRow = rowFor(noteId);
+  const contextRow = rowFor(contextId);
+  const observationRow = rowFor(observationId);
   const pushRow = rowFor(push?.trackId);
   const pushPlatform = push
     ? (PLATFORMS.find((platform) => platform.key === push.platformKey) ?? null)
@@ -505,6 +539,15 @@ function AdminBoardPage() {
     queryFn: fetchVibePoints,
     queryKey: POINTS_KEY,
     refetchOnWindowFocus: true,
+  });
+
+  // The Context dialog's note text — lazily read the first time a Context cell is
+  // opened, keyed per finding so each opens its own note (cached, never refetched).
+  const { data: contextNoteData, isFetching: contextFetching } = useQuery({
+    enabled: contextId !== undefined,
+    queryFn: () => fetchContextNote({ data: { trackId: contextId as string } }),
+    queryKey: [...CONTEXT_NOTE_KEY, contextId],
+    staleTime: Number.POSITIVE_INFINITY,
   });
 
   // The next finding in the current worklist — powers "Save & next" in the Tag and
@@ -747,7 +790,7 @@ function AdminBoardPage() {
         />
       ) : (
         <div className="overflow-x-auto">
-          <div className="min-w-[66rem]">
+          <div className="min-w-[80rem]">
             {/* Column header */}
             <div
               className={cn(
@@ -771,6 +814,14 @@ function AdminBoardPage() {
                   {platform.label}
                 </span>
               ))}
+              <span className="flex items-center gap-1.5">
+                <FileTextIcon className="size-3.5" weight="fill" />
+                Context
+              </span>
+              <span className="flex items-center gap-1.5">
+                <MicrophoneIcon className="size-3.5" weight="fill" />
+                Observation
+              </span>
               <span className="flex items-center gap-1.5">
                 <NotePencilIcon className="size-3.5" weight="bold" />
                 Note
@@ -802,6 +853,8 @@ function AdminBoardPage() {
                       row={row}
                     />
                   ))}
+                  <ContextStageCell onOpen={() => setContextId(row.trackId)} row={row} />
+                  <ObservationStageCell onOpen={() => setObservationId(row.trackId)} row={row} />
                   <NoteStageCell onOpen={() => setNoteId(row.trackId)} row={row} />
                   <MixtapeStageCell onOpen={() => setMixtapeId(row.trackId)} row={row} />
                 </li>
@@ -855,6 +908,18 @@ function AdminBoardPage() {
         onSaveAndNext={(note) => void saveNote(note, true)}
         row={noteRow ?? null}
         saving={noteSaving}
+      />
+
+      <ContextDialog
+        contextNote={contextNoteData?.contextNote ?? ""}
+        loading={contextFetching}
+        onOpenChange={(open) => !open && setContextId(undefined)}
+        row={contextRow ?? null}
+      />
+
+      <ObservationDialog
+        onOpenChange={(open) => !open && setObservationId(undefined)}
+        row={observationRow ?? null}
       />
 
       <PushDialog
@@ -1087,6 +1152,54 @@ function NoteStageCell({ onOpen, row }: { onOpen: () => void; row: BoardRow }) {
       onClick={onOpen}
       state={note ? "done" : "open"}
       title="The finding's note — shows on its log page"
+    />
+  );
+}
+
+// The Context cell — the firecrawl-derived context_note that fuels the observation
+// script (internal fuel, docs/agents/observation-agent.md). Binary by shape: solid
+// + a check when a note exists ("facts gathered"), hollow when not. Clicking opens
+// the view dialog (the note text, lazily read). It's not a partial state on its own
+// — a note is either there or it isn't.
+function ContextStageCell({ onOpen, row }: { onOpen: () => void; row: BoardRow }) {
+  const has = row.hasContextNote;
+
+  return (
+    <StageCell
+      icon={<FileTextIcon className="size-4" weight={has ? "fill" : "regular"} />}
+      label={has ? "Context" : "No context"}
+      onClick={onOpen}
+      state={has ? "done" : "open"}
+      title={has ? "View the finding's context note" : "No context note gathered yet"}
+    />
+  );
+}
+
+// The Observation cell — Fluncle's spoken observation.mp3 (the third enrichment
+// artifact). Reads by shape across THREE states: solid + check when the audio is
+// rendered ("there's an observation"); a dashed PARTIAL when the context note is
+// gathered but the audio isn't voiced yet (the real in-between — facts in hand,
+// script un-rendered); hollow when neither exists. Clicking opens the view dialog
+// (plays the clip if rendered). Authoring/rendering is agent-only (the observe
+// endpoint) — this cell is view + status, not a generate trigger.
+function ObservationStageCell({ onOpen, row }: { onOpen: () => void; row: BoardRow }) {
+  const rendered = Boolean(row.observationAudioUrl);
+  const state: StageState = rendered ? "done" : row.hasContextNote ? "partial" : "open";
+  const label = rendered ? "Heard" : row.hasContextNote ? "Context ready" : "No clip";
+
+  return (
+    <StageCell
+      icon={<MicrophoneIcon className="size-4" weight={state === "open" ? "regular" : "fill"} />}
+      label={label}
+      onClick={onOpen}
+      state={state}
+      title={
+        rendered
+          ? "Play the spoken observation"
+          : row.hasContextNote
+            ? "Context gathered — observation not voiced yet"
+            : "No observation rendered yet"
+      }
     />
   );
 }
