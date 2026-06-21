@@ -3,6 +3,7 @@ import {
   FOUND_BASE,
   spotifyAlbumImageAtSize,
   trackMedia,
+  versionedObservationAudioUrl,
   videoAudioStripped,
   videoCrop,
   videoCropPoster,
@@ -202,5 +203,49 @@ describe("trackMedia (unchanged contract)", () => {
     expect(media.videoUrl).not.toContain("/cdn-cgi/media");
     expect(media.socialVideoUrl).not.toContain("/cdn-cgi/media");
     expect(media.posterUrl).not.toContain("/cdn-cgi/media");
+  });
+
+  it("returns the BARE observation audio URL (the admin-overwrite source of truth)", () => {
+    // trackMedia is keyed by the logId alone (no render timestamp), so it stays
+    // the raw URL — the observe route reads it to PUT the object, and the DTO
+    // versions it for playback. It must never carry a ?v= here.
+    expect(trackMedia("ABC123").observationAudioUrl).toBe(`${FOUND_BASE}/ABC123/observation.mp3`);
+    expect(trackMedia("ABC123").observationAudioUrl).not.toContain("?v=");
+  });
+});
+
+// The playback/consumer observation URL is versioned by observation_generated_at
+// so a re-`observe` (which overwrites observation.mp3 in place at the same R2 key)
+// re-keys the edge cache — the bare URL alone HITs stale until its max-age TTL.
+describe("versionedObservationAudioUrl", () => {
+  const bare = `${FOUND_BASE}/ABC123/observation.mp3`;
+
+  it("appends ?v=<epoch-ms of generatedAt> to the bare URL", () => {
+    const generatedAt = "2026-06-21T10:00:00.000Z";
+    expect(versionedObservationAudioUrl(bare, generatedAt)).toBe(
+      `${bare}?v=${Date.parse(generatedAt)}`,
+    );
+  });
+
+  it("CHANGES the URL when observation_generated_at changes (a re-observe re-keys the cache)", () => {
+    const before = versionedObservationAudioUrl(bare, "2026-06-21T10:00:00.000Z");
+    const after = versionedObservationAudioUrl(bare, "2026-06-21T12:30:00.000Z");
+
+    expect(before).not.toBe(after);
+    expect(before).toContain("?v=");
+    expect(after).toContain("?v=");
+  });
+
+  it("returns undefined for a finding with no observation (no broken URL)", () => {
+    expect(versionedObservationAudioUrl(undefined, "2026-06-21T10:00:00.000Z")).toBeUndefined();
+  });
+
+  it("returns the bare URL unchanged when no timestamp is present (no dangling ?v=)", () => {
+    expect(versionedObservationAudioUrl(bare, undefined)).toBe(bare);
+    expect(versionedObservationAudioUrl(bare, undefined)).not.toContain("?v=");
+  });
+
+  it("returns the bare URL unchanged when the timestamp is unparseable", () => {
+    expect(versionedObservationAudioUrl(bare, "not-a-date")).toBe(bare);
   });
 });

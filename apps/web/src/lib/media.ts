@@ -15,6 +15,45 @@ export function mixtapeAudioUrl(logId: string): string {
   return `${FOUND_BASE}/${encodeURIComponent(logId)}/mixtape.m4a`;
 }
 
+/**
+ * Cache-bust the observation audio URL by its render timestamp.
+ *
+ * Re-`observe`ing a finding overwrites `<log-id>/observation.mp3` in place at the
+ * same R2 key, but the BARE object URL is edge-cached (`cache-control: max-age`),
+ * so `/log` and the admin board keep serving the OLD audio until the TTL expires.
+ * Riding `observation_generated_at` as `?v=<epoch-ms>` re-keys the edge entry on
+ * every re-observe, so playback surfaces fetch the fresh cut immediately. R2
+ * ignores the unknown query (the object resolves byte-identically — verified for
+ * footage), so only the cache key changes, never the bytes. This mirrors the
+ * video `TRANSFORM_VERSION` token and the OG/cover `?n=<version>` bust.
+ *
+ * Pass the STORED bare URL (the `observation_audio_url` column) and the row's
+ * `observation_generated_at`. The bare URL stays the source of truth for any
+ * internal/admin-overwrite use (like the video master in `trackMedia`); only the
+ * playback/consumer URL gets the version. Returns the bare URL unchanged when
+ * either input is missing (no observation → no broken `?v=` token).
+ */
+export function versionedObservationAudioUrl(
+  bareUrl: string | undefined,
+  generatedAt: string | undefined,
+): string | undefined {
+  if (!bareUrl) {
+    return bareUrl;
+  }
+
+  if (!generatedAt) {
+    return bareUrl;
+  }
+
+  const version = Date.parse(generatedAt);
+
+  if (Number.isNaN(version)) {
+    return bareUrl;
+  }
+
+  return `${bareUrl}?v=${version}`;
+}
+
 export type TrackMedia = {
   /** The profile-grid cover: loud centered identity. Also the OG image + video loading still. */
   coverUrl: string;

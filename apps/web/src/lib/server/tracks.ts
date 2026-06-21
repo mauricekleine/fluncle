@@ -8,6 +8,7 @@ import {
 } from "@fluncle/contracts";
 import { logPageUrl } from "../fluncle-links";
 import { GALAXIES, galaxyForVibe } from "../galaxies";
+import { versionedObservationAudioUrl } from "../media";
 import { type FeedItem, type MixtapeMember, rowToMixtape } from "../mixtapes";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
@@ -15,7 +16,7 @@ import { discogsReleaseUrl } from "./discogs";
 
 export type { FeedListPage, TrackCursor, TrackFeatures, TrackListPage, TrackListItem };
 
-type TrackRow = {
+export type TrackRow = {
   added_at: string;
   album: string | null;
   album_image_url: string | null;
@@ -119,7 +120,7 @@ function galaxyOf(x: number | null, y: number | null): { key: Galaxy; name: stri
   return { key, name: GALAXIES[key].name };
 }
 
-function toTrackListItem(row: TrackRow): TrackListItem {
+export function toTrackListItem(row: TrackRow): TrackListItem {
   return {
     addedAt: row.added_at,
     addedToSpotify: Boolean(row.added_to_spotify),
@@ -138,7 +139,14 @@ function toTrackListItem(row: TrackRow): TrackListItem {
     logId: row.log_id ?? undefined,
     logPageUrl: row.log_id ? logPageUrl(row.log_id) : undefined,
     note: row.note?.trim() ? row.note : undefined,
-    observationAudioUrl: row.observation_audio_url ?? undefined,
+    // Version the playback URL by the render timestamp so a re-`observe`
+    // (which overwrites observation.mp3 in place) re-keys the edge cache — the
+    // bare URL alone HITs stale until its max-age TTL. The bare URL stays in the
+    // DB column (the admin-overwrite source of truth); only consumers see ?v=.
+    observationAudioUrl: versionedObservationAudioUrl(
+      row.observation_audio_url ?? undefined,
+      row.observation_generated_at ?? undefined,
+    ),
     observationDurationMs: row.observation_duration_ms ?? undefined,
     observationGeneratedAt: row.observation_generated_at ?? undefined,
     popularity: row.popularity ?? undefined,
