@@ -143,9 +143,14 @@
    signature surface. Retint Fumadocs' default card to canon: a warm translucent
    Sleeve-Black pane with a Dust Line edge that ignites toward gold on hover —
    the artwork-row treatment, translated for docs (One Pane, The Ignition Rule).
-   No drop shadow; depth is the sky behind the glass. */
-#nd-docs-layout article a[data-card],
-#nd-docs-layout a[data-card] {
+   No drop shadow; depth is the sky behind the glass.
+
+   Scope to real <Card>s only. Fumadocs also tags each heading's own anchor
+   wrapper with `data-card` (see its <Heading>), so we exclude any `data-card`
+   that is a heading's direct child — otherwise every h2/h3 reads as a stray
+   bordered box. Headings get their own quiet hover below instead. */
+#nd-docs-layout article a[data-card]:not(:where(h1, h2, h3, h4, h5, h6) > a),
+#nd-docs-layout a[data-card]:not(:where(h1, h2, h3, h4, h5, h6) > a) {
   background: color-mix(in oklch, #10100d 55%, transparent);
   border: 1px solid var(--color-fd-border);
   border-radius: 0.625rem;
@@ -156,26 +161,49 @@
     transform 150ms ease-out;
 }
 
-#nd-docs-layout a[data-card]:hover {
+#nd-docs-layout a[data-card]:not(:where(h1, h2, h3, h4, h5, h6) > a):hover {
   background: color-mix(in oklch, #f5b800 8%, color-mix(in oklch, #10100d 55%, transparent));
   border-color: color-mix(in oklch, #f5b800 38%, transparent);
 }
 
 /* The card title heats to the Glow on hover (it follows the link color). */
-#nd-docs-layout a[data-card]:hover :where(p, h2, h3) {
+#nd-docs-layout a[data-card]:not(:where(h1, h2, h3, h4, h5, h6) > a):hover :where(p, h2, h3) {
+  color: var(--color-fd-accent-foreground);
+}
+
+/* ————— Headings ignite, never box (The Ignition Rule) ————— */
+
+/* Fumadocs wraps each heading's text in an anchor (the `data-card` excluded
+   above). It carries no chrome — no border, no pane: just the heading. On hover
+   it heats toward the Glow (a color shift) while Fumadocs' anchor-link icon
+   fades in, so the affordance stays clear without a box. */
+#nd-docs-layout :where(h1, h2, h3, h4, h5, h6) > a[data-card] {
+  color: inherit;
+  text-decoration: none;
+  transition: color 150ms ease-out;
+}
+
+#nd-docs-layout :where(h1, h2, h3, h4, h5, h6):hover > a[data-card] {
   color: var(--color-fd-accent-foreground);
 }
 
 /* ————— Code: the machine's own word ————— */
 
-/* Code blocks and inline code sit in a quiet Tape-Black box with a Dust Line
-   edge, mono type — the CLI Command treatment (DESIGN.md). */
-#nd-docs-layout article pre,
-#nd-docs-layout figure[data-rehype-pretty-code-figure] pre {
-  background: color-mix(in oklch, #171611 70%, transparent);
-  border: 1px solid var(--color-fd-border);
+/* Code blocks read clean and flush — no card around them. Fumadocs' CodeBlock
+   ships the `<figure class="shiki">` with its own `border`, `bg-fd-card`, and
+   `shadow-sm`; we drop all three so a standalone block stands on the reading
+   pane unboxed, and a block inside a <Card> lets the card be the single
+   container (no box-in-a-box, no doubled border, no different background). The
+   code area itself sits straight on the #nd-page scrim, which is dark enough to
+   hold the Shiki tokens at AA. The mono type is set via --fd-font-mono above. */
+#nd-docs-layout figure.shiki {
+  background: transparent;
+  border: none;
+  box-shadow: none;
 }
 
+/* Only inline code keeps a faint Tape-Black pane so it reads as a token in
+   running prose. */
 #nd-docs-layout article :not(pre) > code {
   background: color-mix(in oklch, #171611 60%, transparent);
   border: 1px solid var(--color-fd-border);
