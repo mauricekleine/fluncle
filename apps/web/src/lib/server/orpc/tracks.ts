@@ -5,31 +5,11 @@
 import { ORPCError } from "@orpc/server";
 import { decodeTrackCursor, getRandomTrack, listTracks } from "../tracks";
 import { resolveLogPageTarget } from "../log-resolver";
-import { apiFault, type Implementer } from "./_shared";
+import { apiFault, type Implementer, parseLimit } from "./_shared";
 
 // Feed page-size bounds, ported verbatim from the live /api/tracks route.
 const LIST_DEFAULT_LIMIT = 16;
 const LIST_MAX_LIMIT = 48;
-
-/**
- * Parse + clamp the incoming `limit` exactly as the live route's `parseLimit`
- * did: a missing, non-integer, or < 1 value degrades to the default; otherwise
- * it is capped at the max. The contract keeps `limit` a raw string (coercion
- * would 400 on `?limit=abc`); this reproduces the legacy tolerance.
- */
-function parseLimit(value: string | undefined): number {
-  if (!value) {
-    return LIST_DEFAULT_LIMIT;
-  }
-
-  const limit = Number.parseInt(value, 10);
-
-  if (!Number.isInteger(limit) || limit < 1) {
-    return LIST_DEFAULT_LIMIT;
-  }
-
-  return Math.min(limit, LIST_MAX_LIMIT);
-}
 
 /**
  * Normalize a discovery-window bound exactly as the live route's `parseTimestamp`
@@ -84,7 +64,7 @@ export function tracksHandlers(os: Implementer) {
   // the FeedListPage itself — no `ok` envelope.
   const listTracksHandler = os.list_tracks.handler(async ({ input }) => {
     try {
-      const limit = parseLimit(input.limit);
+      const limit = parseLimit(input.limit, LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT);
       const cursor = decodeTrackCursor(input.cursor ?? null);
       const since = parseTimestamp(input.since);
       const until = parseTimestamp(input.until);

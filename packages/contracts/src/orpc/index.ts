@@ -97,11 +97,11 @@ export {
 } from "./me-galaxy";
 export { listPrivateSavedFindings, savePrivateFinding, unsavePrivateFinding } from "./me-saved";
 export { listMixtapes } from "./mixtapes";
-export { subscribeNewsletter } from "./newsletter";
+export { type NewsletterBody, subscribeNewsletter } from "./newsletter";
 export { getRandomRadioTrack } from "./radio";
 export { searchTracks } from "./search";
 export { listStories } from "./stories";
-export { submitTrack } from "./submissions";
+export { type SubmissionBody, submitTrack } from "./submissions";
 export { getRandomTrack, getTrack, listTracks } from "./tracks";
 export {
   MixtapeDTOSchema,

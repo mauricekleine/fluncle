@@ -15,6 +15,30 @@
 // main.go) because Go can't import a TS types package. If a request DTO here
 // changes shape, update the Go structs to match (a code-gen step could close
 // this gap later).
+//
+// SINGLE DEFINITION: the response DTOs below are `z.infer`'d from the Zod schemas
+// in `./orpc/_shared.ts` (the live wire authority since the oRPC migration), so a
+// hand-written mirror can never drift from the schema a route validates against.
+// The schemas are pulled with `import type` — a TYPE-ONLY import — so this `.`
+// entry stays runtime-free (no zod in the CLI/extension bundle); only `z.infer`,
+// which erases at compile, reads them. Request DTOs and response ENVELOPES stay
+// hand-written here: the request bodies' contract schemas are deliberately LOOSE
+// (`z.unknown()`), so inferring them would erase the CLI's typed send shape.
+
+import { type z } from "zod";
+import {
+  type MixtapeDTOSchema,
+  type MixtapeSocialPostItemSchema,
+  type SocialPostItemSchema,
+  type SubmissionSchema,
+  type TrackFeaturesSchema,
+  type TrackListItemSchema,
+  type TrackSearchResultSchema,
+  // `.js` extension: the `.` entry is consumed by NodeNext typecheckers (Raycast),
+  // which require explicit extensions on relative imports; Bundler resolvers (web,
+  // CLI) + vite/esbuild resolve it back to the `.ts` source. Type-only import, so
+  // no zod runtime reaches the zod-free `.` bundle.
+} from "./orpc/_shared.js";
 
 // ── Common ───────────────────────────────────────────────────────────────────
 
@@ -33,69 +57,19 @@ export type Galaxy = "astral" | "lunar" | "nebular" | "solar";
 
 // ── Track ────────────────────────────────────────────────────────────────────
 
-/** Enrichment's track-level spectral summary (from `features_json`); absent until enriched. */
-export type TrackFeatures = {
-  centroidHz?: number;
-  highRatio?: number;
-  midFlatness?: number;
-  onsetRate?: number;
-  subBassRatio?: number;
-};
+/**
+ * Enrichment's track-level spectral summary (from `features_json`); absent until
+ * enriched. Inferred from `TrackFeaturesSchema` (./orpc/_shared.ts).
+ */
+export type TrackFeatures = z.infer<typeof TrackFeaturesSchema>;
 
-/** A finding as the feed/log/admin board renders it; emitted by `/api/tracks` and `/api/tracks/:id`. */
-export type TrackListItem = {
-  addedAt: string;
-  addedToSpotify: boolean;
-  album?: string;
-  albumImageUrl?: string;
-  artists: string[];
-  bpm?: number;
-  /** The finding's `discogs.com/release/{id}` URL — a per-track `sameAs`; absent until resolved. */
-  discogsReleaseUrl?: string;
-  durationMs: number;
-  enrichmentStatus: string;
-  features?: TrackFeatures;
-  galaxy?: { key: Galaxy; name: string };
-  isrc?: string;
-  key?: string;
-  label?: string;
-  logId?: string;
-  /** The finding's permanent log page on fluncle.com; absent until a Log ID exists. */
-  logPageUrl?: string;
-  note?: string;
-  /** Fluncle's spoken field observation (R2 mp3); present only when rendered. */
-  observationAudioUrl?: string;
-  /** The observation's length in milliseconds (probed at render time). */
-  observationDurationMs?: number;
-  /** When the observation was rendered (ISO); present only when rendered. */
-  observationGeneratedAt?: string;
-  popularity?: number;
-  postedToTelegram: boolean;
-  previewUrl?: string;
-  releaseDate?: string;
-  spotifyUrl: string;
-  tiktokUrl?: string;
-  title: string;
-  trackId: string;
-  type?: "finding";
-  updatedAt?: string;
-  videoModel?: string;
-  videoModelReasoning?: string;
-  /**
-   * When the SQUARE crop-source master was uploaded (ISO). Its PRESENCE is the
-   * two-master layout signal (docs/video-variants.md): set → `footage.mp4` is the
-   * clean 1920×1920 master archive surfaces MT-crop on the fly, with a baked
-   * portrait `footage.social.mp4` alongside; absent → the legacy single-file
-   * layout (`footage.mp4` is the old portrait+text cut). Consumers fall back to
-   * today's behavior when it's absent.
-   */
-  videoSquaredAt?: string;
-  videoUrl?: string;
-  videoVehicle?: string;
-  vibeX?: number;
-  vibeY?: number;
-  youtubeUrl?: string;
-};
+/**
+ * A finding as the feed/log/admin board renders it; emitted by `/api/tracks` and
+ * `/api/tracks/:id`. Inferred from `TrackListItemSchema` (./orpc/_shared.ts), the
+ * schema the route validates its body against — so this DTO cannot drift from the
+ * wire. Field docs live on the schema.
+ */
+export type TrackListItem = z.infer<typeof TrackListItemSchema>;
 
 /** The cursor for feed pagination (base64'd `addedAt` + `trackId`). */
 export type TrackCursor = {
@@ -128,29 +102,13 @@ export type MixtapeMember = TrackListItem & {
   startMs?: number;
 };
 
-/** A mixtape as the `/mixtapes` surface + `/api/mixtapes` emit it. `status` is always present (NOT NULL column). */
-export type MixtapeDTO = {
-  addedAt?: string;
-  artists: ["Fluncle"];
-  coverImageUrl?: string;
-  createdAt?: string;
-  durationMs?: number;
-  externalUrls: MixtapeExternalUrls;
-  id?: string;
-  logId?: string;
-  memberCount: number;
-  members: MixtapeMember[];
-  note?: string;
-  /** Scheduled date/time (ISO) of an upcoming live session; surfaces in /calendar.ics. */
-  plannedFor?: string;
-  publishedAt?: string;
-  recordedAt?: string;
-  sequenceNumber?: number;
-  status: MixtapeStatus;
-  title: string;
-  type: "mixtape";
-  updatedAt?: string;
-};
+/**
+ * A mixtape as the `/mixtapes` surface + `/api/mixtapes` emit it. `status` is
+ * always present (NOT NULL column). Inferred from `MixtapeDTOSchema`
+ * (./orpc/_shared.ts) — its `members` is the `MixtapeMember` shape (a finding +
+ * optional cue) and its `externalUrls` the `MixtapeExternalUrls` shape.
+ */
+export type MixtapeDTO = z.infer<typeof MixtapeDTOSchema>;
 
 // ── Feed (findings + mixtapes merged) ────────────────────────────────────────
 
@@ -184,16 +142,11 @@ export type MixtapeDeleteResponse = Ok<{}>;
 // each platform, and records the outcome here. `platform` is a plain string so
 // "soundcloud" can join later with no contract churn.
 
-/** A per-platform distribution row (the `mixtape_social_posts` table). */
-export type MixtapeSocialPostItem = {
-  createdAt: string;
-  externalId?: string;
-  platform: string;
-  publishedAt?: string;
-  status: string;
-  updatedAt: string;
-  url?: string;
-};
+/**
+ * A per-platform distribution row (the `mixtape_social_posts` table). Inferred
+ * from `MixtapeSocialPostItemSchema` (./orpc/_shared.ts).
+ */
+export type MixtapeSocialPostItem = z.infer<typeof MixtapeSocialPostItemSchema>;
 
 /** `/api/admin/mixtapes/:id/social` response: the mixtape's per-platform distribution rows. */
 export type MixtapeSocialShowResponse = Ok<{ mixtapeId: string; posts: MixtapeSocialPostItem[] }>;
@@ -236,38 +189,16 @@ export type MixtapeYouTubeInitiateResponse = Ok<{ accessToken: string; sessionUr
 export type SubmissionSource = "web" | "cli" | "ssh";
 export type SubmissionStatus = "pending" | "approved" | "rejected";
 
-export type Submission = {
-  album?: string;
-  artworkUrl?: string;
-  artists: string[];
-  contact?: string;
-  createdAt: string;
-  id: string;
-  note?: string;
-  reviewedAt?: string;
-  source: SubmissionSource;
-  spotifyTrackId: string;
-  spotifyUrl: string;
-  status: SubmissionStatus;
-  title: string;
-};
+/** A finding submission as `/api/submissions` records it. Inferred from `SubmissionSchema` (./orpc/_shared.ts). */
+export type Submission = z.infer<typeof SubmissionSchema>;
 
 export type SubmissionsResponse = Ok<{ submissions: Submission[] }>;
 export type SubmissionResponse = Ok<{ submission: Submission }>;
 
 // ── Social ───────────────────────────────────────────────────────────────────
 
-/** A per-platform post row (the `social_posts` table). */
-export type SocialPostItem = {
-  createdAt: string;
-  externalId?: string;
-  platform: string;
-  publishedAt?: string;
-  scheduledFor?: string;
-  status: string;
-  updatedAt: string;
-  url?: string;
-};
+/** A per-platform post row (the `social_posts` table). Inferred from `SocialPostItemSchema` (./orpc/_shared.ts). */
+export type SocialPostItem = z.infer<typeof SocialPostItemSchema>;
 
 export type SocialStatusUpdate = {
   scheduledFor?: string;
@@ -291,15 +222,8 @@ export type TrackDraftResponse = Ok<{
 
 // ── Search ───────────────────────────────────────────────────────────────────
 
-/** A Spotify search candidate (`/api/search`). */
-export type TrackSearchResult = {
-  album?: string;
-  artworkUrl?: string;
-  artists: string[];
-  id: string;
-  spotifyUrl: string;
-  title: string;
-};
+/** A Spotify search candidate (`/api/search`). Inferred from `TrackSearchResultSchema` (./orpc/_shared.ts). */
+export type TrackSearchResult = z.infer<typeof TrackSearchResultSchema>;
 
 export type SearchResponse = Ok<{ results: TrackSearchResult[] }>;
 

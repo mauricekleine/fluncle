@@ -16,6 +16,28 @@ import { ApiError } from "../spotify";
  */
 export type Implementer = ReturnType<typeof implement<typeof contract, OrpcContext>>;
 
+/**
+ * Parse + clamp an incoming `limit` query param exactly as the live routes did: a
+ * missing, non-integer, or `< 1` value degrades to `fallback`; otherwise it is
+ * capped at `max`. The contracts keep `limit` a raw string (coercion would 400 on
+ * `?limit=abc`), so this reproduces the legacy tolerance. One copy for every handler
+ * (tracks/stories list, the admin board, the enrich sweep) — each passes its own
+ * DEFAULT/MAX so the bounds stay where they read.
+ */
+export function parseLimit(value: string | undefined, fallback: number, max: number): number {
+  if (!value) {
+    return fallback;
+  }
+
+  const limit = Number.parseInt(value, 10);
+
+  if (!Number.isInteger(limit) || limit < 1) {
+    return fallback;
+  }
+
+  return Math.min(limit, max);
+}
+
 // ── Error wire-shape parity (the fault converter half) ───────────────────────
 // The HTTP body re-encoding lives at the rails (../orpc.ts `encodeErrorBody`);
 // this is the conversion every handler's catch uses to turn an unexpected fault

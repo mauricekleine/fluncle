@@ -24,7 +24,9 @@
 //     are `requireOperator`, so both are on the operator tier.
 
 import { env } from "cloudflare:workers";
+import { type InferContractRouterInputs } from "@orpc/contract";
 import { ORPCError } from "@orpc/server";
+import { type contract } from "@fluncle/contracts/orpc";
 import { FOUND_BASE, trackMedia } from "../../media";
 import { parseEditorialNote } from "../http-errors";
 import { publishTrack } from "../publish";
@@ -54,7 +56,7 @@ import {
   searchTracks,
 } from "../tracks";
 import { type VideoArtifact, artifactByField } from "../video-bundle";
-import { apiFault, type Implementer } from "./_shared";
+import { apiFault, type Implementer, parseLimit } from "./_shared";
 
 // Fields only the operator may write: editorial voice (note), the vehicle/video
 // (videoUrl), the map placement (vibeX/vibeY), and the immutable identity fields
@@ -70,28 +72,15 @@ const OPERATOR_ONLY_FIELDS: (keyof TrackUpdate)[] = [
   "videoUrl",
 ];
 
-type PatchBody = {
-  bpm?: unknown;
-  enrichmentStatus?: unknown;
-  features?: unknown;
-  isrc?: unknown;
-  key?: unknown;
-  logId?: unknown;
-  note?: unknown;
-  videoUrl?: unknown;
-  vibeX?: unknown;
-  vibeY?: unknown;
-};
-
-type ObserveBody = {
-  contextNote?: unknown;
-  durationMs?: unknown;
-  durationTargetSec?: unknown;
-  model?: unknown;
-  script?: unknown;
-  voiceId?: unknown;
-  voiceSettings?: unknown;
-};
+// The handler input shapes come straight from the contract (the single source of
+// truth): `InferContractRouterInputs<typeof contract>` projects each op's Zod
+// `.input(...)` to its TS type, so a `PatchBody`/`ObserveBody` hand-mirror can't
+// drift from the schema the route validates. The contract inputs are LOOSE (each
+// field `?: unknown`) by design — the handler narrows them itself — so these are
+// `{ …?: unknown; trackId: string }`, exactly what the old hand-types said.
+type AdminTrackInputs = InferContractRouterInputs<typeof contract>;
+type PatchBody = AdminTrackInputs["update_track"];
+type ObserveBody = AdminTrackInputs["observe_track"];
 
 function resolveModel(value: unknown): ObservationModel {
   return value === "eleven_v3" || value === "eleven_multilingual_v2"
@@ -142,17 +131,7 @@ function parseEnrichmentStatus(value: string | undefined): EnrichmentStatusFilte
 }
 
 function parseAdminLimit(value: string | undefined): number {
-  if (!value) {
-    return ADMIN_LIST_DEFAULT_LIMIT;
-  }
-
-  const limit = Number.parseInt(value, 10);
-
-  if (!Number.isInteger(limit) || limit < 1) {
-    return ADMIN_LIST_DEFAULT_LIMIT;
-  }
-
-  return Math.min(limit, ADMIN_LIST_MAX_LIMIT);
+  return parseLimit(value, ADMIN_LIST_DEFAULT_LIMIT, ADMIN_LIST_MAX_LIMIT);
 }
 
 function resolveDurationTargetSec(value: unknown): number {
@@ -185,7 +164,7 @@ export function adminTracksHandlers(os: Implementer) {
   // field-level guard reads `context.role`.
   const updateTrackHandler = os.update_track.use(adminAuth).handler(async ({ context, input }) => {
     try {
-      const body = input as PatchBody & { trackId: string };
+      const body: PatchBody = input;
       const trackId = body.trackId;
       const update: TrackUpdate = {};
 
@@ -300,7 +279,7 @@ export function adminTracksHandlers(os: Implementer) {
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        const body = input as { dryRun?: unknown; note?: unknown; spotifyUrl?: unknown };
+        const body: AdminTrackInputs["add_track"] = input;
 
         if (typeof body.spotifyUrl !== "string") {
           throw new ORPCError("BAD_REQUEST", {
@@ -336,7 +315,8 @@ export function adminTracksHandlers(os: Implementer) {
   // (docs/hermes-automation-brief.md Build order #3).
   const observeTrackHandler = os.observe_track.use(adminAuth).handler(async ({ input }) => {
     try {
-      const idOrLogId = (input as { trackId: string }).trackId;
+      const body: ObserveBody = input;
+      const idOrLogId = body.trackId;
       const track = await getTrackByIdOrLogId(idOrLogId);
 
       if (!track) {
@@ -380,8 +360,6 @@ export function adminTracksHandlers(os: Implementer) {
           voiceId: "",
         };
       }
-
-      const body = input as ObserveBody;
 
       // The agent authors + voice-gates the script; the Worker re-runs the
       // mechanical scan (defence in depth) and hard-fails on any violation.
@@ -493,7 +471,7 @@ export function adminTracksHandlers(os: Implementer) {
   // into the note, stored as fuel, never executed as instructions.
   const observeContextHandler = os.observe_context.use(adminAuth).handler(async ({ input }) => {
     try {
-      const idOrLogId = (input as { trackId: string }).trackId;
+      const idOrLogId = input.trackId;
       const track = await getTrackByIdOrLogId(idOrLogId);
 
       if (!track) {
@@ -537,10 +515,9 @@ export function adminTracksHandlers(os: Implementer) {
       // as "" so the queue (context_note IS NULL) does not re-pick it forever — but
       // a write-through of "" would still read as null-ish; only a non-empty note
       // advances the queue, so an empty fetch leaves it null for the next tick.
-      const body = input as { query?: unknown };
       const query =
-        typeof body.query === "string" && body.query.trim()
-          ? body.query.trim()
+        typeof input.query === "string" && input.query.trim()
+          ? input.query.trim()
           : buildContextQuery(track);
       const fetched = await fetchTrackContext(query);
 
@@ -570,7 +547,7 @@ export function adminTracksHandlers(os: Implementer) {
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        const idOrLogId = (input as { trackId: string }).trackId;
+        const idOrLogId = input.trackId;
         const track = await getTrackByIdOrLogId(idOrLogId);
 
         if (!track) {
@@ -593,9 +570,7 @@ export function adminTracksHandlers(os: Implementer) {
           });
         }
 
-        const requested = Array.isArray((input as { fields?: unknown }).fields)
-          ? ((input as { fields: unknown[] }).fields as unknown[])
-          : undefined;
+        const requested = Array.isArray(input.fields) ? (input.fields as unknown[]) : undefined;
 
         if (!requested || requested.length === 0) {
           throw new ORPCError("BAD_REQUEST", {
@@ -674,7 +649,8 @@ export function adminTracksHandlers(os: Implementer) {
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        const idOrLogId = (input as { trackId: string }).trackId;
+        const body: AdminTrackInputs["finalize_track_video"] = input;
+        const idOrLogId = body.trackId;
         const track = await getTrackByIdOrLogId(idOrLogId);
 
         if (!track) {
@@ -697,12 +673,6 @@ export function adminTracksHandlers(os: Implementer) {
           });
         }
 
-        const body = input as {
-          squared?: unknown;
-          videoModel?: unknown;
-          videoModelReasoning?: unknown;
-          videoVehicle?: unknown;
-        };
         const videoVehicle =
           typeof body.videoVehicle === "string" && body.videoVehicle.trim()
             ? body.videoVehicle.trim().slice(0, 120)

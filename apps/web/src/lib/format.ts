@@ -1,10 +1,9 @@
-export function formatDuration(durationMs: number): string {
-  const totalSeconds = Math.round(durationMs / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
+import { formatDuration } from "@fluncle/contracts/util";
 
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
-}
+// `formatDuration` is the byte-shared M:SS formatter — one definition in
+// `@fluncle/contracts/util` (the CLI reads the same). Re-exported here so every
+// `@/lib/format` importer keeps its entrypoint.
+export { formatDuration };
 
 export function formatAlbumDuration(durationMs: number): string {
   const totalMinutes = Math.max(1, Math.round(durationMs / 60_000));

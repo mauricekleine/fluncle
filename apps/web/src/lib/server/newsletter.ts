@@ -1,3 +1,4 @@
+import { type NewsletterBody } from "@fluncle/contracts/orpc";
 import { readEnv, readOptionalEnv } from "./env";
 import { ApiError } from "./spotify";
 import { hashSubmitter } from "./submissions";
@@ -7,10 +8,10 @@ const rateLimitWindowMs = 60 * 60 * 1000;
 const rateLimitMaxAttempts = 5;
 const maxEmailLength = 254;
 
-export type NewsletterInput = {
-  email?: unknown;
-  honeypot?: unknown;
-};
+// The subscribe body is the contract's inferred input (`@fluncle/contracts/orpc`),
+// the single source of truth — no parallel hand-mirror to drift. LOOSE/all-unknown
+// by design; `validateInput` narrows it.
+export type NewsletterInput = NewsletterBody;
 
 // Best-effort per-connection limiter. In-memory by design: Loops is the store
 // of record, duplicate subscribes are idempotent (409 reads as success), and
