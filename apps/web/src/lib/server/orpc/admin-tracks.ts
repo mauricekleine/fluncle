@@ -1,0 +1,514 @@
+// The `admin-tracks` domain router module — the admin wave's pilot (every admin
+// pattern the fan-out reuses). Each handler reuses the live `/api/admin/tracks/*`
+// route logic verbatim; the auth tier moves from the per-handler `requireAdmin` /
+// `requireOperator` to the oRPC procedure middleware (../orpc-auth), and the
+// field-level role check reads `context.role` in-handler.
+//
+//   - `update_track` — port of PATCH /admin/tracks/{trackId}. On `adminAuth` (the
+//     live `requireAdmin`: operator OR agent). The FIELD-LEVEL guard reads
+//     `context.role`: the agent may write ONLY analysis fields; an operator-only
+//     field written by the agent is a 403 `forbidden` (rejected, not dropped). The
+//     operator may write anything.
+//   - `observe_track` — port of POST /admin/tracks/{trackId}/observe. On the
+//     operator tier (`adminAuth` + `operatorGuard`) — the live route is
+//     `requireOperator`, so the agent gets a 403. This MATCHES the live tier; the
+//     migration brief's "agent-allowed" note is superseded by the codebase.
+//   - `presign_track_video_uploads` / `finalize_track_video` — ports of the JSON
+//     video control-plane (`…/video/uploads`, `…/video/finalize`). Both live routes
+//     are `requireOperator`, so both are on the operator tier.
+
+import { env } from "cloudflare:workers";
+import { ORPCError } from "@orpc/server";
+import { FOUND_BASE, trackMedia } from "../../media";
+import { parseEditorialNote } from "../http-errors";
+import {
+  DEFAULT_OBSERVATION_MODEL,
+  DEFAULT_VOICE_SETTINGS,
+  type ObservationArtifact,
+  type ObservationModel,
+  type ObservationVoiceSettings,
+  fetchTrackContext,
+  gateObservationScript,
+  renderObservation,
+  resolveVoiceId,
+} from "../observation";
+import { adminAuth, operatorGuard } from "../orpc-auth";
+import { VIDEOS_BUCKET, presignUploads } from "../r2-presign";
+import { type TrackUpdate, updateTrack } from "../track-update";
+import { getTrackByIdOrLogId } from "../tracks";
+import { type VideoArtifact, artifactByField } from "../video-bundle";
+import { apiFault, type Implementer } from "./_shared";
+
+// Fields only the operator may write: editorial voice (note), the vehicle/video
+// (videoUrl), the map placement (vibeX/vibeY), and the immutable identity fields
+// (isrc/logId). The agent role is limited to machine-measured analysis (bpm, key,
+// features, enrichmentStatus) — overwritable, internal, no public footprint.
+// Ported verbatim from the live PATCH route.
+const OPERATOR_ONLY_FIELDS: (keyof TrackUpdate)[] = [
+  "isrc",
+  "logId",
+  "note",
+  "vibeX",
+  "vibeY",
+  "videoUrl",
+];
+
+type PatchBody = {
+  bpm?: unknown;
+  enrichmentStatus?: unknown;
+  features?: unknown;
+  isrc?: unknown;
+  key?: unknown;
+  logId?: unknown;
+  note?: unknown;
+  videoUrl?: unknown;
+  vibeX?: unknown;
+  vibeY?: unknown;
+};
+
+type ObserveBody = {
+  contextNote?: unknown;
+  durationMs?: unknown;
+  durationTargetSec?: unknown;
+  model?: unknown;
+  script?: unknown;
+  voiceId?: unknown;
+  voiceSettings?: unknown;
+};
+
+function resolveModel(value: unknown): ObservationModel {
+  return value === "eleven_v3" || value === "eleven_multilingual_v2"
+    ? value
+    : DEFAULT_OBSERVATION_MODEL;
+}
+
+function resolveVoiceSettings(value: unknown): ObservationVoiceSettings {
+  if (typeof value !== "object" || value === null) {
+    return DEFAULT_VOICE_SETTINGS;
+  }
+
+  const raw = value as Record<string, unknown>;
+  const num = (key: keyof ObservationVoiceSettings, fallback: number): number =>
+    typeof raw[key] === "number" && Number.isFinite(raw[key]) ? (raw[key] as number) : fallback;
+
+  return {
+    similarityBoost: num("similarityBoost", DEFAULT_VOICE_SETTINGS.similarityBoost),
+    speed: num("speed", DEFAULT_VOICE_SETTINGS.speed),
+    stability: num("stability", DEFAULT_VOICE_SETTINGS.stability),
+    style: num("style", DEFAULT_VOICE_SETTINGS.style),
+  };
+}
+
+function resolveDurationTargetSec(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 5 && value <= 90) {
+    return Math.round(value);
+  }
+
+  return 30;
+}
+
+// The canonical fault wrapper for these handlers: an ORPCError (a guard the
+// procedure or the field check threw) passes through untouched; anything else
+// (an ApiError from a reused helper — note_too_long, voice_gate, not_found,
+// no_log_id — or an unexpected throw) becomes a wire-compatible fault via
+// `apiFault`, so the rails encoder reproduces the legacy `{ code, message }` body.
+function toFault(error: unknown): ORPCError<string, unknown> {
+  if (error instanceof ORPCError) {
+    return error;
+  }
+
+  return apiFault(error);
+}
+
+/**
+ * Build the `admin-tracks` domain's handlers. Each reuses the live route logic
+ * verbatim; only the auth gate is relocated to the procedure middleware.
+ */
+export function adminTracksHandlers(os: Implementer) {
+  // PATCH /admin/tracks/{trackId} — on `adminAuth` (operator OR agent). The
+  // field-level guard reads `context.role`.
+  const updateTrackHandler = os.update_track.use(adminAuth).handler(async ({ context, input }) => {
+    try {
+      const body = input as PatchBody & { trackId: string };
+      const trackId = body.trackId;
+      const update: TrackUpdate = {};
+
+      if (typeof body.bpm === "number" && Number.isFinite(body.bpm)) {
+        update.bpm = body.bpm;
+      }
+
+      if (typeof body.key === "string") {
+        update.key = body.key;
+      }
+
+      if (typeof body.features === "string") {
+        update.features = body.features;
+      }
+
+      if (typeof body.videoUrl === "string") {
+        update.videoUrl = body.videoUrl;
+      }
+
+      if (
+        body.enrichmentStatus === "pending" ||
+        body.enrichmentStatus === "done" ||
+        body.enrichmentStatus === "failed"
+      ) {
+        update.enrichmentStatus = body.enrichmentStatus;
+      }
+
+      // A present note sets it (including "" which clears the stored note); an
+      // absent note leaves it untouched. parseEditorialNote throws on too-long.
+      if (typeof body.note === "string") {
+        update.note = parseEditorialNote(body.note);
+      }
+
+      if (typeof body.vibeX === "number" && Number.isFinite(body.vibeX)) {
+        update.vibeX = body.vibeX;
+      }
+
+      if (typeof body.vibeY === "number" && Number.isFinite(body.vibeY)) {
+        update.vibeY = body.vibeY;
+      }
+
+      // Straggler repair: one-time backfill of identity fields into null slots
+      // (updateTrack enforces immutability once set).
+      if (typeof body.isrc === "string") {
+        update.isrc = body.isrc;
+      }
+
+      if (typeof body.logId === "string") {
+        update.logId = body.logId;
+      }
+
+      // The agent role may only touch analysis fields. Reject (not silently drop)
+      // an attempt at an operator-only field — a 403 the gate can voice. The role
+      // is read from the oRPC context (lifted by `adminAuth`), not re-derived.
+      if (context.role === "agent") {
+        const blocked = OPERATOR_ONLY_FIELDS.filter((field) => field in update);
+
+        if (blocked.length > 0) {
+          throw new ORPCError("FORBIDDEN", {
+            data: {
+              apiCode: "forbidden",
+              apiMessage: `The agent role can write only analysis fields, not: ${blocked.join(", ")}`,
+            },
+            message: `The agent role can write only analysis fields, not: ${blocked.join(", ")}`,
+            status: 403,
+          });
+        }
+      }
+
+      const result = await updateTrack(trackId, update);
+
+      return { ok: true as const, ...result };
+    } catch (error) {
+      throw toFault(error);
+    }
+  });
+
+  // POST /admin/tracks/{trackId}/observe — operator tier (live `requireOperator`).
+  const observeTrackHandler = os.observe_track
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const idOrLogId = (input as { trackId: string }).trackId;
+        const track = await getTrackByIdOrLogId(idOrLogId);
+
+        if (!track) {
+          throw new ORPCError("NOT_FOUND", {
+            data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
+            message: `No track with id ${idOrLogId}`,
+            status: 404,
+          });
+        }
+
+        if (!track.logId) {
+          throw new ORPCError("BAD_REQUEST", {
+            data: {
+              apiCode: "no_log_id",
+              apiMessage:
+                "Track has no Log ID; every video needs a coordinate. Backfill the ISRC/Log ID first.",
+            },
+            message: "Track has no Log ID; every video needs a coordinate.",
+            status: 400,
+          });
+        }
+
+        const body = input as ObserveBody;
+
+        // The agent authors + voice-gates the script; the Worker re-runs the
+        // mechanical scan (defence in depth) and hard-fails on any violation.
+        const script = gateObservationScript(body.script);
+        const model = resolveModel(body.model);
+        const voiceSettings = resolveVoiceSettings(body.voiceSettings);
+        const durationTargetSec = resolveDurationTargetSec(body.durationTargetSec);
+        const voiceId = await resolveVoiceId(
+          typeof body.voiceId === "string" ? body.voiceId : undefined,
+        );
+
+        // The factual context (firecrawl). The agent may pass its own context_note;
+        // otherwise the Worker fetches it. Either way it is INTERNAL fuel.
+        const artist = track.artists.join(" ");
+        const fetched =
+          typeof body.contextNote === "string"
+            ? { contextNote: body.contextNote.trim().slice(0, 2000), sources: [] as string[] }
+            : await fetchTrackContext(
+                [artist, track.title, track.label, track.releaseDate, "drum and bass"]
+                  .filter(Boolean)
+                  .join(" "),
+              );
+
+        // Render the spoken observation (ElevenLabs).
+        const { bytes } = await renderObservation(voiceId, { model, text: script, voiceSettings });
+
+        // Duration: ElevenLabs doesn't return one and the Worker can't probe (no
+        // ffprobe). The agent passes the ffprobe value; absent it, estimate from the
+        // target with a noted ±budget. The radio page never re-probes.
+        const durationMs =
+          typeof body.durationMs === "number" &&
+          Number.isFinite(body.durationMs) &&
+          body.durationMs > 0
+            ? Math.round(body.durationMs)
+            : durationTargetSec * 1000;
+
+        const media = trackMedia(track.logId);
+        const generatedAt = new Date().toISOString();
+
+        const artifact: ObservationArtifact = {
+          audioUrl: media.observationAudioUrl,
+          ...(fetched.contextNote ? { contextNote: fetched.contextNote } : {}),
+          durationMs,
+          durationTargetSec,
+          generatedAt,
+          logId: track.logId,
+          model,
+          provider: "elevenlabs",
+          ...(fetched.sources.length > 0 ? { sources: fetched.sources } : {}),
+          text: script,
+          textUrl: media.observationTextUrl,
+          trackId: track.trackId,
+          voiceId,
+          voiceSettings,
+        };
+
+        // Upload the three R2 objects at <log-id>/<name> (the Worker holds the
+        // ≈0.5 MB bytes — direct put, no presign needed for a small artifact).
+        const base = encodeURIComponent(track.logId);
+        await env.VIDEOS.put(`${track.logId}/observation.mp3`, bytes, {
+          httpMetadata: { contentType: "audio/mpeg" },
+        });
+        await env.VIDEOS.put(`${track.logId}/observation.txt`, script, {
+          httpMetadata: { contentType: "text/plain; charset=utf-8" },
+        });
+        await env.VIDEOS.put(`${track.logId}/observation.json`, JSON.stringify(artifact, null, 2), {
+          httpMetadata: { contentType: "application/json; charset=utf-8" },
+        });
+
+        // Persist: the audio url (the "has observation" flag) + duration + timestamp
+        // (visible — they bump lastmod) and the context note (internal — it doesn't).
+        await updateTrack(track.trackId, {
+          observationAudioUrl: media.observationAudioUrl,
+          observationDurationMs: durationMs,
+          observationGeneratedAt: generatedAt,
+          ...(fetched.contextNote ? { contextNote: fetched.contextNote } : {}),
+        });
+
+        return {
+          audioUrl: media.observationAudioUrl,
+          durationMs,
+          generatedAt,
+          jsonUrl: `${FOUND_BASE}/${base}/observation.json`,
+          logId: track.logId,
+          ok: true as const,
+          textUrl: media.observationTextUrl,
+          trackId: track.trackId,
+          voiceId,
+        };
+      } catch (error) {
+        throw toFault(error);
+      }
+    });
+
+  // POST /admin/tracks/{trackId}/video/uploads — operator tier (live
+  // `requireOperator`). The JSON control-plane: sign the direct-to-R2 PUT URLs.
+  const presignVideoUploadsHandler = os.presign_track_video_uploads
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const idOrLogId = (input as { trackId: string }).trackId;
+        const track = await getTrackByIdOrLogId(idOrLogId);
+
+        if (!track) {
+          throw new ORPCError("NOT_FOUND", {
+            data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
+            message: `No track with id ${idOrLogId}`,
+            status: 404,
+          });
+        }
+
+        if (!track.logId) {
+          throw new ORPCError("BAD_REQUEST", {
+            data: {
+              apiCode: "no_log_id",
+              apiMessage:
+                "Track has no Log ID; every video needs a coordinate. Backfill the ISRC/Log ID first.",
+            },
+            message: "Track has no Log ID; every video needs a coordinate.",
+            status: 400,
+          });
+        }
+
+        const requested = Array.isArray((input as { fields?: unknown }).fields)
+          ? ((input as { fields: unknown[] }).fields as unknown[])
+          : undefined;
+
+        if (!requested || requested.length === 0) {
+          throw new ORPCError("BAD_REQUEST", {
+            data: {
+              apiCode: "no_fields",
+              apiMessage: "List the artifact `fields` you want to upload",
+            },
+            message: "List the artifact `fields` you want to upload",
+            status: 400,
+          });
+        }
+
+        const artifacts: VideoArtifact[] = [];
+
+        for (const field of requested) {
+          if (typeof field !== "string") {
+            throw new ORPCError("BAD_REQUEST", {
+              data: { apiCode: "bad_field", apiMessage: "Each field must be a string" },
+              message: "Each field must be a string",
+              status: 400,
+            });
+          }
+
+          const artifact = artifactByField(field);
+
+          if (!artifact) {
+            throw new ORPCError("BAD_REQUEST", {
+              data: {
+                apiCode: "unknown_field",
+                apiMessage: `Unknown video artifact field: ${field}`,
+              },
+              message: `Unknown video artifact field: ${field}`,
+              status: 400,
+            });
+          }
+
+          artifacts.push(artifact);
+        }
+
+        if (!artifacts.some((artifact) => artifact.field === "footage")) {
+          throw new ORPCError("BAD_REQUEST", {
+            data: {
+              apiCode: "no_footage",
+              apiMessage: "A `footage` cut (footage.mp4) is required",
+            },
+            message: "A `footage` cut (footage.mp4) is required",
+            status: 400,
+          });
+        }
+
+        const signed = await presignUploads(
+          VIDEOS_BUCKET,
+          artifacts.map((artifact) => ({
+            contentType: artifact.contentType,
+            key: `${track.logId}/${artifact.name}`,
+          })),
+        );
+
+        const uploads = signed.map((row, index) => ({
+          contentType: row.contentType,
+          field: artifacts[index].field,
+          key: row.key,
+          url: row.url,
+        }));
+
+        return { logId: track.logId, ok: true as const, trackId: track.trackId, uploads };
+      } catch (error) {
+        throw toFault(error);
+      }
+    });
+
+  // POST /admin/tracks/{trackId}/video/finalize — operator tier (live
+  // `requireOperator`). Phase 2: link the canonical web cut.
+  const finalizeVideoHandler = os.finalize_track_video
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const idOrLogId = (input as { trackId: string }).trackId;
+        const track = await getTrackByIdOrLogId(idOrLogId);
+
+        if (!track) {
+          throw new ORPCError("NOT_FOUND", {
+            data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
+            message: `No track with id ${idOrLogId}`,
+            status: 404,
+          });
+        }
+
+        if (!track.logId) {
+          throw new ORPCError("BAD_REQUEST", {
+            data: {
+              apiCode: "no_log_id",
+              apiMessage:
+                "Track has no Log ID; every video needs a coordinate. Backfill the ISRC/Log ID first.",
+            },
+            message: "Track has no Log ID; every video needs a coordinate.",
+            status: 400,
+          });
+        }
+
+        const body = input as {
+          squared?: unknown;
+          videoModel?: unknown;
+          videoModelReasoning?: unknown;
+          videoVehicle?: unknown;
+        };
+        const videoVehicle =
+          typeof body.videoVehicle === "string" && body.videoVehicle.trim()
+            ? body.videoVehicle.trim().slice(0, 120)
+            : undefined;
+        const videoModel =
+          typeof body.videoModel === "string" && body.videoModel.trim()
+            ? body.videoModel.trim().slice(0, 120)
+            : "anthropic/claude-opus-4-8";
+        const videoModelReasoning =
+          typeof body.videoModelReasoning === "string" && body.videoModelReasoning.trim()
+            ? body.videoModelReasoning.trim().slice(0, 120)
+            : "high";
+
+        const videoUrl = trackMedia(track.logId).videoUrl;
+        // `squared` (the CLI sends it when it uploaded BOTH the square footage.mp4
+        // and the portrait footage.social.mp4) flips the two-master layout on:
+        // footage.mp4 is now the clean square crop source. Stamp the signal so the
+        // archive surfaces start MT-cropping this finding (docs/video-variants.md).
+        const squared = body.squared === true;
+
+        await updateTrack(track.trackId, {
+          videoModel,
+          videoModelReasoning,
+          videoUrl,
+          ...(squared ? { videoSquaredAt: new Date().toISOString() } : {}),
+          ...(videoVehicle ? { videoVehicle } : {}),
+        });
+
+        return { logId: track.logId, ok: true as const, trackId: track.trackId, videoUrl };
+      } catch (error) {
+        throw toFault(error);
+      }
+    });
+
+  return {
+    finalize_track_video: finalizeVideoHandler,
+    observe_track: observeTrackHandler,
+    presign_track_video_uploads: presignVideoUploadsHandler,
+    update_track: updateTrackHandler,
+  };
+}

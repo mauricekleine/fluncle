@@ -125,9 +125,16 @@ describe("oRPC public-route contract coverage", () => {
 
   it("converts the entire public surface (proof + pilot + Wave A + Wave B /me)", () => {
     // With Wave B the registry serves every public op — the unauth surface plus the
-    // thirteen `/me` private-session ops. The converted set is exactly the public
-    // route map's values (nothing pending, nothing extra). Sorted for a stable diff.
-    expect([...converted].sort()).toEqual([...new Set(Object.values(PUBLIC_ROUTE_OPS))].sort());
+    // thirteen `/me` private-session ops. Every public op must be converted (a
+    // SUBSET check, not equality: the registry also holds admin ops now — the admin
+    // wave's pilot — which the sibling orpc-admin-coverage.test.ts is the net for).
+    const publicOps = new Set(Object.values(PUBLIC_ROUTE_OPS));
+
+    for (const op of publicOps) {
+      expect(converted.has(op), `public op "${op}" is missing from the contract registry`).toBe(
+        true,
+      );
+    }
   });
 
   it("accounts for every public op: converted XOR pending", () => {
