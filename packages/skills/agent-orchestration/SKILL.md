@@ -32,7 +32,7 @@ Use this loop when the work is decomposable — several independent build slices
 
 ## Patterns worth keeping
 
-**Validate one before fanning out.** For a repetitive, prod-mutating pipeline (render-and-upload, resolve-and-write), run exactly **one** case end-to-end first — a pilot. It proves the recipe _and_ that the deploy/credentials/permissions actually work. A blocker found on item 1 is cheap; the same blocker found on item 40, after 39 half-mutations, is not. Bake the pilot's confirmed recipe into the fan-out.
+**Validate one before fanning out.** For a repetitive, prod-mutating pipeline (render-and-upload, resolve-and-write), run exactly **one** case end-to-end first — a pilot. It proves the recipe _and_ that the deploy/credentials/permissions actually work. A blocker found on item 1 is cheap; the same blocker found on item 40, after 39 half-mutations, is not. Crucially, validate the pilot's _output against the source of truth_ — the original, the spec, the expected result — not merely that it ran and "looks plausible." A subtle regression the pilot waves through (a re-render that quietly shifts the color, a transform that drops a field) gets multiplied across every item in the fan-out, so the comparison must be to what it _should_ be, not to a vibe. Bake the confirmed recipe into the fan-out.
 
 **Sliding-window concurrency pools.** For N independent items, don't run discrete batches (a batch pays `max()` of its slowest member while the rest idle). Hold a fixed concurrency — say 2 — and start the next item the instant any one finishes. Total wall-clock trends to `sum / concurrency` with both slots always saturated. A background job per item plus a "spawn next on completion" rule realizes this cleanly.
 
