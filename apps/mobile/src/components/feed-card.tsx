@@ -184,7 +184,7 @@ export function FeedCard({ finding, active, soundOn, onToggleSound }: Props) {
                 name={observing ? "chatbubble-ellipses" : "chatbubble-ellipses-outline"}
                 size={28}
                 color={observing ? color.eclipseGold : color.starlightCream}
-                style={[styles.icon, styles.noteNudge]}
+                style={styles.icon}
               />
             }
             label={observing ? "Playing" : "Note"}
@@ -290,8 +290,6 @@ const styles = StyleSheet.create({
     textShadowOffset: { height: 1, width: 0 },
     textShadowRadius: 6,
   },
-  // The chatbubble glyph's ink sits slightly left of its advance box; nudge it onto the rail axis.
-  noteNudge: { transform: [{ translateX: 1 }] },
   rail: { alignItems: "center", gap: 16, position: "absolute", right: 6 },
   railIcon: { alignItems: "center", height: 36, justifyContent: "center", width: 36 },
   railItem: { alignItems: "center", gap: 3, width: 60 },
