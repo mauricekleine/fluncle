@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createMixtape, listMixtapes } from "../../../lib/server/mixtapes";
-import { requireAdmin } from "../../../lib/server/env";
+import { requireAdmin, requireOperator } from "../../../lib/server/env";
 import { apiErrorResponse } from "../../../lib/server/http-errors";
 
 export const Route = createFileRoute("/api/admin/mixtapes")({
@@ -19,7 +19,7 @@ export const Route = createFileRoute("/api/admin/mixtapes")({
         });
       },
       POST: async ({ request }) => {
-        const unauthorized = await requireAdmin(request);
+        const unauthorized = await requireOperator(request);
 
         if (unauthorized) {
           return unauthorized;

@@ -12,21 +12,27 @@ vi.mock("../../../lib/server/track-update", () => ({
 }));
 
 const TOKEN = "test-token-track-patch-route";
+const AGENT_TOKEN = "test-token-track-patch-agent";
 
 beforeAll(() => {
   process.env.FLUNCLE_API_TOKEN = TOKEN;
+  process.env.FLUNCLE_AGENT_TOKEN = AGENT_TOKEN;
 });
 
 beforeEach(() => {
   updateTrack.mockReset();
 });
 
-function adminPatch(url: string, body: unknown): Request {
+function patchAs(token: string, url: string, body: unknown): Request {
   return new Request(url, {
     body: JSON.stringify(body),
-    headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     method: "PATCH",
   });
+}
+
+function adminPatch(url: string, body: unknown): Request {
+  return patchAs(TOKEN, url, body);
 }
 
 async function patchHandler(routeModule: {
@@ -108,6 +114,62 @@ describe("PATCH /api/admin/tracks/:id (note)", () => {
 
     expect(response.status).toBe(422);
     expect(((await response.json()) as { code: string }).code).toBe("note_too_long");
+    expect(updateTrack).not.toHaveBeenCalled();
+  });
+});
+
+// The agent role is bounded server-side to machine-measured analysis. An attempt
+// at an operator-only field (note, vibe, video, identity) is a 403, not a silent
+// drop — the box gate is no longer the boundary.
+describe("PATCH /api/admin/tracks/:id (agent role field bounds)", () => {
+  const agentPatch = (body: unknown) =>
+    patchAs(AGENT_TOKEN, `https://www.fluncle.com/api/admin/tracks/${TRACK_ID}`, body);
+
+  it("lets the agent write analysis fields", async () => {
+    updateTrack.mockResolvedValueOnce({ fields: ["bpm", "key"], trackId: TRACK_ID });
+
+    const { Route } = await import("./tracks.$trackId");
+    const PATCH = await patchHandler({ Route });
+
+    const response = await PATCH({
+      params: { trackId: TRACK_ID },
+      request: agentPatch({ bpm: 174, enrichmentStatus: "done", key: "F minor" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, {
+      bpm: 174,
+      enrichmentStatus: "done",
+      key: "F minor",
+    });
+  });
+
+  it.each([
+    ["note", { note: "an editorial take" }],
+    ["vibeX", { vibeX: 0.5 }],
+    ["videoUrl", { videoUrl: "https://r2/footage.mp4" }],
+    ["logId", { logId: "F-0001" }],
+  ])("403s the agent writing %s, without touching the db", async (_field, body) => {
+    const { Route } = await import("./tracks.$trackId");
+    const PATCH = await patchHandler({ Route });
+
+    const response = await PATCH({ params: { trackId: TRACK_ID }, request: agentPatch(body) });
+
+    expect(response.status).toBe(403);
+    expect(((await response.json()) as { code: string }).code).toBe("forbidden");
+    expect(updateTrack).not.toHaveBeenCalled();
+  });
+
+  it("403s a mixed payload (analysis + an operator field) wholesale", async () => {
+    const { Route } = await import("./tracks.$trackId");
+    const PATCH = await patchHandler({ Route });
+
+    const response = await PATCH({
+      params: { trackId: TRACK_ID },
+      request: agentPatch({ bpm: 174, note: "sneaking a note in" }),
+    });
+
+    expect(response.status).toBe(403);
     expect(updateTrack).not.toHaveBeenCalled();
   });
 });

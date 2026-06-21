@@ -6,12 +6,39 @@ Fluncle's chat-facing agent: a self-hosted [Nous Research Hermes](https://hermes
 
 ## The one idea
 
-Hermes is not a bot — it is a long-running box that wields the `fluncle` CLI, and **the CLI is the entire trust boundary**. Everything the agent can do reduces to running `fluncle` commands (plus public HTTP reads) while holding one admin token. Discord/Slack are inbound surfaces onto that box. So the security question is not "which integrations" but "what can the agent do with the token, and what stops it." Two controls answer that:
+Hermes is a long-running box that wields the `fluncle` CLI while holding an admin token. The security question is "what can the agent do with that token, and what stops it." The answer is that **the token itself is scoped**: the box holds a lower-privilege `agent`-role token, and the Worker refuses every publish-/irreversible-class action for that role **server-side** — regardless of what the box does with the token. The trust boundary lives at the Worker, not on the box.
 
-1. **The command gate** (primary) — what the agent may _do_. A wrapper around `fluncle` that denies publish-/irreversible-class commands. See below.
-2. **The allow-list** (secondary) — _who_ may talk to the agent (deny-by-default; tight). This bounds exposure and cost, not actions.
+Two controls, outermost (most authoritative) first:
 
-The box being private and Tailscale-only (no public inbound TCP) shrinks the network surface but does nothing against an agent that already holds the token and a shell — that is the gate's job.
+1. **Server-side roles** (the boundary) — what the token may _do_, enforced at the API. The agent's token authenticates as the `agent` role; publish-/irreversible-class routes accept only the `operator` (the human's full token or browser session). A fully-compromised root agent still cannot publish, because the credential it holds lacks the authority. Defined in `apps/web/src/lib/server/env.ts` (`adminRole` / `requireOperator`); the operator/agent split is detailed under [Roles](#roles-operator-vs-agent).
+2. **The allow-list** — _who_ may talk to the agent (deny-by-default; tight). Bounds exposure and cost, not authority.
+
+There is deliberately **no local command gate**: the CLI runs ungated on the box, and an agent-role attempt at a publish command comes back a 403 the agent relays in voice. A box-side wrapper would only duplicate the server policy (two allow-lists to keep in sync) while protecting nothing the scoped token doesn't already. The box being private and Tailscale-only (no public inbound TCP) shrinks the network surface; the scoped token is what defangs a token leak or a prompt injection.
+
+## Roles (operator vs agent)
+
+One admin surface, two roles — the privilege is the role, not the carrier:
+
+- **`operator`** — the human. Carried by the browser grant cookie (Login with Spotify) **or** the full `FLUNCLE_API_TOKEN` Bearer (the operator's own CLI/laptop). Can do everything.
+- **`agent`** — Hermes and the Discord allow-list. Carried by `FLUNCLE_AGENT_TOKEN`. Bounded to the **reversible/internal** surface; everything that publishes, can't be undone, or is editorial/identity/auth is refused (403).
+
+The dividing line: _could a stranger see the result, or could it not be taken back?_ → operator. _Internal and reversible?_ → agent.
+
+| Surface                                                                                                                         | Role     | Why                                                  |
+| ------------------------------------------------------------------------------------------------------------------------------- | -------- | ---------------------------------------------------- |
+| All public reads + admin reads (`queue`, `enrich-queue`, `vehicles`, `mixtapes list/get`, `submissions review`, `track social`) | agent    | No effect                                            |
+| `enrich-sweep`                                                                                                                  | agent    | Idempotent self-heal; no public footprint            |
+| `track update` — analysis only (`--status/--bpm/--key/--features`)                                                              | agent    | Machine-measured, internal, overwritable             |
+| `track draft` — TikTok/default                                                                                                  | agent    | `SELF_ONLY` inbox draft; a human still posts it      |
+| `add` (Spotify playlist + Telegram)                                                                                             | operator | Public, irreversible                                 |
+| `track draft --platform youtube`                                                                                                | operator | Direct public upload                                 |
+| `track update` — `--note/--video-url/--vibe-x/y` (+ identity `isrc/logId`)                                                      | operator | Editorial voice + map placement — Fluncle's judgment |
+| `track video` / `preview-archive` / `observe`                                                                                   | operator | Durable artifacts                                    |
+| `mixtapes publish/distribute/delete/create/update/members`                                                                      | operator | Publishes/mutates the spine                          |
+| `submissions approve/reject`                                                                                                    | operator | Editorial decision; approve can publish              |
+| `auth *`, `backfill *`                                                                                                          | operator | Credentials / bulk mutation                          |
+
+Enforcement is at the route: agent-allowed routes call `requireAdmin` (any principal); publish-/irreversible-class routes call `requireOperator` (403s the agent). The two conditional commands (`track update`, `track draft`) authenticate with `requireAdmin`, then branch on `adminRole` to reject an operator-only field/platform. The CLI on the box runs ungated — an agent-role attempt at an operator route is refused server-side, and the agent relays the 403 in voice (see `SOUL.md`).
 
 ## Where it runs
 
@@ -19,56 +46,29 @@ A private, Tailscale-only devbox (admin over OpenSSH on the tailnet; no public i
 
 ## The image
 
-Built from the pinned upstream gateway plus the `fluncle` CLI behind the gate. Build context: [`docs/agents/hermes/`](./hermes/) — [`Dockerfile`](./hermes/Dockerfile) + [`fluncle-gate`](./hermes/fluncle-gate).
+Built from the pinned upstream gateway plus the `fluncle` CLI (installed ungated; the Worker is the boundary). Build context: [`docs/agents/hermes/`](./hermes/) — [`Dockerfile`](./hermes/Dockerfile).
 
 - **Pin the upstream tag** (Hermes is pre-1.0; `latest` can change message handling and the model-context startup check under you). Current pin: `nousresearch/hermes-agent:v2026.6.19`.
 - **Pin the model** at ≥64k context. A model below the floor takes the _whole gateway_ down at startup (upstream issue #24140), not just one feature.
 - **Review the upstream pin monthly** and bump deliberately (pinning forever = no security patches for a wide Chromium/ffmpeg/Node/Python surface).
 
 ```bash
-# on the devbox, from the build context (Dockerfile + fluncle-gate present)
+# on the devbox, from the build context (Dockerfile present)
 docker build -t fluncle-hermes:v2026.6.19 .
 ```
 
-## The command gate
+## Changing what the agent may do
 
-The agent's `terminal` tool calls `fluncle`, which is the [`fluncle-gate`](./hermes/fluncle-gate) wrapper; the real CLI is `fluncle-real`. Policy: **public/read commands pass through; the `admin` namespace is deny-by-default with a tight allow-list.** Blocked commands are publish- or irreversible-class — the wrapper exits non-zero with a message telling the agent to ask the operator, who runs them by hand.
-
-This restores the `AGENTS.md` rule ("ask before changes that publish to Spotify/Telegram/Discord/Cloudflare") for an otherwise-autonomous agent.
-
-**Allowed autonomously**
-
-- All non-`admin` commands (public reads/submits): `version`, `recent`, `get`, `random`, `mixtapes`, `open`, `subscribe`, `submit`, `about`.
-- Admin reads: `admin queue`, `admin enrich-queue`, `admin vehicles`, `admin mixtapes list`, `admin mixtapes get`, `admin submissions review`, `admin track social`.
-- `admin enrich-sweep` — the idempotent internal enrichment self-heal (no public effect).
-- `admin track draft` — TikTok/default only (a `SELF_ONLY` inbox draft).
-- `admin track update` — analysis write-back only: `--status`, `--bpm`, `--key`, `--features` (`--json` allowed).
-
-**Blocked (→ "ask the operator", exit 87)**
-
-- `admin add` (publishes to the Spotify playlist + Telegram).
-- `admin track draft --platform youtube` (direct public upload).
-- `admin track update` with any non-analysis flag (`--note`, `--video-url`, `--vibe-x/y`, …).
-- `admin track video`, `admin track preview-archive`, `admin track observe`.
-- `admin mixtapes publish | publish-youtube | distribute | delete | create | update | members`.
-- `admin submissions approve | reject`.
-- `admin auth *`, `admin backfill *`.
-- Anything else under `admin` (deny-by-default — a new admin command is blocked until explicitly allowed here).
-
-### How to change the gate
-
-1. Edit [`docs/agents/hermes/fluncle-gate`](./hermes/fluncle-gate). Keep the allow-list tight — **when in doubt, deny.** New `admin` commands are blocked automatically; you only ever add to the allow-list deliberately.
-2. Rebuild the image (above) and redeploy (restart the container on the new image).
-3. Re-run the gate smoke test (below) to confirm the new policy.
-4. Commit the change — the gate is the security boundary, so it goes through git review, never an ad-hoc edit on the box.
+The allow-list lives in one place — the Worker. To move a command across the operator/agent line, change its route guard in `apps/web/src/lib/server/env.ts` consumers: `requireOperator` for operator-only, `requireAdmin` for agent-allowed, or an `adminRole` branch for a field/platform-level split (see the [Roles](#roles-operator-vs-agent) table). It goes through git review and ships with the next Worker deploy; no box rebuild, no second list to keep in sync.
 
 ## Secrets
 
 The Worker owns every platform secret (R2, Postiz, Turso, YouTube, Mixcloud, Last.fm, Telegram); the agent holds **only** its admin token and the model key. Nothing secret lives in this repo or baked into the image.
 
-- Secrets are pulled from 1Password via the `op` CLI into a **root-owned** `/etc/hermes.env`, mounted with `--env-file` at run. App secrets today: `FLUNCLE_API_TOKEN` (the admin bearer), `OPENROUTER_API_KEY` (model), and the Discord bot token (when wired).
+- Secrets are pulled from 1Password via the `op` CLI into a **root-owned** `/etc/hermes.env`, mounted with `--env-file` at run. App secrets today: the **agent-scoped** admin bearer, `OPENROUTER_API_KEY` (model), and the Discord bot token (when wired).
 - The `op` service-account token is the one bootstrap secret — it can't come _from_ 1Password, so it sits in a separate root-only file used only by the secret-population step, kept **out** of the container env.
-- `FLUNCLE_API_TOKEN` is the admin API bearer. It is intentionally **separate** from the admin-cookie signing key (`ADMIN_SESSION_SECRET`, a Worker-only secret) — so a box compromise costs the API surface (gated by the wrapper) but **cannot forge web-admin sessions**. Rotate with `wrangler secret put FLUNCLE_API_TOKEN`, then re-populate `/etc/hermes.env`.
+- **The box never holds the operator token.** The CLI reads `FLUNCLE_API_TOKEN`; on the box that env var holds the value of the **agent-scoped** token (stored in 1Password as `FLUNCLE_AGENT_TOKEN`). The CLI sends it as its Bearer, the Worker recognizes it as the `agent` role, and publish-class actions are refused server-side. The operator's own laptop keeps the full `FLUNCLE_API_TOKEN` (the `operator` role). Both are intentionally **separate** from the admin-cookie signing key (`ADMIN_SESSION_SECRET`, a Worker-only secret), so a box compromise costs only the agent surface and **cannot forge web-admin sessions**.
+- Provision the agent token: `openssl rand -base64 32` → `wrangler secret put FLUNCLE_AGENT_TOKEN` (Worker) + store it in 1Password → re-populate `/etc/hermes.env` (its `FLUNCLE_API_TOKEN` = the agent value) → restart the container. Rotate the same way. The full `FLUNCLE_API_TOKEN` rotates independently with `wrangler secret put FLUNCLE_API_TOKEN`.
 
 ## Model
 
@@ -100,16 +100,18 @@ docker run -d --name hermes --restart unless-stopped \
 ## Verify (smoke test)
 
 ```bash
-# allow path + CLI present
+# CLI present
 docker run --rm --entrypoint fluncle fluncle-hermes:v2026.6.19 version            # -> fluncle <ver>
-# gate denies a publish-class command (expect a BLOCKED message, exit 87)
-docker run --rm --entrypoint fluncle fluncle-hermes:v2026.6.19 admin add <url>
-# allow path + token + live API (expect {"ok":true,...})
+# agent-allowed read with the agent token + live API (expect {"ok":true,...})
 docker run --rm --env-file /etc/hermes.env --entrypoint fluncle \
   fluncle-hermes:v2026.6.19 admin enrich-queue --json --limit 1
+# the server boundary: a publish-class command with the agent token is refused
+# (expect a 403 "forbidden" — the operator role is required, not an execution)
+docker run --rm --env-file /etc/hermes.env --entrypoint fluncle \
+  fluncle-hermes:v2026.6.19 admin add <url>
 ```
 
-When the gateway is live, repeat the gate check **through the agent** ("run `fluncle admin add …`" must come back as a refusal-to-the-operator, not an execution).
+When the gateway is live, repeat the boundary check **through the agent** ("run `fluncle admin add …`" must come back as an in-voice refusal off the server 403, not an execution).
 
 ### Voice gate (hard requirement before the bot goes public)
 
@@ -117,11 +119,12 @@ A chat reply is a live Fluncle surface. Before public exposure, the pinned model
 
 ## Security posture & limits
 
-- Primary control is the **command gate**; the private no-public-TCP box is secondary.
-- Indirect prompt injection needs no compromised account (the agent browses untrusted web content) — the gate is what stops an injected `fluncle admin add …`.
-- **Honest limit:** the agent runs as root _inside the container_, so the gate is a strong guard against injection/accidental invocation (the model would have to be induced to deliberately overwrite the wrapper — conspicuous and multi-step), not a hard sandbox against a fully adversarial root agent. Hardening to a non-root agent user is the next step and is tracked, not done.
+- The boundary is the **server-side role**: the box holds only the `agent`-scoped token, and publish-/irreversible-class actions are refused at the Worker for that role. The private no-public-TCP box shrinks the network surface.
+- Indirect prompt injection needs no compromised account (the agent browses untrusted web content) — but an injected `fluncle admin add …` is refused by the Worker no matter how it is dispatched (the CLI, raw `curl` with the printenv'd token), because the token is `agent`-scoped. There is no local wrapper to bypass; there is nothing the token can do that the server allows.
+- **Residual surface:** a fully-compromised root agent is bounded to the agent role — reads, `enrich-sweep`, analysis write-back, a TikTok inbox draft. All reversible/internal, none public without the operator. Anyone on the Discord allow-list can trigger those same agent-allowed writes (not just reads); all publish-class is blocked for everyone but the operator.
+- The agent still runs as root _inside the container_, but that no longer grants publish authority (the credential lacks it). Running the agent non-root with the token out of its readable env is now **defense-in-depth** — it protects the agent surface + the token itself — not the publish boundary. Tracked as optional, in [ROADMAP.md](../ROADMAP.md).
 - Back up `~/.hermes` as an encrypted/snapshot copy only (it holds `.env` + memory) — never a plaintext off-box tarball.
 
 ## Status
 
-Live for the internal crew: pinned image with the `fluncle` CLI behind the command gate; secrets via `op` → `/etc/hermes.env`; Discord app online (both privileged intents, a tight allow-list); model pinned (`anthropic/claude-sonnet-4.6`); Fluncle voice via `SOUL.md` + the `copywriting-fluncle` skill, voice-gated. Open (the public-readiness arc — tracked in [ROADMAP.md](../ROADMAP.md)): non-root-in-container hardening + server-side publish confirmation before any wider exposure, and scheduling the enrich-sweep.
+Live for the internal crew: pinned image with the `fluncle` CLI (ungated; the Worker is the boundary); secrets via `op` → `/etc/hermes.env`; Discord app online (both privileged intents, a tight allow-list); model pinned (`anthropic/claude-sonnet-4.6`); Fluncle voice via `SOUL.md` + the `copywriting-fluncle` skill, voice-gated. The publish boundary is **server-side**: the box holds an `agent`-scoped token and the Worker refuses publish-/irreversible-class actions for that role ([Roles](#roles-operator-vs-agent)) — this supersedes the earlier local-command-gate design and the need for a separate publish-confirm flow. Open (tracked in [ROADMAP.md](../ROADMAP.md), now optional defense-in-depth rather than a public-readiness blocker): non-root-in-container hardening, and scheduling the enrich-sweep.

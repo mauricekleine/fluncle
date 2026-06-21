@@ -25,6 +25,15 @@ const envKeys = [
   "ELEVENLABS_VOICE_ID",
   "FIRECRAWL_API_KEY",
   "FLUNCLE_API_TOKEN",
+  // The Hermes box's admin Bearer. A SECOND, lower-privilege admin token: it
+  // authenticates as the "agent" role (see adminRole / requireOperator), which is
+  // bounded server-side to the reversible/internal surface — reads, enrich-sweep,
+  // analysis write-back, a TikTok draft. It can NEVER hit a publish-/irreversible-
+  // class route even with full shell access on the box, because the credential
+  // itself lacks that authority here. The full FLUNCLE_API_TOKEN (the operator's
+  // own CLI) and the browser grant cookie are the "operator" role. OPTIONAL —
+  // unset means no agent principal exists and the surface is operator-only.
+  "FLUNCLE_AGENT_TOKEN",
   "LOOPS_API_KEY",
   "LOOPS_TRANSACTIONAL_ID",
   "POSTIZ_API_KEY",
@@ -150,20 +159,65 @@ export const ADMIN_COOKIE_NAME = "fluncle_admin";
 export const ADMIN_GRANT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const OAUTH_STATE_MAX_AGE_MS = 10 * 60 * 1000;
 
-export async function requireAdmin(request: Request): Promise<Response | undefined> {
-  const expectedToken = await readEnv("FLUNCLE_API_TOKEN");
+// Two admin ROLES, not one admin with carriers (see docs/agents/hermes-agent.md):
+//   - "operator" — the human. Carried by the browser grant cookie OR the full
+//     FLUNCLE_API_TOKEN Bearer (the operator's own CLI). Can do everything.
+//   - "agent" — Hermes (and the Discord allow-list). Carried by FLUNCLE_AGENT_TOKEN.
+//     Bounded to the reversible/internal surface; publish-/irreversible-class
+//     routes 403 it (requireOperator).
+// Both are admin principals (they authenticate onto /api/admin/*); the role is the
+// privilege. The split is what makes the box gate non-load-bearing: a compromised
+// agent holds only the agent token, which the Worker refuses for publish actions.
+export type AdminRole = "operator" | "agent";
+
+// The role behind a request, or null if it is not an admin principal at all. This
+// is the single source of truth both requireAdmin and requireOperator read from.
+export async function adminRole(request: Request): Promise<AdminRole | null> {
   const header = request.headers.get("Authorization");
   const prefix = "Bearer ";
+  const token = header?.startsWith(prefix) ? header.slice(prefix.length) : undefined;
 
-  if (header?.startsWith(prefix) && constantTimeEqual(header.slice(prefix.length), expectedToken)) {
-    return undefined;
+  if (token) {
+    const operatorToken = await readEnv("FLUNCLE_API_TOKEN");
+
+    if (constantTimeEqual(token, operatorToken)) {
+      return "operator";
+    }
+
+    const agentToken = await readOptionalEnv("FLUNCLE_AGENT_TOKEN");
+
+    if (agentToken && constantTimeEqual(token, agentToken)) {
+      return "agent";
+    }
   }
 
+  // The browser grant cookie is always the operator (it is minted only after
+  // "Login with Spotify" against the operator allow-list).
   if (await hasValidAdminCookie(request)) {
+    return "operator";
+  }
+
+  return null;
+}
+
+// Any admin principal (operator OR agent). Use at the top of agent-allowed routes:
+// reads, enrich-sweep, and the conditional routes that then branch on adminRole.
+export async function requireAdmin(request: Request): Promise<Response | undefined> {
+  return (await adminRole(request)) ? undefined : unauthorized();
+}
+
+// Operator only. Use on every publish-/irreversible-class route: a valid agent
+// token gets a 403 (it authenticated fine, it just lacks the role), a non-admin a
+// 401. The browser cookie and the full token pass, so the human admin UI and the
+// operator's own CLI are unaffected.
+export async function requireOperator(request: Request): Promise<Response | undefined> {
+  const role = await adminRole(request);
+
+  if (role === "operator") {
     return undefined;
   }
 
-  return unauthorized();
+  return role === "agent" ? forbidden() : unauthorized();
 }
 
 async function hasValidAdminCookie(request: Request): Promise<boolean> {
@@ -258,6 +312,10 @@ export async function verifyState(state: string): Promise<Record<string, unknown
 
 function unauthorized(): Response {
   return jsonError(401, "unauthorized", "Missing or invalid admin token");
+}
+
+function forbidden(): Response {
+  return jsonError(403, "forbidden", "This action requires the operator role");
 }
 
 function constantTimeEqual(left: string, right: string): boolean {

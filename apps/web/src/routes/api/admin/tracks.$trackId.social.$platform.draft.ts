@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../-alias";
 
 import { readCaptions } from "../../../lib/server/captions";
-import { jsonError, requireAdmin } from "../../../lib/server/env";
+import { jsonError, requireAdmin, requireOperator } from "../../../lib/server/env";
 import {
   apiErrorResponse,
   noLogIdResponse,
@@ -37,6 +37,17 @@ export const serverHandlers: ApiHandlers = {
 
     if (!SUPPORTED.has(platform)) {
       return jsonError(400, "unsupported_platform", `Unsupported platform: ${platform}`);
+    }
+
+    // tiktok is a SELF_ONLY inbox draft (still needs a human to publish in-app),
+    // so the agent role may push it. youtube is a direct PUBLIC upload — operator
+    // only.
+    if (platform === "youtube") {
+      const notOperator = await requireOperator(request);
+
+      if (notOperator) {
+        return notOperator;
+      }
     }
 
     try {

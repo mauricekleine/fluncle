@@ -3,7 +3,7 @@ import { type ApiHandlers, aliasHandlers } from "../-alias";
 import { env } from "cloudflare:workers";
 
 import { FOUND_BASE } from "../../../lib/media";
-import { jsonError, requireAdmin } from "../../../lib/server/env";
+import { jsonError, requireOperator } from "../../../lib/server/env";
 import {
   apiErrorResponse,
   noLogIdResponse,
@@ -31,7 +31,7 @@ import {
 // use the presigned direct-to-R2 flow at .../video/uploads + .../video/finalize.
 export const serverHandlers: ApiHandlers = {
   POST: async ({ params, request }) => {
-    const unauthorized = await requireAdmin(request);
+    const unauthorized = await requireOperator(request);
 
     if (unauthorized) {
       return unauthorized;

@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../../../-alias";
-import { requireAdmin } from "../../../../../lib/server/env";
+import { requireOperator } from "../../../../../lib/server/env";
 import { apiErrorResponse } from "../../../../../lib/server/http-errors";
 import { lastfmGetToken } from "../../../../../lib/server/lastfm";
 
@@ -12,7 +12,7 @@ import { lastfmGetToken } from "../../../../../lib/server/lastfm";
 // (LASTFM_SESSION_KEY), not a DB row — no schema change.
 export const serverHandlers: ApiHandlers = {
   GET: async ({ request }) => {
-    const unauthorized = await requireAdmin(request);
+    const unauthorized = await requireOperator(request);
 
     if (unauthorized) {
       return unauthorized;

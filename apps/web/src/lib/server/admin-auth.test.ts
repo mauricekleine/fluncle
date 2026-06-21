@@ -4,12 +4,15 @@ import { isAllowedSpotifyUser, signGrant, verifyGrant } from "./admin-auth";
 import {
   ADMIN_COOKIE_NAME,
   ADMIN_GRANT_MAX_AGE_MS,
+  adminRole,
   requireAdmin,
+  requireOperator,
   signState,
   verifyState,
 } from "./env";
 
 const TOKEN = "test-token-admin-auth";
+const AGENT_TOKEN = "test-token-agent-auth";
 const SESSION_SECRET = "test-session-secret-admin-auth";
 
 function adminRequest(headers: Record<string, string>): Request {
@@ -24,6 +27,7 @@ function adminRequest(headers: Record<string, string>): Request {
 // separate secrets in production too.
 beforeAll(() => {
   process.env.FLUNCLE_API_TOKEN = TOKEN;
+  process.env.FLUNCLE_AGENT_TOKEN = AGENT_TOKEN;
   process.env.ADMIN_SESSION_SECRET = SESSION_SECRET;
 });
 
@@ -106,6 +110,45 @@ describe("requireAdmin accepts either carrier (one identity, two carriers)", () 
     expect(
       (await requireAdmin(adminRequest({ cookie: `${ADMIN_COOKIE_NAME}=${tampered}` })))?.status,
     ).toBe(401);
+  });
+});
+
+// Two roles, one umbrella. requireAdmin accepts any admin principal (operator OR
+// agent); requireOperator accepts only the operator and 403s a valid agent token.
+// This is what moves the publish boundary off the box gate and into the Worker:
+// the agent token simply lacks the authority, server-side.
+describe("admin roles (operator vs agent)", () => {
+  const bearer = (token: string) => adminRequest({ Authorization: `Bearer ${token}` });
+
+  it("maps each carrier to its role", async () => {
+    expect(await adminRole(bearer(TOKEN))).toBe("operator");
+    expect(await adminRole(bearer(AGENT_TOKEN))).toBe("agent");
+    expect(
+      await adminRole(adminRequest({ cookie: `${ADMIN_COOKIE_NAME}=${await signGrant()}` })),
+    ).toBe("operator");
+    expect(await adminRole(adminRequest({}))).toBeNull();
+    expect(await adminRole(bearer("nope"))).toBeNull();
+  });
+
+  it("requireAdmin accepts both the operator and the agent token", async () => {
+    expect(await requireAdmin(bearer(TOKEN))).toBeUndefined();
+    expect(await requireAdmin(bearer(AGENT_TOKEN))).toBeUndefined();
+  });
+
+  it("requireOperator accepts the operator (token + cookie), 403s the agent, 401s a stranger", async () => {
+    expect(await requireOperator(bearer(TOKEN))).toBeUndefined();
+    expect(
+      await requireOperator(adminRequest({ cookie: `${ADMIN_COOKIE_NAME}=${await signGrant()}` })),
+    ).toBeUndefined();
+
+    expect((await requireOperator(bearer(AGENT_TOKEN)))?.status).toBe(403);
+    expect((await requireOperator(adminRequest({})))?.status).toBe(401);
+    expect((await requireOperator(bearer("nope")))?.status).toBe(401);
+  });
+
+  it("a forged agent token (wrong value) is no principal at all", async () => {
+    expect(await adminRole(bearer(`${AGENT_TOKEN}x`))).toBeNull();
+    expect((await requireOperator(bearer(`${AGENT_TOKEN}x`)))?.status).toBe(401);
   });
 });
 

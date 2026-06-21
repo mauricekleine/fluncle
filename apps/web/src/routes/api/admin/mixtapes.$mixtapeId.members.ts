@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { requireAdmin } from "../../../lib/server/env";
+import { requireOperator } from "../../../lib/server/env";
 import { apiErrorResponse } from "../../../lib/server/http-errors";
 import { addTracksToMixtape, setMixtapeMembers } from "../../../lib/server/mixtapes";
 
@@ -9,7 +9,7 @@ export const Route = createFileRoute("/api/admin/mixtapes/$mixtapeId/members")({
       // PUT replaces the whole tracklist (the editor's drag-reorder); POST appends
       // to it (the board's "Add to mixtape"). Both are draft-only, server-enforced.
       POST: async ({ params, request }) => {
-        const unauthorized = await requireAdmin(request);
+        const unauthorized = await requireOperator(request);
 
         if (unauthorized) {
           return unauthorized;
@@ -24,7 +24,7 @@ export const Route = createFileRoute("/api/admin/mixtapes/$mixtapeId/members")({
         }
       },
       PUT: async ({ params, request }) => {
-        const unauthorized = await requireAdmin(request);
+        const unauthorized = await requireOperator(request);
 
         if (unauthorized) {
           return unauthorized;

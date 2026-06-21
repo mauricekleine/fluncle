@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../../../-alias";
-import { requireAdmin, signState } from "../../../../../lib/server/env";
+import { requireOperator, signState } from "../../../../../lib/server/env";
 import { apiErrorResponse } from "../../../../../lib/server/http-errors";
 import { buildYouTubeAuthUrl } from "../../../../../lib/server/youtube";
 
@@ -8,7 +8,7 @@ import { buildYouTubeAuthUrl } from "../../../../../lib/server/youtube";
 // Mirrors the Spotify start route; the callback verifies the same signed state.
 export const serverHandlers: ApiHandlers = {
   GET: async ({ request }) => {
-    const unauthorized = await requireAdmin(request);
+    const unauthorized = await requireOperator(request);
 
     if (unauthorized) {
       return unauthorized;

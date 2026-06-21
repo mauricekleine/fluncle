@@ -3,7 +3,7 @@ import { type ApiHandlers, aliasHandlers } from "../-alias";
 import { env } from "cloudflare:workers";
 
 import { FOUND_BASE, trackMedia } from "../../../lib/media";
-import { jsonError, requireAdmin } from "../../../lib/server/env";
+import { jsonError, requireOperator } from "../../../lib/server/env";
 import {
   apiErrorResponse,
   noLogIdResponse,
@@ -79,7 +79,7 @@ function resolveDurationTargetSec(value: unknown): number {
 
 export const serverHandlers: ApiHandlers = {
   POST: async ({ params, request }) => {
-    const unauthorized = await requireAdmin(request);
+    const unauthorized = await requireOperator(request);
 
     if (unauthorized) {
       return unauthorized;

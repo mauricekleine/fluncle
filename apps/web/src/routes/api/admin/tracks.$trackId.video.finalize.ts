@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../-alias";
 
 import { trackMedia } from "../../../lib/media";
-import { requireAdmin } from "../../../lib/server/env";
+import { requireOperator } from "../../../lib/server/env";
 import {
   apiErrorResponse,
   noLogIdResponse,
@@ -20,7 +20,7 @@ import { updateTrack } from "../../../lib/server/track-update";
 // Requires the track to have a Log ID (one identity everywhere).
 export const serverHandlers: ApiHandlers = {
   POST: async ({ params, request }) => {
-    const unauthorized = await requireAdmin(request);
+    const unauthorized = await requireOperator(request);
 
     if (unauthorized) {
       return unauthorized;

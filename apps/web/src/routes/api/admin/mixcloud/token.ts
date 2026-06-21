@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../../-alias";
-import { requireAdmin } from "../../../../lib/server/env";
+import { requireOperator } from "../../../../lib/server/env";
 import { apiErrorResponse } from "../../../../lib/server/http-errors";
 import { getMixcloudAccessToken } from "../../../../lib/server/mixcloud";
 
@@ -10,7 +10,7 @@ import { getMixcloudAccessToken } from "../../../../lib/server/mixcloud";
 // mixcloud_auth; the CLI holds it only transiently for the one upload.
 export const serverHandlers: ApiHandlers = {
   POST: async ({ request }) => {
-    const unauthorized = await requireAdmin(request);
+    const unauthorized = await requireOperator(request);
 
     if (unauthorized) {
       return unauthorized;

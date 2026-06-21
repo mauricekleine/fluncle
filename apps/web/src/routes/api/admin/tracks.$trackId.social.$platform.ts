@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { jsonError, requireAdmin } from "../../../lib/server/env";
+import { jsonError, requireOperator } from "../../../lib/server/env";
 import { apiErrorResponse, trackNotFoundResponse } from "../../../lib/server/http-errors";
 import { type SocialStatusUpdate, updateSocialStatus } from "../../../lib/server/social";
 import { getTrackByIdOrLogId } from "../../../lib/server/tracks";
@@ -15,7 +15,7 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/social/$platfor
   server: {
     handlers: {
       PATCH: async ({ params, request }) => {
-        const unauthorized = await requireAdmin(request);
+        const unauthorized = await requireOperator(request);
 
         if (unauthorized) {
           return unauthorized;

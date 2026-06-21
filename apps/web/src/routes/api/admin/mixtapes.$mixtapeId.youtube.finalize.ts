@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../-alias";
-import { requireAdmin } from "../../../lib/server/env";
+import { requireOperator } from "../../../lib/server/env";
 import { apiErrorResponse, parseJsonBody } from "../../../lib/server/http-errors";
 import { renderMixtapeCover } from "../../../lib/server/mixtape-cover";
 import { finalizeMixtapeDistribution } from "../../../lib/server/mixtape-social";
@@ -18,7 +18,7 @@ const THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024;
 // the unlisted video is already live with its real coordinate.
 export const serverHandlers: ApiHandlers = {
   POST: async ({ params, request }) => {
-    const unauthorized = await requireAdmin(request);
+    const unauthorized = await requireOperator(request);
 
     if (unauthorized) {
       return unauthorized;

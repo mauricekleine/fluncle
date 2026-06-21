@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { jsonError, requireAdmin } from "../../../lib/server/env";
+import { jsonError, requireOperator } from "../../../lib/server/env";
 import {
   apiErrorResponse,
   noLogIdResponse,
@@ -23,7 +23,7 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/video/uploads")
   server: {
     handlers: {
       POST: async ({ params, request }) => {
-        const unauthorized = await requireAdmin(request);
+        const unauthorized = await requireOperator(request);
 
         if (unauthorized) {
           return unauthorized;

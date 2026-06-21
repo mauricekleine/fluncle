@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { env } from "cloudflare:workers";
 
-import { jsonError, requireAdmin } from "../../../lib/server/env";
+import { jsonError, requireOperator } from "../../../lib/server/env";
 import { apiErrorResponse, trackNotFoundResponse } from "../../../lib/server/http-errors";
 import {
   archivePreviewForTrack,
@@ -17,7 +17,7 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/preview-archive
   server: {
     handlers: {
       GET: async ({ params, request }) => {
-        const unauthorized = await requireAdmin(request);
+        const unauthorized = await requireOperator(request);
 
         if (unauthorized) {
           return unauthorized;
@@ -47,7 +47,7 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId/preview-archive
         }
       },
       POST: async ({ params, request }) => {
-        const unauthorized = await requireAdmin(request);
+        const unauthorized = await requireOperator(request);
 
         if (unauthorized) {
           return unauthorized;

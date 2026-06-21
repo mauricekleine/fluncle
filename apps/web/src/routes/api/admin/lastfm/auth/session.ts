@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../../../-alias";
-import { jsonError, requireAdmin } from "../../../../../lib/server/env";
+import { jsonError, requireOperator } from "../../../../../lib/server/env";
 import { apiErrorResponse, parseJsonBody } from "../../../../../lib/server/http-errors";
 import { lastfmGetSession } from "../../../../../lib/server/lastfm";
 
@@ -11,7 +11,7 @@ import { lastfmGetSession } from "../../../../../lib/server/lastfm";
 // NOT persist it server-side (no schema change this wave); the secret is the home.
 export const serverHandlers: ApiHandlers = {
   POST: async ({ request }) => {
-    const unauthorized = await requireAdmin(request);
+    const unauthorized = await requireOperator(request);
 
     if (unauthorized) {
       return unauthorized;

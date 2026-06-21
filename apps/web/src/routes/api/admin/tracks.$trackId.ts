@@ -1,8 +1,21 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { requireAdmin } from "../../../lib/server/env";
+import { adminRole, jsonError, requireAdmin } from "../../../lib/server/env";
 import { apiErrorResponse, parseEditorialNote } from "../../../lib/server/http-errors";
 import { type TrackUpdate, updateTrack } from "../../../lib/server/track-update";
+
+// Fields only the operator may write: editorial voice (note), the vehicle/video
+// (videoUrl), the map placement (vibeX/vibeY), and the immutable identity fields
+// (isrc/logId). The agent role is limited to machine-measured analysis (bpm, key,
+// features, enrichmentStatus) — overwritable, internal, no public footprint.
+const OPERATOR_ONLY_FIELDS: (keyof TrackUpdate)[] = [
+  "isrc",
+  "logId",
+  "note",
+  "vibeX",
+  "vibeY",
+  "videoUrl",
+];
 
 type PatchBody = {
   bpm?: unknown;
@@ -79,6 +92,20 @@ export const Route = createFileRoute("/api/admin/tracks/$trackId")({
 
           if (typeof body.logId === "string") {
             update.logId = body.logId;
+          }
+
+          // The agent role may only touch analysis fields. Reject (not silently
+          // drop) an attempt at an operator-only field — a 403 the gate can voice.
+          if ((await adminRole(request)) === "agent") {
+            const blocked = OPERATOR_ONLY_FIELDS.filter((field) => field in update);
+
+            if (blocked.length > 0) {
+              return jsonError(
+                403,
+                "forbidden",
+                `The agent role can write only analysis fields, not: ${blocked.join(", ")}`,
+              );
+            }
           }
 
           const result = await updateTrack(trackId, update);

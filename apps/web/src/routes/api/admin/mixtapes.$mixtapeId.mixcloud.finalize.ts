@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { requireAdmin } from "../../../lib/server/env";
+import { requireOperator } from "../../../lib/server/env";
 import { apiErrorResponse } from "../../../lib/server/http-errors";
 import { finalizeMixtapeDistribution } from "../../../lib/server/mixtape-social";
 import { ApiError } from "../../../lib/server/spotify";
@@ -13,7 +13,7 @@ export const Route = createFileRoute("/api/admin/mixtapes/$mixtapeId/mixcloud/fi
   server: {
     handlers: {
       POST: async ({ params, request }) => {
-        const unauthorized = await requireAdmin(request);
+        const unauthorized = await requireOperator(request);
 
         if (unauthorized) {
           return unauthorized;

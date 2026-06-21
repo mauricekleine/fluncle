@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../../-alias";
-import { requireAdmin } from "../../../../lib/server/env";
+import { requireOperator } from "../../../../lib/server/env";
 import { apiErrorResponse } from "../../../../lib/server/http-errors";
 import { getYouTubeAccessToken } from "../../../../lib/server/youtube";
 
@@ -10,7 +10,7 @@ import { getYouTubeAccessToken } from "../../../../lib/server/youtube";
 // re-initiating would discard the already-uploaded bytes and restart from zero.
 export const serverHandlers: ApiHandlers = {
   POST: async ({ request }) => {
-    const unauthorized = await requireAdmin(request);
+    const unauthorized = await requireOperator(request);
 
     if (unauthorized) {
       return unauthorized;

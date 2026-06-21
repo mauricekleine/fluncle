@@ -1,12 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../-alias";
-import { requireAdmin } from "../../../lib/server/env";
+import { requireOperator } from "../../../lib/server/env";
 import { apiErrorResponse } from "../../../lib/server/http-errors";
 import { deleteMixtape, updateMixtape } from "../../../lib/server/mixtapes";
 
 export const serverHandlers: ApiHandlers = {
   DELETE: async ({ params, request }) => {
-    const unauthorized = await requireAdmin(request);
+    const unauthorized = await requireOperator(request);
 
     if (unauthorized) {
       return unauthorized;
@@ -21,7 +21,7 @@ export const serverHandlers: ApiHandlers = {
     }
   },
   PATCH: async ({ params, request }) => {
-    const unauthorized = await requireAdmin(request);
+    const unauthorized = await requireOperator(request);
 
     if (unauthorized) {
       return unauthorized;

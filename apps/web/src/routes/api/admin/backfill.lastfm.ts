@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../-alias";
 import { backfillLastfmLoves } from "../../../lib/server/backfill";
-import { requireAdmin } from "../../../lib/server/env";
+import { requireOperator } from "../../../lib/server/env";
 import { apiErrorResponse } from "../../../lib/server/http-errors";
 
 // POST /api/admin/backfill/lastfm — back-fill Last.fm `track.love` over published
@@ -38,7 +38,7 @@ function parseBool(value: string | null): boolean {
 
 export const serverHandlers: ApiHandlers = {
   POST: async ({ request }) => {
-    const unauthorized = await requireAdmin(request);
+    const unauthorized = await requireOperator(request);
 
     if (unauthorized) {
       return unauthorized;

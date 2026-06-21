@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../-alias";
-import { jsonError, requireAdmin } from "../../../lib/server/env";
+import { jsonError, requireAdmin, requireOperator } from "../../../lib/server/env";
 import { apiErrorResponse, parseEditorialNote } from "../../../lib/server/http-errors";
 import { publishTrack } from "../../../lib/server/publish";
 import { triggerEnrichment } from "../../../lib/server/spinup";
@@ -62,7 +62,7 @@ export const serverHandlers: ApiHandlers = {
     );
   },
   POST: async ({ request }) => {
-    const unauthorized = await requireAdmin(request);
+    const unauthorized = await requireOperator(request);
 
     if (unauthorized) {
       return unauthorized;
