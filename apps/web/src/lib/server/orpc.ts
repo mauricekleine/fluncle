@@ -42,6 +42,7 @@ import { meGalaxyHandlers } from "./orpc/me-galaxy";
 import { meSavedHandlers } from "./orpc/me-saved";
 import { mixtapesHandlers } from "./orpc/mixtapes";
 import { newsletterHandlers } from "./orpc/newsletter";
+import { radioHandlers } from "./orpc/radio";
 import { searchHandlers } from "./orpc/search";
 import { storiesHandlers } from "./orpc/stories";
 import { submissionsHandlers } from "./orpc/submissions";
@@ -74,6 +75,7 @@ export const router = os.router({
   ...meSavedHandlers(os),
   ...mixtapesHandlers(os),
   ...newsletterHandlers(os),
+  ...radioHandlers(os),
   ...searchHandlers(os),
   ...storiesHandlers(os),
   ...submissionsHandlers(os),

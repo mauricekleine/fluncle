@@ -15,12 +15,14 @@ vi.mock("./log-resolver", () => ({
 // cursor decode behaves exactly as production; the data fetchers are mocked.
 const listTracks = vi.fn();
 const getRandomTrack = vi.fn();
+const getRandomRadioTrack = vi.fn();
 
 vi.mock("./tracks", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./tracks")>();
 
   return {
     ...actual,
+    getRandomRadioTrack: (...args: unknown[]) => getRandomRadioTrack(...args),
     getRandomTrack: (...args: unknown[]) => getRandomTrack(...args),
     listTracks: (...args: unknown[]) => listTracks(...args),
   };
@@ -30,6 +32,7 @@ beforeEach(() => {
   resolveLogPageTarget.mockReset();
   listTracks.mockReset();
   getRandomTrack.mockReset();
+  getRandomRadioTrack.mockReset();
 });
 
 function get(url: string): Request {
@@ -271,6 +274,36 @@ describe("oRPC public read — GET /tracks/random (get_random_track)", () => {
   });
 });
 
+describe("oRPC public read — GET /radio/random (get_random_radio_track)", () => {
+  it("serves { ok: true, track } from the radio-eligible query", async () => {
+    getRandomRadioTrack.mockResolvedValueOnce(TRACK);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(get("https://www.fluncle.com/api/v1/radio/random"));
+
+    expect(response?.status).toBe(200);
+    expect(await response?.json()).toEqual({ ok: true, track: TRACK });
+    // The radio op reads ONLY the eligibility-filtered query — never the unfiltered
+    // random read, so an un-squared / observation-less track can never reach it.
+    expect(getRandomRadioTrack).toHaveBeenCalledTimes(1);
+    expect(getRandomTrack).not.toHaveBeenCalled();
+  });
+
+  it("404s an empty eligible set with the custom track_not_found code", async () => {
+    getRandomRadioTrack.mockResolvedValueOnce(undefined);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(get("https://www.fluncle.com/api/v1/radio/random"));
+
+    expect(response?.status).toBe(404);
+    expect(await response?.json()).toEqual({
+      code: "track_not_found",
+      message: "No radio-eligible tracks found",
+      ok: false,
+    });
+  });
+});
+
 // The generated PUBLIC OpenAPI document — the spec served at /api/v1/openapi.json
 // (Scalar + Postman read it) since the spec flip retired the static
 // public/openapi.json. The load-bearing constraint: it carries EVERY public op and
@@ -295,6 +328,7 @@ const PUBLIC_OPERATION_IDS = [
   "getPrivateAccountExport",
   "getPrivateGalaxyProgress",
   "getPrivateMutationToken",
+  "getRandomRadioTrack",
   "getRandomTrack",
   "getTrack",
   "listMixtapes",

@@ -251,6 +251,32 @@ export async function getRandomTrack(): Promise<TrackListItem | undefined> {
   return row ? toTrackListItem(row) : undefined;
 }
 
+/**
+ * One random RADIO-ELIGIBLE finding for the cycling station (radio.fluncle.com).
+ *
+ * Eligible = the finding carries BOTH a clean square master (`video_squared_at`
+ * set) AND an observation (`observation_audio_url` set):
+ *   - The square master is what radio centre-crops per orientation (media.ts
+ *     `videoCrop`) and draws its OWN chrome over, so a legacy baked-text cut must
+ *     never reach the station — `video_squared_at` is the two-master signal.
+ *   - The observation is the only audio radio plays (the video is silent), so a
+ *     finding with no observation has nothing to say.
+ * Both predicates are `is not null` filters on this OWN bare query (not the
+ * `listTracks` builder), so the endpoint only ever returns a playable finding.
+ */
+export async function getRandomRadioTrack(): Promise<TrackListItem | undefined> {
+  const db = await getDb();
+  const result = await db.execute({
+    sql: `select ${TRACK_SELECT} from tracks
+          where tracks.video_squared_at is not null
+            and tracks.observation_audio_url is not null
+          order by random() limit 1`,
+  });
+  const row = typedRow<TrackRow>(result.rows);
+
+  return row ? toTrackListItem(row) : undefined;
+}
+
 export type TrackNeighbor = {
   artists: string[];
   logId: string;

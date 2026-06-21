@@ -81,7 +81,7 @@ Redefining `footage.mp4` from portrait to square is **stateful and gradual** —
 Consumers read the signal and fall back, so deploying the consumer code changes nothing for un-migrated findings:
 
 - `media.ts` exposes the square-crop helpers (`videoCrop` → `fit=crop` portrait/landscape) + `videoAudioStripped` (`audio=false`) + `socialVideoUrl`; callers reach for the crops/social cut **only when `videoSquaredAt` is set**.
-- `/log` (and the future radio surface): squared → an MT centre-crop of the square (clean, page owns the chrome); un-squared → today's `footage.mp4` portrait rendition.
+- `/log` and `radio.fluncle.com`: squared → an MT centre-crop of the square (clean, the page owns the chrome); un-squared → today's `footage.mp4` portrait rendition. Radio additionally strips the audio (`videoAudioStripped`) so its only sound is the observation, and plays only squared+observed findings (the `get_random_radio_track` eligibility filter).
 - Stories / YouTube / TikTok: squared → `footage.social.mp4` (TikTok via `audio=false` MT); un-squared → `footage.mp4` (its old portrait+text cut) + `footage-silent.mp4`.
 
 The ordered rollout (run, don't merge-and-pray):
