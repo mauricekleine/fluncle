@@ -40,13 +40,25 @@ function shutdown(): void {
   }
 }
 
-async function waitForDb(dbUrl: string, attempts = 50): Promise<void> {
+// `turso dev` is a launcher: it boots an embedded `sqld` child and runs a
+// startup version check against GitHub. On a freshly provisioned worktree's
+// first run — competing with the rest of the concurrent turbo dev fan-out for
+// CPU/IO — that cold start can take well over a few seconds. Once warm it's
+// ~200ms. Budget for the cold case (30s) so the first `bun run dev` doesn't
+// lose the race, and bail immediately with turso's own output if it exits.
+async function waitForDb(dbUrl: string, server: Subprocess, attempts = 300): Promise<void> {
   const client = createClient({
     authToken: process.env.TURSO_AUTH_TOKEN ?? "local-dev",
     url: dbUrl,
   });
 
   for (let attempt = 0; attempt < attempts; attempt++) {
+    if (server.exitCode !== null) {
+      throw new Error(
+        `\`turso dev\` exited (code ${server.exitCode}) before the local libSQL server became reachable at ${dbUrl}. See its output above; check that the \`turso\` CLI is installed and can reach the network on first run.`,
+      );
+    }
+
     try {
       await client.execute("SELECT 1");
 
@@ -56,7 +68,9 @@ async function waitForDb(dbUrl: string, attempts = 50): Promise<void> {
     }
   }
 
-  throw new Error(`Local libSQL server did not come up at ${dbUrl}`);
+  throw new Error(
+    `Local libSQL server did not come up at ${dbUrl} within ${(attempts * 100) / 1000}s`,
+  );
 }
 
 process.on("SIGINT", () => {
@@ -78,9 +92,9 @@ if (isLocal) {
   }
 
   console.log(`Starting local libSQL server on :${port}…`);
-  spawn(["turso", "dev", "--db-file", ".dev/local.db", "--port", port]);
+  const server = spawn(["turso", "dev", "--db-file", ".dev/local.db", "--port", port]);
 
-  await waitForDb(url);
+  await waitForDb(url, server);
 
   console.log("Applying migrations…");
   await $`bun run db:migrate`;
