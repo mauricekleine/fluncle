@@ -1,0 +1,35 @@
+---
+title: The onion
+description: The archive over Tor — the whole site, off the grid, still in the Galaxy.
+---
+
+There's a door into the archive that doesn't touch the open net. A v3 `.onion`, served over Tor: off the grid, still in the Galaxy. Same findings, same Log IDs, no DNS, no certificate authority, no exit node — Tor carries you to the mirror and back, end to end. It's here for the visitor who wants metadata privacy or who can't reach `www.fluncle.com` the usual way.
+
+```
+http://p53pc2uzfu2tnih4cd6wd42ok6zup2uttj6xdmjdccy5kqo33fyppkqd.onion
+```
+
+## How to reach it
+
+You need [Tor Browser](https://www.torproject.org/download/). Two ways in:
+
+- **Open the address.** Paste the `.onion` above into Tor Browser and you're standing in the archive.
+- **Click the pill.** Load `www.fluncle.com` in Tor Browser and a ".onion available" pill appears in the address bar — the `Onion-Location` advertisement. One click drops you onto the onion.
+
+Both land in the same place. The pill is the easier door; the address is the one you can write down.
+
+## What's behind it
+
+The whole site, mirrored. Not a stripped-down lobby — an [onionspray](https://onionservices.torproject.org/apps/web/onionspray/) proxy in front of the live `www.fluncle.com`, rewriting links so everything stays on the onion as you move around. That means the surfaces ride along too:
+
+- The [API](/docs/api-overview) at `/api/v1/*`
+- The [feeds](/docs/feeds) — `/rss.xml`, `/feed.json`, `/atom.xml`
+- The [MCP server](/docs/mcp) at `/mcp`
+
+Point a client at the onion host instead of `www.fluncle.com` and the same archive answers, spoken over Tor.
+
+## What it costs
+
+Nothing you can see, and nothing in the firewall. An onion service reaches the network by outbound connections only — clients arrive through rendezvous points inside Tor — so the mirror opens **zero new inbound ports**. It rides the same VPS as the [rave terminal](/docs/ssh) and [dig](/docs/dig), one more door into the same room.
+
+The archive is public and read-only, so this is a principled surface, not a load-bearing access path: it gives a visitor reach and privacy, not Fluncle's infrastructure cover. Standing it up is operator work — the full runbook lives at `docs/tor.md` in the repo.
