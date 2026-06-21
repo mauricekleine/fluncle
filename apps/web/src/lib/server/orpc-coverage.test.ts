@@ -44,6 +44,11 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   "GET /me/saved-findings": "list_private_saved_findings",
   "GET /me/submissions": "list_private_submissions",
   "GET /mixtapes": "list_mixtapes",
+  // The cycling station's read (RFC Unit B). Contract-only — there is no TanStack
+  // alias file under /api/v1/radio (oRPC serves it straight off the registry), so
+  // it has no route-file basename to enumerate; it is documented here as part of
+  // the public surface net.
+  "GET /radio/random": "get_random_radio_track",
   "GET /search": "search_tracks",
   "GET /stories": "list_stories",
   "GET /tracks": "list_tracks",
@@ -79,7 +84,6 @@ const CARVE_OUT_ROUTES = new Set([
   "preview.$idOrLogId",
   // The generated-spec + tooling surfaces are documents, not API operations.
   "openapi[.]json",
-  "orpc-openapi[.]json",
   "postman[.]json",
 ]);
 

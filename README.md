@@ -12,6 +12,7 @@ The same archive, reachable however you like. Every surface reads the same publi
 | ---------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | Web        | <https://www.fluncle.com>                                               | The public archive: cover-led, dark, fast. Also `/about`, `/log`, `/log/<id>`                                           |
 | Galaxy     | <https://galaxy.fluncle.com>                                            | The game: every finding is a star you can fly to                                                                        |
+| Radio      | <https://radio.fluncle.com>                                             | The cycling station: each finding's clean footage under its spoken observation, lean-back, forever                      |
 | Public API | `https://www.fluncle.com/api/v1/*`                                      | JSON reads and submissions; `/api/*` stays as a permanent alias (see [Web](#web), [Submission Flow](#submission-flow))  |
 | RSS        | <https://www.fluncle.com/rss.xml>                                       | The 25 most recent findings, for feed readers                                                                           |
 | CLI        | `curl -fsSL https://www.fluncle.com/cli/latest.sh \| sh`                | The archive in your terminal (see [CLI](#cli))                                                                          |

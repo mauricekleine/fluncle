@@ -43,7 +43,15 @@ describe("fluncle CLI parsing and JSON output", () => {
 `);
   });
 
-  test("admin queue validates --limit before fetching", async () => {
+  test("admin tracks queue validates --limit before fetching", async () => {
+    const result = await runCli(["admin", "tracks", "queue", "--limit", "0", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
+  });
+
+  test("admin queue (back-compat alias) still resolves to the same handler", async () => {
     const result = await runCli(["admin", "queue", "--limit", "0", "--json"]);
 
     expect(result.exitCode).toBe(1);
@@ -51,7 +59,15 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
-  test("admin vehicles validates --limit before fetching", async () => {
+  test("admin tracks vehicles validates --limit before fetching", async () => {
+    const result = await runCli(["admin", "tracks", "vehicles", "--limit", "0", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
+  });
+
+  test("admin vehicles (back-compat alias) still resolves to the same handler", async () => {
     const result = await runCli(["admin", "vehicles", "--limit", "0", "--json"]);
 
     expect(result.exitCode).toBe(1);
@@ -59,15 +75,39 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
-  test("admin enrich-queue validates --limit before fetching", async () => {
-    const result = await runCli(["admin", "enrich-queue", "--limit", "0", "--json"]);
+  test("admin tracks enrich-queue validates --limit before fetching", async () => {
+    const result = await runCli(["admin", "tracks", "enrich-queue", "--limit", "0", "--json"]);
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
-  test("admin enrich-sweep validates --limit before any sweep", async () => {
+  test("admin tracks enrich --all validates --limit before any sweep", async () => {
+    const result = await runCli(["admin", "tracks", "enrich", "--all", "--limit", "0", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
+  });
+
+  test("admin tracks enrich requires --all (bare enrich errors, never a silent sweep)", async () => {
+    const result = await runCli(["admin", "tracks", "enrich", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("fluncle admin tracks enrich --all");
+  });
+
+  test("admin tracks enrich-sweep (back-compat alias) still resolves to enrich --all", async () => {
+    const result = await runCli(["admin", "tracks", "enrich-sweep", "--limit", "0", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
+  });
+
+  test("admin enrich-sweep (back-compat alias for the cron) still resolves", async () => {
     const result = await runCli(["admin", "enrich-sweep", "--limit", "0", "--json"]);
 
     expect(result.exitCode).toBe(1);
@@ -75,22 +115,25 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
-  test("admin enrich-queue and enrich-sweep show in admin help (distinct from the video queue)", async () => {
-    const adminHelp = await runCli(["admin", "help"]);
+  test("admin tracks group lists the enrich + queue subcommands", async () => {
+    const tracksHelp = await runCli(["admin", "tracks", "--help"]);
 
-    expect(adminHelp.exitCode).toBe(0);
-    expect(adminHelp.stdout).toContain("enrich-queue");
-    expect(adminHelp.stdout).toContain("enrich-sweep");
-    // The video render queue stays its own command.
-    expect(adminHelp.stdout).toContain("queue");
+    expect(tracksHelp.exitCode).toBe(0);
+    expect(tracksHelp.stdout).toContain("enrich-queue");
+    // The canonical sweep verb is visible; the `enrich-sweep` alias is hidden.
+    expect(tracksHelp.stdout).toContain("enrich ");
+    expect(tracksHelp.stdout).not.toContain("enrich-sweep");
+    expect(tracksHelp.stdout).toContain("queue");
+    expect(tracksHelp.stdout).toContain("publish");
+    expect(tracksHelp.stdout).toContain("vehicles");
   });
 
-  test("admin track video requires a footage cut before any upload", async () => {
+  test("admin tracks video requires a footage cut before any upload", async () => {
     // A --dir with no footage.mp4 fails the local validation before the presign
     // request, so this runs without a server or admin token.
     const result = await runCli([
       "admin",
-      "track",
+      "tracks",
       "video",
       "004.7.2I",
       "--dir",
@@ -108,14 +151,51 @@ describe("fluncle CLI parsing and JSON output", () => {
 `);
   });
 
-  test("admin track observe requires a script before any render", async () => {
-    // No --script / --script-file fails local validation before the API call,
-    // so this runs without a server or admin token (and never spends a render).
-    const result = await runCli(["admin", "track", "observe", "004.7.2I", "--json"]);
+  test("admin track video (back-compat group alias) still resolves", async () => {
+    const result = await runCli([
+      "admin",
+      "track",
+      "video",
+      "004.7.2I",
+      "--dir",
+      "/tmp/fluncle-no-such-bundle",
+      "--json",
+    ]);
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Usage: fluncle admin track observe");
+    expect(result.stdout).toContain("A footage cut is required");
+  });
+
+  test("admin tracks observe requires a script before any render", async () => {
+    // No --script / --script-file fails local validation before the API call,
+    // so this runs without a server or admin token (and never spends a render).
+    const result = await runCli(["admin", "tracks", "observe", "004.7.2I", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: fluncle admin tracks observe");
+  });
+
+  test("admin tracks publish (new name) and admin add (alias) both resolve", async () => {
+    const canonical = await runCli(["admin", "tracks", "publish", "--json"]);
+    const alias = await runCli(["admin", "add", "--json"]);
+
+    // Both reach the same handler and fail identically (no Spotify URL given).
+    expect(canonical.exitCode).toBe(1);
+    expect(alias.exitCode).toBe(1);
+    expect(canonical.stdout).toContain("Missing Spotify track URL");
+    expect(alias.stdout).toContain("Missing Spotify track URL");
+  });
+
+  test("admin tracks preview (new name) and preview-archive (alias) both resolve", async () => {
+    const canonical = await runCli(["admin", "tracks", "preview", "--json"]);
+    const alias = await runCli(["admin", "tracks", "preview-archive", "--json"]);
+
+    expect(canonical.exitCode).toBe(1);
+    expect(alias.exitCode).toBe(1);
+    expect(canonical.stdout).toContain("Usage: fluncle admin tracks preview");
+    expect(alias.stdout).toContain("Usage: fluncle admin tracks preview");
   });
 
   test("keeps root help listener-facing", async () => {
@@ -182,8 +262,11 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(adminHelp.stderr).toBe("");
     expect(adminHelp.stdout).not.toContain(fluncleAsciiLogo);
     expect(adminHelp.stdout).toContain("Usage: fluncle admin [options] [command]");
-    expect(adminHelp.stdout).toContain("add [options] [spotifyUrl]");
+    // Canonical Convention B groups show; the back-compat flat aliases (add,
+    // queue, …) are hidden, so they do not clutter the operator help.
+    expect(adminHelp.stdout).toContain("tracks");
     expect(adminHelp.stdout).toContain("submissions");
+    expect(adminHelp.stdout).toContain("backfills");
   });
 });
 

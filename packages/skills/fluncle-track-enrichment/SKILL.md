@@ -39,7 +39,7 @@ The analysis script (`scripts/analyze-track.ts`) is **self-contained** — zero 
 3. **Archive the analysis preview.** If `archivePreview` is present, store that one official 30s preview through the admin API:
 
    ```
-   fluncle admin track preview-archive <trackId> --file "<archivePreview.path>" --source "<archivePreview.source>" --mime "<archivePreview.mime>"
+   fluncle admin tracks preview <trackId> --file "<archivePreview.path>" --source "<archivePreview.source>" --mime "<archivePreview.mime>"
    ```
 
    The Worker writes the bytes to R2 under an operator-only archive path and stores internal metadata. This copy is never linked, downloaded, streamed, or used by `/api/preview`; public playback stays live-only through Deezer/iTunes. Never archive full songs.
@@ -47,7 +47,7 @@ The analysis script (`scripts/analyze-track.ts`) is **self-contained** — zero 
 4. **Write it back.** Use the analysis output:
 
    ```
-   fluncle admin track update <trackId> \
+   fluncle admin tracks update <trackId> \
      [--bpm <bpm>] \
      [--key "<key>"] \
      --features '<features-json>' \
@@ -70,4 +70,4 @@ That's the whole loop: get → analyze → archive → update.
 
 ## Video render (separate, requires the kit)
 
-Rendering the per-track video is **not** part of this self-contained skill — Remotion needs the Fluncle `packages/video` kit present (a repo checkout / prebuilt image). When the kit is available, its doctrine is the **`fluncle-video` skill**: render the bundle, then `fluncle admin track video <track_id|log_id> --dir out/<log-id>` uploads it and sets `video_url` (the Worker owns R2; you never hold R2 credentials). Publishing the rendered video as a social draft is a third capability — the **`fluncle-publish` skill** (`fluncle admin track draft`). Inside the Fluncle repo, the full chain and the kit's README are documented under `docs/` (`agents/enrichment-agent.md`, `track-lifecycle.md`) and `packages/video/README.md`.
+Rendering the per-track video is **not** part of this self-contained skill — Remotion needs the Fluncle `packages/video` kit present (a repo checkout / prebuilt image). When the kit is available, its doctrine is the **`fluncle-video` skill**: render the bundle, then `fluncle admin tracks video <track_id|log_id> --dir out/<log-id>` uploads it and sets `video_url` (the Worker owns R2; you never hold R2 credentials). Publishing the rendered video as a social draft is a third capability — the **`fluncle-publish` skill** (`fluncle admin tracks draft`). Inside the Fluncle repo, the full chain and the kit's README are documented under `docs/` (`agents/enrichment-agent.md`, `track-lifecycle.md`) and `packages/video/README.md`.

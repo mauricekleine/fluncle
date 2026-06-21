@@ -34,6 +34,7 @@ import { meGalaxyContract } from "./me-galaxy";
 import { meSavedContract } from "./me-saved";
 import { mixtapesContract } from "./mixtapes";
 import { newsletterContract } from "./newsletter";
+import { radioContract } from "./radio";
 import { searchContract } from "./search";
 import { storiesContract } from "./stories";
 import { submissionsContract } from "./submissions";
@@ -41,7 +42,7 @@ import { tracksContract } from "./tracks";
 
 // Re-export the per-op contracts so existing importers (and the typed client)
 // keep their entrypoints.
-export { backfillDiscogs, backfillLastfm, sweepEnrichment } from "./admin-backfills";
+export { backfillDiscogs, backfillLastfm, enrichTrack } from "./admin-backfills";
 export {
   addMixtapeMembers,
   createMixtape,
@@ -96,6 +97,7 @@ export {
 export { listPrivateSavedFindings, savePrivateFinding, unsavePrivateFinding } from "./me-saved";
 export { listMixtapes } from "./mixtapes";
 export { subscribeNewsletter } from "./newsletter";
+export { getRandomRadioTrack } from "./radio";
 export { searchTracks } from "./search";
 export { listStories } from "./stories";
 export { submitTrack } from "./submissions";
@@ -134,6 +136,7 @@ export const contract = {
   ...meSavedContract,
   ...mixtapesContract,
   ...newsletterContract,
+  ...radioContract,
   ...searchContract,
   ...storiesContract,
   ...submissionsContract,

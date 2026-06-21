@@ -1,8 +1,9 @@
 // A tiny, dependency-free OpenAPI 3.1 -> Postman Collection v2.1 converter,
-// scoped to exactly the constructs the Fluncle spec uses (public/openapi.json):
-// query/path parameters, JSON request bodies, local $ref schemas, and one
-// server. It runs at request time over the live spec, so the collection is
-// always byte-faithful to the spec it was generated from and needs no separate
+// scoped to exactly the constructs the Fluncle spec uses (the GENERATED public
+// spec from the oRPC contract registry, served at /api/v1/openapi.json): query/path
+// parameters, JSON request bodies, local $ref schemas, and one server. It runs at
+// request time over the live generated spec, so the collection is always
+// byte-faithful to the spec it was generated from and needs no separate
 // maintenance. It deliberately does not implement the whole OpenAPI surface;
 // anything outside what the Fluncle spec exercises is skipped, not guessed.
 

@@ -2,7 +2,7 @@
 
 Canonical architecture for what happens to a track from the moment Fluncle finds it. This is a **stable reference** — the durable contract the surfaces and agents build against. (Living, changeable plans live in [ROADMAP.md](./ROADMAP.md); this is not that.)
 
-The shape in one line: **adding a track is fast and synchronous; enriching it is slow and asynchronous.** A find is listenable the instant it's added; everything expensive (audio analysis, the video) arrives a little later, written back by an agent.
+The shape in one line: **adding a track is fast and synchronous; enriching it is slow and asynchronous.** A find is listenable the instant it's added; everything expensive (audio analysis, the video, the spoken observation) arrives a little later, written back by an agent. **The async work is pulled, not pushed:** each enrichment step is a self-healing queue an agent cron drains, so a failed or never-run step is simply picked up on the next tick — nothing blocks the add, nothing stays stuck.
 
 ## Why two phases
 
@@ -10,7 +10,7 @@ The shape in one line: **adding a track is fast and synchronous; enriching it is
 
 ## Phase 1 — Add (synchronous, in the Worker)
 
-Triggered by `fluncle admin add <spotify-url>` → `POST /api/admin/tracks` → `publishTrack()` (`apps/web/src/lib/server/publish.ts`). Everything here is cheap HTTP, so the track is in the playlist and visible within one request:
+Triggered by `fluncle admin tracks publish <spotify-url>` → `POST /api/admin/tracks` → `publishTrack()` (`apps/web/src/lib/server/publish.ts`). Everything here is cheap HTTP, so the track is in the playlist and visible within one request:
 
 - **Spotify** metadata: title, artists, album, artwork, `duration_ms`, `isrc`, `popularity` (`spotify.ts`).
 - **Deezer** (by ISRC, best-effort): record `label` + a live `preview_url` (`deezer.ts`). This is a fallback pointer for `/api/preview`, not a durable media artifact.
@@ -25,31 +25,41 @@ Every coordinate-bearing finding has a permanent web surface at `https://www.flu
 
 The track is now real, listenable, and shows its identity (coordinate, label, duration). The audio-derived fields are not set yet — they show as "processing" until Phase 2 lands.
 
-## Phase 2 — Enrich (asynchronous, on a Spinup agent)
+## Phase 2 — Enrich (asynchronous, queue/cron-pulled)
 
-After a successful add, the Worker fires a **Spinup agent** (via the Spinup runtime API) with just the `trackId` via an inline `await runs.create` — a fast enqueue (the work then runs durably on Spinup's queue), so it never blocks the add response (this TanStack version doesn't expose Cloudflare's `waitUntil`). The agent has what the Worker can't: a repo checkout, the admin Fluncle CLI, `ffmpeg`, and Remotion. It does **not** hold any platform secret — R2, Postiz, and Turso all live on the Worker, and the agent reaches them only through the authenticated admin API (it carries just its admin token). Given one track ID, it:
+After a successful add the Worker does **nothing else**: it sets `enrichment_status = pending` and returns. **There is no on-add push.** Every enrichment step is pulled asynchronously by an agent cron that drains the step's queue (see [The async pipeline](#the-async-pipeline--self-healing-queues-no-push) below). The agent has what the Worker can't — the admin Fluncle CLI, and (for the heavy steps) `ffmpeg` + Remotion — but holds **no platform secret**: R2, Postiz, ElevenLabs, Firecrawl, and Turso all live on the Worker, and the agent reaches them only through the authenticated admin API with just its admin token. The work a finding moves through:
 
 1. **Resolves + analyzes the preview audio** — BPM, musical **key** (+ confidence), and spectral features (brightness, sub-bass weight, mid-band flatness) via the DSP pipeline (`packages/video/src/pipeline/analyze-audio.ts`). The feature vector is kept as training data for the future vibe-placement model — see "Vibe placement" below.
-2. **Stores the exact analyzed preview** through `fluncle admin track preview-archive` at an operator-only archive path in R2. This is private analysis/model-training input, not public media, not a playback source, and never a full song.
-3. **Renders the video** (the `packages/video` kit) and uploads the bundle with `fluncle admin track video`. The CLI uploads each artifact **directly to R2** via short-lived presigned PUT URLs the Worker signs (`POST .../video/uploads` → PUT to R2 → `POST .../video/finalize`), so large cuts bypass Cloudflare's ~100MB edge body limit; the **Worker** signs the URLs and sets `video_url` to the review cut, and never hands R2 credentials to the agent. (A small bundle can still use the legacy single multipart `POST /api/admin/tracks/:id/video`.)
-4. **Writes the analysis back** through `fluncle admin track update <id>` — `bpm`, `key`, `features` — and flips `enrichment_status` to `done`.
+2. **Stores the exact analyzed preview** through `fluncle admin tracks preview` at an operator-only archive path in R2. This is private analysis/model-training input, not public media, not a playback source, and never a full song.
+3. **Renders the video** (the `packages/video` kit) and uploads the bundle with `fluncle admin tracks video`. The CLI uploads each artifact **directly to R2** via short-lived presigned PUT URLs the Worker signs (`POST .../video/uploads` → PUT to R2 → `POST .../video/finalize`), so large cuts bypass Cloudflare's ~100MB edge body limit; the **Worker** signs the URLs and sets `video_url` to the review cut, and never hands R2 credentials to the agent. (A small bundle can still use the legacy single multipart `POST /api/admin/tracks/:id/video`.)
+4. **Writes the analysis back** through `fluncle admin tracks update <id>` — `bpm`, `key`, `features` — and flips `enrichment_status` to `done`.
 
 > Two-master model: the bundle stores a clean square `footage.mp4` source + a portrait baked-text `footage.social.mp4`, deriving every other orientation/audio variant on the fly via Cloudflare Media Transformations rather than storing it. The full model, surface map, and one-time migration are specced in [video-variants.md](./video-variants.md). The transition is **per-finding and gradual**: a finding adopts the new layout only once its square ships and stamps `video_squared_at`; until then it serves the legacy single-file bundle. So the descriptions below hold for both — surfaces read the signal and fall back.
 
 This takes a while, and that's fine: the find was already live. When it finishes, the analysis fields and the video appear across the Galaxy.
 
-**Self-healing (the enrich-queue + sweep).** The trigger is fire-and-forget, so a run that dies — most often a box that rebooted mid-analysis, leaving the track stuck in `processing` — would otherwise sit forever. The **enrich-queue** is the recovery set: every finding needing (re-)enrichment = `pending` ∪ `failed` ∪ **stale `processing`** (a `processing` row whose `updated_at` is older than `ENRICH_STALE_PROCESSING_MS`, 30 min — comfortably longer than a healthy run — or has no `updated_at` at all). It's a `status: "queue"` filter on `listTracks`, surfaced by `fluncle admin enrich-queue` and re-fired by the **sweep**: `POST /api/admin/enrich-sweep` (CLI: `fluncle admin enrich-sweep`) queries the queue oldest-first and calls `triggerEnrichment` for each. Because every run is keyed `enrich:${logId}`, re-sweeping an in-flight track de-dupes on Spinup's side instead of spawning a duplicate, so an external cron can call the sweep on a fixed interval safely. (This is the **enrichment** queue — distinct from `fluncle admin queue`, the _video render_ backlog.)
+## The async pipeline — self-healing queues (no push)
 
-**Runtime split (Spinup).** The two halves have opposite resource profiles, so they can ship separately. Audio analysis is light — ffmpeg + JS DSP — and fits a microVM's current limits (it just needs `ffmpeg` pinned), so it goes first. Video rendering is heavier (headless Chromium + WebGL): Spinup has no GPU, but software rasterization (SwiftShader) is viable — a 20s clip benchmarks at ~45s software vs ~30s on Metal (~1.45×, single-threaded), so it needs a render-capable rootfs (Chromium + SwiftShader/Mesa + ffmpeg) and likely more than one vCPU, **not** a GPU. See ROADMAP.md for the build split.
+Phase 2 is not one monolithic run — it is a set of **independent steps**, each a self-healing queue an agent drains on a schedule. Every step has the same shape:
 
-This same worker feeds **Phase 3 — Publish** (below): once the video is in R2, the next step pushes a social draft. One async worker, many outputs.
+- **A "ready and not done" queue query** (on `list_tracks_admin` / `listTracks`). **Dependencies live in the query** — a step's prerequisites _are_ its query's conditions, so there is no orchestrator: each step pulls exactly the work that's ready for it. (Audio analysis: `enrichment_status ∈ {pending, failed, stale-processing}`. Observation: `context_note IS NOT NULL AND observation_audio_url IS NULL`. Video: `enrichment_status = done AND video_url IS NULL`.)
+- **An idempotent worker**, keyed per finding (`enrich:${logId}`, `observe:${logId}`, …), so re-pulling an in-flight item is a no-op and an external cron can fire on a fixed interval safely.
+- **A reliability marker** that separates _never-tried_ from _done_ from _tried-and-failed_ from _terminally-impossible_. A bare "value IS NULL" conflates the first two with the last, so a step with a genuine "no result possible" outcome carries a **status enum** (`enrichment_status`, `discogs_status`: `pending`/`done`/`failed`/`unmatched`); an always-retriable step uses a **success timestamp + null-retry** (`lastfm_loved_at`; observation and video read their own output URL). The query reads the marker to skip hopeless cases and not re-burn a rate-limited budget.
+
+A run that dies mid-step leaves the marker un-advanced, so the next tick re-attempts it — nothing blocks, nothing stays stuck. The same machinery serves new finds (picked up on the next tick) **and backfills**: a backfill is not a throwaway script, it is the step's normal cron finding a non-empty queue.
+
+The **enrichment** step is the worked example: its queue is every finding `pending` ∪ `failed` ∪ **stale `processing`** (a `processing` row whose `updated_at` is older than `ENRICH_STALE_PROCESSING_MS`, 30 min, or has none) — a `status: "queue"` filter on `listTracks`, surfaced by `fluncle admin tracks enrich-queue` and re-fired by the **sweep** (`fluncle admin tracks enrich --all` → `POST /api/admin/tracks/enrich`; the old `POST /api/admin/enrich-sweep` path stays a back-compat alias), keyed `enrich:${logId}` so a re-sweep of an in-flight track de-dupes instead of duplicating. (Distinct from the _video render_ backlog queue.)
+
+**The dependency DAG.** From `add`, four steps run independently, in parallel — **audio analysis**, **Discogs** resolve, **Last.fm** love, and the **context note** (Firecrawl facts). Two steps wait on a prerequisite, expressed in their query: **video** waits on audio analysis (`enrichment_status = done`), and the **observation** waits on the **context note** (which is now its own step, distinct from the observation that consumes it). Vibe placement (tag) and the editorial `note` stay operator-only (human judgment); Phase 3 publish stays operator-gated.
+
+**Who runs what — the agent runtime (Hermes).** The agent runtime is the self-hosted **Hermes agent**: the cloud orchestrator (running `claude-sonnet-4.6`), which drains every queue via the `fluncle` CLI and either calls a Worker endpoint that does the work server-side or runs the light compute itself. Hermes is home for **everything** — the deterministic vendor steps (Last.fm, Discogs, context-note Firecrawl, all Worker-side), **the spoken observation** (Sonnet authors the recovered-audio script from the context note; the Worker renders ElevenLabs), and the light **audio analysis** (`ffmpeg` + JS DSP, once `ffmpeg` is in its image). The **one exception is video render** (headless Chromium + WebGL): too heavy for the current box (2 vCPU / 4 GB), it runs as a Claude automation on the operator's Mac that pulls the render queue — a deliberate **compute escape hatch**, the only step not on Hermes, migrated there only if the box is upgraded (a last resort). Hermes holds no vendor key and no operator power (the agent ceiling: reversible / internal / no public footprint); publish-class stays operator-only. Each step writes back through the generic admin update path, then feeds whatever step's query it now satisfies. The Hermes orchestration plan (crons, role tiers, build order) lives in [hermes-automation-brief.md](./hermes-automation-brief.md).
 
 ## The update path
 
 Phase 2 needs to write back, and the operator needs to curate — so tracks are mutable after add, through one generic, admin-only command:
 
 ```
-fluncle admin track update <track_id> --bpm <n> --key "<k>" --features <json> --video-url <url> ...
+fluncle admin tracks update <track_id> --bpm <n> --key "<k>" --features <json> --video-url <url> ...
 ```
 
 Backed by `PATCH /api/admin/tracks/:id`. It writes an **allow-list of curation/enrichment fields only** — `bpm`, `key`, `features`, `video_url`, `enrichment_status`, `note`, and the vibe placement `vibe_x`/`vibe_y` (the tagging tool's write). Identity fields (title, artists, Spotify ids, Log ID) are **immutable once set** — they come from Spotify and never change. The one sanctioned exception is the straggler repair: `isrc` and `logId` accept a **one-time backfill into a null slot** (`logId: "auto"` derives the coordinate the add flow would have minted from the found date + identity); a write against an already-set value is rejected. Every public content update bumps `updated_at`; internal preview archive writes do not, because sitemap/log lastmod should reflect visible changes only.
@@ -79,9 +89,9 @@ The deciding question per platform is: **can the API carry the caption, the cove
 So TikTok keeps the `draft` step because the inbox is the only way a human can supply the caption, cover, and licensed sound; **YouTube posts directly and publicly** the moment the operator pushes (its API carries caption + cover + the video's own audio; Content ID may claim it — we accept that, the goal is reach not revenue). **Instagram is deliberately left out**: baking the master into a Reel gets muted/removed on our account type, and there's no API route to its licensed audio, so there's no clean automated path — Instagram is a manual in-app post (see the `fluncle-publish` skill).
 
 ```
-fluncle admin track draft  <track_id|log_id> --platform tiktok       # TikTok: inbox draft
-fluncle admin track draft  <track_id|log_id> --platform youtube      # YouTube: direct public Short
-fluncle admin track social <track_id|log_id> --platform tiktok --status published --url <url>
+fluncle admin tracks draft  <track_id|log_id> --platform tiktok       # TikTok: inbox draft
+fluncle admin tracks draft  <track_id|log_id> --platform youtube      # YouTube: direct public Short
+fluncle admin tracks social <track_id|log_id> --platform tiktok --status published --url <url>
 ```
 
 `POST /api/admin/tracks/:id/social/:platform/draft` is the single push endpoint, branching by platform (`tiktok`, `youtube`): both push the portrait baked-text social cut — under the two-master layout (`video_squared_at` set) that is `footage.social.mp4` (TikTok as an `audio=false` Media Transformation URL so the operator attaches the licensed sound in-app; YouTube as-is). A legacy finding (no signal yet) still pushes its `footage.mp4` (the old portrait+text cut) and `footage-silent.mp4`, so un-migrated tracks are unaffected. TikTok lands in the app inbox (status `draft`); YouTube uploads as a Short with the track title + `cover.jpg` thumbnail, directly and publicly (status `published`). (The `draft` verb in the path is TikTok-shaped; for YouTube the same call publishes.) Postiz doesn't return the public post URL on create, so the operator fills it (or marks `failed`) afterward via `PATCH …/social/:platform`, or from the `/admin` board. This is **not** part of the enrichment workflow — it's a separate capability (the `fluncle-publish` skill); a future single Spinup agent will chain enrich → video → publish, but they're distinct steps.

@@ -32,20 +32,20 @@ The takeaway: **draft is the TikTok exception; YouTube posts directly; Instagram
 1. **Push the draft.**
 
    ```
-   fluncle admin track draft <track_id|log_id> --platform tiktok
+   fluncle admin tracks draft <track_id|log_id> --platform tiktok
    ```
 
    This sends the track's **audio-less cut** to the platform as a private draft via Postiz. For TikTok it lands in the @fluncle app **inbox** as `SELF_ONLY`. Records `social_posts(platform, draft)`. Note: TikTok's inbox/upload flow accepts the **video file only** — the caption does _not_ transfer (the app shows a "#Postiz" placeholder). The caption is carried in the bundle's `note.txt` for the operator to paste in-app; this is inherent to the inbox flow, not a failure. (Only `DIRECT_POST` carries a caption, and it would skip the manual official-sound step — so we keep inbox.)
 
-   **Rate limit — max 5 inbox drafts per 24 hours (TikTok-side).** TikTok caps pending (unpublished inbox / `SELF_ONLY`) posts at **5 within any rolling 24-hour period**; the 6th is rejected ("TikTok limits pending posts to 5 within any 24-hour period"). The failure is **asynchronous**: `fluncle admin track draft` and Postiz both report success (Postiz mints a post id), but TikTok bounces the over-limit ones downstream — surfaced only as a Postiz error notification, never in the CLI output. So a batch of more than 5 cannot all be drafted the same day: push **≤ 5 per 24h**, space the rest across days, and re-push any that bounced after 24 hours. The count includes drafts still sitting unpublished in the inbox — the operator clearing the inbox (publishing/deleting) frees the budget.
+   **Rate limit — max 5 inbox drafts per 24 hours (TikTok-side).** TikTok caps pending (unpublished inbox / `SELF_ONLY`) posts at **5 within any rolling 24-hour period**; the 6th is rejected ("TikTok limits pending posts to 5 within any 24-hour period"). The failure is **asynchronous**: `fluncle admin tracks draft` and Postiz both report success (Postiz mints a post id), but TikTok bounces the over-limit ones downstream — surfaced only as a Postiz error notification, never in the CLI output. So a batch of more than 5 cannot all be drafted the same day: push **≤ 5 per 24h**, space the rest across days, and re-push any that bounced after 24 hours. The count includes drafts still sitting unpublished in the inbox — the operator clearing the inbox (publishing/deleting) frees the budget.
 
 2. **Hand off to the operator (manual, human-only).** The operator opens the draft in the platform app, **pastes the caption** (from `note.txt`), **adds the official sound**, and publishes or schedules it. The agent does not and cannot do this step — it's where licensing + native posting happen. Stop here and report that the draft is waiting.
 
 3. **Record the outcome** once the operator has acted:
 
    ```
-   fluncle admin track social <track_id|log_id> --platform tiktok --status scheduled
-   fluncle admin track social <track_id|log_id> --platform tiktok --status published --url <post-url>
+   fluncle admin tracks social <track_id|log_id> --platform tiktok --status scheduled
+   fluncle admin tracks social <track_id|log_id> --platform tiktok --status published --url <post-url>
    ```
 
    `published` requires the real `--url` (the inbox/draft API doesn't return the final post URL — the operator supplies it). `scheduled` can carry `--scheduled-for <iso>`.
@@ -53,7 +53,7 @@ The takeaway: **draft is the TikTok exception; YouTube posts directly; Instagram
 4. **Inspect status** anytime:
 
    ```
-   fluncle admin track social <track_id|log_id>
+   fluncle admin tracks social <track_id|log_id>
    ```
 
 ## Workflow — YouTube (direct, live)
@@ -61,7 +61,7 @@ The takeaway: **draft is the TikTok exception; YouTube posts directly; Instagram
 No inbox, no manual finish: the push **posts a public Short directly**. The endpoint sends the **with-audio cut** (`footage.mp4`) with the track title, the caption (`note.txt`) as the description, and the cover (`cover.jpg`) as the thumbnail, and records `social_posts(youtube, published)`.
 
 ```
-fluncle admin track draft <track_id|log_id> --platform youtube     # uploads a public Short now
+fluncle admin tracks draft <track_id|log_id> --platform youtube     # uploads a public Short now
 ```
 
 - **The push is the publish.** The operator's run/click is the only gate — there's no review stage, so push only when the video is final. Postiz doesn't return the public URL on create, so the row lands at `published` with no `url`; record the real link later with `… social … --platform youtube --url <url>`.

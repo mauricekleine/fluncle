@@ -27,7 +27,7 @@ The dividing line: _could a stranger see the result, or could it not be taken ba
 | Surface                                                                                                                         | Role     | Why                                                  |
 | ------------------------------------------------------------------------------------------------------------------------------- | -------- | ---------------------------------------------------- |
 | All public reads + admin reads (`queue`, `enrich-queue`, `vehicles`, `mixtapes list/get`, `submissions review`, `track social`) | agent    | No effect                                            |
-| `enrich-sweep`                                                                                                                  | agent    | Idempotent self-heal; no public footprint            |
+| `tracks enrich --all`                                                                                                           | agent    | Idempotent self-heal; no public footprint            |
 | `track update` — analysis only (`--status/--bpm/--key/--features`)                                                              | agent    | Machine-measured, internal, overwritable             |
 | `track draft` — TikTok/default                                                                                                  | agent    | `SELF_ONLY` inbox draft; a human still posts it      |
 | `add` (Spotify playlist + Telegram)                                                                                             | operator | Public, irreversible                                 |
@@ -111,7 +111,7 @@ docker run --rm --env-file /etc/hermes.env --entrypoint fluncle \
   fluncle-hermes:v2026.6.19 admin add <url>
 ```
 
-When the gateway is live, repeat the boundary check **through the agent** ("run `fluncle admin add …`" must come back as an in-voice refusal off the server 403, not an execution).
+When the gateway is live, repeat the boundary check **through the agent** ("run `fluncle admin tracks publish …`" must come back as an in-voice refusal off the server 403, not an execution).
 
 ### Voice gate (hard requirement before the bot goes public)
 
@@ -120,11 +120,11 @@ A chat reply is a live Fluncle surface. Before public exposure, the pinned model
 ## Security posture & limits
 
 - The boundary is the **server-side role**: the box holds only the `agent`-scoped token, and publish-/irreversible-class actions are refused at the Worker for that role. The private no-public-TCP box shrinks the network surface.
-- Indirect prompt injection needs no compromised account (the agent browses untrusted web content) — but an injected `fluncle admin add …` is refused by the Worker no matter how it is dispatched (the CLI, raw `curl` with the printenv'd token), because the token is `agent`-scoped. There is no local wrapper to bypass; there is nothing the token can do that the server allows.
-- **Residual surface:** a fully-compromised root agent is bounded to the agent role — reads, `enrich-sweep`, analysis write-back, a TikTok inbox draft. All reversible/internal, none public without the operator. Anyone on the Discord allow-list can trigger those same agent-allowed writes (not just reads); all publish-class is blocked for everyone but the operator.
+- Indirect prompt injection needs no compromised account (the agent browses untrusted web content) — but an injected `fluncle admin tracks publish …` is refused by the Worker no matter how it is dispatched (the CLI, raw `curl` with the printenv'd token), because the token is `agent`-scoped. There is no local wrapper to bypass; there is nothing the token can do that the server allows.
+- **Residual surface:** a fully-compromised root agent is bounded to the agent role — reads, the enrich sweep (`tracks enrich --all`), analysis write-back, a TikTok inbox draft. All reversible/internal, none public without the operator. Anyone on the Discord allow-list can trigger those same agent-allowed writes (not just reads); all publish-class is blocked for everyone but the operator.
 - The agent still runs as root _inside the container_, but that no longer grants publish authority (the credential lacks it). Running the agent non-root with the token out of its readable env is now **defense-in-depth** — it protects the agent surface + the token itself — not the publish boundary. Tracked as optional, in [ROADMAP.md](../ROADMAP.md).
 - Back up `~/.hermes` as an encrypted/snapshot copy only (it holds `.env` + memory) — never a plaintext off-box tarball.
 
 ## Status
 
-Live for the internal crew: pinned image with the `fluncle` CLI (ungated; the Worker is the boundary); secrets via `op` → `/etc/hermes.env`; Discord app online (both privileged intents, a tight allow-list); model pinned (`anthropic/claude-sonnet-4.6`); Fluncle voice via `SOUL.md` + the `copywriting-fluncle` skill, voice-gated. The publish boundary is **server-side**: the box holds an `agent`-scoped token and the Worker refuses publish-/irreversible-class actions for that role ([Roles](#roles-operator-vs-agent)) — this supersedes the earlier local-command-gate design and the need for a separate publish-confirm flow. Open (tracked in [ROADMAP.md](../ROADMAP.md), now optional defense-in-depth rather than a public-readiness blocker): non-root-in-container hardening, and scheduling the enrich-sweep.
+Live for the internal crew: pinned image with the `fluncle` CLI (ungated; the Worker is the boundary); secrets via `op` → `/etc/hermes.env`; Discord app online (both privileged intents, a tight allow-list); model pinned (`anthropic/claude-sonnet-4.6`); Fluncle voice via `SOUL.md` + the `copywriting-fluncle` skill, voice-gated. The publish boundary is **server-side**: the box holds an `agent`-scoped token and the Worker refuses publish-/irreversible-class actions for that role ([Roles](#roles-operator-vs-agent)) — this supersedes the earlier local-command-gate design and the need for a separate publish-confirm flow. Open (tracked in [ROADMAP.md](../ROADMAP.md), now optional defense-in-depth rather than a public-readiness blocker): non-root-in-container hardening, and scheduling the enrich sweep (`tracks enrich --all`).

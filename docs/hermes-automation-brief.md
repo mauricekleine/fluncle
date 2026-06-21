@@ -9,14 +9,14 @@ Related: the live agent's architecture + security model is [docs/agents/hermes-a
 - **The operator/agent auth spine** — `apps/web/src/lib/server/orpc-auth.ts`: `adminAuth` middleware injects a typed `context.role`; `adminProcedure` is the agent-allowed tier; `operatorProcedure` / `operatorGuard` is operator-only (403s the agent); field-level checks read `context.role` in-handler. A verbatim port of the live `env.ts` role model. **This is the foundation every role-flip below now rides** — flips are a procedure-tier change, not a guard swap.
 - **The admin oRPC migration** — the #75 pilot + the #77 fan-out drain the admin coverage net's PENDING list to carve-outs only. The Hermes-relevant ops land on the exact tiers we designed (real contract names in the table below).
 - **Convention B ratified** (`docs/naming-conventions.md`, 2026-06-21). The contract registry (`packages/contracts/src/orpc/`) is the enforced source of truth — a route without a contract is a build failure.
-- **Fluncle's real voice locked** (#73/#74) — bespoke ElevenLabs voice, tuned settings, recovered-audio delivery guide finalized. The observation-automation voice gate is **resolved**.
+- **Fluncle's real voice locked** (#73/#74) — bespoke ElevenLabs voice, tuned settings, recovered-audio delivery guide finalized. And the agent now runs **`claude-sonnet-4.6`** (verified on-brand on its Discord newsletter post), so the observation **script-authoring** runs on Hermes too — not just the voice gate but the creative authoring is resolved. No Opus / laptop escape is needed for it; the only compute that still escapes to the Mac is video render (below).
 
 ## The one principle everything hangs on
 
 The Hermes agent wears two hats — **chat** (reads untrusted Discord messages and browses untrusted web) and **cron** (trusted, scheduled, no untrusted input per run). They share one process and one `agent`-scoped token, so **whatever the agent _can_ do is what a prompt-injection can do.** Therefore:
 
 - Hand off a task to the agent **only if it fits under the agent-safe ceiling** (reversible / internal / no public footprint). Never raise the ceiling to operator-level just to make a cron run — an injection would inherit it.
-- **Hermes orchestrates; it does not compute.** It schedules, reads a queue via the `fluncle` CLI, and either calls a Worker endpoint that does the work server-side or triggers heavy compute elsewhere (Spinup enrichment, the laptop render routine). Hermes never needs ffmpeg, a vendor key, or operator power.
+- **Hermes is the cloud home for the agent brain; only heavy render escapes it.** Running `claude-sonnet-4.6`, it drains queues via the `fluncle` CLI and does the work itself wherever the compute is light or server-side: the deterministic vendor steps (Last.fm, Discogs, context-note Firecrawl — Worker-side), the **observation** (Sonnet authors the recovered-audio script, the Worker renders ElevenLabs), and **audio analysis** (`ffmpeg` + JS DSP, once `ffmpeg` is in its image — replacing Spinup). The single exception is **video render** (headless Chromium + WebGL): too heavy for the current 2-vCPU / 4-GB box, so it stays a Claude automation on the operator's Mac that pulls the render queue — a deliberate compute escape hatch, moved to Hermes only on a box upgrade (a last resort). Hermes still holds no vendor key and no operator power.
 - **Publish-class stays operator** (Maurice) and is not handoffable regardless.
 
 This works because **every task worth automating already fits (or fits with guards) under the agent ceiling** — none need operator power. The upgrade path, if the bot ever broadens toward public: split a second, no-untrusted-input automation principal holding a broader token, so cron authority is never injection-reachable. Not needed for the current private/trusted allow-list.
@@ -27,7 +27,7 @@ Tiers and op names are the **landed oRPC contracts** (#75 / #77). "Flip" = move 
 
 | Task (oRPC op)                                 | Queue ready?                          | oRPC tier today                       | Work to enable                                                                                                                                                                                                                                         |
 | ---------------------------------------------- | ------------------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Enrichment self-heal** (`sweep_enrichment`)  | ✅ enrich-queue (`status=queue`)      | ✅ **admin** (agent-allowed)          | wire the Hermes cron — the endpoint is already on the agent tier. Only gate: the CLI command name (rename step).                                                                                                                                       |
+| **Enrichment self-heal** (`enrich_track`)      | ✅ enrich-queue (`status=queue`)      | ✅ **admin** (agent-allowed)          | wire the Hermes cron — the endpoint is already on the agent tier. The CLI name has settled: `fluncle admin tracks enrich --all`.                                                                                                                       |
 | **Audio observations** (`observe_track`)       | ❌ needs a `hasObservation` filter    | operator (#75) → **flip**             | flip to `adminProcedure` + `observe:${logId}` idempotency key + Firecrawl untrusted-input boundary; add `hasObservation` on `list_tracks_admin`; add an `observe-context` contract (script _from_ facts without holding Firecrawl). Voice ✅ resolved. |
 | **Discogs ID backfill** (`backfill_discogs`)   | ✅ targeted (`in_release_id IS NULL`) | operator (#77) → **flip**             | the `discogsStatus` reliability column (below) + resolver refactor + tier flip.                                                                                                                                                                        |
 | **Last.fm loves backfill** (`backfill_lastfm`) | ⚠️ re-loves all (no unloved filter)   | operator (#77) → **flip**             | the `lastfmLovedAt` reliability column (below) + tier flip.                                                                                                                                                                                            |
@@ -57,9 +57,9 @@ A cron agent needs a "give me the next batch needing X" query per step, off the 
 
 ## Two reliability columns (the self-heal made precise)
 
-Both love-on-add and discogs-resolve-on-add are **best-effort** (verified: each swallows its own errors and never blocks or fails an `add`). That is correct — but it means a transient failure is silent and permanent unless something re-attempts it. The backfill commands _are_ that re-attempt (the same role `sweep_enrichment` plays for enrichment), so they are infrastructure, not throwaway scripts. Two columns make them targeted instead of brute-force.
+Both love-on-add and discogs-resolve-on-add are **best-effort** (verified: each swallows its own errors and never blocks or fails an `add`). That is correct — but it means a transient failure is silent and permanent unless something re-attempts it. The backfill commands _are_ that re-attempt (the same role `enrich_track` plays for enrichment), so they are infrastructure, not throwaway scripts. Two columns make them targeted instead of brute-force.
 
-Conventions that make this clean (from the schema + DTO): the public DTO is an explicit SQL whitelist (`TRACK_SELECT` + a row-mapper), so a column that isn't added there **never surfaces** — "internal only" is free. Listing orders by `added_at`, not `updated_at`, so these writes won't reshuffle the feed; but `updatedAt` _is_ surfaced (freshness / lastmod) and the enrich-sweep stale clock reads it, so both new columns must be written **quietly** (touch only their own column, don't bump `updated_at`).
+Conventions that make this clean (from the schema + DTO): the public DTO is an explicit SQL whitelist (`TRACK_SELECT` + a row-mapper), so a column that isn't added there **never surfaces** — "internal only" is free. Listing orders by `added_at`, not `updated_at`, so these writes won't reshuffle the feed; but `updatedAt` _is_ surfaced (freshness / lastmod) and the enrich sweep's stale clock reads it, so both new columns must be written **quietly** (touch only their own column, don't bump `updated_at`).
 
 ### `lastfmLovedAt` (`lastfm_loved_at`, `text` ISO, nullable)
 
@@ -103,21 +103,22 @@ Move the contract from the operator tier to the admin tier (agent-allowed) — `
 - `backfill_discogs` (operator → admin)
 - `observe_track` (operator → admin) — **plus** the `observe:${logId}` idempotency key + the Firecrawl untrusted-input boundary
 
-`sweep_enrichment` is **already on the admin tier** (#77 set it there deliberately as the external-cron tier) — no flip needed, it's cron-ready. Newsletter `draft` is agent-allowed and `send` stays operator (per the RFC + the Discord-nudge gate).
+`enrich_track` is **already on the admin tier** (#77 set it there deliberately as the external-cron tier) — no flip needed, it's cron-ready. Newsletter `draft` is agent-allowed and `send` stays operator (per the RFC + the Discord-nudge gate).
 
 ## Setup / mechanism
 
-Hermes [cron jobs](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron), each a small "read a queue → act per item, idempotently" loop over the `fluncle` CLI:
+**No on-add push — everything is a cron.** The Worker's on-add work ends at `enrichment_status = pending`; there is no fire-and-forget trigger to Spinup or Hermes. Every step below is a Hermes [cron job](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron) — a small "read a queue → act per item, idempotently" loop over the `fluncle` CLI. A new find is caught on the next tick; the same loop drains backfills. (Hermes also exposes an [API server](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server) for an on-demand trigger, but the cron is the durable backbone and the default.)
 
 - **Hourly:** the enrichment self-heal (the on-add trigger already fires enrichment; this is the backstop for the ones that slipped).
-- **Hourly, queue-gated:** read the observation queue (`hasObservation=false`), render the next finding's observation (idempotent per Log ID; no-op when empty).
+- **Hourly, queue-gated — context note:** read the `hasContext=false` queue and fetch the Firecrawl facts for the next finding (Worker-side). This is now its **own step**, distinct from the observation that consumes it — so context can fill in parallel and the observation never holds Firecrawl. Idempotent per Log ID.
+- **Hourly, queue-gated — observation:** read the `context present AND hasObservation=false` queue, author the recovered-audio script (Sonnet + the `copywriting-fluncle` skill) from the context note, and render it via the Worker. Idempotent per Log ID; no-op when empty.
 - **Daily:** the Last.fm love backfill (free, idempotent, now targeted).
 - **Weekly / on-demand:** the Discogs backfill (rate-limited; `--retry-unmatched` rarer still).
 - **Friday:** draft the newsletter edition (per the RFC) → **post a Discord reminder** to the operator → operator reviews and sends. The agent drafts and nudges; it never sends (publish-class).
 
 ## Build order
 
-1. **Enrichment self-heal cron** — the cheapest win; `sweep_enrichment` is already on the agent tier, so this is just the cron once CLI names settle. Proves the cron pattern.
+1. **Enrichment self-heal cron** — the cheapest win; `enrich_track` is already on the agent tier and the CLI name has settled (`fluncle admin tracks enrich --all`), so this is just the cron. Proves the cron pattern.
 2. **Reliability columns + backfill tier flips** — `lastfmLovedAt`, `discogsStatus` + the resolver refactor; flip `backfill_lastfm` / `backfill_discogs` to the admin tier; then the daily / weekly crons.
 3. **Observation automation** — voice ✅; flip `observe_track` to the admin tier + idempotency, add the `hasObservation` filter on `list_tracks_admin`, add the `observe-context` contract; then the queue-gated cron.
 4. **Newsletter** — rides [newsletter-own-the-stack.md](./rfcs/newsletter-own-the-stack.md); once its send lands, add the draft-then-Discord-nudge tiering. (That RFC moves on its own timeline; this is the Hermes hook on top.)
@@ -132,3 +133,5 @@ A clean build start needs both unchecked boxes ticked:
 - ☑ **The auth spine** — `orpc-auth.ts` (`adminProcedure` / `operatorProcedure`); role flips are tier changes.
 
 The reliability columns + resolver refactor are oRPC-independent and could start earliest, but they touch `tracks.ts` / `schema.ts`, so hold them until the oRPC slice's sole-active-slice window has fully cleared. Once the two boxes tick, the endpoints get built as oRPC contracts on the existing tiers and the crons wire up in the order above.
+
+**Update the operator skill when this lands.** The `fluncle-hermes-operator` skill (`packages/skills/fluncle-hermes-operator`) is the operator runbook for changing the Hermes agent, grounded in what's live _today_. When this brief's work ships — the scheduled crons, the `backfill_*` / `observe_track` role flips, and the newsletter `draft` / `send` commands — add those levers to the skill so it stays in step with the agent's real capabilities (it carries the same reminder in its own footer).

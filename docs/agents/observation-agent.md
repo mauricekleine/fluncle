@@ -20,7 +20,7 @@ It is one more step the enrich agent runs, after video — not a new runtime. Th
 The agent authors + voice-gates the script, then runs one CLI command. The Worker fetches the factual context, re-scans the script, renders it (ElevenLabs), uploads `observation.{mp3,txt,json}` to `<log-id>/<name>` on R2, and writes `context_note` + `observation_*` back.
 
 ```
-fluncle admin track observe <track_id|log_id> --script-file observation.txt [--duration-ms <probed>] [--voice-id <id>] [--model <model>]
+fluncle admin tracks observe <track_id|log_id> --script-file observation.txt [--duration-ms <probed>] [--voice-id <id>] [--model <model>]
 ```
 
 - `--script` / `--script-file`: the voice-gated spoken text (with occasional `<break time="0.8s"/>` for v2 pauses). **Required.**

@@ -4,7 +4,7 @@ An hourly Superset automation that films the Fluncle render queue, one finding p
 
 ## What it does
 
-Each hour, a Superset agent runs the prompt: it reads `fluncle admin queue --limit 1 --json`, and if a finding is waiting (no video yet) it renders and ships **exactly one** video for it via the `@fluncle-video` skill, then stops. An empty queue is a silent no-op. Because the ship step sets the finding's `video_url`, the filmed finding leaves the queue — so Superset's at-least-once delivery is safe: a re-run sees an empty (or advanced) queue and won't re-render the same finding.
+Each hour, a Superset agent runs the prompt: it reads `fluncle admin tracks queue --limit 1 --json`, and if a finding is waiting (no video yet) it renders and ships **exactly one** video for it via the `@fluncle-video` skill, then stops. An empty queue is a silent no-op. Because the ship step sets the finding's `video_url`, the filmed finding leaves the queue — so Superset's at-least-once delivery is safe: a re-run sees an empty (or advanced) queue and won't re-render the same finding.
 
 ## Prerequisites on the designated device
 
@@ -19,7 +19,7 @@ Superset runs the agent on a device you designate. That device MUST have, on `PA
 Confirm the toolchain before scheduling:
 
 ```
-fluncle admin queue --limit 1 --json
+fluncle admin tracks queue --limit 1 --json
 bun --version
 ffmpeg -version
 ```
@@ -41,7 +41,7 @@ Then, in **Superset Settings → Agents**, set the model for this agent to **opu
 
 Do not trust the schedule until you've watched it behave by hand. Run the prompt once manually (paste it into an interactive Superset agent run, or run the agent against the prompt file on the designated device) and confirm all three behaviors:
 
-1. **Films the queue head.** With at least one finding waiting, confirm the run picks `tracks[0]` from `fluncle admin queue --limit 1 --json` (the oldest finding with no video), does the diversity check, renders via `@fluncle-video`, ships it, and that `fluncle admin track video` set the finding's `video_url`. Re-run `fluncle admin queue --limit 1 --json` afterward — that finding should be gone from the queue.
+1. **Films the queue head.** With at least one finding waiting, confirm the run picks `tracks[0]` from `fluncle admin tracks queue --limit 1 --json` (the oldest finding with no video), does the diversity check, renders via `@fluncle-video`, ships it, and that `fluncle admin tracks video` set the finding's `video_url`. Re-run `fluncle admin tracks queue --limit 1 --json` afterward — that finding should be gone from the queue.
 2. **Empty-queue no-op.** With every finding already filmed (queue returns `tracks: []`), confirm the run stops immediately: no render, no upload, no output beyond a one-line "queue empty". This is the common steady-state tick.
 3. **Double-run doesn't double-render.** Trigger the prompt twice back-to-back (simulating at-least-once delivery). Confirm the second run does NOT re-render the finding the first run just shipped — once `video_url` is set, that finding has left the queue, so the second run either picks the next finding or no-ops on an empty queue. The worst acceptable case is one wasted render on a tight race, never two published videos for one finding.
 
@@ -50,5 +50,5 @@ Only after all three pass should you leave the hourly schedule running.
 ## Operating notes
 
 - **One finding per hour by design.** The hourly tick is the throttle; the prompt never films more than one finding per run. Backlogs drain one-per-hour. Raise the `--rrule` frequency only if the queue grows faster than it drains.
-- **Posting stays manual.** This automation ships to R2 and sets `video_url`; it never posts to TikTok or any social platform. Publishing is a separate, approval-gated step (`fluncle admin track draft` / the publish skill).
+- **Posting stays manual.** This automation ships to R2 and sets `video_url`; it never posts to TikTok or any social platform. Publishing is a separate, approval-gated step (`fluncle admin tracks draft` / the publish skill).
 - **Pause it** by disabling the automation in Superset (or `superset automations` management commands) — there is no in-repo state to clean up, since the composition lives in the gitignored `workbench/` and nothing is committed.
