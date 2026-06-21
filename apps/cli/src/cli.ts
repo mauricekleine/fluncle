@@ -342,8 +342,23 @@ function addAdminCommands(program: Command): void {
       admin.outputHelp();
     });
 
-  admin
-    .command("add")
+  // Convention B (docs/naming-conventions.md §4): the admin CLI is `group
+  // noun-verb` with PLURAL groups. The canonical track group is `tracks`; the old
+  // singular `track` group is kept as a hidden alias so `admin track <cmd>` still
+  // resolves. The formerly-flat `admin add|queue|enrich-queue|enrich-sweep|
+  // vehicles` commands move under `tracks` (canonical) and stay registered as
+  // hidden flat commands (back-compat for crons + muscle memory).
+  const adminTracks = configureCommand(
+    admin.command("tracks").alias("track").description("Track admin commands"),
+  );
+
+  adminTracks.action(() => {
+    adminTracks.outputHelp();
+  });
+
+  // `add_track` → `admin tracks publish` (canonical). Hidden flat `admin add` alias.
+  adminTracks
+    .command("publish")
     .description("Publish a Spotify track")
     .argument("[spotifyUrl]")
     .option("--note <text>", "Operator note")
@@ -356,6 +371,20 @@ function addAdminCommands(program: Command): void {
     });
 
   admin
+    .command("add", { hidden: true })
+    .description("Publish a Spotify track (alias of `admin tracks publish`)")
+    .argument("[spotifyUrl]")
+    .option("--note <text>", "Operator note")
+    .option("--dry-run", "Preview without publishing", false)
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (spotifyUrl: string | undefined, options: AddOptions) => {
+      const { addCommand } = await import("./commands/add");
+      await runAdd(spotifyUrl, options, addCommand);
+    });
+
+  // The video render queue.
+  adminTracks
     .command("queue")
     .description("Findings awaiting a video, oldest first (the next to film is first)")
     .option("--limit <limit>", "Number of findings to show", "10")
@@ -366,6 +395,16 @@ function addAdminCommands(program: Command): void {
     });
 
   admin
+    .command("queue", { hidden: true })
+    .description("Render queue (alias of `admin tracks queue`)")
+    .option("--limit <limit>", "Number of findings to show", "10")
+    .option("--json", "Print JSON", false)
+    .action(async (options: AdminListOptions) => {
+      const { queueCommand } = await import("./commands/admin-tracks");
+      await runAdminQueue(options, queueCommand);
+    });
+
+  adminTracks
     .command("enrich-queue")
     .description("Findings needing (re-)enrichment: pending, failed, or stuck processing")
     .option("--limit <limit>", "Number of findings to show", "10")
@@ -376,6 +415,17 @@ function addAdminCommands(program: Command): void {
     });
 
   admin
+    .command("enrich-queue", { hidden: true })
+    .description("Enrich queue (alias of `admin tracks enrich-queue`)")
+    .option("--limit <limit>", "Number of findings to show", "10")
+    .option("--json", "Print JSON", false)
+    .action(async (options: AdminListOptions) => {
+      const { enrichQueueCommand } = await import("./commands/admin-tracks");
+      await runAdminEnrichQueue(options, enrichQueueCommand);
+    });
+
+  // `sweep_enrichment` → `admin tracks enrich-sweep` (canonical). Hidden flat alias.
+  adminTracks
     .command("enrich-sweep")
     .description("Re-fire enrichment for everything in the enrich-queue (idempotent self-heal)")
     .option("--limit <limit>", "Max findings to re-trigger", "25")
@@ -386,6 +436,16 @@ function addAdminCommands(program: Command): void {
     });
 
   admin
+    .command("enrich-sweep", { hidden: true })
+    .description("Enrich sweep (alias of `admin tracks enrich-sweep`)")
+    .option("--limit <limit>", "Max findings to re-trigger", "25")
+    .option("--json", "Print JSON", false)
+    .action(async (options: AdminListOptions) => {
+      const { enrichSweepCommand } = await import("./commands/admin-tracks");
+      await runAdminEnrichSweep(options, enrichSweepCommand);
+    });
+
+  adminTracks
     .command("vehicles")
     .description("Recent video vehicles, newest first (the style ledger for diversity)")
     .option("--limit <limit>", "Number of vehicles to show", "10")
@@ -395,11 +455,17 @@ function addAdminCommands(program: Command): void {
       await runAdminVehicles(options, vehiclesCommand);
     });
 
-  const adminTrack = configureCommand(admin.command("track").description("Track admin commands"));
+  admin
+    .command("vehicles", { hidden: true })
+    .description("Video vehicles (alias of `admin tracks vehicles`)")
+    .option("--limit <limit>", "Number of vehicles to show", "10")
+    .option("--json", "Print JSON", false)
+    .action(async (options: AdminListOptions) => {
+      const { vehiclesCommand } = await import("./commands/admin-tracks");
+      await runAdminVehicles(options, vehiclesCommand);
+    });
 
-  adminTrack.action(() => {
-    adminTrack.outputHelp();
-  });
+  const adminTrack = adminTracks;
 
   adminTrack
     .command("update")
@@ -469,7 +535,8 @@ function addAdminCommands(program: Command): void {
     });
 
   adminTrack
-    .command("preview-archive")
+    .command("preview")
+    .alias("preview-archive")
     .description("Store one official preview at the operator-only archive path for analysis")
     .argument("[idOrLogId]")
     .option("--file <file>", "Preview audio file to archive")
@@ -718,8 +785,10 @@ function addAdminCommands(program: Command): void {
       await authLastfmCommand(options);
     });
 
+  // `backfill_*` ops → plural `backfills` group (Convention B). `backfill` kept as
+  // a hidden alias so `admin backfill <provider>` still resolves.
   const backfill = configureCommand(
-    admin.command("backfill").description("Backfill operator-only archives"),
+    admin.command("backfills").alias("backfill").description("Backfill operator-only archives"),
   );
 
   backfill.action(() => {
@@ -775,7 +844,7 @@ async function runTrackPreviewArchive(
 ): Promise<void> {
   if (!idOrLogId || !options.file || !options.source || !options.mime) {
     throw new Error(
-      "Usage: fluncle admin track preview-archive <track_id|log_id> --file <file> --source <source> --mime <mime> [--json]",
+      "Usage: fluncle admin tracks preview <track_id|log_id> --file <file> --source <source> --mime <mime> [--json]",
     );
   }
 
@@ -805,7 +874,7 @@ async function runTrackObserve(
 
   if (!idOrLogId || !script || !script.trim()) {
     throw new Error(
-      "Usage: fluncle admin track observe <track_id|log_id> (--script <text> | --script-file <file>) [--voice-id <id>] [--model <model>] [--duration-ms <ms>] [--context-note <text>] [--json]",
+      "Usage: fluncle admin tracks observe <track_id|log_id> (--script <text> | --script-file <file>) [--voice-id <id>] [--model <model>] [--duration-ms <ms>] [--context-note <text>] [--json]",
     );
   }
 
@@ -993,7 +1062,7 @@ async function runTrackVideo(
 ): Promise<void> {
   if (!idOrLogId) {
     throw new Error(
-      "Missing id. Usage: fluncle admin track video <track_id|log_id> (--dir <dir> | --footage <file> [--footage-social <file>] [--footage-silent <file>] [--poster <file>] [--cover <file>] [--note <file>] [--composition <file>] [--props <file>] [--render <file>])",
+      "Missing id. Usage: fluncle admin tracks video <track_id|log_id> (--dir <dir> | --footage <file> [--footage-social <file>] [--footage-silent <file>] [--poster <file>] [--cover <file>] [--note <file>] [--composition <file>] [--props <file>] [--render <file>])",
     );
   }
 
@@ -1063,7 +1132,7 @@ async function runTrackDraft(
 ): Promise<void> {
   if (!idOrLogId) {
     throw new Error(
-      "Missing id. Usage: fluncle admin track draft <track_id|log_id> [--platform tiktok]",
+      "Missing id. Usage: fluncle admin tracks draft <track_id|log_id> [--platform tiktok]",
     );
   }
 
@@ -1086,7 +1155,7 @@ async function runTrackSocial(
 ): Promise<void> {
   if (!idOrLogId) {
     throw new Error(
-      "Missing id. Usage: fluncle admin track social <track_id|log_id> [--platform tiktok] [--status scheduled|published [--url <url>]]",
+      "Missing id. Usage: fluncle admin tracks social <track_id|log_id> [--platform tiktok] [--status scheduled|published [--url <url>]]",
     );
   }
 
@@ -1193,7 +1262,7 @@ async function runTrackUpdate(
   trackUpdateCommand: typeof import("./commands/track").trackUpdateCommand,
 ): Promise<void> {
   if (!trackId) {
-    throw new Error("Missing track id. Usage: fluncle admin track update <track_id>");
+    throw new Error("Missing track id. Usage: fluncle admin tracks update <track_id>");
   }
 
   const bpm = options.bpm === undefined ? undefined : Number(options.bpm);

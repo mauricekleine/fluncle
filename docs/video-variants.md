@@ -88,7 +88,7 @@ The ordered rollout (run, don't merge-and-pray):
 
 1. **Throwaway script** (`apps/web/scripts/migrate-footage-social.ts`, `--dry-run` first): for every finding with a video, server-side R2-copy `footage.mp4` → `footage.social.mp4` (no re-render — today's `footage.mp4` is already the social cut's spec). Idempotent; does NOT set `video_squared_at`.
 2. **Deploy the consumer code** (this slice): the signal-gated `media.ts` + players + publish push + the `footage.social` presign allow-list entry. With every finding now carrying a `footage.social.mp4` but no `video_squared_at`, every consumer still serves the legacy path — a no-op deploy by design.
-3. **Backfill the squares**, per-track over time: re-render each finding's square (`aspect=square`, clean) and `fluncle admin track video` it alongside the portrait social cut, which stamps `video_squared_at`. Each finding lights up the new layout the moment its square lands; the catalogue converts gradually with zero broken intermediate states.
+3. **Backfill the squares**, per-track over time: re-render each finding's square (`aspect=square`, clean) and `fluncle admin tracks video` it alongside the portrait social cut, which stamps `video_squared_at`. Each finding lights up the new layout the moment its square lands; the catalogue converts gradually with zero broken intermediate states.
 4. **Cutover cleanup** (after the catalogue is fully squared): drop `footage-silent.mp4` from the presign allow-list + stop shipping it, and retire the legacy fallback branches.
 
 The presign allow-list keeps `footage-silent` accepted through steps 1–3 (back-compat for legacy bundles + pre-cutover ships); it's removed only at step 4.

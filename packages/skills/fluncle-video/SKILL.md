@@ -66,7 +66,7 @@ That is the whole kit. The README has the exact signatures.
 
 You do not start blind, and nothing about prior work is hard-coded into this doc — it lives in the data, discoverable at runtime. The already-published videos are BOTH your diversity ledger AND your quality bar. Before you pick a vehicle:
 
-- **Read the vehicle ledger.** `bun run --cwd apps/cli fluncle admin vehicles --json` lists the recently-used vehicles, newest first — each entry is `{ logId, addedAt, vehicle, title, artists }`. That is the diversity ledger. (Admin-gated, the same token the render upload uses; the public `/api/tracks` still carries `videoVehicle` per finding for an unauthenticated read.)
+- **Read the vehicle ledger.** `bun run --cwd apps/cli fluncle admin tracks vehicles --json` lists the recently-used vehicles, newest first — each entry is `{ logId, addedAt, vehicle, title, artists }`. That is the diversity ledger. (Admin-gated, the same token the render upload uses; the public `/api/tracks` still carries `videoVehicle` per finding for an unauthenticated read.)
 - **Look at the actual posters.** Every published video exposes a poster image at `https://found.fluncle.com/<log-id>/poster.jpg`. FETCH a handful and open them — `curl -s "https://found.fluncle.com/<log-id>/poster.jpg" -o /tmp/ref-<log-id>.jpg`, then view the file. Names tell you little; the pixels tell you everything.
 
 Use them two ways: (1) pick a vehicle and a look clearly DIFFERENT from what you see — never the same medium twice in a row; (2) match or beat the best of them. As you look, the through-line is clear: the strongest Fluncle videos are flowing, organic, grainy, and alive (recovered footage), never clean, geometric, or CGI-polished.
