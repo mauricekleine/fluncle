@@ -1,8 +1,16 @@
 // One finding, full-screen (RFC Unit 2). Per-cell player, the media ladder, the
-// native overlay (shared across rungs), the cover-card eclipse drift, and the
-// background-pause rule. The de-risk spike target.
-import { useCallback, useEffect, useState } from "react";
-import { Linking, Pressable, Share, Text, View, useWindowDimensions } from "react-native";
+// native overlay (a right action rail + bottom caption), the cover-card eclipse
+// drift, and the background-pause rule. The de-risk spike target.
+import { type ReactNode, useCallback, useEffect, useState } from "react";
+import {
+  Linking,
+  Pressable,
+  Share,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -12,6 +20,7 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { FontAwesome, Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useVideoPlayer, VideoView } from "expo-video";
@@ -19,7 +28,6 @@ import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
 import { type TrackListItem } from "@fluncle/contracts";
 import { resolveCardMedia } from "@/lib/media";
 import { useBackgroundPause } from "@/audio/session";
-import { HeatButton } from "@/components/heat-button";
 import { color, font, radius } from "@/theme/tokens";
 
 type Props = {
@@ -49,17 +57,15 @@ export function FeedCard({ finding, active, soundOn, onToggleSound }: Props) {
   );
 
   // The recovered observation (VOICE.md's first-heard surface): Fluncle's own
-  // voice over the finding. Its own audio artifact, played through a dedicated
-  // player so it never collides with the card's video/preview track. Only loaded
-  // when the finding actually has one (most don't).
+  // voice over the finding, on its own player so it never collides with the
+  // card's video/preview track. Only loaded when the finding actually has one.
   const observationUrl = finding.observationAudioUrl ?? null;
   const observation = useAudioPlayer(observationUrl);
   const observationStatus = useAudioPlayerStatus(observation);
   const [observing, setObserving] = useState(false);
 
   // Only the visible card plays; sound follows the global toggle. While the
-  // observation is playing it owns the one sound source — keep the card media
-  // silent so the two never overlap.
+  // observation plays it owns the one sound source — keep the card media silent.
   useEffect(() => {
     if (media.kind === "video") {
       player.muted = !soundOn || observing;
@@ -77,8 +83,7 @@ export function FeedCard({ finding, active, soundOn, onToggleSound }: Props) {
     }
   }, [active, soundOn, media.kind, observing]);
 
-  // The observation stops itself when the clip ends; we resume nothing
-  // automatically — tapping again (or the card scrolling away) just stops.
+  // The observation stops itself when the clip ends; resume nothing automatically.
   useEffect(() => {
     if (observationStatus.didJustFinish) {
       setObserving(false);
@@ -103,9 +108,6 @@ export function FeedCard({ finding, active, soundOn, onToggleSound }: Props) {
       stopObservation();
       return;
     }
-    // The observation takes the one sound source: silence the card media first
-    // (the effect above also re-asserts this when `observing` flips), then play
-    // from the top.
     player.pause();
     audio.pause();
     observation.seekTo(0);
@@ -163,22 +165,58 @@ export function FeedCard({ finding, active, soundOn, onToggleSound }: Props) {
         </Animated.View>
       )}
 
-      {/* legibility scrim (Legible Sky Rule): a gradient, transparent → warm dark,
-          so there's no hard seam — the overlay text sits on the darkest part. */}
+      {/* legibility scrim (Legible Sky Rule): a gradient, transparent → warm dark. */}
       <LinearGradient
         pointerEvents="none"
         colors={["transparent", "rgba(9, 10, 11, 0.9)"]}
-        style={{
-          bottom: 0,
-          height: height * 0.6,
-          left: 0,
-          position: "absolute",
-          right: 0,
-        }}
+        style={{ bottom: 0, height: height * 0.6, left: 0, position: "absolute", right: 0 }}
       />
 
+      {/* Right action rail (TikTok-style). Icons stay legible on any background via
+          a drop shadow; gold marks the active sound state (Ignition). */}
+      <View style={[styles.rail, { bottom: insets.bottom + 28 }]}>
+        <RailAction
+          icon={
+            <FontAwesome
+              name="spotify"
+              size={29}
+              color={color.starlightCream}
+              style={styles.icon}
+            />
+          }
+          label="Spotify"
+          onPress={() => Linking.openURL(finding.spotifyUrl)}
+        />
+        <RailAction
+          icon={
+            <Ionicons
+              name="share-outline"
+              size={29}
+              color={color.starlightCream}
+              style={styles.icon}
+            />
+          }
+          label="Share"
+          onPress={() => Share.share({ url: finding.logPageUrl ?? finding.spotifyUrl })}
+        />
+        <RailAction
+          icon={
+            <Ionicons
+              name={soundOn ? "volume-high" : "volume-mute"}
+              size={29}
+              color={soundOn ? color.eclipseGold : color.starlightCream}
+              style={styles.icon}
+            />
+          }
+          active={soundOn}
+          label={soundOn ? "Sound" : "Muted"}
+          onPress={onToggleSound}
+        />
+      </View>
+
+      {/* Bottom caption (narrowed to clear the rail). */}
       <View
-        style={{ bottom: insets.bottom + 24, gap: 8, left: 16, position: "absolute", right: 16 }}
+        style={{ bottom: insets.bottom + 24, gap: 8, left: 16, position: "absolute", right: 84 }}
       >
         {finding.logId ? (
           <Text style={[font.numeric, { color: color.eclipseGlow }]}>{finding.logId}</Text>
@@ -199,21 +237,23 @@ export function FeedCard({ finding, active, soundOn, onToggleSound }: Props) {
             accessibilityRole="button"
             accessibilityState={{ selected: observing }}
             onPress={toggleObservation}
-            style={({ pressed }) => ({
-              alignItems: "center",
-              alignSelf: "flex-start",
-              backgroundColor: observing ? color.goldVeil : color.dustVeil,
-              borderColor: observing ? color.eclipseGold : color.dustLine,
-              borderRadius: radius.sm,
-              borderWidth: 1,
-              flexDirection: "row",
-              gap: 7,
-              marginTop: 6,
-              opacity: pressed ? 0.85 : 1,
-              paddingHorizontal: 11,
-              paddingVertical: 6,
-              transform: pressed && !reduced ? [{ translateY: 1 }] : [],
-            })}
+            style={({ pressed }) => [
+              {
+                alignItems: "center",
+                alignSelf: "flex-start",
+                backgroundColor: observing ? color.goldVeil : color.dustVeil,
+                borderColor: observing ? color.eclipseGold : color.dustLine,
+                borderRadius: radius.sm,
+                borderWidth: 1,
+                flexDirection: "row",
+                gap: 7,
+                marginTop: 6,
+                paddingHorizontal: 11,
+                paddingVertical: 6,
+              },
+              pressed ? { opacity: 0.85 } : null,
+              pressed && !reduced ? { transform: [{ translateY: 1 }] } : null,
+            ]}
           >
             <View
               style={{
@@ -228,25 +268,48 @@ export function FeedCard({ finding, active, soundOn, onToggleSound }: Props) {
             </Text>
           </Pressable>
         ) : null}
-
-        <View style={{ flexDirection: "row", gap: 10, marginTop: 8 }}>
-          <HeatButton
-            label="Open in Spotify"
-            variant="primary"
-            onPress={() => Linking.openURL(finding.spotifyUrl)}
-          />
-          <HeatButton
-            label="Share"
-            variant="outline"
-            onPress={() => Share.share({ url: finding.logPageUrl ?? finding.spotifyUrl })}
-          />
-          <HeatButton
-            label={soundOn ? "Sound on" : "Muted"}
-            variant="outline"
-            onPress={onToggleSound}
-          />
-        </View>
       </View>
     </View>
   );
 }
+
+function RailAction({
+  icon,
+  label,
+  onPress,
+  active,
+}: {
+  icon: ReactNode;
+  label: string;
+  onPress: () => void;
+  active?: boolean;
+}) {
+  return (
+    <Pressable
+      hitSlop={8}
+      onPress={onPress}
+      style={({ pressed }) => [styles.railItem, pressed ? { opacity: 0.6 } : null]}
+    >
+      {icon}
+      <Text style={[font.label, styles.railLabel, active ? { color: color.eclipseGold } : null]}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+const styles = StyleSheet.create({
+  icon: {
+    textShadowColor: "rgba(0, 0, 0, 0.55)",
+    textShadowOffset: { height: 1, width: 0 },
+    textShadowRadius: 6,
+  },
+  rail: { alignItems: "center", gap: 20, position: "absolute", right: 14 },
+  railItem: { alignItems: "center", gap: 4 },
+  railLabel: {
+    color: color.starlightCream,
+    textShadowColor: "rgba(0, 0, 0, 0.55)",
+    textShadowOffset: { height: 1, width: 0 },
+    textShadowRadius: 6,
+  },
+});

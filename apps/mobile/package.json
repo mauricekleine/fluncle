@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@expo-google-fonts/oxanium": "^0.4.2",
+    "@expo/vector-icons": "^15.0.2",
     "@fluncle/contracts": "workspace:*",
     "@fluncle/tokens": "workspace:*",
     "@shopify/flash-list": "2.0.2",
