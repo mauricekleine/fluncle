@@ -13,6 +13,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
+import { LinearGradient } from "expo-linear-gradient";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { useAudioPlayer } from "expo-audio";
 import { type TrackListItem } from "@fluncle/contracts";
@@ -111,13 +112,14 @@ export function FeedCard({ finding, active, soundOn, onToggleSound }: Props) {
         </Animated.View>
       )}
 
-      {/* legibility scrim (Legible Sky Rule) */}
-      <View
+      {/* legibility scrim (Legible Sky Rule): a gradient, transparent → warm dark,
+          so there's no hard seam — the overlay text sits on the darkest part. */}
+      <LinearGradient
         pointerEvents="none"
+        colors={["transparent", "rgba(9, 10, 11, 0.9)"]}
         style={{
-          backgroundColor: "rgba(9, 10, 11, 0.55)",
           bottom: 0,
-          height: height * 0.5,
+          height: height * 0.6,
           left: 0,
           position: "absolute",
           right: 0,
