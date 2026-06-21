@@ -197,7 +197,7 @@ export function FeedCard({ finding, active, soundOn, onToggleSound }: Props) {
               name="spotify"
               size={30}
               color={color.starlightCream}
-              style={styles.icon}
+              style={[styles.icon, styles.spotifyNudge]}
             />
           }
           label="Spotify"
@@ -303,4 +303,7 @@ const styles = StyleSheet.create({
   },
   railLabelActive: { color: color.eclipseGold },
   railPressed: { opacity: 0.6 },
+  // The spotify brand mark's three waves sit optically left of the circle's true
+  // center (true of the glyph in any icon font), so nudge it onto the rail axis.
+  spotifyNudge: { transform: [{ translateX: 3 }] },
 });
