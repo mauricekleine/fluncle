@@ -39,7 +39,7 @@ Boil the ocean: V1 ships **complete**, not as a demo.
 
 **Goals (in reach this build):** feed-first Expo app; native playback folded into the feed; every finding feed-able from log time (cover/silent rungs); push on a new finding + a new mixtape from the `apps/web` publish boundary; native-adapted Nostalgic Cosmos; both-platform EAS builds; deep links resolving `fluncle://<coordinate>` and `https://www.fluncle.com/log/<id>`.
 
-**Honest calibration (outside our control / gated):** store _acceptance_ is a judgment call (4.2) — we minimize rejection risk, we can't promise approval. Paid enrollment + `eas submit` are external/paid/operator-gated. And some submission artifacts are **account-blocked** (AASA Team ID, assetlinks SHA, App Store Connect privacy/age/screenshots): scaffolded pre-gate, finalized post-enrollment.
+**Honest calibration (outside our control / gated):** store _acceptance_ is a judgment call (4.2) — we minimize rejection risk, we can't promise approval. Paid enrollment + `eas submit` are external/paid/operator-gated. And some submission artifacts are **account-blocked** (AASA Team ID, assetlinks SHA, App Store Connect privacy/age/screenshots): scaffolded pre-gate, finalized post-enrollment. The standing review-risk read (5.2 music rights, 4.2 thin-app, the pre-submit moves) lives in [docs/app-store-review.md](../app-store-review.md).
 
 **Out of V1 (deferred, as scope):** submit-a-track, accounts + sync, the native Galaxy game (links out). Note `Save` is auth-gated → deferred; the feed still delivers real actions without auth (Open in Spotify via `spotifyUrl`, Share via `logPageUrl`), so it isn't crippled.
 
