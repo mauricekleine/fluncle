@@ -1,6 +1,6 @@
 ---
 title: The CLI
-description: The archive in your terminal — recent, random, search, submit.
+description: The archive in your terminal. Recent, random, search, submit.
 ---
 
 The `fluncle` CLI is the archive in your terminal: a thin client over the public API, with no secrets of its own. Browse recent findings, pull a random one, search for a track, or submit one for review.
@@ -43,4 +43,4 @@ Every read command takes `--json` for clean machine output. Without it you get t
 
 ## Under the hood
 
-The CLI only ever talks to the public [API](/docs/api-overview) — the same endpoints the web app and the [rave terminal](/docs/ssh) read. It owns no database and no credentials, so what you see in the terminal is exactly what's in the archive.
+The CLI only ever talks to the public [API](/docs/api-overview), the same endpoints the web app and the [rave terminal](/docs/ssh) read. It owns no database and no credentials, so what you see in the terminal is exactly what's in the archive.
