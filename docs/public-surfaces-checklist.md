@@ -7,7 +7,7 @@
 - [x] Canonical API object for every track
 - [x] Canonical metadata schema
 - [x] MusicBrainz/Wikidata IDs where available
-- [ ] Discogs ID — read-only release-ID enrichment scoped in [the RFC](rfcs/lastfm-discogs-sync.md) (needs a `discogs_release_id` column; no secret)
+- [x] Discogs ID — read-only release-ID enrichment shipped (`apps/web/src/lib/server/discogs.ts`: MusicBrainz-first by ISRC then a tracklist-confirmed Discogs search, storing `in_release_id`/`in_master_id` only on ≥0.90 confidence)
 
 ## Web
 
@@ -126,9 +126,9 @@ _Dropped (2026-06-20): per-coordinate web subdomains add nothing over `/log/<id>
 
 - [x] MusicBrainz
 - [x] Wikidata
-- [x] Last.fm — profile `fluncle` claimed + in `sameAs`; write-side sync (love-on-add) scoped in [the RFC](rfcs/lastfm-discogs-sync.md), pending Maurice's key/secret + decision
+- [x] Last.fm — profile `fluncle` claimed + in `sameAs`; write-side sync (love-on-add) shipped (`apps/web/src/lib/server/lastfm.ts`, gated on the `LASTFM_*` Worker secrets); a one-time catalogue backfill is the open tail (see ROADMAP)
 - [ ] ListenBrainz
-- [x] Discogs — profile `fluncle` claimed + in `sameAs`; release-ID enrichment + a findings List scoped in [the RFC](rfcs/lastfm-discogs-sync.md)
+- [x] Discogs — profile `fluncle` claimed + in `sameAs`; release-ID enrichment shipped (`apps/web/src/lib/server/discogs.ts`). The optional Discogs "List of findings" write is the one unbuilt tail (`apps/web/src/lib/fluncle-links.ts` notes it)
 - [ ] 1001Tracklists
 - [ ] Rate Your Music
 - [ ] Bandcamp
