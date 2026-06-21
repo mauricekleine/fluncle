@@ -3,8 +3,8 @@
 // (PR #58); this is that spike made production-grade.
 //
 //   contract (@fluncle/contracts/orpc)
-//     → implement()        — the handler that serves each op (./orpc-auth `base`)
-//     → router             — the typed router object (Router type exported)
+//     → implement()        — the implementer handed to each domain module
+//     → router             — the typed router object, composed per-domain
 //     → OpenAPIHandler      — a Web-Standard fetch handler (no node:http / node:fs)
 //     → OpenAPIGenerator    — the OpenAPI 3.1 doc, generated from the same contracts
 //
@@ -15,60 +15,41 @@
 // (the handler's `matched: false`), so `server.ts` falls the request through to the
 // existing TanStack Start router untouched. oRPC owns only the operations it has
 // contracts for; TanStack owns everything else, in one Worker, indefinitely.
+//
+// COMPOSABLE BY DOMAIN. The handlers live in per-domain modules under `./orpc/`
+// (`./orpc/tracks.ts`, `./orpc/health.ts`, …); each is a factory taking the shared
+// implementer and returning its ops. This root builds that implementer, spreads
+// every domain's handlers into one `router`, and keeps the mount / error-encoder /
+// OpenAPI wiring here. A new wave adds `./orpc/<domain>.ts` (+ its contract module)
+// and one spread line below — no other domain's file is touched.
 
 import { contract } from "@fluncle/contracts/orpc";
 import { OpenAPIGenerator } from "@orpc/openapi";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { implement, ORPCError } from "@orpc/server";
 import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
-import { resolveLogPageTarget } from "./log-resolver";
 import { type OrpcContext } from "./orpc-auth";
-import { ApiError } from "./spotify";
+import { isApiFaultData } from "./orpc/_shared";
+import { healthHandlers } from "./orpc/health";
+import { tracksHandlers } from "./orpc/tracks";
 
 // The contract implementer, pinned to the same request-carrying context the admin
 // spine uses (./orpc-auth), so one OpenAPIHandler routes public + admin ops off a
-// single injected `{ request }`. Public ops attach `.handler` directly; admin ops
-// (fan-out phase) chain `.use(adminAuth)` / build on `operatorProcedure` first.
+// single injected `{ request }`. Public ops attach `.handler` directly (in their
+// domain module); admin ops (later wave) build on `operatorProcedure` first.
 const os = implement(contract).$context<OrpcContext>();
 
-// ── Handlers ───────────────────────────────────────────────────────────────
-// One `.handler` per contract op. The handler body is pre-bound to the op's
+// ── Router ───────────────────────────────────────────────────────────────────
+// Composed from the per-domain handler factories. The spec, the validators, and
+// the typed client all derive from this object, so they cannot disagree with the
+// handlers that implement it. Each domain's handler body is pre-bound to its op's
 // Zod I/O, so it cannot return a shape the contract (and thus the spec) doesn't
 // promise — that is the drift-proofing the migration is for.
-
-// `get_track` — public read of one finding (or mixtape) by Spotify trackId or
-// Log ID. A direct port of the live /api/tracks/{idOrLogId} GET handler:
-// resolve, 404 via ORPCError when absent, else the `{ ok: true } & ({ track } |
-// { mixtape })` envelope. No auth middleware — it is a public read.
-const getTrack = os.get_track.handler(async ({ input }) => {
-  try {
-    const target = await resolveLogPageTarget(input.idOrLogId);
-
-    if (!target) {
-      throw new ORPCError("NOT_FOUND", { message: `No finding for "${input.idOrLogId}"` });
-    }
-
-    return target.kind === "mixtape"
-      ? ({ mixtape: target.mixtape, ok: true } as const)
-      : ({ ok: true, track: target.track } as const);
-  } catch (error) {
-    // Re-throw oRPC's own errors (the 404 above) so the rails encoder shapes the
-    // response; anything else is an unexpected fault — convert it through the
-    // shared `apiFault` helper so its status, code, and message match the
-    // TanStack route it replaces.
-    if (error instanceof ORPCError) {
-      throw error;
-    }
-
-    throw apiFault(error);
-  }
-});
-
-// The contract router. Grows one op per migrated route; the spec, the validators,
-// and the typed client all derive from this object, so they cannot disagree with
-// the handlers that implement it.
+//
+// Add a domain: import its `*Handlers(os)` factory and spread it here.
 export const router = os.router({
-  get_track: getTrack,
+  ...healthHandlers(os),
+  ...tracksHandlers(os),
 });
 
 /** The router type a client imports (`import type { Router }`) to derive a fully typed client. */
@@ -82,22 +63,9 @@ export type Router = typeof router;
 // (the CLI, the enrichment agent, the web app) read `{ ok: false, code, message }`,
 // so we re-encode every thrown `ORPCError` into that shape here, at the rails, and
 // every fan-out route is wire-compatible by construction. oRPC still drives the
-// HTTP status off `error.status`; the encoder only rewrites the body.
-
-// The API `code`/`message` an `ORPCError` can carry through to the wire when the
-// thrown code itself can't say them. Faults converted from an `ApiError` (e.g.
-// `note_too_long` at 422) or a generic 500 stash their legacy `{ code, message }`
-// here so the encoder reproduces the exact `jsonError` body, not a lossy mapping.
-type ApiFaultData = { apiCode: string; apiMessage: string };
-
-function isApiFaultData(data: unknown): data is ApiFaultData {
-  return (
-    typeof data === "object" &&
-    data !== null &&
-    typeof (data as ApiFaultData).apiCode === "string" &&
-    typeof (data as ApiFaultData).apiMessage === "string"
-  );
-}
+// HTTP status off `error.status`; the encoder only rewrites the body. The fault
+// converter half (`apiFault`/`isApiFaultData`) lives in ./orpc/_shared so the
+// domain handlers can produce a wire-compatible fault from their catch.
 
 // oRPC codes are SCREAMING_SNAKE; the API's `code` field is lower_snake. Map the
 // load-bearing ones to the exact codes the legacy routes emit; everything else
@@ -117,31 +85,12 @@ function orpcCodeToApiCode(code: string): string {
 }
 
 /**
- * Convert an unexpected (non-`ORPCError`) fault into an `ORPCError` whose status,
- * code, and message match the legacy `apiErrorResponse` (http-errors.ts): an
- * `ApiError` keeps its own status/code/message; anything else is a 500 with code
- * `error`. The legacy `{ code, message }` ride along in `data` so the rails
- * encoder reproduces the exact `jsonError` body. Shared so every converted
- * handler's catch can `throw apiFault(error)` for one wire-compatible 500 path.
- */
-function apiFault(error: unknown): ORPCError<string, ApiFaultData> {
-  const apiCode = error instanceof ApiError ? error.code : "error";
-  const apiMessage = error instanceof Error ? error.message : String(error);
-  const status = error instanceof ApiError ? error.status : 500;
-
-  return new ORPCError("INTERNAL_SERVER_ERROR", {
-    data: { apiCode, apiMessage },
-    message: apiMessage,
-    status,
-  });
-}
-
-/**
  * Re-encode a thrown `ORPCError` into the legacy `jsonError` body shape
  * (`{ code, message, ok: false }`). Returned to `OpenAPIHandler` as the response
  * body; the HTTP status stays `error.status`, so a 404 stays 404, a 500 stays 500.
- * A fault carrying `ApiFaultData` (from `apiFault`) wins so a converted `ApiError`
- * keeps its exact code/message; otherwise the code maps off the oRPC code.
+ * A fault carrying `ApiFaultData` (from `apiFault`, or a custom-coded read like the
+ * random-track 404) wins so the exact code/message is preserved; otherwise the
+ * code maps off the oRPC code.
  */
 function encodeErrorBody(error: ORPCError<string, unknown>) {
   if (isApiFaultData(error.data)) {
@@ -172,6 +121,11 @@ const handler = new OpenAPIHandler(router, {
 const PRIMARY_PREFIX = "/api/v1";
 const ALIAS_PREFIX = "/api";
 
+// The live /api/health route sets `Cache-Control: no-store` so a liveness poll is
+// never cached. oRPC owns the response framing, so the header is reapplied here on
+// a matched health response — parity without a per-handler header plugin.
+const HEALTH_SUFFIX = "/health";
+
 /**
  * Try to serve `request` with oRPC. Returns the `Response` when a procedure
  * matched, or `null` to fall through to the existing TanStack router (the
@@ -194,7 +148,17 @@ export async function handleOrpc(request: Request): Promise<Response | null> {
     prefix,
   });
 
-  return matched ? response : null;
+  if (!matched) {
+    return null;
+  }
+
+  // Reapply the liveness probe's no-store directive (the one header the live
+  // route set that oRPC's framing would otherwise drop).
+  if (url.pathname === `${prefix}${HEALTH_SUFFIX}`) {
+    response.headers.set("Cache-Control", "no-store");
+  }
+
+  return response;
 }
 
 // The spec, generated from the router — the same contracts that serve the

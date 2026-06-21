@@ -17,9 +17,10 @@ import { CONTRACT_OPERATION_NAMES } from "@fluncle/contracts/orpc";
 // converted AND pending (the pending list must shrink as routes convert), and a
 // pending entry must correspond to a real route (no stale names).
 //
-// Phase 1 converts exactly one route (`get_track`); everything else is PENDING.
-// As the fan-out phase converts routes, move each off PENDING — the test stays
-// green only while the list shrinks honestly.
+// Phase 1 converted one route (`get_track`); the fan-out pilot adds the three
+// public-unauth reads (`get_health`, `list_tracks`, `get_random_track`).
+// Everything else stays PENDING. As later waves convert routes, move each off
+// PENDING — the test stays green only while the list shrinks honestly.
 
 // Each public API route, keyed by its `/api/v1`-relative path, mapped to the
 // canonical Convention-B `verb_noun` op name it should be served by. This is the
@@ -75,7 +76,6 @@ const CARVE_OUT_ROUTES = new Set([
 // this list is empty (and admin coverage lands), the public surface is fully
 // contract-first.
 const PENDING_PUBLIC_OPS = new Set([
-  "get_health",
   "get_current_private_user",
   "get_private_mutation_token",
   "delete_private_account",
@@ -94,8 +94,6 @@ const PENDING_PUBLIC_OPS = new Set([
   "search_tracks",
   "list_stories",
   "submit_track",
-  "list_tracks",
-  "get_random_track",
 ]);
 
 const V1_DIR = fileURLToPath(new URL("../../routes/api/v1", import.meta.url));
@@ -138,8 +136,10 @@ function isCarvedOut(basename: string): boolean {
 describe("oRPC public-route contract coverage", () => {
   const converted = new Set<string>(CONTRACT_OPERATION_NAMES);
 
-  it("converts exactly the proof route in Phase 1", () => {
-    expect([...converted]).toEqual(["get_track"]);
+  it("converts the proof route plus the fan-out pilot's public reads", () => {
+    expect([...converted].sort()).toEqual(
+      ["get_health", "get_random_track", "get_track", "list_tracks"].sort(),
+    );
   });
 
   it("accounts for every public op: converted XOR pending", () => {
