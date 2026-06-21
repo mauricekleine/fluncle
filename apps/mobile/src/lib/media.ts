@@ -11,10 +11,14 @@ function master(logId: string, file: "footage.mp4" | "footage.social.mp4") {
   return `${FOUND_BASE}/${logId}/${file}`;
 }
 
-/** Portrait crop of the CLEAN square master. Valid only when videoSquaredAt is set. */
-export function videoCrop(logId: string, orientation: "portrait" = "portrait") {
-  const dims = orientation === "portrait" ? "width=1080,height=1920" : "width=1080,height=1080";
-  return `${MT}/fit=crop,${dims}/${master(logId, "footage.mp4")}`;
+/**
+ * Portrait crop of the CLEAN square master. Valid only when videoSquaredAt is set.
+ * `fit=cover` (video-valid; `fit=crop` is image-only and 400s) — mirrors the web's
+ * videoCrop in apps/web/src/lib/media.ts. Folds into @fluncle/contracts in Phase 1.
+ */
+export function videoCrop(logId: string, orientation: "landscape" | "portrait" = "portrait") {
+  const dims = orientation === "portrait" ? "width=1080,height=1920" : "width=1920,height=1080";
+  return `${MT}/fit=cover,${dims}/${master(logId, "footage.mp4")}`;
 }
 
 /** A poster still (first frame) of the clean master, for first paint. */
