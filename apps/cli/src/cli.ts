@@ -201,6 +201,12 @@ async function main(args = process.argv.slice(2)): Promise<void> {
 
     process.exit(1);
   }
+
+  // Fire-and-forget update hint, printed to stderr AFTER the command's output.
+  // It can never throw, change the exit code, or touch stdout (see
+  // update-notifier.ts). Reached only on success — failed commands skip it.
+  const { notifyIfUpdateAvailable } = await import("./update-notifier");
+  await notifyIfUpdateAvailable(args);
 }
 
 function configureCommand(command: Command): Command {
