@@ -6,9 +6,13 @@
 //   - `backfill_discogs` / `backfill_lastfm` — operator tier (live
 //     `requireOperator`). Batched: one request handles a bounded pass and returns
 //     `nextCursor`; the CLI loops `?cursor=` until null.
-//   - `sweep_enrichment` — admin tier (live `requireAdmin` — an external cron AND
+//   - `enrich_track` — admin tier (live `requireAdmin` — an external cron AND
 //     the operator hit it, so the agent role is allowed). VERIFIED against the
-//     live route: enrich-sweep is `requireAdmin`, NOT `requireOperator`.
+//     live route: the enrich sweep is `requireAdmin`, NOT `requireOperator`. The
+//     verb is `enrich` (the closed action set); the whole-queue scope is the
+//     CLI's `--all` flag, not part of the verb. Convention B routes it at
+//     `POST /admin/tracks/enrich`; the old `POST /admin/enrich-sweep` path stays
+//     a back-compat alias served by its TanStack route (oRPC no longer matches it).
 //
 // The inputs are the live QUERY params (`limit`/`dryRun`/`cursor`), kept as
 // tolerant optional strings: the live routes parse + clamp them in-handler and
@@ -132,19 +136,21 @@ export const backfillLastfm = oc
   );
 
 /**
- * `sweep_enrichment` → `POST /admin/enrich-sweep` (operationId `sweepEnrichment`).
+ * `enrich_track` → `POST /admin/tracks/enrich` (operationId `enrichTrack`).
  *
- * ADMIN tier (live `requireAdmin` — VERIFIED: enrich-sweep is `requireAdmin`, so
- * the agent role authenticates too, matching the external cron that hits it). One
- * bounded pass re-firing enrichment for pending/failed/stale findings. Preserves
- * the live `{ ok, reEnriched, reEnrichedCount, skipped, skippedCount }` envelope.
+ * ADMIN tier (live `requireAdmin` — VERIFIED: the enrich sweep is `requireAdmin`,
+ * so the agent role authenticates too, matching the external cron that hits it).
+ * One bounded pass re-firing enrichment for pending/failed/stale findings (the
+ * whole-queue sweep). Preserves the live `{ ok, reEnriched, reEnrichedCount,
+ * skipped, skippedCount }` envelope. The old `POST /admin/enrich-sweep` path stays
+ * a back-compat alias on its TanStack route.
  */
-export const sweepEnrichment = oc
+export const enrichTrack = oc
   .route({
     inputStructure: "detailed",
     method: "POST",
-    operationId: "sweepEnrichment",
-    path: "/admin/enrich-sweep",
+    operationId: "enrichTrack",
+    path: "/admin/tracks/enrich",
     summary: "Re-fire enrichment for pending/failed/stale findings (batched)",
     tags: ["Admin"],
   })
@@ -163,5 +169,5 @@ export const sweepEnrichment = oc
 export const adminBackfillsContract = {
   backfill_discogs: backfillDiscogs,
   backfill_lastfm: backfillLastfm,
-  sweep_enrichment: sweepEnrichment,
+  enrich_track: enrichTrack,
 };
