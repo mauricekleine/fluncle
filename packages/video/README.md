@@ -16,6 +16,8 @@ out/<log-id>/render.json
 
 Those files are uploaded to R2 beside `footage.mp4`, `footage-silent.mp4`, `poster.jpg`, and `note.txt`. That keeps generated compositions out of the codebase so they do not bias future agents, while preserving enough source and analyzed props to rerender the same video when needed.
 
+`render.json` records the composition id + source pointer, the props pointer, the diversity-ledger `vehicle`/`model`/`reasoning`, and a **`variants`** provenance map keyed by output filename → the render flags that produced it. The two masters are the same composition + props rendered with different flags, so `variants` is what makes the bundle self-describing: re-rendering `footage.mp4` is `render(composition, props, variants["footage.mp4"])` (`{ aspect: "square", hideOverlay: true }`) and `footage.social.mp4` is `variants["footage.social.mp4"]` (`{ aspect: "portrait", hideOverlay: false }`), so a clean re-render from source reproduces the right cut instead of the portrait default. Writers derive the map from the shared `buildVariants()` helper (`src/remotion/variants.ts`); see [docs/video-variants.md](../../docs/video-variants.md).
+
 Each composition remains **self-contained**: it inlines its own scene code, shaders, and scene composition, imports only the core surface from `../cosmos` plus Remotion/React/tokens as needed, and exports a named `React.FC<NostalgicCosmosProps>`. There are no shared vehicle components to assemble; a track owns its look top to bottom.
 
 Two hard rules guard the output:

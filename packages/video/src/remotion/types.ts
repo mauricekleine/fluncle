@@ -102,6 +102,21 @@ export type CosmosPalette = {
  */
 export type CosmosAspect = "portrait" | "landscape" | "square";
 
+/**
+ * Provenance for one bundled master: the exact render flags it was produced with,
+ * so a future "clean re-render from source" reproduces THIS cut and not the other.
+ * The composition + props are shared across both masters; only these flags differ
+ * (footage.mp4 = square/clean, footage.social.mp4 = portrait/text). Re-rendering an
+ * output is `render(composition, props, variants[<output>])`. See docs/video-variants.md.
+ */
+export type RenderVariant = {
+  aspect: CosmosAspect;
+  hideOverlay: boolean;
+};
+
+/** Map of bundle output filename → the render flags that produced it. */
+export type RenderVariants = Record<string, RenderVariant>;
+
 export type NostalgicCosmosProps = {
   track: CosmosTrack;
   audio: CosmosAudio;

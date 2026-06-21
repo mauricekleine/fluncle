@@ -24,6 +24,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import path from "node:path";
 
 import { type NostalgicCosmosProps } from "../remotion/types";
+import { buildVariants } from "../remotion/variants";
 
 import { buildCaption, type CaptionTrack, fetchReleaseYear, yearFromReleaseDate } from "./caption";
 import { renderCover } from "./render-cover";
@@ -244,6 +245,11 @@ writeFileSync(
       // stores it as the track's video_model_reasoning (surfaced in /api/tracks).
       reasoning: reasoningArg ?? renderManifest.reasoning ?? DEFAULT_VIDEO_REASONING,
       trackId: track.trackId,
+      // The per-master render-flag provenance: ship produces BOTH masters
+      // (footage.mp4 = square/clean, footage.social.mp4 = portrait/text), so a
+      // future "clean re-render from source" reproduces the right cut per output
+      // instead of the portrait default. See docs/video-variants.md.
+      variants: buildVariants(),
       // The diversity-ledger entry: the upload endpoint reads this and stores it
       // as the track's video_vehicle (surfaced in /api/tracks for the next agent).
       vehicle: vehicleArg ?? renderManifest.vehicle ?? null,
