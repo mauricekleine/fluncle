@@ -13,9 +13,9 @@
 //     agent tier (`adminAuth` only) so the Hermes observation cron can drive it
 //     (docs/hermes-automation-brief.md Build order #3). Idempotent per finding (an
 //     existing observation is a no-op). It no longer holds Firecrawl — it reads the
-//     stored `context_note` (written by `observe_context`) as fuel; the voice gate
+//     stored `context_note` (written by `context_track`) as fuel; the voice gate
 //     still hard-fails any banned-identity-word / earthly-geography violation.
-//   - `observe_context` — POST /admin/tracks/{trackId}/observe-context. The split-out
+//   - `context_track` — POST /admin/tracks/{trackId}/context. The split-out
 //     context half (agent tier): fetch the Firecrawl FACTS and write `context_note`
 //     ONLY, quietly (no updated_at bump). Idempotent per finding. Firecrawl output
 //     is untrusted web content treated strictly as DATA.
@@ -395,10 +395,10 @@ export function adminTracksHandlers(os: Implementer) {
 
       // The factual context, treated strictly as INTERNAL DATA (never instructions).
       // observe_track no longer holds Firecrawl: it reads the already-stored
-      // `context_note` (written by the split-out `observe_context` step). Order of
+      // `context_note` (written by the split-out `context_track` step). Order of
       // preference: an explicit body.contextNote (the agent passing the fuel it
       // authored from), then the stored note, then — only if neither exists — a
-      // best-effort Firecrawl fetch so a finding that skipped observe_context still
+      // best-effort Firecrawl fetch so a finding that skipped context_track still
       // resolves. The note is persisted only if it was freshly fetched here.
       const storedContextNote = await getTrackContextNote(track.trackId);
       let contextNote = "";
@@ -461,7 +461,7 @@ export function adminTracksHandlers(os: Implementer) {
 
       // Persist: the audio url (the "has observation" flag) + duration + timestamp
       // (visible — they bump lastmod). Backfill the context note only when this step
-      // freshly fetched it (the observe_context split usually wrote it already); a
+      // freshly fetched it (the context_track split usually wrote it already); a
       // body-supplied or already-stored note is not re-written.
       await updateTrack(track.trackId, {
         observationAudioUrl: media.observationAudioUrl,
@@ -486,12 +486,12 @@ export function adminTracksHandlers(os: Implementer) {
     }
   });
 
-  // POST /admin/tracks/{trackId}/observe-context — agent tier (`adminAuth` only).
+  // POST /admin/tracks/{trackId}/context — agent tier (`adminAuth` only).
   // The split-out context half: fetch the Firecrawl FACTS and write `context_note`
   // ONLY, quietly (track-update.ts does not bump updated_at for contextNote). The
   // Firecrawl output is UNTRUSTED web content treated strictly as DATA — assembled
   // into the note, stored as fuel, never executed as instructions.
-  const observeContextHandler = os.observe_context.use(adminAuth).handler(async ({ input }) => {
+  const contextTrackHandler = os.context_track.use(adminAuth).handler(async ({ input }) => {
     try {
       const idOrLogId = (input as { trackId: string }).trackId;
       const track = await getTrackByIdOrLogId(idOrLogId);
@@ -516,7 +516,7 @@ export function adminTracksHandlers(os: Implementer) {
         });
       }
 
-      // Idempotency (`observe-context:${logId}`): a finding that already has a
+      // Idempotency (`context:${logId}`): a finding that already has a
       // context note is a no-op, so an external cron firing on a fixed interval
       // never re-burns the Firecrawl budget or overwrites the stored facts.
       const existing = await getTrackContextNote(track.trackId);
@@ -739,9 +739,9 @@ export function adminTracksHandlers(os: Implementer) {
 
   return {
     add_track: addTrackHandler,
+    context_track: contextTrackHandler,
     finalize_track_video: finalizeVideoHandler,
     list_tracks_admin: listTracksAdminHandler,
-    observe_context: observeContextHandler,
     observe_track: observeTrackHandler,
     presign_track_video_uploads: presignVideoUploadsHandler,
     update_track: updateTrackHandler,
