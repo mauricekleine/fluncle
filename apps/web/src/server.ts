@@ -7,9 +7,23 @@ import {
 import { isCacheableLogPath, withEdgeCache } from "./lib/server/edge-cache";
 import { ADMIN_COOKIE_NAME } from "./lib/server/env";
 import { handleMcp } from "./lib/server/mcp";
+import { handleOrpc } from "./lib/server/orpc";
 
 export default createServerEntry({
   async fetch(request) {
+    // oRPC owns the API operations it has contracts for, dual-mounted under
+    // `/api/v1` and `/api`. It returns null when no procedure matched (the
+    // `matched: false` fall-through), so every unconverted route — and every
+    // non-API request — flows on to the existing handlers unchanged. This is the
+    // incremental-migration seam (docs/orpc-migration-brief.md); it sits ahead of
+    // the router so a converted route is served by its contract, not the stale
+    // TanStack file route, while the rest of the surface is untouched.
+    const orpc = await handleOrpc(request);
+
+    if (orpc) {
+      return orpc;
+    }
+
     // The MCP endpoint and its server card (the agent tool surface) sit ahead
     // of the router, as do the agent discovery surfaces (well-known endpoints,
     // markdown negotiation); everything else flows through unchanged.
