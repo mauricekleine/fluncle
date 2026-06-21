@@ -125,6 +125,21 @@ export const TrackSearchResultSchema = z
   })
   .meta({ id: "TrackSearchResult" });
 
+/**
+ * A signed-in public user as the `/me` private tier returns it (`PublicUser` in
+ * the server `public-auth` module). The cookie-session identity — distinct from
+ * the admin grant. `username`/`displayUsername` are absent until the user claims
+ * a handle, so both are optional.
+ */
+export const PublicUserSchema = z
+  .object({
+    createdAt: z.string(),
+    displayUsername: z.string().optional(),
+    id: z.string(),
+    username: z.string().optional(),
+  })
+  .meta({ id: "PublicUser" });
+
 /** A finding submission as `/api/submissions` records it (`Submission` in ../index.ts). */
 export const SubmissionSchema = z
   .object({
