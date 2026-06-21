@@ -57,13 +57,13 @@ describe("videoRendition", () => {
 describe("videoCrop", () => {
   it("builds a centre-crop to portrait off the square master", () => {
     expect(videoCrop("ABC123", "portrait")).toBe(
-      `${FOUND_BASE}/cdn-cgi/media/fit=crop,width=1080,height=1920/${FOUND_BASE}/ABC123/footage.mp4?v=1`,
+      `${FOUND_BASE}/cdn-cgi/media/fit=cover,width=1080,height=1920/${FOUND_BASE}/ABC123/footage.mp4?v=1`,
     );
   });
 
   it("builds a centre-crop to landscape off the square master", () => {
     expect(videoCrop("ABC123", "landscape")).toBe(
-      `${FOUND_BASE}/cdn-cgi/media/fit=crop,width=1920,height=1080/${FOUND_BASE}/ABC123/footage.mp4?v=1`,
+      `${FOUND_BASE}/cdn-cgi/media/fit=cover,width=1920,height=1080/${FOUND_BASE}/ABC123/footage.mp4?v=1`,
     );
   });
 

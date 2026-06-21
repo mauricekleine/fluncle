@@ -191,8 +191,10 @@ export function videoPoster(logId: string, master = "footage.mp4"): string {
 // Under the two-master layout (videoSquaredAt set), `footage.mp4` is the CLEAN
 // square 1920×1920 source master. The archive surfaces (/log, radio) never play
 // the square — they request an on-the-fly MT centre-crop to the orientation the
-// viewport wants. `fit=crop` is a CENTRE crop, so a 1920×1920 master yields both
-// a native-resolution 1080×1920 portrait and 1920×1080 landscape with no upscale
+// viewport wants. `fit=cover` scales-to-fill then centre-crops the overflow (the
+// only crop-to-fill `fit` Cloudflare video MT supports — bare `crop` is rejected
+// with a 400), so a 1920×1920 master yields both a native-resolution 1080×1920
+// portrait and 1920×1080 landscape with no upscale
 // (only the centre "plus" of the square is ever seen — compositions destined to
 // be cropped keep their centre of gravity centered). These ONLY apply when the
 // finding carries the square master; a legacy finding still plays `footage.mp4`
@@ -209,16 +211,18 @@ const CROP_DIMENSIONS: Record<CropOrientation, { height: number; width: number }
 
 /**
  * Build a same-zone Media Transformations URL that CENTRE-CROPS the square
- * `footage.mp4` master to `orientation`. `fit=crop,width=W,height=H` resizes +
- * crops in one op; the result is edge-cached like the resolution-ladder
- * renditions. Only valid for a finding under the two-master layout (its
- * `footage.mp4` is the clean square) — callers gate on `videoSquaredAt`.
+ * `footage.mp4` master to `orientation`. `fit=cover,width=W,height=H` scales the
+ * source to fill the box then crops the overflow from the centre, in one op; the
+ * result is edge-cached like the resolution-ladder renditions. (`fit=cover` is
+ * the only crop-to-fill fit Cloudflare video MT accepts — `crop` 400s.) Only
+ * valid for a finding under the two-master layout (its `footage.mp4` is the clean
+ * square) — callers gate on `videoSquaredAt`.
  */
 export function videoCrop(logId: string, orientation: CropOrientation): string {
   const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`);
   const { height, width } = CROP_DIMENSIONS[orientation];
 
-  return `${MEDIA_TRANSFORM_BASE}/fit=crop,width=${width},height=${height}/${source}`;
+  return `${MEDIA_TRANSFORM_BASE}/fit=cover,width=${width},height=${height}/${source}`;
 }
 
 /**
