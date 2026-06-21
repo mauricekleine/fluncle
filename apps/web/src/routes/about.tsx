@@ -5,6 +5,7 @@ import {
   lastfmUrl,
   mixcloudUrl,
   musicbrainzUrl,
+  onionUrl,
   siteUrl,
   soundcloudUrl,
   spotifyPlaylistUrl,
@@ -35,7 +36,7 @@ const faq: Array<{ answer: string; question: string }> = [
   },
   {
     answer:
-      "The Galaxy is everywhere I send my findings: the archive here at fluncle.com, Fluncle's Findings on Spotify, the Telegram channel, the CLI, and the rave terminal at ssh rave.fluncle.com. Every surface carries the same findings under the same Log IDs, so it doesn't matter where you find me, it's all there. There's a game too, at galaxy.fluncle.com, where each finding is a star you can fly to.",
+      "The Galaxy is everywhere I send my findings: the archive here at fluncle.com, Fluncle's Findings on Spotify, the Telegram channel, the CLI, and the rave terminal at ssh rave.fluncle.com. Every surface carries the same findings under the same Log IDs, so it doesn't matter where you find me, it's all there. There's a game too, at galaxy.fluncle.com, where each finding is a star you can fly to. And for anyone who likes to travel dark, the whole archive mirrors onto Tor — off the grid, still in the Galaxy.",
     question: "What is Fluncle's Galaxy?",
   },
   {
@@ -73,6 +74,7 @@ function aboutHead() {
       mixcloudUrl,
       soundcloudUrl,
       twitchUrl,
+      onionUrl,
       musicbrainzUrl,
       wikidataUrl,
       lastfmUrl,
@@ -153,7 +155,11 @@ function AboutPage() {
                 Fluncle's Galaxy is the whole of Fluncle across every surface: the archive at
                 fluncle.com, Fluncle's Findings on Spotify, the Telegram channel, the CLI, and the
                 rave terminal at ssh rave.fluncle.com. One traveler's findings, scattered as points
-                of light.
+                of light. The archive mirrors onto Tor too, off the grid at{" "}
+                <a href={onionUrl} rel="noreferrer">
+                  {onionUrl.replace("http://", "")}
+                </a>
+                .
               </dd>
             </div>
             <div className="log-about-definition">
