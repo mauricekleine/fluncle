@@ -46,3 +46,11 @@ https://www.fluncle.com/api/v1/openapi.json
 ```
 
 The [API reference](/docs/api) reads exactly that document, so it never drifts from what the API actually does. Submitting a track through the API is a recommendation, same as everywhere — it's rate-limited, and Fluncle listens before anything joins the archive.
+
+A [Postman](https://www.postman.com/) collection is built from the same OpenAPI document, on request, under the same versioned base:
+
+```
+https://www.fluncle.com/api/v1/postman.json
+```
+
+Import that URL into Postman for a folder per endpoint with example bodies wired up. It's generated from the spec each time, so it tracks the API the same way the reference does.
