@@ -92,6 +92,13 @@ const envKeys = [
   // binding directly in edge-cache.ts, not via readEnv (they may be unset).
   "CF_CACHE_PURGE_ZONE_ID",
   "CF_CACHE_PURGE_TOKEN",
+  // Expo Push Service access token for the mobile app's push notifications
+  // (lib/server/push.ts; docs/rfcs/mobile-app.md §7). OPTIONAL and read via
+  // readOptionalEnv: the whole push feature is a NO-OP until this is set — the
+  // send-on-publish side-channel returns immediately, so the publish path works
+  // unprovisioned exactly like the Last.fm/Telegram hooks. With Expo's "Enhanced
+  // Security for Push" enabled this Bearer is REQUIRED for /send to authorize.
+  "EXPO_ACCESS_TOKEN",
 ] as const;
 
 export type EnvKey = (typeof envKeys)[number];
