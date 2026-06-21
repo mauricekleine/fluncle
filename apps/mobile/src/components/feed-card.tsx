@@ -305,5 +305,5 @@ const styles = StyleSheet.create({
   railPressed: { opacity: 0.6 },
   // The spotify brand mark's three waves sit optically left of the circle's true
   // center (true of the glyph in any icon font), so nudge it onto the rail axis.
-  spotifyNudge: { transform: [{ translateX: 3 }] },
+  spotifyNudge: { transform: [{ translateX: 4 }] },
 });
