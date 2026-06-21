@@ -1,0 +1,113 @@
+// The `admin-submissions` domain contract module — the submission-review queue
+// (list/show + approve/reject). Part of the admin fan-out
+// (docs/orpc-migration-brief.md), built on the same pattern as `./admin-tracks.ts`.
+//
+//   - `list_submissions` / `get_submission` — admin tier (live `requireAdmin`):
+//     reads, so the agent role authenticates too.
+//   - `approve_submission` / `reject_submission` — operator tier (live
+//     `requireOperator`): they mutate the archive, so the agent gets a 403.
+//
+// The `Submission` DTO already has its Zod mirror in `./_shared`; reuse it so the
+// generated OpenAPI components stay deduplicated.
+
+import { oc } from "@orpc/contract";
+import * as z from "zod";
+import { SubmissionSchema } from "./_shared";
+
+/**
+ * `list_submissions` → `GET /admin/submissions` (operationId `listSubmissions`).
+ *
+ * Admin tier (live `requireAdmin`). The pending-review queue. Preserves the live
+ * `{ ok: true, submissions }` envelope.
+ */
+export const listSubmissions = oc
+  .route({
+    method: "GET",
+    operationId: "listSubmissions",
+    path: "/admin/submissions",
+    summary: "List the pending submission-review queue",
+    tags: ["Admin"],
+  })
+  .output(
+    z.object({
+      ok: z.literal(true),
+      submissions: z.array(SubmissionSchema),
+    }),
+  );
+
+/**
+ * `get_submission` → `GET /admin/submissions/{submissionId}` (operationId
+ * `getSubmission`).
+ *
+ * Admin tier (live `requireAdmin`). One submission by id. Preserves the live
+ * `{ ok: true, submission }` envelope and the `not_found`/404 the helper throws.
+ */
+export const getSubmission = oc
+  .route({
+    method: "GET",
+    operationId: "getSubmission",
+    path: "/admin/submissions/{submissionId}",
+    summary: "Get one submission by id",
+    tags: ["Admin"],
+  })
+  .input(z.object({ submissionId: z.string() }))
+  .output(
+    z.object({
+      ok: z.literal(true),
+      submission: SubmissionSchema,
+    }),
+  );
+
+/**
+ * `approve_submission` → `POST /admin/submissions/{submissionId}/approve`
+ * (operationId `approveSubmission`).
+ *
+ * Operator tier (live `requireOperator`). Flips a submission to `approved`.
+ * Preserves the live `{ ok: true, submission }` envelope.
+ */
+export const approveSubmission = oc
+  .route({
+    method: "POST",
+    operationId: "approveSubmission",
+    path: "/admin/submissions/{submissionId}/approve",
+    summary: "Approve a pending submission",
+    tags: ["Admin"],
+  })
+  .input(z.object({ submissionId: z.string() }))
+  .output(
+    z.object({
+      ok: z.literal(true),
+      submission: SubmissionSchema,
+    }),
+  );
+
+/**
+ * `reject_submission` → `POST /admin/submissions/{submissionId}/reject`
+ * (operationId `rejectSubmission`).
+ *
+ * Operator tier (live `requireOperator`). Flips a submission to `rejected`.
+ * Preserves the live `{ ok: true, submission }` envelope.
+ */
+export const rejectSubmission = oc
+  .route({
+    method: "POST",
+    operationId: "rejectSubmission",
+    path: "/admin/submissions/{submissionId}/reject",
+    summary: "Reject a pending submission",
+    tags: ["Admin"],
+  })
+  .input(z.object({ submissionId: z.string() }))
+  .output(
+    z.object({
+      ok: z.literal(true),
+      submission: SubmissionSchema,
+    }),
+  );
+
+/** The `admin-submissions` domain's ops, merged into the root contract by `./index.ts`. */
+export const adminSubmissionsContract = {
+  approve_submission: approveSubmission,
+  get_submission: getSubmission,
+  list_submissions: listSubmissions,
+  reject_submission: rejectSubmission,
+};

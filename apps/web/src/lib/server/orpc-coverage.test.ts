@@ -19,11 +19,11 @@ import { CONTRACT_OPERATION_NAMES } from "@fluncle/contracts/orpc";
 //
 // Phase 1 converted one route (`get_track`); the fan-out pilot added the three
 // public-unauth reads (`get_health`, `list_tracks`, `get_random_track`); fan-out
-// Wave A converts the five remaining public-unauthenticated ops (`list_mixtapes`,
-// `search_tracks`, `list_stories`, `submit_track`, `subscribe_newsletter`),
-// leaving only the `/me` private tier PENDING (Wave B). As later waves convert
-// routes, move each off PENDING — the test stays green only while the list
-// shrinks honestly.
+// Wave A converted the five remaining public-unauthenticated ops (`list_mixtapes`,
+// `search_tracks`, `list_stories`, `submit_track`, `subscribe_newsletter`); fan-out
+// Wave B converts the thirteen `/me` PRIVATE-SESSION ops (the user-auth tier in
+// ../orpc-auth). With Wave B the PENDING list is EMPTY — the public surface is
+// fully contract-first. The admin tier is its own later wave (carved out below).
 
 // Each public API route, keyed by its `/api/v1`-relative path, mapped to the
 // canonical Convention-B `verb_noun` op name it should be served by. This is the
@@ -36,7 +36,6 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   "GET /me/csrf": "get_private_mutation_token",
   "GET /me/export/{exportId}": "get_private_account_export",
   "GET /me/galaxy-progress": "get_private_galaxy_progress",
-  "GET /me/galaxy-progress/logs": "list_private_galaxy_logs",
   "GET /me/saved-findings": "list_private_saved_findings",
   "GET /me/submissions": "list_private_submissions",
   "GET /mixtapes": "list_mixtapes",
@@ -48,6 +47,10 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   "PATCH /me/profile": "update_private_profile",
   "POST /me/delete": "delete_private_account",
   "POST /me/export": "export_private_account_data",
+  // The only `/me/galaxy-progress/logs` route is this POST collect-one (the game's
+  // per-find write → `collectLogId`); there is no list-logs route, so the op is
+  // named for what it does (see ../../routes/api/me/galaxy-progress/logs.ts).
+  "POST /me/galaxy-progress/logs": "collect_private_galaxy_log",
   "POST /me/saved-findings": "save_private_finding",
   "POST /newsletter": "subscribe_newsletter",
   "POST /submissions": "submit_track",
@@ -74,25 +77,11 @@ const CARVE_OUT_ROUTES = new Set([
   "postman[.]json",
 ]);
 
-// The public routes still awaiting conversion. Phase 1 leaves everything but
-// `get_track` here; the fan-out phase removes entries as it converts them. When
-// this list is empty (and admin coverage lands), the public surface is fully
-// contract-first.
-const PENDING_PUBLIC_OPS = new Set([
-  "get_current_private_user",
-  "get_private_mutation_token",
-  "delete_private_account",
-  "export_private_account_data",
-  "get_private_account_export",
-  "get_private_galaxy_progress",
-  "merge_private_galaxy_progress",
-  "list_private_galaxy_logs",
-  "update_private_profile",
-  "list_private_saved_findings",
-  "save_private_finding",
-  "unsave_private_finding",
-  "list_private_submissions",
-]);
+// The public routes still awaiting conversion. Phase 1 left everything but
+// `get_track` here; the fan-out phase removed entries as it converted them. With
+// Wave B this list is EMPTY — the public surface is fully contract-first (the
+// admin tier is its own later wave, carved out above, not counted here).
+const PENDING_PUBLIC_OPS = new Set<string>([]);
 
 const V1_DIR = fileURLToPath(new URL("../../routes/api/v1", import.meta.url));
 
@@ -134,20 +123,18 @@ function isCarvedOut(basename: string): boolean {
 describe("oRPC public-route contract coverage", () => {
   const converted = new Set<string>(CONTRACT_OPERATION_NAMES);
 
-  it("converts every public-unauthenticated op (proof + pilot + Wave A)", () => {
-    expect([...converted].sort()).toEqual(
-      [
-        "get_health",
-        "get_random_track",
-        "get_track",
-        "list_mixtapes",
-        "list_stories",
-        "list_tracks",
-        "search_tracks",
-        "submit_track",
-        "subscribe_newsletter",
-      ].sort(),
-    );
+  it("converts the entire public surface (proof + pilot + Wave A + Wave B /me)", () => {
+    // With Wave B the registry serves every public op — the unauth surface plus the
+    // thirteen `/me` private-session ops. Every public op must be converted (a
+    // SUBSET check, not equality: the registry also holds admin ops now — the admin
+    // wave's pilot — which the sibling orpc-admin-coverage.test.ts is the net for).
+    const publicOps = new Set(Object.values(PUBLIC_ROUTE_OPS));
+
+    for (const op of publicOps) {
+      expect(converted.has(op), `public op "${op}" is missing from the contract registry`).toBe(
+        true,
+      );
+    }
   });
 
   it("accounts for every public op: converted XOR pending", () => {

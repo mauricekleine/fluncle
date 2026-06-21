@@ -189,16 +189,19 @@
 
 /* ————— Code: the machine's own word ————— */
 
-/* Code blocks read clean and flush — no card around them. Fumadocs' CodeBlock
-   ships the `<figure class="shiki">` with its own `border`, `bg-fd-card`, and
-   `shadow-sm`; we drop all three so a standalone block stands on the reading
-   pane unboxed, and a block inside a <Card> lets the card be the single
-   container (no box-in-a-box, no doubled border, no different background). The
-   code area itself sits straight on the #nd-page scrim, which is dark enough to
-   hold the Shiki tokens at AA. The mono type is set via --fd-font-mono above. */
+/* Code blocks keep ONE quiet card: a single rounded border, transparent fill (no
+   different background), no shadow. Fumadocs' CodeBlock ships the
+   `<figure class="shiki">` with its own `border` + `bg-fd-card` + `shadow-sm`,
+   and our old `pre` rule stacked a SECOND border + pane inside it — a box-in-a-box.
+   We drop the inner doubling and the custom fill but keep the single outer border
+   so the example reads as one contained card, not a flush wall of text. A block
+   inside a <Card> still resolves to one border (the card's own). The code sits on
+   the transparent scrim, dark enough to hold the Shiki tokens at AA. Mono type via
+   --fd-font-mono above. */
 #nd-docs-layout figure.shiki {
   background: transparent;
-  border: none;
+  border: 1px solid var(--color-fd-border);
+  border-radius: 0.625rem;
   box-shadow: none;
 }
 

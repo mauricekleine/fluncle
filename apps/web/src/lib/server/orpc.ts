@@ -30,7 +30,16 @@ import { implement, ORPCError } from "@orpc/server";
 import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
 import { type OrpcContext } from "./orpc-auth";
 import { isApiFaultData } from "./orpc/_shared";
+import { adminBackfillsHandlers } from "./orpc/admin-backfills";
+import { adminMixtapesHandlers } from "./orpc/admin-mixtapes";
+import { adminSocialHandlers } from "./orpc/admin-social";
+import { adminSubmissionsHandlers } from "./orpc/admin-submissions";
+import { adminTokensHandlers } from "./orpc/admin-tokens";
+import { adminTracksHandlers } from "./orpc/admin-tracks";
 import { healthHandlers } from "./orpc/health";
+import { meHandlers } from "./orpc/me";
+import { meGalaxyHandlers } from "./orpc/me-galaxy";
+import { meSavedHandlers } from "./orpc/me-saved";
 import { mixtapesHandlers } from "./orpc/mixtapes";
 import { newsletterHandlers } from "./orpc/newsletter";
 import { searchHandlers } from "./orpc/search";
@@ -53,7 +62,16 @@ const os = implement(contract).$context<OrpcContext>();
 //
 // Add a domain: import its `*Handlers(os)` factory and spread it here.
 export const router = os.router({
+  ...adminBackfillsHandlers(os),
+  ...adminMixtapesHandlers(os),
+  ...adminSocialHandlers(os),
+  ...adminSubmissionsHandlers(os),
+  ...adminTokensHandlers(os),
+  ...adminTracksHandlers(os),
   ...healthHandlers(os),
+  ...meHandlers(os),
+  ...meGalaxyHandlers(os),
+  ...meSavedHandlers(os),
   ...mixtapesHandlers(os),
   ...newsletterHandlers(os),
   ...searchHandlers(os),

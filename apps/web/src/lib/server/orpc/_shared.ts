@@ -59,3 +59,47 @@ export function apiFault(error: unknown): ORPCError<string, ApiFaultData> {
     status,
   });
 }
+
+// ── Response → fault parity (the `/me` private tier) ─────────────────────────
+// The live `/me` route helpers (account-data.ts, public-auth.ts) signal failure
+// by RETURNING a `jsonError` `Response` (body `{ code, message, ok: false }`,
+// status on the Response), not by throwing — the auth/CSRF/rate-limit guards
+// (401/403/415/429) and the per-op business 4xx (404/409/…) both take this form.
+// `responseFault` re-expresses one of those Responses as an `ORPCError` carrying
+// the SAME `{ code, message }` in `ApiFaultData` at the SAME status, so the rails
+// encoder reproduces the legacy body byte-for-byte. The `/me` handlers (and the
+// private-user middleware in ../orpc-auth) throw this whenever a reused live
+// helper hands back a `Response`, so every guard/business failure stays exact.
+
+/**
+ * Convert a `jsonError`-shaped `Response` (the failure carrier of the live `/me`
+ * helpers) into an `ORPCError` that reproduces its `{ code, message }` body at
+ * its status. The body is read from a clone (the live Response is built in
+ * memory, never streamed); a non-JSON or shapeless body degrades to a generic
+ * fault at the Response's status so an unexpected helper Response can't crash the
+ * rails.
+ */
+export async function responseFault(response: Response): Promise<ORPCError<string, ApiFaultData>> {
+  let apiCode = "error";
+  let apiMessage = response.statusText || "Request failed";
+
+  try {
+    const body = (await response.clone().json()) as { code?: unknown; message?: unknown };
+
+    if (typeof body.code === "string") {
+      apiCode = body.code;
+    }
+
+    if (typeof body.message === "string") {
+      apiMessage = body.message;
+    }
+  } catch {
+    // A non-JSON body keeps the status-derived defaults above.
+  }
+
+  return new ORPCError("INTERNAL_SERVER_ERROR", {
+    data: { apiCode, apiMessage },
+    message: apiMessage,
+    status: response.status,
+  });
+}

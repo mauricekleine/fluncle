@@ -1,8 +1,15 @@
 # Hermes agent — giving it real work (automation orchestrator)
 
-**Status: parked planning, not a spec.** This brief consolidates the scoping for turning the Hermes chat agent into Fluncle's queue-driven automation orchestrator. It is **blocked on the in-flight CLI noun/verb naming pass** (the `fluncle admin …` surface is being re-aligned; command names below are today's, several will change). The plan: park this here, revise it once the naming lands, then execute. Per `AGENTS.md`, a `*-brief.md` is non-canonical planning — the codebase and canon (`DESIGN.md` / `PRODUCT.md` / `VOICE.md`) win on any conflict.
+**Status: parked planning, not a spec — but the slice it waited on has largely landed.** This brief is the scoping for turning the Hermes chat agent into Fluncle's queue-driven automation orchestrator. The oRPC + Convention B slice that gated it is now mostly in (see [What landed](#what-landed-so-this-is-buildable-not-blocked)); what's left before a clean build start is narrow (see [Green light](#green-light)). Per `AGENTS.md`, a `*-brief.md` is non-canonical planning — the codebase and canon (`DESIGN.md` / `PRODUCT.md` / `VOICE.md`) win on any conflict.
 
-Related: the live agent's architecture + security model is [docs/agents/hermes-agent.md](./agents/hermes-agent.md); the threads this brief unifies are currently split across the ROADMAP's _Hermes follow-ups_, _Newsletter agent_, _Audio observation_, and _Backfill_ sections.
+Related: the live agent's architecture + security model is [docs/agents/hermes-agent.md](./agents/hermes-agent.md); the oRPC rails are [docs/orpc-migration-brief.md](./orpc-migration-brief.md); the newsletter is now owned by its own RFC, [docs/rfcs/newsletter-own-the-stack.md](./rfcs/newsletter-own-the-stack.md) (see [§ Newsletter](#newsletter--owned-by-its-own-rfc)).
+
+## What landed (so this is buildable, not blocked)
+
+- **The operator/agent auth spine** — `apps/web/src/lib/server/orpc-auth.ts`: `adminAuth` middleware injects a typed `context.role`; `adminProcedure` is the agent-allowed tier; `operatorProcedure` / `operatorGuard` is operator-only (403s the agent); field-level checks read `context.role` in-handler. A verbatim port of the live `env.ts` role model. **This is the foundation every role-flip below now rides** — flips are a procedure-tier change, not a guard swap.
+- **The admin oRPC migration** — the #75 pilot + the #77 fan-out drain the admin coverage net's PENDING list to carve-outs only. The Hermes-relevant ops land on the exact tiers we designed (real contract names in the table below).
+- **Convention B ratified** (`docs/naming-conventions.md`, 2026-06-21). The contract registry (`packages/contracts/src/orpc/`) is the enforced source of truth — a route without a contract is a build failure.
+- **Fluncle's real voice locked** (#73/#74) — bespoke ElevenLabs voice, tuned settings, recovered-audio delivery guide finalized. The observation-automation voice gate is **resolved**.
 
 ## The one principle everything hangs on
 
@@ -16,52 +23,41 @@ This works because **every task worth automating already fits (or fits with guar
 
 ## What's handoffable
 
-| Task                                                 | Queue ready?                                 | Agent-allowed today?                    | Agent needs a vendor key?                                               | Work to enable                                                                                                                                                                                                                                                                              |
-| ---------------------------------------------------- | -------------------------------------------- | --------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Enrichment self-heal** (today `enrich-sweep`)      | ✅ enrich-queue (`status=queue`)             | ✅ yes                                  | none (Worker re-fires Spinup)                                           | schedule a Hermes cron — no new code beyond the naming pass.                                                                                                                                                                                                                                |
-| **Audio observations** (today `track observe`)       | ❌ needs a `hasObservation` filter           | ❌ operator-only → flip **with guards** | none (ElevenLabs + Firecrawl already Worker-side via `/observe`)        | add `hasObservation` filter + an `observe-context` endpoint (so the agent scripts _from_ facts without holding Firecrawl) + flip `observe` to agent-allowed behind the `observe:${logId}` idempotency key. **Gated on Fluncle's real voice.**                                               |
-| **Newsletter — end-to-end** (Friday)                 | ✅ time window via `/api/tracks?since&until` | ❌ no command yet                       | 🔴 **YES today** — host holds `LOOPS_API_KEY` + `FIRECRAWL_API_KEY` raw | migrate Loops → **Resend** (list + subscribe + template), wrap Resend + Firecrawl behind `newsletter draft` (agent) + `newsletter send` (operator); the Friday cron drafts then **pings the operator on Discord** to review & send. See [§ Newsletter](#newsletter--end-to-end-via-resend). |
-| **Discogs ID backfill** (today `backfill discogs`)   | ✅ targeted (`in_release_id IS NULL`)        | ❌ operator-only → flip                 | none (Worker-side)                                                      | the `discogsStatus` reliability column (below) + role flip.                                                                                                                                                                                                                                 |
-| **Last.fm loves backfill** (today `backfill lastfm`) | ⚠️ re-loves all (no unloved filter)          | ❌ operator-only → flip                 | none (Worker-side)                                                      | the `lastfmLovedAt` reliability column (below) + role flip.                                                                                                                                                                                                                                 |
+Tiers and op names are the **landed oRPC contracts** (#75 / #77). "Flip" = move the contract from `operatorProcedure` to `adminProcedure` (agent-allowed).
 
-**Not handoffable** (stay operator / human / compute, correctly): `add` (the one human act); **tag** and **note** (editorial judgment, gated on the vibe-placement model — and `note` is Fluncle's voice, operator-only by design); **render** (the laptop routine, not the agent); **YouTube / TikTok / mixtape publish + distribute** (public, irreversible); `submissions approve/reject` (editorial); all `auth` flows.
+| Task (oRPC op)                                 | Queue ready?                          | oRPC tier today                       | Work to enable                                                                                                                                                                                                                                         |
+| ---------------------------------------------- | ------------------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Enrichment self-heal** (`sweep_enrichment`)  | ✅ enrich-queue (`status=queue`)      | ✅ **admin** (agent-allowed)          | wire the Hermes cron — the endpoint is already on the agent tier. Only gate: the CLI command name (rename step).                                                                                                                                       |
+| **Audio observations** (`observe_track`)       | ❌ needs a `hasObservation` filter    | operator (#75) → **flip**             | flip to `adminProcedure` + `observe:${logId}` idempotency key + Firecrawl untrusted-input boundary; add `hasObservation` on `list_tracks_admin`; add an `observe-context` contract (script _from_ facts without holding Firecrawl). Voice ✅ resolved. |
+| **Discogs ID backfill** (`backfill_discogs`)   | ✅ targeted (`in_release_id IS NULL`) | operator (#77) → **flip**             | the `discogsStatus` reliability column (below) + resolver refactor + tier flip.                                                                                                                                                                        |
+| **Last.fm loves backfill** (`backfill_lastfm`) | ⚠️ re-loves all (no unloved filter)   | operator (#77) → **flip**             | the `lastfmLovedAt` reliability column (below) + tier flip.                                                                                                                                                                                            |
+| **Newsletter** (draft/send)                    | ✅ time window via `list_tracks`      | draft agent / send operator (planned) | owned by [newsletter-own-the-stack.md](./rfcs/newsletter-own-the-stack.md); Hermes adds the draft-then-Discord-nudge layer. See [§ Newsletter](#newsletter--owned-by-its-own-rfc).                                                                     |
 
-## The secrets invariant — the newsletter is the only breach
+**Not handoffable** (stay operator / human / compute, correctly): `add_track` (the one human act); **tag** and **note** (editorial judgment, gated on the vibe-placement model — and `note` is Fluncle's voice, operator-only by design); **render** (the laptop routine, not the agent); YouTube / TikTok / mixtape **publish + distribute** (`publish_*`, `*_youtube`, `draft_track_social --platform youtube` — public, irreversible); `approve_submission` / `reject_submission` (editorial); all `auth` / token-mint ops.
 
-Audit result: the "agent holds only its admin token; the Worker owns every vendor key" invariant holds **everywhere except the newsletter agent**. ElevenLabs, Discogs, Last.fm, and Postiz are all already wrapped behind `fluncle` commands (the Worker holds the keys). The newsletter agent is the lone exception — it calls the `loops` and `firecrawl` CLIs directly, so it holds both raw keys on its host. The newsletter is **also moving off Loops onto Resend** (next section), so the key-exposure fix and the platform swap land together: wrap Resend + Firecrawl behind `fluncle` commands so the agent holds only its admin token, like everything else. Closing this is the highest-value piece of the brief — it removes the last raw vendor key _and_ folds the last external agent into Hermes.
+## Newsletter — owned by its own RFC
 
-## Newsletter — end-to-end via Resend
+The newsletter is now scoped in **[docs/rfcs/newsletter-own-the-stack.md](./rfcs/newsletter-own-the-stack.md)** (ratified). It covers the Loops → Resend move (Audience, subscribe repoint, the on-subscribe confirmation, the Broadcast send) **and** a new newsletter **editions archive** (an `editions` table, `/newsletter/<id>` pages, `list_editions` / `get_edition` contracts), sequenced post-oRPC and targeting an upcoming Friday edition. That RFC owns the build; this brief no longer duplicates it.
 
-The newsletter moves from Loops to **Resend** (account + domains already configured). This is the standout task: it's the one handoffable step that now goes **fully closed-loop**, because Resend has a programmatic send (Loops did not — its dashboard-only send was what forced the manual tap).
+The **Hermes-specific contribution** sits on top of that RFC's send capability — the agent-drafts-operator-sends tiering, with a Discord nudge as the gate:
 
-It's a **Loops → Resend migration, not an add-on** — Resend takes all three jobs Loops did today:
+- **Draft** runs **agent-allowed** (the Friday cron builds the edition via the RFC's draft path; Firecrawl tidbits stay Worker-side).
+- **Send** stays **operator-only** — sending to the real list is publish-class (PRODUCT.md "operator-controlled").
+- **The gate is a Discord nudge:** the agent drafts, then posts a Discord message to the operator (subject, find count, the review/send command) using its existing Discord presence; the operator reviews and sends. The agent never sends. (Upgrade path: schedule the send with an operator veto window — a later choice, not the default.)
 
-- **Subscriber list** — `subscribeToNewsletter` (`POST /api/newsletter`, `contacts/create`) repoints to a Resend **Audience** + `contacts.create`; the existing Loops list is a one-time export → Resend Audience.
-- **Confirmation email** on subscribe — the Loops transactional (`LOOPS_TRANSACTIONAL_ID`) becomes a Resend transactional `emails.send`.
-- **The weekly campaign** — a Resend **Broadcast**, created/updated _and_ sent by API. The LMX template ports to a Resend Broadcast template (triple-`{{{VAR}}}` syntax) or a React Email render.
-
-Two Worker endpoints / commands, on different role tiers:
-
-- `fluncle admin newsletter draft --since … --until …` (**agent-allowed**) — Worker pulls the window's finds + mixtapes, runs the Firecrawl tidbits behind the domain allow-list + lyric-marker guards, and creates/updates the Resend Broadcast **draft**.
-- `fluncle admin newsletter send` (**operator-only**) — Worker sends the drafted Broadcast.
-
-**The send gate — agent drafts, then nudges; operator sends.** Sending to the real subscriber list is publish-class (public, un-sendable-back, reputation-bearing), so it stays operator-only per the role model and PRODUCT.md ("publishing operator-controlled"). The Friday cron has the agent **draft the Broadcast and then post a Discord message to the operator** — subject, find count, any mixtape, the tidbits + sources, and the review/send command — using its existing Discord presence as the reminder channel. The operator reviews and fires `newsletter send`. The agent never sends. (Upgrade path if a hands-off cadence is ever wanted: the agent schedules the Broadcast via Resend `scheduled_at` with an operator veto window — explicitly a later choice, not the default.)
-
-**Secrets:** `RESEND_API_KEY` is Worker-owned; the agent holds neither it nor Firecrawl. Retire `LOOPS_API_KEY` + `LOOPS_TRANSACTIONAL_ID` and the `loops`/`firecrawl` CLI deps when this lands.
-
-**Resend gotchas to bake into the spec:** use a **full-access** API key (a sending-only restricted key 401s on the contacts/broadcasts endpoints); put an **idempotency key** on the send (a retried send must not double-blast the list); the `from` must match a verified domain; Broadcasts carry the **unsubscribe link + suppression** automatically (covers the CAN-SPAM/compliance side); mind **domain warm-up** volume limits on the first sends.
+Fold this draft-then-nudge tiering into the newsletter RFC when it's built, or keep it a thin Hermes add-on once the RFC's send lands. The secrets invariant holds throughout: `RESEND_API_KEY` is Worker-owned and the agent holds no vendor key — the newsletter was the last raw-key breach, and the RFC closes it.
 
 ## Queue gaps
 
-A cron agent needs a "give me the next batch needing X" query per step. Today:
+A cron agent needs a "give me the next batch needing X" query per step, off the now-oRPC `list_tracks_admin` (GET /admin/tracks, #77):
 
-- **Ready:** enrichment (`status=queue`), render (`hasVideo=false`), tag (`placement=unplaced`) — all via `GET /api/admin/tracks`.
-- **Need new filter params on `/api/admin/tracks`:** `hasObservation`, `hasNote`, and per-platform publish (`hasYouTubePost` / `hasTikTokPost`, joined on `social_posts` status).
+- **Ready:** enrichment (`status=queue`), render (`hasVideo=false`), tag (`placement=unplaced`).
+- **Need new filter params on `list_tracks_admin`:** `hasObservation`, `hasNote`, and per-platform publish (`hasYouTubePost` / `hasTikTokPost`, joined on `social_posts` status). These extend the existing contract's input schema.
 - **Backfills:** Discogs already filters `in_release_id IS NULL`; Last.fm re-walks all published (no unloved filter) — both fixed by the reliability columns below.
 
 ## Two reliability columns (the self-heal made precise)
 
-Both love-on-add and discogs-resolve-on-add are **best-effort** (verified: each swallows its own errors and never blocks or fails an `add`). That is correct — but it means a transient failure is silent and permanent unless something re-attempts it. The backfill commands _are_ that re-attempt (the same role `enrich-sweep` plays for enrichment), so they are infrastructure, not throwaway scripts. Two columns make them targeted instead of brute-force.
+Both love-on-add and discogs-resolve-on-add are **best-effort** (verified: each swallows its own errors and never blocks or fails an `add`). That is correct — but it means a transient failure is silent and permanent unless something re-attempts it. The backfill commands _are_ that re-attempt (the same role `sweep_enrichment` plays for enrichment), so they are infrastructure, not throwaway scripts. Two columns make them targeted instead of brute-force.
 
 Conventions that make this clean (from the schema + DTO): the public DTO is an explicit SQL whitelist (`TRACK_SELECT` + a row-mapper), so a column that isn't added there **never surfaces** — "internal only" is free. Listing orders by `added_at`, not `updated_at`, so these writes won't reshuffle the feed; but `updatedAt` _is_ surfaced (freshness / lastmod) and the enrich-sweep stale clock reads it, so both new columns must be written **quietly** (touch only their own column, don't bump `updated_at`).
 
@@ -91,40 +87,48 @@ Stops overloading `in_release_id IS NULL`, which today conflates "never ran" wit
 
 Migration: add both columns to `src/db/schema.ts`, then `bun run --cwd apps/web db:generate` (never hand-written, per `AGENTS.md`); Cloudflare auto-migrates on deploy.
 
-## Build these as oRPC contracts (admin is on oRPC now)
+## Build on the oRPC rails
 
-Every endpoint this brief adds or touches is admin (`/api/admin/*`) — the newsletter draft, observe-context, the backfills, the new queue filters, and the role flips. The [oRPC migration](./orpc-migration-brief.md) now brings the admin surface onto oRPC (admin auth is a typed `context.role` tier via `adminProcedure` / `operatorProcedure`, not per-handler `requireAdmin` / `requireOperator` calls). Since that slice lands first (see Blocked on), build this brief's endpoints as **oRPC contracts on the right procedure tier**, not as TanStack add-ons: the new `…/newsletter/draft` and `observe-context` ops get contracts in the registry; the new `/api/admin/tracks` filter params extend the existing tracks-list contract.
+Admin **is** on oRPC now (the #75 pilot + the #77 fan-out), so every endpoint this brief adds or touches is a contract, not a TanStack add-on:
+
+- **New ops** — `observe-context`, and the newsletter `draft` / `send` (per the RFC) — get contracts in `packages/contracts/src/orpc/` and handlers in `apps/web/src/lib/server/orpc/`, on the right tier via `.use(adminAuth)` (agent-allowed) or `.use(adminAuth).use(operatorGuard)` (operator-only).
+- **New filter params** (`hasObservation`, …) extend the existing `list_tracks_admin` input schema.
+- **Role flips** are a one-line tier change on the existing contract (below), and the admin coverage test keeps the registry honest.
 
 ## Role flips
 
-To run on a Hermes cron, these routes move from the operator tier to the admin tier (agent-allowed) — a **procedure-tier change** (`operatorProcedure → adminProcedure`) now that admin is on oRPC, not swapping a guard call. Each is defensible — idempotent and reversible, the Worker owns the keys, and an injected trigger's blast radius is "a few extra free / rate-limited vendor calls":
+Move the contract from the operator tier to the admin tier (agent-allowed) — `operatorProcedure → adminProcedure`. Each is defensible: idempotent and reversible, the Worker owns the keys, and an injected trigger's blast radius is "a few extra free / rate-limited vendor calls":
 
-- `POST /api/admin/backfill/lastfm`
-- `POST /api/admin/backfill/discogs`
-- `POST /api/admin/tracks/:id/observe` (with the `observe:${logId}` idempotency key + the Firecrawl untrusted-input boundary)
-- the new `POST /api/admin/newsletter/draft`
+- `backfill_lastfm` (operator → admin)
+- `backfill_discogs` (operator → admin)
+- `observe_track` (operator → admin) — **plus** the `observe:${logId}` idempotency key + the Firecrawl untrusted-input boundary
 
-`enrich-sweep` is already agent-allowed. The new `POST /api/admin/newsletter/send` **stays operator-tier** (publish-class) — the agent drafts and pings; only the operator sends.
+`sweep_enrichment` is **already on the admin tier** (#77 set it there deliberately as the external-cron tier) — no flip needed, it's cron-ready. Newsletter `draft` is agent-allowed and `send` stays operator (per the RFC + the Discord-nudge gate).
 
 ## Setup / mechanism
 
 Hermes [cron jobs](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron), each a small "read a queue → act per item, idempotently" loop over the `fluncle` CLI:
 
 - **Hourly:** the enrichment self-heal (the on-add trigger already fires enrichment; this is the backstop for the ones that slipped).
-- **Hourly, queue-gated:** read the observation queue, render the next finding's observation (idempotent per Log ID; no-op when empty) — _after_ the voice lands.
+- **Hourly, queue-gated:** read the observation queue (`hasObservation=false`), render the next finding's observation (idempotent per Log ID; no-op when empty).
 - **Daily:** the Last.fm love backfill (free, idempotent, now targeted).
 - **Weekly / on-demand:** the Discogs backfill (rate-limited; `--retry-unmatched` rarer still).
-- **Friday:** draft the newsletter (Resend Broadcast, Worker-side) → **post a Discord reminder** to the operator (subject, find count, review/send command) → operator reviews and fires `newsletter send`. The agent drafts and nudges; it never sends (publish-class).
+- **Friday:** draft the newsletter edition (per the RFC) → **post a Discord reminder** to the operator → operator reviews and sends. The agent drafts and nudges; it never sends (publish-class).
 
 ## Build order
 
-1. **Enrichment self-heal cron** — the cheapest win; proves the cron pattern. (No code beyond the naming pass.)
-2. **Newsletter → Resend, end-to-end** — biggest win (closes the last key breach + the consolidation, and goes fully closed-loop). Includes the Loops→Resend migration (list export → Audience, subscribe repoint, LMX → Broadcast template), the `draft` (agent) / `send` (operator) commands, and the Friday cron's Discord review nudge. Independent of the voice gate. `docs/agents/newsletter-agent.md` gets a full rewrite here (it's deeply Loops-shaped).
-3. **Reliability columns + backfill role flips** — `lastfmLovedAt`, `discogsStatus` + the resolver refactor; then daily / weekly crons.
-4. **Observation automation** — after Fluncle's real voice; needs the `hasObservation` filter + `observe-context` endpoint + the guarded `observe` flip.
+1. **Enrichment self-heal cron** — the cheapest win; `sweep_enrichment` is already on the agent tier, so this is just the cron once CLI names settle. Proves the cron pattern.
+2. **Reliability columns + backfill tier flips** — `lastfmLovedAt`, `discogsStatus` + the resolver refactor; flip `backfill_lastfm` / `backfill_discogs` to the admin tier; then the daily / weekly crons.
+3. **Observation automation** — voice ✅; flip `observe_track` to the admin tier + idempotency, add the `hasObservation` filter on `list_tracks_admin`, add the `observe-context` contract; then the queue-gated cron.
+4. **Newsletter** — rides [newsletter-own-the-stack.md](./rfcs/newsletter-own-the-stack.md); once its send lands, add the draft-then-Discord-nudge tiering. (That RFC moves on its own timeline; this is the Hermes hook on top.)
 
-## Blocked on
+## Green light
 
-- **The CLI noun/verb naming pass (in flight).** Command names will change (`enrich-sweep` is shorthand, not the target shape); don't wire cron to names that are about to move. **Revise this brief once the naming lands**, then execute.
-- **Fluncle's real voice** — gates the observation automation (a placeholder render would need re-rendering).
-- Everything else above is build work, sequenced once the names settle.
+A clean build start needs both unchecked boxes ticked:
+
+- ☑ **#77 merged** (on `main` at `6513deb`) — the admin oRPC migration is complete; the PENDING list is down to carve-outs, and every Hermes op is a contract on its tier.
+- ☐ **CLI admin naming rename landed** (Convention B §4 step 3 — not started, no aliases yet). The crons invoke via the `fluncle` CLI, so the command names must be stable first; don't wire a cron to a name about to move. **This is now the only remaining gate.**
+- ☑ **Fluncle's voice** — locked (#73/#74); observation automation unblocked.
+- ☑ **The auth spine** — `orpc-auth.ts` (`adminProcedure` / `operatorProcedure`); role flips are tier changes.
+
+The reliability columns + resolver refactor are oRPC-independent and could start earliest, but they touch `tracks.ts` / `schema.ts`, so hold them until the oRPC slice's sole-active-slice window has fully cleared. Once the two boxes tick, the endpoints get built as oRPC contracts on the existing tiers and the crons wire up in the order above.

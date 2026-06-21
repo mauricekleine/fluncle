@@ -35,13 +35,15 @@ export type ObservationVoiceSettings = {
   style: number;
 };
 
-// A measured, sparse read for a quiet field observation: high stability (steady),
-// modest style, speed just under 1 so the <break/>s breathe.
+// A measured read for a quiet field observation, tuned by ear for the bespoke
+// Fluncle voice: stability steady-but-not-flat (lower than before, so the read
+// keeps some life), a touch more style for colour, speed just under 1 so the
+// <break/>s breathe.
 export const DEFAULT_VOICE_SETTINGS: ObservationVoiceSettings = {
   similarityBoost: 0.75,
-  speed: 0.92,
-  stability: 0.6,
-  style: 0.15,
+  speed: 0.88,
+  stability: 0.48,
+  style: 0.3,
 };
 
 /** The structured observation the agent authors and posts to /observe. */
@@ -90,6 +92,34 @@ const BANNED_WORDS = [
   "streaming",
 ] as const;
 
+// Earthly geography is banned from the SPOKEN read: the cosmos replaces the map,
+// so no countries, cities, nationalities, or regions. The context_note (firecrawl
+// facts) may carry "US/American producer" as fuel, but a real render leaked it as
+// "the American side of the map", breaking the fiction — translate an origin into
+// a far sector or drop it (see references/recovered-audio-delivery.md). This list
+// is deliberately TIGHT: only terms with no plausible cosmic or innocent meaning
+// in a 30s observation, so ambiguous short tokens that would false-positive (e.g.
+// a bare "us"/"uk") are left out and only their unambiguous dotted forms are
+// caught. Matched as whole words, case-insensitively.
+const BANNED_GEOGRAPHY = [
+  "american",
+  "americas",
+  "america",
+  "british",
+  "britain",
+  "england",
+  "english",
+  "london",
+  "dutch",
+  "holland",
+  "netherlands",
+  "european",
+  "europe",
+  "u.k.",
+  "u.s.",
+  "usa",
+] as const;
+
 export type VoiceGateViolation = { reason: string; word?: string };
 
 /**
@@ -104,6 +134,21 @@ export function scanObservationScript(text: string): VoiceGateViolation[] {
     // Whole-word match so "signature"/"contention" don't false-positive.
     if (new RegExp(`\\b${word}\\b`, "i").test(lower)) {
       violations.push({ reason: `banned identity word "${word}" (VOICE.md §3)`, word });
+    }
+  }
+
+  for (const place of BANNED_GEOGRAPHY) {
+    // Escape the dotted abbreviations (u.k./u.s.) and anchor on word boundaries.
+    // A trailing dot already ends the token, so we only need a trailing \b for the
+    // plain alphabetic terms.
+    const escaped = place.replace(/\./g, "\\.");
+    const pattern = place.endsWith(".") ? `\\b${escaped}` : `\\b${escaped}\\b`;
+
+    if (new RegExp(pattern, "i").test(lower)) {
+      violations.push({
+        reason: `earthly geography "${place}" — the cosmos replaces the map; translate an origin into a far sector or drop it (recovered-audio-delivery.md)`,
+        word: place,
+      });
     }
   }
 

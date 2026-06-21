@@ -21,7 +21,16 @@
 // OpenAPI `operationId` (`get_track` → `getTrack`). The REST path mirrors the
 // live route; resources are plural, the op noun stays singular.
 
+import { adminBackfillsContract } from "./admin-backfills";
+import { adminMixtapesContract } from "./admin-mixtapes";
+import { adminSocialContract } from "./admin-social";
+import { adminSubmissionsContract } from "./admin-submissions";
+import { adminTokensContract } from "./admin-tokens";
+import { adminTracksContract } from "./admin-tracks";
 import { healthContract } from "./health";
+import { meContract } from "./me";
+import { meGalaxyContract } from "./me-galaxy";
+import { meSavedContract } from "./me-saved";
 import { mixtapesContract } from "./mixtapes";
 import { newsletterContract } from "./newsletter";
 import { searchContract } from "./search";
@@ -31,7 +40,58 @@ import { tracksContract } from "./tracks";
 
 // Re-export the per-op contracts so existing importers (and the typed client)
 // keep their entrypoints.
+export { backfillDiscogs, backfillLastfm, sweepEnrichment } from "./admin-backfills";
+export {
+  addMixtapeMembers,
+  createMixtape,
+  deleteMixtape,
+  finalizeMixtapeMixcloud,
+  finalizeMixtapeYoutube,
+  getMixtapeSocial,
+  initiateMixtapeYoutube,
+  listMixtapesAdmin,
+  publishMixtape,
+  publishMixtapeYoutube,
+  setMixtapeMembers,
+  updateMixtape,
+} from "./admin-mixtapes";
+export { draftTrackSocial, listTrackSocial, updateTrackSocial } from "./admin-social";
+export {
+  approveSubmission,
+  getSubmission,
+  listSubmissions,
+  rejectSubmission,
+} from "./admin-submissions";
+export {
+  exchangeLastfmSession,
+  mintMixcloudToken,
+  mintYoutubeToken,
+  startLastfmAuth,
+} from "./admin-tokens";
+export {
+  addTrack,
+  finalizeTrackVideo,
+  listTracksAdmin,
+  observeTrack,
+  presignTrackVideoUploads,
+  updateTrack,
+} from "./admin-tracks";
 export { getHealth } from "./health";
+export {
+  deletePrivateAccount,
+  exportPrivateAccountData,
+  getCurrentPrivateUser,
+  getPrivateAccountExport,
+  getPrivateMutationToken,
+  listPrivateSubmissions,
+  updatePrivateProfile,
+} from "./me";
+export {
+  collectPrivateGalaxyLog,
+  getPrivateGalaxyProgress,
+  mergePrivateGalaxyProgress,
+} from "./me-galaxy";
+export { listPrivateSavedFindings, savePrivateFinding, unsavePrivateFinding } from "./me-saved";
 export { listMixtapes } from "./mixtapes";
 export { subscribeNewsletter } from "./newsletter";
 export { searchTracks } from "./search";
@@ -40,6 +100,9 @@ export { submitTrack } from "./submissions";
 export { getRandomTrack, getTrack, listTracks } from "./tracks";
 export {
   MixtapeDTOSchema,
+  MixtapeSocialPostItemSchema,
+  PublicUserSchema,
+  SocialPostItemSchema,
   SubmissionSchema,
   TrackListItemSchema,
   TrackSearchResultSchema,
@@ -56,7 +119,16 @@ export {
  * a domain joins the registry.
  */
 export const contract = {
+  ...adminBackfillsContract,
+  ...adminMixtapesContract,
+  ...adminSocialContract,
+  ...adminSubmissionsContract,
+  ...adminTokensContract,
+  ...adminTracksContract,
   ...healthContract,
+  ...meContract,
+  ...meGalaxyContract,
+  ...meSavedContract,
   ...mixtapesContract,
   ...newsletterContract,
   ...searchContract,

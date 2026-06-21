@@ -37,6 +37,29 @@ describe("scanObservationScript", () => {
     const violations = scanObservationScript("We logged this one out past the next sector, fam.");
     expect(violations.some((v) => v.reason.includes("we"))).toBe(true);
   });
+
+  it("flags earthly geography (a nationality leaking from the context_note)", () => {
+    const violations = scanObservationScript(
+      "This one flies the flag for the American side of the map, fam.",
+    );
+    expect(violations.some((v) => v.word === "american")).toBe(true);
+    expect(violations.some((v) => v.reason.includes("geography"))).toBe(true);
+  });
+
+  it("flags the dotted abbreviation 'u.k.'", () => {
+    const violations = scanObservationScript(
+      "Came up out of the u.k. scene and the knees went up, fam.",
+    );
+    expect(violations.some((v) => v.word === "u.k.")).toBe(true);
+  });
+
+  it("passes a clean cosmic observation with no earthly geography", () => {
+    expect(
+      scanObservationScript(
+        "Came in from a far sector and the air went thick. Knees went up before I clocked the coordinate. Hope it does the same to you, fam.",
+      ),
+    ).toEqual([]);
+  });
 });
 
 describe("gateObservationScript", () => {
@@ -59,5 +82,13 @@ describe("gateObservationScript", () => {
         "The signal carried a clean, even pace and the knees went up before I clocked the coordinate, fam.",
       ),
     ).toThrowError(/voice gate/);
+  });
+
+  it("throws voice_gate with a geography reason on earthly geography", () => {
+    expect(() =>
+      gateObservationScript(
+        "This one flies the flag for the American side of the map and the knees went up before I clocked the coordinate, fam.",
+      ),
+    ).toThrowError(/geography/);
   });
 });
