@@ -9,10 +9,16 @@
 //     `context.role`: the agent may write ONLY analysis fields; an operator-only
 //     field written by the agent is a 403 `forbidden` (rejected, not dropped). The
 //     operator may write anything.
-//   - `observe_track` — port of POST /admin/tracks/{trackId}/observe. On the
-//     operator tier (`adminAuth` + `operatorGuard`) — the live route is
-//     `requireOperator`, so the agent gets a 403. This MATCHES the live tier; the
-//     migration brief's "agent-allowed" note is superseded by the codebase.
+//   - `observe_track` — POST /admin/tracks/{trackId}/observe. FLIPPED to the
+//     agent tier (`adminAuth` only) so the Hermes observation cron can drive it
+//     (docs/hermes-automation-brief.md Build order #3). Idempotent per finding (an
+//     existing observation is a no-op). It no longer holds Firecrawl — it reads the
+//     stored `context_note` (written by `observe_context`) as fuel; the voice gate
+//     still hard-fails any banned-identity-word / earthly-geography violation.
+//   - `observe_context` — POST /admin/tracks/{trackId}/observe-context. The split-out
+//     context half (agent tier): fetch the Firecrawl FACTS and write `context_note`
+//     ONLY, quietly (no updated_at bump). Idempotent per finding. Firecrawl output
+//     is untrusted web content treated strictly as DATA.
 //   - `presign_track_video_uploads` / `finalize_track_video` — ports of the JSON
 //     video control-plane (`…/video/uploads`, `…/video/finalize`). Both live routes
 //     are `requireOperator`, so both are on the operator tier.
@@ -28,6 +34,7 @@ import {
   type ObservationArtifact,
   type ObservationModel,
   type ObservationVoiceSettings,
+  buildContextQuery,
   fetchTrackContext,
   gateObservationScript,
   renderObservation,
@@ -42,6 +49,7 @@ import {
   ENRICHMENT_STATUS_FILTERS,
   decodeTrackCursor,
   getTrackByIdOrLogId,
+  getTrackContextNote,
   listTracks,
   searchTracks,
 } from "../tracks";
@@ -112,8 +120,10 @@ function resolveVoiceSettings(value: unknown): ObservationVoiceSettings {
 const ADMIN_LIST_DEFAULT_LIMIT = 16;
 const ADMIN_LIST_MAX_LIMIT = 48;
 
-// `hasVideo` is tri-state, ported verbatim from the live route.
-function parseHasVideo(value: string | undefined): boolean | undefined {
+// Tri-state boolean query params ("true"/"false"/absent → true/false/undefined),
+// ported verbatim from the live `hasVideo` route. `hasContext`/`hasObservation`
+// reuse it to drive the two observation queues.
+function parseTriStateBool(value: string | undefined): boolean | undefined {
   if (value === "true") {
     return true;
   }
@@ -271,7 +281,9 @@ export function adminTracksHandlers(os: Implementer) {
 
       return await listTracks({
         cursor: decodeTrackCursor(input.cursor ?? null),
-        hasVideo: parseHasVideo(input.hasVideo),
+        hasContext: parseTriStateBool(input.hasContext),
+        hasObservation: parseTriStateBool(input.hasObservation),
+        hasVideo: parseTriStateBool(input.hasVideo),
         limit: parseAdminLimit(input.limit),
         order: input.order === "asc" ? "asc" : "desc",
         status: parseEnrichmentStatus(input.status),
@@ -319,129 +331,237 @@ export function adminTracksHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/tracks/{trackId}/observe — operator tier (live `requireOperator`).
-  const observeTrackHandler = os.observe_track
-    .use(adminAuth)
-    .use(operatorGuard)
-    .handler(async ({ input }) => {
-      try {
-        const idOrLogId = (input as { trackId: string }).trackId;
-        const track = await getTrackByIdOrLogId(idOrLogId);
+  // POST /admin/tracks/{trackId}/observe — agent tier (`adminAuth` only). FLIPPED
+  // from the operator tier so the Hermes observation cron drives it
+  // (docs/hermes-automation-brief.md Build order #3).
+  const observeTrackHandler = os.observe_track.use(adminAuth).handler(async ({ input }) => {
+    try {
+      const idOrLogId = (input as { trackId: string }).trackId;
+      const track = await getTrackByIdOrLogId(idOrLogId);
 
-        if (!track) {
-          throw new ORPCError("NOT_FOUND", {
-            data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
-            message: `No track with id ${idOrLogId}`,
-            status: 404,
-          });
-        }
-
-        if (!track.logId) {
-          throw new ORPCError("BAD_REQUEST", {
-            data: {
-              apiCode: "no_log_id",
-              apiMessage:
-                "Track has no Log ID; every video needs a coordinate. Backfill the ISRC/Log ID first.",
-            },
-            message: "Track has no Log ID; every video needs a coordinate.",
-            status: 400,
-          });
-        }
-
-        const body = input as ObserveBody;
-
-        // The agent authors + voice-gates the script; the Worker re-runs the
-        // mechanical scan (defence in depth) and hard-fails on any violation.
-        const script = gateObservationScript(body.script);
-        const model = resolveModel(body.model);
-        const voiceSettings = resolveVoiceSettings(body.voiceSettings);
-        const durationTargetSec = resolveDurationTargetSec(body.durationTargetSec);
-        const voiceId = await resolveVoiceId(
-          typeof body.voiceId === "string" ? body.voiceId : undefined,
-        );
-
-        // The factual context (firecrawl). The agent may pass its own context_note;
-        // otherwise the Worker fetches it. Either way it is INTERNAL fuel.
-        const artist = track.artists.join(" ");
-        const fetched =
-          typeof body.contextNote === "string"
-            ? { contextNote: body.contextNote.trim().slice(0, 2000), sources: [] as string[] }
-            : await fetchTrackContext(
-                [artist, track.title, track.label, track.releaseDate, "drum and bass"]
-                  .filter(Boolean)
-                  .join(" "),
-              );
-
-        // Render the spoken observation (ElevenLabs).
-        const { bytes } = await renderObservation(voiceId, { model, text: script, voiceSettings });
-
-        // Duration: ElevenLabs doesn't return one and the Worker can't probe (no
-        // ffprobe). The agent passes the ffprobe value; absent it, estimate from the
-        // target with a noted ±budget. The radio page never re-probes.
-        const durationMs =
-          typeof body.durationMs === "number" &&
-          Number.isFinite(body.durationMs) &&
-          body.durationMs > 0
-            ? Math.round(body.durationMs)
-            : durationTargetSec * 1000;
-
-        const media = trackMedia(track.logId);
-        const generatedAt = new Date().toISOString();
-
-        const artifact: ObservationArtifact = {
-          audioUrl: media.observationAudioUrl,
-          ...(fetched.contextNote ? { contextNote: fetched.contextNote } : {}),
-          durationMs,
-          durationTargetSec,
-          generatedAt,
-          logId: track.logId,
-          model,
-          provider: "elevenlabs",
-          ...(fetched.sources.length > 0 ? { sources: fetched.sources } : {}),
-          text: script,
-          textUrl: media.observationTextUrl,
-          trackId: track.trackId,
-          voiceId,
-          voiceSettings,
-        };
-
-        // Upload the three R2 objects at <log-id>/<name> (the Worker holds the
-        // ≈0.5 MB bytes — direct put, no presign needed for a small artifact).
-        const base = encodeURIComponent(track.logId);
-        await env.VIDEOS.put(`${track.logId}/observation.mp3`, bytes, {
-          httpMetadata: { contentType: "audio/mpeg" },
+      if (!track) {
+        throw new ORPCError("NOT_FOUND", {
+          data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
+          message: `No track with id ${idOrLogId}`,
+          status: 404,
         });
-        await env.VIDEOS.put(`${track.logId}/observation.txt`, script, {
-          httpMetadata: { contentType: "text/plain; charset=utf-8" },
-        });
-        await env.VIDEOS.put(`${track.logId}/observation.json`, JSON.stringify(artifact, null, 2), {
-          httpMetadata: { contentType: "application/json; charset=utf-8" },
-        });
+      }
 
-        // Persist: the audio url (the "has observation" flag) + duration + timestamp
-        // (visible — they bump lastmod) and the context note (internal — it doesn't).
-        await updateTrack(track.trackId, {
-          observationAudioUrl: media.observationAudioUrl,
-          observationDurationMs: durationMs,
-          observationGeneratedAt: generatedAt,
-          ...(fetched.contextNote ? { contextNote: fetched.contextNote } : {}),
+      if (!track.logId) {
+        throw new ORPCError("BAD_REQUEST", {
+          data: {
+            apiCode: "no_log_id",
+            apiMessage:
+              "Track has no Log ID; every video needs a coordinate. Backfill the ISRC/Log ID first.",
+          },
+          message: "Track has no Log ID; every video needs a coordinate.",
+          status: 400,
         });
+      }
+
+      // Idempotency (`observe:${logId}`): a finding that already has an observation
+      // is a no-op, so re-pulling an in-flight item — or an external cron firing on
+      // a fixed interval — never spends a second ElevenLabs render or overwrites the
+      // existing artifact. The versioned playback URL on the row is already keyed by
+      // the prior render; report it back unchanged.
+      if (track.observationAudioUrl) {
+        const existingBase = encodeURIComponent(track.logId);
 
         return {
-          audioUrl: media.observationAudioUrl,
-          durationMs,
-          generatedAt,
-          jsonUrl: `${FOUND_BASE}/${base}/observation.json`,
+          audioUrl: track.observationAudioUrl,
+          durationMs: track.observationDurationMs ?? 0,
+          generatedAt: track.observationGeneratedAt ?? "",
+          jsonUrl: `${FOUND_BASE}/${existingBase}/observation.json`,
           logId: track.logId,
           ok: true as const,
-          textUrl: media.observationTextUrl,
+          skipped: true as const,
+          textUrl: trackMedia(track.logId).observationTextUrl,
           trackId: track.trackId,
-          voiceId,
+          voiceId: "",
         };
-      } catch (error) {
-        throw toFault(error);
       }
-    });
+
+      const body = input as ObserveBody;
+
+      // The agent authors + voice-gates the script; the Worker re-runs the
+      // mechanical scan (defence in depth) and hard-fails on any violation.
+      const script = gateObservationScript(body.script);
+      const model = resolveModel(body.model);
+      const voiceSettings = resolveVoiceSettings(body.voiceSettings);
+      const durationTargetSec = resolveDurationTargetSec(body.durationTargetSec);
+      const voiceId = await resolveVoiceId(
+        typeof body.voiceId === "string" ? body.voiceId : undefined,
+      );
+
+      // The factual context, treated strictly as INTERNAL DATA (never instructions).
+      // observe_track no longer holds Firecrawl: it reads the already-stored
+      // `context_note` (written by the split-out `observe_context` step). Order of
+      // preference: an explicit body.contextNote (the agent passing the fuel it
+      // authored from), then the stored note, then — only if neither exists — a
+      // best-effort Firecrawl fetch so a finding that skipped observe_context still
+      // resolves. The note is persisted only if it was freshly fetched here.
+      const storedContextNote = await getTrackContextNote(track.trackId);
+      let contextNote = "";
+      let freshlyFetched = false;
+
+      if (typeof body.contextNote === "string" && body.contextNote.trim()) {
+        contextNote = body.contextNote.trim().slice(0, 2000);
+      } else if (storedContextNote?.trim()) {
+        contextNote = storedContextNote.trim().slice(0, 2000);
+      } else {
+        const fetched = await fetchTrackContext(buildContextQuery(track));
+        contextNote = fetched.contextNote;
+        freshlyFetched = Boolean(fetched.contextNote);
+      }
+
+      // Render the spoken observation (ElevenLabs).
+      const { bytes } = await renderObservation(voiceId, { model, text: script, voiceSettings });
+
+      // Duration: ElevenLabs doesn't return one and the Worker can't probe (no
+      // ffprobe). The agent passes the ffprobe value; absent it, estimate from the
+      // target with a noted ±budget. The radio page never re-probes.
+      const durationMs =
+        typeof body.durationMs === "number" &&
+        Number.isFinite(body.durationMs) &&
+        body.durationMs > 0
+          ? Math.round(body.durationMs)
+          : durationTargetSec * 1000;
+
+      const media = trackMedia(track.logId);
+      const generatedAt = new Date().toISOString();
+
+      const artifact: ObservationArtifact = {
+        audioUrl: media.observationAudioUrl,
+        ...(contextNote ? { contextNote } : {}),
+        durationMs,
+        durationTargetSec,
+        generatedAt,
+        logId: track.logId,
+        model,
+        provider: "elevenlabs",
+        text: script,
+        textUrl: media.observationTextUrl,
+        trackId: track.trackId,
+        voiceId,
+        voiceSettings,
+      };
+
+      // Upload the three R2 objects at <log-id>/<name> (the Worker holds the
+      // ≈0.5 MB bytes — direct put, no presign needed for a small artifact).
+      const base = encodeURIComponent(track.logId);
+      await env.VIDEOS.put(`${track.logId}/observation.mp3`, bytes, {
+        httpMetadata: { contentType: "audio/mpeg" },
+      });
+      await env.VIDEOS.put(`${track.logId}/observation.txt`, script, {
+        httpMetadata: { contentType: "text/plain; charset=utf-8" },
+      });
+      await env.VIDEOS.put(`${track.logId}/observation.json`, JSON.stringify(artifact, null, 2), {
+        httpMetadata: { contentType: "application/json; charset=utf-8" },
+      });
+
+      // Persist: the audio url (the "has observation" flag) + duration + timestamp
+      // (visible — they bump lastmod). Backfill the context note only when this step
+      // freshly fetched it (the observe_context split usually wrote it already); a
+      // body-supplied or already-stored note is not re-written.
+      await updateTrack(track.trackId, {
+        observationAudioUrl: media.observationAudioUrl,
+        observationDurationMs: durationMs,
+        observationGeneratedAt: generatedAt,
+        ...(freshlyFetched ? { contextNote } : {}),
+      });
+
+      return {
+        audioUrl: media.observationAudioUrl,
+        durationMs,
+        generatedAt,
+        jsonUrl: `${FOUND_BASE}/${base}/observation.json`,
+        logId: track.logId,
+        ok: true as const,
+        textUrl: media.observationTextUrl,
+        trackId: track.trackId,
+        voiceId,
+      };
+    } catch (error) {
+      throw toFault(error);
+    }
+  });
+
+  // POST /admin/tracks/{trackId}/observe-context — agent tier (`adminAuth` only).
+  // The split-out context half: fetch the Firecrawl FACTS and write `context_note`
+  // ONLY, quietly (track-update.ts does not bump updated_at for contextNote). The
+  // Firecrawl output is UNTRUSTED web content treated strictly as DATA — assembled
+  // into the note, stored as fuel, never executed as instructions.
+  const observeContextHandler = os.observe_context.use(adminAuth).handler(async ({ input }) => {
+    try {
+      const idOrLogId = (input as { trackId: string }).trackId;
+      const track = await getTrackByIdOrLogId(idOrLogId);
+
+      if (!track) {
+        throw new ORPCError("NOT_FOUND", {
+          data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
+          message: `No track with id ${idOrLogId}`,
+          status: 404,
+        });
+      }
+
+      if (!track.logId) {
+        throw new ORPCError("BAD_REQUEST", {
+          data: {
+            apiCode: "no_log_id",
+            apiMessage:
+              "Track has no Log ID; every video needs a coordinate. Backfill the ISRC/Log ID first.",
+          },
+          message: "Track has no Log ID; every video needs a coordinate.",
+          status: 400,
+        });
+      }
+
+      // Idempotency (`observe-context:${logId}`): a finding that already has a
+      // context note is a no-op, so an external cron firing on a fixed interval
+      // never re-burns the Firecrawl budget or overwrites the stored facts.
+      const existing = await getTrackContextNote(track.trackId);
+
+      if (existing?.trim()) {
+        return {
+          contextNote: existing,
+          logId: track.logId,
+          ok: true as const,
+          skipped: true as const,
+          sources: [],
+          trackId: track.trackId,
+        };
+      }
+
+      // Fetch the FACTS (Firecrawl). The agent may override the search query; the
+      // result is internal DATA. A best-effort empty note is still written-through
+      // as "" so the queue (context_note IS NULL) does not re-pick it forever — but
+      // a write-through of "" would still read as null-ish; only a non-empty note
+      // advances the queue, so an empty fetch leaves it null for the next tick.
+      const body = input as { query?: unknown };
+      const query =
+        typeof body.query === "string" && body.query.trim()
+          ? body.query.trim()
+          : buildContextQuery(track);
+      const fetched = await fetchTrackContext(query);
+
+      if (fetched.contextNote.trim()) {
+        // Quiet write: contextNote alone, so track-update.ts does NOT bump
+        // updated_at (no public surface moves; the enrich-sweep stale clock and the
+        // sitemap lastmod stay untouched).
+        await updateTrack(track.trackId, { contextNote: fetched.contextNote });
+      }
+
+      return {
+        contextNote: fetched.contextNote,
+        logId: track.logId,
+        ok: true as const,
+        sources: fetched.sources,
+        trackId: track.trackId,
+      };
+    } catch (error) {
+      throw toFault(error);
+    }
+  });
 
   // POST /admin/tracks/{trackId}/video/uploads — operator tier (live
   // `requireOperator`). The JSON control-plane: sign the direct-to-R2 PUT URLs.
@@ -621,6 +741,7 @@ export function adminTracksHandlers(os: Implementer) {
     add_track: addTrackHandler,
     finalize_track_video: finalizeVideoHandler,
     list_tracks_admin: listTracksAdminHandler,
+    observe_context: observeContextHandler,
     observe_track: observeTrackHandler,
     presign_track_video_uploads: presignVideoUploadsHandler,
     update_track: updateTrackHandler,

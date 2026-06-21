@@ -75,6 +75,7 @@ export {
   addTrack,
   finalizeTrackVideo,
   listTracksAdmin,
+  observeContext,
   observeTrack,
   presignTrackVideoUploads,
   updateTrack,

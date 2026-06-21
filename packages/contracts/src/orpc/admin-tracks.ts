@@ -62,6 +62,15 @@ const ObserveTrackBodySchema = z.looseObject({
 });
 
 /**
+ * The observe-context body (POST /admin/tracks/{trackId}/observe-context). LOOSE:
+ * the only optional field is an agent-supplied `query` override for the Firecrawl
+ * search; the handler narrows it in-handler, so the contract stays permissive.
+ */
+const ObserveContextBodySchema = z.looseObject({
+  query: z.unknown().optional(),
+});
+
+/**
  * The presign body (POST /admin/tracks/{trackId}/video/uploads). LOOSE: the live
  * route validates `fields` itself (`no_fields`/`bad_field`/`unknown_field`/
  * `no_footage`), so the contract stays permissive.
@@ -123,12 +132,16 @@ export const updateTrack = oc
  * `observe_track` → `POST /admin/tracks/{trackId}/observe` (operationId
  * `observeTrack`).
  *
- * Mint the audio-observation artifact (render + R2 upload + write-back). On
- * `operatorProcedure` — the live route is `requireOperator`, so the agent role
- * gets a 403 (this MATCHES the live tier; the migration brief's "agent-allowed"
- * note is superseded by the codebase, which is authoritative). Reuses the live
- * handler logic verbatim, preserving the `{ ok: true, audioUrl, durationMs, … }`
- * envelope and the `no_script`/400, `voice_gate`/422, `no_log_id`/400 codes.
+ * Mint the audio-observation artifact: author-time the agent has already written
+ * the recovered-audio script, so this step VOICE-GATES it, renders it (ElevenLabs),
+ * uploads the artifact to R2, and writes back. It no longer holds Firecrawl — it
+ * reads the already-stored `context_note` (written by `observe_context`) as its
+ * fuel. On `adminProcedure` (agent-allowed): flipped from the operator tier so the
+ * Hermes cron can drive it (docs/hermes-automation-brief.md Build order #3). Idempotent
+ * per finding — an existing `observation_audio_url` is a no-op (`skipped: true`),
+ * so re-pulling an in-flight item is safe (`observe:${logId}`). Preserves the
+ * `{ ok: true, audioUrl, durationMs, … }` envelope and the `no_script`/400,
+ * `voice_gate`/422, `no_log_id`/400 codes.
  */
 export const observeTrack = oc
   .route({
@@ -147,9 +160,52 @@ export const observeTrack = oc
       jsonUrl: z.string(),
       logId: z.string(),
       ok: z.literal(true),
+      // `true` when an observation already existed and the call was a no-op
+      // (idempotent re-pull); absent on a fresh mint.
+      skipped: z.boolean().optional(),
       textUrl: z.string(),
       trackId: z.string(),
       voiceId: z.string(),
+    }),
+  );
+
+/**
+ * `observe_context` → `POST /admin/tracks/{trackId}/observe-context` (operationId
+ * `observeContext`).
+ *
+ * Fetch the track's FACTUAL context (Firecrawl: label/year/release) and write it
+ * to the internal `context_note` column ONLY — no script authoring, no render.
+ * This is the split-out context half of the observation pipeline
+ * (docs/hermes-automation-brief.md Build order #3): `observe_context` fills the
+ * note so `observe_track` can author + render from it without holding Firecrawl.
+ *
+ * On `adminProcedure` (agent-allowed). Writes `context_note` QUIETLY — it touches
+ * only that internal column, so it does NOT bump `updated_at` (no public surface
+ * moves; the feed/lastmod/enrich-sweep stale clock are undisturbed). Idempotent
+ * per finding — an existing `context_note` is a no-op (`skipped: true`), keyed
+ * `observe-context:${logId}`, so an external cron can fire safely. The Firecrawl
+ * output is UNTRUSTED web content treated strictly as DATA (stored as fuel, never
+ * executed). Codes: `not_found`/404, `no_log_id`/400.
+ */
+export const observeContext = oc
+  .route({
+    method: "POST",
+    operationId: "observeContext",
+    path: "/admin/tracks/{trackId}/observe-context",
+    summary: "Fetch + store a track's factual context note (Firecrawl facts only)",
+    tags: ["Admin"],
+  })
+  .input(ObserveContextBodySchema.extend({ trackId: z.string() }))
+  .output(
+    z.object({
+      contextNote: z.string(),
+      logId: z.string(),
+      ok: z.literal(true),
+      // `true` when a context note already existed and the call was a no-op
+      // (idempotent re-pull); absent on a fresh fetch.
+      skipped: z.boolean().optional(),
+      sources: z.array(z.string()),
+      trackId: z.string(),
     }),
   );
 
@@ -261,6 +317,12 @@ export const listTracksAdmin = oc
   .input(
     z.object({
       cursor: z.string().optional(),
+      // `hasContext` / `hasObservation` power the two observation queues (the
+      // context queue = `hasContext=false`; the observation queue = `hasContext=true`
+      // AND `hasObservation=false`). Tri-state tolerant strings ("true"/"false"),
+      // parsed + clamped in-handler exactly like `hasVideo`.
+      hasContext: z.string().optional(),
+      hasObservation: z.string().optional(),
       hasVideo: z.string().optional(),
       limit: z.string().optional(),
       order: z.string().optional(),
@@ -314,6 +376,7 @@ export const adminTracksContract = {
   add_track: addTrack,
   finalize_track_video: finalizeTrackVideo,
   list_tracks_admin: listTracksAdmin,
+  observe_context: observeContext,
   observe_track: observeTrack,
   presign_track_video_uploads: presignTrackVideoUploads,
   update_track: updateTrack,

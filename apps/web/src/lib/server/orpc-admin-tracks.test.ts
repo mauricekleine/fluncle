@@ -18,6 +18,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const updateTrack = vi.fn();
 const getTrackByIdOrLogId = vi.fn();
+const getTrackContextNote = vi.fn();
 const put = vi.fn();
 const renderObservation = vi.fn();
 const fetchTrackContext = vi.fn();
@@ -43,6 +44,7 @@ vi.mock("./tracks", async (importOriginal) => {
   return {
     ...actual,
     getTrackByIdOrLogId: (id: string) => getTrackByIdOrLogId(id),
+    getTrackContextNote: (id: string) => getTrackContextNote(id),
     listTracks: (...args: unknown[]) => listTracks(...args),
     searchTracks: (...args: unknown[]) => searchTracks(...args),
   };
@@ -116,6 +118,7 @@ beforeAll(() => {
 beforeEach(() => {
   updateTrack.mockReset();
   getTrackByIdOrLogId.mockReset();
+  getTrackContextNote.mockReset().mockResolvedValue(null);
   put.mockReset();
   fetchTrackContext.mockReset();
   presignUploads.mockReset();
@@ -249,7 +252,7 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
   });
 });
 
-// ── observe_track — operator tier (live requireOperator) ─────────────────────
+// ── observe_track — agent tier (FLIPPED from operator; Build order #3) ────────
 describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
   it("401s with no admin token", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -259,14 +262,18 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
     expect(renderObservation).not.toHaveBeenCalled();
   });
 
-  it("403s the AGENT (operator-only) before any render", async () => {
-    const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(post("/observe", AGENT_TOKEN, { script: GOOD_SCRIPT }));
+  it("lets the AGENT observe (the tier flip — no longer operator-only)", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+    updateTrack.mockResolvedValueOnce({ fields: [], trackId: TRACK_ID });
 
-    expect(response?.status).toBe(403);
-    expect(((await response?.json()) as { code: string }).code).toBe("forbidden");
-    expect(renderObservation).not.toHaveBeenCalled();
-    expect(getTrackByIdOrLogId).not.toHaveBeenCalled();
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      post("/observe", AGENT_TOKEN, { durationMs: 28000, script: GOOD_SCRIPT }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(((await response?.json()) as { ok: boolean }).ok).toBe(true);
+    expect(renderObservation).toHaveBeenCalled();
   });
 
   it("renders, uploads three R2 objects, writes back, and returns the live envelope", async () => {
@@ -289,12 +296,54 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
       "004.7.2I/observation.txt",
       "004.7.2I/observation.json",
     ]);
+    // No stored context note → observe_track freshly fetches it and backfills it.
     expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, {
       contextNote: "Signature Records, 2008.",
       observationAudioUrl: "https://found.fluncle.com/004.7.2I/observation.mp3",
       observationDurationMs: 28000,
       observationGeneratedAt: expect.any(String),
     });
+  });
+
+  it("reads the STORED context note instead of re-fetching Firecrawl", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+    getTrackContextNote.mockResolvedValueOnce("Stored facts: Signature Records, 2008.");
+    updateTrack.mockResolvedValueOnce({ fields: [], trackId: TRACK_ID });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      post("/observe", AGENT_TOKEN, { durationMs: 28000, script: GOOD_SCRIPT }),
+    );
+
+    expect(response?.status).toBe(200);
+    // The stored note short-circuits the fetch entirely.
+    expect(fetchTrackContext).not.toHaveBeenCalled();
+    // A stored (not freshly fetched) note is NOT re-written.
+    const [, update] = updateTrack.mock.calls[0] as [string, Record<string, unknown>];
+    expect("contextNote" in update).toBe(false);
+  });
+
+  it("is idempotent: an existing observation is a no-op (skipped, no render)", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce({
+      ...TRACK,
+      observationAudioUrl: "https://found.fluncle.com/004.7.2I/observation.mp3?v=1",
+      observationDurationMs: 30000,
+      observationGeneratedAt: "2026-06-01T00:00:00.000Z",
+    });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      post("/observe", AGENT_TOKEN, { durationMs: 28000, script: GOOD_SCRIPT }),
+    );
+
+    expect(response?.status).toBe(200);
+    const data = (await response?.json()) as { ok: boolean; skipped?: boolean };
+    expect(data.ok).toBe(true);
+    expect(data.skipped).toBe(true);
+    // No render, no upload, no write-back — a clean idempotent no-op.
+    expect(renderObservation).not.toHaveBeenCalled();
+    expect(put).not.toHaveBeenCalled();
+    expect(updateTrack).not.toHaveBeenCalled();
   });
 
   it("422s a script with a banned identity word before spending a render", async () => {
@@ -314,6 +363,22 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
     expect(put).not.toHaveBeenCalled();
   });
 
+  it("422s a script with earthly geography leaked from the context note", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      post("/observe", AGENT_TOKEN, {
+        script:
+          "This one flies the flag for the American side of the map and the knees went up before I clocked the coordinate, fam.",
+      }),
+    );
+
+    expect(response?.status).toBe(422);
+    expect(((await response?.json()) as { code: string }).code).toBe("voice_gate");
+    expect(renderObservation).not.toHaveBeenCalled();
+  });
+
   it("400s `no_log_id` for a track with no Log ID", async () => {
     getTrackByIdOrLogId.mockResolvedValueOnce({ ...TRACK, logId: undefined });
 
@@ -322,6 +387,96 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
 
     expect(response?.status).toBe(400);
     expect(((await response?.json()) as { code: string }).code).toBe("no_log_id");
+  });
+});
+
+// ── observe_context — agent tier (the split-out context half; Build order #3) ─
+describe("oRPC observe_context (POST /admin/tracks/{trackId}/observe-context)", () => {
+  it("401s with no admin token", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(post("/observe-context", undefined, {}));
+
+    expect(response?.status).toBe(401);
+    expect(fetchTrackContext).not.toHaveBeenCalled();
+  });
+
+  it("lets the AGENT fetch facts and writes context_note QUIETLY (no observation)", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+    getTrackContextNote.mockResolvedValueOnce(null);
+    fetchTrackContext.mockResolvedValueOnce({
+      contextNote: "Signature Records, 2008.",
+      sources: ["https://signature.example/release"],
+    });
+    updateTrack.mockResolvedValueOnce({ fields: ["context_note"], trackId: TRACK_ID });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(post("/observe-context", AGENT_TOKEN, {}));
+
+    expect(response?.status).toBe(200);
+    const data = (await response?.json()) as {
+      contextNote: string;
+      ok: boolean;
+      sources: string[];
+    };
+    expect(data.ok).toBe(true);
+    expect(data.contextNote).toBe("Signature Records, 2008.");
+    expect(data.sources).toEqual(["https://signature.example/release"]);
+    // It writes ONLY contextNote — no observation/render/R2 side effects. The
+    // quiet-write (no updated_at bump) is track-update.ts's responsibility; here we
+    // prove the handler touches nothing but the note.
+    expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, { contextNote: "Signature Records, 2008." });
+    expect(renderObservation).not.toHaveBeenCalled();
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it("is idempotent: an existing context note is a no-op (skipped, no fetch)", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+    getTrackContextNote.mockResolvedValueOnce("Already fetched facts.");
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(post("/observe-context", AGENT_TOKEN, {}));
+
+    expect(response?.status).toBe(200);
+    const data = (await response?.json()) as { contextNote: string; skipped?: boolean };
+    expect(data.skipped).toBe(true);
+    expect(data.contextNote).toBe("Already fetched facts.");
+    expect(fetchTrackContext).not.toHaveBeenCalled();
+    expect(updateTrack).not.toHaveBeenCalled();
+  });
+
+  it("leaves the note null on an empty Firecrawl result (queue re-picks next tick)", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+    getTrackContextNote.mockResolvedValueOnce(null);
+    fetchTrackContext.mockResolvedValueOnce({ contextNote: "", sources: [] });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(post("/observe-context", AGENT_TOKEN, {}));
+
+    expect(response?.status).toBe(200);
+    // An empty fetch must NOT write through — the queue (context_note IS NULL) keeps
+    // re-picking it rather than locking in an empty note.
+    expect(updateTrack).not.toHaveBeenCalled();
+  });
+
+  it("400s `no_log_id` for a track with no Log ID", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce({ ...TRACK, logId: undefined });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(post("/observe-context", AGENT_TOKEN, {}));
+
+    expect(response?.status).toBe(400);
+    expect(((await response?.json()) as { code: string }).code).toBe("no_log_id");
+    expect(fetchTrackContext).not.toHaveBeenCalled();
+  });
+
+  it("404s `not_found` for an unknown track", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(undefined);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(post("/observe-context", AGENT_TOKEN, {}));
+
+    expect(response?.status).toBe(404);
+    expect(((await response?.json()) as { code: string }).code).toBe("not_found");
   });
 });
 
@@ -478,6 +633,44 @@ describe("oRPC list_tracks_admin (GET /admin/tracks)", () => {
     expect(await response?.json()).toEqual({ tracks: [LIST_ITEM] });
     expect(searchTracks).toHaveBeenCalledWith({ limit: 5, q: "calibre" });
     expect(listTracks).not.toHaveBeenCalled();
+  });
+
+  it("parses the `hasContext=false` context queue filter", async () => {
+    listTracks.mockResolvedValueOnce({ totalCount: 0, tracks: [] });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(adminGet("?hasContext=false&order=asc", AGENT_TOKEN));
+
+    expect(response?.status).toBe(200);
+    const [opts] = listTracks.mock.calls[0] as [Record<string, unknown>];
+    expect(opts.hasContext).toBe(false);
+    expect(opts.hasObservation).toBeUndefined();
+  });
+
+  it("parses the observation queue filter (hasContext=true AND hasObservation=false)", async () => {
+    listTracks.mockResolvedValueOnce({ totalCount: 0, tracks: [] });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      adminGet("?hasContext=true&hasObservation=false", AGENT_TOKEN),
+    );
+
+    expect(response?.status).toBe(200);
+    const [opts] = listTracks.mock.calls[0] as [Record<string, unknown>];
+    expect(opts.hasContext).toBe(true);
+    expect(opts.hasObservation).toBe(false);
+  });
+
+  it("leaves the new filters undefined when absent (tri-state)", async () => {
+    listTracks.mockResolvedValueOnce({ totalCount: 0, tracks: [] });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(adminGet("", AGENT_TOKEN));
+
+    expect(response?.status).toBe(200);
+    const [opts] = listTracks.mock.calls[0] as [Record<string, unknown>];
+    expect(opts.hasContext).toBeUndefined();
+    expect(opts.hasObservation).toBeUndefined();
   });
 });
 

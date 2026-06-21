@@ -80,6 +80,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/tracks": "add_track",
   "POST /admin/tracks/enrich": "enrich_track",
   "POST /admin/tracks/{trackId}/observe": "observe_track",
+  // observe_context is served by oRPC at its own path; like the enrich op above it
+  // has no TanStack route FILE (oRPC owns the path directly), so it lives here as a
+  // path→op entry without a `tracks.$trackId.observe-context.ts` route file.
+  "POST /admin/tracks/{trackId}/observe-context": "observe_context",
   "POST /admin/tracks/{trackId}/social/{platform}/draft": "draft_track_social",
   "POST /admin/tracks/{trackId}/video/finalize": "finalize_track_video",
   "POST /admin/tracks/{trackId}/video/uploads": "presign_track_video_uploads",

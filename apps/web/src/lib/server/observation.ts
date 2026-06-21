@@ -252,6 +252,23 @@ function isLyricDomain(url: string | undefined): boolean {
 export type ContextFetchResult = { contextNote: string; sources: string[] };
 
 /**
+ * Build the Firecrawl search query for a track's factual context from its
+ * metadata. One assembly point shared by the `observe-context` step and (as a
+ * fallback) `observe_track`, so both fetch the same facts. The track fields are
+ * Spotify/Deezer metadata — trusted identity strings, not free web content.
+ */
+export function buildContextQuery(track: {
+  artists: string[];
+  label?: string;
+  releaseDate?: string;
+  title: string;
+}): string {
+  return [track.artists.join(" "), track.title, track.label, track.releaseDate, "drum and bass"]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/**
  * Firecrawl search for the track's factual context (label/year/release/artist
  * background). Assembles the non-lyric snippets into a compact note and returns
  * the source URLs (provenance — kept off the DB, stored in observation.json).
