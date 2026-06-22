@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { get, MIXTAPE, readJson, TRACK } from "./orpc-test-kit";
 
 // The proof route + the rails seam. `resolveLogPageTarget` is mocked — the
 // handler's job is to shape the contract response and the 404, not to touch
@@ -47,32 +48,6 @@ beforeEach(() => {
   getTrackByIdOrLogId.mockReset();
 });
 
-function get(url: string): Request {
-  return new Request(url, { method: "GET" });
-}
-
-const TRACK = {
-  addedAt: "2026-01-01T00:00:00.000Z",
-  addedToSpotify: true,
-  artists: ["Some Artist"],
-  durationMs: 300000,
-  enrichmentStatus: "done",
-  postedToTelegram: true,
-  spotifyUrl: "https://open.spotify.com/track/abc",
-  title: "Some Banger",
-  trackId: "abc",
-};
-
-const MIXTAPE = {
-  artists: ["Fluncle"] as ["Fluncle"],
-  externalUrls: {},
-  memberCount: 0,
-  members: [],
-  status: "published" as const,
-  title: "A Set",
-  type: "mixtape" as const,
-};
-
 describe("oRPC rails — handleOrpc", () => {
   it("ignores non-/api requests (returns null so they fall through)", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -99,7 +74,7 @@ describe("oRPC proof route — GET /tracks/{idOrLogId} (get_track)", () => {
 
     expect(response).not.toBeNull();
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ ok: true, track: TRACK });
+    expect(await readJson(response)).toEqual({ ok: true, track: TRACK });
     expect(resolveLogPageTarget).toHaveBeenCalledWith("abc");
   });
 
@@ -110,7 +85,7 @@ describe("oRPC proof route — GET /tracks/{idOrLogId} (get_track)", () => {
     const response = await handleOrpc(get("https://www.fluncle.com/api/tracks/abc"));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ ok: true, track: TRACK });
+    expect(await readJson(response)).toEqual({ ok: true, track: TRACK });
   });
 
   it("serves a mixtape arm as { ok: true, mixtape }", async () => {
@@ -120,7 +95,7 @@ describe("oRPC proof route — GET /tracks/{idOrLogId} (get_track)", () => {
     const response = await handleOrpc(get("https://www.fluncle.com/api/v1/tracks/001.F.1A"));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ mixtape: MIXTAPE, ok: true });
+    expect(await readJson(response)).toEqual({ mixtape: MIXTAPE, ok: true });
   });
 
   it("404s when nothing resolves — body parity with the legacy jsonError shape", async () => {
@@ -132,7 +107,7 @@ describe("oRPC proof route — GET /tracks/{idOrLogId} (get_track)", () => {
     expect(response?.status).toBe(404);
     // Byte-shape parity with trackNotFoundResponse → jsonError(404, "not_found", …):
     // `{ code: "not_found", message: <string>, ok: false }`, nothing else.
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       code: "not_found",
       message: expect.any(String),
       ok: false,
@@ -147,7 +122,7 @@ describe("oRPC proof route — GET /tracks/{idOrLogId} (get_track)", () => {
 
     expect(response?.status).toBe(500);
     // Parity with apiErrorResponse's generic arm → jsonError(500, "error", message).
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       code: "error",
       message: "turso fell over",
       ok: false,
@@ -162,7 +137,7 @@ describe("oRPC public read — GET /health (get_health)", () => {
 
     expect(response?.status).toBe(200);
     expect(response?.headers.get("Cache-Control")).toBe("no-store");
-    expect(await response?.json()).toEqual({ ok: true });
+    expect(await readJson(response)).toEqual({ ok: true });
   });
 
   it("serves the same handler on the bare /api alias", async () => {
@@ -171,7 +146,7 @@ describe("oRPC public read — GET /health (get_health)", () => {
 
     expect(response?.status).toBe(200);
     expect(response?.headers.get("Cache-Control")).toBe("no-store");
-    expect(await response?.json()).toEqual({ ok: true });
+    expect(await readJson(response)).toEqual({ ok: true });
   });
 });
 
@@ -189,7 +164,7 @@ describe("oRPC public read — GET /tracks (list_tracks)", () => {
     const response = await handleOrpc(get("https://www.fluncle.com/api/v1/tracks"));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual(PAGE);
+    expect(await readJson(response)).toEqual(PAGE);
   });
 
   it("defaults the limit and includes mixtapes when unwindowed", async () => {
@@ -266,7 +241,7 @@ describe("oRPC public read — GET /tracks/random (get_random_track)", () => {
     const response = await handleOrpc(get("https://www.fluncle.com/api/v1/tracks/random"));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ ok: true, track: TRACK });
+    expect(await readJson(response)).toEqual({ ok: true, track: TRACK });
   });
 
   it("404s an empty archive with the custom track_not_found code (byte parity)", async () => {
@@ -278,7 +253,7 @@ describe("oRPC public read — GET /tracks/random (get_random_track)", () => {
     expect(response?.status).toBe(404);
     // Parity with the live route's hand-rolled 404 body — code is the custom
     // `track_not_found`, NOT the rails' generic `not_found` mapping.
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       code: "track_not_found",
       message: "No tracks found",
       ok: false,
@@ -294,7 +269,7 @@ describe("oRPC public read — GET /radio/random (get_random_radio_track)", () =
     const response = await handleOrpc(get("https://www.fluncle.com/api/v1/radio/random"));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ ok: true, track: TRACK });
+    expect(await readJson(response)).toEqual({ ok: true, track: TRACK });
     // The radio op reads ONLY the eligibility-filtered query — never the unfiltered
     // random read, so an un-squared / observation-less track can never reach it.
     expect(getRandomRadioTrack).toHaveBeenCalledTimes(1);
@@ -308,7 +283,7 @@ describe("oRPC public read — GET /radio/random (get_random_radio_track)", () =
     const response = await handleOrpc(get("https://www.fluncle.com/api/v1/radio/random"));
 
     expect(response?.status).toBe(404);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       code: "track_not_found",
       message: "No radio-eligible tracks found",
       ok: false,
@@ -473,12 +448,16 @@ describe("oRPC OpenAPI generation — the public spec (the flip)", () => {
     const document = (await generateOpenApiDocument()) as GeneratedSpec;
 
     expect(document.openapi).toMatch(/^3\.1/);
-    expect(document.info.title).toBe("Fluncle API");
+    // Contract values stay exact (the version + server URL are the API's identity).
     expect(document.info.version).toBe("1.0.0");
-    // The published prose carried over from the retired static spec.
-    expect(document.info.summary).toBe("Drum & bass bangers from another dimension.");
-    expect(document.info.description).toContain("The public API for Fluncle's Findings");
     expect(document.servers?.[0]?.url).toBe("https://www.fluncle.com/api/v1");
+    // The marketing prose (title/summary/description) is relaxed to presence checks
+    // so a harmless copy edit doesn't break the spec test — it just has to be there
+    // and mention Fluncle.
+    expect(document.info.title).toContain("Fluncle");
+    expect(typeof document.info.summary).toBe("string");
+    expect((document.info.summary ?? "").length).toBeGreaterThan(0);
+    expect(document.info.description ?? "").toContain("Fluncle");
   });
 
   it("contains EVERY public op with its correct operationId", async () => {

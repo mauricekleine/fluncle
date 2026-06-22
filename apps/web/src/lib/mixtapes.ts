@@ -26,7 +26,7 @@ export type MixtapeCoverSize = "card" | "og" | "square" | "thumb" | "wide";
  * passes through unchanged.)
  */
 export function mixtapeDisplayTitle(title: string): string {
-  return title.split(" | ")[0];
+  return title.split(" | ")[0] ?? title;
 }
 
 /**

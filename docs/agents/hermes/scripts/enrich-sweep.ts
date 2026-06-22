@@ -14,7 +14,7 @@
 // failed ∪ stale processing, so a `done` finding is already out of it; re-running
 // never double-writes), fast no-op when the queue is empty:
 //
-//   1. `fluncle admin tracks enrich-queue --json`  → the worklist.
+//   1. `fluncle admin tracks enrich --queue --json`  → the worklist.
 //   2. per finding (bounded batch):
 //      a. `fluncle track get <id> --json`           → artists, title, isrc, trackId.
 //      b. `bun .../analyze-track.ts --artist <a> --title <t> [--isrc <i>]`
@@ -189,11 +189,12 @@ function enrichOne(finding: QueueFinding): Outcome {
 // ---------------------------------------------------------------------------
 
 function main(): void {
-  // `enrich-queue --json` returns `{ ok: true, tracks: [...] }`, not a bare array.
+  // `enrich --queue --json` returns `{ ok: true, tracks: [...] }`, not a bare array.
   const response = fluncleJson<{ tracks?: QueueFinding[] }>([
     "admin",
     "tracks",
-    "enrich-queue",
+    "enrich",
+    "--queue",
     "--limit",
     String(QUEUE_LIMIT),
   ]);

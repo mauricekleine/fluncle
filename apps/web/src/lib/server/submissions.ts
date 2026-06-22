@@ -226,7 +226,7 @@ export async function approveSubmission(id: string): Promise<Submission> {
   return getSubmission(id);
 }
 
-function validateSubmissionInput(
+export function validateSubmissionInput(
   body: SubmissionInput,
 ): Omit<Submission, "id" | "status" | "createdAt"> {
   if (typeof body.honeypot === "string" && body.honeypot.trim()) {

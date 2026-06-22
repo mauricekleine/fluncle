@@ -43,7 +43,7 @@ export function yearFromReleaseDate(releaseDate: string | null | undefined): num
 }
 
 /** "Found Jun 8" — the found date, UTC, no leading zero (matches FloatingType). */
-function formatFound(iso: string): string {
+export function formatFound(iso: string): string {
   const d = new Date(iso);
 
   if (Number.isNaN(d.getTime())) {

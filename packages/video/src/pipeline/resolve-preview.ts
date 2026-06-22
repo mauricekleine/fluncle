@@ -28,7 +28,7 @@ type ItunesHit = {
 
 type ItunesResponse = { results?: ItunesHit[] };
 
-function normalize(value: string): string {
+export function normalize(value: string): string {
   return value
     .toLowerCase()
     .normalize("NFKD")
@@ -39,7 +39,7 @@ function normalize(value: string): string {
 }
 
 /** Dice coefficient over bigrams; cheap fuzzy similarity in 0..1. */
-function similarity(a: string, b: string): number {
+export function similarity(a: string, b: string): number {
   const na = normalize(a);
   const nb = normalize(b);
   if (na.length === 0 || nb.length === 0) {

@@ -8,6 +8,8 @@ on:
         type: string
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
 
 concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -37,6 +39,7 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version-file: apps/ssh/go.mod
+          cache-dependency-path: apps/ssh/go.sum
 
       - name: Cache Bun packages
         uses: actions/cache@v5
@@ -58,5 +61,17 @@ jobs:
       - name: Run Typecheck
         run: bun run typecheck
 
-      - name: Run Web Tests
-        run: bun run --cwd apps/web test
+      - name: Run Tests
+        run: bun run test
+
+      - name: Build Go (apps/ssh)
+        run: go build -C apps/ssh ./...
+
+      - name: Vet Go (apps/ssh)
+        run: go vet -C apps/ssh ./...
+
+      - name: Test Go (apps/ssh)
+        run: go test -C apps/ssh ./...
+
+      - name: Check Go formatting (apps/ssh)
+        run: test -z "$(gofmt -l apps/ssh)"

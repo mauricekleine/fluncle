@@ -1,31 +1,32 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { decodeTrackCursor, listTracks } from "../../lib/server/tracks";
+import { type ApiHandlers, aliasHandlers } from "./-alias";
 
 const defaultLimit = 16;
 const maxLimit = 48;
 
-export const Route = createFileRoute("/api/tracks")({
-  server: {
-    handlers: {
-      GET: async ({ request }) => {
-        const url = new URL(request.url);
-        const limit = parseLimit(url.searchParams.get("limit"));
-        const cursor = decodeTrackCursor(url.searchParams.get("cursor"));
-        const since = parseTimestamp(url.searchParams.get("since"));
-        const until = parseTimestamp(url.searchParams.get("until"));
+export const serverHandlers: ApiHandlers = {
+  GET: async ({ request }) => {
+    const url = new URL(request.url);
+    const limit = parseLimit(url.searchParams.get("limit"));
+    const cursor = decodeTrackCursor(url.searchParams.get("cursor"));
+    const since = parseTimestamp(url.searchParams.get("since"));
+    const until = parseTimestamp(url.searchParams.get("until"));
 
-        return Response.json(
-          await listTracks({
-            cursor,
-            includeMixtapes: since === undefined && until === undefined,
-            limit,
-            since,
-            until,
-          }),
-        );
-      },
-    },
+    return Response.json(
+      await listTracks({
+        cursor,
+        includeMixtapes: since === undefined && until === undefined,
+        limit,
+        since,
+        until,
+      }),
+    );
   },
+};
+
+export const Route = createFileRoute("/api/tracks")({
+  server: { handlers: aliasHandlers(serverHandlers) },
 });
 
 function parseLimit(value: string | null): number {
@@ -54,5 +55,3 @@ function parseTimestamp(value: string | null): string | undefined {
 
   return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
 }
-
-export const serverHandlers = Route.options.server!.handlers;

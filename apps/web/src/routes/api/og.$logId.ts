@@ -3,7 +3,9 @@ import { ImageResponse, loadGoogleFont } from "workers-og";
 import { formatDateLong } from "@/lib/format";
 import { GALAXIES, galaxyForVibe } from "@/lib/galaxies";
 import { spotifyAlbumImageAtSize, trackMedia } from "@/lib/media";
+import { requireParam } from "@/lib/server/http-errors";
 import { getTrackByIdOrLogId } from "@/lib/server/tracks";
+import { type ApiHandlers, aliasHandlers } from "./-alias";
 
 // Per-finding Open Graph card (1200×630), rendered on the edge with workers-og
 // (Satori + resvg WASM — confirmed running under the @cloudflare/vite-plugin
@@ -49,45 +51,43 @@ async function fetchImageDataUri(url: string): Promise<string | undefined> {
   }
 }
 
-export const Route = createFileRoute("/api/og/$logId")({
-  server: {
-    handlers: {
-      GET: async ({ params }) => {
-        const logId = params.logId;
+export const serverHandlers: ApiHandlers = {
+  GET: async ({ params }) => {
+    const logId = requireParam(params.logId, "logId");
 
-        const track = await getTrackByIdOrLogId(logId);
+    const track = await getTrackByIdOrLogId(logId);
 
-        if (!track) {
-          return new Response("Not found", { status: 404 });
-        }
+    if (!track) {
+      return new Response("Not found", { status: 404 });
+    }
 
-        // The drop frame is the hero; findings without footage fall back to the
-        // album cover.
-        const bgSource = track.videoUrl
-          ? trackMedia(track.logId ?? logId).posterUrl
-          : spotifyAlbumImageAtSize(track.albumImageUrl, "large");
-        const background = bgSource ? await fetchImageDataUri(bgSource) : undefined;
+    // The drop frame is the hero; findings without footage fall back to the
+    // album cover.
+    const bgSource = track.videoUrl
+      ? trackMedia(track.logId ?? logId).posterUrl
+      : spotifyAlbumImageAtSize(track.albumImageUrl, "large");
+    const background = bgSource ? await fetchImageDataUri(bgSource) : undefined;
 
-        const galaxy =
-          track.vibeX !== undefined && track.vibeY !== undefined
-            ? GALAXIES[galaxyForVibe(track.vibeX, track.vibeY)].name
-            : undefined;
-        const meta = [
-          `Found ${formatDateLong(track.addedAt)}`,
-          track.bpm ? `${Math.round(track.bpm)} BPM` : undefined,
-          track.key,
-          galaxy,
-        ]
-          .filter(Boolean)
-          .join("  ·  ");
+    const galaxy =
+      track.vibeX !== undefined && track.vibeY !== undefined
+        ? GALAXIES[galaxyForVibe(track.vibeX, track.vibeY)].name
+        : undefined;
+    const meta = [
+      `Found ${formatDateLong(track.addedAt)}`,
+      track.bpm ? `${Math.round(track.bpm)} BPM` : undefined,
+      track.key,
+      galaxy,
+    ]
+      .filter(Boolean)
+      .join("  ·  ");
 
-        // The card deviates from the list convention's `Artist — Title`: at
-        // display size, title-led over two lines (matching the /log page's own
-        // hierarchy) reads far better, especially for long remix titles.
-        const title = escapeHtml(track.title);
-        const artist = escapeHtml(track.artists.join(", "));
+    // The card deviates from the list convention's `Artist — Title`: at
+    // display size, title-led over two lines (matching the /log page's own
+    // hierarchy) reads far better, especially for long remix titles.
+    const title = escapeHtml(track.title);
+    const artist = escapeHtml(track.artists.join(", "));
 
-        const html = `
+    const html = `
           <div style="position:relative;display:flex;width:${WIDTH}px;height:${HEIGHT}px;background:${COLOR.bg};font-family:'Oxanium';overflow:hidden;">
             ${
               background
@@ -107,22 +107,22 @@ export const Route = createFileRoute("/api/og/$logId")({
           </div>
         `;
 
-        const [oxaniumBold, oxaniumMedium] = await Promise.all([
-          loadGoogleFont({ family: "Oxanium", weight: 800 }),
-          loadGoogleFont({ family: "Oxanium", weight: 500 }),
-        ]);
+    const [oxaniumBold, oxaniumMedium] = await Promise.all([
+      loadGoogleFont({ family: "Oxanium", weight: 800 }),
+      loadGoogleFont({ family: "Oxanium", weight: 500 }),
+    ]);
 
-        return new ImageResponse(html, {
-          fonts: [
-            { data: oxaniumBold, name: "Oxanium", style: "normal", weight: 800 },
-            { data: oxaniumMedium, name: "Oxanium", style: "normal", weight: 500 },
-          ],
-          height: HEIGHT,
-          width: WIDTH,
-        });
-      },
-    },
+    return new ImageResponse(html, {
+      fonts: [
+        { data: oxaniumBold, name: "Oxanium", style: "normal", weight: 800 },
+        { data: oxaniumMedium, name: "Oxanium", style: "normal", weight: 500 },
+      ],
+      height: HEIGHT,
+      width: WIDTH,
+    });
   },
-});
+};
 
-export const serverHandlers = Route.options.server!.handlers;
+export const Route = createFileRoute("/api/og/$logId")({
+  server: { handlers: aliasHandlers(serverHandlers) },
+});

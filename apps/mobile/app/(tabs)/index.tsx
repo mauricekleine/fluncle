@@ -34,7 +34,7 @@ export default function FeedScreen() {
     const idx = token?.index ?? -1;
     const s = stateRef.current;
     if (idx >= 0 && idx >= s.findings.length - 3 && s.hasNextPage && !s.isFetchingNextPage) {
-      s.fetchNextPage();
+      void s.fetchNextPage();
     }
   }).current;
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 80 }).current;
@@ -72,7 +72,7 @@ export default function FeedScreen() {
         viewabilityConfig={viewabilityConfig}
         onEndReached={() => {
           if (hasNextPage) {
-            fetchNextPage();
+            void fetchNextPage();
           }
         }}
         onEndReachedThreshold={0.6}

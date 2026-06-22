@@ -206,6 +206,10 @@ function verifyCsrfToken(user: PublicUser, token: string | null): boolean {
     .digest("base64url");
   const received = parts[2];
 
+  if (received === undefined) {
+    return false;
+  }
+
   try {
     return timingSafeEqual(Buffer.from(received), Buffer.from(expected));
   } catch {

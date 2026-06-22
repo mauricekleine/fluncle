@@ -376,7 +376,7 @@ Rate limit: 5 submissions per connection per hour. Over that returns 429 with co
 
 ## Model Context Protocol
 
-The same tools are available over MCP (Streamable HTTP, no auth) at \`${siteUrl}/mcp\`: \`get_recent_tracks\`, \`get_random_track\`, \`search_tracks\`, \`submit_track\`, and \`subscribe_newsletter\`. The server card (SEP-2127) is at \`${siteUrl}/.well-known/mcp/server-card.json\`.
+The same tools are available over MCP (Streamable HTTP, no auth) at \`${siteUrl}/mcp\`: \`list_tracks\`, \`get_random_track\`, \`search_tracks\`, \`submit_track\`, and \`subscribe_newsletter\`. The server card (SEP-2127) is at \`${siteUrl}/.well-known/mcp/server-card.json\`.
 
 ## Everything else
 

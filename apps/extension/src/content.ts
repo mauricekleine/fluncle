@@ -202,6 +202,9 @@ function linkifyTextNode(textNode: Text): boolean {
   while ((match = pattern.exec(text))) {
     const raw = match[0];
     const id = match[1];
+    if (id === undefined) {
+      continue;
+    }
 
     if (match.index > lastIndex) {
       fragment.append(text.slice(lastIndex, match.index));

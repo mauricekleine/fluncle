@@ -113,7 +113,7 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
     }
     player.pause();
     audio.pause();
-    observation.seekTo(0);
+    void observation.seekTo(0);
     observation.play();
     setObserving(true);
   }, [observing, stopObservation, player, audio, observation]);

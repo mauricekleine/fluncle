@@ -12,14 +12,18 @@ import * as z from "zod";
 // hidden behind it). Validate the shape at the contract edge so a malformed token
 // 400s before it can bloat the registry or break a fan-out. The bracketed body is
 // opaque, so accept any non-`]` run inside the brackets.
-const ExpoPushTokenSchema = z
+export const ExpoPushTokenSchema = z
   .string()
   .regex(/^ExponentPushToken\[[^\]]+\]$/, "Must be a valid ExponentPushToken[…]");
 
 // The push categories a device can mute. Mirrors the two send paths in the server
 // `push` module (`notifyNewFinding` → "findings", `notifyNewMixtape` →
 // "mixtapes"); a muted category is dropped from that path's fan-out.
-const PushCategorySchema = z.enum(["findings", "mixtapes"]);
+export const PushCategorySchema = z.enum(["findings", "mixtapes"]);
+
+// The platforms a device can register from. Surfaced so the contract edge rejects
+// anything that is not the Expo iOS/Android app.
+export const DevicePlatformSchema = z.enum(["android", "ios"]);
 
 /**
  * `register_device` → `POST /devices` (operationId `registerDevice`).
@@ -42,7 +46,7 @@ export const registerDevice = oc
     z.object({
       appVersion: z.string().max(64).optional(),
       mutedCategories: z.array(PushCategorySchema).optional(),
-      platform: z.enum(["android", "ios"]),
+      platform: DevicePlatformSchema,
       token: ExpoPushTokenSchema,
     }),
   )
@@ -68,7 +72,7 @@ export const deregisterDevice = oc
   .output(z.object({ ok: z.literal(true) }));
 
 /**
- * `sweep_push_receipts` → `POST /admin/push/sweep-receipts` (operationId
+ * `sweep_push_receipts` → `POST /admin/push/receipts/sweep` (operationId
  * `sweepPushReceipts`).
  *
  * Admin tier (live `requireAdmin` — like `sweep_enrichment`, so an external cron
@@ -84,7 +88,7 @@ export const sweepPushReceipts = oc
     inputStructure: "detailed",
     method: "POST",
     operationId: "sweepPushReceipts",
-    path: "/admin/push/sweep-receipts",
+    path: "/admin/push/receipts/sweep",
     summary: "Prune push tokens Expo reports gone (DeviceNotRegistered via receipts)",
     tags: ["Admin"],
   })

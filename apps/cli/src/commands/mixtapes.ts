@@ -192,22 +192,23 @@ export async function mixtapeDistributeCommand(
   const results: { platform: string; url: string }[] = [];
 
   if (doYoutube) {
+    if (!options.video) {
+      throw new CliError("missing_video", "YouTube distribution needs --video <mp4>");
+    }
     onProgress("YouTube: uploading video…");
     const { distributeYoutube } = await import("./mixtape-youtube");
-    const result = await distributeYoutube(mixtapeId, options.video!, onProgress);
+    const result = await distributeYoutube(mixtapeId, options.video, onProgress);
     results.push({ platform: "youtube", url: result.url });
     onProgress(`YouTube: ${result.url}`);
   }
 
   if (doMixcloud) {
+    if (!options.audio) {
+      throw new CliError("missing_audio", "Mixcloud distribution needs --audio <file>");
+    }
     onProgress("Mixcloud: uploading audio…");
     const { distributeMixcloud } = await import("./mixtape-mixcloud");
-    const result = await distributeMixcloud(
-      mixtapeId,
-      options.audio!,
-      onProgress,
-      options.unlisted,
-    );
+    const result = await distributeMixcloud(mixtapeId, options.audio, onProgress, options.unlisted);
     results.push({ platform: "mixcloud", url: result.url });
     onProgress(`Mixcloud: ${result.url}`);
   }
@@ -311,11 +312,15 @@ function parseCueSheet(text: string): CueEntry[] {
 
     const match = trimmed.match(/^(\d{1,2}:\d{2}(?::\d{2})?)\s+(.+)$/);
     if (match) {
-      const startMs = parseDuration(match[1]);
+      const [, time, ref] = match;
+      if (time === undefined || ref === undefined) {
+        continue;
+      }
+      const startMs = parseDuration(time);
       if (startMs === null) {
         continue;
       }
-      entries.push({ ref: match[2].trim(), startMs });
+      entries.push({ ref: ref.trim(), startMs });
     } else {
       entries.push({ ref: trimmed });
     }
@@ -340,12 +345,18 @@ function parseDuration(input: string): number | null {
     }
     if (parts.length === 3) {
       const [hours, minutes, seconds] = nums;
+      if (hours === undefined || minutes === undefined || seconds === undefined) {
+        return null;
+      }
       if (minutes >= 60 || seconds >= 60) {
         return null;
       }
       return Math.round((hours * 3600 + minutes * 60 + seconds) * 1000);
     }
     const [minutes, seconds] = nums;
+    if (minutes === undefined || seconds === undefined) {
+      return null;
+    }
     if (seconds >= 60) {
       return null;
     }

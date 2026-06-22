@@ -53,7 +53,11 @@ describe("createSim", () => {
     expect(sim.ship.fuel).toBe(sim.config.tankCapacity);
     expect(sim.orbitIndex).toBe(-1);
     expect(sim.entities).toEqual([]);
-    expect(sim.stars[0].collected).toBe(false);
+    const firstStar = sim.stars[0];
+    if (firstStar === undefined) {
+      throw new Error("expected at least one star");
+    }
+    expect(firstStar.collected).toBe(false);
   });
 });
 
@@ -111,7 +115,11 @@ describe("orbit", () => {
     stepSim(sim, FLY, 1 / 60);
 
     expect(sim.phase).toBe("orbiting");
-    expect(sim.stars[0].collected).toBe(true);
+    const firstStar = sim.stars[0];
+    if (firstStar === undefined) {
+      throw new Error("expected at least one star");
+    }
+    expect(firstStar.collected).toBe(true);
     expect(sim.collectedCount).toBe(1);
     expect(sim.orbitFresh).toBe(true);
     expect(collectKinds(sim)).toContain("logged");
@@ -170,7 +178,11 @@ describe("resetSim", () => {
   it("clears the log and rebuilds the same galaxy", () => {
     const sim = createSim([makeStar("241.0.1A", 800, 0), makeStar("242.0.1B", 0, 900)]);
 
-    sim.stars[0].collected = true;
+    const firstStar = sim.stars[0];
+    if (firstStar === undefined) {
+      throw new Error("expected at least one star");
+    }
+    firstStar.collected = true;
     sim.collectedCount = 1;
     sim.ship.fuel = 3;
 

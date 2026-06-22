@@ -2,7 +2,7 @@
 // and external agents consume. Pure types (no runtime): the web stays the source
 // of truth for logic + the drizzle schema; this package is the single place the
 // public DTOs + response envelopes are defined, so the CLI/Raycast mirrors can't
-// drift (they did before — CLI `RecentTrack` was missing 7 fields, `AddTrackResult`
+// drift (they did before — CLI `RecentTrack` was missing 7 fields, `PublishTrackResult`
 // carried a dead `tags`, `MixtapeMemberItem` was a subset).
 //
 // Web routes import these to type `Response.json<…>(…)`; the CLI imports them for
@@ -257,7 +257,7 @@ export type SearchResponse = Ok<{ results: TrackSearchResult[] }>;
 // ── Add / publish ────────────────────────────────────────────────────────────
 
 /** `/api/admin/tracks` POST response (the add-track result). */
-export type AddTrackResult = {
+export type PublishTrackResult = {
   addedToSpotify: boolean;
   dryRun: boolean;
   message: string;
@@ -279,7 +279,7 @@ export type AddTrackResult = {
   };
 };
 
-export type AddTrackResponse = Ok<AddTrackResult>;
+export type PublishTrackResponse = Ok<PublishTrackResult>;
 
 // ── Video bundle (presigned direct-to-R2) ────────────────────────────────────
 
@@ -316,7 +316,7 @@ export type TrackUpdateResponse = Ok<TrackUpdateResult>;
 
 // ── Request DTOs (typed bodies the CLI sends; the web validates `unknown` separately) ──
 
-export type AddTrackRequest = {
+export type PublishTrackRequest = {
   dryRun?: boolean;
   note?: string;
   spotifyUrl: string;

@@ -170,8 +170,12 @@ describe("SSH star-flight sim parity fixture", () => {
     snapshot("cruise-1s");
     step(30, { boost: true, steer: 1 });
     snapshot("boost-turn-0.5s");
-    sim.ship.x = sim.stars[0].x;
-    sim.ship.y = sim.stars[0].y;
+    const firstStar = sim.stars[0];
+    if (firstStar === undefined) {
+      throw new Error("expected at least one star in the sim fixture");
+    }
+    sim.ship.x = firstStar.x;
+    sim.ship.y = firstStar.y;
     sim.ship.fuel = 20;
     stepSim(sim, { boost: false, steer: 0 }, simFixture.step);
     snapshot("orbit-first-star");

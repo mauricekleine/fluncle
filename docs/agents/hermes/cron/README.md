@@ -8,9 +8,9 @@ Every step is a "read a queue → act per item, idempotently" loop over the `flu
 
 `fluncle-enrich` is **live on the box**. It does not carry a prompt: enrichment is pure compute (get → analyze → update, zero LLM tokens), so it is a `--no-agent --script` job. Its script source lives beside the build context at [`../scripts/`](../scripts/) — a bash wrapper (`enrich-sweep.sh`) the cron runner execs by extension, which in turn `exec`s the bun orchestrator (`enrich-sweep.ts`). It is created on the box directly (not in `jobs.json`, which holds the agent jobs).
 
-| Job              | Schedule | What it does                                                                                                                                                                                                                                                                 | Server slice                                   |
-| ---------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| `fluncle-enrich` | every 5m | Drain `admin tracks enrich-queue`; per finding (bounded batch, cap 4/tick): `tracks get` → `analyze-track.ts` (ffmpeg + DSP on the box) → `admin tracks update --bpm [--key] --features --status done` (or `--status failed` when no preview). Idempotent; no-op when empty. | The existing `admin tracks update` write-back. |
+| Job              | Schedule | What it does                                                                                                                                                                                                                                                                   | Server slice                                   |
+| ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
+| `fluncle-enrich` | every 5m | Drain `admin tracks enrich --queue`; per finding (bounded batch, cap 4/tick): `tracks get` → `analyze-track.ts` (ffmpeg + DSP on the box) → `admin tracks update --bpm [--key] --features --status done` (or `--status failed` when no preview). Idempotent; no-op when empty. | The existing `admin tracks update` write-back. |
 
 **Every 5m, not hourly:** the sweep burns no tokens and no-ops on an empty queue, so it runs far more often than the hourly agent crons — a new find enriches within minutes. The Worker-side Spinup trigger + SDK + secrets have been **removed** (this is the only path that enriches a find). The image carries `ffmpeg` + `bun`, and the `fluncle-track-enrichment` skill is installed under `~/.hermes/skills/` (→ `/opt/data/skills/`). To recreate it on a rebuilt box:
 
@@ -26,7 +26,7 @@ The two AGENT jobs in [`jobs.json`](./jobs.json) are drafted but **not yet wired
 
 | Job                    | Schedule | What it does                                                                                                                                                                | Server slice                                                           |
 | ---------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `fluncle-context-note` | every 1h | Drain `hasContext=false` (`admin tracks context-queue`), call `admin tracks context` per finding (Worker-side Firecrawl), write `context_note` quietly.                     | `context_track` agent-tier endpoint + `hasContext` filter (#86/#88).   |
+| `fluncle-context-note` | every 1h | Drain `hasContext=false` (`admin tracks context --queue`), call `admin tracks context` per finding (Worker-side Firecrawl), write `context_note` quietly.                   | `context_track` agent-tier endpoint + `hasContext` filter (#86/#88).   |
 | `fluncle-observation`  | every 1h | Drain `hasContext=true AND hasObservation=false`; author the recovered-audio script (Sonnet + `copywriting-fluncle`) from the stored context note, then `observe --script`. | `observe_track` flipped to agent tier + `hasObservation` filter (#86). |
 
 NOT included (deliberately, per the brief): the Last.fm / Discogs **backfills** (their reliability columns — `lastfmLovedAt`, `discogsStatus` — are not built yet) and the **newsletter** (owned by its own RFC).
@@ -58,9 +58,9 @@ or ask the running bot in Discord (`/cron add "every 1h" "<prompt>"`), or in nat
 
 ### Before wiring (gates from the brief)
 
-1. **CLI admin naming rename — landed (#88).** The crons invoke via the `fluncle` CLI; the context command is `fluncle admin tracks context <id|logId>` and the queue shows are `context-queue` / `observe-queue` (Convention B §4). Every job prompt here is pinned to those names.
+1. **CLI admin naming rename — landed (#88, refined by the Convention-B cleanup).** The crons invoke via the `fluncle` CLI; the context command is `fluncle admin tracks context <id|logId>` and the queue shows are the `context --queue` / `observe --queue` worklist views (Convention B §6.4 — no `*-queue` commands). Every job prompt here is pinned to those names.
 2. **Smoke-test each command by hand on the box** with the agent token before scheduling it, so a scheduled run isn't the first time it executes:
-   - `fluncle admin tracks enrich-queue --json --limit 1` → expect `{ "ok": true, ... }` (the queue the live `--no-agent` sweep already reads).
+   - `fluncle admin tracks enrich --queue --json --limit 1` → expect `{ "ok": true, ... }` (the queue the live `--no-agent` sweep already reads).
    - `fluncle admin tracks context <id> --json` against one `hasContext=false` finding → expect a quiet `context_note` write (no `updated_at` bump).
    - `fluncle admin tracks observe <id> --script-file <one short test script> --json` against one eligible finding → expect a rendered `observation.{mp3,txt,json}` and the voice gate passing.
 3. **Watch the first few ticks** — `~/.hermes/cron/output/{job_id}/*.md` and `~/.hermes/logs/`. The observation cron costs ElevenLabs credits per render; confirm the per-tick batch is small and the queue drains as expected before walking away.
