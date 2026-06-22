@@ -117,6 +117,7 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
   // The public archive reads + Spotify candidate search (orpc-coverage.test.ts).
   "get_edition",
   "get_health",
+  "get_radio_now_playing",
   "get_random_radio_track",
   "get_random_track",
   "get_track",

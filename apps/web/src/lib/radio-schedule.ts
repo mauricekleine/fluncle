@@ -107,7 +107,13 @@ export function resolveRadioSlot(
   let offsetMs = 0;
 
   for (let i = 0; i < entries.length; i++) {
-    const duration = segmentDurationMs(entries[i]);
+    const entry = entries[i];
+
+    if (!entry) {
+      continue;
+    }
+
+    const duration = segmentDurationMs(entry);
 
     if (p < cumulative + duration) {
       index = i;
@@ -119,12 +125,21 @@ export function resolveRadioSlot(
   }
 
   const nextIndex = (index + 1) % entries.length;
+  const current = entries[index];
+  const next = entries[nextIndex];
+
+  // `entries.length > 0` and both indices are in-bounds by construction, so this
+  // guard never fires — but it discharges noUncheckedIndexedAccess honestly and
+  // keeps the empty-schedule contract (caller surfaces the empty-sector state).
+  if (!current || !next) {
+    return undefined;
+  }
 
   return {
-    current: entries[index],
-    currentDurationMs: segmentDurationMs(entries[index]),
+    current,
+    currentDurationMs: segmentDurationMs(current),
     currentIndex: index,
-    next: entries[nextIndex],
+    next,
     nextIndex,
     offsetMs,
   };
