@@ -44,7 +44,7 @@ export function CosmosBackdrop() {
       true,
     );
     return () => cancelAnimation(phase);
-  }, [reduced]);
+  }, [phase, reduced]);
 
   const bloomOpacity = useDerivedValue(() => 0.78 + phase.value * 0.22);
 

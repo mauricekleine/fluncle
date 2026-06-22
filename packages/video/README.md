@@ -71,7 +71,7 @@ The full local loop: fetch track → resolve a preview clip → download + norma
 - **`--composition-source <file>`** — explicitly record the source file that produced the render. If omitted, the pipeline records `src/remotion/workbench/<Id>.tsx`, matching the auto-registration contract.
 - **`--duration-ms <10000-30000>`** — pick the clip length off the waveform (end on a clean beat). Drives `durationInFrames`.
 
-Other scripts: `bun run studio` (Remotion Studio, the live scrub loop), `bun run typecheck` (`tsc --noEmit`, the quality check for any change here).
+Other scripts: `bun run studio` (Remotion Studio, the live scrub loop), `bun run typecheck` (`tsgo --noEmit`, the quality check for any change here).
 
 ### Props contract
 

@@ -1,7 +1,7 @@
 // One finding, full-screen (RFC Unit 2). Per-cell player, the media ladder, the
 // native overlay (a right action rail + bottom caption), the cover-card eclipse
 // drift, and the background-pause rule. The de-risk spike target.
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { memo, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Linking,
   Pressable,
@@ -42,11 +42,14 @@ function foundLabel(iso: string): string {
   return `Found ${d.toLocaleDateString("en-US", { day: "numeric", month: "short" })}`;
 }
 
-export function FeedCard({ finding, active, soundOn, onToggleSound }: Props) {
+export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onToggleSound }: Props) {
   const { height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const reduced = useReducedMotion();
-  const media = resolveCardMedia(finding);
+  // Stabilize the resolved media so effects can depend on the object itself (not
+  // computed `media.kind`/`media.previewUrl` member reads) and only re-run when the
+  // finding actually changes.
+  const media = useMemo(() => resolveCardMedia(finding), [finding]);
 
   const player = useVideoPlayer(media.kind === "video" ? media.videoUrl : null, (p) => {
     p.loop = true;
@@ -81,7 +84,7 @@ export function FeedCard({ finding, active, soundOn, onToggleSound }: Props) {
         audio.pause();
       }
     }
-  }, [active, soundOn, media.kind, observing]);
+  }, [active, audio, media, observing, player, soundOn]);
 
   // The observation stops itself when the clip ends; resume nothing automatically.
   useEffect(() => {
@@ -96,7 +99,7 @@ export function FeedCard({ finding, active, soundOn, onToggleSound }: Props) {
       observation.pause();
       setObserving(false);
     }
-  }, [active, observing]);
+  }, [active, observation, observing]);
 
   const stopObservation = useCallback(() => {
     observation.pause();
@@ -126,7 +129,7 @@ export function FeedCard({ finding, active, soundOn, onToggleSound }: Props) {
       observation.pause();
       setObserving(false);
     }
-  }, [media.kind, observing, observation]);
+  }, [audio, media, observation, observing, player]);
   useBackgroundPause(pauseAll);
 
   // Cover rung: a slow eclipse drift (The Light-Years cover card is alive, not static).
@@ -140,7 +143,7 @@ export function FeedCard({ finding, active, soundOn, onToggleSound }: Props) {
             true,
           )
         : 0;
-  }, [media.kind, reduced]);
+  }, [drift, media, reduced]);
   const coverStyle = useAnimatedStyle(() => ({
     transform: [
       { scale: 1 + drift.value * 0.06 },
@@ -249,7 +252,7 @@ export function FeedCard({ finding, active, soundOn, onToggleSound }: Props) {
       </View>
     </View>
   );
-}
+});
 
 function RailAction({
   accessibilityLabel,

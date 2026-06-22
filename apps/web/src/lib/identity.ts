@@ -1,12 +1,9 @@
 // The Fluncle identity strings (web-overhaul RFC §4, decisions §8.4 +
 // 2026-06-11 follow-up).
 //
-// - fluncleTagline: the one-line opener every register starts from.
 // - fluncleDescription: the canonical ENTITY description for machine-facing
 //   surfaces — home/root meta, llms.txt, the glossary, WebSite/MusicGroup
 //   schema. Reused verbatim; edit it here or nowhere.
-export const fluncleTagline = "Drum & bass bangers from another dimension.";
-
 export const fluncleAsciiLogo = `███████╗██╗     ██╗   ██╗███╗   ██╗ ██████╗██╗     ███████╗
 ██╔════╝██║     ██║   ██║████╗  ██║██╔════╝██║     ██╔════╝
 █████╗  ██║     ██║   ██║██╔██╗ ██║██║     ██║     █████╗

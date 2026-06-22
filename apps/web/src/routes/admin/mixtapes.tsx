@@ -38,6 +38,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { AdminShell } from "@/components/admin/admin-shell";
 import {
@@ -279,8 +280,8 @@ function MixtapeEditor({
   const bodyId = useId();
   const [note, setNote] = useState(mixtape.note ?? "");
   const [recordedAt, setRecordedAt] = useState(mixtape.recordedAt?.slice(0, 10) ?? "");
-  const [plannedFor, setPlannedFor] = useState(toLocalDateTime(mixtape.plannedFor));
-  const [durationField, setDurationField] = useState(formatDurationField(mixtape.durationMs));
+  const [plannedFor, setPlannedFor] = useState(() => toLocalDateTime(mixtape.plannedFor));
+  const [durationField, setDurationField] = useState(() => formatDurationField(mixtape.durationMs));
   // SoundCloud is the one manual link (YouTube + Mixcloud are recorded by `distribute`
   // and shown read-only in the Distribution strip).
   const [soundcloudUrl, setSoundcloudUrl] = useState(mixtape.externalUrls.soundcloud ?? "");
@@ -482,12 +483,7 @@ function MixtapeEditor({
       </button>
 
       {expanded ? (
-        <div
-          aria-labelledby={headerId}
-          className="px-4 pb-4 pt-2 sm:px-5"
-          id={bodyId}
-          role="region"
-        >
+        <section aria-labelledby={headerId} className="px-4 pb-4 pt-2 sm:px-5" id={bodyId}>
           {minted ? (
             // A published checkpoint is read-only — a clean summary, not the editor:
             // the tracklist, where it's live, the dream note, and the public page.
@@ -665,7 +661,7 @@ fluncle admin mixtapes publish-youtube ${mixtape.id ?? "<id>"}`}
               {notice}
             </p>
           ) : null}
-        </div>
+        </section>
       ) : null}
     </section>
   );
@@ -1237,16 +1233,18 @@ function useDebounced<T>(value: T, delayMs: number): T {
   return debounced;
 }
 
+function subscribeReducedMotion(onChange: () => void): () => void {
+  const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+  media.addEventListener("change", onChange);
+  return () => media.removeEventListener("change", onChange);
+}
+
 function usePrefersReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(false);
-  useEffect(() => {
-    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
-    setReduced(media.matches);
-    const onChange = (event: MediaQueryListEvent) => setReduced(event.matches);
-    media.addEventListener("change", onChange);
-    return () => media.removeEventListener("change", onChange);
-  }, []);
-  return reduced;
+  return useSyncExternalStore(
+    subscribeReducedMotion,
+    () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+    () => false,
+  );
 }
 
 // An ISO instant → the `datetime-local` input's value (local wall-clock, no zone,

@@ -1,5 +1,5 @@
 import { colors } from "@fluncle/tokens";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AbsoluteFill, useCurrentFrame, useVideoConfig } from "remotion";
 import { hexToRgb } from "../color";
 import { useAudioReactivity, type AudioReactivityOptions } from "../hooks/use-audio-reactivity";
@@ -362,6 +362,19 @@ type GlBundle = {
  * frame is drawn in a useEffect keyed on the frame so headless captures get a
  * painted canvas.
  */
+// The error-overlay surface — a static fallback shown only when WebGL setup
+// fails. All fixed, so it stays stable instead of rebuilding each render.
+const ERROR_STYLE: React.CSSProperties = {
+  backgroundColor: colors.deepField,
+  color: colors.reentryRed,
+  fontFamily: "ui-monospace, SF Mono, Menlo, monospace",
+  fontSize: 22,
+  lineHeight: 1.4,
+  padding: 48,
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
+};
+
 export const ShaderLayer: React.FC<ShaderLayerProps> = ({
   fragmentShader,
   palette,
@@ -425,71 +438,74 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
 
   // (Re)compile + link the program whenever the shader string changes, and
   // (re)acquire the context on loss. Returns a live bundle or null on failure.
-  const ensureBundle = (canvas: HTMLCanvasElement): GlBundle | null => {
-    const fullFrag = HEADER + "\n" + fragmentShader;
-    const existing = bundleRef.current;
-    if (existing && !existing.gl.isContextLost() && shaderKeyRef.current === fullFrag) {
-      return existing;
-    }
+  const ensureBundle = useCallback(
+    (canvas: HTMLCanvasElement): GlBundle | null => {
+      const fullFrag = HEADER + "\n" + fragmentShader;
+      const existing = bundleRef.current;
+      if (existing && !existing.gl.isContextLost() && shaderKeyRef.current === fullFrag) {
+        return existing;
+      }
 
-    const gl = canvas.getContext("webgl", { preserveDrawingBuffer: true });
-    if (!gl) {
-      setError("WebGL unavailable (no context). Renders require --gl=angle.");
-      return null;
-    }
-
-    const compile = (type: number, src: string): WebGLShader | null => {
-      const sh = gl.createShader(type);
-      if (!sh) {
+      const gl = canvas.getContext("webgl", { preserveDrawingBuffer: true });
+      if (!gl) {
+        setError("WebGL unavailable (no context). Renders require --gl=angle.");
         return null;
       }
-      gl.shaderSource(sh, src);
-      gl.compileShader(sh);
-      if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
-        const log = gl.getShaderInfoLog(sh) ?? "unknown compile error";
-        setError(
-          `${type === gl.FRAGMENT_SHADER ? "Fragment" : "Vertex"} shader failed to compile:\n${log}`,
-        );
-        gl.deleteShader(sh);
+
+      const compile = (type: number, src: string): WebGLShader | null => {
+        const sh = gl.createShader(type);
+        if (!sh) {
+          return null;
+        }
+        gl.shaderSource(sh, src);
+        gl.compileShader(sh);
+        if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+          const log = gl.getShaderInfoLog(sh) ?? "unknown compile error";
+          setError(
+            `${type === gl.FRAGMENT_SHADER ? "Fragment" : "Vertex"} shader failed to compile:\n${log}`,
+          );
+          gl.deleteShader(sh);
+          return null;
+        }
+        return sh;
+      };
+
+      const vs = compile(gl.VERTEX_SHADER, VERT);
+      const fs = compile(gl.FRAGMENT_SHADER, fullFrag);
+      if (!vs || !fs) {
         return null;
       }
-      return sh;
-    };
 
-    const vs = compile(gl.VERTEX_SHADER, VERT);
-    const fs = compile(gl.FRAGMENT_SHADER, fullFrag);
-    if (!vs || !fs) {
-      return null;
-    }
+      const program = gl.createProgram();
+      if (!program) {
+        setError("Failed to create WebGL program.");
+        return null;
+      }
+      gl.attachShader(program, vs);
+      gl.attachShader(program, fs);
+      gl.linkProgram(program);
+      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        setError(`Program link failed:\n${gl.getProgramInfoLog(program) ?? "unknown link error"}`);
+        return null;
+      }
 
-    const program = gl.createProgram();
-    if (!program) {
-      setError("Failed to create WebGL program.");
-      return null;
-    }
-    gl.attachShader(program, vs);
-    gl.attachShader(program, fs);
-    gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      setError(`Program link failed:\n${gl.getProgramInfoLog(program) ?? "unknown link error"}`);
-      return null;
-    }
+      const buffer = gl.createBuffer();
+      if (!buffer) {
+        setError("Failed to create vertex buffer.");
+        return null;
+      }
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      // Fullscreen triangle (covers the clip space with one primitive).
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
 
-    const buffer = gl.createBuffer();
-    if (!buffer) {
-      setError("Failed to create vertex buffer.");
-      return null;
-    }
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    // Fullscreen triangle (covers the clip space with one primitive).
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-
-    const bundle: GlBundle = { buffer, gl, program };
-    bundleRef.current = bundle;
-    shaderKeyRef.current = fullFrag;
-    setError(null);
-    return bundle;
-  };
+      const bundle: GlBundle = { buffer, gl, program };
+      bundleRef.current = bundle;
+      shaderKeyRef.current = fullFrag;
+      setError(null);
+      return bundle;
+    },
+    [fragmentShader],
+  );
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -599,23 +615,11 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
     return () => {
       canvas.removeEventListener("webglcontextlost", onLost, false);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [frame, fragmentShader, fps, clipProgress, audio, seed, stops, uniforms, bloom]);
+  }, [audio, bloom, clipProgress, ensureBundle, fps, frame, seed, stops, uniforms]);
 
   if (error) {
     return (
-      <AbsoluteFill
-        style={{
-          backgroundColor: colors.deepField,
-          color: colors.reentryRed,
-          fontFamily: "ui-monospace, SF Mono, Menlo, monospace",
-          fontSize: 22,
-          lineHeight: 1.4,
-          padding: 48,
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
-        }}
-      >
+      <AbsoluteFill style={ERROR_STYLE}>
         <div style={{ color: colors.eclipseGold, fontWeight: 800, marginBottom: 16 }}>
           ShaderLayer error
         </div>

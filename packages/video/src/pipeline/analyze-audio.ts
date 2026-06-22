@@ -446,13 +446,13 @@ export async function analyzeAudio(
 
   // Beat grid across full clip, then trimmed/relative to the window.
   const fullGrid = bestPhaseGrid(onsetEnvNorm, bpm, totalMs);
-  const beatGrid = fullGrid
-    .filter((t) => t >= startMs && t < endMs)
-    .map((t) => Math.round(t - startMs));
+  const beatGrid = fullGrid.flatMap((t) =>
+    t >= startMs && t < endMs ? [Math.round(t - startMs)] : [],
+  );
 
-  const onsets = onsetsAll
-    .filter((o) => o >= startMs && o < endMs)
-    .map((o) => Math.round(o - startMs));
+  const onsets = onsetsAll.flatMap((o) =>
+    o >= startMs && o < endMs ? [Math.round(o - startMs)] : [],
+  );
 
   return {
     bassCurve,

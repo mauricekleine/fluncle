@@ -5,7 +5,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 // layout jump.
 export function StoriesSkeleton() {
   return (
-    <div aria-busy="true" aria-label="Loading stories" className="stories-stage" role="status">
+    <output aria-busy="true" aria-label="Loading stories" className="stories-stage">
       <div className="stories-viewport">
         <div className="story-slot">
           <div className="story-view empty-scanlines">
@@ -23,6 +23,6 @@ export function StoriesSkeleton() {
           </div>
         </div>
       </div>
-    </div>
+    </output>
   );
 }

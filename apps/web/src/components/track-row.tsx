@@ -210,7 +210,7 @@ function MixtapeLinksMenu({ track }: { track: Extract<FeedItem, { type: "mixtape
         {externalLinks.map((link) => (
           <DropdownMenuItem
             key={link.label}
-            render={<a href={link.href} rel="noreferrer" target="_blank" />}
+            render={<a aria-label={link.label} href={link.href} rel="noreferrer" target="_blank" />}
           >
             <BrandIcon className="size-4" icon={link.icon} />
             {link.label}
@@ -251,18 +251,30 @@ function TrackLinksMenu({ track, trackLine }: { track: Track; trackLine: string 
         <DotsThreeIcon aria-hidden="true" size={18} weight="bold" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-40">
-        <DropdownMenuItem render={<a href={track.spotifyUrl} rel="noreferrer" target="_blank" />}>
+        <DropdownMenuItem
+          render={
+            <a aria-label="Spotify" href={track.spotifyUrl} rel="noreferrer" target="_blank" />
+          }
+        >
           <BrandIcon className="size-4" icon={siSpotify} />
           Spotify
         </DropdownMenuItem>
         {track.tiktokUrl ? (
-          <DropdownMenuItem render={<a href={track.tiktokUrl} rel="noreferrer" target="_blank" />}>
+          <DropdownMenuItem
+            render={
+              <a aria-label="TikTok" href={track.tiktokUrl} rel="noreferrer" target="_blank" />
+            }
+          >
             <BrandIcon className="size-4" icon={siTiktok} />
             TikTok
           </DropdownMenuItem>
         ) : null}
         {track.youtubeUrl ? (
-          <DropdownMenuItem render={<a href={track.youtubeUrl} rel="noreferrer" target="_blank" />}>
+          <DropdownMenuItem
+            render={
+              <a aria-label="YouTube" href={track.youtubeUrl} rel="noreferrer" target="_blank" />
+            }
+          >
             <BrandIcon className="size-4" icon={siYoutube} />
             YouTube
           </DropdownMenuItem>

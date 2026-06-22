@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
@@ -12,7 +13,13 @@ import { color, font, radius } from "@/theme/tokens";
 // (the most robust path): a Pressable style FUNCTION dropped flexDirection under
 // NativeWind, and FlashList v2 mishandled flex-row item roots — so the row layout
 // is a plain View and the archive list uses FlatList (see archive.tsx).
-export function FindingRow({ finding, isLast }: { finding: TrackListItem; isLast?: boolean }) {
+export const FindingRow = memo(function FindingRow({
+  finding,
+  isLast,
+}: {
+  finding: TrackListItem;
+  isLast?: boolean;
+}) {
   const router = useRouter();
   const id = finding.logId ?? finding.trackId;
   const meta = [
@@ -50,7 +57,7 @@ export function FindingRow({ finding, isLast }: { finding: TrackListItem; isLast
       )}
     </Pressable>
   );
-}
+});
 
 const styles = StyleSheet.create({
   art: {

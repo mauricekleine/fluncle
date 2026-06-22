@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { siSpotify } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
@@ -302,7 +302,9 @@ function RadioPage() {
       <div aria-hidden="true" className="sr-only">
         {nextVideoUrl ? <video muted playsInline preload="auto" src={nextVideoUrl} /> : undefined}
         {next?.observationAudioUrl ? (
-          <audio preload="auto" src={next.observationAudioUrl} />
+          <audio preload="auto" src={next.observationAudioUrl}>
+            <track kind="captions" />
+          </audio>
         ) : undefined}
       </div>
     </main>
@@ -338,10 +340,10 @@ function RadioMessage({
           play: back to the archive or the full log. */}
       {wayBack ? (
         <div className="radio-actions">
-          <Button nativeButton={false} render={<a href="/" />} size="sm" variant="outline">
+          <Button nativeButton={false} render={<Link to="/" />} size="sm" variant="outline">
             Back to the archive
           </Button>
-          <Button nativeButton={false} render={<a href="/log" />} size="sm" variant="outline">
+          <Button nativeButton={false} render={<Link to="/log" />} size="sm" variant="outline">
             Browse the log
           </Button>
         </div>

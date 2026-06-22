@@ -11,25 +11,31 @@ export function formatAlbumDuration(durationMs: number): string {
   return `${totalMinutes} min`;
 }
 
+// Pinned locale and timezone so the server-rendered date matches hydration on
+// every client; VOICE.md's tabular convention is "Jun 4". Built once at module
+// load — the Intl constructor allocates locale-data tables that are expensive to
+// rebuild per call.
+const dateFormatter = new Intl.DateTimeFormat("en-US", {
+  day: "numeric",
+  month: "short",
+  timeZone: "UTC",
+});
+
+// The archival form with the year ("Jun 4, 2026") — the log page is a permanent
+// record, so its Found date carries the year the feed omits.
+const dateLongFormatter = new Intl.DateTimeFormat("en-US", {
+  day: "numeric",
+  month: "short",
+  timeZone: "UTC",
+  year: "numeric",
+});
+
 export function formatDate(value: string): string {
-  // Pinned locale and timezone so the server-rendered date matches hydration
-  // on every client; VOICE.md's tabular convention is "Jun 4".
-  return new Intl.DateTimeFormat("en-US", {
-    day: "numeric",
-    month: "short",
-    timeZone: "UTC",
-  }).format(new Date(value));
+  return dateFormatter.format(new Date(value));
 }
 
 export function formatDateLong(value: string): string {
-  // The archival form with the year ("Jun 4, 2026") — the log page is a
-  // permanent record, so its Found date carries the year the feed omits.
-  return new Intl.DateTimeFormat("en-US", {
-    day: "numeric",
-    month: "short",
-    timeZone: "UTC",
-    year: "numeric",
-  }).format(new Date(value));
+  return dateLongFormatter.format(new Date(value));
 }
 
 export function formatDurationField(durationMs?: number | null): string {

@@ -120,6 +120,26 @@ const BANNED_GEOGRAPHY = [
   "usa",
 ] as const;
 
+// The banned lists are static, so compile their whole-word matchers ONCE at module
+// load instead of rebuilding a RegExp per word on every scan.
+const BANNED_WORD_MATCHERS: { regex: RegExp; word: string }[] = BANNED_WORDS.map((word) => ({
+  // Whole-word match so "signature"/"contention" don't false-positive.
+  regex: new RegExp(`\\b${word}\\b`, "i"),
+  word,
+}));
+
+const BANNED_GEOGRAPHY_MATCHERS: { place: string; regex: RegExp }[] = BANNED_GEOGRAPHY.map(
+  (place) => {
+    // Escape the dotted abbreviations (u.k./u.s.) and anchor on word boundaries.
+    // A trailing dot already ends the token, so we only need a trailing \b for the
+    // plain alphabetic terms.
+    const escaped = place.replace(/\./g, "\\.");
+    const pattern = place.endsWith(".") ? `\\b${escaped}` : `\\b${escaped}\\b`;
+
+    return { place, regex: new RegExp(pattern, "i") };
+  },
+);
+
 export type VoiceGateViolation = { reason: string; word?: string };
 
 /**
@@ -130,21 +150,14 @@ export function scanObservationScript(text: string): VoiceGateViolation[] {
   const violations: VoiceGateViolation[] = [];
   const lower = text.toLowerCase();
 
-  for (const word of BANNED_WORDS) {
-    // Whole-word match so "signature"/"contention" don't false-positive.
-    if (new RegExp(`\\b${word}\\b`, "i").test(lower)) {
+  for (const { regex, word } of BANNED_WORD_MATCHERS) {
+    if (regex.test(lower)) {
       violations.push({ reason: `banned identity word "${word}" (VOICE.md §3)`, word });
     }
   }
 
-  for (const place of BANNED_GEOGRAPHY) {
-    // Escape the dotted abbreviations (u.k./u.s.) and anchor on word boundaries.
-    // A trailing dot already ends the token, so we only need a trailing \b for the
-    // plain alphabetic terms.
-    const escaped = place.replace(/\./g, "\\.");
-    const pattern = place.endsWith(".") ? `\\b${escaped}` : `\\b${escaped}\\b`;
-
-    if (new RegExp(pattern, "i").test(lower)) {
+  for (const { place, regex } of BANNED_GEOGRAPHY_MATCHERS) {
+    if (regex.test(lower)) {
       violations.push({
         reason: `earthly geography "${place}" — the cosmos replaces the map; translate an origin into a far sector or drop it (recovered-audio-delivery.md)`,
         word: place,

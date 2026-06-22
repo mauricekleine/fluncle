@@ -15,8 +15,10 @@ import docsCss from "../docs.css?url";
 // .source/server module reaches for node:path, so it must never enter the
 // client bundle. The server fn serializes the tree (Fumadocs' own
 // serializePageTree); useFumadocsLoader rehydrates it on the client.
+// oxlint-disable-next-line sort-keys -- TanStack canonical property order (loader before head); see AGENTS.md
 export const Route = createFileRoute("/docs")({
   component: DocsRoute,
+  loader: async () => loadDocsTree(),
   head: () => ({
     links: [
       {
@@ -25,7 +27,6 @@ export const Route = createFileRoute("/docs")({
       },
     ],
   }),
-  loader: async () => loadDocsTree(),
 });
 
 const loadDocsTree = createServerFn({ method: "GET" }).handler(async () => {

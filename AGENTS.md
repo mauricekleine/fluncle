@@ -93,6 +93,8 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - MUST: Keep publishing authority behind the authenticated admin API.
 - SHOULD: Preserve existing server module boundaries under `apps/web/src/lib/server` and API route handlers under `apps/web/src/routes/api`.
 - SHOULD: Name new public surfaces (CLI / API / MCP / SSH) per the cross-surface `verb_noun` convention in [docs/naming-conventions.md](./docs/naming-conventions.md), so one operation reads the same everywhere.
+- MUST: Order options in `createFileRoute(...)({...})` and `createRootRoute({...})` by TanStack's canonical sequence (params → validateSearch → loaderDeps → context → beforeLoad → loader → head → scripts), since each step feeds the next step's type inference.
+- MUST: Put `// oxlint-disable-next-line sort-keys` directly above any such route definition whose canonical order breaks alphabetical key order (e.g. `loader` before `head`); `eslint/sort-keys` stays on and auto-fixed everywhere else.
 
 ## UI Components
 

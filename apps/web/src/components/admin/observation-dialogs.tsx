@@ -93,7 +93,13 @@ export function ObservationDialog({ onOpenChange, row }: ObservationDialogProps)
 
         {audioUrl ? (
           <div className="flex flex-col gap-3">
-            <audio className="w-full" controls preload="none" src={audioUrl}>
+            <audio
+              aria-label={`Fluncle's observation — ${row?.title}`}
+              className="w-full"
+              controls
+              preload="none"
+              src={audioUrl}
+            >
               <track kind="captions" />
             </audio>
             <dl className="flex items-center gap-4 text-xs text-muted-foreground">

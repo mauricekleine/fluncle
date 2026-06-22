@@ -96,7 +96,13 @@ export function LogObservation({
         </p>
       </div>
 
-      <audio onError={() => setFailed(true)} preload="none" ref={audioRef} src={audioUrl}>
+      <audio
+        aria-label="Recovered observation"
+        onError={() => setFailed(true)}
+        preload="none"
+        ref={audioRef}
+        src={audioUrl}
+      >
         <track kind="captions" />
       </audio>
     </section>

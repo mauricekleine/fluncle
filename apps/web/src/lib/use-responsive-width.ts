@@ -25,7 +25,7 @@ const RENDITION_LADDER: readonly RenditionWidth[] = [360, 480, 720, 1080];
 const MAX_PIXEL_RATIO = 2;
 
 /** Snap a device-pixel width up to the nearest rendition rung. */
-export function pickRenditionWidth(deviceWidth: number): RenditionWidth {
+function pickRenditionWidth(deviceWidth: number): RenditionWidth {
   for (const rung of RENDITION_LADDER) {
     if (deviceWidth <= rung) {
       return rung;

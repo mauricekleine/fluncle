@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { cloneElement, isValidElement, useEffect, useMemo, useState } from "react";
+import { cloneElement, isValidElement, useEffect, useMemo, useReducer, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -41,6 +41,50 @@ type Submission = {
   title: string;
 };
 
+type AccountState = {
+  csrfToken: string;
+  me: Me | undefined;
+  progress: Progress | undefined;
+  saved: SavedFinding[];
+  submissions: Submission[];
+};
+
+type AccountAction =
+  | { me: Me; type: "signedOut" }
+  | {
+      csrfToken: string;
+      me: Me;
+      progress: Progress;
+      saved: SavedFinding[];
+      submissions: Submission[];
+      type: "loaded";
+    };
+
+const initialAccountState: AccountState = {
+  csrfToken: "",
+  me: undefined,
+  progress: undefined,
+  saved: [],
+  submissions: [],
+};
+
+function accountReducer(state: AccountState, action: AccountAction): AccountState {
+  switch (action.type) {
+    case "signedOut":
+      return { ...initialAccountState, me: action.me };
+    case "loaded":
+      return {
+        csrfToken: action.csrfToken,
+        me: action.me,
+        progress: action.progress,
+        saved: action.saved,
+        submissions: action.submissions,
+      };
+    default:
+      return state;
+  }
+}
+
 export const Route = createFileRoute("/account")({
   component: AccountPage,
   head: () => ({
@@ -57,24 +101,18 @@ export const Route = createFileRoute("/account")({
 });
 
 function AccountPage() {
-  const [me, setMe] = useState<Me | undefined>();
-  const [progress, setProgress] = useState<Progress | undefined>();
-  const [saved, setSaved] = useState<SavedFinding[]>([]);
-  const [submissions, setSubmissions] = useState<Submission[]>([]);
-  const [csrfToken, setCsrfToken] = useState("");
+  const [{ csrfToken, me, progress, saved, submissions }, dispatch] = useReducer(
+    accountReducer,
+    initialAccountState,
+  );
   const [message, setMessage] = useState("");
   const signedIn = !!me?.user;
 
   async function refresh() {
     const nextMe = (await fetch("/api/me").then((res) => res.json())) as Me;
 
-    setMe(nextMe);
-
     if (!nextMe.user) {
-      setProgress(undefined);
-      setSaved([]);
-      setSubmissions([]);
-      setCsrfToken("");
+      dispatch({ me: nextMe, type: "signedOut" });
       return;
     }
 
@@ -89,10 +127,14 @@ function AccountPage() {
       fetch("/api/me/csrf").then((res) => res.json() as Promise<{ csrfToken?: string }>),
     ]);
 
-    setProgress(progressResponse as Progress);
-    setSaved((savedResponse.savedFindings ?? []) as SavedFinding[]);
-    setSubmissions((submissionsResponse.submissions ?? []) as Submission[]);
-    setCsrfToken(csrfResponse.csrfToken ?? "");
+    dispatch({
+      csrfToken: csrfResponse.csrfToken ?? "",
+      me: nextMe,
+      progress: progressResponse as Progress,
+      saved: (savedResponse.savedFindings ?? []) as SavedFinding[],
+      submissions: (submissionsResponse.submissions ?? []) as Submission[],
+      type: "loaded",
+    });
   }
 
   useEffect(() => {

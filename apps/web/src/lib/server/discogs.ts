@@ -38,7 +38,7 @@ const USER_AGENT = "Fluncle/1.0 (+https://www.fluncle.com)";
 // stores the id; anything below stores NOTHING. Tuned so a confident exact match
 // (artist + title + tracklist-contains + a corroborating signal) clears it while a
 // VA-compilation / wrong-variant / near-name collision falls short.
-export const CONFIDENCE_THRESHOLD = 0.9;
+const CONFIDENCE_THRESHOLD = 0.9;
 
 // How many Discogs search candidates to fetch + score per query variant. Each fetch
 // is one release lookup; a couple per finding stays well inside the rate limit.

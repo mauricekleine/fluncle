@@ -64,7 +64,7 @@ function loadConfig(): void {
     return;
   }
 
-  config({ path: join(homedir(), `.config/fluncle/.env.${profile}`) });
+  config({ path: join(homedir(), `.config/fluncle/.env.${profile}`), quiet: true });
   loadedProfile = profile;
 }
 

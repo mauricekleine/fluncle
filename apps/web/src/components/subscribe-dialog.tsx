@@ -1,5 +1,5 @@
 import { CircleNotchIcon, EnvelopeSimpleIcon } from "@phosphor-icons/react";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useReducer } from "react";
 import { HoneypotField } from "@/components/honeypot-field";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,6 +15,43 @@ import { Label } from "@/components/ui/label";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { subscribeToNewsletter } from "@/lib/newsletter";
 
+type FormState = {
+  didSubscribe: boolean;
+  email: string;
+  error: string | undefined;
+  isSubmitting: boolean;
+  website: string;
+};
+
+type FormAction =
+  | { fields: Partial<FormState>; type: "patch" }
+  | { type: "submitFailed"; error: string }
+  | { type: "submitStarted" }
+  | { type: "submitSucceeded" };
+
+const initialFormState: FormState = {
+  didSubscribe: false,
+  email: "",
+  error: undefined,
+  isSubmitting: false,
+  website: "",
+};
+
+function formReducer(state: FormState, action: FormAction): FormState {
+  switch (action.type) {
+    case "patch":
+      return { ...state, ...action.fields };
+    case "submitStarted":
+      return { ...state, error: undefined, isSubmitting: true };
+    case "submitSucceeded":
+      return { ...state, didSubscribe: true, email: "", isSubmitting: false, website: "" };
+    case "submitFailed":
+      return { ...state, error: action.error, isSubmitting: false };
+    default:
+      return state;
+  }
+}
+
 /**
  * `compact` renders the trigger as a tooltip'd icon. Otherwise it's a full
  * outline button; pass `className` (e.g. `flex-1`) and a shorter `label` to sit
@@ -25,33 +62,28 @@ export function SubscribeDialog({
   className,
   label = "Get the weekly newsletter",
 }: { compact?: boolean; className?: string; label?: string } = {}) {
-  const [email, setEmail] = useState("");
-  const [website, setWebsite] = useState("");
-  const [error, setError] = useState<string | undefined>();
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [didSubscribe, setDidSubscribe] = useState(false);
+  const [state, dispatch] = useReducer(formReducer, initialFormState);
+  const { didSubscribe, email, error, isSubmitting, website } = state;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     const trimmedEmail = email.trim();
 
     if (!trimmedEmail) {
-      setError("Enter your email address.");
+      dispatch({ fields: { error: "Enter your email address." }, type: "patch" });
       return;
     }
 
-    setError(undefined);
-    setIsSubmitting(true);
+    dispatch({ type: "submitStarted" });
 
     try {
       await subscribeToNewsletter({ email: trimmedEmail, honeypot: website });
-      setDidSubscribe(true);
-      setEmail("");
-      setWebsite("");
+      dispatch({ type: "submitSucceeded" });
     } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : String(caughtError));
-    } finally {
-      setIsSubmitting(false);
+      dispatch({
+        error: caughtError instanceof Error ? caughtError.message : String(caughtError),
+        type: "submitFailed",
+      });
     }
   }
 
@@ -96,13 +128,19 @@ export function SubscribeDialog({
                 autoComplete="email"
                 id="newsletter-email"
                 inputMode="email"
-                onChange={(event) => setEmail(event.target.value)}
+                onChange={(event) =>
+                  dispatch({ fields: { email: event.target.value }, type: "patch" })
+                }
                 placeholder="junglist@example.com"
                 type="email"
                 value={email}
               />
             </Label>
-            <HoneypotField id="newsletter-website" onChange={setWebsite} value={website} />
+            <HoneypotField
+              id="newsletter-website"
+              onChange={(value) => dispatch({ fields: { website: value }, type: "patch" })}
+              value={website}
+            />
             <Button disabled={isSubmitting} type="submit">
               {isSubmitting ? (
                 <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />

@@ -15,10 +15,8 @@ Notifications.setNotificationHandler({
   }),
 });
 
-export const PUSH_CATEGORIES = ["finding", "mixtape"] as const;
-
 /** Android 13's permission prompt only appears once a channel exists — create first. */
-export async function ensureAndroidChannels() {
+async function ensureAndroidChannels() {
   if (Platform.OS !== "android") {
     return;
   }

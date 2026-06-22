@@ -427,15 +427,18 @@ export function adminTracksHandlers(os: Implementer) {
       // Upload the three R2 objects at <log-id>/<name> (the Worker holds the
       // ≈0.5 MB bytes — direct put, no presign needed for a small artifact).
       const base = encodeURIComponent(track.logId);
-      await env.VIDEOS.put(`${track.logId}/observation.mp3`, bytes, {
-        httpMetadata: { contentType: "audio/mpeg" },
-      });
-      await env.VIDEOS.put(`${track.logId}/observation.txt`, script, {
-        httpMetadata: { contentType: "text/plain; charset=utf-8" },
-      });
-      await env.VIDEOS.put(`${track.logId}/observation.json`, JSON.stringify(artifact, null, 2), {
-        httpMetadata: { contentType: "application/json; charset=utf-8" },
-      });
+      // Independent objects, distinct keys — write them together, then flag the DB.
+      await Promise.all([
+        env.VIDEOS.put(`${track.logId}/observation.mp3`, bytes, {
+          httpMetadata: { contentType: "audio/mpeg" },
+        }),
+        env.VIDEOS.put(`${track.logId}/observation.txt`, script, {
+          httpMetadata: { contentType: "text/plain; charset=utf-8" },
+        }),
+        env.VIDEOS.put(`${track.logId}/observation.json`, JSON.stringify(artifact, null, 2), {
+          httpMetadata: { contentType: "application/json; charset=utf-8" },
+        }),
+      ]);
 
       // Persist: the audio url (the "has observation" flag) + duration + timestamp
       // (visible — they bump lastmod). Backfill the context note only when this step

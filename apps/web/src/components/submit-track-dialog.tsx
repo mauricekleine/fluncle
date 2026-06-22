@@ -1,5 +1,5 @@
 import { CircleNotchIcon, MagnifyingGlassIcon, PaperPlaneTiltIcon } from "@phosphor-icons/react";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useReducer, useState } from "react";
 import { HoneypotField } from "@/components/honeypot-field";
 import { TrackSummary } from "@/components/track-summary";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,78 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { searchTracks, submitTrack, type SearchResult } from "@/lib/submissions";
 
+type FormState = {
+  contact: string;
+  didSubmit: boolean;
+  error: string | undefined;
+  isSearching: boolean;
+  isSubmitting: boolean;
+  note: string;
+  query: string;
+  results: SearchResult[];
+  selected: SearchResult | undefined;
+  website: string;
+};
+
+type FormAction =
+  | { fields: Partial<FormState>; type: "patch" }
+  | { type: "searchFailed"; error: string }
+  | { type: "searchStarted" }
+  | { results: SearchResult[]; type: "searchSucceeded" }
+  | { type: "submitFailed"; error: string }
+  | { type: "submitStarted" }
+  | { type: "submitSucceeded" };
+
+const initialFormState: FormState = {
+  contact: "",
+  didSubmit: false,
+  error: undefined,
+  isSearching: false,
+  isSubmitting: false,
+  note: "",
+  query: "",
+  results: [],
+  selected: undefined,
+  website: "",
+};
+
+function formReducer(state: FormState, action: FormAction): FormState {
+  switch (action.type) {
+    case "patch":
+      return { ...state, ...action.fields };
+    case "searchStarted":
+      return {
+        ...state,
+        didSubmit: false,
+        error: undefined,
+        isSearching: true,
+        selected: undefined,
+      };
+    case "searchSucceeded":
+      return { ...state, isSearching: false, results: action.results };
+    case "searchFailed":
+      return { ...state, error: action.error, isSearching: false, results: [] };
+    case "submitStarted":
+      return { ...state, error: undefined, isSubmitting: true };
+    case "submitSucceeded":
+      return {
+        ...state,
+        contact: "",
+        didSubmit: true,
+        isSubmitting: false,
+        note: "",
+        query: "",
+        results: [],
+        selected: undefined,
+        website: "",
+      };
+    case "submitFailed":
+      return { ...state, error: action.error, isSubmitting: false };
+    default:
+      return state;
+  }
+}
+
 /**
  * Defaults to a full outline "Submit a track" button. Pass `className` (e.g.
  * `w-full` or `flex-1`) to size it within a row; `compact` renders a tooltip'd
@@ -28,43 +100,45 @@ export function SubmitTrackDialog({
   compact = false,
 }: { className?: string; compact?: boolean } = {}) {
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<SearchResult[]>([]);
-  const [selected, setSelected] = useState<SearchResult | undefined>();
-  const [note, setNote] = useState("");
-  const [contact, setContact] = useState("");
-  const [website, setWebsite] = useState("");
-  const [error, setError] = useState<string | undefined>();
-  const [isSearching, setIsSearching] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [didSubmit, setDidSubmit] = useState(false);
+  const [state, dispatch] = useReducer(formReducer, initialFormState);
+  const {
+    contact,
+    didSubmit,
+    error,
+    isSearching,
+    isSubmitting,
+    note,
+    query,
+    results,
+    selected,
+    website,
+  } = state;
 
   async function handleSearch(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     const trimmedQuery = query.trim();
 
     if (!trimmedQuery) {
-      setError("Enter a Spotify URL or track search.");
+      dispatch({ fields: { error: "Enter a Spotify URL or track search." }, type: "patch" });
       return;
     }
 
-    setError(undefined);
-    setDidSubmit(false);
-    setSelected(undefined);
-    setIsSearching(true);
+    dispatch({ type: "searchStarted" });
 
     try {
       const candidates = await searchTracks(trimmedQuery);
-      setResults(candidates);
 
       if (candidates.length === 0) {
-        setError("No Spotify tracks found.");
+        dispatch({ error: "No Spotify tracks found.", type: "searchFailed" });
+        return;
       }
+
+      dispatch({ results: candidates, type: "searchSucceeded" });
     } catch (caughtError) {
-      setResults([]);
-      setError(caughtError instanceof Error ? caughtError.message : String(caughtError));
-    } finally {
-      setIsSearching(false);
+      dispatch({
+        error: caughtError instanceof Error ? caughtError.message : String(caughtError),
+        type: "searchFailed",
+      });
     }
   }
 
@@ -72,12 +146,11 @@ export function SubmitTrackDialog({
     event.preventDefault();
 
     if (!selected) {
-      setError("Select a track first.");
+      dispatch({ error: "Select a track first.", type: "submitFailed" });
       return;
     }
 
-    setError(undefined);
-    setIsSubmitting(true);
+    dispatch({ type: "submitStarted" });
 
     try {
       await submitTrack({
@@ -86,17 +159,12 @@ export function SubmitTrackDialog({
         honeypot: website,
         note,
       });
-      setDidSubmit(true);
-      setResults([]);
-      setSelected(undefined);
-      setQuery("");
-      setNote("");
-      setContact("");
-      setWebsite("");
+      dispatch({ type: "submitSucceeded" });
     } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : String(caughtError));
-    } finally {
-      setIsSubmitting(false);
+      dispatch({
+        error: caughtError instanceof Error ? caughtError.message : String(caughtError),
+        type: "submitFailed",
+      });
     }
   }
 
@@ -134,7 +202,9 @@ export function SubmitTrackDialog({
             Search or Spotify URL
             <Input
               id="track-search"
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) =>
+                dispatch({ fields: { query: event.target.value }, type: "patch" })
+              }
               placeholder="Camo & Crooked or https://open.spotify.com/track/..."
               value={query}
             />
@@ -158,7 +228,7 @@ export function SubmitTrackDialog({
                   <button
                     className="grid grid-cols-[3.25rem_minmax(0,1fr)] items-center gap-3 rounded-lg border border-border bg-secondary/50 p-2 text-left outline-none transition-colors hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/40 aria-pressed:border-primary"
                     key={result.id}
-                    onClick={() => setSelected(result)}
+                    onClick={() => dispatch({ fields: { selected: result }, type: "patch" })}
                     type="button"
                     aria-pressed={selected?.id === result.id}
                   >
@@ -181,7 +251,9 @@ export function SubmitTrackDialog({
               <Textarea
                 id="track-note"
                 maxLength={500}
-                onChange={(event) => setNote(event.target.value)}
+                onChange={(event) =>
+                  dispatch({ fields: { note: event.target.value }, type: "patch" })
+                }
                 value={note}
               />
             </Label>
@@ -190,11 +262,17 @@ export function SubmitTrackDialog({
               <Input
                 id="track-contact"
                 maxLength={120}
-                onChange={(event) => setContact(event.target.value)}
+                onChange={(event) =>
+                  dispatch({ fields: { contact: event.target.value }, type: "patch" })
+                }
                 value={contact}
               />
             </Label>
-            <HoneypotField id="track-website" onChange={setWebsite} value={website} />
+            <HoneypotField
+              id="track-website"
+              onChange={(value) => dispatch({ fields: { website: value }, type: "patch" })}
+              value={website}
+            />
             <Button disabled={isSubmitting} type="submit">
               {isSubmitting ? (
                 <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />

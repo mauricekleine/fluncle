@@ -26,14 +26,20 @@ function logIndexHead(loaderData: TrackListPage | undefined) {
   const itemList = {
     "@context": "https://schema.org",
     "@type": "ItemList",
-    itemListElement: loaderData?.tracks
-      .filter((track) => track.logId)
-      .map((track, index) => ({
-        "@type": "ListItem",
-        name: `${track.logId} · ${artistTitleLine(track)}`,
-        position: index + 1,
-        url: `${siteUrl}/log/${encodeURIComponent(track.logId as string)}`,
-      })),
+    itemListElement: loaderData?.tracks.reduce<
+      Array<{ "@type": "ListItem"; name: string; position: number; url: string }>
+    >((items, track) => {
+      if (track.logId) {
+        items.push({
+          "@type": "ListItem",
+          name: `${track.logId} · ${artistTitleLine(track)}`,
+          position: items.length + 1,
+          url: `${siteUrl}/log/${encodeURIComponent(track.logId)}`,
+        });
+      }
+
+      return items;
+    }, []),
     name: "Fluncle's log",
     url: `${siteUrl}/log`,
   };

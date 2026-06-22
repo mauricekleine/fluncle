@@ -75,18 +75,33 @@ export function mixtapeAlbumJsonLd(mixtape: MixtapeDTO): Record<string, unknown>
     sameAs: Object.values(mixtape.externalUrls).filter(Boolean),
     track: {
       "@type": "ItemList",
-      itemListElement: mixtape.members
-        .filter((member) => member.logId)
-        .map((member, index) => ({
-          "@type": "ListItem",
+      itemListElement: mixtape.members.reduce<
+        Array<{
+          "@type": "ListItem";
           item: {
-            "@type": "MusicRecording",
-            byArtist: member.artists.map((artist) => ({ "@type": "MusicGroup", name: artist })),
-            name: member.title,
-            url: logPageUrl(member.logId as string),
-          },
-          position: index + 1,
-        })),
+            "@type": "MusicRecording";
+            byArtist: Array<{ "@type": "MusicGroup"; name: string }>;
+            name: string;
+            url: string;
+          };
+          position: number;
+        }>
+      >((items, member) => {
+        if (member.logId) {
+          items.push({
+            "@type": "ListItem",
+            item: {
+              "@type": "MusicRecording",
+              byArtist: member.artists.map((artist) => ({ "@type": "MusicGroup", name: artist })),
+              name: member.title,
+              url: logPageUrl(member.logId),
+            },
+            position: items.length + 1,
+          });
+        }
+
+        return items;
+      }, []),
     },
     url: logPageUrl(logId),
   };

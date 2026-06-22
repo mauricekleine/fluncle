@@ -305,9 +305,14 @@ function parseArtists(value: unknown): string[] {
   }
 
   const artists = value
-    .filter((artist): artist is string => typeof artist === "string")
-    .map((artist) => artist.trim())
-    .filter(Boolean)
+    .flatMap((artist) => {
+      if (typeof artist !== "string") {
+        return [];
+      }
+
+      const trimmed = artist.trim();
+      return trimmed ? [trimmed] : [];
+    })
     .slice(0, 12);
 
   if (artists.length === 0) {

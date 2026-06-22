@@ -1,6 +1,6 @@
 import { getInputProps } from "remotion";
 import { colors } from "@fluncle/tokens";
-import { FloatingType } from "../primitives";
+import { FloatingType } from "../primitives/floating-type";
 
 // <CloseCard> — the constant ending every Fluncle video shares.
 //
@@ -85,6 +85,19 @@ const clamp01 = (n: number): number => Math.min(1, Math.max(0, n));
 const MARGIN_X = 96;
 const SAFE_BOTTOM = 230;
 
+// Static container layout — the fixed lower-anchor stack. Only the cross-axis
+// alignment varies per render (from `align`), so the rest lives here and stays
+// stable across frames.
+const CONTAINER_STYLE: React.CSSProperties = {
+  bottom: SAFE_BOTTOM,
+  display: "flex",
+  flexDirection: "column",
+  gap: 14,
+  left: MARGIN_X,
+  position: "absolute",
+  right: MARGIN_X,
+};
+
 export const CloseCard: React.FC<CloseCardProps> = ({
   arc,
   progress,
@@ -125,14 +138,8 @@ export const CloseCard: React.FC<CloseCardProps> = ({
   return (
     <div
       style={{
+        ...CONTAINER_STYLE,
         alignItems: align === "center" ? "center" : "flex-start",
-        bottom: SAFE_BOTTOM,
-        display: "flex",
-        flexDirection: "column",
-        gap: 14,
-        left: MARGIN_X,
-        position: "absolute",
-        right: MARGIN_X,
         ...style,
       }}
     >
