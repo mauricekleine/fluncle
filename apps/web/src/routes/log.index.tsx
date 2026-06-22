@@ -94,7 +94,7 @@ function LogIndexPage() {
         ) : (
           <ol className="log-index-list">
             {entries.map((track) => (
-              <li className="log-index-row" key={track.trackId}>
+              <li className="log-index-row log-index-row--entry" key={track.trackId}>
                 <Link
                   className="log-index-id"
                   params={{ logId: track.logId as string }}
