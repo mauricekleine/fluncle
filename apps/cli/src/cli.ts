@@ -34,12 +34,6 @@ type AdminQueueOptions = AdminListOptions & {
   hasObservation?: boolean;
 };
 
-type AdminEnrichOptions = {
-  all: boolean;
-  json: boolean;
-  limit?: string;
-};
-
 type OpenOptions = {
   app: boolean;
   browser: boolean;
@@ -470,43 +464,6 @@ function addAdminCommands(program: Command): void {
     .action(async (options: AdminListOptions) => {
       const { enrichQueueCommand } = await import("./commands/admin-tracks");
       await runAdminEnrichQueue(options, enrichQueueCommand);
-    });
-
-  // `enrich_track` → `admin tracks enrich --all` (canonical Convention B: the verb
-  // is `enrich`; `--all` is the whole-queue scope, not part of the verb). The old
-  // `admin tracks enrich-sweep` AND the flat `admin enrich-sweep` (the cron's
-  // stable name) stay hidden aliases that resolve to `enrich --all`.
-  adminTracks
-    .command("enrich")
-    .description(
-      "Re-fire enrichment for everything in the enrich-queue (--all; idempotent self-heal)",
-    )
-    .option("--all", "Sweep the whole enrich-queue (required)", false)
-    .option("--limit <limit>", "Max findings to re-trigger", "25")
-    .option("--json", "Print JSON", false)
-    .action(async (options: AdminEnrichOptions) => {
-      const { enrichSweepCommand } = await import("./commands/admin-tracks");
-      await runAdminEnrich(options, enrichSweepCommand);
-    });
-
-  adminTracks
-    .command("enrich-sweep", { hidden: true })
-    .description("Enrich sweep (alias of `admin tracks enrich --all`)")
-    .option("--limit <limit>", "Max findings to re-trigger", "25")
-    .option("--json", "Print JSON", false)
-    .action(async (options: AdminListOptions) => {
-      const { enrichSweepCommand } = await import("./commands/admin-tracks");
-      await runAdminEnrich({ ...options, all: true }, enrichSweepCommand);
-    });
-
-  admin
-    .command("enrich-sweep", { hidden: true })
-    .description("Enrich sweep (alias of `admin tracks enrich --all`)")
-    .option("--limit <limit>", "Max findings to re-trigger", "25")
-    .option("--json", "Print JSON", false)
-    .action(async (options: AdminListOptions) => {
-      const { enrichSweepCommand } = await import("./commands/admin-tracks");
-      await runAdminEnrich({ ...options, all: true }, enrichSweepCommand);
     });
 
   adminTracks
@@ -1834,50 +1791,6 @@ async function runAdminEnrichQueue(
   const noun = tracks.length === 1 ? "finding" : "findings";
   console.log(`${tracks.length} ${noun} needing (re-)enrichment, oldest first:`);
   console.log(trackRows(tracks).join("\n"));
-}
-
-async function runAdminEnrich(
-  options: AdminEnrichOptions,
-  enrichSweepCommand: typeof import("./commands/admin-tracks").enrichSweepCommand,
-): Promise<void> {
-  // `--all` is the only scope this command serves today (the whole-queue sweep).
-  // It is required so a bare `enrich` can't silently fire a sweep, and so a
-  // future per-finding `enrich <id>` can land beside it without ambiguity.
-  if (!options.all) {
-    throw new Error(
-      "Usage: fluncle admin tracks enrich --all [--limit 25] [--json] (sweeps the whole enrich-queue)",
-    );
-  }
-
-  const limit = parseListLimit(options.limit);
-  const result = await enrichSweepCommand(limit);
-
-  if (options.json) {
-    printJson({
-      ok: true,
-      reEnriched: result.reEnriched,
-      reEnrichedCount: result.reEnrichedCount,
-      skipped: result.skipped,
-      skippedCount: result.skippedCount,
-    });
-    return;
-  }
-
-  if (result.reEnrichedCount === 0 && result.skippedCount === 0) {
-    console.log("Nothing to sweep. The enrich-queue is empty.");
-    return;
-  }
-
-  const noun = result.reEnrichedCount === 1 ? "finding" : "findings";
-  console.log(`Re-fired enrichment for ${result.reEnrichedCount} ${noun}.`);
-
-  for (const entry of result.reEnriched) {
-    console.log(`  ${entry.logId || entry.trackId} (was ${entry.status})`);
-  }
-
-  if (result.skippedCount > 0) {
-    console.log(`Skipped ${result.skippedCount} with no Log ID yet.`);
-  }
 }
 
 async function runAdminVehicles(

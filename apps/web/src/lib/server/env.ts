@@ -79,10 +79,6 @@ const envKeys = [
   "DISCORD_WEBHOOK_URL",
   "TURSO_DATABASE_URL",
   "TURSO_AUTH_TOKEN",
-  // Spinup agents: each has its own scoped runtime key (sk_agent_…) + id. Async
-  // track enrichment fires on add via runs.create.
-  "SPINUP_ENRICH_AGENT_ID",
-  "SPINUP_ENRICH_AGENT_KEY",
   // Cloudflare cache purge-by-URL (lib/server/edge-cache.ts): when a finding is
   // published or updated, the Worker drops its `/log/<id>` page + the `/log` index
   // from the edge cache globally. Both OPTIONAL — absent, the purge degrades to a

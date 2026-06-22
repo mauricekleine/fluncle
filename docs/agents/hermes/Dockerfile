@@ -3,7 +3,7 @@
 # docs/agents/hermes-agent.md.
 FROM nousresearch/hermes-agent:v2026.6.19
 
-# Enrichment toolchain (docs/spinup-to-hermes-enrichment-brief.md): the
+# Enrichment toolchain (docs/agents/hermes/cron/README.md): the
 # fluncle-track-enrichment skill's analyze-track.ts is `#!/usr/bin/env bun` and
 # shells out to `ffmpeg` to decode the preview, so the box needs both on PATH for
 # the `--no-agent` enrich-sweep cron. The Nous Hermes base is Debian-based, so

@@ -29,7 +29,6 @@
     "@dnd-kit/utilities": "~3.2.2",
     "@fluncle/contracts": "workspace:*",
     "@fluncle/tokens": "workspace:*",
-    "@getspinup/sdk": "1.1.1",
     "@libsql/client": "catalog:",
     "@orpc/openapi": "1.14.6",
     "@orpc/server": "1.14.6",

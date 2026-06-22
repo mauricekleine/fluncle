@@ -70,7 +70,6 @@ import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiAdminSubmissionsRouteImport } from './routes/api/admin/submissions'
 import { Route as ApiAdminMixtapesRouteImport } from './routes/api/admin/mixtapes'
 import { Route as ApiAdminLogoutRouteImport } from './routes/api/admin/logout'
-import { Route as ApiAdminEnrichSweepRouteImport } from './routes/api/admin/enrich-sweep'
 import { Route as ApiV1TracksRandomRouteImport } from './routes/api/v1/tracks/random'
 import { Route as ApiV1TracksIdOrLogIdRouteImport } from './routes/api/v1/tracks.$idOrLogId'
 import { Route as ApiV1PreviewIdOrLogIdRouteImport } from './routes/api/v1/preview.$idOrLogId'
@@ -86,7 +85,6 @@ import { Route as ApiV1MeCsrfRouteImport } from './routes/api/v1/me/csrf'
 import { Route as ApiV1AdminSubmissionsRouteImport } from './routes/api/v1/admin/submissions'
 import { Route as ApiV1AdminMixtapesRouteImport } from './routes/api/v1/admin/mixtapes'
 import { Route as ApiV1AdminLogoutRouteImport } from './routes/api/v1/admin/logout'
-import { Route as ApiV1AdminEnrichSweepRouteImport } from './routes/api/v1/admin/enrich-sweep'
 import { Route as ApiMeSavedFindingsTrackIdRouteImport } from './routes/api/me/saved-findings.$trackId'
 import { Route as ApiMeGalaxyProgressLogsRouteImport } from './routes/api/me/galaxy-progress/logs'
 import { Route as ApiMeExportExportIdRouteImport } from './routes/api/me/export.$exportId'
@@ -455,11 +453,6 @@ const ApiAdminLogoutRoute = ApiAdminLogoutRouteImport.update({
   path: '/api/admin/logout',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiAdminEnrichSweepRoute = ApiAdminEnrichSweepRouteImport.update({
-  id: '/api/admin/enrich-sweep',
-  path: '/api/admin/enrich-sweep',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ApiV1TracksRandomRoute = ApiV1TracksRandomRouteImport.update({
   id: '/random',
   path: '/random',
@@ -533,11 +526,6 @@ const ApiV1AdminMixtapesRoute = ApiV1AdminMixtapesRouteImport.update({
 const ApiV1AdminLogoutRoute = ApiV1AdminLogoutRouteImport.update({
   id: '/api/v1/admin/logout',
   path: '/api/v1/admin/logout',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiV1AdminEnrichSweepRoute = ApiV1AdminEnrichSweepRouteImport.update({
-  id: '/api/v1/admin/enrich-sweep',
-  path: '/api/v1/admin/enrich-sweep',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiMeSavedFindingsTrackIdRoute =
@@ -939,7 +927,6 @@ export interface FileRoutesByFullPath {
   '/log/': typeof LogIndexRoute
   '/mixtapes/': typeof MixtapesIndexRoute
   '/stories/': typeof StoriesIndexRoute
-  '/api/admin/enrich-sweep': typeof ApiAdminEnrichSweepRoute
   '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/admin/mixtapes': typeof ApiAdminMixtapesRouteWithChildren
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
@@ -975,7 +962,6 @@ export interface FileRoutesByFullPath {
   '/api/me/export/$exportId': typeof ApiMeExportExportIdRoute
   '/api/me/galaxy-progress/logs': typeof ApiMeGalaxyProgressLogsRoute
   '/api/me/saved-findings/$trackId': typeof ApiMeSavedFindingsTrackIdRoute
-  '/api/v1/admin/enrich-sweep': typeof ApiV1AdminEnrichSweepRoute
   '/api/v1/admin/logout': typeof ApiV1AdminLogoutRoute
   '/api/v1/admin/mixtapes': typeof ApiV1AdminMixtapesRouteWithChildren
   '/api/v1/admin/submissions': typeof ApiV1AdminSubmissionsRouteWithChildren
@@ -1079,7 +1065,6 @@ export interface FileRoutesByTo {
   '/log': typeof LogIndexRoute
   '/mixtapes': typeof MixtapesIndexRoute
   '/stories': typeof StoriesIndexRoute
-  '/api/admin/enrich-sweep': typeof ApiAdminEnrichSweepRoute
   '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/admin/mixtapes': typeof ApiAdminMixtapesRouteWithChildren
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
@@ -1115,7 +1100,6 @@ export interface FileRoutesByTo {
   '/api/me/export/$exportId': typeof ApiMeExportExportIdRoute
   '/api/me/galaxy-progress/logs': typeof ApiMeGalaxyProgressLogsRoute
   '/api/me/saved-findings/$trackId': typeof ApiMeSavedFindingsTrackIdRoute
-  '/api/v1/admin/enrich-sweep': typeof ApiV1AdminEnrichSweepRoute
   '/api/v1/admin/logout': typeof ApiV1AdminLogoutRoute
   '/api/v1/admin/mixtapes': typeof ApiV1AdminMixtapesRouteWithChildren
   '/api/v1/admin/submissions': typeof ApiV1AdminSubmissionsRouteWithChildren
@@ -1222,7 +1206,6 @@ export interface FileRoutesById {
   '/log/': typeof LogIndexRoute
   '/mixtapes/': typeof MixtapesIndexRoute
   '/stories/': typeof StoriesIndexRoute
-  '/api/admin/enrich-sweep': typeof ApiAdminEnrichSweepRoute
   '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/admin/mixtapes': typeof ApiAdminMixtapesRouteWithChildren
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
@@ -1258,7 +1241,6 @@ export interface FileRoutesById {
   '/api/me/export/$exportId': typeof ApiMeExportExportIdRoute
   '/api/me/galaxy-progress/logs': typeof ApiMeGalaxyProgressLogsRoute
   '/api/me/saved-findings/$trackId': typeof ApiMeSavedFindingsTrackIdRoute
-  '/api/v1/admin/enrich-sweep': typeof ApiV1AdminEnrichSweepRoute
   '/api/v1/admin/logout': typeof ApiV1AdminLogoutRoute
   '/api/v1/admin/mixtapes': typeof ApiV1AdminMixtapesRouteWithChildren
   '/api/v1/admin/submissions': typeof ApiV1AdminSubmissionsRouteWithChildren
@@ -1366,7 +1348,6 @@ export interface FileRouteTypes {
     | '/log/'
     | '/mixtapes/'
     | '/stories/'
-    | '/api/admin/enrich-sweep'
     | '/api/admin/logout'
     | '/api/admin/mixtapes'
     | '/api/admin/submissions'
@@ -1402,7 +1383,6 @@ export interface FileRouteTypes {
     | '/api/me/export/$exportId'
     | '/api/me/galaxy-progress/logs'
     | '/api/me/saved-findings/$trackId'
-    | '/api/v1/admin/enrich-sweep'
     | '/api/v1/admin/logout'
     | '/api/v1/admin/mixtapes'
     | '/api/v1/admin/submissions'
@@ -1506,7 +1486,6 @@ export interface FileRouteTypes {
     | '/log'
     | '/mixtapes'
     | '/stories'
-    | '/api/admin/enrich-sweep'
     | '/api/admin/logout'
     | '/api/admin/mixtapes'
     | '/api/admin/submissions'
@@ -1542,7 +1521,6 @@ export interface FileRouteTypes {
     | '/api/me/export/$exportId'
     | '/api/me/galaxy-progress/logs'
     | '/api/me/saved-findings/$trackId'
-    | '/api/v1/admin/enrich-sweep'
     | '/api/v1/admin/logout'
     | '/api/v1/admin/mixtapes'
     | '/api/v1/admin/submissions'
@@ -1648,7 +1626,6 @@ export interface FileRouteTypes {
     | '/log/'
     | '/mixtapes/'
     | '/stories/'
-    | '/api/admin/enrich-sweep'
     | '/api/admin/logout'
     | '/api/admin/mixtapes'
     | '/api/admin/submissions'
@@ -1684,7 +1661,6 @@ export interface FileRouteTypes {
     | '/api/me/export/$exportId'
     | '/api/me/galaxy-progress/logs'
     | '/api/me/saved-findings/$trackId'
-    | '/api/v1/admin/enrich-sweep'
     | '/api/v1/admin/logout'
     | '/api/v1/admin/mixtapes'
     | '/api/v1/admin/submissions'
@@ -1785,7 +1761,6 @@ export interface RootRouteChildren {
   LogIndexRoute: typeof LogIndexRoute
   MixtapesIndexRoute: typeof MixtapesIndexRoute
   StoriesIndexRoute: typeof StoriesIndexRoute
-  ApiAdminEnrichSweepRoute: typeof ApiAdminEnrichSweepRoute
   ApiAdminLogoutRoute: typeof ApiAdminLogoutRoute
   ApiAdminMixtapesRoute: typeof ApiAdminMixtapesRouteWithChildren
   ApiAdminSubmissionsRoute: typeof ApiAdminSubmissionsRouteWithChildren
@@ -1807,7 +1782,6 @@ export interface RootRouteChildren {
   ApiAdminBackfillLastfmRoute: typeof ApiAdminBackfillLastfmRoute
   ApiAdminMixcloudTokenRoute: typeof ApiAdminMixcloudTokenRoute
   ApiAdminYoutubeTokenRoute: typeof ApiAdminYoutubeTokenRoute
-  ApiV1AdminEnrichSweepRoute: typeof ApiV1AdminEnrichSweepRoute
   ApiV1AdminLogoutRoute: typeof ApiV1AdminLogoutRoute
   ApiV1AdminMixtapesRoute: typeof ApiV1AdminMixtapesRouteWithChildren
   ApiV1AdminSubmissionsRoute: typeof ApiV1AdminSubmissionsRouteWithChildren
@@ -2271,13 +2245,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminLogoutRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/admin/enrich-sweep': {
-      id: '/api/admin/enrich-sweep'
-      path: '/api/admin/enrich-sweep'
-      fullPath: '/api/admin/enrich-sweep'
-      preLoaderRoute: typeof ApiAdminEnrichSweepRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/api/v1/tracks/random': {
       id: '/api/v1/tracks/random'
       path: '/random'
@@ -2381,13 +2348,6 @@ declare module '@tanstack/react-router' {
       path: '/api/v1/admin/logout'
       fullPath: '/api/v1/admin/logout'
       preLoaderRoute: typeof ApiV1AdminLogoutRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/v1/admin/enrich-sweep': {
-      id: '/api/v1/admin/enrich-sweep'
-      path: '/api/v1/admin/enrich-sweep'
-      fullPath: '/api/v1/admin/enrich-sweep'
-      preLoaderRoute: typeof ApiV1AdminEnrichSweepRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/me/saved-findings/$trackId': {
@@ -3240,7 +3200,6 @@ const rootRouteChildren: RootRouteChildren = {
   LogIndexRoute: LogIndexRoute,
   MixtapesIndexRoute: MixtapesIndexRoute,
   StoriesIndexRoute: StoriesIndexRoute,
-  ApiAdminEnrichSweepRoute: ApiAdminEnrichSweepRoute,
   ApiAdminLogoutRoute: ApiAdminLogoutRoute,
   ApiAdminMixtapesRoute: ApiAdminMixtapesRouteWithChildren,
   ApiAdminSubmissionsRoute: ApiAdminSubmissionsRouteWithChildren,
@@ -3262,7 +3221,6 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAdminBackfillLastfmRoute: ApiAdminBackfillLastfmRoute,
   ApiAdminMixcloudTokenRoute: ApiAdminMixcloudTokenRoute,
   ApiAdminYoutubeTokenRoute: ApiAdminYoutubeTokenRoute,
-  ApiV1AdminEnrichSweepRoute: ApiV1AdminEnrichSweepRoute,
   ApiV1AdminLogoutRoute: ApiV1AdminLogoutRoute,
   ApiV1AdminMixtapesRoute: ApiV1AdminMixtapesRouteWithChildren,
   ApiV1AdminSubmissionsRoute: ApiV1AdminSubmissionsRouteWithChildren,

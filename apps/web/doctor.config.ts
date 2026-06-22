@@ -71,7 +71,7 @@ export default {
 
       // Sequential awaits that MUST stay sequential: retries that depend on the
       // prior outcome, ordered DB writes, and per-item calls to rate-limited
-      // third-party APIs (Discogs / MusicBrainz / Last.fm / Postiz / Spinup).
+      // third-party APIs (Discogs / MusicBrainz / Last.fm / Postiz).
       // Naive Promise.all here risks 429s, ordering bugs, or shared-state races.
       {
         files: [
@@ -80,7 +80,6 @@ export default {
           "src/lib/server/discogs.ts",
           "src/lib/server/mixtapes.ts",
           "src/lib/server/log-id.ts",
-          "src/lib/server/spinup.ts",
           // retry loops: each attempt only runs because the prior one failed —
           // the rule's documented exemption (not independent iterations).
           "src/lib/server/retry.ts",
@@ -91,12 +90,6 @@ export default {
       {
         files: ["src/lib/server/postiz.ts"],
         rules: ["react-doctor/server-sequential-independent-await", "react-doctor/js-index-maps"],
-      },
-      // R2 put then DB flag, and reauth-error persistence: the second await
-      // depends on / must follow the first — not independent.
-      {
-        files: ["src/lib/server/spinup.ts"],
-        rules: ["react-doctor/async-parallel"],
       },
       {
         files: ["src/lib/server/publish.ts"],

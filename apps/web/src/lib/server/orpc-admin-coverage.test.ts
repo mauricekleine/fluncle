@@ -24,7 +24,7 @@ import { CONTRACT_OPERATION_NAMES } from "@fluncle/contracts/orpc";
 // The admin PILOT converted the pattern-complete `admin-tracks` set (the
 // field-level role guard + the operator-tier observe + the JSON video
 // control-plane). The admin WAVE then fanned out the rest onto that exact pattern:
-// the backfills + enrich-sweep (`admin-backfills`), the submission-review queue
+// the backfills (`admin-backfills`), the submission-review queue
 // (`admin-submissions`), the mixtape authoring + distribution control plane
 // (`admin-mixtapes`), the per-finding social ops (`admin-social`), the
 // just-in-time credential reads + Last.fm desktop-auth JSON exchange
@@ -56,11 +56,6 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "PATCH /admin/tracks/{trackId}/social/{platform}": "update_track_social",
   "POST /admin/backfill/discogs": "backfill_discogs",
   "POST /admin/backfill/lastfm": "backfill_lastfm",
-  // The enrich sweep is `enrich_track`, served by oRPC at the canonical
-  // Convention-B path; the old `/admin/enrich-sweep` path stays a back-compat
-  // alias on its TanStack route (the `enrich-sweep.ts` file), so it keeps an
-  // entry too — same op, two documented paths.
-  "POST /admin/enrich-sweep": "enrich_track",
   "POST /admin/lastfm/auth/session": "exchange_lastfm_session",
   "POST /admin/mixcloud/token": "mint_mixcloud_token",
   "POST /admin/mixtapes": "create_mixtape",
@@ -78,10 +73,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/submissions/{submissionId}/approve": "approve_submission",
   "POST /admin/submissions/{submissionId}/reject": "reject_submission",
   "POST /admin/tracks": "add_track",
-  "POST /admin/tracks/enrich": "enrich_track",
-  // context_track is served by oRPC at its own path; like the enrich op above it
-  // has no TanStack route FILE (oRPC owns the path directly), so it lives here as a
-  // path→op entry without a `tracks.$trackId.context.ts` route file.
+  // context_track is served by oRPC at its own path; it has no TanStack route FILE
+  // (oRPC owns the path directly), so it lives here as a path→op entry without a
+  // `tracks.$trackId.context.ts` route file.
   "POST /admin/tracks/{trackId}/context": "context_track",
   "POST /admin/tracks/{trackId}/observe": "observe_track",
   "POST /admin/tracks/{trackId}/social/{platform}/draft": "draft_track_social",
