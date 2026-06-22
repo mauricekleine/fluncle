@@ -33,6 +33,7 @@
     "postinstall": "command -v husky > /dev/null 2>&1 && husky || true",
     "social:preview": "bun run --cwd packages/video social:preview",
     "prepare": "command -v husky > /dev/null 2>&1 && husky || true",
+    "test": "turbo run test",
     "typecheck": "turbo run typecheck",
     "doctor": "npx react-doctor@latest"
   },
