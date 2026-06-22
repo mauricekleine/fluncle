@@ -149,8 +149,8 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
 const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> = {
   add_mixtape_members: "operator",
   approve_submission: "operator",
-  backfill_discogs: "operator",
-  backfill_lastfm: "operator",
+  backfill_discogs: "admin",
+  backfill_lastfm: "admin",
   collect_private_galaxy_log: "private-session",
   context_track: "admin",
   create_edition: "admin",
@@ -169,6 +169,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   get_private_mutation_token: "private-session",
   get_submission: "admin",
   initiate_mixtape_youtube: "operator",
+  list_editions_admin: "admin",
   list_mixtapes_admin: "admin",
   list_private_saved_findings: "private-session",
   list_private_submissions: "private-session",

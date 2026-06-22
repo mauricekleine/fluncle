@@ -45,7 +45,7 @@ import { tracksContract } from "./tracks";
 // Re-export the per-op contracts so existing importers (and the typed client)
 // keep their entrypoints.
 export { backfillDiscogs, backfillLastfm } from "./admin-backfills";
-export { createEdition, sendEdition, updateEdition } from "./admin-editions";
+export { createEdition, listEditionsAdmin, sendEdition, updateEdition } from "./admin-editions";
 export {
   addMixtapeMembers,
   createMixtape,

@@ -19,6 +19,25 @@ import { EditionDTOSchema } from "./_shared";
 const EditionEnvelope = z.object({ edition: EditionDTOSchema, ok: z.literal(true) });
 
 /**
+ * `list_editions_admin` → `GET /admin/newsletter/editions` (operationId
+ * `listEditionsAdmin`).
+ *
+ * Admin tier — agent-allowed. The full edition list INCLUDING drafts (distinct from
+ * the public `list_editions`, which is sent-only). The Friday cron reads this from a
+ * fresh session to find an unsent draft to re-offer before authoring a new one, and
+ * to read the last sent edition's `windowUntil` cutoff. Preserves `{ editions, ok }`.
+ */
+export const listEditionsAdmin = oc
+  .route({
+    method: "GET",
+    operationId: "listEditionsAdmin",
+    path: "/admin/newsletter/editions",
+    summary: "List every newsletter edition (including drafts)",
+    tags: ["Admin"],
+  })
+  .output(z.object({ editions: z.array(EditionDTOSchema), ok: z.literal(true) }));
+
+/**
  * `create_edition` → `POST /admin/newsletter/editions` (operationId `createEdition`).
  *
  * Admin tier — drafting is agent-allowed. LOOSE body — `createEdition` validates.
@@ -75,6 +94,7 @@ export const sendEdition = oc
 /** The `admin-editions` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminEditionsContract = {
   create_edition: createEdition,
+  list_editions_admin: listEditionsAdmin,
   send_edition: sendEdition,
   update_edition: updateEdition,
 };
