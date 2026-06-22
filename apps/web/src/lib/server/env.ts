@@ -325,7 +325,10 @@ function forbidden(): Response {
   return jsonError(403, "forbidden", "This action requires the operator role");
 }
 
-function constantTimeEqual(left: string, right: string): boolean {
+// Exported for unit tests: Node's timingSafeEqual THROWS on length-mismatch, so
+// the length guard is load-bearing — a missing guard turns an intended 401 into
+// an unhandled 500. Tests assert the guard returns false (never throws/bypasses).
+export function constantTimeEqual(left: string, right: string): boolean {
   const leftBuffer = Buffer.from(left);
   const rightBuffer = Buffer.from(right);
 
