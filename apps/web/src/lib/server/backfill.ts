@@ -268,7 +268,10 @@ async function recordAttempt(
 async function runPublishedFindingPass(
   startCursor: string | undefined,
   limit: number,
-  visit: (track: TrackListItem) => Promise<boolean>,
+  // `true` = handled (counts toward the limit); `false` = skipped; `"stop"` = a
+  // circuit breaker tripped (e.g. the vendor is rate-limiting) — abort the pass
+  // immediately rather than marching the next finding into the same wall.
+  visit: (track: TrackListItem) => Promise<boolean | "stop">,
 ): Promise<string | null> {
   let cursor = startCursor;
   let handled = 0;
@@ -292,7 +295,15 @@ async function runPublishedFindingPass(
 
       lastVisited = { addedAt: track.addedAt, trackId: track.trackId };
 
-      if (await visit(track)) {
+      const outcome = await visit(track);
+
+      if (outcome === "stop") {
+        // Circuit breaker tripped — stop the pass now (no more vendor calls this
+        // run). Resume from the last finding visited on the next tick.
+        return lastVisited ? encodeTrackCursor(lastVisited) : (cursor ?? null);
+      }
+
+      if (outcome) {
         handled += 1;
       }
     }
@@ -452,10 +463,20 @@ export async function backfillDiscogsIds(
         title: track.title,
       });
 
+      if (enrichment.rateLimited) {
+        // Circuit breaker: Discogs is actively rate-limiting. Stop the whole run
+        // here rather than marching the next finding into the same 429 wall — the
+        // storm #119 missed (per-finding cooldown only helps the NEXT run; nothing
+        // stopped the current one). Do NOT cool this finding down: it was budget-
+        // throttled, not unresolvable, so the next 30m tick retries it with a fresh
+        // rate-limit window (the resolved findings above are already `done`-gated).
+        return "stop";
+      }
+
       if (!enrichment.releaseId) {
-        // A throttled miss is a FAILURE (back off); a clean no-match is a TRIED
-        // (base cooldown, streak reset) so an unresolvable finding isn't re-hit.
-        await recordAttempt(track.trackId, "discogs", enrichment.rateLimited ? "failure" : "tried");
+        // A clean no-match is a TRIED (base cooldown, streak reset) so an
+        // unresolvable finding isn't re-hit every tick.
+        await recordAttempt(track.trackId, "discogs", "tried");
         unresolved.push(logId);
         return true;
       }
