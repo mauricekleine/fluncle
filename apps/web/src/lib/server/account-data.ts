@@ -3,8 +3,14 @@ import { type InValue } from "@libsql/client/web";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 import { jsonError } from "./env";
+import { enforceRateLimit } from "./rate-limit";
+
+// Re-export the shared limiter from its established import site. `enforceRateLimit`
+// moved to `./rate-limit` (the one atomic, cf-connecting-ip-keyed limiter), but
+// the account/auth call sites (`orpc/devices.ts`, `routes/api/auth/$.ts`) and the
+// `/me` preamble below still reach for it here.
+export { enforceRateLimit };
 import {
-  hashRequestPart,
   isAllowedDisplayUsername,
   isAllowedUsername,
   requireJsonMutation,
@@ -49,10 +55,6 @@ type SubmissionRow = {
   spotify_url: string;
   status: "approved" | "pending" | "rejected";
   title: string;
-};
-
-type CountRow = {
-  event_count: number;
 };
 
 type ExportRow = {
@@ -126,56 +128,6 @@ export async function meResponse(request: Request): Promise<MeResponse> {
     ok: true,
     user: user ?? null,
   };
-}
-
-export async function enforceRateLimit({
-  action,
-  limit,
-  request,
-  userId,
-  windowMs,
-}: {
-  action: string;
-  limit: number;
-  request: Request;
-  userId?: string;
-  windowMs: number;
-}): Promise<Response | undefined> {
-  const db = await getDb();
-  const ipHash = hashRequestPart(
-    request.headers.get("cf-connecting-ip") ??
-      request.headers.get("x-forwarded-for")?.split(",")[0],
-  );
-  const userAgentHash = hashRequestPart(request.headers.get("user-agent"));
-  const bucket = userId ?? ipHash ?? "unknown";
-  const windowStart = new Date(Date.now() - windowMs).toISOString();
-  const countResult = await db.execute({
-    args: [action, bucket, windowStart],
-    sql: `select count(*) as event_count from rate_limit_events
-      where action = ? and bucket = ? and created_at >= ?`,
-  });
-  const count = Number(typedRow<CountRow>(countResult.rows)?.event_count ?? 0);
-
-  if (count >= limit) {
-    return jsonError(429, "rate_limited", "Too many requests. Try again later.");
-  }
-
-  await db.execute({
-    args: [
-      randomUUID(),
-      action,
-      bucket,
-      userId ?? null,
-      ipHash ?? null,
-      userAgentHash ?? null,
-      new Date().toISOString(),
-    ],
-    sql: `insert into rate_limit_events
-      (id, action, bucket, user_id, ip_hash, user_agent_hash, created_at)
-      values (?, ?, ?, ?, ?, ?, ?)`,
-  });
-
-  return undefined;
 }
 
 /**

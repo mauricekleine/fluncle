@@ -48,12 +48,28 @@ vi.mock("./newsletter", () => ({
   subscribeToNewsletter: (...args: unknown[]) => subscribeToNewsletter(...args),
 }));
 
-beforeEach(() => {
+// The shared limiter touches Turso; these handler-shape tests don't (the limiter
+// has its own focused coverage in rate-limit.test.ts). No-op it so the response
+// framing is what's under test, not the rate-limit DB round-trip.
+vi.mock("./rate-limit", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./rate-limit")>();
+
+  return {
+    ...actual,
+    assertRateLimit: async () => undefined,
+  };
+});
+
+beforeEach(async () => {
   listMixtapes.mockReset();
   searchTrackCandidates.mockReset();
   listTracks.mockReset();
   createSubmission.mockReset();
   subscribeToNewsletter.mockReset();
+  // Clear the search handler's recent-query cache so an entry from one test
+  // never serves another (the cache is exercised on its own elsewhere).
+  const { __resetSearchCache } = await import("./orpc/search");
+  __resetSearchCache();
 });
 
 function get(url: string): Request {

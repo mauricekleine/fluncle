@@ -1,7 +1,8 @@
 import { type NewsletterBody } from "@fluncle/contracts/orpc";
 import { readEnv, readOptionalEnv } from "./env";
+import { getPublicSession } from "./public-auth";
+import { assertRateLimit } from "./rate-limit";
 import { ApiError } from "./spotify";
-import { hashSubmitter } from "./submissions";
 
 const loopsApiUrl = "https://app.loops.so/api/v1";
 const rateLimitWindowMs = 60 * 60 * 1000;
@@ -13,18 +14,26 @@ const maxEmailLength = 254;
 // by design; `validateInput` narrows it.
 export type NewsletterInput = NewsletterBody;
 
-// Best-effort per-connection limiter. In-memory by design: Loops is the store
-// of record, duplicate subscribes are idempotent (409 reads as success), and
-// the confirmation send is deduped by Loops' own Idempotency-Key, so a reset
-// on redeploy costs nothing.
-const attemptsByConnection = new Map<string, number[]>();
-
 export async function subscribeToNewsletter(
   body: NewsletterInput,
   request: Request,
 ): Promise<void> {
   const email = validateInput(body);
-  enforceRateLimit(hashSubmitter(request));
+
+  // The shared atomic, DB-backed limiter — the old per-isolate in-memory array
+  // reset on every redeploy and was per-Worker-isolate, which is no limit at all
+  // against an email-bombing flood. Keyed on the signed-in user when present, else
+  // hash(cf-connecting-ip) (never x-forwarded-for, never the User-Agent).
+  const publicUser = await getPublicSession(request);
+
+  await assertRateLimit({
+    action: "subscribe_newsletter",
+    limit: rateLimitMaxAttempts,
+    message: "Too many tries from this connection. Try again later.",
+    request,
+    userId: publicUser?.id,
+    windowMs: rateLimitWindowMs,
+  });
 
   const apiKey = await readEnv("LOOPS_API_KEY");
   const created = await createContact(apiKey, email);
@@ -58,34 +67,6 @@ function validateInput(body: NewsletterInput): string {
   }
 
   return email;
-}
-
-function enforceRateLimit(connectionHash: string): void {
-  const now = Date.now();
-  const windowStart = now - rateLimitWindowMs;
-  const attempts = (attemptsByConnection.get(connectionHash) ?? []).filter(
-    (timestamp) => timestamp >= windowStart,
-  );
-
-  if (attempts.length >= rateLimitMaxAttempts) {
-    throw new ApiError(
-      "rate_limited",
-      "Too many tries from this connection. Try again later.",
-      429,
-    );
-  }
-
-  attempts.push(now);
-  attemptsByConnection.set(connectionHash, attempts);
-
-  // Drop stale connections so the map cannot grow without bound.
-  if (attemptsByConnection.size > 10_000) {
-    for (const [key, timestamps] of attemptsByConnection) {
-      if (timestamps.every((timestamp) => timestamp < windowStart)) {
-        attemptsByConnection.delete(key);
-      }
-    }
-  }
 }
 
 // Returns true when the contact is on the list (newly created or already

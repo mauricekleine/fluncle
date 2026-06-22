@@ -8,6 +8,7 @@ import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 import { readOptionalEnv } from "./env";
 import { getPublicSession } from "./public-auth";
+import { assertRateLimit } from "./rate-limit";
 import { ApiError, fetchTrackMetadata, parseSpotifyTrackUrl } from "./spotify";
 
 const noteMaxLength = 500;
@@ -36,10 +37,6 @@ type SubmissionRow = {
   reviewed_at: string | null;
 };
 
-type CountRow = {
-  submission_count: number;
-};
-
 type PublishedTrackRow = {
   added_to_spotify: number;
   posted_to_telegram: number;
@@ -55,25 +52,18 @@ export async function createSubmission(
   const submitterHash = hashSubmitter(request);
   const publicUser = await getPublicSession(request);
   const createdAt = new Date().toISOString();
-  const windowStart = new Date(Date.now() - rateLimitWindowMs).toISOString();
 
-  const rateResult = await db.execute({
-    args: [submitterHash, windowStart],
-    sql: `select count(*) as submission_count
-      from submissions
-      where submitter_hash = ?
-        and created_at >= ?`,
+  // The shared atomic limiter, keyed on the signed-in user when present else
+  // hash(cf-connecting-ip). Rotating the User-Agent (the old `${ip}:${ua}` key)
+  // no longer buys a fresh allowance, and the count-then-insert race is gone.
+  await assertRateLimit({
+    action: "submit_track",
+    limit: rateLimitMaxSubmissions,
+    message: "Too many submissions from this connection. Try again later.",
+    request,
+    userId: publicUser?.id,
+    windowMs: rateLimitWindowMs,
   });
-  const rateRows = typedRows<CountRow>(rateResult.rows);
-  const submissionCount = Number(rateRows[0]?.submission_count ?? 0);
-
-  if (submissionCount >= rateLimitMaxSubmissions) {
-    throw new ApiError(
-      "rate_limited",
-      "Too many submissions from this connection. Try again later.",
-      429,
-    );
-  }
 
   const track = await fetchTrackMetadata(input.spotifyTrackId);
   const submission: Submission = {

@@ -263,6 +263,31 @@ export const rateLimitEvents = sqliteTable(
   ],
 );
 
+// Fixed-window rate-limit counters: one row per (action, bucket, window_start),
+// incremented by a single atomic conditional upsert (see lib/server/rate-limit.ts).
+// This is the durable, race-free backbone for every action limiter — the
+// `count < max` guard lives in the upsert's `WHERE`, so two concurrent requests
+// can never both pass the limit (unlike the old count-then-insert TOCTOU path).
+// The `bucket` is `hash(cf-connecting-ip)` for anonymous callers or `userId` for
+// authenticated ones — never the spoofable x-forwarded-for, never the User-Agent.
+export const rateLimitCounters = sqliteTable(
+  "rate_limit_counters",
+  {
+    action: text("action").notNull(),
+    bucket: text("bucket").notNull(),
+    count: integer("count").notNull().default(0),
+    // ISO timestamp of the start of the current fixed window (windowMs-aligned).
+    windowStart: text("window_start").notNull(),
+  },
+  (table) => [
+    uniqueIndex("rate_limit_counter_action_bucket_window_idx").on(
+      table.action,
+      table.bucket,
+      table.windowStart,
+    ),
+  ],
+);
+
 export const userGalaxyState = sqliteTable("user_galaxy_state", {
   createdAt: text("created_at").notNull(),
   deaths: integer("deaths").notNull().default(0),
