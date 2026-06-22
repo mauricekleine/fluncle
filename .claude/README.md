@@ -20,3 +20,7 @@ The GitHub MCP server (remote HTTP) needs a token in the environment:
 ```bash
 export GITHUB_PERSONAL_ACCESS_TOKEN=ghp_...   # least-privilege scopes; never commit
 ```
+
+## Codex
+
+The same three hooks are mirrored for Codex in `../.codex/` (`hooks.json` + `hooks/`), adapted to Codex's `apply_patch` edit tool and allow/deny model. See `../.codex/README.md`.
