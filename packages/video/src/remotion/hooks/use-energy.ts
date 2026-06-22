@@ -21,5 +21,5 @@ export type UseCurveOptions = {
 export const useEnergy = (curve: EnergySample[], options: UseCurveOptions = {}): number => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
-  return smoothCurveAtFrame(curve, frame, fps, options.startMs ?? 0, options.smoothingFrames ?? 6);
+  return smoothCurveAtFrame(curve, frame, fps, options.startMs ?? 0, options.smoothingFrames ?? 4);
 };

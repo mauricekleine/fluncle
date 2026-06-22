@@ -4,13 +4,14 @@ import { type CosmosAudio, type EnergySample } from "../types";
 import { useBass } from "./use-bass";
 import { useBeat } from "./use-beat";
 import { useEnergy, type UseCurveOptions } from "./use-energy";
+import { useFlux } from "./use-flux";
 import { useMid } from "./use-mid";
 import { useOnset } from "./use-onset";
 import { useTreble } from "./use-treble";
 
 type AudioReactivityInput = Pick<
   CosmosAudio,
-  "bassCurve" | "beatGrid" | "energyCurve" | "midCurve" | "onsets" | "trebleCurve"
+  "bassCurve" | "beatGrid" | "energyCurve" | "fluxCurve" | "midCurve" | "onsets" | "trebleCurve"
 >;
 
 export type DropEnvelopeOptions = {
@@ -34,6 +35,7 @@ export type AudioReactivityOptions = {
   bass?: UseCurveOptions;
   mid?: UseCurveOptions;
   treble?: UseCurveOptions;
+  flux?: UseCurveOptions;
   fastEnergy?: UseCurveOptions;
   fastBass?: UseCurveOptions;
   fastMid?: UseCurveOptions;
@@ -63,6 +65,8 @@ export type AudioReactivity = {
   midFast: number;
   /** Near-raw treble, for snappy hat/cymbal-driven sparkle. */
   trebleFast: number;
+  /** Continuous transient/attack (flux) envelope — between-onset shimmer. */
+  flux: number;
   /** Beat-grid pulse, snap-to-one and exponential decay. */
   beat: number;
   /** Onset transient pulse, usually shorter than beat. */
@@ -171,6 +175,7 @@ export const useAudioReactivity = (
     smoothingFrames: 1,
     ...options.fastTreble,
   });
+  const flux = useFlux(audio.fluxCurve ?? [], options.flux);
   const { pulse: beat } = useBeat(audio.beatGrid, { decay: options.beatDecay ?? 3.2 });
   // swellBeat feeds MOTION, so it decays slowly: at high BPM a fast decay leaves a
   // per-beat sawtooth that makes movement lurch. A slow decay blurs consecutive
@@ -189,12 +194,14 @@ export const useAudioReactivity = (
   // on every 1/4 note, which reads as jitter at high BPM — proven on the 173 BPM
   // D&B tracks, where even 0.14 still ticked and 0 looked markedly smoother. Keep
   // motion gliding on the bass/energy envelopes; let `hit` (not swell) carry the
-  // sharp on-beat MATERIAL. Only raise this for a slow track where a faint
-  // motional beat-lock genuinely won't strobe.
+  // sharp on-beat MATERIAL. Only raise the beat weight for a slow track where a
+  // faint motional beat-lock genuinely won't strobe. The bass+energy weights sum
+  // to 1.0 (0.6 + 0.4) so a real drop where both peak drives swell to the full
+  // 1.0; clamp01 is now a guarantee, not a ceiling.
   const swell = clamp01(
     swellBeat * (options.swellBeatWeight ?? 0) +
-      bass * (options.swellBassWeight ?? 0.42) +
-      energy * (options.swellEnergyWeight ?? 0.22),
+      bass * (options.swellBassWeight ?? 0.6) +
+      energy * (options.swellEnergyWeight ?? 0.4),
   );
   const disturbance = clamp01(hit * 0.6 + swell * 0.45 + drop * 0.25);
 
@@ -205,6 +212,7 @@ export const useAudioReactivity = (
     drop,
     energy,
     energyFast,
+    flux,
     hit,
     mid,
     midFast,
@@ -213,17 +221,12 @@ export const useAudioReactivity = (
     swell,
     treble,
     trebleFast,
+    // The bag's only legitimate entry: u_audioDisturbance is the one uniform
+    // ShaderLayer reads from here. Every other audio signal lives in the HEADER
+    // and is pushed by name (audio.bass, audio.swell, audio.flux, …), so a shader
+    // declaring it by name always gets a real value — no silent-zero aliases.
     uniforms: {
-      u_audioBeat: beat,
       u_audioDisturbance: disturbance,
-      u_audioDrop: drop,
-      u_audioHit: hit,
-      u_audioOnset: onset,
-      u_audioSwell: swell,
-      u_bassFast: bassFast,
-      u_energyFast: energyFast,
-      u_midFast: midFast,
-      u_trebleFast: trebleFast,
     },
   };
 };

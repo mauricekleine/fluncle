@@ -51,6 +51,8 @@ export type ShaderLayerProps = {
   midCurve?: EnergySample[];
   /** Treble curve (>2kHz) for `u_treble` via useTreble. Omitted = u_treble stays 0. */
   trebleCurve?: EnergySample[];
+  /** Flux curve (continuous transient/attack) for `u_flux` via useFlux. Omitted = u_flux stays 0. */
+  fluxCurve?: EnergySample[];
   /**
    * Shared audio-reactivity profile. Use these to disturb MATERIAL (width,
    * density, threshold, glow, grain, refraction, exposure) on the immediate
@@ -101,6 +103,7 @@ uniform float u_energyFast;// near-raw energy, for sharper non-positional reacti
 uniform float u_bassFast;  // near-raw bass, for pressure without smoothing lag
 uniform float u_midFast;   // near-raw mid, snappier lead-driven reactions
 uniform float u_trebleFast;// near-raw treble, snappy hat/cymbal sparkle
+uniform float u_flux;      // 0..1 continuous transient/attack envelope (between-onset shimmer)
 uniform float u_seed;      // per-track seed
 uniform vec3  u_palette[4];// Retint ramp stops, dark -> light
 
@@ -389,6 +392,7 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
   bassCurve,
   midCurve,
   trebleCurve,
+  fluxCurve,
   reactivity,
   uniforms,
   opacity = 1,
@@ -409,6 +413,7 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
       bassCurve: bassCurve ?? [],
       beatGrid: beatGrid ?? [],
       energyCurve: energyCurve ?? [],
+      fluxCurve: fluxCurve ?? [],
       midCurve: midCurve ?? [],
       onsets: onsets ?? [],
       trebleCurve: trebleCurve ?? [],
@@ -568,6 +573,7 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
     gl.uniform1f(u("u_bassFast"), audio.bassFast);
     gl.uniform1f(u("u_midFast"), audio.midFast);
     gl.uniform1f(u("u_trebleFast"), audio.trebleFast);
+    gl.uniform1f(u("u_flux"), audio.flux);
     gl.uniform1f(u("u_seed"), seed);
 
     const flatPalette = new Float32Array(stops.flatMap((hex) => toVec3(hex)));
