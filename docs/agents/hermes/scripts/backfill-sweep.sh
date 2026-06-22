@@ -33,7 +33,14 @@ set -euo pipefail
 # `fluncle`/`bun` spawns resolve regardless of the runner's PATH.
 export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 
+# Belt-and-suspenders: the cron runner's exec context loses the PATH export above,
+# so pin ABSOLUTE paths for the interpreter + the CLI. The orchestrator reads
+# BUN_BIN/FLUNCLE_BIN, so its `bun`/`fluncle` spawns resolve with zero PATH
+# dependence; the wrapper itself execs bun by absolute path too.
+export BUN_BIN="${BUN_BIN:-/root/.bun/bin/bun}"
+export FLUNCLE_BIN="${FLUNCLE_BIN:-/usr/local/bin/fluncle}"
+
 # Resolve the orchestrator next to this wrapper so it runs regardless of CWD.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-exec bun "${SCRIPT_DIR}/backfill-sweep.ts" "$@"
+exec "${BUN_BIN}" "${SCRIPT_DIR}/backfill-sweep.ts" "$@"
