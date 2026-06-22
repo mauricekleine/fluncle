@@ -129,7 +129,10 @@ export async function createBroadcast(params: {
       from,
       html: params.html,
       name: params.name,
-      segmentId,
+      // Resend's REST API is snake_case — `segmentId` is silently ignored and the
+      // create fails "Missing segment_id or audience_id". (The Node SDK camelCases
+      // for you; we use raw fetch, so we send snake_case.)
+      segment_id: segmentId,
       subject: params.subject,
     },
     idempotencyKey: `edition-broadcast/${params.editionId}`,
@@ -164,7 +167,9 @@ export async function sendBroadcast(
   options: { scheduledAt?: string } = {},
 ): Promise<void> {
   const response = await resendFetch(`/broadcasts/${encodeURIComponent(broadcastId)}/send`, {
-    body: options.scheduledAt ? { scheduledAt: options.scheduledAt } : undefined,
+    // snake_case for Resend's REST API (see createBroadcast). Immediate send omits
+    // the body entirely; only a scheduled send carries `scheduled_at`.
+    body: options.scheduledAt ? { scheduled_at: options.scheduledAt } : undefined,
     idempotencyKey: `edition-send/${broadcastId}`,
     method: "POST",
   });

@@ -92,7 +92,10 @@ describe("createBroadcast + sendBroadcast", () => {
     expect(url).toBe("https://api.resend.com/broadcasts");
     expect(init.headers["Idempotency-Key"]).toBe("edition-broadcast/ed_1");
     const body = JSON.parse(init.body);
-    expect(body.segmentId).toBe("seg_fluncle");
+    // Resend's REST API is snake_case — `segment_id`, not `segmentId` (the camelCase
+    // key is silently ignored → "Missing segment_id or audience_id" at send time).
+    expect(body.segment_id).toBe("seg_fluncle");
+    expect(body.segmentId).toBeUndefined();
     expect(body.from).toBe("Fluncle <fluncle@newsletter.fluncle.com>");
   });
 
@@ -106,13 +109,13 @@ describe("createBroadcast + sendBroadcast", () => {
     expect(init.headers["Idempotency-Key"]).toBe("edition-send/bc_1");
   });
 
-  it("passes scheduledAt through on send", async () => {
+  it("passes the schedule through as snake_case scheduled_at on send", async () => {
     fetchMock.mockResolvedValueOnce(ok());
 
     await sendBroadcast("bc_1", { scheduledAt: "in 1 hour" });
 
     const [, init] = fetchMock.mock.calls[0] ?? [];
-    expect(JSON.parse(init.body)).toEqual({ scheduledAt: "in 1 hour" });
+    expect(JSON.parse(init.body)).toEqual({ scheduled_at: "in 1 hour" });
   });
 
   it("throws broadcast_create_failed on a create error", async () => {
