@@ -126,6 +126,10 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(tracksHelp.stdout).toContain("queue");
     expect(tracksHelp.stdout).toContain("publish");
     expect(tracksHelp.stdout).toContain("vehicles");
+    // The observation-pipeline surface: the context command + the two cron queues.
+    expect(tracksHelp.stdout).toContain("context");
+    expect(tracksHelp.stdout).toContain("context-queue");
+    expect(tracksHelp.stdout).toContain("observe-queue");
   });
 
   test("admin tracks video requires a footage cut before any upload", async () => {
@@ -175,6 +179,50 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage: fluncle admin tracks observe");
+  });
+
+  test("admin tracks context requires an id before any fetch", async () => {
+    // No id fails local validation before the API call, so this runs without a
+    // server or admin token (and never spends a Firecrawl fetch).
+    const result = await runCli(["admin", "tracks", "context", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: fluncle admin tracks context");
+  });
+
+  test("admin tracks context-queue validates --limit before fetching", async () => {
+    const result = await runCli(["admin", "tracks", "context-queue", "--limit", "0", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
+  });
+
+  test("admin tracks observe-queue validates --limit before fetching", async () => {
+    const result = await runCli(["admin", "tracks", "observe-queue", "--limit", "0", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
+  });
+
+  test("admin tracks queue accepts the observation-cron filters", async () => {
+    // The boolean filters parse cleanly; --limit still validates first.
+    const result = await runCli([
+      "admin",
+      "tracks",
+      "queue",
+      "--has-context",
+      "--has-observation",
+      "--limit",
+      "0",
+      "--json",
+    ]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
   test("admin tracks publish (new name) and admin add (alias) both resolve", async () => {

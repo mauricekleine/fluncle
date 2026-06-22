@@ -10,6 +10,7 @@ import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { Button } from "@/components/ui/button";
 import { siteUrl } from "@/lib/fluncle-links";
 import { formatAlbumDuration, formatDateLong, formatDuration } from "@/lib/format";
+import { jsonLdScript } from "@/lib/json-ld";
 import { isLogPageParam } from "@/lib/log-page-param";
 import {
   artistTitleLine,
@@ -127,10 +128,12 @@ function logHead(loaderData: LogPageData | undefined) {
         { content: description, name: "twitter:description" },
         { content: ogImageUrl, name: "twitter:image" },
       ],
-      scripts: [
-        { children: JSON.stringify(mixtapeAlbumJsonLd(mixtape)), type: "application/ld+json" },
-        { children: JSON.stringify(breadcrumbsJsonLd(logId)), type: "application/ld+json" },
-      ],
+      // JSON-LD goes through `jsonLdScript`, which HTML-escapes the serialized
+      // payload before it reaches the inline <script>'s `children` (rendered raw
+      // via dangerouslySetInnerHTML), so a `</script>` in mixtape.title / .note /
+      // member titles can't break out of the <script> (stored-XSS sink,
+      // security review).
+      scripts: [jsonLdScript(mixtapeAlbumJsonLd(mixtape)), jsonLdScript(breadcrumbsJsonLd(logId))],
     };
   }
 
@@ -175,10 +178,13 @@ function logHead(loaderData: LogPageData | undefined) {
       { content: description, name: "twitter:description" },
       { content: ogImage, name: "twitter:image" },
     ],
-    scripts: [
-      { children: JSON.stringify(recording), type: "application/ld+json" },
-      { children: JSON.stringify(breadcrumbs), type: "application/ld+json" },
-    ],
+    // JSON-LD goes through `jsonLdScript`, which HTML-escapes the serialized
+    // payload before it reaches the inline <script>'s `children` (rendered raw
+    // via dangerouslySetInnerHTML), so a `</script>` in the (Spotify-sourced)
+    // title/artist/album or the operator `note` (woven into definitionalProse,
+    // the JSON-LD description) can't break out of the <script> (stored-XSS sink,
+    // security review).
+    scripts: [jsonLdScript(recording), jsonLdScript(breadcrumbs)],
   };
 }
 

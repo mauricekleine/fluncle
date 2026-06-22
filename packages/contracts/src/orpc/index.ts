@@ -73,9 +73,9 @@ export {
 } from "./admin-tokens";
 export {
   addTrack,
+  contextTrack,
   finalizeTrackVideo,
   listTracksAdmin,
-  observeContext,
   observeTrack,
   presignTrackVideoUploads,
   updateTrack,
