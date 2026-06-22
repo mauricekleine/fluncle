@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { get, MIXTAPE, postJson, readJson, TRACK } from "./orpc-test-kit";
 
 // Wave A — the five public-unauthenticated ops fanned out off the pilot's
 // per-domain pattern. As in orpc.test.ts, the underlying server helpers are
@@ -72,44 +73,6 @@ beforeEach(async () => {
   __resetSearchCache();
 });
 
-function get(url: string): Request {
-  return new Request(url, { method: "GET" });
-}
-
-function post(url: string, body: string): Request {
-  return new Request(url, {
-    body,
-    headers: { "Content-Type": "application/json" },
-    method: "POST",
-  });
-}
-
-function postJson(url: string, body: unknown): Request {
-  return post(url, JSON.stringify(body));
-}
-
-const TRACK = {
-  addedAt: "2026-01-01T00:00:00.000Z",
-  addedToSpotify: true,
-  artists: ["Some Artist"],
-  durationMs: 300000,
-  enrichmentStatus: "done",
-  postedToTelegram: true,
-  spotifyUrl: "https://open.spotify.com/track/abc",
-  title: "Some Banger",
-  trackId: "abc",
-};
-
-const MIXTAPE = {
-  artists: ["Fluncle"] as ["Fluncle"],
-  externalUrls: {},
-  memberCount: 0,
-  members: [],
-  status: "published" as const,
-  title: "A Set",
-  type: "mixtape" as const,
-};
-
 // ── list_mixtapes ────────────────────────────────────────────────────────────
 
 describe("oRPC public read — GET /mixtapes (list_mixtapes)", () => {
@@ -120,7 +83,7 @@ describe("oRPC public read — GET /mixtapes (list_mixtapes)", () => {
     const response = await handleOrpc(get("https://www.fluncle.com/api/v1/mixtapes"));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ mixtapes: [MIXTAPE], ok: true });
+    expect(await readJson(response)).toEqual({ mixtapes: [MIXTAPE], ok: true });
     expect(listMixtapes).toHaveBeenCalledWith();
   });
 
@@ -131,7 +94,7 @@ describe("oRPC public read — GET /mixtapes (list_mixtapes)", () => {
     const response = await handleOrpc(get("https://www.fluncle.com/api/mixtapes"));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ mixtapes: [], ok: true });
+    expect(await readJson(response)).toEqual({ mixtapes: [], ok: true });
   });
 
   it("500s an unexpected fault as { code: 'error', message, ok: false }", async () => {
@@ -141,7 +104,7 @@ describe("oRPC public read — GET /mixtapes (list_mixtapes)", () => {
     const response = await handleOrpc(get("https://www.fluncle.com/api/v1/mixtapes"));
 
     expect(response?.status).toBe(500);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       code: "error",
       message: "turso fell over",
       ok: false,
@@ -166,7 +129,7 @@ describe("oRPC public read — GET /search (search_tracks)", () => {
     const response = await handleOrpc(get("https://www.fluncle.com/api/v1/search?q=amen"));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ ok: true, results: [RESULT] });
+    expect(await readJson(response)).toEqual({ ok: true, results: [RESULT] });
     expect(searchTrackCandidates).toHaveBeenCalledWith("amen");
   });
 
@@ -186,7 +149,7 @@ describe("oRPC public read — GET /search (search_tracks)", () => {
     expect(response?.status).toBe(400);
     // Parity with the live route's jsonError(400, "invalid_query", …) — the code
     // is the custom `invalid_query`, NOT the rails' generic `invalid_request`.
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       code: "invalid_query",
       message: "Search query must be at least 2 characters",
       ok: false,
@@ -199,7 +162,7 @@ describe("oRPC public read — GET /search (search_tracks)", () => {
     const response = await handleOrpc(get("https://www.fluncle.com/api/v1/search"));
 
     expect(response?.status).toBe(400);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       code: "invalid_query",
       message: "Search query must be at least 2 characters",
       ok: false,
@@ -223,7 +186,7 @@ describe("oRPC public read — GET /stories (list_stories)", () => {
     const response = await handleOrpc(get("https://www.fluncle.com/api/v1/stories"));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual(PAGE);
+    expect(await readJson(response)).toEqual(PAGE);
   });
 
   it("defaults the limit and passes hasVideo: true", async () => {
@@ -298,11 +261,11 @@ describe("oRPC public write — POST /submissions (submit_track)", () => {
     const response = await handleOrpc(postJson("https://www.fluncle.com/api/v1/submissions", BODY));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ ok: true, submission: SUBMISSION });
+    expect(await readJson(response)).toEqual({ ok: true, submission: SUBMISSION });
     // The parsed body is handed through to createSubmission untouched (the loose
     // contract input preserves it field-for-field, including unknown keys).
     expect(createSubmission).toHaveBeenCalledTimes(1);
-    expect(createSubmission.mock.calls[0][0]).toEqual(BODY);
+    expect(createSubmission.mock.calls[0]?.[0]).toEqual(BODY);
   });
 
   it("preserves the honeypot key through the loose contract input", async () => {
@@ -313,7 +276,7 @@ describe("oRPC public write — POST /submissions (submit_track)", () => {
       postJson("https://www.fluncle.com/api/v1/submissions", { ...BODY, honeypot: "" }),
     );
 
-    expect(createSubmission.mock.calls[0][0]).toEqual({ ...BODY, honeypot: "" });
+    expect(createSubmission.mock.calls[0]?.[0]).toEqual({ ...BODY, honeypot: "" });
   });
 
   it("carries the validation ApiError code/status (invalid_request/400) byte-for-byte", async () => {
@@ -328,7 +291,7 @@ describe("oRPC public write — POST /submissions (submit_track)", () => {
     );
 
     expect(response?.status).toBe(400);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       code: "invalid_request",
       message: "Text fields must be 500 characters or less",
       ok: false,
@@ -349,7 +312,7 @@ describe("oRPC public write — POST /submissions (submit_track)", () => {
     const response = await handleOrpc(postJson("https://www.fluncle.com/api/v1/submissions", BODY));
 
     expect(response?.status).toBe(429);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       code: "rate_limited",
       message: "Too many submissions from this connection. Try again later.",
       ok: false,
@@ -369,8 +332,8 @@ describe("oRPC public write — POST /newsletter (subscribe_newsletter)", () => 
     );
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ ok: true });
-    expect(subscribeToNewsletter.mock.calls[0][0]).toEqual({ email: "fan@example.com" });
+    expect(await readJson(response)).toEqual({ ok: true });
+    expect(subscribeToNewsletter.mock.calls[0]?.[0]).toEqual({ email: "fan@example.com" });
   });
 
   it("serves the same handler on the bare /api alias", async () => {
@@ -382,7 +345,7 @@ describe("oRPC public write — POST /newsletter (subscribe_newsletter)", () => 
     );
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ ok: true });
+    expect(await readJson(response)).toEqual({ ok: true });
   });
 
   it("carries the invalid_email ApiError code/status (400) byte-for-byte", async () => {
@@ -397,7 +360,7 @@ describe("oRPC public write — POST /newsletter (subscribe_newsletter)", () => 
     );
 
     expect(response?.status).toBe(400);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       code: "invalid_email",
       message: "Enter a valid email address.",
       ok: false,

@@ -1,21 +1,32 @@
 import { type ComponentType } from "react";
 import { TiktokIcon, YoutubeIcon } from "@/components/platform-icons";
+import { type Platform, type PlatformMeta, PLATFORMS as PLATFORM_META } from "@/lib/platforms";
 
-// The publish targets shared by the board's stage cells + push dialog. `directPost`
-// distinguishes the push shapes: TikTok pushes a private inbox DRAFT (the operator
-// finishes in-app), YouTube posts DIRECTLY and publicly on click. Instagram is
-// intentionally absent — there's no legitimate automated audio path
-// (docs/track-lifecycle.md). Logos are the official simple-icons brand marks (the
-// platform-icons / interface-icons split; DESIGN.md).
+export type { Platform };
 
-export type PlatformConfig = {
-  Icon: ComponentType<{ className?: string; weight?: "fill" | "bold" | "regular" }>;
-  directPost: boolean;
-  key: string;
-  label: string;
+// The publish targets shared by the board's stage cells + push dialog. The set,
+// labels, and push shapes live in the pure `lib/platforms.ts` source of truth
+// (server-safe, no icons); this module joins each to its brand logo. Logos are
+// the official simple-icons brand marks (the platform-icons / interface-icons
+// split; DESIGN.md). A new platform without an icon fails the build (the
+// PLATFORM_ICONS map is exhaustive over `Platform`).
+
+type PlatformIcon = ComponentType<{
+  className?: string;
+  weight?: "fill" | "bold" | "regular";
+}>;
+
+const PLATFORM_ICONS: Record<Platform, PlatformIcon> = {
+  tiktok: TiktokIcon,
+  youtube: YoutubeIcon,
 };
 
-export const PLATFORMS: PlatformConfig[] = [
-  { Icon: TiktokIcon, directPost: false, key: "tiktok", label: "TikTok" },
-  { Icon: YoutubeIcon, directPost: true, key: "youtube", label: "YouTube" },
-];
+export type PlatformConfig = PlatformMeta & {
+  Icon: PlatformIcon;
+  key: Platform;
+};
+
+export const PLATFORMS: readonly PlatformConfig[] = PLATFORM_META.map((platform) => ({
+  ...platform,
+  Icon: PLATFORM_ICONS[platform.key],
+}));

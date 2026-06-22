@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, setAdminTokenEnv } from "./orpc-test-kit";
 
 // The ADMIN wave's pilot parity + auth proof: the `admin-tracks` ops driven
 // end-to-end through `handleOrpc` against `/api/v1/admin/...`, so the REAL admin
@@ -75,8 +76,6 @@ vi.mock("./observation", async (importOriginal) => {
   };
 });
 
-const OPERATOR_TOKEN = "test-token-admin-operator";
-const AGENT_TOKEN = "test-token-admin-agent";
 const TRACK_ID = "track-123";
 
 const TRACK = {
@@ -105,10 +104,7 @@ const LIST_ITEM = {
   trackId: TRACK_ID,
 };
 
-beforeAll(() => {
-  process.env.FLUNCLE_API_TOKEN = OPERATOR_TOKEN;
-  process.env.FLUNCLE_AGENT_TOKEN = AGENT_TOKEN;
-});
+beforeAll(setAdminTokenEnv);
 
 beforeEach(() => {
   updateTrack.mockReset();
@@ -171,7 +167,11 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
     const response = await handleOrpc(patch(OPERATOR_TOKEN, { bpm: 174, key: "F minor" }));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ fields: ["bpm", "key"], ok: true, trackId: TRACK_ID });
+    expect(await readJson(response)).toEqual({
+      fields: ["bpm", "key"],
+      ok: true,
+      trackId: TRACK_ID,
+    });
     expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, { bpm: 174, key: "F minor" });
   });
 
@@ -200,7 +200,7 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
     const response = await handleOrpc(patch(OPERATOR_TOKEN, { note: "x".repeat(281) }));
 
     expect(response?.status).toBe(422);
-    expect(((await response?.json()) as { code: string }).code).toBe("note_too_long");
+    expect(((await readJson(response)) as { code: string }).code).toBe("note_too_long");
     expect(updateTrack).not.toHaveBeenCalled();
   });
 
@@ -232,7 +232,7 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
     const response = await handleOrpc(patch(AGENT_TOKEN, body));
 
     expect(response?.status).toBe(403);
-    expect(((await response?.json()) as { code: string }).code).toBe("forbidden");
+    expect(((await readJson(response)) as { code: string }).code).toBe("forbidden");
     expect(updateTrack).not.toHaveBeenCalled();
   });
 
@@ -241,7 +241,7 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
     const response = await handleOrpc(patch(AGENT_TOKEN, { bpm: 174, note: "sneaking a note in" }));
 
     expect(response?.status).toBe(403);
-    expect(((await response?.json()) as { code: string }).code).toBe("forbidden");
+    expect(((await readJson(response)) as { code: string }).code).toBe("forbidden");
     expect(updateTrack).not.toHaveBeenCalled();
   });
 });
@@ -266,7 +266,7 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
     );
 
     expect(response?.status).toBe(200);
-    expect(((await response?.json()) as { ok: boolean }).ok).toBe(true);
+    expect(((await readJson(response)) as { ok: boolean }).ok).toBe(true);
     expect(renderObservation).toHaveBeenCalled();
   });
 
@@ -280,7 +280,11 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
     );
 
     expect(response?.status).toBe(200);
-    const data = (await response?.json()) as { audioUrl: string; durationMs: number; ok: boolean };
+    const data = (await readJson(response)) as {
+      audioUrl: string;
+      durationMs: number;
+      ok: boolean;
+    };
     expect(data.ok).toBe(true);
     expect(data.audioUrl).toBe("https://found.fluncle.com/004.7.2I/observation.mp3");
     expect(data.durationMs).toBe(28000);
@@ -331,7 +335,7 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
     );
 
     expect(response?.status).toBe(200);
-    const data = (await response?.json()) as { ok: boolean; skipped?: boolean };
+    const data = (await readJson(response)) as { ok: boolean; skipped?: boolean };
     expect(data.ok).toBe(true);
     expect(data.skipped).toBe(true);
     // No render, no upload, no write-back — a clean idempotent no-op.
@@ -352,7 +356,7 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
     );
 
     expect(response?.status).toBe(422);
-    expect(((await response?.json()) as { code: string }).code).toBe("voice_gate");
+    expect(((await readJson(response)) as { code: string }).code).toBe("voice_gate");
     expect(renderObservation).not.toHaveBeenCalled();
     expect(put).not.toHaveBeenCalled();
   });
@@ -369,7 +373,7 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
     );
 
     expect(response?.status).toBe(422);
-    expect(((await response?.json()) as { code: string }).code).toBe("voice_gate");
+    expect(((await readJson(response)) as { code: string }).code).toBe("voice_gate");
     expect(renderObservation).not.toHaveBeenCalled();
   });
 
@@ -380,7 +384,7 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
     const response = await handleOrpc(post("/observe", OPERATOR_TOKEN, { script: GOOD_SCRIPT }));
 
     expect(response?.status).toBe(400);
-    expect(((await response?.json()) as { code: string }).code).toBe("no_log_id");
+    expect(((await readJson(response)) as { code: string }).code).toBe("no_log_id");
   });
 });
 
@@ -407,7 +411,7 @@ describe("oRPC context_track (POST /admin/tracks/{trackId}/context)", () => {
     const response = await handleOrpc(post("/context", AGENT_TOKEN, {}));
 
     expect(response?.status).toBe(200);
-    const data = (await response?.json()) as {
+    const data = (await readJson(response)) as {
       contextNote: string;
       ok: boolean;
       sources: string[];
@@ -431,7 +435,7 @@ describe("oRPC context_track (POST /admin/tracks/{trackId}/context)", () => {
     const response = await handleOrpc(post("/context", AGENT_TOKEN, {}));
 
     expect(response?.status).toBe(200);
-    const data = (await response?.json()) as { contextNote: string; skipped?: boolean };
+    const data = (await readJson(response)) as { contextNote: string; skipped?: boolean };
     expect(data.skipped).toBe(true);
     expect(data.contextNote).toBe("Already fetched facts.");
     expect(fetchTrackContext).not.toHaveBeenCalled();
@@ -459,7 +463,7 @@ describe("oRPC context_track (POST /admin/tracks/{trackId}/context)", () => {
     const response = await handleOrpc(post("/context", AGENT_TOKEN, {}));
 
     expect(response?.status).toBe(400);
-    expect(((await response?.json()) as { code: string }).code).toBe("no_log_id");
+    expect(((await readJson(response)) as { code: string }).code).toBe("no_log_id");
     expect(fetchTrackContext).not.toHaveBeenCalled();
   });
 
@@ -470,7 +474,7 @@ describe("oRPC context_track (POST /admin/tracks/{trackId}/context)", () => {
     const response = await handleOrpc(post("/context", AGENT_TOKEN, {}));
 
     expect(response?.status).toBe(404);
-    expect(((await response?.json()) as { code: string }).code).toBe("not_found");
+    expect(((await readJson(response)) as { code: string }).code).toBe("not_found");
   });
 });
 
@@ -496,7 +500,7 @@ describe("oRPC presign_track_video_uploads (POST .../video/uploads)", () => {
     );
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       logId: "004.7.2I",
       ok: true,
       trackId: TRACK_ID,
@@ -520,7 +524,7 @@ describe("oRPC presign_track_video_uploads (POST .../video/uploads)", () => {
     );
 
     expect(response?.status).toBe(400);
-    expect(((await response?.json()) as { code: string }).code).toBe("no_footage");
+    expect(((await readJson(response)) as { code: string }).code).toBe("no_footage");
     expect(presignUploads).not.toHaveBeenCalled();
   });
 
@@ -531,7 +535,7 @@ describe("oRPC presign_track_video_uploads (POST .../video/uploads)", () => {
     const response = await handleOrpc(post("/video/uploads", OPERATOR_TOKEN, { fields: [] }));
 
     expect(response?.status).toBe(400);
-    expect(((await response?.json()) as { code: string }).code).toBe("no_fields");
+    expect(((await readJson(response)) as { code: string }).code).toBe("no_fields");
   });
 });
 
@@ -555,7 +559,7 @@ describe("oRPC finalize_track_video (POST .../video/finalize)", () => {
     );
 
     expect(response?.status).toBe(200);
-    const data = (await response?.json()) as { logId: string; ok: boolean; videoUrl: string };
+    const data = (await readJson(response)) as { logId: string; ok: boolean; videoUrl: string };
     expect(data.ok).toBe(true);
     expect(data.logId).toBe("004.7.2I");
     expect(data.videoUrl).toContain("004.7.2I");
@@ -574,7 +578,7 @@ describe("oRPC finalize_track_video (POST .../video/finalize)", () => {
     const response = await handleOrpc(post("/video/finalize", OPERATOR_TOKEN, {}));
 
     expect(response?.status).toBe(404);
-    expect(((await response?.json()) as { code: string }).code).toBe("not_found");
+    expect(((await readJson(response)) as { code: string }).code).toBe("not_found");
     expect(updateTrack).not.toHaveBeenCalled();
   });
 });
@@ -608,7 +612,7 @@ describe("oRPC list_tracks_admin (GET /admin/tracks)", () => {
     );
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ nextCursor: "cur", totalCount: 2, tracks: [] });
+    expect(await readJson(response)).toEqual({ nextCursor: "cur", totalCount: 2, tracks: [] });
     // The filters parsed in-handler (order asc, hasVideo false, status pending).
     const [opts] = listTracks.mock.calls[0] as [Record<string, unknown>];
     expect(opts.order).toBe("asc");
@@ -624,7 +628,7 @@ describe("oRPC list_tracks_admin (GET /admin/tracks)", () => {
     const response = await handleOrpc(adminGet("?q=calibre&limit=5", OPERATOR_TOKEN));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ tracks: [LIST_ITEM] });
+    expect(await readJson(response)).toEqual({ tracks: [LIST_ITEM] });
     expect(searchTracks).toHaveBeenCalledWith({ limit: 5, q: "calibre" });
     expect(listTracks).not.toHaveBeenCalled();
   });
@@ -695,7 +699,7 @@ describe("oRPC add_track (POST /admin/tracks)", () => {
     );
 
     expect(response?.status).toBe(400);
-    expect(((await response?.json()) as { code: string }).code).toBe("invalid_request");
+    expect(((await readJson(response)) as { code: string }).code).toBe("invalid_request");
     expect(publishTrack).not.toHaveBeenCalled();
   });
 
@@ -725,7 +729,7 @@ describe("oRPC add_track (POST /admin/tracks)", () => {
     );
 
     expect(response?.status).toBe(200);
-    const data = (await response?.json()) as { ok: boolean; addedToSpotify: boolean };
+    const data = (await readJson(response)) as { ok: boolean; addedToSpotify: boolean };
     expect(data.ok).toBe(true);
     expect(data.addedToSpotify).toBe(true);
     expect(publishTrack).toHaveBeenCalledWith("https://open.spotify.com/track/x", {

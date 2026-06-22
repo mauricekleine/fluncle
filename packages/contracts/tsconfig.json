@@ -2,7 +2,8 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "moduleResolution": "Bundler",
-    "strict": true
+    "strict": true,
+    "types": ["node"]
   },
   "include": ["src/**/*.ts"]
 }

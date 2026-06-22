@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../-alias";
 import { requireOperator } from "../../../lib/server/env";
-import { apiErrorResponse, parseJsonBody } from "../../../lib/server/http-errors";
+import { apiErrorResponse, parseJsonBody, requireParam } from "../../../lib/server/http-errors";
 import { renderMixtapeCover } from "../../../lib/server/mixtape-cover";
 import { finalizeMixtapeDistribution } from "../../../lib/server/mixtape-social";
 import { ApiError } from "../../../lib/server/spotify";
@@ -25,6 +25,7 @@ export const serverHandlers: ApiHandlers = {
     }
 
     try {
+      const mixtapeId = requireParam(params.mixtapeId, "mixtapeId");
       const parsed = await parseJsonBody(request);
 
       if (parsed instanceof Response) {
@@ -38,7 +39,7 @@ export const serverHandlers: ApiHandlers = {
         throw new ApiError("invalid_request", "videoId is required", 400);
       }
 
-      const mixtape = await finalizeMixtapeDistribution(params.mixtapeId, "youtube", {
+      const mixtape = await finalizeMixtapeDistribution(mixtapeId, "youtube", {
         externalId: videoId,
         url: `https://youtu.be/${videoId}`,
       });
@@ -49,7 +50,7 @@ export const serverHandlers: ApiHandlers = {
       // is already live with its real coordinate.
       await trySetThumbnail(mixtape.logId, videoId).catch((error) => {
         console.warn(
-          `[mixtape ${params.mixtapeId}] YouTube thumbnail set failed (non-fatal):`,
+          `[mixtape ${mixtapeId}] YouTube thumbnail set failed (non-fatal):`,
           error instanceof Error ? error.message : String(error),
         );
       });

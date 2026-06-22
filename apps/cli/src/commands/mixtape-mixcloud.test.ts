@@ -60,6 +60,6 @@ describe("mixcloudSections", () => {
       member({ artists: ["A", "B"], startMs: 0, title: "Collab" }),
     ]);
 
-    expect(sections[0].artist).toBe("A, B");
+    expect(sections[0]?.artist).toBe("A, B");
   });
 });

@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "./-alias";
+import { requireParam } from "@/lib/server/http-errors";
 import { renderMixtapeCover, resolveCoverSize } from "@/lib/server/mixtape-cover";
 
 // On-the-fly mixtape cover, rendered on the edge with workers-og (Satori + resvg
@@ -17,7 +18,7 @@ import { renderMixtapeCover, resolveCoverSize } from "@/lib/server/mixtape-cover
 
 export const serverHandlers: ApiHandlers = {
   GET: async ({ request, params }) => {
-    const logId = decodeURIComponent(params.logId);
+    const logId = decodeURIComponent(requireParam(params.logId, "logId"));
     const size = resolveCoverSize(new URL(request.url).searchParams.get("size"));
     const image = await renderMixtapeCover(logId, size);
 

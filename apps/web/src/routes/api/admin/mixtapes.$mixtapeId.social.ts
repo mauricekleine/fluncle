@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../-alias";
 import { requireAdmin } from "../../../lib/server/env";
-import { apiErrorResponse } from "../../../lib/server/http-errors";
+import { apiErrorResponse, requireParam } from "../../../lib/server/http-errors";
 import { listMixtapeSocialPosts } from "../../../lib/server/mixtape-social";
 
 // The per-platform distribution rows for a mixtape (mixtape_social_posts). The
@@ -16,9 +16,10 @@ export const serverHandlers: ApiHandlers = {
     }
 
     try {
-      const posts = await listMixtapeSocialPosts(params.mixtapeId);
+      const mixtapeId = requireParam(params.mixtapeId, "mixtapeId");
+      const posts = await listMixtapeSocialPosts(mixtapeId);
 
-      return Response.json({ mixtapeId: params.mixtapeId, ok: true, posts });
+      return Response.json({ mixtapeId, ok: true, posts });
     } catch (error) {
       return apiErrorResponse(error);
     }

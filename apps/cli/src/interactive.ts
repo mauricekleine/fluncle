@@ -193,6 +193,9 @@ export async function paginateWithKeyboard(options: PaginateOptions): Promise<vo
       const columns = stdout.columns ?? 80;
       const before = pages.slice(0, index).reduce((count, page) => count + page.lines.length, 0);
       const page = pages[index];
+      if (page === undefined) {
+        return;
+      }
       const start = before + 1;
       const end = before + page.lines.length;
       const loading = busy ? "  ·  loading…" : "";
@@ -204,7 +207,7 @@ export async function paginateWithKeyboard(options: PaginateOptions): Promise<vo
     }
 
     function loadNext(): void {
-      const cursor = pages[index].nextCursor;
+      const cursor = pages[index]?.nextCursor;
 
       if (cursor === undefined) {
         return;

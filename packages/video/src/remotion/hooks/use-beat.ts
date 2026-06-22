@@ -39,7 +39,7 @@ export const useBeat = (beatGrid: number[], options: UseBeatOptions = {}): BeatS
   // Find the most recent beat at or before now.
   let beatIndex = -1;
   for (let i = 0; i < beatGrid.length; i++) {
-    if (beatGrid[i]! <= nowMs) {
+    if (beatGrid[i] <= nowMs) {
       beatIndex = i;
     } else {
       break;
@@ -50,11 +50,11 @@ export const useBeat = (beatGrid: number[], options: UseBeatOptions = {}): BeatS
     return { beatIndex: -1, beatProgress: 0, pulse: 0 };
   }
 
-  const beatMs = beatGrid[beatIndex]!;
+  const beatMs = beatGrid[beatIndex];
   const nextMs =
     beatIndex + 1 < beatGrid.length
-      ? beatGrid[beatIndex + 1]!
-      : beatMs + (beatGrid[beatIndex]! - (beatGrid[beatIndex - 1] ?? beatMs - 500));
+      ? beatGrid[beatIndex + 1]
+      : beatMs + (beatGrid[beatIndex] - (beatGrid[beatIndex - 1] ?? beatMs - 500));
 
   const interval = Math.max(1, nextMs - beatMs);
   const beatProgress = Math.min(1, Math.max(0, (nowMs - beatMs) / interval));

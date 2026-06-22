@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../-alias";
 import { requireOperator } from "../../../lib/server/env";
-import { apiErrorResponse } from "../../../lib/server/http-errors";
+import { apiErrorResponse, requireParam } from "../../../lib/server/http-errors";
 import { publishMixtape } from "../../../lib/server/mixtapes";
 
 export const serverHandlers: ApiHandlers = {
@@ -13,7 +13,7 @@ export const serverHandlers: ApiHandlers = {
     }
 
     try {
-      const mixtape = await publishMixtape(params.mixtapeId);
+      const mixtape = await publishMixtape(requireParam(params.mixtapeId, "mixtapeId"));
 
       return Response.json({ mixtape, ok: true });
     } catch (error) {

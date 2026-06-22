@@ -14,7 +14,7 @@ const clamp255 = (n: number): number => Math.min(255, Math.max(0, Math.round(n))
 export const hexToRgb = (hex: string): Rgb => {
   let h = hex.trim().replace(/^#/, "");
   if (h.length === 3) {
-    h = h[0]! + h[0]! + h[1]! + h[1]! + h[2]! + h[2]!;
+    h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
   }
   if (h.length !== 6 || /[^0-9a-fA-F]/.test(h)) {
     return { b: 0, g: 0, r: 0 };

@@ -18,7 +18,7 @@ export function useNotificationObserver() {
       }
     }
 
-    Notifications.getLastNotificationResponseAsync().then((r) => {
+    void Notifications.getLastNotificationResponseAsync().then((r) => {
       if (mounted) {
         route(r);
       }

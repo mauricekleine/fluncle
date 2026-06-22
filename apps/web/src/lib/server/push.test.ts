@@ -156,8 +156,8 @@ describe("notifyNewFinding — configured fan-out", () => {
     }[];
     // Only the un-muted device (a); b muted "findings".
     expect(sent).toHaveLength(1);
-    expect(sent[0].to).toBe("ExponentPushToken[a]");
-    expect(sent[0].data.url).toContain("/log/2026.A.01");
+    expect(sent[0]?.to).toBe("ExponentPushToken[a]");
+    expect(sent[0]?.data.url).toContain("/log/2026.A.01");
     // The receipt id is parked for the later receipts sweep.
     expect(batch).toHaveBeenCalled();
   });

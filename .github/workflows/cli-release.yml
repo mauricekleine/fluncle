@@ -86,7 +86,7 @@ jobs:
       # publishing (no token; the publisher is configured for this repo). The tap
       # step no-ops until its secret exists.
       - name: Set up Node for npm publish
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"

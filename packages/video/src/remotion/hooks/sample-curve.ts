@@ -14,12 +14,12 @@ export const sampleCurve = (curve: EnergySample[], timeMs: number): number => {
     return 0;
   }
 
-  const first = curve[0]!;
+  const first = curve[0];
   if (timeMs <= first.timeMs) {
     return first.energy;
   }
 
-  const last = curve[curve.length - 1]!;
+  const last = curve[curve.length - 1];
   if (timeMs >= last.timeMs) {
     return last.energy;
   }
@@ -27,9 +27,9 @@ export const sampleCurve = (curve: EnergySample[], timeMs: number): number => {
   // Linear scan is fine: curves are short (one sample per ~frame at most) and
   // a render walks frames forward, so this stays cheap and branch-predictable.
   for (let i = 1; i < curve.length; i++) {
-    const next = curve[i]!;
+    const next = curve[i];
     if (timeMs <= next.timeMs) {
-      const prev = curve[i - 1]!;
+      const prev = curve[i - 1];
       const span = next.timeMs - prev.timeMs;
       if (span <= 0) {
         return next.energy;

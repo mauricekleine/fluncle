@@ -117,7 +117,7 @@ async function main(): Promise<void> {
       aspectArg !== "landscape" &&
       aspectArg !== "square") ||
     (durationFlagIndex >= 0 &&
-      (!Number.isFinite(durationMs) || durationMs! < 10_000 || durationMs! > 30_000))
+      (!Number.isFinite(durationMs) || (durationMs ?? 0) < 10_000 || (durationMs ?? 0) > 30_000))
   ) {
     throw new Error(
       "usage: bun src/pipeline/social-preview.ts <trackId|logId> [--skip-render] [--composition <Id>] [--composition-source <file>] [--duration-ms <10000-30000>] [--draft] [--no-overlay] [--aspect <portrait|landscape|square>] [--landscape]",
@@ -249,7 +249,7 @@ async function main(): Promise<void> {
     encoding: "utf8",
   });
   const meanMatch = /mean_volume:\s*(-?\d+(?:\.\d+)?) dB/.exec(probe.stderr ?? "");
-  const meanVolume = meanMatch ? Number.parseFloat(meanMatch[1]!) : Number.NaN;
+  const meanVolume = meanMatch ? Number.parseFloat(meanMatch[1] ?? "") : Number.NaN;
   if (Number.isFinite(meanVolume) && meanVolume < -70) {
     throw new Error(
       `[social-preview] rendered MP4 is SILENT (mean_volume ${meanVolume} dB). The audio hooks drive visuals only — add <TrackAudio audio={audio} /> to the composition so the cut carries sound.`,

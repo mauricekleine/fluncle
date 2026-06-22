@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readJson } from "./orpc-test-kit";
 
 // Wave B — the CSRF/origin guard ORDERING proof for the `/me` mutation tier.
 // Unlike orpc-wave-b.test.ts (which stubs `requireAccountMutation` wholesale to
@@ -64,7 +65,7 @@ describe("oRPC /me mutation guard ordering (real requireAccountMutation)", () =>
     );
 
     expect(response?.status).toBe(403);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       code: "invalid_origin",
       message: "Invalid request origin",
       ok: false,
@@ -83,7 +84,7 @@ describe("oRPC /me mutation guard ordering (real requireAccountMutation)", () =>
     );
 
     expect(response?.status).toBe(403);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       code: "csrf_required",
       message: "Invalid account mutation token",
       ok: false,
@@ -106,7 +107,7 @@ describe("oRPC /me mutation guard ordering (real requireAccountMutation)", () =>
     // `invalid_content_type`. The request is rejected either way; the handler
     // never runs.
     expect(response?.status).toBe(400);
-    expect(((await response?.json()) as { code?: string }).code).toBe("invalid_request");
+    expect(((await readJson(response)) as { code?: string }).code).toBe("invalid_request");
     expect(saveFinding).not.toHaveBeenCalled();
   });
 });

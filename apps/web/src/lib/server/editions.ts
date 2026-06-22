@@ -192,6 +192,11 @@ export async function sendEdition(
     ],
     "write",
   );
+
+  if (!result) {
+    throw new ApiError("send_failed", "Edition could not be marked sent", 409);
+  }
+
   const row = typedRow<SendRow>(result.rows);
 
   if (!row) {

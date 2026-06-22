@@ -7,6 +7,7 @@
     "build": "ray build",
     "dev": "ray develop",
     "lint": "ray lint",
+    "test": "bun test",
     "typecheck": "tsgo --noEmit"
   },
   "dependencies": {

@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, req, setAdminTokenEnv } from "./orpc-test-kit";
 
 // The admin wave's `admin-tokens` parity + auth proof, driven end-to-end through
 // `handleOrpc`. ALL four ops are operator tier (live `requireOperator`): the agent
@@ -23,13 +24,7 @@ vi.mock("./lastfm", () => ({
   lastfmGetToken: (...args: unknown[]) => lastfmGetToken(...args),
 }));
 
-const OPERATOR_TOKEN = "test-token-admin-operator";
-const AGENT_TOKEN = "test-token-admin-agent";
-
-beforeAll(() => {
-  process.env.FLUNCLE_API_TOKEN = OPERATOR_TOKEN;
-  process.env.FLUNCLE_AGENT_TOKEN = AGENT_TOKEN;
-});
+beforeAll(setAdminTokenEnv);
 
 beforeEach(() => {
   getYouTubeAccessToken.mockReset();
@@ -37,24 +32,6 @@ beforeEach(() => {
   lastfmGetToken.mockReset();
   lastfmGetSession.mockReset();
 });
-
-function req(path: string, method: string, token: string | undefined, body?: unknown): Request {
-  const headers: Record<string, string> = {};
-
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-
-  if (body !== undefined) {
-    headers["Content-Type"] = "application/json";
-  }
-
-  return new Request(`https://www.fluncle.com/api/v1${path}`, {
-    body: body === undefined ? undefined : JSON.stringify(body),
-    headers,
-    method,
-  });
-}
 
 // ── mint_youtube_token — operator tier ───────────────────────────────────────
 describe("oRPC mint_youtube_token (POST /admin/youtube/token)", () => {
@@ -81,7 +58,7 @@ describe("oRPC mint_youtube_token (POST /admin/youtube/token)", () => {
     const response = await handleOrpc(req("/admin/youtube/token", "POST", OPERATOR_TOKEN));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ accessToken: "yt-tok", ok: true });
+    expect(await readJson(response)).toEqual({ accessToken: "yt-tok", ok: true });
   });
 });
 
@@ -102,7 +79,7 @@ describe("oRPC mint_mixcloud_token (POST /admin/mixcloud/token)", () => {
     const response = await handleOrpc(req("/admin/mixcloud/token", "POST", OPERATOR_TOKEN));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ accessToken: "mc-tok", ok: true });
+    expect(await readJson(response)).toEqual({ accessToken: "mc-tok", ok: true });
   });
 });
 
@@ -123,7 +100,7 @@ describe("oRPC start_lastfm_auth (GET /admin/lastfm/auth/start)", () => {
     const response = await handleOrpc(req("/admin/lastfm/auth/start", "GET", OPERATOR_TOKEN));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       authUrl: "https://last.fm/auth",
       ok: true,
       token: "rt-1",
@@ -150,7 +127,7 @@ describe("oRPC exchange_lastfm_session (POST /admin/lastfm/auth/session)", () =>
     );
 
     expect(response?.status).toBe(400);
-    expect(((await response?.json()) as { code: string }).code).toBe("invalid_request");
+    expect(((await readJson(response)) as { code: string }).code).toBe("invalid_request");
     expect(lastfmGetSession).not.toHaveBeenCalled();
   });
 
@@ -163,7 +140,7 @@ describe("oRPC exchange_lastfm_session (POST /admin/lastfm/auth/session)", () =>
     );
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ name: "fluncle", ok: true, sessionKey: "sk-1" });
+    expect(await readJson(response)).toEqual({ name: "fluncle", ok: true, sessionKey: "sk-1" });
     expect(lastfmGetSession).toHaveBeenCalledWith("rt-1");
   });
 });

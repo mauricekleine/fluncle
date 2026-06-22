@@ -43,6 +43,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - Raycast changes: `bun run --cwd apps/raycast build` and `bun run --cwd apps/raycast lint`.
 - SSH app changes: `go build -C apps/ssh ./...`, `gofmt -l apps/ssh` (must list nothing), and `go vet -C apps/ssh ./...`.
 - Video package changes: `bun run --cwd packages/video typecheck`.
+- NEVER: Use the TypeScript non-null assertion operator (`!`). Narrow with a guard, early return, `??`, or `?.`. Enforced as an error by oxlint (`typescript/no-non-null-assertion`).
 - SHOULD: Run focused checks first, then broader root checks when the change has cross-package or user-facing risk.
 - SHOULD: For docs-only changes, verify formatting/readability instead of running full test suites unless docs generation is affected.
 
@@ -52,6 +53,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - MUST: Report when required validation depends on external services and could not be run locally.
 - NEVER: Invent secrets, credentials, listener data, analytics data, or production state.
 - MUST: Treat a push to `main` as a production deploy — Cloudflare Workers Builds rebuilds `apps/web` on every push; rapid successive pushes/merges coalesce and can drop an intermediate build, so space deploy-triggering merges and confirm a build ran on the final commit.
+- The prod deploy is gated by `bun run deploy:gate` (typecheck across all packages) in the Cloudflare Build command — a failing gate aborts the build before `wrangler deploy`. Extend `deploy:gate` in `package.json` (not the dashboard) to add checks to the deploy boundary.
 
 ## Library and API Docs
 

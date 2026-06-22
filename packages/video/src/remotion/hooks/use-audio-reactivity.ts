@@ -97,7 +97,7 @@ const findPeakTimeMs = (curve: EnergySample[]): number | undefined => {
     return undefined;
   }
 
-  let peak = curve[0]!;
+  let peak = curve[0];
   for (const sample of curve) {
     if (sample.energy > peak.energy) {
       peak = sample;

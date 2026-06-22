@@ -32,7 +32,7 @@ const sine = (freq: number, seconds: number): Float32Array => {
   let peak = 0;
   let peakBin = 0;
   for (let k = 1; k <= N / 2; k++) {
-    const m = re[k]! * re[k]! + im[k]! * im[k]!;
+    const m = re[k] * re[k] + im[k] * im[k];
     if (m > peak) {
       peak = m;
       peakBin = k;

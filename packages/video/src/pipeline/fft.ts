@@ -41,11 +41,11 @@ export function fftInPlace(re: Float64Array, im: Float64Array): void {
     }
     j ^= bit;
     if (i < j) {
-      const tr = re[i]!;
-      re[i] = re[j]!;
+      const tr = re[i];
+      re[i] = re[j];
       re[j] = tr;
-      const ti = im[i]!;
-      im[i] = im[j]!;
+      const ti = im[i];
+      im[i] = im[j];
       im[j] = ti;
     }
   }
@@ -62,12 +62,12 @@ export function fftInPlace(re: Float64Array, im: Float64Array): void {
       for (let k = 0; k < half; k++) {
         const a = i + k;
         const b = a + half;
-        const br = re[b]!;
-        const bi = im[b]!;
+        const br = re[b];
+        const bi = im[b];
         const xr = br * cr - bi * ci;
         const xi = br * ci + bi * cr;
-        const ar = re[a]!;
-        const ai = im[a]!;
+        const ar = re[a];
+        const ai = im[a];
         re[b] = ar - xr;
         im[b] = ai - xi;
         re[a] = ar + xr;

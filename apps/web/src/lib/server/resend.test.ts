@@ -40,14 +40,14 @@ describe("addContactToSegment", () => {
     await addContactToSegment("raver@example.com");
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    const [createUrl, createInit] = fetchMock.mock.calls[0];
+    const [createUrl, createInit] = fetchMock.mock.calls[0] ?? [];
     expect(createUrl).toBe("https://api.resend.com/contacts");
     expect(JSON.parse(createInit.body)).toEqual({
       email: "raver@example.com",
       unsubscribed: false,
     });
 
-    const [segUrl] = fetchMock.mock.calls[1];
+    const [segUrl] = fetchMock.mock.calls[1] ?? [];
     expect(segUrl).toBe("https://api.resend.com/contacts/raver%40example.com/segments/seg_fluncle");
   });
 
@@ -88,7 +88,7 @@ describe("createBroadcast + sendBroadcast", () => {
     });
 
     expect(result.id).toBe("bc_1");
-    const [url, init] = fetchMock.mock.calls[0];
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
     expect(url).toBe("https://api.resend.com/broadcasts");
     expect(init.headers["Idempotency-Key"]).toBe("edition-broadcast/ed_1");
     const body = JSON.parse(init.body);
@@ -101,7 +101,7 @@ describe("createBroadcast + sendBroadcast", () => {
 
     await sendBroadcast("bc_1");
 
-    const [url, init] = fetchMock.mock.calls[0];
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
     expect(url).toBe("https://api.resend.com/broadcasts/bc_1/send");
     expect(init.headers["Idempotency-Key"]).toBe("edition-send/bc_1");
   });
@@ -111,7 +111,7 @@ describe("createBroadcast + sendBroadcast", () => {
 
     await sendBroadcast("bc_1", { scheduledAt: "in 1 hour" });
 
-    const [, init] = fetchMock.mock.calls[0];
+    const [, init] = fetchMock.mock.calls[0] ?? [];
     expect(JSON.parse(init.body)).toEqual({ scheduledAt: "in 1 hour" });
   });
 

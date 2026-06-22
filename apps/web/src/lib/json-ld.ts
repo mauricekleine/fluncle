@@ -39,7 +39,10 @@ const JSON_LD_ESCAPES: Record<string, string> = {
  * JSON-LD.
  */
 export function serializeJsonLd(jsonLd: JsonLd): string {
-  return JSON.stringify(jsonLd).replace(/[<>&\u2028\u2029]/g, (char) => JSON_LD_ESCAPES[char]!);
+  return JSON.stringify(jsonLd).replace(
+    /[<>&\u2028\u2029]/g,
+    (char) => JSON_LD_ESCAPES[char] ?? char,
+  );
 }
 
 /**

@@ -167,7 +167,7 @@ export async function fetchSpotifyProfile(code: string): Promise<SpotifyProfile>
 export function parseSpotifyTrackUrl(input: string): string {
   const uriMatch = input.match(/^spotify:track:([A-Za-z0-9]{22})$/);
 
-  if (uriMatch) {
+  if (uriMatch?.[1] !== undefined) {
     return uriMatch[1];
   }
 
