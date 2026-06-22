@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../-alias";
 
 import { trackMedia, videoAudioStripped } from "../../../lib/media";
+import { isPlatform } from "../../../lib/platforms";
 import { readCaptions } from "../../../lib/server/captions";
 import { jsonError, requireAdmin, requireOperator } from "../../../lib/server/env";
 import {
@@ -23,7 +24,11 @@ import { getTrackByIdOrLogId } from "../../../lib/server/tracks";
 // Instagram is intentionally absent: no legitimate automated audio path (see
 // postiz.ts / docs). The `/draft` verb is TikTok-shaped; it is the single push
 // endpoint, not a back-compat path.
-const SUPPORTED = new Set(["tiktok", "youtube"]);
+//
+// Supported platforms + the `isPlatform` guard are derived from PLATFORMS
+// (lib/platforms.ts, the single source of truth) — a new push target appears
+// here for free, and the exhaustive switch below makes the build fail until its
+// branch is added.
 
 export const serverHandlers: ApiHandlers = {
   POST: async ({ params, request }) => {
@@ -36,7 +41,7 @@ export const serverHandlers: ApiHandlers = {
     const idOrLogId = params.trackId;
     const platform = params.platform;
 
-    if (!SUPPORTED.has(platform)) {
+    if (!isPlatform(platform)) {
       return jsonError(400, "unsupported_platform", `Unsupported platform: ${platform}`);
     }
 
@@ -78,26 +83,44 @@ export const serverHandlers: ApiHandlers = {
       const captions = await readCaptions([track.logId]);
       const caption = captions[track.logId] ?? "";
 
+      // The push shape per platform. The switch is exhaustive over `Platform`:
+      // a new push target added to PLATFORMS without a branch here fails the
+      // build (the `never` default), instead of silently 400-ing at runtime.
       let postId: string;
       let status: "draft" | "published";
 
-      if (platform === "tiktok") {
-        // Silent so the operator attaches the licensed sound in-app. Two-master:
-        // strip audio off the social cut via MT (footage-silent.mp4 is retired).
-        // Legacy: the stored footage-silent.mp4 sibling.
-        const silent = track.videoSquaredAt
-          ? videoAudioStripped(social)
-          : social.replace(/footage\.mp4$/, "footage-silent.mp4");
-        ({ postId } = await pushTikTokDraft({ caption, videoUrl: silent }));
-        status = "draft";
-      } else {
-        ({ postId } = await pushYouTubeShort({
-          coverUrl: media.coverUrl,
-          description: caption,
-          title: track.title,
-          videoUrl: social,
-        }));
-        status = "published";
+      switch (platform) {
+        case "tiktok": {
+          // Silent so the operator attaches the licensed sound in-app. Two-master:
+          // strip audio off the social cut via MT (footage-silent.mp4 is retired).
+          // Legacy: the stored footage-silent.mp4 sibling.
+          const silent = track.videoSquaredAt
+            ? videoAudioStripped(social)
+            : social.replace(/footage\.mp4$/, "footage-silent.mp4");
+          ({ postId } = await pushTikTokDraft({ caption, videoUrl: silent }));
+          status = "draft";
+          break;
+        }
+        case "youtube": {
+          ({ postId } = await pushYouTubeShort({
+            coverUrl: media.coverUrl,
+            description: caption,
+            title: track.title,
+            videoUrl: social,
+          }));
+          status = "published";
+          break;
+        }
+        default: {
+          // Exhaustiveness gate: if `platform` is ever widened past the handled
+          // cases this stops type-checking (assigning a non-`never` to `never`),
+          // so a new push target can't silently fall through here at runtime.
+          const unreachable: never = platform;
+
+          void unreachable;
+
+          return jsonError(400, "unsupported_platform", "Unsupported platform");
+        }
       }
 
       await upsertPost(track.trackId, platform, status, postId);
