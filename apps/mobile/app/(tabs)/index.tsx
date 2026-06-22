@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { View, useWindowDimensions } from "react-native";
 import { FlashList, type ViewToken } from "@shopify/flash-list";
 import { type TrackListItem } from "@fluncle/contracts";
@@ -42,19 +42,28 @@ export default function FeedScreen() {
   // autoplay the first card before the first viewability event fires
   const current = activeId ?? (findings[0] ? idOf(findings[0]) : null);
 
+  // A stable toggle (updater form needs no soundOn dep) and a stable renderItem so
+  // FlashList doesn't rebuild every cell on each redraw — only when the active card
+  // or the global sound state actually changes.
+  const toggleSound = useCallback(() => setSoundOn((s) => !s), [setSoundOn]);
+  const renderItem = useCallback(
+    ({ item }: { item: TrackListItem }) => (
+      <FeedCard
+        finding={item}
+        active={idOf(item) === current}
+        soundOn={soundOn}
+        onToggleSound={toggleSound}
+      />
+    ),
+    [current, soundOn, toggleSound],
+  );
+
   return (
     <View style={{ backgroundColor: color.deepField, flex: 1 }}>
       <FlashList
         data={findings}
         keyExtractor={idOf}
-        renderItem={({ item }) => (
-          <FeedCard
-            finding={item}
-            active={idOf(item) === current}
-            soundOn={soundOn}
-            onToggleSound={() => setSoundOn((s) => !s)}
-          />
-        )}
+        renderItem={renderItem}
         pagingEnabled
         showsVerticalScrollIndicator={false}
         snapToInterval={height}

@@ -77,20 +77,21 @@ export function placeStars(tracks: GameTrack[]): Star[] {
     const radius = ringRadius(sector);
 
     for (const placed of spreadRing(ring, radius)) {
-      const seed = placed.track.logId ?? placed.track.trackId;
+      const { track } = placed;
+      const seed = track.logId ?? track.trackId;
 
       stars.push({
         angle: placed.angle,
-        artistLine: placed.track.artists.join(", "),
+        artistLine: track.artists.join(", "),
         collected: false,
-        id: placed.track.logId ?? seed,
+        id: track.logId ?? seed,
         kind: "star",
-        logId: placed.track.logId ?? seed,
+        logId: track.logId ?? seed,
         radius,
         sector,
-        spotifyUrl: placed.track.spotifyUrl,
-        title: placed.track.title,
-        trackId: placed.track.trackId,
+        spotifyUrl: track.spotifyUrl,
+        title: track.title,
+        trackId: track.trackId,
         vOffset: (fnv1a(`${seed}#v`) % 440) - 220,
         vx: 0,
         vy: 0,

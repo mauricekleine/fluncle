@@ -207,11 +207,11 @@ export async function setMixtapeMembers(
   id: string,
   input: MixtapeMemberInput,
 ): Promise<MixtapeDTO> {
-  await assertDraftMixtape(id);
-
   if (!Array.isArray(input.members) || input.members.length === 0) {
     throw new ApiError("invalid_members", "Add at least one finding to the mixtape", 400);
   }
+
+  await assertDraftMixtape(id);
 
   const seen = new Set<string>();
   const entries: { startMs: number | null; trackId: string }[] = [];
@@ -274,11 +274,11 @@ export async function addTracksToMixtape(
   id: string,
   input: MixtapeMemberInput,
 ): Promise<MixtapeDTO> {
-  await assertDraftMixtape(id);
-
   if (!Array.isArray(input.members) || input.members.length === 0) {
     throw new ApiError("invalid_members", "Add at least one finding to the mixtape", 400);
   }
+
+  await assertDraftMixtape(id);
 
   const db = await getDb();
   const existing = await db.execute({

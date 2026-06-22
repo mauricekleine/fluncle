@@ -11,8 +11,10 @@ const fetchMixtapes = createServerFn({ method: "GET" }).handler(() => listMixtap
 const title = "Fluncle: mixtapes";
 const description = "Fluncle's own DJ mixtapes, each one a checkpoint made from findings.";
 
+// oxlint-disable-next-line sort-keys -- TanStack canonical property order (loader before head); see AGENTS.md
 export const Route = createFileRoute("/mixtapes/")({
   component: MixtapesPage,
+  loader: () => fetchMixtapes(),
   head: ({ loaderData }: { loaderData?: MixtapeDTO[] }) => ({
     links: [{ href: `${siteUrl}/mixtapes`, rel: "canonical" }],
     meta: [
@@ -42,7 +44,6 @@ export const Route = createFileRoute("/mixtapes/")({
       }),
     ],
   }),
-  loader: () => fetchMixtapes(),
 });
 
 function MixtapesPage() {

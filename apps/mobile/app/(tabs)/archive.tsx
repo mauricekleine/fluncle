@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { FlatList, Pressable, Text, View } from "react-native";
+import { useCallback, useState } from "react";
+import { FlatList, type ListRenderItem, Pressable, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { type Galaxy } from "@fluncle/contracts";
@@ -18,6 +18,13 @@ export default function ArchiveScreen() {
   const all = flattenFeed(data?.pages);
   const [galaxy, setGalaxy] = useState<Galaxy | null>(null);
   const shown = galaxy ? all.filter((f) => f.galaxy?.key === galaxy) : all;
+
+  // Stable renderItem so the list bails out of rebuilding every visible row on
+  // each screen redraw; only re-created when the row count (last-row flag) shifts.
+  const renderItem = useCallback<ListRenderItem<(typeof shown)[number]>>(
+    ({ index, item }) => <FindingRow finding={item} isLast={index === shown.length - 1} />,
+    [shown.length],
+  );
 
   return (
     <View style={{ flex: 1 }}>
@@ -72,9 +79,7 @@ export default function ArchiveScreen() {
         <FlatList
           data={shown}
           keyExtractor={(f) => f.logId ?? f.trackId}
-          renderItem={({ index, item }) => (
-            <FindingRow finding={item} isLast={index === shown.length - 1} />
-          )}
+          renderItem={renderItem}
           contentContainerStyle={{ paddingBottom: insets.bottom + 20 }}
           onEndReached={() => {
             if (hasNextPage && !isFetchingNextPage) {

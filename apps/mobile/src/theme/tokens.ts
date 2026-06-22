@@ -4,7 +4,7 @@
 // - rem → px (×16); "Npx" passes through
 // NativeWind classes read the hardcoded mirror in tailwind.config.js; inline +
 // Reanimated styles read this typed adapter. Keep the two in sync.
-import { colors as raw, motion, radii as rawRadii, typography } from "@fluncle/tokens";
+import { colors as raw, radii as rawRadii, typography } from "@fluncle/tokens";
 import { type TextStyle } from "react-native";
 
 const REM = 16;
@@ -79,11 +79,6 @@ export const font = {
     letterSpacing: parseFloat(typography.title.letterSpacing) * REM,
     lineHeight: size(typography.title.fontSize) * typography.title.lineHeight,
   } satisfies TextStyle,
-} as const;
-
-export const timing = {
-  float: motion.float.durationMs,
-  state: motion.state.durationMs,
 } as const;
 
 // The four galaxies (canon: @fluncle/contracts Galaxy union). Display names +

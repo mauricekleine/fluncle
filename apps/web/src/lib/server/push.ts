@@ -94,9 +94,9 @@ export function chunkMessages<T>(items: T[], size = EXPO_CHUNK_SIZE): T[][] {
  * mutes" (it can't silently swallow a notification). Exported for the unit test.
  */
 export function tokensForCategory(rows: PushTokenRow[], category: PushCategory): string[] {
-  return rows
-    .filter((row) => !mutedCategories(row.muted_json).includes(category))
-    .map((row) => row.token);
+  return rows.flatMap((row) =>
+    mutedCategories(row.muted_json).includes(category) ? [] : [row.token],
+  );
 }
 
 function mutedCategories(mutedJson: string | null): string[] {
@@ -328,8 +328,7 @@ export async function sweepPushReceipts(options: {
   dryRun: boolean;
   limit: number;
 }): Promise<{ checked: number; pending: number; pruned: number }> {
-  const accessToken = await readOptionalEnv("EXPO_ACCESS_TOKEN");
-  const db = await getDb();
+  const [accessToken, db] = await Promise.all([readOptionalEnv("EXPO_ACCESS_TOKEN"), getDb()]);
 
   // The ledger size, so the op can report the remaining backlog regardless of the
   // pass budget.

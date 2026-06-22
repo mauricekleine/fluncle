@@ -2,6 +2,11 @@ import { Action, ActionPanel, Icon, Image, List, showToast, Toast } from "@rayca
 import { useEffect, useState } from "react";
 import { getRecentTracks, type RecentTrack } from "./fluncle";
 
+const dateFormatter = new Intl.DateTimeFormat(undefined, {
+  day: "numeric",
+  month: "short",
+});
+
 export default function Command() {
   const [isLoading, setIsLoading] = useState(true);
   const [tracks, setTracks] = useState<RecentTrack[]>([]);
@@ -68,8 +73,5 @@ function TrackActions({ track }: { track: RecentTrack }) {
 }
 
 function formatDate(value: string): string {
-  return new Intl.DateTimeFormat(undefined, {
-    day: "numeric",
-    month: "short",
-  }).format(new Date(value));
+  return dateFormatter.format(new Date(value));
 }

@@ -4,8 +4,8 @@
 // importable from client code.
 
 /** The Fluncle epoch: 2026-05-30 = day 0 (see lib/server/log-id.ts). */
-export const EPOCH_MS = Date.UTC(2026, 4, 30);
-export const DAY_MS = 86_400_000;
+const EPOCH_MS = Date.UTC(2026, 4, 30);
+const DAY_MS = 86_400_000;
 
 /** Stable 32-bit FNV-1a hash → non-negative integer. */
 export function fnv1a(value: string): number {

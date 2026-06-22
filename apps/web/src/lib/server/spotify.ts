@@ -266,8 +266,10 @@ export async function searchTrackCandidates(query: string): Promise<TrackSearchR
 }
 
 export async function addTrackToPlaylist(track: TrackMetadata): Promise<void> {
-  const env = await readEnvs(["SPOTIFY_PLAYLIST_ID"]);
-  const accessToken = await getSpotifyAccessToken();
+  const [env, accessToken] = await Promise.all([
+    readEnvs(["SPOTIFY_PLAYLIST_ID"]),
+    getSpotifyAccessToken(),
+  ]);
 
   await spotifyFetch(`/playlists/${env.SPOTIFY_PLAYLIST_ID}/items`, accessToken, {
     body: JSON.stringify({

@@ -5,7 +5,7 @@
       "error",
       {
         "case": "kebabCase",
-        "ignore": "(^\\$.+\\.(j|t)sx?$)|(routeTree.*.ts)"
+        "ignore": ["(^\\$.+\\.(j|t)sx?$)|(routeTree.*.ts)"]
       }
     ]
   }

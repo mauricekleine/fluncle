@@ -7,6 +7,34 @@ type FormValues = {
   note?: string;
 };
 
+async function handleSubmit(values: FormValues) {
+  const spotifyUrl = parseSpotifyTrackInput(values.spotifyUrl);
+
+  if (!spotifyUrl) {
+    await showToast({
+      style: Toast.Style.Failure,
+      title: "Invalid Spotify track URL",
+    });
+    return;
+  }
+
+  const toast = await showToast({
+    style: Toast.Style.Animated,
+    title: "Logging track",
+  });
+
+  try {
+    const result = await addTrack(spotifyUrl, values.note);
+    toast.style = Toast.Style.Success;
+    toast.title = "Logged to Fluncle's Findings";
+    toast.message = `${result.track.artists.join(", ")} — ${result.track.title}`;
+  } catch (error) {
+    toast.style = Toast.Style.Failure;
+    toast.title = "Failed to log track";
+    toast.message = error instanceof Error ? error.message : String(error);
+  }
+}
+
 export default function Command() {
   const [spotifyUrl, setSpotifyUrl] = useState<string>("");
 
@@ -18,34 +46,6 @@ export default function Command() {
       }
     });
   }, []);
-
-  async function handleSubmit(values: FormValues) {
-    const spotifyUrl = parseSpotifyTrackInput(values.spotifyUrl);
-
-    if (!spotifyUrl) {
-      await showToast({
-        style: Toast.Style.Failure,
-        title: "Invalid Spotify track URL",
-      });
-      return;
-    }
-
-    const toast = await showToast({
-      style: Toast.Style.Animated,
-      title: "Logging track",
-    });
-
-    try {
-      const result = await addTrack(spotifyUrl, values.note);
-      toast.style = Toast.Style.Success;
-      toast.title = "Logged to Fluncle's Findings";
-      toast.message = `${result.track.artists.join(", ")} — ${result.track.title}`;
-    } catch (error) {
-      toast.style = Toast.Style.Failure;
-      toast.title = "Failed to log track";
-      toast.message = error instanceof Error ? error.message : String(error);
-    }
-  }
 
   return (
     <Form

@@ -16,7 +16,9 @@ export default function RootLayout() {
   const [client] = useState(() => new QueryClient());
   const [fontsLoaded] = useFonts({ Oxanium_400Regular, Oxanium_800ExtraBold });
 
-  useEffect(configureAudioSession, []);
+  useEffect(() => {
+    configureAudioSession();
+  }, []);
   useNotificationObserver();
 
   if (!fontsLoaded) {

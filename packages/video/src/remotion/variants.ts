@@ -8,10 +8,10 @@
 import { type RenderVariant, type RenderVariants } from "./types";
 
 /** The clean square crop-source master: aspect=square, overlay suppressed. */
-export const FOOTAGE: RenderVariant = { aspect: "square", hideOverlay: true };
+const FOOTAGE: RenderVariant = { aspect: "square", hideOverlay: true };
 
 /** The portrait baked-text social cut: the default flags. */
-export const FOOTAGE_SOCIAL: RenderVariant = { aspect: "portrait", hideOverlay: false };
+const FOOTAGE_SOCIAL: RenderVariant = { aspect: "portrait", hideOverlay: false };
 
 /** The canonical output filenames for the two masters. */
 export const FOOTAGE_FILENAME = "footage.mp4";

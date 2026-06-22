@@ -38,9 +38,7 @@ export function applyLifetimeMarkers(stars: Star[], logIds: Iterable<string>): v
 }
 
 export function collectLifetimeLogIds(state: SimState): string[] {
-  return state.stars
-    .filter((star) => star.collected || star.lifetimeLogged)
-    .map((star) => star.logId);
+  return state.stars.flatMap((star) => (star.collected || star.lifetimeLogged ? [star.logId] : []));
 }
 
 export function mergeProgress(

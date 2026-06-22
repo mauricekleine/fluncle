@@ -30,7 +30,7 @@ Run from `packages/media` (or with `bun run --cwd packages/media …`). Use **bu
 bun run render:og        # bundles, selects GalaxyOg, renders apps/web/public/galaxy/og.png at 1200×630
 bun run render:socials   # renders the claimed social banners/covers into docs/socials/banners/
 bun run studio      # Remotion Studio — live scrub the asset while editing
-bun run typecheck   # tsc --noEmit, the quality check for any change here
+bun run typecheck   # tsgo --noEmit, the quality check for any change here
 ```
 
 Stills render headless through a Chromium that Remotion downloads on first run; `render:og` needs that browser available (the same toolchain `@fluncle/video` uses).

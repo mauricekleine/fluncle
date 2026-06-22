@@ -77,6 +77,28 @@ const SAFE_BOTTOM = 230;
 
 const FADE = 0.8;
 
+// Static block layouts — the two fixed corners. Only opacity/transform vary per
+// frame (from the envelope), so the rest lives here and stays stable across
+// renders. Identity sits lower-left; telemetry upper-right, right-aligned.
+const IDENTITY_STYLE: React.CSSProperties = {
+  bottom: SAFE_BOTTOM,
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+  left: MARGIN_X,
+  position: "absolute",
+  right: MARGIN_X, // wraps long titles inside the safe inset
+};
+const TELEMETRY_STYLE: React.CSSProperties = {
+  alignItems: "flex-end",
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+  position: "absolute",
+  right: MARGIN_X,
+  top: SAFE_TOP,
+};
+
 /**
  * The provenance line: label and release year, the two release credits, joined
  * as `Label (2018)`. Parens are the sanctioned year form (VOICE.md / the
@@ -145,14 +167,8 @@ export const TypePlate: React.FC<TypePlateProps> = ({
       {identity.opacity > 0.001 ? (
         <div
           style={{
-            bottom: SAFE_BOTTOM,
-            display: "flex",
-            flexDirection: "column",
-            gap: 10,
-            left: MARGIN_X,
+            ...IDENTITY_STYLE,
             opacity: identity.opacity,
-            position: "absolute",
-            right: MARGIN_X, // wraps long titles inside the safe inset
             transform: `translateY(${identity.rise}px)`,
           }}
         >
@@ -184,14 +200,8 @@ export const TypePlate: React.FC<TypePlateProps> = ({
       {telemetry.opacity > 0.001 ? (
         <div
           style={{
-            alignItems: "flex-end",
-            display: "flex",
-            flexDirection: "column",
-            gap: 8,
+            ...TELEMETRY_STYLE,
             opacity: telemetry.opacity,
-            position: "absolute",
-            right: MARGIN_X,
-            top: SAFE_TOP,
             transform: `translateY(${telemetry.rise}px)`,
           }}
         >

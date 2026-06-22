@@ -1,6 +1,7 @@
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { DocsPage, preloadDocsPage } from "./-docs-page";
+import { preloadDocsPage } from "./-docs-loader";
+import { DocsPage } from "./-docs-page";
 
 // Every /docs/<slug...> human page. The MDX is compiled at build time; the
 // server fn resolves the slug to a content path (404 on a miss) and the client

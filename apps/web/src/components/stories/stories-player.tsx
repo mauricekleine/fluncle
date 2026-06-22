@@ -338,7 +338,7 @@ export function StoriesPlayer({
   }
 
   return (
-    <div
+    <section
       aria-label="Stories"
       aria-roledescription="story player"
       className="stories-stage"
@@ -347,7 +347,6 @@ export function StoriesPlayer({
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      role="region"
     >
       <div className="stories-viewport">
         <div
@@ -431,6 +430,6 @@ export function StoriesPlayer({
       <p aria-live="polite" className="sr-only">
         {`Story ${index + 1} of ${tracks.length}: ${track.artists.join(", ")} - ${track.title}`}
       </p>
-    </div>
+    </section>
   );
 }

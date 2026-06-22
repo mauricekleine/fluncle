@@ -10,13 +10,14 @@
     "./util": "./src/util.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsgo --noEmit"
   },
   "dependencies": {
     "@orpc/contract": "1.14.6",
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@typescript/native-preview": "catalog:",
     "typescript": "catalog:"
   }
 }

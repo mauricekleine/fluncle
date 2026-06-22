@@ -157,6 +157,32 @@ export const Route = createFileRoute("/")({
   component: HomePage,
 });
 
+// The cover's inner art, shared by both story-link targets below. Static, so
+// it's built once at module load rather than rebuilt on every render.
+const coverArt = (
+  <>
+    <span className="cover-story-gap">
+      {/* WebP for the page; the PNG stays canonical for og:image and JSON-LD. */}
+      <picture>
+        <source srcSet="/fluncle-cover.webp" type="image/webp" />
+        <img
+          alt="Fluncle cover art"
+          className="aspect-square w-full object-cover"
+          // The LCP element: fetch it at high priority and never lazy-load it.
+          fetchPriority="high"
+          height="512"
+          loading="eager"
+          src="/fluncle-cover.png"
+          width="512"
+        />
+      </picture>
+    </span>
+    <span aria-hidden="true" className="cover-story-badge">
+      <PlayIcon className="size-3.5" weight="fill" />
+    </span>
+  </>
+);
+
 function HomePage() {
   const initialPage = Route.useLoaderData();
   const { story } = Route.useSearch();
@@ -227,31 +253,6 @@ function HomePage() {
   // The stories entry opens at the newest finding with footage — resolved on
   // the server across the whole archive (above), not just this first page.
   const newestStoryLogId = initialPage.newestStoryLogId;
-
-  // The cover's inner art, shared by both story-link targets below.
-  const coverArt = (
-    <>
-      <span className="cover-story-gap">
-        {/* WebP for the page; the PNG stays canonical for og:image and JSON-LD. */}
-        <picture>
-          <source srcSet="/fluncle-cover.webp" type="image/webp" />
-          <img
-            alt="Fluncle cover art"
-            className="aspect-square w-full object-cover"
-            // The LCP element: fetch it at high priority and never lazy-load it.
-            fetchPriority="high"
-            height="512"
-            loading="eager"
-            src="/fluncle-cover.png"
-            width="512"
-          />
-        </picture>
-      </span>
-      <span aria-hidden="true" className="cover-story-badge">
-        <PlayIcon className="size-3.5" weight="fill" />
-      </span>
-    </>
-  );
 
   useEffect(() => {
     console.log(

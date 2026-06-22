@@ -11,11 +11,12 @@
     "dev": "bun run ./scripts/build.ts --watch",
     "icons": "bash ./scripts/make-icons.sh",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsgo --noEmit"
   },
   "devDependencies": {
     "@types/bun": "catalog:",
     "@types/chrome": "~0.1.43",
+    "@typescript/native-preview": "catalog:",
     "typescript": "catalog:"
   }
 }

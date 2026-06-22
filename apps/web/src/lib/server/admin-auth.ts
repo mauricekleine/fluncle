@@ -24,10 +24,10 @@ import { type SpotifyProfile } from "./spotify";
 // display differs from the stable id).
 function parseAllowList(value: string, lowercase: boolean): Set<string> {
   return new Set(
-    value
-      .split(",")
-      .map((entry) => (lowercase ? entry.trim().toLowerCase() : entry.trim()))
-      .filter(Boolean),
+    value.split(",").flatMap((entry) => {
+      const trimmed = lowercase ? entry.trim().toLowerCase() : entry.trim();
+      return trimmed ? [trimmed] : [];
+    }),
   );
 }
 

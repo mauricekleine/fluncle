@@ -6,4 +6,5 @@ linker = "hoisted"
 # Only install package versions published at least 3 days ago
 minimumReleaseAge = 259200
 # Our own Spinup packages — trusted, and we adopt them as soon as they publish.
-minimumReleaseAgeExcludes = ["@getspinup/sdk", "@getspinup/constants"]
+# cnfast — adopted ahead of the age window by explicit operator decision.
+minimumReleaseAgeExcludes = ["@getspinup/sdk", "@getspinup/constants", "cnfast"]

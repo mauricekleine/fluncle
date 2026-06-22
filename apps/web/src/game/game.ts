@@ -147,16 +147,20 @@ export function createGame(container: HTMLElement): Game {
         const page = await fetchTracks({ cursor, limit: 48 });
 
         return {
-          items: page.tracks
-            .filter((track) => track.type !== "mixtape")
-            .map((track) => ({
-              addedAt: track.addedAt,
-              artists: track.artists,
-              logId: track.logId,
-              spotifyUrl: track.spotifyUrl,
-              title: track.title,
-              trackId: track.trackId,
-            })),
+          items: page.tracks.flatMap((track) =>
+            track.type === "mixtape"
+              ? []
+              : [
+                  {
+                    addedAt: track.addedAt,
+                    artists: track.artists,
+                    logId: track.logId,
+                    spotifyUrl: track.spotifyUrl,
+                    title: track.title,
+                    trackId: track.trackId,
+                  },
+                ],
+          ),
           nextCursor: page.nextCursor,
         };
       },

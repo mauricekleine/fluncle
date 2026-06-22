@@ -76,7 +76,14 @@ export function RandomBangerDialog() {
             <div className="flex flex-wrap gap-2">
               <Button
                 nativeButton={false}
-                render={<a href={track.spotifyUrl} rel="noreferrer" target="_blank" />}
+                render={
+                  <a
+                    aria-label="Listen on Spotify"
+                    href={track.spotifyUrl}
+                    rel="noreferrer"
+                    target="_blank"
+                  />
+                }
               >
                 <BrandIcon icon={siSpotify} />
                 Listen on Spotify

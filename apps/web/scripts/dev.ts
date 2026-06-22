@@ -13,7 +13,7 @@ import { createClient } from "@libsql/client/web";
 import { config } from "dotenv";
 import { existsSync } from "node:fs";
 
-config({ path: ".dev.vars" });
+config({ path: ".dev.vars", quiet: true });
 
 const url = process.env.TURSO_DATABASE_URL ?? "";
 const isLocal = /^http:\/\/(127\.0\.0\.1|localhost):\d+/.test(url);

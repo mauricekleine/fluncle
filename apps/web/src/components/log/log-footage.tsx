@@ -142,6 +142,9 @@ export function LogFootage({ track }: { track: Track }) {
           preload={nearViewport ? "metadata" : "none"}
           ref={videoRef}
           src={videoUrl}
+          // Decorative muted loop (no controls): kept out of the focus order so
+          // it stays consistent with aria-hidden — sound is the preview button.
+          tabIndex={-1}
         />
       ) : (
         // No footage (or none of it survived the trip): the cover holds the frame.

@@ -11,33 +11,18 @@ function master(logId: string, file: "footage.mp4" | "footage.social.mp4") {
   return `${FOUND_BASE}/${logId}/${file}`;
 }
 
-/**
- * Portrait crop of the CLEAN square master. Valid only when videoSquaredAt is set.
- * `fit=cover` (video-valid; `fit=crop` is image-only and 400s) — mirrors the web's
- * videoCrop in apps/web/src/lib/media.ts. Folds into @fluncle/contracts in Phase 1.
- */
-export function videoCrop(logId: string, orientation: "landscape" | "portrait" = "portrait") {
-  const dims = orientation === "portrait" ? "width=1080,height=1920" : "width=1920,height=1080";
-  return `${MT}/fit=cover,${dims}/${master(logId, "footage.mp4")}`;
-}
-
 /** A poster still (first frame) of the clean master, for first paint. */
-export function videoPoster(logId: string) {
+function videoPoster(logId: string) {
   return `${MT}/mode=frame,time=0s,format=jpg/${master(logId, "footage.mp4")}`;
 }
 
-/** A width-limited rendition for cellular. */
-export function videoRendition(logId: string, width: 360 | 480 | 720 | 1080) {
-  return `${MT}/mode=video,width=${width}/${master(logId, "footage.mp4")}`;
-}
-
 /** The raw clean master (onError fallback target — MT can cold-fail / >100MB). */
-export function videoMaster(logId: string) {
+function videoMaster(logId: string) {
   return master(logId, "footage.mp4");
 }
 
 /** The 30s preview proxy (live relay; expiring previewUrl tokens aren't used directly). */
-export function previewProxy(idOrLogId: string) {
+function previewProxy(idOrLogId: string) {
   return `${API_BASE}/api/v1/preview/${idOrLogId}`;
 }
 

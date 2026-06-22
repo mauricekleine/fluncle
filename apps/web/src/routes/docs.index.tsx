@@ -1,6 +1,7 @@
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { DocsPage, preloadDocsPage } from "./-docs-page";
+import { preloadDocsPage } from "./-docs-loader";
+import { DocsPage } from "./-docs-page";
 
 // The /docs landing page — renders content/docs/index.mdx through the same
 // pipeline as every other doc.

@@ -34,6 +34,20 @@ export type MixtapeCoverProps = {
 
 type Star = { bright: number; size: number; x: number; y: number };
 
+// Static style for the coordinate marker — hoisted so its object identity is
+// stable across renders (all properties are constant, none per-render).
+const COORDINATE_STYLE: React.CSSProperties = {
+  color: colors.starlightCream,
+  fontFamily: OXANIUM_STACK,
+  fontSize: "3.4vmin",
+  fontVariantNumeric: "tabular-nums",
+  fontWeight: 400,
+  letterSpacing: "0.22em",
+  marginTop: "2.4vmin",
+  opacity: 0.72,
+  textShadow: `0 1px 14px ${colors.deepField}`,
+};
+
 // The cosmonaut fills ~46% of the height of its square cutout (the rest is
 // transparent margin); scale so the visible figure hits the target height.
 const FIGURE_IN_CUTOUT = 0.46;
@@ -146,21 +160,7 @@ export const MixtapeCover: React.FC<MixtapeCoverProps> = ({
           >
             MIXTAPE #{number}
           </div>
-          <div
-            style={{
-              color: colors.starlightCream,
-              fontFamily: OXANIUM_STACK,
-              fontSize: "3.4vmin",
-              fontVariantNumeric: "tabular-nums",
-              fontWeight: 400,
-              letterSpacing: "0.22em",
-              marginTop: "2.4vmin",
-              opacity: 0.72,
-              textShadow: `0 1px 14px ${colors.deepField}`,
-            }}
-          >
-            {coordinate}
-          </div>
+          <div style={COORDINATE_STYLE}>{coordinate}</div>
         </AbsoluteFill>
       ) : null}
 

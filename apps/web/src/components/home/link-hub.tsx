@@ -68,7 +68,12 @@ export function HomeLinkHub() {
       {/* The actions: the gold Galaxy CTA (One Sun), Playlist + Newsletter, and
           the contribute button. */}
       <div className="flex flex-col gap-2.5">
-        <Button className="w-full" nativeButton={false} render={<a href={galaxyUrl} />} size="lg">
+        <Button
+          className="w-full"
+          nativeButton={false}
+          render={<a aria-label="Enter Fluncle's Galaxy" href={galaxyUrl} />}
+          size="lg"
+        >
           <img
             alt=""
             aria-hidden="true"
@@ -81,7 +86,14 @@ export function HomeLinkHub() {
           <Button
             className="flex-1"
             nativeButton={false}
-            render={<a href={spotifyPlaylistUrl} rel="noreferrer" target="_blank" />}
+            render={
+              <a
+                aria-label="Fluncle playlist on Spotify"
+                href={spotifyPlaylistUrl}
+                rel="noreferrer"
+                target="_blank"
+              />
+            }
             size="lg"
             variant="outline"
           >
@@ -111,7 +123,14 @@ export function HomeLinkHub() {
                     aria-label={social.label}
                     className="text-muted-foreground size-8"
                     nativeButton={false}
-                    render={<a href={social.href} rel="noreferrer" target="_blank" />}
+                    render={
+                      <a
+                        aria-label={social.label}
+                        href={social.href}
+                        rel="noreferrer"
+                        target="_blank"
+                      />
+                    }
                     size="icon"
                     variant="ghost"
                   />
