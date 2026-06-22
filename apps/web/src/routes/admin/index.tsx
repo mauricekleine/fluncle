@@ -34,7 +34,6 @@ import { readCaptions } from "@/lib/server/captions";
 import { listMixtapeMembershipsForTracks, listMixtapes } from "@/lib/server/mixtapes";
 import { getContextNote, listContextNotePresenceForTracks } from "@/lib/server/observation-board";
 import { listSocialPostsForTracks } from "@/lib/server/social";
-import { triggerEnrichment } from "@/lib/server/spinup";
 import { getSpotifyAuthStatus, type SpotifyAuthStatus } from "@/lib/server/spotify";
 import { type BlockedOn, trackStage } from "@/lib/server/track-stage";
 import { decodeTrackCursor, listTracks, listVibePoints, type VibePoint } from "@/lib/server/tracks";
@@ -47,7 +46,7 @@ import { cn } from "@/lib/utils";
 // Agents (an agent does it) and Yours (your hands) — because the pipeline isn't a
 // strict chain: steps run in parallel, fail, and retry. A cell reads by SHAPE
 // (round = agent, square = yours) and FILL (open → in-flight → done), and clicking
-// it opens that step's dialog (Tag → the vibe map; Enrich → the Spinup agent;
+// it opens that step's dialog (Tag → the vibe map; Enrich → re-queue for the box cron;
 // YouTube/TikTok → the publish loop). The board derives its steps from a pure model
 // (pipeline/board-model) and wires every cell back to the dialogs through `actions`.
 //
@@ -224,21 +223,6 @@ const fetchVibePoints = createServerFn({ method: "GET" }).handler(
     return listVibePoints();
   },
 );
-
-// Kick the Spinup enrichment agent for one finding. triggerEnrichment is a fast
-// enqueue that never throws and marks the record "processing" on a good enqueue;
-// the agent flips it to "done" when it finishes (docs/track-lifecycle.md).
-const triggerEnrichmentFn = createServerFn({ method: "POST" })
-  .validator((data: { logId: string; trackId: string }) => data)
-  .handler(async ({ data }) => {
-    if (!(await isAdminRequest())) {
-      throw redirect({ to: "/admin/login" });
-    }
-
-    await triggerEnrichment(data.trackId, data.logId);
-
-    return { ok: true };
-  });
 
 type BoardSearch = { mix: MixFilter; stage: Worklist };
 
@@ -665,10 +649,23 @@ function AdminBoardPage() {
     setEnrichError(undefined);
 
     try {
-      await triggerEnrichmentFn({ data: { logId: enrichRow.logId, trackId: enrichRow.trackId } });
-      // Optimistic: a good enqueue marks the record "processing" server-side; show
-      // it immediately. Window-focus refetch reconciles with the agent's result.
-      patchRow(enrichRow.trackId, { enrichmentStatus: "processing" });
+      // Re-queue the finding for the on-box `fluncle-enrich` cron: PATCH the
+      // status back to "pending" (queue-eligible). The cron picks it up on its
+      // next ~5-min tick, analyzes on-box, and writes "done"/"failed" back.
+      const response = await fetch(`/api/admin/tracks/${enrichRow.trackId}`, {
+        body: JSON.stringify({ enrichmentStatus: "pending" }),
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        method: "PATCH",
+      });
+
+      if (!response.ok) {
+        throw new Error(`Queue failed (${response.status})`);
+      }
+
+      // Optimistic: show it queued immediately. Window-focus refetch reconciles
+      // with the cron's result.
+      patchRow(enrichRow.trackId, { enrichmentStatus: "pending" });
       setEnrichId(undefined);
     } catch (caught) {
       setEnrichError(caught instanceof Error ? caught.message : String(caught));

@@ -1,18 +1,10 @@
-// The `admin-backfills` domain contract module — the operator/admin-gated
-// maintenance sweeps (the Discogs + Last.fm back-fills and the self-healing
-// enrichment sweep). Part of the admin fan-out (docs/orpc-migration-brief.md),
-// built on the same pattern as `./admin-tracks.ts`.
+// The `admin-backfills` domain contract module — the operator-gated maintenance
+// sweeps (the Discogs + Last.fm back-fills). Part of the admin fan-out
+// (docs/orpc-migration-brief.md), built on the same pattern as `./admin-tracks.ts`.
 //
 //   - `backfill_discogs` / `backfill_lastfm` — operator tier (live
 //     `requireOperator`). Batched: one request handles a bounded pass and returns
 //     `nextCursor`; the CLI loops `?cursor=` until null.
-//   - `enrich_track` — admin tier (live `requireAdmin` — an external cron AND
-//     the operator hit it, so the agent role is allowed). VERIFIED against the
-//     live route: the enrich sweep is `requireAdmin`, NOT `requireOperator`. The
-//     verb is `enrich` (the closed action set); the whole-queue scope is the
-//     CLI's `--all` flag, not part of the verb. Convention B routes it at
-//     `POST /admin/tracks/enrich`; the old `POST /admin/enrich-sweep` path stays
-//     a back-compat alias served by its TanStack route (oRPC no longer matches it).
 //
 // The inputs are the live QUERY params (`limit`/`dryRun`/`cursor`), kept as
 // tolerant optional strings: the live routes parse + clamp them in-handler and
@@ -40,15 +32,6 @@ const DiscogsResolvedSchema = z
     source: z.string(),
   })
   .meta({ id: "DiscogsBackfillResolved" });
-
-/** An enrich-sweep row (`{ logId, status, trackId }`). */
-const EnrichSweepEntrySchema = z
-  .object({
-    logId: z.string(),
-    status: z.string(),
-    trackId: z.string(),
-  })
-  .meta({ id: "EnrichSweepEntry" });
 
 /** A failed-Last.fm row (`{ error, logId }`). */
 const LastfmFailedSchema = z
@@ -135,39 +118,8 @@ export const backfillLastfm = oc
     }),
   );
 
-/**
- * `enrich_track` → `POST /admin/tracks/enrich` (operationId `enrichTrack`).
- *
- * ADMIN tier (live `requireAdmin` — VERIFIED: the enrich sweep is `requireAdmin`,
- * so the agent role authenticates too, matching the external cron that hits it).
- * One bounded pass re-firing enrichment for pending/failed/stale findings (the
- * whole-queue sweep). Preserves the live `{ ok, reEnriched, reEnrichedCount,
- * skipped, skippedCount }` envelope. The old `POST /admin/enrich-sweep` path stays
- * a back-compat alias on its TanStack route.
- */
-export const enrichTrack = oc
-  .route({
-    inputStructure: "detailed",
-    method: "POST",
-    operationId: "enrichTrack",
-    path: "/admin/tracks/enrich",
-    summary: "Re-fire enrichment for pending/failed/stale findings (batched)",
-    tags: ["Admin"],
-  })
-  .input(z.object({ query: z.object({ limit: z.string().optional() }) }))
-  .output(
-    z.object({
-      ok: z.literal(true),
-      reEnriched: z.array(EnrichSweepEntrySchema),
-      reEnrichedCount: z.number(),
-      skipped: z.array(EnrichSweepEntrySchema),
-      skippedCount: z.number(),
-    }),
-  );
-
 /** The `admin-backfills` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminBackfillsContract = {
   backfill_discogs: backfillDiscogs,
   backfill_lastfm: backfillLastfm,
-  enrich_track: enrichTrack,
 };

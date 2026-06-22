@@ -83,45 +83,14 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
-  test("admin tracks enrich --all validates --limit before any sweep", async () => {
-    const result = await runCli(["admin", "tracks", "enrich", "--all", "--limit", "0", "--json"]);
-
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
-  });
-
-  test("admin tracks enrich requires --all (bare enrich errors, never a silent sweep)", async () => {
-    const result = await runCli(["admin", "tracks", "enrich", "--json"]);
-
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("fluncle admin tracks enrich --all");
-  });
-
-  test("admin tracks enrich-sweep (back-compat alias) still resolves to enrich --all", async () => {
-    const result = await runCli(["admin", "tracks", "enrich-sweep", "--limit", "0", "--json"]);
-
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
-  });
-
-  test("admin enrich-sweep (back-compat alias for the cron) still resolves", async () => {
-    const result = await runCli(["admin", "enrich-sweep", "--limit", "0", "--json"]);
-
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
-  });
-
-  test("admin tracks group lists the enrich + queue subcommands", async () => {
+  test("admin tracks group lists the queue + pipeline subcommands", async () => {
     const tracksHelp = await runCli(["admin", "tracks", "--help"]);
 
     expect(tracksHelp.exitCode).toBe(0);
+    // The enrich-queue read (the box cron's worklist) is the kept enrichment
+    // surface; the old `enrich`/`enrich-sweep` sweep commands are gone (the
+    // on-box `fluncle-enrich` cron drains the queue directly).
     expect(tracksHelp.stdout).toContain("enrich-queue");
-    // The canonical sweep verb is visible; the `enrich-sweep` alias is hidden.
-    expect(tracksHelp.stdout).toContain("enrich ");
     expect(tracksHelp.stdout).not.toContain("enrich-sweep");
     expect(tracksHelp.stdout).toContain("queue");
     expect(tracksHelp.stdout).toContain("publish");
