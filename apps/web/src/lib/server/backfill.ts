@@ -28,7 +28,7 @@
 // exponentially instead of being retried every tick. After the call the outcome
 // is recorded so the next tick resumes from a clean, durable state.
 
-import { getDb } from "./db";
+import { getDb, typedRows } from "./db";
 import { discogsResolveRelease } from "./discogs";
 import { lastfmLove } from "./lastfm";
 import { decodeTrackCursor, encodeTrackCursor, listTracks, type TrackListItem } from "./tracks";
@@ -153,6 +153,31 @@ async function readReliability(trackId: string, source: BackfillSource): Promise
     failures: typeof row?.failures === "number" ? row.failures : 0,
     isDone: Boolean(row?.done_at),
   };
+}
+
+/**
+ * Which of the given findings are already loved on Last.fm — i.e. carry a
+ * `backfill_lastfm_done_at`. Returned as a Set of trackIds; the admin board turns
+ * it into the Last.fm (LFM) cell status, the SAME `done_at` the backfill stamps on
+ * a successful `track.love`, so the heart and the love write share one source of
+ * truth. One batch query for the whole page, no N+1. Findings that predate the
+ * column (or were never loved) read as absent — an empty heart.
+ */
+export async function listLastfmLovedForTracks(trackIds: string[]): Promise<Set<string>> {
+  if (trackIds.length === 0) {
+    return new Set();
+  }
+
+  const db = await getDb();
+  const placeholders = trackIds.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: trackIds,
+    sql: `select track_id from tracks
+          where track_id in (${placeholders})
+            and backfill_lastfm_done_at is not null`,
+  });
+
+  return new Set(typedRows<{ track_id: string }>(result.rows).map((row) => row.track_id));
 }
 
 // The cooldown window for a finding given its consecutive-failure count: the base

@@ -30,6 +30,7 @@ import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { GALAXIES, galaxyForVibe } from "@/lib/galaxies";
 import { type MixtapeDTO } from "@/lib/mixtapes";
 import { isAdminRequest } from "@/lib/server/admin-auth";
+import { listLastfmLovedForTracks } from "@/lib/server/backfill";
 import { readCaptions } from "@/lib/server/captions";
 import { listMixtapeMembershipsForTracks, listMixtapes } from "@/lib/server/mixtapes";
 import { getContextNote, listContextNotePresenceForTracks } from "@/lib/server/observation-board";
@@ -141,10 +142,11 @@ const fetchBoard = createServerFn({ method: "GET" })
     // posts, the mixtape memberships (which tapes each finding is already on), and
     // which findings carry an internal context_note (the Context column status —
     // pulled admin-only since context_note never rides the public track contract).
-    const [posts, mixtapes, contextNotes] = await Promise.all([
+    const [posts, mixtapes, contextNotes, lastfmLoved] = await Promise.all([
       listSocialPostsForTracks(trackIds),
       listMixtapeMembershipsForTracks(trackIds),
       listContextNotePresenceForTracks(trackIds),
+      listLastfmLovedForTracks(trackIds),
     ]);
 
     return {
@@ -153,6 +155,7 @@ const fetchBoard = createServerFn({ method: "GET" })
       tracks: page.tracks.map((track) => ({
         ...track,
         hasContextNote: contextNotes.has(track.trackId),
+        lastfmLoved: lastfmLoved.has(track.trackId),
         mixtapes: mixtapes[track.trackId] ?? [],
         posts: posts[track.trackId] ?? [],
       })),
