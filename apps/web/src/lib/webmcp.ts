@@ -193,6 +193,11 @@ const tools: WebMcpTool[] = [
 // parity with the server MCP surface (lib/server/mcp.ts). Shares the canonical
 // tool's execute + schema so the two never drift.
 const listTracksTool = tools[0];
+
+if (!listTracksTool) {
+  throw new Error("list_tracks tool missing from the WebMCP tool list");
+}
+
 tools.push({
   ...listTracksTool,
   description: `[Deprecated — use list_tracks] ${listTracksTool.description}`,

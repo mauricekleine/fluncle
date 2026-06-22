@@ -201,6 +201,11 @@ const tools: McpTool[] = [
 // the canonical tool's execute + schema so the two never drift; kept in tools/list
 // for a deprecation window so agents pinned to the old name keep working.
 const listTracksTool = tools[0];
+
+if (!listTracksTool) {
+  throw new Error("list_tracks tool missing from the MCP tool list");
+}
+
 tools.push({
   ...listTracksTool,
   deprecated: true,
