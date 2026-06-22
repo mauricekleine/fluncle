@@ -16,7 +16,22 @@ import { StoriesDialog } from "@/components/stories/stories-dialog";
 import { TrackRow } from "@/components/track-row";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { siteUrl, spotifyPlaylistUrl, telegramUrl } from "@/lib/fluncle-links";
+import {
+  discogsUrl,
+  instagramUrl,
+  lastfmUrl,
+  mixcloudUrl,
+  musicbrainzUrl,
+  onionUrl,
+  siteUrl,
+  soundcloudUrl,
+  spotifyPlaylistUrl,
+  telegramUrl,
+  tiktokUrl,
+  twitchUrl,
+  wikidataUrl,
+  youtubeUrl,
+} from "@/lib/fluncle-links";
 import { fluncleAsciiLogo, fluncleDescription } from "@/lib/identity";
 import { jsonLdScript } from "@/lib/json-ld";
 import { type FeedItem } from "@/lib/mixtapes";
@@ -98,7 +113,25 @@ export const Route = createFileRoute("/")({
         image: `${siteUrl}/fluncle-cover.png`,
         name: "Fluncle's Findings",
         numTracks: loaderData?.totalCount,
-        sameAs: [spotifyPlaylistUrl, telegramUrl],
+        // The full identity graph, matching /about's MusicGroup so the home
+        // page (highest authority, hit first by crawlers) declares the same
+        // corroboration anchors. Same order as /about so the entity reads
+        // identically everywhere.
+        sameAs: [
+          spotifyPlaylistUrl,
+          telegramUrl,
+          tiktokUrl,
+          instagramUrl,
+          youtubeUrl,
+          mixcloudUrl,
+          soundcloudUrl,
+          twitchUrl,
+          onionUrl,
+          musicbrainzUrl,
+          wikidataUrl,
+          lastfmUrl,
+          discogsUrl,
+        ],
         track: loaderData?.tracks.flatMap((track) => {
           if (track.type === "mixtape") {
             return [];
@@ -338,6 +371,16 @@ function HomePage() {
                   </div>
                 ) : undefined}
 
+                {tracks.length === 0 && error ? (
+                  // The first page never arrived: surface it here instead of a
+                  // blank field. (Once any track has loaded, an error on a later
+                  // page is shown by the note below the field.)
+                  <div className="empty-scanlines px-4 py-10 text-center text-muted-foreground">
+                    <p>Couldn't reach the archive. The findings didn't make the trip back.</p>
+                    <p className="mt-1 text-destructive">{error}</p>
+                  </div>
+                ) : undefined}
+
                 {tracks.length > 0 ? (
                   // The feed sizes to its content but never taller than ~a viewport (max-height,
                   // not a fixed height — so a short list doesn't leave empty padding below it),
@@ -378,7 +421,9 @@ function HomePage() {
                 ) : undefined}
               </div>
 
-              {error ? <p className="mt-4 text-sm text-destructive">{error}</p> : undefined}
+              {error && tracks.length > 0 ? (
+                <p className="mt-4 text-sm text-destructive">{error}</p>
+              ) : undefined}
 
               {cursor ? <span className="sr-only">Loaded through cursor {cursor}</span> : undefined}
             </section>

@@ -1,6 +1,7 @@
 import { fetchTracks } from "../lib/tracks";
 import { createAudioManager } from "./audio";
 import { createInput } from "./input";
+import { collectPages } from "./paginate";
 import { placeStars } from "./placement";
 import {
   applyLifetimeMarkers,
@@ -36,6 +37,8 @@ import { type GameTrack } from "./types";
 
 const SIM_STEP = 1 / 60;
 const MAX_STEPS_PER_FRAME = 5;
+/** Hard cap on catalogue pages so a non-advancing cursor can't hang the loader. */
+const MAX_CATALOGUE_PAGES = 48;
 /** How long the log card lingers after you fly on. */
 const LOG_CARD_LINGER = 4;
 const TELEMETRY_SECONDS = 5;
@@ -135,29 +138,30 @@ export function createGame(container: HTMLElement): Game {
   }
 
   async function loadCatalogue(): Promise<void> {
-    const tracks: GameTrack[] = [];
-    let cursor: string | undefined;
+    // The catalogue is small and the cursor must always advance. A bounded,
+    // cycle-guarded walk means a misbehaving endpoint (a non-advancing or
+    // repeating cursor) charts what it can and stops, instead of hanging the
+    // browser. 48 pages of 48 covers far more findings than exist.
+    const tracks = await collectPages<GameTrack>(
+      async (cursor) => {
+        const page = await fetchTracks({ cursor, limit: 48 });
 
-    do {
-      const page = await fetchTracks({ cursor, limit: 48 });
-
-      for (const track of page.tracks) {
-        if (track.type === "mixtape") {
-          continue;
-        }
-
-        tracks.push({
-          addedAt: track.addedAt,
-          artists: track.artists,
-          logId: track.logId,
-          spotifyUrl: track.spotifyUrl,
-          title: track.title,
-          trackId: track.trackId,
-        });
-      }
-
-      cursor = page.nextCursor;
-    } while (cursor);
+        return {
+          items: page.tracks
+            .filter((track) => track.type !== "mixtape")
+            .map((track) => ({
+              addedAt: track.addedAt,
+              artists: track.artists,
+              logId: track.logId,
+              spotifyUrl: track.spotifyUrl,
+              title: track.title,
+              trackId: track.trackId,
+            })),
+          nextCursor: page.nextCursor,
+        };
+      },
+      { maxPages: MAX_CATALOGUE_PAGES },
+    );
 
     if (destroyed) {
       return;

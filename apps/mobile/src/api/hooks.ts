@@ -35,16 +35,33 @@ export function flattenFeed(pages: FeedPage[] | undefined): TrackListItem[] {
 }
 
 /**
+ * What a Log ID resolved to: a finding the app can render, a mixtape it can't
+ * (those live on the web), or nothing (a dead coordinate). The screen tells the
+ * three apart so a mixtape deep-link reads "open on web", not "not found".
+ */
+export type FindingResolution =
+  | { kind: "finding"; finding: TrackListItem }
+  | { kind: "mixtape"; logId?: string }
+  | { kind: "missing" };
+
+/**
  * A single finding by Spotify trackId or Log ID. `get_track` can resolve a Log ID
- * to a mixtape; the app's /log surface renders findings, so the mixtape arm maps
- * to `undefined` (the screen shows its "not found" state).
+ * to a mixtape; the app renders findings, not mixtapes, so a mixtape resolves to
+ * its own `mixtape` arm (the screen points the crew to the web) rather than the
+ * same "not found" state as a dead coordinate.
  */
 export function useFinding(idOrLogId: string) {
   return useQuery(
     orpc.get_track.queryOptions({
       enabled: Boolean(idOrLogId),
       input: { idOrLogId },
-      select: (res) => ("track" in res ? res.track : undefined),
+      select: (res): FindingResolution => {
+        if ("track" in res) {
+          return { finding: res.track, kind: "finding" };
+        }
+
+        return { kind: "mixtape", logId: res.mixtape.logId };
+      },
     }),
   );
 }

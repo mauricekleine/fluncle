@@ -144,6 +144,10 @@ export function HomeLinkHub() {
             Logs
           </Link>
           <Dot />
+          <Link className={linkClassName} to="/mixtapes">
+            Mixtapes
+          </Link>
+          <Dot />
           <Link className={linkClassName} to="/docs">
             Docs
           </Link>
@@ -162,10 +166,14 @@ export function HomeLinkHub() {
           aria-label="Developer tools and connections"
           className="flex items-center justify-center gap-3 text-[13px] font-mono border-t pt-4"
         >
-          {/* CLI/MCP/SSH are docs pages served by the /docs/$ catch-all, so
+          {/* CLI/DIG/MCP/SSH are docs pages served by the /docs/$ catch-all, so
               they navigate via the splat param (exact URLs /docs/cli etc.). */}
           <Link className={linkClassName} params={{ _splat: "cli" }} to="/docs/$">
             CLI
+          </Link>
+          <Dot />
+          <Link className={linkClassName} params={{ _splat: "dig" }} to="/docs/$">
+            DIG
           </Link>
           <Dot />
           <a className={linkClassName} href={repoUrl} rel="noreferrer" target="_blank">
