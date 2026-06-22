@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  BOUNDARY_COMMIT_MS,
+  BREATHER_FADE_IN_MS,
+  BREATHER_FADE_OUT_MS,
+  breatherDimAt,
   nextBoundaryEpochMs,
   OFFSET_SNAP_GRID_MS,
   type RadioScheduleEntry,
+  radioBoundaryDecision,
   resolveRadioSlot,
   SEGMENT_FLOOR_MS,
+  SEGMENT_STALE_AFTER_MS,
   segmentDurationMs,
   snapOffsetMs,
   totalLoopDurationMs,
@@ -166,6 +172,68 @@ describe("nextBoundaryEpochMs — growth applies at a seam, no playhead jump", (
   it("falls back to now as a fresh anchor when the old loop was empty (T=0)", () => {
     const now = EPOCH + 5_000;
     expect(nextBoundaryEpochMs(EPOCH, 0, now)).toBe(now);
+  });
+});
+
+describe("radioBoundaryDecision — clock-driven advance + hysteresis + self-heal (Bug A)", () => {
+  const START = 1_000_000_000_000;
+  const SEG = 20_000; // a 20s observation segment.
+
+  it("holds in the calm middle of a segment", () => {
+    expect(radioBoundaryDecision(START, SEG, START + 10_000)).toBe("hold");
+  });
+
+  it("holds right at the end and just past it (hysteresis: the seam can't flip back)", () => {
+    expect(radioBoundaryDecision(START, SEG, START + SEG)).toBe("hold");
+    // A sub-commit overshoot rides instead of advancing — no oscillation N↔N+1.
+    expect(radioBoundaryDecision(START, SEG, START + SEG + BOUNDARY_COMMIT_MS - 1)).toBe("hold");
+  });
+
+  it("advances once past the end by the commit margin (the normal hand-off)", () => {
+    expect(radioBoundaryDecision(START, SEG, START + SEG + BOUNDARY_COMMIT_MS)).toBe("advance");
+    expect(radioBoundaryDecision(START, SEG, START + SEG + 1_000)).toBe("advance");
+  });
+
+  it("resyncs when far past the end with no advance (a wedge self-heals, no refresh)", () => {
+    expect(radioBoundaryDecision(START, SEG, START + SEG + SEGMENT_STALE_AFTER_MS)).toBe("resync");
+    expect(radioBoundaryDecision(START, SEG, START + SEG + 60_000)).toBe("resync");
+  });
+
+  it("resyncs when the on-screen segment hasn't started yet (a skew overshoot of the seam)", () => {
+    expect(radioBoundaryDecision(START, SEG, START - BOUNDARY_COMMIT_MS - 1)).toBe("resync");
+    // A hair before the start still holds (within the commit band, no flip-back).
+    expect(radioBoundaryDecision(START, SEG, START - BOUNDARY_COMMIT_MS + 1)).toBe("hold");
+  });
+});
+
+describe("breatherDimAt — the deterministic inter-clip fade (Feature B)", () => {
+  const SEG = 20_000;
+
+  it("is clear (0) in the calm middle of a segment", () => {
+    expect(breatherDimAt(SEG / 2, SEG)).toBe(0);
+  });
+
+  it("is fully black at the exact seam (end of segment / start of next)", () => {
+    expect(breatherDimAt(SEG, SEG)).toBe(1); // end of the ending segment
+    expect(breatherDimAt(0, SEG)).toBe(1); // head of the new segment
+  });
+
+  it("ramps to black over the final fade-out window of the ending segment", () => {
+    expect(breatherDimAt(SEG - BREATHER_FADE_OUT_MS, SEG)).toBe(0);
+    expect(breatherDimAt(SEG - BREATHER_FADE_OUT_MS / 2, SEG)).toBeCloseTo(0.5, 5);
+  });
+
+  it("lifts from black over the fade-in window of the new segment", () => {
+    expect(breatherDimAt(BREATHER_FADE_IN_MS, SEG)).toBe(0);
+    expect(breatherDimAt(BREATHER_FADE_IN_MS / 2, SEG)).toBeCloseTo(0.5, 5);
+  });
+
+  it("never returns outside [0, 1]", () => {
+    for (const offset of [-100, 0, 500, SEG - 1, SEG, SEG + 100]) {
+      const dim = breatherDimAt(offset, SEG);
+      expect(dim).toBeGreaterThanOrEqual(0);
+      expect(dim).toBeLessThanOrEqual(1);
+    }
   });
 });
 

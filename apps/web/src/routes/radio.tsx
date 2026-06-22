@@ -1,3 +1,4 @@
+import { SpeakerSimpleHighIcon, SpeakerSimpleSlashIcon } from "@phosphor-icons/react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { siSpotify } from "simple-icons";
@@ -6,7 +7,13 @@ import { Button } from "@/components/ui/button";
 import { siteUrl } from "@/lib/fluncle-links";
 import { formatDateLong } from "@/lib/format";
 import { videoClipCrop, videoCrop, videoCropPoster } from "@/lib/media";
-import { OFFSET_SNAP_GRID_MS, SEGMENT_FLOOR_MS, snapOffsetMs } from "@/lib/radio-schedule";
+import {
+  breatherDimAt,
+  OFFSET_SNAP_GRID_MS,
+  radioBoundaryDecision,
+  SEGMENT_FLOOR_MS,
+  snapOffsetMs,
+} from "@/lib/radio-schedule";
 import { fetchRadioNowPlaying, type RadioNowPlaying, type Track } from "@/lib/tracks";
 import { DESKTOP_QUERY, useMediaQuery } from "@/lib/use-media-query";
 
@@ -44,9 +51,18 @@ const COPY = {
 const RIDE_MS = 250; // < this: let it ride (imperceptible).
 const HARD_SEEK_MS = 2000; // > this: hard-seek (treat as a fresh join).
 const SOFT_CORRECT_RATE = 1.03; // the brief nudge for medium drift.
-// Poll the server clock to refresh skew + catch a catalogue change. The boundary
-// re-fetch (on `ended`) doubles as a resync; this is the between-segments cadence.
+// Poll the server clock to refresh skew + catch a catalogue change. Findings are
+// SHORT (some floored to 3s) and turn over far faster than this poll, so the poll
+// is NOT what advances findings — the schedule-clock controller (below) is. This
+// cadence only refreshes skew and catches a catalogue change between segments.
 const SKEW_POLL_MS = 45_000;
+// The schedule-clock controller tick (Bug A). Findings advance from the SHARED
+// CLOCK, not the audio element's `ended`: every tick recomputes the boundary
+// decision off the segment's shared-clock anchor. Fast enough that a short
+// finding's boundary is honoured promptly, cheap enough to also drive the breather
+// dim. This is the heartbeat that makes the seam clock-driven (advance), keeps it
+// from flickering (hysteresis), and self-heals a wedged surface (resync).
+const CONTROLLER_TICK_MS = 200;
 
 export const Route = createFileRoute("/radio")({
   component: RadioPage,
@@ -100,20 +116,25 @@ function silentPosterUrl(track: Track, desktop: boolean, atSeconds = 0): string 
   return videoCropPoster(track.logId, desktop ? "landscape" : "portrait", undefined, atSeconds);
 }
 
-/** The floored, real-or-fallback segment length for a finding (ms). */
-function segmentMs(track: Track): number {
-  const raw = track.observationDurationMs;
-
-  return typeof raw === "number" && raw >= SEGMENT_FLOOR_MS ? raw : SEGMENT_FLOOR_MS;
-}
-
 type Playhead = {
   // Whether this segment was JOINED mid-flight (clip at the snapped offset) or
   // entered from the head (a scheduled transition / first finding from offset 0).
   joinedMidSegment: boolean;
   offsetMs: number;
+  // The segment's scheduled START in the (skew-corrected) SERVER clock — the single
+  // anchor the controller derives the boundary decision and the breather dim from.
+  // A scheduled advance sets the next segment's start to `thisStart + segMs` (NOT
+  // `Date.now()`), so the shared timeline stays exact and every client agrees.
+  segmentStartServerMs: number;
   track: Track;
 };
+
+/** The floored, real-or-fallback observation length for a finding (ms). */
+function trackSegmentMs(track: Track): number {
+  const raw = track.observationDurationMs;
+
+  return typeof raw === "number" && raw >= SEGMENT_FLOOR_MS ? raw : SEGMENT_FLOOR_MS;
+}
 
 function RadioPage() {
   // The begin-gate: false until the first user gesture unlocks audible audio.
@@ -125,6 +146,9 @@ function RadioPage() {
   const [next, setNext] = useState<Track | undefined>(undefined);
   // No finding could be played (empty eligible set, or a broken run).
   const [exhausted, setExhausted] = useState(false);
+  // A LOCAL playback preference (not part of the shared schedule): mute the
+  // observation. The top-right toggle flips it; the audio element mirrors it.
+  const [muted, setMuted] = useState(false);
 
   // The desktop verdict drives the crop orientation: landscape on desktop,
   // portrait on mobile. `false` on the server / first paint, then the live verdict.
@@ -138,11 +162,25 @@ function RadioPage() {
   // The next preloaded finding, read without re-subscribing.
   const nextRef = useRef<Track | undefined>(undefined);
   nextRef.current = next;
+  // The on-screen playhead, read inside the controller tick / event handlers
+  // without re-subscribing the effect each advance.
+  const playheadRef = useRef<Playhead | undefined>(undefined);
+  playheadRef.current = playhead;
+  // The current breather dim level (0 clear … 1 full black), driven by the
+  // controller off the shared-clock offset. A ref so the rAF/interval tick writes
+  // it cheaply; mirrored into CSS via a state-free style write on the overlay.
+  const breatherRef = useRef<HTMLDivElement | null>(null);
+
+  // The client's server-clock now: Date.now() corrected by the smoothed skew. The
+  // ONE source of truth the controller, the breather, and the resync ladder all
+  // read — so the surface advances from the schedule clock, never the media element.
+  const serverNow = useCallback(() => Date.now() + skewMsRef.current, []);
 
   // Resolve the authoritative now-playing slot from the server, refresh the clock
-  // skew (NTP-lite), and place the playhead at the returned offset. `fromHead`
-  // forces a head-start (a scheduled transition rolling onto the next segment),
-  // overriding the server's mid-segment offset for an already-watching client.
+  // skew (NTP-lite), and place the playhead at the returned offset, anchoring the
+  // segment's shared-clock START. `fromHead` forces a head-start (a scheduled
+  // transition rolling onto the next segment), overriding the server's mid-segment
+  // offset for an already-watching client.
   const resolveSlot = useCallback(
     async (fromHead = false): Promise<RadioNowPlaying | undefined> => {
       const sentAt = Date.now();
@@ -153,10 +191,14 @@ function RadioPage() {
       // Smooth across polls to reject jitter (a light EMA; the first sample seeds it).
       skewMsRef.current = skewMsRef.current === 0 ? sample : skewMsRef.current * 0.7 + sample * 0.3;
 
+      const offsetMs = fromHead ? 0 : slot.offsetMs;
+
       setExhausted(false);
       setPlayhead({
         joinedMidSegment: !fromHead && slot.offsetMs > 0,
-        offsetMs: fromHead ? 0 : slot.offsetMs,
+        offsetMs,
+        // Anchor: where, in the shared server clock, this segment began.
+        segmentStartServerMs: Date.now() + skewMsRef.current - offsetMs,
         track: slot.currentTrack,
       });
       setNext(slot.nextTrack);
@@ -166,29 +208,42 @@ function RadioPage() {
     [],
   );
 
-  // Advance at a segment boundary: roll onto the preloaded next finding from its
-  // HEAD if it's ready (the smooth scheduled transition), else re-resolve from the
-  // server. A broken run gives up to the empty state. NEVER a random skip — that
-  // would desync this one client forever; on trouble we resync to the schedule.
+  // Advance to the NEXT finding at a segment boundary (Bug A: this is called by the
+  // schedule-clock controller, NOT the media element's `ended`). Roll onto the
+  // preloaded next finding if it's ready (the smooth scheduled transition), else
+  // re-resolve from the server. The next segment's shared-clock start is the
+  // PREVIOUS start + the previous observation length — deterministic, so every
+  // client lands the boundary at the same instant and no client drifts a segment.
+  // NEVER a random skip — on trouble we resync to the schedule.
   const advance = useCallback(async () => {
+    const current = playheadRef.current;
     const preloaded = nextRef.current;
     nextRef.current = undefined;
     setNext(undefined);
 
-    if (preloaded) {
+    if (current && preloaded) {
+      const nextStart = current.segmentStartServerMs + trackSegmentMs(current.track);
+
       setExhausted(false);
-      setPlayhead({ joinedMidSegment: false, offsetMs: 0, track: preloaded });
+      setPlayhead({
+        joinedMidSegment: false,
+        offsetMs: 0,
+        segmentStartServerMs: nextStart,
+        track: preloaded,
+      });
       // Re-resolve in the background to refresh the next preload + the skew, but
       // keep the smooth head-start we already painted.
       void resolveSlot(true).catch(() => {
-        // Harmless — the boundary re-fetch already placed the head-start.
+        // Harmless — the controller re-evaluates and the poll re-syncs.
       });
 
       return;
     }
 
+    // No preloaded next (single-finding loop, or a dropped preload) → re-ask the
+    // server for the authoritative current slot rather than guessing.
     try {
-      await resolveSlot(true);
+      await resolveSlot();
     } catch {
       setExhausted(true);
     }
@@ -201,35 +256,122 @@ function RadioPage() {
     void resolveSlot().catch(() => setExhausted(true));
   }, [resolveSlot]);
 
+  // THE SCHEDULE-CLOCK CONTROLLER (Bug A root-cause fix). Findings advance from the
+  // SHARED CLOCK, not the audio element's `ended` and not a `loop`. Every tick it
+  // (1) computes the boundary decision off the segment's shared-clock anchor —
+  // hold / advance / resync — with hysteresis so the seam can't flicker N↔N+1 and a
+  // wedge self-heals without a refresh, and (2) drives the deterministic breather
+  // dim off the same offset (so every client darkens at the same instant). One
+  // re-entrancy guard keeps an in-flight advance/resync from firing twice.
+  const busyRef = useRef(false);
+  useEffect(() => {
+    if (!started || !playhead) {
+      return;
+    }
+
+    const reducedMotion = prefersReducedMotion();
+
+    const tick = () => {
+      const head = playheadRef.current;
+      const overlay = breatherRef.current;
+
+      if (!head) {
+        return;
+      }
+
+      const segMs = trackSegmentMs(head.track);
+      const offsetMs = serverNow() - head.segmentStartServerMs;
+
+      // The deterministic breather: opacity is a pure function of the shared-clock
+      // offset, identical on every client. Reduced motion stays clear (an instant
+      // cut at the same boundary — no fade, still in lockstep).
+      if (overlay) {
+        overlay.style.opacity = reducedMotion ? "0" : String(breatherDimAt(offsetMs, segMs));
+      }
+
+      if (busyRef.current) {
+        return;
+      }
+
+      const decision = radioBoundaryDecision(head.segmentStartServerMs, segMs, serverNow());
+
+      if (decision === "advance") {
+        busyRef.current = true;
+        void advance().finally(() => {
+          busyRef.current = false;
+        });
+
+        return;
+      }
+
+      if (decision === "resync") {
+        busyRef.current = true;
+        void resolveSlot()
+          .catch(() => setExhausted(true))
+          .finally(() => {
+            busyRef.current = false;
+          });
+      }
+    };
+
+    tick();
+    const id = window.setInterval(tick, CONTROLLER_TICK_MS);
+
+    return () => window.clearInterval(id);
+  }, [started, playhead, advance, resolveSlot, serverNow]);
+
   // Poll the server clock between segments to refresh skew and catch a catalogue
-  // change (a changed scheduleVersion re-fetches the schedule). The boundary
-  // re-fetch on `ended` is the other resync point.
+  // change (a changed scheduleVersion re-fetches the schedule). Advance itself is
+  // the controller's job; this poll only corrects drift and catches a rolled
+  // catalogue — findings turn over far faster than this cadence.
   useEffect(() => {
     if (!started || !playhead) {
       return;
     }
 
     const id = window.setInterval(() => {
-      const previousVersionTrack = nextRef.current;
-
       void fetchRadioNowPlaying()
         .then((slot) => {
           const sample = slot.serverEpochMs - Date.now();
           skewMsRef.current = skewMsRef.current * 0.7 + sample * 0.3;
 
-          // A grown / re-observed catalogue: the schedule rolled, so hard-resync to
-          // the new authoritative slot rather than drifting on the stale one.
-          if (slot.currentTrack.trackId !== playhead.track.trackId && !previousVersionTrack) {
-            void resolveSlot();
+          // A grown / re-observed catalogue: the schedule rolled the current finding
+          // to a different one than we (and our preload) expect → hard-resync to the
+          // new authoritative slot rather than drifting on the stale one.
+          const head = playheadRef.current;
+          const expectedNext = nextRef.current;
+          const serverMovedOn =
+            head !== undefined &&
+            slot.currentTrack.trackId !== head.track.trackId &&
+            slot.currentTrack.trackId !== expectedNext?.trackId;
+
+          if (serverMovedOn && !busyRef.current) {
+            busyRef.current = true;
+            void resolveSlot()
+              .catch(() => undefined)
+              .finally(() => {
+                busyRef.current = false;
+              });
           }
         })
         .catch(() => {
-          // A transient failure is harmless — the next poll or boundary re-syncs.
+          // A transient failure is harmless — the next poll or the controller re-syncs.
         });
     }, SKEW_POLL_MS);
 
     return () => window.clearInterval(id);
   }, [started, playhead, resolveSlot]);
+
+  // Mirror the LOCAL mute preference onto the observation element. Kept separate
+  // from the playback effect so toggling mute never re-seeks or interrupts the run
+  // — it is a volume preference, not a schedule change.
+  useEffect(() => {
+    const audio = audioRef.current;
+
+    if (audio) {
+      audio.muted = muted;
+    }
+  }, [muted, playhead]);
 
   // Drive the looping silent video. It plays muted (its audio is stripped anyway),
   // loops under the observation, and pauses under reduced motion (the offset
@@ -252,11 +394,12 @@ function RadioPage() {
     });
   }, [playhead, isDesktop]);
 
-  // Drive the observation: seek to the join offset BEFORE play (the audio is the
-  // authoritative clock), then run the resync ladder against the locally-computed
-  // expected offset. On `ended`, advance to the next scheduled segment. A
-  // load/play error RESYNCS to the schedule (never a random skip — that desyncs
-  // this client permanently).
+  // Drive the observation: seek to the join offset BEFORE play, then run the resync
+  // ladder against the expected offset. Advancing findings is the CONTROLLER's job
+  // (off the shared clock) — the audio does NOT advance on `ended` and the video
+  // never advances on `loop`. The audio only keeps its own playback ALIGNED to the
+  // shared segment anchor: ride small drift, soft-correct medium, hard-seek large /
+  // on tab-return. A load/play error RESYNCS (never a random skip).
   useEffect(() => {
     const audio = audioRef.current;
 
@@ -264,18 +407,16 @@ function RadioPage() {
       return;
     }
 
-    const segMs = segmentMs(playhead.track);
-    // The wall-clock instant this segment started, in the (skew-corrected) server
-    // clock — the anchor the local resync computes the expected offset from.
-    const segmentStartServerMs = Date.now() + skewMsRef.current - playhead.offsetMs;
+    const segMs = trackSegmentMs(playhead.track);
+    // The shared-clock anchor for this segment (the SAME value the controller and
+    // the breather read), so the audio aligns to exactly the broadcast offset.
+    const segmentStartServerMs = playhead.segmentStartServerMs;
+    const expectedOffsetMs = () => serverNow() - segmentStartServerMs;
 
-    const expectedOffsetMs = () => Date.now() + skewMsRef.current - segmentStartServerMs;
-
-    // Seek to the offset before playing — the audio leads, the video follows it.
-    audio.currentTime = playhead.offsetMs / 1000;
+    // Seek to the offset before playing — align the audio to the shared offset.
+    audio.currentTime = Math.max(0, Math.min(playhead.offsetMs, segMs)) / 1000;
     audio.playbackRate = 1;
 
-    const onEnded = () => void advance();
     const onError = () => {
       // RESYNC, don't skip: a random skip on a synchronized surface desyncs this
       // client forever. Re-resolve the authoritative slot.
@@ -283,9 +424,16 @@ function RadioPage() {
     };
 
     // The resync ladder: nudge toward the expected offset without audible re-seeks
-    // for jitter, but guarantee convergence after a sleep.
+    // for jitter, but guarantee convergence after a sleep. Past the segment end the
+    // controller owns the boundary, so the ladder only corrects WITHIN the segment.
     const onTimeUpdate = () => {
-      const drift = audio.currentTime * 1000 - expectedOffsetMs();
+      const expected = expectedOffsetMs();
+
+      if (expected >= segMs) {
+        return; // at/past the end — leave the boundary to the controller.
+      }
+
+      const drift = audio.currentTime * 1000 - expected;
       const abs = Math.abs(drift);
 
       if (abs <= RIDE_MS) {
@@ -305,14 +453,16 @@ function RadioPage() {
 
       // Large drift → hard-seek to the expected offset (a fresh-join correction).
       audio.playbackRate = 1;
-      const target = Math.min(expectedOffsetMs(), segMs) / 1000;
+      const target = Math.min(expected, segMs) / 1000;
 
       if (target >= 0) {
         audio.currentTime = target;
       }
     };
 
-    // A backgrounded tab is throttled and returns seconds off → always hard-seek.
+    // A backgrounded tab is throttled and returns seconds off. Hard-seek the audio
+    // to the shared offset if still mid-segment; if the segment has elapsed, leave
+    // the boundary to the controller (which advances/resyncs on its next tick).
     const onVisible = () => {
       if (document.visibilityState !== "visible") {
         return;
@@ -321,8 +471,6 @@ function RadioPage() {
       const target = expectedOffsetMs();
 
       if (target >= segMs) {
-        void advance();
-
         return;
       }
 
@@ -330,7 +478,6 @@ function RadioPage() {
       audio.currentTime = Math.max(0, target) / 1000;
     };
 
-    audio.addEventListener("ended", onEnded);
     audio.addEventListener("error", onError);
     audio.addEventListener("timeupdate", onTimeUpdate);
     document.addEventListener("visibilitychange", onVisible);
@@ -340,13 +487,12 @@ function RadioPage() {
     });
 
     return () => {
-      audio.removeEventListener("ended", onEnded);
       audio.removeEventListener("error", onError);
       audio.removeEventListener("timeupdate", onTimeUpdate);
       document.removeEventListener("visibilitychange", onVisible);
       audio.pause();
     };
-  }, [playhead, advance, resolveSlot]);
+  }, [playhead, resolveSlot, serverNow]);
 
   if (!started) {
     return <BeginGate onBegin={begin} />;
@@ -399,7 +545,32 @@ function RadioPage() {
         <RadioMessage>{COPY.loading}</RadioMessage>
       )}
 
+      {/* The deterministic breather (Feature B): a full-black overlay whose opacity
+          the controller writes each tick from breatherDimAt(offset) — fade-out into
+          the seam, a beat of black, fade-in on the new clip. Timed off the SHARED
+          clock, so every client darkens together; instant (no fade) under reduced
+          motion, still at the same boundary. */}
+      <div aria-hidden="true" className="radio-breather" ref={breatherRef} />
+
       <div aria-hidden="true" className="radio-scrim" />
+
+      {/* Mute toggle (Feature C): a single quiet icon top-right. A LOCAL playback
+          preference, not part of the shared schedule. */}
+      <button
+        aria-label={muted ? "Unmute the observation" : "Mute the observation"}
+        aria-pressed={muted}
+        className="radio-mute"
+        onClick={() => setMuted((m) => !m)}
+        type="button"
+      >
+        {/* Phosphor weight tracks state (DESIGN.md Iconography): fill when active
+            (muted), regular when idle (audible). */}
+        {muted ? (
+          <SpeakerSimpleSlashIcon aria-hidden="true" weight="fill" />
+        ) : (
+          <SpeakerSimpleHighIcon aria-hidden="true" weight="regular" />
+        )}
+      </button>
 
       <div className="radio-meta">
         {current.logId ? <span className="radio-log-id">{current.logId}</span> : undefined}
@@ -440,7 +611,8 @@ function RadioPage() {
       </div>
 
       {/* The observation: its own audio artifact, seeked to the join offset and
-          played over the looping silent video. Hidden; advance() runs on `ended`. */}
+          played over the looping silent video. Hidden; the schedule-clock
+          controller advances at the boundary (NOT this element's `ended`). */}
       {observationUrl ? (
         <audio key={observationUrl} preload="auto" ref={audioRef} src={observationUrl}>
           <track kind="captions" />
