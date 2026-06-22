@@ -1,5 +1,7 @@
 # RFC: Audio observation layer + radio.fluncle.com — a third enrichment artifact, then a station that plays it
 
+> **Shipped: #115/#117 — `radio.fluncle.com` is live.** This is the original planning record; read the deferred-units framing below as history, not current state.
+
 **Status:** Final (research → /taste → 4-role adversarial panel synthesized, 2026-06-20) — completeness standard applied. **Superseded on synchronization by [`radio-broadcast.md`](./radio-broadcast.md):** this RFC built radio per-client random and listed "synchronized" + "a 24/7 stream server" as non-goals; `radio-broadcast.md` reverses the first (radio is now one server-authoritative shared run — a Turso-anchored epoch + modulo clock, a polled `/radio/now-playing`, a fast offset-join) while keeping the second (still no stream server). The observation pipeline + the eligibility/DTO/host-rewrite specified here stand unchanged.
 **For:** a fresh build session (or a small team of agents) standing up the observation pipeline + the radio surface, plus Maurice for the ElevenLabs voice-ID + paid-vendor + canon calls.
 **Canon/authority:** the codebase and `AGENTS.md` arbitrate; `docs/track-lifecycle.md`, `docs/agents/hermes-agent.md`, `VOICE.md` / `packages/skills/copywriting-fluncle`, `packages/video/README.md`, and the live `fluncle` CLI + `/api/v1` are the ground truth. This is planning under `docs/`, not spec. It supersedes an earlier non-canonical radio brainstorm — the direction was right, the specifics are corrected here.

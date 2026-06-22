@@ -106,7 +106,7 @@ Once the render passes its gates, package the bundle and link it to the track. A
 2. **Upload + link** — `fluncle admin tracks video <log-id> --dir packages/video/out/<log-id>` uploads the bundle to R2 under `<log-id>/` (served at `found.fluncle.com`) and sets the track's `video_url` to the review cut. The Worker owns R2; you never hold R2 credentials.
 3. **Post (manual)** — grab `footage-silent.mp4`, upload to TikTok, attach the official sound, paste `note.txt`, post. Auto-draft is deferred.
 
-No cleanup step: the composition lives in the gitignored `workbench/` and `root.tsx` was never edited, so there is nothing to remove and nothing can leak into a commit. The durable copy is the R2 bundle; the local `workbench/` file and `out/` render are disposable scratch (an ephemeral Spinup VM discards them; a fresh agent starts clean from source).
+No cleanup step: the composition lives in the gitignored `workbench/` and `root.tsx` was never edited, so there is nothing to remove and nothing can leak into a commit. The durable copy is the R2 bundle; the local `workbench/` file and `out/` render are disposable scratch (an ephemeral agent VM discards them; a fresh agent starts clean from source).
 
 ## 9. Report
 

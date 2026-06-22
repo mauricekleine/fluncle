@@ -39,7 +39,7 @@ The **Sign-in** column says which identity manages each profile — not the lite
 | ---------- | ------------------------------- | -------------------------------------------- |
 | Web        | https://www.fluncle.com         | The archive                                  |
 | SSH        | `ssh rave.fluncle.com`          | The rave terminal                            |
-| Newsletter | the mothership, via Loops       | "Fresh bangers, every Friday, from Fluncle." |
+| Newsletter | the mothership, via Resend      | "Fresh bangers, every Friday, from Fluncle." |
 | RSS        | https://www.fluncle.com/rss.xml |                                              |
 
 ## Unclaimed / future

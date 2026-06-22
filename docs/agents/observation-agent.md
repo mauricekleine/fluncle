@@ -25,7 +25,7 @@ fluncle admin tracks observe <track_id|log_id> --script-file observation.txt [--
 
 - `--script` / `--script-file`: the voice-gated spoken text (with occasional `<break time="0.8s"/>` for v2 pauses). **Required.**
 - `--duration-ms`: the agent's `ffprobe` value for the rendered mp3 (ElevenLabs returns no duration; the Worker can't probe). Absent it, the Worker estimates from the target with a ±10% budget — **pass the probed value so the stored duration is true.**
-- `--voice-id`: overrides the configured `ELEVENLABS_VOICE_ID` (the stock library voice today; the bespoke Fluncle voice drops in by swapping the Worker var).
+- `--voice-id`: overrides the configured `ELEVENLABS_VOICE_ID` (the bespoke Fluncle voice — the live default).
 - `--model`: `eleven_multilingual_v2` (default — stable, on-brand) or `eleven_v3` (more theatrical, riskier).
 - `--context-note`: pass a pre-fetched context note to skip the Worker's firecrawl call.
 
@@ -45,12 +45,12 @@ The script is a live Fluncle voice surface, **heard** in a synthetic voice — a
 - `context_note` and the script carry **facts only** — never quote or closely paraphrase lyrics. The Worker filters known lyric domains out of the firecrawl context; a leaked lyric in a _spoken_ artifact is a copyright + voice problem at once.
 - Never invent a factual claim; the context note and track props are authoritative.
 - The observation carries **no commercial track audio** — only Fluncle's spoken voice. The artifact is internal until the operator stands up a surface that plays it.
-- The bespoke Fluncle voice is a swap-a-secret follow-on (Maurice records it + hands over `ELEVENLABS_VOICE_ID`); the pipeline ships and is judged against a stock voice first.
+- The bespoke Fluncle voice is **live** — `ELEVENLABS_VOICE_ID` points at it in `wrangler.jsonc`, and `observation.ts` tunes the voice settings (stability/style/speed) by ear for it.
 - Loudness normalization (ElevenLabs sits ~−24 LUFS vs the −16 web norm) can't run in the Worker. If observations drift in loudness, the agent runs one `loudnorm` ffmpeg pass before passing the mp3 — not a v1 blocker.
 
 ## Worker secrets (the operator sets these)
 
 - `ELEVENLABS_API_KEY` — secret (`wrangler secret put ELEVENLABS_API_KEY`).
-- `ELEVENLABS_VOICE_ID` — non-secret var in `wrangler.jsonc` (swappable; a stock voice today).
+- `ELEVENLABS_VOICE_ID` — non-secret var in `wrangler.jsonc` (the bespoke Fluncle voice).
 - `FIRECRAWL_API_KEY` — already a declared Worker secret.
 - R2 (`R2_*`) — already present.

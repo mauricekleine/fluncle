@@ -117,7 +117,7 @@ _Dropped (2026-06-20): per-coordinate web subdomains add nothing over `/log/<id>
 
 - [x] Telegram channel
 - [ ] Discord server
-- [ ] Discord bot
+- [x] Discord bot — Hermes, the self-hosted Nous Hermes gateway, fronts Discord and acts on the archive through the authenticated `fluncle` CLI (`docs/agents/hermes-agent.md`); the Friday newsletter cron even delivers its `clarify` Send button to Discord
 - [ ] Slack app/channel
 - [ ] WhatsApp Channel
 - [ ] Matrix room, optional
@@ -126,9 +126,9 @@ _Dropped (2026-06-20): per-coordinate web subdomains add nothing over `/log/<id>
 
 - [x] MusicBrainz
 - [x] Wikidata
-- [x] Last.fm — profile `fluncle` claimed + in `sameAs`; write-side sync (love-on-add) shipped (`apps/web/src/lib/server/lastfm.ts`, gated on the `LASTFM_*` Worker secrets); a one-time catalogue backfill is the open tail (see ROADMAP)
+- [x] Last.fm — profile `fluncle` claimed + in `sameAs`; write-side sync (love-on-add) shipped (`apps/web/src/lib/server/lastfm.ts`, gated on the `LASTFM_*` Worker secrets); the catalogue backfill shipped too — the on-box `fluncle-backfill` `--no-agent` cron drains the love over already-published findings, tracked by the `backfillLastfm*` reliability columns (#119)
 - [ ] ListenBrainz
-- [x] Discogs — profile `fluncle` claimed + in `sameAs`; release-ID enrichment shipped (`apps/web/src/lib/server/discogs.ts`). The optional Discogs "List of findings" write is the one unbuilt tail (`apps/web/src/lib/fluncle-links.ts` notes it)
+- [x] Discogs — profile `fluncle` claimed + in `sameAs`; release-ID enrichment shipped (`apps/web/src/lib/server/discogs.ts`), with the on-box `fluncle-backfill` `--no-agent` cron resolving release-ids over already-published findings (`backfillDiscogs*` reliability columns, #119). The optional Discogs "List of findings" write is the one unbuilt tail (`apps/web/src/lib/fluncle-links.ts` notes it)
 - [ ] 1001Tracklists
 - [ ] Rate Your Music
 - [ ] Bandcamp

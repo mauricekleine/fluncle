@@ -3,7 +3,7 @@
 //
 // Zero npm dependencies. External tools only: `ffmpeg` (on PATH) and network
 // access (Deezer/iTunes for the preview). It does NOT import any Fluncle code, so
-// it runs anywhere the skill is installed — a local session or a Spinup microVM.
+// it runs anywhere the skill is installed — a local session or the Hermes box.
 //
 // Given an artist + title (the agent gets these from `fluncle track get --json`),
 // it resolves a legal preview clip, decodes it, and emits an analysis JSON on
