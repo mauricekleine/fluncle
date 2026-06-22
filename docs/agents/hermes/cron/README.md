@@ -12,6 +12,24 @@ The three crons are the queue-driven backbone the brief specifies — no on-add 
 
 NOT included (deliberately, per the brief): the Last.fm / Discogs **backfills** (their reliability columns — `lastfmLovedAt`, `discogsStatus` — are not built yet) and the **newsletter** (owned by its own RFC).
 
+## The `--no-agent` enrichment cron (Spinup → Hermes migration)
+
+PREPARED, NOT YET DEPLOYED. Source: [`docs/spinup-to-hermes-enrichment-brief.md`](../../../spinup-to-hermes-enrichment-brief.md), build order #3 (repo parts). This is the one cron that does **not** carry a prompt: enrichment is pure compute (get → analyze → update, zero LLM tokens), so it is a `--no-agent --script` job. Its script source lives beside the build context at [`../scripts/`](../scripts/) — a bash wrapper (`enrich-sweep.sh`) the cron runner execs by extension, which in turn `exec`s the bun orchestrator (`enrich-sweep.ts`).
+
+| Job                    | Schedule | What it does                                                                                                                                                                                                                                                                            | Server slice                                   |
+| ---------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `fluncle-enrich-sweep` | every 5m | Drain `admin tracks enrich-queue`; per finding (bounded batch, cap 4/tick): `tracks get` → `analyze-track.ts` (ffmpeg + DSP on the box, no Spinup) → `admin tracks update --bpm [--key] --features --status done` (or `--status failed` when no preview). Idempotent; no-op when empty. | The existing `admin tracks update` write-back. |
+
+**Every 5m, not hourly:** the sweep burns no tokens and no-ops on an empty queue, so it runs far more often than the hourly agent crons — a new find enriches within minutes (replacing the dropped fast on-add path). Wire it on the devbox **after** the image carries ffmpeg + bun (Dockerfile, build order #1) and the `fluncle-track-enrichment` skill is installed under `~/.hermes/skills/` (→ `/opt/data/skills/`, build order #2):
+
+```bash
+# Deploy the script pair, then create the no-agent cron.
+scp docs/agents/hermes/scripts/enrich-sweep.{sh,ts} <box>:~/.hermes/scripts/
+hermes cron create "every 5m" --no-agent --script enrich-sweep.sh --deliver local
+```
+
+This is the migration's replacement for `fluncle-enrich-self-heal` (which fires the Spinup agent). Order the cutover so there's no gap: prove this cron drains the queue **before** the Worker-cleanup PR removes the Spinup trigger + SDK + secrets (brief build order #4–#5, a **separate later step** — not in this PR). The hourly self-heal row above stays until then.
+
 ## The cron mechanism (verified against upstream)
 
 Source: <https://hermes-agent.nousresearch.com/docs/user-guide/features/cron> (fetched 2026-06-21).
@@ -19,7 +37,7 @@ Source: <https://hermes-agent.nousresearch.com/docs/user-guide/features/cron> (f
 - **Where jobs live:** `~/.hermes/cron/jobs.json` on the box. Per-run output is saved to `~/.hermes/cron/output/{job_id}/{timestamp}.md`. (Crons are **not** in `config.yaml` — `config.yaml` only carries cron _defaults_ like `cron.wrap_response` / `cron.script_timeout_seconds`.)
 - **Scheduler:** the gateway ticks every 60 s and runs any due job in a **completely fresh, isolated agent session**. The prompt must be self-contained — there is no carried conversation. That is why each `prompt` below restates its whole task.
 - **Schedule formats:** relative one-shot (`30m`, `2h`), recurring interval (`every 1h`, `every 2h`), cron expression (`0 * * * *`), or ISO timestamp. These three use `every 1h`.
-- **Agent job vs. no-agent job:** an **agent** job carries a `prompt` and reasons through the task (these three — they read a queue and act per item, and the observation one authors copy). A **no-agent** job carries `no_agent: true` + a `script` and ships its stdout, skipping the LLM (watchdogs / heartbeats — not used here).
+- **Agent job vs. no-agent job:** an **agent** job carries a `prompt` and reasons through the task (these three — they read a queue and act per item, and the observation one authors copy). A **no-agent** job carries `no_agent: true` + a `script` and ships its stdout, skipping the LLM (the enrichment sweep above is the one no-agent job; the three hourly jobs are agent jobs).
 - **Delivery (`deliver`):** `local` saves the run output under `~/.hermes/cron/output/` with no chat post; `origin`, `discord`, `discord:#channel`, etc. post to a channel; `all` fans out. These are silent self-heal loops, so they're set to `local`. Switch to `discord` if you want a per-run digest in the crew feed.
 - **Chaining (`context_from`):** a job can prepend another job's most recent output as context. **Not used** here: the context-note → observation handoff is durable **server state** (the stored `context_note`), not cron-run output, so the observation cron reads the queue directly rather than chaining off the context cron's stdout. (This is intentional — chaining would couple the two jobs' ticks; the queue decouples them, which is the whole point of the context⊥observation split.)
 - **Repeat:** intervals (`every 1h`) and cron expressions repeat **forever** by default; a one-shot runs once. `repeat: <n>` caps the run count. Left `null` here (forever).
