@@ -185,6 +185,38 @@ export async function getTrackByIdOrLogId(idOrLogId: string): Promise<TrackListI
 }
 
 /**
+ * Hydrate a batch of findings by their Log IDs in ONE query (no N+1), keyed by
+ * `logId` for O(1) lookup. The edition-email render holds only each finding's tiny
+ * `{ logId, why }` reference (the schema keeps it small + current), so the render
+ * resolves the live `Artist — Title` + Spotify link from here. A logId with no live
+ * finding is simply absent from the map; bound args only, never interpolated.
+ */
+export async function getTracksByLogIds(logIds: string[]): Promise<Record<string, TrackListItem>> {
+  const unique = [...new Set(logIds.filter((id) => id.trim()))];
+
+  if (unique.length === 0) {
+    return {};
+  }
+
+  const db = await getDb();
+  const placeholders = unique.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: unique,
+    sql: `select ${TRACK_SELECT} from tracks where log_id in (${placeholders})`,
+  });
+
+  const byLogId: Record<string, TrackListItem> = {};
+
+  for (const row of typedRows<TrackRow>(result.rows)) {
+    if (row.log_id) {
+      byLogId[row.log_id] = toTrackListItem(row);
+    }
+  }
+
+  return byLogId;
+}
+
+/**
  * Read the INTERNAL `context_note` for a track (the Firecrawl-derived facts).
  * `context_note` is deliberately OUTSIDE `TRACK_SELECT` (internal-only fuel,
  * never surfaced through `toTrackListItem`), so the observe steps read it

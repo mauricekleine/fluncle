@@ -154,7 +154,7 @@ export async function sendEdition(
     throw new ApiError("missing_subject", "An edition needs a subject before it can be sent", 409);
   }
 
-  const html = renderEditionEmailHtml(draft);
+  const html = await renderEditionEmailHtml(draft);
 
   const broadcast = await createBroadcast({
     editionId: id,
