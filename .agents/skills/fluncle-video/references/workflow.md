@@ -23,7 +23,7 @@ BPM comes from the audio analysis already in the props — measured off the actu
 
 In order:
 
-1. **Diversity check (doctrine 3).** Run `fluncle admin vehicles --json` — the recently-used vehicles, newest first — the diversity ledger. List the vehicles already used and choose one clearly different; parallel runs converge on the same idea (voronoi/cellular, horizontal lines) unless each deliberately diverges. Also honor the brief and the SKILL.md failure modes.
+1. **Diversity check (doctrine 3).** Run `fluncle admin tracks vehicles --json` — the recently-used vehicles, newest first — the diversity ledger. List the vehicles already used and choose one clearly different; parallel runs converge on the same idea (voronoi/cellular, horizontal lines) unless each deliberately diverges. Also honor the brief and the SKILL.md failure modes.
 2. **Commit to the whole-frame register, THEN the driver (doctrine 1).** First decide what the WHOLE frame is: **fully abstract** (the field itself is the image, edge to edge) or **recognizably real, shown abstractly** (the eye can name it — a flock, flowers, a wing); never the uncanny middle, and never a small object on a dead background. Then pick the ONE driver inside it — the full-field surface ITSELF, or a focal subject that integrates the whole frame. orb / lines / fractal / glass / glitch, or one you invent; everything else supports it. Let `track.features` (the enrichment spectral summary in props, when present) steer the choice — a sub-bass-heavy track (`subBassRatio`) wants a dense, heavy vehicle; a bright high-`centroidHz` one wants treble sparkle and fine detail; a busy high-`onsetRate` one wants a snappier field. Decide how the one committed climax is expressed — the vehicle's OWN material intensifying in the SCENE's palette (a crest igniting, a resolution front completing, a body's limb surging), never a second celestial body and never a bolted-on gold/yellow sun. Eclipse Gold is optional, reached only when the vehicle's own material genuinely runs hot; a cool scene climaxes cool.
 3. **Choose the texture family** (nebula / analog / dither / paint / fluent / duotone / smear — see MOODBOARD.md) that fits the tune. A liquid roller wants drift, nebula, or fluent; a neuro stomper wants dither, glitch, hard onset flashes; a gel-lit duotone suits the meditative ones; a headlong, propulsive track suits smear (velocity blur). Pick a DIFFERENT region than the last few renders — the moodboard is a map of distinct looks, not an average to converge on.
 4. **Write a two-sentence journey:** from where, through what, arriving where — matched to the song's energy curve. Name where the drop lands and how the vehicle ignites there.
@@ -103,10 +103,10 @@ Once the render passes its gates, package the bundle and link it to the track. A
 
    The track MUST have a Log ID (no Log ID → no ship; backfill the ISRC first). Requires an existing render (`out/<trackId>.mp4`) — run step 7 first.
 
-2. **Upload + link** — `fluncle admin track video <log-id> --dir packages/video/out/<log-id>` uploads the bundle to R2 under `<log-id>/` (served at `found.fluncle.com`) and sets the track's `video_url` to the review cut. The Worker owns R2; you never hold R2 credentials.
+2. **Upload + link** — `fluncle admin tracks video <log-id> --dir packages/video/out/<log-id>` uploads the bundle to R2 under `<log-id>/` (served at `found.fluncle.com`) and sets the track's `video_url` to the review cut. The Worker owns R2; you never hold R2 credentials.
 3. **Post (manual)** — grab `footage-silent.mp4`, upload to TikTok, attach the official sound, paste `note.txt`, post. Auto-draft is deferred.
 
-No cleanup step: the composition lives in the gitignored `workbench/` and `root.tsx` was never edited, so there is nothing to remove and nothing can leak into a commit. The durable copy is the R2 bundle; the local `workbench/` file and `out/` render are disposable scratch (an ephemeral Spinup VM discards them; a fresh agent starts clean from source).
+No cleanup step: the composition lives in the gitignored `workbench/` and `root.tsx` was never edited, so there is nothing to remove and nothing can leak into a commit. The durable copy is the R2 bundle; the local `workbench/` file and `out/` render are disposable scratch (an ephemeral agent VM discards them; a fresh agent starts clean from source).
 
 ## 9. Report
 

@@ -6,9 +6,9 @@ The deployed web app owns Fluncle server-side API routes. The CLI is a thin HTTP
 
 ```bash
 bun run --cwd apps/cli fluncle recent [--limit 10] [--json]
-bun run --cwd apps/cli fluncle admin queue [--limit 10] [--json]
-bun run --cwd apps/cli fluncle admin vehicles [--limit 10] [--json]
-bun run --cwd apps/cli fluncle admin add <spotify-url-or-uri> [--note "text"] [--dry-run] [--json]
+bun run --cwd apps/cli fluncle admin tracks queue [--limit 10] [--json]
+bun run --cwd apps/cli fluncle admin tracks vehicles [--limit 10] [--json]
+bun run --cwd apps/cli fluncle admin tracks publish <spotify-url-or-uri> [--note "text"] [--dry-run] [--json]
 bun run --cwd apps/cli fluncle admin auth spotify
 ```
 
@@ -74,7 +74,7 @@ Recent:
 
 ## Publish Flow
 
-`fluncle admin add` calls `POST /api/admin/tracks` with `Authorization: Bearer <FLUNCLE_API_TOKEN>`. The server should:
+`fluncle admin tracks publish` calls `POST /api/admin/tracks` with `Authorization: Bearer <FLUNCLE_API_TOKEN>`. The server should:
 
 1. Parse track ID.
 2. Check Turso duplicate by `track_id`.
@@ -92,7 +92,7 @@ If Spotify fails, do not post to Telegram. If Telegram fails after Spotify succe
 Use a duplicate track for non-mutating checks:
 
 ```bash
-FLUNCLE_API_TOKEN=... bun run --cwd apps/cli fluncle admin add "spotify:track:2fyMcl41UQzD2WlBtJ0c8G" --json
+FLUNCLE_API_TOKEN=... bun run --cwd apps/cli fluncle admin tracks publish "spotify:track:2fyMcl41UQzD2WlBtJ0c8G" --json
 ```
 
 Use recent for public API checks:

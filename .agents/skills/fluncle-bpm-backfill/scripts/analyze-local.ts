@@ -334,9 +334,9 @@ function multiWindow(samples: Float32Array): {
     const whole = estimateBpm(samples);
 
     return {
+      agreement: whole.bpm === null ? 0 : 1,
       bpm: whole.bpm,
       confidence: whole.bpmConfidence,
-      agreement: whole.bpm === null ? 0 : 1,
       windows: 1,
     };
   }
@@ -354,7 +354,7 @@ function multiWindow(samples: Float32Array): {
     }
 
     const key = Math.round(seg.bpm * 2) / 2;
-    const cur = buckets.get(key) ?? { sumConf: 0, sumBpm: 0, votes: 0 };
+    const cur = buckets.get(key) ?? { sumBpm: 0, sumConf: 0, votes: 0 };
     cur.sumConf += seg.bpmConfidence;
     cur.sumBpm += seg.bpm * seg.bpmConfidence;
     cur.votes += 1;
@@ -370,16 +370,16 @@ function multiWindow(samples: Float32Array): {
   }
 
   if (!best || best.sumConf <= 0) {
-    return { bpm: null, confidence: 0, agreement: 0, windows };
+    return { agreement: 0, bpm: null, confidence: 0, windows };
   }
 
   // Confidence-weighted mean within the winning bucket.
   const bpm = Number((best.sumBpm / best.sumConf).toFixed(2));
 
   return {
+    agreement: best.votes,
     bpm,
     confidence: Number((best.sumConf / Math.max(1, windows)).toFixed(3)),
-    agreement: best.votes,
     windows,
   };
 }
@@ -407,14 +407,14 @@ try {
   console.log(
     JSON.stringify(
       {
+        agreement: scan.agreement,
         audioFile,
-        durationS,
         bpm: scan.bpm,
         confidence: scan.confidence,
-        agreement: scan.agreement,
-        windows: scan.windows,
-        wholeTrack: { bpm: whole.bpm, confidence: whole.bpmConfidence },
+        durationS,
         onsetRate: whole.onsetRate,
+        wholeTrack: { bpm: whole.bpm, confidence: whole.bpmConfidence },
+        windows: scan.windows,
       },
       null,
       2,

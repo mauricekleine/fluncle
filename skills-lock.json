@@ -26,7 +26,7 @@
     "fluncle-bpm-backfill": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-bpm-backfill",
       "sourceType": "local",
-      "computedHash": "02282e6eeed2afb9fd4d7be51b93752f049dfede060f9fba7600ebf1be10cb60"
+      "computedHash": "0cff66229c8b123db7cb1ee964735100b7ed3f8dffda99599775969419501ce7"
     },
     "fluncle-goal-writer": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/goal-writer",
@@ -36,22 +36,22 @@
     "fluncle-hermes-operator": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-hermes-operator",
       "sourceType": "local",
-      "computedHash": "aaf7a0cc299806a39be9b769639895f394ebad177fe7fdcaf5e5a8e22de43e3f"
+      "computedHash": "1f74b12d373fa81fb0038730d8379778824e7074fbf30db6f27ba36e8503b659"
     },
     "fluncle-mixtapes": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-mixtapes",
       "sourceType": "local",
-      "computedHash": "c814c1165a67261c28964e5e64bfc1e0997d623509690249a569c65de001a5cf"
+      "computedHash": "6a519615c8ec222167ab3972fa11d6b935dbb33a7df9ed5900ee455837bd0d53"
     },
     "fluncle-operator": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-operator",
       "sourceType": "local",
-      "computedHash": "306bd9ce5d6ef4c09eac7d7f41136d0fdaad589ac37b332cf63047dfd6a2a402"
+      "computedHash": "1fa0bd42bfb690783d027f718656eea43f0b0e4cf967274115f8117a1b2ec6f2"
     },
     "fluncle-publish": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-publish",
       "sourceType": "local",
-      "computedHash": "e3dd9a79df700b927ae1127d6b6b73379720b4b62449c08dca98aa4e712a50d5"
+      "computedHash": "0782df2411af5e76666e242b16d15df053f7f18441e58f4d055e5bb38f6b0038"
     },
     "fluncle-rfc-writer": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-rfc-writer",
@@ -61,12 +61,12 @@
     "fluncle-track-enrichment": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-track-enrichment",
       "sourceType": "local",
-      "computedHash": "7ec477725a444936767a138aca253eaa9cc9557071c9245769568ca1c7ea8ea6"
+      "computedHash": "efe35ceab91ced6929208f1d63e6c1e32f891c5ed880a1039639e5f87b10affc"
     },
     "fluncle-video": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-video",
       "sourceType": "local",
-      "computedHash": "deb9759a56c4d49d49f267865553ae6540e32e42e3736afa80836e2051661b5c"
+      "computedHash": "4a0adddd04a391b1b073bb8bf9ee997aa7bdfc82d776d1315cff5ca82770aa86"
     },
     "hetzner-devbox": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/hetzner-devbox",
