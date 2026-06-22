@@ -4,7 +4,7 @@
 // other domain's file is touched.
 
 import { ORPCError } from "@orpc/server";
-import { createSubmission, type SubmissionInput } from "../submissions";
+import { createSubmission } from "../submissions";
 import { apiFault, type Implementer } from "./_shared";
 
 /**
@@ -18,11 +18,12 @@ import { apiFault, type Implementer } from "./_shared";
  */
 export function submissionsHandlers(os: Implementer) {
   // `submit_track` — submit a finding for review. Port of /api/submissions POST:
-  // the contract has already parsed the JSON body into `input` (a loose object
-  // mirroring `SubmissionInput`); pass it through and shape the success envelope.
+  // the contract has already parsed the JSON body into `input` (the inferred
+  // `SubmissionBody` — the same type the server accepts, so no cast); pass it
+  // through and shape the success envelope.
   const submitTrackHandler = os.submit_track.handler(async ({ context, input }) => {
     try {
-      const submission = await createSubmission(input as SubmissionInput, context.request);
+      const submission = await createSubmission(input, context.request);
 
       return { ok: true, submission } as const;
     } catch (error) {

@@ -30,6 +30,13 @@ const SubmissionBodySchema = z.looseObject({
 });
 
 /**
+ * The inferred submission-body input — the single source of truth the server's
+ * `createSubmission` accepts (replacing the hand-mirrored `SubmissionInput`).
+ * LOOSE/all-unknown by design (see above); `validateSubmissionInput` narrows it.
+ */
+export type SubmissionBody = z.infer<typeof SubmissionBodySchema>;
+
+/**
  * `submit_track` → `POST /submissions` (operationId `submitTrack`).
  *
  * Submit a finding for review (a recommendation, not a publish). The success

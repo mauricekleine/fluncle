@@ -27,13 +27,28 @@ export function setEnvProfile(profile: string | undefined): void {
 export function loadEnv(keys: readonly EnvKey[]): Record<EnvKey, string> {
   loadConfig();
 
-  const missing = keys.filter((key) => !process.env[key]);
+  const result = {} as Record<EnvKey, string>;
+  const missing: EnvKey[] = [];
+
+  for (const key of keys) {
+    const value = process.env[key];
+
+    // Narrow honestly: read once and check, instead of a `!` that lies about the
+    // `string | undefined` type. A key cleared between this read and use can't slip
+    // through typed as `string`.
+    if (value === undefined) {
+      missing.push(key);
+      continue;
+    }
+
+    result[key] = value;
+  }
 
   if (missing.length > 0) {
     throw new Error(`Missing required env vars: ${missing.join(", ")}`);
   }
 
-  return Object.fromEntries(keys.map((key) => [key, process.env[key]!])) as Record<EnvKey, string>;
+  return result;
 }
 
 export function getApiBaseUrl(): string {
@@ -64,5 +79,5 @@ function getEnvProfile(): EnvProfile {
 }
 
 function isEnvProfile(value: string): value is EnvProfile {
-  return envProfiles.includes(value as EnvProfile);
+  return (envProfiles as readonly string[]).includes(value);
 }

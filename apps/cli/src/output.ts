@@ -2,6 +2,22 @@ import { type ApiFailure } from "@fluncle/contracts";
 
 export type { ApiFailure as JsonFailure };
 
+/**
+ * Narrow an untyped parsed JSON body to the `ApiFailure` shape the API emits on a
+ * non-2xx (`{ ok: false, code, message }`). The HTTP client reads `code`/`message`
+ * off the error arm; this guard replaces a blind `data as JsonFailure` so a
+ * malformed/shapeless error body can't be read as a failure (it falls back to the
+ * status line instead).
+ */
+export function isJsonFailure(value: unknown): value is ApiFailure {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as ApiFailure).code === "string" &&
+    typeof (value as ApiFailure).message === "string"
+  );
+}
+
 export class CliError extends Error {
   code: string;
 

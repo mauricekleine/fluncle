@@ -54,33 +54,6 @@ export async function listMixtapeSocialPosts(mixtapeId: string): Promise<Mixtape
 }
 
 /**
- * Record a non-terminal distribution state — `uploading` when bytes start moving,
- * `failed` when a leg dies. Idempotent on (mixtape, platform); coalesces so a
- * retry never clobbers an already-recorded `external_id`/`url`/publish stamp.
- */
-export async function markMixtapeDistribution(
-  mixtapeId: string,
-  platform: MixtapePlatform,
-  status: "uploading" | "failed",
-  externalId?: string,
-): Promise<void> {
-  const now = new Date().toISOString();
-  const db = await getDb();
-
-  await db.execute({
-    args: [crypto.randomUUID(), mixtapeId, platform, status, externalId ?? null, now, now, status],
-    sql: `insert into mixtape_social_posts (id, mixtape_id, platform, status, external_id, created_at, updated_at)
-          values (?, ?, ?, ?, ?, ?, ?)
-          on conflict(mixtape_id, platform) do update set
-            status = ?,
-            external_id = coalesce(excluded.external_id, mixtape_social_posts.external_id),
-            updated_at = excluded.updated_at`,
-  });
-
-  await touchMixtape(mixtapeId, now);
-}
-
-/**
  * The terminal success path: record the platform post as `published` (its `url` is
  * the public listen link) and flip the mixtape `distributing → published` if this is
  * its first live link. Idempotent on (mixtape, platform) and on the flip — a retry
@@ -165,16 +138,4 @@ export async function finalizeMixtapeDistribution(
   }
 
   return mixtape;
-}
-
-// A distribution change alters the mixtape's public surfaces (the published rows
-// feed /log, RSS, llms.txt) and the on-the-fly cover's `?v=<updatedAt>` cache key,
-// so it counts as a content change — bump updated_at.
-async function touchMixtape(mixtapeId: string, now: string): Promise<void> {
-  const db = await getDb();
-
-  await db.execute({
-    args: [now, mixtapeId],
-    sql: `update mixtapes set updated_at = ? where id = ?`,
-  });
 }

@@ -1,4 +1,10 @@
+import { formatError } from "@fluncle/contracts/util";
 import { ApiError } from "./spotify";
+
+// `formatError` is the byte-shared error-stringifier — one definition in
+// `@fluncle/contracts/util` (the CLI reads the same). Re-exported so existing
+// `./retry` importers keep their entrypoint.
+export { formatError };
 
 export async function withRetries<T>(
   label: string,
@@ -27,12 +33,4 @@ export async function withRetries<T>(
   }
 
   throw new Error(`${label} failed after ${attempts} attempts: ${formatError(lastError)}`);
-}
-
-export function formatError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return String(error);
 }

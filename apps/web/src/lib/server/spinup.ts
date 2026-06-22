@@ -64,7 +64,13 @@ export type EnrichSweepEntry = {
   trackId: string;
 };
 
-export type EnrichSweepResult = {
+// The CORE sweep result — the two finding lists. Distinct from the full
+// `EnrichSweepResult` envelope the contract + CLI carry (`{ ok, reEnriched,
+// reEnrichedCount, skipped, skippedCount }`): the `ok`/count envelope is added at
+// the ROUTE layer (orpc/admin-backfills.ts + the enrich-sweep route), so this
+// internal helper returns only the lists. Named apart so the subset can't be
+// mistaken for the wire envelope.
+export type EnrichSweepCore = {
   /** The findings re-triggered this run (status they were picked up in). */
   reEnriched: EnrichSweepEntry[];
   /** Queued findings with no Log ID yet (can't enrich without the R2 key). */
@@ -79,7 +85,7 @@ export type EnrichSweepResult = {
 // admin-gated (its route carries the auth); the CLI/Raycast reach it via that
 // admin endpoint, never holding the sk_agent_… key. NEVER throws per track —
 // one bad finding must not abort the rest of the sweep.
-export async function sweepEnrichmentQueue(limit: number): Promise<EnrichSweepResult> {
+export async function sweepEnrichmentQueue(limit: number): Promise<EnrichSweepCore> {
   const { tracks } = await listTracks({ limit, order: "asc", status: "queue" });
   const reEnriched: EnrichSweepEntry[] = [];
   const skipped: EnrichSweepEntry[] = [];

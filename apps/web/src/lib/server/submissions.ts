@@ -1,4 +1,5 @@
 import { type Submission, type SubmissionSource, type SubmissionStatus } from "@fluncle/contracts";
+import { type SubmissionBody } from "@fluncle/contracts/orpc";
 
 export type { Submission };
 
@@ -14,18 +15,10 @@ const contactMaxLength = 120;
 const rateLimitWindowMs = 60 * 60 * 1000;
 const rateLimitMaxSubmissions = 5;
 
-export type SubmissionInput = {
-  spotifyTrackId?: unknown;
-  spotifyUrl?: unknown;
-  title?: unknown;
-  artists?: unknown;
-  album?: unknown;
-  artworkUrl?: unknown;
-  note?: unknown;
-  contact?: unknown;
-  source?: unknown;
-  honeypot?: unknown;
-};
+// The submission body is the contract's inferred input (`@fluncle/contracts/orpc`),
+// the single source of truth — no parallel hand-mirror to drift. LOOSE/all-unknown
+// by design; `validateSubmissionInput` narrows it.
+export type SubmissionInput = SubmissionBody;
 
 type SubmissionRow = {
   id: string;
