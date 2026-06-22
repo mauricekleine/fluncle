@@ -60,7 +60,11 @@ describe("placeStars", () => {
     }
 
     // The frontier sector pushes the newer finding to a larger ring.
-    expect(stars[1].radius).toBeGreaterThan(stars[0].radius);
+    const [first, second] = stars;
+    if (first === undefined || second === undefined) {
+      throw new Error("expected at least two placed stars");
+    }
+    expect(second.radius).toBeGreaterThan(first.radius);
   });
 });
 

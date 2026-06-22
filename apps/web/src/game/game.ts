@@ -217,12 +217,16 @@ export function createGame(container: HTMLElement): Game {
         endT = 0;
         phase = "end";
         break;
-      case "logged":
+      case "logged": {
         card = { shownAt: nowS, starIndex: event.starIndex };
-        state.stars[event.starIndex].lifetimeLogged = true;
-        persistLoggedLogId(state.stars[event.starIndex].logId);
-        pushTelemetry(`Logged fluncle://${state.stars[event.starIndex].logId}.`);
+        const loggedStar = state.stars[event.starIndex];
+        if (loggedStar !== undefined) {
+          loggedStar.lifetimeLogged = true;
+          persistLoggedLogId(loggedStar.logId);
+          pushTelemetry(`Logged fluncle://${loggedStar.logId}.`);
+        }
         break;
+      }
       case "low-fuel":
         pushTelemetry("Tank low.");
         break;
@@ -259,6 +263,10 @@ export function createGame(container: HTMLElement): Game {
 
     const star = state.stars[card.starIndex];
     const inOrbit = state.orbitIndex === card.starIndex;
+
+    if (star === undefined) {
+      return undefined;
+    }
 
     return {
       age: nowS - card.shownAt,
@@ -386,7 +394,7 @@ export function createGame(container: HTMLElement): Game {
       wasOrbiting = orbiting;
     }
 
-    while (telemetry.length > 0 && telemetry[0].until < nowS) {
+    while (telemetry[0] !== undefined && telemetry[0].until < nowS) {
       telemetry.shift();
     }
 
@@ -528,7 +536,13 @@ export function createGame(container: HTMLElement): Game {
           return "Nothing left to log out here.";
         }
 
-        sim.stars[carrier.starIndex].collected = true;
+        const carrierStar = sim.stars[carrier.starIndex];
+
+        if (carrierStar === undefined) {
+          return "Nothing left to log out here.";
+        }
+
+        carrierStar.collected = true;
         sim.collectedCount += 1;
         sim.events.push({ kind: "logged", starIndex: carrier.starIndex });
 
@@ -536,7 +550,7 @@ export function createGame(container: HTMLElement): Game {
           sim.events.push({ kind: "all-found" });
         }
 
-        return `Logged fluncle://${sim.stars[carrier.starIndex].logId}. No flying required.`;
+        return `Logged fluncle://${carrierStar.logId}. No flying required.`;
       },
       mute: () => {
         audio.setMuted(!audio.muted());

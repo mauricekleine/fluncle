@@ -32,22 +32,30 @@ describe("Galaxy lifetime progress", () => {
 
     const sim = createSim(stars);
 
-    expect(sim.stars[0].lifetimeLogged).toBe(true);
-    expect(sim.stars[0].collected).toBe(false);
+    const firstStar = sim.stars[0];
+    if (firstStar === undefined) {
+      throw new Error("expected at least one star");
+    }
+    expect(firstStar.lifetimeLogged).toBe(true);
+    expect(firstStar.collected).toBe(false);
     expect(sim.collectedCount).toBe(0);
   });
 
   it("tow or manual restart clears active cargo only", () => {
     const sim = createSim([makeStar("241.0.1A")]);
 
-    sim.stars[0].lifetimeLogged = true;
-    sim.stars[0].collected = true;
+    const firstStar = sim.stars[0];
+    if (firstStar === undefined) {
+      throw new Error("expected at least one star");
+    }
+    firstStar.lifetimeLogged = true;
+    firstStar.collected = true;
     sim.collectedCount = 1;
 
     resetSim(sim, false);
 
-    expect(sim.stars[0].collected).toBe(false);
-    expect(sim.stars[0].lifetimeLogged).toBe(true);
+    expect(firstStar.collected).toBe(false);
+    expect(firstStar.lifetimeLogged).toBe(true);
     expect(collectLifetimeLogIds(sim)).toEqual(["241.0.1A"]);
   });
 

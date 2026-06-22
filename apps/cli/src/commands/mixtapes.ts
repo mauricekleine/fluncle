@@ -312,11 +312,15 @@ function parseCueSheet(text: string): CueEntry[] {
 
     const match = trimmed.match(/^(\d{1,2}:\d{2}(?::\d{2})?)\s+(.+)$/);
     if (match) {
-      const startMs = parseDuration(match[1]);
+      const [, time, ref] = match;
+      if (time === undefined || ref === undefined) {
+        continue;
+      }
+      const startMs = parseDuration(time);
       if (startMs === null) {
         continue;
       }
-      entries.push({ ref: match[2].trim(), startMs });
+      entries.push({ ref: ref.trim(), startMs });
     } else {
       entries.push({ ref: trimmed });
     }
@@ -341,12 +345,18 @@ function parseDuration(input: string): number | null {
     }
     if (parts.length === 3) {
       const [hours, minutes, seconds] = nums;
+      if (hours === undefined || minutes === undefined || seconds === undefined) {
+        return null;
+      }
       if (minutes >= 60 || seconds >= 60) {
         return null;
       }
       return Math.round((hours * 3600 + minutes * 60 + seconds) * 1000);
     }
     const [minutes, seconds] = nums;
+    if (minutes === undefined || seconds === undefined) {
+      return null;
+    }
     if (seconds >= 60) {
       return null;
     }

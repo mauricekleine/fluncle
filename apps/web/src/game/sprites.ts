@@ -35,8 +35,14 @@ function makeSprite(map: string[]): HTMLCanvasElement {
   }
 
   for (let y = 0; y < map.length; y++) {
+    const row = map[y];
+    if (row === undefined) {
+      continue;
+    }
+
     for (let x = 0; x < w; x++) {
-      const ink = INK[map[y][x]];
+      const cell = row[x];
+      const ink = cell === undefined ? undefined : INK[cell];
 
       if (ink) {
         ctx.fillStyle = ink;
@@ -83,8 +89,14 @@ export function makeShipSprite(): HTMLCanvasElement {
   }
 
   for (let y = 0; y < SHIP_MAP.length; y++) {
+    const row = SHIP_MAP[y];
+    if (row === undefined) {
+      continue;
+    }
+
     for (let x = 0; x < SHIP_SIZE; x++) {
-      const ink = INK[SHIP_MAP[y][x]];
+      const cell = row[x];
+      const ink = cell === undefined ? undefined : INK[cell];
 
       if (ink) {
         ctx.fillStyle = ink;

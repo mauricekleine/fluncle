@@ -189,7 +189,10 @@ export function createAudioManager(): AudioManager {
     // In orbit: the listening moment. Full volume, dead center, fresh log or
     // a revisit alike.
     if (state.orbitIndex >= 0) {
-      return { gain: 1, pan: 0, trackId: state.stars[state.orbitIndex].trackId };
+      const orbited = state.stars[state.orbitIndex];
+      if (orbited !== undefined) {
+        return { gain: 1, pan: 0, trackId: orbited.trackId };
+      }
     }
 
     // Sticky carrier: between two stars the literal nearest flips constantly,
@@ -203,7 +206,7 @@ export function createAudioManager(): AudioManager {
     for (let index = 0; index < state.stars.length; index++) {
       const star = state.stars[index];
 
-      if (star.collected) {
+      if (star === undefined || star.collected) {
         continue;
       }
 
@@ -241,6 +244,11 @@ export function createAudioManager(): AudioManager {
     }
 
     const star = state.stars[bestIndex];
+
+    if (star === undefined) {
+      return undefined;
+    }
+
     const bearing = Math.atan2(star.y - ship.y, star.x - ship.x) - ship.heading;
 
     return {
@@ -274,7 +282,10 @@ export function createAudioManager(): AudioManager {
     const carrier = nearestCarrier(state);
 
     if (carrier && carrier.distance < state.config.audioRange * 1.5) {
-      void loadBuffer(state.stars[carrier.starIndex].trackId);
+      const carrierStar = state.stars[carrier.starIndex];
+      if (carrierStar !== undefined) {
+        void loadBuffer(carrierStar.trackId);
+      }
     }
 
     if (thrust) {
@@ -353,7 +364,12 @@ export function createAudioManager(): AudioManager {
         blip(523, 0, 0.09);
         blip(784, 0.1, 0.09);
         blip(1046, 0.2, 0.2);
-        void loadBuffer(state.stars[event.starIndex].trackId);
+        {
+          const loggedStar = state.stars[event.starIndex];
+          if (loggedStar !== undefined) {
+            void loadBuffer(loggedStar.trackId);
+          }
+        }
         break;
       case "low-fuel":
         startAlarm();

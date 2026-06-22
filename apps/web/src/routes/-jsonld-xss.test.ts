@@ -77,8 +77,12 @@ describe("JSON-LD output encoding (stored-XSS guard)", () => {
     const parsed = JSON.parse(playlist as string) as {
       track: Array<{ inAlbum: { name: string }; name: string }>;
     };
-    expect(parsed.track[0].name).toBe(PAYLOAD);
-    expect(parsed.track[0].inAlbum.name).toBe(PAYLOAD);
+    const firstTrack = parsed.track[0];
+    if (firstTrack === undefined) {
+      throw new Error("expected at least one track in the playlist JSON-LD");
+    }
+    expect(firstTrack.name).toBe(PAYLOAD);
+    expect(firstTrack.inAlbum.name).toBe(PAYLOAD);
   });
 
   it("log page MusicRecording neutralizes a </script> in the title and the operator note", () => {

@@ -96,9 +96,14 @@ function runEligibleQuery() {
     (t) => t.video_squared_at !== null && t.observation_audio_url !== null,
   );
 
-  return eligible.length > 0
-    ? [baseRow(eligible[Math.floor(Math.random() * eligible.length)])]
-    : [];
+  if (eligible.length === 0) {
+    return [];
+  }
+  const picked = eligible[Math.floor(Math.random() * eligible.length)];
+  if (picked === undefined) {
+    throw new Error("expected a picked eligible track");
+  }
+  return [baseRow(picked)];
 }
 
 // The mock emulates the real `order by random() limit 1` with `Math.random()`.

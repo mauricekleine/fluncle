@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../-alias";
 import { getAccountExport } from "../../../lib/server/account-data";
+import { requireParam } from "../../../lib/server/http-errors";
 import { requirePublicUser } from "../../../lib/server/public-auth";
 
 export const serverHandlers: ApiHandlers = {
@@ -11,7 +12,7 @@ export const serverHandlers: ApiHandlers = {
       return user;
     }
 
-    const result = await getAccountExport(user, params.exportId);
+    const result = await getAccountExport(user, requireParam(params.exportId, "exportId"));
 
     return result instanceof Response ? result : Response.json(result);
   },

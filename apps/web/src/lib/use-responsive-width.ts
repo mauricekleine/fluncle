@@ -32,7 +32,9 @@ function pickRenditionWidth(deviceWidth: number): RenditionWidth {
     }
   }
 
-  return RENDITION_LADDER[RENDITION_LADDER.length - 1];
+  // The ladder is a non-empty const, so the last rung always exists; the
+  // widest rung (1080) is the safe fallback if that invariant ever changes.
+  return RENDITION_LADDER[RENDITION_LADDER.length - 1] ?? 1080;
 }
 
 /**

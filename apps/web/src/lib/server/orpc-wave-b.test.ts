@@ -207,7 +207,7 @@ describe("oRPC /me — POST /me/saved-findings (save_private_finding)", () => {
 
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({ ok: true, savedFinding });
-    expect(saveFinding.mock.calls[0][1]).toEqual({ trackId: "abc" });
+    expect(saveFinding.mock.calls[0]?.[1]).toEqual({ trackId: "abc" });
   });
 
   it("carries the helper's track_not_found/404 Response byte-for-byte", async () => {
@@ -266,7 +266,7 @@ describe("oRPC /me — DELETE /me/saved-findings/{trackId} (unsave_private_findi
 
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({ ok: true });
-    expect(deleteSavedFinding.mock.calls[0][1]).toBe("abc");
+    expect(deleteSavedFinding.mock.calls[0]?.[1]).toBe("abc");
   });
 });
 
@@ -307,7 +307,7 @@ describe("oRPC /me — PUT /me/galaxy-progress (merge_private_galaxy_progress)",
 
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual(progress);
-    expect(mergeGalaxyProgress.mock.calls[0][1]).toEqual({ collectedLogIds: ["0001"] });
+    expect(mergeGalaxyProgress.mock.calls[0]?.[1]).toEqual({ collectedLogIds: ["0001"] });
   });
 });
 
@@ -325,7 +325,7 @@ describe("oRPC /me — POST /me/galaxy-progress/logs (collect_private_galaxy_log
 
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({ logId: "0001", ok: true });
-    expect(collectLogId.mock.calls[0][1]).toBe("0001");
+    expect(collectLogId.mock.calls[0]?.[1]).toBe("0001");
   });
 
   it("400s a non-string logId with the live invalid_request body", async () => {
@@ -469,7 +469,7 @@ describe("oRPC /me — GET /me/export/{exportId} (get_private_account_export)", 
 
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual(payload);
-    expect(getAccountExport.mock.calls[0][1]).toBe("exp-1");
+    expect(getAccountExport.mock.calls[0]?.[1]).toBe("exp-1");
   });
 
   it("carries the export_not_found/404 byte-for-byte", async () => {

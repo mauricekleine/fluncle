@@ -3,6 +3,7 @@ import { ImageResponse, loadGoogleFont } from "workers-og";
 import { formatDateLong } from "@/lib/format";
 import { GALAXIES, galaxyForVibe } from "@/lib/galaxies";
 import { spotifyAlbumImageAtSize, trackMedia } from "@/lib/media";
+import { requireParam } from "@/lib/server/http-errors";
 import { getTrackByIdOrLogId } from "@/lib/server/tracks";
 import { type ApiHandlers, aliasHandlers } from "./-alias";
 
@@ -52,7 +53,7 @@ async function fetchImageDataUri(url: string): Promise<string | undefined> {
 
 export const serverHandlers: ApiHandlers = {
   GET: async ({ params }) => {
-    const logId = params.logId;
+    const logId = requireParam(params.logId, "logId");
 
     const track = await getTrackByIdOrLogId(logId);
 

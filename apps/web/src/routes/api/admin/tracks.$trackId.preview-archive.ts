@@ -3,7 +3,11 @@ import { env } from "cloudflare:workers";
 
 import { type ApiHandlers, aliasHandlers } from "../-alias";
 import { jsonError, requireOperator } from "../../../lib/server/env";
-import { apiErrorResponse, trackNotFoundResponse } from "../../../lib/server/http-errors";
+import {
+  apiErrorResponse,
+  requireParam,
+  trackNotFoundResponse,
+} from "../../../lib/server/http-errors";
 import {
   archivePreviewForTrack,
   getPreviewArchiveMetadata,
@@ -22,7 +26,7 @@ export const serverHandlers: ApiHandlers = {
       return unauthorized;
     }
 
-    const idOrLogId = params.trackId;
+    const idOrLogId = requireParam(params.trackId, "trackId");
 
     try {
       const archive = await getPreviewArchiveMetadata(idOrLogId);
@@ -52,7 +56,7 @@ export const serverHandlers: ApiHandlers = {
       return unauthorized;
     }
 
-    const idOrLogId = params.trackId;
+    const idOrLogId = requireParam(params.trackId, "trackId");
 
     try {
       const track = await getTrackByIdOrLogId(idOrLogId);

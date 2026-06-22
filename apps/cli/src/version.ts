@@ -94,7 +94,7 @@ export function compareVersions(left: string, right: string): number {
   const rightParts = parseVersion(right);
 
   for (let index = 0; index < 3; index += 1) {
-    const difference = leftParts[index] - rightParts[index];
+    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
 
     if (difference !== 0) {
       return difference;
@@ -107,9 +107,8 @@ export function compareVersions(left: string, right: string): number {
 function parseVersion(version: string): [number, number, number] {
   const parts = version.split(".").map((part) => Number.parseInt(part, 10));
 
-  return [
-    Number.isInteger(parts[0]) ? parts[0] : 0,
-    Number.isInteger(parts[1]) ? parts[1] : 0,
-    Number.isInteger(parts[2]) ? parts[2] : 0,
-  ];
+  const integerOrZero = (value: number | undefined): number =>
+    value !== undefined && Number.isInteger(value) ? value : 0;
+
+  return [integerOrZero(parts[0]), integerOrZero(parts[1]), integerOrZero(parts[2])];
 }

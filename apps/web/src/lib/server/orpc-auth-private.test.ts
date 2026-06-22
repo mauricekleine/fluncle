@@ -120,7 +120,7 @@ describe("privateUserMutation (= requireAccountMutation, the /me CSRF write tier
       .handler(({ context }) => ({ user: context.user }));
 
     expect(await invoke(procedure)).toEqual({ user: USER });
-    expect(requireAccountMutation.mock.calls[0][1]).toEqual({
+    expect(requireAccountMutation.mock.calls[0]?.[1]).toEqual({
       action: "account.saved.write",
       limit: 90,
     });
