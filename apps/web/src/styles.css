@@ -1273,8 +1273,11 @@ body::before {
 .log-plate-footer {
   border-top: 1px solid var(--border);
   display: flex;
+  /* Wrap the footer links instead of letting them overflow a narrow screen; the
+     row-gap keeps wrapped lines from touching. */
+  flex-wrap: wrap;
   font-size: 0.85rem;
-  gap: 1.25rem;
+  gap: 0.75rem 1.25rem;
   justify-content: space-between;
   padding-top: 1.1rem;
 }
@@ -1309,7 +1312,23 @@ body::before {
   border-bottom: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
   display: flex;
   gap: 0.9rem;
+  /* Keep the tappable row at least ~44px tall so the Log ID / title links clear
+     the touch-target floor on mobile. */
+  min-height: 2.75rem;
+  min-width: 0;
   padding: 0.7rem 0;
+}
+
+/* The /log row has three direct children (Log ID, title line, date) rather than
+   the mixtape row's cover + body grid, so it lays them out itself: the title
+   line absorbs the slack and ellipsizes (min-width:0 below), the date stays
+   whole at the row's end. On a narrow screen the date wraps under the line. */
+.log-index-row--entry {
+  align-items: baseline;
+  column-gap: 0.9rem;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  row-gap: 0.15rem;
 }
 
 .log-index-cover-link {
@@ -1360,6 +1379,10 @@ body::before {
 .log-index-line {
   color: var(--starlight-cream);
   font-weight: 700;
+  /* min-width:0 lets this grid track shrink below its content so the ellipsis
+     can engage instead of overflowing the row and shoving "Found <date>" out of
+     place. */
+  min-width: 0;
   /* One clean line per finding: a long Artist — Title truncates with an
      ellipsis instead of wrapping and breaking the row rhythm. */
   overflow: hidden;
@@ -1377,16 +1400,29 @@ body::before {
   color: var(--muted-foreground);
   font-size: 0.8rem;
   font-variant-numeric: tabular-nums;
+  /* Mobile: the date drops under the title (column 2), out of the Log ID
+     column, keeping the row to two tidy lines on a narrow screen. */
   grid-column: 2;
+  white-space: nowrap;
 }
 
 @media (min-width: 640px) {
+  /* Mixtape rows: the body grid gains a third, intrinsic column so the meta
+     ("12 bangers · 58 min") sits inline at the end. */
   .log-index-body {
     grid-template-columns: 5.2rem minmax(0, 1fr) auto;
   }
 
+  /* /log entry rows: the row itself gains a third, intrinsic column so the date
+     sits inline at the row's end; the content column still ellipsizes. */
+  .log-index-row--entry {
+    align-items: center;
+    grid-template-columns: max-content minmax(0, 1fr) max-content;
+  }
+
   .log-index-date {
     grid-column: auto;
+    justify-self: end;
   }
 }
 
@@ -1417,6 +1453,9 @@ body::before {
   font-size: 0.92rem;
   line-height: 1.55;
   margin: 0.25rem 0 0;
+  /* The Tor .onion address in one definition is a long unbreakable string; let
+     it break mid-token so it can't force horizontal scroll on a narrow screen. */
+  overflow-wrap: anywhere;
 }
 
 .log-privacy-intro {
@@ -1867,7 +1906,8 @@ body::before {
   gap: 1rem;
   inset: 0;
   justify-items: center;
-  padding: 2rem;
+  /* Fluid padding so the gate doesn't crowd a phone screen. */
+  padding: clamp(1.25rem, 5vw, 2rem);
   place-content: center;
   position: fixed;
   text-align: center;
@@ -1875,7 +1915,8 @@ body::before {
 
 .radio-gate-title {
   color: var(--starlight-cream);
-  font-size: 1.75rem;
+  /* Scale down on narrow screens so the title stays on one or two clean lines. */
+  font-size: clamp(1.35rem, 6vw, 1.75rem);
   font-weight: 800;
   letter-spacing: -0.01em;
 }
@@ -1884,7 +1925,8 @@ body::before {
   color: var(--stardust);
   font-size: 1rem;
   line-height: 1.4;
-  max-width: 34rem;
+  /* Cap reading width, but never wider than the viewport's padded box. */
+  max-width: min(34rem, 100%);
 }
 
 @theme {

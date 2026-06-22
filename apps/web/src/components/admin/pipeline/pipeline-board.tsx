@@ -23,10 +23,15 @@ import { type BoardRow } from "@/components/admin/use-publish";
 
 const COL_W = 3.5;
 const COL_CLASS = "w-14";
-// The pinned finding column: it grows to absorb the row's slack (pushing the action
+// The finding column: it grows to absorb the row's slack (pushing the action
 // cells to the right edge) but never shrinks below a readable floor, and stays
-// opaque so columns scroll cleanly underneath it.
+// opaque so columns scroll cleanly underneath it. From `sm` up it's pinned (the
+// `sm:sticky` on each cell); on a phone a 14rem pin would swallow most of the
+// viewport, so it un-pins and scrolls with the rest of the board instead.
 const LEAD_CLASS = "min-w-56 flex-1 bg-card px-4 sm:px-5";
+// The pin, applied per cell so it can be dropped below `sm`. z-index keeps the
+// pinned column above the step columns scrolling underneath it.
+const LEAD_PIN = "sm:sticky sm:left-0";
 
 const SHORT: Record<StepKey, string> = {
   context: "Ctx",
@@ -54,7 +59,7 @@ export function PipelineBoard({ actions, entries }: BoardProps) {
       <div className="w-max min-w-full">
         {/* Super-headers */}
         <div className="flex items-end border-b border-border/60">
-          <div className={`sticky left-0 z-20 py-2.5 ${LEAD_CLASS}`} />
+          <div className={`z-20 py-2.5 ${LEAD_PIN} ${LEAD_CLASS}`} />
           <GroupHead label="Agents" span={autoCols.length} />
           <span aria-hidden="true" className="mx-3 self-stretch border-l border-border" />
           <GroupHead label="Yours" span={humanCols.length} />
@@ -63,7 +68,7 @@ export function PipelineBoard({ actions, entries }: BoardProps) {
         {/* Column icons + abbreviations */}
         <div className="flex items-end border-b border-border bg-card/40">
           <div
-            className={`sticky left-0 z-20 py-3 text-xs font-bold text-muted-foreground ${LEAD_CLASS}`}
+            className={`z-20 py-3 text-xs font-bold text-muted-foreground ${LEAD_PIN} ${LEAD_CLASS}`}
           >
             Finding
           </div>
@@ -88,7 +93,7 @@ export function PipelineBoard({ actions, entries }: BoardProps) {
                     hover wash can't show through it — it carries its own matching
                     tint on group-hover instead. */}
                 <div
-                  className={`sticky left-0 z-10 py-3 transition-colors group-hover:bg-[color-mix(in_oklab,var(--card),var(--primary)_6%)] ${LEAD_CLASS}`}
+                  className={`z-10 py-3 transition-colors group-hover:bg-[color-mix(in_oklab,var(--card),var(--primary)_6%)] ${LEAD_PIN} ${LEAD_CLASS}`}
                 >
                   <FindingLead logId onPreview={actions.onPreview} row={entry.row} size="md" />
                 </div>
