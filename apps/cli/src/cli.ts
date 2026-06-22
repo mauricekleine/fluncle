@@ -29,6 +29,11 @@ type AdminListOptions = {
   limit?: string;
 };
 
+type AdminQueueOptions = AdminListOptions & {
+  hasContext?: boolean;
+  hasObservation?: boolean;
+};
+
 type AdminEnrichOptions = {
   all: boolean;
   json: boolean;
@@ -107,6 +112,11 @@ type TrackObserveOptions = {
   script?: string;
   scriptFile?: string;
   voiceId?: string;
+};
+
+type TrackContextOptions = {
+  json: boolean;
+  query?: string;
 };
 
 type PreviewArchiveBackfillOptions = {
@@ -392,13 +402,16 @@ function addAdminCommands(program: Command): void {
       await runAdd(spotifyUrl, options, addCommand);
     });
 
-  // The video render queue.
+  // The video render queue. `--has-context`/`--has-observation` narrow it to the
+  // observation crons' queues (which findings still need field notes / a voice).
   adminTracks
     .command("queue")
     .description("Findings awaiting a video, oldest first (the next to film is first)")
     .option("--limit <limit>", "Number of findings to show", "10")
+    .option("--has-context", "Only findings whose field notes are already gathered")
+    .option("--has-observation", "Only findings that already have a spoken observation")
     .option("--json", "Print JSON", false)
-    .action(async (options: AdminListOptions) => {
+    .action(async (options: AdminQueueOptions) => {
       const { queueCommand } = await import("./commands/admin-tracks");
       await runAdminQueue(options, queueCommand);
     });
@@ -407,10 +420,36 @@ function addAdminCommands(program: Command): void {
     .command("queue", { hidden: true })
     .description("Render queue (alias of `admin tracks queue`)")
     .option("--limit <limit>", "Number of findings to show", "10")
+    .option("--has-context", "Only findings whose field notes are already gathered")
+    .option("--has-observation", "Only findings that already have a spoken observation")
     .option("--json", "Print JSON", false)
-    .action(async (options: AdminListOptions) => {
+    .action(async (options: AdminQueueOptions) => {
       const { queueCommand } = await import("./commands/admin-tracks");
       await runAdminQueue(options, queueCommand);
+    });
+
+  // `context_track`'s worklist: findings whose field notes haven't been gathered.
+  adminTracks
+    .command("context-queue")
+    .description("Findings missing their field notes, oldest first (the context cron's worklist)")
+    .option("--limit <limit>", "Number of findings to show", "10")
+    .option("--json", "Print JSON", false)
+    .action(async (options: AdminListOptions) => {
+      const { contextQueueCommand } = await import("./commands/admin-tracks");
+      await runAdminContextQueue(options, contextQueueCommand);
+    });
+
+  // `observe_track`'s worklist: findings with field notes but no spoken observation.
+  adminTracks
+    .command("observe-queue")
+    .description(
+      "Findings with notes but no observation yet, oldest first (the observe cron's worklist)",
+    )
+    .option("--limit <limit>", "Number of findings to show", "10")
+    .option("--json", "Print JSON", false)
+    .action(async (options: AdminListOptions) => {
+      const { observeQueueCommand } = await import("./commands/admin-tracks");
+      await runAdminObserveQueue(options, observeQueueCommand);
     });
 
   adminTracks
@@ -593,6 +632,20 @@ function addAdminCommands(program: Command): void {
     .action(async (idOrLogId: string | undefined, options: TrackObserveOptions) => {
       const { trackObserveCommand } = await import("./commands/track");
       await runTrackObserve(idOrLogId, options, trackObserveCommand);
+    });
+
+  // `context_track` → `admin tracks context` (Convention B). Fetch the field notes
+  // (the facts) before Fluncle speaks; `observe` reads them as fuel. Idempotent.
+  adminTrack
+    .command("context")
+    .description("Gather the field notes for a finding (facts only; observe speaks from them)")
+    .argument("[idOrLogId]")
+    .option("--query <text>", "Override the fact-search query (else the Worker builds one)")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (idOrLogId: string | undefined, options: TrackContextOptions) => {
+      const { trackContextCommand } = await import("./commands/track");
+      await runTrackContext(idOrLogId, options, trackContextCommand);
     });
 
   const adminMixtapes = configureCommand(
@@ -943,6 +996,42 @@ async function runTrackObserve(
   console.log(`  audio: ${result.audioUrl}`);
   console.log(`  length: ${Math.round(result.durationMs / 1000)}s`);
   console.log(`  voice: ${result.voiceId}`);
+}
+
+async function runTrackContext(
+  idOrLogId: string | undefined,
+  options: TrackContextOptions,
+  trackContextCommand: typeof import("./commands/track").trackContextCommand,
+): Promise<void> {
+  if (!idOrLogId) {
+    throw new Error(
+      "Usage: fluncle admin tracks context <track_id|log_id> [--query <text>] [--json]",
+    );
+  }
+
+  const result = await trackContextCommand(idOrLogId, { query: options.query });
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  if (result.skipped) {
+    console.log(`Field notes already on file for ${result.logId}. Nothing to gather.`);
+    return;
+  }
+
+  if (!result.contextNote.trim()) {
+    console.log(`No field notes turned up for ${result.logId}. The queue will swing back around.`);
+    return;
+  }
+
+  console.log(`Gathered field notes for ${result.logId}:`);
+  console.log(`  ${result.contextNote}`);
+
+  if (result.sources.length > 0) {
+    console.log(`  sources: ${result.sources.join(", ")}`);
+  }
 }
 
 async function runPreviewArchiveBackfill(
@@ -1641,11 +1730,14 @@ function parseListLimit(value: string | undefined): number {
 }
 
 async function runAdminQueue(
-  options: AdminListOptions,
+  options: AdminQueueOptions,
   queueCommand: typeof import("./commands/admin-tracks").queueCommand,
 ): Promise<void> {
   const limit = parseListLimit(options.limit);
-  const tracks = await queueCommand(limit);
+  const tracks = await queueCommand(limit, {
+    hasContext: options.hasContext ? true : undefined,
+    hasObservation: options.hasObservation ? true : undefined,
+  });
 
   if (options.json) {
     printJson({
@@ -1663,6 +1755,58 @@ async function runAdminQueue(
   const { trackRows } = await import("./format");
   const noun = tracks.length === 1 ? "finding" : "findings";
   console.log(`${tracks.length} ${noun} awaiting a video, oldest first:`);
+  console.log(trackRows(tracks).join("\n"));
+}
+
+async function runAdminContextQueue(
+  options: AdminListOptions,
+  contextQueueCommand: typeof import("./commands/admin-tracks").contextQueueCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const tracks = await contextQueueCommand(limit);
+
+  if (options.json) {
+    printJson({
+      ok: true,
+      tracks,
+    });
+    return;
+  }
+
+  if (tracks.length === 0) {
+    console.log("Every finding has its field notes. Nothing waiting on context.");
+    return;
+  }
+
+  const { trackRows } = await import("./format");
+  const noun = tracks.length === 1 ? "finding" : "findings";
+  console.log(`${tracks.length} ${noun} missing field notes, oldest first:`);
+  console.log(trackRows(tracks).join("\n"));
+}
+
+async function runAdminObserveQueue(
+  options: AdminListOptions,
+  observeQueueCommand: typeof import("./commands/admin-tracks").observeQueueCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const tracks = await observeQueueCommand(limit);
+
+  if (options.json) {
+    printJson({
+      ok: true,
+      tracks,
+    });
+    return;
+  }
+
+  if (tracks.length === 0) {
+    console.log("Every finding with notes has its observation. Nothing waiting on a voice.");
+    return;
+  }
+
+  const { trackRows } = await import("./format");
+  const noun = tracks.length === 1 ? "finding" : "findings";
+  console.log(`${tracks.length} ${noun} awaiting an observation, oldest first:`);
   console.log(trackRows(tracks).join("\n"));
 }
 
@@ -2024,6 +2168,7 @@ const stringOptions = new Set([
   "--platform",
   "--poster",
   "--props",
+  "--query",
   "--recorded-at",
   "--render",
   "--scheduled-for",

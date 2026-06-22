@@ -253,7 +253,7 @@ export type ContextFetchResult = { contextNote: string; sources: string[] };
 
 /**
  * Build the Firecrawl search query for a track's factual context from its
- * metadata. One assembly point shared by the `observe-context` step and (as a
+ * metadata. One assembly point shared by the `context_track` step and (as a
  * fallback) `observe_track`, so both fetch the same facts. The track fields are
  * Spotify/Deezer metadata — trusted identity strings, not free web content.
  */

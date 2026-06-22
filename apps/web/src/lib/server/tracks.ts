@@ -186,7 +186,7 @@ export async function getTrackByIdOrLogId(idOrLogId: string): Promise<TrackListI
  * Read the INTERNAL `context_note` for a track (the Firecrawl-derived facts).
  * `context_note` is deliberately OUTSIDE `TRACK_SELECT` (internal-only fuel,
  * never surfaced through `toTrackListItem`), so the observe steps read it
- * directly: the `observe-context` step skips when it is already present
+ * directly: the `context_track` step skips when it is already present
  * (idempotent no-op), and `observe_track` reads it as the stored fuel it no
  * longer fetches itself. Returns `null` when the track is missing or unset.
  */
@@ -409,7 +409,7 @@ export const ENRICHMENT_STATUS_FILTERS: readonly EnrichmentStatusFilter[] = [
 type ListTracksOptions = {
   cursor?: TrackCursor;
   /**
-   * Context-note presence (admin only) — the `observe-context` queue's filter.
+   * Context-note presence (admin only) — the `context_track` queue's filter.
    * `false` = `context_note IS NULL` (needs the Firecrawl facts fetched); `true`
    * = already has them. Internal field, never surfaced; omitted for public reads.
    */
@@ -489,7 +489,7 @@ export async function listTracks({
     filterClauses.push("video_url is null");
   }
 
-  // The observe-context queue: `context_note IS NULL` (facts not fetched yet).
+  // The context queue: `context_note IS NULL` (facts not fetched yet).
   if (hasContext === true) {
     filterClauses.push("context_note is not null");
   } else if (hasContext === false) {

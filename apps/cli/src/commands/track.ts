@@ -338,3 +338,44 @@ export async function trackObserveCommand(
     body,
   );
 }
+
+// `fluncle admin tracks context <id|logId>` — fetch + store the track's FACTUAL
+// context note (Firecrawl facts only). The split-out context half of the
+// observation pipeline: the Worker fetches the facts and writes the internal
+// `context_note` so a later `observe` can author + render from it without holding
+// Firecrawl. Idempotent — a finding that already has a note is a no-op (`skipped`),
+// so the context cron can fire on a fixed interval safely. The CLI stays a thin
+// relay; the optional --query overrides the Worker's search string.
+export type TrackContextOptions = {
+  query?: string;
+};
+
+type ContextBody = {
+  query?: string;
+};
+
+export type TrackContextResult = {
+  contextNote: string;
+  logId: string;
+  ok: true;
+  /** True when a context note already existed and the call was a no-op. */
+  skipped?: boolean;
+  sources: string[];
+  trackId: string;
+};
+
+export async function trackContextCommand(
+  idOrLogId: string,
+  options: TrackContextOptions = {},
+): Promise<TrackContextResult> {
+  const body: ContextBody = {};
+
+  if (options.query !== undefined) {
+    body.query = options.query;
+  }
+
+  return adminApiPost<TrackContextResult>(
+    `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/context`,
+    body,
+  );
+}
