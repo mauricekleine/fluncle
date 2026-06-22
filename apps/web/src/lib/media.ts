@@ -288,23 +288,68 @@ export function videoCrop(
 }
 
 /**
- * The poster twin of `videoCrop`: a single opening frame, CENTRE-CROPPED to
- * `orientation` off the square master. Cloudflare MT accepts `fit=cover` combined
- * with `mode=frame` (verified 200 on a live portrait crop), so the squared poster
+ * The poster twin of `videoCrop`: a single frame, CENTRE-CROPPED to `orientation`
+ * off the square master. Cloudflare MT accepts `fit=cover` combined with
+ * `mode=frame` (verified 200 on a live portrait crop), so the squared poster
  * matches the cropped clip's aspect instead of a square loading frame. Same
  * gating as `videoCrop` — only valid under the two-master layout.
+ *
+ * `atSeconds` threads `time=${atSeconds}s` into the `mode=frame` URL (CF accepts
+ * `fit=cover` + `mode=frame` + `time=` together — verified). The shared-broadcast
+ * join needs the offset frame, not the opening one: a joiner 40s into a segment
+ * must see the 40s still, or the poster→video swap visibly jumps (and a
+ * reduced-motion joiner holds on the correct mid-segment frame). Defaults to `0`
+ * — the opening frame, the existing /log + radio-head behavior unchanged.
  */
 export function videoCropPoster(
   logId: string,
   orientation: CropOrientation,
   width?: number,
+  atSeconds = 0,
 ): string {
   const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`);
   const { nativeWidth, ratio } = CROP_GEOMETRY[orientation];
   const cropWidth = width ?? nativeWidth;
   const cropHeight = Math.round(cropWidth * ratio);
+  const time = Math.max(0, Math.floor(atSeconds));
 
-  return `${MEDIA_TRANSFORM_BASE}/fit=cover,width=${cropWidth},height=${cropHeight},mode=frame,time=0s,format=jpg/${source}`;
+  return `${MEDIA_TRANSFORM_BASE}/fit=cover,width=${cropWidth},height=${cropHeight},mode=frame,time=${time}s,format=jpg/${source}`;
+}
+
+/**
+ * A same-zone Media Transformations CLIP of the cropped square master that BEGINS
+ * at a global offset — the fast offset-join (RFC radio-broadcast.md Unit B). CF MT
+ * `mode=video` supports `time=` (start offset) + `duration=` (1-60s), so a joiner
+ * fetches a faststart rendition whose frame 0 IS the offset — no in-file seek of
+ * the non-faststart master (verified live 2026-06-22: `time=5s,duration=10s` → a
+ * 200, ~7MB faststart MP4, edge-cached at a 20-day TTL).
+ *
+ * The crop + audio-strip + clip are ONE combined transform — never nested (the
+ * `videoCrop` no-nesting rule: Cloudflare 400s a transform-in-a-transform and
+ * double-appends `?v`). The video is silent (radio plays the observation over it),
+ * so `audio=false` rides along. `startSeconds` should already be SNAPPED to the
+ * cache grid (`snapOffsetMs` in radio-schedule.ts) — every distinct `time=` is a
+ * distinct cache key, so per-second offsets fragment the edge cache; snapping lets
+ * joiners share a handful of warm clips per segment. `durationSeconds` defaults to
+ * the 60s MT max so one clip covers the rest of most segments before the page
+ * swaps to the steady-state looping `videoCrop` (no `time=`, already warm/shared).
+ */
+export function videoClipCrop(
+  logId: string,
+  orientation: CropOrientation,
+  startSeconds: number,
+  width?: number,
+  durationSeconds = 60,
+): string {
+  const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`);
+  const { nativeWidth, ratio } = CROP_GEOMETRY[orientation];
+  const cropWidth = width ?? nativeWidth;
+  const cropHeight = Math.round(cropWidth * ratio);
+  const start = Math.max(0, Math.floor(startSeconds));
+  // CF MT clamps duration to [1, 60]; keep it inside that window.
+  const duration = Math.min(60, Math.max(1, Math.floor(durationSeconds)));
+
+  return `${MEDIA_TRANSFORM_BASE}/fit=cover,width=${cropWidth},height=${cropHeight},audio=false,time=${start}s,duration=${duration}s/${source}`;
 }
 
 /**

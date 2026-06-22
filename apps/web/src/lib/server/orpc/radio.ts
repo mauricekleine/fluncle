@@ -4,7 +4,14 @@
 // is touched.
 
 import { ORPCError } from "@orpc/server";
-import { getRandomRadioTrack } from "../tracks";
+import { resolveRadioSlot, totalLoopDurationMs } from "../../radio-schedule";
+import {
+  getRadioEligibleTracks,
+  getRadioScheduleAnchor,
+  getRadioScheduleFingerprint,
+  getRandomRadioTrack,
+  getTrackByIdOrLogId,
+} from "../tracks";
 import { apiFault, type Implementer } from "./_shared";
 
 /**
@@ -37,5 +44,71 @@ export function radioHandlers(os: Implementer) {
     }
   });
 
-  return { get_random_radio_track: getRandomRadioTrackHandler };
+  const notFound = () =>
+    new ORPCError("NOT_FOUND", {
+      data: { apiCode: "track_not_found", apiMessage: "No radio-eligible tracks found" },
+      message: "No radio-eligible tracks found",
+    });
+
+  // The server-authoritative now-playing slot on the shared loop. The eligible set
+  // is read deterministically (found-order); the stored epoch is read+rolled (a
+  // self-heal at the next boundary on a changed set); the modulo math resolves the
+  // current slot + offset. `currentTrack`/`nextTrack` are hydrated to full list
+  // items so the page renders identical metadata to the random read. The server
+  // timestamp rides along for the client's NTP-lite skew. An empty set is the
+  // same `track_not_found` 404 the random read uses (the page's quiet-sector copy).
+  const getRadioNowPlayingHandler = os.get_radio_now_playing.handler(async () => {
+    try {
+      const entries = await getRadioEligibleTracks();
+      const version = await getRadioScheduleFingerprint();
+      const loopMs = totalLoopDurationMs(entries);
+      const nowMs = Date.now();
+      const anchor = await getRadioScheduleAnchor(version, loopMs, nowMs);
+      const slot = resolveRadioSlot(entries, anchor.epochMs, nowMs);
+
+      if (!slot) {
+        throw notFound();
+      }
+
+      // Hydrate the two scheduled slots to full list items (the lean schedule
+      // query carries only the clock fields). The eligibility predicate guarantees
+      // the rows still exist; a vanished row (a delete between reads) 404s rather
+      // than serving a partial slot — the client resyncs, it never random-skips.
+      const [currentTrack, nextTrack] = await Promise.all([
+        getTrackByIdOrLogId(slot.current.trackId),
+        getTrackByIdOrLogId(slot.next.trackId),
+      ]);
+
+      if (!currentTrack) {
+        throw notFound();
+      }
+
+      return {
+        nowPlaying: {
+          currentTrack,
+          // Omit a self-referential next on a single-finding loop (it's the same
+          // finding looping; there is no distinct preload target).
+          nextTrack:
+            nextTrack && nextTrack.trackId !== currentTrack.trackId ? nextTrack : undefined,
+          offsetMs: slot.offsetMs,
+          scheduleVersion: anchor.version,
+          serverEpochMs: nowMs,
+          totalLoopDurationMs: loopMs,
+          trackCount: entries.length,
+        },
+        ok: true,
+      } as const;
+    } catch (error) {
+      if (error instanceof ORPCError) {
+        throw error;
+      }
+
+      throw apiFault(error);
+    }
+  });
+
+  return {
+    get_radio_now_playing: getRadioNowPlayingHandler,
+    get_random_radio_track: getRandomRadioTrackHandler,
+  };
 }

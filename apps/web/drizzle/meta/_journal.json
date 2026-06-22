@@ -204,6 +204,13 @@
       "when": 1782121986417,
       "tag": "0028_eminent_gauntlet",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1782130465387,
+      "tag": "0029_tough_blackheart",
+      "breakpoints": true
     }
   ]
 }

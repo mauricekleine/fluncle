@@ -94,6 +94,31 @@ export const tracks = sqliteTable("tracks", {
   videoVehicle: text("video_vehicle"),
 });
 
+// The radio.fluncle.com shared-schedule anchor (RFC radio-broadcast.md, Unit A).
+// ONE row (PK = service = "radio") holding the wall-clock `epoch` the modulo
+// schedule is measured from and the `version` fingerprint of the eligible set it
+// was computed for (`${count}:${maxObservationGeneratedAt}`). The broadcast is a
+// pure function of (deterministic eligible list, per-segment duration, epoch):
+// `p = (now − epoch) mod T`. The stored epoch is the ONE thing a pure function
+// can't derive — *when* a catalogue change takes effect. When the eligible set
+// changes (`version` no longer matches the live fingerprint), `now-playing`
+// rolls the epoch forward to the next loop boundary (`epoch += ⌈(now−epoch)/T⌉·T`)
+// and rewrites this row, so a grown catalogue applies at the seam and no current
+// listener's playhead jumps. This is a lazy self-heal on the READ path — the
+// eligibility-changing agent writes (observe / square backfill) never touch it.
+export const radioSchedule = sqliteTable("radio_schedule", {
+  // The wall-clock anchor (ms since epoch) the modulo schedule is measured from.
+  epochMs: integer("epoch_ms").notNull(),
+  // When this row was last (re)computed — provenance for the boundary roll.
+  generatedAt: text("generated_at").notNull(),
+  // Single-row table: a fixed PK so the row is upserted, never duplicated.
+  service: text("service").primaryKey(),
+  // The eligible-set fingerprint this epoch was computed for:
+  // `${count}:${maxObservationGeneratedAt}`. A mismatch with the live fingerprint
+  // is the "the schedule changed" trigger.
+  version: text("version").notNull(),
+});
+
 export const spotifyAuth = sqliteTable("spotify_auth", {
   accessToken: text("access_token").notNull(),
   expiresAt: text("expires_at").notNull(),

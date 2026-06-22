@@ -5,6 +5,7 @@ import {
   trackMedia,
   versionedObservationAudioUrl,
   videoAudioStripped,
+  videoClipCrop,
   videoCrop,
   videoCropPoster,
   videoPoster,
@@ -129,6 +130,70 @@ describe("videoCropPoster", () => {
 
   it("encodes the Log ID in the source URL", () => {
     expect(videoCropPoster("a/b c", "portrait")).toContain(`${FOUND_BASE}/a%2Fb%20c/footage.mp4`);
+  });
+
+  it("defaults to the opening frame (time=0s) — the /log + radio-head behavior unchanged", () => {
+    expect(videoCropPoster("ABC123", "portrait")).toContain("time=0s");
+  });
+
+  it("threads the offset frame for a mid-segment joiner (the shared-broadcast poster)", () => {
+    // A joiner 40s in must see the 40s still, not the opening frame, or the
+    // poster→video swap visibly jumps. The offset floors to whole seconds.
+    expect(videoCropPoster("ABC123", "landscape", undefined, 40)).toBe(
+      `${FOUND_BASE}/cdn-cgi/media/fit=cover,width=1920,height=1080,mode=frame,time=40s,format=jpg/${FOUND_BASE}/ABC123/footage.mp4?v=1`,
+    );
+    expect(videoCropPoster("ABC123", "portrait", 720, 12.9)).toContain("time=12s");
+  });
+
+  it("never emits a negative time", () => {
+    expect(videoCropPoster("ABC123", "portrait", undefined, -5)).toContain("time=0s");
+  });
+});
+
+// The fast offset-join clip (RFC radio-broadcast.md Unit B). CF MT `mode=video`
+// `time=`/`duration=` returns a faststart rendition that BEGINS at the global
+// offset (verified live: time=5s,duration=10s → 200, ~7MB faststart, edge-cached).
+// Crop + audio-strip + clip are ONE combined transform, never nested.
+describe("videoClipCrop", () => {
+  it("builds one combined crop+strip+clip beginning at the offset (landscape)", () => {
+    expect(videoClipCrop("ABC123", "landscape", 40, undefined, 20)).toBe(
+      `${FOUND_BASE}/cdn-cgi/media/fit=cover,width=1920,height=1080,audio=false,time=40s,duration=20s/${FOUND_BASE}/ABC123/footage.mp4?v=1`,
+    );
+  });
+
+  it("derives the portrait height from the 16/9 ratio at a ladder width", () => {
+    expect(videoClipCrop("ABC123", "portrait", 10, 720, 30)).toBe(
+      `${FOUND_BASE}/cdn-cgi/media/fit=cover,width=720,height=1280,audio=false,time=10s,duration=30s/${FOUND_BASE}/ABC123/footage.mp4?v=1`,
+    );
+  });
+
+  it("is ONE transform, never nested, with a single ?v (the no-nesting rule)", () => {
+    const url = videoClipCrop("ABC123", "landscape", 40);
+    expect(url.match(/cdn-cgi\/media/g)).toHaveLength(1);
+    expect(url.match(/\?v=/g)).toHaveLength(1);
+    expect(url).toContain("audio=false");
+  });
+
+  it("defaults the duration to the 60s MT max", () => {
+    expect(videoClipCrop("ABC123", "landscape", 40)).toContain("duration=60s");
+  });
+
+  it("clamps the duration into the CF MT [1, 60] window", () => {
+    expect(videoClipCrop("ABC123", "landscape", 40, undefined, 120)).toContain("duration=60s");
+    expect(videoClipCrop("ABC123", "landscape", 40, undefined, 0)).toContain("duration=1s");
+  });
+
+  it("floors the start to whole seconds and never goes negative", () => {
+    expect(videoClipCrop("ABC123", "landscape", 12.9)).toContain("time=12s");
+    expect(videoClipCrop("ABC123", "landscape", -5)).toContain("time=0s");
+  });
+
+  it("rides the cache-bust token so a re-rendered master re-keys the clip", () => {
+    expect(videoClipCrop("ABC123", "landscape", 40)).toContain("/footage.mp4?v=");
+  });
+
+  it("encodes the Log ID in the source URL", () => {
+    expect(videoClipCrop("a/b c", "portrait", 10)).toContain(`${FOUND_BASE}/a%2Fb%20c/footage.mp4`);
   });
 });
 

@@ -4,7 +4,7 @@
 
 import { oc } from "@orpc/contract";
 import * as z from "zod";
-import { TrackListItemSchema } from "./_shared";
+import { RadioNowPlayingSchema, TrackListItemSchema } from "./_shared";
 
 /**
  * `get_random_radio_track` → `GET /radio/random` (operationId `getRandomRadioTrack`).
@@ -32,7 +32,31 @@ export const getRandomRadioTrack = oc
   })
   .output(z.object({ ok: z.literal(true), track: TrackListItemSchema }));
 
+/**
+ * The server-authoritative now-playing slot on the shared schedule (RFC
+ * radio-broadcast.md, Unit A). The broadcast is one continuous loop every listener
+ * computes their place in: `currentTrack` + `offsetMs` is what's playing right now
+ * and how far in. The client seeks `<audio>.currentTime = offsetMs/1000`, then
+ * runs the SAME modulo math locally off `serverEpochMs` (NTP-lite skew) between
+ * polls; it re-fetches when `scheduleVersion` changes (a grown / re-observed
+ * catalogue). `nextTrack` is the preload target — it always starts at offset 0
+ * (only a fresh joiner lands mid-segment; a watching client rolls onto the next
+ * segment at its head). An empty eligible set is a 404 (the page's quiet-sector
+ * state), handled by the rails error encoder, not the output schema. The slot
+ * shape itself is `RadioNowPlayingSchema` (./_shared.ts).
+ */
+export const getRadioNowPlaying = oc
+  .route({
+    method: "GET",
+    operationId: "getRadioNowPlaying",
+    path: "/radio/now-playing",
+    summary: "The server-authoritative now-playing slot on the shared schedule",
+    tags: ["Radio"],
+  })
+  .output(z.object({ nowPlaying: RadioNowPlayingSchema, ok: z.literal(true) }));
+
 /** The `radio` domain's ops, merged into the root contract by `./index.ts`. */
 export const radioContract = {
+  get_radio_now_playing: getRadioNowPlaying,
   get_random_radio_track: getRandomRadioTrack,
 };
