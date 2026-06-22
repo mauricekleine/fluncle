@@ -4,11 +4,11 @@ These are the version-controlled **source** for the three Hermes automation cron
 
 The three crons are the queue-driven backbone the brief specifies — no on-add push, every step is a "read a queue → act per item, idempotently" loop over the `fluncle` CLI, hourly. A new finding is caught on the next tick.
 
-| Job | Schedule | What it does | Server slice |
-| --- | --- | --- | --- |
-| `fluncle-enrich-self-heal` | every 1h | `fluncle admin tracks enrich --all` — backstop for enrichment that slipped the on-add trigger. | `enrich_track` already on the agent tier (#77). |
-| `fluncle-context-note` | every 1h | Drain `hasContext=false`, call the context endpoint per finding (Worker-side Firecrawl), write `context_note` quietly. | `observe_context` agent-tier endpoint + `hasContext` filter (#86). |
-| `fluncle-observation` | every 1h | Drain `hasContext=true AND hasObservation=false`; author the recovered-audio script (Sonnet + `copywriting-fluncle`) from the stored context note, then `observe --script`. | `observe_track` flipped to agent tier + `hasObservation` filter (#86). |
+| Job                        | Schedule | What it does                                                                                                                                                                | Server slice                                                           |
+| -------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `fluncle-enrich-self-heal` | every 1h | `fluncle admin tracks enrich --all` — backstop for enrichment that slipped the on-add trigger.                                                                              | `enrich_track` already on the agent tier (#77).                        |
+| `fluncle-context-note`     | every 1h | Drain `hasContext=false`, call the context endpoint per finding (Worker-side Firecrawl), write `context_note` quietly.                                                      | `observe_context` agent-tier endpoint + `hasContext` filter (#86).     |
+| `fluncle-observation`      | every 1h | Drain `hasContext=true AND hasObservation=false`; author the recovered-audio script (Sonnet + `copywriting-fluncle`) from the stored context note, then `observe --script`. | `observe_track` flipped to agent tier + `hasObservation` filter (#86). |
 
 NOT included (deliberately, per the brief): the Last.fm / Discogs **backfills** (their reliability columns — `lastfmLovedAt`, `discogsStatus` — are not built yet) and the **newsletter** (owned by its own RFC).
 
@@ -16,7 +16,7 @@ NOT included (deliberately, per the brief): the Last.fm / Discogs **backfills** 
 
 Source: <https://hermes-agent.nousresearch.com/docs/user-guide/features/cron> (fetched 2026-06-21).
 
-- **Where jobs live:** `~/.hermes/cron/jobs.json` on the box. Per-run output is saved to `~/.hermes/cron/output/{job_id}/{timestamp}.md`. (Crons are **not** in `config.yaml` — `config.yaml` only carries cron *defaults* like `cron.wrap_response` / `cron.script_timeout_seconds`.)
+- **Where jobs live:** `~/.hermes/cron/jobs.json` on the box. Per-run output is saved to `~/.hermes/cron/output/{job_id}/{timestamp}.md`. (Crons are **not** in `config.yaml` — `config.yaml` only carries cron _defaults_ like `cron.wrap_response` / `cron.script_timeout_seconds`.)
 - **Scheduler:** the gateway ticks every 60 s and runs any due job in a **completely fresh, isolated agent session**. The prompt must be self-contained — there is no carried conversation. That is why each `prompt` below restates its whole task.
 - **Schedule formats:** relative one-shot (`30m`, `2h`), recurring interval (`every 1h`, `every 2h`), cron expression (`0 * * * *`), or ISO timestamp. These three use `every 1h`.
 - **Agent job vs. no-agent job:** an **agent** job carries a `prompt` and reasons through the task (these three — they read a queue and act per item, and the observation one authors copy). A **no-agent** job carries `no_agent: true` + a `script` and ships its stdout, skipping the LLM (watchdogs / heartbeats — not used here).
