@@ -1,6 +1,6 @@
-import { type AddTrackResult } from "@fluncle/contracts";
+import { type PublishTrackResult } from "@fluncle/contracts";
 
-export type { AddTrackResult };
+export type { PublishTrackResult };
 
 import { logPageUrl } from "../fluncle-links";
 import { formatDuration } from "../format";
@@ -38,7 +38,7 @@ type TrackRow = {
 export async function publishTrack(
   spotifyUrl: string,
   options: AddOptions,
-): Promise<AddTrackResult> {
+): Promise<PublishTrackResult> {
   const db = await getDb();
   const trackId = parseSpotifyTrackUrl(spotifyUrl);
   const existingResult = await db.execute({
@@ -306,7 +306,7 @@ function buildAddResult(
     postedToTelegram: boolean;
   },
   extra: { logId?: string; label?: string; previewUrl?: string } = {},
-): AddTrackResult {
+): PublishTrackResult {
   return {
     addedToSpotify: status.addedToSpotify,
     dryRun: status.dryRun,

@@ -446,9 +446,21 @@ function addAdminCommands(program: Command): void {
     .command("enrich")
     .description("Enrichment worklist (pending, failed, or stuck processing) — use --queue")
     .option("--queue", "Show the enrichment worklist, oldest first", false)
-    .option("--limit <limit>", "Number of findings to show", "10")
+    .option("--limit <limit>", "Number of findings to show with --queue", "10")
     .option("--json", "Print JSON", false)
     .action(async (options: AdminQueueViewOptions) => {
+      // `--queue` is the worklist view — the on-box `fluncle-enrich` cron's
+      // worklist. Enrichment has no single-track CLI form (it runs on the box), so
+      // without `--queue` there's nothing to act on; require it, mirroring how
+      // `observe`/`context` gate their worklist view on `--queue`.
+      if (!options.queue) {
+        console.error(
+          "`tracks enrich` is a worklist view — enrichment runs on the on-box `fluncle-enrich` cron.\nUse `tracks enrich --queue` to see findings needing (re-)enrichment.",
+        );
+        process.exitCode = 1;
+        return;
+      }
+
       const { enrichQueueCommand } = await import("./commands/admin-tracks");
       await runAdminEnrichQueue(options, enrichQueueCommand);
     });
@@ -544,7 +556,6 @@ function addAdminCommands(program: Command): void {
 
   adminTrack
     .command("preview")
-    .alias("preview-archive")
     .description("Store one official preview at the operator-only archive path for analysis")
     .argument("[idOrLogId]")
     .option("--file <file>", "Preview audio file to archive")

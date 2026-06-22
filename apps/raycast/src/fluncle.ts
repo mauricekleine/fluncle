@@ -1,4 +1,4 @@
-import { type AddTrackResponse, type ApiFailure, type TrackListItem } from "@fluncle/contracts";
+import { type PublishTrackResponse, type ApiFailure, type TrackListItem } from "@fluncle/contracts";
 import { getPreferenceValues } from "@raycast/api";
 import { execFile } from "node:child_process";
 
@@ -6,7 +6,7 @@ type Preferences = {
   flunclePath: string;
 };
 
-export type AddResult = AddTrackResponse;
+export type AddResult = PublishTrackResponse;
 
 export type RecentTrack = Pick<
   TrackListItem,

@@ -1,4 +1,4 @@
-import { type AddTrackResult } from "@fluncle/contracts";
+import { type PublishTrackResult } from "@fluncle/contracts";
 import { adminApiPost } from "../api";
 
 type AddOptions = {
@@ -7,7 +7,7 @@ type AddOptions = {
   json?: boolean;
 };
 
-export type AddCommandResult = AddTrackResult;
+export type AddCommandResult = PublishTrackResult;
 
 export async function addCommand(
   spotifyUrl: string,

@@ -268,10 +268,10 @@ export const finalizeTrackVideo = oc
   );
 
 /**
- * The publish-track result (`AddTrackResult` in ../index.ts). The
+ * The publish-track result (`PublishTrackResult` in ../index.ts). The
  * `POST /admin/tracks` body — `publishTrack`'s output envelope.
  */
-const AddTrackResultSchema = z
+const PublishTrackResultSchema = z
   .object({
     addedToSpotify: z.boolean(),
     dryRun: z.boolean(),
@@ -293,7 +293,7 @@ const AddTrackResultSchema = z
       trackId: z.string(),
     }),
   })
-  .meta({ id: "AddTrackResult" });
+  .meta({ id: "PublishTrackResult" });
 
 /**
  * `list_tracks_admin` → `GET /admin/tracks` (operationId `listTracksAdmin`).
@@ -354,7 +354,7 @@ export const listTracksAdmin = oc
  * Publish a finding from a Spotify URL: certify it, post to Telegram, kick off
  * async enrichment. Operator tier (live `requireOperator`). LOOSE body — the live
  * route validates `spotifyUrl` itself (`invalid_request`/400) and caps the note
- * (`note_too_long`). Preserves the `{ ok: true, ...AddTrackResult }` envelope.
+ * (`note_too_long`). Preserves the `{ ok: true, ...PublishTrackResult }` envelope.
  */
 export const publishTrack = oc
   .route({
@@ -371,7 +371,7 @@ export const publishTrack = oc
       spotifyUrl: z.unknown().optional(),
     }),
   )
-  .output(AddTrackResultSchema.extend({ ok: z.literal(true) }));
+  .output(PublishTrackResultSchema.extend({ ok: z.literal(true) }));
 
 /** The `admin-tracks` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminTracksContract = {

@@ -232,14 +232,17 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(alias.stdout).toContain("Missing Spotify track URL");
   });
 
-  test("admin tracks preview (new name) and preview-archive (alias) both resolve", async () => {
+  test("admin tracks preview resolves; the old preview-archive name is gone", async () => {
     const canonical = await runCli(["admin", "tracks", "preview", "--json"]);
-    const alias = await runCli(["admin", "tracks", "preview-archive", "--json"]);
+    const removed = await runCli(["admin", "tracks", "preview-archive", "--json"]);
 
     expect(canonical.exitCode).toBe(1);
-    expect(alias.exitCode).toBe(1);
     expect(canonical.stdout).toContain("Usage: fluncle admin tracks preview");
-    expect(alias.stdout).toContain("Usage: fluncle admin tracks preview");
+    // The dash-compound alias was dropped (admin surface, no-alias policy): the old
+    // name no longer resolves to the command — it errors instead of printing the
+    // `preview` usage.
+    expect(removed.exitCode).toBe(1);
+    expect(removed.stdout).not.toContain("Usage: fluncle admin tracks preview");
   });
 
   test("keeps root help listener-facing", async () => {
