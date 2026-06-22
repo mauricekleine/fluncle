@@ -44,7 +44,6 @@ import {
 } from "../observation";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { VIDEOS_BUCKET, presignUploads } from "../r2-presign";
-import { triggerEnrichment } from "../spinup";
 import { type TrackUpdate, updateTrack } from "../track-update";
 import {
   type EnrichmentStatusFilter,
@@ -298,11 +297,11 @@ export function adminTracksHandlers(os: Implementer) {
           note: note || undefined,
         });
 
-        // Fast enqueue — the work runs durably on Spinup. triggerEnrichment never
-        // throws.
-        if (!result.dryRun && result.track.logId) {
-          await triggerEnrichment(result.track.trackId, result.track.logId);
-        }
+        // No on-add enrichment push: the add leaves the track at the schema
+        // default `enrichment_status = "pending"`, which is queue-eligible. The
+        // on-box `fluncle-enrich` `--no-agent` cron drains the enrich-queue every
+        // ~5 min, analyzes on-box (ffmpeg + bun), and writes back via
+        // `fluncle admin tracks update`. See docs/track-lifecycle.md (Phase 2).
 
         return { ok: true as const, ...result };
       } catch (error) {

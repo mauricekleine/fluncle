@@ -205,7 +205,7 @@ export function boardSteps(row: BoardRow): BoardStep[] {
     enrich: {
       actionable: true,
       gated: false,
-      hint: "Audio analysis on the Spinup agent",
+      hint: "Audio analysis by the on-box enrichment cron",
       state:
         row.enrichmentStatus === "done"
           ? "done"

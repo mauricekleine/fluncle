@@ -1,15 +1,14 @@
 #!/usr/bin/env bun
 // enrich-sweep.ts — the bun orchestrator behind the `--no-agent` enrichment cron.
 //
-// PREPARED, NOT YET DEPLOYED. Version-controlled source; the repo is canonical and
-// the box is a deploy target (fluncle-hermes-operator skill). Invoked by the bash
-// wrapper (enrich-sweep.sh) the cron runner execs every ~5m — see that file's
-// header for the `hermes cron create` wire-up. Box rebuild (ffmpeg + bun image)
-// and the Worker-cleanup PR are SEPARATE later steps
-// (docs/spinup-to-hermes-enrichment-brief.md, build order #1 and #4).
+// LIVE. Version-controlled source; the repo is canonical and the box is a deploy
+// target (fluncle-hermes-operator skill). Invoked by the bash wrapper
+// (enrich-sweep.sh) the cron runner execs every ~5m — see that file's header for
+// the `hermes cron create` wire-up and ../cron/README.md for the full cron model.
 //
-// This replaces the Spinup enrichment agent: it does the analysis ON the box
-// instead of firing `runs.create` at Spinup. Pure compute, zero LLM tokens.
+// This is the on-box enrichment path: it does the analysis ON the box (ffmpeg +
+// bun), so there is no Worker-side enrichment trigger. Pure compute, zero LLM
+// tokens.
 //
 // The loop, idempotent by construction (the queue is `status=queue`: pending ∪
 // failed ∪ stale processing, so a `done` finding is already out of it; re-running
