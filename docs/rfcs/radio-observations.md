@@ -2,7 +2,7 @@
 
 **Status:** Final (research → /taste → 4-role adversarial panel synthesized, 2026-06-20) — completeness standard applied.
 **For:** a fresh build session (or a small team of agents) standing up the observation pipeline + the radio surface, plus Maurice for the ElevenLabs voice-ID + paid-vendor + canon calls.
-**Canon/authority:** the codebase and `AGENTS.md` arbitrate; `docs/track-lifecycle.md`, `docs/agents/hermes-agent.md`, `VOICE.md` / `packages/skills/copywriting-fluncle`, `packages/video/README.md`, and the live `fluncle` CLI + `/api/v1` are the ground truth. This is planning under `docs/`, not spec. The source `docs/rfcs/radio-brief.md` is a non-canonical brainstorm (per `AGENTS.md`) — the direction is right, the specifics are corrected here.
+**Canon/authority:** the codebase and `AGENTS.md` arbitrate; `docs/track-lifecycle.md`, `docs/agents/hermes-agent.md`, `VOICE.md` / `packages/skills/copywriting-fluncle`, `packages/video/README.md`, and the live `fluncle` CLI + `/api/v1` are the ground truth. This is planning under `docs/`, not spec. It supersedes an earlier non-canonical radio brainstorm — the direction was right, the specifics are corrected here.
 
 > Process note: divergent research across five threads (the enrichment data model + queue; the R2/CLI/admin-endpoint pattern + command-gate class; the voice + script artifact; the `/api/v1` + radio host-rewrite + DTO + UI; and the ElevenLabs/firecrawl vendor surface — each grounded in the real worktree files and, for the vendors, in current docs dated June 2026), then a /taste pass and a 4-role adversarial review (staff engineer, brand-voice director, security/ops, product-scope). Their corrections are baked in — including the brief's three load-bearing errors: `note` is **not** unused (it is the operator-authored editorial "why" with public SEO/AEO value), the sample script uses **banned identity words** ("signal"), and the "Start transmission" gate copy uses another (**"transmission"**). Live verifications and sources are in the appendix.
 
@@ -183,7 +183,7 @@ Until that row lands, the closest existing home is the **Web** register (warm, q
 - **The Dry Rule** — no exclamation marks. Observational, sparse, deadpan-warm. No hype voice, no "what a tune / massive banger / coming up next" (the brief's own bans — they map to real canon: the no-hype/no-DJ-patter rules).
 - **The Selector's three-beat / said-not-written** — it's Fluncle _saying_ this over a tune, not writing ad copy. Kin-name warmth where it fits; never "we" as a company.
 - **Mention the Log ID and the artist/title** (the spine wants the coordinate + the reveal) — but speak the coordinate, don't recite a URL robotically; the `fluncle://` form is fine as the log marker.
-- **Facts only from the props + the context note** — never invent a factual claim, never quote or closely paraphrase lyrics (lyrics may shape _theme_ at a high level only, per the brief's own rule `radio-brief.md:47`; and the repo's audio/source policy that keeps lyric and full-audio sources internal-only, `track-lifecycle.md:53`).
+- **Facts only from the props + the context note** — never invent a factual claim, never quote or closely paraphrase lyrics (lyrics may shape _theme_ at a high level only; and the repo's audio/source policy that keeps lyric and full-audio sources internal-only, `track-lifecycle.md:53`).
 
 ### TTS voice-direction — where it lives
 
