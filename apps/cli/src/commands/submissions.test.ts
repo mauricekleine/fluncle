@@ -20,7 +20,7 @@ let approved = false;
 
 // Override only the two api functions the approve path uses; spread the rest so
 // the global mock.module replacement doesn't strip exports other test files need.
-mock.module("../api", () => ({
+await mock.module("../api", () => ({
   ...realApi,
   adminApiGet: async () => ({ submission: fakeSubmission }),
   adminApiPost: async (path: string) => {
@@ -31,7 +31,7 @@ mock.module("../api", () => ({
   },
 }));
 
-mock.module("./add", () => ({
+await mock.module("./add", () => ({
   // The approve flow calls add twice: a dry-run preview, then the real publish.
   // Only the real publish (no dryRun) counts as "published".
   addCommand: async (_url: string, options: { dryRun?: boolean }) => {

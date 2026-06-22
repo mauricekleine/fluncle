@@ -50,9 +50,10 @@ function headResponse(length: number | null, ok = true): Response {
 
 /** Install a stub fetch for the route's HEAD probe. */
 function stubFetch(impl: (url: string) => Response): void {
-  globalThis.fetch = vi.fn(async (input: RequestInfo | URL) =>
-    impl(String(input)),
-  ) as unknown as typeof fetch;
+  globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+    const url = input instanceof URL ? input.href : typeof input === "string" ? input : input.url;
+    return impl(url);
+  }) as unknown as typeof fetch;
 }
 
 async function render(): Promise<string> {
