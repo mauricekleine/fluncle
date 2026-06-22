@@ -25,6 +25,7 @@
     "build": "turbo run build",
     "check": "bun run lint && bun run format:check && bun run typecheck && bun run test && bun run build",
     "check:fix": "bun run lint:fix && bun run format",
+    "deploy:gate": "turbo run typecheck",
     "dev": "turbo run dev",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
