@@ -390,11 +390,11 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
   });
 });
 
-// ── observe_context — agent tier (the split-out context half; Build order #3) ─
-describe("oRPC observe_context (POST /admin/tracks/{trackId}/observe-context)", () => {
+// ── context_track — agent tier (the split-out context half; Build order #3) ──
+describe("oRPC context_track (POST /admin/tracks/{trackId}/context)", () => {
   it("401s with no admin token", async () => {
     const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(post("/observe-context", undefined, {}));
+    const response = await handleOrpc(post("/context", undefined, {}));
 
     expect(response?.status).toBe(401);
     expect(fetchTrackContext).not.toHaveBeenCalled();
@@ -410,7 +410,7 @@ describe("oRPC observe_context (POST /admin/tracks/{trackId}/observe-context)", 
     updateTrack.mockResolvedValueOnce({ fields: ["context_note"], trackId: TRACK_ID });
 
     const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(post("/observe-context", AGENT_TOKEN, {}));
+    const response = await handleOrpc(post("/context", AGENT_TOKEN, {}));
 
     expect(response?.status).toBe(200);
     const data = (await response?.json()) as {
@@ -434,7 +434,7 @@ describe("oRPC observe_context (POST /admin/tracks/{trackId}/observe-context)", 
     getTrackContextNote.mockResolvedValueOnce("Already fetched facts.");
 
     const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(post("/observe-context", AGENT_TOKEN, {}));
+    const response = await handleOrpc(post("/context", AGENT_TOKEN, {}));
 
     expect(response?.status).toBe(200);
     const data = (await response?.json()) as { contextNote: string; skipped?: boolean };
@@ -450,7 +450,7 @@ describe("oRPC observe_context (POST /admin/tracks/{trackId}/observe-context)", 
     fetchTrackContext.mockResolvedValueOnce({ contextNote: "", sources: [] });
 
     const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(post("/observe-context", AGENT_TOKEN, {}));
+    const response = await handleOrpc(post("/context", AGENT_TOKEN, {}));
 
     expect(response?.status).toBe(200);
     // An empty fetch must NOT write through — the queue (context_note IS NULL) keeps
@@ -462,7 +462,7 @@ describe("oRPC observe_context (POST /admin/tracks/{trackId}/observe-context)", 
     getTrackByIdOrLogId.mockResolvedValueOnce({ ...TRACK, logId: undefined });
 
     const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(post("/observe-context", AGENT_TOKEN, {}));
+    const response = await handleOrpc(post("/context", AGENT_TOKEN, {}));
 
     expect(response?.status).toBe(400);
     expect(((await response?.json()) as { code: string }).code).toBe("no_log_id");
@@ -473,7 +473,7 @@ describe("oRPC observe_context (POST /admin/tracks/{trackId}/observe-context)", 
     getTrackByIdOrLogId.mockResolvedValueOnce(undefined);
 
     const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(post("/observe-context", AGENT_TOKEN, {}));
+    const response = await handleOrpc(post("/context", AGENT_TOKEN, {}));
 
     expect(response?.status).toBe(404);
     expect(((await response?.json()) as { code: string }).code).toBe("not_found");

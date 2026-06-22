@@ -20,6 +20,13 @@ const NewsletterBodySchema = z.looseObject({
 });
 
 /**
+ * The inferred subscribe-body input — the single source of truth the server's
+ * `subscribeToNewsletter` accepts (replacing the hand-mirrored `NewsletterInput`).
+ * LOOSE/all-unknown by design (see above); the route narrows it in-handler.
+ */
+export type NewsletterBody = z.infer<typeof NewsletterBodySchema>;
+
+/**
  * `subscribe_newsletter` → `POST /newsletter` (operationId `subscribeNewsletter`).
  *
  * Board the newsletter. Converted at its CURRENT path `POST /newsletter` (the

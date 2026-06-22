@@ -31,7 +31,13 @@ const R2_SERVICE = "s3";
 
 export type PresignTarget = { contentType: string; key: string };
 
-export type PresignedUpload = {
+// The signed S3 row this module produces — keyed by object key, with NO `field`.
+// Distinct from the contract `PresignedUpload` DTO (../../../packages/contracts),
+// which is the field-BEARING wire shape: the admin video handler joins each signed
+// row back to its artifact `field` before emitting the response. Named apart so the
+// two same-named-but-different shapes can't be confused (the field-less row here vs
+// the field-bearing DTO on the wire).
+export type SignedUpload = {
   /** The exact Content-Type the CLI MUST replay on its PUT (baked into the sig). */
   contentType: string;
   key: string;
@@ -44,7 +50,7 @@ export type PresignedUpload = {
 export async function presignUploads(
   bucket: string,
   targets: readonly PresignTarget[],
-): Promise<PresignedUpload[]> {
+): Promise<SignedUpload[]> {
   const { R2_ACCESS_KEY_ID, R2_ACCOUNT_ID, R2_SECRET_ACCESS_KEY } = await readEnvs([
     "R2_ACCESS_KEY_ID",
     "R2_ACCOUNT_ID",

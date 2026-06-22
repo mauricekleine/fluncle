@@ -3,7 +3,7 @@
 // hands in. A future wave adds an op here and one spread line in the root — no
 // other domain's file is touched.
 
-import { type NewsletterInput, subscribeToNewsletter } from "../newsletter";
+import { subscribeToNewsletter } from "../newsletter";
 import { apiFault, type Implementer } from "./_shared";
 
 /**
@@ -18,11 +18,11 @@ import { apiFault, type Implementer } from "./_shared";
 export function newsletterHandlers(os: Implementer) {
   // `subscribe_newsletter` — board the newsletter (at the current `POST
   // /newsletter` path). Port of /api/newsletter POST: the contract has parsed the
-  // JSON body into `input` (a loose object mirroring `NewsletterInput`); pass it
-  // through and emit the bare `{ ok: true }` the live route returns.
+  // JSON body into `input` (the inferred `NewsletterBody` — the same type the
+  // server accepts, so no cast); pass it through and emit the bare `{ ok: true }`.
   const subscribeNewsletterHandler = os.subscribe_newsletter.handler(async ({ context, input }) => {
     try {
-      await subscribeToNewsletter(input as NewsletterInput, context.request);
+      await subscribeToNewsletter(input, context.request);
 
       return { ok: true } as const;
     } catch (error) {

@@ -62,11 +62,11 @@ const ObserveTrackBodySchema = z.looseObject({
 });
 
 /**
- * The observe-context body (POST /admin/tracks/{trackId}/observe-context). LOOSE:
- * the only optional field is an agent-supplied `query` override for the Firecrawl
- * search; the handler narrows it in-handler, so the contract stays permissive.
+ * The context body (POST /admin/tracks/{trackId}/context). LOOSE: the only
+ * optional field is an agent-supplied `query` override for the Firecrawl search;
+ * the handler narrows it in-handler, so the contract stays permissive.
  */
-const ObserveContextBodySchema = z.looseObject({
+const ContextTrackBodySchema = z.looseObject({
   query: z.unknown().optional(),
 });
 
@@ -135,7 +135,7 @@ export const updateTrack = oc
  * Mint the audio-observation artifact: author-time the agent has already written
  * the recovered-audio script, so this step VOICE-GATES it, renders it (ElevenLabs),
  * uploads the artifact to R2, and writes back. It no longer holds Firecrawl — it
- * reads the already-stored `context_note` (written by `observe_context`) as its
+ * reads the already-stored `context_note` (written by `context_track`) as its
  * fuel. On `adminProcedure` (agent-allowed): flipped from the operator tier so the
  * Hermes cron can drive it (docs/hermes-automation-brief.md Build order #3). Idempotent
  * per finding — an existing `observation_audio_url` is a no-op (`skipped: true`),
@@ -170,32 +170,34 @@ export const observeTrack = oc
   );
 
 /**
- * `observe_context` → `POST /admin/tracks/{trackId}/observe-context` (operationId
- * `observeContext`).
+ * `context_track` → `POST /admin/tracks/{trackId}/context` (operationId
+ * `contextTrack`).
  *
  * Fetch the track's FACTUAL context (Firecrawl: label/year/release) and write it
  * to the internal `context_note` column ONLY — no script authoring, no render.
  * This is the split-out context half of the observation pipeline
- * (docs/hermes-automation-brief.md Build order #3): `observe_context` fills the
+ * (docs/hermes-automation-brief.md Build order #3): `context_track` fills the
  * note so `observe_track` can author + render from it without holding Firecrawl.
+ * The action segment is the single word `context` (Convention B §6: no dash-compound
+ * action segments — the dash-compound `observe-context` is retired with no alias).
  *
  * On `adminProcedure` (agent-allowed). Writes `context_note` QUIETLY — it touches
  * only that internal column, so it does NOT bump `updated_at` (no public surface
  * moves; the feed/lastmod/enrich-sweep stale clock are undisturbed). Idempotent
  * per finding — an existing `context_note` is a no-op (`skipped: true`), keyed
- * `observe-context:${logId}`, so an external cron can fire safely. The Firecrawl
- * output is UNTRUSTED web content treated strictly as DATA (stored as fuel, never
- * executed). Codes: `not_found`/404, `no_log_id`/400.
+ * `context:${logId}`, so an external cron can fire safely. The Firecrawl output is
+ * UNTRUSTED web content treated strictly as DATA (stored as fuel, never executed).
+ * Codes: `not_found`/404, `no_log_id`/400.
  */
-export const observeContext = oc
+export const contextTrack = oc
   .route({
     method: "POST",
-    operationId: "observeContext",
-    path: "/admin/tracks/{trackId}/observe-context",
+    operationId: "contextTrack",
+    path: "/admin/tracks/{trackId}/context",
     summary: "Fetch + store a track's factual context note (Firecrawl facts only)",
     tags: ["Admin"],
   })
-  .input(ObserveContextBodySchema.extend({ trackId: z.string() }))
+  .input(ContextTrackBodySchema.extend({ trackId: z.string() }))
   .output(
     z.object({
       contextNote: z.string(),
@@ -374,9 +376,9 @@ export const addTrack = oc
 /** The `admin-tracks` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminTracksContract = {
   add_track: addTrack,
+  context_track: contextTrack,
   finalize_track_video: finalizeTrackVideo,
   list_tracks_admin: listTracksAdmin,
-  observe_context: observeContext,
   observe_track: observeTrack,
   presign_track_video_uploads: presignTrackVideoUploads,
   update_track: updateTrack,

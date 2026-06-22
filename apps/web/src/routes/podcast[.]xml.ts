@@ -24,17 +24,26 @@ const SHOW_DESCRIPTION =
   "Fluncle's own DJ mixtapes — long drum & bass recordings where he settles a stretch of findings into one continuous dream. Each episode is a checkpoint from the archive, recorded across the Galaxy. fluncle.com is home base.";
 
 /**
- * The enclosure byte length, read from the R2 object's Content-Length via a
- * HEAD request. Podcast clients want the size; if the HEAD fails (object not
- * uploaded yet, edge error) we fall back to "0", which clients tolerate.
+ * The enclosure byte length in bytes, read from the R2 object's Content-Length
+ * via a HEAD request. Returns null when there is no real audio behind the URL —
+ * a failed HEAD (object not uploaded yet, edge error), a non-2xx response, or a
+ * zero/absent length — so the caller can drop that episode rather than emit a
+ * broken enclosure a podcast app can't play.
  */
-async function audioLength(url: string): Promise<string> {
+async function audioLength(url: string): Promise<number | null> {
   try {
     const res = await fetch(url, { method: "HEAD" });
-    const length = res.ok ? res.headers.get("content-length") : null;
-    return length ?? "0";
+
+    if (!res.ok) {
+      return null;
+    }
+
+    const header = res.headers.get("content-length");
+    const length = header ? Number.parseInt(header, 10) : NaN;
+
+    return Number.isFinite(length) && length > 0 ? length : null;
   } catch {
-    return "0";
+    return null;
   }
 }
 
@@ -56,7 +65,7 @@ export const Route = createFileRoute("/podcast.xml")({
           (mixtape) => mixtape.logId && (mixtape.recordedAt || mixtape.addedAt),
         );
 
-        const items = await Promise.all(
+        const maybeItems = await Promise.all(
           mixtapes.map(async (mixtape) => {
             const logId = mixtape.logId as string;
             const title = mixtapeDisplayTitle(mixtape.title);
@@ -64,6 +73,14 @@ export const Route = createFileRoute("/podcast.xml")({
             const link = `${SITE_URL}/log/${encodeURIComponent(logId)}`;
             const audioUrl = mixtapeAudioUrl(logId);
             const length = await audioLength(audioUrl);
+
+            // No real audio behind the enclosure (object not uploaded yet, or a
+            // zero-length object): drop the episode rather than hand a podcast
+            // app a broken file it can't play.
+            if (length === null) {
+              return undefined;
+            }
+
             const pubDate = new Date(
               mixtape.recordedAt ?? (mixtape.addedAt as string),
             ).toUTCString();
@@ -92,6 +109,10 @@ export const Route = createFileRoute("/podcast.xml")({
 </item>`;
           }),
         );
+
+        // Keep only the episodes that have real audio (audioLength returned a
+        // size). An empty feed is still valid — better than broken enclosures.
+        const items = maybeItems.filter((item): item is string => item !== undefined);
 
         const newest = mixtapes[0];
         const lastBuildDate = newest

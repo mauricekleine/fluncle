@@ -81,7 +81,7 @@ What's left before it's worth opening: it cycles only **squared + observed** fin
 
 **Operator step — the CNAME.** One Worker serves every subdomain (no per-subdomain wrangler routes; galaxy has none), so `radio.fluncle.com` is a **CNAME to the Worker** on the `fluncle.com` zone — a DNS-only step (the same zone already runs Media Transformations for `found.fluncle.com`). After it's wired, verify past hydration in a real browser (the `verify-interactive-states-visually` canon: a server-only rewrite hydrates into the wrong route; the rewrite here is isomorphic by construction).
 
-**Decide `observe`'s role when radio is built.** ✅ Resolved (#86): `observe_track` flipped to the **agent tier** with both guards — the `observe:${logId}` idempotency key (an existing observation is a no-op) and the Firecrawl untrusted-input boundary (facts are stored as DATA, the server-side voice gate still hard-fails any banned-identity-word / earthly-geography violation). The context fetch is now its own agent-tier `observe_context` step that writes `context_note` quietly, so the flow is context → script → render. `list_tracks_admin` gained the `hasContext` / `hasObservation` queue filters that drive the two crons. Still open: wiring the two Hermes crons themselves (operational, on the box).
+**Wire the two Hermes crons.** The observation pipeline is in place — `observe_track` / `observe_context` are agent-tier with the idempotency-key + Firecrawl-untrusted-input guards, and `list_tracks_admin` carries the `hasContext` / `hasObservation` queue filters the crons read. Still open: standing up the two Hermes crons themselves (operational, on the box).
 
 ### Observation pipeline — mark empty-context findings so the queue stops re-burning Firecrawl
 
@@ -107,18 +107,12 @@ The on-site layer shipped (per-finding `/log/<id>` pages with definitional prose
 - **Submit + monitor.** Sitemap submitted to GSC and Bing (2026-06-11); watch the _set_ of log pages move to Indexed (count ≈ archive size); verify bare-token retrieval (`004.7.2I`, `fluncle://004.7.2I`) lands the log page. Check Fluncle is present in Brave Search. **First retrieval confirmed (2026-06-17), faster than the "weeks-out" estimate:** a bare `"004.6.0Q"` Google query returns the owned `fluncle.com/log` surface (#2), the YouTube Short caption (#1, with the coordinate + `Found Jun 3` rendered verbatim), and the gate-screen OG card (`packages/media`) in Images — within ~3 days of publish. Remaining granular milestones: the per-finding `/log/<id>` pages moving to Indexed in GSC (today the bare coordinate lands the `/log` _index_, not yet the individual page), and confirming an individual page ranks for its own coordinate. Indexing and AI citation are still ongoing outcomes — monitoring, not ship gates.
 - **Third-party corroboration: the anchors exist (2026-06-11).** MusicBrainz artist `53346748-1357-45c0-a847-9d248b65d655` (Person, homepage/TikTok/Telegram links) and Wikidata item `Q140169844` (instance of human, official website, MusicBrainz artist ID, TikTok + Telegram usernames); both are in the `/about` `sameAs` set. Remaining: authentic presence where dnb lives (r/DnB and friends — participate, don't fabricate), and enrich the Wikidata item as facts accumulate.
 
-### Developer & discovery surfaces — dig, versioned API, docs hub, feeds, CLI distribution (shipped)
+### Developer & discovery surfaces — the long tail
 
-The machine- and developer-facing reach of `docs/public-surfaces-checklist.md` landed (2026-06-20):
+The machine- and developer-facing surfaces of `docs/public-surfaces-checklist.md` (dig, versioned contract-first API, the Fumadocs `/docs` hub, feeds, CLI distribution, SSH deep-links) are live. What's open:
 
-- **`dig.fluncle.com`** — a custom Go authoritative DNS server on the rave VPS, under a delegated zone, answers `dig <coord>.dig.fluncle.com TXT` plus the `random` / `latest` labels, returning a finding's metadata as a `v=fluncle1` TXT line. The delightful-obsession surface, ~free on the box; documented in the `/docs` dig guide. (`today` label still open; coordinate **web** subdomains were dropped — they add nothing over `/log/<id>` and were the only thing needing Cloudflare for SaaS, so `dig` carries the per-coordinate novelty instead.)
-- **API v1 — now contract-first** — every route mounts at `/api/v1/*` with `/api/*` kept as permanent back-compat aliases (shared handlers, not redirects, so POST bodies survive). The whole public **and** admin API is oRPC contracts and the `/api/v1/openapi.json` spec is **generated** from them, admin excluded via a `/admin` path filter (the migration shipped 2026-06-21; see `docs/orpc-migration-brief.md`). _Follow-up:_ the generated public spec documents only the success response per op — add a shared default-error response (the uniform `{ code, message, ok: false }` 4xx/5xx the rails encoder emits) so the per-op `400`/`429` docs the old static file carried aren't lost.
-- **`/docs` hub** — a Fumadocs site (CLI / SSH / MCP / dig / feeds / Log-ID / API-overview guides) with the **Scalar** API reference embedded at `/docs/api`.
-- **Feeds** — JSON Feed (`/feed.json`), Atom (`/atom.xml`), the mixtape Podcast RSS (`/podcast.xml`), and `/calendar.ics` of planned live sessions.
-- **CLI distribution** — the one CLI source ships three ways at one CI-aligned version (**0.33.0**): the public npm package `fluncle` (OIDC trusted publishing, no token), a Homebrew tap (`mauricekleine/homebrew-fluncle`), and GitHub Release binaries — all bumped together by `cli-release.yml` on any `apps/cli/**` change.
-- **SSH deep-links** — `ssh rave.fluncle.com latest | random | <coord>` jump straight to a finding in the terminal.
-
-What's left is the non-gating long tail in the checklist: the `today` dig label, a public changelog, a Docker image / Postman collection, broader data-graph anchors (Discogs, Last.fm, ListenBrainz), and directory listings (Product Hunt, Internet Archive, a Hugging Face dataset). Pick from `docs/public-surfaces-checklist.md` when one earns its keep.
+- **OpenAPI default-error response.** The generated public spec (`/api/v1/openapi.json`) documents only the success response per op — add a shared default-error response (the uniform `{ code, message, ok: false }` 4xx/5xx the rails encoder emits) so the per-op `400`/`429` docs the old static file carried aren't lost.
+- **The non-gating tail in the checklist:** the `today` dig label, a public changelog, a Docker image / Postman collection, broader data-graph anchors (Discogs, Last.fm, ListenBrainz), and directory listings (Product Hunt, Internet Archive, a Hugging Face dataset). Pick from `docs/public-surfaces-checklist.md` when one earns its keep.
 
 ### Fluncle Lens (Chrome extension) — submitted, in review
 
@@ -127,7 +121,7 @@ Fluncle Lens (`apps/extension`) — an MV3 extension that detects `fluncle://<co
 Open:
 
 - **Post-approval announce + fan-out.** When it clears review, fold it into the surface map — a quiet line to the crew (Telegram / the Friday letter), a mention on `/about` and the `/docs` developer surfaces. It's a net-new public surface the autonomy-ladder §1 fan-out list doesn't yet name.
-- **Future features.** The non-canonical source brainstorm is `docs/rfcs/chrome-extension-brief.md`; translate it into Fluncle's terms when picked up (the brief leans on banned words like "signals" — canon wins per `AGENTS.md`).
+- **Future features.** Beyond Log-ID linkification, any richer Lens behaviour is open-ended — translate ideas into Fluncle's terms when picked up (canon wins per `AGENTS.md`; the source brainstorm leaned on banned words like "signals").
 - **Run-from-source meanwhile.** Pre-approval Maurice is the only user, running it unpacked from `apps/extension/dist/` — fine until it's live; the store build is `bun run --cwd apps/extension bundle`.
 
 ### Tor `.onion` surfaces (RFC final) — stand up the onion
@@ -140,31 +134,26 @@ Turso (libSQL) is the source of truth, hosted in **Ireland**, so every Worker→
 
 Near-term the cheaper win is **edge-caching the `/log` HTML** (short TTL + stale-while-revalidate + purge-on-publish) — scoped separately. Treat D1 as the deeper structural lever: pursue it when DB latency (not render time or asset weight) is the proven bottleneck. Spike it first — confirm D1's limits fit the catalogue and access patterns, and that nothing in the current libSQL usage is load-bearing — before committing to the migration.
 
-### Fluncle's own mixtapes — spine + admin + autopublish shipped
+### Fluncle's own mixtapes — open follow-ups
 
-The mixtape spine is **live** and the admin + cover + draft model were overhauled (PR #22, 2026-06-19, on top of the #18/#20/#21 plumbing). A mixtape is a spine-native object — Fluncle dreaming, a checkpoint — with its own `F`-marked Log ID, a `/log/<id>` compilation page, a `/mixtapes` front door, quiet feed / `recent` / MCP inclusion (without inflating `Found · N`), `DJMixAlbum` JSON-LD, an RSS `<category>`, sitemap entries, and an llms.txt Mixtapes section. Runbook + spine model: **[packages/skills/fluncle-mixtapes](../packages/skills/fluncle-mixtapes)**.
-
-What PR #22 changed: the `/admin/mixtapes` editor now **collapses** each mixtape to a summary row and edits members through a search + drag-reorder **playlist builder** (`@dnd-kit`, searching findings by Log ID / artist / title); **covers render on the fly** via `workers-og`/Satori at `/api/mixtape-cover/<logId>?size=square|og|wide`, derived from the Log ID — the per-mixtape Remotion render and the `cover_image_url` column are gone (`render:mixtape-bg` bakes the shared background once); and a **draft is now the operator-authored subset** (recordedAt, duration, note, tracklist), with the title, Log ID, and cover all minted/derived at publish. The first mixtape, **`019.F.1A`** ("Fluncle Drum & Bass Mixtape #1", 17 findings, 72 min liquid), is published and fanned out; Mixcloud / YouTube / SoundCloud are live (#1 uploaded by hand; the autopublish `distribute` command handles this going forward).
-
-**Autopublish shipped** (validated end-to-end 2026-06-20). One `fluncle admin mixtapes distribute` command pushes a mixtape's video→YouTube + audio→Mixcloud on our own server-side OAuth (`youtube_auth` / `mixcloud_auth`), mint-first into a non-public `distributing` state, the first successful link flips it public; the CLI streams the bytes, the Worker mints the coordinate and records each leg. The `fluncle://<logId>` note breadcrumb (external descriptions only) is built at upload. SoundCloud and the MusicBrainz/Wikidata loop stay manual by design. How-to: the [fluncle-mixtapes skill](../packages/skills/fluncle-mixtapes).
-
-What's left:
+The mixtape spine, the `/admin/mixtapes` editor + on-the-fly covers, and the `fluncle admin mixtapes distribute` autopublish (video→YouTube + audio→Mixcloud on our own OAuth, mint-first) are all live. Runbook + spine model: **[packages/skills/fluncle-mixtapes](../packages/skills/fluncle-mixtapes)**. What's open:
 
 - **Off-site (low priority).** Keep enriching Wikidata `Q140169844` as facts accumulate (the MusicBrainz DJ-mix release [`fc818504`](https://musicbrainz.org/release/fc818504-6c01-4565-be1e-d1b3657f8a7c)) — tracked in the off-site thread above.
+- **SoundCloud + the MusicBrainz/Wikidata loop** stay manual by design.
 
 Out of scope until needed: a teaser-clip-of-a-mixtape pipeline, and the Galaxy-game checkpoint body at the mixtape's sector.
 
 ### Private preview archive — move to a non-public bucket
 
-Shipped (PR #6): enrichment stores the exact official 30s preview used for the feature vector at an operator-only path (`analysis/previews/<log-id>/<sha256>.<ext>`), excluded from every public DTO/UI/RSS/sitemap and from `/api/preview` (public playback stays live-only: stored Deezer → refreshed-by-ISRC → iTunes, `Cache-Control: no-store`; R2 is never the playback source). **Open follow-up:** it currently lives in the public `fluncle-videos` bucket, so its privacy rests only on the unguessable key — move it to a dedicated **non-public** R2 bucket before relying on it as training input. The columns stay inert until the first archive write, so there's runway. (Training consumer: the vibe-placement model below.)
+Enrichment stores the exact official 30s preview used for the feature vector at an operator-only path (`analysis/previews/<log-id>/<sha256>.<ext>`), excluded from every public surface. **Open:** it currently lives in the public `fluncle-videos` bucket, so its privacy rests only on the unguessable key — move it to a dedicated **non-public** R2 bucket before relying on it as training input. The columns stay inert until the first archive write, so there's runway. (Training consumer: the vibe-placement model below.)
 
 ### TikTok audio line-up (build only when a track breaks)
 
 On standby — most relevant during the content backlog. The video is beat-matched to a Deezer/iTunes 30s preview (a fixed mid-song segment); TikTok's attachable sound is usually — not always — the song's first ~60s, trimmable to any start within the span it exposes. When the preview segment isn't reachable there and the track has no obvious section to line up by ear, the visuals pulse to beats that aren't playing. **Stage 0 (now):** by-ear line-up. **Stage 1 (on break):** full-track audio for analysis only via Apify `apidojo/youtube-scraper` (stream URL → ffmpeg → analyze → discard, never stored or served). **Stage 2:** pick the best ~20s window inside the first ~55s, render to it, write the absolute start offset into `render.json` + surface it ("start the sound at 0:42"). Audio policy: YouTube audio is internal-analysis-only; published audio uses official previews. AcousticBrainz-by-ISRC is frozen (~2022/24), so it is not a BPM fallback for new tracks.
 
-### Optimize web playback (clips are all transform-eligible now)
+### Optimize web playback — verify the mobile win
 
-Re-rendering the oversized clips is **done** — every R2 footage file, with-audio and silent, is under Cloudflare's 100 MB transform ceiling (verified 2026-06-17; largest ~95 MB, a few sit close so watch the pipeline's CRF doesn't drift back up). The core playback layer also shipped: `apps/web/src/lib/media.ts` serves same-zone Media Transformation renditions (a 360/480/720/1080 width ladder via `videoRendition`) + a cheap `mode=frame` poster (`videoPoster`), with a one-shot `onError` fallback to the raw master.
+The playback layer is in place: every R2 footage file is under Cloudflare's 100 MB transform ceiling (watch the pipeline's CRF doesn't drift back up — the largest sit close to ~95 MB), and `apps/web/src/lib/media.ts` serves same-zone Media Transformation renditions (a 360/480/720/1080 width ladder via `videoRendition`) + a cheap `mode=frame` poster (`videoPoster`), with a one-shot `onError` fallback to the raw master.
 
 What's left is a real before/after measurement on a mobile connection: throttled-mobile bytes-on-load and time-to-first-frame on real glass. The playback paths are in place around it — the feed carries no video, the Stories player streams via range requests, and the log-page footage defers its fetch until it nears the viewport — so the open item is verifying the win, not building more deferral.
 
@@ -172,7 +161,7 @@ Re-ship caveat (for the content-backlog loop too): replacing a clip at the same 
 
 ### YouTube thumbnails — backfill the back catalogue + guard the missing cover
 
-Custom YouTube thumbnails are wired and on by default: the per-platform push derives `<log-id>/cover.jpg` from the footage path and `pushYouTubeShort` uploads it as `settings.thumbnail` (`apps/web/src/lib/server/postiz.ts`). It's been live since the admin posting board (`b16a5db`, 2026-06-13), so every Short pushed since carries the Fluncle plate; the Shorts published before it still show YouTube's auto-picked video frame. One follow-up, operator-side and low-priority (nothing is broken — new pushes are covered, and a missing cover degrades to a thumbnail-less push rather than failing):
+Custom YouTube thumbnails are wired and on by default (`pushYouTubeShort` uploads `<log-id>/cover.jpg` as `settings.thumbnail`, `apps/web/src/lib/server/postiz.ts`), so every newly-pushed Short carries the Fluncle plate; the Shorts published before that landed still show YouTube's auto-picked frame. One follow-up, operator-side and low-priority (nothing is broken — new pushes are covered, and a missing cover degrades to a thumbnail-less push rather than failing):
 
 - **Backfill the pre-`b16a5db` Shorts.** Postiz's create-post flow makes a _new_ video and has no "edit an existing video's thumbnail" call, so the live Shorts can't be retro-fixed through our path. Options: set each one's thumbnail manually in YouTube Studio (~7 videos, no code), or a one-off **YouTube Data API `thumbnails.set`** script that uploads `cover.jpg` per published Short. The script's blocker — "no direct YouTube credential in the repo" — is gone: the mixtape autopublish work shipped `youtube_auth` + `fluncle admin auth youtube` (our own upload-scoped OAuth), so the backfill is now a trivial reusable `thumbnails.set` script reusing that credential.
 
@@ -201,9 +190,7 @@ The spine (the Log ID) already runs across surfaces; what's ahead:
 
 ### Fluncle's Galaxy — the game (v1 live)
 
-v1 shipped 2026-06-10 at [galaxy.fluncle.com](https://galaxy.fluncle.com) (same Worker, `/galaxy` route): behind-the-ship 8-bit flight where every banger is a star at its Log ID coordinate, the nearest uncollected preview fades in by distance and pans by bearing, reaching a star parks you in an orbit listening moment that refuels the tank, dry tank means towed home at `0/N`, and `N/N` opens the fly-home win with a credits roll of the full log. Touch + keyboard, Esc pause, the `window.fluncle` flight computer easter egg, audio through the same-origin `/api/preview/:idOrLogId` proxy (live Deezer/iTunes only; archived previews are not a playback source). Shares the Log ID spine with the logbook reframe; the shipped design decisions live in the code and git history. What's ahead:
-
-**The entity spine (landed, PR #7).** The world is now data-driven: stars, set-dressing, hazards, and projectiles are one typed `Entity` model with a per-kind behavior table (`game/types.ts` + `sim.ts`), backed by the pure-state tests it was missing (`sim.test.ts`, `entities.test.ts`). Riding that spine: Roadster + UFO set-dressing, the black-hole teleport network (gravity in, slingshot out — never a restart; subsumes the old worm-hole idea), asteroid waves + an auto-clearing laser, the amen-break intro + master volume toggle, and the gate-screen OG image (`packages/media`). Every hazard routes through the fuel economy; the dry-tank tow stays the one true failure. This is the same sim spine the SSH RFC reuses wholesale.
+v1 is live at [galaxy.fluncle.com](https://galaxy.fluncle.com) (same Worker, `/galaxy` route): behind-the-ship 8-bit flight where every banger is a star at its Log ID coordinate. The world is data-driven — stars, set-dressing, hazards, and projectiles are one typed `Entity` model with a per-kind behavior table (`game/types.ts` + `sim.ts`) — and the black-hole teleport network, asteroid waves + auto-clearing laser, the amen-break intro, and the gate-screen OG image (`packages/media`) all ride it; every hazard routes through the fuel economy, the dry-tank tow stays the one true failure. Shares the Log ID spine with the logbook reframe, and is the same sim the SSH version reuses. What's ahead:
 
 **Near polish:**
 
@@ -222,15 +209,13 @@ v1 shipped 2026-06-10 at [galaxy.fluncle.com](https://galaxy.fluncle.com) (same 
 - **Other planets / forward bases** — future, tied to persistence (refuel hubs / respawn points out on the frontier).
 - **The bespoke sprite menagerie** beyond the heroes (see Near polish).
 
-**SSH version (the flex)** — **landed in code and deployed live (PR #13)**. The approach pivoted: instead of compiling `sim.ts` to WASM (Javy/QuickJS → wazero), the SSH galaxy is a **Go port** of the sim (`apps/ssh/internal/galaxy` — engine/placement/projection) kept in lockstep by **parity tests** against the JS source (`apps/web/src/game/parity-fixtures.test.ts` + testdata), wired into the terminal (`screenGalaxy` / `handleGalaxyKey` in `apps/ssh/main.go`). The same _sim_ inside `ssh rave.fluncle.com`, then: a top-down scope renderer, the read-the-log orbit card with an OSC-8 Spotify link, audio-less as flavor ("the audio didn't survive the trip out here — it's still playing back on Earth"), telemetry in the deepest Depth-Gradient register taken from the shipped strings ("Pulled under. Flung across the galaxy." · "Home, junglist."). Map knowledge is portable across surfaces — the Log ID spine paying off. The working Go port + parity harness resolve the old PASS/KILL spikes (SSH input latency; the engine model) and the "confirm realtime input + frame rate" question. **Deployed and live at `rave.fluncle.com` (2026-06-17)** — the Minimum Lovable galaxy shipped whole, the same _sim_ inside the terminal. Remaining are named fast-follows: SSH experience polish, QR / Kitty-input / ambient-crew.
+**SSH version (the flex)** — live at `ssh rave.fluncle.com`: a Go port of the sim (`apps/ssh/internal/galaxy`) kept in lockstep with the JS source by parity tests (`apps/web/src/game/parity-fixtures.test.ts`), the same _sim_ inside the terminal — top-down scope renderer, the read-the-log orbit card with an OSC-8 Spotify link, audio-less as flavor, telemetry in the deepest Depth-Gradient register. Map knowledge is portable across surfaces — the Log ID spine paying off. Remaining are named fast-follows: SSH experience polish, QR / Kitty-input / ambient-crew.
 
 **Persistence:** web private accounts now sync lifetime Galaxy progress without changing active-run cargo. Cross-surface login for SSH/CLI remains future work; anonymous play stays first-class.
 
 ### User accounts
 
-The private web account layer shipped in PR #19: Better Auth email/password + username, `/account`, private Galaxy lifetime progress, saved findings, signed-in submission ownership, export/delete, durable DB-backed rate limits, CSRF-bound account mutations, and hard separation from admin auth. Anonymous browse, submit, RSS, MCP, CLI, SSH, and Galaxy play remain unchanged.
-
-Follow-ups are deliberately separate from the first private web slice:
+The private web account layer is live (Better Auth email/password + username, `/account`, private Galaxy lifetime progress, saved findings, signed-in submission ownership, export/delete, durable rate limits, hard separation from admin auth). Anonymous browse, submit, RSS, MCP, CLI, SSH, and Galaxy play stay unchanged. Follow-ups, deliberately separate from that first slice:
 
 - **Cross-surface account login:** CLI/SSH device login for synced Galaxy lifetime markers, saved findings, and own submissions. User tokens must stay separate from `FLUNCLE_API_TOKEN`, and SSH stays anonymous by default.
 - **Authenticated MCP tools:** only if there is a concrete agent use case; keep the existing MCP server/card anonymous until a dedicated auth contract, CORS/header behavior, and failure model exist.

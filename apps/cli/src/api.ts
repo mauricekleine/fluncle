@@ -1,5 +1,5 @@
 import { getApiBaseUrl, loadEnv } from "./env";
-import { CliError, type JsonFailure } from "./output";
+import { CliError, isJsonFailure } from "./output";
 
 export async function publicApiGet<T>(path: string): Promise<T> {
   return apiRequest<T>(path);
@@ -89,13 +89,18 @@ async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const data = parseJson(text);
 
   if (!response.ok) {
-    const failure = data as JsonFailure | undefined;
+    // Validate the error arm before reading it: a malformed/shapeless error body
+    // degrades to the HTTP status line instead of surfacing `undefined`.
+    const failure = isJsonFailure(data) ? data : undefined;
     throw new CliError(
       failure?.code ?? `http_${response.status}`,
       failure?.message ?? `${response.status} ${response.statusText}`,
     );
   }
 
+  // The caller supplies `T` from the contract response types (`@fluncle/contracts`);
+  // this is the boundary cast over the JSON-parsed body (the one documented escape
+  // hatch in the thin HTTP client).
   return data as T;
 }
 

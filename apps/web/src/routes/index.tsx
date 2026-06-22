@@ -16,8 +16,24 @@ import { StoriesDialog } from "@/components/stories/stories-dialog";
 import { TrackRow } from "@/components/track-row";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { siteUrl, spotifyPlaylistUrl, telegramUrl } from "@/lib/fluncle-links";
+import {
+  discogsUrl,
+  instagramUrl,
+  lastfmUrl,
+  mixcloudUrl,
+  musicbrainzUrl,
+  onionUrl,
+  siteUrl,
+  soundcloudUrl,
+  spotifyPlaylistUrl,
+  telegramUrl,
+  tiktokUrl,
+  twitchUrl,
+  wikidataUrl,
+  youtubeUrl,
+} from "@/lib/fluncle-links";
 import { fluncleAsciiLogo, fluncleDescription } from "@/lib/identity";
+import { jsonLdScript } from "@/lib/json-ld";
 import { type FeedItem } from "@/lib/mixtapes";
 import { listTracks } from "@/lib/server/tracks";
 import { fetchTracks, type TracksResponse } from "@/lib/tracks";
@@ -75,51 +91,67 @@ export const Route = createFileRoute("/")({
         type: "image/webp",
       },
     ],
+    // JSON-LD goes through `jsonLdScript`, which HTML-escapes the serialized
+    // payload before it reaches the inline <script>'s `children` (rendered raw
+    // via dangerouslySetInnerHTML), so untrusted Spotify titles/artists/album
+    // can't break out of the <script> (stored-XSS sink, security review).
     scripts: [
-      {
-        // The site-level entity block (no SearchAction: there is no search
-        // results page, and schema must mirror what the page actually does).
-        children: JSON.stringify({
-          "@context": "https://schema.org",
-          "@type": "WebSite",
-          description: fluncleDescription,
-          name: "Fluncle",
-          url: `${siteUrl}/`,
-        }),
-        type: "application/ld+json",
-      },
-      {
-        children: JSON.stringify({
-          "@context": "https://schema.org",
-          "@type": "MusicPlaylist",
-          description: fluncleDescription,
-          genre: "Drum and Bass",
-          image: `${siteUrl}/fluncle-cover.png`,
-          name: "Fluncle's Findings",
-          numTracks: loaderData?.totalCount,
-          sameAs: [spotifyPlaylistUrl, telegramUrl],
-          track: loaderData?.tracks.flatMap((track) => {
-            if (track.type === "mixtape") {
-              return [];
-            }
+      // The site-level entity block (no SearchAction: there is no search results
+      // page, and schema must mirror what the page actually does).
+      jsonLdScript({
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        description: fluncleDescription,
+        name: "Fluncle",
+        url: `${siteUrl}/`,
+      }),
+      jsonLdScript({
+        "@context": "https://schema.org",
+        "@type": "MusicPlaylist",
+        description: fluncleDescription,
+        genre: "Drum and Bass",
+        image: `${siteUrl}/fluncle-cover.png`,
+        name: "Fluncle's Findings",
+        numTracks: loaderData?.totalCount,
+        // The full identity graph, matching /about's MusicGroup so the home
+        // page (highest authority, hit first by crawlers) declares the same
+        // corroboration anchors. Same order as /about so the entity reads
+        // identically everywhere.
+        sameAs: [
+          spotifyPlaylistUrl,
+          telegramUrl,
+          tiktokUrl,
+          instagramUrl,
+          youtubeUrl,
+          mixcloudUrl,
+          soundcloudUrl,
+          twitchUrl,
+          onionUrl,
+          musicbrainzUrl,
+          wikidataUrl,
+          lastfmUrl,
+          discogsUrl,
+        ],
+        track: loaderData?.tracks.flatMap((track) => {
+          if (track.type === "mixtape") {
+            return [];
+          }
 
-            return [
-              {
-                "@type": "MusicRecording",
-                byArtist: track.artists.map((artist) => ({
-                  "@type": "MusicGroup",
-                  name: artist,
-                })),
-                ...(track.album ? { inAlbum: { "@type": "MusicAlbum", name: track.album } } : {}),
-                name: track.title,
-                url: track.spotifyUrl,
-              },
-            ];
-          }),
-          url: `${siteUrl}/`,
+          return [
+            {
+              "@type": "MusicRecording",
+              byArtist: track.artists.map((artist) => ({
+                "@type": "MusicGroup",
+                name: artist,
+              })),
+              ...(track.album ? { inAlbum: { "@type": "MusicAlbum", name: track.album } } : {}),
+              name: track.title,
+              url: track.spotifyUrl,
+            },
+          ];
         }),
-        type: "application/ld+json",
-      },
+        url: `${siteUrl}/`,
+      }),
     ],
   }),
   component: HomePage,
@@ -339,6 +371,16 @@ function HomePage() {
                   </div>
                 ) : undefined}
 
+                {tracks.length === 0 && error ? (
+                  // The first page never arrived: surface it here instead of a
+                  // blank field. (Once any track has loaded, an error on a later
+                  // page is shown by the note below the field.)
+                  <div className="empty-scanlines px-4 py-10 text-center text-muted-foreground">
+                    <p>Couldn't reach the archive. The findings didn't make the trip back.</p>
+                    <p className="mt-1 text-destructive">{error}</p>
+                  </div>
+                ) : undefined}
+
                 {tracks.length > 0 ? (
                   // The feed sizes to its content but never taller than ~a viewport (max-height,
                   // not a fixed height — so a short list doesn't leave empty padding below it),
@@ -379,7 +421,9 @@ function HomePage() {
                 ) : undefined}
               </div>
 
-              {error ? <p className="mt-4 text-sm text-destructive">{error}</p> : undefined}
+              {error && tracks.length > 0 ? (
+                <p className="mt-4 text-sm text-destructive">{error}</p>
+              ) : undefined}
 
               {cursor ? <span className="sr-only">Loaded through cursor {cursor}</span> : undefined}
             </section>

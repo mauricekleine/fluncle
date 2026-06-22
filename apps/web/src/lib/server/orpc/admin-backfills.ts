@@ -19,7 +19,7 @@
 import { backfillDiscogsIds, backfillLastfmLoves } from "../backfill";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { sweepEnrichmentQueue } from "../spinup";
-import { apiFault, type Implementer } from "./_shared";
+import { apiFault, type Implementer, parseLimit } from "./_shared";
 
 // Ported verbatim from the live backfill routes.
 const BACKFILL_DEFAULT_LIMIT = 50;
@@ -28,20 +28,6 @@ const BACKFILL_MAX_LIMIT = 500;
 // Ported verbatim from the live enrich-sweep route (a smaller pass budget).
 const SWEEP_DEFAULT_LIMIT = 25;
 const SWEEP_MAX_LIMIT = 100;
-
-function parseLimit(value: string | undefined, fallback: number, max: number): number {
-  if (!value) {
-    return fallback;
-  }
-
-  const limit = Number.parseInt(value, 10);
-
-  if (!Number.isInteger(limit) || limit < 1) {
-    return fallback;
-  }
-
-  return Math.min(limit, max);
-}
 
 function parseBool(value: string | undefined): boolean {
   return value === "1" || value === "true";

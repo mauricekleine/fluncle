@@ -79,11 +79,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/submissions/{submissionId}/reject": "reject_submission",
   "POST /admin/tracks": "add_track",
   "POST /admin/tracks/enrich": "enrich_track",
-  "POST /admin/tracks/{trackId}/observe": "observe_track",
-  // observe_context is served by oRPC at its own path; like the enrich op above it
+  // context_track is served by oRPC at its own path; like the enrich op above it
   // has no TanStack route FILE (oRPC owns the path directly), so it lives here as a
-  // path→op entry without a `tracks.$trackId.observe-context.ts` route file.
-  "POST /admin/tracks/{trackId}/observe-context": "observe_context",
+  // path→op entry without a `tracks.$trackId.context.ts` route file.
+  "POST /admin/tracks/{trackId}/context": "context_track",
+  "POST /admin/tracks/{trackId}/observe": "observe_track",
   "POST /admin/tracks/{trackId}/social/{platform}/draft": "draft_track_social",
   "POST /admin/tracks/{trackId}/video/finalize": "finalize_track_video",
   "POST /admin/tracks/{trackId}/video/uploads": "presign_track_video_uploads",
@@ -104,18 +104,18 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
 //     they are CONVERTED, not carved out, in the admin wave.)
 //   - The admin `logout` (GET): a 302 that expires the grant cookie and bounces to
 //     /admin/login. Not RPC JSON, so it stays on TanStack like the OAuth redirects.
-//   - The multipart-FILE routes (`preview-archive`; the legacy multipart
-//     `…/video.ts` POST, superseded by the converted presign/finalize JSON
-//     control-plane): they take `request.formData()` with a `File` part. Per the
-//     brief, oRPC's multipart-file-body ergonomics on workerd are not adopted for
-//     this pilot — these single irregular routes stay on TanStack, not the model
-//     for the wave. CARVED OUT (the decision the brief asks for at kickoff).
+//   - The multipart-FILE route (`preview-archive`): it takes `request.formData()`
+//     with a `File` part. Per the brief, oRPC's multipart-file-body ergonomics on
+//     workerd are not adopted for this pilot — this single irregular route stays on
+//     TanStack, not the model for the wave. CARVED OUT (the decision the brief asks
+//     for at kickoff). (The legacy multipart `…/video.ts` POST that was carved out
+//     alongside it has since been REMOVED — no first-party caller posted a small
+//     multipart bundle; the CLI uses the presign/finalize JSON flow.)
 const ADMIN_CARVE_OUT_ROUTE_PREFIXES = ["spotify/auth/", "youtube/auth/", "mixcloud/auth/"];
 
 const ADMIN_CARVE_OUT_ROUTES = new Set([
   "logout", // a 302 redirect (expire the grant cookie, bounce to /admin/login), not RPC JSON.
   "tracks.$trackId.preview-archive", // multipart-file body (formData → File).
-  "tracks.$trackId.video", // the legacy multipart upload, superseded by presign/finalize.
 ]);
 
 const ADMIN_DIR = fileURLToPath(new URL("../../routes/api/admin", import.meta.url));

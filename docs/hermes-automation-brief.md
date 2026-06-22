@@ -2,7 +2,7 @@
 
 **Status: parked planning, not a spec — but the slice it waited on has largely landed.** This brief is the scoping for turning the Hermes chat agent into Fluncle's queue-driven automation orchestrator. The oRPC + Convention B slice that gated it is now mostly in (see [What landed](#what-landed-so-this-is-buildable-not-blocked)); what's left before a clean build start is narrow (see [Green light](#green-light)). Per `AGENTS.md`, a `*-brief.md` is non-canonical planning — the codebase and canon (`DESIGN.md` / `PRODUCT.md` / `VOICE.md`) win on any conflict.
 
-Related: the live agent's architecture + security model is [docs/agents/hermes-agent.md](./agents/hermes-agent.md); the oRPC rails are [docs/orpc-migration-brief.md](./orpc-migration-brief.md); the newsletter is now owned by its own RFC, [docs/rfcs/newsletter-own-the-stack.md](./rfcs/newsletter-own-the-stack.md) (see [§ Newsletter](#newsletter--owned-by-its-own-rfc)).
+Related: the live agent's architecture + security model is [docs/agents/hermes-agent.md](./agents/hermes-agent.md); the oRPC rails it builds on shipped (the contracts live in `packages/contracts/src/orpc`, the auth spine in `apps/web/src/lib/server/orpc-auth.ts`); the newsletter is now owned by its own RFC, [docs/rfcs/newsletter-own-the-stack.md](./rfcs/newsletter-own-the-stack.md) (see [§ Newsletter](#newsletter--owned-by-its-own-rfc)).
 
 ## What landed (so this is buildable, not blocked)
 

@@ -1,17 +1,20 @@
 import { adminApiGet, adminApiPost } from "../api";
 import { mapTrack, type RecentTrack, type TracksResponse } from "./recent";
 
-// Mirrors the /api/admin/tracks page cap. The order + hasVideo + status filters
-// are applied in SQL by listTracks; the CLI just pages through the matching rows.
+// Mirrors the /api/admin/tracks page cap. The order + hasVideo + hasContext +
+// hasObservation + status filters are applied in SQL by listTracks; the CLI just
+// pages through the matching rows.
 const pageSize = 48;
 
 async function fetchAdminTracks(options: {
+  hasContext?: boolean;
+  hasObservation?: boolean;
   hasVideo?: boolean;
   max: number;
   order: "asc" | "desc";
   status?: string;
 }): Promise<RecentTrack[]> {
-  const { hasVideo, max, order, status } = options;
+  const { hasContext, hasObservation, hasVideo, max, order, status } = options;
   const results: RecentTrack[] = [];
   let cursor: string | undefined;
 
@@ -20,6 +23,14 @@ async function fetchAdminTracks(options: {
 
     if (hasVideo !== undefined) {
       params.set("hasVideo", String(hasVideo));
+    }
+
+    if (hasContext !== undefined) {
+      params.set("hasContext", String(hasContext));
+    }
+
+    if (hasObservation !== undefined) {
+      params.set("hasObservation", String(hasObservation));
     }
 
     if (status !== undefined) {
@@ -52,10 +63,26 @@ async function fetchAdminTracks(options: {
   return results;
 }
 
+export type QueueFilters = {
+  hasContext?: boolean;
+  hasObservation?: boolean;
+};
+
 // The render queue: findings with no video yet, oldest first. The first row is
 // the next finding to film (oldest-first is how the backlog is worked down).
-export async function queueCommand(limit: number): Promise<RecentTrack[]> {
-  return fetchAdminTracks({ hasVideo: false, max: limit, order: "asc" });
+// The optional `hasContext`/`hasObservation` filters narrow it to the observation
+// crons' queues (so a cron can ask "what still needs field notes / a voice?").
+export async function queueCommand(
+  limit: number,
+  filters: QueueFilters = {},
+): Promise<RecentTrack[]> {
+  return fetchAdminTracks({
+    hasContext: filters.hasContext,
+    hasObservation: filters.hasObservation,
+    hasVideo: false,
+    max: limit,
+    order: "asc",
+  });
 }
 
 // The ENRICHMENT queue (distinct from the VIDEO queue above): findings needing
@@ -63,6 +90,25 @@ export async function queueCommand(limit: number): Promise<RecentTrack[]> {
 // sweep re-fires these; this read just surfaces what's stuck.
 export async function enrichQueueCommand(limit: number): Promise<RecentTrack[]> {
   return fetchAdminTracks({ max: limit, order: "asc", status: "queue" });
+}
+
+// The CONTEXT queue: findings whose factual field notes haven't been gathered yet
+// (`hasContext=false`), oldest first — the `context` cron's worklist (each row is a
+// `tracks context <id>` to run).
+export async function contextQueueCommand(limit: number): Promise<RecentTrack[]> {
+  return fetchAdminTracks({ hasContext: false, max: limit, order: "asc" });
+}
+
+// The OBSERVATION queue: findings with field notes on file but no spoken
+// observation yet (`hasContext=true AND hasObservation=false`), oldest first — the
+// `observe` cron's worklist (each row is a `tracks observe <id>` to run).
+export async function observeQueueCommand(limit: number): Promise<RecentTrack[]> {
+  return fetchAdminTracks({
+    hasContext: true,
+    hasObservation: false,
+    max: limit,
+    order: "asc",
+  });
 }
 
 export type EnrichSweepEntry = {
