@@ -271,14 +271,14 @@ export function adminTracksHandlers(os: Implementer) {
     }
   });
 
-  // POST /admin/tracks — operator tier (live `requireOperator`). Add (publish) a
-  // finding from a Spotify URL, then kick off async enrichment.
-  const addTrackHandler = os.add_track
+  // POST /admin/tracks — operator tier (live `requireOperator`). Publish a finding
+  // from a Spotify URL, then kick off async enrichment.
+  const publishTrackHandler = os.publish_track
     .use(adminAuth)
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        const body: AdminTrackInputs["add_track"] = input;
+        const body: AdminTrackInputs["publish_track"] = input;
 
         if (typeof body.spotifyUrl !== "string") {
           throw new ORPCError("BAD_REQUEST", {
@@ -710,12 +710,12 @@ export function adminTracksHandlers(os: Implementer) {
     });
 
   return {
-    add_track: addTrackHandler,
     context_track: contextTrackHandler,
     finalize_track_video: finalizeVideoHandler,
     list_tracks_admin: listTracksAdminHandler,
     observe_track: observeTrackHandler,
     presign_track_video_uploads: presignVideoUploadsHandler,
+    publish_track: publishTrackHandler,
     update_track: updateTrackHandler,
   };
 }

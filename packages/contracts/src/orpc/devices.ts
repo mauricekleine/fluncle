@@ -68,7 +68,7 @@ export const deregisterDevice = oc
   .output(z.object({ ok: z.literal(true) }));
 
 /**
- * `sweep_push_receipts` → `POST /admin/push/sweep-receipts` (operationId
+ * `sweep_push_receipts` → `POST /admin/push/receipts/sweep` (operationId
  * `sweepPushReceipts`).
  *
  * Admin tier (live `requireAdmin` — like `sweep_enrichment`, so an external cron
@@ -84,7 +84,7 @@ export const sweepPushReceipts = oc
     inputStructure: "detailed",
     method: "POST",
     operationId: "sweepPushReceipts",
-    path: "/admin/push/sweep-receipts",
+    path: "/admin/push/receipts/sweep",
     summary: "Prune push tokens Expo reports gone (DeviceNotRegistered via receipts)",
     tags: ["Admin"],
   })

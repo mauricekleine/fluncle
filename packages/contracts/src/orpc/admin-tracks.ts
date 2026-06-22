@@ -268,8 +268,8 @@ export const finalizeTrackVideo = oc
   );
 
 /**
- * The add-track result (`AddTrackResult` in ../index.ts). The `POST /admin/tracks`
- * body — `publishTrack`'s envelope, reused for `add_track`'s output.
+ * The publish-track result (`AddTrackResult` in ../index.ts). The
+ * `POST /admin/tracks` body — `publishTrack`'s output envelope.
  */
 const AddTrackResultSchema = z
   .object({
@@ -349,19 +349,19 @@ export const listTracksAdmin = oc
   );
 
 /**
- * `add_track` → `POST /admin/tracks` (operationId `addTrack`).
+ * `publish_track` → `POST /admin/tracks` (operationId `publishTrack`).
  *
- * Add (publish) a finding from a Spotify URL: certify it, post to Telegram, kick
- * off async enrichment. Operator tier (live `requireOperator`). LOOSE body — the
- * live route validates `spotifyUrl` itself (`invalid_request`/400) and caps the
- * note (`note_too_long`). Preserves the `{ ok: true, ...AddTrackResult }` envelope.
+ * Publish a finding from a Spotify URL: certify it, post to Telegram, kick off
+ * async enrichment. Operator tier (live `requireOperator`). LOOSE body — the live
+ * route validates `spotifyUrl` itself (`invalid_request`/400) and caps the note
+ * (`note_too_long`). Preserves the `{ ok: true, ...AddTrackResult }` envelope.
  */
-export const addTrack = oc
+export const publishTrack = oc
   .route({
     method: "POST",
-    operationId: "addTrack",
+    operationId: "publishTrack",
     path: "/admin/tracks",
-    summary: "Add (publish) a finding from a Spotify URL",
+    summary: "Publish a finding from a Spotify URL",
     tags: ["Admin"],
   })
   .input(
@@ -375,11 +375,11 @@ export const addTrack = oc
 
 /** The `admin-tracks` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminTracksContract = {
-  add_track: addTrack,
   context_track: contextTrack,
   finalize_track_video: finalizeTrackVideo,
   list_tracks_admin: listTracksAdmin,
   observe_track: observeTrack,
   presign_track_video_uploads: presignTrackVideoUploads,
+  publish_track: publishTrack,
   update_track: updateTrack,
 };

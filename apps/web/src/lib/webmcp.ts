@@ -69,7 +69,7 @@ const tools: WebMcpTool[] = [
       },
       type: "object",
     },
-    name: "get_recent_tracks",
+    name: "list_tracks",
   },
   {
     description: "Pull one random certified track from Fluncle's archive.",
@@ -188,6 +188,16 @@ const tools: WebMcpTool[] = [
     name: "subscribe_newsletter",
   },
 ];
+
+// `get_recent_tracks` deprecation alias of `list_tracks` (Convention B §4), kept in
+// parity with the server MCP surface (lib/server/mcp.ts). Shares the canonical
+// tool's execute + schema so the two never drift.
+const listTracksTool = tools[0];
+tools.push({
+  ...listTracksTool,
+  description: `[Deprecated — use list_tracks] ${listTracksTool.description}`,
+  name: "get_recent_tracks",
+});
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";

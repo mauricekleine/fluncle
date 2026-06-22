@@ -18,16 +18,24 @@ describe("fluncle CLI parsing and JSON output", () => {
   });
 
   test("keeps validation failures as JSON when --json is present", async () => {
-    const result = await runCli(["track", "get", "--json"]);
+    const result = await runCli(["tracks", "get", "--json"]);
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe("");
     expect(result.stdout).toBe(`{
   "code": "error",
-  "message": "Missing id. Usage: fluncle track get <track_id|log_id> [--json]",
+  "message": "Missing id. Usage: fluncle tracks get <track_id|log_id> [--json]",
   "ok": false
 }
 `);
+  });
+
+  test("the singular `track get` alias still resolves to the same handler", async () => {
+    const result = await runCli(["track", "get", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Missing id. Usage: fluncle tracks get");
   });
 
   test("preserves the recent alias and limit validation before fetching", async () => {
@@ -75,8 +83,8 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
-  test("admin tracks enrich-queue validates --limit before fetching", async () => {
-    const result = await runCli(["admin", "tracks", "enrich-queue", "--limit", "0", "--json"]);
+  test("admin tracks enrich --queue validates --limit before fetching", async () => {
+    const result = await runCli(["admin", "tracks", "enrich", "--queue", "--limit", "0", "--json"]);
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe("");
@@ -87,18 +95,21 @@ describe("fluncle CLI parsing and JSON output", () => {
     const tracksHelp = await runCli(["admin", "tracks", "--help"]);
 
     expect(tracksHelp.exitCode).toBe(0);
-    // The enrich-queue read (the box cron's worklist) is the kept enrichment
-    // surface; the old `enrich`/`enrich-sweep` sweep commands are gone (the
-    // on-box `fluncle-enrich` cron drains the queue directly).
-    expect(tracksHelp.stdout).toContain("enrich-queue");
+    // The worklist views are `--queue` flags on the verbs (Convention B §6.4 — no
+    // dash-compound `*-queue` commands). The enrichment sweep itself is the on-box
+    // `fluncle-enrich` cron, which reads `tracks enrich --queue` to drain the queue.
+    expect(tracksHelp.stdout).toContain("enrich");
+    expect(tracksHelp.stdout).not.toContain("enrich-queue");
     expect(tracksHelp.stdout).not.toContain("enrich-sweep");
+    expect(tracksHelp.stdout).not.toContain("context-queue");
+    expect(tracksHelp.stdout).not.toContain("observe-queue");
     expect(tracksHelp.stdout).toContain("queue");
     expect(tracksHelp.stdout).toContain("publish");
     expect(tracksHelp.stdout).toContain("vehicles");
-    // The observation-pipeline surface: the context command + the two cron queues.
+    // The observation-pipeline surface: the context + observe verbs (each with a
+    // `--queue` worklist view).
     expect(tracksHelp.stdout).toContain("context");
-    expect(tracksHelp.stdout).toContain("context-queue");
-    expect(tracksHelp.stdout).toContain("observe-queue");
+    expect(tracksHelp.stdout).toContain("observe");
   });
 
   test("admin tracks video requires a footage cut before any upload", async () => {
@@ -160,16 +171,32 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Usage: fluncle admin tracks context");
   });
 
-  test("admin tracks context-queue validates --limit before fetching", async () => {
-    const result = await runCli(["admin", "tracks", "context-queue", "--limit", "0", "--json"]);
+  test("admin tracks context --queue validates --limit before fetching", async () => {
+    const result = await runCli([
+      "admin",
+      "tracks",
+      "context",
+      "--queue",
+      "--limit",
+      "0",
+      "--json",
+    ]);
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
-  test("admin tracks observe-queue validates --limit before fetching", async () => {
-    const result = await runCli(["admin", "tracks", "observe-queue", "--limit", "0", "--json"]);
+  test("admin tracks observe --queue validates --limit before fetching", async () => {
+    const result = await runCli([
+      "admin",
+      "tracks",
+      "observe",
+      "--queue",
+      "--limit",
+      "0",
+      "--json",
+    ]);
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe("");

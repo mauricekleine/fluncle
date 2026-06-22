@@ -34,6 +34,12 @@ type AdminQueueOptions = AdminListOptions & {
   hasObservation?: boolean;
 };
 
+// A verb whose worklist is a `--queue` view flag (`tracks enrich|observe|context
+// --queue`): the worklist runners read `json`/`limit` off it (AdminListOptions).
+type AdminQueueViewOptions = AdminListOptions & {
+  queue?: boolean;
+};
+
 type OpenOptions = {
   app: boolean;
   browser: boolean;
@@ -102,7 +108,9 @@ type TrackObserveOptions = {
   durationMs?: string;
   durationTargetSec?: string;
   json: boolean;
+  limit?: string;
   model?: string;
+  queue?: boolean;
   script?: string;
   scriptFile?: string;
   voiceId?: string;
@@ -110,7 +118,9 @@ type TrackObserveOptions = {
 
 type TrackContextOptions = {
   json: boolean;
+  limit?: string;
   query?: string;
+  queue?: boolean;
 };
 
 type PreviewArchiveBackfillOptions = {
@@ -320,11 +330,15 @@ function addMetaCommands(program: Command): void {
 }
 
 function addTrackCommands(program: Command): void {
-  const track = configureCommand(
-    program.command("track", { hidden: true }).description("Public track lookups"),
+  // Convention B (docs/naming-conventions.md §6.3): public CLI groups are PLURAL.
+  // The canonical public lookup group is `tracks`; the old singular `track` is kept
+  // as a hidden alias so `track get <id>` still resolves (mirrors the admin
+  // `tracks`-alias-`track` pattern).
+  const tracks = configureCommand(
+    program.command("tracks", { hidden: true }).alias("track").description("Public track lookups"),
   );
 
-  track
+  tracks
     .command("get")
     .description("Look up one finding by id or Log ID")
     .argument("[idOrLogId]")
@@ -355,11 +369,13 @@ function addAdminCommands(program: Command): void {
   // Convention B (docs/naming-conventions.md §4): the admin CLI is `group
   // noun-verb` with PLURAL groups. The canonical track group is `tracks`; the old
   // singular `track` group is kept as a hidden alias so `admin track <cmd>` still
-  // resolves. The formerly-flat `admin add|queue|enrich-queue|vehicles` commands
-  // move under `tracks` (canonical) and stay registered as hidden flat commands
-  // (back-compat for crons + muscle memory). `enrich-queue` (the noun) stays a
-  // `tracks enrich-queue` show — the box `fluncle-enrich` cron reads it to drain
-  // the queue (the Worker no longer re-fires enrichment itself).
+  // resolves. The formerly-flat `admin add|queue|vehicles` commands move under
+  // `tracks` (canonical) and stay registered as hidden flat commands (back-compat
+  // for crons + muscle memory). A verb's worklist is a `--queue` view flag on the
+  // verb itself (`tracks enrich --queue`, `tracks observe --queue`, `tracks
+  // context --queue`), not a dash-compound command (§6.4) — the box `fluncle-enrich`
+  // cron reads `tracks enrich --queue` to drain the queue (the Worker no longer
+  // re-fires enrichment itself).
   const adminTracks = configureCommand(
     admin.command("tracks").alias("track").description("Track admin commands"),
   );
@@ -421,46 +437,18 @@ function addAdminCommands(program: Command): void {
       await runAdminQueue(options, queueCommand);
     });
 
-  // `context_track`'s worklist: findings whose field notes haven't been gathered.
+  // The enrichment verb. Enrichment itself runs as the on-box `fluncle-enrich`
+  // `--no-agent` cron (it analyzes on-box and writes back via `tracks update`), so
+  // the CLI surface is the worklist view: `--queue` shows findings needing
+  // (re-)enrichment — pending ∪ failed ∪ stuck processing. The box cron reads this
+  // to drain the queue.
   adminTracks
-    .command("context-queue")
-    .description("Findings missing their field notes, oldest first (the context cron's worklist)")
+    .command("enrich")
+    .description("Enrichment worklist (pending, failed, or stuck processing) — use --queue")
+    .option("--queue", "Show the enrichment worklist, oldest first", false)
     .option("--limit <limit>", "Number of findings to show", "10")
     .option("--json", "Print JSON", false)
-    .action(async (options: AdminListOptions) => {
-      const { contextQueueCommand } = await import("./commands/admin-tracks");
-      await runAdminContextQueue(options, contextQueueCommand);
-    });
-
-  // `observe_track`'s worklist: findings with field notes but no spoken observation.
-  adminTracks
-    .command("observe-queue")
-    .description(
-      "Findings with notes but no observation yet, oldest first (the observe cron's worklist)",
-    )
-    .option("--limit <limit>", "Number of findings to show", "10")
-    .option("--json", "Print JSON", false)
-    .action(async (options: AdminListOptions) => {
-      const { observeQueueCommand } = await import("./commands/admin-tracks");
-      await runAdminObserveQueue(options, observeQueueCommand);
-    });
-
-  adminTracks
-    .command("enrich-queue")
-    .description("Findings needing (re-)enrichment: pending, failed, or stuck processing")
-    .option("--limit <limit>", "Number of findings to show", "10")
-    .option("--json", "Print JSON", false)
-    .action(async (options: AdminListOptions) => {
-      const { enrichQueueCommand } = await import("./commands/admin-tracks");
-      await runAdminEnrichQueue(options, enrichQueueCommand);
-    });
-
-  admin
-    .command("enrich-queue", { hidden: true })
-    .description("Enrich queue (alias of `admin tracks enrich-queue`)")
-    .option("--limit <limit>", "Number of findings to show", "10")
-    .option("--json", "Print JSON", false)
-    .action(async (options: AdminListOptions) => {
+    .action(async (options: AdminQueueViewOptions) => {
       const { enrichQueueCommand } = await import("./commands/admin-tracks");
       await runAdminEnrichQueue(options, enrichQueueCommand);
     });
@@ -573,6 +561,12 @@ function addAdminCommands(program: Command): void {
     .command("observe")
     .description("Render Fluncle's spoken field observation for a track (ElevenLabs, Worker-side)")
     .argument("[idOrLogId]")
+    .option(
+      "--queue",
+      "Show the observe worklist (notes but no observation yet), oldest first",
+      false,
+    )
+    .option("--limit <limit>", "Number of findings to show with --queue", "10")
     .option("--script <text>", "The voice-gated observation script (the spoken text)")
     .option(
       "--script-file <file>",
@@ -586,6 +580,14 @@ function addAdminCommands(program: Command): void {
     .option("--json", "Print JSON", false)
     .allowExcessArguments()
     .action(async (idOrLogId: string | undefined, options: TrackObserveOptions) => {
+      // `--queue` is the observe worklist view (findings with notes but no
+      // observation yet) — the observe cron's worklist. Otherwise observe one track.
+      if (options.queue) {
+        const { observeQueueCommand } = await import("./commands/admin-tracks");
+        await runAdminObserveQueue(options, observeQueueCommand);
+        return;
+      }
+
       const { trackObserveCommand } = await import("./commands/track");
       await runTrackObserve(idOrLogId, options, trackObserveCommand);
     });
@@ -596,10 +598,24 @@ function addAdminCommands(program: Command): void {
     .command("context")
     .description("Gather the field notes for a finding (facts only; observe speaks from them)")
     .argument("[idOrLogId]")
+    .option(
+      "--queue",
+      "Show the context worklist (findings missing field notes), oldest first",
+      false,
+    )
+    .option("--limit <limit>", "Number of findings to show with --queue", "10")
     .option("--query <text>", "Override the fact-search query (else the Worker builds one)")
     .option("--json", "Print JSON", false)
     .allowExcessArguments()
     .action(async (idOrLogId: string | undefined, options: TrackContextOptions) => {
+      // `--queue` is the context worklist view (findings missing field notes) — the
+      // context cron's worklist. Otherwise gather one finding's field notes.
+      if (options.queue) {
+        const { contextQueueCommand } = await import("./commands/admin-tracks");
+        await runAdminContextQueue(options, contextQueueCommand);
+        return;
+      }
+
       const { trackContextCommand } = await import("./commands/track");
       await runTrackContext(idOrLogId, options, trackContextCommand);
     });
@@ -1288,7 +1304,7 @@ async function runTrackGet(
   trackGetCommand: typeof import("./commands/track").trackGetCommand,
 ): Promise<void> {
   if (!idOrLogId) {
-    throw new Error("Missing id. Usage: fluncle track get <track_id|log_id> [--json]");
+    throw new Error("Missing id. Usage: fluncle tracks get <track_id|log_id> [--json]");
   }
 
   const result = await trackGetCommand(idOrLogId);

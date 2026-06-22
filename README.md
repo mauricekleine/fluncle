@@ -86,9 +86,9 @@ bun run --cwd apps/cli fluncle open telegram --app
 bun run --cwd apps/cli fluncle submit
 bun run --cwd apps/cli fluncle submit "https://open.spotify.com/track/..."
 bun run --cwd apps/cli fluncle version --check
-bun run --cwd apps/cli fluncle admin add "https://open.spotify.com/track/..." --note "Absolute weapon"
-bun run --cwd apps/cli fluncle admin add "https://open.spotify.com/track/..." --dry-run
-bun run --cwd apps/cli fluncle admin track preview-archive <track-id-or-log-id> --file preview.mp3 --source deezer:isrc --mime audio/mpeg
+bun run --cwd apps/cli fluncle admin tracks publish "https://open.spotify.com/track/..." --note "Absolute weapon"
+bun run --cwd apps/cli fluncle admin tracks publish "https://open.spotify.com/track/..." --dry-run
+bun run --cwd apps/cli fluncle admin tracks preview <track-id-or-log-id> --file preview.mp3 --source deezer:isrc --mime audio/mpeg
 bun run --cwd apps/cli fluncle admin backfill previews --dry-run
 bun run --cwd apps/cli fluncle admin submissions
 bun run --cwd apps/cli fluncle admin submissions review <submission-id>
@@ -241,7 +241,7 @@ After the first deploy, add `fluncle.com` in the Cloudflare Workers custom domai
 
 The web Worker also serves a small, stateless [Model Context Protocol](https://modelcontextprotocol.io) server at `https://www.fluncle.com/mcp` (Streamable HTTP, no sessions, no auth): the same archive the public API exposes, handed to agents as tools. It is a thin layer over the internal functions the `/api` routes already use, so validation, the submission rate limit, and the submitter hash stay identical.
 
-Tools: `get_recent_tracks`, `get_random_track`, `search_tracks`, `submit_track`, `subscribe_newsletter`.
+Tools: `list_tracks` (deprecated alias `get_recent_tracks`), `get_random_track`, `search_tracks`, `submit_track`, `subscribe_newsletter`.
 
 The MCP Server Card (SEP-2127) for agent discovery is at `/.well-known/mcp/server-card.json`. The endpoint is intercepted ahead of the router in `apps/web/src/server.ts`; the server lives in `apps/web/src/lib/server/mcp.ts`. The browser-side WebMCP surface (`apps/web/src/lib/webmcp.ts`) mirrors the same tools for agent-driving browsers; keep the two in step.
 

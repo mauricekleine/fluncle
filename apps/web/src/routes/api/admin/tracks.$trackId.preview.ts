@@ -9,11 +9,11 @@ import {
 } from "../../../lib/server/preview-archive";
 import { getTrackByIdOrLogId } from "../../../lib/server/tracks";
 
-// POST /api/admin/tracks/:idOrLogId/preview-archive — stores one official 30s
-// preview at an operator-only archive path for later analysis/model training.
-// It is never a playback source and is never exposed through public DTOs.
+// POST /api/admin/tracks/:idOrLogId/preview — stores one official 30s preview at
+// an operator-only archive path for later analysis/model training. It is never a
+// playback source and is never exposed through public DTOs.
 
-export const Route = createFileRoute("/api/admin/tracks/$trackId/preview-archive")({
+export const Route = createFileRoute("/api/admin/tracks/$trackId/preview")({
   server: {
     handlers: {
       GET: async ({ params, request }) => {
