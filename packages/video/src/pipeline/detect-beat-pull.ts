@@ -29,8 +29,9 @@
 // the beat grid (the symptom is the jitter itself, whatever drives it), so the gate
 // needs only the video.
 
-import { spawnSync } from "node:child_process";
 import path from "node:path";
+
+import { extractGrayFrames, fenceFrames, structuralDelta } from "./frames";
 
 // Downscaled gray frame the motion is computed on. Small on purpose: we want the
 // GLOBAL motion of the picture, not micro-texture churn, and it keeps the raw pipe
@@ -93,48 +94,18 @@ const meanAbsDiff = (a: Float32Array, b: Float32Array): number => {
 
 /**
  * Pull the downscaled gray frames from a video as raw luma (NOT yet normalised —
- * the scorer removes per-frame brightness). Shells out to ffmpeg.
+ * the scorer removes per-frame brightness). Thin wrapper over the shared
+ * `extractGrayFrames` (frames.ts) pinned to the gate's 48×86 grid and fps=30: the
+ * 0.17 threshold was earned at 30fps, so the gate asserts the rate rather than
+ * probing it. Timeline-aligned metrics (coupling/intent) probe the real fps
+ * separately.
  */
 export function extractFrames(videoPath: string): { fps: number; frames: Float32Array[] } {
-  const result = spawnSync(
-    "ffmpeg",
-    [
-      "-v",
-      "error",
-      "-i",
-      videoPath,
-      "-an",
-      "-vf",
-      `scale=${SAMPLE_W}:${SAMPLE_H}:flags=area,format=gray`,
-      "-f",
-      "rawvideo",
-      "-pix_fmt",
-      "gray",
-      "-",
-    ],
-    { maxBuffer: 512 * 1024 * 1024 },
-  );
-
-  if (result.status !== 0 || !result.stdout) {
-    throw new Error(
-      `ffmpeg frame extraction failed for ${videoPath}: ${result.stderr?.toString() ?? "no output"}`,
-    );
-  }
-
-  const buf = result.stdout;
-  const frameSize = SAMPLE_W * SAMPLE_H;
-  const count = Math.floor(buf.length / frameSize);
-  const frames: Float32Array[] = [];
-
-  for (let f = 0; f < count; f++) {
-    const base = f * frameSize;
-    const frame = new Float32Array(frameSize);
-    for (let p = 0; p < frameSize; p++) {
-      frame[p] = buf[base + p];
-    }
-    frames.push(frame);
-  }
-
+  const { frames } = extractGrayFrames(videoPath, {
+    height: SAMPLE_H,
+    probeFps: false,
+    width: SAMPLE_W,
+  });
   return { fps: DEFAULT_FPS, frames };
 }
 
@@ -168,50 +139,16 @@ export function scoreBeatPull(
     return { ...base, inconclusive: "too few frames to judge" };
   }
 
-  // Brightness-normalise: subtract each frame's mean so a uniform glow/exposure
-  // pulse leaves no motion behind, only structural movement does.
-  const normalised = rawFrames.map((f) => {
-    let sum = 0;
-    for (let p = 0; p < f.length; p++) {
-      sum += f[p];
-    }
-    const mean = sum / f.length;
-    const out = new Float32Array(f.length);
-    for (let p = 0; p < f.length; p++) {
-      out[p] = f[p] - mean;
-    }
-    return out;
-  });
-
-  // The grain fence: a temporal box low-pass over ±smoothFrames. Film grain
-  // reseeds every frame or two (~24Hz); smoothing it out leaves the slower
-  // structural motion (the beat is ~3Hz), so the reversal below scores MOTION
-  // snap-back, not grain flicker. Without this the metric is grain-dominated on
-  // low-motion clips and a grain-only "fix" passes a real motion pull.
-  const frames =
-    smoothFrames > 0
-      ? normalised.map((_, i) => {
-          const out = new Float32Array(normalised[0].length);
-          const lo = Math.max(0, i - smoothFrames);
-          const hi = Math.min(n - 1, i + smoothFrames);
-          for (let j = lo; j <= hi; j++) {
-            for (let p = 0; p < out.length; p++) {
-              out[p] += normalised[j][p];
-            }
-          }
-          const w = hi - lo + 1;
-          for (let p = 0; p < out.length; p++) {
-            out[p] /= w;
-          }
-          return out;
-        })
-      : normalised;
-
-  // Consecutive-frame motion (the path travelled per step).
-  const step: number[] = [];
-  for (let i = 0; i < n - 1; i++) {
-    step.push(meanAbsDiff(frames[i], frames[i + 1]));
-  }
+  // Mean-subtract + the grain fence, then the consecutive-frame motion — the ONE
+  // shared structural pipeline (frames.ts). `fenceFrames` brightness-normalises
+  // each frame (so a uniform glow/exposure pulse leaves no motion behind) and
+  // applies the ±smoothFrames temporal box low-pass (film grain reseeds ~24Hz,
+  // the beat is ~3Hz, so the box pass removes grain flicker and keeps structural
+  // motion). `structuralDelta` is the per-step `meanAbsDiff` over those fenced
+  // frames — the same `step[]` coupling/dead-zone/intent consume, so the gate and
+  // the aliveness metrics agree byte-for-byte on what "structural change" means.
+  const frames = fenceFrames(rawFrames, smoothFrames);
+  const step = structuralDelta(rawFrames, { smoothFrames });
   if (step.every((s) => s === step[0])) {
     return { ...base, inconclusive: "no motion variation" };
   }

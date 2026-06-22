@@ -27,6 +27,7 @@ import { type NostalgicCosmosProps } from "../remotion/types";
 import { buildVariants } from "../remotion/variants";
 
 import { buildCaption, type CaptionTrack, fetchReleaseYear, yearFromReleaseDate } from "./caption";
+import { generateIntentStub } from "./intent";
 import { renderCover } from "./render-cover";
 
 const OUT_DIR = path.resolve(import.meta.dirname, "../../out");
@@ -113,6 +114,7 @@ const poster = path.join(bundle, "poster.jpg");
 const notePath = path.join(bundle, "note.txt");
 const compositionPath = path.join(bundle, "composition.tsx");
 const propsOutPath = path.join(bundle, "props.json");
+const intentOutPath = path.join(bundle, "intent.json");
 const renderOutPath = path.join(bundle, "render.json");
 
 // The render manifest (composition id + the props the portrait master rendered
@@ -201,6 +203,22 @@ if (existsSync(propsPath)) {
   copyFileSync(propsPath, propsOutPath);
 }
 
+// intent.json — the render-intent spine. The author writes out/<trackId>.intent.json
+// at concept time; copy it into the bundle. v1 warn-and-stub: a missing intent is a
+// WARNING, not a ship blocker — write a generated stub so the bundle always carries
+// one and the metrics/judge never hit a missing-file path.
+const intentPath = path.join(OUT_DIR, `${track.trackId}.intent.json`);
+if (existsSync(intentPath)) {
+  log("intent.json (render-intent spine)");
+  copyFileSync(intentPath, intentOutPath);
+} else {
+  log("intent.json MISSING — shipping a generated stub (the author declared no intent)");
+  writeFileSync(
+    intentOutPath,
+    JSON.stringify(generateIntentStub(track.trackId, track.logId), null, 2),
+  );
+}
+
 // cover.jpg — the profile-grid cover (loud, centered identity over a clean late
 // frame). Needs props.json in the bundle; the operator AirDrops it to Photos and
 // sets it as the post's cover. Render failure is non-fatal — the rest of the
@@ -237,6 +255,8 @@ writeFileSync(
     {
       compositionId: renderManifest.compositionId ?? null,
       compositionSource: existsSync(compositionPath) ? "composition.tsx" : null,
+      // The render-intent spine: shipped beside props (the author's file or a stub).
+      intent: existsSync(intentOutPath) ? "intent.json" : null,
       // The authoring AI model: the upload endpoint reads this and stores it as
       // the track's video_model (surfaced in /api/tracks alongside the vehicle).
       model: modelArg ?? renderManifest.model ?? DEFAULT_VIDEO_MODEL,
