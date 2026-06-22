@@ -26,4 +26,7 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14" \
 # is no local command gate: the box holds an `agent`-scoped token and the Worker
 # refuses publish-/irreversible-class actions for that role server-side, so the
 # CLI runs ungated and an attempted publish comes back as a 403 to relay in voice.
-RUN npm install -g fluncle
+# Pinned for reproducible rebuilds (the version line also busts the layer cache on
+# a bump); carries the Convention-B renamed surface + `admin newsletter`/backfill
+# commands. Bump deliberately when a newer release is needed on the box.
+RUN npm install -g fluncle@0.54.0
