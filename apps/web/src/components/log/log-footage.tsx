@@ -1,5 +1,5 @@
 import { PauseIcon, PlayIcon } from "@phosphor-icons/react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   spotifyAlbumImageAtSize,
@@ -13,6 +13,7 @@ import { type Track } from "@/lib/tracks";
 import { useInViewport } from "@/lib/use-in-viewport";
 import { DESKTOP_QUERY, useMediaQuery } from "@/lib/use-media-query";
 import { useResponsiveWidth } from "@/lib/use-responsive-width";
+import { useVideoStallRecovery } from "@/lib/use-video-recovery";
 
 // The log page's media element: the finding's footage as ONE element of the
 // archival plate (the page register), not a full-bleed reel — the cinematic
@@ -61,6 +62,29 @@ export function LogFootage({ track }: { track: Track }) {
           ? videoRendition(track.logId, { width: renditionWidth })
           : masterVideoUrl
       : masterVideoUrl;
+  const onMaster = !videoUrl || videoUrl === masterVideoUrl;
+
+  // The stall watchdog catches a STUCK load (a rendition that fires `stalled`/
+  // `waiting`, or never advances `readyState`, with no `error` — so the one-shot
+  // `onError` below never runs). First wedge drops to the raw master; a wedge
+  // already on the master re-arms the load so the muted loop still recovers.
+  const recoverStuck = useCallback(() => {
+    const video = videoRef.current;
+
+    if (!renditionFailed && !onMaster) {
+      setRenditionFailed(true);
+
+      return;
+    }
+
+    if (video) {
+      video.load();
+
+      if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        video.play().catch(() => {});
+      }
+    }
+  }, [onMaster, renditionFailed]);
 
   const [posterFailed, setPosterFailed] = useState(false);
   const [framePosterFailed, setFramePosterFailed] = useState(false);
@@ -118,6 +142,23 @@ export function LogFootage({ track }: { track: Track }) {
       video.pause();
     }
   }, [preview.isActive]);
+
+  // Watchdog: only while the clip is actually meant to be loading/playing — near
+  // the viewport, and either motion is welcome (the muted loop) or the preview
+  // toggle armed it under reduced motion. Off-screen there's no load to be stuck.
+  const playbackExpected =
+    nearViewport &&
+    Boolean(videoUrl) &&
+    (typeof window === "undefined" ||
+      !window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
+      preview.isActive);
+
+  useVideoStallRecovery({
+    expectsPlayback: playbackExpected,
+    onStall: recoverStuck,
+    src: videoUrl,
+    videoRef,
+  });
 
   return (
     <figure className="log-footage">
