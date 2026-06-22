@@ -8,6 +8,7 @@ import { jsonError, requireAdmin, requireOperator } from "../../../lib/server/en
 import {
   apiErrorResponse,
   noLogIdResponse,
+  requireParam,
   trackNotFoundResponse,
 } from "../../../lib/server/http-errors";
 import { pushTikTokDraft, pushYouTubeShort } from "../../../lib/server/postiz";
@@ -38,8 +39,8 @@ export const serverHandlers: ApiHandlers = {
       return unauthorized;
     }
 
-    const idOrLogId = params.trackId;
-    const platform = params.platform;
+    const idOrLogId = requireParam(params.trackId, "trackId");
+    const platform = requireParam(params.platform, "platform");
 
     if (!isPlatform(platform)) {
       return jsonError(400, "unsupported_platform", `Unsupported platform: ${platform}`);

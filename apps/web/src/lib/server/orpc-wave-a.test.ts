@@ -265,7 +265,7 @@ describe("oRPC public write — POST /submissions (submit_track)", () => {
     // The parsed body is handed through to createSubmission untouched (the loose
     // contract input preserves it field-for-field, including unknown keys).
     expect(createSubmission).toHaveBeenCalledTimes(1);
-    expect(createSubmission.mock.calls[0][0]).toEqual(BODY);
+    expect(createSubmission.mock.calls[0]?.[0]).toEqual(BODY);
   });
 
   it("preserves the honeypot key through the loose contract input", async () => {
@@ -276,7 +276,7 @@ describe("oRPC public write — POST /submissions (submit_track)", () => {
       postJson("https://www.fluncle.com/api/v1/submissions", { ...BODY, honeypot: "" }),
     );
 
-    expect(createSubmission.mock.calls[0][0]).toEqual({ ...BODY, honeypot: "" });
+    expect(createSubmission.mock.calls[0]?.[0]).toEqual({ ...BODY, honeypot: "" });
   });
 
   it("carries the validation ApiError code/status (invalid_request/400) byte-for-byte", async () => {
@@ -333,7 +333,7 @@ describe("oRPC public write — POST /newsletter (subscribe_newsletter)", () => 
 
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({ ok: true });
-    expect(subscribeToNewsletter.mock.calls[0][0]).toEqual({ email: "fan@example.com" });
+    expect(subscribeToNewsletter.mock.calls[0]?.[0]).toEqual({ email: "fan@example.com" });
   });
 
   it("serves the same handler on the bare /api alias", async () => {

@@ -373,6 +373,9 @@ export function createRenderer(container: HTMLElement): Renderer {
   function drawStreaks(dt: number, speedFactor: number, steer: number, horizon: number): void {
     for (let index = 0; index < streaks.length; index++) {
       const streak = streaks[index];
+      if (streak === undefined) {
+        continue;
+      }
 
       streak.depth -= dt * speedFactor * 1.6;
       streak.bearing -= dt * steer * 0.8;
@@ -455,6 +458,9 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     for (let index = 0; index < sim.stars.length; index++) {
       const star = sim.stars[index];
+      if (star === undefined) {
+        continue;
+      }
       const projected = project(sim, star.x, star.y, star.vOffset);
 
       if (!projected) {
@@ -1019,10 +1025,14 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.textAlign = "center";
 
     for (let index = 0; index < view.telemetry.length; index++) {
+      const line = view.telemetry[index];
+      if (line === undefined) {
+        continue;
+      }
       const lineY = height - 88 - (view.telemetry.length - 1 - index) * 9;
 
       ctx.fillStyle = index === view.telemetry.length - 1 ? palette.creamMuted : palette.creamDim;
-      ctx.fillText(view.telemetry[index], width / 2, lineY);
+      ctx.fillText(line, width / 2, lineY);
     }
 
     ctx.textAlign = "left";
@@ -1147,7 +1157,11 @@ export function createRenderer(container: HTMLElement): Renderer {
         : [steerLine, restLine];
 
     for (let index = 0; index < lines.length; index++) {
-      ctx.fillText(lines[index], cx, orbY + 80 + index * 13);
+      const line = lines[index];
+      if (line === undefined) {
+        continue;
+      }
+      ctx.fillText(line, cx, orbY + 80 + index * 13);
     }
 
     const blink = reducedMotion ? 1 : 0.5 + 0.5 * Math.sin(view.nowS * 3);
@@ -1276,6 +1290,9 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     for (let index = 0; index < ordered.length; index++) {
       const star = ordered[index];
+      if (star === undefined) {
+        continue;
+      }
       const y = rollTop + index * lineHeight - scroll;
 
       if (y < rollTop - lineHeight || y > rollBottom) {

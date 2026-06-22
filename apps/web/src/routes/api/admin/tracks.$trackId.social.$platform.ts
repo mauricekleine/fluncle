@@ -2,7 +2,11 @@ import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../-alias";
 
 import { jsonError, requireOperator } from "../../../lib/server/env";
-import { apiErrorResponse, trackNotFoundResponse } from "../../../lib/server/http-errors";
+import {
+  apiErrorResponse,
+  requireParam,
+  trackNotFoundResponse,
+} from "../../../lib/server/http-errors";
 import { type SocialStatusUpdate, updateSocialStatus } from "../../../lib/server/social";
 import { getTrackByIdOrLogId } from "../../../lib/server/tracks";
 
@@ -20,8 +24,8 @@ export const serverHandlers: ApiHandlers = {
       return unauthorized;
     }
 
-    const idOrLogId = params.trackId;
-    const platform = params.platform;
+    const idOrLogId = requireParam(params.trackId, "trackId");
+    const platform = requireParam(params.platform, "platform");
 
     try {
       const body = (await request.json()) as PatchBody;

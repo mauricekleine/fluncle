@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../-alias";
 import { requireOperator } from "../../../lib/server/env";
-import { apiErrorResponse } from "../../../lib/server/http-errors";
+import { apiErrorResponse, requireParam } from "../../../lib/server/http-errors";
 import { finalizeMixtapeDistribution } from "../../../lib/server/mixtape-social";
 import { ApiError } from "../../../lib/server/spotify";
 
@@ -25,10 +25,14 @@ export const serverHandlers: ApiHandlers = {
         throw new ApiError("invalid_request", "Mixcloud finalize requires a url", 400);
       }
 
-      const mixtape = await finalizeMixtapeDistribution(params.mixtapeId, "mixcloud", {
-        externalId: body.externalId,
-        url: body.url,
-      });
+      const mixtape = await finalizeMixtapeDistribution(
+        requireParam(params.mixtapeId, "mixtapeId"),
+        "mixcloud",
+        {
+          externalId: body.externalId,
+          url: body.url,
+        },
+      );
 
       return Response.json({ mixtape, ok: true, platform: "mixcloud" });
     } catch (error) {

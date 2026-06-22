@@ -1,6 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { jsonError } from "../../lib/server/env";
-import { apiErrorResponse, trackNotFoundResponse } from "../../lib/server/http-errors";
+import {
+  apiErrorResponse,
+  requireParam,
+  trackNotFoundResponse,
+} from "../../lib/server/http-errors";
 import { fetchLivePreview } from "../../lib/server/preview-live";
 import { getTrackByIdOrLogId } from "../../lib/server/tracks";
 import { type ApiHandlers, aliasHandlers } from "./-alias";
@@ -22,7 +26,7 @@ const corsHeaders = {
 
 export const serverHandlers: ApiHandlers = {
   GET: async ({ params, request }) => {
-    const idOrLogId = params.idOrLogId;
+    const idOrLogId = requireParam(params.idOrLogId, "idOrLogId");
 
     try {
       const track = await getTrackByIdOrLogId(idOrLogId);

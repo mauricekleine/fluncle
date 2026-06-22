@@ -2,7 +2,11 @@ import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../-alias";
 
 import { requireAdmin } from "../../../lib/server/env";
-import { apiErrorResponse, trackNotFoundResponse } from "../../../lib/server/http-errors";
+import {
+  apiErrorResponse,
+  requireParam,
+  trackNotFoundResponse,
+} from "../../../lib/server/http-errors";
 import { listSocialPosts } from "../../../lib/server/social";
 import { getTrackByIdOrLogId } from "../../../lib/server/tracks";
 
@@ -16,7 +20,7 @@ export const serverHandlers: ApiHandlers = {
       return unauthorized;
     }
 
-    const idOrLogId = params.trackId;
+    const idOrLogId = requireParam(params.trackId, "trackId");
 
     try {
       const track = await getTrackByIdOrLogId(idOrLogId);

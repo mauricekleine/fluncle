@@ -96,7 +96,7 @@ describe("oRPC op-name naming convention (verb_noun, Convention B)", () => {
 
   it("every contract op name starts with an approved verb", () => {
     for (const op of opNames) {
-      const verb = op.split("_")[0];
+      const verb = op.split("_")[0] ?? op;
 
       expect(
         APPROVED_VERBS.has(verb),

@@ -449,6 +449,9 @@ function updateOrbit(state: SimState): void {
 
   for (let index = 0; index < state.stars.length; index++) {
     const star = state.stars[index];
+    if (star === undefined) {
+      continue;
+    }
     const distance = Math.hypot(star.x - ship.x, star.y - ship.y);
 
     if (distance <= config.starOrbitRadius && distance < nearestDistance) {
@@ -457,7 +460,9 @@ function updateOrbit(state: SimState): void {
     }
   }
 
-  if (nearestIndex < 0) {
+  const nearest = state.stars[nearestIndex];
+
+  if (nearestIndex < 0 || nearest === undefined) {
     return;
   }
 
@@ -467,8 +472,8 @@ function updateOrbit(state: SimState): void {
   state.orbitFresh = false;
   state.phase = "orbiting";
 
-  if (!state.stars[nearestIndex].collected) {
-    state.stars[nearestIndex].collected = true;
+  if (!nearest.collected) {
+    nearest.collected = true;
     state.collectedCount += 1;
     state.orbitFresh = true;
     state.events.push({ kind: "logged", starIndex: nearestIndex });
@@ -487,6 +492,11 @@ export function departOrbit(state: SimState): void {
 
   const star = state.stars[state.orbitIndex];
   const { config, ship } = state;
+
+  if (star === undefined) {
+    return;
+  }
+
   const away = Math.atan2(ship.y - star.y, ship.x - star.x);
   const heading =
     Number.isFinite(away) && Math.hypot(ship.x - star.x, ship.y - star.y) > 1
@@ -597,7 +607,7 @@ export function nearestCarrier(state: SimState): CarrierInfo | undefined {
   for (let index = 0; index < state.stars.length; index++) {
     const star = state.stars[index];
 
-    if (star.collected) {
+    if (star === undefined || star.collected) {
       continue;
     }
 
@@ -644,7 +654,7 @@ export function radarBlips(state: SimState): RadarBlip[] {
     for (let index = 0; index < state.stars.length; index++) {
       const star = state.stars[index];
 
-      if (star.collected) {
+      if (star === undefined || star.collected) {
         continue;
       }
 
@@ -746,8 +756,10 @@ function warpShip(entity: FrontierEntity, state: SimState): void {
     // run (learnable), but the seed varies the pick run to run.
     const exit = exits[fnv1a(`${entity.id}:${state.seed}`) % exits.length];
 
-    ship.x = exit.x;
-    ship.y = exit.y;
+    if (exit !== undefined) {
+      ship.x = exit.x;
+      ship.y = exit.y;
+    }
   }
 
   ship.vx = 0;

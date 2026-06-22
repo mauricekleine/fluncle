@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../-alias";
 import { deleteSavedFinding, requireAccountMutation } from "../../../lib/server/account-data";
+import { requireParam } from "../../../lib/server/http-errors";
 
 export const serverHandlers: ApiHandlers = {
   DELETE: async ({ params, request }) => {
@@ -13,7 +14,7 @@ export const serverHandlers: ApiHandlers = {
       return user;
     }
 
-    const result = await deleteSavedFinding(user, params.trackId);
+    const result = await deleteSavedFinding(user, requireParam(params.trackId, "trackId"));
 
     return result instanceof Response ? result : Response.json(result);
   },

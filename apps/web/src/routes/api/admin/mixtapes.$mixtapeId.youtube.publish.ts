@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../-alias";
 import { requireOperator } from "../../../lib/server/env";
-import { apiErrorResponse } from "../../../lib/server/http-errors";
+import { apiErrorResponse, requireParam } from "../../../lib/server/http-errors";
 import { listMixtapeSocialPosts } from "../../../lib/server/mixtape-social";
 import { ApiError } from "../../../lib/server/spotify";
 import { getYouTubeAccessToken } from "../../../lib/server/youtube";
@@ -20,7 +20,7 @@ export const serverHandlers: ApiHandlers = {
     }
 
     try {
-      const posts = await listMixtapeSocialPosts(params.mixtapeId);
+      const posts = await listMixtapeSocialPosts(requireParam(params.mixtapeId, "mixtapeId"));
       const youtube = posts.find((post) => post.platform === "youtube");
       const videoId = youtube?.externalId;
 

@@ -95,7 +95,7 @@ export function definitionalProse(track: LogProseInput): string {
   // reads as its own sentence before the coordinate closer.
   const note = track.note?.trim();
   if (note) {
-    const sentence = note[0].toUpperCase() + note.slice(1);
+    const sentence = note.charAt(0).toUpperCase() + note.slice(1);
     sentences.push(/[.!?…]$/.test(sentence) ? sentence : `${sentence}.`);
   }
 

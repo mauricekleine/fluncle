@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../-alias";
 import { requireOperator } from "../../../lib/server/env";
-import { apiErrorResponse, parseJsonBody } from "../../../lib/server/http-errors";
+import { apiErrorResponse, parseJsonBody, requireParam } from "../../../lib/server/http-errors";
 import { youtubeDescription } from "../../../lib/mixtape-chapters";
 import { getMixtapeById } from "../../../lib/server/mixtapes";
 import { ApiError } from "../../../lib/server/spotify";
@@ -37,7 +37,9 @@ export const serverHandlers: ApiHandlers = {
         throw new ApiError("invalid_request", "contentLength must be a positive number", 400);
       }
 
-      const mixtape = await getMixtapeById(params.mixtapeId, { includeDrafts: true });
+      const mixtape = await getMixtapeById(requireParam(params.mixtapeId, "mixtapeId"), {
+        includeDrafts: true,
+      });
 
       if (mixtape.status !== "distributing" && mixtape.status !== "published") {
         throw new ApiError(

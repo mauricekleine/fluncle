@@ -29,7 +29,7 @@ describe("presignUploads", () => {
       // Host is the R2 S3 endpoint for this account.
       expect(url.host).toBe(`${ACCOUNT_ID}.r2.cloudflarestorage.com`);
       // Path is /<bucket>/<key>, exact.
-      expect(url.pathname).toBe(`/${VIDEOS_BUCKET}/${targets[index].key}`);
+      expect(url.pathname).toBe(`/${VIDEOS_BUCKET}/${targets[index]?.key}`);
       // SigV4 query params are present.
       expect(url.searchParams.get("X-Amz-Algorithm")).toBe("AWS4-HMAC-SHA256");
       expect(url.searchParams.get("X-Amz-Signature")).toMatch(/^[0-9a-f]{64}$/);
@@ -41,8 +41,8 @@ describe("presignUploads", () => {
       // MUST PUT with this exact header or R2 returns SignatureDoesNotMatch.
       expect(url.searchParams.get("X-Amz-SignedHeaders")).toContain("content-type");
       // The contentType the CLI must replay is returned alongside the URL.
-      expect(upload.contentType).toBe(targets[index].contentType);
-      expect(upload.key).toBe(targets[index].key);
+      expect(upload.contentType).toBe(targets[index]?.contentType);
+      expect(upload.key).toBe(targets[index]?.key);
     }
   });
 
@@ -53,6 +53,10 @@ describe("presignUploads", () => {
     const [asJpeg] = await presignUploads(VIDEOS_BUCKET, [
       { contentType: "image/jpeg", key: "004.7.2I/footage.mp4" },
     ]);
+
+    if (asMp4 === undefined || asJpeg === undefined) {
+      throw new Error("expected both presign results");
+    }
 
     // Same key, different baked Content-Type → different signature.
     expect(new URL(asMp4.url).searchParams.get("X-Amz-Signature")).not.toBe(

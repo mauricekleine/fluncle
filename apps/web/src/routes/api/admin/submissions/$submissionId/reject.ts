@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../../../-alias";
 import { requireOperator } from "../../../../../lib/server/env";
-import { apiErrorResponse } from "../../../../../lib/server/http-errors";
+import { apiErrorResponse, requireParam } from "../../../../../lib/server/http-errors";
 import { rejectSubmission } from "../../../../../lib/server/submissions";
 
 export const serverHandlers: ApiHandlers = {
@@ -13,7 +13,7 @@ export const serverHandlers: ApiHandlers = {
     }
 
     try {
-      const submission = await rejectSubmission(params.submissionId);
+      const submission = await rejectSubmission(requireParam(params.submissionId, "submissionId"));
 
       return Response.json({
         ok: true,

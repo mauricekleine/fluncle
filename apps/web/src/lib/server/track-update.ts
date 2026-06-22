@@ -294,5 +294,5 @@ export async function updateTrack(
   // request re-renders. Fire-and-forget — never blocks the write.
   purgeLogCache(effectiveLogId);
 
-  return { fields: sets.map((set) => set.split(" ")[0]), trackId };
+  return { fields: sets.map((set) => set.split(" ")[0] ?? set), trackId };
 }

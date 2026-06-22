@@ -180,7 +180,7 @@ describe("oRPC public-route contract coverage", () => {
       value.replace(/[./]/g, " ").replace(/[${}]/g, "").trim().split(/\s+/).join("/");
 
     const documented = new Set(
-      Object.keys(PUBLIC_ROUTE_OPS).map((path) => canonical(path.split(" ")[1])),
+      Object.keys(PUBLIC_ROUTE_OPS).map((path) => canonical(path.split(" ")[1] ?? path)),
     );
 
     for (const basename of listRouteBasenames(V1_DIR)) {

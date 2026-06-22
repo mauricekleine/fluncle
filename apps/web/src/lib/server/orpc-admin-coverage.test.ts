@@ -238,7 +238,7 @@ describe("oRPC admin-route contract coverage", () => {
     // The path key already starts with `/admin/...`; the file basename is relative
     // to the admin dir, so prefix it with `admin/` to compare on the same footing.
     const documented = new Set(
-      Object.keys(ADMIN_ROUTE_OPS).map((key) => canonical(key.split(" ")[1])),
+      Object.keys(ADMIN_ROUTE_OPS).map((key) => canonical(key.split(" ")[1] ?? key)),
     );
 
     for (const basename of listRouteBasenames(ADMIN_DIR)) {
