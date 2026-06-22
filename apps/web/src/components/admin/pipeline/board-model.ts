@@ -34,8 +34,8 @@ export type StepIcon = ComponentType<{ className?: string; weight?: IconWeight }
 // without painting a dozen gold cells per row:
 //   kind   — `auto` (an agent does it) reads round; `human` (your hands) reads square.
 //   state  — open → running → partial → done, plus `planned` for a step that's
-//            designed-in but not wired yet (Last.fm), shown ghosted so a variant's
-//            density reflects where the pipeline is heading, not just where it is.
+//            designed-in but not wired yet, shown ghosted so a variant's density
+//            reflects where the pipeline is heading, not just where it is.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type StepKey =
@@ -60,7 +60,7 @@ export type StepKind = "auto" | "human";
  * partial — touched, not closed (a pushed-but-not-live draft; context gathered but
  *           not voiced; a finding sitting in a draft tape).
  * done    — closed.
- * planned — designed-in, not wired yet (Last.fm love); never actionable.
+ * planned — designed-in, not wired yet; ghosted, never actionable.
  */
 export type StepState = "open" | "running" | "partial" | "done" | "planned";
 
@@ -224,12 +224,15 @@ export function boardSteps(row: BoardRow): BoardStep[] {
             : "Enrich",
     },
     lastfm: {
-      // Not wired yet — designed-in so the variants show the real future density.
+      // The Last.fm love runs on its own (the publish fan-out loves on add; the
+      // backfill loves older findings) — no board click. `lastfmLoved` is the
+      // presence of `backfill_lastfm_done_at`, the same stamp a successful love
+      // writes, so the heart tracks the real loved-status, not a guess.
       actionable: false,
       gated: false,
-      hint: "Love on Last.fm — not wired up yet",
-      state: "planned",
-      statusLabel: "Soon",
+      hint: row.lastfmLoved ? "Loved on Last.fm" : "Not loved on Last.fm yet",
+      state: row.lastfmLoved ? "done" : "open",
+      statusLabel: row.lastfmLoved ? "Loved" : "Love",
     },
     mixtape: {
       actionable: true,

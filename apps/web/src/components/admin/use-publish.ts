@@ -16,6 +16,11 @@ export type BoardRow = TrackListItem & {
   // facts that fuel the observation script). Pulled through the admin-only board
   // path, never the public `TrackListItem` contract — see observation-board.ts.
   hasContextNote: boolean;
+  // Whether the finding is already loved on Last.fm — the presence of
+  // `backfill_lastfm_done_at`, the same stamp the Last.fm backfill writes on a
+  // successful `track.love`. Pulled through the admin-only board path (the
+  // backfill-reliability columns never ride the public `TrackListItem` contract).
+  lastfmLoved: boolean;
   mixtapes: MixtapeMembership[];
   posts: SocialPostItem[];
 };
