@@ -9,6 +9,7 @@
     "ios": "expo run:ios",
     "android": "expo run:android",
     "prebuild": "expo prebuild",
+    "test": "bun test",
     "typecheck": "tsgo --noEmit",
     "lint": "expo lint"
   },
