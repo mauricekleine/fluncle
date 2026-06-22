@@ -63,8 +63,8 @@ export const adminAuth = base.middleware(async ({ context, next }) => {
 });
 
 // `adminProcedure` — any authenticated admin (operator OR agent). Use as the base
-// for reads, enrich-sweep, analysis write-back, and the conditional routes that
-// then branch on `context.role` in-handler.
+// for reads, analysis write-back, and the conditional routes that then branch on
+// `context.role` in-handler.
 export const adminProcedure = base.use(adminAuth);
 
 // `operatorGuard` — the operator-only check as a standalone MIDDLEWARE (the fine

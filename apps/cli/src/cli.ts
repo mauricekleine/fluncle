@@ -355,12 +355,11 @@ function addAdminCommands(program: Command): void {
   // Convention B (docs/naming-conventions.md §4): the admin CLI is `group
   // noun-verb` with PLURAL groups. The canonical track group is `tracks`; the old
   // singular `track` group is kept as a hidden alias so `admin track <cmd>` still
-  // resolves. The formerly-flat `admin add|queue|enrich-queue|enrich-sweep|
-  // vehicles` commands move under `tracks` (canonical) and stay registered as
-  // hidden flat commands (back-compat for crons + muscle memory). The sweep's
-  // canonical form is `tracks enrich --all` (verb `enrich`, `--all` is the scope);
-  // `tracks enrich-sweep` + flat `admin enrich-sweep` stay hidden aliases for it.
-  // `enrich-queue` (the noun) stays a `tracks enrich-queue` show.
+  // resolves. The formerly-flat `admin add|queue|enrich-queue|vehicles` commands
+  // move under `tracks` (canonical) and stay registered as hidden flat commands
+  // (back-compat for crons + muscle memory). `enrich-queue` (the noun) stays a
+  // `tracks enrich-queue` show — the box `fluncle-enrich` cron reads it to drain
+  // the queue (the Worker no longer re-fires enrichment itself).
   const adminTracks = configureCommand(
     admin.command("tracks").alias("track").description("Track admin commands"),
   );
