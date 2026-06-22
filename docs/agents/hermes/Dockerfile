@@ -7,9 +7,10 @@ FROM nousresearch/hermes-agent:v2026.6.19
 # fluncle-track-enrichment skill's analyze-track.ts is `#!/usr/bin/env bun` and
 # shells out to `ffmpeg` to decode the preview, so the box needs both on PATH for
 # the `--no-agent` enrich-sweep cron. The Nous Hermes base is Debian-based, so
-# ffmpeg comes from apt; one layer, lists cleaned, no recommends.
+# ffmpeg comes from apt; unzip is also required because bun's installer (below)
+# unpacks the binary from a zip. One layer, lists cleaned, no recommends.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg \
+  && apt-get install -y --no-install-recommends ffmpeg unzip \
   && rm -rf /var/lib/apt/lists/*
 
 # Bun — pinned to the repo's toolchain (packageManager bun@1.3.14) so the box runs
