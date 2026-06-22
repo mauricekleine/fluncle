@@ -1,0 +1,37 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".codex/hooks/guard-protected-files.sh",
+            "statusMessage": "Checking protected files"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".codex/hooks/remind-main-push.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".codex/hooks/format-on-edit.sh",
+            "statusMessage": "Formatting with oxfmt"
+          }
+        ]
+      }
+    ]
+  }
+}
