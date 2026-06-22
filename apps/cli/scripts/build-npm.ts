@@ -42,7 +42,7 @@ async function main(): Promise<void> {
     throw new Error("npm bundle build failed");
   }
 
-  const built = await result.outputs[0]!.text();
+  const built = await result.outputs[0].text();
   // Force a node shebang at byte 0 so the bin is directly executable under node.
   const withNodeShebang = built.replace(/^#![^\n]*\n/, "#!/usr/bin/env node\n");
   const final = withNodeShebang.startsWith("#!")

@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { readJson } from "./orpc-test-helpers";
 
 // The admin wave's `admin-mixtapes` parity + auth proof, driven end-to-end
 // through `handleOrpc`. Covers the auth tiers (reads = admin; everything else =
@@ -100,7 +101,7 @@ describe("oRPC list_mixtapes_admin (GET /admin/mixtapes)", () => {
     const response = await handleOrpc(req("/admin/mixtapes", "GET", AGENT_TOKEN));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ mixtapes: [MIXTAPE], ok: true });
+    expect(await readJson(response)).toEqual({ mixtapes: [MIXTAPE], ok: true });
     expect(listMixtapes).toHaveBeenCalledWith({ hydrateMembers: true, includeDrafts: true });
   });
 });
@@ -124,7 +125,7 @@ describe("oRPC create_mixtape (POST /admin/mixtapes)", () => {
     );
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ mixtape: MIXTAPE, ok: true });
+    expect(await readJson(response)).toEqual({ mixtape: MIXTAPE, ok: true });
     expect(createMixtape).toHaveBeenCalledWith({ note: "a dream" });
   });
 });
@@ -191,7 +192,7 @@ describe("oRPC delete_mixtape (DELETE /admin/mixtapes/{mixtapeId})", () => {
     );
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ ok: true });
+    expect(await readJson(response)).toEqual({ ok: true });
     expect(deleteMixtape).toHaveBeenCalledWith(MIXTAPE_ID);
   });
 });
@@ -234,7 +235,7 @@ describe("oRPC get_mixtape_social (GET .../social)", () => {
     );
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       mixtapeId: MIXTAPE_ID,
       ok: true,
       posts: [{ createdAt: "t", platform: "youtube", status: "published", updatedAt: "t" }],
@@ -263,7 +264,7 @@ describe("oRPC finalize_mixtape_mixcloud (POST .../mixcloud/finalize)", () => {
     );
 
     expect(response?.status).toBe(400);
-    expect(((await response?.json()) as { code: string }).code).toBe("invalid_request");
+    expect(((await readJson(response)) as { code: string }).code).toBe("invalid_request");
   });
 
   it("records the cloudcast for the operator and returns the live envelope", async () => {
@@ -278,7 +279,7 @@ describe("oRPC finalize_mixtape_mixcloud (POST .../mixcloud/finalize)", () => {
     );
 
     expect(response?.status).toBe(200);
-    const data = (await response?.json()) as { ok: boolean; platform: string };
+    const data = (await readJson(response)) as { ok: boolean; platform: string };
     expect(data.ok).toBe(true);
     expect(data.platform).toBe("mixcloud");
     expect(finalizeMixtapeDistribution).toHaveBeenCalledWith(MIXTAPE_ID, "mixcloud", {
@@ -309,6 +310,6 @@ describe("oRPC publish_mixtape_youtube (POST .../youtube/publish)", () => {
     );
 
     expect(response?.status).toBe(409);
-    expect(((await response?.json()) as { code: string }).code).toBe("youtube_not_distributed");
+    expect(((await readJson(response)) as { code: string }).code).toBe("youtube_not_distributed");
   });
 });

@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { readJson } from "./orpc-test-helpers";
 
 // The admin wave's `admin-backfills` parity + auth proof: the maintenance sweeps
 // driven end-to-end through `handleOrpc` against `/api/v1/admin/...`, so the REAL
@@ -67,7 +68,7 @@ describe("oRPC backfill_discogs (POST /admin/backfill/discogs)", () => {
     const response = await handleOrpc(post("/admin/backfill/discogs", AGENT_TOKEN));
 
     expect(response?.status).toBe(403);
-    expect(((await response?.json()) as { code: string }).code).toBe("forbidden");
+    expect(((await readJson(response)) as { code: string }).code).toBe("forbidden");
     expect(backfillDiscogsIds).not.toHaveBeenCalled();
   });
 
@@ -87,7 +88,7 @@ describe("oRPC backfill_discogs (POST /admin/backfill/discogs)", () => {
     );
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       dryRun: false,
       nextCursor: "cur-2",
       ok: true,
@@ -125,7 +126,7 @@ describe("oRPC backfill_lastfm (POST /admin/backfill/lastfm)", () => {
     const response = await handleOrpc(post("/admin/backfill/lastfm?dryRun=true", OPERATOR_TOKEN));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       dryRun: true,
       failed: [{ error: "boom", logId: "004.7.3J" }],
       failedCount: 1,
@@ -159,7 +160,7 @@ describe("oRPC enrich_track (POST /admin/tracks/enrich)", () => {
     const response = await handleOrpc(post("/admin/tracks/enrich?limit=5", AGENT_TOKEN));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       ok: true,
       reEnriched: [{ logId: "004.7.2I", status: "failed", trackId: "t1" }],
       reEnrichedCount: 1,
@@ -209,7 +210,7 @@ describe("enrich-sweep back-compat alias (POST /admin/enrich-sweep)", () => {
     });
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       ok: true,
       reEnriched: [{ logId: "004.7.2I", status: "failed", trackId: "t1" }],
       reEnrichedCount: 1,

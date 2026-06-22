@@ -43,6 +43,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - Raycast changes: `bun run --cwd apps/raycast build` and `bun run --cwd apps/raycast lint`.
 - SSH app changes: `go build -C apps/ssh ./...`, `gofmt -l apps/ssh` (must list nothing), and `go vet -C apps/ssh ./...`.
 - Video package changes: `bun run --cwd packages/video typecheck`.
+- NEVER: Use the TypeScript non-null assertion operator (`!`). Narrow with a guard, early return, `??`, or `?.`. Enforced as an error by oxlint (`typescript/no-non-null-assertion`).
 - SHOULD: Run focused checks first, then broader root checks when the change has cross-package or user-facing risk.
 - SHOULD: For docs-only changes, verify formatting/readability instead of running full test suites unless docs generation is affected.
 

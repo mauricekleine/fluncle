@@ -20,7 +20,7 @@ export const useOnset = (onsets: number[], windowMs = 180): number => {
   let flash = 0;
 
   for (let i = 0; i < onsets.length; i++) {
-    const delta = nowMs - onsets[i]!;
+    const delta = nowMs - onsets[i];
     if (delta < 0) {
       // Onsets are sorted ascending; the rest are in the future.
       break;

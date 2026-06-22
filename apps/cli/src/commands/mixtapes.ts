@@ -192,22 +192,23 @@ export async function mixtapeDistributeCommand(
   const results: { platform: string; url: string }[] = [];
 
   if (doYoutube) {
+    if (!options.video) {
+      throw new CliError("missing_video", "YouTube distribution needs --video <mp4>");
+    }
     onProgress("YouTube: uploading video…");
     const { distributeYoutube } = await import("./mixtape-youtube");
-    const result = await distributeYoutube(mixtapeId, options.video!, onProgress);
+    const result = await distributeYoutube(mixtapeId, options.video, onProgress);
     results.push({ platform: "youtube", url: result.url });
     onProgress(`YouTube: ${result.url}`);
   }
 
   if (doMixcloud) {
+    if (!options.audio) {
+      throw new CliError("missing_audio", "Mixcloud distribution needs --audio <file>");
+    }
     onProgress("Mixcloud: uploading audio…");
     const { distributeMixcloud } = await import("./mixtape-mixcloud");
-    const result = await distributeMixcloud(
-      mixtapeId,
-      options.audio!,
-      onProgress,
-      options.unlisted,
-    );
+    const result = await distributeMixcloud(mixtapeId, options.audio, onProgress, options.unlisted);
     results.push({ platform: "mixcloud", url: result.url });
     onProgress(`Mixcloud: ${result.url}`);
   }

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readJson } from "./orpc-test-helpers";
 
 // Wave B — the thirteen `/me` PRIVATE-SESSION ops fanned out off the user-auth
 // tier (orpc-auth.ts). As in orpc-wave-a.test.ts, the underlying server helpers
@@ -115,7 +116,7 @@ describe("oRPC /me — GET /me (get_current_private_user)", () => {
     const response = await handleOrpc(get(`${BASE}/me`));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ ok: true, user: USER });
+    expect(await readJson(response)).toEqual({ ok: true, user: USER });
   });
 
   it("serves { ok: true, user: null } with NO session (does not 401)", async () => {
@@ -125,7 +126,7 @@ describe("oRPC /me — GET /me (get_current_private_user)", () => {
     const response = await handleOrpc(get(`${BASE}/me`));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ ok: true, user: null });
+    expect(await readJson(response)).toEqual({ ok: true, user: null });
   });
 });
 
@@ -140,7 +141,7 @@ describe("oRPC /me — GET /me/csrf (get_private_mutation_token)", () => {
     const response = await handleOrpc(get(`${BASE}/me/csrf`));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ csrfToken: "user-1.123.sig", ok: true });
+    expect(await readJson(response)).toEqual({ csrfToken: "user-1.123.sig", ok: true });
     expect(createCsrfToken).toHaveBeenCalledWith(USER);
   });
 
@@ -153,7 +154,7 @@ describe("oRPC /me — GET /me/csrf (get_private_mutation_token)", () => {
     const response = await handleOrpc(get(`${BASE}/me/csrf`));
 
     expect(response?.status).toBe(401);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       code: "auth_required",
       message: "Sign in to use this private account route",
       ok: false,
@@ -181,7 +182,7 @@ describe("oRPC /me — GET /me/saved-findings (list_private_saved_findings)", ()
     const response = await handleOrpc(get(`${BASE}/me/saved-findings`));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ ok: true, savedFindings });
+    expect(await readJson(response)).toEqual({ ok: true, savedFindings });
   });
 
   it("401s with NO session (the read tier guard)", async () => {
@@ -193,7 +194,7 @@ describe("oRPC /me — GET /me/saved-findings (list_private_saved_findings)", ()
     const response = await handleOrpc(get(`${BASE}/me/saved-findings`));
 
     expect(response?.status).toBe(401);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       code: "auth_required",
       message: "Sign in to use this private account route",
       ok: false,
@@ -219,7 +220,7 @@ describe("oRPC /me — POST /me/saved-findings (save_private_finding)", () => {
     );
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ ok: true, savedFinding });
+    expect(await readJson(response)).toEqual({ ok: true, savedFinding });
     expect(saveFinding.mock.calls[0][1]).toEqual({ trackId: "abc" });
   });
 
@@ -235,7 +236,7 @@ describe("oRPC /me — POST /me/saved-findings (save_private_finding)", () => {
     );
 
     expect(response?.status).toBe(404);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       code: "track_not_found",
       message: "No finding at that coordinate",
       ok: false,
@@ -253,7 +254,7 @@ describe("oRPC /me — POST /me/saved-findings (save_private_finding)", () => {
     );
 
     expect(response?.status).toBe(403);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       code: "csrf_required",
       message: "Invalid account mutation token",
       ok: false,
@@ -278,7 +279,7 @@ describe("oRPC /me — DELETE /me/saved-findings/{trackId} (unsave_private_findi
     );
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ ok: true });
+    expect(await readJson(response)).toEqual({ ok: true });
     expect(deleteSavedFinding.mock.calls[0][1]).toBe("abc");
   });
 });
@@ -301,7 +302,7 @@ describe("oRPC /me — GET /me/galaxy-progress (get_private_galaxy_progress)", (
     const response = await handleOrpc(get(`${BASE}/me/galaxy-progress`));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual(progress);
+    expect(await readJson(response)).toEqual(progress);
   });
 });
 
@@ -319,7 +320,7 @@ describe("oRPC /me — PUT /me/galaxy-progress (merge_private_galaxy_progress)",
     );
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual(progress);
+    expect(await readJson(response)).toEqual(progress);
     expect(mergeGalaxyProgress.mock.calls[0][1]).toEqual({ collectedLogIds: ["0001"] });
   });
 });
@@ -337,7 +338,7 @@ describe("oRPC /me — POST /me/galaxy-progress/logs (collect_private_galaxy_log
     );
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ logId: "0001", ok: true });
+    expect(await readJson(response)).toEqual({ logId: "0001", ok: true });
     expect(collectLogId.mock.calls[0][1]).toBe("0001");
   });
 
@@ -348,7 +349,7 @@ describe("oRPC /me — POST /me/galaxy-progress/logs (collect_private_galaxy_log
     const response = await handleOrpc(body(`${BASE}/me/galaxy-progress/logs`, "POST", {}));
 
     expect(response?.status).toBe(400);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       code: "invalid_request",
       message: "Missing Log ID",
       ok: false,
@@ -368,7 +369,7 @@ describe("oRPC /me — POST /me/galaxy-progress/logs (collect_private_galaxy_log
     );
 
     expect(response?.status).toBe(404);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       code: "log_not_found",
       message: "No finding at that coordinate",
       ok: false,
@@ -388,7 +389,7 @@ describe("oRPC /me — PATCH /me/profile (update_private_profile)", () => {
     const response = await handleOrpc(body(`${BASE}/me/profile`, "PATCH", { username: "newname" }));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ ok: true, user: updated });
+    expect(await readJson(response)).toEqual({ ok: true, user: updated });
   });
 
   it("carries the username_taken/409 byte-for-byte", async () => {
@@ -401,7 +402,7 @@ describe("oRPC /me — PATCH /me/profile (update_private_profile)", () => {
     const response = await handleOrpc(body(`${BASE}/me/profile`, "PATCH", { username: "taken" }));
 
     expect(response?.status).toBe(409);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       code: "username_taken",
       message: "That username is already aboard",
       ok: false,
@@ -429,7 +430,7 @@ describe("oRPC /me — POST /me/delete (delete_private_account)", () => {
     const response = await handleOrpc(body(`${BASE}/me/delete`, "POST", {}));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ ok: true, summary });
+    expect(await readJson(response)).toEqual({ ok: true, summary });
   });
 });
 
@@ -456,7 +457,7 @@ describe("oRPC /me — POST /me/export (export_private_account_data)", () => {
     const response = await handleOrpc(body(`${BASE}/me/export`, "POST", {}));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual(payload);
+    expect(await readJson(response)).toEqual(payload);
   });
 });
 
@@ -481,7 +482,7 @@ describe("oRPC /me — GET /me/export/{exportId} (get_private_account_export)", 
     const response = await handleOrpc(get(`${BASE}/me/export/exp-1`));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual(payload);
+    expect(await readJson(response)).toEqual(payload);
     expect(getAccountExport.mock.calls[0][1]).toBe("exp-1");
   });
 
@@ -493,7 +494,7 @@ describe("oRPC /me — GET /me/export/{exportId} (get_private_account_export)", 
     const response = await handleOrpc(get(`${BASE}/me/export/nope`));
 
     expect(response?.status).toBe(404);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       code: "export_not_found",
       message: "Export not found",
       ok: false,
@@ -523,7 +524,7 @@ describe("oRPC /me — GET /me/submissions (list_private_submissions)", () => {
     const response = await handleOrpc(get(`${BASE}/me/submissions`));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ ok: true, submissions });
+    expect(await readJson(response)).toEqual({ ok: true, submissions });
   });
 });
 
@@ -537,7 +538,7 @@ describe("oRPC /me — the bare /api alias", () => {
     const response = await handleOrpc(get("https://www.fluncle.com/api/me"));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({ ok: true, user: null });
+    expect(await readJson(response)).toEqual({ ok: true, user: null });
   });
 });
 

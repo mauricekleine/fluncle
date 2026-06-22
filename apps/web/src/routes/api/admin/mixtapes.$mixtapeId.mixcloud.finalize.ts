@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { type ApiHandlers, aliasHandlers } from "../-alias";
 import { requireOperator } from "../../../lib/server/env";
 import { apiErrorResponse } from "../../../lib/server/http-errors";
 import { finalizeMixtapeDistribution } from "../../../lib/server/mixtape-social";
@@ -9,35 +10,33 @@ import { ApiError } from "../../../lib/server/spotify";
 // the published post, dual-writes `mixtapes.mixcloud_url`, and flips the mixtape
 // `distributing → published` on its first live link.
 
-export const Route = createFileRoute("/api/admin/mixtapes/$mixtapeId/mixcloud/finalize")({
-  server: {
-    handlers: {
-      POST: async ({ params, request }) => {
-        const unauthorized = await requireOperator(request);
+export const serverHandlers: ApiHandlers = {
+  POST: async ({ params, request }) => {
+    const unauthorized = await requireOperator(request);
 
-        if (unauthorized) {
-          return unauthorized;
-        }
+    if (unauthorized) {
+      return unauthorized;
+    }
 
-        try {
-          const body = (await request.json()) as { externalId?: string; url?: string };
+    try {
+      const body = (await request.json()) as { externalId?: string; url?: string };
 
-          if (typeof body.url !== "string" || body.url.length === 0) {
-            throw new ApiError("invalid_request", "Mixcloud finalize requires a url", 400);
-          }
+      if (typeof body.url !== "string" || body.url.length === 0) {
+        throw new ApiError("invalid_request", "Mixcloud finalize requires a url", 400);
+      }
 
-          const mixtape = await finalizeMixtapeDistribution(params.mixtapeId, "mixcloud", {
-            externalId: body.externalId,
-            url: body.url,
-          });
+      const mixtape = await finalizeMixtapeDistribution(params.mixtapeId, "mixcloud", {
+        externalId: body.externalId,
+        url: body.url,
+      });
 
-          return Response.json({ mixtape, ok: true, platform: "mixcloud" });
-        } catch (error) {
-          return apiErrorResponse(error);
-        }
-      },
-    },
+      return Response.json({ mixtape, ok: true, platform: "mixcloud" });
+    } catch (error) {
+      return apiErrorResponse(error);
+    }
   },
-});
+};
 
-export const serverHandlers = Route.options.server!.handlers;
+export const Route = createFileRoute("/api/admin/mixtapes/$mixtapeId/mixcloud/finalize")({
+  server: { handlers: aliasHandlers(serverHandlers) },
+});

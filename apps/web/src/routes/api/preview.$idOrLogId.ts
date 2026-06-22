@@ -3,6 +3,7 @@ import { jsonError } from "../../lib/server/env";
 import { apiErrorResponse, trackNotFoundResponse } from "../../lib/server/http-errors";
 import { fetchLivePreview } from "../../lib/server/preview-live";
 import { getTrackByIdOrLogId } from "../../lib/server/tracks";
+import { type ApiHandlers, aliasHandlers } from "./-alias";
 
 // Streams a finding's official 30s preview (Deezer/iTunes — never YouTube;
 // see the roadmap's audio policy). The proxy exists because the stored Deezer
@@ -19,51 +20,49 @@ const corsHeaders = {
   "access-control-allow-origin": "*",
 };
 
-export const Route = createFileRoute("/api/preview/$idOrLogId")({
-  server: {
-    handlers: {
-      GET: async ({ params, request }) => {
-        const idOrLogId = params.idOrLogId;
+export const serverHandlers: ApiHandlers = {
+  GET: async ({ params, request }) => {
+    const idOrLogId = params.idOrLogId;
 
-        try {
-          const track = await getTrackByIdOrLogId(idOrLogId);
+    try {
+      const track = await getTrackByIdOrLogId(idOrLogId);
 
-          if (!track) {
-            return trackNotFoundResponse(idOrLogId);
-          }
+      if (!track) {
+        return trackNotFoundResponse(idOrLogId);
+      }
 
-          const upstream = await fetchLivePreview(track, request);
+      const upstream = await fetchLivePreview(track, request);
 
-          if (!upstream) {
-            return jsonError(404, "no_preview", "No preview available for this finding.");
-          }
+      if (!upstream) {
+        return jsonError(404, "no_preview", "No preview available for this finding.");
+      }
 
-          const headers = new Headers(corsHeaders);
+      const headers = new Headers(corsHeaders);
 
-          for (const name of ["content-type", "content-length", "content-range", "accept-ranges"]) {
-            const value = upstream.headers.get(name);
+      for (const name of ["content-type", "content-length", "content-range", "accept-ranges"]) {
+        const value = upstream.headers.get(name);
 
-            if (value) {
-              headers.set(name, value);
-            }
-          }
-
-          if (!headers.has("content-type")) {
-            headers.set("content-type", "audio/mpeg");
-          }
-
-          // Keep public playback a live relay only: no edge cache, no R2
-          // playback tier, and no durable public copy.
-          headers.set("cache-control", "no-store");
-
-          return new Response(upstream.body, { headers, status: upstream.status });
-        } catch (error) {
-          return apiErrorResponse(error);
+        if (value) {
+          headers.set(name, value);
         }
-      },
-      OPTIONS: () => new Response(undefined, { headers: corsHeaders, status: 204 }),
-    },
-  },
-});
+      }
 
-export const serverHandlers = Route.options.server!.handlers;
+      if (!headers.has("content-type")) {
+        headers.set("content-type", "audio/mpeg");
+      }
+
+      // Keep public playback a live relay only: no edge cache, no R2
+      // playback tier, and no durable public copy.
+      headers.set("cache-control", "no-store");
+
+      return new Response(upstream.body, { headers, status: upstream.status });
+    } catch (error) {
+      return apiErrorResponse(error);
+    }
+  },
+  OPTIONS: () => new Response(undefined, { headers: corsHeaders, status: 204 }),
+};
+
+export const Route = createFileRoute("/api/preview/$idOrLogId")({
+  server: { handlers: aliasHandlers(serverHandlers) },
+});

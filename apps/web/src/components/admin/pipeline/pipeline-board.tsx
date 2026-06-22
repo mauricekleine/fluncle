@@ -92,23 +92,19 @@ export function PipelineBoard({ actions, entries }: BoardProps) {
                 >
                   <FindingLead logId onPreview={actions.onPreview} row={entry.row} size="md" />
                 </div>
-                {autoCols.map((col) => (
-                  <Cell
-                    actions={actions}
-                    key={col.key}
-                    row={entry.row}
-                    step={byKey.get(col.key)!}
-                  />
-                ))}
+                {autoCols.map((col) => {
+                  const step = byKey.get(col.key);
+                  return step ? (
+                    <Cell actions={actions} key={col.key} row={entry.row} step={step} />
+                  ) : null;
+                })}
                 <span aria-hidden="true" className="mx-3 self-stretch border-l border-border/60" />
-                {humanCols.map((col) => (
-                  <Cell
-                    actions={actions}
-                    key={col.key}
-                    row={entry.row}
-                    step={byKey.get(col.key)!}
-                  />
-                ))}
+                {humanCols.map((col) => {
+                  const step = byKey.get(col.key);
+                  return step ? (
+                    <Cell actions={actions} key={col.key} row={entry.row} step={step} />
+                  ) : null;
+                })}
               </li>
             );
           })}

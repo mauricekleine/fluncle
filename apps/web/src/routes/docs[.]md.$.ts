@@ -45,5 +45,3 @@ export const Route = createFileRoute("/docs.md/$")({
     },
   },
 });
-
-export const serverHandlers = Route.options.server!.handlers;
