@@ -215,6 +215,92 @@ const generator = new OpenAPIGenerator({
 // public spec by construction — it cannot leak by a forgotten tag.
 const ADMIN_PATH_PREFIX = "/admin/";
 
+// ── Shared error response ────────────────────────────────────────────────────
+// The generator documents only the SUCCESS response per op (the contracts carry no
+// type-safe `.errors()`, so oRPC's `customErrorResponseBodySchema` hook never fires).
+// But every public op CAN fault, and when it does the rails encoder
+// (`encodeErrorBody` above) rewrites the body into the legacy `jsonError` envelope —
+// `{ code, message, ok: false }`, status on the Response (env.ts → `jsonError`).
+// Document that uniform 4xx/5xx fault shape once, as a shared component, and attach
+// it as the `default` response on every public operation, so error shapes are part
+// of the published spec again (the static `public/openapi.json` carried per-op
+// 400/429 docs; the generated one lost them). The shape MUST mirror the encoder's
+// output exactly — no invented fields — or the spec lies about the wire.
+const ERROR_SCHEMA_NAME = "Error";
+const ERROR_SCHEMA_REF = `#/components/schemas/${ERROR_SCHEMA_NAME}`;
+
+const HTTP_METHODS = ["get", "put", "post", "delete", "options", "head", "patch", "trace"] as const;
+
+// Inferred from `OpenAPIGenerator.generate` so the in-place edits stay type-checked
+// against the generator's return type rather than a hand-rolled shape. The schema +
+// response value types are derived from the document so the injected component and
+// `default` response satisfy the exact (V3/V3.1-intersected) member types the doc's
+// `components.schemas` and `operation.responses` maps expect.
+type GeneratedDocument = Awaited<ReturnType<typeof generator.generate>>;
+type SchemaValue = NonNullable<NonNullable<GeneratedDocument["components"]>["schemas"]>[string];
+type PathItem = NonNullable<GeneratedDocument["paths"]>[string];
+type Operation = NonNullable<NonNullable<PathItem>["get"]>;
+type ResponseValue = NonNullable<Operation["responses"]>[string];
+
+// The exact body the rails encoder (`encodeErrorBody`) emits, which is the legacy
+// `jsonError(status, code, message)` shape (env.ts): `code` (the lower_snake API
+// code, e.g. `not_found`, `invalid_request`, `track_not_found`), a human `message`,
+// and `ok` pinned `false` to discriminate it from every success envelope.
+const ERROR_SCHEMA: SchemaValue = {
+  additionalProperties: false,
+  description:
+    "The uniform fault envelope every operation returns on a 4xx/5xx. The HTTP status carries the error class; the body identifies it with a stable lower_snake `code`, a human-readable `message`, and `ok: false` so it can be discriminated from a success envelope.",
+  properties: {
+    code: {
+      description: "A stable, machine-readable error code (e.g. `not_found`, `invalid_request`).",
+      type: "string",
+    },
+    message: { description: "A human-readable description of the fault.", type: "string" },
+    ok: { const: false, description: "Always `false` on a fault response.", type: "boolean" },
+  },
+  required: ["code", "message", "ok"],
+  type: "object",
+};
+
+const ERROR_RESPONSE: ResponseValue = {
+  content: { "application/json": { schema: { $ref: ERROR_SCHEMA_REF } } },
+  description: "Fault — the `{ code, message, ok: false }` envelope, with the class in the status.",
+};
+
+/**
+ * Register the shared `Error` component and attach it as the `default` response on
+ * every operation in the generated doc — without disturbing the per-op success
+ * responses, the operationIds, or anything else the generator produced. The
+ * generated paths are exactly the public surface (the admin tier is already
+ * filtered out before this runs), so every operation touched here is a public one.
+ */
+function attachDefaultErrorResponse(document: GeneratedDocument): GeneratedDocument {
+  const components = document.components ?? {};
+  document.components = {
+    ...components,
+    schemas: { ...components.schemas, [ERROR_SCHEMA_NAME]: ERROR_SCHEMA },
+  };
+
+  for (const pathItem of Object.values(document.paths ?? {})) {
+    if (pathItem === undefined) {
+      continue;
+    }
+
+    for (const method of HTTP_METHODS) {
+      const operation = pathItem[method];
+      if (operation === undefined) {
+        continue;
+      }
+
+      // Never clobber a `default` the generator already emitted (it does not today,
+      // but keep the per-op success responses untouched if that ever changes).
+      operation.responses = { default: ERROR_RESPONSE, ...operation.responses };
+    }
+  }
+
+  return document;
+}
+
 /** True when an oRPC contract procedure's REST path is under the admin tier. */
 function isAdminPath(path: string | undefined): boolean {
   return path !== undefined && (path === "/admin" || path.startsWith(ADMIN_PATH_PREFIX));
@@ -229,7 +315,7 @@ function isAdminPath(path: string | undefined): boolean {
  * prose.
  */
 export async function generateOpenApiDocument() {
-  return generator.generate(router, {
+  const document = await generator.generate(router, {
     filter: ({ contract }) => !isAdminPath(contract["~orpc"].route.path),
     info: {
       contact: {
@@ -244,4 +330,9 @@ export async function generateOpenApiDocument() {
     },
     servers: [{ url: "https://www.fluncle.com/api/v1" }],
   });
+
+  // Document the uniform fault envelope every public op can return, as a shared
+  // component attached as each op's `default` response (the success responses the
+  // generator emitted are left untouched).
+  return attachDefaultErrorResponse(document);
 }

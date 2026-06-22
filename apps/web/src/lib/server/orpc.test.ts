@@ -381,11 +381,24 @@ describe("oRPC public read — GET /radio/now-playing (get_radio_now_playing)", 
 // (Scalar + Postman read it) since the spec flip retired the static
 // public/openapi.json. The load-bearing constraint: it carries EVERY public op and
 // ZERO admin ops (docs/orpc-migration-brief.md — admin stays OFF the public spec).
+type ErrorSchema = {
+  type?: string;
+  additionalProperties?: boolean;
+  properties?: Record<string, { type?: string; const?: unknown }>;
+  required?: string[];
+};
+
+type Operation = {
+  operationId?: string;
+  responses?: Record<string, { content?: Record<string, { schema?: { $ref?: string } }> }>;
+};
+
 type GeneratedSpec = {
   openapi: string;
   info: { title: string; version: string; summary?: string; description?: string };
   servers?: { url: string }[];
-  paths: Record<string, Record<string, { operationId?: string }>>;
+  components?: { schemas?: Record<string, ErrorSchema> };
+  paths: Record<string, Record<string, Operation>>;
 };
 
 // Every public op's operationId (the camelCase projection of its verb_noun key),
@@ -488,5 +501,70 @@ describe("oRPC OpenAPI generation — the public spec (the flip)", () => {
 
     // And the op set is EXACTLY the public surface — nothing extra, nothing missing.
     expect(new Set(ids)).toEqual(new Set(PUBLIC_OPERATION_IDS));
+  });
+
+  it("documents the shared Error component as the rails encoder's { code, message, ok: false } envelope", async () => {
+    const { generateOpenApiDocument } = await import("./orpc");
+    const document = (await generateOpenApiDocument()) as GeneratedSpec;
+
+    // The shared fault component MUST mirror the rails encoder (orpc.ts
+    // `encodeErrorBody` → env.ts `jsonError`) exactly: a string `code`, a string
+    // `message`, and `ok` pinned to the literal `false`, with nothing else — so the
+    // spec never claims a field the wire doesn't carry.
+    const error = document.components?.schemas?.Error;
+    expect(error).toBeDefined();
+    expect(error?.type).toBe("object");
+    expect(error?.additionalProperties).toBe(false);
+    expect(new Set(error?.required ?? [])).toEqual(new Set(["code", "message", "ok"]));
+    expect(error?.properties?.code?.type).toBe("string");
+    expect(error?.properties?.message?.type).toBe("string");
+    expect(error?.properties?.ok?.type).toBe("boolean");
+    expect(error?.properties?.ok?.const).toBe(false);
+  });
+
+  it("attaches the Error envelope as the default response on every public op (sampled)", async () => {
+    const { generateOpenApiDocument } = await import("./orpc");
+    const document = (await generateOpenApiDocument()) as GeneratedSpec;
+
+    // A sampled GET read, a POST write, and the proof route — each must carry the
+    // shared fault as its `default` response, $ref-ing the one Error component.
+    const sampled: [path: string, method: string][] = [
+      ["/tracks/{idOrLogId}", "get"],
+      ["/tracks", "get"],
+      ["/newsletter", "post"],
+    ];
+
+    for (const [path, method] of sampled) {
+      const operation = document.paths[path]?.[method];
+      expect(
+        operation,
+        `expected ${method.toUpperCase()} ${path} on the public spec`,
+      ).toBeDefined();
+      const ref = operation?.responses?.default?.content?.["application/json"]?.schema?.$ref;
+      expect(ref, `${method.toUpperCase()} ${path} is missing the default Error response`).toBe(
+        "#/components/schemas/Error",
+      );
+    }
+
+    // And EVERY public operation carries it — no op is documented without its fault
+    // shape, and the success responses are left intact alongside it.
+    for (const item of Object.values(document.paths)) {
+      for (const operation of Object.values(item)) {
+        if (operation.operationId === undefined) {
+          continue;
+        }
+        const responses = operation.responses ?? {};
+        expect(
+          responses.default?.content?.["application/json"]?.schema?.$ref,
+          `op "${operation.operationId}" is missing the default Error response`,
+        ).toBe("#/components/schemas/Error");
+        // The success response(s) survive — `default` is additive, not a replacement.
+        const nonDefault = Object.keys(responses).filter((status) => status !== "default");
+        expect(
+          nonDefault.length,
+          `op "${operation.operationId}" lost its success response`,
+        ).toBeGreaterThan(0);
+      }
+    }
   });
 });
