@@ -83,7 +83,7 @@ export default function ArchiveScreen() {
           contentContainerStyle={{ paddingBottom: insets.bottom + 20 }}
           onEndReached={() => {
             if (hasNextPage && !isFetchingNextPage) {
-              fetchNextPage();
+              void fetchNextPage();
             }
           }}
           onEndReachedThreshold={0.5}
