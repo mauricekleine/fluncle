@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { readJson } from "./orpc-test-helpers";
+import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, req, setAdminTokenEnv } from "./orpc-test-kit";
 
 // The admin wave's `admin-submissions` parity + auth proof, driven end-to-end
 // through `handleOrpc` so the REAL admin auth spine runs.
@@ -21,8 +21,6 @@ vi.mock("./submissions", () => ({
   rejectSubmission: (...args: unknown[]) => rejectSubmission(...args),
 }));
 
-const OPERATOR_TOKEN = "test-token-admin-operator";
-const AGENT_TOKEN = "test-token-admin-agent";
 const SUBMISSION_ID = "sub-123";
 
 const SUBMISSION = {
@@ -36,10 +34,7 @@ const SUBMISSION = {
   title: "Mr Right On",
 };
 
-beforeAll(() => {
-  process.env.FLUNCLE_API_TOKEN = OPERATOR_TOKEN;
-  process.env.FLUNCLE_AGENT_TOKEN = AGENT_TOKEN;
-});
+beforeAll(setAdminTokenEnv);
 
 beforeEach(() => {
   listPendingSubmissions.mockReset();
@@ -47,16 +42,6 @@ beforeEach(() => {
   approveSubmission.mockReset();
   rejectSubmission.mockReset();
 });
-
-function req(path: string, method: string, token: string | undefined): Request {
-  const headers: Record<string, string> = {};
-
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-
-  return new Request(`https://www.fluncle.com/api/v1${path}`, { headers, method });
-}
 
 // ── list_submissions — admin tier ────────────────────────────────────────────
 describe("oRPC list_submissions (GET /admin/submissions)", () => {

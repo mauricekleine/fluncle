@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { readJson } from "./orpc-test-helpers";
+import { readJson } from "./orpc-test-kit";
 
 // Wave B — the CSRF/origin guard ORDERING proof for the `/me` mutation tier.
 // Unlike orpc-wave-b.test.ts (which stubs `requireAccountMutation` wholesale to

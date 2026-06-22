@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { readJson } from "./orpc-test-helpers";
+import { BASE, get, jsonRequest as body, readJson } from "./orpc-test-kit";
 
 // Wave B — the thirteen `/me` PRIVATE-SESSION ops fanned out off the user-auth
 // tier (orpc-auth.ts). As in orpc-wave-a.test.ts, the underlying server helpers
@@ -64,25 +64,11 @@ function jsonError(status: number, code: string, message: string): Response {
   return Response.json({ code, message, ok: false }, { status });
 }
 
-function get(url: string): Request {
-  return new Request(url, { method: "GET" });
-}
-
-function body(url: string, method: string, payload: unknown): Request {
-  return new Request(url, {
-    body: JSON.stringify(payload),
-    headers: { "Content-Type": "application/json" },
-    method,
-  });
-}
-
 // A signed-in session for the read tier, and a passed CSRF guard for writes.
 function signIn(): void {
   requirePublicUser.mockResolvedValue(USER);
   requireAccountMutation.mockResolvedValue(USER);
 }
-
-const BASE = "https://www.fluncle.com/api/v1";
 
 beforeEach(() => {
   for (const fn of [

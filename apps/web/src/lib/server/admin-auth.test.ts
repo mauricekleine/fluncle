@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { isAllowedSpotifyUser, signGrant, verifyGrant } from "./admin-auth";
 import {
   ADMIN_COOKIE_NAME,
@@ -29,6 +29,16 @@ beforeAll(() => {
   process.env.FLUNCLE_API_TOKEN = TOKEN;
   process.env.FLUNCLE_AGENT_TOKEN = AGENT_TOKEN;
   process.env.ADMIN_SESSION_SECRET = SESSION_SECRET;
+  // Freeze the clock so every `Date.now()` — the `iat` a state is signed with AND
+  // the `now` it is verified against — reads the same instant. The grant/OAuth
+  // window math (fresh vs stale, expired) becomes exact instead of relying on the
+  // two reads landing in the same tick.
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-06-22T12:00:00.000Z"));
+});
+
+afterAll(() => {
+  vi.useRealTimers();
 });
 
 const DAY_MS = 24 * 60 * 60 * 1000;

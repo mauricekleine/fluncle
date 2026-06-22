@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { readJson } from "./orpc-test-helpers";
+import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, req, setAdminTokenEnv } from "./orpc-test-kit";
 
 // The admin wave's `admin-backfills` parity + auth proof: the maintenance sweeps
 // driven end-to-end through `handleOrpc` against `/api/v1/admin/...`, so the REAL
@@ -26,13 +26,7 @@ vi.mock("./spinup", () => ({
   sweepEnrichmentQueue: (...args: unknown[]) => sweepEnrichmentQueue(...args),
 }));
 
-const OPERATOR_TOKEN = "test-token-admin-operator";
-const AGENT_TOKEN = "test-token-admin-agent";
-
-beforeAll(() => {
-  process.env.FLUNCLE_API_TOKEN = OPERATOR_TOKEN;
-  process.env.FLUNCLE_AGENT_TOKEN = AGENT_TOKEN;
-});
+beforeAll(setAdminTokenEnv);
 
 beforeEach(() => {
   backfillDiscogsIds.mockReset();
@@ -42,15 +36,9 @@ beforeEach(() => {
 
 // A bodyless POST (no Content-Type), the exact shape the CLI's `adminApiPost`
 // sends for these query-only ops after the wave (it no longer claims a JSON
-// content-type without a body).
+// content-type without a body). `req` omits Content-Type when no body is passed.
 function post(path: string, token: string | undefined): Request {
-  const headers: Record<string, string> = {};
-
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-
-  return new Request(`https://www.fluncle.com/api/v1${path}`, { headers, method: "POST" });
+  return req(path, "POST", token);
 }
 
 // ── backfill_discogs — operator tier ─────────────────────────────────────────

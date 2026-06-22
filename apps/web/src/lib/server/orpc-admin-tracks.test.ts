@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { readJson } from "./orpc-test-helpers";
+import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, setAdminTokenEnv } from "./orpc-test-kit";
 
 // The ADMIN wave's pilot parity + auth proof: the `admin-tracks` ops driven
 // end-to-end through `handleOrpc` against `/api/v1/admin/...`, so the REAL admin
@@ -81,8 +81,6 @@ vi.mock("./observation", async (importOriginal) => {
   };
 });
 
-const OPERATOR_TOKEN = "test-token-admin-operator";
-const AGENT_TOKEN = "test-token-admin-agent";
 const TRACK_ID = "track-123";
 
 const TRACK = {
@@ -111,10 +109,7 @@ const LIST_ITEM = {
   trackId: TRACK_ID,
 };
 
-beforeAll(() => {
-  process.env.FLUNCLE_API_TOKEN = OPERATOR_TOKEN;
-  process.env.FLUNCLE_AGENT_TOKEN = AGENT_TOKEN;
-});
+beforeAll(setAdminTokenEnv);
 
 beforeEach(() => {
   updateTrack.mockReset();
