@@ -1,6 +1,6 @@
 ---
 name: fluncle-track-enrichment
-description: Enrich a Fluncle track from audio — analyze a preview for BPM, musical key, and a spectral feature vector, then write them back via the fluncle CLI. Use when given a Fluncle track id or log_id to analyze/enrich, when computing key/BPM for a track, or when running the track enrichment agent (locally or on a Spinup microVM). Also for the audio feature vector that will train the vibe-placement model.
+description: Enrich a Fluncle track from audio — analyze a preview for BPM, musical key, and a spectral feature vector, then write them back via the fluncle CLI. Use when given a Fluncle track id or log_id to analyze/enrich, when computing key/BPM for a track, or when running the track enrichment agent (locally or on the Hermes box). Also for the audio feature vector that will train the vibe-placement model.
 ---
 
 # Fluncle track enrichment agent

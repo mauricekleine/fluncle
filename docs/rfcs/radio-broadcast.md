@@ -1,5 +1,7 @@
 # RFC: radio.fluncle.com — a true synchronized broadcast (+ streaming optimization)
 
+> **Shipped: #115/#117 — `radio.fluncle.com` is live.** This is the original planning record; read the deferred-units framing below as history, not current state.
+
 **Status:** Draft → Final (research across 4 threads → /taste → adversarial panel synthesized, 2026-06-22) — completeness standard applied.
 **For:** a fresh build session (or a small team of agents) turning the per-client radio cycle into one server-authoritative shared run, with fast offset-join playback. Plus Maurice for the catalogue-order, schedule-epoch, and "is mid-join announced" calls.
 **Canon/authority:** the codebase and `AGENTS.md` arbitrate; `docs/track-lifecycle.md`, `docs/rfcs/radio-observations.md` (the original radio RFC — built it per-client random), `docs/video-variants.md`, `DESIGN.md` / `PRODUCT.md` / `VOICE.md` (+ `packages/skills/copywriting-fluncle`) are ground truth. This is planning under `docs/`, not spec. It **reverses one scope line** of `radio-observations.md` (which listed "synchronized" + "a 24/7 stream server" as non-goals): synchronization is now in; a stream server is still out (we do it with zero new always-on infra).

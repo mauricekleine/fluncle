@@ -141,6 +141,5 @@ bunx --bun shadcn@latest add dialog
 
 - Applies to skills created via `/skill-creator`, `Skill Creator`, or `$skill-creator`
 - MUST: Put new skills in `packages/skills`
-- MUST: Prefix Spinup-specific skills with `spinup-`
 - MUST: Verify skills with `UV_CACHE_DIR=/tmp/uv-cache uv run --with pyyaml python "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py" packages/skills/<skill-path>`
 - MUST: Install local skills with `npx skills add ./packages/skills/<skill-path> -y -a claude-code -a codex`

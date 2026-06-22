@@ -50,7 +50,7 @@ fluncle recent --limit 1 --json
 For this project’s known VPS, previous deployments used:
 
 ```bash
-ssh admin@spinup-devbox-01 'fluncle recent --limit 1 --json'
+ssh admin@<host> 'fluncle recent --limit 1 --json'
 ```
 
 Only use a host-specific SSH command when the user asks for that deployment target.
