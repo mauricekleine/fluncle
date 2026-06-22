@@ -672,8 +672,8 @@ describe("oRPC list_tracks_admin (GET /admin/tracks)", () => {
   });
 });
 
-// ── add_track — operator tier (publish from a Spotify URL) ───────────────────
-describe("oRPC add_track (POST /admin/tracks)", () => {
+// ── publish_track — operator tier (publish from a Spotify URL) ───────────────
+describe("oRPC publish_track (POST /admin/tracks)", () => {
   it("403s the AGENT (operator-only)", async () => {
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(

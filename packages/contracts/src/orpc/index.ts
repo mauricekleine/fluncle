@@ -76,12 +76,12 @@ export {
   startLastfmAuth,
 } from "./admin-tokens";
 export {
-  addTrack,
   contextTrack,
   finalizeTrackVideo,
   listTracksAdmin,
   observeTrack,
   presignTrackVideoUploads,
+  publishTrack,
   updateTrack,
 } from "./admin-tracks";
 export { getHealth } from "./health";

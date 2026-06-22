@@ -24,18 +24,18 @@ One admin surface, two roles — the privilege is the role, not the carrier:
 
 The dividing line: _could a stranger see the result, or could it not be taken back?_ → operator. _Internal and reversible?_ → agent.
 
-| Surface                                                                                                                         | Role     | Why                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------- |
-| All public reads + admin reads (`queue`, `enrich-queue`, `vehicles`, `mixtapes list/get`, `submissions review`, `track social`) | agent    | No effect                                                              |
-| `track update` — analysis only (`--status/--bpm/--key/--features`)                                                              | agent    | Machine-measured, internal, overwritable; the enrich cron's write-back |
-| `track draft` — TikTok/default                                                                                                  | agent    | `SELF_ONLY` inbox draft; a human still posts it                        |
-| `add` (Spotify playlist + Telegram)                                                                                             | operator | Public, irreversible                                                   |
-| `track draft --platform youtube`                                                                                                | operator | Direct public upload                                                   |
-| `track update` — `--note/--video-url/--vibe-x/y` (+ identity `isrc/logId`)                                                      | operator | Editorial voice + map placement — Fluncle's judgment                   |
-| `track video` / `preview-archive` / `observe`                                                                                   | operator | Durable artifacts                                                      |
-| `mixtapes publish/distribute/delete/create/update/members`                                                                      | operator | Publishes/mutates the spine                                            |
-| `submissions approve/reject`                                                                                                    | operator | Editorial decision; approve can publish                                |
-| `auth *`, `backfill *`                                                                                                          | operator | Credentials / bulk mutation                                            |
+| Surface                                                                                                                           | Role     | Why                                                                    |
+| --------------------------------------------------------------------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------- |
+| All public reads + admin reads (`queue`, `enrich --queue`, `vehicles`, `mixtapes list/get`, `submissions review`, `track social`) | agent    | No effect                                                              |
+| `track update` — analysis only (`--status/--bpm/--key/--features`)                                                                | agent    | Machine-measured, internal, overwritable; the enrich cron's write-back |
+| `track draft` — TikTok/default                                                                                                    | agent    | `SELF_ONLY` inbox draft; a human still posts it                        |
+| `add` (Spotify playlist + Telegram)                                                                                               | operator | Public, irreversible                                                   |
+| `track draft --platform youtube`                                                                                                  | operator | Direct public upload                                                   |
+| `track update` — `--note/--video-url/--vibe-x/y` (+ identity `isrc/logId`)                                                        | operator | Editorial voice + map placement — Fluncle's judgment                   |
+| `track video` / `preview` / `observe`                                                                                             | operator | Durable artifacts                                                      |
+| `mixtapes publish/distribute/delete/create/update/members`                                                                        | operator | Publishes/mutates the spine                                            |
+| `submissions approve/reject`                                                                                                      | operator | Editorial decision; approve can publish                                |
+| `auth *`, `backfill *`                                                                                                            | operator | Credentials / bulk mutation                                            |
 
 Enforcement is at the route: agent-allowed routes call `requireAdmin` (any principal); publish-/irreversible-class routes call `requireOperator` (403s the agent). The two conditional commands (`track update`, `track draft`) authenticate with `requireAdmin`, then branch on `adminRole` to reject an operator-only field/platform. The CLI on the box runs ungated — an agent-role attempt at an operator route is refused server-side, and the agent relays the 403 in voice (see `SOUL.md`).
 
@@ -119,7 +119,7 @@ docker run -d --name hermes --restart unless-stopped \
 Hermes is also Fluncle's queue-driven automation orchestrator: scheduled, trusted, no-untrusted-input loops over the `fluncle` CLI (`docs/hermes-automation-brief.md`). They are versioned at [`docs/agents/hermes/cron/`](./hermes/cron/) (`jobs.json` + a `README.md` with the operator's wire-on-the-box steps).
 
 - **Mechanism (verified, [upstream cron docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron)):** jobs live in `~/.hermes/cron/jobs.json` (**not** `config.yaml`), per-run output under `~/.hermes/cron/output/{job_id}/`; the gateway ticks every 60 s and runs each due job in a **fresh, isolated agent session** (the prompt must be self-contained). Schedules are relative / `every Nh` interval / cron expression / ISO timestamp. Jobs are created via Hermes' own `cronjob` tool (`hermes cron create …`, chat `/cron add`, or conversation) — not by hand-editing `jobs.json`. The repo file is the canonical source; the box is the deploy target.
-- **`fluncle-enrich` — LIVE, the box's `--no-agent` sweep (every 5 min).** It drains the enrich-queue (`fluncle admin tracks enrich-queue`), analyzes each finding on-box (`ffmpeg` + `bun`), and writes the result back via `fluncle admin tracks update`. It runs **without** the agent brain (`--no-agent`), so it carries no untrusted-input surface; it is created on the box directly (`hermes cron create --no-agent …`) and is **not** in `jobs.json` (which holds the agent jobs). This is the only path that enriches a new find — there is no on-add push.
+- **`fluncle-enrich` — LIVE, the box's `--no-agent` sweep (every 5 min).** It drains the enrich worklist (`fluncle admin tracks enrich --queue`), analyzes each finding on-box (`ffmpeg` + `bun`), and writes the result back via `fluncle admin tracks update`. It runs **without** the agent brain (`--no-agent`), so it carries no untrusted-input surface; it is created on the box directly (`hermes cron create --no-agent …`) and is **not** in `jobs.json` (which holds the agent jobs). This is the only path that enriches a new find — there is no on-add push.
 - **The two AGENT crons (drafted in `jobs.json`, hourly, idempotent queue drains):** context-note (drain `hasContext=false`, fetch Worker-side Firecrawl facts) and observation (drain `hasContext=true AND hasObservation=false`, author the recovered-audio script with `copywriting-fluncle`, then `observe --script`). They stay under the agent ceiling — reversible, internal, no public footprint — so an injection can do nothing the scheduled run can't. Backfills (Last.fm / Discogs) and the newsletter are **not** in this set.
 
 ## Verify (smoke test)
@@ -129,7 +129,7 @@ Hermes is also Fluncle's queue-driven automation orchestrator: scheduled, truste
 docker run --rm --entrypoint fluncle fluncle-hermes:v2026.6.19 version            # -> fluncle <ver>
 # agent-allowed read with the agent token + live API (expect {"ok":true,...})
 docker run --rm --env-file /etc/hermes.env --entrypoint fluncle \
-  fluncle-hermes:v2026.6.19 admin enrich-queue --json --limit 1
+  fluncle-hermes:v2026.6.19 admin tracks enrich --queue --json --limit 1
 # the server boundary: a publish-class command with the agent token is refused
 # (expect a 403 "forbidden" — the operator role is required, not an execution)
 docker run --rm --env-file /etc/hermes.env --entrypoint fluncle \

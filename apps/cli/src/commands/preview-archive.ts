@@ -49,7 +49,7 @@ export async function previewArchiveUploadCommand(
   form.append("mime", options.mime);
 
   return adminApiPostForm<PreviewArchiveResult>(
-    `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/preview-archive`,
+    `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/preview`,
     form,
   );
 }
@@ -93,7 +93,7 @@ export async function previewArchiveBackfillCommand(
       }
 
       const status = await adminApiGet<PreviewArchiveStatus>(
-        `/api/admin/tracks/${encodeURIComponent(track.trackId)}/preview-archive`,
+        `/api/admin/tracks/${encodeURIComponent(track.trackId)}/preview`,
       );
 
       if (status.archived) {
@@ -143,7 +143,7 @@ async function uploadResolvedPreview(trackId: string, preview: ResolvedPreview):
   form.append("source", preview.source);
   form.append("mime", preview.mime);
 
-  await adminApiPostForm(`/api/admin/tracks/${encodeURIComponent(trackId)}/preview-archive`, form);
+  await adminApiPostForm(`/api/admin/tracks/${encodeURIComponent(trackId)}/preview`, form);
 }
 
 async function resolvePreview(track: Track): Promise<ResolvedPreview | undefined> {

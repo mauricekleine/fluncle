@@ -77,10 +77,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // the whole devices domain is contract-first oRPC), so it has no file-enumeration
   // entry; it lives here only to satisfy the "registry holds EXACTLY this map's
   // ops" check. An EXTERNAL cron calls it (TanStack has no `scheduled()`).
-  "POST /admin/push/sweep-receipts": "sweep_push_receipts",
+  "POST /admin/push/receipts/sweep": "sweep_push_receipts",
   "POST /admin/submissions/{submissionId}/approve": "approve_submission",
   "POST /admin/submissions/{submissionId}/reject": "reject_submission",
-  "POST /admin/tracks": "add_track",
+  "POST /admin/tracks": "publish_track",
   // context_track is served by oRPC at its own path; it has no TanStack route FILE
   // (oRPC owns the path directly), so it lives here as a path→op entry without a
   // `tracks.$trackId.context.ts` route file.
@@ -106,9 +106,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
 //     they are CONVERTED, not carved out, in the admin wave.)
 //   - The admin `logout` (GET): a 302 that expires the grant cookie and bounces to
 //     /admin/login. Not RPC JSON, so it stays on TanStack like the OAuth redirects.
-//   - The multipart-FILE route (`preview-archive`): it takes `request.formData()`
-//     with a `File` part. Per the brief, oRPC's multipart-file-body ergonomics on
-//     workerd are not adopted for this pilot — this single irregular route stays on
+//   - The multipart-FILE route (`preview`): it takes `request.formData()` with a
+//     `File` part. Per the brief, oRPC's multipart-file-body ergonomics on workerd
+//     are not adopted for this pilot — this single irregular route stays on
 //     TanStack, not the model for the wave. CARVED OUT (the decision the brief asks
 //     for at kickoff). (The legacy multipart `…/video.ts` POST that was carved out
 //     alongside it has since been REMOVED — no first-party caller posted a small
@@ -117,7 +117,7 @@ const ADMIN_CARVE_OUT_ROUTE_PREFIXES = ["spotify/auth/", "youtube/auth/", "mixcl
 
 const ADMIN_CARVE_OUT_ROUTES = new Set([
   "logout", // a 302 redirect (expire the grant cookie, bounce to /admin/login), not RPC JSON.
-  "tracks.$trackId.preview-archive", // multipart-file body (formData → File).
+  "tracks.$trackId.preview", // multipart-file body (formData → File).
 ]);
 
 const ADMIN_DIR = fileURLToPath(new URL("../../routes/api/admin", import.meta.url));

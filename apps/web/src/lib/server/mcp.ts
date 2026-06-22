@@ -47,6 +47,10 @@ type ToolResult = {
 };
 
 type McpTool = {
+  // A deprecated alias kept in tools/list for a deprecation window. Convention B
+  // (docs/naming-conventions.md §4) renamed `get_recent_tracks` → `list_tracks`;
+  // existing agents still calling the old name resolve to the same execute.
+  deprecated?: boolean;
   description: string;
   execute: (args: Record<string, unknown>, request: Request) => Promise<unknown>;
   inputSchema: Record<string, unknown>;
@@ -70,7 +74,7 @@ const tools: McpTool[] = [
       },
       type: "object",
     },
-    name: "get_recent_tracks",
+    name: "list_tracks",
     title: "Recent findings",
   },
   {
@@ -192,6 +196,22 @@ const tools: McpTool[] = [
     title: "Subscribe to the newsletter",
   },
 ];
+
+// `get_recent_tracks` deprecation alias of `list_tracks` (Convention B §4). Shares
+// the canonical tool's execute + schema so the two never drift; kept in tools/list
+// for a deprecation window so agents pinned to the old name keep working.
+const listTracksTool = tools[0];
+
+if (!listTracksTool) {
+  throw new Error("list_tracks tool missing from the MCP tool list");
+}
+
+tools.push({
+  ...listTracksTool,
+  deprecated: true,
+  description: `[Deprecated — use list_tracks] ${listTracksTool.description}`,
+  name: "get_recent_tracks",
+});
 
 // The MCP Server Card (SEP-2127). Carries the canonical shape (top-level name,
 // remotes, capabilities object) plus the looser serverInfo/transport fields
