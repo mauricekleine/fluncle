@@ -458,16 +458,25 @@ function discogsFetch<T>(
         },
       });
 
-      // 429 is the rate-limit; honour Retry-After and try again within this slot.
-      if (response.status === 429 && attempt < 2) {
-        const retryAfter = Number(response.headers.get("Retry-After")) || 2;
-        console.warn(`[discogs] 429 for ${path} — retry ${attempt + 1}/2 after ${retryAfter}s`);
-        await delay(rateLimitIntervalMs === 0 ? 0 : retryAfter * 1000);
-        continue;
+      // Proactive throttle: Discogs recommends honouring its rate-limit headers
+      // (`X-Discogs-Ratelimit-Remaining`, a 60s moving window). When the budget is
+      // nearly spent, trip the breaker BEFORE the next call earns a 429 — the sweep
+      // stops clean instead of storming, and the next 30-min tick starts a fresh
+      // window. This is the local throttle Discogs's docs ask for.
+      // Guard on the header being PRESENT — `Number(null)` is 0, not NaN, so an
+      // absent header would otherwise read as "0 remaining" and trip falsely.
+      const remainingHeader = response.headers.get("X-Discogs-Ratelimit-Remaining");
+      const remaining = remainingHeader === null ? Number.NaN : Number(remainingHeader);
+
+      if (signal && Number.isFinite(remaining) && remaining <= 1) {
+        signal.hit = true;
       }
 
-      // Retries exhausted on a 429 → Discogs is actively rate-limiting; flag it so
-      // the backfill backs off rather than re-storming next tick.
+      // 429 = Discogs is rate-limiting. Do NOT retry within the request: once the
+      // token's per-minute window is tripped, every call in it 429s, so retrying
+      // just storms (and times out the caller). Flag it on the FIRST 429 and bail —
+      // the variant loop + the backfill's run-level circuit breaker stop here, and
+      // the next 30-min tick retries with a fresh window. One call, not a wall.
       if (response.status === 429 && signal) {
         signal.hit = true;
       }

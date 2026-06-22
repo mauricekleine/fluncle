@@ -344,4 +344,22 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
     // No ISRC in the legacy form → MB bridge is skipped, straight to the search.
     expect(await discogsResolveRelease("Teddy Killerz", "Gate")).toEqual({ releaseId: 7 });
   });
+
+  it("trips the rate-limit signal proactively when X-Discogs-Ratelimit-Remaining is spent", async () => {
+    const { calls } = mockFetch([
+      {
+        match: DISCOGS_SEARCH,
+        response: Response.json(
+          { results: [] },
+          { headers: { "X-Discogs-Ratelimit-Remaining": "0" } },
+        ),
+      },
+    ]);
+
+    // Budget spent → reported throttled (not a clean miss), so the backfill's
+    // circuit breaker stops the run instead of storming; the search is not re-fired
+    // across the other query variants.
+    expect(await discogsResolveRelease("IYRE", "Glowing Embers")).toEqual({ rateLimited: true });
+    expect(calls.filter((url) => url.includes(DISCOGS_SEARCH))).toHaveLength(1);
+  });
 });
