@@ -625,6 +625,13 @@ async function resolveViaDiscogsSearch(
   let best: ScoredCandidate | undefined;
 
   for (const variant of searchVariants(input)) {
+    // Stop trying more query variants once a 429 has exhausted its retries — the
+    // token is rate-limited, so each further variant just adds to the storm. Bail
+    // and let the backfill's circuit breaker stop the run.
+    if (signal?.hit) {
+      break;
+    }
+
     const search = await discogsFetch<DiscogsSearchResult>(
       `/database/search?${variant.toString()}`,
       token,
@@ -708,6 +715,12 @@ export async function discogsResolveRelease(
 
     if (viaMb && (viaMb.releaseId || viaMb.masterId)) {
       return viaMb;
+    }
+
+    // MusicBrainz already exhausted a 503 — don't march into Discogs and storm a
+    // second vendor; report throttled so the backfill's circuit breaker trips.
+    if (signal.hit) {
+      return { rateLimited: true };
     }
 
     // 2. Discogs scored search — needs the token. No token → no-op (stays inert).

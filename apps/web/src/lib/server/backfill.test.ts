@@ -127,16 +127,23 @@ describe("backfillDiscogsIds — reliability gate", () => {
     expect(recordDone?.sql).toContain("backfill_discogs_failures = 0");
   });
 
-  it("a throttled miss records a FAILURE (backoff); a clean miss records TRIED (streak reset)", async () => {
-    // Throttled miss: rateLimited true → failures += 1.
+  it("a throttled miss trips the circuit breaker — stops the run, no cooldown (next tick retries); a clean miss records TRIED", async () => {
+    // Throttled miss: rateLimited true → the breaker trips. The run STOPS before
+    // the second finding (no march into the same 429 wall — the storm #119 missed),
+    // and the throttled finding is NOT recorded (no cooldown) so the next tick
+    // retries it with a fresh rate-limit window.
     discogsResolveRelease.mockResolvedValueOnce({ rateLimited: true });
-    singlePage([finding("1")]);
+    singlePage([finding("1"), finding("2")]);
     const { backfillDiscogsIds } = await import("./backfill");
     await backfillDiscogsIds(10, false);
-    expect(writes[0]?.sql).toContain("backfill_discogs_failures = backfill_discogs_failures + 1");
+    expect(writes, "no reliability write for a throttled finding").toEqual([]);
+    expect(discogsResolveRelease, "the run halted before the second finding").toHaveBeenCalledTimes(
+      1,
+    );
 
     writes.length = 0;
     reliabilityRows.clear();
+    discogsResolveRelease.mockClear();
 
     // Clean no-match: {} → failures reset to 0 (a tried, not a failure).
     discogsResolveRelease.mockResolvedValueOnce({});
