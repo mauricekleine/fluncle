@@ -10,3 +10,7 @@
 model:
   provider: openrouter
   default: anthropic/claude-sonnet-4.6
+
+# Discord: reply inline in the channel; an @mention no longer spawns a thread.
+discord:
+  auto_thread: false
