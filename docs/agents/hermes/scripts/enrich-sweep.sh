@@ -32,7 +32,7 @@ export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 # (the 127 proved it), so pin ABSOLUTE paths for the interpreter + the CLI. The
 # orchestrator reads BUN_BIN/FLUNCLE_BIN, so its `bun`/`fluncle` spawns resolve
 # with zero PATH dependence; the wrapper itself execs bun by absolute path too.
-export BUN_BIN="${BUN_BIN:-/root/.bun/bin/bun}"
+export BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 export FLUNCLE_BIN="${FLUNCLE_BIN:-/usr/local/bin/fluncle}"
 
 # Resolve the orchestrator next to this wrapper so it runs regardless of CWD.

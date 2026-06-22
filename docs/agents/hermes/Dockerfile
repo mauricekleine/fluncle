@@ -15,12 +15,16 @@ RUN apt-get update \
 
 # Bun — pinned to the repo's toolchain (packageManager bun@1.3.14) so the box runs
 # the same interpreter the skill is authored against. The official installer drops
-# the binary at /root/.bun/bin; symlink it onto PATH so `bun` resolves for cron
-# scripts and the agent CLI alike. BUN_INSTALL keeps the install path explicit.
+# the binary in /root/.bun (root's HOME, mode 700). The `--no-agent` cron runner
+# execs as a NON-root user that can't traverse /root, so a symlink there fails
+# (126 Permission denied). COPY the binary to /usr/local/bin (world-traversable)
+# instead — a real file outside /root that any user can exec. `fluncle` (npm -g in
+# /usr/local/lib) is already world-accessible, so only bun needs this.
 ENV BUN_INSTALL=/root/.bun
-ENV PATH=/root/.bun/bin:$PATH
+ENV PATH=/usr/local/bin:$PATH
 RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14" \
-  && ln -s /root/.bun/bin/bun /usr/local/bin/bun
+  && cp /root/.bun/bin/bun /usr/local/bin/bun \
+  && chmod 755 /usr/local/bin/bun
 
 # Install the Fluncle CLI — the agent's only path to read/write the archive. There
 # is no local command gate: the box holds an `agent`-scoped token and the Worker
