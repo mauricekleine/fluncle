@@ -82,6 +82,23 @@ The agent's identity is **Fluncle**, set always-on via `~/.hermes/SOUL.md` (Herm
 
 To change the voice: edit `SOUL.md` (or the `copywriting-fluncle` skill) in the repo, redeploy to `~/.hermes/SOUL.md` / the skills dir, restart, retest. Voice lives in git, never the agent's self-improve loop.
 
+**Redeploying the `copywriting-fluncle` skill.** The skills dir is the host-mounted `~/.hermes/skills/` → `/opt/data/skills/` in the container (root-owned), so update it _through_ Docker from the repo, not by hand on the box. With `$BOX` / `$PORT` set from the ops notes, from the repo root:
+
+```bash
+# 1. ship the current skill from the repo (tar over ssh; scp isn't always allowed)
+tar czf - -C packages/skills copywriting-fluncle \
+  | ssh -p $PORT $BOX 'rm -rf /tmp/cwf && mkdir /tmp/cwf && tar xzf - -C /tmp/cwf'
+# 2. back up the old one, replace via docker cp (lands in the host-mounted volume → persists)
+ssh -p $PORT $BOX '
+  docker exec hermes sh -c "rm -rf /opt/data/skills/copywriting-fluncle.bak; \
+    mv /opt/data/skills/copywriting-fluncle /opt/data/skills/copywriting-fluncle.bak"
+  docker cp /tmp/cwf/copywriting-fluncle hermes:/opt/data/skills/copywriting-fluncle'
+# 3. restart so the change is picked up
+ssh -p $PORT $BOX 'docker restart hermes'
+```
+
+The agent loads a skill **by name** from `/opt/data/skills/` fresh each session, so a content-replace + restart is the whole update — no manifest step. Verify with `docker exec hermes ls /opt/data/skills/copywriting-fluncle/references/`, then re-render one observation to confirm the new guidance took.
+
 ## Run
 
 ```bash
