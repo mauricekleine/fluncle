@@ -47,6 +47,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "GET /admin/lastfm/auth/start": "start_lastfm_auth",
   "GET /admin/mixtapes": "list_mixtapes_admin",
   "GET /admin/mixtapes/{mixtapeId}/social": "get_mixtape_social",
+  // The newsletter edition list (drafts inclusive) — contract-only oRPC, no TanStack
+  // route file (oRPC serves it off the registry). Admin tier (agent-allowed): the
+  // Friday cron reads it from a fresh session to find an unsent draft + the window.
+  "GET /admin/newsletter/editions": "list_editions_admin",
   "GET /admin/submissions": "list_submissions",
   "GET /admin/submissions/{submissionId}": "get_submission",
   "GET /admin/tracks": "list_tracks_admin",

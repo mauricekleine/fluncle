@@ -170,6 +170,14 @@ type MixtapeDistributeOptions = {
   youtube?: boolean;
 };
 
+type NewsletterDraftOptions = {
+  contentFile?: string;
+  json: boolean;
+  subject?: string;
+  windowSince?: string;
+  windowUntil?: string;
+};
+
 export function createProgram(): Command {
   const program = configureCommand(new Command());
 
@@ -759,6 +767,75 @@ function addAdminCommands(program: Command): void {
     .action(async (idOrLogId: string | undefined, options: { json: boolean }) => {
       const { publishYoutubeCommand } = await import("./commands/mixtape-youtube");
       await runMixtapePublishYoutube(idOrLogId, options, publishYoutubeCommand);
+    });
+
+  const adminNewsletter = configureCommand(
+    admin.command("newsletter").description("Newsletter edition commands"),
+  );
+
+  adminNewsletter.action(() => {
+    adminNewsletter.outputHelp();
+  });
+
+  // `create_edition` → `admin newsletter draft`. The Friday cron persists the
+  // authored edition here FIRST (persist-then-offer), then offers the Discord send
+  // button. Agent-allowed (admin tier). Re-run updates the stale draft, never dupes.
+  adminNewsletter
+    .command("draft")
+    .description("Persist a newsletter edition draft (the agent authors it, you send it)")
+    .option("--content-file <file>", "Structured edition content payload (JSON)")
+    .option("--subject <text>", "Email subject line")
+    .option("--window-since <date>", "Discovery-window start (ISO)")
+    .option("--window-until <date>", "Discovery-window end (ISO)")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: NewsletterDraftOptions) => {
+      const { newsletterDraftCommand } = await import("./commands/newsletter");
+      await runNewsletterDraft(options, newsletterDraftCommand);
+    });
+
+  // `update_edition` → `admin newsletter update`. Edit a draft's payload/subject/
+  // window before send. Sent editions are frozen (409). Agent-allowed (admin tier).
+  adminNewsletter
+    .command("update")
+    .description("Update a draft edition's payload, subject, or window")
+    .argument("[id]")
+    .option("--content-file <file>", "Structured edition content payload (JSON)")
+    .option("--subject <text>", "Email subject line")
+    .option("--window-since <date>", "Discovery-window start (ISO)")
+    .option("--window-until <date>", "Discovery-window end (ISO)")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (id: string | undefined, options: NewsletterDraftOptions) => {
+      const { newsletterUpdateCommand } = await import("./commands/newsletter");
+      await runNewsletterUpdate(id, options, newsletterUpdateCommand);
+    });
+
+  // `send_edition` → `admin newsletter send`. OPERATOR ONLY — the human gate (the
+  // old Loops dashboard tap). The Worker creates + sends the Resend broadcast and
+  // mints the number. A valid AGENT token gets a 403, so the cron can't send.
+  adminNewsletter
+    .command("send")
+    .description("Send an edition — OPERATOR only (Resend broadcast + mint the number)")
+    .argument("[id]")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (id: string | undefined, options: { json: boolean }) => {
+      const { newsletterSendCommand } = await import("./commands/newsletter");
+      await runNewsletterSend(id, options, newsletterSendCommand);
+    });
+
+  // `list_editions_admin` → `admin newsletter list`. Every edition INCLUDING drafts
+  // (the public archive is sent-only). The cron reads this from a fresh session to
+  // find an unsent draft + the last sent edition's window cutoff.
+  adminNewsletter
+    .command("list")
+    .description("List every edition including drafts (the cron's miss-recovery read)")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: { json: boolean }) => {
+      const { newsletterListCommand } = await import("./commands/newsletter");
+      await runNewsletterList(options, newsletterListCommand);
     });
 
   const submissions = configureCommand(
@@ -1602,6 +1679,88 @@ function formatCue(ms: number): string {
     return `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
   }
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+async function runNewsletterDraft(
+  options: NewsletterDraftOptions,
+  newsletterDraftCommand: typeof import("./commands/newsletter").newsletterDraftCommand,
+): Promise<void> {
+  const result = await newsletterDraftCommand(options);
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  console.log(
+    `Drafted edition ${result.edition.id}. It stays a draft until the operator sends it.`,
+  );
+}
+
+async function runNewsletterUpdate(
+  id: string | undefined,
+  options: NewsletterDraftOptions,
+  newsletterUpdateCommand: typeof import("./commands/newsletter").newsletterUpdateCommand,
+): Promise<void> {
+  if (!id) {
+    throw new Error("Missing edition id. Usage: fluncle admin newsletter update <id>");
+  }
+
+  const result = await newsletterUpdateCommand(id, options);
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  console.log(`Saved draft ${result.edition.id}.`);
+}
+
+async function runNewsletterSend(
+  id: string | undefined,
+  options: { json: boolean },
+  newsletterSendCommand: typeof import("./commands/newsletter").newsletterSendCommand,
+): Promise<void> {
+  if (!id) {
+    throw new Error("Missing edition id. Usage: fluncle admin newsletter send <id>");
+  }
+
+  const result = await newsletterSendCommand(id);
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  const number = result.edition.number;
+  console.log(
+    number === undefined
+      ? `Sent edition ${result.edition.id}.`
+      : `Sent edition #${number} — it's out to the list and in the archive.`,
+  );
+}
+
+async function runNewsletterList(
+  options: { json: boolean },
+  newsletterListCommand: typeof import("./commands/newsletter").newsletterListCommand,
+): Promise<void> {
+  const editions = await newsletterListCommand();
+
+  if (options.json) {
+    printJson({ editions, ok: true });
+    return;
+  }
+
+  if (editions.length === 0) {
+    console.log("No editions yet.");
+    return;
+  }
+
+  for (const edition of editions) {
+    const label = edition.number === undefined ? "draft" : `#${edition.number}`;
+    const subject = edition.subject ?? "(no subject)";
+    console.log(`${label}\t${edition.status}\t${edition.id}\t${subject}`);
+  }
 }
 
 async function runAdd(

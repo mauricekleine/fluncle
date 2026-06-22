@@ -1,6 +1,6 @@
 {
   "_comment": [
-    "The two AGENT jobs below are PREPARED, NOT YET WIRED. The operator wires them on",
+    "The three AGENT jobs below are PREPARED, NOT YET WIRED. The operator wires them on",
     "the box — see ./README.md. (The enrichment sweep is a separate `--no-agent` job,",
     "`fluncle-enrich`, already LIVE on the box and not recorded in this file.)",
     "This file is the version-controlled SOURCE for Hermes' cron jobs (the repo is",
@@ -17,22 +17,50 @@
     "  - the gateway ticks the scheduler every 60s and runs due jobs in FRESH,",
     "    isolated agent sessions — the prompt must be self-contained.",
     "  - schedule: relative one-shot (30m), interval (every 1h), cron expr (0 * * * *),",
-    "    or ISO timestamp. We use `every 1h`.",
+    "    or ISO timestamp. The two hourly queue-drains use `every 1h`; the weekly",
+    "    newsletter uses a cron expression `0 15 * * 5` (Friday 15:00).",
     "  - an agent job carries a `prompt` and reasons through the task; a no_agent job",
-    "    carries a `script` and ships its stdout, skipping the LLM. Both jobs below are",
-    "    AGENT jobs (they read a queue and act per item). The enrichment sweep is a",
-    "    separate `--no-agent` job (`fluncle-enrich`, every 5 min) created on the box",
-    "    directly — see ./README.md — so it is NOT recorded here.",
-    "  - deliver: `local` saves output to ~/.hermes/cron/output (no chat spam); these",
-    "    are silent queue-drain loops, so they deliver `local`. The operator can switch to",
-    "    `discord` for a run digest.",
+    "    carries a `script` and ships its stdout, skipping the LLM. All three jobs below",
+    "    are AGENT jobs (the two hourly ones read a queue and act per item; the weekly",
+    "    newsletter AUTHORS the edition copy). The enrichment sweep is a separate",
+    "    `--no-agent` job (`fluncle-enrich`, every 5 min) created on the box directly —",
+    "    see ./README.md — so it is NOT recorded here.",
+    "  - deliver: `local` saves output to ~/.hermes/cron/output (no chat spam); the two",
+    "    hourly jobs are silent queue-drain loops, so they deliver `local`. The Friday",
+    "    newsletter delivers `discord`: the edition is a crew-feed moment AND the send",
+    "    gate is a `clarify` button the operator must see and tap in the channel.",
+    "",
+    "TIMEZONE — DST-AWARE (newsletter only): Hermes cron has NO per-job timezone field",
+    "(verified against the upstream cron docs — schedules are relative / every Nh / a",
+    "cron expression / an ISO timestamp, all evaluated against the BOX CLOCK). So",
+    "`0 15 * * 5` means 15:00 in WHATEVER timezone the box clock is set to. To hit",
+    "15:00 Amsterdam through the CET⇄CEST flip, the BOX is pinned to Europe/Amsterdam",
+    "(`TZ=Europe/Amsterdam` on `docker run`, or the host /etc/localtime); the OS tz",
+    "database then handles DST and `0 15 * * 5` is always 15:00 Amsterdam, summer or",
+    "winter, with zero app-level DST logic. The hourly intervals (enrich/context/",
+    "observation) are TZ-agnostic, so this box-clock pin is invisible to them. Any",
+    "FUTURE absolute-time cron inherits Amsterdam-local — document new ones as such.",
+    "",
+    "CLARIFY SEND GATE (newsletter only): the send stays operator-gated. The agent",
+    "token gets a 403 on `send_edition` server-side, so the cron CANNOT send. Instead",
+    "the cron PERSISTS the draft first (the durable artifact), then calls the built-in",
+    "`clarify` tool to render a tappable Send/Hold button in Discord and BLOCKS for the",
+    "tap. On Send → the agent calls `fluncle admin newsletter send`. On Hold or the",
+    "clarify timeout sentinel (default 600s) → it treats silence as Hold (NEVER",
+    "auto-sends — silence is not consent for a publish-class action); the draft is",
+    "saved and re-offered next Friday. `clarify_timeout` is GLOBAL `agent.` config (not",
+    "per-call); keep the default and lean on persist-first + re-offer, not a long block.",
     "",
     "CLI NAMING (pinned, #88 landed): the context-note step's CLI command is",
     "`fluncle admin tracks context <trackId|logId>` (Convention B §4). Worker op",
     "`context_track` → POST /admin/tracks/{trackId}/context (agent tier, idempotent on",
     "`context:${logId}`). Queue filters are `--has-context` / `--has-observation` on",
     "`admin tracks queue`, plus the `context --queue` / `observe --queue` worklist views",
-    "(Convention B §6.4 — no `*-queue` commands). Every name below is pinned to that surface."
+    "(Convention B §6.4 — no `*-queue` commands). The newsletter relays are",
+    "`fluncle admin newsletter draft|update|send|list` (Convention B; `draft`=",
+    "create_edition admin tier, `send`=send_edition OPERATOR tier, `list`=",
+    "list_editions_admin admin tier, drafts inclusive). Every name below is pinned to",
+    "that surface."
   ],
 
   "jobs": [
@@ -50,6 +78,14 @@
       "deliver": "local",
       "repeat": null,
       "prompt": "You are running Fluncle's hourly observation cron. Fresh session — everything you need is here. You are Fluncle; load and apply the `copywriting-fluncle` skill for the script you write (it is the full voice canon). This job AUTHORS the recovered-audio observation script from the already-stored context note, then renders it via the Worker. It consumes the context the context-note cron produced; it never fetches Firecrawl itself.\n\nLoop, idempotently, per finding:\n\n1. Read the queue: findings that HAVE a context note but NO observation yet — `hasContext=true AND hasObservation=false`, oldest first (`GET /admin/tracks?hasContext=true&hasObservation=false&order=asc`). Process a bounded batch (e.g. up to 5 per tick — observation costs ElevenLabs credits, so keep batches small; a new eligible find is caught next tick).\n2. For each finding: read its stored context note (the factual fuel). Author the SPOKEN recovered-audio script in Fluncle's voice per the `copywriting-fluncle` skill and the recovered-audio delivery guide — grounded ONLY in the context note's facts. Hard voice constraints (the Worker also re-scans and will 403 a violation): no banned identity words, NEVER name earthly geography (the cosmos replaces the map), use only sparse `<break>`s (dense breaks get vocalised as thinking sounds), no exclamation marks, no em dashes in prose, sentence case, lead with the body then turn to the crew. Target 20–45 seconds.\n3. Render it: `fluncle admin tracks observe <trackId|logId> --script-file <path> --json` (or `--script <text>`). The Worker re-scans the script, renders it with the bespoke ElevenLabs voice, uploads observation.{mp3,txt,json} to R2, and writes the observation fields back. Idempotent per finding (`observe:${logId}`) — an existing observation is a no-op, so re-running is safe. Pass `--context-note` only if you already hold the note text; otherwise the Worker reads the stored one.\n4. If the Worker 403s on the voice gate, do NOT paste a raw error — note which finding failed the gate, skip it, and move on (it stays in the queue for a future author pass). Report a one-line summary: how many observations rendered this tick, how many skipped (gate / already present). No-op cleanly when the queue is empty.\n\nEvery claim in the script must trace to the context note — never invent a track, artist, date, Log ID, or stat. Do NOT publish, tag, or write the editorial note; those are operator-only."
+    },
+
+    {
+      "name": "fluncle-newsletter",
+      "schedule": "0 15 * * 5",
+      "deliver": "discord",
+      "repeat": null,
+      "prompt": "You are running Fluncle's weekly newsletter cron. Fresh session — everything you need is here. You are Fluncle: the uncle with the good records, writing a letter to the people on his list. Load and apply the `copywriting-fluncle` skill (the full voice canon, Email register) before you write a word. This job AUTHORS the week's edition, PERSISTS it as a DRAFT first, then offers the operator a Send button. You NEVER send it yourself — `send_edition` is operator-only and your agent token gets a 403; the operator taps Send.\n\nThe whole job, in order:\n\n1. MISS-RECOVERY FIRST. Read every edition including drafts: `fluncle admin newsletter list --json` (op `list_editions_admin`, drafts inclusive). If an UNSENT draft already exists (status `draft`, no `number`), do NOT author a new one — re-offer THAT draft's Send button (jump to step 7 with its id). Its tracks were never delivered, so re-sending the existing draft is correct. Only when there is no unsent draft do you author a fresh edition.\n\n2. WINDOW. Capture NOW as an ISO timestamp; this run's window ends here (UNTIL). From the same list, find the most recent SENT edition (status `sent`, highest `number`) and read its `windowUntil` — that cutoff is your SINCE. If no sent edition exists, use NOW minus 7 days. (The window self-heals: only SENT editions anchor it, so a skipped week widens the next window instead of dropping finds.)\n\n3. FETCH the finds: `GET https://www.fluncle.com/api/tracks?since=<SINCE>&until=<NOW>&limit=48`, paging with `cursor` while `nextCursor` is returned. Then the mixtapes: `GET https://www.fluncle.com/api/mixtapes` (newest first, no window params); keep only those whose `addedAt` falls inside SINCE..NOW. A mixtape is Fluncle's own DJ set — optional and rare; none in the window means no mixtape section. Never invent one or stretch the window to find one.\n\n4. ZERO-FIND RULE. If the window has no tracks AND no mixtapes, author NOTHING and send nothing — report 'no finds this window; skipping' and exit. A missed Friday is quieter than a hollow one. (A window with only a mixtape and no tracks is still worth an edition — the mixtape is the edition.)\n\n5. THE WHY. Each track's `note` is Fluncle's own words on why it made the cut — your primary material; quote or lightly adapt it. NEVER invent a reason for a track with no note; describe it plainly or let the title stand alone. A mixtape's `note` is its dream note; treat it the same. TIDBITS are optional and strict: only recent, concrete, source-linked artist news you are confident is the same artist (drum & bass aliases collide with mainstream names — when unsure, drop it); at most 2–3; never fabricate or embellish.\n\n6. AUTHOR + PERSIST THE DRAFT. Build the structured content payload (the single source the archive page AND the email HTML both render from): `intro` (1–3 sentences, the week in one breath, first person), the per-track blocks (newest first; each with the `Artist — Title` line — that em dash is the ONLY one allowed — the why, the finding's log-page link, and a quiet inline Spotify link), the optional mixtape block, and the optional tidbits (each with its source link). Voice rails (copywriting-fluncle is canon and overrides this): Email register, a letter from a bruv; open 'Ahoy cosmonauts,' close 'Happy raving,' then 'Fluncle'; first person 'I', never 'we'; NO exclamation marks; never the words 'transmission', 'signal' (as identity), 'curated', or 'content'; 'banger' at most once per paragraph; if a sentence reads written rather than said out loud to a mate, rewrite it. Write the payload to a JSON file, pick a short, dry, sentence-case subject specific to this week, then PERSIST IT FIRST (the durable artifact, before any button): `fluncle admin newsletter draft --content-file <edition.json> --subject \"<subject>\" --window-since <SINCE> --window-until <UNTIL> --json`. Capture the returned `edition.id`.\n\n7. OFFER THE SEND BUTTON (persist-then-offer). Call the `clarify` tool with a one-line review summary the operator can read in a few seconds — subject, finds count, window SINCE..UNTIL — and the choices ['Send', 'Hold']. clarify renders tappable buttons in Discord and BLOCKS for the tap.\n   - On 'Send': call `fluncle admin newsletter send <edition.id> --json`. The Worker renders the email HTML from the stored payload, creates + sends the Resend broadcast, and mints the edition number. Report the minted `#<number>`.\n   - On 'Hold' OR the clarify timeout sentinel (no tap in time): do NOT send. Silence is not consent for a publish-class action. Report 'drafted edition <id>; send pending — re-offered next Friday' and exit. The draft is persisted and the next Friday tick (step 1) re-offers it.\n\nNEVER send unprompted, NEVER auto-send on timeout, NEVER double-send (re-running step 1 finds the existing draft and re-offers it rather than authoring a duplicate). Every fact in the email must come from the API response or a source-linked tidbit — the uncle never makes things up; the music is impressive enough."
     }
   ]
 }
