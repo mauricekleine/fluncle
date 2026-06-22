@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { readJson } from "./orpc-test-helpers";
+import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, req, setAdminTokenEnv } from "./orpc-test-kit";
 
 // The admin wave's `admin-tokens` parity + auth proof, driven end-to-end through
 // `handleOrpc`. ALL four ops are operator tier (live `requireOperator`): the agent
@@ -24,13 +24,7 @@ vi.mock("./lastfm", () => ({
   lastfmGetToken: (...args: unknown[]) => lastfmGetToken(...args),
 }));
 
-const OPERATOR_TOKEN = "test-token-admin-operator";
-const AGENT_TOKEN = "test-token-admin-agent";
-
-beforeAll(() => {
-  process.env.FLUNCLE_API_TOKEN = OPERATOR_TOKEN;
-  process.env.FLUNCLE_AGENT_TOKEN = AGENT_TOKEN;
-});
+beforeAll(setAdminTokenEnv);
 
 beforeEach(() => {
   getYouTubeAccessToken.mockReset();
@@ -38,24 +32,6 @@ beforeEach(() => {
   lastfmGetToken.mockReset();
   lastfmGetSession.mockReset();
 });
-
-function req(path: string, method: string, token: string | undefined, body?: unknown): Request {
-  const headers: Record<string, string> = {};
-
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-
-  if (body !== undefined) {
-    headers["Content-Type"] = "application/json";
-  }
-
-  return new Request(`https://www.fluncle.com/api/v1${path}`, {
-    body: body === undefined ? undefined : JSON.stringify(body),
-    headers,
-    method,
-  });
-}
 
 // ── mint_youtube_token — operator tier ───────────────────────────────────────
 describe("oRPC mint_youtube_token (POST /admin/youtube/token)", () => {

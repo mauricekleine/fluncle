@@ -101,8 +101,15 @@ function runEligibleQuery() {
     : [];
 }
 
+// The mock emulates the real `order by random() limit 1` with `Math.random()`.
+// Pin it so the pick is deterministic across runs — the eligibility invariant
+// below must hold for ANY draw, so we sweep the spy across the [0,1) range rather
+// than freezing a single index.
+const randomSpy = vi.spyOn(Math, "random");
+
 beforeEach(() => {
   execute.mockReset();
+  randomSpy.mockReset().mockReturnValue(0);
   execute.mockImplementation(async (query: { sql: string }) => {
     // Guard the predicate is actually in the SQL, not just emulated by the mock.
     expect(query.sql).toContain("video_squared_at is not null");
@@ -114,9 +121,13 @@ beforeEach(() => {
 
 describe("getRandomRadioTrack", () => {
   it("only ever returns a radio-eligible finding (squared + observed)", async () => {
-    // Many draws: an ineligible finding (un-squared OR observation-less) must
-    // never surface, however the random pick lands.
+    // Sweep the pick across the whole [0,1) range: an ineligible finding
+    // (un-squared OR observation-less) must never surface, however the random
+    // pick lands. Deterministic now (the spy drives every draw) instead of
+    // hoping 50 real-random draws happen to cover the space.
     for (let i = 0; i < 50; i++) {
+      randomSpy.mockReturnValue(i / 50);
+
       const track = await getRandomRadioTrack();
 
       expect(track?.trackId).toBe("track-eligible");

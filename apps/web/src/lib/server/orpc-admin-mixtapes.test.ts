@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { readJson } from "./orpc-test-helpers";
+import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, req, setAdminTokenEnv } from "./orpc-test-kit";
 
 // The admin wave's `admin-mixtapes` parity + auth proof, driven end-to-end
 // through `handleOrpc`. Covers the auth tiers (reads = admin; everything else =
@@ -37,8 +37,6 @@ vi.mock("./mixtape-social", () => ({
   listMixtapeSocialPosts: (...args: unknown[]) => listMixtapeSocialPosts(...args),
 }));
 
-const OPERATOR_TOKEN = "test-token-admin-operator";
-const AGENT_TOKEN = "test-token-admin-agent";
 const MIXTAPE_ID = "mix-123";
 
 const MIXTAPE = {
@@ -51,10 +49,7 @@ const MIXTAPE = {
   type: "mixtape",
 };
 
-beforeAll(() => {
-  process.env.FLUNCLE_API_TOKEN = OPERATOR_TOKEN;
-  process.env.FLUNCLE_AGENT_TOKEN = AGENT_TOKEN;
-});
+beforeAll(setAdminTokenEnv);
 
 beforeEach(() => {
   listMixtapes.mockReset();
@@ -68,24 +63,6 @@ beforeEach(() => {
   listMixtapeSocialPosts.mockReset();
   finalizeMixtapeDistribution.mockReset();
 });
-
-function req(path: string, method: string, token: string | undefined, body?: unknown): Request {
-  const headers: Record<string, string> = {};
-
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-
-  if (body !== undefined) {
-    headers["Content-Type"] = "application/json";
-  }
-
-  return new Request(`https://www.fluncle.com/api/v1${path}`, {
-    body: body === undefined ? undefined : JSON.stringify(body),
-    headers,
-    method,
-  });
-}
 
 // ── list_mixtapes_admin — admin tier ─────────────────────────────────────────
 describe("oRPC list_mixtapes_admin (GET /admin/mixtapes)", () => {

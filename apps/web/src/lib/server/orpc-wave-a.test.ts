@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { readJson } from "./orpc-test-helpers";
+import { get, MIXTAPE, postJson, readJson, TRACK } from "./orpc-test-kit";
 
 // Wave A — the five public-unauthenticated ops fanned out off the pilot's
 // per-domain pattern. As in orpc.test.ts, the underlying server helpers are
@@ -72,44 +72,6 @@ beforeEach(async () => {
   const { __resetSearchCache } = await import("./orpc/search");
   __resetSearchCache();
 });
-
-function get(url: string): Request {
-  return new Request(url, { method: "GET" });
-}
-
-function post(url: string, body: string): Request {
-  return new Request(url, {
-    body,
-    headers: { "Content-Type": "application/json" },
-    method: "POST",
-  });
-}
-
-function postJson(url: string, body: unknown): Request {
-  return post(url, JSON.stringify(body));
-}
-
-const TRACK = {
-  addedAt: "2026-01-01T00:00:00.000Z",
-  addedToSpotify: true,
-  artists: ["Some Artist"],
-  durationMs: 300000,
-  enrichmentStatus: "done",
-  postedToTelegram: true,
-  spotifyUrl: "https://open.spotify.com/track/abc",
-  title: "Some Banger",
-  trackId: "abc",
-};
-
-const MIXTAPE = {
-  artists: ["Fluncle"] as ["Fluncle"],
-  externalUrls: {},
-  memberCount: 0,
-  members: [],
-  status: "published" as const,
-  title: "A Set",
-  type: "mixtape" as const,
-};
 
 // ── list_mixtapes ────────────────────────────────────────────────────────────
 

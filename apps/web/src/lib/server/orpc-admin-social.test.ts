@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { readJson } from "./orpc-test-helpers";
+import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, req, setAdminTokenEnv } from "./orpc-test-kit";
 
 // The admin wave's `admin-social` parity + auth proof, driven end-to-end through
 // `handleOrpc`. The security-critical piece is the FIELD-LEVEL operator guard on
@@ -39,8 +39,6 @@ vi.mock("./captions", () => ({
   readCaptions: (...args: unknown[]) => readCaptions(...args),
 }));
 
-const OPERATOR_TOKEN = "test-token-admin-operator";
-const AGENT_TOKEN = "test-token-admin-agent";
 const TRACK_ID = "track-123";
 
 const TRACK = {
@@ -51,10 +49,7 @@ const TRACK = {
   videoUrl: "https://found.fluncle.com/004.7.2I/footage.mp4",
 };
 
-beforeAll(() => {
-  process.env.FLUNCLE_API_TOKEN = OPERATOR_TOKEN;
-  process.env.FLUNCLE_AGENT_TOKEN = AGENT_TOKEN;
-});
+beforeAll(setAdminTokenEnv);
 
 beforeEach(() => {
   getTrackByIdOrLogId.mockReset();
@@ -65,24 +60,6 @@ beforeEach(() => {
   pushYouTubeShort.mockReset();
   readCaptions.mockReset().mockResolvedValue({ "004.7.2I": "a caption" });
 });
-
-function req(path: string, method: string, token: string | undefined, body?: unknown): Request {
-  const headers: Record<string, string> = {};
-
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-
-  if (body !== undefined) {
-    headers["Content-Type"] = "application/json";
-  }
-
-  return new Request(`https://www.fluncle.com/api/v1${path}`, {
-    body: body === undefined ? undefined : JSON.stringify(body),
-    headers,
-    method,
-  });
-}
 
 // ── list_track_social — admin tier ───────────────────────────────────────────
 describe("oRPC list_track_social (GET /admin/tracks/{trackId}/social)", () => {

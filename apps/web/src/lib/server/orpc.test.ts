@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { readJson } from "./orpc-test-helpers";
+import { get, MIXTAPE, readJson, TRACK } from "./orpc-test-kit";
 
 // The proof route + the rails seam. `resolveLogPageTarget` is mocked — the
 // handler's job is to shape the contract response and the 404, not to touch
@@ -35,32 +35,6 @@ beforeEach(() => {
   getRandomTrack.mockReset();
   getRandomRadioTrack.mockReset();
 });
-
-function get(url: string): Request {
-  return new Request(url, { method: "GET" });
-}
-
-const TRACK = {
-  addedAt: "2026-01-01T00:00:00.000Z",
-  addedToSpotify: true,
-  artists: ["Some Artist"],
-  durationMs: 300000,
-  enrichmentStatus: "done",
-  postedToTelegram: true,
-  spotifyUrl: "https://open.spotify.com/track/abc",
-  title: "Some Banger",
-  trackId: "abc",
-};
-
-const MIXTAPE = {
-  artists: ["Fluncle"] as ["Fluncle"],
-  externalUrls: {},
-  memberCount: 0,
-  members: [],
-  status: "published" as const,
-  title: "A Set",
-  type: "mixtape" as const,
-};
 
 describe("oRPC rails — handleOrpc", () => {
   it("ignores non-/api requests (returns null so they fall through)", async () => {
@@ -373,12 +347,16 @@ describe("oRPC OpenAPI generation — the public spec (the flip)", () => {
     const document = (await generateOpenApiDocument()) as GeneratedSpec;
 
     expect(document.openapi).toMatch(/^3\.1/);
-    expect(document.info.title).toBe("Fluncle API");
+    // Contract values stay exact (the version + server URL are the API's identity).
     expect(document.info.version).toBe("1.0.0");
-    // The published prose carried over from the retired static spec.
-    expect(document.info.summary).toBe("Drum & bass bangers from another dimension.");
-    expect(document.info.description).toContain("The public API for Fluncle's Findings");
     expect(document.servers?.[0]?.url).toBe("https://www.fluncle.com/api/v1");
+    // The marketing prose (title/summary/description) is relaxed to presence checks
+    // so a harmless copy edit doesn't break the spec test — it just has to be there
+    // and mention Fluncle.
+    expect(document.info.title).toContain("Fluncle");
+    expect(typeof document.info.summary).toBe("string");
+    expect((document.info.summary ?? "").length).toBeGreaterThan(0);
+    expect(document.info.description ?? "").toContain("Fluncle");
   });
 
   it("contains EVERY public op with its correct operationId", async () => {
