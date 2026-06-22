@@ -7,7 +7,7 @@ The three crons are the queue-driven backbone the brief specifies — no on-add 
 | Job                        | Schedule | What it does                                                                                                                                                                | Server slice                                                           |
 | -------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | `fluncle-enrich-self-heal` | every 1h | `fluncle admin tracks enrich --all` — backstop for enrichment that slipped the on-add trigger.                                                                              | `enrich_track` already on the agent tier (#77).                        |
-| `fluncle-context-note`     | every 1h | Drain `hasContext=false`, call the context endpoint per finding (Worker-side Firecrawl), write `context_note` quietly.                                                      | `observe_context` agent-tier endpoint + `hasContext` filter (#86).     |
+| `fluncle-context-note`     | every 1h | Drain `hasContext=false` (`admin tracks context-queue`), call `admin tracks context` per finding (Worker-side Firecrawl), write `context_note` quietly.                     | `context_track` agent-tier endpoint + `hasContext` filter (#86/#88).   |
 | `fluncle-observation`      | every 1h | Drain `hasContext=true AND hasObservation=false`; author the recovered-audio script (Sonnet + `copywriting-fluncle`) from the stored context note, then `observe --script`. | `observe_track` flipped to agent tier + `hasObservation` filter (#86). |
 
 NOT included (deliberately, per the brief): the Last.fm / Discogs **backfills** (their reliability columns — `lastfmLovedAt`, `discogsStatus` — are not built yet) and the **newsletter** (owned by its own RFC).
@@ -40,10 +40,10 @@ or ask the running bot in Discord (`/cron add "every 1h" "<prompt>"`), or in nat
 
 ### Before wiring (gates from the brief)
 
-1. **CLI admin naming rename must land first** (the brief's sole remaining green-light gate, Convention B §4 — sibling PR branch `cli/observe-context-crons`). The crons invoke via the `fluncle` CLI; don't wire a cron to a command name about to move. The context-note job carries a `TODO(cli-rename)` marker — pin the real CLI verb there once the rename merges.
+1. **CLI admin naming rename — landed (#88).** The crons invoke via the `fluncle` CLI; the context command is `fluncle admin tracks context <id|logId>` and the queue shows are `context-queue` / `observe-queue` (Convention B §4). Every job prompt here is pinned to those names.
 2. **Smoke-test each command by hand on the box** with the agent token before scheduling it, so a scheduled run isn't the first time it executes:
    - `fluncle admin tracks enrich --all --json` → expect `{ "ok": true, ... }`.
-   - the context-note fetch (CLI verb per #1, or the `observe_context` endpoint) against one `hasContext=false` finding → expect a quiet `context_note` write.
+   - `fluncle admin tracks context <id> --json` against one `hasContext=false` finding → expect a quiet `context_note` write (no `updated_at` bump).
    - `fluncle admin tracks observe <id> --script-file <one short test script> --json` against one eligible finding → expect a rendered `observation.{mp3,txt,json}` and the voice gate passing.
 3. **Watch the first few ticks** — `~/.hermes/cron/output/{job_id}/*.md` and `~/.hermes/logs/`. The observation cron costs ElevenLabs credits per render; confirm the per-tick batch is small and the queue drains as expected before walking away.
 
@@ -55,4 +55,4 @@ or ask the running bot in Discord (`/cron add "every 1h" "<prompt>"`), or in nat
 
 ## Keeping this in step
 
-When the CLI rename lands, update the `TODO(cli-rename)` in `jobs.json`, recreate the affected job on the box, and re-verify. When the backfill reliability columns + the newsletter ship, add their crons here too (the brief and the `fluncle-hermes-operator` skill carry the same reminder).
+When the backfill reliability columns + the newsletter ship, add their crons here too (the brief and the `fluncle-hermes-operator` skill carry the same reminder).
