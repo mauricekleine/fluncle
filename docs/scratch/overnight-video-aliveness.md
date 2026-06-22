@@ -101,6 +101,10 @@ The judge versions are different _vehicles_ (fresh sessions, by design), so the 
 - **Unit C build interruption (handled):** the Unit C sub-agent hit a transient OpenRouter/API rate limit before finishing its last three items; the orchestrator completed them directly (the `judge:metrics` package.json script, the ship.ts intent copy/stub, and reporting `provisionalThresholds` on the coupling result) and re-ran the full gate green.
 - **Local judge harness artifact (minor):** one of ~8 judge calls (020.0.5L round 2) returned `ok:false` because the model's JSON ran past the harness's `max_tokens` (1600) and truncated mid-string. The fail-advisory-open path handled it correctly (the run proceeded on the deterministic gates + the visible raw scores). For Part II's real relay, raise the token ceiling / set the schema's `summary` shorter. Throwaway harness lives at `packages/video/out/_judge/judge-local.ts` (gitignored).
 
+## Orchestration note (method)
+
+Units A/B/C and all 6 renders were built by FRESH sub-agents (own context, own creative choices), but in the SHARED working tree rather than isolated git worktrees. Rationale: (a) the cross-unit contracts force ordering anyway (C consumes A's `types.ts`; B documents A+C), so A→C ran sequentially and B (docs) ran parallel to C since they are file-disjoint; (b) worktree agents branch from origin's last _pushed_ commit, but the brief forbids pushing — they would have missed the local Step-0/A/C commits; (c) merging worktree branches back without touching main adds fragility for an unattended run. The substantive requirements held: disjoint file sets, B owns all README/skill docs, each unit reviewed + gated + committed before the next. Tier-3 renders ran sequentially (the parallel Tier-2 agents collided writing the shared gitignored `workbench/`).
+
 ## Operator's pending calls
 
 1. **Pick the judge anchors (Decision 6):** choose 1–2 strong renders + 1 dead one and label them; they wire into the judge prompt as few-shot anchors (teach the bar, never "make it look like this"). The 6 pilot clips in `out/overnight/` are a natural starting set.
