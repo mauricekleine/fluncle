@@ -169,6 +169,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   get_private_mutation_token: "private-session",
   get_submission: "admin",
   initiate_mixtape_youtube: "operator",
+  list_editions_admin: "admin",
   list_mixtapes_admin: "admin",
   list_private_saved_findings: "private-session",
   list_private_submissions: "private-session",

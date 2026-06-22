@@ -284,6 +284,46 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("https://github.com/mauricekleine/fluncle");
   });
 
+  test("admin newsletter draft requires a content payload before any API call", async () => {
+    // No --content-file fails local validation (CliError) before the API call, so
+    // this runs without a server or admin token.
+    const result = await runCli(["admin", "newsletter", "draft", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("missing_content");
+  });
+
+  test("admin newsletter update requires an id before any API call", async () => {
+    const result = await runCli(["admin", "newsletter", "update", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: fluncle admin newsletter update");
+  });
+
+  test("admin newsletter send requires an id before any API call", async () => {
+    // Send is operator-gated server-side; the missing-id guard fails first, so this
+    // runs without a server or token (and never reaches the Resend broadcast).
+    const result = await runCli(["admin", "newsletter", "send", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: fluncle admin newsletter send");
+  });
+
+  test("admin newsletter group lists its draft/update/send/list subcommands", async () => {
+    // The group's default action prints its own help (no subcommand given).
+    const help = await runCli(["admin", "newsletter"]);
+
+    expect(help.exitCode).toBe(0);
+    expect(help.stdout).toContain("Usage: fluncle admin newsletter");
+    expect(help.stdout).toContain("draft");
+    expect(help.stdout).toContain("update");
+    expect(help.stdout).toContain("send");
+    expect(help.stdout).toContain("list");
+  });
+
   test("about takes no positional argument", async () => {
     const result = await runCli(["about", "extra"]);
 
