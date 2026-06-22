@@ -129,17 +129,29 @@ describe("searchTracks", () => {
   it("lowercases and binds q as parameters (never interpolates)", async () => {
     await searchTracks({ q: "Calibre" });
 
-    const call = execute.mock.calls[0][0] as { args: unknown[]; sql: string };
+    const firstCall = execute.mock.calls[0];
+    if (firstCall === undefined) {
+      throw new Error("expected execute to have been called");
+    }
+    const call = firstCall[0] as { args: unknown[]; sql: string };
     expect(call.args.slice(0, 4)).toEqual(["calibre", "calibre", "calibre", "calibre"]);
     expect(call.sql).not.toContain("Calibre");
   });
 
   it("clamps limit to a max of 50 and floors to 1", async () => {
     await searchTracks({ limit: 999, q: "track" });
-    expect((execute.mock.calls[0][0] as { args: unknown[] }).args.at(-1)).toBe(50);
+    const firstCall = execute.mock.calls[0];
+    if (firstCall === undefined) {
+      throw new Error("expected execute to have been called");
+    }
+    expect((firstCall[0] as { args: unknown[] }).args.at(-1)).toBe(50);
 
     await searchTracks({ limit: 0, q: "track" });
-    expect((execute.mock.calls[1][0] as { args: unknown[] }).args.at(-1)).toBe(20);
+    const secondCall = execute.mock.calls[1];
+    if (secondCall === undefined) {
+      throw new Error("expected execute to have been called twice");
+    }
+    expect((secondCall[0] as { args: unknown[] }).args.at(-1)).toBe(20);
   });
 
   it("respects an explicit limit", async () => {

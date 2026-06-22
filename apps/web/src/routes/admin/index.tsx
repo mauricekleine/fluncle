@@ -79,8 +79,12 @@ type Worklist = "all" | "needs-tagging" | "needs-video" | "ready-youtube" | "rea
 // buckets were dropped as noise — each stage's own cell already shows its state, and
 // the per-stage worklists went unused. ?stage values stay back-compatible: an old
 // link to a dropped bucket validates back to "all" (WORKLIST_KEYS no longer has it).
-const WORKLISTS: { blockedOn?: BlockedOn; key: Worklist; label: string }[] = [
-  { key: "all", label: "All" },
+type WorklistDef = { blockedOn?: BlockedOn; key: Worklist; label: string };
+// The "all" worklist is the canonical fallback when no key matches; naming it
+// keeps the fallback statically defined (not an unchecked index).
+const ALL_WORKLIST: WorklistDef = { key: "all", label: "All" };
+const WORKLISTS: WorklistDef[] = [
+  ALL_WORKLIST,
   { blockedOn: "needs tagging", key: "needs-tagging", label: "Needs tagging" },
   { blockedOn: null, key: "done", label: "Live" },
 ];
@@ -341,7 +345,7 @@ function AdminBoardPage() {
   // source as the lifecycle model. In-memory filtering is fine at current scale.
   const staged = useMemo(() => rows.map((row) => ({ ...trackStage(row), row })), [rows]);
 
-  const worklistDef = WORKLISTS.find((worklist) => worklist.key === activeWorklist) ?? WORKLISTS[0];
+  const worklistDef = WORKLISTS.find((worklist) => worklist.key === activeWorklist) ?? ALL_WORKLIST;
   // Both filters AND together: the worklist narrows by pipeline stage, the mixtape
   // lens by tape membership. In-memory, like the worklist — fine at current scale.
   const visible = useMemo(
