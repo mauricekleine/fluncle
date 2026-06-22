@@ -288,16 +288,10 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
     );
   });
 
-  it("resolves to {} on a miss, a non-2xx, or a thrown fetch", async () => {
+  it("resolves to {} on a clean miss or a thrown fetch", async () => {
     mockFetch([
       { body: { recordings: [] }, match: MB_ISRC },
       { body: { results: [] }, match: DISCOGS_SEARCH },
-    ]);
-    expect(await discogsResolveRelease({ artists: ["Artist"], title: "Title" })).toEqual({});
-
-    mockFetch([
-      { match: MB_ISRC, response: new Response("rate limited", { status: 429 }) },
-      { match: DISCOGS_SEARCH, response: new Response("rate limited", { status: 429 }) },
     ]);
     expect(await discogsResolveRelease({ artists: ["Artist"], title: "Title" })).toEqual({});
 
@@ -308,6 +302,19 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
       }),
     );
     expect(await discogsResolveRelease({ artists: ["Artist"], title: "Title" })).toEqual({});
+  });
+
+  it("flags `rateLimited` when the vendor exhausts the 429 retries (backoff signal)", async () => {
+    // Every call 429s past its in-slot retries → the resolution is unresolved
+    // BECAUSE we were throttled, not because there's no match. The backfill reads
+    // this to back the finding off hard instead of re-storming it next tick.
+    mockFetch([
+      { match: MB_ISRC, response: new Response("rate limited", { status: 429 }) },
+      { match: DISCOGS_SEARCH, response: new Response("rate limited", { status: 429 }) },
+    ]);
+    expect(await discogsResolveRelease({ artists: ["Artist"], title: "Title" })).toEqual({
+      rateLimited: true,
+    });
   });
 
   it("skips blank artist/title without calling any API", async () => {

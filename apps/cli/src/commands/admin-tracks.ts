@@ -122,6 +122,10 @@ export type LastfmBackfillResult = {
   // under a rate limiter), so the CLI loops this until null.
   nextCursor: string | null;
   ok: boolean;
+  // Findings the per-finding reliability gate held back this pass (already loved,
+  // or cooling down after a recent attempt/failure). They didn't burn the batch.
+  skipped: string[];
+  skippedCount: number;
 };
 
 // One bounded pass of the Last.fm love backfill via the admin API — the Worker
@@ -152,6 +156,10 @@ export type DiscogsBackfillResult = {
   ok: boolean;
   resolved: Array<{ logId: string; masterId?: number; releaseId: number; source: string }>;
   resolvedCount: number;
+  // Findings the per-finding reliability gate held back this pass (already
+  // resolved, or cooling down after a recent attempt/failure). Didn't burn budget.
+  skipped: string[];
+  skippedCount: number;
   unresolved: string[];
   unresolvedCount: number;
 };

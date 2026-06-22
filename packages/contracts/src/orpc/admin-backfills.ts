@@ -45,10 +45,11 @@ const LastfmFailedSchema = z
  * `backfill_discogs` → `POST /admin/backfill/discogs` (operationId
  * `backfillDiscogs`).
  *
- * Operator tier (live `requireOperator`). One bounded pass over published
- * findings missing a Discogs release id; on a confident match the ids are written
- * server-side. Preserves the live `{ ok, dryRun, resolved, resolvedCount,
- * unresolved, unresolvedCount, nextCursor }` envelope.
+ * Operator tier (live `requireOperator`). One bounded, reliability-gated pass over
+ * published findings missing a Discogs release id; on a confident match the ids are
+ * written server-side. Returns `{ ok, dryRun, resolved, resolvedCount, unresolved,
+ * unresolvedCount, skipped, skippedCount, nextCursor }` — `skipped` is the findings
+ * the per-finding cooldown/done gate held back this pass.
  */
 export const backfillDiscogs = oc
   .route({
@@ -75,6 +76,10 @@ export const backfillDiscogs = oc
       ok: z.literal(true),
       resolved: z.array(DiscogsResolvedSchema),
       resolvedCount: z.number(),
+      // Findings the reliability gate skipped this pass (already resolved, or
+      // cooling down after a recent attempt/failure) — they didn't burn the batch.
+      skipped: z.array(z.string()),
+      skippedCount: z.number(),
       unresolved: z.array(z.string()),
       unresolvedCount: z.number(),
     }),
@@ -84,9 +89,10 @@ export const backfillDiscogs = oc
  * `backfill_lastfm` → `POST /admin/backfill/lastfm` (operationId
  * `backfillLastfm`).
  *
- * Operator tier (live `requireOperator`). One bounded pass loving published
- * findings on Last.fm (idempotent). Preserves the live `{ ok, dryRun, loved,
- * lovedCount, failed, failedCount, nextCursor }` envelope.
+ * Operator tier (live `requireOperator`). One bounded, reliability-gated pass
+ * loving published findings on Last.fm (idempotent). Returns `{ ok, dryRun, loved,
+ * lovedCount, failed, failedCount, skipped, skippedCount, nextCursor }` — `skipped`
+ * is the findings the per-finding cooldown/done gate held back this pass.
  */
 export const backfillLastfm = oc
   .route({
@@ -115,6 +121,10 @@ export const backfillLastfm = oc
       lovedCount: z.number(),
       nextCursor: z.string().nullable(),
       ok: z.literal(true),
+      // Findings the reliability gate skipped this pass (already loved, or cooling
+      // down after a recent attempt/failure) — they didn't burn the batch budget.
+      skipped: z.array(z.string()),
+      skippedCount: z.number(),
     }),
   );
 

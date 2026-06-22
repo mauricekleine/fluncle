@@ -5,9 +5,10 @@ import { readJson } from "./orpc-test-helpers";
 // driven end-to-end through `handleOrpc` against `/api/v1/admin/...`, so the REAL
 // admin auth spine (../orpc-auth) runs — only the data-layer helpers are mocked.
 //
-//   - backfill_discogs / backfill_lastfm — operator tier (live `requireOperator`):
-//     401 no token, 403 agent, the operator passes; the live `?limit/dryRun/cursor`
-//     query params parse in-handler and the success envelope is byte-for-byte.
+//   - backfill_discogs / backfill_lastfm — agent tier (`adminAuth`): 401 no token,
+//     the AGENT token now passes (the box cron drives it), the operator passes too;
+//     the live `?limit/dryRun/cursor` params parse in-handler and the success
+//     envelope is byte-for-byte.
 
 const backfillDiscogsIds = vi.fn();
 const backfillLastfmLoves = vi.fn();
@@ -43,7 +44,7 @@ function post(path: string, token: string | undefined): Request {
   return new Request(`https://www.fluncle.com/api/v1${path}`, { headers, method: "POST" });
 }
 
-// ── backfill_discogs — operator tier ─────────────────────────────────────────
+// ── backfill_discogs — agent tier ─────────────────────────────────────────────────────────────────────────────────────
 describe("oRPC backfill_discogs (POST /admin/backfill/discogs)", () => {
   it("401s with no admin token", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -53,13 +54,23 @@ describe("oRPC backfill_discogs (POST /admin/backfill/discogs)", () => {
     expect(backfillDiscogsIds).not.toHaveBeenCalled();
   });
 
-  it("403s the AGENT (operator-only)", async () => {
+  it("allows the AGENT (agent tier — the box cron drives it)", async () => {
+    backfillDiscogsIds.mockResolvedValueOnce({
+      dryRun: false,
+      nextCursor: null,
+      resolved: [],
+      resolvedCount: 0,
+      skipped: [],
+      skippedCount: 0,
+      unresolved: [],
+      unresolvedCount: 0,
+    });
+
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(post("/admin/backfill/discogs", AGENT_TOKEN));
 
-    expect(response?.status).toBe(403);
-    expect(((await readJson(response)) as { code: string }).code).toBe("forbidden");
-    expect(backfillDiscogsIds).not.toHaveBeenCalled();
+    expect(response?.status).toBe(200);
+    expect(backfillDiscogsIds).toHaveBeenCalled();
   });
 
   it("runs a pass for the operator and returns the live envelope", async () => {
@@ -68,6 +79,8 @@ describe("oRPC backfill_discogs (POST /admin/backfill/discogs)", () => {
       nextCursor: "cur-2",
       resolved: [{ logId: "004.7.2I", releaseId: 12, source: "discogs" }],
       resolvedCount: 1,
+      skipped: ["004.7.4K"],
+      skippedCount: 1,
       unresolved: ["004.7.3J"],
       unresolvedCount: 1,
     });
@@ -84,6 +97,8 @@ describe("oRPC backfill_discogs (POST /admin/backfill/discogs)", () => {
       ok: true,
       resolved: [{ logId: "004.7.2I", releaseId: 12, source: "discogs" }],
       resolvedCount: 1,
+      skipped: ["004.7.4K"],
+      skippedCount: 1,
       unresolved: ["004.7.3J"],
       unresolvedCount: 1,
     });
@@ -92,14 +107,25 @@ describe("oRPC backfill_discogs (POST /admin/backfill/discogs)", () => {
   });
 });
 
-// ── backfill_lastfm — operator tier ──────────────────────────────────────────
+// ── backfill_lastfm — agent tier ───────────────────────────────────────────────────────────────────────────────────────
 describe("oRPC backfill_lastfm (POST /admin/backfill/lastfm)", () => {
-  it("403s the AGENT (operator-only)", async () => {
+  it("allows the AGENT (agent tier — the box cron drives it)", async () => {
+    backfillLastfmLoves.mockResolvedValueOnce({
+      dryRun: false,
+      failed: [],
+      failedCount: 0,
+      loved: [],
+      lovedCount: 0,
+      nextCursor: null,
+      skipped: [],
+      skippedCount: 0,
+    });
+
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(post("/admin/backfill/lastfm", AGENT_TOKEN));
 
-    expect(response?.status).toBe(403);
-    expect(backfillLastfmLoves).not.toHaveBeenCalled();
+    expect(response?.status).toBe(200);
+    expect(backfillLastfmLoves).toHaveBeenCalled();
   });
 
   it("runs a pass for the operator and returns the live envelope", async () => {
@@ -110,6 +136,8 @@ describe("oRPC backfill_lastfm (POST /admin/backfill/lastfm)", () => {
       loved: ["004.7.2I"],
       lovedCount: 1,
       nextCursor: null,
+      skipped: ["004.7.4K"],
+      skippedCount: 1,
     });
 
     const { handleOrpc } = await import("./orpc");
@@ -124,6 +152,8 @@ describe("oRPC backfill_lastfm (POST /admin/backfill/lastfm)", () => {
       lovedCount: 1,
       nextCursor: null,
       ok: true,
+      skipped: ["004.7.4K"],
+      skippedCount: 1,
     });
     // Default limit (50), dryRun=true → true, no cursor.
     expect(backfillLastfmLoves).toHaveBeenCalledWith(50, true, undefined);
