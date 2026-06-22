@@ -729,48 +729,51 @@ function addAdminCommands(program: Command): void {
     admin.command("submissions").description("Review listener submissions"),
   );
 
-  submissions.action(async () => {
+  submissions.option("--json", "Print JSON", false).action(async (options: JsonOptions) => {
     const { listSubmissionsCommand } = await import("./commands/submissions");
-    await listSubmissionsCommand();
+    await listSubmissionsCommand(options);
   });
 
   submissions
     .command("review")
     .description("Inspect one submission")
     .argument("[submissionId]")
-    .action(async (submissionId: string | undefined) => {
+    .option("--json", "Print JSON", false)
+    .action(async (submissionId: string | undefined, options: JsonOptions) => {
       if (!submissionId) {
         throw new Error("Missing submission id for: review");
       }
 
       const { reviewSubmissionCommand } = await import("./commands/submissions");
-      await reviewSubmissionCommand(submissionId);
+      await reviewSubmissionCommand(submissionId, options);
     });
 
   submissions
     .command("reject")
     .description("Reject a submission")
     .argument("[submissionId]")
-    .action(async (submissionId: string | undefined) => {
+    .option("--json", "Print JSON", false)
+    .action(async (submissionId: string | undefined, options: JsonOptions) => {
       if (!submissionId) {
         throw new Error("Missing submission id for: reject");
       }
 
       const { rejectSubmissionCommand } = await import("./commands/submissions");
-      await rejectSubmissionCommand(submissionId);
+      await rejectSubmissionCommand(submissionId, options);
     });
 
   submissions
     .command("approve")
-    .description("Approve a submission")
+    .description("Approve a submission (--json approves without the confirm prompt)")
     .argument("[submissionId]")
-    .action(async (submissionId: string | undefined) => {
+    .option("--json", "Print JSON, skip the confirm prompt", false)
+    .action(async (submissionId: string | undefined, options: JsonOptions) => {
       if (!submissionId) {
         throw new Error("Missing submission id for: approve");
       }
 
       const { approveSubmissionCommand } = await import("./commands/submissions");
-      await approveSubmissionCommand(submissionId);
+      await approveSubmissionCommand(submissionId, options);
     });
 
   const auth = configureCommand(admin.command("auth").description("Authentication commands"));

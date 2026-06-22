@@ -213,7 +213,7 @@ function RadioPage() {
   }
 
   if (exhausted) {
-    return <RadioMessage>{COPY.empty}</RadioMessage>;
+    return <RadioMessage wayBack>{COPY.empty}</RadioMessage>;
   }
 
   if (!current) {
@@ -321,13 +321,31 @@ function BeginGate({ onBegin }: { onBegin: () => void }) {
   );
 }
 
-function RadioMessage({ children }: { children: React.ReactNode }) {
+function RadioMessage({
+  children,
+  wayBack = false,
+}: {
+  children: React.ReactNode;
+  wayBack?: boolean;
+}) {
   return (
     <main className="radio-gate">
       <h1 className="sr-only">{title}</h1>
       <p className="radio-gate-subtitle" role="status">
         {children}
       </p>
+      {/* A lean-back surface still needs a door out when there's nothing to
+          play: back to the archive or the full log. */}
+      {wayBack ? (
+        <div className="radio-actions">
+          <Button nativeButton={false} render={<a href="/" />} size="sm" variant="outline">
+            Back to the archive
+          </Button>
+          <Button nativeButton={false} render={<a href="/log" />} size="sm" variant="outline">
+            Browse the log
+          </Button>
+        </div>
+      ) : undefined}
     </main>
   );
 }
