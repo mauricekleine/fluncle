@@ -27,7 +27,6 @@ const presignUploads = vi.fn();
 const listTracks = vi.fn();
 const searchTracks = vi.fn();
 const publishTrack = vi.fn();
-const triggerEnrichment = vi.fn();
 
 vi.mock("cloudflare:workers", () => ({
   env: { VIDEOS: { put: (...args: unknown[]) => put(...args) } },
@@ -53,10 +52,6 @@ vi.mock("./tracks", async (importOriginal) => {
 
 vi.mock("./publish", () => ({
   publishTrack: (...args: unknown[]) => publishTrack(...args),
-}));
-
-vi.mock("./spinup", () => ({
-  triggerEnrichment: (...args: unknown[]) => triggerEnrichment(...args),
 }));
 
 vi.mock("./r2-presign", async (importOriginal) => {
@@ -125,7 +120,6 @@ beforeEach(() => {
   listTracks.mockReset();
   searchTracks.mockReset();
   publishTrack.mockReset();
-  triggerEnrichment.mockReset();
 });
 
 function patch(token: string | undefined, body: unknown): Request {
@@ -709,7 +703,7 @@ describe("oRPC add_track (POST /admin/tracks)", () => {
     expect(publishTrack).not.toHaveBeenCalled();
   });
 
-  it("publishes for the operator, triggers enrichment, returns the live envelope", async () => {
+  it("publishes for the operator and returns the live envelope (no on-add enrichment push)", async () => {
     publishTrack.mockResolvedValueOnce({
       addedToSpotify: true,
       dryRun: false,
@@ -742,11 +736,14 @@ describe("oRPC add_track (POST /admin/tracks)", () => {
       dryRun: false,
       note: "a take",
     });
-    // A live (non-dry) add with a Log ID kicks off async enrichment.
-    expect(triggerEnrichment).toHaveBeenCalledWith(TRACK_ID, "004.7.2I");
+    // No on-add enrichment push: the add leaves the new finding at the schema
+    // default `enrichment_status = "pending"` (queue-eligible), and the on-box
+    // `fluncle-enrich` cron drains it. The handler must NOT write the status
+    // itself — `updateTrack` is the cron's write-back, never the add path.
+    expect(updateTrack).not.toHaveBeenCalled();
   });
 
-  it("does NOT trigger enrichment on a dry run", async () => {
+  it("does not touch enrichment state on a dry run either", async () => {
     publishTrack.mockResolvedValueOnce({
       addedToSpotify: false,
       dryRun: true,
@@ -776,6 +773,6 @@ describe("oRPC add_track (POST /admin/tracks)", () => {
       dryRun: true,
       note: undefined,
     });
-    expect(triggerEnrichment).not.toHaveBeenCalled();
+    expect(updateTrack).not.toHaveBeenCalled();
   });
 });

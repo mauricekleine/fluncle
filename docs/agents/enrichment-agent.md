@@ -1,10 +1,10 @@
 # Track Agent Bootstrap (enrich → video → publish)
 
-Fluncle is Maurice's drum & bass publishing brand. The enrichment agent is the **async half of the track lifecycle**: the fast metadata add already happened (the track is live and listenable), and the agent fills in the rest a little later — first the analysis (**BPM, musical key, and a spectral feature vector**), then — when the video kit is present — the **per-track video**, and finally the **social draft**. The agent does not exist as a runtime yet; this doc is the bootstrap that points it at its real instructions.
+Fluncle is Maurice's drum & bass publishing brand. The enrichment agent is the **async half of the track lifecycle**: the fast metadata add already happened (the track is live and listenable), and the rest fills in a little later — first the analysis (**BPM, musical key, and a spectral feature vector**), then — when the video kit is present — the **per-track video**, and finally the **social draft**. This doc is the bootstrap that points each capability at its real instructions.
 
-These are three capabilities, each its own skill, run in order: **enrich → video → publish**. Today they run as distinct steps — the analysis is buildable on Spinup now and ships autonomously; video + publish run by hand (locally). The target is a **single Spinup agent that chains all three**, fired by an inline `await runs.create` when a track is added (a fast enqueue that returns at once; this TanStack version doesn't expose Cloudflare's `waitUntil`) (see [track-lifecycle.md](../track-lifecycle.md) for the three phases and [ROADMAP.md](../ROADMAP.md) for the capstone + what blocks it — the render-capable Spinup profile). Whatever runs it, the contract is the same: the agent reads/writes only through the authenticated **`fluncle` CLI** (a thin client over the admin API); the Worker owns every secret (R2, Postiz, Turso) and the agent holds only its admin token.
+These are three capabilities, each its own skill, run in order: **enrich → video → publish**. The **enrichment** step is live: it runs as the on-box `fluncle-enrich` `--no-agent` cron on Hermes (every 5 min), which reads the enrich-queue (`fluncle admin tracks enrich-queue`), runs the self-contained `analyze-track` script on-box (`ffmpeg` + `bun`), and writes the result back via `fluncle admin tracks update`. There is **no on-add trigger**: a new find lands at the schema default `enrichment_status = "pending"` (queue-eligible), so the cron picks it up on its next tick. Video + publish run as their own steps on the Hermes runtime (see [track-lifecycle.md](../track-lifecycle.md) for the phases and the cron model under [hermes/cron/](./hermes/cron/)). The contract is the same for all three: each reads/writes only through the authenticated **`fluncle` CLI** (a thin client over the admin API); the Worker owns every secret (R2, Postiz, Turso) and the agent holds only its admin token.
 
-It is meant to run **anywhere**: locally on Maurice's machine, or as a Cloud Agent on a Spinup microVM. Its input is always one Fluncle **track id** or **log_id**, and nothing else.
+It is meant to run **anywhere**: the enrichment cron runs on the Hermes box, and the script also runs locally on Maurice's machine. Its input is always one Fluncle **track id** or **log_id**, and nothing else.
 
 ## What it needs
 
@@ -19,7 +19,7 @@ It does **not** need a checkout of this repo. The enrichment skill is self-conta
 **The full operating instructions are the `fluncle-track-enrichment` skill, not this doc.** Read it and follow it step by step:
 
 - `packages/skills/fluncle-track-enrichment/SKILL.md` — the get → analyze → archive → update loop, the rules (key honesty, never invent data, and the operator owns vibe placement), and its self-contained `scripts/analyze-track.ts`.
-- Install standalone (e.g. on Spinup): `npx skills add https://github.com/mauricekleine/fluncle/tree/main/packages/skills/fluncle-track-enrichment`. The analysis script has zero npm dependencies and no Fluncle imports, so it runs wherever the skill is installed.
+- Install standalone (e.g. on the Hermes box): `npx skills add https://github.com/mauricekleine/fluncle/tree/main/packages/skills/fluncle-track-enrichment`. The analysis script has zero npm dependencies and no Fluncle imports, so it runs wherever the skill is installed.
 - `docs/track-lifecycle.md` is the canonical architecture (sync add vs async enrich, the Worker/ffmpeg constraint, the feature vector, R2 ownership).
 
 ## Preview archive (private analysis only)

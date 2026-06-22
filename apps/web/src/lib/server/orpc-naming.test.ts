@@ -71,6 +71,7 @@ const APPROVED_VERBS = new Set<string>([
   "reject",
   "reset",
   "save",
+  "send",
   "set",
   "start",
   "sweep",

@@ -62,8 +62,3 @@ R2_ACCOUNT_ID=0651fd3b33d9e0b2fe72a5f13e5cf65d
 # Loops newsletter (transactional id is the published confirmation email)
 LOOPS_API_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/LOOPS_API_KEY
 LOOPS_TRANSACTIONAL_ID=op://$FLUNCLE_1PASSWORD_ENV_ITEM/LOOPS_TRANSACTIONAL_ID
-
-# Spinup agents -- each agent has its OWN scoped runtime key (sk_agent_...) carrying
-# the runs:create permission. Async track enrichment fires on add via runs.create.
-SPINUP_ENRICH_AGENT_ID=agent_857b6b85-029b-42bd-a79a-47a23d83a42e
-SPINUP_ENRICH_AGENT_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/SPINUP_ENRICH_AGENT_KEY

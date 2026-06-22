@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # enrich-sweep.sh — the `--no-agent` enrichment cron's job ENTRY.
 #
-# PREPARED, NOT YET DEPLOYED. Version-controlled source; the repo is canonical and
-# the box is a deploy target (fluncle-hermes-operator skill). The operator deploys
-# this pair to ~/.hermes/scripts/ on the devbox and wires the cron there.
-# Box rebuild (ffmpeg + bun image) and the Worker-cleanup PR are SEPARATE later
-# steps (docs/spinup-to-hermes-enrichment-brief.md, build order #1 and #4).
+# LIVE. Version-controlled source; the repo is canonical and the box is a deploy
+# target (fluncle-hermes-operator skill). This pair is deployed to ~/.hermes/scripts/
+# on the devbox and the cron is wired there. The Worker-side enrichment trigger is
+# removed — this is the only enrichment path. See ../cron/README.md.
 #
 # Why a .sh that execs a .ts: the Hermes `--no-agent --script` runner dispatches by
 # extension — bash for `.sh`/`.bash`, Python for everything else — so a bare `.ts`

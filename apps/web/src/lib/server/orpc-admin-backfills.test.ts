@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, req, setAdminTokenEnv } from "./orpc-test-kit";
+import { readJson } from "./orpc-test-helpers";
 
 // The admin wave's `admin-backfills` parity + auth proof: the maintenance sweeps
 // driven end-to-end through `handleOrpc` against `/api/v1/admin/...`, so the REAL
@@ -8,37 +8,39 @@ import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, req, setAdminTokenEnv } from "./
 //   - backfill_discogs / backfill_lastfm — operator tier (live `requireOperator`):
 //     401 no token, 403 agent, the operator passes; the live `?limit/dryRun/cursor`
 //     query params parse in-handler and the success envelope is byte-for-byte.
-//   - enrich_track — ADMIN tier (live `requireAdmin`): the agent PASSES (200), a
-//     non-admin is a 401. VERIFIED: the enrich sweep is requireAdmin, NOT operator.
-//     Served at /admin/tracks/enrich (Convention B); the old /admin/enrich-sweep
-//     path stays a TanStack alias (covered at the bottom of this file).
 
 const backfillDiscogsIds = vi.fn();
 const backfillLastfmLoves = vi.fn();
-const sweepEnrichmentQueue = vi.fn();
 
 vi.mock("./backfill", () => ({
   backfillDiscogsIds: (...args: unknown[]) => backfillDiscogsIds(...args),
   backfillLastfmLoves: (...args: unknown[]) => backfillLastfmLoves(...args),
 }));
 
-vi.mock("./spinup", () => ({
-  sweepEnrichmentQueue: (...args: unknown[]) => sweepEnrichmentQueue(...args),
-}));
+const OPERATOR_TOKEN = "test-token-admin-operator";
+const AGENT_TOKEN = "test-token-admin-agent";
 
-beforeAll(setAdminTokenEnv);
+beforeAll(() => {
+  process.env.FLUNCLE_API_TOKEN = OPERATOR_TOKEN;
+  process.env.FLUNCLE_AGENT_TOKEN = AGENT_TOKEN;
+});
 
 beforeEach(() => {
   backfillDiscogsIds.mockReset();
   backfillLastfmLoves.mockReset();
-  sweepEnrichmentQueue.mockReset();
 });
 
 // A bodyless POST (no Content-Type), the exact shape the CLI's `adminApiPost`
 // sends for these query-only ops after the wave (it no longer claims a JSON
-// content-type without a body). `req` omits Content-Type when no body is passed.
+// content-type without a body).
 function post(path: string, token: string | undefined): Request {
-  return req(path, "POST", token);
+  const headers: Record<string, string> = {};
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  return new Request(`https://www.fluncle.com/api/v1${path}`, { headers, method: "POST" });
 }
 
 // ── backfill_discogs — operator tier ─────────────────────────────────────────
@@ -125,86 +127,5 @@ describe("oRPC backfill_lastfm (POST /admin/backfill/lastfm)", () => {
     });
     // Default limit (50), dryRun=true → true, no cursor.
     expect(backfillLastfmLoves).toHaveBeenCalledWith(50, true, undefined);
-  });
-});
-
-// ── enrich_track — ADMIN tier (the agent is allowed) ─────────────────────────
-describe("oRPC enrich_track (POST /admin/tracks/enrich)", () => {
-  it("401s with no admin token", async () => {
-    const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(post("/admin/tracks/enrich", undefined));
-
-    expect(response?.status).toBe(401);
-    expect(sweepEnrichmentQueue).not.toHaveBeenCalled();
-  });
-
-  it("lets the AGENT run it (admin tier, not operator) and returns the live envelope", async () => {
-    sweepEnrichmentQueue.mockResolvedValueOnce({
-      reEnriched: [{ logId: "004.7.2I", status: "failed", trackId: "t1" }],
-      skipped: [{ logId: "004.7.3J", status: "pending", trackId: "t2" }],
-    });
-
-    const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(post("/admin/tracks/enrich?limit=5", AGENT_TOKEN));
-
-    expect(response?.status).toBe(200);
-    expect(await readJson(response)).toEqual({
-      ok: true,
-      reEnriched: [{ logId: "004.7.2I", status: "failed", trackId: "t1" }],
-      reEnrichedCount: 1,
-      skipped: [{ logId: "004.7.3J", status: "pending", trackId: "t2" }],
-      skippedCount: 1,
-    });
-    expect(sweepEnrichmentQueue).toHaveBeenCalledWith(5);
-  });
-
-  it("also lets the operator run it", async () => {
-    sweepEnrichmentQueue.mockResolvedValueOnce({ reEnriched: [], skipped: [] });
-
-    const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(post("/admin/tracks/enrich", OPERATOR_TOKEN));
-
-    expect(response?.status).toBe(200);
-    expect(sweepEnrichmentQueue).toHaveBeenCalledWith(25); // default limit
-  });
-});
-
-// ── the back-compat alias: POST /admin/enrich-sweep stays live ───────────────
-// The op's canonical oRPC path moved to /admin/tracks/enrich, so oRPC no longer
-// matches the old /admin/enrich-sweep path (handleOrpc returns null → fall
-// through). The TanStack route file at routes/api/admin/enrich-sweep.ts is the
-// permanent alias: invoke its exported handler directly to prove the old path
-// (the cron's stable name) still hits the same sweep with the same envelope.
-describe("enrich-sweep back-compat alias (POST /admin/enrich-sweep)", () => {
-  it("is no longer matched by oRPC (the path moved to /admin/tracks/enrich)", async () => {
-    const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(post("/admin/enrich-sweep", AGENT_TOKEN));
-
-    // null = oRPC matched nothing; the request falls through to TanStack.
-    expect(response).toBeNull();
-    expect(sweepEnrichmentQueue).not.toHaveBeenCalled();
-  });
-
-  it("the TanStack alias route still serves the sweep (same live envelope)", async () => {
-    sweepEnrichmentQueue.mockResolvedValueOnce({
-      reEnriched: [{ logId: "004.7.2I", status: "failed", trackId: "t1" }],
-      skipped: [],
-    });
-
-    const { serverHandlers } = await import("../../routes/api/admin/enrich-sweep");
-    const response = await serverHandlers.POST?.({
-      params: {},
-      request: post("/admin/enrich-sweep?limit=5", AGENT_TOKEN),
-    });
-
-    expect(response?.status).toBe(200);
-    expect(await readJson(response)).toEqual({
-      ok: true,
-      reEnriched: [{ logId: "004.7.2I", status: "failed", trackId: "t1" }],
-      reEnrichedCount: 1,
-      skipped: [],
-      skippedCount: 0,
-    });
-    expect(sweepEnrichmentQueue).toHaveBeenCalledWith(5);
   });
 });

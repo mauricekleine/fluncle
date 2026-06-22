@@ -36,6 +36,16 @@ const envKeys = [
   "FLUNCLE_AGENT_TOKEN",
   "LOOPS_API_KEY",
   "LOOPS_TRANSACTIONAL_ID",
+  // Resend — the newsletter's send-of-record (docs/rfcs/newsletter-own-the-stack.md).
+  // The Worker owns the key; the agent box never holds it (the agent calls the
+  // admin send op, the Worker creates + sends the broadcast). RESEND_API_KEY is the
+  // secret; RESEND_SEGMENT_ID is the Fluncle Audience/Segment the subscribe path
+  // adds contacts to AND the broadcast targets; RESEND_FROM is the verified sender
+  // (e.g. "Fluncle <fluncle@newsletter.fluncle.com>"), read via readOptionalEnv so
+  // a missing one is a clean 500 rather than a thrown Missing at module scope.
+  "RESEND_API_KEY",
+  "RESEND_SEGMENT_ID",
+  "RESEND_FROM",
   "POSTIZ_API_KEY",
   "POSTIZ_API_URL",
   // R2 S3-API credentials for presigned direct-to-bucket uploads (the video
@@ -79,10 +89,6 @@ const envKeys = [
   "DISCORD_WEBHOOK_URL",
   "TURSO_DATABASE_URL",
   "TURSO_AUTH_TOKEN",
-  // Spinup agents: each has its own scoped runtime key (sk_agent_…) + id. Async
-  // track enrichment fires on add via runs.create.
-  "SPINUP_ENRICH_AGENT_ID",
-  "SPINUP_ENRICH_AGENT_KEY",
   // Cloudflare cache purge-by-URL (lib/server/edge-cache.ts): when a finding is
   // published or updated, the Worker drops its `/log/<id>` page + the `/log` index
   // from the edge cache globally. Both OPTIONAL — absent, the purge degrades to a

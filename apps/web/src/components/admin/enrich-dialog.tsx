@@ -9,12 +9,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-// The Enrich cell's dialog — kick off (or re-run) the async enrichment agent on
-// Spinup for one finding. Enrichment is the audio-analysis pass: BPM, musical key,
-// and the spectral features that feed tagging + the video kit. Triggering is a fast
-// ENQUEUE — the work runs durably on Spinup, the agent flips the status to "done"
-// when it reports back (docs/track-lifecycle.md, Phase 2), so the cell shows
-// "Enriching…" in the meantime and this dialog reflects whichever state it's in.
+// The Enrich cell's dialog — queue (or re-queue) one finding for the on-box
+// enrichment cron. Enrichment is the audio-analysis pass: BPM, musical key, and
+// the spectral features that feed tagging + the video kit. Pressing the button
+// marks the finding "pending" (queue-eligible); the on-box `fluncle-enrich`
+// `--no-agent` cron picks it up on its next ~5-min tick, analyzes on-box, and
+// flips the status to "done"/"failed" (docs/track-lifecycle.md, Phase 2). The
+// cell reflects whichever state it's in.
 
 type EnrichDialogProps = {
   error?: string;
@@ -47,8 +48,9 @@ export function EnrichDialog({
             Enrich — {row?.title}
           </DialogTitle>
           <DialogDescription>
-            Run the audio-analysis agent on Spinup: BPM, key, and the spectral features that feed
-            tagging and the video kit.
+            Queue this finding for the enrichment cron: BPM, key, and the spectral features that
+            feed tagging and the video kit. Marking it pending re-runs the analysis on the box's
+            next tick.
           </DialogDescription>
         </DialogHeader>
 
@@ -69,7 +71,7 @@ export function EnrichDialog({
         ) : running ? (
           <p className="flex items-center gap-2 rounded-lg border border-dashed border-primary/40 bg-primary/5 p-3 text-sm text-muted-foreground">
             <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
-            Running on the agent — this takes a few minutes. It flips to done when the agent reports
+            The box cron picked this up and is analyzing it. It flips to done when the cron writes
             back.
           </p>
         ) : noLogId ? (
@@ -78,7 +80,7 @@ export function EnrichDialog({
           </p>
         ) : failed ? (
           <p className="text-sm text-destructive">
-            The last enrichment run failed. Re-running enqueues a fresh attempt.
+            The last enrichment run failed. Re-queuing marks it pending for a fresh pass.
           </p>
         ) : undefined}
 
@@ -95,7 +97,7 @@ export function EnrichDialog({
             ) : (
               <WaveformIcon aria-hidden="true" weight="fill" />
             )}
-            {done ? "Re-run enrichment" : failed ? "Retry enrichment" : "Run enrichment"}
+            {done ? "Re-queue enrichment" : failed ? "Retry enrichment" : "Queue enrichment"}
           </Button>
         )}
       </DialogContent>

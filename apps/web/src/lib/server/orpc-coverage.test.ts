@@ -44,6 +44,12 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   "GET /me/saved-findings": "list_private_saved_findings",
   "GET /me/submissions": "list_private_submissions",
   "GET /mixtapes": "list_mixtapes",
+  // The newsletter archive reads (docs/rfcs/newsletter-own-the-stack.md §3).
+  // Contract-only oRPC — there is no TanStack route file under /api/v1/newsletter
+  // (oRPC serves them off the registry), so they have no route-file basename to
+  // enumerate; documented here as part of the public surface net.
+  "GET /newsletter/editions": "list_editions",
+  "GET /newsletter/editions/{number}": "get_edition",
   // The cycling station's read (RFC Unit B). Contract-only — there is no TanStack
   // alias file under /api/v1/radio (oRPC serves it straight off the registry), so
   // it has no route-file basename to enumerate; it is documented here as part of
