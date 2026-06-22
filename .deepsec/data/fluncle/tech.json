@@ -1,0 +1,6 @@
+{
+  "tags": ["bun", "github-actions", "node"],
+  "sentinels": ["bun.lock", "package.json"],
+  "detectedAt": "2026-06-21T20:42:26.530Z",
+  "rootPath": "/Users/maurice/Projects/fluncle"
+}
