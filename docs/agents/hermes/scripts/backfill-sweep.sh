@@ -15,16 +15,23 @@
 # small bounded batch of each source per tick via the `fluncle` CLI, and the Worker
 # carries the per-finding reliability state + Retry-After backoff.
 #
-# Operator wires it on the devbox (the image already carries bun + the fluncle CLI,
-# and the operator token is the box's agent token — NOTE: the backfills are OPERATOR
-# tier, so the box must drive them with an OPERATOR-scoped token, not the agent one;
-# confirm the token tier before scheduling):
+# Operator wires it on the devbox (the image already carries bun + the fluncle CLI;
+# the backfills are AGENT tier, so the box's existing agent-scoped token drives them
+# — no operator token needed):
 #
 #   hermes cron create "every 30m" --no-agent --script backfill-sweep.sh --deliver local
 #
 # Confirm with `hermes cron list`; per-run output lands in
 # ~/.hermes/cron/output/{job_id}/{timestamp}.md.
 set -euo pipefail
+
+# The Hermes cron `--no-agent --script` runner execs this with a minimal PATH that
+# omits /usr/local/bin (the bun + fluncle symlinks) and /root/.bun/bin, so a bare
+# `bun`/`fluncle` is "not found" → exit 127 (the runner's env, not the image's; a
+# manual `bash backfill-sweep.sh` works because it inherits the container's full PATH).
+# Prepend the known install dirs so this wrapper's `bun` AND the orchestrator's
+# `fluncle`/`bun` spawns resolve regardless of the runner's PATH.
+export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 
 # Resolve the orchestrator next to this wrapper so it runs regardless of CWD.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

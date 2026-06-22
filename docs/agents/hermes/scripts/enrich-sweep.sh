@@ -20,6 +20,14 @@
 # ~/.hermes/cron/output/{job_id}/{timestamp}.md.
 set -euo pipefail
 
+# The Hermes cron `--no-agent --script` runner execs this with a minimal PATH that
+# omits /usr/local/bin (the bun + fluncle symlinks) and /root/.bun/bin, so a bare
+# `bun`/`fluncle` is "not found" → exit 127 (the runner's env, not the image's; a
+# manual `bash enrich-sweep.sh` works because it inherits the container's full PATH).
+# Prepend the known install dirs so this wrapper's `bun` AND the orchestrator's
+# `fluncle`/`bun` spawns resolve regardless of the runner's PATH.
+export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
+
 # Resolve the orchestrator next to this wrapper so it runs regardless of CWD.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
