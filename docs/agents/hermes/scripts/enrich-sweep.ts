@@ -190,13 +190,15 @@ function enrichOne(finding: QueueFinding): Outcome {
 // ---------------------------------------------------------------------------
 
 function main(): void {
-  const queue = fluncleJson<QueueFinding[]>([
+  // `enrich-queue --json` returns `{ ok: true, tracks: [...] }`, not a bare array.
+  const response = fluncleJson<{ tracks?: QueueFinding[] }>([
     "admin",
     "tracks",
     "enrich-queue",
     "--limit",
     String(QUEUE_LIMIT),
   ]);
+  const queue = response.tracks ?? [];
 
   const summary = { batch: 0, done: 0, failed: 0, queued: queue.length, skipped: 0 };
 
