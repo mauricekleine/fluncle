@@ -8,6 +8,28 @@ Every step is a "read a queue → act per item, idempotently" loop over the `flu
 
 `fluncle-enrich` is **live on the box**. It does not carry a prompt: enrichment is pure compute (get → analyze → update, zero LLM tokens), so it is a `--no-agent --script` job. Its script source lives beside the build context at [`../scripts/`](../scripts/) — a bash wrapper (`enrich-sweep.sh`) the cron runner execs by extension, which in turn `exec`s the bun orchestrator (`enrich-sweep.ts`). It is created on the box directly (not in `jobs.json`, which holds the agent jobs).
 
+## The `--no-agent` catalogue-backfill cron (PREPARED, NOT YET WIRED)
+
+`fluncle-backfill` repairs the two music-graph side-channels over already-published findings: the **Discogs** release-id resolve and the **Last.fm love**. Like enrichment it carries no prompt — it is pure HTTP driving (zero LLM tokens) — so it is a `--no-agent --script` job. Its source lives beside the enrich sweep at [`../scripts/`](../scripts/): `backfill-sweep.sh` (the bash entry the runner execs by extension) → `backfill-sweep.ts` (the bun orchestrator).
+
+**The Worker-paced model.** The box holds **no** Discogs/Last.fm vendor keys (those live in the Worker). So the backfill API calls happen **in the Worker**; this driver just **paces** it — one small bounded batch of each source per tick (default `--limit 6`). The Worker carries the per-finding **reliability state** and the **Retry-After backoff**, so the box driver stays dumb and the next tick resumes from durable state. This is what stops the old 429-storm.
+
+| Job                | Schedule  | What it does                                                                                                                                                                                                                                                                                                                  | Server slice                                                    |
+| ------------------ | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `fluncle-backfill` | every 30m | Drive one paced batch of `admin backfills discogs` + `admin backfills lastfm` (each `--limit 6`). The Worker resolves/loves only findings the per-finding reliability gate hasn't done or isn't cooling down, respects each vendor's `Retry-After`, and records the outcome. Idempotent; no-op once the catalogue is drained. | The reliability columns + Retry-After backoff in `backfill.ts`. |
+
+**Every 30m, not 5m:** unlike `fluncle-enrich` (latency-sensitive for new finds), the backfill is a one-time catalogue repair. The 24h base cooldown means a done/tried finding isn't re-hit for a day, so the sweep drains over hours and then goes quiet; a 30m gap lets each vendor's per-minute budget fully recover between ticks. 6 findings/source/tick × 48 ticks/day comfortably drains the backlog within days while never bursting the vendor budget.
+
+> **Token tier (must resolve before wiring).** The backfills are **operator-tier** (`requireOperator` — "credentials / bulk mutation" in the [hermes-agent roles](../../hermes-agent.md#roles-operator-vs-agent) table), but the box normally holds only the **agent-scoped** token. An agent-token sweep is **403'd server-side**. So either (a) provision an **operator-scoped** token for _this cron only_ in `/etc/hermes.env` (deviates from "the box never holds the operator token" — weigh the blast radius), or (b) reclassify the backfills to **agent** tier in the Worker route guard (they are internal + reversible: loving is idempotent, Discogs ids are internal enrichment, neither publishes), which lets the existing agent token drive them. Option (b) is the cleaner long-term fit; it is a deliberate role-boundary change and is **out of scope for the PR that built this cron** — decide it before scheduling the job.
+
+To create it on a rebuilt box (after the token tier above is resolved):
+
+```bash
+# Deploy the script pair, then create the no-agent cron.
+scp docs/agents/hermes/scripts/backfill-sweep.{sh,ts} <box>:~/.hermes/scripts/
+hermes cron create "every 30m" --no-agent --script backfill-sweep.sh --deliver local
+```
+
 | Job              | Schedule | What it does                                                                                                                                                                                                                                                                   | Server slice                                   |
 | ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
 | `fluncle-enrich` | every 5m | Drain `admin tracks enrich --queue`; per finding (bounded batch, cap 4/tick): `tracks get` → `analyze-track.ts` (ffmpeg + DSP on the box) → `admin tracks update --bpm [--key] --features --status done` (or `--status failed` when no preview). Idempotent; no-op when empty. | The existing `admin tracks update` write-back. |
@@ -29,7 +51,7 @@ The two AGENT jobs in [`jobs.json`](./jobs.json) are drafted but **not yet wired
 | `fluncle-context-note` | every 1h | Drain `hasContext=false` (`admin tracks context --queue`), call `admin tracks context` per finding (Worker-side Firecrawl), write `context_note` quietly.                   | `context_track` agent-tier endpoint + `hasContext` filter (#86/#88).   |
 | `fluncle-observation`  | every 1h | Drain `hasContext=true AND hasObservation=false`; author the recovered-audio script (Sonnet + `copywriting-fluncle`) from the stored context note, then `observe --script`. | `observe_track` flipped to agent tier + `hasObservation` filter (#86). |
 
-NOT included (deliberately, per the brief): the Last.fm / Discogs **backfills** (their reliability columns — `lastfmLovedAt`, `discogsStatus` — are not built yet) and the **newsletter** (owned by its own RFC).
+NOT included here (the Last.fm / Discogs **backfills** are now built — see the `--no-agent` `fluncle-backfill` cron above — and the **newsletter** is owned by its own RFC).
 
 ## The cron mechanism (verified against upstream)
 
@@ -73,4 +95,4 @@ or ask the running bot in Discord (`/cron add "every 1h" "<prompt>"`), or in nat
 
 ## Keeping this in step
 
-When the backfill reliability columns + the newsletter ship, add their crons here too (the brief and the `fluncle-hermes-operator` skill carry the same reminder).
+When the newsletter ships, add its cron here too (the brief and the `fluncle-hermes-operator` skill carry the same reminder). The backfill reliability columns + their `fluncle-backfill` cron have landed (above).

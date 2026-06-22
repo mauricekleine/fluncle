@@ -90,7 +90,19 @@ const throttleMb = makeRateLimiter();
 export type DiscogsEnrichment = {
   masterId?: number;
   releaseId?: number;
+  // True when a Discogs (429) or MusicBrainz (503) call EXHAUSTED its in-slot
+  // retries during this resolution — i.e. the vendor is actively rate-limiting us.
+  // An empty `{}` with `rateLimited: true` means "unresolved because we got
+  // throttled", NOT "unresolved because there is no match"; the Worker-paced
+  // backfill reads it to back the finding off hard instead of retrying next tick.
+  rateLimited?: boolean;
 };
+
+// A mutable per-resolution flag threaded through the rate-limited fetch helpers so
+// `discogsResolveRelease` can report whether the vendor throttled us this pass
+// (vs the call genuinely finding nothing). Module-level fetchers can't return it
+// out-of-band, so they flip it on a flag the caller owns for the duration.
+type RateLimitSignal = { hit: boolean };
 
 // The richer signal the publish path already holds. All optional except title so
 // the resolver degrades gracefully (e.g. no ISRC → skip the MB bridge).
@@ -241,7 +253,7 @@ type MbIsrcLookup = {
 type MbReleaseLookup = MbRelease & { error?: unknown };
 type MbReleaseGroupLookup = MbRelease & { error?: unknown };
 
-function mbFetch<T>(path: string): Promise<T | undefined> {
+function mbFetch<T>(path: string, signal?: RateLimitSignal): Promise<T | undefined> {
   const separator = path.includes("?") ? "&" : "?";
   const url = `${MUSICBRAINZ_API_ROOT}${path}${separator}fmt=json`;
 
@@ -255,6 +267,12 @@ function mbFetch<T>(path: string): Promise<T | undefined> {
         console.warn(`[musicbrainz] 503 for ${path} — retry ${attempt + 1}/2 after ${retryAfter}s`);
         await delay(rateLimitIntervalMs === 0 ? 0 : retryAfter * 1000);
         continue;
+      }
+
+      // Retries exhausted on a 503 → the vendor is actively throttling; flag it so
+      // the backfill backs off rather than re-storming next tick.
+      if (response.status === 503 && signal) {
+        signal.hit = true;
       }
 
       if (!response.ok) {
@@ -307,6 +325,7 @@ function relationToEnrichment(relation: {
  */
 async function resolveViaMusicBrainz(
   input: DiscogsResolveInput,
+  signal?: RateLimitSignal,
 ): Promise<DiscogsEnrichment | undefined> {
   const isrc = input.isrc?.trim();
 
@@ -319,6 +338,7 @@ async function resolveViaMusicBrainz(
   // it 400s, and the code reads release-groups off the per-release detail below anyway.
   const lookup = await mbFetch<MbIsrcLookup>(
     `/isrc/${encodeURIComponent(isrc)}?inc=releases+url-rels`,
+    signal,
   );
 
   if (!lookup || lookup.error || !Array.isArray(lookup.recordings)) {
@@ -352,6 +372,7 @@ async function resolveViaMusicBrainz(
 
     const detail = await mbFetch<MbReleaseLookup>(
       `/release/${release.id}?inc=url-rels+release-groups`,
+      signal,
     );
 
     if (!detail || detail.error) {
@@ -368,7 +389,10 @@ async function resolveViaMusicBrainz(
     const groupId = detail["release-group"]?.id;
 
     if (groupId) {
-      const group = await mbFetch<MbReleaseGroupLookup>(`/release-group/${groupId}?inc=url-rels`);
+      const group = await mbFetch<MbReleaseGroupLookup>(
+        `/release-group/${groupId}?inc=url-rels`,
+        signal,
+      );
       const onGroup = discogsRelation(group?.relations);
 
       if (onGroup) {
@@ -420,7 +444,11 @@ type ScoredCandidate = {
   score: number;
 };
 
-function discogsFetch<T>(path: string, token: string): Promise<T | undefined> {
+function discogsFetch<T>(
+  path: string,
+  token: string,
+  signal?: RateLimitSignal,
+): Promise<T | undefined> {
   return throttleDiscogs(async () => {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const response = await fetch(`${DISCOGS_API_ROOT}${path}`, {
@@ -436,6 +464,12 @@ function discogsFetch<T>(path: string, token: string): Promise<T | undefined> {
         console.warn(`[discogs] 429 for ${path} — retry ${attempt + 1}/2 after ${retryAfter}s`);
         await delay(rateLimitIntervalMs === 0 ? 0 : retryAfter * 1000);
         continue;
+      }
+
+      // Retries exhausted on a 429 → Discogs is actively rate-limiting; flag it so
+      // the backfill backs off rather than re-storming next tick.
+      if (response.status === 429 && signal) {
+        signal.hit = true;
       }
 
       if (!response.ok) {
@@ -585,6 +619,7 @@ function searchVariants(input: DiscogsResolveInput): URLSearchParams[] {
 async function resolveViaDiscogsSearch(
   input: DiscogsResolveInput,
   token: string,
+  signal?: RateLimitSignal,
 ): Promise<ScoredCandidate | undefined> {
   const seen = new Set<number>();
   let best: ScoredCandidate | undefined;
@@ -593,6 +628,7 @@ async function resolveViaDiscogsSearch(
     const search = await discogsFetch<DiscogsSearchResult>(
       `/database/search?${variant.toString()}`,
       token,
+      signal,
     );
 
     const hits = (search?.results ?? []).filter(
@@ -606,7 +642,7 @@ async function resolveViaDiscogsSearch(
 
       seen.add(hit.id);
 
-      const release = await discogsFetch<DiscogsRelease>(`/releases/${hit.id}`, token);
+      const release = await discogsFetch<DiscogsRelease>(`/releases/${hit.id}`, token, signal);
 
       if (!release?.id) {
         continue;
@@ -662,9 +698,13 @@ export async function discogsResolveRelease(
     return {};
   }
 
+  // Owned for this resolution: any exhausted 429/503 flips it, so a `{}` return can
+  // report "throttled" vs "no match" to the Worker-paced backfill.
+  const signal: RateLimitSignal = { hit: false };
+
   try {
     // 1. MusicBrainz bridge — accepted directly when present (human-verified).
-    const viaMb = await resolveViaMusicBrainz(input);
+    const viaMb = await resolveViaMusicBrainz(input, signal);
 
     if (viaMb && (viaMb.releaseId || viaMb.masterId)) {
       return viaMb;
@@ -674,14 +714,15 @@ export async function discogsResolveRelease(
     const token = await readOptionalEnv("DISCOGS_USER_TOKEN");
 
     if (!token) {
-      return {};
+      return signal.hit ? { rateLimited: true } : {};
     }
 
-    const best = await resolveViaDiscogsSearch(input, token);
+    const best = await resolveViaDiscogsSearch(input, token, signal);
 
-    // 3. The gate: store NOTHING below the threshold. "Unresolved" is correct.
+    // 3. The gate: store NOTHING below the threshold. "Unresolved" is correct —
+    // but distinguish "unresolved because throttled" so the backfill backs off.
     if (!best || best.score < CONFIDENCE_THRESHOLD) {
-      return {};
+      return signal.hit ? { rateLimited: true } : {};
     }
 
     const { release } = best;
@@ -704,7 +745,7 @@ export async function discogsResolveRelease(
       }`,
     );
 
-    return {};
+    return signal.hit ? { rateLimited: true } : {};
   }
 }
 

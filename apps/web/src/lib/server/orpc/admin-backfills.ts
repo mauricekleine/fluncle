@@ -48,6 +48,8 @@ export function adminBackfillsHandlers(os: Implementer) {
           ok: true as const,
           resolved: result.resolved,
           resolvedCount: result.resolvedCount,
+          skipped: result.skipped,
+          skippedCount: result.skippedCount,
           unresolved: result.unresolved,
           unresolvedCount: result.unresolvedCount,
         };
@@ -77,6 +79,8 @@ export function adminBackfillsHandlers(os: Implementer) {
           lovedCount: result.lovedCount,
           nextCursor: result.nextCursor,
           ok: true as const,
+          skipped: result.skipped,
+          skippedCount: result.skippedCount,
         };
       } catch (error) {
         throw apiFault(error);

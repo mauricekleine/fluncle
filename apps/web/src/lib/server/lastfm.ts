@@ -29,6 +29,34 @@ const SIGNATURE_EXCLUDED = new Set(["api_sig", "callback", "format"]);
 
 type LastfmError = { error?: number; message?: string };
 
+// Last.fm error 29 = "Rate limit exceeded" (the JSON-body code; an HTTP 429 carries
+// it too). Errors 11 (service offline) and 16 (temporary) are also "try again
+// later" signals — the backfill treats all three as a retryable rate-limit/backoff
+// hit rather than a permanent failure. See docs (Context7 last_fm_api, 2026-06-22).
+const LASTFM_RETRYABLE_ERRORS = new Set([11, 16, 29]);
+
+/**
+ * Whether a `lastfmLove` outcome was a retryable rate-limit/backoff hit (HTTP 429
+ * or Last.fm error 11/16/29) vs a clean success or a permanent failure. The
+ * publish path ignores this (it fires once, best-effort); the Worker-paced
+ * backfill reads it to back a finding off hard on a rate-limit hit.
+ */
+export type LastfmLoveOutcome =
+  | { ok: true }
+  | { error: string; ok: false; rateLimited: boolean; retryAfterMs?: number };
+
+// A signal raised by callLastfm when a request was rate-limited, so lastfmLove can
+// distinguish a 429/error-29 from any other failure without re-parsing the message.
+class LastfmRateLimitError extends Error {
+  readonly retryAfterMs?: number;
+
+  constructor(message: string, retryAfterMs?: number) {
+    super(message);
+    this.name = "LastfmRateLimitError";
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
 /**
  * Build the `api_sig` for a signed call: alphabetize every signed param, join
  * them as `<name><value>` with no separators, append the shared secret, MD5.
@@ -65,7 +93,27 @@ async function callLastfm(params: Record<string, string>, sharedSecret: string):
   // Even non-2xx bodies carry the Last.fm error envelope; parse before throwing.
   const json = (await response.json().catch(() => ({}))) as LastfmError;
 
+  // A rate-limit/backoff hit (HTTP 429, or a Last.fm 11/16/29 body code) is raised
+  // as a distinct signal so a paced caller can back off rather than retry-storm.
+  // Honour a Retry-After header when present (Last.fm rarely sends one, so the
+  // caller supplies a default backoff when retryAfterMs is undefined).
+  const retryAfterMs = parseRetryAfterMs(response.headers.get("Retry-After"));
+
+  if (response.status === 429) {
+    throw new LastfmRateLimitError(
+      `Last.fm request failed: 429 ${response.statusText}`,
+      retryAfterMs,
+    );
+  }
+
   if (typeof json.error === "number") {
+    if (LASTFM_RETRYABLE_ERRORS.has(json.error)) {
+      throw new LastfmRateLimitError(
+        `Last.fm error ${json.error}: ${json.message ?? "unknown"}`,
+        retryAfterMs,
+      );
+    }
+
     throw new Error(`Last.fm error ${json.error}: ${json.message ?? "unknown"}`);
   }
 
@@ -76,6 +124,17 @@ async function callLastfm(params: Record<string, string>, sharedSecret: string):
   return json;
 }
 
+/** Parse a `Retry-After` header (delta-seconds; HTTP-date form is ignored) → ms. */
+function parseRetryAfterMs(header: string | null): number | undefined {
+  if (!header) {
+    return undefined;
+  }
+
+  const seconds = Number(header);
+
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : undefined;
+}
+
 /**
  * Best-effort `track.love` (a Loved Track = an explicit endorsement). Fired once
  * per newly published finding, matched by `{artist, track}` strings (Last.fm has
@@ -83,22 +142,25 @@ async function callLastfm(params: Record<string, string>, sharedSecret: string):
  * postToTelegram / the Deezer enrichment: a miss is logged and the add continues.
  *
  * No-ops silently when Last.fm isn't configured (no session key yet), so the
- * publish path works before Maurice provisions the credentials.
+ * publish path works before Maurice provisions the credentials. The publish path
+ * ignores the return; the Worker-paced backfill reads the `LastfmLoveOutcome` to
+ * record the result and back a rate-limited finding off hard (a clean `{ ok: true }`
+ * covers both a real love and the configured-no-op, since both mean "no work owed").
  */
-export async function lastfmLove(artist: string, track: string): Promise<void> {
+export async function lastfmLove(artist: string, track: string): Promise<LastfmLoveOutcome> {
   const cleanArtist = artist.trim();
   const cleanTrack = track.trim();
 
   if (!cleanArtist || !cleanTrack) {
-    return;
+    return { ok: true };
   }
 
   try {
     const sessionKey = await readOptionalEnv("LASTFM_SESSION_KEY");
 
     if (!sessionKey) {
-      // Not connected yet — silently skip (the love hook is provisioned later).
-      return;
+      // Not connected yet — silently no-op (the love hook is provisioned later).
+      return { ok: true };
     }
 
     const env = await readEnvs(["LASTFM_API_KEY", "LASTFM_SHARED_SECRET"]);
@@ -113,14 +175,19 @@ export async function lastfmLove(artist: string, track: string): Promise<void> {
       },
       env.LASTFM_SHARED_SECRET,
     );
+
+    return { ok: true };
   } catch (error) {
     // Side-channel: log and continue. Loving is idempotent, so a later retry/
     // backfill is harmless; the add must never fail on a Last.fm miss.
-    console.error(
-      `Last.fm love failed for "${artist} — ${track}": ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Last.fm love failed for "${artist} — ${track}": ${message}`);
+
+    if (error instanceof LastfmRateLimitError) {
+      return { error: message, ok: false, rateLimited: true, retryAfterMs: error.retryAfterMs };
+    }
+
+    return { error: message, ok: false, rateLimited: false };
   }
 }
 

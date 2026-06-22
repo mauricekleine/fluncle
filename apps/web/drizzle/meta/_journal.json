@@ -211,6 +211,13 @@
       "when": 1782130465387,
       "tag": "0029_tough_blackheart",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1782139933679,
+      "tag": "0030_graceful_dark_beast",
+      "breakpoints": true
     }
   ]
 }

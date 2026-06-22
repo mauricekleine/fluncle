@@ -1,5 +1,6 @@
-// Admin-gated, idempotent catalogue backfills for the two music-graph writes that
-// landed AFTER the synchronous add already existed (see docs/rfcs/lastfm-discogs-sync.md):
+// Admin-gated, idempotent, Worker-paced catalogue backfills for the two music-graph
+// writes that landed AFTER the synchronous add already existed (see
+// docs/rfcs/lastfm-discogs-sync.md):
 //
 //   1. Last.fm `track.love` — endorse every already-published finding (a Loved
 //      Track, never a scrobble — no fabricated listening history). `lastfmLove`
@@ -15,6 +16,17 @@
 // best-effort PER FINDING: one bad finding counts as a failure and the sweep
 // continues. Neither triggers the publish fan-out (no Spotify playlist add, no
 // Telegram) — this is a side-channel repair over rows that are already published.
+//
+// ── Reliability (the "Worker-paced" model) ──────────────────────────────────
+// The box holds NO vendor keys, so the API calls happen HERE (in the Worker); the
+// box `--no-agent` cron just drives one small batch per tick via the CLI. To keep
+// from re-storming a vendor API across ticks, each finding carries per-source
+// reliability state in the `tracks` row (backfill_{discogs,lastfm}_{attempted_at,
+// attempts,failures,done_at}). Before any vendor call the sweep SKIPS a finding
+// that is already done or was tried within a cooldown window; the window grows
+// with the consecutive-failure count, so a rate-limited finding backs off
+// exponentially instead of being retried every tick. After the call the outcome
+// is recorded so the next tick resumes from a clean, durable state.
 
 import { getDb } from "./db";
 import { discogsResolveRelease } from "./discogs";
@@ -44,6 +56,23 @@ const DISCOGS_DELAY_MS = 1200;
 // request fewer via `limit`.
 const MAX_BATCH = 3;
 
+// ── Cooldown / backoff policy ────────────────────────────────────────────────
+// A finding that was attempted recently is SKIPPED until its cooldown elapses, so
+// a tight cron (re-running every few minutes) can't re-hit the same finding before
+// the vendor's rate budget has recovered. The base cooldown is the floor between
+// two attempts on the SAME finding; the actual window grows with the consecutive
+// failure count (exponential backoff), capped, so a finding the vendor keeps
+// throttling backs off hard instead of being retried every tick.
+//
+//   - BASE: a clean attempt (resolved, loved, or a clean no-match) earns a long
+//     floor — there is no reason to re-resolve an unresolved finding for a day; a
+//     new resolver pass is a deliberate operator action (clear the columns or pass
+//     a fresh window), not an every-tick retry.
+//   - On FAILURE (a rate-limit hit, or a Last.fm error): window = BASE × 2^failures,
+//     capped at MAX, so 1→2× … and it tops out rather than growing unbounded.
+const COOLDOWN_BASE_MS = 24 * 60 * 60 * 1000; // 24h between attempts on the same finding
+const COOLDOWN_MAX_MS = 7 * 24 * 60 * 60 * 1000; // cap the backoff window at 7 days
+
 // The cursor to resume from on the next pass, or null once the archive is
 // exhausted. The CLI loops until this is null.
 type BackfillPass<T> = T & { nextCursor: string | null };
@@ -54,15 +83,36 @@ export type LastfmBackfillResult = BackfillPass<{
   failedCount: number;
   loved: string[];
   lovedCount: number;
+  // Findings the sweep deliberately skipped this pass (already done, or cooling
+  // down after a recent attempt/failure). They don't burn the batch budget.
+  skipped: string[];
+  skippedCount: number;
 }>;
 
 export type DiscogsBackfillResult = BackfillPass<{
   dryRun: boolean;
   resolved: Array<{ logId: string; masterId?: number; releaseId: number; source: string }>;
   resolvedCount: number;
+  // Findings the sweep deliberately skipped this pass (already resolved, or cooling
+  // down after a recent attempt/failure). They don't burn the batch budget.
+  skipped: string[];
+  skippedCount: number;
   unresolved: string[];
   unresolvedCount: number;
 }>;
+
+// Which source's reliability columns a query/write targets.
+type BackfillSource = "discogs" | "lastfm";
+
+// The per-source reliability state read off a finding's row.
+type ReliabilityState = {
+  attemptedAt: string | null;
+  failures: number;
+  isDone: boolean;
+};
+
+// The recorded outcome of one finding's attempt, mapped to a reliability write.
+type AttemptOutcome = "done" | "failure" | "tried";
 
 // A finding is "published" once it's on the playlist AND posted — the same bar the
 // love/Discogs writes care about (an in-flight/incomplete add isn't a finding yet).
@@ -70,11 +120,121 @@ function isPublishedFinding(track: TrackListItem): boolean {
   return track.type === "finding" && track.addedToSpotify && track.postedToTelegram;
 }
 
+// ── Reliability state I/O ─────────────────────────────────────────────────────
+
+// The snake_case column prefix for a source ("backfill_discogs" / "backfill_lastfm").
+function columnPrefix(source: BackfillSource): string {
+  return `backfill_${source}`;
+}
+
+// Read a finding's per-source reliability state. Rows that predate the columns
+// read as all-null/zero (the migration defaults attempts/failures to 0), which is
+// exactly the "never attempted" state — so a fresh finding is eligible immediately.
+async function readReliability(trackId: string, source: BackfillSource): Promise<ReliabilityState> {
+  const db = await getDb();
+  const p = columnPrefix(source);
+
+  const result = await db.execute({
+    args: [trackId],
+    sql: `select ${p}_attempted_at as attempted_at,
+        ${p}_failures as failures,
+        ${p}_done_at as done_at
+      from tracks
+      where track_id = ?
+      limit 1`,
+  });
+
+  const row = result.rows[0] as
+    | { attempted_at: string | null; done_at: string | null; failures: number | null }
+    | undefined;
+
+  return {
+    attemptedAt: row?.attempted_at ?? null,
+    failures: typeof row?.failures === "number" ? row.failures : 0,
+    isDone: Boolean(row?.done_at),
+  };
+}
+
+// The cooldown window for a finding given its consecutive-failure count: the base
+// floor, doubled per failure, capped. 0 failures → BASE; each failure doubles it.
+function cooldownMs(failures: number): number {
+  if (failures <= 0) {
+    return COOLDOWN_BASE_MS;
+  }
+
+  const scaled = COOLDOWN_BASE_MS * 2 ** Math.min(failures, 10);
+
+  return Math.min(scaled, COOLDOWN_MAX_MS);
+}
+
+// Whether a finding should be SKIPPED this pass: already done, or attempted within
+// its (failure-scaled) cooldown window. A finding never attempted (attemptedAt
+// null) is always eligible.
+function shouldSkip(state: ReliabilityState, now: number): boolean {
+  if (state.isDone) {
+    return true;
+  }
+
+  if (!state.attemptedAt) {
+    return false;
+  }
+
+  const last = Date.parse(state.attemptedAt);
+
+  if (!Number.isFinite(last)) {
+    // An unparseable timestamp shouldn't wedge a finding forever — treat it as
+    // eligible (the next attempt overwrites it with a clean ISO value).
+    return false;
+  }
+
+  return now - last < cooldownMs(state.failures);
+}
+
+// Record a finding's attempt outcome into its per-source reliability columns. Bumps
+// the attempt counter and the attempt timestamp every time; `done` stamps done_at
+// and clears the failure streak; `failure` increments the streak (driving the
+// backoff); `tried` (a clean no-match) clears the streak without marking done.
+// Touches ONLY the reliability columns — never updated_at, enrichment status, or
+// any public field, so it triggers no fan-out and is invisible to the feed.
+async function recordAttempt(
+  trackId: string,
+  source: BackfillSource,
+  outcome: AttemptOutcome,
+): Promise<void> {
+  const db = await getDb();
+  const p = columnPrefix(source);
+  const now = new Date().toISOString();
+
+  const doneClause = outcome === "done" ? `${p}_done_at = ?,` : "";
+  const failuresClause =
+    outcome === "failure" ? `${p}_failures = ${p}_failures + 1` : `${p}_failures = 0`;
+
+  const args: string[] = [now]; // attempted_at
+
+  if (outcome === "done") {
+    args.push(now); // done_at
+  }
+
+  args.push(trackId);
+
+  await db.execute({
+    args,
+    sql: `update tracks
+      set ${p}_attempted_at = ?,
+        ${p}_attempts = ${p}_attempts + 1,
+        ${doneClause}
+        ${failuresClause}
+      where track_id = ?`,
+  });
+}
+
+// ── Pass driver ───────────────────────────────────────────────────────────────
+
 // Process ONE bounded pass of the public feed (newest-first, deterministic on
 // added_at + track_id) starting at `startCursor`, invoking `visit` for each
 // PUBLISHED finding until `limit` of them have been HANDLED or the archive is
-// exhausted. `visit` returns whether the finding counted toward the limit
-// (Discogs skips rows that already have an id, so those don't burn the budget).
+// exhausted. `visit` returns whether the finding counted toward the limit (a
+// skipped/already-done finding returns false, so it doesn't burn the budget).
 //
 // Returns the cursor to resume from on the next pass — the feed cursor is
 // exclusive on {added_at, track_id}, so resuming after the LAST published finding
@@ -128,9 +288,13 @@ async function runPublishedFindingPass(
   return lastVisited ? encodeTrackCursor(lastVisited) : (cursor ?? null);
 }
 
+// ── Last.fm ───────────────────────────────────────────────────────────────────
+
 // Back-fill Last.fm loves over published findings. `lastfmLove` is idempotent and
 // no-ops without the session key, so this is safe to run repeatedly; we still
-// honour dryRun so the operator can preview the set first. Best-effort per finding.
+// honour dryRun so the operator can preview the set first. Best-effort per finding,
+// with per-finding reliability state: a loved finding is marked done (skipped
+// forever after), a rate-limited/failed one backs off via the cooldown window.
 export async function backfillLastfmLoves(
   limit: number,
   dryRun: boolean,
@@ -138,6 +302,8 @@ export async function backfillLastfmLoves(
 ): Promise<LastfmBackfillResult> {
   const loved: string[] = [];
   const failed: Array<{ error: string; logId: string }> = [];
+  const skipped: string[] = [];
+  const now = Date.now();
 
   const nextCursor = await runPublishedFindingPass(
     startCursor,
@@ -152,18 +318,28 @@ export async function backfillLastfmLoves(
         return false;
       }
 
+      // Reliability gate: already loved, or cooling down → skip (don't burn budget).
+      const state = await readReliability(track.trackId, "lastfm");
+
+      if (shouldSkip(state, now)) {
+        skipped.push(logId);
+        return false;
+      }
+
       if (dryRun) {
+        // Preview the set without firing or recording state.
         loved.push(logId);
         return true;
       }
 
-      try {
-        // lastfmLove never throws (it logs + swallows), so a failure here would be
-        // exceptional; we still guard so the sweep can't abort on one finding.
-        await lastfmLove(artist, track.title);
+      const outcome = await lastfmLove(artist, track.title);
+
+      if (outcome.ok) {
+        await recordAttempt(track.trackId, "lastfm", "done");
         loved.push(logId);
-      } catch (error) {
-        failed.push({ error: error instanceof Error ? error.message : String(error), logId });
+      } else {
+        await recordAttempt(track.trackId, "lastfm", "failure");
+        failed.push({ error: outcome.error, logId });
       }
 
       return true;
@@ -177,13 +353,19 @@ export async function backfillLastfmLoves(
     loved,
     lovedCount: loved.length,
     nextCursor,
+    skipped,
+    skippedCount: skipped.length,
   };
 }
 
+// ── Discogs ───────────────────────────────────────────────────────────────────
+
 // Back-fill Discogs ids over published findings WHERE in_release_id is null (the
 // public DTO exposes this as the absence of `discogsReleaseUrl`). Resolves
-// best-effort and, on a confident match, writes the ids server-side via the same
-// columns publishTrack populates. Paced under the Discogs rate limit.
+// best-effort and, on a confident match, writes the ids server-side. Paced under
+// the Discogs rate limit, with per-finding reliability state: a resolved finding is
+// marked done, a clean no-match earns the base cooldown (so it isn't re-resolved
+// every tick), and a rate-limited resolve backs off via the failure-scaled window.
 export async function backfillDiscogsIds(
   limit: number,
   dryRun: boolean,
@@ -191,6 +373,8 @@ export async function backfillDiscogsIds(
 ): Promise<DiscogsBackfillResult> {
   const resolved: DiscogsBackfillResult["resolved"] = [];
   const unresolved: string[] = [];
+  const skipped: string[] = [];
+  const now = Date.now();
   let first = true;
 
   const nextCursor = await runPublishedFindingPass(
@@ -210,6 +394,21 @@ export async function backfillDiscogsIds(
 
       const logId = track.logId ?? track.trackId;
 
+      // Reliability gate: already resolved (done), or cooling down → skip. This is
+      // what stops the 429-storm: a finding tried this window is not re-resolved.
+      const state = await readReliability(track.trackId, "discogs");
+
+      if (shouldSkip(state, now)) {
+        skipped.push(logId);
+        return false;
+      }
+
+      if (dryRun) {
+        // Preview the set without resolving, writing, or recording state.
+        unresolved.push(logId);
+        return true;
+      }
+
       // Pace the calls (skip the wait before the first one).
       if (!first) {
         await delay(DISCOGS_DELAY_MS);
@@ -217,7 +416,8 @@ export async function backfillDiscogsIds(
       first = false;
 
       // discogsResolveRelease never throws; {} = unresolved (below the gate or no
-      // token), which is the correct state — record it and move on.
+      // token). `rateLimited` distinguishes "throttled" from "no match" so we can
+      // back off the former hard instead of re-hitting it next tick.
       const enrichment = await discogsResolveRelease({
         album: track.album,
         artists: track.artists,
@@ -228,13 +428,15 @@ export async function backfillDiscogsIds(
       });
 
       if (!enrichment.releaseId) {
+        // A throttled miss is a FAILURE (back off); a clean no-match is a TRIED
+        // (base cooldown, streak reset) so an unresolvable finding isn't re-hit.
+        await recordAttempt(track.trackId, "discogs", enrichment.rateLimited ? "failure" : "tried");
         unresolved.push(logId);
         return true;
       }
 
-      if (!dryRun) {
-        await setDiscogsIds(track.trackId, enrichment.releaseId, enrichment.masterId);
-      }
+      await setDiscogsIds(track.trackId, enrichment.releaseId, enrichment.masterId);
+      await recordAttempt(track.trackId, "discogs", "done");
 
       resolved.push({
         logId,
@@ -254,6 +456,8 @@ export async function backfillDiscogsIds(
     nextCursor,
     resolved,
     resolvedCount: resolved.length,
+    skipped,
+    skippedCount: skipped.length,
     unresolved,
     unresolvedCount: unresolved.length,
   };

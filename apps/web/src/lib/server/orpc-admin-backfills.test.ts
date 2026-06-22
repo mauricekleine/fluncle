@@ -68,6 +68,8 @@ describe("oRPC backfill_discogs (POST /admin/backfill/discogs)", () => {
       nextCursor: "cur-2",
       resolved: [{ logId: "004.7.2I", releaseId: 12, source: "discogs" }],
       resolvedCount: 1,
+      skipped: ["004.7.4K"],
+      skippedCount: 1,
       unresolved: ["004.7.3J"],
       unresolvedCount: 1,
     });
@@ -84,6 +86,8 @@ describe("oRPC backfill_discogs (POST /admin/backfill/discogs)", () => {
       ok: true,
       resolved: [{ logId: "004.7.2I", releaseId: 12, source: "discogs" }],
       resolvedCount: 1,
+      skipped: ["004.7.4K"],
+      skippedCount: 1,
       unresolved: ["004.7.3J"],
       unresolvedCount: 1,
     });
@@ -110,6 +114,8 @@ describe("oRPC backfill_lastfm (POST /admin/backfill/lastfm)", () => {
       loved: ["004.7.2I"],
       lovedCount: 1,
       nextCursor: null,
+      skipped: ["004.7.4K"],
+      skippedCount: 1,
     });
 
     const { handleOrpc } = await import("./orpc");
@@ -124,6 +130,8 @@ describe("oRPC backfill_lastfm (POST /admin/backfill/lastfm)", () => {
       lovedCount: 1,
       nextCursor: null,
       ok: true,
+      skipped: ["004.7.4K"],
+      skippedCount: 1,
     });
     // Default limit (50), dryRun=true → true, no cursor.
     expect(backfillLastfmLoves).toHaveBeenCalledWith(50, true, undefined);

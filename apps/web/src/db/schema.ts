@@ -8,6 +8,27 @@ export const tracks = sqliteTable("tracks", {
   album: text("album"),
   albumImageUrl: text("album_image_url"),
   artistsJson: text("artists_json").notNull(),
+  // Per-finding backfill reliability state for the two Worker-paced catalogue
+  // sweeps (Discogs release-id resolve, Last.fm love), one column-set per source.
+  // The sweeps are best-effort side-channels over already-published findings; this
+  // state makes them RESUMABLE and keeps them from re-storming a vendor API:
+  //   - *AttemptedAt — ISO of the last attempt; the sweep skips a finding tried
+  //     within a cooldown window (the window grows with the failure count, so a
+  //     repeatedly-failing finding backs off instead of being retried every tick).
+  //   - *Attempts    — total attempts (diagnostic / unbounded-retry guard).
+  //   - *Failures    — CONSECUTIVE failures (reset to 0 on success); drives the
+  //     exponential backoff window. A done/resolved finding has 0.
+  //   - *DoneAt      — ISO when the source completed for this finding (Discogs:
+  //     ids written; Last.fm: loved). Set ⇒ the sweep skips it forever (idempotent
+  //     no-op). Null until done. All four are null on rows that predate the column.
+  backfillDiscogsAttemptedAt: text("backfill_discogs_attempted_at"),
+  backfillDiscogsAttempts: integer("backfill_discogs_attempts").notNull().default(0),
+  backfillDiscogsDoneAt: text("backfill_discogs_done_at"),
+  backfillDiscogsFailures: integer("backfill_discogs_failures").notNull().default(0),
+  backfillLastfmAttemptedAt: text("backfill_lastfm_attempted_at"),
+  backfillLastfmAttempts: integer("backfill_lastfm_attempts").notNull().default(0),
+  backfillLastfmDoneAt: text("backfill_lastfm_done_at"),
+  backfillLastfmFailures: integer("backfill_lastfm_failures").notNull().default(0),
   bpm: real("bpm"),
   // Firecrawl-derived FACTUAL context about the track (label/year/release
   // context/artist background), gathered during the observe step as CREATIVE

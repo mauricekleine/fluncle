@@ -1058,19 +1058,26 @@ async function runBackfillLastfm(
   const limit = parseListLimit(options.limit);
   const loved: string[] = [];
   const failed: Array<{ error: string; logId: string }> = [];
+  const skipped: string[] = [];
   let cursor: string | undefined;
   let dryRun = options.dryRun;
 
+  // The cap is on findings actually HANDLED (loved + failed); skips don't count, so
+  // the loop keeps draining cursors past cooling-down findings until the cap is met
+  // or the archive is exhausted (nextCursor null).
   while (loved.length + failed.length < limit) {
     const remaining = limit - (loved.length + failed.length);
     const result = await backfillLastfmCommand(remaining, options.dryRun, cursor);
     dryRun = result.dryRun;
     loved.push(...result.loved);
     failed.push(...result.failed);
+    skipped.push(...result.skipped);
 
     if (!options.json) {
       const verb = result.dryRun ? "Would love" : "Loved";
-      console.log(`  …${verb.toLowerCase()} ${result.lovedCount}; ${result.failedCount} failed`);
+      console.log(
+        `  …${verb.toLowerCase()} ${result.lovedCount}; ${result.failedCount} failed; ${result.skippedCount} skipped`,
+      );
     }
 
     if (result.nextCursor === null) {
@@ -1088,12 +1095,16 @@ async function runBackfillLastfm(
       loved,
       lovedCount: loved.length,
       ok: true,
+      skipped,
+      skippedCount: skipped.length,
     });
     return;
   }
 
   const verb = dryRun ? "Would love" : "Loved";
-  console.log(`${verb} ${loved.length} finding(s) on Last.fm; ${failed.length} failed.`);
+  console.log(
+    `${verb} ${loved.length} finding(s) on Last.fm; ${failed.length} failed; ${skipped.length} skipped.`,
+  );
 
   for (const logId of loved) {
     console.log(`  ${logId}`);
@@ -1112,19 +1123,26 @@ async function runBackfillDiscogs(
   const resolved: Array<{ logId: string; masterId?: number; releaseId: number; source: string }> =
     [];
   const unresolved: string[] = [];
+  const skipped: string[] = [];
   let cursor: string | undefined;
   let dryRun = options.dryRun;
 
+  // The cap is on findings actually HANDLED (resolved + unresolved); skips don't
+  // count, so the loop keeps draining cursors past cooling-down/done findings until
+  // the cap is met or the archive is exhausted (nextCursor null).
   while (resolved.length + unresolved.length < limit) {
     const remaining = limit - (resolved.length + unresolved.length);
     const result = await backfillDiscogsCommand(remaining, options.dryRun, cursor);
     dryRun = result.dryRun;
     resolved.push(...result.resolved);
     unresolved.push(...result.unresolved);
+    skipped.push(...result.skipped);
 
     if (!options.json) {
       const verb = result.dryRun ? "would resolve" : "resolved";
-      console.log(`  …${verb} ${result.resolvedCount}; ${result.unresolvedCount} unresolved`);
+      console.log(
+        `  …${verb} ${result.resolvedCount}; ${result.unresolvedCount} unresolved; ${result.skippedCount} skipped`,
+      );
     }
 
     if (result.nextCursor === null) {
@@ -1140,6 +1158,8 @@ async function runBackfillDiscogs(
       ok: true,
       resolved,
       resolvedCount: resolved.length,
+      skipped,
+      skippedCount: skipped.length,
       unresolved,
       unresolvedCount: unresolved.length,
     });
@@ -1147,7 +1167,9 @@ async function runBackfillDiscogs(
   }
 
   const verb = dryRun ? "Would resolve" : "Resolved";
-  console.log(`${verb} ${resolved.length} Discogs release id(s); ${unresolved.length} unresolved.`);
+  console.log(
+    `${verb} ${resolved.length} Discogs release id(s); ${unresolved.length} unresolved; ${skipped.length} skipped.`,
+  );
 
   for (const item of resolved) {
     const master = item.masterId ? ` (master ${item.masterId})` : "";
