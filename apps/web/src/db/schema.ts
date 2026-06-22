@@ -495,3 +495,39 @@ export const mixtapeTracks = sqliteTable(
     uniqueIndex("mixtape_tracks_mixtape_track_idx").on(table.mixtapeId, table.trackId),
   ],
 );
+
+// A newsletter EDITION — the weekly dispatch from the mothership, now persisted so
+// every Friday letter has a permanent home (docs/rfcs/newsletter-own-the-stack.md).
+// Modeled on the `mixtapes` table SHAPE (own table + counter + a draft→sent
+// lifecycle) but NOT its identity: an edition is content, not a collectible, so its
+// identity is a plain integer `number` minted on send (`max(number)+1`) — NO Log
+// ID, no coordinate, no spine resolver branch. The stored `contentJson` is the
+// single source that renders BOTH the web archive page and the email HTML.
+export const editions = sqliteTable("editions", {
+  // RSS/index ordering — set on send.
+  addedAt: text("added_at"),
+  // The structured JSON payload the agent authors (intro, galaxy-grouped finding
+  // refs by logId + per-edition "why", the optional mixtape ref, the tidbits +
+  // sources, the window, the subject). NOT raw LMX — the web page and the email
+  // HTML both render FROM this one source. Stored as JSON text.
+  contentJson: text("content_json").notNull(),
+  createdAt: text("created_at").notNull(),
+  id: text("id").primaryKey(),
+  // The sequential edition number — minted on send (`max(number)+1`), null while a
+  // draft. A plain integer never exhausts (no cap-54 like the mixtape spine).
+  number: integer("number").unique(),
+  // Provenance of the send so a re-send is idempotent and the archive records how
+  // it went out. "resend" + the Resend broadcast id.
+  sendExternalId: text("send_external_id"),
+  sendProvider: text("send_provider"),
+  sentAt: text("sent_at"),
+  status: text("status", { enum: ["draft", "sent"] })
+    .notNull()
+    .default("draft"),
+  subject: text("subject"),
+  updatedAt: text("updated_at").notNull(),
+  // The discovery window this edition covered — `windowUntil` anchors the next
+  // window's self-heal (the agent reads the last SENT edition's cutoff).
+  windowSince: text("window_since"),
+  windowUntil: text("window_until"),
+});

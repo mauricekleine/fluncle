@@ -52,6 +52,12 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "GET /admin/tracks": "list_tracks_admin",
   "GET /admin/tracks/{trackId}/social": "list_track_social",
   "PATCH /admin/mixtapes/{mixtapeId}": "update_mixtape",
+  // The newsletter edition control plane (docs/rfcs/newsletter-own-the-stack.md
+  // §3.3). Contract-only oRPC — no TanStack route files under /api/admin/newsletter
+  // (oRPC serves them off the registry), so they have no file-enumeration entry;
+  // they live here to satisfy the "registry holds EXACTLY this map's ops" check.
+  // create/update are admin tier (agent-allowed drafting); send is operator-only.
+  "PATCH /admin/newsletter/editions/{id}": "update_edition",
   "PATCH /admin/tracks/{trackId}": "update_track",
   "PATCH /admin/tracks/{trackId}/social/{platform}": "update_track_social",
   "POST /admin/backfill/discogs": "backfill_discogs",
@@ -65,6 +71,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/mixtapes/{mixtapeId}/youtube/finalize": "finalize_mixtape_youtube",
   "POST /admin/mixtapes/{mixtapeId}/youtube/initiate": "initiate_mixtape_youtube",
   "POST /admin/mixtapes/{mixtapeId}/youtube/publish": "publish_mixtape_youtube",
+  "POST /admin/newsletter/editions": "create_edition",
+  "POST /admin/newsletter/editions/{id}/send": "send_edition",
   // The push receipts sweep is a contract-only admin op (no TanStack route file —
   // the whole devices domain is contract-first oRPC), so it has no file-enumeration
   // entry; it lives here only to satisfy the "registry holds EXACTLY this map's

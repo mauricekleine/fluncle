@@ -154,6 +154,73 @@ export const SocialPostItemSchema = z
   })
   .meta({ id: "SocialPostItem" });
 
+/**
+ * A finding reference inside an edition's content payload — the finding's own Log
+ * ID plus the editorial "why" line written FOR this edition (which may differ from
+ * the finding's own `note`). The archive page hydrates the live finding from
+ * `tracks` by `logId`, so the reference stays tiny and current.
+ */
+const EditionFindingRefSchema = z
+  .object({
+    logId: z.string(),
+    why: z.string().optional(),
+  })
+  .meta({ id: "EditionFindingRef" });
+
+/** A galaxy-grouped block of finding references inside an edition. */
+const EditionGalaxyBlockSchema = z
+  .object({
+    findings: z.array(EditionFindingRefSchema),
+    galaxy: z.string(),
+  })
+  .meta({ id: "EditionGalaxyBlock" });
+
+/** A tidbit (a linkable fact) carried in an edition. */
+const EditionTidbitSchema = z
+  .object({
+    source: z.string().optional(),
+    text: z.string(),
+  })
+  .meta({ id: "EditionTidbit" });
+
+/**
+ * The structured content payload an edition stores (`editions.content_json`). The
+ * SINGLE source the agent authors that renders BOTH the web archive page and the
+ * email HTML (docs/rfcs/newsletter-own-the-stack.md §2.3, §2.6). LOOSE on the
+ * agent's side at write time (the admin route passes it through), but this is the
+ * canonical READ shape the public DTO exposes.
+ */
+export const EditionContentSchema = z
+  .object({
+    galaxies: z.array(EditionGalaxyBlockSchema).optional(),
+    intro: z.string().optional(),
+    mixtapeRef: z.string().optional(),
+    tidbits: z.array(EditionTidbitSchema).optional(),
+  })
+  .meta({ id: "EditionContent" });
+
+/**
+ * An edition as the `/newsletter` archive surface + `/api/v1/newsletter/editions`
+ * emit it (`EditionDTO` in ../index.ts). NOT a collectible: a plain integer
+ * `number` (minted on send, absent on a draft), no Log ID, no coordinate. The
+ * `content` is the structured payload above.
+ */
+export const EditionDTOSchema = z
+  .object({
+    addedAt: z.string().optional(),
+    content: EditionContentSchema,
+    createdAt: z.string().optional(),
+    id: z.string(),
+    number: z.number().optional(),
+    sentAt: z.string().optional(),
+    status: z.enum(["draft", "sent"]),
+    subject: z.string().optional(),
+    updatedAt: z.string().optional(),
+    windowSince: z.string().optional(),
+    windowUntil: z.string().optional(),
+  })
+  .meta({ id: "EditionDTO" });
+
 /** A mixtape per-platform distribution row (`MixtapeSocialPostItem`; `mixtape_social_posts`). */
 export const MixtapeSocialPostItemSchema = z
   .object({
