@@ -2,6 +2,7 @@ import { Link, createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { siteUrl } from "@/lib/fluncle-links";
 import { formatDate } from "@/lib/format";
+import { jsonLdScript } from "@/lib/json-ld";
 import { artistTitleLine } from "@/lib/log-prose";
 import { listTracks, type TrackListPage } from "@/lib/server/tracks";
 
@@ -47,7 +48,12 @@ function logIndexHead(loaderData: TrackListPage | undefined) {
       { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
       { content: `${siteUrl}/log`, property: "og:url" },
     ],
-    scripts: [{ children: JSON.stringify(itemList), type: "application/ld+json" }],
+    // JSON-LD goes through `jsonLdScript`, which HTML-escapes the serialized
+    // payload before it reaches the inline <script>'s `children` (rendered raw
+    // via dangerouslySetInnerHTML), so a `</script>` in a (Spotify-sourced) track
+    // title/artist (woven into each ListItem name) can't break out of the
+    // <script> (stored-XSS sink, security review).
+    scripts: [jsonLdScript(itemList)],
   };
 }
 

@@ -2,6 +2,7 @@ import { Link, createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { siteUrl } from "@/lib/fluncle-links";
 import { formatAlbumDuration } from "@/lib/format";
+import { jsonLdScript } from "@/lib/json-ld";
 import { type MixtapeDTO, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { listMixtapes } from "@/lib/server/mixtapes";
 
@@ -22,22 +23,23 @@ export const Route = createFileRoute("/mixtapes/")({
       { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
       { content: `${siteUrl}/mixtapes`, property: "og:url" },
     ],
+    // JSON-LD goes through `jsonLdScript`, which HTML-escapes the serialized
+    // payload before it reaches the inline <script>'s `children` (rendered raw
+    // via dangerouslySetInnerHTML), so a `</script>` in a mixtape title can't
+    // break out of the <script> (stored-XSS sink, security review).
     scripts: [
-      {
-        children: JSON.stringify({
-          "@context": "https://schema.org",
-          "@type": "ItemList",
-          itemListElement: loaderData?.map((mixtape, index) => ({
-            "@type": "ListItem",
-            name: `${mixtape.logId} · ${mixtape.title}`,
-            position: index + 1,
-            url: `${siteUrl}/log/${encodeURIComponent(mixtape.logId as string)}`,
-          })),
-          name: "Fluncle's mixtapes",
-          url: `${siteUrl}/mixtapes`,
-        }),
-        type: "application/ld+json",
-      },
+      jsonLdScript({
+        "@context": "https://schema.org",
+        "@type": "ItemList",
+        itemListElement: loaderData?.map((mixtape, index) => ({
+          "@type": "ListItem",
+          name: `${mixtape.logId} · ${mixtape.title}`,
+          position: index + 1,
+          url: `${siteUrl}/log/${encodeURIComponent(mixtape.logId as string)}`,
+        })),
+        name: "Fluncle's mixtapes",
+        url: `${siteUrl}/mixtapes`,
+      }),
     ],
   }),
   loader: () => fetchMixtapes(),

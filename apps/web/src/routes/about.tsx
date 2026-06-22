@@ -16,6 +16,7 @@ import {
   youtubeUrl,
 } from "@/lib/fluncle-links";
 import { fluncleDescription, fluncleMetaDescription } from "@/lib/identity";
+import { jsonLdScript } from "@/lib/json-ld";
 
 // The entity and answer surface (web-overhaul RFC §4): the Galaxy lore in
 // Fluncle's own voice, the four definition blocks, the Log-ID decode with a
@@ -102,10 +103,12 @@ function aboutHead() {
       { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
       { content: pageUrl, property: "og:url" },
     ],
-    scripts: [
-      { children: JSON.stringify(entity), type: "application/ld+json" },
-      { children: JSON.stringify(faqPage), type: "application/ld+json" },
-    ],
+    // JSON-LD goes through `jsonLdScript`, which HTML-escapes the serialized
+    // payload before it reaches the inline <script>'s `children` (rendered raw
+    // via dangerouslySetInnerHTML). The values here are first-party copy, but the
+    // safe path is uniform across every JSON-LD emitter (stored-XSS sink,
+    // security review).
+    scripts: [jsonLdScript(entity), jsonLdScript(faqPage)],
   };
 }
 
