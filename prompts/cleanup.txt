@@ -1,0 +1,12 @@
+I want to clean up my codebase and improve code quality. This is a complex task, so we'll need 8 subagents, one for each of the following tasks:
+
+1. Deduplicate and consolidate all code, implementing DRY principles where it reduces complexity.
+2. Find all type definitions and consolidate any that should be shared.
+3. Use tools like knip to identify and remove all unused code, ensuring it is truly unreferenced.
+4. Untangle any circular dependencies using tools such as madge.
+5. Remove weak types (e.g., 'unknown', 'any', or equivalents in other languages). Research and apply strong types as appropriate, ensuring type safety and correctness throughout the codebase and related packages.
+6. Remove all try/catch and equivalent defensive programming if it doesn't specifically handle unknown or unsanitized input; ensure error handling is clear and does not hide errors or introduce fallback patterns without reason.
+7. Find and remove any deprecated, legacy, or fallback code. Ensure all code paths are clean, concise, and as singular as possible.
+8. Remove all AI slop, stubs, unnecessary comments, or placeholders. Any comments describing in-motion work or replacements should be removed or rewritten to be helpful and concise for new users trying to understand the codebase.
+
+Each subagent should conduct detailed research on their assigned task, write a critical assessment of the current code and recommendations, and then implement all high-confidence, low-risk recommendations.

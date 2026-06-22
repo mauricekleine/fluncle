@@ -1,0 +1,4 @@
+/goal go over every single feature in this app create a user story with expected behaviour based on the code keep a single canonical spreadsheet tracking the features status
+- when done switch loop to testing every user story and documenting all errors 
+- when done fix every logistical error or ux error
+- test every user behaviour again post fix
