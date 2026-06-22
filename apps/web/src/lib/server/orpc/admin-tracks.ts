@@ -631,12 +631,19 @@ export function adminTracksHandlers(os: Implementer) {
           })),
         );
 
-        const uploads = signed.map((row, index) => ({
-          contentType: row.contentType,
-          field: artifacts[index].field,
-          key: row.key,
-          url: row.url,
-        }));
+        const uploads = signed.map((row, index) => {
+          const artifact = artifacts[index];
+          if (artifact === undefined) {
+            throw new Error("Presigned upload row has no matching artifact");
+          }
+
+          return {
+            contentType: row.contentType,
+            field: artifact.field,
+            key: row.key,
+            url: row.url,
+          };
+        });
 
         return { logId: track.logId, ok: true as const, trackId: track.trackId, uploads };
       } catch (error) {

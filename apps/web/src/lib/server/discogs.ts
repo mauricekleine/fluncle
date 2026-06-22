@@ -203,7 +203,7 @@ function yearOf(value: string | undefined): number | undefined {
 function parseDiscogsUrl(url: string): { kind: "master" | "release"; id: number } | undefined {
   const match = url.match(/discogs\.com\/(?:[a-z-]+\/)?(release|master)\/(\d+)/i);
 
-  if (!match) {
+  if (match?.[1] === undefined || match[2] === undefined) {
     return undefined;
   }
 

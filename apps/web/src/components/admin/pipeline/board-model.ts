@@ -177,7 +177,11 @@ function publishStep(
  */
 export function boardSteps(row: BoardRow): BoardStep[] {
   const tagged = row.vibeX !== undefined && row.vibeY !== undefined;
-  const galaxy = row.galaxy?.key ?? (tagged ? galaxyForVibe(row.vibeX!, row.vibeY!) : undefined);
+  const galaxy =
+    row.galaxy?.key ??
+    (row.vibeX !== undefined && row.vibeY !== undefined
+      ? galaxyForVibe(row.vibeX, row.vibeY)
+      : undefined);
   const note = row.note?.trim();
   const rendered = Boolean(row.observationAudioUrl);
   const onTape = row.mixtapes.some((m) => m.status === "published" || m.status === "distributing");

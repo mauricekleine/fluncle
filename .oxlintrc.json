@@ -13,8 +13,15 @@
     "curly": "error",
     "eslint/sort-keys": "error",
     "import/consistent-type-specifier-style": ["error", "prefer-inline"],
+    "no-unsafe-optional-chaining": "error",
     "no-unused-vars": "warn",
+    "typescript/await-thenable": "error",
     "typescript/consistent-type-definitions": ["error", "type"],
+    "typescript/no-base-to-string": "error",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-spread": "error",
+    "typescript/no-non-null-assertion": "error",
+    "typescript/no-non-null-asserted-optional-chain": "error",
     "unicorn/filename-case": [
       "error",
       {

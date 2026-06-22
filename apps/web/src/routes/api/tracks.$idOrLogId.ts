@@ -1,6 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { apiErrorResponse, trackNotFoundResponse } from "../../lib/server/http-errors";
+import {
+  apiErrorResponse,
+  requireParam,
+  trackNotFoundResponse,
+} from "../../lib/server/http-errors";
 import { resolveLogPageTarget } from "../../lib/server/log-resolver";
 import { type ApiHandlers, aliasHandlers } from "./-alias";
 
@@ -10,7 +14,7 @@ import { type ApiHandlers, aliasHandlers } from "./-alias";
 // one implementation; see ./-alias for the dual-mount contract.
 export const serverHandlers: ApiHandlers = {
   GET: async ({ params }) => {
-    const idOrLogId = params.idOrLogId;
+    const idOrLogId = requireParam(params.idOrLogId, "idOrLogId");
 
     try {
       const target = await resolveLogPageTarget(idOrLogId);

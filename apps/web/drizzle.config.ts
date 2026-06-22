@@ -7,10 +7,20 @@ const configDir = dirname(fileURLToPath(import.meta.url));
 
 config({ path: join(configDir, ".dev.vars") });
 
+function requireEnv(name: string): string {
+  const value = process.env[name];
+
+  if (!value) {
+    throw new Error(`${name} is required (set it in apps/web/.dev.vars)`);
+  }
+
+  return value;
+}
+
 export default defineConfig({
   dbCredentials: {
-    authToken: process.env.TURSO_AUTH_TOKEN!,
-    url: process.env.TURSO_DATABASE_URL!,
+    authToken: requireEnv("TURSO_AUTH_TOKEN"),
+    url: requireEnv("TURSO_DATABASE_URL"),
   },
   dialect: "turso",
   out: "./drizzle",

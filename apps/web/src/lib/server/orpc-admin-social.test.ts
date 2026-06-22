@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, req, setAdminTokenEnv } from "./orpc-test-kit";
 
 // The admin wave's `admin-social` parity + auth proof, driven end-to-end through
 // `handleOrpc`. The security-critical piece is the FIELD-LEVEL operator guard on
@@ -38,8 +39,6 @@ vi.mock("./captions", () => ({
   readCaptions: (...args: unknown[]) => readCaptions(...args),
 }));
 
-const OPERATOR_TOKEN = "test-token-admin-operator";
-const AGENT_TOKEN = "test-token-admin-agent";
 const TRACK_ID = "track-123";
 
 const TRACK = {
@@ -50,10 +49,7 @@ const TRACK = {
   videoUrl: "https://found.fluncle.com/004.7.2I/footage.mp4",
 };
 
-beforeAll(() => {
-  process.env.FLUNCLE_API_TOKEN = OPERATOR_TOKEN;
-  process.env.FLUNCLE_AGENT_TOKEN = AGENT_TOKEN;
-});
+beforeAll(setAdminTokenEnv);
 
 beforeEach(() => {
   getTrackByIdOrLogId.mockReset();
@@ -64,24 +60,6 @@ beforeEach(() => {
   pushYouTubeShort.mockReset();
   readCaptions.mockReset().mockResolvedValue({ "004.7.2I": "a caption" });
 });
-
-function req(path: string, method: string, token: string | undefined, body?: unknown): Request {
-  const headers: Record<string, string> = {};
-
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-
-  if (body !== undefined) {
-    headers["Content-Type"] = "application/json";
-  }
-
-  return new Request(`https://www.fluncle.com/api/v1${path}`, {
-    body: body === undefined ? undefined : JSON.stringify(body),
-    headers,
-    method,
-  });
-}
 
 // ── list_track_social — admin tier ───────────────────────────────────────────
 describe("oRPC list_track_social (GET /admin/tracks/{trackId}/social)", () => {
@@ -102,7 +80,7 @@ describe("oRPC list_track_social (GET /admin/tracks/{trackId}/social)", () => {
     const response = await handleOrpc(req(`/admin/tracks/${TRACK_ID}/social`, "GET", AGENT_TOKEN));
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       ok: true,
       posts: [{ createdAt: "t", platform: "tiktok", status: "draft", updatedAt: "t" }],
       trackId: TRACK_ID,
@@ -118,7 +96,7 @@ describe("oRPC list_track_social (GET /admin/tracks/{trackId}/social)", () => {
     );
 
     expect(response?.status).toBe(404);
-    expect(((await response?.json()) as { code: string }).code).toBe("not_found");
+    expect(((await readJson(response)) as { code: string }).code).toBe("not_found");
   });
 });
 
@@ -141,7 +119,7 @@ describe("oRPC update_track_social (PATCH .../social/{platform})", () => {
     );
 
     expect(response?.status).toBe(400);
-    expect(((await response?.json()) as { code: string }).code).toBe("bad_status");
+    expect(((await readJson(response)) as { code: string }).code).toBe("bad_status");
   });
 
   it("400s `url_required` publishing without a url", async () => {
@@ -153,7 +131,7 @@ describe("oRPC update_track_social (PATCH .../social/{platform})", () => {
     );
 
     expect(response?.status).toBe(400);
-    expect(((await response?.json()) as { code: string }).code).toBe("url_required");
+    expect(((await readJson(response)) as { code: string }).code).toBe("url_required");
   });
 
   it("404s `no_post` when no platform row exists", async () => {
@@ -168,7 +146,7 @@ describe("oRPC update_track_social (PATCH .../social/{platform})", () => {
     );
 
     expect(response?.status).toBe(404);
-    expect(((await response?.json()) as { code: string }).code).toBe("no_post");
+    expect(((await readJson(response)) as { code: string }).code).toBe("no_post");
   });
 
   it("updates for the operator and returns the live envelope", async () => {
@@ -184,7 +162,7 @@ describe("oRPC update_track_social (PATCH .../social/{platform})", () => {
     );
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       ok: true,
       platform: "tiktok",
       status: "published",
@@ -215,7 +193,7 @@ describe("oRPC draft_track_social (POST .../social/{platform}/draft)", () => {
     );
 
     expect(response?.status).toBe(400);
-    expect(((await response?.json()) as { code: string }).code).toBe("unsupported_platform");
+    expect(((await readJson(response)) as { code: string }).code).toBe("unsupported_platform");
   });
 
   it("403s the AGENT pushing to YOUTUBE (operator-only platform)", async () => {
@@ -225,7 +203,7 @@ describe("oRPC draft_track_social (POST .../social/{platform}/draft)", () => {
     );
 
     expect(response?.status).toBe(403);
-    expect(((await response?.json()) as { code: string }).code).toBe("forbidden");
+    expect(((await readJson(response)) as { code: string }).code).toBe("forbidden");
     // The operator gate fires BEFORE the track lookup, exactly as the live route.
     expect(getTrackByIdOrLogId).not.toHaveBeenCalled();
   });
@@ -240,7 +218,7 @@ describe("oRPC draft_track_social (POST .../social/{platform}/draft)", () => {
     );
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       externalId: "tt-1",
       ok: true,
       platform: "tiktok",
@@ -261,7 +239,7 @@ describe("oRPC draft_track_social (POST .../social/{platform}/draft)", () => {
     );
 
     expect(response?.status).toBe(200);
-    expect(await response?.json()).toEqual({
+    expect(await readJson(response)).toEqual({
       externalId: "yt-1",
       ok: true,
       platform: "youtube",
@@ -281,6 +259,6 @@ describe("oRPC draft_track_social (POST .../social/{platform}/draft)", () => {
     );
 
     expect(response?.status).toBe(400);
-    expect(((await response?.json()) as { code: string }).code).toBe("no_video");
+    expect(((await readJson(response)) as { code: string }).code).toBe("no_video");
   });
 });

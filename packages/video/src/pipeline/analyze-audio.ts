@@ -149,7 +149,7 @@ export function computeBands(decoded: DecodedWav): Bands {
     const frameStart = start + (hopSamples >> 1) - half;
     for (let i = 0; i < fftSize; i++) {
       const s = frameStart + i;
-      re[i] = (s >= 0 && s < samples.length ? samples[s]! : 0) * win[i]!;
+      re[i] = (s >= 0 && s < samples.length ? samples[s] : 0) * win[i];
       im[i] = 0;
     }
     fftInPlace(re, im);
@@ -158,7 +158,7 @@ export function computeBands(decoded: DecodedWav): Bands {
     let pMid = 0;
     let pHigh = 0;
     for (let k = 1; k <= half; k++) {
-      const p = re[k]! * re[k]! + im[k]! * im[k]!;
+      const p = re[k] * re[k] + im[k] * im[k];
       if (k <= bassMaxBin) {
         pBass += p;
       } else if (k <= midMaxBin) {

@@ -290,7 +290,9 @@ export function openApiToPostman(input: Json): PostmanCollection {
       schema: "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
       ...(spec.info?.version ? { version: spec.info.version } : {}),
     },
-    item: order.map((name) => folders.get(name)!),
+    item: order
+      .map((name) => folders.get(name))
+      .filter((folder): folder is PostmanFolder => folder !== undefined),
     variable: [
       { key: "baseUrl", value: host[0] + (basePath.length > 0 ? `/${basePath.join("/")}` : "") },
     ],

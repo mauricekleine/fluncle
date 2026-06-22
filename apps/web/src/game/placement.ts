@@ -44,7 +44,7 @@ export function makeRng(seed: number): () => number {
 function sectorOf(track: GameTrack): number {
   const match = track.logId?.match(LOG_ID_PATTERN);
 
-  if (match) {
+  if (match?.[1] !== undefined) {
     return Number.parseInt(match[1], 10);
   }
 
@@ -128,6 +128,11 @@ function spreadRing(
     for (let index = 0; index < sorted.length; index++) {
       const current = sorted[index];
       const next = sorted[(index + 1) % sorted.length];
+
+      if (current === undefined || next === undefined) {
+        continue;
+      }
+
       const gap =
         index + 1 === sorted.length
           ? next.angle + Math.PI * 2 - current.angle
@@ -316,6 +321,10 @@ export function placeBlackHoles(stars: Star[], seed: number): FrontierEntity[] {
     const liveIndex = Math.floor(rng() * slots.length);
     const live = slots[liveIndex];
     const exits = slots.filter((_, index) => index !== liveIndex);
+
+    if (live === undefined) {
+      continue;
+    }
 
     entities.push({
       bodyRadius: BLACKHOLE_HORIZON,

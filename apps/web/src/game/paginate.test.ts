@@ -13,7 +13,16 @@ describe("collectPages", () => {
       b: { items: [5], nextCursor: undefined },
     };
 
-    const items = await collectPages(async (cursor) => pages[cursor ?? ""], { maxPages: 48 });
+    const items = await collectPages(
+      async (cursor) => {
+        const page = pages[cursor ?? ""];
+        if (page === undefined) {
+          throw new Error(`no page for cursor ${cursor ?? ""}`);
+        }
+        return page;
+      },
+      { maxPages: 48 },
+    );
 
     expect(items).toEqual([1, 2, 3, 4, 5]);
   });

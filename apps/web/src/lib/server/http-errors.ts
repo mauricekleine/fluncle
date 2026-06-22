@@ -15,6 +15,20 @@ export function trackNotFoundResponse(id: string): Response {
   return jsonError(404, "not_found", `No track with id ${id}`);
 }
 
+/**
+ * Narrow a route path parameter to a non-undefined string. TanStack only invokes
+ * a handler once its route matched, so a declared `$param` is always present;
+ * this throws a clean 400 (via `apiErrorResponse`) only if that invariant is ever
+ * violated, instead of passing `undefined` downstream.
+ */
+export function requireParam(value: string | undefined, name: string): string {
+  if (value === undefined) {
+    throw new ApiError("invalid_request", `Missing path parameter '${name}'`, 400);
+  }
+
+  return value;
+}
+
 /** The canonical 400 for a track that has no Log ID (video/social flows need one). */
 export function noLogIdResponse(): Response {
   return jsonError(

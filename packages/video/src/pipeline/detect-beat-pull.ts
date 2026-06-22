@@ -86,7 +86,7 @@ const DEFAULTS = {
 const meanAbsDiff = (a: Float32Array, b: Float32Array): number => {
   let d = 0;
   for (let p = 0; p < a.length; p++) {
-    d += Math.abs(a[p]! - b[p]!);
+    d += Math.abs(a[p] - b[p]);
   }
   return d / a.length;
 };
@@ -130,7 +130,7 @@ export function extractFrames(videoPath: string): { fps: number; frames: Float32
     const base = f * frameSize;
     const frame = new Float32Array(frameSize);
     for (let p = 0; p < frameSize; p++) {
-      frame[p] = buf[base + p]!;
+      frame[p] = buf[base + p];
     }
     frames.push(frame);
   }
@@ -173,12 +173,12 @@ export function scoreBeatPull(
   const normalised = rawFrames.map((f) => {
     let sum = 0;
     for (let p = 0; p < f.length; p++) {
-      sum += f[p]!;
+      sum += f[p];
     }
     const mean = sum / f.length;
     const out = new Float32Array(f.length);
     for (let p = 0; p < f.length; p++) {
-      out[p] = f[p]! - mean;
+      out[p] = f[p] - mean;
     }
     return out;
   });
@@ -191,12 +191,12 @@ export function scoreBeatPull(
   const frames =
     smoothFrames > 0
       ? normalised.map((_, i) => {
-          const out = new Float32Array(normalised[0]!.length);
+          const out = new Float32Array(normalised[0].length);
           const lo = Math.max(0, i - smoothFrames);
           const hi = Math.min(n - 1, i + smoothFrames);
           for (let j = lo; j <= hi; j++) {
             for (let p = 0; p < out.length; p++) {
-              out[p] += normalised[j]![p]!;
+              out[p] += normalised[j][p];
             }
           }
           const w = hi - lo + 1;
@@ -210,7 +210,7 @@ export function scoreBeatPull(
   // Consecutive-frame motion (the path travelled per step).
   const step: number[] = [];
   for (let i = 0; i < n - 1; i++) {
-    step.push(meanAbsDiff(frames[i]!, frames[i + 1]!));
+    step.push(meanAbsDiff(frames[i], frames[i + 1]));
   }
   if (step.every((s) => s === step[0])) {
     return { ...base, inconclusive: "no motion variation" };
@@ -223,12 +223,12 @@ export function scoreBeatPull(
   for (let i = lag; i < n - lag; i++) {
     let pathLen = 0;
     for (let k = i - lag; k < i + lag; k++) {
-      pathLen += step[k]!;
+      pathLen += step[k];
     }
     if (pathLen <= 1e-6) {
       continue;
     }
-    const net = meanAbsDiff(frames[i - lag]!, frames[i + lag]!);
+    const net = meanAbsDiff(frames[i - lag], frames[i + lag]);
     sum += Math.max(0, 1 - net / pathLen);
     count += 1;
   }

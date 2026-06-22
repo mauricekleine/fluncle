@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { detectInstallMethod, shouldNotify, updateCommand } from "./update-notifier";
 
 describe("detectInstallMethod", () => {
@@ -70,6 +70,14 @@ describe("shouldNotify", () => {
   function setTty(value: boolean): void {
     Object.defineProperty(process.stderr, "isTTY", { configurable: true, value });
   }
+
+  beforeEach(() => {
+    // The CI runner sets CI=true in the ambient env; clear it (and the opt-out var)
+    // before each case so a test controls its own environment and the TTY-true
+    // assertions hold. Cases that test the CI/opt-out paths set the var themselves.
+    delete process.env.CI;
+    delete process.env.FLUNCLE_NO_UPDATE_NOTIFIER;
+  });
 
   afterEach(() => {
     Object.defineProperty(process.stderr, "isTTY", {

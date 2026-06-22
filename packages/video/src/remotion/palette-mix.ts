@@ -50,11 +50,11 @@ export const paletteMix = (swatches: string[], options: PaletteMixOptions = {}):
   }
 
   const sorted = [...clean].sort((a, b) => luminance(a) - luminance(b));
-  const darkest = sorted[0]!;
-  const brightest = sorted[sorted.length - 1]!;
+  const darkest = sorted[0];
+  const brightest = sorted[sorted.length - 1];
 
   // Most chromatic swatch is the artwork's natural accent.
-  const mostChromatic = [...clean].sort((a, b) => saturation(b) - saturation(a))[0]!;
+  const mostChromatic = [...clean].sort((a, b) => saturation(b) - saturation(a))[0];
 
   // Background: warm near-black, gently drifted toward the artwork's darkest.
   const background = mix(colors.deepField, darkest, backgroundDrift);

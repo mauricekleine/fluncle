@@ -58,12 +58,18 @@ export function parseDuration(input: string): number | null {
     }
     if (parts.length === 3) {
       const [hours, minutes, seconds] = nums;
+      if (hours === undefined || minutes === undefined || seconds === undefined) {
+        return null;
+      }
       if (minutes >= 60 || seconds >= 60) {
         return null;
       }
       return Math.round((hours * 3600 + minutes * 60 + seconds) * 1000);
     }
     const [minutes, seconds] = nums;
+    if (minutes === undefined || seconds === undefined) {
+      return null;
+    }
     if (seconds >= 60) {
       return null;
     }

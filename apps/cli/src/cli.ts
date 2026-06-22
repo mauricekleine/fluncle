@@ -1973,6 +1973,9 @@ function assertParseArgsCompatibleOptionValues(args: string[]): void {
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
+    if (arg === undefined) {
+      continue;
+    }
 
     if (arg === "--") {
       return;
@@ -2012,6 +2015,9 @@ function positionalArgs(args: string[]): string[] {
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
+    if (arg === undefined) {
+      continue;
+    }
 
     if (arg === "--") {
       positionals.push(...args.slice(index + 1));
@@ -2049,6 +2055,9 @@ function positionalArgs(args: string[]): string[] {
 function topLevelCommand(args: string[]): string | undefined {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
+    if (arg === undefined) {
+      continue;
+    }
 
     if (arg === "--env") {
       index += 1;

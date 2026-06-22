@@ -36,3 +36,7 @@ packages/video/src/remotion/workbench/*
 
 # TanStack Start temp/cache
 apps/web/.tanstack/
+
+# Test coverage reports (vitest --coverage)
+coverage/
+**/coverage/

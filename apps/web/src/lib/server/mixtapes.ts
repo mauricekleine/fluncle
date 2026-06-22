@@ -454,6 +454,11 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
     ],
     "write",
   );
+
+  if (publishResult === undefined) {
+    throw new ApiError("publish_failed", "Mixtape could not be minted", 409);
+  }
+
   const row = typedRow<PublishRow>(publishResult.rows);
 
   if (!row) {

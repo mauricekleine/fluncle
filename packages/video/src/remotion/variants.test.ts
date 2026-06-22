@@ -16,12 +16,12 @@ assert.deepEqual(both, {
 });
 
 // footage.mp4 is the clean square crop-source master.
-assert.equal(both[FOOTAGE_FILENAME]!.aspect, "square");
-assert.equal(both[FOOTAGE_FILENAME]!.hideOverlay, true);
+assert.equal(both[FOOTAGE_FILENAME].aspect, "square");
+assert.equal(both[FOOTAGE_FILENAME].hideOverlay, true);
 
 // footage.social.mp4 is the portrait baked-text social cut (the render default).
-assert.equal(both[FOOTAGE_SOCIAL_FILENAME]!.aspect, "portrait");
-assert.equal(both[FOOTAGE_SOCIAL_FILENAME]!.hideOverlay, false);
+assert.equal(both[FOOTAGE_SOCIAL_FILENAME].aspect, "portrait");
+assert.equal(both[FOOTAGE_SOCIAL_FILENAME].hideOverlay, false);
 
 // A writer that produces only one master records only that master's entry —
 // never fabricating a master it didn't render.

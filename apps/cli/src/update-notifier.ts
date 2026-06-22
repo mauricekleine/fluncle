@@ -96,6 +96,9 @@ export function shouldNotify(args: string[]): boolean {
 function firstPositional(args: string[]): string | undefined {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
+    if (arg === undefined) {
+      continue;
+    }
 
     if (arg === "--env") {
       index += 1;

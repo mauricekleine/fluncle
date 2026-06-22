@@ -106,15 +106,15 @@ const TELEMETRY_STYLE: React.CSSProperties = {
  * Fluncle's Found date. Degrades to label-only, bare year, or nothing.
  */
 export const provenanceLine = (label?: string, releaseDate?: string): string | null => {
-  const year = releaseDate?.slice(0, 4);
-  const hasYear = year ? /^\d{4}$/.test(year) : false;
-  if (label && hasYear) {
+  const sliced = releaseDate?.slice(0, 4);
+  const year = sliced && /^\d{4}$/.test(sliced) ? sliced : null;
+  if (label && year) {
     return `${label} (${year})`;
   }
   if (label) {
     return label;
   }
-  return hasYear ? year! : null;
+  return year;
 };
 
 /** 0..1 presence envelope: eased fade in at `inSec`, hold, eased fade out. */

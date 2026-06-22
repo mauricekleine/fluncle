@@ -182,9 +182,12 @@ function foldLine(line: string): string {
   while (start < bytes.length) {
     let end = Math.min(start + limit, bytes.length);
     // Don't split a UTF-8 multi-byte sequence: back off while the next byte is a
-    // continuation byte (0b10xxxxxx).
-    while (end < bytes.length && (bytes[end] & 0xc0) === 0x80) {
+    // continuation byte (0b10xxxxxx). The `end < bytes.length` guard keeps the
+    // index in bounds, so the byte is always present here.
+    let nextByte = bytes[end];
+    while (nextByte !== undefined && end < bytes.length && (nextByte & 0xc0) === 0x80) {
       end -= 1;
+      nextByte = bytes[end];
     }
     segments.push(decoder.decode(bytes.subarray(start, end)));
     start = end;
