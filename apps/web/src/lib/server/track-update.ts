@@ -42,6 +42,15 @@ export type TrackUpdate = {
   observationDurationMs?: number;
   /** When the observation was rendered (ISO). */
   observationGeneratedAt?: string;
+  /**
+   * The spoken observation SCRIPT (the voice-gated prose passed to the render).
+   * Mirrors the R2 `observation.json` `text` on the row so the admin dialog can show
+   * the transcript without an R2 round-trip. Internal (the transcript of an internal
+   * artifact) — never on the public contract, and NOT in VISIBLE_FIELDS: on a fresh
+   * render the sibling `observationAudioUrl` already bumps lastmod, and the one-off
+   * back-migration writes it standalone (must move no public surface).
+   */
+  observationScript?: string;
   /** The AI model that authored the video, in <provider>/<model> notation. */
   videoModel?: string;
   /** The reasoning/thinking effort the authoring model ran at (e.g. "high"). */
@@ -188,6 +197,13 @@ export async function updateTrack(
   if (update.observationGeneratedAt !== undefined) {
     sets.push("observation_generated_at = ?");
     args.push(update.observationGeneratedAt);
+  }
+
+  if (update.observationScript !== undefined) {
+    // Empty string clears the transcript — null, not "", so a cleared row reads as
+    // "no script yet" for the back-migration's `observation_script IS NULL` pick.
+    sets.push("observation_script = ?");
+    args.push(update.observationScript === "" ? null : update.observationScript);
   }
 
   if (update.vibeX !== undefined) {

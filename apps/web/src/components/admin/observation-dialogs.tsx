@@ -70,12 +70,31 @@ export function ContextDialog({ contextNote, loading, onOpenChange, row }: Conte
 type ObservationDialogProps = {
   onOpenChange: (open: boolean) => void;
   row: BoardRow | null;
+  /** The spoken transcript ("" = absent / not yet read), read lazily on open. */
+  script: string;
+  scriptLoading: boolean;
 };
 
-export function ObservationDialog({ onOpenChange, row }: ObservationDialogProps) {
+// The stored script carries the occasional SSML pause (`<break time="0.8s"/>`) the
+// render needs but a reader doesn't — strip the tags so the transcript reads as the
+// clean prose it speaks (collapsing the gap each tag leaves to a single space).
+function readableTranscript(script: string): string {
+  return script
+    .replace(/<break[^>]*\/?>/gi, " ")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+export function ObservationDialog({
+  onOpenChange,
+  row,
+  script,
+  scriptLoading,
+}: ObservationDialogProps) {
   const audioUrl = row?.observationAudioUrl;
   const durationMs = row?.observationDurationMs;
   const generatedAt = row?.observationGeneratedAt;
+  const transcript = readableTranscript(script);
 
   return (
     <Dialog onOpenChange={onOpenChange} open={row !== null}>
@@ -116,6 +135,25 @@ export function ObservationDialog({ onOpenChange, row }: ObservationDialogProps)
                 </div>
               ) : undefined}
             </dl>
+
+            {/* The spoken transcript, below the player — what the audio says, read
+                quietly (the recovered-audio voice on the page in text form). */}
+            {scriptLoading ? (
+              <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+                Reading the transcript…
+              </p>
+            ) : transcript ? (
+              <ScrollArea className="max-h-48 rounded-lg border border-border bg-card/50 p-3">
+                <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+                  {transcript}
+                </p>
+              </ScrollArea>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                No transcript stored. The back-migration recovers it from the rendered artifact.
+              </p>
+            )}
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">

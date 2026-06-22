@@ -440,13 +440,16 @@ export function adminTracksHandlers(os: Implementer) {
       ]);
 
       // Persist: the audio url (the "has observation" flag) + duration + timestamp
-      // (visible — they bump lastmod). Backfill the context note only when this step
-      // freshly fetched it (the context_track split usually wrote it already); a
-      // body-supplied or already-stored note is not re-written.
+      // (visible — they bump lastmod) + the spoken script (the transcript mirror of
+      // observation.json `text`, so the admin dialog reads it from the row, not R2).
+      // Backfill the context note only when this step freshly fetched it (the
+      // context_track split usually wrote it already); a body-supplied or
+      // already-stored note is not re-written.
       await updateTrack(track.trackId, {
         observationAudioUrl: media.observationAudioUrl,
         observationDurationMs: durationMs,
         observationGeneratedAt: generatedAt,
+        observationScript: script,
         ...(freshlyFetched ? { contextNote } : {}),
       });
 
