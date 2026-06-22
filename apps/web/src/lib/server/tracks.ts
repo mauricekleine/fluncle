@@ -9,12 +9,14 @@ import {
 import { logPageUrl } from "../fluncle-links";
 import { GALAXIES, galaxyForVibe } from "../galaxies";
 import { versionedObservationAudioUrl } from "../media";
+import { nextBoundaryEpochMs, type RadioScheduleEntry } from "../radio-schedule";
 import { type FeedItem, type MixtapeMember, rowToMixtape } from "../mixtapes";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 import { discogsReleaseUrl } from "./discogs";
 
 export type { FeedListPage, TrackCursor, TrackFeatures, TrackListPage, TrackListItem };
+export type { RadioScheduleEntry };
 
 export type TrackRow = {
   added_at: string;
@@ -294,6 +296,123 @@ export async function getRandomRadioTrack(): Promise<TrackListItem | undefined> 
   const row = typedRow<TrackRow>(result.rows);
 
   return row ? toTrackListItem(row) : undefined;
+}
+
+// ── radio.fluncle.com — the shared schedule (RFC radio-broadcast.md, Unit A) ──
+
+/**
+ * The radio loop's eligible findings, deterministically ordered. The eligibility
+ * predicate matches `getRandomRadioTrack` (a clean square master + an observation)
+ * PLUS `observation_duration_ms`/`log_id` non-null — the schedule arithmetic needs
+ * the segment length (the audio IS the clock) and the URL builder needs the logId,
+ * where the random op tolerated their absence by skipping client-side.
+ *
+ * The order is found-order — `added_at ASC, track_id ASC`, the codebase's
+ * canonical stable total order (the feed cursor, neighbors, and search tiebreak
+ * all use this tuple). It MUST NOT be `random()` — that is exactly what breaks
+ * synchronization. A non-found shuffle (Decision #2) would be a stable
+ * epoch-seeded permutation in the handler; the SQL stays deterministic either way.
+ */
+export async function getRadioEligibleTracks(): Promise<RadioScheduleEntry[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    sql: `select track_id, log_id, observation_duration_ms
+          from tracks
+          where video_squared_at is not null
+            and observation_audio_url is not null
+            and observation_duration_ms is not null
+            and log_id is not null
+          order by added_at asc, track_id asc`,
+  });
+
+  return typedRows<{
+    log_id: string;
+    observation_duration_ms: number;
+    track_id: string;
+  }>(result.rows).map((row) => ({
+    logId: row.log_id,
+    observationDurationMs: row.observation_duration_ms,
+    trackId: row.track_id,
+  }));
+}
+
+/**
+ * A cheap fingerprint of the eligible set — `${count}:${maxObservationGeneratedAt}`
+ * over the SAME predicate as `getRadioEligibleTracks`. `count` rises on a new
+ * eligible finding; `latest` (the max `observation_generated_at`) moves on a
+ * re-observe (a changed duration). A different fingerprint is the "the schedule
+ * changed" trigger that rolls the epoch to the next loop boundary — computed on
+ * the READ path, so the eligibility-changing agent writes never touch the anchor.
+ */
+export async function getRadioScheduleFingerprint(): Promise<string> {
+  const db = await getDb();
+  const result = await db.execute({
+    sql: `select count(*) as count,
+                 coalesce(max(observation_generated_at), '') as latest
+          from tracks
+          where video_squared_at is not null
+            and observation_audio_url is not null
+            and observation_duration_ms is not null
+            and log_id is not null`,
+  });
+  const row = typedRow<{ count: number; latest: string }>(result.rows);
+
+  return `${Number(row?.count ?? 0)}:${row?.latest ?? ""}`;
+}
+
+type RadioScheduleRow = {
+  epoch_ms: number;
+  version: string;
+};
+
+/**
+ * Read the stored schedule anchor, ROLLING it to the next loop boundary when the
+ * eligible set changed (a self-heal on the read path). Returns the live epoch the
+ * modulo math is measured from plus the fingerprint clients re-fetch on.
+ *
+ * On a fingerprint mismatch (or a first-ever read), the new schedule is made to
+ * take effect at the NEXT loop boundary of the OLD loop (`nextBoundaryEpochMs`),
+ * so a grown/re-observed catalogue applies at a seam and no current listener's
+ * playhead jumps mid-loop — then the row is upserted. `oldEntries` lets the caller
+ * pass the freshly-read eligible set so the boundary roll uses the OLD loop length
+ * the listeners are still riding (the caller reads the live set anyway).
+ */
+export async function getRadioScheduleAnchor(
+  version: string,
+  oldLoopDurationMs: number,
+  nowMs: number = Date.now(),
+): Promise<{ epochMs: number; version: string }> {
+  const db = await getDb();
+  const stored = typedRow<RadioScheduleRow>(
+    (
+      await db.execute({
+        args: ["radio"],
+        sql: `select epoch_ms, version from radio_schedule where service = ?`,
+      })
+    ).rows,
+  );
+
+  // The anchor still matches the live set — nothing to roll.
+  if (stored && stored.version === version) {
+    return { epochMs: stored.epoch_ms, version };
+  }
+
+  // First-ever read: anchor at now. A changed set: roll the OLD epoch to the next
+  // boundary of the OLD loop so the new schedule applies at a seam.
+  const epochMs = stored ? nextBoundaryEpochMs(stored.epoch_ms, oldLoopDurationMs, nowMs) : nowMs;
+  const generatedAt = new Date(nowMs).toISOString();
+
+  await db.execute({
+    args: [epochMs, generatedAt, version],
+    sql: `insert into radio_schedule (service, epoch_ms, generated_at, version)
+          values ('radio', ?, ?, ?)
+          on conflict(service) do update set
+            epoch_ms = excluded.epoch_ms,
+            generated_at = excluded.generated_at,
+            version = excluded.version`,
+  });
+
+  return { epochMs, version };
 }
 
 export type TrackNeighbor = {

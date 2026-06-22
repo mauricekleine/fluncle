@@ -102,7 +102,7 @@ export {
 export { listPrivateSavedFindings, savePrivateFinding, unsavePrivateFinding } from "./me-saved";
 export { listMixtapes } from "./mixtapes";
 export { type NewsletterBody, subscribeNewsletter } from "./newsletter";
-export { getRandomRadioTrack } from "./radio";
+export { getRadioNowPlaying, getRandomRadioTrack } from "./radio";
 export { searchTracks } from "./search";
 export { listStories } from "./stories";
 export { type SubmissionBody, submitTrack } from "./submissions";
@@ -113,6 +113,7 @@ export {
   MixtapeDTOSchema,
   MixtapeSocialPostItemSchema,
   PublicUserSchema,
+  RadioNowPlayingSchema,
   SocialPostItemSchema,
   SubmissionSchema,
   TrackListItemSchema,

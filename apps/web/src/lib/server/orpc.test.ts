@@ -16,14 +16,22 @@ vi.mock("./log-resolver", () => ({
 const listTracks = vi.fn();
 const getRandomTrack = vi.fn();
 const getRandomRadioTrack = vi.fn();
+const getRadioEligibleTracks = vi.fn();
+const getRadioScheduleFingerprint = vi.fn();
+const getRadioScheduleAnchor = vi.fn();
+const getTrackByIdOrLogId = vi.fn();
 
 vi.mock("./tracks", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./tracks")>();
 
   return {
     ...actual,
+    getRadioEligibleTracks: (...args: unknown[]) => getRadioEligibleTracks(...args),
+    getRadioScheduleAnchor: (...args: unknown[]) => getRadioScheduleAnchor(...args),
+    getRadioScheduleFingerprint: (...args: unknown[]) => getRadioScheduleFingerprint(...args),
     getRandomRadioTrack: (...args: unknown[]) => getRandomRadioTrack(...args),
     getRandomTrack: (...args: unknown[]) => getRandomTrack(...args),
+    getTrackByIdOrLogId: (...args: unknown[]) => getTrackByIdOrLogId(...args),
     listTracks: (...args: unknown[]) => listTracks(...args),
   };
 });
@@ -33,6 +41,10 @@ beforeEach(() => {
   listTracks.mockReset();
   getRandomTrack.mockReset();
   getRandomRadioTrack.mockReset();
+  getRadioEligibleTracks.mockReset();
+  getRadioScheduleFingerprint.mockReset();
+  getRadioScheduleAnchor.mockReset();
+  getTrackByIdOrLogId.mockReset();
 });
 
 function get(url: string): Request {
@@ -304,6 +316,92 @@ describe("oRPC public read — GET /radio/random (get_random_radio_track)", () =
   });
 });
 
+describe("oRPC public read — GET /radio/now-playing (get_radio_now_playing)", () => {
+  const CURRENT = { ...TRACK, logId: "001.1.1A", trackId: "track-a" };
+  const NEXT = { ...TRACK, logId: "002.1.1B", trackId: "track-b" };
+
+  function wireSchedule() {
+    getRadioEligibleTracks.mockResolvedValueOnce([
+      { logId: "001.1.1A", observationDurationMs: 20_000, trackId: "track-a" },
+      { logId: "002.1.1B", observationDurationMs: 30_000, trackId: "track-b" },
+    ]);
+    getRadioScheduleFingerprint.mockResolvedValueOnce("2:2026-06-10T00:00:00.000Z");
+    // Anchor at "now − 5s" so the modulo lands 5s into the first segment.
+    getRadioScheduleAnchor.mockResolvedValueOnce({
+      epochMs: Date.now() - 5_000,
+      version: "2:2026-06-10T00:00:00.000Z",
+    });
+    getTrackByIdOrLogId.mockImplementation(async (id: string) =>
+      id === "track-a" ? CURRENT : id === "track-b" ? NEXT : undefined,
+    );
+  }
+
+  it("serves { ok: true, nowPlaying } — the slot + offset on the shared loop", async () => {
+    wireSchedule();
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(get("https://www.fluncle.com/api/v1/radio/now-playing"));
+
+    expect(response?.status).toBe(200);
+    const body = (await response?.json()) as {
+      ok: true;
+      nowPlaying: {
+        currentTrack: { trackId: string };
+        nextTrack?: { trackId: string };
+        offsetMs: number;
+        scheduleVersion: string;
+        serverEpochMs: number;
+        totalLoopDurationMs: number;
+        trackCount: number;
+      };
+    };
+
+    expect(body.ok).toBe(true);
+    expect(body.nowPlaying.currentTrack.trackId).toBe("track-a");
+    expect(body.nowPlaying.nextTrack?.trackId).toBe("track-b");
+    // 5s into the 20s first segment, within a coarse tolerance for the Date.now()s.
+    expect(body.nowPlaying.offsetMs).toBeGreaterThanOrEqual(4_000);
+    expect(body.nowPlaying.offsetMs).toBeLessThanOrEqual(6_000);
+    expect(body.nowPlaying.totalLoopDurationMs).toBe(50_000);
+    expect(body.nowPlaying.trackCount).toBe(2);
+    expect(body.nowPlaying.scheduleVersion).toBe("2:2026-06-10T00:00:00.000Z");
+    expect(typeof body.nowPlaying.serverEpochMs).toBe("number");
+    // The now-playing read never falls through to the random read.
+    expect(getRandomRadioTrack).not.toHaveBeenCalled();
+  });
+
+  it("404s an empty schedule with the custom track_not_found code", async () => {
+    getRadioEligibleTracks.mockResolvedValueOnce([]);
+    getRadioScheduleFingerprint.mockResolvedValueOnce("0:");
+    getRadioScheduleAnchor.mockResolvedValueOnce({ epochMs: Date.now(), version: "0:" });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(get("https://www.fluncle.com/api/v1/radio/now-playing"));
+
+    expect(response?.status).toBe(404);
+    expect(await response?.json()).toEqual({
+      code: "track_not_found",
+      message: "No radio-eligible tracks found",
+      ok: false,
+    });
+  });
+
+  it("omits a self-referential nextTrack on a single-finding loop", async () => {
+    getRadioEligibleTracks.mockResolvedValueOnce([
+      { logId: "001.1.1A", observationDurationMs: 20_000, trackId: "track-a" },
+    ]);
+    getRadioScheduleFingerprint.mockResolvedValueOnce("1:x");
+    getRadioScheduleAnchor.mockResolvedValueOnce({ epochMs: Date.now(), version: "1:x" });
+    getTrackByIdOrLogId.mockResolvedValue(CURRENT);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(get("https://www.fluncle.com/api/v1/radio/now-playing"));
+
+    const body = (await response?.json()) as { nowPlaying: { nextTrack?: unknown } };
+    expect(body.nowPlaying.nextTrack).toBeUndefined();
+  });
+});
+
 // The generated PUBLIC OpenAPI document — the spec served at /api/v1/openapi.json
 // (Scalar + Postman read it) since the spec flip retired the static
 // public/openapi.json. The load-bearing constraint: it carries EVERY public op and
@@ -330,6 +428,7 @@ const PUBLIC_OPERATION_IDS = [
   "getPrivateAccountExport",
   "getPrivateGalaxyProgress",
   "getPrivateMutationToken",
+  "getRadioNowPlaying",
   "getRandomRadioTrack",
   "getRandomTrack",
   "getTrack",

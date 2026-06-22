@@ -5,37 +5,48 @@ import { BrandIcon } from "@/components/brand-icon";
 import { Button } from "@/components/ui/button";
 import { siteUrl } from "@/lib/fluncle-links";
 import { formatDateLong } from "@/lib/format";
-import { videoCrop, videoCropPoster } from "@/lib/media";
-import { fetchRandomRadioTrack, type Track } from "@/lib/tracks";
+import { videoClipCrop, videoCrop, videoCropPoster } from "@/lib/media";
+import { OFFSET_SNAP_GRID_MS, SEGMENT_FLOOR_MS, snapOffsetMs } from "@/lib/radio-schedule";
+import { fetchRadioNowPlaying, type RadioNowPlaying, type Track } from "@/lib/tracks";
 import { DESKTOP_QUERY, useMediaQuery } from "@/lib/use-media-query";
 
-// radio.fluncle.com — the cycling observation station (RFC Unit B). A lean-back
-// surface that loops Fluncle's Findings: each finding's CLEAN footage running
-// silent under its spoken observation, then on to the next, forever. It plays
-// ZERO commercial audio — the video is the audio-stripped square master and the
-// only sound is the recovered observation (the first HEARD surface). The host
-// rewrite in router.tsx serves this route at radio.fluncle.com/ (mirrors galaxy).
+// radio.fluncle.com — ONE synchronized run of Fluncle's Findings (RFC
+// radio-broadcast.md). Not a per-client shuffle: a single server-authoritative
+// loop every listener computes their place in and drops into mid-flight. Each
+// finding's CLEAN footage runs silent under its spoken observation, then on to the
+// next, forever; the only sound is the recovered observation (the first HEARD
+// surface). The audio IS the clock — the video loops silently underneath and is
+// never seek-aligned. The host rewrite in router.tsx serves this at
+// radio.fluncle.com/ (mirrors galaxy).
 
 const title = "Fluncle, observing";
 const description =
-  "Drum & bass bangers from another dimension. A continuous run of Fluncle's findings, each one playing under the observation he logged when he got there.";
+  "Drum & bass bangers from another dimension. One continuous run of Fluncle's findings, each one playing under the observation he logged when he got there.";
 
 // Fluncle's voice, recovered-log register (copywriting-fluncle, VOICE.md §5):
-// in-fiction, no banned identity words, no exclamation marks, warm and dry.
+// in-fiction, no banned identity words (NEVER broadcast/station/tune in/live —
+// the retired radio-operator metaphor), no exclamation marks, warm and dry.
 const COPY = {
-  // The begin-gate (audible audio needs a gesture). The control is "Begin"
-  // (decided); the subtitle says what this is.
-  beginSubtitle:
-    "A continuous run of findings. Each one plays under what I found when I got there.",
-  // Nothing radio-eligible yet (or a run of broken assets gave out).
+  // The begin-gate. The control is "Begin"; the subtitle says what this is — one
+  // continuous run you drop into mid-flight (the one UI truth synchronization
+  // adds, expressed in-fiction, never as a status widget).
+  beginSubtitle: "One continuous run of findings. You drop in mid-flight, wherever I've got to.",
+  // Nothing radio-eligible yet (or the run gave out).
   empty: "Nothing logged out here yet. Quiet sector tonight.",
-  // Between segments, while the next finding's assets load.
-  loading: "Still listening for the next one.",
+  // While the next finding's assets load, or while catching up to the run.
+  loading: "Catching up to the run.",
 } as const;
 
-// Give up to the empty state after this many consecutive failed picks (a dead
-// endpoint or a run of broken objects) instead of hammering forever.
-const MAX_SKIP_ATTEMPTS = 5;
+// Resync ladder (RFC §2.5 / Decision #4). The audio currentTime is checked
+// against the locally-computed expected offset; small drift rides (a hard seek is
+// a worse glitch than the drift on a lean-back voice run), medium drift nudges the
+// rate, large drift / a tab-return / a schedule change hard-seeks.
+const RIDE_MS = 250; // < this: let it ride (imperceptible).
+const HARD_SEEK_MS = 2000; // > this: hard-seek (treat as a fresh join).
+const SOFT_CORRECT_RATE = 1.03; // the brief nudge for medium drift.
+// Poll the server clock to refresh skew + catch a catalogue change. The boundary
+// re-fetch (on `ended`) doubles as a resync; this is the between-segments cadence.
+const SKEW_POLL_MS = 45_000;
 
 export const Route = createFileRoute("/radio")({
   component: RadioPage,
@@ -52,125 +63,185 @@ export const Route = createFileRoute("/radio")({
   }),
 });
 
-/** Build the orientation-cropped, audio-stripped silent video URL for a finding. */
-function silentVideoUrl(track: Track, desktop: boolean): string | undefined {
-  // Radio draws its OWN chrome, so it only ever plays a finding with a clean
-  // square master (the eligibility filter guarantees videoSquaredAt is set) — a
-  // centre-crop to the viewport orientation, with the audio stripped so the only
-  // sound on the surface is the observation.
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
+/**
+ * Build the orientation-cropped, audio-stripped silent video URL for a finding.
+ * `startSeconds` (a fresh join, mid-segment) clips the master to begin AT the
+ * snapped offset (the fast offset-join); omitted (a scheduled transition from the
+ * head, or the steady-state loop) requests the warm, shared looping crop.
+ */
+function silentVideoUrl(track: Track, desktop: boolean, startSeconds?: number): string | undefined {
+  // Radio draws its OWN chrome, so it only plays a finding with a clean square
+  // master (eligibility guarantees videoSquaredAt is set) — a centre-crop to the
+  // viewport orientation, audio stripped so the only sound is the observation.
   if (!track.logId || !track.videoSquaredAt) {
     return undefined;
   }
 
-  // ONE combined transform (crop + audio-strip), not nested transforms — see videoCrop.
-  return videoCrop(track.logId, desktop ? "landscape" : "portrait", undefined, true);
+  const orientation = desktop ? "landscape" : "portrait";
+
+  // ONE combined transform (crop + audio-strip [+ clip]), never nested — see media.ts.
+  return startSeconds && startSeconds > 0
+    ? videoClipCrop(track.logId, orientation, startSeconds)
+    : videoCrop(track.logId, orientation, undefined, true);
 }
 
-/** The cheap cropped opening frame, matching the clip's orientation. */
-function silentPosterUrl(track: Track, desktop: boolean): string | undefined {
+/** The cheap cropped poster frame at the join offset (0 for a head start). */
+function silentPosterUrl(track: Track, desktop: boolean, atSeconds = 0): string | undefined {
   if (!track.logId || !track.videoSquaredAt) {
     return undefined;
   }
 
-  return videoCropPoster(track.logId, desktop ? "landscape" : "portrait");
+  return videoCropPoster(track.logId, desktop ? "landscape" : "portrait", undefined, atSeconds);
 }
+
+/** The floored, real-or-fallback segment length for a finding (ms). */
+function segmentMs(track: Track): number {
+  const raw = track.observationDurationMs;
+
+  return typeof raw === "number" && raw >= SEGMENT_FLOOR_MS ? raw : SEGMENT_FLOOR_MS;
+}
+
+type Playhead = {
+  // Whether this segment was JOINED mid-flight (clip at the snapped offset) or
+  // entered from the head (a scheduled transition / first finding from offset 0).
+  joinedMidSegment: boolean;
+  offsetMs: number;
+  track: Track;
+};
 
 function RadioPage() {
   // The begin-gate: false until the first user gesture unlocks audible audio.
   const [started, setStarted] = useState(false);
-  // The finding currently on the surface (undefined until the first one loads).
-  const [current, setCurrent] = useState<Track | undefined>(undefined);
-  // The preloaded NEXT finding, fetched during the current segment for a smooth
-  // hand-off; consumed by advance() and re-warmed each cycle.
+  // The finding on the surface + the offset it was placed at (undefined until the
+  // first slot resolves).
+  const [playhead, setPlayhead] = useState<Playhead | undefined>(undefined);
+  // The preloaded NEXT finding (from the schedule) — always plays from its head.
   const [next, setNext] = useState<Track | undefined>(undefined);
-  // No finding could be played (empty eligible set, or a broken-asset run).
+  // No finding could be played (empty eligible set, or a broken run).
   const [exhausted, setExhausted] = useState(false);
 
-  // The desktop verdict drives the crop orientation: landscape full-screen on
-  // desktop, portrait on mobile. `false` on the server / first paint (mobile
-  // portrait default), then the live matchMedia verdict — no SSR mismatch.
+  // The desktop verdict drives the crop orientation: landscape on desktop,
+  // portrait on mobile. `false` on the server / first paint, then the live verdict.
   const isDesktop = useMediaQuery(DESKTOP_QUERY);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  // The latest preloaded finding, read by advance() without re-subscribing it.
+  // The clock skew (serverEpochMs − clientReceiveMs, smoothed): the client
+  // computes its own expected offset from `Date.now() + skew` between polls.
+  const skewMsRef = useRef<number>(0);
+  // The next preloaded finding, read without re-subscribing.
   const nextRef = useRef<Track | undefined>(undefined);
   nextRef.current = next;
 
-  // Advance to the next finding: take the preloaded one if it's ready, else fetch
-  // fresh, retrying a few times so a single broken object skips rather than
-  // stalls. A whole run of failures (a dead endpoint) gives up to the empty
-  // state. Clears the preload so the current-segment effect re-warms a fresh one.
+  // Resolve the authoritative now-playing slot from the server, refresh the clock
+  // skew (NTP-lite), and place the playhead at the returned offset. `fromHead`
+  // forces a head-start (a scheduled transition rolling onto the next segment),
+  // overriding the server's mid-segment offset for an already-watching client.
+  const resolveSlot = useCallback(
+    async (fromHead = false): Promise<RadioNowPlaying | undefined> => {
+      const sentAt = Date.now();
+      const slot = await fetchRadioNowPlaying();
+      const receivedAt = Date.now();
+      // NTP-lite: server time at response build, corrected by half the round-trip.
+      const sample = slot.serverEpochMs + (receivedAt - sentAt) / 2 - receivedAt;
+      // Smooth across polls to reject jitter (a light EMA; the first sample seeds it).
+      skewMsRef.current = skewMsRef.current === 0 ? sample : skewMsRef.current * 0.7 + sample * 0.3;
+
+      setExhausted(false);
+      setPlayhead({
+        joinedMidSegment: !fromHead && slot.offsetMs > 0,
+        offsetMs: fromHead ? 0 : slot.offsetMs,
+        track: slot.currentTrack,
+      });
+      setNext(slot.nextTrack);
+
+      return slot;
+    },
+    [],
+  );
+
+  // Advance at a segment boundary: roll onto the preloaded next finding from its
+  // HEAD if it's ready (the smooth scheduled transition), else re-resolve from the
+  // server. A broken run gives up to the empty state. NEVER a random skip — that
+  // would desync this one client forever; on trouble we resync to the schedule.
   const advance = useCallback(async () => {
     const preloaded = nextRef.current;
     nextRef.current = undefined;
     setNext(undefined);
 
     if (preloaded) {
-      setCurrent(preloaded);
       setExhausted(false);
-
-      return;
-    }
-
-    for (let attempt = 0; attempt < MAX_SKIP_ATTEMPTS; attempt++) {
-      try {
-        const track = await fetchRandomRadioTrack();
-
-        setCurrent(track);
-        setExhausted(false);
-
-        return;
-      } catch {
-        // Try again with a fresh random pick.
-      }
-    }
-
-    setExhausted(true);
-  }, []);
-
-  // Begin: the first gesture unlocks audio and pulls the first finding.
-  const begin = useCallback(() => {
-    setStarted(true);
-    void advance();
-  }, [advance]);
-
-  // Preload the NEXT finding during the current segment, so the swap on `ended`
-  // paints instantly. A failed preload is harmless: advance() falls back to a
-  // fresh fetch + skip.
-  useEffect(() => {
-    if (!started || !current) {
-      return;
-    }
-
-    let cancelled = false;
-
-    fetchRandomRadioTrack()
-      .then((track) => {
-        if (!cancelled) {
-          setNext(track);
-        }
-      })
-      .catch(() => {
-        // Harmless — advance() re-fetches when the segment ends.
+      setPlayhead({ joinedMidSegment: false, offsetMs: 0, track: preloaded });
+      // Re-resolve in the background to refresh the next preload + the skew, but
+      // keep the smooth head-start we already painted.
+      void resolveSlot(true).catch(() => {
+        // Harmless — the boundary re-fetch already placed the head-start.
       });
 
-    return () => {
-      cancelled = true;
-    };
-  }, [started, current]);
+      return;
+    }
+
+    try {
+      await resolveSlot(true);
+    } catch {
+      setExhausted(true);
+    }
+  }, [resolveSlot]);
+
+  // Begin: the first gesture unlocks audio and resolves the synced slot — a fresh
+  // joiner lands mid-flight at the server's offset.
+  const begin = useCallback(() => {
+    setStarted(true);
+    void resolveSlot().catch(() => setExhausted(true));
+  }, [resolveSlot]);
+
+  // Poll the server clock between segments to refresh skew and catch a catalogue
+  // change (a changed scheduleVersion re-fetches the schedule). The boundary
+  // re-fetch on `ended` is the other resync point.
+  useEffect(() => {
+    if (!started || !playhead) {
+      return;
+    }
+
+    const id = window.setInterval(() => {
+      const previousVersionTrack = nextRef.current;
+
+      void fetchRadioNowPlaying()
+        .then((slot) => {
+          const sample = slot.serverEpochMs - Date.now();
+          skewMsRef.current = skewMsRef.current * 0.7 + sample * 0.3;
+
+          // A grown / re-observed catalogue: the schedule rolled, so hard-resync to
+          // the new authoritative slot rather than drifting on the stale one.
+          if (slot.currentTrack.trackId !== playhead.track.trackId && !previousVersionTrack) {
+            void resolveSlot();
+          }
+        })
+        .catch(() => {
+          // A transient failure is harmless — the next poll or boundary re-syncs.
+        });
+    }, SKEW_POLL_MS);
+
+    return () => window.clearInterval(id);
+  }, [started, playhead, resolveSlot]);
 
   // Drive the looping silent video. It plays muted (its audio is stripped anyway),
-  // loops under the observation, and pauses under reduced motion (the poster frame
-  // holds; the observation stays audible — the lean-back point survives).
+  // loops under the observation, and pauses under reduced motion (the offset
+  // poster holds; the observation stays audible — the lean-back point survives).
   useEffect(() => {
     const video = videoRef.current;
 
-    if (!video || !current) {
+    if (!video || !playhead) {
       return;
     }
 
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    if (prefersReducedMotion()) {
       video.pause();
 
       return;
@@ -179,34 +250,103 @@ function RadioPage() {
     video.play().catch(() => {
       // Autoplay denied (muted should be fine) — the poster frame stands in.
     });
-  }, [current, isDesktop]);
+  }, [playhead, isDesktop]);
 
-  // Drive the observation: play the new finding's audio once. When it ends,
-  // advance. A load/play error skips to the next finding rather than stalling
-  // (a stale or missing R2 object).
+  // Drive the observation: seek to the join offset BEFORE play (the audio is the
+  // authoritative clock), then run the resync ladder against the locally-computed
+  // expected offset. On `ended`, advance to the next scheduled segment. A
+  // load/play error RESYNCS to the schedule (never a random skip — that desyncs
+  // this client permanently).
   useEffect(() => {
     const audio = audioRef.current;
 
-    if (!audio || !current?.observationAudioUrl) {
+    if (!audio || !playhead?.track.observationAudioUrl) {
       return;
     }
 
+    const segMs = segmentMs(playhead.track);
+    // The wall-clock instant this segment started, in the (skew-corrected) server
+    // clock — the anchor the local resync computes the expected offset from.
+    const segmentStartServerMs = Date.now() + skewMsRef.current - playhead.offsetMs;
+
+    const expectedOffsetMs = () => Date.now() + skewMsRef.current - segmentStartServerMs;
+
+    // Seek to the offset before playing — the audio leads, the video follows it.
+    audio.currentTime = playhead.offsetMs / 1000;
+    audio.playbackRate = 1;
+
     const onEnded = () => void advance();
-    const onError = () => void advance();
+    const onError = () => {
+      // RESYNC, don't skip: a random skip on a synchronized surface desyncs this
+      // client forever. Re-resolve the authoritative slot.
+      void resolveSlot().catch(() => setExhausted(true));
+    };
+
+    // The resync ladder: nudge toward the expected offset without audible re-seeks
+    // for jitter, but guarantee convergence after a sleep.
+    const onTimeUpdate = () => {
+      const drift = audio.currentTime * 1000 - expectedOffsetMs();
+      const abs = Math.abs(drift);
+
+      if (abs <= RIDE_MS) {
+        if (audio.playbackRate !== 1) {
+          audio.playbackRate = 1;
+        }
+
+        return;
+      }
+
+      if (abs <= HARD_SEEK_MS) {
+        // Behind the expected offset → speed up; ahead → ease down.
+        audio.playbackRate = drift < 0 ? SOFT_CORRECT_RATE : 1 / SOFT_CORRECT_RATE;
+
+        return;
+      }
+
+      // Large drift → hard-seek to the expected offset (a fresh-join correction).
+      audio.playbackRate = 1;
+      const target = Math.min(expectedOffsetMs(), segMs) / 1000;
+
+      if (target >= 0) {
+        audio.currentTime = target;
+      }
+    };
+
+    // A backgrounded tab is throttled and returns seconds off → always hard-seek.
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+
+      const target = expectedOffsetMs();
+
+      if (target >= segMs) {
+        void advance();
+
+        return;
+      }
+
+      audio.playbackRate = 1;
+      audio.currentTime = Math.max(0, target) / 1000;
+    };
 
     audio.addEventListener("ended", onEnded);
     audio.addEventListener("error", onError);
+    audio.addEventListener("timeupdate", onTimeUpdate);
+    document.addEventListener("visibilitychange", onVisible);
     audio.play().catch(() => {
-      // Playback denied or the object died — skip to the next finding.
-      void advance();
+      // Playback denied or the object died — resync rather than stall.
+      void resolveSlot().catch(() => setExhausted(true));
     });
 
     return () => {
       audio.removeEventListener("ended", onEnded);
       audio.removeEventListener("error", onError);
+      audio.removeEventListener("timeupdate", onTimeUpdate);
+      document.removeEventListener("visibilitychange", onVisible);
       audio.pause();
     };
-  }, [current, advance]);
+  }, [playhead, advance, resolveSlot]);
 
   if (!started) {
     return <BeginGate onBegin={begin} />;
@@ -216,13 +356,22 @@ function RadioPage() {
     return <RadioMessage wayBack>{COPY.empty}</RadioMessage>;
   }
 
-  if (!current) {
+  if (!playhead) {
     return <RadioMessage>{COPY.loading}</RadioMessage>;
   }
 
-  const videoUrl = silentVideoUrl(current, isDesktop);
-  const posterUrl = silentPosterUrl(current, isDesktop);
+  const current = playhead.track;
+  // A mid-segment join snaps the clip + poster to the cache grid (joiners share a
+  // warm clip); the residual is nudged by the resync ladder. A head start (offset
+  // 0 — a scheduled transition / the first finding) plays the warm looping crop.
+  const joinSnapSeconds = playhead.joinedMidSegment
+    ? snapOffsetMs(playhead.offsetMs, OFFSET_SNAP_GRID_MS) / 1000
+    : 0;
+  const videoUrl = silentVideoUrl(current, isDesktop, joinSnapSeconds);
+  const posterUrl = silentPosterUrl(current, isDesktop, joinSnapSeconds);
   const observationUrl = current.observationAudioUrl;
+  // The schedule's next finding always plays from its head, so preload the warm
+  // steady-state crop (not a time= clip) — we know it WILL play and WHEN.
   const nextVideoUrl = next ? silentVideoUrl(next, isDesktop) : undefined;
 
   return (
@@ -233,11 +382,11 @@ function RadioPage() {
         <video
           aria-hidden="true"
           className="radio-footage"
-          // A broken video skips to the next finding rather than stalling.
+          // A broken video resyncs to the schedule rather than skipping randomly.
           key={videoUrl}
           loop
           muted
-          onError={() => void advance()}
+          onError={() => void resolveSlot().catch(() => setExhausted(true))}
           playsInline
           poster={posterUrl}
           preload="auto"
@@ -246,7 +395,7 @@ function RadioPage() {
         />
       ) : (
         // Eligibility guarantees a square master, so this is only reached if the
-        // logId is somehow absent — advance rather than show a blank stage.
+        // logId is somehow absent — resync rather than show a blank stage.
         <RadioMessage>{COPY.loading}</RadioMessage>
       )}
 
@@ -290,15 +439,16 @@ function RadioPage() {
         </div>
       </div>
 
-      {/* The observation: its own audio artifact, played once over the looping
-          silent video. Hidden; advance() runs on its `ended`. */}
+      {/* The observation: its own audio artifact, seeked to the join offset and
+          played over the looping silent video. Hidden; advance() runs on `ended`. */}
       {observationUrl ? (
         <audio key={observationUrl} preload="auto" ref={audioRef} src={observationUrl}>
           <track kind="captions" />
         </audio>
       ) : undefined}
 
-      {/* Hidden preload of the next finding's assets for an instant hand-off. */}
+      {/* Hidden preload of the NEXT scheduled finding (from its head) for an
+          instant hand-off — preload="auto" because we know it plays, and when. */}
       <div aria-hidden="true" className="sr-only">
         {nextVideoUrl ? <video muted playsInline preload="auto" src={nextVideoUrl} /> : undefined}
         {next?.observationAudioUrl ? (

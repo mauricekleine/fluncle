@@ -69,6 +69,25 @@ export const TrackListItemSchema = z
   })
   .meta({ id: "TrackListItem" });
 
+/**
+ * The radio.fluncle.com now-playing slot (`RadioNowPlaying` in ../index.ts; RFC
+ * radio-broadcast.md Unit A). The server-authoritative position on the shared loop
+ * — `currentTrack` + `offsetMs` is what's playing right now; `nextTrack` the
+ * preload target (offset 0); `serverEpochMs` + `scheduleVersion` drive the
+ * client's NTP-lite skew + the re-fetch on a changed catalogue.
+ */
+export const RadioNowPlayingSchema = z
+  .object({
+    currentTrack: TrackListItemSchema,
+    nextTrack: TrackListItemSchema.optional(),
+    offsetMs: z.number(),
+    scheduleVersion: z.string(),
+    serverEpochMs: z.number(),
+    totalLoopDurationMs: z.number(),
+    trackCount: z.number(),
+  })
+  .meta({ id: "RadioNowPlaying" });
+
 /** A per-platform distribution row (`MixtapeMember`-adjacent; see ../index.ts). */
 const MixtapeMemberSchema = TrackListItemSchema.extend({
   startMs: z.number().optional(),

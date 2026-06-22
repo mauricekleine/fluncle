@@ -30,6 +30,7 @@ import {
   type EditionDTOSchema,
   type MixtapeDTOSchema,
   type MixtapeSocialPostItemSchema,
+  type RadioNowPlayingSchema,
   type SocialPostItemSchema,
   type SubmissionSchema,
   type TrackFeaturesSchema,
@@ -129,6 +130,18 @@ export type RandomTrackResponse = Ok<{ track: TrackListItem }>;
 
 /** `/api/tracks/:idOrLogId` response: a finding or a mixtape. */
 export type TrackGetResponse = Ok<{ track: TrackListItem }> | Ok<{ mixtape: MixtapeDTO }>;
+
+// ── Radio (the shared broadcast clock) ───────────────────────────────────────
+
+/**
+ * The radio.fluncle.com now-playing slot on the shared loop (RFC
+ * radio-broadcast.md Unit A). Inferred from `RadioNowPlayingSchema`
+ * (./orpc/_shared.ts) — the schema the `/radio/now-playing` op validates against.
+ */
+export type RadioNowPlaying = z.infer<typeof RadioNowPlayingSchema>;
+
+/** `/api/v1/radio/now-playing` response. */
+export type RadioNowPlayingResponse = Ok<{ nowPlaying: RadioNowPlaying }>;
 
 // ── Mixtape API envelopes ────────────────────────────────────────────────────
 

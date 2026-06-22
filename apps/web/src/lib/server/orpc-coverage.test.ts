@@ -50,10 +50,12 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   // enumerate; documented here as part of the public surface net.
   "GET /newsletter/editions": "list_editions",
   "GET /newsletter/editions/{number}": "get_edition",
-  // The cycling station's read (RFC Unit B). Contract-only — there is no TanStack
-  // alias file under /api/v1/radio (oRPC serves it straight off the registry), so
-  // it has no route-file basename to enumerate; it is documented here as part of
-  // the public surface net.
+  // The cycling station's reads. Contract-only — there is no TanStack alias file
+  // under /api/v1/radio (oRPC serves them straight off the registry), so they have
+  // no route-file basename to enumerate; documented here as part of the public
+  // surface net. `now-playing` is the shared-broadcast clock (RFC
+  // radio-broadcast.md Unit A); `random` is the kept fallback (RFC Unit B).
+  "GET /radio/now-playing": "get_radio_now_playing",
   "GET /radio/random": "get_random_radio_track",
   "GET /search": "search_tracks",
   "GET /stories": "list_stories",
