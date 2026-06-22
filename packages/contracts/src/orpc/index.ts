@@ -22,12 +22,14 @@
 // live route; resources are plural, the op noun stays singular.
 
 import { adminBackfillsContract } from "./admin-backfills";
+import { adminEditionsContract } from "./admin-editions";
 import { adminMixtapesContract } from "./admin-mixtapes";
 import { adminSocialContract } from "./admin-social";
 import { adminSubmissionsContract } from "./admin-submissions";
 import { adminTokensContract } from "./admin-tokens";
 import { adminTracksContract } from "./admin-tracks";
 import { devicesContract } from "./devices";
+import { editionsContract } from "./editions";
 import { healthContract } from "./health";
 import { meContract } from "./me";
 import { meGalaxyContract } from "./me-galaxy";
@@ -43,6 +45,7 @@ import { tracksContract } from "./tracks";
 // Re-export the per-op contracts so existing importers (and the typed client)
 // keep their entrypoints.
 export { backfillDiscogs, backfillLastfm, enrichTrack } from "./admin-backfills";
+export { createEdition, sendEdition, updateEdition } from "./admin-editions";
 export {
   addMixtapeMembers,
   createMixtape,
@@ -59,6 +62,7 @@ export {
 } from "./admin-mixtapes";
 export { draftTrackSocial, listTrackSocial, updateTrackSocial } from "./admin-social";
 export { deregisterDevice, registerDevice, sweepPushReceipts } from "./devices";
+export { getEdition, listEditions } from "./editions";
 export {
   approveSubmission,
   getSubmission,
@@ -104,6 +108,8 @@ export { listStories } from "./stories";
 export { type SubmissionBody, submitTrack } from "./submissions";
 export { getRandomTrack, getTrack, listTracks } from "./tracks";
 export {
+  EditionContentSchema,
+  EditionDTOSchema,
   MixtapeDTOSchema,
   MixtapeSocialPostItemSchema,
   PublicUserSchema,
@@ -125,12 +131,14 @@ export {
  */
 export const contract = {
   ...adminBackfillsContract,
+  ...adminEditionsContract,
   ...adminMixtapesContract,
   ...adminSocialContract,
   ...adminSubmissionsContract,
   ...adminTokensContract,
   ...adminTracksContract,
   ...devicesContract,
+  ...editionsContract,
   ...healthContract,
   ...meContract,
   ...meGalaxyContract,

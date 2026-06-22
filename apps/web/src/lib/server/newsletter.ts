@@ -1,10 +1,9 @@
 import { type NewsletterBody } from "@fluncle/contracts/orpc";
-import { readEnv, readOptionalEnv } from "./env";
 import { getPublicSession } from "./public-auth";
 import { assertRateLimit } from "./rate-limit";
+import { addContactToSegment } from "./resend";
 import { ApiError } from "./spotify";
 
-const loopsApiUrl = "https://app.loops.so/api/v1";
 const rateLimitWindowMs = 60 * 60 * 1000;
 const rateLimitMaxAttempts = 5;
 const maxEmailLength = 254;
@@ -14,6 +13,14 @@ const maxEmailLength = 254;
 // by design; `validateInput` narrows it.
 export type NewsletterInput = NewsletterBody;
 
+// Repointed Loops → Resend (docs/rfcs/newsletter-own-the-stack.md §4.1). The public
+// contract/endpoint shape is UNCHANGED — same `POST /newsletter`, same validation,
+// same rate limit, same bare `{ ok: true }` — only the list-of-record backend
+// swaps: the email is added to the Fluncle Resend SEGMENT instead of the Loops
+// contacts list. Resend is now the sole list-of-record (the clean mirror of the old
+// Loops-only design; no local subscribers table). The on-subscribe confirmation
+// transactional is dropped for now: single-opt-in stays (RFC §1 non-goals keep
+// today's posture), and every broadcast carries the managed RFC-8058 unsubscribe.
 export async function subscribeToNewsletter(
   body: NewsletterInput,
   request: Request,
@@ -35,18 +42,7 @@ export async function subscribeToNewsletter(
     windowMs: rateLimitWindowMs,
   });
 
-  const apiKey = await readEnv("LOOPS_API_KEY");
-  const created = await createContact(apiKey, email);
-
-  if (!created) {
-    return;
-  }
-
-  const transactionalId = await readOptionalEnv("LOOPS_TRANSACTIONAL_ID");
-
-  if (transactionalId) {
-    await sendConfirmation(apiKey, transactionalId, email);
-  }
+  await addContactToSegment(email);
 }
 
 function validateInput(body: NewsletterInput): string {
@@ -56,7 +52,7 @@ function validateInput(body: NewsletterInput): string {
 
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
 
-  // Deliberately loose shape check; Loops validates properly on its side.
+  // Deliberately loose shape check; Resend validates properly on its side.
   const looksLikeEmail =
     email.length >= 6 &&
     email.length <= maxEmailLength &&
@@ -67,66 +63,4 @@ function validateInput(body: NewsletterInput): string {
   }
 
   return email;
-}
-
-// Returns true when the contact is on the list (newly created or already
-// there); Loops returns 409 for an existing email, which is success for us.
-async function createContact(apiKey: string, email: string): Promise<boolean> {
-  const response = await fetch(`${loopsApiUrl}/contacts/create`, {
-    body: JSON.stringify({
-      email,
-      source: "fluncle.com",
-      subscribed: true,
-    }),
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    method: "POST",
-  });
-
-  if (response.ok || response.status === 409) {
-    return true;
-  }
-
-  if (response.status === 429) {
-    throw new ApiError("rate_limited", "Try again in a minute.", 503);
-  }
-
-  const data = (await response.json().catch(() => undefined)) as { message?: string } | undefined;
-
-  throw new ApiError(
-    "subscribe_failed",
-    data?.message ?? `Could not subscribe (${response.status})`,
-    502,
-  );
-}
-
-// Confirmation is a courtesy on top of a successful subscribe; a failure here
-// (missing template, transient error) must not unsubscribe the outcome, so it
-// logs and returns. Loops dedupes resends for 24h via the Idempotency-Key.
-async function sendConfirmation(
-  apiKey: string,
-  transactionalId: string,
-  email: string,
-): Promise<void> {
-  const response = await fetch(`${loopsApiUrl}/transactional`, {
-    body: JSON.stringify({
-      email,
-      transactionalId,
-    }),
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "Idempotency-Key": `newsletter-confirm:${email}`,
-    },
-    method: "POST",
-  });
-
-  if (!response.ok && response.status !== 409) {
-    const data = (await response.json().catch(() => undefined)) as { message?: string } | undefined;
-    console.error(
-      `Newsletter confirmation send failed (${response.status}): ${data?.message ?? "unknown"}`,
-    );
-  }
 }

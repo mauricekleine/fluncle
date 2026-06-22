@@ -27,6 +27,7 @@
 
 import { type z } from "zod";
 import {
+  type EditionDTOSchema,
   type MixtapeDTOSchema,
   type MixtapeSocialPostItemSchema,
   type SocialPostItemSchema,
@@ -136,6 +137,19 @@ export type MixtapeCreateResponse = Ok<{ mixtape: MixtapeDTO }>;
 export type MixtapeUpdateResponse = Ok<{ mixtape: MixtapeDTO }>;
 export type MixtapePublishResponse = Ok<{ mixtape: MixtapeDTO }>;
 export type MixtapeDeleteResponse = Ok<{}>;
+
+// ── Edition (the newsletter archive) ─────────────────────────────────────────
+
+/**
+ * A newsletter edition as the `/newsletter` archive + `/api/v1/newsletter/editions`
+ * emit it (docs/rfcs/newsletter-own-the-stack.md). NOT a collectible — a plain
+ * integer `number` (minted on send), no Log ID, no coordinate. Inferred from
+ * `EditionDTOSchema` (./orpc/_shared.ts), so this DTO cannot drift from the wire.
+ */
+export type EditionDTO = z.infer<typeof EditionDTOSchema>;
+
+export type EditionsResponse = Ok<{ editions: EditionDTO[] }>;
+export type EditionResponse = Ok<{ edition: EditionDTO }>;
 
 // ── Mixtape distribution (audio→Mixcloud, video→YouTube) ─────────────────────
 // One CLI command mints a mixtape into `distributing`, moves the local bytes to
