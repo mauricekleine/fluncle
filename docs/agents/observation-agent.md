@@ -6,14 +6,16 @@ It is one more step the enrich agent runs, after video — not a new runtime. Th
 
 ## The two artifacts (don't conflate them)
 
-|            | `context_note` (the facts)                                                     | the observation script (the voice)                                                                                                                                        |
-| ---------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **What**   | Firecrawl-derived FACTS: label, year, release context, artist background. Dry. | A 20–45s recovered field observation in Fluncle's voice.                                                                                                                  |
-| **Source** | The Worker's firecrawl search (or `--context-note` from the agent).            | Written by the **agent** (it holds `copywriting-fluncle`) from the context + track metadata + vibe placement + the video's vehicle/palette. Never a paraphrase of lyrics. |
-| **Lives**  | `context_note` column (internal).                                              | `observation.txt` + `observation.json` at `found.fluncle.com/<log-id>/`.                                                                                                  |
-| **Gate**   | none                                                                           | the **voice gate** (below).                                                                                                                                               |
+|            | `context_note` (the facts)                                                                                                                                             | the observation script (the voice)                                                                                                                                        |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **What**   | A clean, distilled note of FACTS: label, year, release context, artist background. 1–2 dry Wikipedia-plain paragraphs + one `Texture:` line of sensory/scene pointers. | A 20–45s recovered field observation in Fluncle's voice.                                                                                                                  |
+| **Source** | The Worker's Firecrawl search → distilled by a small LLM (OpenRouter), or `--context-note` from the agent.                                                             | Written by the **agent** (it holds `copywriting-fluncle`) from the context + track metadata + vibe placement + the video's vehicle/palette. Never a paraphrase of lyrics. |
+| **Lives**  | `context_note` column (internal), with a `context_status` reliability marker.                                                                                          | `observation.txt` + `observation.json` at `found.fluncle.com/<log-id>/`.                                                                                                  |
+| **Gate**   | none                                                                                                                                                                   | the **voice gate** (below).                                                                                                                                               |
 
 `context_note` is **internal creative fuel** — never rendered on `/log`, never in JSON-LD/RSS/llms.txt, never quotes lyrics, and writing it alone does not bump `updated_at`. It is **not** the editorial `note` (the operator's public "why").
+
+The note is **distilled**, not raw search-soup: `context_track` runs the Firecrawl search (query = artist + title + label + the genre anchor; the release **date** is deliberately left out — a literal date narrows/breaks the search), then feeds the raw snippets + source URLs to a small LLM (OpenRouter, model from `OPENROUTER_CONTEXT_MODEL`, default `anthropic/claude-haiku-4.5`) that returns a grounded, junk-free note. Best-effort: a distil failure falls back to the cleaned raw snippets rather than blocking the render. The `context_status` column (`pending`/`resolved`/`empty`/`failed`) makes a confirmed-empty fetch distinct from never-attempted, so the context queue (`hasContext=false`, status-aware) skips a hopeless find instead of re-burning Firecrawl + the LLM every tick (`--retry-empty` re-picks `empty`; `failed` is retried next tick).
 
 ## The command
 
@@ -53,4 +55,6 @@ The script is a live Fluncle voice surface, **heard** in a synthetic voice — a
 - `ELEVENLABS_API_KEY` — secret (`wrangler secret put ELEVENLABS_API_KEY`).
 - `ELEVENLABS_VOICE_ID` — non-secret var in `wrangler.jsonc` (the bespoke Fluncle voice).
 - `FIRECRAWL_API_KEY` — already a declared Worker secret.
+- `OPENROUTER_API_KEY` — secret, drives the context-note distil pass. Read via `readOptionalEnv`: unset ⇒ the distil degrades gracefully to the cleaned raw snippets (never blocks a render).
+- `OPENROUTER_CONTEXT_MODEL` — OPTIONAL non-secret var overriding the distil model; absent, defaults to `anthropic/claude-haiku-4.5`.
 - R2 (`R2_*`) — already present.

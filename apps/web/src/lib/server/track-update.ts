@@ -23,6 +23,12 @@ export type TrackUpdate = {
    * it alone does NOT bump updated_at (it moves no public surface).
    */
   contextNote?: string;
+  /**
+   * The context-fetch reliability marker (the `context_track` queue's resume state).
+   * Internal only — never surfaced through public DTOs, and (like contextNote)
+   * writing it does NOT bump updated_at. See schema.ts `contextStatus`.
+   */
+  contextStatus?: "pending" | "resolved" | "empty" | "failed";
   enrichmentStatus?: "pending" | "processing" | "done" | "failed";
   /** Raw audio feature vector as a JSON string (training data for the classifier). */
   features?: string;
@@ -65,7 +71,8 @@ export type TrackUpdate = {
 // The fields whose write changes a PUBLIC surface, so it should move the
 // sitemap/log `lastmod` (updated_at). Everything else (features, contextNote) is
 // internal training/creative fuel: written by the enrichment agent, never
-// rendered, so it must not bump lastmod. isrc/logId backfills are identity
+// rendered, so it must not bump lastmod (contextStatus is likewise internal —
+// the context-fetch resume marker). isrc/logId backfills are identity
 // repairs that DO surface (the coordinate appears everywhere), so they count.
 const VISIBLE_FIELDS = new Set<keyof TrackUpdate>([
   "bpm",
@@ -171,6 +178,11 @@ export async function updateTrack(
   if (update.contextNote !== undefined) {
     sets.push("context_note = ?");
     args.push(update.contextNote);
+  }
+
+  if (update.contextStatus !== undefined) {
+    sets.push("context_status = ?");
+    args.push(update.contextStatus);
   }
 
   if (update.observationAudioUrl !== undefined) {

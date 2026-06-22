@@ -528,9 +528,13 @@ export const ENRICHMENT_STATUS_FILTERS: readonly EnrichmentStatusFilter[] = [
 type ListTracksOptions = {
   cursor?: TrackCursor;
   /**
-   * Context-note presence (admin only) — the `context_track` queue's filter.
-   * `false` = `context_note IS NULL` (needs the Firecrawl facts fetched); `true`
-   * = already has them. Internal field, never surfaced; omitted for public reads.
+   * Context-fetch state (admin only) — the `context_track` queue's filter.
+   * `false` = the queue: findings still NEEDING a context fetch. Status-aware so a
+   * CONFIRMED-EMPTY fetch is not re-burned every tick: it matches `context_status`
+   * pending ∪ failed ∪ NULL (never-attempted rows that predate the column read NULL
+   * and count as pending), but NOT `empty`/`resolved`. `true` = already resolved
+   * (`context_note IS NOT NULL`). Internal field, never surfaced; omitted for
+   * public reads. Pair `false` with `retryEmptyContext` to also re-pick `empty`.
    */
   hasContext?: boolean;
   /**
@@ -555,6 +559,13 @@ type ListTracksOptions = {
    * tagging queue and its toggle. Omitted for public reads.
    */
   placement?: "placed" | "unplaced";
+  /**
+   * Widen the `hasContext=false` context queue to also re-pick CONFIRMED-EMPTY
+   * finds (`context_status = 'empty'`) — the `--retry-empty` escape hatch for when
+   * a query/source fix means a previously-hopeless find might now resolve. No
+   * effect unless `hasContext === false`. Omitted for public reads.
+   */
+  retryEmptyContext?: boolean;
   since?: string;
   /**
    * Enrichment-state filter (admin only). A bare status matches that exact
@@ -579,6 +590,7 @@ export async function listTracks({
   limit,
   order = "desc",
   placement,
+  retryEmptyContext = false,
   since,
   status,
   until,
@@ -608,11 +620,21 @@ export async function listTracks({
     filterClauses.push("video_url is null");
   }
 
-  // The context queue: `context_note IS NULL` (facts not fetched yet).
+  // The context queue. `true` = resolved (a note is stored). `false` = the work
+  // queue: findings still needing a fetch — no note yet AND `context_status`
+  // pending/failed/NULL (NULL = never-attempted rows that predate the column), but
+  // NOT `empty` so a confirmed-empty find is not re-burned every tick. The
+  // `context_note IS NULL` guard also keeps a legacy resolved-but-unmarked row (note
+  // present, status NULL) out of the queue. `retryEmptyContext` widens it to also
+  // re-pick `empty` (the `--retry-empty` escape hatch).
   if (hasContext === true) {
     filterClauses.push("context_note is not null");
   } else if (hasContext === false) {
-    filterClauses.push("context_note is null");
+    filterClauses.push(
+      retryEmptyContext
+        ? "(context_note is null and (context_status is null or context_status in ('pending', 'failed', 'empty')))"
+        : "(context_note is null and (context_status is null or context_status in ('pending', 'failed')))",
+    );
   }
 
   // The observation queue: `observation_audio_url IS NULL` (no spoken

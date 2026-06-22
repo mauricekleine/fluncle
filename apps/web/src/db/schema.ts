@@ -36,6 +36,20 @@ export const tracks = sqliteTable("tracks", {
   // rendered on /log, never in JSON-LD/RSS/llms.txt, never quotes lyrics. This
   // is NOT the editorial `note` (the operator's public "why").
   contextNote: text("context_note"),
+  // The context-fetch reliability marker (mirrors the backfill_* state above). The
+  // `context_track` queue picks `pending` rows (never-attempted); this column lets a
+  // CONFIRMED-EMPTY fetch (`empty`) be distinct from never-attempted, so the cron does
+  // not re-burn Firecrawl + the distil LLM on a hopeless find every tick. States:
+  //   - pending  — never attempted (the default; the queue's pick set).
+  //   - resolved — a distilled (or cleaned-raw fallback) note was stored.
+  //   - empty    — the fetch returned nothing usable; intentionally left blank. The
+  //                queue skips it unless `--retry-empty` widens the pick set.
+  //   - failed   — the attempt threw (vendor down); eligible for a later retry.
+  // Internal only — never surfaced through public DTOs. Rows that predate the column
+  // read NULL and are treated as `pending`.
+  contextStatus: text("context_status", {
+    enum: ["pending", "resolved", "empty", "failed"],
+  }),
   durationMs: integer("duration_ms").notNull(),
   enrichmentStatus: text("enrichment_status").notNull().default("pending"),
   featuresJson: text("features_json"),

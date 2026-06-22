@@ -264,6 +264,7 @@ export function adminTracksHandlers(os: Implementer) {
         hasVideo: parseTriStateBool(input.hasVideo),
         limit: parseAdminLimit(input.limit),
         order: input.order === "asc" ? "asc" : "desc",
+        retryEmptyContext: parseTriStateBool(input.retryEmptyContext) === true,
         status: parseEnrichmentStatus(input.status),
       });
     } catch (error) {
@@ -447,7 +448,10 @@ export function adminTracksHandlers(os: Implementer) {
         observationAudioUrl: media.observationAudioUrl,
         observationDurationMs: durationMs,
         observationGeneratedAt: generatedAt,
-        ...(freshlyFetched ? { contextNote } : {}),
+        // A freshly-fetched-here note also marks `context_status = 'resolved'` so the
+        // context queue (status-aware) treats this finding as done, mirroring the
+        // split-out `context_track` step's write.
+        ...(freshlyFetched ? { contextNote, contextStatus: "resolved" as const } : {}),
       });
 
       return {
@@ -512,22 +516,28 @@ export function adminTracksHandlers(os: Implementer) {
         };
       }
 
-      // Fetch the FACTS (Firecrawl). The agent may override the search query; the
-      // result is internal DATA. A best-effort empty note is still written-through
-      // as "" so the queue (context_note IS NULL) does not re-pick it forever — but
-      // a write-through of "" would still read as null-ish; only a non-empty note
-      // advances the queue, so an empty fetch leaves it null for the next tick.
+      // Fetch the FACTS (Firecrawl) and DISTIL them into a clean note (OpenRouter).
+      // The agent may override the search query; the result is internal DATA.
       const query =
         typeof input.query === "string" && input.query.trim()
           ? input.query.trim()
           : buildContextQuery(track);
       const fetched = await fetchTrackContext(query);
 
-      if (fetched.contextNote.trim()) {
-        // Quiet write: contextNote alone, so track-update.ts does NOT bump
-        // updated_at (no public surface moves; the enrich-sweep stale clock and the
-        // sitemap lastmod stay untouched).
-        await updateTrack(track.trackId, { contextNote: fetched.contextNote });
+      // Persist the reliability marker alongside the note. The `context_status`
+      // column makes a confirmed-empty fetch (`empty`) distinct from never-attempted
+      // (NULL/`pending`), so the queue does not re-burn Firecrawl + the distil LLM on
+      // a hopeless find every tick (`--retry-empty` re-picks `empty`; `failed` is a
+      // vendor-down miss the next tick retries). All quiet: contextNote/contextStatus
+      // are internal, so track-update.ts does NOT bump updated_at (no public surface
+      // moves; the enrich-sweep stale clock and the sitemap lastmod stay untouched).
+      if (fetched.status === "resolved" && fetched.contextNote.trim()) {
+        await updateTrack(track.trackId, {
+          contextNote: fetched.contextNote,
+          contextStatus: "resolved",
+        });
+      } else {
+        await updateTrack(track.trackId, { contextStatus: fetched.status });
       }
 
       return {
