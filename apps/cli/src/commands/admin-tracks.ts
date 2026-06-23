@@ -255,6 +255,7 @@ export type VehicleEntry = {
   addedAt: string;
   artists: string[];
   logId?: string;
+  grain?: string;
   title: string;
   vehicle?: string;
 };
@@ -267,6 +268,7 @@ export async function vehiclesCommand(limit: number): Promise<VehicleEntry[]> {
   return tracks.map((track) => ({
     addedAt: track.addedAt,
     artists: track.artists,
+    grain: track.videoGrain,
     logId: track.logId,
     title: track.title,
     vehicle: track.videoVehicle,

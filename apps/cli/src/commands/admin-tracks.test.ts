@@ -29,6 +29,7 @@ function finding(trackId: string, logId: string): TrackListItem {
     title: "Song",
     trackId,
     type: "finding",
+    videoGrain: undefined,
     videoModel: undefined,
     videoModelReasoning: undefined,
     videoUrl: undefined,

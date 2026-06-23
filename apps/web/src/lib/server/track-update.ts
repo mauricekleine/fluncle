@@ -79,6 +79,8 @@ export type TrackUpdate = {
   videoUrl?: string;
   /** The video's travelling vehicle (diversity ledger; surfaced in /api/tracks). */
   videoVehicle?: string;
+  /** The video's grain FAMILY (grain ledger; surfaced in /api/tracks). */
+  videoGrain?: string;
   /** Vibe-map placement (the admin tagging tool). vibeX = Light↔Dark mood. */
   vibeX?: number;
   /** vibeY = Floaty↔Driving energy. Both set together when a track is placed. */
@@ -101,6 +103,7 @@ const VISIBLE_FIELDS = new Set<keyof TrackUpdate>([
   "observationAudioUrl",
   "observationDurationMs",
   "observationGeneratedAt",
+  "videoGrain",
   "videoModel",
   "videoModelReasoning",
   "videoSquaredAt",
@@ -157,6 +160,11 @@ export async function updateTrack(
   if (update.videoVehicle !== undefined) {
     sets.push("video_vehicle = ?");
     args.push(update.videoVehicle);
+  }
+
+  if (update.videoGrain !== undefined) {
+    sets.push("video_grain = ?");
+    args.push(update.videoGrain);
   }
 
   if (update.videoModel !== undefined) {

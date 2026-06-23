@@ -98,6 +98,7 @@ const PresignVideoUploadsBodySchema = z.looseObject({
  */
 const FinalizeVideoBodySchema = z.looseObject({
   squared: z.unknown().optional(),
+  videoGrain: z.unknown().optional(),
   videoModel: z.unknown().optional(),
   videoModelReasoning: z.unknown().optional(),
   videoVehicle: z.unknown().optional(),

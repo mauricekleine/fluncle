@@ -81,6 +81,7 @@ function baseRow(stored: StoredTrack) {
     updated_at: null,
     vibe_x: 0.4,
     vibe_y: -0.2,
+    video_grain: null,
     video_model: null,
     video_model_reasoning: null,
     video_url: "https://found.fluncle.com/003.1.1A/footage.mp4",

@@ -171,8 +171,95 @@ float dotField(vec2 uv, vec2 res, float cells, float radius, float jitter, float
   return cov;
 }`;
 
-/** filmGrain(vec3 col, vec2 uv, float time, float intensity)->vec3: organic clumping grain (not TV static). Needs `valueNoise`+`hash`. */
+/** filmGrain: organic clumping grain (not TV static). Two overloads (GLSL arity
+ * overload), both needing `valueNoise`+`hash`:
+ *  - filmGrain(col, uv, time, float intensity) — the LEGACY default, unchanged:
+ *    today's 1px / 24Hz / monochrome / isotropic emulsion. The ~20 call sites
+ *    and every doc snippet keep compiling untouched.
+ *  - filmGrain(col, uv, time, GrainOpts o)      — the full knob set, so a
+ *    composition picks a grain FAMILY (scale/boil/clump/aniso/color/basis) and an
+ *    AMOUNT (`o.amount`; bias LOW toward near-silent — the grain signature stays present every frame, never fully off). Grab a
+ *    GRAIN.* preset (the `grainFamilies` snippet) and pass it, or tweak a field:
+ *    `GrainOpts o = grainCoarseSilver(); o.amount = 0.04;`.
+ * Determinism: a pure function of (uv, floor(time*boilHz), seed) — `boilHz=0`
+ * freezes the plate and is still deterministic; basis 3 (blue-noise) is analytic
+ * (interleaved-gradient), never a sampled random texture; derive `seed` from
+ * `u_seed` for a per-track-stable field. Encode note: COARSER grain (`scale>1`)
+ * compresses BETTER than 1px speckle under the README's 32M VBV cap; very fine +
+ * heavy is the worst case, so don't crank fine+high. */
 const filmGrain = /* glsl */ `
+struct GrainOpts {
+  float amount;     // master strength, 0.0..0.30; bias LOW (near-silent), never fully off
+  float scale;      // grain cell size in px, 0.5..6.0; 1.0 = today's per-pixel speckle
+  float boilHz;     // reseed/boil rate, 0.0..30.0; 24.0 = today; 0.0 = frozen plate
+  float clumpScale; // clump envelope cell size in px, 8..64; ~22 today
+  float clumpAmt;   // 0..1 how strongly clumps pool the speckle; 1 = today, 0 = even film
+  vec2  aniso;      // grain stretch; (1,1) isotropic; (1,3) vertical streak (VHS lean)
+  float color;      // 0 monochrome (today) .. 1 per-channel RGB (dye-cloud) grain
+  float lumaLow;    // shadow grain strength (1.3 today)
+  float lumaHigh;   // highlight grain strength (0.55 today)
+  int   basis;      // 0 hash, 1 soft, 2 ordered-dither, 3 blue-noise, 4 halftone-dot
+  float seed;       // grain field offset; derive from u_seed for per-track stability
+};
+// recursive ordered (Bayer) dither — array-free, WebGL1-safe, returns ~[0,1).
+float grainBayer2(vec2 a) { a = floor(a); return fract(a.x / 2.0 + a.y * a.y * 0.75); }
+float grainBayer4(vec2 a) { return grainBayer2(0.5 * a) * 0.25 + grainBayer2(a); }
+float grainBayer8(vec2 a) { return grainBayer4(0.5 * a) * 0.25 + grainBayer2(a); }
+// interleaved-gradient (blue-noise-ish) value, analytic — returns ~[0,1).
+float grainIGN(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
+// One centered speckle in ~[-0.5,0.5] for a given basis, grain cell, and reseed.
+float grainSpeckle(vec2 cell, vec2 g, float t, float seed, int basis) {
+  if (basis == 1) {
+    // soft: low-freq smooth noise, gentler than per-pixel hash (dye/emulsion bloom).
+    return valueNoise(g * 0.5 + t * 1.7 + seed) - 0.5;
+  } else if (basis == 2) {
+    // ordered dither used AS the grain (a visible 1-bit-ish quantization texture).
+    return grainBayer8(cell + floor(vec2(t * 1.7 + seed))) - 0.5;
+  } else if (basis == 3) {
+    // blue-noise-ish: even, high-frequency dispersion, no clumpy lattice.
+    return grainIGN(cell + vec2(t * 1.7 + seed)) - 0.5;
+  } else if (basis == 4) {
+    // halftone dot screen (rotated ~15deg) — a printed-dot degradation grade;
+    // a faint hash boil keeps the print alive frame-to-frame (the signature).
+    float c = cos(0.26); float s = sin(0.26);
+    vec2 q = mat2(c, -s, s, c) * (g * 0.5);
+    float d = length(fract(q) - 0.5);
+    float boil = (hash21(cell + t * 1.7 + seed) - 0.5) * 0.25;
+    return (0.5 - smoothstep(0.18, 0.32, d)) + boil;
+  }
+  // basis 0 (default): fine per-pixel hash speckle (today).
+  return hash21(cell + t * 1.7 + seed) - 0.5;
+}
+vec3 filmGrain(vec3 col, vec2 uv, float time, GrainOpts o) {
+  // Organic emulsion grain generalized: same clump-pooled, luminance-shaped,
+  // integer-time-reseeded speckle as the legacy path, with the character (size,
+  // boil, clump, anisotropy, color, basis, amount) exposed as composition knobs.
+  float t = floor(time * max(o.boilHz, 0.0));
+  vec2 px = uv * u_res;
+  // grain cells: scaled (coarse silver vs fine emulsion) + anisotropic (streak).
+  vec2 g = px / max(o.scale, 0.001) / max(o.aniso, vec2(0.001));
+  vec2 cell = floor(g);
+  // clumping envelope on UNSCALED pixels, so clump size is independent of scale.
+  float clump = valueNoise(px / max(o.clumpScale, 1.0) + t * 0.31 + o.seed);
+  float pooled = mix(0.35, 1.5, clump * clump);
+  float envelope = mix(1.0, pooled, clamp(o.clumpAmt, 0.0, 1.0));
+  // luminance shaping (mid/shadow grain reads strongest on film).
+  float l = dot(col, vec3(0.299, 0.587, 0.114));
+  float shape = mix(o.lumaLow, o.lumaHigh, smoothstep(0.0, 0.85, l));
+  float mono = grainSpeckle(cell, g, t, o.seed, o.basis) * envelope;
+  vec3 grain = vec3(mono);
+  if (o.color > 0.001) {
+    // per-channel RGB grain (dye-cloud): an independent field per channel.
+    vec3 perCh = vec3(
+      grainSpeckle(cell, g, t, o.seed, o.basis),
+      grainSpeckle(cell, g, t, o.seed + 17.3, o.basis),
+      grainSpeckle(cell, g, t, o.seed + 41.7, o.basis)
+    ) * envelope;
+    grain = mix(vec3(mono), perCh, clamp(o.color, 0.0, 1.0));
+  }
+  return col + grain * o.amount * shape;
+}
+// Legacy overload (unchanged): today's 1px / 24Hz / monochrome / isotropic grain.
 vec3 filmGrain(vec3 col, vec2 uv, float time, float intensity) {
   // Organic emulsion grain, NOT TV static. Three things make it read as film:
   // (1) the speckle is fine but its AMPLITUDE is modulated by a low-frequency
@@ -192,6 +279,35 @@ vec3 filmGrain(vec3 col, vec2 uv, float time, float intensity) {
   float l = dot(col, vec3(0.299, 0.587, 0.114));
   float shape = mix(1.3, 0.55, smoothstep(0.0, 0.85, l));
   return col + grain * intensity * shape;
+}`;
+
+/** grainFamilies: six named GrainOpts presets layered on the filmGrain knob set —
+ * `grainFineEmulsion` (today, but amount is yours), `grainCoarseSilver` (pushed
+ * high-ISO B&W), `grainHalftone` (printed dot screen), `grainChemicalDye` (the
+ * one on-brand COLORED grain), `grainVhsScanline` (anisotropic tape streak),
+ * `grainDither` (visible ordered-dither grade). Pass one straight into the
+ * GrainOpts overload of `filmGrain`, or grab and tweak a field. Each video picks
+ * a DISTINCT family (the grain diversity ledger). Needs `filmGrain` (the
+ * GrainOpts struct) and the injected `u_seed`. SET amount to the composition —
+ * often BELOW the 0.08 default; a clean, electric finding wants its pop. */
+const grainFamilies = /* glsl */ `
+GrainOpts grainFineEmulsion() {
+  return GrainOpts(0.08, 1.0, 24.0, 22.0, 1.0, vec2(1.0), 0.0, 1.3, 0.55, 0, u_seed);
+}
+GrainOpts grainCoarseSilver() {
+  return GrainOpts(0.07, 3.2, 11.0, 30.0, 1.0, vec2(1.0), 0.0, 1.35, 0.5, 0, u_seed);
+}
+GrainOpts grainHalftone() {
+  return GrainOpts(0.10, 2.4, 18.0, 28.0, 0.6, vec2(1.0), 0.0, 1.2, 0.6, 4, u_seed);
+}
+GrainOpts grainChemicalDye() {
+  return GrainOpts(0.07, 1.4, 20.0, 34.0, 0.8, vec2(1.0), 1.0, 1.2, 0.6, 1, u_seed);
+}
+GrainOpts grainVhsScanline() {
+  return GrainOpts(0.08, 1.2, 28.0, 26.0, 0.5, vec2(1.0, 3.0), 0.25, 1.2, 0.65, 0, u_seed);
+}
+GrainOpts grainDither() {
+  return GrainOpts(0.09, 1.6, 10.0, 24.0, 0.4, vec2(1.0), 0.0, 1.1, 0.7, 2, u_seed);
 }`;
 
 /** vignette(vec2 uv, float radius, float softness)->0..1: radial darkening multiplier.
@@ -316,8 +432,10 @@ export const GLSL = {
   dotField,
   /** Fractal brownian motion fbm(p, octaves)->0..1 (domain-rotated). Needs valueNoise. */
   fbm,
-  /** Organic emulsion-clumping film grain filmGrain(col, uv, time, intensity). Needs valueNoise+hash. */
+  /** Organic emulsion-clumping film grain. Two overloads: filmGrain(col,uv,time,float) (legacy) + filmGrain(col,uv,time,GrainOpts) (full knob set, amount→0=off). Needs valueNoise+hash. */
   filmGrain,
+  /** Six named GrainOpts presets (fineEmulsion/coarseSilver/halftone/chemicalDye/vhsScanline/dither) for the filmGrain knob set. Needs filmGrain + u_seed. */
+  grainFamilies,
   /** Deterministic value hashes: hash21, hash22, hash13. Base for all noise. */
   hash,
   /** The Retint gradient-map paletteRamp(t)->vec3 + retint(src) over u_palette. */

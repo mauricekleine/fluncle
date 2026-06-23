@@ -807,6 +807,10 @@ export function adminTracksHandlers(os: Implementer) {
           typeof body.videoVehicle === "string" && body.videoVehicle.trim()
             ? body.videoVehicle.trim().slice(0, 120)
             : undefined;
+        const videoGrain =
+          typeof body.videoGrain === "string" && body.videoGrain.trim()
+            ? body.videoGrain.trim().slice(0, 120)
+            : undefined;
         const videoModel =
           typeof body.videoModel === "string" && body.videoModel.trim()
             ? body.videoModel.trim().slice(0, 120)
@@ -829,6 +833,7 @@ export function adminTracksHandlers(os: Implementer) {
           videoUrl,
           ...(squared ? { videoSquaredAt: new Date().toISOString() } : {}),
           ...(videoVehicle ? { videoVehicle } : {}),
+          ...(videoGrain ? { videoGrain } : {}),
         });
 
         return { logId: track.logId, ok: true as const, trackId: track.trackId, videoUrl };

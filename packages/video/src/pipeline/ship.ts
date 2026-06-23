@@ -36,7 +36,7 @@ const PACKAGE_ROOT = path.resolve(import.meta.dirname, "../..");
 const input = process.argv[2];
 if (!input) {
   console.error(
-    "usage: bun src/pipeline/ship.ts <trackId|log-id> [--vehicle <tag>] [--model <provider/model>] [--reasoning <level>]",
+    "usage: bun src/pipeline/ship.ts <trackId|log-id> [--vehicle <tag>] [--grain <family>] [--model <provider/model>] [--reasoning <level>]",
   );
   process.exit(1);
 }
@@ -47,6 +47,13 @@ if (!input) {
 const vehicleFlagIndex = process.argv.indexOf("--vehicle");
 const vehicleArg =
   vehicleFlagIndex >= 0 ? process.argv[vehicleFlagIndex + 1]?.trim() || undefined : undefined;
+
+// The grain FAMILY tag (e.g. "grainCoarseSilver"), written into render.json so the
+// upload step records it as the grain ledger entry. Falls back to any `grain`
+// already in the render manifest.
+const grainFlagIndex = process.argv.indexOf("--grain");
+const grainArg =
+  grainFlagIndex >= 0 ? process.argv[grainFlagIndex + 1]?.trim() || undefined : undefined;
 
 // The authoring AI model (<provider>/<model>), written into render.json so the
 // upload step records it alongside the vehicle. Falls back to any `model` already
@@ -124,6 +131,7 @@ const renderManifestPath = path.join(OUT_DIR, `${track.trackId}.render.json`);
 let renderManifest: {
   compositionId?: string;
   compositionSource?: string;
+  grain?: string;
   model?: string;
   props?: string;
   reasoning?: string;
@@ -255,6 +263,9 @@ writeFileSync(
     {
       compositionId: renderManifest.compositionId ?? null,
       compositionSource: existsSync(compositionPath) ? "composition.tsx" : null,
+      // The grain-ledger entry: the upload endpoint reads this and stores it as the
+      // track's video_grain (surfaced in /api/tracks beside the vehicle).
+      grain: grainArg ?? renderManifest.grain ?? null,
       // The render-intent spine: shipped beside props (the author's file or a stub).
       intent: existsSync(intentOutPath) ? "intent.json" : null,
       // The authoring AI model: the upload endpoint reads this and stores it as

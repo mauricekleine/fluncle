@@ -153,6 +153,7 @@ export async function trackVideoCommand(
       videoModelReasoning,
       ...(squared ? { squared: true } : {}),
       ...(manifest.vehicle ? { videoVehicle: manifest.vehicle } : {}),
+      ...(manifest.grain ? { videoGrain: manifest.grain } : {}),
     },
   );
 
@@ -162,7 +163,7 @@ export async function trackVideoCommand(
 // Reads the bundle's render.json once and returns the three string fields the
 // finalize call needs (vehicle/model/reasoning). A missing or unparseable value
 // just leaves that field absent (the caller defaults), never fails the upload.
-type RenderManifestField = "model" | "reasoning" | "vehicle";
+type RenderManifestField = "grain" | "model" | "reasoning" | "vehicle";
 
 async function readManifestFields(
   renderPath: string,
@@ -171,7 +172,7 @@ async function readManifestFields(
     const manifest = (await Bun.file(renderPath).json()) as Record<RenderManifestField, unknown>;
     const result: Partial<Record<RenderManifestField, string>> = {};
 
-    for (const key of ["vehicle", "model", "reasoning"] as const) {
+    for (const key of ["vehicle", "grain", "model", "reasoning"] as const) {
       const value = manifest[key];
 
       if (typeof value === "string" && value.trim()) {
