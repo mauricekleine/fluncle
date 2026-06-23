@@ -80,8 +80,15 @@ const DEFAULTS = {
   // pre-smooth — see detect-beat-pull.test.ts). Without it the metric is dominated
   // by film-grain flicker on low-motion clips (a clip's raw 0.42 was ~40% grain).
   // Hardened, clean clips cluster at ~0.10 and operator-confirmed motion pulls sit
-  // at 0.24+; 0.17 splits the gap and correctly rejects a grain-only "fix".
-  threshold: 0.17,
+  // at 0.24+.
+  //
+  // PROVISIONAL re-calibration (2026-06-23, n=3 beat-having tracks, advisory): the
+  // global-vs-internal motion law (out/overnight/INSIGHTS.md) showed beat-pull is
+  // the right detector for the whole-vehicle JUMP, but 0.17 under-caught by ~0.01 —
+  // operator-labelled jumpers ("DJ scratch" / uncapped-swell drift surge) sat at
+  // 0.164 while the alive exemplar sat at 0.157. 0.16 splits that gap: it catches
+  // the jumpers and passes the alive clip. Re-validate as more labelled clips land.
+  threshold: 0.16,
 };
 
 const meanAbsDiff = (a: Float32Array, b: Float32Array): number => {

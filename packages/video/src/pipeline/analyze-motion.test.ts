@@ -39,7 +39,12 @@ import { type CosmosAudio, type EnergySample } from "../remotion/types";
 
 import { type RgbFrames } from "./frames";
 import { type RenderIntent, RENDER_INTENT_SCHEMA } from "./intent";
-import { checkIntent, scoreCoupling, scoreFlashSafety } from "./analyze-motion";
+import {
+  checkIntent,
+  scoreBeatReactivity,
+  scoreCoupling,
+  scoreFlashSafety,
+} from "./analyze-motion";
 
 const FPS = 30;
 const FW = 64;
@@ -453,4 +458,78 @@ console.log(
 
 console.log(
   "✓ analyze-motion: flash gate catches strobe/quadrant/red/flash-in-grain & spares grain; coupling alive/dead+attribution & null-bounded FP; intent drop/tripwire/coverage",
+);
+
+// ---------------------------------------------------------------------------
+// BEAT-GRID REACTIVITY + STRUCTURAL ARC (R3 rebuild — the anti-dead measure that
+// works on real-beat tracks, where legacy coupling collapses).
+// ---------------------------------------------------------------------------
+
+const beatGridMs: number[] = [];
+for (let ms = 0; ms < clipMs; ms += 343) {
+  beatGridMs.push(ms); // ~174 BPM
+}
+const beatFrameSet = new Set(beatGridMs.map((ms) => Math.round((ms / 1000) * FPS)));
+const beatAudio = { ...audioFrom(flatCurve), beatGrid: beatGridMs };
+const flatMeanL = Array.from({ length: DELTA_LEN + 1 }, () => 0.5);
+
+// REACTIVE: the structural delta SPIKES on the beat frames, flat between.
+const reactiveDelta = Array.from({ length: DELTA_LEN }, (_, f) =>
+  beatFrameSet.has(f) || beatFrameSet.has(f - 1) ? 0.25 : 0.02,
+);
+const reactiveR = scoreBeatReactivity({
+  audio: beatAudio,
+  delta: reactiveDelta,
+  fps: FPS,
+  intent: null,
+  meanL: flatMeanL,
+});
+assert.ok(reactiveR.beatGridCoupling > 0.2, "on-beat spikes must give positive beat-grid coupling");
+assert.ok(reactiveR.beatPercentile >= 80, "on-beat reactivity must clear the phase-shuffle null");
+assert.notEqual(reactiveR.verdict, "dead", "an on-beat-reacting clip must not read dead");
+
+// DEAD: a flat delta — no on-beat reactivity.
+const deadReactDelta = Array.from({ length: DELTA_LEN }, () => 0.05);
+const deadReactR = scoreBeatReactivity({
+  audio: beatAudio,
+  delta: deadReactDelta,
+  fps: FPS,
+  intent: null,
+  meanL: flatMeanL,
+});
+assert.equal(deadReactR.verdict, "dead", "a flat delta must read dead");
+assert.ok(Math.abs(deadReactR.beatGridCoupling) < 0.05, "a flat delta has ~0 beat-grid coupling");
+
+// ARC: more activity + brightness AFTER the drop → a positive scene-change arc.
+const arcIntent: RenderIntent = {
+  arcSource: "energyCurve",
+  bindings: [],
+  climax: { atMs: 5000, colour: "x", form: "x" },
+  concept: "x",
+  dropMs: 5000,
+  logId: null,
+  motionModel: "constant-drift",
+  register: "abstract",
+  schema: RENDER_INTENT_SCHEMA,
+  textureFamily: "nebula",
+  trackId: "x",
+  vehicle: "x",
+};
+const arcDelta = Array.from({ length: DELTA_LEN }, (_, f) => (f < 150 ? 0.03 : 0.18));
+const arcMeanL = Array.from({ length: DELTA_LEN + 1 }, (_, f) => (f < 150 ? 0.3 : 0.6));
+const arcR = scoreBeatReactivity({
+  audio: beatAudio,
+  delta: arcDelta,
+  fps: FPS,
+  intent: arcIntent,
+  meanL: arcMeanL,
+});
+assert.ok(arcR.arcScore > 0.2, "a calm->vibrant character shift must give a positive arc score");
+assert.equal(arcR.dropSource, "intent", "arc uses the intent dropMs when present");
+
+console.log(
+  `beat-reactivity: reactive bgc=${reactiveR.beatGridCoupling}(P${reactiveR.beatPercentile},${reactiveR.verdict}) dead=${deadReactR.verdict}(${deadReactR.beatGridCoupling}) arc=${arcR.arcScore}`,
+);
+console.log(
+  "✓ beat-grid reactivity: on-beat spikes read reactive, flat reads dead, calm→vibrant scores an arc",
 );

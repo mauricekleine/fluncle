@@ -9,6 +9,7 @@
     "social:preview": "bun src/pipeline/social-preview.ts",
     "detect-beat-pull": "bun src/pipeline/detect-beat-pull.ts",
     "judge:metrics": "bun src/pipeline/analyze-motion.ts",
+    "lint:composition": "bun src/pipeline/lint-composition.ts",
     "ship": "bun src/pipeline/ship.ts",
     "test": "bun test",
     "typecheck": "tsgo --noEmit"

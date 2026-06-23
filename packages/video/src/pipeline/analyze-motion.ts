@@ -1174,6 +1174,195 @@ function median(xs: number[]): number {
 }
 
 // ---------------------------------------------------------------------------
+// Beat-grid reactivity + structural arc (R3 rebuild — the anti-dead measure that
+// WORKS on real-beat tracks). The legacy `coupling` block above correlates the
+// structural delta against the audio curve's VARIANCE; on a sustained beat the
+// energy curve is flat-high (no variance) so it collapses to ~0 ("dead") even on
+// a reacting clip, and it brightness-normalizes luminosity away (so a clip that
+// reacts via brightness reads negative). This block instead asks two questions
+// the operator's eye actually cares about (out/overnight/INSIGHTS.md): does the
+// picture's reactivity — structure AND luminosity — SPIKE on the beat-grid times
+// vs between, and does its CHARACTER shift calm->vibrant across the drop (the
+// prized "reactive scene-change")? Advisory; reported beside the legacy value.
+// NOTE: this measures the INTERNAL/anti-dead channel; it does NOT distinguish a
+// good in-place reaction from a whole-vehicle JUMP (both spike on the beat) —
+// beat-pull (reversal) is the gate that catches the jump.
+// ---------------------------------------------------------------------------
+
+export type BeatReactivity = {
+  deterministic: true;
+  hard: false;
+  /** On-beat minus off-beat reactivity, normalized to [-1,1], on a combined
+   *  structural+luminance delta. >0 = the picture reacts more ON the beats. */
+  beatGridCoupling: number;
+  structuralBeatContrast: number;
+  luminanceBeatContrast: number;
+  /** Percentile of the real on-beat reactivity vs a phase-shuffled-beat null. */
+  beatPercentile: number;
+  verdict: "reactive" | "weak" | "dead";
+  /** Structural arc: does the character shift calm->vibrant across the drop?
+   *  Positive = more active/brighter after the drop (the prized scene-change). */
+  arcScore: number;
+  arcActivityDelta: number;
+  arcLumaDelta: number;
+  dropMs: number;
+  dropSource: "intent" | "energyPeak";
+  nullDesc: string;
+};
+
+function minMaxNorm(xs: number[]): number[] {
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const x of xs) {
+    if (x < lo) {
+      lo = x;
+    }
+    if (x > hi) {
+      hi = x;
+    }
+  }
+  const span = hi - lo;
+  if (span <= 1e-9) {
+    return xs.map(() => 0);
+  }
+  return xs.map((x) => (x - lo) / span);
+}
+
+function onOffBeatMean(
+  signal: number[],
+  beatFrames: number[],
+  halfWin: number,
+): { on: number; off: number } {
+  const onMask = Array.from<boolean>({ length: signal.length }).fill(false);
+  for (const bf of beatFrames) {
+    for (let d = -halfWin; d <= halfWin; d++) {
+      const f = bf + d;
+      if (f >= 0 && f < signal.length) {
+        onMask[f] = true;
+      }
+    }
+  }
+  let onSum = 0;
+  let onN = 0;
+  let offSum = 0;
+  let offN = 0;
+  for (let f = 0; f < signal.length; f++) {
+    if (onMask[f]) {
+      onSum += signal[f];
+      onN += 1;
+    } else {
+      offSum += signal[f];
+      offN += 1;
+    }
+  }
+  return { off: offN > 0 ? offSum / offN : 0, on: onN > 0 ? onSum / onN : 0 };
+}
+
+function contrast(hiVal: number, loVal: number): number {
+  const denom = hiVal + loVal;
+  return denom > 1e-9 ? (hiVal - loVal) / denom : 0;
+}
+
+export type BeatReactivityInput = {
+  delta: number[];
+  meanL: number[];
+  audio: CosmosAudio;
+  fps: number;
+  intent: RenderIntent | null;
+};
+
+/** Pure beat-grid reactivity + arc scorer over the structural delta + the per-frame
+ *  luminance + the beat grid + intent. No ffmpeg. Advisory. */
+export function scoreBeatReactivity(input: BeatReactivityInput): BeatReactivity {
+  const { delta, meanL, audio, fps, intent } = input;
+  const n = delta.length;
+
+  // Luminance delta, aligned to the structural delta (both index i = frame i->i+1).
+  const lumaDelta: number[] = [];
+  for (let i = 0; i < n; i++) {
+    lumaDelta.push(Math.abs((meanL[i + 1] ?? meanL[i] ?? 0) - (meanL[i] ?? 0)));
+  }
+  const structN = minMaxNorm(delta);
+  const lumaN = minMaxNorm(lumaDelta);
+  const combined = structN.map((s, i) => s + (lumaN[i] ?? 0));
+
+  // Beat frames in the delta index space.
+  const beatFrames = audio.beatGrid
+    .map((ms) => Math.round((ms / 1000) * fps))
+    .filter((f) => f >= 0 && f < n);
+  const halfWin = Math.max(1, Math.round(fps * 0.06)); // ~60ms on-beat window (+ hook lag)
+
+  const structPair = onOffBeatMean(structN, beatFrames, halfWin);
+  const lumaPair = onOffBeatMean(lumaN, beatFrames, halfWin);
+  const combPair = onOffBeatMean(combined, beatFrames, halfWin);
+  const structuralBeatContrast = contrast(structPair.on, structPair.off);
+  const luminanceBeatContrast = contrast(lumaPair.on, lumaPair.off);
+  const beatGridCoupling = contrast(combPair.on, combPair.off);
+
+  // Phase-shuffle null: shift the whole beat grid by a random frame offset, recompute
+  // the on-beat mean of the combined signal. ~200 deterministic shifts (mulberry32).
+  let beatPercentile = 0;
+  if (beatFrames.length >= 2 && n > 4) {
+    const rng = mulberry32(NULL_SEED ^ 0x5bd1e995);
+    const nullDist: number[] = [];
+    for (let k = 0; k < NULL_N; k++) {
+      const shift = 1 + Math.floor(rng() * (n - 1));
+      const shifted = beatFrames.map((f) => (f + shift) % n);
+      nullDist.push(onOffBeatMean(combined, shifted, halfWin).on);
+    }
+    beatPercentile = percentileOf(combPair.on, nullDist);
+  }
+  let verdict: "reactive" | "weak" | "dead";
+  if (beatGridCoupling > 0 && beatPercentile >= 90) {
+    verdict = "reactive";
+  } else if (beatGridCoupling > 0 && beatPercentile >= 70) {
+    verdict = "weak";
+  } else {
+    verdict = "dead";
+  }
+
+  // Structural arc: drop frame from intent (preferred) or the energy-curve peak.
+  let dropMs = intent && intent.dropMs > 0 ? intent.dropMs : 0;
+  let dropSource: "intent" | "energyPeak" = "intent";
+  if (dropMs <= 0) {
+    dropSource = "energyPeak";
+    let peak = -Infinity;
+    let peakMs = 0;
+    for (const s of audio.energyCurve) {
+      if (s.energy > peak) {
+        peak = s.energy;
+        peakMs = s.timeMs;
+      }
+    }
+    dropMs = peakMs;
+  }
+  const dropFrame = Math.min(n - 1, Math.max(0, Math.round((dropMs / 1000) * fps)));
+  const arcActivityDelta = contrast(
+    mean(combined.slice(dropFrame)),
+    mean(combined.slice(0, dropFrame)),
+  );
+  const lumaCut = Math.min(meanL.length, dropFrame + 1);
+  const arcLumaDelta = contrast(mean(meanL.slice(lumaCut)), mean(meanL.slice(0, lumaCut)));
+  const arcScore = Math.max(0, 0.6 * arcActivityDelta + 0.4 * arcLumaDelta);
+
+  return {
+    arcActivityDelta: Number(arcActivityDelta.toFixed(4)),
+    arcLumaDelta: Number(arcLumaDelta.toFixed(4)),
+    arcScore: Number(arcScore.toFixed(4)),
+    beatGridCoupling: Number(beatGridCoupling.toFixed(4)),
+    beatPercentile: Number(beatPercentile.toFixed(1)),
+    deterministic: true,
+    dropMs,
+    dropSource,
+    hard: false,
+    luminanceBeatContrast: Number(luminanceBeatContrast.toFixed(4)),
+    nullDesc: `phase-shuffle beat-grid, mulberry32, N=${NULL_N}; on-beat window ±${halfWin}f; reactive>=P90`,
+    structuralBeatContrast: Number(structuralBeatContrast.toFixed(4)),
+    verdict,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // The orchestrator + report assembly (C6)
 // ---------------------------------------------------------------------------
 
@@ -1195,6 +1384,7 @@ export type MotionReport = {
   flashSafety: FlashSafetyResult;
   beatPull: BeatPullResult & { deterministic: true; hard: true };
   coupling: CouplingResult | null;
+  beatReactivity: BeatReactivity | null;
   intent: IntentCheckResult | null;
   intentDeclaredBand: IntentBand | null;
   gate: GateRollup;
@@ -1280,7 +1470,11 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
   const durationMs =
     audio?.durationMs ?? Math.round((gray.frames.length / Math.max(1, reportFps)) * 1000);
 
+  // The per-frame luminance series (reused by beat-reactivity + the intent check).
+  const perFrame = decodeFlashFrames(rgb);
+
   let coupling: CouplingResult | null = null;
+  let beatReactivity: BeatReactivity | null = null;
   if (audio) {
     coupling = scoreCoupling({
       audio,
@@ -1288,11 +1482,17 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
       fps: reportFps,
       intent,
     });
+    beatReactivity = scoreBeatReactivity({
+      audio,
+      delta,
+      fps: reportFps,
+      intent,
+      meanL: perFrame.meanL,
+    });
   }
 
   let intentCheck: IntentCheckResult | null = null;
   if (intent && audio) {
-    const perFrame = decodeFlashFrames(rgb);
     intentCheck = checkIntent({ audio, delta, fps: reportFps, intent, meanL: perFrame.meanL });
   }
 
@@ -1326,6 +1526,17 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
     }
   }
 
+  if (beatReactivity) {
+    if (beatReactivity.verdict === "dead") {
+      advisories.push("beatReactivity.dead");
+    } else if (beatReactivity.verdict === "weak") {
+      advisories.push("beatReactivity.weak");
+    }
+    if (beatReactivity.arcScore >= 0.15) {
+      advisories.push(`sceneArc(${beatReactivity.arcScore})`);
+    }
+  }
+
   if (intentCheck) {
     if (!intentCheck.translationTripwire.pass) {
       advisories.push("intent.translationTripwire");
@@ -1348,6 +1559,7 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
 
   return {
     beatPull,
+    beatReactivity,
     coupling,
     durationMs,
     flashSafety,
