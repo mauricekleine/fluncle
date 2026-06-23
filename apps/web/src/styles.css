@@ -2011,7 +2011,12 @@ body::before {
   left: 0;
   margin-inline: auto;
   max-width: 64rem;
+  /* Pull the now-playing block tighter to the left edge of the frame. The left
+     inset is its own fluid value — small but never flush against the glass on a
+     narrow phone (min 0.6rem, easing up to 1.25rem on wider screens) — while the
+     right padding and the bottom safe-area inset stay as they were. */
   padding: 1.25rem 1.25rem calc(1.5rem + env(safe-area-inset-bottom));
+  padding-left: clamp(0.6rem, 2vw, 1.25rem);
   position: absolute;
   right: 0;
 }

@@ -17,6 +17,7 @@ import {
 } from "@/components/admin/pipeline/board-model";
 import { PipelineBoard } from "@/components/admin/pipeline/pipeline-board";
 import { EnrichDialog } from "@/components/admin/enrich-dialog";
+import { FindStreakChip } from "@/components/admin/find-streak-chip";
 import { NoteDialog } from "@/components/admin/note-dialog";
 import { ContextDialog, ObservationDialog } from "@/components/admin/observation-dialogs";
 import { PLATFORMS } from "@/components/admin/platform-cell";
@@ -832,7 +833,12 @@ function AdminBoardPage() {
   );
 
   return (
-    <AdminShell current="board" subheader={subheader} title="Board">
+    <AdminShell
+      current="board"
+      headerActions={<FindStreakChip findings={rows} />}
+      subheader={subheader}
+      title="Board"
+    >
       {rows.length === 0 ? (
         <EmptyState body="Logged bangers will show up here." title="No findings yet" />
       ) : visible.length === 0 ? (
