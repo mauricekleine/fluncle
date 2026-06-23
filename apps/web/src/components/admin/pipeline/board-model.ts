@@ -199,12 +199,26 @@ export function boardSteps(row: BoardRow): BoardStep[] {
       statusLabel: row.hasContextNote ? "Context" : "No context",
     },
     discogs: {
-      // No manual trigger — the agent resolves the release; clicking opens the link.
+      // The board is a WORKFLOW tracker, not a data-existence tracker. The Discogs
+      // backfill ran-but-found-no-release is a SUCCESS (the workflow checked, there
+      // just was no Discogs release to link) — so the cell closes `done` the moment
+      // the backfill RAN (`discogsRan`, the `backfill_discogs_attempted_at` stamp),
+      // whether or not it linked a release. Grey/`open` means ONE thing: not run yet.
+      // No manual trigger — the agent resolves the release; clicking opens the link
+      // (still only actionable when there's a release to open).
       actionable: Boolean(row.discogsReleaseUrl),
       gated: false,
-      hint: row.discogsReleaseUrl ? "Open the Discogs release" : "No Discogs release linked yet",
-      state: row.discogsReleaseUrl ? "done" : "open",
-      statusLabel: row.discogsReleaseUrl ? "Linked" : "No release",
+      hint: row.discogsReleaseUrl
+        ? "Open the Discogs release"
+        : row.discogsRan
+          ? "Checked — no Discogs release found"
+          : "Discogs lookup hasn't run yet",
+      state: row.discogsRan ? "done" : "open",
+      statusLabel: row.discogsReleaseUrl
+        ? "Linked"
+        : row.discogsRan
+          ? "Checked — no release"
+          : "Pending",
     },
     enrich: {
       actionable: true,
@@ -224,15 +238,21 @@ export function boardSteps(row: BoardRow): BoardStep[] {
             : "Enrich",
     },
     lastfm: {
-      // The Last.fm love runs on its own (the publish fan-out loves on add; the
-      // backfill loves older findings) — no board click. `lastfmLoved` is the
-      // presence of `backfill_lastfm_done_at`, the same stamp a successful love
-      // writes, so the heart tracks the real loved-status, not a guess.
+      // Same workflow-tracker rule as Discogs. The Last.fm love runs on its own (the
+      // publish fan-out loves on add; the backfill loves older findings) — no board
+      // click. The cell closes `done` the moment the backfill RAN (`lastfmRan`, the
+      // `backfill_lastfm_attempted_at` stamp), whether or not the love landed; grey/
+      // `open` means only "not run yet". `lastfmLoved` (the `backfill_lastfm_done_at`
+      // stamp a successful `track.love` writes) only refines the label.
       actionable: false,
       gated: false,
-      hint: row.lastfmLoved ? "Loved on Last.fm" : "Not loved on Last.fm yet",
-      state: row.lastfmLoved ? "done" : "open",
-      statusLabel: row.lastfmLoved ? "Loved" : "Love",
+      hint: row.lastfmLoved
+        ? "Loved on Last.fm"
+        : row.lastfmRan
+          ? "Checked — not loved on Last.fm"
+          : "Last.fm love hasn't run yet",
+      state: row.lastfmRan ? "done" : "open",
+      statusLabel: row.lastfmLoved ? "Loved" : row.lastfmRan ? "Checked — not loved" : "Pending",
     },
     mixtape: {
       actionable: true,

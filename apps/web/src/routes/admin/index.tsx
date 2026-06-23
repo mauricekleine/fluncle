@@ -30,7 +30,7 @@ import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { GALAXIES, galaxyForVibe } from "@/lib/galaxies";
 import { type MixtapeDTO } from "@/lib/mixtapes";
 import { isAdminRequest } from "@/lib/server/admin-auth";
-import { listLastfmLovedForTracks } from "@/lib/server/backfill";
+import { listBackfillRanForTracks, listLastfmLovedForTracks } from "@/lib/server/backfill";
 import { readCaptions } from "@/lib/server/captions";
 import { listMixtapeMembershipsForTracks, listMixtapes } from "@/lib/server/mixtapes";
 import {
@@ -145,13 +145,20 @@ const fetchBoard = createServerFn({ method: "GET" })
     });
     const trackIds = page.tracks.map((track) => track.trackId);
     // Batch fetches — one query each for the whole page, no N+1: the per-platform
-    // posts, the mixtape memberships (which tapes each finding is already on), and
-    // which findings carry an internal context_note (the Context column status —
-    // pulled admin-only since context_note never rides the public track contract).
-    const [posts, mixtapes, contextNotes, lastfmLoved] = await Promise.all([
+    // posts, the mixtape memberships (which tapes each finding is already on), which
+    // findings carry an internal context_note (the Context column status — pulled
+    // admin-only since context_note never rides the public track contract), and the
+    // Discogs/Last.fm backfill RAN-stamps (`*_attempted_at`) + the Last.fm LOVED-stamp
+    // (`backfill_lastfm_done_at`). The board's Discogs/Last.fm cells are workflow
+    // trackers: `done` once the backfill ran (whether or not it found data), grey
+    // only while it's never run — the ran-stamp drives the cell, the data-stamp
+    // (release url / loved) only refines the label.
+    const [posts, mixtapes, contextNotes, discogsRan, lastfmRan, lastfmLoved] = await Promise.all([
       listSocialPostsForTracks(trackIds),
       listMixtapeMembershipsForTracks(trackIds),
       listContextNotePresenceForTracks(trackIds),
+      listBackfillRanForTracks(trackIds, "discogs"),
+      listBackfillRanForTracks(trackIds, "lastfm"),
       listLastfmLovedForTracks(trackIds),
     ]);
 
@@ -160,8 +167,10 @@ const fetchBoard = createServerFn({ method: "GET" })
       totalCount: page.totalCount,
       tracks: page.tracks.map((track) => ({
         ...track,
+        discogsRan: discogsRan.has(track.trackId),
         hasContextNote: contextNotes.has(track.trackId),
         lastfmLoved: lastfmLoved.has(track.trackId),
+        lastfmRan: lastfmRan.has(track.trackId),
         mixtapes: mixtapes[track.trackId] ?? [],
         posts: posts[track.trackId] ?? [],
       })),
