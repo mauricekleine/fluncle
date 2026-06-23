@@ -56,6 +56,9 @@ const APPROVED_VERBS = new Set<string>([
   "note",
   "observe",
   "render",
+  // `requeue` (put a finding's video back on the render queue) — ratified into the
+  // action set with the `requeue_video` re-render command (docs/naming-conventions.md §6, #148).
+  "requeue",
   // Concrete actions already in the live registry the prose set doesn't spell out
   // verbatim. Adding a genuinely new verb is a deliberate edit here (with a reason),
   // which is exactly the gate this test exists to enforce.
