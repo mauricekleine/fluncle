@@ -46,8 +46,9 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14" \
 # CLI runs ungated and an attempted publish comes back as a 403 to relay in voice.
 # Pinned for reproducible rebuilds (the version line also busts the layer cache on
 # a bump); carries the Convention-B renamed surface + `admin newsletter`/backfill
-# commands. Bump deliberately when a newer release is needed on the box.
-RUN npm install -g fluncle@0.54.0
+# commands + the `admin tracks note` auto-note command (the `fluncle-note` cron).
+# Bump deliberately when a newer release is needed on the box.
+RUN npm install -g fluncle@0.57.0
 
 # Claude Code — the `fluncle-observation` `--no-agent` cron's ONE agentic step shells
 # out to `claude -p` to author the recovered-audio observation script in Fluncle's
