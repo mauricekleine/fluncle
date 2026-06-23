@@ -2008,17 +2008,17 @@ body::before {
   display: grid;
   gap: 0.4rem;
   justify-items: start;
-  left: 0;
-  margin-inline: auto;
-  max-width: 64rem;
-  /* Pull the now-playing block tighter to the left edge of the frame. The left
-     inset is its own fluid value — small but never flush against the glass on a
-     narrow phone (min 0.6rem, easing up to 1.25rem on wider screens) — while the
-     right padding and the bottom safe-area inset stay as they were. */
-  padding: 1.25rem 1.25rem calc(1.5rem + env(safe-area-inset-bottom));
-  padding-left: clamp(0.6rem, 2vw, 1.25rem);
+  /* LEFT-ANCHORED, not center-constrained. The old `left:0; right:0;
+     margin-inline:auto; max-width:64rem` centered the block on a wide screen, so a
+     left padding only nudged inside that centered box (it never reached the frame
+     edge). Anchor it to the left edge instead — `left` is a small fluid inset that
+     hugs the frame (min 0.9rem on a phone, easing to 1.5rem on wider screens), with
+     the block capped to a comfortable reading column so a long title still wraps.
+     The bottom safe-area inset and the right gutter on the padding are kept. */
+  left: clamp(0.9rem, 2vw, 1.5rem);
+  max-width: min(38rem, calc(100% - 2 * clamp(0.9rem, 2vw, 1.5rem)));
+  padding: 1.25rem 1.25rem calc(1.5rem + env(safe-area-inset-bottom)) 0;
   position: absolute;
-  right: 0;
 }
 
 .radio-log-id {
@@ -2051,25 +2051,58 @@ body::before {
   font-variant-numeric: tabular-nums;
 }
 
-/* Synced observation captions (the spoken script, word by word). Sits on the
-   same scrimmed meta pane as the facts/artist, so it inherits their AA contrast
-   over the footage. Resting words are dim (Stardust); the current word lights to
-   Starlight Cream with a quiet Gold cast (the Ignition Rule — heat marks the live
-   word, never paint). Wraps to a few lines, capped so a long observation never
-   pushes the title off a phone. */
-.radio-captions {
-  color: var(--stardust);
-  display: -webkit-box;
-  font-size: 0.95rem;
-  line-height: 1.4;
-  margin-block: 0.1rem 0.15rem;
-  max-width: 42rem;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+/* Fluncle narrating, center-stage. The observation reads ONE slice at a time, big
+   and centered over the footage — not a bottom-anchored subtitle strip. The layer
+   fills the stage and centers its single line both ways; pointer-events stay off so
+   the footage/controls underneath are untouched. */
+.radio-narration {
+  align-items: center;
+  display: grid;
+  inset: 0;
+  justify-items: center;
+  /* Keep the line clear of the now-playing block at the bottom and the mute disc at
+     the top, and never flush to a phone's edges. */
+  padding: clamp(3.5rem, 12vh, 7rem) clamp(1.25rem, 6vw, 3rem);
+  pointer-events: none;
+  position: absolute;
 }
 
-.radio-caption-word {
+/* One slice: a confident narration size (not a subtitle), centered, capped to a
+   comfortable reading measure. The Legible Sky Rule over live footage with no box —
+   a soft text-shadow scrim on the line itself holds AA without a heavy plate. */
+.radio-narration-line {
+  /* The soft swap between slices: a fresh node mounts per slice (keyed on the slice
+     index), fading + lifting in. Reduced motion collapses it below. */
+  animation: radio-narration-in 320ms ease-out both;
+  color: var(--stardust);
+  font-size: clamp(1.5rem, 4.5vw, 2.5rem);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.28;
+  margin: 0;
+  max-width: 22ch;
+  overflow-wrap: anywhere;
+  text-align: center;
+  text-shadow: 0 0.05rem 1.1rem color-mix(in oklch, var(--deep-field) 88%, transparent);
+  text-wrap: balance;
+}
+
+@keyframes radio-narration-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.4rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Resting words are dim (Stardust); the live word lights to Starlight Cream with a
+   Gold cast (the Ignition Rule — heat marks the spoken word, never paint). The exact
+   per-word treatment carried over from the old captions. */
+.radio-narration-word {
   /* Colour-only transition so the highlight reads as a glow, not motion; grounded
      under reduced motion below. */
   transition:
@@ -2077,13 +2110,20 @@ body::before {
     text-shadow 120ms ease-out;
 }
 
-.radio-caption-word.is-active {
+.radio-narration-word.is-active {
   color: var(--starlight-cream);
-  text-shadow: 0 0 0.5rem color-mix(in oklch, var(--eclipse-gold) 45%, transparent);
+  text-shadow:
+    0 0.05rem 1.1rem color-mix(in oklch, var(--deep-field) 88%, transparent),
+    0 0 0.75rem color-mix(in oklch, var(--eclipse-gold) 45%, transparent);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .radio-caption-word {
+  /* Instant swap, no fade/lift; instant heat, no glow transition. */
+  .radio-narration-line {
+    animation: none;
+  }
+
+  .radio-narration-word {
     transition: none;
   }
 }
