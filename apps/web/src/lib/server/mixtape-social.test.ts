@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The mixtape per-platform double-fire guard (lib/server/mixtape-social.ts;
-// docs/rfcs/mobile-app.md §7). `finalizeMixtapeDistribution` is called ONCE PER
+// The mixtape per-platform double-fire guard (lib/server/mixtape-social.ts).
+// `finalizeMixtapeDistribution` is called ONCE PER
 // PLATFORM (YouTube + Mixcloud both finalize), so a naive "the mixtape is
 // published ⇒ notify" double-fires. The flip is a GUARDED
 // `update ... where status = 'distributing'`; only the call whose guard changed a

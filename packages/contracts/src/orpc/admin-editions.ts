@@ -1,5 +1,5 @@
 // The `admin-editions` domain contract module — the newsletter edition authoring +
-// send control plane (docs/rfcs/newsletter-own-the-stack.md §3.3). Built on the
+// send control plane. Built on the
 // `admin-mixtapes` pattern. Everything nests under `/admin/newsletter/editions`.
 //
 // VERIFIED auth tiers (enforced in the handlers, not the contract):

@@ -41,7 +41,7 @@ function editionLogIds(edition: EditionDTO): string[] {
 /**
  * Render the email HTML for a Resend broadcast from an edition's stored content —
  * the SAME `content` payload the web archive page renders (one source → two
- * renders, docs/rfcs/newsletter-own-the-stack.md §2.6). This is the Email-register
+ * renders). This is the Email-register
  * letter: the "Ahoy cosmonauts," greeting, the galaxy-grouped finds, the tidbits,
  * the "Happy raving, Fluncle" sign-off, and the compliance footer — the managed
  * `{{{RESEND_UNSUBSCRIBE_URL}}}` token Resend substitutes per-recipient (it adds the

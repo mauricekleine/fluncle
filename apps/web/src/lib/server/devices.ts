@@ -1,4 +1,4 @@
-// The push-device registry write path (docs/rfcs/mobile-app.md §7). The mobile
+// The push-device registry write path. The mobile
 // app registers its Expo push token here (an idempotent upsert on the token), and
 // deregisters to opt out. Anonymous-compatible: the V1 app has no account, so
 // `userId` is null until accounts arrive.

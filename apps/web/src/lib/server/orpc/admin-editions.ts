@@ -2,7 +2,7 @@
 // Resend send. Each handler reuses the live `editions` server logic; the auth tier
 // lives in the oRPC procedure middleware (../orpc-auth).
 //
-// VERIFIED auth tiers (docs/rfcs/newsletter-own-the-stack.md §3.3):
+// VERIFIED auth tiers:
 //   - `list_editions_admin` / `create_edition` / `update_edition` — admin tier
 //     (`adminAuth`): reading the draft list + drafting are AGENT-ALLOWED (the Friday
 //     cron persists the draft and reads back its own unsent draft from a fresh session).

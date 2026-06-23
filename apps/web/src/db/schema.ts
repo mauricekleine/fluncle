@@ -529,7 +529,7 @@ export const mixtapeSocialPosts = sqliteTable(
   ],
 );
 
-// Push-notification device registry (the mobile app, docs/rfcs/mobile-app.md §7):
+// Push-notification device registry (the mobile app):
 // one row per Expo push token, which IS the natural key (the `userGalaxyState`
 // natural-PK precedent, not a surrogate id). `token` is `ExponentPushToken[…]`;
 // `userId` is nullable — the V1 app is anonymous, so it binds only once accounts
@@ -555,7 +555,7 @@ export const pushTokens = sqliteTable(
   ],
 );
 
-// The pending push-receipt ledger (docs/rfcs/mobile-app.md §7). Expo's send
+// The pending push-receipt ledger. Expo's send
 // returns one TICKET per message; an "ok" ticket carries a RECEIPT id you fetch
 // ~15min+ later (getReceipts) to learn the real delivery outcome —
 // `DeviceNotRegistered` (the dead-token signal) arrives HERE, not on the ticket.
@@ -589,7 +589,7 @@ export const mixtapeTracks = sqliteTable(
 );
 
 // A newsletter EDITION — the weekly dispatch from the mothership, now persisted so
-// every Friday letter has a permanent home (docs/rfcs/newsletter-own-the-stack.md).
+// every Friday letter has a permanent home.
 // Modeled on the `mixtapes` table SHAPE (own table + counter + a draft→sent
 // lifecycle) but NOT its identity: an edition is content, not a collectible, so its
 // identity is a plain integer `number` minted on send (`max(number)+1`) — NO Log

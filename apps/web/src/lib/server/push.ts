@@ -1,4 +1,4 @@
-// Push notifications via the Expo Push Service (docs/rfcs/mobile-app.md §7). The
+// Push notifications via the Expo Push Service. The
 // mobile app registers a device token (the `register_device` op); when a finding
 // or a mixtape publishes, the publish boundary calls one of the notify functions
 // here to reach the crew on their phones.

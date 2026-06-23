@@ -213,7 +213,7 @@ const EditionTidbitSchema = z
 /**
  * The structured content payload an edition stores (`editions.content_json`). The
  * SINGLE source the agent authors that renders BOTH the web archive page and the
- * email HTML (docs/rfcs/newsletter-own-the-stack.md §2.3, §2.6). LOOSE on the
+ * email HTML. LOOSE on the
  * agent's side at write time (the admin route passes it through), but this is the
  * canonical READ shape the public DTO exposes.
  */

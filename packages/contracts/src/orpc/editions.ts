@@ -1,5 +1,5 @@
-// The `editions` domain contract module — the public newsletter-archive reads
-// (docs/rfcs/newsletter-own-the-stack.md §3). Everything the newsletter owns nests
+// The `editions` domain contract module — the public newsletter-archive reads.
+// Everything the newsletter owns nests
 // under the `/newsletter` singleton: the editions collection is a plural
 // sub-resource at `/newsletter/editions`. Convention B (verb_noun → camelCase
 // operationId; plural collection under the singleton; singular op noun).

@@ -2,7 +2,7 @@
 
 **Branch:** `video-aliveness-overnight` (NOTHING pushed to main, no deploy, no publish — all left for the operator).
 **Date:** 2026-06-22 → overnight.
-**What this is:** Part I of `docs/rfcs/video-aliveness-rfc.md` built on the branch (Tiers 1), then 3 not-yet-posted findings each rendered TWICE — once on the new pipeline with NO judge (Tier 2), once on the new pipeline WITH a local LLM judge in the loop (Tier 3) — for a before/after comparison.
+**What this is:** Part I of the video-aliveness RFC built on the branch (Tiers 1), then 3 not-yet-posted findings each rendered TWICE — once on the new pipeline with NO judge (Tier 2), once on the new pipeline WITH a local LLM judge in the loop (Tier 3) — for a before/after comparison.
 
 ---
 

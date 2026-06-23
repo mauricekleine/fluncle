@@ -1,6 +1,5 @@
 // Admin-gated, idempotent, Worker-paced catalogue backfills for the two music-graph
-// writes that landed AFTER the synchronous add already existed (see
-// docs/rfcs/lastfm-discogs-sync.md):
+// writes that landed AFTER the synchronous add already existed:
 //
 //   1. Last.fm `track.love` — endorse every already-published finding (a Loved
 //      Track, never a scrobble — no fabricated listening history). `lastfmLove`

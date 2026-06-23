@@ -1,7 +1,7 @@
 // The `devices` domain contract module. Owns the public push-device registry
 // write ops — a phone (the Expo app) registers its push token so a new finding /
 // mixtape can reach the crew, and deregisters to opt out. Net-new for the mobile
-// app (docs/rfcs/mobile-app.md §7); follows the `submissions` public-write
+// app; follows the `submissions` public-write
 // pattern. A future wave adds an op here and one spread line in `./index.ts`,
 // touching no other domain's file.
 

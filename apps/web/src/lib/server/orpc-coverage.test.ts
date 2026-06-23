@@ -31,8 +31,8 @@ import { CONTRACT_OPERATION_NAMES } from "@fluncle/contracts/orpc";
 // listed separately so the net's edges are explicit, not accidental.
 const PUBLIC_ROUTE_OPS: Record<string, string> = {
   // The devices domain is contract-only oRPC (no TanStack route file under
-  // /api/v1) — the mobile app's push-device registry, authored contract-first
-  // (docs/rfcs/mobile-app.md §7). It has no file-enumeration entry; it lives here
+  // /api/v1) — the mobile app's push-device registry, authored contract-first.
+  // It has no file-enumeration entry; it lives here
   // so the "every public op is converted" check covers it.
   "DELETE /devices/{token}": "deregister_device",
   "DELETE /me/saved-findings/{trackId}": "unsave_private_finding",
@@ -44,7 +44,7 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   "GET /me/saved-findings": "list_private_saved_findings",
   "GET /me/submissions": "list_private_submissions",
   "GET /mixtapes": "list_mixtapes",
-  // The newsletter archive reads (docs/rfcs/newsletter-own-the-stack.md §3).
+  // The newsletter archive reads.
   // Contract-only oRPC — there is no TanStack route file under /api/v1/newsletter
   // (oRPC serves them off the registry), so they have no route-file basename to
   // enumerate; documented here as part of the public surface net.
