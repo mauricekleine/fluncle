@@ -47,16 +47,17 @@ A private, Tailscale-only devbox (admin over OpenSSH on the tailnet; no public i
 
 ## The image
 
-Built from the pinned upstream gateway plus the `fluncle` CLI (installed ungated; the Worker is the boundary). Build context: [`docs/agents/hermes/`](./hermes/) — [`Dockerfile`](./hermes/Dockerfile).
+Built from the pinned upstream gateway plus the `fluncle` CLI and the Claude Code CLI (both installed ungated; the Worker is the boundary). Build context: the **repo root** (the `copywriting-fluncle` skill is `COPY`d in, so the context must include `packages/skills/`); Dockerfile at [`docs/agents/hermes/Dockerfile`](./hermes/Dockerfile).
 
 - **The image carries `ffmpeg` + `bun`** so the box can run the audio-analysis enrichment on-box — the lever for the `fluncle-enrich` `--no-agent` cron (it decodes the preview with `ffmpeg` and runs the `analyze-track` DSP with `bun`, no Worker round-trip).
-- **Pin the upstream tag** (Hermes is pre-1.0; `latest` can change message handling and the model-context startup check under you). Current pin: `nousresearch/hermes-agent:v2026.6.19`.
+- **The image carries the `claude` (Claude Code) CLI + the `copywriting-fluncle` skill** so the `fluncle-observation` `--no-agent` cron's one agentic step (`claude -p` authoring the recovered-audio script in voice) survives a rebuild. The skill is baked at `/opt/claude/skills/copywriting-fluncle` with `CLAUDE_CONFIG_DIR=/opt/claude` (a world-readable config dir), so the non-root cron user finds it without depending on its HOME. `claude -p` authenticates from `CLAUDE_CODE_OAUTH_TOKEN` (subscription auth, **not** OpenRouter), injected at run via the secret env-file (§ Secrets) — never baked.
+- **Pin the upstream tag** (Hermes is pre-1.0; `latest` can change message handling and the model-context startup check under you). Current pin: `nousresearch/hermes-agent:v2026.6.19`. The `fluncle` CLI (`fluncle@0.54.0`) and Claude Code (`@anthropic-ai/claude-code@2.1.186`) are pinned the same way — bump deliberately at each `npm install -g` line.
 - **Pin the model** at ≥64k context. A model below the floor takes the _whole gateway_ down at startup (upstream issue #24140), not just one feature.
 - **Review the upstream pin monthly** and bump deliberately (pinning forever = no security patches for a wide Chromium/ffmpeg/Node/Python surface).
 
 ```bash
-# on the devbox, from the build context (Dockerfile present)
-docker build -t fluncle-hermes:v2026.6.19 .
+# on the devbox, from the REPO ROOT (the skill COPY needs packages/skills/ in context)
+docker build -f docs/agents/hermes/Dockerfile -t fluncle-hermes:v2026.6.19 .
 ```
 
 ## Changing what the agent may do
@@ -67,7 +68,7 @@ The allow-list lives in one place — the Worker. To move a command across the o
 
 The Worker owns every platform secret (R2, Postiz, Turso, YouTube, Mixcloud, Last.fm, Telegram); the agent holds **only** its admin token and the model key. Nothing secret lives in this repo or baked into the image.
 
-- Secrets are pulled from 1Password via the `op` CLI into a **root-owned** `/etc/hermes.env`, mounted with `--env-file` at run. App secrets today: the **agent-scoped** admin bearer, `OPENROUTER_API_KEY` (model), and the Discord bot token (when wired).
+- Secrets are pulled from 1Password via the `op` CLI into a **root-owned** `/etc/hermes.env`, mounted with `--env-file` at run. App secrets today: the **agent-scoped** admin bearer, `OPENROUTER_API_KEY` (model), `CLAUDE_CODE_OAUTH_TOKEN` (the Claude Code subscription token the `fluncle-observation` cron's `claude -p` authoring step authenticates with — from `op://Fluncle/CLAUDE_CODE_OAUTH_TOKEN/credential`; subscription auth, distinct from `OPENROUTER_API_KEY`), and the Discord bot token (when wired). The `claude` binary + the `copywriting-fluncle` skill are baked into the image (§ The image); only this token arrives at run — never baked.
 - The `op` service-account token is the one bootstrap secret — it can't come _from_ 1Password, so it sits in a separate root-only file used only by the secret-population step, kept **out** of the container env.
 - **The box never holds the operator token.** The CLI reads `FLUNCLE_API_TOKEN`; on the box that env var holds the value of the **agent-scoped** token (stored in 1Password as `FLUNCLE_AGENT_TOKEN`). The CLI sends it as its Bearer, the Worker recognizes it as the `agent` role, and publish-class actions are refused server-side. The operator's own laptop keeps the full `FLUNCLE_API_TOKEN` (the `operator` role). Both are intentionally **separate** from the admin-cookie signing key (`ADMIN_SESSION_SECRET`, a Worker-only secret), so a box compromise costs only the agent surface and **cannot forge web-admin sessions**.
 - Provision the agent token: `openssl rand -base64 32` → `wrangler secret put FLUNCLE_AGENT_TOKEN` (Worker) + store it in 1Password → re-populate `/etc/hermes.env` (its `FLUNCLE_API_TOKEN` = the agent value) → restart the container. Rotate the same way. The full `FLUNCLE_API_TOKEN` rotates independently with `wrangler secret put FLUNCLE_API_TOKEN`.
