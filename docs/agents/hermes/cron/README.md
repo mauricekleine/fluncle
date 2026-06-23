@@ -8,6 +8,24 @@ Every step is a "read a queue → act per item, idempotently" loop over the `flu
 
 `fluncle-enrich` is **live on the box**. It does not carry a prompt: enrichment is pure compute (get → analyze → update, zero LLM tokens), so it is a `--no-agent --script` job. Its script source lives beside the build context at [`../scripts/`](../scripts/) — a bash wrapper (`enrich-sweep.sh`) the cron runner execs by extension, which in turn `exec`s the bun orchestrator (`enrich-sweep.ts`). It is created on the box directly (not in `jobs.json`, which holds the agent jobs).
 
+## The `--no-agent` context-note cron (PREPARED, NOT YET WIRED)
+
+`fluncle-context-note` fills the **factual** context note for findings that lack one (the `context_note`), so the observation cron can author a grounded script later. It used to be a full **agent** cron that spent a whole Sonnet session just to drain a queue and POST per finding — pure harness tax (~37k prompt tokens/call to emit ~200). Its only real LLM work — distilling the note — already moved **Worker-side onto Haiku** (#129), so the box no longer needs an agent: it only asks the API what's queued and triggers the Worker endpoint per finding. It carries no prompt and burns **zero LLM tokens on the box**, so it is now a `--no-agent --script` job like enrich/backfill. Its source lives beside them at [`../scripts/`](../scripts/): `context-sweep.sh` (the bash entry the runner execs by extension) → `context-sweep.ts` (the bun orchestrator).
+
+**The Worker-paced model.** The box holds **no** Firecrawl key (the Worker does), and the note-distilling LLM (Haiku) is Worker-side too. So the Firecrawl search + Haiku distill + the quiet `context_note` write all happen **in the Worker**; this driver just **triggers** it — one small bounded batch per tick (`BATCH_CAP` 6). `context_track` is **agent tier** (idempotent on `context:${logId}`), so the box's existing agent-scoped token drives it; no operator token on the box (matching the `fluncle-enrich`/`fluncle-backfill` precedent).
+
+| Job                    | Schedule  | What it does                                                                                                                                                                                                                                                | Server slice                                                              |
+| ---------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `fluncle-context-note` | every 60m | Drain `admin tracks context --queue` (`hasContext=false`, oldest-first); per finding (bounded batch, cap 6/tick): `admin tracks context <id>` → triggers the Worker (Firecrawl + Haiku distill + quiet `context_note` write). Idempotent; no-op when empty. | `context_track` agent-tier endpoint + `hasContext` filter (#86/#88/#129). |
+
+**Every 60m, not 5m:** unlike `fluncle-enrich` (latency-sensitive for new finds), the context note is fuel the hourly observation cron consumes — so an hourly cadence keeps the two in step without paying the Worker (Firecrawl + Haiku) more often than the observation step can use. The sweep no-ops on an empty queue. To create it on a rebuilt box:
+
+```bash
+# Deploy the script pair, then create the no-agent cron.
+scp docs/agents/hermes/scripts/context-sweep.{sh,ts} <box>:~/.hermes/scripts/
+hermes cron create "every 60m" --no-agent --script context-sweep.sh --deliver local
+```
+
 ## The `--no-agent` catalogue-backfill cron (PREPARED, NOT YET WIRED)
 
 `fluncle-backfill` repairs the two music-graph side-channels over already-published findings: the **Discogs** release-id resolve and the **Last.fm love**. Like enrichment it carries no prompt — it is pure HTTP driving (zero LLM tokens) — so it is a `--no-agent --script` job. Its source lives beside the enrich sweep at [`../scripts/`](../scripts/): `backfill-sweep.sh` (the bash entry the runner execs by extension) → `backfill-sweep.ts` (the bun orchestrator).
@@ -44,19 +62,18 @@ hermes cron create "every 5m" --no-agent --script enrich-sweep.sh --deliver loca
 
 ## The agent crons — PREPARED, NOT YET WIRED
 
-The three AGENT jobs in [`jobs.json`](./jobs.json) are drafted but **not yet wired on the box** (`docs/hermes-automation-brief.md`, Build order #2–#3). The operator wires them on the devbox.
+The two AGENT jobs in [`jobs.json`](./jobs.json) are drafted but **not yet wired on the box** (`docs/hermes-automation-brief.md`, Build order #2–#3). The operator wires them on the devbox. (The context-note step is no longer an agent job — it is now the `--no-agent` `fluncle-context-note` sweep above.)
 
-| Job                    | Schedule     | What it does                                                                                                                                                                                                         | Server slice                                                                                                           |
-| ---------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `fluncle-context-note` | every 1h     | Drain `hasContext=false` (`admin tracks context --queue`), call `admin tracks context` per finding (Worker-side Firecrawl), write `context_note` quietly.                                                            | `context_track` agent-tier endpoint + `hasContext` filter (#86/#88).                                                   |
-| `fluncle-observation`  | every 1h     | Drain `hasContext=true AND hasObservation=false`; author the recovered-audio script (Sonnet + `copywriting-fluncle`) from the stored context note, then `observe --script`.                                          | `observe_track` flipped to agent tier + `hasObservation` filter (#86).                                                 |
-| `fluncle-newsletter`   | `0 15 * * 5` | Friday 15:00 Amsterdam (box-TZ pinned): read the discovery window, author the edition (Sonnet + `copywriting-fluncle`), persist a DRAFT via `admin newsletter draft`, then offer a `clarify` Send button in Discord. | `create_edition` (admin tier) + `send_edition` (operator tier) + `list_editions_admin` (admin tier, drafts inclusive). |
+| Job                   | Schedule     | What it does                                                                                                                                                                                                         | Server slice                                                                                                           |
+| --------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `fluncle-observation` | every 1h     | Drain `hasContext=true AND hasObservation=false`; author the recovered-audio script (Sonnet + `copywriting-fluncle`) from the stored context note, then `observe --script`.                                          | `observe_track` flipped to agent tier + `hasObservation` filter (#86).                                                 |
+| `fluncle-newsletter`  | `0 15 * * 5` | Friday 15:00 Amsterdam (box-TZ pinned): read the discovery window, author the edition (Sonnet + `copywriting-fluncle`), persist a DRAFT via `admin newsletter draft`, then offer a `clarify` Send button in Discord. | `create_edition` (admin tier) + `send_edition` (operator tier) + `list_editions_admin` (admin tier, drafts inclusive). |
 
 The newsletter is the one cron that is **`deliver: discord`** (not `local`): the Friday edition is a crew-feed moment AND the send gate is a `clarify` button the operator must see and tap. It is also the one cron on a **cron expression** (`0 15 * * 5`) rather than an interval, so it depends on the box clock being pinned to `Europe/Amsterdam` — see [The newsletter cron's two extras](#the-newsletter-crons-two-extras-dst--the-clarify-send-gate).
 
 ## The newsletter cron's two extras: DST + the clarify send gate
 
-The two hourly crons are plain box-clock-agnostic intervals. The Friday newsletter adds two mechanics the others don't have:
+The hourly observation cron and the `--no-agent` sweeps are plain box-clock-agnostic intervals. The Friday newsletter adds two mechanics the others don't have:
 
 - **DST-aware Friday 15:00 Amsterdam — solved by the BOX CLOCK, not a TZ field.** Hermes cron has **no per-job timezone** (verified against the upstream cron docs: schedules are relative / `every Nh` / a cron expression / an ISO timestamp, all evaluated against the box clock). So `0 15 * * 5` fires at 15:00 in whatever timezone the box clock reads. To hit 15:00 Amsterdam correctly through the CET⇄CEST flip, **pin the box to `Europe/Amsterdam`** (`TZ=Europe/Amsterdam` on `docker run`, or the host `/etc/localtime`); the OS tz database then handles DST and `0 15 * * 5` is always 15:00 Amsterdam, summer or winter, with zero app-level DST logic. The hourly intervals (enrich/context/observation) are TZ-agnostic, so this pin is invisible to them — but any **future absolute-time cron inherits Amsterdam-local**, so document new ones as such. _Smoke-test before relying on it:_ schedule a one-shot `0 <next-minute> * * *` and confirm it fires at the Amsterdam-local minute; if it evaluates UTC regardless, fall back to two seasonal entries (`0 13 * * 5` summer + `0 14 * * 5` winter, each season-guarded).
 - **The `clarify` send gate — persist-then-offer.** The send stays operator-gated: the agent token gets a 403 on `send_edition` server-side, so the cron **cannot** send. Instead it **persists the draft first** (the durable artifact — a missed button never loses the authored work), then calls the built-in `clarify` tool to render a tappable **Send / Hold** button in Discord and blocks for the tap. On **Send** → the agent runs `fluncle admin newsletter send <id>`. On **Hold** or the clarify timeout sentinel (default 600s) → it treats silence as Hold (**never** auto-sends — silence is not consent for a publish-class action); the draft is saved and re-offered on the next Friday tick (the cron's step 1 reads `admin newsletter list` for an unsent draft before authoring a new one). `clarify_timeout` is **global** `agent.` config (not per-call), so keep the default and lean on persist-first + re-offer rather than a long block. _Verify `clarify` is reachable in a `deliver: discord` cron session_ (it is a built-in toolset; a dry run from a scheduled tick settles it).
@@ -67,9 +84,9 @@ Source: <https://hermes-agent.nousresearch.com/docs/user-guide/features/cron> (f
 
 - **Where jobs live:** `~/.hermes/cron/jobs.json` on the box. Per-run output is saved to `~/.hermes/cron/output/{job_id}/{timestamp}.md`. (Crons are **not** in `config.yaml` — `config.yaml` only carries cron _defaults_ like `cron.wrap_response` / `cron.script_timeout_seconds`.)
 - **Scheduler:** the gateway ticks every 60 s and runs any due job in a **completely fresh, isolated agent session**. The prompt must be self-contained — there is no carried conversation. That is why each `prompt` below restates its whole task.
-- **Schedule formats:** relative one-shot (`30m`, `2h`), recurring interval (`every 1h`, `every 5m`), cron expression (`0 * * * *`), or ISO timestamp. The two hourly agent jobs use `every 1h`; the `--no-agent` enrich sweep uses `every 5m`; the weekly newsletter uses a cron expression `0 15 * * 5` (Friday 15:00, evaluated against the **box clock** — which is why the box is pinned to `Europe/Amsterdam`; there is no per-job TZ field).
-- **Agent job vs. no-agent job:** an **agent** job carries a `prompt` and reasons through the task (the three agent jobs — the two hourly queue-drains and the weekly newsletter, which authors copy). A **no-agent** job carries `no_agent: true` + a `script` and ships its stdout, skipping the LLM (the `fluncle-enrich` sweep is the one no-agent job).
-- **Delivery (`deliver`):** `local` saves the run output under `~/.hermes/cron/output/` with no chat post; `origin`, `discord`, `discord:#channel`, etc. post to a channel; `all` fans out. The two hourly queue-drains are silent, so they're `local`; the **newsletter is `discord`** (a crew-feed moment, and the `clarify` Send button needs a channel the operator sees).
+- **Schedule formats:** relative one-shot (`30m`, `2h`), recurring interval (`every 1h`, `every 5m`), cron expression (`0 * * * *`), or ISO timestamp. The hourly observation agent job uses `every 1h`; the `--no-agent` sweeps use `every 5m` (enrich), `every 30m` (backfill), and `every 60m` (context-note); the weekly newsletter uses a cron expression `0 15 * * 5` (Friday 15:00, evaluated against the **box clock** — which is why the box is pinned to `Europe/Amsterdam`; there is no per-job TZ field).
+- **Agent job vs. no-agent job:** an **agent** job carries a `prompt` and reasons through the task (the two agent jobs — the hourly observation queue-drain and the weekly newsletter, both of which author copy). A **no-agent** job carries `no_agent: true` + a `script` and ships its stdout, skipping the LLM (the `fluncle-enrich`, `fluncle-backfill`, and `fluncle-context-note` sweeps).
+- **Delivery (`deliver`):** `local` saves the run output under `~/.hermes/cron/output/` with no chat post; `origin`, `discord`, `discord:#channel`, etc. post to a channel; `all` fans out. The queue-drain crons are silent, so they're `local`; the **newsletter is `discord`** (a crew-feed moment, and the `clarify` Send button needs a channel the operator sees).
 - **Chaining (`context_from`):** a job can prepend another job's most recent output as context. **Not used** here: the context-note → observation handoff is durable **server state** (the stored `context_note`), not cron-run output, so the observation cron reads the queue directly rather than chaining off the context cron's stdout. (This is intentional — chaining would couple the two jobs' ticks; the queue decouples them, which is the whole point of the context⊥observation split.)
 - **Repeat:** intervals (`every 1h`) and cron expressions repeat **forever** by default; a one-shot runs once. `repeat: <n>` caps the run count. Left `null` here (forever).
 
@@ -79,8 +96,8 @@ Source: <https://hermes-agent.nousresearch.com/docs/user-guide/features/cron> (f
 
 ```bash
 # On the devbox, over SSH on the tailnet (address in the operator's ops notes).
-# CLI form — one per agent job (first arg is the schedule, second is the prompt):
-hermes cron create "every 1h"   "<prompt from jobs.json: fluncle-context-note>" --deliver local
+# CLI form — one per agent job (first arg is the schedule, second is the prompt).
+# (The context-note step is a `--no-agent` script sweep now — see its section above.)
 hermes cron create "every 1h"   "<prompt from jobs.json: fluncle-observation>"  --deliver local
 # The newsletter: a cron expression, delivered to Discord (the Send button needs a channel).
 # Pin the box clock to Europe/Amsterdam FIRST (see "The newsletter cron's two extras").
@@ -94,6 +111,7 @@ or ask the running bot in Discord (`/cron add "every 1h" "<prompt>"`), or in nat
 1. **CLI admin naming rename — landed (#88, refined by the Convention-B cleanup).** The crons invoke via the `fluncle` CLI; the context command is `fluncle admin tracks context <id|logId>` and the queue shows are the `context --queue` / `observe --queue` worklist views (Convention B §6.4 — no `*-queue` commands). Every job prompt here is pinned to those names.
 2. **Smoke-test each command by hand on the box** with the agent token before scheduling it, so a scheduled run isn't the first time it executes:
    - `fluncle admin tracks enrich --queue --json --limit 1` → expect `{ "ok": true, ... }` (the queue the live `--no-agent` sweep already reads).
+   - `fluncle admin tracks context --queue --json --limit 1` → expect `{ "ok": true, "tracks": [...] }` (the worklist the `--no-agent` context sweep reads).
    - `fluncle admin tracks context <id> --json` against one `hasContext=false` finding → expect a quiet `context_note` write (no `updated_at` bump).
    - `fluncle admin tracks observe <id> --script-file <one short test script> --json` against one eligible finding → expect a rendered `observation.{mp3,txt,json}` and the voice gate passing.
    - **Newsletter:** `fluncle admin newsletter list --json` → expect `{ "ok": true, editions: [...] }` (drafts inclusive). Then author one edition end-to-end by hand: `fluncle admin newsletter draft --content-file <edition.json> --subject "<test>" --window-since <iso> --window-until <iso> --json` → expect a `draft` row with a sane `content`. Do NOT send yet. Confirm the agent token gets a **403** on `fluncle admin newsletter send <id> --json` (the operator gate); the operator fires the real send.
@@ -103,9 +121,9 @@ or ask the running bot in Discord (`/cron add "every 1h" "<prompt>"`), or in nat
 
 ### Verify it's healthy
 
-- `hermes cron list` shows `fluncle-enrich` (live) plus the three agent jobs with a sane `next_run_at`.
-- After an hour, each hourly job's `~/.hermes/cron/output/{job_id}/` has a fresh run with the expected one-line summary (and a no-op when its queue is empty).
-- Wire the context-note first (cheaper, no paid render), then the observation, then the newsletter (gate it on the box-TZ pin + one good hand-authored edition end-to-end first, per `docs/agents/newsletter-agent.md`).
+- `hermes cron list` shows `fluncle-enrich` (live) plus the `fluncle-context-note` / `fluncle-backfill` sweeps and the two agent jobs with a sane `next_run_at`.
+- After a tick, each job's `~/.hermes/cron/output/{job_id}/` has a fresh run with the expected one-line summary (and a no-op when its queue is empty).
+- Wire the context-note sweep first (cheaper, no paid render — it only triggers the Worker), then the observation, then the newsletter (gate it on the box-TZ pin + one good hand-authored edition end-to-end first, per `docs/agents/newsletter-agent.md`).
 - The newsletter's first live send goes to a **seed/operator-only audience first** (per the RFC's de-risk step) to validate DKIM + the unsubscribe link before any subscriber sees it.
 
 ## Keeping this in step
