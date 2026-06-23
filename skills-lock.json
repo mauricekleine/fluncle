@@ -36,7 +36,7 @@
     "fluncle-hermes-operator": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-hermes-operator",
       "sourceType": "local",
-      "computedHash": "1f74b12d373fa81fb0038730d8379778824e7074fbf30db6f27ba36e8503b659"
+      "computedHash": "01b4776e4a553df8c028ab528d97204a5ff783c99c14ea28899b7fb007b02066"
     },
     "fluncle-mixtapes": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-mixtapes",
@@ -61,12 +61,12 @@
     "fluncle-track-enrichment": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-track-enrichment",
       "sourceType": "local",
-      "computedHash": "efe35ceab91ced6929208f1d63e6c1e32f891c5ed880a1039639e5f87b10affc"
+      "computedHash": "ea963650d2bfc38216ded2c1d8413284fa5c260e99f92bc557b687b234931c72"
     },
     "fluncle-video": {
-      "source": "/Users/maurice/.superset/worktrees/5eed65e8-d27d-4e50-8b3e-2e2685c57120/video-aliveness-overnight/packages/skills/fluncle-video",
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-video",
       "sourceType": "local",
-      "computedHash": "7cbba232fb04a3acfdd16b5a70461d38255cfb6cd658c88bee5c6ed7b9dc9afd"
+      "computedHash": "fe808b893b9cd91840955f13b68cf244a2ffeefca9ee7e0b9a826a9ed851e93e"
     },
     "hetzner-devbox": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/hetzner-devbox",
