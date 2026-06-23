@@ -6,6 +6,7 @@ import { BrandIcon } from "@/components/brand-icon";
 import { Button } from "@/components/ui/button";
 import { siteUrl } from "@/lib/fluncle-links";
 import { formatDateLong } from "@/lib/format";
+import { activeSliceForOffset } from "@/lib/observation-slices";
 import { videoClipCrop, videoCrop, videoCropPoster } from "@/lib/media";
 import {
   breatherDimAt,
@@ -137,32 +138,19 @@ function trackSegmentMs(track: Track): number {
   return typeof raw === "number" && raw >= SEGMENT_FLOOR_MS ? raw : SEGMENT_FLOOR_MS;
 }
 
-// The active-word index for an offset (ms into the observation): the LAST word whose
-// window has started and not yet ended. Between words (a gap/pause) the last spoken
-// word stays lit rather than flickering off, so the read never strobes. -1 before the
-// first word. A binary-search-free linear scan is fine — observations are ~40 words.
-function activeWordIndex(words: { endMs: number; startMs: number }[], offsetMs: number): number {
-  let index = -1;
-
-  for (let i = 0; i < words.length; i += 1) {
-    const word = words[i];
-
-    if (!word || offsetMs < word.startMs) {
-      break;
-    }
-
-    index = i;
-  }
-
-  return index;
-}
-
-// Synced observation captions: the spoken script, word by word, with the CURRENT
-// word lit off the SAME shared-clock offset the audio resyncs to (not raw
-// audio.currentTime — captions then stay aligned through resyncs and while muted).
-// A rAF loop reads the offset and updates the active index; the highlight is a
-// colour change (the Gold heat), grounded under reduced motion (no transition).
-// Absent alignment ⇒ the component renders nothing (no captions for that finding).
+// Synced observation captions, redesigned as Fluncle NARRATING LIVE, center-stage
+// (RFC radio-broadcast.md / the operator's center-stage ask): not the whole
+// transcript as a bottom-anchored subtitle strip, but ONE slice at a time, big and
+// centered over the footage. The script is split into sequential slices (sentence
+// units, long sentences chunked into bounded phrase windows — see
+// lib/observation-slices.ts); only the slice containing the currently-spoken word
+// is on screen. Within that slice the CURRENT word is lit (the Gold heat), carried
+// over verbatim from the old per-word treatment. When the spoken word reaches a
+// slice's last word, the next tick swaps to the next slice with its first word lit
+// — a soft cross-fade keyed on sliceIndex, instant under reduced motion. All of it
+// reads off the SAME shared-clock offset the audio resyncs to (not raw
+// audio.currentTime — so the captions stay aligned through resyncs and while
+// muted). Absent alignment ⇒ the component renders nothing (no captions).
 function RadioCaptions({
   segmentStartServerMs,
   serverNow,
@@ -172,7 +160,9 @@ function RadioCaptions({
   serverNow: () => number;
   words: { endMs: number; startMs: number; text: string }[];
 }) {
-  const [active, setActive] = useState(-1);
+  // The live slice + the lit word within it, recomputed each frame off the shared
+  // clock. The whole result is derived (pure function), so a single state holds it.
+  const [view, setView] = useState(() => activeSliceForOffset(words, -1));
 
   useEffect(() => {
     if (words.length === 0) {
@@ -182,7 +172,7 @@ function RadioCaptions({
     let frame = 0;
 
     const tick = () => {
-      setActive(activeWordIndex(words, serverNow() - segmentStartServerMs));
+      setView(activeSliceForOffset(words, serverNow() - segmentStartServerMs));
       frame = requestAnimationFrame(tick);
     };
 
@@ -195,19 +185,33 @@ function RadioCaptions({
     return undefined;
   }
 
+  const slice = view.slices[view.sliceIndex];
+
+  if (!slice) {
+    return undefined;
+  }
+
   return (
-    <p aria-label="Observation captions" className="radio-captions" role="group">
-      {words.map((word, i) => (
-        <span
-          className={i === active ? "radio-caption-word is-active" : "radio-caption-word"}
-          // The script is a fixed, ordered word list; index is a stable key here.
-          // oxlint-disable-next-line no-array-index-key
-          key={i}
-        >
-          {word.text}{" "}
-        </span>
-      ))}
-    </p>
+    <div aria-hidden="true" className="radio-narration">
+      {/* Keyed on the slice index so React mounts a fresh node per slice — the CSS
+          enter animation (a soft fade, reduced-motion → instant) plays on the swap. */}
+      <p className="radio-narration-line" key={view.sliceIndex}>
+        {slice.words.map((word, i) => (
+          <span
+            className={
+              i === view.activeWordInSlice
+                ? "radio-narration-word is-active"
+                : "radio-narration-word"
+            }
+            // The script is a fixed, ordered word list; index is a stable key here.
+            // oxlint-disable-next-line no-array-index-key
+            key={i}
+          >
+            {word.text}{" "}
+          </span>
+        ))}
+      </p>
+    </div>
   );
 }
 
@@ -669,6 +673,18 @@ function RadioPage() {
 
       <div aria-hidden="true" className="radio-scrim" />
 
+      {/* Fluncle narrating, center-stage: one slice of the observation at a time,
+          big and centered over the footage, the live word lit (Gold heat). Reads
+          off the shared-clock offset, so it stays aligned through resyncs and while
+          muted. Absent alignment ⇒ renders nothing. */}
+      {current.observationAlignment && current.observationAlignment.words.length > 0 ? (
+        <RadioCaptions
+          segmentStartServerMs={playhead.segmentStartServerMs}
+          serverNow={serverNow}
+          words={current.observationAlignment.words}
+        />
+      ) : undefined}
+
       {/* Mute toggle (Feature C): a single quiet icon top-right. A LOCAL playback
           preference, not part of the shared schedule. */}
       <button
@@ -691,13 +707,6 @@ function RadioPage() {
         {current.logId ? <span className="radio-log-id">{current.logId}</span> : undefined}
         <h2 className="radio-title">{current.title}</h2>
         <p className="radio-artist">{current.artists.join(", ")}</p>
-        {current.observationAlignment && current.observationAlignment.words.length > 0 ? (
-          <RadioCaptions
-            segmentStartServerMs={playhead.segmentStartServerMs}
-            serverNow={serverNow}
-            words={current.observationAlignment.words}
-          />
-        ) : undefined}
         <p className="radio-facts">
           {[
             current.label,
