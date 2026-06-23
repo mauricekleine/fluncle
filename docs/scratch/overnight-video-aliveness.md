@@ -189,3 +189,74 @@ Every `judge` variant scored coupling "alive" (0.57 / 0.43 / 0.25) where its `no
 - **The coupling metric needs a redesign before it gates anything** — stop brightness-normalizing away luminosity; measure beat-aligned in-place reactivity, not curve-variance correlation. (Feeds Part II.)
 - Krakota (`011.6.8K`) is **already posted** — its clip is not swappable; it is here only to test aliveness-on-a-beat.
 - **OpenRouter credits ran out mid-run once** (Krakota's first judge attempt fell through to an un-judged render — no contact-sheet produced; I stopped it and re-ran after the balance recovered, then all judge calls returned `ok:true`). Part II's relay should surface a clear "judge unavailable / out of credits" advisory rather than silently shipping an un-judged render as a judged one.
+
+---
+
+## Reviewer note (heartbeat, 2026-06-23 ~11:35) — Round 2 closeout + the converged conclusion
+
+The round-2 run + the operator labels + the metric reads now agree on a single, cheap story. All 6 round-2 clips ffprobe valid (1080×1920 h264+aac, ~20s); both hard gates pass on all.
+
+**Judge-vs-nojudge beat-pull (the whole-vehicle jump), per track:** 011.6.8K 0.164→0.130 (−0.034); 018.5.7Y 0.157→0.098 (−0.059); 019.3.9J 0.164→0.141 (−0.024). The judge lowered the jump on all three — but at least one (Flowidus 018.5.7Y) reached it by pivoting to a **rigid one-way slide** (the operator's "dead sliding" failure), then scoring coupling 0.43 "alive." So the judge trades JUMP for DEAD-SLIDE. The contact-sheet (keyframes) cannot perceive beat-locked in-place reactivity, so the judge falls back on the flawed coupling number → optimizes toward sliding. **Verdict: the judge is a dead end for ALIVENESS** (both rounds). It may still serve as a brand/off-brand/readability checker — but not for the goal.
+
+**Coupling is miscalibrated for real beats (sharper diagnosis):** it correlates the picture-delta against the audio curve's VARIANCE, but a sustained dropped beat is flat-high energy (low variance) → correlation collapses to ~0 even when the picture reacts on the kick. All 3 no-judge renders read "dead" (0.04 / 0.06 / −0.31) while reacting. The fix is a **beat-grid-aligned reactivity measure** — does material deform/brighten ON the beatGrid timestamps vs between — NOT curve-variance correlation. Do not gate on the current coupling.
+
+**The beat-filter bug the run caught (good catch):** `bassCrest` (p95/mean) is ANTI-correlated with a real beat (a sustained drop has compressed bass → low crest; a sparse intro has spiky bass → high crest), so the original gate selected FOR intros. Corrected gate (`out/_judge/beat-gate.ts`): onsetDensity + sustainHigh + secondHalfMean + bassSustain. Only 2 not-yet-posted findings cleared it; 011.6.8K (Krakota, POSTED) is flagged not-swappable.
+
+**The converged, cheap, high-confidence plan** (see `out/overnight/INSIGHTS.md`): (1) DOCTRINE — global translation = constant clock, audio-free; all reactivity → in-place internal deformation (018.5.7Y "cold murmuration" nojudge is the exemplar; the jump came from `drift = …swell*1.4…` / `drift = u_audioSwell*0.10`). (2) STATIC LINT — flag an audio uniform on any drift/travel/pos term. (3) TIGHTEN beat-pull ~0.17→0.15 (the nojudge jumpers sit 0.157–0.164). (4) REBUILD coupling as beat-grid-aligned, or keep it advisory-only. (5) DROP the judge for aliveness. Operator to label the 6 round-2 clips (eyeball) to seed the recalibration.
+
+Heartbeat stood down — round 2 complete (6/6 + report).
+
+---
+
+## CORRECTION (operator eyeballed the round-2 JUDGE variants, 2026-06-23 ~11:50)
+
+The reviewer note above called the judge "a dead end for aliveness." **That was wrong** — it leaned on the broken coupling metric + a misread "rigid slide" alarm. Operator labels on the 3 judge variants: **ALL THREE ALIVE**, and BETTER than 2/3 of the no-judge variants (which jumped/scratched). See `out/overnight/round2-labels.json`.
+
+- **Judge verdict → UNRESOLVED, leaning HELPFUL on beat tracks.** Confounded (each variant is a different fresh-author vehicle; n=3) — settle with a same-vehicle judge-refine-vs-not test. The judge variants had LOWER beat-pull (continuous global, no jump) + real internal reactivity → they EXEMPLIFY the aliveness law. The metric (and a prediction) said the opposite of the eye; the eye wins.
+- **NEW PRIZED DOCTRINE TARGET (operator-requested): the reactive SCENE-CHANGE / structural arc** — the composition visibly shifts CHARACTER across the song structure (calm build → drop → vibrant main), not just per-beat. = doctrine 10 made vivid; only appears on beat tracks. Exemplars: `018.5.7Y.judge` (clear build/drop/main change, layered cloud-gradient voronoi — best voronoi yet) + `019.3.9J.judge` (oil-painting palette; calm-before → vibrant-on-drop; goldilocks of reactive-not-jumpy). A beat-grid-aligned metric would also measure this.
+
+The cheap aliveness fixes (global-drift-audio-free doctrine + the static lint + beat-pull tighten) STAND — they fix the no-judge jumpers. We ADD the structural-arc doctrine, and we KEEP the judge in the experiment rather than dropping it.
+
+---
+
+## Round 3 — fold-in (Phase A) + same-vehicle judge isolation (Phase B), 2026-06-23
+
+This round acts on the heartbeat plan above: it (A) folds the global-vs-internal findings into doctrine + tooling, then (B) runs the **same-vehicle judge-refine-vs-not test** the note asked for — settling the round-2 confound (each round-2 pair was a _different_ fresh-author vehicle, so "judge vs no-judge" was tangled with "vehicle A vs vehicle B"). In Round 3 each pair is ONE vehicle, rendered, then the judge's `likelyCodeFixes` applied to that SAME composition and re-rendered. The before/after now isolates exactly what the judge changes.
+
+### Phase A — folded in (committed `5e1c72d`, gate green: typecheck + oxlint + bun test, 9 test files)
+
+- **Doctrine (`fluncle-video` skill):** GLOBAL translation is an audio-free constant clock; ALL reactivity is INTERNAL deformation (sharpens doctrine 7). Two new Failure-modes: the DJ-scratch (audio on drift, no constant base) + the uncapped-swell drift surge (audio coeff ≥ the clock coeff). New PRIZED pattern: the reactive scene-change / structural arc (calm build → drop → vibrant main, read from the energy curve). Exemplars cited (cold-murmuration; 018.5.7Y.judge + 019.3.9J.judge).
+- **Static lint** `bun run --cwd packages/video lint:composition <comp.tsx>` (`src/pipeline/lint-composition.ts` + test): flags a translation term that binds audio over/without a dominant constant clock. **Validated on the real round-2 sources 3/3:** cold-murmuration clean; tide-screen flagged (`swell*1.4 ≥ sec*0.85`); watered-silk flagged (`drift = u_audioSwell*0.10`, no base) — the two operator-confirmed jumpers, caught at author time.
+- **Coupling rebuilt beat-grid-aligned** (`analyze-motion.ts` `beatReactivity` block): on-beat vs off-beat contrast on a combined structural+LUMINANCE delta (fixes the brightness-normalize blind spot) + a phase-shuffle null + a structural-arc score; the legacy `coupling` stays for comparison. **Validated vs all 12 labelled clips:** beat-pull@0.16 cleanly separates the 3 jumpers (≥0.16) from all 8 alive (<0.16); the new beat-reactivity trends alive>weak but is NOISY (it can't see a localized off-centre bloom or a sustained-roller, both frame-averaged away) → it stays ADVISORY, not a gate. **The reliable gate remains beat-pull; the eye remains the arbiter.**
+- **Judge harness** re-anchored: motionEnergy/beatSync now read the new beat-grid block (the legacy coupling is told to be ignored on beat tracks), and a per-beat **motion-delta montage** (ffmpeg frame-diffs) is sent beside the keyframe sheet so the judge can SEE reactivity stills can't; max_tokens raised (round-2 truncation fix).
+- **beat-pull threshold 0.17 → 0.16** (provisional; alive-exemplar 0.157 / jumpers 0.164).
+
+### Phase B — same-vehicle judge isolation (6 clips for the operator to label)
+
+3 beat-having findings (corrected gate); only **2 not-yet-posted cleanly passed** (the pool is genuinely thin), so the 3rd is the strongest borderline (a real beat at sustainHigh 0.34 vs ~0.35, bassSustain 0.88 — not a lull, not posted). Each pair: ONE vehicle, no-judge baseline → the judge's fixes applied to the SAME composition (material/binding/arc only, never a vehicle pivot) → judge final. All 6 ffprobe **1080×1920 h264+aac, ~20s**; **both intent.json `vehicle` fields match within each pair (isolation confirmed).**
+
+| Log ID   | Track                                                        | Beat confirm (onset/s · sustainHigh · bassSustain · bpm) | Vehicle (one per pair)        | Variant | beat-pull | beatReactivity (bgc / verdict / arc) | Your label |
+| -------- | ------------------------------------------------------------ | -------------------------------------------------------- | ----------------------------- | ------- | --------- | ------------------------------------ | ---------- |
+| 019.1.7X | Strength — Technimatic · _not-yet-posted_                    | 3.95 · 0.37 · 0.99 · 185                                 | caustic bloom (fluent)        | nojudge | 0.14 ✓    | −0.005 / dead / 0                    |            |
+| 019.1.7X | ″                                                            | ″                                                        | ″                             | judge   | 0.14 ✓    | −0.006 / dead / 0                    |            |
+| 012.2.4L | See For Miles — Krakota · _not-yet-posted_                   | 5.35 · 0.47 · 0.74 · 185                                 | terrain ridge (nebula)        | nojudge | 0.057 ✓   | 0.026 / reactive / 0.080             |            |
+| 012.2.4L | ″                                                            | ″                                                        | ″                             | judge   | 0.144 ✓   | **0.057** / reactive / 0             |            |
+| 020.1.1A | Take Me There — Krakota · _not-yet-posted · borderline gate_ | 4.80 · 0.34 · 0.88 · 185                                 | starling murmuration (dither) | nojudge | 0.08 ✓    | 0.022 / weak / 0.05                  |            |
+| 020.1.1A | ″                                                            | ″                                                        | ″                             | judge   | 0.09 ✓    | 0.008 / weak / 0.047                 |            |
+
+All 6 pass both hard gates (beat-pull <0.16 + flash safe) and the motion lint (no audio on global translation).
+
+### What the judge did to each fixed vehicle, and the honest read
+
+- **Strength / caustic bloom:** judge said "mild render" at the climax → fixes: bass→brightness gain 0.42→0.95 + ignition re-aligned to the drop. Visually the crest ignites far harder; the beat-grid metric stayed flat (it frame-averages, so a small off-centre bloom is invisible to it).
+- **See For Miles / terrain ridge:** judge said low motion → fixes: a stronger energy structural-arc + a per-beat hit pulse. **beatGridCoupling doubled (0.026→0.057), pictureActivity 2.01→2.71** — a measured reactivity gain on the SAME vehicle. Cost: beat-pull 0.057→0.144 (more reactive → closer to the jump line, still passing).
+- **Take Me There / starling murmuration:** judge said the climax doesn't condense → fixes: drop→condensation density + per-kick bind + treble sparkle. The arc contrast rose (arcLumaDelta 0.064→0.080, the climax now visibly condenses) but the on-beat metric dipped (a sustained roller has no punchy per-beat transient to lock to without tripping beat-pull).
+
+**The de-confounded finding:** on a FIXED vehicle the judge's fixes are consistently in the right spirit (sharpen the climax / add the arc / increase reactivity), grounded in metric keys, and gate-safe (no pivot; beat-pull still passing; lint clean) — and at least once (terrain ridge) produced a clear measured reactivity gain. This is unlike round 2, where the judge "helped" partly by pivoting to a rigid slide. BUT the deterministic beat-grid metric deltas are MIXED (one doubled, one flat, one dropped) because the metric still can't see localized blooms or sustained-roller reactivity — so the metric cannot certify the judge. **The operator's eye on these 3 same-vehicle before/after pairs is the clean test the round-2 confound blocked.** The judge also showed its weakness mid-run (it mislabeled warm-dark ground as "static blackness" on terrain ridge); the agents corrected by steering on the deterministic signals + the eye.
+
+### Round-3 operator calls
+
+- **Label the 6 clips** (the table's last column). Because each pair is ONE vehicle, the label difference within a pair = the judge's effect, cleanly. This settles "is the judge helpful on beats" without the round-2 vehicle confound.
+- **The beat-grid metric needs a localized + envelope-aware read** before it can certify aliveness — it frame-averages, so an off-centre bloom (caustic bloom) and a sustained roller (starling murmuration) both read flat despite visible reactivity. Beat-pull + the lint + the eye remain the reliable trio.
+- Only 2 not-yet-posted beat-having findings remain in the recent pool (the well is nearly dry for swappable beat clips); future rounds may need newer findings or posted tracks.
+- The `lint:composition` is ready to wire into the render workflow as an author-time gate (it caught both round-2 jumpers); consider adding it to the skill's Gates step.
