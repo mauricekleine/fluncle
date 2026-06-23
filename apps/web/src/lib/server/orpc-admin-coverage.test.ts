@@ -93,6 +93,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // (oRPC owns the path directly), so it lives here as a path→op entry without a
   // `tracks.$trackId.context.ts` route file.
   "POST /admin/tracks/{trackId}/context": "context_track",
+  // note_track (the auto-note authoring step) is contract-only oRPC like context_track
+  // — no TanStack route file; oRPC owns the path directly.
+  "POST /admin/tracks/{trackId}/note": "note_track",
   "POST /admin/tracks/{trackId}/observe": "observe_track",
   "POST /admin/tracks/{trackId}/social/{platform}/draft": "draft_track_social",
   "POST /admin/tracks/{trackId}/video/finalize": "finalize_track_video",
@@ -180,6 +183,7 @@ describe("oRPC admin-route contract coverage", () => {
   it("converts the pilot's `admin-tracks` set (update/observe/video presign+finalize)", () => {
     const expected = [
       "finalize_track_video",
+      "note_track",
       "observe_track",
       "presign_track_video_uploads",
       "update_track",

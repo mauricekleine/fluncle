@@ -153,14 +153,16 @@ const fetchBoard = createServerFn({ method: "GET" })
     // trackers: `done` once the backfill ran (whether or not it found data), grey
     // only while it's never run — the ran-stamp drives the cell, the data-stamp
     // (release url / loved) only refines the label.
-    const [posts, mixtapes, contextNotes, discogsRan, lastfmRan, lastfmLoved] = await Promise.all([
-      listSocialPostsForTracks(trackIds),
-      listMixtapeMembershipsForTracks(trackIds),
-      listContextNotePresenceForTracks(trackIds),
-      listBackfillRanForTracks(trackIds, "discogs"),
-      listBackfillRanForTracks(trackIds, "lastfm"),
-      listLastfmLovedForTracks(trackIds),
-    ]);
+    const [posts, mixtapes, contextNotes, discogsRan, lastfmRan, lastfmLoved, noteRan] =
+      await Promise.all([
+        listSocialPostsForTracks(trackIds),
+        listMixtapeMembershipsForTracks(trackIds),
+        listContextNotePresenceForTracks(trackIds),
+        listBackfillRanForTracks(trackIds, "discogs"),
+        listBackfillRanForTracks(trackIds, "lastfm"),
+        listLastfmLovedForTracks(trackIds),
+        listBackfillRanForTracks(trackIds, "note"),
+      ]);
 
     return {
       nextCursor: page.nextCursor,
@@ -172,6 +174,7 @@ const fetchBoard = createServerFn({ method: "GET" })
         lastfmLoved: lastfmLoved.has(track.trackId),
         lastfmRan: lastfmRan.has(track.trackId),
         mixtapes: mixtapes[track.trackId] ?? [],
+        noteRan: noteRan.has(track.trackId),
         posts: posts[track.trackId] ?? [],
       })),
     };
