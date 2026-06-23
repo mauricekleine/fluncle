@@ -419,13 +419,16 @@ function addAdminCommands(program: Command): void {
       await runAdd(spotifyUrl, options, addCommand);
     });
 
-  // The video render queue. `--has-context`/`--has-observation` narrow it to the
-  // observation crons' queues (which findings still need field notes / a voice).
+  // The video render queue. It is HARD-GATED on `hasContext=true`: it only ever
+  // surfaces findings that already carry a stored context note, so the render's
+  // context read is a guaranteed cached no-op (never a Firecrawl trigger). The
+  // `--has-context` flag is therefore always-on here and kept only for back-compat;
+  // `--has-observation` still narrows it to the already-voiced subset.
   adminTracks
     .command("queue")
     .description("Findings awaiting a video, oldest first (the next to film is first)")
     .option("--limit <limit>", "Number of findings to show", "10")
-    .option("--has-context", "Only findings whose field notes are already gathered")
+    .option("--has-context", "No-op: the render queue is always context-gated")
     .option("--has-observation", "Only findings that already have a spoken observation")
     .option("--json", "Print JSON", false)
     .action(async (options: AdminQueueOptions) => {
@@ -437,7 +440,7 @@ function addAdminCommands(program: Command): void {
     .command("queue", { hidden: true })
     .description("Render queue (alias of `admin tracks queue`)")
     .option("--limit <limit>", "Number of findings to show", "10")
-    .option("--has-context", "Only findings whose field notes are already gathered")
+    .option("--has-context", "No-op: the render queue is always context-gated")
     .option("--has-observation", "Only findings that already have a spoken observation")
     .option("--json", "Print JSON", false)
     .action(async (options: AdminQueueOptions) => {

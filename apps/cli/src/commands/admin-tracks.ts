@@ -70,14 +70,25 @@ export type QueueFilters = {
 
 // The render queue: findings with no video yet, oldest first. The first row is
 // the next finding to film (oldest-first is how the backlog is worked down).
-// The optional `hasContext`/`hasObservation` filters narrow it to the observation
-// crons' queues (so a cron can ask "what still needs field notes / a voice?").
+//
+// HARD-GATED on `hasContext=true`: the queue only ever surfaces findings that
+// already carry a stored `context_note`. The video render reads that note (the
+// `Texture:` line) as creative fuel via `tracks context <id>`, and that read —
+// on a note-less finding — would TRIGGER a Firecrawl+distil (a read that writes).
+// Filming only context'd findings makes the render's context read a guaranteed
+// cached no-op, the same safety the observation queues already have. A finding's
+// video therefore waits until it's context-noted — fine: the context cron runs
+// every ~5 min, and a render with the Texture fuel is the one worth filming.
+//
+// `hasContext=true` is hard-set here (not overridable); `filters.hasContext` is
+// kept only as a no-op compatibility seam. The optional `hasObservation` filter
+// still narrows it (so a cron can ask "what's context'd but still needs a voice?").
 export async function queueCommand(
   limit: number,
   filters: QueueFilters = {},
 ): Promise<RecentTrack[]> {
   return fetchAdminTracks({
-    hasContext: filters.hasContext,
+    hasContext: true,
     hasObservation: filters.hasObservation,
     hasVideo: false,
     max: limit,
