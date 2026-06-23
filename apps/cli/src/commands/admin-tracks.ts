@@ -8,13 +8,14 @@ const pageSize = 48;
 
 async function fetchAdminTracks(options: {
   hasContext?: boolean;
+  hasNote?: boolean;
   hasObservation?: boolean;
   hasVideo?: boolean;
   max: number;
   order: "asc" | "desc";
   status?: string;
 }): Promise<RecentTrack[]> {
-  const { hasContext, hasObservation, hasVideo, max, order, status } = options;
+  const { hasContext, hasNote, hasObservation, hasVideo, max, order, status } = options;
   const results: RecentTrack[] = [];
   let cursor: string | undefined;
 
@@ -27,6 +28,10 @@ async function fetchAdminTracks(options: {
 
     if (hasContext !== undefined) {
       params.set("hasContext", String(hasContext));
+    }
+
+    if (hasNote !== undefined) {
+      params.set("hasNote", String(hasNote));
     }
 
     if (hasObservation !== undefined) {
@@ -117,6 +122,18 @@ export async function observeQueueCommand(limit: number): Promise<RecentTrack[]>
   return fetchAdminTracks({
     hasContext: true,
     hasObservation: false,
+    max: limit,
+    order: "asc",
+  });
+}
+
+// The AUTO-NOTE queue: findings with the context_note fuel on file but no editorial
+// note yet (`hasContext=true AND hasNote=false`), oldest first — the `note` cron's
+// worklist (each row is a `tracks note <id> --script-file <path>` to author + post).
+export async function noteQueueCommand(limit: number): Promise<RecentTrack[]> {
+  return fetchAdminTracks({
+    hasContext: true,
+    hasNote: false,
     max: limit,
     order: "asc",
   });

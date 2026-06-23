@@ -181,6 +181,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   merge_private_galaxy_progress: "private-session",
   mint_mixcloud_token: "operator",
   mint_youtube_token: "operator",
+  // The auto-note authoring step — agent tier (adminAuth only, no operatorGuard), the
+  // written-note sibling of observe_track/context_track; the box's agent token drives it.
+  note_track: "admin",
   observe_track: "admin",
   presign_track_video_uploads: "operator",
   publish_mixtape: "operator",

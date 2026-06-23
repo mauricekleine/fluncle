@@ -265,11 +265,21 @@ export function boardSteps(row: BoardRow): BoardStep[] {
       statusLabel: onTape ? "On a tape" : inDraftTape ? "In a draft" : "Add",
     },
     note: {
+      // An `auto` step (the auto-note cron authors it) that stays `actionable` so the
+      // operator can still hand-write or override. `done` = a note exists (the
+      // deliverable — auto-authored OR operator-typed); `noteRan`
+      // (`backfill_note_attempted_at`) refines the grey state so a finding the cron
+      // visited but couldn't fill reads "Checked — no note" rather than a bare "Note".
+      // The operator override always wins: note_track fills an EMPTY note only.
       actionable: true,
       gated: false,
-      hint: "The finding's note — shows on its log page",
+      hint: note
+        ? "The finding's note — shows on its log page"
+        : row.noteRan
+          ? "Auto-note ran — no note yet; write one"
+          : "No note yet — write one, or the auto-note cron will",
       state: note ? "done" : "open",
-      statusLabel: note ? "Noted" : "Note",
+      statusLabel: note ? "Noted" : row.noteRan ? "Checked — no note" : "Note",
     },
     observation: {
       actionable: true,

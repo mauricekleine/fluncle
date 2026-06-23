@@ -62,12 +62,24 @@ const ObserveTrackBodySchema = z.looseObject({
 });
 
 /**
- * The context body (POST /admin/tracks/{trackId}/context). LOOSE: the only
- * optional field is an agent-supplied `query` override for the Firecrawl search;
- * the handler narrows it in-handler, so the contract stays permissive.
+ * The context body (POST /admin/tracks/{trackId}/context). LOOSE: an agent-supplied
+ * `query` override for the Firecrawl search, and `refresh` — re-run the fetch+distil
+ * even when a note already exists (the default short-circuits on `skipped:true`).
+ * The handler narrows both in-handler, so the contract stays permissive.
  */
 const ContextTrackBodySchema = z.looseObject({
   query: z.unknown().optional(),
+  refresh: z.unknown().optional(),
+});
+
+/**
+ * The note body (POST /admin/tracks/{trackId}/note). LOOSE: the live handler
+ * voice-GATES the authored `note` itself (emitting `no_note`/`note_too_short`/
+ * `note_too_long`/`voice_gate`) and enforces the fill-empty-only guard, so the
+ * contract stays permissive to keep those codes byte-for-byte.
+ */
+const NoteTrackBodySchema = z.looseObject({
+  note: z.unknown().optional(),
 });
 
 /**
@@ -204,9 +216,50 @@ export const contextTrack = oc
       logId: z.string(),
       ok: z.literal(true),
       // `true` when a context note already existed and the call was a no-op
-      // (idempotent re-pull); absent on a fresh fetch.
+      // (idempotent re-pull); absent on a fresh fetch. `--refresh` forces a re-fetch,
+      // so it never short-circuits and `skipped` stays absent.
       skipped: z.boolean().optional(),
       sources: z.array(z.string()),
+      trackId: z.string(),
+    }),
+  );
+
+/**
+ * `note_track` → `POST /admin/tracks/{trackId}/note` (operationId `noteTrack`).
+ *
+ * AUTO-author a finding's editorial `note` (the written-note sibling of
+ * `observe_track`): the agent has already authored the note in Fluncle's voice from
+ * the `context_note` fuel + track metadata; this step VOICE-GATES it (the written
+ * register's banned-word / earthly-geography / exclamation / "we"-as-company scan,
+ * shared with the spoken gate) and stores it into the `note` field. On
+ * `adminProcedure` (agent-allowed) so the on-box note cron can drive it — `observe`
+ * is the precedent for the tier (docs/agents/note-agent.md).
+ *
+ * SAFETY (the cardinal guarantee): it fills an EMPTY note ONLY. A finding that
+ * already carries a note — operator-written OR previously auto-authored — is a no-op
+ * (`skipped: true`); the agent NEVER clobbers an existing note. The operator override
+ * always wins, enforced server-side. Every authoring attempt stamps the
+ * `backfill_note_*` "ran" state (board done-when-ran semantics); a fill also stamps
+ * `backfill_note_done_at`. Codes: `not_found`/404, `no_log_id`/400, `no_note`/400,
+ * `note_too_short`/422, `note_too_long`/422, `voice_gate`/422.
+ */
+export const noteTrack = oc
+  .route({
+    method: "POST",
+    operationId: "noteTrack",
+    path: "/admin/tracks/{trackId}/note",
+    summary: "Auto-author a finding's editorial note (fills an empty note only)",
+    tags: ["Admin"],
+  })
+  .input(NoteTrackBodySchema.extend({ trackId: z.string() }))
+  .output(
+    z.object({
+      logId: z.string(),
+      note: z.string(),
+      ok: z.literal(true),
+      // `true` when a note already existed and the call was a no-op (the
+      // fill-empty-only guard refused to clobber it); absent on a fresh fill.
+      skipped: z.boolean().optional(),
       trackId: z.string(),
     }),
   );
@@ -319,11 +372,13 @@ export const listTracksAdmin = oc
   .input(
     z.object({
       cursor: z.string().optional(),
-      // `hasContext` / `hasObservation` power the two observation queues (the
+      // `hasContext` / `hasObservation` / `hasNote` power the three agent queues (the
       // context queue = `hasContext=false`; the observation queue = `hasContext=true`
-      // AND `hasObservation=false`). Tri-state tolerant strings ("true"/"false"),
-      // parsed + clamped in-handler exactly like `hasVideo`.
+      // AND `hasObservation=false`; the auto-note queue = `hasContext=true` AND
+      // `hasNote=false`). Tri-state tolerant strings ("true"/"false"), parsed +
+      // clamped in-handler exactly like `hasVideo`.
       hasContext: z.string().optional(),
+      hasNote: z.string().optional(),
       hasObservation: z.string().optional(),
       hasVideo: z.string().optional(),
       limit: z.string().optional(),
@@ -382,6 +437,7 @@ export const adminTracksContract = {
   context_track: contextTrack,
   finalize_track_video: finalizeTrackVideo,
   list_tracks_admin: listTracksAdmin,
+  note_track: noteTrack,
   observe_track: observeTrack,
   presign_track_video_uploads: presignTrackVideoUploads,
   publish_track: publishTrack,

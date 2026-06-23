@@ -35,6 +35,13 @@ export type BoardRow = TrackListItem & {
   // never run; paired with `lastfmLoved` to tell "Loved" from "Checked — not loved".
   lastfmRan: boolean;
   mixtapes: MixtapeMembership[];
+  // Whether the auto-note authoring has RUN for this finding — the presence of
+  // `backfill_note_attempted_at`, stamped on every authoring attempt by `note_track`.
+  // Like Discogs/Last.fm the Note cell is a workflow tracker: `done` once a note
+  // exists, grey only while none does (the cron hasn't authored one and the operator
+  // hasn't typed one). Pulled through the admin-only board path, never the public
+  // `TrackListItem` contract.
+  noteRan: boolean;
   posts: SocialPostItem[];
 };
 export type BoardPage = { nextCursor?: string; totalCount: number; tracks: BoardRow[] };

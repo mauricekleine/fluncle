@@ -66,7 +66,26 @@ await mock.module("../api", () => ({
   },
 }));
 
-const { queueCommand } = await import("./admin-tracks");
+const { noteQueueCommand, queueCommand } = await import("./admin-tracks");
+
+describe("auto-note queue — hasContext=true AND hasNote=false", () => {
+  beforeEach(() => {
+    requestedPaths = [];
+  });
+
+  test("requests the context'd-but-noteless worklist, oldest first", async () => {
+    await noteQueueCommand(10);
+
+    expect(requestedPaths).toHaveLength(1);
+    const url = new URL(requestedPaths[0] ?? "", "https://fluncle.test");
+    // The note cron's worklist: findings with the context_note fuel on file but no
+    // editorial note yet — the exact pairing observe uses, swapping hasObservation
+    // for hasNote.
+    expect(url.searchParams.get("hasContext")).toBe("true");
+    expect(url.searchParams.get("hasNote")).toBe("false");
+    expect(url.searchParams.get("order")).toBe("asc");
+  });
+});
 
 describe("video render queue — hasContext hard-gate", () => {
   beforeEach(() => {

@@ -345,13 +345,16 @@ export async function trackObserveCommand(
 // `context_note` so a later `observe` can author + render from it without holding
 // Firecrawl. Idempotent — a finding that already has a note is a no-op (`skipped`),
 // so the context cron can fire on a fixed interval safely. The CLI stays a thin
-// relay; the optional --query overrides the Worker's search string.
+// relay; the optional --query overrides the Worker's search string, and --refresh
+// RE-RUNS the fetch+distil even when a note already exists (backfill/sharpen).
 export type TrackContextOptions = {
   query?: string;
+  refresh?: boolean;
 };
 
 type ContextBody = {
   query?: string;
+  refresh?: boolean;
 };
 
 export type TrackContextResult = {
@@ -374,8 +377,48 @@ export async function trackContextCommand(
     body.query = options.query;
   }
 
+  if (options.refresh) {
+    body.refresh = true;
+  }
+
   return adminApiPost<TrackContextResult>(
     `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/context`,
+    body,
+  );
+}
+
+// `fluncle admin tracks note <id|logId> --script-file <path>` — store the
+// AGENT-AUTHORED editorial note for a finding (the written-note sibling of
+// `observe`). The Worker voice-GATES the note and fills it ONLY when the finding has
+// no note yet: an operator-written (or previously auto-authored) note is never
+// clobbered (the call returns `skipped: true`). The CLI stays a thin relay; the
+// caller reads the authored note from --script-file (or passes it inline).
+export type TrackNoteOptions = {
+  /** The voice-gated editorial note (read from --script-file by the caller, or inline). */
+  note: string;
+};
+
+type NoteBody = {
+  note: string;
+};
+
+export type TrackNoteResult = {
+  logId: string;
+  note: string;
+  ok: true;
+  /** True when a note already existed and the fill-empty-only guard refused to clobber it. */
+  skipped?: boolean;
+  trackId: string;
+};
+
+export async function trackNoteCommand(
+  idOrLogId: string,
+  options: TrackNoteOptions,
+): Promise<TrackNoteResult> {
+  const body: NoteBody = { note: options.note };
+
+  return adminApiPost<TrackNoteResult>(
+    `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/note`,
     body,
   );
 }

@@ -116,8 +116,13 @@ export type AlignmentBackfillResult = BackfillPass<{
   emptyCount: number;
 }>;
 
-// Which source's reliability columns a query/write targets.
-export type BackfillSource = "discogs" | "lastfm";
+// Which source's reliability columns a query/write targets. `note` is the odd one
+// out: it is NOT a Worker-paced vendor sweep (no `backfillNote…` driver lives in
+// this module) — it only shares the per-source `backfill_note_*` column shape so the
+// auto-note authoring step (`note_track`, agent tier) can reuse `recordAttempt` for
+// its "ran" stamp and the board can reuse `listBackfillRanForTracks(_, "note")` for
+// the Note cell's done-when-ran semantics, exactly like Discogs/Last.fm.
+export type BackfillSource = "discogs" | "lastfm" | "note";
 
 // The per-source reliability state read off a finding's row.
 type ReliabilityState = {
@@ -298,6 +303,21 @@ async function recordAttempt(
         ${failuresClause}
       where track_id = ?`,
   });
+}
+
+/**
+ * Stamp the auto-note authoring "ran" state for a finding into the `backfill_note_*`
+ * columns. The exported seam the `note_track` handler calls: `done` when an empty
+ * `note` was filled this run (stamps `backfill_note_done_at`), `tried` when the
+ * authoring ran but did NOT fill (a too-long/blank script, or an operator note
+ * already present — the workflow ran, found nothing to do). Reuses `recordAttempt`,
+ * so it touches ONLY the reliability columns (no `updated_at` bump, no fan-out) —
+ * the same quiet write the catalogue sweeps make. Note has no backoff scheduler of
+ * its own (the deterministic `hasNote=false` queue is the worklist), so `failure`
+ * is intentionally not surfaced here; an authoring miss is a `tried`.
+ */
+export async function recordNoteAttempt(trackId: string, filled: boolean): Promise<void> {
+  await recordAttempt(trackId, "note", filled ? "done" : "tried");
 }
 
 // ── Pass driver ───────────────────────────────────────────────────────────────

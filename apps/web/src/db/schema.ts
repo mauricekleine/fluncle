@@ -29,6 +29,20 @@ export const tracks = sqliteTable("tracks", {
   backfillLastfmAttempts: integer("backfill_lastfm_attempts").notNull().default(0),
   backfillLastfmDoneAt: text("backfill_lastfm_done_at"),
   backfillLastfmFailures: integer("backfill_lastfm_failures").notNull().default(0),
+  // The auto-note authoring "ran" stamp (the written-note sibling of the observation
+  // pipeline). Unlike Discogs/Last.fm this is NOT a vendor sweep — `note_track`
+  // (agent tier) stamps `backfill_note_attempted_at` on EVERY authoring attempt and
+  // `backfill_note_done_at` only when an empty `note` was actually FILLED. It reuses
+  // the same backfill_* column convention purely so the admin board's "done-when-ran"
+  // semantics and `listBackfillRanForTracks` machinery work for the Note cell exactly
+  // like Discogs/Last.fm: grey/`open` = never run, `done` = the workflow ran (a note
+  // exists). The operator override always wins — the handler fills an EMPTY note only,
+  // never clobbering an operator-written one, so a hand-written note can carry no
+  // attempt stamp and still read `done` off the `note` column itself.
+  backfillNoteAttemptedAt: text("backfill_note_attempted_at"),
+  backfillNoteAttempts: integer("backfill_note_attempts").notNull().default(0),
+  backfillNoteDoneAt: text("backfill_note_done_at"),
+  backfillNoteFailures: integer("backfill_note_failures").notNull().default(0),
   bpm: real("bpm"),
   // Firecrawl-derived FACTUAL context about the track (label/year/release
   // context/artist background), gathered during the observe step as CREATIVE

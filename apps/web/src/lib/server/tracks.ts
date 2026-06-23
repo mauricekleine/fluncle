@@ -628,6 +628,14 @@ type ListTracksOptions = {
    * hasObservation=false`. Omitted for public reads.
    */
   hasObservation?: boolean;
+  /**
+   * Editorial-note presence (admin only) — the auto-note queue's filter.
+   * `false` = `note IS NULL OR note = ''` (no editorial note yet — the queue);
+   * `true` = a note is on file. The note queue is `hasContext=true AND hasNote=false`
+   * (a finding with the context_note fuel but no written note yet). Omitted for
+   * public reads.
+   */
+  hasNote?: boolean;
   /** Only findings with a rendered video — the Stories feed's filter. */
   hasVideo?: boolean;
   includeMixtapes?: boolean;
@@ -668,6 +676,7 @@ export function listTracks(options: ListTracksOptions): Promise<TrackListPage>;
 export async function listTracks({
   cursor,
   hasContext,
+  hasNote,
   hasObservation,
   hasVideo,
   includeMixtapes = false,
@@ -727,6 +736,16 @@ export async function listTracks({
     filterClauses.push("observation_audio_url is not null");
   } else if (hasObservation === false) {
     filterClauses.push("observation_audio_url is null");
+  }
+
+  // The auto-note queue: `note IS NULL OR note = ''` (no editorial note yet). Paired
+  // with hasContext=true it is the "ready to author a note" queue — a finding with
+  // the context_note fuel but an empty `note`. The empty-string guard matches the
+  // fill-empty-only semantics of note_track (a whitespace note is still empty).
+  if (hasNote === true) {
+    filterClauses.push("(note is not null and trim(note) != '')");
+  } else if (hasNote === false) {
+    filterClauses.push("(note is null or trim(note) = '')");
   }
 
   if (placement === "unplaced") {
