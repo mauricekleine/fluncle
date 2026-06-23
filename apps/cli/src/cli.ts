@@ -548,6 +548,17 @@ function addAdminCommands(program: Command): void {
     });
 
   adminTrack
+    .command("requeue-video")
+    .description("Clear a finding's video so it re-enters the render queue (operator)")
+    .argument("[idOrLogId]")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (idOrLogId: string | undefined, options: JsonOptions) => {
+      const { trackRequeueVideoCommand } = await import("./commands/track");
+      await runTrackRequeueVideo(idOrLogId, options, trackRequeueVideoCommand);
+    });
+
+  adminTrack
     .command("draft")
     .description("Push the video to a platform as a draft")
     .argument("[idOrLogId]")
@@ -1636,6 +1647,29 @@ async function runTrackUpdate(
   }
 
   console.log(`Updated ${result.trackId}: ${result.fields.join(", ")}`);
+}
+
+async function runTrackRequeueVideo(
+  idOrLogId: string | undefined,
+  options: JsonOptions,
+  trackRequeueVideoCommand: typeof import("./commands/track").trackRequeueVideoCommand,
+): Promise<void> {
+  if (!idOrLogId) {
+    throw new Error("Missing id. Usage: fluncle admin tracks requeue-video <track_id|log_id>");
+  }
+
+  const result = await trackRequeueVideoCommand(idOrLogId);
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  console.log(
+    result.alreadyClear
+      ? `${result.logId} already had no video — nothing to clear.`
+      : `Cleared the video for ${result.logId}. It's back on the render queue (and off radio until re-rendered).`,
+  );
 }
 
 async function runMixtapeCreate(
