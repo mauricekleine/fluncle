@@ -322,6 +322,51 @@ export const finalizeTrackVideo = oc
   );
 
 /**
+ * `requeue_video` → `POST /admin/tracks/{trackId}/video/requeue` (operationId
+ * `requeueVideo`).
+ *
+ * Clear a finding's video state so it RE-ENTERS the render queue AND drops cleanly
+ * off radio until re-rendered (the render skill improved → re-film an already-filmed
+ * finding). It clears BOTH display/queue gates: `video_url` (the render queue gates
+ * on it — `hasVideo=false` is `video_url is null`) and `video_squared_at` (radio
+ * eligibility gates on it). Clearing only `video_url` would re-queue the finding but
+ * leave it eligible-but-broken on radio (radio plays the square master, keyed on
+ * `video_squared_at`, with no playable source). The video LEDGER columns
+ * (`video_vehicle`/`video_grain`/`video_model`/`video_model_reasoning`) are
+ * deliberately LEFT INTACT — they describe the prior render and are read by the next
+ * video agent to DIVERSIFY away from recent choices, so they help the re-render.
+ *
+ * OPERATOR tier (live `requireOperator`): this removes a LIVE published video, so it
+ * must NOT be agent-tier — the box agent never clears videos. Idempotent: clearing an
+ * already-clear finding is a clean no-op (NULL→NULL). Codes: `not_found`/404,
+ * `no_log_id`/400. The body is empty (the trackId path param is the whole input).
+ *
+ * CACHE CAVEAT (known follow-up, NOT built here): re-shipping `footage.mp4` to the
+ * SAME R2 key leaves Cloudflare Media-Transformation renditions cached separately
+ * (the web player streams MT crops, not the master), so a re-render may need a cache
+ * purge of the transform URLs. See docs/video-variants.md + the r2-purge note.
+ */
+export const requeueVideo = oc
+  .route({
+    method: "POST",
+    operationId: "requeueVideo",
+    path: "/admin/tracks/{trackId}/video/requeue",
+    summary: "Clear a finding's video so it re-enters the render queue (and off radio)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ trackId: z.string() }))
+  .output(
+    z.object({
+      // `true` when the finding already had no video and the call was a no-op
+      // (idempotent re-requeue); absent when a live video was actually cleared.
+      alreadyClear: z.boolean().optional(),
+      logId: z.string(),
+      ok: z.literal(true),
+      trackId: z.string(),
+    }),
+  );
+
+/**
  * The publish-track result (`PublishTrackResult` in ../index.ts). The
  * `POST /admin/tracks` body — `publishTrack`'s output envelope.
  */
@@ -442,5 +487,6 @@ export const adminTracksContract = {
   observe_track: observeTrack,
   presign_track_video_uploads: presignTrackVideoUploads,
   publish_track: publishTrack,
+  requeue_video: requeueVideo,
   update_track: updateTrack,
 };

@@ -190,6 +190,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   publish_mixtape_youtube: "operator",
   publish_track: "operator",
   reject_submission: "operator",
+  // Clears a LIVE published video (video_url + video_squared_at) to re-queue a
+  // re-render — operator-only (adminAuth + operatorGuard); the box agent never
+  // clears videos, so an agent token 403s.
+  requeue_video: "operator",
   save_private_finding: "private-session",
   send_edition: "operator",
   set_mixtape_members: "operator",

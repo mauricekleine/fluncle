@@ -842,6 +842,74 @@ export function adminTracksHandlers(os: Implementer) {
       }
     });
 
+  // POST /admin/tracks/{trackId}/video/requeue — operator tier (live
+  // `requireOperator`). Clear a finding's video so it re-enters the render queue AND
+  // drops cleanly off radio until re-rendered. This removes a LIVE published video,
+  // so it is operator-only (NOT agent-tier — the box agent never clears videos).
+  //
+  // It clears BOTH display/queue gates, the minimal set that fully returns a finding
+  // to "no video": `video_url` (the render queue's gate — `hasVideo=false` is
+  // `video_url is null`) and `video_squared_at` (radio's eligibility gate). Clearing
+  // only `video_url` would re-queue it but leave it eligible-but-broken on radio (no
+  // playable square-master source). The ledger columns (videoVehicle/videoGrain/
+  // videoModel/videoModelReasoning) are LEFT INTACT on purpose — they describe the
+  // prior render and the next video agent reads them to diversify away from it.
+  //
+  // CACHE CAVEAT (known follow-up, not built here): re-shipping footage.mp4 to the
+  // same R2 key leaves Cloudflare Media-Transformation renditions cached separately
+  // (the player streams MT crops, not the master), so a re-render may need a purge of
+  // the transform URLs (docs/video-variants.md, the r2-purge precedent).
+  const requeueVideoHandler = os.requeue_video
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const idOrLogId = input.trackId;
+        const track = await getTrackByIdOrLogId(idOrLogId);
+
+        if (!track) {
+          throw new ORPCError("NOT_FOUND", {
+            data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
+            message: `No track with id ${idOrLogId}`,
+            status: 404,
+          });
+        }
+
+        if (!track.logId) {
+          throw new ORPCError("BAD_REQUEST", {
+            data: {
+              apiCode: "no_log_id",
+              apiMessage:
+                "Track has no Log ID; every video needs a coordinate. Backfill the ISRC/Log ID first.",
+            },
+            message: "Track has no Log ID; every video needs a coordinate.",
+            status: 400,
+          });
+        }
+
+        // Idempotent: a finding already at "no video" is a clean no-op — skip the
+        // write entirely (no needless updateTrack/cache purge), report alreadyClear.
+        if (!track.videoUrl && !track.videoSquaredAt) {
+          return {
+            alreadyClear: true as const,
+            logId: track.logId,
+            ok: true as const,
+            trackId: track.trackId,
+          };
+        }
+
+        // Clear both gates. updateTrack maps an empty string to NULL for each (the
+        // documented "remove an off-direction video" + re-render paths), so the
+        // `video_url is not null` queue filter and the `video_squared_at is not null`
+        // radio filter both drop this finding until it is re-rendered.
+        await updateTrack(track.trackId, { videoSquaredAt: "", videoUrl: "" });
+
+        return { logId: track.logId, ok: true as const, trackId: track.trackId };
+      } catch (error) {
+        throw toFault(error);
+      }
+    });
+
   return {
     context_track: contextTrackHandler,
     finalize_track_video: finalizeVideoHandler,
@@ -850,6 +918,7 @@ export function adminTracksHandlers(os: Implementer) {
     observe_track: observeTrackHandler,
     presign_track_video_uploads: presignVideoUploadsHandler,
     publish_track: publishTrackHandler,
+    requeue_video: requeueVideoHandler,
     update_track: updateTrackHandler,
   };
 }

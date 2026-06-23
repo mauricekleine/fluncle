@@ -276,6 +276,32 @@ export async function trackUpdateCommand(
   );
 }
 
+// `fluncle admin tracks requeue-video <id|logId>` — clear a finding's video so it
+// re-enters the render queue AND drops cleanly off radio until re-rendered (the
+// render skill improved → re-film an already-filmed finding). Operator-authenticated
+// (it removes a LIVE published video; the FLUNCLE_API_TOKEN must be the operator
+// token, never the box agent's). Clears BOTH gates server-side: video_url (the queue
+// gate) and video_squared_at (the radio gate). Idempotent — an already-clear finding
+// comes back `alreadyClear: true`. A body-less POST (the id is the whole input).
+//
+// CACHE CAVEAT (known follow-up, not done here): re-shipping footage.mp4 to the same
+// R2 key leaves Cloudflare Media-Transformation renditions cached separately, so a
+// re-render may still need a purge of the transform URLs (docs/video-variants.md).
+export type TrackRequeueVideoResponse = {
+  alreadyClear?: boolean;
+  logId: string;
+  ok: true;
+  trackId: string;
+};
+
+export async function trackRequeueVideoCommand(
+  idOrLogId: string,
+): Promise<TrackRequeueVideoResponse> {
+  return adminApiPost<TrackRequeueVideoResponse>(
+    `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/video/requeue`,
+  );
+}
+
 // `fluncle admin track observe <id|logId>` — mint the audio-observation artifact.
 // The agent authors + voice-gates the spoken script (it holds copywriting-fluncle)
 // and passes it here; the Worker fetches the factual context, re-scans the script,

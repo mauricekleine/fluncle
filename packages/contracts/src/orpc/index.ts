@@ -88,6 +88,7 @@ export {
   observeTrack,
   presignTrackVideoUploads,
   publishTrack,
+  requeueVideo,
   updateTrack,
 } from "./admin-tracks";
 export { getHealth } from "./health";

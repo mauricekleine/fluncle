@@ -851,6 +851,98 @@ describe("oRPC finalize_track_video (POST .../video/finalize)", () => {
   });
 });
 
+// ── requeue_video — operator tier (clear the video to re-queue a re-render) ──
+// A finding WITH a live video: both the render-queue gate (videoUrl) and the
+// radio gate (videoSquaredAt) are set, so a requeue must clear BOTH.
+const FILMED_TRACK = {
+  ...TRACK,
+  videoSquaredAt: "2026-06-01T00:00:00.000Z",
+  videoUrl: "https://found.fluncle.com/004.7.2I/footage.mp4",
+};
+
+describe("oRPC requeue_video (POST .../video/requeue)", () => {
+  it("401s with no admin token (the adminAuth tier)", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(post("/video/requeue", undefined, {}));
+
+    expect(response?.status).toBe(401);
+    expect(updateTrack).not.toHaveBeenCalled();
+  });
+
+  it("403s the AGENT (operator-only — the box agent never clears a live video)", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(post("/video/requeue", AGENT_TOKEN, {}));
+
+    expect(response?.status).toBe(403);
+    expect(((await readJson(response)) as { code: string }).code).toBe("forbidden");
+    expect(updateTrack).not.toHaveBeenCalled();
+  });
+
+  it("clears BOTH video_url and video_squared_at for the operator", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(FILMED_TRACK);
+    updateTrack.mockResolvedValueOnce({
+      fields: ["video_squared_at", "video_url"],
+      trackId: TRACK_ID,
+    });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(post("/video/requeue", OPERATOR_TOKEN, {}));
+
+    expect(response?.status).toBe(200);
+    const data = (await readJson(response)) as {
+      alreadyClear?: boolean;
+      logId: string;
+      ok: boolean;
+      trackId: string;
+    };
+    expect(data.ok).toBe(true);
+    expect(data.logId).toBe("004.7.2I");
+    expect(data.trackId).toBe(TRACK_ID);
+    // A real clear, not a no-op.
+    expect(data.alreadyClear).toBeUndefined();
+    // Empty string is the updateTrack contract for "clear to NULL" on both gates —
+    // and ONLY those two (the vehicle/grain/model ledger is left intact).
+    expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, { videoSquaredAt: "", videoUrl: "" });
+  });
+
+  it("is idempotent: an already-clear finding is a no-op (alreadyClear, no write)", async () => {
+    // TRACK has neither videoUrl nor videoSquaredAt → already at "no video" state.
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(post("/video/requeue", OPERATOR_TOKEN, {}));
+
+    expect(response?.status).toBe(200);
+    const data = (await readJson(response)) as { alreadyClear?: boolean; ok: boolean };
+    expect(data.ok).toBe(true);
+    expect(data.alreadyClear).toBe(true);
+    // Clean no-op: no write, no cache purge.
+    expect(updateTrack).not.toHaveBeenCalled();
+  });
+
+  it("400s `no_log_id` for a track with no Log ID", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce({ ...FILMED_TRACK, logId: undefined });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(post("/video/requeue", OPERATOR_TOKEN, {}));
+
+    expect(response?.status).toBe(400);
+    expect(((await readJson(response)) as { code: string }).code).toBe("no_log_id");
+    expect(updateTrack).not.toHaveBeenCalled();
+  });
+
+  it("404s `not_found` for an unknown track", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(undefined);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(post("/video/requeue", OPERATOR_TOKEN, {}));
+
+    expect(response?.status).toBe(404);
+    expect(((await readJson(response)) as { code: string }).code).toBe("not_found");
+    expect(updateTrack).not.toHaveBeenCalled();
+  });
+});
+
 // ── list_tracks_admin — admin tier (the board query) ─────────────────────────
 function adminGet(query: string, token: string | undefined): Request {
   const headers: Record<string, string> = {};

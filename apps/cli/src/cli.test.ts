@@ -171,6 +171,16 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Usage: fluncle admin tracks context");
   });
 
+  test("admin tracks requeue-video requires an id before any clear", async () => {
+    // No id fails local validation before the API call, so this runs without a
+    // server or admin token (and never clears a live video).
+    const result = await runCli(["admin", "tracks", "requeue-video", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: fluncle admin tracks requeue-video");
+  });
+
   test("admin tracks context --queue validates --limit before fetching", async () => {
     const result = await runCli([
       "admin",
