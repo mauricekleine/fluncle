@@ -93,14 +93,14 @@ It measures the clip's short-lag motion reversal — whether the picture jumps t
 
 Once the render passes its gates, package the bundle and link it to the track. All local; the operator runs it.
 
-1. **Package** — `bun run --cwd packages/video ship <trackId|log-id> --vehicle "<your vehicle>"` builds `out/<log-id>/` (the `--vehicle` tag, e.g. `"caustic web"`, lands in `render.json` and becomes the track's diversity-ledger entry on upload):
+1. **Package** — `bun run --cwd packages/video ship <trackId|log-id> --vehicle "<your vehicle>" --grain "<your grain family>"` builds `out/<log-id>/` (the `--vehicle` and `--grain` tags, e.g. `"caustic web"` / `"grainCoarseSilver"`, land in `render.json` and become the track's diversity-ledger entries on upload):
    - `footage.mp4` — with audio; the public/web cut (becomes `video_url`) + your QA pass
    - `footage-silent.mp4` — audio-less remux (`ffmpeg -c copy -an`); the cut you upload to TikTok and attach the official sound to by hand (keeps licensing inside TikTok)
    - `poster.jpg` — a ~80% drop frame
    - `note.txt` — the fixed-template caption that accompanies the footage: `Artist — Title (Year)` / Label / `Found <date>: fluncle://<log-id>` / `#dnb #drumnbass #drumandbass` + sub-genre tags (lowercased, deduped)
    - `composition.tsx` — the exact Remotion source used for the render (copied from `workbench/<CompId>.tsx`)
    - `props.json` — analyzed audio curves, beat grid, palette, and track props
-   - `render.json` — composition id, rerender pointers, and the `vehicle` tag (the diversity-ledger entry, read by the upload step into `video_vehicle`)
+   - `render.json` — composition id, rerender pointers, and the `vehicle` + `grain` tags (the diversity-ledger entries, read by the upload step into `video_vehicle` / `video_grain`)
 
    The track MUST have a Log ID (no Log ID → no ship; backfill the ISRC first). Requires an existing render (`out/<trackId>.mp4`) — run step 7 first.
 

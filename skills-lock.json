@@ -66,7 +66,7 @@
     "fluncle-video": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-video",
       "sourceType": "local",
-      "computedHash": "fe808b893b9cd91840955f13b68cf244a2ffeefca9ee7e0b9a826a9ed851e93e"
+      "computedHash": "c3fcb21f540a7fea147351e3f5632621e8bc054481c6778b8d4d3248ce33bd22"
     },
     "hetzner-devbox": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/hetzner-devbox",
