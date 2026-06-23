@@ -44,6 +44,10 @@ const PENDING = "__pending__" as const;
 // for future admin routes (a new route lands here as PENDING until it converts).
 const ADMIN_ROUTE_OPS: Record<string, string> = {
   "DELETE /admin/mixtapes/{mixtapeId}": "delete_mixtape",
+  // The newsletter edition delete — contract-only oRPC (no TanStack route file).
+  // Operator tier: a hard delete that reaches a SENT edition too (pulling a sent
+  // test edition from the public archive); the agent token 403s.
+  "DELETE /admin/newsletter/editions/{id}": "delete_edition",
   "GET /admin/lastfm/auth/start": "start_lastfm_auth",
   "GET /admin/mixtapes": "list_mixtapes_admin",
   "GET /admin/mixtapes/{mixtapeId}/social": "get_mixtape_social",
