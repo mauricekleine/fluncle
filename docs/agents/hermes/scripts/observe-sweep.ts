@@ -54,7 +54,11 @@ import { join } from "node:path";
 // worklist; anything not reached this tick is picked up on the next (~60m later).
 // ---------------------------------------------------------------------------
 
-const BATCH_CAP = 3; // findings authored + rendered per tick (small — paid renders)
+// One finding per tick: the Hermes cron runner kills a `--no-agent` job at 120s, and a
+// single `claude -p` authoring (skill-read + Sonnet) + ElevenLabs render already sits
+// near that budget — two blew it. The queue drains across hourly ticks (find volume is
+// low). Raise only once a HEALTHY run measures comfortably under 120s per finding.
+const BATCH_CAP = 1;
 const QUEUE_LIMIT = 50; // hard ceiling on the queue read (we only act on BATCH_CAP)
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
