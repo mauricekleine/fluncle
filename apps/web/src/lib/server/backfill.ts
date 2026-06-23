@@ -102,7 +102,7 @@ export type DiscogsBackfillResult = BackfillPass<{
 }>;
 
 // Which source's reliability columns a query/write targets.
-type BackfillSource = "discogs" | "lastfm";
+export type BackfillSource = "discogs" | "lastfm";
 
 // The per-source reliability state read off a finding's row.
 type ReliabilityState = {
@@ -175,6 +175,38 @@ export async function listLastfmLovedForTracks(trackIds: string[]): Promise<Set<
     sql: `select track_id from tracks
           where track_id in (${placeholders})
             and backfill_lastfm_done_at is not null`,
+  });
+
+  return new Set(typedRows<{ track_id: string }>(result.rows).map((row) => row.track_id));
+}
+
+/**
+ * Which of the given findings the backfill has RUN for a given source — i.e. carry
+ * a `backfill_<source>_attempted_at`. The attempt timestamp is stamped on EVERY
+ * real attempt (a confident match, a clean no-match, and a failure alike — see
+ * `recordAttempt`), so it answers the board's actual question: "has the workflow
+ * run for this finding?", not "did it find data?". `done_at` (loved / resolved)
+ * only stamps on a successful match, so a ran-but-empty finding has `attempted_at`
+ * set and `done_at` null — exactly the "Checked — no release" / "Checked — not
+ * loved" state the board now shows instead of grey. One batch query per source for
+ * the whole page, no N+1. Findings that predate the columns read as absent.
+ */
+export async function listBackfillRanForTracks(
+  trackIds: string[],
+  source: BackfillSource,
+): Promise<Set<string>> {
+  if (trackIds.length === 0) {
+    return new Set();
+  }
+
+  const db = await getDb();
+  const p = columnPrefix(source);
+  const placeholders = trackIds.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: trackIds,
+    sql: `select track_id from tracks
+          where track_id in (${placeholders})
+            and ${p}_attempted_at is not null`,
   });
 
   return new Set(typedRows<{ track_id: string }>(result.rows).map((row) => row.track_id));
