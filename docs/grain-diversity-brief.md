@@ -61,18 +61,18 @@ vec3 filmGrain(vec3 col, vec2 uv, float time, float intensity); // = the 11-knob
 
 Knob-by-knob (what it does, range, default = today's behavior):
 
-| Knob | What it does | Range | Default (= today) |
-|---|---|---|---|
-| `amount` | master strength; **0.0 = grain OFF** | 0.0–0.30 | 0.08 |
-| `scale` | grain GRAIN size in px (coarse silver-halide vs fine emulsion) | 0.5–6.0 | 1.0 |
-| `boilHz` | reseed/boil rate; brand SIGNATURE lives here (it must boil) | 0.0–30.0 | 24.0 |
-| `clumpScale` | clump envelope cell size in px | 8–64 | 22 |
-| `clumpAmt` | how pooled/patchy the clumps read | 0.0–1.0 | ~0.7 (the 0.35→1.5 envelope) |
-| `aniso` | directional stretch of the grain cell | (1,1)–(1,4) | (1,1) |
-| `color` | monochrome → per-channel RGB grain | 0.0–1.0 | 0.0 |
-| `lumaLow` / `lumaHigh` | luminance shaping | 0–2 / 0–2 | 1.3 / 0.55 |
-| `basis` | the noise BASIS / pattern (hash / soft / dither / blue-noise / halftone) | 0–4 | 0 |
-| `seed` | per-track grain field offset | any | from `u_seed` |
+| Knob                   | What it does                                                             | Range       | Default (= today)            |
+| ---------------------- | ------------------------------------------------------------------------ | ----------- | ---------------------------- |
+| `amount`               | master strength; **0.0 = grain OFF**                                     | 0.0–0.30    | 0.08                         |
+| `scale`                | grain GRAIN size in px (coarse silver-halide vs fine emulsion)           | 0.5–6.0     | 1.0                          |
+| `boilHz`               | reseed/boil rate; brand SIGNATURE lives here (it must boil)              | 0.0–30.0    | 24.0                         |
+| `clumpScale`           | clump envelope cell size in px                                           | 8–64        | 22                           |
+| `clumpAmt`             | how pooled/patchy the clumps read                                        | 0.0–1.0     | ~0.7 (the 0.35→1.5 envelope) |
+| `aniso`                | directional stretch of the grain cell                                    | (1,1)–(1,4) | (1,1)                        |
+| `color`                | monochrome → per-channel RGB grain                                       | 0.0–1.0     | 0.0                          |
+| `lumaLow` / `lumaHigh` | luminance shaping                                                        | 0–2 / 0–2   | 1.3 / 0.55                   |
+| `basis`                | the noise BASIS / pattern (hash / soft / dither / blue-noise / halftone) | 0–4         | 0                            |
+| `seed`                 | per-track grain field offset                                             | any         | from `u_seed`                |
 
 Determinism constraints (`packages/video/README.md` §"Determinism rules"): the grain field stays a pure function of `(uv, floor(time*boilHz), seed)`. No `Math.random`, no `Date.now`. `seed` MUST derive from the `u_seed` prop (and stable sub-seeds), so a track always renders identically. `boilHz=0` gives a frozen-plate variant that is still deterministic. The blue-noise basis (3) must be computed analytically or from a deterministic tile, never a random texture.
 
@@ -98,16 +98,19 @@ Note: `dither8`/`ditherValue` already exist in the injected header (`shader-laye
 ## 3. A diversity rule for the skill — enforce grain variety like vehicle diversity
 
 Mirror the existing **vehicle diversity ledger** exactly. The mechanism already exists end-to-end for `vehicle`:
+
 - DB column `video_vehicle` (`apps/web/src/db/schema.ts:161`), written via `track-update.ts:80-81,157-159`.
 - `ship` emits `vehicle` into the render manifest/upload payload (`packages/video/src/pipeline/ship.ts:253-255`); the CLI forwards `manifest.vehicle → videoVehicle` (`apps/cli/src/commands/track.ts:155`).
 - Surfaced for the next agent via `/api/tracks` and `fluncle admin tracks vehicles --json` (`apps/cli/src/commands/admin-tracks.ts:262-272`), described in SKILL.md §"See what's already been made" as the diversity ledger.
 
 Proposal — add a parallel `grain` (or `videoGrain`) ledger entry that records which of the six families a finding used:
+
 - New DB column `video_grain` (one verb_noun-clean field), written the same way `video_vehicle` is.
 - `ship` writes `grain: <familyName>` into the render manifest beside `vehicle`/`model`/`reasoning`; CLI forwards it.
 - Add `grain` to the vehicles ledger read (`fluncle admin tracks vehicles --json` already returns `{logId, addedAt, vehicle, title, artists}` — add `grain`) so one call gives the agent both ledgers.
 
 Skill rule (drop into SKILL.md doctrine 3 "Vehicle diversity" as a sibling clause, and into the cookbook):
+
 - "Pick a grain FAMILY (§grain families) the same way you pick a vehicle: read the recent ledger and choose one DISTINCT from the recent runs — don't repeat the recent grain. Map the family to the texture-family/track-features you already chose (analog→VHS, dither→dither/halftone, fluent/watercolor→chemical-dye, nebula/orb→coarse-silver or fine-emulsion). Then set the AMOUNT to the COMPOSITION, not a default: a clean, electric, high-pop scene wants LESS grain (down toward near-zero); a soft, far-travelled, melancholic scene wants more. Grain is always present and always boils (the Light-Years signature), but its amount and form are yours."
 - Add grain to the run report requirement: the agent must name which grain family it chose and why (mirroring the existing "name how the Texture drove a specific visual decision"), so the operator can confirm it varied.
 
@@ -120,9 +123,11 @@ This makes grain variety enforceable and auditable the same way vehicle variety 
 ### DESIGN.md
 
 Current (`DESIGN.md:104`, the Light-Years Rule):
+
 > **The Light-Years Rule.** Every artifact in this system arrives lossy because of how far it travelled: grain over the sun, compression in the video, glitch and dither, the worn edge of a recovered record. The degradation is narrative, never sloppiness — it is the cost of light-years, the reason a finding from the edge of the map looks the way it does. Grain and lossy texture are therefore load-bearing brand, not decoration; a surface rendered too clean reads as fake. (The video kit in `packages/video` is built entirely on this rule; VOICE.md borrows it for copy.)
 
 Proposed revision (keep grain a SIGNATURE; make amount/form composition-led — add one sentence, change none of the existing meaning):
+
 > **The Light-Years Rule.** Every artifact in this system arrives lossy because of how far it travelled: grain over the sun, compression in the video, glitch and dither, the worn edge of a recovered record. The degradation is narrative, never sloppiness — it is the cost of light-years, the reason a finding from the edge of the map looks the way it does. Grain and lossy texture are therefore load-bearing brand, not decoration; a surface rendered too clean reads as fake. **The grain is a SIGNATURE, not a fixed wash: it is present and it boils on every frame, but its AMOUNT and FORM are the composition's call — fine emulsion or coarse silver, a printed halftone or a tape streak, heavy on a far-travelled relic and near-silent where a clean, electric finding wants its pop. A grain over-applied flattens the very pop it should protect; match it to the finding, never default it to heavy.** (The video kit in `packages/video` is built entirely on this rule; VOICE.md borrows it for copy.)
 
 Also soften the absolute in `DESIGN.md:108` ("**heavy grain over warm near-black** everywhere"): change "heavy grain" → "grain over warm near-black everywhere (its weight set per surface)" so the motif list no longer mandates HEAVY. (Small, keeps the motif, drops the always-heavy default.)
@@ -166,6 +171,7 @@ Cheap, high-value first; each phase ships independently.
 Recommended first step: **Phase 0 → Phase 1.** The doctrine change (grain amount is composition-led, bias lower) plus a single before/after render captures the decisive monitor-finding win immediately, with zero kit risk, and de-risks the larger helper-family build that follows.
 
 ### Key files (all absolute)
+
 - `packages/video/src/remotion/journey/glsl.ts:174-195` — `filmGrain` (the one helper to extend).
 - `packages/video/src/remotion/journey/shader-layer.tsx:85-117` — injected HEADER incl. `ditherValue`/`dither8` (the dither-grain anchor).
 - `packages/video/README.md` — `GLSL.*` inventory + encode/determinism rules to update.
