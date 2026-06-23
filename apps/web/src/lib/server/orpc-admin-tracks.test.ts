@@ -307,6 +307,7 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
       observationAudioUrl: "https://found.fluncle.com/004.7.2I/observation.mp3",
       observationDurationMs: 28000,
       observationGeneratedAt: expect.any(String),
+      observationScript: GOOD_SCRIPT,
     });
   });
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { siSpotify, siTiktok } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import {
 } from "@/lib/media";
 import { type Track } from "@/lib/tracks";
 import { useResponsiveWidth } from "@/lib/use-responsive-width";
+import { useVideoStallRecovery } from "@/lib/use-video-recovery";
 
 // One story: the footage (clip + poster) with a bottom scrim for legible meta
 // (The Legible Sky Rule), and the finding's frame — Log ID, title, artist,
@@ -68,6 +69,36 @@ export function StoryView({
         ? videoCrop(track.logId, "portrait", renditionWidth)
         : videoRendition(track.logId, { width: renditionWidth })
       : masterVideoUrl;
+  const onMaster = !videoUrl || videoUrl === masterVideoUrl;
+
+  // The stall watchdog catches a STUCK load — a rendition that fires `stalled`/
+  // `waiting` (or never advances `readyState`) but no `error`, so the one-shot
+  // `onError` below never runs and the clip would hang on its poster. First wedge
+  // retries the same source (a cold-MISS often warms on a re-load); a wedge while
+  // already on the master falls all the way back so playback still recovers.
+  const recoverStuck = useCallback(() => {
+    const video = videoRef.current;
+
+    if (!renditionFailed && !onMaster) {
+      // Drop the rendition for the raw master (mirrors the onError fallback).
+      setRenditionFailed(true);
+
+      return;
+    }
+
+    // Already on the master (or the rendition already gave up): re-arm the load.
+    if (video) {
+      video.load();
+      video.play().catch(() => {});
+    }
+  }, [onMaster, renditionFailed]);
+
+  useVideoStallRecovery({
+    expectsPlayback: active && playing && Boolean(videoUrl),
+    onStall: recoverStuck,
+    src: videoUrl,
+    videoRef,
+  });
 
   const [posterFailed, setPosterFailed] = useState(false);
   // A cheap edge-extracted opening frame for the poster; falls back to the

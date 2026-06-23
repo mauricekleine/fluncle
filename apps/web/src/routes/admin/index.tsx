@@ -33,7 +33,11 @@ import { isAdminRequest } from "@/lib/server/admin-auth";
 import { listLastfmLovedForTracks } from "@/lib/server/backfill";
 import { readCaptions } from "@/lib/server/captions";
 import { listMixtapeMembershipsForTracks, listMixtapes } from "@/lib/server/mixtapes";
-import { getContextNote, listContextNotePresenceForTracks } from "@/lib/server/observation-board";
+import {
+  getContextNote,
+  getObservationScript,
+  listContextNotePresenceForTracks,
+} from "@/lib/server/observation-board";
 import { listSocialPostsForTracks } from "@/lib/server/social";
 import { getSpotifyAuthStatus, type SpotifyAuthStatus } from "@/lib/server/spotify";
 import { type BlockedOn, trackStage } from "@/lib/server/track-stage";
@@ -67,6 +71,8 @@ const SPOTIFY_STATUS_KEY = ["admin", "spotify", "status"] as const;
 const DRAFT_MIXTAPES_KEY = ["admin", "mixtapes", "drafts"] as const;
 // The lazily-read context_note for the Context cell's view dialog, keyed by trackId.
 const CONTEXT_NOTE_KEY = ["admin", "context-note"] as const;
+// The lazily-read observation script (transcript) for the Observation dialog, keyed by trackId.
+const OBSERVATION_SCRIPT_KEY = ["admin", "observation-script"] as const;
 
 // The worklists — a `blockedOn` filter (the next action) plus "all" and a "done"
 // terminal bucket. The active one lives in `?stage` so it's deep-linkable and
@@ -204,6 +210,21 @@ const fetchContextNote = createServerFn({ method: "GET" })
     }
 
     return { contextNote: await getContextNote(data.trackId) };
+  });
+
+// Lazy observation-script read — only when the operator opens a finding's
+// Observation dialog, to read the spoken transcript under the audio player. The
+// script mirrors the R2 observation.json `text` on the row (written by the observe
+// render); internal like the context note, so it rides this gated admin path and
+// never the public track contract. Never preloaded for the whole page.
+const fetchObservationScript = createServerFn({ method: "GET" })
+  .validator((data: { trackId: string }) => data)
+  .handler(async ({ data }): Promise<{ script: string }> => {
+    if (!(await isAdminRequest())) {
+      throw redirect({ to: "/admin/login" });
+    }
+
+    return { script: await getObservationScript(data.trackId) };
   });
 
 // The Spotify connection light. Read-only (no token refresh) and focus-refetched,
@@ -527,6 +548,15 @@ function AdminBoardPage() {
     enabled: contextId !== undefined,
     queryFn: () => fetchContextNote({ data: { trackId: contextId as string } }),
     queryKey: [...CONTEXT_NOTE_KEY, contextId],
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+
+  // The Observation dialog's spoken transcript — lazily read the first time an
+  // Observation cell is opened, keyed per finding (cached, never refetched).
+  const { data: observationScriptData, isFetching: observationScriptFetching } = useQuery({
+    enabled: observationId !== undefined,
+    queryFn: () => fetchObservationScript({ data: { trackId: observationId as string } }),
+    queryKey: [...OBSERVATION_SCRIPT_KEY, observationId],
     staleTime: Number.POSITIVE_INFINITY,
   });
 
@@ -859,6 +889,8 @@ function AdminBoardPage() {
       <ObservationDialog
         onOpenChange={(open) => !open && setObservationId(undefined)}
         row={observationRow ?? null}
+        script={observationScriptData?.script ?? ""}
+        scriptLoading={observationScriptFetching}
       />
 
       <PushDialog

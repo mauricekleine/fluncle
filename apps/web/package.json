@@ -5,8 +5,10 @@
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
+    "backfill:youtube-thumbnails": "bun run scripts/backfill-youtube-thumbnails.ts",
     "build": "NODE_OPTIONS=--max-old-space-size=6144 vite build",
     "db:generate": "drizzle-kit generate",
+    "db:backfill-observation-script": "bun run scripts/backfill-observation-script.ts",
     "db:migrate": "drizzle-kit migrate",
     "db:pull-prod": "bun run scripts/db-pull-prod.ts",
     "db:refresh-dev": "bun run scripts/db-refresh.ts",

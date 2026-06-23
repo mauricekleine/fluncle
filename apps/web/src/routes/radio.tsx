@@ -16,6 +16,7 @@ import {
 } from "@/lib/radio-schedule";
 import { fetchRadioNowPlaying, type RadioNowPlaying, type Track } from "@/lib/tracks";
 import { DESKTOP_QUERY, useMediaQuery } from "@/lib/use-media-query";
+import { useVideoStallRecovery } from "@/lib/use-video-recovery";
 
 // radio.fluncle.com — ONE synchronized run of Fluncle's Findings (RFC
 // radio-broadcast.md). Not a per-client shuffle: a single server-authoritative
@@ -494,6 +495,50 @@ function RadioPage() {
     };
   }, [playhead, resolveSlot, serverNow]);
 
+  // The silent looping crop for the current playhead, derived once so both the
+  // stall watchdog (an unconditional hook, above the early returns) and the render
+  // read the same URL. `undefined` until a playhead resolves.
+  const joinSnapSeconds =
+    playhead && playhead.joinedMidSegment
+      ? snapOffsetMs(playhead.offsetMs, OFFSET_SNAP_GRID_MS) / 1000
+      : 0;
+  const videoUrl = playhead
+    ? silentVideoUrl(playhead.track, isDesktop, joinSnapSeconds)
+    : undefined;
+
+  // The video stall watchdog. The radio video carries no sound (the observation
+  // is the clock), but a STUCK silent loop freezes the stage on its poster with
+  // no `error` event — so the `onError` resync never fires. First wedge re-arms
+  // the load (a cold-MISS clip often warms on a retry); a persistent wedge resyncs
+  // to the schedule, which re-resolves to the warm steady-state crop. Reduced
+  // motion intentionally holds the poster, so the watchdog stands down there.
+  const videoStalledRef = useRef(false);
+  const recoverStuckVideo = useCallback(() => {
+    const video = videoRef.current;
+
+    if (!videoStalledRef.current && video) {
+      videoStalledRef.current = true;
+      video.load();
+      video.play().catch(() => {});
+
+      return;
+    }
+
+    videoStalledRef.current = false;
+    void resolveSlot().catch(() => setExhausted(true));
+  }, [resolveSlot]);
+
+  useEffect(() => {
+    videoStalledRef.current = false;
+  }, [videoUrl]);
+
+  useVideoStallRecovery({
+    expectsPlayback: started && Boolean(videoUrl) && !prefersReducedMotion(),
+    onStall: recoverStuckVideo,
+    src: videoUrl,
+    videoRef,
+  });
+
   if (!started) {
     return <BeginGate onBegin={begin} />;
   }
@@ -507,13 +552,9 @@ function RadioPage() {
   }
 
   const current = playhead.track;
-  // A mid-segment join snaps the clip + poster to the cache grid (joiners share a
-  // warm clip); the residual is nudged by the resync ladder. A head start (offset
-  // 0 — a scheduled transition / the first finding) plays the warm looping crop.
-  const joinSnapSeconds = playhead.joinedMidSegment
-    ? snapOffsetMs(playhead.offsetMs, OFFSET_SNAP_GRID_MS) / 1000
-    : 0;
-  const videoUrl = silentVideoUrl(current, isDesktop, joinSnapSeconds);
+  // `videoUrl` and `joinSnapSeconds` are derived above the early returns (the stall
+  // watchdog reads the same URL). A mid-segment join snaps the poster to the cache
+  // grid like the clip; a head start (offset 0) takes the opening frame.
   const posterUrl = silentPosterUrl(current, isDesktop, joinSnapSeconds);
   const observationUrl = current.observationAudioUrl;
   // The schedule's next finding always plays from its head, so preload the warm

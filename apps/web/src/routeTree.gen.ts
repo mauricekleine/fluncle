@@ -24,11 +24,13 @@ import { Route as AboutRouteImport } from './routes/about'
 import { Route as AdminRouteRouteImport } from './routes/admin/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as StoriesIndexRouteImport } from './routes/stories.index'
+import { Route as NewsletterIndexRouteImport } from './routes/newsletter.index'
 import { Route as MixtapesIndexRouteImport } from './routes/mixtapes.index'
 import { Route as LogIndexRouteImport } from './routes/log.index'
 import { Route as DocsIndexRouteImport } from './routes/docs.index'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as StoriesLogIdRouteImport } from './routes/stories.$logId'
+import { Route as NewsletterNumberRouteImport } from './routes/newsletter.$number'
 import { Route as LogLogIdRouteImport } from './routes/log.$logId'
 import { Route as DocsApiRouteImport } from './routes/docs.api'
 import { Route as DocsSplatRouteImport } from './routes/docs.$'
@@ -42,6 +44,7 @@ import { Route as ApiNewsletterRouteImport } from './routes/api/newsletter'
 import { Route as ApiMixtapesRouteImport } from './routes/api/mixtapes'
 import { Route as ApiMeRouteImport } from './routes/api/me'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
+import { Route as AdminNewsletterRouteImport } from './routes/admin/newsletter'
 import { Route as AdminMixtapesRouteImport } from './routes/admin/mixtapes'
 import { Route as AdminLoginRouteImport } from './routes/admin/login'
 import { Route as ApiV1TracksRouteImport } from './routes/api/v1/tracks'
@@ -223,6 +226,11 @@ const StoriesIndexRoute = StoriesIndexRouteImport.update({
   path: '/stories/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const NewsletterIndexRoute = NewsletterIndexRouteImport.update({
+  id: '/newsletter/',
+  path: '/newsletter/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const MixtapesIndexRoute = MixtapesIndexRouteImport.update({
   id: '/mixtapes/',
   path: '/mixtapes/',
@@ -246,6 +254,11 @@ const AdminIndexRoute = AdminIndexRouteImport.update({
 const StoriesLogIdRoute = StoriesLogIdRouteImport.update({
   id: '/stories/$logId',
   path: '/stories/$logId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NewsletterNumberRoute = NewsletterNumberRouteImport.update({
+  id: '/newsletter/$number',
+  path: '/newsletter/$number',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LogLogIdRoute = LogLogIdRouteImport.update({
@@ -312,6 +325,11 @@ const ApiHealthRoute = ApiHealthRouteImport.update({
   id: '/api/health',
   path: '/api/health',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AdminNewsletterRoute = AdminNewsletterRouteImport.update({
+  id: '/newsletter',
+  path: '/newsletter',
+  getParentRoute: () => AdminRouteRoute,
 } as any)
 const AdminMixtapesRoute = AdminMixtapesRouteImport.update({
   id: '/mixtapes',
@@ -908,6 +926,7 @@ export interface FileRoutesByFullPath {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
+  '/admin/newsletter': typeof AdminNewsletterRoute
   '/api/health': typeof ApiHealthRoute
   '/api/me': typeof ApiMeRouteWithChildren
   '/api/mixtapes': typeof ApiMixtapesRoute
@@ -921,11 +940,13 @@ export interface FileRoutesByFullPath {
   '/docs/$': typeof DocsSplatRoute
   '/docs/api': typeof DocsApiRoute
   '/log/$logId': typeof LogLogIdRoute
+  '/newsletter/$number': typeof NewsletterNumberRoute
   '/stories/$logId': typeof StoriesLogIdRoute
   '/admin/': typeof AdminIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/log/': typeof LogIndexRoute
   '/mixtapes/': typeof MixtapesIndexRoute
+  '/newsletter/': typeof NewsletterIndexRoute
   '/stories/': typeof StoriesIndexRoute
   '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/admin/mixtapes': typeof ApiAdminMixtapesRouteWithChildren
@@ -1046,6 +1067,7 @@ export interface FileRoutesByTo {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
+  '/admin/newsletter': typeof AdminNewsletterRoute
   '/api/health': typeof ApiHealthRoute
   '/api/me': typeof ApiMeRouteWithChildren
   '/api/mixtapes': typeof ApiMixtapesRoute
@@ -1059,11 +1081,13 @@ export interface FileRoutesByTo {
   '/docs/$': typeof DocsSplatRoute
   '/docs/api': typeof DocsApiRoute
   '/log/$logId': typeof LogLogIdRoute
+  '/newsletter/$number': typeof NewsletterNumberRoute
   '/stories/$logId': typeof StoriesLogIdRoute
   '/admin': typeof AdminIndexRoute
   '/docs': typeof DocsIndexRoute
   '/log': typeof LogIndexRoute
   '/mixtapes': typeof MixtapesIndexRoute
+  '/newsletter': typeof NewsletterIndexRoute
   '/stories': typeof StoriesIndexRoute
   '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/admin/mixtapes': typeof ApiAdminMixtapesRouteWithChildren
@@ -1187,6 +1211,7 @@ export interface FileRoutesById {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
+  '/admin/newsletter': typeof AdminNewsletterRoute
   '/api/health': typeof ApiHealthRoute
   '/api/me': typeof ApiMeRouteWithChildren
   '/api/mixtapes': typeof ApiMixtapesRoute
@@ -1200,11 +1225,13 @@ export interface FileRoutesById {
   '/docs/$': typeof DocsSplatRoute
   '/docs/api': typeof DocsApiRoute
   '/log/$logId': typeof LogLogIdRoute
+  '/newsletter/$number': typeof NewsletterNumberRoute
   '/stories/$logId': typeof StoriesLogIdRoute
   '/admin/': typeof AdminIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/log/': typeof LogIndexRoute
   '/mixtapes/': typeof MixtapesIndexRoute
+  '/newsletter/': typeof NewsletterIndexRoute
   '/stories/': typeof StoriesIndexRoute
   '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/admin/mixtapes': typeof ApiAdminMixtapesRouteWithChildren
@@ -1329,6 +1356,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/admin/login'
     | '/admin/mixtapes'
+    | '/admin/newsletter'
     | '/api/health'
     | '/api/me'
     | '/api/mixtapes'
@@ -1342,11 +1370,13 @@ export interface FileRouteTypes {
     | '/docs/$'
     | '/docs/api'
     | '/log/$logId'
+    | '/newsletter/$number'
     | '/stories/$logId'
     | '/admin/'
     | '/docs/'
     | '/log/'
     | '/mixtapes/'
+    | '/newsletter/'
     | '/stories/'
     | '/api/admin/logout'
     | '/api/admin/mixtapes'
@@ -1467,6 +1497,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/admin/login'
     | '/admin/mixtapes'
+    | '/admin/newsletter'
     | '/api/health'
     | '/api/me'
     | '/api/mixtapes'
@@ -1480,11 +1511,13 @@ export interface FileRouteTypes {
     | '/docs/$'
     | '/docs/api'
     | '/log/$logId'
+    | '/newsletter/$number'
     | '/stories/$logId'
     | '/admin'
     | '/docs'
     | '/log'
     | '/mixtapes'
+    | '/newsletter'
     | '/stories'
     | '/api/admin/logout'
     | '/api/admin/mixtapes'
@@ -1607,6 +1640,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/admin/login'
     | '/admin/mixtapes'
+    | '/admin/newsletter'
     | '/api/health'
     | '/api/me'
     | '/api/mixtapes'
@@ -1620,11 +1654,13 @@ export interface FileRouteTypes {
     | '/docs/$'
     | '/docs/api'
     | '/log/$logId'
+    | '/newsletter/$number'
     | '/stories/$logId'
     | '/admin/'
     | '/docs/'
     | '/log/'
     | '/mixtapes/'
+    | '/newsletter/'
     | '/stories/'
     | '/api/admin/logout'
     | '/api/admin/mixtapes'
@@ -1757,9 +1793,11 @@ export interface RootRouteChildren {
   CliLatestDotshRoute: typeof CliLatestDotshRoute
   DocsDotmdSplatRoute: typeof DocsDotmdSplatRoute
   LogLogIdRoute: typeof LogLogIdRoute
+  NewsletterNumberRoute: typeof NewsletterNumberRoute
   StoriesLogIdRoute: typeof StoriesLogIdRoute
   LogIndexRoute: typeof LogIndexRoute
   MixtapesIndexRoute: typeof MixtapesIndexRoute
+  NewsletterIndexRoute: typeof NewsletterIndexRoute
   StoriesIndexRoute: typeof StoriesIndexRoute
   ApiAdminLogoutRoute: typeof ApiAdminLogoutRoute
   ApiAdminMixtapesRoute: typeof ApiAdminMixtapesRouteWithChildren
@@ -1923,6 +1961,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof StoriesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/newsletter/': {
+      id: '/newsletter/'
+      path: '/newsletter'
+      fullPath: '/newsletter/'
+      preLoaderRoute: typeof NewsletterIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/mixtapes/': {
       id: '/mixtapes/'
       path: '/mixtapes'
@@ -1956,6 +2001,13 @@ declare module '@tanstack/react-router' {
       path: '/stories/$logId'
       fullPath: '/stories/$logId'
       preLoaderRoute: typeof StoriesLogIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/newsletter/$number': {
+      id: '/newsletter/$number'
+      path: '/newsletter/$number'
+      fullPath: '/newsletter/$number'
+      preLoaderRoute: typeof NewsletterNumberRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/log/$logId': {
@@ -2048,6 +2100,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/health'
       preLoaderRoute: typeof ApiHealthRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/admin/newsletter': {
+      id: '/admin/newsletter'
+      path: '/newsletter'
+      fullPath: '/admin/newsletter'
+      preLoaderRoute: typeof AdminNewsletterRouteImport
+      parentRoute: typeof AdminRouteRoute
     }
     '/admin/mixtapes': {
       id: '/admin/mixtapes'
@@ -2790,12 +2849,14 @@ declare module '@tanstack/react-router' {
 interface AdminRouteRouteChildren {
   AdminLoginRoute: typeof AdminLoginRoute
   AdminMixtapesRoute: typeof AdminMixtapesRoute
+  AdminNewsletterRoute: typeof AdminNewsletterRoute
   AdminIndexRoute: typeof AdminIndexRoute
 }
 
 const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminLoginRoute: AdminLoginRoute,
   AdminMixtapesRoute: AdminMixtapesRoute,
+  AdminNewsletterRoute: AdminNewsletterRoute,
   AdminIndexRoute: AdminIndexRoute,
 }
 
@@ -3196,9 +3257,11 @@ const rootRouteChildren: RootRouteChildren = {
   CliLatestDotshRoute: CliLatestDotshRoute,
   DocsDotmdSplatRoute: DocsDotmdSplatRoute,
   LogLogIdRoute: LogLogIdRoute,
+  NewsletterNumberRoute: NewsletterNumberRoute,
   StoriesLogIdRoute: StoriesLogIdRoute,
   LogIndexRoute: LogIndexRoute,
   MixtapesIndexRoute: MixtapesIndexRoute,
+  NewsletterIndexRoute: NewsletterIndexRoute,
   StoriesIndexRoute: StoriesIndexRoute,
   ApiAdminLogoutRoute: ApiAdminLogoutRoute,
   ApiAdminMixtapesRoute: ApiAdminMixtapesRouteWithChildren,
