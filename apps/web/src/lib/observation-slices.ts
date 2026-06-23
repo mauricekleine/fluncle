@@ -49,8 +49,11 @@ const MIN_WORDS_PER_SLICE = 6;
 // A word that ENDS a sentence: trailing terminal punctuation, allowing a closing
 // quote/paren/bracket after it (e.g. `home."`, `there?`, `wait…`).
 const SENTENCE_END = /[.!?…]["')\]]*$/;
-// A word that ends a PHRASE: a soft internal break we may chunk a long sentence on.
-const PHRASE_BREAK = /[,;:—–-]["')\]]*$/;
+// A word that ends a PHRASE: a soft internal break we may chunk a long sentence on
+// — comma, semicolon, colon, or a dash (em/en). A bare hyphen is deliberately NOT
+// here: it joins a compound (`drum-`) rather than ending a phrase, so breaking on
+// it would split mid-word.
+const PHRASE_BREAK = /[,;:—–]["')\]]*$/;
 
 /**
  * Split the flat word list into sequential, screen-friendly slices (sentence

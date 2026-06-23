@@ -192,10 +192,17 @@ function RadioCaptions({
   }
 
   return (
-    <div aria-hidden="true" className="radio-narration">
-      {/* Keyed on the slice index so React mounts a fresh node per slice — the CSS
-          enter animation (a soft fade, reduced-motion → instant) plays on the swap. */}
-      <p className="radio-narration-line" key={view.sliceIndex}>
+    <div className="radio-narration">
+      {/* The full observation script, exposed once to assistive tech (the visible
+          layer is a fast per-slice swap that would be noisy as a live region). Keeps
+          the spoken text reachable for screen readers — it is not announced live. */}
+      <p className="sr-only">{words.map((word) => word.text).join(" ")}</p>
+
+      {/* The visible narration: aria-hidden so the per-slice/word animation never
+          spams the a11y tree; the sr-only line above carries the read. Keyed on the
+          slice index so React mounts a fresh node per slice — the CSS enter animation
+          (a soft fade, reduced-motion → instant) plays on the swap. */}
+      <p aria-hidden="true" className="radio-narration-line" key={view.sliceIndex}>
         {slice.words.map((word, i) => (
           <span
             className={

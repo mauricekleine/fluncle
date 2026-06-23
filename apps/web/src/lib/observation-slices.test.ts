@@ -67,6 +67,24 @@ describe("sliceObservationWords", () => {
     expect(slices[1]?.words.length).toBe(3);
   });
 
+  it("does not treat a bare hyphen as a phrase break (compound word)", () => {
+    // A hyphen joins a compound; breaking on it would split mid-word. With 8 words
+    // and a hyphen past the 6-word min, the slice must NOT cut on the hyphen — it
+    // runs to the sentence end.
+    const words = build(["a", "b", "c", "d", "e", "drum-", "and", "bass."]);
+    const slices = sliceObservationWords(words);
+
+    expect(slices).toHaveLength(1);
+    expect(slices[0]?.words.map((w) => w.text).join(" ")).toBe("a b c d e drum- and bass.");
+  });
+
+  it("breaks on an em-dash phrase boundary past the minimum", () => {
+    const words = build(["a", "b", "c", "d", "e", "f—", "g", "h."]);
+    const slices = sliceObservationWords(words);
+
+    expect(slices[0]?.words.map((w) => w.text).join(" ")).toBe("a b c d e f—");
+  });
+
   it("does not break on a soft phrase boundary before the minimum", () => {
     // A comma at word 3 (below the 6-word min) must NOT split — only a full
     // sentence end would, and there is none until the last word.
