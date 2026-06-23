@@ -89,7 +89,7 @@ export const backfillDiscogs = oc
  * `backfill_lastfm` → `POST /admin/backfill/lastfm` (operationId
  * `backfillLastfm`).
  *
- * Operator tier (live `requireOperator`). One bounded, reliability-gated pass
+ * Agent tier (`adminAuth`). One bounded, reliability-gated pass
  * loving published findings on Last.fm (idempotent). Returns `{ ok, dryRun, loved,
  * lovedCount, failed, failedCount, skipped, skippedCount, nextCursor }` — `skipped`
  * is the findings the per-finding cooldown/done gate held back this pass.
