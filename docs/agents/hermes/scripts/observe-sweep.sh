@@ -22,12 +22,15 @@
 # step that genuinely needs a model.
 #
 # PRODUCTION PRE-REQS (see ../cron/README.md):
-#   - `claude` (Claude Code CLI) — BAKED into the image; authed at run via
-#     CLAUDE_CODE_OAUTH_TOKEN in the cron env (subscription auth — zero OpenRouter
-#     tokens; from op://Fluncle/CLAUDE_CODE_OAUTH_TOKEN/credential in /etc/hermes.env).
+#   - `claude` (Claude Code CLI) — BAKED into the image; authed via subscription
+#     CLAUDE_CODE_OAUTH_TOKEN (zero OpenRouter tokens). The `--no-agent` runner does
+#     NOT pass --env-file secrets beyond FLUNCLE_API_TOKEN, so the token does NOT reach
+#     this script via the container env — it is read from a 0600 operator-placed file
+#     at ${HOME}/.observe-sweep.env (mounted ~/.hermes), sourced below.
 #   - the `copywriting-fluncle` skill — BAKED into the image at /opt/claude/skills/
 #     (discovered via CLAUDE_CONFIG_DIR=/opt/claude, readable by the non-root cron user).
-#   - optional DISCORD_ALERT_WEBHOOK in the cron env for the claude-auth-failed ping.
+#   - optional DISCORD_ALERT_WEBHOOK for the claude-auth-failed ping (in the same file —
+#     it too is dropped by the runner's curated env).
 #
 # Operator wires it on the devbox (the image already carries bun + the fluncle CLI +
 # claude + the skill; `observe_track` is AGENT tier, so the box's existing agent-scoped
@@ -53,6 +56,22 @@ export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 # dependence; the wrapper itself execs bun by absolute path too.
 export BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 export FLUNCLE_BIN="${FLUNCLE_BIN:-/usr/local/bin/fluncle}"
+
+# The `--no-agent` cron runner's curated env passes FLUNCLE_API_TOKEN + CLAUDE_CONFIG_DIR
+# but DROPS the other --env-file secrets — verified on the box: CLAUDE_CODE_OAUTH_TOKEN
+# (and OPENROUTER_API_KEY, DISCORD_*) reach `docker exec` + agent crons but NOT a
+# --no-agent script's env. `claude -p` authenticates from CLAUDE_CODE_OAUTH_TOKEN, so the
+# hybrid step's secrets live in a 0600 file the operator places in the mounted ~/.hermes
+# (HOME), sourced here: CLAUDE_CODE_OAUTH_TOKEN (required), and optionally
+# DISCORD_ALERT_WEBHOOK / OBSERVE_CLAUDE_MODEL. The operator writes the token via
+# `op read op://Fluncle/CLAUDE_CODE_OAUTH_TOKEN/credential` → `CLAUDE_CODE_OAUTH_TOKEN=…`.
+OBSERVE_ENV_FILE="${OBSERVE_ENV_FILE:-${HOME:-/opt/data/home}/.observe-sweep.env}"
+if [ -r "${OBSERVE_ENV_FILE}" ]; then
+  set -a
+  # shellcheck source=/dev/null
+  . "${OBSERVE_ENV_FILE}"
+  set +a
+fi
 
 # Resolve the orchestrator next to this wrapper so it runs regardless of CWD.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
