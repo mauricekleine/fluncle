@@ -105,6 +105,14 @@ const envKeys = [
   // unprovisioned exactly like the Last.fm/Telegram hooks. With Expo's "Enhanced
   // Security for Push" enabled this Bearer is REQUIRED for /send to authorize.
   "EXPO_ACCESS_TOKEN",
+  // OpenRouter — the small-LLM distil pass that turns raw Firecrawl search snippets
+  // into a clean context_note (lib/server/observation.ts). OPENROUTER_API_KEY is a
+  // secret, read via readOptionalEnv so an unprovisioned Worker degrades gracefully:
+  // the distil falls back to the cleaned raw snippets rather than blocking the
+  // render. OPENROUTER_CONTEXT_MODEL is an OPTIONAL, non-secret override for the
+  // distil model; absent, it defaults to `anthropic/claude-haiku-4.5`.
+  "OPENROUTER_API_KEY",
+  "OPENROUTER_CONTEXT_MODEL",
 ] as const;
 
 export type EnvKey = (typeof envKeys)[number];

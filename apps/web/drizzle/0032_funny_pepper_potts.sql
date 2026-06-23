@@ -1,0 +1,1 @@
+ALTER TABLE `tracks` ADD `context_status` text;

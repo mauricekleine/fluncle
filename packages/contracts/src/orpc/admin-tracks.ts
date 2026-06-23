@@ -329,6 +329,10 @@ export const listTracksAdmin = oc
       limit: z.string().optional(),
       order: z.string().optional(),
       q: z.string().optional(),
+      // `--retry-empty`: widen the `hasContext=false` context queue to also re-pick
+      // CONFIRMED-EMPTY finds (`context_status = 'empty'`). Tri-state tolerant string,
+      // parsed in-handler like the other booleans; only honoured with `hasContext=false`.
+      retryEmptyContext: z.string().optional(),
       status: z.string().optional(),
     }),
   )

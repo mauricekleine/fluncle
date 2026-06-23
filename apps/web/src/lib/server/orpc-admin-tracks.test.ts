@@ -116,7 +116,12 @@ beforeEach(() => {
   renderObservation
     .mockReset()
     .mockResolvedValue({ bytes: new ArrayBuffer(512), voiceId: "voice-stock-1" });
-  fetchTrackContext.mockResolvedValue({ contextNote: "Signature Records, 2008.", sources: [] });
+  fetchTrackContext.mockResolvedValue({
+    contextNote: "Signature Records, 2008.",
+    distilled: true,
+    sources: [],
+    status: "resolved",
+  });
   listTracks.mockReset();
   searchTracks.mockReset();
   publishTrack.mockReset();
@@ -294,9 +299,11 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
       "004.7.2I/observation.txt",
       "004.7.2I/observation.json",
     ]);
-    // No stored context note → observe_track freshly fetches it and backfills it.
+    // No stored context note → observe_track freshly fetches it and backfills it,
+    // marking context_status=resolved so the status-aware queue treats it as done.
     expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, {
       contextNote: "Signature Records, 2008.",
+      contextStatus: "resolved",
       observationAudioUrl: "https://found.fluncle.com/004.7.2I/observation.mp3",
       observationDurationMs: 28000,
       observationGeneratedAt: expect.any(String),
@@ -404,7 +411,9 @@ describe("oRPC context_track (POST /admin/tracks/{trackId}/context)", () => {
     getTrackContextNote.mockResolvedValueOnce(null);
     fetchTrackContext.mockResolvedValueOnce({
       contextNote: "Signature Records, 2008.",
+      distilled: true,
       sources: ["https://signature.example/release"],
+      status: "resolved",
     });
     updateTrack.mockResolvedValueOnce({ fields: ["context_note"], trackId: TRACK_ID });
 
@@ -420,10 +429,14 @@ describe("oRPC context_track (POST /admin/tracks/{trackId}/context)", () => {
     expect(data.ok).toBe(true);
     expect(data.contextNote).toBe("Signature Records, 2008.");
     expect(data.sources).toEqual(["https://signature.example/release"]);
-    // It writes ONLY contextNote — no observation/render/R2 side effects. The
-    // quiet-write (no updated_at bump) is track-update.ts's responsibility; here we
-    // prove the handler touches nothing but the note.
-    expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, { contextNote: "Signature Records, 2008." });
+    // It writes the distilled note + the resolved status — both internal, no
+    // observation/render/R2 side effects. The quiet-write (no updated_at bump) is
+    // track-update.ts's responsibility; here we prove the handler touches nothing
+    // but the note + its reliability marker.
+    expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, {
+      contextNote: "Signature Records, 2008.",
+      contextStatus: "resolved",
+    });
     expect(renderObservation).not.toHaveBeenCalled();
     expect(put).not.toHaveBeenCalled();
   });
@@ -443,18 +456,45 @@ describe("oRPC context_track (POST /admin/tracks/{trackId}/context)", () => {
     expect(updateTrack).not.toHaveBeenCalled();
   });
 
-  it("leaves the note null on an empty Firecrawl result (queue re-picks next tick)", async () => {
+  it("marks context_status=empty on an empty Firecrawl result (no note, queue skips it)", async () => {
     getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
     getTrackContextNote.mockResolvedValueOnce(null);
-    fetchTrackContext.mockResolvedValueOnce({ contextNote: "", sources: [] });
+    fetchTrackContext.mockResolvedValueOnce({
+      contextNote: "",
+      distilled: false,
+      sources: [],
+      status: "empty",
+    });
+    updateTrack.mockResolvedValueOnce({ fields: ["context_status"], trackId: TRACK_ID });
 
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(post("/context", AGENT_TOKEN, {}));
 
     expect(response?.status).toBe(200);
-    // An empty fetch must NOT write through — the queue (context_note IS NULL) keeps
-    // re-picking it rather than locking in an empty note.
-    expect(updateTrack).not.toHaveBeenCalled();
+    // A confirmed-empty fetch writes the reliability marker (NOT the note) so the
+    // status-aware queue stops re-burning Firecrawl + the distil LLM on it every tick
+    // (only `--retry-empty` re-picks it). No contextNote in the write.
+    expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, { contextStatus: "empty" });
+    const update = updateTrack.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect("contextNote" in update).toBe(false);
+  });
+
+  it("marks context_status=failed on a Firecrawl vendor error (retryable next tick)", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+    getTrackContextNote.mockResolvedValueOnce(null);
+    fetchTrackContext.mockResolvedValueOnce({
+      contextNote: "",
+      distilled: false,
+      sources: [],
+      status: "failed",
+    });
+    updateTrack.mockResolvedValueOnce({ fields: ["context_status"], trackId: TRACK_ID });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(post("/context", AGENT_TOKEN, {}));
+
+    expect(response?.status).toBe(200);
+    expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, { contextStatus: "failed" });
   });
 
   it("400s `no_log_id` for a track with no Log ID", async () => {

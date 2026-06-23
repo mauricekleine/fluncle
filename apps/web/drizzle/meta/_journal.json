@@ -225,6 +225,13 @@
       "when": 1782159147653,
       "tag": "0031_happy_frog_thor",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1782192646523,
+      "tag": "0032_funny_pepper_potts",
+      "breakpoints": true
     }
   ]
 }
