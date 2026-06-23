@@ -14,3 +14,18 @@ model:
 # Discord: reply inline in the channel; an @mention no longer spawns a thread.
 discord:
   auto_thread: false
+
+# Env passthrough to spawned `--no-agent` cron scripts. The gateway WITHHOLDS its
+# recognized infrastructure secrets (provider keys + gateway/tool tokens —
+# OPENROUTER_API_KEY, DISCORD_*, CLAUDE_CODE_OAUTH_TOKEN) from subprocesses by default,
+# and only passes UNRECOGNIZED custom vars (FLUNCLE_API_TOKEN) through (Hermes security
+# docs § Environment Variable Passthrough). The observe-sweep cron's `claude -p` step
+# needs CLAUDE_CODE_OAUTH_TOKEN, and its auth-failure alert needs DISCORD_ALERT_WEBHOOK —
+# both arrive via /etc/hermes.env, so allowlist them here (the documented mechanism, which
+# replaced an earlier file-sourcing workaround). FLUNCLE_API_TOKEN is listed for clarity
+# though it already passes by default.
+terminal:
+  env_passthrough:
+    - FLUNCLE_API_TOKEN
+    - CLAUDE_CODE_OAUTH_TOKEN
+    - DISCORD_ALERT_WEBHOOK
