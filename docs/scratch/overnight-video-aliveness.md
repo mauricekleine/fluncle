@@ -118,3 +118,26 @@ Units A/B/C and all 6 renders were built by FRESH sub-agents (own context, own c
 - Metrics on a render: `bun run --cwd packages/video judge:metrics <trackId|video> --json --intent <file>`.
 - The local judge: `bun packages/video/out/_judge/judge-local.ts --video <mp4> --track <trackId> --intent <file>` (needs the Bash sandbox disabled for the OpenRouter call; reads the key from `~/.config/fluncle/.env.local`).
 - All 6 deliverables + their metrics/intent snapshots + the Tier-2 composition sources: `packages/video/out/overnight/` (gitignored).
+
+---
+
+## Reviewer note (heartbeat, 2026-06-23 ~01:10) — Part I + the 6-clip pilot, independently verified
+
+Re-ran on the branch (no live render in flight):
+
+- **Gates GREEN:** `typecheck` exit 0 · `oxlint` exit 0 · `bun test` — all 8 files' asserts pass, beat-pull golden byte-identical (raw `0.6800544743756005` / hardened `0.5070420720154718`). The panel's P0 fixes are present and tested: the 10°-field flash rule + the fast-flash-in-grain fixture, the coupling per-clip permutation null (~7% FP vs the rejected 21–73%), peak-per-band over the full <150Hz, `rawDynamicsHint`.
+- **All 6 renders valid:** 1080×1920 h264+aac, ~20.0s; each passes flash (safe) + beat-pull + `hardPass`.
+
+**Before/after coupling (raw r) — the headline finding:**
+
+| Track    | no-judge | judge |
+| -------- | -------- | ----- |
+| 020.0.5L | 0.504    | 0.482 |
+| 020.0.8R | 0.659    | 0.447 |
+| 020.9.8S | 0.684    | 0.230 |
+
+On all three tracks the judge-loop render has LOWER raw coupling than the no-judge render (all still "alive" + gate-pass). Two caveats: each clip is a DIFFERENT vehicle (a fresh author, not the same comp refined), and the judge optimizes its rubric (brandFit / readability / divergence / motionEnergy) — NOT the coupling metric. So this is "what the agent makes with vs without judge feedback," n=1 per track, rubric-only, no anchors.
+
+**Likely correction (ties to Decision 6):** when picking the judge anchors, include at least one HIGH-coupling alive clip scored 5 on motionEnergy (e.g. the 0.68 no-judge 020.9.8S) as the "this is alive" anchor — a rubric-only judge with no anchors appears to drift toward polish/readability over raw reactivity. The 6 pilot clips are the natural anchor set. Eyeball the mp4s directly to decide whether the judge's trade (more brand/readability, less raw coupling) reads better to you — that taste call is exactly what this comparison was built to surface.
+
+Heartbeat stood down — run complete (Part I built + verified green, 6/6 pilot videos rendered).
