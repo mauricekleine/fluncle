@@ -109,19 +109,22 @@ export type BoardProps = {
   actions: BoardActions;
 };
 
-// The canonical order + identity of every step. Lifecycle-ish (rough, not fixed),
-// agents first then your hands, in the order each group's work tends to land. The
-// Last.fm love is automated (an agent loves the track once it's added), so it sits
-// among the agents, right after the enrichment it rides along with.
+// The canonical order + identity of every step. Agents first, then your hands.
+// Within agents the order reads as the pipeline settles: the catalogue links
+// (Last.fm, Discogs), then the per-finding chain Enrich → Context → Note →
+// Observation → Video. NOTE sits among the agents in anticipation of auto-drafted
+// notes (the _Auto-drafted finding notes_ slice); until that lands it is still
+// operator-written, but it lives among the agents it will join. Within your hands:
+// Tag, then the social pushes, then the mixtape.
 const STEP_DEFS: { key: StepKey; kind: StepKind; label: string; Icon: StepIcon }[] = [
-  { Icon: WaveformIcon, key: "enrich", kind: "auto", label: "Enrich" },
   { Icon: HeartIcon, key: "lastfm", kind: "auto", label: "Last.fm" },
   { Icon: VinylRecordIcon, key: "discogs", kind: "auto", label: "Discogs" },
-  { Icon: FilmSlateIcon, key: "video", kind: "auto", label: "Video" },
+  { Icon: WaveformIcon, key: "enrich", kind: "auto", label: "Enrich" },
   { Icon: FileTextIcon, key: "context", kind: "auto", label: "Context" },
+  { Icon: NotePencilIcon, key: "note", kind: "auto", label: "Note" },
   { Icon: MicrophoneIcon, key: "observation", kind: "auto", label: "Observation" },
+  { Icon: FilmSlateIcon, key: "video", kind: "auto", label: "Video" },
   { Icon: CrosshairIcon, key: "tag", kind: "human", label: "Tag" },
-  { Icon: NotePencilIcon, key: "note", kind: "human", label: "Note" },
   { Icon: YoutubeIcon, key: "youtube", kind: "human", label: "YouTube" },
   { Icon: TiktokIcon, key: "tiktok", kind: "human", label: "TikTok" },
   { Icon: CassetteTapeIcon, key: "mixtape", kind: "human", label: "Mixtape" },
