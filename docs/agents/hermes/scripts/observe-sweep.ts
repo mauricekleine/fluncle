@@ -15,12 +15,13 @@
 //      hasObservation=false`, oldest first). Empty → fast no-op, exit.
 //   2. per finding (bounded batch, BATCH_CAP small — observation costs ElevenLabs
 //      credits + subscription quota):
-//      a. GATHER (deterministic): `fluncle track get <id> --json` → the raw finding
-//         metadata (artists, title, label, release year, galaxy, vibe). This is the
-//         factual fuel the authoring step grounds the script in. (The stored
-//         `context_note` is internal-only — never surfaced by a read endpoint — so
-//         the Worker injects it itself at delivery as the gate's source of truth;
-//         the metadata here is the distilled facts the note was built from.)
+//      a. GATHER (deterministic): `fluncle track get <id> --json` → the finding's
+//         identity metadata (artists, title, label, release year, galaxy, vibe),
+//         AND `fluncle admin tracks context <id> --json` → the stored `context_note`
+//         (the firecrawl facts the context sweep distilled). The note is the PRIMARY
+//         authoring fuel — `admin tracks context` returns it (`skipped: true`, no
+//         re-fetch) for a finding that already has one, which every queue item does
+//         (`hasContext=true`). A blank/unreadable note degrades to identity-only.
 //      b. AUTHOR (the ONE agentic step): build the authoring prompt (the voice/format
 //         doctrine ported from the old agent cron's jobs.json prompt, with the
 //         finding's data interpolated inline) and run `claude -p` — Claude Code,
@@ -182,7 +183,7 @@ function looksLikeAuthFailure(text: string): boolean {
 // restate the hard, gate-enforced constraints here so the output is gate-safe.
 // ---------------------------------------------------------------------------
 
-function buildAuthoringPrompt(finding: Finding): string {
+function buildAuthoringPrompt(finding: Finding, contextNote: string): string {
   const artists = finding.artists?.length ? finding.artists.join(", ") : "unknown";
   const title = finding.title ?? "unknown";
   const label = finding.label ?? "unknown";
@@ -193,6 +194,21 @@ function buildAuthoringPrompt(finding: Finding): string {
       ? `x=${finding.vibeX}, y=${finding.vibeY}`
       : "unplaced";
 
+  // The stored context note (the firecrawl facts the context sweep distilled) is
+  // the PRIMARY fuel — it carries release context, scene, and label history the bare
+  // metadata can't. The metadata below is supporting identity. When the note is
+  // absent (best-effort read failed), author from identity alone — sparse + certain.
+  const noteBlock = contextNote
+    ? [
+        "CONTEXT NOTE (the gathered facts — your PRIMARY material; ground the prose in these):",
+        contextNote,
+        "",
+      ]
+    : [
+        "(No context note on file — author from the identity facts below alone; stay sparse and certain.)",
+        "",
+      ];
+
   return [
     "You are Fluncle, writing the SPOKEN recovered-audio observation for one finding.",
     "Load and apply the `copywriting-fluncle` skill — it is the full voice canon; let it govern the voice.",
@@ -200,7 +216,8 @@ function buildAuthoringPrompt(finding: Finding): string {
     "This is the recovered-audio register: a short spoken observation, as if Fluncle is talking over the track to the crew.",
     "Ground every claim in the facts below. Never invent a track, artist, date, Log ID, label, or stat.",
     "",
-    "THE FINDING (the factual fuel — your only material):",
+    ...noteBlock,
+    "THE FINDING (identity):",
     `  artists: ${artists}`,
     `  title: ${title}`,
     `  label: ${label}`,
@@ -226,8 +243,8 @@ function buildAuthoringPrompt(finding: Finding): string {
 // other failure (leave the finding queued); returns the script string on success.
 // ---------------------------------------------------------------------------
 
-function authorScript(finding: Finding): string | null {
-  const prompt = buildAuthoringPrompt(finding);
+function authorScript(finding: Finding, contextNote: string): string | null {
+  const prompt = buildAuthoringPrompt(finding, contextNote);
   const args = [
     "-p",
     "--model",
@@ -346,6 +363,31 @@ function deliverScript(id: string, script: string): Outcome {
 }
 
 // ---------------------------------------------------------------------------
+// Read the finding's stored context note — the firecrawl facts the context sweep
+// distilled, which are the observation's PRIMARY authoring fuel. `admin tracks
+// context <id>` returns the stored note (`skipped: true`, NO re-fetch) for a
+// finding that already has one — and every queue item does (`hasContext=true`), so
+// this is a cheap read with no side effect. Best-effort: any failure (or a blank
+// note) degrades to identity-only authoring rather than blocking the finding.
+// ---------------------------------------------------------------------------
+
+function readContextNote(id: string): string {
+  try {
+    const result = fluncleJson<{ contextNote?: string }>(["admin", "tracks", "context", id]);
+
+    return result.contextNote?.trim() ?? "";
+  } catch (error) {
+    log(
+      `${id}: could not read context note (${
+        error instanceof Error ? error.message : String(error)
+      }) — authoring from identity metadata only`,
+    );
+
+    return "";
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Per-finding: gather → author → deliver.
 // ---------------------------------------------------------------------------
 
@@ -358,9 +400,9 @@ function observeOne(queued: QueueFinding): Outcome {
     return "skipped";
   }
 
-  // (a) Gather the finding's metadata (the factual fuel). `track get` is the
-  // SINGULAR public read; it returns the raw finding (galaxy + vibe intact). A
-  // mixtape arm can't appear here (the queue is findings), but guard anyway.
+  // (a) Gather the finding's identity metadata. `track get` is the SINGULAR public
+  // read; it returns the raw finding (galaxy + vibe intact). A mixtape arm can't
+  // appear here (the queue is findings), but guard anyway.
   const response = fluncleJson<TrackGetResponse>(["track", "get", id]);
   const finding = response.track;
 
@@ -370,9 +412,13 @@ function observeOne(queued: QueueFinding): Outcome {
     return "skipped";
   }
 
-  // (b) Author the script (the one agentic step). Throws ClaudeAuthError to abort
+  // (b) Read the stored context note — the PRIMARY authoring fuel (the firecrawl
+  // facts the context sweep produced). Best-effort: degrades to identity-only.
+  const contextNote = readContextNote(id);
+
+  // (c) Author the script (the one agentic step). Throws ClaudeAuthError to abort
   // the whole batch; returns null to leave THIS finding queued.
-  const script = authorScript(finding);
+  const script = authorScript(finding, contextNote);
 
   if (!script) {
     return "skipped";
