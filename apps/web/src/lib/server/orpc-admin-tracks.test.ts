@@ -818,7 +818,11 @@ describe("oRPC finalize_track_video (POST .../video/finalize)", () => {
 
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(
-      post("/video/finalize", OPERATOR_TOKEN, { squared: true, videoVehicle: "submarine" }),
+      post("/video/finalize", OPERATOR_TOKEN, {
+        squared: true,
+        videoGrain: "grainCoarseSilver",
+        videoVehicle: "submarine",
+      }),
     );
 
     expect(response?.status).toBe(200);
@@ -829,6 +833,7 @@ describe("oRPC finalize_track_video (POST .../video/finalize)", () => {
 
     const [, update] = updateTrack.mock.calls[0] as [string, Record<string, unknown>];
     expect(update.videoVehicle).toBe("submarine");
+    expect(update.videoGrain).toBe("grainCoarseSilver");
     expect(update.videoModel).toBe("anthropic/claude-opus-4-8");
     expect(update.videoModelReasoning).toBe("high");
     expect(typeof update.videoSquaredAt).toBe("string");

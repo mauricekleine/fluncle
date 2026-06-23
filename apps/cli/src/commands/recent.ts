@@ -39,6 +39,7 @@ export function mapTrack(track: RecentTrack | RecentMixtape): RecentItem {
     title: track.title,
     trackId: track.trackId,
     type: "finding",
+    videoGrain: track.videoGrain,
     videoModel: track.videoModel,
     videoModelReasoning: track.videoModelReasoning,
     videoUrl: track.videoUrl,

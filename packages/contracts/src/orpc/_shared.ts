@@ -68,6 +68,7 @@ export const TrackListItemSchema = z
     updatedAt: z.string().optional(),
     vibeX: z.number().optional(),
     vibeY: z.number().optional(),
+    videoGrain: z.string().optional(),
     videoModel: z.string().optional(),
     videoModelReasoning: z.string().optional(),
     videoSquaredAt: z.string().optional(),

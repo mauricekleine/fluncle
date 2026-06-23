@@ -39,6 +39,7 @@ const BASE_ROW: TrackRow = {
   updated_at: null,
   vibe_x: null,
   vibe_y: null,
+  video_grain: null,
   video_model: null,
   video_model_reasoning: null,
   video_squared_at: null,

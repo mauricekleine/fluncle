@@ -46,6 +46,7 @@ export type TrackRow = {
   title: string;
   track_id: string;
   updated_at: string | null;
+  video_grain: string | null;
   video_model: string | null;
   video_model_reasoning: string | null;
   video_squared_at: string | null;
@@ -76,7 +77,7 @@ type MixtapeFeedRow = {
 // surfaced (parsed) as creative fuel for the video agent.
 const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.title, tracks.album, tracks.album_image_url, tracks.artists_json,
   tracks.bpm, tracks.duration_ms, tracks.enrichment_status, tracks.features_json, tracks.in_release_id, tracks.isrc, tracks.key, tracks.label, tracks.log_id, tracks.popularity,
-  tracks.preview_url, tracks.release_date, tracks.video_url, tracks.video_squared_at, tracks.video_vehicle, tracks.video_model, tracks.video_model_reasoning, tracks.note, tracks.added_at,
+  tracks.preview_url, tracks.release_date, tracks.video_url, tracks.video_squared_at, tracks.video_vehicle, tracks.video_grain, tracks.video_model, tracks.video_model_reasoning, tracks.note, tracks.added_at,
   tracks.updated_at, tracks.vibe_x, tracks.vibe_y, tracks.added_to_spotify, tracks.posted_to_telegram,
   tracks.observation_audio_url, tracks.observation_duration_ms, tracks.observation_generated_at, tracks.observation_alignment_json,
   (select url from social_posts
@@ -215,6 +216,7 @@ export function toTrackListItem(row: TrackRow): TrackListItem {
     updatedAt: row.updated_at ?? undefined,
     vibeX: row.vibe_x ?? undefined,
     vibeY: row.vibe_y ?? undefined,
+    videoGrain: row.video_grain ?? undefined,
     videoModel: row.video_model ?? undefined,
     videoModelReasoning: row.video_model_reasoning ?? undefined,
     videoSquaredAt: row.video_squared_at ?? undefined,

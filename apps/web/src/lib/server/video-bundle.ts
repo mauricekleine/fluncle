@@ -30,10 +30,10 @@ export function artifactByField(field: string): VideoArtifact | undefined {
   return VIDEO_ARTIFACTS.find((artifact) => artifact.field === field);
 }
 
-// render.json is a loose manifest the ship pipeline writes (vehicle, model,
-// reasoning). Each field is read independently: a missing/unparseable value
-// just leaves that field empty (the caller defaults), never failing an upload.
-type RenderManifestField = "model" | "reasoning" | "vehicle";
+// render.json is a loose manifest the ship pipeline writes (vehicle, grain,
+// model, reasoning). Each field is read independently: a missing/unparseable
+// value just leaves that field empty (the caller defaults), never failing an upload.
+type RenderManifestField = "grain" | "model" | "reasoning" | "vehicle";
 
 function stringFromManifest(raw: string, key: RenderManifestField): string | undefined {
   try {
@@ -53,6 +53,11 @@ function stringFromManifest(raw: string, key: RenderManifestField): string | und
 /** The travelling vehicle (ship writes it from `--vehicle`) — the diversity ledger. */
 export function vehicleFromRenderJson(raw: string): string | undefined {
   return stringFromManifest(raw, "vehicle");
+}
+
+/** The grain FAMILY (ship writes it from `--grain`) — the grain diversity ledger. */
+export function grainFromRenderJson(raw: string): string | undefined {
+  return stringFromManifest(raw, "grain");
 }
 
 /** The authoring AI model (ship writes it from `--model`), in `<provider>/<model>` notation. */

@@ -136,6 +136,10 @@ export const tracks = sqliteTable("tracks", {
   // operator drops it on the map. Replaces sub-genre tags as the grouping.
   vibeX: real("vibe_x"),
   vibeY: real("vibe_y"),
+  // The grain FAMILY of the track's video (e.g. "grainCoarseSilver"). Set when the
+  // video is uploaded; surfaced in /api/tracks beside the vehicle so the next agent
+  // reads recent grain families and diversifies (the grain ledger).
+  videoGrain: text("video_grain"),
   // The AI model that authored the track's video, in <provider>/<model> notation
   // (e.g. "anthropic/claude-opus-4-8"). Set when the video is uploaded; surfaced
   // in /api/tracks alongside the vehicle. Defaults so existing rows backfill.

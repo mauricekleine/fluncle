@@ -49,7 +49,7 @@ A finding with no `logId` cannot be shipped (ship requires a Log ID). If `tracks
 fluncle admin tracks vehicles --json
 ```
 
-This returns `{ "ok": true, "vehicles": [ ... ] }`, recently-used vehicles newest first — the diversity ledger (doctrine 3 of the `@fluncle-video` skill). Read the recent `vehicle` values and pick a medium/primitive clearly DIFFERENT from the last few; also fetch a couple of recent posters as the skill describes. Never repeat the most-recent vehicle unless the music genuinely demands it.
+This returns `{ "ok": true, "vehicles": [ ... ] }`, recently-used findings newest first — the diversity ledger (doctrine 3 of the `@fluncle-video` skill); each entry carries both `vehicle` and `grain`. Read the recent `vehicle` AND `grain` values and pick a medium/primitive AND a grain family (cookbook §grain families) each clearly DIFFERENT from the last few; also fetch a couple of recent posters as the skill describes. Never repeat the most-recent vehicle or grain family unless the music genuinely demands it.
 
 ### 3. Render the video — via `@fluncle-video`, end to end
 
@@ -70,7 +70,7 @@ This is the objective catch for the one defect you cannot see in stills: motion 
 Per the skill's ship step:
 
 ```
-bun run --cwd packages/video ship <log-id> --vehicle "<your vehicle>"
+bun run --cwd packages/video ship <log-id> --vehicle "<your vehicle>" --grain "<your grain family>"
 fluncle admin tracks video <log-id> --dir packages/video/out/<log-id>
 ```
 

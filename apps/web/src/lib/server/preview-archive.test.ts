@@ -111,6 +111,7 @@ describe("preview archive helpers", () => {
             title: "Track",
             track_id: "spotify-track",
             updated_at: null,
+            video_grain: null,
             video_url: null,
             video_vehicle: null,
           },
