@@ -3,6 +3,7 @@ import {
   CaretRightIcon,
   CircleNotchIcon,
   PaperPlaneTiltIcon,
+  TrashIcon,
 } from "@phosphor-icons/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
@@ -190,6 +191,8 @@ function EditionRow({
               ) : null}
             </div>
           )}
+
+          <DeleteControl edition={edition} refresh={refresh} />
         </section>
       ) : null}
     </section>
@@ -370,6 +373,89 @@ function SendControl({ edition, refresh }: { edition: EditionDTO; refresh: () =>
       {notice ? (
         <p aria-live="polite" className="text-sm text-muted-foreground">
           {notice}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+// The Delete control — the operator's archive-pull. Available on EVERY row (drafts
+// AND sent): a sent test edition is exactly what needs removing from the public
+// /newsletter archive. A hard delete with no recall, so it sits behind an explicit
+// confirm that names it as permanent. Destructive styling (Re-entry Red), but quiet
+// — a small trailing control, not a loud one.
+function DeleteControl({
+  edition,
+  refresh,
+}: {
+  edition: EditionDTO;
+  refresh: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useAutoNotice();
+  const isSent = edition.status === "sent";
+  // A real name to put in the title: the minted number, else the subject. A
+  // subject-less draft has neither, so the title falls back to a natural phrasing.
+  const name = edition.number ? `No. ${edition.number}` : edition.subject?.trim();
+  const title = name ? `Delete edition ${name}?` : "Delete this draft?";
+
+  const remove = async () => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      const response = await fetch(
+        `/api/v1/admin/newsletter/editions/${encodeURIComponent(edition.id)}`,
+        { method: "DELETE" },
+      );
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+      await refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-t border-border pt-4">
+      <AlertDialog>
+        <AlertDialogTrigger
+          render={
+            <Button disabled={busy} size="sm" variant="destructive">
+              {busy ? (
+                <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+              ) : (
+                <TrashIcon aria-hidden="true" />
+              )}
+              {busy ? "Deleting…" : "Delete"}
+            </Button>
+          }
+        />
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{title}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {isSent
+                ? "This pulls the back issue from the public archive for good. The email that already went out is untouched. Only the archive entry goes. There's no undo."
+                : "This drops the draft for good. There's no undo."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>Keep it</AlertDialogCancel>
+            <AlertDialogAction disabled={busy} onClick={() => void remove()} variant="destructive">
+              {busy ? (
+                <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+              ) : undefined}
+              {busy ? "Deleting…" : "Delete it"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {error ? (
+        <p className="text-sm text-destructive" role="alert">
+          {error}
         </p>
       ) : null}
     </div>

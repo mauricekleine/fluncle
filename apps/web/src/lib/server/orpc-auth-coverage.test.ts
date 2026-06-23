@@ -155,6 +155,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   context_track: "admin",
   create_edition: "admin",
   create_mixtape: "operator",
+  delete_edition: "operator",
   delete_mixtape: "operator",
   delete_private_account: "private-session",
   draft_track_social: "admin",
