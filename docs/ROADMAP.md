@@ -60,7 +60,7 @@ The Hermes box is the queue-driven runner for the per-finding pipeline. Enrichme
 
 What's prepared and waiting to be wired:
 
-- **`fluncle-context-note`** (agent, `every 1h`) — drains the no-context queue and calls `context_track` per finding (Worker-side Firecrawl, writes `context_note` quietly, idempotent per finding).
+- **`fluncle-context-note`** (`--no-agent`, `every 60m`) — drains the no-context queue (`admin tracks context --queue`) and triggers `context_track` per finding. The Worker runs the Firecrawl search + the Haiku note-distill (#129) + the quiet `context_note` write, so the box only triggers (zero LLM tokens on the box). Idempotent per finding. Source: `scripts/context-sweep.{sh,ts}`.
 - **`fluncle-observation`** (agent, `every 1h`) — authors the recovered-audio script from each finding's stored `context_note`, then renders it (the bespoke ElevenLabs voice, R2 upload, voice gate re-scanned server-side). Consumes context → renders; never fetches Firecrawl itself.
 - **`fluncle-backfill`** (`--no-agent`, `every 30m`) — paces the two Worker-side catalogue backfills (Discogs resolve + Last.fm love), the Worker carrying the per-finding reliability state + Retry-After backoff. See _Run the prepared catalogue backfills_ below.
 - **`fluncle-newsletter`** (agent, `0 15 * * 5`, Europe/Amsterdam box clock) — authors + persists the Friday edition, then offers the operator a Discord Send/Hold button (persist-then-offer; never auto-sends).
