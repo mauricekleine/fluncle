@@ -45,7 +45,7 @@ const LastfmFailedSchema = z
  * `backfill_discogs` → `POST /admin/backfill/discogs` (operationId
  * `backfillDiscogs`).
  *
- * Operator tier (live `requireOperator`). One bounded, reliability-gated pass over
+ * Agent tier (`adminAuth`). One bounded, reliability-gated pass over
  * published findings missing a Discogs release id; on a confident match the ids are
  * written server-side. Returns `{ ok, dryRun, resolved, resolvedCount, unresolved,
  * unresolvedCount, skipped, skippedCount, nextCursor }` — `skipped` is the findings
@@ -128,8 +128,61 @@ export const backfillLastfm = oc
     }),
   );
 
+/** A failed-alignment row (`{ error, logId }`). */
+const AlignmentFailedSchema = z
+  .object({
+    error: z.string(),
+    logId: z.string(),
+  })
+  .meta({ id: "AlignmentBackfillFailed" });
+
+/**
+ * `backfill_alignment` → `POST /admin/backfill/alignment` (operationId
+ * `backfillAlignment`).
+ *
+ * Agent tier (`adminAuth`): a reversible, no-publish re-derivation of word-level
+ * caption timings over observations rendered before `/with-timestamps` (audio +
+ * script on R2, no alignment). One bounded pass force-aligns each eligible finding's
+ * existing mp3 to its script (no re-render) and writes the word timings. Returns
+ * `{ ok, dryRun, aligned, alignedCount, empty, emptyCount, failed, failedCount,
+ * nextCursor }` — `empty` is the findings the aligner returned no usable words for
+ * (stored as a sentinel so they aren't re-burned).
+ */
+export const backfillAlignment = oc
+  .route({
+    inputStructure: "detailed",
+    method: "POST",
+    operationId: "backfillAlignment",
+    path: "/admin/backfill/alignment",
+    summary: "Back-fill word-level observation caption timings (forced-alignment, batched)",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      query: z.object({
+        cursor: z.string().optional(),
+        dryRun: z.string().optional(),
+        limit: z.string().optional(),
+      }),
+    }),
+  )
+  .output(
+    z.object({
+      aligned: z.array(z.string()),
+      alignedCount: z.number(),
+      dryRun: z.boolean(),
+      empty: z.array(z.string()),
+      emptyCount: z.number(),
+      failed: z.array(AlignmentFailedSchema),
+      failedCount: z.number(),
+      nextCursor: z.string().nullable(),
+      ok: z.literal(true),
+    }),
+  );
+
 /** The `admin-backfills` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminBackfillsContract = {
+  backfill_alignment: backfillAlignment,
   backfill_discogs: backfillDiscogs,
   backfill_lastfm: backfillLastfm,
 };

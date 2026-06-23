@@ -137,6 +137,80 @@ function trackSegmentMs(track: Track): number {
   return typeof raw === "number" && raw >= SEGMENT_FLOOR_MS ? raw : SEGMENT_FLOOR_MS;
 }
 
+// The active-word index for an offset (ms into the observation): the LAST word whose
+// window has started and not yet ended. Between words (a gap/pause) the last spoken
+// word stays lit rather than flickering off, so the read never strobes. -1 before the
+// first word. A binary-search-free linear scan is fine — observations are ~40 words.
+function activeWordIndex(words: { endMs: number; startMs: number }[], offsetMs: number): number {
+  let index = -1;
+
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i];
+
+    if (!word || offsetMs < word.startMs) {
+      break;
+    }
+
+    index = i;
+  }
+
+  return index;
+}
+
+// Synced observation captions: the spoken script, word by word, with the CURRENT
+// word lit off the SAME shared-clock offset the audio resyncs to (not raw
+// audio.currentTime — captions then stay aligned through resyncs and while muted).
+// A rAF loop reads the offset and updates the active index; the highlight is a
+// colour change (the Gold heat), grounded under reduced motion (no transition).
+// Absent alignment ⇒ the component renders nothing (no captions for that finding).
+function RadioCaptions({
+  segmentStartServerMs,
+  serverNow,
+  words,
+}: {
+  segmentStartServerMs: number;
+  serverNow: () => number;
+  words: { endMs: number; startMs: number; text: string }[];
+}) {
+  const [active, setActive] = useState(-1);
+
+  useEffect(() => {
+    if (words.length === 0) {
+      return;
+    }
+
+    let frame = 0;
+
+    const tick = () => {
+      setActive(activeWordIndex(words, serverNow() - segmentStartServerMs));
+      frame = requestAnimationFrame(tick);
+    };
+
+    frame = requestAnimationFrame(tick);
+
+    return () => cancelAnimationFrame(frame);
+  }, [words, segmentStartServerMs, serverNow]);
+
+  if (words.length === 0) {
+    return undefined;
+  }
+
+  return (
+    <p aria-label="Observation captions" className="radio-captions" role="group">
+      {words.map((word, i) => (
+        <span
+          className={i === active ? "radio-caption-word is-active" : "radio-caption-word"}
+          // The script is a fixed, ordered word list; index is a stable key here.
+          // oxlint-disable-next-line no-array-index-key
+          key={i}
+        >
+          {word.text}{" "}
+        </span>
+      ))}
+    </p>
+  );
+}
+
 function RadioPage() {
   // The begin-gate: false until the first user gesture unlocks audible audio.
   const [started, setStarted] = useState(false);
@@ -617,6 +691,13 @@ function RadioPage() {
         {current.logId ? <span className="radio-log-id">{current.logId}</span> : undefined}
         <h2 className="radio-title">{current.title}</h2>
         <p className="radio-artist">{current.artists.join(", ")}</p>
+        {current.observationAlignment && current.observationAlignment.words.length > 0 ? (
+          <RadioCaptions
+            segmentStartServerMs={playhead.segmentStartServerMs}
+            serverNow={serverNow}
+            words={current.observationAlignment.words}
+          />
+        ) : undefined}
         <p className="radio-facts">
           {[
             current.label,
