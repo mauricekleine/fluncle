@@ -66,6 +66,16 @@ export const tracks = sqliteTable("tracks", {
   label: text("label"),
   logId: text("log_id").unique(),
   note: text("note"),
+  // Word-level caption timings for the spoken observation, as a JSON string
+  // (`{ source, words: [{ text, startMs, endMs }] }` — see lib/server/observation.ts
+  // `ObservationAlignment`). Drives the synced subtitles on the radio player (and,
+  // later, /log): the current word is highlighted off `audio.currentTime`. Captured
+  // at render time from ElevenLabs `/with-timestamps`, or back-filled onto an existing
+  // observation via `/forced-alignment`. Internal-but-PUBLIC: unlike the script, the
+  // word timings ARE surfaced (the public TrackListItem carries them so the radio
+  // caption render can read them), but they describe an EXISTING artifact, so writing
+  // them does NOT bump updated_at (a backfill must move no public lastmod).
+  observationAlignmentJson: text("observation_alignment_json"),
   // The audio observation (Fluncle's recovered field observation, spoken).
   // observationAudioUrl is the R2 read URL for <log-id>/observation.mp3 — set
   // when the render is uploaded; its presence is the "has observation" flag. The

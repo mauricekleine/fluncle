@@ -194,6 +194,46 @@ export async function backfillDiscogsCommand(
   return adminApiPost<DiscogsBackfillResult>(`/api/admin/backfill/discogs?${params.toString()}`);
 }
 
+export type AlignmentBackfillResult = {
+  // Findings whose observation got word-level caption timings this pass.
+  aligned: string[];
+  alignedCount: number;
+  dryRun: boolean;
+  // Eligible findings the aligner returned no usable words for (stored as a sentinel
+  // so they aren't re-burned), counted as handled but not "aligned".
+  empty: string[];
+  emptyCount: number;
+  failed: Array<{ error: string; logId: string }>;
+  failedCount: number;
+  // The feed cursor to resume from on the next pass, or null when the archive is
+  // drained. Each forced-alignment call runs under a small pace, so the CLI loops
+  // this until null.
+  nextCursor: string | null;
+  ok: boolean;
+};
+
+// One bounded pass of the observation-caption alignment backfill via the admin API —
+// the Worker force-aligns each eligible finding's EXISTING observation mp3 to its
+// stored script (no re-render, no second voice spend) and writes the word timings.
+// Idempotent: a finding that already has alignment is skipped. `--dry-run` reports
+// the eligible set without aligning or writing. Pass the prior pass's `nextCursor`
+// to resume; the CLI loops until it comes back null.
+export async function backfillAlignmentCommand(
+  limit: number,
+  dryRun: boolean,
+  cursor?: string,
+): Promise<AlignmentBackfillResult> {
+  const params = new URLSearchParams({ dryRun: String(dryRun), limit: String(limit) });
+
+  if (cursor) {
+    params.set("cursor", cursor);
+  }
+
+  return adminApiPost<AlignmentBackfillResult>(
+    `/api/admin/backfill/alignment?${params.toString()}`,
+  );
+}
+
 export type VehicleEntry = {
   addedAt: string;
   artists: string[];

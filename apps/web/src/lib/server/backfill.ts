@@ -28,9 +28,11 @@
 // exponentially instead of being retried every tick. After the call the outcome
 // is recorded so the next tick resumes from a clean, durable state.
 
+import { env } from "cloudflare:workers";
 import { getDb, typedRows } from "./db";
 import { discogsResolveRelease } from "./discogs";
 import { lastfmLove } from "./lastfm";
+import { alignObservationAudio, type ObservationAlignment } from "./observation";
 import { decodeTrackCursor, encodeTrackCursor, listTracks, type TrackListItem } from "./tracks";
 
 // One DB page per pass. The batch pages with the same cursor the public feed uses
@@ -99,6 +101,19 @@ export type DiscogsBackfillResult = BackfillPass<{
   skippedCount: number;
   unresolved: string[];
   unresolvedCount: number;
+}>;
+
+export type AlignmentBackfillResult = BackfillPass<{
+  // Findings whose observation got word-level caption timings this pass.
+  aligned: string[];
+  alignedCount: number;
+  dryRun: boolean;
+  failed: Array<{ error: string; logId: string }>;
+  failedCount: number;
+  // Eligible findings the alignment came back empty for (no usable words) — counted
+  // as handled (we won't re-burn them every tick) but not "aligned".
+  empty: string[];
+  emptyCount: number;
 }>;
 
 // Which source's reliability columns a query/write targets.
@@ -571,4 +586,183 @@ function batchLimit(limit: number): number {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ── Observation-alignment backfill ──────────────────────────────────────────────
+//
+// Re-derive word-level caption timings for observations rendered BEFORE the
+// `/with-timestamps` switch (audio + script already on R2, `observation_alignment_json`
+// null) WITHOUT re-rendering: fetch the existing mp3 from R2 and force-align it to its
+// stored script (ElevenLabs `/forced-alignment` — cheap, no second voice spend).
+//
+// Idempotent like `context_track`: the artifact's own presence is the resume marker
+// (the `observation_alignment_json IS NULL` pick), so a re-run never re-aligns a done
+// finding and no per-source cooldown columns are needed. A force-align that comes back
+// with no usable words stores a sentinel `{ words: [] }` so it is marked handled (the
+// radio simply renders no captions for it) rather than re-burned every tick. One pass
+// is bounded (`batchLimit`) and returns a resume cursor the CLI loops until null.
+
+// Eligible-row shape for the alignment sweep: the audio + script needed to align,
+// keyed by the cursor's (added_at, track_id).
+type AlignmentRow = {
+  added_at: string;
+  log_id: string | null;
+  observation_audio_url: string;
+  observation_script: string;
+  track_id: string;
+};
+
+// One forced-alignment call per finding can take a few seconds; pace them so a long
+// sweep stays well under any ElevenLabs concurrency ceiling.
+const ALIGNMENT_DELAY_MS = 600;
+
+// Fetch the rendered observation mp3 bytes from R2 for a finding. The audio lives at
+// `<log-id>/observation.mp3` (the same key the observe handler put it under).
+async function readObservationAudio(logId: string): Promise<ArrayBuffer | null> {
+  const object = await env.VIDEOS.get(`${logId}/observation.mp3`);
+
+  return object ? await object.arrayBuffer() : null;
+}
+
+/**
+ * Back-fill word-level caption alignment over observations that have audio + a script
+ * but no alignment yet. Best-effort per finding (a vendor error counts as a failure
+ * and the sweep continues). `dryRun` previews the eligible set without spending a
+ * forced-alignment call or writing. Bounded + cursor-paged; returns `nextCursor`.
+ */
+export async function backfillObservationAlignment(
+  limit: number,
+  dryRun: boolean,
+  startCursor?: string,
+): Promise<AlignmentBackfillResult> {
+  const aligned: string[] = [];
+  const empty: string[] = [];
+  const failed: Array<{ error: string; logId: string }> = [];
+  const max = batchLimit(limit);
+  const db = await getDb();
+
+  let cursor = startCursor;
+  let handled = 0;
+  let nextCursor: string | null = null;
+  let first = true;
+
+  while (handled < max) {
+    const decoded = decodeTrackCursor(cursor ?? null);
+    // Page the eligible rows oldest-LAST (desc) to match the feed cursor's ordering,
+    // filtering to "has audio + script, no alignment" so the sweep only visits real
+    // work. The cursor is the (added_at, track_id) of the last row of the prior page.
+    const args: Array<number | string> = [];
+    let where = `observation_audio_url is not null
+        and observation_script is not null
+        and observation_alignment_json is null
+        and log_id is not null`;
+
+    if (decoded) {
+      where += ` and (added_at < ? or (added_at = ? and track_id < ?))`;
+      args.push(decoded.addedAt, decoded.addedAt, decoded.trackId);
+    }
+
+    const page = await db.execute({
+      args: [...args, PAGE_SIZE],
+      sql: `select track_id, log_id, added_at, observation_audio_url, observation_script
+            from tracks
+            where ${where}
+            order by added_at desc, track_id desc
+            limit ?`,
+    });
+
+    const rows = typedRows<AlignmentRow>(page.rows);
+
+    if (rows.length === 0) {
+      nextCursor = null;
+      break;
+    }
+
+    for (const row of rows) {
+      if (handled >= max) {
+        break;
+      }
+
+      const logId = row.log_id ?? row.track_id;
+      const coordinate = row.log_id ?? "";
+
+      if (dryRun) {
+        aligned.push(logId);
+        handled += 1;
+        continue;
+      }
+
+      if (!first) {
+        await delay(ALIGNMENT_DELAY_MS);
+      }
+      first = false;
+
+      try {
+        const audio = await readObservationAudio(coordinate);
+
+        if (!audio) {
+          failed.push({ error: "observation.mp3 missing from R2", logId });
+          handled += 1;
+          continue;
+        }
+
+        const alignment = await alignObservationAudio(audio, row.observation_script);
+
+        // A null alignment (no usable words) stores a sentinel empty-words artifact so
+        // the row is durably marked handled (it drops out of the eligibility filter)
+        // rather than re-aligned every tick.
+        const stored: ObservationAlignment = alignment ?? { source: "forced-alignment", words: [] };
+
+        await writeObservationAlignment(row.track_id, stored);
+
+        if (alignment && alignment.words.length > 0) {
+          aligned.push(logId);
+        } else {
+          empty.push(logId);
+        }
+      } catch (error) {
+        failed.push({ error: error instanceof Error ? error.message : String(error), logId });
+      }
+
+      handled += 1;
+    }
+
+    const last = rows[rows.length - 1];
+    nextCursor = last
+      ? encodeTrackCursor({ addedAt: last.added_at, trackId: last.track_id })
+      : null;
+
+    if (handled >= max) {
+      break;
+    }
+
+    cursor = nextCursor ?? undefined;
+  }
+
+  return {
+    aligned,
+    alignedCount: aligned.length,
+    dryRun,
+    empty,
+    emptyCount: empty.length,
+    failed,
+    failedCount: failed.length,
+    nextCursor,
+  };
+}
+
+// Server-side write of the alignment column ONLY. Internal-but-public (the radio
+// caption render reads it) but it describes an EXISTING artifact, so it must NOT bump
+// updated_at — unlike setDiscogsIds. A direct, lastmod-free UPDATE mirrors the quiet
+// context_note write.
+async function writeObservationAlignment(
+  trackId: string,
+  alignment: ObservationAlignment,
+): Promise<void> {
+  const db = await getDb();
+
+  await db.execute({
+    args: [JSON.stringify(alignment), trackId],
+    sql: `update tracks set observation_alignment_json = ? where track_id = ?`,
+  });
 }

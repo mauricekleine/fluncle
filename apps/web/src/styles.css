@@ -2046,6 +2046,43 @@ body::before {
   font-variant-numeric: tabular-nums;
 }
 
+/* Synced observation captions (the spoken script, word by word). Sits on the
+   same scrimmed meta pane as the facts/artist, so it inherits their AA contrast
+   over the footage. Resting words are dim (Stardust); the current word lights to
+   Starlight Cream with a quiet Gold cast (the Ignition Rule — heat marks the live
+   word, never paint). Wraps to a few lines, capped so a long observation never
+   pushes the title off a phone. */
+.radio-captions {
+  color: var(--stardust);
+  display: -webkit-box;
+  font-size: 0.95rem;
+  line-height: 1.4;
+  margin-block: 0.1rem 0.15rem;
+  max-width: 42rem;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.radio-caption-word {
+  /* Colour-only transition so the highlight reads as a glow, not motion; grounded
+     under reduced motion below. */
+  transition:
+    color 120ms ease-out,
+    text-shadow 120ms ease-out;
+}
+
+.radio-caption-word.is-active {
+  color: var(--starlight-cream);
+  text-shadow: 0 0 0.5rem color-mix(in oklch, var(--eclipse-gold) 45%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .radio-caption-word {
+    transition: none;
+  }
+}
+
 .radio-actions {
   display: flex;
   flex-wrap: wrap;
