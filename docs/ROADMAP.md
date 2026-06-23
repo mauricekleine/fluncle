@@ -6,8 +6,9 @@ Forward-facing, roughly prioritized list of open work — what we pick from next
 
 The add → live pipeline is operational end to end:
 
-- **One `/admin` cockpit** — every finding is a row with its derived stage (Enrich · Tag · YouTube · TikTok), stage worklists, and the publish controls; the old `/admin/tag` + `/admin/posts` pages folded into it.
-- **Hands-off rendering** — a Claude scheduled **routine** ("Fluncle video queue") fires hourly on the Mac, films exactly the oldest queued finding end to end with the `fluncle-video` skill, then stops (queue-gated, one finding per tick; a no-op when the queue is empty or the laptop's asleep). The backlog is essentially full — 25 of 26 findings have a clip.
+- **One `/admin` cockpit** — every finding is a row with its derived stage, the board split into the **Agents** lane (Last.fm · Discogs · Enrich · Context · Note · Observation · Video — what runs on its own) and the **Yours** lane (Tag · YouTube · TikTok · Mixtape — the human tail), with stage worklists and the publish controls; the old `/admin/tag` + `/admin/posts` pages folded into it. The stage grid is `board-model.ts` `STEP_DEFS`.
+- **Deterministic per-finding enrichment (off the agent)** — the per-finding pipeline is `--no-agent` Hermes-box sweeps, not a Sonnet agent: `enrich` (BPM/key/spectral vector), `context-note` (Firecrawl facts → distilled prose + a `Texture:` line, now uniform across the archive), `note` (the auto-authored editorial "why", voice-gated, fill-empty-only — #141), `observation` (the recovered-audio script + the bespoke-voice render), and `backfill` (the Discogs/Last.fm catalogue sweeps). Moving the whole pipeline off the agent saves ~$20/day, and the **only agent cron left is the Friday newsletter**. `enrich` runs live today; the rest are prepared and waiting on the box redeploy (see _Next → Hermes automation_).
+- **Hands-off rendering** — a Claude scheduled **routine** ("Fluncle video queue") fires hourly on the Mac, films exactly the oldest queued finding end to end with the `fluncle-video` skill, then stops (queue-gated, one finding per tick; a no-op when the queue is empty or the laptop's asleep). Renders are now music-reactive — the signal-chain dials + the global-vs-internal motion law + the author-time composition lint shipped (see _Brand & canon → Video aliveness_).
 - **Publishing** — driven from the board: YouTube Shorts hands-off (title + caption + `cover.jpg` thumbnail via the API), TikTok as a drafted inbox post the operator finishes in-app. The in-app sound/cover/schedule flow and the ≤ 5-drafts/24h TikTok cadence live in the `fluncle-publish` skill.
 
 What's left of the loop is ongoing operation, not build work. The fully-autonomous, server-side version — chaining enrich → render → publish without the laptop in the loop — lives in **Later → TikTok auto-pipeline**.
@@ -33,24 +34,27 @@ The full path a finding travels, top to bottom: one human act, then how far it p
 - [x] **Galaxy game (web)** — a collectible star at its Log ID coordinate
 - [x] **Galaxy game (SSH)** — the same star in the terminal galaxy
 
-**2 · Async, automated** — no laptop-tap, no human; they just run:
+**2 · Async, automated** — no laptop-tap, no human; they just run (the per-finding sweeps are `--no-agent` Hermes-box crons — deterministic or one-`claude -p`-call hybrids, no Sonnet agent; `enrich` is live, the rest land with the box redeploy in _Next → Hermes automation_):
 
 - [x] **Enrichment (Hermes box cron)** — BPM, key, and the `features_json` spectral vector. A new find lands at `enrichment_status: pending` (queue-eligible, no on-add push); the box's `fluncle-enrich` `--no-agent` cron (every 5 min, drains `admin tracks enrich --queue`) enriches it within minutes (`pending → done`, or `failed` when no preview). Spinup decommissioned (#104).
+- [ ] **Context note (Hermes box cron, built — pending the box redeploy)** — the `fluncle-context-note` `--no-agent` sweep triggers `context_track`; the Worker runs the Firecrawl search + the Haiku note-distill and writes the quiet `context_note` (distilled facts + a `Texture:` line). Zero LLM tokens on the box.
+- [ ] **Note (Hermes box cron, built — pending the box redeploy)** — the `fluncle-note` hybrid sweep auto-authors the public editorial `note` from the `context_note` fuel via one `claude -p` call (subscription auth, `copywriting-fluncle` skill), voice-gated, **fill-empty-only** so an operator note is never clobbered (#141).
+- [ ] **Observation (Hermes box cron, built — pending the box redeploy)** — the `fluncle-observation` hybrid sweep `claude -p`-authors the recovered-audio script, then the Worker voice-gates + renders the bespoke ElevenLabs voice to R2.
 - [x] **Render (local Claude routine)** — the hourly "Fluncle video queue" films the oldest queued finding end to end and uploads to R2; idle when the queue is empty. See _Now → Hands-off rendering_.
 
 **3 · The manual tail** — what still needs a hand, roughly in order, and where each one automates:
 
-- [ ] **Tag** the vibe (`vibe_x`/`vibe_y` → galaxy) on the board. Automates via the _Vibe-placement model_ (gated on ~50–100 labels).
-- [ ] **Note** the editorial "why". Automates via _Auto-drafted finding notes_ (downstream of the vibe model + a notes corpus).
+- [ ] **Tag** the vibe (`vibe_x`/`vibe_y` → galaxy) on the board. The head of the tail — the one subjective placement everything downstream leans on. Automates via the _Vibe-placement model_ (gated on ~50–100 labels).
+- [ ] **Note** the editorial "why". The auto-note now drafts a first pass per finding (§2 above, fill-empty-only); the operator still verifies/edits, and those edits grow the corpus. A richer vibe-neighbour version is downstream of the vibe model — see _Auto-drafted finding notes_.
 - [ ] **YouTube** Shorts — the operator triggers the push today (the upload itself is hands-off: title + caption + `cover.jpg` thumbnail). Goes fully auto when the server-side chain extends — the one channel that needs no in-app finish. See _Later → TikTok auto-pipeline → More platforms_.
 - [ ] **TikTok** — drafted to the inbox from the board; the operator finishes in-app (attach the official sound, publish). Manual by design — no legitimate API audio path. The last per-finding beat. See _Later → TikTok auto-pipeline_.
-- [ ] **Newsletter (Friday)** — the Hermes Friday cron drafts the weekly edition and persists it (finds grouped by galaxy, scene tidbits via Firecrawl), but the **send is an operator tap** on a Discord Send/Hold button (`send_edition` is operator-tier — the agent token 403s, so the cron never auto-sends). The one weekly-cadence step; everything above it is per-finding. See _Later → Newsletter — open follow-ups_.
+- [ ] **Newsletter (Friday)** — the Hermes Friday cron (the one agent cron left) drafts the weekly edition and persists it (finds grouped by galaxy, scene tidbits via Firecrawl), but the **send is an operator tap** on a Discord Send/Hold button (`send_edition` is operator-tier — the agent token 403s, so the cron never auto-sends). The one weekly-cadence step; everything above it is per-finding. See _Later → Newsletter — open follow-ups_.
 
 **4 · Deferred (on purpose)** — a surface we could reach but are choosing to leave dark for now:
 
 - **Instagram** (`@fluncle`) — the account exists, but we're not posting yet. The music-licensing exposure isn't worth it: there's no legitimate API audio path (the master gets muted on a business/creator account, and IG's licensed audio is app-only), so it would mean either silent clips or manual in-app posts under that licensing risk. Parked, not closed. See _Later → TikTok auto-pipeline → More platforms_.
 
-**The shape:** one human add → instant parallel fan-out to ~10 surfaces → two automated async agents (enrich, render) → a shrinking manual tail. Of that tail, tag + note fall to the vibe model and YouTube to the server-side chain; TikTok and the Friday newsletter send stay deliberate human taps, each blocked by an external platform limit, not by us.
+**The shape:** one human add → instant parallel fan-out to ~10 surfaces → a deterministic async pipeline (enrich, context, note, observation, render — off the agent) → a shrinking manual tail. Of that tail, tag falls to the vibe model and YouTube to the server-side chain; TikTok and the Friday newsletter send stay deliberate human taps, each blocked by an external platform limit, not by us.
 
 ## Next — surface what we make, and tidy reliability
 
@@ -61,6 +65,7 @@ The Hermes box is the queue-driven runner for the per-finding pipeline. Enrichme
 What's prepared and waiting to be wired:
 
 - **`fluncle-context-note`** (`--no-agent`, `every 60m`) — drains the no-context queue (`admin tracks context --queue`) and triggers `context_track` per finding. The Worker runs the Firecrawl search + the Haiku note-distill (#129) + the quiet `context_note` write, so the box only triggers (zero LLM tokens on the box). Idempotent per finding. Source: `scripts/context-sweep.{sh,ts}`.
+- **`fluncle-note`** (hybrid `--no-agent`) — auto-authors the public editorial `note` from the `context_note` fuel via one `claude -p` call (subscription auth, `copywriting-fluncle` skill), voice-gated, **fill-empty-only** (never clobbers an operator note — #141, `docs/agents/note-agent.md`). Source: `scripts/note-sweep.{sh,ts}`.
 - **`fluncle-observation`** (hybrid `--no-agent`, `every 60m`) — a deterministic queue/gather/deliver sweep with ONE `claude -p` authoring step in the middle (Claude Code, subscription auth via `CLAUDE_CODE_OAUTH_TOKEN`, read-only tools + the `copywriting-fluncle` skill — zero OpenRouter tokens). Drains `admin tracks observe --queue`, reads each finding's metadata (`track get`), `claude -p` authors the recovered-audio script, then `observe --script-file` posts it for the Worker to voice-gate + render (the bespoke ElevenLabs voice, R2 upload). Cap 3/tick (paid renders). Replaces the old full-agent observation cron. Source: `scripts/observe-sweep.{sh,ts}`.
 - **`fluncle-backfill`** (`--no-agent`, `every 30m`) — paces the two Worker-side catalogue backfills (Discogs resolve + Last.fm love), the Worker carrying the per-finding reliability state + Retry-After backoff. See _Run the prepared catalogue backfills_ below.
 - **`fluncle-newsletter`** (agent, `0 15 * * 5`, Europe/Amsterdam box clock) — authors + persists the Friday edition, then offers the operator a Discord Send/Hold button (persist-then-offer; never auto-sends).
@@ -136,9 +141,11 @@ Open:
 - **Future features.** Beyond Log-ID linkification, any richer Lens behaviour is open-ended — translate ideas into Fluncle's terms when picked up (canon wins per `AGENTS.md`; the source brainstorm leaned on banned words like "signals").
 - **Run-from-source meanwhile.** Pre-approval Maurice is the only user, running it unpacked from `apps/extension/dist/` — fine until it's live; the store build is `bun run --cwd apps/extension bundle`.
 
-### Tor `.onion` surfaces (RFC final) — stand up the onion
+### Tor `.onion` surfaces — web onion LIVE, SSH onion deferred
 
-`docs/rfcs/tor-surfaces.md` is **final** (researched, /taste'd, 3-role adversarial panel) but has no build slot — a **principled novelty**: one Tor daemon on the rave VPS, two onion identities (a web onion proxying `www.fluncle.com`, carrying API/RSS/MCP as free riders, and a rave onion → the SSH terminal), opening **zero new inbound ports**. The cheap, high-signal half is just the `Onion-Location` response header (the ".onion available" pill in Tor Browser); the one real build is the onionspray web onion (Unit A), whose only non-obvious cost is a Cloudflare WAF/IP bypass so the proxy's origin fetch isn't blocked. Closes the six Tor boxes in `docs/public-surfaces-checklist.md`. A tasteful flex riding existing infra at ~$0 marginal — size it when the novelty earns its keep, the way `dig.fluncle.com` did. Owner decisions (SSH-onion-in-v1, key custody) are listed in the RFC.
+The Fluncle web onion is **live** on the rave VPS — a web onion proxying `www.fluncle.com` (carrying API/RSS/MCP as free riders), gated on `WEB_ONION_HOSTNAME`, with the `Onion-Location` header surfacing the ".onion available" pill in Tor Browser and a Cloudflare WAF/IP bypass so the proxy's origin fetch isn't blocked. Deployment shape + key custody: `docs/tor.md`. What's open:
+
+- **The rave SSH onion (deferred).** A second onion identity → the SSH terminal was scoped but deferred; stand it up if the flex earns its keep.
 
 ### Database latency — evaluate Turso → Cloudflare D1
 
@@ -148,7 +155,7 @@ Near-term the cheaper win is **edge-caching the `/log` HTML** (short TTL + stale
 
 ### radio.fluncle.com — LIVE
 
-`radio.fluncle.com` is **live** as a **synchronized broadcast** — a shared clock + fast offset-join (#115), with clock-driven advance, boundary hysteresis, self-heal, and mute (#117); sync-verified on real devices. It plays each eligible finding's clean square master (MT-cropped to landscape on desktop / portrait on mobile, audio stripped) under its observation audio, every listener on the same schedule rather than each cycling its own. Eligibility = `video_squared_at AND observation_audio_url`; the station fills out as the observation backfill runs (see _Run the prepared catalogue backfills_). The known media-loading stall is tracked above as a cross-surface bug, not a radio-specific one.
+`radio.fluncle.com` is **live** as a **synchronized broadcast** — a shared clock + fast offset-join (#115), with clock-driven advance, boundary hysteresis, self-heal, and mute (#117); sync-verified on real devices. It plays each eligible finding's clean square master (MT-cropped to landscape on desktop / portrait on mobile, audio stripped) under its observation audio, every listener on the same schedule rather than each cycling its own. **Synced observation subtitles ship too (#140)** — word-level captions cued to the observation audio over the full-screen footage (an accessibility + dwell win, last-word-stays-lit anti-strobe, WCAG AA). Eligibility = `video_squared_at AND observation_audio_url`; the station fills out as the observation backfill runs (see _Run the prepared catalogue backfills_). The known media-loading stall is tracked above as a cross-surface bug, not a radio-specific one.
 
 ### Fluncle's own mixtapes — open follow-ups
 
@@ -255,6 +262,7 @@ The private web account layer is live (Better Auth email/password + username, `/
 ### Brand & canon
 
 - **Moodboard → canon audit (video-side remainder)** — the web overhaul resolved the web half (the logbook plate, ignition hovers, the grain architecture, and the archive grammar are in DESIGN.md now). Still open per concept: whether the video-kit proofs (texture families' full grammar, vehicle grammar, One-Sun-through-the-vehicle) get promoted into canon or stay video-local; cross-link, don't duplicate.
+- **Video aliveness — Part I shipped, grain-diversity in progress.** Part I landed (merge `9d12806`): music-reactive renders via the signal-chain dials + the global-vs-internal motion law + an author-time composition lint, with the deterministic flash-safety / coupling / intent metrics (`packages/video/src/pipeline/`). The proposed Part II — an LLM judge in the render loop — was prototyped and **dropped** (proven not worth the one prod deploy it needed). **In progress:** a grain-diversity thread (its own active work), keeping the grain from converging across renders.
 - **Video rendering guidelines refresh** — two additions to the video doctrine, folded into the `fluncle-video` skill + the DESIGN.md video section: (a) a **lava-lamp aesthetic register** — a calm, slow, non-flashy, non-strobo family for the quiet covers (the opposite of a busy beat-reactive scene); and (b) a **contact-sheet QA technique** — render a multi-panel frame-grid (stills sampled across the clip) so a render can be eyeballed at a glance before shipping, catching the static / HTML-y / sameness failure modes early.
 
 ### Newsletter — open follow-ups
@@ -282,9 +290,9 @@ The plan:
 
 Unnecessarily fun — that's the point.
 
-### Auto-drafted finding notes (the enrichment agent's editorial pass)
+### Auto-drafted finding notes — v1 shipped, the vibe-neighbour refinement open
 
-The board now takes an optional **note** per finding — the editorial "why" that renders on the `/log/<id>` page and feeds its definitional prose + `MusicRecording` schema, so a note is real SEO/AEO value, not just operator chrome. Writing one per finding by hand is the bottleneck, and the agent can take a first pass.
+The board takes an optional **note** per finding — the editorial "why" that renders on the `/log/<id>` page and feeds its definitional prose + `MusicRecording` schema, so a note is real SEO/AEO value, not just operator chrome. **The v1 auto-note shipped (#141, `docs/agents/note-agent.md`):** a context-note-grounded first pass authored by one `claude -p` call (subscription auth, `copywriting-fluncle` voice), voice-gated, **fill-empty-only** so an operator note is never clobbered, running as the `fluncle-note` box cron. The operator still verifies/edits, and those edits grow the corpus. What remains here is the richer **vibe-neighbour** version below — a longer-term autonomous refinement, gated on the vibe-placement model.
 
 The notes encode Maurice's **subjective** read — where he placed the finding on the vibe map, how it sits in its galaxy — not its objective spectral numbers. So the neighbours to draw from must be nearest in **vibe** (the placed `vibe_x`/`vibe_y`, same galaxy), NOT in `features_json`: two tracks can measure nearly identical yet land in different galaxies by feel, and a feature-twin's note would carry the wrong vibe. That is why this is **downstream of the vibe-placement model above** — a new finding needs a vibe coordinate before it has vibe-neighbours, and in the autonomous chain that coordinate comes from the model (features → predicted `vibe_x`/`vibe_y`). The features are the model's input; the note's neighbours live in the vibe space the model produces.
 
@@ -292,8 +300,4 @@ The shape: enrich → the vibe model places the finding → pull the notes of it
 
 Gated on the **vibe-placement model** (for the coordinate) and a **notes corpus** to draw from (the board's note column is filling it now). Lives in `packages/skills/fluncle-track-enrichment` alongside the `(vibe_x, vibe_y)` prediction. (A finding that's already manually tagged has its coordinate now, so the neighbour-in-vibe approach can be prototyped on the current set before the model lands — just not autonomously.)
 
-**Now unblocked — a context-note-grounded v1 (2026-06-23).** The clean distilled `context_note` (firecrawl facts + the `Texture:` line, from the context-sweep #129) is a strong NEW input that sidesteps the vibe-model gate. A draft grounded in the context note's facts + the finding's existing galaxy/vibe placement + the `copywriting-fluncle` voice — authored by Haiku / `claude -p` on the **same free subscription path the observation now uses** — is viable immediately on tagged findings. The context note supplies the FACTUAL spine the old soup-notes never could (label, scene, character); the galaxy/vibe placement keeps it subjective rather than generic fact-recitation; the copywriting skill keeps it on-brand and the divergence discipline keeps it diverse. Real SEO/AEO value on `/log` pages, and it enriches the newsletter. Operator still verifies/edits (growing the corpus). The vibe-neighbour model above stays the longer-term autonomous refinement; this is the immediately-shippable first pass.
-
-### Radio — timestamped observation subtitles
-
-The observation transcript now lives on the finding row (`observation_script`, #128) — that's the enabler; the admin dialog already renders the static transcript. Next: **timestamped subtitles on `radio.fluncle.com`**, line-by-line synced to the observation audio over the full-screen video (Maurice's instinct: subtitles laid over the full-screen footage will look sick, and they're an accessibility + dwell win). Needs per-line timing — capture **ElevenLabs character/word timestamps at render time** (the observe endpoint already calls ElevenLabs; grab the alignment alongside the mp3) or a forced-alignment pass over the stored audio+script — persisted next to `observation_script` so the player can cue each line. Public surface: dark/quiet canon, WCAG AA, respects reduced-motion.
+The v1 shipped because the clean distilled `context_note` (firecrawl facts + the `Texture:` line) is a strong input that sidesteps the vibe-model gate: the context note supplies the FACTUAL spine the old soup-notes never could (label, scene, character), the galaxy/vibe placement keeps it subjective rather than generic fact-recitation, and the copywriting skill keeps it on-brand. The vibe-neighbour model stays the longer-term autonomous refinement on top of it.
