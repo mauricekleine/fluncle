@@ -68,6 +68,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "PATCH /admin/newsletter/editions/{id}": "update_edition",
   "PATCH /admin/tracks/{trackId}": "update_track",
   "PATCH /admin/tracks/{trackId}/social/{platform}": "update_track_social",
+  "POST /admin/backfill/alignment": "backfill_alignment",
   "POST /admin/backfill/discogs": "backfill_discogs",
   "POST /admin/backfill/lastfm": "backfill_lastfm",
   "POST /admin/lastfm/auth/session": "exchange_lastfm_session",

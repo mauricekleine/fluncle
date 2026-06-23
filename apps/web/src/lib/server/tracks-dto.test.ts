@@ -24,6 +24,7 @@ const BASE_ROW: TrackRow = {
   label: null,
   log_id: "004.7.2I",
   note: null,
+  observation_alignment_json: null,
   observation_audio_url: "https://found.fluncle.com/004.7.2I/observation.mp3",
   observation_duration_ms: 22000,
   observation_generated_at: "2026-06-21T10:00:00.000Z",

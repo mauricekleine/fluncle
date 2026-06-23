@@ -396,8 +396,15 @@ export function adminTracksHandlers(os: Implementer) {
         freshlyFetched = Boolean(fetched.contextNote);
       }
 
-      // Render the spoken observation (ElevenLabs).
-      const { bytes } = await renderObservation(voiceId, { model, text: script, voiceSettings });
+      // Render the spoken observation (ElevenLabs `/with-timestamps`): one call
+      // returns the mp3 bytes AND the character alignment, normalised here to the
+      // stored word-level shape. A missing/malformed alignment is `null` (captions
+      // degrade to none) — it never blocks the render.
+      const { alignment, bytes } = await renderObservation(voiceId, {
+        model,
+        text: script,
+        voiceSettings,
+      });
 
       // Duration: ElevenLabs doesn't return one and the Worker can't probe (no
       // ffprobe). The agent passes the ffprobe value; absent it, estimate from the
@@ -413,6 +420,7 @@ export function adminTracksHandlers(os: Implementer) {
       const generatedAt = new Date().toISOString();
 
       const artifact: ObservationArtifact = {
+        ...(alignment ? { alignment } : {}),
         audioUrl: media.observationAudioUrl,
         ...(contextNote ? { contextNote } : {}),
         durationMs,
@@ -451,6 +459,9 @@ export function adminTracksHandlers(os: Implementer) {
       // context_track split usually wrote it already); a body-supplied or
       // already-stored note is not re-written.
       await updateTrack(track.trackId, {
+        // The caption timings (when captured) — internal-but-public, not in
+        // VISIBLE_FIELDS; the sibling observationAudioUrl bumps lastmod for the render.
+        ...(alignment ? { observationAlignmentJson: JSON.stringify(alignment) } : {}),
         observationAudioUrl: media.observationAudioUrl,
         observationDurationMs: durationMs,
         observationGeneratedAt: generatedAt,

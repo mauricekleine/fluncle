@@ -7,6 +7,8 @@ import {
   fetchTrackContext,
   gateObservationScript,
   scanObservationScript,
+  wordsFromCharacterAlignment,
+  wordsFromForcedAlignment,
 } from "./observation";
 
 // The voice gate's automatable half (VOICE.md §3 bans + the Dry Rule + no
@@ -343,5 +345,60 @@ describe("fetchTrackContext (status transitions + distil/fallback)", () => {
 
     expect(result.status).toBe("failed");
     expect(result.contextNote).toBe("");
+  });
+});
+
+// The two ElevenLabs alignment shapes → the one stored word-level shape. These power
+// the radio captions, so the grouping (chars → words) and the ms rounding are
+// load-bearing.
+describe("wordsFromCharacterAlignment", () => {
+  it("groups characters into words on whitespace, spanning first-start → last-end (ms)", () => {
+    // "Hi yo" → two words; per-char times in seconds.
+    const words = wordsFromCharacterAlignment({
+      character_end_times_seconds: [0.1, 0.2, 0.3, 0.5, 0.6],
+      character_start_times_seconds: [0, 0.1, 0.2, 0.4, 0.5],
+      characters: ["H", "i", " ", "y", "o"],
+    });
+
+    expect(words).toEqual([
+      { endMs: 200, startMs: 0, text: "Hi" },
+      { endMs: 600, startMs: 400, text: "yo" },
+    ]);
+  });
+
+  it("returns null on a length-mismatched block (never blocks a render)", () => {
+    expect(
+      wordsFromCharacterAlignment({
+        character_end_times_seconds: [0.1],
+        character_start_times_seconds: [0, 0.1],
+        characters: ["H", "i"],
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null when the arrays are absent", () => {
+    expect(wordsFromCharacterAlignment(undefined)).toBeNull();
+  });
+});
+
+describe("wordsFromForcedAlignment", () => {
+  it("maps word objects (seconds) to the stored ms shape, dropping empty tokens", () => {
+    const words = wordsFromForcedAlignment({
+      words: [
+        { end: 0.4, start: 0.1, text: "Oof" },
+        { end: 0.5, start: 0.4, text: "  " },
+        { end: 0.9, start: 0.6, text: "banger" },
+      ],
+    });
+
+    expect(words).toEqual([
+      { endMs: 400, startMs: 100, text: "Oof" },
+      { endMs: 900, startMs: 600, text: "banger" },
+    ]);
+  });
+
+  it("returns null on an empty/absent word list", () => {
+    expect(wordsFromForcedAlignment({ words: [] })).toBeNull();
+    expect(wordsFromForcedAlignment(undefined)).toBeNull();
   });
 });

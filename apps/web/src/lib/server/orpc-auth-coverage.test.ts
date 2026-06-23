@@ -149,6 +149,7 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
 const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> = {
   add_mixtape_members: "operator",
   approve_submission: "operator",
+  backfill_alignment: "admin",
   backfill_discogs: "admin",
   backfill_lastfm: "admin",
   collect_private_galaxy_log: "private-session",

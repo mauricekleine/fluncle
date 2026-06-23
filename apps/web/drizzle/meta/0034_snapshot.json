@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "80ba7dd3-6339-45b4-8ed9-6b6d796a30ca",
-  "prevId": "8f82fcc2-9747-4bec-a8e0-5b6698690237",
+  "id": "66af7612-bd5b-4c24-b17a-3d1c42db9be7",
+  "prevId": "80ba7dd3-6339-45b4-8ed9-6b6d796a30ca",
   "tables": {
     "account": {
       "name": "account",
@@ -1234,6 +1234,36 @@
         },
         "backfill_lastfm_failures": {
           "name": "backfill_lastfm_failures",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "backfill_note_attempted_at": {
+          "name": "backfill_note_attempted_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "backfill_note_attempts": {
+          "name": "backfill_note_attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "backfill_note_done_at": {
+          "name": "backfill_note_done_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "backfill_note_failures": {
+          "name": "backfill_note_failures",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,

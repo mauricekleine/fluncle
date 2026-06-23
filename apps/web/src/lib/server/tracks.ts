@@ -33,6 +33,7 @@ export type TrackRow = {
   label: string | null;
   log_id: string | null;
   note: string | null;
+  observation_alignment_json: string | null;
   observation_audio_url: string | null;
   observation_duration_ms: number | null;
   observation_generated_at: string | null;
@@ -77,7 +78,7 @@ const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.title, tracks.
   tracks.bpm, tracks.duration_ms, tracks.enrichment_status, tracks.features_json, tracks.in_release_id, tracks.isrc, tracks.key, tracks.label, tracks.log_id, tracks.popularity,
   tracks.preview_url, tracks.release_date, tracks.video_url, tracks.video_squared_at, tracks.video_vehicle, tracks.video_model, tracks.video_model_reasoning, tracks.note, tracks.added_at,
   tracks.updated_at, tracks.vibe_x, tracks.vibe_y, tracks.added_to_spotify, tracks.posted_to_telegram,
-  tracks.observation_audio_url, tracks.observation_duration_ms, tracks.observation_generated_at,
+  tracks.observation_audio_url, tracks.observation_duration_ms, tracks.observation_generated_at, tracks.observation_alignment_json,
   (select url from social_posts
      where track_id = tracks.track_id and platform = 'tiktok' and status = 'published'
        and url is not null
@@ -90,6 +91,56 @@ const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.title, tracks.
 /** A finite number, or undefined — for tolerant parsing of stored feature JSON. */
 function finiteOrUndefined(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * Parse the stored `observation_alignment_json` into the public caption shape
+ * (`{ words: [{ text, startMs, endMs }] }`), or undefined. An empty-words sentinel
+ * (the forced-alignment backfill stores `{ words: [] }` to mark a finding handled
+ * when the aligner found nothing) surfaces as undefined — no captions to render.
+ */
+function parseObservationAlignment(
+  json: string | null,
+): { words: { endMs: number; startMs: number; text: string }[] } | undefined {
+  if (!json) {
+    return undefined;
+  }
+
+  try {
+    const raw = JSON.parse(json) as { words?: unknown };
+
+    if (!Array.isArray(raw.words)) {
+      return undefined;
+    }
+
+    const words = raw.words.flatMap((entry) => {
+      if (typeof entry !== "object" || entry === null) {
+        return [];
+      }
+
+      const word = entry as {
+        end?: unknown;
+        endMs?: unknown;
+        start?: unknown;
+        startMs?: unknown;
+        text?: unknown;
+      };
+      const text = typeof word.text === "string" ? word.text : "";
+      const startMs = finiteOrUndefined(word.startMs);
+      const endMs = finiteOrUndefined(word.endMs);
+
+      if (!text || startMs === undefined || endMs === undefined) {
+        return [];
+      }
+
+      return [{ endMs, startMs, text }];
+    });
+
+    return words.length > 0 ? { words } : undefined;
+  } catch (error) {
+    console.warn("parseObservationAlignment: malformed observation_alignment_json column", error);
+    return undefined;
+  }
 }
 
 /** Parse the enrichment `features_json` into a typed spectral summary, or undefined. */
@@ -141,6 +192,7 @@ export function toTrackListItem(row: TrackRow): TrackListItem {
     logId: row.log_id ?? undefined,
     logPageUrl: row.log_id ? logPageUrl(row.log_id) : undefined,
     note: row.note?.trim() ? row.note : undefined,
+    observationAlignment: parseObservationAlignment(row.observation_alignment_json),
     // Version the playback URL by the render timestamp so a re-`observe`
     // (which overwrites observation.mp3 in place) re-keys the edge cache — the
     // bare URL alone HITs stale until its max-age TTL. The bare URL stays in the

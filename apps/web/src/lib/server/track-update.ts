@@ -42,6 +42,14 @@ export type TrackUpdate = {
    */
   logId?: string;
   note?: string;
+  /**
+   * Word-level caption timings for the spoken observation, as a JSON string
+   * (`ObservationAlignment` from lib/server/observation.ts). Drives the synced radio
+   * subtitles. Empty string clears it. NOT in VISIBLE_FIELDS: it describes an EXISTING
+   * artifact (captured at render time alongside the audio, or back-filled later via
+   * forced-alignment), so writing it must move no public lastmod.
+   */
+  observationAlignmentJson?: string;
   /** Fluncle's spoken observation R2 url (<log-id>/observation.mp3); visible field. */
   observationAudioUrl?: string;
   /** The observation's length in ms (probed by the agent at render time). */
@@ -192,6 +200,13 @@ export async function updateTrack(
   if (update.contextStatus !== undefined) {
     sets.push("context_status = ?");
     args.push(update.contextStatus);
+  }
+
+  if (update.observationAlignmentJson !== undefined) {
+    // Empty string clears it — null, not "", so the backfill's
+    // `observation_alignment_json IS NULL` pick treats a cleared row as un-aligned.
+    sets.push("observation_alignment_json = ?");
+    args.push(update.observationAlignmentJson === "" ? null : update.observationAlignmentJson);
   }
 
   if (update.observationAudioUrl !== undefined) {

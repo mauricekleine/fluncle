@@ -1019,6 +1019,19 @@ function addAdminCommands(program: Command): void {
       const { backfillDiscogsCommand } = await import("./commands/admin-tracks");
       await runBackfillDiscogs(options, backfillDiscogsCommand);
     });
+
+  backfill
+    .command("alignment")
+    .description(
+      "Back-fill word-level caption timings for observations rendered before timestamps (no re-render)",
+    )
+    .option("--dry-run", "Report the eligible set but align nothing", false)
+    .option("--limit <limit>", "Max observations to align", "50")
+    .option("--json", "Print JSON", false)
+    .action(async (options: BackfillSyncOptions) => {
+      const { backfillAlignmentCommand } = await import("./commands/admin-tracks");
+      await runBackfillAlignment(options, backfillAlignmentCommand);
+    });
 }
 
 async function runTrackPreviewArchive(
@@ -1326,6 +1339,69 @@ async function runBackfillDiscogs(
   for (const item of resolved) {
     const master = item.masterId ? ` (master ${item.masterId})` : "";
     console.log(`  ${item.logId}: release ${item.releaseId}${master}`);
+  }
+}
+
+async function runBackfillAlignment(
+  options: BackfillSyncOptions,
+  backfillAlignmentCommand: typeof import("./commands/admin-tracks").backfillAlignmentCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const aligned: string[] = [];
+  const empty: string[] = [];
+  const failed: Array<{ error: string; logId: string }> = [];
+  let cursor: string | undefined;
+  let dryRun = options.dryRun;
+
+  // The cap is on observations actually HANDLED (aligned + empty + failed). Each pass
+  // returns a resume cursor; loop until the cap is met or the archive is drained.
+  while (aligned.length + empty.length + failed.length < limit) {
+    const remaining = limit - (aligned.length + empty.length + failed.length);
+    const result = await backfillAlignmentCommand(remaining, options.dryRun, cursor);
+    dryRun = result.dryRun;
+    aligned.push(...result.aligned);
+    empty.push(...result.empty);
+    failed.push(...result.failed);
+
+    if (!options.json) {
+      const verb = result.dryRun ? "would align" : "aligned";
+      console.log(
+        `  …${verb} ${result.alignedCount}; ${result.emptyCount} empty; ${result.failedCount} failed`,
+      );
+    }
+
+    if (result.nextCursor === null) {
+      break;
+    }
+
+    cursor = result.nextCursor;
+  }
+
+  if (options.json) {
+    printJson({
+      aligned,
+      alignedCount: aligned.length,
+      dryRun,
+      empty,
+      emptyCount: empty.length,
+      failed,
+      failedCount: failed.length,
+      ok: true,
+    });
+    return;
+  }
+
+  const verb = dryRun ? "Would align" : "Aligned";
+  console.log(
+    `${verb} ${aligned.length} observation(s); ${empty.length} empty; ${failed.length} failed.`,
+  );
+
+  for (const logId of aligned) {
+    console.log(`  ${logId}`);
+  }
+
+  for (const item of failed) {
+    console.log(`  ${item.logId}: ${item.error}`);
   }
 }
 
