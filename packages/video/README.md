@@ -79,7 +79,7 @@ Every producer (pipeline, Studio defaults, the agent) satisfies `NostalgicCosmos
 
 ```ts
 type NostalgicCosmosProps = {
-  track: CosmosTrack; // + optional track.features (enrichment spectral summary, creative fuel)
+  track: CosmosTrack; // + optional track.features (spectral summary) & track.contextNote/track.texture (context-note character) — both creative fuel
   audio: CosmosAudio; // file, startMs, durationMs (10000–30000), bpm, beatGrid[], onsets[], energyCurve[], bassCurve[], midCurve[], trebleCurve[]
   palette: CosmosPalette; // background, ink, accent, glow, swatches[]
   seed: number;
@@ -89,6 +89,8 @@ type NostalgicCosmosProps = {
 `durationInFrames` is derived from `audio.durationMs` in `root.tsx` via `calculateMetadata`, so the clip length always matches the audio. The pipeline writes real props to `out/<trackId>.props.json`; `ship` copies those props to `out/<log-id>/props.json`.
 
 **`track.features`** (optional) is the enrichment skill's track-level spectral summary — `{ centroidHz, subBassRatio, highRatio, midFlatness, onsetRate }` — fetched from the public API and passed through as CREATIVE FUEL: it steers the vehicle/texture/band-mapping at concept time, never per-frame reactivity (that is `audio.*`). Absent until a track is enriched, so treat it as optional. This is the enrichment → video handoff; the two analyses run alongside each other (track-level direction vs per-frame animation), neither replaces the other.
+
+**`track.contextNote` + `track.texture`** (optional) are the SECOND direction input — the finding's distilled `context_note` (firecrawl FACTS → a small LLM; see `apps/web/src/lib/server/observation.ts`) and, split out of its trailing `Texture:` line, 3–6 sensory/scene/mood pointers. The note is INTERNAL (admin-gated), so the pipeline reads it via the CLI (`fluncle admin tracks context <id> --json`, no re-fetch — the same read the observe sweep uses) rather than the public `/api/tracks`. Pure CREATIVE FUEL, **never on-screen text**: where `features` says HOW a track sounds, `texture` says WHAT it evokes (orchestrated/atmospheric/foundational) — it leans the vehicle/texture-family/palette/scene at concept time and INFORMS, never templates (see the fluncle-video skill §"Metadata must visibly matter"). Absent until a finding is context'd, so treat it as optional; a bare `packages/video` checkout with no `fluncle` on PATH simply gets no note. (Forward tie-in, not a dependency: the aliveness RFC's `intent.json` spine is the natural home for these declared direction inputs once it's built; for now they ride `track` directly.)
 
 ### Encode settings rationale
 
