@@ -61,6 +61,14 @@ export const tracks = sqliteTable("tracks", {
   observationAudioUrl: text("observation_audio_url"),
   observationDurationMs: integer("observation_duration_ms"),
   observationGeneratedAt: text("observation_generated_at"),
+  // The spoken observation SCRIPT — the voice-gated prose the agent authored and
+  // passed to the observe render (with the occasional `<break/>`). It already lives
+  // in the R2 `observation.json` (field `text`) + `observation.txt`; this column
+  // mirrors it on the row so the admin observation dialog can show the transcript
+  // without an R2 round-trip, and (future) radio.fluncle.com can render line-by-line
+  // subtitles synced over the video. Internal like `context_note`: never on the
+  // public TrackListItem contract — surfaced only through the admin-only board path.
+  observationScript: text("observation_script"),
   popularity: integer("popularity"),
   postedToTelegram: integer("posted_to_telegram", { mode: "boolean" }).notNull().default(false),
   postedToTelegramAt: text("posted_to_telegram_at"),
