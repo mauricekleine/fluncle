@@ -9,7 +9,7 @@ The stuck-video bug hits both `radio.fluncle.com` and the homepage Stories reel 
 - `apps/web/src/lib/use-video-recovery.ts` — `useVideoStallRecovery` (the watchdog) + `mediaStallVerdict` (the pure decision core).
 - Consumers: `apps/web/src/routes/radio.tsx` (~line 609), `apps/web/src/components/stories/story-view.tsx` (~line 96), `apps/web/src/components/log/log-footage.tsx` (~line 156).
 
-The watchdog (added in #126) already closes the *first* gap — a stuck load that fires `stalled`/`waiting` (or just never advances `readyState`) and **never** an `error`, so the one-shot `onError` fallback never runs. It polls `mediaStallVerdict` on a 1s tick and fires `onStall` once per "wedge episode."
+The watchdog (added in #126) already closes the _first_ gap — a stuck load that fires `stalled`/`waiting` (or just never advances `readyState`) and **never** an `error`, so the one-shot `onError` fallback never runs. It polls `mediaStallVerdict` on a 1s tick and fires `onStall` once per "wedge episode."
 
 The remaining intermittent stall is a **second-order gap in the episode latch.**
 
@@ -18,17 +18,22 @@ The remaining intermittent stall is a **second-order gap in the episode latch.**
 `useVideoStallRecovery` (use-video-recovery.ts:155–226) keeps a per-episode latch:
 
 ```js
-let recovered = false;            // line 155
+let recovered = false; // line 155
 // ... in the tick (line 205):
-if (recovered) { return; }        // dead until re-armed
+if (recovered) {
+  return;
+} // dead until re-armed
 // ... on wedge (line 222):
-recovered = true; onStallRef.current();
+recovered = true;
+onStallRef.current();
 ```
 
 The latch is re-armed **only** by `onLoadStart`, wired to `loadstart` + `emptied` (lines 164–170, 193–194):
 
 ```js
-const onLoadStart = () => { /* ... */ recovered = false; };
+const onLoadStart = () => {
+  /* ... */ recovered = false;
+};
 video.addEventListener("loadstart", onLoadStart);
 video.addEventListener("emptied", onLoadStart);
 ```
@@ -41,7 +46,7 @@ This is correct for two of the three recovery paths:
 
 - **Radio, SECOND wedge** (`radio.tsx:601–602`): calls `void resolveSlot()` to re-resolve the authoritative broadcast slot instead of reloading the element. **`resolveSlot()` frequently resolves to the SAME `videoUrl`** — the warm steady-state crop for the current finding (the common case: the schedule has not rolled; we are recovering a transient edge stall, not a catalogue change). When `videoUrl` is unchanged, React does **not** re-assign the `<video src>` attribute, so the browser runs **no** new load algorithm: **no `emptied`, no `loadstart`.** `onLoadStart` never fires, `recovered` stays `true`, and the watchdog is **dead for the remaining lifetime of this effect instance.**
 
-The effect only re-runs (rebuilding fresh state with `recovered = false`) when its deps `[videoRef, src, expectsPlayback]` change (line 242). With `src` unchanged and `expectsPlayback` steady, the watchdog stays latched-off. A *subsequent* edge stall on that same clip then has **no recovery path at all** — the clip hangs on its poster (or last frame) until the schedule organically advances to a different finding. That is the "occasionally gets stuck loading" report: rare (needs two wedges on the same unchanged slot), surface-shared (same hook), and not radio-clock-related (#115/#117 are not involved).
+The effect only re-runs (rebuilding fresh state with `recovered = false`) when its deps `[videoRef, src, expectsPlayback]` change (line 242). With `src` unchanged and `expectsPlayback` steady, the watchdog stays latched-off. A _subsequent_ edge stall on that same clip then has **no recovery path at all** — the clip hangs on its poster (or last frame) until the schedule organically advances to a different finding. That is the "occasionally gets stuck loading" report: rare (needs two wedges on the same unchanged slot), surface-shared (same hook), and not radio-clock-related (#115/#117 are not involved).
 
 ### Why it reproduces on Stories too, less often
 
@@ -71,7 +76,7 @@ if (recovered) {
 }
 ```
 
-with `let recoveredAt = 0;` set alongside `recovered = true; recoveredAt = now();` at the wedge, and a `let attempts = 0;` guard (`if (attempts >= MAX_RECOVERY_ATTEMPTS) return;`) so radio's second-wedge `resolveSlot()` path gets a *bounded* retry instead of going permanently dead.
+with `let recoveredAt = 0;` set alongside `recovered = true; recoveredAt = now();` at the wedge, and a `let attempts = 0;` guard (`if (attempts >= MAX_RECOVERY_ATTEMPTS) return;`) so radio's second-wedge `resolveSlot()` path gets a _bounded_ retry instead of going permanently dead.
 
 **(B) Caller-side, narrower.** In `radio.tsx`, make the second-wedge recovery force a reload even when the slot is unchanged — e.g. after `resolveSlot()`, if the resolved `videoUrl` is identical, call `video.load()` so an `emptied`/`loadstart` re-arms the latch. Smaller blast radius (radio-only) but leaves the shared hook with a latch that silently assumes recovery always swaps `src`.
 
