@@ -23,14 +23,14 @@
 #
 # PRODUCTION PRE-REQS (see ../cron/README.md):
 #   - `claude` (Claude Code CLI) — BAKED into the image; authed via subscription
-#     CLAUDE_CODE_OAUTH_TOKEN (zero OpenRouter tokens). The runner WITHHOLDS Hermes' own
-#     recognized secrets from --no-agent scripts, so the token is ALLOWLISTED via
-#     `terminal.env_passthrough` in config.yaml; it arrives from /etc/hermes.env
-#     (op://Fluncle/CLAUDE_CODE_OAUTH_TOKEN/credential).
+#     CLAUDE_CODE_OAUTH_TOKEN (zero OpenRouter tokens). The `--no-agent` runner does
+#     NOT pass --env-file secrets beyond FLUNCLE_API_TOKEN, so the token does NOT reach
+#     this script via the container env — it is read from a 0600 operator-placed file
+#     at ${HOME}/.observe-sweep.env (mounted ~/.hermes), sourced below.
 #   - the `copywriting-fluncle` skill — BAKED into the image at /opt/claude/skills/
 #     (discovered via CLAUDE_CONFIG_DIR=/opt/claude, readable by the non-root cron user).
-#   - DISCORD_ALERT_WEBHOOK for the claude-auth-failed ping — also allowlisted in
-#     config.yaml's `terminal.env_passthrough` (from /etc/hermes.env).
+#   - optional DISCORD_ALERT_WEBHOOK for the claude-auth-failed ping (in the same file —
+#     it too is dropped by the runner's curated env).
 #
 # Operator wires it on the devbox (the image already carries bun + the fluncle CLI +
 # claude + the skill; `observe_track` is AGENT tier, so the box's existing agent-scoped
@@ -57,11 +57,22 @@ export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 export BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 export FLUNCLE_BIN="${FLUNCLE_BIN:-/usr/local/bin/fluncle}"
 
-# CLAUDE_CODE_OAUTH_TOKEN (claude -p auth) + DISCORD_ALERT_WEBHOOK (the auth-fail ping)
-# arrive via the container --env-file, BUT the cron runner withholds Hermes' recognized
-# secrets from --no-agent scripts by default — so they are ALLOWLISTED in config.yaml's
-# `terminal.env_passthrough` (Hermes security docs § Environment Variable Passthrough).
-# Nothing to source here; the env carries them.
+# The cron runner WITHHOLDS Hermes' recognized PROVIDER CREDENTIALS (CLAUDE_CODE_OAUTH_TOKEN,
+# OPENROUTER_API_KEY, DISCORD_*) from --no-agent scripts — a HARD security blocklist
+# (`_HERMES_PROVIDER_ENV_BLOCKLIST`, GHSA-rhgp-j443-p4rf) that config.yaml's
+# `terminal.env_passthrough` CANNOT override (it logs "refusing to register … blocked by
+# _HERMES_PROVIDER_ENV_BLOCKLIST" and drops it). Only UNRECOGNIZED custom vars
+# (FLUNCLE_API_TOKEN) pass. So `claude -p`'s token can ONLY reach this script via a file the
+# operator places — sourced here: a 0600 ${HOME}/.observe-sweep.env (mounted ~/.hermes)
+# holding CLAUDE_CODE_OAUTH_TOKEN (required) + optionally DISCORD_ALERT_WEBHOOK /
+# OBSERVE_CLAUDE_MODEL. Written via `op read op://Fluncle/CLAUDE_CODE_OAUTH_TOKEN/credential`.
+OBSERVE_ENV_FILE="${OBSERVE_ENV_FILE:-${HOME:-/opt/data/home}/.observe-sweep.env}"
+if [ -r "${OBSERVE_ENV_FILE}" ]; then
+  set -a
+  # shellcheck source=/dev/null
+  . "${OBSERVE_ENV_FILE}"
+  set +a
+fi
 
 # Resolve the orchestrator next to this wrapper so it runs regardless of CWD.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
