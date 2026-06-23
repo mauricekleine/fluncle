@@ -1,10 +1,10 @@
 import { type EditionDTO } from "@fluncle/contracts";
 import { logPageUrl, siteUrl } from "../fluncle-links";
 
-// The postal address line CAN-SPAM requires in every bulk send's footer
-// (docs/rfcs/newsletter-own-the-stack.md §4.3). A placeholder until the real
-// address is wired as config — flagged in the PR as an operator step.
-const POSTAL_ADDRESS = "Fluncle · the mothership · somewhere in the cosmos";
+// The footer sign-off line (the slot CAN-SPAM reserves for a postal address).
+// While the list is friends + family this stays a cosmic sign-off; swap it for a
+// real physical mailing address here once the audience grows past F&F.
+const POSTAL_ADDRESS = "With love, from somewhere deep in the galaxy, Fluncle";
 
 function escapeHtml(value: string): string {
   return value
