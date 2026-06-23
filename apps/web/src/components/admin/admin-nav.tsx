@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 const LINKS = [
   { key: "board", label: "Board", to: "/admin" },
   { key: "mixtapes", label: "Mixtapes", to: "/admin/mixtapes" },
+  { key: "newsletter", label: "Newsletter", to: "/admin/newsletter" },
 ] as const;
 
 export type AdminNavCurrent = (typeof LINKS)[number]["key"];
