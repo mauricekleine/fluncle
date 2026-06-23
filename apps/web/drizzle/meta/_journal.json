@@ -218,6 +218,34 @@
       "when": 1782139933679,
       "tag": "0030_graceful_dark_beast",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1782159147653,
+      "tag": "0031_happy_frog_thor",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1782192646523,
+      "tag": "0032_funny_pepper_potts",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1782234765640,
+      "tag": "0033_nebulous_quasimodo",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1782236985481,
+      "tag": "0034_milky_silver_fox",
+      "breakpoints": true
     }
   ]
 }

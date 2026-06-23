@@ -28,7 +28,9 @@ import { type InferContractRouterInputs } from "@orpc/contract";
 import { ORPCError } from "@orpc/server";
 import { type contract } from "@fluncle/contracts/orpc";
 import { FOUND_BASE, trackMedia } from "../../media";
+import { recordNoteAttempt } from "../backfill";
 import { parseEditorialNote } from "../http-errors";
+import { gateNoteText } from "../note";
 import { publishTrack } from "../publish";
 import {
   DEFAULT_OBSERVATION_MODEL,
@@ -80,6 +82,7 @@ const OPERATOR_ONLY_FIELDS: (keyof TrackUpdate)[] = [
 type AdminTrackInputs = InferContractRouterInputs<typeof contract>;
 type PatchBody = AdminTrackInputs["update_track"];
 type ObserveBody = AdminTrackInputs["observe_track"];
+type NoteBody = AdminTrackInputs["note_track"];
 
 function resolveModel(value: unknown): ObservationModel {
   return value === "eleven_v3" || value === "eleven_multilingual_v2"
@@ -109,8 +112,8 @@ const ADMIN_LIST_DEFAULT_LIMIT = 16;
 const ADMIN_LIST_MAX_LIMIT = 48;
 
 // Tri-state boolean query params ("true"/"false"/absent → true/false/undefined),
-// ported verbatim from the live `hasVideo` route. `hasContext`/`hasObservation`
-// reuse it to drive the two observation queues.
+// ported verbatim from the live `hasVideo` route. `hasContext`/`hasObservation`/
+// `hasNote` reuse it to drive the context, observation, and auto-note queues.
 function parseTriStateBool(value: string | undefined): boolean | undefined {
   if (value === "true") {
     return true;
@@ -260,10 +263,12 @@ export function adminTracksHandlers(os: Implementer) {
       return await listTracks({
         cursor: decodeTrackCursor(input.cursor ?? null),
         hasContext: parseTriStateBool(input.hasContext),
+        hasNote: parseTriStateBool(input.hasNote),
         hasObservation: parseTriStateBool(input.hasObservation),
         hasVideo: parseTriStateBool(input.hasVideo),
         limit: parseAdminLimit(input.limit),
         order: input.order === "asc" ? "asc" : "desc",
+        retryEmptyContext: parseTriStateBool(input.retryEmptyContext) === true,
         status: parseEnrichmentStatus(input.status),
       });
     } catch (error) {
@@ -391,8 +396,15 @@ export function adminTracksHandlers(os: Implementer) {
         freshlyFetched = Boolean(fetched.contextNote);
       }
 
-      // Render the spoken observation (ElevenLabs).
-      const { bytes } = await renderObservation(voiceId, { model, text: script, voiceSettings });
+      // Render the spoken observation (ElevenLabs `/with-timestamps`): one call
+      // returns the mp3 bytes AND the character alignment, normalised here to the
+      // stored word-level shape. A missing/malformed alignment is `null` (captions
+      // degrade to none) — it never blocks the render.
+      const { alignment, bytes } = await renderObservation(voiceId, {
+        model,
+        text: script,
+        voiceSettings,
+      });
 
       // Duration: ElevenLabs doesn't return one and the Worker can't probe (no
       // ffprobe). The agent passes the ffprobe value; absent it, estimate from the
@@ -408,6 +420,7 @@ export function adminTracksHandlers(os: Implementer) {
       const generatedAt = new Date().toISOString();
 
       const artifact: ObservationArtifact = {
+        ...(alignment ? { alignment } : {}),
         audioUrl: media.observationAudioUrl,
         ...(contextNote ? { contextNote } : {}),
         durationMs,
@@ -440,14 +453,23 @@ export function adminTracksHandlers(os: Implementer) {
       ]);
 
       // Persist: the audio url (the "has observation" flag) + duration + timestamp
-      // (visible — they bump lastmod). Backfill the context note only when this step
-      // freshly fetched it (the context_track split usually wrote it already); a
-      // body-supplied or already-stored note is not re-written.
+      // (visible — they bump lastmod) + the spoken script (the transcript mirror of
+      // observation.json `text`, so the admin dialog reads it from the row, not R2).
+      // Backfill the context note only when this step freshly fetched it (the
+      // context_track split usually wrote it already); a body-supplied or
+      // already-stored note is not re-written.
       await updateTrack(track.trackId, {
+        // The caption timings (when captured) — internal-but-public, not in
+        // VISIBLE_FIELDS; the sibling observationAudioUrl bumps lastmod for the render.
+        ...(alignment ? { observationAlignmentJson: JSON.stringify(alignment) } : {}),
         observationAudioUrl: media.observationAudioUrl,
         observationDurationMs: durationMs,
         observationGeneratedAt: generatedAt,
-        ...(freshlyFetched ? { contextNote } : {}),
+        observationScript: script,
+        // A freshly-fetched-here note also marks `context_status = 'resolved'` so the
+        // context queue (status-aware) treats this finding as done, mirroring the
+        // split-out `context_track` step's write.
+        ...(freshlyFetched ? { contextNote, contextStatus: "resolved" as const } : {}),
       });
 
       return {
@@ -499,9 +521,16 @@ export function adminTracksHandlers(os: Implementer) {
       // Idempotency (`context:${logId}`): a finding that already has a
       // context note is a no-op, so an external cron firing on a fixed interval
       // never re-burns the Firecrawl budget or overwrites the stored facts.
+      //
+      // `refresh` (the CLI's `--refresh`) RE-RUNS the fetch+distil even when a note
+      // already exists — the deliberate operator action to backfill/sharpen an old
+      // context note (the auto-note's primary fuel). It costs a Firecrawl + distil
+      // pass per call, so it is opt-in; the default stays the short-circuit so the
+      // every-tick context cron never re-burns the budget on an already-noted find.
+      const refresh = input.refresh === true || input.refresh === "true";
       const existing = await getTrackContextNote(track.trackId);
 
-      if (existing?.trim()) {
+      if (existing?.trim() && !refresh) {
         return {
           contextNote: existing,
           logId: track.logId,
@@ -512,29 +541,121 @@ export function adminTracksHandlers(os: Implementer) {
         };
       }
 
-      // Fetch the FACTS (Firecrawl). The agent may override the search query; the
-      // result is internal DATA. A best-effort empty note is still written-through
-      // as "" so the queue (context_note IS NULL) does not re-pick it forever — but
-      // a write-through of "" would still read as null-ish; only a non-empty note
-      // advances the queue, so an empty fetch leaves it null for the next tick.
+      // Fetch the FACTS (Firecrawl) and DISTIL them into a clean note (OpenRouter).
+      // The agent may override the search query; the result is internal DATA.
       const query =
         typeof input.query === "string" && input.query.trim()
           ? input.query.trim()
           : buildContextQuery(track);
       const fetched = await fetchTrackContext(query);
 
-      if (fetched.contextNote.trim()) {
-        // Quiet write: contextNote alone, so track-update.ts does NOT bump
-        // updated_at (no public surface moves; the enrich-sweep stale clock and the
-        // sitemap lastmod stay untouched).
-        await updateTrack(track.trackId, { contextNote: fetched.contextNote });
+      // Persist the reliability marker alongside the note. The `context_status`
+      // column makes a confirmed-empty fetch (`empty`) distinct from never-attempted
+      // (NULL/`pending`), so the queue does not re-burn Firecrawl + the distil LLM on
+      // a hopeless find every tick (`--retry-empty` re-picks `empty`; `failed` is a
+      // vendor-down miss the next tick retries). All quiet: contextNote/contextStatus
+      // are internal, so track-update.ts does NOT bump updated_at (no public surface
+      // moves; the enrich-sweep stale clock and the sitemap lastmod stay untouched).
+      if (fetched.status === "resolved" && fetched.contextNote.trim()) {
+        await updateTrack(track.trackId, {
+          contextNote: fetched.contextNote,
+          contextStatus: "resolved",
+        });
+      } else if (refresh && existing?.trim()) {
+        // A `--refresh` that re-fetched nothing usable must NOT downgrade a finding
+        // that already had a good note: keep the prior note + its `resolved` status
+        // rather than blanking the status to `empty`/`failed` and losing the fuel.
+        // (No write at all — the row is already resolved.)
+      } else {
+        await updateTrack(track.trackId, { contextStatus: fetched.status });
       }
 
+      // On a `--refresh` no-op (re-fetch found nothing usable but a note already
+      // existed), report the PRESERVED note, not the empty re-fetch result.
+      const contextNote =
+        fetched.status === "resolved" && fetched.contextNote.trim()
+          ? fetched.contextNote
+          : refresh && existing?.trim()
+            ? existing
+            : fetched.contextNote;
+
       return {
-        contextNote: fetched.contextNote,
+        contextNote,
         logId: track.logId,
         ok: true as const,
         sources: fetched.sources,
+        trackId: track.trackId,
+      };
+    } catch (error) {
+      throw toFault(error);
+    }
+  });
+
+  // POST /admin/tracks/{trackId}/note — agent tier (`adminAuth` only). The
+  // written-note sibling of observe_track: the agent authored the editorial note in
+  // Fluncle's voice; this step VOICE-GATES it and stores it into the `note` field.
+  // CARDINAL SAFETY: fills an EMPTY note ONLY — a finding with a note already
+  // (operator-written OR previously auto-authored) is a no-op (`skipped: true`); the
+  // operator override always wins, enforced here, server-side.
+  const noteTrackHandler = os.note_track.use(adminAuth).handler(async ({ input }) => {
+    try {
+      const body: NoteBody = input;
+      const idOrLogId = body.trackId;
+      const track = await getTrackByIdOrLogId(idOrLogId);
+
+      if (!track) {
+        throw new ORPCError("NOT_FOUND", {
+          data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
+          message: `No track with id ${idOrLogId}`,
+          status: 404,
+        });
+      }
+
+      if (!track.logId) {
+        throw new ORPCError("BAD_REQUEST", {
+          data: {
+            apiCode: "no_log_id",
+            apiMessage:
+              "Track has no Log ID; every finding needs a coordinate. Backfill the ISRC/Log ID first.",
+          },
+          message: "Track has no Log ID; every finding needs a coordinate.",
+          status: 400,
+        });
+      }
+
+      // THE FILL-EMPTY-ONLY GUARD (the cardinal safety guarantee). `track.note` is
+      // `undefined` only when the stored note is empty/whitespace (toTrackListItem
+      // trims it); any non-empty note — operator-written or previously auto-authored
+      // — short-circuits to a no-op. The agent NEVER overwrites an existing note. We
+      // still stamp the "ran" state (the workflow ran; it correctly found nothing to
+      // do) so the board doesn't keep re-queuing a hand-noted finding.
+      if (track.note?.trim()) {
+        await recordNoteAttempt(track.trackId, false);
+
+        return {
+          logId: track.logId,
+          note: track.note,
+          ok: true as const,
+          skipped: true as const,
+          trackId: track.trackId,
+        };
+      }
+
+      // Voice-gate the agent-authored note (defence in depth: the agent gates as it
+      // writes; the Worker re-scans and hard-fails any violation before it is stored
+      // — the note lands straight on the public /log surface).
+      const note = gateNoteText(body.note);
+
+      // Fill the empty note. `parseEditorialNote` re-validates the length against the
+      // public budget on the same path an operator note takes; the gate already
+      // checked it, so this is the byte-identical store, not a second source of truth.
+      await updateTrack(track.trackId, { note: parseEditorialNote(note) });
+      await recordNoteAttempt(track.trackId, true);
+
+      return {
+        logId: track.logId,
+        note,
+        ok: true as const,
         trackId: track.trackId,
       };
     } catch (error) {
@@ -720,6 +841,7 @@ export function adminTracksHandlers(os: Implementer) {
     context_track: contextTrackHandler,
     finalize_track_video: finalizeVideoHandler,
     list_tracks_admin: listTracksAdminHandler,
+    note_track: noteTrackHandler,
     observe_track: observeTrackHandler,
     presign_track_video_uploads: presignVideoUploadsHandler,
     publish_track: publishTrackHandler,

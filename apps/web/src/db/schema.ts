@@ -29,6 +29,20 @@ export const tracks = sqliteTable("tracks", {
   backfillLastfmAttempts: integer("backfill_lastfm_attempts").notNull().default(0),
   backfillLastfmDoneAt: text("backfill_lastfm_done_at"),
   backfillLastfmFailures: integer("backfill_lastfm_failures").notNull().default(0),
+  // The auto-note authoring "ran" stamp (the written-note sibling of the observation
+  // pipeline). Unlike Discogs/Last.fm this is NOT a vendor sweep — `note_track`
+  // (agent tier) stamps `backfill_note_attempted_at` on EVERY authoring attempt and
+  // `backfill_note_done_at` only when an empty `note` was actually FILLED. It reuses
+  // the same backfill_* column convention purely so the admin board's "done-when-ran"
+  // semantics and `listBackfillRanForTracks` machinery work for the Note cell exactly
+  // like Discogs/Last.fm: grey/`open` = never run, `done` = the workflow ran (a note
+  // exists). The operator override always wins — the handler fills an EMPTY note only,
+  // never clobbering an operator-written one, so a hand-written note can carry no
+  // attempt stamp and still read `done` off the `note` column itself.
+  backfillNoteAttemptedAt: text("backfill_note_attempted_at"),
+  backfillNoteAttempts: integer("backfill_note_attempts").notNull().default(0),
+  backfillNoteDoneAt: text("backfill_note_done_at"),
+  backfillNoteFailures: integer("backfill_note_failures").notNull().default(0),
   bpm: real("bpm"),
   // Firecrawl-derived FACTUAL context about the track (label/year/release
   // context/artist background), gathered during the observe step as CREATIVE
@@ -36,6 +50,20 @@ export const tracks = sqliteTable("tracks", {
   // rendered on /log, never in JSON-LD/RSS/llms.txt, never quotes lyrics. This
   // is NOT the editorial `note` (the operator's public "why").
   contextNote: text("context_note"),
+  // The context-fetch reliability marker (mirrors the backfill_* state above). The
+  // `context_track` queue picks `pending` rows (never-attempted); this column lets a
+  // CONFIRMED-EMPTY fetch (`empty`) be distinct from never-attempted, so the cron does
+  // not re-burn Firecrawl + the distil LLM on a hopeless find every tick. States:
+  //   - pending  — never attempted (the default; the queue's pick set).
+  //   - resolved — a distilled (or cleaned-raw fallback) note was stored.
+  //   - empty    — the fetch returned nothing usable; intentionally left blank. The
+  //                queue skips it unless `--retry-empty` widens the pick set.
+  //   - failed   — the attempt threw (vendor down); eligible for a later retry.
+  // Internal only — never surfaced through public DTOs. Rows that predate the column
+  // read NULL and are treated as `pending`.
+  contextStatus: text("context_status", {
+    enum: ["pending", "resolved", "empty", "failed"],
+  }),
   durationMs: integer("duration_ms").notNull(),
   enrichmentStatus: text("enrichment_status").notNull().default("pending"),
   featuresJson: text("features_json"),
@@ -52,6 +80,16 @@ export const tracks = sqliteTable("tracks", {
   label: text("label"),
   logId: text("log_id").unique(),
   note: text("note"),
+  // Word-level caption timings for the spoken observation, as a JSON string
+  // (`{ source, words: [{ text, startMs, endMs }] }` — see lib/server/observation.ts
+  // `ObservationAlignment`). Drives the synced subtitles on the radio player (and,
+  // later, /log): the current word is highlighted off `audio.currentTime`. Captured
+  // at render time from ElevenLabs `/with-timestamps`, or back-filled onto an existing
+  // observation via `/forced-alignment`. Internal-but-PUBLIC: unlike the script, the
+  // word timings ARE surfaced (the public TrackListItem carries them so the radio
+  // caption render can read them), but they describe an EXISTING artifact, so writing
+  // them does NOT bump updated_at (a backfill must move no public lastmod).
+  observationAlignmentJson: text("observation_alignment_json"),
   // The audio observation (Fluncle's recovered field observation, spoken).
   // observationAudioUrl is the R2 read URL for <log-id>/observation.mp3 — set
   // when the render is uploaded; its presence is the "has observation" flag. The
@@ -61,6 +99,14 @@ export const tracks = sqliteTable("tracks", {
   observationAudioUrl: text("observation_audio_url"),
   observationDurationMs: integer("observation_duration_ms"),
   observationGeneratedAt: text("observation_generated_at"),
+  // The spoken observation SCRIPT — the voice-gated prose the agent authored and
+  // passed to the observe render (with the occasional `<break/>`). It already lives
+  // in the R2 `observation.json` (field `text`) + `observation.txt`; this column
+  // mirrors it on the row so the admin observation dialog can show the transcript
+  // without an R2 round-trip, and (future) radio.fluncle.com can render line-by-line
+  // subtitles synced over the video. Internal like `context_note`: never on the
+  // public TrackListItem contract — surfaced only through the admin-only board path.
+  observationScript: text("observation_script"),
   popularity: integer("popularity"),
   postedToTelegram: integer("posted_to_telegram", { mode: "boolean" }).notNull().default(false),
   postedToTelegramAt: text("posted_to_telegram_at"),

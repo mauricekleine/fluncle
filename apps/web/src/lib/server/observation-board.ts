@@ -46,3 +46,23 @@ export async function getContextNote(trackId: string): Promise<string> {
 
   return row?.context_note?.trim() ?? "";
 }
+
+/**
+ * The spoken observation SCRIPT (the transcript) for one finding — read lazily when
+ * the operator opens the Observation cell's dialog (never preloaded for the whole
+ * page). The script is the transcript mirror of the R2 `observation.json` `text`,
+ * stored on the row by the observe render; like `context_note` it's internal, so it
+ * stays on this gated admin path and off the public track contract. Empty string
+ * when absent (no render yet, or a pre-back-migration finding).
+ */
+export async function getObservationScript(trackId: string): Promise<string> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [trackId],
+    sql: `select observation_script from tracks where track_id = ? limit 1`,
+  });
+
+  const row = typedRows<{ observation_script: string | null }>(result.rows)[0];
+
+  return row?.observation_script?.trim() ?? "";
+}

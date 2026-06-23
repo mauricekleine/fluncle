@@ -23,6 +23,12 @@ export type TrackUpdate = {
    * it alone does NOT bump updated_at (it moves no public surface).
    */
   contextNote?: string;
+  /**
+   * The context-fetch reliability marker (the `context_track` queue's resume state).
+   * Internal only — never surfaced through public DTOs, and (like contextNote)
+   * writing it does NOT bump updated_at. See schema.ts `contextStatus`.
+   */
+  contextStatus?: "pending" | "resolved" | "empty" | "failed";
   enrichmentStatus?: "pending" | "processing" | "done" | "failed";
   /** Raw audio feature vector as a JSON string (training data for the classifier). */
   features?: string;
@@ -36,12 +42,29 @@ export type TrackUpdate = {
    */
   logId?: string;
   note?: string;
+  /**
+   * Word-level caption timings for the spoken observation, as a JSON string
+   * (`ObservationAlignment` from lib/server/observation.ts). Drives the synced radio
+   * subtitles. Empty string clears it. NOT in VISIBLE_FIELDS: it describes an EXISTING
+   * artifact (captured at render time alongside the audio, or back-filled later via
+   * forced-alignment), so writing it must move no public lastmod.
+   */
+  observationAlignmentJson?: string;
   /** Fluncle's spoken observation R2 url (<log-id>/observation.mp3); visible field. */
   observationAudioUrl?: string;
   /** The observation's length in ms (probed by the agent at render time). */
   observationDurationMs?: number;
   /** When the observation was rendered (ISO). */
   observationGeneratedAt?: string;
+  /**
+   * The spoken observation SCRIPT (the voice-gated prose passed to the render).
+   * Mirrors the R2 `observation.json` `text` on the row so the admin dialog can show
+   * the transcript without an R2 round-trip. Internal (the transcript of an internal
+   * artifact) — never on the public contract, and NOT in VISIBLE_FIELDS: on a fresh
+   * render the sibling `observationAudioUrl` already bumps lastmod, and the one-off
+   * back-migration writes it standalone (must move no public surface).
+   */
+  observationScript?: string;
   /** The AI model that authored the video, in <provider>/<model> notation. */
   videoModel?: string;
   /** The reasoning/thinking effort the authoring model ran at (e.g. "high"). */
@@ -65,7 +88,8 @@ export type TrackUpdate = {
 // The fields whose write changes a PUBLIC surface, so it should move the
 // sitemap/log `lastmod` (updated_at). Everything else (features, contextNote) is
 // internal training/creative fuel: written by the enrichment agent, never
-// rendered, so it must not bump lastmod. isrc/logId backfills are identity
+// rendered, so it must not bump lastmod (contextStatus is likewise internal —
+// the context-fetch resume marker). isrc/logId backfills are identity
 // repairs that DO surface (the coordinate appears everywhere), so they count.
 const VISIBLE_FIELDS = new Set<keyof TrackUpdate>([
   "bpm",
@@ -173,6 +197,18 @@ export async function updateTrack(
     args.push(update.contextNote);
   }
 
+  if (update.contextStatus !== undefined) {
+    sets.push("context_status = ?");
+    args.push(update.contextStatus);
+  }
+
+  if (update.observationAlignmentJson !== undefined) {
+    // Empty string clears it — null, not "", so the backfill's
+    // `observation_alignment_json IS NULL` pick treats a cleared row as un-aligned.
+    sets.push("observation_alignment_json = ?");
+    args.push(update.observationAlignmentJson === "" ? null : update.observationAlignmentJson);
+  }
+
   if (update.observationAudioUrl !== undefined) {
     // Empty string clears the observation (re-render path) — null, not "", so the
     // `observation_audio_url is not null` radio-eligibility filter drops it.
@@ -188,6 +224,13 @@ export async function updateTrack(
   if (update.observationGeneratedAt !== undefined) {
     sets.push("observation_generated_at = ?");
     args.push(update.observationGeneratedAt);
+  }
+
+  if (update.observationScript !== undefined) {
+    // Empty string clears the transcript — null, not "", so a cleared row reads as
+    // "no script yet" for the back-migration's `observation_script IS NULL` pick.
+    sets.push("observation_script = ?");
+    args.push(update.observationScript === "" ? null : update.observationScript);
   }
 
   if (update.vibeX !== undefined) {

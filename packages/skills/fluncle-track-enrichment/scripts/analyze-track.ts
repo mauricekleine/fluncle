@@ -35,13 +35,6 @@ const title = arg("title");
 const isrc = arg("isrc");
 const archiveDir = arg("archive-dir");
 
-if (!artist || !title) {
-  console.error(
-    'usage: bun analyze-track.ts --artist "<artist>" --title "<title>" [--isrc <isrc>]',
-  );
-  process.exit(1);
-}
-
 const log = (message: string) => console.error(`[analyze] ${message}`);
 
 // ---------------------------------------------------------------------------
@@ -102,7 +95,8 @@ async function resolvePreviews(): Promise<Preview[]> {
       results?: Array<{ artistName?: string; previewUrl?: string; trackName?: string }>;
     };
     const hit = (body.results ?? []).find(
-      (item) => item.previewUrl && normalize(item.artistName ?? "").includes(normalize(artist)),
+      (item) =>
+        item.previewUrl && normalize(item.artistName ?? "").includes(normalize(artist ?? "")),
     );
     push("itunes", hit?.previewUrl);
   } catch {
@@ -453,6 +447,70 @@ function foldToBand(bpm: number): number | null {
   return null;
 }
 
+// AcousticBrainz-by-ISRC fallback — the clean, structured BPM source mirrored from
+// the manual bpm-backfill skill's Step 1 (ISRC → MusicBrainz recording MBID →
+// AcousticBrainz `rhythm.bpm`). Best-effort: any error, 404, missing recording, or
+// non-numeric field → null, so the caller keeps the analyzer's honest null. The
+// AcousticBrainz BPM is a real measured tempo, so it should octave-fold cleanly
+// into the D&B band; if it can't fold, treat it as a miss (in-band discipline).
+// `fetchImpl` is injectable so this is testable without touching the network.
+export async function acousticBrainzBpmByIsrc(
+  isrc: string | undefined,
+  fetchImpl: typeof fetch = fetch,
+): Promise<number | null> {
+  if (!isrc) {
+    return null;
+  }
+
+  // MusicBrainz requires a descriptive User-Agent and rate-limits to ~1 req/s.
+  const userAgent = "fluncle-track-enrichment/1.0 ( hey@mauricekleine.com )";
+  const headers = { "User-Agent": userAgent };
+
+  try {
+    // ISRC → MusicBrainz recording MBID. Resolving by ISRC is exact-recording, so
+    // the first recording is the right one (zero matching risk).
+    const mbResponse = await fetchImpl(
+      `https://musicbrainz.org/ws/2/recording?query=isrc:${encodeURIComponent(isrc)}&fmt=json`,
+      { headers },
+    );
+
+    if (!mbResponse.ok) {
+      return null;
+    }
+
+    const mbBody = (await mbResponse.json()) as { recordings?: Array<{ id?: string }> };
+    const mbid = mbBody.recordings?.[0]?.id;
+
+    if (!mbid) {
+      return null;
+    }
+
+    // MBID → AcousticBrainz BPM. A 404 means "not in the archive" (the project
+    // froze in 2022) → miss.
+    const abResponse = await fetchImpl(
+      `https://acousticbrainz.org/api/v1/${encodeURIComponent(mbid)}/low-level`,
+      { headers },
+    );
+
+    if (!abResponse.ok) {
+      return null;
+    }
+
+    const abBody = (await abResponse.json()) as { rhythm?: { bpm?: unknown } };
+    const bpm = abBody.rhythm?.bpm;
+
+    if (typeof bpm !== "number" || !Number.isFinite(bpm) || bpm <= 0) {
+      return null;
+    }
+
+    const folded = foldToBand(bpm);
+
+    return folded === null ? null : Number(folded.toFixed(2));
+  } catch {
+    return null;
+  }
+}
+
 function estimateBpm(samples: Float32Array): {
   bpm: number | null;
   bpmConfidence: number;
@@ -647,97 +705,129 @@ type PreviewAnalysis = {
   tempo: { bpm: number | null; bpmConfidence: number; onsetRate: number };
 };
 
-log(`resolving previews for ${artist} — ${title}`);
-const previews = await resolvePreviews();
-
-if (previews.length === 0) {
-  console.error("[analyze] no preview found — cannot analyze");
-  process.exit(2);
-}
-
-log(`found ${previews.length} preview(s): ${previews.map((p) => p.source).join(", ")}`);
-
-// Analyze every window. One clip may be a beatless build-up while another holds
-// the drop — so we measure each and keep the most-confident read per field.
-const analyses: PreviewAnalysis[] = [];
-
-for (const preview of previews) {
-  try {
-    const loaded = await loadPreview(preview.url);
-    const spec = spectral(loaded.samples);
-    const key = estimateKey(spec.chroma);
-    const tempo = estimateBpm(loaded.samples);
-    log(
-      `${preview.source} (${(loaded.samples.length / SAMPLE_RATE).toFixed(1)}s): bpm ${tempo.bpm ?? "null"} (conf ${tempo.bpmConfidence}), key ${key.key} (conf ${key.confidence})`,
+// Only run the full pipeline when this file is the directly-invoked entry. On
+// import (e.g. from a test), `import.meta.main` is false, so the analyzer can be
+// imported to exercise `acousticBrainzBpmByIsrc` in isolation without resolving
+// previews or hitting the network.
+if (import.meta.main) {
+  if (!artist || !title) {
+    console.error(
+      'usage: bun analyze-track.ts --artist "<artist>" --title "<title>" [--isrc <isrc>]',
     );
-    analyses.push({
-      bytes: loaded.bytes,
-      key,
-      mime: loaded.mime,
-      source: preview.source,
-      spec,
-      tempo,
-    });
-  } catch (error) {
-    log(`${preview.source}: skipped — ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
   }
-}
 
-if (analyses.length === 0) {
-  console.error("[analyze] every preview failed to decode — cannot analyze");
-  process.exit(2);
-}
+  log(`resolving previews for ${artist} — ${title}`);
+  const previews = await resolvePreviews();
 
-// The most beat-clear window (highest bpmConfidence) is the most rhythmically
-// defined section, so its timbre best characterises the feature vector. BPM =
-// the most confident NON-NULL read; key = the most confident read anywhere (key
-// is a global property, section-independent).
-const primary = [...analyses].sort((a, b) => b.tempo.bpmConfidence - a.tempo.bpmConfidence)[0];
-const bestBpm = [...analyses]
-  .sort((a, b) => b.tempo.bpmConfidence - a.tempo.bpmConfidence)
-  .find((a) => a.tempo.bpm !== null);
-const bestKey = [...analyses].sort((a, b) => b.key.confidence - a.key.confidence)[0];
+  if (previews.length === 0) {
+    console.error("[analyze] no preview found — cannot analyze");
+    process.exit(2);
+  }
 
-const reliableKey = bestKey.key.confidence >= KEY_CONFIDENCE_FLOOR ? bestKey.key.key : null;
-let archivePreview:
-  | {
-      mime: string;
-      path: string;
-      source: string;
+  log(`found ${previews.length} preview(s): ${previews.map((p) => p.source).join(", ")}`);
+
+  // Analyze every window. One clip may be a beatless build-up while another holds
+  // the drop — so we measure each and keep the most-confident read per field.
+  const analyses: PreviewAnalysis[] = [];
+
+  for (const preview of previews) {
+    try {
+      const loaded = await loadPreview(preview.url);
+      const spec = spectral(loaded.samples);
+      const key = estimateKey(spec.chroma);
+      const tempo = estimateBpm(loaded.samples);
+      log(
+        `${preview.source} (${(loaded.samples.length / SAMPLE_RATE).toFixed(1)}s): bpm ${tempo.bpm ?? "null"} (conf ${tempo.bpmConfidence}), key ${key.key} (conf ${key.confidence})`,
+      );
+      analyses.push({
+        bytes: loaded.bytes,
+        key,
+        mime: loaded.mime,
+        source: preview.source,
+        spec,
+        tempo,
+      });
+    } catch (error) {
+      log(`${preview.source}: skipped — ${error instanceof Error ? error.message : String(error)}`);
     }
-  | undefined;
+  }
 
-if (archiveDir) {
-  mkdirSync(archiveDir, { recursive: true });
-  const path = join(archiveDir, `preview.${previewExtension(primary.mime)}`);
-  writeFileSync(path, primary.bytes);
-  archivePreview = { mime: primary.mime, path, source: primary.source };
-  log(`archive preview -> ${path}`);
+  if (analyses.length === 0) {
+    console.error("[analyze] every preview failed to decode — cannot analyze");
+    process.exit(2);
+  }
+
+  // The most beat-clear window (highest bpmConfidence) is the most rhythmically
+  // defined section, so its timbre best characterises the feature vector. BPM =
+  // the most confident NON-NULL read; key = the most confident read anywhere (key
+  // is a global property, section-independent).
+  const primary = [...analyses].sort((a, b) => b.tempo.bpmConfidence - a.tempo.bpmConfidence)[0];
+  const bestBpm = [...analyses]
+    .sort((a, b) => b.tempo.bpmConfidence - a.tempo.bpmConfidence)
+    .find((a) => a.tempo.bpm !== null);
+  const bestKey = [...analyses].sort((a, b) => b.key.confidence - a.key.confidence)[0];
+
+  // BPM decision. The preview path is primary; when it yields null (e.g. a
+  // beatless build-up clip) AND we have an ISRC, fall back to the structured
+  // AcousticBrainz-by-ISRC source (best-effort, in-band folded). A miss leaves
+  // bpm null exactly as before — honest null over a fabricated number.
+  let outputBpm = bestBpm?.tempo.bpm ?? null;
+  let bpmSource = bestBpm?.source ?? null;
+
+  if (outputBpm === null && isrc) {
+    const fallbackBpm = await acousticBrainzBpmByIsrc(isrc);
+
+    if (fallbackBpm !== null) {
+      outputBpm = fallbackBpm;
+      bpmSource = "acousticbrainz";
+      log(`bpm fallback: acousticbrainz by isrc ${isrc} -> ${fallbackBpm}`);
+    } else {
+      log(`bpm fallback: acousticbrainz by isrc ${isrc} -> miss (staying null)`);
+    }
+  }
+
+  const reliableKey = bestKey.key.confidence >= KEY_CONFIDENCE_FLOOR ? bestKey.key.key : null;
+  let archivePreview:
+    | {
+        mime: string;
+        path: string;
+        source: string;
+      }
+    | undefined;
+
+  if (archiveDir) {
+    mkdirSync(archiveDir, { recursive: true });
+    const path = join(archiveDir, `preview.${previewExtension(primary.mime)}`);
+    writeFileSync(path, primary.bytes);
+    archivePreview = { mime: primary.mime, path, source: primary.source };
+    log(`archive preview -> ${path}`);
+  }
+
+  const output = {
+    archivePreview,
+    artist,
+    bpm: outputBpm,
+    bpmConfidence: bestBpm?.tempo.bpmConfidence ?? primary.tempo.bpmConfidence,
+    bpmSource,
+    features: {
+      centroidHz: primary.spec.centroidHz,
+      highRatio: primary.spec.highRatio,
+      midFlatness: primary.spec.midFlatness,
+      onsetRate: primary.tempo.onsetRate,
+      subBassRatio: primary.spec.subBassRatio,
+    },
+    key: reliableKey,
+    keyConfidence: bestKey.key.confidence,
+    keySource: reliableKey ? bestKey.source : null,
+    previews: analyses.map((a) => ({
+      bpm: a.tempo.bpm,
+      bpmConfidence: a.tempo.bpmConfidence,
+      keyConfidence: a.key.confidence,
+      source: a.source,
+    })),
+    title,
+  };
+
+  console.log(JSON.stringify(output, null, 2));
 }
-
-const output = {
-  archivePreview,
-  artist,
-  bpm: bestBpm?.tempo.bpm ?? null,
-  bpmConfidence: bestBpm?.tempo.bpmConfidence ?? primary.tempo.bpmConfidence,
-  bpmSource: bestBpm?.source ?? null,
-  features: {
-    centroidHz: primary.spec.centroidHz,
-    highRatio: primary.spec.highRatio,
-    midFlatness: primary.spec.midFlatness,
-    onsetRate: primary.tempo.onsetRate,
-    subBassRatio: primary.spec.subBassRatio,
-  },
-  key: reliableKey,
-  keyConfidence: bestKey.key.confidence,
-  keySource: reliableKey ? bestKey.source : null,
-  previews: analyses.map((a) => ({
-    bpm: a.tempo.bpm,
-    bpmConfidence: a.tempo.bpmConfidence,
-    keyConfidence: a.key.confidence,
-    source: a.source,
-  })),
-  title,
-};
-
-console.log(JSON.stringify(output, null, 2));

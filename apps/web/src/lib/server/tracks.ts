@@ -33,6 +33,7 @@ export type TrackRow = {
   label: string | null;
   log_id: string | null;
   note: string | null;
+  observation_alignment_json: string | null;
   observation_audio_url: string | null;
   observation_duration_ms: number | null;
   observation_generated_at: string | null;
@@ -77,7 +78,7 @@ const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.title, tracks.
   tracks.bpm, tracks.duration_ms, tracks.enrichment_status, tracks.features_json, tracks.in_release_id, tracks.isrc, tracks.key, tracks.label, tracks.log_id, tracks.popularity,
   tracks.preview_url, tracks.release_date, tracks.video_url, tracks.video_squared_at, tracks.video_vehicle, tracks.video_model, tracks.video_model_reasoning, tracks.note, tracks.added_at,
   tracks.updated_at, tracks.vibe_x, tracks.vibe_y, tracks.added_to_spotify, tracks.posted_to_telegram,
-  tracks.observation_audio_url, tracks.observation_duration_ms, tracks.observation_generated_at,
+  tracks.observation_audio_url, tracks.observation_duration_ms, tracks.observation_generated_at, tracks.observation_alignment_json,
   (select url from social_posts
      where track_id = tracks.track_id and platform = 'tiktok' and status = 'published'
        and url is not null
@@ -90,6 +91,56 @@ const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.title, tracks.
 /** A finite number, or undefined — for tolerant parsing of stored feature JSON. */
 function finiteOrUndefined(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * Parse the stored `observation_alignment_json` into the public caption shape
+ * (`{ words: [{ text, startMs, endMs }] }`), or undefined. An empty-words sentinel
+ * (the forced-alignment backfill stores `{ words: [] }` to mark a finding handled
+ * when the aligner found nothing) surfaces as undefined — no captions to render.
+ */
+function parseObservationAlignment(
+  json: string | null,
+): { words: { endMs: number; startMs: number; text: string }[] } | undefined {
+  if (!json) {
+    return undefined;
+  }
+
+  try {
+    const raw = JSON.parse(json) as { words?: unknown };
+
+    if (!Array.isArray(raw.words)) {
+      return undefined;
+    }
+
+    const words = raw.words.flatMap((entry) => {
+      if (typeof entry !== "object" || entry === null) {
+        return [];
+      }
+
+      const word = entry as {
+        end?: unknown;
+        endMs?: unknown;
+        start?: unknown;
+        startMs?: unknown;
+        text?: unknown;
+      };
+      const text = typeof word.text === "string" ? word.text : "";
+      const startMs = finiteOrUndefined(word.startMs);
+      const endMs = finiteOrUndefined(word.endMs);
+
+      if (!text || startMs === undefined || endMs === undefined) {
+        return [];
+      }
+
+      return [{ endMs, startMs, text }];
+    });
+
+    return words.length > 0 ? { words } : undefined;
+  } catch (error) {
+    console.warn("parseObservationAlignment: malformed observation_alignment_json column", error);
+    return undefined;
+  }
 }
 
 /** Parse the enrichment `features_json` into a typed spectral summary, or undefined. */
@@ -141,6 +192,7 @@ export function toTrackListItem(row: TrackRow): TrackListItem {
     logId: row.log_id ?? undefined,
     logPageUrl: row.log_id ? logPageUrl(row.log_id) : undefined,
     note: row.note?.trim() ? row.note : undefined,
+    observationAlignment: parseObservationAlignment(row.observation_alignment_json),
     // Version the playback URL by the render timestamp so a re-`observe`
     // (which overwrites observation.mp3 in place) re-keys the edge cache — the
     // bare URL alone HITs stale until its max-age TTL. The bare URL stays in the
@@ -182,6 +234,38 @@ export async function getTrackByIdOrLogId(idOrLogId: string): Promise<TrackListI
   const row = typedRow<TrackRow>(result.rows);
 
   return row ? toTrackListItem(row) : undefined;
+}
+
+/**
+ * Hydrate a batch of findings by their Log IDs in ONE query (no N+1), keyed by
+ * `logId` for O(1) lookup. The edition-email render holds only each finding's tiny
+ * `{ logId, why }` reference (the schema keeps it small + current), so the render
+ * resolves the live `Artist — Title` + Spotify link from here. A logId with no live
+ * finding is simply absent from the map; bound args only, never interpolated.
+ */
+export async function getTracksByLogIds(logIds: string[]): Promise<Record<string, TrackListItem>> {
+  const unique = [...new Set(logIds.filter((id) => id.trim()))];
+
+  if (unique.length === 0) {
+    return {};
+  }
+
+  const db = await getDb();
+  const placeholders = unique.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: unique,
+    sql: `select ${TRACK_SELECT} from tracks where log_id in (${placeholders})`,
+  });
+
+  const byLogId: Record<string, TrackListItem> = {};
+
+  for (const row of typedRows<TrackRow>(result.rows)) {
+    if (row.log_id) {
+      byLogId[row.log_id] = toTrackListItem(row);
+    }
+  }
+
+  return byLogId;
 }
 
 /**
@@ -528,9 +612,13 @@ export const ENRICHMENT_STATUS_FILTERS: readonly EnrichmentStatusFilter[] = [
 type ListTracksOptions = {
   cursor?: TrackCursor;
   /**
-   * Context-note presence (admin only) — the `context_track` queue's filter.
-   * `false` = `context_note IS NULL` (needs the Firecrawl facts fetched); `true`
-   * = already has them. Internal field, never surfaced; omitted for public reads.
+   * Context-fetch state (admin only) — the `context_track` queue's filter.
+   * `false` = the queue: findings still NEEDING a context fetch. Status-aware so a
+   * CONFIRMED-EMPTY fetch is not re-burned every tick: it matches `context_status`
+   * pending ∪ failed ∪ NULL (never-attempted rows that predate the column read NULL
+   * and count as pending), but NOT `empty`/`resolved`. `true` = already resolved
+   * (`context_note IS NOT NULL`). Internal field, never surfaced; omitted for
+   * public reads. Pair `false` with `retryEmptyContext` to also re-pick `empty`.
    */
   hasContext?: boolean;
   /**
@@ -540,6 +628,14 @@ type ListTracksOptions = {
    * hasObservation=false`. Omitted for public reads.
    */
   hasObservation?: boolean;
+  /**
+   * Editorial-note presence (admin only) — the auto-note queue's filter.
+   * `false` = `note IS NULL OR note = ''` (no editorial note yet — the queue);
+   * `true` = a note is on file. The note queue is `hasContext=true AND hasNote=false`
+   * (a finding with the context_note fuel but no written note yet). Omitted for
+   * public reads.
+   */
+  hasNote?: boolean;
   /** Only findings with a rendered video — the Stories feed's filter. */
   hasVideo?: boolean;
   includeMixtapes?: boolean;
@@ -555,6 +651,13 @@ type ListTracksOptions = {
    * tagging queue and its toggle. Omitted for public reads.
    */
   placement?: "placed" | "unplaced";
+  /**
+   * Widen the `hasContext=false` context queue to also re-pick CONFIRMED-EMPTY
+   * finds (`context_status = 'empty'`) — the `--retry-empty` escape hatch for when
+   * a query/source fix means a previously-hopeless find might now resolve. No
+   * effect unless `hasContext === false`. Omitted for public reads.
+   */
+  retryEmptyContext?: boolean;
   since?: string;
   /**
    * Enrichment-state filter (admin only). A bare status matches that exact
@@ -573,12 +676,14 @@ export function listTracks(options: ListTracksOptions): Promise<TrackListPage>;
 export async function listTracks({
   cursor,
   hasContext,
+  hasNote,
   hasObservation,
   hasVideo,
   includeMixtapes = false,
   limit,
   order = "desc",
   placement,
+  retryEmptyContext = false,
   since,
   status,
   until,
@@ -608,11 +713,21 @@ export async function listTracks({
     filterClauses.push("video_url is null");
   }
 
-  // The context queue: `context_note IS NULL` (facts not fetched yet).
+  // The context queue. `true` = resolved (a note is stored). `false` = the work
+  // queue: findings still needing a fetch — no note yet AND `context_status`
+  // pending/failed/NULL (NULL = never-attempted rows that predate the column), but
+  // NOT `empty` so a confirmed-empty find is not re-burned every tick. The
+  // `context_note IS NULL` guard also keeps a legacy resolved-but-unmarked row (note
+  // present, status NULL) out of the queue. `retryEmptyContext` widens it to also
+  // re-pick `empty` (the `--retry-empty` escape hatch).
   if (hasContext === true) {
     filterClauses.push("context_note is not null");
   } else if (hasContext === false) {
-    filterClauses.push("context_note is null");
+    filterClauses.push(
+      retryEmptyContext
+        ? "(context_note is null and (context_status is null or context_status in ('pending', 'failed', 'empty')))"
+        : "(context_note is null and (context_status is null or context_status in ('pending', 'failed')))",
+    );
   }
 
   // The observation queue: `observation_audio_url IS NULL` (no spoken
@@ -621,6 +736,16 @@ export async function listTracks({
     filterClauses.push("observation_audio_url is not null");
   } else if (hasObservation === false) {
     filterClauses.push("observation_audio_url is null");
+  }
+
+  // The auto-note queue: `note IS NULL OR note = ''` (no editorial note yet). Paired
+  // with hasContext=true it is the "ready to author a note" queue — a finding with
+  // the context_note fuel but an empty `note`. The empty-string guard matches the
+  // fill-empty-only semantics of note_track (a whitespace note is still empty).
+  if (hasNote === true) {
+    filterClauses.push("(note is not null and trim(note) != '')");
+  } else if (hasNote === false) {
+    filterClauses.push("(note is null or trim(note) = '')");
   }
 
   if (placement === "unplaced") {

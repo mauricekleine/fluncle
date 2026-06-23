@@ -8,13 +8,14 @@ const pageSize = 48;
 
 async function fetchAdminTracks(options: {
   hasContext?: boolean;
+  hasNote?: boolean;
   hasObservation?: boolean;
   hasVideo?: boolean;
   max: number;
   order: "asc" | "desc";
   status?: string;
 }): Promise<RecentTrack[]> {
-  const { hasContext, hasObservation, hasVideo, max, order, status } = options;
+  const { hasContext, hasNote, hasObservation, hasVideo, max, order, status } = options;
   const results: RecentTrack[] = [];
   let cursor: string | undefined;
 
@@ -27,6 +28,10 @@ async function fetchAdminTracks(options: {
 
     if (hasContext !== undefined) {
       params.set("hasContext", String(hasContext));
+    }
+
+    if (hasNote !== undefined) {
+      params.set("hasNote", String(hasNote));
     }
 
     if (hasObservation !== undefined) {
@@ -70,14 +75,25 @@ export type QueueFilters = {
 
 // The render queue: findings with no video yet, oldest first. The first row is
 // the next finding to film (oldest-first is how the backlog is worked down).
-// The optional `hasContext`/`hasObservation` filters narrow it to the observation
-// crons' queues (so a cron can ask "what still needs field notes / a voice?").
+//
+// HARD-GATED on `hasContext=true`: the queue only ever surfaces findings that
+// already carry a stored `context_note`. The video render reads that note (the
+// `Texture:` line) as creative fuel via `tracks context <id>`, and that read —
+// on a note-less finding — would TRIGGER a Firecrawl+distil (a read that writes).
+// Filming only context'd findings makes the render's context read a guaranteed
+// cached no-op, the same safety the observation queues already have. A finding's
+// video therefore waits until it's context-noted — fine: the context cron runs
+// every ~5 min, and a render with the Texture fuel is the one worth filming.
+//
+// `hasContext=true` is hard-set here (not overridable); `filters.hasContext` is
+// kept only as a no-op compatibility seam. The optional `hasObservation` filter
+// still narrows it (so a cron can ask "what's context'd but still needs a voice?").
 export async function queueCommand(
   limit: number,
   filters: QueueFilters = {},
 ): Promise<RecentTrack[]> {
   return fetchAdminTracks({
-    hasContext: filters.hasContext,
+    hasContext: true,
     hasObservation: filters.hasObservation,
     hasVideo: false,
     max: limit,
@@ -106,6 +122,18 @@ export async function observeQueueCommand(limit: number): Promise<RecentTrack[]>
   return fetchAdminTracks({
     hasContext: true,
     hasObservation: false,
+    max: limit,
+    order: "asc",
+  });
+}
+
+// The AUTO-NOTE queue: findings with the context_note fuel on file but no editorial
+// note yet (`hasContext=true AND hasNote=false`), oldest first — the `note` cron's
+// worklist (each row is a `tracks note <id> --script-file <path>` to author + post).
+export async function noteQueueCommand(limit: number): Promise<RecentTrack[]> {
+  return fetchAdminTracks({
+    hasContext: true,
+    hasNote: false,
     max: limit,
     order: "asc",
   });
@@ -181,6 +209,46 @@ export async function backfillDiscogsCommand(
   }
 
   return adminApiPost<DiscogsBackfillResult>(`/api/admin/backfill/discogs?${params.toString()}`);
+}
+
+export type AlignmentBackfillResult = {
+  // Findings whose observation got word-level caption timings this pass.
+  aligned: string[];
+  alignedCount: number;
+  dryRun: boolean;
+  // Eligible findings the aligner returned no usable words for (stored as a sentinel
+  // so they aren't re-burned), counted as handled but not "aligned".
+  empty: string[];
+  emptyCount: number;
+  failed: Array<{ error: string; logId: string }>;
+  failedCount: number;
+  // The feed cursor to resume from on the next pass, or null when the archive is
+  // drained. Each forced-alignment call runs under a small pace, so the CLI loops
+  // this until null.
+  nextCursor: string | null;
+  ok: boolean;
+};
+
+// One bounded pass of the observation-caption alignment backfill via the admin API —
+// the Worker force-aligns each eligible finding's EXISTING observation mp3 to its
+// stored script (no re-render, no second voice spend) and writes the word timings.
+// Idempotent: a finding that already has alignment is skipped. `--dry-run` reports
+// the eligible set without aligning or writing. Pass the prior pass's `nextCursor`
+// to resume; the CLI loops until it comes back null.
+export async function backfillAlignmentCommand(
+  limit: number,
+  dryRun: boolean,
+  cursor?: string,
+): Promise<AlignmentBackfillResult> {
+  const params = new URLSearchParams({ dryRun: String(dryRun), limit: String(limit) });
+
+  if (cursor) {
+    params.set("cursor", cursor);
+  }
+
+  return adminApiPost<AlignmentBackfillResult>(
+    `/api/admin/backfill/alignment?${params.toString()}`,
+  );
 }
 
 export type VehicleEntry = {

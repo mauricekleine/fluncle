@@ -260,3 +260,33 @@ All 6 pass both hard gates (beat-pull <0.16 + flash safe) and the motion lint (n
 - **The beat-grid metric needs a localized + envelope-aware read** before it can certify aliveness — it frame-averages, so an off-centre bloom (caustic bloom) and a sustained roller (starling murmuration) both read flat despite visible reactivity. Beat-pull + the lint + the eye remain the reliable trio.
 - Only 2 not-yet-posted beat-having findings remain in the recent pool (the well is nearly dry for swappable beat clips); future rounds may need newer findings or posted tracks.
 - The `lint:composition` is ready to wire into the render workflow as an author-time gate (it caught both round-2 jumpers); consider adding it to the skill's Gates step.
+
+---
+
+## Final reviewer note (heartbeat, 2026-06-23 ~19:35) — round 3 closeout
+
+Independently re-ran the gate in the worktree: **typecheck 0 · oxlint 0 · bun test all 9 files green** (incl. the new `motion-lint` and `beat-grid reactivity` tests). The Phase-A fold-in (`5e1c72d`) is real and verified: doctrine (global-vs-internal + the two jumper failure-modes + the prized structural-arc), the static `lint:composition` (validated catching BOTH round-2 jumpers at author time — the concrete win), the beat-grid-aligned coupling (advisory — still frame-averages, can't see off-centre blooms / sustained rollers), the judge motion-montage, and beat-pull 0.17→0.16 (validated: cleanly separates the 3 jumpers ≥0.16 from all 8 alive <0.16 across the 12-clip corpus).
+
+**Correction to my earlier "judge neutral-to-worse" read:** with the vehicle held constant, the judge's edits are actually _in the right spirit_ (sharpen the climax, add the arc, raise reactivity), grounded in metric keys, gate-safe (no pivot, beat-pull still <0.16, lint clean), and on terrain ridge produced a _measured_ reactivity gain (beatGridCoupling 0.026→0.057, pictureActivity 2.01→2.71). The beat-pull rise there (0.057→0.144) is "more reactive, still safe," not a regression. So the judge is NOT a clear dead-end — but the beat-grid metric can't certify it (mixed deltas; blind to localized/sustained reactivity), so the **operator's eye on the 3 same-vehicle pairs is the clean decider** the round-2 confound blocked.
+
+Grain (operator-requested audit, folded in): the kit has ONE grain helper `GLSL.filmGrain` whose only real knob is `intensity`; size(1px)/boil(24Hz)/clump(~22px)/luminance-shape/noise-basis/monochrome/isotropic are all HARDCODED, and 13/13 shipped comps invoke it identically → the predictable "same grain." Fix (no code yet): expose grain scale/anisotropy/seed/color knobs + a grain-helper family + a diversity rule (analogous to vehicle diversity).
+
+Heartbeat stood down — round 3 complete (fold-in committed + gate-green; 6 same-vehicle clips for labeling).
+
+---
+
+## OPERATOR LABELS on the same-vehicle pairs (2026-06-23) — the decisive judge verdict
+
+The clean A/B (vehicle held constant, only the judge's edits differ), operator's eye as arbiter:
+
+| Pair (one vehicle)              | no-judge                                                                                                      | judge                                                             | judge effect   |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | -------------- |
+| 019.1.7X · caustic bloom        | ALIVE (beautiful; internal everything moves/transforms; vehicle slowly passes; steady beat, clean, no strobe) | "no notable differences — exactly the same"                       | **NONE**       |
+| 012.2.4L · terrain ridge        | ALIVE (the horizon effect is stunning)                                                                        | "noticeable difference, but towards more JITTERY — a degradation" | **WORSE**      |
+| 020.1.1A · starling murmuration | ALIVE (steady progression, aliveness inside)                                                                  | "slightly more alive but barely noticeable, no real value-add"    | **NEGLIGIBLE** |
+
+**Verdict: 0 improvements, 1 degradation, 2 neutral. With the confound removed, the judge does NOT earn its keep for aliveness — and on terrain ridge actively hurt (more jitter).** Note: the agent's metric had reported terrain-ridge's judge edit as a "measured reactivity gain" (beatGridCoupling 0.026→0.057) — the eye calls that same edit "jitter." So even the new beat-grid metric rewards the wrong thing; the metric's "more reactive" = the human's "jittery." Across 3 rounds / 18 clips the metrics AND the judge consistently pointed against the operator's eye; the eye was the only reliable signal. **DECISION: the WIN is the pipeline (Part I dials + the global-vs-internal doctrine + the author-time lint) — all 3 no-judge beat renders are alive. Drop the judge for aliveness; do NOT deploy Part II to chase it. (A narrow brand/safety-checker role is a separate, lower-priority question.)**
+
+## GRAIN — a second decisive operator finding
+
+On an EXTERNAL monitor (which renders the grain less heavily), `019.1.7X` looks BETTER — more electric, more pop — than on the Macbook screen where the grain shows fully. **The grain is actively reducing the pop on this composition.** This confirms the grain is over-applied/over-fixed and that loosening grain controls is right — and crucially that the knob must include AMOUNT (some compositions want much LESS grain, or none), not only texture variety. Challenges the "grain on every frame, always" reading of the Light-Years Rule: grain amount should be composition-led.

@@ -9,10 +9,9 @@ import {
 } from "react";
 import { StoryView } from "@/components/stories/story-view";
 import { Button } from "@/components/ui/button";
+import { storyProgress } from "@/lib/story-progress";
 import { type Track } from "@/lib/tracks";
 
-// A story with no playable clip runs on this timer instead of the clip's clock.
-const fallbackDurationMs = 8_000;
 const swipeThresholdPx = 60;
 const tapMaxMs = 300;
 const tapMaxDriftPx = 10;
@@ -70,6 +69,9 @@ export function StoriesPlayer({
   indexRef.current = index;
   const reducedMotionRef = useRef(false);
   const fillRef = useRef<HTMLSpanElement | null>(null);
+  // The progress strip, so a story switch can clear a stale loading shimmer off
+  // whichever segment was carrying it.
+  const progressRef = useRef<HTMLDivElement | null>(null);
   // The active story's <video> — the clip clock; null for a cover-only story.
   const activeVideoRef = useRef<HTMLVideoElement | null>(null);
   // The fallback timer clock (clip-less stories): accumulated ms plus the
@@ -144,6 +146,11 @@ export function StoriesPlayer({
     timerAccumulatedRef.current = 0;
     timerStartedAtRef.current = isPausedRef.current ? undefined : performance.now();
     fillRef.current?.style.setProperty("transform", "scaleX(0)");
+    // Drop any loading shimmer left on the segment we just stepped off; the tick
+    // re-applies it to the new active segment if its clip is still loading.
+    progressRef.current
+      ?.querySelectorAll(".stories-segment.is-loading")
+      .forEach((segment) => segment.classList.remove("is-loading"));
   }, [index, track]);
 
   // Hold / space pause freezes the clip-less timer clock; the clip itself
@@ -167,26 +174,32 @@ export function StoriesPlayer({
 
     const tick = () => {
       const video = activeVideoRef.current;
-      let progress: number;
-      let finished: boolean;
+      const running =
+        timerStartedAtRef.current === undefined ? 0 : performance.now() - timerStartedAtRef.current;
 
-      if (video && Number.isFinite(video.duration) && video.duration > 0) {
-        progress = video.currentTime / video.duration;
-        finished = video.ended || progress >= 0.999;
-      } else {
-        const running =
-          timerStartedAtRef.current === undefined
-            ? 0
-            : performance.now() - timerStartedAtRef.current;
+      // A clip-bearing story clocks (and gates) on its clip; a cover-only story
+      // runs the fallback timer. The gate holds a still-loading clip at 0 and
+      // reports `loading` so the bar can't finish (and auto-advance) over a
+      // frozen poster.
+      const verdict = storyProgress({
+        currentTime: video?.currentTime ?? 0,
+        duration: video?.duration ?? NaN,
+        fallbackElapsedMs: timerAccumulatedRef.current + running,
+        hasClip: video !== null,
+        readyState: video?.readyState ?? 0,
+      });
 
-        progress = (timerAccumulatedRef.current + running) / fallbackDurationMs;
-        finished = progress >= 1;
+      const fill = fillRef.current;
+
+      if (fill) {
+        fill.style.setProperty("transform", `scaleX(${verdict.progress})`);
+        // While the clip loads, shimmer this segment (a static dimmed sweep
+        // under reduced motion — handled in CSS). Toggled imperatively to match
+        // the no-re-render progress write above.
+        fill.parentElement?.classList.toggle("is-loading", verdict.loading);
       }
 
-      progress = Math.min(1, progress);
-      fillRef.current?.style.setProperty("transform", `scaleX(${progress})`);
-
-      if (finished && !reducedMotionRef.current && !isPausedRef.current) {
+      if (verdict.finished && !reducedMotionRef.current && !isPausedRef.current) {
         if (indexRef.current < tracks.length - 1) {
           goTo(indexRef.current + 1);
         } else if (!endedRef.current) {
@@ -381,7 +394,7 @@ export function StoriesPlayer({
         </div>
 
         <header className="stories-chrome">
-          <div aria-hidden="true" className="stories-progress">
+          <div aria-hidden="true" className="stories-progress" ref={progressRef}>
             {tracks.map((storyTrack, storyIndex) => (
               <span className="stories-segment" key={storyTrack.trackId}>
                 {/* Past = full, current = animated (fillRef), future = empty.

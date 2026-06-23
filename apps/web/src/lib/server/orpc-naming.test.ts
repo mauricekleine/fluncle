@@ -51,6 +51,9 @@ const APPROVED_VERBS = new Set<string>([
   "draft",
   "enrich",
   "finalize",
+  // `note` (auto-author a finding's editorial note) — the written-note sibling of
+  // `observe`/`context`, same verb-as-action shape ("note this finding").
+  "note",
   "observe",
   "render",
   // Concrete actions already in the live registry the prose set doesn't spell out

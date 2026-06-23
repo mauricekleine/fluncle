@@ -18,6 +18,7 @@ import { Vibrant } from "node-vibrant/node";
 import { paletteMix } from "../remotion/palette-mix";
 import { type CosmosAspect, type NostalgicCosmosProps } from "../remotion/types";
 import { analyzeAudio } from "./analyze-audio";
+import { readContextNote } from "./context-note";
 import { downloadPreview } from "./download-preview";
 import { fetchTrack } from "./fetch-track";
 import { resolvePreview } from "./resolve-preview";
@@ -135,6 +136,23 @@ async function main(): Promise<void> {
   console.log(`[social-preview] fetching track ${trackId}`);
   const track = await fetchTrack(trackId);
   console.log(`[social-preview] track: "${track.title}" by ${track.artists.join(", ")}`);
+
+  // Surface the finding's distilled context_note as CREATIVE FUEL (direction only,
+  // NEVER on-screen text — on-screen facts stay Spotify-sourced). The note is
+  // internal (admin-gated), so we read it via the CLI exactly as the observe sweep
+  // does (`fluncle admin tracks context <id> --json`, no re-fetch). Best-effort:
+  // a missing CLI or an un-context'd finding degrades to no fuel, like `features`.
+  const context = readContextNote(track.logId ?? trackId);
+  if (context) {
+    track.contextNote = context.contextNote;
+    track.texture = context.texture;
+    console.log(
+      `[social-preview] context note: ${context.contextNote.length} chars` +
+        (context.texture.length > 0 ? `, texture: ${context.texture.join(", ")}` : ""),
+    );
+  } else {
+    console.log(`[social-preview] no context note on file (creative fuel: features only)`);
+  }
 
   console.log(`[social-preview] resolving preview`);
   const preview = await resolvePreview({ artists: track.artists, title: track.title });

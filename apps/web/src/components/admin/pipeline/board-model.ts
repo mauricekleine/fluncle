@@ -109,19 +109,22 @@ export type BoardProps = {
   actions: BoardActions;
 };
 
-// The canonical order + identity of every step. Lifecycle-ish (rough, not fixed),
-// agents first then your hands, in the order each group's work tends to land. The
-// Last.fm love is automated (an agent loves the track once it's added), so it sits
-// among the agents, right after the enrichment it rides along with.
+// The canonical order + identity of every step. Agents first, then your hands.
+// Within agents the order reads as the pipeline settles: the catalogue links
+// (Last.fm, Discogs), then the per-finding chain Enrich → Context → Note →
+// Observation → Video. NOTE sits among the agents in anticipation of auto-drafted
+// notes (the _Auto-drafted finding notes_ slice); until that lands it is still
+// operator-written, but it lives among the agents it will join. Within your hands:
+// Tag, then the social pushes, then the mixtape.
 const STEP_DEFS: { key: StepKey; kind: StepKind; label: string; Icon: StepIcon }[] = [
-  { Icon: WaveformIcon, key: "enrich", kind: "auto", label: "Enrich" },
   { Icon: HeartIcon, key: "lastfm", kind: "auto", label: "Last.fm" },
   { Icon: VinylRecordIcon, key: "discogs", kind: "auto", label: "Discogs" },
-  { Icon: FilmSlateIcon, key: "video", kind: "auto", label: "Video" },
+  { Icon: WaveformIcon, key: "enrich", kind: "auto", label: "Enrich" },
   { Icon: FileTextIcon, key: "context", kind: "auto", label: "Context" },
+  { Icon: NotePencilIcon, key: "note", kind: "auto", label: "Note" },
   { Icon: MicrophoneIcon, key: "observation", kind: "auto", label: "Observation" },
+  { Icon: FilmSlateIcon, key: "video", kind: "auto", label: "Video" },
   { Icon: CrosshairIcon, key: "tag", kind: "human", label: "Tag" },
-  { Icon: NotePencilIcon, key: "note", kind: "human", label: "Note" },
   { Icon: YoutubeIcon, key: "youtube", kind: "human", label: "YouTube" },
   { Icon: TiktokIcon, key: "tiktok", kind: "human", label: "TikTok" },
   { Icon: CassetteTapeIcon, key: "mixtape", kind: "human", label: "Mixtape" },
@@ -199,12 +202,26 @@ export function boardSteps(row: BoardRow): BoardStep[] {
       statusLabel: row.hasContextNote ? "Context" : "No context",
     },
     discogs: {
-      // No manual trigger — the agent resolves the release; clicking opens the link.
+      // The board is a WORKFLOW tracker, not a data-existence tracker. The Discogs
+      // backfill ran-but-found-no-release is a SUCCESS (the workflow checked, there
+      // just was no Discogs release to link) — so the cell closes `done` the moment
+      // the backfill RAN (`discogsRan`, the `backfill_discogs_attempted_at` stamp),
+      // whether or not it linked a release. Grey/`open` means ONE thing: not run yet.
+      // No manual trigger — the agent resolves the release; clicking opens the link
+      // (still only actionable when there's a release to open).
       actionable: Boolean(row.discogsReleaseUrl),
       gated: false,
-      hint: row.discogsReleaseUrl ? "Open the Discogs release" : "No Discogs release linked yet",
-      state: row.discogsReleaseUrl ? "done" : "open",
-      statusLabel: row.discogsReleaseUrl ? "Linked" : "No release",
+      hint: row.discogsReleaseUrl
+        ? "Open the Discogs release"
+        : row.discogsRan
+          ? "Checked — no Discogs release found"
+          : "Discogs lookup hasn't run yet",
+      state: row.discogsRan ? "done" : "open",
+      statusLabel: row.discogsReleaseUrl
+        ? "Linked"
+        : row.discogsRan
+          ? "Checked — no release"
+          : "Pending",
     },
     enrich: {
       actionable: true,
@@ -224,15 +241,21 @@ export function boardSteps(row: BoardRow): BoardStep[] {
             : "Enrich",
     },
     lastfm: {
-      // The Last.fm love runs on its own (the publish fan-out loves on add; the
-      // backfill loves older findings) — no board click. `lastfmLoved` is the
-      // presence of `backfill_lastfm_done_at`, the same stamp a successful love
-      // writes, so the heart tracks the real loved-status, not a guess.
+      // Same workflow-tracker rule as Discogs. The Last.fm love runs on its own (the
+      // publish fan-out loves on add; the backfill loves older findings) — no board
+      // click. The cell closes `done` the moment the backfill RAN (`lastfmRan`, the
+      // `backfill_lastfm_attempted_at` stamp), whether or not the love landed; grey/
+      // `open` means only "not run yet". `lastfmLoved` (the `backfill_lastfm_done_at`
+      // stamp a successful `track.love` writes) only refines the label.
       actionable: false,
       gated: false,
-      hint: row.lastfmLoved ? "Loved on Last.fm" : "Not loved on Last.fm yet",
-      state: row.lastfmLoved ? "done" : "open",
-      statusLabel: row.lastfmLoved ? "Loved" : "Love",
+      hint: row.lastfmLoved
+        ? "Loved on Last.fm"
+        : row.lastfmRan
+          ? "Checked — not loved on Last.fm"
+          : "Last.fm love hasn't run yet",
+      state: row.lastfmRan ? "done" : "open",
+      statusLabel: row.lastfmLoved ? "Loved" : row.lastfmRan ? "Checked — not loved" : "Pending",
     },
     mixtape: {
       actionable: true,
@@ -242,11 +265,21 @@ export function boardSteps(row: BoardRow): BoardStep[] {
       statusLabel: onTape ? "On a tape" : inDraftTape ? "In a draft" : "Add",
     },
     note: {
+      // An `auto` step (the auto-note cron authors it) that stays `actionable` so the
+      // operator can still hand-write or override. `done` = a note exists (the
+      // deliverable — auto-authored OR operator-typed); `noteRan`
+      // (`backfill_note_attempted_at`) refines the grey state so a finding the cron
+      // visited but couldn't fill reads "Checked — no note" rather than a bare "Note".
+      // The operator override always wins: note_track fills an EMPTY note only.
       actionable: true,
       gated: false,
-      hint: "The finding's note — shows on its log page",
+      hint: note
+        ? "The finding's note — shows on its log page"
+        : row.noteRan
+          ? "Auto-note ran — no note yet; write one"
+          : "No note yet — write one, or the auto-note cron will",
       state: note ? "done" : "open",
-      statusLabel: note ? "Noted" : "Note",
+      statusLabel: note ? "Noted" : row.noteRan ? "Checked — no note" : "Note",
     },
     observation: {
       actionable: true,

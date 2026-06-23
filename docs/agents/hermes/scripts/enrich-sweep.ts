@@ -61,6 +61,7 @@ type QueueFinding = {
 
 type AnalyzeOutput = {
   bpm: number | null;
+  bpmSource: string | null;
   features: Record<string, unknown>;
   key: string | null;
 };
@@ -179,7 +180,11 @@ function enrichOne(finding: QueueFinding): Outcome {
   updateArgs.push("--status", "done");
 
   fluncleJson(updateArgs);
-  log(`${trackId}: done (bpm ${parsed.bpm ?? "null"}, key ${parsed.key ?? "null"})`);
+  // Surface the BPM provenance so a fallback BPM is distinguishable in cron logs
+  // (e.g. `via acousticbrainz` when the preview was beatless and the structured
+  // ISRC fallback supplied the tempo).
+  const bpmVia = parsed.bpm !== null && parsed.bpmSource ? ` via ${parsed.bpmSource}` : "";
+  log(`${trackId}: done (bpm ${parsed.bpm ?? "null"}${bpmVia}, key ${parsed.key ?? "null"})`);
 
   return "done";
 }

@@ -8,8 +8,16 @@
 //     cron persists the draft and reads back its own unsent draft from a fresh session).
 //   - `send_edition` — operator tier (`adminAuth` + `operatorGuard`): the explicit
 //     human gate. A valid agent token gets a 403.
+//   - `delete_edition` — operator tier (same as send): the hard delete that pulls an
+//     edition (drafts AND sent) from the archive. A valid agent token gets a 403.
 
-import { createEdition, listEditions, sendEdition, updateEdition } from "../editions";
+import {
+  createEdition,
+  deleteEdition,
+  listEditions,
+  sendEdition,
+  updateEdition,
+} from "../editions";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { apiFault, type Implementer } from "./_shared";
 
@@ -66,8 +74,25 @@ export function adminEditionsHandlers(os: Implementer) {
       }
     });
 
+  // DELETE /admin/newsletter/editions/{id} — OPERATOR tier. The hard delete that
+  // reaches a SENT edition too (pulling a sent test edition from the public archive
+  // is the point). Removes only the row; the already-sent broadcast is untouched.
+  const deleteEditionHandler = os.delete_edition
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const { id } = await deleteEdition(input.id);
+
+        return { id, ok: true as const };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   return {
     create_edition: createEditionHandler,
+    delete_edition: deleteEditionHandler,
     list_editions_admin: listEditionsAdminHandler,
     send_edition: sendEditionHandler,
     update_edition: updateEditionHandler,

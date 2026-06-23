@@ -44,6 +44,10 @@ const PENDING = "__pending__" as const;
 // for future admin routes (a new route lands here as PENDING until it converts).
 const ADMIN_ROUTE_OPS: Record<string, string> = {
   "DELETE /admin/mixtapes/{mixtapeId}": "delete_mixtape",
+  // The newsletter edition delete — contract-only oRPC (no TanStack route file).
+  // Operator tier: a hard delete that reaches a SENT edition too (pulling a sent
+  // test edition from the public archive); the agent token 403s.
+  "DELETE /admin/newsletter/editions/{id}": "delete_edition",
   "GET /admin/lastfm/auth/start": "start_lastfm_auth",
   "GET /admin/mixtapes": "list_mixtapes_admin",
   "GET /admin/mixtapes/{mixtapeId}/social": "get_mixtape_social",
@@ -64,6 +68,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "PATCH /admin/newsletter/editions/{id}": "update_edition",
   "PATCH /admin/tracks/{trackId}": "update_track",
   "PATCH /admin/tracks/{trackId}/social/{platform}": "update_track_social",
+  "POST /admin/backfill/alignment": "backfill_alignment",
   "POST /admin/backfill/discogs": "backfill_discogs",
   "POST /admin/backfill/lastfm": "backfill_lastfm",
   "POST /admin/lastfm/auth/session": "exchange_lastfm_session",
@@ -89,6 +94,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // (oRPC owns the path directly), so it lives here as a path→op entry without a
   // `tracks.$trackId.context.ts` route file.
   "POST /admin/tracks/{trackId}/context": "context_track",
+  // note_track (the auto-note authoring step) is contract-only oRPC like context_track
+  // — no TanStack route file; oRPC owns the path directly.
+  "POST /admin/tracks/{trackId}/note": "note_track",
   "POST /admin/tracks/{trackId}/observe": "observe_track",
   "POST /admin/tracks/{trackId}/social/{platform}/draft": "draft_track_social",
   "POST /admin/tracks/{trackId}/video/finalize": "finalize_track_video",
@@ -176,6 +184,7 @@ describe("oRPC admin-route contract coverage", () => {
   it("converts the pilot's `admin-tracks` set (update/observe/video presign+finalize)", () => {
     const expected = [
       "finalize_track_video",
+      "note_track",
       "observe_track",
       "presign_track_video_uploads",
       "update_track",

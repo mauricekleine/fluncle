@@ -7,6 +7,9 @@
 //     AGENT-ALLOWED. The Friday agent authors + persists the draft.
 //   - `send_edition` — operator tier (`adminAuth` + `operatorGuard`): the send is
 //     the human gate (the old Loops dashboard tap). A valid agent token gets a 403.
+//   - `delete_edition` — operator tier (same tier as send): a HARD delete that
+//     reaches a SENT edition too (the one case that needs pulling from the public
+//     archive). A valid agent token gets a 403.
 //
 // Mutating bodies stay LOOSE/passthrough — the server `editions` module validates
 // and throws its own codes, so the contract must not pre-reject.
@@ -91,9 +94,30 @@ export const sendEdition = oc
   .input(z.looseObject({ id: z.string(), scheduledAt: z.unknown().optional() }))
   .output(EditionEnvelope);
 
+/**
+ * `delete_edition` → `DELETE /admin/newsletter/editions/{id}` (operationId
+ * `deleteEdition`).
+ *
+ * OPERATOR tier (same as `send_edition`) — a valid agent token gets a 403. A HARD
+ * delete that reaches ANY status INCLUDING `sent`: pulling a sent test edition from
+ * the public archive is the whole point. Removes only the DB row (the already-sent
+ * Resend broadcast is untouched). Returns the deleted id in `{ id, ok }`.
+ */
+export const deleteEdition = oc
+  .route({
+    method: "DELETE",
+    operationId: "deleteEdition",
+    path: "/admin/newsletter/editions/{id}",
+    summary: "Delete a newsletter edition (any status, including sent)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ id: z.string() }))
+  .output(z.object({ id: z.string(), ok: z.literal(true) }));
+
 /** The `admin-editions` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminEditionsContract = {
   create_edition: createEdition,
+  delete_edition: deleteEdition,
   list_editions_admin: listEditionsAdmin,
   send_edition: sendEdition,
   update_edition: updateEdition,

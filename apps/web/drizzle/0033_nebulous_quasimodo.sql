@@ -1,0 +1,1 @@
+ALTER TABLE `tracks` ADD `observation_alignment_json` text;

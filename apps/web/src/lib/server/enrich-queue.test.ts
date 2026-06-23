@@ -204,9 +204,28 @@ describe("listTracks hasContext / hasObservation filters (the observation queues
     return listCall.sql;
   }
 
-  it("the context queue (hasContext=false) filters `context_note is null`", async () => {
+  it("the context queue (hasContext=false) is status-aware: no note + pending/failed/NULL, not empty", async () => {
     await listTracks({ hasContext: false, limit: 50 });
-    expect(lastListSql()).toContain("context_note is null");
+    const sql = lastListSql();
+    // No note yet AND never-attempted (NULL, predating the column) ∪ pending ∪ failed
+    // — a confirmed `empty` find is excluded so the cron does not re-burn it every tick.
+    expect(sql).toContain(
+      "context_note is null and (context_status is null or context_status in ('pending', 'failed'))",
+    );
+    expect(sql).not.toContain("'empty'");
+  });
+
+  it("hasContext=false with retryEmptyContext widens the queue to also re-pick `empty`", async () => {
+    await listTracks({ hasContext: false, limit: 50, retryEmptyContext: true });
+    const sql = lastListSql();
+    expect(sql).toContain(
+      "context_note is null and (context_status is null or context_status in ('pending', 'failed', 'empty'))",
+    );
+  });
+
+  it("retryEmptyContext has no effect without hasContext=false", async () => {
+    await listTracks({ limit: 50, retryEmptyContext: true });
+    expect(lastListSql()).not.toContain("context_status");
   });
 
   it("hasContext=true filters `context_note is not null`", async () => {

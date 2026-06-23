@@ -12,6 +12,14 @@ import { type TrackListItem } from "@/lib/server/tracks";
 
 /** A page row: a finding plus its per-platform posts and mixtape memberships. */
 export type BoardRow = TrackListItem & {
+  // Whether the Discogs backfill has RUN for this finding — the presence of
+  // `backfill_discogs_attempted_at`, stamped on every real attempt (a resolve OR a
+  // clean no-match). The board's Discogs cell is a WORKFLOW tracker: `done` once it
+  // ran (whether or not it linked a release), grey only while it's never run. Paired
+  // with `discogsReleaseUrl` to tell "Linked" from "Checked — no release". Pulled
+  // through the admin-only board path (reliability columns never ride the public
+  // `TrackListItem` contract).
+  discogsRan: boolean;
   // Whether the finding carries an internal `context_note` (the firecrawl-derived
   // facts that fuel the observation script). Pulled through the admin-only board
   // path, never the public `TrackListItem` contract — see observation-board.ts.
@@ -21,7 +29,19 @@ export type BoardRow = TrackListItem & {
   // successful `track.love`. Pulled through the admin-only board path (the
   // backfill-reliability columns never ride the public `TrackListItem` contract).
   lastfmLoved: boolean;
+  // Whether the Last.fm backfill has RUN for this finding — the presence of
+  // `backfill_lastfm_attempted_at`, stamped on every real attempt. Like Discogs, the
+  // Last.fm cell is a workflow tracker: `done` once it ran, grey only while it's
+  // never run; paired with `lastfmLoved` to tell "Loved" from "Checked — not loved".
+  lastfmRan: boolean;
   mixtapes: MixtapeMembership[];
+  // Whether the auto-note authoring has RUN for this finding — the presence of
+  // `backfill_note_attempted_at`, stamped on every authoring attempt by `note_track`.
+  // Like Discogs/Last.fm the Note cell is a workflow tracker: `done` once a note
+  // exists, grey only while none does (the cron hasn't authored one and the operator
+  // hasn't typed one). Pulled through the admin-only board path, never the public
+  // `TrackListItem` contract.
+  noteRan: boolean;
   posts: SocialPostItem[];
 };
 export type BoardPage = { nextCursor?: string; totalCount: number; tracks: BoardRow[] };

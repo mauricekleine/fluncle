@@ -154,7 +154,7 @@ export async function sendEdition(
     throw new ApiError("missing_subject", "An edition needs a subject before it can be sent", 409);
   }
 
-  const html = renderEditionEmailHtml(draft);
+  const html = await renderEditionEmailHtml(draft);
 
   const broadcast = await createBroadcast({
     editionId: id,
@@ -204,6 +204,31 @@ export async function sendEdition(
   }
 
   return getEditionById(id, { includeDrafts: true });
+}
+
+/**
+ * HARD-delete an edition row by id, at ANY status — drafts AND sent. Unlike
+ * `updateEdition` (which freezes a sent back-issue), delete must reach a sent
+ * edition: a test edition that already went out is exactly what the operator needs
+ * to pull from the public archive. This removes ONLY the DB row — the Resend
+ * broadcast it sent is already gone and is not touched. A deleted `number` leaves
+ * a gap in the sequence; that's fine (the public archive reads by number, and a
+ * missing one 404s gracefully via `getEditionByNumber`). Operator-tier only.
+ */
+export async function deleteEdition(id: string): Promise<{ id: string }> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [id],
+    sql: `delete from editions where id = ? returning id`,
+  });
+
+  const row = typedRow<{ id: string }>(result.rows);
+
+  if (!row) {
+    throw new ApiError("edition_not_found", "Edition not found", 404);
+  }
+
+  return { id: row.id };
 }
 
 // ── Reads ─────────────────────────────────────────────────────────────────────

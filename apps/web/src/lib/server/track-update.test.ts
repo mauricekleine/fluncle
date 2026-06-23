@@ -64,6 +64,13 @@ describe("updateTrack — the visible-field lastmod bump", () => {
     expect(lastUpdateSql).not.toContain("updated_at = ?");
   });
 
+  it("does NOT bump updated_at for an observation_script-only write (internal transcript)", async () => {
+    await updateTrack("track-123", { observationScript: "The name made me pause…" });
+
+    expect(lastUpdateSql).toContain("observation_script = ?");
+    expect(lastUpdateSql).not.toContain("updated_at = ?");
+  });
+
   it("bumps updated_at for an editorial note write (public copy)", async () => {
     await updateTrack("track-123", { note: "Knees up the second it dropped." });
 
@@ -177,6 +184,7 @@ describe("updateTrack — empty-string clears to null (not stored as '')", () =>
     [
       { column: "video_url = ?", field: "videoUrl" },
       { column: "observation_audio_url = ?", field: "observationAudioUrl" },
+      { column: "observation_script = ?", field: "observationScript" },
       { column: "video_squared_at = ?", field: "videoSquaredAt" },
     ];
 

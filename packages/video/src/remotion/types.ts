@@ -33,6 +33,24 @@ export type CosmosTrack = {
    */
   releaseDate?: string;
   /**
+   * The finding's distilled `context_note` (firecrawl FACTS → a small LLM): 1–2
+   * dry paragraphs of scene/label/release context, ending in a `Texture:` line.
+   * CREATIVE FUEL — direction only, NEVER rendered as on-screen text (on-screen
+   * facts stay Spotify-sourced; see the fluncle-video skill §"Metadata must
+   * visibly matter"). Where `features` says HOW the track sounds, this says WHAT
+   * it evokes. Internal (admin-gated) — read via `fluncle admin tracks context`,
+   * not the public API. Absent until the track is context'd, so treat it as
+   * optional and degrade gracefully (like `features`).
+   */
+  contextNote?: string;
+  /**
+   * The pointers parsed out of the context note's trailing `Texture:` line — the
+   * most direct creative fuel (e.g. ["orchestrated", "layered", "atmospheric
+   * depth"]). Steers the vehicle, texture family, palette lean, and scene concept;
+   * it INFORMS, never templates. Empty/absent when there is no context note.
+   */
+  texture?: string[];
+  /**
    * Enrichment's track-level spectral summary (creative fuel — steers the
    * vehicle, texture, and which band drives what; NOT per-frame reactivity, that
    * is the audio analysis). Absent until the track is enriched.

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createEdition,
+  deleteEdition,
   getEditionByNumber,
   listEditions,
   sendEdition,
@@ -22,6 +23,13 @@ const execute = vi.hoisted(() =>
     // SELECT returns the current row state below.
     if (query.sql.startsWith("insert into editions") || query.sql.startsWith("update editions")) {
       return { rows: [] };
+    }
+
+    // The hard delete — `returning id`. A present row yields its id (no status
+    // filter: delete reaches sent editions too); an absent one yields nothing so
+    // the server throws not-found.
+    if (query.sql.startsWith("delete from editions")) {
+      return { rows: state.row.id ? [{ id: state.row.id }] : [] };
     }
 
     // A read (EDITION_SELECT). For the sent-only filter, return nothing if the row
@@ -163,6 +171,30 @@ describe("sendEdition — mint-on-send + Resend broadcast", () => {
 
     await expect(sendEdition("edition-id")).rejects.toThrow(/subject/i);
     expect(createBroadcast).not.toHaveBeenCalled();
+  });
+});
+
+describe("deleteEdition — hard delete at any status", () => {
+  beforeEach(() => {
+    execute.mockClear();
+  });
+
+  it("deletes a draft and returns its id", async () => {
+    seedDraft({ number: null, status: "draft" });
+
+    await expect(deleteEdition("edition-id")).resolves.toEqual({ id: "edition-id" });
+  });
+
+  it("deletes a SENT edition too (no frozen guard — pulls it from the archive)", async () => {
+    seedDraft({ number: 1, status: "sent" });
+
+    await expect(deleteEdition("edition-id")).resolves.toEqual({ id: "edition-id" });
+  });
+
+  it("throws not-found when the row is absent", async () => {
+    seedDraft({ id: "" });
+
+    await expect(deleteEdition("missing-id")).rejects.toThrow(/not found/i);
   });
 });
 

@@ -34,8 +34,8 @@ type AdminQueueOptions = AdminListOptions & {
   hasObservation?: boolean;
 };
 
-// A verb whose worklist is a `--queue` view flag (`tracks enrich|observe|context
-// --queue`): the worklist runners read `json`/`limit` off it (AdminListOptions).
+// A verb whose worklist is a `--queue` view flag (`tracks enrich|observe|context|
+// note --queue`): the worklist runners read `json`/`limit` off it (AdminListOptions).
 type AdminQueueViewOptions = AdminListOptions & {
   queue?: boolean;
 };
@@ -121,6 +121,15 @@ type TrackContextOptions = {
   limit?: string;
   query?: string;
   queue?: boolean;
+  refresh?: boolean;
+};
+
+type TrackNoteOptions = {
+  json: boolean;
+  limit?: string;
+  queue?: boolean;
+  script?: string;
+  scriptFile?: string;
 };
 
 type PreviewArchiveBackfillOptions = {
@@ -419,13 +428,16 @@ function addAdminCommands(program: Command): void {
       await runAdd(spotifyUrl, options, addCommand);
     });
 
-  // The video render queue. `--has-context`/`--has-observation` narrow it to the
-  // observation crons' queues (which findings still need field notes / a voice).
+  // The video render queue. It is HARD-GATED on `hasContext=true`: it only ever
+  // surfaces findings that already carry a stored context note, so the render's
+  // context read is a guaranteed cached no-op (never a Firecrawl trigger). The
+  // `--has-context` flag is therefore always-on here and kept only for back-compat;
+  // `--has-observation` still narrows it to the already-voiced subset.
   adminTracks
     .command("queue")
     .description("Findings awaiting a video, oldest first (the next to film is first)")
     .option("--limit <limit>", "Number of findings to show", "10")
-    .option("--has-context", "Only findings whose field notes are already gathered")
+    .option("--has-context", "No-op: the render queue is always context-gated")
     .option("--has-observation", "Only findings that already have a spoken observation")
     .option("--json", "Print JSON", false)
     .action(async (options: AdminQueueOptions) => {
@@ -437,7 +449,7 @@ function addAdminCommands(program: Command): void {
     .command("queue", { hidden: true })
     .description("Render queue (alias of `admin tracks queue`)")
     .option("--limit <limit>", "Number of findings to show", "10")
-    .option("--has-context", "Only findings whose field notes are already gathered")
+    .option("--has-context", "No-op: the render queue is always context-gated")
     .option("--has-observation", "Only findings that already have a spoken observation")
     .option("--json", "Print JSON", false)
     .action(async (options: AdminQueueOptions) => {
@@ -624,6 +636,7 @@ function addAdminCommands(program: Command): void {
     )
     .option("--limit <limit>", "Number of findings to show with --queue", "10")
     .option("--query <text>", "Override the fact-search query (else the Worker builds one)")
+    .option("--refresh", "Re-run the fetch even if a note exists (backfill/sharpen)", false)
     .option("--json", "Print JSON", false)
     .allowExcessArguments()
     .action(async (idOrLogId: string | undefined, options: TrackContextOptions) => {
@@ -637,6 +650,36 @@ function addAdminCommands(program: Command): void {
 
       const { trackContextCommand } = await import("./commands/track");
       await runTrackContext(idOrLogId, options, trackContextCommand);
+    });
+
+  // `note_track` → `admin tracks note` (Convention B). Author + store the finding's
+  // editorial note (the written-note sibling of `observe`). Fills an EMPTY note only;
+  // an operator note is never clobbered. `--queue` is the note cron's worklist.
+  adminTrack
+    .command("note")
+    .description("Author the editorial note for a finding (fills an empty note only)")
+    .argument("[idOrLogId]")
+    .option(
+      "--queue",
+      "Show the note worklist (context'd findings with no note yet), oldest first",
+      false,
+    )
+    .option("--limit <limit>", "Number of findings to show with --queue", "10")
+    .option("--script <text>", "The voice-gated editorial note")
+    .option("--script-file <file>", "Read the editorial note from a file")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (idOrLogId: string | undefined, options: TrackNoteOptions) => {
+      // `--queue` is the note worklist view (context'd findings with no note yet) —
+      // the note cron's worklist. Otherwise author one finding's note.
+      if (options.queue) {
+        const { noteQueueCommand } = await import("./commands/admin-tracks");
+        await runAdminNoteQueue(options, noteQueueCommand);
+        return;
+      }
+
+      const { trackNoteCommand } = await import("./commands/track");
+      await runTrackNote(idOrLogId, options, trackNoteCommand);
     });
 
   const adminMixtapes = configureCommand(
@@ -976,6 +1019,19 @@ function addAdminCommands(program: Command): void {
       const { backfillDiscogsCommand } = await import("./commands/admin-tracks");
       await runBackfillDiscogs(options, backfillDiscogsCommand);
     });
+
+  backfill
+    .command("alignment")
+    .description(
+      "Back-fill word-level caption timings for observations rendered before timestamps (no re-render)",
+    )
+    .option("--dry-run", "Report the eligible set but align nothing", false)
+    .option("--limit <limit>", "Max observations to align", "50")
+    .option("--json", "Print JSON", false)
+    .action(async (options: BackfillSyncOptions) => {
+      const { backfillAlignmentCommand } = await import("./commands/admin-tracks");
+      await runBackfillAlignment(options, backfillAlignmentCommand);
+    });
 }
 
 async function runTrackPreviewArchive(
@@ -1065,11 +1121,14 @@ async function runTrackContext(
 ): Promise<void> {
   if (!idOrLogId) {
     throw new Error(
-      "Usage: fluncle admin tracks context <track_id|log_id> [--query <text>] [--json]",
+      "Usage: fluncle admin tracks context <track_id|log_id> [--query <text>] [--refresh] [--json]",
     );
   }
 
-  const result = await trackContextCommand(idOrLogId, { query: options.query });
+  const result = await trackContextCommand(idOrLogId, {
+    query: options.query,
+    refresh: options.refresh,
+  });
 
   if (options.json) {
     printJson(result);
@@ -1092,6 +1151,35 @@ async function runTrackContext(
   if (result.sources.length > 0) {
     console.log(`  sources: ${result.sources.join(", ")}`);
   }
+}
+
+async function runTrackNote(
+  idOrLogId: string | undefined,
+  options: TrackNoteOptions,
+  trackNoteCommand: typeof import("./commands/track").trackNoteCommand,
+): Promise<void> {
+  const note = options.scriptFile ? readFileSync(options.scriptFile, "utf8") : options.script;
+
+  if (!idOrLogId || !note || !note.trim()) {
+    throw new Error(
+      "Usage: fluncle admin tracks note <track_id|log_id> (--script <text> | --script-file <file>) [--json]",
+    );
+  }
+
+  const result = await trackNoteCommand(idOrLogId, { note: note.trim() });
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  if (result.skipped) {
+    console.log(`A note is already on file for ${result.logId}. The operator's note stands.`);
+    return;
+  }
+
+  console.log(`Authored the note for ${result.logId}:`);
+  console.log(`  ${result.note}`);
 }
 
 async function runPreviewArchiveBackfill(
@@ -1251,6 +1339,69 @@ async function runBackfillDiscogs(
   for (const item of resolved) {
     const master = item.masterId ? ` (master ${item.masterId})` : "";
     console.log(`  ${item.logId}: release ${item.releaseId}${master}`);
+  }
+}
+
+async function runBackfillAlignment(
+  options: BackfillSyncOptions,
+  backfillAlignmentCommand: typeof import("./commands/admin-tracks").backfillAlignmentCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const aligned: string[] = [];
+  const empty: string[] = [];
+  const failed: Array<{ error: string; logId: string }> = [];
+  let cursor: string | undefined;
+  let dryRun = options.dryRun;
+
+  // The cap is on observations actually HANDLED (aligned + empty + failed). Each pass
+  // returns a resume cursor; loop until the cap is met or the archive is drained.
+  while (aligned.length + empty.length + failed.length < limit) {
+    const remaining = limit - (aligned.length + empty.length + failed.length);
+    const result = await backfillAlignmentCommand(remaining, options.dryRun, cursor);
+    dryRun = result.dryRun;
+    aligned.push(...result.aligned);
+    empty.push(...result.empty);
+    failed.push(...result.failed);
+
+    if (!options.json) {
+      const verb = result.dryRun ? "would align" : "aligned";
+      console.log(
+        `  …${verb} ${result.alignedCount}; ${result.emptyCount} empty; ${result.failedCount} failed`,
+      );
+    }
+
+    if (result.nextCursor === null) {
+      break;
+    }
+
+    cursor = result.nextCursor;
+  }
+
+  if (options.json) {
+    printJson({
+      aligned,
+      alignedCount: aligned.length,
+      dryRun,
+      empty,
+      emptyCount: empty.length,
+      failed,
+      failedCount: failed.length,
+      ok: true,
+    });
+    return;
+  }
+
+  const verb = dryRun ? "Would align" : "Aligned";
+  console.log(
+    `${verb} ${aligned.length} observation(s); ${empty.length} empty; ${failed.length} failed.`,
+  );
+
+  for (const logId of aligned) {
+    console.log(`  ${logId}`);
+  }
+
+  for (const item of failed) {
+    console.log(`  ${item.logId}: ${item.error}`);
   }
 }
 
@@ -1971,6 +2122,32 @@ async function runAdminObserveQueue(
   const { trackRows } = await import("./format");
   const noun = tracks.length === 1 ? "finding" : "findings";
   console.log(`${tracks.length} ${noun} awaiting an observation, oldest first:`);
+  console.log(trackRows(tracks).join("\n"));
+}
+
+async function runAdminNoteQueue(
+  options: AdminListOptions,
+  noteQueueCommand: typeof import("./commands/admin-tracks").noteQueueCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const tracks = await noteQueueCommand(limit);
+
+  if (options.json) {
+    printJson({
+      ok: true,
+      tracks,
+    });
+    return;
+  }
+
+  if (tracks.length === 0) {
+    console.log("Every context'd finding has a note. Nothing waiting on the uncle's words.");
+    return;
+  }
+
+  const { trackRows } = await import("./format");
+  const noun = tracks.length === 1 ? "finding" : "findings";
+  console.log(`${tracks.length} ${noun} awaiting a note, oldest first:`);
   console.log(trackRows(tracks).join("\n"));
 }
 

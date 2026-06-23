@@ -876,6 +876,37 @@ body::before {
   width: 100%;
 }
 
+/* The active clip is still loading: the bar holds at 0 (the fill stays empty)
+   and the segment itself signals the wait. Reduced-motion default is a static,
+   slightly brighter track — feedback without movement (The Grounded Floats
+   Rule). With motion allowed it gains the shimmer below. */
+.stories-segment.is-loading {
+  background: color-mix(in oklch, var(--starlight-cream) 42%, transparent);
+}
+
+/* The Retint Rule — a borrowed shimmer recolored to canon: a quiet
+   Starlight-Cream sweep across the warm-dark track, no spinner, no second sun. */
+@media (prefers-reduced-motion: no-preference) {
+  .stories-segment.is-loading {
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      color-mix(in oklch, var(--starlight-cream) 30%, transparent) 50%,
+      transparent 100%
+    );
+    background-position: -40% 0;
+    background-repeat: no-repeat;
+    background-size: 40% 100%;
+    animation: stories-segment-shimmer 1.4s ease-in-out infinite;
+  }
+}
+
+@keyframes stories-segment-shimmer {
+  to {
+    background-position: 140% 0;
+  }
+}
+
 .stories-controls {
   display: flex;
   gap: 0.25rem;
@@ -1426,6 +1457,69 @@ body::before {
   }
 }
 
+/* The newsletter archive (/newsletter) + a back issue (/newsletter/<n>) */
+
+/* The intro preview under each archive row — a quiet second line, spanning the
+   whole row so it sits under the #NN / subject / date header rather than in an
+   implicit fourth column. */
+.log-newsletter-snippet {
+  color: var(--stardust);
+  font-size: 0.85rem;
+  grid-column: 1 / -1;
+  line-height: 1.5;
+  margin: 0.1rem 0 0;
+  /* Keep the preview to one tidy line so the list stays scannable. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A back issue's lead paragraph — the uncle's opening line, set as readable
+   body prose above the galaxy-grouped finds. */
+.log-newsletter-intro {
+  color: var(--starlight-cream);
+  font-size: 1rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.log-newsletter-tidbits {
+  color: var(--starlight-cream);
+  display: grid;
+  font-size: 0.92rem;
+  gap: 0.5rem;
+  line-height: 1.55;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.log-newsletter-tidbits a {
+  color: var(--accent-foreground);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+/* A finding's editorial "why" on a back-issue page — wraps to full sentences
+   (unlike the truncating .log-related-line in the related list), set quiet next
+   to the coordinate. */
+.log-newsletter-why {
+  color: var(--stardust);
+  font-size: 0.9rem;
+  line-height: 1.55;
+  min-width: 0;
+}
+
+/* The "Happy raving, Fluncle" sign-off — the letter's close, set apart and
+   quiet. */
+.log-newsletter-signoff {
+  color: var(--muted-foreground);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.95rem;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
 /* About */
 
 .log-about-story {
@@ -1950,6 +2044,43 @@ body::before {
   color: var(--stardust);
   font-size: 0.85rem;
   font-variant-numeric: tabular-nums;
+}
+
+/* Synced observation captions (the spoken script, word by word). Sits on the
+   same scrimmed meta pane as the facts/artist, so it inherits their AA contrast
+   over the footage. Resting words are dim (Stardust); the current word lights to
+   Starlight Cream with a quiet Gold cast (the Ignition Rule — heat marks the live
+   word, never paint). Wraps to a few lines, capped so a long observation never
+   pushes the title off a phone. */
+.radio-captions {
+  color: var(--stardust);
+  display: -webkit-box;
+  font-size: 0.95rem;
+  line-height: 1.4;
+  margin-block: 0.1rem 0.15rem;
+  max-width: 42rem;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.radio-caption-word {
+  /* Colour-only transition so the highlight reads as a glow, not motion; grounded
+     under reduced motion below. */
+  transition:
+    color 120ms ease-out,
+    text-shadow 120ms ease-out;
+}
+
+.radio-caption-word.is-active {
+  color: var(--starlight-cream);
+  text-shadow: 0 0 0.5rem color-mix(in oklch, var(--eclipse-gold) 45%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .radio-caption-word {
+    transition: none;
+  }
 }
 
 .radio-actions {
