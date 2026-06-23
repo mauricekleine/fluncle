@@ -20,7 +20,20 @@
 import { type RefObject, useEffect, useRef } from "react";
 
 /** The element has at least the current frame and enough to start playing. */
-const HAVE_CURRENT_DATA = 2;
+export const HAVE_CURRENT_DATA = 2;
+
+/**
+ * Is this `<video>` genuinely playable yet — does it hold at least the current
+ * frame (`readyState >= HAVE_CURRENT_DATA`, i.e. a `canplay`/`playing` has
+ * fired)? Below this the element is still loading: it shows its poster, nothing
+ * has played, and any clock driven off it would advance over a frozen screen.
+ * Shared so the stall watchdog and the Stories progress gate read "playable" the
+ * same way. A null element (a cover-only story with no clip) is not a video, so
+ * this is irrelevant to it — callers gate on the element's presence first.
+ */
+export function isVideoPlayable(video: Pick<HTMLVideoElement, "readyState"> | null): boolean {
+  return video !== null && video.readyState >= HAVE_CURRENT_DATA;
+}
 
 /**
  * No progress within this window (and not yet playable) counts as wedged. Long
@@ -167,7 +180,7 @@ export function useVideoStallRecovery({
     // The element told us it's starved while not yet playable; start the grace
     // clock (a later `playing`/`canplay` clears it via markProgress).
     const onStalledOrWaiting = () => {
-      if (video.readyState < 2 && stallEventAt === undefined) {
+      if (video.readyState < HAVE_CURRENT_DATA && stallEventAt === undefined) {
         stallEventAt = now();
       }
     };

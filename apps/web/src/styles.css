@@ -876,6 +876,37 @@ body::before {
   width: 100%;
 }
 
+/* The active clip is still loading: the bar holds at 0 (the fill stays empty)
+   and the segment itself signals the wait. Reduced-motion default is a static,
+   slightly brighter track — feedback without movement (The Grounded Floats
+   Rule). With motion allowed it gains the shimmer below. */
+.stories-segment.is-loading {
+  background: color-mix(in oklch, var(--starlight-cream) 42%, transparent);
+}
+
+/* The Retint Rule — a borrowed shimmer recolored to canon: a quiet
+   Starlight-Cream sweep across the warm-dark track, no spinner, no second sun. */
+@media (prefers-reduced-motion: no-preference) {
+  .stories-segment.is-loading {
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      color-mix(in oklch, var(--starlight-cream) 30%, transparent) 50%,
+      transparent 100%
+    );
+    background-position: -40% 0;
+    background-repeat: no-repeat;
+    background-size: 40% 100%;
+    animation: stories-segment-shimmer 1.4s ease-in-out infinite;
+  }
+}
+
+@keyframes stories-segment-shimmer {
+  to {
+    background-position: 140% 0;
+  }
+}
+
 .stories-controls {
   display: flex;
   gap: 0.25rem;
