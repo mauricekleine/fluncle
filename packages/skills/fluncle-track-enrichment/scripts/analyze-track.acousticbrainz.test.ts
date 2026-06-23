@@ -16,7 +16,7 @@ function mockFetch(
 ): { calls: string[]; fetch: typeof fetch } {
   const calls: string[] = [];
   const fetchImpl = (async (input: string | URL | Request): Promise<Response> => {
-    const url = typeof input === "string" ? input : input.toString();
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     calls.push(url);
 
     const route = routes.find((r) => url.includes(r.match));
