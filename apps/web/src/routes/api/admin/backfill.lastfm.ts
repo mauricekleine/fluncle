@@ -5,8 +5,8 @@ import { requireOperator } from "../../../lib/server/env";
 import { apiErrorResponse } from "../../../lib/server/http-errors";
 
 // POST /api/admin/backfill/lastfm — back-fill Last.fm `track.love` over published
-// findings (a Loved Track = an endorsement, never a scrobble — see
-// docs/rfcs/lastfm-discogs-sync.md §1). Idempotent (loving twice is a no-op) and
+// findings (a Loved Track = an endorsement, never a scrobble).
+// Idempotent (loving twice is a no-op) and
 // admin-gated + Worker-only: the Worker holds the LASTFM_* secrets, so the call
 // stays here, never in the CLI. The CLI's `fluncle admin backfill lastfm` is a
 // thin client over this. POST (it has an effect — when configured).

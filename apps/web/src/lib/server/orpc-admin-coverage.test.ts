@@ -60,8 +60,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "GET /admin/tracks": "list_tracks_admin",
   "GET /admin/tracks/{trackId}/social": "list_track_social",
   "PATCH /admin/mixtapes/{mixtapeId}": "update_mixtape",
-  // The newsletter edition control plane (docs/rfcs/newsletter-own-the-stack.md
-  // §3.3). Contract-only oRPC — no TanStack route files under /api/admin/newsletter
+  // The newsletter edition control plane. Contract-only oRPC — no TanStack route
+  // files under /api/admin/newsletter
   // (oRPC serves them off the registry), so they have no file-enumeration entry;
   // they live here to satisfy the "registry holds EXACTLY this map's ops" check.
   // create/update are admin tier (agent-allowed drafting); send is operator-only.

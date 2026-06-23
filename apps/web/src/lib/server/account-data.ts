@@ -597,8 +597,8 @@ export function accountDeletionStatements({
       sql: `delete from user_galaxy_state where user_id = ?`,
     },
     {
-      // Push tokens bound to this user (the mobile app, docs/rfcs/mobile-app.md
-      // §7). Anonymous rows (the V1 default, user_id NULL) are reaped by the
+      // Push tokens bound to this user (the mobile app). Anonymous rows (the
+      // V1 default, user_id NULL) are reaped by the
       // last_seen_at staleness policy instead; this clears the linked ones.
       args: [userId],
       sql: `delete from push_tokens where user_id = ?`,

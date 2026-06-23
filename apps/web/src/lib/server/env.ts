@@ -36,7 +36,7 @@ const envKeys = [
   "FLUNCLE_AGENT_TOKEN",
   "LOOPS_API_KEY",
   "LOOPS_TRANSACTIONAL_ID",
-  // Resend — the newsletter's send-of-record (docs/rfcs/newsletter-own-the-stack.md).
+  // Resend — the newsletter's send-of-record.
   // The Worker owns the key; the agent box never holds it (the agent calls the
   // admin send op, the Worker creates + sends the broadcast). RESEND_API_KEY is the
   // secret; RESEND_SEGMENT_ID is the Fluncle Audience/Segment the subscribe path
@@ -99,7 +99,7 @@ const envKeys = [
   "CF_CACHE_PURGE_ZONE_ID",
   "CF_CACHE_PURGE_TOKEN",
   // Expo Push Service access token for the mobile app's push notifications
-  // (lib/server/push.ts; docs/rfcs/mobile-app.md §7). OPTIONAL and read via
+  // (lib/server/push.ts). OPTIONAL and read via
   // readOptionalEnv: the whole push feature is a NO-OP until this is set — the
   // send-on-publish side-channel returns immediately, so the publish path works
   // unprovisioned exactly like the Last.fm/Telegram hooks. With Expo's "Enhanced

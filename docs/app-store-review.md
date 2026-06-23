@@ -1,6 +1,6 @@
 # App store review — Fluncle mobile
 
-Context for submitting the Expo app (`apps/mobile`) to the Apple App Store and Google Play. This is not a roadmap item or a checklist to action now — it is a standing read before any store submission, so the known review risks are not a surprise. The app's build and scope live in [the mobile RFC](rfcs/mobile-app.md).
+Context for submitting the Expo app (`apps/mobile`) to the Apple App Store and Google Play. This is not a roadmap item or a checklist to action now — it is a standing read before any store submission, so the known review risks are not a surprise. The app's build and scope live in `apps/mobile`.
 
 ## The short version
 

@@ -155,7 +155,7 @@ export type MixtapeDeleteResponse = Ok<{}>;
 
 /**
  * A newsletter edition as the `/newsletter` archive + `/api/v1/newsletter/editions`
- * emit it (docs/rfcs/newsletter-own-the-stack.md). NOT a collectible — a plain
+ * emit it. NOT a collectible — a plain
  * integer `number` (minted on send), no Log ID, no coordinate. Inferred from
  * `EditionDTOSchema` (./orpc/_shared.ts), so this DTO cannot drift from the wire.
  */
