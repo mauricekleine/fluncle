@@ -21,15 +21,17 @@
 # per tick just to drain a queue) with a deterministic wrapper around the one creative
 # step that genuinely needs a model.
 #
-# PRODUCTION PRE-REQS (the operator wires these; see ../cron/README.md):
-#   - `claude` (Claude Code CLI) on PATH and authed via CLAUDE_CODE_OAUTH_TOKEN in the
-#     cron env (subscription auth — zero OpenRouter tokens).
-#   - the `copywriting-fluncle` skill installed for claude-code under ~/.claude/skills/.
+# PRODUCTION PRE-REQS (see ../cron/README.md):
+#   - `claude` (Claude Code CLI) — BAKED into the image; authed at run via
+#     CLAUDE_CODE_OAUTH_TOKEN in the cron env (subscription auth — zero OpenRouter
+#     tokens; from op://Fluncle/CLAUDE_CODE_OAUTH_TOKEN/credential in /etc/hermes.env).
+#   - the `copywriting-fluncle` skill — BAKED into the image at /opt/claude/skills/
+#     (discovered via CLAUDE_CONFIG_DIR=/opt/claude, readable by the non-root cron user).
 #   - optional DISCORD_ALERT_WEBHOOK in the cron env for the claude-auth-failed ping.
 #
-# Operator wires it on the devbox (the image already carries bun + the fluncle CLI;
-# `observe_track` is AGENT tier, so the box's existing agent-scoped token drives it —
-# no operator token needed):
+# Operator wires it on the devbox (the image already carries bun + the fluncle CLI +
+# claude + the skill; `observe_track` is AGENT tier, so the box's existing agent-scoped
+# token drives it — no operator token needed):
 #
 #   hermes cron create "every 60m" --no-agent --script observe-sweep.sh --deliver local --name fluncle-observation
 #
