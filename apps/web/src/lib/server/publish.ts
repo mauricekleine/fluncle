@@ -139,8 +139,7 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
   // `discogs.com/release/{id}` URL becomes a per-finding `sameAs`.
   // discogsResolveRelease swallows its own errors and no-ops without the token, so
   // a miss never blocks the add — same side-channel discipline as Deezer. The
-  // Deezer label feeds the labelSim signal. See docs/track-lifecycle.md /
-  // docs/rfcs/lastfm-discogs-sync.md §2.
+  // Deezer label feeds the labelSim signal. See docs/track-lifecycle.md.
   const discogs = await discogsResolveRelease({
     album: track.album,
     artists: track.artists,

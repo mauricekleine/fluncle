@@ -4,7 +4,7 @@
 //
 // Why `love`, not `scrobble`: a scrobble claims "Fluncle listened just now",
 // which would fabricate a listening history. A Loved Track is an explicit
-// endorsement — exactly what a certified finding is. See docs/rfcs/lastfm-discogs-sync.md §1.
+// endorsement — exactly what a certified finding is.
 //
 // All write methods require authentication. Every authenticated call is signed:
 // `api_sig = md5( <all params name+value, alphabetized, concatenated> + shared_secret )`,

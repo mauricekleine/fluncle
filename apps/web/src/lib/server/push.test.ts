@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Unit coverage for the Expo push fan-out (lib/server/push.ts; docs/rfcs/mobile-app.md
-// §7). The load-bearing, easy-to-get-wrong bits are pinned here:
+// Unit coverage for the Expo push fan-out (lib/server/push.ts). The load-bearing,
+// easy-to-get-wrong bits are pinned here:
 //   - chunking ≤100 (Expo's hard per-request ceiling),
 //   - the per-category mute filter (a muted device is dropped from that fan-out),
 //   - the NO-OP-when-unset property (EXPO_ACCESS_TOKEN absent ⇒ nothing happens —

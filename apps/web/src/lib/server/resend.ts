@@ -1,5 +1,5 @@
-// The Resend client surface — the newsletter's send-of-record
-// (docs/rfcs/newsletter-own-the-stack.md §4). The Worker owns `RESEND_API_KEY`;
+// The Resend client surface — the newsletter's send-of-record.
+// The Worker owns `RESEND_API_KEY`;
 // the agent box never holds it (the agent calls the admin send op; the Worker
 // creates + sends the broadcast). Raw `fetch` against the REST API, mirroring the
 // repo's other vendor clients (`./newsletter` Loops, `./postiz`) — no SDK, so the

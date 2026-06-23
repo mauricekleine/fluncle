@@ -4,29 +4,44 @@ The version-controlled **source** for the Hermes automation cron jobs (`docs/her
 
 Every step is a "read a queue → act per item, idempotently" loop over the `fluncle` CLI. There is **no on-add push**: a new find lands at `enrichment_status = pending` (queue-eligible) and is caught on the next tick.
 
+## Cron roster
+
+Live on the box as of the **2026-06-23 cutover**. Every per-finding job is `--no-agent`; the Friday newsletter is the only **agent** job left. "Box authoring" is how much model time the job spends locally: none (a pure deterministic trigger), one `claude -p` call (a hybrid — subscription auth, zero OpenRouter), or a full agent session. Run `hermes cron list` on the box for live job IDs + next-run times.
+
+| Job                    | Cadence             | Mode                | Box authoring       | What it does                                                         |
+| ---------------------- | ------------------- | ------------------- | ------------------- | -------------------------------------------------------------------- |
+| `fluncle-enrich`       | every 5m            | `--no-agent`        | none (on-box DSP)   | BPM / key / spectral analysis on the box, write-back                 |
+| `fluncle-context-note` | every 5m            | `--no-agent`        | none (Worker Haiku) | Firecrawl facts → distilled `context_note` + a `Texture:` line       |
+| `fluncle-note`         | every 10m           | `--no-agent` hybrid | one `claude -p`     | auto-author the editorial `/log` note (fill-empty-only)              |
+| `fluncle-observation`  | every 60m           | `--no-agent` hybrid | one `claude -p`     | author the recovered-audio script → Worker ElevenLabs render         |
+| `fluncle-backfill`     | every 30m           | `--no-agent`        | none (Worker HTTP)  | Discogs id + Last.fm love catalogue repair                           |
+| `fluncle-newsletter`   | Fri 15:00 Amsterdam | **agent**           | full agent session  | draft + persist the weekly edition (send is an operator Discord tap) |
+
+The per-cron sections below carry the full mechanism, schedule rationale, and the rebuild-from-scratch wiring for each.
+
 ## The `--no-agent` enrichment cron (LIVE)
 
 `fluncle-enrich` is **live on the box**. It does not carry a prompt: enrichment is pure compute (get → analyze → update, zero LLM tokens), so it is a `--no-agent --script` job. Its script source lives beside the build context at [`../scripts/`](../scripts/) — a bash wrapper (`enrich-sweep.sh`) the cron runner execs by extension, which in turn `exec`s the bun orchestrator (`enrich-sweep.ts`). It is created on the box directly (not in `jobs.json`, which holds only the one remaining agent job, the newsletter).
 
-## The `--no-agent` context-note cron (PREPARED, NOT YET WIRED)
+## The `--no-agent` context-note cron (LIVE)
 
 `fluncle-context-note` fills the **factual** context note for findings that lack one (the `context_note`), so the observation cron can author a grounded script later. It used to be a full **agent** cron that spent a whole Sonnet session just to drain a queue and POST per finding — pure harness tax (~37k prompt tokens/call to emit ~200). Its only real LLM work — distilling the note — already moved **Worker-side onto Haiku** (#129), so the box no longer needs an agent: it only asks the API what's queued and triggers the Worker endpoint per finding. It carries no prompt and burns **zero LLM tokens on the box**, so it is now a `--no-agent --script` job like enrich/backfill. Its source lives beside them at [`../scripts/`](../scripts/): `context-sweep.sh` (the bash entry the runner execs by extension) → `context-sweep.ts` (the bun orchestrator).
 
 **The Worker-paced model.** The box holds **no** Firecrawl key (the Worker does), and the note-distilling LLM (Haiku) is Worker-side too. So the Firecrawl search + Haiku distill + the quiet `context_note` write all happen **in the Worker**; this driver just **triggers** it — one small bounded batch per tick (`BATCH_CAP` 6). `context_track` is **agent tier** (idempotent on `context:${logId}`), so the box's existing agent-scoped token drives it; no operator token on the box (matching the `fluncle-enrich`/`fluncle-backfill` precedent).
 
-| Job                    | Schedule  | What it does                                                                                                                                                                                                                                                | Server slice                                                              |
-| ---------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `fluncle-context-note` | every 60m | Drain `admin tracks context --queue` (`hasContext=false`, oldest-first); per finding (bounded batch, cap 6/tick): `admin tracks context <id>` → triggers the Worker (Firecrawl + Haiku distill + quiet `context_note` write). Idempotent; no-op when empty. | `context_track` agent-tier endpoint + `hasContext` filter (#86/#88/#129). |
+| Job                    | Schedule | What it does                                                                                                                                                                                                                                                | Server slice                                                              |
+| ---------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `fluncle-context-note` | every 5m | Drain `admin tracks context --queue` (`hasContext=false`, oldest-first); per finding (bounded batch, cap 6/tick): `admin tracks context <id>` → triggers the Worker (Firecrawl + Haiku distill + quiet `context_note` write). Idempotent; no-op when empty. | `context_track` agent-tier endpoint + `hasContext` filter (#86/#88/#129). |
 
-**Every 60m, not 5m:** unlike `fluncle-enrich` (latency-sensitive for new finds), the context note is fuel the hourly observation cron consumes — so an hourly cadence keeps the two in step without paying the Worker (Firecrawl + Haiku) more often than the observation step can use. The sweep no-ops on an empty queue. To create it on a rebuilt box:
+**Every 5m, like enrich:** the sweep burns **no box tokens** (it only triggers the Worker per queued finding) and no-ops on an empty queue, so a tight cadence is cheap — it gets fresh `context_note` onto a new find within minutes, which is the fuel the downstream `note` + `observation` crons consume. The Worker's Firecrawl + Haiku cost is paid only when a finding is actually queued (rare; most ticks no-op), not per-tick. To create it on a rebuilt box:
 
 ```bash
 # Deploy the script pair, then create the no-agent cron.
 scp docs/agents/hermes/scripts/context-sweep.{sh,ts} <box>:~/.hermes/scripts/
-hermes cron create "every 60m" --no-agent --script context-sweep.sh --deliver local
+hermes cron create "every 5m" --no-agent --script context-sweep.sh --deliver local
 ```
 
-## The `--no-agent` catalogue-backfill cron (PREPARED, NOT YET WIRED)
+## The `--no-agent` catalogue-backfill cron (LIVE)
 
 `fluncle-backfill` repairs the two music-graph side-channels over already-published findings: the **Discogs** release-id resolve and the **Last.fm love**. Like enrichment it carries no prompt — it is pure HTTP driving (zero LLM tokens) — so it is a `--no-agent --script` job. Its source lives beside the enrich sweep at [`../scripts/`](../scripts/): `backfill-sweep.sh` (the bash entry the runner execs by extension) → `backfill-sweep.ts` (the bun orchestrator).
 
@@ -60,7 +75,7 @@ scp docs/agents/hermes/scripts/enrich-sweep.{sh,ts} <box>:~/.hermes/scripts/
 hermes cron create "every 5m" --no-agent --script enrich-sweep.sh --deliver local
 ```
 
-## The HYBRID `--no-agent` observation cron (PREPARED, NOT YET WIRED)
+## The HYBRID `--no-agent` observation cron (LIVE)
 
 `fluncle-observation` renders the spoken recovered-audio observation per finding. Unlike the four pure-trigger sweeps above, this one is a **hybrid**: the queue read, the per-finding metadata gather, and the render delivery are all **deterministic** (the `fluncle` CLI), and only the creative authoring — turning a finding's facts into a script in Fluncle's voice — runs **one `claude -p` call** in the middle. So it is a `--no-agent --script` job like the others (a deterministic wrapper ships the stdout summary), but it spends a little model time on the one step that genuinely needs it. This replaces the old full-**agent** `fluncle-observation` cron (a whole Sonnet session per tick just to drain a queue and POST per finding). Its source lives beside the other sweeps at [`../scripts/`](../scripts/): `observe-sweep.sh` (the bash entry the runner execs by extension) → `observe-sweep.ts` (the bun orchestrator).
 
@@ -98,7 +113,7 @@ hermes cron create "every 60m" --no-agent --script observe-sweep.sh --deliver lo
 
 **Every 60m, not 5m:** observation is the paid step (ElevenLabs credits + subscription quota), and its input is the context note the hourly context sweep produces — so an hourly cadence keeps the two in step. **`BATCH_CAP=1`** (one finding per tick): the cron runner kills a job at 120s and a single `claude -p` authoring + ElevenLabs render already ≈ that budget (raise the cap only if a healthy run measures well under 120s, or lift `cron.script_timeout_seconds` in `config.yaml`). The queue drains across hourly ticks; a fresh eligible finding is caught next tick.
 
-## The HYBRID `--no-agent` auto-note cron (PREPARED, NOT YET WIRED)
+## The HYBRID `--no-agent` auto-note cron (LIVE)
 
 `fluncle-note` auto-authors a finding's **written editorial note** — the line that shows on its `/log` page (today the operator writes it by hand). It is the written-note **sibling** of `fluncle-observation` and shares its exact hybrid shape: the queue read, the per-finding metadata + context-note gather, and the delivery are all **deterministic** (the `fluncle` CLI), and only the creative authoring — turning a finding's facts into a one-line editorial note in Fluncle's voice — runs **one `claude -p` call** in the middle. Source beside the others at [`../scripts/`](../scripts/): `note-sweep.sh` (the bash entry) → `note-sweep.ts` (the bun orchestrator).
 
@@ -108,7 +123,7 @@ hermes cron create "every 60m" --no-agent --script observe-sweep.sh --deliver lo
 
 | Job            | Schedule  | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Server slice                                               |
 | -------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| `fluncle-note` | every 30m | Drain `admin tracks note --queue` (`hasContext=true AND hasNote=false`, oldest-first); per finding (bounded batch, cap **1**/tick): `track get` → `claude -p` authors the one-line editorial note (read-only tools, `copywriting-fluncle`) → `admin tracks note --script-file` (the Worker voice-gates + **fills an empty note only** + stores). An operator note already on file is a `skipped` no-op (the override wins); a gate reject is skipped (stays queued). Idempotent; no-op when empty. | `note_track` (agent tier) + `hasNote` filter (this slice). |
+| `fluncle-note` | every 10m | Drain `admin tracks note --queue` (`hasContext=true AND hasNote=false`, oldest-first); per finding (bounded batch, cap **1**/tick): `track get` → `claude -p` authors the one-line editorial note (read-only tools, `copywriting-fluncle`) → `admin tracks note --script-file` (the Worker voice-gates + **fills an empty note only** + stores). An operator note already on file is a `skipped` no-op (the override wins); a gate reject is skipped (stays queued). Idempotent; no-op when empty. | `note_track` (agent tier) + `hasNote` filter (this slice). |
 
 **Env knobs.** `NOTE_CLAUDE_MODEL` (default `claude-sonnet-4-6`); `NOTE_CLAUDE_EFFORT` (optional, passed as `--effort` when set); `DISCORD_ALERT_WEBHOOK` (optional, the claude-auth-failed ping target). **Production pre-reqs** match observation's: the `claude` CLI + `copywriting-fluncle` skill are baked into the image, and the token is **file-sourced** from a `0600` `${HOME}/.note-sweep.env` (Hermes hard-blocks provider creds from the cron env — see **Operational gotchas**), holding `CLAUDE_CODE_OAUTH_TOKEN` plus optionally `DISCORD_ALERT_WEBHOOK` / `NOTE_CLAUDE_MODEL`. `note_track` is **agent tier**, so the box's existing agent-scoped token drives the delivery POST. The auth-fail ping ("Fluncle note-sweep: claude auth failed, re-auth needed") and the **`BATCH_CAP=1`** under-120s rule are the same as observation. To wire it on a rebuilt box (mirror the observation block above, swapping `observe`→`note`):
 
@@ -117,12 +132,12 @@ docker cp note-sweep.sh hermes:/opt/data/scripts/ && docker cp note-sweep.ts her
 docker exec hermes chown 1000:1000 /opt/data/scripts/note-sweep.* && docker exec hermes chmod +x /opt/data/scripts/note-sweep.sh
 printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$(op read op://Fluncle/CLAUDE_CODE_OAUTH_TOKEN/credential)" \
   | ssh <box> 'docker exec -i hermes sh -c "cat > /opt/data/home/.note-sweep.env && chown hermes:hermes /opt/data/home/.note-sweep.env && chmod 600 /opt/data/home/.note-sweep.env"'
-hermes cron create "every 30m" --no-agent --script note-sweep.sh --deliver local --name fluncle-note
+hermes cron create "every 10m" --no-agent --script note-sweep.sh --deliver local --name fluncle-note
 ```
 
-## The agent crons — PREPARED, NOT YET WIRED
+## The agent cron — the Friday newsletter (LIVE)
 
-The ONE remaining AGENT job in [`jobs.json`](./jobs.json) — the weekly newsletter — is drafted but **not yet wired on the box** (`docs/hermes-automation-brief.md`, Build order #2–#3). The operator wires it on the devbox. (The context-note step is the `--no-agent` `fluncle-context-note` sweep above, and the observation step is the HYBRID `--no-agent` `fluncle-observation` sweep above — neither is an agent job any more.)
+The ONE remaining AGENT job in [`jobs.json`](./jobs.json) — the weekly newsletter — is **live on the box** (`fluncle-newsletter`, `0 15 * * 5`). It is the only job that still runs a full agent session; every per-finding step is a `--no-agent` sweep above (the context-note + observation steps used to be agent crons and were converted in the cutover). It authors + persists the Friday edition, then offers the operator a Discord Send/Hold button — it never auto-sends (`send_edition` is operator-tier, so the agent token 403s).
 
 | Job                  | Schedule     | What it does                                                                                                                                                                                                         | Server slice                                                                                                           |
 | -------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
@@ -143,7 +158,7 @@ Source: <https://hermes-agent.nousresearch.com/docs/user-guide/features/cron> (f
 
 - **Where jobs live:** `~/.hermes/cron/jobs.json` on the box. Per-run output is saved to `~/.hermes/cron/output/{job_id}/{timestamp}.md`. (Crons are **not** in `config.yaml` — `config.yaml` only carries cron _defaults_ like `cron.wrap_response` / `cron.script_timeout_seconds`.)
 - **Scheduler:** the gateway ticks every 60 s and runs any due job in a **completely fresh, isolated agent session**. The prompt must be self-contained — there is no carried conversation. That is why each `prompt` below restates its whole task.
-- **Schedule formats:** relative one-shot (`30m`, `2h`), recurring interval (`every 1h`, `every 5m`), cron expression (`0 * * * *`), or ISO timestamp. The `--no-agent` sweeps use `every 5m` (enrich), `every 30m` (backfill), and `every 60m` (context-note and observation); the weekly newsletter uses a cron expression `0 15 * * 5` (Friday 15:00, evaluated against the **box clock** — which is why the box is pinned to `Europe/Amsterdam`; there is no per-job TZ field).
+- **Schedule formats:** relative one-shot (`30m`, `2h`), recurring interval (`every 1h`, `every 5m`), cron expression (`0 * * * *`), or ISO timestamp. The `--no-agent` sweeps use `every 5m` (enrich and context-note), `every 10m` (note), `every 30m` (backfill), and `every 60m` (observation); the weekly newsletter uses a cron expression `0 15 * * 5` (Friday 15:00, evaluated against the **box clock** — which is why the box is pinned to `Europe/Amsterdam`; there is no per-job TZ field).
 - **Agent job vs. no-agent job:** an **agent** job carries a `prompt` and reasons through the task (the one agent job left — the weekly newsletter, which authors the edition copy). A **no-agent** job carries `no_agent: true` + a `script` and ships its stdout (the `fluncle-enrich`, `fluncle-backfill`, `fluncle-context-note`, and `fluncle-observation` sweeps). The first three burn **zero** LLM tokens; `fluncle-observation` is the **hybrid** — its script spends one `claude -p` call (subscription auth) on the creative authoring step, deterministic everywhere else.
 - **Delivery (`deliver`):** `local` saves the run output under `~/.hermes/cron/output/` with no chat post; `origin`, `discord`, `discord:#channel`, etc. post to a channel; `all` fans out. The queue-drain crons are silent, so they're `local`; the **newsletter is `discord`** (a crew-feed moment, and the `clarify` Send button needs a channel the operator sees).
 - **Chaining (`context_from`):** a job can prepend another job's most recent output as context. **Not used** here: the context-note → observation handoff is durable **server state** (the stored `context_note`), not cron-run output, so the observation sweep reads the queue directly rather than chaining off the context cron's stdout. (This is intentional — chaining would couple the two jobs' ticks; the queue decouples them, which is the whole point of the context⊥observation split.)

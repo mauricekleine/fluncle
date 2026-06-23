@@ -13,7 +13,7 @@ const maxEmailLength = 254;
 // by design; `validateInput` narrows it.
 export type NewsletterInput = NewsletterBody;
 
-// Repointed Loops → Resend (docs/rfcs/newsletter-own-the-stack.md §4.1). The public
+// Repointed Loops → Resend. The public
 // contract/endpoint shape is UNCHANGED — same `POST /newsletter`, same validation,
 // same rate limit, same bare `{ ok: true }` — only the list-of-record backend
 // swaps: the email is added to the Fluncle Resend SEGMENT instead of the Loops

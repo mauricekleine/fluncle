@@ -2,7 +2,7 @@
 
 The weekly newsletter runs as the **`fluncle-newsletter` Hermes agent cron** on the devbox (Friday 15:00 Europe/Amsterdam) — the same on-box automation home as the enrichment / context / observation crons. It authors the edition in Fluncle's voice, persists it as a **draft** server-side, then offers the operator a Discord **Send** button. The send stays operator-gated.
 
-This file is the **authoring doctrine** — the window logic, the voice rails, the zero-find rule, the tidbit discipline. The self-contained cron prompt in [`hermes/cron/jobs.json`](./hermes/cron/jobs.json) (job `fluncle-newsletter`) restates it for the fresh, isolated session each Friday tick runs in; the operator wiring + the DST and `clarify`-gate mechanics live in [`hermes/cron/README.md`](./hermes/cron/README.md). The server build (the `editions` table, the Resend Broadcast send, the `/newsletter` archive) is the RFC's: [`docs/rfcs/newsletter-own-the-stack.md`](../rfcs/newsletter-own-the-stack.md). This doc consumes it.
+This file is the **authoring doctrine** — the window logic, the voice rails, the zero-find rule, the tidbit discipline. The self-contained cron prompt in [`hermes/cron/jobs.json`](./hermes/cron/jobs.json) (job `fluncle-newsletter`) restates it for the fresh, isolated session each Friday tick runs in; the operator wiring + the DST and `clarify`-gate mechanics live in [`hermes/cron/README.md`](./hermes/cron/README.md). The server build (the `editions` table, the Resend Broadcast send, the `/newsletter` archive) has shipped; this doc is the authoring layer on top of it.
 
 ## The shape (Hermes + Resend, not Spinup + Loops)
 

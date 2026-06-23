@@ -2,7 +2,7 @@
 // Discogs RELEASE id (or the MASTER that groups its versions) so the release
 // metadata corroborates the finding and `discogs.com/release/{id}` becomes a
 // per-finding `sameAs` for the track. No writes to Discogs — search + release
-// lookup only. See docs/rfcs/lastfm-discogs-sync.md §2.
+// lookup only.
 //
 // THE STANDARD: a wrong ID is worse than a missing one. Discogs search ranking is
 // unreliable (it's release-centric, variant-heavy, community-entered) while our
