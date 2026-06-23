@@ -141,3 +141,51 @@ On all three tracks the judge-loop render has LOWER raw coupling than the no-jud
 **Likely correction (ties to Decision 6):** when picking the judge anchors, include at least one HIGH-coupling alive clip scored 5 on motionEnergy (e.g. the 0.68 no-judge 020.9.8S) as the "this is alive" anchor — a rubric-only judge with no anchors appears to drift toward polish/readability over raw reactivity. The 6 pilot clips are the natural anchor set. Eyeball the mp4s directly to decide whether the judge's trade (more brand/readability, less raw coupling) reads better to you — that taste call is exactly what this comparison was built to surface.
 
 Heartbeat stood down — run complete (Part I built + verified green, 6/6 pilot videos rendered).
+
+---
+
+## Round 2 — beat-having tracks (2026-06-23)
+
+Round 1's three source tracks were all intros/lulls (per `out/overnight/labels.json`: "NO real beat … reactivity-to-a-drop was never tested"). Round 2 re-runs the before/after on **3 findings whose preview audio has a real, sustained beat**, with fresh **unbiased** sub-agents (each got only the trackId + "make the best Fluncle video per the skill" — no vehicle/coupling/round-1 hints), so the comparison is honest. 6 new mp4s in `packages/video/out/overnight/` (`<logId>.{nojudge,judge}.mp4` + `.metrics.json` + `.intent.json`), all ffprobe **1080×1920 h264+aac, ~20s**.
+
+### The beat filter (and a metric bug it caught)
+
+The first gate (`onsetDensity≥1.5 ∧ bassCrest≥2.0 ∧ energyRise`) **passed all three round-1 lulls** — the analyzer's onsets fire on atmospheric build texture, and a build IS an energy rise. Worse, across **36 sampled candidates, 0 passed** a `bassCrest≥2.0`-plus-sustain gate, because **`bassCrest` (p95/mean of the bass curve) is ANTI-correlated with a real beat**: a sustained dropped beat has _compressed_ bass (loud throughout → low crest); a sparse intro has _spiky_ bass (high crest). Requiring high crest selects FOR intros. Corrected gate (`packages/video/out/_judge/beat-gate.ts`, gitignored): **`onsetDensity≥1.5 ∧ sustainHigh≥0.35 ∧ secondHalfMean≥0.55 ∧ bassSustain≥0.3`** — sustained loudness + bass presence. It cleanly fails the round-1 lulls (sustainHigh 0.01–0.08, bassSustain 0.03–0.20) and passes real drops. Only **2 not-yet-posted** findings cleared it, so the 3rd is a **posted** track (Krakota — flagged; not swappable). Never padded with a lull.
+
+### Labeling-ready table (operator: fill the last column by eyeballing the mp4s)
+
+| Log ID   | Track                                                                           | Beat confirm (onset/s · sustainHigh · 2ndHalf · bassSustain · bpm) | Variant | Vehicle (family)                             | Hard gates                       | Coupling r (z / pctile)          | Your label |
+| -------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ------- | -------------------------------------------- | -------------------------------- | -------------------------------- | ---------- |
+| 019.3.9J | Empty Love (GLXY Remix) — Submotion Orchestra/Ed Thomas/GLXY · _not-yet-posted_ | 4.3 · 0.39 · 0.65 · 0.53 · 185                                     | nojudge | watered silk — interference weave (fluent)   | beat-pull 0.16 ✓ · flash safe ✓  | **0.04 (dead)**                  |            |
+| 019.3.9J | ″                                                                               | ″                                                                  | judge   | cell skin — voronoi (fluent)                 | beat-pull 0.14 ✓ · flash safe ✓  | **0.573** (z 6.21 / P100, alive) |            |
+| 018.5.7Y | Shelter — Flowidus · _not-yet-posted_                                           | 5.1 · 0.64 · 0.77 · 0.76 · 175                                     | nojudge | cold murmuration — ridged streaming + dither | beat-pull 0.16 ✓ · flash safe ✓  | **0.06 (dead)**                  |            |
+| 018.5.7Y | ″                                                                               | ″                                                                  | judge   | frost bloom — crystalline voronoi (fluent)   | beat-pull 0.098 ✓ · flash safe ✓ | **0.43** (z 5.55 / P100, alive)  |            |
+| 011.6.8K | Sea Air — Krakota · **POSTED (not swappable)**                                  | 5.85 · 0.60 · 0.63 · 1.0 · 185                                     | nojudge | tide screen — halftone/dither                | beat-pull 0.16 ✓ · flash safe ✓  | **−0.31 (dead)**                 |            |
+| 011.6.8K | ″                                                                               | ″                                                                  | judge   | drift veil — smear                           | beat-pull 0.13 ✓ · flash safe ✓  | **0.25** (z 3.45, alive)         |            |
+
+All 6 PASS both hard gates (beat-pull + flash). Each `judge` variant is a DIFFERENT vehicle from its `nojudge` sibling (fresh author per the unbiased design), so coupling deltas conflate vehicle + judge — **the eyeball is the arbiter.**
+
+### The headline finding — coupling is miscalibrated for real beats
+
+**All three NO-JUDGE renders read coupling "dead" (0.04 / 0.06 / −0.31)** despite passing beat-pull + flash and reacting per each agent's frame-verify. This reproduces (on real beats) the blind spot `labels.json` flagged, and explains it:
+
+- The coupling estimator runs on `structuralDelta`, which is **brightness-normalized** (mean-luma subtracted) — so it is BLIND to luminosity/exposure reactivity, a primary gate-safe channel. Krakota's no-judge "tide screen" expresses loudness through brightness → coupling went **negative** (−0.31).
+- It correlates against the audio curve's variance, but a **sustained** beat has flat-high energy (little variance) → correlation collapses toward 0 even when the picture reacts in-place to the kick.
+- Net: coupling reads "dead" on exactly the renders that ARE reacting on a real beat. **Do NOT promote coupling to a gate** (Decision 2) on this estimator; Part II needs a beat-grid-aligned reactivity measure (does material deform ON the beats, luminosity included), not curve-variance correlation.
+
+### The judge, on real beats (honest read)
+
+Every `judge` variant scored coupling "alive" (0.57 / 0.43 / 0.25) where its `nojudge` sibling read "dead" — but this is **not** clean evidence the judge improves aliveness:
+
+- The judge optimizes its rubric + the (flawed) coupling number, which rewards large-scale structural change. On **Flowidus** the agent pivoted its motion model to a **rigid one-way slide** to clear beat-pull — that is the operator's "dead sliding" failure mode, yet it scores coupling 0.43 "alive." A higher coupling number can mean _more sliding_, not more felt aliveness.
+- Where the judge clearly helped: **real brand + arc catches** grounded in metrics — GLXY's judge caught a "bolted-on golden sun" (the climax's "perfect circularity reads procedural") and the fix removed it; Krakota's judge drove the climax from **10627ms → 340ms** off the real drop. And the agents correctly **overrode** bad suggestions (GLXY's judge said "remove text overlays" — refused; the TypePlate is mandatory per doctrine 4).
+- `beatSync` stayed low (1–2) across Krakota's judge rounds — the contact-sheet (keyframes) can't perceive beat-locked in-place reactivity, so the judge leans on the flawed coupling number for "motion."
+
+**Verdict to confirm by eye:** consistent with round 1, the judge is a useful brand/arc/readability + divergence layer but does not reliably raise _felt_ aliveness and can push toward sliding. Label the 6 clips; if the judge variants read worse despite higher coupling, that confirms both the metric and the rubric-only judge need the anchors (Decision 6) before either is trusted for aliveness.
+
+### Round-2 operator calls
+
+- **Label the 6 clips above** (eyeball — the table's last column). This is the real test of judge-vs-nojudge on a beat, and seeds the coupling re-calibration.
+- **The coupling metric needs a redesign before it gates anything** — stop brightness-normalizing away luminosity; measure beat-aligned in-place reactivity, not curve-variance correlation. (Feeds Part II.)
+- Krakota (`011.6.8K`) is **already posted** — its clip is not swappable; it is here only to test aliveness-on-a-beat.
+- **OpenRouter credits ran out mid-run once** (Krakota's first judge attempt fell through to an un-judged render — no contact-sheet produced; I stopped it and re-ran after the balance recovered, then all judge calls returned `ok:true`). Part II's relay should surface a clear "judge unavailable / out of credits" advisory rather than silently shipping an un-judged render as a judged one.
