@@ -64,9 +64,9 @@
       "computedHash": "efe35ceab91ced6929208f1d63e6c1e32f891c5ed880a1039639e5f87b10affc"
     },
     "fluncle-video": {
-      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-video",
+      "source": "/Users/maurice/.superset/worktrees/5eed65e8-d27d-4e50-8b3e-2e2685c57120/video-aliveness-overnight/packages/skills/fluncle-video",
       "sourceType": "local",
-      "computedHash": "4a0adddd04a391b1b073bb8bf9ee997aa7bdfc82d776d1315cff5ca82770aa86"
+      "computedHash": "7cbba232fb04a3acfdd16b5a70461d38255cfb6cd658c88bee5c6ed7b9dc9afd"
     },
     "hetzner-devbox": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/hetzner-devbox",

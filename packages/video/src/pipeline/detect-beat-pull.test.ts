@@ -65,6 +65,21 @@ console.log("drift     :", JSON.stringify(driftR));
 console.log("jitter    :", JSON.stringify(jitterR));
 console.log("grain raw :", JSON.stringify(grainRaw), " hardened:", JSON.stringify(grainHard));
 
+// GOLDEN — byte-identical scores (a build gate). These exact floats were captured
+// from the scorer on these fixtures BEFORE the C1 refactor that factored the
+// mean-subtract → grain-fence → step[] pipeline out into frames.ts
+// (fenceFrames/structuralDelta). The 0.17 calibration was earned against this math;
+// any change that shifts these floats has changed the calibrated gate and MUST be
+// re-justified. Keep these alongside the threshold asserts below.
+assert.equal(driftR.score, 0.000311799921059464, "GOLDEN: drift score must be byte-identical");
+assert.equal(jitterR.score, 0.7404814583204837, "GOLDEN: jitter score must be byte-identical");
+assert.equal(grainRaw.score, 0.6800544743756005, "GOLDEN: grain-raw score must be byte-identical");
+assert.equal(
+  grainHard.score,
+  0.5070420720154718,
+  "GOLDEN: grain-hardened score must be byte-identical",
+);
+
 // A smooth glide passes.
 assert.equal(driftR.beatLocked, false, "a smooth glide must pass");
 assert.ok(driftR.score < 0.05, "a smooth glide has near-zero reversal");

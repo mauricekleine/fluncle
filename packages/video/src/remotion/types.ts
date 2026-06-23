@@ -87,6 +87,14 @@ export type CosmosAudio = {
   midCurve: EnergySample[];
   /** High band, >2kHz (hats/cymbals/air). 0..1, normalized. */
   trebleCurve: EnergySample[];
+  /**
+   * Continuous transient/attack (flux) envelope, 0..1 — the half-wave band-delta
+   * "shimmer" between onsets. Optional so old props.json on disk + Studio defaults
+   * still typecheck (a missing curve reads 0, today's behaviour).
+   */
+  fluxCurve?: EnergySample[];
+  /** Pre-normalization per-band crest factor; lets the motion checker tell a flat track from a normalizer-flattened one. */
+  rawDynamicsHint?: { bass: number; mid: number; treble: number };
 };
 
 export type CosmosPalette = {

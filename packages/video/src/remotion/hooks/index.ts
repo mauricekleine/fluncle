@@ -8,6 +8,7 @@ export { useEnergy, type UseCurveOptions } from "./use-energy";
 export { useBass } from "./use-bass";
 export { useMid } from "./use-mid";
 export { useTreble } from "./use-treble";
+export { useFlux } from "./use-flux";
 export {
   useAudioReactivity,
   type AudioReactivity,
