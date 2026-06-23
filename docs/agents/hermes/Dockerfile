@@ -9,10 +9,12 @@
 # RUNTIME SECRET (not baked): the `fluncle-observation` `--no-agent` cron shells out
 # to `claude -p` (Claude Code, SUBSCRIPTION auth), which authenticates from the
 # CLAUDE_CODE_OAUTH_TOKEN env var. That token is a secret — it is NEVER baked into
-# the image. It is pulled from 1Password (op://Fluncle/CLAUDE_CODE_OAUTH_TOKEN/
-# credential) into /etc/hermes.env and injected at run via --env-file, the same path
-# as the agent token + model key (docs/agents/hermes-agent.md § Secrets). The image
-# only carries the `claude` binary + the skill; the credential arrives at run time.
+# the image; it is pulled from 1Password (op://Fluncle/CLAUDE_CODE_OAUTH_TOKEN/credential).
+# The image only carries the `claude` binary + the skill; the credential arrives at run
+# time. NOTE: --env-file (/etc/hermes.env) delivers it to `docker exec` + AGENT crons, but
+# Hermes BLOCKS provider credentials from `--no-agent` cron script envs (GHSA-rhgp-j443-p4rf),
+# so observe-sweep.sh reads the token from a 0600 file instead — see
+# docs/agents/hermes/cron/README.md § Operational gotchas (do not re-debug these).
 FROM nousresearch/hermes-agent:v2026.6.19
 
 # Enrichment toolchain (docs/agents/hermes/cron/README.md): the
