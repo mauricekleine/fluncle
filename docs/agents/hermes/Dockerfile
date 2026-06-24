@@ -55,7 +55,11 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14" \
 # NOTE: box.ascii is pre-1.0 and its installer offers no version pin — it tracks
 # the `ascii-prod` channel (the CLI also self-updates), so this is the one image
 # dependency not version-pinned. Re-verify the conductor after a base rebuild.
-RUN curl -fsSL https://box.ascii.dev/install | sh \
+# SHELL=/bin/sh: the installer runs `basename "$SHELL"` under `set -u`, and $SHELL
+# is unset in a Docker build (→ "parameter not set", exit 2); setting it also makes
+# the installer skip the .bashrc/.zshrc integration (only the binary + config, clean).
+RUN export SHELL=/bin/sh \
+  && curl -fsSL https://box.ascii.dev/install | sh \
   && cp /root/.ascii/bin/box /usr/local/bin/box \
   && chmod 755 /usr/local/bin/box
 
