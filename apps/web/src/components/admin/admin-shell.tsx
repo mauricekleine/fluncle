@@ -33,6 +33,8 @@ type AdminShellProps = {
   subtitle?: ReactNode;
   /** The page heading. Quiet, small, bold — never a marketing masthead. */
   title: string;
+  /** A small inline accessory rendered immediately right of the title (e.g. the streak chip). */
+  titleAccessory?: ReactNode;
 };
 
 export function AdminShell({
@@ -43,6 +45,7 @@ export function AdminShell({
   subheader,
   subtitle,
   title,
+  titleAccessory,
 }: AdminShellProps) {
   return (
     <main
@@ -59,7 +62,10 @@ export function AdminShell({
       >
         <header className="flex items-center justify-between gap-4 border-b border-border px-4 py-3 sm:px-5">
           <div className="min-w-0">
-            <h1 className="text-sm font-bold">{title}</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-sm font-bold">{title}</h1>
+              {titleAccessory}
+            </div>
             {subtitle ? <p className="text-xs text-muted-foreground">{subtitle}</p> : undefined}
           </div>
           <div className="flex shrink-0 items-center gap-2">
