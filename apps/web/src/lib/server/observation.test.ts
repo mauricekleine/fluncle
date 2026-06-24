@@ -2,10 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   CONTEXT_DISTIL_SYSTEM_PROMPT,
+  OBSERVATION_TAIL_PAD_MS,
   buildContextQuery,
   distilContextNote,
   fetchTrackContext,
   gateObservationScript,
+  observationDurationFromAlignment,
+  sanitizeForTts,
   scanObservationScript,
   wordsFromCharacterAlignment,
 } from "./observation";
@@ -377,5 +380,58 @@ describe("wordsFromCharacterAlignment", () => {
 
   it("returns null when the arrays are absent", () => {
     expect(wordsFromCharacterAlignment(undefined)).toBeNull();
+  });
+});
+
+describe("observationDurationFromAlignment", () => {
+  it("derives the real length from the last word's end plus the tail pad", () => {
+    const duration = observationDurationFromAlignment({
+      source: "with-timestamps",
+      words: [
+        { endMs: 1200, startMs: 0, text: "a" },
+        { endMs: 38239, startMs: 37000, text: "fam" },
+      ],
+    });
+
+    // 38239 (real audio end) + pad — NOT the old flat 30000 that cut the seam.
+    expect(duration).toBe(38239 + OBSERVATION_TAIL_PAD_MS);
+  });
+
+  it("uses the MAX end, not the last entry's (out-of-order safe)", () => {
+    const duration = observationDurationFromAlignment({
+      source: "with-timestamps",
+      words: [
+        { endMs: 40000, startMs: 39000, text: "late" },
+        { endMs: 1000, startMs: 0, text: "early" },
+      ],
+    });
+
+    expect(duration).toBe(40000 + OBSERVATION_TAIL_PAD_MS);
+  });
+
+  it("returns undefined for a missing or empty alignment (caller keeps its fallback)", () => {
+    expect(observationDurationFromAlignment(null)).toBeUndefined();
+    expect(observationDurationFromAlignment(undefined)).toBeUndefined();
+    expect(
+      observationDurationFromAlignment({ source: "with-timestamps", words: [] }),
+    ).toBeUndefined();
+  });
+});
+
+describe("sanitizeForTts", () => {
+  it("rewrites an em-dash 'Artist — Title' to the spoken comma-beat", () => {
+    expect(sanitizeForTts("Whiney, LaMeduza — Teddy's Gate")).toBe(
+      "Whiney, LaMeduza, Teddy's Gate",
+    );
+  });
+
+  it("also handles en-dashes and collapses doubled spaces", () => {
+    expect(sanitizeForTts("Days Like These – Soul  Deep")).toBe("Days Like These, Soul Deep");
+  });
+
+  it("leaves dash-free text untouched (aside from trim)", () => {
+    expect(sanitizeForTts("That's a banger. Find a dark room, fam. ")).toBe(
+      "That's a banger. Find a dark room, fam.",
+    );
   });
 });

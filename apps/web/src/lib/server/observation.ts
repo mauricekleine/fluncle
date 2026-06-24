@@ -36,13 +36,15 @@ export type ObservationVoiceSettings = {
 };
 
 // A measured read for a quiet field observation, tuned by ear for the bespoke
-// Fluncle voice: stability steady-but-not-flat (lower than before, so the read
-// keeps some life), a touch more style for colour, speed just under 1 so the
-// <break/>s breathe.
+// Fluncle voice. `stability` is the runaway guard: at 0.48 the v2 model kept some
+// life but drifted into back-half gibberish / held-vowel runaways ("AAAA", "BAAA")
+// on a meaningful fraction of renders (stochastic, not length-driven). 0.6 leans the
+// read toward stable without going monotone — fewer derailments, voice intact. Style
+// and the sub-1 speed (so the <break/>s breathe) are unchanged so the identity holds.
 export const DEFAULT_VOICE_SETTINGS: ObservationVoiceSettings = {
   similarityBoost: 0.75,
   speed: 0.88,
-  stability: 0.48,
+  stability: 0.6,
   style: 0.3,
 };
 
@@ -78,6 +80,42 @@ export type ObservationAlignment = {
   source: "forced-alignment" | "with-timestamps";
   words: ObservationWord[];
 };
+
+/**
+ * The pad (ms) added past the last spoken word when deriving an observation's
+ * duration from its alignment. The radio segment length IS this duration
+ * (radio-schedule.ts), and the breather darkens the final BREATHER_FADE_OUT_MS
+ * (900ms) of the segment — so without a pad the closing word would be eaten by the
+ * fade. A pad comfortably past that window lets the read finish lit, then fade into
+ * the dark beat between findings.
+ */
+export const OBSERVATION_TAIL_PAD_MS = 1200;
+
+/**
+ * Derive the real observation duration (ms) from its word alignment — the last
+ * word's end plus OBSERVATION_TAIL_PAD_MS. This is the truth the radio clock needs:
+ * the box cron doesn't ffprobe, so `/observe` falls back to this instead of the 30s
+ * TARGET (which clamped every segment to 30s while real reads run 35–50s, cutting the
+ * audio at the seam). Returns undefined for a missing/empty alignment (caller keeps
+ * its own fallback). Also the source of truth for the one-off duration backfill.
+ */
+export function observationDurationFromAlignment(
+  alignment: ObservationAlignment | null | undefined,
+): number | undefined {
+  if (!alignment || alignment.words.length === 0) {
+    return undefined;
+  }
+
+  let lastEndMs = 0;
+
+  for (const word of alignment.words) {
+    if (word.endMs > lastEndMs) {
+      lastEndMs = word.endMs;
+    }
+  }
+
+  return lastEndMs > 0 ? lastEndMs + OBSERVATION_TAIL_PAD_MS : undefined;
+}
 
 /** What lands at <log-id>/observation.json — script + render metadata + provenance. */
 export type ObservationArtifact = ObservationScript & {
@@ -632,6 +670,20 @@ type WithTimestampsResponse = {
 };
 
 /**
+ * Sanitise the spoken text for TTS stability. An em/en dash ("Artist — Title") is a
+ * known v2 destabiliser — it can drop the read into a long mis-pause or shove the
+ * prosody off the rails — so the dash that means "a beat, then the title" is rewritten
+ * to the comma it actually sounds like. Shaping only what reaches ElevenLabs (and thus
+ * the spoken/caption timing); the agent's original script is still stored verbatim.
+ */
+export function sanitizeForTts(text: string): string {
+  return text
+    .replace(/\s*[—–]\s*/g, ", ")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+/**
  * Render the spoken observation via the ElevenLabs TTS `/with-timestamps` REST API:
  * one call returns the mp3 (base64) AND character-level alignment, so a fresh render
  * captures its caption timings at generation time (no separate forced-alignment
@@ -651,7 +703,7 @@ export async function renderObservation(
   const response = await fetch(url, {
     body: JSON.stringify({
       model_id: model,
-      text,
+      text: sanitizeForTts(text),
       voice_settings: {
         similarity_boost: voiceSettings.similarityBoost,
         speed: voiceSettings.speed,

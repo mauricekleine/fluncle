@@ -41,6 +41,7 @@ import {
   buildContextQuery,
   fetchTrackContext,
   gateObservationScript,
+  observationDurationFromAlignment,
   renderObservation,
   resolveVoiceId,
 } from "../observation";
@@ -408,14 +409,18 @@ export function adminTracksHandlers(os: Implementer) {
       });
 
       // Duration: ElevenLabs doesn't return one and the Worker can't probe (no
-      // ffprobe). The agent passes the ffprobe value; absent it, estimate from the
-      // target with a noted ±budget. The radio page never re-probes.
+      // ffprobe). Prefer an explicit probed `body.durationMs`; absent it (the box cron
+      // doesn't ffprobe), derive the REAL length from the alignment's last word —
+      // since the radio segment length IS this duration (radio-schedule.ts), the old
+      // `durationTargetSec * 1000` fallback clamped every read to 30s and cut the audio
+      // at the seam. The 30s target only survives as a last resort when there's no
+      // alignment at all. The radio page never re-probes.
       const durationMs =
         typeof body.durationMs === "number" &&
         Number.isFinite(body.durationMs) &&
         body.durationMs > 0
           ? Math.round(body.durationMs)
-          : durationTargetSec * 1000;
+          : (observationDurationFromAlignment(alignment) ?? durationTargetSec * 1000);
 
       const media = trackMedia(track.logId);
       const generatedAt = new Date().toISOString();
