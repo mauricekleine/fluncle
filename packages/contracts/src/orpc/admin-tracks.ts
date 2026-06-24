@@ -55,6 +55,9 @@ const ObserveTrackBodySchema = z.looseObject({
   contextNote: z.unknown().optional(),
   durationMs: z.unknown().optional(),
   durationTargetSec: z.unknown().optional(),
+  // Re-render an existing observation instead of no-op'ing on it (operator-driven
+  // voice re-tunes / fixing a degenerate render). Default behaviour stays idempotent.
+  force: z.unknown().optional(),
   model: z.unknown().optional(),
   script: z.unknown().optional(),
   voiceId: z.unknown().optional(),

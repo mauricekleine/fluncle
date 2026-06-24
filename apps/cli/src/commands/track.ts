@@ -333,6 +333,8 @@ export type TrackObserveOptions = {
   contextNote?: string;
   durationMs?: number;
   durationTargetSec?: number;
+  /** Re-render even if an observation already exists (voice re-tune / fix a render). */
+  force?: boolean;
   model?: string;
   /** The spoken script (read from --script-file by the caller, or passed inline). */
   script: string;
@@ -343,6 +345,7 @@ type ObserveBody = {
   contextNote?: string;
   durationMs?: number;
   durationTargetSec?: number;
+  force?: boolean;
   model?: string;
   script: string;
   voiceId?: string;
@@ -380,6 +383,9 @@ export async function trackObserveCommand(
   }
   if (options.contextNote !== undefined) {
     body.contextNote = options.contextNote;
+  }
+  if (options.force) {
+    body.force = true;
   }
 
   return adminApiPost<TrackObserveResult>(

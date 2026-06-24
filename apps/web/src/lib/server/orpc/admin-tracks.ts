@@ -349,8 +349,11 @@ export function adminTracksHandlers(os: Implementer) {
       // is a no-op, so re-pulling an in-flight item — or an external cron firing on
       // a fixed interval — never spends a second ElevenLabs render or overwrites the
       // existing artifact. The versioned playback URL on the row is already keyed by
-      // the prior render; report it back unchanged.
-      if (track.observationAudioUrl) {
+      // the prior render; report it back unchanged. `force` bypasses this for a
+      // deliberate operator re-render (voice re-tune / fixing a degenerate render).
+      const force = body.force === true;
+
+      if (track.observationAudioUrl && !force) {
         const existingBase = encodeURIComponent(track.logId);
 
         return {

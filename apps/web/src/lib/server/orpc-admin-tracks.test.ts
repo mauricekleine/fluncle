@@ -358,6 +358,29 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
     expect(updateTrack).not.toHaveBeenCalled();
   });
 
+  it("force: re-renders an existing observation (bypasses idempotency)", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce({
+      ...TRACK,
+      observationAudioUrl: "https://found.fluncle.com/004.7.2I/observation.mp3?v=1",
+      observationDurationMs: 30000,
+      observationGeneratedAt: "2026-06-01T00:00:00.000Z",
+    });
+    updateTrack.mockResolvedValueOnce({ fields: [], trackId: TRACK_ID });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      post("/observe", OPERATOR_TOKEN, { force: true, script: GOOD_SCRIPT }),
+    );
+
+    expect(response?.status).toBe(200);
+    const data = (await readJson(response)) as { ok: boolean; skipped?: boolean };
+    expect(data.ok).toBe(true);
+    expect(data.skipped).toBeUndefined();
+    // The whole render path runs again — the deliberate operator re-render.
+    expect(renderObservation).toHaveBeenCalled();
+    expect(updateTrack).toHaveBeenCalled();
+  });
+
   it("422s a script with a banned identity word before spending a render", async () => {
     getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
 

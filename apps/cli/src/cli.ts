@@ -107,6 +107,7 @@ type TrackObserveOptions = {
   contextNote?: string;
   durationMs?: string;
   durationTargetSec?: string;
+  force?: boolean;
   json: boolean;
   limit?: string;
   model?: string;
@@ -630,6 +631,11 @@ function addAdminCommands(program: Command): void {
     .option("--duration-ms <ms>", "Probed audio duration in ms (the agent runs ffprobe)")
     .option("--duration-target-sec <sec>", "Target observation length in seconds (20–45)")
     .option("--context-note <text>", "Pre-fetched factual context (else the Worker firecrawls)")
+    .option(
+      "--force",
+      "Re-render even if an observation already exists (voice re-tune / fix)",
+      false,
+    )
     .option("--json", "Print JSON", false)
     .allowExcessArguments()
     .action(async (idOrLogId: string | undefined, options: TrackObserveOptions) => {
@@ -1107,6 +1113,7 @@ async function runTrackObserve(
     contextNote: options.contextNote,
     durationMs,
     durationTargetSec,
+    force: options.force,
     model: options.model,
     script: script.trim(),
     voiceId: options.voiceId,
