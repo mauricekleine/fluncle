@@ -82,8 +82,9 @@ const STATUS_LABEL: Record<ServiceHealthStatus, string> = {
   ok: "Operational",
 };
 
-// The canon mapping (DESIGN.md, the Nostalgic Cosmos has no green) — escalating by
-// LOUDNESS so the eye lands on trouble, not on the calm:
+// The canon mapping (DESIGN.md — the Nostalgic Cosmos has no green, and The One Sun
+// Rule caps Eclipse Gold at ~10% of a view) — escalating by LOUDNESS so the eye lands
+// on trouble, not on the calm (a grid of filled gold "ok" badges blew that budget):
 //   ok       → a small Eclipse-Gold dot that gently pings (motion-safe), with a
 //              quiet muted label. Healthy is the baseline, so it stays calm and
 //              gold reads as a living signal, not wallpaper.
@@ -210,7 +211,7 @@ function StatusPage() {
 
       {ordered.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          No signal from the services yet. Check back in a moment.
+          Nothing's reported in from the services yet. Check back in a moment.
         </p>
       ) : (
         <section aria-label="Service health" className="grid grid-cols-1 gap-4 sm:grid-cols-2">
