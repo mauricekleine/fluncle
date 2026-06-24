@@ -33,6 +33,12 @@
     // to change voices. The matching ELEVENLABS_API_KEY is a secret the operator
     // sets with `wrangler secret put`, never checked in.
     "ELEVENLABS_VOICE_ID": "z2NqaumJt62XBIPvDgjw",
+    // Cartesia (Sonic) — the migration voice. CARTESIA_VOICE_ID is the cloned Fluncle
+    // voice (instant-clone of the bespoke read), a swappable config var like the
+    // ElevenLabs one. The matching CARTESIA_API_KEY is a secret set with
+    // `wrangler secret put`. OBSERVATION_PROVIDER is unset here (defaults to
+    // elevenlabs in code); set it to "cartesia" to flip the render vendor.
+    "CARTESIA_VOICE_ID": "ca8c023f-1901-40f7-be8c-faafd7a58139",
   },
   // OPERATOR OPS STEP — Media Transformations (playback renditions):
   // The web playback surfaces (Stories, the log-page footage) request same-zone

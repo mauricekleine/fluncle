@@ -33,16 +33,21 @@ import { parseEditorialNote } from "../http-errors";
 import { gateNoteText } from "../note";
 import { publishTrack } from "../publish";
 import {
+  DEFAULT_CARTESIA_SPEED,
   DEFAULT_OBSERVATION_MODEL,
   DEFAULT_VOICE_SETTINGS,
   type ObservationArtifact,
   type ObservationModel,
   type ObservationVoiceSettings,
+  type RenderedObservation,
   buildContextQuery,
   fetchTrackContext,
   gateObservationScript,
   observationDurationFromAlignment,
   renderObservation,
+  renderObservationCartesia,
+  resolveCartesiaVoiceId,
+  resolveObservationProvider,
   resolveVoiceId,
 } from "../observation";
 import { adminAuth, operatorGuard } from "../orpc-auth";
@@ -373,12 +378,8 @@ export function adminTracksHandlers(os: Implementer) {
       // The agent authors + voice-gates the script; the Worker re-runs the
       // mechanical scan (defence in depth) and hard-fails on any violation.
       const script = gateObservationScript(body.script);
-      const model = resolveModel(body.model);
-      const voiceSettings = resolveVoiceSettings(body.voiceSettings);
       const durationTargetSec = resolveDurationTargetSec(body.durationTargetSec);
-      const voiceId = await resolveVoiceId(
-        typeof body.voiceId === "string" ? body.voiceId : undefined,
-      );
+      const provider = await resolveObservationProvider();
 
       // The factual context, treated strictly as INTERNAL DATA (never instructions).
       // observe_track no longer holds Firecrawl: it reads the already-stored
@@ -401,15 +402,35 @@ export function adminTracksHandlers(os: Implementer) {
         freshlyFetched = Boolean(fetched.contextNote);
       }
 
-      // Render the spoken observation (ElevenLabs `/with-timestamps`): one call
-      // returns the mp3 bytes AND the character alignment, normalised here to the
-      // stored word-level shape. A missing/malformed alignment is `null` (captions
-      // degrade to none) — it never blocks the render.
-      const { alignment, bytes } = await renderObservation(voiceId, {
-        model,
-        text: script,
-        voiceSettings,
-      });
+      // Render via the configured vendor (default Cartesia). Both paths return
+      // `{ alignment, bytes, voiceId }` in the same shape, so duration, captions, and
+      // the upload stay provider-agnostic. ElevenLabs carries model + voiceSettings;
+      // Cartesia carries neither (its knobs live in renderObservationCartesia, which
+      // also encodes the streamed PCM → MP3). A missing/malformed alignment is `null`
+      // (captions degrade) — never a render failure.
+      let rendered: RenderedObservation;
+      let model: ObservationModel | undefined;
+      let voiceSettings: ObservationVoiceSettings | undefined;
+
+      if (provider === "cartesia") {
+        const cartesiaVoiceId = await resolveCartesiaVoiceId(
+          typeof body.voiceId === "string" ? body.voiceId : undefined,
+        );
+
+        rendered = await renderObservationCartesia(cartesiaVoiceId, { text: script });
+      } else {
+        model = resolveModel(body.model);
+        voiceSettings = resolveVoiceSettings(body.voiceSettings);
+
+        const elevenVoiceId = await resolveVoiceId(
+          typeof body.voiceId === "string" ? body.voiceId : undefined,
+        );
+
+        rendered = await renderObservation(elevenVoiceId, { model, text: script, voiceSettings });
+      }
+
+      const { alignment, bytes } = rendered;
+      const voiceId = rendered.voiceId;
 
       // Duration: ElevenLabs doesn't return one and the Worker can't probe (no
       // ffprobe). Prefer an explicit probed `body.durationMs`; absent it (the box cron
@@ -436,13 +457,14 @@ export function adminTracksHandlers(os: Implementer) {
         durationTargetSec,
         generatedAt,
         logId: track.logId,
-        model,
-        provider: "elevenlabs",
+        ...(model ? { model } : {}),
+        provider,
+        ...(provider === "cartesia" ? { speed: DEFAULT_CARTESIA_SPEED } : {}),
         text: script,
         textUrl: media.observationTextUrl,
         trackId: track.trackId,
         voiceId,
-        voiceSettings,
+        ...(voiceSettings ? { voiceSettings } : {}),
       };
 
       // Upload the three R2 objects at <log-id>/<name> (the Worker holds the

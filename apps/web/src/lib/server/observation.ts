@@ -18,6 +18,7 @@
 // (firecrawl search, ElevenLabs TTS) — a `fetch` await burns ~no Worker CPU and
 // the ~0.5 MB mp3 fits in memory.
 
+import lamejs from "@breezystack/lamejs";
 import { readEnv, readOptionalEnv } from "./env";
 import { ApiError } from "./spotify";
 
@@ -48,15 +49,18 @@ export const DEFAULT_VOICE_SETTINGS: ObservationVoiceSettings = {
   style: 0.3,
 };
 
+/** Which TTS vendor renders the observation. */
+export type ObservationProvider = "cartesia" | "elevenlabs";
+
 /** The structured observation the agent authors and posts to /observe. */
 export type ObservationScript = {
   durationTargetSec: number; // 20–45
   logId: string; // the fluncle:// coordinate
-  model: ObservationModel;
+  model?: ObservationModel; // ElevenLabs only (Cartesia has no model knob)
   sources?: string[]; // firecrawl provenance, kept off the DB
-  text: string; // the spoken prose (with <break/> for v2) — what goes to TTS
+  text: string; // the spoken prose — what goes to TTS
   trackId: string;
-  voiceSettings: ObservationVoiceSettings;
+  voiceSettings?: ObservationVoiceSettings; // ElevenLabs only
 };
 
 /**
@@ -77,7 +81,7 @@ export type ObservationWord = { endMs: number; startMs: number; text: string };
  * now-retired one-off backfill still carry it (the caption render reads them).
  */
 export type ObservationAlignment = {
-  source: "forced-alignment" | "with-timestamps";
+  source: "cartesia" | "forced-alignment" | "with-timestamps";
   words: ObservationWord[];
 };
 
@@ -124,7 +128,8 @@ export type ObservationArtifact = ObservationScript & {
   contextNote?: string; // the firecrawl facts used as fuel (also stored on the row)
   durationMs: number;
   generatedAt: string;
-  provider: "elevenlabs";
+  provider: ObservationProvider;
+  speed?: number; // Cartesia only (the render speed)
   textUrl: string; // …/observation.txt
   voiceId: string;
 };
@@ -651,6 +656,32 @@ export async function resolveVoiceId(override?: string): Promise<string> {
   return configured;
 }
 
+/**
+ * Which TTS vendor renders the observation. Defaults to `elevenlabs` (the incumbent)
+ * so deploying the Cartesia code is a no-op; the migration flips it by setting
+ * `OBSERVATION_PROVIDER=cartesia` once the key + cloned voice id are provisioned.
+ */
+export async function resolveObservationProvider(): Promise<ObservationProvider> {
+  const configured = await readOptionalEnv("OBSERVATION_PROVIDER");
+
+  return configured === "cartesia" ? "cartesia" : "elevenlabs";
+}
+
+/** Resolve the cloned Fluncle voice id on Cartesia (config var, request may override). */
+export async function resolveCartesiaVoiceId(override?: string): Promise<string> {
+  if (typeof override === "string" && override.trim()) {
+    return override.trim();
+  }
+
+  const configured = await readOptionalEnv("CARTESIA_VOICE_ID");
+
+  if (!configured) {
+    throw new ApiError("no_voice_id", "No CARTESIA_VOICE_ID configured", 400);
+  }
+
+  return configured;
+}
+
 /** Decode a base64 string (the `/with-timestamps` audio payload) to bytes. */
 function base64ToArrayBuffer(base64: string): ArrayBuffer {
   const binary = atob(base64);
@@ -757,6 +788,243 @@ export async function renderObservation(
   return {
     alignment: words ? { source: "with-timestamps", words } : null,
     bytes: base64ToArrayBuffer(payload.audio_base64),
+    voiceId,
+  };
+}
+
+// ── Cartesia (Sonic) render path ─────────────────────────────────────────────
+//
+// The migration voice (a conversational read that doesn't drag on dreamy scripts
+// the way v2 does). Cartesia's timestamped endpoint (`/tts/sse`) streams RAW PCM
+// only, so we encode PCM → MP3 in-process with lamejs — the Worker can't ffmpeg, and
+// a master/rendition transform doesn't fit a single spoken clip. The encode is
+// ~250ms for ~14s of audio (well inside the Worker CPU budget) and lands a 30s read
+// at ~0.35 MB (smaller than the old ElevenLabs mp3). Word timestamps ride the same
+// SSE stream, normalised to the stored alignment shape, so captions + the duration
+// derivation work unchanged.
+
+const CARTESIA_API = "https://api.cartesia.ai";
+const CARTESIA_VERSION = "2026-03-01";
+const CARTESIA_MODEL = "sonic-3";
+const CARTESIA_SAMPLE_RATE = 44100;
+const CARTESIA_MP3_KBPS = 96;
+
+/** The render speed, dialed by ear (a touch faster than the spike's 0.76). */
+export const DEFAULT_CARTESIA_SPEED = 0.8;
+
+/**
+ * Strip the ElevenLabs `<break/>` SSML (Cartesia doesn't parse it, and the
+ * catalog-free doctrine drops breaks anyway) and rewrite the em/en dash to the spoken
+ * comma — the Cartesia-side sibling of `sanitizeForTts`.
+ */
+export function sanitizeForCartesia(text: string): string {
+  return text
+    .replace(/<break[^>]*>/g, " ")
+    .replace(/\s*[—–]\s*/g, ", ")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+/** Cartesia's parallel word-timestamp arrays (seconds) → the stored word shape (ms). */
+export function wordsFromCartesia(
+  words: string[],
+  starts: number[],
+  ends: number[],
+): ObservationWord[] | null {
+  const count = Math.min(words.length, starts.length, ends.length);
+
+  if (count === 0) {
+    return null;
+  }
+
+  const out: ObservationWord[] = [];
+
+  for (let i = 0; i < count; i += 1) {
+    const text = (words[i] ?? "").trim();
+
+    if (!text) {
+      continue;
+    }
+
+    out.push({ endMs: secToMs(ends[i] ?? 0), startMs: secToMs(starts[i] ?? 0), text });
+  }
+
+  return out.length > 0 ? out : null;
+}
+
+/** Concatenate byte chunks into one buffer (PCM chunks, then MP3 frames). */
+function concatBytes(parts: Uint8Array[]): Uint8Array {
+  let total = 0;
+
+  for (const part of parts) {
+    total += part.length;
+  }
+
+  const out = new Uint8Array(total);
+  let offset = 0;
+
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+
+  return out;
+}
+
+type CartesiaSseEvent = {
+  data?: string;
+  message?: string;
+  title?: string;
+  type: string;
+  word_timestamps?: { end: number[]; start: number[]; words: string[] };
+};
+
+/** Drain Cartesia's SSE stream into the concatenated PCM + the word timestamps. */
+async function readCartesiaSse(
+  body: ReadableStream<Uint8Array>,
+): Promise<{ pcm: Uint8Array; words: ObservationWord[] | null }> {
+  const chunks: Uint8Array[] = [];
+  const words: string[] = [];
+  const starts: number[] = [];
+  const ends: number[] = [];
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let live = true;
+
+  while (live) {
+    const { value, done } = await reader.read();
+
+    if (done) {
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+
+    let sep = buffer.indexOf("\n\n");
+
+    while (sep !== -1) {
+      const frame = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      sep = buffer.indexOf("\n\n");
+
+      const line = frame.split("\n").find((l) => l.startsWith("data:"));
+
+      if (!line) {
+        continue;
+      }
+
+      const evt = JSON.parse(line.slice(5).trim()) as CartesiaSseEvent;
+
+      if (evt.type === "chunk" && evt.data) {
+        chunks.push(new Uint8Array(base64ToArrayBuffer(evt.data)));
+      } else if (evt.type === "timestamps" && evt.word_timestamps) {
+        words.push(...evt.word_timestamps.words);
+        starts.push(...evt.word_timestamps.start);
+        ends.push(...evt.word_timestamps.end);
+      } else if (evt.type === "done") {
+        live = false;
+      } else if (evt.type === "error") {
+        throw new ApiError(
+          "cartesia_error",
+          `Cartesia stream error: ${(evt.title ?? "") + (evt.message ? ` ${evt.message}` : "")}`.trim(),
+          502,
+        );
+      }
+    }
+  }
+
+  return { pcm: concatBytes(chunks), words: wordsFromCartesia(words, starts, ends) };
+}
+
+/** Encode raw PCM (s16le, mono) → MP3 bytes with lamejs (the Worker can't ffmpeg). */
+function encodePcmToMp3(pcm: Uint8Array, sampleRate: number, kbps: number): ArrayBuffer {
+  const encoder = new lamejs.Mp3Encoder(1, sampleRate, kbps);
+  const samples = new Int16Array(pcm.buffer, pcm.byteOffset, Math.floor(pcm.byteLength / 2));
+  const parts: Uint8Array[] = [];
+  const block = 1152; // one MP3 frame's worth of samples
+
+  for (let i = 0; i < samples.length; i += block) {
+    const part = encoder.encodeBuffer(samples.subarray(i, i + block));
+
+    if (part.length > 0) {
+      parts.push(part);
+    }
+  }
+
+  const tail = encoder.flush();
+
+  if (tail.length > 0) {
+    parts.push(tail);
+  }
+
+  let total = 0;
+
+  for (const part of parts) {
+    total += part.length;
+  }
+
+  const out = new ArrayBuffer(total);
+  const view = new Uint8Array(out);
+  let offset = 0;
+
+  for (const part of parts) {
+    view.set(part, offset);
+    offset += part.length;
+  }
+
+  return out;
+}
+
+/**
+ * Render the spoken observation via Cartesia Sonic (`/tts/sse`): one streamed call
+ * returns raw PCM + word timestamps; the PCM is encoded to a small mono MP3 in-process
+ * (lamejs). Mirrors `renderObservation`'s `{ alignment, bytes, voiceId }` return so the
+ * observe handler stays provider-agnostic.
+ */
+export async function renderObservationCartesia(
+  voiceId: string,
+  { speed = DEFAULT_CARTESIA_SPEED, text }: { speed?: number; text: string },
+): Promise<RenderedObservation> {
+  const apiKey = await readEnv("CARTESIA_API_KEY");
+
+  const response = await fetch(`${CARTESIA_API}/tts/sse`, {
+    body: JSON.stringify({
+      add_timestamps: true,
+      generation_config: { speed },
+      language: "en",
+      model_id: CARTESIA_MODEL,
+      output_format: { container: "raw", encoding: "pcm_s16le", sample_rate: CARTESIA_SAMPLE_RATE },
+      transcript: sanitizeForCartesia(text),
+      voice: { id: voiceId, mode: "id" },
+    }),
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Cartesia-Version": CARTESIA_VERSION,
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+
+  if (!response.ok || !response.body) {
+    const detail = await response.text().catch(() => "");
+
+    throw new ApiError(
+      "cartesia_error",
+      `Cartesia render failed (${response.status})${detail ? `: ${detail.slice(0, 300)}` : ""}`,
+      502,
+    );
+  }
+
+  const { pcm, words } = await readCartesiaSse(response.body);
+
+  if (pcm.byteLength === 0) {
+    throw new ApiError("cartesia_error", "Cartesia returned no audio", 502);
+  }
+
+  return {
+    alignment: words ? { source: "cartesia", words } : null,
+    bytes: encodePcmToMp3(pcm, CARTESIA_SAMPLE_RATE, CARTESIA_MP3_KBPS),
     voiceId,
   };
 }

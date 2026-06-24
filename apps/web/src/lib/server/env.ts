@@ -16,6 +16,16 @@ const envKeys = [
   "ADMIN_SESSION_SECRET",
   "BETTER_AUTH_SECRET",
   "BETTER_AUTH_URL",
+  // Cartesia (Sonic) TTS — the migration voice for the audio-observation render
+  // (Worker-side). CARTESIA_API_KEY is a secret; CARTESIA_VOICE_ID is the swappable
+  // config var holding the cloned Fluncle voice id. OBSERVATION_PROVIDER
+  // ("cartesia" | "elevenlabs") flips the render vendor at runtime (default
+  // elevenlabs, so deploying the Cartesia code is a no-op until the flip); both the
+  // voice id and the provider read via readOptionalEnv so an unprovisioned Worker
+  // degrades cleanly.
+  "CARTESIA_API_KEY",
+  "CARTESIA_VOICE_ID",
+  "OBSERVATION_PROVIDER",
   // ElevenLabs TTS for the audio-observation render (Worker-side; the agent never
   // holds it). ELEVENLABS_API_KEY is a secret; ELEVENLABS_VOICE_ID is a swappable
   // config var (a stock library voice today; the bespoke Fluncle voice drops in by

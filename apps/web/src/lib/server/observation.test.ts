@@ -8,8 +8,10 @@ import {
   fetchTrackContext,
   gateObservationScript,
   observationDurationFromAlignment,
+  sanitizeForCartesia,
   sanitizeForTts,
   scanObservationScript,
+  wordsFromCartesia,
   wordsFromCharacterAlignment,
 } from "./observation";
 
@@ -449,5 +451,33 @@ describe("sanitizeForTts", () => {
     expect(sanitizeForTts('a beat <break time="0.3s"/> then more')).toBe(
       'a beat <break time="0.3s"/> then more',
     );
+  });
+});
+
+describe("sanitizeForCartesia", () => {
+  it("strips <break> SSML entirely (Cartesia doesn't parse it) and the em-dash", () => {
+    expect(sanitizeForCartesia('rolls you quiet. <break time="1.0s"/> Days Like These.')).toBe(
+      "rolls you quiet. Days Like These.",
+    );
+    expect(sanitizeForCartesia("BOP, Unquote — Drifting Away")).toBe("BOP, Unquote, Drifting Away");
+  });
+});
+
+describe("wordsFromCartesia", () => {
+  it("zips the parallel second-arrays into the stored ms word shape", () => {
+    expect(wordsFromCartesia(["Hello", "world"], [0, 0.51], [0.4, 0.92])).toEqual([
+      { endMs: 400, startMs: 0, text: "Hello" },
+      { endMs: 920, startMs: 510, text: "world" },
+    ]);
+  });
+
+  it("drops empty/whitespace word tokens and tolerates a length mismatch", () => {
+    expect(wordsFromCartesia(["hi", "  ", "yo"], [0, 0.2, 0.3], [0.2, 0.3])).toEqual([
+      { endMs: 200, startMs: 0, text: "hi" },
+    ]);
+  });
+
+  it("returns null for empty input", () => {
+    expect(wordsFromCartesia([], [], [])).toBeNull();
   });
 });
