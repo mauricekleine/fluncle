@@ -38,6 +38,14 @@ export type StatusEventRow = {
   status: ServiceHealthStatus;
 };
 
+/** One historical check sample as `service_check_samples` stores it (the uptime bar). */
+export type ServiceCheckSampleRow = {
+  at: string;
+  latency_ms: number | null;
+  service: string;
+  status: ServiceHealthStatus;
+};
+
 /** One probed service in an incoming health snapshot (the `record_health` body). */
 export type HealthCheckInput = {
   latencyMs: number | null;
@@ -50,6 +58,11 @@ export type HealthCheckInput = {
 // The ledger is trimmed to this many most-recent rows on every write — a status
 // page never needs deep history, and this keeps the table bounded without a cron.
 const STATUS_EVENTS_KEEP = 200;
+
+// Each service's recent-check ledger is trimmed to this many most-recent rows on
+// every write — the uptime bar shows the last N checks (≈ N × the 10m cadence),
+// bounded without a cron. It fills in over time, then rolls.
+const SERVICE_CHECK_SAMPLES_KEEP = 90;
 
 /** Every `service_status` row, newest-checked first — the page's service grid. */
 export async function getServiceStatuses(): Promise<ServiceStatusRow[]> {
@@ -75,6 +88,29 @@ export async function getRecentStatusEvents(limit = 15): Promise<StatusEventRow[
   });
 
   return typedRows<StatusEventRow>(result.rows);
+}
+
+/**
+ * The recent check samples grouped by service, OLDEST→newest within each (so the bar
+ * renders left-to-right, oldest at the left). A plain object (JSON-serialisable across
+ * the loader boundary), keyed by service id; the table is bounded by the per-write
+ * prune, so this reads at most SERVICE_CHECK_SAMPLES_KEEP × service-count rows.
+ */
+export async function getServiceCheckSamples(): Promise<Record<string, ServiceCheckSampleRow[]>> {
+  const db = await getDb();
+  const result = await db.execute(
+    `select service, status, latency_ms, at
+       from service_check_samples
+       order by service asc, at asc`,
+  );
+
+  const byService: Record<string, ServiceCheckSampleRow[]> = {};
+
+  for (const row of typedRows<ServiceCheckSampleRow>(result.rows)) {
+    (byService[row.service] ??= []).push(row);
+  }
+
+  return byService;
 }
 
 /**
@@ -115,6 +151,32 @@ export async function recordHealthSnapshot(at: string, checks: HealthCheckInput[
         sql: `insert into status_events (id, service, status, message, at)
                 values (?, ?, ?, ?, ?)`,
       });
+    }
+
+    // Append this check to the recent-samples ledger (the uptime bar), then prune
+    // this service to its most-recent SERVICE_CHECK_SAMPLES_KEEP rows. NON-CRITICAL:
+    // the bar is an enhancement, so a failure here (e.g. the table not yet migrated
+    // during a deploy window) must never lose the service_status upsert + the event
+    // above — it is caught and logged, not thrown.
+    try {
+      await db.execute({
+        args: [randomUUID(), check.service, check.status, check.latencyMs, at],
+        sql: `insert into service_check_samples (id, service, status, latency_ms, at)
+                values (?, ?, ?, ?, ?)`,
+      });
+      await db.execute({
+        args: [check.service, check.service, SERVICE_CHECK_SAMPLES_KEEP],
+        sql: `delete from service_check_samples
+                where service = ?
+                  and id not in (
+                    select id from service_check_samples
+                    where service = ?
+                    order by at desc, id desc
+                    limit ?
+                  )`,
+      });
+    } catch (error) {
+      console.error("recordHealthSnapshot: sample-ledger write failed (non-critical)", error);
     }
   }
 

@@ -2,10 +2,11 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { siteUrl } from "@/lib/fluncle-links";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   getRecentStatusEvents,
+  getServiceCheckSamples,
   getServiceStatuses,
+  type ServiceCheckSampleRow,
   type ServiceHealthStatus,
   type ServiceStatusRow,
   type StatusEventRow,
@@ -27,28 +28,47 @@ const SERVICE_ORDER = ["web", "db", "r2", "dns", "ssh", "onion", "hermes", "rend
 
 // A human label per known service id (falls back to the raw id for an unknown one).
 const SERVICE_LABELS: Record<string, string> = {
+  automation: "Enrichment Agents",
   db: "Database",
   dns: "DNS",
   hermes: "Hermes agent",
   onion: "Tor onion",
-  r2: "R2 storage",
-  "render-box": "Render box",
+  r2: "Media storage",
+  "render-box": "Video Rendering Agent",
   ssh: "SSH terminal",
   web: "Web",
+};
+
+// A quiet one-line subtitle per service — the public domain it lives at, or a plain
+// description of what it does. Public-safe (every domain here is already public; the
+// descriptions name no internal host). Absent for an unknown service.
+const SERVICE_SUBTITLES: Record<string, string> = {
+  automation: "the per-finding enrichment crew",
+  dns: "dig.fluncle.com",
+  hermes: "the Discord chat agent",
+  r2: "found.fluncle.com",
+  "render-box": "renders each finding's video",
+  ssh: "rave.fluncle.com",
+  web: "www.fluncle.com",
 };
 
 type StatusPageData = {
   events: StatusEventRow[];
   now: string;
+  samples: Record<string, ServiceCheckSampleRow[]>;
   services: ServiceStatusRow[];
 };
 
 const fetchStatus = createServerFn({ method: "GET" }).handler(async (): Promise<StatusPageData> => {
-  const [services, events] = await Promise.all([getServiceStatuses(), getRecentStatusEvents(15)]);
+  const [services, events, samples] = await Promise.all([
+    getServiceStatuses(),
+    getRecentStatusEvents(15),
+    getServiceCheckSamples(),
+  ]);
 
   // The reference instant for every relative-time render, fixed in the loader so
   // the server-rendered "up 3d" matches hydration exactly (no client clock drift).
-  return { events, now: new Date().toISOString(), services };
+  return { events, now: new Date().toISOString(), samples, services };
 });
 
 const title = "System Status · Fluncle";
@@ -168,6 +188,102 @@ function serviceLabel(service: string): string {
   return SERVICE_LABELS[service] ?? service;
 }
 
+function serviceSubtitle(service: string): string | undefined {
+  return SERVICE_SUBTITLES[service];
+}
+
+// The recent-uptime bar holds this many fixed ticks; real samples are right-aligned
+// (newest = "now" at the far right) and the unfilled left is padded with faint
+// placeholders, so the strip is always full-width and visibly FILLS IN as the ledger
+// grows (≈ BAR_SLOTS × the 10m cadence of history).
+const BAR_SLOTS = 90;
+
+// Tick tone per status — a calm dim neutral for ok (Eclipse Gold is reserved for the
+// live edge + the status dot, per The One Sun Rule), amber for degraded, red for down,
+// a faint placeholder for a slot the ledger hasn't reached yet.
+function tickClass(status: ServiceHealthStatus | null): string {
+  if (status === "down") {
+    return "bg-destructive";
+  }
+  if (status === "degraded") {
+    return "bg-[#ffd057]";
+  }
+  if (status === "ok") {
+    return "bg-muted-foreground/35";
+  }
+  return "bg-muted-foreground/10";
+}
+
+function UptimeBar({
+  samples,
+  status,
+}: {
+  samples: ServiceCheckSampleRow[];
+  status: ServiceHealthStatus;
+}) {
+  const recent = samples.slice(-BAR_SLOTS);
+  const padCount = Math.max(0, BAR_SLOTS - recent.length);
+  const slots = [
+    ...Array.from({ length: padCount }, (_, index) => ({ key: `pad-${index}`, status: null })),
+    ...recent.map((sample, index) => ({ key: `${sample.at}-${index}`, status: sample.status })),
+  ];
+  const liveKey = slots[slots.length - 1]?.key;
+
+  return (
+    <div aria-hidden className="flex h-8 w-full items-stretch gap-px">
+      {slots.map((slot) => {
+        // The live edge (the "now" tick) pulses in its status colour — gold when ok
+        // (the heartbeat), amber/red when not; motion-safe so reduce-motion is calm.
+        const isLive = slot.key === liveKey && slot.status !== null;
+        const liveClass = isLive
+          ? status === "ok"
+            ? "bg-primary motion-safe:animate-pulse"
+            : "motion-safe:animate-pulse"
+          : "";
+
+        return (
+          <span
+            className={`min-w-px flex-1 rounded-[1px] ${tickClass(slot.status)} ${liveClass}`}
+            key={slot.key}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+// Uptime % over the recorded window (ok ÷ total samples), one decimal. Null until the
+// ledger has its first sample.
+function uptimePercent(samples: ServiceCheckSampleRow[]): number | null {
+  if (samples.length === 0) {
+    return null;
+  }
+
+  const ok = samples.filter((sample) => sample.status === "ok").length;
+
+  return Math.round((ok / samples.length) * 1000) / 10;
+}
+
+// "3h" / "12m" / "2d" elapsed since `fromIso` (whole units, terse), or "moments" under
+// a minute — for the bar's left-edge "<window> ago" label.
+function elapsedShort(fromIso: string, nowIso: string): string {
+  const ms = new Date(nowIso).getTime() - new Date(fromIso).getTime();
+
+  if (!Number.isFinite(ms) || ms < 60_000) {
+    return "moments";
+  }
+
+  const minutes = Math.floor(ms / 60_000);
+
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+
+  return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
+}
+
 // Sort by the fixed SERVICE_ORDER; an unranked (unknown) service sorts after every
 // ranked one, then alphabetically among themselves.
 function sortServices(services: ServiceStatusRow[]): ServiceStatusRow[] {
@@ -199,14 +315,14 @@ function overallHeadline(services: ServiceStatusRow[]): string {
 }
 
 function StatusPage() {
-  const { events, now, services } = Route.useLoaderData();
+  const { events, now, samples, services } = Route.useLoaderData();
   const ordered = sortServices(services);
 
   return (
-    <main className="mx-auto w-full max-w-3xl px-6 py-12 text-foreground">
-      <header className="mb-8">
-        <h1 className="text-2xl font-medium">System status</h1>
-        <p className="mt-1 text-sm text-muted-foreground">{overallHeadline(ordered)}</p>
+    <main className="mx-auto w-full max-w-4xl px-6 py-14 text-foreground">
+      <header className="mb-10">
+        <h1 className="text-3xl font-semibold tracking-tight">System status</h1>
+        <p className="mt-1.5 text-muted-foreground">{overallHeadline(ordered)}</p>
       </header>
 
       {ordered.length === 0 ? (
@@ -214,48 +330,57 @@ function StatusPage() {
           Nothing's reported in from the services yet. Check back in a moment.
         </p>
       ) : (
-        <section aria-label="Service health" className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {ordered.map((service) => (
-            <Card key={service.service} size="sm">
-              <CardHeader className="flex-row items-start justify-between gap-2">
-                <CardTitle>{serviceLabel(service.service)}</CardTitle>
-                <StatusIndicator status={service.status} />
-              </CardHeader>
-              <CardContent className="grid gap-1 text-sm">
-                {service.message ? (
-                  <p className="text-muted-foreground">{service.message}</p>
+        <section aria-label="Service health" className="divide-y divide-border/50">
+          {ordered.map((service) => {
+            const serviceSamples = samples[service.service] ?? [];
+            const pct = uptimePercent(serviceSamples);
+            const subtitle = serviceSubtitle(service.service);
+            const oldest = serviceSamples[0];
+
+            return (
+              <article className="py-6 first:pt-0" key={service.service}>
+                <div className="flex items-baseline justify-between gap-3">
+                  <h2 className="text-base font-medium text-foreground">
+                    {serviceLabel(service.service)}
+                  </h2>
+                  <StatusIndicator status={service.status} />
+                </div>
+
+                {subtitle || service.message ? (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {subtitle}
+                    {subtitle && service.message ? " · " : ""}
+                    {service.message}
+                  </p>
                 ) : undefined}
-                <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-                  <dt className="sr-only">Uptime</dt>
-                  <dd className="col-span-2 text-foreground">
-                    {humanizeSince(service.since, now, service.status)}
-                  </dd>
-                  {service.latency_ms !== null ? (
-                    <>
-                      <dt>Latency</dt>
-                      <dd>{service.latency_ms} ms</dd>
-                    </>
-                  ) : undefined}
-                  <dt>Checked</dt>
-                  <dd>
-                    <time dateTime={service.checked_at}>{formatCheckedAt(service.checked_at)}</time>
-                  </dd>
-                </dl>
-              </CardContent>
-            </Card>
-          ))}
+
+                <div className="mt-4">
+                  <UptimeBar samples={serviceSamples} status={service.status} />
+                </div>
+
+                <div className="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                  <span>{oldest ? `${elapsedShort(oldest.at, now)} ago` : "no history yet"}</span>
+                  <span className="text-foreground/80">
+                    {pct === null
+                      ? humanizeSince(service.since, now, service.status)
+                      : `${pct}% uptime`}
+                  </span>
+                  <span>now</span>
+                </div>
+              </article>
+            );
+          })}
         </section>
       )}
 
       {events.length > 0 ? (
-        <section aria-label="Recent events" className="mt-10">
-          <h2 className="mb-3 text-sm font-medium text-muted-foreground">Recent events</h2>
-          <ul className="divide-y divide-border rounded-lg ring-1 ring-border">
+        <section aria-label="Recent events" className="mt-12">
+          <h2 className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Recent events
+          </h2>
+          <ul className="space-y-2">
             {events.map((event) => (
-              <li
-                className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm"
-                key={event.id}
-              >
+              <li className="flex items-center justify-between gap-3 text-sm" key={event.id}>
                 <div className="flex min-w-0 items-center gap-2">
                   <StatusIndicator status={event.status} />
                   <span className="truncate">

@@ -242,6 +242,28 @@ export const statusEvents = sqliteTable(
   (table) => [index("status_events_at_idx").on(table.at)],
 );
 
+// The append-only per-check SAMPLE ledger — one row per probed service per snapshot
+// (every ~10m tick). Drives the recent-uptime bar on /status: a strip of the last N
+// checks per service, coloured by status, that fills in over time. Pruned per-service
+// to the most recent samples on every write (bounded without a cron), indexed on
+// (service, at) for the per-service recent-first read + the prune's keep-set.
+// PUBLIC-SAFE like the others: service + status + latency + time only.
+export const serviceCheckSamples = sqliteTable(
+  "service_check_samples",
+  {
+    // When the sample was taken (ISO). Equals the POSTed snapshot `at`.
+    at: text("at").notNull(),
+    id: text("id").primaryKey(),
+    // Round-trip latency of this probe, in ms. Null when not measured.
+    latencyMs: integer("latency_ms"),
+    // The probed service.
+    service: text("service").notNull(),
+    // The three-state health enum at this sample (same enum as service_status).
+    status: text("status", { enum: ["ok", "degraded", "down"] }).notNull(),
+  },
+  (table) => [index("service_check_samples_service_at_idx").on(table.service, table.at)],
+);
+
 export const spotifyAuth = sqliteTable("spotify_auth", {
   accessToken: text("access_token").notNull(),
   expiresAt: text("expires_at").notNull(),
