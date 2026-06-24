@@ -24,17 +24,27 @@ import {
 // The deliberate, fixed display order. Known services lead in this sequence; any
 // service the snapshot reports that isn't named here is appended (alphabetically),
 // so a newly-probed service surfaces without a code change.
-const SERVICE_ORDER = ["web", "db", "r2", "dns", "ssh", "onion", "hermes", "render-box"];
+const SERVICE_ORDER = [
+  "web",
+  "db",
+  "r2",
+  "dns",
+  "ssh",
+  "onion",
+  "hermes",
+  "automation",
+  "render-box",
+];
 
 // A human label per known service id (falls back to the raw id for an unknown one).
 const SERVICE_LABELS: Record<string, string> = {
-  automation: "Enrichment Agents",
+  automation: "Enrichment agents",
   db: "Database",
   dns: "DNS",
   hermes: "Hermes agent",
   onion: "Tor onion",
   r2: "Media storage",
-  "render-box": "Video Rendering Agent",
+  "render-box": "Video rendering agent",
   ssh: "SSH terminal",
   web: "Web",
 };
@@ -319,85 +329,88 @@ function StatusPage() {
   const ordered = sortServices(services);
 
   return (
-    <main className="mx-auto w-full max-w-4xl px-6 py-14 text-foreground">
-      <header className="mb-10">
-        <h1 className="text-3xl font-semibold tracking-tight">System status</h1>
-        <p className="mt-1.5 text-muted-foreground">{overallHeadline(ordered)}</p>
-      </header>
+    <main className="log-plate-stage">
+      <article className="log-plate text-foreground">
+        <header className="log-masthead">
+          <p className="log-nameplate">Fluncle's Findings</p>
+          <h1 className="log-coordinate log-index-title">System status</h1>
+          <p className="text-sm text-muted-foreground">{overallHeadline(ordered)}</p>
+        </header>
 
-      {ordered.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          Nothing's reported in from the services yet. Check back in a moment.
-        </p>
-      ) : (
-        <section aria-label="Service health" className="divide-y divide-border/50">
-          {ordered.map((service) => {
-            const serviceSamples = samples[service.service] ?? [];
-            const pct = uptimePercent(serviceSamples);
-            const subtitle = serviceSubtitle(service.service);
-            const oldest = serviceSamples[0];
+        {ordered.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Nothing's reported in from the services yet. Check back in a moment.
+          </p>
+        ) : (
+          <section aria-label="Service health" className="divide-y divide-border/50">
+            {ordered.map((service) => {
+              const serviceSamples = samples[service.service] ?? [];
+              const pct = uptimePercent(serviceSamples);
+              const subtitle = serviceSubtitle(service.service);
+              const oldest = serviceSamples[0];
 
-            return (
-              <article className="py-6 first:pt-0" key={service.service}>
-                <div className="flex items-baseline justify-between gap-3">
-                  <h2 className="text-base font-medium text-foreground">
-                    {serviceLabel(service.service)}
-                  </h2>
-                  <StatusIndicator status={service.status} />
-                </div>
+              return (
+                <article className="py-6 first:pt-0" key={service.service}>
+                  <div className="flex items-baseline justify-between gap-3">
+                    <h2 className="text-base font-medium text-foreground">
+                      {serviceLabel(service.service)}
+                    </h2>
+                    <StatusIndicator status={service.status} />
+                  </div>
 
-                {subtitle || service.message ? (
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {subtitle}
-                    {subtitle && service.message ? " · " : ""}
-                    {service.message}
-                  </p>
-                ) : undefined}
+                  {subtitle || service.message ? (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {subtitle}
+                      {subtitle && service.message ? " · " : ""}
+                      {service.message}
+                    </p>
+                  ) : undefined}
 
-                <div className="mt-4">
-                  <UptimeBar samples={serviceSamples} status={service.status} />
-                </div>
+                  <div className="mt-4">
+                    <UptimeBar samples={serviceSamples} status={service.status} />
+                  </div>
 
-                <div className="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                  <span>{oldest ? `${elapsedShort(oldest.at, now)} ago` : "no history yet"}</span>
-                  <span className="text-foreground/80">
-                    {pct === null
-                      ? humanizeSince(service.since, now, service.status)
-                      : `${pct}% uptime`}
-                  </span>
-                  <span>now</span>
-                </div>
-              </article>
-            );
-          })}
-        </section>
-      )}
+                  <div className="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                    <span>{oldest ? `${elapsedShort(oldest.at, now)} ago` : "no history yet"}</span>
+                    <span className="text-foreground/80">
+                      {pct === null
+                        ? humanizeSince(service.since, now, service.status)
+                        : `${pct}% uptime`}
+                    </span>
+                    <span>now</span>
+                  </div>
+                </article>
+              );
+            })}
+          </section>
+        )}
 
-      {events.length > 0 ? (
-        <section aria-label="Recent events" className="mt-12">
-          <h2 className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Recent events
-          </h2>
-          <ul className="space-y-2">
-            {events.map((event) => (
-              <li className="flex items-center justify-between gap-3 text-sm" key={event.id}>
-                <div className="flex min-w-0 items-center gap-2">
-                  <StatusIndicator status={event.status} />
-                  <span className="truncate">
-                    <span className="text-foreground">{serviceLabel(event.service)}</span>
-                    {event.message ? (
-                      <span className="text-muted-foreground"> — {event.message}</span>
-                    ) : undefined}
-                  </span>
-                </div>
-                <time className="shrink-0 text-xs text-muted-foreground" dateTime={event.at}>
-                  {formatCheckedAt(event.at)}
-                </time>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : undefined}
+        {events.length > 0 ? (
+          <section aria-label="Recent events">
+            <h2 className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Recent events
+            </h2>
+            <ul className="space-y-2">
+              {events.map((event) => (
+                <li className="flex items-center justify-between gap-3 text-sm" key={event.id}>
+                  <div className="flex min-w-0 items-center gap-2">
+                    <StatusIndicator status={event.status} />
+                    <span className="truncate">
+                      <span className="text-foreground">{serviceLabel(event.service)}</span>
+                      {event.message ? (
+                        <span className="text-muted-foreground"> — {event.message}</span>
+                      ) : undefined}
+                    </span>
+                  </div>
+                  <time className="shrink-0 text-xs text-muted-foreground" dateTime={event.at}>
+                    {formatCheckedAt(event.at)}
+                  </time>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : undefined}
+      </article>
     </main>
   );
 }
