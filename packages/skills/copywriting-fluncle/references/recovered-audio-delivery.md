@@ -21,9 +21,9 @@ These are `DEFAULT_VOICE_SETTINGS` in `observation.ts`, tuned by ear for this vo
 
 Load-bearing, corrected by a real render. A `<break time="…"/>` between every sentence is **wrong**: dense break tags destabilise `eleven_multilingual_v2` (the pipeline default) — in a real render the model **vocalised the tags as audible "thinking sounds"**, little hums and exhales where the breaks were meant to be silent. ElevenLabs' own docs back this up: a break tag maxes at 3s, and "some models reduce or ignore break tags" when they pile up. So a script peppered with breaks doesn't pace better; it falls apart.
 
-The proven-good shape (confirmed by ear) is **sparse breaks at the major beats only**: at most **1–2** `<break time="~1.0s"/>`, spaced far apart, where the read genuinely needs to land and sit — typically one before the artist/title reveal and one before the turn to the crew. Natural punctuation and line breaks carry every other pause. **Never a break after every sentence.**
+The proven-good shape (confirmed by ear) is **sparse breaks at the major beats only**: at most **1–2** `<break time="~1.0s"/>`, spaced far apart, where the read genuinely needs to land and sit — typically one as the opening reaction gives way to the read of the track, and one before the turn to the crew. Natural punctuation and line breaks carry every other pause. **Never a break after every sentence.**
 
-- **At most 1–2 breaks** in a ~30s observation, each `~1.0s`, placed at a real beat (the reveal, the turn to the crew).
+- **At most 1–2 breaks** in a ~30s observation, each `~1.0s`, placed at a real beat (the shift from the opening reaction into the track, the turn to the crew).
 - **Far apart** — a break earns its place by marking a section change, not a clause-to-clause pause.
 - Let full stops, commas, and line breaks do the rest; the voice settings (`speed: 0.88`) already keep the read slow.
 
@@ -33,7 +33,7 @@ Worked example (~30s, two breaks at the beats):
 I caught this one on a long drift, the kind where you stop checking which way is home. It came in fast and bright, a roller that won't let your feet settle, and something in my chest lifted before I'd found the edges of it. <break time="1.0s" /> Ownglow built this one. Do U. I've heard a hundred tunes reach for this and come up short. This one keeps its head up the whole way through. <break time="1.0s" /> I hope it lifts something in you too, fam. Enjoy, cosmonauts.
 ```
 
-One break before the artist/title reveal, one before the turn to the crew. Everything between them rides natural punctuation. Add a third break and you're back in thinking-sound territory.
+One break as the opening reaction gives way to the read of the track, one before the turn to the crew. The artist or title, if it surfaces, rides woven into that middle section ("Ownglow built this one. Do U.") — never announced as a catalog line. Everything between the breaks rides natural punctuation. Add a third break and you're back in thinking-sound territory.
 
 Future path: `eleven_v3` (typed in `ObservationModel` but not the default) paces off inline audio tags instead of `<break/>` SSML. Out of scope today — named here so the swap is a known door, not a surprise.
 
@@ -54,6 +54,25 @@ flies the flag for the American side of the map   →   came in from a far secto
 ```
 
 This is the Garnish/Sauce rule applied to the heard surface: the cosmos is scientific (sectors, coordinates, light-years), never the earthly map. The voice gate in `observation.ts` now hard-fails a spoken script that names a place — but the gate is a backstop; the script should never reach for the map in the first place.
+
+## No catalog recitation
+
+Corrected by ear across every model. The observation is a **voice log — Fluncle sharing what a track did to him, not reading a catalogue entry**. The single worst tell is the metadata recitation: a flat "Title. Label. Year." line dropped mid-read ("Days Like These. Soul Deep Digital, 2016."). It reads like a database row spoken aloud — no model can make it conversational, and it is **redundant**: the title, artist, label, and year are already on screen next to the audio (the `/log` page and the radio meta block render them). Reading them out loud is dead weight on the one surface where every second of attention is heard.
+
+So the `context_note` facts (label, year, scene) are **fuel, not lines**. They ground the _feel_ of the observation; they are never recited:
+
+- **Never** speak a label or a year as a fact. A year, if it must surface, becomes texture ("a few years back", "an old one"), never "2016".
+- The **artist or title**, if it comes out at all, rides **woven into the talk**, the way you'd mention it to a mate — "Ownglow built this one. Do U." — never announced as a standalone reveal, and never followed by the label/year tail.
+- When in doubt, **drop it** and stay on what the track did to a body. The metadata is on screen; the voice is for the thing the screen can't show.
+
+Before → after:
+
+```
+Days Like These. Soul Deep Digital, 2016.   →   (drop it — it's on screen)
+                                                or weave only the feel: "an old Soul Deep roller"
+```
+
+The North Star holds the line: _would the uncle say this out loud over a tune?_ Nobody recites a label and a year to a mate. They say what it did to them.
 
 ## The recovered texture + loudness
 
