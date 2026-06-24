@@ -138,10 +138,10 @@ FLUNCLE_API_TOKEN=<admin token>
 
 For local development, put local API settings in `~/.config/fluncle/.env.local` and run CLI commands with `--env local`.
 
-Set the preference to:
+Set the preference to your standalone binary, for example:
 
 ```text
-/Users/maurice/.local/bin/fluncle
+~/.local/bin/fluncle
 ```
 
 Then verify:

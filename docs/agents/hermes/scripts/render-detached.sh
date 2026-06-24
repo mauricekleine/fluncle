@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# render-detached.sh — runs ON the render box (rave-03), deployed there by
+# render-detached.sh — runs ON the render box, deployed there by
 # provision-rave-03.sh. The conductor's SSH triggers this and returns in seconds;
 # the actual ~85-min render is DETACHED here (setsid) so it survives the short SSH
 # AND a Hermes container restart — the render is decoupled from the conductor.

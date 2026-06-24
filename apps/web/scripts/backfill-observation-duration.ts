@@ -14,9 +14,10 @@
  * Mirrors `observationDurationFromAlignment` in src/lib/server/observation.ts (kept
  * in sync by hand — this script can't import Worker code that pulls `cloudflare:workers`).
  *
- * Production credentials are read at run time from 1Password (the same item
- * `db:pull-prod` uses), so `op` must be unlocked. DRY-RUN by default — prints the diff
- * and writes nothing. Pass `--apply` to commit the UPDATEs.
+ * Production credentials are read at run time from 1Password (the same
+ * `FLUNCLE_TURSO_OP_ITEM` item `db:pull-prod` uses — see the ops runbook note),
+ * so `op` must be unlocked. DRY-RUN by default — prints the diff and writes
+ * nothing. Pass `--apply` to commit the UPDATEs.
  */
 import { $ } from "bun";
 import { createClient } from "@libsql/client/web";
@@ -24,7 +25,12 @@ import { createClient } from "@libsql/client/web";
 // Keep in sync with OBSERVATION_TAIL_PAD_MS in src/lib/server/observation.ts.
 const OBSERVATION_TAIL_PAD_MS = 1200;
 
-const ITEM = "op://Fluncle/Turso Production Credentials";
+const ITEM = process.env.FLUNCLE_TURSO_OP_ITEM;
+if (!ITEM) {
+  throw new Error(
+    "Set FLUNCLE_TURSO_OP_ITEM to the 1Password item holding the production Turso credentials — see the ops runbook note.",
+  );
+}
 const APPLY = process.argv.includes("--apply");
 
 async function readSecret(field: string): Promise<string> {

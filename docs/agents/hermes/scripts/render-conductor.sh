@@ -2,11 +2,11 @@
 # render-conductor.sh — the `fluncle-render` `--no-agent` Hermes cron.
 #
 # LIVE (wired 2026-06-24). Version-controlled source; the repo is canonical and the
-# box is a deploy target (fluncle-hermes-operator skill). Deployed to /opt/data/scripts/
-# on the devbox; the `fluncle-render` cron is wired there. See ../cron/README.md.
+# box is a deploy target (fluncle-hermes-operator skill). Deployed onto the Hermes
+# orchestrator box; the `fluncle-render` cron is wired there. See ../cron/README.md.
 #
 # WHAT IT DOES: drives the per-finding video render on a SCALE-TO-ZERO box.ascii
-# render box (rave-03). It wakes the box, triggers the `@fluncle-video` render of
+# render box. It wakes the box, triggers the `@fluncle-video` render of
 # exactly one queued finding via `claude -p` (the render-queue prompt), and parks
 # the box when the render finishes. The box renders + SHIPS to R2/the website;
 # it NEVER posts to social (the prompt's hard rail). Social posting stays manual.
@@ -37,8 +37,7 @@
 #     ${HOME}/.render-conductor.env. CLAUDE_CODE_OAUTH_TOKEN is a RECOGNIZED
 #     provider cred Hermes HARD-BLOCKS from the cron env (GHSA-rhgp-j443-p4rf),
 #     so it can only reach this script via a file; BOX_API_KEY rides along.
-#     Written via `op read op://Fluncle/CLAUDE_CODE_OAUTH_TOKEN/credential` and
-#     `op read op://Fluncle/BOX_API_KEY/credential`.
+#     Written from the configured 1Password items (see the ops runbook note).
 #
 # Operator wires it on the devbox (image carries bun + fluncle + the box CLI):
 #   hermes cron create "every 60m" --no-agent --script render-conductor.sh \

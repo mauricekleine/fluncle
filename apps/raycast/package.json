@@ -68,7 +68,7 @@
       "description": "Absolute path to the fluncle executable.",
       "type": "textfield",
       "required": true,
-      "default": "/Users/maurice/.local/bin/fluncle"
+      "default": "/usr/local/bin/fluncle"
     }
   ],
   "title": "Fluncle"

@@ -1,5 +1,5 @@
 // DESIGN.md is canonical. This package mirrors it verbatim.
-// Source of truth: /Users/maurice/Projects/fluncle/DESIGN.md (frontmatter + prose).
+// Source of truth: DESIGN.md at the repo root (frontmatter + prose).
 // If a value here disagrees with DESIGN.md, DESIGN.md wins; fix this file.
 
 /**
