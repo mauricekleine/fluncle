@@ -1,5 +1,6 @@
 import { CircleNotchIcon, FileTextIcon, MicrophoneIcon } from "@phosphor-icons/react";
 import { type BoardRow } from "@/components/admin/use-publish";
+import { stripSsml } from "@/lib/observation-text";
 import {
   Dialog,
   DialogContent,
@@ -75,16 +76,6 @@ type ObservationDialogProps = {
   scriptLoading: boolean;
 };
 
-// The stored script carries the occasional SSML pause (`<break time="0.8s"/>`) the
-// render needs but a reader doesn't — strip the tags so the transcript reads as the
-// clean prose it speaks (collapsing the gap each tag leaves to a single space).
-function readableTranscript(script: string): string {
-  return script
-    .replace(/<break[^>]*\/?>/gi, " ")
-    .replace(/[ \t]{2,}/g, " ")
-    .trim();
-}
-
 export function ObservationDialog({
   onOpenChange,
   row,
@@ -94,7 +85,10 @@ export function ObservationDialog({
   const audioUrl = row?.observationAudioUrl;
   const durationMs = row?.observationDurationMs;
   const generatedAt = row?.observationGeneratedAt;
-  const transcript = readableTranscript(script);
+  // The stored script carries the occasional SSML tag (a `<break …/>` pause, an
+  // `<emphasis>` span) the render needs but a reader doesn't — strip them so the
+  // transcript reads as the clean prose it speaks.
+  const transcript = stripSsml(script);
 
   return (
     <Dialog onOpenChange={onOpenChange} open={row !== null}>
