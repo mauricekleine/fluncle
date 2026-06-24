@@ -116,12 +116,13 @@ if [ ! -f "$BOX_CFG_DIR/config.json" ]; then
   mkdir -p "$BOX_CFG_DIR"
   printf '{"api_url":"https://ascii.dev","channel":"ascii-prod"}\n' >"$BOX_CFG_DIR/config.json"
 fi
-if ! "$BOX_BIN" status >/dev/null 2>&1; then
-  if ! "$BOX_BIN" login "$BOX_API_KEY" >/dev/null 2>&1; then
-    log "box login failed"
-    emit "render-conductor: box.ascii auth failed"
-    exit 1
-  fi
+# `box status` exits 0 even when NOT authenticated, so it can't gate the login.
+# Always (re-)login — `box login <token>` is idempotent + non-interactive; log its
+# output so a real auth failure (bad key, network) is visible, not silent.
+if ! "$BOX_BIN" login "$BOX_API_KEY" >>"$LOG_FILE" 2>&1; then
+  log "box login failed (see output above)"
+  emit "render-conductor: box.ascii auth failed"
+  exit 1
 fi
 
 state="$(read_or "$STATE_FILE" idle)"

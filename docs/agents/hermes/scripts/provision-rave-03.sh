@@ -17,15 +17,19 @@ BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 FLUNCLE_BIN="${FLUNCLE_BIN:-/usr/local/bin/fluncle}" # the conductor's bundled CLI, copied onto the box
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${FLUNCLE_REPO_URL:-https://github.com/mauricekleine/fluncle}"
-TTL="${BOX_TTL:-6h}" # backstop: box.ascii archives the box after TTL if a crashed conductor never parks it
 
 err() { printf '%s\n' "$*" >&2; }
 
-# 1. Create the box. --no-auto-stop: the CONDUCTOR owns stop/resume (idle
-#    auto-stop could fire during a claude-thinking gap and kill a render). --ttl
-#    is the only backstop for a conductor that dies entirely mid-render; a
-#    premature archive is recoverable (the next tick reprovisions).
-new_json="$("$BOX_BIN" new --json --no-auto-stop --ttl "$TTL" 2>&1)" || {
+# 1. Create the box. --no-auto-stop is REQUIRED, for two reasons: idle auto-stop
+#    could fire during a claude-thinking gap and kill a render, AND the conductor
+#    poll-detects "done" by ssh'ing the RUNNING box — a parked/auto-stopped box
+#    isn't reachable, so it must stay up until the conductor explicitly stops it.
+#    box.ascii REJECTS --no-auto-stop combined with --ttl ("use --no-auto-stop by
+#    itself"), so there is NO box-side lifetime backstop: the conductor is the sole
+#    stop authority (its per-tick stop + the MAX_RENDER stuck-guard force-stop). A
+#    conductor that dies ENTIRELY mid-render leaves a running box — mitigated by the
+#    container's restart policy + the hourly stuck-guard, else an operator cleanup.
+new_json="$("$BOX_BIN" new --json --no-auto-stop 2>&1)" || {
   err "box new failed: $new_json"
   exit 1
 }
@@ -38,18 +42,29 @@ err "provisioning render box $id from $REPO ..."
 
 # 2. Clone clean main + install + the fluncle-video skill + the bun-wrapper. The
 #    wrapper dir is created BEFORE the scp in step 3 (the scp target must exist).
+#    EVERY step gets </dev/null: this runs via `bash -s` (the script is on stdin), and
+#    `npx skills add` (interactive) otherwise READS that stdin and eats the rest of the
+#    script — silently skipping the mkdir, so the step-3 scp then fails on a missing dir.
+#    box ssh returns non-zero on remote failure (set -e), so the check catches a real one.
 if ! "$BOX_BIN" ssh "$id" 'bash -s' >&2 <<PROV
 set -e
 cd ~ && rm -rf fluncle
-git clone --depth 1 $REPO fluncle
-cd fluncle && bun install >/dev/null 2>&1
-npx -y skills add ./packages/skills/fluncle-video -y -a claude-code >/dev/null 2>&1
+git clone --depth 1 $REPO fluncle </dev/null
+cd fluncle && bun install </dev/null >/dev/null 2>&1
+npx -y skills add ./packages/skills/fluncle-video -y -a claude-code </dev/null >/dev/null 2>&1
 mkdir -p ~/.local/bin ~/.local/lib
 printf '#!/bin/sh\nexec bun "\$HOME/.local/lib/fluncle.mjs" "\$@"\n' > ~/.local/bin/fluncle
 chmod +x ~/.local/bin/fluncle
 PROV
 then
   err "box setup failed"
+  exit 1
+fi
+
+# Belt-and-suspenders: confirm setup actually produced the wrapper dir before the scp
+# (the stdin-eating bug failed silently with box ssh still returning 0).
+if ! "$BOX_BIN" ssh "$id" 'test -d "$HOME/.local/lib"' </dev/null >/dev/null 2>&1; then
+  err "box setup incomplete — no ~/.local/lib after setup"
   exit 1
 fi
 
