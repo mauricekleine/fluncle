@@ -128,6 +128,58 @@ export async function upsertPost(
   await touchTrack(trackId, now);
 }
 
+/**
+ * Whether any finding is in the "pushed but no URL" state for a platform — a row
+ * with a live (published/scheduled) status but a still-null `url`. The YouTube
+ * push gate reads this: Postiz doesn't return the live URL on create, so we
+ * resolve it asynchronously from `/missing` by matching the newest published
+ * item. Allowing a second push while one is still awaiting its URL would make
+ * that newest-match ambiguous, so the gate keeps exactly one YouTube upload
+ * pending at a time.
+ */
+export async function hasPostAwaitingUrl(platform: string): Promise<boolean> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [platform],
+    sql: `select 1 from social_posts
+          where platform = ?
+            and status in ('published', 'scheduled')
+            and url is null
+          limit 1`,
+  });
+
+  return result.rows.length > 0;
+}
+
+/**
+ * Record the live public URL on a track's platform row (the auto-resolved
+ * Postiz `/missing` permalink). Best-effort: only fills an empty `url`, so a URL
+ * the operator already entered manually is never clobbered. Returns false if
+ * there's no matching row to fill (e.g. the post row vanished).
+ */
+export async function recordPostUrl(
+  trackId: string,
+  platform: string,
+  url: string,
+): Promise<boolean> {
+  const now = new Date().toISOString();
+  const db = await getDb();
+  const result = await db.execute({
+    args: [url, now, trackId, platform],
+    sql: `update social_posts
+          set url = ?, updated_at = ?
+          where track_id = ? and platform = ? and url is null`,
+  });
+
+  if (result.rowsAffected > 0) {
+    await touchTrack(trackId, now);
+
+    return true;
+  }
+
+  return false;
+}
+
 // A social-post change alters what the track's public surfaces show (the
 // tiktok_url join in TRACK_SELECT), so it counts as a content change for the
 // track record too — sitemap lastmod reads tracks.updated_at.

@@ -12,15 +12,23 @@
 //     additionally `requireOperator`. Ported VERBATIM: the in-handler check reads
 //     `context.role`, so a youtube push by the agent is a 403 (the order matches
 //     the live route — the `unsupported_platform` check runs BEFORE the operator
-//     gate, the track lookup AFTER it).
+//     gate, the track lookup AFTER it). After the operator gate, a YouTube push
+//     also passes the push gate (`hasPostAwaitingUrl("youtube")` → 409
+//     `youtube_url_pending`): exactly one YouTube upload may be pending its URL,
+//     so the post-push `/missing` newest-match stays unambiguous. On a successful
+//     push the live YouTube URL is auto-resolved (`resolveYouTubeUrl`) and
+//     recorded (`recordPostUrl`); a miss leaves `url` null for the operator's
+//     manual "Update URL" fallback.
 
 import { ORPCError } from "@orpc/server";
 import { trackMedia, videoAudioStripped } from "../../media";
 import { readCaptions } from "../captions";
 import { adminAuth, operatorGuard } from "../orpc-auth";
-import { pushTikTokDraft, pushYouTubeShort } from "../postiz";
+import { pushTikTokDraft, pushYouTubeShort, resolveYouTubeUrl } from "../postiz";
 import {
+  hasPostAwaitingUrl,
   listSocialPosts,
+  recordPostUrl,
   type SocialStatusUpdate,
   updateSocialStatus,
   upsertPost,
@@ -173,6 +181,22 @@ export function adminSocialHandlers(os: Implementer) {
           });
         }
 
+        // The push gate: block a new YouTube push while any finding is still
+        // "pushed but no URL" for YouTube. Postiz returns the live URL only via
+        // `/missing` (matched by the newest published item), so a second pending
+        // upload would make that match ambiguous. Keep exactly one in flight.
+        if (platform === "youtube" && (await hasPostAwaitingUrl("youtube"))) {
+          throw new ORPCError("CONFLICT", {
+            data: {
+              apiCode: "youtube_url_pending",
+              apiMessage:
+                "A YouTube post is still awaiting its URL — record it first (or run the URL resolver), then push the next one.",
+            },
+            message: "A YouTube post is still awaiting its URL — record it first.",
+            status: 409,
+          });
+        }
+
         const track = await getTrackByIdOrLogId(idOrLogId);
 
         if (!track) {
@@ -235,6 +259,20 @@ export function adminSocialHandlers(os: Implementer) {
         }
 
         await upsertPost(track.trackId, platform, status, postId);
+
+        // Auto-record the live YouTube URL: Postiz returns only its own postId on
+        // create, so poll `/missing` (the publish is async) and store the newest
+        // YouTube permalink on the row — surfaced via `list_track_social`. A
+        // side-effect, not part of the draft envelope. Best-effort and coverless:
+        // on a miss the url stays null and the operator's manual "Update URL" is
+        // the fallback (and the push gate then holds the next push until it's set).
+        if (platform === "youtube") {
+          const resolved = await resolveYouTubeUrl(postId);
+
+          if (resolved) {
+            await recordPostUrl(track.trackId, platform, resolved);
+          }
+        }
 
         return {
           externalId: postId,

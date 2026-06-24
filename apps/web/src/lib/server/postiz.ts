@@ -165,6 +165,73 @@ async function createPost(input: {
   return { postId };
 }
 
+/**
+ * Postiz's `/missing` for a post: the provider's recent published content as
+ * `[{ id, url }]`. Postiz `POST /posts` returns only Postiz's own postId, never
+ * the published platform URL, so `/missing` is how we connect a post to its live
+ * content when the permalink isn't immediate (docs: GET
+ * /public/v1/posts/{postId}/missing). A non-2xx degrades to an empty list — the
+ * caller treats "no URL yet" as a best-effort miss, not a hard failure.
+ */
+export async function getMissingContent(
+  postId: string,
+): Promise<Array<{ id: string; url: string }>> {
+  const response = await postizFetch(`/posts/${postId}/missing`, { method: "GET" });
+
+  if (!response.ok) {
+    return [];
+  }
+
+  const items = (await response.json()) as Array<{ id?: unknown; url?: unknown }>;
+
+  return items.flatMap((item) =>
+    typeof item.id === "string" && typeof item.url === "string"
+      ? [{ id: item.id, url: item.url }]
+      : [],
+  );
+}
+
+/** Whether a URL points at a YouTube watch/short/youtu.be permalink. */
+function isYouTubeUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+
+    return host.endsWith("youtube.com") || host.endsWith("youtu.be");
+  } catch {
+    return false;
+  }
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Resolve the live YouTube URL for a just-pushed post by polling `/missing`. The
+ * publish is async, so the URL may take a moment: poll a few times with a short
+ * backoff. Postiz returns the provider's recent published content; the push gate
+ * keeps exactly one YouTube upload pending, so the newest YouTube-shaped item is
+ * unambiguously this post's. Returns null on a miss — the caller leaves the row's
+ * `url` unset, so the operator's manual "Update URL" still works as the fallback.
+ */
+export async function resolveYouTubeUrl(postId: string): Promise<string | null> {
+  // 5 attempts over ~7.5s total: poll, then wait 0.5s, 1s, 1.5s, 2s, 2.5s.
+  // Best-effort — a longer publish lag simply falls back to the manual entry.
+  const backoffsMs = [500, 1000, 1500, 2000, 2500];
+
+  for (const delayMs of backoffsMs) {
+    const items = await getMissingContent(postId);
+    // Most-recent-first; take the newest YouTube-shaped item.
+    const match = items.find((item) => isYouTubeUrl(item.url));
+
+    if (match) {
+      return match.url;
+    }
+
+    await sleep(delayMs);
+  }
+
+  return null;
+}
+
 /** Push a TikTok draft (video to the app inbox, SELF_ONLY). Returns the post id. */
 export async function pushTikTokDraft(input: {
   caption: string;
