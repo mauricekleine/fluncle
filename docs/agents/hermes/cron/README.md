@@ -6,7 +6,7 @@ Every step is a "read a queue → act per item, idempotently" loop over the `flu
 
 ## Cron roster
 
-Live on the box as of the **2026-06-23 cutover**. Every per-finding job is `--no-agent`; the Friday newsletter is the only **agent** job left. `fluncle-render` (the video render conductor, below) is the one **PREPARED** job not yet wired. "Box authoring" is how much model time the job spends locally: none (a pure deterministic trigger), one `claude -p` call (a hybrid — subscription auth, zero OpenRouter), or a full agent session. Run `hermes cron list` on the box for live job IDs + next-run times.
+Live on the box as of the **2026-06-23 cutover** (+ `fluncle-render` wired **2026-06-24**). Every per-finding job is `--no-agent`; the Friday newsletter is the only **agent** job left. `fluncle-render` (the video render conductor, below) conducts renders on a separate scale-to-zero box.ascii box (rave-03), not on the Hermes box itself. "Box authoring" is how much model time the job spends locally: none (a pure deterministic trigger), one `claude -p` call (a hybrid — subscription auth, zero OpenRouter), or a full agent session. Run `hermes cron list` on the box for live job IDs + next-run times.
 
 | Job                    | Cadence             | Mode                   | Box authoring             | What it does                                                         |
 | ---------------------- | ------------------- | ---------------------- | ------------------------- | -------------------------------------------------------------------- |
@@ -15,7 +15,7 @@ Live on the box as of the **2026-06-23 cutover**. Every per-finding job is `--no
 | `fluncle-note`         | every 10m           | `--no-agent` hybrid    | one `claude -p`           | auto-author the editorial `/log` note (fill-empty-only)              |
 | `fluncle-observation`  | every 60m           | `--no-agent` hybrid    | one `claude -p`           | author the recovered-audio script → Worker ElevenLabs render         |
 | `fluncle-backfill`     | every 30m           | `--no-agent`           | none (Worker HTTP)        | Discogs id + Last.fm love catalogue repair                           |
-| `fluncle-render`       | every 60m           | `--no-agent` conductor | none (remote `claude -p`) | wake rave-03 → render + ship one finding's video → park (PREPARED)   |
+| `fluncle-render`       | every 60m           | `--no-agent` conductor | none (remote `claude -p`) | wake rave-03 → render + ship one finding's video → park (LIVE)       |
 | `fluncle-newsletter`   | Fri 15:00 Amsterdam | **agent**              | full agent session        | draft + persist the weekly edition (send is an operator Discord tap) |
 
 The per-cron sections below carry the full mechanism, schedule rationale, and the rebuild-from-scratch wiring for each.
@@ -136,7 +136,9 @@ printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$(op read op://Fluncle/CLAUDE_CODE_OAUTH_
 hermes cron create "every 10m" --no-agent --script note-sweep.sh --deliver local --name fluncle-note
 ```
 
-## The render conductor cron (PREPARED)
+## The render conductor cron (LIVE)
+
+**Live as of 2026-06-24** — image `fluncle-hermes:v2026.6.24` bakes the box.ascii CLI + `openssh-client` + `fluncle@0.60.0`; the `fluncle-render` cron is wired (`every 60m`) and proven end-to-end (authed → provisioned a fresh render box from `main` → triggered a detached render → a second tick held on single-flight). Wiring it surfaced several box.ascii CLI realities now handled in the Dockerfile + scripts — see [§ box.ascii CLI quirks (handled)](#boxascii-cli-quirks-handled) at the end of this section.
 
 `fluncle-render` drives the per-finding VIDEO render — but unlike every other sweep (which runs its whole job inside the Hermes box) it is a **conductor**: the Hermes box has no GPU and no Remotion toolchain, so it wakes a separate **scale-to-zero box.ascii render box (rave-03)**, triggers the `@fluncle-video` render of exactly one queued finding _there_ via a remote `claude -p`, and parks the box when the render finishes. The render box renders + **ships to R2 / the website** (sets `video_url`); it **never posts to social** — enforced twice over: the render-queue prompt's hard rail says don't, AND the server-side role boundary makes it impossible (the box carries only the `agent`-scoped token, and `track draft --platform youtube` / every publish-class route is operator-tier → 403, so a misbehaving render agent _cannot_ post). Source at [`../scripts/`](../scripts/): `render-conductor.sh` (the cron entry), `provision-rave-03.sh` (reproduces the render box from clean `main`), `render-detached.sh` (runs on the render box).
 
@@ -180,6 +182,18 @@ hermes cron create "every 60m" --no-agent --script render-conductor.sh --deliver
 - `docker exec -u hermes -e HOME=/opt/data/home hermes box login "$(op read op://Fluncle/BOX_API_KEY/credential)"` then `box status` → authed.
 - `docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/data/scripts/render-conductor.sh` against a non-empty queue → expect `started render of <logId> on <boxid>`; a second immediate run → `render in flight … single-flight hold`. Watch `~/.render-conductor/conductor.log` + the render box's `~/conductor-run.log`.
 - Confirm the first render ships (the finding leaves `admin tracks queue`) before walking away. Then schedule + watch a few hourly ticks.
+
+### box.ascii CLI quirks (handled)
+
+Wiring the conductor live surfaced several box.ascii CLI realities a stubbed dry-run (fake `box`) could not — all now handled in the Dockerfile + scripts, recorded so a rebuild does not re-debug them:
+
+- **The installer needs `$SHELL` set + ends in an interactive onboard.** It runs `basename "$SHELL"` under `set -u` ($SHELL unset in a Docker build → exit 2) AND ends with an interactive `box onboard` (sign-in) needing a tty. The Dockerfile sets `SHELL=/bin/sh`, wraps the install `(curl | sh || true)`, and `test -x` the binary; runtime auth is `box login`, never baked.
+- **`box new --ttl` is SECONDS (not a duration string) and is mutually exclusive with `--no-auto-stop`** ("use --no-auto-stop by itself"). The conductor REQUIRES `--no-auto-stop` (it poll-detects done by ssh'ing the RUNNING box; a TTL/auto-stop box would vanish mid-poll), so there is no box-side lifetime backstop — the conductor is the sole stop authority.
+- **`box status` exits 0 even when unauthenticated**, so it cannot gate the login; the conductor always `box login`s (idempotent).
+- **`box ssh` propagates remote pass/fail (0 vs 1) but not the exact exit code** (it prints an error JSON on non-zero). The done-poll keys off that 0/1; failures are checked, not the code.
+- **`box ssh 'bash -s' <<heredoc` feeds the script on stdin, and `npx skills add` reads that stdin**, eating the rest of the script (silently skipping the `mkdir`, so the next scp failed on a missing dir). Every provision step gets `</dev/null` + a post-setup dir check.
+
+Operational notes: the cron user is `hermes` (`HOME=/opt/data/home`); `box login` + the box config (`~/.config/ascii/box/config.json`, re-created by the conductor at the cron user's HOME) persist there. Billing tradeoff: up to ~35–60 min idle-wait per render (the box runs until the next hourly tick parks it) → ~480 of the 555 box-h/month worst case, far less in practice (ticks no-op once the queue is caught up). Tune `START_INTERVAL` if it bites.
 
 ## The agent cron — the Friday newsletter (LIVE)
 

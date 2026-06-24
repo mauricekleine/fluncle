@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # render-conductor.sh — the `fluncle-render` `--no-agent` Hermes cron.
 #
-# PREPARED. Version-controlled source; the repo is canonical and the box is a
-# deploy target (fluncle-hermes-operator skill). Deploys to ~/.hermes/scripts/ on
-# the devbox; the cron is wired there. See ../cron/README.md § the render cron.
+# LIVE (wired 2026-06-24). Version-controlled source; the repo is canonical and the
+# box is a deploy target (fluncle-hermes-operator skill). Deployed to /opt/data/scripts/
+# on the devbox; the `fluncle-render` cron is wired there. See ../cron/README.md.
 #
 # WHAT IT DOES: drives the per-finding video render on a SCALE-TO-ZERO box.ascii
 # render box (rave-03). It wakes the box, triggers the `@fluncle-video` render of
