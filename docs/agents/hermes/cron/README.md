@@ -19,7 +19,7 @@ Live on the box as of the **2026-06-23 cutover** (+ `fluncle-render` wired **202
 | `fluncle-healthcheck`  | every 10m           | `--no-agent`           | none (probes only)        | probe each service → Discord-ping on a status flip → POST the `/status` snapshot |
 | `fluncle-newsletter`   | Fri 15:00 Amsterdam | **agent**              | full agent session        | draft + persist the weekly edition (send is an operator Discord tap)             |
 
-The per-cron sections below carry the full mechanism, schedule rationale, and the rebuild-from-scratch wiring for each.
+The per-cron sections below carry the full mechanism, schedule rationale, and the rebuild-from-scratch wiring for each. In the deploy recipes, `<box>` and `op://<vault>/…` are operator placeholders — substitute your own host and 1Password vault; the exact item paths live in the ops runbook note in 1Password (this repo is open source, so concrete hosts/vault names stay out of it).
 
 ## The `--no-agent` enrichment cron (LIVE)
 
@@ -99,7 +99,7 @@ claude -p --model "$OBSERVE_CLAUDE_MODEL" --allowedTools "Read,Glob,Grep" --outp
 
 **The claude-auth ping.** If `claude -p` fails with an **auth/quota** signature (distinct from a transient model hiccup — the detection is narrow), the sweep **stops the batch**, leaves the queue **intact** (no data lost — the queue is the durable worklist), and emits a loud `{ ok:false, reason:"claude_auth", … }` summary line plus a best-effort POST to `DISCORD_ALERT_WEBHOOK` ("Fluncle observe-sweep: claude auth failed, re-auth needed") when that env is set. An absent webhook still leaves the loud summary + a nonzero exit.
 
-**Production pre-reqs.** The image now carries the `claude` (Claude Code) CLI **and** the `copywriting-fluncle` skill (baked at `/opt/claude/skills/copywriting-fluncle`, discovered via `CLAUDE_CONFIG_DIR=/opt/claude` so the non-root cron user finds it regardless of its HOME — see the Dockerfile + `docs/agents/hermes-agent.md` § The image). So a rebuilt box has both already. The one run-time pre-req is the claude auth token — and it **cannot come from the cron env** (Hermes hard-blocks provider credentials; see **Operational gotchas** below). `observe-sweep.sh` sources it from a `0600` operator-placed file at `${HOME}/.observe-sweep.env` (= `/opt/data/home/.observe-sweep.env`) holding `CLAUDE_CODE_OAUTH_TOKEN` (subscription auth, from `op://Fluncle/CLAUDE_CODE_OAUTH_TOKEN/credential`; **not** OpenRouter) plus optionally `DISCORD_ALERT_WEBHOOK` + `OBSERVE_CLAUDE_MODEL`. `observe_track` is **agent tier** (#86), so the box's existing agent-scoped token drives the delivery POST; no operator token. To create it on a rebuilt box:
+**Production pre-reqs.** The image now carries the `claude` (Claude Code) CLI **and** the `copywriting-fluncle` skill (baked at `/opt/claude/skills/copywriting-fluncle`, discovered via `CLAUDE_CONFIG_DIR=/opt/claude` so the non-root cron user finds it regardless of its HOME — see the Dockerfile + `docs/agents/hermes-agent.md` § The image). So a rebuilt box has both already. The one run-time pre-req is the claude auth token — and it **cannot come from the cron env** (Hermes hard-blocks provider credentials; see **Operational gotchas** below). `observe-sweep.sh` sources it from a `0600` operator-placed file at `${HOME}/.observe-sweep.env` (= `/opt/data/home/.observe-sweep.env`) holding `CLAUDE_CODE_OAUTH_TOKEN` (subscription auth, from `op://<vault>/CLAUDE_CODE_OAUTH_TOKEN/credential`; **not** OpenRouter) plus optionally `DISCORD_ALERT_WEBHOOK` + `OBSERVE_CLAUDE_MODEL`. `observe_track` is **agent tier** (#86), so the box's existing agent-scoped token drives the delivery POST; no operator token. To create it on a rebuilt box:
 
 ```bash
 # Deploy the script pair (~/.hermes is hermes-owned 700, so copy IN via docker cp, not scp):
@@ -107,7 +107,7 @@ docker cp observe-sweep.sh hermes:/opt/data/scripts/ && docker cp observe-sweep.
 docker exec hermes chown 1000:1000 /opt/data/scripts/observe-sweep.* && docker exec hermes chmod +x /opt/data/scripts/observe-sweep.sh
 # Place the 0600 secrets file the script sources (Hermes won't pass the token via env — see Gotchas).
 # The value never prints; it flows op -> the file:
-printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$(op read op://Fluncle/CLAUDE_CODE_OAUTH_TOKEN/credential)" \
+printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$(op read op://<vault>/CLAUDE_CODE_OAUTH_TOKEN/credential)" \
   | ssh <box> 'docker exec -i hermes sh -c "cat > /opt/data/home/.observe-sweep.env && chown hermes:hermes /opt/data/home/.observe-sweep.env && chmod 600 /opt/data/home/.observe-sweep.env"'
 # (append DISCORD_ALERT_WEBHOOK to the same file the same way — optional, for the auth-fail ping.)
 hermes cron create "every 60m" --no-agent --script observe-sweep.sh --deliver local --name fluncle-observation
@@ -132,7 +132,7 @@ hermes cron create "every 60m" --no-agent --script observe-sweep.sh --deliver lo
 ```bash
 docker cp note-sweep.sh hermes:/opt/data/scripts/ && docker cp note-sweep.ts hermes:/opt/data/scripts/
 docker exec hermes chown 1000:1000 /opt/data/scripts/note-sweep.* && docker exec hermes chmod +x /opt/data/scripts/note-sweep.sh
-printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$(op read op://Fluncle/CLAUDE_CODE_OAUTH_TOKEN/credential)" \
+printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$(op read op://<vault>/CLAUDE_CODE_OAUTH_TOKEN/credential)" \
   | ssh <box> 'docker exec -i hermes sh -c "cat > /opt/data/home/.note-sweep.env && chown hermes:hermes /opt/data/home/.note-sweep.env && chmod 600 /opt/data/home/.note-sweep.env"'
 hermes cron create "every 10m" --no-agent --script note-sweep.sh --deliver local --name fluncle-note
 ```
@@ -170,8 +170,8 @@ done
 docker exec hermes sh -c 'chown 1000:1000 /opt/data/scripts/render-*.sh /opt/data/scripts/provision-rave-03.sh && chmod +x /opt/data/scripts/render-*.sh /opt/data/scripts/provision-rave-03.sh'
 
 # 2. Place the 0600 secrets file (Hermes won't pass these via the cron env). Values never print; op -> the file.
-{ printf 'BOX_API_KEY=%s\n' "$(op read op://Fluncle/BOX_API_KEY/credential)"; \
-  printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$(op read op://Fluncle/CLAUDE_CODE_OAUTH_TOKEN/credential)"; } \
+{ printf 'BOX_API_KEY=%s\n' "$(op read op://<vault>/BOX_API_KEY/credential)"; \
+  printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$(op read op://<vault>/CLAUDE_CODE_OAUTH_TOKEN/credential)"; } \
   | ssh <box> 'docker exec -i hermes sh -c "cat > /opt/data/home/.render-conductor.env && chown hermes:hermes /opt/data/home/.render-conductor.env && chmod 600 /opt/data/home/.render-conductor.env"'
 
 # 3. Create the cron (hourly).
@@ -180,7 +180,7 @@ hermes cron create "every 60m" --no-agent --script render-conductor.sh --deliver
 
 **Smoke-test before scheduling** (mimic the cron user — `docker exec -u hermes -e HOME=/opt/data/home`, § Operational gotchas):
 
-- `docker exec -u hermes -e HOME=/opt/data/home hermes box login "$(op read op://Fluncle/BOX_API_KEY/credential)"` then `box status` → authed.
+- `docker exec -u hermes -e HOME=/opt/data/home hermes box login "$(op read op://<vault>/BOX_API_KEY/credential)"` then `box status` → authed.
 - `docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/data/scripts/render-conductor.sh` against a non-empty queue → expect `started render of <logId> on <boxid>`; a second immediate run → `render in flight … single-flight hold`. Watch `~/.render-conductor/conductor.log` + the render box's `~/conductor-run.log`.
 - Confirm the first render ships (the finding leaves `admin tracks queue`) before walking away. Then schedule + watch a few hourly ticks.
 
@@ -299,7 +299,7 @@ or ask the running bot in Discord (`/cron add "0 15 * * 5" "<prompt>"`), or in n
    - `fluncle admin tracks observe <id> --script-file <one short test script> --json` against one eligible finding → expect a rendered `observation.{mp3,txt,json}` and the voice gate passing.
    - **Observation (the hybrid sweep's authoring step):** `printf 'Say hello in one short sentence.' | claude -p --model "$OBSERVE_CLAUDE_MODEL" --allowedTools "Read,Glob,Grep" --output-format json` → expect a JSON envelope with a non-empty `.result` and **zero OpenRouter spend** (subscription auth via `CLAUDE_CODE_OAUTH_TOKEN`). The `copywriting-fluncle` skill is baked into the image at `/opt/claude/skills/copywriting-fluncle` (`CLAUDE_CONFIG_DIR=/opt/claude`); confirm `claude` lists it as the cron user, e.g. `docker exec hermes ls /opt/claude/skills/`.
    - **Newsletter:** `fluncle admin newsletter list --json` → expect `{ "ok": true, editions: [...] }` (drafts inclusive). Then author one edition end-to-end by hand: `fluncle admin newsletter draft --content-file <edition.json> --subject "<test>" --window-since <iso> --window-until <iso> --json` → expect a `draft` row with a sane `content`. Do NOT send yet. Confirm the agent token gets a **403** on `fluncle admin newsletter send <id> --json` (the operator gate); the operator fires the real send.
-3. **Claude Code on the box (observation).** The image bakes the `claude` CLI **and** the `copywriting-fluncle` skill (at `/opt/claude/skills/`, discovered via `CLAUDE_CONFIG_DIR=/opt/claude`), so a rebuilt box has both. The one run-time pre-req is auth — and it does **not** come from the cron env (Hermes hard-blocks provider credentials; see **Operational gotchas**). `observe-sweep.sh` sources it from a `0600` file at `/opt/data/home/.observe-sweep.env`: `CLAUDE_CODE_OAUTH_TOKEN` (subscription auth — NOT OpenRouter — from `op://Fluncle/CLAUDE_CODE_OAUTH_TOKEN/credential`), plus optionally `DISCORD_ALERT_WEBHOOK` (the claude-auth-failed ping), `OBSERVE_CLAUDE_MODEL` (default `claude-sonnet-4-6`), and `OBSERVE_CLAUDE_EFFORT`.
+3. **Claude Code on the box (observation).** The image bakes the `claude` CLI **and** the `copywriting-fluncle` skill (at `/opt/claude/skills/`, discovered via `CLAUDE_CONFIG_DIR=/opt/claude`), so a rebuilt box has both. The one run-time pre-req is auth — and it does **not** come from the cron env (Hermes hard-blocks provider credentials; see **Operational gotchas**). `observe-sweep.sh` sources it from a `0600` file at `/opt/data/home/.observe-sweep.env`: `CLAUDE_CODE_OAUTH_TOKEN` (subscription auth — NOT OpenRouter — from `op://<vault>/CLAUDE_CODE_OAUTH_TOKEN/credential`), plus optionally `DISCORD_ALERT_WEBHOOK` (the claude-auth-failed ping), `OBSERVE_CLAUDE_MODEL` (default `claude-sonnet-4-6`), and `OBSERVE_CLAUDE_EFFORT`.
 4. **Box timezone (newsletter).** Pin the box to `Europe/Amsterdam` (`TZ` env on `docker run`, or host `/etc/localtime`) and run the one-shot smoke test from [the newsletter extras](#the-newsletter-crons-two-extras-dst--the-clarify-send-gate) before scheduling `0 15 * * 5`. Confirm the recurring intervals are unaffected.
 5. **The `clarify` gate, dry (newsletter).** From the running bot, exercise `clarify("Send edition #N?", [Send, Hold])` in Discord; confirm the buttons render, Hold no-ops, and the timeout sentinel is handled — and that `clarify` is reachable from a `deliver: discord` cron session (not just an interactive DM).
 6. **Watch the first few ticks** — `~/.hermes/cron/output/{job_id}/*.md` and `~/.hermes/logs/`. The observation sweep costs Cartesia credits + subscription quota per render; confirm the per-tick batch is small (`BATCH_CAP=1`) and the queue drains as expected before walking away.
