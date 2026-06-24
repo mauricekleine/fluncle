@@ -65,7 +65,7 @@ export FLUNCLE_BIN="${FLUNCLE_BIN:-/usr/local/bin/fluncle}"
 # (FLUNCLE_API_TOKEN) pass. So `claude -p`'s token can ONLY reach this script via a file the
 # operator places — sourced here: a 0600 ${HOME}/.observe-sweep.env (mounted ~/.hermes)
 # holding CLAUDE_CODE_OAUTH_TOKEN (required) + optionally DISCORD_ALERT_WEBHOOK /
-# OBSERVE_CLAUDE_MODEL. Written via `op read op://Fluncle/CLAUDE_CODE_OAUTH_TOKEN/credential`.
+# OBSERVE_CLAUDE_MODEL. Written from the configured 1Password item (see the ops runbook note).
 OBSERVE_ENV_FILE="${OBSERVE_ENV_FILE:-${HOME:-/opt/data/home}/.observe-sweep.env}"
 if [ -r "${OBSERVE_ENV_FILE}" ]; then
   set -a

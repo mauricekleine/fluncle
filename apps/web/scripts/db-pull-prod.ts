@@ -6,16 +6,22 @@
  * production.
  *
  * Production credentials are never stored in .dev.vars. They are read at run
- * time from 1Password (the `Turso Production Credentials` item in the Fluncle
- * vault), so this is a deliberate, human-in-the-loop step: `op` must be
- * unlocked. The dump itself is read-only (SELECTs).
+ * time from 1Password — point `FLUNCLE_TURSO_OP_ITEM` at the item that holds the
+ * production Turso credentials (see the ops runbook note) — so this is a
+ * deliberate, human-in-the-loop step: `op` must be unlocked. The dump itself is
+ * read-only (SELECTs).
  */
 import { $ } from "bun";
 import { createClient } from "@libsql/client/web";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-const ITEM = "op://Fluncle/Turso Production Credentials";
+const ITEM = process.env.FLUNCLE_TURSO_OP_ITEM;
+if (!ITEM) {
+  throw new Error(
+    "Set FLUNCLE_TURSO_OP_ITEM to the 1Password item holding the production Turso credentials — see the ops runbook note.",
+  );
+}
 
 async function readSecret(field: string): Promise<string> {
   try {

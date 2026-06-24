@@ -88,9 +88,9 @@ dig @127.0.0.1 -p 15353 004.7.2I.dig.fluncle.com TXT +short
 
 Checks: `gofmt -l . && go vet ./... && go build ./... && go test ./...`.
 
-## Deploying to the rave VPS
+## Deploying to the public-edge box
 
-`fluncle-dns` runs on the same VPS as `ssh rave.fluncle.com`. Three operator steps: build the binary, install the service, open the port. Then delegate the zone from Cloudflare. These are gated production steps — run them yourself.
+`fluncle-dns` runs on the public-edge box (the same box that serves `ssh rave.fluncle.com`; host map in the ops runbook note). Three operator steps: build the binary, install the service, open the port. Then delegate the zone from Cloudflare. These are gated production steps — run them yourself.
 
 ### 1. Build and ship the binary
 
@@ -118,7 +118,7 @@ If `:53` is already taken by a stub resolver (Ubuntu's `systemd-resolved` often 
 
 DNS needs both transports — UDP for the common case, TCP for large answers and fallback.
 
-- **Provider firewall** (Hetzner Cloud firewall, the rave VPS's first gate): allow inbound `UDP/53` and `TCP/53` from anywhere.
+- **Provider firewall** (the public-edge box's first gate): allow inbound `UDP/53` and `TCP/53` from anywhere.
 - **Host firewall**, if `ufw` is active:
 
   ```bash
@@ -136,7 +136,7 @@ The `fluncle.com` zone lives on Cloudflare. Delegate `dig.fluncle.com` to the VP
 
 The `A` record is the in-bailiwick glue the `NS` delegation points at.
 
-`apps/dns/scripts/delegate.sh` creates both via the Cloudflare API, reading creds from 1Password (`op://Fluncle/Cloudflare DNS/...`). Preview first, then apply:
+`apps/dns/scripts/delegate.sh` creates both via the Cloudflare API, reading creds from the configured 1Password item (set `FLUNCLE_CF_DNS_OP_ITEM`; see the ops runbook note). Preview first, then apply:
 
 ```bash
 apps/dns/scripts/delegate.sh --dry-run <VPS_IP>

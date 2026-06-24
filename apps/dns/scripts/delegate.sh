@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # delegate.sh — create the Cloudflare DNS records that delegate the
-# `dig.fluncle.com` zone to the fluncle-dns server running on the rave VPS.
+# `dig.fluncle.com` zone to the fluncle-dns server running on the public-edge box
+# (host map in the ops runbook note).
 #
 # It creates two records in the `fluncle.com` zone:
 #   1. dig.fluncle.com   NS  ns1.dig.fluncle.com   (the delegation)
@@ -18,12 +19,14 @@
 #   apps/dns/scripts/delegate.sh <VPS_IP>          # apply
 #   apps/dns/scripts/delegate.sh --dry-run <VPS_IP> # print what it would do
 #
-# Credentials are read from 1Password at call time (nothing is stored):
-#   op://Fluncle/Cloudflare DNS/CLOUDFLARE_ACCOUNT_ID
-#   op://Fluncle/Cloudflare DNS/CLOUDFLARE_API_KEY
+# Credentials are read from 1Password at call time (nothing is stored). Set
+# FLUNCLE_CF_DNS_OP_ITEM to the 1Password item that holds the Cloudflare DNS
+# credentials (see the ops runbook note); the script reads these fields under it:
+#   <item>/CLOUDFLARE_ACCOUNT_ID
+#   <item>/CLOUDFLARE_API_KEY
 # If the secret is a Global API Key (not a scoped API Token), also expose the
 # account email so the legacy auth headers can be used:
-#   op://Fluncle/Cloudflare DNS/CLOUDFLARE_EMAIL   (optional)
+#   <item>/CLOUDFLARE_EMAIL   (optional)
 
 set -euo pipefail
 
@@ -65,11 +68,12 @@ for bin in op curl jq; do
   command -v "$bin" >/dev/null 2>&1 || { echo "error: '$bin' not found on PATH" >&2; exit 1; }
 done
 
+CF_DNS_ITEM="${FLUNCLE_CF_DNS_OP_ITEM:?set to your 1Password item holding the Cloudflare DNS credentials — see the ops runbook note}"
 echo "Reading Cloudflare credentials from 1Password…" >&2
-ACCOUNT_ID="$(op read 'op://Fluncle/Cloudflare DNS/CLOUDFLARE_ACCOUNT_ID')"
-API_KEY="$(op read 'op://Fluncle/Cloudflare DNS/CLOUDFLARE_API_KEY')"
+ACCOUNT_ID="$(op read "${CF_DNS_ITEM}/CLOUDFLARE_ACCOUNT_ID")"
+API_KEY="$(op read "${CF_DNS_ITEM}/CLOUDFLARE_API_KEY")"
 # Optional: only present when the secret is a Global API Key.
-CF_EMAIL="$(op read 'op://Fluncle/Cloudflare DNS/CLOUDFLARE_EMAIL' 2>/dev/null || true)"
+CF_EMAIL="$(op read "${CF_DNS_ITEM}/CLOUDFLARE_EMAIL" 2>/dev/null || true)"
 
 if [[ -z "$API_KEY" ]]; then
   echo "error: missing Cloudflare api key in 1Password" >&2

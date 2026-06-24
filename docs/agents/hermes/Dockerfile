@@ -9,7 +9,7 @@
 # RUNTIME SECRET (not baked): the `fluncle-observation` `--no-agent` cron shells out
 # to `claude -p` (Claude Code, SUBSCRIPTION auth), which authenticates from the
 # CLAUDE_CODE_OAUTH_TOKEN env var. That token is a secret — it is NEVER baked into
-# the image; it is pulled from 1Password (op://Fluncle/CLAUDE_CODE_OAUTH_TOKEN/credential).
+# the image; it is pulled from the configured 1Password item (see the ops runbook note).
 # The image only carries the `claude` binary + the skill; the credential arrives at run
 # time. NOTE: --env-file (/etc/hermes.env) delivers it to `docker exec` + AGENT crons, but
 # Hermes BLOCKS provider credentials from `--no-agent` cron script envs (GHSA-rhgp-j443-p4rf),
@@ -23,8 +23,8 @@ FROM nousresearch/hermes-agent:v2026.6.19
 # the `--no-agent` enrich-sweep cron. The Nous Hermes base is Debian-based, so
 # ffmpeg comes from apt; unzip is also required because bun's installer (below)
 # unpacks the binary from a zip; openssh-client because the box.ascii CLI's
-# `box ssh`/`box scp` — the `fluncle-render` conductor's transport to the rave-03
-# render box — shells out to system ssh/scp. One layer, lists cleaned, no recommends.
+# `box ssh`/`box scp` — the `fluncle-render` conductor's transport to the render
+# box — shells out to system ssh/scp. One layer, lists cleaned, no recommends.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ffmpeg unzip openssh-client \
   && rm -rf /var/lib/apt/lists/*
@@ -43,15 +43,16 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14" \
   && chmod 755 /usr/local/bin/bun
 
 # box.ascii CLI — the `fluncle-render` `--no-agent` conductor cron drives a
-# SCALE-TO-ZERO box.ascii render box (rave-03): wake it, trigger the render via a
+# SCALE-TO-ZERO box.ascii render box: wake it, trigger the render via a
 # remote `claude -p`, park it (docs/agents/hermes/cron/README.md § the render
 # conductor). The installer drops the binary in $HOME/.ascii/bin (/root, mode 700);
 # the non-root cron runner can't traverse /root, so COPY it to /usr/local/bin like
 # bun. Run under `sh` it skips the .bashrc/.zshrc shell-integration (writes only the
 # binary + a ~/.config/ascii/box/config.json — non-secret api_url/channel, which
 # render-conductor.sh re-creates at the cron user's own HOME). Auth is NOT baked:
-# the conductor `box login`s from BOX_API_KEY (op://Fluncle/BOX_API_KEY/credential)
-# at run, persisting under the cron user's $HOME (the mounted /opt/data/home).
+# the conductor `box login`s from BOX_API_KEY (the configured 1Password item — see
+# the ops runbook note) at run, persisting under the cron user's $HOME (the mounted
+# agent state dir).
 # NOTE: box.ascii is pre-1.0 and its installer offers no version pin — it tracks
 # the `ascii-prod` channel (the CLI also self-updates), so this is the one image
 # dependency not version-pinned. Re-verify the conductor after a base rebuild.

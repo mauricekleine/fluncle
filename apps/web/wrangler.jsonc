@@ -34,26 +34,14 @@
     // switch remains.)
     "CARTESIA_VOICE_ID": "ca8c023f-1901-40f7-be8c-faafd7a58139",
   },
-  // OPERATOR OPS STEP — Media Transformations (playback renditions):
-  // The web playback surfaces (Stories, the log-page footage) request same-zone
-  // /cdn-cgi/media renditions of each master (lib/media.ts videoRendition /
-  // videoPoster). Cloudflare only serves /cdn-cgi/media once Transformations is
-  // ENABLED on the fluncle.com zone — there is no wrangler/binding switch for
-  // the URL transform path; it is a dashboard/API zone setting the operator
-  // toggles: Cloudflare dashboard → fluncle.com → Stream → Transformations →
-  // "Enable" for the zone (the found.fluncle.com hostname must be in scope).
-  // Until it is on, every /cdn-cgi/media URL errors and the code's one-shot
-  // onError fallback plays the raw master — safe, just not optimized.
-  //
-  // MERGE GATE: hold this slice's merge until slice C has emptied the oversized
-  // manifest (Media Transformations rejects sources >100MB) AND the zone setting
-  // above is enabled. The fallback keeps any remaining straggler playable.
+  // Media Transformations (playback renditions): the web playback surfaces request
+  // same-zone /cdn-cgi/media renditions of each master (lib/media.ts). These require
+  // Transformations ENABLED on the zone (a one-time dashboard/API zone setting, no
+  // wrangler/binding switch); until it is on, the code's one-shot onError fallback
+  // plays the raw master. The operator enablement step is in the ops runbook note.
 
-  // R2 bucket for per-track videos and private analysis artifacts. Public reads are served from
-  // found.fluncle.com; the Worker owns the bucket (the agent uploads via the
-  // admin endpoint and never holds R2 credentials). Public video keys:
-  // <log-id>/footage.mp4, <log-id>/footage-silent.mp4, <log-id>/poster.jpg,
-  // <log-id>/cover.jpg, <log-id>/note.txt. Operator-only archive path:
-  // analysis/previews/<log-id>/<sha256>.<ext> (never a playback source).
+  // R2 bucket for per-track videos and private analysis artifacts. Public reads are
+  // served from found.fluncle.com; the Worker owns the bucket (the agent uploads via
+  // the admin endpoint and never holds R2 credentials).
   "r2_buckets": [{ "binding": "VIDEOS", "bucket_name": "fluncle-videos" }],
 }
