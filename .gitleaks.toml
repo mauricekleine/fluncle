@@ -1,0 +1,34 @@
+# gitleaks configuration — the leak-prevention backstop (CI runs gitleaks on every
+# PR + push; see .github/workflows/gitleaks.yml). Extends the default ruleset with a
+# tight allowlist for values that are intentionally public (runtime identifiers, not
+# secrets) and for non-source directories.
+#
+# This catches accidentally-committed SECRET VALUES (tokens, keys). It is a different
+# concern from the ops-boundary doc cleanup (op:// item PATHS, runbooks, topology) —
+# those are references, not secrets, and live behind the Fluncle ops runbook note in
+# 1Password.
+title = "Fluncle gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Intentionally-public identifiers (runtime config, not secrets) + non-source paths"
+regexTarget = "match"
+regexes = [
+  # The Cloudflare R2 account id is a runtime Worker binding (wrangler.jsonc) — a
+  # public account IDENTIFIER, not a credential. It is useless without the actual
+  # R2 token, which is a Worker secret and never in the repo.
+  '''0651fd3b33d9e0b2fe72a5f13e5cf65d''',
+]
+paths = [
+  '''(^|/)node_modules/''',
+  '''(^|/)\.dev/''',
+  '''(^|/)dist/''',
+  '''(^|/)\.output/''',
+  '''(^|/)\.source/''',
+  '''(^|/)\.(claude|agents)/''',
+  '''(^|/)bun\.lock$''',
+  # generated Worker types carry the public R2 account id (covered by the regex too)
+  '''apps/web/worker-configuration\.d\.ts$''',
+]

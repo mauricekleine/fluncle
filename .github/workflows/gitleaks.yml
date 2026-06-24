@@ -1,0 +1,40 @@
+name: gitleaks
+
+# The leak-prevention backstop for the open-source repo: scan the full git history
+# for accidentally-committed secret VALUES (tokens, keys) on every PR + push to main.
+# Config + allowlist live in .gitleaks.toml at the repo root. This is a different
+# concern from the ops-boundary doc hygiene (op:// item paths, topology) — those are
+# references, not secrets, and live behind the Fluncle ops runbook note in 1Password.
+#
+# We run the gitleaks CLI directly (the official pinned image) rather than the
+# gitleaks-action wrapper: the CLI is unconditionally free (the action gates some
+# features behind GITLEAKS_LICENSE), the pin is reproducible, and it is the exact
+# invocation validated locally. Bump the pin via the fluncle-maintenance skill.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  cancel-in-progress: true
+  group: gitleaks-${{ github.ref }}
+
+jobs:
+  scan:
+    name: Scan git history for committed secrets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # full history — gitleaks `git` mode scans every commit
+
+      - name: gitleaks
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/repo" \
+            ghcr.io/gitleaks/gitleaks:v8.30.1 \
+            git /repo --config=/repo/.gitleaks.toml --redact --exit-code 1 --no-banner
