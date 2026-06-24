@@ -38,6 +38,11 @@
       "sourceType": "local",
       "computedHash": "01b4776e4a553df8c028ab528d97204a5ff783c99c14ea28899b7fb007b02066"
     },
+    "fluncle-maintenance": {
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-maintenance",
+      "sourceType": "local",
+      "computedHash": "a0e44646ecd0a7535aacef7c5e4f9d97bf10bb719823dcaa68c6dded9b68ac1b"
+    },
     "fluncle-mixtapes": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-mixtapes",
       "sourceType": "local",
