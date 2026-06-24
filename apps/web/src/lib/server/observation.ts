@@ -670,14 +670,27 @@ type WithTimestampsResponse = {
 };
 
 /**
- * Sanitise the spoken text for TTS stability. An em/en dash ("Artist — Title") is a
- * known v2 destabiliser — it can drop the read into a long mis-pause or shove the
- * prosody off the rails — so the dash that means "a beat, then the title" is rewritten
- * to the comma it actually sounds like. Shaping only what reaches ElevenLabs (and thus
- * the spoken/caption timing); the agent's original script is still stored verbatim.
+ * The longest `<break>` the read may carry. A long break is a v2 destabiliser: the
+ * model slows down hard right after it and can trail into artifacts, and a 1s pause
+ * reads as dead air anyway. Capping keeps a beat without the derailment.
+ */
+const MAX_BREAK_SEC = 0.5;
+
+/**
+ * Sanitise the spoken text for TTS stability. Two known v2 destabilisers are tamed:
+ *   1. A long `<break>` — the model slows/artifacts after it; cap it to MAX_BREAK_SEC.
+ *   2. An em/en dash ("Artist — Title") — it can drop the read into a long mis-pause
+ *      or shove the prosody off the rails; rewrite it to the comma it sounds like.
+ * Shaping only what reaches ElevenLabs (and thus the spoken/caption timing); the
+ * agent's original script is still stored verbatim.
  */
 export function sanitizeForTts(text: string): string {
   return text
+    .replace(/<break\s+time="([\d.]+)s"\s*\/>/g, (_match, sec: string) => {
+      const capped = Math.min(Number.parseFloat(sec) || MAX_BREAK_SEC, MAX_BREAK_SEC);
+
+      return `<break time="${capped}s"/>`;
+    })
     .replace(/\s*[—–]\s*/g, ", ")
     .replace(/[ \t]{2,}/g, " ")
     .trim();

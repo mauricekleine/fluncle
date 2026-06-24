@@ -434,4 +434,20 @@ describe("sanitizeForTts", () => {
       "That's a banger. Find a dark room, fam.",
     );
   });
+
+  it("caps an over-long <break> to 0.5s (the post-break slowdown destabiliser)", () => {
+    expect(sanitizeForTts('rolls you quiet. <break time="1.0s"/> Days Like These.')).toBe(
+      'rolls you quiet. <break time="0.5s"/> Days Like These.',
+    );
+    // The space-before-slash variant the agent also emits.
+    expect(sanitizeForTts('a minute. <break time="2.0s" /> Hospital Records.')).toBe(
+      'a minute. <break time="0.5s"/> Hospital Records.',
+    );
+  });
+
+  it("leaves an already-short <break> alone", () => {
+    expect(sanitizeForTts('a beat <break time="0.3s"/> then more')).toBe(
+      'a beat <break time="0.3s"/> then more',
+    );
+  });
 });
