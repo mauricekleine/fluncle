@@ -9,6 +9,7 @@ import {
   videoCrop,
   videoCropPoster,
   videoPoster,
+  videoPurgeUrls,
   videoRendition,
 } from "./media";
 
@@ -331,5 +332,80 @@ describe("versionedObservationAudioUrl", () => {
 
   it("returns the bare URL unchanged when the timestamp is unparseable", () => {
     expect(versionedObservationAudioUrl(bare, "not-a-date")).toBe(bare);
+  });
+});
+
+// The re-render purge set must mirror the builders above EXACTLY — a width the
+// surfaces request but the set omits stays stale; a width never requested is
+// wasted purge budget. These tests pin the set against the very builders it
+// shadows, so a future change to a builder that isn't reflected here fails.
+describe("videoPurgeUrls", () => {
+  const LOG_ID = "004.7.2I";
+
+  it("always includes both R2 masters and the audio-stripped social cut", () => {
+    const media = trackMedia(LOG_ID);
+
+    for (const squared of [true, false]) {
+      const urls = videoPurgeUrls(LOG_ID, { squared });
+
+      expect(urls).toContain(media.videoUrl);
+      expect(urls).toContain(media.socialVideoUrl);
+      expect(urls).toContain(videoAudioStripped(media.socialVideoUrl));
+    }
+  });
+
+  it("returns a de-duplicated set (no URL listed twice)", () => {
+    for (const squared of [true, false]) {
+      const urls = videoPurgeUrls(LOG_ID, { squared });
+
+      expect(new Set(urls).size).toBe(urls.length);
+    }
+  });
+
+  it("legacy: every ladder rendition off footage.mp4 plus the opening poster", () => {
+    const urls = videoPurgeUrls(LOG_ID, { squared: false });
+
+    for (const width of [360, 480, 720, 1080] as const) {
+      expect(urls).toContain(videoRendition(LOG_ID, { width }));
+    }
+
+    expect(urls).toContain(videoPoster(LOG_ID));
+  });
+
+  it("legacy: does NOT include the square-crop renditions", () => {
+    const urls = videoPurgeUrls(LOG_ID, { squared: false });
+
+    expect(urls).not.toContain(videoCrop(LOG_ID, "portrait"));
+    expect(urls).not.toContain(videoCrop(LOG_ID, "landscape"));
+  });
+
+  it("squared: includes both orientations × ladder + native crops, silent + poster", () => {
+    const urls = videoPurgeUrls(LOG_ID, { squared: true });
+
+    for (const orientation of ["landscape", "portrait"] as const) {
+      // native crop (no explicit width), silent loop, and opening poster
+      expect(urls).toContain(videoCrop(LOG_ID, orientation));
+      expect(urls).toContain(videoCrop(LOG_ID, orientation, undefined, true));
+      expect(urls).toContain(videoCropPoster(LOG_ID, orientation));
+
+      for (const width of [360, 480, 720, 1080] as const) {
+        expect(urls).toContain(videoCrop(LOG_ID, orientation, width));
+        expect(urls).toContain(videoCrop(LOG_ID, orientation, width, true));
+        expect(urls).toContain(videoCropPoster(LOG_ID, orientation, width));
+      }
+    }
+  });
+
+  it("squared: does NOT include the legacy width-ladder renditions", () => {
+    const urls = videoPurgeUrls(LOG_ID, { squared: true });
+
+    expect(urls).not.toContain(videoRendition(LOG_ID, { width: 720 }));
+    expect(urls).not.toContain(videoPoster(LOG_ID));
+  });
+
+  it("stays within Cloudflare's 30-URL-per-request purge cap before chunking", () => {
+    // The squared family is the larger set; keep it small enough that a single
+    // finding rarely needs more than a couple of purge requests (the helper chunks).
+    expect(videoPurgeUrls(LOG_ID, { squared: true }).length).toBeLessThanOrEqual(30);
   });
 });

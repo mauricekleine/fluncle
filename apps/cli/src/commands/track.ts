@@ -284,9 +284,10 @@ export async function trackUpdateCommand(
 // gate) and video_squared_at (the radio gate). Idempotent — an already-clear finding
 // comes back `alreadyClear: true`. A body-less POST (the id is the whole input).
 //
-// CACHE CAVEAT (known follow-up, not done here): re-shipping footage.mp4 to the same
-// R2 key leaves Cloudflare Media-Transformation renditions cached separately, so a
-// re-render may still need a purge of the transform URLs (docs/video-variants.md).
+// CACHE NOTE: re-shipping footage.mp4 to the same R2 key leaves Cloudflare
+// Media-Transformation renditions cached separately. The video ship purges them
+// automatically on a re-render; `fluncle admin tracks purge-video` is the manual
+// twin (docs/video-variants.md).
 export type TrackRequeueVideoResponse = {
   alreadyClear?: boolean;
   logId: string;
@@ -299,6 +300,27 @@ export async function trackRequeueVideoCommand(
 ): Promise<TrackRequeueVideoResponse> {
   return adminApiPost<TrackRequeueVideoResponse>(
     `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/video/requeue`,
+  );
+}
+
+// `fluncle admin tracks purge-video <id|logId>` — evict a finding's stale
+// Cloudflare Media-Transformation renditions from the edge. The manual twin of the
+// automatic purge the video ship fires on a re-render: the player streams MT crops
+// derived from `footage.mp4`, so re-uploading to the same R2 key leaves those
+// renditions stale until their TTL expires. Run this after a manual R2 re-upload,
+// or to force-evict a finding whose automatic purge was skipped (no zone token at
+// the time). Operator-authenticated. Body-less POST. `noVideo: true` when there is
+// nothing to purge.
+export type TrackPurgeVideoResponse = {
+  logId: string;
+  noVideo?: boolean;
+  ok: true;
+  trackId: string;
+};
+
+export async function trackPurgeVideoCommand(idOrLogId: string): Promise<TrackPurgeVideoResponse> {
+  return adminApiPost<TrackPurgeVideoResponse>(
+    `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/video/purge`,
   );
 }
 
