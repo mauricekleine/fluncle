@@ -163,7 +163,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   export_private_account_data: "private-session",
   finalize_mixtape_mixcloud: "operator",
   finalize_mixtape_youtube: "operator",
-  finalize_track_video: "operator",
+  // The autonomous render box links its own cut + sets video_url — agent tier
+  // (adminAuth only, no operatorGuard); the box's agent token publishes its renders.
+  finalize_track_video: "admin",
   get_mixtape_social: "admin",
   get_private_account_export: "private-session",
   get_private_galaxy_progress: "private-session",
@@ -184,7 +186,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // written-note sibling of observe_track/context_track; the box's agent token drives it.
   note_track: "admin",
   observe_track: "admin",
-  presign_track_video_uploads: "operator",
+  // The autonomous render box signs its own R2 upload URLs — agent tier (adminAuth
+  // only, no operatorGuard); the box's agent token publishes its renders.
+  presign_track_video_uploads: "admin",
   publish_mixtape: "operator",
   publish_mixtape_youtube: "operator",
   publish_track: "operator",

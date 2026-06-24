@@ -672,11 +672,11 @@ export function adminTracksHandlers(os: Implementer) {
     }
   });
 
-  // POST /admin/tracks/{trackId}/video/uploads — operator tier (live
-  // `requireOperator`). The JSON control-plane: sign the direct-to-R2 PUT URLs.
+  // POST /admin/tracks/{trackId}/video/uploads — agent tier (any admin principal,
+  // operator OR agent): the autonomous render box publishes its own renders. The JSON
+  // control-plane: sign the direct-to-R2 PUT URLs.
   const presignVideoUploadsHandler = os.presign_track_video_uploads
     .use(adminAuth)
-    .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
         const idOrLogId = input.trackId;
@@ -781,92 +781,90 @@ export function adminTracksHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/tracks/{trackId}/video/finalize — operator tier (live
-  // `requireOperator`). Phase 2: link the canonical web cut.
-  const finalizeVideoHandler = os.finalize_track_video
-    .use(adminAuth)
-    .use(operatorGuard)
-    .handler(async ({ input }) => {
-      try {
-        const body: AdminTrackInputs["finalize_track_video"] = input;
-        const idOrLogId = body.trackId;
-        const track = await getTrackByIdOrLogId(idOrLogId);
+  // POST /admin/tracks/{trackId}/video/finalize — agent tier (any admin principal,
+  // operator OR agent): the autonomous render box links its own cut. Phase 2: link the
+  // canonical web cut (sets video_url).
+  const finalizeVideoHandler = os.finalize_track_video.use(adminAuth).handler(async ({ input }) => {
+    try {
+      const body: AdminTrackInputs["finalize_track_video"] = input;
+      const idOrLogId = body.trackId;
+      const track = await getTrackByIdOrLogId(idOrLogId);
 
-        if (!track) {
-          throw new ORPCError("NOT_FOUND", {
-            data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
-            message: `No track with id ${idOrLogId}`,
-            status: 404,
-          });
-        }
-
-        if (!track.logId) {
-          throw new ORPCError("BAD_REQUEST", {
-            data: {
-              apiCode: "no_log_id",
-              apiMessage:
-                "Track has no Log ID; every video needs a coordinate. Backfill the ISRC/Log ID first.",
-            },
-            message: "Track has no Log ID; every video needs a coordinate.",
-            status: 400,
-          });
-        }
-
-        const videoVehicle =
-          typeof body.videoVehicle === "string" && body.videoVehicle.trim()
-            ? body.videoVehicle.trim().slice(0, 120)
-            : undefined;
-        const videoGrain =
-          typeof body.videoGrain === "string" && body.videoGrain.trim()
-            ? body.videoGrain.trim().slice(0, 120)
-            : undefined;
-        const videoModel =
-          typeof body.videoModel === "string" && body.videoModel.trim()
-            ? body.videoModel.trim().slice(0, 120)
-            : "anthropic/claude-opus-4-8";
-        const videoModelReasoning =
-          typeof body.videoModelReasoning === "string" && body.videoModelReasoning.trim()
-            ? body.videoModelReasoning.trim().slice(0, 120)
-            : "high";
-
-        const videoUrl = trackMedia(track.logId).videoUrl;
-        // `squared` (the CLI sends it when it uploaded BOTH the square footage.mp4
-        // and the portrait footage.social.mp4) flips the two-master layout on:
-        // footage.mp4 is now the clean square crop source. Stamp the signal so the
-        // archive surfaces start MT-cropping this finding (docs/video-variants.md).
-        const squared = body.squared === true;
-
-        // A RE-RENDER: this finding already had a `video_url` (the prior render),
-        // and finalize re-ships `footage.mp4` to the SAME R2 key. The bare master
-        // URL is byte-identical (the queue gates on presence, not content), so the
-        // DB write below is a no-op for `video_url` — but the edge keeps serving the
-        // OLD master's cached Media-Transformation renditions. Purge them so the
-        // player picks up the fresh render. Best-effort, fired off the request
-        // lifecycle (waitUntil) BELOW after the DB write commits.
-        const isReRender = Boolean(track.videoUrl);
-
-        await updateTrack(track.trackId, {
-          videoModel,
-          videoModelReasoning,
-          videoUrl,
-          ...(squared ? { videoSquaredAt: new Date().toISOString() } : {}),
-          ...(videoVehicle ? { videoVehicle } : {}),
-          ...(videoGrain ? { videoGrain } : {}),
+      if (!track) {
+        throw new ORPCError("NOT_FOUND", {
+          data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
+          message: `No track with id ${idOrLogId}`,
+          status: 404,
         });
-
-        // Drop the stale renditions on a re-render. `squared` reflects the layout
-        // the finding now carries (a freshly-stamped two-master finding, or a
-        // finding already squared whose re-ship omitted the flag — keep it cropped):
-        // the purge set must match what the surfaces will request post-finalize.
-        if (isReRender) {
-          purgeVideoCache(track.logId, squared || Boolean(track.videoSquaredAt));
-        }
-
-        return { logId: track.logId, ok: true as const, trackId: track.trackId, videoUrl };
-      } catch (error) {
-        throw toFault(error);
       }
-    });
+
+      if (!track.logId) {
+        throw new ORPCError("BAD_REQUEST", {
+          data: {
+            apiCode: "no_log_id",
+            apiMessage:
+              "Track has no Log ID; every video needs a coordinate. Backfill the ISRC/Log ID first.",
+          },
+          message: "Track has no Log ID; every video needs a coordinate.",
+          status: 400,
+        });
+      }
+
+      const videoVehicle =
+        typeof body.videoVehicle === "string" && body.videoVehicle.trim()
+          ? body.videoVehicle.trim().slice(0, 120)
+          : undefined;
+      const videoGrain =
+        typeof body.videoGrain === "string" && body.videoGrain.trim()
+          ? body.videoGrain.trim().slice(0, 120)
+          : undefined;
+      const videoModel =
+        typeof body.videoModel === "string" && body.videoModel.trim()
+          ? body.videoModel.trim().slice(0, 120)
+          : "anthropic/claude-opus-4-8";
+      const videoModelReasoning =
+        typeof body.videoModelReasoning === "string" && body.videoModelReasoning.trim()
+          ? body.videoModelReasoning.trim().slice(0, 120)
+          : "high";
+
+      const videoUrl = trackMedia(track.logId).videoUrl;
+      // `squared` (the CLI sends it when it uploaded BOTH the square footage.mp4
+      // and the portrait footage.social.mp4) flips the two-master layout on:
+      // footage.mp4 is now the clean square crop source. Stamp the signal so the
+      // archive surfaces start MT-cropping this finding (docs/video-variants.md).
+      const squared = body.squared === true;
+
+      // A RE-RENDER: this finding already had a `video_url` (the prior render),
+      // and finalize re-ships `footage.mp4` to the SAME R2 key. The bare master
+      // URL is byte-identical (the queue gates on presence, not content), so the
+      // DB write below is a no-op for `video_url` — but the edge keeps serving the
+      // OLD master's cached Media-Transformation renditions. Purge them so the
+      // player picks up the fresh render. Best-effort, fired off the request
+      // lifecycle (waitUntil) BELOW after the DB write commits.
+      const isReRender = Boolean(track.videoUrl);
+
+      await updateTrack(track.trackId, {
+        videoModel,
+        videoModelReasoning,
+        videoUrl,
+        ...(squared ? { videoSquaredAt: new Date().toISOString() } : {}),
+        ...(videoVehicle ? { videoVehicle } : {}),
+        ...(videoGrain ? { videoGrain } : {}),
+      });
+
+      // Drop the stale renditions on a re-render. `squared` reflects the layout
+      // the finding now carries (a freshly-stamped two-master finding, or a
+      // finding already squared whose re-ship omitted the flag — keep it cropped):
+      // the purge set must match what the surfaces will request post-finalize.
+      if (isReRender) {
+        purgeVideoCache(track.logId, squared || Boolean(track.videoSquaredAt));
+      }
+
+      return { logId: track.logId, ok: true as const, trackId: track.trackId, videoUrl };
+    } catch (error) {
+      throw toFault(error);
+    }
+  });
 
   // POST /admin/tracks/{trackId}/video/requeue — operator tier (live
   // `requireOperator`). Clear a finding's video so it re-enters the render queue AND

@@ -764,14 +764,19 @@ describe("oRPC note_track (POST /admin/tracks/{trackId}/note)", () => {
   });
 });
 
-// ── presign_track_video_uploads — operator tier ─────────────────────────────
+// ── presign_track_video_uploads — agent tier ────────────────────────────────
 describe("oRPC presign_track_video_uploads (POST .../video/uploads)", () => {
-  it("403s the AGENT (operator-only)", async () => {
+  it("accepts the AGENT (agent tier — the box publishes its own renders)", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+    presignUploads.mockResolvedValueOnce([
+      { contentType: "video/mp4", key: "004.7.2I/footage.mp4", url: "https://r2/put?sig=1" },
+    ]);
+
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(post("/video/uploads", AGENT_TOKEN, { fields: ["footage"] }));
 
-    expect(response?.status).toBe(403);
-    expect(presignUploads).not.toHaveBeenCalled();
+    expect(response?.status).toBe(200);
+    expect(presignUploads).toHaveBeenCalled();
   });
 
   it("signs the requested fields and returns the live `uploads` envelope", async () => {
@@ -825,14 +830,17 @@ describe("oRPC presign_track_video_uploads (POST .../video/uploads)", () => {
   });
 });
 
-// ── finalize_track_video — operator tier ────────────────────────────────────
+// ── finalize_track_video — agent tier ───────────────────────────────────────
 describe("oRPC finalize_track_video (POST .../video/finalize)", () => {
-  it("403s the AGENT (operator-only)", async () => {
+  it("accepts the AGENT (agent tier — the box publishes its own renders)", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+    updateTrack.mockResolvedValueOnce({ fields: ["video_url"], trackId: TRACK_ID });
+
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(post("/video/finalize", AGENT_TOKEN, {}));
 
-    expect(response?.status).toBe(403);
-    expect(updateTrack).not.toHaveBeenCalled();
+    expect(response?.status).toBe(200);
+    expect(updateTrack).toHaveBeenCalled();
   });
 
   it("links the canonical cut and returns the live envelope", async () => {
