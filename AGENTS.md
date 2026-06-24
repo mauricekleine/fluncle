@@ -11,6 +11,8 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 
 ## Work Standard
 
+- MUST: If it can be automated, it should be automated. When the choice is "automation is possible but it will require work" versus "do it manually," choose automation every time — with AI the marginal cost of completeness is near zero. The point of this project is reach: how far Fluncle's tentacles stretch across the web (search engines, AI crawlers, and ultimately real humans — DnB fans, artists). A manual step is reach that does not scale. The ONLY exception is a genuine, documented platform constraint with no automatable path (e.g. TikTok licensed audio must be attached in the app) — and even then, automate everything up to and after the irreducible manual step, and capture its result automatically.
+- MUST: Hold the bar at "holy shit, that's done," not "good enough." When asked for something, deliver the finished product — implementation + tests + documentation — not a plan to build it and not a workaround. Never table a permanent solve that is within reach; never leave a dangling thread when tying it off takes five more minutes. Time, fatigue, and complexity are not excuses. Search before building, test before shipping, ship the complete thing.
 - MUST: Prefer a complete, durable fix over a workaround when the full fix is reasonably reachable in the current task.
 - MUST: Build the real implementation instead of papering over behavior when the implementation path is small and well-scoped.
 - MUST: Search the codebase before adding new patterns, helpers, dependencies, or abstractions.
