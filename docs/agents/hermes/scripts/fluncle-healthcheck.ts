@@ -539,8 +539,14 @@ function probeRenderBox(): Check {
       const used = parsed.used ?? parsed.hoursUsed ?? parsed.usage;
       const cap = parsed.limit ?? parsed.hours ?? parsed.cap;
 
-      if (used !== undefined && cap !== undefined) {
-        usageSuffix = `, plan ${String(used)}/${String(cap)}`;
+      // Only format genuine primitive usage values — narrowing to number|string
+      // both satisfies no-base-to-string and skips any object/array shape that
+      // would otherwise stringify to "[object Object]".
+      const isPrimitive = (value: unknown): value is number | string =>
+        typeof value === "number" || typeof value === "string";
+
+      if (isPrimitive(used) && isPrimitive(cap)) {
+        usageSuffix = `, plan ${used}/${cap}`;
       }
     } catch {
       // Not parseable usage — skip; the state alone is the health signal.
