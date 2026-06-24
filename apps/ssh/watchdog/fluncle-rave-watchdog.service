@@ -1,6 +1,6 @@
 [Unit]
 Description=fluncle-rave-watchdog — rave-01 dead-man's-switch beacon + rave-01→rave-02 cross-ping
-Documentation=https://github.com/fluncle (apps/ssh/watchdog/README.md)
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/apps/ssh/watchdog/README.md
 After=network-online.target
 Wants=network-online.target
 
