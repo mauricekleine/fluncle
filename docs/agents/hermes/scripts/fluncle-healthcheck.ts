@@ -117,6 +117,14 @@ function msg(text: string): string | null {
   return trimmed.length > 120 ? `${trimmed.slice(0, 119)}…` : trimmed;
 }
 
+function usageValue(value: unknown): string | null {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  return null;
+}
+
 /** A `fetch` with a hard AbortController timeout — resolves or throws, never hangs. */
 async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
   const controller = new AbortController();
@@ -538,9 +546,11 @@ function probeRenderBox(): Check {
       const parsed = JSON.parse(limits.stdout) as Record<string, unknown>;
       const used = parsed.used ?? parsed.hoursUsed ?? parsed.usage;
       const cap = parsed.limit ?? parsed.hours ?? parsed.cap;
+      const renderedUsed = usageValue(used);
+      const renderedCap = usageValue(cap);
 
-      if (used !== undefined && cap !== undefined) {
-        usageSuffix = `, plan ${String(used)}/${String(cap)}`;
+      if (renderedUsed !== null && renderedCap !== null) {
+        usageSuffix = `, plan ${renderedUsed}/${renderedCap}`;
       }
     } catch {
       // Not parseable usage — skip; the state alone is the health signal.
