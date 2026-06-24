@@ -1,41 +1,46 @@
-# Bump procedure — edit the pin, then ship it
+# Bump procedure — edit the pin, merge it, then ship it to the box
 
-A bump is two halves: **the repo edit** (committed, reviewed in git) and **the deploy** (the running box catches up). This skill — and the routine — only ever do the first half and open a PR. The second half (rebuild + redeploy + smoke-test) is an **operator** step, because it touches the box, spends a rebuild, and needs the box secrets.
+A bump is two halves: **the repo edit** (committed, reviewed in git, CI-gated) and **the deploy** (the running box catches up). The routine now does **both** for a clearly-safe bump — it merges the green PR, and for a baked Dockerfile pin it also rebuilds + redeploys + smoke-tests the box, **rolling back if the smoke fails**. The box mechanics belong to the `fluncle-hermes-operator` skill; this routine drives them. It still **brakes** (reports, never ships) on anything risky — see [safety-doctrine.md](safety-doctrine.md).
 
-## The split: what the routine does vs what the operator does
+## The two halves, and what validates each
 
-| Half          | Who                           | What                                                                                                                                                            |
-| ------------- | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Repo edit** | the routine (or you, by hand) | Edit the pin in the committed file, commit on a branch, open a PR. The CI deploy-gate (`format:check` + `lint` + `typecheck` + `test`) validates the repo side. |
-| **Deploy**    | the operator only             | Rebuild the Hermes image from the edited Dockerfile, redeploy to the box, run the smoke tests. Routine **never** does this.                                     |
+| Half           | Validated by                                                                                       | What ships it                                                                                                                       |
+| -------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| **Repo edit**  | the CI deploy-gate (`format:check` + `lint` + `typecheck` + `test`) + gitleaks                     | merging the green PR to `main`.                                                                                                     |
+| **Box deploy** | the **post-rebuild smoke test** (CI never rebuilds the image — this is the validation it can't do) | rebuilding the image from the merged `main`, redeploying the container, smoke-testing, with rollback to the previous image on fail. |
 
-Two of the six inventory items (`package.json` `packageManager`, the workflow `bun-version:` + the Actions SHA-pins) are **fully** repo-side — they ship when the PR merges to `main` and CI/the Cloudflare build picks them up, no box step. The other half (the Dockerfile `FROM` / `npm -g` pins) only reaches the box on a **rebuild**, which is the operator follow-up. A PR that edits a Dockerfile pin must say so in its body: _"rebuild + redeploy is an operator follow-up; the repo edit is validated by CI but the box still runs the old pin until rebuilt."_
+Two of the six inventory items (`package.json` `packageManager`, the workflow `bun-version:` + the Actions SHA-pins) are **fully** repo-side — they ship the moment the PR merges; **no box step**. The other half (the Dockerfile `FROM` / `npm -g` pins) only reaches the box on a **rebuild** — and the rebuild is now the routine's, gated by the smoke test.
 
-## The repo-edit half (what a routine PR contains)
+## The flow for a clearly-safe bump (repo → merge → box)
 
-1. **Edit the pin in place** — the inventory tells you the exact line/marker per item. For bun, edit all three places in the same commit.
-2. **Commit on a branch** (never push to `main` from the routine — open a PR; see the automation prompt). Conventional commit, e.g. `chore(deps): bump claude-code CLI pin 2.1.186 → 2.1.187` or `chore(ci): SHA-pin GitHub Actions (deepsec finding)`.
-3. **Open a PR** with: the drift table (item, old pin, new pin, drift class), the safety call per item, and — for any Dockerfile edit — the explicit "operator rebuild follow-up" note. Let the CI deploy-gate run.
-4. **Stop.** Do not merge (the orchestrating session / operator merges), do not touch the box.
+1. **Edit the pin in place** on a branch — the inventory tells you the exact line/marker per item. For bun, edit all three places in one commit.
+2. **Run the repo-side gate locally**, then **open a PR** with the drift table, the per-item safety call, and (for a Dockerfile edit) the note that the box rebuild + smoke-test will follow the merge.
+3. **Wait for the PR's CI to go green** (Quality Checks + gitleaks + the Cloudflare build). A red check → **do not merge**; report and leave the PR for a human.
+4. **Merge** the green PR (`gh pr merge --squash --admin --delete-branch`).
+5. **If a baked Dockerfile pin changed, ship it to the box** (the deploy half, below). Otherwise you're done — the repo-side change is live on merge.
 
-## The deploy half (operator — referenced, NOT inlined here)
+## The deploy half (driven, with a rollback rail — mechanics NOT inlined here)
 
-The exact build context, the `docker build`/`docker run` invocation, the env-file + secret placement, the cron user, and the smoke tests are **operator material**. They are **not** reproduced in this public skill. They live in:
+The exact build context, the `docker build`/`docker run` invocation, the env-file + secret placement, the cron user, and the smoke-test checklist are the **`fluncle-hermes-operator`** skill's, and the secret-bearing steps live in **the Hermes ops runbook note in 1Password**. The routine reads those at run time. The **shape** it follows (so the doctrine is explicit without inlining commands):
 
-- **The Hermes ops runbook note in 1Password** — the canonical operator recipe (build context, the exact build/run commands, the secrets, the smoke-test checklist). This is where the operator works from.
-- **`docs/agents/hermes/cron/README.md`** — the in-repo, architecture-level runbook for the crons and the render conductor (what each pin powers, the rebuild pre-reqs at the procedure level, the verify checklist). Public-safe; routes to the ops note for the secret-bearing steps.
-- **The `fluncle-hermes-operator` skill** — the operator's map for _which lever_ a change pulls and the change → ship → verify loop. The "bump the upstream pin / the bundled `fluncle` CLI / the Claude Code CLI" row says: **rebuild the image (from the repo root, `-f docs/agents/hermes/Dockerfile`) + restart + smoke test.** That skill owns the box mechanics; this one routes to it.
+1. **Make it reversible first.** Capture the running container's run-config (`docker inspect`) and **keep the previous image** (tag it / don't prune it). Nothing below is allowed to start until the old image is preserved.
+2. **Single-flight.** If a rebuild/redeploy is already in progress, stop — never run two.
+3. **Rebuild** the image from the repo root against the merged `docs/agents/hermes/Dockerfile` (build context = repo root so the baked skill is reachable).
+4. **Redeploy** — stop the old container, run the new image with the captured config + the env-file repopulated from the ops note, restart.
+5. **Smoke-test** the verify checklist: `fluncle version` is the new pin; an agent-tier read returns `{ok:true}`; a publish-class command is refused 403; for the render path, `box status` → authed; `dig` answers; `hermes cron list` shows the roster.
+6. **Gate on the smoke:**
+   - **Pass** → shipped. Report it.
+   - **Fail** → **roll back**: stop the new container, restart the **previous image**, confirm the smoke checklist passes on it. The PR is already merged, so report loudly that the box stayed on the prior CLI pending a human, and leave a follow-up note.
+   - **Rollback fails** (the worst case) → **stop**. Fire the loudest alert available (the operator Discord webhook from the ops note); do not keep retrying. A human takes it from here.
 
-The shape of the operator deploy (so the routine's PR note is accurate, without inlining commands):
+The box must **never** be left on a broken build. A clean rebuild whose smoke test passes is the only "shipped" state; everything else ends on the previous image.
 
-1. **Rebuild** the image from the repo root against the edited `docs/agents/hermes/Dockerfile` (the build context is the repo root so the baked skill is reachable).
-2. **Redeploy + restart** the container on the box.
-3. **Smoke-test** — the verify checklist in `docs/agents/hermes/cron/README.md` (CLI present and the right version; an agent-allowed read returns `{ok:true}`; a publish-class command is refused 403; for a base bump, the gateway starts above the model-context floor; for a render-path bump, `box status` → authed and a conductor dry-run).
+## When the routine does NOT do the deploy half
+
+- **A BRAKE item** never reaches merge, so it never reaches the box — it's a report.
+- **A base-image bump** is always a BRAKE: report the newer tag, let the operator pull it (the rebuild's failure mode there is the whole gateway, too coarse and too consequential to take unattended).
+- **box.ascii** is unpinnable; the routine re-verifies the conductor as part of the smoke test after a rebuild it did for another reason, but never bumps it.
 
 ## Public-repo rule (applies to every file in this skill)
 
-**Never** inline in any committed file here: host names, IPs, secret values, `op://` paths, box SSH/`docker`/`box` commands, or local `/Users/...` filesystem paths. The operator's secret-bearing commands stay in the 1Password ops note. The committed docs and this skill stay at the architecture / procedure level. (Same rule the `fluncle-hermes-operator` skill and the cron README hold.)
-
-## After the deploy (operator confirms)
-
-A bump is "done" only once the operator has rebuilt, redeployed, and the smoke test passed — and, for the render path, re-verified box.ascii (it self-updates, so a rebuild is a natural moment to confirm the conductor still authenticates and renders). The routine's job ends at the green PR; closing the loop on the box is the operator's, and the PR should say so.
+**Never** inline in any committed file here: host names, IPs, secret values, `op://` paths, box SSH/`docker`/`box` commands, or local `/Users/...` filesystem paths. The operator's secret-bearing commands stay in the 1Password ops note + the `fluncle-hermes-operator` skill; the committed docs and this skill stay at the architecture / procedure level. (Same rule the `fluncle-hermes-operator` skill and the cron README hold.)

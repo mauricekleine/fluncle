@@ -26,7 +26,7 @@ All commands assume the repo root as the working directory. The "check latest" o
   These are calendar-versioned (`vYYYY.M.D`). Compare the newest tag to the pin.
 
 - **How to bump:** edit the `FROM` tag → **rebuild the image + redeploy + smoke-test** (operator step — see `bump-procedure.md`). The version line also busts the Docker layer cache.
-- **Safety:** **PULL THE BRAKE — always report, never auto-apply.** Pre-1.0; a base bump can change the runtime or drop the gateway below the model-context floor, and the only validation is a box rebuild + smoke test this routine cannot run. Report the available tag and let the operator decide. Periodically the operator _should_ take a base bump for upstream security patches — surface it, do not apply it.
+- **Safety:** **PULL THE BRAKE — always report, never ship.** Pre-1.0; a base bump can change the runtime or drop the gateway below the model-context floor at startup. The routine _can_ rebuild + smoke-test, but the base's failure mode is the **whole gateway**, not one probe — too coarse and too consequential to ship unattended. Report the available tag and let the operator decide. Periodically the operator _should_ take a base bump for upstream security patches — surface it, do not apply it.
 
 ---
 
@@ -56,7 +56,7 @@ bun is baked into the image, declared as the repo's `packageManager`, and reques
   ```
 
 - **How to bump:** change the version in **all** of: the Dockerfile installer line (`bun-v<new>`), `package.json` `packageManager` (`bun@<new>`), and every workflow `bun-version:`. Then the Dockerfile change ships via image rebuild; the `package.json` + workflow changes ship via the PR's CI deploy-gate and merge to `main`.
-- **Safety:** a **patch/minor** that the CI deploy-gate accepts is safe to apply (it is the same interpreter CI runs). A **major** bun bump = **brake** (toolchain-wide behaviour change). Note that the image-rebuild half is still an operator follow-up; the routine can land the repo-side `package.json` + workflow change and flag the Dockerfile line for the rebuild.
+- **Safety:** a **patch/minor** that the CI deploy-gate accepts is safe to ship (it is the same interpreter CI runs). A **major** bun bump = **brake** (toolchain-wide behaviour change). The repo-side `package.json` + workflow change ships on merge; the routine ships the Dockerfile line on the same box rebuild it does for any baked-pin bump (smoke-validated, rollback on fail).
 
 ---
 
@@ -77,7 +77,7 @@ bun is baked into the image, declared as the repo's `packageManager`, and reques
   ```
 
 - **How to bump:** edit the `fluncle@<version>` → rebuild + redeploy. The version line busts the layer cache. (This is Fluncle's own CLI, released by the repo's `cli-release.yml`; it carries the renamed Convention-B surface + admin commands the crons call.)
-- **Safety:** a **patch/minor** is safe to auto-apply — it is first-party, and a stale CLI on the box just lacks a recent command. Still, **the bump ships only on an image rebuild** (operator follow-up); the PR lands the Dockerfile edit and flags the rebuild. A **major** = brake (a renamed/removed command could break a cron).
+- **Safety:** a **patch/minor** is safe to ship — it is first-party, and a stale CLI on the box just lacks a recent command. The bump reaches the box on an image rebuild, which the routine now does **end-to-end after merge** (rebuild + smoke-test, rollback on a failed smoke). A **major** = brake (a renamed/removed command could break a cron).
 
 ---
 
@@ -98,7 +98,7 @@ bun is baked into the image, declared as the repo's `packageManager`, and reques
   ```
 
 - **How to bump:** edit `@anthropic-ai/claude-code@<version>` → rebuild + redeploy. This is the `claude -p` binary the observation cron's one agentic step shells out to (subscription auth at run time; zero OpenRouter tokens). Never float `latest` — the Hermes toolchain is pinned whole.
-- **Safety:** a **patch/minor** is safe to auto-apply (it is the agent CLI, not the model or the auth; the deploy-gate covers the repo side, and a patch rarely changes the `claude -p` contract). The bump still ships on an image rebuild (operator follow-up). A **major** = brake (the `-p` / skills-discovery contract could change). Anything touching the **auth token shape** = brake regardless of version.
+- **Safety:** a **patch/minor** is safe to ship (it is the agent CLI, not the model or the auth; a patch rarely changes the `claude -p` contract). The deploy-gate can't validate a baked pin, so the routine validates it on the box: rebuild + **smoke-test** after merge, rollback on a failed smoke. A **major** = brake (the `-p` / skills-discovery contract could change). Anything touching the **auth token shape** = brake regardless of version.
 
 ---
 
@@ -108,8 +108,8 @@ bun is baked into the image, declared as the repo's `packageManager`, and reques
 - **Marker:** `curl -fsSL https://box.ascii.dev/install` (the comment says `box.ascii is pre-1.0 and its installer offers no version pin … this is the one image dependency not version-pinned … Re-verify the conductor after a base rebuild.`)
 - **Current pin:** **none.** The installer tracks the `ascii-prod` channel and the CLI self-updates. There is no version to read and nothing to bump.
 - **Check latest:** N/A — not pinnable. Do not try to pin it; that is by design.
-- **Action on a sweep:** there is **no bump**. The only maintenance is to **re-verify the render conductor after the operator rebuilds the base image** (a `box status` → authed, then a conductor dry-run). That verification is part of the operator's rebuild smoke-test, not a routine auto-apply. If a sweep finds nothing else to do, box.ascii contributes a one-line "unpinnable, re-verify post-rebuild" note and nothing more.
-- **Safety:** always **brake** in the sense that the routine never acts on it. It is the operator's post-rebuild check.
+- **Action on a sweep:** there is **no bump**. The only maintenance is to **re-verify the render conductor after a rebuild** (a `box status` → authed, then a conductor dry-run) — which the routine already does as part of its post-rebuild smoke-test whenever it rebuilds for another baked pin. If a sweep finds nothing else to do, box.ascii contributes a one-line "unpinnable, re-verify post-rebuild" note and nothing more.
+- **Safety:** always **brake** in the sense that the routine never bumps it. It re-verifies the conductor as part of any post-rebuild smoke-test (the routine's own, or the operator's).
 
 ---
 
@@ -144,7 +144,7 @@ The `.deepsec` scan (`.deepsec/data/fluncle/reports/`) flags every workflow acti
 
 ## Quick reference table
 
-| #   | Item                | File (marker)                                                                     | Current pin (read)          | Check latest                                 | Auto-apply?                       |
+| #   | Item                | File (marker)                                                                     | Current pin (read)          | Check latest                                 | Ship end-to-end?                  |
 | --- | ------------------- | --------------------------------------------------------------------------------- | --------------------------- | -------------------------------------------- | --------------------------------- |
 | 1   | Hermes base image   | `Dockerfile` `FROM nousresearch/hermes-agent:`                                    | `grep '^FROM nousresearch'` | Docker Hub tags API                          | **Never** (pre-1.0)               |
 | 2   | bun (×3)            | `Dockerfile` `bun-v` + `package.json` `packageManager` + workflows `bun-version:` | the three greps above       | bun GH `releases/latest`                     | patch/minor yes, major brake      |
