@@ -49,8 +49,9 @@ export async function render(
     serveUrl,
     // The eager Oxanium load is a delayRender; under several concurrent renders
     // (a batch of agents) the machine oversubscribes and the default ~28s window
-    // trips. Give font load room — it's I/O wait, not compute.
-    timeoutInMilliseconds: 120_000,
+    // trips. Give font load room — it's I/O wait, not compute. Swangle (GPU-less
+    // software GL) runs slower than a real GPU; 300s covers the worst case.
+    timeoutInMilliseconds: 300_000,
   });
 
   await renderMedia({
@@ -79,7 +80,8 @@ export async function render(
     serveUrl,
     // Same delayRender headroom as selectComposition (see above) — concurrent
     // batch renders oversubscribe and the default font-load window trips.
-    timeoutInMilliseconds: 120_000,
+    // 300s covers the swangle (software GL) worst case.
+    timeoutInMilliseconds: 300_000,
     x264Preset: draft ? "veryfast" : "slow",
     // Ship adds two things draft skips (draft is a throwaway proof): the VBV cap
     // that keeps the master under 100MB, and explicit bt709 colour. bt709 is
