@@ -4,9 +4,9 @@ A bump is two halves: **the repo edit** (committed, reviewed in git, CI-gated) a
 
 ## The two halves, and what validates each
 
-| Half          | Validated by                                                                 | What ships it                                                                                                                       |
-| ------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| **Repo edit** | the CI deploy-gate (`format:check` + `lint` + `typecheck` + `test`) + gitleaks | merging the green PR to `main`.                                                                                                     |
+| Half           | Validated by                                                                                       | What ships it                                                                                                                       |
+| -------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| **Repo edit**  | the CI deploy-gate (`format:check` + `lint` + `typecheck` + `test`) + gitleaks                     | merging the green PR to `main`.                                                                                                     |
 | **Box deploy** | the **post-rebuild smoke test** (CI never rebuilds the image — this is the validation it can't do) | rebuilding the image from the merged `main`, redeploying the container, smoke-testing, with rollback to the previous image on fail. |
 
 Two of the six inventory items (`package.json` `packageManager`, the workflow `bun-version:` + the Actions SHA-pins) are **fully** repo-side — they ship the moment the PR merges; **no box step**. The other half (the Dockerfile `FROM` / `npm -g` pins) only reaches the box on a **rebuild** — and the rebuild is now the routine's, gated by the smoke test.
