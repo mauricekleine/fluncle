@@ -841,8 +841,6 @@ export function adminTracksHandlers(os: Implementer) {
       // OLD master's cached Media-Transformation renditions. Purge them so the
       // player picks up the fresh render. Best-effort, fired off the request
       // lifecycle (waitUntil) BELOW after the DB write commits.
-      const isReRender = Boolean(track.videoUrl);
-
       await updateTrack(track.trackId, {
         videoModel,
         videoModelReasoning,
@@ -852,13 +850,13 @@ export function adminTracksHandlers(os: Implementer) {
         ...(videoGrain ? { videoGrain } : {}),
       });
 
-      // Drop the stale renditions on a re-render. `squared` reflects the layout
-      // the finding now carries (a freshly-stamped two-master finding, or a
-      // finding already squared whose re-ship omitted the flag — keep it cropped):
-      // the purge set must match what the surfaces will request post-finalize.
-      if (isReRender) {
-        purgeVideoCache(track.logId, squared || Boolean(track.videoSquaredAt));
-      }
+      // Drop stale edge renditions on EVERY finalize, not just when track.videoUrl was
+      // already set: the requeue flow clears video_url to re-queue a finding, so a
+      // re-render's finalize sees no prior url and would otherwise skip the purge (the
+      // gap the manual heartbeat used to cover). On a genuine first render nothing is
+      // cached yet, so this is a harmless no-op. `squared` reflects the layout the
+      // finding now carries, so the purge set matches what the surfaces will request.
+      purgeVideoCache(track.logId, squared || Boolean(track.videoSquaredAt));
 
       return { logId: track.logId, ok: true as const, trackId: track.trackId, videoUrl };
     } catch (error) {
