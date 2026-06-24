@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { View, useWindowDimensions } from "react-native";
 import { FlashList, type ViewToken } from "@shopify/flash-list";
 import { type TrackListItem } from "@fluncle/contracts";
@@ -19,25 +19,22 @@ export default function FeedScreen() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [soundOn, setSoundOn] = useState(false);
 
-  // The viewability callback must keep a stable identity (RN warns otherwise), so
-  // it reads live pagination state through a ref refreshed each render.
-  const stateRef = useRef({ fetchNextPage, findings, hasNextPage, isFetchingNextPage });
-  stateRef.current = { fetchNextPage, findings, hasNextPage, isFetchingNextPage };
-
-  const onViewable = useRef(({ viewableItems }: { viewableItems: ViewToken<TrackListItem>[] }) => {
-    const token = viewableItems[0];
-    if (token?.item) {
-      setActiveId(idOf(token.item));
-    }
-    // Prefetch older findings before the user reaches the end. onEndReached is
-    // unreliable on a paging feed, so drive it off the visible index instead.
-    const idx = token?.index ?? -1;
-    const s = stateRef.current;
-    if (idx >= 0 && idx >= s.findings.length - 3 && s.hasNextPage && !s.isFetchingNextPage) {
-      void s.fetchNextPage();
-    }
-  }).current;
-  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 80 }).current;
+  const onViewable = useCallback(
+    ({ viewableItems }: { viewableItems: ViewToken<TrackListItem>[] }) => {
+      const token = viewableItems[0];
+      if (token?.item) {
+        setActiveId(idOf(token.item));
+      }
+      // Prefetch older findings before the user reaches the end. onEndReached is
+      // unreliable on a paging feed, so drive it off the visible index instead.
+      const idx = token?.index ?? -1;
+      if (idx >= 0 && idx >= findings.length - 3 && hasNextPage && !isFetchingNextPage) {
+        void fetchNextPage();
+      }
+    },
+    [fetchNextPage, findings.length, hasNextPage, isFetchingNextPage],
+  );
+  const viewabilityConfig = useMemo(() => ({ itemVisiblePercentThreshold: 80 }), []);
 
   // autoplay the first card before the first viewability event fires
   const current = activeId ?? (findings[0] ? idOf(findings[0]) : null);
