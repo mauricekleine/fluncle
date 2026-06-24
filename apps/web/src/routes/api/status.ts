@@ -7,14 +7,15 @@ import { type ApiHandlers, aliasHandlers } from "./-alias";
 // same source store (`getServiceStatuses`), but emits JSON for a poller instead
 // of HTML for a human.
 //
-// Its load-bearing field is `secondsSinceFreshestReport`: the server-computed gap
-// between now and the freshest `checkedAt` across all services. Because the
-// healthcheck cron (on the Hermes box, "rave-02") rewrites EVERY service's
-// `checkedAt` on each ~10m tick, `max(checkedAt)` is the last cron tick — so this
-// number answers "how long since the rave-02 prober last reported anything." The
-// rave-01 watchdog reads exactly this one integer to decide whether the prober has
-// gone dark (the dead-man's-switch cross-ping). Computing it server-side avoids any
-// client clock skew.
+// Two server-computed freshness gaps (no client clock skew):
+//   - `secondsSinceFreshestReport`: now − the freshest `checkedAt` across ALL
+//     services — "how long since ANY service was reported."
+//   - `secondsSinceProberReport`: now − the `hermes` service's `checkedAt`. `hermes`
+//     is the rave-02 healthcheck cron's self-liveness, posted ONLY by that cron, so
+//     this is "how long since the rave-02 PROBER reported." The rave-01 watchdog's
+//     dead-man's-switch cross-ping reads THIS one (not the global): rave-01 itself
+//     now posts an `onion` check, which would keep the global freshest current and
+//     mask rave-02 going dark — `hermes` stays untouched by rave-01.
 //
 // PUBLIC-SAFE BY CONSTRUCTION (this repo is open source): it echoes only the
 // already-public service name / status / short message / latency / timestamps that
@@ -48,11 +49,24 @@ export const serverHandlers: ApiHandlers = {
     const secondsSinceFreshestReport =
       freshestReportMs === null ? null : Math.max(0, Math.round((now - freshestReportMs) / 1000));
 
+    // The rave-02 PROBER's own freshness, keyed on the `hermes` service — the
+    // healthcheck cron's self-liveness, which ONLY that cron posts. The dead-man's-
+    // switch cross-ping (the rave-01 watchdog) reads THIS, not the global freshest:
+    // rave-01 now posts its own `onion` check, which would keep
+    // `secondsSinceFreshestReport` fresh and mask rave-02 going dark. `hermes` is
+    // untouched by rave-01, so its staleness is the true "rave-02 prober dark" signal.
+    const hermes = services.find((service) => service.service === "hermes");
+    const proberReportMs = hermes ? Date.parse(hermes.checked_at) : Number.NaN;
+    const secondsSinceProberReport = Number.isNaN(proberReportMs)
+      ? null
+      : Math.max(0, Math.round((now - proberReportMs) / 1000));
+
     return Response.json(
       {
         freshestReportAt,
         generatedAt: new Date(now).toISOString(),
         secondsSinceFreshestReport,
+        secondsSinceProberReport,
         services: services.map((service) => ({
           checkedAt: service.checked_at,
           latencyMs: service.latency_ms,

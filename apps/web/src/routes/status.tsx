@@ -56,6 +56,7 @@ const SERVICE_SUBTITLES: Record<string, string> = {
   automation: "the per-finding enrichment crew",
   dns: "dig.fluncle.com",
   hermes: "the Discord chat agent",
+  onion: "the archive over Tor",
   r2: "found.fluncle.com",
   "render-box": "renders each finding's video",
   ssh: "rave.fluncle.com",

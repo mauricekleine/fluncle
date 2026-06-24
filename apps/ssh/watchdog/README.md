@@ -4,10 +4,11 @@ The rave-01 side of Fluncle's monitoring dead-man's switch. A small bash watchdo
 
 ## What it does
 
-Each run does two best-effort jobs and always exits 0 on a completed run:
+Each run does three best-effort jobs and always exits 0 on a completed run:
 
 1. **rave-01's own beacon.** It `curl`s `$RAVE01_BEACON_URL` — rave-01's external dead-man's-switch ping. An outside uptime service alerts when these pings _stop_, which catches **rave-01 itself going dark**.
-2. **The rave-01→rave-02 cross-ping.** It reads `$WATCH_STATUS_URL` (the public [`/api/status`](../../web/src/routes/api/status.ts)) and pulls the single integer `secondsSinceFreshestReport` (the server-computed gap since the freshest service report — i.e. since the last rave-02 healthcheck tick). If that exceeds `$WATCH_STALE_MINUTES × 60` (default 30 min), the rave-02 prober has gone dark, so it Discord-pings `$DISCORD_ALERT_WEBHOOK` — but **only once on the flip into-stale and once on recovery**, using a transition-state file (`watchdog-state.json` under the systemd `StateDirectory`), the same no-spam pattern as the `fluncle-healthcheck` cron. If `/api/status` is unreachable, it logs to stderr and **skips** the freshness check this round (it does **not** alert on web-unreachable — that is the healthcheck cron's job, and the external beacons cover a systemic outage). It never throws.
+2. **The rave-01→rave-02 cross-ping.** It reads `$WATCH_STATUS_URL` (the public [`/api/status`](../../web/src/routes/api/status.ts)) and pulls the single integer `secondsSinceProberReport` (the staleness of the `hermes` service — the rave-02 healthcheck cron's self-liveness, posted **only** by that cron, so job 3's own onion post can't mask it). If that exceeds `$WATCH_STALE_MINUTES × 60` (default 30 min), the rave-02 prober has gone dark, so it Discord-pings `$DISCORD_ALERT_WEBHOOK` — but **only once on the flip into-stale and once on recovery**, using a transition-state file (`watchdog-state.json` under the systemd `StateDirectory`), the same no-spam pattern as the `fluncle-healthcheck` cron. If `/api/status` is unreachable, it logs to stderr and **skips** the freshness check this round (it does **not** alert on web-unreachable — that is the healthcheck cron's job, and the external beacons cover a systemic outage). It never throws.
+3. **The onion probe.** rave-01 hosts the Tor onion services and runs Tor, so it is the only box that can route a `.onion` request. It `curl --socks5-hostname`s the onion (`$WATCH_ONION_URL`) through rave-01's local Tor SOCKS proxy: **any HTTP response = reachable** (the onion service is published _and_ the Tor circuit + onionspray + the Worker all answered — even the Worker's http→https 307 proves the path); a timeout/refusal = down. It then POSTs an `onion` service check to `record_health` (`$WATCH_WORKER_URL/api/admin/health`, authorized by `$FLUNCLE_API_TOKEN`), so the onion shows on `/status` like any other service, and Discord-pings on a transition (a separate `onion-state.json`), no-spam. All four onion vars are optional — unset any and the probe is skipped. (This is why the cross-ping reads `secondsSinceProberReport`, not the global freshest: rave-01 now posts to `record_health` too, and keying the cross-ping on `hermes` keeps rave-01's onion post from ever masking a dead rave-02.)
 
 ## Architecture: the dead-man's-switch triad
 
@@ -28,7 +29,11 @@ Public-safe by construction (this repo is open source): NO hostnames, IPs, ports
 - `RAVE01_BEACON_URL` — rave-01's external dead-man's-switch beacon URL (silent liveness ping).
 - `WATCH_STATUS_URL` — the public `/api/status` URL (the cross-ping freshness source).
 - `WATCH_STALE_MINUTES` — _optional_; the staleness threshold in minutes (default 30).
-- `DISCORD_ALERT_WEBHOOK` — the Discord webhook for the cross-ping transition alert.
+- `DISCORD_ALERT_WEBHOOK` — the Discord webhook for the transition alerts.
+- `WATCH_ONION_URL` — _optional_ (job 3); the onion health URL (`http://<addr>.onion/api/health`). Unset skips the onion probe.
+- `WATCH_WORKER_URL` — the Worker origin for the onion `record_health` POST (e.g. the public site origin).
+- `FLUNCLE_API_TOKEN` — the agent-scoped token authorizing the onion POST (`record_health` is agent-tier).
+- `WATCH_TOR_SOCKS` / `WATCH_ONION_TIMEOUT` — _optional_; rave-01's Tor SOCKS proxy (default `127.0.0.1:9050`) + the probe timeout in seconds (default 30, Tor is slow).
 
 ## Deploy (on rave-01)
 
@@ -40,7 +45,8 @@ sudo install -D -m 0755 apps/ssh/watchdog/fluncle-rave-watchdog.sh \
   /opt/fluncle-rave-watchdog/fluncle-rave-watchdog.sh
 
 # 2. Place the 0600 operator env file (values from the ops runbook note in 1Password).
-#    Keys: RAVE01_BEACON_URL, WATCH_STATUS_URL, WATCH_STALE_MINUTES, DISCORD_ALERT_WEBHOOK.
+#    Keys: RAVE01_BEACON_URL, WATCH_STATUS_URL, WATCH_STALE_MINUTES, DISCORD_ALERT_WEBHOOK,
+#    + (job 3 / onion) WATCH_ONION_URL, WATCH_WORKER_URL, FLUNCLE_API_TOKEN.
 sudo install -d -m 0755 /etc/fluncle
 sudo install -m 0600 /dev/null /etc/fluncle/rave-watchdog.env
 sudo "$EDITOR" /etc/fluncle/rave-watchdog.env   # paste the four keys
