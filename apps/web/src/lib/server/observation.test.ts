@@ -9,10 +9,8 @@ import {
   gateObservationScript,
   observationDurationFromAlignment,
   sanitizeForCartesia,
-  sanitizeForTts,
   scanObservationScript,
   wordsFromCartesia,
-  wordsFromCharacterAlignment,
 } from "./observation";
 
 // The voice gate's automatable half (VOICE.md §3 bans + the Dry Rule + no
@@ -352,43 +350,10 @@ describe("fetchTrackContext (status transitions + distil/fallback)", () => {
   });
 });
 
-// The two ElevenLabs alignment shapes → the one stored word-level shape. These power
-// the radio captions, so the grouping (chars → words) and the ms rounding are
-// load-bearing.
-describe("wordsFromCharacterAlignment", () => {
-  it("groups characters into words on whitespace, spanning first-start → last-end (ms)", () => {
-    // "Hi yo" → two words; per-char times in seconds.
-    const words = wordsFromCharacterAlignment({
-      character_end_times_seconds: [0.1, 0.2, 0.3, 0.5, 0.6],
-      character_start_times_seconds: [0, 0.1, 0.2, 0.4, 0.5],
-      characters: ["H", "i", " ", "y", "o"],
-    });
-
-    expect(words).toEqual([
-      { endMs: 200, startMs: 0, text: "Hi" },
-      { endMs: 600, startMs: 400, text: "yo" },
-    ]);
-  });
-
-  it("returns null on a length-mismatched block (never blocks a render)", () => {
-    expect(
-      wordsFromCharacterAlignment({
-        character_end_times_seconds: [0.1],
-        character_start_times_seconds: [0, 0.1],
-        characters: ["H", "i"],
-      }),
-    ).toBeNull();
-  });
-
-  it("returns null when the arrays are absent", () => {
-    expect(wordsFromCharacterAlignment(undefined)).toBeNull();
-  });
-});
-
 describe("observationDurationFromAlignment", () => {
   it("derives the real length from the last word's end plus the tail pad", () => {
     const duration = observationDurationFromAlignment({
-      source: "with-timestamps",
+      source: "cartesia",
       words: [
         { endMs: 1200, startMs: 0, text: "a" },
         { endMs: 38239, startMs: 37000, text: "fam" },
@@ -401,7 +366,7 @@ describe("observationDurationFromAlignment", () => {
 
   it("uses the MAX end, not the last entry's (out-of-order safe)", () => {
     const duration = observationDurationFromAlignment({
-      source: "with-timestamps",
+      source: "cartesia",
       words: [
         { endMs: 40000, startMs: 39000, text: "late" },
         { endMs: 1000, startMs: 0, text: "early" },
@@ -414,43 +379,7 @@ describe("observationDurationFromAlignment", () => {
   it("returns undefined for a missing or empty alignment (caller keeps its fallback)", () => {
     expect(observationDurationFromAlignment(null)).toBeUndefined();
     expect(observationDurationFromAlignment(undefined)).toBeUndefined();
-    expect(
-      observationDurationFromAlignment({ source: "with-timestamps", words: [] }),
-    ).toBeUndefined();
-  });
-});
-
-describe("sanitizeForTts", () => {
-  it("rewrites an em-dash 'Artist — Title' to the spoken comma-beat", () => {
-    expect(sanitizeForTts("Whiney, LaMeduza — Teddy's Gate")).toBe(
-      "Whiney, LaMeduza, Teddy's Gate",
-    );
-  });
-
-  it("also handles en-dashes and collapses doubled spaces", () => {
-    expect(sanitizeForTts("Days Like These – Soul  Deep")).toBe("Days Like These, Soul Deep");
-  });
-
-  it("leaves dash-free text untouched (aside from trim)", () => {
-    expect(sanitizeForTts("That's a banger. Find a dark room, fam. ")).toBe(
-      "That's a banger. Find a dark room, fam.",
-    );
-  });
-
-  it("caps an over-long <break> to 0.5s (the post-break slowdown destabiliser)", () => {
-    expect(sanitizeForTts('rolls you quiet. <break time="1.0s"/> Days Like These.')).toBe(
-      'rolls you quiet. <break time="0.5s"/> Days Like These.',
-    );
-    // The space-before-slash variant the agent also emits.
-    expect(sanitizeForTts('a minute. <break time="2.0s" /> Hospital Records.')).toBe(
-      'a minute. <break time="0.5s"/> Hospital Records.',
-    );
-  });
-
-  it("leaves an already-short <break> alone", () => {
-    expect(sanitizeForTts('a beat <break time="0.3s"/> then more')).toBe(
-      'a beat <break time="0.3s"/> then more',
-    );
+    expect(observationDurationFromAlignment({ source: "cartesia", words: [] })).toBeUndefined();
   });
 });
 

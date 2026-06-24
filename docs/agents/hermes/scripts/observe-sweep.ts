@@ -13,7 +13,7 @@
 //   1. QUEUE (deterministic): `fluncle admin tracks observe --queue --json` → findings
 //      that HAVE a context note but NO observation yet (`hasContext=true AND
 //      hasObservation=false`, oldest first). Empty → fast no-op, exit.
-//   2. per finding (bounded batch, BATCH_CAP small — observation costs ElevenLabs
+//   2. per finding (bounded batch, BATCH_CAP small — observation costs Cartesia
 //      credits + subscription quota):
 //      a. GATHER (deterministic): `fluncle track get <id> --json` → the finding's
 //         identity metadata (artists, title, label, release year, galaxy, vibe),
@@ -30,7 +30,7 @@
 //         The JSON envelope's `.result` field is the script.
 //      c. DELIVER (deterministic): write the script to a temp file, then
 //         `fluncle admin tracks observe <id> --script-file <tmp> --json` → the Worker
-//         RE-SCANS (the voice gate), renders ElevenLabs, stores. The SCRIPT posts it,
+//         RE-SCANS (the voice gate), renders Cartesia, stores. The SCRIPT posts it,
 //         never claude. A gate 403/422 → log which finding failed, skip it (stays
 //         queued), continue. The temp file is cleaned up either way.
 //
@@ -49,13 +49,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // ---------------------------------------------------------------------------
-// Config — a SMALL bounded batch: each observation burns ElevenLabs credits AND
+// Config — a SMALL bounded batch: each observation burns Cartesia credits AND
 // claude subscription quota, so keep ticks cheap. The queue is the durable
 // worklist; anything not reached this tick is picked up on the next (~60m later).
 // ---------------------------------------------------------------------------
 
 // One finding per tick: the Hermes cron runner kills a `--no-agent` job at 120s, and a
-// single `claude -p` authoring (skill-read + Sonnet) + ElevenLabs render already sits
+// single `claude -p` authoring (skill-read + Sonnet) + Cartesia render already sits
 // near that budget — two blew it. The queue drains across hourly ticks (find volume is
 // low). Raise only once a HEALTHY run measures comfortably under 120s per finding.
 const BATCH_CAP = 1;

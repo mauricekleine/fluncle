@@ -110,7 +110,6 @@ type TrackObserveOptions = {
   force?: boolean;
   json: boolean;
   limit?: string;
-  model?: string;
   queue?: boolean;
   script?: string;
   scriptFile?: string;
@@ -613,7 +612,7 @@ function addAdminCommands(program: Command): void {
 
   adminTrack
     .command("observe")
-    .description("Render Fluncle's spoken field observation for a track (ElevenLabs, Worker-side)")
+    .description("Render Fluncle's spoken field observation for a track (Cartesia, Worker-side)")
     .argument("[idOrLogId]")
     .option(
       "--queue",
@@ -626,9 +625,8 @@ function addAdminCommands(program: Command): void {
       "--script-file <file>",
       "Read the observation script from a file (e.g. observation.txt)",
     )
-    .option("--voice-id <id>", "Override the configured ElevenLabs voice id")
-    .option("--model <model>", "TTS model (eleven_multilingual_v2 | eleven_v3)")
-    .option("--duration-ms <ms>", "Probed audio duration in ms (the agent runs ffprobe)")
+    .option("--voice-id <id>", "Override the configured Cartesia voice id")
+    .option("--duration-ms <ms>", "Probed audio duration in ms (else derived from word timestamps)")
     .option("--duration-target-sec <sec>", "Target observation length in seconds (20–45)")
     .option("--context-note <text>", "Pre-fetched factual context (else the Worker firecrawls)")
     .option(
@@ -1086,7 +1084,7 @@ async function runTrackObserve(
 
   if (!idOrLogId || !script || !script.trim()) {
     throw new Error(
-      "Usage: fluncle admin tracks observe <track_id|log_id> (--script <text> | --script-file <file>) [--voice-id <id>] [--model <model>] [--duration-ms <ms>] [--context-note <text>] [--json]",
+      "Usage: fluncle admin tracks observe <track_id|log_id> (--script <text> | --script-file <file>) [--voice-id <id>] [--duration-ms <ms>] [--context-note <text>] [--json]",
     );
   }
 
@@ -1114,7 +1112,6 @@ async function runTrackObserve(
     durationMs,
     durationTargetSec,
     force: options.force,
-    model: options.model,
     script: script.trim(),
     voiceId: options.voiceId,
   });

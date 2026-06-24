@@ -85,8 +85,8 @@ export function ObservationDialog({
   const audioUrl = row?.observationAudioUrl;
   const durationMs = row?.observationDurationMs;
   const generatedAt = row?.observationGeneratedAt;
-  // The stored script carries the occasional SSML tag (a `<break …/>` pause, an
-  // `<emphasis>` span) the render needs but a reader doesn't — strip them so the
+  // A legacy stored script may carry the occasional SSML tag (a `<break …/>` pause,
+  // an `<emphasis>` span) from before the Cartesia migration — strip them so the
   // transcript reads as the clean prose it speaks.
   const transcript = stripSsml(script);
 

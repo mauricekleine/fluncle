@@ -11,12 +11,12 @@
 //      Never on /log, never in JSON-LD/RSS, never quotes lyrics.
 //   2. the observation script — Fluncle's voice, authored by the AGENT (which
 //      holds copywriting-fluncle), passed to the observe endpoint. The Worker
-//      mechanically scans it (the voice gate) and relays it to ElevenLabs.
+//      mechanically scans it (the voice gate) and relays it to Cartesia.
 //
 // The Worker can't run ffmpeg, so it never normalises loudness or probes duration
 // (the agent does both if needed). It does the two pure-HTTP vendor calls
-// (firecrawl search, ElevenLabs TTS) — a `fetch` await burns ~no Worker CPU and
-// the ~0.5 MB mp3 fits in memory.
+// (firecrawl search, Cartesia TTS) — a `fetch` await burns ~no Worker CPU and
+// the ~0.35 MB mp3 fits in memory.
 
 import lamejs from "@breezystack/lamejs";
 import { readEnv, readOptionalEnv } from "./env";
@@ -24,64 +24,31 @@ import { ApiError } from "./spotify";
 
 // ── The script + render artifacts (R2 `observation.json` shape) ──────────────
 
-/** The TTS model. A config constant so a v3-audio-tags swap is one line. */
-export type ObservationModel = "eleven_multilingual_v2" | "eleven_v3";
-
-export const DEFAULT_OBSERVATION_MODEL: ObservationModel = "eleven_multilingual_v2";
-
-export type ObservationVoiceSettings = {
-  similarityBoost: number;
-  speed: number;
-  stability: number;
-  style: number;
-};
-
-// A measured read for a quiet field observation, tuned by ear for the bespoke
-// Fluncle voice. `stability` is the runaway guard: at 0.48 the v2 model kept some
-// life but drifted into back-half gibberish / held-vowel runaways ("AAAA", "BAAA")
-// on a meaningful fraction of renders (stochastic, not length-driven). 0.6 leans the
-// read toward stable without going monotone — fewer derailments, voice intact. Style
-// and the sub-1 speed (so the <break/>s breathe) are unchanged so the identity holds.
-export const DEFAULT_VOICE_SETTINGS: ObservationVoiceSettings = {
-  similarityBoost: 0.75,
-  speed: 0.88,
-  stability: 0.6,
-  style: 0.3,
-};
-
-/** Which TTS vendor renders the observation. */
-export type ObservationProvider = "cartesia" | "elevenlabs";
-
 /** The structured observation the agent authors and posts to /observe. */
 export type ObservationScript = {
   durationTargetSec: number; // 20–45
   logId: string; // the fluncle:// coordinate
-  model?: ObservationModel; // ElevenLabs only (Cartesia has no model knob)
   sources?: string[]; // firecrawl provenance, kept off the DB
   text: string; // the spoken prose — what goes to TTS
   trackId: string;
-  voiceSettings?: ObservationVoiceSettings; // ElevenLabs only
 };
 
 /**
  * A single spoken word with its playback window, in MILLISECONDS (the same unit as
  * `durationMs`, and what `audio.currentTime * 1000` compares against on the radio
- * caption render). This is the NORMALISED shape we persist, derived from the
- * ElevenLabs `/with-timestamps` character arrays, grouped into words.
+ * caption render). This is the NORMALISED shape we persist, derived from
+ * Cartesia's parallel word-timestamp arrays.
  */
 export type ObservationWord = { endMs: number; startMs: number; text: string };
 
 /**
  * The stored alignment artifact — word-level timestamps for the synced radio/log
- * captions. Word-level (not character-level) because that is what the caption
- * render highlights; grouping happens once, server-side, so every surface reads the
- * same ready-to-render shape. `source` records which ElevenLabs endpoint produced
- * it: every fresh render captures its timings via `/with-timestamps`. The legacy
- * `"forced-alignment"` value remains in the union because rows aligned by the
- * now-retired one-off backfill still carry it (the caption render reads them).
+ * captions. Word-level because that is what the caption render highlights; grouping
+ * happens once, server-side, so every surface reads the same ready-to-render shape.
+ * `source` records the vendor — Cartesia returns word timestamps on the render stream.
  */
 export type ObservationAlignment = {
-  source: "cartesia" | "forced-alignment" | "with-timestamps";
+  source: "cartesia";
   words: ObservationWord[];
 };
 
@@ -128,8 +95,8 @@ export type ObservationArtifact = ObservationScript & {
   contextNote?: string; // the firecrawl facts used as fuel (also stored on the row)
   durationMs: number;
   generatedAt: string;
-  provider: ObservationProvider;
-  speed?: number; // Cartesia only (the render speed)
+  provider: "cartesia";
+  speed: number; // the render speed
   textUrl: string; // …/observation.txt
   voiceId: string;
 };
@@ -373,7 +340,7 @@ export function buildContextQuery(track: {
 // foreign-language fragments — never *understood*. We feed those snippets + their
 // source URLs to a small LLM and store its distilled output as the context_note.
 // Worker-safe: a raw `fetch` to OpenRouter's chat-completions REST endpoint (same
-// reasoning as the firecrawl/elevenlabs raw-fetch pattern; no SDK).
+// reasoning as the firecrawl/cartesia raw-fetch pattern; no SDK).
 
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -544,21 +511,13 @@ export async function fetchTrackContext(query: string): Promise<ContextFetchResu
   return { contextNote, distilled: distilled !== null, sources, status: "resolved" };
 }
 
-// ── ElevenLabs render ────────────────────────────────────────────────────────
+// ── Render artifact + shared helpers ─────────────────────────────────────────
 //
-// Raw `fetch` to the TTS REST endpoint (same Worker-safety reasoning as
-// firecrawl). The voice id is a config secret/var (swappable for the bespoke
-// Fluncle voice later); the API key is a Worker secret. Returns the mp3 bytes;
-// the Worker R2.put()s them (≈0.5 MB, well under the edge limit). ElevenLabs does
-// NOT return a duration — the agent probes it with ffprobe and passes durationMs.
-
-const ELEVENLABS_OUTPUT_FORMAT = "mp3_44100_128";
-
-export type RenderObservationOptions = {
-  model: ObservationModel;
-  text: string;
-  voiceSettings: ObservationVoiceSettings;
-};
+// The render is a raw `fetch` to the Cartesia TTS endpoint (same Worker-safety
+// reasoning as firecrawl). The voice id is a config var (the cloned Fluncle voice,
+// swappable); the API key is a Worker secret. Returns the mp3 bytes; the Worker
+// R2.put()s them (≈0.35 MB, well under the edge limit). Cartesia returns no clip
+// duration — it's derived from the word timestamps (or a probed durationMs override).
 
 export type RenderedObservation = {
   alignment: ObservationAlignment | null;
@@ -566,106 +525,8 @@ export type RenderedObservation = {
   voiceId: string;
 };
 
-// ── Alignment normalisation (the `/with-timestamps` shape → the stored shape) ───
-//
-// `/with-timestamps` returns parallel CHARACTER arrays (`characters`,
-// `character_start_times_seconds`, `character_end_times_seconds`), which we group
-// into words on whitespace to get the word-level `ObservationAlignment` the caption
-// render reads. All timings land in MILLISECONDS (rounded ints) so they compare
-// directly against `audio.currentTime * 1000` with no per-frame unit conversion.
-
-/** ElevenLabs `/with-timestamps` per-character alignment block. */
-export type ElevenLabsCharacterAlignment = {
-  character_end_times_seconds: number[];
-  character_start_times_seconds: number[];
-  characters: string[];
-};
-
+/** Seconds (Cartesia's timestamp unit) → milliseconds (the stored alignment unit). */
 const secToMs = (seconds: number): number => Math.max(0, Math.round(seconds * 1000));
-
-/**
- * Group an ElevenLabs character-level alignment into words: split on whitespace
- * characters, take each run of non-space characters as a word, and span its window
- * from the first character's start to the last character's end. Whitespace/empty
- * runs are dropped (they carry no visible token). Returns null when the arrays are
- * absent or length-mismatched (a malformed block never blocks a render).
- */
-export function wordsFromCharacterAlignment(
-  alignment: ElevenLabsCharacterAlignment | undefined,
-): ObservationWord[] | null {
-  const chars = alignment?.characters;
-  const starts = alignment?.character_start_times_seconds;
-  const ends = alignment?.character_end_times_seconds;
-
-  if (!Array.isArray(chars) || !Array.isArray(starts) || !Array.isArray(ends)) {
-    return null;
-  }
-
-  if (chars.length === 0 || chars.length !== starts.length || chars.length !== ends.length) {
-    return null;
-  }
-
-  const words: ObservationWord[] = [];
-  let current: { endMs: number; startMs: number; text: string } | null = null;
-
-  for (let i = 0; i < chars.length; i += 1) {
-    const char = chars[i] ?? "";
-    const startMs = secToMs(starts[i] ?? 0);
-    const endMs = secToMs(ends[i] ?? 0);
-
-    if (/\s/.test(char)) {
-      if (current) {
-        words.push(current);
-        current = null;
-      }
-
-      continue;
-    }
-
-    if (current) {
-      current.text += char;
-      current.endMs = Math.max(current.endMs, endMs);
-    } else {
-      current = { endMs, startMs, text: char };
-    }
-  }
-
-  if (current) {
-    words.push(current);
-  }
-
-  return words.length > 0 ? words : null;
-}
-
-/** Resolve the configured ElevenLabs voice id (the request may override it). */
-export async function resolveVoiceId(override?: string): Promise<string> {
-  if (typeof override === "string" && override.trim()) {
-    return override.trim();
-  }
-
-  const configured = await readOptionalEnv("ELEVENLABS_VOICE_ID");
-
-  if (!configured) {
-    throw new ApiError(
-      "no_voice_id",
-      "No ELEVENLABS_VOICE_ID configured and no voiceId in the request",
-      400,
-    );
-  }
-
-  return configured;
-}
-
-/**
- * Which TTS vendor renders the observation. Defaults to `elevenlabs` (the incumbent)
- * so deploying the Cartesia code is a no-op; the migration flips it by setting
- * `OBSERVATION_PROVIDER=cartesia` once the key + cloned voice id are provisioned.
- */
-export async function resolveObservationProvider(): Promise<ObservationProvider> {
-  const configured = await readOptionalEnv("OBSERVATION_PROVIDER");
-
-  return configured === "cartesia" ? "cartesia" : "elevenlabs";
-}
 
 /** Resolve the cloned Fluncle voice id on Cartesia (config var, request may override). */
 export async function resolveCartesiaVoiceId(override?: string): Promise<string> {
@@ -682,7 +543,7 @@ export async function resolveCartesiaVoiceId(override?: string): Promise<string>
   return configured;
 }
 
-/** Decode a base64 string (the `/with-timestamps` audio payload) to bytes. */
+/** Decode a base64 string (a Cartesia SSE audio chunk) to bytes. */
 function base64ToArrayBuffer(base64: string): ArrayBuffer {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -694,104 +555,6 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
   return bytes.buffer;
 }
 
-type WithTimestampsResponse = {
-  alignment?: ElevenLabsCharacterAlignment;
-  audio_base64?: string;
-  normalized_alignment?: ElevenLabsCharacterAlignment;
-};
-
-/**
- * The longest `<break>` the read may carry. A long break is a v2 destabiliser: the
- * model slows down hard right after it and can trail into artifacts, and a 1s pause
- * reads as dead air anyway. Capping keeps a beat without the derailment.
- */
-const MAX_BREAK_SEC = 0.5;
-
-/**
- * Sanitise the spoken text for TTS stability. Two known v2 destabilisers are tamed:
- *   1. A long `<break>` — the model slows/artifacts after it; cap it to MAX_BREAK_SEC.
- *   2. An em/en dash ("Artist — Title") — it can drop the read into a long mis-pause
- *      or shove the prosody off the rails; rewrite it to the comma it sounds like.
- * Shaping only what reaches ElevenLabs (and thus the spoken/caption timing); the
- * agent's original script is still stored verbatim.
- */
-export function sanitizeForTts(text: string): string {
-  return text
-    .replace(/<break\s+time="([\d.]+)s"\s*\/>/g, (_match, sec: string) => {
-      const capped = Math.min(Number.parseFloat(sec) || MAX_BREAK_SEC, MAX_BREAK_SEC);
-
-      return `<break time="${capped}s"/>`;
-    })
-    .replace(/\s*[—–]\s*/g, ", ")
-    .replace(/[ \t]{2,}/g, " ")
-    .trim();
-}
-
-/**
- * Render the spoken observation via the ElevenLabs TTS `/with-timestamps` REST API:
- * one call returns the mp3 (base64) AND character-level alignment, so a fresh render
- * captures its caption timings at generation time (no separate forced-alignment
- * pass). The base64 audio is decoded to bytes for the R2 put. The character
- * alignment is grouped into the stored word-level shape; a missing/malformed block
- * yields `alignment: null` (captions degrade to none — never a failed render).
- */
-export async function renderObservation(
-  voiceId: string,
-  { model, text, voiceSettings }: RenderObservationOptions,
-): Promise<RenderedObservation> {
-  const apiKey = await readEnv("ELEVENLABS_API_KEY");
-  const url = `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(
-    voiceId,
-  )}/with-timestamps?output_format=${ELEVENLABS_OUTPUT_FORMAT}`;
-
-  const response = await fetch(url, {
-    body: JSON.stringify({
-      model_id: model,
-      text: sanitizeForTts(text),
-      voice_settings: {
-        similarity_boost: voiceSettings.similarityBoost,
-        speed: voiceSettings.speed,
-        stability: voiceSettings.stability,
-        style: voiceSettings.style,
-      },
-    }),
-    headers: {
-      "Content-Type": "application/json",
-      "xi-api-key": apiKey,
-    },
-    method: "POST",
-  });
-
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-
-    throw new ApiError(
-      "elevenlabs_error",
-      `ElevenLabs render failed (${response.status})${detail ? `: ${detail.slice(0, 300)}` : ""}`,
-      502,
-    );
-  }
-
-  const payload = (await response.json()) as WithTimestampsResponse;
-
-  if (!payload.audio_base64) {
-    throw new ApiError("elevenlabs_error", "ElevenLabs returned no audio payload", 502);
-  }
-
-  // Prefer the normalized alignment (it tracks the SPOKEN normalisation — numbers,
-  // abbreviations expanded — so the windows line up with the audio), falling back to
-  // the raw alignment.
-  const words =
-    wordsFromCharacterAlignment(payload.normalized_alignment) ??
-    wordsFromCharacterAlignment(payload.alignment);
-
-  return {
-    alignment: words ? { source: "with-timestamps", words } : null,
-    bytes: base64ToArrayBuffer(payload.audio_base64),
-    voiceId,
-  };
-}
-
 // ── Cartesia (Sonic) render path ─────────────────────────────────────────────
 //
 // The migration voice (a conversational read that doesn't drag on dreamy scripts
@@ -799,9 +562,8 @@ export async function renderObservation(
 // only, so we encode PCM → MP3 in-process with lamejs — the Worker can't ffmpeg, and
 // a master/rendition transform doesn't fit a single spoken clip. The encode is
 // ~250ms for ~14s of audio (well inside the Worker CPU budget) and lands a 30s read
-// at ~0.35 MB (smaller than the old ElevenLabs mp3). Word timestamps ride the same
-// SSE stream, normalised to the stored alignment shape, so captions + the duration
-// derivation work unchanged.
+// at ~0.35 MB. Word timestamps ride the same SSE stream, normalised to the stored
+// alignment shape, so captions + the duration derivation work unchanged.
 
 const CARTESIA_API = "https://api.cartesia.ai";
 const CARTESIA_VERSION = "2026-03-01";
@@ -813,9 +575,9 @@ const CARTESIA_MP3_KBPS = 96;
 export const DEFAULT_CARTESIA_SPEED = 0.78;
 
 /**
- * Strip the ElevenLabs `<break/>` SSML (Cartesia doesn't parse it, and the
- * catalog-free doctrine drops breaks anyway) and rewrite the em/en dash to the spoken
- * comma — the Cartesia-side sibling of `sanitizeForTts`.
+ * Strip any legacy `<break/>` SSML (Cartesia doesn't parse it, and the catalog-free
+ * doctrine drops breaks anyway) and rewrite the em/en dash to the spoken comma, so
+ * the punctuation paces the read.
  */
 export function sanitizeForCartesia(text: string): string {
   return text

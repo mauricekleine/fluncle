@@ -47,7 +47,7 @@ export const TrackListItemSchema = z
     note: z.string().optional(),
     // Word-level caption timings for the spoken observation (ms windows), driving the
     // synced subtitles on the radio player. Present only once captured (a fresh
-    // `/with-timestamps` render or a forced-alignment backfill); absent ⇒ no captions.
+    // Cartesia timestamped render or a forced-alignment backfill); absent ⇒ no captions.
     observationAlignment: z
       .object({
         words: z.array(z.object({ endMs: z.number(), startMs: z.number(), text: z.string() })),

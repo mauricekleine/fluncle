@@ -327,7 +327,7 @@ export async function trackPurgeVideoCommand(idOrLogId: string): Promise<TrackPu
 // `fluncle admin track observe <id|logId>` — mint the audio-observation artifact.
 // The agent authors + voice-gates the spoken script (it holds copywriting-fluncle)
 // and passes it here; the Worker fetches the factual context, re-scans the script,
-// renders it with ElevenLabs, uploads observation.{mp3,txt,json} to R2, and writes
+// renders it with Cartesia, uploads observation.{mp3,txt,json} to R2, and writes
 // the observation fields back. The CLI stays a thin relay — no vendor logic.
 export type TrackObserveOptions = {
   contextNote?: string;
@@ -335,7 +335,6 @@ export type TrackObserveOptions = {
   durationTargetSec?: number;
   /** Re-render even if an observation already exists (voice re-tune / fix a render). */
   force?: boolean;
-  model?: string;
   /** The spoken script (read from --script-file by the caller, or passed inline). */
   script: string;
   voiceId?: string;
@@ -346,7 +345,6 @@ type ObserveBody = {
   durationMs?: number;
   durationTargetSec?: number;
   force?: boolean;
-  model?: string;
   script: string;
   voiceId?: string;
 };
@@ -371,9 +369,6 @@ export async function trackObserveCommand(
 
   if (options.voiceId !== undefined) {
     body.voiceId = options.voiceId;
-  }
-  if (options.model !== undefined) {
-    body.model = options.model;
   }
   if (options.durationMs !== undefined) {
     body.durationMs = options.durationMs;

@@ -34,21 +34,13 @@ import { gateNoteText } from "../note";
 import { publishTrack } from "../publish";
 import {
   DEFAULT_CARTESIA_SPEED,
-  DEFAULT_OBSERVATION_MODEL,
-  DEFAULT_VOICE_SETTINGS,
   type ObservationArtifact,
-  type ObservationModel,
-  type ObservationVoiceSettings,
-  type RenderedObservation,
   buildContextQuery,
   fetchTrackContext,
   gateObservationScript,
   observationDurationFromAlignment,
-  renderObservation,
   renderObservationCartesia,
   resolveCartesiaVoiceId,
-  resolveObservationProvider,
-  resolveVoiceId,
 } from "../observation";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { VIDEOS_BUCKET, presignUploads } from "../r2-presign";
@@ -90,29 +82,6 @@ type AdminTrackInputs = InferContractRouterInputs<typeof contract>;
 type PatchBody = AdminTrackInputs["update_track"];
 type ObserveBody = AdminTrackInputs["observe_track"];
 type NoteBody = AdminTrackInputs["note_track"];
-
-function resolveModel(value: unknown): ObservationModel {
-  return value === "eleven_v3" || value === "eleven_multilingual_v2"
-    ? value
-    : DEFAULT_OBSERVATION_MODEL;
-}
-
-function resolveVoiceSettings(value: unknown): ObservationVoiceSettings {
-  if (typeof value !== "object" || value === null) {
-    return DEFAULT_VOICE_SETTINGS;
-  }
-
-  const raw = value as Record<string, unknown>;
-  const num = (key: keyof ObservationVoiceSettings, fallback: number): number =>
-    typeof raw[key] === "number" && Number.isFinite(raw[key]) ? (raw[key] as number) : fallback;
-
-  return {
-    similarityBoost: num("similarityBoost", DEFAULT_VOICE_SETTINGS.similarityBoost),
-    speed: num("speed", DEFAULT_VOICE_SETTINGS.speed),
-    stability: num("stability", DEFAULT_VOICE_SETTINGS.stability),
-    style: num("style", DEFAULT_VOICE_SETTINGS.style),
-  };
-}
 
 // Admin board list page-size bounds, ported verbatim from the live GET route.
 const ADMIN_LIST_DEFAULT_LIMIT = 16;
@@ -352,7 +321,7 @@ export function adminTracksHandlers(os: Implementer) {
 
       // Idempotency (`observe:${logId}`): a finding that already has an observation
       // is a no-op, so re-pulling an in-flight item — or an external cron firing on
-      // a fixed interval — never spends a second ElevenLabs render or overwrites the
+      // a fixed interval — never spends a second Cartesia render or overwrites the
       // existing artifact. The versioned playback URL on the row is already keyed by
       // the prior render; report it back unchanged. `force` bypasses this for a
       // deliberate operator re-render (voice re-tune / fixing a degenerate render).
@@ -379,7 +348,6 @@ export function adminTracksHandlers(os: Implementer) {
       // mechanical scan (defence in depth) and hard-fails on any violation.
       const script = gateObservationScript(body.script);
       const durationTargetSec = resolveDurationTargetSec(body.durationTargetSec);
-      const provider = await resolveObservationProvider();
 
       // The factual context, treated strictly as INTERNAL DATA (never instructions).
       // observe_track no longer holds Firecrawl: it reads the already-stored
@@ -402,37 +370,17 @@ export function adminTracksHandlers(os: Implementer) {
         freshlyFetched = Boolean(fetched.contextNote);
       }
 
-      // Render via the configured vendor (default Cartesia). Both paths return
-      // `{ alignment, bytes, voiceId }` in the same shape, so duration, captions, and
-      // the upload stay provider-agnostic. ElevenLabs carries model + voiceSettings;
-      // Cartesia carries neither (its knobs live in renderObservationCartesia, which
-      // also encodes the streamed PCM → MP3). A missing/malformed alignment is `null`
-      // (captions degrade) — never a render failure.
-      let rendered: RenderedObservation;
-      let model: ObservationModel | undefined;
-      let voiceSettings: ObservationVoiceSettings | undefined;
+      // Render via Cartesia Sonic: renderObservationCartesia clones-once → SSE (raw PCM
+      // + word timestamps) → in-process MP3, returning `{ alignment, bytes, voiceId }`.
+      // A missing/malformed alignment is `null` (captions degrade) — never a render fail.
+      const cartesiaVoiceId = await resolveCartesiaVoiceId(
+        typeof body.voiceId === "string" ? body.voiceId : undefined,
+      );
+      const { alignment, bytes, voiceId } = await renderObservationCartesia(cartesiaVoiceId, {
+        text: script,
+      });
 
-      if (provider === "cartesia") {
-        const cartesiaVoiceId = await resolveCartesiaVoiceId(
-          typeof body.voiceId === "string" ? body.voiceId : undefined,
-        );
-
-        rendered = await renderObservationCartesia(cartesiaVoiceId, { text: script });
-      } else {
-        model = resolveModel(body.model);
-        voiceSettings = resolveVoiceSettings(body.voiceSettings);
-
-        const elevenVoiceId = await resolveVoiceId(
-          typeof body.voiceId === "string" ? body.voiceId : undefined,
-        );
-
-        rendered = await renderObservation(elevenVoiceId, { model, text: script, voiceSettings });
-      }
-
-      const { alignment, bytes } = rendered;
-      const voiceId = rendered.voiceId;
-
-      // Duration: ElevenLabs doesn't return one and the Worker can't probe (no
+      // Duration: Cartesia returns no clip length and the Worker can't probe (no
       // ffprobe). Prefer an explicit probed `body.durationMs`; absent it (the box cron
       // doesn't ffprobe), derive the REAL length from the alignment's last word —
       // since the radio segment length IS this duration (radio-schedule.ts), the old
@@ -457,14 +405,12 @@ export function adminTracksHandlers(os: Implementer) {
         durationTargetSec,
         generatedAt,
         logId: track.logId,
-        ...(model ? { model } : {}),
-        provider,
-        ...(provider === "cartesia" ? { speed: DEFAULT_CARTESIA_SPEED } : {}),
+        provider: "cartesia",
+        speed: DEFAULT_CARTESIA_SPEED,
         text: script,
         textUrl: media.observationTextUrl,
         trackId: track.trackId,
         voiceId,
-        ...(voiceSettings ? { voiceSettings } : {}),
       };
 
       // Upload the three R2 objects at <log-id>/<name> (the Worker holds the

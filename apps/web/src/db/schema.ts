@@ -84,8 +84,8 @@ export const tracks = sqliteTable("tracks", {
   // (`{ source, words: [{ text, startMs, endMs }] }` — see lib/server/observation.ts
   // `ObservationAlignment`). Drives the synced subtitles on the radio player (and,
   // later, /log): the current word is highlighted off `audio.currentTime`. Captured
-  // at render time from ElevenLabs `/with-timestamps`, or back-filled onto an existing
-  // observation via `/forced-alignment`. Internal-but-PUBLIC: unlike the script, the
+  // at render time from Cartesia's word timestamps (a retired one-off `/forced-alignment`
+  // backfill seeded older rows). Internal-but-PUBLIC: unlike the script, the
   // word timings ARE surfaced (the public TrackListItem carries them so the radio
   // caption render can read them), but they describe an EXISTING artifact, so writing
   // them does NOT bump updated_at (a backfill must move no public lastmod).
@@ -100,7 +100,7 @@ export const tracks = sqliteTable("tracks", {
   observationDurationMs: integer("observation_duration_ms"),
   observationGeneratedAt: text("observation_generated_at"),
   // The spoken observation SCRIPT — the voice-gated prose the agent authored and
-  // passed to the observe render (with the occasional `<break/>`). It already lives
+  // passed to the observe render. It already lives
   // in the R2 `observation.json` (field `text`) + `observation.txt`; this column
   // mirrors it on the row so the admin observation dialog can show the transcript
   // without an R2 round-trip, and (future) radio.fluncle.com can render line-by-line

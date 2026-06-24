@@ -21,7 +21,7 @@ const updateTrack = vi.fn();
 const getTrackByIdOrLogId = vi.fn();
 const getTrackContextNote = vi.fn();
 const put = vi.fn();
-const renderObservation = vi.fn();
+const renderObservationCartesia = vi.fn();
 const fetchTrackContext = vi.fn();
 const presignUploads = vi.fn();
 const listTracks = vi.fn();
@@ -70,14 +70,14 @@ vi.mock("./r2-presign", async (importOriginal) => {
 
 vi.mock("./observation", async (importOriginal) => {
   // Keep the REAL voice gate (gateObservationScript) + defaults; fake only the
-  // vendor I/O (firecrawl + ElevenLabs).
+  // vendor I/O (firecrawl + Cartesia).
   const actual = await importOriginal<typeof import("./observation")>();
 
   return {
     ...actual,
     fetchTrackContext: (query: string) => fetchTrackContext(query),
-    renderObservation: (...args: unknown[]) => renderObservation(...args),
-    resolveVoiceId: async (override?: string) => override ?? "voice-stock-1",
+    renderObservationCartesia: (...args: unknown[]) => renderObservationCartesia(...args),
+    resolveCartesiaVoiceId: async (override?: string) => override ?? "voice-stock-1",
   };
 });
 
@@ -118,7 +118,7 @@ beforeEach(() => {
   put.mockReset();
   fetchTrackContext.mockReset();
   presignUploads.mockReset();
-  renderObservation
+  renderObservationCartesia
     .mockReset()
     .mockResolvedValue({ bytes: new ArrayBuffer(512), voiceId: "voice-stock-1" });
   fetchTrackContext.mockResolvedValue({
@@ -264,7 +264,7 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
     const response = await handleOrpc(post("/observe", undefined, { script: GOOD_SCRIPT }));
 
     expect(response?.status).toBe(401);
-    expect(renderObservation).not.toHaveBeenCalled();
+    expect(renderObservationCartesia).not.toHaveBeenCalled();
   });
 
   it("lets the AGENT observe (the tier flip — no longer operator-only)", async () => {
@@ -278,7 +278,7 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
 
     expect(response?.status).toBe(200);
     expect(((await readJson(response)) as { ok: boolean }).ok).toBe(true);
-    expect(renderObservation).toHaveBeenCalled();
+    expect(renderObservationCartesia).toHaveBeenCalled();
   });
 
   it("renders, uploads three R2 objects, writes back, and returns the live envelope", async () => {
@@ -353,7 +353,7 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
     expect(data.ok).toBe(true);
     expect(data.skipped).toBe(true);
     // No render, no upload, no write-back — a clean idempotent no-op.
-    expect(renderObservation).not.toHaveBeenCalled();
+    expect(renderObservationCartesia).not.toHaveBeenCalled();
     expect(put).not.toHaveBeenCalled();
     expect(updateTrack).not.toHaveBeenCalled();
   });
@@ -377,7 +377,7 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
     expect(data.ok).toBe(true);
     expect(data.skipped).toBeUndefined();
     // The whole render path runs again — the deliberate operator re-render.
-    expect(renderObservation).toHaveBeenCalled();
+    expect(renderObservationCartesia).toHaveBeenCalled();
     expect(updateTrack).toHaveBeenCalled();
   });
 
@@ -394,7 +394,7 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
 
     expect(response?.status).toBe(422);
     expect(((await readJson(response)) as { code: string }).code).toBe("voice_gate");
-    expect(renderObservation).not.toHaveBeenCalled();
+    expect(renderObservationCartesia).not.toHaveBeenCalled();
     expect(put).not.toHaveBeenCalled();
   });
 
@@ -411,7 +411,7 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
 
     expect(response?.status).toBe(422);
     expect(((await readJson(response)) as { code: string }).code).toBe("voice_gate");
-    expect(renderObservation).not.toHaveBeenCalled();
+    expect(renderObservationCartesia).not.toHaveBeenCalled();
   });
 
   it("400s `no_log_id` for a track with no Log ID", async () => {
@@ -466,7 +466,7 @@ describe("oRPC context_track (POST /admin/tracks/{trackId}/context)", () => {
       contextNote: "Signature Records, 2008.",
       contextStatus: "resolved",
     });
-    expect(renderObservation).not.toHaveBeenCalled();
+    expect(renderObservationCartesia).not.toHaveBeenCalled();
     expect(put).not.toHaveBeenCalled();
   });
 

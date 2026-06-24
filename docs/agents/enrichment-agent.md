@@ -59,13 +59,13 @@ The agent never holds the Postiz key — the Worker owns it, same pattern as R2.
 
 ## Audio observation (separate, after video)
 
-Once a track has its enrichment and (for the spoken script's creative fuel) ideally its video, the agent can mint the **audio observation** — Fluncle's spoken field observation, rendered with ElevenLabs and stored beside the video bundle at `<log-id>/observation.{mp3,txt,json}`. The agent authors + voice-gates the script (it holds `copywriting-fluncle`); the Worker fetches the factual context, re-scans, renders, uploads, and writes back. One command:
+Once a track has its enrichment and (for the spoken script's creative fuel) ideally its video, the agent can mint the **audio observation** — Fluncle's spoken field observation, rendered with Cartesia and stored beside the video bundle at `<log-id>/observation.{mp3,txt,json}`. The agent authors + voice-gates the script (it holds `copywriting-fluncle`); the Worker fetches the factual context, re-scans, renders, uploads, and writes back. One command:
 
 ```
-fluncle admin tracks observe <track_id|log_id> --script-file observation.txt --duration-ms <probed>
+fluncle admin tracks observe <track_id|log_id> --script-file observation.txt
 ```
 
-Its full doctrine is **[observation-agent.md](./observation-agent.md)** (the two artifacts, the voice gate, the safety rails — facts only, no lyrics, no commercial track audio). `observe` is auto-allowed but spends a paid render per call, so de-dupe per Log ID. The Worker owns the firecrawl + ElevenLabs secrets; the agent holds only its admin token.
+Its full doctrine is **[observation-agent.md](./observation-agent.md)** (the two artifacts, the voice gate, the safety rails — facts only, no lyrics, no commercial track audio). `observe` is auto-allowed but spends a paid render per call, so de-dupe per Log ID. The Worker owns the firecrawl + Cartesia secrets; the agent holds only its admin token.
 
 ## Safety rails (inline so they survive even if the skill fails to load)
 

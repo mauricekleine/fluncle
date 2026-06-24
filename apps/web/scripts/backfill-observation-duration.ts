@@ -9,7 +9,7 @@
  * route is fixed forward (it now derives the length from the alignment), but the rows
  * already written carry the wrong 30000. This recomputes them from the truth that is
  * already stored — the alignment's last word — so the existing reads stop being cut.
- * No ElevenLabs, no re-render: pure arithmetic over data we already have.
+ * No TTS vendor, no re-render: pure arithmetic over data we already have.
  *
  * Mirrors `observationDurationFromAlignment` in src/lib/server/observation.ts (kept
  * in sync by hand — this script can't import Worker code that pulls `cloudflare:workers`).

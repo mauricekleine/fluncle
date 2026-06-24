@@ -2,7 +2,7 @@
 
 The **audio observation** is Fluncle's spoken, recovered **field observation**: what he saw and felt arriving at a track's coordinate, in the recovered-audio register (VOICE.md §5 — the first _heard_ surface). It rides the same R2 rails the video bundle runs on, and it is a per-finding artifact whose first home is the `/log/<id>` page (an `<audio>` control under the footage); `radio.fluncle.com` later amplifies it. See [track-lifecycle.md](../track-lifecycle.md) for the lifecycle and the data model.
 
-It is one more step the enrich agent runs, after video — not a new runtime. The Worker owns every vendor secret (firecrawl, ElevenLabs, R2); the agent holds only its `FLUNCLE_API_TOKEN` and calls one CLI command.
+It is one more step the enrich agent runs, after video — not a new runtime. The Worker owns every vendor secret (firecrawl, Cartesia, R2); the agent holds only its `FLUNCLE_API_TOKEN` and calls one CLI command.
 
 ## The two artifacts (don't conflate them)
 
@@ -19,19 +19,18 @@ The note is **distilled**, not raw search-soup: `context_track` runs the Firecra
 
 ## The command
 
-The agent authors + voice-gates the script, then runs one CLI command. The Worker fetches the factual context, re-scans the script, renders it (ElevenLabs), uploads `observation.{mp3,txt,json}` to `<log-id>/<name>` on R2, and writes `context_note` + `observation_*` back.
+The agent authors + voice-gates the script, then runs one CLI command. The Worker fetches the factual context, re-scans the script, renders it (Cartesia), uploads `observation.{mp3,txt,json}` to `<log-id>/<name>` on R2, and writes `context_note` + `observation_*` back.
 
 ```
-fluncle admin tracks observe <track_id|log_id> --script-file observation.txt [--duration-ms <probed>] [--voice-id <id>] [--model <model>]
+fluncle admin tracks observe <track_id|log_id> --script-file observation.txt [--duration-ms <probed>] [--voice-id <id>]
 ```
 
-- `--script` / `--script-file`: the voice-gated spoken text (with occasional `<break time="0.8s"/>` for v2 pauses). **Required.**
-- `--duration-ms`: the agent's `ffprobe` value for the rendered mp3 (ElevenLabs returns no duration; the Worker can't probe). Absent it, the Worker estimates from the target with a ±10% budget — **pass the probed value so the stored duration is true.**
-- `--voice-id`: overrides the configured `ELEVENLABS_VOICE_ID` (the bespoke Fluncle voice — the live default).
-- `--model`: `eleven_multilingual_v2` (default — stable, on-brand) or `eleven_v3` (more theatrical, riskier).
+- `--script` / `--script-file`: the voice-gated spoken text — plain prose, no SSML tags (Cartesia paces on punctuation, not `<break/>`). **Required.**
+- `--duration-ms`: an optional `ffprobe` override. Absent it, the Worker derives the true length from the render's word timestamps (the radio segment length IS this duration), so passing it is rarely needed — the box cron doesn't.
+- `--voice-id`: overrides the configured `CARTESIA_VOICE_ID` (the cloned Fluncle voice — the live default).
 - `--context-note`: pass a pre-fetched context note to skip the Worker's firecrawl call.
 
-Backed by `POST /api/admin/tracks/:id/observe` (`requireAdmin`-gated, mirrors the video-finalize structure, requires a Log ID). The `observe` command is **auto-allowed** in the command gate (it writes an internal R2 artifact + private field + enrichment fields, posts to **no** public feed) — but each call **spends an ElevenLabs render**, so de-dupe per Log ID (one render per track, not per poll).
+Backed by `POST /api/admin/tracks/:id/observe` (`requireAdmin`-gated, mirrors the video-finalize structure, requires a Log ID). The `observe` command is **auto-allowed** in the command gate (it writes an internal R2 artifact + private field + enrichment fields, posts to **no** public feed) — but each call **spends a Cartesia render**, so de-dupe per Log ID (one render per track, not per poll).
 
 ## The voice gate (a hard ship requirement)
 
@@ -45,7 +44,7 @@ The script is a live Fluncle voice surface, **heard** in a synthetic voice — a
 
 The observation carries **word-level caption timings** so the spoken read can be subtitled in sync — the current word lights as it's heard. They live on the `observation_alignment_json` column (a JSON `{ source, words: [{ text, startMs, endMs }] }`) and ride the public `TrackListItem` as `observationAlignment`, surfaced today on the **radio player** (each word lit off the same shared schedule clock the audio resyncs to, so the captions stay aligned through resyncs and while muted; the `/log` caption render is a follow-up).
 
-**Fresh renders** capture alignment at generation time, Worker-side: the observe render calls ElevenLabs `/v1/text-to-speech/{voice}/with-timestamps` (one call → mp3 + character alignment), and the Worker groups the characters into words. A missing/malformed alignment is stored as absent — captions degrade to none, never a failed render. (A retired one-off forced-alignment backfill seeded timings for observations rendered before this switch; those rows carry `source: "forced-alignment"` and the caption render reads them the same way.)
+**Fresh renders** capture alignment at generation time, Worker-side: the observe render streams Cartesia's `/tts/sse` endpoint with `add_timestamps` on (one call → raw PCM + word timestamps), and the Worker normalises the parallel timestamp arrays into words. A missing/malformed alignment is stored as absent — captions degrade to none, never a failed render. (A retired one-off forced-alignment backfill seeded timings for observations rendered before this switch; those rows carry `source: "forced-alignment"` and the caption render reads them the same way.)
 
 Writing alignment does **not** bump `updated_at` (it describes an existing artifact, so it moves no public lastmod).
 
@@ -55,13 +54,13 @@ Writing alignment does **not** bump `updated_at` (it describes an existing artif
 - `context_note` and the script carry **facts only** — never quote or closely paraphrase lyrics. The Worker filters known lyric domains out of the firecrawl context; a leaked lyric in a _spoken_ artifact is a copyright + voice problem at once.
 - Never invent a factual claim; the context note and track props are authoritative.
 - The observation carries **no commercial track audio** — only Fluncle's spoken voice. The artifact is internal until the operator stands up a surface that plays it.
-- The bespoke Fluncle voice is **live** — `ELEVENLABS_VOICE_ID` points at it in `wrangler.jsonc`, and `observation.ts` tunes the voice settings (stability/style/speed) by ear for it.
-- Loudness normalization (ElevenLabs sits ~−24 LUFS vs the −16 web norm) can't run in the Worker. If observations drift in loudness, the agent runs one `loudnorm` ffmpeg pass before passing the mp3 — not a v1 blocker.
+- The cloned Fluncle voice is **live** — `CARTESIA_VOICE_ID` points at it in `wrangler.jsonc`, and `observation.ts` sets the one knob Cartesia exposes (`DEFAULT_CARTESIA_SPEED = 0.78`, dialed by ear).
+- Loudness normalization (the render can sit hot vs the ~−24 LUFS observation norm) can't run in the Worker. If observations drift in loudness, the agent runs one `loudnorm` ffmpeg pass before passing the mp3 — not a v1 blocker.
 
 ## Worker secrets (the operator sets these)
 
-- `ELEVENLABS_API_KEY` — secret (`wrangler secret put ELEVENLABS_API_KEY`).
-- `ELEVENLABS_VOICE_ID` — non-secret var in `wrangler.jsonc` (the bespoke Fluncle voice).
+- `CARTESIA_API_KEY` — secret (`wrangler secret put CARTESIA_API_KEY`).
+- `CARTESIA_VOICE_ID` — non-secret var in `wrangler.jsonc` (the cloned Fluncle voice).
 - `FIRECRAWL_API_KEY` — already a declared Worker secret.
 - `OPENROUTER_API_KEY` — secret, drives the context-note distil pass. Read via `readOptionalEnv`: unset ⇒ the distil degrades gracefully to the cleaned raw snippets (never blocks a render).
 - `OPENROUTER_CONTEXT_MODEL` — OPTIONAL non-secret var overriding the distil model; absent, defaults to `anthropic/claude-haiku-4.5`.

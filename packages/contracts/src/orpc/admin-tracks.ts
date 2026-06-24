@@ -47,9 +47,9 @@ const UpdateTrackBodySchema = z.looseObject({
 
 /**
  * The observe body (POST /admin/tracks/{trackId}/observe). LOOSE: the live route
- * resolves the model/voice/duration defaults and voice-GATES the script itself
- * (emitting `no_script`/`voice_gate`), so the contract stays permissive to keep
- * those codes byte-for-byte.
+ * resolves the voice/duration defaults and voice-GATES the script itself (emitting
+ * `no_script`/`voice_gate`), so the contract stays permissive to keep those codes
+ * byte-for-byte.
  */
 const ObserveTrackBodySchema = z.looseObject({
   contextNote: z.unknown().optional(),
@@ -58,10 +58,8 @@ const ObserveTrackBodySchema = z.looseObject({
   // Re-render an existing observation instead of no-op'ing on it (operator-driven
   // voice re-tunes / fixing a degenerate render). Default behaviour stays idempotent.
   force: z.unknown().optional(),
-  model: z.unknown().optional(),
   script: z.unknown().optional(),
   voiceId: z.unknown().optional(),
-  voiceSettings: z.unknown().optional(),
 });
 
 /**
@@ -149,7 +147,7 @@ export const updateTrack = oc
  * `observeTrack`).
  *
  * Mint the audio-observation artifact: author-time the agent has already written
- * the recovered-audio script, so this step VOICE-GATES it, renders it (ElevenLabs),
+ * the recovered-audio script, so this step VOICE-GATES it, renders it (Cartesia),
  * uploads the artifact to R2, and writes back. It no longer holds Firecrawl — it
  * reads the already-stored `context_note` (written by `context_track`) as its
  * fuel. On `adminProcedure` (agent-allowed): flipped from the operator tier so the

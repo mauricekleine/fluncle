@@ -16,7 +16,7 @@
 # authoring — turning a finding's facts into a recovered-audio script in Fluncle's
 # voice — runs `claude -p` (Claude Code, SUBSCRIPTION auth via CLAUDE_CODE_OAUTH_TOKEN,
 # NOT OpenRouter) with READ-ONLY tools. The SCRIPT posts the authored text to the
-# observe endpoint; the Worker re-scans (the voice gate) + renders ElevenLabs + stores.
+# observe endpoint; the Worker re-scans (the voice gate) + renders Cartesia + stores.
 # This replaces the old full-agent `fluncle-observation` cron (a whole Sonnet session
 # per tick just to drain a queue) with a deterministic wrapper around the one creative
 # step that genuinely needs a model.

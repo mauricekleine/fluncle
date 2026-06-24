@@ -130,8 +130,8 @@ function parseObservationAlignment(
       const startMs = finiteOrUndefined(word.startMs);
       const endMs = finiteOrUndefined(word.endMs);
 
-      // SSML markup tokens (e.g. `<break time="1.0s" />`) live in the observation
-      // script so ElevenLabs inserts a pause; the aligner tokenises them as "words".
+      // Legacy SSML markup tokens (e.g. `<break time="1.0s" />`) can linger in an
+      // older observation script, and an aligner tokenises them as "words".
       // They must never render as caption text — drop any token carrying tag markup
       // (`<`, `>`, or an `attr="…"` fragment). Spoken words never contain these, and
       // dropping a break leaves a natural gap (the next word's start is past the pause).

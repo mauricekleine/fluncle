@@ -1,7 +1,8 @@
-// The observation script is authored for ElevenLabs and carries the occasional
-// SSML tag the renderer needs but a reader doesn't — a pause (`<break time="1.0s" />`)
-// or an emphasis span (`<emphasis>…</emphasis>`). These tags must never reach a
-// human-facing surface as literal text (the admin transcript reads the raw script).
+// Some legacy observation scripts (authored before the Cartesia migration) carry the
+// occasional SSML tag a reader doesn't want — a pause (`<break time="1.0s" />`) or an
+// emphasis span (`<emphasis>…</emphasis>`). Cartesia strips these at render time, but
+// they must never reach a human-facing surface as literal text either (the admin
+// transcript reads the raw stored script).
 //
 // `stripSsml` removes every `<…>` tag SPAN from a free-prose string and collapses
 // the double space a mid-sentence tag leaves behind, so the transcript reads as the
