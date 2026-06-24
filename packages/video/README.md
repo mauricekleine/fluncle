@@ -112,7 +112,7 @@ type NostalgicCosmosProps = {
 
 ### GPU / ANGLE note
 
-GPU rendering requires ANGLE (Metal on Apple Silicon). Both `selectComposition` and `renderMedia` pass `chromiumOptions: { gl: "angle" }` (matching `remotion.config.ts` for Studio/CLI parity). A `remotion still`/`render` invoked by hand must pass `--gl=angle`. Verified on Apple Silicon ("ANGLE Metal Renderer").
+GPU shaders need a real GL context, and the renderer is **one source of truth** — `glRenderer()` in `src/pipeline/gl.ts`, read by `selectComposition`/`renderMedia` (`chromiumOptions.gl`) and by `remotion.config.ts` (so `remotion still`/`render` inherit it — no `--gl` flag needed). It defaults to **ANGLE** (Metal on Apple Silicon — verified "ANGLE Metal Renderer"); a GPU-less host (the remote render box) exports `FLUNCLE_GL=swangle` (SwiftShader-on-ANGLE: software, visually identical, slower).
 
 ### Determinism rules (non-negotiable)
 

@@ -5,7 +5,7 @@ import { ShaderLayer } from "./journey/shader-layer";
 // Smoke test for the GPU shader stack: fbm field through the Retint palette ramp,
 // finished with organic film grain, a dither pass to kill banding, and a vignette.
 // Renders via <ShaderLayer> on ANGLE/Metal. Scrub in Studio (GlProbe) or shoot a
-// still: `bunx remotion still GlProbe out/shader-smoke.png --gl=angle`.
+// still: `bunx remotion still GlProbe out/shader-smoke.png` (GL renderer via FLUNCLE_GL).
 //
 // Targets: grain must read as film (emulsion clumping), not TV static; the
 // gradient must be smooth with no 8-bit banding (dither8 in the header).

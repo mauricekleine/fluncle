@@ -7,7 +7,9 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-const FFMPEG = "/opt/homebrew/bin/ffmpeg";
+// The ffmpeg binary: PATH by default (Homebrew on macOS, /usr/bin on Linux), with
+// an explicit override for hosts where it lives elsewhere. Mirrors FLUNCLE_BIN.
+const FFMPEG = process.env.FLUNCLE_FFMPEG ?? "ffmpeg";
 
 const PUBLIC_DIR = path.resolve(import.meta.dirname, "../../public");
 

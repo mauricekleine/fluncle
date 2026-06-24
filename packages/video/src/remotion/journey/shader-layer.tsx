@@ -453,7 +453,9 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
 
       const gl = canvas.getContext("webgl", { preserveDrawingBuffer: true });
       if (!gl) {
-        setError("WebGL unavailable (no context). Renders require --gl=angle.");
+        setError(
+          "WebGL unavailable (no context). Renders need a GL renderer — angle or swangle (FLUNCLE_GL).",
+        );
         return null;
       }
 

@@ -6,6 +6,7 @@ import { bundle } from "@remotion/bundler";
 import { renderMedia, selectComposition } from "@remotion/renderer";
 
 import { type NostalgicCosmosProps } from "../remotion/types";
+import { glRenderer } from "./gl";
 
 const ENTRY_POINT = path.resolve(import.meta.dirname, "../remotion/index.ts");
 export type RenderResult = {
@@ -40,9 +41,9 @@ export async function render(
   });
 
   const composition = await selectComposition({
-    // GPU shaders: ANGLE (Metal on Apple Silicon) gives WebGL a real hardware
-    // context headlessly, matching remotion.config.ts for Studio/CLI parity.
-    chromiumOptions: { gl: "angle" },
+    // GPU shaders need a real GL context: ANGLE (Metal) locally, swangle (software)
+    // on a GPU-less host — driven by FLUNCLE_GL, matching remotion.config.ts.
+    chromiumOptions: { gl: glRenderer() },
     id: compositionId,
     inputProps,
     serveUrl,
@@ -53,7 +54,7 @@ export async function render(
   });
 
   await renderMedia({
-    chromiumOptions: { gl: "angle" },
+    chromiumOptions: { gl: glRenderer() },
     codec: "h264",
     composition,
     // These scenes are GLSL shaders over film grain — high entropy h264 can't

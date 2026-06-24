@@ -55,10 +55,10 @@ No registration step — dropping the file in `workbench/` is the registration (
 Render stills across the timeline and **view them** — code review alone misses overflow and blowouts:
 
 ```
-bunx remotion still src/remotion/index.ts <CompId> out/still-N.png --props=out/<trackId>.props.json --frame=N --gl=angle
+bunx remotion still src/remotion/index.ts <CompId> out/still-N.png --props=out/<trackId>.props.json --frame=N
 ```
 
-GPU shaders require `--gl=angle`. Render at least four frames across the clip, and ALWAYS include:
+GPU shaders need a GL context — ANGLE locally / swangle on a GPU-less host, inherited from `remotion.config.ts` via `FLUNCLE_GL` (no `--gl` flag needed). Render at least four frames across the clip, and ALWAYS include:
 
 - **frame ~5** — verify the vehicle is present and holding center (Always-Visible Vehicle).
 - **the brightest frame** (the drop, from the energy curve) — verify type legibility and that nothing is blown out, that the warm dark holds. Verify the vehicle's FOCAL MASS sits inside the frame — off-centre is good, but the centre of attention must not be cropped out of frame (a crescent whose body lives past the edge reads as a missed framing). Check the corners: the full-bleed field must reach all four — if the frame reads as a circle/porthole, the background vignette is too tight (doctrine 6).

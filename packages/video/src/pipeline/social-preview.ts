@@ -21,6 +21,7 @@ import { analyzeAudio } from "./analyze-audio";
 import { readContextNote } from "./context-note";
 import { downloadPreview } from "./download-preview";
 import { fetchTrack } from "./fetch-track";
+import { resolveArchivedPreview } from "./resolve-archived-preview";
 import { resolvePreview } from "./resolve-preview";
 
 const OUT_DIR = path.resolve(import.meta.dirname, "../../out");
@@ -155,7 +156,12 @@ async function main(): Promise<void> {
   }
 
   console.log(`[social-preview] resolving preview`);
-  const preview = await resolvePreview({ artists: track.artists, title: track.title });
+  // Prefer the R2 analysis archive (region-independent — the render-host path); fall
+  // back to the live Deezer/iTunes search (region-gated) when there is no archive or
+  // no admin token in env (local dev). See resolve-archived-preview.ts.
+  const preview =
+    (await resolveArchivedPreview(track.logId ?? trackId)) ??
+    (await resolvePreview({ artists: track.artists, title: track.title }));
   if (!preview) {
     throw new Error(
       `[social-preview] no confident preview found for "${track.title}" by ${track.artists.join(", ")}`,

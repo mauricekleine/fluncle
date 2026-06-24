@@ -18,6 +18,8 @@ import path from "node:path";
 import { bundle } from "@remotion/bundler";
 import { renderStill, selectComposition } from "@remotion/renderer";
 
+import { glRenderer } from "./gl";
+
 const ENTRY_POINT = path.resolve(import.meta.dirname, "../remotion/index.ts");
 
 /** Probe a media file's duration in seconds via ffprobe. */
@@ -101,7 +103,7 @@ export async function renderCover(bundleDirs: string[]): Promise<void> {
     };
 
     const composition = await selectComposition({
-      chromiumOptions: { gl: "angle" },
+      chromiumOptions: { gl: glRenderer() },
       id: "Cover",
       inputProps,
       serveUrl,
@@ -109,7 +111,7 @@ export async function renderCover(bundleDirs: string[]): Promise<void> {
 
     const output = path.join(bundleDir, "cover.jpg");
     await renderStill({
-      chromiumOptions: { gl: "angle" },
+      chromiumOptions: { gl: glRenderer() },
       composition,
       frame: 0,
       imageFormat: "jpeg",

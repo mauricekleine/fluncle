@@ -131,7 +131,7 @@ Run from `packages/video` (or `bun run --cwd packages/video <script>`). Use `bun
 
 - `bun run social:preview <trackId> --skip-render` — resolve + analyze audio (BPM, beat grid, onsets, energy + bass/mid/treble band curves), extract artwork palette, write `out/<trackId>.props.json`. Run first; the props file is your ground truth.
 - `bun run social:preview <trackId> --composition <CompId>` — the full pipeline through render to `out/<trackId>.mp4`, pointed at your composition.
-- `bunx remotion still src/remotion/index.ts <CompId> out/still-N.png --props=out/<trackId>.props.json --frame=N --gl=angle` — the stills for the critique loop (GPU shaders require `--gl=angle`).
+- `bunx remotion still src/remotion/index.ts <CompId> out/still-N.png --props=out/<trackId>.props.json --frame=N` — the stills for the critique loop (GPU shaders need a GL context: ANGLE locally / swangle on a GPU-less host, inherited from `remotion.config.ts` via `FLUNCLE_GL` — no `--gl` flag needed).
 - `bun run studio` — Remotion Studio, to scrub a scene live with default props.
 - `bun run --cwd packages/video typecheck` and `bunx oxlint packages/video` — the gates before any render. Format with `bunx oxfmt --write <files>`, never prettier.
 

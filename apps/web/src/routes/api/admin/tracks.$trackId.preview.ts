@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { env } from "cloudflare:workers";
 
 import { type ApiHandlers, aliasHandlers } from "../-alias";
-import { jsonError, requireOperator } from "../../../lib/server/env";
+import { jsonError, requireAdmin, requireOperator } from "../../../lib/server/env";
 import {
   apiErrorResponse,
   requireParam,
@@ -19,8 +19,11 @@ import { getTrackByIdOrLogId } from "../../../lib/server/tracks";
 // It is never a playback source and is never exposed through public DTOs.
 
 export const serverHandlers: ApiHandlers = {
+  // GET — agent tier: the autonomous render box reads its OWN finding's archived
+  // preview key to resolve audio region-independently. Authenticated + non-public,
+  // so the Deezer-licensing stance holds (POST/archive stays operator-only below).
   GET: async ({ params, request }) => {
-    const unauthorized = await requireOperator(request);
+    const unauthorized = await requireAdmin(request);
 
     if (unauthorized) {
       return unauthorized;
