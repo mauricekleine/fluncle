@@ -55,11 +55,16 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14" \
 # NOTE: box.ascii is pre-1.0 and its installer offers no version pin — it tracks
 # the `ascii-prod` channel (the CLI also self-updates), so this is the one image
 # dependency not version-pinned. Re-verify the conductor after a base rebuild.
-# SHELL=/bin/sh: the installer runs `basename "$SHELL"` under `set -u`, and $SHELL
-# is unset in a Docker build (→ "parameter not set", exit 2); setting it also makes
-# the installer skip the .bashrc/.zshrc integration (only the binary + config, clean).
+# Two install-in-Docker quirks the installer trips on: (1) it runs `basename "$SHELL"`
+# under `set -u` and $SHELL is unset in a build (→ "parameter not set", exit 2), so set
+# SHELL=/bin/sh — which also makes it skip the .bashrc/.zshrc integration (binary +
+# config only, clean); (2) it ENDS with an interactive `box onboard` (sign-in) that
+# needs a tty and fails in a build (cannot open /dev/tty). The binary is installed
+# BEFORE that step and runtime auth is `box login $BOX_API_KEY` (the conductor), so
+# ignore the onboard exit (|| true) and assert the binary actually landed (test -x).
 RUN export SHELL=/bin/sh \
-  && curl -fsSL https://box.ascii.dev/install | sh \
+  && (curl -fsSL https://box.ascii.dev/install | sh || true) \
+  && test -x /root/.ascii/bin/box \
   && cp /root/.ascii/bin/box /usr/local/bin/box \
   && chmod 755 /usr/local/bin/box
 
