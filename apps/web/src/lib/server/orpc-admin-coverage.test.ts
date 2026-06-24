@@ -70,6 +70,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "PATCH /admin/tracks/{trackId}/social/{platform}": "update_track_social",
   "POST /admin/backfill/discogs": "backfill_discogs",
   "POST /admin/backfill/lastfm": "backfill_lastfm",
+  // record_health (the public /status dashboard's write) is contract-only oRPC —
+  // no TanStack route file; oRPC owns the path directly, like context_track. Admin
+  // tier (agent-allowed): the box's status cron POSTs a snapshot with its agent token.
+  "POST /admin/health": "record_health",
   "POST /admin/lastfm/auth/session": "exchange_lastfm_session",
   "POST /admin/mixcloud/token": "mint_mixcloud_token",
   "POST /admin/mixtapes": "create_mixtape",

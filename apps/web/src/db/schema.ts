@@ -190,6 +190,58 @@ export const radioSchedule = sqliteTable("radio_schedule", {
   version: text("version").notNull(),
 });
 
+// The public status dashboard's current-state snapshot — ONE row per probed
+// service (PK = `service`, so each check upserts its single row, the
+// `radio_schedule`/`spotify_auth` single-row precedent). A Hermes cron probes
+// the services and POSTs a snapshot to the agent-tier `record_health` op; this
+// table is what /status reads. `status` is the three-state health enum (plain
+// TEXT, the enum only narrows the type — widening needs no migration). `since`
+// is when the CURRENT status began (carried forward across an upsert while the
+// status is unchanged, reset to `checked_at` on a transition), so the page can
+// render "up 3d" / "down 12m". PUBLIC-SAFE by construction: only the service
+// name, status, a short message, latency, and timestamps live here — never an
+// IP, hostname, op-path, or raw error body.
+export const serviceStatus = sqliteTable("service_status", {
+  // When this row was last refreshed by a probe (ISO). Equals the POSTed `at`.
+  checkedAt: text("checked_at").notNull(),
+  // Round-trip latency of the last probe, in ms. Null when not measured.
+  latencyMs: integer("latency_ms"),
+  // A short, public-safe human message (e.g. "elevated p95", "timed out"). Null
+  // when nothing to say. NEVER a raw error body / internal address.
+  message: text("message"),
+  // The probed service (PK): one of web/db/r2/dns/ssh/onion/hermes/render-box,
+  // but plain TEXT so a new service needs no migration.
+  service: text("service").primaryKey(),
+  // When the CURRENT status began (ISO) — preserved across upserts while the
+  // status is unchanged, reset to `checked_at` on a transition. Drives the
+  // human "up 3d" / "down 12m" uptime/downtime read on /status.
+  since: text("since").notNull(),
+  // The three-state health enum (plain TEXT; the enum only narrows the type).
+  status: text("status", { enum: ["ok", "degraded", "down"] }).notNull(),
+});
+
+// The append-only status TRANSITION ledger — one row per status change (the
+// probe POSTs `transitioned: true` for the check that flipped). Feeds the
+// compact "recent events" feed on /status. Pruned to the most recent 200 rows
+// on every write (a status page never needs deep history), indexed on `at` for
+// the recent-first read + the prune's keep-set. PUBLIC-SAFE like
+// `service_status`: service + status + short message + time only.
+export const statusEvents = sqliteTable(
+  "status_events",
+  {
+    // When the transition happened (ISO). Equals the POSTed snapshot `at`.
+    at: text("at").notNull(),
+    id: text("id").primaryKey(),
+    // A short, public-safe human message for the transition. Null when none.
+    message: text("message"),
+    // The service that transitioned.
+    service: text("service").notNull(),
+    // The status it transitioned INTO (same three-state enum as service_status).
+    status: text("status", { enum: ["ok", "degraded", "down"] }).notNull(),
+  },
+  (table) => [index("status_events_at_idx").on(table.at)],
+);
+
 export const spotifyAuth = sqliteTable("spotify_auth", {
   accessToken: text("access_token").notNull(),
   expiresAt: text("expires_at").notNull(),

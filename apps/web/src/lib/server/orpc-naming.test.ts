@@ -78,6 +78,10 @@ const APPROVED_VERBS = new Set<string>([
   "merge",
   "mint",
   "presign",
+  // `record` (persist a service-health snapshot for the public /status dashboard) —
+  // the agent-tier write the box's status cron drives. "Record this snapshot": a
+  // genuinely new action verb, added deliberately with the `record_health` op.
+  "record",
   "register",
   "reject",
   "reset",

@@ -253,6 +253,13 @@
       "when": 1782247259364,
       "tag": "0035_noisy_smasher",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1782306255049,
+      "tag": "0036_steady_otto_octavius",
+      "breakpoints": true
     }
   ]
 }

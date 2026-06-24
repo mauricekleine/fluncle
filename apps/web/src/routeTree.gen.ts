@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as StatusRouteImport } from './routes/status'
 import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as RssDotxmlRouteImport } from './routes/rss[.]xml'
 import { Route as RadioRouteImport } from './routes/radio'
@@ -151,6 +152,11 @@ import { Route as ApiV1AdminMixtapesMixtapeIdMixcloudFinalizeRouteImport } from 
 import { Route as ApiAdminTracksTrackIdSocialPlatformDraftRouteImport } from './routes/api/admin/tracks.$trackId.social.$platform.draft'
 import { Route as ApiV1AdminTracksTrackIdSocialPlatformDraftRouteImport } from './routes/api/v1/admin/tracks.$trackId.social.$platform.draft'
 
+const StatusRoute = StatusRouteImport.update({
+  id: '/status',
+  path: '/status',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
   id: '/sitemap.xml',
   path: '/sitemap.xml',
@@ -924,6 +930,7 @@ export interface FileRoutesByFullPath {
   '/radio': typeof RadioRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
+  '/status': typeof StatusRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
   '/admin/newsletter': typeof AdminNewsletterRoute
@@ -1065,6 +1072,7 @@ export interface FileRoutesByTo {
   '/radio': typeof RadioRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
+  '/status': typeof StatusRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
   '/admin/newsletter': typeof AdminNewsletterRoute
@@ -1209,6 +1217,7 @@ export interface FileRoutesById {
   '/radio': typeof RadioRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
+  '/status': typeof StatusRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
   '/admin/newsletter': typeof AdminNewsletterRoute
@@ -1354,6 +1363,7 @@ export interface FileRouteTypes {
     | '/radio'
     | '/rss.xml'
     | '/sitemap.xml'
+    | '/status'
     | '/admin/login'
     | '/admin/mixtapes'
     | '/admin/newsletter'
@@ -1495,6 +1505,7 @@ export interface FileRouteTypes {
     | '/radio'
     | '/rss.xml'
     | '/sitemap.xml'
+    | '/status'
     | '/admin/login'
     | '/admin/mixtapes'
     | '/admin/newsletter'
@@ -1638,6 +1649,7 @@ export interface FileRouteTypes {
     | '/radio'
     | '/rss.xml'
     | '/sitemap.xml'
+    | '/status'
     | '/admin/login'
     | '/admin/mixtapes'
     | '/admin/newsletter'
@@ -1782,6 +1794,7 @@ export interface RootRouteChildren {
   RadioRoute: typeof RadioRoute
   RssDotxmlRoute: typeof RssDotxmlRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
+  StatusRoute: typeof StatusRoute
   ApiHealthRoute: typeof ApiHealthRoute
   ApiMeRoute: typeof ApiMeRouteWithChildren
   ApiMixtapesRoute: typeof ApiMixtapesRoute
@@ -1856,6 +1869,13 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/status': {
+      id: '/status'
+      path: '/status'
+      fullPath: '/status'
+      preLoaderRoute: typeof StatusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/sitemap.xml': {
       id: '/sitemap.xml'
       path: '/sitemap.xml'
@@ -3246,6 +3266,7 @@ const rootRouteChildren: RootRouteChildren = {
   RadioRoute: RadioRoute,
   RssDotxmlRoute: RssDotxmlRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
+  StatusRoute: StatusRoute,
   ApiHealthRoute: ApiHealthRoute,
   ApiMeRoute: ApiMeRouteWithChildren,
   ApiMixtapesRoute: ApiMixtapesRoute,
