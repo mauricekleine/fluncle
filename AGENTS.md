@@ -34,7 +34,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - MUST: Use `bun` for repo scripts and package management unless a documented tool requires otherwise.
 - MUST: Use `rg` for code search when available.
 - NEVER: Use `npm`, `pnpm`, or `yarn` for installs unless the task targets tooling that explicitly requires them.
-- NEVER: Run `prettier` or `bunx prettier` in this repo. Formatting is owned by `oxfmt`; use `bunx oxfmt <files>` or `bun run check`.
+- NEVER: Run `prettier` or `bunx prettier` outside `apps/raycast`. Formatting is owned by `oxfmt` for the repo, except `apps/raycast` where Raycast's CLI is the source of truth and `ray lint` runs a Prettier check over `src/**`. Use `bunx oxfmt <files>` or `bun run check` for non-Raycast files; use `bun run --cwd apps/raycast lint -- --fix` only for Raycast formatting fixes.
 
 ## Quality Checks
 
@@ -42,7 +42,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - Lint and format: `bun run check` from the repo root for broad validation.
 - Web changes: `bun run --cwd apps/web typecheck`, `bun run --cwd apps/web build`, and `bun run --cwd apps/web lint` when relevant.
 - CLI changes: `bun run --cwd apps/cli typecheck` and focused CLI commands such as `bun run --cwd apps/cli fluncle recent --limit 1 --json` when behavior changes.
-- Raycast changes: `bun run --cwd apps/raycast build` and `bun run --cwd apps/raycast lint`.
+- Raycast changes: `bun run --cwd apps/raycast build` and `bun run --cwd apps/raycast lint`. If lint fails only on Raycast formatting, run `bun run --cwd apps/raycast lint -- --fix` and keep the resulting changes scoped to `apps/raycast`.
 - SSH app changes: `go build -C apps/ssh ./...`, `gofmt -l apps/ssh` (must list nothing), and `go vet -C apps/ssh ./...`.
 - Video package changes: `bun run --cwd packages/video typecheck`.
 - NEVER: Use the TypeScript non-null assertion operator (`!`). Narrow with a guard, early return, `??`, or `?.`. Enforced as an error by oxlint (`typescript/no-non-null-assertion`).

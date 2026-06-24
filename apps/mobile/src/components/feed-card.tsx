@@ -1,7 +1,7 @@
 // One finding, full-screen (RFC Unit 2). Per-cell player, the media ladder, the
 // native overlay (a right action rail + bottom caption), the cover-card eclipse
 // drift, and the background-pause rule. The de-risk spike target.
-import { memo, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, type ReactNode, useCallback, useEffect, useMemo } from "react";
 import {
   Linking,
   Pressable,
@@ -65,12 +65,13 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
   const observationUrl = finding.observationAudioUrl ?? null;
   const observation = useAudioPlayer(observationUrl);
   const observationStatus = useAudioPlayerStatus(observation);
-  const [observing, setObserving] = useState(false);
+  const observing = active && observationStatus.playing;
 
   // Only the visible card plays; sound follows the global toggle. While the
   // observation plays it owns the one sound source — keep the card media silent.
   useEffect(() => {
     if (media.kind === "video") {
+      // eslint-disable-next-line react-hooks/immutability -- expo-video exposes `muted` as the documented imperative player API.
       player.muted = !soundOn || observing;
       if (active && !observing) {
         player.play();
@@ -86,24 +87,15 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
     }
   }, [active, audio, media, observing, player, soundOn]);
 
-  // The observation stops itself when the clip ends; resume nothing automatically.
-  useEffect(() => {
-    if (observationStatus.didJustFinish) {
-      setObserving(false);
-    }
-  }, [observationStatus.didJustFinish]);
-
   // Scrolling the card away stops a playing observation (visible-card-only rule).
   useEffect(() => {
-    if (!active && observing) {
+    if (!active && observationStatus.playing) {
       observation.pause();
-      setObserving(false);
     }
-  }, [active, observation, observing]);
+  }, [active, observation, observationStatus.playing]);
 
   const stopObservation = useCallback(() => {
     observation.pause();
-    setObserving(false);
   }, [observation]);
 
   const toggleObservation = useCallback(() => {
@@ -115,7 +107,6 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
     audio.pause();
     void observation.seekTo(0);
     observation.play();
-    setObserving(true);
   }, [observing, stopObservation, player, audio, observation]);
 
   // No background audio (reinforces the session rule; covers calls / route changes).
@@ -127,7 +118,6 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
     }
     if (observing) {
       observation.pause();
-      setObserving(false);
     }
   }, [audio, media, observation, observing, player]);
   useBackgroundPause(pauseAll);

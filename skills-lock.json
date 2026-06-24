@@ -51,7 +51,7 @@
     "fluncle-operator": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-operator",
       "sourceType": "local",
-      "computedHash": "1fa0bd42bfb690783d027f718656eea43f0b0e4cf967274115f8117a1b2ec6f2"
+      "computedHash": "2e43826c5f4845e2001c1a859960dda96b48da08a3e44ebb4a91f6de98dbea64"
     },
     "fluncle-publish": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-publish",
