@@ -16,8 +16,11 @@ const getTrackByIdOrLogId = vi.fn();
 const listSocialPosts = vi.fn();
 const updateSocialStatus = vi.fn();
 const upsertPost = vi.fn();
+const hasPostAwaitingUrl = vi.fn();
+const recordPostUrl = vi.fn();
 const pushTikTokDraft = vi.fn();
 const pushYouTubeShort = vi.fn();
+const resolveYouTubeUrl = vi.fn();
 const readCaptions = vi.fn();
 
 vi.mock("./tracks", () => ({
@@ -25,7 +28,9 @@ vi.mock("./tracks", () => ({
 }));
 
 vi.mock("./social", () => ({
+  hasPostAwaitingUrl: (...args: unknown[]) => hasPostAwaitingUrl(...args),
   listSocialPosts: (...args: unknown[]) => listSocialPosts(...args),
+  recordPostUrl: (...args: unknown[]) => recordPostUrl(...args),
   updateSocialStatus: (...args: unknown[]) => updateSocialStatus(...args),
   upsertPost: (...args: unknown[]) => upsertPost(...args),
 }));
@@ -33,6 +38,7 @@ vi.mock("./social", () => ({
 vi.mock("./postiz", () => ({
   pushTikTokDraft: (...args: unknown[]) => pushTikTokDraft(...args),
   pushYouTubeShort: (...args: unknown[]) => pushYouTubeShort(...args),
+  resolveYouTubeUrl: (...args: unknown[]) => resolveYouTubeUrl(...args),
 }));
 
 vi.mock("./captions", () => ({
@@ -56,8 +62,11 @@ beforeEach(() => {
   listSocialPosts.mockReset();
   updateSocialStatus.mockReset();
   upsertPost.mockReset();
+  hasPostAwaitingUrl.mockReset().mockResolvedValue(false);
+  recordPostUrl.mockReset().mockResolvedValue(true);
   pushTikTokDraft.mockReset();
   pushYouTubeShort.mockReset();
+  resolveYouTubeUrl.mockReset().mockResolvedValue(null);
   readCaptions.mockReset().mockResolvedValue({ "004.7.2I": "a caption" });
 });
 
@@ -229,9 +238,11 @@ describe("oRPC draft_track_social (POST .../social/{platform}/draft)", () => {
     expect(upsertPost).toHaveBeenCalledWith(TRACK_ID, "tiktok", "draft", "tt-1");
   });
 
-  it("lets the OPERATOR push to YOUTUBE (published)", async () => {
+  it("lets the OPERATOR push to YOUTUBE (published); url unresolved leaves it null", async () => {
     getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
     pushYouTubeShort.mockResolvedValueOnce({ postId: "yt-1" });
+    // The publish lag: /missing resolves nothing this time, so no url is recorded.
+    resolveYouTubeUrl.mockResolvedValueOnce(null);
 
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(
@@ -248,6 +259,69 @@ describe("oRPC draft_track_social (POST .../social/{platform}/draft)", () => {
     });
     expect(pushYouTubeShort).toHaveBeenCalled();
     expect(upsertPost).toHaveBeenCalledWith(TRACK_ID, "youtube", "published", "yt-1");
+    expect(resolveYouTubeUrl).toHaveBeenCalledWith("yt-1");
+    // No url resolved → nothing recorded; the operator's manual entry is the fallback.
+    expect(recordPostUrl).not.toHaveBeenCalled();
+  });
+
+  it("auto-records the live YouTube URL on the row when /missing resolves it", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+    pushYouTubeShort.mockResolvedValueOnce({ postId: "yt-2" });
+    resolveYouTubeUrl.mockResolvedValueOnce("https://youtube.com/shorts/abc123");
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(`/admin/tracks/${TRACK_ID}/social/youtube/draft`, "POST", OPERATOR_TOKEN),
+    );
+
+    expect(response?.status).toBe(200);
+    // The draft envelope is unchanged; the resolved url is a side-effect on the
+    // row (surfaced via list_track_social), not part of the response.
+    expect(await readJson(response)).toEqual({
+      externalId: "yt-2",
+      ok: true,
+      platform: "youtube",
+      status: "published",
+      trackId: TRACK_ID,
+    });
+    expect(resolveYouTubeUrl).toHaveBeenCalledWith("yt-2");
+    expect(recordPostUrl).toHaveBeenCalledWith(
+      TRACK_ID,
+      "youtube",
+      "https://youtube.com/shorts/abc123",
+    );
+  });
+
+  it("409s the push gate when a YouTube post is still awaiting its URL", async () => {
+    hasPostAwaitingUrl.mockResolvedValueOnce(true);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(`/admin/tracks/${TRACK_ID}/social/youtube/draft`, "POST", OPERATOR_TOKEN),
+    );
+
+    expect(response?.status).toBe(409);
+    expect(((await readJson(response)) as { code: string }).code).toBe("youtube_url_pending");
+    // The gate fires BEFORE the track lookup and the push — nothing is published.
+    expect(getTrackByIdOrLogId).not.toHaveBeenCalled();
+    expect(pushYouTubeShort).not.toHaveBeenCalled();
+  });
+
+  it("the gate does NOT block a TIKTOK push (youtube-only)", async () => {
+    // A pending youtube URL must not stop a tiktok draft.
+    hasPostAwaitingUrl.mockResolvedValue(true);
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+    pushTikTokDraft.mockResolvedValueOnce({ postId: "tt-9" });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(`/admin/tracks/${TRACK_ID}/social/tiktok/draft`, "POST", AGENT_TOKEN),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(pushTikTokDraft).toHaveBeenCalled();
+    // The youtube gate was never consulted for a tiktok push.
+    expect(hasPostAwaitingUrl).not.toHaveBeenCalled();
   });
 
   it("400s `no_video` when the track has no video", async () => {

@@ -458,16 +458,18 @@ export const userDeletionRequests = sqliteTable(
 // Per-platform publication state for a track's video. One row per (track,
 // platform); the generic track pipeline tops out at "video in R2" (video_url),
 // and publication is tracked here. Today: TikTok via Postiz (push draft → manual
-// review/publish in-app → status updated by the operator). Extensible to
-// YouTube Shorts / Instagram Reels (the `platform` enum widens — plain TEXT, no
-// migration). `external_id` holds the Postiz post id; `url` the public post URL.
+// review/publish in-app → status updated by the operator) and YouTube Shorts
+// (direct PUBLIC upload → `published`; the public `url` is auto-recorded from
+// Postiz `/missing`, falling back to the operator's manual entry). The `platform`
+// enum is plain TEXT, so widening it (e.g. to Instagram Reels) needs no migration.
+// `external_id` holds the Postiz post id; `url` the public post URL.
 export const socialPosts = sqliteTable(
   "social_posts",
   {
     createdAt: text("created_at").notNull(),
     externalId: text("external_id"),
     id: text("id").primaryKey(),
-    platform: text("platform", { enum: ["tiktok"] }).notNull(),
+    platform: text("platform", { enum: ["tiktok", "youtube"] }).notNull(),
     publishedAt: text("published_at"),
     scheduledFor: text("scheduled_for"),
     status: text("status", { enum: ["draft", "scheduled", "published", "failed"] }).notNull(),

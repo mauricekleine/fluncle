@@ -11,8 +11,8 @@ import {
   requireParam,
   trackNotFoundResponse,
 } from "../../../lib/server/http-errors";
-import { pushTikTokDraft, pushYouTubeShort } from "../../../lib/server/postiz";
-import { upsertPost } from "../../../lib/server/social";
+import { pushTikTokDraft, pushYouTubeShort, resolveYouTubeUrl } from "../../../lib/server/postiz";
+import { hasPostAwaitingUrl, recordPostUrl, upsertPost } from "../../../lib/server/social";
 import { getTrackByIdOrLogId } from "../../../lib/server/tracks";
 
 // POST /api/admin/tracks/:idOrLogId/social/:platform/draft
@@ -54,6 +54,18 @@ export const serverHandlers: ApiHandlers = {
 
       if (notOperator) {
         return notOperator;
+      }
+
+      // The push gate: block a new YouTube push while any finding is still
+      // "pushed but no URL" for YouTube. The live URL resolves from Postiz
+      // `/missing` by matching the newest published item, so a second pending
+      // upload would make that match ambiguous. Keep exactly one in flight.
+      if (await hasPostAwaitingUrl("youtube")) {
+        return jsonError(
+          409,
+          "youtube_url_pending",
+          "A YouTube post is still awaiting its URL — record it first (or run the URL resolver), then push the next one.",
+        );
       }
     }
 
@@ -125,6 +137,19 @@ export const serverHandlers: ApiHandlers = {
       }
 
       await upsertPost(track.trackId, platform, status, postId);
+
+      // Auto-record the live YouTube URL: Postiz returns only its own postId on
+      // create, so poll `/missing` (the publish is async) and store the newest
+      // YouTube permalink on the row — surfaced via the social list. Best-effort
+      // and coverless: on a miss the url stays null and the operator's manual
+      // "Update URL" is the fallback (the push gate holds the next push until set).
+      if (platform === "youtube") {
+        const resolved = await resolveYouTubeUrl(postId);
+
+        if (resolved) {
+          await recordPostUrl(track.trackId, platform, resolved);
+        }
+      }
 
       return Response.json({
         externalId: postId,
