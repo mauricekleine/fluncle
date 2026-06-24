@@ -36,7 +36,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 // ---------------------------------------------------------------------------
 // Config — every probe target comes from the file-sourced env (the .sh sources
@@ -70,7 +70,12 @@ const STATE_DIR = join(HOME, ".healthcheck");
 const STATE_FILE = join(STATE_DIR, "state.json");
 
 // Where the Hermes cron runner saves each job's per-run output.
-const CRON_OUTPUT_DIR = join(HOME, ".hermes", "cron", "output");
+// The Hermes gateway writes per-run cron output to <data-root>/cron/output/<job-id>/.
+// The data root is the parent of the cron user's HOME (HOME=/opt/data/home → the
+// /opt/data mount); operator-overridable via HEALTHCHECK_CRON_OUTPUT_DIR for a
+// non-standard layout.
+const CRON_OUTPUT_DIR =
+  process.env.HEALTHCHECK_CRON_OUTPUT_DIR ?? join(dirname(HOME), "cron", "output");
 // The render conductor's state file (idle | rendering).
 const RENDER_STATE_FILE = join(HOME, ".render-conductor", "state");
 
@@ -315,8 +320,9 @@ function probeSsh(): Promise<Check> {
 
 // ---------------------------------------------------------------------------
 // PROBE: automation — the on-box Hermes crons, aggregated to ONE service. For each
-// known cron, find its output dir (matched by name within ~/.hermes/cron/output/),
-// take the newest *.md, parse its LAST content line as JSON and check `.ok !== false`,
+// known cron, find its output dir (dirs are named by job id, so each is resolved to
+// its cron via the run-file's `# Cron Job:` header), take the newest *.md, parse its
+// LAST content line as JSON and check `.ok !== false`,
 // AND require the file mtime within ~3× the cron's cadence. ok if all healthy+fresh;
 // degraded (naming the laggards) otherwise. A cron with NO output dir yet is
 // "no data" — treated as ok-unknown, NOT down (a freshly-rebuilt box hasn't ticked).
@@ -338,12 +344,41 @@ const AUTOMATION_CRONS: { cadenceMs: number; name: string }[] = [
 type CronVerdict = "fresh-ok" | "lagging" | "failed" | "no-data";
 
 /**
- * Map each cron-output dir to the cron that OWNS it — longest cron name first, and a
- * dir is claimed only ONCE. This is the fix for the "note" ⊂ "context-note" overlap:
- * a bare `note` cron must not grab the `context-note` dir (or vice versa). The runner
- * names dirs by job id, but the operator-given `--name fluncle-<cron>` is part of it,
- * so we match on the cron's bare name as a substring and let the most-specific
- * (longest) name claim each dir exclusively.
+ * The cron NAME a given output dir belongs to (from the newest run-file's
+ * `# Cron Job: <name>` header, e.g. `fluncle-enrich`), plus that file's mtime. The
+ * runner names dirs by job id, so the header is the only link to the cron; the mtime
+ * lets a recreated cron's CURRENT dir outrank a stale leftover with the same name.
+ * jobName is "" if the dir has no readable run file.
+ */
+function dirInfo(dir: string): { jobName: string; mtimeMs: number } {
+  try {
+    const newest = readdirSync(dir)
+      .filter((entry) => entry.endsWith(".md"))
+      .map((entry) => join(dir, entry))
+      .map((path) => ({ mtimeMs: statSync(path).mtimeMs, path }))
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
+
+    if (!newest) {
+      return { jobName: "", mtimeMs: 0 };
+    }
+
+    const match = readFileSync(newest.path, "utf8")
+      .slice(0, 600)
+      .match(/^#\s*Cron Job:\s*(.+)$/m);
+
+    return { jobName: (match?.[1]?.trim() ?? "").toLowerCase(), mtimeMs: newest.mtimeMs };
+  } catch {
+    return { jobName: "", mtimeMs: 0 };
+  }
+}
+
+/**
+ * Map each cron to the output dir it OWNS. Dirs are named by job id, so resolve each
+ * dir to its recorded cron name (the run-file header), FRESHEST dir first (so a
+ * recreated cron's current dir wins over a stale leftover), then claim longest-name
+ * first so the most-specific cron wins each dir exclusively. This is the fix for the
+ * "note" ⊂ "context-note" overlap: the `fluncle-context-note` header contains both
+ * substrings, so `context-note` claims its dir before a bare `note` can.
  */
 function claimCronDirs(crons: { cadenceMs: number; name: string }[]): Map<string, string> {
   const claimed = new Map<string, string>(); // cron name -> dir path
@@ -352,10 +387,10 @@ function claimCronDirs(crons: { cadenceMs: number; name: string }[]): Map<string
     return claimed;
   }
 
-  let dirs: string[];
+  let resolved: { dir: string; jobName: string; mtimeMs: number }[];
 
   try {
-    dirs = readdirSync(CRON_OUTPUT_DIR)
+    resolved = readdirSync(CRON_OUTPUT_DIR)
       .map((entry) => join(CRON_OUTPUT_DIR, entry))
       .filter((path) => {
         try {
@@ -363,7 +398,10 @@ function claimCronDirs(crons: { cadenceMs: number; name: string }[]): Map<string
         } catch {
           return false;
         }
-      });
+      })
+      .map((dir) => ({ dir, ...dirInfo(dir) }))
+      .filter((entry) => entry.jobName !== "")
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
   } catch {
     return claimed;
   }
@@ -372,13 +410,13 @@ function claimCronDirs(crons: { cadenceMs: number; name: string }[]): Map<string
   const byLongest = [...crons].sort((a, b) => b.name.length - a.name.length);
 
   for (const cron of byLongest) {
-    const dir = dirs.find(
-      (path) => !used.has(path) && path.toLowerCase().includes(cron.name.toLowerCase()),
+    const hit = resolved.find(
+      (entry) => !used.has(entry.dir) && entry.jobName.includes(cron.name.toLowerCase()),
     );
 
-    if (dir) {
-      claimed.set(cron.name, dir);
-      used.add(dir);
+    if (hit) {
+      claimed.set(cron.name, hit.dir);
+      used.add(hit.dir);
     }
   }
 
