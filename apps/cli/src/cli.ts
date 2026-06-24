@@ -559,6 +559,17 @@ function addAdminCommands(program: Command): void {
     });
 
   adminTrack
+    .command("purge-video")
+    .description("Purge a finding's stale Cloudflare video renditions from the edge (operator)")
+    .argument("[idOrLogId]")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (idOrLogId: string | undefined, options: JsonOptions) => {
+      const { trackPurgeVideoCommand } = await import("./commands/track");
+      await runTrackPurgeVideo(idOrLogId, options, trackPurgeVideoCommand);
+    });
+
+  adminTrack
     .command("draft")
     .description("Push the video to a platform as a draft")
     .argument("[idOrLogId]")
@@ -1669,6 +1680,29 @@ async function runTrackRequeueVideo(
     result.alreadyClear
       ? `${result.logId} already had no video — nothing to clear.`
       : `Cleared the video for ${result.logId}. It's back on the render queue (and off radio until re-rendered).`,
+  );
+}
+
+async function runTrackPurgeVideo(
+  idOrLogId: string | undefined,
+  options: JsonOptions,
+  trackPurgeVideoCommand: typeof import("./commands/track").trackPurgeVideoCommand,
+): Promise<void> {
+  if (!idOrLogId) {
+    throw new Error("Missing id. Usage: fluncle admin tracks purge-video <track_id|log_id>");
+  }
+
+  const result = await trackPurgeVideoCommand(idOrLogId);
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  console.log(
+    result.noVideo
+      ? `${result.logId} has no video — nothing to purge.`
+      : `Purging the stale renditions for ${result.logId} from the edge. The next play picks up the fresh render.`,
   );
 }
 

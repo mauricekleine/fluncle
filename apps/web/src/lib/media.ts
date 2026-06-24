@@ -375,3 +375,92 @@ const AUDIO_STRIPPED_WIDTH = 1080;
 export function videoAudioStripped(source: string): string {
   return `${MEDIA_TRANSFORM_BASE}/mode=video,audio=false,width=${AUDIO_STRIPPED_WIDTH}/${versionedSource(source)}`;
 }
+
+// ── Cache-purge URL set (the re-render purge) ────────────────────────────────
+//
+// Re-shipping `footage.mp4` to the SAME R2 key (a re-render via the video ship
+// finalize step) leaves every Media-Transformation rendition above cached at the
+// edge — each keyed on its own transform URL — still pointing at the OLD master's
+// bytes until its TTL expires, so the player keeps serving the stale clip. The
+// `?v=N` TRANSFORM_VERSION token only re-keys the WHOLE catalogue in a deploy; a
+// single re-rendered finding needs a per-URL purge of exactly its renditions.
+//
+// `videoPurgeUrls` is the inverse of the builders above: given a finding's logId
+// (and whether it carries the two-master square layout), it returns the full,
+// FINITE set of public URLs the surfaces actually generate for that finding — the
+// masters plus every deterministic rendition. The Cloudflare purge-by-URL API
+// (`{ files: [...] }`) only evicts the exact URLs listed, so this set must mirror
+// the builders precisely: a width the surfaces never request is wasted purge
+// budget; a width they do request that's missing here stays stale.
+//
+// What is deliberately NOT enumerable, and why it's safe to omit:
+//   - radio time-offset CLIPS (`videoClipCrop`, `time=…s,duration=…s`): a joiner
+//     mints a fresh cache key per snapped offset, so the keyspace is unbounded —
+//     not purgeable by exhaustive URL listing. They're short by construction (one
+//     clip covers the rest of a segment, then the page swaps to the warm looping
+//     `videoCrop`), so they self-heal within a segment. A bulk re-render that must
+//     evict them too bumps `TRANSFORM_VERSION` (a whole-catalogue re-key).
+//   - the offset poster frames (`videoCropPoster` with `atSeconds > 0`): same
+//     unbounded-offset reasoning; the opening-frame poster (atSeconds=0) IS listed.
+
+// The resolution ladder the responsive surfaces snap to (mirror of
+// use-responsive-width.ts `RENDITION_LADDER`). Every rung is a separately-cached
+// rendition, so the purge set walks the same rungs the surfaces request.
+const PURGE_RENDITION_WIDTHS: readonly RenditionWidth[] = [360, 480, 720, 1080];
+
+/**
+ * The full set of public URLs to purge from Cloudflare's edge when a finding's
+ * `footage.mp4` is re-shipped to the same R2 key. Exhaustive but precise — only
+ * URLs the playback/social/poster surfaces actually generate (see the builders
+ * above for each surface's exact request).
+ *
+ * `squared` selects which family of renditions a finding emits: a two-master
+ * (square) finding is centre-CROPPED per orientation (`videoCrop`/`videoCropPoster`,
+ * /log + radio), while a legacy finding plays a width-ladder rendition off the
+ * portrait master (`videoRendition`/`videoPoster`, /log + Stories). Both families'
+ * masters and the audio-stripped social cut are always included.
+ */
+export function videoPurgeUrls(logId: string, { squared }: { squared: boolean }): string[] {
+  const media = trackMedia(logId);
+  const urls = new Set<string>();
+
+  // The R2 masters themselves (bare object URLs — the transform sources, and the
+  // <video> fallback on a transform error). `?v` is NOT appended to the bare
+  // master URL anywhere (only transform SOURCES carry it), so purge it un-versioned.
+  urls.add(media.videoUrl); // footage.mp4 (square or legacy portrait master)
+  urls.add(media.socialVideoUrl); // footage.social.mp4 (portrait social cut)
+
+  // The audio-stripped social cut (TikTok push) — `videoAudioStripped` off the
+  // social master. Built from a full URL, so pass the social master.
+  urls.add(videoAudioStripped(media.socialVideoUrl));
+
+  if (squared) {
+    // Two-master crops: every orientation × every ladder width (Stories sizes the
+    // crop to the measured pane; /log + radio use the native width). Plus the
+    // silent (audio=false) crop radio loops, and the opening-frame crop poster.
+    for (const orientation of ["landscape", "portrait"] as const) {
+      for (const width of PURGE_RENDITION_WIDTHS) {
+        urls.add(videoCrop(logId, orientation, width));
+        urls.add(videoCrop(logId, orientation, width, true)); // radio silent loop
+        urls.add(videoCropPoster(logId, orientation, width)); // opening-frame poster
+      }
+
+      // The native-width crops (no explicit width → the orientation's native): the
+      // fixed-resolution /log + radio-head requests, distinct cache keys from the
+      // ladder rungs above.
+      urls.add(videoCrop(logId, orientation));
+      urls.add(videoCrop(logId, orientation, undefined, true));
+      urls.add(videoCropPoster(logId, orientation));
+    }
+  } else {
+    // Legacy portrait renditions: the width-ladder video off footage.mp4, plus the
+    // opening-frame poster (mode=frame).
+    for (const width of PURGE_RENDITION_WIDTHS) {
+      urls.add(videoRendition(logId, { width }));
+    }
+
+    urls.add(videoPoster(logId));
+  }
+
+  return [...urls];
+}

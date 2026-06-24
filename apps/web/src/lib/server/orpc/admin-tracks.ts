@@ -47,6 +47,7 @@ import {
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { VIDEOS_BUCKET, presignUploads } from "../r2-presign";
 import { type TrackUpdate, updateTrack } from "../track-update";
+import { purgeVideoCache } from "../video-cache";
 import {
   type EnrichmentStatusFilter,
   ENRICHMENT_STATUS_FILTERS,
@@ -827,6 +828,15 @@ export function adminTracksHandlers(os: Implementer) {
         // archive surfaces start MT-cropping this finding (docs/video-variants.md).
         const squared = body.squared === true;
 
+        // A RE-RENDER: this finding already had a `video_url` (the prior render),
+        // and finalize re-ships `footage.mp4` to the SAME R2 key. The bare master
+        // URL is byte-identical (the queue gates on presence, not content), so the
+        // DB write below is a no-op for `video_url` — but the edge keeps serving the
+        // OLD master's cached Media-Transformation renditions. Purge them so the
+        // player picks up the fresh render. Best-effort, fired off the request
+        // lifecycle (waitUntil) BELOW after the DB write commits.
+        const isReRender = Boolean(track.videoUrl);
+
         await updateTrack(track.trackId, {
           videoModel,
           videoModelReasoning,
@@ -835,6 +845,14 @@ export function adminTracksHandlers(os: Implementer) {
           ...(videoVehicle ? { videoVehicle } : {}),
           ...(videoGrain ? { videoGrain } : {}),
         });
+
+        // Drop the stale renditions on a re-render. `squared` reflects the layout
+        // the finding now carries (a freshly-stamped two-master finding, or a
+        // finding already squared whose re-ship omitted the flag — keep it cropped):
+        // the purge set must match what the surfaces will request post-finalize.
+        if (isReRender) {
+          purgeVideoCache(track.logId, squared || Boolean(track.videoSquaredAt));
+        }
 
         return { logId: track.logId, ok: true as const, trackId: track.trackId, videoUrl };
       } catch (error) {
@@ -855,10 +873,10 @@ export function adminTracksHandlers(os: Implementer) {
   // videoModel/videoModelReasoning) are LEFT INTACT on purpose — they describe the
   // prior render and the next video agent reads them to diversify away from it.
   //
-  // CACHE CAVEAT (known follow-up, not built here): re-shipping footage.mp4 to the
-  // same R2 key leaves Cloudflare Media-Transformation renditions cached separately
-  // (the player streams MT crops, not the master), so a re-render may need a purge of
-  // the transform URLs (docs/video-variants.md, the r2-purge precedent).
+  // CACHE NOTE: re-shipping footage.mp4 to the same R2 key leaves Cloudflare
+  // Media-Transformation renditions cached separately (the player streams MT crops,
+  // not the master). finalize_track_video now purges them automatically on a
+  // re-render; purge_video (below) is the manual operator twin.
   const requeueVideoHandler = os.requeue_video
     .use(adminAuth)
     .use(operatorGuard)
@@ -910,6 +928,60 @@ export function adminTracksHandlers(os: Implementer) {
       }
     });
 
+  // POST /admin/tracks/{trackId}/video/purge — operator tier (live
+  // `requireOperator`). The manual twin of the automatic re-render purge in
+  // finalize: evict this finding's stale Cloudflare Media-Transformation renditions
+  // from the edge (the player streams MT crops, not the master, so a same-key
+  // re-upload leaves the renditions stale). Operator-only — it acts on a LIVE video.
+  const purgeVideoHandler = os.purge_video
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const idOrLogId = input.trackId;
+        const track = await getTrackByIdOrLogId(idOrLogId);
+
+        if (!track) {
+          throw new ORPCError("NOT_FOUND", {
+            data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
+            message: `No track with id ${idOrLogId}`,
+            status: 404,
+          });
+        }
+
+        if (!track.logId) {
+          throw new ORPCError("BAD_REQUEST", {
+            data: {
+              apiCode: "no_log_id",
+              apiMessage:
+                "Track has no Log ID; every video needs a coordinate. Backfill the ISRC/Log ID first.",
+            },
+            message: "Track has no Log ID; every video needs a coordinate.",
+            status: 400,
+          });
+        }
+
+        // No video → nothing cached to purge. Report the no-op rather than firing a
+        // pointless purge of URLs that resolve to a missing master.
+        if (!track.videoUrl) {
+          return {
+            logId: track.logId,
+            noVideo: true as const,
+            ok: true as const,
+            trackId: track.trackId,
+          };
+        }
+
+        // Fire-and-forget (waitUntil inside). `squared` mirrors the finding's layout
+        // so the purge set matches the rendition family the surfaces actually serve.
+        purgeVideoCache(track.logId, Boolean(track.videoSquaredAt));
+
+        return { logId: track.logId, ok: true as const, trackId: track.trackId };
+      } catch (error) {
+        throw toFault(error);
+      }
+    });
+
   return {
     context_track: contextTrackHandler,
     finalize_track_video: finalizeVideoHandler,
@@ -918,6 +990,7 @@ export function adminTracksHandlers(os: Implementer) {
     observe_track: observeTrackHandler,
     presign_track_video_uploads: presignVideoUploadsHandler,
     publish_track: publishTrackHandler,
+    purge_video: purgeVideoHandler,
     requeue_video: requeueVideoHandler,
     update_track: updateTrackHandler,
   };

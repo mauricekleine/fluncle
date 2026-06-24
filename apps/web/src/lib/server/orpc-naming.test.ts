@@ -55,6 +55,11 @@ const APPROVED_VERBS = new Set<string>([
   // `observe`/`context`, same verb-as-action shape ("note this finding").
   "note",
   "observe",
+  // `purge` (evict a finding's stale Cloudflare video renditions from the edge) —
+  // ratified into the action set with the `purge_video` re-render cache command
+  // (docs/naming-conventions.md §6). The sibling of `requeue` on the video lifecycle:
+  // `requeue_video` clears the render gates, `purge_video` clears the edge cache.
+  "purge",
   "render",
   // `requeue` (put a finding's video back on the render queue) — ratified into the
   // action set with the `requeue_video` re-render command (docs/naming-conventions.md §6, #148).

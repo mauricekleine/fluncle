@@ -100,6 +100,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/tracks/{trackId}/observe": "observe_track",
   "POST /admin/tracks/{trackId}/social/{platform}/draft": "draft_track_social",
   "POST /admin/tracks/{trackId}/video/finalize": "finalize_track_video",
+  // purge_video — contract-only oRPC (no TanStack route file; oRPC owns the path
+  // directly, like requeue_video). Operator tier: it acts on a LIVE published video
+  // (purges its edge renditions), so the agent token 403s.
+  "POST /admin/tracks/{trackId}/video/purge": "purge_video",
   // requeue_video — contract-only oRPC (no TanStack route file; oRPC owns the path
   // directly, like context_track/note_track). Operator tier: it clears a LIVE
   // published video (video_url + video_squared_at), so the agent token 403s.

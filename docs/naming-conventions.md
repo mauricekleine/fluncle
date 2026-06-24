@@ -131,7 +131,7 @@ The same publish action is `Push draft to inbox` (board) / `admin track draft` (
 
 All three share the same spine: **one canonical operation name per operation**, written `verb_noun` in a registry, from which each surface's name is _derived by a fixed rule_. They differ in how aggressively they restructure the CLI and how they handle the machine-noun/voice-noun split.
 
-The canonical verb set is small and closed: `list`, `get`, `search`, `submit`, `subscribe`, `create`, `update`, `delete`, `publish`, plus a named-action set for non-CRUD operations (`enrich`, `observe`, `render`, `draft`, `distribute`, `backfill`, `authorize`, `requeue`). The canonical noun is the **machine noun** (`track`, `mixtape`, `submission`, `newsletter`, `preview`, …), singular.
+The canonical verb set is small and closed: `list`, `get`, `search`, `submit`, `subscribe`, `create`, `update`, `delete`, `publish`, plus a named-action set for non-CRUD operations (`enrich`, `observe`, `render`, `draft`, `distribute`, `backfill`, `authorize`, `requeue`, `purge`). The canonical noun is the **machine noun** (`track`, `mixtape`, `submission`, `newsletter`, `preview`, …), singular.
 
 ### Convention A — "REST everywhere" (noun → verb, plural resources)
 
@@ -218,7 +218,7 @@ So the convention's job at the boundary is narrow: make every _machine_ name der
 
 When you add a public operation — a CLI command, an API route, an MCP tool, an SSH deep link, or an admin action — name it once, then derive:
 
-1. **Pick the canonical op:** `verb_noun`, where `verb` is in the closed set (`list`, `get`, `search`, `submit`, `subscribe`, `create`, `update`, `delete`, `publish`, or a named non-CRUD action like `enrich`/`observe`/`draft`/`distribute`/`finalize`/`requeue`) and `noun` is the singular machine noun (`track`, `mixtape`, `submission`, `newsletter`, `preview`). Add it to the registry.
+1. **Pick the canonical op:** `verb_noun`, where `verb` is in the closed set (`list`, `get`, `search`, `submit`, `subscribe`, `create`, `update`, `delete`, `publish`, or a named non-CRUD action like `enrich`/`observe`/`draft`/`distribute`/`finalize`/`requeue`/`purge`) and `noun` is the singular machine noun (`track`, `mixtape`, `submission`, `newsletter`, `preview`). Add it to the registry.
 2. **Derive the names, don't invent them:**
    - MCP/WebMCP tool = the op verbatim, `snake_case` (`enrich_track`). Mirror server `mcp.ts` and browser `webmcp.ts` together.
    - OpenAPI `operationId` = the op, `camelCase` (`enrichTrack`).

@@ -189,6 +189,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   publish_mixtape: "operator",
   publish_mixtape_youtube: "operator",
   publish_track: "operator",
+  // Purges a LIVE published video's stale edge renditions (the re-render cache twin
+  // of requeue_video) — operator-only (adminAuth + operatorGuard); the box agent
+  // never acts on live videos, so an agent token 403s.
+  purge_video: "operator",
   reject_submission: "operator",
   // Clears a LIVE published video (video_url + video_squared_at) to re-queue a
   // re-render — operator-only (adminAuth + operatorGuard); the box agent never

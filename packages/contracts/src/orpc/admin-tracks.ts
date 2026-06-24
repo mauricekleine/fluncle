@@ -341,10 +341,11 @@ export const finalizeTrackVideo = oc
  * already-clear finding is a clean no-op (NULL→NULL). Codes: `not_found`/404,
  * `no_log_id`/400. The body is empty (the trackId path param is the whole input).
  *
- * CACHE CAVEAT (known follow-up, NOT built here): re-shipping `footage.mp4` to the
- * SAME R2 key leaves Cloudflare Media-Transformation renditions cached separately
- * (the web player streams MT crops, not the master), so a re-render may need a cache
- * purge of the transform URLs. See docs/video-variants.md + the r2-purge note.
+ * CACHE NOTE: re-shipping `footage.mp4` to the SAME R2 key leaves Cloudflare
+ * Media-Transformation renditions cached separately (the web player streams MT
+ * crops, not the master). The video ship's finalize step now purges them
+ * automatically on a re-render; `purge_video` is the manual operator twin. See
+ * docs/video-variants.md + the r2-purge note.
  */
 export const requeueVideo = oc
   .route({
@@ -361,6 +362,46 @@ export const requeueVideo = oc
       // (idempotent re-requeue); absent when a live video was actually cleared.
       alreadyClear: z.boolean().optional(),
       logId: z.string(),
+      ok: z.literal(true),
+      trackId: z.string(),
+    }),
+  );
+
+/**
+ * `purge_video` → `POST /admin/tracks/{trackId}/video/purge` (operationId
+ * `purgeVideo`).
+ *
+ * Purge a finding's Cloudflare Media-Transformation renditions from the edge — the
+ * operator-tier manual twin of the automatic purge the video ship's finalize step
+ * fires on a re-render. The player streams resized/cropped renditions DERIVED from
+ * the master `footage.mp4` (each edge-cached under its own transform URL), so when
+ * `footage.mp4` is re-shipped to the SAME R2 key, those renditions keep serving the
+ * OLD clip until their TTL expires. This evicts that finding's exact rendition URLs
+ * (the masters + every width/crop/poster/audio variant the surfaces request) so the
+ * next request transcodes the fresh master. Run it after a manual R2 re-upload, or
+ * to force-evict a finding whose automatic purge was skipped (no token at the time).
+ *
+ * OPERATOR tier (live `requireOperator`): it acts on a LIVE published video, so it
+ * is NOT agent-tier. Best-effort: the actual purge fires on `waitUntil`, so the op
+ * returns immediately whether or not the zone token is provisioned (it logs + no-ops
+ * when unset). Codes: `not_found`/404, `no_log_id`/400. The body is empty (the
+ * trackId path param is the whole input). `noVideo` reports the no-op case where the
+ * finding has no video to purge.
+ */
+export const purgeVideo = oc
+  .route({
+    method: "POST",
+    operationId: "purgeVideo",
+    path: "/admin/tracks/{trackId}/video/purge",
+    summary: "Purge a finding's stale Cloudflare video renditions from the edge",
+    tags: ["Admin"],
+  })
+  .input(z.object({ trackId: z.string() }))
+  .output(
+    z.object({
+      logId: z.string(),
+      // `true` when the finding has no video — nothing to purge, a clean no-op.
+      noVideo: z.boolean().optional(),
       ok: z.literal(true),
       trackId: z.string(),
     }),
@@ -487,6 +528,7 @@ export const adminTracksContract = {
   observe_track: observeTrack,
   presign_track_video_uploads: presignTrackVideoUploads,
   publish_track: publishTrack,
+  purge_video: purgeVideo,
   requeue_video: requeueVideo,
   update_track: updateTrack,
 };
