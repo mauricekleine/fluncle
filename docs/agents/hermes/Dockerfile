@@ -24,9 +24,11 @@ FROM nousresearch/hermes-agent:v2026.6.19
 # ffmpeg comes from apt; unzip is also required because bun's installer (below)
 # unpacks the binary from a zip; openssh-client because the box.ascii CLI's
 # `box ssh`/`box scp` — the `fluncle-render` conductor's transport to the render
-# box — shells out to system ssh/scp. One layer, lists cleaned, no recommends.
+# box — shells out to system ssh/scp; dnsutils (`dig`) because the
+# `fluncle-healthcheck` cron's dns probe shells out to `dig` to query the
+# `dig.fluncle.com` nameserver. One layer, lists cleaned, no recommends.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg unzip openssh-client \
+  && apt-get install -y --no-install-recommends ffmpeg unzip openssh-client dnsutils \
   && rm -rf /var/lib/apt/lists/*
 
 # Bun — pinned to the repo's toolchain (packageManager bun@1.3.14) so the box runs
