@@ -45,10 +45,7 @@ The script is a live Fluncle voice surface, **heard** in a synthetic voice — a
 
 The observation carries **word-level caption timings** so the spoken read can be subtitled in sync — the current word lights as it's heard. They live on the `observation_alignment_json` column (a JSON `{ source, words: [{ text, startMs, endMs }] }`) and ride the public `TrackListItem` as `observationAlignment`, surfaced today on the **radio player** (each word lit off the same shared schedule clock the audio resyncs to, so the captions stay aligned through resyncs and while muted; the `/log` caption render is a follow-up).
 
-Two paths populate it, both Worker-side and free of any second voice spend on the backfill:
-
-- **Fresh renders** capture alignment at generation time: the observe render calls ElevenLabs `/v1/text-to-speech/{voice}/with-timestamps` (one call → mp3 + character alignment), and the Worker groups the characters into words. A missing/malformed alignment is stored as absent — captions degrade to none, never a failed render.
-- **Backfill** (observations rendered before the switch): `fluncle admin backfills alignment` (→ `POST /admin/backfill/alignment`, `backfill_alignment`, agent tier) force-aligns each eligible finding's EXISTING mp3 to its stored script via `/v1/forced-alignment` — no re-render. Idempotent like `context_track` (the column's presence is the resume marker); a no-words result stores a sentinel `{ words: [] }` so it isn't re-burned. Bounded + cursor-paged; loop with `--limit`/the returned cursor.
+**Fresh renders** capture alignment at generation time, Worker-side: the observe render calls ElevenLabs `/v1/text-to-speech/{voice}/with-timestamps` (one call → mp3 + character alignment), and the Worker groups the characters into words. A missing/malformed alignment is stored as absent — captions degrade to none, never a failed render. (A retired one-off forced-alignment backfill seeded timings for observations rendered before this switch; those rows carry `source: "forced-alignment"` and the caption render reads them the same way.)
 
 Writing alignment does **not** bump `updated_at` (it describes an existing artifact, so it moves no public lastmod).
 
