@@ -54,6 +54,19 @@ export const STALL_EVENT_GRACE_MS = 3_000;
 export const STALL_TICK_MS = 1_000;
 
 /**
+ * The most recoveries the watchdog will fire across a single effect instance
+ * (one source / `expectsPlayback` lifetime). The latch re-arms after each
+ * recovery (see `recoveryLatchDecision`), so without a cap a genuinely dead
+ * source — where every recovery is a no-op that swaps no `src` and never reaches
+ * `HAVE_CURRENT_DATA` — would re-wedge, re-arm, and recover on a tight loop,
+ * hammering `load()`/`resolveSlot()` forever. This caps the bounded retry: after
+ * this many attempts the watchdog stands down for the rest of the episode. Low
+ * enough to never thrash a dead edge; high enough to cover a couple of cold
+ * misses on the same finding (the field repro is two wedges on one slot).
+ */
+export const MAX_RECOVERY_ATTEMPTS = 3;
+
+/**
  * A read-only snapshot of a media element's load health at one instant. Mirrors
  * the `HTMLMediaElement` fields the verdict needs, so the decision is testable
  * without a DOM.
@@ -108,15 +121,79 @@ export function mediaStallVerdict(snapshot: MediaStallSnapshot): boolean {
 }
 
 /**
+ * A read-only snapshot of the recovery latch at one tick: whether a recovery has
+ * already fired and is still standing, how long ago it fired, whether the element
+ * has since reached a playable frame, and how many recoveries have fired so far.
+ * Mirrors only what the latch decision needs, so it is testable without a DOM.
+ */
+export type RecoveryLatchSnapshot = {
+  /** A recovery has fired and the latch has not yet re-armed. */
+  recovered: boolean;
+  /** Ms since the last recovery fired (meaningful only while `recovered`). */
+  msSinceRecovery: number;
+  /** The element holds at least the current frame now (`readyState >= HAVE_CURRENT_DATA`). */
+  isPlayable: boolean;
+  /** How many recoveries have fired across this episode so far. */
+  attempts: number;
+};
+
+/** What the watchdog tick should do with the recovery latch this cycle. */
+export type RecoveryLatchAction =
+  /** Latch is dead this tick — skip the wedge check entirely. */
+  | "hold"
+  /** Latch should re-arm (no-op recovery left `src` unchanged, or the element
+   *  recovered) — clear it and let the wedge check run again. */
+  | "rearm"
+  /** Latch is open — run the wedge check normally. */
+  | "open";
+
+/**
+ * Decide what a watchdog tick should do with the one-recovery-per-episode latch.
+ *
+ * The latch exists so each stuck load gets exactly one recovery, never a tight
+ * retry loop. The original latch re-armed ONLY when a fresh `loadstart`/`emptied`
+ * fired — i.e. only when the caller's recovery swapped `src`. Radio's second-wedge
+ * recovery (`resolveSlot()`) commonly resolves to the SAME `videoUrl`, swaps no
+ * `src`, fires no `loadstart`, and so the latch stayed dead forever, leaving a
+ * later stall on that clip with no recovery path.
+ *
+ * This re-arms the latch defensively without depending on a fresh load event:
+ * once a recovery has fired, the next tick may re-arm it if EITHER the element
+ * actually made it to a playable frame since (a real recovery — let a future
+ * distinct wedge recover too) OR a bounded re-arm window has elapsed (a no-op
+ * recovery that swapped no `src` is not permanently latched). The whole thing is
+ * capped at `MAX_RECOVERY_ATTEMPTS` so a genuinely dead source cannot tight-loop.
+ */
+export function recoveryLatchDecision(snapshot: RecoveryLatchSnapshot): RecoveryLatchAction {
+  // The bounded retry is exhausted: a dead source stands down for good. Checked
+  // first so a hard-dead clip can never re-arm past the cap.
+  if (snapshot.attempts >= MAX_RECOVERY_ATTEMPTS) {
+    return "hold";
+  }
+
+  if (!snapshot.recovered) {
+    return "open";
+  }
+
+  if (snapshot.isPlayable || snapshot.msSinceRecovery >= STALL_TIMEOUT_MS) {
+    return "rearm";
+  }
+
+  return "hold";
+}
+
+/**
  * Attach the stall/error watchdog to a `<video>` ref and fire `onStall` ONCE per
  * wedge episode.
  *
  * It tracks the current source's load-start, last-`readyState`-progress, and
  * last-`stalled`/`waiting` timestamps, polls `mediaStallVerdict` on a cheap tick,
  * and calls `onStall` the first time the load is judged wedged. The episode latch
- * re-arms whenever the element resets to a fresh load (`loadstart` / `emptied`) —
- * i.e. when the caller swaps `src` to recover — so each distinct stuck load gets
- * exactly one recovery call, never a tight retry loop on the same wedged source.
+ * re-arms when the element resets to a fresh load (`loadstart` / `emptied`), when
+ * it reaches a playable frame, OR after a bounded window — so a recovery that
+ * swaps no `src` (radio's `resolveSlot()` resolving to the same slot) is not
+ * permanently latched (see `recoveryLatchDecision`). A `MAX_RECOVERY_ATTEMPTS` cap
+ * keeps a genuinely dead source from tight-looping recoveries.
  *
  * `expectsPlayback` gates the whole watchdog: when the element is intentionally
  * idle (off-screen, reduced-motion hold, paused) there's no load to be stuck, so
@@ -151,8 +228,14 @@ export function useVideoStallRecovery({
     let lastProgressAt = loadStartAt;
     let lastReadyState = video.readyState;
     let stallEventAt: number | undefined;
-    // Latch: one recovery per wedge episode. Cleared when a fresh load begins.
+    // Latch: one recovery per wedge episode. Re-armed by a fresh load, by the
+    // element reaching a playable frame, or after a bounded window (so a no-op
+    // recovery that swapped no `src` isn't permanently latched), capped at
+    // MAX_RECOVERY_ATTEMPTS so a dead source can't tight-loop. See
+    // `recoveryLatchDecision`.
     let recovered = false;
+    let recoveredAt = 0;
+    let attempts = 0;
 
     const markProgress = () => {
       lastProgressAt = now();
@@ -166,7 +249,11 @@ export function useVideoStallRecovery({
       lastProgressAt = loadStartAt;
       lastReadyState = video.readyState;
       stallEventAt = undefined;
+      // A genuinely fresh load is a new episode: clear the latch AND the bounded
+      // attempt budget so the new source gets its own full retry allowance.
       recovered = false;
+      recoveredAt = 0;
+      attempts = 0;
     };
 
     // readyState climbing = real load progress; clears any outstanding stall.
@@ -203,14 +290,26 @@ export function useVideoStallRecovery({
     video.addEventListener("waiting", onStalledOrWaiting);
 
     const id = window.setInterval(() => {
-      if (recovered) {
-        return;
-      }
-
-      // Reflect any readyState the browser reached without a discrete event.
+      // Reflect any readyState the browser reached without a discrete event,
+      // BEFORE the latch decision so a since-recovered element is seen playable.
       onReadyProgress();
 
       const t = now();
+      const latch = recoveryLatchDecision({
+        attempts,
+        isPlayable: isVideoPlayable(video),
+        msSinceRecovery: recovered ? t - recoveredAt : 0,
+        recovered,
+      });
+
+      if (latch === "hold") {
+        return;
+      }
+
+      if (latch === "rearm") {
+        recovered = false;
+      }
+
       const wedged = mediaStallVerdict({
         expectsPlayback: true,
         msSinceLastProgress: t - lastProgressAt,
@@ -221,6 +320,8 @@ export function useVideoStallRecovery({
 
       if (wedged) {
         recovered = true;
+        recoveredAt = t;
+        attempts += 1;
         onStallRef.current();
       }
     }, STALL_TICK_MS);
