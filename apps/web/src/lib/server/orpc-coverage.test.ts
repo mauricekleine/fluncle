@@ -93,6 +93,12 @@ const CARVE_OUT_ROUTES = new Set([
   // The generated-spec + tooling surfaces are documents, not API operations.
   "openapi[.]json",
   "postman[.]json",
+  // The machine-readable status read — the JSON sibling of the /status HTML
+  // dashboard (../../routes/api/status.ts). A public resource read like /api/health,
+  // deliberately NOT an oRPC operation: it just echoes the already-public
+  // `service_status` snapshot for a poller (the rave-01 watchdog reads its
+  // `secondsSinceFreshestReport`), so it carries no contract and stays carved out.
+  "status",
 ]);
 
 // The public routes still awaiting conversion. Phase 1 left everything but

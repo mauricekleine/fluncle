@@ -1,0 +1,50 @@
+[Unit]
+Description=fluncle-rave-watchdog — rave-01 dead-man's-switch beacon + rave-01→rave-02 cross-ping
+Documentation=https://github.com/fluncle (apps/ssh/watchdog/README.md)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Drop the script at /opt/fluncle-rave-watchdog/fluncle-rave-watchdog.sh (see README).
+ExecStart=/opt/fluncle-rave-watchdog/fluncle-rave-watchdog.sh
+
+# All inputs (the two beacon URLs, the /api/status URL, the staleness threshold, the
+# Discord webhook) come from an operator-placed file kept OUT of the repo — values
+# live in the ops runbook note in 1Password. Create it 0600, owned root (the unit
+# reads it as root before dropping to the DynamicUser). See the README.
+EnvironmentFile=/etc/fluncle/rave-watchdog.env
+
+# Run as a transient, unprivileged, per-service user; no real account to manage.
+DynamicUser=yes
+# Persistent state dir under /var/lib that survives across runs AND works with
+# DynamicUser (systemd owns it to the dynamic user each run). Exposed as
+# $STATE_DIRECTORY; the script keeps watchdog-state.json (the no-spam flag) there.
+StateDirectory=fluncle-rave-watchdog
+StateDirectoryMode=0700
+
+# Hardening — this oneshot only needs the network, curl, and its state dir.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+UMask=0077

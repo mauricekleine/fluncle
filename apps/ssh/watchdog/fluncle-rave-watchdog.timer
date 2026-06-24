@@ -1,0 +1,16 @@
+[Unit]
+Description=fluncle-rave-watchdog timer — run the rave-01 watchdog every ~10m
+Documentation=https://github.com/fluncle (apps/ssh/watchdog/README.md)
+
+[Timer]
+# First run shortly after boot, then every ~10 minutes. The interval mirrors the
+# rave-02 healthcheck cron's ~10m cadence (the cross-ping reads its freshness).
+OnBootSec=2min
+OnUnitActiveSec=10min
+# A little jitter so a fleet of timers never thunders the status endpoint at once.
+RandomizedDelaySec=30
+# Catch up a missed run if the box was asleep/off at the scheduled tick.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
