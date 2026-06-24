@@ -33,6 +33,11 @@
 #   HEALTHCHECK_SSH_HOST     — the SSH app host (TCP-connect probe).
 #   HEALTHCHECK_SSH_PORT     — the SSH app port.
 #   DISCORD_ALERT_WEBHOOK    — the Discord webhook for transition alerts.
+#   HEALTHCHECK_BEACON_URL   — OPTIONAL. The external dead-man's-switch beacon URL
+#                              (healthchecks.io / BetterUptime / self-hosted). The
+#                              orchestrator curls it at the end of every completed
+#                              tick so an outside service alerts if THIS box (the
+#                              prober) ever goes dark. Unset ⇒ no beacon, skipped.
 #
 # FLUNCLE_API_TOKEN (the agent-scoped token that authorizes the snapshot POST)
 # arrives via the CRON ENV — an unrecognized custom var passes Hermes' provider-cred

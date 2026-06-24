@@ -40,6 +40,7 @@ import { Route as CliLatestDotshRouteImport } from './routes/cli/latest[.]sh'
 import { Route as ApiTracksRouteImport } from './routes/api/tracks'
 import { Route as ApiSubmissionsRouteImport } from './routes/api/submissions'
 import { Route as ApiStoriesRouteImport } from './routes/api/stories'
+import { Route as ApiStatusRouteImport } from './routes/api/status'
 import { Route as ApiSearchRouteImport } from './routes/api/search'
 import { Route as ApiNewsletterRouteImport } from './routes/api/newsletter'
 import { Route as ApiMixtapesRouteImport } from './routes/api/mixtapes'
@@ -51,6 +52,7 @@ import { Route as AdminLoginRouteImport } from './routes/admin/login'
 import { Route as ApiV1TracksRouteImport } from './routes/api/v1/tracks'
 import { Route as ApiV1SubmissionsRouteImport } from './routes/api/v1/submissions'
 import { Route as ApiV1StoriesRouteImport } from './routes/api/v1/stories'
+import { Route as ApiV1StatusRouteImport } from './routes/api/v1/status'
 import { Route as ApiV1SearchRouteImport } from './routes/api/v1/search'
 import { Route as ApiV1PostmanDotjsonRouteImport } from './routes/api/v1/postman[.]json'
 import { Route as ApiV1OpenapiDotjsonRouteImport } from './routes/api/v1/openapi[.]json'
@@ -307,6 +309,11 @@ const ApiStoriesRoute = ApiStoriesRouteImport.update({
   path: '/api/stories',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiStatusRoute = ApiStatusRouteImport.update({
+  id: '/api/status',
+  path: '/api/status',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiSearchRoute = ApiSearchRouteImport.update({
   id: '/api/search',
   path: '/api/search',
@@ -360,6 +367,11 @@ const ApiV1SubmissionsRoute = ApiV1SubmissionsRouteImport.update({
 const ApiV1StoriesRoute = ApiV1StoriesRouteImport.update({
   id: '/api/v1/stories',
   path: '/api/v1/stories',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiV1StatusRoute = ApiV1StatusRouteImport.update({
+  id: '/api/v1/status',
+  path: '/api/v1/status',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiV1SearchRoute = ApiV1SearchRouteImport.update({
@@ -939,6 +951,7 @@ export interface FileRoutesByFullPath {
   '/api/mixtapes': typeof ApiMixtapesRoute
   '/api/newsletter': typeof ApiNewsletterRoute
   '/api/search': typeof ApiSearchRoute
+  '/api/status': typeof ApiStatusRoute
   '/api/stories': typeof ApiStoriesRoute
   '/api/submissions': typeof ApiSubmissionsRoute
   '/api/tracks': typeof ApiTracksRouteWithChildren
@@ -978,6 +991,7 @@ export interface FileRoutesByFullPath {
   '/api/v1/openapi.json': typeof ApiV1OpenapiDotjsonRoute
   '/api/v1/postman.json': typeof ApiV1PostmanDotjsonRoute
   '/api/v1/search': typeof ApiV1SearchRoute
+  '/api/v1/status': typeof ApiV1StatusRoute
   '/api/v1/stories': typeof ApiV1StoriesRoute
   '/api/v1/submissions': typeof ApiV1SubmissionsRoute
   '/api/v1/tracks': typeof ApiV1TracksRouteWithChildren
@@ -1081,6 +1095,7 @@ export interface FileRoutesByTo {
   '/api/mixtapes': typeof ApiMixtapesRoute
   '/api/newsletter': typeof ApiNewsletterRoute
   '/api/search': typeof ApiSearchRoute
+  '/api/status': typeof ApiStatusRoute
   '/api/stories': typeof ApiStoriesRoute
   '/api/submissions': typeof ApiSubmissionsRoute
   '/api/tracks': typeof ApiTracksRouteWithChildren
@@ -1120,6 +1135,7 @@ export interface FileRoutesByTo {
   '/api/v1/openapi.json': typeof ApiV1OpenapiDotjsonRoute
   '/api/v1/postman.json': typeof ApiV1PostmanDotjsonRoute
   '/api/v1/search': typeof ApiV1SearchRoute
+  '/api/v1/status': typeof ApiV1StatusRoute
   '/api/v1/stories': typeof ApiV1StoriesRoute
   '/api/v1/submissions': typeof ApiV1SubmissionsRoute
   '/api/v1/tracks': typeof ApiV1TracksRouteWithChildren
@@ -1226,6 +1242,7 @@ export interface FileRoutesById {
   '/api/mixtapes': typeof ApiMixtapesRoute
   '/api/newsletter': typeof ApiNewsletterRoute
   '/api/search': typeof ApiSearchRoute
+  '/api/status': typeof ApiStatusRoute
   '/api/stories': typeof ApiStoriesRoute
   '/api/submissions': typeof ApiSubmissionsRoute
   '/api/tracks': typeof ApiTracksRouteWithChildren
@@ -1265,6 +1282,7 @@ export interface FileRoutesById {
   '/api/v1/openapi.json': typeof ApiV1OpenapiDotjsonRoute
   '/api/v1/postman.json': typeof ApiV1PostmanDotjsonRoute
   '/api/v1/search': typeof ApiV1SearchRoute
+  '/api/v1/status': typeof ApiV1StatusRoute
   '/api/v1/stories': typeof ApiV1StoriesRoute
   '/api/v1/submissions': typeof ApiV1SubmissionsRoute
   '/api/v1/tracks': typeof ApiV1TracksRouteWithChildren
@@ -1372,6 +1390,7 @@ export interface FileRouteTypes {
     | '/api/mixtapes'
     | '/api/newsletter'
     | '/api/search'
+    | '/api/status'
     | '/api/stories'
     | '/api/submissions'
     | '/api/tracks'
@@ -1411,6 +1430,7 @@ export interface FileRouteTypes {
     | '/api/v1/openapi.json'
     | '/api/v1/postman.json'
     | '/api/v1/search'
+    | '/api/v1/status'
     | '/api/v1/stories'
     | '/api/v1/submissions'
     | '/api/v1/tracks'
@@ -1514,6 +1534,7 @@ export interface FileRouteTypes {
     | '/api/mixtapes'
     | '/api/newsletter'
     | '/api/search'
+    | '/api/status'
     | '/api/stories'
     | '/api/submissions'
     | '/api/tracks'
@@ -1553,6 +1574,7 @@ export interface FileRouteTypes {
     | '/api/v1/openapi.json'
     | '/api/v1/postman.json'
     | '/api/v1/search'
+    | '/api/v1/status'
     | '/api/v1/stories'
     | '/api/v1/submissions'
     | '/api/v1/tracks'
@@ -1658,6 +1680,7 @@ export interface FileRouteTypes {
     | '/api/mixtapes'
     | '/api/newsletter'
     | '/api/search'
+    | '/api/status'
     | '/api/stories'
     | '/api/submissions'
     | '/api/tracks'
@@ -1697,6 +1720,7 @@ export interface FileRouteTypes {
     | '/api/v1/openapi.json'
     | '/api/v1/postman.json'
     | '/api/v1/search'
+    | '/api/v1/status'
     | '/api/v1/stories'
     | '/api/v1/submissions'
     | '/api/v1/tracks'
@@ -1800,6 +1824,7 @@ export interface RootRouteChildren {
   ApiMixtapesRoute: typeof ApiMixtapesRoute
   ApiNewsletterRoute: typeof ApiNewsletterRoute
   ApiSearchRoute: typeof ApiSearchRoute
+  ApiStatusRoute: typeof ApiStatusRoute
   ApiStoriesRoute: typeof ApiStoriesRoute
   ApiSubmissionsRoute: typeof ApiSubmissionsRoute
   ApiTracksRoute: typeof ApiTracksRouteWithChildren
@@ -1826,6 +1851,7 @@ export interface RootRouteChildren {
   ApiV1OpenapiDotjsonRoute: typeof ApiV1OpenapiDotjsonRoute
   ApiV1PostmanDotjsonRoute: typeof ApiV1PostmanDotjsonRoute
   ApiV1SearchRoute: typeof ApiV1SearchRoute
+  ApiV1StatusRoute: typeof ApiV1StatusRoute
   ApiV1StoriesRoute: typeof ApiV1StoriesRoute
   ApiV1SubmissionsRoute: typeof ApiV1SubmissionsRoute
   ApiV1TracksRoute: typeof ApiV1TracksRouteWithChildren
@@ -2086,6 +2112,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiStoriesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/status': {
+      id: '/api/status'
+      path: '/api/status'
+      fullPath: '/api/status'
+      preLoaderRoute: typeof ApiStatusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/search': {
       id: '/api/search'
       path: '/api/search'
@@ -2161,6 +2194,13 @@ declare module '@tanstack/react-router' {
       path: '/api/v1/stories'
       fullPath: '/api/v1/stories'
       preLoaderRoute: typeof ApiV1StoriesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/status': {
+      id: '/api/v1/status'
+      path: '/api/v1/status'
+      fullPath: '/api/v1/status'
+      preLoaderRoute: typeof ApiV1StatusRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/v1/search': {
@@ -3272,6 +3312,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiMixtapesRoute: ApiMixtapesRoute,
   ApiNewsletterRoute: ApiNewsletterRoute,
   ApiSearchRoute: ApiSearchRoute,
+  ApiStatusRoute: ApiStatusRoute,
   ApiStoriesRoute: ApiStoriesRoute,
   ApiSubmissionsRoute: ApiSubmissionsRoute,
   ApiTracksRoute: ApiTracksRouteWithChildren,
@@ -3298,6 +3339,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiV1OpenapiDotjsonRoute: ApiV1OpenapiDotjsonRoute,
   ApiV1PostmanDotjsonRoute: ApiV1PostmanDotjsonRoute,
   ApiV1SearchRoute: ApiV1SearchRoute,
+  ApiV1StatusRoute: ApiV1StatusRoute,
   ApiV1StoriesRoute: ApiV1StoriesRoute,
   ApiV1SubmissionsRoute: ApiV1SubmissionsRoute,
   ApiV1TracksRoute: ApiV1TracksRouteWithChildren,

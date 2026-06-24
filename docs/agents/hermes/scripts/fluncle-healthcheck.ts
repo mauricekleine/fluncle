@@ -54,6 +54,13 @@ const SSH_PORT = Number.parseInt(process.env.HEALTHCHECK_SSH_PORT ?? "", 10);
 const DISCORD_ALERT_WEBHOOK = process.env.DISCORD_ALERT_WEBHOOK ?? "";
 const FLUNCLE_API_TOKEN = process.env.FLUNCLE_API_TOKEN ?? "";
 
+// OPTIONAL external dead-man's-switch beacon. A completed tick means "the prober
+// ran", so we ping this URL at the end of every tick; an external service
+// (healthchecks.io / BetterUptime / a self-hosted instance — provider-agnostic)
+// alerts when the pings STOP, which is the only signal that catches THIS box going
+// dark (a dead prober can't alert about itself). Unset ⇒ skipped silently.
+const BEACON_URL = process.env.HEALTHCHECK_BEACON_URL ?? "";
+
 // Per-probe network timeout. Short on purpose: a hung target degrades to a clean
 // "down" well inside the ~120s runner kill rather than starving the budget.
 const PROBE_TIMEOUT_MS = Number.parseInt(process.env.HEALTHCHECK_TIMEOUT_MS ?? "", 10) || 4000;
@@ -647,6 +654,39 @@ function pingDiscord(content: string): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// BEACON: the external dead-man's-switch ping. A completed tick = "the prober
+// ran", so we curl the operator-set ${BEACON_URL} at the end of every tick. The
+// external service (healthchecks.io / BetterUptime / self-hosted) flips when the
+// pings STOP — the only signal that catches THIS box (the prober) going dark,
+// since a dead prober can't alert about itself. Provider-agnostic (just a URL),
+// OPTIONAL (unset ⇒ skipped), and strictly best-effort: a short --max-time curl
+// that never throws and only logs to stderr on failure. A failed beacon must never
+// affect the tick's exit status (the snapshot + Discord alert have already fired).
+// ---------------------------------------------------------------------------
+
+function pingBeacon(): void {
+  if (!BEACON_URL) {
+    return; // No beacon configured — skip silently (it's optional).
+  }
+
+  try {
+    const { code } = runQuiet(
+      "curl",
+      ["-sS", "-o", "/dev/null", "--max-time", "10", BEACON_URL],
+      12_000,
+    );
+
+    if (code !== 0) {
+      log(`beacon ping exited ${code} (best-effort, ignored)`);
+    }
+  } catch (error) {
+    log(
+      `beacon ping failed (best-effort, ignored): ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
 /** Build the alert text from the transitions; returns null when nothing alert-worthy. */
 function buildAlert(checks: CheckWithTransition[], prev: StateMap): string | null {
   const nowDown: string[] = [];
@@ -776,6 +816,11 @@ async function main(): Promise<void> {
 
   // Persist the snapshot to the page (best-effort).
   const posted = await postSnapshot(at, withTransition);
+
+  // Reaching here means the tick completed — ping the external dead-man's-switch
+  // beacon so an outside service can alert if THIS box (the prober) ever stops
+  // ticking. Best-effort + optional; never affects the run's exit status.
+  pingBeacon();
 
   // One JSON summary line — the cron run output. `ok` reflects the PROBE run, not the
   // services' health (the snapshot carries that); a down service is a normal,
