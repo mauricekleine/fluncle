@@ -23,6 +23,7 @@
 
 import { adminBackfillsContract } from "./admin-backfills";
 import { adminEditionsContract } from "./admin-editions";
+import { adminHealthContract } from "./admin-health";
 import { adminMixtapesContract } from "./admin-mixtapes";
 import { adminSocialContract } from "./admin-social";
 import { adminSubmissionsContract } from "./admin-submissions";
@@ -45,6 +46,7 @@ import { tracksContract } from "./tracks";
 // Re-export the per-op contracts so existing importers (and the typed client)
 // keep their entrypoints.
 export { backfillDiscogs, backfillLastfm } from "./admin-backfills";
+export { recordHealth, ServiceHealthStatusSchema } from "./admin-health";
 export {
   createEdition,
   deleteEdition,
@@ -140,6 +142,7 @@ export {
 export const contract = {
   ...adminBackfillsContract,
   ...adminEditionsContract,
+  ...adminHealthContract,
   ...adminMixtapesContract,
   ...adminSocialContract,
   ...adminSubmissionsContract,

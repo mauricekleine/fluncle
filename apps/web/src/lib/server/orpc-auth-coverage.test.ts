@@ -196,6 +196,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // of requeue_video) — operator-only (adminAuth + operatorGuard); the box agent
   // never acts on live videos, so an agent token 403s.
   purge_video: "operator",
+  // The box's status cron POSTs a health snapshot — agent tier (adminAuth only, no
+  // operatorGuard), the context_track/note_track precedent; it writes only the
+  // internal service_status/status_events tables (no publish), so the agent token drives it.
+  record_health: "admin",
   reject_submission: "operator",
   // Clears a LIVE published video (video_url + video_squared_at) to re-queue a
   // re-render — operator-only (adminAuth + operatorGuard); the box agent never

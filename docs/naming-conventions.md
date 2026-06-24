@@ -131,7 +131,7 @@ The same publish action is `Push draft to inbox` (board) / `admin track draft` (
 
 All three share the same spine: **one canonical operation name per operation**, written `verb_noun` in a registry, from which each surface's name is _derived by a fixed rule_. They differ in how aggressively they restructure the CLI and how they handle the machine-noun/voice-noun split.
 
-The canonical verb set is small and closed: `list`, `get`, `search`, `submit`, `subscribe`, `create`, `update`, `delete`, `publish`, plus a named-action set for non-CRUD operations (`enrich`, `observe`, `render`, `draft`, `distribute`, `backfill`, `authorize`, `requeue`, `purge`). The canonical noun is the **machine noun** (`track`, `mixtape`, `submission`, `newsletter`, `preview`, …), singular.
+The canonical verb set is small and closed: `list`, `get`, `search`, `submit`, `subscribe`, `create`, `update`, `delete`, `publish`, plus a named-action set for non-CRUD operations (`enrich`, `observe`, `render`, `draft`, `distribute`, `backfill`, `authorize`, `requeue`, `purge`, `record`). The canonical noun is the **machine noun** (`track`, `mixtape`, `submission`, `newsletter`, `preview`, …), singular.
 
 ### Convention A — "REST everywhere" (noun → verb, plural resources)
 
