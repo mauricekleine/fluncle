@@ -82,18 +82,21 @@ const STATUS_LABEL: Record<ServiceHealthStatus, string> = {
   ok: "Operational",
 };
 
-// The canon mapping (DESIGN.md, the Nostalgic Cosmos has no green):
-//   ok       → Eclipse Gold (primary) — the calm "all good" accent
-//   degraded → Eclipse Glow (#ffd057)  — the warm amber/caution
-//   down     → Re-entry Red            — errors only, the `destructive` variant
-function StatusBadge({ status }: { status: ServiceHealthStatus }) {
+// The canon mapping (DESIGN.md, the Nostalgic Cosmos has no green) — escalating by
+// LOUDNESS so the eye lands on trouble, not on the calm:
+//   ok       → a small Eclipse-Gold dot that gently pings (motion-safe), with a
+//              quiet muted label. Healthy is the baseline, so it stays calm and
+//              gold reads as a living signal, not wallpaper.
+//   degraded → Eclipse Glow (#ffd057) filled chip — the warm amber caution.
+//   down     → Re-entry Red filled chip — the `destructive` variant, errors only.
+function StatusIndicator({ status }: { status: ServiceHealthStatus }) {
   if (status === "down") {
     return <Badge variant="destructive">{STATUS_LABEL.down}</Badge>;
   }
 
   if (status === "degraded") {
-    // Eclipse Glow as a quiet caution chip (the design system carries no amber
-    // badge variant, so the token is applied inline, dark-only by construction).
+    // Eclipse Glow as a caution chip (the design system carries no amber badge
+    // variant, so the token is applied inline, dark-only by construction).
     return (
       <Badge className="border-transparent bg-[#ffd057]/15 text-[#ffd057]">
         {STATUS_LABEL.degraded}
@@ -101,7 +104,20 @@ function StatusBadge({ status }: { status: ServiceHealthStatus }) {
     );
   }
 
-  return <Badge>{STATUS_LABEL.ok}</Badge>;
+  // ok — the alive baseline: a steady gold dot under an expanding gold "ping" ring
+  // (the heartbeat). motion-safe so reduced-motion users get a calm static dot.
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+      <span className="relative flex size-1.5">
+        <span
+          aria-hidden
+          className="absolute inline-flex size-full rounded-full bg-primary opacity-60 motion-safe:animate-ping"
+        />
+        <span aria-hidden className="relative inline-flex size-1.5 rounded-full bg-primary" />
+      </span>
+      {STATUS_LABEL.ok}
+    </span>
+  );
 }
 
 // "up 3d" / "down 12m" / "ok 5h" — the elapsed time since the CURRENT status
@@ -178,7 +194,7 @@ function overallHeadline(services: ServiceStatusRow[]): string {
     return "Some services are degraded";
   }
 
-  return "All systems operational";
+  return "All systems nominal";
 }
 
 function StatusPage() {
@@ -194,7 +210,7 @@ function StatusPage() {
 
       {ordered.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          No service has reported in yet. Check back in a moment.
+          No signal from the services yet. Check back in a moment.
         </p>
       ) : (
         <section aria-label="Service health" className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -202,7 +218,7 @@ function StatusPage() {
             <Card key={service.service} size="sm">
               <CardHeader className="flex-row items-start justify-between gap-2">
                 <CardTitle>{serviceLabel(service.service)}</CardTitle>
-                <StatusBadge status={service.status} />
+                <StatusIndicator status={service.status} />
               </CardHeader>
               <CardContent className="grid gap-1 text-sm">
                 {service.message ? (
@@ -240,7 +256,7 @@ function StatusPage() {
                 key={event.id}
               >
                 <div className="flex min-w-0 items-center gap-2">
-                  <StatusBadge status={event.status} />
+                  <StatusIndicator status={event.status} />
                   <span className="truncate">
                     <span className="text-foreground">{serviceLabel(event.service)}</span>
                     {event.message ? (
