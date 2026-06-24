@@ -10,11 +10,10 @@ ADMIN_SESSION_SECRET=op://$FLUNCLE_1PASSWORD_ENV_ITEM/ADMIN_SESSION_SECRET
 
 FIRECRAWL_API_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/FIRECRAWL_API_KEY
 
-# ElevenLabs TTS for the audio-observation render. The API key is a standalone
-# Fluncle-vault item; the voice id is a non-secret swappable config var (a stock
-# library voice today — the bespoke Fluncle voice drops in by changing it).
-ELEVENLABS_API_KEY=op://Fluncle/ELEVENLABS_API_KEY/credential
-ELEVENLABS_VOICE_ID=EkK5I93UQWFDigLMpZcX
+# Cartesia (Sonic) TTS for the audio-observation render — the only observation
+# voice. Only the API key is a secret; CARTESIA_VOICE_ID is non-secret config in
+# wrangler.jsonc vars (applied to local dev too), so it does not belong here.
+CARTESIA_API_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/CARTESIA_API_KEY
 
 POSTIZ_API_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/POSTIZ_API_KEY
 POSTIZ_API_URL=
