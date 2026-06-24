@@ -58,7 +58,7 @@ bun run check
 bun run check:fix
 ```
 
-Root scripts are orchestrated with Turborepo. `oxlint` and `oxfmt` run from the root with workspace-aware configs.
+Root scripts are orchestrated with Turborepo. `oxlint` and `oxfmt` run from the root with workspace-aware configs. `apps/raycast` is the exception: Raycast's CLI owns extension formatting, and `ray lint` runs its own Prettier check over `src/**`.
 
 ## Environment
 
@@ -112,6 +112,7 @@ Local migration commands read Turso credentials from `apps/web/.dev.vars` throug
 ```bash
 bun run --cwd apps/raycast build
 bun run --cwd apps/raycast lint
+bun run --cwd apps/raycast lint -- --fix
 bun run --cwd apps/raycast dev
 ```
 
