@@ -22,9 +22,11 @@ FROM nousresearch/hermes-agent:v2026.6.19
 # shells out to `ffmpeg` to decode the preview, so the box needs both on PATH for
 # the `--no-agent` enrich-sweep cron. The Nous Hermes base is Debian-based, so
 # ffmpeg comes from apt; unzip is also required because bun's installer (below)
-# unpacks the binary from a zip. One layer, lists cleaned, no recommends.
+# unpacks the binary from a zip; openssh-client because the box.ascii CLI's
+# `box ssh`/`box scp` — the `fluncle-render` conductor's transport to the rave-03
+# render box — shells out to system ssh/scp. One layer, lists cleaned, no recommends.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg unzip \
+  && apt-get install -y --no-install-recommends ffmpeg unzip openssh-client \
   && rm -rf /var/lib/apt/lists/*
 
 # Bun — pinned to the repo's toolchain (packageManager bun@1.3.14) so the box runs
@@ -39,6 +41,23 @@ ENV PATH=/usr/local/bin:$PATH
 RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14" \
   && cp /root/.bun/bin/bun /usr/local/bin/bun \
   && chmod 755 /usr/local/bin/bun
+
+# box.ascii CLI — the `fluncle-render` `--no-agent` conductor cron drives a
+# SCALE-TO-ZERO box.ascii render box (rave-03): wake it, trigger the render via a
+# remote `claude -p`, park it (docs/agents/hermes/cron/README.md § the render
+# conductor). The installer drops the binary in $HOME/.ascii/bin (/root, mode 700);
+# the non-root cron runner can't traverse /root, so COPY it to /usr/local/bin like
+# bun. Run under `sh` it skips the .bashrc/.zshrc shell-integration (writes only the
+# binary + a ~/.config/ascii/box/config.json — non-secret api_url/channel, which
+# render-conductor.sh re-creates at the cron user's own HOME). Auth is NOT baked:
+# the conductor `box login`s from BOX_API_KEY (op://Fluncle/BOX_API_KEY/credential)
+# at run, persisting under the cron user's $HOME (the mounted /opt/data/home).
+# NOTE: box.ascii is pre-1.0 and its installer offers no version pin — it tracks
+# the `ascii-prod` channel (the CLI also self-updates), so this is the one image
+# dependency not version-pinned. Re-verify the conductor after a base rebuild.
+RUN curl -fsSL https://box.ascii.dev/install | sh \
+  && cp /root/.ascii/bin/box /usr/local/bin/box \
+  && chmod 755 /usr/local/bin/box
 
 # Install the Fluncle CLI — the agent's only path to read/write the archive. There
 # is no local command gate: the box holds an `agent`-scoped token and the Worker

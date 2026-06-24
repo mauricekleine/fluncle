@@ -6,16 +6,17 @@ Every step is a "read a queue → act per item, idempotently" loop over the `flu
 
 ## Cron roster
 
-Live on the box as of the **2026-06-23 cutover**. Every per-finding job is `--no-agent`; the Friday newsletter is the only **agent** job left. "Box authoring" is how much model time the job spends locally: none (a pure deterministic trigger), one `claude -p` call (a hybrid — subscription auth, zero OpenRouter), or a full agent session. Run `hermes cron list` on the box for live job IDs + next-run times.
+Live on the box as of the **2026-06-23 cutover**. Every per-finding job is `--no-agent`; the Friday newsletter is the only **agent** job left. `fluncle-render` (the video render conductor, below) is the one **PREPARED** job not yet wired. "Box authoring" is how much model time the job spends locally: none (a pure deterministic trigger), one `claude -p` call (a hybrid — subscription auth, zero OpenRouter), or a full agent session. Run `hermes cron list` on the box for live job IDs + next-run times.
 
-| Job                    | Cadence             | Mode                | Box authoring       | What it does                                                         |
-| ---------------------- | ------------------- | ------------------- | ------------------- | -------------------------------------------------------------------- |
-| `fluncle-enrich`       | every 5m            | `--no-agent`        | none (on-box DSP)   | BPM / key / spectral analysis on the box, write-back                 |
-| `fluncle-context-note` | every 5m            | `--no-agent`        | none (Worker Haiku) | Firecrawl facts → distilled `context_note` + a `Texture:` line       |
-| `fluncle-note`         | every 10m           | `--no-agent` hybrid | one `claude -p`     | auto-author the editorial `/log` note (fill-empty-only)              |
-| `fluncle-observation`  | every 60m           | `--no-agent` hybrid | one `claude -p`     | author the recovered-audio script → Worker ElevenLabs render         |
-| `fluncle-backfill`     | every 30m           | `--no-agent`        | none (Worker HTTP)  | Discogs id + Last.fm love catalogue repair                           |
-| `fluncle-newsletter`   | Fri 15:00 Amsterdam | **agent**           | full agent session  | draft + persist the weekly edition (send is an operator Discord tap) |
+| Job                    | Cadence             | Mode                   | Box authoring             | What it does                                                         |
+| ---------------------- | ------------------- | ---------------------- | ------------------------- | -------------------------------------------------------------------- |
+| `fluncle-enrich`       | every 5m            | `--no-agent`           | none (on-box DSP)         | BPM / key / spectral analysis on the box, write-back                 |
+| `fluncle-context-note` | every 5m            | `--no-agent`           | none (Worker Haiku)       | Firecrawl facts → distilled `context_note` + a `Texture:` line       |
+| `fluncle-note`         | every 10m           | `--no-agent` hybrid    | one `claude -p`           | auto-author the editorial `/log` note (fill-empty-only)              |
+| `fluncle-observation`  | every 60m           | `--no-agent` hybrid    | one `claude -p`           | author the recovered-audio script → Worker ElevenLabs render         |
+| `fluncle-backfill`     | every 30m           | `--no-agent`           | none (Worker HTTP)        | Discogs id + Last.fm love catalogue repair                           |
+| `fluncle-render`       | every 60m           | `--no-agent` conductor | none (remote `claude -p`) | wake rave-03 → render + ship one finding's video → park (PREPARED)   |
+| `fluncle-newsletter`   | Fri 15:00 Amsterdam | **agent**              | full agent session        | draft + persist the weekly edition (send is an operator Discord tap) |
 
 The per-cron sections below carry the full mechanism, schedule rationale, and the rebuild-from-scratch wiring for each.
 
@@ -134,6 +135,51 @@ printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$(op read op://Fluncle/CLAUDE_CODE_OAUTH_
   | ssh <box> 'docker exec -i hermes sh -c "cat > /opt/data/home/.note-sweep.env && chown hermes:hermes /opt/data/home/.note-sweep.env && chmod 600 /opt/data/home/.note-sweep.env"'
 hermes cron create "every 10m" --no-agent --script note-sweep.sh --deliver local --name fluncle-note
 ```
+
+## The render conductor cron (PREPARED)
+
+`fluncle-render` drives the per-finding VIDEO render — but unlike every other sweep (which runs its whole job inside the Hermes box) it is a **conductor**: the Hermes box has no GPU and no Remotion toolchain, so it wakes a separate **scale-to-zero box.ascii render box (rave-03)**, triggers the `@fluncle-video` render of exactly one queued finding _there_ via a remote `claude -p`, and parks the box when the render finishes. The render box renders + **ships to R2 / the website** (sets `video_url`); it **never posts to social** — enforced twice over: the render-queue prompt's hard rail says don't, AND the server-side role boundary makes it impossible (the box carries only the `agent`-scoped token, and `track draft --platform youtube` / every publish-class route is operator-tier → 403, so a misbehaving render agent _cannot_ post). Source at [`../scripts/`](../scripts/): `render-conductor.sh` (the cron entry), `provision-rave-03.sh` (reproduces the render box from clean `main`), `render-detached.sh` (runs on the render box).
+
+**Why a STATE MACHINE, not a blocking job.** A swangle (software-GL) render runs ~85 min, but the `--no-agent` runner kills any job at ~120s (§ Operational gotchas). So the conductor cannot block on the render. Instead the render runs **DETACHED on the render box** (it survives a Hermes container restart — decoupled), and each conductor tick is a quick (<120s) step in a two-state machine persisted under `~/.render-conductor/`:
+
+- **RENDERING** → poll the box for `~/conductor-run.done`; STOP (snapshot) the box when present, return to idle. Still running → NO-OP. Past 2.5h → force-park (stuck guard).
+- **IDLE** → if past the hourly start gate AND the queue is non-empty: resume the parked box (or reprovision if box.ascii reclaimed it), inject creds, trigger one detached render → rendering.
+
+**Single-flight (no two renders at once — the hard requirement).** The STATE enforces it (only `idle` starts a render; a `rendering` tick only polls), and an atomic `mkdir` lock is a second guard so two ticks never race the state file (with a stale-lock breaker for a tick the 120s runner killed mid-hold — `flock` is deliberately avoided, it is not portable and adds a util-linux dep). Because a render (~85m) outlasts the hourly tick, the `rendering` no-op branch fires every cycle: it is the primary safety, exercised continuously, not a rare net.
+
+**Cadence + billing.** Hourly: a render STARTS at most once per `START_INTERVAL` (3600s). Because a render finishes mid-interval and the next hourly tick parks the box, there is up to ~35 min of idle-wait per render — worst case ~480 of the 555 box-hours/month on the $20 tier, far less in practice (every tick no-ops once the queue is caught up). Tune `START_INTERVAL` if it ever bites.
+
+**Scale-to-zero + reprovision.** box.ascii reclaims idle boxes AND their snapshots past the archive window, so the render box is **not durable state**. The conductor stores the box id and tries `box resume`; on a 404 it runs `provision-rave-03.sh` — a purge is a ~5-min non-event. `box new --no-auto-stop --ttl 6h`: the conductor owns stop/resume (idle auto-stop could fire during a claude-thinking gap and kill a render); the TTL is the backstop that archives a box a crashed conductor (or a tick killed mid-provision) forgot to park.
+
+**Secrets.** `FLUNCLE_API_TOKEN` (agent-scoped) arrives via the cron env (a custom var passes Hermes' provider-cred blocklist) — used for the queue gate AND injected to the render box. `CLAUDE_CODE_OAUTH_TOKEN` (the render box's `claude -p` auth) is a RECOGNIZED provider cred Hermes hard-blocks from the cron env (§ Operational gotchas), so it — plus `BOX_API_KEY` — is file-sourced from a `0600` `${HOME}/.render-conductor.env`. The conductor injects `CLAUDE_CODE_OAUTH_TOKEN` + `FLUNCLE_API_TOKEN` + `FLUNCLE_GL=swangle` to the render box's `/dev/shm/fluncle.env` on each wake (tmpfs does not survive the stop/resume snapshot — re-injected every cycle, never on argv).
+
+| Job              | Schedule  | What it does                                                                                                                                                                                                                                                                                                                                                        | Server slice                                                                                       |
+| ---------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `fluncle-render` | every 60m | IDLE→ resume/reprovision rave-03, inject creds, trigger one detached `@fluncle-video` render of the queue head (`admin tracks queue`, oldest-first); RENDERING→ poll + park the box on the done-marker. One render at a time (state + `mkdir` lock). The render box ships via `admin tracks video`. Idempotent; no-op on an empty queue / within the hourly window. | `presign_track_video_uploads` + `track video` (agent tier) + the render-queue prompt's hard rails. |
+
+**Pre-reqs.** The image carries `bun` + the `fluncle` CLI + the **box.ascii CLI** + `openssh-client` (the Dockerfile box block). The render box is provisioned from `main` (no image dep). Run-time pre-reqs: the `0600` secrets file + box.ascii auth. To wire it on a rebuilt box:
+
+```bash
+# 1. Deploy the three scripts (~/.hermes is hermes-owned 700 — copy IN via docker cp, not scp).
+for s in render-conductor.sh provision-rave-03.sh render-detached.sh; do
+  docker cp "docs/agents/hermes/scripts/$s" hermes:/opt/data/scripts/
+done
+docker exec hermes sh -c 'chown 1000:1000 /opt/data/scripts/render-*.sh /opt/data/scripts/provision-rave-03.sh && chmod +x /opt/data/scripts/render-*.sh /opt/data/scripts/provision-rave-03.sh'
+
+# 2. Place the 0600 secrets file (Hermes won't pass these via the cron env). Values never print; op -> the file.
+{ printf 'BOX_API_KEY=%s\n' "$(op read op://Fluncle/BOX_API_KEY/credential)"; \
+  printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$(op read op://Fluncle/CLAUDE_CODE_OAUTH_TOKEN/credential)"; } \
+  | ssh <box> 'docker exec -i hermes sh -c "cat > /opt/data/home/.render-conductor.env && chown hermes:hermes /opt/data/home/.render-conductor.env && chmod 600 /opt/data/home/.render-conductor.env"'
+
+# 3. Create the cron (hourly).
+hermes cron create "every 60m" --no-agent --script render-conductor.sh --deliver local --name fluncle-render
+```
+
+**Smoke-test before scheduling** (mimic the cron user — `docker exec -u hermes -e HOME=/opt/data/home`, § Operational gotchas):
+
+- `docker exec -u hermes -e HOME=/opt/data/home hermes box login "$(op read op://Fluncle/BOX_API_KEY/credential)"` then `box status` → authed.
+- `docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/data/scripts/render-conductor.sh` against a non-empty queue → expect `started render of <logId> on <boxid>`; a second immediate run → `render in flight … single-flight hold`. Watch `~/.render-conductor/conductor.log` + the render box's `~/conductor-run.log`.
+- Confirm the first render ships (the finding leaves `admin tracks queue`) before walking away. Then schedule + watch a few hourly ticks.
 
 ## The agent cron — the Friday newsletter (LIVE)
 
