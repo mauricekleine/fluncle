@@ -28,14 +28,14 @@ ffmpeg -version
 
 It is a **Routine** in the Claude Code desktop app (**Routines → "Fluncle video queue"**) — not a CLI cron and not a Superset automation. Its configuration:
 
-| Field        | Value                                                                                                                                                |
-| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Name         | `Fluncle video queue`                                                                                                                                |
-| Description  | Renders videos in the queue                                                                                                                          |
-| Folder       | `/Users/maurice/Projects/fluncle` (the repo checkout it runs from)                                                                                   |
-| Repeats      | Hourly at ~:00                                                                                                                                       |
-| Permission   | **Act without asking** — it runs unattended, so it must not pause for a confirmation                                                                 |
-| Agent        | the Claude Code agent (keep it on the strongest model — video authoring writes the GLSL shader + runs the critique loop)                             |
+| Field        | Value                                                                                                                                                                                      |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Name         | `Fluncle video queue`                                                                                                                                                                      |
+| Description  | Renders videos in the queue                                                                                                                                                                |
+| Folder       | `/Users/maurice/Projects/fluncle` (the repo checkout it runs from)                                                                                                                         |
+| Repeats      | Hourly at ~:00                                                                                                                                                                             |
+| Permission   | **Act without asking** — it runs unattended, so it must not pause for a confirmation                                                                                                       |
+| Agent        | the Claude Code agent (keep it on the strongest model — video authoring writes the GLSL shader + runs the critique loop)                                                                   |
 | Instructions | the render prompt, stored at `~/.claude/scheduled-tasks/fluncle-video-queue/SKILL.md` — keep it in step with [render-queue.prompt.md](render-queue.prompt.md), the version-controlled copy |
 
 Pause/resume it with the **Status** toggle on the routine; **Run now** triggers a one-off tick. The History panel lists recent runs. The routine is operator-owned — its instructions live in `~/.claude` and are edited in the app — so `render-queue.prompt.md` is the canonical, reviewable copy: edit it here, then paste it into the routine (or when first creating the routine).

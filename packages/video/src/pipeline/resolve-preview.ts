@@ -38,6 +38,33 @@ export function normalize(value: string): string {
     .trim();
 }
 
+// Any word that marks a track as a specific version rather than the bare title.
+const VERSION_MARKER =
+  /\b(mix|edit|version|remix|dub|vip|bootleg|rework|re-?edit|flip|refix|remaster(?:ed)?|instrumental)\b/i;
+// A third-party / alternate REWORK (not the artist's own original/extended/radio
+// cut), which would carry different musical content than the finding.
+const REMIX_MARKER = /\b(remix|bootleg|vip|rework|re-?edit|flip|refix)\b/i;
+
+/**
+ * Strip a trailing version/mix descriptor so a Spotify title like
+ * "Days Like These - Original Mix" matches Deezer's bare "Days Like These".
+ * Dance-music titles almost always carry one ("- Original Mix", "- Radio Edit",
+ * "- Extended Mix", "- <Artist> Remix"); Deezer's exact `track:` filter returns
+ * zero hits when the suffix is included. Only strips a tail that actually names a
+ * version, so an ordinary "A - B" title is left untouched.
+ */
+export function stripVersionSuffix(title: string): string {
+  const parts = title.split(/\s+-\s+/);
+  if (parts.length > 1 && VERSION_MARKER.test(parts[parts.length - 1] ?? "")) {
+    return parts.slice(0, -1).join(" - ").trim();
+  }
+  return title.trim();
+}
+
+function isRemix(title: string): boolean {
+  return REMIX_MARKER.test(title);
+}
+
 /** Dice coefficient over bigrams; cheap fuzzy similarity in 0..1. */
 export function similarity(a: string, b: string): number {
   const na = normalize(a);
@@ -70,7 +97,10 @@ export function similarity(a: string, b: string): number {
 }
 
 async function resolveDeezer(title: string, artist: string): Promise<ResolvedPreview | null> {
-  const q = `artist:"${artist}" track:"${title}"`;
+  // Query Deezer with the version suffix stripped — an exact `track:"… - Original
+  // Mix"` returns nothing, while the bare title finds the release plus its remixes.
+  const baseTitle = stripVersionSuffix(title);
+  const q = `artist:"${artist}" track:"${baseTitle}"`;
   const url = `https://api.deezer.com/search?q=${encodeURIComponent(q)}`;
   const res = await fetch(url, { headers: { accept: "application/json" } });
   if (!res.ok) {
@@ -79,14 +109,34 @@ async function resolveDeezer(title: string, artist: string): Promise<ResolvedPre
   const json = (await res.json()) as DeezerResponse;
   const hits = json.data ?? [];
 
+  // Among exact-artist hits, pick the recording that matches the FINDING — not the
+  // first one Deezer returns (often a remix). The finding's "- Original Mix" is the
+  // bare original, so prefer the non-remix whose base title is closest, and back
+  // away from a third-party rework unless the finding itself is that rework.
+  const targetBase = stripVersionSuffix(title);
+  const targetIsRemix = isRemix(title);
+  let exact: { score: number; preview: ResolvedPreview } | null = null;
   for (const hit of hits) {
     if (!hit.preview) {
       continue;
     }
-    const artistMatch = normalize(hit.artist?.name ?? "") === normalize(artist);
-    if (artistMatch) {
-      return { confidence: 0.95, source: "deezer", url: hit.preview };
+    if (normalize(hit.artist?.name ?? "") !== normalize(artist)) {
+      continue;
     }
+    let score = similarity(stripVersionSuffix(hit.title ?? ""), targetBase);
+    if (isRemix(hit.title ?? "")) {
+      if (!targetIsRemix) {
+        score -= 0.5;
+      }
+    } else {
+      score += 0.05;
+    }
+    if (!exact || score > exact.score) {
+      exact = { preview: { confidence: 0.92, source: "deezer", url: hit.preview }, score };
+    }
+  }
+  if (exact) {
+    return exact.preview;
   }
 
   // Looser fallback within Deezer: take the best fuzzy match if it clears the floor.
