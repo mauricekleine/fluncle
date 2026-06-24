@@ -75,6 +75,29 @@ export async function listSocialPostsForTracks(
   return byTrack;
 }
 
+/** A published post reduced to what the publish-streak reads — the platform and the
+ *  Amsterdam-bucketed day it went live. */
+export type PublishedPostDay = { platform: string; publishedAt: string };
+
+/**
+ * The full set of (platform, published_at) for every published post — the input to
+ * the board's publish-streak. Read straight from `social_posts`, independent of the
+ * board's finding pagination, so the streak counts every qualifying day, not just
+ * the loaded window. Only `published` rows with a non-null `published_at` come back.
+ */
+export async function listPublishedPostDays(): Promise<PublishedPostDay[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    sql: `select platform, published_at from social_posts
+          where status = 'published' and published_at is not null`,
+  });
+
+  return typedRows<{ platform: string; published_at: string }>(result.rows).map((row) => ({
+    platform: row.platform,
+    publishedAt: row.published_at,
+  }));
+}
+
 /**
  * Record (or refresh) a pushed post for a track on a platform. `draft` is the
  * TikTok inbox push; `published` is a direct post (Instagram/YouTube) that goes
