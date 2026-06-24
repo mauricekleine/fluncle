@@ -240,9 +240,13 @@ function probeDns(): Check {
   }
 
   const started = Date.now();
+  // Split DNS_QUERY into argv so the query can carry a record TYPE, e.g.
+  // "random.dig.fluncle.com TXT" → ["random.dig.fluncle.com", "TXT"]. Fluncle's
+  // own nameserver (fluncle-dns) serves TXT records, so a bare name (default A)
+  // would get NODATA and read as a false "down"; the type is required.
   const { code, stdout } = runQuiet(
     "dig",
-    ["+short", "+time=3", "+tries=1", DNS_QUERY],
+    ["+short", "+time=3", "+tries=1", ...DNS_QUERY.trim().split(/\s+/)],
     PROBE_TIMEOUT_MS,
   );
   const latencyMs = Date.now() - started;
