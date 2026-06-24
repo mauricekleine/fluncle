@@ -809,8 +809,8 @@ const CARTESIA_MODEL = "sonic-3";
 const CARTESIA_SAMPLE_RATE = 44100;
 const CARTESIA_MP3_KBPS = 96;
 
-/** The render speed, dialed by ear (a touch faster than the spike's 0.76). */
-export const DEFAULT_CARTESIA_SPEED = 0.8;
+/** The render speed, dialed by ear (a hair above the spike's 0.76). */
+export const DEFAULT_CARTESIA_SPEED = 0.78;
 
 /**
  * Strip the ElevenLabs `<break/>` SSML (Cartesia doesn't parse it, and the
