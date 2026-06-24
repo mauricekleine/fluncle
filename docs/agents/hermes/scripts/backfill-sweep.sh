@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # backfill-sweep.sh — the `--no-agent` catalogue-backfill cron's job ENTRY.
 #
-# PREPARED, NOT YET WIRED. Version-controlled source; the repo is canonical and the
+# LIVE. Version-controlled source; the repo is canonical and the
 # box is a deploy target (fluncle-hermes-operator skill). This pair deploys to
 # ~/.hermes/scripts/ on the devbox and the cron is wired there. See ../cron/README.md.
 #

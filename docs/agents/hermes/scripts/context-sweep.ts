@@ -2,7 +2,7 @@
 // context-sweep.ts — the bun orchestrator behind the `--no-agent` context-note cron
 // (`fluncle-context-note`).
 //
-// PREPARED. Version-controlled source; the repo is canonical and the box is a
+// LIVE. Version-controlled source; the repo is canonical and the box is a
 // deploy target (fluncle-hermes-operator skill). Invoked by the bash wrapper
 // (context-sweep.sh) the cron runner execs on a schedule — see that file's header
 // for the `hermes cron create` wire-up and ../cron/README.md for the cron model.

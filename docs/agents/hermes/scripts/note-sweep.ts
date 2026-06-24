@@ -2,7 +2,7 @@
 // note-sweep.ts — the bun orchestrator behind the `--no-agent` auto-note cron
 // (`fluncle-note`).
 //
-// PREPARED. Version-controlled source; the repo is canonical and the box is a
+// LIVE. Version-controlled source; the repo is canonical and the box is a
 // deploy target (fluncle-hermes-operator skill). Invoked by the bash wrapper
 // (note-sweep.sh) the cron runner execs every ~30m — see that file's header for the
 // `hermes cron create` wire-up and ../cron/README.md for the full cron model.

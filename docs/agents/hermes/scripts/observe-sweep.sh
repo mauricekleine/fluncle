@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # observe-sweep.sh — the `--no-agent` observation cron's job ENTRY.
 #
-# PREPARED. Version-controlled source; the repo is canonical and the box is a
+# LIVE. Version-controlled source; the repo is canonical and the box is a
 # deploy target (fluncle-hermes-operator skill). This pair deploys to
 # ~/.hermes/scripts/ on the devbox and the cron is wired there. See ../cron/README.md.
 #
