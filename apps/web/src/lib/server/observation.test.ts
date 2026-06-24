@@ -8,7 +8,6 @@ import {
   gateObservationScript,
   scanObservationScript,
   wordsFromCharacterAlignment,
-  wordsFromForcedAlignment,
 } from "./observation";
 
 // The voice gate's automatable half (VOICE.md §3 bans + the Dry Rule + no
@@ -378,27 +377,5 @@ describe("wordsFromCharacterAlignment", () => {
 
   it("returns null when the arrays are absent", () => {
     expect(wordsFromCharacterAlignment(undefined)).toBeNull();
-  });
-});
-
-describe("wordsFromForcedAlignment", () => {
-  it("maps word objects (seconds) to the stored ms shape, dropping empty tokens", () => {
-    const words = wordsFromForcedAlignment({
-      words: [
-        { end: 0.4, start: 0.1, text: "Oof" },
-        { end: 0.5, start: 0.4, text: "  " },
-        { end: 0.9, start: 0.6, text: "banger" },
-      ],
-    });
-
-    expect(words).toEqual([
-      { endMs: 400, startMs: 100, text: "Oof" },
-      { endMs: 900, startMs: 600, text: "banger" },
-    ]);
-  });
-
-  it("returns null on an empty/absent word list", () => {
-    expect(wordsFromForcedAlignment({ words: [] })).toBeNull();
-    expect(wordsFromForcedAlignment(undefined)).toBeNull();
   });
 });

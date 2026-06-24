@@ -60,9 +60,8 @@ export type ObservationScript = {
 /**
  * A single spoken word with its playback window, in MILLISECONDS (the same unit as
  * `durationMs`, and what `audio.currentTime * 1000` compares against on the radio
- * caption render). This is the NORMALISED shape we persist, derived from either
- * ElevenLabs source (the `/with-timestamps` character arrays, grouped into words,
- * or the `/forced-alignment` word objects).
+ * caption render). This is the NORMALISED shape we persist, derived from the
+ * ElevenLabs `/with-timestamps` character arrays, grouped into words.
  */
 export type ObservationWord = { endMs: number; startMs: number; text: string };
 
@@ -71,7 +70,9 @@ export type ObservationWord = { endMs: number; startMs: number; text: string };
  * captions. Word-level (not character-level) because that is what the caption
  * render highlights; grouping happens once, server-side, so every surface reads the
  * same ready-to-render shape. `source` records which ElevenLabs endpoint produced
- * it (a fresh `/with-timestamps` render vs a `/forced-alignment` backfill).
+ * it: every fresh render captures its timings via `/with-timestamps`. The legacy
+ * `"forced-alignment"` value remains in the union because rows aligned by the
+ * now-retired one-off backfill still carry it (the caption render reads them).
  */
 export type ObservationAlignment = {
   source: "forced-alignment" | "with-timestamps";
@@ -522,27 +523,19 @@ export type RenderedObservation = {
   voiceId: string;
 };
 
-// ── Alignment normalisation (the two ElevenLabs shapes → one stored shape) ───────
+// ── Alignment normalisation (the `/with-timestamps` shape → the stored shape) ───
 //
-// The two endpoints return DIFFERENT shapes, so both are normalised to the same
-// word-level `ObservationAlignment` the caption render reads:
-//   - `/with-timestamps` → parallel CHARACTER arrays (`characters`,
-//     `character_start_times_seconds`, `character_end_times_seconds`). We group the
-//     characters into words on whitespace.
-//   - `/forced-alignment` → ready-made `words: [{ text, start, end }]` (seconds).
-// All timings land in MILLISECONDS (rounded ints) so they compare directly against
-// `audio.currentTime * 1000` with no per-frame unit conversion.
+// `/with-timestamps` returns parallel CHARACTER arrays (`characters`,
+// `character_start_times_seconds`, `character_end_times_seconds`), which we group
+// into words on whitespace to get the word-level `ObservationAlignment` the caption
+// render reads. All timings land in MILLISECONDS (rounded ints) so they compare
+// directly against `audio.currentTime * 1000` with no per-frame unit conversion.
 
 /** ElevenLabs `/with-timestamps` per-character alignment block. */
 export type ElevenLabsCharacterAlignment = {
   character_end_times_seconds: number[];
   character_start_times_seconds: number[];
   characters: string[];
-};
-
-/** ElevenLabs `/forced-alignment` response (word + character timings, seconds). */
-export type ForcedAlignmentResponse = {
-  words?: { end: number; start: number; text: string }[];
 };
 
 const secToMs = (seconds: number): number => Math.max(0, Math.round(seconds * 1000));
@@ -596,31 +589,6 @@ export function wordsFromCharacterAlignment(
 
   if (current) {
     words.push(current);
-  }
-
-  return words.length > 0 ? words : null;
-}
-
-/** Normalise a `/forced-alignment` response into the stored word-level shape. */
-export function wordsFromForcedAlignment(
-  response: ForcedAlignmentResponse | undefined,
-): ObservationWord[] | null {
-  const raw = response?.words;
-
-  if (!Array.isArray(raw) || raw.length === 0) {
-    return null;
-  }
-
-  const words: ObservationWord[] = [];
-
-  for (const word of raw) {
-    const text = typeof word?.text === "string" ? word.text.trim() : "";
-
-    if (!text) {
-      continue; // skip whitespace-only / empty tokens
-    }
-
-    words.push({ endMs: secToMs(word.end ?? 0), startMs: secToMs(word.start ?? 0), text });
   }
 
   return words.length > 0 ? words : null;
@@ -726,52 +694,4 @@ export async function renderObservation(
     bytes: base64ToArrayBuffer(payload.audio_base64),
     voiceId,
   };
-}
-
-// ── Forced-alignment backfill ────────────────────────────────────────────────
-//
-// For observations rendered BEFORE `/with-timestamps` (audio + script already on
-// R2, no alignment): re-derive word timings WITHOUT re-rendering (cheap, no second
-// voice spend) by force-aligning the existing mp3 to its script. Multipart upload
-// of the audio file + the text; the response carries word objects directly.
-
-const ELEVENLABS_FORCED_ALIGNMENT_URL = "https://api.elevenlabs.io/v1/forced-alignment";
-
-/**
- * Force-align an existing observation's audio bytes to its script text, returning
- * the normalised word-level alignment (or null if the response carried no usable
- * words). Throws an ApiError on a vendor error so a sweep can record the failure.
- */
-export async function alignObservationAudio(
-  audio: ArrayBuffer,
-  text: string,
-): Promise<ObservationAlignment | null> {
-  const apiKey = await readEnv("ELEVENLABS_API_KEY");
-
-  const form = new FormData();
-  form.append("file", new Blob([audio], { type: "audio/mpeg" }), "observation.mp3");
-  form.append("text", text);
-
-  const response = await fetch(ELEVENLABS_FORCED_ALIGNMENT_URL, {
-    body: form,
-    headers: { "xi-api-key": apiKey },
-    method: "POST",
-  });
-
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-
-    throw new ApiError(
-      "elevenlabs_error",
-      `ElevenLabs forced-alignment failed (${response.status})${
-        detail ? `: ${detail.slice(0, 300)}` : ""
-      }`,
-      502,
-    );
-  }
-
-  const payload = (await response.json()) as ForcedAlignmentResponse;
-  const words = wordsFromForcedAlignment(payload);
-
-  return words ? { source: "forced-alignment", words } : null;
 }

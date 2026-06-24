@@ -13,7 +13,7 @@
 // the handlers read `input.query.*` and apply the SAME parse/clamp logic the live
 // `parseLimit`/`parseBool` did (a tolerant string → number/bool, never a 400).
 
-import { backfillDiscogsIds, backfillLastfmLoves, backfillObservationAlignment } from "../backfill";
+import { backfillDiscogsIds, backfillLastfmLoves } from "../backfill";
 import { adminAuth } from "../orpc-auth";
 import { apiFault, type Implementer, parseLimit } from "./_shared";
 
@@ -85,38 +85,7 @@ export function adminBackfillsHandlers(os: Implementer) {
     }
   });
 
-  // POST /admin/backfill/alignment — agent tier (`adminAuth`): re-derive word-level
-  // observation caption timings (forced-alignment over the existing mp3, no re-render,
-  // no publish), so the box's agent-token cron drives it without an operator token.
-  const backfillAlignmentHandler = os.backfill_alignment
-    .use(adminAuth)
-    .handler(async ({ input }) => {
-      try {
-        const { query } = input;
-        const result = await backfillObservationAlignment(
-          parseLimit(query.limit, BACKFILL_DEFAULT_LIMIT, BACKFILL_MAX_LIMIT),
-          parseBool(query.dryRun),
-          query.cursor ?? undefined,
-        );
-
-        return {
-          aligned: result.aligned,
-          alignedCount: result.alignedCount,
-          dryRun: result.dryRun,
-          empty: result.empty,
-          emptyCount: result.emptyCount,
-          failed: result.failed,
-          failedCount: result.failedCount,
-          nextCursor: result.nextCursor,
-          ok: true as const,
-        };
-      } catch (error) {
-        throw apiFault(error);
-      }
-    });
-
   return {
-    backfill_alignment: backfillAlignmentHandler,
     backfill_discogs: backfillDiscogsHandler,
     backfill_lastfm: backfillLastfmHandler,
   };
