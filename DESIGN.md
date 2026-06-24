@@ -184,7 +184,7 @@ Depth in this system comes from translucency, not shadows: every raised surface 
 
 **The One Pane Rule.** Glass does not stack on glass. Every pane sits directly on the cosmos, never on another pane (PRODUCT.md bans "glassy card stacks" by name); content inside a pane sits flat on it. On the web the pane is **the plate** (below): one document per page, with the cover frame, the list, and the nerd card mounted flat on it as printed fields — none of them carries its own glass.
 
-**The Legible Sky Rule.** Text never sits on the raw backdrop. Every text surface is a pane that dims what it covers enough to hold WCAG AA (4.5:1 for body text), even where the burning sun sits behind the glass. If a bright backdrop region breaks contrast, the pane gets more opaque, not the text dimmer.
+**The Legible Sky Rule.** Text never sits on the raw backdrop. Every text surface is a pane that dims what it covers enough to hold WCAG AA (4.5:1 for body text), even where the burning sun sits behind the glass. If a bright backdrop region breaks contrast, the pane gets more opaque, not the text dimmer. The one surface with no pane to dim — the radio's live narration captions over full-bleed footage — meets the same AA floor by inverting instead: the line blends `difference` against the footage, so the glyphs always read as the photographic negative of whatever is behind them (a bright sun computes to dark ink, a black seam to bright ink) and stay legible on every frame. The spoken word stays the lit point: it breaks out of the blend to a true Eclipse-Gold glyph (the heat the eye tracks), never an inverted hue.
 
 ## 5. Components
 

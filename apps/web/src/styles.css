@@ -2068,22 +2068,24 @@ body::before {
 }
 
 /* One slice: a confident narration size (not a subtitle), centered, capped to a
-   comfortable reading measure. The Legible Sky Rule over live footage with no box —
-   a soft text-shadow scrim on the line itself holds AA without a heavy plate. */
+   comfortable reading measure. The Inversion Rule over live footage — no box, no
+   scrim: the glyphs blend `difference` against the footage, so they invert whatever
+   sits behind them and stay legible on any frame (a bright sun, a black seam, busy
+   colour). White is the cleanest inversion base. */
 .radio-narration-line {
   /* The soft swap between slices: a fresh node mounts per slice (keyed on the slice
      index), fading + lifting in. Reduced motion collapses it below. */
   animation: radio-narration-in 320ms ease-out both;
-  color: var(--stardust);
+  color: #fff;
   font-size: clamp(1.5rem, 4.5vw, 2.5rem);
   font-weight: 700;
   letter-spacing: -0.01em;
   line-height: 1.28;
   margin: 0;
   max-width: 22ch;
+  mix-blend-mode: difference;
   overflow-wrap: anywhere;
   text-align: center;
-  text-shadow: 0 0.05rem 1.1rem color-mix(in oklch, var(--deep-field) 88%, transparent);
   text-wrap: balance;
 }
 
@@ -2099,9 +2101,10 @@ body::before {
   }
 }
 
-/* Resting words are dim (Stardust); the live word lights to Starlight Cream with a
-   Gold cast (the Ignition Rule — heat marks the spoken word, never paint). The exact
-   per-word treatment carried over from the old captions. */
+/* Resting words ride the inverted line (white under `difference`). The live word is
+   the Ignition (the Gold heat marks the spoken word). A Gold *cast* can't survive the
+   invert — it would flip to teal — so the live word breaks OUT of the blend to its
+   true Eclipse-Gold, the one warm point the eye tracks across the inverted line. */
 .radio-narration-word {
   /* Colour-only transition so the highlight reads as a glow, not motion; grounded
      under reduced motion below. */
@@ -2111,10 +2114,17 @@ body::before {
 }
 
 .radio-narration-word.is-active {
-  color: var(--starlight-cream);
+  /* The spoken word IS the lit point — a true Eclipse-Gold glyph that leaves the
+     line's `difference` blend so the heat reads as real Gold, not an inverted hue (a
+     blended Gold would flip to teal). A dark halo plus a Gold bloom underneath keep
+     it legible and lit where the footage runs bright — the warm point the eye tracks
+     across the inverted line. */
+  color: var(--eclipse-gold);
+  mix-blend-mode: normal;
   text-shadow:
-    0 0.05rem 1.1rem color-mix(in oklch, var(--deep-field) 88%, transparent),
-    0 0 0.75rem color-mix(in oklch, var(--eclipse-gold) 45%, transparent);
+    0 0.05rem 0.5rem color-mix(in oklch, var(--deep-field) 82%, transparent),
+    0 0 0.85rem color-mix(in oklch, var(--eclipse-gold) 55%, transparent),
+    0 0 1.7rem color-mix(in oklch, var(--eclipse-gold) 35%, transparent);
 }
 
 @media (prefers-reduced-motion: reduce) {
