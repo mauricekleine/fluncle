@@ -30,23 +30,22 @@ import {
 // here automatically — no edit to this file.
 const CRON_SURFACES = cronSurfaces();
 const CRON_ORDER = CRON_SURFACES.map((surface) => surface.name);
-const CRON_SERVICE_IDS = new Set(CRON_ORDER);
 
-// The deliberate, fixed display order for the CORE (non-cron) services. They lead the
-// page; the crons render after them under their own heading. Any service the snapshot
-// reports that isn't named here (and isn't a cron) is appended alphabetically, so a
-// newly-probed service surfaces without a code change.
-const SERVICE_ORDER = [
-  "web",
-  "db",
-  "r2",
-  "dns",
-  "ssh",
-  "onion",
-  "hermes",
-  "self-deploy",
-  "render-box",
-];
+// Self-posted automations that belong under the Automation heading but are NOT registry
+// crons: `self-deploy` is the box's host systemd timer (pin-watch) reporting its own
+// health via record_health, not a healthcheck-probed Hermes cron — so it never enters
+// the registry cron catalog, yet it is a humming scheduled system like the rest. These
+// LEAD the Automation group (foundational), ahead of the registry crons.
+const SELF_POSTED_AUTOMATION_ORDER = ["self-deploy"];
+const AUTOMATION_ORDER = [...SELF_POSTED_AUTOMATION_ORDER, ...CRON_ORDER];
+const AUTOMATION_SERVICE_IDS = new Set(AUTOMATION_ORDER);
+
+// The deliberate, fixed display order for the CORE services (the reachability/health of a
+// running thing, not a scheduled job). They lead the page; the Automation group renders
+// after them under its own heading. Any service the snapshot reports that isn't named
+// here (and isn't an automation) is appended alphabetically, so a newly-probed service
+// surfaces without a code change.
+const SERVICE_ORDER = ["web", "db", "r2", "dns", "ssh", "onion", "hermes", "render-box"];
 
 // A human label per known service id (falls back to the raw id for an unknown one). The
 // cron labels are keyed by their registry surface name; the fallback strips the `cron.`
@@ -63,6 +62,7 @@ const SERVICE_LABELS: Record<string, string> = {
   // conductor cron's last-run freshness; `render-box` is the scale-to-zero box's
   // reachability. The labels make the distinction obvious.
   "cron.render": "Render cron",
+  "cron.social-capture": "Social links",
   db: "Database",
   dns: "DNS",
   hermes: "Hermes agent",
@@ -86,6 +86,7 @@ const SERVICE_SUBTITLES: Record<string, string> = {
   "cron.note": "writes each finding's editorial note",
   "cron.observation": "Fluncle's spoken field observations",
   "cron.render": "the conductor's last run",
+  "cron.social-capture": "the live YouTube and TikTok URLs for each posted video",
   db: "the archive's persistence",
   dns: "dig.fluncle.com",
   hermes: "the Discord chat agent",
@@ -109,6 +110,13 @@ function serviceLabel(service: string): string {
 function serviceSubtitle(service: string): string | undefined {
   return SERVICE_SUBTITLES[service];
 }
+
+// The section heading — a prominent uppercase label with a hairline rule beneath it.
+// Shared by the service groups (Services / Automation) and the events feed so the
+// page's three sections read at one consistent, visible weight (they were near-hidden
+// muted-xs labels before).
+const SECTION_HEADING_CLASS =
+  "mb-4 border-b border-border pb-2 text-sm font-semibold uppercase tracking-wide text-foreground";
 
 type StatusPageData = {
   events: StatusEventRow[];
@@ -348,11 +356,11 @@ function sortByOrder(services: ServiceStatusRow[], order: string[]): ServiceStat
   });
 }
 
-// Split the reported services into the core list and the cron group, each in its own
-// fixed order. A cron is identified by its registry service id (`cron.*`), so the two
-// groups never overlap and a brand-new cron lands in the Automation group automatically.
-// Retired/orphaned ids (e.g. the pre-split `automation` aggregate) are already filtered
-// out upstream at `getServiceStatuses`, so they never reach here.
+// Split the reported services into the core list and the Automation group, each in its
+// own fixed order. A row joins Automation if it is a registry cron (`cron.*`) OR a
+// self-posted automation (`self-deploy`) — so the two groups never overlap and a brand-new
+// cron lands in Automation automatically. Retired/orphaned ids (e.g. the pre-split
+// `automation` aggregate) are already filtered out upstream at `getServiceStatuses`.
 function groupServices(services: ServiceStatusRow[]): {
   core: ServiceStatusRow[];
   crons: ServiceStatusRow[];
@@ -361,10 +369,10 @@ function groupServices(services: ServiceStatusRow[]): {
   const crons: ServiceStatusRow[] = [];
 
   for (const service of services) {
-    (CRON_SERVICE_IDS.has(service.service) ? crons : core).push(service);
+    (AUTOMATION_SERVICE_IDS.has(service.service) ? crons : core).push(service);
   }
 
-  return { core: sortByOrder(core, SERVICE_ORDER), crons: sortByOrder(crons, CRON_ORDER) };
+  return { core: sortByOrder(core, SERVICE_ORDER), crons: sortByOrder(crons, AUTOMATION_ORDER) };
 }
 
 // The overall headline: down beats degraded beats all-operational.
@@ -449,9 +457,7 @@ function ServiceGroup({
 
   return (
     <section aria-label={label}>
-      <h2 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        {label}
-      </h2>
+      <h2 className={SECTION_HEADING_CLASS}>{label}</h2>
       <div className="divide-y divide-border/50">
         {rows.map((service) => (
           <ServiceRow
@@ -493,9 +499,7 @@ function StatusPage() {
 
         {events.length > 0 ? (
           <section aria-label="Recent events">
-            <h2 className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Recent events
-            </h2>
+            <h2 className={SECTION_HEADING_CLASS}>Recent events</h2>
             <ul className="space-y-2">
               {events.map((event) => (
                 <li className="flex items-center justify-between gap-3 text-sm" key={event.id}>
