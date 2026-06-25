@@ -73,8 +73,12 @@ const COOLDOWN_BASE_MS = 24 * 60 * 60 * 1000; // 24h between attempts on the sam
 const COOLDOWN_MAX_MS = 7 * 24 * 60 * 60 * 1000; // cap the backoff window at 7 days
 
 // The cursor to resume from on the next pass, or null once the archive is
-// exhausted. The CLI loops until this is null.
-type BackfillPass<T> = T & { nextCursor: string | null };
+// exhausted. The CLI loops until this is null — UNLESS `rateLimited` is true, the
+// vendor circuit breaker tripped (active 429s): then the CLI must stop looping and
+// let the next tick resume with a fresh rate window, instead of re-firing the
+// cursor straight back into the same wall (the #119-class storm — a stalled tick
+// that grinds 300s+ and busts the cron's 120s timeout).
+type BackfillPass<T> = T & { nextCursor: string | null; rateLimited: boolean };
 
 export type LastfmBackfillResult = BackfillPass<{
   dryRun: boolean;
@@ -391,6 +395,7 @@ export async function backfillLastfmLoves(
   const failed: Array<{ error: string; logId: string }> = [];
   const skipped: string[] = [];
   const now = Date.now();
+  let rateLimited = false;
 
   const nextCursor = await runPublishedFindingPass(
     startCursor,
@@ -424,11 +429,19 @@ export async function backfillLastfmLoves(
       if (outcome.ok) {
         await recordAttempt(track.trackId, "lastfm", "done");
         loved.push(logId);
-      } else {
-        await recordAttempt(track.trackId, "lastfm", "failure");
-        failed.push({ error: outcome.error, logId });
+        return true;
       }
 
+      if (outcome.rateLimited) {
+        // Circuit breaker: Last.fm is actively rate-limiting. Stop the run here and
+        // do NOT cool this finding down (it was throttled, not unmatchable) so the
+        // next tick retries it with a fresh window — symmetric with Discogs below.
+        rateLimited = true;
+        return "stop";
+      }
+
+      await recordAttempt(track.trackId, "lastfm", "failure");
+      failed.push({ error: outcome.error, logId });
       return true;
     },
   );
@@ -439,7 +452,11 @@ export async function backfillLastfmLoves(
     failedCount: failed.length,
     loved,
     lovedCount: loved.length,
-    nextCursor,
+    // Null the cursor on a throttle-stop so even the deployed CLI stops looping this
+    // tick (see the Discogs return for the full why) — the deployed CLI breaks on a
+    // null cursor, not the newer `rateLimited` flag.
+    nextCursor: rateLimited ? null : nextCursor,
+    rateLimited,
     skipped,
     skippedCount: skipped.length,
   };
@@ -463,6 +480,7 @@ export async function backfillDiscogsIds(
   const skipped: string[] = [];
   const now = Date.now();
   let first = true;
+  let rateLimited = false;
 
   const nextCursor = await runPublishedFindingPass(
     startCursor,
@@ -521,6 +539,9 @@ export async function backfillDiscogsIds(
         // stopped the current one). Do NOT cool this finding down: it was budget-
         // throttled, not unresolvable, so the next 30m tick retries it with a fresh
         // rate-limit window (the resolved findings above are already `done`-gated).
+        // The flag tells the CLI to STOP LOOPING the cursor (not just this pass) —
+        // otherwise it re-fires the same throttled cursor and grinds to a timeout.
+        rateLimited = true;
         return "stop";
       }
 
@@ -550,7 +571,13 @@ export async function backfillDiscogsIds(
 
   return {
     dryRun,
-    nextCursor,
+    // On a throttle-stop, NULL the cursor so even the currently-deployed CLI (which
+    // breaks only on a null cursor, not the newer `rateLimited` flag) stops looping
+    // this tick instead of re-firing the cursor into the same 429 wall to the 120s
+    // timeout. Losing the resume point is harmless: the cron starts each tick from
+    // the top and the reliability gate re-skips done/cooling findings cheaply.
+    nextCursor: rateLimited ? null : nextCursor,
+    rateLimited,
     resolved,
     resolvedCount: resolved.length,
     skipped,

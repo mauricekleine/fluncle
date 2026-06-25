@@ -27,15 +27,19 @@ import { spawnSync } from "node:child_process";
 
 // ---------------------------------------------------------------------------
 // Config — a small bounded batch per source per tick so one tick stays well
-// inside both the Worker request budget and the vendor rate budget. The Worker
-// clamps each request to a 3-finding server pass; the CLI loops the cursor up to
-// this `--limit` of HANDLED findings, so 6 ≈ two server passes (~70s worst case
-// for Discogs: ~10 paced ~1.1s lookups per unresolved finding). The 30-minute
-// cadence (see backfill-sweep.sh) lets the per-minute vendor budget fully recover
-// between ticks; the reliability cooldown keeps a drained catalogue quiet.
+// inside both the Worker request budget and the cron's 120s timeout. The Worker
+// clamps each request to a 3-finding server pass AND stops the run (signalling the
+// CLI to stop looping the cursor) the moment the vendor rate-limit circuit breaker
+// trips — so a throttled tick bails after one short pass instead of grinding the
+// cursor back into the same 429 wall for 300s+ (the timeout that errored this cron
+// every tick). With that bail in place, 3 = exactly one server pass per source
+// (~36s worst case for Discogs: ~10 paced ~1.1s lookups per unresolved finding),
+// leaving wide headroom under the 120s timeout. The 30-minute cadence (see
+// backfill-sweep.sh) lets the per-minute vendor budget recover between ticks; the
+// reliability cooldown keeps a drained catalogue quiet.
 // ---------------------------------------------------------------------------
 
-const BATCH_LIMIT = Number(process.env.FLUNCLE_BACKFILL_LIMIT ?? "6");
+const BATCH_LIMIT = Number(process.env.FLUNCLE_BACKFILL_LIMIT ?? "3");
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 
@@ -47,6 +51,10 @@ const log = (message: string) => console.error(`[backfill-sweep] ${message}`);
 
 type DiscogsSummary = {
   ok?: boolean;
+  // True when the sweep bailed early because Discogs is actively rate-limiting (the
+  // circuit breaker) — a throttled tick, not a drained catalogue. Surfaced so the
+  // cron output reads honestly instead of looking like a silent "0 resolved" no-op.
+  rateLimited?: boolean;
   resolvedCount?: number;
   skippedCount?: number;
   unresolvedCount?: number;
@@ -56,6 +64,7 @@ type LastfmSummary = {
   failedCount?: number;
   lovedCount?: number;
   ok?: boolean;
+  rateLimited?: boolean;
   skippedCount?: number;
 };
 
@@ -94,8 +103,14 @@ function fluncleJson<T>(args: string[]): T {
 
 function main(): void {
   const summary = {
-    discogs: { error: null as string | null, resolved: 0, skipped: 0, unresolved: 0 },
-    lastfm: { error: null as string | null, failed: 0, loved: 0, skipped: 0 },
+    discogs: {
+      error: null as string | null,
+      resolved: 0,
+      skipped: 0,
+      throttled: false,
+      unresolved: 0,
+    },
+    lastfm: { error: null as string | null, failed: 0, loved: 0, skipped: 0, throttled: false },
     ok: true,
   };
 
@@ -106,6 +121,7 @@ function main(): void {
     summary.discogs.resolved = discogs.resolvedCount ?? 0;
     summary.discogs.unresolved = discogs.unresolvedCount ?? 0;
     summary.discogs.skipped = discogs.skippedCount ?? 0;
+    summary.discogs.throttled = discogs.rateLimited ?? false;
   } catch (error) {
     summary.discogs.error = error instanceof Error ? error.message : String(error);
     log(`discogs backfill failed: ${summary.discogs.error}`);
@@ -116,6 +132,7 @@ function main(): void {
     summary.lastfm.loved = lastfm.lovedCount ?? 0;
     summary.lastfm.failed = lastfm.failedCount ?? 0;
     summary.lastfm.skipped = lastfm.skippedCount ?? 0;
+    summary.lastfm.throttled = lastfm.rateLimited ?? false;
   } catch (error) {
     summary.lastfm.error = error instanceof Error ? error.message : String(error);
     log(`lastfm backfill failed: ${summary.lastfm.error}`);

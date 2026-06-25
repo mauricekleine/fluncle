@@ -58,6 +58,7 @@ describe("oRPC backfill_discogs (POST /admin/backfill/discogs)", () => {
     backfillDiscogsIds.mockResolvedValueOnce({
       dryRun: false,
       nextCursor: null,
+      rateLimited: false,
       resolved: [],
       resolvedCount: 0,
       skipped: [],
@@ -77,6 +78,7 @@ describe("oRPC backfill_discogs (POST /admin/backfill/discogs)", () => {
     backfillDiscogsIds.mockResolvedValueOnce({
       dryRun: false,
       nextCursor: "cur-2",
+      rateLimited: false,
       resolved: [{ logId: "004.7.2I", releaseId: 12, source: "discogs" }],
       resolvedCount: 1,
       skipped: ["004.7.4K"],
@@ -95,6 +97,7 @@ describe("oRPC backfill_discogs (POST /admin/backfill/discogs)", () => {
       dryRun: false,
       nextCursor: "cur-2",
       ok: true,
+      rateLimited: false,
       resolved: [{ logId: "004.7.2I", releaseId: 12, source: "discogs" }],
       resolvedCount: 1,
       skipped: ["004.7.4K"],
@@ -117,6 +120,7 @@ describe("oRPC backfill_lastfm (POST /admin/backfill/lastfm)", () => {
       loved: [],
       lovedCount: 0,
       nextCursor: null,
+      rateLimited: false,
       skipped: [],
       skippedCount: 0,
     });
@@ -136,6 +140,7 @@ describe("oRPC backfill_lastfm (POST /admin/backfill/lastfm)", () => {
       loved: ["004.7.2I"],
       lovedCount: 1,
       nextCursor: null,
+      rateLimited: false,
       skipped: ["004.7.4K"],
       skippedCount: 1,
     });
@@ -152,6 +157,7 @@ describe("oRPC backfill_lastfm (POST /admin/backfill/lastfm)", () => {
       lovedCount: 1,
       nextCursor: null,
       ok: true,
+      rateLimited: false,
       skipped: ["004.7.4K"],
       skippedCount: 1,
     });

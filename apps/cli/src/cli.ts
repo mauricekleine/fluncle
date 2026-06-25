@@ -1262,6 +1262,7 @@ async function runBackfillLastfm(
   const skipped: string[] = [];
   let cursor: string | undefined;
   let dryRun = options.dryRun;
+  let throttled = false;
 
   // The cap is on findings actually HANDLED (loved + failed); skips don't count, so
   // the loop keeps draining cursors past cooling-down findings until the cap is met
@@ -1281,6 +1282,14 @@ async function runBackfillLastfm(
       );
     }
 
+    if (result.rateLimited) {
+      // Last.fm circuit breaker tripped (active rate-limiting). Stop looping the
+      // cursor — re-firing it just grinds into the same wall until the cron's 120s
+      // timeout; the next tick resumes from a fresh rate-limit window.
+      throttled = true;
+      break;
+    }
+
     if (result.nextCursor === null) {
       break;
     }
@@ -1296,6 +1305,7 @@ async function runBackfillLastfm(
       loved,
       lovedCount: loved.length,
       ok: true,
+      rateLimited: throttled,
       skipped,
       skippedCount: skipped.length,
     });
@@ -1327,6 +1337,7 @@ async function runBackfillDiscogs(
   const skipped: string[] = [];
   let cursor: string | undefined;
   let dryRun = options.dryRun;
+  let throttled = false;
 
   // The cap is on findings actually HANDLED (resolved + unresolved); skips don't
   // count, so the loop keeps draining cursors past cooling-down/done findings until
@@ -1346,6 +1357,14 @@ async function runBackfillDiscogs(
       );
     }
 
+    if (result.rateLimited) {
+      // Discogs circuit breaker tripped (active 429s). Stop looping the cursor —
+      // re-firing it just grinds into the same wall until the cron's 120s timeout;
+      // the next tick resumes from a fresh rate-limit window.
+      throttled = true;
+      break;
+    }
+
     if (result.nextCursor === null) {
       break;
     }
@@ -1357,6 +1376,7 @@ async function runBackfillDiscogs(
     printJson({
       dryRun,
       ok: true,
+      rateLimited: throttled,
       resolved,
       resolvedCount: resolved.length,
       skipped,

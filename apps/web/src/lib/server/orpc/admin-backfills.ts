@@ -46,6 +46,7 @@ export function adminBackfillsHandlers(os: Implementer) {
         dryRun: result.dryRun,
         nextCursor: result.nextCursor,
         ok: true as const,
+        rateLimited: result.rateLimited,
         resolved: result.resolved,
         resolvedCount: result.resolvedCount,
         skipped: result.skipped,
@@ -77,6 +78,7 @@ export function adminBackfillsHandlers(os: Implementer) {
         lovedCount: result.lovedCount,
         nextCursor: result.nextCursor,
         ok: true as const,
+        rateLimited: result.rateLimited,
         skipped: result.skipped,
         skippedCount: result.skippedCount,
       };
