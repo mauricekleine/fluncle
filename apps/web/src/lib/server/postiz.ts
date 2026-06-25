@@ -10,9 +10,10 @@
 //   value[].content), then publishes manually. Type "draft" would keep it in
 //   Postiz and send nothing, so it would never reach TikTok.
 // - Instagram Reel & YouTube Short: the API carries caption + the video's own
-//   (baked-in) audio, and YouTube also takes a custom thumbnail, so these post
-//   DIRECTLY (no inbox, no manual finish) per the operator's choice. We push the
-//   with-audio cut, not the silent one. See docs/track-lifecycle.md (Phase 3).
+//   (baked-in) audio, so these post DIRECTLY (no inbox, no manual finish) per the
+//   operator's choice. We push the with-audio cut, not the silent one, and set NO
+//   custom YouTube thumbnail — the auto-picked frame reads better (docs/ROADMAP.md
+//   "YouTube thumbnails — decided: leave them"). See docs/track-lifecycle.md (Phase 3).
 //
 // The Worker owns the Postiz key; the agent/CLI never sees it.
 
@@ -81,27 +82,6 @@ async function resolveIntegrationId(candidates: string[]): Promise<string> {
     `No connected ${candidates[0]} channel in Postiz (looked for ${candidates.join("/")}; connected: ${connected})`,
     400,
   );
-}
-
-/**
- * Whether a HEAD probe *proves* a public object is gone — only an explicit
- * 404/410 counts. Used to probe an optional R2 object before asking Postiz to
- * pull it: older bundles can lack a cover.jpg, and a confirmed not-found should
- * degrade to a thumbnail-less push rather than 502 the whole thing. Anything
- * else is inconclusive — a 2xx says present, and a 403, a 5xx, a HEAD-averse
- * CDN, or a network blip must NOT be read as absence (that would hide a real
- * cover-delivery problem behind a silent success). On "not proven gone" the
- * caller falls through to the normal upload path, which surfaces a genuine
- * failure as the existing 502.
- */
-async function isConfirmedAbsent(url: string): Promise<boolean> {
-  try {
-    const response = await fetch(url, { method: "HEAD" });
-
-    return response.status === 404 || response.status === 410;
-  } catch {
-    return false;
-  }
 }
 
 /** Register a public HTTPS media URL with Postiz (it pulls it). Returns the ref. */
@@ -505,33 +485,19 @@ export async function pushTikTokDraft(input: {
 // it can't mirror TikTok's add-sound-in-app flow. IG presence is a manual,
 // in-app post. See docs/track-lifecycle.md (Phase 3) and the fluncle-publish skill.
 
-/** Upload a YouTube Short directly (public), with a custom thumbnail. */
+/**
+ * Push a YouTube Short directly (public). We deliberately set NO custom
+ * thumbnail: YouTube's auto-picked frame from each bespoke-shader video reads
+ * better than a flat cover plate, so we keep the auto-frame (see docs/ROADMAP.md
+ * "YouTube thumbnails — decided: leave them"). The push carries title + caption.
+ */
 export async function pushYouTubeShort(input: {
-  coverUrl?: string;
   description: string;
   title: string;
   videoUrl: string;
 }): Promise<{ postId: string }> {
   const integrationId = await resolveIntegrationId(["youtube"]);
   const media = await uploadFromUrl(input.videoUrl);
-
-  // The cover is optional: older bundles can lack a cover.jpg in R2. Skip the
-  // thumbnail only on a *confirmed* absence (404/410), so a genuinely missing
-  // cover degrades to a thumbnail-less Short. Any other probe result falls
-  // through to uploadFromUrl — a present cover uploads, and a real
-  // cover-delivery problem (403/5xx/etc.) surfaces as the existing 502 rather
-  // than being silently dropped.
-  let thumbnail: Media | undefined;
-
-  if (input.coverUrl) {
-    if (await isConfirmedAbsent(input.coverUrl)) {
-      console.warn(
-        `postiz: cover missing (404/410), posting YouTube Short without thumbnail (${input.coverUrl})`,
-      );
-    } else {
-      thumbnail = await uploadFromUrl(input.coverUrl);
-    }
-  }
 
   return createPost({
     content: input.description,
@@ -541,7 +507,7 @@ export async function pushYouTubeShort(input: {
       __type: "youtube",
       selfDeclaredMadeForKids: "no",
       tags: [],
-      thumbnail: thumbnail ? { id: thumbnail.id, path: thumbnail.path } : null,
+      thumbnail: null,
       title: input.title.slice(0, YT_TITLE_MAX),
       type: "public",
     },
