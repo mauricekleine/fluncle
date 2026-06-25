@@ -2766,20 +2766,21 @@ var statusServiceOrder = []string{
 	"ssh",
 	"onion",
 	"hermes",
-	"automation",
 	"render-box",
 }
 
 // statusServiceLabels carries the voice label per known service id (mirrors the
 // web dashboard's SERVICE_LABELS), falling back to the raw id for an unknown one.
+// `render-box` (the scale-to-zero box's reachability) reads distinctly from the
+// `cron.render` row (the render cron's last-run freshness), so the two never read as
+// the video-render agent listed twice.
 var statusServiceLabels = map[string]string{
-	"automation": "Enrichment agents",
 	"db":         "Database",
 	"dns":        "DNS",
 	"hermes":     "Hermes agent",
 	"onion":      "Tor onion",
 	"r2":         "Media storage",
-	"render-box": "Video rendering agent",
+	"render-box": "Render box",
 	"ssh":        "SSH terminal",
 	"web":        "Web",
 }
@@ -2788,12 +2789,11 @@ var statusServiceLabels = map[string]string{
 // public domain it lives at, or what it does (mirrors the web dashboard's
 // SERVICE_SUBTITLES). Public-safe: every domain here is already public.
 var statusServiceSubtitles = map[string]string{
-	"automation": "the per-finding enrichment crew",
 	"dns":        "dig.fluncle.com",
 	"hermes":     "the Discord chat agent",
 	"onion":      "the archive over Tor",
 	"r2":         "found.fluncle.com",
-	"render-box": "renders each finding's video",
+	"render-box": "the scale-to-zero box's reachability",
 	"ssh":        "rave.fluncle.com",
 	"web":        "www.fluncle.com",
 }
