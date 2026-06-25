@@ -105,6 +105,10 @@ docker run -d --name hermes --restart unless-stopped \
 - For a Discord-only bot, publish **no** ports (the gateway dials out over the Discord WebSocket). If the API (`8642`) or dashboard (`9119`) is ever needed, bind to `127.0.0.1`/`tailscale0` only.
 - Disable Tailscale node-key expiry on the box (no public fallback → an expired key is a total lockout).
 
+## Self-deploy (the pin-watch timer)
+
+The box keeps its baked CLI pins current **on its own**. `fluncle-pin-watch` — a host systemd timer on rave-02 (a _host_ timer, not a Hermes cron: a container can't cleanly rebuild and replace itself) — hourly compares the `fluncle` + Claude Code pins in this Dockerfile on `main` against the running container's versions; on drift it rebuilds the image, **pre-smokes** it (versions + an agent read + the publish-class role boundary) in throwaway containers BEFORE touching the live one, swaps, post-smokes, and **auto-rolls-back** on any failure — credential-free (the repo is public; secrets are reused from the running container's own env, nothing read from `op`), Discord-alerting on a deploy or rollback. This is the deploy half of the version-currency loop: the [`fluncle-maintenance`](../../packages/skills/fluncle-maintenance) routine merges a clearly-safe pin bump (and stops), and the box self-deploys it. The base image (`FROM`) is **not** watched — a base bump stays a manual operator brake. Runbook + the rollback rail: [`hermes/pin-watch/`](./hermes/pin-watch/).
+
 ## Crons (automation)
 
 Hermes is also Fluncle's queue-driven automation orchestrator: scheduled, trusted, no-untrusted-input loops over the `fluncle` CLI (`docs/hermes-automation-brief.md`). They are versioned at [`docs/agents/hermes/cron/`](./hermes/cron/) (`jobs.json` + a `README.md` with the operator's wire-on-the-box steps).

@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# fluncle-pin-watch — the rave-02 box's self-deploy.
+#
+# Watches main's baked CLI pins (the `fluncle` + Claude Code versions in
+# docs/agents/hermes/Dockerfile) against what the running Hermes container has;
+# when main is ahead, rebuilds the image and swaps the container — with a
+# pre-smoke gate (the new image is fully smoke-tested in throwaway containers
+# BEFORE the live one is touched) and an auto-rollback rail (on any failure the
+# previous image is restored). The box is never left broken.
+#
+# CREDENTIAL-FREE BY DESIGN: the repo is public (clone needs no key), and the new
+# container REUSES the running container's runtime env (captured via
+# `docker inspect`, the doctrine's "keep it reversible" step) — so this reads
+# nothing from `op`, writes no secret to host disk persistently, and puts no
+# token on the box. The captured env lives only in a tmpfs file for the swap.
+#
+# Run by pin-watch.timer (default: --if-stale, a no-op when current). Run once
+# by hand with --force to clear accumulated debt and validate the recipe.
+#
+# Doctrine: docs/agents/hermes-agent.md + the fluncle-hermes-operator skill.
+set -euo pipefail
+
+# ── config (overridable via the env) ──────────────────────────────────────────
+CONTAINER="${PINWATCH_CONTAINER:-hermes}"
+IMAGE_REPO="${PINWATCH_IMAGE_REPO:-fluncle-hermes}"
+REPO_URL="${PINWATCH_REPO_URL:-https://github.com/mauricekleine/fluncle.git}"
+REPO_DIR="${PINWATCH_REPO_DIR:-/opt/fluncle-build}"
+DOCKERFILE="docs/agents/hermes/Dockerfile"
+LOCK="${PINWATCH_LOCK:-/run/lock/fluncle-pin-watch.lock}"
+KEEP_IMAGES="${PINWATCH_KEEP_IMAGES:-4}"
+
+MODE="--if-stale"
+case "${1:-}" in
+  --force) MODE="--force" ;;     # rebuild regardless of drift (the operator pilot)
+  --dry-run) MODE="--dry-run" ;; # build + pre-smoke the new image, then STOP (never swap)
+esac
+
+log() { printf '[pin-watch] %s\n' "$*" >&2; }
+die() { log "FATAL: $*"; exit 1; }
+
+# ── single-flight ─────────────────────────────────────────────────────────────
+exec 9>"$LOCK"
+flock -n 9 || { log "another run holds the lock; exiting"; exit 0; }
+
+command -v docker >/dev/null || die "docker not found"
+command -v git >/dev/null || die "git not found"
+docker inspect "$CONTAINER" >/dev/null 2>&1 || die "container '$CONTAINER' not running — refusing to act (an operator must (re)provision it)"
+
+# Discord alert (best-effort; the webhook is read from the LIVE container's env
+# so we never need a config file). Never throws.
+WEBHOOK="$(docker inspect "$CONTAINER" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | sed -n 's/^DISCORD_ALERT_WEBHOOK=//p' | head -1 || true)"
+alert() {
+  [ -n "$WEBHOOK" ] || return 0
+  curl -fsS -m 10 -H 'Content-Type: application/json' \
+    -d "$(printf '{"content":%s}' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$/"/')")" \
+    "$WEBHOOK" >/dev/null 2>&1 || true
+}
+
+# ── 1. sync the build context (public repo, no credential) ────────────────────
+if [ -d "$REPO_DIR/.git" ]; then
+  git -C "$REPO_DIR" fetch --depth 1 origin main -q
+else
+  log "cloning the public repo into $REPO_DIR"
+  rm -rf "$REPO_DIR"
+  git clone --depth 1 "$REPO_URL" "$REPO_DIR" -q
+fi
+git -C "$REPO_DIR" checkout -q -B main origin/main
+git -C "$REPO_DIR" reset --hard -q origin/main
+
+# ── 2. read the target pins (Dockerfile on main) vs the box's running versions ─
+pin_from_dockerfile() { sed -n "s/.*$1@\\([0-9][0-9.]*\\).*/\\1/p" "$REPO_DIR/$DOCKERFILE" | head -1; }
+WANT_FLUNCLE="$(pin_from_dockerfile 'fluncle')"
+WANT_CLAUDE="$(pin_from_dockerfile '@anthropic-ai\/claude-code')"
+[ -n "$WANT_FLUNCLE" ] && [ -n "$WANT_CLAUDE" ] || die "could not parse the Dockerfile pins (fluncle='$WANT_FLUNCLE' claude='$WANT_CLAUDE')"
+
+HAVE_FLUNCLE="$(docker exec "$CONTAINER" fluncle version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+HAVE_CLAUDE="$(docker exec "$CONTAINER" claude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+log "fluncle: have=$HAVE_FLUNCLE want=$WANT_FLUNCLE | claude-code: have=$HAVE_CLAUDE want=$WANT_CLAUDE"
+
+if [ "$MODE" = "--if-stale" ] && [ "$HAVE_FLUNCLE" = "$WANT_FLUNCLE" ] && [ "$HAVE_CLAUDE" = "$WANT_CLAUDE" ]; then
+  log "pins current — no-op"
+  exit 0
+fi
+log "pins drifted (or --force) — rebuilding"
+
+# ── 3. capture the running container's runtime env (the secrets) into a tmpfs ──
+# = the container's env MINUS the image's baked ENV (so we re-inject only the
+# --env-file vars, never the image defaults). Lives only in tmpfs; rm on exit.
+OLD_IMAGE="$(docker inspect "$CONTAINER" --format '{{.Config.Image}}')"
+ENVTMP="$(mktemp -p "${XDG_RUNTIME_DIR:-/dev/shm}" pinwatch-env.XXXXXX)"
+chmod 600 "$ENVTMP"
+trap 'rm -f "$ENVTMP"' EXIT
+comm -23 \
+  <(docker inspect "$CONTAINER"  --format '{{range .Config.Env}}{{println .}}{{end}}' | sort) \
+  <(docker inspect "$OLD_IMAGE"  --format '{{range .Config.Env}}{{println .}}{{end}}' | sort) \
+  > "$ENVTMP"
+[ -s "$ENVTMP" ] || die "captured runtime env is empty — refusing to launch a secret-less container"
+
+# capture the run-config flags from the LIVE container (faithful reproduction —
+# never assume a path: the script runs as root, so `~` would be /root, not the
+# real /home/admin/.hermes mount).
+RESTART="$(docker inspect "$CONTAINER" --format '{{.HostConfig.RestartPolicy.Name}}')"
+MOUNT_SRC="$(docker inspect "$CONTAINER" --format '{{range .Mounts}}{{if eq .Destination "/opt/data"}}{{.Source}}{{end}}{{end}}')"
+[ -n "$MOUNT_SRC" ] || die "could not find the /opt/data mount source on the running container"
+
+# ── 4. build the new image ────────────────────────────────────────────────────
+SHA="$(git -C "$REPO_DIR" rev-parse --short HEAD)"
+NEW_IMAGE="$IMAGE_REPO:v$(date -u +%Y.%m.%d)-$SHA"
+log "building $NEW_IMAGE (repo root build context, -f $DOCKERFILE)"
+docker build -f "$REPO_DIR/$DOCKERFILE" -t "$NEW_IMAGE" "$REPO_DIR" >&2 || { alert "🛠️ pin-watch: BUILD FAILED for $NEW_IMAGE — box untouched, staying on $OLD_IMAGE"; die "build failed"; }
+
+# ── 5. PRE-SMOKE the new image in throwaway containers (live box untouched) ────
+presmoke_fail() { alert "🛠️ pin-watch: PRE-SMOKE FAILED ($1) for $NEW_IMAGE — box untouched, staying on $OLD_IMAGE"; die "pre-smoke failed: $1"; }
+GOT_FLUNCLE="$(docker run --rm --entrypoint fluncle "$NEW_IMAGE" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+[ "$GOT_FLUNCLE" = "$WANT_FLUNCLE" ] || presmoke_fail "fluncle version $GOT_FLUNCLE != $WANT_FLUNCLE"
+GOT_CLAUDE="$(docker run --rm --entrypoint claude "$NEW_IMAGE" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+[ "$GOT_CLAUDE" = "$WANT_CLAUDE" ] || presmoke_fail "claude version $GOT_CLAUDE != $WANT_CLAUDE"
+# agent-allowed read with the agent token + live API (expect ok:true)
+docker run --rm --env-file "$ENVTMP" --entrypoint fluncle "$NEW_IMAGE" admin tracks enrich --queue --json --limit 1 2>/dev/null | grep -Eq '"ok" *: *true' || presmoke_fail "agent read did not return ok:true"
+# the server boundary: a publish-class command with the agent token MUST be refused
+if docker run --rm --env-file "$ENVTMP" --entrypoint fluncle "$NEW_IMAGE" admin add 'https://open.spotify.com/track/0000000000000000pinwatch' >/dev/null 2>&1; then
+  presmoke_fail "publish-class command was NOT refused (role boundary regression)"
+fi
+log "pre-smoke passed"
+
+if [ "$MODE" = "--dry-run" ]; then
+  log "dry-run: $NEW_IMAGE built and pre-smoke passed; leaving the live container untouched"
+  exit 0
+fi
+
+# ── 6. swap (the only moment the live container is touched) ────────────────────
+run_container() {
+  docker run -d --name "$CONTAINER" --restart "${RESTART:-unless-stopped}" \
+    --memory=4g --cpus=2 --shm-size=1g \
+    --log-driver json-file --log-opt max-size=10m --log-opt max-file=5 \
+    -v "$MOUNT_SRC":/opt/data \
+    --env-file "$ENVTMP" \
+    "$1" gateway run >/dev/null
+}
+# Healthy = the gateway came up and stays up (the CLI answers from inside).
+container_healthy() {
+  sleep 6
+  [ "$(docker inspect "$CONTAINER" --format '{{.State.Running}}' 2>/dev/null)" = "true" ] &&
+    docker exec "$CONTAINER" fluncle version >/dev/null 2>&1
+}
+
+log "swapping $CONTAINER: $OLD_IMAGE -> $NEW_IMAGE"
+docker stop "$CONTAINER" >/dev/null 2>&1 || true
+docker rm "$CONTAINER" >/dev/null 2>&1 || true
+
+# ── 7. start new + post-swap smoke (the `if` keeps set -e from bare-exiting) ───
+if run_container "$NEW_IMAGE" && container_healthy; then
+  log "post-swap smoke passed — deployed $NEW_IMAGE"
+  alert "🚀 pin-watch: deployed $NEW_IMAGE on rave-02 — fluncle $HAVE_FLUNCLE→$WANT_FLUNCLE, claude-code $HAVE_CLAUDE→$WANT_CLAUDE"
+  # prune old fluncle-hermes images, keep the most recent $KEEP_IMAGES (rollback depth)
+  docker images "$IMAGE_REPO" --format '{{.Repository}}:{{.Tag}} {{.CreatedAt}}' \
+    | sort -rk2 | awk 'NR>'"$KEEP_IMAGES"' {print $1}' | xargs -r docker rmi >/dev/null 2>&1 || true
+  exit 0
+fi
+
+# ── 8. ROLLBACK — the box is never left broken ────────────────────────────────
+log "new image did not come up healthy — rolling back to $OLD_IMAGE"
+docker stop "$CONTAINER" >/dev/null 2>&1 || true
+docker rm "$CONTAINER" >/dev/null 2>&1 || true
+if run_container "$OLD_IMAGE" && container_healthy; then
+  alert "↩️ pin-watch: $NEW_IMAGE failed smoke on rave-02 — ROLLED BACK to $OLD_IMAGE (running). A human should look."
+  die "rolled back to $OLD_IMAGE after a failed deploy"
+fi
+alert "🔴 pin-watch: ROLLBACK ALSO FAILED on rave-02 — Hermes is DOWN. Operator needed NOW."
+die "rollback failed — box is down"

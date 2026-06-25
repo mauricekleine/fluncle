@@ -25,8 +25,8 @@ All commands assume the repo root as the working directory. The "check latest" o
 
   These are calendar-versioned (`vYYYY.M.D`). Compare the newest tag to the pin.
 
-- **How to bump:** edit the `FROM` tag → **rebuild the image + redeploy + smoke-test** (operator step — see `bump-procedure.md`). The version line also busts the Docker layer cache.
-- **Safety:** **PULL THE BRAKE — always report, never ship.** Pre-1.0; a base bump can change the runtime or drop the gateway below the model-context floor at startup. The routine _can_ rebuild + smoke-test, but the base's failure mode is the **whole gateway**, not one probe — too coarse and too consequential to ship unattended. Report the available tag and let the operator decide. Periodically the operator _should_ take a base bump for upstream security patches — surface it, do not apply it.
+- **How to bump:** edit the `FROM` tag → open a PR → merge when CI green → the on-box `fluncle-pin-watch` timer self-deploys the rebuild (see `bump-procedure.md` and `docs/agents/hermes/pin-watch/`). The version line also busts the Docker layer cache.
+- **Safety:** **PULL THE BRAKE — always report, never ship.** Pre-1.0; a base bump can change the runtime or drop the gateway below the model-context floor at startup. The base's failure mode is the **whole gateway**, not one probe — too coarse and too consequential to ship unattended even with the pin-watch pre-smoke safety net. Report the available tag and let the operator decide. Periodically the operator _should_ take a base bump for upstream security patches — surface it, do not apply it.
 
 ---
 
@@ -55,8 +55,8 @@ bun is baked into the image, declared as the repo's `packageManager`, and reques
     | grep -m1 '"tag_name"' | sed 's/.*"bun-v//;s/".*//'
   ```
 
-- **How to bump:** change the version in **all** of: the Dockerfile installer line (`bun-v<new>`), `package.json` `packageManager` (`bun@<new>`), and every workflow `bun-version:`. Then the Dockerfile change ships via image rebuild; the `package.json` + workflow changes ship via the PR's CI deploy-gate and merge to `main`.
-- **Safety:** a **patch/minor** that the CI deploy-gate accepts is safe to ship (it is the same interpreter CI runs). A **major** bun bump = **brake** (toolchain-wide behaviour change). The repo-side `package.json` + workflow change ships on merge; the routine ships the Dockerfile line on the same box rebuild it does for any baked-pin bump (smoke-validated, rollback on fail).
+- **How to bump:** change the version in **all** of: the Dockerfile installer line (`bun-v<new>`), `package.json` `packageManager` (`bun@<new>`), and every workflow `bun-version:`. The Dockerfile change ships via the box's `fluncle-pin-watch` self-deploy after the PR merges; the `package.json` + workflow changes ship via the PR's CI deploy-gate and merge to `main`.
+- **Safety:** a **patch/minor** that the CI deploy-gate accepts is safe to ship (it is the same interpreter CI runs). A **major** bun bump = **brake** (toolchain-wide behaviour change). The repo-side `package.json` + workflow change ships on merge; the baked Dockerfile line ships via pin-watch (rebuild → pre-smoke → auto-rollback on fail).
 
 ---
 
@@ -76,8 +76,8 @@ bun is baked into the image, declared as the repo's `packageManager`, and reques
   npm view fluncle version
   ```
 
-- **How to bump:** edit the `fluncle@<version>` → rebuild + redeploy. The version line busts the layer cache. (This is Fluncle's own CLI, released by the repo's `cli-release.yml`; it carries the renamed Convention-B surface + admin commands the crons call.)
-- **Safety:** a **patch/minor** is safe to ship — it is first-party, and a stale CLI on the box just lacks a recent command. The bump reaches the box on an image rebuild, which the routine now does **end-to-end after merge** (rebuild + smoke-test, rollback on a failed smoke). A **major** = brake (a renamed/removed command could break a cron).
+- **How to bump:** edit the `fluncle@<version>` line → open a PR → merge when CI green. The version line busts the layer cache, and the on-box `fluncle-pin-watch` timer picks it up: rebuild → pre-smoke → swap → auto-rollback. (This is Fluncle's own CLI, released by the repo's `cli-release.yml`; it carries the renamed Convention-B surface + admin commands the crons call.)
+- **Safety:** a **patch/minor** is safe to ship — it is first-party, and a stale CLI on the box just lacks a recent command. The merge triggers the pin-watch self-deploy (pre-smoke-validated, auto-rollback on fail). A **major** = brake (a renamed/removed command could break a cron).
 
 ---
 
@@ -97,8 +97,8 @@ bun is baked into the image, declared as the repo's `packageManager`, and reques
   npm view @anthropic-ai/claude-code version
   ```
 
-- **How to bump:** edit `@anthropic-ai/claude-code@<version>` → rebuild + redeploy. This is the `claude -p` binary the observation cron's one agentic step shells out to (subscription auth at run time; zero OpenRouter tokens). Never float `latest` — the Hermes toolchain is pinned whole.
-- **Safety:** a **patch/minor** is safe to ship (it is the agent CLI, not the model or the auth; a patch rarely changes the `claude -p` contract). The deploy-gate can't validate a baked pin, so the routine validates it on the box: rebuild + **smoke-test** after merge, rollback on a failed smoke. A **major** = brake (the `-p` / skills-discovery contract could change). Anything touching the **auth token shape** = brake regardless of version.
+- **How to bump:** edit `@anthropic-ai/claude-code@<version>` → open a PR → merge when CI green. The on-box `fluncle-pin-watch` timer then rebuilds, pre-smokes (including an agent-tier `{ok:true}` check), and auto-rolls-back on any failure. This is the `claude -p` binary the observation cron's one agentic step shells out to (subscription auth at run time; zero OpenRouter tokens). Never float `latest` — the Hermes toolchain is pinned whole.
+- **Safety:** a **patch/minor** is safe to ship (it is the agent CLI, not the model or the auth; a patch rarely changes the `claude -p` contract). The deploy-gate can't validate a baked pin; the pin-watch pre-smoke validates it on the box before the live container is touched. A **major** = brake (the `-p` / skills-discovery contract could change). Anything touching the **auth token shape** = brake regardless of version.
 
 ---
 
@@ -108,8 +108,8 @@ bun is baked into the image, declared as the repo's `packageManager`, and reques
 - **Marker:** `curl -fsSL https://box.ascii.dev/install` (the comment says `box.ascii is pre-1.0 and its installer offers no version pin … this is the one image dependency not version-pinned … Re-verify the conductor after a base rebuild.`)
 - **Current pin:** **none.** The installer tracks the `ascii-prod` channel and the CLI self-updates. There is no version to read and nothing to bump.
 - **Check latest:** N/A — not pinnable. Do not try to pin it; that is by design.
-- **Action on a sweep:** there is **no bump**. The only maintenance is to **re-verify the render conductor after a rebuild** (a `box status` → authed, then a conductor dry-run) — which the routine already does as part of its post-rebuild smoke-test whenever it rebuilds for another baked pin. If a sweep finds nothing else to do, box.ascii contributes a one-line "unpinnable, re-verify post-rebuild" note and nothing more.
-- **Safety:** always **brake** in the sense that the routine never bumps it. It re-verifies the conductor as part of any post-rebuild smoke-test (the routine's own, or the operator's).
+- **Action on a sweep:** there is **no bump**. The only maintenance is to **re-verify the render conductor after a rebuild** (a `box status` → authed, then a conductor dry-run) — which the on-box pin-watch post-smoke already does whenever it rebuilds for another baked pin. If a sweep finds nothing else to do, box.ascii contributes a one-line "unpinnable, re-verify post-rebuild" note and nothing more.
+- **Safety:** always **brake** in the sense that the routine never bumps it. The pin-watch post-smoke re-verifies the conductor as part of any rebuild it does; the routine itself never SSHes to the box to do so.
 
 ---
 

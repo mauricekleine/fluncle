@@ -1,0 +1,19 @@
+[Unit]
+Description=fluncle-pin-watch — rave-02 Hermes self-deploy (watch main's baked CLI pins, rebuild + smoke + auto-rollback)
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/pin-watch/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+# Runs as root: it drives the Docker daemon (build + swap the hermes container)
+# and owns the build clone at /opt/fluncle-build. Credential-free — it reads no
+# secrets (reuses the running container's env) and clones a public repo.
+ExecStart=/opt/fluncle-pin-watch/rebuild-hermes.sh
+# A full image rebuild (~6 GB base) can take several minutes; give it room.
+TimeoutStartSec=1800
+# Modest hardening for a root docker-driving oneshot.
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
