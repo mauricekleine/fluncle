@@ -277,11 +277,11 @@ describe("oRPC draft_track_social (POST .../social/{platform}/draft)", () => {
   it("auto-records the live YouTube URL + links the release-id when it resolves", async () => {
     getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
     pushYouTubeShort.mockResolvedValueOnce({ postId: "yt-2" });
-    // The resolver reads the auto-populated releaseURL off the dated /posts list
-    // (the real watch URL) + the releaseId (the videoId); recorded VERBATIM.
+    // The resolver reads the releaseId (the videoId) off the dated /posts list and
+    // builds the canonical Short URL; that is what the caller records.
     resolveSocialUrl.mockResolvedValueOnce({
       nativeId: "h61ZuxQVnBA",
-      url: "https://www.youtube.com/watch?v=h61ZuxQVnBA",
+      url: "https://www.youtube.com/shorts/h61ZuxQVnBA",
     });
 
     const { handleOrpc } = await import("./orpc");
@@ -300,11 +300,11 @@ describe("oRPC draft_track_social (POST .../social/{platform}/draft)", () => {
       trackId: TRACK_ID,
     });
     expect(resolveSocialUrl).toHaveBeenCalledWith("yt-2", "youtube");
-    // The auto-populated releaseURL is recorded VERBATIM, not reconstructed.
+    // The canonical Short URL the resolver built is what gets recorded.
     expect(recordPostUrl).toHaveBeenCalledWith(
       TRACK_ID,
       "youtube",
-      "https://www.youtube.com/watch?v=h61ZuxQVnBA",
+      "https://www.youtube.com/shorts/h61ZuxQVnBA",
     );
     // The videoId links the post to its content for Postiz analytics.
     expect(postizSetReleaseId).toHaveBeenCalledWith("yt-2", "h61ZuxQVnBA");
@@ -439,11 +439,13 @@ describe("resolveSocialUrl (YouTube releaseURL / TikTok /missing)", () => {
     );
   }
 
-  it("YouTube: returns the auto-populated releaseURL VERBATIM once PUBLISHED", async () => {
+  it("YouTube: captures the canonical /shorts/<id> URL built from the videoId once PUBLISHED", async () => {
     const { resolveSocialUrl } = await vi.importActual<typeof import("./postiz")>("./postiz");
 
     // The dated /posts list. NOTE the unescaped newline in `content` — exactly the
     // shape live Postiz returns — to prove the lenient parse recovers the post.
+    // Postiz auto-populates `releaseURL` as a `watch?v=<id>` URL; we capture the
+    // canonical Short form built from `releaseId` (the videoId) instead.
     const listBody =
       '{"posts":[' +
       '{"id":"yt-live","state":"PUBLISHED","releaseId":"h61ZuxQVnBA",' +
@@ -457,7 +459,7 @@ describe("resolveSocialUrl (YouTube releaseURL / TikTok /missing)", () => {
 
     expect(resolved).toEqual({
       nativeId: "h61ZuxQVnBA",
-      url: "https://www.youtube.com/watch?v=h61ZuxQVnBA",
+      url: "https://www.youtube.com/shorts/h61ZuxQVnBA",
     });
   });
 
@@ -540,7 +542,7 @@ describe("oRPC capture_post_urls (POST /admin/social/posts/capture)", () => {
     resolveSocialUrl
       .mockResolvedValueOnce({
         nativeId: "vid9",
-        url: "https://www.youtube.com/watch?v=vid9",
+        url: "https://www.youtube.com/shorts/vid9",
       })
       .mockResolvedValueOnce({
         nativeId: "aweme9",
@@ -553,7 +555,7 @@ describe("oRPC capture_post_urls (POST /admin/social/posts/capture)", () => {
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({
       captured: [
-        { platform: "youtube", trackId: "t-yt", url: "https://www.youtube.com/watch?v=vid9" },
+        { platform: "youtube", trackId: "t-yt", url: "https://www.youtube.com/shorts/vid9" },
         {
           platform: "tiktok",
           trackId: "t-tt",
@@ -572,7 +574,7 @@ describe("oRPC capture_post_urls (POST /admin/social/posts/capture)", () => {
     expect(recordPostUrl).toHaveBeenCalledWith(
       "t-yt",
       "youtube",
-      "https://www.youtube.com/watch?v=vid9",
+      "https://www.youtube.com/shorts/vid9",
     );
     expect(recordPostUrl).toHaveBeenCalledWith(
       "t-tt",
