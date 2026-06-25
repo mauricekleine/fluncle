@@ -31,7 +31,9 @@ import (
 	"charm.land/wish/v2/logging"
 	sshgalaxy "fluncle/apps/ssh/internal/galaxy"
 	"github.com/charmbracelet/ssh"
+	"github.com/mdp/qrterminal/v3"
 	"github.com/oschwald/maxminddb-golang/v2"
+	"rsc.io/qr"
 )
 
 const defaultAPIURL = "https://www.fluncle.com"
@@ -1544,7 +1546,11 @@ func (m model) renderGalaxyLog() string {
 		content = append(content, "", readingStyle.Render(terminalLink("Play back on Earth", carrier.track.SpotifyURL)))
 	}
 	if coord := strings.TrimSpace(carrier.track.LogID); coord != "" {
-		content = append(content, "", readingStyle.Render(terminalLink("Read the log", logPageURL(coord))))
+		logURL := logPageURL(coord)
+		content = append(content, "", readingStyle.Render(terminalLink("Read the log", logURL)))
+		if beam := logQR(logURL); beam != "" {
+			content = append(content, "", labelStyle.Render("Lift the log off the terminal — point a phone at the beam:"), "", beam)
+		}
 	}
 	content = append(content, "", labelStyle.Render("The audio didn't survive the trip out here. It's still playing back on Earth."))
 	return scaffold("Galaxy", "Recovered flight log", content, helpLine("any key depart"))
@@ -2328,6 +2334,36 @@ func logPageURL(logID string) string {
 	return websiteURL + "/log/" + url.PathEscape(logID)
 }
 
+// logQR etches the finding's /log page into a half-block QR — a beam you can
+// lift off the recovered terminal and carry back to a real screen. It is a
+// physical-layer companion to the OSC-8 "Read the log" hyperlink: the link is
+// for a terminal that can click, the QR is for a junglist holding up a phone.
+//
+// In qrterminal's half-block mode the dark data modules render as bare spaces
+// and the light field renders as block glyphs (█/▀/▄). Painting those glyphs in
+// muted Stardust ink over the Deep Field leaves a light-on-dark code: the camera
+// reads the Stardust field as light and the unpainted Deep Field as the dark
+// data, so it scans while staying inside the audio-less, instruments-only
+// register. Returns "" if encoding fails, so the card simply omits the beam.
+func logQR(targetURL string) string {
+	var buf bytes.Buffer
+	qrterminal.GenerateWithConfig(targetURL, qrterminal.Config{
+		HalfBlocks: true,
+		Level:      qr.L,
+		QuietZone:  1,
+		Writer:     &buf,
+	})
+	rendered := strings.TrimRight(buf.String(), "\n")
+	if rendered == "" {
+		return ""
+	}
+	lines := strings.Split(rendered, "\n")
+	for index, line := range lines {
+		lines[index] = qrStyle.Render(line)
+	}
+	return strings.Join(lines, "\n")
+}
+
 const (
 	galaxyFrame       = time.Second / 15
 	galaxyHoldWindow  = 575 * time.Millisecond
@@ -3051,6 +3087,13 @@ var (
 	// labelStyle is secondary ink: field labels, subtitles, captions, times.
 	labelStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorStardust))
+	// qrStyle paints the recovered /log QR beam: Stardust block glyphs (the light
+	// field) over the Deep Field page (the dark data), a light-on-dark code that
+	// still scans. Stardust over Deep Field keeps it in the quiet, instruments-only
+	// register, never louder than the gold links above it.
+	qrStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(colorStardust)).
+		Background(lipgloss.Color(colorDeepField))
 	// rowIndexStyle and rowArtistStyle are the muted segments of a track row.
 	rowIndexStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorStardust))

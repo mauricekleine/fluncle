@@ -7,7 +7,10 @@ require (
 	charm.land/lipgloss/v2 v2.0.3
 	charm.land/wish/v2 v2.0.1
 	github.com/charmbracelet/ssh v0.0.0-20250826160808-ebfa259c7309
+	github.com/mattn/go-runewidth v0.0.23
+	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/oschwald/maxminddb-golang/v2 v2.3.0
+	rsc.io/qr v0.2.0
 )
 
 require (
@@ -27,7 +30,6 @@ require (
 	github.com/creack/pty v1.1.24 // indirect
 	github.com/go-logfmt/logfmt v0.6.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
-	github.com/mattn/go-runewidth v0.0.23 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
@@ -35,4 +37,5 @@ require (
 	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/term v0.42.0 // indirect
 )
