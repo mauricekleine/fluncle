@@ -1,6 +1,6 @@
 # Earth — the top-down overworld
 
-`/earth` is Fluncle's top-down overworld game: the **ground Fluncle left from**. The galaxy game (`/galaxy`) is first-person among the stars; Earth is the ground under that sky, walked top-down (Pokémon-on-a-Game-Boy-Color, in the Nostalgic Cosmos). Every device you bump is a **door into a real Fluncle surface**, and the rocket on the northern launch pad is the door into the Galaxy game. *"We have the sky but not the ground"* — now both, joined.
+`/earth` is Fluncle's top-down overworld game: the **ground Fluncle left from**. The galaxy game (`/galaxy`) is first-person among the stars; Earth is the ground under that sky, walked top-down (Pokémon-on-a-Game-Boy-Color, in the Nostalgic Cosmos). Every device you bump is a **door into a real Fluncle surface**, and the rocket on the northern launch pad is the door into the Galaxy game. _"We have the sky but not the ground"_ — now both, joined.
 
 Built per [docs/earth-overworld-rfc.md](./earth-overworld-rfc.md). A client-only Canvas app, the same shape as the galaxy game (`apps/web/src/game/*`): the route boots it via a dynamic import in `useEffect`, the server never touches browser APIs, the bundle stays light.
 
@@ -36,7 +36,7 @@ Every door opens one of three things:
 
 - **An owned surface** — `surface: "<name>"` where `<name>` is a [`@fluncle/registry`](../packages/registry/src/index.ts) surface (e.g. `web.log`, `subdomain.onion`, `mcp.server`). The generic `SurfaceCard` reads the URL + blurb straight from the registry, so a door never hardcodes a URL or drifts from canon. This is the single source of truth (#165).
 - **A custom card** — `card: "<id>"` for anything the registry doesn't carry: the recovered SSH terminal, the social channels (Spotify/Telegram/YouTube/Instagram, from `apps/web/src/lib/fluncle-links.ts`), the gated clients (mobile, Lens, Discord), and the rocket's launch card.
-- The **rocket** is just a custom card whose body is a typed `<Link to="/galaxy">` — the galaxy's own boot sequence is "Earth falling away", so the link *is* the launch.
+- The **rocket** is just a custom card whose body is a typed `<Link to="/galaxy">` — the galaxy's own boot sequence is "Earth falling away", so the link _is_ the launch.
 
 ## Adding a door (the runbook)
 

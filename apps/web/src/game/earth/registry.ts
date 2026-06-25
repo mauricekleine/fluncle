@@ -1,4 +1,4 @@
-import  { type DoorDef, type RegionModule } from "./regions/_shared";
+import { type DoorDef, type RegionModule } from "./regions/_shared";
 import { makeSprite } from "./sprites";
 
 // Auto-registration: every region module under ./regions/*.ts (except _shared)
