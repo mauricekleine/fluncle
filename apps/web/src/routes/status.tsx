@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
+import { cronSurfaces } from "@fluncle/registry";
 import { siteUrl } from "@/lib/fluncle-links";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -21,24 +22,34 @@ import {
 // at the write (the probe + the `record_health` handler), and this surface simply
 // never reaches for anything else.
 
-// The deliberate, fixed display order. Known services lead in this sequence; any
-// service the snapshot reports that isn't named here is appended (alphabetically),
-// so a newly-probed service surfaces without a code change.
-const SERVICE_ORDER = [
-  "web",
-  "db",
-  "r2",
-  "dns",
-  "ssh",
-  "onion",
-  "hermes",
-  "automation",
-  "render-box",
-];
+// The on-box Hermes crons, in @fluncle/registry catalog order — the single source of
+// truth for which crons exist + how they're ordered. The healthcheck cron POSTs one
+// `service_status` row per cron (service id = the registry surface name, e.g.
+// `cron.enrich`); this page reads that list back to render every humming system on its
+// own row, grouped under an "Automation" heading. A cron added to the registry surfaces
+// here automatically — no edit to this file.
+const CRON_SURFACES = cronSurfaces();
+const CRON_ORDER = CRON_SURFACES.map((surface) => surface.name);
+const CRON_SERVICE_IDS = new Set(CRON_ORDER);
 
-// A human label per known service id (falls back to the raw id for an unknown one).
+// The deliberate, fixed display order for the CORE (non-cron) services. They lead the
+// page; the crons render after them under their own heading. Any service the snapshot
+// reports that isn't named here (and isn't a cron) is appended alphabetically, so a
+// newly-probed service surfaces without a code change.
+const SERVICE_ORDER = ["web", "db", "r2", "dns", "ssh", "onion", "hermes", "render-box"];
+
+// A human label per known service id (falls back to the raw id for an unknown one). The
+// cron labels are keyed by their registry surface name; the fallback strips the `cron.`
+// prefix, so an as-yet-unlabeled cron still reads cleanly.
 const SERVICE_LABELS: Record<string, string> = {
-  automation: "Enrichment agents",
+  "cron.backfill": "Catalogue backfill",
+  "cron.context-note": "Context notes",
+  "cron.enrich": "Audio enrichment",
+  "cron.healthcheck": "Healthcheck prober",
+  "cron.newsletter": "Weekly newsletter",
+  "cron.note": "Editorial notes",
+  "cron.observation": "Audio observations",
+  "cron.render": "Video rendering",
   db: "Database",
   dns: "DNS",
   hermes: "Hermes agent",
@@ -53,15 +64,36 @@ const SERVICE_LABELS: Record<string, string> = {
 // description of what it does. Public-safe (every domain here is already public; the
 // descriptions name no internal host). Absent for an unknown service.
 const SERVICE_SUBTITLES: Record<string, string> = {
-  automation: "the per-finding enrichment crew",
+  "cron.backfill": "repairs Discogs ids and Last.fm loves",
+  "cron.context-note": "distills the facts behind each finding",
+  "cron.enrich": "BPM, key, and the spectral fingerprint",
+  "cron.healthcheck": "the prober behind this very page",
+  "cron.newsletter": "drafts the Friday edition",
+  "cron.note": "writes each finding's editorial note",
+  "cron.observation": "Fluncle's spoken field observations",
+  "cron.render": "renders each finding's video",
+  db: "the archive's persistence",
   dns: "dig.fluncle.com",
   hermes: "the Discord chat agent",
   onion: "the archive over Tor",
   r2: "found.fluncle.com",
-  "render-box": "renders each finding's video",
+  "render-box": "the scale-to-zero render box",
   ssh: "rave.fluncle.com",
   web: "www.fluncle.com",
 };
+
+// A label for a service id, with the cron fallback (strip `cron.`) baked in.
+function serviceLabel(service: string): string {
+  if (SERVICE_LABELS[service]) {
+    return SERVICE_LABELS[service];
+  }
+
+  return service.startsWith("cron.") ? service.slice("cron.".length) : service;
+}
+
+function serviceSubtitle(service: string): string | undefined {
+  return SERVICE_SUBTITLES[service];
+}
 
 type StatusPageData = {
   events: StatusEventRow[];
@@ -195,14 +227,6 @@ function formatCheckedAt(value: string): string {
   return `${timeFormatter.format(new Date(value))} UTC`;
 }
 
-function serviceLabel(service: string): string {
-  return SERVICE_LABELS[service] ?? service;
-}
-
-function serviceSubtitle(service: string): string | undefined {
-  return SERVICE_SUBTITLES[service];
-}
-
 // The recent-uptime bar holds this many fixed ticks; real samples are right-aligned
 // (newest = "now" at the far right) and the unfilled left is padded with faint
 // placeholders, so the strip is always full-width and visibly FILLS IN as the ledger
@@ -295,17 +319,44 @@ function elapsedShort(fromIso: string, nowIso: string): string {
   return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
 }
 
-// Sort by the fixed SERVICE_ORDER; an unranked (unknown) service sorts after every
-// ranked one, then alphabetically among themselves.
-function sortServices(services: ServiceStatusRow[]): ServiceStatusRow[] {
+// Sort by a fixed order array; an unranked (unknown) service sorts after every ranked
+// one, then alphabetically among themselves. Shared by the core list (SERVICE_ORDER)
+// and the cron group (CRON_ORDER, the registry's catalog order).
+function sortByOrder(services: ServiceStatusRow[], order: string[]): ServiceStatusRow[] {
   return [...services].sort((a, b) => {
-    const ai = SERVICE_ORDER.indexOf(a.service);
-    const bi = SERVICE_ORDER.indexOf(b.service);
-    const ar = ai === -1 ? SERVICE_ORDER.length : ai;
-    const br = bi === -1 ? SERVICE_ORDER.length : bi;
+    const ai = order.indexOf(a.service);
+    const bi = order.indexOf(b.service);
+    const ar = ai === -1 ? order.length : ai;
+    const br = bi === -1 ? order.length : bi;
 
     return ar === br ? a.service.localeCompare(b.service) : ar - br;
   });
+}
+
+// The legacy single aggregate the prober used to post before the per-cron split. The
+// box no longer writes it, but the old row lingers in `service_status` until the next
+// deploy; drop it so a permanently-stale "automation" row never shows under Services.
+const LEGACY_SERVICE_IDS = new Set(["automation"]);
+
+// Split the reported services into the core list and the cron group, each in its own
+// fixed order. A cron is identified by its registry service id (`cron.*`), so the two
+// groups never overlap and a brand-new cron lands in the Automation group automatically.
+function groupServices(services: ServiceStatusRow[]): {
+  core: ServiceStatusRow[];
+  crons: ServiceStatusRow[];
+} {
+  const core: ServiceStatusRow[] = [];
+  const crons: ServiceStatusRow[] = [];
+
+  for (const service of services) {
+    if (LEGACY_SERVICE_IDS.has(service.service)) {
+      continue;
+    }
+
+    (CRON_SERVICE_IDS.has(service.service) ? crons : core).push(service);
+  }
+
+  return { core: sortByOrder(core, SERVICE_ORDER), crons: sortByOrder(crons, CRON_ORDER) };
 }
 
 // The overall headline: down beats degraded beats all-operational.
@@ -325,9 +376,92 @@ function overallHeadline(services: ServiceStatusRow[]): string {
   return "All systems nominal";
 }
 
+// One service row — the masthead (label + indicator), the subtitle/message line, the
+// uptime bar, and the footer (history span · uptime% · now). Shared by the core list
+// and the Automation (per-cron) group so both render identically.
+function ServiceRow({
+  now,
+  samples,
+  service,
+}: {
+  now: string;
+  samples: ServiceCheckSampleRow[];
+  service: ServiceStatusRow;
+}) {
+  const pct = uptimePercent(samples);
+  const subtitle = serviceSubtitle(service.service);
+  const oldest = samples[0];
+
+  return (
+    <article className="py-6 first:pt-0">
+      <div className="flex items-baseline justify-between gap-3">
+        <h3 className="text-base font-medium text-foreground">{serviceLabel(service.service)}</h3>
+        <StatusIndicator status={service.status} />
+      </div>
+
+      {subtitle || service.message ? (
+        <p className="mt-1 text-xs text-muted-foreground">
+          {subtitle}
+          {subtitle && service.message ? " · " : ""}
+          {service.message}
+        </p>
+      ) : undefined}
+
+      <div className="mt-4">
+        <UptimeBar samples={samples} status={service.status} />
+      </div>
+
+      <div className="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span>{oldest ? `${elapsedShort(oldest.at, now)} ago` : "no history yet"}</span>
+        <span className="text-foreground/80">
+          {pct === null ? humanizeSince(service.since, now, service.status) : `${pct}% uptime`}
+        </span>
+        <span>now</span>
+      </div>
+    </article>
+  );
+}
+
+// One labeled group of service rows (the core services, or the per-cron Automation
+// group). The label is a quiet uppercase header matching "Recent events".
+function ServiceGroup({
+  label,
+  now,
+  rows,
+  samples,
+}: {
+  label: string;
+  now: string;
+  rows: ServiceStatusRow[];
+  samples: Record<string, ServiceCheckSampleRow[]>;
+}) {
+  if (rows.length === 0) {
+    return undefined;
+  }
+
+  return (
+    <section aria-label={label}>
+      <h2 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </h2>
+      <div className="divide-y divide-border/50">
+        {rows.map((service) => (
+          <ServiceRow
+            key={service.service}
+            now={now}
+            samples={samples[service.service] ?? []}
+            service={service}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function StatusPage() {
   const { events, now, samples, services } = Route.useLoaderData();
-  const ordered = sortServices(services);
+  const { core, crons } = groupServices(services);
+  const reporting = [...core, ...crons];
 
   return (
     <main className="log-plate-stage">
@@ -335,55 +469,18 @@ function StatusPage() {
         <header className="log-masthead">
           <p className="log-nameplate">Fluncle's Findings</p>
           <h1 className="log-coordinate log-index-title">System status</h1>
-          <p className="text-sm text-muted-foreground">{overallHeadline(ordered)}</p>
+          <p className="text-sm text-muted-foreground">{overallHeadline(reporting)}</p>
         </header>
 
-        {ordered.length === 0 ? (
+        {reporting.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             Nothing's reported in from the services yet. Check back in a moment.
           </p>
         ) : (
-          <section aria-label="Service health" className="divide-y divide-border/50">
-            {ordered.map((service) => {
-              const serviceSamples = samples[service.service] ?? [];
-              const pct = uptimePercent(serviceSamples);
-              const subtitle = serviceSubtitle(service.service);
-              const oldest = serviceSamples[0];
-
-              return (
-                <article className="py-6 first:pt-0" key={service.service}>
-                  <div className="flex items-baseline justify-between gap-3">
-                    <h2 className="text-base font-medium text-foreground">
-                      {serviceLabel(service.service)}
-                    </h2>
-                    <StatusIndicator status={service.status} />
-                  </div>
-
-                  {subtitle || service.message ? (
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {subtitle}
-                      {subtitle && service.message ? " · " : ""}
-                      {service.message}
-                    </p>
-                  ) : undefined}
-
-                  <div className="mt-4">
-                    <UptimeBar samples={serviceSamples} status={service.status} />
-                  </div>
-
-                  <div className="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                    <span>{oldest ? `${elapsedShort(oldest.at, now)} ago` : "no history yet"}</span>
-                    <span className="text-foreground/80">
-                      {pct === null
-                        ? humanizeSince(service.since, now, service.status)
-                        : `${pct}% uptime`}
-                    </span>
-                    <span>now</span>
-                  </div>
-                </article>
-              );
-            })}
-          </section>
+          <div className="space-y-8">
+            <ServiceGroup label="Services" now={now} rows={core} samples={samples} />
+            <ServiceGroup label="Automation" now={now} rows={crons} samples={samples} />
+          </div>
         )}
 
         {events.length > 0 ? (

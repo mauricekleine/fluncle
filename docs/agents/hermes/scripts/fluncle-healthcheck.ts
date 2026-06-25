@@ -14,9 +14,11 @@
 //        r2          — HEAD ${HEALTHCHECK_R2_PROBE_URL}.
 //        dns         — dig +short ${HEALTHCHECK_DNS_QUERY} (non-empty answer = ok).
 //        ssh         — TCP-connect ${HEALTHCHECK_SSH_HOST}:${HEALTHCHECK_SSH_PORT}.
-//        automation  — read ~/.hermes/cron/output/<job>/ per Hermes cron: newest *.md,
+//        cron.*      — read ~/.hermes/cron/output/<job>/ per Hermes cron: newest *.md,
 //                      its last line parsed as JSON (`.ok !== false`), AND fresh within
-//                      ~3× the cron's cadence. Aggregated to ONE service.
+//                      ~3× the cron's cadence. Emitted as ONE service PER cron (service
+//                      id = the registry surface name, e.g. `cron.enrich`), so /status
+//                      shows every humming system on its own row — not one aggregate.
 //        render-box  — read ${HOME}/.render-conductor/state (idle|rendering both ok;
 //                      missing = "not yet provisioned", ok). NEVER wakes the box.
 //        hermes      — self-evident: this cron runs ON the box, so ok.
@@ -319,26 +321,39 @@ function probeSsh(): Promise<Check> {
 }
 
 // ---------------------------------------------------------------------------
-// PROBE: automation — the on-box Hermes crons, aggregated to ONE service. For each
-// known cron, find its output dir (dirs are named by job id, so each is resolved to
-// its cron via the run-file's `# Cron Job:` header), take the newest *.md, parse its
-// LAST content line as JSON and check `.ok !== false`,
-// AND require the file mtime within ~3× the cron's cadence. ok if all healthy+fresh;
-// degraded (naming the laggards) otherwise. A cron with NO output dir yet is
-// "no data" — treated as ok-unknown, NOT down (a freshly-rebuilt box hasn't ticked).
+// PROBE: crons — the on-box Hermes crons, ONE service row PER cron (not one
+// aggregate). For each known cron, find its output dir (dirs are named by job id,
+// so each is resolved to its cron via the run-file's `# Cron Job:` header), take the
+// newest *.md, parse its LAST content line as JSON and check `.ok !== false`, AND
+// require the file mtime within ~3× the cron's cadence. Per cron: ok if fresh+healthy,
+// degraded if lagging, down if its last run failed (`{ ok: false }`). A cron with NO
+// output dir yet is "no data" — emitted as ok with a "no runs yet" note, NEVER down
+// (a freshly-rebuilt box hasn't ticked). The service id is the cron's @fluncle/registry
+// surface name (e.g. `cron.enrich`) so the box prober and the Worker /status page share
+// one vocabulary; this file is deployed standalone to the box (no workspace resolution),
+// so the list is mirrored inline here — keep it in lockstep with the registry's
+// cronSurfaces().
 // ---------------------------------------------------------------------------
 
-// Each cron's NAME (as it appears in its output dir name) + its cadence in ms. The
-// staleness budget is 3× the cadence: a job that hasn't produced output in three of
-// its own cycles is genuinely lagging.
-const AUTOMATION_CRONS: { cadenceMs: number; name: string }[] = [
-  { cadenceMs: 5 * 60_000, name: "enrich" },
-  { cadenceMs: 5 * 60_000, name: "context-note" },
-  { cadenceMs: 10 * 60_000, name: "note" },
-  { cadenceMs: 60 * 60_000, name: "observation" },
-  { cadenceMs: 30 * 60_000, name: "backfill" },
-  { cadenceMs: 60 * 60_000, name: "render" },
-  { cadenceMs: 7 * 24 * 60 * 60_000, name: "newsletter" }, // weekly — a generous floor
+// Each cron's registry surface name (the emitted service id) + the bare token its
+// output-dir `# Cron Job:` header contains (e.g. the dir for `fluncle-context-note`
+// matches "context-note") + its cadence in ms. The staleness budget is 3× the
+// cadence: a job that hasn't produced output in three of its own cycles is genuinely
+// lagging. Mirror of @fluncle/registry cronSurfaces() — when a cron is added there,
+// add it here too (this script can't import the workspace package on the box).
+// One known cron: the registry surface id we emit, the bare token its output-dir
+// header carries, and its cadence.
+type CronDef = { cadenceMs: number; match: string; service: string };
+
+const AUTOMATION_CRONS: CronDef[] = [
+  { cadenceMs: 5 * 60_000, match: "enrich", service: "cron.enrich" },
+  { cadenceMs: 5 * 60_000, match: "context-note", service: "cron.context-note" },
+  { cadenceMs: 10 * 60_000, match: "note", service: "cron.note" },
+  { cadenceMs: 60 * 60_000, match: "observation", service: "cron.observation" },
+  { cadenceMs: 30 * 60_000, match: "backfill", service: "cron.backfill" },
+  { cadenceMs: 60 * 60_000, match: "render", service: "cron.render" },
+  { cadenceMs: 10 * 60_000, match: "healthcheck", service: "cron.healthcheck" },
+  { cadenceMs: 7 * 24 * 60 * 60_000, match: "newsletter", service: "cron.newsletter" }, // weekly — a generous floor
 ];
 
 type CronVerdict = "fresh-ok" | "lagging" | "failed" | "no-data";
@@ -373,15 +388,16 @@ function dirInfo(dir: string): { jobName: string; mtimeMs: number } {
 }
 
 /**
- * Map each cron to the output dir it OWNS. Dirs are named by job id, so resolve each
- * dir to its recorded cron name (the run-file header), FRESHEST dir first (so a
- * recreated cron's current dir wins over a stale leftover), then claim longest-name
- * first so the most-specific cron wins each dir exclusively. This is the fix for the
- * "note" ⊂ "context-note" overlap: the `fluncle-context-note` header contains both
- * substrings, so `context-note` claims its dir before a bare `note` can.
+ * Map each cron to the output dir it OWNS, keyed by the cron's registry `service` id.
+ * Dirs are named by job id, so resolve each dir to its recorded cron name (the run-file
+ * header), FRESHEST dir first (so a recreated cron's current dir wins over a stale
+ * leftover), then claim longest-MATCH first so the most-specific cron wins each dir
+ * exclusively. This is the fix for the "note" ⊂ "context-note" overlap: the
+ * `fluncle-context-note` header contains both substrings, so `context-note` claims its
+ * dir before a bare `note` can.
  */
-function claimCronDirs(crons: { cadenceMs: number; name: string }[]): Map<string, string> {
-  const claimed = new Map<string, string>(); // cron name -> dir path
+function claimCronDirs(crons: CronDef[]): Map<string, string> {
+  const claimed = new Map<string, string>(); // service id -> dir path
 
   if (!existsSync(CRON_OUTPUT_DIR)) {
     return claimed;
@@ -407,15 +423,15 @@ function claimCronDirs(crons: { cadenceMs: number; name: string }[]): Map<string
   }
 
   const used = new Set<string>(); // dir paths already claimed
-  const byLongest = [...crons].sort((a, b) => b.name.length - a.name.length);
+  const byLongest = [...crons].sort((a, b) => b.match.length - a.match.length);
 
   for (const cron of byLongest) {
     const hit = resolved.find(
-      (entry) => !used.has(entry.dir) && entry.jobName.includes(cron.name.toLowerCase()),
+      (entry) => !used.has(entry.dir) && entry.jobName.includes(cron.match.toLowerCase()),
     );
 
     if (hit) {
-      claimed.set(cron.name, hit.dir);
+      claimed.set(cron.service, hit.dir);
       used.add(hit.dir);
     }
   }
@@ -424,10 +440,7 @@ function claimCronDirs(crons: { cadenceMs: number; name: string }[]): Map<string
 }
 
 /** Judge one cron's claimed dir: newest *.md fresh-enough AND its last line `.ok !== false`. */
-function judgeCron(
-  cron: { cadenceMs: number; name: string },
-  dir: string | undefined,
-): CronVerdict {
+function judgeCron(cron: CronDef, dir: string | undefined): CronVerdict {
   if (!dir) {
     return "no-data"; // no output dir yet — defensively ok-unknown, never down
   }
@@ -487,56 +500,41 @@ function judgeCron(
   return "fresh-ok";
 }
 
-function probeAutomation(): Check {
-  const service = "automation";
-  // Claim each output dir to its most-specific cron first (handles "note" ⊂
-  // "context-note"), then judge each cron against the dir it actually owns.
+/** Map one cron's verdict to its public Check (status + a short, public-safe note). */
+function cronCheck(cron: CronDef, verdict: CronVerdict): Check {
+  const base = { latencyMs: null, service: cron.service };
+
+  if (verdict === "failed") {
+    // The cron's last run reported `{ ok: false }` — a real failure for THIS system.
+    return { ...base, message: msg("last run failed"), status: "down" };
+  }
+
+  if (verdict === "lagging") {
+    // Healthy-looking output, but stale beyond 3× the cadence — the job is behind.
+    return { ...base, message: msg("behind schedule"), status: "degraded" };
+  }
+
+  if (verdict === "no-data") {
+    // No output dir / no runs yet — a freshly-rebuilt box, not a fault. ok-unknown.
+    return { ...base, message: msg("no runs yet"), status: "ok" };
+  }
+
+  return { ...base, message: msg("fresh"), status: "ok" };
+}
+
+/**
+ * Probe every known Hermes cron and emit ONE Check PER cron (service id = its registry
+ * surface name, e.g. `cron.enrich`). Claim each output dir to its most-specific cron
+ * first (handles "note" ⊂ "context-note"), then judge each cron against the dir it
+ * actually owns. Each cron stands or falls on its own row — "look how many systems are
+ * humming" — instead of collapsing into a single aggregate.
+ */
+function probeCrons(): Check[] {
   const claimed = claimCronDirs(AUTOMATION_CRONS);
 
-  const lagging: string[] = [];
-  const failed: string[] = [];
-  let evaluated = 0;
-
-  for (const cron of AUTOMATION_CRONS) {
-    const verdict = judgeCron(cron, claimed.get(cron.name));
-
-    if (verdict === "no-data") {
-      continue; // ok-unknown — a cron that hasn't ticked yet doesn't count against us
-    }
-
-    evaluated += 1;
-
-    if (verdict === "lagging") {
-      lagging.push(cron.name);
-    } else if (verdict === "failed") {
-      failed.push(cron.name);
-    }
-  }
-
-  if (failed.length > 0 || lagging.length > 0) {
-    const parts: string[] = [];
-
-    if (failed.length > 0) {
-      parts.push(`failed: ${failed.join(", ")}`);
-    }
-
-    if (lagging.length > 0) {
-      parts.push(`lagging: ${lagging.join(", ")}`);
-    }
-
-    return { latencyMs: null, message: msg(parts.join("; ")), service, status: "degraded" };
-  }
-
-  if (evaluated === 0) {
-    return { latencyMs: null, message: msg("no cron output yet"), service, status: "ok" };
-  }
-
-  return {
-    latencyMs: null,
-    message: msg(`${evaluated} cron${evaluated === 1 ? "" : "s"} fresh`),
-    service,
-    status: "ok",
-  };
+  return AUTOMATION_CRONS.map((cron) =>
+    cronCheck(cron, judgeCron(cron, claimed.get(cron.service))),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -838,11 +836,15 @@ async function main(): Promise<void> {
   // well under the runner's ~120s kill.
   const [web, r2, ssh] = await Promise.all([probeWeb(), probeR2(), probeSsh()]);
   const dns = probeDns();
-  const automation = probeAutomation();
+  const crons = probeCrons();
   const renderBox = probeRenderBox();
   const hermes = probeHermes();
 
-  const checks: Check[] = [web, r2, dns, ssh, automation, renderBox, hermes];
+  // One row per cron (cron.*) instead of a single `automation` aggregate, so /status
+  // shows every humming system on its own line. Transitions still fire per-service
+  // (the state map is keyed by service id), so a single cron going down/recovering
+  // pings on its own.
+  const checks: Check[] = [web, r2, dns, ssh, ...crons, renderBox, hermes];
 
   // Transitions against the prior state map.
   const prev = loadState();
