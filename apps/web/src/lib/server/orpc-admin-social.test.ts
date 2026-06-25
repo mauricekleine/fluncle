@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, req, setAdminTokenEnv } from "./orpc-test-kit";
 
 // The admin wave's `admin-social` parity + auth proof, driven end-to-end through
@@ -274,13 +274,14 @@ describe("oRPC draft_track_social (POST .../social/{platform}/draft)", () => {
     expect(postizSetReleaseId).not.toHaveBeenCalled();
   });
 
-  it("auto-records the live YouTube URL + links the release-id when /missing resolves it", async () => {
+  it("auto-records the live YouTube URL + links the release-id when it resolves", async () => {
     getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
     pushYouTubeShort.mockResolvedValueOnce({ postId: "yt-2" });
-    // /missing returns the native videoId; the handler builds the /shorts/ permalink.
+    // The resolver reads the auto-populated releaseURL off the dated /posts list
+    // (the real watch URL) + the releaseId (the videoId); recorded VERBATIM.
     resolveSocialUrl.mockResolvedValueOnce({
-      nativeId: "abc123",
-      url: "https://www.youtube.com/shorts/abc123",
+      nativeId: "h61ZuxQVnBA",
+      url: "https://www.youtube.com/watch?v=h61ZuxQVnBA",
     });
 
     const { handleOrpc } = await import("./orpc");
@@ -299,13 +300,14 @@ describe("oRPC draft_track_social (POST .../social/{platform}/draft)", () => {
       trackId: TRACK_ID,
     });
     expect(resolveSocialUrl).toHaveBeenCalledWith("yt-2", "youtube");
+    // The auto-populated releaseURL is recorded VERBATIM, not reconstructed.
     expect(recordPostUrl).toHaveBeenCalledWith(
       TRACK_ID,
       "youtube",
-      "https://www.youtube.com/shorts/abc123",
+      "https://www.youtube.com/watch?v=h61ZuxQVnBA",
     );
-    // The native id links the post to its content for Postiz analytics.
-    expect(postizSetReleaseId).toHaveBeenCalledWith("yt-2", "abc123");
+    // The videoId links the post to its content for Postiz analytics.
+    expect(postizSetReleaseId).toHaveBeenCalledWith("yt-2", "h61ZuxQVnBA");
   });
 
   it("409s the push gate when a YouTube post is still awaiting its URL", async () => {
@@ -353,19 +355,12 @@ describe("oRPC draft_track_social (POST .../social/{platform}/draft)", () => {
   });
 });
 
-// ── permalinkFromMissingId — the native id → permalink mapping ────────────────
-// The load-bearing fix: Postiz's /missing `id` is the platform's NATIVE content id
-// (the TikTok aweme id / the YouTube videoId), so the permalink is BUILT from it,
-// per platform. (The pure function is imported un-mocked via importActual.)
-describe("permalinkFromMissingId (native id → permalink, per platform)", () => {
-  it("builds a YouTube Shorts permalink from the videoId", async () => {
-    const { permalinkFromMissingId } = await vi.importActual<typeof import("./postiz")>("./postiz");
-
-    expect(permalinkFromMissingId("youtube", "dQw4w9WgXcQ")).toBe(
-      "https://www.youtube.com/shorts/dQw4w9WgXcQ",
-    );
-  });
-
+// ── permalinkFromMissingId — TikTok's native aweme id → permalink ─────────────
+// Verified against live Postiz: only TikTok needs this builder — its `releaseURL`
+// is a useless `…/messages?…` placeholder, so the permalink is BUILT from the
+// `/missing` native aweme id. YouTube reads its real `releaseURL` straight off the
+// post (so this returns null for youtube). (Imported un-mocked via importActual.)
+describe("permalinkFromMissingId (TikTok native aweme id → permalink)", () => {
   it("builds a TikTok @fluncle/video permalink from the aweme id", async () => {
     const { permalinkFromMissingId } = await vi.importActual<typeof import("./postiz")>("./postiz");
 
@@ -374,10 +369,16 @@ describe("permalinkFromMissingId (native id → permalink, per platform)", () =>
     );
   });
 
-  it("yields null for an empty id (defensive — unverified id shape)", async () => {
+  it("yields null for youtube — it reads releaseURL off the post, not /missing", async () => {
     const { permalinkFromMissingId } = await vi.importActual<typeof import("./postiz")>("./postiz");
 
-    expect(permalinkFromMissingId("youtube", "   ")).toBeNull();
+    expect(permalinkFromMissingId("youtube", "dQw4w9WgXcQ")).toBeNull();
+  });
+
+  it("yields null for an empty id (defensive)", async () => {
+    const { permalinkFromMissingId } = await vi.importActual<typeof import("./postiz")>("./postiz");
+
+    expect(permalinkFromMissingId("tiktok", "   ")).toBeNull();
     expect(permalinkFromMissingId("tiktok", "")).toBeNull();
   });
 
@@ -387,12 +388,126 @@ describe("permalinkFromMissingId (native id → permalink, per platform)", () =>
     expect(permalinkFromMissingId("instagram", "anything")).toBeNull();
   });
 
-  it("passes through an already-absolute URL (in case Postiz ever returns one)", async () => {
+  it("passes through an already-absolute URL in the id (in case Postiz returns one)", async () => {
     const { permalinkFromMissingId } = await vi.importActual<typeof import("./postiz")>("./postiz");
 
-    expect(permalinkFromMissingId("youtube", "https://youtu.be/abc123")).toBe(
-      "https://youtu.be/abc123",
+    expect(permalinkFromMissingId("tiktok", "https://www.tiktok.com/@fluncle/video/abc")).toBe(
+      "https://www.tiktok.com/@fluncle/video/abc",
     );
+  });
+});
+
+// ── resolveSocialUrl — the corrected resolver, against a mocked Postiz ─────────
+// Verified against live Postiz (see the postiz.ts doctrine):
+//   - YouTube: read the dated `/posts` list, find the post by id, and once it's
+//     PUBLISHED with an auto-populated `releaseId` + a real YouTube `releaseURL`,
+//     return that URL VERBATIM (never reconstruct it).
+//   - TikTok: fall back to `/missing` (its `releaseURL` is a `…/messages?…`
+//     placeholder) and BUILD the permalink from the newest native aweme id.
+// `resolveSocialUrl` is imported un-mocked via importActual; only global `fetch`
+// (the Postiz HTTP boundary) and `POSTIZ_API_KEY` are stubbed.
+describe("resolveSocialUrl (YouTube releaseURL / TikTok /missing)", () => {
+  const ORIGINAL_KEY = process.env.POSTIZ_API_KEY;
+  const ORIGINAL_URL = process.env.POSTIZ_API_URL;
+
+  beforeEach(() => {
+    process.env.POSTIZ_API_KEY = "test-postiz-key";
+    process.env.POSTIZ_API_URL = "https://api.postiz.test/public/v1";
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    process.env.POSTIZ_API_KEY = ORIGINAL_KEY;
+    process.env.POSTIZ_API_URL = ORIGINAL_URL;
+  });
+
+  // A tiny router over the Postiz endpoints `resolveSocialUrl` touches. Routes
+  // return a verbatim body string (so we can reproduce the unescaped newline
+  // Postiz really sends in the dated list `content`).
+  function mockPostiz(routes: Array<{ body: string; match: string }>): void {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string): Promise<Response> => {
+        const route = routes.find((candidate) => url.includes(candidate.match));
+
+        if (!route) {
+          return new Response("not found", { status: 404 });
+        }
+
+        return new Response(route.body, { status: 200 });
+      }),
+    );
+  }
+
+  it("YouTube: returns the auto-populated releaseURL VERBATIM once PUBLISHED", async () => {
+    const { resolveSocialUrl } = await vi.importActual<typeof import("./postiz")>("./postiz");
+
+    // The dated /posts list. NOTE the unescaped newline in `content` — exactly the
+    // shape live Postiz returns — to prove the lenient parse recovers the post.
+    const listBody =
+      '{"posts":[' +
+      '{"id":"yt-live","state":"PUBLISHED","releaseId":"h61ZuxQVnBA",' +
+      '"releaseURL":"https://www.youtube.com/watch?v=h61ZuxQVnBA",' +
+      '"content":"Sea Air\nfluncle://011.6.8K","integration":{"providerIdentifier":"youtube"}}' +
+      "]}";
+
+    mockPostiz([{ body: listBody, match: "/posts?" }]);
+
+    const resolved = await resolveSocialUrl("yt-live", "youtube");
+
+    expect(resolved).toEqual({
+      nativeId: "h61ZuxQVnBA",
+      url: "https://www.youtube.com/watch?v=h61ZuxQVnBA",
+    });
+  });
+
+  it("YouTube: returns null while the post is not PUBLISHED yet (sweep retries)", async () => {
+    const { resolveSocialUrl } = await vi.importActual<typeof import("./postiz")>("./postiz");
+
+    const listBody =
+      '{"posts":[{"id":"yt-pending","state":"QUEUE","releaseId":"missing","releaseURL":null}]}';
+
+    mockPostiz([{ body: listBody, match: "/posts?" }]);
+
+    expect(await resolveSocialUrl("yt-pending", "youtube")).toBeNull();
+  });
+
+  it("YouTube: returns null when releaseURL is the placeholder, not a real URL", async () => {
+    const { resolveSocialUrl } = await vi.importActual<typeof import("./postiz")>("./postiz");
+
+    // PUBLISHED but releaseURL is a non-YouTube placeholder → not a real permalink.
+    const listBody =
+      '{"posts":[{"id":"yt-x","state":"PUBLISHED","releaseId":"missing",' +
+      '"releaseURL":"https://www.tiktok.com/messages?lang=en"}]}';
+
+    mockPostiz([{ body: listBody, match: "/posts?" }]);
+
+    expect(await resolveSocialUrl("yt-x", "youtube")).toBeNull();
+  });
+
+  it("TikTok: builds the @fluncle/video permalink from the newest /missing aweme id", async () => {
+    const { resolveSocialUrl } = await vi.importActual<typeof import("./postiz")>("./postiz");
+
+    // The /missing body for a finished inbox draft: [{ id: awemeId, url: cover }].
+    const missingBody =
+      '[{"id":"7280000000000000000","url":"https://p16.tiktokcdn.com/cover.jpg"}]';
+
+    mockPostiz([{ body: missingBody, match: "/missing" }]);
+
+    const resolved = await resolveSocialUrl("tt-live", "tiktok");
+
+    expect(resolved).toEqual({
+      nativeId: "7280000000000000000",
+      url: "https://www.tiktok.com/@fluncle/video/7280000000000000000",
+    });
+  });
+
+  it("TikTok: returns null when /missing is empty (not finished in-app yet)", async () => {
+    const { resolveSocialUrl } = await vi.importActual<typeof import("./postiz")>("./postiz");
+
+    mockPostiz([{ body: "[]", match: "/missing" }]);
+
+    expect(await resolveSocialUrl("tt-pending", "tiktok")).toBeNull();
   });
 });
 
@@ -423,7 +538,10 @@ describe("oRPC capture_post_urls (POST /admin/social/posts/capture)", () => {
       { externalId: "tt-9", platform: "tiktok", status: "draft", trackId: "t-tt" },
     ]);
     resolveSocialUrl
-      .mockResolvedValueOnce({ nativeId: "vid9", url: "https://www.youtube.com/shorts/vid9" })
+      .mockResolvedValueOnce({
+        nativeId: "vid9",
+        url: "https://www.youtube.com/watch?v=vid9",
+      })
       .mockResolvedValueOnce({
         nativeId: "aweme9",
         url: "https://www.tiktok.com/@fluncle/video/aweme9",
@@ -435,7 +553,7 @@ describe("oRPC capture_post_urls (POST /admin/social/posts/capture)", () => {
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({
       captured: [
-        { platform: "youtube", trackId: "t-yt", url: "https://www.youtube.com/shorts/vid9" },
+        { platform: "youtube", trackId: "t-yt", url: "https://www.youtube.com/watch?v=vid9" },
         {
           platform: "tiktok",
           trackId: "t-tt",
@@ -454,7 +572,7 @@ describe("oRPC capture_post_urls (POST /admin/social/posts/capture)", () => {
     expect(recordPostUrl).toHaveBeenCalledWith(
       "t-yt",
       "youtube",
-      "https://www.youtube.com/shorts/vid9",
+      "https://www.youtube.com/watch?v=vid9",
     );
     expect(recordPostUrl).toHaveBeenCalledWith(
       "t-tt",

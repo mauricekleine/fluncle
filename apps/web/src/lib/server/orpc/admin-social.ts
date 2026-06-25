@@ -15,16 +15,17 @@
 //     gate, the track lookup AFTER it). After the operator gate, a YouTube push
 //     also passes the push gate (`hasPostAwaitingUrl("youtube")` → 409
 //     `youtube_url_pending`): exactly one YouTube upload may be pending its URL,
-//     so the post-push `/missing` newest-match stays unambiguous. On a successful
-//     push the live URL is auto-resolved (`resolveSocialUrl` — built from the
-//     platform's native content id) and recorded (`recordPostUrl`), and the Postiz
+//     so the post-push capture stays unambiguous. On a successful push the live
+//     URL is auto-resolved (`resolveSocialUrl`: YouTube reads the `releaseURL`
+//     Postiz auto-populates on the published post; TikTok builds it from the
+//     `/missing` native aweme id) and recorded (`recordPostUrl`), and the Postiz
 //     release-id is linked for analytics; a miss leaves `url` null for the capture
 //     sweep (below) or the operator's manual "Update URL" fallback.
 //   - `capture_post_urls` — admin tier: the polling SWEEP. Drains the "pushed but
-//     no URL" backlog across youtube + tiktok by polling Postiz's `/missing`,
-//     building each permalink from the native id, recording it, linking the
-//     release-id, and flipping a captured TikTok `draft` → `published`. The box
-//     capture cron drives this.
+//     no URL" backlog across youtube + tiktok via `resolveSocialUrl` (YouTube's
+//     auto-populated `releaseURL` / TikTok's `/missing` aweme id), recording each
+//     url, linking the release-id, and flipping a captured TikTok `draft` →
+//     `published`. The box capture cron drives this.
 
 import { ORPCError } from "@orpc/server";
 import { trackMedia, videoAudioStripped } from "../../media";
@@ -189,9 +190,9 @@ export function adminSocialHandlers(os: Implementer) {
         }
 
         // The push gate: block a new YouTube push while any finding is still
-        // "pushed but no URL" for YouTube. Postiz returns the live URL only via
-        // `/missing` (matched by the newest published item), so a second pending
-        // upload would make that match ambiguous. Keep exactly one in flight.
+        // "pushed but no URL" for YouTube. The capture resolves a post by id from
+        // the dated `/posts` list, so the gate is a safety belt — it keeps the
+        // backlog shallow and the operator queue legible. Keep one in flight.
         if (platform === "youtube" && (await hasPostAwaitingUrl("youtube"))) {
           throw new ORPCError("CONFLICT", {
             data: {
@@ -268,13 +269,13 @@ export function adminSocialHandlers(os: Implementer) {
         await upsertPost(track.trackId, platform, status, postId);
 
         // Auto-record the live YouTube URL: Postiz returns only its own postId on
-        // create, so poll `/missing` (the publish is async) and BUILD the permalink
-        // from the platform's native content id (the `/missing` `url` is a cover
-        // thumbnail, not a permalink). Store it on the row — surfaced via
-        // `list_track_social` — and link the Postiz release-id for analytics. A
-        // side-effect, not part of the draft envelope. Best-effort: on a miss the
-        // url stays null and the capture sweep (or the operator's manual "Update
-        // URL") is the fallback (and the push gate holds the next push until set).
+        // create, so read the post back from the dated `/posts` list (the publish
+        // is async). Once PUBLISHED, Postiz auto-populates `releaseURL` — the real
+        // watch URL — on the post; `resolveSocialUrl` returns it VERBATIM. Store it
+        // on the row — surfaced via `list_track_social` — and link the Postiz
+        // release-id (the videoId) for analytics. A side-effect, not part of the
+        // draft envelope. Best-effort: on a miss the url stays null and the capture
+        // sweep (or the operator's manual "Update URL") is the fallback.
         if (platform === "youtube") {
           const resolved = await resolveSocialUrl(postId, platform);
 
@@ -300,15 +301,17 @@ export function adminSocialHandlers(os: Implementer) {
   // agent-allowed: it only fills the public `url` Postiz withheld on create and
   // links the analytics release-id; it never publishes anything new). The polling
   // SWEEP that drains the "pushed but no URL" backlog: select every youtube/tiktok
-  // post with a Postiz id but no captured `url` (status published/draft), poll
-  // Postiz's `/missing` for each, BUILD the permalink from the native content id,
-  // record it (`recordPostUrl` — fill-empty-only, never clobbers a manual url),
-  // link the Postiz release-id, and flip a captured TikTok `draft` → `published`.
-  // The draft handler already attempts an inline resolve on a fresh YouTube push;
-  // this catches the misses (publish lag) and every TikTok the operator finished
-  // in-app. Best-effort: a post whose `/missing` hasn't resolved is simply skipped
-  // (it stays pending for the next sweep), and `resolveSocialUrl`/`postizSetReleaseId`
-  // degrade on a non-2xx rather than throw, so one lagging post never burns the batch.
+  // post with a Postiz id but no captured `url` (status published/draft), resolve
+  // each via `resolveSocialUrl` (YouTube reads the auto-populated `releaseURL` off
+  // the dated `/posts` list; TikTok builds the permalink from the `/missing` aweme
+  // id), record it (`recordPostUrl` — fill-empty-only, never clobbers a manual
+  // url), link the Postiz release-id, and flip a captured TikTok `draft` →
+  // `published`. The draft handler already attempts an inline resolve on a fresh
+  // YouTube push; this catches the misses (publish lag) and every TikTok the
+  // operator finished in-app. Best-effort: a post not yet resolved is simply
+  // skipped (it stays pending for the next sweep), and `resolveSocialUrl`/
+  // `postizSetReleaseId` degrade rather than throw, so one lagging post never
+  // burns the batch.
   const capturePostUrlsHandler = os.capture_post_urls.use(adminAuth).handler(async ({ input }) => {
     try {
       const limit = parseLimit((input as { limit?: string }).limit, 25, 100);

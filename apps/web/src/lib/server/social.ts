@@ -131,16 +131,18 @@ export async function upsertPost(
 /**
  * Whether any finding is in the "pushed but no URL" state for a platform — a row
  * with a live status but a still-null `url`. The push gate reads this: Postiz
- * doesn't return the live URL on create, so we resolve it asynchronously from
- * `/missing` by matching the newest item per platform. Allowing a second push
- * while one is still awaiting its URL would make that newest-match ambiguous, so
- * the gate keeps exactly one upload pending at a time per platform.
+ * doesn't return the live URL on create, so we resolve it asynchronously (YouTube
+ * from the auto-populated `releaseURL` on the dated `/posts` list; TikTok from the
+ * newest `/missing` item). The TikTok newest-match would go ambiguous with two
+ * drafts in flight, so the gate keeps exactly one upload pending at a time per
+ * platform — and keeps the operator's capture queue shallow and legible.
  *
  * The "live" statuses differ by platform: a YouTube Short posts DIRECTLY
  * (`published`/`scheduled`), while a TikTok push lands as an inbox `draft` the
- * operator finishes in-app. Both can have a recoverable native id on Postiz's
- * `/missing` before their `url` is captured, so TikTok's `draft` counts here too —
- * the capture sweep flips a captured TikTok `draft` to `published`.
+ * operator finishes in-app. A YouTube post carries its own auto-populated
+ * `releaseURL` once published, and a TikTok `draft` has a recoverable native id on
+ * `/missing`, so TikTok's `draft` counts here too — the capture sweep flips a
+ * captured TikTok `draft` to `published`.
  */
 export async function hasPostAwaitingUrl(platform: string): Promise<boolean> {
   const liveStatuses = platform === "tiktok" ? ["draft"] : ["published", "scheduled"];
@@ -170,10 +172,11 @@ export type PostAwaitingUrl = {
 /**
  * Every post still awaiting its public URL on an auto-capturable platform —
  * `youtube`/`tiktok` rows with a Postiz post id (`external_id`) but a null `url`,
- * in a status the capture sweep handles (`published`/`draft`). The sweep polls
- * Postiz's `/missing` for each, builds the permalink from the native id, records
- * it, links the Postiz release-id, and flips a captured TikTok `draft` to
- * `published`. Oldest first so the backlog drains in order.
+ * in a status the capture sweep handles (`published`/`draft`). The sweep resolves
+ * each (YouTube's auto-populated `releaseURL` off the dated `/posts` list /
+ * TikTok's `/missing` aweme id), records the url, links the Postiz release-id, and
+ * flips a captured TikTok `draft` to `published`. Oldest first so the backlog
+ * drains in order.
  */
 export async function listPostsAwaitingUrl(limit: number): Promise<PostAwaitingUrl[]> {
   const db = await getDb();

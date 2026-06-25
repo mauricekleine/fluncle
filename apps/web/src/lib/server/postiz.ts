@@ -166,14 +166,106 @@ async function createPost(input: {
 }
 
 /**
+ * Parse a Postiz JSON body LENIENTLY. Verified against live Postiz: the dated
+ * `/posts` list returns post `content` with UNESCAPED newlines (a raw control
+ * char inside a JSON string), which `Response.json()` rejects. So read the text
+ * and escape bare control characters inside the body before `JSON.parse`. On any
+ * parse failure the caller degrades to "nothing found", never throws.
+ */
+async function readLenientJson(response: Response): Promise<unknown> {
+  const text = await response.text();
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Escape the bare control chars (newline/tab/CR) Postiz leaves unescaped
+    // inside string values, then retry. A still-unparseable body yields null.
+    const escaped = text
+      .replace(/\r\n/g, "\\n")
+      .replace(/\n/g, "\\n")
+      .replace(/\r/g, "\\n")
+      .replace(/\t/g, "\\t");
+
+    try {
+      return JSON.parse(escaped);
+    } catch {
+      return null;
+    }
+  }
+}
+
+/** A post as the dated `/posts` list returns it. `releaseId`/`releaseURL` are
+ *  AUTO-POPULATED by Postiz on a published YouTube direct post (the videoId + the
+ *  real watch URL); a TikTok inbox draft keeps `releaseId === "missing"` and a
+ *  useless `…/messages?…` placeholder `releaseURL`. */
+export type PostizListPost = {
+  content?: string;
+  id: string;
+  integration?: { providerIdentifier?: string };
+  publishDate?: string;
+  releaseId?: string | null;
+  releaseURL?: string | null;
+  state?: string;
+};
+
+// The dated-list window: look back 7 days, forward 1 day (covers a just-pushed
+// post whose publishDate the server may stamp slightly ahead of our clock).
+const LIST_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
+const LIST_LOOKAHEAD_MS = 1 * 24 * 60 * 60 * 1000;
+
+/**
+ * The dated `/posts` list. Verified against live Postiz: BOTH `startDate` and
+ * `endDate` are REQUIRED (a 400 without either) and must be ISO-8601 strings.
+ * There is NO single-post-by-id endpoint (`GET /posts/{id}` is a 404), so this
+ * window is how we read a post object back. The body parses leniently (the post
+ * `content` carries unescaped newlines). A non-2xx / unparseable body degrades to
+ * an empty list — the caller treats it as "not resolved yet", not a hard failure.
+ */
+export async function getDatedPosts(): Promise<PostizListPost[]> {
+  const now = Date.now();
+  const startDate = new Date(now - LIST_LOOKBACK_MS).toISOString();
+  const endDate = new Date(now + LIST_LOOKAHEAD_MS).toISOString();
+  const query = `?startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`;
+
+  const response = await postizFetch(`/posts${query}`, { method: "GET" });
+
+  if (!response.ok) {
+    return [];
+  }
+
+  const raw = await readLenientJson(response);
+
+  // Log the raw body for observability — so the operator can inspect exactly what
+  // Postiz returns for each platform (and so we can tighten the resolver from it).
+  console.warn(`postiz: GET /posts${query} raw body:`, JSON.stringify(raw));
+
+  const posts = isRecord(raw) && Array.isArray(raw.posts) ? (raw.posts as unknown[]) : [];
+
+  return posts.flatMap((post) =>
+    isRecord(post) && typeof post.id === "string" ? [post as PostizListPost] : [],
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/**
  * Postiz's `/missing` for a post: the provider's recent published content as
- * `[{ id, url }]`, where `id` is the platform's NATIVE content id (the TikTok
- * aweme id / the YouTube videoId) and `url` is a COVER THUMBNAIL image, NOT a
- * permalink. Postiz `POST /posts` returns only Postiz's own postId, never the
- * published platform's id or URL, so `/missing` is how we recover the native id
- * and BUILD the permalink ourselves (docs: GET /public/v1/posts/{postId}/missing).
+ * `[{ id, url }]`, where `id` is the platform's NATIVE content id (e.g. the
+ * TikTok aweme id) and `url` is a COVER THUMBNAIL image, NOT a permalink.
+ *
+ * VERIFIED against live Postiz: `/missing` is populated ONLY while the post's
+ * `releaseId === "missing"`. That holds for a TikTok inbox draft the operator
+ * finishes in-app (TikTok's API never reports the post back, so `releaseId`
+ * stays `"missing"` and `releaseURL` is a useless `…/messages?…` placeholder) —
+ * for those we recover the native aweme id here and BUILD the permalink
+ * ourselves. A YouTube direct post, by contrast, has Postiz AUTO-POPULATE
+ * `releaseId`/`releaseURL` on the post object once published, so its `/missing`
+ * returns `[]` and we read the URL straight off the post (see `resolveSocialUrl`).
+ *
  * A non-2xx degrades to an empty list — the caller treats "no id yet" as a
- * best-effort miss, not a hard failure.
+ * best-effort miss, not a hard failure (docs: GET /public/v1/posts/{postId}/missing).
  */
 export async function getMissingContent(
   postId: string,
@@ -184,11 +276,10 @@ export async function getMissingContent(
     return [];
   }
 
-  const raw = (await response.json()) as unknown;
+  const raw = await readLenientJson(response);
 
-  // The id shape is UNVERIFIED until a live operator post confirms it — log the
-  // FULL raw body so the operator can inspect exactly what Postiz returns for
-  // each platform (and so we can tighten the permalink builders from real data).
+  // Log the FULL raw body so the operator can inspect exactly what Postiz returns
+  // for the TikTok path (and so we can tighten the permalink builder from real data).
   console.warn(`postiz: /posts/${postId}/missing raw body:`, JSON.stringify(raw));
 
   const items = Array.isArray(raw) ? (raw as Array<{ id?: unknown; url?: unknown }>) : [];
@@ -204,16 +295,12 @@ export async function getMissingContent(
 const TIKTOK_HANDLE = "fluncle";
 
 /**
- * Build a public permalink from a platform's NATIVE content id (the `/missing`
- * `id`). Best-effort and defensive: the exact id shape is UNVERIFIED (one live
- * operator post confirms it — see `getMissingContent`, which logs the raw body),
- * so an empty/whitespace id yields null rather than a broken link, and any
- * already-absolute URL (in case Postiz ever returns one in `id`) passes through.
- *
- *   - YouTube → https://www.youtube.com/shorts/<videoId>
- *   - TikTok  → https://www.tiktok.com/@fluncle/video/<awemeId>
- *
- * An unknown platform yields null (we only auto-capture youtube/tiktok).
+ * Build a public TikTok permalink from the native aweme id (the `/missing` `id`).
+ * TikTok's API never reports a finished inbox draft back to Postiz, so its
+ * `releaseURL` is a useless `…/messages?…` placeholder — we recover the aweme id
+ * from `/missing` and build `https://www.tiktok.com/@fluncle/video/<awemeId>`.
+ * Defensive: an empty/whitespace id yields null rather than a broken link, and
+ * any already-absolute URL (in case Postiz ever returns one in `id`) passes through.
  */
 export function permalinkFromMissingId(platform: string, id: string): string | null {
   const trimmed = id.trim();
@@ -227,81 +314,123 @@ export function permalinkFromMissingId(platform: string, id: string): string | n
     return trimmed;
   }
 
-  const encoded = encodeURIComponent(trimmed);
-
-  if (platform === "youtube") {
-    return `https://www.youtube.com/shorts/${encoded}`;
-  }
-
   if (platform === "tiktok") {
-    return `https://www.tiktok.com/@${TIKTOK_HANDLE}/video/${encoded}`;
+    return `https://www.tiktok.com/@${TIKTOK_HANDLE}/video/${encodeURIComponent(trimmed)}`;
   }
 
+  // YouTube reads its URL straight off the post's `releaseURL` (see
+  // `resolveSocialUrl`); any other platform isn't auto-captured.
   return null;
 }
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+/** Whether a string is a real YouTube watch/share URL — the shape Postiz
+ *  auto-populates into `releaseURL` for a published YouTube post (a
+ *  `youtube.com`/`youtu.be` https link). Guards against the `…/messages?…`
+ *  placeholder Postiz returns for an unfinished post. */
+export function isYouTubeUrl(value: string): boolean {
+  return /^https:\/\/(www\.)?(youtube\.com|youtu\.be)\//i.test(value.trim());
+}
 
-/** A resolved post's public permalink + the platform's native content id (the
- *  `/missing` `id`, used to set the Postiz release-id for analytics). */
+/** A resolved post's public permalink + the platform's native content id (used
+ *  to set the Postiz release-id for analytics). For YouTube the `nativeId` is the
+ *  videoId Postiz auto-populated as `releaseId`; for TikTok it's the `/missing`
+ *  aweme id. */
 export type ResolvedSocialContent = { nativeId: string; url: string };
 
 /**
- * Resolve the live permalink for a just-pushed post by polling `/missing` and
- * BUILDING the permalink from the platform's native content id. The publish is
- * async, so the id may take a moment: poll a few times with a short backoff.
- * Postiz returns the provider's recent published content (`url` is a cover
- * thumbnail, `id` is the native id); the push gate keeps exactly one upload
- * pending per platform, so the newest item is unambiguously this post's. Returns
- * the built permalink AND the native id (for the release-id link), or null on a
+ * Resolve the live permalink for a pushed post. Verified against live Postiz —
+ * the path splits by platform:
+ *
+ *   - YouTube: a direct post. Once published, Postiz AUTO-POPULATES `releaseId`
+ *     (the videoId) and `releaseURL` (the real watch URL) ON the post object, and
+ *     its `/missing` returns `[]`. So read the dated `/posts` list, find this post
+ *     by id, and if it's PUBLISHED with a set `releaseId` and a real YouTube
+ *     `releaseURL`, return that URL VERBATIM (never reconstruct it). Not yet
+ *     published → null (the sweep retries next tick).
+ *   - TikTok: an inbox draft the operator finishes in-app. `releaseId` stays
+ *     `"missing"` and `releaseURL` is a `…/messages?…` placeholder, so fall back
+ *     to `/missing` and BUILD `…/@fluncle/video/<awemeId>` from the newest item's
+ *     native id. The one-pending push gate keeps "newest" unambiguous. Empty →
+ *     null (not finished in-app yet; retry).
+ *
+ * Returns the permalink AND the native id (for the release-id link), or null on a
  * miss — the caller leaves the row's `url` unset, so the operator's manual
- * "Update URL" still works as the fallback.
+ * "Update URL" (or the next sweep tick) is the fallback.
  */
 export async function resolveSocialUrl(
   postId: string,
   platform: string,
 ): Promise<ResolvedSocialContent | null> {
-  // 5 attempts over ~7.5s total: poll, then wait 0.5s, 1s, 1.5s, 2s, 2.5s.
-  // Best-effort — a longer publish lag simply falls back to the manual entry.
-  const backoffsMs = [500, 1000, 1500, 2000, 2500];
+  if (platform === "youtube") {
+    return resolveYouTubeFromList(postId);
+  }
 
-  for (const delayMs of backoffsMs) {
-    const items = await getMissingContent(postId);
-    // Most-recent-first; build a permalink from the newest item's native id.
-    for (const item of items) {
-      const permalink = permalinkFromMissingId(platform, item.id);
+  if (platform === "tiktok") {
+    return resolveTikTokFromMissing(postId);
+  }
 
-      if (permalink) {
-        return { nativeId: item.id, url: permalink };
-      }
+  return null;
+}
+
+/** The YouTube path: find the post in the dated list; if published with a real
+ *  auto-populated `releaseURL`, return it verbatim. */
+async function resolveYouTubeFromList(postId: string): Promise<ResolvedSocialContent | null> {
+  const posts = await getDatedPosts();
+  const post = posts.find((item) => item.id === postId);
+
+  if (!post || post.state !== "PUBLISHED") {
+    return null;
+  }
+
+  const releaseId = typeof post.releaseId === "string" ? post.releaseId.trim() : "";
+  const releaseUrl = typeof post.releaseURL === "string" ? post.releaseURL.trim() : "";
+
+  // A genuine published YouTube post has BOTH a real videoId (`releaseId`, not
+  // "" / "missing") AND a real YouTube `releaseURL`. Use the URL Postiz hands us.
+  if (releaseId && releaseId !== "missing" && isYouTubeUrl(releaseUrl)) {
+    return { nativeId: releaseId, url: releaseUrl };
+  }
+
+  return null;
+}
+
+/** The TikTok path: poll `/missing` for the native aweme id and build the
+ *  permalink. The publish is async (the operator finishes in-app), so a longer
+ *  lag simply falls back to the manual entry / the next sweep tick. */
+async function resolveTikTokFromMissing(postId: string): Promise<ResolvedSocialContent | null> {
+  const items = await getMissingContent(postId);
+
+  // Most-recent-first; build a permalink from the newest item's native aweme id.
+  for (const item of items) {
+    const permalink = permalinkFromMissingId("tiktok", item.id);
+
+    if (permalink) {
+      return { nativeId: item.id, url: permalink };
     }
-
-    await sleep(delayMs);
   }
 
   return null;
 }
 
 /**
- * Back-compat shim for the legacy TanStack draft route (the dead admin
- * `social/{platform}/draft` handler that another slice deletes). It expects the
- * old `resolveYouTubeUrl(postId) -> url|null` signature; delegate to the
- * generalized `resolveSocialUrl` and return just the URL string. DELETE THIS
- * once the legacy route is gone — the live oRPC handler uses `resolveSocialUrl`.
- */
-export async function resolveYouTubeUrl(postId: string): Promise<string | null> {
-  return (await resolveSocialUrl(postId, "youtube"))?.url ?? null;
-}
-
-/**
  * Connect a published Postiz post to its live content for Postiz analytics:
  * `PUT /posts/{postId}/release-id` with the platform's native content id. Postiz
- * uses this link to pull engagement metrics for the post. Best-effort — a non-2xx
- * is logged and swallowed so a capture sweep never fails on the analytics link.
+ * uses this link to pull engagement metrics for the post. For a YouTube direct
+ * post Postiz already auto-populates the same `releaseId`, so this is an
+ * idempotent no-op re-set; for a captured TikTok aweme id it's the real link.
+ * Guarded against an empty/`"missing"` id (nothing to link). Best-effort — a
+ * non-2xx is logged and swallowed so a capture sweep never fails on the link.
  */
 export async function postizSetReleaseId(postId: string, releaseId: string): Promise<void> {
+  const trimmed = releaseId.trim();
+
+  // Nothing to link: never PUT an empty / placeholder id.
+  if (!trimmed || trimmed === "missing") {
+    return;
+  }
+
   const response = await postizFetch(`/posts/${postId}/release-id`, {
-    body: JSON.stringify({ releaseId }),
+    body: JSON.stringify({ releaseId: trimmed }),
     headers: { "Content-Type": "application/json" },
     method: "PUT",
   });
