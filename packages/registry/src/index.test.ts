@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 
 import {
   cronSurfaces,
+  liveSurfaces,
   statusProbes,
   SURFACES,
   type Surface,
@@ -80,13 +81,14 @@ assert.ok(
   "surfacesByKind filters by kind",
 );
 
-// statusProbes is exactly the probeConfig-bearing set, and the narrowed type lets a
-// consumer read probeConfig without a guard.
+// statusProbes is exactly the probeConfig-bearing set among LIVE surfaces (a pending
+// surface is not probed until it goes live), and the narrowed type lets a consumer
+// read probeConfig without a guard.
 const probes = statusProbes();
 assert.equal(
   probes.length,
-  SURFACES.filter((surface) => surface.probeConfig !== undefined).length,
-  "statusProbes returns every probeConfig-bearing surface",
+  liveSurfaces().filter((surface) => surface.probeConfig !== undefined).length,
+  "statusProbes returns every probeConfig-bearing LIVE surface",
 );
 for (const probe of probes) {
   assert.ok(probe.probeConfig.kind, "a status probe has a probe kind");
@@ -112,3 +114,67 @@ assert.ok(
   SURFACES.some((surface) => surface.name === "cron.newsletter"),
   "the newsletter cron is registered",
 );
+
+// ── The pending (pre-staged, dark) gate ──────────────────────────────────────
+// A `pending` surface is registered in the catalog (so it is reviewed and one
+// field-flip away) yet DARK everywhere: excluded from `liveSurfaces` and so from
+// every selector. This locks that no consumer can leak a pending surface — the
+// fan-out is the single act of flipping `pending` off.
+
+// liveSurfaces is exactly the non-pending catalog.
+const live = liveSurfaces();
+assert.equal(
+  live.length,
+  SURFACES.filter((surface) => surface.pending !== true).length,
+  "liveSurfaces is the catalog minus pending surfaces",
+);
+assert.ok(
+  live.every((surface) => surface.pending !== true),
+  "liveSurfaces excludes every pending surface",
+);
+
+// Fluncle Lens is pre-staged: present in the catalog, absent from every selector.
+const lens = SURFACES.find((surface) => surface.name === "extension.lens");
+assert.ok(lens, "the Fluncle Lens surface is registered");
+assert.equal(
+  lens?.pending,
+  true,
+  "the Fluncle Lens surface is pending (dark until store approval)",
+);
+
+// The gate, asserted generically over EVERY pending surface so the invariant holds
+// for any future pre-staged entry, not just the Lens.
+for (const surface of SURFACES.filter((s) => s.pending === true)) {
+  assert.ok(
+    !liveSurfaces().some((s) => s.name === surface.name),
+    `${surface.name}: a pending surface is absent from liveSurfaces`,
+  );
+  // Absent from every context menu it carries a weight for.
+  for (const ctx of contexts) {
+    if (surface.weights[ctx] !== undefined) {
+      assert.ok(
+        !surfacesForContext(ctx).some((s) => s.name === surface.name),
+        `${surface.name}: a pending surface is absent from surfacesForContext("${ctx}")`,
+      );
+      const weight = surface.weights[ctx];
+      if (weight) {
+        assert.ok(
+          !surfacesByWeight(ctx, weight).some((s) => s.name === surface.name),
+          `${surface.name}: a pending surface is absent from surfacesByWeight("${ctx}", …)`,
+        );
+      }
+    }
+  }
+  // Absent from its kind bucket.
+  assert.ok(
+    !surfacesByKind(surface.kind).some((s) => s.name === surface.name),
+    `${surface.name}: a pending surface is absent from surfacesByKind`,
+  );
+  // Absent from the /status probe set even if it carries a probeConfig.
+  if (surface.probeConfig !== undefined) {
+    assert.ok(
+      !statusProbes().some((s) => s.name === surface.name),
+      `${surface.name}: a pending surface is not probed by /status`,
+    );
+  }
+}

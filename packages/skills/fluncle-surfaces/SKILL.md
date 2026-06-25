@@ -56,6 +56,7 @@ Keep object keys **alphabetically sorted** (`oxfmt`/`sort-keys` enforces it): `s
 
 When you add or change a surface, these are everywhere it shows up. The selectors live in `packages/registry/src/index.ts`:
 
+- **`liveSurfaces()`** — the catalog minus `pending` (pre-staged, dark) surfaces. Every other selector reads through it, so a `pending` surface reaches no consumer (see step 4 of the runbook). A raw-catalog consumer should iterate this, not `SURFACES`.
 - **`surfacesForContext(ctx)`** — surfaces displayed in `ctx`, sorted loudest-first. The per-context menu/nav builder.
 - **`surfacesByWeight(ctx, weight)`** — one tier within a context.
 - **`surfacesByKind(kind)`**, **`statusProbes()`** (probeConfig-bearing, type-narrowed), **`cronSurfaces()`**.
@@ -66,8 +67,8 @@ Real consumers — point at these when wiring:
 | ---------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
 | `/status` health board       | [`apps/web/src/routes/status.tsx`](../../apps/web/src/routes/status.tsx)                                       | `cronSurfaces()` for the cron order + labels            |
 | `/status` per-cron freshness | [`docs/agents/hermes/scripts/fluncle-healthcheck.ts`](../../docs/agents/hermes/scripts/fluncle-healthcheck.ts) | mirrors `cronSurfaces()` (the on-box prober)            |
-| MCP `get_status` tool        | [`apps/web/src/lib/server/mcp.ts`](../../apps/web/src/lib/server/mcp.ts)                                       | `SURFACES` for the `/status` service labels             |
-| CLI `status` command         | [`apps/cli/src/commands/status.ts`](../../apps/cli/src/commands/status.ts)                                     | `SURFACES` for the service labels                       |
+| MCP `get_status` tool        | [`apps/web/src/lib/server/mcp.ts`](../../apps/web/src/lib/server/mcp.ts)                                       | `liveSurfaces()` for the `/status` service labels       |
+| CLI `status` command         | [`apps/cli/src/commands/status.ts`](../../apps/cli/src/commands/status.ts)                                     | `liveSurfaces()` for the service labels                 |
 | Doctrine doc                 | [`docs/surfaces-doctrine.md`](../../docs/surfaces-doctrine.md)                                                 | the §2 kind tables + the §3 per-context matrix          |
 | Catalog invariants test      | [`packages/registry/src/index.test.ts`](../../packages/registry/src/index.test.ts)                             | unique names, kind-shaped fields, per-context partition |
 
@@ -90,6 +91,7 @@ The homepage **dev-row / nav** weighting (`weights.web` via `surfacesForContext(
    - [ ] **doctrine doc** — add the row to the matching §2 kind table (home-context weight) and to the §3 per-context matrix in `docs/surfaces-doctrine.md`.
    - [ ] **naming-conventions registry** — if it is a new public operation (CLI / API / MCP / SSH), run it past the "how to name a new feature" checklist in [docs/naming-conventions.md](../../docs/naming-conventions.md) before you fix the `name`.
 3. **Operator/agent-only?** Give it only a `hidden` weight in the relevant context (e.g. `weights: { cli: "hidden" }` for `cli.admin`, or `weights: { status: "hidden" }` for a quiet cron). It stays registered + probeable without being advertised.
+4. **Gated behind an external approval?** (a store review, a DNS cutover, anything not yet live). Add the entry now with **`pending: true`** — `liveSurfaces()` drops it, so it is reviewed but DARK everywhere (no menu, no `/status` probe, the dev-row, `llms.txt`, the sitemap, the §2/§3 tables). Fill in its real `weights`/`probeConfig` and a placeholder `url`, and capture the flip plan in `operatorNotes`. The day it goes live, the fan-out is **one field-flip**: drop `pending`, swap the placeholder address for the real one, and add its §2/§3 rows. `extension.lens` (the Fluncle Lens Chrome extension, pending store approval) is the worked example.
 
 ## 5. Verify
 

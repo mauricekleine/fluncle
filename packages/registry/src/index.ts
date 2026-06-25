@@ -29,6 +29,7 @@
  * - `mcp`        the Model Context Protocol server (/mcp)
  * - `cli`        a `fluncle` CLI command (the thin HTTP client)
  * - `cron`       an on-box Hermes scheduled job (enrichment + the newsletter)
+ * - `extension`  a browser extension on a vendor store (Fluncle Lens, Chrome Web Store)
  */
 export type SurfaceKind =
   | "web_route"
@@ -40,7 +41,8 @@ export type SurfaceKind =
   | "ssh"
   | "mcp"
   | "cli"
-  | "cron";
+  | "cron"
+  | "extension";
 
 /**
  * How loudly a surface is presented IN A GIVEN CONTEXT. `primary` surfaces lead
@@ -126,6 +128,19 @@ export type Surface = {
   probeConfig?: ProbeConfig;
   /** A discovery/advertisement URL that points AT this surface (a card, a linkset entry). */
   discoveryUrl?: string;
+  /**
+   * PRE-STAGED but not yet live: registered in the catalog (so it is reviewed and
+   * one field-flip away) yet DARK everywhere. A `pending` surface is excluded from
+   * every selector — `surfacesForContext`, `surfacesByWeight`, `surfacesByKind`,
+   * `statusProbes`, `cronSurfaces` — so it appears on no context menu, no `/status`
+   * probe, the dev-row, llms.txt, or the sitemap, and the raw `SURFACES`-iterating
+   * consumers (the MCP `get_status` labels, the CLI status labels) skip it too via
+   * `liveSurfaces()`. Delete the flag (or set it false) the moment the surface goes
+   * live and every consumer picks it up at once. Used to land a surface ahead of an
+   * external gate (e.g. a Chrome Web Store review) so the fan-out is a single,
+   * reviewed, no-other-edits flip on approval.
+   */
+  pending?: boolean;
   /** Operator-only context: tier, caveats, where the source lives. Never secrets. */
   operatorNotes?: string;
 };
@@ -693,6 +708,30 @@ export const SURFACES: readonly Surface[] = [
     weights: { cli: "hidden" },
   },
 
+  // ── Browser extensions (vendor-store surfaces) ─────────────────────────────
+  {
+    exposedContent: [
+      "Fluncle Lens — the browser extension that finds fluncle:// coordinates on any page and links each to its /log/<coord> finding (with a hover card from the public API)",
+    ],
+    kind: "extension",
+    name: "extension.lens",
+    // DARK until the Chrome Web Store review clears (submitted 2026-06-21; the
+    // `<all_urls>` content-script match triggers a long Broad-Host-Permissions
+    // review). PRE-STAGED so the post-approval fan-out is one field-flip:
+    //   1. drop `pending: true` (or set it false),
+    //   2. swap `url` for the assigned listing URL
+    //      (https://chromewebstore.google.com/detail/<assigned-extension-id>),
+    //   3. add the §2/§3 doctrine rows (it is now a live web surface).
+    // No other consumer needs touching — the menus, /status probe, MCP + CLI status
+    // labels all read the catalog and light up at once. Source: apps/extension.
+    operatorNotes:
+      "Fluncle Lens (apps/extension), MV3. PENDING Chrome Web Store review — DARK until approval, then flip `pending` + set the assigned listing URL. The placeholder `url` is the store search for the listing; probeConfig is the post-approval /status check.",
+    pending: true,
+    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
+    url: "https://chromewebstore.google.com/search/Fluncle%20Lens",
+    weights: { web: "secondary" },
+  },
+
   // ── Crons (the on-box Hermes scheduled jobs) ───────────────────────────────
   {
     command: "fluncle admin tracks enrich --queue",
@@ -815,40 +854,56 @@ const WEIGHT_ORDER: Record<SurfaceWeight, number> = {
 };
 
 /**
+ * The LIVE catalog — every surface except the `pending` (pre-staged, dark) ones.
+ * Every selector reads through this, so a `pending` surface never reaches a menu, a
+ * probe, the dev-row, llms.txt, or the sitemap. A raw `SURFACES`-iterating consumer
+ * (the MCP `get_status` labels, the CLI status labels) should iterate this instead.
+ * Flip a surface's `pending` off and it appears in all of them at once.
+ */
+export function liveSurfaces(): Surface[] {
+  return SURFACES.filter((surface) => surface.pending !== true);
+}
+
+/**
  * Every surface DISPLAYED IN `ctx` (i.e. carrying a weight for that context),
  * sorted loudest-first (primary → hidden), ties broken by catalog order. This is
  * the per-context menu/nav builder: `surfacesForContext("web")` is the homepage's
- * ranked surface list; `surfacesForContext("ssh")` is the rave terminal's.
+ * ranked surface list; `surfacesForContext("ssh")` is the rave terminal's. `pending`
+ * surfaces are excluded (see `liveSurfaces`).
  */
 export function surfacesForContext(ctx: SurfaceContext): Surface[] {
-  return SURFACES.filter((surface) => surface.weights[ctx] !== undefined).sort((a, b) => {
-    const wa = a.weights[ctx];
-    const wb = b.weights[ctx];
-    // Both are defined (the filter guaranteed it); fall back keeps TS happy.
-    return (wa ? WEIGHT_ORDER[wa] : 0) - (wb ? WEIGHT_ORDER[wb] : 0);
-  });
+  return liveSurfaces()
+    .filter((surface) => surface.weights[ctx] !== undefined)
+    .sort((a, b) => {
+      const wa = a.weights[ctx];
+      const wb = b.weights[ctx];
+      // Both are defined (the filter guaranteed it); fall back keeps TS happy.
+      return (wa ? WEIGHT_ORDER[wa] : 0) - (wb ? WEIGHT_ORDER[wb] : 0);
+    });
 }
 
 /**
  * Every surface at the given weight IN A CONTEXT, in catalog order. The per-context
  * successor to the old global `surfacesByWeight`: name the context you are ranking
  * for. `surfacesByWeight("web", "primary")` is the web homepage's loud front doors.
+ * `pending` surfaces are excluded (see `liveSurfaces`).
  */
 export function surfacesByWeight(ctx: SurfaceContext, weight: SurfaceWeight): Surface[] {
-  return SURFACES.filter((surface) => surface.weights[ctx] === weight);
+  return liveSurfaces().filter((surface) => surface.weights[ctx] === weight);
 }
 
-/** Every surface at the given kind, in catalog order. */
+/** Every LIVE surface at the given kind, in catalog order (`pending` excluded). */
 export function surfacesByKind(kind: SurfaceKind): Surface[] {
-  return SURFACES.filter((surface) => surface.kind === kind);
+  return liveSurfaces().filter((surface) => surface.kind === kind);
 }
 
 /**
- * Every surface that carries a `probeConfig` — the set a `/status` prober walks.
+ * Every LIVE surface that carries a `probeConfig` — the set a `/status` prober walks
+ * (`pending` excluded, so a pre-staged surface is not probed until it goes live).
  * Narrows the type so a consumer can read `surface.probeConfig` without a guard.
  */
 export function statusProbes(): Array<Surface & { probeConfig: ProbeConfig }> {
-  return SURFACES.filter(
+  return liveSurfaces().filter(
     (surface): surface is Surface & { probeConfig: ProbeConfig } =>
       surface.probeConfig !== undefined,
   );

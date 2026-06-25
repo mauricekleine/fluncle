@@ -6,11 +6,11 @@ This doc replaces the old `docs/public-surfaces-checklist.md` (a hand-maintained
 
 ## 1. The registry is the source of truth
 
-Every surface is **one entry in `@fluncle/registry`** (`packages/registry/src/index.ts`) — a pure, typed catalog (`SURFACES`) plus a few selectors over it (`surfacesForContext`, `surfacesByWeight`, `surfacesByKind`, `statusProbes`, `cronSurfaces`). It is data, not a route table and not a secrets inventory: internal IPs, op-paths, and credentials never go in it.
+Every surface is **one entry in `@fluncle/registry`** (`packages/registry/src/index.ts`) — a pure, typed catalog (`SURFACES`) plus a few selectors over it (`liveSurfaces`, `surfacesForContext`, `surfacesByWeight`, `surfacesByKind`, `statusProbes`, `cronSurfaces`). It is data, not a route table and not a secrets inventory: internal IPs, op-paths, and credentials never go in it.
 
 The point is that one entry **fans out**. Add a surface to the registry once and every consumer — the `/status` prober, the homepage dev-row, `llms.txt`, the sitemap, and this doc — picks it up from the same list instead of each hand-maintaining a drifting copy. This doc is organized around the registry's own shape: its `SurfaceKind` families (§2) and its per-context `SurfaceWeight` matrix (§3).
 
-Each entry carries: a stable `name` (unique, e.g. `web.log`, `api.tracks`), a `kind`, a `weights` matrix (per-context prominence — see §3), the address it lives at (`url` / `route` / `subdomain` / `command`, populated per kind), `exposedContent` (what it serves, in plain words), and — where applicable — `apiFormat`, a `probeConfig` (how `/status` checks it), a `discoveryUrl` (what advertises it), and `operatorNotes` (tier, caveats, where the source lives; never secrets).
+Each entry carries: a stable `name` (unique, e.g. `web.log`, `api.tracks`), a `kind`, a `weights` matrix (per-context prominence — see §3), the address it lives at (`url` / `route` / `subdomain` / `command`, populated per kind), `exposedContent` (what it serves, in plain words), and — where applicable — `apiFormat`, a `probeConfig` (how `/status` checks it), a `discoveryUrl` (what advertises it), `pending` (pre-staged but dark — see §3.5), and `operatorNotes` (tier, caveats, where the source lives; never secrets).
 
 ## 2. The surface inventory, by kind
 
@@ -212,6 +212,12 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 
 A surface is operator/agent-only where its only display weight is `hidden` (`cli.admin` in `cli`; every cron but the newsletter in `status`) — registered (and probeable) without being advertised.
 
+## 3.5. Pre-staging a surface — the `pending` (dark) gate
+
+`hidden` and `pending` are different shapes of "not loud." A `hidden` weight is a **live** surface that one context deliberately doesn't headline (it still probes, still serves, still answers). A surface marked **`pending: true`** is **not live at all yet**: registered (so it is reviewed and one field-flip away) but **DARK everywhere** — `liveSurfaces()` drops it, so every selector (`surfacesForContext`, `surfacesByWeight`, `surfacesByKind`, `statusProbes`, `cronSurfaces`) and every raw-catalog consumer that reads `liveSurfaces()` (the MCP `get_status` labels, the CLI status labels) skips it. It appears on no menu, no `/status` probe, the dev-row, `llms.txt`, or the sitemap, and it stays out of the §2/§3 tables until it goes live.
+
+Use it to land a surface **ahead of an external gate** so the post-approval fan-out is a single, reviewed, no-other-edits flip. **Fluncle Lens** (`extension.lens`, the `apps/extension` Chrome extension) is the first such entry: it is in Chrome Web Store review, so it sits in the catalog `pending: true`. On approval the operator (1) drops `pending` (or sets it false), (2) swaps the placeholder `url` for the store's assigned listing URL, and (3) adds its §2/§3 rows — and every menu, the `/status` probe, and the MCP + CLI status labels light up at once. (The one deliberate exception is `/sprites`, the noindex internal sprite-coverage audit, which iterates raw `SURFACES` so a still-dark surface is counted as needing a sprite — it advertises nothing.)
+
 ## 4. Adding a surface — the checklist
 
 When Fluncle gains a new reachable surface, the work is small and the fan-out is automatic:
@@ -222,4 +228,4 @@ When Fluncle gains a new reachable surface, the work is small and the fan-out is
 4. **It lights up `llms.txt` and the sitemap.** A public web route / feed / discovery map flows into the crawler- and LLM-facing maps so agents and search engines find it.
 5. **It lights up this doc.** Add the row to the matching kind table in §2 (its home-context weight) and to the per-context matrix in §3. The registry is the source of truth; this doc tracks it.
 
-If a surface is operator/agent-only, give it only a `hidden` weight in the relevant context (e.g. `weights: { cli: "hidden" }`) so it stays registered (and probeable) without being advertised. If it's a non-CRUD action or a new command, run it past the naming convention's "how to name a new feature" checklist before you pick the `name`.
+If a surface is operator/agent-only, give it only a `hidden` weight in the relevant context (e.g. `weights: { cli: "hidden" }`) so it stays registered (and probeable) without being advertised. If a surface exists but is **gated behind an external approval** (a store review, a DNS cutover), add it now with `pending: true` so it is reviewed but dark, then flip the flag the day it goes live (see §3.5) — fill in its real `weights`/`probeConfig`/§2-§3 rows in the same flip. If it's a non-CRUD action or a new command, run it past the naming convention's "how to name a new feature" checklist before you pick the `name`.
