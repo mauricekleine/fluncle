@@ -1,7 +1,9 @@
 import { createAuthClient } from "better-auth/react";
-import { usernameClient } from "better-auth/client/plugins";
+import { deviceAuthorizationClient, usernameClient } from "better-auth/client/plugins";
 
 export const authClient = createAuthClient({
   basePath: "/api/auth",
-  plugins: [usernameClient()],
+  // `deviceAuthorizationClient` exposes `authClient.device.approve/deny` for the
+  // /device verification surface, where a signed-in user approves a `fluncle login`.
+  plugins: [usernameClient(), deviceAuthorizationClient()],
 });

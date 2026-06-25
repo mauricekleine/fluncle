@@ -267,6 +267,13 @@
       "when": 1782320811337,
       "tag": "0037_cold_bedlam",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "6",
+      "when": 1782401337838,
+      "tag": "0038_wooden_old_lace",
+      "breakpoints": true
     }
   ]
 }

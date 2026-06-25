@@ -206,6 +206,7 @@ export function createProgram(): Command {
 
   addListenCommands(program);
   addShareCommands(program);
+  addAccountCommands(program);
   addMetaCommands(program);
   addTrackCommands(program);
   addAdminCommands(program);
@@ -321,6 +322,38 @@ function addShareCommands(program: Command): void {
     .action(async (input: string[]) => {
       const { submitCommand } = await import("./commands/submit");
       await submitCommand(input.join(" ") || undefined);
+    });
+}
+
+// The cross-surface ACCOUNT tier (`fluncle login`). A signed-in listener links
+// this device to their OWN Fluncle account (the device-authorization flow) to sync
+// their Galaxy progress + saved findings. The minted user token is stored
+// HARD-SEPARATE from the admin FLUNCLE_API_TOKEN (see user-token.ts); these
+// commands never read or write the admin grant.
+function addAccountCommands(program: Command): void {
+  program
+    .command("login")
+    .description("Link this device to your Fluncle account (sync your Galaxy)")
+    .action(async () => {
+      const { loginCommand } = await import("./commands/login");
+      await loginCommand();
+    });
+
+  program
+    .command("logout")
+    .description("Unlink this device from your account")
+    .action(async () => {
+      const { logoutCommand } = await import("./commands/login");
+      await logoutCommand();
+    });
+
+  program
+    .command("me")
+    .description("Your account and Galaxy progress (sign in with `fluncle login`)")
+    .option("--json", "Print JSON", false)
+    .action(async (options: JsonOptions) => {
+      const { meCommand } = await import("./commands/me");
+      await runMe(options, meCommand);
     });
 }
 
@@ -2358,6 +2391,28 @@ async function runStatus(
 
   const { statusLines } = await import("./commands/status");
   console.log(statusLines(snapshot).join("\n"));
+}
+
+async function runMe(
+  options: JsonOptions,
+  meCommand: typeof import("./commands/me").meCommand,
+): Promise<void> {
+  const me = await meCommand();
+
+  if (options.json) {
+    printJson({ ok: true, ...me });
+    return;
+  }
+
+  console.log(me.name);
+  console.log(
+    [
+      `${me.collectedCount} ${me.collectedCount === 1 ? "finding" : "findings"} collected`,
+      `${me.wins} ${me.wins === 1 ? "win" : "wins"}`,
+      `${me.deaths} ${me.deaths === 1 ? "death" : "deaths"}`,
+    ].join(" · "),
+  );
+  console.log(`Aboard since ${new Date(me.joinedAt).toLocaleDateString()}`);
 }
 
 function rejectUnexpectedPositionals(positionals: string[]): void {
