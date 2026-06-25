@@ -10,6 +10,9 @@ import { type FC } from "react";
 
 export type CardProps = {
   onClose: () => void;
+  /** Provided only to the rocket's launch card: play the launch cinematic, then
+   *  navigate to /galaxy. Other cards ignore it. */
+  onLaunch?: () => void;
 };
 
 export type CardEntry = {

@@ -28,6 +28,8 @@ export type EarthAudio = {
   muted: () => boolean;
   /** Create/resume the AudioContext — call on the first user gesture. */
   resume: () => void;
+  /** The rocket-launch roar — an ignition thud, a building rumble, a rising whoosh. */
+  rocketLaunch: () => void;
   /** Ramp the master gain to mute or unmute. */
   setMuted: (value: boolean) => void;
   /** A soft, short footstep tick. */
@@ -221,6 +223,75 @@ export function createEarthAudio(): EarthAudio {
       if (bedOn) {
         startBed();
       }
+    },
+    rocketLaunch: () => {
+      if (!ensureContext() || !master || !context) {
+        return;
+      }
+
+      const now = context.currentTime;
+
+      // ignition: a low thud
+      tone(master, 70, 0, 0.45, 0.18, "sine");
+
+      // the rumble: filtered noise that builds, opens up on liftoff, then fades
+      const buffer = context.createBuffer(
+        1,
+        Math.floor(context.sampleRate * 2.6),
+        context.sampleRate,
+      );
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < data.length; i++) {
+        data[i] = Math.random() * 2 - 1;
+      }
+      const noise = context.createBufferSource();
+      noise.buffer = buffer;
+      const filter = context.createBiquadFilter();
+      filter.type = "lowpass";
+      filter.frequency.setValueAtTime(180, now);
+      filter.frequency.exponentialRampToValueAtTime(900, now + 1.6);
+      filter.frequency.exponentialRampToValueAtTime(120, now + 2.6);
+      const rumble = context.createGain();
+      rumble.gain.setValueAtTime(0.0001, now);
+      rumble.gain.exponentialRampToValueAtTime(0.22, now + 0.8);
+      rumble.gain.setValueAtTime(0.22, now + 1.8);
+      rumble.gain.exponentialRampToValueAtTime(0.0001, now + 2.6);
+      noise.connect(filter);
+      filter.connect(rumble);
+      rumble.connect(master);
+      noise.start(now);
+      noise.stop(now + 2.6);
+      noise.onended = () => {
+        try {
+          noise.disconnect();
+          filter.disconnect();
+          rumble.disconnect();
+        } catch {
+          // Already torn down.
+        }
+      };
+
+      // a rising whoosh as it climbs
+      const osc = context.createOscillator();
+      const og = context.createGain();
+      osc.type = "sawtooth";
+      osc.frequency.setValueAtTime(60, now + 0.8);
+      osc.frequency.exponentialRampToValueAtTime(220, now + 2.2);
+      og.gain.setValueAtTime(0.0001, now + 0.8);
+      og.gain.exponentialRampToValueAtTime(0.05, now + 1.2);
+      og.gain.exponentialRampToValueAtTime(0.0001, now + 2.4);
+      osc.connect(og);
+      og.connect(master);
+      osc.start(now + 0.8);
+      osc.stop(now + 2.5);
+      osc.onended = () => {
+        try {
+          osc.disconnect();
+          og.disconnect();
+        } catch {
+          // Already torn down.
+        }
+      };
     },
     setMuted: (value: boolean) => {
       isMuted = value;

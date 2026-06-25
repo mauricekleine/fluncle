@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { CARD_REGISTRY } from "@/game/earth/cards/registry";
 import { findSurface, SurfaceCard } from "@/game/earth/cards/surface-card";
@@ -27,9 +27,16 @@ export const Route = createFileRoute("/earth")({
   }),
 });
 
+type EarthGameHandle = {
+  destroy: () => void;
+  launch: (tx: number, ty: number, onDone: () => void) => void;
+  resume: () => void;
+};
+
 function EarthPage() {
   const containerRef = useRef<HTMLDivElement>(null);
-  const gameRef = useRef<{ destroy: () => void; resume: () => void } | undefined>(undefined);
+  const gameRef = useRef<EarthGameHandle | undefined>(undefined);
+  const navigate = useNavigate();
   const [door, setDoor] = useState<PlacedDoor | undefined>();
 
   useEffect(() => {
@@ -57,6 +64,13 @@ function EarthPage() {
     gameRef.current?.resume();
   }
 
+  function launch(target: PlacedDoor) {
+    setDoor(undefined);
+    gameRef.current?.launch(target.tx, target.ty, () => {
+      void navigate({ to: "/galaxy" });
+    });
+  }
+
   return (
     <main className="fixed inset-0 flex flex-col items-center justify-center overflow-hidden bg-[#090a0b]">
       <h1 className="sr-only">Earth — the Fluncle overworld</h1>
@@ -70,9 +84,9 @@ function EarthPage() {
         className="pointer-events-none absolute bottom-6 left-0 right-0 text-center text-xs tracking-wide"
         style={{ color: p.creamMuted }}
       >
-        arrow keys / WASD to walk · E to enter a door
+        arrow keys / WASD to walk · E to open
       </p>
-      {door ? <DoorOverlay door={door} onClose={close} /> : null}
+      {door ? <DoorOverlay door={door} onClose={close} onLaunch={() => launch(door)} /> : null}
       <noscript>
         <NoscriptFallback />
       </noscript>
@@ -80,7 +94,15 @@ function EarthPage() {
   );
 }
 
-function DoorOverlay({ door, onClose }: { door: PlacedDoor; onClose: () => void }) {
+function DoorOverlay({
+  door,
+  onClose,
+  onLaunch,
+}: {
+  door: PlacedDoor;
+  onClose: () => void;
+  onLaunch: () => void;
+}) {
   const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -99,7 +121,7 @@ function DoorOverlay({ door, onClose }: { door: PlacedDoor; onClose: () => void 
       className="absolute inset-0 z-10 flex items-center justify-center p-6"
       style={{ background: "rgba(9,10,11,0.86)" }}
     >
-      <DoorCard door={door} onClose={onClose} />
+      <DoorCard door={door} onClose={onClose} onLaunch={onLaunch} />
       <button
         className="absolute bottom-6 right-6 text-xs tracking-widest"
         onClick={onClose}
@@ -113,10 +135,18 @@ function DoorOverlay({ door, onClose }: { door: PlacedDoor; onClose: () => void 
   );
 }
 
-function DoorCard({ door, onClose }: { door: PlacedDoor; onClose: () => void }) {
+function DoorCard({
+  door,
+  onClose,
+  onLaunch,
+}: {
+  door: PlacedDoor;
+  onClose: () => void;
+  onLaunch: () => void;
+}) {
   if (door.card) {
     const Card = CARD_REGISTRY[door.card];
-    return Card ? <Card onClose={onClose} /> : null;
+    return Card ? <Card onClose={onClose} onLaunch={onLaunch} /> : null;
   }
   if (door.surface) {
     const surface = findSurface(door.surface);

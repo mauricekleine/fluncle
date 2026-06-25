@@ -1,5 +1,5 @@
 import { createEarthAudio } from "./audio";
-import { type Camera, followCamera } from "./camera";
+import { type Camera, clampCamera, followCamera } from "./camera";
 import { createGrain } from "./grain";
 import { createInput } from "./input";
 import { DOORS, type PlacedDoor, buildPropSprites } from "./registry";
@@ -28,9 +28,17 @@ const VIEW_H = VIEW_TILES_H * TILE; // 208
 const SPEED = 58; // logical px/sec
 const REACH = 28; // interaction radius from feet to a door anchor
 const CAMERA_EASE = 0.16;
+const LAUNCH_DURATION = 2.6; // seconds — the rocket cinematic before /galaxy
 
 type Options = {
   onEnterDoor: (door: PlacedDoor) => void;
+};
+
+type EarthGame = {
+  destroy: () => void;
+  /** Play the rocket-launch cinematic from a tile, then call onDone (→ /galaxy). */
+  launch: (tx: number, ty: number, onDone: () => void) => void;
+  resume: () => void;
 };
 
 type Player = {
@@ -40,10 +48,7 @@ type Player = {
   y: number;
 };
 
-export function createEarth(
-  container: HTMLElement,
-  options: Options,
-): { destroy: () => void; resume: () => void } {
+export function createEarth(container: HTMLElement, options: Options): EarthGame {
   const canvas = document.createElement("canvas");
   canvas.width = VIEW_W;
   canvas.height = VIEW_H;
@@ -53,7 +58,7 @@ export function createEarth(
 
   const context = canvas.getContext("2d");
   if (!context) {
-    return { destroy: () => canvas.remove(), resume: () => {} };
+    return { destroy: () => canvas.remove(), launch: () => {}, resume: () => {} };
   }
   const ctx = context;
   ctx.imageSmoothingEnabled = false;
@@ -125,6 +130,13 @@ export function createEarth(
   let frame = 0;
   let raf = 0;
   let last = 0;
+
+  // the rocket-launch cinematic
+  let launching = false;
+  let launchT = 0;
+  let launchX = 0;
+  let launchY = 0;
+  let onLaunchDone: (() => void) | undefined;
 
   function fit() {
     const rect = container.getBoundingClientRect();
@@ -293,12 +305,99 @@ export function createEarth(
     grain.draw(ctx, frame, reducedMotion);
   }
 
+  // ── the rocket-launch cinematic ───────────────────────────────────────────
+  // A flickering exhaust cone below the rocket — the rocket's OWN hot material
+  // (the One Sun light), cream core → gold → red, longer on liftoff.
+  function drawLaunchFlame(x: number, baseY: number, t: number) {
+    const lift = Math.max(0, t - 0.8);
+    const len = Math.round(10 + Math.min(42, lift * 64) + Math.sin(frame * 0.9) * 4);
+    const flick = Math.sin(frame * 1.3) * 1.5;
+    for (let i = 0; i < len; i++) {
+      const w = Math.max(1, 7 - i * 0.18) + (i % 3 === 0 ? flick : 0);
+      const color =
+        i < 4 ? "#fffbf2" : i < len * 0.4 ? "#ffd057" : i < len * 0.75 ? "#f5b800" : "#ff6b57";
+      ctx.fillStyle = color;
+      ctx.fillRect(Math.round(x - w), Math.round(baseY + i), Math.round(w * 2), 1);
+    }
+  }
+
+  // Cream smoke billowing at the pad as the rocket climbs.
+  function drawLaunchSmoke(x: number, y: number, t: number) {
+    for (let i = 0; i < 5; i++) {
+      const age = t - i * 0.12;
+      if (age > 0) {
+        ctx.globalAlpha = Math.max(0, 0.5 - age * 0.18);
+        ctx.fillStyle = i % 2 === 0 ? "#b7ab95" : "#6e6657";
+        ctx.beginPath();
+        ctx.arc(x + (i - 2) * 9, y - 2, 4 + age * 22, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function renderLaunch() {
+    ctx.clearRect(0, 0, VIEW_W, VIEW_H);
+    const cam = clampCamera(launchX, launchY, VIEW_W, VIEW_H, WORLD_PX_W, WORLD_PX_H);
+    const ignite = Math.min(1, launchT / 0.8);
+    const decay = Math.max(0, 4 - (launchT - 2.2) * 18);
+    const shakeAmp = reducedMotion ? 0 : launchT < 2.2 ? 1.2 + ignite * 2.8 : decay;
+    const shakeX = Math.sin(frame * 1.7) * shakeAmp;
+    const shakeY = Math.cos(frame * 2.3) * shakeAmp;
+    const lift = Math.max(0, launchT - 0.8);
+    const rise = 0.5 * 430 * lift * lift; // accelerating off the pad
+
+    ctx.save();
+    ctx.translate(-Math.round(cam.x + shakeX), -Math.round(cam.y + shakeY));
+    drawTiles(cam.x, cam.y);
+    drawPlayer();
+    drawLaunchSmoke(launchX, launchY, launchT);
+    const sprite = pngs.launch_rocket ?? props.launch_rocket;
+    const ry = launchY - rise;
+    drawLaunchFlame(launchX, ry, launchT);
+    if (sprite) {
+      ctx.drawImage(sprite, Math.round(launchX - sprite.width / 2), Math.round(ry - sprite.height));
+    }
+    ctx.restore();
+
+    // a gold ignition flash, then the fade to deep field that hands off to /galaxy
+    if (launchT > 2.0) {
+      const flash = Math.max(0, 0.7 - (launchT - 2.0) * 2.5);
+      if (flash > 0) {
+        ctx.globalAlpha = flash;
+        ctx.fillStyle = "#ffd057";
+        ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+      }
+      ctx.globalAlpha = Math.min(1, Math.max(0, (launchT - 2.2) / 0.4));
+      ctx.fillStyle = "#090a0b";
+      ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+      ctx.globalAlpha = 1;
+    }
+
+    grain.draw(ctx, frame, reducedMotion);
+  }
+
+  function launchUpdate(dt: number) {
+    launchT += dt;
+    if (launchT >= LAUNCH_DURATION) {
+      launching = false;
+      const done = onLaunchDone;
+      onLaunchDone = undefined;
+      done?.();
+    }
+  }
+
   function loop(now: number) {
     const dt = last === 0 ? 0 : Math.min(0.05, (now - last) / 1000);
     last = now;
     frame++;
-    update(dt);
-    render();
+    if (launching) {
+      launchUpdate(dt);
+      renderLaunch();
+    } else {
+      update(dt);
+      render();
+    }
     raf = requestAnimationFrame(loop);
   }
   raf = requestAnimationFrame(loop);
@@ -312,6 +411,15 @@ export function createEarth(
       reduced.removeEventListener("change", onReduced);
       window.removeEventListener("resize", onResize);
       canvas.remove();
+    },
+    launch(tx, ty, onDone) {
+      launching = true;
+      launchT = 0;
+      launchX = tx * TILE + TILE / 2;
+      launchY = ty * TILE + TILE;
+      onLaunchDone = onDone;
+      paused = false;
+      audio.rocketLaunch();
     },
     resume() {
       paused = false;
