@@ -138,7 +138,18 @@ run_container() {
     "$1" gateway run >/dev/null
 }
 # Healthy = the gateway came up and stays up (the CLI answers from inside).
+# Test hook: PINWATCH_TEST_FAIL_POSTSMOKE=1 forces the FIRST health check (the
+# post-swap one) to fail exactly once, to drill the rollback rail — the second
+# call (the rollback's own check) runs for real. The box swaps to the new image,
+# "fails", and is restored to the previous image; both are known-good, so it
+# stays healthy throughout. See README § Testing the rollback rail.
+postsmoke_drilled=0
 container_healthy() {
+  if [ "${PINWATCH_TEST_FAIL_POSTSMOKE:-}" = "1" ] && [ "$postsmoke_drilled" = "0" ]; then
+    postsmoke_drilled=1
+    log "TEST: forcing this post-swap smoke to fail (rollback drill)"
+    return 1
+  fi
   sleep 6
   [ "$(docker inspect "$CONTAINER" --format '{{.State.Running}}' 2>/dev/null)" = "true" ] &&
     docker exec "$CONTAINER" fluncle version >/dev/null 2>&1

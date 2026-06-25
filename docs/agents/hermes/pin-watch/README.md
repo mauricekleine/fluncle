@@ -56,3 +56,13 @@ systemctl list-timers pin-watch.timer
 ```
 
 The script is idempotent and a no-op when current, so the timer is safe to run as often as you like.
+
+## Testing the rollback rail
+
+The rollback rail is the safety net (it restores the previous image if a future bump passes pre-smoke but then fails to come up). Drill it without putting the box at risk: `PINWATCH_TEST_FAIL_POSTSMOKE=1` forces the _first_ (post-swap) health check to fail exactly once — the box swaps to the freshly-built image, "fails", and is restored to the previous image (the second health check, the rollback's own, runs for real). Both images are known-good, so the gateway stays healthy throughout; it just exercises the recovery path end to end.
+
+```bash
+sudo env PINWATCH_TEST_FAIL_POSTSMOKE=1 /opt/fluncle-pin-watch/rebuild-hermes.sh --force
+```
+
+Expect: `swapping … -> <new>` → `TEST: forcing this post-swap smoke to fail` → `rolling back to <previous>` → `FATAL: rolled back …` (a rollback exits non-zero by design), a `↩️ ROLLED BACK` Discord alert, and `docker ps` back on the previous image, healthy. Verified live 2026-06-25.
