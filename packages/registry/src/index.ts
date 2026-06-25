@@ -537,7 +537,7 @@ export const SURFACES: readonly Surface[] = [
     apiFormat: "application/json",
     discoveryUrl: `${SITE}/.well-known/mcp/server-card.json`,
     exposedContent: [
-      "the archive as MCP tools (Streamable HTTP, no auth): list_tracks, get_random_track, search_tracks, submit_track, subscribe_newsletter",
+      "the archive as MCP tools (Streamable HTTP, no auth): list_tracks, get_random_track, get_status, search_tracks, submit_track, subscribe_newsletter",
     ],
     kind: "mcp",
     name: "mcp.server",
