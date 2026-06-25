@@ -395,6 +395,7 @@ const (
 	screenSubscribe     screen = "subscribe"
 	screenSubscribed    screen = "subscribed"
 	screenGalaxy        screen = "galaxy"
+	screenStatus        screen = "status"
 	screenInstall       screen = "install"
 	screenAbout         screen = "about"
 	screenMessage       screen = "message"
@@ -422,6 +423,7 @@ type model struct {
 	note           string
 	contact        string
 	message        string
+	status         *statusReport
 	galaxy         galaxyState
 	loading        bool
 	err            string
@@ -521,6 +523,26 @@ type searchResult struct {
 	ArtworkURL string   `json:"artworkUrl,omitempty"`
 }
 
+// statusReport is the /api/v1/status payload — the machine-readable sibling of
+// the /status dashboard. The terminal reads it straight off the public API (no
+// CLI shim); only the already-public service name / status / short message /
+// since timestamp ever flow through, the same fields the web page shows.
+type statusReport struct {
+	GeneratedAt string          `json:"generatedAt"`
+	Services    []serviceStatus `json:"services"`
+}
+
+// serviceStatus is one probed service in the report. `Status` is the three-state
+// health enum ("ok"/"degraded"/"down"); `Since` is when the current state began.
+type serviceStatus struct {
+	CheckedAt string `json:"checkedAt"`
+	LatencyMs *int   `json:"latencyMs"`
+	Message   string `json:"message,omitempty"`
+	Service   string `json:"service"`
+	Since     string `json:"since"`
+	Status    string `json:"status"`
+}
+
 type tracksMsg struct {
 	tracks []track
 	total  int
@@ -572,6 +594,11 @@ type submitMsg struct {
 
 type subscribeMsg struct {
 	err error
+}
+
+type statusMsg struct {
+	report *statusReport
+	err    error
 }
 
 func newModel(app *app, width, height int) model {
@@ -720,6 +747,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.input = ""
 		m.screen = screenSubscribed
+	case statusMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.err = msg.err.Error()
+			return m, nil
+		}
+		m.status = msg.report
 	case tea.MouseWheelMsg:
 		return m.handleWheel(msg)
 	case tea.PasteMsg:
@@ -764,7 +798,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handleGalaxyKey(key)
 	case screenAbout:
 		return m.handleAboutKey(key)
-	case screenDetail, screenInstall, screenMessage, screenSubscribed, screenMixtapeDetail:
+	case screenDetail, screenInstall, screenMessage, screenSubscribed, screenMixtapeDetail, screenStatus:
 		if key == "q" || key == "esc" || key == "backspace" || key == "b" {
 			if (m.screen == screenDetail || m.screen == screenMixtapeDetail) && m.detailBack != "" {
 				m.screen = m.detailBack
@@ -828,6 +862,12 @@ func (m model) handleMenuKey(key string) (tea.Model, tea.Cmd) {
 			m.err = ""
 		case "install":
 			m.screen = screenInstall
+		case "status":
+			m.screen = screenStatus
+			m.loading = true
+			m.err = ""
+			m.status = nil
+			return m, m.fetchStatus()
 		case "about":
 			m.screen = screenAbout
 			m.scroll = 0
@@ -1055,6 +1095,8 @@ func (m model) View() tea.View {
 		content = m.renderSubscribed()
 	case screenGalaxy:
 		content = m.renderGalaxy()
+	case screenStatus:
+		content = m.renderStatus()
 	case screenInstall:
 		content = m.renderInstall()
 	case screenAbout:
@@ -1669,6 +1711,53 @@ func (m model) renderGalaxyTelemetry() string {
 	return strings.Join(lines, "\n")
 }
 
+// renderStatus draws the recovered service-health board: one row per probed
+// service, its state read as a recovered telemetry field. Deep instrument
+// register — no exclamation marks (VOICE.md §6), the cosmos modifies but the
+// fields stay honestly plain. The order mirrors the web /status dashboard
+// (known services lead in SERVICE_ORDER; an unknown one falls in after).
+func (m model) renderStatus() string {
+	if m.loading {
+		return statusView("System status", "Reading the service telemetry...")
+	}
+	if m.err != "" {
+		return errorView("System status", m.err)
+	}
+	if m.status == nil || len(m.status.Services) == 0 {
+		return statusView("System status", "Nothing's reported in from the services yet. Quiet sector.")
+	}
+
+	services := sortServiceStatuses(m.status.Services)
+	content := make([]string, 0, len(services)*3)
+	for index, service := range services {
+		if index > 0 {
+			content = append(content, "")
+		}
+		// "Web · up 3d" — the service's voice label, its current state as a
+		// recovered field, and how long it's held there.
+		header := rowTitleStyle.Render(serviceStatusLabel(service.Service)) +
+			labelStyle.Render(" · ") +
+			statusWordStyle(service.Status).Render(serviceStatusWord(service.Status)) +
+			labelStyle.Render(" · "+humanizeServiceSince(service.Since, m.status.GeneratedAt, service.Status))
+		content = append(content, header)
+		// The probe's short message (already public-safe at the write); the
+		// subtitle names what the service is, in plain words.
+		detail := serviceStatusSubtitle(service.Service)
+		if message := strings.TrimSpace(service.Message); message != "" {
+			if detail != "" {
+				detail += " · "
+			}
+			detail += message
+		}
+		if detail != "" {
+			content = append(content, labelStyle.Render(detail))
+		}
+	}
+
+	help := helpLine("q back", "ctrl+c quit")
+	return scaffold("System status", overallStatusHeadline(services), content, help)
+}
+
 func (m model) renderInstall() string {
 	content := []string{
 		readingStyle.Render("Browse the latest bangers, submit tracks, and dig through Fluncle's Findings from your terminal."),
@@ -1977,6 +2066,19 @@ func (m model) fetchByCoord(coord string) tea.Cmd {
 	}
 }
 
+// fetchStatus pulls the public service-health report — the machine-readable
+// /api/v1/status payload, read straight off the API (no CLI shim). The terminal
+// renders the same already-public fields the /status dashboard shows.
+func (m model) fetchStatus() tea.Cmd {
+	return func() tea.Msg {
+		var report statusReport
+		if err := m.app.getJSON("/api/v1/status", &report); err != nil {
+			return statusMsg{err: err}
+		}
+		return statusMsg{report: &report}
+	}
+}
+
 // maxGalaxyPages caps the catalogue load so a misbehaving endpoint (a
 // non-advancing or repeating cursor) charts what it can and stops, instead of
 // looping forever. 48 pages of 48 covers far more findings than exist.
@@ -2128,6 +2230,7 @@ func menuItems() []menuItem {
 		{id: "submit", label: "Submit a track"},
 		{id: "subscribe", label: "Subscribe"},
 		{id: "install", label: "Install CLI"},
+		{id: "status", label: "System status"},
 		{id: "about", label: "About"},
 		{id: "quit", label: "Quit"},
 	}
@@ -2649,6 +2752,171 @@ func dropLastRune(value string) string {
 		return ""
 	}
 	return string(runes[:len(runes)-1])
+}
+
+// statusServiceOrder is the fixed display order, mirroring the web /status
+// dashboard's SERVICE_ORDER. Known services lead in this sequence; any service
+// the report carries that isn't named here is appended (alphabetically), so a
+// newly-probed service surfaces without a code change.
+var statusServiceOrder = []string{
+	"web",
+	"db",
+	"r2",
+	"dns",
+	"ssh",
+	"onion",
+	"hermes",
+	"automation",
+	"render-box",
+}
+
+// statusServiceLabels carries the voice label per known service id (mirrors the
+// web dashboard's SERVICE_LABELS), falling back to the raw id for an unknown one.
+var statusServiceLabels = map[string]string{
+	"automation": "Enrichment agents",
+	"db":         "Database",
+	"dns":        "DNS",
+	"hermes":     "Hermes agent",
+	"onion":      "Tor onion",
+	"r2":         "Media storage",
+	"render-box": "Video rendering agent",
+	"ssh":        "SSH terminal",
+	"web":        "Web",
+}
+
+// statusServiceSubtitles is the quiet one-line description per service — the
+// public domain it lives at, or what it does (mirrors the web dashboard's
+// SERVICE_SUBTITLES). Public-safe: every domain here is already public.
+var statusServiceSubtitles = map[string]string{
+	"automation": "the per-finding enrichment crew",
+	"dns":        "dig.fluncle.com",
+	"hermes":     "the Discord chat agent",
+	"onion":      "the archive over Tor",
+	"r2":         "found.fluncle.com",
+	"render-box": "renders each finding's video",
+	"ssh":        "rave.fluncle.com",
+	"web":        "www.fluncle.com",
+}
+
+func serviceStatusLabel(service string) string {
+	if label, ok := statusServiceLabels[service]; ok {
+		return label
+	}
+	return service
+}
+
+func serviceStatusSubtitle(service string) string {
+	return statusServiceSubtitles[service]
+}
+
+// serviceStatusWord is the recovered field's reading of the three-state health
+// enum: "operational" / "degraded" / "down" (mirrors the web STATUS_LABEL,
+// lowercased for the terminal's quieter telemetry register). An unknown enum
+// value falls through verbatim.
+func serviceStatusWord(status string) string {
+	switch status {
+	case "ok":
+		return "operational"
+	case "degraded":
+		return "degraded"
+	case "down":
+		return "down"
+	default:
+		return status
+	}
+}
+
+// statusWordStyle escalates by loudness, mirroring the web dashboard's badge
+// mapping (DESIGN.md — The One Sun Rule keeps gold reserved): an ok service
+// reads in the calm Stardust label color (healthy is the baseline), degraded in
+// Eclipse Glow heat, down in Re-entry Red.
+func statusWordStyle(status string) lipgloss.Style {
+	switch status {
+	case "down":
+		return errorStyle
+	case "degraded":
+		return taglineStyle
+	default:
+		return labelStyle
+	}
+}
+
+// humanizeServiceSince reads "up 3d" / "down 12m" / "degraded 5h" — the elapsed
+// time since the CURRENT status began, the verb tuned to the status (mirrors the
+// web humanizeSince). Whole-unit and terse; a fresh transition reads "just now".
+func humanizeServiceSince(sinceISO, nowISO, status string) string {
+	verb := "up"
+	switch status {
+	case "down":
+		verb = "down"
+	case "degraded":
+		verb = "degraded"
+	}
+
+	since, sinceErr := time.Parse(time.RFC3339, sinceISO)
+	now, nowErr := time.Parse(time.RFC3339, nowISO)
+	if sinceErr != nil || nowErr != nil {
+		return verb
+	}
+
+	elapsed := now.Sub(since)
+	if elapsed < time.Minute {
+		return verb + " just now"
+	}
+	if elapsed < time.Hour {
+		return fmt.Sprintf("%s %dm", verb, int(elapsed/time.Minute))
+	}
+	if elapsed < 24*time.Hour {
+		return fmt.Sprintf("%s %dh", verb, int(elapsed/time.Hour))
+	}
+	return fmt.Sprintf("%s %dd", verb, int(elapsed/(24*time.Hour)))
+}
+
+// overallStatusHeadline is the board's one-line summary: down beats degraded
+// beats all-operational (mirrors the web overallHeadline), in the terminal's
+// recovered-instrument register.
+func overallStatusHeadline(services []serviceStatus) string {
+	hasDown := false
+	hasDegraded := false
+	for _, service := range services {
+		switch service.Status {
+		case "down":
+			hasDown = true
+		case "degraded":
+			hasDegraded = true
+		}
+	}
+	if hasDown {
+		return "Some services are down"
+	}
+	if hasDegraded {
+		return "Some services are degraded"
+	}
+	return "All systems nominal"
+}
+
+// sortServiceStatuses orders the services by statusServiceOrder; an unknown
+// (unranked) service sorts after every ranked one, then alphabetically among
+// themselves. Stable mirror of the web dashboard's sortServices.
+func sortServiceStatuses(services []serviceStatus) []serviceStatus {
+	ordered := append([]serviceStatus{}, services...)
+	rank := func(service string) int {
+		for index, name := range statusServiceOrder {
+			if name == service {
+				return index
+			}
+		}
+		return len(statusServiceOrder)
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		ri := rank(ordered[i].Service)
+		rj := rank(ordered[j].Service)
+		if ri == rj {
+			return ordered[i].Service < ordered[j].Service
+		}
+		return ri < rj
+	})
+	return ordered
 }
 
 // formatDuration renders a millisecond duration as "M:SS", the runtime form a
