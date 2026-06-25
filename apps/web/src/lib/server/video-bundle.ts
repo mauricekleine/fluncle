@@ -5,9 +5,9 @@
 // footage.mp4 is the canonical web cut (its URL becomes video_url). Under the
 // two-master layout (docs/video-variants.md) it is the CLEAN square 1920×1920
 // crop source, and footage.social.mp4 is the portrait baked-text social cut
-// (Stories/YouTube as-is, TikTok via audio=false MT). footage-silent.mp4 is the
-// retiring audio-less cut — still ACCEPTED here for back-compat during the
-// transition (legacy bundles + pre-cutover ships), dropped at the cutover phase.
+// (Stories/YouTube as-is, TikTok via audio=false MT). The audio-less variant is
+// retired: surfaces derive a silent cut on the fly via an `audio=false` Media
+// Transformation, so the ship pipeline no longer writes footage-silent.mp4.
 // cover.jpg is the profile-grid cover, retrieved by convention with no dedicated
 // column. composition.tsx + props.json + render.json make the source
 // re-renderable. The rest are stored alongside at <log-id>/<name>.
@@ -17,7 +17,6 @@ export type VideoArtifact = { contentType: string; field: string; name: string }
 export const VIDEO_ARTIFACTS: readonly VideoArtifact[] = [
   { contentType: "video/mp4", field: "footage", name: "footage.mp4" },
   { contentType: "video/mp4", field: "footage-social", name: "footage.social.mp4" },
-  { contentType: "video/mp4", field: "footage-silent", name: "footage-silent.mp4" },
   { contentType: "image/jpeg", field: "poster", name: "poster.jpg" },
   { contentType: "image/jpeg", field: "cover", name: "cover.jpg" },
   { contentType: "text/plain; charset=utf-8", field: "note", name: "note.txt" },

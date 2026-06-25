@@ -20,6 +20,15 @@ regexes = [
   # public account IDENTIFIER, not a credential. It is useless without the actual
   # R2 token, which is a Worker secret and never in the repo.
   '''0651fd3b33d9e0b2fe72a5f13e5cf65d''',
+  # The IndexNow ownership token, served publicly at /<key>.txt so search engines can
+  # verify domain ownership before accepting URL submissions. Public by design — it is
+  # not a credential and grants nothing beyond proving we control the served file.
+  '''8337c1b41068549f248bf56f1fc465df''',
+  # Feed content-type MIME strings in the surfaces registry (`apiFormat`) — RSS/Atom/
+  # JSON-Feed media types, not secrets. gitleaks' generic-api-key rule false-positives
+  # the `...+xml` / `...+json` media types.
+  '''application/(rss|atom)\+xml''',
+  '''application/feed\+json''',
 ]
 paths = [
   '''(^|/)node_modules/''',
