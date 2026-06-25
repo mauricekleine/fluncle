@@ -127,13 +127,13 @@ Enrichment is **already done** — it runs as the on-box `fluncle-enrich` `--no-
 
 ## Green light
 
-A clean build start needs both unchecked boxes ticked:
+All gates are now cleared — the crons are wired and live on the box ([cron README](./agents/hermes/cron/README.md)):
 
 - ☑ **#77 merged** (on `main` at `6513deb`) — the admin oRPC migration is complete; the PENDING list is down to carve-outs, and every Hermes op is a contract on its tier.
-- ☐ **CLI admin naming rename landed** (Convention B §4 step 3 — not started, no aliases yet). The crons invoke via the `fluncle` CLI, so the command names must be stable first; don't wire a cron to a name about to move. **This is now the only remaining gate.**
+- ☑ **CLI admin naming rename landed** (#88, refined by the Convention-B cleanup — the crons invoke `fluncle admin tracks <verb>` against stable names).
 - ☑ **Fluncle's voice** — locked (#73/#74); observation automation unblocked.
 - ☑ **The auth spine** — `orpc-auth.ts` (`adminProcedure` / `operatorProcedure`); role flips are tier changes.
 
-The reliability columns + resolver refactor are oRPC-independent and could start earliest, but they touch `tracks.ts` / `schema.ts`, so hold them until the oRPC slice's sole-active-slice window has fully cleared. Once the two boxes tick, the endpoints get built as oRPC contracts on the existing tiers and the crons wire up in the order above.
+The reliability columns + resolver refactor shipped with the `backfill` crons; the endpoints were built as oRPC contracts on the existing tiers and the crons wired up in the order above.
 
 **Update the operator skill when this lands.** The `fluncle-hermes-operator` skill (`packages/skills/fluncle-hermes-operator`) is the operator runbook for changing the Hermes agent, grounded in what's live _today_. When this brief's work ships — the scheduled crons, the `backfill_*` / `observe_track` role flips, and the newsletter `draft` / `send` commands — add those levers to the skill so it stays in step with the agent's real capabilities (it carries the same reminder in its own footer).
