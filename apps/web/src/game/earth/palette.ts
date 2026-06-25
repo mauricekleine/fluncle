@@ -1,10 +1,14 @@
 // The overworld palette — the canon 8-bit ramp (galaxy game / DESIGN.md) plus a
-// few overworld-derived tones a top-down ground surface needs and the star map
-// never did: a warm-dark SOIL band bridging the gap between Tape Black (#171611)
-// and Cream Dim (#6e6657), and a single sparing green PHOSPHOR for the CRT
-// screen (the Retint Rule sanctions a dim cool accent used as a detail, never a
-// field — the CRT is the only place it appears). Everything else samples the
-// shared `palette`, so the overworld and the galaxy read as one cosmos.
+// minimal warm-dark SOIL band a top-down ground surface needs and the star map
+// never did: three tones bridging Tape Black (#171611) and Cream Dim (#6e6657),
+// all on the Warm-Dark axis (DESIGN.md: "every black and neutral leans warm").
+//
+// Canon note (Retint Rule): there is NO green-phosphor token. Cool hues survive
+// only as minor counter-accents, never a field — so the CRT screen and the SSH
+// terminal use the canon `coolTeal` as a dim ghost, and the recovered-CRT feel
+// comes from scanlines + cream ink + a gold prompt, not a green wash. Everything
+// else samples the shared `palette`, so the overworld and the galaxy read as one
+// cosmos.
 
 import { palette } from "../palette";
 
@@ -16,10 +20,6 @@ export const earthPalette = {
   groundDim: "#1d1c16",
   /** A lit speck of soil — sparse texture so the ground isn't flat. */
   groundLit: "#3b3930",
-  /** CRT green-phosphor glow — the one off-ramp accent, CRT screen only. */
-  phosphor: "#74e0a8",
-  /** Its scanline shadow. */
-  phosphorDim: "#2f6f54",
 } as const;
 
 export type EarthInk = keyof typeof earthPalette;
