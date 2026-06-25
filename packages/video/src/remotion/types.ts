@@ -27,6 +27,13 @@ export type CosmosTrack = {
   /** Record label (Spotify metadata). Authoritative, render-safe fact. */
   label?: string;
   /**
+   * The recording's ISRC — the unique identifier for THIS exact recording (an
+   * original and its remix carry different ISRCs). Not rendered; it's the key the
+   * preview resolver uses to fetch the EXACT recording's audio (Deezer by ISRC)
+   * instead of fuzzy-matching by name, which can pick the wrong recording.
+   */
+  isrc?: string;
+  /**
    * Release date ("2015-12-18", Spotify metadata). Authoritative, render-safe;
    * the on-screen plate shows only the YEAR (a catalog credit beside the label),
    * kept distinct from Fluncle's own Found date.

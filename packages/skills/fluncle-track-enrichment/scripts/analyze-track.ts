@@ -51,6 +51,66 @@ function normalize(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
+// Version-aware matching (self-contained; the skill imports no Fluncle code). A
+// finding's ISRC names the EXACT recording — an original and its remix carry
+// DIFFERENT ISRCs. The fuzzy Deezer-search + iTunes legs return the whole release
+// family, so without a version gate a REMIX finding's BPM/key/feature vector could
+// be computed from the ORIGINAL (the fuzzy candidate outvoting the ISRC one). These
+// helpers mirror packages/video's resolve-preview / apps/web's discogs resolver:
+// the candidate's version descriptor must AGREE with the finding's.
+const VERSION_MARKER =
+  /\b(mix|edit|version|remix|dub|vip|bootleg|rework|re-?edit|flip|refix|remaster(?:ed)?|instrumental)\b/i;
+const REMIX_MARKER = /\b(remix|bootleg|vip|rework|re-?edit|flip|refix)\b/i;
+const VERSION_STOPWORDS = new Set(["mix", "the", "and", "feat", "ft", "edit", "version", "remix"]);
+
+function titleTokens(value: string): string[] {
+  return value
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+}
+
+function versionTokens(value: string): Set<string> {
+  const parts = value.split(/\s+-\s+/);
+  const tail = parts.length > 1 ? (parts[parts.length - 1] ?? "") : "";
+  if (parts.length > 1 && VERSION_MARKER.test(tail)) {
+    return new Set(titleTokens(tail));
+  }
+  const bracketed = /[([]([^)\]]*?)[)\]]/.exec(value);
+  if (bracketed?.[1] && VERSION_MARKER.test(bracketed[1])) {
+    return new Set(titleTokens(bracketed[1]));
+  }
+  return new Set();
+}
+
+/**
+ * Whether a candidate title is the SAME version as the finding (directional).
+ * Exported so the focused test can exercise it without running the pipeline (the
+ * full run is guarded by `import.meta.main`).
+ */
+export function versionMatches(findingTitle: string, candidateTitle: string): boolean {
+  const findingIsRemix = REMIX_MARKER.test(findingTitle);
+  const candidateIsRemix = REMIX_MARKER.test(candidateTitle);
+
+  if (findingIsRemix) {
+    if (!candidateIsRemix) {
+      return false;
+    }
+    const want = [...versionTokens(findingTitle)].filter((t) => !VERSION_STOPWORDS.has(t));
+    if (want.length === 0) {
+      return true;
+    }
+    const have = versionTokens(candidateTitle);
+    return want.every((token) => have.has(token));
+  }
+
+  return !candidateIsRemix;
+}
+
 async function resolvePreviews(): Promise<Preview[]> {
   const found: Preview[] = [];
   const push = (source: string, url: string | undefined | null) => {
@@ -58,6 +118,8 @@ async function resolvePreviews(): Promise<Preview[]> {
       found.push({ source, url });
     }
   };
+
+  const findingTitle = title ?? "";
 
   // 1. Deezer by ISRC — the most precise (exact recording).
   if (isrc) {
@@ -73,19 +135,24 @@ async function resolvePreviews(): Promise<Preview[]> {
     }
   }
 
-  // 2. Deezer search by artist + title.
+  // 2. Deezer search by artist + title — VERSION-GATED so a remix finding never
+  //    pulls in the original's preview alongside the ISRC candidate.
   try {
     const query = `artist:"${artist}" track:"${title}"`;
     const response = await fetch(`https://api.deezer.com/search?q=${encodeURIComponent(query)}`);
     const body = (await response.json()) as {
       data?: Array<{ artist?: { name?: string }; preview?: string; title?: string }>;
     };
-    push("deezer:search", (body.data ?? []).find((item) => item.preview)?.preview);
+    const hit = (body.data ?? []).find(
+      (item) => item.preview && versionMatches(findingTitle, item.title ?? ""),
+    );
+    push("deezer:search", hit?.preview);
   } catch {
     // fall through
   }
 
-  // 3. iTunes — usually a different window of the song than Deezer.
+  // 3. iTunes — usually a different window of the song than Deezer. Also version-
+  //    gated (artist contains + same version) so it can't seed the wrong recording.
   try {
     const term = encodeURIComponent(`${artist} ${title}`);
     const response = await fetch(
@@ -96,7 +163,9 @@ async function resolvePreviews(): Promise<Preview[]> {
     };
     const hit = (body.results ?? []).find(
       (item) =>
-        item.previewUrl && normalize(item.artistName ?? "").includes(normalize(artist ?? "")),
+        item.previewUrl &&
+        normalize(item.artistName ?? "").includes(normalize(artist ?? "")) &&
+        versionMatches(findingTitle, item.trackName ?? ""),
     );
     push("itunes", hit?.previewUrl);
   } catch {

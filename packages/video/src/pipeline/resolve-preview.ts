@@ -1,6 +1,20 @@
 // Resolve a 30s preview audio URL for a track, without ever touching YouTube.
-// Deezer is tried first (exact-ish artist match -> high confidence); iTunes is
-// the fuzzy fallback. Returns null when nothing clears the confidence floor.
+//
+// ISRC FIRST: a finding's ISRC uniquely identifies the EXACT recording (an
+// original and its remix carry DIFFERENT ISRCs), so when we have it we resolve
+// Deezer by `track/isrc:<isrc>` — exact, region-independent, never the wrong
+// recording. Only when there is no ISRC (or the ISRC lookup yields no preview) do
+// we fall back to an artist+title search, and that fallback is VERSION-AWARE: it
+// requires the candidate's version descriptor to agree with the finding's (a remix
+// finding resolves to the matching remix, never the bare original — see
+// version-match.ts, which mirrors apps/web/src/lib/server/discogs.ts).
+//
+// iTunes is the last-resort fuzzy fallback. Returns null when nothing clears the
+// confidence floor.
+
+import { normalize, stripVersionSuffix, versionMatches } from "./version-match";
+
+export { isRemix, normalize, stripVersionSuffix, versionMatches } from "./version-match";
 
 type PreviewSource = "deezer" | "itunes" | "archive";
 
@@ -20,6 +34,8 @@ type DeezerHit = {
 
 type DeezerResponse = { data?: DeezerHit[] };
 
+type DeezerIsrcTrack = { error?: unknown; preview?: string };
+
 type ItunesHit = {
   previewUrl?: string;
   trackName?: string;
@@ -27,43 +43,6 @@ type ItunesHit = {
 };
 
 type ItunesResponse = { results?: ItunesHit[] };
-
-export function normalize(value: string): string {
-  return value
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/\(.*?\)|\[.*?\]/g, " ")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-// Any word that marks a track as a specific version rather than the bare title.
-const VERSION_MARKER =
-  /\b(mix|edit|version|remix|dub|vip|bootleg|rework|re-?edit|flip|refix|remaster(?:ed)?|instrumental)\b/i;
-// A third-party / alternate REWORK (not the artist's own original/extended/radio
-// cut), which would carry different musical content than the finding.
-const REMIX_MARKER = /\b(remix|bootleg|vip|rework|re-?edit|flip|refix)\b/i;
-
-/**
- * Strip a trailing version/mix descriptor so a Spotify title like
- * "Days Like These - Original Mix" matches Deezer's bare "Days Like These".
- * Dance-music titles almost always carry one ("- Original Mix", "- Radio Edit",
- * "- Extended Mix", "- <Artist> Remix"); Deezer's exact `track:` filter returns
- * zero hits when the suffix is included. Only strips a tail that actually names a
- * version, so an ordinary "A - B" title is left untouched.
- */
-export function stripVersionSuffix(title: string): string {
-  const parts = title.split(/\s+-\s+/);
-  if (parts.length > 1 && VERSION_MARKER.test(parts[parts.length - 1] ?? "")) {
-    return parts.slice(0, -1).join(" - ").trim();
-  }
-  return title.trim();
-}
-
-function isRemix(title: string): boolean {
-  return REMIX_MARKER.test(title);
-}
 
 /** Dice coefficient over bigrams; cheap fuzzy similarity in 0..1. */
 export function similarity(a: string, b: string): number {
@@ -96,7 +75,29 @@ export function similarity(a: string, b: string): number {
   return total > 0 ? (2 * intersection) / total : 0;
 }
 
-async function resolveDeezer(title: string, artist: string): Promise<ResolvedPreview | null> {
+/**
+ * EXACT path: Deezer by ISRC. `track/isrc:<isrc>` returns the one recording the
+ * finding's ISRC names — original or remix, never the other — with its 30s
+ * preview. This is the same endpoint the render's own caption.ts (fetchReleaseYear)
+ * and apps/web's enrichFromDeezer already trust. Null when the ISRC has no Deezer
+ * match or no preview, so the caller falls back to the version-aware name search.
+ */
+async function resolveDeezerByIsrc(isrc: string): Promise<ResolvedPreview | null> {
+  const res = await fetch(`https://api.deezer.com/track/isrc:${encodeURIComponent(isrc.trim())}`, {
+    headers: { accept: "application/json" },
+  });
+  if (!res.ok) {
+    return null;
+  }
+  const track = (await res.json()) as DeezerIsrcTrack;
+  if (track.error || !track.preview?.trim()) {
+    return null;
+  }
+  // ISRC is exact-recording, so confidence is maximal among the live sources.
+  return { confidence: 0.99, source: "deezer", url: track.preview };
+}
+
+async function resolveDeezerSearch(title: string, artist: string): Promise<ResolvedPreview | null> {
   // Query Deezer with the version suffix stripped — an exact `track:"… - Original
   // Mix"` returns nothing, while the bare title finds the release plus its remixes.
   const baseTitle = stripVersionSuffix(title);
@@ -109,12 +110,12 @@ async function resolveDeezer(title: string, artist: string): Promise<ResolvedPre
   const json = (await res.json()) as DeezerResponse;
   const hits = json.data ?? [];
 
-  // Among exact-artist hits, pick the recording that matches the FINDING — not the
-  // first one Deezer returns (often a remix). The finding's "- Original Mix" is the
-  // bare original, so prefer the non-remix whose base title is closest, and back
-  // away from a third-party rework unless the finding itself is that rework.
   const targetBase = stripVersionSuffix(title);
-  const targetIsRemix = isRemix(title);
+
+  // Among exact-artist hits, pick the recording whose VERSION matches the finding —
+  // never the first one Deezer returns (often a remix), and never tip a remix to
+  // the bare original. The version gate (versionMatches) is the kill-switch; among
+  // version-matching candidates we then prefer the closest base title.
   let exact: { score: number; preview: ResolvedPreview } | null = null;
   for (const hit of hits) {
     if (!hit.preview) {
@@ -123,14 +124,10 @@ async function resolveDeezer(title: string, artist: string): Promise<ResolvedPre
     if (normalize(hit.artist?.name ?? "") !== normalize(artist)) {
       continue;
     }
-    let score = similarity(stripVersionSuffix(hit.title ?? ""), targetBase);
-    if (isRemix(hit.title ?? "")) {
-      if (!targetIsRemix) {
-        score -= 0.5;
-      }
-    } else {
-      score += 0.05;
+    if (!versionMatches(title, hit.title ?? "")) {
+      continue;
     }
+    const score = similarity(stripVersionSuffix(hit.title ?? ""), targetBase);
     if (!exact || score > exact.score) {
       exact = { preview: { confidence: 0.92, source: "deezer", url: hit.preview }, score };
     }
@@ -139,10 +136,15 @@ async function resolveDeezer(title: string, artist: string): Promise<ResolvedPre
     return exact.preview;
   }
 
-  // Looser fallback within Deezer: take the best fuzzy match if it clears the floor.
+  // Looser fallback within Deezer: take the best fuzzy match if it clears the floor
+  // AND its version still agrees with the finding (so the remix never falls through
+  // to the original here either).
   let best: ResolvedPreview | null = null;
   for (const hit of hits) {
     if (!hit.preview) {
+      continue;
+    }
+    if (!versionMatches(title, hit.title ?? "")) {
       continue;
     }
     const score =
@@ -164,9 +166,16 @@ async function resolveItunes(title: string, artist: string): Promise<ResolvedPre
   const json = (await res.json()) as ItunesResponse;
   const hits = json.results ?? [];
 
+  // iTunes is the last-resort leg and exposes only a "trackName" without a clean
+  // version field. We can't fully trust its descriptor, but we can at least refuse
+  // an OBVIOUS mismatch: a remix finding must not take a non-remix hit (and an
+  // original must not take a third-party remix). Version-aware, not blind.
   let best: ResolvedPreview | null = null;
   for (const hit of hits) {
     if (!hit.previewUrl) {
+      continue;
+    }
+    if (!versionMatches(title, hit.trackName ?? "")) {
       continue;
     }
     const titleScore = similarity(hit.trackName ?? "", title);
@@ -180,23 +189,36 @@ async function resolveItunes(title: string, artist: string): Promise<ResolvedPre
 }
 
 /**
- * Resolve a preview URL for a track. Deezer first, iTunes fallback, never YouTube.
- * Returns null if no candidate reaches the confidence floor (0.6).
+ * Resolve a preview URL for a track. ISRC-first (exact recording), then a
+ * version-aware Deezer/iTunes name search, never YouTube. Returns null if no
+ * candidate reaches the confidence floor (0.6).
  */
 export async function resolvePreview({
   title,
   artists,
+  isrc,
 }: {
   title: string;
   artists: string[];
+  isrc?: string;
 }): Promise<ResolvedPreview | null> {
   const artist = artists[0] ?? "";
 
-  const deezer = await resolveDeezer(title, artist).catch(() => null);
+  // 1. Exact: Deezer by ISRC. The finding's ISRC IS the recording.
+  if (isrc?.trim()) {
+    const byIsrc = await resolveDeezerByIsrc(isrc).catch(() => null);
+    if (byIsrc) {
+      return byIsrc;
+    }
+  }
+
+  // 2. Fallback: version-aware Deezer search.
+  const deezer = await resolveDeezerSearch(title, artist).catch(() => null);
   if (deezer && deezer.confidence >= CONFIDENCE_FLOOR) {
     return deezer;
   }
 
+  // 3. Last resort: version-aware iTunes search.
   const itunes = await resolveItunes(title, artist).catch(() => null);
   if (itunes && itunes.confidence >= CONFIDENCE_FLOOR) {
     return itunes;
