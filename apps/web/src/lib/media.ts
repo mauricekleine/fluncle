@@ -1,12 +1,14 @@
 // R2 media for a finding, keyed by its Log ID.
 //
 // The Worker owns the bucket; these are the public read URLs on the
-// found.fluncle.com custom domain. The video bundle (footage / footage-silent /
+// found.fluncle.com custom domain. The video bundle (footage / footage.social /
 // poster / cover / …) is stored at `<log-id>/<name>` — only `footage.mp4` gets a
-// DB column (`video_url`); cover, poster, and the silent cut live by CONVENTION,
+// DB column (`video_url`); cover, poster, and the social cut live by CONVENTION,
 // with no column. This module is the single source of that convention for every
 // surface (the feed, Stories, OG tags), so the `<log-id>/<name>` shape is written
-// down once instead of re-encoded per caller.
+// down once instead of re-encoded per caller. The audio-less variant is no longer
+// a stored object — surfaces derive it via an `audio=false` Media Transformation
+// (videoCrop silent / videoAudioStripped), so `footage-silent.mp4` is retired.
 
 export const FOUND_BASE = "https://found.fluncle.com";
 
@@ -80,8 +82,6 @@ export type TrackMedia = {
    * for legacy findings. Surfaces fall back to `videoUrl` when it's absent.
    */
   socialVideoUrl: string;
-  /** The audio-less cut — what Stories plays muted, since sound is the official preview. */
-  silentVideoUrl: string;
 };
 
 /** Derive the conventional R2 media URLs for a finding from its Log ID. */
@@ -95,7 +95,6 @@ export function trackMedia(logId: string): TrackMedia {
     observationJsonUrl: `${base}/observation.json`,
     observationTextUrl: `${base}/observation.txt`,
     posterUrl: `${base}/poster.jpg`,
-    silentVideoUrl: `${base}/footage-silent.mp4`,
     socialVideoUrl: `${base}/footage.social.mp4`,
     videoUrl: `${base}/footage.mp4`,
   };
