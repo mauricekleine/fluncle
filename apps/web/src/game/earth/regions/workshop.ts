@@ -107,7 +107,7 @@ const region: RegionModule = {
     { label: "the radio", prop: "radio", surface: "web.radio", tx: 8, ty: 29 },
   ],
   id: "workshop",
-  props: { boombox, cli: floppy, crt, radio, turntable },
+  props: { boombox, crt, floppy, radio, turntable },
 };
 
 export default region;
