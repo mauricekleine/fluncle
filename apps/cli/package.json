@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@fluncle/contracts": "workspace:*",
+    "@fluncle/registry": "workspace:*",
     "commander": "catalog:",
     "dotenv": "catalog:"
   },
