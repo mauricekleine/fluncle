@@ -1,7 +1,9 @@
+import { SURFACES } from "@fluncle/registry";
 import { siteUrl } from "../fluncle-links";
 import { fluncleDescription } from "../identity";
 import { subscribeToNewsletter } from "./newsletter";
 import { ApiError, searchTrackCandidates } from "./spotify";
+import { getServiceStatuses, type ServiceHealthStatus } from "./status";
 import { createSubmission } from "./submissions";
 import { getRandomTrack, listTracks } from "./tracks";
 
@@ -89,6 +91,14 @@ const tools: McpTool[] = [
     inputSchema: { properties: {}, type: "object" },
     name: "get_random_track",
     title: "Random finding",
+  },
+  {
+    description:
+      "Check whether all of Fluncle's systems are operational. Returns an overall ok flag, a one-line headline, and the current status of each service (the website, the API, the media zone, the SSH terminal, the DNS zone, the Tor mirror, the render box, and the on-box prober). Read-only; the same health the public /status page shows.",
+    execute: async () => summarizeStatus(),
+    inputSchema: { properties: {}, type: "object" },
+    name: "get_status",
+    title: "Are all systems up?",
   },
   {
     description:
@@ -326,7 +336,7 @@ async function dispatch(message: unknown, request: Request): Promise<JsonRpcResp
       return success(id, {
         capabilities: { tools: { listChanged: false } },
         instructions:
-          "Fluncle's drum & bass archive as tools: list recent findings, pull a random one, search Spotify candidates, submit a track for review, or board the newsletter. A submission is a recommendation, not a publish; Fluncle listens before anything goes out.",
+          "Fluncle's drum & bass archive as tools: list recent findings, pull a random one, check whether all of Fluncle's systems are operational, search Spotify candidates, submit a track for review, or board the newsletter. A submission is a recommendation, not a publish; Fluncle listens before anything goes out.",
         protocolVersion: requested || PROTOCOL_VERSION,
         serverInfo: { name: SERVER_NAME, title: "Fluncle", version: SERVER_VERSION },
       });
@@ -381,6 +391,93 @@ async function dispatch(message: unknown, request: Request): Promise<JsonRpcResp
     default:
       return failure(id, -32601, `Method not found: ${method}`);
   }
+}
+
+// One service in the get_status summary: the registry label, the raw service id,
+// its three-state health, and the probe's short message (null when none).
+type StatusService = {
+  label: string;
+  message: string | null;
+  name: string;
+  status: ServiceHealthStatus;
+};
+
+// A friendly label per `/status` service id, derived from the surfaces registry so
+// the two never drift. The registry records each probed surface's `/status` service
+// id in its operatorNotes (e.g. "Probed on /status as service `r2`"); we read that
+// once and pair the id with the surface's first exposedContent line as a label. Keys
+// the registry doesn't tag (the prober's own self-liveness) fall back to a constant.
+const SERVICE_PROBE_MARKER = /service `([a-z0-9-]+)`/i;
+const registryServiceLabels: Record<string, string> = (() => {
+  const labels: Record<string, string> = {
+    // The rave-02 healthcheck cron's self-liveness — posted only by the prober, not
+    // a registry surface, so it carries no operatorNotes marker.
+    hermes: "the on-box prober (rave-02 healthcheck)",
+  };
+
+  for (const surface of SURFACES) {
+    const serviceId = surface.operatorNotes?.match(SERVICE_PROBE_MARKER)?.[1];
+    const label = surface.exposedContent[0];
+
+    if (serviceId && label && !(serviceId in labels)) {
+      labels[serviceId] = label;
+    }
+  }
+
+  return labels;
+})();
+
+// A concise operational summary an agent can answer "are all Fluncle systems up?"
+// from. Reads the same public health store the /status page and /api/v1/status read.
+// `ok` is true only when every service is `ok`; a single `down` flips `ok` false and
+// drives a blunt headline. An empty store (the cron has never written) reports unknown
+// rather than a false all-clear.
+async function summarizeStatus(): Promise<{
+  headline: string;
+  ok: boolean;
+  services: StatusService[];
+}> {
+  const rows = await getServiceStatuses();
+  const services: StatusService[] = rows.map((row) => ({
+    label: registryServiceLabels[row.service] ?? row.service,
+    message: row.message,
+    name: row.service,
+    status: row.status,
+  }));
+
+  if (services.length === 0) {
+    return { headline: "No service health has been reported yet.", ok: false, services };
+  }
+
+  const down = services.filter((service) => service.status === "down");
+  const degraded = services.filter((service) => service.status === "degraded");
+  const ok = down.length === 0 && degraded.length === 0;
+
+  return { headline: statusHeadline(services.length, down, degraded), ok, services };
+}
+
+// The one-line verdict. All clear → a plain all-up line; otherwise name the services
+// that are down/degraded so the agent can relay specifics without re-reading the list.
+function statusHeadline(total: number, down: StatusService[], degraded: StatusService[]): string {
+  if (down.length === 0 && degraded.length === 0) {
+    return `All ${total} Fluncle systems are operational.`;
+  }
+
+  const parts: string[] = [];
+
+  if (down.length > 0) {
+    parts.push(`${listNames(down)} down`);
+  }
+
+  if (degraded.length > 0) {
+    parts.push(`${listNames(degraded)} degraded`);
+  }
+
+  return `Not all systems are up: ${parts.join("; ")}.`;
+}
+
+function listNames(services: StatusService[]): string {
+  return services.map((service) => service.name).join(", ");
 }
 
 function clampLimit(value: unknown): number {

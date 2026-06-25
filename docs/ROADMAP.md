@@ -126,10 +126,10 @@ The on-site layer shipped (per-finding `/log/<id>` pages with definitional prose
 
 ### Developer & discovery surfaces — the long tail
 
-The machine- and developer-facing surfaces of `docs/public-surfaces-checklist.md` (dig, versioned contract-first API, the Fumadocs `/docs` hub, feeds, CLI distribution, SSH deep-links) are live. What's open:
+The machine- and developer-facing surfaces mapped in [docs/surfaces-doctrine.md](./surfaces-doctrine.md) (dig, versioned contract-first API, the Fumadocs `/docs` hub, feeds, CLI distribution, SSH deep-links) are live. What's open:
 
 - **OpenAPI default-error response.** The generated public spec (`/api/v1/openapi.json`) documents only the success response per op — add a shared default-error response (the uniform `{ code, message, ok: false }` 4xx/5xx the rails encoder emits) so the per-op `400`/`429` docs the old static file carried aren't lost.
-- **The non-gating tail in the checklist:** the `today` dig label, a public changelog, a Docker image / Postman collection, broader data-graph anchors (Discogs, Last.fm, ListenBrainz), and directory listings (Product Hunt, Internet Archive, a Hugging Face dataset). Pick from `docs/public-surfaces-checklist.md` when one earns its keep.
+- **The non-gating tail:** the `today` dig label, a public changelog, a Docker image / Postman collection, broader data-graph anchors (Discogs, Last.fm, ListenBrainz), and directory listings (Product Hunt, Internet Archive, a Hugging Face dataset). Each becomes a registry entry in [docs/surfaces-doctrine.md](./surfaces-doctrine.md) when one earns its keep.
 
 ### Fluncle Lens (Chrome extension) — submitted, in review
 
