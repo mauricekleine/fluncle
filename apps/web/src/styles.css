@@ -2180,6 +2180,106 @@ body::before {
   text-wrap: balance;
 }
 
+/* ── The crew button's glowing moving border (home link hub) ──────────────────
+   The Retint Rule (DESIGN.md): the Vercel/Linear conic-sweep border, stolen for
+   its craft and recolored to canon — a single warm arc that sweeps through
+   Eclipse Gold → Eclipse Glow → Re-entry Red (the eclipse heat), never a rainbow.
+   An @property --crew-glow-angle spins one conic gradient; ::before paints the lit
+   EDGE (the fill masked to a ~1.5px ring), and a blurred ::after casts the soft
+   halo beneath. It stays an outline control — no gold FILL — so the moving light
+   never competes with the Galaxy CTA's one sun (One Sun budget governs the total).
+   The button's own outline border still carries the resting frame + focus ring;
+   this is light laid on top. Reduced motion freezes it to a steady gold-lit frame. */
+@property --crew-glow-angle {
+  inherits: false;
+  initial-value: 0deg;
+  syntax: "<angle>";
+}
+
+.crew-glow {
+  isolation: isolate;
+  position: relative;
+}
+
+.crew-glow::before,
+.crew-glow::after {
+  background: conic-gradient(
+    from var(--crew-glow-angle),
+    transparent 0deg,
+    var(--eclipse-gold) 70deg,
+    var(--eclipse-glow) 120deg,
+    var(--reentry-red) 165deg,
+    transparent 210deg,
+    transparent 360deg
+  );
+  border-radius: inherit;
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+}
+
+/* The lit edge: the conic fill clipped to a ~1.5px ring — two stacked fills the
+   mask composites to a frame (the padding-box hole is excluded). Sits just above
+   the button face. */
+.crew-glow::before {
+  padding: 1.5px;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  z-index: 1;
+}
+
+/* The soft halo: the same sweep, blurred and dimmed, cast BENEATH the button so
+   the warm light bleeds past the edge without washing out the dark plate. */
+.crew-glow::after {
+  filter: blur(7px);
+  opacity: 0.55;
+  z-index: -1;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .crew-glow::before,
+  .crew-glow::after {
+    animation: crew-glow-sweep 5.5s linear infinite;
+  }
+}
+
+/* Reduced motion: no sweep. Freeze to a steady gold-lit frame — a calm warm edge
+   over a quiet halo, the same canon light held still (DESIGN.md: the ambient
+   movements stop under reduce; the frame still reads as lit, never a frozen arc). */
+@media (prefers-reduced-motion: reduce) {
+  .crew-glow::before,
+  .crew-glow::after {
+    animation: none;
+    background: none;
+  }
+
+  .crew-glow::before {
+    border: 1.5px solid color-mix(in oklch, var(--eclipse-gold) 55%, transparent);
+    -webkit-mask: none;
+    mask: none;
+    padding: 0;
+  }
+
+  .crew-glow::after {
+    box-shadow: 0 0 18px -4px color-mix(in oklch, var(--eclipse-gold) 45%, transparent);
+    filter: none;
+    opacity: 1;
+  }
+}
+
+@keyframes crew-glow-sweep {
+  to {
+    --crew-glow-angle: 360deg;
+  }
+}
+
 @theme {
   --font-display: "Oxanium", ui-sans-serif, system-ui, sans-serif;
   /* The terminal voice: every "for the nerds" / CLI surface speaks in this

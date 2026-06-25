@@ -1,3 +1,4 @@
+import { RadioIcon, UsersThreeIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import {
   siInstagram,
@@ -11,6 +12,7 @@ import {
   siYoutube,
 } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
+import { HomeStatusPill } from "@/components/home/status-pill";
 import { SubmitTrackDialog } from "@/components/submit-track-dialog";
 import { SubscribeDialog } from "@/components/subscribe-dialog";
 import { Button } from "@/components/ui/button";
@@ -19,6 +21,7 @@ import {
   galaxyUrl,
   instagramUrl,
   mixcloudUrl,
+  radioUrl,
   repoUrl,
   soundcloudUrl,
   spotifyPlaylistUrl,
@@ -29,11 +32,13 @@ import {
   youtubeUrl,
 } from "@/lib/fluncle-links";
 
-// The cover column's link hub: the gold Galaxy CTA + quiet companions at the top,
-// then a spacer (mt-auto) that sinks the tertiary links to the BOTTOM of the
-// column. Rendered as a direct flex child of the <aside> (which stretches to the
-// grid row height on desktop), so flex-1 + mt-auto actually push the links down.
-// The Galaxy CTA is the ONE gold primary (One Sun); everything else is quiet.
+// The cover column's link hub. Top to bottom: the gold Galaxy CTA (the ONE sun),
+// the two listen + contribute button rows, the Join-the-Crew button (its own
+// glowing moving border), then the quiet sections sunk to the BOTTOM (mt-auto) —
+// "Follow Fluncle" and its socials, the About/Logs/Mixtapes/Docs row, the "For the
+// nerds" dev-surface row, and the live status pill at the very bottom. Rendered as
+// a direct flex child of the <aside> (which stretches to the grid row height on
+// desktop), so flex-1 + mt-auto actually push the lower group down.
 
 // Fluncle off-site, alphabetical (docs/socials/). Spotify stays the Playlist
 // button above, so it isn't duplicated in the icon strip.
@@ -49,7 +54,7 @@ const socialLinks = [
 ];
 
 // The shared treatment for every quiet text link at the bottom (About, Logs,
-// Docs, Join the Crew — and the developer row: CLI, GIT, MCP, SSH).
+// Mixtapes, Docs — and the developer row: CLI, DIG, GIT, MCP, SSH).
 const linkClassName =
   "font-semibold text-muted-foreground transition-colors hover:text-accent-foreground";
 
@@ -62,11 +67,24 @@ function Dot() {
   );
 }
 
+/** A quiet centered section header — a muted label between two divider lines.
+    Shared by "Follow Fluncle" and "For the nerds" so they read identically. */
+function SectionHeader({ children }: { children: string }) {
+  return (
+    <div className="flex items-center gap-3">
+      <span aria-hidden="true" className="h-px flex-1 bg-border" />
+      <span className="text-sm font-semibold tracking-wide text-muted-foreground">{children}</span>
+      <span aria-hidden="true" className="h-px flex-1 bg-border" />
+    </div>
+  );
+}
+
 export function HomeLinkHub() {
   return (
     <div className="mt-3 flex flex-1 flex-col">
-      {/* The actions: the gold Galaxy CTA (One Sun), Playlist + Newsletter, and
-          the contribute button. */}
+      {/* The actions: the gold Galaxy CTA (One Sun), the listen pair (Playlist +
+          Radio), the contribute pair (Newsletter + Submit a track), then the
+          Join-the-Crew button carrying its glowing moving border. */}
       <div className="flex flex-col gap-2.5">
         <Button
           className="w-full"
@@ -82,6 +100,9 @@ export function HomeLinkHub() {
           />
           Enter Fluncle's Galaxy
         </Button>
+
+        {/* The listen pair: Playlist (Spotify) + Radio (radio.fluncle.com). Both
+            outline/secondary — neither is a second sun. */}
         <div className="flex items-center gap-2">
           <Button
             className="flex-1"
@@ -100,17 +121,44 @@ export function HomeLinkHub() {
             <BrandIcon icon={siSpotify} />
             Playlist
           </Button>
-          <SubscribeDialog className="flex-1" label="Newsletter" />
+          <Button
+            className="flex-1"
+            nativeButton={false}
+            render={<a aria-label="Listen on Fluncle radio" href={radioUrl} />}
+            size="lg"
+            variant="outline"
+          >
+            <RadioIcon aria-hidden="true" weight="bold" />
+            Radio
+          </Button>
         </div>
-        <SubmitTrackDialog className="w-full" />
 
-        <div className="mt-1 flex items-center gap-3">
-          <span aria-hidden="true" className="h-px flex-1 bg-border" />
-          <span className="text-sm font-semibold tracking-wide text-muted-foreground">
-            Follow Fluncle
-          </span>
-          <span aria-hidden="true" className="h-px flex-1 bg-border" />
+        {/* The contribute pair: the newsletter sign-up + the track submission. */}
+        <div className="flex items-center gap-2">
+          <SubscribeDialog className="flex-1" label="Newsletter" />
+          <SubmitTrackDialog className="flex-1" />
         </div>
+
+        {/* Join the Crew, moved up to sit with the actions — a full-width outline
+            button wearing the glowing moving border (.crew-glow, styles.css). Same
+            height as the buttons above; the glow is light on top, not a gold fill,
+            so the One Sun stays the Galaxy CTA's alone. */}
+        <Button
+          className="crew-glow w-full"
+          nativeButton={false}
+          render={<Link aria-label="Join the Crew" to="/account" />}
+          size="lg"
+          variant="outline"
+        >
+          <UsersThreeIcon aria-hidden="true" weight="bold" />
+          Join the Crew
+        </Button>
+      </div>
+
+      {/* The quiet sections sink to the bottom of the column (mt-auto): the socials,
+          the site links, the dev-surface row, and the live status pill. */}
+      <div className="mt-auto flex flex-col items-center gap-3 pt-8">
+        <SectionHeader>Follow Fluncle</SectionHeader>
         <nav
           aria-label="Fluncle on other platforms"
           className="flex items-center justify-center gap-0.5"
@@ -142,15 +190,9 @@ export function HomeLinkHub() {
             </Tooltip>
           ))}
         </nav>
-      </div>
 
-      {/* The quiet links sink to the bottom of the column (mt-auto): site links,
-          the developer/connection links as plain text, then the social strip. */}
-      <div className="mt-auto flex flex-col items-center gap-3 pt-8">
-        {/* About · Logs · Docs stay an inline row; Docs is the new /docs entry.
-            "Join the Crew" gets its own quiet button below: the four-item inline
-            row wraps "Join the Crew" onto a second line in the narrow cover
-            column (240–280px desktop aside), so it sits on its own instead. */}
+        {/* The site links — About · Logs · Mixtapes · Docs. Radio left this row
+            (it's a Listen-pair button now), so the inline set stays compact. */}
         <nav
           aria-label="More from Fluncle"
           className="flex items-center justify-center gap-3 text-sm"
@@ -171,19 +213,13 @@ export function HomeLinkHub() {
             Docs
           </Link>
         </nav>
-        <Button
-          className="w-full"
-          nativeButton={false}
-          render={<Link to="/account" />}
-          size="sm"
-          variant="outline"
-        >
-          Join the Crew
-        </Button>
 
+        {/* The dev-surface section: its own header (matching "Follow Fluncle")
+            over the terminal-voiced CLI/DIG/GIT/MCP/SSH row. */}
+        <SectionHeader>For the nerds</SectionHeader>
         <nav
           aria-label="Developer tools and connections"
-          className="flex items-center justify-center gap-3 text-[13px] font-mono border-t pt-4"
+          className="flex items-center justify-center gap-3 text-[13px] font-mono"
         >
           {/* CLI/DIG/MCP/SSH are docs pages served by the /docs/$ catch-all, so
               they navigate via the splat param (exact URLs /docs/cli etc.). */}
@@ -207,6 +243,9 @@ export function HomeLinkHub() {
             SSH
           </Link>
         </nav>
+
+        {/* The live heartbeat: a ping-dot pill that fetches /api/status on mount. */}
+        <HomeStatusPill />
       </div>
     </div>
   );
