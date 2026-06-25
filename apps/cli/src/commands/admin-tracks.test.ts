@@ -67,7 +67,37 @@ await mock.module("../api", () => ({
   },
 }));
 
-const { noteQueueCommand, queueCommand } = await import("./admin-tracks");
+const { contextQueueCommand, noteQueueCommand, queueCommand } = await import("./admin-tracks");
+
+describe("context queue — --retry-empty plumbing", () => {
+  beforeEach(() => {
+    requestedPaths = [];
+  });
+
+  test("the routine queue read omits retryEmptyContext (narrow sweep)", async () => {
+    await contextQueueCommand(10);
+
+    expect(requestedPaths).toHaveLength(1);
+    const url = new URL(requestedPaths[0] ?? "", "https://fluncle.test");
+    // The every-tick context cron's worklist: findings missing field notes, oldest
+    // first. Without the flag the widen param must be ABSENT so the server keeps
+    // confirmed-empty finds out of the queue.
+    expect(url.searchParams.get("hasContext")).toBe("false");
+    expect(url.searchParams.get("order")).toBe("asc");
+    expect(url.searchParams.has("retryEmptyContext")).toBe(false);
+  });
+
+  test("--retry-empty widens the read with retryEmptyContext=true", async () => {
+    await contextQueueCommand(10, true);
+
+    expect(requestedPaths).toHaveLength(1);
+    const url = new URL(requestedPaths[0] ?? "", "https://fluncle.test");
+    // The occasional widen pass: still the `hasContext=false` queue (the only place
+    // the server honours the flag), now also re-picking confirmed-empty finds.
+    expect(url.searchParams.get("hasContext")).toBe("false");
+    expect(url.searchParams.get("retryEmptyContext")).toBe("true");
+  });
+});
 
 describe("auto-note queue — hasContext=true AND hasNote=false", () => {
   beforeEach(() => {

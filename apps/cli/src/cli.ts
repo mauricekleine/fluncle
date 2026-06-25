@@ -123,6 +123,7 @@ type TrackContextOptions = {
   query?: string;
   queue?: boolean;
   refresh?: boolean;
+  retryEmpty?: boolean;
 };
 
 type TrackNoteOptions = {
@@ -683,6 +684,11 @@ function addAdminCommands(program: Command): void {
       "Show the context worklist (findings missing field notes), oldest first",
       false,
     )
+    .option(
+      "--retry-empty",
+      "With --queue: also re-pick finds confirmed empty last pass (widen the net)",
+      false,
+    )
     .option("--limit <limit>", "Number of findings to show with --queue", "10")
     .option("--query <text>", "Override the fact-search query (else the Worker builds one)")
     .option("--refresh", "Re-run the fetch even if a note exists (backfill/sharpen)", false)
@@ -690,7 +696,8 @@ function addAdminCommands(program: Command): void {
     .allowExcessArguments()
     .action(async (idOrLogId: string | undefined, options: TrackContextOptions) => {
       // `--queue` is the context worklist view (findings missing field notes) — the
-      // context cron's worklist. Otherwise gather one finding's field notes.
+      // context cron's worklist. `--retry-empty` widens it to also re-pick finds the
+      // prior pass confirmed empty. Otherwise gather one finding's field notes.
       if (options.queue) {
         const { contextQueueCommand } = await import("./commands/admin-tracks");
         await runAdminContextQueue(options, contextQueueCommand);
@@ -2141,11 +2148,14 @@ async function runAdminQueue(
 }
 
 async function runAdminContextQueue(
-  options: AdminListOptions,
+  options: AdminListOptions & { retryEmpty?: boolean },
   contextQueueCommand: typeof import("./commands/admin-tracks").contextQueueCommand,
 ): Promise<void> {
   const limit = parseListLimit(options.limit);
-  const tracks = await contextQueueCommand(limit);
+  // `--retry-empty` widens the worklist to also re-pick CONFIRMED-EMPTY finds (the
+  // occasional widen-the-net pass); off by default keeps the routine sweep narrow.
+  const retryEmpty = options.retryEmpty === true;
+  const tracks = await contextQueueCommand(limit, retryEmpty);
 
   if (options.json) {
     printJson({
@@ -2162,7 +2172,8 @@ async function runAdminContextQueue(
 
   const { trackRows } = await import("./format");
   const noun = tracks.length === 1 ? "finding" : "findings";
-  console.log(`${tracks.length} ${noun} missing field notes, oldest first:`);
+  const scope = retryEmpty ? " (incl. empty retries)" : "";
+  console.log(`${tracks.length} ${noun} missing field notes${scope}, oldest first:`);
   console.log(trackRows(tracks).join("\n"));
 }
 

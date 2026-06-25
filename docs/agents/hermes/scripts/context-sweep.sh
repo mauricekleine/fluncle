@@ -24,6 +24,17 @@
 #
 # Confirm with `hermes cron list`; per-run output lands in
 # ~/.hermes/cron/output/{job_id}/{timestamp}.md.
+#
+# THE OCCASIONAL WIDEN PASS (--retry-empty): the routine sweep above EXCLUDES finds the
+# prior pass confirmed empty (`context_status = 'empty'`), so the every-tick cron never
+# re-burns Firecrawl + the distil LLM on a hopeless find. To re-attempt those empties
+# (e.g. monthly, after new web facts may have surfaced), run a SEPARATE, rarely-fired
+# cron that passes the flag through to the orchestrator — NOT the default 60m job:
+#
+#   hermes cron create "every 720h" --no-agent --script context-sweep.sh --deliver local -- --retry-empty
+#
+# Or one-shot by hand on the box: `RETRY_EMPTY=1 bash context-sweep.sh`. Either way the
+# per-finding trigger is identical; only the worklist (step 1) widens.
 set -euo pipefail
 
 # The Hermes cron `--no-agent --script` runner execs this with a minimal PATH that

@@ -25,6 +25,14 @@
 //      triggers the Worker (Firecrawl + Haiku distill + the quiet context_note write).
 //      Record pass/fail per finding; one finding's failure never aborts the sweep.
 //
+// THE OCCASIONAL WIDEN PASS (`RETRY_EMPTY=1` or `--retry-empty`): the routine sweep's
+// queue read (step 1) EXCLUDES finds the prior pass confirmed empty
+// (`context_status = 'empty'`) so the every-tick cron never re-burns Firecrawl + the
+// distil LLM on a hopeless find. This flag widens the worklist to ALSO re-pick those
+// empties — the deliberate, rarely-run net-widening pass (e.g. a monthly retry after
+// new web facts may have surfaced). OFF by default; the routine cron does NOT set it.
+// See context-sweep.sh for the separate occasional cron wire-up.
+//
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
 import { spawnSync } from "node:child_process";
@@ -39,6 +47,15 @@ const BATCH_CAP = 6; // findings triggered per tick (sane small cap)
 const QUEUE_LIMIT = 50; // hard ceiling on the queue read (we only act on BATCH_CAP)
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
+
+// The occasional widen-the-net pass. OFF for the routine cron; ON only for the
+// deliberate retry-empties run via `RETRY_EMPTY=1` or a `--retry-empty` arg. When on,
+// the queue read also surfaces finds the prior pass confirmed empty so the Worker
+// re-attempts them; the per-finding trigger is identical either way.
+const RETRY_EMPTY =
+  process.env.RETRY_EMPTY === "1" ||
+  process.env.RETRY_EMPTY === "true" ||
+  process.argv.slice(2).includes("--retry-empty");
 
 const log = (message: string) => console.error(`[context-sweep] ${message}`);
 
@@ -129,6 +146,8 @@ function contextOne(finding: QueueFinding): Outcome {
 
 function main(): void {
   // `context --queue --json` returns `{ ok: true, tracks: [...] }`, not a bare array.
+  // `--retry-empty` (the occasional widen pass) also re-picks confirmed-empty finds;
+  // the routine cron omits it, so the worklist stays narrow tick to tick.
   const response = fluncleJson<{ tracks?: QueueFinding[] }>([
     "admin",
     "tracks",
@@ -136,10 +155,18 @@ function main(): void {
     "--queue",
     "--limit",
     String(QUEUE_LIMIT),
+    ...(RETRY_EMPTY ? ["--retry-empty"] : []),
   ]);
   const queue = response.tracks ?? [];
 
-  const summary = { batch: 0, failed: 0, filled: 0, noop: 0, queueRemaining: queue.length };
+  const summary = {
+    batch: 0,
+    failed: 0,
+    filled: 0,
+    noop: 0,
+    queueRemaining: queue.length,
+    retryEmpty: RETRY_EMPTY,
+  };
 
   if (queue.length === 0) {
     console.log(JSON.stringify({ ok: true, processed: 0, ...summary }));
