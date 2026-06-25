@@ -1,4 +1,4 @@
-import { RadioIcon, UsersThreeIcon } from "@phosphor-icons/react";
+import { RadioIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import {
   siInstagram,
@@ -69,9 +69,9 @@ function Dot() {
 
 /** A quiet centered section header — a muted label between two divider lines.
     Shared by "Follow Fluncle" and "For the nerds" so they read identically. */
-function SectionHeader({ children }: { children: string }) {
+function SectionHeader({ children, className = "" }: { children: string; className?: string }) {
   return (
-    <div className="flex items-center gap-3">
+    <div className={`flex w-full items-center gap-3 ${className}`}>
       <span aria-hidden="true" className="h-px flex-1 bg-border" />
       <span className="text-sm font-semibold tracking-wide text-muted-foreground">{children}</span>
       <span aria-hidden="true" className="h-px flex-1 bg-border" />
@@ -83,8 +83,8 @@ export function HomeLinkHub() {
   return (
     <div className="mt-3 flex flex-1 flex-col">
       {/* The actions: the gold Galaxy CTA (One Sun), the listen pair (Playlist +
-          Radio), the contribute pair (Newsletter + Submit a track), then the
-          Join-the-Crew button carrying its glowing moving border. */}
+          Radio), and the contribute pair (Newsletter + Submit a track). Join the
+          Crew lives in the masthead's top-right now (the sign-up convention). */}
       <div className="flex flex-col gap-2.5">
         <Button
           className="w-full"
@@ -138,25 +138,33 @@ export function HomeLinkHub() {
           <SubscribeDialog className="flex-1" label="Newsletter" />
           <SubmitTrackDialog className="flex-1" />
         </div>
-
-        {/* Join the Crew, moved up to sit with the actions — a full-width outline
-            button wearing the glowing moving border (.crew-glow, styles.css). Same
-            height as the buttons above; the glow is light on top, not a gold fill,
-            so the One Sun stays the Galaxy CTA's alone. */}
-        <Button
-          className="crew-glow w-full"
-          nativeButton={false}
-          render={<Link aria-label="Join the Crew" to="/account" />}
-          size="lg"
-          variant="outline"
-        >
-          <UsersThreeIcon aria-hidden="true" weight="bold" />
-          Join the Crew
-        </Button>
       </div>
 
+      {/* The site links sit directly under Join the Crew — About · Logs · Mixtapes ·
+          Docs. Radio left this row (it's a Listen-pair button now). */}
+      <nav
+        aria-label="More from Fluncle"
+        className="mt-4 flex items-center justify-center gap-3 text-sm"
+      >
+        <Link className={linkClassName} to="/about">
+          About
+        </Link>
+        <Dot />
+        <Link className={linkClassName} to="/log">
+          Logs
+        </Link>
+        <Dot />
+        <Link className={linkClassName} to="/mixtapes">
+          Mixtapes
+        </Link>
+        <Dot />
+        <Link className={linkClassName} to="/docs">
+          Docs
+        </Link>
+      </nav>
+
       {/* The quiet sections sink to the bottom of the column (mt-auto): the socials,
-          the site links, the dev-surface row, and the live status pill. */}
+          the dev-surface row, and the live status pill. */}
       <div className="mt-auto flex flex-col items-center gap-3 pt-8">
         <SectionHeader>Follow Fluncle</SectionHeader>
         <nav
@@ -191,32 +199,9 @@ export function HomeLinkHub() {
           ))}
         </nav>
 
-        {/* The site links — About · Logs · Mixtapes · Docs. Radio left this row
-            (it's a Listen-pair button now), so the inline set stays compact. */}
-        <nav
-          aria-label="More from Fluncle"
-          className="flex items-center justify-center gap-3 text-sm"
-        >
-          <Link className={linkClassName} to="/about">
-            About
-          </Link>
-          <Dot />
-          <Link className={linkClassName} to="/log">
-            Logs
-          </Link>
-          <Dot />
-          <Link className={linkClassName} to="/mixtapes">
-            Mixtapes
-          </Link>
-          <Dot />
-          <Link className={linkClassName} to="/docs">
-            Docs
-          </Link>
-        </nav>
-
         {/* The dev-surface section: its own header (matching "Follow Fluncle")
             over the terminal-voiced CLI/DIG/GIT/MCP/SSH row. */}
-        <SectionHeader>For the nerds</SectionHeader>
+        <SectionHeader className="mt-3">For the nerds</SectionHeader>
         <nav
           aria-label="Developer tools and connections"
           className="flex items-center justify-center gap-3 text-[13px] font-mono"

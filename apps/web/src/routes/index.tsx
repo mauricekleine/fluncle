@@ -1,4 +1,4 @@
-import { CircleNotchIcon, PlayIcon } from "@phosphor-icons/react";
+import { CircleNotchIcon, PlayIcon, UsersThreeIcon } from "@phosphor-icons/react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import {
   Link,
@@ -11,9 +11,9 @@ import { createServerFn } from "@tanstack/react-start";
 import { colors } from "@fluncle/tokens";
 import { useCallback, useEffect, useRef } from "react";
 import { HomeLinkHub } from "@/components/home/link-hub";
-import { RandomBangerDialog } from "@/components/random-banger-dialog";
 import { StoriesDialog } from "@/components/stories/stories-dialog";
 import { TrackRow } from "@/components/track-row";
+import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -318,10 +318,18 @@ function HomePage() {
               <p className="home-tagline">Drum & bass bangers from another dimension.</p>
             </div>
             <div className="home-masthead-actions">
-              <span aria-label={`${totalCount} findings logged`} className="home-stamp">
-                Found · {totalCount}
-              </span>
-              <RandomBangerDialog />
+              {/* Join the Crew — the conventional top-right sign-up slot, wearing
+                  the glowing moving border (.crew-glow). Outline, not a gold fill,
+                  so the One Sun stays the Galaxy CTA's. */}
+              <Button
+                className="crew-glow"
+                nativeButton={false}
+                render={<Link aria-label="Join the Crew" to="/account" />}
+                variant="outline"
+              >
+                <UsersThreeIcon aria-hidden="true" weight="bold" />
+                Join the Crew
+              </Button>
             </div>
           </header>
           <section className="grid gap-y-8 lg:min-h-0 lg:grid-cols-[minmax(240px,280px)_minmax(0,1fr)] lg:gap-x-10">
