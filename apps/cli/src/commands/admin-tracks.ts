@@ -13,9 +13,11 @@ async function fetchAdminTracks(options: {
   hasVideo?: boolean;
   max: number;
   order: "asc" | "desc";
+  retryEmptyContext?: boolean;
   status?: string;
 }): Promise<RecentTrack[]> {
-  const { hasContext, hasNote, hasObservation, hasVideo, max, order, status } = options;
+  const { hasContext, hasNote, hasObservation, hasVideo, max, order, retryEmptyContext, status } =
+    options;
   const results: RecentTrack[] = [];
   let cursor: string | undefined;
 
@@ -28,6 +30,14 @@ async function fetchAdminTracks(options: {
 
     if (hasContext !== undefined) {
       params.set("hasContext", String(hasContext));
+    }
+
+    // `retryEmptyContext` widens the `hasContext=false` context queue to also
+    // re-pick CONFIRMED-EMPTY finds (`context_status = 'empty'`). Honoured
+    // server-side only alongside `hasContext=false`; emit it only when set so the
+    // routine queue read stays byte-identical to before.
+    if (retryEmptyContext) {
+      params.set("retryEmptyContext", "true");
     }
 
     if (hasNote !== undefined) {
@@ -111,8 +121,17 @@ export async function enrichQueueCommand(limit: number): Promise<RecentTrack[]> 
 // The CONTEXT queue: findings whose factual field notes haven't been gathered yet
 // (`hasContext=false`), oldest first — the `context` cron's worklist (each row is a
 // `tracks context <id>` to run).
-export async function contextQueueCommand(limit: number): Promise<RecentTrack[]> {
-  return fetchAdminTracks({ hasContext: false, max: limit, order: "asc" });
+//
+// `retryEmptyContext` (the CLI's `--retry-empty`) WIDENS the queue to also re-pick
+// finds the prior pass confirmed empty (`context_status = 'empty'`) — the
+// widen-the-net occasional pass, off by default so the every-tick routine sweep
+// never re-burns Firecrawl + the distil LLM on a hopeless find. The server honours
+// it only because this queue is `hasContext=false`.
+export async function contextQueueCommand(
+  limit: number,
+  retryEmptyContext = false,
+): Promise<RecentTrack[]> {
+  return fetchAdminTracks({ hasContext: false, max: limit, order: "asc", retryEmptyContext });
 }
 
 // The OBSERVATION queue: findings with field notes on file but no spoken
