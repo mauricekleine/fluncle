@@ -1,4 +1,4 @@
-import { SURFACES } from "@fluncle/registry";
+import { liveSurfaces } from "@fluncle/registry";
 import { siteUrl } from "../fluncle-links";
 import { fluncleDescription } from "../identity";
 import { subscribeToNewsletter } from "./newsletter";
@@ -420,7 +420,7 @@ const registryServiceLabels: Record<string, string> = (() => {
     "render-box": "the scale-to-zero render box's reachability",
   };
 
-  for (const surface of SURFACES) {
+  for (const surface of liveSurfaces()) {
     const serviceId = surface.operatorNotes?.match(SERVICE_PROBE_MARKER)?.[1];
     const label = surface.exposedContent[0];
 

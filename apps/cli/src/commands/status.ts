@@ -1,4 +1,4 @@
-import { SURFACES } from "@fluncle/registry";
+import { liveSurfaces } from "@fluncle/registry";
 import { publicApiGet } from "../api";
 
 // The three-state service health enum the /api/status endpoint emits. It mirrors
@@ -48,7 +48,7 @@ export async function statusCommand(): Promise<StatusResponse> {
 const serviceLabels: ReadonlyMap<string, string> = (() => {
   const labels = new Map<string, string>();
 
-  for (const surface of SURFACES) {
+  for (const surface of liveSurfaces()) {
     const match = surface.operatorNotes?.match(/service `([a-z0-9-]+)`/);
     const id = match?.[1];
     const label = surface.exposedContent[0];
