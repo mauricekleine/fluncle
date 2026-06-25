@@ -331,6 +331,30 @@ export function isYouTubeUrl(value: string): boolean {
   return /^https:\/\/(www\.)?(youtube\.com|youtu\.be)\//i.test(value.trim());
 }
 
+// A bare YouTube videoId: 11 chars of the URL-safe base64 alphabet.
+const YOUTUBE_VIDEO_ID = /^[\w-]{11}$/;
+// Pull the videoId out of a watch (`v=…`) or shorts (`shorts/…`) URL.
+const YOUTUBE_ID_FROM_URL = /(?:shorts\/|v=)([\w-]{11})/;
+
+/**
+ * The canonical Short permalink for a published YouTube post. Every Fluncle
+ * video is uploaded as a Short, so we capture one consistent
+ * `https://www.youtube.com/shorts/<id>` form rather than Postiz's `watch?v=<id>`
+ * `releaseURL`. Prefer the post's `releaseId` (which IS the 11-char videoId);
+ * as a defensive fallback, extract the id from the `releaseURL` (watch or shorts
+ * shape). Returns null when neither yields a real id, so a malformed URL (a bare
+ * `/shorts/`) is never built.
+ */
+export function youtubeShortUrl(releaseId: string, releaseUrl: string): string | null {
+  if (YOUTUBE_VIDEO_ID.test(releaseId)) {
+    return `https://www.youtube.com/shorts/${releaseId}`;
+  }
+
+  const fromUrl = releaseUrl.match(YOUTUBE_ID_FROM_URL)?.[1];
+
+  return fromUrl ? `https://www.youtube.com/shorts/${fromUrl}` : null;
+}
+
 /** A resolved post's public permalink + the platform's native content id (used
  *  to set the Postiz release-id for analytics). For YouTube the `nativeId` is the
  *  videoId Postiz auto-populated as `releaseId`; for TikTok it's the `/missing`
@@ -341,12 +365,13 @@ export type ResolvedSocialContent = { nativeId: string; url: string };
  * Resolve the live permalink for a pushed post. Verified against live Postiz —
  * the path splits by platform:
  *
- *   - YouTube: a direct post. Once published, Postiz AUTO-POPULATES `releaseId`
- *     (the videoId) and `releaseURL` (the real watch URL) ON the post object, and
+ *   - YouTube: a direct Short. Once published, Postiz AUTO-POPULATES `releaseId`
+ *     (the videoId) and `releaseURL` (a `watch?v=<id>` URL) ON the post object, and
  *     its `/missing` returns `[]`. So read the dated `/posts` list, find this post
- *     by id, and if it's PUBLISHED with a set `releaseId` and a real YouTube
- *     `releaseURL`, return that URL VERBATIM (never reconstruct it). Not yet
- *     published → null (the sweep retries next tick).
+ *     by id, and if it's PUBLISHED with a real videoId + YouTube `releaseURL`,
+ *     return the canonical `…/shorts/<id>` form (built from `releaseId`) so every
+ *     captured URL is one consistent shape. Not yet published → null (the sweep
+ *     retries next tick).
  *   - TikTok: an inbox draft the operator finishes in-app. `releaseId` stays
  *     `"missing"` and `releaseURL` is a `…/messages?…` placeholder, so fall back
  *     to `/missing` and BUILD `…/@fluncle/video/<awemeId>` from the newest item's
@@ -373,7 +398,8 @@ export async function resolveSocialUrl(
 }
 
 /** The YouTube path: find the post in the dated list; if published with a real
- *  auto-populated `releaseURL`, return it verbatim. */
+ *  auto-populated `releaseURL`, build the canonical `…/shorts/<id>` permalink from
+ *  the videoId (never capture Postiz's `watch?v=<id>` shape). */
 async function resolveYouTubeFromList(postId: string): Promise<ResolvedSocialContent | null> {
   const posts = await getDatedPosts();
   const post = posts.find((item) => item.id === postId);
@@ -386,9 +412,14 @@ async function resolveYouTubeFromList(postId: string): Promise<ResolvedSocialCon
   const releaseUrl = typeof post.releaseURL === "string" ? post.releaseURL.trim() : "";
 
   // A genuine published YouTube post has BOTH a real videoId (`releaseId`, not
-  // "" / "missing") AND a real YouTube `releaseURL`. Use the URL Postiz hands us.
+  // "" / "missing") AND a real YouTube `releaseURL`. Capture the canonical Short
+  // form, built from the videoId (or recovered from the URL as a fallback).
   if (releaseId && releaseId !== "missing" && isYouTubeUrl(releaseUrl)) {
-    return { nativeId: releaseId, url: releaseUrl };
+    const shortUrl = youtubeShortUrl(releaseId, releaseUrl);
+
+    if (shortUrl) {
+      return { nativeId: releaseId, url: shortUrl };
+    }
   }
 
   return null;

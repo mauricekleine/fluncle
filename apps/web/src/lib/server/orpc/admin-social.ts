@@ -16,14 +16,16 @@
 //     also passes the push gate (`hasPostAwaitingUrl("youtube")` → 409
 //     `youtube_url_pending`): exactly one YouTube upload may be pending its URL,
 //     so the post-push capture stays unambiguous. On a successful push the live
-//     URL is auto-resolved (`resolveSocialUrl`: YouTube reads the `releaseURL`
-//     Postiz auto-populates on the published post; TikTok builds it from the
-//     `/missing` native aweme id) and recorded (`recordPostUrl`), and the Postiz
+//     URL is auto-resolved (`resolveSocialUrl`: YouTube builds the canonical
+//     `…/shorts/<id>` form from the videoId Postiz auto-populates on the published
+//     post; TikTok builds it from the `/missing` native aweme id) and recorded
+//     (`recordPostUrl`), and the Postiz
 //     release-id is linked for analytics; a miss leaves `url` null for the capture
 //     sweep (below) or the operator's manual "Update URL" fallback.
 //   - `capture_post_urls` — admin tier: the polling SWEEP. Drains the "pushed but
 //     no URL" backlog across youtube + tiktok via `resolveSocialUrl` (YouTube's
-//     auto-populated `releaseURL` / TikTok's `/missing` aweme id), recording each
+//     canonical `…/shorts/<id>` from the videoId / TikTok's `/missing` aweme id),
+//     recording each
 //     url, linking the release-id, and flipping a captured TikTok `draft` →
 //     `published`. The box capture cron drives this.
 
