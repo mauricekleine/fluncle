@@ -61,6 +61,7 @@ export async function fetchTrack(idOrLogId: string): Promise<CosmosTrack> {
     discoveredAt: found.addedAt,
     durationMs: found.durationMs,
     features: found.features,
+    isrc: found.isrc,
     label: found.label,
     logId: found.logId,
     note: found.note,

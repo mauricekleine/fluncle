@@ -157,11 +157,14 @@ async function main(): Promise<void> {
 
   console.log(`[social-preview] resolving preview`);
   // Prefer the R2 analysis archive (region-independent — the render-host path); fall
-  // back to the live Deezer/iTunes search (region-gated) when there is no archive or
-  // no admin token in env (local dev). See resolve-archived-preview.ts.
+  // back to the live search (region-gated) when there is no archive or no admin
+  // token in env (local dev). The live search is ISRC-FIRST: the finding's ISRC
+  // names the EXACT recording, so we pass it through and resolve Deezer by ISRC
+  // before any fuzzy artist+title search (which can pick the wrong recording — the
+  // original for a remix). See resolve-archived-preview.ts + resolve-preview.ts.
   const preview =
     (await resolveArchivedPreview(track.logId ?? trackId)) ??
-    (await resolvePreview({ artists: track.artists, title: track.title }));
+    (await resolvePreview({ artists: track.artists, isrc: track.isrc, title: track.title }));
   if (!preview) {
     throw new Error(
       `[social-preview] no confident preview found for "${track.title}" by ${track.artists.join(", ")}`,
