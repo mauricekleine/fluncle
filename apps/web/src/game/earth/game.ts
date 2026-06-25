@@ -350,7 +350,7 @@ export function createEarth(container: HTMLElement, options: Options): EarthGame
     ctx.save();
     ctx.translate(-Math.round(cam.x + shakeX), -Math.round(cam.y + shakeY));
     drawTiles(cam.x, cam.y);
-    drawPlayer();
+    // the traveller is aboard the rocket now — don't draw them at the pad
     drawLaunchSmoke(launchX, launchY, launchT);
     const sprite = pngs.launch_rocket ?? props.launch_rocket;
     const ry = launchY - rise;
