@@ -56,6 +56,24 @@ alert() {
     "$WEBHOOK" >/dev/null 2>&1 || true
 }
 
+# Self-deploy health → the public /status board (the `self-deploy` row). Reuses
+# the agent token already in the LIVE container's env (the same token the
+# pre-smoke read uses) — nothing is written to disk, nothing is read from `op`.
+# Best-effort, never throws; the message is public-safe (tool versions only,
+# never a host or a raw error). status ∈ ok|degraded|down.
+WORKER_URL="${PINWATCH_WORKER_URL:-https://www.fluncle.com}"
+APITOKEN="$(docker inspect "$CONTAINER" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | sed -n 's/^FLUNCLE_API_TOKEN=//p' | head -1 || true)"
+post_health() {
+  [ -n "$APITOKEN" ] || return 0
+  local status="$1" esc
+  esc="$(printf '%s' "$2" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  curl -fsS -m 10 \
+    -H 'Content-Type: application/json' -H "Authorization: Bearer $APITOKEN" \
+    -d "$(printf '{"at":"%s","checks":[{"service":"self-deploy","status":"%s","message":"%s","latencyMs":null,"transitioned":false}]}' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$status" "$esc")" \
+    "${WORKER_URL%/}/api/admin/health" >/dev/null 2>&1 || true
+}
+
 # ── 1. sync the build context (public repo, no credential) ────────────────────
 if [ -d "$REPO_DIR/.git" ]; then
   git -C "$REPO_DIR" fetch --depth 1 origin main -q
@@ -79,6 +97,7 @@ log "fluncle: have=$HAVE_FLUNCLE want=$WANT_FLUNCLE | claude-code: have=$HAVE_CL
 
 if [ "$MODE" = "--if-stale" ] && [ "$HAVE_FLUNCLE" = "$WANT_FLUNCLE" ] && [ "$HAVE_CLAUDE" = "$WANT_CLAUDE" ]; then
   log "pins current — no-op"
+  post_health ok "current — fluncle $HAVE_FLUNCLE, claude-code $HAVE_CLAUDE"
   exit 0
 fi
 log "pins drifted (or --force) — rebuilding"
@@ -107,10 +126,10 @@ MOUNT_SRC="$(docker inspect "$CONTAINER" --format '{{range .Mounts}}{{if eq .Des
 SHA="$(git -C "$REPO_DIR" rev-parse --short HEAD)"
 NEW_IMAGE="$IMAGE_REPO:v$(date -u +%Y.%m.%d)-$SHA"
 log "building $NEW_IMAGE (repo root build context, -f $DOCKERFILE)"
-docker build -f "$REPO_DIR/$DOCKERFILE" -t "$NEW_IMAGE" "$REPO_DIR" >&2 || { alert "🛠️ pin-watch: BUILD FAILED for $NEW_IMAGE — box untouched, staying on $OLD_IMAGE"; die "build failed"; }
+docker build -f "$REPO_DIR/$DOCKERFILE" -t "$NEW_IMAGE" "$REPO_DIR" >&2 || { alert "🛠️ pin-watch: BUILD FAILED for $NEW_IMAGE — box untouched, staying on $OLD_IMAGE"; post_health degraded "a pin bump failed to build; box stays on fluncle $HAVE_FLUNCLE, claude-code $HAVE_CLAUDE"; die "build failed"; }
 
 # ── 5. PRE-SMOKE the new image in throwaway containers (live box untouched) ────
-presmoke_fail() { alert "🛠️ pin-watch: PRE-SMOKE FAILED ($1) for $NEW_IMAGE — box untouched, staying on $OLD_IMAGE"; die "pre-smoke failed: $1"; }
+presmoke_fail() { alert "🛠️ pin-watch: PRE-SMOKE FAILED ($1) for $NEW_IMAGE — box untouched, staying on $OLD_IMAGE"; post_health degraded "a pin bump failed pre-smoke; box untouched on fluncle $HAVE_FLUNCLE, claude-code $HAVE_CLAUDE"; die "pre-smoke failed: $1"; }
 GOT_FLUNCLE="$(docker run --rm --entrypoint fluncle "$NEW_IMAGE" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
 [ "$GOT_FLUNCLE" = "$WANT_FLUNCLE" ] || presmoke_fail "fluncle version $GOT_FLUNCLE != $WANT_FLUNCLE"
 GOT_CLAUDE="$(docker run --rm --entrypoint claude "$NEW_IMAGE" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
@@ -163,6 +182,7 @@ docker rm "$CONTAINER" >/dev/null 2>&1 || true
 if run_container "$NEW_IMAGE" && container_healthy; then
   log "post-swap smoke passed — deployed $NEW_IMAGE"
   alert "🚀 pin-watch: deployed $NEW_IMAGE on rave-02 — fluncle $HAVE_FLUNCLE→$WANT_FLUNCLE, claude-code $HAVE_CLAUDE→$WANT_CLAUDE"
+  post_health ok "deployed — fluncle $WANT_FLUNCLE, claude-code $WANT_CLAUDE"
   # prune old fluncle-hermes images, keep the most recent $KEEP_IMAGES (rollback depth)
   docker images "$IMAGE_REPO" --format '{{.Repository}}:{{.Tag}} {{.CreatedAt}}' \
     | sort -rk2 | awk 'NR>'"$KEEP_IMAGES"' {print $1}' | xargs -r docker rmi >/dev/null 2>&1 || true
@@ -175,7 +195,9 @@ docker stop "$CONTAINER" >/dev/null 2>&1 || true
 docker rm "$CONTAINER" >/dev/null 2>&1 || true
 if run_container "$OLD_IMAGE" && container_healthy; then
   alert "↩️ pin-watch: $NEW_IMAGE failed smoke on rave-02 — ROLLED BACK to $OLD_IMAGE (running). A human should look."
+  post_health degraded "rolled back a failed bump; box healthy on fluncle $HAVE_FLUNCLE, claude-code $HAVE_CLAUDE"
   die "rolled back to $OLD_IMAGE after a failed deploy"
 fi
 alert "🔴 pin-watch: ROLLBACK ALSO FAILED on rave-02 — Hermes is DOWN. Operator needed NOW."
+post_health down "agent box down after a failed bump — operator needed"
 die "rollback failed — box is down"

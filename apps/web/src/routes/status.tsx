@@ -36,7 +36,17 @@ const CRON_SERVICE_IDS = new Set(CRON_ORDER);
 // page; the crons render after them under their own heading. Any service the snapshot
 // reports that isn't named here (and isn't a cron) is appended alphabetically, so a
 // newly-probed service surfaces without a code change.
-const SERVICE_ORDER = ["web", "db", "r2", "dns", "ssh", "onion", "hermes", "render-box"];
+const SERVICE_ORDER = [
+  "web",
+  "db",
+  "r2",
+  "dns",
+  "ssh",
+  "onion",
+  "hermes",
+  "self-deploy",
+  "render-box",
+];
 
 // A human label per known service id (falls back to the raw id for an unknown one). The
 // cron labels are keyed by their registry surface name; the fallback strips the `cron.`
@@ -59,6 +69,7 @@ const SERVICE_LABELS: Record<string, string> = {
   onion: "Tor onion",
   r2: "Media storage",
   "render-box": "Render box",
+  "self-deploy": "Self-deploy",
   ssh: "SSH terminal",
   web: "Web",
 };
@@ -81,6 +92,7 @@ const SERVICE_SUBTITLES: Record<string, string> = {
   onion: "the archive over Tor",
   r2: "found.fluncle.com",
   "render-box": "the scale-to-zero box's reachability",
+  "self-deploy": "the agent box rebuilds itself when its tools update",
   ssh: "rave.fluncle.com",
   web: "www.fluncle.com",
 };

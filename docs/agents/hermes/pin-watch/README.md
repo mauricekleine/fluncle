@@ -33,6 +33,8 @@ Default `--if-stale` (the timer); `--force` runs it unconditionally (the operato
 
 Discord alerts (deploy / rollback / failure) use the `DISCORD_ALERT_WEBHOOK` already in the container's env — no config file.
 
+Every run also reports a **`self-deploy` health check** to the public [`/status`](https://www.fluncle.com/status) board (POST `/api/admin/health`, agent tier) so the self-maintenance loop is visible alongside the other services: `ok` when current or freshly deployed, `degraded` when a bump failed to build / pre-smoke or was rolled back (box healthy on the prior tools, a human should look), `down` if a rollback itself failed. It reuses the **agent token already in the container's env** (the same one the pre-smoke read uses) — no token on disk, none from `op` — and the message is public-safe (tool versions only). If the timer ever stops, the row simply goes stale on `/status`, which is itself the signal that the box may be silently drifting.
+
 ## Deploy (on rave-02, one time)
 
 ```bash
@@ -66,3 +68,5 @@ sudo env PINWATCH_TEST_FAIL_POSTSMOKE=1 /opt/fluncle-pin-watch/rebuild-hermes.sh
 ```
 
 Expect: `swapping … -> <new>` → `TEST: forcing this post-swap smoke to fail` → `rolling back to <previous>` → `FATAL: rolled back …` (a rollback exits non-zero by design), a `↩️ ROLLED BACK` Discord alert, and `docker ps` back on the previous image, healthy. Verified live 2026-06-25.
+
+Because the drill walks the real rollback path, it also posts a `degraded` `self-deploy` check, so the [`/status`](https://www.fluncle.com/status) row shows amber until the next hourly tick (or a manual `sudo /opt/fluncle-pin-watch/rebuild-hermes.sh`) posts `ok` again. That's expected — the box itself stays healthy throughout.
