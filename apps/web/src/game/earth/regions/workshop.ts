@@ -1,4 +1,4 @@
-import  { type RegionModule } from "./_shared";
+import { type RegionModule } from "./_shared";
 
 // The Workshop (west) — the machines. The seed region: it demonstrates the full
 // region pattern (pure char-grid props + doors pointing at cards) AND carries
@@ -103,8 +103,8 @@ const region: RegionModule = {
     { card: "terminal", label: "the rave terminal", prop: "crt", tx: 6, ty: 19 },
     { card: "spotify", label: "Fluncle's Findings on Spotify", prop: "boombox", tx: 13, ty: 19 },
     { card: "cli", label: "the fluncle CLI", prop: "floppy", tx: 5, ty: 24 },
-    { card: "mixtapes", label: "the mixtapes", prop: "turntable", tx: 12, ty: 25 },
-    { card: "radio", label: "the radio", prop: "radio", tx: 8, ty: 29 },
+    { label: "the mixtapes", prop: "turntable", surface: "web.mixtapes", tx: 12, ty: 25 },
+    { label: "the radio", prop: "radio", surface: "web.radio", tx: 8, ty: 29 },
   ],
   id: "workshop",
   props: { boombox, cli: floppy, crt, radio, turntable },

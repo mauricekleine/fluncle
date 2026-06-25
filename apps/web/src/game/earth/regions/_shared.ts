@@ -21,12 +21,16 @@ export type DoorDef = {
   /** Anchor tile (bottom-center); the prop draws upward from here. */
   tx: number;
   ty: number;
-  /** The door's name — used for the a11y label + the noscript link text. */
+  /** The door's name — used for the card title, the a11y label, the noscript link. */
   label: string;
-  /** A card id in the card registry (../cards/*) to open as an overlay. */
+  /** A @fluncle/registry surface name (e.g. "web.mixtapes") — the owned-surface
+   *  doors read their URL + blurb from the registry via the generic SurfaceCard. */
+  surface?: string;
+  /** Or a custom card id in the card registry (../cards/*) — the terminal, the
+   *  social channels, the rocket-to-/galaxy launch card, anything the registry
+   *  doesn't cover. A card that wants to navigate (the rocket) renders a typed
+   *  <Link> inside itself. */
   card?: string;
-  /** Or a route to navigate to instead of an overlay (the rocket → /galaxy). */
-  route?: string;
   /** Defaults to "live"; "gated" doors render the coming-soon card chrome. */
   status?: DoorStatus;
 };
