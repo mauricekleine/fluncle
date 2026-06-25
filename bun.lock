@@ -123,6 +123,7 @@
         "@dnd-kit/utilities": "~3.2.2",
         "@fluncle/contracts": "workspace:*",
         "@fluncle/registry": "workspace:*",
+        "@fluncle/sprites": "workspace:*",
         "@fluncle/tokens": "workspace:*",
         "@libsql/client": "catalog:",
         "@orpc/openapi": "1.14.6",
@@ -208,6 +209,10 @@
         "@typescript/native-preview": "catalog:",
         "typescript": "catalog:",
       },
+    },
+    "packages/sprites": {
+      "name": "@fluncle/sprites",
+      "version": "0.0.0",
     },
     "packages/tokens": {
       "name": "@fluncle/tokens",
@@ -667,6 +672,8 @@
     "@fluncle/mobile": ["@fluncle/mobile@workspace:apps/mobile"],
 
     "@fluncle/registry": ["@fluncle/registry@workspace:packages/registry"],
+
+    "@fluncle/sprites": ["@fluncle/sprites@workspace:packages/sprites"],
 
     "@fluncle/ssh": ["@fluncle/ssh@workspace:apps/ssh"],
 

@@ -18,9 +18,9 @@ Usage (key read from the environment ONLY — never commit a key):
       python packages/skills/fluncle-sprites/scripts/generate_sprite.py \
       web.newsletter ssh.rave dns.zone
 
-PNG file name == the sprite id; output lands in apps/web/public/earth/<id>.png
-(surface/prop sprites) — change OUT for game sprites. Always taste-gate in
-/sprites before calling a sprite done.
+PNG file name == the sprite id; output lands in packages/sprites/assets/earth/<id>.png
+(the @fluncle/sprites canonical home; the web build mirrors it to public/). Change OUT
+for the galaxy collection. Always taste-gate in /sprites before calling a sprite done.
 """
 
 import base64
@@ -40,7 +40,7 @@ KEY_HEX = "#00ff00"   # solid chroma key; the model paints the subject over this
 
 MODEL = "gemini-3.1-flash-image"
 URL = f"https://generativelanguage.googleapis.com/v1/models/{MODEL}:generateContent"
-OUT = "apps/web/public/earth"
+OUT = "packages/sprites/assets/earth"  # the canonical home; the web build mirrors it to public/
 
 
 def hexes(*hs):

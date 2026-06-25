@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { SURFACES } from "@fluncle/registry";
+import { SPRITE_BY_SURFACE, SPRITES, spriteUrl } from "@fluncle/sprites";
 
 // The Sprite System — a plain, internal inventory of EVERY pixel sprite across the
 // Galaxy in one place, so we can inspect them side by side and judge consistency. It
@@ -11,57 +12,8 @@ import { SURFACES } from "@fluncle/registry";
 // noindex: an internal design/tooling surface, deliberately NOT in the registry, the
 // sitemap, or any nav. (A future admin-gated Gemini generation flow lives here too.)
 
-// The current surface -> sprite assignment, lifted from the Earth overworld game (the
-// only place that has depicted these so far). A flat map for now; if the system lands,
-// `sprite` becomes a canonical field on the @fluncle/registry `Surface` type and this
-// map dissolves into the catalog itself.
-const SPRITE_BY_SURFACE: Record<string, string> = {
-  "cron.newsletter": "/earth/comms_mailbox.png",
-  "dns.zone": "/earth/edge_switchboard.png",
-  "mcp.server": "/earth/edge_terminal.png",
-  "ssh.rave": "/earth/crt.png",
-  "subdomain.dig": "/earth/edge_switchboard.png",
-  "subdomain.galaxy": "/earth/launch_rocket.png",
-  "subdomain.onion": "/earth/edge_onion.png",
-  "subdomain.radio": "/earth/radio.png",
-  "subdomain.status": "/earth/edge_fusebox.png",
-  "web.about": "/earth/landing_board.png",
-  "web.galaxy": "/earth/launch_rocket.png",
-  "web.home": "/earth/landing_monolith.png",
-  "web.log": "/earth/landing_logbook.png",
-  "web.mixtapes": "/earth/turntable.png",
-  "web.newsletter": "/earth/comms_mailbox.png",
-  "web.radio": "/earth/radio.png",
-  "web.status": "/earth/edge_fusebox.png",
-};
-
-// The Galaxy game's sprite set (the first-person /galaxy). The raw collection.
-const GALAXY_SPRITES = ["earth", "asteroid", "roadster", "ship", "ufo"];
-
-// The Earth overworld game's prop set — the source pool the registry sprites are drawn
-// from. The raw collection (includes props not yet bound to any surface).
-const EARTH_SPRITES = [
-  "boombox",
-  "comms_camcorder",
-  "comms_mailbox",
-  "comms_pager",
-  "comms_polaroids",
-  "comms_robot",
-  "crt",
-  "edge_fusebox",
-  "edge_onion",
-  "edge_switchboard",
-  "edge_terminal",
-  "floppy",
-  "landing_board",
-  "landing_lens",
-  "landing_logbook",
-  "landing_monolith",
-  "landing_nokia",
-  "launch_rocket",
-  "radio",
-  "turntable",
-];
+// All sprite data — the surface→sprite assignment + the collections — comes from
+// @fluncle/sprites (the single source of truth: assets, manifest, and the resolver).
 
 const SECTION_HEADING =
   "mb-5 flex items-baseline gap-2 border-b border-border pb-2 text-sm font-semibold uppercase tracking-wide text-foreground";
@@ -127,13 +79,16 @@ function SpritesPage() {
             </span>
           </h2>
           <SpriteGrid>
-            {SURFACES.map((surface) => (
-              <SpriteTile
-                key={surface.name}
-                name={surface.name}
-                src={SPRITE_BY_SURFACE[surface.name]}
-              />
-            ))}
+            {SURFACES.map((surface) => {
+              const ref = SPRITE_BY_SURFACE[surface.name];
+              return (
+                <SpriteTile
+                  key={surface.name}
+                  name={surface.name}
+                  src={ref ? spriteUrl(ref) : undefined}
+                />
+              );
+            })}
           </SpriteGrid>
         </section>
 
@@ -145,8 +100,8 @@ function SpritesPage() {
             </span>
           </h2>
           <SpriteGrid>
-            {GALAXY_SPRITES.map((name) => (
-              <SpriteTile key={name} name={name} src={`/galaxy/${name}.png`} />
+            {SPRITES.galaxy.map((id) => (
+              <SpriteTile key={id} name={id} src={spriteUrl({ collection: "galaxy", id })} />
             ))}
           </SpriteGrid>
         </section>
@@ -159,8 +114,8 @@ function SpritesPage() {
             </span>
           </h2>
           <SpriteGrid>
-            {EARTH_SPRITES.map((name) => (
-              <SpriteTile key={name} name={name} src={`/earth/${name}.png`} />
+            {SPRITES.earth.map((id) => (
+              <SpriteTile key={id} name={id} src={spriteUrl({ collection: "earth", id })} />
             ))}
           </SpriteGrid>
         </section>
