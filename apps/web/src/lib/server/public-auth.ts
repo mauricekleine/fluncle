@@ -1,10 +1,21 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { betterAuth, type Auth, type BetterAuthOptions } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { bearer, deviceAuthorization } from "better-auth/plugins";
 import { username } from "better-auth/plugins/username";
 import * as schema from "../../db/schema";
 import { getDb, getDrizzleDb, typedRow } from "./db";
 import { jsonError, readOptionalEnv } from "./env";
+
+// The CLI's OAuth client id for the device-authorization grant (RFC 8628). The
+// `fluncle login` flow is a first-party, fully-trusted client — the CLI is ours,
+// it carries no client secret, and the device code is bound to the approving
+// user — so it is the only id we accept (`validateClient` below). The minted
+// access_token is a NORMAL better-auth session token (the same carrier the web
+// cookie wraps), resolved by the `bearer` plugin, and is HARD-SEPARATE from the
+// admin `FLUNCLE_API_TOKEN` grant (which `adminRole` in ./env.ts resolves by a
+// constant-time compare — a user session token can never match it).
+export const cliDeviceClientId = "fluncle-cli";
 
 type PublicAuth = Auth<BetterAuthOptions>;
 
@@ -82,7 +93,12 @@ function publicAuthSecret(): string {
   return resolvePublicAuthSecret(process.env.BETTER_AUTH_SECRET, import.meta.env.DEV);
 }
 
-function createPublicAuthOptions(db: Awaited<ReturnType<typeof getDrizzleDb>>): BetterAuthOptions {
+// Exported as a test seam: the device-auth suite builds a fresh, isolated auth
+// instance per test over an in-memory drizzle DB by passing it here, sidestepping
+// the module-level `getPublicAuth` memo. Production builds it once via `getPublicAuth`.
+export function createPublicAuthOptions(
+  db: Awaited<ReturnType<typeof getDrizzleDb>>,
+): BetterAuthOptions {
   return {
     advanced: {
       cookiePrefix: "fluncle_user",
@@ -110,6 +126,29 @@ function createPublicAuthOptions(db: Awaited<ReturnType<typeof getDrizzleDb>>): 
           username: "post-normalization",
         },
       }),
+      // The OAuth 2.0 Device Authorization Grant (RFC 8628) — the framework-native
+      // engine behind `fluncle login`. The CLI requests a device+user code, the
+      // user approves at /device while signed in to their Fluncle account, and the
+      // CLI polls /api/auth/device/token to receive a session token. The verification
+      // surface is the `/device` route in this app.
+      deviceAuthorization({
+        expiresIn: "30m",
+        interval: "5s",
+        // No model/field overrides — the drizzle adapter maps the `deviceCode`
+        // model to our `device_code` table via the schema object above. The key
+        // must still be present: this plugin version's options schema treats
+        // `schema` as non-optional.
+        schema: {},
+        // First-party CLI only: the `fluncle-cli` client carries no secret and the
+        // device code is user-bound, so the id IS the trust boundary here.
+        validateClient: (clientId) => clientId === cliDeviceClientId,
+      }),
+      // Accept the device-minted session token as `Authorization: Bearer <token>`
+      // so the CLI (which has no cookie jar) can call `/me` reads. This resolves a
+      // USER session only; it never touches the admin grant — `adminRole`
+      // (./env.ts) compares the Bearer against `FLUNCLE_API_TOKEN`/`FLUNCLE_AGENT_TOKEN`
+      // by constant-time equality, which a random session token cannot satisfy.
+      bearer(),
     ],
     secret: publicAuthSecret(),
     trustedOrigins: ["http://localhost:3000", "http://127.0.0.1:3000", "https://www.fluncle.com"],

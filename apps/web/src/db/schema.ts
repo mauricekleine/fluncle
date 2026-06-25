@@ -411,6 +411,40 @@ export const verification = sqliteTable(
   (table) => [index("verification_identifier_idx").on(table.identifier)],
 );
 
+// The OAuth 2.0 Device Authorization Grant ledger (RFC 8628) — Better Auth's
+// `deviceAuthorization` plugin model. One row per `fluncle login`: minted on
+// /api/auth/device/code (status "pending"), flipped to "approved"/"denied" when
+// the user acts at /device, and consumed when the CLI exchanges the device code
+// for a session at /api/auth/device/token. Rows expire (`expiresAt`) and the
+// plugin sweeps them. Column names are snake_case to match the rest of the auth
+// schema; the Better Auth model name is `deviceCode`.
+export const deviceCode = sqliteTable(
+  "device_code",
+  {
+    clientId: text("client_id"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .notNull(),
+    deviceCode: text("device_code").notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    id: text("id").primaryKey(),
+    lastPolledAt: integer("last_polled_at", { mode: "timestamp_ms" }),
+    pollingInterval: integer("polling_interval"),
+    scope: text("scope"),
+    status: text("status").notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .$onUpdate(() => new Date())
+      .notNull(),
+    userCode: text("user_code").notNull(),
+    userId: text("user_id").references(() => user.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    index("device_code_device_code_idx").on(table.deviceCode),
+    index("device_code_user_code_idx").on(table.userCode),
+  ],
+);
+
 export const rateLimitEvents = sqliteTable(
   "rate_limit_events",
   {

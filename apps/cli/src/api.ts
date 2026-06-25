@@ -1,5 +1,32 @@
 import { getApiBaseUrl, loadEnv } from "./env";
 import { CliError, isJsonFailure } from "./output";
+import { readUserToken } from "./user-token";
+
+// The USER tier (`fluncle login`). Reads the signed-in user's own `/me` resources
+// by presenting the stored USER session token as a Bearer header — resolved by the
+// Worker's better-auth `bearer` plugin. This is HARD-SEPARATE from `adminHeaders()`:
+// it never reads `FLUNCLE_API_TOKEN`, and the user token store (./user-token.ts)
+// is never read by the admin env-loader, so the two carriers can never cross.
+export async function userApiGet<T>(path: string): Promise<T> {
+  return apiRequest<T>(path, {
+    headers: userHeaders(),
+  });
+}
+
+function userHeaders(): Record<string, string> {
+  const stored = readUserToken();
+
+  if (!stored) {
+    throw new CliError(
+      "not_logged_in",
+      "You're not signed in. Run `fluncle login` to link this device to your account.",
+    );
+  }
+
+  return {
+    Authorization: `Bearer ${stored.token}`,
+  };
+}
 
 export async function publicApiGet<T>(path: string): Promise<T> {
   return apiRequest<T>(path);
