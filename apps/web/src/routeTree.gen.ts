@@ -22,6 +22,7 @@ import { Route as CalendarDoticsRouteImport } from './routes/calendar[.]ics'
 import { Route as AtomDotxmlRouteImport } from './routes/atom[.]xml'
 import { Route as AccountRouteImport } from './routes/account'
 import { Route as AboutRouteImport } from './routes/about'
+import { Route as R8337c1b41068549f248bf56f1fc465dfDottxtRouteImport } from './routes/8337c1b41068549f248bf56f1fc465df[.]txt'
 import { Route as AdminRouteRouteImport } from './routes/admin/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as StoriesIndexRouteImport } from './routes/stories.index'
@@ -219,6 +220,12 @@ const AboutRoute = AboutRouteImport.update({
   path: '/about',
   getParentRoute: () => rootRouteImport,
 } as any)
+const R8337c1b41068549f248bf56f1fc465dfDottxtRoute =
+  R8337c1b41068549f248bf56f1fc465dfDottxtRouteImport.update({
+    id: '/8337c1b41068549f248bf56f1fc465df.txt',
+    path: '/8337c1b41068549f248bf56f1fc465df.txt',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const AdminRouteRoute = AdminRouteRouteImport.update({
   id: '/admin',
   path: '/admin',
@@ -930,6 +937,7 @@ const ApiV1AdminTracksTrackIdSocialPlatformDraftRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteRouteWithChildren
+  '/8337c1b41068549f248bf56f1fc465df.txt': typeof R8337c1b41068549f248bf56f1fc465dfDottxtRoute
   '/about': typeof AboutRoute
   '/account': typeof AccountRoute
   '/atom.xml': typeof AtomDotxmlRoute
@@ -1075,6 +1083,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/8337c1b41068549f248bf56f1fc465df.txt': typeof R8337c1b41068549f248bf56f1fc465dfDottxtRoute
   '/about': typeof AboutRoute
   '/account': typeof AccountRoute
   '/atom.xml': typeof AtomDotxmlRoute
@@ -1221,6 +1230,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteRouteWithChildren
+  '/8337c1b41068549f248bf56f1fc465df.txt': typeof R8337c1b41068549f248bf56f1fc465dfDottxtRoute
   '/about': typeof AboutRoute
   '/account': typeof AccountRoute
   '/atom.xml': typeof AtomDotxmlRoute
@@ -1369,6 +1379,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/admin'
+    | '/8337c1b41068549f248bf56f1fc465df.txt'
     | '/about'
     | '/account'
     | '/atom.xml'
@@ -1514,6 +1525,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/8337c1b41068549f248bf56f1fc465df.txt'
     | '/about'
     | '/account'
     | '/atom.xml'
@@ -1659,6 +1671,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/admin'
+    | '/8337c1b41068549f248bf56f1fc465df.txt'
     | '/about'
     | '/account'
     | '/atom.xml'
@@ -1806,6 +1819,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRouteRoute: typeof AdminRouteRouteWithChildren
+  R8337c1b41068549f248bf56f1fc465dfDottxtRoute: typeof R8337c1b41068549f248bf56f1fc465dfDottxtRoute
   AboutRoute: typeof AboutRoute
   AccountRoute: typeof AccountRoute
   AtomDotxmlRoute: typeof AtomDotxmlRoute
@@ -1984,6 +1998,13 @@ declare module '@tanstack/react-router' {
       path: '/about'
       fullPath: '/about'
       preLoaderRoute: typeof AboutRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/8337c1b41068549f248bf56f1fc465df.txt': {
+      id: '/8337c1b41068549f248bf56f1fc465df.txt'
+      path: '/8337c1b41068549f248bf56f1fc465df.txt'
+      fullPath: '/8337c1b41068549f248bf56f1fc465df.txt'
+      preLoaderRoute: typeof R8337c1b41068549f248bf56f1fc465dfDottxtRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin': {
@@ -3294,6 +3315,8 @@ const ApiV1AdminTracksTrackIdSocialRouteWithChildren =
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRouteRoute: AdminRouteRouteWithChildren,
+  R8337c1b41068549f248bf56f1fc465dfDottxtRoute:
+    R8337c1b41068549f248bf56f1fc465dfDottxtRoute,
   AboutRoute: AboutRoute,
   AccountRoute: AccountRoute,
   AtomDotxmlRoute: AtomDotxmlRoute,
