@@ -1,3 +1,4 @@
+import { createEarthAudio } from "./audio";
 import { type Camera, followCamera } from "./camera";
 import { createGrain } from "./grain";
 import { createInput } from "./input";
@@ -88,6 +89,26 @@ export function createEarth(
   reduced.addEventListener("change", onReduced);
 
   const input = createInput();
+
+  // Audio is gesture-gated: browsers won't make sound until the first key, so
+  // the bed + SFX unlock on that gesture. A tiny local keydown owns the M-mute
+  // (it stays out of input.ts's movement/action shape) and the audio unlock.
+  const audio = createEarthAudio();
+  let audioUnlocked = false;
+  const STEP_DISTANCE = 12; // px of stride between footstep ticks
+  let stepAccum = 0;
+  const onAudioKey = (event: KeyboardEvent) => {
+    if (!audioUnlocked) {
+      audioUnlocked = true;
+      audio.resume();
+      audio.ambient(true);
+    }
+    if (event.key === "m" || event.key === "M") {
+      audio.setMuted(!audio.muted());
+    }
+  };
+  window.addEventListener("keydown", onAudioKey);
+
   const player: Player = { facing: "down", stride: 0, x: SPAWN.x, y: SPAWN.y };
   let camera: Camera = followCamera(
     player,
@@ -148,8 +169,14 @@ export function createEarth(
       player.facing =
         Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? "left" : "right") : dy < 0 ? "up" : "down";
       player.stride += SPEED * dt;
+      stepAccum += SPEED * dt;
+      while (stepAccum >= STEP_DISTANCE) {
+        stepAccum -= STEP_DISTANCE;
+        audio.step();
+      }
     } else {
       player.stride = 0;
+      stepAccum = 0;
     }
 
     camera = followCamera(
@@ -178,6 +205,7 @@ export function createEarth(
 
     if (input.consumeAction() && nearest) {
       paused = true;
+      audio.doorOpen();
       options.onEnterDoor(nearest);
     }
   }
@@ -279,6 +307,8 @@ export function createEarth(
     destroy() {
       cancelAnimationFrame(raf);
       input.destroy();
+      window.removeEventListener("keydown", onAudioKey);
+      audio.destroy();
       reduced.removeEventListener("change", onReduced);
       window.removeEventListener("resize", onResize);
       canvas.remove();
