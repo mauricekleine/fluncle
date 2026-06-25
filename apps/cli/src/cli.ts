@@ -343,6 +343,15 @@ function addMetaCommands(program: Command): void {
         json: options.json,
       });
     });
+
+  program
+    .command("status")
+    .description("How Fluncle's services are holding up")
+    .option("--json", "Print JSON", false)
+    .action(async (options: JsonOptions) => {
+      const { statusCommand } = await import("./commands/status");
+      await runStatus(options, statusCommand);
+    });
 }
 
 function addTrackCommands(program: Command): void {
@@ -2268,6 +2277,24 @@ async function runRandom(
   }
 }
 
+async function runStatus(
+  options: JsonOptions,
+  statusCommand: typeof import("./commands/status").statusCommand,
+): Promise<void> {
+  const snapshot = await statusCommand();
+
+  if (options.json) {
+    printJson({
+      ok: true,
+      ...snapshot,
+    });
+    return;
+  }
+
+  const { statusLines } = await import("./commands/status");
+  console.log(statusLines(snapshot).join("\n"));
+}
+
 function rejectUnexpectedPositionals(positionals: string[]): void {
   if (positionals.length === 0) {
     return;
@@ -2493,6 +2520,7 @@ Share:
 
 Meta:
   fluncle about                        Fluncle, and where to find him
+  fluncle status [--json]              How Fluncle's services are holding up
   fluncle version [--check] [--json]   Print or check the version
 
 Fluncle elsewhere:
