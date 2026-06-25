@@ -27,6 +27,13 @@
     // token (R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY, Object Read & Write on
     // fluncle-videos) is set as a secret, never checked in.
     "R2_ACCOUNT_ID": "0651fd3b33d9e0b2fe72a5f13e5cf65d",
+    // Non-secret fluncle.com Cloudflare zone id: the edge cache-purge calls POST to
+    // .../zones/${CF_CACHE_PURGE_ZONE_ID}/purge_cache to evict stale Media-Transformation
+    // renditions on a video re-render (lib/server/video-cache.ts) and the log page cache
+    // (lib/server/edge-cache.ts). The matching CF_CACHE_PURGE_TOKEN (a Cache-Purge-scoped
+    // API token) is a secret set with `wrangler secret put` — prod-only, so local dev,
+    // which carries no token, safely no-ops the purge.
+    "CF_CACHE_PURGE_ZONE_ID": "93b403e3d6ed70d10cdd2890c557376f",
     // Cartesia (Sonic) — the observation voice. CARTESIA_VOICE_ID is the cloned
     // Fluncle voice (instant-clone of the bespoke read), a swappable config var. The
     // matching CARTESIA_API_KEY is a secret set with `wrangler secret put`. (ElevenLabs
