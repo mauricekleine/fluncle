@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { bothReadyToStart, canPlayThrough, HAVE_ENOUGH_DATA } from "./use-radio-sync-controller";
+import {
+  bothReadyToStart,
+  canPlayThrough,
+  HAVE_ENOUGH_DATA,
+  radioPhaseOnReady,
+} from "./use-radio-sync-controller";
 
 // The A/V start gate is the load-bearing fix for the radio desync: video and audio
 // are two independent elements, and the gate is what holds BOTH back until each can
@@ -51,5 +56,24 @@ describe("bothReadyToStart", () => {
 
   it("holds when the audio element is absent (no observation mounted yet)", () => {
     expect(bothReadyToStart({ audio: null, reducedMotion: false, video: ready })).toBe(false);
+  });
+});
+
+// The entry gate: tuning-in holds the full-screen radio back until the stream is
+// genuinely ready, so captions never roll over a black loading screen. The one
+// transition that matters (tuning → playing) is pure, and its idempotency is what
+// keeps a fresh segment's re-armed start from yanking the surface back through the
+// gate mid-run.
+describe("radioPhaseOnReady", () => {
+  it("opens the gate from tuning into playing when the stream is ready", () => {
+    expect(radioPhaseOnReady("tuning")).toBe("playing");
+  });
+
+  it("is a no-op once already playing — a re-armed start mid-run never re-enters", () => {
+    expect(radioPhaseOnReady("playing")).toBe("playing");
+  });
+
+  it("never jumps idle straight to playing — only a tuning gate can open", () => {
+    expect(radioPhaseOnReady("idle")).toBe("idle");
   });
 });

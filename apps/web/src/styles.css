@@ -2166,6 +2166,8 @@ body::before {
   font-size: clamp(1.35rem, 6vw, 1.75rem);
   font-weight: 800;
   letter-spacing: -0.01em;
+  /* Balance the two-line title so neither line is left a lone short word. */
+  text-wrap: balance;
 }
 
 .radio-gate-subtitle {
@@ -2174,6 +2176,8 @@ body::before {
   line-height: 1.4;
   /* Cap reading width, but never wider than the viewport's padded box. */
   max-width: min(34rem, 100%);
+  /* Balance the wrap so the subtitle never strands a "to." widow on its own line. */
+  text-wrap: balance;
 }
 
 @theme {

@@ -78,6 +78,27 @@ export function bothReadyToStart({
 }
 
 /**
+ * The radio's entry phases. `"idle"` shows the begin-gate. `"tuning"` is the
+ * gesture has fired and the media is mounted + buffering in the background, but the
+ * gate STAYS up (a disabled loading button) so captions never roll over a black
+ * loading screen. `"playing"` is the stream is genuinely ready — the gated start
+ * opened (the same `bothReadyToStart` moment) — so the full-screen radio appears
+ * with the picture and the observation starting together.
+ */
+export type RadioPhase = "idle" | "tuning" | "playing";
+
+/**
+ * The tuning → playing gate: the entry into the full-screen radio opens ONLY while
+ * tuning. This is the idempotency guard that keeps the gated A/V start (which
+ * re-arms on every fresh segment) from re-triggering the screen entry mid-run — the
+ * start opening for segment N+1 must NOT yank the surface back through the gate.
+ * Pure so the one transition that matters is unit-testable without a DOM.
+ */
+export function radioPhaseOnReady(current: RadioPhase): RadioPhase {
+  return current === "tuning" ? "playing" : current;
+}
+
+/**
  * Screen Wake Lock for the lean-back radio run: keep the device awake while the
  * run is playing so the screen doesn't sleep mid-observation, re-acquire when the
  * tab returns to the foreground (the OS drops the lock when the page is hidden),
