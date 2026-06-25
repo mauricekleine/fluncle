@@ -72,7 +72,6 @@ type TrackVideoOptions = {
   cover?: string;
   dir?: string;
   footage?: string;
-  footageSilent?: string;
   footageSocial?: string;
   json: boolean;
   model?: string;
@@ -532,7 +531,6 @@ function addAdminCommands(program: Command): void {
     .option("--cover <file>", "Cover image")
     .option("--dir <dir>", "Bundle directory")
     .option("--footage <file>", "Video footage (square crop source)")
-    .option("--footage-silent <file>", "Silent video footage (retiring)")
     .option("--footage-social <file>", "Portrait social cut (baked text)")
     .option("--json", "Print JSON", false)
     .option("--model <model>", "Authoring AI model (<provider>/<model>)")
@@ -1362,7 +1360,7 @@ async function runTrackVideo(
 ): Promise<void> {
   if (!idOrLogId) {
     throw new Error(
-      "Missing id. Usage: fluncle admin tracks video <track_id|log_id> (--dir <dir> | --footage <file> [--footage-social <file>] [--footage-silent <file>] [--poster <file>] [--cover <file>] [--note <file>] [--composition <file>] [--props <file>] [--render <file>])",
+      "Missing id. Usage: fluncle admin tracks video <track_id|log_id> (--dir <dir> | --footage <file> [--footage-social <file>] [--poster <file>] [--cover <file>] [--note <file>] [--composition <file>] [--props <file>] [--render <file>])",
     );
   }
 
@@ -1392,7 +1390,6 @@ async function runTrackVideo(
     composition: resolveFile(options.composition, "composition.tsx"),
     cover: resolveFile(options.cover, "cover.jpg"),
     footage: resolveFile(options.footage, "footage.mp4"),
-    footageSilent: resolveFile(options.footageSilent, "footage-silent.mp4"),
     footageSocial: resolveFile(options.footageSocial, "footage.social.mp4"),
     model: options.model,
     note: resolveFile(options.note, "note.txt"),
@@ -2460,7 +2457,6 @@ const stringOptions = new Set([
   "--features",
   "--file",
   "--footage",
-  "--footage-silent",
   "--footage-social",
   "--from",
   "--key",
