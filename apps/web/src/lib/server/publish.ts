@@ -9,6 +9,7 @@ import { getDb, typedRow } from "./db";
 import { enrichFromDeezer, lookupIsrcFromDeezer } from "./deezer";
 import { discogsResolveRelease } from "./discogs";
 import { purgeLogCache } from "./edge-cache";
+import { submitFindingToIndexNow } from "./indexnow";
 import { lastfmLove } from "./lastfm";
 import { resolveLogId } from "./log-id";
 import { notifyNewFinding } from "./push";
@@ -276,6 +277,11 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
   // The duplicate/incomplete_duplicate guards above throw before this hook, so a
   // retry can't re-reach it — no extra gate needed.
   notifyNewFinding(track, logId);
+  // Best-effort: ping IndexNow (Bing/Yandex + the shared network) so the fresh
+  // log page is crawled within minutes (indexnow.ts). Fire-and-forget via
+  // waitUntil; the key is a PUBLIC ownership token, so this needs no operator
+  // secret and NEVER throws or blocks the publish — same discipline as above.
+  submitFindingToIndexNow(logId);
 
   const message = `Banger logged
 

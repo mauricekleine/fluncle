@@ -65,6 +65,7 @@
         "expo-constants": "~56.0.18",
         "expo-font": "~56.0.7",
         "expo-image": "~56.0.11",
+        "expo-keep-awake": "~56.0.3",
         "expo-linear-gradient": "~56.0.4",
         "expo-linking": "~56.0.14",
         "expo-notifications": "~56.0.18",
@@ -193,6 +194,15 @@
       "devDependencies": {
         "@types/react": "~19.2.17",
         "@types/react-dom": "~19.2.3",
+        "@typescript/native-preview": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    "packages/registry": {
+      "name": "@fluncle/registry",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/node": "catalog:",
         "@typescript/native-preview": "catalog:",
         "typescript": "catalog:",
       },
@@ -653,6 +663,8 @@
     "@fluncle/media": ["@fluncle/media@workspace:packages/media"],
 
     "@fluncle/mobile": ["@fluncle/mobile@workspace:apps/mobile"],
+
+    "@fluncle/registry": ["@fluncle/registry@workspace:packages/registry"],
 
     "@fluncle/ssh": ["@fluncle/ssh@workspace:apps/ssh"],
 

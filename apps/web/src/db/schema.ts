@@ -95,7 +95,7 @@ export const tracks = sqliteTable("tracks", {
   // when the render is uploaded; its presence is the "has observation" flag. The
   // script (observation.txt) and the structured artifact + render metadata
   // (observation.json) live by CONVENTION at <log-id>/<name> with no column,
-  // exactly like poster.jpg / footage-silent.mp4 (see lib/media.ts).
+  // exactly like poster.jpg / cover.jpg (see lib/media.ts).
   observationAudioUrl: text("observation_audio_url"),
   observationDurationMs: integer("observation_duration_ms"),
   observationGeneratedAt: text("observation_generated_at"),

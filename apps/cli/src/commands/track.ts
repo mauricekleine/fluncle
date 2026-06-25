@@ -37,7 +37,6 @@ export type TrackVideoOptions = {
   composition?: string;
   cover?: string;
   footage?: string;
-  footageSilent?: string;
   footageSocial?: string;
   model?: string;
   note?: string;
@@ -71,7 +70,6 @@ const FOUND_BASE = "https://found.fluncle.com";
 const VIDEO_FIELDS: ReadonlyArray<{ field: string; option: keyof TrackVideoOptions }> = [
   { field: "footage", option: "footage" },
   { field: "footage-social", option: "footageSocial" },
-  { field: "footage-silent", option: "footageSilent" },
   { field: "poster", option: "poster" },
   { field: "cover", option: "cover" },
   { field: "note", option: "note" },

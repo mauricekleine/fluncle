@@ -2,6 +2,8 @@
 
 # Scoped brief: grain diversity in the Fluncle video kit
 
+> **LANDED 2026-06-24 (#145).** This brief's full scope shipped: the `GrainOpts` overload of `filmGrain` plus the six named families (`grainFineEmulsion` / `grainCoarseSilver` / `grainHalftone` / `grainChemicalDye` / `grainVhsScanline` / `grainDither`) live in `packages/video/src/remotion/journey/glsl.ts`, and the `video_grain` ledger threads `ship` → CLI → `track-update`. The canonical surface is the code + the `fluncle-video` skill cookbook; keep this brief as the historical scoping record only.
+
 Read-only scoping. No code was changed. This proposes the work; it does not do it.
 
 ## The problem, verified against source
