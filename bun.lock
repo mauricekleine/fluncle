@@ -197,6 +197,15 @@
         "typescript": "catalog:",
       },
     },
+    "packages/registry": {
+      "name": "@fluncle/registry",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/node": "catalog:",
+        "@typescript/native-preview": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
     "packages/tokens": {
       "name": "@fluncle/tokens",
       "version": "0.1.0",
@@ -653,6 +662,8 @@
     "@fluncle/media": ["@fluncle/media@workspace:packages/media"],
 
     "@fluncle/mobile": ["@fluncle/mobile@workspace:apps/mobile"],
+
+    "@fluncle/registry": ["@fluncle/registry@workspace:packages/registry"],
 
     "@fluncle/ssh": ["@fluncle/ssh@workspace:apps/ssh"],
 
