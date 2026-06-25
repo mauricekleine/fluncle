@@ -171,7 +171,7 @@ On standby — most relevant during the content backlog. The video is beat-match
 
 ### YouTube thumbnails — decided: leave them (2026-06-23)
 
-We're **not** setting custom YouTube thumbnails — YouTube's auto-picked frame from each bespoke-shader video looks **better** than a flat `cover.jpg` plate, the grid reading as a varied, alive wall of cosmic visuals a static plate would only flatten. Decided and done; the only residue is the dead thumbnail-upload branch still in `pushYouTubeShort` (`apps/web/src/lib/server/postiz.ts`) — a ~15-line cleanup, not urgent (it fails silently and the auto-frame is the preferred result anyway).
+We're **not** setting custom YouTube thumbnails — YouTube's auto-picked frame from each bespoke-shader video looks **better** than a flat `cover.jpg` plate, the grid reading as a varied, alive wall of cosmic visuals a static plate would only flatten. Decided and done; the dead thumbnail-upload branch in `pushYouTubeShort` (`apps/web/src/lib/server/postiz.ts`) has been removed — the function is now honest about pushing only title + caption and setting no thumbnail.
 
 ## Later — the bigger arcs
 

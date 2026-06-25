@@ -260,7 +260,6 @@ export function adminSocialHandlers(os: Implementer) {
           status = "draft";
         } else {
           ({ postId } = await pushYouTubeShort({
-            coverUrl: media.coverUrl,
             description: caption,
             title: track.title,
             videoUrl: social,
