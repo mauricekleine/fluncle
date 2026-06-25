@@ -1,4 +1,8 @@
-import { SpeakerSimpleHighIcon, SpeakerSimpleSlashIcon } from "@phosphor-icons/react";
+import {
+  CircleNotchIcon,
+  SpeakerSimpleHighIcon,
+  SpeakerSimpleSlashIcon,
+} from "@phosphor-icons/react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { siSpotify } from "simple-icons";
@@ -16,6 +20,12 @@ import {
   snapOffsetMs,
 } from "@/lib/radio-schedule";
 import { fetchRadioNowPlaying, type RadioNowPlaying, type Track } from "@/lib/tracks";
+import {
+  bothReadyToStart,
+  type RadioPhase,
+  radioPhaseOnReady,
+  useScreenWakeLock,
+} from "@/lib/use-radio-sync-controller";
 import { DESKTOP_QUERY, useMediaQuery } from "@/lib/use-media-query";
 import { useVideoStallRecovery } from "@/lib/use-video-recovery";
 
@@ -44,7 +54,21 @@ const COPY = {
   empty: "Nothing logged out here yet. Quiet sector tonight.",
   // While the next finding's assets load, or while catching up to the run.
   loading: "Catching up to the run.",
+  // The loading label on the Begin button while the stream buffers in the
+  // background — the gate stays up until the picture and the observation can start
+  // together, so captions never roll over a black loading screen. Reuses the
+  // COPY.loading register verbatim (the two loading states speak in one voice);
+  // NEVER the retired radio-operator metaphor (broadcast / station / tune in / live).
+  tuning: "Catching up to the run…",
 } as const;
+
+// The hard ceiling on the "tuning" hold. The play effect opens the gate the
+// instant both elements can play through (the SAME `startBoth` readiness the sync
+// controller uses), so this only fires when a browser under-reports
+// `canplaythrough` and the coarser `canplay` fallback never lands either. Past it
+// we enter "playing" anyway — the video-stall watchdog still covers a genuinely
+// wedged stream, and a slightly-early entry beats hanging on the gate forever.
+const TUNING_MAX_WAIT_MS = 6_000;
 
 // Resync ladder (RFC §2.5 / Decision #4). The audio currentTime is checked
 // against the locally-computed expected offset; small drift rides (a hard seek is
@@ -223,8 +247,13 @@ function RadioCaptions({
 }
 
 function RadioPage() {
-  // The begin-gate: false until the first user gesture unlocks audible audio.
-  const [started, setStarted] = useState(false);
+  // The entry phase (RadioPhase, shared with the sync controller). The media
+  // elements mount once we leave "idle", so they buffer during "tuning"; the
+  // visible radio only shows in "playing".
+  const [phase, setPhase] = useState<RadioPhase>("idle");
+  // The schedule clock + media effects run from the first gesture onward (both
+  // "tuning" and "playing") so the slot resolves and the gated start can buffer.
+  const started = phase !== "idle";
   // The finding on the surface + the offset it was placed at (undefined until the
   // first slot resolves).
   const [playhead, setPlayhead] = useState<Playhead | undefined>(undefined);
@@ -256,6 +285,11 @@ function RadioPage() {
   // controller off the shared-clock offset. A ref so the rAF/interval tick writes
   // it cheaply; mirrored into CSS via a state-free style write on the overlay.
   const breatherRef = useRef<HTMLDivElement | null>(null);
+  // Whether the gated A/V start has opened for the CURRENT segment (the audio is
+  // playing). The audio effect sets it; a small video effect reads it so an
+  // orientation flip (which remounts the `<video key={videoUrl}>`) re-plays the
+  // fresh element without re-seeking the already-running audio. Reset per segment.
+  const avStartedRef = useRef(false);
 
   // The client's server-clock now: Date.now() corrected by the smoothed skew. The
   // ONE source of truth the controller, the breather, and the resync ladder all
@@ -336,11 +370,37 @@ function RadioPage() {
   }, [resolveSlot]);
 
   // Begin: the first gesture unlocks audio and resolves the synced slot — a fresh
-  // joiner lands mid-flight at the server's offset.
+  // joiner lands mid-flight at the server's offset. It enters "tuning" (not
+  // "playing"): the media elements mount and buffer in the background while the
+  // gate stays up, so the full-screen radio + captions only appear once the stream
+  // is genuinely ready (the gated start opens) and everything begins together.
   const begin = useCallback(() => {
-    setStarted(true);
+    setPhase("tuning");
     void resolveSlot().catch(() => setExhausted(true));
   }, [resolveSlot]);
+
+  // The gated start has opened (both the picture and the observation can play
+  // through) → reveal the full-screen radio. Idempotent: only "tuning" advances, so
+  // a later re-arm of the start (a fresh segment) never re-triggers the entry.
+  const markPlaying = useCallback(() => {
+    setPhase(radioPhaseOnReady);
+  }, []);
+
+  // The tuning safety net: never hang on the gate. The play effect's `startBoth`
+  // flips us to "playing" the moment both elements can play through (its `canplay`
+  // fallback already covers browsers that under-report `canplaythrough`); this
+  // bounded timer is the last resort if even that never lands, so a wedged buffer
+  // can't trap the listener on a loading gate. The video-stall watchdog still
+  // covers a genuinely stuck stream once we're in.
+  useEffect(() => {
+    if (phase !== "tuning") {
+      return;
+    }
+
+    const id = window.setTimeout(markPlaying, TUNING_MAX_WAIT_MS);
+
+    return () => window.clearTimeout(id);
+  }, [phase, markPlaying]);
 
   // THE SCHEDULE-CLOCK CONTROLLER (Bug A root-cause fix). Findings advance from the
   // SHARED CLOCK, not the audio element's `ended` and not a `loop`. Every tick it
@@ -459,40 +519,28 @@ function RadioPage() {
     }
   }, [muted, playhead]);
 
-  // Drive the looping silent video. It plays muted (its audio is stripped anyway),
-  // loops under the observation, and pauses under reduced motion (the offset
-  // poster holds; the observation stays audible — the lean-back point survives).
-  useEffect(() => {
-    const video = videoRef.current;
-
-    if (!video || !playhead) {
-      return;
-    }
-
-    if (prefersReducedMotion()) {
-      video.pause();
-
-      return;
-    }
-
-    video.play().catch(() => {
-      // Autoplay denied (muted should be fine) — the poster frame stands in.
-    });
-  }, [playhead, isDesktop]);
-
-  // Drive the observation: seek to the join offset BEFORE play, then run the resync
-  // ladder against the expected offset. Advancing findings is the CONTROLLER's job
-  // (off the shared clock) — the audio does NOT advance on `ended` and the video
-  // never advances on `loop`. The audio only keeps its own playback ALIGNED to the
-  // shared segment anchor: ride small drift, soft-correct medium, hard-seek large /
-  // on tab-return. A load/play error RESYNCS (never a random skip).
+  // THE A/V SYNC + DOUBLE-START FIX. The video (silent loop) and the audio
+  // (observation) are two independent elements; left to themselves the lighter
+  // video reaches a playable frame first and starts while the audio is still
+  // buffering → the audio lags the picture all segment. And the effect's
+  // setup → cleanup → setup on a segment transition (and again under StrictMode in
+  // dev) fires two overlapping `play()` promises whose race the drift ladder reads
+  // as a restart. So a SINGLE gated start: both elements begin together, exactly
+  // once per segment, only when BOTH are buffered to `canplaythrough`.
+  //
+  // The drift-correction ladder is untouched — it just can't run before the gated
+  // start opens, so it never corrects against a not-yet-playing element. Advancing
+  // findings stays the CONTROLLER's job (off the shared clock); the audio does NOT
+  // advance on `ended` and the video never advances on `loop`.
   useEffect(() => {
     const audio = audioRef.current;
+    const video = videoRef.current;
 
     if (!audio || !playhead?.track.observationAudioUrl) {
       return;
     }
 
+    const reducedMotion = prefersReducedMotion();
     const segMs = trackSegmentMs(playhead.track);
     // The shared-clock anchor for this segment (the SAME value the controller and
     // the breather read), so the audio aligns to exactly the broadcast offset.
@@ -502,6 +550,50 @@ function RadioPage() {
     // Seek to the offset before playing — align the audio to the shared offset.
     audio.currentTime = Math.max(0, Math.min(playhead.offsetMs, segMs)) / 1000;
     audio.playbackRate = 1;
+
+    // The one-shot start guard. `play()` (video + audio) fires EXACTLY ONCE per
+    // segment — this is what defeats the StrictMode/cleanup double-fire that
+    // produced the "restart". Once started, the readiness listeners stand down.
+    let started = false;
+    // A fresh segment begins not-yet-started (the video effect reads this ref).
+    avStartedRef.current = false;
+
+    const startBoth = () => {
+      if (started) {
+        return;
+      }
+
+      // Hold until BOTH elements can play through (reduced motion waits on the
+      // audio alone — the video won't play, the poster holds), so the picture and
+      // the observation begin locked together instead of the video out-running it.
+      if (!bothReadyToStart({ audio, reducedMotion, video })) {
+        return;
+      }
+
+      started = true;
+      avStartedRef.current = true;
+
+      // The stream is genuinely ready — open the entry gate (a no-op once already
+      // "playing"). The full-screen radio + captions appear now, locked to the
+      // first frame and the first spoken word, never over a black loading screen.
+      markPlaying();
+
+      if (reducedMotion) {
+        // Reduced motion holds the offset poster (no looping motion); only the
+        // observation plays — the lean-back point survives.
+        video?.pause();
+      } else {
+        video?.play().catch(() => {
+          // Autoplay denied (the video is muted, so this is rare) — the poster
+          // frame stands in; the audio still starts so the run is never silent.
+        });
+      }
+
+      audio.play().catch(() => {
+        // Playback denied or the object died — resync rather than stall.
+        void resolveSlot().catch(() => setExhausted(true));
+      });
+    };
 
     const onError = () => {
       // RESYNC, don't skip: a random skip on a synchronized surface desyncs this
@@ -513,6 +605,12 @@ function RadioPage() {
     // for jitter, but guarantee convergence after a sleep. Past the segment end the
     // controller owns the boundary, so the ladder only corrects WITHIN the segment.
     const onTimeUpdate = () => {
+      // The ladder only corrects an element that has actually started — never
+      // against a not-yet-playing one (which would seek before the gate opens).
+      if (!started) {
+        return;
+      }
+
       const expected = expectedOffsetMs();
 
       if (expected >= segMs) {
@@ -546,11 +644,18 @@ function RadioPage() {
       }
     };
 
-    // A backgrounded tab is throttled and returns seconds off. Hard-seek the audio
-    // to the shared offset if still mid-segment; if the segment has elapsed, leave
-    // the boundary to the controller (which advances/resyncs on its next tick).
+    // A backgrounded tab is throttled and returns seconds off. On return: if the
+    // gated start hasn't opened yet (the tab was hidden through the buffer), try
+    // it now; otherwise hard-seek the audio to the shared offset if still
+    // mid-segment (past the end, leave the boundary to the controller).
     const onVisible = () => {
       if (document.visibilityState !== "visible") {
+        return;
+      }
+
+      if (!started) {
+        startBoth();
+
         return;
       }
 
@@ -567,18 +672,56 @@ function RadioPage() {
     audio.addEventListener("error", onError);
     audio.addEventListener("timeupdate", onTimeUpdate);
     document.addEventListener("visibilitychange", onVisible);
-    audio.play().catch(() => {
-      // Playback denied or the object died — resync rather than stall.
-      void resolveSlot().catch(() => setExhausted(true));
-    });
+    // The readiness gate: each element signals when it can play through, and
+    // `startBoth` fires the one-shot start the first tick BOTH are ready. `canplay`
+    // is a coarser fallback so a browser that under-reports `canplaythrough` still
+    // opens the gate once it has the current frame.
+    audio.addEventListener("canplaythrough", startBoth);
+    audio.addEventListener("canplay", startBoth);
+    video?.addEventListener("canplaythrough", startBoth);
+    video?.addEventListener("canplay", startBoth);
+
+    // Already-warm elements (a preloaded next finding handed off at the seam) may
+    // have buffered before the listeners attached and will fire no further event —
+    // attempt the gated start immediately so they don't wait for one.
+    startBoth();
 
     return () => {
       audio.removeEventListener("error", onError);
       audio.removeEventListener("timeupdate", onTimeUpdate);
       document.removeEventListener("visibilitychange", onVisible);
+      audio.removeEventListener("canplaythrough", startBoth);
+      audio.removeEventListener("canplay", startBoth);
+      video?.removeEventListener("canplaythrough", startBoth);
+      video?.removeEventListener("canplay", startBoth);
       audio.pause();
     };
-  }, [playhead, resolveSlot, serverNow]);
+  }, [playhead, resolveSlot, serverNow, markPlaying]);
+
+  // Orientation re-attach. An orientation flip changes `videoUrl`, which remounts
+  // the `<video key={videoUrl}>` — a FRESH element the audio effect (keyed on
+  // playhead, not orientation) won't re-play. So once the segment's gated start has
+  // already opened, re-play the new element here, without touching the running
+  // audio (no re-seek). Before the gate opens, the audio effect's listeners own the
+  // start; reduced motion pauses (the poster holds). This is silent, seek-agnostic
+  // loop video — re-playing it is harmless.
+  useEffect(() => {
+    const video = videoRef.current;
+
+    if (!video || !playhead || !avStartedRef.current) {
+      return;
+    }
+
+    if (prefersReducedMotion()) {
+      video.pause();
+
+      return;
+    }
+
+    video.play().catch(() => {
+      // Autoplay denied — the poster frame stands in.
+    });
+  }, [playhead, isDesktop]);
 
   // The silent looping crop for the current playhead, derived once so both the
   // stall watchdog (an unconditional hook, above the early returns) and the render
@@ -624,16 +767,31 @@ function RadioPage() {
     videoRef,
   });
 
-  if (!started) {
+  // Keep the screen awake for the lean-back run: hold the Screen Wake Lock while a
+  // finding is on the surface (the observation is audible even under reduced motion
+  // and even when muted — a muted but running run still warrants the screen), and
+  // drop it when the run gives out or the gate hasn't been crossed. Feature-detected
+  // and self-healing across tab-backgrounding inside the hook.
+  useScreenWakeLock(started && !exhausted && Boolean(playhead));
+
+  // Whether we're still tuning in: the gesture has fired and the media is buffering
+  // in the background, but the gate stays up until the gated start opens (or the
+  // max-wait fallback fires). The visible radio chrome is held back until "playing".
+  const tuning = phase === "tuning";
+
+  if (phase === "idle") {
     return <BeginGate onBegin={begin} />;
   }
 
+  // The run gave out — surface it over the gate, whatever phase we were in.
   if (exhausted) {
     return <RadioMessage wayBack>{COPY.empty}</RadioMessage>;
   }
 
+  // Tuning before the first slot resolves: the gate stays up with its loading
+  // button; no media to mount yet, so just hold the loading gate.
   if (!playhead) {
-    return <RadioMessage>{COPY.loading}</RadioMessage>;
+    return <BeginGate loading onBegin={begin} />;
   }
 
   const current = playhead.track;
@@ -671,82 +829,108 @@ function RadioPage() {
         <RadioMessage>{COPY.loading}</RadioMessage>
       )}
 
-      {/* The deterministic breather (Feature B): a full-black overlay whose opacity
-          the controller writes each tick from breatherDimAt(offset) — fade-out into
-          the seam, a beat of black, fade-in on the new clip. Timed off the SHARED
-          clock, so every client darkens together; instant (no fade) under reduced
-          motion, still at the same boundary. */}
-      <div aria-hidden="true" className="radio-breather" ref={breatherRef} />
+      {/* The visible radio chrome only mounts once we're PLAYING. While tuning the
+          media buffers underneath (above) but the captions / meta / breather stay
+          held back so nothing rolls over a black loading screen; the gate overlay
+          (below) carries the loading state instead. */}
+      {!tuning ? (
+        <>
+          {/* The deterministic breather (Feature B): a full-black overlay whose
+              opacity the controller writes each tick from breatherDimAt(offset) —
+              fade-out into the seam, a beat of black, fade-in on the new clip. Timed
+              off the SHARED clock, so every client darkens together; instant (no
+              fade) under reduced motion, still at the same boundary. */}
+          <div aria-hidden="true" className="radio-breather" ref={breatherRef} />
 
-      <div aria-hidden="true" className="radio-scrim" />
+          <div aria-hidden="true" className="radio-scrim" />
 
-      {/* Fluncle narrating, center-stage: one slice of the observation at a time,
-          big and centered over the footage, the live word lit (Gold heat). Reads
-          off the shared-clock offset, so it stays aligned through resyncs and while
-          muted. Absent alignment ⇒ renders nothing. */}
-      {current.observationAlignment && current.observationAlignment.words.length > 0 ? (
-        <RadioCaptions
-          segmentStartServerMs={playhead.segmentStartServerMs}
-          serverNow={serverNow}
-          words={current.observationAlignment.words}
-        />
+          {/* Fluncle narrating, center-stage: one slice of the observation at a
+              time, big and centered over the footage, the live word lit (Gold heat).
+              Reads off the shared-clock offset, so it stays aligned through resyncs
+              and while muted. Absent alignment ⇒ renders nothing. */}
+          {current.observationAlignment && current.observationAlignment.words.length > 0 ? (
+            <RadioCaptions
+              segmentStartServerMs={playhead.segmentStartServerMs}
+              serverNow={serverNow}
+              words={current.observationAlignment.words}
+            />
+          ) : undefined}
+
+          {/* Mute toggle (Feature C): a single quiet icon top-right. A LOCAL
+              playback preference, not part of the shared schedule. */}
+          <button
+            aria-label={muted ? "Unmute the observation" : "Mute the observation"}
+            aria-pressed={muted}
+            className="radio-mute"
+            onClick={() => setMuted((m) => !m)}
+            type="button"
+          >
+            {/* Phosphor weight tracks state (DESIGN.md Iconography): fill when active
+                (muted), regular when idle (audible). */}
+            {muted ? (
+              <SpeakerSimpleSlashIcon aria-hidden="true" weight="fill" />
+            ) : (
+              <SpeakerSimpleHighIcon aria-hidden="true" weight="regular" />
+            )}
+          </button>
+
+          <div className="radio-meta">
+            {current.logId ? <span className="radio-log-id">{current.logId}</span> : undefined}
+            <h2 className="radio-title">{current.title}</h2>
+            <p className="radio-artist">{current.artists.join(", ")}</p>
+            <p className="radio-facts">
+              {[
+                current.label,
+                current.releaseDate ? formatDateLong(current.releaseDate) : undefined,
+                current.bpm ? `${current.bpm} BPM` : undefined,
+                current.key,
+                current.galaxy?.name,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </p>
+            <div className="radio-actions">
+              {current.logPageUrl ? (
+                <Button
+                  nativeButton={false}
+                  render={<a href={current.logPageUrl} />}
+                  size="sm"
+                  variant="outline"
+                >
+                  View the log
+                </Button>
+              ) : undefined}
+              <Button
+                nativeButton={false}
+                render={<a href={current.spotifyUrl} rel="noreferrer" target="_blank" />}
+                size="sm"
+                variant="outline"
+              >
+                <BrandIcon icon={siSpotify} />
+                Listen on Spotify
+              </Button>
+            </div>
+          </div>
+        </>
       ) : undefined}
 
-      {/* Mute toggle (Feature C): a single quiet icon top-right. A LOCAL playback
-          preference, not part of the shared schedule. */}
-      <button
-        aria-label={muted ? "Unmute the observation" : "Mute the observation"}
-        aria-pressed={muted}
-        className="radio-mute"
-        onClick={() => setMuted((m) => !m)}
-        type="button"
-      >
-        {/* Phosphor weight tracks state (DESIGN.md Iconography): fill when active
-            (muted), regular when idle (audible). */}
-        {muted ? (
-          <SpeakerSimpleSlashIcon aria-hidden="true" weight="fill" />
-        ) : (
-          <SpeakerSimpleHighIcon aria-hidden="true" weight="regular" />
-        )}
-      </button>
-
-      <div className="radio-meta">
-        {current.logId ? <span className="radio-log-id">{current.logId}</span> : undefined}
-        <h2 className="radio-title">{current.title}</h2>
-        <p className="radio-artist">{current.artists.join(", ")}</p>
-        <p className="radio-facts">
-          {[
-            current.label,
-            current.releaseDate ? formatDateLong(current.releaseDate) : undefined,
-            current.bpm ? `${current.bpm} BPM` : undefined,
-            current.key,
-            current.galaxy?.name,
-          ]
-            .filter(Boolean)
-            .join(" · ")}
-        </p>
-        <div className="radio-actions">
-          {current.logPageUrl ? (
-            <Button
-              nativeButton={false}
-              render={<a href={current.logPageUrl} />}
-              size="sm"
-              variant="outline"
-            >
-              View the log
-            </Button>
-          ) : undefined}
-          <Button
-            nativeButton={false}
-            render={<a href={current.spotifyUrl} rel="noreferrer" target="_blank" />}
-            size="sm"
-            variant="outline"
-          >
-            <BrandIcon icon={siSpotify} />
-            Listen on Spotify
+      {/* While tuning, the begin-gate stays up OVER the buffering media (a disabled
+          loading button), so the listener sees we're setting things up rather than a
+          black screen with captions already rolling. A presentational div (not a
+          nested <main>) overlaying the stage — the .radio-gate backdrop is opaque,
+          so it fully covers the buffering picture. */}
+      {tuning ? (
+        <div className="radio-gate">
+          {/* Styled like the gate title but a <p>, not a second <h1> — the stage's
+              sr-only <h1> above is the page heading. */}
+          <p className="radio-gate-title">{title}</p>
+          <p className="radio-gate-subtitle">{COPY.beginSubtitle}</p>
+          <Button aria-busy disabled size="lg">
+            <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+            {COPY.tuning}
           </Button>
         </div>
-      </div>
+      ) : undefined}
 
       {/* The observation: its own audio artifact, seeked to the join offset and
           played over the looping silent video. Hidden; the schedule-clock
@@ -771,13 +955,26 @@ function RadioPage() {
   );
 }
 
-function BeginGate({ onBegin }: { onBegin: () => void }) {
+// The begin-gate. `loading` is the tuning-in state: the gesture has fired and the
+// stream is buffering, so the control shows a spinner + COPY.tuning and is disabled
+// until the gated start opens (the gate then gives way to the full-screen radio).
+// When tuning, it overlays the buffering media, so it owns its own backdrop (the
+// .radio-gate is opaque) — the listener sees we're setting things up, never a black
+// screen with captions already rolling.
+function BeginGate({ loading = false, onBegin }: { loading?: boolean; onBegin: () => void }) {
   return (
     <main className="radio-gate">
       <h1 className="radio-gate-title">{title}</h1>
       <p className="radio-gate-subtitle">{COPY.beginSubtitle}</p>
-      <Button onClick={onBegin} size="lg">
-        Begin
+      <Button aria-busy={loading} disabled={loading} onClick={onBegin} size="lg">
+        {loading ? (
+          <>
+            <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+            {COPY.tuning}
+          </>
+        ) : (
+          "Begin"
+        )}
       </Button>
     </main>
   );

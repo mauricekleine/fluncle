@@ -90,6 +90,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // entry; it lives here only to satisfy the "registry holds EXACTLY this map's
   // ops" check. An EXTERNAL cron calls it (TanStack has no `scheduled()`).
   "POST /admin/push/receipts/sweep": "sweep_push_receipts",
+  // capture_post_urls — contract-only oRPC (no TanStack route file; oRPC owns the
+  // path directly). A collection-level sweep that recovers the public YouTube/TikTok
+  // post URLs Postiz withholds on create. Admin tier — the on-box capture cron drives
+  // it; it only fills the public url and links the analytics release-id.
+  "POST /admin/social/posts/capture": "capture_post_urls",
   "POST /admin/submissions/{submissionId}/approve": "approve_submission",
   "POST /admin/submissions/{submissionId}/reject": "reject_submission",
   "POST /admin/tracks": "publish_track",

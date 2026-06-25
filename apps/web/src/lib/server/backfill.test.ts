@@ -135,7 +135,14 @@ describe("backfillDiscogsIds — reliability gate", () => {
     discogsResolveRelease.mockResolvedValueOnce({ rateLimited: true });
     singlePage([finding("1"), finding("2")]);
     const { backfillDiscogsIds } = await import("./backfill");
-    await backfillDiscogsIds(10, false);
+    const throttled = await backfillDiscogsIds(10, false);
+    expect(throttled.rateLimited, "the result flags the throttle so the CLI stops looping").toBe(
+      true,
+    );
+    expect(
+      throttled.nextCursor,
+      "a throttle-stop nulls the cursor so even the deployed CLI (null-only break) stops looping",
+    ).toBeNull();
     expect(writes, "no reliability write for a throttled finding").toEqual([]);
     expect(discogsResolveRelease, "the run halted before the second finding").toHaveBeenCalledTimes(
       1,
@@ -182,7 +189,7 @@ describe("backfillLastfmLoves — reliability gate", () => {
     expect(writes).toHaveLength(0);
   });
 
-  it("a clean love records done; a rate-limited love records a failure", async () => {
+  it("a clean love records done; a plain (non-throttled) error records a failure", async () => {
     lastfmLove.mockResolvedValueOnce({ ok: true });
     singlePage([finding("1")]);
     const { backfillLastfmLoves } = await import("./backfill");
@@ -193,10 +200,28 @@ describe("backfillLastfmLoves — reliability gate", () => {
     writes.length = 0;
     reliabilityRows.clear();
 
-    lastfmLove.mockResolvedValueOnce({ error: "rate", ok: false, rateLimited: true });
+    lastfmLove.mockResolvedValueOnce({ error: "nope", ok: false, rateLimited: false });
     singlePage([finding("2")]);
-    const limited = await backfillLastfmLoves(10, false);
-    expect(limited.failed).toEqual([{ error: "rate", logId: "LOG-2" }]);
+    const failedRun = await backfillLastfmLoves(10, false);
+    expect(failedRun.failed).toEqual([{ error: "nope", logId: "LOG-2" }]);
+    expect(failedRun.rateLimited).toBe(false);
     expect(writes[0]?.sql).toContain("backfill_lastfm_failures = backfill_lastfm_failures + 1");
+  });
+
+  it("a rate-limited love trips the circuit breaker — stops the run, flags rateLimited, no failure record (next tick retries)", async () => {
+    // Symmetric with Discogs: a throttled love is NOT a failure (no cooldown), so the
+    // next tick retries it with a fresh window, and the flag tells the CLI to stop
+    // looping the cursor instead of grinding into the same wall to the 120s timeout.
+    lastfmLove.mockResolvedValueOnce({ error: "rate", ok: false, rateLimited: true });
+    singlePage([finding("1"), finding("2")]);
+    const { backfillLastfmLoves } = await import("./backfill");
+    const limited = await backfillLastfmLoves(10, false);
+    expect(limited.rateLimited, "the result flags the throttle so the CLI stops looping").toBe(
+      true,
+    );
+    expect(limited.nextCursor, "a throttle-stop nulls the cursor for the deployed CLI").toBeNull();
+    expect(limited.failed, "a throttled love is not recorded as a failure").toEqual([]);
+    expect(writes, "no reliability write for a throttled love").toHaveLength(0);
+    expect(lastfmLove, "the run halted before the second finding").toHaveBeenCalledTimes(1);
   });
 });

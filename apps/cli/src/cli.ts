@@ -88,7 +88,9 @@ type TrackDraftOptions = {
 };
 
 type TrackSocialOptions = {
+  capture?: boolean;
   json: boolean;
+  limit?: string;
   platform?: string;
   scheduledFor?: string;
   status?: string;
@@ -592,6 +594,12 @@ function addAdminCommands(program: Command): void {
     .command("social")
     .description("Show or update a track's per-platform publication status")
     .argument("[idOrLogId]")
+    .option(
+      "--capture",
+      "Sweep: capture missing YouTube/TikTok post URLs from Postiz (no id needed)",
+      false,
+    )
+    .option("--limit <limit>", "Max pending posts to poll with --capture", "25")
     .option("--json", "Print JSON", false)
     .option("--platform <platform>", "Publishing platform")
     .option("--scheduled-for <date>", "Scheduled publication date")
@@ -599,6 +607,14 @@ function addAdminCommands(program: Command): void {
     .option("--url <url>", "Published post URL")
     .allowExcessArguments()
     .action(async (idOrLogId: string | undefined, options: TrackSocialOptions) => {
+      // `--capture` is the collection-level sweep (no track id) — the box capture
+      // cron's worklist. Otherwise show/update one track's per-platform state.
+      if (options.capture) {
+        const { trackSocialCaptureCommand } = await import("./commands/track");
+        await runTrackSocialCapture(options, trackSocialCaptureCommand);
+        return;
+      }
+
       const { trackSocialShowCommand, trackSocialUpdateCommand } = await import("./commands/track");
       await runTrackSocial(idOrLogId, options, trackSocialShowCommand, trackSocialUpdateCommand);
     });
@@ -1246,6 +1262,7 @@ async function runBackfillLastfm(
   const skipped: string[] = [];
   let cursor: string | undefined;
   let dryRun = options.dryRun;
+  let throttled = false;
 
   // The cap is on findings actually HANDLED (loved + failed); skips don't count, so
   // the loop keeps draining cursors past cooling-down findings until the cap is met
@@ -1265,6 +1282,14 @@ async function runBackfillLastfm(
       );
     }
 
+    if (result.rateLimited) {
+      // Last.fm circuit breaker tripped (active rate-limiting). Stop looping the
+      // cursor — re-firing it just grinds into the same wall until the cron's 120s
+      // timeout; the next tick resumes from a fresh rate-limit window.
+      throttled = true;
+      break;
+    }
+
     if (result.nextCursor === null) {
       break;
     }
@@ -1280,6 +1305,7 @@ async function runBackfillLastfm(
       loved,
       lovedCount: loved.length,
       ok: true,
+      rateLimited: throttled,
       skipped,
       skippedCount: skipped.length,
     });
@@ -1311,6 +1337,7 @@ async function runBackfillDiscogs(
   const skipped: string[] = [];
   let cursor: string | undefined;
   let dryRun = options.dryRun;
+  let throttled = false;
 
   // The cap is on findings actually HANDLED (resolved + unresolved); skips don't
   // count, so the loop keeps draining cursors past cooling-down/done findings until
@@ -1330,6 +1357,14 @@ async function runBackfillDiscogs(
       );
     }
 
+    if (result.rateLimited) {
+      // Discogs circuit breaker tripped (active 429s). Stop looping the cursor —
+      // re-firing it just grinds into the same wall until the cron's 120s timeout;
+      // the next tick resumes from a fresh rate-limit window.
+      throttled = true;
+      break;
+    }
+
     if (result.nextCursor === null) {
       break;
     }
@@ -1341,6 +1376,7 @@ async function runBackfillDiscogs(
     printJson({
       dryRun,
       ok: true,
+      rateLimited: throttled,
       resolved,
       resolvedCount: resolved.length,
       skipped,
@@ -1513,6 +1549,35 @@ async function runTrackSocial(
   }
 
   console.log(`${platform} → ${options.status} for ${result.trackId}`);
+}
+
+async function runTrackSocialCapture(
+  options: TrackSocialOptions,
+  trackSocialCaptureCommand: typeof import("./commands/track").trackSocialCaptureCommand,
+): Promise<void> {
+  const limit = options.limit === undefined ? undefined : Number.parseInt(options.limit, 10);
+
+  if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+    throw new Error("--limit must be a positive integer");
+  }
+
+  const result = await trackSocialCaptureCommand(limit);
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  if (result.captured.length === 0) {
+    console.log(`Polled ${result.polled} pending post(s); nothing new to capture.`);
+    return;
+  }
+
+  console.log(`Captured ${result.captured.length} post URL(s) from ${result.polled} polled:`);
+
+  for (const post of result.captured) {
+    console.log(`  ${post.platform}: ${post.url}`);
+  }
 }
 
 async function runTrackGet(

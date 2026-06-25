@@ -63,6 +63,11 @@
       "sourceType": "local",
       "computedHash": "baae9dd979cd98d1d7c6ee5fd6eef91541950e054e4d01482b16ab716031ee46"
     },
+    "fluncle-surfaces": {
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-surfaces",
+      "sourceType": "local",
+      "computedHash": "e83219df1faaafabc89173909d2ae193a782aa2b5b70f9545c5dc5b283416316"
+    },
     "fluncle-track-enrichment": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-track-enrichment",
       "sourceType": "local",

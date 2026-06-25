@@ -150,6 +150,10 @@ export type LastfmBackfillResult = {
   // under a rate limiter), so the CLI loops this until null.
   nextCursor: string | null;
   ok: boolean;
+  // True when the pass STOPPED on the Last.fm rate-limit circuit breaker: the CLI
+  // must stop looping the cursor (the next tick resumes with a fresh window) rather
+  // than re-firing into the same wall until the cron's 120s timeout kills it.
+  rateLimited: boolean;
   // Findings the per-finding reliability gate held back this pass (already loved,
   // or cooling down after a recent attempt/failure). They didn't burn the batch.
   skipped: string[];
@@ -182,6 +186,10 @@ export type DiscogsBackfillResult = {
   // runs under a rate limiter), so the CLI loops this until null.
   nextCursor: string | null;
   ok: boolean;
+  // True when the pass STOPPED on the Discogs rate-limit circuit breaker: the CLI
+  // must stop looping the cursor (the next tick resumes with a fresh window) rather
+  // than re-firing into the same 429 wall until the cron's 120s timeout kills it.
+  rateLimited: boolean;
   resolved: Array<{ logId: string; masterId?: number; releaseId: number; source: string }>;
   resolvedCount: number;
   // Findings the per-finding reliability gate held back this pass (already

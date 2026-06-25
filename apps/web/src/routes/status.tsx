@@ -36,7 +36,17 @@ const CRON_SERVICE_IDS = new Set(CRON_ORDER);
 // page; the crons render after them under their own heading. Any service the snapshot
 // reports that isn't named here (and isn't a cron) is appended alphabetically, so a
 // newly-probed service surfaces without a code change.
-const SERVICE_ORDER = ["web", "db", "r2", "dns", "ssh", "onion", "hermes", "render-box"];
+const SERVICE_ORDER = [
+  "web",
+  "db",
+  "r2",
+  "dns",
+  "ssh",
+  "onion",
+  "hermes",
+  "self-deploy",
+  "render-box",
+];
 
 // A human label per known service id (falls back to the raw id for an unknown one). The
 // cron labels are keyed by their registry surface name; the fallback strips the `cron.`
@@ -49,13 +59,17 @@ const SERVICE_LABELS: Record<string, string> = {
   "cron.newsletter": "Weekly newsletter",
   "cron.note": "Editorial notes",
   "cron.observation": "Audio observations",
-  "cron.render": "Video rendering",
+  // Two DIFFERENT render signals (not the agent twice): `cron.render` is the
+  // conductor cron's last-run freshness; `render-box` is the scale-to-zero box's
+  // reachability. The labels make the distinction obvious.
+  "cron.render": "Render cron",
   db: "Database",
   dns: "DNS",
   hermes: "Hermes agent",
   onion: "Tor onion",
   r2: "Media storage",
-  "render-box": "Video rendering agent",
+  "render-box": "Render box",
+  "self-deploy": "Self-deploy",
   ssh: "SSH terminal",
   web: "Web",
 };
@@ -71,13 +85,14 @@ const SERVICE_SUBTITLES: Record<string, string> = {
   "cron.newsletter": "drafts the Friday edition",
   "cron.note": "writes each finding's editorial note",
   "cron.observation": "Fluncle's spoken field observations",
-  "cron.render": "renders each finding's video",
+  "cron.render": "the conductor's last run",
   db: "the archive's persistence",
   dns: "dig.fluncle.com",
   hermes: "the Discord chat agent",
   onion: "the archive over Tor",
   r2: "found.fluncle.com",
-  "render-box": "the scale-to-zero render box",
+  "render-box": "the scale-to-zero box's reachability",
+  "self-deploy": "the agent box rebuilds itself when its tools update",
   ssh: "rave.fluncle.com",
   web: "www.fluncle.com",
 };
@@ -333,14 +348,11 @@ function sortByOrder(services: ServiceStatusRow[], order: string[]): ServiceStat
   });
 }
 
-// The legacy single aggregate the prober used to post before the per-cron split. The
-// box no longer writes it, but the old row lingers in `service_status` until the next
-// deploy; drop it so a permanently-stale "automation" row never shows under Services.
-const LEGACY_SERVICE_IDS = new Set(["automation"]);
-
 // Split the reported services into the core list and the cron group, each in its own
 // fixed order. A cron is identified by its registry service id (`cron.*`), so the two
 // groups never overlap and a brand-new cron lands in the Automation group automatically.
+// Retired/orphaned ids (e.g. the pre-split `automation` aggregate) are already filtered
+// out upstream at `getServiceStatuses`, so they never reach here.
 function groupServices(services: ServiceStatusRow[]): {
   core: ServiceStatusRow[];
   crons: ServiceStatusRow[];
@@ -349,10 +361,6 @@ function groupServices(services: ServiceStatusRow[]): {
   const crons: ServiceStatusRow[] = [];
 
   for (const service of services) {
-    if (LEGACY_SERVICE_IDS.has(service.service)) {
-      continue;
-    }
-
     (CRON_SERVICE_IDS.has(service.service) ? crons : core).push(service);
   }
 

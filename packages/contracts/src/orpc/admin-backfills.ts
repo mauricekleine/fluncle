@@ -74,6 +74,9 @@ export const backfillDiscogs = oc
       dryRun: z.boolean(),
       nextCursor: z.string().nullable(),
       ok: z.literal(true),
+      // True when the pass STOPPED on the Discogs rate-limit circuit breaker — the
+      // CLI stops looping the cursor and the next tick resumes with a fresh window.
+      rateLimited: z.boolean(),
       resolved: z.array(DiscogsResolvedSchema),
       resolvedCount: z.number(),
       // Findings the reliability gate skipped this pass (already resolved, or
@@ -121,6 +124,9 @@ export const backfillLastfm = oc
       lovedCount: z.number(),
       nextCursor: z.string().nullable(),
       ok: z.literal(true),
+      // True when the pass STOPPED on the Last.fm rate-limit circuit breaker — the
+      // CLI stops looping the cursor and the next tick resumes with a fresh window.
+      rateLimited: z.boolean(),
       // Findings the reliability gate skipped this pass (already loved, or cooling
       // down after a recent attempt/failure) — they didn't burn the batch budget.
       skipped: z.array(z.string()),

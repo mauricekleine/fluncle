@@ -64,7 +64,24 @@ const STATUS_EVENTS_KEEP = 200;
 // bounded without a cron. It fills in over time, then rolls.
 const SERVICE_CHECK_SAMPLES_KEEP = 90;
 
-/** Every `service_status` row, newest-checked first — the page's service grid. */
+// Service ids no current prober writes — orphaned `service_status` rows left over
+// from a probe that was retired or renamed. The healthcheck cron upserts but never
+// deletes, so a retired id lingers stale forever until an operator drops the row by
+// hand. Filtering them here (the SHARED read) makes them vanish from EVERY surface
+// at once — the /status page, /api/status, the CLI `status` command, and the MCP
+// `get_status` tool — so none of them shows a permanently-stale row.
+//
+// `automation` is the known orphan: PR #177 split the single aggregate probe into one
+// row per Hermes cron (`cron.enrich`, `cron.render`, …), so the old `automation`
+// aggregate is no longer posted. Add an id here when a probe is retired; remove it
+// once the underlying `service_status` row is dropped.
+const RETIRED_SERVICE_IDS = new Set(["automation"]);
+
+/**
+ * Every CURRENT `service_status` row, newest-checked first — the page's service grid.
+ * Retired/orphaned ids (`RETIRED_SERVICE_IDS`) are filtered out at this shared read so
+ * a stale row never surfaces on any consumer (page, /api/status, CLI, MCP).
+ */
 export async function getServiceStatuses(): Promise<ServiceStatusRow[]> {
   const db = await getDb();
   const result = await db.execute(
@@ -73,7 +90,9 @@ export async function getServiceStatuses(): Promise<ServiceStatusRow[]> {
        order by checked_at desc`,
   );
 
-  return typedRows<ServiceStatusRow>(result.rows);
+  return typedRows<ServiceStatusRow>(result.rows).filter(
+    (row) => !RETIRED_SERVICE_IDS.has(row.service),
+  );
 }
 
 /** The most-recent `limit` transition rows, newest first — the page's events feed. */

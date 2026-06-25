@@ -234,7 +234,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "web_route",
     name: "web.status",
     operatorNotes:
-      "The future status.fluncle.com host points here. The fluncle-healthcheck cron POSTs its snapshots to the agent-tier record_health op that this page reads.",
+      "status.fluncle.com rewrites its root here (see the router rewrite + the subdomain.status surface). The fluncle-healthcheck cron POSTs its snapshots to the agent-tier record_health op that this page reads.",
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/status",
     url: `${SITE}/status`,
@@ -316,10 +316,11 @@ export const SURFACES: readonly Surface[] = [
     weights: { web: "tertiary" },
   },
   {
-    exposedContent: ["the planned status host — points at /status"],
+    exposedContent: ["the status host — its root rewrites to /status"],
     kind: "subdomain",
     name: "subdomain.status",
-    operatorNotes: "PLANNED. Not yet wired; the page already lives at www.fluncle.com/status.",
+    operatorNotes:
+      "Isomorphic host-rewrite in apps/web router (input/output) so SSR + hydration agree. The DNS record (status.fluncle.com → the Worker) is the remaining operator step.",
     subdomain: "status.fluncle.com",
     url: "https://status.fluncle.com",
     weights: { status: "tertiary", web: "tertiary" },
@@ -751,6 +752,18 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    command: "fluncle admin tracks social --capture",
+    exposedContent: [
+      "capture the YouTube/TikTok post URLs Postiz withholds on create → write back (--no-agent, Worker HTTP)",
+    ],
+    kind: "cron",
+    name: "cron.social-capture",
+    operatorNotes:
+      "every 10m. Pure HTTP trigger, zero LLM tokens. Agent tier (fills the public URL only — publishes nothing). The box's baked CLI predates the `--capture` verb, so the cron curls POST /api/admin/social/posts/capture directly; the Worker polls Postiz and writes back. Source: docs/agents/hermes/scripts/social-capture-sweep.sh. Probed on /status as cron.social-capture.",
+    probeConfig: { cadenceMs: 10 * MINUTE_MS, cronName: "fluncle-social-capture", kind: "cron" },
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin tracks queue",
     exposedContent: [
       "wake the rave-03 render box → render + ship one finding's video → park (conductor)",
@@ -758,7 +771,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "cron",
     name: "cron.render",
     operatorNotes:
-      "every 60m. A conductor: triggers a detached @fluncle-video render on a scale-to-zero box.ascii box (rave-03). Never posts to social (operator-tier 403). Probed on /status as service `render-box`.",
+      "every 60m. A conductor: triggers a detached @fluncle-video render on a scale-to-zero box.ascii box (rave-03). Never posts to social (operator-tier 403). Probed on /status as service `cron.render` (its own last-run freshness); the box's reachability is the SEPARATE `render-box` probe (the conductor state file).",
     probeConfig: { cadenceMs: 60 * MINUTE_MS, cronName: "fluncle-render", kind: "cron" },
     weights: { status: "hidden" },
   },

@@ -406,13 +406,18 @@ type StatusService = {
 // the two never drift. The registry records each probed surface's `/status` service
 // id in its operatorNotes (e.g. "Probed on /status as service `r2`"); we read that
 // once and pair the id with the surface's first exposedContent line as a label. Keys
-// the registry doesn't tag (the prober's own self-liveness) fall back to a constant.
+// the registry doesn't tag (the prober's own self-liveness, the box-reachability probe)
+// fall back to a constant, so they read as their own distinct signal.
 const SERVICE_PROBE_MARKER = /service `([a-z0-9-]+)`/i;
 const registryServiceLabels: Record<string, string> = (() => {
   const labels: Record<string, string> = {
     // The rave-02 healthcheck cron's self-liveness — posted only by the prober, not
     // a registry surface, so it carries no operatorNotes marker.
     hermes: "the on-box prober (rave-02 healthcheck)",
+    // The scale-to-zero render box's reachability (the conductor state file). A
+    // DIFFERENT signal from `cron.render` (the render cron's last-run freshness),
+    // so it gets its own box-centric label rather than the conductor's description.
+    "render-box": "the scale-to-zero render box's reachability",
   };
 
   for (const surface of SURFACES) {

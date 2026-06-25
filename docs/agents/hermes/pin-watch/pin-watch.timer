@@ -1,0 +1,13 @@
+[Unit]
+Description=fluncle-pin-watch timer — hourly check for a drifted baked CLI pin on main
+
+[Timer]
+# First check shortly after boot, then hourly. Persistent catches up a missed
+# window (laptop/box asleep) on the next wake. The check is a cheap no-op when
+# the pins are current, so hourly is free; a real rebuild only runs on drift.
+OnBootSec=10min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

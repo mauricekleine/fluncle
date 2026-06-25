@@ -151,6 +151,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   approve_submission: "operator",
   backfill_discogs: "admin",
   backfill_lastfm: "admin",
+  // The capture sweep is agent-allowed (admin tier): it only fills the public URL
+  // Postiz withheld on create + links the analytics release-id — it publishes nothing.
+  capture_post_urls: "admin",
   collect_private_galaxy_log: "private-session",
   context_track: "admin",
   create_edition: "admin",

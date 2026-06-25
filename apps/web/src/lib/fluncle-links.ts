@@ -40,6 +40,10 @@ export const repoUrl = "https://github.com/mauricekleine/fluncle";
 // The Galaxy game (same Worker, galaxy. subdomain): fly to every banger.
 export const galaxyUrl = "https://galaxy.fluncle.com";
 
+// The radio (same Worker, radio. subdomain): one synchronized run of Fluncle's
+// findings, each playing under the observation he logged when he got there.
+export const radioUrl = "https://radio.fluncle.com";
+
 // The Tor onion: an onionspray mirror of www.fluncle.com, so it carries the
 // same archive plus the API, RSS, and MCP — off the grid, still in the Galaxy.
 // Tor Browser advertises it via the Onion-Location pill; this is the on-site
