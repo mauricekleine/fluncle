@@ -6,15 +6,15 @@ This doc replaces the old `docs/public-surfaces-checklist.md` (a hand-maintained
 
 ## 1. The registry is the source of truth
 
-Every surface is **one entry in `@fluncle/registry`** (`packages/registry/src/index.ts`) — a pure, typed catalog (`SURFACES`) plus a few selectors over it (`surfacesByWeight`, `surfacesByKind`, `statusProbes`, `cronSurfaces`). It is data, not a route table and not a secrets inventory: internal IPs, op-paths, and credentials never go in it.
+Every surface is **one entry in `@fluncle/registry`** (`packages/registry/src/index.ts`) — a pure, typed catalog (`SURFACES`) plus a few selectors over it (`surfacesForContext`, `surfacesByWeight`, `surfacesByKind`, `statusProbes`, `cronSurfaces`). It is data, not a route table and not a secrets inventory: internal IPs, op-paths, and credentials never go in it.
 
-The point is that one entry **fans out**. Add a surface to the registry once and every consumer — the `/status` prober, the homepage dev-row, `llms.txt`, the sitemap, and this doc — picks it up from the same list instead of each hand-maintaining a drifting copy. This doc is organized around the registry's own shape: its `SurfaceKind` families (§2) and its `SurfaceWeight` ladder (§3).
+The point is that one entry **fans out**. Add a surface to the registry once and every consumer — the `/status` prober, the homepage dev-row, `llms.txt`, the sitemap, and this doc — picks it up from the same list instead of each hand-maintaining a drifting copy. This doc is organized around the registry's own shape: its `SurfaceKind` families (§2) and its per-context `SurfaceWeight` matrix (§3).
 
-Each entry carries: a stable `name` (unique, e.g. `web.log`, `api.tracks`), a `kind`, a `weight`, the address it lives at (`url` / `route` / `subdomain` / `command`, populated per kind), `exposedContent` (what it serves, in plain words), and — where applicable — `apiFormat`, a `probeConfig` (how `/status` checks it), a `discoveryUrl` (what advertises it), and `operatorNotes` (tier, caveats, where the source lives; never secrets).
+Each entry carries: a stable `name` (unique, e.g. `web.log`, `api.tracks`), a `kind`, a `weights` matrix (per-context prominence — see §3), the address it lives at (`url` / `route` / `subdomain` / `command`, populated per kind), `exposedContent` (what it serves, in plain words), and — where applicable — `apiFormat`, a `probeConfig` (how `/status` checks it), a `discoveryUrl` (what advertises it), and `operatorNotes` (tier, caveats, where the source lives; never secrets).
 
 ## 2. The surface inventory, by kind
 
-Generated from the `SURFACES` catalog. Each row is the registry `name`, its address, and what it exposes; the weight column is §3's ladder. Keep this table in step with the catalog when you add or change an entry.
+Generated from the `SURFACES` catalog. Each row is the registry `name`, its address, and what it exposes; the **Weight** column is the surface's prominence in its **home context** — the display context where it most naturally lives (web routes / subdomains / API / feeds / discovery / MCP / DNS rank in `web`; the SSH surface in `ssh`; CLI verbs in `cli`; crons in `status`). The full per-context matrix is §3. Keep this table in step with the catalog when you add or change an entry.
 
 ### Web routes — pages on `www.fluncle.com`
 
@@ -131,23 +131,95 @@ Checked by their last-run freshness (not an HTTP hit), so they carry a `cronName
 | `cron.render`       | `fluncle-render`       | every 60m           | wake the render box → render + ship one finding's video → park (a conductor; never posts to social)                                  | hidden    |
 | `cron.healthcheck`  | `fluncle-healthcheck`  | every 10m           | probe each service → Discord-ping on a status flip → POST the `/status` snapshot (`--no-agent`)                                      | hidden    |
 
-## 3. The platform-weight matrix
+## 3. The per-context weight matrix
 
-`SurfaceWeight` is the registry's "how loudly is this presented" ladder — it drives which surfaces lead the homepage dev-row and this doc, and which are real-but-quiet. `surfacesByWeight(weight)` returns each tier in catalog order.
+Weight is **per display context**, not global. A surface can be loud in one place and quiet (or absent) in another: the Galaxy game leads the web homepage but sits mid-menu in the SSH terminal; a CLI verb has no web presence at all. So `weight` is a sparse matrix — `weights: Partial<Record<SurfaceContext, SurfaceWeight>>` — keyed by the surface that does the displaying.
 
-- **`primary`** — the loud front doors; these lead the homepage dev-row and this inventory. `web.home`, `web.log`, `web.mixtapes`, `web.galaxy`, `subdomain.galaxy`, `api.tracks`, `feed.rss`, `discovery.llms`, `mcp.server`, `ssh.rave`, `cli.recent`.
-- **`secondary`** — real, advertised, but not headline. The rest of the public web routes (`web.stories`, `web.about`, `web.newsletter`, `web.docs`, `web.status`, `web.radio`), `subdomain.radio`, most of the API (`api.track`, `api.tracks.random`, `api.mixtapes`, `api.search`, `api.submissions`, `api.newsletter`), the secondary feeds (`feed.atom`, `feed.json`, `feed.podcast`), the secondary discovery maps (`discovery.sitemap`, `discovery.llms-full`, `discovery.openapi`), the public CLI verbs (`cli.mixtapes`, `cli.open`, `cli.random`, `cli.subscribe`, `cli.submit`), and the one operator-visible cron `cron.newsletter`.
-- **`tertiary`** — low-level details and infrastructure surfaces: `web.privacy`, the infra subdomains (`subdomain.found`, `subdomain.dig`, `subdomain.status`, `subdomain.onion`), the niche API endpoints (`api.stories`, `api.radio.now-playing`, `api.health`), `feed.calendar`, the well-known discovery files (`discovery.robots`, `discovery.mcp-server-card`, `discovery.api-catalog`, `discovery.agent-skills`), `dns.zone`, and the meta CLI commands (`cli.tracks-get`, `cli.about`, `cli.version`).
-- **`hidden`** — real and registered but deliberately not advertised (operator/agent-only): `cli.admin` and every cron except the newsletter (`cron.enrich`, `cron.context-note`, `cron.note`, `cron.observation`, `cron.backfill`, `cron.render`, `cron.healthcheck`).
+A **display context** is one of the surfaces that itself acts as a menu / nav / entry point ranking _other_ surfaces:
+
+- **`web`** — the `www.fluncle.com` homepage nav + dev-row (the browser front door). Ranks the human-web surfaces a visitor browses to.
+- **`ssh`** — the rave terminal menu (`ssh rave.fluncle.com`, the keyboard front door). Ranks what the TUI offers and its deep-link one-shots.
+- **`cli`** — the `fluncle` CLI's own command surface (`fluncle --help` / the about screen). Ranks the CLI verbs against each other.
+- **`status`** — the `/status` health dashboard + the MCP `get_status` summary. Ranks the probed services by how prominently they head the board.
+
+The weight ladder within a context is unchanged — **`primary`** (the loud front doors that lead that context), **`secondary`** (real, advertised, not headline), **`tertiary`** (low-level / infrastructure), **`hidden`** (registered but deliberately not advertised there, operator/agent-only). A **blank cell means the surface is not displayed in that context** (an absent key in the matrix).
+
+`surfacesForContext(ctx)` returns the surfaces a context displays, sorted loudest-first; `surfacesByWeight(ctx, weight)` returns one tier within a context.
+
+| Surface                     | `web`     | `ssh`     | `cli`     | `status`  |
+| --------------------------- | --------- | --------- | --------- | --------- |
+| `web.home`                  | primary   |           |           |           |
+| `web.log`                   | primary   | secondary |           |           |
+| `web.mixtapes`              | primary   | secondary |           |           |
+| `web.galaxy`                | primary   | secondary |           |           |
+| `web.stories`               | secondary |           |           |           |
+| `web.about`                 | secondary | tertiary  |           |           |
+| `web.newsletter`            | secondary |           |           |           |
+| `web.docs`                  | secondary |           |           |           |
+| `web.status`                | secondary |           |           | primary   |
+| `web.radio`                 | secondary |           |           |           |
+| `web.privacy`               | tertiary  |           |           |           |
+| `subdomain.galaxy`          | primary   | secondary |           |           |
+| `subdomain.radio`           | secondary |           |           |           |
+| `subdomain.found`           | tertiary  |           |           | tertiary  |
+| `subdomain.dig`             | tertiary  |           |           |           |
+| `subdomain.status`          | tertiary  |           |           | tertiary  |
+| `subdomain.onion`           | tertiary  |           |           | tertiary  |
+| `api.tracks`                | primary   |           |           | secondary |
+| `api.track`                 | secondary |           |           |           |
+| `api.tracks.random`         | secondary |           |           |           |
+| `api.mixtapes`              | secondary |           |           |           |
+| `api.search`                | secondary |           |           |           |
+| `api.submissions`           | secondary |           |           |           |
+| `api.newsletter`            | secondary |           |           |           |
+| `api.stories`               | tertiary  |           |           |           |
+| `api.radio.now-playing`     | tertiary  |           |           |           |
+| `api.health`                | tertiary  |           |           | tertiary  |
+| `feed.rss`                  | primary   |           |           |           |
+| `feed.atom`                 | secondary |           |           |           |
+| `feed.json`                 | secondary |           |           |           |
+| `feed.podcast`              | secondary |           |           |           |
+| `feed.calendar`             | tertiary  |           |           |           |
+| `discovery.llms`            | primary   |           |           |           |
+| `discovery.sitemap`         | secondary |           |           |           |
+| `discovery.llms-full`       | secondary |           |           |           |
+| `discovery.openapi`         | secondary |           |           |           |
+| `discovery.robots`          | tertiary  |           |           |           |
+| `discovery.mcp-server-card` | tertiary  |           |           |           |
+| `discovery.api-catalog`     | tertiary  |           |           |           |
+| `discovery.agent-skills`    | tertiary  |           |           |           |
+| `mcp.server`                | primary   |           |           |           |
+| `dns.zone`                  | tertiary  |           |           | tertiary  |
+| `ssh.rave`                  | primary   | primary   |           | secondary |
+| `cli.recent`                | tertiary  |           | primary   |           |
+| `cli.mixtapes`              |           |           | secondary |           |
+| `cli.open`                  |           |           | secondary |           |
+| `cli.random`                |           |           | secondary |           |
+| `cli.subscribe`             |           |           | secondary |           |
+| `cli.submit`                |           |           | secondary |           |
+| `cli.tracks-get`            |           |           | tertiary  |           |
+| `cli.about`                 |           |           | tertiary  |           |
+| `cli.version`               |           |           | tertiary  |           |
+| `cli.admin`                 |           |           | hidden    |           |
+| `cron.newsletter`           |           |           |           | secondary |
+| `cron.enrich`               |           |           |           | hidden    |
+| `cron.context-note`         |           |           |           | hidden    |
+| `cron.note`                 |           |           |           | hidden    |
+| `cron.observation`          |           |           |           | hidden    |
+| `cron.backfill`             |           |           |           | hidden    |
+| `cron.render`               |           |           |           | hidden    |
+| `cron.healthcheck`          |           |           |           | hidden    |
+
+A surface is operator/agent-only where its only display weight is `hidden` (`cli.admin` in `cli`; every cron but the newsletter in `status`) — registered (and probeable) without being advertised.
 
 ## 4. Adding a surface — the checklist
 
 When Fluncle gains a new reachable surface, the work is small and the fan-out is automatic:
 
-1. **Add the registry entry.** Append one `Surface` to `SURFACES` in `packages/registry/src/index.ts`: a unique `name`, its `kind`, its `weight`, its address (`url` / `route` / `subdomain` / `command`), `exposedContent`, and — where they apply — `apiFormat`, a `probeConfig`, a `discoveryUrl`, and `operatorNotes`. Name it per the cross-surface `verb_noun` convention ([docs/naming-conventions.md](./naming-conventions.md)) so one operation reads the same across CLI / API / MCP / SSH.
+1. **Add the registry entry.** Append one `Surface` to `SURFACES` in `packages/registry/src/index.ts`: a unique `name`, its `kind`, its per-context `weights` matrix (a weight for each context that displays it — see §3; omit a context to leave it absent there), its address (`url` / `route` / `subdomain` / `command`), `exposedContent`, and — where they apply — `apiFormat`, a `probeConfig`, a `discoveryUrl`, and `operatorNotes`. Name it per the cross-surface `verb_noun` convention ([docs/naming-conventions.md](./naming-conventions.md)) so one operation reads the same across CLI / API / MCP / SSH.
 2. **It lights up `/status`.** If the entry carries a `probeConfig`, the `fluncle-healthcheck` cron walks it (`statusProbes()`) and it appears on the health dashboard — an HTTP surface is GET-probed, a `cron` surface is checked by its last-run freshness.
-3. **It lights up the homepage dev-row.** A `primary`/`secondary` entry (`surfacesByWeight`) joins the row of surfaces the homepage advertises, in its weight tier.
+3. **It lights up a context's menu.** Give it a weight in the contexts that should show it: `weights.web` joins the homepage dev-row, `weights.ssh` the rave terminal menu, `weights.cli` the CLI help surface, `weights.status` the health board's ranking. `surfacesForContext(ctx)` returns that context's surfaces loudest-first.
 4. **It lights up `llms.txt` and the sitemap.** A public web route / feed / discovery map flows into the crawler- and LLM-facing maps so agents and search engines find it.
-5. **It lights up this doc.** Add the row to the matching kind table in §2 and place it in the §3 weight tier. The registry is the source of truth; this doc tracks it.
+5. **It lights up this doc.** Add the row to the matching kind table in §2 (its home-context weight) and to the per-context matrix in §3. The registry is the source of truth; this doc tracks it.
 
-If a surface is operator/agent-only, give it `weight: "hidden"` so it stays registered (and probeable) without being advertised. If it's a non-CRUD action or a new command, run it past the naming convention's "how to name a new feature" checklist before you pick the `name`.
+If a surface is operator/agent-only, give it only a `hidden` weight in the relevant context (e.g. `weights: { cli: "hidden" }`) so it stays registered (and probeable) without being advertised. If it's a non-CRUD action or a new command, run it past the naming convention's "how to name a new feature" checklist before you pick the `name`.
