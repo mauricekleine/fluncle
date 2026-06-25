@@ -47,6 +47,10 @@ const APPROVED_VERBS = new Set<string>([
   // The convention's named non-CRUD action set (§3, §6).
   "authorize",
   "backfill",
+  // `capture` (recover the public YouTube/TikTok post URLs Postiz withholds on
+  // create, building each from the platform's native content id) — added
+  // deliberately with the `capture_post_urls` sweep (docs/naming-conventions.md §6).
+  "capture",
   "distribute",
   "draft",
   "enrich",
