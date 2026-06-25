@@ -17,6 +17,7 @@ import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as PodcastDotxmlRouteImport } from './routes/podcast[.]xml'
 import { Route as GalaxyRouteImport } from './routes/galaxy'
 import { Route as FeedDotjsonRouteImport } from './routes/feed[.]json'
+import { Route as EarthRouteImport } from './routes/earth'
 import { Route as DocsRouteImport } from './routes/docs'
 import { Route as CalendarDoticsRouteImport } from './routes/calendar[.]ics'
 import { Route as AtomDotxmlRouteImport } from './routes/atom[.]xml'
@@ -192,6 +193,11 @@ const GalaxyRoute = GalaxyRouteImport.update({
 const FeedDotjsonRoute = FeedDotjsonRouteImport.update({
   id: '/feed.json',
   path: '/feed.json',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EarthRoute = EarthRouteImport.update({
+  id: '/earth',
+  path: '/earth',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DocsRoute = DocsRouteImport.update({
@@ -935,6 +941,7 @@ export interface FileRoutesByFullPath {
   '/atom.xml': typeof AtomDotxmlRoute
   '/calendar.ics': typeof CalendarDoticsRoute
   '/docs': typeof DocsRouteWithChildren
+  '/earth': typeof EarthRoute
   '/feed.json': typeof FeedDotjsonRoute
   '/galaxy': typeof GalaxyRoute
   '/podcast.xml': typeof PodcastDotxmlRoute
@@ -1079,6 +1086,7 @@ export interface FileRoutesByTo {
   '/account': typeof AccountRoute
   '/atom.xml': typeof AtomDotxmlRoute
   '/calendar.ics': typeof CalendarDoticsRoute
+  '/earth': typeof EarthRoute
   '/feed.json': typeof FeedDotjsonRoute
   '/galaxy': typeof GalaxyRoute
   '/podcast.xml': typeof PodcastDotxmlRoute
@@ -1226,6 +1234,7 @@ export interface FileRoutesById {
   '/atom.xml': typeof AtomDotxmlRoute
   '/calendar.ics': typeof CalendarDoticsRoute
   '/docs': typeof DocsRouteWithChildren
+  '/earth': typeof EarthRoute
   '/feed.json': typeof FeedDotjsonRoute
   '/galaxy': typeof GalaxyRoute
   '/podcast.xml': typeof PodcastDotxmlRoute
@@ -1374,6 +1383,7 @@ export interface FileRouteTypes {
     | '/atom.xml'
     | '/calendar.ics'
     | '/docs'
+    | '/earth'
     | '/feed.json'
     | '/galaxy'
     | '/podcast.xml'
@@ -1518,6 +1528,7 @@ export interface FileRouteTypes {
     | '/account'
     | '/atom.xml'
     | '/calendar.ics'
+    | '/earth'
     | '/feed.json'
     | '/galaxy'
     | '/podcast.xml'
@@ -1664,6 +1675,7 @@ export interface FileRouteTypes {
     | '/atom.xml'
     | '/calendar.ics'
     | '/docs'
+    | '/earth'
     | '/feed.json'
     | '/galaxy'
     | '/podcast.xml'
@@ -1811,6 +1823,7 @@ export interface RootRouteChildren {
   AtomDotxmlRoute: typeof AtomDotxmlRoute
   CalendarDoticsRoute: typeof CalendarDoticsRoute
   DocsRoute: typeof DocsRouteWithChildren
+  EarthRoute: typeof EarthRoute
   FeedDotjsonRoute: typeof FeedDotjsonRoute
   GalaxyRoute: typeof GalaxyRoute
   PodcastDotxmlRoute: typeof PodcastDotxmlRoute
@@ -1949,6 +1962,13 @@ declare module '@tanstack/react-router' {
       path: '/feed.json'
       fullPath: '/feed.json'
       preLoaderRoute: typeof FeedDotjsonRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/earth': {
+      id: '/earth'
+      path: '/earth'
+      fullPath: '/earth'
+      preLoaderRoute: typeof EarthRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/docs': {
@@ -3299,6 +3319,7 @@ const rootRouteChildren: RootRouteChildren = {
   AtomDotxmlRoute: AtomDotxmlRoute,
   CalendarDoticsRoute: CalendarDoticsRoute,
   DocsRoute: DocsRouteWithChildren,
+  EarthRoute: EarthRoute,
   FeedDotjsonRoute: FeedDotjsonRoute,
   GalaxyRoute: GalaxyRoute,
   PodcastDotxmlRoute: PodcastDotxmlRoute,
