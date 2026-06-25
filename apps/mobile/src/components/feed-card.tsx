@@ -1,7 +1,7 @@
 // One finding, full-screen (RFC Unit 2). Per-cell player, the media ladder, the
 // native overlay (a right action rail + bottom caption), the cover-card eclipse
 // drift, and the background-pause rule. The de-risk spike target.
-import { memo, type ReactNode, useCallback, useEffect, useMemo } from "react";
+import { memo, type ReactNode, useCallback, useEffect, useId, useMemo } from "react";
 import {
   Linking,
   Pressable,
@@ -25,6 +25,7 @@ import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
+import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { type TrackListItem } from "@fluncle/contracts";
 import { resolveCardMedia } from "@/lib/media";
 import { useBackgroundPause } from "@/audio/session";
@@ -93,6 +94,23 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
       observation.pause();
     }
   }, [active, observation, observationStatus.playing]);
+
+  // Hold the wake lock while this card is the one actually making sound (an
+  // audible video, or Fluncle's observation) so a long clip never lets the
+  // screen sleep mid-listen. A stable per-card tag keeps the calls idempotent;
+  // the cleanup always releases, so locks can't leak on pause/scroll/unmount.
+  const keepAwakeTag = useId();
+  const audibleVideo = active && media.kind === "video" && soundOn && !observing;
+  const playing = observing || audibleVideo;
+  useEffect(() => {
+    if (!playing) {
+      return;
+    }
+    void activateKeepAwakeAsync(keepAwakeTag);
+    return () => {
+      void deactivateKeepAwake(keepAwakeTag);
+    };
+  }, [keepAwakeTag, playing]);
 
   const stopObservation = useCallback(() => {
     observation.pause();
