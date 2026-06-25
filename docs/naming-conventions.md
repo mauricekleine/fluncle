@@ -25,6 +25,7 @@ The `fluncle` tree, grouped as the root help presents it (Listen / Share / Meta)
 | `admin tracks`                       | `publish` (hidden flat/alias `add`)                                                                | **noun → verb**                                                       | publish a track from a Spotify URL                                                                         |
 | `admin tracks`                       | `queue` (hidden flat alias `queue`)                                                                | bare noun (the video render queue)                                    | `--has-context`/`--has-observation` narrow it                                                              |
 | `admin tracks`                       | `enrich --queue`, `observe --queue`, `context --queue`                                             | **verb + `--queue` view flag**                                        | worklist views (no `*-queue` commands, §6.4); enrich's sweep is the on-box `fluncle-enrich` cron           |
+| `admin tracks`                       | `social --capture`                                                                                 | **verb + `--capture` sweep flag**                                     | the collection-level URL-capture sweep (`capture_post_urls`); the on-box capture cron drains it            |
 | `admin tracks`                       | `vehicles` (hidden flat alias `vehicles`)                                                          | bare plural noun                                                      | the style ledger                                                                                           |
 | `admin tracks`                       | `update`, `video`, `draft`, `social`, `preview` (alias `preview-archive`), `observe`, `context`    | **noun → verb/noun-as-verb mix**                                      | `update`/`observe`/`context` are verbs; `video`/`draft`/`social` are nouns standing in for an implied verb |
 | `admin mixtapes`                     | `create`, `update`, `members`, `publish`, `delete`, `list`, `get`, `distribute`, `publish-youtube` | **noun → verb** mostly; `publish-youtube` is a dash compound (legacy) |                                                                                                            |
@@ -68,6 +69,7 @@ Admin operations (cookie-or-bearer, **not in the public OpenAPI spec**), express
 | Show per-platform social status                     | `GET /admin/tracks/{trackId}/social`                                                                       |
 | Update one platform's status                        | `PATCH /admin/tracks/{trackId}/social/{platform}`                                                          |
 | Push a draft to a platform                          | `POST /admin/tracks/{trackId}/social/{platform}/draft`                                                     |
+| Capture missing post URLs (the sweep)               | `POST /admin/social/posts/capture` (`capture_post_urls`; collection-level action, no track id)             |
 | Record an observation                               | `POST /admin/tracks/{trackId}/observe` (**verb segment on a REST path**)                                   |
 | Archive a preview                                   | `POST /admin/tracks/{trackId}/preview` (single-word action; `…/preview-archive` retired)                   |
 | List/create mixtapes                                | `GET/POST /admin/mixtapes`                                                                                 |
@@ -131,7 +133,7 @@ The same publish action is `Push draft to inbox` (board) / `admin track draft` (
 
 All three share the same spine: **one canonical operation name per operation**, written `verb_noun` in a registry, from which each surface's name is _derived by a fixed rule_. They differ in how aggressively they restructure the CLI and how they handle the machine-noun/voice-noun split.
 
-The canonical verb set is small and closed: `list`, `get`, `search`, `submit`, `subscribe`, `create`, `update`, `delete`, `publish`, plus a named-action set for non-CRUD operations (`enrich`, `observe`, `render`, `draft`, `distribute`, `backfill`, `authorize`, `requeue`, `purge`, `record`). The canonical noun is the **machine noun** (`track`, `mixtape`, `submission`, `newsletter`, `preview`, …), singular.
+The canonical verb set is small and closed: `list`, `get`, `search`, `submit`, `subscribe`, `create`, `update`, `delete`, `publish`, plus a named-action set for non-CRUD operations (`enrich`, `observe`, `render`, `draft`, `distribute`, `backfill`, `authorize`, `requeue`, `purge`, `record`, `capture`). The canonical noun is the **machine noun** (`track`, `mixtape`, `submission`, `newsletter`, `preview`, `post`, …), singular.
 
 ### Convention A — "REST everywhere" (noun → verb, plural resources)
 
@@ -218,7 +220,7 @@ So the convention's job at the boundary is narrow: make every _machine_ name der
 
 When you add a public operation — a CLI command, an API route, an MCP tool, an SSH deep link, or an admin action — name it once, then derive:
 
-1. **Pick the canonical op:** `verb_noun`, where `verb` is in the closed set (`list`, `get`, `search`, `submit`, `subscribe`, `create`, `update`, `delete`, `publish`, or a named non-CRUD action like `enrich`/`observe`/`draft`/`distribute`/`finalize`/`requeue`/`purge`) and `noun` is the singular machine noun (`track`, `mixtape`, `submission`, `newsletter`, `preview`). Add it to the registry.
+1. **Pick the canonical op:** `verb_noun`, where `verb` is in the closed set (`list`, `get`, `search`, `submit`, `subscribe`, `create`, `update`, `delete`, `publish`, or a named non-CRUD action like `enrich`/`observe`/`draft`/`distribute`/`finalize`/`requeue`/`purge`/`capture`) and `noun` is the singular machine noun (`track`, `mixtape`, `submission`, `newsletter`, `preview`, `post`). Add it to the registry.
 2. **Derive the names, don't invent them:**
    - MCP/WebMCP tool = the op verbatim, `snake_case` (`enrich_track`). Mirror server `mcp.ts` and browser `webmcp.ts` together.
    - OpenAPI `operationId` = the op, `camelCase` (`enrichTrack`).

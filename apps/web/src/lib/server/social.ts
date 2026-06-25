@@ -130,25 +130,75 @@ export async function upsertPost(
 
 /**
  * Whether any finding is in the "pushed but no URL" state for a platform — a row
- * with a live (published/scheduled) status but a still-null `url`. The YouTube
- * push gate reads this: Postiz doesn't return the live URL on create, so we
- * resolve it asynchronously from `/missing` by matching the newest published
- * item. Allowing a second push while one is still awaiting its URL would make
- * that newest-match ambiguous, so the gate keeps exactly one YouTube upload
- * pending at a time.
+ * with a live status but a still-null `url`. The push gate reads this: Postiz
+ * doesn't return the live URL on create, so we resolve it asynchronously from
+ * `/missing` by matching the newest item per platform. Allowing a second push
+ * while one is still awaiting its URL would make that newest-match ambiguous, so
+ * the gate keeps exactly one upload pending at a time per platform.
+ *
+ * The "live" statuses differ by platform: a YouTube Short posts DIRECTLY
+ * (`published`/`scheduled`), while a TikTok push lands as an inbox `draft` the
+ * operator finishes in-app. Both can have a recoverable native id on Postiz's
+ * `/missing` before their `url` is captured, so TikTok's `draft` counts here too —
+ * the capture sweep flips a captured TikTok `draft` to `published`.
  */
 export async function hasPostAwaitingUrl(platform: string): Promise<boolean> {
+  const liveStatuses = platform === "tiktok" ? ["draft"] : ["published", "scheduled"];
+  const placeholders = liveStatuses.map(() => "?").join(", ");
   const db = await getDb();
   const result = await db.execute({
-    args: [platform],
+    args: [platform, ...liveStatuses],
     sql: `select 1 from social_posts
           where platform = ?
-            and status in ('published', 'scheduled')
+            and status in (${placeholders})
             and url is null
           limit 1`,
   });
 
   return result.rows.length > 0;
+}
+
+/** A post the capture sweep should poll: it has a Postiz post id but no captured
+ *  `url` yet. The sweep builds the permalink from `/missing` and records it. */
+export type PostAwaitingUrl = {
+  externalId: string;
+  platform: string;
+  status: string;
+  trackId: string;
+};
+
+/**
+ * Every post still awaiting its public URL on an auto-capturable platform —
+ * `youtube`/`tiktok` rows with a Postiz post id (`external_id`) but a null `url`,
+ * in a status the capture sweep handles (`published`/`draft`). The sweep polls
+ * Postiz's `/missing` for each, builds the permalink from the native id, records
+ * it, links the Postiz release-id, and flips a captured TikTok `draft` to
+ * `published`. Oldest first so the backlog drains in order.
+ */
+export async function listPostsAwaitingUrl(limit: number): Promise<PostAwaitingUrl[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [limit],
+    sql: `select track_id, platform, status, external_id from social_posts
+          where platform in ('youtube', 'tiktok')
+            and url is null
+            and external_id is not null
+            and status in ('published', 'draft')
+          order by created_at asc
+          limit ?`,
+  });
+
+  return typedRows<{
+    external_id: string;
+    platform: string;
+    status: string;
+    track_id: string;
+  }>(result.rows).map((row) => ({
+    externalId: row.external_id,
+    platform: row.platform,
+    status: row.status,
+    trackId: row.track_id,
+  }));
 }
 
 /**

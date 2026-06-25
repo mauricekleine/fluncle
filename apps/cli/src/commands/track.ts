@@ -245,6 +245,29 @@ export async function trackSocialShowCommand(idOrLogId: string): Promise<TrackSo
   return adminApiGet(`/api/admin/tracks/${encodeURIComponent(idOrLogId)}/social`);
 }
 
+// `fluncle admin tracks social --capture` — the capture SWEEP. Drains the "pushed
+// but no URL" backlog across YouTube + TikTok: the Worker polls Postiz's `/missing`
+// for each pending post, builds the permalink from the platform's native content
+// id, records it, links the Postiz release-id for analytics, and flips a captured
+// TikTok draft to published. Agent-allowed (it only fills the public URL Postiz
+// withheld on create — it publishes nothing). Idempotent and best-effort; the box
+// capture cron drives it. The CLI stays a thin relay.
+export type TrackSocialCaptureResult = {
+  captured: Array<{ platform: string; trackId: string; url: string }>;
+  ok: true;
+  polled: number;
+};
+
+export async function trackSocialCaptureCommand(limit?: number): Promise<TrackSocialCaptureResult> {
+  // A JSON body (even when empty) is required: the oRPC handler builds its input
+  // from the request body, and a bodyless POST deserializes to `undefined` (a 400
+  // `invalid_request`). `limit` rides in the body, the CLI's relay shape for the
+  // other JSON admin POSTs.
+  const body = limit === undefined ? {} : { limit: String(limit) };
+
+  return adminApiPost<TrackSocialCaptureResult>(`/api/admin/social/posts/capture`, body);
+}
+
 export async function trackUpdateCommand(
   trackId: string,
   options: TrackUpdateOptions,

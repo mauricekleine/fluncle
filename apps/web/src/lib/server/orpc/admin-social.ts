@@ -16,17 +16,24 @@
 //     also passes the push gate (`hasPostAwaitingUrl("youtube")` → 409
 //     `youtube_url_pending`): exactly one YouTube upload may be pending its URL,
 //     so the post-push `/missing` newest-match stays unambiguous. On a successful
-//     push the live YouTube URL is auto-resolved (`resolveYouTubeUrl`) and
-//     recorded (`recordPostUrl`); a miss leaves `url` null for the operator's
-//     manual "Update URL" fallback.
+//     push the live URL is auto-resolved (`resolveSocialUrl` — built from the
+//     platform's native content id) and recorded (`recordPostUrl`), and the Postiz
+//     release-id is linked for analytics; a miss leaves `url` null for the capture
+//     sweep (below) or the operator's manual "Update URL" fallback.
+//   - `capture_post_urls` — admin tier: the polling SWEEP. Drains the "pushed but
+//     no URL" backlog across youtube + tiktok by polling Postiz's `/missing`,
+//     building each permalink from the native id, recording it, linking the
+//     release-id, and flipping a captured TikTok `draft` → `published`. The box
+//     capture cron drives this.
 
 import { ORPCError } from "@orpc/server";
 import { trackMedia, videoAudioStripped } from "../../media";
 import { readCaptions } from "../captions";
 import { adminAuth, operatorGuard } from "../orpc-auth";
-import { pushTikTokDraft, pushYouTubeShort, resolveYouTubeUrl } from "../postiz";
+import { postizSetReleaseId, pushTikTokDraft, pushYouTubeShort, resolveSocialUrl } from "../postiz";
 import {
   hasPostAwaitingUrl,
+  listPostsAwaitingUrl,
   listSocialPosts,
   recordPostUrl,
   type SocialStatusUpdate,
@@ -34,7 +41,7 @@ import {
   upsertPost,
 } from "../social";
 import { getTrackByIdOrLogId } from "../tracks";
-import { apiFault, type Implementer } from "./_shared";
+import { apiFault, parseLimit, type Implementer } from "./_shared";
 
 // Ported verbatim from the live draft route. TikTok is the SELF_ONLY inbox draft
 // (agent-allowed); YouTube is the direct PUBLIC upload (operator only).
@@ -190,7 +197,7 @@ export function adminSocialHandlers(os: Implementer) {
             data: {
               apiCode: "youtube_url_pending",
               apiMessage:
-                "A YouTube post is still awaiting its URL — record it first (or run the URL resolver), then push the next one.",
+                "A YouTube post is still awaiting its URL — record it first, then push the next one.",
             },
             message: "A YouTube post is still awaiting its URL — record it first.",
             status: 409,
@@ -261,16 +268,19 @@ export function adminSocialHandlers(os: Implementer) {
         await upsertPost(track.trackId, platform, status, postId);
 
         // Auto-record the live YouTube URL: Postiz returns only its own postId on
-        // create, so poll `/missing` (the publish is async) and store the newest
-        // YouTube permalink on the row — surfaced via `list_track_social`. A
-        // side-effect, not part of the draft envelope. Best-effort and coverless:
-        // on a miss the url stays null and the operator's manual "Update URL" is
-        // the fallback (and the push gate then holds the next push until it's set).
+        // create, so poll `/missing` (the publish is async) and BUILD the permalink
+        // from the platform's native content id (the `/missing` `url` is a cover
+        // thumbnail, not a permalink). Store it on the row — surfaced via
+        // `list_track_social` — and link the Postiz release-id for analytics. A
+        // side-effect, not part of the draft envelope. Best-effort: on a miss the
+        // url stays null and the capture sweep (or the operator's manual "Update
+        // URL") is the fallback (and the push gate holds the next push until set).
         if (platform === "youtube") {
-          const resolved = await resolveYouTubeUrl(postId);
+          const resolved = await resolveSocialUrl(postId, platform);
 
           if (resolved) {
-            await recordPostUrl(track.trackId, platform, resolved);
+            await recordPostUrl(track.trackId, platform, resolved.url);
+            await postizSetReleaseId(postId, resolved.nativeId);
           }
         }
 
@@ -286,7 +296,66 @@ export function adminSocialHandlers(os: Implementer) {
       }
     });
 
+  // POST /admin/social/posts/capture — admin tier (the on-box capture cron is
+  // agent-allowed: it only fills the public `url` Postiz withheld on create and
+  // links the analytics release-id; it never publishes anything new). The polling
+  // SWEEP that drains the "pushed but no URL" backlog: select every youtube/tiktok
+  // post with a Postiz id but no captured `url` (status published/draft), poll
+  // Postiz's `/missing` for each, BUILD the permalink from the native content id,
+  // record it (`recordPostUrl` — fill-empty-only, never clobbers a manual url),
+  // link the Postiz release-id, and flip a captured TikTok `draft` → `published`.
+  // The draft handler already attempts an inline resolve on a fresh YouTube push;
+  // this catches the misses (publish lag) and every TikTok the operator finished
+  // in-app. Best-effort: a post whose `/missing` hasn't resolved is simply skipped
+  // (it stays pending for the next sweep), and `resolveSocialUrl`/`postizSetReleaseId`
+  // degrade on a non-2xx rather than throw, so one lagging post never burns the batch.
+  const capturePostUrlsHandler = os.capture_post_urls.use(adminAuth).handler(async ({ input }) => {
+    try {
+      const limit = parseLimit((input as { limit?: string }).limit, 25, 100);
+      const pending = await listPostsAwaitingUrl(limit);
+
+      const captured: Array<{ platform: string; trackId: string; url: string }> = [];
+      let polled = 0;
+
+      for (const post of pending) {
+        polled += 1;
+
+        const resolved = await resolveSocialUrl(post.externalId, post.platform);
+
+        if (!resolved) {
+          continue;
+        }
+
+        // Fill the empty url (never clobbers a manual entry). Skip the side-effects
+        // if there was no row to fill — the post vanished or was filled meanwhile.
+        const recorded = await recordPostUrl(post.trackId, post.platform, resolved.url);
+
+        if (!recorded) {
+          continue;
+        }
+
+        await postizSetReleaseId(post.externalId, resolved.nativeId);
+
+        // A captured TikTok draft has now reached the app and gone live (the
+        // operator finished it in-app), so flip draft → published with its url.
+        if (post.platform === "tiktok" && post.status === "draft") {
+          await updateSocialStatus(post.trackId, post.platform, {
+            status: "published",
+            url: resolved.url,
+          });
+        }
+
+        captured.push({ platform: post.platform, trackId: post.trackId, url: resolved.url });
+      }
+
+      return { captured, ok: true as const, polled };
+    } catch (error) {
+      throw toFault(error);
+    }
+  });
+
   return {
+    capture_post_urls: capturePostUrlsHandler,
     draft_track_social: draftTrackSocialHandler,
     list_track_social: listTrackSocialHandler,
     update_track_social: updateTrackSocialHandler,

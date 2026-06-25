@@ -89,7 +89,9 @@ type TrackDraftOptions = {
 };
 
 type TrackSocialOptions = {
+  capture?: boolean;
   json: boolean;
+  limit?: string;
   platform?: string;
   scheduledFor?: string;
   status?: string;
@@ -585,6 +587,12 @@ function addAdminCommands(program: Command): void {
     .command("social")
     .description("Show or update a track's per-platform publication status")
     .argument("[idOrLogId]")
+    .option(
+      "--capture",
+      "Sweep: capture missing YouTube/TikTok post URLs from Postiz (no id needed)",
+      false,
+    )
+    .option("--limit <limit>", "Max pending posts to poll with --capture", "25")
     .option("--json", "Print JSON", false)
     .option("--platform <platform>", "Publishing platform")
     .option("--scheduled-for <date>", "Scheduled publication date")
@@ -592,6 +600,14 @@ function addAdminCommands(program: Command): void {
     .option("--url <url>", "Published post URL")
     .allowExcessArguments()
     .action(async (idOrLogId: string | undefined, options: TrackSocialOptions) => {
+      // `--capture` is the collection-level sweep (no track id) — the box capture
+      // cron's worklist. Otherwise show/update one track's per-platform state.
+      if (options.capture) {
+        const { trackSocialCaptureCommand } = await import("./commands/track");
+        await runTrackSocialCapture(options, trackSocialCaptureCommand);
+        return;
+      }
+
       const { trackSocialShowCommand, trackSocialUpdateCommand } = await import("./commands/track");
       await runTrackSocial(idOrLogId, options, trackSocialShowCommand, trackSocialUpdateCommand);
     });
@@ -1507,6 +1523,35 @@ async function runTrackSocial(
   }
 
   console.log(`${platform} → ${options.status} for ${result.trackId}`);
+}
+
+async function runTrackSocialCapture(
+  options: TrackSocialOptions,
+  trackSocialCaptureCommand: typeof import("./commands/track").trackSocialCaptureCommand,
+): Promise<void> {
+  const limit = options.limit === undefined ? undefined : Number.parseInt(options.limit, 10);
+
+  if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+    throw new Error("--limit must be a positive integer");
+  }
+
+  const result = await trackSocialCaptureCommand(limit);
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  if (result.captured.length === 0) {
+    console.log(`Polled ${result.polled} pending post(s); nothing new to capture.`);
+    return;
+  }
+
+  console.log(`Captured ${result.captured.length} post URL(s) from ${result.polled} polled:`);
+
+  for (const post of result.captured) {
+    console.log(`  ${post.platform}: ${post.url}`);
+  }
 }
 
 async function runTrackGet(

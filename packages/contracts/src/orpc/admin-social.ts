@@ -12,6 +12,9 @@
 //     `tiktok` (a SELF_ONLY inbox draft) is agent-allowed. The handler reads
 //     `context.role` to reproduce that exact branch (a youtube push by the agent
 //     is a 403, a tiktok push is allowed).
+//   - `capture_post_urls` — admin tier: the polling SWEEP that captures the public
+//     YouTube/TikTok post URLs Postiz withholds on create (built from the native
+//     content id on `/missing`) and links each release-id for analytics.
 //
 // Inputs stay LOOSE/passthrough by design — the live routes narrow `unknown`
 // in-handler and emit their own codes (`bad_status`/`url_required`/
@@ -114,8 +117,38 @@ export const draftTrackSocial = oc
     }),
   );
 
+/**
+ * `capture_post_urls` → `POST /admin/social/posts/capture` (operationId
+ * `capturePostUrls`).
+ *
+ * Admin tier (the on-box capture cron is agent-allowed — it only fills the public
+ * `url` Postiz withheld on create and links the analytics release-id; it publishes
+ * nothing). The polling SWEEP: select every youtube/tiktok post with a Postiz id
+ * but no captured `url` (status published/draft), poll Postiz's `/missing`, build
+ * each permalink from the platform's native content id, record it, link the
+ * release-id, and flip a captured TikTok `draft` → `published`. LOOSE body — the
+ * handler clamps `limit` itself. Returns the `{ ok, polled, captured }` envelope.
+ */
+export const capturePostUrls = oc
+  .route({
+    method: "POST",
+    operationId: "capturePostUrls",
+    path: "/admin/social/posts/capture",
+    summary: "Capture missing YouTube/TikTok post URLs from Postiz (the sweep)",
+    tags: ["Admin"],
+  })
+  .input(z.looseObject({ limit: z.unknown().optional() }))
+  .output(
+    z.object({
+      captured: z.array(z.object({ platform: z.string(), trackId: z.string(), url: z.string() })),
+      ok: z.literal(true),
+      polled: z.number(),
+    }),
+  );
+
 /** The `admin-social` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminSocialContract = {
+  capture_post_urls: capturePostUrls,
   draft_track_social: draftTrackSocial,
   list_track_social: listTrackSocial,
   update_track_social: updateTrackSocial,
