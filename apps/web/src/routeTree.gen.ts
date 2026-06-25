@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as StatusRouteImport } from './routes/status'
+import { Route as SpritesRouteImport } from './routes/sprites'
 import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as RssDotxmlRouteImport } from './routes/rss[.]xml'
 import { Route as RadioRouteImport } from './routes/radio'
@@ -153,6 +154,11 @@ import { Route as ApiV1AdminMixtapesMixtapeIdMixcloudFinalizeRouteImport } from 
 const StatusRoute = StatusRouteImport.update({
   id: '/status',
   path: '/status',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SpritesRoute = SpritesRouteImport.update({
+  id: '/sprites',
+  path: '/sprites',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
@@ -915,6 +921,7 @@ export interface FileRoutesByFullPath {
   '/radio': typeof RadioRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
+  '/sprites': typeof SpritesRoute
   '/status': typeof StatusRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
@@ -1055,6 +1062,7 @@ export interface FileRoutesByTo {
   '/radio': typeof RadioRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
+  '/sprites': typeof SpritesRoute
   '/status': typeof StatusRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
@@ -1198,6 +1206,7 @@ export interface FileRoutesById {
   '/radio': typeof RadioRoute
   '/rss.xml': typeof RssDotxmlRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
+  '/sprites': typeof SpritesRoute
   '/status': typeof StatusRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
@@ -1342,6 +1351,7 @@ export interface FileRouteTypes {
     | '/radio'
     | '/rss.xml'
     | '/sitemap.xml'
+    | '/sprites'
     | '/status'
     | '/admin/login'
     | '/admin/mixtapes'
@@ -1482,6 +1492,7 @@ export interface FileRouteTypes {
     | '/radio'
     | '/rss.xml'
     | '/sitemap.xml'
+    | '/sprites'
     | '/status'
     | '/admin/login'
     | '/admin/mixtapes'
@@ -1624,6 +1635,7 @@ export interface FileRouteTypes {
     | '/radio'
     | '/rss.xml'
     | '/sitemap.xml'
+    | '/sprites'
     | '/status'
     | '/admin/login'
     | '/admin/mixtapes'
@@ -1767,6 +1779,7 @@ export interface RootRouteChildren {
   RadioRoute: typeof RadioRoute
   RssDotxmlRoute: typeof RssDotxmlRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
+  SpritesRoute: typeof SpritesRoute
   StatusRoute: typeof StatusRoute
   ApiHealthRoute: typeof ApiHealthRoute
   ApiMeRoute: typeof ApiMeRouteWithChildren
@@ -1847,6 +1860,13 @@ declare module '@tanstack/react-router' {
       path: '/status'
       fullPath: '/status'
       preLoaderRoute: typeof StatusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sprites': {
+      id: '/sprites'
+      path: '/sprites'
+      fullPath: '/sprites'
+      preLoaderRoute: typeof SpritesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/sitemap.xml': {
@@ -3168,6 +3188,7 @@ const rootRouteChildren: RootRouteChildren = {
   RadioRoute: RadioRoute,
   RssDotxmlRoute: RssDotxmlRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
+  SpritesRoute: SpritesRoute,
   StatusRoute: StatusRoute,
   ApiHealthRoute: ApiHealthRoute,
   ApiMeRoute: ApiMeRouteWithChildren,
