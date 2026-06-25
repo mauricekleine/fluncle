@@ -752,6 +752,18 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    command: "fluncle admin tracks social --capture",
+    exposedContent: [
+      "capture the YouTube/TikTok post URLs Postiz withholds on create → write back (--no-agent, Worker HTTP)",
+    ],
+    kind: "cron",
+    name: "cron.social-capture",
+    operatorNotes:
+      "every 10m. Pure HTTP trigger, zero LLM tokens. Agent tier (fills the public URL only — publishes nothing). The box's baked CLI predates the `--capture` verb, so the cron curls POST /api/admin/social/posts/capture directly; the Worker polls Postiz and writes back. Source: docs/agents/hermes/scripts/social-capture-sweep.sh. Probed on /status as cron.social-capture.",
+    probeConfig: { cadenceMs: 10 * MINUTE_MS, cronName: "fluncle-social-capture", kind: "cron" },
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin tracks queue",
     exposedContent: [
       "wake the rave-03 render box → render + ship one finding's video → park (conductor)",

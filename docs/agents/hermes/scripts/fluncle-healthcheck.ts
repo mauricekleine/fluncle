@@ -351,6 +351,7 @@ const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 10 * 60_000, match: "note", service: "cron.note" },
   { cadenceMs: 60 * 60_000, match: "observation", service: "cron.observation" },
   { cadenceMs: 30 * 60_000, match: "backfill", service: "cron.backfill" },
+  { cadenceMs: 10 * 60_000, match: "social-capture", service: "cron.social-capture" },
   { cadenceMs: 60 * 60_000, match: "render", service: "cron.render" },
   { cadenceMs: 10 * 60_000, match: "healthcheck", service: "cron.healthcheck" },
   { cadenceMs: 7 * 24 * 60 * 60_000, match: "newsletter", service: "cron.newsletter" }, // weekly — a generous floor
