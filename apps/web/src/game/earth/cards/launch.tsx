@@ -13,7 +13,7 @@ function LaunchCard() {
     <CardShell label="the rocket">
       <div className="text-center">
         <p className="text-lg" style={{ color: c.creamBright }}>
-          the Galaxy
+          The Galaxy
         </p>
         <p className="mt-2 text-sm" style={{ color: c.creamMuted }}>
           the rocket takes you up. every banger out there is a star, waiting at its Log ID.

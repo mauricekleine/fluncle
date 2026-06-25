@@ -134,7 +134,7 @@ export function TerminalBody({ host }: { host: string }) {
             "repeating-linear-gradient(0deg, rgba(0,0,0,0.30) 0px, rgba(0,0,0,0.30) 1px, transparent 2px, transparent 4px)",
         }}
       />
-      <p style={{ color: c.coolTeal }}>fluncle terminal · recovered shell</p>
+      <p style={{ color: c.creamMuted }}>fluncle terminal · recovered shell</p>
       <p>[ ok ] tailnet up</p>
       <p>[ ok ] tor: onion published</p>
       <p>[ ok ] wish: listening</p>

@@ -17,7 +17,7 @@ function SpotifyCard() {
   return (
     <CardShell label="Fluncle's Findings on Spotify">
       <LinkBody
-        blurb="every banger the traveller logged, gathered into one playlist."
+        blurb="every banger I've logged, gathered into one playlist."
         cta={{ href: spotifyPlaylistUrl, label: "open on Spotify" }}
         title="Fluncle's Findings"
       />
