@@ -10,9 +10,11 @@ import {
   cronSurfaces,
   statusProbes,
   SURFACES,
+  type Surface,
+  type SurfaceContext,
   surfacesByKind,
   surfacesByWeight,
-  type Surface,
+  surfacesForContext,
 } from "./index";
 
 // Names are the catalog's primary key — a consumer keys off them, so duplicates
@@ -36,11 +38,40 @@ for (const surface of SURFACES) {
   }
 }
 
-// surfacesByWeight partitions the catalog: the four weights cover it exactly.
+// Weight is per-display-context now, and SPARSE. Within ONE context, the weights
+// partition the surfaces displayed there: the four weights cover surfacesForContext
+// exactly, no surface counted twice. Run the invariant for every context.
 const weights = ["primary", "secondary", "tertiary", "hidden"] as const;
-const byWeightTotal = weights.reduce((sum, weight) => sum + surfacesByWeight(weight).length, 0);
-assert.equal(byWeightTotal, SURFACES.length, "every surface has exactly one weight");
-assert.ok(surfacesByWeight("primary").length > 0, "there is at least one primary surface");
+const contexts: readonly SurfaceContext[] = ["web", "ssh", "cli", "status"];
+for (const ctx of contexts) {
+  const shown = surfacesForContext(ctx);
+  const byWeightTotal = weights.reduce(
+    (sum, weight) => sum + surfacesByWeight(ctx, weight).length,
+    0,
+  );
+  assert.equal(
+    byWeightTotal,
+    shown.length,
+    `${ctx}: every displayed surface has exactly one weight in this context`,
+  );
+  // surfacesForContext is sorted loudest-first.
+  const order = { hidden: 3, primary: 0, secondary: 1, tertiary: 2 } as const;
+  for (let i = 1; i < shown.length; i++) {
+    const prev = shown[i - 1]?.weights[ctx];
+    const curr = shown[i]?.weights[ctx];
+    if (prev && curr) {
+      assert.ok(order[prev] <= order[curr], `${ctx}: surfacesForContext sorts primary→hidden`);
+    }
+  }
+}
+assert.ok(surfacesForContext("web").length > 0, "the web context displays at least one surface");
+assert.ok(surfacesByWeight("web", "primary").length > 0, "the web homepage has a primary surface");
+// An absent context key means "not displayed there": the crons never lead the web nav.
+assert.equal(
+  surfacesForContext("web").filter((surface) => surface.kind === "cron").length,
+  0,
+  "crons are not displayed in the web context",
+);
 
 // surfacesByKind returns only that kind, and the union over all kinds is the whole
 // catalog (no surface has an off-list kind).

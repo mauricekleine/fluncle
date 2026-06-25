@@ -43,11 +43,45 @@ export type SurfaceKind =
   | "cron";
 
 /**
- * How loudly a surface is presented. `primary` surfaces lead the homepage dev-row
- * and the doctrine doc; `hidden` ones are real and registered but deliberately not
- * advertised (operator/agent-only or a low-level discovery detail).
+ * How loudly a surface is presented IN A GIVEN CONTEXT. `primary` surfaces lead
+ * that context's menu/nav; `hidden` ones are real and registered but deliberately
+ * not advertised there (operator/agent-only or a low-level discovery detail).
+ *
+ * Weight is per-display-context, not global: a surface can be `primary` on the web
+ * homepage yet `secondary` in the SSH terminal, or absent from one context while
+ * loud in another (see `SurfaceContext` and `Surface.weights`).
  */
 export type SurfaceWeight = "primary" | "secondary" | "tertiary" | "hidden";
+
+/**
+ * A DISPLAY CONTEXT: one of the surfaces that itself acts as a menu / nav / entry
+ * point ranking OTHER surfaces. A surface's prominence is relative to where it is
+ * shown, so weight is keyed by context. The same finding-archive route can lead the
+ * web homepage while sitting mid-menu in the SSH terminal.
+ *
+ * - `web`     the www.fluncle.com homepage nav + dev-row — the browser front door.
+ *             Ranks the human-web surfaces a visitor browses to (routes, the Galaxy,
+ *             radio, the feeds/discovery a curious dev would notice).
+ * - `ssh`     the rave terminal menu (ssh rave.fluncle.com) — the keyboard front
+ *             door. Ranks what the TUI offers (Enter the Galaxy, Latest, Mixtapes,
+ *             Submit, Subscribe, Install CLI, About) and the deep-link one-shots.
+ * - `cli`     the `fluncle` CLI's own command surface — how loudly each verb is
+ *             presented in `fluncle --help` / the about screen. Ranks the CLI verbs
+ *             against each other (`recent` leads; `admin` is hidden).
+ * - `status`  the `/status` health dashboard + the MCP `get_status` summary. Ranks
+ *             the probed services by how prominently they head the board (the core
+ *             web/db/media services lead; the quiet crons trail).
+ */
+export type SurfaceContext = "web" | "ssh" | "cli" | "status";
+
+/**
+ * The per-context presentation of one surface: its weight in each context that
+ * displays it. SPARSE — an absent key means the surface is NOT displayed in that
+ * context (e.g. an on-box cron has no `web`/`ssh`/`cli` entry; a CLI verb has no
+ * `web` entry). At least one key should be present for any surface meant to surface
+ * somewhere; a wholly-internal surface may legitimately carry an empty matrix.
+ */
+export type SurfaceWeights = Partial<Record<SurfaceContext, SurfaceWeight>>;
 
 /**
  * How a `/status` prober should check a surface, when it is probeable. `cron`
@@ -70,7 +104,12 @@ export type Surface = {
   /** A stable, human-readable id, unique across the catalog (e.g. "web.log", "api.tracks"). */
   name: string;
   kind: SurfaceKind;
-  weight: SurfaceWeight;
+  /**
+   * How loudly this surface is presented, PER DISPLAY CONTEXT. Sparse: a key is
+   * present only for a context that displays the surface; an absent key means
+   * "not shown there". See `SurfaceContext` and `surfacesForContext`.
+   */
+  weights: SurfaceWeights;
   /** The canonical absolute URL, when the surface lives at a fixed address. */
   url?: string;
   /** The host for a `subdomain`/`dns`/`ssh` surface (e.g. "galaxy.fluncle.com"). */
@@ -122,7 +161,7 @@ export const SURFACES: readonly Surface[] = [
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/",
     url: `${SITE}/`,
-    weight: "primary",
+    weights: { web: "primary" },
   },
   {
     exposedContent: [
@@ -134,7 +173,7 @@ export const SURFACES: readonly Surface[] = [
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/log",
     url: `${SITE}/log`,
-    weight: "primary",
+    weights: { ssh: "secondary", web: "primary" },
   },
   {
     exposedContent: ["Fluncle's own DJ mixtapes — each a checkpoint set with an F-marked Log ID"],
@@ -143,7 +182,7 @@ export const SURFACES: readonly Surface[] = [
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/mixtapes",
     url: `${SITE}/mixtapes`,
-    weight: "primary",
+    weights: { ssh: "secondary", web: "primary" },
   },
   {
     exposedContent: [
@@ -155,7 +194,7 @@ export const SURFACES: readonly Surface[] = [
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/stories",
     url: `${SITE}/stories`,
-    weight: "secondary",
+    weights: { web: "secondary" },
   },
   {
     exposedContent: ["who Fluncle is, what the Galaxy is, how to read a Log ID"],
@@ -164,7 +203,7 @@ export const SURFACES: readonly Surface[] = [
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/about",
     url: `${SITE}/about`,
-    weight: "secondary",
+    weights: { ssh: "tertiary", web: "secondary" },
   },
   {
     exposedContent: [
@@ -176,7 +215,7 @@ export const SURFACES: readonly Surface[] = [
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/newsletter",
     url: `${SITE}/newsletter`,
-    weight: "secondary",
+    weights: { web: "secondary" },
   },
   {
     exposedContent: [
@@ -188,7 +227,7 @@ export const SURFACES: readonly Surface[] = [
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/docs",
     url: `${SITE}/docs`,
-    weight: "secondary",
+    weights: { web: "secondary" },
   },
   {
     exposedContent: ["the public service-health dashboard — uptime per service, recent events"],
@@ -199,7 +238,7 @@ export const SURFACES: readonly Surface[] = [
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/status",
     url: `${SITE}/status`,
-    weight: "secondary",
+    weights: { status: "primary", web: "secondary" },
   },
   {
     exposedContent: ["the Galaxy game — the 8-bit fly-to-every-banger arcade front door"],
@@ -209,7 +248,7 @@ export const SURFACES: readonly Surface[] = [
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/galaxy",
     url: `${SITE}/galaxy`,
-    weight: "primary",
+    weights: { ssh: "secondary", web: "primary" },
   },
   {
     exposedContent: [
@@ -221,7 +260,7 @@ export const SURFACES: readonly Surface[] = [
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/radio",
     url: `${SITE}/radio`,
-    weight: "secondary",
+    weights: { web: "secondary" },
   },
   {
     exposedContent: ["the privacy policy"],
@@ -229,7 +268,7 @@ export const SURFACES: readonly Surface[] = [
     name: "web.privacy",
     route: "/privacy",
     url: `${SITE}/privacy`,
-    weight: "tertiary",
+    weights: { web: "tertiary" },
   },
 
   // ── Subdomains (sibling hosts on the same Worker) ──────────────────────────
@@ -242,7 +281,7 @@ export const SURFACES: readonly Surface[] = [
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     subdomain: "galaxy.fluncle.com",
     url: "https://galaxy.fluncle.com",
-    weight: "primary",
+    weights: { ssh: "secondary", web: "primary" },
   },
   {
     exposedContent: ["the observation station (root rewrites to /radio)"],
@@ -252,7 +291,7 @@ export const SURFACES: readonly Surface[] = [
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     subdomain: "radio.fluncle.com",
     url: "https://radio.fluncle.com",
-    weight: "secondary",
+    weights: { web: "secondary" },
   },
   {
     exposedContent: [
@@ -265,7 +304,7 @@ export const SURFACES: readonly Surface[] = [
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     subdomain: "found.fluncle.com",
     url: "https://found.fluncle.com",
-    weight: "tertiary",
+    weights: { status: "tertiary", web: "tertiary" },
   },
   {
     exposedContent: ["the delegated DNS zone's host label (see the dns surface for the resolver)"],
@@ -274,7 +313,7 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes: "The zone is served by apps/dns; see the `dns.zone` surface.",
     subdomain: "dig.fluncle.com",
     url: "https://dig.fluncle.com",
-    weight: "tertiary",
+    weights: { web: "tertiary" },
   },
   {
     exposedContent: ["the planned status host — points at /status"],
@@ -283,7 +322,7 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes: "PLANNED. Not yet wired; the page already lives at www.fluncle.com/status.",
     subdomain: "status.fluncle.com",
     url: "https://status.fluncle.com",
-    weight: "tertiary",
+    weights: { status: "tertiary", web: "tertiary" },
   },
   {
     exposedContent: [
@@ -296,7 +335,7 @@ export const SURFACES: readonly Surface[] = [
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     subdomain: "p53pc2uzfu2tnih4cd6wd42ok6zup2uttj6xdmjdccy5kqo33fyppkqd.onion",
     url: "http://p53pc2uzfu2tnih4cd6wd42ok6zup2uttj6xdmjdccy5kqo33fyppkqd.onion",
-    weight: "tertiary",
+    weights: { status: "tertiary", web: "tertiary" },
   },
 
   // ── Public API (the /api/v1 surface) ───────────────────────────────────────
@@ -309,7 +348,7 @@ export const SURFACES: readonly Surface[] = [
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/api/v1/tracks",
     url: `${SITE}/api/v1/tracks`,
-    weight: "primary",
+    weights: { status: "secondary", web: "primary" },
   },
   {
     apiFormat: "application/json",
@@ -319,7 +358,7 @@ export const SURFACES: readonly Surface[] = [
     name: "api.track",
     route: "/api/v1/tracks/:idOrLogId",
     url: `${SITE}/api/v1/tracks/:idOrLogId`,
-    weight: "secondary",
+    weights: { web: "secondary" },
   },
   {
     apiFormat: "application/json",
@@ -329,7 +368,7 @@ export const SURFACES: readonly Surface[] = [
     name: "api.tracks.random",
     route: "/api/v1/tracks/random",
     url: `${SITE}/api/v1/tracks/random`,
-    weight: "secondary",
+    weights: { web: "secondary" },
   },
   {
     apiFormat: "application/json",
@@ -339,7 +378,7 @@ export const SURFACES: readonly Surface[] = [
     name: "api.mixtapes",
     route: "/api/v1/mixtapes",
     url: `${SITE}/api/v1/mixtapes`,
-    weight: "secondary",
+    weights: { web: "secondary" },
   },
   {
     apiFormat: "application/json",
@@ -349,7 +388,7 @@ export const SURFACES: readonly Surface[] = [
     name: "api.search",
     route: "/api/v1/search",
     url: `${SITE}/api/v1/search`,
-    weight: "secondary",
+    weights: { web: "secondary" },
   },
   {
     apiFormat: "application/json",
@@ -359,7 +398,7 @@ export const SURFACES: readonly Surface[] = [
     name: "api.submissions",
     route: "/api/v1/submissions",
     url: `${SITE}/api/v1/submissions`,
-    weight: "secondary",
+    weights: { web: "secondary" },
   },
   {
     apiFormat: "application/json",
@@ -369,7 +408,7 @@ export const SURFACES: readonly Surface[] = [
     name: "api.newsletter",
     route: "/api/v1/newsletter",
     url: `${SITE}/api/v1/newsletter`,
-    weight: "secondary",
+    weights: { web: "secondary" },
   },
   {
     apiFormat: "application/json",
@@ -379,7 +418,7 @@ export const SURFACES: readonly Surface[] = [
     name: "api.stories",
     route: "/api/v1/stories",
     url: `${SITE}/api/v1/stories`,
-    weight: "tertiary",
+    weights: { web: "tertiary" },
   },
   {
     apiFormat: "application/json",
@@ -389,7 +428,7 @@ export const SURFACES: readonly Surface[] = [
     name: "api.radio.now-playing",
     route: "/api/v1/radio/now-playing",
     url: `${SITE}/api/v1/radio/now-playing`,
-    weight: "tertiary",
+    weights: { web: "tertiary" },
   },
   {
     apiFormat: "application/json",
@@ -401,7 +440,7 @@ export const SURFACES: readonly Surface[] = [
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/api/health",
     url: `${SITE}/api/health`,
-    weight: "tertiary",
+    weights: { status: "tertiary", web: "tertiary" },
   },
 
   // ── Feeds (subscribable syndication documents) ─────────────────────────────
@@ -413,7 +452,7 @@ export const SURFACES: readonly Surface[] = [
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/rss.xml",
     url: `${SITE}/rss.xml`,
-    weight: "primary",
+    weights: { web: "primary" },
   },
   {
     apiFormat: "application/atom+xml",
@@ -422,7 +461,7 @@ export const SURFACES: readonly Surface[] = [
     name: "feed.atom",
     route: "/atom.xml",
     url: `${SITE}/atom.xml`,
-    weight: "secondary",
+    weights: { web: "secondary" },
   },
   {
     apiFormat: "application/feed+json",
@@ -431,7 +470,7 @@ export const SURFACES: readonly Surface[] = [
     name: "feed.json",
     route: "/feed.json",
     url: `${SITE}/feed.json`,
-    weight: "secondary",
+    weights: { web: "secondary" },
   },
   {
     apiFormat: "application/rss+xml",
@@ -440,7 +479,7 @@ export const SURFACES: readonly Surface[] = [
     name: "feed.podcast",
     route: "/podcast.xml",
     url: `${SITE}/podcast.xml`,
-    weight: "secondary",
+    weights: { web: "secondary" },
   },
   {
     apiFormat: "text/calendar",
@@ -449,7 +488,7 @@ export const SURFACES: readonly Surface[] = [
     name: "feed.calendar",
     route: "/calendar.ics",
     url: `${SITE}/calendar.ics`,
-    weight: "tertiary",
+    weights: { web: "tertiary" },
   },
 
   // ── Discovery (machine-/crawler-facing maps) ──────────────────────────────
@@ -461,7 +500,7 @@ export const SURFACES: readonly Surface[] = [
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/sitemap.xml",
     url: `${SITE}/sitemap.xml`,
-    weight: "secondary",
+    weights: { web: "secondary" },
   },
   {
     apiFormat: "text/plain",
@@ -474,7 +513,7 @@ export const SURFACES: readonly Surface[] = [
       "Cloudflare's managed robots.txt can prepend directives; this file is the origin's intent.",
     route: "/robots.txt",
     url: `${SITE}/robots.txt`,
-    weight: "tertiary",
+    weights: { web: "tertiary" },
   },
   {
     apiFormat: "text/markdown",
@@ -484,7 +523,7 @@ export const SURFACES: readonly Surface[] = [
     name: "discovery.llms",
     route: "/llms.txt",
     url: `${SITE}/llms.txt`,
-    weight: "primary",
+    weights: { web: "primary" },
   },
   {
     apiFormat: "text/markdown",
@@ -493,7 +532,7 @@ export const SURFACES: readonly Surface[] = [
     name: "discovery.llms-full",
     route: "/llms-full.txt",
     url: `${SITE}/llms-full.txt`,
-    weight: "secondary",
+    weights: { web: "secondary" },
   },
   {
     apiFormat: "application/openapi+json",
@@ -502,7 +541,7 @@ export const SURFACES: readonly Surface[] = [
     name: "discovery.openapi",
     route: "/api/v1/openapi.json",
     url: `${SITE}/api/v1/openapi.json`,
-    weight: "secondary",
+    weights: { web: "secondary" },
   },
   {
     apiFormat: "application/json",
@@ -511,7 +550,7 @@ export const SURFACES: readonly Surface[] = [
     name: "discovery.mcp-server-card",
     route: "/.well-known/mcp/server-card.json",
     url: `${SITE}/.well-known/mcp/server-card.json`,
-    weight: "tertiary",
+    weights: { web: "tertiary" },
   },
   {
     apiFormat: "application/linkset+json",
@@ -520,7 +559,7 @@ export const SURFACES: readonly Surface[] = [
     name: "discovery.api-catalog",
     route: "/.well-known/api-catalog",
     url: `${SITE}/.well-known/api-catalog`,
-    weight: "tertiary",
+    weights: { web: "tertiary" },
   },
   {
     apiFormat: "application/json",
@@ -529,7 +568,7 @@ export const SURFACES: readonly Surface[] = [
     name: "discovery.agent-skills",
     route: "/.well-known/agent-skills/index.json",
     url: `${SITE}/.well-known/agent-skills/index.json`,
-    weight: "tertiary",
+    weights: { web: "tertiary" },
   },
 
   // ── MCP server ────────────────────────────────────────────────────────────
@@ -544,7 +583,7 @@ export const SURFACES: readonly Surface[] = [
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/mcp",
     url: `${SITE}/mcp`,
-    weight: "primary",
+    weights: { web: "primary" },
   },
 
   // ── DNS (the delegated authoritative zone) ─────────────────────────────────
@@ -560,7 +599,7 @@ export const SURFACES: readonly Surface[] = [
       "apps/dns — a tiny authoritative server for dig.fluncle.com, reads the public API and renders a finding as TXT. Not recursive (out-of-zone is REFUSED). Probed on /status as service `dns`.",
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     subdomain: "dig.fluncle.com",
-    weight: "tertiary",
+    weights: { status: "tertiary", web: "tertiary" },
   },
 
   // ── SSH (the rave terminal) ────────────────────────────────────────────────
@@ -575,7 +614,7 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes: "apps/ssh (Go Wish/Bubble Tea). Probed on /status as service `ssh`.",
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     subdomain: "rave.fluncle.com",
-    weight: "primary",
+    weights: { ssh: "primary", status: "secondary", web: "primary" },
   },
 
   // ── CLI (the `fluncle` thin client) ────────────────────────────────────────
@@ -584,63 +623,63 @@ export const SURFACES: readonly Surface[] = [
     exposedContent: ["the latest bangers, newest first (alias `list`)"],
     kind: "cli",
     name: "cli.recent",
-    weight: "primary",
+    weights: { cli: "primary", web: "tertiary" },
   },
   {
     command: "fluncle mixtapes",
     exposedContent: ["Fluncle's checkpoint sets"],
     kind: "cli",
     name: "cli.mixtapes",
-    weight: "secondary",
+    weights: { cli: "secondary" },
   },
   {
     command: "fluncle open",
     exposedContent: ["pick a track, open it in Spotify"],
     kind: "cli",
     name: "cli.open",
-    weight: "secondary",
+    weights: { cli: "secondary" },
   },
   {
     command: "fluncle random",
     exposedContent: ["the archive throws one back"],
     kind: "cli",
     name: "cli.random",
-    weight: "secondary",
+    weights: { cli: "secondary" },
   },
   {
     command: "fluncle subscribe",
     exposedContent: ["subscribe to the Friday newsletter"],
     kind: "cli",
     name: "cli.subscribe",
-    weight: "secondary",
+    weights: { cli: "secondary" },
   },
   {
     command: "fluncle submit",
     exposedContent: ["send a track for review"],
     kind: "cli",
     name: "cli.submit",
-    weight: "secondary",
+    weights: { cli: "secondary" },
   },
   {
     command: "fluncle tracks get",
     exposedContent: ["look up one finding by id or Log ID (group alias `track`)"],
     kind: "cli",
     name: "cli.tracks-get",
-    weight: "tertiary",
+    weights: { cli: "tertiary" },
   },
   {
     command: "fluncle about",
     exposedContent: ["Fluncle, and where to find him"],
     kind: "cli",
     name: "cli.about",
-    weight: "tertiary",
+    weights: { cli: "tertiary" },
   },
   {
     command: "fluncle version",
     exposedContent: ["print or check the version (--check hits the latest GitHub release)"],
     kind: "cli",
     name: "cli.version",
-    weight: "tertiary",
+    weights: { cli: "tertiary" },
   },
   {
     command: "fluncle admin",
@@ -650,7 +689,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "cli",
     name: "cli.admin",
     operatorNotes: "Authenticated admin/agent tier. The enrichment crons drive a subset of these.",
-    weight: "hidden",
+    weights: { cli: "hidden" },
   },
 
   // ── Crons (the on-box Hermes scheduled jobs) ───────────────────────────────
@@ -664,7 +703,7 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 5m. Pure compute, zero LLM tokens. Source: docs/agents/hermes/scripts/enrich-sweep.*",
     probeConfig: { cadenceMs: 5 * MINUTE_MS, cronName: "fluncle-enrich", kind: "cron" },
-    weight: "hidden",
+    weights: { status: "hidden" },
   },
   {
     command: "fluncle admin tracks context --queue",
@@ -676,7 +715,7 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 5m. --no-agent trigger; the Worker does the Firecrawl + Haiku distill. Zero on-box tokens.",
     probeConfig: { cadenceMs: 5 * MINUTE_MS, cronName: "fluncle-context-note", kind: "cron" },
-    weight: "hidden",
+    weights: { status: "hidden" },
   },
   {
     command: "fluncle admin tracks note --queue",
@@ -688,7 +727,7 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 10m. Hybrid --no-agent; one claude -p authors the line. Never clobbers an operator note.",
     probeConfig: { cadenceMs: 10 * MINUTE_MS, cronName: "fluncle-note", kind: "cron" },
-    weight: "hidden",
+    weights: { status: "hidden" },
   },
   {
     command: "fluncle admin tracks observe --queue",
@@ -700,7 +739,7 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 60m. Hybrid --no-agent; one claude -p authors the script, the Worker voice-gates + renders.",
     probeConfig: { cadenceMs: 60 * MINUTE_MS, cronName: "fluncle-observation", kind: "cron" },
-    weight: "hidden",
+    weights: { status: "hidden" },
   },
   {
     command: "fluncle admin backfills discogs && fluncle admin backfills lastfm",
@@ -709,7 +748,7 @@ export const SURFACES: readonly Surface[] = [
     name: "cron.backfill",
     operatorNotes: "every 30m. Pure HTTP driving, zero LLM tokens. Agent tier.",
     probeConfig: { cadenceMs: 30 * MINUTE_MS, cronName: "fluncle-backfill", kind: "cron" },
-    weight: "hidden",
+    weights: { status: "hidden" },
   },
   {
     command: "fluncle admin tracks queue",
@@ -721,7 +760,7 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 60m. A conductor: triggers a detached @fluncle-video render on a scale-to-zero box.ascii box (rave-03). Never posts to social (operator-tier 403). Probed on /status as service `render-box`.",
     probeConfig: { cadenceMs: 60 * MINUTE_MS, cronName: "fluncle-render", kind: "cron" },
-    weight: "hidden",
+    weights: { status: "hidden" },
   },
   {
     exposedContent: [
@@ -732,7 +771,7 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "every 10m. Pure probing, zero LLM tokens. POSTs to the agent-tier record_health op that /status reads.",
     probeConfig: { cadenceMs: 10 * MINUTE_MS, cronName: "fluncle-healthcheck", kind: "cron" },
-    weight: "hidden",
+    weights: { status: "hidden" },
   },
   {
     command: "fluncle admin newsletter draft",
@@ -748,15 +787,42 @@ export const SURFACES: readonly Surface[] = [
       cronName: "fluncle-newsletter",
       kind: "cron",
     },
-    weight: "secondary",
+    weights: { status: "secondary" },
   },
 ];
 
 // ── Selectors ────────────────────────────────────────────────────────────────
 
-/** Every surface at the given presentation weight, in catalog order. */
-export function surfacesByWeight(weight: SurfaceWeight): Surface[] {
-  return SURFACES.filter((surface) => surface.weight === weight);
+/** The weight ladder, loudest first — the sort order for a context's menu. */
+const WEIGHT_ORDER: Record<SurfaceWeight, number> = {
+  hidden: 3,
+  primary: 0,
+  secondary: 1,
+  tertiary: 2,
+};
+
+/**
+ * Every surface DISPLAYED IN `ctx` (i.e. carrying a weight for that context),
+ * sorted loudest-first (primary → hidden), ties broken by catalog order. This is
+ * the per-context menu/nav builder: `surfacesForContext("web")` is the homepage's
+ * ranked surface list; `surfacesForContext("ssh")` is the rave terminal's.
+ */
+export function surfacesForContext(ctx: SurfaceContext): Surface[] {
+  return SURFACES.filter((surface) => surface.weights[ctx] !== undefined).sort((a, b) => {
+    const wa = a.weights[ctx];
+    const wb = b.weights[ctx];
+    // Both are defined (the filter guaranteed it); fall back keeps TS happy.
+    return (wa ? WEIGHT_ORDER[wa] : 0) - (wb ? WEIGHT_ORDER[wb] : 0);
+  });
+}
+
+/**
+ * Every surface at the given weight IN A CONTEXT, in catalog order. The per-context
+ * successor to the old global `surfacesByWeight`: name the context you are ranking
+ * for. `surfacesByWeight("web", "primary")` is the web homepage's loud front doors.
+ */
+export function surfacesByWeight(ctx: SurfaceContext, weight: SurfaceWeight): Surface[] {
+  return SURFACES.filter((surface) => surface.weights[ctx] === weight);
 }
 
 /** Every surface at the given kind, in catalog order. */
