@@ -91,7 +91,7 @@ export function AddToMixtapeDialog({
         <DialogHeader>
           <DialogTitle>Add to a mixtape</DialogTitle>
           <DialogDescription>
-            {track ? `${track.artists.join(", ")} — ${track.title}` : ""}
+            Drop this finding into a draft mixtape, or start a new one.
           </DialogDescription>
         </DialogHeader>
 
