@@ -95,8 +95,8 @@ export function HomeLinkHub() {
           <img
             alt=""
             aria-hidden="true"
-            className="size-5 [image-rendering:pixelated]"
-            src="/galaxy/earth.png"
+            className="size-5 object-contain [image-rendering:pixelated]"
+            src="/galaxy/ship.png"
           />
           Enter Fluncle's Galaxy
         </Button>

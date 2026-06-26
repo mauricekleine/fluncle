@@ -18,6 +18,13 @@ import { SPRITE_BY_SURFACE, SPRITES, spriteUrl } from "@fluncle/sprites";
 const SECTION_HEADING =
   "mb-5 flex items-baseline gap-2 border-b border-border pb-2 text-sm font-semibold uppercase tracking-wide text-foreground";
 
+// The registry section shows only USER-FACING surfaces — the places a human actually
+// visits or uses (web pages, sibling-host subdomains, the SSH terminal, the browser
+// extension). The machine/infra surfaces (api, feed, discovery, dns, mcp, cli, cron) are
+// real but not pages anyone lands on, so they earn no sprite slot here. `pending` (dark,
+// pre-staged) surfaces are excluded too.
+const USER_FACING_KINDS = new Set(["web_route", "subdomain", "ssh", "extension"]);
+
 // One inspector cell: a uniform framed square holding the pixel sprite (crisp, never
 // smoothed), or a dashed placeholder where a sprite is still missing, with the name
 // beneath. Uniform cells make the grid read as a sprite sheet, so style drift and the
@@ -56,7 +63,10 @@ function SpriteGrid({ children }: { children: React.ReactNode }) {
 }
 
 function SpritesPage() {
-  const mapped = SURFACES.filter((surface) => SPRITE_BY_SURFACE[surface.name]).length;
+  const surfaces = SURFACES.filter(
+    (surface) => USER_FACING_KINDS.has(surface.kind) && surface.pending !== true,
+  );
+  const mapped = surfaces.filter((surface) => SPRITE_BY_SURFACE[surface.name]).length;
 
   return (
     <main className="log-plate-stage">
@@ -75,11 +85,11 @@ function SpritesPage() {
           <h2 className={SECTION_HEADING}>
             Registry surfaces
             <span className="font-normal normal-case tracking-normal text-muted-foreground">
-              {mapped} / {SURFACES.length} have a sprite
+              user-facing — {mapped} / {surfaces.length} have a sprite
             </span>
           </h2>
           <SpriteGrid>
-            {SURFACES.map((surface) => {
+            {surfaces.map((surface) => {
               const ref = SPRITE_BY_SURFACE[surface.name];
               return (
                 <SpriteTile
