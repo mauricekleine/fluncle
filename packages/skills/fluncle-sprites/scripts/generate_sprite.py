@@ -214,6 +214,15 @@ SPRITES = {
             "teal only on the sprout"
         ),
     },
+    "found_chest": {  # subdomain.found (the R2 media zone — the vault of recovered findings)
+        "w": 42,
+        "palette": CREAMS + BLACKS + GOLD1,
+        "prompt": p(
+            "an old treasure chest, a closed cream and warm-grey wooden chest with a domed lid, "
+            "gold metal corner bands and a gold clasp lock on the front, gold only on the bands "
+            "and the clasp"
+        ),
+    },
     "radio": {  # web.radio, subdomain.radio
         "w": 44,
         "palette": CREAMS + BLACKS + GOLD1,
