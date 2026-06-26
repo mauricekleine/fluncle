@@ -4,7 +4,7 @@ Every pinned/baked version in Fluncle's runtime supply chain, with where it live
 
 All commands assume the repo root as the working directory. The "check latest" one-liners are read-only (npm/curl) — safe to run on any tick.
 
-**Most of this is now automated.** `.github/workflows/hermes-pin-drift.yml` (the script `.github/scripts/hermes-pin-drift.sh`) sweeps items **2–4** (bun, the `fluncle` CLI, the Claude Code CLI) hourly and opens a PR for a same-major bump; **Renovate** (`renovate.json`) owns item **6** (the Actions digests); item **1** (base image) is report-only and item **5** (box.ascii) is unpinnable. This inventory stays the source of truth the workflow encodes and the operator's runbook for the brakes it reports.
+**Most of this is now automated.** `.github/workflows/hermes-pin-drift.yml` (the script `.github/scripts/hermes-pin-drift.sh`) sweeps items **2–4** (bun, the `fluncle` CLI, the Claude Code CLI) on every `fluncle` release + hourly, and opens a PR for a same-major bump; **Renovate** (`renovate.json`) owns item **6** (the Actions digests); item **1** (base image) is report-only and item **5** (box.ascii) is unpinnable. This inventory stays the source of truth the workflow encodes and the operator's runbook for the brakes it reports.
 
 ---
 

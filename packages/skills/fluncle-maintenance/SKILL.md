@@ -68,7 +68,7 @@ The CI sweep (`hermes-pin-drift.yml`) carries a clearly-safe bump to: **edit →
 
 ## Cadence
 
-**~Hourly, in CI.** First-party `fluncle` releases ship often, so the box should track them within the hour — the `hermes-pin-drift.yml` schedule runs hourly (Renovate's Action-digest sweep stays weekly), each tick a cheap no-op when nothing drifted or a pin-drift PR is already open. The mechanism is the CI workflow + Renovate (see [automation/](automation/)); a manual run is just "follow the sweep above," or run this skill by hand for a judgment-heavy pass.
+**On every `fluncle` release + hourly, in CI.** `hermes-pin-drift.yml` runs the moment a `fluncle` release publishes (a `workflow_run` on `CLI Release`, so the box tracks first-party bumps within minutes) and hourly as the backstop for the external pins (Renovate's Action-digest sweep stays weekly). Each tick is a cheap no-op when nothing drifted or a pin-drift PR is already open. The mechanism is the CI workflow + Renovate (see [automation/](automation/)); a manual run is just "follow the sweep above," or run this skill by hand for a judgment-heavy pass.
 
 ## Source priority
 
