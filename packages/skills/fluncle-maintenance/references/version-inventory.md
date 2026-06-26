@@ -4,6 +4,8 @@ Every pinned/baked version in Fluncle's runtime supply chain, with where it live
 
 All commands assume the repo root as the working directory. The "check latest" one-liners are read-only (npm/curl) — safe to run on any tick.
 
+**Most of this is now automated.** `.github/workflows/hermes-pin-drift.yml` (the script `.github/scripts/hermes-pin-drift.sh`) sweeps items **2–4** (bun, the `fluncle` CLI, the Claude Code CLI) weekly and opens a PR for a same-major bump; **Renovate** (`renovate.json`) owns item **6** (the Actions digests); item **1** (base image) is report-only and item **5** (box.ascii) is unpinnable. This inventory stays the source of truth the workflow encodes and the operator's runbook for the brakes it reports.
+
 ---
 
 ## 1. Nous Research Hermes base image — PRE-1.0, BRAKE BY DEFAULT
@@ -137,7 +139,7 @@ The `.deepsec` scan (`.deepsec/data/fluncle/reports/`) flags every workflow acti
   If the tag points at an annotated-tag object, dereference it: `gh api repos/<owner>/<repo>/git/tags/<sha> --jq '.object.sha'`.
 
 - **How to apply (the SHA-pin):** replace `uses: actions/checkout@v6` with `uses: actions/checkout@<40-char-sha> # v6` (keep the version in a trailing comment so humans and bots can read it). Do this for each flagged action **at its current major** — you are hardening the reference, not upgrading the action.
-- **Renovate recommendation:** the `.deepsec` finding recommends a bot (Renovate or Dependabot) to keep SHA-pinned actions bumped. The repo has **no** `renovate.json`/`dependabot.yml` today. Adding one is a reasonable, low-risk follow-up the routine may include in its PR (Renovate's `helpers:pinGitHubActionDigests` preset pins-and-tracks) — but call it out in the PR body as a config addition, not silently.
+- **Renovate owns this axis now.** `renovate.json` (repo root) configures the Renovate GitHub App scoped to the `github-actions` manager with the `helpers:pinGitHubActionDigests` preset — it SHA-pins each action and refreshes the digest (same-major) as the action ships updates; a new major waits for dependency-dashboard approval. The config is **inert until the Renovate app is installed** on the repo. A manual sweep no longer hand-SHA-pins the actions — instead, verify Renovate is installed and its PRs are flowing.
 - **Safety:** **SHA-pinning at the current major is SAFE to auto-apply** — it changes no behaviour (same commit the tag resolves to today), and the CI deploy-gate/PR run proves the workflow still parses and runs. Bumping an action to a **new major** = brake (report it). Adding a Renovate config is safe but should be named explicitly in the PR.
 
 ---
@@ -151,4 +153,4 @@ The `.deepsec` scan (`.deepsec/data/fluncle/reports/`) flags every workflow acti
 | 3   | `fluncle` CLI       | `Dockerfile` `npm install -g fluncle@`                                            | `grep 'fluncle@'`           | `npm view fluncle version`                   | patch/minor yes, major brake      |
 | 4   | Claude Code CLI     | `Dockerfile` `@anthropic-ai/claude-code@`                                         | `grep 'claude-code@'`       | `npm view @anthropic-ai/claude-code version` | patch/minor yes, major/auth brake |
 | 5   | box.ascii CLI       | `Dockerfile` `box.ascii.dev/install`                                              | unpinned                    | N/A                                          | **Never** (re-verify only)        |
-| 6   | GitHub Actions tags | `.github/workflows/*.yml` `uses: …@vN`                                            | `grep 'uses:.*@'`           | `gh api …/git/refs/tags/<tag>`               | **SHA-pin at current major: yes** |
+| 6   | GitHub Actions tags | `.github/workflows/*.yml` `uses: …@vN`                                            | `grep 'uses:.*@'`           | `gh api …/git/refs/tags/<tag>`               | **Renovate (auto-pins + tracks)** |

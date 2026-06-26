@@ -1,31 +1,37 @@
 # Hands-off maintenance (the version-drift routine)
 
-A local Claude Code Routine that sweeps Fluncle's pinned/baked supply chain for version drift, ~weekly, hands-off, and ships the clearly-safe bumps **end-to-end**. The brain is [maintenance.prompt.md](maintenance.prompt.md); this file is orientation.
+Two **server-side** mechanisms keep Fluncle's baked supply chain current, hands-off — no laptop, no operator tick:
 
-## What it does
+1. **`.github/workflows/hermes-pin-drift.yml`** — a weekly GitHub Actions sweep. It checks the baked toolchain pins (the `fluncle` CLI, the Claude Code CLI, bun) against their registries and, for a clearly-safe **same-major** bump, opens a PR. The deterministic detect-and-edit is `.github/scripts/hermes-pin-drift.sh`. A **major** bump or a newer Nous Research Hermes **base image** is reported as a GitHub issue, never auto-bumped. On merge of a Dockerfile pin, the rave-02 `fluncle-pin-watch` timer self-deploys it (rebuild → pre-smoke → swap → auto-rollback).
+2. **Renovate** (`renovate.json`) — keeps the **GitHub Actions** pinned to commit SHAs and refreshes them (same-major) as the actions ship updates. Scoped to the `github-actions` manager only; it does not touch the app dependency tree or the baked CLIs.
 
-Each run, the prompt runs as a Claude Code agent on Opus 4.8: it reads every pin in the `@fluncle-maintenance` inventory (the Nous Research Hermes base image, bun, the `fluncle` CLI, the Claude Code CLI, box.ascii, and the GitHub Actions tags), checks latest for each, judges each drift against the safety doctrine, and then **either** ships the clearly-safe bumps end-to-end — open a PR, wait for CI green, **merge** — **or** reports the drift and pulls the brake with the reason. For a baked Dockerfile pin, the routine's job ends at the merge: the on-box `fluncle-pin-watch` timer (rave-02) self-deploys it (rebuild → pre-smoke → swap → auto-rollback; `docs/agents/hermes/pin-watch/`). The routine never touches the box. It does one bounded sweep and stops. An empty sweep (nothing drifted) is a quiet one-line no-op. The full per-run contract — the SHIP-vs-BRAKE rules, the mid-flight stop points, the hard rails — lives in the prompt; this file is just orientation.
+Together they cover the inventory: the workflow owns `fluncle` / `claude-code` / `bun` and the base-image report; Renovate owns the Action digests; box.ascii is unpinnable (pin-watch re-verifies it after any rebuild it does).
 
-## Where it runs: a local Claude Code desktop-app Routine on the operator's Mac
+## The split: bump in CI, deploy on the box
 
-The prompt is triggered by a **Claude Code desktop-app Routine** ("Fluncle maintenance") on the operator's Mac. This is deliberately **not** mission-critical: a missed week is a non-event (drift accrues slowly; the next run catches it), so a closed laptop is fine. Maintenance has no queue and no deadline, so it stays a simple local routine.
+The bump-PR half needs **write credentials** (push a branch, open a PR); the box deliberately holds **none** — `fluncle-pin-watch` is credential-free (a read-only public clone plus the running container's own env). So the two halves live apart on purpose:
 
-The routine needs: a clean Fluncle repo checkout on an up-to-date `main`; the operator's `git`/`gh` auth (to branch, commit, open AND **merge** the PR); network for the read-only "check latest" calls (`npm view`, `curl`, the Docker Hub / GitHub APIs). That is all. The routine **never** SSHes to the box, runs `docker`, or touches `op` — the box self-deploys baked-pin bumps via its on-box `fluncle-pin-watch` timer. **The routine's blast radius is GitHub only** (open + merge a PR); it does not reach the live box.
+- **GitHub Actions / Renovate** (they have the repo + a token) → open the PR that moves the pin.
+- **rave-02 `fluncle-pin-watch`** (credential-free) → deploy the merged pin within the hour.
 
-## The per-run behaviors (what a healthy run does)
+That keeps the box token-free while the galaxy still self-maintains, **repo AND box**.
 
-1. **Sweeps and finds nothing.** All six pins current → a one-line "all pins current" and exit. No PR, no box step, no noise. The common steady-state run.
-2. **Finds clearly-safe drift → ships it end-to-end.** A patch/minor `fluncle` or Claude Code CLI bump, a patch/minor bun bump (all three places), or a GitHub Actions SHA-pin → edit on a branch, run the gate locally, open a PR, **wait for CI green, merge**. That is the routine's delivery. For a baked Dockerfile pin (the CLIs), the on-box `fluncle-pin-watch` timer then picks it up — rebuild → pre-smoke → swap → auto-rollback — within the hour. SHA-pins / `package.json` / workflow edits are fully repo-side and ship on the merge alone.
-3. **Finds risky drift → pulls the brake.** A major bump, a new Hermes base tag, or anything touching auth/runtime/the model → no merge; a report with the current pin, the latest, the drift class, and the reason, so the operator decides and ships it via the bump procedure.
+## Auth + how far it ships
+
+`hermes-pin-drift.yml` runs on the default `GITHUB_TOKEN` out of the box: it **opens the PR for an operator to review and merge** (CI runs on the operator's interaction with the PR). To make it fully hands-off, add a fine-scoped PAT as the `PIN_DRIFT_TOKEN` repo secret — the PR then triggers CI and is set to **auto-merge on green**. Either way, the merge is the deploy trigger for a baked Dockerfile pin (pin-watch takes it from there). Renovate opens its own PRs as the Renovate GitHub App; **install the app on the repo to activate `renovate.json`** — the config is inert until then.
+
+## What the deterministic sweep does NOT decide
+
+The workflow encodes only the _provably_ safe rule — a same-major bump of a first-party / Anthropic CLI or bun. It deliberately does not read release notes or weigh nuance. Anything with real blast radius — a **major**, the **base image**, an **auth-shape** change — is a **reported brake** the operator decides and ships via [references/bump-procedure.md](../references/bump-procedure.md). When a sweep genuinely needs judgment beyond semver, run the skill itself by hand: [maintenance.prompt.md](maintenance.prompt.md) is the full Opus-gated pass over the doctrine and the inventory, kept as the manual / deep path (it is not on a schedule).
 
 ## Operating notes
 
-- **One bounded sweep per run by design.** The weekly cadence is the throttle; the prompt sweeps once and stops. It does not "catch up" months of drift in a single run.
+- **One bounded sweep per run by design.** The weekly cadence (the workflow's cron + Renovate's schedule) is the throttle; a run sweeps once. It does not "catch up" months of drift at once.
 - **The box self-deploys baked-pin bumps safely.** The on-box `fluncle-pin-watch` timer captures the previous image, pre-smokes the new one before swapping, auto-rolls-back on any failure, and Discord-alerts on deploy or rollback. The base image is always a brake (its failure mode is the whole gateway — too coarse to ship unattended even with pin-watch's safety net).
-- **Opus is the gate — for stopping and continuing.** There is no human approving a tick, so the prompt takes only what the safety doctrine calls _clearly_ safe all the way, and stops the instant a CI check goes red. When in doubt, it stops.
-- **Out of scope, on purpose.** The workspace dependency catalog (the `bunfig.toml` `minimumReleaseAge` flow) and the agent's model/voice/permissions are separate flows — the routine mentions drift it notices there but never acts on it.
-- **Pause it** by disabling the "Fluncle maintenance" Routine in the Claude Code app. In-flight artifacts are an open/merged PR (reviewable like any other). Pausing never leaves a half-rebuilt box — the routine never touches the box.
+- **Determinism is the gate for the automated path.** No human approves a CI tick, so the workflow ships only what semver proves safe (a same-major first-party/Anthropic CLI or bun bump) and reports everything else. A red CI run is never merged.
+- **Out of scope, on purpose.** The workspace dependency catalog (the `bunfig.toml` `minimumReleaseAge` flow) and the agent's model/voice/permissions are separate flows — neither mechanism here touches them.
+- **Pause it** by disabling the workflow (Actions tab) and/or the Renovate app. In-flight artifacts are an open PR (reviewable like any other). Pausing never leaves a half-rebuilt box — neither mechanism touches the live box; only the merge → pin-watch path does.
 
-## How it's wired in the Claude app
+## Retired: the local Mac Routine
 
-The Routine is a single scheduled entry in the Claude Code desktop app: a ~weekly schedule, a working directory pointed at a Fluncle repo checkout, and a prompt that loads the `@fluncle-maintenance` skill and runs [maintenance.prompt.md](maintenance.prompt.md). Point it at a checkout that stays on a fresh `main` (or have the routine pull first), and ensure its permission mode allows the unattended `git`/`gh` operations it needs. Nothing else is configured in-repo — the schedule and the working directory live in the app, and the prompt is self-contained.
+This sweep previously ran as a **Claude Code desktop-app Routine on the operator's Mac** (driven by `maintenance.prompt.md`). It worked but was laptop-dependent — a closed lid skipped a week — and in practice the **bump-PR half was never actually running**, so the pins drifted while only the box's deploy half (pin-watch) stayed live. It is **retired** in favour of the always-on CI workflow above. `maintenance.prompt.md` is kept as the doctrine-complete manual / deep sweep — run it by hand when you want the full judgment pass, not as the scheduled mechanism.

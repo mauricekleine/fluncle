@@ -1,0 +1,86 @@
+name: Hermes Pin Drift
+
+# The server-side drift sweep for the box's baked supply chain — the missing
+# bump-PR half of fluncle-maintenance (the rave-02 fluncle-pin-watch timer is the
+# DEPLOY half; this is what feeds it). It checks the `fluncle` CLI, the Claude
+# Code CLI, and bun against their registries and, for a clearly-safe same-major
+# bump, opens a PR; a major bump or a newer Hermes base image is reported as an
+# issue, never auto-bumped. On merge of a Dockerfile pin, rave-02 self-deploys it.
+#
+# Auth: with no PIN_DRIFT_TOKEN secret it runs on the default GITHUB_TOKEN — it
+# opens the PR for an operator to review + merge (CI runs on their interaction).
+# Provide a fine-scoped PAT as PIN_DRIFT_TOKEN to make it fully hands-off: the PR
+# then triggers CI and is set to auto-merge on green (matches the old Mac routine).
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC — weekly; drift accrues slowly
+  workflow_dispatch:
+
+concurrency:
+  cancel-in-progress: false
+  group: hermes-pin-drift
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  drift:
+    name: Check + bump baked Hermes pins
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          token: ${{ secrets.PIN_DRIFT_TOKEN || github.token }}
+
+      - name: Detect drift + apply the safe bumps
+        id: drift
+        run: bash .github/scripts/hermes-pin-drift.sh --apply
+
+      - name: Open a PR for the safe bumps
+        if: steps.drift.outputs.bumped == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PIN_DRIFT_TOKEN || github.token }}
+          PR_TITLE: ${{ steps.drift.outputs.pr_title }}
+          AUTOMERGE: ${{ secrets.PIN_DRIFT_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          open_pr="$(gh pr list --state open --json number,headRefName \
+            --jq '[.[] | select(.headRefName | startswith("hermes-pin-drift/"))][0].number')"
+          if [ -n "$open_pr" ]; then
+            echo "pin-drift PR #$open_pr is still open — skipping (merge it first)."
+            exit 0
+          fi
+          branch="hermes-pin-drift/${{ github.run_id }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add docs/agents/hermes/Dockerfile package.json \
+            .github/workflows/quality-checks.yml .github/workflows/cli-release.yml
+          git commit -m "$PR_TITLE"
+          git push -u origin "$branch"
+          gh pr create --base main --head "$branch" \
+            --title "$PR_TITLE" --body-file "${RUNNER_TEMP}/pin-drift-pr-body.md"
+          if [ "$AUTOMERGE" = "true" ]; then
+            gh pr merge "$branch" --auto --squash --delete-branch \
+              || echo "auto-merge unavailable (enable it + branch protection) — leaving the PR for review."
+          fi
+
+      - name: Report risky drift as an issue
+        if: steps.drift.outputs.braked == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PIN_DRIFT_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          title="Hermes supply-chain: drift needs an operator decision"
+          existing="$(gh issue list --state open --search "$title in:title" \
+            --json number --jq '.[0].number')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file "${RUNNER_TEMP}/pin-drift-issue-body.md"
+          else
+            gh issue create --title "$title" --body-file "${RUNNER_TEMP}/pin-drift-issue-body.md"
+          fi
