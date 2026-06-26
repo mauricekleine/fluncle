@@ -7,6 +7,7 @@ apps/web/.dev/
 apps/web/.source/
 .turbo/
 .wrangler/
+__pycache__/
 node_modules/
 dist/
 build/
