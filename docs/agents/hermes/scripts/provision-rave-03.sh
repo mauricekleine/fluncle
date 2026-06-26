@@ -5,7 +5,9 @@
 # Called by render-conductor.sh when `box resume` 404s — box.ascii reclaims idle
 # boxes AND their snapshots past the archive window, so a render box is not durable
 # state. This makes a purge a ~5-min non-event: the box is reproducible from main +
-# the conductor's own baked CLI, no golden snapshot to babysit.
+# the conductor's own baked CLI, no golden snapshot to babysit. This is the COLD-START
+# path only: a *resumed* snapshot (the common path) self-updates instead — the
+# conductor's `freshen_checkout` git-resets its stale checkout to current `main` at wake.
 #
 # Reproduces exactly what shipped 019.1.7X by hand: clone main, install, add the
 # fluncle-video skill, lay down the bun-wrapped `fluncle` CLI (the upload uses

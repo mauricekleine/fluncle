@@ -85,6 +85,33 @@ emit() { printf '%s\n' "$*"; } # the cron run summary lands on stdout
 now() { date +%s; }
 read_or() { cat "$1" 2>/dev/null || printf '%s' "$2"; }
 
+# Freshen a RESUMED snapshot's stale checkout to current `main`. The render box is
+# scale-to-zero (asleep but for a render), so it can't watch `main` itself like the
+# rave-02 `fluncle-pin-watch` timer — the conductor does it here, at wake, before the
+# render, so a `packages/video` fix lands on the very next render instead of waiting
+# for a snapshot purge + reprovision. Drift-gated + BEST-EFFORT: a fetch/reset failure
+# logs and renders on the existing checkout (the queue is idempotent, the next tick
+# retries; a broken render just re-queues). `bun install` + the fluncle-video skill
+# re-add run ONLY when the lockfile / skill subtree actually moved (the common case —
+# a code change — is just a shallow fetch + reset, seconds against an ~85m render).
+# The reprovision branch needs none of this: it clones clean `main` by construction.
+freshen_checkout() {
+  "$BOX_BIN" ssh "$1" 'bash -s' >>"$LOG_FILE" 2>&1 <<'FRESH' || log "freshen: ssh failed — rendering on the existing checkout"
+set -u
+cd "$HOME/fluncle" || { echo "[freshen] no ~/fluncle — skip"; exit 0; }
+git fetch --depth 1 origin main -q 2>/dev/null || { echo "[freshen] fetch failed — keep current"; exit 0; }
+have="$(git rev-parse HEAD 2>/dev/null)"; want="$(git rev-parse FETCH_HEAD 2>/dev/null)"
+[ -n "$want" ] && [ "$have" != "$want" ] || { echo "[freshen] current at ${have:0:7}"; exit 0; }
+before_lock="$(sha256sum bun.lock 2>/dev/null)"
+before_skill="$(git rev-parse HEAD:packages/skills/fluncle-video 2>/dev/null)"
+git reset --hard FETCH_HEAD -q || { echo "[freshen] reset failed — keep current"; exit 0; }
+[ "$(sha256sum bun.lock 2>/dev/null)" != "$before_lock" ] && bun install </dev/null >/dev/null 2>&1
+[ "$(git rev-parse HEAD:packages/skills/fluncle-video 2>/dev/null)" != "$before_skill" ] \
+  && npx -y skills add ./packages/skills/fluncle-video -y -a claude-code </dev/null >/dev/null 2>&1
+echo "[freshen] updated ${have:0:7} -> $(git rev-parse --short HEAD)"
+FRESH
+}
+
 # --- single-flight: only one tick mutates state at a time. An atomic `mkdir`
 #     lock (portable; no util-linux `flock` dependency). A tick killed by the
 #     ~120s runner can't run its EXIT trap, so first break a lock older than the
@@ -187,6 +214,7 @@ log "queue head: $head"
 # reclaimed it (idle boxes + snapshots are purged past the archive window).
 if [ -n "$boxid" ] && "$BOX_BIN" resume "$boxid" >/dev/null 2>&1; then
   log "resumed box $boxid"
+  freshen_checkout "$boxid" # bring the stale snapshot's checkout up to current main
 else
   log "box missing/purged — reprovisioning"
   if ! boxid="$(BOX_BIN="$BOX_BIN" BUN_BIN="$BUN_BIN" FLUNCLE_BIN="$FLUNCLE_BIN" bash "$PROVISION" 2>>"$LOG_FILE")" || [ -z "$boxid" ]; then
