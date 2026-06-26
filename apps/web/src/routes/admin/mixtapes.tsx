@@ -40,7 +40,9 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { siBeatport } from "simple-icons";
 import { AdminShell } from "@/components/admin/admin-shell";
+import { BrandIcon } from "@/components/brand-icon";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -65,6 +67,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
+import { beatportSearchUrl } from "@/lib/beatport";
 import { formatAlbumDuration, formatDurationField, parseDuration } from "@/lib/format";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
 import { type MixtapeDTO, mixtapeDisplayTitle } from "@/lib/mixtapes";
@@ -952,6 +955,16 @@ function SortableMemberRow({
           {formatAlbumDuration(member.durationMs)}
         </span>
       ) : null}
+      <a
+        aria-label={`Search ${member.title} on Beatport`}
+        className="inline-flex size-9 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+        href={beatportSearchUrl(member.artists, member.title)}
+        rel="noreferrer"
+        target="_blank"
+        title="Search on Beatport"
+      >
+        <BrandIcon className="size-4" icon={siBeatport} />
+      </a>
       <button
         aria-label={`Remove ${member.title}`}
         className="inline-flex size-9 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-destructive focus-visible:outline-2 focus-visible:outline-ring"

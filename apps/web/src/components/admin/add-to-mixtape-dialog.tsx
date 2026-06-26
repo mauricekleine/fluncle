@@ -13,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { beatportSearchUrl } from "@/lib/beatport";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
 import { mixtapeDisplayTitle, type MixtapeDTO } from "@/lib/mixtapes";
 import { type MixtapeMembership } from "@/lib/server/mixtapes";
@@ -230,11 +231,6 @@ export function AddToMixtapeDialog({
       </DialogContent>
     </Dialog>
   );
-}
-
-function beatportSearchUrl(artists: string[], title: string): string {
-  const query = `${artists.join(" ")} ${title}`.trim();
-  return `https://www.beatport.com/search?q=${encodeURIComponent(query)}`;
 }
 
 async function createDraft(): Promise<string> {
