@@ -2,7 +2,7 @@
 
 Two **server-side** mechanisms keep Fluncle's baked supply chain current, hands-off — no laptop, no operator tick:
 
-1. **`.github/workflows/hermes-pin-drift.yml`** — a weekly GitHub Actions sweep. It checks the baked toolchain pins (the `fluncle` CLI, the Claude Code CLI, bun) against their registries and, for a clearly-safe **same-major** bump, opens a PR. The deterministic detect-and-edit is `.github/scripts/hermes-pin-drift.sh`. A **major** bump or a newer Nous Research Hermes **base image** is reported as a GitHub issue, never auto-bumped. On merge of a Dockerfile pin, the rave-02 `fluncle-pin-watch` timer self-deploys it (rebuild → pre-smoke → swap → auto-rollback).
+1. **`.github/workflows/hermes-pin-drift.yml`** — an hourly GitHub Actions sweep. It checks the baked toolchain pins (the `fluncle` CLI, the Claude Code CLI, bun) against their registries and, for a clearly-safe **same-major** bump, opens a PR. The deterministic detect-and-edit is `.github/scripts/hermes-pin-drift.sh`. A **major** bump or a newer Nous Research Hermes **base image** is reported as a GitHub issue, never auto-bumped. On merge of a Dockerfile pin, the rave-02 `fluncle-pin-watch` timer self-deploys it (rebuild → pre-smoke → swap → auto-rollback).
 2. **Renovate** (`renovate.json`) — keeps the **GitHub Actions** pinned to commit SHAs and refreshes them (same-major) as the actions ship updates. Scoped to the `github-actions` manager only; it does not touch the app dependency tree or the baked CLIs.
 
 Together they cover the inventory: the workflow owns `fluncle` / `claude-code` / `bun` and the base-image report; Renovate owns the Action digests; box.ascii is unpinnable (pin-watch re-verifies it after any rebuild it does).
@@ -26,7 +26,7 @@ The workflow encodes only the _provably_ safe rule — a same-major bump of a fi
 
 ## Operating notes
 
-- **One bounded sweep per run by design.** The weekly cadence (the workflow's cron + Renovate's schedule) is the throttle; a run sweeps once. It does not "catch up" months of drift at once.
+- **One bounded sweep per run by design.** The cadence is the throttle — the workflow runs **hourly** (first-party `fluncle` releases ship often, so the box should track them within the hour); Renovate's Action-digest sweep stays weekly. Each tick is a cheap check: a no-op when nothing drifted or a pin-drift PR is already open, a rebuild only on real drift.
 - **The box self-deploys baked-pin bumps safely.** The on-box `fluncle-pin-watch` timer captures the previous image, pre-smokes the new one before swapping, auto-rolls-back on any failure, and Discord-alerts on deploy or rollback. The base image is always a brake (its failure mode is the whole gateway — too coarse to ship unattended even with pin-watch's safety net).
 - **Determinism is the gate for the automated path.** No human approves a CI tick, so the workflow ships only what semver proves safe (a same-major first-party/Anthropic CLI or bun bump) and reports everything else. A red CI run is never merged.
 - **Out of scope, on purpose.** The workspace dependency catalog (the `bunfig.toml` `minimumReleaseAge` flow) and the agent's model/voice/permissions are separate flows — neither mechanism here touches them.
