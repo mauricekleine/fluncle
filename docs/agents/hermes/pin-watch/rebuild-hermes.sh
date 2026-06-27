@@ -151,8 +151,13 @@ fi
 
 # ── 6. swap (the only moment the live container is touched) ────────────────────
 run_container() {
+  # TZ pin: the Friday newsletter cron (`0 15 * * 5`) has no per-job timezone — it fires
+  # at 15:00 in the BOX CLOCK's zone. Without this the rebuilt container defaults to UTC
+  # and the newsletter slips to 17:00 Amsterdam (summer). Keep it pinned so every
+  # auto-rebuild preserves 15:00 Amsterdam across the DST flip (see cron/README.md).
   docker run -d --name "$CONTAINER" --restart "${RESTART:-unless-stopped}" \
     --memory=4g --cpus=2 --shm-size=1g \
+    -e TZ=Europe/Amsterdam \
     --log-driver json-file --log-opt max-size=10m --log-opt max-file=5 \
     -v "$MOUNT_SRC":/opt/data \
     --env-file "$ENVTMP" \
