@@ -84,9 +84,6 @@ const DRY_RUN = process.argv.includes("--dry-run");
 
 const log = (message: string) => console.error(`[newsletter-sweep] ${message}`);
 
-// Galaxy block order (the doctrine). Unplaced finds collect under "Also found" last.
-const GALAXY_ORDER = ["Solar", "Nebular", "Lunar", "Astral", "Also found"];
-
 // ---------------------------------------------------------------------------
 // Types — only the fields we consume.
 // ---------------------------------------------------------------------------
