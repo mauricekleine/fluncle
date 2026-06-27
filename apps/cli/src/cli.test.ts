@@ -322,7 +322,24 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Usage: fluncle admin newsletter send");
   });
 
-  test("admin newsletter group lists its draft/update/send/list subcommands", async () => {
+  test("admin newsletter delete requires an id before any API call", async () => {
+    const result = await runCli(["admin", "newsletter", "delete", "--yes", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: fluncle admin newsletter delete");
+  });
+
+  test("admin newsletter delete requires --yes to confirm the hard delete", async () => {
+    // The id is present, so the --yes guard fails first — no server or token needed.
+    const result = await runCli(["admin", "newsletter", "delete", "some-id", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("--yes");
+  });
+
+  test("admin newsletter group lists its draft/update/send/list/delete subcommands", async () => {
     // The group's default action prints its own help (no subcommand given).
     const help = await runCli(["admin", "newsletter"]);
 
@@ -332,6 +349,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(help.stdout).toContain("update");
     expect(help.stdout).toContain("send");
     expect(help.stdout).toContain("list");
+    expect(help.stdout).toContain("delete");
   });
 
   test("about takes no positional argument", async () => {

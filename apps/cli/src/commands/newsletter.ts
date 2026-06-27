@@ -1,6 +1,6 @@
 import { type EditionResponse, type EditionsResponse } from "@fluncle/contracts";
 import { existsSync, readFileSync } from "node:fs";
-import { adminApiGet, adminApiPatch, adminApiPost } from "../api";
+import { adminApiDelete, adminApiGet, adminApiPatch, adminApiPost } from "../api";
 import { CliError } from "../output";
 
 // The CLI relay for the newsletter edition control plane (the Hermes Friday cron's
@@ -118,4 +118,14 @@ export async function newsletterListCommand(): Promise<EditionListItem[]> {
   const response = await adminApiGet<EditionsResponse>("/api/admin/newsletter/editions");
 
   return response.editions;
+}
+
+/**
+ * HARD-delete an edition at ANY status (OPERATOR tier — the same gate as send).
+ * Drafts and sent back-issues alike: a hollow edition that already mailed is exactly
+ * what the operator pulls from the public archive, which reopens the self-healing send
+ * window so the dropped finds re-enter the next edition. A valid AGENT token gets a 403.
+ */
+export async function newsletterDeleteCommand(id: string): Promise<{ id: string }> {
+  return adminApiDelete<{ id: string }>(`/api/admin/newsletter/editions/${encodeURIComponent(id)}`);
 }

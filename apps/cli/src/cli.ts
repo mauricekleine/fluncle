@@ -6,6 +6,7 @@ import { Command, CommanderError } from "commander";
 import { fluncleAsciiLogo, fluncleTagline } from "./brand";
 import { setEnvProfile } from "./env";
 import { spotifyPlaylistUrl, telegramUrl } from "./links";
+import { maybePrintLiveCallout } from "./live";
 import { printJson, toJsonFailure } from "./output";
 import { formatError } from "./retry";
 
@@ -222,6 +223,10 @@ async function main(args = process.argv.slice(2)): Promise<void> {
     program.outputHelp();
     return;
   }
+
+  // The live-set callout, above the command's output while Fluncle is on the decks
+  // (non-admin human commands only). Best-effort — awaited but it never throws.
+  await maybePrintLiveCallout(args);
 
   try {
     assertParseArgsCompatiblePositionals(args);
@@ -968,6 +973,21 @@ function addAdminCommands(program: Command): void {
     .action(async (options: { json: boolean }) => {
       const { newsletterListCommand } = await import("./commands/newsletter");
       await runNewsletterList(options, newsletterListCommand);
+    });
+
+  // `delete_edition` → `admin newsletter delete`. OPERATOR ONLY — the hard delete that
+  // pulls an edition (draft OR sent back-issue) from the archive. Deleting a sent one
+  // reopens the self-healing window so its finds re-enter the next edition. --yes guards.
+  adminNewsletter
+    .command("delete")
+    .description("Delete an edition (draft or sent) — OPERATOR only; reopens the send window")
+    .argument("[id]")
+    .option("--yes", "Confirm the delete", false)
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (id: string | undefined, options: { json: boolean; yes: boolean }) => {
+      const { newsletterDeleteCommand } = await import("./commands/newsletter");
+      await runNewsletterDelete(id, options, newsletterDeleteCommand);
     });
 
   const submissions = configureCommand(
@@ -2018,6 +2038,29 @@ async function runNewsletterSend(
       ? `Sent edition ${result.edition.id}.`
       : `Sent edition #${number} — it's out to the list and in the archive.`,
   );
+}
+
+async function runNewsletterDelete(
+  id: string | undefined,
+  options: { json: boolean; yes: boolean },
+  newsletterDeleteCommand: typeof import("./commands/newsletter").newsletterDeleteCommand,
+): Promise<void> {
+  if (!id) {
+    throw new Error("Missing edition id. Usage: fluncle admin newsletter delete <id> --yes");
+  }
+
+  if (!options.yes) {
+    throw new Error("Pass --yes to confirm — this hard-deletes the edition (draft or sent).");
+  }
+
+  const result = await newsletterDeleteCommand(id);
+
+  if (options.json) {
+    printJson({ ...result, ok: true });
+    return;
+  }
+
+  console.log(`Deleted edition ${result.id}. The send window reopens to cover its finds.`);
 }
 
 async function runNewsletterList(
