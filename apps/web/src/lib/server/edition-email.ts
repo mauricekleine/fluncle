@@ -16,13 +16,13 @@ function escapeHtml(value: string): string {
 }
 
 /** `Artist — Title` for a hydrated finding (the em dash is the only one allowed). */
-function trackLabel(track: TrackListItem): string {
+export function trackLabel(track: TrackListItem): string {
   const artist = track.artists.join(", ").trim();
   return artist ? `${artist} — ${track.title}` : track.title;
 }
 
 /** Collect every logId an edition references (each galaxy's findings + the mixtape). */
-function editionLogIds(edition: EditionDTO): string[] {
+export function editionLogIds(edition: EditionDTO): string[] {
   const ids: string[] = [];
 
   for (const block of edition.content.galaxies ?? []) {
@@ -36,6 +36,25 @@ function editionLogIds(edition: EditionDTO): string[] {
   }
 
   return ids;
+}
+
+/**
+ * Hydrate every logId across the given editions to its `Artist — Title` label in ONE
+ * batched read (bare logId fallback for a find with no live track). Server-side — the
+ * web newsletter renders call this in their loaders and pass the label strings to the
+ * client, mirroring the email render's hydration.
+ */
+export async function editionsLabels(editions: EditionDTO[]): Promise<Record<string, string>> {
+  const ids = [...new Set(editions.flatMap(editionLogIds))];
+  const tracks = await getTracksByLogIds(ids);
+  const labels: Record<string, string> = {};
+
+  for (const id of ids) {
+    const track = tracks[id];
+    labels[id] = track ? trackLabel(track) : id;
+  }
+
+  return labels;
 }
 
 /**

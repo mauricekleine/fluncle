@@ -4,7 +4,12 @@ import { type EditionDTO, orderedGalaxies } from "@/lib/editions";
 import { logPageUrl, siteUrl } from "@/lib/fluncle-links";
 import { formatDateLong } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
+import { editionsLabels } from "@/lib/server/edition-email";
 import { getEditionByNumber } from "@/lib/server/editions";
+
+// The loader hydrates each finding's logId to its `Artist — Title` label (server-side,
+// one batched read) and ships the label strings to the client, mirroring the email.
+type EditionLoaderData = { edition: EditionDTO; labels: Record<string, string> };
 
 // One back issue of the mothership (`/newsletter/<number>`) rendered as a proper
 // web page — the intro, the galaxy-grouped finds (each linking to its permanent
@@ -13,7 +18,7 @@ import { getEditionByNumber } from "@/lib/server/editions";
 
 const fetchEdition = createServerFn({ method: "GET" })
   .validator((data: { number: string }) => data)
-  .handler(async ({ data: { number } }): Promise<EditionDTO> => {
+  .handler(async ({ data: { number } }): Promise<EditionLoaderData> => {
     const parsed = Number.parseInt(number, 10);
 
     if (!Number.isInteger(parsed) || parsed < 1) {
@@ -26,7 +31,7 @@ const fetchEdition = createServerFn({ method: "GET" })
       throw notFound();
     }
 
-    return edition;
+    return { edition, labels: await editionsLabels([edition]) };
   });
 
 // A typed head() outside the route options — reading loaderData inline makes the
@@ -69,12 +74,12 @@ function editionHead(edition: EditionDTO | undefined) {
 export const Route = createFileRoute("/newsletter/$number")({
   component: EditionPage,
   loader: ({ params }) => fetchEdition({ data: { number: params.number } }),
-  head: ({ loaderData }: { loaderData?: EditionDTO }) => editionHead(loaderData),
+  head: ({ loaderData }: { loaderData?: EditionLoaderData }) => editionHead(loaderData?.edition),
   notFoundComponent: EditionNotFound,
 });
 
 function EditionPage() {
-  const edition = Route.useLoaderData();
+  const { edition, labels } = Route.useLoaderData();
   const { content } = edition;
   const galaxies = orderedGalaxies(content);
 
@@ -100,7 +105,9 @@ function EditionPage() {
               {block.findings.map((finding) => (
                 <li key={finding.logId}>
                   <a href={logPageUrl(finding.logId)}>
-                    <span className="log-related-coordinate">{finding.logId}</span>
+                    <span className="log-related-coordinate">
+                      {labels[finding.logId] ?? finding.logId}
+                    </span>
                     {finding.why?.trim() ? (
                       <span className="log-newsletter-why">{finding.why}</span>
                     ) : null}
