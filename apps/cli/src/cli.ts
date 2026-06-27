@@ -6,7 +6,6 @@ import { Command, CommanderError } from "commander";
 import { fluncleAsciiLogo, fluncleTagline } from "./brand";
 import { setEnvProfile } from "./env";
 import { spotifyPlaylistUrl, telegramUrl } from "./links";
-import { maybePrintLiveCallout } from "./live";
 import { printJson, toJsonFailure } from "./output";
 import { formatError } from "./retry";
 
@@ -223,10 +222,6 @@ async function main(args = process.argv.slice(2)): Promise<void> {
     program.outputHelp();
     return;
   }
-
-  // The live-set callout, above the command's output while Fluncle is on the decks
-  // (non-admin human commands only). Best-effort — awaited but it never throws.
-  await maybePrintLiveCallout(args);
 
   try {
     assertParseArgsCompatiblePositionals(args);
