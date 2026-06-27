@@ -18,5 +18,5 @@ op inject -f -i "$TPL_DIR/fluncle-secrets.env.tpl" -o "$ts"
 grep -q OPENROUTER_API_KEY "$tg"      || { echo "gateway inject sanity fail" >&2; exit 1; }
 grep -q CLAUDE_CODE_OAUTH_TOKEN "$ts" || { echo "sweep inject sanity fail" >&2; exit 1; }
 install -m 600 -o root -g root "$tg" "$GATEWAY_OUT"
-install -m 600 -o 1000 -g 1000 "$ts" "$SWEEP_OUT"
+install -m 600 -o 10000 -g 10000 "$ts" "$SWEEP_OUT"
 echo "fluncle-secrets-sync: ok $(date -u +%FT%TZ)"
