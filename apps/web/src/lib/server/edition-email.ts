@@ -72,7 +72,11 @@ export async function renderEditionEmailHtml(edition: EditionDTO): Promise<strin
   }
 
   for (const block of content.galaxies ?? []) {
-    parts.push(`<h2>${escapeHtml(block.galaxy)}</h2>`);
+    // The newsletter no longer groups by galaxy — a block with an empty label is a
+    // single flat list, so skip the header. (A non-empty label still renders.)
+    if (block.galaxy.trim()) {
+      parts.push(`<h2>${escapeHtml(block.galaxy)}</h2>`);
+    }
     parts.push("<ul>");
 
     for (const finding of block.findings) {

@@ -224,7 +224,9 @@ function EditionPreview({ content }: { content: EditionDTO["content"] }) {
 
       {galaxies.map((block) => (
         <div key={block.galaxy} className="space-y-1.5">
-          <p className="text-xs font-bold text-muted-foreground">{block.galaxy}</p>
+          {block.galaxy.trim() ? (
+            <p className="text-xs font-bold text-muted-foreground">{block.galaxy}</p>
+          ) : null}
           <ul className="space-y-1">
             {block.findings.map((finding) => (
               <li key={finding.logId} className="flex flex-wrap items-baseline gap-x-2">

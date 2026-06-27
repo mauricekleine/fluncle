@@ -287,10 +287,9 @@ function fetchMixtapes(since: string, until: string): Mixtape[] {
 
 function buildAuthoringPrompt(findings: Finding[], mixtapes: Mixtape[]): string {
   const findingLines = findings.map((f) => {
-    const galaxy = f.galaxy?.name ?? "(unplaced)";
     const note = f.note?.trim() ? f.note.trim() : "(no note — OMIT the why for this finding)";
 
-    return `- logId=${f.logId ?? "?"} | galaxy=${galaxy} | note: ${note}`;
+    return `- logId=${f.logId ?? "?"} | note: ${note}`;
   });
 
   const mixtapeLines = mixtapes.map(
@@ -298,34 +297,27 @@ function buildAuthoringPrompt(findings: Finding[], mixtapes: Mixtape[]): string 
   );
 
   return [
-    "You are Fluncle, authoring this week's newsletter edition — the uncle with the good records writing a letter to his list.",
-    "Write strictly in Fluncle's Email-register voice as defined by the VOICE RAILS below — they are the canon for this call (you have no file tools here).",
+    "You are Fluncle, authoring this week's newsletter edition — the uncle with the good records, writing a letter to the people on his list.",
+    "Load and apply the `copywriting-fluncle` skill BEFORE you write a word — it is the full voice canon (Email register) and governs every line. Let it win over anything restated here.",
     "",
-    "You output ONE JSON object and NOTHING else — no preamble, no markdown fences, no commentary. Shape (field names verbatim):",
+    "Output ONE JSON object and NOTHING else — no preamble, no markdown fences, no commentary. Emit EXACTLY this shape (field names verbatim):",
     "{",
-    '  "subject": "<short, dry, sentence-case, specific to this week — no emoji, no exclamation>",',
+    '  "subject": "<a short, dry, sentence-case subject specific to this week — no emoji, no exclamation>",',
     '  "content": {',
     '    "intro": "<1-3 sentences, the week in one breath, first person>",',
-    '    "galaxies": [ { "galaxy": "Solar", "findings": [ { "logId": "021.7.1A", "why": "<from this finding\'s note; OMIT the field entirely if it has no note>" } ] } ],',
-    '    "mixtapeRef": "<a mixtape logId, ONLY if one is listed below; omit otherwise>",',
-    '    "tidbits": [ { "text": "<a recent, concrete, source-linked artist fact>", "source": "<url>" } ]',
+    '    "galaxies": [ { "galaxy": "", "findings": [ { "logId": "021.7.1A", "why": "<the why, from this finding\'s note; OMIT this field entirely if the finding has no note>" } ] } ],',
+    '    "mixtapeRef": "<the mixtape\'s logId, ONLY if a mixtape is listed below; omit otherwise>",',
+    '    "tidbits": [ { "text": "<a recent, concrete artist fact>", "source": "<the source URL>" } ]',
     "  }",
     "}",
     "",
-    "GROUPING + ORDER:",
-    "  - Group findings BY GALAXY: one block per galaxy that has finds this week. Order the blocks Solar, Nebular, Lunar, Astral.",
-    '  - Findings with galaxy=(unplaced) go in a FINAL block whose `galaxy` is the literal string "Also found".',
-    "  - Keep findings within a block in the order given below (newest-first).",
-    '  - `galaxy` in the output is the NAME string (e.g. "Solar") or "Also found".',
+    'SINGLE LIST: do NOT group or label by galaxy (placement is not shown in the newsletter). Emit EXACTLY ONE block with `galaxy` set to "" (an empty string), listing every finding in the order given below (newest-first). Never mention galaxies, the vibe map, or placement anywhere in your prose.',
     "",
-    "HARD RULES (do not break):",
-    "  - Each finding ref is ONLY { logId, why } — never artist, title, or URL (the render hydrates those). `why` is OMITTED entirely when the finding has no note.",
-    "  - The `why` comes from the finding's note (quote or lightly adapt it); never invent a reason. Keep each `why` to one breath.",
-    "  - `mixtapeRef` is present ONLY if a mixtape is listed below; never invent one.",
-    "  - `tidbits` is omitted unless you have a recent, concrete, source-linked artist fact you are sure of; at most 2-3; never fabricate. Omit when unsure.",
-    "  - `intro` is always present. Do NOT include the 'Ahoy cosmonauts,' open or 'Happy raving,'/'Fluncle' close — the render adds those.",
+    "THE WHY: each finding's note below is Fluncle's own words on why it made the cut — your PRIMARY material for that finding's `why`; quote or lightly adapt it. NEVER invent a reason for a finding with no note — OMIT its `why` entirely. Keep each `why` to one breath. A mixtape's note is its dream note.",
     "",
-    "VOICE RAILS (copywriting-fluncle is canon): a letter from a bruv; first person 'I', never 'we'; no exclamation marks; no em dashes in prose; sentence case; never the words 'transmission', 'signal' (as identity), 'curated', or 'content'; never name earthly geography (the cosmos replaces the map); if a line reads written rather than said out loud to a mate, rewrite it.",
+    "FINDING REFS: each finding is ONLY { logId, why } — never the artist, title, or URL (the render hydrates each logId to its live Artist — Title + links). `mixtapeRef` is present ONLY if a mixtape is listed below; never invent one. `tidbits` are optional and strict — only recent, concrete, source-linked artist facts you are sure of, at most 2-3, never fabricated; omit when you have none. `intro` is always present.",
+    "",
+    "VOICE (copywriting-fluncle is canon and overrides this): the Email register, a letter from a bruv; first person 'I', never 'we'; no exclamation marks; if a sentence reads written rather than said out loud to a mate, rewrite it. The 'Ahoy cosmonauts,' open and the 'Happy raving,' / 'Fluncle' close are added by the render — do NOT put them in `intro`.",
     "",
     `THIS WEEK'S FINDINGS (${findings.length}, newest-first):`,
     findingLines.length ? findingLines.join("\n") : "(none)",
@@ -359,11 +351,19 @@ function countFindings(content: AuthoredContent): number {
  */
 function authorEdition(findings: Finding[], mixtapes: Mixtape[]): Authored | null {
   const prompt = buildAuthoringPrompt(findings, mixtapes);
-  // NO tools: a skill-read (Glob/Grep + multiple Reads) adds variable round-trips that
-  // pushed a real run to ~2m12s — over the cron runner's 120s kill. The voice canon is
-  // carried INLINE in the prompt instead (keep those rails in sync with the
-  // copywriting-fluncle skill), so this is a single bounded generation pass, no tools.
-  const args = ["-p", "--model", NEWSLETTER_CLAUDE_MODEL, "--output-format", "json"];
+  // READ-ONLY tools so the authoring loads + applies the baked `copywriting-fluncle`
+  // skill (the canonical voice — never inlined/forked). The skill read pushes a run to
+  // ~2m12s, so the cron's script_timeout_seconds is raised to 300 in config.yaml (the
+  // newsletter's voice quality is worth the extra minute; same pattern as note/observe).
+  const args = [
+    "-p",
+    "--model",
+    NEWSLETTER_CLAUDE_MODEL,
+    "--allowedTools",
+    "Read,Glob,Grep",
+    "--output-format",
+    "json",
+  ];
 
   if (NEWSLETTER_CLAUDE_EFFORT) {
     args.push("--effort", NEWSLETTER_CLAUDE_EFFORT);
@@ -533,9 +533,10 @@ function main(): void {
   const editions = listEditions();
 
   // 1. MISS-RECOVERY: an unsent draft already stands → re-offer it, author nothing.
+  // (--dry-run skips this so a fresh authoring can be validated without disturbing it.)
   const existing = findUnsentDraft(editions);
 
-  if (existing?.id) {
+  if (existing?.id && !DRY_RUN) {
     const finds = countFindings(existing.content ?? {});
     const mixes = existing.content?.mixtapeRef ? 1 : 0;
     log(`unsent draft ${existing.id} already exists — re-offering, not authoring`);

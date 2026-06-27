@@ -14,3 +14,11 @@ model:
 # Discord: reply inline in the channel; an @mention no longer spawns a thread.
 discord:
   auto_thread: false
+
+# Cron: raise the `--no-agent` script timeout from the 120s default. The weekly
+# newsletter sweep (newsletter-sweep.sh) loads the copywriting-fluncle skill before it
+# authors (~2m12s end-to-end) — the canonical voice is worth the extra minute over a
+# faster-but-worse edition. Resolution order is env var (HERMES_CRON_SCRIPT_TIMEOUT) →
+# this setting → the 120s default. The other sweeps finish well under 120s regardless.
+cron:
+  script_timeout_seconds: 300
