@@ -107,7 +107,10 @@ describe("createEdition / updateEdition", () => {
     seedDraft({ number: null, status: "draft" });
 
     const edition = await createEdition({
-      contentJson: { intro: "Ahoy cosmonauts." },
+      contentJson: {
+        galaxies: [{ findings: [{ logId: "001.1.1A", why: "" }], galaxy: "Liftoff" }],
+        intro: "Ahoy cosmonauts.",
+      },
       subject: "First dispatch",
     });
 
@@ -118,6 +121,13 @@ describe("createEdition / updateEdition", () => {
   it("rejects a create with no content payload", async () => {
     seedDraft();
     await expect(createEdition({ subject: "Empty" })).rejects.toThrow(/content/i);
+  });
+
+  it("rejects a hollow create (no findings, no mixtape)", async () => {
+    seedDraft();
+    await expect(
+      createEdition({ contentJson: { intro: "Ten finds." }, subject: "Hollow" }),
+    ).rejects.toThrow(/finding|mixtape/i);
   });
 
   it("rejects editing a sent edition (frozen back-issue)", async () => {

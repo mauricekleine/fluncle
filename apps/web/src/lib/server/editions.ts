@@ -44,6 +44,31 @@ export type EditionInput = {
   windowUntil?: unknown;
 };
 
+// A real edition carries at least one finding or a mixtape — never a hollow,
+// intro-only shell (the doctrine's zero-find rule). Shared by the create fail-fast
+// and the send gate. Kept structural so it accepts both the parsed DTO content and a
+// freshly-parsed JSON payload.
+type FindingShape = { galaxies?: Array<{ findings?: unknown[] }>; mixtapeRef?: unknown };
+
+function editionHasFindings(content: FindingShape): boolean {
+  const findingCount = (content.galaxies ?? []).reduce(
+    (sum, block) => sum + (block.findings?.length ?? 0),
+    0,
+  );
+  return (
+    findingCount > 0 || (typeof content.mixtapeRef === "string" && content.mixtapeRef.trim() !== "")
+  );
+}
+
+function parseEditionContent(contentJson: string): FindingShape {
+  try {
+    const parsed: unknown = JSON.parse(contentJson);
+    return typeof parsed === "object" && parsed !== null ? (parsed as FindingShape) : {};
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Create a DRAFT edition (no number yet — the archive's source of truth, persisted
  * at author time). Mirrors `createMixtape`: a `randomUUID` id, the operator/agent's
@@ -55,6 +80,13 @@ export async function createEdition(input: EditionInput): Promise<EditionDTO> {
   // `requireContent` guarantees a non-undefined payload; assert it for the type.
   if (fields.contentJson === undefined) {
     throw new ApiError("invalid_content", "An edition needs a content payload", 400);
+  }
+
+  // Fail fast on a hollow draft: the newsletter cron authors a full edition in one
+  // shot, so a payload with no findings (the agent dropping `galaxies`) is a bug —
+  // reject it here so the cron errors immediately, not silently at the send gate.
+  if (!editionHasFindings(parseEditionContent(fields.contentJson))) {
+    throw new ApiError("empty_edition", "An edition needs at least one finding or a mixtape", 400);
   }
 
   const now = new Date().toISOString();
@@ -158,11 +190,7 @@ export async function sendEdition(
   // intro-only shell. (The agent once authored editions with the `galaxies` array
   // dropped, and a find-less edition mailed out empty; this is the server-side
   // backstop so it can't happen again, matching the doctrine's zero-find rule.)
-  const findingCount = (draft.content.galaxies ?? []).reduce(
-    (sum, block) => sum + block.findings.length,
-    0,
-  );
-  if (findingCount === 0 && !draft.content.mixtapeRef?.trim()) {
+  if (!editionHasFindings(draft.content)) {
     throw new ApiError(
       "empty_edition",
       "An edition needs at least one finding or a mixtape before it can be sent",
