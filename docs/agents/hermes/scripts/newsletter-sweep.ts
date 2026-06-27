@@ -1,0 +1,616 @@
+#!/usr/bin/env bun
+// newsletter-sweep.ts — the bun orchestrator behind the `--no-agent` weekly
+// newsletter cron (`fluncle-newsletter`).
+//
+// LIVE. Version-controlled source; the repo is canonical and the box is a deploy
+// target (fluncle-hermes-operator skill). Invoked by the bash wrapper
+// (newsletter-sweep.sh) the cron runner execs Fridays 15:00 Amsterdam — see that
+// file's header for the `hermes cron create` wire-up and ../cron/README.md.
+//
+// WHY THIS REPLACED THE AGENT LOOP. The newsletter used to be an AGENT cron (a
+// model-driven conversation that authored + persisted + offered the Send button). On
+// 2026-06-27 a single triggered run flailed for 83 model calls / ~$9.61 of OpenRouter
+// credit (it hand-rolled the shell for the CLI call, fumbled quoting, and — once the
+// new empty-edition guard started rejecting its hollow drafts — retried into a storm
+// with no iteration cap). This sweep moves the newsletter onto the SAME hybrid
+// `--no-agent` pattern as note/observe: everything deterministic except ONE bounded
+// `claude -p` authoring call. One call, not 83; a hard ceiling on cost; and the
+// authoring runs on the Claude SUBSCRIPTION (CLAUDE_CODE_OAUTH_TOKEN), not OpenRouter,
+// so it burns zero per-token credit.
+//
+// THE JOB, in order (mirrors the old doctrine, minus the agent):
+//   1. MISS-RECOVERY (deterministic): `fluncle admin newsletter list --json`. If an
+//      unsent draft already exists (status `draft`, no number), DO NOT author a new
+//      one — re-offer THAT draft (re-emit the operator summary) and exit. Its finds
+//      were never delivered; re-offering is correct.
+//   2. WINDOW (deterministic): UNTIL = now (ISO). SINCE = the most recent SENT
+//      edition's `windowUntil`, or now-7d if none. The window self-heals: only SENT
+//      editions anchor it, so a skipped week widens the next window instead of
+//      dropping finds.
+//   3. FETCH (deterministic): `/api/tracks?since&until&limit=48` (paged via
+//      nextCursor) for findings + `/api/mixtapes` filtered to the window. Public reads,
+//      no auth. Findings are capped (FIND_CAP, newest-first) to keep the one authoring
+//      call inside the cron runner's 120s budget; a cap hit is logged.
+//   4. ZERO-FIND RULE (deterministic): no findings AND no mixtapes → author nothing,
+//      exit. A missed Friday is quieter than a hollow one.
+//   5. AUTHOR (the ONE agentic step): build the prompt (the voice + the verbatim
+//      content shape, with the finds/mixtapes interpolated) and run `claude -p`
+//      (subscription auth, READ-ONLY tools so it can load `copywriting-fluncle`).
+//      Output is the structured `{subject, content}` JSON. We validate it carries at
+//      least one finding or a mixtape (the same zero-find rule the server guard
+//      enforces) before persisting — a hollow author result is dropped, never drafted.
+//   6. PERSIST (deterministic): write `content` to a temp file, then
+//      `fluncle admin newsletter draft --content-file … --subject … --window-since …
+//      --window-until … --json` (admin tier — the agent token drafts; it can't send).
+//   7. OFFER (deterministic, degraded): the old agent used an interactive `clarify`
+//      Send button, which needs the gateway. A `--no-agent` script can't render one, so
+//      stdout carries the one-line operator summary + the exact send command; the cron
+//      delivers it to Discord and the operator runs `fluncle admin newsletter send <id>`
+//      (operator tier — silence is never consent for a send). The draft persists
+//      regardless; next Friday's miss-recovery re-offers an un-sent one.
+//
+// stdout: the ONE operator-facing line the cron delivers to Discord (the summary + the
+// send command). All diagnostics + the machine summary → stderr (never the channel).
+
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+
+const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
+const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
+const SITE = process.env.FLUNCLE_SITE_URL ?? "https://www.fluncle.com";
+
+// The authoring model + optional effort, env-overridable (defaults match note-sweep).
+const NEWSLETTER_CLAUDE_MODEL = process.env.NEWSLETTER_CLAUDE_MODEL ?? "claude-sonnet-4-6";
+const NEWSLETTER_CLAUDE_EFFORT = process.env.NEWSLETTER_CLAUDE_EFFORT;
+
+// Cap the findings handed to the one authoring call so it stays inside the cron
+// runner's 120s kill (a normal week is well under this; a huge self-healed backlog
+// window is the only case that hits it — newest-first, the rest roll to next week).
+const FIND_CAP = Number(process.env.NEWSLETTER_FIND_CAP ?? "50");
+const PAGE_LIMIT = 48; // /api/tracks page size (matches the doctrine)
+const PAGE_CAP = 12; // hard ceiling on pages fetched (backstop against a cursor loop)
+
+const DISCORD_ALERT_WEBHOOK = process.env.DISCORD_ALERT_WEBHOOK;
+
+// --dry-run: do everything EXCEPT persist + deliver — print what WOULD be drafted.
+// Used to validate a run safely (one claude call, no draft, no Discord).
+const DRY_RUN = process.argv.includes("--dry-run");
+
+const log = (message: string) => console.error(`[newsletter-sweep] ${message}`);
+
+// Galaxy block order (the doctrine). Unplaced finds collect under "Also found" last.
+const GALAXY_ORDER = ["Solar", "Nebular", "Lunar", "Astral", "Also found"];
+
+// ---------------------------------------------------------------------------
+// Types — only the fields we consume.
+// ---------------------------------------------------------------------------
+
+type Edition = {
+  content?: { galaxies?: Array<{ findings?: unknown[] }>; mixtapeRef?: unknown };
+  id?: string;
+  number?: number | null;
+  status?: string;
+  subject?: string;
+  windowUntil?: string | null;
+};
+
+type Finding = {
+  galaxy?: { key?: string; name?: string };
+  logId?: string;
+  note?: string;
+};
+
+type Mixtape = {
+  addedAt?: string;
+  logId?: string;
+  note?: string;
+};
+
+type ClaudeEnvelope = { is_error?: boolean; result?: string; subtype?: string };
+
+// The authored payload claude returns: a subject + the content shape the renders read.
+type AuthoredContent = {
+  galaxies?: Array<{ findings?: Array<{ logId?: string; why?: string }>; galaxy?: string }>;
+  intro?: string;
+  mixtapeRef?: string;
+  tidbits?: Array<{ source?: string; text?: string }>;
+};
+type Authored = { content?: AuthoredContent; subject?: string };
+
+class ClaudeAuthError extends Error {}
+
+// ---------------------------------------------------------------------------
+// Shell + fetch helpers
+// ---------------------------------------------------------------------------
+
+function run(
+  bin: string,
+  args: string[],
+  input?: string,
+): { code: number; stderr: string; stdout: string } {
+  const result = spawnSync(bin, args, { encoding: "utf8", input, maxBuffer: 64 * 1024 * 1024 });
+
+  if (result.error) {
+    throw new Error(`failed to spawn ${bin}: ${result.error.message}`);
+  }
+
+  return { code: result.status ?? 1, stderr: result.stderr ?? "", stdout: result.stdout ?? "" };
+}
+
+function fluncleJson<T>(args: string[]): T {
+  const { code, stderr, stdout } = run(FLUNCLE_BIN, [...args, "--json"]);
+
+  if (code !== 0) {
+    throw new Error(`fluncle ${args.join(" ")} exited ${code}: ${stderr.trim()}`);
+  }
+
+  try {
+    return JSON.parse(stdout) as T;
+  } catch {
+    throw new Error(`fluncle ${args.join(" ")} did not return JSON: ${stdout.slice(0, 200)}`);
+  }
+}
+
+function curlJson<T>(url: string): T {
+  const { code, stderr, stdout } = run("curl", ["-sS", "--max-time", "30", url]);
+
+  if (code !== 0) {
+    throw new Error(`curl ${url} exited ${code}: ${stderr.trim()}`);
+  }
+
+  try {
+    return JSON.parse(stdout) as T;
+  } catch {
+    throw new Error(`curl ${url} did not return JSON: ${stdout.slice(0, 200)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// claude-auth detection — narrow, mirrors note-sweep: only an explicit re-auth /
+// quota signature counts so a transient model hiccup doesn't false-alarm.
+// ---------------------------------------------------------------------------
+
+const AUTH_SIGNATURES = [
+  "invalid api key",
+  "authentication_error",
+  "oauth token",
+  "oauth_token",
+  "please run /login",
+  "run claude login",
+  "claude setup-token",
+  "not logged in",
+  "unauthorized",
+  "401",
+  "credit balance is too low",
+];
+
+function looksLikeAuthFailure(text: string): boolean {
+  const haystack = text.toLowerCase();
+
+  return AUTH_SIGNATURES.some((signature) => haystack.includes(signature));
+}
+
+// ---------------------------------------------------------------------------
+// Window + fetch (all deterministic)
+// ---------------------------------------------------------------------------
+
+function listEditions(): Edition[] {
+  const response = fluncleJson<{ editions?: Edition[] }>(["admin", "newsletter", "list"]);
+
+  return response.editions ?? [];
+}
+
+/** The unsent draft to re-offer (miss-recovery), if any. */
+function findUnsentDraft(editions: Edition[]): Edition | undefined {
+  return editions.find(
+    (e) => e.status === "draft" && (e.number === null || e.number === undefined),
+  );
+}
+
+/** SINCE = the most recent SENT edition's windowUntil, else now-7d. */
+function computeSince(editions: Edition[], nowIso: string): string {
+  const sent = editions
+    .filter((e) => e.status === "sent")
+    .sort((a, b) => (b.number ?? 0) - (a.number ?? 0));
+  const cutoff = sent[0]?.windowUntil;
+
+  if (cutoff) {
+    return cutoff;
+  }
+
+  const weekAgo = new Date(Date.parse(nowIso) - 7 * 24 * 60 * 60 * 1000);
+
+  return weekAgo.toISOString();
+}
+
+function fetchFindings(since: string, until: string): Finding[] {
+  const findings: Finding[] = [];
+  let cursor: string | undefined;
+
+  for (let page = 0; page < PAGE_CAP; page += 1) {
+    const params = new URLSearchParams({ limit: String(PAGE_LIMIT), since, until });
+
+    if (cursor) {
+      params.set("cursor", cursor);
+    }
+
+    const response = curlJson<{ nextCursor?: string; tracks?: Finding[] }>(
+      `${SITE}/api/tracks?${params.toString()}`,
+    );
+
+    findings.push(...(response.tracks ?? []));
+
+    if (!response.nextCursor || findings.length >= FIND_CAP) {
+      break;
+    }
+
+    cursor = response.nextCursor;
+  }
+
+  if (findings.length > FIND_CAP) {
+    log(`window has ${findings.length} findings — capping the edition at the newest ${FIND_CAP}`);
+
+    return findings.slice(0, FIND_CAP);
+  }
+
+  return findings;
+}
+
+function fetchMixtapes(since: string, until: string): Mixtape[] {
+  const response = curlJson<{ mixtapes?: Mixtape[] }>(`${SITE}/api/mixtapes`);
+  const sinceMs = Date.parse(since);
+  const untilMs = Date.parse(until);
+
+  return (response.mixtapes ?? []).filter((m) => {
+    if (!m.addedAt) {
+      return false;
+    }
+
+    const at = Date.parse(m.addedAt);
+
+    return at >= sinceMs && at <= untilMs;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// The authoring prompt — the doctrine (verbatim content shape + voice rails) with
+// this window's findings + mixtapes interpolated. The model loads the
+// `copywriting-fluncle` skill for the full voice canon; we restate the hard,
+// gate-relevant rules so the output is safe.
+// ---------------------------------------------------------------------------
+
+function buildAuthoringPrompt(findings: Finding[], mixtapes: Mixtape[]): string {
+  const findingLines = findings.map((f) => {
+    const galaxy = f.galaxy?.name ?? "(unplaced)";
+    const note = f.note?.trim() ? f.note.trim() : "(no note — OMIT the why for this finding)";
+
+    return `- logId=${f.logId ?? "?"} | galaxy=${galaxy} | note: ${note}`;
+  });
+
+  const mixtapeLines = mixtapes.map(
+    (m) => `- logId=${m.logId ?? "?"} | note: ${m.note?.trim() || "(no note)"}`,
+  );
+
+  return [
+    "You are Fluncle, authoring this week's newsletter edition — the uncle with the good records writing a letter to his list.",
+    "Write strictly in Fluncle's Email-register voice as defined by the VOICE RAILS below — they are the canon for this call (you have no file tools here).",
+    "",
+    "You output ONE JSON object and NOTHING else — no preamble, no markdown fences, no commentary. Shape (field names verbatim):",
+    "{",
+    '  "subject": "<short, dry, sentence-case, specific to this week — no emoji, no exclamation>",',
+    '  "content": {',
+    '    "intro": "<1-3 sentences, the week in one breath, first person>",',
+    '    "galaxies": [ { "galaxy": "Solar", "findings": [ { "logId": "021.7.1A", "why": "<from this finding\'s note; OMIT the field entirely if it has no note>" } ] } ],',
+    '    "mixtapeRef": "<a mixtape logId, ONLY if one is listed below; omit otherwise>",',
+    '    "tidbits": [ { "text": "<a recent, concrete, source-linked artist fact>", "source": "<url>" } ]',
+    "  }",
+    "}",
+    "",
+    "GROUPING + ORDER:",
+    "  - Group findings BY GALAXY: one block per galaxy that has finds this week. Order the blocks Solar, Nebular, Lunar, Astral.",
+    '  - Findings with galaxy=(unplaced) go in a FINAL block whose `galaxy` is the literal string "Also found".',
+    "  - Keep findings within a block in the order given below (newest-first).",
+    '  - `galaxy` in the output is the NAME string (e.g. "Solar") or "Also found".',
+    "",
+    "HARD RULES (do not break):",
+    "  - Each finding ref is ONLY { logId, why } — never artist, title, or URL (the render hydrates those). `why` is OMITTED entirely when the finding has no note.",
+    "  - The `why` comes from the finding's note (quote or lightly adapt it); never invent a reason. Keep each `why` to one breath.",
+    "  - `mixtapeRef` is present ONLY if a mixtape is listed below; never invent one.",
+    "  - `tidbits` is omitted unless you have a recent, concrete, source-linked artist fact you are sure of; at most 2-3; never fabricate. Omit when unsure.",
+    "  - `intro` is always present. Do NOT include the 'Ahoy cosmonauts,' open or 'Happy raving,'/'Fluncle' close — the render adds those.",
+    "",
+    "VOICE RAILS (copywriting-fluncle is canon): a letter from a bruv; first person 'I', never 'we'; no exclamation marks; no em dashes in prose; sentence case; never the words 'transmission', 'signal' (as identity), 'curated', or 'content'; never name earthly geography (the cosmos replaces the map); if a line reads written rather than said out loud to a mate, rewrite it.",
+    "",
+    `THIS WEEK'S FINDINGS (${findings.length}, newest-first):`,
+    findingLines.length ? findingLines.join("\n") : "(none)",
+    "",
+    `THIS WEEK'S MIXTAPES (${mixtapes.length}):`,
+    mixtapeLines.length ? mixtapeLines.join("\n") : "(none)",
+    "",
+    "Output ONLY the JSON object.",
+  ].join("\n");
+}
+
+/** Pull a JSON object out of the model result (tolerate stray fences/preamble). */
+function extractJson(result: string): string {
+  const fenced = result.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const body = fenced ? fenced[1] : result;
+  const start = body.indexOf("{");
+  const end = body.lastIndexOf("}");
+
+  return start >= 0 && end > start ? body.slice(start, end + 1) : body;
+}
+
+function countFindings(content: AuthoredContent): number {
+  return (content.galaxies ?? []).reduce((sum, block) => sum + (block.findings?.length ?? 0), 0);
+}
+
+/**
+ * Author the edition via one `claude -p` call (subscription auth, read-only tools).
+ * Throws ClaudeAuthError on an auth/quota failure; returns null on any other failure
+ * or a result that fails validation (so we never persist junk); returns {subject,
+ * content} on success.
+ */
+function authorEdition(findings: Finding[], mixtapes: Mixtape[]): Authored | null {
+  const prompt = buildAuthoringPrompt(findings, mixtapes);
+  // NO tools: a skill-read (Glob/Grep + multiple Reads) adds variable round-trips that
+  // pushed a real run to ~2m12s — over the cron runner's 120s kill. The voice canon is
+  // carried INLINE in the prompt instead (keep those rails in sync with the
+  // copywriting-fluncle skill), so this is a single bounded generation pass, no tools.
+  const args = ["-p", "--model", NEWSLETTER_CLAUDE_MODEL, "--output-format", "json"];
+
+  if (NEWSLETTER_CLAUDE_EFFORT) {
+    args.push("--effort", NEWSLETTER_CLAUDE_EFFORT);
+  }
+
+  const { code, stderr, stdout } = run(CLAUDE_BIN, args, prompt);
+
+  if (code !== 0) {
+    const combined = `${stdout}\n${stderr}`;
+
+    if (looksLikeAuthFailure(combined)) {
+      throw new ClaudeAuthError(combined.trim().slice(-300));
+    }
+
+    log(
+      `claude -p exited ${code} (not auth): ${stderr.trim().slice(-200) || stdout.trim().slice(-200)}`,
+    );
+
+    return null;
+  }
+
+  let envelope: ClaudeEnvelope;
+
+  try {
+    envelope = JSON.parse(stdout) as ClaudeEnvelope;
+  } catch {
+    log(`claude -p did not return JSON envelope: ${stdout.slice(0, 200)}`);
+
+    return null;
+  }
+
+  if (envelope.is_error) {
+    const detail = `${envelope.subtype ?? ""} ${envelope.result ?? ""}`;
+
+    if (looksLikeAuthFailure(detail)) {
+      throw new ClaudeAuthError(detail.trim().slice(-300));
+    }
+
+    log(`claude -p returned is_error (${envelope.subtype ?? "?"})`);
+
+    return null;
+  }
+
+  const raw = typeof envelope.result === "string" ? envelope.result : "";
+  let authored: Authored;
+
+  try {
+    authored = JSON.parse(extractJson(raw)) as Authored;
+  } catch {
+    log(`could not parse the authored JSON: ${raw.slice(0, 200)}`);
+
+    return null;
+  }
+
+  const subject = authored.subject?.trim();
+  const content = authored.content;
+
+  if (!subject || !content) {
+    log("authored result missing subject or content — dropping");
+
+    return null;
+  }
+
+  // The same zero-find rule the server guard enforces — never persist a hollow author.
+  if (countFindings(content) === 0 && !content.mixtapeRef?.trim()) {
+    log("authored content has no findings and no mixtape — dropping (would be hollow)");
+
+    return null;
+  }
+
+  return { content, subject };
+}
+
+// ---------------------------------------------------------------------------
+// Persist (deterministic): write content to a temp file, draft via the CLI.
+// ---------------------------------------------------------------------------
+
+function persistDraft(authored: Authored, since: string, until: string): string | null {
+  const dir = mkdtempSync(join(tmpdir(), "newsletter-sweep-"));
+  const contentPath = join(dir, "content.json");
+
+  try {
+    writeFileSync(contentPath, JSON.stringify(authored.content), "utf8");
+
+    const { code, stderr, stdout } = run(FLUNCLE_BIN, [
+      "admin",
+      "newsletter",
+      "draft",
+      "--content-file",
+      contentPath,
+      "--subject",
+      authored.subject ?? "",
+      "--window-since",
+      since,
+      "--window-until",
+      until,
+      "--json",
+    ]);
+
+    if (code !== 0) {
+      log(`draft exited ${code}: ${stderr.trim().slice(-300) || stdout.trim().slice(-300)}`);
+
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(stdout) as { edition?: { id?: string } };
+
+      return parsed.edition?.id ?? null;
+    } catch {
+      log(`draft did not return JSON: ${stdout.slice(0, 200)}`);
+
+      return null;
+    }
+  } finally {
+    rmSync(dir, { force: true, recursive: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Auth-failure alert (best-effort Discord ping; loud stderr is the floor).
+// ---------------------------------------------------------------------------
+
+function pingClaudeAuthFailure(detail: string): void {
+  log(`claude auth failure (tail): ${detail}`);
+
+  if (!DISCORD_ALERT_WEBHOOK) {
+    return;
+  }
+
+  try {
+    run("curl", [
+      "-sS",
+      "-X",
+      "POST",
+      "-H",
+      "Content-Type: application/json",
+      "-d",
+      JSON.stringify({ content: "Fluncle newsletter-sweep: claude auth failed, re-auth needed." }),
+      "--max-time",
+      "10",
+      DISCORD_ALERT_WEBHOOK,
+    ]);
+  } catch {
+    // best-effort
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The operator-facing line (stdout → Discord). The send is operator-tier, so we
+// hand over the exact command rather than an (agent-only) interactive button.
+// ---------------------------------------------------------------------------
+
+function offerLine(subject: string, id: string, finds: number, mixes: number): string {
+  return [
+    `Drafted _${subject}_ — ${finds} track${finds === 1 ? "" : "s"} + ${mixes} mixtape${mixes === 1 ? "" : "s"}, send pending.`,
+    `Review + send (operator): fluncle admin newsletter send ${id}`,
+  ].join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+function main(): void {
+  const nowIso = new Date().toISOString();
+  const editions = listEditions();
+
+  // 1. MISS-RECOVERY: an unsent draft already stands → re-offer it, author nothing.
+  const existing = findUnsentDraft(editions);
+
+  if (existing?.id) {
+    const finds = countFindings(existing.content ?? {});
+    const mixes = existing.content?.mixtapeRef ? 1 : 0;
+    log(`unsent draft ${existing.id} already exists — re-offering, not authoring`);
+    console.log(offerLine(existing.subject ?? "(untitled)", existing.id, finds, mixes));
+
+    return;
+  }
+
+  // 2. WINDOW
+  const since = computeSince(editions, nowIso);
+  const until = nowIso;
+  log(`window ${since} .. ${until}`);
+
+  // 3. FETCH
+  const findings = fetchFindings(since, until);
+  const mixtapes = fetchMixtapes(since, until);
+  log(`fetched ${findings.length} finding(s) + ${mixtapes.length} mixtape(s)`);
+
+  // 4. ZERO-FIND RULE
+  if (findings.length === 0 && mixtapes.length === 0) {
+    log("no finds this window — skipping (a missed Friday is quieter than a hollow one)");
+    console.error(JSON.stringify({ ok: true, reason: "no_finds", skipped: true }));
+
+    return;
+  }
+
+  // 5. AUTHOR (the one agentic step)
+  let authored: Authored | null;
+
+  try {
+    authored = authorEdition(findings, mixtapes);
+  } catch (error) {
+    if (error instanceof ClaudeAuthError) {
+      pingClaudeAuthFailure(error.message);
+      console.error(JSON.stringify({ ok: false, reason: "claude_auth" }));
+      process.exit(1);
+    }
+
+    throw error;
+  }
+
+  if (!authored?.content || !authored.subject) {
+    log("authoring failed — no draft this run (the window re-opens next Friday)");
+    console.error(JSON.stringify({ ok: false, reason: "author_failed" }));
+    process.exit(1);
+  }
+
+  const finds = countFindings(authored.content);
+  const mixes = authored.content.mixtapeRef ? 1 : 0;
+
+  if (DRY_RUN) {
+    log("DRY RUN — not persisting or delivering. Would draft:");
+    console.error(
+      JSON.stringify({ content: authored.content, subject: authored.subject }, null, 2),
+    );
+    console.log(
+      `[dry-run] would draft _${authored.subject}_ — ${finds} tracks + ${mixes} mixtapes`,
+    );
+
+    return;
+  }
+
+  // 6. PERSIST
+  const id = persistDraft(authored, since, until);
+
+  if (!id) {
+    log("persist failed — no draft this run");
+    console.error(JSON.stringify({ ok: false, reason: "persist_failed" }));
+    process.exit(1);
+  }
+
+  log(`drafted edition ${id} (${finds} finds + ${mixes} mixtapes) — send pending`);
+
+  // 7. OFFER (stdout → Discord; operator runs the send)
+  console.log(offerLine(authored.subject, id, finds, mixes));
+}
+
+main();
