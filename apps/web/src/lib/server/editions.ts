@@ -154,6 +154,22 @@ export async function sendEdition(
     throw new ApiError("missing_subject", "An edition needs a subject before it can be sent", 409);
   }
 
+  // A real edition carries at least one finding or a mixtape — never a hollow,
+  // intro-only shell. (The agent once authored editions with the `galaxies` array
+  // dropped, and a find-less edition mailed out empty; this is the server-side
+  // backstop so it can't happen again, matching the doctrine's zero-find rule.)
+  const findingCount = (draft.content.galaxies ?? []).reduce(
+    (sum, block) => sum + block.findings.length,
+    0,
+  );
+  if (findingCount === 0 && !draft.content.mixtapeRef?.trim()) {
+    throw new ApiError(
+      "empty_edition",
+      "An edition needs at least one finding or a mixtape before it can be sent",
+      409,
+    );
+  }
+
   const html = await renderEditionEmailHtml(draft);
 
   const broadcast = await createBroadcast({

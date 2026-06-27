@@ -78,7 +78,10 @@ function seedDraft(overrides: Partial<Row> = {}): void {
   state.maxNumber = 0;
   state.row = {
     added_at: null,
-    content_json: JSON.stringify({ intro: "Ahoy." }),
+    content_json: JSON.stringify({
+      galaxies: [{ findings: [{ logId: "001.1.1A", why: "" }], galaxy: "Liftoff" }],
+      intro: "Ahoy.",
+    }),
     created_at: "2026-06-26T00:00:00.000Z",
     id: "edition-id",
     number: null,
@@ -171,6 +174,24 @@ describe("sendEdition — mint-on-send + Resend broadcast", () => {
 
     await expect(sendEdition("edition-id")).rejects.toThrow(/subject/i);
     expect(createBroadcast).not.toHaveBeenCalled();
+  });
+
+  it("refuses to send a hollow edition (no findings, no mixtape)", async () => {
+    // The Jun-27 incident: the agent dropped the `galaxies` array, so the email
+    // went out with only the intro. The guard must reject it before any broadcast.
+    seedDraft({ content_json: JSON.stringify({ intro: "Ten finds this week." }) });
+
+    await expect(sendEdition("edition-id")).rejects.toThrow(/finding|mixtape/i);
+    expect(createBroadcast).not.toHaveBeenCalled();
+  });
+
+  it("sends a mixtape-only edition (no findings is fine with a mixtape)", async () => {
+    seedDraft({ content_json: JSON.stringify({ intro: "A new tape.", mixtapeRef: "002.1.1F" }) });
+
+    const sent = await sendEdition("edition-id");
+
+    expect(createBroadcast).toHaveBeenCalledTimes(1);
+    expect(sent.status).toBe("sent");
   });
 });
 
