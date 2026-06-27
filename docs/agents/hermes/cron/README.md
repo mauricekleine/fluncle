@@ -8,17 +8,18 @@ Every step is a "read a queue → act per item, idempotently" loop over the `flu
 
 Live on the box as of the **2026-06-23 cutover** (+ `fluncle-render` wired **2026-06-24**). Every per-finding job is `--no-agent`; the Friday newsletter is the only **agent** job left. `fluncle-render` (the video render conductor, below) conducts renders on a separate scale-to-zero box.ascii box (rave-03), not on the Hermes box itself. "Box authoring" is how much model time the job spends locally: none (a pure deterministic trigger), one `claude -p` call (a hybrid — subscription auth, zero OpenRouter), or a full agent session. Run `hermes cron list` on the box for live job IDs + next-run times.
 
-| Job                      | Cadence             | Mode                   | Box authoring             | What it does                                                                     |
-| ------------------------ | ------------------- | ---------------------- | ------------------------- | -------------------------------------------------------------------------------- |
-| `fluncle-enrich`         | every 5m            | `--no-agent`           | none (on-box DSP)         | BPM / key / spectral analysis on the box, write-back                             |
-| `fluncle-context-note`   | every 5m            | `--no-agent`           | none (Worker Haiku)       | Firecrawl facts → distilled `context_note` + a `Texture:` line                   |
-| `fluncle-note`           | every 10m           | `--no-agent` hybrid    | one `claude -p`           | auto-author the editorial `/log` note (fill-empty-only)                          |
-| `fluncle-observation`    | every 60m           | `--no-agent` hybrid    | one `claude -p`           | author the recovered-audio script → Worker Cartesia render                       |
-| `fluncle-backfill`       | every 30m           | `--no-agent`           | none (Worker HTTP)        | Discogs id + Last.fm love catalogue repair                                       |
-| `fluncle-social-capture` | every 10m           | `--no-agent`           | none (curl, box-authored) | capture YouTube/TikTok post URLs from Postiz → write back                        |
-| `fluncle-render`         | every 60m           | `--no-agent` conductor | none (remote `claude -p`) | wake rave-03 → render + ship one finding's video → park (LIVE)                   |
-| `fluncle-healthcheck`    | every 10m           | `--no-agent`           | none (probes only)        | probe each service → Discord-ping on a status flip → POST the `/status` snapshot |
-| `fluncle-newsletter`     | Fri 15:00 Amsterdam | **agent**              | full agent session        | draft + persist the weekly edition (send is an operator Discord tap)             |
+| Job                      | Cadence             | Mode                   | Box authoring             | What it does                                                                            |
+| ------------------------ | ------------------- | ---------------------- | ------------------------- | --------------------------------------------------------------------------------------- |
+| `fluncle-enrich`         | every 5m            | `--no-agent`           | none (on-box DSP)         | BPM / key / spectral analysis on the box, write-back                                    |
+| `fluncle-context-note`   | every 5m            | `--no-agent`           | none (Worker Haiku)       | Firecrawl facts → distilled `context_note` + a `Texture:` line                          |
+| `fluncle-note`           | every 10m           | `--no-agent` hybrid    | one `claude -p`           | auto-author the editorial `/log` note (fill-empty-only)                                 |
+| `fluncle-observation`    | every 60m           | `--no-agent` hybrid    | one `claude -p`           | author the recovered-audio script → Worker Cartesia render                              |
+| `fluncle-backfill`       | every 30m           | `--no-agent`           | none (Worker HTTP)        | Discogs id + Last.fm love catalogue repair                                              |
+| `fluncle-social-capture` | every 10m           | `--no-agent`           | none (curl, box-authored) | capture YouTube/TikTok post URLs from Postiz → write back                               |
+| `fluncle-render`         | every 60m           | `--no-agent` conductor | none (remote `claude -p`) | wake rave-03 → render + ship one finding's video → park (LIVE)                          |
+| `fluncle-healthcheck`    | every 10m           | `--no-agent`           | none (probes only)        | probe each service → Discord-ping on a status flip → POST the `/status` snapshot        |
+| `fluncle-live`           | every 1m            | `--no-agent`           | none (Twitch poll)        | poll Twitch Helix for `flunclelive` → POST the live state for the cross-surface callout |
+| `fluncle-newsletter`     | Fri 15:00 Amsterdam | **agent**              | full agent session        | draft + persist the weekly edition (send is an operator Discord tap)                    |
 
 The per-cron sections below carry the full mechanism, schedule rationale, and the rebuild-from-scratch wiring for each. In the deploy recipes, `<box>` and `op://<vault>/…` are operator placeholders — substitute your own host and 1Password vault; the exact item paths live in the ops runbook note in 1Password (this repo is open source, so concrete hosts/vault names stay out of it).
 
@@ -266,6 +267,38 @@ docker exec hermes sh -c 'chown 1000:1000 /opt/data/scripts/fluncle-healthcheck.
 # Then create the cron:
 hermes cron create "every 10m" --no-agent --script fluncle-healthcheck.sh --deliver local --name fluncle-healthcheck
 ```
+
+## The live cron
+
+`fluncle-live` is the poller behind Fluncle's cross-surface **live-set callout** — the one loud, ephemeral beat that fans out across every surface (the web home banner, the crew Telegram ping+pin, the SSH footer line, the CLI, the MCP live-note, the `dig live` TXT record) while Fluncle is on the decks on Twitch, and clears itself the moment the set ends. Every ~1m it asks Twitch Helix whether `flunclelive` is streaming and POSTs the raw live state to the agent-tier `POST /api/admin/twitch/live` (oRPC `record_live_state`). It carries no prompt and burns **zero LLM tokens** — pure polling, a `--no-agent --script` job like the healthcheck. Source beside the other sweeps at [`../scripts/`](../scripts/): `fluncle-live.sh` (the bash entry the runner execs by extension) → `fluncle-live.ts` (the bun orchestrator).
+
+**The tick (all deterministic — no model time).** 1) **Token**: mint a Twitch **client-credentials app token** (public Helix reads, **no app review**), cached to `${HOME}/.fluncle-live/token.json` by its expiry so it isn't minted every tick (app tokens last ~60 days; a 401 re-mints once). 2) **Poll**: `GET https://api.twitch.tv/helix/streams?user_login=flunclelive` with the `Client-Id` + `Bearer` headers — a non-empty `data[]` ⇒ live (read `title` + `started_at`), empty ⇒ offline. 3) **POST** the raw `{ at, live, title, startedAt }` to `${LIVE_WORKER_URL}/api/admin/twitch/live`. The poller is intentionally **dumb**: it reports state every minute, idempotently. The **Worker** owns the smarts — it stores the row, detects the off→on / on→off transition, and fires the crew Telegram callout (post + pin on go-live, unpin on end). Auto-clear is **read-side**: every surface treats a flag older than ~5 min as offline, so a dead poller can never strand a permanent "LIVE" banner.
+
+**The POST is agent tier.** `record_live_state` is `adminAuth` only (no `operatorGuard` — internal `live_state` write, fully reversible), so the box's existing **agent-scoped** token drives it, like `record_health`. The tick emits one JSON summary line to stdout (`ok:true` even when the channel is offline — an offline channel is a normal, successful tick; `ok:false` would mean the poller itself couldn't run), diagnostics to stderr.
+
+| Job            | Schedule | What it does                                                                                                                                                                   | Server slice                                           |
+| -------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| `fluncle-live` | every 1m | Mint/reuse a Twitch app token; poll Helix `Get Streams` for `flunclelive`; POST the raw live state to `record_live_state`. Best-effort; never throws. No-op-cheap (no tokens). | `record_live_state` (agent-tier `/admin/twitch/live`). |
+
+**Public-safe by construction (this repo is open source).** The script + the docs carry **no** tokens, hostnames, or `op://` paths. The Twitch credentials + the Worker origin come from a `0600` operator-placed file `${HOME}/.live.env` (sourced by the `.sh` exactly like the healthcheck cron). Referenced here only by env-key NAME:
+
+- `LIVE_WORKER_URL` — the Worker origin (the live-state POST target `…/api/admin/twitch/live`).
+- `TWITCH_CLIENT_ID` — the Twitch dev-app client id ([dev.twitch.tv/console/apps](https://dev.twitch.tv/console/apps)).
+- `TWITCH_CLIENT_SECRET` — the Twitch dev-app client secret (Hermes hard-blocks provider-cred-looking vars from the cron env — § Operational gotchas — so it lives in the file).
+- `TWITCH_USER_LOGIN` — **OPTIONAL**. The channel login to poll; defaults to `flunclelive`.
+
+`FLUNCLE_API_TOKEN` is **not** in that file: the agent-scoped token rides the **cron env** (an unrecognized custom var passes Hermes' provider-cred blocklist, same as the other sweeps). To wire it on the box (the image already carries `bun` + `curl`):
+
+```bash
+# Deploy the script pair (~/.hermes is hermes-owned 700 — copy IN via docker cp, not scp):
+docker cp fluncle-live.sh hermes:/opt/data/scripts/ && docker cp fluncle-live.ts hermes:/opt/data/scripts/
+docker exec hermes sh -c 'chown 1000:1000 /opt/data/scripts/fluncle-live.* && chmod +x /opt/data/scripts/fluncle-live.sh'
+# Place the 0600 ${HOME}/.live.env (TWITCH_CLIENT_ID/SECRET + LIVE_WORKER_URL — values in the ops runbook note in 1Password).
+# Then create the cron:
+hermes cron create "every 1m" --no-agent --script fluncle-live.sh --deliver local --name fluncle-live
+```
+
+**De-risk before wiring (3 curls, ~30s).** Prove the spine with the operator's `client_id`/`client_secret` before trusting the cron: 1) mint — `curl -X POST 'https://id.twitch.tv/oauth2/token' -d "client_id=…&client_secret=…&grant_type=client_credentials"`; 2) live — `curl -H 'Client-Id: …' -H 'Authorization: Bearer <token>' 'https://api.twitch.tv/helix/streams?user_login=flunclelive'` while the channel is live (expect a populated `data[]`); 3) offline — the same when off (expect `data: []`). If that read works, the whole spine is green.
 
 ## The agent cron — the Friday newsletter (LIVE)
 

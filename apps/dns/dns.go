@@ -13,6 +13,14 @@ import (
 // data is dynamic and short-TTL (resolvers do not AXFR us).
 const soaSerial = 1
 
+// liveLabel is the reserved name (e.g. live.dig.fluncle.com) that answers the
+// cross-surface live-set callout instead of a finding lookup.
+const liveLabel = "live"
+
+// liveRecordTTL keeps the live TXT short so resolvers re-query within a minute of
+// the set ending (the callout must clear promptly), shorter than a finding's TTL.
+const liveRecordTTL = 60
+
 // handler answers queries for the delegated zone.
 type handler struct {
 	cfg config
@@ -57,6 +65,14 @@ func (h *handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	// lookup decides whether the finding exists (NXDOMAIN if it does not).
 	label := strings.TrimSuffix(name, "."+zone)
 
+	// The reserved `live` label answers the live-set callout off /api/status, not a
+	// finding lookup. It always exists (NODATA, never NXDOMAIN, for non-TXT types).
+	if label == liveLabel {
+		h.answerLive(m, q)
+		_ = w.WriteMsg(m)
+		return
+	}
+
 	switch q.Qtype {
 	case dns.TypeTXT, dns.TypeANY:
 		h.answerTXT(m, q, label)
@@ -99,6 +115,31 @@ func (h *handler) answerTXT(m *dns.Msg, q dns.Question, label string) {
 		},
 		Txt: buildTXT(t, h.cfg),
 	})
+}
+
+// answerLive answers the reserved `live` label: a TXT carrying the live-set
+// callout (v=fluncle1; live=0|1; …) on a short TTL, NODATA for other types.
+func (h *handler) answerLive(m *dns.Msg, q dns.Question) {
+	switch q.Qtype {
+	case dns.TypeTXT, dns.TypeANY:
+		info, err := h.api.liveStatus()
+		if err != nil {
+			log.Printf("live lookup: %v", err)
+			m.Rcode = dns.RcodeServerFailure
+			return
+		}
+		m.Answer = append(m.Answer, &dns.TXT{
+			Hdr: dns.RR_Header{
+				Name:   q.Name,
+				Rrtype: dns.TypeTXT,
+				Class:  dns.ClassINET,
+				Ttl:    liveRecordTTL,
+			},
+			Txt: buildLiveTXT(info),
+		})
+	default:
+		h.nodata(m)
+	}
 }
 
 func (h *handler) answerApex(m *dns.Msg, q dns.Question) {

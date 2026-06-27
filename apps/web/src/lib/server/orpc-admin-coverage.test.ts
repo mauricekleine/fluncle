@@ -117,6 +117,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // published video (video_url + video_squared_at), so the agent token 403s.
   "POST /admin/tracks/{trackId}/video/requeue": "requeue_video",
   "POST /admin/tracks/{trackId}/video/uploads": "presign_track_video_uploads",
+  // record_live_state (the cross-surface live-set callout's write) is contract-only
+  // oRPC — no TanStack route file; oRPC owns the path directly, like record_health.
+  // Admin tier (agent-allowed): the box's `fluncle-live` poller POSTs the raw Twitch
+  // state with its agent token each minute.
+  "POST /admin/twitch/live": "record_live_state",
   "POST /admin/youtube/token": "mint_youtube_token",
   // The PUT shares the `members` file/path with the POST above (append vs replace);
   // oRPC routes the two methods to distinct ops, so each gets its own entry.

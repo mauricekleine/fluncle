@@ -426,6 +426,7 @@ type model struct {
 	contact        string
 	message        string
 	status         *statusReport
+	live           *liveState
 	galaxy         galaxyState
 	loading        bool
 	err            string
@@ -531,7 +532,18 @@ type searchResult struct {
 // since timestamp ever flow through, the same fields the web page shows.
 type statusReport struct {
 	GeneratedAt string          `json:"generatedAt"`
+	Live        *liveState      `json:"live,omitempty"`
 	Services    []serviceStatus `json:"services"`
+}
+
+// liveState is the cross-surface live-set callout off /api/v1/status: whether
+// Fluncle is on the decks right now (staleness already applied server-side), the
+// public stream title, and the Twitch url. The footer renders one line when On.
+type liveState struct {
+	On        bool   `json:"on"`
+	Title     string `json:"title,omitempty"`
+	StartedAt string `json:"startedAt,omitempty"`
+	URL       string `json:"url"`
 }
 
 // serviceStatus is one probed service in the report. `Status` is the three-state
@@ -603,6 +615,17 @@ type statusMsg struct {
 	err    error
 }
 
+// liveMsg carries the live-set callout state for the menu footer — SEPARATE from
+// statusMsg so it never touches m.loading/m.err (the status screen's state). It is
+// best-effort: a failed read just carries a nil live (the footer shows nothing).
+type liveMsg struct {
+	live *liveState
+}
+
+// liveTickMsg re-arms the periodic live refresh so a long-lived session's footer
+// clears within ~a minute of a set ending (mirrors the read-side staleness guard).
+type liveTickMsg time.Time
+
 func newModel(app *app, width, height int) model {
 	return newModelWithBoot(app, width, height, bootCommand{kind: bootMenu})
 }
@@ -636,18 +659,21 @@ func unknownCommandLine(raw string) string {
 }
 
 func (m model) Init() tea.Cmd {
+	// fetchLive rides every boot path so the menu footer carries the live-set callout
+	// from the first paint (and starts the periodic refresh loop). It is best-effort
+	// and side-effect-free, so it never disturbs the boot screen's own load.
 	switch m.boot.kind {
 	case bootLatest:
-		return m.fetchLatestDetail()
+		return tea.Batch(m.fetchLatestDetail(), m.fetchLive())
 	case bootRandom:
-		return m.fetchRandom()
+		return tea.Batch(m.fetchRandom(), m.fetchLive())
 	case bootCoord:
-		return m.fetchByCoord(m.boot.coord)
+		return tea.Batch(m.fetchByCoord(m.boot.coord), m.fetchLive())
 	case bootUnknown:
 		// The deep-register line is already set; the menu still wants its footer.
-		return m.fetchFooter()
+		return tea.Batch(m.fetchFooter(), m.fetchLive())
 	}
-	return m.fetchFooter()
+	return tea.Batch(m.fetchFooter(), m.fetchLive())
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -756,6 +782,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.status = msg.report
+	case liveMsg:
+		// Best-effort footer state; re-arm the periodic refresh so the line clears
+		// when a set ends without the user navigating.
+		m.live = msg.live
+		return m, liveTick()
+	case liveTickMsg:
+		return m, m.fetchLive()
 	case tea.MouseWheelMsg:
 		return m.handleWheel(msg)
 	case tea.PasteMsg:
@@ -1167,6 +1200,20 @@ func (m model) renderFooter(compact bool) string {
 	rule := ruleStyle.Render(strings.Repeat("─", m.menuRuleWidth()))
 	var lines []string
 
+	// The live-set callout, directly under the rule when Fluncle is on the decks
+	// (Nebula Violet, the one sanctioned second light — DESIGN.md "The Live
+	// Exception"). Renders nothing otherwise; staleness is already applied server-side.
+	lines = append(lines, rule)
+	if m.live != nil && m.live.On {
+		liveLine := liveStyle.Render("● On the decks, live now") +
+			labelStyle.Render(" · "+liveDisplayURL(m.live.URL))
+		if compact {
+			lines = append(lines, liveLine)
+		} else {
+			lines = append(lines, "", liveLine)
+		}
+	}
+
 	if compact {
 		// One line for the finding, time inline, no breathing rows.
 		found := labelStyle.Render("Last found: ")
@@ -1178,9 +1225,9 @@ func (m model) renderFooter(compact bool) string {
 				rowTitleStyle.Render(m.footer.Title) +
 				labelStyle.Render(" · "+relativeTime(m.footer.AddedAt))
 		}
-		lines = []string{rule, found}
+		lines = append(lines, found)
 	} else {
-		lines = []string{rule, "", labelStyle.Render("Last found:")}
+		lines = append(lines, "", labelStyle.Render("Last found:"))
 		if m.footer == nil {
 			lines = append(lines, labelStyle.Render("Scanning the archive..."))
 		} else {
@@ -1209,6 +1256,14 @@ func (m model) renderFooter(compact bool) string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// liveDisplayURL strips the scheme and leading www. from the live url for a clean
+// terminal readout (https://www.twitch.tv/flunclelive → twitch.tv/flunclelive).
+func liveDisplayURL(url string) string {
+	url = strings.TrimPrefix(url, "https://")
+	url = strings.TrimPrefix(url, "http://")
+	return strings.TrimPrefix(url, "www.")
 }
 
 // menuRuleWidth returns the logo block width, capped at the content width so the
@@ -2083,6 +2138,30 @@ func (m model) fetchStatus() tea.Cmd {
 		}
 		return statusMsg{report: &report}
 	}
+}
+
+// liveRefreshInterval re-reads the live-set callout this often so the menu footer
+// clears within ~a minute of a set ending, even on a session that never leaves it.
+const liveRefreshInterval = 60 * time.Second
+
+// fetchLive reads ONLY the live-set callout off /api/v1/status for the menu footer.
+// Best-effort: a failed read carries a nil live (footer shows nothing) and never
+// surfaces an error or touches the loading state, so it is safe to run at boot.
+func (m model) fetchLive() tea.Cmd {
+	return func() tea.Msg {
+		var report statusReport
+		if err := m.app.getJSON("/api/v1/status", &report); err != nil {
+			return liveMsg{live: nil}
+		}
+		return liveMsg{live: report.Live}
+	}
+}
+
+// liveTick schedules the next live refresh.
+func liveTick() tea.Cmd {
+	return tea.Tick(liveRefreshInterval, func(t time.Time) tea.Msg {
+		return liveTickMsg(t)
+	})
 }
 
 // maxGalaxyPages caps the catalogue load so a misbehaving endpoint (a
@@ -3060,6 +3139,7 @@ const (
 	colorStardust       = "#b7ab95" // muted ink: labels, captions, artist
 	colorReentryRed     = "#ff6b57" // errors
 	colorRule           = "#3a342a" // separators, non-focus borders
+	colorNebulaViolet   = "#ab7bff" // the live-set callout (DESIGN.md "The Live Exception")
 )
 
 var (
@@ -3119,6 +3199,12 @@ var (
 			Foreground(lipgloss.Color(colorRule))
 	errorStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorReentryRed))
+	// liveStyle paints the live-set callout in Nebula Violet, the one sanctioned
+	// second light, shown only while Fluncle is on the decks (DESIGN.md "The Live
+	// Exception").
+	liveStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(colorNebulaViolet)).
+			Bold(true)
 	// ruleStyle draws horizontal separators in the rule color.
 	ruleStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorRule))

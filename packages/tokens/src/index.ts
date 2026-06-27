@@ -16,6 +16,10 @@ export const colors = {
   eclipseGold: "#f5b800",
   goldVeil: "#f5b8001a",
   inkOnGold: "#151006",
+  // The live-set colour — the one sanctioned second light, used ONLY for the
+  // cross-surface live-on-Twitch callout (DESIGN.md "The Live Exception").
+  nebulaVeil: "#ab7bff1a",
+  nebulaViolet: "#ab7bff",
   reentryRed: "#ff6b57",
   ruleDark: "#3a342a",
   sleeveBlack: "#10100d",
