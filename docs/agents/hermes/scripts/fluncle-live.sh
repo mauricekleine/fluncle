@@ -21,8 +21,8 @@
 # PUBLIC-SAFE BY CONSTRUCTION (this repo is open source): this script carries NO
 # hostnames, tokens, or secrets. The Twitch credentials are read from the SHARED,
 # op-injected ${HOME}/.fluncle-secrets.env (sourced below, exactly like the other
-# sweeps — note/observe/newsletter/render). That file is rendered from the
-# `Fluncle Automations` 1Password vault by the host `fluncle-secrets-sync` timer
+# sweeps — note/observe/newsletter/render). That file is rendered from the box's
+# 1Password secrets vault by the host `fluncle-secrets-sync` timer
 # (docs/agents/hermes/secrets/), so a credential is added by editing 1Password + the
 # inject template, never by hand-placing a per-sweep file. Keys it must carry:
 #
@@ -57,10 +57,9 @@ export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 export BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 
 # The Twitch credentials ride the SHARED op-injected secrets file (Hermes blocks
-# TWITCH_CLIENT_SECRET from the cron env). Rendered from the `Fluncle Automations`
-# 1Password vault by the host fluncle-secrets-sync timer (docs/agents/hermes/secrets/);
-# the same file every other sweep sources. FLUNCLE_API_TOKEN is NOT here — it rides
-# the cron env.
+# TWITCH_CLIENT_SECRET from the cron env). Rendered from the box's 1Password secrets
+# vault by the host fluncle-secrets-sync timer (docs/agents/hermes/secrets/); the same
+# file every other sweep sources. FLUNCLE_API_TOKEN is NOT here — it rides the cron env.
 LIVE_ENV_FILE="${LIVE_ENV_FILE:-${HOME:-/opt/data/home}/.fluncle-secrets.env}"
 if [ -r "${LIVE_ENV_FILE}" ]; then
   set -a

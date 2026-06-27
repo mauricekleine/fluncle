@@ -280,7 +280,7 @@ hermes cron create "every 10m" --no-agent --script fluncle-healthcheck.sh --deli
 | -------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
 | `fluncle-live` | every 1m | Mint/reuse a Twitch app token; poll Helix `Get Streams` for `flunclelive`; POST the raw live state to `record_live_state`. Best-effort; never throws. No-op-cheap (no tokens). | `record_live_state` (agent-tier `/admin/twitch/live`). |
 
-**Public-safe by construction (this repo is open source).** The script + the docs carry **no** tokens, hostnames, or `op://` paths. The two Twitch credentials are the only new secrets, and they ride the **shared op-injected `${HOME}/.fluncle-secrets.env`** the `.sh` sources — the same file every other sweep reads, rendered from the **`Fluncle Automations`** 1Password vault by the host `fluncle-secrets-sync` timer ([`../secrets/`](../secrets/)). Add them by 1Password, not by hand-placing a file:
+**Public-safe by construction (this repo is open source).** The script + the docs carry **no** tokens, hostnames, or `op://` paths. The two Twitch credentials are the only new secrets, and they ride the **shared op-injected `${HOME}/.fluncle-secrets.env`** the `.sh` sources — the same file every other sweep reads, rendered from the box's 1Password secrets vault by the host `fluncle-secrets-sync` timer ([`../secrets/`](../secrets/)). Add them via 1Password, not by hand-placing a file (the exact vault + item live in the ops runbook note, kept out of this open-source repo):
 
 - `TWITCH_CLIENT_ID` — the Twitch dev-app client id ([dev.twitch.tv/console/apps](https://dev.twitch.tv/console/apps)).
 - `TWITCH_CLIENT_SECRET` — the Twitch dev-app client secret (Hermes hard-blocks provider-cred-looking vars from the cron env — § Operational gotchas — so it must ride the injected file, not the cron env).
@@ -288,10 +288,11 @@ hermes cron create "every 10m" --no-agent --script fluncle-healthcheck.sh --deli
 `LIVE_WORKER_URL` (the POST target) defaults to `https://www.fluncle.com` in the orchestrator and `TWITCH_USER_LOGIN` defaults to `flunclelive`, so neither needs configuring (override via the shared file only for testing). `FLUNCLE_API_TOKEN` is **not** a new secret: the agent-scoped token already rides the **cron env** (an unrecognized custom var passes Hermes' provider-cred blocklist, same as the other sweeps). To wire it on the box (the image already carries `bun` + `curl`):
 
 ```bash
-# 1. Add the two creds to the `Fluncle Automations` 1Password vault, then reference
-#    them from the inject template /etc/hermes/fluncle-secrets.env.tpl (host), e.g.:
-#      TWITCH_CLIENT_ID=op://Fluncle Automations/<item>/client_id
-#      TWITCH_CLIENT_SECRET=op://Fluncle Automations/<item>/client_secret
+# 1. Add the two creds to the box's 1Password secrets vault (the one the
+#    fluncle-secrets-sync timer reads — exact vault/item in the ops runbook), then
+#    reference them from the host inject template, e.g.:
+#      TWITCH_CLIENT_ID=op://<vault>/<item>/client-id
+#      TWITCH_CLIENT_SECRET=op://<vault>/<item>/client-secret
 # 2. Re-render the shared secrets file now (or wait for the ~15m timer):
 sudo systemctl start fluncle-secrets-sync
 # 3. Deploy the script pair (~/.hermes is hermes-owned 700 — copy IN via docker cp, not scp):
