@@ -26,14 +26,15 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 // ---------------------------------------------------------------------------
-// Config — the Twitch credentials + Worker origin come from the file-sourced env
-// (the .sh sources ${HOME}/.live.env before exec'ing us); FLUNCLE_API_TOKEN rides
-// the cron env. NO hostnames/tokens are hard-coded — public-safe by construction.
+// Config — the Twitch credentials come from the shared op-injected secrets file
+// (the .sh sources ${HOME}/.fluncle-secrets.env before exec'ing us); FLUNCLE_API_TOKEN
+// rides the cron env. The Worker origin defaults to prod (override via LIVE_WORKER_URL
+// only for testing). NO tokens are hard-coded — public-safe by construction.
 // ---------------------------------------------------------------------------
 
 const HOME = process.env.HOME ?? homedir() ?? "/opt/data/home";
 
-const WORKER_URL = (process.env.LIVE_WORKER_URL ?? "").replace(/\/+$/, "");
+const WORKER_URL = (process.env.LIVE_WORKER_URL ?? "https://www.fluncle.com").replace(/\/+$/, "");
 const TWITCH_CLIENT_ID = process.env.TWITCH_CLIENT_ID ?? "";
 const TWITCH_CLIENT_SECRET = process.env.TWITCH_CLIENT_SECRET ?? "";
 const TWITCH_USER_LOGIN = process.env.TWITCH_USER_LOGIN ?? "flunclelive";

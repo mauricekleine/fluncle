@@ -19,20 +19,24 @@
 # lives in the bun orchestrator beside it. Its stdout is the cron's run output.
 #
 # PUBLIC-SAFE BY CONSTRUCTION (this repo is open source): this script carries NO
-# hostnames, tokens, or secrets. The Twitch credentials + the Worker origin are read
-# from a 0600 operator-placed file at ${HOME}/.live.env (sourced below, exactly like
-# the healthcheck cron sources its env). Required keys:
+# hostnames, tokens, or secrets. The Twitch credentials are read from the SHARED,
+# op-injected ${HOME}/.fluncle-secrets.env (sourced below, exactly like the other
+# sweeps — note/observe/newsletter/render). That file is rendered from the
+# `Fluncle Automations` 1Password vault by the host `fluncle-secrets-sync` timer
+# (docs/agents/hermes/secrets/), so a credential is added by editing 1Password + the
+# inject template, never by hand-placing a per-sweep file. Keys it must carry:
 #
-#   LIVE_WORKER_URL      — the Worker origin, e.g. https://www.fluncle.com (the POST
-#                          target for the live state: ${LIVE_WORKER_URL}/api/admin/twitch/live).
 #   TWITCH_CLIENT_ID     — the Twitch dev-app client id (dev.twitch.tv/console/apps).
 #   TWITCH_CLIENT_SECRET — the Twitch dev-app client secret.
-#   TWITCH_USER_LOGIN    — OPTIONAL. The channel login to poll. Defaults to flunclelive.
+#
+# Optional, both with safe defaults in the orchestrator (set only to override):
+#   LIVE_WORKER_URL   — the Worker origin. Defaults to https://www.fluncle.com.
+#   TWITCH_USER_LOGIN — the channel login to poll. Defaults to flunclelive.
 #
 # FLUNCLE_API_TOKEN (the agent-scoped token that authorizes the POST) arrives via the
 # CRON ENV — an unrecognized custom var passes Hermes' provider-cred blocklist, same
-# as the healthcheck + observe sweeps. TWITCH_CLIENT_SECRET resembles a provider cred,
-# so Hermes hard-blocks it from the cron env — that is why it lives in the 0600 file.
+# as the other sweeps. TWITCH_CLIENT_SECRET resembles a provider cred, so Hermes
+# hard-blocks it from the cron env — that is why it rides the op-injected file.
 #
 # Operator wires it on the box (image carries bun + curl):
 #   hermes cron create "every 1m" --no-agent --script fluncle-live.sh \
@@ -52,11 +56,12 @@ export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 # so pin the ABSOLUTE interpreter path. The orchestrator reads BUN_BIN.
 export BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 
-# The Twitch credentials + Worker origin are file-sourced (Hermes blocks
-# TWITCH_CLIENT_SECRET from the cron env; the rest are kept out of the repo). A 0600
-# ${HOME}/.live.env populated by the operator (see the ops runbook note in 1Password).
-# FLUNCLE_API_TOKEN is NOT here — it rides the cron env.
-LIVE_ENV_FILE="${LIVE_ENV_FILE:-${HOME:-/opt/data/home}/.live.env}"
+# The Twitch credentials ride the SHARED op-injected secrets file (Hermes blocks
+# TWITCH_CLIENT_SECRET from the cron env). Rendered from the `Fluncle Automations`
+# 1Password vault by the host fluncle-secrets-sync timer (docs/agents/hermes/secrets/);
+# the same file every other sweep sources. FLUNCLE_API_TOKEN is NOT here — it rides
+# the cron env.
+LIVE_ENV_FILE="${LIVE_ENV_FILE:-${HOME:-/opt/data/home}/.fluncle-secrets.env}"
 if [ -r "${LIVE_ENV_FILE}" ]; then
   set -a
   # shellcheck source=/dev/null
