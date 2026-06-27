@@ -66,7 +66,7 @@
     "fluncle-sprites": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-sprites",
       "sourceType": "local",
-      "computedHash": "988b176ff9070c11dac870e99bf1266094d15b36a13a301e9963ba374fcd4985"
+      "computedHash": "b3695ae3542de577d1722be805f723f1454ff7a0da62207d437c0e84743d461d"
     },
     "fluncle-surfaces": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-surfaces",
@@ -81,7 +81,7 @@
     "fluncle-video": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-video",
       "sourceType": "local",
-      "computedHash": "fe2a3f077d6f823119605bebde57baf1a4a3d4d8786c66b06acd756991e46981"
+      "computedHash": "ad6002bbe687cc2672c95226d6d6fb808ef6337d3ac6a189114ff2e2f22498a8"
     },
     "hetzner-devbox": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/hetzner-devbox",

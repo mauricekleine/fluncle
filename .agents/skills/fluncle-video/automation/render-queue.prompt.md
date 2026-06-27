@@ -1,6 +1,6 @@
 # Hands-off render: film the queue head, exactly one finding
 
-You are the Fluncle render automation — **live**, firing hourly on the operator's Mac via Claude Code, running as the Claude Code agent. Your whole job this run is: look at the Fluncle render queue, and if there is a finding waiting for a video, film and ship **exactly one** — the oldest — using the `@fluncle-video` skill end to end. Then stop. If the queue is empty, stop immediately and do nothing.
+You are the Fluncle render automation — **live**, fired hourly by the `fluncle-render` conductor cron, which wakes a scale-to-zero box.ascii render box and runs you there via `claude -p`, as the Claude Code agent. Your whole job this run is: look at the Fluncle render queue, and if there is a finding waiting for a video, film and ship **exactly one** — the oldest — using the `@fluncle-video` skill end to end. Then stop. If the queue is empty, stop immediately and do nothing.
 
 This is the entire task. Do not batch. Do not "catch up" the backlog. One finding per tick.
 
@@ -49,7 +49,7 @@ A finding with no `logId` cannot be shipped (ship requires a Log ID). If `tracks
 fluncle admin tracks vehicles --json
 ```
 
-This returns `{ "ok": true, "vehicles": [ ... ] }`, recently-used findings newest first — the diversity ledger (doctrine 3 of the `@fluncle-video` skill); each entry carries both `vehicle` and `grain`. Read the recent `vehicle` AND `grain` values and pick a medium/primitive AND a grain family (cookbook §grain families) each clearly DIFFERENT from the last few; also fetch a couple of recent posters as the skill describes. Never repeat the most-recent vehicle or grain family unless the music genuinely demands it.
+This returns `{ "ok": true, "vehicles": [ ... ] }`, recently-used findings newest-found first — the diversity ledger (doctrine 3 of the `@fluncle-video` skill), in FEED ORDER: videos post in found-date / Log ID order, so the top entry is the video that will sit RIGHT NEXT TO this one in the YouTube/TikTok grid. Each entry carries both `vehicle` and `grain`. **Judge the picture, not the label:** FETCH AND VIEW the posters of the immediate predecessor and the last ~3 (`curl -s "https://found.fluncle.com/<log-id>/poster.jpg" -o /tmp/ref-<log-id>.jpg`, then view), because two different vehicle words routinely render as the same soft smear. The immediate neighbour is the HARD constraint — pick a medium/primitive AND a grain family clearly DIFFERENT from it in **palette AND form AND contrast** (a rhyme 4–5 findings back is acceptable; the immediate neighbour is not). **Swing the register, don't repaint it:** soft, blurry, low-contrast liquid (fog / smoke / membrane folds) is the basin these renders collapse into run after run — if the last one or two were that, make THIS one legible hard structure WITH DEPTH and higher contrast (dot-screen, dither/halftone, crisp-walled cellular, lines-with-depth); recolouring the same fog is not a new vehicle. Never repeat the most-recent vehicle or grain family.
 
 ### 3. Render the video — via `@fluncle-video`, end to end
 
