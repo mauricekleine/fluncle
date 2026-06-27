@@ -4,6 +4,8 @@ Every pinned/baked version in Fluncle's runtime supply chain, with where it live
 
 All commands assume the repo root as the working directory. The "check latest" one-liners are read-only (npm/curl) — safe to run on any tick.
 
+**Most of this is now automated.** `.github/workflows/hermes-pin-drift.yml` (the script `.github/scripts/hermes-pin-drift.sh`) sweeps items **2–4** (bun, the `fluncle` CLI, the Claude Code CLI) on every `fluncle` release + hourly, and opens a PR for a same-major bump; **Renovate** (`renovate.json`) owns item **6** (the Actions digests); item **1** (base image) is report-only and item **5** (box.ascii) is unpinnable. This inventory stays the source of truth the workflow encodes and the operator's runbook for the brakes it reports.
+
 ---
 
 ## 1. Nous Research Hermes base image — PRE-1.0, BRAKE BY DEFAULT
@@ -25,8 +27,8 @@ All commands assume the repo root as the working directory. The "check latest" o
 
   These are calendar-versioned (`vYYYY.M.D`). Compare the newest tag to the pin.
 
-- **How to bump:** edit the `FROM` tag → **rebuild the image + redeploy + smoke-test** (operator step — see `bump-procedure.md`). The version line also busts the Docker layer cache.
-- **Safety:** **PULL THE BRAKE — always report, never ship.** Pre-1.0; a base bump can change the runtime or drop the gateway below the model-context floor at startup. The routine _can_ rebuild + smoke-test, but the base's failure mode is the **whole gateway**, not one probe — too coarse and too consequential to ship unattended. Report the available tag and let the operator decide. Periodically the operator _should_ take a base bump for upstream security patches — surface it, do not apply it.
+- **How to bump:** edit the `FROM` tag → open a PR → merge when CI green → the on-box `fluncle-pin-watch` timer self-deploys the rebuild (see `bump-procedure.md` and `docs/agents/hermes/pin-watch/`). The version line also busts the Docker layer cache.
+- **Safety:** **PULL THE BRAKE — always report, never ship.** Pre-1.0; a base bump can change the runtime or drop the gateway below the model-context floor at startup. The base's failure mode is the **whole gateway**, not one probe — too coarse and too consequential to ship unattended even with the pin-watch pre-smoke safety net. Report the available tag and let the operator decide. Periodically the operator _should_ take a base bump for upstream security patches — surface it, do not apply it.
 
 ---
 
@@ -55,8 +57,8 @@ bun is baked into the image, declared as the repo's `packageManager`, and reques
     | grep -m1 '"tag_name"' | sed 's/.*"bun-v//;s/".*//'
   ```
 
-- **How to bump:** change the version in **all** of: the Dockerfile installer line (`bun-v<new>`), `package.json` `packageManager` (`bun@<new>`), and every workflow `bun-version:`. Then the Dockerfile change ships via image rebuild; the `package.json` + workflow changes ship via the PR's CI deploy-gate and merge to `main`.
-- **Safety:** a **patch/minor** that the CI deploy-gate accepts is safe to ship (it is the same interpreter CI runs). A **major** bun bump = **brake** (toolchain-wide behaviour change). The repo-side `package.json` + workflow change ships on merge; the routine ships the Dockerfile line on the same box rebuild it does for any baked-pin bump (smoke-validated, rollback on fail).
+- **How to bump:** change the version in **all** of: the Dockerfile installer line (`bun-v<new>`), `package.json` `packageManager` (`bun@<new>`), and every workflow `bun-version:`. The Dockerfile change ships via the box's `fluncle-pin-watch` self-deploy after the PR merges; the `package.json` + workflow changes ship via the PR's CI deploy-gate and merge to `main`.
+- **Safety:** a **patch/minor** that the CI deploy-gate accepts is safe to ship (it is the same interpreter CI runs). A **major** bun bump = **brake** (toolchain-wide behaviour change). The repo-side `package.json` + workflow change ships on merge; the baked Dockerfile line ships via pin-watch (rebuild → pre-smoke → auto-rollback on fail).
 
 ---
 
@@ -76,8 +78,8 @@ bun is baked into the image, declared as the repo's `packageManager`, and reques
   npm view fluncle version
   ```
 
-- **How to bump:** edit the `fluncle@<version>` → rebuild + redeploy. The version line busts the layer cache. (This is Fluncle's own CLI, released by the repo's `cli-release.yml`; it carries the renamed Convention-B surface + admin commands the crons call.)
-- **Safety:** a **patch/minor** is safe to ship — it is first-party, and a stale CLI on the box just lacks a recent command. The bump reaches the box on an image rebuild, which the routine now does **end-to-end after merge** (rebuild + smoke-test, rollback on a failed smoke). A **major** = brake (a renamed/removed command could break a cron).
+- **How to bump:** edit the `fluncle@<version>` line → open a PR → merge when CI green. The version line busts the layer cache, and the on-box `fluncle-pin-watch` timer picks it up: rebuild → pre-smoke → swap → auto-rollback. (This is Fluncle's own CLI, released by the repo's `cli-release.yml`; it carries the renamed Convention-B surface + admin commands the crons call.)
+- **Safety:** a **patch/minor** is safe to ship — it is first-party, and a stale CLI on the box just lacks a recent command. The merge triggers the pin-watch self-deploy (pre-smoke-validated, auto-rollback on fail). A **major** = brake (a renamed/removed command could break a cron).
 
 ---
 
@@ -97,8 +99,8 @@ bun is baked into the image, declared as the repo's `packageManager`, and reques
   npm view @anthropic-ai/claude-code version
   ```
 
-- **How to bump:** edit `@anthropic-ai/claude-code@<version>` → rebuild + redeploy. This is the `claude -p` binary the observation cron's one agentic step shells out to (subscription auth at run time; zero OpenRouter tokens). Never float `latest` — the Hermes toolchain is pinned whole.
-- **Safety:** a **patch/minor** is safe to ship (it is the agent CLI, not the model or the auth; a patch rarely changes the `claude -p` contract). The deploy-gate can't validate a baked pin, so the routine validates it on the box: rebuild + **smoke-test** after merge, rollback on a failed smoke. A **major** = brake (the `-p` / skills-discovery contract could change). Anything touching the **auth token shape** = brake regardless of version.
+- **How to bump:** edit `@anthropic-ai/claude-code@<version>` → open a PR → merge when CI green. The on-box `fluncle-pin-watch` timer then rebuilds, pre-smokes (including an agent-tier `{ok:true}` check), and auto-rolls-back on any failure. This is the `claude -p` binary the observation cron's one agentic step shells out to (subscription auth at run time; zero OpenRouter tokens). Never float `latest` — the Hermes toolchain is pinned whole.
+- **Safety:** a **patch/minor** is safe to ship (it is the agent CLI, not the model or the auth; a patch rarely changes the `claude -p` contract). The deploy-gate can't validate a baked pin; the pin-watch pre-smoke validates it on the box before the live container is touched. A **major** = brake (the `-p` / skills-discovery contract could change). Anything touching the **auth token shape** = brake regardless of version.
 
 ---
 
@@ -108,8 +110,8 @@ bun is baked into the image, declared as the repo's `packageManager`, and reques
 - **Marker:** `curl -fsSL https://box.ascii.dev/install` (the comment says `box.ascii is pre-1.0 and its installer offers no version pin … this is the one image dependency not version-pinned … Re-verify the conductor after a base rebuild.`)
 - **Current pin:** **none.** The installer tracks the `ascii-prod` channel and the CLI self-updates. There is no version to read and nothing to bump.
 - **Check latest:** N/A — not pinnable. Do not try to pin it; that is by design.
-- **Action on a sweep:** there is **no bump**. The only maintenance is to **re-verify the render conductor after a rebuild** (a `box status` → authed, then a conductor dry-run) — which the routine already does as part of its post-rebuild smoke-test whenever it rebuilds for another baked pin. If a sweep finds nothing else to do, box.ascii contributes a one-line "unpinnable, re-verify post-rebuild" note and nothing more.
-- **Safety:** always **brake** in the sense that the routine never bumps it. It re-verifies the conductor as part of any post-rebuild smoke-test (the routine's own, or the operator's).
+- **Action on a sweep:** there is **no bump**. The only maintenance is to **re-verify the render conductor after a rebuild** (a `box status` → authed, then a conductor dry-run) — which the on-box pin-watch post-smoke already does whenever it rebuilds for another baked pin. If a sweep finds nothing else to do, box.ascii contributes a one-line "unpinnable, re-verify post-rebuild" note and nothing more.
+- **Safety:** always **brake** in the sense that the routine never bumps it. The pin-watch post-smoke re-verifies the conductor as part of any rebuild it does; the routine itself never SSHes to the box to do so.
 
 ---
 
@@ -137,7 +139,7 @@ The `.deepsec` scan (`.deepsec/data/fluncle/reports/`) flags every workflow acti
   If the tag points at an annotated-tag object, dereference it: `gh api repos/<owner>/<repo>/git/tags/<sha> --jq '.object.sha'`.
 
 - **How to apply (the SHA-pin):** replace `uses: actions/checkout@v6` with `uses: actions/checkout@<40-char-sha> # v6` (keep the version in a trailing comment so humans and bots can read it). Do this for each flagged action **at its current major** — you are hardening the reference, not upgrading the action.
-- **Renovate recommendation:** the `.deepsec` finding recommends a bot (Renovate or Dependabot) to keep SHA-pinned actions bumped. The repo has **no** `renovate.json`/`dependabot.yml` today. Adding one is a reasonable, low-risk follow-up the routine may include in its PR (Renovate's `helpers:pinGitHubActionDigests` preset pins-and-tracks) — but call it out in the PR body as a config addition, not silently.
+- **Renovate owns this axis now.** `renovate.json` (repo root) configures the Renovate GitHub App scoped to the `github-actions` manager with the `helpers:pinGitHubActionDigests` preset — it SHA-pins each action and refreshes the digest (same-major) as the action ships updates; a new major waits for dependency-dashboard approval. The config is **inert until the Renovate app is installed** on the repo. A manual sweep no longer hand-SHA-pins the actions — instead, verify Renovate is installed and its PRs are flowing.
 - **Safety:** **SHA-pinning at the current major is SAFE to auto-apply** — it changes no behaviour (same commit the tag resolves to today), and the CI deploy-gate/PR run proves the workflow still parses and runs. Bumping an action to a **new major** = brake (report it). Adding a Renovate config is safe but should be named explicitly in the PR.
 
 ---
@@ -151,4 +153,4 @@ The `.deepsec` scan (`.deepsec/data/fluncle/reports/`) flags every workflow acti
 | 3   | `fluncle` CLI       | `Dockerfile` `npm install -g fluncle@`                                            | `grep 'fluncle@'`           | `npm view fluncle version`                   | patch/minor yes, major brake      |
 | 4   | Claude Code CLI     | `Dockerfile` `@anthropic-ai/claude-code@`                                         | `grep 'claude-code@'`       | `npm view @anthropic-ai/claude-code version` | patch/minor yes, major/auth brake |
 | 5   | box.ascii CLI       | `Dockerfile` `box.ascii.dev/install`                                              | unpinned                    | N/A                                          | **Never** (re-verify only)        |
-| 6   | GitHub Actions tags | `.github/workflows/*.yml` `uses: …@vN`                                            | `grep 'uses:.*@'`           | `gh api …/git/refs/tags/<tag>`               | **SHA-pin at current major: yes** |
+| 6   | GitHub Actions tags | `.github/workflows/*.yml` `uses: …@vN`                                            | `grep 'uses:.*@'`           | `gh api …/git/refs/tags/<tag>`               | **Renovate (auto-pins + tracks)** |

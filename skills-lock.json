@@ -15,7 +15,7 @@
     "copywriting-fluncle": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/copywriting-fluncle",
       "sourceType": "local",
-      "computedHash": "dd711af890c9bda9899bcb74f826acdaedc8baa372560df93a98a52d6a8ed6da"
+      "computedHash": "2f0d66131c69ab1fc2428e73e1e1690521eb73c1fa9634e1a6dd05a25d17df04"
     },
     "email-best-practices": {
       "source": "resend/resend-skills",
@@ -41,7 +41,7 @@
     "fluncle-maintenance": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-maintenance",
       "sourceType": "local",
-      "computedHash": "6e06cfcb7b5d5508cd7998dab490ac267ebbc7f46437e783801dc9a898b851f2"
+      "computedHash": "00a6e346f0f9b03f53752853943b70eb8d411200e25e8541049f6282fd7c8242"
     },
     "fluncle-mixtapes": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-mixtapes",
@@ -51,7 +51,7 @@
     "fluncle-operator": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-operator",
       "sourceType": "local",
-      "computedHash": "2e43826c5f4845e2001c1a859960dda96b48da08a3e44ebb4a91f6de98dbea64"
+      "computedHash": "8b4074a2ba5811bdb62e6e02510a2f92c7db9b7bcebfe398f65bfad620ced483"
     },
     "fluncle-publish": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-publish",
@@ -66,12 +66,12 @@
     "fluncle-sprites": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-sprites",
       "sourceType": "local",
-      "computedHash": "b3695ae3542de577d1722be805f723f1454ff7a0da62207d437c0e84743d461d"
+      "computedHash": "0deb8442a1cc56ff771ed688d5ffbcbe46da6568cc83accb66138cd297a8e726"
     },
     "fluncle-surfaces": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-surfaces",
       "sourceType": "local",
-      "computedHash": "e83219df1faaafabc89173909d2ae193a782aa2b5b70f9545c5dc5b283416316"
+      "computedHash": "6b4c82efb04c91e086378c8978aeb670a1d590d5bdb9dc391ef739bc0a67dafd"
     },
     "fluncle-track-enrichment": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-track-enrichment",

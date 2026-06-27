@@ -24,10 +24,10 @@ Do not re-add a separate note command unless there is a materially different wor
 
 ## Local CLI Path
 
-Raycast preferences should point to:
+Raycast preferences should point to your standalone binary, for example:
 
 ```text
-/Users/maurice/.local/bin/fluncle
+~/.local/bin/fluncle
 ```
 
 This must be a standalone binary, not a Bun-linked script. Raycast may fail with `env: bun: No such file or directory` if the path resolves to `#!/usr/bin/env bun`.
