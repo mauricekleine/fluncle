@@ -52,7 +52,7 @@ BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 FLUNCLE_BIN="${FLUNCLE_BIN:-/usr/local/bin/fluncle}"
 
 # --- file-sourced secrets (provider creds are blocked from the cron env) ---
-CONDUCTOR_ENV="${CONDUCTOR_ENV:-${HOME:-/opt/data/home}/.render-conductor.env}"
+CONDUCTOR_ENV="${CONDUCTOR_ENV:-${HOME:-/opt/data/home}/.fluncle-secrets.env}"
 if [ -r "$CONDUCTOR_ENV" ]; then
   set -a
   # shellcheck source=/dev/null

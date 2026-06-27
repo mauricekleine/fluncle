@@ -65,7 +65,7 @@ export FLUNCLE_BIN="${FLUNCLE_BIN:-/usr/local/bin/fluncle}"
 # operator places — sourced here: a 0600 ${HOME}/.note-sweep.env (mounted ~/.hermes)
 # holding CLAUDE_CODE_OAUTH_TOKEN (required) + optionally DISCORD_ALERT_WEBHOOK /
 # NOTE_CLAUDE_MODEL. Written from the configured 1Password item (see the ops runbook note).
-NOTE_ENV_FILE="${NOTE_ENV_FILE:-${HOME:-/opt/data/home}/.note-sweep.env}"
+NOTE_ENV_FILE="${NOTE_ENV_FILE:-${HOME:-/opt/data/home}/.fluncle-secrets.env}"
 if [ -r "${NOTE_ENV_FILE}" ]; then
   set -a
   # shellcheck source=/dev/null
