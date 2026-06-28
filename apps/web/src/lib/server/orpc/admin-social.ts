@@ -36,6 +36,7 @@ import { adminAuth, operatorGuard } from "../orpc-auth";
 import { postizSetReleaseId, pushTikTokDraft, pushYouTubeShort, resolveSocialUrl } from "../postiz";
 import {
   hasPostAwaitingUrl,
+  isUrlClaimedByOtherTrack,
   listPostsAwaitingUrl,
   listSocialPosts,
   recordPostUrl,
@@ -309,10 +310,13 @@ export function adminSocialHandlers(os: Implementer) {
   // url), link the Postiz release-id, and flip a captured TikTok `draft` →
   // `published`. The draft handler already attempts an inline resolve on a fresh
   // YouTube push; this catches the misses (publish lag) and every TikTok the
-  // operator finished in-app. Best-effort: a post not yet resolved is simply
-  // skipped (it stays pending for the next sweep), and `resolveSocialUrl`/
-  // `postizSetReleaseId` degrade rather than throw, so one lagging post never
-  // burns the batch.
+  // operator finished in-app. A resolved url already claimed by ANOTHER track is
+  // skipped (`isUrlClaimedByOtherTrack`) — TikTok's `/missing` returns the
+  // account's newest aweme, which while the draft is unpublished is the previous
+  // track's video, so the row stays pending until a fresh permalink appears.
+  // Best-effort: a post not yet resolved is simply skipped (it stays pending for
+  // the next sweep), and `resolveSocialUrl`/`postizSetReleaseId` degrade rather
+  // than throw, so one lagging post never burns the batch.
   const capturePostUrlsHandler = os.capture_post_urls.use(adminAuth).handler(async ({ input }) => {
     try {
       const limit = parseLimit((input as { limit?: string }).limit, 25, 100);
@@ -327,6 +331,17 @@ export function adminSocialHandlers(os: Implementer) {
         const resolved = await resolveSocialUrl(post.externalId, post.platform);
 
         if (!resolved) {
+          continue;
+        }
+
+        // The TikTok newest-account-URL trap: TikTok never reports a finished
+        // inbox draft back, so the permalink is built from the @fluncle account's
+        // NEWEST aweme (`/missing`). While this track's draft still sits
+        // unpublished in the inbox, that "newest" is the PREVIOUS track's video —
+        // a URL already stored on another track's row. Never attach a claimed URL;
+        // leave the row pending until TikTok surfaces a fresh, unclaimed permalink
+        // (i.e. once the draft is actually published in-app).
+        if (await isUrlClaimedByOtherTrack(resolved.url, post.trackId)) {
           continue;
         }
 

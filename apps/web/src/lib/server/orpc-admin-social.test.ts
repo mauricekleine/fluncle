@@ -19,6 +19,7 @@ const listSocialPosts = vi.fn();
 const updateSocialStatus = vi.fn();
 const upsertPost = vi.fn();
 const hasPostAwaitingUrl = vi.fn();
+const isUrlClaimedByOtherTrack = vi.fn();
 const listPostsAwaitingUrl = vi.fn();
 const recordPostUrl = vi.fn();
 const pushTikTokDraft = vi.fn();
@@ -33,6 +34,7 @@ vi.mock("./tracks", () => ({
 
 vi.mock("./social", () => ({
   hasPostAwaitingUrl: (...args: unknown[]) => hasPostAwaitingUrl(...args),
+  isUrlClaimedByOtherTrack: (...args: unknown[]) => isUrlClaimedByOtherTrack(...args),
   listPostsAwaitingUrl: (...args: unknown[]) => listPostsAwaitingUrl(...args),
   listSocialPosts: (...args: unknown[]) => listSocialPosts(...args),
   recordPostUrl: (...args: unknown[]) => recordPostUrl(...args),
@@ -69,6 +71,7 @@ beforeEach(() => {
   updateSocialStatus.mockReset().mockResolvedValue(true);
   upsertPost.mockReset();
   hasPostAwaitingUrl.mockReset().mockResolvedValue(false);
+  isUrlClaimedByOtherTrack.mockReset().mockResolvedValue(false);
   listPostsAwaitingUrl.mockReset().mockResolvedValue([]);
   recordPostUrl.mockReset().mockResolvedValue(true);
   pushTikTokDraft.mockReset();
@@ -627,5 +630,72 @@ describe("oRPC capture_post_urls (POST /admin/social/posts/capture)", () => {
     expect(await readJson(response)).toEqual({ captured: [], ok: true, polled: 1 });
     expect(postizSetReleaseId).not.toHaveBeenCalled();
     expect(updateSocialStatus).not.toHaveBeenCalled();
+  });
+
+  it("skips a TikTok URL already claimed by another track (the unpublished-draft trap)", async () => {
+    // The just-pushed draft (t-new) still sits unpublished in the inbox, so
+    // TikTok's /missing returns the @fluncle account's NEWEST aweme — which is
+    // the PREVIOUS track's video, a URL already stored on another track's row.
+    listPostsAwaitingUrl.mockResolvedValueOnce([
+      { externalId: "tt-new", platform: "tiktok", status: "draft", trackId: "t-new" },
+    ]);
+    resolveSocialUrl.mockResolvedValueOnce({
+      nativeId: "awemePrev",
+      url: "https://www.tiktok.com/@fluncle/video/awemePrev",
+    });
+    // That URL is already attached to a different track → do not re-use it.
+    isUrlClaimedByOtherTrack.mockResolvedValueOnce(true);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req(`/admin/social/posts/capture`, "POST", AGENT_TOKEN, {}));
+
+    expect(response?.status).toBe(200);
+    // Polled but not captured — the row stays pending until a fresh permalink.
+    expect(await readJson(response)).toEqual({ captured: [], ok: true, polled: 1 });
+    expect(isUrlClaimedByOtherTrack).toHaveBeenCalledWith(
+      "https://www.tiktok.com/@fluncle/video/awemePrev",
+      "t-new",
+    );
+    // Nothing is written: no url recorded, no release-id linked, no draft flip.
+    expect(recordPostUrl).not.toHaveBeenCalled();
+    expect(postizSetReleaseId).not.toHaveBeenCalled();
+    expect(updateSocialStatus).not.toHaveBeenCalled();
+  });
+
+  it("captures a fresh, unclaimed TikTok URL (draft now published in-app)", async () => {
+    listPostsAwaitingUrl.mockResolvedValueOnce([
+      { externalId: "tt-fresh", platform: "tiktok", status: "draft", trackId: "t-fresh" },
+    ]);
+    resolveSocialUrl.mockResolvedValueOnce({
+      nativeId: "awemeFresh",
+      url: "https://www.tiktok.com/@fluncle/video/awemeFresh",
+    });
+    // The newest aweme is unclaimed → this draft really did go live in-app.
+    isUrlClaimedByOtherTrack.mockResolvedValueOnce(false);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req(`/admin/social/posts/capture`, "POST", AGENT_TOKEN, {}));
+
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toEqual({
+      captured: [
+        {
+          platform: "tiktok",
+          trackId: "t-fresh",
+          url: "https://www.tiktok.com/@fluncle/video/awemeFresh",
+        },
+      ],
+      ok: true,
+      polled: 1,
+    });
+    expect(recordPostUrl).toHaveBeenCalledWith(
+      "t-fresh",
+      "tiktok",
+      "https://www.tiktok.com/@fluncle/video/awemeFresh",
+    );
+    expect(updateSocialStatus).toHaveBeenCalledWith("t-fresh", "tiktok", {
+      status: "published",
+      url: "https://www.tiktok.com/@fluncle/video/awemeFresh",
+    });
   });
 });
