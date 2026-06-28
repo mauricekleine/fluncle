@@ -101,7 +101,7 @@ function EditionPage() {
         {galaxies.map((block) => (
           <section className="log-related" key={block.galaxy}>
             {block.galaxy.trim() ? <h2>{block.galaxy}</h2> : null}
-            <ul className="log-related-list">
+            <ul className="log-related-list log-newsletter-finds">
               {block.findings.map((finding) => (
                 <li key={finding.logId}>
                   <a href={logPageUrl(finding.logId)}>

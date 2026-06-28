@@ -1500,9 +1500,25 @@ body::before {
   text-underline-offset: 0.2em;
 }
 
+/* A back-issue finding stacks its Artist — Title link over its editorial "why".
+   The shared .log-related-list row is a single baseline-aligned flex line with a
+   non-shrinking coordinate, which on this page (where the coordinate holds the
+   full Artist — Title label, not a short Log ID) squeezes a long entry's "why"
+   into a narrow, one-word-per-line column. Stacking lets both read full-width at
+   every width. */
+.log-newsletter-finds {
+  gap: 0.85rem;
+}
+
+.log-newsletter-finds a {
+  align-items: stretch;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
 /* A finding's editorial "why" on a back-issue page — wraps to full sentences
-   (unlike the truncating .log-related-line in the related list), set quiet next
-   to the coordinate. */
+   (unlike the truncating .log-related-line in the related list), set quiet below
+   the Artist — Title link. */
 .log-newsletter-why {
   color: var(--stardust);
   font-size: 0.9rem;
