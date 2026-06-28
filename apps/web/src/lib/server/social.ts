@@ -205,6 +205,29 @@ export async function listPostsAwaitingUrl(limit: number): Promise<PostAwaitingU
 }
 
 /**
+ * Whether this exact public URL is already stored on a DIFFERENT track's social
+ * post. The TikTok capture builds its permalink from the @fluncle account's
+ * NEWEST published aweme (`/missing`) — but while a just-pushed draft still sits
+ * unpublished in the inbox, that "newest" post is the PREVIOUS track's video.
+ * Recording it would wrongly attach another track's URL to this one, so the
+ * sweep skips a URL already claimed elsewhere and leaves the row pending until
+ * TikTok surfaces a fresh, unclaimed permalink (i.e. once the draft is actually
+ * published in-app). The current track is excluded (`track_id != ?`) so its own
+ * row never blocks itself.
+ */
+export async function isUrlClaimedByOtherTrack(url: string, trackId: string): Promise<boolean> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [url, trackId],
+    sql: `select 1 from social_posts
+          where url = ? and track_id != ?
+          limit 1`,
+  });
+
+  return result.rows.length > 0;
+}
+
+/**
  * Record the live public URL on a track's platform row (the auto-resolved
  * Postiz `/missing` permalink). Best-effort: only fills an empty `url`, so a URL
  * the operator already entered manually is never clobbered. Returns false if
