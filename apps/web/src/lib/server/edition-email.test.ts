@@ -35,7 +35,7 @@ describe("renderEditionEmailHtml — finding hydration", () => {
     getTracksByLogIds.mockReset();
   });
 
-  it("renders Artist — Title (not the bare logId) linked to its log page + a Spotify link", async () => {
+  it("renders Artist — Title (not the bare logId) linked to its log page", async () => {
     getTracksByLogIds.mockResolvedValue({ "021.7.1A": track() });
 
     const html = await renderEditionEmailHtml(
@@ -47,7 +47,7 @@ describe("renderEditionEmailHtml — finding hydration", () => {
     expect(html).toContain("Photek — Ni Ten Ichi Ryu");
     expect(html).not.toContain(">021.7.1A<");
     expect(html).toContain('href="https://www.fluncle.com/log/021.7.1A"');
-    expect(html).toContain('href="https://open.spotify.com/track/abc"');
+    expect(html).not.toContain("open.spotify.com");
     expect(html).toContain("the snare alone");
     expect(html).toContain("<h2>Astral</h2>");
   });

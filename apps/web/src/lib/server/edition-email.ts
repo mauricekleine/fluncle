@@ -67,8 +67,8 @@ export async function editionsLabels(editions: EditionDTO[]): Promise<Record<str
  * RFC-8058 one-click `List-Unsubscribe` headers for bulk) plus the postal address.
  *
  * Each finding reference is the tiny `{ logId, why }` the schema keeps current; the
- * render HYDRATES every `logId` to its live finding (`Artist — Title`, the `/log`
- * page, a quiet Spotify link) in ONE batched read (no N+1) — so the email always
+ * render HYDRATES every `logId` to its live finding (`Artist — Title` linked to the
+ * `/log` page) in ONE batched read (no N+1) — so the email always
  * carries the live metadata, not a bare Log ID. A logId with no live finding falls
  * back to the bare Log ID linked to its (still valid) log page.
  *
@@ -102,11 +102,8 @@ export async function renderEditionEmailHtml(edition: EditionDTO): Promise<strin
       const track = tracksByLogId[finding.logId];
       const href = logPageUrl(finding.logId);
       const label = track ? trackLabel(track) : finding.logId;
-      const spotify = track?.spotifyUrl
-        ? ` <a href="${escapeHtml(track.spotifyUrl)}" style="color:#888">Spotify</a>`
-        : "";
       const why = finding.why?.trim() ? ` — ${escapeHtml(finding.why)}` : "";
-      parts.push(`<li><a href="${escapeHtml(href)}">${escapeHtml(label)}</a>${spotify}${why}</li>`);
+      parts.push(`<li><a href="${escapeHtml(href)}">${escapeHtml(label)}</a>${why}</li>`);
     }
 
     parts.push("</ul>");
