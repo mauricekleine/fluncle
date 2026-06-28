@@ -101,8 +101,8 @@ read_or() { cat "$1" 2>/dev/null || printf '%s' "$2"; }
 # instead of rendering nothing and looping forever on a stale done-marker. The remote
 # `exit 42` is the missing-checkout signal.
 freshen_checkout() {
-  local rc=0
-  "$BOX_BIN" ssh "$1" 'bash -s' >>"$LOG_FILE" 2>&1 <<'FRESH' || rc=$?
+  local out rc=0
+  out="$("$BOX_BIN" ssh "$1" 'bash -s' 2>&1 <<'FRESH'
 set -u
 cd "$HOME/fluncle" || { echo "[freshen] no ~/fluncle — needs reprovision"; exit 42; }
 git fetch --depth 1 origin main -q 2>/dev/null || { echo "[freshen] fetch failed — keep current"; exit 0; }
@@ -116,7 +116,13 @@ git reset --hard FETCH_HEAD -q || { echo "[freshen] reset failed — keep curren
   && npx -y skills add ./packages/skills/fluncle-video -y -a claude-code </dev/null >/dev/null 2>&1
 echo "[freshen] updated ${have:0:7} -> $(git rev-parse --short HEAD)"
 FRESH
-  if [ "$rc" = "42" ]; then
+)" || rc=$?
+  printf '%s\n' "$out" >>"$LOG_FILE"
+  # box.ascii's `ssh` FLATTENS a remote non-zero exit to its OWN exit 1 (the real
+  # remote status lands only in its error JSON), so the in-script `exit 42` never
+  # arrives here as rc=42 — detect the missing-checkout signal from the remote's
+  # OUTPUT marker instead of the (flattened) exit code.
+  if printf '%s' "$out" | grep -q 'needs reprovision'; then
     return 2 # ~/fluncle missing on resume — caller must reprovision
   fi
   [ "$rc" = "0" ] || log "freshen: ssh rc=$rc — rendering on the existing checkout"
