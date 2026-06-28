@@ -1928,10 +1928,11 @@ body::before {
   position: absolute;
 }
 
-/* The mute toggle (Feature C): a single quiet icon, top-right, above the safe-area
-   inset. Cover-led and dark — a faint disc that lifts on hover/focus, never a
-   bright control. */
-.radio-mute {
+/* The settings cog: a single quiet icon, top-right, above the safe-area inset.
+   Cover-led and dark — a faint disc that lifts on hover/focus, never a bright
+   control. It opens the surface-settings popover (mute, subtitles, info box,
+   fullscreen). Hidden in fullscreen so the frame is just the footage. */
+.radio-settings-cog {
   align-items: center;
   /* The Legible Sky Rule applies over LIVE footage with no scrim under the disc:
      keep the base dark enough that the cream glyph holds AA over even a bright /
@@ -1952,26 +1953,58 @@ body::before {
     background 150ms ease,
     border-color 150ms ease;
   width: 2.75rem;
+  z-index: 1;
 }
 
-.radio-mute svg {
+.radio-settings-cog svg {
   height: 1.35rem;
   width: 1.35rem;
 }
 
-.radio-mute:hover,
-.radio-mute:focus-visible {
+.radio-settings-cog:hover,
+.radio-settings-cog:focus-visible {
   background: color-mix(in oklch, var(--deep-field) 92%, transparent);
   border-color: color-mix(in oklch, var(--starlight-cream) 28%, transparent);
 }
 
-.radio-mute:focus-visible {
+.radio-settings-cog:focus-visible {
   outline: 2px solid var(--eclipse-gold);
   outline-offset: 2px;
 }
 
+/* The settings popover: the shared design-system popover (Sleeve Black, Dust Line
+   ring), narrowed to the control column. One quiet row per preference. */
+.radio-settings-panel {
+  gap: 0.25rem;
+  width: 15rem;
+}
+
+.radio-setting-row {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  padding: 0.4rem 0;
+}
+
+.radio-setting-label {
+  align-items: center;
+  color: var(--starlight-cream);
+  cursor: pointer;
+  display: flex;
+  gap: 0.6rem;
+  font-size: 0.9rem;
+}
+
+.radio-setting-label svg {
+  color: var(--stardust);
+  flex: none;
+  height: 1.15rem;
+  width: 1.15rem;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .radio-mute {
+  .radio-settings-cog {
     transition: none;
   }
 }
@@ -2046,8 +2079,8 @@ body::before {
   display: grid;
   inset: 0;
   justify-items: center;
-  /* Keep the line clear of the now-playing block at the bottom and the mute disc at
-     the top, and never flush to a phone's edges. */
+  /* Keep the line clear of the now-playing block at the bottom and the settings cog
+     at the top, and never flush to a phone's edges. */
   padding: clamp(3.5rem, 12vh, 7rem) clamp(1.25rem, 6vw, 3rem);
   pointer-events: none;
   position: absolute;
