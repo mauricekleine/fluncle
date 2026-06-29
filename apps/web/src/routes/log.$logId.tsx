@@ -432,13 +432,15 @@ function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
   return (
     <main className="log-plate-stage">
       <article className="log-plate">
-        <img
-          alt={mixtape.title}
-          className="log-mixtape-cover"
-          height={640}
-          src={mixtapeCoverUrl(logId, "card")}
-          width={640}
-        />
+        {mixtape.setVideoAt ? undefined : (
+          <img
+            alt={mixtape.title}
+            className="log-mixtape-cover"
+            height={640}
+            src={mixtapeCoverUrl(logId, "card")}
+            width={640}
+          />
+        )}
 
         <header className="log-masthead">
           <p className="log-nameplate">Mixtape No. {mixtape.sequenceNumber ?? 1}</p>
