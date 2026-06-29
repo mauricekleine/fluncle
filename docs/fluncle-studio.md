@@ -1,6 +1,6 @@
-# Fluncle Studio — the set-video staging (`distribute --set-video`)
+# Fluncle Studio — set-video staging + the footage cut
 
-The mixtape set → clip pipeline (full design: `docs/fluncle-studio-rfc.md`). This doc covers the shipped **set-video staging** — Unit A — the automation of the manual three-step staging the `fluncle-mixtapes` skill used to document.
+The mixtape set → clip pipeline (full design: `docs/fluncle-studio-rfc.md`). This doc covers the shipped **set-video staging** (Unit A — the automation of the manual three-step staging the `fluncle-mixtapes` skill used to document) and the **footage cut** (Unit C — the deterministic box job that turns a `pending` clip into a framed 9:16 clip on R2).
 
 ## What it does
 
@@ -45,3 +45,74 @@ The bytes never traverse the Cloudflare zone; only the tiny presign/complete con
 - Multipart presign: `apps/web/src/lib/server/r2-presign.ts` (`presignMultipartUpload` + the pure `presignMultipartParts` / `presignMultipartAction` / `parseUploadId`).
 - The op: contract `packages/contracts/src/orpc/admin-mixtapes.ts` (`presign_set_video_upload`), handler `apps/web/src/lib/server/orpc/admin-mixtapes.ts`, coverage `orpc-admin-coverage.test.ts` + `orpc-auth-coverage.test.ts` (operator tier).
 - Tests: `apps/cli/src/commands/mixtape-set-video.test.ts` (part-splitting, complete-XML, ffmpeg arg shape; the real-ffmpeg test is skip-guarded so CI — which has no ffmpeg — skips it) and `apps/web/src/lib/server/r2-presign.test.ts` (the multipart signers + the UploadId parse).
+
+---
+
+# Unit C — the footage cut (the box)
+
+The deterministic cut that turns each `pending` `mixtape_clips` row into a framed 9:16 clip on R2, then marks it `done`. It runs on the **always-on Hermes box (rave-02)**, not the GPU render box — a CPU-trivial ffmpeg trim, no GPU, no `claude -p`, none of the render box's agent machinery (`docs/fluncle-studio-rfc.md` Decision 1).
+
+## What it does
+
+For one pending clip: pull the mixtape's staged set rendition `<mixtapeLogId>/set.mp4` from R2 (public read), then **one ffmpeg pass** — trim `[inMs,outMs]`, crop 16:9 → 9:16 at the clip's `xOffset`, bake a **minimal brand frame**, store the result as the clip's pseudo-finding master `<clipId>/footage.mp4`, and mark the clip `done`. Because the clip is stored at `<clipId>/footage.mp4`, the merged `videoCrop(clipId)` / `videoCropPoster(clipId)` / `videoAudioStripped(...)` Media-Transformation helpers (`apps/web/src/lib/media.ts`) finish it — the resolution ladder, the poster, and the silent TikTok variant the clip library (Unit G) serves.
+
+## The cut (one ffmpeg pass)
+
+`fluncle admin clips cut <clipId>` (`apps/cli/src/commands/clips.ts`) — runs on the box:
+
+1. Resolve the clip (`list_clips`) + its mixtape (`mixtapeGetCommand`). It asserts the mixtape is minted (a committed Log ID) and its set video is **staged** (`setVideoAt` set, i.e. `distribute --set-video` ran) — else `set_not_staged` (the clip stays `pending`).
+2. ffmpeg, one pass (`clipCutFfmpegArgs`): `-ss <inMs> -i <set.mp4 URL> -t <durMs> -vf "crop=ih*9/16:ih:<xOffset>:0,scale=1080:1920,<brand frame>" -c:v libx264 -crf 21 -maxrate 10M -bufsize 20M -c:a aac -b:a 192k -movflags +faststart`. `-ss` **before** `-i` is an input seek — over HTTP against the faststart `set.mp4` it range-requests to the offset instead of downloading the whole ~1.5 GB rendition, and with the re-encode it is frame-accurate. The **bitrate cap** keeps the output `footage.mp4` **< 100 MB** (a 60 s 1080×1920 cut lands ~75 MB), so Cloudflare MT (100 MB source ceiling) doesn't 400 the fan-out; the cut command also asserts the rendered file is under the cap before upload.
+3. The **brand frame** (`clipCutVideoFilter`): two `drawtext` lines bottom-left — the **mixtape display title** + the `fluncle://<mixtapeLogId>` coordinate (Starlight Cream `#f4ead7`) — each over a semi-transparent **scrim box** (`box=1:boxcolor=black@0.55`) so the text clears AA over arbitrary (bright/busy) footage. Per-track titles are Phase-2 (they need cues); v1 stamps the mixtape level. The font is fontconfig's default unless `CLIP_FONT_FILE` points at an installed `.ttf`/`.otf`. NOT the full cosmos composition (a later enhancement).
+4. **Upload** the cut single-PUT to R2 at `<clipId>/footage.mp4` via the agent-tier **`presign_clip_upload`** (a clip is < 100 MB, so the single-PUT `r2-presign.ts` path — no multipart). The box holds no R2 creds — the Worker signs; the box PUTs.
+5. **Finalize** via the agent-tier **`finalize_clip_cut`**: mark the clip `done` AND purge the clip's stale edge renditions **server-side** (`purgeClipCache` over `clipPurgeUrls`; the box holds no Cloudflare creds), so a **re-cut** to the same `clipId` never keeps serving the old cut (#152 lesson).
+
+## The cron (`fluncle-studio-clip`)
+
+`docs/agents/hermes/scripts/clip-sweep.{sh,ts}` — a `--no-agent` pure-trigger sweep (the enrich-sweep shape, no `claude -p`). Each tick: `fluncle admin clips list --status pending --json` → for a bounded batch (default 1, `CLIP_BATCH_CAP`), `fluncle admin clips cut <clipId>`. Idempotent: a `done` clip is out of the next tick's `pending` read, and a not-yet-staged clip is skipped (stays `pending`) without blocking the batch — so no single-flight lock is needed (unlike the GPU render conductor). The batch is small so a tick stays under the Hermes `--no-agent` 120 s kill.
+
+## The agent-tier ops (the box's agent token)
+
+The box drives everything with its **agent-scoped** `FLUNCLE_API_TOKEN`, so the two write ops are **agent tier** (`adminAuth` only, no `operatorGuard`) — the `presign_track_video_uploads` / `finalize_track_video` precedent for the render box. `update_clip` is operator-tier (the box can't use it), which is exactly why the cut gets its own narrow `finalize_clip_cut`. Listing pending clips uses the merged `list_clips` (admin tier; the agent token clears `requireAdmin`).
+
+| op                    | method + path                             | tier  |
+| --------------------- | ----------------------------------------- | ----- |
+| `list_clips`          | `GET /admin/clips?status=pending`         | admin |
+| `presign_clip_upload` | `POST /admin/clips/{clipId}/cut/presign`  | agent |
+| `finalize_clip_cut`   | `POST /admin/clips/{clipId}/cut/finalize` | agent |
+
+(All three pass with the agent token; `admin` and `agent` both clear `requireAdmin` — the distinction is only that `agent` is barred from operator-tier ops.)
+
+## Box deploy (operator)
+
+Cron scripts deploy by **`docker cp` into the running container**, NOT baked into the image and NOT auto-deployed (the cron-scripts reality — see `../agents/hermes/cron/README.md`). The CLI **is** baked (`fluncle`/`bun` already in the image), so only the new cron pair + ffmpeg need to land on the box.
+
+1. **Install ffmpeg + a font on rave-02** (inside the Hermes container, or bake it into the image on the next rebuild):
+
+   ```bash
+   apt-get update && apt-get install -y ffmpeg fonts-dejavu-core
+   # optional: export CLIP_FONT_FILE=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+   #           (else drawtext uses fontconfig's default font)
+   ```
+
+2. **Copy the cron pair into the container** (the `docker cp` to `hermes:/opt/data/scripts/` reality):
+
+   ```bash
+   docker cp clip-sweep.sh hermes:/opt/data/scripts/clip-sweep.sh
+   docker cp clip-sweep.ts hermes:/opt/data/scripts/clip-sweep.ts
+   ```
+
+3. **Wire the cron** (the agent token already lives in the cron env — no operator token, since the ops are agent tier):
+
+   ```bash
+   hermes cron create "every 15m" --no-agent --script clip-sweep.sh --deliver local --name fluncle-studio-clip
+   hermes cron list   # confirm; per-run output → ~/.hermes/cron/output/{job_id}/{timestamp}.md
+   ```
+
+The CLI bump (the `admin clips` commands) reaches the box on the next baked-CLI pin bump (the `fluncle-pin-watch` self-deploy), so step 2 only needs to wait for a CLI version that carries `admin clips cut`.
+
+## The pieces
+
+- Cut + pure helpers: `apps/cli/src/commands/clips.ts` (`clipCutFfmpegArgs` / `clipCutVideoFilter` / `escapeDrawtextValue` / `clipFootageKey` / `setVideoUrl`; the `clipsListCommand` / `clipCutCommand` orchestration) + CLI wiring in `apps/cli/src/cli.ts` (`admin clips list|cut`).
+- The agent-tier ops: contract `packages/contracts/src/orpc/admin-mixtapes.ts` (`presign_clip_upload`, `finalize_clip_cut`), handlers `apps/web/src/lib/server/orpc/admin-mixtapes.ts`, the cut-done helper `apps/web/src/lib/server/clips.ts` (`markClipCutDone` / `getClip`), the clip purge `apps/web/src/lib/studio-clips.ts` (`clipPurgeUrls`) + `apps/web/src/lib/server/video-cache.ts` (`purgeClipCache`).
+- The cron: `docs/agents/hermes/scripts/clip-sweep.{sh,ts}`.
+- Tests (ffmpeg-free): `apps/cli/src/commands/clips.test.ts` (the ffmpeg arg shape, the crop/scale/brand-frame filtergraph + drawtext escaping, the footage key — never invoking ffmpeg), `apps/web/src/lib/studio-clips.test.ts` (`clipPurgeUrls`), and the oRPC coverage/auth-tier nets (`orpc-admin-coverage.test.ts` + `orpc-auth-coverage.test.ts`) pin the two new ops as agent tier.

@@ -97,3 +97,26 @@ export function clipDownloadUrls(clipId: string): ClipDownloadUrls {
 
   return { silent: videoAudioStripped(withAudio), withAudio };
 }
+
+/**
+ * The EXACT, finite set of public URLs the clip surfaces emit for one clip — the
+ * inverse of the builders above, the clip twin of `videoPurgeUrls` (media.ts). When
+ * the box RE-CUTS a clip it re-ships `<clipId>/footage.mp4` to the same R2 key, so the
+ * bare master + every edge-cached Media-Transformation rendition derived from it stay
+ * stale until their TTL expires; `finalize_clip_cut` purges this set so the next
+ * request transcodes the fresh cut (#152 lesson). It mirrors the builders precisely:
+ * the bare master (`clipDownloadUrls().withAudio`), the silent download
+ * (`.silent`), and the library card's poster (`clipPosterUrl`) + inline preview
+ * (`clipPreviewUrl`) — the only clip renditions any surface requests.
+ *
+ * NOTE on `videoPurgeUrls(clipId, { squared: true })`: it covers the bare master + the
+ * portrait crops/poster, but its audio-stripped entry is off `footage.social.mp4`
+ * (which a clip never has) — so it MISSES the clip's real silent download
+ * (`audio=false` off `footage.mp4`). This precise set is why the cut path purges THIS,
+ * not the squared finding set.
+ */
+export function clipPurgeUrls(clipId: string): string[] {
+  const { silent, withAudio } = clipDownloadUrls(clipId);
+
+  return [...new Set([withAudio, silent, clipPosterUrl(clipId), clipPreviewUrl(clipId)])];
+}

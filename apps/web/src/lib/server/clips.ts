@@ -120,6 +120,20 @@ async function getClipRow(clipId: string): Promise<ClipRow> {
   return row;
 }
 
+// Fetch one clip by id (a clean 404 when it's gone). Exported so the agent-tier cut
+// ops (Unit C: `presign_clip_upload` / `finalize_clip_cut`) can confirm the clip
+// exists before signing its upload / marking it done.
+export async function getClip(clipId: string): Promise<ClipDTO> {
+  return rowToClip(await getClipRow(clipId));
+}
+
+// Mark a clip's cut `done` (Unit C `finalize_clip_cut`). A thin wrapper over the
+// shared `updateClip` so the box's agent-tier finalize and the operator `update_clip`
+// write the SAME `status` column the same way.
+export async function markClipCutDone(clipId: string): Promise<ClipDTO> {
+  return updateClip(clipId, { status: "done" });
+}
+
 export async function createClip(mixtapeId: string, input: ClipInput): Promise<ClipDTO> {
   // The mixtape must exist (drafts included — pre-release backlog clipping stages
   // the set early). getMixtapeById throws `mixtape_not_found`/404 if it doesn't.

@@ -410,6 +410,64 @@ export const presignSetVideoUpload = oc
     }),
   );
 
+/**
+ * `presign_clip_upload` → `POST /admin/clips/{clipId}/cut/presign` (operationId
+ * `presignClipUpload`).
+ *
+ * AGENT tier (`requireAdmin`, agent-allowed — adminAuth only, NO operatorGuard):
+ * Fluncle Studio Unit C, the box's clip-cut path. The on-box `fluncle-studio-clip`
+ * cron's agent token signs its OWN clip output, the same way the render box signs its
+ * track-video uploads (`presign_track_video_uploads`). A clip is < 100 MB, so this is
+ * a SINGLE-PUT presign (the `r2-presign.ts` single-PUT path — NO multipart) for the
+ * clip's pseudo-finding master `<clipId>/footage.mp4`. LOOSE body — the handler
+ * defaults `contentType` and confirms the clip exists (`clip_not_found`/404). Returns
+ * `{ ok, clipId, key, url, contentType }` (one signed PUT URL; the CLI MUST replay the
+ * identical `contentType` header — it is baked into the signature).
+ */
+export const presignClipUpload = oc
+  .route({
+    method: "POST",
+    operationId: "presignClipUpload",
+    // Path-symmetric with `finalize_clip_cut` (both nest under the `/cut/` artifact),
+    // mirroring the `set-video/presign` + `video/finalize` precedent pairs.
+    path: "/admin/clips/{clipId}/cut/presign",
+    summary: "Presign a single-PUT direct-to-R2 upload for a clip's cut output",
+    tags: ["Admin"],
+  })
+  .input(z.looseObject({ clipId: z.string(), contentType: z.unknown().optional() }))
+  .output(
+    z.object({
+      clipId: z.string(),
+      contentType: z.string(),
+      key: z.string(),
+      ok: z.literal(true),
+      url: z.string(),
+    }),
+  );
+
+/**
+ * `finalize_clip_cut` → `POST /admin/clips/{clipId}/cut/finalize` (operationId
+ * `finalizeClipCut`).
+ *
+ * AGENT tier (`requireAdmin`, agent-allowed — adminAuth only, NO operatorGuard):
+ * Fluncle Studio Unit C. After the box uploads `<clipId>/footage.mp4`, it calls this
+ * to mark the cut `done` (the `update_clip` operator op is unreachable to the agent
+ * token, so the box gets its own narrow agent-tier finalize — the `finalize_track_video`
+ * precedent for the render box). The handler also PURGES the clip's stale edge
+ * renditions server-side (the box holds no Cloudflare creds), so a RE-CUT to the same
+ * `clipId` doesn't keep serving the old cut (#152 lesson). Returns `{ clip, ok }`.
+ */
+export const finalizeClipCut = oc
+  .route({
+    method: "POST",
+    operationId: "finalizeClipCut",
+    path: "/admin/clips/{clipId}/cut/finalize",
+    summary: "Mark a clip's cut done + purge its stale edge renditions",
+    tags: ["Admin"],
+  })
+  .input(z.object({ clipId: z.string() }))
+  .output(ClipEnvelope);
+
 /** The `admin-mixtapes` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminMixtapesContract = {
   add_mixtape_members: addMixtapeMembers,
@@ -417,12 +475,14 @@ export const adminMixtapesContract = {
   create_mixtape: createMixtape,
   delete_clip: deleteClip,
   delete_mixtape: deleteMixtape,
+  finalize_clip_cut: finalizeClipCut,
   finalize_mixtape_mixcloud: finalizeMixtapeMixcloud,
   finalize_mixtape_youtube: finalizeMixtapeYoutube,
   get_mixtape_social: getMixtapeSocial,
   initiate_mixtape_youtube: initiateMixtapeYoutube,
   list_clips: listClips,
   list_mixtapes_admin: listMixtapesAdmin,
+  presign_clip_upload: presignClipUpload,
   presign_set_video_upload: presignSetVideoUpload,
   publish_mixtape: publishMixtape,
   publish_mixtape_youtube: publishMixtapeYoutube,
