@@ -78,6 +78,32 @@ const fetchStudioMixtape = createServerFn({ method: "GET" })
     return getMixtapeById(mixtapeId, { includeDrafts: true });
   });
 
+// The set-analysis envelope is a bare R2 object on found.fluncle.com — a DIFFERENT
+// origin from www.fluncle.com with no `access-control-allow-origin`, so a browser
+// fetch is CORS-blocked. We fetch it SERVER-SIDE (server-to-server, no CORS) and
+// return the parsed envelope or null. A 404/non-OK is the normal "not staged yet"
+// state (the editor degrades to manual in/out), never an error.
+const fetchStudioEnvelope = createServerFn({ method: "GET" })
+  .validator((data: { logId: string }) => data)
+  .handler(async ({ data: { logId } }): Promise<StudioEnvelope | null> => {
+    if (!(await isAdminRequest())) {
+      throw redirect({ to: "/admin/login" });
+    }
+
+    try {
+      const response = await fetch(mixtapeStudioEnvelopeUrl(logId));
+
+      if (!response.ok) {
+        return null;
+      }
+
+      return (await response.json()) as StudioEnvelope;
+    } catch {
+      // A network hiccup reads as "not staged yet" — the preview + manual in/out hold.
+      return null;
+    }
+  });
+
 export const Route = createFileRoute("/admin/studio/$mixtapeId")({
   beforeLoad: () => ensureAdmin(),
   component: StudioPage,
@@ -157,23 +183,12 @@ function StudioEditor({
   const [error, setError] = useAutoNotice();
   const [notice, setNotice] = useAutoNotice();
 
-  // ── The envelope (R2) — graceful absence: a 404 means "not staged yet", which is
-  // a normal state, never an error. No envelope → no curve, no suggestions; the
-  // preview + manual in/out still work.
+  // ── The envelope — fetched SERVER-SIDE (the R2 object is cross-origin with no
+  // CORS header; see fetchStudioEnvelope). Graceful absence: null means "not staged
+  // yet" (a normal state), so no curve, no suggestions — the preview + manual in/out
+  // still work, never an error.
   const { data: envelope } = useQuery<StudioEnvelope | null>({
-    queryFn: async () => {
-      const response = await fetch(mixtapeStudioEnvelopeUrl(logId));
-
-      if (response.status === 404) {
-        return null;
-      }
-
-      if (!response.ok) {
-        return null;
-      }
-
-      return (await response.json()) as StudioEnvelope;
-    },
+    queryFn: () => fetchStudioEnvelope({ data: { logId } }),
     queryKey: ["admin", "studio-envelope", logId],
     retry: false,
     staleTime: 5 * 60_000,
