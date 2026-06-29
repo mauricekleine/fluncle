@@ -232,6 +232,7 @@ ${tracks.join("\n")}
 ## Tools
 
 - [CLI installer](${siteUrl}/cli/latest.sh): curl -fsSL ${siteUrl}/cli/latest.sh | sh, then try fluncle recent
+- [Fluncle Lens](https://chromewebstore.google.com/detail/efkkceaofendabikblfjhoepgejfpakk): a Chrome extension that finds fluncle:// coordinates on any web page and links each to its /log finding
 - The rave terminal: ssh rave.fluncle.com, the deepest room in the Galaxy
 `;
 

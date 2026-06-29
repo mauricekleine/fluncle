@@ -1,5 +1,6 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
 import {
+  chromeExtensionUrl,
   discogsUrl,
   instagramUrl,
   lastfmUrl,
@@ -142,6 +143,14 @@ function AboutPage() {
             Everything I find out there, I send back to you across the Galaxy: the archive you came
             from, the playlist, the Telegram feed, a terminal at the deep end. Same findings on
             every one, same Log IDs, so pick whichever you like, you won't miss a thing.
+          </p>
+          <p>
+            Out on the open web a fluncle:// coordinate is a door. Fluncle Lens, a lens for your
+            browser, spots them on any page and walks you back to the finding.{" "}
+            <a href={chromeExtensionUrl} rel="noreferrer">
+              Get the Chrome extension
+            </a>
+            .
           </p>
         </section>
 

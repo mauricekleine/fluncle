@@ -133,13 +133,18 @@ assert.ok(
   "liveSurfaces excludes every pending surface",
 );
 
-// Fluncle Lens is pre-staged: present in the catalog, absent from every selector.
+// Fluncle Lens went live on the Chrome Web Store (2026-06-29): present in the
+// catalog, no longer pending, and surfaced as a `secondary` web entry.
 const lens = SURFACES.find((surface) => surface.name === "extension.lens");
 assert.ok(lens, "the Fluncle Lens surface is registered");
-assert.equal(
-  lens?.pending,
-  true,
-  "the Fluncle Lens surface is pending (dark until store approval)",
+assert.notEqual(lens?.pending, true, "the Fluncle Lens surface is live (not pending)");
+assert.ok(
+  liveSurfaces().some((surface) => surface.name === "extension.lens"),
+  "the Fluncle Lens surface appears in liveSurfaces",
+);
+assert.ok(
+  surfacesForContext("web").some((surface) => surface.name === "extension.lens"),
+  "the Fluncle Lens surface appears in the web context",
 );
 
 // The gate, asserted generically over EVERY pending surface so the invariant holds

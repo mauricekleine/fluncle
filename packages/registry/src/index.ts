@@ -715,20 +715,16 @@ export const SURFACES: readonly Surface[] = [
     ],
     kind: "extension",
     name: "extension.lens",
-    // DARK until the Chrome Web Store review clears (submitted 2026-06-21; the
-    // `<all_urls>` content-script match triggers a long Broad-Host-Permissions
-    // review). PRE-STAGED so the post-approval fan-out is one field-flip:
-    //   1. drop `pending: true` (or set it false),
-    //   2. swap `url` for the assigned listing URL
-    //      (https://chromewebstore.google.com/detail/<assigned-extension-id>),
-    //   3. add the §2/§3 doctrine rows (it is now a live web surface).
-    // No other consumer needs touching — the menus, /status probe, MCP + CLI status
-    // labels all read the catalog and light up at once. Source: apps/extension.
+    // LIVE on the Chrome Web Store (published 2026-06-29, extension id
+    // efkkceaofendabikblfjhoepgejfpakk). A `secondary` web surface: advertised on
+    // the homepage dev-row and the /about page, not a homepage headline. No
+    // probeConfig — a vendor store listing is not one of our own health-probeable
+    // endpoints (the on-box healthcheck walks web/r2/dns/ssh + the crons, never an
+    // external GET), and Google's store would bot-block / redirect a bare GET and
+    // read back as a false "down". Source: apps/extension.
     operatorNotes:
-      "Fluncle Lens (apps/extension), MV3. PENDING Chrome Web Store review — DARK until approval, then flip `pending` + set the assigned listing URL. The placeholder `url` is the store search for the listing; probeConfig is the post-approval /status check.",
-    pending: true,
-    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
-    url: "https://chromewebstore.google.com/search/Fluncle%20Lens",
+      "Fluncle Lens (apps/extension), MV3, LIVE on the Chrome Web Store (published 2026-06-29). Store listing reachability is Google's, not ours, so it is not on the /status board.",
+    url: "https://chromewebstore.google.com/detail/efkkceaofendabikblfjhoepgejfpakk",
     weights: { web: "secondary" },
   },
 
