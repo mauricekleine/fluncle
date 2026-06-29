@@ -75,28 +75,13 @@ Omit a flag to target one platform. The command is **mint-first**: a `draft` min
 
 Each leg records into `mixtape_social_posts` — the single source of truth for a mixtape's listen links. The public `externalUrls` (mixcloud/youtube/soundcloud) derives from the `published` rows there; there are no `mixtapes.*_url` columns. SoundCloud has no `distribute` leg — set it manually from the admin editor (it too becomes a `mixtape_social_posts` row).
 
-**Set video on `/log` (a standard leg of every distribution).** Once the set video is on R2, the mixtape `/log/<logId>` page shows it as the hero (replacing the cover) and it is crawled/indexed like the finding clips (a `<video:video>` sitemap entry + a VideoObject + og:video). Three steps after `distribute` has minted the Log ID:
+**Set video on `/log` (a leg of `distribute`).** Once the set video is on R2, the mixtape `/log/<logId>` page shows it as the hero (replacing the cover) and it is crawled/indexed like the finding clips (a `<video:video>` sitemap entry + a VideoObject + og:video). This is **automated** — add `--set-video` to `distribute` with the set master:
 
-1. **Web rendition** — faststart H.264, clean Track 2 audio (the recording is already 1080p H.264; re-encode only to shrink the stream):
+```bash
+fluncle admin mixtapes distribute <idOrLogId> --video <master>.mp4 --set-video
+```
 
-   ```bash
-   ffmpeg -i <recording>.mov -map 0:v:0 -map 0:a:1 -c:v libx264 -b:v 4000k -movflags +faststart set.mp4
-   ```
-
-2. **Upload to R2** at `<logId>/set.mp4` — multipart, because the single-PUT admin presign is too small for a full set:
-
-   ```bash
-   export AWS_ACCESS_KEY_ID=$(op read "op://$FLUNCLE_1PASSWORD_ENV_ITEM/R2_ACCESS_KEY_ID")
-   export AWS_SECRET_ACCESS_KEY=$(op read "op://$FLUNCLE_1PASSWORD_ENV_ITEM/R2_SECRET_ACCESS_KEY")
-   aws s3 cp set.mp4 "s3://fluncle-videos/<logId>/set.mp4" \
-     --endpoint-url "https://<R2_ACCOUNT_ID>.r2.cloudflarestorage.com" --region auto --content-type video/mp4
-   ```
-
-   `$FLUNCLE_1PASSWORD_ENV_ITEM` is the dev-env 1Password vault/item — the same placeholder as `apps/web/.dev.vars.tpl`; the concrete vault/item name lives in the private Ops Runbook note, never in this repo. `R2_ACCOUNT_ID` + the bucket are public in `apps/web/wrangler.jsonc`. (That op item's `FLUNCLE_API_TOKEN` is **local-dev only** — it 401s against prod, so prod admin calls go through the operator's logged-in browser, not that token.)
-
-3. **Flip the `Set video` toggle** on the mixtape in `/admin/mixtapes` (sets `setVideoAt`) — the player + the sitemap `<video:video>` + the VideoObject JSON-LD all light up.
-
-Folding this into `distribute` itself (a `--set-video` that stages the rendition and flips `setVideoAt` automatically) is the Fluncle Studio RFC's Unit A — see `docs/fluncle-studio-rfc.md`.
+It derives one **1080p faststart rendition** with ffmpeg (CRF 20, AAC, ~2s GOP for scrubbing; ~1.5–2 GB), multipart-uploads it straight to R2 at `<logId>/set.mp4`, and flips `setVideoAt` — the player + the sitemap `<video:video>` + the VideoObject JSON-LD all light up. The raw multi-GB master **stays local** (only the rendition goes to R2; it also serves the editor scrub + the clip cut). `--set-video` is opt-in and additive: combine it with the YouTube/Mixcloud legs, or run it **alone** to backfill an already-published set (`distribute <id> --video x.mp4 --set-video`). Idempotent — a re-run re-stages + re-flips. Needs ffmpeg on PATH (the operator's Mac). See `docs/fluncle-studio.md` (Unit A) + `docs/fluncle-studio-rfc.md`.
 
 ### D. Make YouTube public
 
