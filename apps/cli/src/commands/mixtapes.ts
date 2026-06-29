@@ -115,6 +115,7 @@ export type MixtapeDistributeOptions = {
   audio?: string;
   json: boolean;
   mixcloud?: boolean;
+  setVideo?: boolean;
   unlisted?: boolean;
   video?: string;
   youtube?: boolean;
@@ -129,9 +130,14 @@ export type MixtapeDistributeResult = {
 /**
  * Distribute a mixtape end to end: mint the coordinate if it's still a draft, then
  * move the local bytes to each requested platform (video→YouTube, audio→Mixcloud).
- * With neither --youtube nor --mixcloud, does both. The first successful platform
- * link flips the mixtape `distributing → published` (server-side, in each finalize).
- * Idempotent: re-running resumes a `distributing` mixtape, reusing its Log ID.
+ * With no platform selector at all, does YouTube + Mixcloud. The first successful
+ * platform link flips the mixtape `distributing → published` (server-side, in each
+ * finalize). `--set-video` is an ADDITIONAL leg (Fluncle Studio Unit A): it derives a
+ * 1080p rendition of the set and stages it to R2 at `<logId>/set.mp4`, flipping
+ * `setVideoAt` so the `/log` player + video SEO light up. It is opt-in (never part of
+ * the no-selector default — it needs a video master + ffmpeg) and runs ONLY-set-video
+ * when it is the sole selector (the backfill case). Idempotent: re-running resumes a
+ * `distributing` mixtape, reusing its Log ID, and re-stages the set video.
  */
 export async function mixtapeDistributeCommand(
   idOrLogId: string,
@@ -144,15 +150,22 @@ export async function mixtapeDistributeCommand(
     throw new CliError("mixtape_not_found", `No mixtape with id or log id ${idOrLogId}`);
   }
 
-  const both = !options.youtube && !options.mixcloud;
+  // No platform selector → the legacy default (YouTube + Mixcloud). `--set-video` is
+  // an additional, opt-in leg, so it never triggers the default; running it alone (the
+  // backfill case) stages only the set video.
+  const both = !options.youtube && !options.mixcloud && !options.setVideo;
   const doYoutube = both || Boolean(options.youtube);
   const doMixcloud = both || Boolean(options.mixcloud);
+  const doSetVideo = Boolean(options.setVideo);
 
   if (doYoutube && !options.video) {
     throw new CliError("missing_video", "YouTube distribution needs --video <mp4>");
   }
   if (doMixcloud && !options.audio) {
     throw new CliError("missing_audio", "Mixcloud distribution needs --audio <file>");
+  }
+  if (doSetVideo && !options.video) {
+    throw new CliError("missing_video", "--set-video needs --video <master.mp4>");
   }
 
   const mixtapeId = mixtape.id;
@@ -211,6 +224,17 @@ export async function mixtapeDistributeCommand(
     const result = await distributeMixcloud(mixtapeId, options.audio, onProgress, options.unlisted);
     results.push({ platform: "mixcloud", url: result.url });
     onProgress(`Mixcloud: ${result.url}`);
+  }
+
+  if (doSetVideo) {
+    if (!options.video) {
+      throw new CliError("missing_video", "--set-video needs --video <master.mp4>");
+    }
+    onProgress("Set video: staging the 1080p rendition…");
+    const { stageSetVideo } = await import("./mixtape-set-video");
+    const result = await stageSetVideo(mixtapeId, options.video, onProgress);
+    results.push({ platform: "set-video", url: result.url });
+    onProgress(`Set video: ${result.url}`);
   }
 
   return { logId, mixtapeId, results };

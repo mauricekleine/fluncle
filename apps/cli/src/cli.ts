@@ -176,6 +176,7 @@ type MixtapeDistributeOptions = {
   audio?: string;
   json: boolean;
   mixcloud?: boolean;
+  setVideo?: boolean;
   unlisted?: boolean;
   video?: string;
   youtube?: boolean;
@@ -879,6 +880,10 @@ function addAdminCommands(program: Command): void {
     .option("--audio <file>", "Audio file for Mixcloud")
     .option("--youtube", "Only distribute to YouTube")
     .option("--mixcloud", "Only distribute to Mixcloud")
+    .option(
+      "--set-video",
+      "Also stage a 1080p set-video rendition (from --video) to R2 + flip setVideoAt for the /log player",
+    )
     .option(
       "--unlisted",
       "Keep Mixcloud private too (YouTube is always unlisted until publish-youtube)",

@@ -196,6 +196,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // written-note sibling of observe_track/context_track; the box's agent token drives it.
   note_track: "admin",
   observe_track: "admin",
+  // The set-video staging presign (Fluncle Studio Unit A) — operator tier (adminAuth
+  // + operatorGuard): it opens an upload that flips a public mixtape surface, so the
+  // agent token 403s (unlike the agent-tier track presign below).
+  presign_set_video_upload: "operator",
   // The autonomous render box signs its own R2 upload URLs — agent tier (adminAuth
   // only, no operatorGuard); the box's agent token publishes its renders.
   presign_track_video_uploads: "admin",
