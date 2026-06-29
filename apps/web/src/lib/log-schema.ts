@@ -1,6 +1,6 @@
 import { logPageUrl, siteUrl } from "./fluncle-links";
 import { formatIsoDuration } from "./format";
-import { definitionalProse, type LogProseInput } from "./log-prose";
+import { artistTitleLine, definitionalProse, type LogProseInput } from "./log-prose";
 import { type MixtapeDTO } from "./mixtapes";
 
 // Re-exported for callers that have always reached the log-URL builder through
@@ -51,6 +51,33 @@ export function musicRecordingJsonLd(
       ...(track.tiktokUrl ? [track.tiktokUrl] : []),
       ...(track.discogsReleaseUrl ? [track.discogsReleaseUrl] : []),
     ],
+    url: logPageUrl(track.logId),
+  };
+}
+
+/**
+ * The finding's VideoObject — the richer crawl signal on top of the working
+ * og:video, emitted only when the finding carries a rendered video. The
+ * description mirrors the visible definitional prose (schema that contradicts the
+ * page gets discounted); `uploadDate` is the finding's freshest real timestamp,
+ * sliced to a date.
+ */
+export function videoObjectJsonLd(
+  track: LogSchemaInput,
+  {
+    contentUrl,
+    thumbnailUrl,
+    uploadDate,
+  }: { contentUrl: string; thumbnailUrl: string; uploadDate: string },
+): Record<string, unknown> {
+  return {
+    "@context": "https://schema.org",
+    "@type": "VideoObject",
+    contentUrl,
+    description: definitionalProse(track),
+    name: artistTitleLine(track),
+    thumbnailUrl,
+    uploadDate: uploadDate.slice(0, 10),
     url: logPageUrl(track.logId),
   };
 }

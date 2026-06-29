@@ -23,6 +23,7 @@ import {
   logPageUrl,
   mixtapeAlbumJsonLd,
   musicRecordingJsonLd,
+  videoObjectJsonLd,
 } from "@/lib/log-schema";
 import { spotifyAlbumImageAtSize, trackMedia } from "@/lib/media";
 import { type MixtapeDTO, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
@@ -153,6 +154,19 @@ function logHead(loaderData: LogPageData | undefined) {
   const ogQuery = Number.isFinite(ogVersion) ? `?v=${ogVersion}` : "";
   const ogImage = `${siteUrl}/api/og/${encodeURIComponent(logId)}${ogQuery}`;
   const breadcrumbs = breadcrumbsJsonLd(logId);
+  // The VideoObject — the richer crawl signal on top of og:video, emitted only
+  // when the finding has a rendered video. uploadDate is the finding's freshest
+  // real timestamp (a fresh square crop counts as the upload moment).
+  const videoSchema = track.videoUrl
+    ? videoObjectJsonLd(
+        { ...track, logId },
+        {
+          contentUrl: media.videoUrl,
+          thumbnailUrl: imageUrl,
+          uploadDate: track.videoSquaredAt ?? track.updatedAt ?? track.addedAt,
+        },
+      )
+    : undefined;
 
   return {
     links: [{ href: pageUrl, rel: "canonical" }],
@@ -184,7 +198,11 @@ function logHead(loaderData: LogPageData | undefined) {
     // title/artist/album or the operator `note` (woven into definitionalProse,
     // the JSON-LD description) can't break out of the <script> (stored-XSS sink,
     // security review).
-    scripts: [jsonLdScript(recording), jsonLdScript(breadcrumbs)],
+    scripts: [
+      jsonLdScript(recording),
+      jsonLdScript(breadcrumbs),
+      ...(videoSchema ? [jsonLdScript(videoSchema)] : []),
+    ],
   };
 }
 
