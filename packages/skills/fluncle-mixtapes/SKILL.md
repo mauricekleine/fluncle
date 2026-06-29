@@ -75,6 +75,29 @@ Omit a flag to target one platform. The command is **mint-first**: a `draft` min
 
 Each leg records into `mixtape_social_posts` — the single source of truth for a mixtape's listen links. The public `externalUrls` (mixcloud/youtube/soundcloud) derives from the `published` rows there; there are no `mixtapes.*_url` columns. SoundCloud has no `distribute` leg — set it manually from the admin editor (it too becomes a `mixtape_social_posts` row).
 
+**Set video on `/log` (a standard leg of every distribution).** Once the set video is on R2, the mixtape `/log/<logId>` page shows it as the hero (replacing the cover) and it is crawled/indexed like the finding clips (a `<video:video>` sitemap entry + a VideoObject + og:video). Three steps after `distribute` has minted the Log ID:
+
+1. **Web rendition** — faststart H.264, clean Track 2 audio (the recording is already 1080p H.264; re-encode only to shrink the stream):
+
+   ```bash
+   ffmpeg -i <recording>.mov -map 0:v:0 -map 0:a:1 -c:v libx264 -b:v 4000k -movflags +faststart set.mp4
+   ```
+
+2. **Upload to R2** at `<logId>/set.mp4` — multipart, because the single-PUT admin presign is too small for a full set:
+
+   ```bash
+   export AWS_ACCESS_KEY_ID=$(op read "op://Fluncle/Web Local Dev Env/R2_ACCESS_KEY_ID")
+   export AWS_SECRET_ACCESS_KEY=$(op read "op://Fluncle/Web Local Dev Env/R2_SECRET_ACCESS_KEY")
+   aws s3 cp set.mp4 "s3://fluncle-videos/<logId>/set.mp4" \
+     --endpoint-url "https://<R2_ACCOUNT_ID>.r2.cloudflarestorage.com" --region auto --content-type video/mp4
+   ```
+
+   `R2_ACCOUNT_ID` is public in `apps/web/wrangler.jsonc`. (The same op item's `FLUNCLE_API_TOKEN` is **local-dev only** — it 401s against prod, so prod admin calls go through the operator's logged-in browser, not that token.)
+
+3. **Flip the `Set video` toggle** on the mixtape in `/admin/mixtapes` (sets `setVideoAt`) — the player + the sitemap `<video:video>` + the VideoObject JSON-LD all light up.
+
+Folding this into `distribute` itself (a `--set-video` that stages the rendition and flips `setVideoAt` automatically) is the Fluncle Studio RFC's Unit A — see `docs/fluncle-studio-rfc.md`.
+
 ### D. Make YouTube public
 
 The one recurring human gate: the `/admin/mixtapes` **Make YouTube public** button, or `fluncle admin mixtapes publish-youtube <idOrLogId>` (server-side `videos.update`).
