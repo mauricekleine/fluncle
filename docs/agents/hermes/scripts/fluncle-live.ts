@@ -240,7 +240,9 @@ async function main(): Promise<void> {
   const at = new Date().toISOString();
 
   if (!TWITCH_CLIENT_ID || !TWITCH_CLIENT_SECRET) {
-    throw new Error("missing TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET (populate ~/.live.env)");
+    throw new Error(
+      "missing TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET (populate ~/.fluncle-secrets.env)",
+    );
   }
 
   const poll = await pollTwitch();

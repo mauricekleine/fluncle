@@ -268,7 +268,7 @@ export const serviceCheckSamples = sqliteTable(
 // right now" beat that fans out across every surface while the Twitch stream is
 // on, then clears the moment it ends. ONE row (PK = the constant `"twitch"`),
 // upserted each minute by the on-box `fluncle-live` poller via the agent-tier
-// `set_live` op — exactly the `service_status` shape (a box cron writes, every
+// `record_live_state` op — exactly the `service_status` shape (a box cron writes, every
 // surface reads), just a single boolean+title instead of a per-service grid.
 //
 // Auto-clear is READ-side: a consumer treats the flag as offline when `updated_at`

@@ -9,7 +9,7 @@
 //     treated as offline, so a dead poller mid-set can never strand a permanent
 //     "LIVE" banner. Auto-clear is self-healing regardless of poller health.
 //   - WRITE (the on-box poller): `setLiveState` — upsert the single row from the
-//     `set_live` op, detect the off→on / on→off TRANSITION against the stored row,
+//     `record_live_state` op, detect the off→on / on→off TRANSITION against the stored row,
 //     and fire the crew Telegram callout on go-live (send + pin, capturing the
 //     message id) / unpin on end. Side-effects are best-effort: a Telegram failure
 //     never fails the write, and the staleness guard remains the read-side backstop.
@@ -47,7 +47,7 @@ export type LiveState = {
   url: string;
 };
 
-/** The raw Twitch state the poller POSTs via `set_live`. */
+/** The raw Twitch state the poller POSTs via `record_live_state`. */
 export type SetLiveInput = {
   live: boolean;
   title: string | null;
