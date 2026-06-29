@@ -64,21 +64,21 @@ bun is baked into the image, declared as the repo's `packageManager`, and reques
 
 ## 3. `fluncle` CLI (baked)
 
-- **File:** `docs/agents/hermes/Dockerfile` (~line 79).
-- **Marker:** `RUN npm install -g fluncle@` (comment ends with `Bump deliberately when a newer release is needed on the box.`)
+- **File:** `docs/agents/hermes/Dockerfile` (the fluncle install block, ~line 83).
+- **Marker:** `releases/download/v<version>/fluncle-linux-` — the box installs the **standalone bun-compiled binary**, NOT the `npm -g` thin client. The Bun-runtime commands (clip cut, media uploads — `Bun.spawn`/`Bun.file`) only run on the binary; the npm package's `#!/usr/bin/env node` shebang makes them throw "Bun is not defined". The binary embeds bun, so every command works on the box.
 - **Current pin:**
 
   ```bash
-  grep -n 'npm install -g fluncle@' docs/agents/hermes/Dockerfile
+  grep -n 'releases/download/v.*/fluncle-' docs/agents/hermes/Dockerfile
   ```
 
 - **Check latest:**
 
   ```bash
-  npm view fluncle version
+  npm view fluncle version   # the npm thin client + the binary share one version (cli-release.yml)
   ```
 
-- **How to bump:** edit the `fluncle@<version>` line → open a PR → merge when CI green. The version line busts the layer cache, and the on-box `fluncle-pin-watch` timer picks it up: rebuild → pre-smoke → swap → auto-rollback. (This is Fluncle's own CLI, released by the repo's `cli-release.yml`; it carries the renamed Convention-B surface + admin commands the crons call.)
+- **How to bump:** edit the `releases/download/v<version>/` URL in the install block → open a PR → merge when CI green. The version busts the layer cache, and the on-box `fluncle-pin-watch` timer picks it up: rebuild → pre-smoke (`fluncle version` == the pin) → swap → auto-rollback. (Fluncle's own CLI, released by `cli-release.yml`, which publishes the npm thin client AND the standalone binaries at one version; the binary carries the Convention-B surface + the admin commands the crons call.)
 - **Safety:** a **patch/minor** is safe to ship — it is first-party, and a stale CLI on the box just lacks a recent command. The merge triggers the pin-watch self-deploy (pre-smoke-validated, auto-rollback on fail). A **major** = brake (a renamed/removed command could break a cron).
 
 ---
@@ -150,7 +150,7 @@ The `.deepsec` scan (`.deepsec/data/fluncle/reports/`) flags every workflow acti
 | --- | ------------------- | --------------------------------------------------------------------------------- | --------------------------- | -------------------------------------------- | --------------------------------- |
 | 1   | Hermes base image   | `Dockerfile` `FROM nousresearch/hermes-agent:`                                    | `grep '^FROM nousresearch'` | Docker Hub tags API                          | **Never** (pre-1.0)               |
 | 2   | bun (×3)            | `Dockerfile` `bun-v` + `package.json` `packageManager` + workflows `bun-version:` | the three greps above       | bun GH `releases/latest`                     | patch/minor yes, major brake      |
-| 3   | `fluncle` CLI       | `Dockerfile` `npm install -g fluncle@`                                            | `grep 'fluncle@'`           | `npm view fluncle version`                   | patch/minor yes, major brake      |
+| 3   | `fluncle` CLI       | `Dockerfile` `releases/download/v<ver>/fluncle-linux-` (standalone binary)        | `grep 'download/v.*/fluncle-'` | `npm view fluncle version`                | patch/minor yes, major brake      |
 | 4   | Claude Code CLI     | `Dockerfile` `@anthropic-ai/claude-code@`                                         | `grep 'claude-code@'`       | `npm view @anthropic-ai/claude-code version` | patch/minor yes, major/auth brake |
 | 5   | box.ascii CLI       | `Dockerfile` `box.ascii.dev/install`                                              | unpinned                    | N/A                                          | **Never** (re-verify only)        |
 | 6   | GitHub Actions tags | `.github/workflows/*.yml` `uses: …@vN`                                            | `grep 'uses:.*@'`           | `gh api …/git/refs/tags/<tag>`               | **Renovate (auto-pins + tracks)** |

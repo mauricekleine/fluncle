@@ -89,7 +89,9 @@ git -C "$REPO_DIR" reset --hard -q origin/main
 
 # ── 2. read the target pins (Dockerfile on main) vs the box's running versions ─
 pin_from_dockerfile() { sed -n "s/.*$1@\\([0-9][0-9.]*\\).*/\\1/p" "$REPO_DIR/$DOCKERFILE" | head -1; }
-WANT_FLUNCLE="$(pin_from_dockerfile 'fluncle')"
+# fluncle is the standalone binary now (releases/download/v<ver>/fluncle-…), not npm@;
+# its version is read off the release-asset URL. claude-code stays an npm@ pin.
+WANT_FLUNCLE="$(sed -n 's#.*releases/download/v\([0-9][0-9.]*\)/fluncle-.*#\1#p' "$REPO_DIR/$DOCKERFILE" | head -1)"
 WANT_CLAUDE="$(pin_from_dockerfile '@anthropic-ai\/claude-code')"
 [ -n "$WANT_FLUNCLE" ] && [ -n "$WANT_CLAUDE" ] || die "could not parse the Dockerfile pins (fluncle='$WANT_FLUNCLE' claude='$WANT_CLAUDE')"
 

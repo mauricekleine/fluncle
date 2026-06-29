@@ -47,7 +47,7 @@ major()  { printf '%s' "${1#v}" | cut -d. -f1; }
 inplace() { SRCH="$2" REPL="$3" perl -i -pe 's/\Q$ENV{SRCH}\E/$ENV{REPL}/g' "$1"; }
 
 # ── read the current pins (markers, not line numbers) ─────────────────────────
-CUR_FLUNCLE="$(sed -n 's/.*npm install -g fluncle@\([0-9][0-9.]*\).*/\1/p' "$DOCKERFILE" | head -1)"
+CUR_FLUNCLE="$(sed -n 's#.*releases/download/v\([0-9][0-9.]*\)/fluncle-.*#\1#p' "$DOCKERFILE" | head -1)"
 CUR_CLAUDE="$(sed -n 's#.*@anthropic-ai/claude-code@\([0-9][0-9.]*\).*#\1#p' "$DOCKERFILE" | head -1)"
 CUR_BUN="$(sed -n 's/.*bun-v\([0-9][0-9.]*\).*/\1/p' "$DOCKERFILE" | head -1)"
 CUR_BASE="$(sed -n 's#^FROM nousresearch/hermes-agent:\(.*\)#\1#p' "$DOCKERFILE" | head -1)"
@@ -118,7 +118,7 @@ printf '%s\n' "${TABLE[@]}" >&2
 # ── apply the safe bumps ──────────────────────────────────────────────────────
 declare -a CHANGES=()
 if [ -n "$APPLY_FLUNCLE" ]; then
-  inplace "$DOCKERFILE" "npm install -g fluncle@$CUR_FLUNCLE" "npm install -g fluncle@$APPLY_FLUNCLE"
+  inplace "$DOCKERFILE" "releases/download/v$CUR_FLUNCLE/fluncle-" "releases/download/v$APPLY_FLUNCLE/fluncle-"
   CHANGES+=("\`fluncle\` \`$CUR_FLUNCLE\` → \`$APPLY_FLUNCLE\` (Dockerfile)")
 fi
 if [ -n "$APPLY_CLAUDE" ]; then

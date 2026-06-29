@@ -75,12 +75,27 @@ RUN export SHELL=/bin/sh \
 # is no local command gate: the box holds an `agent`-scoped token and the Worker
 # refuses publish-/irreversible-class actions for that role server-side, so the
 # CLI runs ungated and an attempted publish comes back as a 403 to relay in voice.
-# Pinned for reproducible rebuilds (the version line also busts the layer cache on
-# a bump); carries the Convention-B renamed surface + `admin newsletter`/backfill
-# commands + the `admin tracks note` auto-note command (the `fluncle-note` cron) +
+#
+# This is the STANDALONE bun-compiled binary, NOT the `npm -g` thin client: the
+# clip-cut + media-upload commands use the Bun runtime (Bun.spawn/Bun.file), and the
+# npm package ships a `#!/usr/bin/env node` shebang — so under node those throw "Bun is
+# not defined" (the cut surfaces it as a misleading "ffmpeg missing"). The standalone
+# binary embeds bun, so every command runs on the box. `fluncle version` reports this
+# version (baked via `--define` at release build), which is how pin-watch's pre-smoke
+# validates it. Pinned for reproducible rebuilds (the URL version busts the layer cache);
+# bump deliberately — pin-watch + hermes-pin-drift parse the `releases/download/v<ver>/`
+# URL below. Released by the repo's `cli-release.yml`; carries the Convention-B renamed
+# surface + `admin newsletter`/backfill + `admin tracks note` (the `fluncle-note` cron) +
 # the Fluncle Studio `admin clips list`/`cut` commands (the `fluncle-studio-clip` cron).
-# Bump deliberately when a newer release is needed on the box.
-RUN npm install -g fluncle@0.71.0
+RUN arch="$(uname -m)" \
+  && case "$arch" in \
+       aarch64|arm64) cpu="arm64" ;; \
+       x86_64|amd64)  cpu="x64" ;; \
+       *) echo "unsupported arch for the fluncle binary: $arch" >&2; exit 1 ;; \
+     esac \
+  && curl -fsSL "https://github.com/mauricekleine/fluncle/releases/download/v0.71.0/fluncle-linux-${cpu}" \
+       -o /usr/local/bin/fluncle \
+  && chmod 755 /usr/local/bin/fluncle
 
 # Claude Code — the `fluncle-observation` `--no-agent` cron's ONE agentic step shells
 # out to `claude -p` to author the recovered-audio observation script in Fluncle's
