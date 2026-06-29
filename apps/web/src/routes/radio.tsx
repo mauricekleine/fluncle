@@ -1,5 +1,9 @@
 import {
+  ArrowsOutIcon,
   CircleNotchIcon,
+  ClosedCaptioningIcon,
+  GearSixIcon,
+  InfoIcon,
   SpeakerSimpleHighIcon,
   SpeakerSimpleSlashIcon,
 } from "@phosphor-icons/react";
@@ -8,6 +12,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { siSpotify } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Switch } from "@/components/ui/switch";
 import { siteUrl } from "@/lib/fluncle-links";
 import { formatDateLong } from "@/lib/format";
 import { activeSliceForOffset } from "@/lib/observation-slices";
@@ -246,6 +252,119 @@ function RadioCaptions({
   );
 }
 
+// One row of the settings popover: an interface icon + a sentence-case label that
+// labels its Switch (clicking the label toggles it). The icon can track state
+// (DESIGN.md Iconography) — the caller passes the glyph for the current value.
+function RadioSettingRow({
+  checked,
+  icon,
+  id,
+  label,
+  onCheckedChange,
+}: {
+  checked: boolean;
+  icon: React.ReactNode;
+  id: string;
+  label: string;
+  onCheckedChange: (next: boolean) => void;
+}) {
+  return (
+    <div className="radio-setting-row">
+      <label className="radio-setting-label" htmlFor={id}>
+        {icon}
+        <span>{label}</span>
+      </label>
+      <Switch checked={checked} id={id} onCheckedChange={onCheckedChange} />
+    </div>
+  );
+}
+
+// The settings cog + popover. The trigger is the quiet top-right disc (the cog);
+// the popover holds the four LOCAL surface preferences. Each Switch is keyboard-
+// reachable and labelled; the icons track state where it reads clearer (the speaker
+// slashes when muted, the arrows fold in when fullscreen). The cog itself is hidden
+// in fullscreen by the caller, so this only renders the windowed control set.
+function RadioSettings({
+  muted,
+  onToggleCaptions,
+  onToggleFullscreen,
+  onToggleMeta,
+  onToggleMuted,
+  open,
+  setOpen,
+  showCaptions,
+  showMeta,
+}: {
+  muted: boolean;
+  onToggleCaptions: (next: boolean) => void;
+  onToggleFullscreen: (next: boolean) => void;
+  onToggleMeta: (next: boolean) => void;
+  onToggleMuted: (next: boolean) => void;
+  open: boolean;
+  setOpen: (next: boolean) => void;
+  showCaptions: boolean;
+  showMeta: boolean;
+}) {
+  return (
+    <Popover onOpenChange={setOpen} open={open}>
+      <PopoverTrigger aria-label="Surface settings" className="radio-settings-cog">
+        <GearSixIcon aria-hidden="true" weight="regular" />
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        aria-label="Surface settings"
+        className="radio-settings-panel"
+        side="bottom"
+      >
+        <RadioSettingRow
+          checked={!muted}
+          icon={
+            muted ? (
+              <SpeakerSimpleSlashIcon aria-hidden="true" weight="fill" />
+            ) : (
+              <SpeakerSimpleHighIcon aria-hidden="true" weight="regular" />
+            )
+          }
+          id="radio-setting-sound"
+          label="Sound"
+          // The switch reads as "sound on": checked means audible, so flip mute to
+          // its inverse.
+          onCheckedChange={(soundOn) => onToggleMuted(!soundOn)}
+        />
+        <RadioSettingRow
+          checked={showCaptions}
+          icon={
+            <ClosedCaptioningIcon aria-hidden="true" weight={showCaptions ? "fill" : "regular"} />
+          }
+          id="radio-setting-captions"
+          label="Subtitles"
+          onCheckedChange={onToggleCaptions}
+        />
+        <RadioSettingRow
+          checked={showMeta}
+          icon={<InfoIcon aria-hidden="true" weight={showMeta ? "fill" : "regular"} />}
+          id="radio-setting-meta"
+          label="Info box"
+          onCheckedChange={onToggleMeta}
+        />
+        <RadioSettingRow
+          checked={false}
+          icon={
+            // Fullscreen is event-driven elsewhere; the popover always renders in the
+            // windowed state (the cog is hidden in fullscreen), so the glyph is the
+            // "go fullscreen" arrows. The fold-in arrows ship for the rare in-popover
+            // fullscreen state.
+            <ArrowsOutIcon aria-hidden="true" weight="regular" />
+          }
+          id="radio-setting-fullscreen"
+          label="Fullscreen"
+          onCheckedChange={onToggleFullscreen}
+        />
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function RadioPage() {
   // The entry phase (RadioPhase, shared with the sync controller). The media
   // elements mount once we leave "idle", so they buffer during "tuning"; the
@@ -261,9 +380,23 @@ function RadioPage() {
   const [next, setNext] = useState<Track | undefined>(undefined);
   // No finding could be played (empty eligible set, or a broken run).
   const [exhausted, setExhausted] = useState(false);
-  // A LOCAL playback preference (not part of the shared schedule): mute the
-  // observation. The top-right toggle flips it; the audio element mirrors it.
+  // LOCAL surface preferences (not part of the shared schedule): the top-right cog
+  // opens a settings popover that flips each of these. `muted` silences the
+  // observation (the audio element mirrors it); `showCaptions` / `showMeta` hide the
+  // narration and the bottom-left now-playing block. They default to their current
+  // visibility (audible, captioned, meta shown), so an untouched join looks exactly
+  // as it did before the cog existed. The point: a clean, silent, chrome-free frame
+  // to pull into a live mixtape set on a side screen.
   const [muted, setMuted] = useState(false);
+  const [showCaptions, setShowCaptions] = useState(true);
+  const [showMeta, setShowMeta] = useState(true);
+  // Whether the settings popover is open. Closed when we enter fullscreen so the
+  // frame is clean (and the cog — its trigger — unmounts there anyway).
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Are we fullscreen? Driven by the `fullscreenchange` event, never guessed — so
+  // the browser's native Escape exit is the single source of truth. In fullscreen
+  // the cog hides; pressing Escape exits fullscreen, which re-shows the cog.
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   // The desktop verdict drives the crop orientation: landscape on desktop,
   // portrait on mobile. `false` on the server / first paint, then the live verdict.
@@ -518,6 +651,37 @@ function RadioPage() {
       audio.muted = muted;
     }
   }, [muted, playhead]);
+
+  // Track fullscreen off the `fullscreenchange` event — the ONE source of truth, so
+  // the browser's native Escape exit (which the Fullscreen API owns) flows straight
+  // back to "show the cog again". We never run a custom Escape handler that would
+  // fight that. Seed from the current state so an already-fullscreen mount is right.
+  useEffect(() => {
+    const sync = () => setIsFullscreen(Boolean(document.fullscreenElement));
+
+    sync();
+    document.addEventListener("fullscreenchange", sync);
+
+    return () => document.removeEventListener("fullscreenchange", sync);
+  }, []);
+
+  // Toggle the whole surface in/out of fullscreen via the Fullscreen API. Entering
+  // closes the popover so nothing lingers over the clean frame; the cog (the
+  // popover trigger) unmounts in fullscreen and only returns when Escape exits.
+  const toggleFullscreen = useCallback((wantFullscreen: boolean) => {
+    if (wantFullscreen) {
+      setSettingsOpen(false);
+      void document.documentElement.requestFullscreen?.().catch(() => {
+        // Denied or unsupported — `fullscreenchange` won't fire, so the cog stays.
+      });
+
+      return;
+    }
+
+    void document.exitFullscreen?.().catch(() => {
+      // Already out, or denied — the event listener keeps state honest regardless.
+    });
+  }, []);
 
   // THE A/V SYNC + DOUBLE-START FIX. The video (silent loop) and the audio
   // (observation) are two independent elements; left to themselves the lighter
@@ -848,7 +1012,9 @@ function RadioPage() {
               time, big and centered over the footage, the live word lit (Gold heat).
               Reads off the shared-clock offset, so it stays aligned through resyncs
               and while muted. Absent alignment ⇒ renders nothing. */}
-          {current.observationAlignment && current.observationAlignment.words.length > 0 ? (
+          {showCaptions &&
+          current.observationAlignment &&
+          current.observationAlignment.words.length > 0 ? (
             <RadioCaptions
               segmentStartServerMs={playhead.segmentStartServerMs}
               serverNow={serverNow}
@@ -856,61 +1022,64 @@ function RadioPage() {
             />
           ) : undefined}
 
-          {/* Mute toggle (Feature C): a single quiet icon top-right. A LOCAL
-              playback preference, not part of the shared schedule. */}
-          <button
-            aria-label={muted ? "Unmute the observation" : "Mute the observation"}
-            aria-pressed={muted}
-            className="radio-mute"
-            onClick={() => setMuted((m) => !m)}
-            type="button"
-          >
-            {/* Phosphor weight tracks state (DESIGN.md Iconography): fill when active
-                (muted), regular when idle (audible). */}
-            {muted ? (
-              <SpeakerSimpleSlashIcon aria-hidden="true" weight="fill" />
-            ) : (
-              <SpeakerSimpleHighIcon aria-hidden="true" weight="regular" />
-            )}
-          </button>
+          {/* The settings cog (top-right): a single quiet disc that opens a popover
+              of LOCAL surface preferences (none part of the shared schedule) — mute
+              the observation, hide the captions, hide the now-playing block, and go
+              fullscreen. In fullscreen the whole control unmounts, so the frame is
+              just the footage; Escape exits fullscreen and the cog returns. */}
+          {!isFullscreen ? (
+            <RadioSettings
+              muted={muted}
+              onToggleFullscreen={toggleFullscreen}
+              onToggleMeta={setShowMeta}
+              onToggleMuted={setMuted}
+              onToggleCaptions={setShowCaptions}
+              open={settingsOpen}
+              setOpen={setSettingsOpen}
+              showCaptions={showCaptions}
+              showMeta={showMeta}
+            />
+          ) : undefined}
 
-          <div className="radio-meta">
-            {current.logId ? <span className="radio-log-id">{current.logId}</span> : undefined}
-            <h2 className="radio-title">{current.title}</h2>
-            <p className="radio-artist">{current.artists.join(", ")}</p>
-            <p className="radio-facts">
-              {[
-                current.label,
-                current.releaseDate ? formatDateLong(current.releaseDate) : undefined,
-                current.bpm ? `${current.bpm} BPM` : undefined,
-                current.key,
-                current.galaxy?.name,
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-            </p>
-            <div className="radio-actions">
-              {current.logPageUrl ? (
+          {showMeta ? (
+            <div className="radio-meta">
+              {current.logId ? <span className="radio-log-id">{current.logId}</span> : undefined}
+              <h2 className="radio-title">{current.title}</h2>
+              <p className="radio-artist">{current.artists.join(", ")}</p>
+              <p className="radio-facts">
+                {[
+                  current.label,
+                  current.releaseDate ? formatDateLong(current.releaseDate) : undefined,
+                  current.bpm ? `${current.bpm} BPM` : undefined,
+                  current.key,
+                  current.galaxy?.name,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </p>
+              <div className="radio-actions">
+                {current.logPageUrl ? (
+                  <Button
+                    nativeButton={false}
+                    render={<a href={current.logPageUrl} />}
+                    size="sm"
+                    variant="outline"
+                  >
+                    View the log
+                  </Button>
+                ) : undefined}
                 <Button
                   nativeButton={false}
-                  render={<a href={current.logPageUrl} />}
+                  render={<a href={current.spotifyUrl} rel="noreferrer" target="_blank" />}
                   size="sm"
                   variant="outline"
                 >
-                  View the log
+                  <BrandIcon icon={siSpotify} />
+                  Listen on Spotify
                 </Button>
-              ) : undefined}
-              <Button
-                nativeButton={false}
-                render={<a href={current.spotifyUrl} rel="noreferrer" target="_blank" />}
-                size="sm"
-                variant="outline"
-              >
-                <BrandIcon icon={siSpotify} />
-                Listen on Spotify
-              </Button>
+              </div>
             </div>
-          </div>
+          ) : undefined}
         </>
       ) : undefined}
 

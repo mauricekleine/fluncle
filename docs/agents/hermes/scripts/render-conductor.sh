@@ -95,10 +95,16 @@ read_or() { cat "$1" 2>/dev/null || printf '%s' "$2"; }
 # re-add run ONLY when the lockfile / skill subtree actually moved (the common case —
 # a code change — is just a shallow fetch + reset, seconds against an ~85m render).
 # The reprovision branch needs none of this: it clones clean `main` by construction.
+# Returns 0 when the checkout is present (freshened or already current) or when the
+# freshen ssh just hiccups (proceed on the existing checkout). Returns 2 when ~/fluncle
+# is MISSING — box.ascii's snapshot dropped it on resume — so the caller reprovisions
+# instead of rendering nothing and looping forever on a stale done-marker. The remote
+# `exit 42` is the missing-checkout signal.
 freshen_checkout() {
-  "$BOX_BIN" ssh "$1" 'bash -s' >>"$LOG_FILE" 2>&1 <<'FRESH' || log "freshen: ssh failed — rendering on the existing checkout"
+  local out rc=0
+  out="$("$BOX_BIN" ssh "$1" 'bash -s' 2>&1 <<'FRESH'
 set -u
-cd "$HOME/fluncle" || { echo "[freshen] no ~/fluncle — skip"; exit 0; }
+cd "$HOME/fluncle" || { echo "[freshen] no ~/fluncle — needs reprovision"; exit 42; }
 git fetch --depth 1 origin main -q 2>/dev/null || { echo "[freshen] fetch failed — keep current"; exit 0; }
 have="$(git rev-parse HEAD 2>/dev/null)"; want="$(git rev-parse FETCH_HEAD 2>/dev/null)"
 [ -n "$want" ] && [ "$have" != "$want" ] || { echo "[freshen] current at ${have:0:7}"; exit 0; }
@@ -110,6 +116,17 @@ git reset --hard FETCH_HEAD -q || { echo "[freshen] reset failed — keep curren
   && npx -y skills add ./packages/skills/fluncle-video -y -a claude-code </dev/null >/dev/null 2>&1
 echo "[freshen] updated ${have:0:7} -> $(git rev-parse --short HEAD)"
 FRESH
+)" || rc=$?
+  printf '%s\n' "$out" >>"$LOG_FILE"
+  # box.ascii's `ssh` FLATTENS a remote non-zero exit to its OWN exit 1 (the real
+  # remote status lands only in its error JSON), so the in-script `exit 42` never
+  # arrives here as rc=42 — detect the missing-checkout signal from the remote's
+  # OUTPUT marker instead of the (flattened) exit code.
+  if printf '%s' "$out" | grep -q 'needs reprovision'; then
+    return 2 # ~/fluncle missing on resume — caller must reprovision
+  fi
+  [ "$rc" = "0" ] || log "freshen: ssh rc=$rc — rendering on the existing checkout"
+  return 0
 }
 
 # --- single-flight: only one tick mutates state at a time. An atomic `mkdir`
@@ -214,9 +231,21 @@ log "queue head: $head"
 # reclaimed it (idle boxes + snapshots are purged past the archive window).
 if [ -n "$boxid" ] && "$BOX_BIN" resume "$boxid" >/dev/null 2>&1; then
   log "resumed box $boxid"
-  freshen_checkout "$boxid" # bring the stale snapshot's checkout up to current main
+  # A resume can succeed while box.ascii's snapshot dropped ~/fluncle. freshen_checkout
+  # returns 2 in that case: stop the checkout-less box (it renders nothing) and fall
+  # through to a fresh reprovision, so a lost checkout self-heals instead of looping on
+  # a stale done-marker.
+  if ! freshen_checkout "$boxid"; then
+    log "resumed box $boxid lost its ~/fluncle checkout — stopping it + reprovisioning"
+    "$BOX_BIN" stop "$boxid" >/dev/null 2>&1 || true
+    boxid=""
+  fi
 else
-  log "box missing/purged — reprovisioning"
+  boxid=""
+fi
+
+if [ -z "$boxid" ]; then
+  log "no usable box — reprovisioning"
   if ! boxid="$(BOX_BIN="$BOX_BIN" BUN_BIN="$BUN_BIN" FLUNCLE_BIN="$FLUNCLE_BIN" bash "$PROVISION" 2>>"$LOG_FILE")" || [ -z "$boxid" ]; then
     log "provision failed"
     emit "render-conductor: provision failed"

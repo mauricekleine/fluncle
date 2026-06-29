@@ -27,6 +27,7 @@ import { type EditionDTO, orderedGalaxies } from "@/lib/editions";
 import { logPageUrl } from "@/lib/fluncle-links";
 import { formatDateLong } from "@/lib/format";
 import { isAdminRequest } from "@/lib/server/admin-auth";
+import { editionsLabels } from "@/lib/server/edition-email";
 import { listEditions } from "@/lib/server/editions";
 
 // The operator's newsletter front-end (`/admin/newsletter`): the editions list
@@ -36,6 +37,10 @@ import { listEditions } from "@/lib/server/editions";
 // Resend broadcast, gated behind an explicit confirm. Surfaced from the test that
 // found the editions were CLI/API-only (docs/ROADMAP.md, Newsletter follow-ups).
 
+// The loader hydrates every finding's logId to its `Artist — Title` label (server-side,
+// one batched read across all editions) and ships the label strings to the client.
+type EditionsLoaderData = { editions: EditionDTO[]; labels: Record<string, string> };
+
 const EDITIONS_KEY = ["admin", "editions"] as const;
 
 const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
@@ -44,14 +49,18 @@ const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
   }
 });
 
-const fetchEditions = createServerFn({ method: "GET" }).handler(async () => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
+const fetchEditions = createServerFn({ method: "GET" }).handler(
+  async (): Promise<EditionsLoaderData> => {
+    if (!(await isAdminRequest())) {
+      throw redirect({ to: "/admin/login" });
+    }
 
-  // Drafts inclusive — the operator is here to review and send the unsent ones.
-  return listEditions({ includeDrafts: true });
-});
+    // Drafts inclusive — the operator is here to review and send the unsent ones.
+    const editions = await listEditions({ includeDrafts: true });
+
+    return { editions, labels: await editionsLabels(editions) };
+  },
+);
 
 export const Route = createFileRoute("/admin/newsletter")({
   beforeLoad: () => ensureAdmin(),
@@ -60,16 +69,17 @@ export const Route = createFileRoute("/admin/newsletter")({
 });
 
 function AdminNewsletterPage() {
-  const initialEditions = Route.useLoaderData();
+  const initialData = Route.useLoaderData();
   const queryClient = useQueryClient();
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
-  const { data: editions } = useQuery({
-    initialData: initialEditions,
+  const { data } = useQuery({
+    initialData,
     queryFn: () => fetchEditions(),
     queryKey: EDITIONS_KEY,
     // Admin convention: focus-refetch ON, so a send made elsewhere lands here.
     refetchOnWindowFocus: true,
   });
+  const { editions, labels } = data;
 
   const draftCount = editions.filter((edition) => edition.status === "draft").length;
   const sentCount = editions.length - draftCount;
@@ -108,6 +118,7 @@ function AdminNewsletterPage() {
                 key={edition.id}
                 edition={edition}
                 expanded={expanded.has(edition.id)}
+                labels={labels}
                 onToggle={() => toggle(edition.id)}
                 refresh={() => queryClient.invalidateQueries({ queryKey: EDITIONS_KEY })}
               />
@@ -122,11 +133,13 @@ function AdminNewsletterPage() {
 function EditionRow({
   edition,
   expanded,
+  labels,
   onToggle,
   refresh,
 }: {
   edition: EditionDTO;
   expanded: boolean;
+  labels: Record<string, string>;
   onToggle: () => void;
   refresh: () => Promise<void>;
 }) {
@@ -169,7 +182,7 @@ function EditionRow({
           className="space-y-4 px-4 pb-4 pt-2 sm:px-5"
           id={bodyId}
         >
-          <EditionPreview content={edition.content} />
+          <EditionPreview content={edition.content} labels={labels} />
 
           {isDraft ? (
             <SendControl edition={edition} refresh={refresh} />
@@ -202,7 +215,13 @@ function EditionRow({
 // A read-only render of the stored content payload — what the edition becomes on
 // the page and (in spirit) in the email. The same view helpers the public archive
 // uses, so the preview matches the back issue.
-function EditionPreview({ content }: { content: EditionDTO["content"] }) {
+function EditionPreview({
+  content,
+  labels,
+}: {
+  content: EditionDTO["content"];
+  labels: Record<string, string>;
+}) {
   const galaxies = orderedGalaxies(content);
   const isEmpty = !content.intro?.trim() && galaxies.length === 0 && !content.mixtapeRef?.trim();
 
@@ -224,7 +243,9 @@ function EditionPreview({ content }: { content: EditionDTO["content"] }) {
 
       {galaxies.map((block) => (
         <div key={block.galaxy} className="space-y-1.5">
-          <p className="text-xs font-bold text-muted-foreground">{block.galaxy}</p>
+          {block.galaxy.trim() ? (
+            <p className="text-xs font-bold text-muted-foreground">{block.galaxy}</p>
+          ) : null}
           <ul className="space-y-1">
             {block.findings.map((finding) => (
               <li key={finding.logId} className="flex flex-wrap items-baseline gap-x-2">
@@ -234,7 +255,7 @@ function EditionPreview({ content }: { content: EditionDTO["content"] }) {
                   rel="noreferrer"
                   target="_blank"
                 >
-                  {finding.logId}
+                  {labels[finding.logId] ?? finding.logId}
                 </a>
                 {finding.why?.trim() ? (
                   <span className="text-muted-foreground">{finding.why}</span>

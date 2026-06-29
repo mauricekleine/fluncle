@@ -16,13 +16,13 @@ function escapeHtml(value: string): string {
 }
 
 /** `Artist — Title` for a hydrated finding (the em dash is the only one allowed). */
-function trackLabel(track: TrackListItem): string {
+export function trackLabel(track: TrackListItem): string {
   const artist = track.artists.join(", ").trim();
   return artist ? `${artist} — ${track.title}` : track.title;
 }
 
 /** Collect every logId an edition references (each galaxy's findings + the mixtape). */
-function editionLogIds(edition: EditionDTO): string[] {
+export function editionLogIds(edition: EditionDTO): string[] {
   const ids: string[] = [];
 
   for (const block of edition.content.galaxies ?? []) {
@@ -39,6 +39,25 @@ function editionLogIds(edition: EditionDTO): string[] {
 }
 
 /**
+ * Hydrate every logId across the given editions to its `Artist — Title` label in ONE
+ * batched read (bare logId fallback for a find with no live track). Server-side — the
+ * web newsletter renders call this in their loaders and pass the label strings to the
+ * client, mirroring the email render's hydration.
+ */
+export async function editionsLabels(editions: EditionDTO[]): Promise<Record<string, string>> {
+  const ids = [...new Set(editions.flatMap(editionLogIds))];
+  const tracks = await getTracksByLogIds(ids);
+  const labels: Record<string, string> = {};
+
+  for (const id of ids) {
+    const track = tracks[id];
+    labels[id] = track ? trackLabel(track) : id;
+  }
+
+  return labels;
+}
+
+/**
  * Render the email HTML for a Resend broadcast from an edition's stored content —
  * the SAME `content` payload the web archive page renders (one source → two
  * renders). This is the Email-register
@@ -48,8 +67,8 @@ function editionLogIds(edition: EditionDTO): string[] {
  * RFC-8058 one-click `List-Unsubscribe` headers for bulk) plus the postal address.
  *
  * Each finding reference is the tiny `{ logId, why }` the schema keeps current; the
- * render HYDRATES every `logId` to its live finding (`Artist — Title`, the `/log`
- * page, a quiet Spotify link) in ONE batched read (no N+1) — so the email always
+ * render HYDRATES every `logId` to its live finding (`Artist — Title` linked to the
+ * `/log` page) in ONE batched read (no N+1) — so the email always
  * carries the live metadata, not a bare Log ID. A logId with no live finding falls
  * back to the bare Log ID linked to its (still valid) log page.
  *
@@ -72,18 +91,19 @@ export async function renderEditionEmailHtml(edition: EditionDTO): Promise<strin
   }
 
   for (const block of content.galaxies ?? []) {
-    parts.push(`<h2>${escapeHtml(block.galaxy)}</h2>`);
+    // The newsletter no longer groups by galaxy — a block with an empty label is a
+    // single flat list, so skip the header. (A non-empty label still renders.)
+    if (block.galaxy.trim()) {
+      parts.push(`<h2>${escapeHtml(block.galaxy)}</h2>`);
+    }
     parts.push("<ul>");
 
     for (const finding of block.findings) {
       const track = tracksByLogId[finding.logId];
       const href = logPageUrl(finding.logId);
       const label = track ? trackLabel(track) : finding.logId;
-      const spotify = track?.spotifyUrl
-        ? ` <a href="${escapeHtml(track.spotifyUrl)}" style="color:#888">Spotify</a>`
-        : "";
       const why = finding.why?.trim() ? ` — ${escapeHtml(finding.why)}` : "";
-      parts.push(`<li><a href="${escapeHtml(href)}">${escapeHtml(label)}</a>${spotify}${why}</li>`);
+      parts.push(`<li><a href="${escapeHtml(href)}">${escapeHtml(label)}</a>${why}</li>`);
     }
 
     parts.push("</ul>");
