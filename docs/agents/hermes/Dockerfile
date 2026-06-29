@@ -77,9 +77,10 @@ RUN export SHELL=/bin/sh \
 # CLI runs ungated and an attempted publish comes back as a 403 to relay in voice.
 # Pinned for reproducible rebuilds (the version line also busts the layer cache on
 # a bump); carries the Convention-B renamed surface + `admin newsletter`/backfill
-# commands + the `admin tracks note` auto-note command (the `fluncle-note` cron).
+# commands + the `admin tracks note` auto-note command (the `fluncle-note` cron) +
+# the Fluncle Studio `admin clips list`/`cut` commands (the `fluncle-studio-clip` cron).
 # Bump deliberately when a newer release is needed on the box.
-RUN npm install -g fluncle@0.68.0
+RUN npm install -g fluncle@0.70.0
 
 # Claude Code — the `fluncle-observation` `--no-agent` cron's ONE agentic step shells
 # out to `claude -p` to author the recovered-audio observation script in Fluncle's
