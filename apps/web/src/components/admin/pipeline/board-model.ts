@@ -202,13 +202,17 @@ export function boardSteps(row: BoardRow): BoardStep[] {
       statusLabel: row.hasContextNote ? "Context" : "No context",
     },
     discogs: {
-      // The board is a WORKFLOW tracker, not a data-existence tracker. The Discogs
-      // backfill ran-but-found-no-release is a SUCCESS (the workflow checked, there
-      // just was no Discogs release to link) — so the cell closes `done` the moment
-      // the backfill RAN (`discogsRan`, the `backfill_discogs_attempted_at` stamp),
-      // whether or not it linked a release. Grey/`open` means ONE thing: not run yet.
-      // No manual trigger — the agent resolves the release; clicking opens the link
-      // (still only actionable when there's a release to open).
+      // The board is a WORKFLOW tracker, not a data-existence tracker. The cell
+      // closes `done` once the lookup has resolved a release OR ran without finding
+      // one — both are a SUCCESS (the workflow checked). A release can be linked by
+      // EITHER path: the on-add resolve (publishTrack writes `in_release_id` directly,
+      // without ever stamping `backfill_discogs_attempted_at`) or the backfill sweep
+      // (which stamps `discogsRan`, then SKIPS already-linked findings forever). So a
+      // finding resolved on add carries `discogsReleaseUrl` but NOT `discogsRan` — it
+      // must still read `done`, or a linked release renders as an un-filled "Pending"
+      // cell. Hence: linked (either path) OR ran ⇒ done. Grey/`open` means ONE thing:
+      // never resolved AND never swept. No manual trigger — the agent resolves the
+      // release; clicking opens the link (only actionable when there's one to open).
       actionable: Boolean(row.discogsReleaseUrl),
       gated: false,
       hint: row.discogsReleaseUrl
@@ -216,7 +220,7 @@ export function boardSteps(row: BoardRow): BoardStep[] {
         : row.discogsRan
           ? "Checked — no Discogs release found"
           : "Discogs lookup hasn't run yet",
-      state: row.discogsRan ? "done" : "open",
+      state: row.discogsReleaseUrl || row.discogsRan ? "done" : "open",
       statusLabel: row.discogsReleaseUrl
         ? "Linked"
         : row.discogsRan
