@@ -62,6 +62,7 @@ export type MixtapeRowLike = {
   published_at?: string | null;
   recorded_at?: string | null;
   sequence_number?: number | null;
+  set_video_at?: string | null;
   soundcloud_url?: string | null;
   status?: MixtapeStatus | null;
   title: string;
@@ -92,6 +93,7 @@ export function rowToMixtape(row: MixtapeRowLike, members: MixtapeMember[] = [])
     publishedAt: row.published_at ?? undefined,
     recordedAt: row.recorded_at ?? undefined,
     sequenceNumber: row.sequence_number ?? undefined,
+    setVideoAt: row.set_video_at ?? undefined,
     status: row.status ?? "draft",
     title: row.title,
     type: "mixtape",

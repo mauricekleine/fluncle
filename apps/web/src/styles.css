@@ -1083,6 +1083,109 @@ body::before {
   width: min(100%, 20rem);
 }
 
+/* The mixtape set player: the branded scrubber-driven video for a ~72-min set
+   (the finding footage is play/pause-only). Dark, warm-neutral; the scrubber
+   rides the Stardust → Starlight-Cream ramp (no galaxy tints — they fail AA on
+   the dark plate), the play/pause is the one Eclipse-Gold light (One Sun). */
+.mixtape-player {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0 auto;
+  width: min(100%, 34rem);
+}
+
+.mixtape-player-media {
+  aspect-ratio: 16 / 9;
+  background: var(--sleeve-black);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-lg);
+  display: block;
+  object-fit: cover;
+  width: 100%;
+}
+
+.mixtape-player-controls {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+}
+
+.mixtape-player-toggle {
+  flex: none;
+}
+
+.mixtape-player-time {
+  color: var(--stardust);
+  flex: none;
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* The scrubber: a click/drag seek bar on the VibeMap pointer model. The fill +
+   thumb track the video clock (content motion) with no transition, so they keep
+   moving under reduced motion; only the focus/hover lift is eased + gated. */
+.video-scrubber {
+  cursor: pointer;
+  flex: 1 1 auto;
+  min-width: 0;
+  outline: none;
+  padding-block: 0.6rem;
+  position: relative;
+  touch-action: none;
+}
+
+.video-scrubber-track {
+  /* The unfilled rail: warm Stardust, lifted enough to read the full seekable
+     length before any fill, with a Dust-Line hairline (the system's one edge
+     treatment) so the empty rail stays discoverable. The state indicators (fill +
+     thumb, Starlight Cream) carry the affordance and clear AA 3:1 on their own. */
+  background: color-mix(in oklch, var(--stardust) 45%, transparent);
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px var(--dust-line);
+  height: 4px;
+  overflow: hidden;
+  width: 100%;
+}
+
+.video-scrubber-fill {
+  background: var(--starlight-cream);
+  height: 100%;
+}
+
+.video-scrubber-thumb {
+  background: var(--starlight-cream);
+  border-radius: 999px;
+  height: 12px;
+  pointer-events: none;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  transition: scale 150ms ease-out;
+  width: 12px;
+}
+
+.video-scrubber:hover .video-scrubber-thumb,
+.video-scrubber:focus-visible .video-scrubber-thumb {
+  scale: 1.25;
+}
+
+.video-scrubber:focus-visible .video-scrubber-thumb {
+  box-shadow: 0 0 0 4px color-mix(in oklch, var(--eclipse-gold) 50%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .video-scrubber-thumb {
+    transition: none;
+  }
+
+  .video-scrubber:hover .video-scrubber-thumb,
+  .video-scrubber:focus-visible .video-scrubber-thumb {
+    scale: 1;
+  }
+}
+
 .log-definition {
   display: grid;
   gap: 0.45rem;

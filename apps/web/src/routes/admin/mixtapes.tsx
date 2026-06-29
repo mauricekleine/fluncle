@@ -66,6 +66,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { beatportSearchUrl } from "@/lib/beatport";
 import { formatAlbumDuration, formatDurationField, parseDuration } from "@/lib/format";
@@ -503,6 +504,10 @@ function MixtapeEditor({
                 <DistributionStrip mixtapeId={mixtape.id} status={mixtape.status} />
               ) : null}
 
+              {mixtape.id && mixtape.logId ? (
+                <SetVideoToggle mixtape={mixtape} refresh={refresh} />
+              ) : null}
+
               {note.trim() ? (
                 <div className="space-y-1.5">
                   <Label>Note</Label>
@@ -785,6 +790,69 @@ function DistributionStatusBadge({ status }: { status: string }) {
     <Badge className="shrink-0 capitalize" variant={variant}>
       {status}
     </Badge>
+  );
+}
+
+// The set-video gate: flip it on AFTER uploading the full set video to R2
+// (`<log-id>/set.mp4`), and the mixtape's `/log` page shows the branded scrubber
+// player. A flag, not an upload — writes `setVideoAt` through the existing
+// operator-tier `update_mixtape` op (its own PATCH, so it never touches the
+// published mixtape's immutable recorded date). Only shown once the coordinate is
+// minted (the URL needs the Log ID).
+function SetVideoToggle({
+  mixtape,
+  refresh,
+}: {
+  mixtape: MixtapeDTO;
+  refresh: () => Promise<void>;
+}) {
+  const switchId = useId();
+  const on = Boolean(mixtape.setVideoAt);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useAutoNotice();
+  const id = mixtape.id;
+
+  const toggle = async (next: boolean) => {
+    if (!id) {
+      return;
+    }
+    setBusy(true);
+    setError(undefined);
+    try {
+      await saveMixtape(id, { setVideoAt: next ? new Date().toISOString() : "" });
+      await refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor={switchId}>Set video</Label>
+      <div className="flex items-center gap-3">
+        <Switch
+          checked={on}
+          disabled={busy}
+          id={switchId}
+          onCheckedChange={(next) => void toggle(next)}
+        />
+        <span className="text-sm text-muted-foreground">
+          {on ? "The set player is live on the log page." : "Off. No set player yet."}
+        </span>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Flip on after uploading the full set video to{" "}
+        <code className="font-mono">{mixtape.logId}/set.mp4</code> on R2; it shows the branded
+        scrubber player on the public log page.
+      </p>
+      {error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
