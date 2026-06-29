@@ -1,6 +1,6 @@
 # RFC: Fluncle Studio — the mixtape set → clip pipeline (footage clips; distribution deferred)
 
-**Status:** Final (4 research threads → /taste → 4-role adversarial panel synthesized, 2026-06-29) — completeness standard applied; operator decisions resolved inline.
+**Status:** Final (4 research threads → /taste → 4-role adversarial panel synthesized, 2026-06-29) — completeness standard applied; operator decisions resolved inline. Amended 2026-06-29: Unit F (the `/log` set-video player + video SEO) shipped (#208); Unit A's CLI surface is now `fluncle admin mixtapes distribute --set-video` (the staging folds into the normal distribution flow) rather than a standalone `studio ingest`.
 **For:** a fresh build session / a small team of agents.
 **Canon/authority:** the codebase + `AGENTS.md`, `DESIGN.md`, `VOICE.md`, `PRODUCT.md`, `docs/video-variants.md`, `packages/skills/fluncle-mixtapes/references/spine-model.md`. Planning, not spec; code + canon win on conflict.
 
@@ -17,7 +17,7 @@ The clipping core ships complete — implementation + tests + docs, every thread
 
 ## 0. Summary / the reframe
 
-- **The unifying simplification (operator's insight): one staged master earns its keep three ways.** Upload the raw **landscape** set master to R2 once, and it is simultaneously (a) the **clip source**, (b) the **`/log/<mixtapeLogId>` set-video player** (today a mixtape log page has no video), and (c) via one web-playable rendition, the **editor scrub-preview**. The draft's hardest blocker ("the 2GB master has no R2 home") becomes a feature.
+- **The unifying simplification (operator's insight): one staged master earns its keep three ways.** Upload the raw **landscape** set master to R2 once, and it is simultaneously (a) the **clip source**, (b) the **`/log/<mixtapeLogId>` set-video player** (shipped 2026-06-29, #208 — player + video SEO), and (c) via one web-playable rendition, the **editor scrub-preview**. The draft's hardest blocker ("the 2GB master has no R2 home") becomes a feature.
 - **Clips are real footage, framed — not generated.** v1 cuts a **9:16 portrait window from the landscape master** (never a squared source — squaring double-crops the frame away), with an operator-chosen x-offset, plus a **minimal brand frame** (Artist — Title, the `fluncle://` coordinate, a small Fluncle mark). This keeps the human-mixing warmth (PRODUCT.md's _warm, crewed_ axis) while carrying enough narrative to satisfy the surface-saturation rule. The full cosmos composition is a later enhancement.
 - **MT is the finisher, not the aspect engine** (panel correction). Cloudflare MT crop is **centre-only**, so the framed 9:16 is **baked at the ffmpeg cut**; MT then derives resolution ladders / poster / silent-audio variants from that ≤60s, ≤100 MB clip. A clip is stored as its **own pseudo-finding namespace** `<clipId>/footage.mp4` so the existing `videoCrop(clipId, …)`/`videoPurgeUrls(clipId, …)` helpers work **unchanged** (they're hardwired to `<logId>/footage.mp4` — a `clips/<id>.mp4` subpath gets zero fan-out; the draft was wrong here).
 - **One DSP envelope, two jobs.** The set's energy/bass/flux envelope (computed once on the box from the **R2 audio**, which already exists) is both the auto-suggest signal and the editor's waveform data. Auto-suggest is candidate drops the operator vets — not certainties.
@@ -33,17 +33,21 @@ The clipping core ships complete — implementation + tests + docs, every thread
 
 **Honest calibration:** in reach now — ingest, analysis, the footage cut, the data layer, the editor, the `/log` player. Out of this RFC — distribution (a real external IG-audio blocker) and the full cosmos composition. Whether clips _perform_ on socials is an outcome we don't control. A content note, not a code item: future sets want a **portrait-aware camera frame** (the current top-down angle centre-crops to an awkward 9:16, as the operator confirmed) — the editor's framing offset mitigates existing footage; better staging fixes it at the source.
 
-## 2. Unit A — Master ingest to R2 (+ the web rendition)
+## 2. Unit A — Master ingest via `distribute --set-video`
 
-**Direction:** the CLI is the only place that holds the local master (like `distribute`), so a new **`fluncle studio ingest <mixtapeId>`** command stages it.
+**Direction:** the CLI is the only place that holds the local master (like `distribute`). Rather than a standalone `studio ingest`, **fold the staging into the existing `fluncle admin mixtapes distribute` command as a `--set-video` flag** — so the `/log` set video _and_ the clip source come free with the normal mixtape distribution flow. This replaces the manual three-step staging the `fluncle-mixtapes` skill documents today (rendition → `aws s3 cp` → flip the toggle), and `mixtapeSetVideoUrl` + the `/log` player + the video SEO already shipped (#208), so this is purely the automation of the staging + the flag-flip.
 
-**Plan:**
+**`fluncle admin mixtapes distribute <id> --video <mixtape>.mp4 --set-video`** does three things beyond the YouTube/Mixcloud legs:
 
-- The master is multi-GB → the existing single-PUT presign (`r2-presign.ts`, 1h TTL, ~200 MB budget) won't move it. Use **multipart upload** (or a long-TTL resumable PUT) via a new admin-tier presign op (see §5). Land the raw landscape master at a **private** key (embargo: an unreleased set must not be public — the public `found.fluncle.com` zone would leak it). Flip to public-readable on mixtape publish.
-- Produce **one web-playable rendition** at ingest — faststart, ~1 Mbps 720p, ~1 s GOP (dense keyframes for scrubbing) — serving both the editor preview and the `/log` player. **Do not cap it at 100 MB** (panel correction: it is never an MT input; it's played directly over R2 range requests; 100 MB / 48 min ≈ 278 kbps is unwatchable). Size it for seek latency + legibility (~300–500 MB is fine over range requests).
-- Add `mixtapeMasterUrl(mixtapeLogId)` + `mixtapeSetVideoUrl(mixtapeLogId)` helpers to `media.ts` next to `mixtapeAudioUrl`.
+- **Stage the raw landscape master** to a **private** R2 key — the clip source + archive (the highest-quality source for Unit C's cut). The master is multi-GB → the existing single-PUT presign (`r2-presign.ts`, 1h TTL, ~200 MB budget) won't move it; use **multipart upload** via a new admin-tier presign op (§5). Private because an unreleased set must not leak on the public `found.fluncle.com` zone; flip public-readable on mixtape publish (Decision 3).
+- **Derive + stage one web rendition** — faststart, ~1 Mbps 720p, ~1 s GOP (dense keyframes for scrubbing), at `<logId>/set.mp4` — serving the `/log` player **and** the editor scrub-preview. **Not capped at 100 MB** (it is never an MT input; it's played directly over R2 range requests; 100 MB / 48 min ≈ 278 kbps is unwatchable). Size for seek + legibility (~300–500 MB).
+- **Flip `setVideoAt`** via the existing operator-tier `update_mixtape` → the `/log` player + the `<video:video>` sitemap entry + the VideoObject light up (Unit F, shipped).
 
-**Edge cases:** storage/lifecycle of the 2 GB master after clipping (keep as archive — it's also the `/log` source); confirm R2 `accept-ranges: bytes` + `+faststart` survive the custom-domain hop (Safari range probing).
+**Idempotent + backfill:** `--set-video` re-run on an already-published mixtape just re-stages + re-flips, so it backfills an older set (e.g. #1's raw master for clipping) with no separate command. `mixtapeMasterUrl(mixtapeLogId)` joins the shipped `mixtapeSetVideoUrl` in `media.ts`.
+
+**Decision (new, §Decisions):** does `--set-video` always stage the 2 GB master (clip-ready, heavier) or rendition-only by default with master staging behind a flag? Rendition-only is the cheap `/log` win; the master is only needed once clipping (Units B–E) is live.
+
+**Edge cases:** storage/lifecycle of the 2 GB master (keep as archive — also the clip source); confirm R2 `accept-ranges: bytes` + `+faststart` survive the custom-domain hop (Safari range probing); the bytes move CLI-direct (the Worker can't proxy a multi-GB master — same constraint as the YouTube/Mixcloud legs).
 
 ## 3. Unit B — Set analysis (the box, off R2 audio)
 
@@ -102,13 +106,13 @@ Entered from a **"Clip this set" action on a minted `MixtapeEditor` row** (mixta
 - **Settings cog** (`Popover`, the radio precedent): clip length, the brand-frame toggle, the framing reset. **Cut the DAW flourishes** (taste): no spectrogram (a later stretch with wavesurfer), no J/K/L shuttle/frame-step (drop-aligned cuts don't need frame precision; arrow-nudge suffices).
 - **a11y/canon:** `components/ui/*` only (no `@base-ui/react/*`); Phosphor icons; reduced-motion = clock/pointer-tracked values are _content_ (not gated — cite the VibeMap precedent), only easing/auto-scroll is suppressed; `role="application"` + `aria-label` + `aria-live` time readout. `canon-reviewer` + a11y pass before merge.
 
-## 7. Unit F — the `/log` set-video player (the tied-off bonus)
+## 7. Unit F — the `/log` set-video player (SHIPPED)
 
-The staged master's web rendition lights up the mixtape `/log/<mixtapeLogId>` page (today video-less, e.g. `019.F.1A`): a cover-led, range-streamed `<video>` of the set under the existing tracklist. Reuses the Unit A rendition + `useVideoStallRecovery`; gated on the master being staged + public (post-release). Small, high-value, and it justifies the master-ingest work twice.
+**Done** (#208 + the video SEO, 2026-06-29): the mixtape `/log/<mixtapeLogId>` page shows the set video as the hero (replacing the cover) when `setVideoAt` is set — a branded scrubber-driven `<video>`, range-streamed from `<logId>/set.mp4`, plus the `<video:video>` sitemap entry + VideoObject JSON-LD + og:video (crawled like the finding clips). `019.F.1A` is live. The reusable `VideoScrubber` built here is the exact one the editor (Unit E) inherits. The only remaining gap is **Unit A automating the staging** (`--set-video`) that is operator-manual today (per the `fluncle-mixtapes` skill).
 
 ## Sequencing & ownership
 
-- **Day one (parallel):** **A** (master ingest CLI + presign ops + the web rendition) and **B** (the `analyze-set.ts` envelope/picker, de-risked on **#1's R2 audio**) and **D** (the `mixtape_clips` table + the 7 ops + coverage + the hardened `set_mixtape_cues`). A and D unblock everything; B proves the DSP independently.
+- **Day one (parallel):** **A** (`distribute --set-video` — the master + rendition staging + the presign ops) and **B** (the `analyze-set.ts` envelope/picker, de-risked on **#1's R2 audio**) and **D** (the `mixtape_clips` table + the 7 ops + coverage + the hardened `set_mixtape_cues`). A and D unblock everything; B proves the DSP independently. (Unit F — the `/log` player — is already shipped; A automates its staging.)
 - **Then C** (the footage cut) needs A's master + D's clip object. **Then E** (editor) needs A's rendition + C + D. **F** (`/log` player) needs A.
 - **Biggest de-risk:** run B against mixtape #1's audio first (proves the picker, zero dependence on the #2 re-record), and ingest #1's master (Unit A) to validate the multipart upload + light up #1's `/log` player.
 - **Deploy discipline:** one PR per unit; mind Cloudflare build coalescing on `main` merges.
@@ -120,11 +124,12 @@ Most are resolved (operator). Remaining:
 1. **Box for the ffmpeg cut + DSP:** the always-on Hermes box (rave-02) — confirm/install ffmpeg there (recommended; deterministic, no GPU). vs the render box.
 2. **The minimal brand frame's exact treatment** — ffmpeg `drawtext` (simplest) vs a thin Remotion overlay pass (more control, sets up the future cosmos version). Recommend Remotion-thin for typographic + grain canon.
 3. **Master privacy lifecycle** — private key pre-release, flip public on publish: confirm the flip mechanism (a key move/copy vs an ACL change in R2).
-4. **`/log` player default-on for all mixtapes**, or opt-in per mixtape?
+4. **`/log` player default-on for all mixtapes**, or opt-in per mixtape? (Today it is opt-in via the `setVideoAt` flag — keep that.)
+5. **`--set-video` scope:** always stage the 2 GB master (clip-ready) vs **rendition-only by default** with master staging behind a flag. Rendition-only is the cheap `/log` win; the master is only needed once clipping (Units B–E) is live. (Recommend rendition-only default + `--archive-master` for the clip source, so a routine distribution doesn't always push 2 GB.)
 
 ## Acceptance criteria
 
-- **A:** `fluncle studio ingest <id>` multipart-uploads a 2 GB master to a private R2 key + produces a faststart web rendition; a **test** of the presign+upload shape; `docs/fluncle-studio.md` documents the artifacts + privacy lifecycle.
+- **A:** `fluncle admin mixtapes distribute <id> --set-video` multipart-uploads the master to a private R2 key, derives + stages the faststart web rendition, and flips `setVideoAt` (idempotent re-run backfills an already-published set); a **test** of the presign+upload shape; `docs/fluncle-studio.md` documents the flag + the artifacts + the privacy lifecycle. Replaces the manual three-step staging in the `fluncle-mixtapes` skill.
 - **B:** the box produces a `StudioEnvelope` for mixtape #1 from its R2 audio; the top-N picker has a **unit test** (spacing, local-snap, pre-roll) and is **validated on the real set** (snap accuracy, candidate sanity) — not just a fixture.
 - **C:** a clip job cuts a framed 9:16 < 100 MB clip master with the brand frame → stored as `<clipId>/footage.mp4` → `videoCrop(clipId)` derives the ladder/poster/silent; re-cut purges; a **test** of the cut/ship + the AA scrim over footage.
 - **D:** migrations via `db:generate`; the **7 ops pass the coverage + auth-tier build-gates**; `set_mixtape_cues` backfills #1 post-publish, **rejects a non-member ref / a draft mutation of set+order / non-monotonic cues**; `naming-convention-linter` clean.
