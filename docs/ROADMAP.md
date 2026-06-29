@@ -130,15 +130,15 @@ The machine- and developer-facing surfaces mapped in [docs/surfaces-doctrine.md]
 
 - **The non-gating tail:** the `today` dig label, a public changelog, a Docker image, broader data-graph anchors (Discogs, Last.fm, ListenBrainz), and directory listings (Product Hunt, Internet Archive, a Hugging Face dataset). Each becomes a registry entry in [docs/surfaces-doctrine.md](./surfaces-doctrine.md) when one earns its keep.
 
-### Fluncle Lens (Chrome extension) — submitted, in review
+### Fluncle Lens (Chrome extension) — LIVE
 
-Fluncle Lens (`apps/extension`) — an MV3 extension that detects `fluncle://<coord>` Log IDs anywhere on the web and turns each into a link to its `/log/<coord>` page — was **submitted to the Chrome Web Store and is in compliance review** (2026-06-21). It's the first browser surface riding the Log ID spine. The `<all_urls>` content-script match triggers a **"Broad Host Permissions" in-depth review** — expected and justified (a coordinate can appear on any page), so the review runs long by design. Listing specifics (category Entertainment, privacy policy at the real `/privacy` route, the bundle/icon/screenshot pointers, and the privacy-form answers that recur on every version update) are captured operator-side.
+Fluncle Lens (`apps/extension`) — an MV3 extension that detects `fluncle://<coord>` Log IDs anywhere on the web and turns each into a link to its `/log/<coord>` page — is **live in the Chrome Web Store** (published 2026-06-29; store ID `efkkceaofendabikblfjhoepgejfpakk`, [listing](https://chromewebstore.google.com/detail/efkkceaofendabikblfjhoepgejfpakk)). It's the first browser surface riding the Log ID spine. Listing specifics (category Entertainment, the `/privacy` policy route, the bundle/icon/screenshot pointers) and the privacy-form answers that recur on every version update are captured operator-side.
 
 Open:
 
-- **Post-approval announce + fan-out.** When it clears review, fold it into the surface map — a quiet line to the crew (Telegram / the Friday letter), a mention on `/about` and the `/docs` developer surfaces. It's a net-new public surface the autonomy-ladder §1 fan-out list doesn't yet name. Pre-stage it as a `@fluncle/registry` surface entry ready to flip the moment it goes live (so /status, the homepage dev-row, llms.txt, and the sitemap all light up at once — see the `fluncle-surfaces` runbook).
+- **Surface fan-out (in flight).** The pre-staged `extension.lens` `@fluncle/registry` entry is being flipped live (drop `pending`, swap in the real store URL) so /status, the homepage dev-row, llms.txt, the sitemap, and the surfaces-doctrine doc light up at once, plus a "Get the Chrome extension" link on `/about` — open as a PR (the `fluncle-surfaces` runbook).
+- **Announce to the crew.** Once the fan-out merges, a quiet line to the crew (Telegram / the Friday letter), drafted in Fluncle's voice and operator-sent.
 - **Future features.** Beyond Log-ID linkification, any richer Lens behaviour is open-ended — translate ideas into Fluncle's terms when picked up (canon wins per `AGENTS.md`; the source brainstorm leaned on banned words like "signals").
-- **Run-from-source meanwhile.** Pre-approval Maurice is the only user, running it unpacked from `apps/extension/dist/` — fine until it's live; the store build is `bun run --cwd apps/extension bundle`.
 
 ### Tor `.onion` surfaces — web onion LIVE, SSH onion deferred
 
@@ -187,7 +187,7 @@ The shape:
 - **Fan out, then auto-clear.** A tasteful banner/callout on the web home + feed (quiet, dark, reduced-motion-safe — the calm aesthetic holds, this is the _one_ allowed loud beat), a ping to the crew on Telegram (a "live now" message with the watch link, pinned for the duration), and a line in the dry surfaces (the CLI `recent` header / the SSH MOTD). Every surface reads the same flag; when it flips off, every callout disappears on its own.
 - **Voice.** In-fiction as "on the decks" / "live in the booth" / "rinsing a set live" — never "transmission", "signal", or "stream" as identity (the banned set in VOICE); "live" as the literal Twitch state is fine. Dry and warm, the crew addressed directly; the callout brags as little as the rest of the copy.
 
-Gated on nothing structural — it's net-new surface plumbing, sized as a single arc when live mixing becomes a regular thing.
+**Status: built — PR #199, merge-ready** (reviewed clean across contract/auth/credentials + design/voice, CI green, up to date with `main`). The full live-state layer is implemented across every surface — web banner (with the new Nebula Violet "Live Exception" brand color, DESIGN.md), Telegram pin, SSH, CLI, MCP, dig/DNS, and `/api/status` — on the agent-tier `record_live_state` route fed by the on-box `fluncle-live` Helix-poll cron. What's left is **operator-side, not build**: register a Twitch dev app for the client id/secret (gated on the operator's Twitch 2FA), merge #199, drop the secret in the op vault, wire the `fluncle-live` box cron, and redeploy the Go SSH/DNS apps.
 
 ### radio.fluncle.com on Twitch 24/7 — the always-on channel
 
