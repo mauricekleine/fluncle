@@ -87,6 +87,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/mixtapes/{mixtapeId}/members": "add_mixtape_members",
   "POST /admin/mixtapes/{mixtapeId}/mixcloud/finalize": "finalize_mixtape_mixcloud",
   "POST /admin/mixtapes/{mixtapeId}/publish": "publish_mixtape",
+  // The set-video staging presign (Fluncle Studio Unit A) — contract-only oRPC (no
+  // TanStack route file; oRPC owns the path directly). Operator tier: it opens a
+  // multipart direct-to-R2 upload for the mixtape's `<logId>/set.mp4` rendition.
+  "POST /admin/mixtapes/{mixtapeId}/set-video/presign": "presign_set_video_upload",
   "POST /admin/mixtapes/{mixtapeId}/youtube/finalize": "finalize_mixtape_youtube",
   "POST /admin/mixtapes/{mixtapeId}/youtube/initiate": "initiate_mixtape_youtube",
   "POST /admin/mixtapes/{mixtapeId}/youtube/publish": "publish_mixtape_youtube",

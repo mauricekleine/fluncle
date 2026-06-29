@@ -272,9 +272,9 @@ export const publishMixtapeYoutube = oc
 // A clip is a lightweight 9:16 derivative of a mixtape's set video — many per set.
 // LOOSE/passthrough bodies, like the rest of the domain: the server helpers
 // (`createClip`/`updateClip`/`setMixtapeCues`) validate + throw their own codes, so
-// the contract must not pre-reject. The two presign ops (`presign_set_video_upload`
-// /`presign_clip_upload`) are DEFERRED to Units A/C (they sign R2 uploads for the
-// set-video staging + the box's clip output), so they are NOT in this slice.
+// the contract must not pre-reject. The remaining presign op (`presign_clip_upload`)
+// is DEFERRED to Unit C (it signs the box's clip output); `presign_set_video_upload`
+// below ships with Unit A (it signs the CLI's set-video rendition upload).
 
 /**
  * `list_clips` → `GET /admin/clips` (operationId `listClips`).
@@ -368,6 +368,48 @@ export const setMixtapeCues = oc
   .input(z.looseObject({ mixtapeId: z.string() }))
   .output(MixtapeEnvelope);
 
+/**
+ * `presign_set_video_upload` → `POST /admin/mixtapes/{mixtapeId}/set-video/presign`
+ * (operationId `presignSetVideoUpload`).
+ *
+ * Operator tier (`requireOperator`). Fluncle Studio Unit A: open a multipart
+ * direct-to-R2 upload for a mixtape's 1080p set-video rendition at `<logId>/set.mp4`
+ * and presign every leg of it (one PUT URL per `partCount` parts + the complete +
+ * abort URLs). The rendition is ~1.5GB — past the single-PUT presign budget — so the
+ * CLI streams the parts straight to R2 and completes the upload itself (the Worker
+ * can't proxy the bytes). LOOSE body — the handler validates `partCount` and gates on
+ * the mixtape being minted (`invalid_request`/400, `mixtape_not_distributing`/409,
+ * `mixtape_no_log_id`/409). Returns `{ ok, mixtapeId, logId, key, uploadId, parts,
+ * completeUrl, abortUrl }`.
+ */
+export const presignSetVideoUpload = oc
+  .route({
+    method: "POST",
+    operationId: "presignSetVideoUpload",
+    path: "/admin/mixtapes/{mixtapeId}/set-video/presign",
+    summary: "Open + presign a multipart direct-to-R2 upload for a mixtape's set video",
+    tags: ["Admin"],
+  })
+  .input(
+    z.looseObject({
+      contentType: z.unknown().optional(),
+      mixtapeId: z.string(),
+      partCount: z.unknown().optional(),
+    }),
+  )
+  .output(
+    z.object({
+      abortUrl: z.string(),
+      completeUrl: z.string(),
+      key: z.string(),
+      logId: z.string(),
+      mixtapeId: z.string(),
+      ok: z.literal(true),
+      parts: z.array(z.object({ partNumber: z.number(), url: z.string() })),
+      uploadId: z.string(),
+    }),
+  );
+
 /** The `admin-mixtapes` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminMixtapesContract = {
   add_mixtape_members: addMixtapeMembers,
@@ -381,6 +423,7 @@ export const adminMixtapesContract = {
   initiate_mixtape_youtube: initiateMixtapeYoutube,
   list_clips: listClips,
   list_mixtapes_admin: listMixtapesAdmin,
+  presign_set_video_upload: presignSetVideoUpload,
   publish_mixtape: publishMixtape,
   publish_mixtape_youtube: publishMixtapeYoutube,
   set_mixtape_cues: setMixtapeCues,

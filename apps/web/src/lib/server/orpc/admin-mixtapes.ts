@@ -29,6 +29,7 @@ import {
   updateMixtape,
 } from "../mixtapes";
 import { adminAuth, operatorGuard } from "../orpc-auth";
+import { R2_MAX_PARTS, VIDEOS_BUCKET, presignMultipartUpload } from "../r2-presign";
 import { getYouTubeAccessToken } from "../youtube";
 import { apiFault, type Implementer } from "./_shared";
 
@@ -492,6 +493,76 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
+  // POST /admin/mixtapes/{mixtapeId}/set-video/presign — operator tier (Fluncle
+  // Studio Unit A). Open a multipart direct-to-R2 upload for the mixtape's set-video
+  // rendition at `<logId>/set.mp4` + presign every leg; the CLI streams the ~1.5GB
+  // rendition straight to R2. Gates like the YouTube initiate: a minted mixtape only
+  // (it needs a committed Log ID for the key).
+  const presignSetVideoUploadHandler = os.presign_set_video_upload
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const body = input as { contentType?: unknown; partCount?: unknown };
+        const partCount = Number(body.partCount);
+
+        if (!Number.isInteger(partCount) || partCount < 1 || partCount > R2_MAX_PARTS) {
+          throw new ORPCError("BAD_REQUEST", {
+            data: {
+              apiCode: "invalid_request",
+              apiMessage: `partCount must be an integer 1..${R2_MAX_PARTS}`,
+            },
+            message: `partCount must be an integer 1..${R2_MAX_PARTS}`,
+            status: 400,
+          });
+        }
+
+        const contentType =
+          typeof body.contentType === "string" && body.contentType ? body.contentType : "video/mp4";
+
+        const mixtape = await getMixtapeById(input.mixtapeId, { includeDrafts: true });
+
+        if (mixtape.status !== "distributing" && mixtape.status !== "published") {
+          throw new ORPCError("CONFLICT", {
+            data: {
+              apiCode: "mixtape_not_distributing",
+              apiMessage: "Mint the mixtape (publish) before staging its set video",
+            },
+            message: "Mint the mixtape (publish) before staging its set video",
+            status: 409,
+          });
+        }
+
+        if (!mixtape.logId) {
+          throw new ORPCError("CONFLICT", {
+            data: { apiCode: "mixtape_no_log_id", apiMessage: "Mixtape has no committed Log ID" },
+            message: "Mixtape has no committed Log ID",
+            status: 409,
+          });
+        }
+
+        const presign = await presignMultipartUpload(
+          VIDEOS_BUCKET,
+          `${mixtape.logId}/set.mp4`,
+          contentType,
+          partCount,
+        );
+
+        return {
+          abortUrl: presign.abortUrl,
+          completeUrl: presign.completeUrl,
+          key: presign.key,
+          logId: mixtape.logId,
+          mixtapeId: input.mixtapeId,
+          ok: true as const,
+          parts: presign.parts,
+          uploadId: presign.uploadId,
+        };
+      } catch (error) {
+        throw toFault(error);
+      }
+    });
+
   // PUT /admin/mixtapes/{mixtapeId}/cues — operator tier. The hardened post-publish
   // cue backfill. LOOSE body → setMixtapeCues, which owns the non-draft + member-set
   // + monotonic/start-at-0 guards.
@@ -521,6 +592,7 @@ export function adminMixtapesHandlers(os: Implementer) {
     initiate_mixtape_youtube: initiateMixtapeYoutubeHandler,
     list_clips: listClipsHandler,
     list_mixtapes_admin: listMixtapesAdminHandler,
+    presign_set_video_upload: presignSetVideoUploadHandler,
     publish_mixtape: publishMixtapeHandler,
     publish_mixtape_youtube: publishMixtapeYoutubeHandler,
     set_mixtape_cues: setMixtapeCuesHandler,
