@@ -79,7 +79,7 @@ RUN export SHELL=/bin/sh \
 # a bump); carries the Convention-B renamed surface + `admin newsletter`/backfill
 # commands + the `admin tracks note` auto-note command (the `fluncle-note` cron).
 # Bump deliberately when a newer release is needed on the box.
-RUN npm install -g fluncle@0.68.0
+RUN npm install -g fluncle@0.69.0
 
 # Claude Code — the `fluncle-observation` `--no-agent` cron's ONE agentic step shells
 # out to `claude -p` to author the recovered-audio observation script in Fluncle's
