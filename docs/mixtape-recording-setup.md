@@ -14,7 +14,7 @@ Rekordbox sends its master to one place. The trap is thinking you must choose be
 Rekordbox (master)
   ├─ DDJ-FLX4 ──► monitor speakers + headphone cue   (you hear + cue, FLX4-controlled)
   └─ BlackHole 2ch ──► OBS Audio Input Capture ──► Twitch stream + recording
-DDJ-FLX4 / a mic ──► OBS Mic/Aux ──► its own OBS track (so the mix can be voice-free)
+a mic ──► OBS Mic/Aux ──► Track 1 only (so Track 2 stays clean, voice-free music)
 ```
 
 ## Setup (one-time)
@@ -40,13 +40,15 @@ Install BlackHole 2ch (`brew install blackhole-2ch`, reboot if it was a fresh in
 - **Audio Input Capture** source → Device = **`BlackHole 2ch`**. This is the music.
 - **Mic/Aux** → your mic (Samson Q2U via the Scarlett, or whatever) — only if you talk on stream.
 - **Track split so the Mixcloud master stays voice-free** (OBS → Advanced Audio Properties → Tracks):
-  - Audio Input Capture (music) → **Tracks 1 and 2**
-  - Mic/Aux → **Track 2** only
-  - Result: **Track 1 = music only** (extract this for Mixcloud), **Track 2 = music + voice** (Twitch + the video).
-- Output → Streaming → Audio Track = **2** (viewers hear music + you). Output → Recording → Audio Tracks = **1 and 2**.
-- Output → Audio → **Audio Bitrate 320** (Twitch max, worth it for music).
-- Output → Recording → Recording Format `.mp4` (or `.mov` — both remux cleanly later). Audio Encoder CoreAudio AAC.
-- Keep **everything at 44.1 kHz** end to end (Rekordbox, BlackHole, OBS) to avoid crackle/drift.
+  - Audio Input Capture (music / BlackHole) → **all tracks** (1–6; at minimum 1 and 2)
+  - Mic/Aux → **Track 1** only
+  - Result: **Track 1 = music + mic** (the Twitch live feed), **Track 2 = music only** — the clean master. Extract Track 2 for Mixcloud and for clips.
+- Output → Streaming → Audio Track = **1** (viewers hear music + you). Output → Recording → Audio Tracks = **1 and 2** (so the clean Track 2 lands in the file).
+- Output → Audio → **Audio Bitrate 320** on Tracks 1 and 2 (Twitch max, worth it for music).
+- **Video — Output (Scaled) Resolution = `1920×1080`** (Settings → Video). This is the resolution the recording bakes to: recording reuses the stream encoder at the _scaled_ res, so if it's left at `1280×720` the whole set records 720p no matter how sharp the cameras are, and the 9:16 clips come out soft. Set Base (Canvas) to `1920×1080` too (60 fps + Bicubic are fine). Source both cameras at 1080p. **Keep the recording H.264** (not HEVC) so Cloudflare Media Transformations / the clip pipeline can read it.
+- For crisper clips, optionally give Output → Recording its **own** Video Encoder (Apple VT H264 hardware, ~12–16 Mbps) instead of "(Use stream encoder)" — the Twitch stream stays at 6000 kbps while the local clip source gets sharper (nearly free on Apple silicon).
+- Output → Recording → Recording Format `.mov`/`.mp4` (both remux cleanly later). Audio Encoder CoreAudio AAC.
+- Keep the **same sample rate end to end** — OBS is at 48 kHz, so set BlackHole (Audio MIDI Setup) and Rekordbox to 48 kHz too, to avoid resample crackle/drift.
 
 ## Pre-flight (every single set — 10 seconds, non-negotiable)
 
@@ -64,20 +66,20 @@ ffprobe -v error -show_entries 'format=duration:stream=index,codec_type,codec_na
   -of default=noprint_wrappers=1 "<recording>.mov"
 ```
 
-Identify the **music-only** audio track (the clean one — stereo, healthy level). Then:
+The **clean music-only track is Track 2** (`-map 0:a:1`); Track 1 carries your mic. Then:
 
 ```bash
-# VIDEO for YouTube — remux video + the music track, no re-encode (fast, lossless)
-ffmpeg -i "<recording>.mov" -map 0:v:0 -map 0:a:0 -c copy -movflags +faststart out.mp4
+# VIDEO for YouTube — remux video + the clean music track, no re-encode (fast, lossless)
+ffmpeg -i "<recording>.mov" -map 0:v:0 -map 0:a:1 -c copy -movflags +faststart out.mp4
 
-# AUDIO master for Mixcloud — music track → 320k mp3
-ffmpeg -i "<recording>.mov" -map 0:a:0 -c:a libmp3lame -b:a 320k out.mp3
+# AUDIO master for Mixcloud — clean music track → 320k mp3
+ffmpeg -i "<recording>.mov" -map 0:a:1 -c:a libmp3lame -b:a 320k out.mp3
 
 # Trim dead air off the front (e.g. start at 4:30): add -ss 270 before -i
-ffmpeg -ss 270 -i "<recording>.mov" -map 0:v:0 -map 0:a:0 -c copy -movflags +faststart out.mp4
+ffmpeg -ss 270 -i "<recording>.mov" -map 0:v:0 -map 0:a:1 -c copy -movflags +faststart out.mp4
 ```
 
-`-map 0:a:0` selects the first audio track — point it at whichever track is music-only (Track 1 in the split above). Then hand `out.mp4` + `out.mp3` to `fluncle admin mixtapes distribute`.
+`-map 0:a:1` selects the **second** audio track — the clean, music-only one (Track 2). Swap to `-map 0:a:0` (Track 1) only if you want your mic in the YouTube video. Then hand `out.mp4` + `out.mp3` to `fluncle admin mixtapes distribute`.
 
 ## Troubleshooting
 
@@ -85,10 +87,10 @@ ffmpeg -ss 270 -i "<recording>.mov" -map 0:v:0 -map 0:a:0 -c copy -movflags +fas
 | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | OBS records **silence** on the BlackHole track; only the mic has sound (mono, roomy) | Rekordbox master is going to the FLX4 but **not** BlackHole — usually because an **Aggregate Device** replaced PC MASTER OUT | Delete the Aggregate Device. Rekordbox device = DDJ-FLX4, tick **PC MASTER OUT**, Master Output = `DDJ-FLX4 + BlackHole 2ch`. Verify the OBS meter bounces. |
 | No **headphone cue** on the FLX4                                                     | Rekordbox is pointed at BlackHole alone, or at an Aggregate Device (aggregates kill controller cue)                          | Rekordbox device = DDJ-FLX4 (+ PC MASTER OUT). Cue lives on the FLX4 only when Rekordbox owns the FLX4 directly.                                            |
-| Your **voice is in the Mixcloud mix**                                                | OBS recorded music + mic onto the same track                                                                                 | Use the track split (music → Track 1, mic → Track 2); extract Track 1 for Mixcloud.                                                                         |
+| Your **voice is in the Mixcloud mix**                                                | You extracted Track 1 (music + mic) instead of the clean track                                                               | Track split = music → all tracks, mic → Track 1 only; extract **Track 2** (`-map 0:a:1`) for Mixcloud — Track 1 carries the mic.                            |
 | DnB track shows **half BPM** (86 vs 172)                                             | Analysis BPM range tops out below 172                                                                                        | Preferences → Analysis → BPM Range `98–195`, then **re-analyze**. Quick: the **2×** button.                                                                 |
 | **Tempo drifts/shifts** through a track                                              | Track analyzed with a **Dynamic** beatgrid                                                                                   | Preferences → Analysis → Beat Grid = Normal/Static, re-analyze. (If the tempo _fader_ jumps on load, that's **SYNC** — turn it off.)                        |
-| Crackle / pitch drift in the recording                                               | Sample-rate mismatch                                                                                                         | Force 44.1 kHz everywhere (Rekordbox, BlackHole, OBS).                                                                                                      |
+| Crackle / pitch drift in the recording                                               | Sample-rate mismatch                                                                                                         | Match the rate everywhere — OBS is 48 kHz, so set BlackHole (Audio MIDI Setup) + Rekordbox to 48 kHz.                                                       |
 
 ## References
 
