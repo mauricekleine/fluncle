@@ -1354,6 +1354,89 @@ body::before {
   color: var(--ink-on-gold);
 }
 
+/* The clip library (Unit G) — a cross-set grid of 9:16 poster tiles. The stage is a
+   portrait window on the warm dark ground; a done clip shows its poster (revealing an
+   inline preview on play), a pending clip shows the quiet cutting placeholder. */
+.clip-stage {
+  align-items: center;
+  aspect-ratio: 9 / 16;
+  background: var(--sleeve-black);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+}
+
+.clip-stage-media {
+  height: 100%;
+  inset: 0;
+  object-fit: cover;
+  position: absolute;
+  width: 100%;
+}
+
+/* The play affordance over a poster — a quiet cream glyph that ignites to Eclipse
+   Glow on hover/focus (the Ignition Rule; never a dim). */
+.clip-stage-play {
+  align-items: center;
+  background: color-mix(in oklch, var(--deep-field) 55%, transparent);
+  border-radius: 9999px;
+  color: var(--starlight-cream);
+  display: flex;
+  height: 2.75rem;
+  justify-content: center;
+  position: relative;
+  transition:
+    color 150ms ease-out,
+    background-color 150ms ease-out;
+  width: 2.75rem;
+}
+
+.clip-stage:hover .clip-stage-play,
+.clip-stage:focus-visible .clip-stage-play {
+  background: color-mix(in oklch, var(--deep-field) 65%, transparent);
+  color: var(--eclipse-glow, var(--primary));
+}
+
+.clip-stage:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.clip-stage-pending {
+  color: var(--stardust);
+}
+
+/* The inline preview transport, pinned along the bottom of the stage over a near-solid
+   scrim so the cream scrubber + gold play button clear AA against arbitrary (including
+   bright) footage. The band stays opaque across the controls' own height and fades only
+   in its top third, so nothing sits over a transparent stretch (the Legible Sky Rule). */
+.clip-preview-controls {
+  align-items: center;
+  background: linear-gradient(
+    to top,
+    color-mix(in oklch, var(--deep-field) 88%, transparent) 0%,
+    color-mix(in oklch, var(--deep-field) 88%, transparent) 68%,
+    transparent 100%
+  );
+  bottom: 0;
+  display: flex;
+  gap: 0.5rem;
+  left: 0;
+  padding: 0.5rem 0.5rem 0.6rem;
+  position: absolute;
+  right: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clip-stage-play {
+    transition: none;
+  }
+}
+
 .log-definition {
   display: grid;
   gap: 0.45rem;

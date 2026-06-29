@@ -1,4 +1,4 @@
-import { siTiktok, siYoutube } from "simple-icons";
+import { siInstagram, siTiktok, siYoutube } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
 
 // Platform logo components — the OFFICIAL brand marks from simple-icons, wrapped to
@@ -19,4 +19,8 @@ export function YoutubeIcon({ className }: PlatformIconProps) {
 
 export function TiktokIcon({ className }: PlatformIconProps) {
   return <BrandIcon className={className} icon={siTiktok} />;
+}
+
+export function InstagramIcon({ className }: PlatformIconProps) {
+  return <BrandIcon className={className} icon={siInstagram} />;
 }
