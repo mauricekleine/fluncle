@@ -82,6 +82,34 @@ export function videoObjectJsonLd(
   };
 }
 
+/**
+ * The mixtape set video's VideoObject — parity with the finding VideoObject (the
+ * crawl signal that gets the set video indexed like the rendered finding clips),
+ * emitted only when the mixtape carries a set video (setVideoAt). uploadDate is
+ * the set-video timestamp, sliced to a date.
+ */
+export function mixtapeVideoObjectJsonLd(
+  mixtape: MixtapeDTO,
+  {
+    contentUrl,
+    thumbnailUrl,
+    uploadDate,
+  }: { contentUrl: string; thumbnailUrl: string; uploadDate: string },
+): Record<string, unknown> {
+  const logId = mixtape.logId as string;
+
+  return {
+    "@context": "https://schema.org",
+    "@type": "VideoObject",
+    contentUrl,
+    description: mixtape.note ?? `Fluncle drum & bass mixtape — ${mixtape.title}.`,
+    name: mixtape.title,
+    thumbnailUrl,
+    uploadDate: uploadDate.slice(0, 10),
+    url: logPageUrl(logId),
+  };
+}
+
 export function mixtapeAlbumJsonLd(mixtape: MixtapeDTO): Record<string, unknown> {
   const logId = mixtape.logId as string;
 

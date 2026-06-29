@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { artistTitleLine, definitionalSentences } from "../lib/log-prose";
-import { spotifyAlbumImageAtSize, trackMedia } from "../lib/media";
+import { mixtapeSetVideoUrl, spotifyAlbumImageAtSize, trackMedia } from "../lib/media";
+import { mixtapeCoverUrl } from "../lib/mixtapes";
 import { buildSitemapXml, type SitemapLogPage } from "../lib/sitemap";
 import { parseArtistsJson } from "../lib/server/artists";
 import { getDb, typedRows } from "../lib/server/db";
@@ -27,6 +28,9 @@ type TrackRow = {
 type MixtapeRow = {
   lastmod: string;
   log_id: string;
+  note: string | null;
+  set_video_at: string | null;
+  title: string;
 };
 
 function trackPage(row: TrackRow): SitemapLogPage {
@@ -70,6 +74,32 @@ function trackPage(row: TrackRow): SitemapLogPage {
   };
 }
 
+// A published mixtape: its cover for Google Images, plus a `<video:video>` block
+// when the full set video is live (setVideoAt) — parity with finding footage, so
+// the set recording is crawlable, not just a plain <loc>.
+function mixtapePage(row: MixtapeRow): SitemapLogPage {
+  const logId = row.log_id;
+  const imageLoc = mixtapeCoverUrl(logId, "card");
+
+  if (!row.set_video_at) {
+    return { imageLoc, lastmod: row.lastmod, logId };
+  }
+
+  return {
+    imageLoc,
+    lastmod: row.lastmod,
+    logId,
+    video: {
+      contentLoc: mixtapeSetVideoUrl(logId),
+      description: row.note?.trim()
+        ? row.note.trim()
+        : `Fluncle drum & bass mixtape — ${row.title}.`,
+      thumbnailLoc: mixtapeCoverUrl(logId, "card"),
+      title: row.title,
+    },
+  };
+}
+
 export const Route = createFileRoute("/sitemap.xml")({
   server: {
     handlers: {
@@ -89,7 +119,8 @@ export const Route = createFileRoute("/sitemap.xml")({
                   order by lastmod desc`,
           }),
           db.execute({
-            sql: `select log_id, coalesce(updated_at, added_at) as lastmod
+            sql: `select log_id, title, note, set_video_at,
+                         max(coalesce(set_video_at, ''), coalesce(updated_at, ''), added_at) as lastmod
                   from mixtapes
                   where status = 'published' and log_id is not null and added_at is not null
                   order by lastmod desc`,
@@ -97,9 +128,7 @@ export const Route = createFileRoute("/sitemap.xml")({
         ]);
 
         const trackPages = typedRows<TrackRow>(trackResult.rows).map(trackPage);
-        const mixtapePages = typedRows<MixtapeRow>(mixtapeResult.rows).map(
-          (row): SitemapLogPage => ({ lastmod: row.lastmod, logId: row.log_id }),
-        );
+        const mixtapePages = typedRows<MixtapeRow>(mixtapeResult.rows).map(mixtapePage);
         const xml = buildSitemapXml([...trackPages, ...mixtapePages]);
 
         return new Response(xml, {

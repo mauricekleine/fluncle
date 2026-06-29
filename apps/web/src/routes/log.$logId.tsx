@@ -23,10 +23,11 @@ import {
   breadcrumbsJsonLd,
   logPageUrl,
   mixtapeAlbumJsonLd,
+  mixtapeVideoObjectJsonLd,
   musicRecordingJsonLd,
   videoObjectJsonLd,
 } from "@/lib/log-schema";
-import { spotifyAlbumImageAtSize, trackMedia } from "@/lib/media";
+import { mixtapeSetVideoUrl, spotifyAlbumImageAtSize, trackMedia } from "@/lib/media";
 import { type MixtapeDTO, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { resolveLogPageTarget } from "@/lib/server/log-resolver";
 import {
@@ -111,6 +112,17 @@ function logHead(loaderData: LogPageData | undefined) {
     const ogImageUrl = mixtape.logId
       ? mixtapeCoverUrl(logId, "og")
       : (mixtape.coverImageUrl ?? `${siteUrl}/fluncle-cover.png`);
+    // The set video's VideoObject + og:video — parity with the finding video, so
+    // the mixtape's set recording is crawled/indexed like the rendered clips.
+    // Emitted only once the set video is uploaded (setVideoAt); the video file is
+    // the bare R2 set.mp4 (range-streamed, not a Media Transformation).
+    const setVideoSchema = mixtape.setVideoAt
+      ? mixtapeVideoObjectJsonLd(mixtape, {
+          contentUrl: mixtapeSetVideoUrl(logId),
+          thumbnailUrl: mixtapeCoverUrl(logId, "card"),
+          uploadDate: mixtape.setVideoAt,
+        })
+      : undefined;
 
     return {
       links: [{ href: pageUrl, rel: "canonical" }],
@@ -125,6 +137,12 @@ function logHead(loaderData: LogPageData | undefined) {
         { content: "image/png", property: "og:image:type" },
         { content: pageUrl, property: "og:url" },
         { content: "music.album", property: "og:type" },
+        ...(mixtape.setVideoAt
+          ? [
+              { content: mixtapeSetVideoUrl(logId), property: "og:video" },
+              { content: "video/mp4", property: "og:video:type" },
+            ]
+          : []),
         { content: "summary_large_image", name: "twitter:card" },
         { content: title, name: "twitter:title" },
         { content: description, name: "twitter:description" },
@@ -135,7 +153,11 @@ function logHead(loaderData: LogPageData | undefined) {
       // via dangerouslySetInnerHTML), so a `</script>` in mixtape.title / .note /
       // member titles can't break out of the <script> (stored-XSS sink,
       // security review).
-      scripts: [jsonLdScript(mixtapeAlbumJsonLd(mixtape)), jsonLdScript(breadcrumbsJsonLd(logId))],
+      scripts: [
+        jsonLdScript(mixtapeAlbumJsonLd(mixtape)),
+        jsonLdScript(breadcrumbsJsonLd(logId)),
+        ...(setVideoSchema ? [jsonLdScript(setVideoSchema)] : []),
+      ],
     };
   }
 
