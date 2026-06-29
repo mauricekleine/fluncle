@@ -21,6 +21,7 @@ import {
   CassetteTapeIcon,
   CircleNotchIcon,
   DotsSixVerticalIcon,
+  FilmStripIcon,
   ScissorsIcon,
   TrashIcon,
   XIcon,
@@ -203,19 +204,28 @@ function AdminMixtapesPage() {
     <AdminShell
       current="mixtapes"
       headerActions={
-        <Button disabled={creating} onClick={() => void createDraft()} size="sm">
-          {creating ? (
-            <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
-          ) : undefined}
-          {creating ? (
-            "Logging…"
-          ) : (
-            <>
-              <span className="sm:hidden">New draft</span>
-              <span className="hidden sm:inline">New mixtape draft</span>
-            </>
-          )}
-        </Button>
+        <>
+          {/* The cross-set clip library lives one click off here, not in the deliberately
+              minimal 3-item admin nav (Unit G IA; docs/fluncle-studio-rfc.md §8). */}
+          <Button nativeButton={false} render={<a href="/admin/clips" />} size="sm" variant="ghost">
+            <FilmStripIcon aria-hidden="true" />
+            <span className="hidden sm:inline">Clip library</span>
+            <span className="sm:hidden">Clips</span>
+          </Button>
+          <Button disabled={creating} onClick={() => void createDraft()} size="sm">
+            {creating ? (
+              <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+            ) : undefined}
+            {creating ? (
+              "Logging…"
+            ) : (
+              <>
+                <span className="sm:hidden">New draft</span>
+                <span className="hidden sm:inline">New mixtape draft</span>
+              </>
+            )}
+          </Button>
+        </>
       }
       title="Mixtapes"
     >

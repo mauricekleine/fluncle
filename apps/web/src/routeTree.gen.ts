@@ -54,6 +54,7 @@ import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as AdminNewsletterRouteImport } from './routes/admin/newsletter'
 import { Route as AdminMixtapesRouteImport } from './routes/admin/mixtapes'
 import { Route as AdminLoginRouteImport } from './routes/admin/login'
+import { Route as AdminClipsRouteImport } from './routes/admin/clips'
 import { Route as ApiV1TracksRouteImport } from './routes/api/v1/tracks'
 import { Route as ApiV1SubmissionsRouteImport } from './routes/api/v1/submissions'
 import { Route as ApiV1StoriesRouteImport } from './routes/api/v1/stories'
@@ -382,6 +383,11 @@ const AdminMixtapesRoute = AdminMixtapesRouteImport.update({
 const AdminLoginRoute = AdminLoginRouteImport.update({
   id: '/login',
   path: '/login',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminClipsRoute = AdminClipsRouteImport.update({
+  id: '/clips',
+  path: '/clips',
   getParentRoute: () => AdminRouteRoute,
 } as any)
 const ApiV1TracksRoute = ApiV1TracksRouteImport.update({
@@ -969,6 +975,7 @@ export interface FileRoutesByFullPath {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/sprites': typeof SpritesRoute
   '/status': typeof StatusRoute
+  '/admin/clips': typeof AdminClipsRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
   '/admin/newsletter': typeof AdminNewsletterRoute
@@ -1117,6 +1124,7 @@ export interface FileRoutesByTo {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/sprites': typeof SpritesRoute
   '/status': typeof StatusRoute
+  '/admin/clips': typeof AdminClipsRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
   '/admin/newsletter': typeof AdminNewsletterRoute
@@ -1268,6 +1276,7 @@ export interface FileRoutesById {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/sprites': typeof SpritesRoute
   '/status': typeof StatusRoute
+  '/admin/clips': typeof AdminClipsRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
   '/admin/newsletter': typeof AdminNewsletterRoute
@@ -1420,6 +1429,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/sprites'
     | '/status'
+    | '/admin/clips'
     | '/admin/login'
     | '/admin/mixtapes'
     | '/admin/newsletter'
@@ -1568,6 +1578,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/sprites'
     | '/status'
+    | '/admin/clips'
     | '/admin/login'
     | '/admin/mixtapes'
     | '/admin/newsletter'
@@ -1718,6 +1729,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/sprites'
     | '/status'
+    | '/admin/clips'
     | '/admin/login'
     | '/admin/mixtapes'
     | '/admin/newsletter'
@@ -2257,6 +2269,13 @@ declare module '@tanstack/react-router' {
       path: '/login'
       fullPath: '/admin/login'
       preLoaderRoute: typeof AdminLoginRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/clips': {
+      id: '/admin/clips'
+      path: '/clips'
+      fullPath: '/admin/clips'
+      preLoaderRoute: typeof AdminClipsRouteImport
       parentRoute: typeof AdminRouteRoute
     }
     '/api/v1/tracks': {
@@ -2984,6 +3003,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface AdminRouteRouteChildren {
+  AdminClipsRoute: typeof AdminClipsRoute
   AdminLoginRoute: typeof AdminLoginRoute
   AdminMixtapesRoute: typeof AdminMixtapesRoute
   AdminNewsletterRoute: typeof AdminNewsletterRoute
@@ -2992,6 +3012,7 @@ interface AdminRouteRouteChildren {
 }
 
 const AdminRouteRouteChildren: AdminRouteRouteChildren = {
+  AdminClipsRoute: AdminClipsRoute,
   AdminLoginRoute: AdminLoginRoute,
   AdminMixtapesRoute: AdminMixtapesRoute,
   AdminNewsletterRoute: AdminNewsletterRoute,

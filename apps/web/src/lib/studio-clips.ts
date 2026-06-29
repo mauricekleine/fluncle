@@ -1,0 +1,99 @@
+// The clip library's pure logic (Fluncle Studio Unit G; docs/fluncle-studio-rfc.md
+// §8). The cross-set library at `/admin/clips` browses every `mixtape_clips` row, so
+// it needs two DOM-free things kept here for unit-testing (no React, no `<video>`):
+//
+//   1. The FILTER — narrow the loaded clip list by mixtape and/or status (the two
+//      library dropdowns), client-side over the server-loaded set (the whole backlog
+//      is small; filtering in the browser is instant and keeps the grid responsive
+//      without a refetch per dropdown change).
+//   2. The DOWNLOAD + POSTER URL builders — a clip is stored as its own pseudo-finding
+//      `<clipId>/footage.mp4` (RFC §4), so the existing `trackMedia`/`videoCrop*`/
+//      `videoAudioStripped` media helpers work UNCHANGED against the clipId. The
+//      operator hand-posts (the irreducible in-app beat — IG/TikTok have no API music
+//      path), so the card offers the file two ways: WITH audio (the bare master) for
+//      Instagram, and the audio-STRIPPED variant for TikTok (the licensed sound is
+//      attached in-app).
+
+import { type ClipDTO } from "@fluncle/contracts/orpc";
+import { trackMedia, videoAudioStripped, videoCrop, videoCropPoster } from "@/lib/media";
+
+/** The library's status dropdown values: every clip, or one cut-queue state. */
+export type ClipStatusFilter = "all" | "done" | "pending";
+
+/** The two-dropdown library filter. `mixtapeId` is "all" or a concrete mixtape id. */
+export type ClipLibraryFilter = {
+  mixtapeId: string;
+  status: ClipStatusFilter;
+};
+
+/** The "no narrowing" sentinel both dropdowns default to. */
+export const ALL_FILTER = "all";
+
+/** The default (unfiltered) library view. */
+export const DEFAULT_CLIP_FILTER: ClipLibraryFilter = {
+  mixtapeId: ALL_FILTER,
+  status: ALL_FILTER,
+};
+
+/**
+ * Narrow a clip list by mixtape and/or status. "all" on either axis is a no-op for
+ * that axis, so the default filter returns the list untouched. Pure — the order of
+ * the input list is preserved (the server already sorts newest-first).
+ */
+export function filterClips(clips: ClipDTO[], filter: ClipLibraryFilter): ClipDTO[] {
+  return clips.filter((clip) => {
+    if (filter.mixtapeId !== ALL_FILTER && clip.mixtapeId !== filter.mixtapeId) {
+      return false;
+    }
+
+    if (filter.status !== ALL_FILTER && clip.status !== filter.status) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
+/** A clip's length in milliseconds (out − in), floored at 0 for a malformed window. */
+export function clipDurationMs(clip: Pick<ClipDTO, "inMs" | "outMs">): number {
+  return Math.max(0, clip.outMs - clip.inMs);
+}
+
+/**
+ * The clip's 9:16 poster frame — the card thumbnail. A frame centre-cropped to
+ * portrait off the clip's pseudo-finding `footage.mp4` (already a 1080×1920 cut, so
+ * the cover crop just scales it down). `width` keeps the grid thumbnail light on the
+ * wire instead of shipping the native 1080-wide poster.
+ */
+export function clipPosterUrl(clipId: string, width = 480): string {
+  return videoCropPoster(clipId, "portrait", width);
+}
+
+/**
+ * A light, edge-cached portrait rendition (WITH audio) for the card's inline preview
+ * — a downscaled `videoCrop` off the clip's `footage.mp4`, not the bare master, so a
+ * scrub stays cheap on a phone.
+ */
+export function clipPreviewUrl(clipId: string, width = 720): string {
+  return videoCrop(clipId, "portrait", width);
+}
+
+/** A clip's two download targets, both keyed off its pseudo-finding `footage.mp4`. */
+export type ClipDownloadUrls = {
+  /** Audio-STRIPPED (TikTok: the operator attaches the licensed sound in-app). */
+  silent: string;
+  /** The bare master, audio intact (Instagram). */
+  withAudio: string;
+};
+
+/**
+ * Build the with-audio + silent download URLs for a clip. With-audio is the bare R2
+ * master (`<clipId>/footage.mp4`); silent runs that through the `audio=false` Media
+ * Transformation. Distribution is deferred (the operator hand-posts), so these are
+ * the v1 hand-off.
+ */
+export function clipDownloadUrls(clipId: string): ClipDownloadUrls {
+  const withAudio = trackMedia(clipId).videoUrl;
+
+  return { silent: videoAudioStripped(withAudio), withAudio };
+}
