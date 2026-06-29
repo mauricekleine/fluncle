@@ -106,7 +106,7 @@ RUN arch="$(uname -m)" \
 # /usr/local/lib + a /usr/local/bin/claude symlink, both world-accessible, so the
 # NON-root cron user can exec it (same world-readable property the `fluncle` CLI relies
 # on). Bump lever: this version line.
-RUN npm install -g @anthropic-ai/claude-code@2.1.195
+RUN npm install -g @anthropic-ai/claude-code@2.1.196
 
 # The `copywriting-fluncle` skill, baked for Claude Code so the cron's `claude -p`
 # can load the full voice canon. CLAUDE DISCOVERS SKILLS UNDER ITS CONFIG DIR
