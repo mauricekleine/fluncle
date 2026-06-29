@@ -274,6 +274,13 @@
       "when": 1782401337838,
       "tag": "0038_wooden_old_lace",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "6",
+      "when": 1782713819862,
+      "tag": "0039_ambitious_lucky_pierre",
+      "breakpoints": true
     }
   ]
 }

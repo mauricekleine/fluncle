@@ -607,6 +607,11 @@ export const mixtapes = sqliteTable("mixtapes", {
   publishedAt: text("published_at"),
   recordedAt: text("recorded_at"),
   sequenceNumber: integer("sequence_number").unique(),
+  // When set (an ISO timestamp), the full set video has been uploaded to R2 at
+  // `<log-id>/set.mp4` and the mixtape `/log` page shows the branded scrubber
+  // player. Operator-flipped from /admin/mixtapes AFTER the upload; null until
+  // then. A flag, not a URL — the URL derives from the Log ID (mixtapeSetVideoUrl).
+  setVideoAt: text("set_video_at"),
   // "distributing" is the minted-but-uploading state between draft and published
   // (see MixtapeStatus in @fluncle/contracts). Plain TEXT, the enum only narrows
   // the type.

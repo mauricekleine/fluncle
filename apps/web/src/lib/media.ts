@@ -18,6 +18,17 @@ export function mixtapeAudioUrl(logId: string): string {
 }
 
 /**
+ * The mixtape's full set VIDEO on R2 (`<log-id>/set.mp4`), by its Log ID. Served
+ * as a bare range-streamed, faststart object — NOT a Media Transformation: the
+ * ~72-min set is well past Cloudflare MT's 100MB source ceiling, so the player
+ * fetches the master directly and the browser range-seeks it. Gated on the
+ * mixtape's `setVideoAt` flag (the upload exists) before any surface reaches for it.
+ */
+export function mixtapeSetVideoUrl(logId: string): string {
+  return `${FOUND_BASE}/${encodeURIComponent(logId)}/set.mp4`;
+}
+
+/**
  * Cache-bust the observation audio URL by its render timestamp.
  *
  * Re-`observe`ing a finding overwrites `<log-id>/observation.mp3` in place at the

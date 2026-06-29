@@ -39,6 +39,7 @@ type MixtapeRow = {
   published_at: string | null;
   recorded_at: string | null;
   sequence_number: number | null;
+  set_video_at: string | null;
   soundcloud_url: string | null;
   status: MixtapeStatus;
   title: string;
@@ -65,6 +66,7 @@ export type MixtapeInput = {
   note?: unknown;
   plannedFor?: unknown;
   recordedAt?: unknown;
+  setVideoAt?: unknown;
   soundcloudUrl?: unknown;
 };
 
@@ -141,6 +143,7 @@ export async function updateMixtape(id: string, input: MixtapeInput): Promise<Mi
     ["note", fields.note],
     ["recorded_at", fields.recordedAt],
     ["planned_for", fields.plannedFor],
+    ["set_video_at", fields.setVideoAt],
   ] as const) {
     if (value !== undefined) {
       sets.push(`${column} = ?`);
@@ -640,6 +643,7 @@ const MIXTAPE_SELECT = `select
   m.recorded_at,
   m.planned_for,
   m.published_at,
+  m.set_video_at,
   m.created_at,
   m.updated_at,
   (select count(*) from mixtape_tracks mt where mt.mixtape_id = m.id) as member_count
@@ -675,6 +679,7 @@ function validateMixtapeInput(input: MixtapeInput): {
   note?: string | null;
   plannedFor?: string | null;
   recordedAt?: string | null;
+  setVideoAt?: string | null;
   soundcloudUrl?: string | null;
 } {
   return {
@@ -682,6 +687,7 @@ function validateMixtapeInput(input: MixtapeInput): {
     note: optionalText(input.note, noteMaxLength),
     plannedFor: optionalIsoDate(input.plannedFor, "plannedFor"),
     recordedAt: optionalIsoDate(input.recordedAt, "recordedAt"),
+    setVideoAt: optionalIsoDate(input.setVideoAt, "setVideoAt"),
     soundcloudUrl: optionalUrl(input.soundcloudUrl),
   };
 }

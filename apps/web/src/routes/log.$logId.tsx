@@ -5,6 +5,7 @@ import { siMixcloud, siSoundcloud, siSpotify, siTiktok, siYoutube } from "simple
 import { BrandIcon } from "@/components/brand-icon";
 import { LogFootage } from "@/components/log/log-footage";
 import { LogObservation } from "@/components/log/log-observation";
+import { MixtapeVideoPlayer } from "@/components/mixtape-video-player";
 import { SaveFindingButton } from "@/components/save-finding-button";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { Button } from "@/components/ui/button";
@@ -444,6 +445,8 @@ function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
           <h1 className="log-coordinate">{logId}</h1>
           <p className="log-coordinate-uri">fluncle://{logId}</p>
         </header>
+
+        {mixtape.setVideoAt ? <MixtapeVideoPlayer logId={logId} title={displayTitle} /> : undefined}
 
         <section aria-label="The checkpoint" className="log-definition">
           <h2 className="log-track-title">{displayTitle}</h2>

@@ -124,6 +124,9 @@ export const MixtapeDTOSchema = z
     publishedAt: z.string().optional(),
     recordedAt: z.string().optional(),
     sequenceNumber: z.number().optional(),
+    // Set (ISO) once the full set video is uploaded to R2 — the `/log` page then
+    // shows the branded scrubber player. Absent ⇒ no set video yet.
+    setVideoAt: z.string().optional(),
     status: z.enum(["distributing", "draft", "published"]),
     title: z.string(),
     type: z.literal("mixtape"),
