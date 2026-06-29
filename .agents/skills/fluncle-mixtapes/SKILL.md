@@ -86,13 +86,13 @@ Each leg records into `mixtape_social_posts` — the single source of truth for 
 2. **Upload to R2** at `<logId>/set.mp4` — multipart, because the single-PUT admin presign is too small for a full set:
 
    ```bash
-   export AWS_ACCESS_KEY_ID=$(op read "op://Fluncle/Web Local Dev Env/R2_ACCESS_KEY_ID")
-   export AWS_SECRET_ACCESS_KEY=$(op read "op://Fluncle/Web Local Dev Env/R2_SECRET_ACCESS_KEY")
+   export AWS_ACCESS_KEY_ID=$(op read "op://$FLUNCLE_1PASSWORD_ENV_ITEM/R2_ACCESS_KEY_ID")
+   export AWS_SECRET_ACCESS_KEY=$(op read "op://$FLUNCLE_1PASSWORD_ENV_ITEM/R2_SECRET_ACCESS_KEY")
    aws s3 cp set.mp4 "s3://fluncle-videos/<logId>/set.mp4" \
      --endpoint-url "https://<R2_ACCOUNT_ID>.r2.cloudflarestorage.com" --region auto --content-type video/mp4
    ```
 
-   `R2_ACCOUNT_ID` is public in `apps/web/wrangler.jsonc`. (The same op item's `FLUNCLE_API_TOKEN` is **local-dev only** — it 401s against prod, so prod admin calls go through the operator's logged-in browser, not that token.)
+   `$FLUNCLE_1PASSWORD_ENV_ITEM` is the dev-env 1Password vault/item — the same placeholder as `apps/web/.dev.vars.tpl`; the concrete vault/item name lives in the private Ops Runbook note, never in this repo. `R2_ACCOUNT_ID` + the bucket are public in `apps/web/wrangler.jsonc`. (That op item's `FLUNCLE_API_TOKEN` is **local-dev only** — it 401s against prod, so prod admin calls go through the operator's logged-in browser, not that token.)
 
 3. **Flip the `Set video` toggle** on the mixtape in `/admin/mixtapes` (sets `setVideoAt`) — the player + the sitemap `<video:video>` + the VideoObject JSON-LD all light up.
 
