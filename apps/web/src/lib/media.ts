@@ -29,6 +29,18 @@ export function mixtapeSetVideoUrl(logId: string): string {
 }
 
 /**
+ * The mixtape's set-analysis artifact on R2 (`<log-id>/studio-envelope.json`), by
+ * its Log ID — the `StudioEnvelope` (energy/bass/flux curves + candidate drops)
+ * Unit B's `analyze-set` stages and the Studio editor (Unit E) reads to draw its
+ * energy lane + suggestions. It is NOT always present (the box stages it lazily),
+ * so callers MUST treat a 404 as "no waveform yet" and degrade to manual in/out —
+ * never an error. A plain GET object like the set video, no Media Transform.
+ */
+export function mixtapeStudioEnvelopeUrl(logId: string): string {
+  return `${FOUND_BASE}/${encodeURIComponent(logId)}/studio-envelope.json`;
+}
+
+/**
  * Cache-bust the observation audio URL by its render timestamp.
  *
  * Re-`observe`ing a finding overwrites `<log-id>/observation.mp3` in place at the

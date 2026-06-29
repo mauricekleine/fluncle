@@ -21,6 +21,7 @@ import {
   CassetteTapeIcon,
   CircleNotchIcon,
   DotsSixVerticalIcon,
+  ScissorsIcon,
   TrashIcon,
   XIcon,
 } from "@phosphor-icons/react";
@@ -506,6 +507,24 @@ function MixtapeEditor({
 
               {mixtape.id && mixtape.logId ? (
                 <SetVideoToggle mixtape={mixtape} refresh={refresh} />
+              ) : null}
+
+              {mixtape.id && mixtape.logId ? (
+                <div className="space-y-1.5">
+                  <Label>Studio</Label>
+                  <Button
+                    nativeButton={false}
+                    render={<a href={`/admin/studio/${encodeURIComponent(mixtape.id)}`} />}
+                    size="sm"
+                    variant="outline"
+                  >
+                    <ScissorsIcon aria-hidden="true" />
+                    Clip this set
+                  </Button>
+                  <p className="text-xs text-muted-foreground">
+                    Open the editor to cut framed 9:16 clips from the set video.
+                  </p>
+                </div>
               ) : null}
 
               {note.trim() ? (

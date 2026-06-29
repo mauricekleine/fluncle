@@ -82,6 +82,7 @@ import { Route as ApiAdminSubmissionsRouteImport } from './routes/api/admin/subm
 import { Route as ApiAdminMixtapesRouteImport } from './routes/api/admin/mixtapes'
 import { Route as ApiAdminLogoutRouteImport } from './routes/api/admin/logout'
 import { Route as ApiAdminClipsRouteImport } from './routes/api/admin/clips'
+import { Route as AdminStudioMixtapeIdRouteImport } from './routes/admin/studio.$mixtapeId'
 import { Route as ApiV1TracksRandomRouteImport } from './routes/api/v1/tracks/random'
 import { Route as ApiV1TracksIdOrLogIdRouteImport } from './routes/api/v1/tracks.$idOrLogId'
 import { Route as ApiV1PreviewIdOrLogIdRouteImport } from './routes/api/v1/preview.$idOrLogId'
@@ -522,6 +523,11 @@ const ApiAdminClipsRoute = ApiAdminClipsRouteImport.update({
   id: '/api/admin/clips',
   path: '/api/admin/clips',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AdminStudioMixtapeIdRoute = AdminStudioMixtapeIdRouteImport.update({
+  id: '/studio/$mixtapeId',
+  path: '/studio/$mixtapeId',
+  getParentRoute: () => AdminRouteRoute,
 } as any)
 const ApiV1TracksRandomRoute = ApiV1TracksRandomRouteImport.update({
   id: '/random',
@@ -988,6 +994,7 @@ export interface FileRoutesByFullPath {
   '/mixtapes/': typeof MixtapesIndexRoute
   '/newsletter/': typeof NewsletterIndexRoute
   '/stories/': typeof StoriesIndexRoute
+  '/admin/studio/$mixtapeId': typeof AdminStudioMixtapeIdRoute
   '/api/admin/clips': typeof ApiAdminClipsRouteWithChildren
   '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/admin/mixtapes': typeof ApiAdminMixtapesRouteWithChildren
@@ -1135,6 +1142,7 @@ export interface FileRoutesByTo {
   '/mixtapes': typeof MixtapesIndexRoute
   '/newsletter': typeof NewsletterIndexRoute
   '/stories': typeof StoriesIndexRoute
+  '/admin/studio/$mixtapeId': typeof AdminStudioMixtapeIdRoute
   '/api/admin/clips': typeof ApiAdminClipsRouteWithChildren
   '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/admin/mixtapes': typeof ApiAdminMixtapesRouteWithChildren
@@ -1285,6 +1293,7 @@ export interface FileRoutesById {
   '/mixtapes/': typeof MixtapesIndexRoute
   '/newsletter/': typeof NewsletterIndexRoute
   '/stories/': typeof StoriesIndexRoute
+  '/admin/studio/$mixtapeId': typeof AdminStudioMixtapeIdRoute
   '/api/admin/clips': typeof ApiAdminClipsRouteWithChildren
   '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/admin/mixtapes': typeof ApiAdminMixtapesRouteWithChildren
@@ -1436,6 +1445,7 @@ export interface FileRouteTypes {
     | '/mixtapes/'
     | '/newsletter/'
     | '/stories/'
+    | '/admin/studio/$mixtapeId'
     | '/api/admin/clips'
     | '/api/admin/logout'
     | '/api/admin/mixtapes'
@@ -1583,6 +1593,7 @@ export interface FileRouteTypes {
     | '/mixtapes'
     | '/newsletter'
     | '/stories'
+    | '/admin/studio/$mixtapeId'
     | '/api/admin/clips'
     | '/api/admin/logout'
     | '/api/admin/mixtapes'
@@ -1732,6 +1743,7 @@ export interface FileRouteTypes {
     | '/mixtapes/'
     | '/newsletter/'
     | '/stories/'
+    | '/admin/studio/$mixtapeId'
     | '/api/admin/clips'
     | '/api/admin/logout'
     | '/api/admin/mixtapes'
@@ -2443,6 +2455,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminClipsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/studio/$mixtapeId': {
+      id: '/admin/studio/$mixtapeId'
+      path: '/studio/$mixtapeId'
+      fullPath: '/admin/studio/$mixtapeId'
+      preLoaderRoute: typeof AdminStudioMixtapeIdRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
     '/api/v1/tracks/random': {
       id: '/api/v1/tracks/random'
       path: '/random'
@@ -2969,6 +2988,7 @@ interface AdminRouteRouteChildren {
   AdminMixtapesRoute: typeof AdminMixtapesRoute
   AdminNewsletterRoute: typeof AdminNewsletterRoute
   AdminIndexRoute: typeof AdminIndexRoute
+  AdminStudioMixtapeIdRoute: typeof AdminStudioMixtapeIdRoute
 }
 
 const AdminRouteRouteChildren: AdminRouteRouteChildren = {
@@ -2976,6 +2996,7 @@ const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminMixtapesRoute: AdminMixtapesRoute,
   AdminNewsletterRoute: AdminNewsletterRoute,
   AdminIndexRoute: AdminIndexRoute,
+  AdminStudioMixtapeIdRoute: AdminStudioMixtapeIdRoute,
 }
 
 const AdminRouteRouteWithChildren = AdminRouteRoute._addFileChildren(
