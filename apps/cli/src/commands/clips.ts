@@ -65,15 +65,22 @@ export function setVideoUrl(logId: string): string {
 }
 
 /**
- * Escape a string for use inside a SINGLE-QUOTED ffmpeg drawtext `text='…'` value
- * passed as ONE argv token (no shell — `Bun.spawn` passes argv directly). Inside the
- * quotes colons/commas stay literal (so a title with `:` or `,` survives the filtergraph
- * splitter); only the backslash, the `%` (drawtext's `%{…}` expansion sigil), and the
- * single quote itself need handling. A literal `'` uses the standard ffmpeg
- * close-escape-reopen idiom (`'\''`). Order matters: backslashes first.
+ * Escape a string for use as an ffmpeg drawtext `text='…'` value passed as ONE argv
+ * token (no shell — `Bun.spawn` passes argv directly). The single quotes alone do NOT
+ * protect the filtergraph separators `:` and `,` — ffmpeg's parser still splits on them,
+ * so a `fluncle://<logId>` coordinate (or a title with a colon/comma) breaks the graph
+ * with "No option name near …". They must be backslash-escaped. Also handle the
+ * backslash itself, the `%` (drawtext's `%{…}` expansion sigil), and a literal `'` (the
+ * close-escape-reopen idiom `'\''`). Order matters: backslashes first (so the escapes we
+ * add below are not themselves doubled), then the separators, then `%`, then the quote.
  */
 export function escapeDrawtextValue(text: string): string {
-  return text.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/'/g, "'\\''");
+  return text
+    .replace(/\\/g, "\\\\")
+    .replace(/:/g, "\\:")
+    .replace(/,/g, "\\,")
+    .replace(/%/g, "\\%")
+    .replace(/'/g, "'\\''");
 }
 
 export type ClipCutFilterOptions = {

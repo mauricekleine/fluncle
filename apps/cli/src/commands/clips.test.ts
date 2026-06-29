@@ -48,9 +48,12 @@ describe("escapeDrawtextValue", () => {
     expect(escapeDrawtextValue("don't")).toBe("don'\\''t");
   });
 
-  test("leaves colons + commas literal (the single quotes protect them)", () => {
-    // No escaping of `:`/`,` — they survive the filtergraph splitter inside the quotes.
-    expect(escapeDrawtextValue("Live: dusk, redux")).toBe("Live: dusk, redux");
+  test("backslash-escapes the filtergraph separators `:` and `,`", () => {
+    // The single quotes do NOT protect `:`/`,` — ffmpeg splits on them regardless, so
+    // they must be escaped (else a `fluncle://…` coordinate or a colon in the title
+    // breaks the graph with "No option name near …").
+    expect(escapeDrawtextValue("Live: dusk, redux")).toBe("Live\\: dusk\\, redux");
+    expect(escapeDrawtextValue("fluncle://019.F.1A")).toBe("fluncle\\://019.F.1A");
   });
 });
 
@@ -74,7 +77,8 @@ describe("clipCutVideoFilter", () => {
     const filter = clipCutVideoFilter(base);
 
     expect(filter).toContain("drawtext=text='Fluncle Dreaming 002'");
-    expect(filter).toContain("drawtext=text='fluncle://019.F.1A'");
+    // The coordinate's `://` colon is escaped so ffmpeg doesn't split the filtergraph.
+    expect(filter).toContain("drawtext=text='fluncle\\://019.F.1A'");
     // Two scrim boxes (AA over arbitrary footage) — one per line.
     expect(filter.match(/box=1:boxcolor=black@0\.55/g)).toHaveLength(2);
   });
@@ -92,7 +96,7 @@ describe("clipCutVideoFilter", () => {
   test("escapes a hostile title into the filtergraph", () => {
     const filter = clipCutVideoFilter({ ...base, title: "edge: a,b 100%" });
 
-    expect(filter).toContain("drawtext=text='edge: a,b 100\\%'");
+    expect(filter).toContain("drawtext=text='edge\\: a\\,b 100\\%'");
   });
 });
 
