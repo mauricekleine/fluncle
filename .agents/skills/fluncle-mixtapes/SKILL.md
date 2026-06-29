@@ -38,6 +38,8 @@ For the Rekordbox tracklist step, also cache the database key once (see that ste
 2. Capture the assets: the audio master, the mixtape video, any teaser clips (capture clips even though the clip-of-a-mixtape pipeline isn't built — raw material you don't want to re-shoot).
 3. Archive the raw assets to the operator path (R2), like a finding's analysis archive.
 
+**Audio — Track 2 is the clean master.** The OBS recording carries two audio tracks (Advanced Output records tracks 1 + 2): **Track 1 = mix + mic** (the Twitch live feed), **Track 2 = the clean stereo mix only** (BlackHole / PC MASTER OUT, no mic). Always take the **clean Track 2** for the Mixcloud audio master and for any clip audio — never Track 1, it carries the mic. In ffmpeg that is the second audio stream: `-map 0:a:1`. The recording is 1080p H.264 (OBS Output (Scaled) Resolution must be 1920×1080, not 720p; keep H.264 so the clip pipeline / Cloudflare Media Transformations can read it). Full OBS / BlackHole recording setup lives in `docs/mixtape-recording-setup.md`.
+
 ### B. Build the draft + tracklist
 
 A draft is **just the operator-authored subset**: a recorded date (defaults to today), an optional dream note, and the tracklist. Duration is derived from the upload at distribute time, not entered. Build the draft in `/admin/mixtapes` (or via `fluncle admin mixtapes create`).
@@ -63,6 +65,8 @@ Feed the pruned list into the tracklist: attach each track as a **member finding
 ```bash
 fluncle admin mixtapes distribute <idOrLogId> --video <mixtape>.mp4 --audio <master>
 ```
+
+The `--audio <master>` must be the **clean mix (Track 2, no mic)** — extract it from the OBS `.mov` first, mapping the second audio stream: `ffmpeg -i <recording>.mov -map 0:a:1 -c:a libmp3lame -b:a 320k <master>.mp3` (Track 1 carries the mic — see §A). The `--video` can be the raw `.mov` (it keeps both tracks) or a clean-audio cut — your call on whether the YouTube video carries your voice.
 
 Omit a flag to target one platform. The command is **mint-first**: a `draft` mints the `XXX.F.ZZ` Log ID + number + title into a non-public `distributing` state (the cover renders, public surfaces stay hidden), the uploads carry the committed Log ID, and the **first successful platform link flips it `published`** — so a public mixtape always has somewhere to listen. It is **idempotent per platform**: re-running resumes a `distributing` mixtape and reuses its Log ID.
 
