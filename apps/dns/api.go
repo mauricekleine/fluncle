@@ -43,6 +43,25 @@ type listResponse struct {
 	Tracks []track `json:"tracks"`
 }
 
+// liveInfo is the cross-surface live-set callout the DNS surface exposes (the
+// `live` label). Whether Fluncle is on the decks right now, plus the public title
+// and the Twitch url. Read off /api/status `.live` (staleness already applied).
+type liveInfo struct {
+	On    bool
+	Title string
+	URL   string
+}
+
+// statusResponse is the subset of GET /api/status the DNS surface reads — only the
+// live-set callout block. `Live` is absent/nil on older payloads ⇒ treated offline.
+type statusResponse struct {
+	Live *struct {
+		On    bool   `json:"on"`
+		Title string `json:"title"`
+		URL   string `json:"url"`
+	} `json:"live"`
+}
+
 // apiClient fetches findings from the Fluncle public API, with a small
 // in-memory TTL cache so a hot coordinate (or a `dig` retry storm) does not
 // hammer the API.
@@ -50,6 +69,12 @@ type apiClient struct {
 	base string
 	http *http.Client
 	cache
+
+	// A tiny separate TTL slot for the live-set callout (one global value, not
+	// keyed like findings), so a `dig live` retry storm does not hammer /api/status.
+	liveMu  sync.Mutex
+	liveVal liveInfo
+	liveExp time.Time
 }
 
 func newAPIClient(base string, timeout, cacheTTL time.Duration) *apiClient {
@@ -144,6 +169,42 @@ func (c *apiClient) fetchLatest() (*track, error) {
 	}
 	t := resp.Tracks[0]
 	return &t, nil
+}
+
+// liveStatus returns the current live-set callout, reading /api/status `.live`
+// behind the small TTL cache. Offline (On=false) on any absent `live` block.
+func (c *apiClient) liveStatus() (liveInfo, error) {
+	c.liveMu.Lock()
+	if time.Now().Before(c.liveExp) {
+		v := c.liveVal
+		c.liveMu.Unlock()
+		return v, nil
+	}
+	c.liveMu.Unlock()
+
+	u := fmt.Sprintf("%s/api/status", c.base)
+	body, status, err := c.do(u)
+	if err != nil {
+		return liveInfo{}, err
+	}
+	if status != http.StatusOK {
+		return liveInfo{}, fmt.Errorf("api status %d for live", status)
+	}
+	var resp statusResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return liveInfo{}, fmt.Errorf("decode live: %w", err)
+	}
+
+	info := liveInfo{}
+	if resp.Live != nil {
+		info = liveInfo{On: resp.Live.On, Title: resp.Live.Title, URL: resp.Live.URL}
+	}
+
+	c.liveMu.Lock()
+	c.liveVal = info
+	c.liveExp = time.Now().Add(c.ttl)
+	c.liveMu.Unlock()
+	return info, nil
 }
 
 func (c *apiClient) do(u string) ([]byte, int, error) {

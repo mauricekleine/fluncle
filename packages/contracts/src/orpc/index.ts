@@ -29,6 +29,7 @@ import { adminSocialContract } from "./admin-social";
 import { adminSubmissionsContract } from "./admin-submissions";
 import { adminTokensContract } from "./admin-tokens";
 import { adminTracksContract } from "./admin-tracks";
+import { adminTwitchContract } from "./admin-twitch";
 import { devicesContract } from "./devices";
 import { editionsContract } from "./editions";
 import { healthContract } from "./health";
@@ -116,6 +117,7 @@ export { searchTracks } from "./search";
 export { listStories } from "./stories";
 export { type SubmissionBody, submitTrack } from "./submissions";
 export { getRandomTrack, getTrack, listTracks } from "./tracks";
+export { recordLiveState } from "./admin-twitch";
 export {
   EditionContentSchema,
   EditionDTOSchema,
@@ -148,6 +150,7 @@ export const contract = {
   ...adminSubmissionsContract,
   ...adminTokensContract,
   ...adminTracksContract,
+  ...adminTwitchContract,
   ...devicesContract,
   ...editionsContract,
   ...healthContract,

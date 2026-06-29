@@ -203,6 +203,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // operatorGuard), the context_track/note_track precedent; it writes only the
   // internal service_status/status_events tables (no publish), so the agent token drives it.
   record_health: "admin",
+  // The live-set poller's write — admin tier (adminAuth, no operatorGuard), the
+  // record_health precedent; it writes only the internal single-row live_state table
+  // (no publish), so the box agent token drives it each minute.
+  record_live_state: "admin",
   reject_submission: "operator",
   // Clears a LIVE published video (video_url + video_squared_at) to re-queue a
   // re-render — operator-only (adminAuth + operatorGuard); the box agent never

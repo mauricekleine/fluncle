@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { getLiveState } from "@/lib/server/live";
 import { getServiceStatuses } from "@/lib/server/status";
 import { type ApiHandlers, aliasHandlers } from "./-alias";
 
@@ -20,7 +21,9 @@ import { type ApiHandlers, aliasHandlers } from "./-alias";
 // PUBLIC-SAFE BY CONSTRUCTION (this repo is open source): it echoes only the
 // already-public service name / status / short message / latency / timestamps that
 // the /status page shows — never an internal address (the probe + `record_health`
-// keep `message` clean). No field beyond the documented shape is added.
+// keep `message` clean). The one addition beyond the health shape is `live` (the
+// cross-surface live-set callout) — also public-safe: only the live boolean, the
+// public Twitch stream title/startedAt, and the public channel url.
 //
 // Handlers live in a shared `serverHandlers` object so the canonical /api/v1 mount
 // (./v1/status) and the permanent /api back-compat alias serve identical behaviour
@@ -29,7 +32,7 @@ import { type ApiHandlers, aliasHandlers } from "./-alias";
 // coverage net), so it needs no contract.
 export const serverHandlers: ApiHandlers = {
   GET: async () => {
-    const services = await getServiceStatuses();
+    const [services, live] = await Promise.all([getServiceStatuses(), getLiveState()]);
 
     // The freshest report instant across all services = the last cron tick. Null
     // when there are no services yet (a brand-new store the cron hasn't written).
@@ -65,6 +68,11 @@ export const serverHandlers: ApiHandlers = {
       {
         freshestReportAt,
         generatedAt: new Date(now).toISOString(),
+        // The cross-surface live-set callout (staleness already applied by
+        // getLiveState): `on` plus the public stream title/startedAt and the Twitch
+        // url. SSH, the CLI, and dig all read this one field; the web home loader and
+        // the MCP live-note read getLiveState() directly.
+        live,
         secondsSinceFreshestReport,
         secondsSinceProberReport,
         services: services.map((service) => ({
