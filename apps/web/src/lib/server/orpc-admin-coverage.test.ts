@@ -76,6 +76,14 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "PATCH /admin/tracks/{trackId}/social/{platform}": "update_track_social",
   "POST /admin/backfill/discogs": "backfill_discogs",
   "POST /admin/backfill/lastfm": "backfill_lastfm",
+  // The box's clip-cut finalize (Fluncle Studio Unit C) — contract-only oRPC (no
+  // TanStack route file; oRPC owns the path directly, like finalize_track_video). Agent
+  // tier: the box marks its own cut done + the handler purges the stale edge renditions.
+  "POST /admin/clips/{clipId}/cut/finalize": "finalize_clip_cut",
+  // The box's clip-cut upload presign (Fluncle Studio Unit C) — contract-only oRPC.
+  // Agent tier: a single-PUT presign for the clip's `<clipId>/footage.mp4`. Path-symmetric
+  // with the finalize above (both nest under `/cut/`).
+  "POST /admin/clips/{clipId}/cut/presign": "presign_clip_upload",
   // record_health (the public /status dashboard's write) is contract-only oRPC —
   // no TanStack route file; oRPC owns the path directly, like context_track. Admin
   // tier (agent-allowed): the box's status cron POSTs a snapshot with its agent token.

@@ -40,6 +40,13 @@ type AdminQueueViewOptions = AdminListOptions & {
   queue?: boolean;
 };
 
+// The Fluncle Studio clip-library list filter (`admin clips list`).
+type ClipListOptions = {
+  json: boolean;
+  mixtape?: string;
+  status?: string;
+};
+
 type OpenOptions = {
   app: boolean;
   browser: boolean;
@@ -904,6 +911,41 @@ function addAdminCommands(program: Command): void {
     .action(async (idOrLogId: string | undefined, options: { json: boolean }) => {
       const { publishYoutubeCommand } = await import("./commands/mixtape-youtube");
       await runMixtapePublishYoutube(idOrLogId, options, publishYoutubeCommand);
+    });
+
+  // Fluncle Studio clips (docs/fluncle-studio.md). `list` is the agent-allowed read
+  // (Unit G); `cut` is the box's footage cut (Unit C) — the `fluncle-studio-clip` cron
+  // calls `admin clips cut <clipId>` per pending clip (presign + ffmpeg + ship +
+  // finalize, all behind the agent token).
+  const adminClips = configureCommand(
+    admin.command("clips").description("Mixtape clip (Fluncle Studio) commands"),
+  );
+
+  adminClips.action(() => {
+    adminClips.outputHelp();
+  });
+
+  adminClips
+    .command("list")
+    .description("List clips (filter by --status pending|done and/or --mixtape <id>)")
+    .option("--status <status>", "Filter by cut status (pending|done)")
+    .option("--mixtape <id>", "Filter by mixtape id")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: ClipListOptions) => {
+      const { clipsListCommand } = await import("./commands/clips");
+      await runClipsList(options, clipsListCommand);
+    });
+
+  adminClips
+    .command("cut")
+    .description("Cut one clip's framed 9:16 footage from its set rendition, then ship it")
+    .argument("[clipId]")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (clipId: string | undefined, options: { json: boolean }) => {
+      const { clipCutCommand } = await import("./commands/clips");
+      await runClipsCut(clipId, options, clipCutCommand);
     });
 
   const adminNewsletter = configureCommand(
@@ -1934,6 +1976,51 @@ async function runMixtapeList(
     const coordinate = mixtape.logId ?? "draft";
     console.log(`${coordinate}\t${status}\t${mixtape.memberCount} bangers\t${mixtape.title}`);
   }
+}
+
+async function runClipsList(
+  options: ClipListOptions,
+  clipsListCommand: typeof import("./commands/clips").clipsListCommand,
+): Promise<void> {
+  const clips = await clipsListCommand({ mixtapeId: options.mixtape, status: options.status });
+
+  if (options.json) {
+    printJson({ clips, ok: true });
+    return;
+  }
+
+  if (clips.length === 0) {
+    console.log("No clips.");
+    return;
+  }
+
+  for (const clip of clips) {
+    console.log(
+      `${clip.id}\t${clip.status}\t${clip.mixtapeId}\t${clip.inMs}-${clip.outMs}ms\tx=${clip.xOffset}`,
+    );
+  }
+}
+
+async function runClipsCut(
+  clipId: string | undefined,
+  options: { json: boolean },
+  clipCutCommand: typeof import("./commands/clips").clipCutCommand,
+): Promise<void> {
+  if (!clipId) {
+    throw new Error("Missing clip id. Usage: fluncle admin clips cut <clipId>");
+  }
+
+  const onProgress = options.json ? () => {} : (message: string) => console.log(message);
+  const result = await clipCutCommand(clipId, onProgress);
+
+  if (options.json) {
+    printJson({ ok: true, ...result });
+    return;
+  }
+
+  console.log(
+    `Cut ${result.clipId} → ${result.url} (${(result.sizeBytes / 1_000_000).toFixed(1)} MB).`,
+  );
 }
 
 async function runMixtapeGet(

@@ -168,6 +168,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   draft_track_social: "admin",
   exchange_lastfm_session: "operator",
   export_private_account_data: "private-session",
+  // The box's clip-cut finalize (Fluncle Studio Unit C) — agent tier (adminAuth only,
+  // no operatorGuard), the finalize_track_video precedent: the on-box cron marks its
+  // own cut done + the handler purges the stale edge renditions. The agent token drives it.
+  finalize_clip_cut: "admin",
   finalize_mixtape_mixcloud: "operator",
   finalize_mixtape_youtube: "operator",
   // The autonomous render box links its own cut + sets video_url — agent tier
@@ -196,9 +200,14 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // written-note sibling of observe_track/context_track; the box's agent token drives it.
   note_track: "admin",
   observe_track: "admin",
+  // The box's clip-cut upload presign (Fluncle Studio Unit C) — agent tier (adminAuth
+  // only, no operatorGuard), the presign_track_video_uploads precedent: the on-box cron
+  // signs its OWN clip output (`<clipId>/footage.mp4`) with the agent token. Distinct
+  // from presign_set_video_upload below, which is OPERATOR-driven at distribute time.
+  presign_clip_upload: "admin",
   // The set-video staging presign (Fluncle Studio Unit A) — operator tier (adminAuth
   // + operatorGuard): it opens an upload that flips a public mixtape surface, so the
-  // agent token 403s (unlike the agent-tier track presign below).
+  // agent token 403s (unlike the agent-tier track/clip presigns).
   presign_set_video_upload: "operator",
   // The autonomous render box signs its own R2 upload URLs — agent tier (adminAuth
   // only, no operatorGuard); the box's agent token publishes its renders.

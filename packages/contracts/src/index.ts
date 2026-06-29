@@ -27,6 +27,7 @@
 
 import { type z } from "zod";
 import {
+  type ClipDTOSchema,
   type EditionDTOSchema,
   type MixtapeDTOSchema,
   type MixtapeSocialPostItemSchema,
@@ -147,6 +148,33 @@ export type RadioNowPlayingResponse = Ok<{ nowPlaying: RadioNowPlaying }>;
 
 export type MixtapesResponse = Ok<{ mixtapes: MixtapeDTO[] }>;
 export type MixtapeCreateResponse = Ok<{ mixtape: MixtapeDTO }>;
+
+// ── Mixtape clips (Fluncle Studio Unit C/D/G) ────────────────────────────────
+// A clip is a lightweight 9:16 derivative cut from a mixtape's set video — many per
+// set, NOT a spine object (no Log ID). Inferred from `ClipDTOSchema` (./orpc/_shared)
+// so the wire shape cannot drift. The CLI (`fluncle admin clips list|cut`) + the box
+// clip-cut cron read these.
+
+/** A clip row as the clip ops emit it. */
+export type ClipDTO = z.infer<typeof ClipDTOSchema>;
+
+/** `GET /api/admin/clips` response: every clip (optionally filtered by mixtape/status). */
+export type ClipsResponse = Ok<{ clips: ClipDTO[] }>;
+
+/**
+ * `POST /api/admin/clips/:clipId/cut/presign` response (Unit C): the single presigned
+ * PUT URL the box streams `<clipId>/footage.mp4` to, plus the exact `contentType`
+ * it MUST replay on the PUT (baked into the signature).
+ */
+export type ClipPresignResponse = Ok<{
+  clipId: string;
+  contentType: string;
+  key: string;
+  url: string;
+}>;
+
+/** `POST /api/admin/clips/:clipId/cut/finalize` response (Unit C): the clip, marked done. */
+export type ClipCutFinalizeResponse = Ok<{ clip: ClipDTO }>;
 export type MixtapeUpdateResponse = Ok<{ mixtape: MixtapeDTO }>;
 export type MixtapePublishResponse = Ok<{ mixtape: MixtapeDTO }>;
 export type MixtapeDeleteResponse = Ok<{}>;

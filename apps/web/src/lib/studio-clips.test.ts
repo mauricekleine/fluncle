@@ -6,6 +6,7 @@ import {
   clipDurationMs,
   clipPosterUrl,
   clipPreviewUrl,
+  clipPurgeUrls,
   DEFAULT_CLIP_FILTER,
   filterClips,
 } from "./studio-clips";
@@ -111,5 +112,30 @@ describe("clipPosterUrl / clipPreviewUrl", () => {
     expect(url).toContain("/cdn-cgi/media/");
     expect(url).toContain("fit=cover");
     expect(url).toContain("clip-xyz/footage.mp4");
+  });
+});
+
+describe("clipPurgeUrls", () => {
+  const urls = clipPurgeUrls("clip-xyz");
+
+  it("is exactly the four clip surfaces (bare, silent, poster, preview), deduped", () => {
+    const { silent, withAudio } = clipDownloadUrls("clip-xyz");
+
+    expect(new Set(urls)).toEqual(
+      new Set([withAudio, silent, clipPosterUrl("clip-xyz"), clipPreviewUrl("clip-xyz")]),
+    );
+    expect(urls.length).toBe(4);
+  });
+
+  it("covers the clip's REAL silent download (audio=false off footage.mp4)", () => {
+    // The gap videoPurgeUrls({squared:true}) misses (it strips audio off footage.social).
+    expect(urls).toContain(clipDownloadUrls("clip-xyz").silent);
+    expect(
+      urls.some((url) => url.includes("audio=false") && url.includes("clip-xyz/footage.mp4")),
+    ).toBe(true);
+  });
+
+  it("includes the bare master so a re-cut evicts the with-audio download", () => {
+    expect(urls).toContain("https://found.fluncle.com/clip-xyz/footage.mp4");
   });
 });

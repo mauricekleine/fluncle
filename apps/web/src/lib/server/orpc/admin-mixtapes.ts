@@ -14,7 +14,7 @@
 // 502s) byte-for-byte.
 
 import { ORPCError } from "@orpc/server";
-import { createClip, deleteClip, listClips, updateClip } from "../clips";
+import { createClip, deleteClip, getClip, listClips, markClipCutDone, updateClip } from "../clips";
 import { youtubeDescription } from "../../mixtape-chapters";
 import { finalizeMixtapeDistribution, listMixtapeSocialPosts } from "../mixtape-social";
 import {
@@ -29,7 +29,8 @@ import {
   updateMixtape,
 } from "../mixtapes";
 import { adminAuth, operatorGuard } from "../orpc-auth";
-import { R2_MAX_PARTS, VIDEOS_BUCKET, presignMultipartUpload } from "../r2-presign";
+import { R2_MAX_PARTS, VIDEOS_BUCKET, presignMultipartUpload, presignUploads } from "../r2-presign";
+import { purgeClipCache } from "../video-cache";
 import { getYouTubeAccessToken } from "../youtube";
 import { apiFault, type Implementer } from "./_shared";
 
@@ -493,6 +494,62 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
+  // POST /admin/clips/{clipId}/presign — AGENT tier (Fluncle Studio Unit C). The box's
+  // clip-cut cron signs its OWN clip output with the agent token (the render-box
+  // `presign_track_video_uploads` precedent — adminAuth only, no operatorGuard). A clip
+  // is < 100 MB, so this is a SINGLE-PUT presign for `<clipId>/footage.mp4`.
+  const presignClipUploadHandler = os.presign_clip_upload
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const body = input as { contentType?: unknown };
+        const contentType =
+          typeof body.contentType === "string" && body.contentType ? body.contentType : "video/mp4";
+
+        // Confirm the clip exists for a clean 404 before signing (getClip throws
+        // `clip_not_found`/404). The footage key is the clip's pseudo-finding master
+        // (`trackMedia(clipId).videoUrl` is `<base>/<clipId>/footage.mp4`), so the merged
+        // `videoCrop(clipId)` / poster / silent MT helpers finish it.
+        await getClip(input.clipId);
+
+        const footageKey = `${input.clipId}/footage.mp4`;
+        const [signed] = await presignUploads(VIDEOS_BUCKET, [{ contentType, key: footageKey }]);
+
+        if (!signed) {
+          throw apiFault(new Error("Failed to presign the clip upload"));
+        }
+
+        return {
+          clipId: input.clipId,
+          contentType: signed.contentType,
+          key: signed.key,
+          ok: true as const,
+          url: signed.url,
+        };
+      } catch (error) {
+        throw toFault(error);
+      }
+    });
+
+  // POST /admin/clips/{clipId}/cut/finalize — AGENT tier (Fluncle Studio Unit C). After
+  // the box uploads `<clipId>/footage.mp4`, mark the cut `done` (the operator
+  // `update_clip` is unreachable to the agent token) AND purge the clip's stale edge
+  // renditions server-side (the box holds no Cloudflare creds), so a re-cut to the same
+  // clipId never keeps serving the old cut. Mirrors `finalize_track_video`.
+  const finalizeClipCutHandler = os.finalize_clip_cut.use(adminAuth).handler(async ({ input }) => {
+    try {
+      const clip = await markClipCutDone(input.clipId);
+
+      // Best-effort, off the request lifecycle (waitUntil). A genuine first cut has
+      // nothing cached yet, so this is a harmless no-op; a re-cut evicts the stale set.
+      purgeClipCache(input.clipId);
+
+      return { clip, ok: true as const };
+    } catch (error) {
+      throw toFault(error);
+    }
+  });
+
   // POST /admin/mixtapes/{mixtapeId}/set-video/presign — operator tier (Fluncle
   // Studio Unit A). Open a multipart direct-to-R2 upload for the mixtape's set-video
   // rendition at `<logId>/set.mp4` + presign every leg; the CLI streams the ~1.5GB
@@ -586,12 +643,14 @@ export function adminMixtapesHandlers(os: Implementer) {
     create_mixtape: createMixtapeHandler,
     delete_clip: deleteClipHandler,
     delete_mixtape: deleteMixtapeHandler,
+    finalize_clip_cut: finalizeClipCutHandler,
     finalize_mixtape_mixcloud: finalizeMixtapeMixcloudHandler,
     finalize_mixtape_youtube: finalizeMixtapeYoutubeHandler,
     get_mixtape_social: getMixtapeSocialHandler,
     initiate_mixtape_youtube: initiateMixtapeYoutubeHandler,
     list_clips: listClipsHandler,
     list_mixtapes_admin: listMixtapesAdminHandler,
+    presign_clip_upload: presignClipUploadHandler,
     presign_set_video_upload: presignSetVideoUploadHandler,
     publish_mixtape: publishMixtapeHandler,
     publish_mixtape_youtube: publishMixtapeYoutubeHandler,
