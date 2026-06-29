@@ -1,6 +1,6 @@
 # RFC: Fluncle Studio — the mixtape set → clip pipeline (footage clips; distribution deferred)
 
-**Status:** Final (4 research threads → /taste → 4-role adversarial panel synthesized, 2026-06-29) — completeness standard applied; operator decisions resolved inline. Amended 2026-06-29: Unit F (the `/log` set-video player + video SEO) shipped (#208); Unit A's CLI surface is now `fluncle admin mixtapes distribute --set-video` (the staging folds into the normal distribution flow) rather than a standalone `studio ingest`, and `--set-video` stages **one 1080p rendition — no raw master on R2** (it serves the `/log` player, the editor, and the clip cut; the pristine master stays a local archive).
+**Status:** Final (4 research threads → /taste → 4-role adversarial panel synthesized, 2026-06-29) — completeness standard applied; operator decisions resolved inline. Amended 2026-06-29: Unit F (the `/log` set-video player + video SEO) shipped (#208); Unit A's CLI surface is now `fluncle admin mixtapes distribute --set-video` (the staging folds into the normal distribution flow) rather than a standalone `studio ingest`, and `--set-video` stages **one 1080p rendition — no raw master on R2** (it serves the `/log` player, the editor, and the clip cut; the pristine master stays a local archive). Added **Unit G — the cross-mixtape clip library** (`/admin/clips`: browse/filter/download, distribution-ready) and made the **one-set → many-clips** model explicit.
 **For:** a fresh build session / a small team of agents.
 **Canon/authority:** the codebase + `AGENTS.md`, `DESIGN.md`, `VOICE.md`, `PRODUCT.md`, `docs/video-variants.md`, `packages/skills/fluncle-mixtapes/references/spine-model.md`. Planning, not spec; code + canon win on conflict.
 
@@ -10,7 +10,7 @@
 
 The clipping core ships complete — implementation + tests + docs, every thread tied off. "Holy shit, that's done," not "good enough."
 
-- **Nothing in the clipping core is deferred or optional.** Set-video staging (the `--set-video` rendition), set analysis, the footage cut (with its minimal brand frame), the data layer + cue-unlock, the editor, and the `/log` set-video player all ship.
+- **Nothing in the clipping core is deferred or optional.** Set-video staging (the `--set-video` rendition), set analysis, the footage cut (with its minimal brand frame), the data layer + cue-unlock, the editor, the **clip library** (browse/filter/download across sets), and the `/log` set-video player all ship.
 - **Tests + docs are part of done** (oRPC coverage + auth-tier tests, the DSP picker unit test, the cut-job test, the `set_mixtape_cues` guard test, `docs/fluncle-studio.md`) — in acceptance criteria, not a follow-up.
 - **The only sanctioned "not now":** (1) **distribution** to IG/TikTok — a separate outcome with a genuine external blocker (IG's 2026 AI audio-fingerprinting mutes copyrighted audio on API Reels; no API music path; the in-app post is the irreducible manual beat). (2) The **full cosmos composition** over footage — a real enhancement chain on top of the shipped minimal-brand footage clip. Both are honest scoping.
 - **Dangling threads this build ties off:** the mixtape gets a **clip-capable rendition on R2** (one 1080p `set.mp4` serving the clip cut + the `/log` player + the editor; the raw master stays local), and **#1's missing per-track cues** become backfillable.
@@ -23,7 +23,7 @@ The clipping core ships complete — implementation + tests + docs, every thread
 - **One DSP envelope, two jobs.** The set's energy/bass/flux envelope (computed once on the box from the **R2 audio**, which already exists) is both the auto-suggest signal and the editor's waveform data. Auto-suggest is candidate drops the operator vets — not certainties.
 - **The cue model already shipped; only the publish-freeze blocks #1.** `mixtape_tracks.start_ms` + the cue-sheet parser + `mixtape-chapters.ts` are live; a narrow, hardened `set_mixtape_cues` write-path unlocks post-publish backfill without touching the frozen set/order.
 - **The editor is mixtape-scoped and ~70% assembly** — `/admin/studio/$mixtapeId` entered from the mixtape row (not a 4th nav peer), built from `AdminShell fill` + `VibeMap`'s pointer model + `useVideoStallRecovery` + the radio clock + Shadcn `ui/*`.
-- **Decomposition:** A (set-video staging) and B (set analysis) are independent, ship day one. C (the cut) needs A's rendition + the clip object. D (data layer) is independent (ship with B). E (editor) needs A's rendition + C + D. F (`/log` player) is shipped; A automates its staging. Distribution + full-cosmos are later.
+- **Decomposition:** A (set-video staging) and B (set analysis) are independent, ship day one. C (the cut) needs A's rendition + the clip object. D (data layer) is independent (ship with B). E (editor) needs A's rendition + C + D. G (clip library) needs C's rendered clips + D's ops. F (`/log` player) is shipped; A automates its staging. Distribution (push-to-social from G) + full-cosmos are later.
 
 ## 1. Context & goals
 
@@ -78,7 +78,9 @@ The clipping core ships complete — implementation + tests + docs, every thread
 
 ## 5. Unit D — Data layer (schema + contracts)
 
-**Clip = lightweight derivative, NOT a spine object** (no Log ID — the spine namespace is scarce/collectible; a clip is a re-cuttable trailer). New table **`mixtape_clips`** (via `db:generate`): `{ id (pk = clipId), mixtapeId (FK), inMs, outMs, xOffset, caption?, createdAt, updatedAt }` (centre-aspect is always 9:16 in v1; `xOffset` is the framing; no `cropX/cropY` MT fiction). Distribution **deferred** → a sibling `mixtape_clip_social_posts` table later, never `*_url` columns.
+**A set yields MANY clips** — that's the whole point (a backlog to drip-feed). One-to-many via `mixtapeId`; an editor session (Unit E) mints several rows, and they're browsed/managed across sets in the clip library (Unit G).
+
+**Clip = lightweight derivative, NOT a spine object** (no Log ID — the spine namespace is scarce/collectible; a clip is a re-cuttable trailer). New table **`mixtape_clips`** (via `db:generate`): `{ id (pk = clipId), mixtapeId (FK), inMs, outMs, xOffset, caption?, status, createdAt, updatedAt }` (centre-aspect is always 9:16 in v1; `xOffset` is the framing; `status` tracks `pending`/`done` for the cut queue + drives the library filter; no `cropX/cropY` MT fiction). Distribution **deferred** → a sibling `mixtape_clip_social_posts` table later, never `*_url` columns.
 
 **Cue persistence — the field exists** (`mixtape_tracks.start_ms`); the gap is the publish freeze. New **`setMixtapeCues(id, [{ref, startMs}])`** helper, **hardened** (panel M1): `ref` is a **trackId** (matches the `(mixtapeId, trackId)` unique index — not a position); it **UPDATEs `start_ms` on existing members only**, asserts the **mixtape is non-draft** + the **member set is unchanged** (same count + trackId set) as a state backstop (not handler-discipline alone), and validates **monotonic, start-at-0 cues** (YouTube chapter rules). Note (M2): backfilling #1's cues updates the DB + `/mixtapes` but **not** the already-distributed YouTube description chapters — a chapters re-push is out of scope, flag it.
 
@@ -86,7 +88,7 @@ The clipping core ships complete — implementation + tests + docs, every thread
 
 | op                         | method + path                                        | tier     |
 | -------------------------- | ---------------------------------------------------- | -------- |
-| `list_mixtape_clips`       | `GET /admin/mixtapes/{mixtapeId}/clips`              | admin    |
+| `list_clips`               | `GET /admin/clips` (optional `?mixtapeId`/`?status`) | admin    |
 | `create_clip`              | `POST /admin/mixtapes/{mixtapeId}/clips`             | operator |
 | `update_clip`              | `PATCH /admin/clips/{clipId}`                        | operator |
 | `delete_clip`              | `DELETE /admin/clips/{clipId}`                       | operator |
@@ -94,7 +96,7 @@ The clipping core ships complete — implementation + tests + docs, every thread
 | `presign_set_video_upload` | `POST /admin/mixtapes/{mixtapeId}/set-video/presign` | operator |
 | `presign_clip_upload`      | `POST /admin/clips/{clipId}/presign`                 | operator |
 
-**Seven ops, not five** (panel C4): the existing `presign_track_video_uploads` is track-scoped + footage-required — it can't sign a mixtape set-video rendition or a clip output, so two new **multipart** presign ops are required (`presign_set_video_upload` for `<logId>/set.mp4` from the CLI; `presign_clip_upload` for `<clipId>/footage.mp4` from the box). **Build-gate obligations** (verified accurate): every op into `ADMIN_ROUTE_OPS` (`orpc-admin-coverage.test.ts`) and `EXPECTED_TIERS` (`orpc-auth-coverage.test.ts`, reference-equal middleware check — wire `.use(adminAuth)` for the read, `.use(adminAuth).use(operatorGuard)` for writes); register in the contract export; run `naming-convention-linter`. Note: `list_*` matches the coverage net's public-op-prefix heuristic — verify `list_mixtape_clips` lands as `admin` in `EXPECTED_TIERS` and isn't demanded by the public net (M4). Captions authored via `copywriting-fluncle`; store clean, append `fluncle://<mixtapeLogId>` only at payload-build; **add a clip-caption register to VOICE.md** before the first post.
+**Seven ops, not five** (panel C4): the existing `presign_track_video_uploads` is track-scoped + footage-required — it can't sign a mixtape set-video rendition or a clip output, so two new **multipart** presign ops are required (`presign_set_video_upload` for `<logId>/set.mp4` from the CLI; `presign_clip_upload` for `<clipId>/footage.mp4` from the box). **Build-gate obligations** (verified accurate): every op into `ADMIN_ROUTE_OPS` (`orpc-admin-coverage.test.ts`) and `EXPECTED_TIERS` (`orpc-auth-coverage.test.ts`, reference-equal middleware check — wire `.use(adminAuth)` for the read, `.use(adminAuth).use(operatorGuard)` for writes); register in the contract export; run `naming-convention-linter`. `list_clips` (filterable by `mixtapeId`) serves **both** the editor (Unit E, one set) and the clip library (Unit G, all sets). Note: `list_*` matches the coverage net's public-op-prefix heuristic — verify `list_clips` lands as `admin` in `EXPECTED_TIERS` and isn't demanded by the public net (M4). Captions authored via `copywriting-fluncle`; store clean, append `fluncle://<mixtapeLogId>` only at payload-build; **add a clip-caption register to VOICE.md** before the first post.
 
 ## 6. Unit E — The editor (`/admin/studio/$mixtapeId`)
 
@@ -102,7 +104,7 @@ Entered from a **"Clip this set" action on a minted `MixtapeEditor` row** (mixta
 
 - **Hero preview** (the web rendition from Unit A) over `<video>` + `useVideoStallRecovery`, `preload="metadata"`; one clock — the video's `requestVideoFrameCallback` `mediaTime`; the scrubber + waveform _read_ it (radio's "one clock" discipline).
 - **One quiet energy lane** below (two-zone calm) drawn in the **warm-neutral ink ramp** — Stardust `#b7ab95` curve, Starlight Cream `#f4ead7` active region (panel P0: galaxy tints fail contrast — 1.1–1.3:1, nebular can't clear 3:1 — _and_ violate Warm Dark/Retint; the neutral ramp is canon _and_ AA). Bass/flux are optional overlays behind the settings cog.
-- **Suggestion-first** (taste): auto-suggested windows render as **dashed-Stardust ghost regions** the operator accepts/nudges/adds; hand-pick drags an in/out band. **Color governance:** gold = the **Create clip** action only; playhead = Cream; candidates = dashed Stardust; committed region = Gold-Veil `#f5b8001a` (one sun).
+- **Suggestion-first** (taste): auto-suggested windows render as **dashed-Stardust ghost regions** the operator accepts/nudges/adds; hand-pick drags an in/out band. **A session mints many clips** — accept several suggestions + hand-pick more — each its own `mixtape_clips` row + queued cut (browse/manage them across sets in the library, Unit G). **Color governance:** gold = the **Create clip** action only; playhead = Cream; candidates = dashed Stardust; committed region = Gold-Veil `#f5b8001a` (one sun).
 - **Crop framing** = a draggable 9:16 rect over the landscape preview (the `VibeMap` pointer model) → an `xOffset` baked at cut time. This is the framing the awkward centred crop needs.
 - **Settings cog** (`Popover`, the radio precedent): clip length, the brand-frame toggle, the framing reset. **Cut the DAW flourishes** (taste): no spectrogram (a later stretch with wavesurfer), no J/K/L shuttle/frame-step (drop-aligned cuts don't need frame precision; arrow-nudge suffices).
 - **a11y/canon:** `components/ui/*` only (no `@base-ui/react/*`); Phosphor icons; reduced-motion = clock/pointer-tracked values are _content_ (not gated — cite the VibeMap precedent), only easing/auto-scroll is suppressed; `role="application"` + `aria-label` + `aria-live` time readout. `canon-reviewer` + a11y pass before merge.
@@ -111,10 +113,16 @@ Entered from a **"Clip this set" action on a minted `MixtapeEditor` row** (mixta
 
 **Done** (#208 + the video SEO, 2026-06-29): the mixtape `/log/<mixtapeLogId>` page shows the set video as the hero (replacing the cover) when `setVideoAt` is set — a branded scrubber-driven `<video>`, range-streamed from `<logId>/set.mp4`, plus the `<video:video>` sitemap entry + VideoObject JSON-LD + og:video (crawled like the finding clips). `019.F.1A` is live. The reusable `VideoScrubber` built here is the exact one the editor (Unit E) inherits. The only remaining gap is **Unit A automating the staging** (`--set-video`) that is operator-manual today (per the `fluncle-mixtapes` skill).
 
+## 8. Unit G — The clip library (`/admin/clips`)
+
+A set yields **many** clips, so beyond the per-set editor (Unit E) there's a cross-mixtape **clip library** — an `/admin/clips` grid of every clip, **filterable by mixtape** (and `status`). Each card shows the 9:16 poster (`videoCropPoster(clipId)`) + the source mixtape + the caption + the in/out, with inline preview (the shared `VideoScrubber`) and a **download** action: the rendered clip from R2 — **with-audio** (`<clipId>/footage.mp4`) for IG, or the **silent** variant (`videoAudioStripped(clipId)`) for TikTok — so the operator posts it manually (the irreducible in-app beat; IG/TikTok have no API music path — see §1 + the TikTok-inbox precedent). Built from `AdminShell` + the existing pipeline-board grid patterns + the shared player; reads `list_clips` (filterable); `delete_clip` prunes a bad cut.
+
+**This is where distribution lands when it's built** (deferred — see The standard): a per-clip **"push to Postiz / push to a platform"** action becomes a column here, writing `mixtape_clip_social_posts` rows (the sibling table in Unit D). **Download-and-manual-post is the shipped v1; push-to-social (Postiz or direct) is the documented next layer** that hangs off this surface — so the library is built distribution-ready (the row + the status column) without building distribution now.
+
 ## Sequencing & ownership
 
 - **Day one (parallel):** **A** (`distribute --set-video` — the 1080p rendition staging + the presign ops) and **B** (the `analyze-set.ts` envelope/picker, de-risked on **#1's R2 audio**) and **D** (the `mixtape_clips` table + the 7 ops + coverage + the hardened `set_mixtape_cues`). A and D unblock everything; B proves the DSP independently. (Unit F — the `/log` player — is already shipped; A automates its staging.)
-- **Then C** (the footage cut) needs A's rendition + D's clip object. **Then E** (editor) needs A's rendition + C + D. (F is shipped.)
+- **Then C** (the footage cut) needs A's rendition + D's clip object. **Then E** (editor) needs A's rendition + C + D, and **G** (clip library) needs C's rendered clips + D's `list_clips`. (F is shipped.)
 - **Biggest de-risk:** run B against mixtape #1's audio first (proves the picker, zero dependence on the #2 re-record), and stage #1's rendition (Unit A) to validate the multipart upload (#1's `/log` player is already live from the manual staging).
 - **Deploy discipline:** one PR per unit; mind Cloudflare build coalescing on `main` merges.
 
@@ -135,9 +143,10 @@ Most are resolved (operator). Remaining:
 - **B:** the box produces a `StudioEnvelope` for mixtape #1 from its R2 audio; the top-N picker has a **unit test** (spacing, local-snap, pre-roll) and is **validated on the real set** (snap accuracy, candidate sanity) — not just a fixture.
 - **C:** a clip job cuts a framed 9:16 < 100 MB clip (its `footage.mp4`) with the brand frame → stored as `<clipId>/footage.mp4` → `videoCrop(clipId)` derives the ladder/poster/silent; re-cut purges; a **test** of the cut/ship + the AA scrim over footage.
 - **D:** migrations via `db:generate`; the **7 ops pass the coverage + auth-tier build-gates**; `set_mixtape_cues` backfills #1 post-publish, **rejects a non-member ref / a draft mutation of set+order / non-monotonic cues**; `naming-convention-linter` clean.
-- **E:** the editor loads the rendition + envelope, scrubs, shows suggestions, hand-picks in/out, frames the crop, creates a clip (→ a row + a queued cut); `canon-reviewer` + a11y pass; warm-neutral waveform verified ≥3:1; typecheck/build/lint green.
-- **F:** `/log/<mixtapeLogId>` plays the set video (range-streamed, faststart).
-- **End-to-end:** from mixtape #1, produce ≥3 framed, captioned 9:16 footage clips playable from R2, and its `/log` page plays the full set — no distribution required.
+- **E:** the editor loads the rendition + envelope, scrubs, shows suggestions, hand-picks in/out, frames the crop, and creates **several clips in a session** (each → a row + a queued cut); `canon-reviewer` + a11y pass; warm-neutral waveform verified ≥3:1; typecheck/build/lint green.
+- **F:** `/log/<mixtapeLogId>` plays the set video (range-streamed, faststart). _(Shipped.)_
+- **G:** `/admin/clips` lists every clip, filters by mixtape + status, previews inline, and downloads a clip (with-audio + the silent variant); `delete_clip` prunes one; a **test** of the filter; built distribution-ready (the `mixtape_clip_social_posts` shape + the `status` column) without building push-to-social.
+- **End-to-end:** from mixtape #1, produce **several** framed, captioned 9:16 footage clips, browse + filter them in the clip library, **download** one ready to hand-post, and its `/log` page plays the full set — no distribution layer required.
 
 ## Risks & open questions
 
