@@ -116,6 +116,14 @@ All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertise
 | `cli.version`    | `fluncle version`    | print or check the version (`--check` hits the latest GitHub release)                              | tertiary  |
 | `cli.admin`      | `fluncle admin`      | the operator/agent command group (hidden): `tracks`, `mixtapes`, `newsletter`, `backfills`, `auth` | hidden    |
 
+### Browser extensions — vendor-store surfaces
+
+Listings on a third-party store, not pages we host. Their uptime is the store's, so they carry no `/status` probe.
+
+| Surface          | Store URL                                                           | Exposes                                                                                                                                                                  | Weight    |
+| ---------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- |
+| `extension.lens` | `chromewebstore.google.com/detail/efkkceaofendabikblfjhoepgejfpakk` | Fluncle Lens — the Chrome extension that finds `fluncle://` coordinates on any page and links each to its `/log/<coord>` finding (with a hover card from the public API) | secondary |
+
 ### Crons — the on-box Hermes scheduled jobs
 
 Checked by their last-run freshness (not an HTTP hit), so they carry a `cronName` + cadence instead of a URL probe.
@@ -201,6 +209,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `cli.about`                 |           |           | tertiary  |           |
 | `cli.version`               |           |           | tertiary  |           |
 | `cli.admin`                 |           |           | hidden    |           |
+| `extension.lens`            | secondary |           |           |           |
 | `cron.newsletter`           |           |           |           | secondary |
 | `cron.enrich`               |           |           |           | hidden    |
 | `cron.context-note`         |           |           |           | hidden    |
@@ -216,7 +225,7 @@ A surface is operator/agent-only where its only display weight is `hidden` (`cli
 
 `hidden` and `pending` are different shapes of "not loud." A `hidden` weight is a **live** surface that one context deliberately doesn't headline (it still probes, still serves, still answers). A surface marked **`pending: true`** is **not live at all yet**: registered (so it is reviewed and one field-flip away) but **DARK everywhere** — `liveSurfaces()` drops it, so every selector (`surfacesForContext`, `surfacesByWeight`, `surfacesByKind`, `statusProbes`, `cronSurfaces`) and every raw-catalog consumer that reads `liveSurfaces()` (the MCP `get_status` labels, the CLI status labels) skips it. It appears on no menu, no `/status` probe, the dev-row, `llms.txt`, or the sitemap, and it stays out of the §2/§3 tables until it goes live.
 
-Use it to land a surface **ahead of an external gate** so the post-approval fan-out is a single, reviewed, no-other-edits flip. **Fluncle Lens** (`extension.lens`, the `apps/extension` Chrome extension) is the first such entry: it is in Chrome Web Store review, so it sits in the catalog `pending: true`. On approval the operator (1) drops `pending` (or sets it false), (2) swaps the placeholder `url` for the store's assigned listing URL, and (3) adds its §2/§3 rows — and every menu, the `/status` probe, and the MCP + CLI status labels light up at once. (The one deliberate exception is `/sprites`, the noindex internal sprite-coverage audit, which iterates raw `SURFACES` so a still-dark surface is counted as needing a sprite — it advertises nothing.)
+Use it to land a surface **ahead of an external gate** so the post-approval fan-out is a single, reviewed, no-other-edits flip. **Fluncle Lens** (`extension.lens`, the `apps/extension` Chrome extension) was the first such entry: it sat `pending: true` through Chrome Web Store review, then went **live on 2026-06-29** by exactly this flip — drop `pending`, swap the placeholder `url` for the store's assigned listing URL (`chromewebstore.google.com/detail/efkkceaofendabikblfjhoepgejfpakk`), and add its §2/§3 rows — and the menus, the dev-row, and the MCP + CLI status labels lit up at once. (A vendor store listing is not one of our own health-probeable endpoints, so it carries no `probeConfig`.) (The one deliberate exception to the dark-everywhere rule is `/sprites`, the noindex internal sprite-coverage audit, which iterates raw `SURFACES` so a still-dark surface is counted as needing a sprite — it advertises nothing.)
 
 ## 4. Adding a surface — the checklist
 
