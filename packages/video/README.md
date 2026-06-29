@@ -75,6 +75,12 @@ The full local loop: fetch track → resolve a preview clip → download + norma
 
 Other scripts: `bun run studio` (Remotion Studio, the live scrub loop), `bun run typecheck` (`tsgo --noEmit`, the quality check for any change here).
 
+The per-hop curve-builders the analyzer relies on (`computeBands`, `onsetEnvelope`, the normalizers) live in `src/pipeline/audio-curves.ts`, shared so both the render path and the set path use the same kernel.
+
+### Set analysis (Fluncle Studio, Unit B)
+
+- **`bun src/pipeline/analyze-set.ts <set-audio> [out.json]`** (`src/pipeline/analyze-set.ts`) — turns a long DJ-set audio file into a `StudioEnvelope`: full-length energy/bass/flux curves (decimated to a ~100ms display hop; the 20ms analysis stays internal) plus a ranked list of candidate **drop** windows the operator vets in the editor. The decode is a STREAMING ffmpeg pass at 11025Hz (a 48-min set never materializes as a whole-WAV buffer + float array). The picker is NEW logic vs the render path's single-20s-window kernel: drop-novelty scoring (a quiet breakdown → a loud bass slam, weighted by the re-entry flux), **local** (windowed) max-normalization so quieter good drops survive, spacing-deduped peak-picking (~35s apart), a **local** per-peak tempo/phase snap (a single global BPM drifts on a multi-tempo set), and a musical pre-roll so the drop lands just inside the window. Candidates are loudness-rise guesses (`kind: "drop"`), not certainties — a soft re-entry false-positives. `bpm` is `null` on a multi-tempo set.
+
 ### Evaluation scripts (the gates)
 
 - **`bun run detect-beat-pull <trackId|video>`** — the motion-reversal gate: measures the picture's short-lag translation reversal (lurch-then-snap) and exits non-zero on a fail. The single hard gate on the Motion law (doctrine 7).
