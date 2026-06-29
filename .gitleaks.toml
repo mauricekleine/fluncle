@@ -3,10 +3,11 @@
 # tight allowlist for values that are intentionally public (runtime identifiers, not
 # secrets) and for non-source directories.
 #
-# This catches accidentally-committed SECRET VALUES (tokens, keys). It is a different
-# concern from the ops-boundary doc cleanup (op:// item PATHS, runbooks, topology) —
-# those are references, not secrets, and live behind the Fluncle ops runbook note in
-# 1Password.
+# This catches accidentally-committed SECRET VALUES (tokens, keys) via the default
+# ruleset — PLUS a hygiene backstop (the `fluncle-op-path` rule below) for concrete
+# `op://<vault>/<item>` 1Password paths. Those aren't secrets, but this repo is
+# PUBLIC, so the secret-management MAP stays out of it too: use a placeholder and keep
+# concrete vault/item names in the private Ops Runbook note (see AGENTS.md "Public Repo").
 title = "Fluncle gitleaks config"
 
 [extend]
@@ -40,4 +41,16 @@ paths = [
   '''(^|/)bun\.lock$''',
   # generated Worker types carry the public R2 account id (covered by the regex too)
   '''apps/web/worker-configuration\.d\.ts$''',
+  # the gitleaks config itself contains the op:// rule's regex literal (self-match)
+  '''(^|/)\.gitleaks\.toml$''',
 ]
+
+# A hygiene backstop (NOT a secret scan): flag a concrete 1Password op:// vault/item
+# path committed to this PUBLIC repo. Placeholders are fine — `op://$FLUNCLE_1PASSWORD_ENV_ITEM/<field>`
+# (see apps/web/.dev.vars.tpl) or `op://<vault>/<item>/<field>`. Concrete vault/item
+# names live in the private "Fluncle — Ops Runbook" 1Password note, never here.
+[[rules]]
+id = "fluncle-op-path"
+description = "Concrete op:// 1Password vault/item path in a committed file (public-repo hygiene). Use a placeholder; see AGENTS.md 'Public Repo'."
+keywords = ["op://"]
+regex = '''op://[^$<\s][^/]*/'''

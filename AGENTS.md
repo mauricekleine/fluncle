@@ -9,6 +9,14 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - If instructions conflict with system/tool safety rules, follow the higher-priority rule and mention the conflict.
 - Prefer the smallest change that fully solves the task.
 
+## Public Repo
+
+- This repository is **open source and public** (`github.com/mauricekleine/fluncle`). Everything committed is world-readable forever, git history included — write every file for that audience.
+- NEVER commit secret VALUES (tokens, keys, passwords). gitleaks guards this in CI; never rely on it alone.
+- NEVER commit the secret-management MAP either: concrete `op://<vault>/<item>` 1Password paths, hostnames, IPs, ports, internal URLs, tailnet names, webhook URLs, or local `/Users/...` paths. They are references rather than secrets, but they hand out the topology. Use a PLACEHOLDER (`op://$FLUNCLE_1PASSWORD_ENV_ITEM/<field>` as in `apps/web/.dev.vars.tpl`, or `op://<vault>/<item>/<field>`); concrete names live in the private "Fluncle — Ops Runbook" 1Password note. The `fluncle-op-path` rule in `.gitleaks.toml` backstops the `op://` case.
+- Public runtime IDENTIFIERS are fine (the R2 account id, the IndexNow token — both allowlisted in `.gitleaks.toml`): they grant nothing without the matching secret.
+- Keep committed docs and skills at the architecture/procedure level; secret-bearing operator commands stay in the Ops Runbook note + the relevant operator skill.
+
 ## Work Standard
 
 - MUST: If it can be automated, it should be automated. When the choice is "automation is possible but it will require work" versus "do it manually," choose automation every time — with AI the marginal cost of completeness is near zero. The point of this project is reach: how far Fluncle's tentacles stretch across the web (search engines, AI crawlers, and ultimately real humans — DnB fans, artists). A manual step is reach that does not scale. The ONLY exception is a genuine, documented platform constraint with no automatable path (e.g. TikTok licensed audio must be attached in the app) — and even then, automate everything up to and after the irreducible manual step, and capture its result automatically.

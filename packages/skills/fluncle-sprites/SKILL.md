@@ -58,7 +58,7 @@ Treat the AI render as a MOCK on flat magenta; the clean sprite comes from the p
 ## Run it
 
 ```bash
-GEMINI_API_KEY="$(op read 'op://Fluncle/GEMINI_API_KEY/credential')" \
+GEMINI_API_KEY="$(op read 'op://<vault>/GEMINI_API_KEY/credential')" \
   UV_CACHE_DIR=/tmp/uv-cache uv run --with pillow \
   python packages/skills/fluncle-sprites/scripts/generate_sprite.py <id> [<id> …]
 ```
