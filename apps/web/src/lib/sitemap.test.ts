@@ -47,4 +47,87 @@ describe("buildSitemapXml (sitemap enumeration)", () => {
     expect(xml).not.toContain("<lastmod>");
     expect(xml.match(/<loc>/g)).toHaveLength(6);
   });
+
+  it("declares the image + video namespaces on the urlset", () => {
+    const xml = buildSitemapXml(pages);
+
+    expect(xml).toContain('xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"');
+    expect(xml).toContain('xmlns:video="http://www.google.com/schemas/sitemap-video/1.1"');
+  });
+
+  it("emits an <image:image> cover per finding that carries one", () => {
+    const xml = buildSitemapXml([
+      {
+        imageLoc: "https://found.fluncle.com/011.6.8K/cover.jpg",
+        lastmod: "2026-06-10T14:57:38.786Z",
+        logId: "011.6.8K",
+      },
+    ]);
+
+    expect(xml).toContain(
+      "<image:image>\n      <image:loc>https://found.fluncle.com/011.6.8K/cover.jpg</image:loc>\n    </image:image>",
+    );
+  });
+
+  it("emits a well-formed <video:video> block for a finding with footage", () => {
+    const xml = buildSitemapXml([
+      {
+        imageLoc: "https://found.fluncle.com/011.6.8K/cover.jpg",
+        lastmod: "2026-06-10T14:57:38.786Z",
+        logId: "011.6.8K",
+        video: {
+          contentLoc: "https://found.fluncle.com/011.6.8K/footage.mp4",
+          description: "A rolling 174 BPM banger.",
+          thumbnailLoc: "https://found.fluncle.com/011.6.8K/cover.jpg",
+          title: "Artist — Title",
+        },
+      },
+    ]);
+
+    // Google's required field order: thumbnail_loc, title, description, content_loc.
+    const block = xml.slice(xml.indexOf("<video:video>"), xml.indexOf("</video:video>"));
+    const order = [
+      block.indexOf("<video:thumbnail_loc>"),
+      block.indexOf("<video:title>"),
+      block.indexOf("<video:description>"),
+      block.indexOf("<video:content_loc>"),
+    ];
+
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(order.every((index) => index >= 0)).toBe(true);
+    expect(xml).toContain(
+      "<video:content_loc>https://found.fluncle.com/011.6.8K/footage.mp4</video:content_loc>",
+    );
+  });
+
+  it("XML-escapes the video title and description (no unescaped & or <)", () => {
+    const xml = buildSitemapXml([
+      {
+        lastmod: "2026-06-10T14:57:38.786Z",
+        logId: "011.6.8K",
+        video: {
+          contentLoc: "https://found.fluncle.com/011.6.8K/footage.mp4",
+          description: 'Tom & Jerry <vibes> with a "quote".',
+          thumbnailLoc: "https://found.fluncle.com/011.6.8K/cover.jpg",
+          title: "A & B — <Title>",
+        },
+      },
+    ]);
+
+    expect(xml).toContain("<video:title>A &amp; B — &lt;Title&gt;</video:title>");
+    expect(xml).toContain(
+      "<video:description>Tom &amp; Jerry &lt;vibes&gt; with a &quot;quote&quot;.</video:description>",
+    );
+    // No raw metacharacter survives inside the escaped fields.
+    expect(xml).not.toContain("A & B");
+    expect(xml).not.toContain("<Title>");
+  });
+
+  it("omits image + video for a plain page (a mixtape)", () => {
+    const xml = buildSitemapXml([{ lastmod: "2026-06-10T14:57:38.786Z", logId: "006.F.01" }]);
+
+    expect(xml).not.toContain("<image:image>");
+    expect(xml).not.toContain("<video:video>");
+    expect(xml).toContain("<loc>https://www.fluncle.com/log/006.F.01</loc>");
+  });
 });

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { definitionalProse } from "./log-prose";
-import { breadcrumbsJsonLd, mixtapeAlbumJsonLd, musicRecordingJsonLd } from "./log-schema";
+import {
+  breadcrumbsJsonLd,
+  mixtapeAlbumJsonLd,
+  musicRecordingJsonLd,
+  videoObjectJsonLd,
+} from "./log-schema";
 
 const track = {
   addedAt: "2026-06-03T18:21:00.000Z",
@@ -60,6 +65,27 @@ describe("musicRecordingJsonLd (the log page schema)", () => {
     expect(bare).not.toHaveProperty("isrcCode");
     expect(bare).not.toHaveProperty("inAlbum");
     expect(bare.sameAs).toEqual([track.spotifyUrl]);
+  });
+});
+
+describe("videoObjectJsonLd (the finding's video schema)", () => {
+  const jsonLd = videoObjectJsonLd(track, {
+    contentUrl: "https://found.fluncle.com/004.7.2I/footage.mp4",
+    thumbnailUrl: "https://img/cover.jpg",
+    uploadDate: "2026-06-12T09:30:00.000Z",
+  });
+
+  it("is a VideoObject pointing at the footage, named Artist — Title", () => {
+    expect(jsonLd["@type"]).toBe("VideoObject");
+    expect(jsonLd.contentUrl).toBe("https://found.fluncle.com/004.7.2I/footage.mp4");
+    expect(jsonLd.thumbnailUrl).toBe("https://img/cover.jpg");
+    expect(jsonLd.name).toBe("Axwell, 1991 — Nobody Else - 1991 Remix");
+    expect(jsonLd.url).toBe("https://www.fluncle.com/log/004.7.2I");
+  });
+
+  it("mirrors the visible prose and dates the upload from the freshest stamp", () => {
+    expect(jsonLd.description).toBe(definitionalProse(track));
+    expect(jsonLd.uploadDate).toBe("2026-06-12");
   });
 });
 
