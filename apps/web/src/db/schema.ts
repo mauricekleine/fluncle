@@ -707,6 +707,38 @@ export const mixtapeTracks = sqliteTable(
   ],
 );
 
+// A mixtape CLIP — a lightweight 9:16 derivative cut from a mixtape's set video
+// (the Fluncle Studio drip-feed; docs/fluncle-studio-rfc.md Unit D). One set yields
+// MANY clips (a backlog to drip-feed), so this is one-to-many via `mixtape_id`.
+// NOT a spine object: a clip carries NO Log ID — the spine namespace is
+// scarce/collectible, and a clip is a re-cuttable trailer, not a checkpoint.
+// `in_ms`/`out_ms` are the cut window into the set; `x_offset` is the 9:16 framing
+// offset baked at the ffmpeg cut (MT crop is centre-only, so the framing lives
+// here, not as an MT param); `caption` is the operator/agent-authored copy (stored
+// clean — the `fluncle://` coordinate is appended only at payload-build). `status`
+// tracks the cut queue (`pending` → `done`) AND drives the clip-library filter.
+// Distribution state lands later in a sibling `mixtape_clip_social_posts` table,
+// never `*_url` columns here (docs/fluncle-studio-rfc.md §5/§8).
+export const mixtapeClips = sqliteTable(
+  "mixtape_clips",
+  {
+    caption: text("caption"),
+    createdAt: text("created_at").notNull(),
+    id: text("id").primaryKey(),
+    inMs: integer("in_ms").notNull(),
+    // Plain text id, no declared FK — matching the sibling `mixtape_tracks` /
+    // `mixtape_social_posts` (this schema declares no SQLite/libSQL FKs anywhere).
+    mixtapeId: text("mixtape_id").notNull(),
+    outMs: integer("out_ms").notNull(),
+    status: text("status", { enum: ["pending", "done"] })
+      .notNull()
+      .default("pending"),
+    updatedAt: text("updated_at").notNull(),
+    xOffset: integer("x_offset").notNull(),
+  },
+  (table) => [index("mixtape_clips_mixtape_id_idx").on(table.mixtapeId)],
+);
+
 // A newsletter EDITION — the weekly dispatch from the mothership, now persisted so
 // every Friday letter has a permanent home.
 // Modeled on the `mixtapes` table SHAPE (own table + counter + a draft→sent

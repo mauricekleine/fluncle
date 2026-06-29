@@ -156,8 +156,12 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   capture_post_urls: "admin",
   collect_private_galaxy_log: "private-session",
   context_track: "admin",
+  // The Fluncle Studio clip writes (docs/fluncle-studio-rfc.md Unit D) — operator
+  // tier: the agent never cuts/mints/prunes clips, so an agent token 403s.
+  create_clip: "operator",
   create_edition: "admin",
   create_mixtape: "operator",
+  delete_clip: "operator",
   delete_edition: "operator",
   delete_mixtape: "operator",
   delete_private_account: "private-session",
@@ -175,6 +179,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   get_private_mutation_token: "private-session",
   get_submission: "admin",
   initiate_mixtape_youtube: "operator",
+  // The clip library/editor read — admin tier (agent-allowed), the list_*_admin
+  // precedent. Filterable by mixtapeId/status; serves the editor + the library.
+  list_clips: "admin",
   list_editions_admin: "admin",
   list_mixtapes_admin: "admin",
   list_private_saved_findings: "private-session",
@@ -210,10 +217,14 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   requeue_video: "operator",
   save_private_finding: "private-session",
   send_edition: "operator",
+  // The hardened post-publish cue backfill — operator tier: it rewrites a published
+  // set's surface, so the agent token 403s.
+  set_mixtape_cues: "operator",
   set_mixtape_members: "operator",
   start_lastfm_auth: "operator",
   sweep_push_receipts: "admin",
   unsave_private_finding: "private-session",
+  update_clip: "operator",
   update_edition: "admin",
   update_mixtape: "operator",
   update_private_profile: "private-session",

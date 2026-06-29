@@ -19,10 +19,13 @@
 
 import { oc } from "@orpc/contract";
 import * as z from "zod";
-import { MixtapeDTOSchema, MixtapeSocialPostItemSchema } from "./_shared";
+import { ClipDTOSchema, MixtapeDTOSchema, MixtapeSocialPostItemSchema } from "./_shared";
 
 /** The `{ mixtape, ok }` envelope most mixtape ops return. */
 const MixtapeEnvelope = z.object({ mixtape: MixtapeDTOSchema, ok: z.literal(true) });
+
+/** The `{ clip, ok }` envelope the single-clip writes return. */
+const ClipEnvelope = z.object({ clip: ClipDTOSchema, ok: z.literal(true) });
 
 /**
  * `list_mixtapes_admin` → `GET /admin/mixtapes` (operationId `listMixtapesAdmin`).
@@ -265,18 +268,123 @@ export const publishMixtapeYoutube = oc
   .input(z.object({ mixtapeId: z.string() }))
   .output(z.object({ ok: z.literal(true), url: z.string() }));
 
+// ── Fluncle Studio: clips + cue backfill (docs/fluncle-studio-rfc.md Unit D) ───
+// A clip is a lightweight 9:16 derivative of a mixtape's set video — many per set.
+// LOOSE/passthrough bodies, like the rest of the domain: the server helpers
+// (`createClip`/`updateClip`/`setMixtapeCues`) validate + throw their own codes, so
+// the contract must not pre-reject. The two presign ops (`presign_set_video_upload`
+// /`presign_clip_upload`) are DEFERRED to Units A/C (they sign R2 uploads for the
+// set-video staging + the box's clip output), so they are NOT in this slice.
+
+/**
+ * `list_clips` → `GET /admin/clips` (operationId `listClips`).
+ *
+ * Admin tier (`requireAdmin`, agent-allowed). Every clip, optionally filtered by
+ * `mixtapeId` and/or `status` — the SAME read the per-set editor (one mixtape) and
+ * the cross-set clip library (all mixtapes) both consume. Preserves `{ clips, ok }`.
+ */
+export const listClips = oc
+  .route({
+    method: "GET",
+    operationId: "listClips",
+    path: "/admin/clips",
+    summary: "List clips (optionally filtered by mixtape and/or status)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ mixtapeId: z.string().optional(), status: z.string().optional() }))
+  .output(z.object({ clips: z.array(ClipDTOSchema), ok: z.literal(true) }));
+
+/**
+ * `create_clip` → `POST /admin/mixtapes/{mixtapeId}/clips` (operationId `createClip`).
+ *
+ * Operator tier (`requireOperator`). Mint one clip row for a mixtape (the editor
+ * queues a cut). LOOSE body — `createClip` validates the cut window + framing.
+ * Preserves `{ clip, ok }`.
+ */
+export const createClip = oc
+  .route({
+    method: "POST",
+    operationId: "createClip",
+    path: "/admin/mixtapes/{mixtapeId}/clips",
+    summary: "Create a clip for a mixtape (queues a cut)",
+    tags: ["Admin"],
+  })
+  .input(z.looseObject({ mixtapeId: z.string() }))
+  .output(ClipEnvelope);
+
+/**
+ * `update_clip` → `PATCH /admin/clips/{clipId}` (operationId `updateClip`).
+ *
+ * Operator tier (`requireOperator`). Edit a clip's window/framing/caption/status.
+ * LOOSE body — `updateClip` validates. Preserves `{ clip, ok }`.
+ */
+export const updateClip = oc
+  .route({
+    method: "PATCH",
+    operationId: "updateClip",
+    path: "/admin/clips/{clipId}",
+    summary: "Update a clip's fields",
+    tags: ["Admin"],
+  })
+  .input(z.looseObject({ clipId: z.string() }))
+  .output(ClipEnvelope);
+
+/**
+ * `delete_clip` → `DELETE /admin/clips/{clipId}` (operationId `deleteClip`).
+ *
+ * Operator tier (`requireOperator`). Prune a bad cut from the library. Preserves
+ * the `{ ok }` envelope.
+ */
+export const deleteClip = oc
+  .route({
+    method: "DELETE",
+    operationId: "deleteClip",
+    path: "/admin/clips/{clipId}",
+    summary: "Delete a clip",
+    tags: ["Admin"],
+  })
+  .input(z.object({ clipId: z.string() }))
+  .output(z.object({ ok: z.literal(true) }));
+
+/**
+ * `set_mixtape_cues` → `PUT /admin/mixtapes/{mixtapeId}/cues` (operationId
+ * `setMixtapeCues`).
+ *
+ * Operator tier (`requireOperator`). The HARDENED post-publish cue backfill: re-time
+ * the `start_ms` of a MINTED mixtape's EXISTING members without touching the frozen
+ * set/order (each cue `ref` is a current trackId). LOOSE body — `setMixtapeCues`
+ * validates the cue shape, asserts the mixtape is non-draft + the member set is
+ * unchanged, and enforces monotonic, start-at-0 cues (YouTube chapter rules).
+ * Preserves `{ mixtape, ok }`.
+ */
+export const setMixtapeCues = oc
+  .route({
+    method: "PUT",
+    operationId: "setMixtapeCues",
+    path: "/admin/mixtapes/{mixtapeId}/cues",
+    summary: "Backfill a published mixtape's per-track cues (start_ms)",
+    tags: ["Admin"],
+  })
+  .input(z.looseObject({ mixtapeId: z.string() }))
+  .output(MixtapeEnvelope);
+
 /** The `admin-mixtapes` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminMixtapesContract = {
   add_mixtape_members: addMixtapeMembers,
+  create_clip: createClip,
   create_mixtape: createMixtape,
+  delete_clip: deleteClip,
   delete_mixtape: deleteMixtape,
   finalize_mixtape_mixcloud: finalizeMixtapeMixcloud,
   finalize_mixtape_youtube: finalizeMixtapeYoutube,
   get_mixtape_social: getMixtapeSocial,
   initiate_mixtape_youtube: initiateMixtapeYoutube,
+  list_clips: listClips,
   list_mixtapes_admin: listMixtapesAdmin,
   publish_mixtape: publishMixtape,
   publish_mixtape_youtube: publishMixtapeYoutube,
+  set_mixtape_cues: setMixtapeCues,
   set_mixtape_members: setMixtapeMembers,
+  update_clip: updateClip,
   update_mixtape: updateMixtape,
 };
