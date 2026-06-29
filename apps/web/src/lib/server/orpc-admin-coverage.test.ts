@@ -43,11 +43,16 @@ const PENDING = "__pending__" as const;
 // every route maps to its canonical converted op; the PENDING sentinel is retained
 // for future admin routes (a new route lands here as PENDING until it converts).
 const ADMIN_ROUTE_OPS: Record<string, string> = {
+  // The Fluncle Studio clip ops (docs/fluncle-studio-rfc.md Unit D): clip CRUD +
+  // the hardened post-publish cue backfill. `list_clips` is admin tier
+  // (agent-allowed read); the writes are operator tier.
+  "DELETE /admin/clips/{clipId}": "delete_clip",
   "DELETE /admin/mixtapes/{mixtapeId}": "delete_mixtape",
   // The newsletter edition delete — contract-only oRPC (no TanStack route file).
   // Operator tier: a hard delete that reaches a SENT edition too (pulling a sent
   // test edition from the public archive); the agent token 403s.
   "DELETE /admin/newsletter/editions/{id}": "delete_edition",
+  "GET /admin/clips": "list_clips",
   "GET /admin/lastfm/auth/start": "start_lastfm_auth",
   "GET /admin/mixtapes": "list_mixtapes_admin",
   "GET /admin/mixtapes/{mixtapeId}/social": "get_mixtape_social",
@@ -59,6 +64,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "GET /admin/submissions/{submissionId}": "get_submission",
   "GET /admin/tracks": "list_tracks_admin",
   "GET /admin/tracks/{trackId}/social": "list_track_social",
+  "PATCH /admin/clips/{clipId}": "update_clip",
   "PATCH /admin/mixtapes/{mixtapeId}": "update_mixtape",
   // The newsletter edition control plane. Contract-only oRPC — no TanStack route
   // files under /api/admin/newsletter
@@ -77,6 +83,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/lastfm/auth/session": "exchange_lastfm_session",
   "POST /admin/mixcloud/token": "mint_mixcloud_token",
   "POST /admin/mixtapes": "create_mixtape",
+  "POST /admin/mixtapes/{mixtapeId}/clips": "create_clip",
   "POST /admin/mixtapes/{mixtapeId}/members": "add_mixtape_members",
   "POST /admin/mixtapes/{mixtapeId}/mixcloud/finalize": "finalize_mixtape_mixcloud",
   "POST /admin/mixtapes/{mixtapeId}/publish": "publish_mixtape",
@@ -118,6 +125,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/tracks/{trackId}/video/requeue": "requeue_video",
   "POST /admin/tracks/{trackId}/video/uploads": "presign_track_video_uploads",
   "POST /admin/youtube/token": "mint_youtube_token",
+  // The hardened post-publish cue backfill (Fluncle Studio Unit D, panel M1):
+  // re-times an existing minted tracklist's start_ms; operator tier.
+  "PUT /admin/mixtapes/{mixtapeId}/cues": "set_mixtape_cues",
   // The PUT shares the `members` file/path with the POST above (append vs replace);
   // oRPC routes the two methods to distinct ops, so each gets its own entry.
   "PUT /admin/mixtapes/{mixtapeId}/members": "set_mixtape_members",

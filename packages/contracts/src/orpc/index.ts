@@ -56,16 +56,21 @@ export {
 } from "./admin-editions";
 export {
   addMixtapeMembers,
+  createClip,
   createMixtape,
+  deleteClip,
   deleteMixtape,
   finalizeMixtapeMixcloud,
   finalizeMixtapeYoutube,
   getMixtapeSocial,
   initiateMixtapeYoutube,
+  listClips,
   listMixtapesAdmin,
   publishMixtape,
   publishMixtapeYoutube,
+  setMixtapeCues,
   setMixtapeMembers,
+  updateClip,
   updateMixtape,
 } from "./admin-mixtapes";
 export { draftTrackSocial, listTrackSocial, updateTrackSocial } from "./admin-social";
@@ -117,6 +122,8 @@ export { listStories } from "./stories";
 export { type SubmissionBody, submitTrack } from "./submissions";
 export { getRandomTrack, getTrack, listTracks } from "./tracks";
 export {
+  type ClipDTO,
+  ClipDTOSchema,
   EditionContentSchema,
   EditionDTOSchema,
   MixtapeDTOSchema,

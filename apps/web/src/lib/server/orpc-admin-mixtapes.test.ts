@@ -20,6 +20,11 @@ const publishMixtape = vi.fn();
 const getMixtapeById = vi.fn();
 const listMixtapeSocialPosts = vi.fn();
 const finalizeMixtapeDistribution = vi.fn();
+const setMixtapeCues = vi.fn();
+const listClips = vi.fn();
+const createClip = vi.fn();
+const updateClip = vi.fn();
+const deleteClip = vi.fn();
 
 vi.mock("./mixtapes", () => ({
   addTracksToMixtape: (...args: unknown[]) => addTracksToMixtape(...args),
@@ -28,8 +33,16 @@ vi.mock("./mixtapes", () => ({
   getMixtapeById: (...args: unknown[]) => getMixtapeById(...args),
   listMixtapes: (...args: unknown[]) => listMixtapes(...args),
   publishMixtape: (...args: unknown[]) => publishMixtape(...args),
+  setMixtapeCues: (...args: unknown[]) => setMixtapeCues(...args),
   setMixtapeMembers: (...args: unknown[]) => setMixtapeMembers(...args),
   updateMixtape: (...args: unknown[]) => updateMixtape(...args),
+}));
+
+vi.mock("./clips", () => ({
+  createClip: (...args: unknown[]) => createClip(...args),
+  deleteClip: (...args: unknown[]) => deleteClip(...args),
+  listClips: (...args: unknown[]) => listClips(...args),
+  updateClip: (...args: unknown[]) => updateClip(...args),
 }));
 
 vi.mock("./mixtape-social", () => ({
@@ -62,7 +75,23 @@ beforeEach(() => {
   getMixtapeById.mockReset();
   listMixtapeSocialPosts.mockReset();
   finalizeMixtapeDistribution.mockReset();
+  setMixtapeCues.mockReset();
+  listClips.mockReset();
+  createClip.mockReset();
+  updateClip.mockReset();
+  deleteClip.mockReset();
 });
+
+const CLIP = {
+  createdAt: "2026-06-29T00:00:00.000Z",
+  id: "clip-1",
+  inMs: 0,
+  mixtapeId: MIXTAPE_ID,
+  outMs: 30_000,
+  status: "pending" as const,
+  updatedAt: "2026-06-29T00:00:00.000Z",
+  xOffset: 240,
+};
 
 // ── list_mixtapes_admin — admin tier ─────────────────────────────────────────
 describe("oRPC list_mixtapes_admin (GET /admin/mixtapes)", () => {
@@ -288,5 +317,128 @@ describe("oRPC publish_mixtape_youtube (POST .../youtube/publish)", () => {
 
     expect(response?.status).toBe(409);
     expect(((await readJson(response)) as { code: string }).code).toBe("youtube_not_distributed");
+  });
+});
+
+// ── Fluncle Studio clips (Unit D): list = admin; create/update/delete = operator ─
+describe("oRPC list_clips (GET /admin/clips)", () => {
+  it("401s with no token", async () => {
+    const { handleOrpc } = await import("./orpc");
+    expect((await handleOrpc(req("/admin/clips", "GET", undefined)))?.status).toBe(401);
+  });
+
+  it("lets the AGENT read, passing the ?mixtapeId/?status filters through", async () => {
+    listClips.mockResolvedValueOnce([CLIP]);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(`/admin/clips?mixtapeId=${MIXTAPE_ID}&status=pending`, "GET", AGENT_TOKEN),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toEqual({ clips: [CLIP], ok: true });
+    expect(listClips).toHaveBeenCalledWith({ mixtapeId: MIXTAPE_ID, status: "pending" });
+  });
+});
+
+describe("oRPC create_clip (POST /admin/mixtapes/{mixtapeId}/clips)", () => {
+  it("403s the AGENT (operator-only)", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(`/admin/mixtapes/${MIXTAPE_ID}/clips`, "POST", AGENT_TOKEN, { inMs: 0, outMs: 30_000 }),
+    );
+
+    expect(response?.status).toBe(403);
+    expect(createClip).not.toHaveBeenCalled();
+  });
+
+  it("creates for the operator and returns `{ clip, ok }`", async () => {
+    createClip.mockResolvedValueOnce(CLIP);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(`/admin/mixtapes/${MIXTAPE_ID}/clips`, "POST", OPERATOR_TOKEN, {
+        inMs: 0,
+        outMs: 30_000,
+        xOffset: 240,
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toEqual({ clip: CLIP, ok: true });
+    expect(createClip).toHaveBeenCalledWith(MIXTAPE_ID, { inMs: 0, outMs: 30_000, xOffset: 240 });
+  });
+});
+
+describe("oRPC update_clip (PATCH /admin/clips/{clipId})", () => {
+  it("403s the AGENT", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/clips/clip-1", "PATCH", AGENT_TOKEN, { caption: "x" }),
+    );
+
+    expect(response?.status).toBe(403);
+    expect(updateClip).not.toHaveBeenCalled();
+  });
+
+  it("updates for the operator (clipId off the path, body forwarded)", async () => {
+    updateClip.mockResolvedValueOnce({ ...CLIP, caption: "a banger" });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/clips/clip-1", "PATCH", OPERATOR_TOKEN, { caption: "a banger" }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(updateClip).toHaveBeenCalledWith("clip-1", { caption: "a banger" });
+  });
+});
+
+describe("oRPC delete_clip (DELETE /admin/clips/{clipId})", () => {
+  it("403s the AGENT", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req("/admin/clips/clip-1", "DELETE", AGENT_TOKEN));
+
+    expect(response?.status).toBe(403);
+    expect(deleteClip).not.toHaveBeenCalled();
+  });
+
+  it("deletes for the operator and returns `{ ok: true }`", async () => {
+    deleteClip.mockResolvedValueOnce(undefined);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req("/admin/clips/clip-1", "DELETE", OPERATOR_TOKEN));
+
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toEqual({ ok: true });
+    expect(deleteClip).toHaveBeenCalledWith("clip-1");
+  });
+});
+
+describe("oRPC set_mixtape_cues (PUT /admin/mixtapes/{mixtapeId}/cues)", () => {
+  it("403s the AGENT (operator-only)", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(`/admin/mixtapes/${MIXTAPE_ID}/cues`, "PUT", AGENT_TOKEN, { cues: [] }),
+    );
+
+    expect(response?.status).toBe(403);
+    expect(setMixtapeCues).not.toHaveBeenCalled();
+  });
+
+  it("backfills for the operator (mixtapeId off the path, cues forwarded)", async () => {
+    setMixtapeCues.mockResolvedValueOnce({ ...MIXTAPE, status: "published" });
+    const cues = [
+      { ref: "t1", startMs: 0 },
+      { ref: "t2", startMs: 180_000 },
+    ];
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(`/admin/mixtapes/${MIXTAPE_ID}/cues`, "PUT", OPERATOR_TOKEN, { cues }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(setMixtapeCues).toHaveBeenCalledWith(MIXTAPE_ID, { cues });
   });
 });

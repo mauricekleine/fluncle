@@ -252,6 +252,30 @@ export const EditionDTOSchema = z
   })
   .meta({ id: "EditionDTO" });
 
+/**
+ * A clip — a lightweight 9:16 derivative cut from a mixtape's set video
+ * (`mixtape_clips`; docs/fluncle-studio-rfc.md Unit D; `ClipDTO` below). NOT a spine
+ * object: it carries no Log ID. Many per mixtape (the drip-feed backlog). This is the
+ * wire shape the clip ops emit and the editor / clip library read. `xOffset` is the
+ * 9:16 framing offset; `status` is the cut-queue + library-filter state.
+ */
+export const ClipDTOSchema = z
+  .object({
+    caption: z.string().optional(),
+    createdAt: z.string(),
+    id: z.string(),
+    inMs: z.number(),
+    mixtapeId: z.string(),
+    outMs: z.number(),
+    status: z.enum(["done", "pending"]),
+    updatedAt: z.string(),
+    xOffset: z.number(),
+  })
+  .meta({ id: "ClipDTO" });
+
+/** The TS shape of a clip, derived from the schema (one definition, no drift). */
+export type ClipDTO = z.infer<typeof ClipDTOSchema>;
+
 /** A mixtape per-platform distribution row (`MixtapeSocialPostItem`; `mixtape_social_posts`). */
 export const MixtapeSocialPostItemSchema = z
   .object({

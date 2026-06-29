@@ -14,6 +14,7 @@
 // 502s) byte-for-byte.
 
 import { ORPCError } from "@orpc/server";
+import { createClip, deleteClip, listClips, updateClip } from "../clips";
 import { youtubeDescription } from "../../mixtape-chapters";
 import { finalizeMixtapeDistribution, listMixtapeSocialPosts } from "../mixtape-social";
 import {
@@ -23,6 +24,7 @@ import {
   getMixtapeById,
   listMixtapes,
   publishMixtape,
+  setMixtapeCues,
   setMixtapeMembers,
   updateMixtape,
 } from "../mixtapes";
@@ -434,18 +436,96 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
+  // ── Fluncle Studio: clips + cue backfill (docs/fluncle-studio-rfc.md Unit D) ──
+
+  // GET /admin/clips — admin tier (agent-allowed read). Optional ?mixtapeId/?status.
+  const listClipsHandler = os.list_clips.use(adminAuth).handler(async ({ input }) => {
+    try {
+      return {
+        clips: await listClips({ mixtapeId: input.mixtapeId, status: input.status }),
+        ok: true as const,
+      };
+    } catch (error) {
+      throw apiFault(error);
+    }
+  });
+
+  // POST /admin/mixtapes/{mixtapeId}/clips — operator tier. LOOSE body → createClip.
+  const createClipHandler = os.create_clip
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const { mixtapeId, ...body } = input as { mixtapeId: string } & Record<string, unknown>;
+
+        return { clip: await createClip(mixtapeId, body), ok: true as const };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  // PATCH /admin/clips/{clipId} — operator tier. LOOSE body → updateClip.
+  const updateClipHandler = os.update_clip
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const { clipId, ...body } = input as { clipId: string } & Record<string, unknown>;
+
+        return { clip: await updateClip(clipId, body), ok: true as const };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  // DELETE /admin/clips/{clipId} — operator tier.
+  const deleteClipHandler = os.delete_clip
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        await deleteClip(input.clipId);
+
+        return { ok: true as const };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  // PUT /admin/mixtapes/{mixtapeId}/cues — operator tier. The hardened post-publish
+  // cue backfill. LOOSE body → setMixtapeCues, which owns the non-draft + member-set
+  // + monotonic/start-at-0 guards.
+  const setMixtapeCuesHandler = os.set_mixtape_cues
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const { mixtapeId, ...body } = input as { mixtapeId: string } & Record<string, unknown>;
+        const mixtape = await setMixtapeCues(mixtapeId, body);
+
+        return { mixtape, ok: true as const };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   return {
     add_mixtape_members: addMixtapeMembersHandler,
+    create_clip: createClipHandler,
     create_mixtape: createMixtapeHandler,
+    delete_clip: deleteClipHandler,
     delete_mixtape: deleteMixtapeHandler,
     finalize_mixtape_mixcloud: finalizeMixtapeMixcloudHandler,
     finalize_mixtape_youtube: finalizeMixtapeYoutubeHandler,
     get_mixtape_social: getMixtapeSocialHandler,
     initiate_mixtape_youtube: initiateMixtapeYoutubeHandler,
+    list_clips: listClipsHandler,
     list_mixtapes_admin: listMixtapesAdminHandler,
     publish_mixtape: publishMixtapeHandler,
     publish_mixtape_youtube: publishMixtapeYoutubeHandler,
+    set_mixtape_cues: setMixtapeCuesHandler,
     set_mixtape_members: setMixtapeMembersHandler,
+    update_clip: updateClipHandler,
     update_mixtape: updateMixtapeHandler,
   };
 }

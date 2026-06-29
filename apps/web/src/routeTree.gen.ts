@@ -81,6 +81,7 @@ import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiAdminSubmissionsRouteImport } from './routes/api/admin/submissions'
 import { Route as ApiAdminMixtapesRouteImport } from './routes/api/admin/mixtapes'
 import { Route as ApiAdminLogoutRouteImport } from './routes/api/admin/logout'
+import { Route as ApiAdminClipsRouteImport } from './routes/api/admin/clips'
 import { Route as ApiV1TracksRandomRouteImport } from './routes/api/v1/tracks/random'
 import { Route as ApiV1TracksIdOrLogIdRouteImport } from './routes/api/v1/tracks.$idOrLogId'
 import { Route as ApiV1PreviewIdOrLogIdRouteImport } from './routes/api/v1/preview.$idOrLogId'
@@ -103,6 +104,7 @@ import { Route as ApiAdminYoutubeTokenRouteImport } from './routes/api/admin/you
 import { Route as ApiAdminSubmissionsSubmissionIdRouteImport } from './routes/api/admin/submissions/$submissionId'
 import { Route as ApiAdminMixtapesMixtapeIdRouteImport } from './routes/api/admin/mixtapes.$mixtapeId'
 import { Route as ApiAdminMixcloudTokenRouteImport } from './routes/api/admin/mixcloud/token'
+import { Route as ApiAdminClipsClipIdRouteImport } from './routes/api/admin/clips.$clipId'
 import { Route as ApiAdminBackfillLastfmRouteImport } from './routes/api/admin/backfill.lastfm'
 import { Route as ApiAdminBackfillDiscogsRouteImport } from './routes/api/admin/backfill.discogs'
 import { Route as ApiV1MeSavedFindingsTrackIdRouteImport } from './routes/api/v1/me/saved-findings.$trackId'
@@ -125,6 +127,8 @@ import { Route as ApiAdminSpotifyAuthCallbackRouteImport } from './routes/api/ad
 import { Route as ApiAdminMixtapesMixtapeIdSocialRouteImport } from './routes/api/admin/mixtapes.$mixtapeId.social'
 import { Route as ApiAdminMixtapesMixtapeIdPublishRouteImport } from './routes/api/admin/mixtapes.$mixtapeId.publish'
 import { Route as ApiAdminMixtapesMixtapeIdMembersRouteImport } from './routes/api/admin/mixtapes.$mixtapeId.members'
+import { Route as ApiAdminMixtapesMixtapeIdCuesRouteImport } from './routes/api/admin/mixtapes.$mixtapeId.cues'
+import { Route as ApiAdminMixtapesMixtapeIdClipsRouteImport } from './routes/api/admin/mixtapes.$mixtapeId.clips'
 import { Route as ApiAdminMixcloudAuthStartRouteImport } from './routes/api/admin/mixcloud/auth/start'
 import { Route as ApiAdminMixcloudAuthCallbackRouteImport } from './routes/api/admin/mixcloud/auth/callback'
 import { Route as ApiAdminLastfmAuthStartRouteImport } from './routes/api/admin/lastfm/auth/start'
@@ -514,6 +518,11 @@ const ApiAdminLogoutRoute = ApiAdminLogoutRouteImport.update({
   path: '/api/admin/logout',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAdminClipsRoute = ApiAdminClipsRouteImport.update({
+  id: '/api/admin/clips',
+  path: '/api/admin/clips',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiV1TracksRandomRoute = ApiV1TracksRandomRouteImport.update({
   id: '/random',
   path: '/random',
@@ -626,6 +635,11 @@ const ApiAdminMixcloudTokenRoute = ApiAdminMixcloudTokenRouteImport.update({
   id: '/api/admin/mixcloud/token',
   path: '/api/admin/mixcloud/token',
   getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAdminClipsClipIdRoute = ApiAdminClipsClipIdRouteImport.update({
+  id: '/$clipId',
+  path: '/$clipId',
+  getParentRoute: () => ApiAdminClipsRoute,
 } as any)
 const ApiAdminBackfillLastfmRoute = ApiAdminBackfillLastfmRouteImport.update({
   id: '/api/admin/backfill/lastfm',
@@ -752,6 +766,18 @@ const ApiAdminMixtapesMixtapeIdMembersRoute =
   ApiAdminMixtapesMixtapeIdMembersRouteImport.update({
     id: '/members',
     path: '/members',
+    getParentRoute: () => ApiAdminMixtapesMixtapeIdRoute,
+  } as any)
+const ApiAdminMixtapesMixtapeIdCuesRoute =
+  ApiAdminMixtapesMixtapeIdCuesRouteImport.update({
+    id: '/cues',
+    path: '/cues',
+    getParentRoute: () => ApiAdminMixtapesMixtapeIdRoute,
+  } as any)
+const ApiAdminMixtapesMixtapeIdClipsRoute =
+  ApiAdminMixtapesMixtapeIdClipsRouteImport.update({
+    id: '/clips',
+    path: '/clips',
     getParentRoute: () => ApiAdminMixtapesMixtapeIdRoute,
   } as any)
 const ApiAdminMixcloudAuthStartRoute =
@@ -962,6 +988,7 @@ export interface FileRoutesByFullPath {
   '/mixtapes/': typeof MixtapesIndexRoute
   '/newsletter/': typeof NewsletterIndexRoute
   '/stories/': typeof StoriesIndexRoute
+  '/api/admin/clips': typeof ApiAdminClipsRouteWithChildren
   '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/admin/mixtapes': typeof ApiAdminMixtapesRouteWithChildren
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
@@ -991,6 +1018,7 @@ export interface FileRoutesByFullPath {
   '/api/v1/tracks': typeof ApiV1TracksRouteWithChildren
   '/api/admin/backfill/discogs': typeof ApiAdminBackfillDiscogsRoute
   '/api/admin/backfill/lastfm': typeof ApiAdminBackfillLastfmRoute
+  '/api/admin/clips/$clipId': typeof ApiAdminClipsClipIdRoute
   '/api/admin/mixcloud/token': typeof ApiAdminMixcloudTokenRoute
   '/api/admin/mixtapes/$mixtapeId': typeof ApiAdminMixtapesMixtapeIdRouteWithChildren
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
@@ -1017,6 +1045,8 @@ export interface FileRoutesByFullPath {
   '/api/admin/lastfm/auth/start': typeof ApiAdminLastfmAuthStartRoute
   '/api/admin/mixcloud/auth/callback': typeof ApiAdminMixcloudAuthCallbackRoute
   '/api/admin/mixcloud/auth/start': typeof ApiAdminMixcloudAuthStartRoute
+  '/api/admin/mixtapes/$mixtapeId/clips': typeof ApiAdminMixtapesMixtapeIdClipsRoute
+  '/api/admin/mixtapes/$mixtapeId/cues': typeof ApiAdminMixtapesMixtapeIdCuesRoute
   '/api/admin/mixtapes/$mixtapeId/members': typeof ApiAdminMixtapesMixtapeIdMembersRoute
   '/api/admin/mixtapes/$mixtapeId/publish': typeof ApiAdminMixtapesMixtapeIdPublishRoute
   '/api/admin/mixtapes/$mixtapeId/social': typeof ApiAdminMixtapesMixtapeIdSocialRoute
@@ -1105,6 +1135,7 @@ export interface FileRoutesByTo {
   '/mixtapes': typeof MixtapesIndexRoute
   '/newsletter': typeof NewsletterIndexRoute
   '/stories': typeof StoriesIndexRoute
+  '/api/admin/clips': typeof ApiAdminClipsRouteWithChildren
   '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/admin/mixtapes': typeof ApiAdminMixtapesRouteWithChildren
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
@@ -1134,6 +1165,7 @@ export interface FileRoutesByTo {
   '/api/v1/tracks': typeof ApiV1TracksRouteWithChildren
   '/api/admin/backfill/discogs': typeof ApiAdminBackfillDiscogsRoute
   '/api/admin/backfill/lastfm': typeof ApiAdminBackfillLastfmRoute
+  '/api/admin/clips/$clipId': typeof ApiAdminClipsClipIdRoute
   '/api/admin/mixcloud/token': typeof ApiAdminMixcloudTokenRoute
   '/api/admin/mixtapes/$mixtapeId': typeof ApiAdminMixtapesMixtapeIdRouteWithChildren
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
@@ -1160,6 +1192,8 @@ export interface FileRoutesByTo {
   '/api/admin/lastfm/auth/start': typeof ApiAdminLastfmAuthStartRoute
   '/api/admin/mixcloud/auth/callback': typeof ApiAdminMixcloudAuthCallbackRoute
   '/api/admin/mixcloud/auth/start': typeof ApiAdminMixcloudAuthStartRoute
+  '/api/admin/mixtapes/$mixtapeId/clips': typeof ApiAdminMixtapesMixtapeIdClipsRoute
+  '/api/admin/mixtapes/$mixtapeId/cues': typeof ApiAdminMixtapesMixtapeIdCuesRoute
   '/api/admin/mixtapes/$mixtapeId/members': typeof ApiAdminMixtapesMixtapeIdMembersRoute
   '/api/admin/mixtapes/$mixtapeId/publish': typeof ApiAdminMixtapesMixtapeIdPublishRoute
   '/api/admin/mixtapes/$mixtapeId/social': typeof ApiAdminMixtapesMixtapeIdSocialRoute
@@ -1251,6 +1285,7 @@ export interface FileRoutesById {
   '/mixtapes/': typeof MixtapesIndexRoute
   '/newsletter/': typeof NewsletterIndexRoute
   '/stories/': typeof StoriesIndexRoute
+  '/api/admin/clips': typeof ApiAdminClipsRouteWithChildren
   '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/admin/mixtapes': typeof ApiAdminMixtapesRouteWithChildren
   '/api/admin/submissions': typeof ApiAdminSubmissionsRouteWithChildren
@@ -1280,6 +1315,7 @@ export interface FileRoutesById {
   '/api/v1/tracks': typeof ApiV1TracksRouteWithChildren
   '/api/admin/backfill/discogs': typeof ApiAdminBackfillDiscogsRoute
   '/api/admin/backfill/lastfm': typeof ApiAdminBackfillLastfmRoute
+  '/api/admin/clips/$clipId': typeof ApiAdminClipsClipIdRoute
   '/api/admin/mixcloud/token': typeof ApiAdminMixcloudTokenRoute
   '/api/admin/mixtapes/$mixtapeId': typeof ApiAdminMixtapesMixtapeIdRouteWithChildren
   '/api/admin/submissions/$submissionId': typeof ApiAdminSubmissionsSubmissionIdRouteWithChildren
@@ -1306,6 +1342,8 @@ export interface FileRoutesById {
   '/api/admin/lastfm/auth/start': typeof ApiAdminLastfmAuthStartRoute
   '/api/admin/mixcloud/auth/callback': typeof ApiAdminMixcloudAuthCallbackRoute
   '/api/admin/mixcloud/auth/start': typeof ApiAdminMixcloudAuthStartRoute
+  '/api/admin/mixtapes/$mixtapeId/clips': typeof ApiAdminMixtapesMixtapeIdClipsRoute
+  '/api/admin/mixtapes/$mixtapeId/cues': typeof ApiAdminMixtapesMixtapeIdCuesRoute
   '/api/admin/mixtapes/$mixtapeId/members': typeof ApiAdminMixtapesMixtapeIdMembersRoute
   '/api/admin/mixtapes/$mixtapeId/publish': typeof ApiAdminMixtapesMixtapeIdPublishRoute
   '/api/admin/mixtapes/$mixtapeId/social': typeof ApiAdminMixtapesMixtapeIdSocialRoute
@@ -1398,6 +1436,7 @@ export interface FileRouteTypes {
     | '/mixtapes/'
     | '/newsletter/'
     | '/stories/'
+    | '/api/admin/clips'
     | '/api/admin/logout'
     | '/api/admin/mixtapes'
     | '/api/admin/submissions'
@@ -1427,6 +1466,7 @@ export interface FileRouteTypes {
     | '/api/v1/tracks'
     | '/api/admin/backfill/discogs'
     | '/api/admin/backfill/lastfm'
+    | '/api/admin/clips/$clipId'
     | '/api/admin/mixcloud/token'
     | '/api/admin/mixtapes/$mixtapeId'
     | '/api/admin/submissions/$submissionId'
@@ -1453,6 +1493,8 @@ export interface FileRouteTypes {
     | '/api/admin/lastfm/auth/start'
     | '/api/admin/mixcloud/auth/callback'
     | '/api/admin/mixcloud/auth/start'
+    | '/api/admin/mixtapes/$mixtapeId/clips'
+    | '/api/admin/mixtapes/$mixtapeId/cues'
     | '/api/admin/mixtapes/$mixtapeId/members'
     | '/api/admin/mixtapes/$mixtapeId/publish'
     | '/api/admin/mixtapes/$mixtapeId/social'
@@ -1541,6 +1583,7 @@ export interface FileRouteTypes {
     | '/mixtapes'
     | '/newsletter'
     | '/stories'
+    | '/api/admin/clips'
     | '/api/admin/logout'
     | '/api/admin/mixtapes'
     | '/api/admin/submissions'
@@ -1570,6 +1613,7 @@ export interface FileRouteTypes {
     | '/api/v1/tracks'
     | '/api/admin/backfill/discogs'
     | '/api/admin/backfill/lastfm'
+    | '/api/admin/clips/$clipId'
     | '/api/admin/mixcloud/token'
     | '/api/admin/mixtapes/$mixtapeId'
     | '/api/admin/submissions/$submissionId'
@@ -1596,6 +1640,8 @@ export interface FileRouteTypes {
     | '/api/admin/lastfm/auth/start'
     | '/api/admin/mixcloud/auth/callback'
     | '/api/admin/mixcloud/auth/start'
+    | '/api/admin/mixtapes/$mixtapeId/clips'
+    | '/api/admin/mixtapes/$mixtapeId/cues'
     | '/api/admin/mixtapes/$mixtapeId/members'
     | '/api/admin/mixtapes/$mixtapeId/publish'
     | '/api/admin/mixtapes/$mixtapeId/social'
@@ -1686,6 +1732,7 @@ export interface FileRouteTypes {
     | '/mixtapes/'
     | '/newsletter/'
     | '/stories/'
+    | '/api/admin/clips'
     | '/api/admin/logout'
     | '/api/admin/mixtapes'
     | '/api/admin/submissions'
@@ -1715,6 +1762,7 @@ export interface FileRouteTypes {
     | '/api/v1/tracks'
     | '/api/admin/backfill/discogs'
     | '/api/admin/backfill/lastfm'
+    | '/api/admin/clips/$clipId'
     | '/api/admin/mixcloud/token'
     | '/api/admin/mixtapes/$mixtapeId'
     | '/api/admin/submissions/$submissionId'
@@ -1741,6 +1789,8 @@ export interface FileRouteTypes {
     | '/api/admin/lastfm/auth/start'
     | '/api/admin/mixcloud/auth/callback'
     | '/api/admin/mixcloud/auth/start'
+    | '/api/admin/mixtapes/$mixtapeId/clips'
+    | '/api/admin/mixtapes/$mixtapeId/cues'
     | '/api/admin/mixtapes/$mixtapeId/members'
     | '/api/admin/mixtapes/$mixtapeId/publish'
     | '/api/admin/mixtapes/$mixtapeId/social'
@@ -1825,6 +1875,7 @@ export interface RootRouteChildren {
   MixtapesIndexRoute: typeof MixtapesIndexRoute
   NewsletterIndexRoute: typeof NewsletterIndexRoute
   StoriesIndexRoute: typeof StoriesIndexRoute
+  ApiAdminClipsRoute: typeof ApiAdminClipsRouteWithChildren
   ApiAdminLogoutRoute: typeof ApiAdminLogoutRoute
   ApiAdminMixtapesRoute: typeof ApiAdminMixtapesRouteWithChildren
   ApiAdminSubmissionsRoute: typeof ApiAdminSubmissionsRouteWithChildren
@@ -2385,6 +2436,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminLogoutRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/admin/clips': {
+      id: '/api/admin/clips'
+      path: '/api/admin/clips'
+      fullPath: '/api/admin/clips'
+      preLoaderRoute: typeof ApiAdminClipsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/v1/tracks/random': {
       id: '/api/v1/tracks/random'
       path: '/random'
@@ -2539,6 +2597,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminMixcloudTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/admin/clips/$clipId': {
+      id: '/api/admin/clips/$clipId'
+      path: '/$clipId'
+      fullPath: '/api/admin/clips/$clipId'
+      preLoaderRoute: typeof ApiAdminClipsClipIdRouteImport
+      parentRoute: typeof ApiAdminClipsRoute
+    }
     '/api/admin/backfill/lastfm': {
       id: '/api/admin/backfill/lastfm'
       path: '/api/admin/backfill/lastfm'
@@ -2691,6 +2756,20 @@ declare module '@tanstack/react-router' {
       path: '/members'
       fullPath: '/api/admin/mixtapes/$mixtapeId/members'
       preLoaderRoute: typeof ApiAdminMixtapesMixtapeIdMembersRouteImport
+      parentRoute: typeof ApiAdminMixtapesMixtapeIdRoute
+    }
+    '/api/admin/mixtapes/$mixtapeId/cues': {
+      id: '/api/admin/mixtapes/$mixtapeId/cues'
+      path: '/cues'
+      fullPath: '/api/admin/mixtapes/$mixtapeId/cues'
+      preLoaderRoute: typeof ApiAdminMixtapesMixtapeIdCuesRouteImport
+      parentRoute: typeof ApiAdminMixtapesMixtapeIdRoute
+    }
+    '/api/admin/mixtapes/$mixtapeId/clips': {
+      id: '/api/admin/mixtapes/$mixtapeId/clips'
+      path: '/clips'
+      fullPath: '/api/admin/mixtapes/$mixtapeId/clips'
+      preLoaderRoute: typeof ApiAdminMixtapesMixtapeIdClipsRouteImport
       parentRoute: typeof ApiAdminMixtapesMixtapeIdRoute
     }
     '/api/admin/mixcloud/auth/start': {
@@ -2987,7 +3066,21 @@ const ApiTracksRouteWithChildren = ApiTracksRoute._addFileChildren(
   ApiTracksRouteChildren,
 )
 
+interface ApiAdminClipsRouteChildren {
+  ApiAdminClipsClipIdRoute: typeof ApiAdminClipsClipIdRoute
+}
+
+const ApiAdminClipsRouteChildren: ApiAdminClipsRouteChildren = {
+  ApiAdminClipsClipIdRoute: ApiAdminClipsClipIdRoute,
+}
+
+const ApiAdminClipsRouteWithChildren = ApiAdminClipsRoute._addFileChildren(
+  ApiAdminClipsRouteChildren,
+)
+
 interface ApiAdminMixtapesMixtapeIdRouteChildren {
+  ApiAdminMixtapesMixtapeIdClipsRoute: typeof ApiAdminMixtapesMixtapeIdClipsRoute
+  ApiAdminMixtapesMixtapeIdCuesRoute: typeof ApiAdminMixtapesMixtapeIdCuesRoute
   ApiAdminMixtapesMixtapeIdMembersRoute: typeof ApiAdminMixtapesMixtapeIdMembersRoute
   ApiAdminMixtapesMixtapeIdPublishRoute: typeof ApiAdminMixtapesMixtapeIdPublishRoute
   ApiAdminMixtapesMixtapeIdSocialRoute: typeof ApiAdminMixtapesMixtapeIdSocialRoute
@@ -2999,6 +3092,8 @@ interface ApiAdminMixtapesMixtapeIdRouteChildren {
 
 const ApiAdminMixtapesMixtapeIdRouteChildren: ApiAdminMixtapesMixtapeIdRouteChildren =
   {
+    ApiAdminMixtapesMixtapeIdClipsRoute: ApiAdminMixtapesMixtapeIdClipsRoute,
+    ApiAdminMixtapesMixtapeIdCuesRoute: ApiAdminMixtapesMixtapeIdCuesRoute,
     ApiAdminMixtapesMixtapeIdMembersRoute:
       ApiAdminMixtapesMixtapeIdMembersRoute,
     ApiAdminMixtapesMixtapeIdPublishRoute:
@@ -3250,6 +3345,7 @@ const rootRouteChildren: RootRouteChildren = {
   MixtapesIndexRoute: MixtapesIndexRoute,
   NewsletterIndexRoute: NewsletterIndexRoute,
   StoriesIndexRoute: StoriesIndexRoute,
+  ApiAdminClipsRoute: ApiAdminClipsRouteWithChildren,
   ApiAdminLogoutRoute: ApiAdminLogoutRoute,
   ApiAdminMixtapesRoute: ApiAdminMixtapesRouteWithChildren,
   ApiAdminSubmissionsRoute: ApiAdminSubmissionsRouteWithChildren,

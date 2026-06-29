@@ -351,6 +351,136 @@ export async function addTracksToMixtape(
   return purgeMixtapeLogCache(await getMixtapeById(id, { includeDrafts: true }));
 }
 
+// A cue: a member's start offset on the set timeline, keyed by the member's TRACK
+// ID (`ref`), matching the `(mixtape_id, track_id)` unique index. The Fluncle Studio
+// cue-backfill body (docs/fluncle-studio-rfc.md §5, panel M1).
+export type MixtapeCueInput = {
+  cues?: Array<{ ref?: unknown; startMs?: unknown }>;
+};
+
+// Backfill a MINTED mixtape's per-track cues (`mixtape_tracks.start_ms`) — the
+// narrow, HARDENED write-path that unlocks #1's missing cues post-publish without
+// touching the frozen set/order (docs/fluncle-studio-rfc.md §5, panel M1). Unlike
+// the draft member edits (setMixtapeMembers), this does NOT call assertDraftMixtape;
+// instead it is the inverse — it asserts the mixtape exists + is NON-draft, then
+// re-times the EXISTING members only. Its guards (each a state backstop, not handler
+// discipline):
+//   - the mixtape must exist + be non-draft (cues are a post-publish backfill);
+//   - every `ref` must be a CURRENT member, and the cue set must match the member set
+//     EXACTLY (same count + same trackId set) — so it can only re-time the frozen
+//     tracklist, never add/drop/reorder it (rejects a non-member ref);
+//   - the cues, in tracklist order, must start at 0 and increase monotonically
+//     (YouTube chapter rules).
+// It backfills the DB + `/mixtapes`, but NOT the already-distributed YouTube
+// description chapters (a chapters re-push is out of scope; M2).
+export async function setMixtapeCues(id: string, input: MixtapeCueInput): Promise<MixtapeDTO> {
+  if (!Array.isArray(input.cues) || input.cues.length === 0) {
+    throw new ApiError("invalid_cues", "Provide a cue for every track", 400);
+  }
+
+  // Assert the mixtape exists (getMixtapeById throws mixtape_not_found/404) and is
+  // NON-draft — cues backfill a published/distributing set, never a draft (draft
+  // start_ms is owned by setMixtapeMembers on the draft path).
+  const mixtape = await getMixtapeById(id, { includeDrafts: true });
+
+  if (mixtape.status === "draft") {
+    throw new ApiError(
+      "mixtape_is_draft",
+      "Cues backfill a minted set — publish the mixtape first",
+      409,
+    );
+  }
+
+  // Validate each cue's shape: a non-empty `ref` (trackId) + a non-negative integer
+  // `startMs`, no duplicate refs.
+  const byRef = new Map<string, number>();
+
+  for (const raw of input.cues) {
+    const ref = typeof raw?.ref === "string" ? raw.ref.trim() : "";
+    const startMs = raw?.startMs;
+
+    if (!ref) {
+      throw new ApiError("invalid_cues", "Each cue needs a track ref", 400);
+    }
+
+    if (typeof startMs !== "number" || !Number.isInteger(startMs) || startMs < 0) {
+      throw new ApiError(
+        "invalid_start_ms",
+        "Cue timestamps must be non-negative integers (ms)",
+        400,
+      );
+    }
+
+    if (byRef.has(ref)) {
+      throw new ApiError("duplicate_cue", "A track can only carry one cue", 400);
+    }
+
+    byRef.set(ref, startMs);
+  }
+
+  // Load the current members in tracklist order. The cue set must match this member
+  // set EXACTLY — the state backstop that keeps this from altering the tracklist.
+  const db = await getDb();
+  const membersResult = await db.execute({
+    args: [id],
+    sql: `select track_id, position from mixtape_tracks where mixtape_id = ? order by position`,
+  });
+  const members = typedRows<{ position: number; track_id: string }>(membersResult.rows);
+
+  if (members.length !== byRef.size) {
+    throw new ApiError(
+      "member_set_changed",
+      "Cues must cover exactly the current tracklist (one per track)",
+      409,
+    );
+  }
+
+  // Reject any ref that isn't a current member. With equal counts + unique refs,
+  // every ref matching a member means the two sets are identical.
+  for (const ref of byRef.keys()) {
+    if (!members.some((member) => member.track_id === ref)) {
+      throw new ApiError("non_member_cue", `No current member with id ${ref}`, 400);
+    }
+  }
+
+  // Validate monotonic, start-at-0 cues along the tracklist order (YouTube chapters).
+  let previous = -1;
+
+  for (const [index, member] of members.entries()) {
+    const startMs = byRef.get(member.track_id) ?? 0;
+
+    if (index === 0 && startMs !== 0) {
+      throw new ApiError("cue_not_start_at_zero", "The first cue must start at 0 ms", 400);
+    }
+
+    if (startMs <= previous) {
+      throw new ApiError(
+        "cue_not_monotonic",
+        "Cues must increase along the tracklist (no repeats, in order)",
+        400,
+      );
+    }
+
+    previous = startMs;
+  }
+
+  // Re-time the existing members only — one UPDATE per member, plus the mixtape's
+  // updated_at bump (the cues change its public /mixtapes surface).
+  const now = new Date().toISOString();
+  await db.batch(
+    [
+      ...members.map((member) => ({
+        args: [byRef.get(member.track_id) ?? 0, id, member.track_id],
+        sql: `update mixtape_tracks set start_ms = ? where mixtape_id = ? and track_id = ?`,
+      })),
+      { args: [now, id], sql: `update mixtapes set updated_at = ? where id = ?` },
+    ],
+    "write",
+  );
+
+  return purgeMixtapeLogCache(await getMixtapeById(id, { includeDrafts: true }));
+}
+
 // Which mixtapes each of these findings sits in, keyed by trackId — one query, no
 // N+1, mirroring listSocialPostsForTracks. The board reads this for a page of
 // findings to mark what's already spoken for; a finding in no mixtape is absent.
