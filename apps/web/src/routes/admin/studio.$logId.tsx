@@ -16,7 +16,6 @@ import {
   type SetStateAction,
   useCallback,
   useEffect,
-  useId,
   useRef,
   useState,
 } from "react";
@@ -27,12 +26,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Switch } from "@/components/ui/switch";
 import { formatClock, VideoScrubber } from "@/components/mixtape-video-player";
 import { mixtapeSetVideoUrl, mixtapeStudioEnvelopeUrl } from "@/lib/media";
 import { type MixtapeDTO, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { isAdminRequest } from "@/lib/server/admin-auth";
-import { getMixtapeById } from "@/lib/server/mixtapes";
+import { getMixtapeForRender } from "@/lib/server/mixtapes";
 import { useVideoStallRecovery } from "@/lib/use-video-recovery";
 import {
   type StudioEnvelope,
@@ -68,14 +66,22 @@ const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
 });
 
 const fetchStudioMixtape = createServerFn({ method: "GET" })
-  .validator((data: { mixtapeId: string }) => data)
-  .handler(async ({ data: { mixtapeId } }): Promise<MixtapeDTO> => {
+  .validator((data: { logId: string }) => data)
+  .handler(async ({ data: { logId } }): Promise<MixtapeDTO> => {
     if (!(await isAdminRequest())) {
       throw redirect({ to: "/admin/login" });
     }
 
-    // Drafts included: pre-release backlog clipping stages a set early.
-    return getMixtapeById(mixtapeId, { includeDrafts: true });
+    // Resolve by the minted coordinate (published or mid-distribute). A draft has no
+    // logId, so the studio is only reachable for a clippable set — and the URL carries
+    // the `XXX.F.ZZ` coordinate, never the internal UUID.
+    const mixtape = await getMixtapeForRender(logId);
+
+    if (!mixtape) {
+      throw redirect({ to: "/admin/mixtapes" });
+    }
+
+    return mixtape;
   });
 
 // The set-analysis envelope is a bare R2 object on found.fluncle.com — a DIFFERENT
@@ -104,10 +110,10 @@ const fetchStudioEnvelope = createServerFn({ method: "GET" })
     }
   });
 
-export const Route = createFileRoute("/admin/studio/$mixtapeId")({
+export const Route = createFileRoute("/admin/studio/$logId")({
   beforeLoad: () => ensureAdmin(),
   component: StudioPage,
-  loader: ({ params }) => fetchStudioMixtape({ data: { mixtapeId: params.mixtapeId } }),
+  loader: ({ params }) => fetchStudioMixtape({ data: { logId: params.logId } }),
 });
 
 // An active hand-pick band, as ordered in/out fractions of the set duration.
@@ -178,7 +184,6 @@ function StudioEditor({
   );
   const framingTouched = useRef(false);
   const [clipLengthMs, setClipLengthMs] = useState<number>(DEFAULT_CLIP_LENGTH_MS);
-  const [brandFrame, setBrandFrame] = useState(true);
   const [liveMessage, setLiveMessage] = useState("");
   const [error, setError] = useAutoNotice();
   const [notice, setNotice] = useAutoNotice();
@@ -614,9 +619,7 @@ function StudioEditor({
           </span>
 
           <SettingsCog
-            brandFrame={brandFrame}
             clipLengthMs={clipLengthMs}
-            onBrandFrameChange={setBrandFrame}
             onClipLengthChange={setClipLengthMs}
             onResetFraming={resetFraming}
           />
@@ -777,20 +780,14 @@ function ClipRow({
 }
 
 function SettingsCog({
-  brandFrame,
   clipLengthMs,
-  onBrandFrameChange,
   onClipLengthChange,
   onResetFraming,
 }: {
-  brandFrame: boolean;
   clipLengthMs: number;
-  onBrandFrameChange: (next: boolean) => void;
   onClipLengthChange: (ms: number) => void;
   onResetFraming: () => void;
 }) {
-  const brandId = useId();
-
   return (
     <Popover>
       <PopoverTrigger
@@ -818,14 +815,6 @@ function SettingsCog({
           </div>
           <p className="text-xs text-muted-foreground">The window a Mark drops at the playhead.</p>
         </div>
-
-        <div className="flex items-center justify-between gap-2">
-          <Label htmlFor={brandId}>Brand frame</Label>
-          <Switch checked={brandFrame} id={brandId} onCheckedChange={onBrandFrameChange} />
-        </div>
-        <p className="-mt-2 text-xs text-muted-foreground">
-          Bakes Artist — Title + the coordinate into the cut.
-        </p>
 
         <Button className="w-full" onClick={onResetFraming} size="sm" variant="outline">
           <ArrowCounterClockwiseIcon aria-hidden="true" />

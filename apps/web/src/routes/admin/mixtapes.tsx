@@ -524,7 +524,7 @@ function MixtapeEditor({
                   <Label>Studio</Label>
                   <Button
                     nativeButton={false}
-                    render={<a href={`/admin/studio/${encodeURIComponent(mixtape.id)}`} />}
+                    render={<a href={`/admin/studio/${encodeURIComponent(mixtape.logId ?? "")}`} />}
                     size="sm"
                     variant="outline"
                   >
