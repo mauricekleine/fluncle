@@ -726,9 +726,9 @@ export const mixtapeClips = sqliteTable(
     createdAt: text("created_at").notNull(),
     id: text("id").primaryKey(),
     inMs: integer("in_ms").notNull(),
-    mixtapeId: text("mixtape_id")
-      .notNull()
-      .references(() => mixtapes.id, { onDelete: "cascade" }),
+    // Plain text id, no declared FK — matching the sibling `mixtape_tracks` /
+    // `mixtape_social_posts` (this schema declares no SQLite/libSQL FKs anywhere).
+    mixtapeId: text("mixtape_id").notNull(),
     outMs: integer("out_ms").notNull(),
     status: text("status", { enum: ["pending", "done"] })
       .notNull()

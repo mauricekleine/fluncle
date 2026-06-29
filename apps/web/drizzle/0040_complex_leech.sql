@@ -7,8 +7,7 @@ CREATE TABLE `mixtape_clips` (
 	`out_ms` integer NOT NULL,
 	`status` text DEFAULT 'pending' NOT NULL,
 	`updated_at` text NOT NULL,
-	`x_offset` integer NOT NULL,
-	FOREIGN KEY (`mixtape_id`) REFERENCES `mixtapes`(`id`) ON UPDATE no action ON DELETE cascade
+	`x_offset` integer NOT NULL
 );
 --> statement-breakpoint
 CREATE INDEX `mixtape_clips_mixtape_id_idx` ON `mixtape_clips` (`mixtape_id`);

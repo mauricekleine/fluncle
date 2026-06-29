@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "4af79a7c-be0a-4395-91d8-54808025c772",
+  "id": "1d92173e-358f-41f3-ae5d-47aa1ec19d0b",
   "prevId": "46f5ad78-efee-43c1-bd6d-8bcae68fa802",
   "tables": {
     "account": {
@@ -453,17 +453,7 @@
           "isUnique": false
         }
       },
-      "foreignKeys": {
-        "mixtape_clips_mixtape_id_mixtapes_id_fk": {
-          "name": "mixtape_clips_mixtape_id_mixtapes_id_fk",
-          "tableFrom": "mixtape_clips",
-          "tableTo": "mixtapes",
-          "columnsFrom": ["mixtape_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}
