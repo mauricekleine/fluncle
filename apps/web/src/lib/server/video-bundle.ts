@@ -3,7 +3,7 @@
 // + keys + vehicle-ledger parsing live in one place.
 //
 // footage.mp4 is the canonical web cut (its URL becomes video_url). Under the
-// two-master layout (docs/video-variants.md) it is the CLEAN square 1920×1920
+// two-master layout it is the CLEAN square 1920×1920
 // crop source, and footage.social.mp4 is the portrait baked-text social cut
 // (Stories/YouTube as-is, TikTok via audio=false MT). The audio-less variant is
 // retired: surfaces derive a silent cut on the fly via an `audio=false` Media

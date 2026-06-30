@@ -3,8 +3,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { CONTRACT_OPERATION_NAMES } from "@fluncle/contracts/orpc";
 
-// The ADMIN coverage scaffold for the oRPC migration (docs/orpc-migration-brief.md,
-// the admin section + "Definition of done"). The sibling orpc-coverage.test.ts
+// The ADMIN coverage scaffold for the oRPC migration. The sibling orpc-coverage.test.ts
 // draws the same net over the PUBLIC surface; this one extends it to ADMIN, which
 // the public net deliberately skips (it `continue`s past the `admin/` directory).
 //
@@ -43,7 +42,7 @@ const PENDING = "__pending__" as const;
 // every route maps to its canonical converted op; the PENDING sentinel is retained
 // for future admin routes (a new route lands here as PENDING until it converts).
 const ADMIN_ROUTE_OPS: Record<string, string> = {
-  // The Fluncle Studio clip ops (docs/fluncle-studio-rfc.md Unit D): clip CRUD +
+  // The Fluncle Studio clip ops: clip CRUD +
   // the hardened post-publish cue backfill. `list_clips` is admin tier
   // (agent-allowed read); the writes are operator tier.
   "DELETE /admin/clips/{clipId}": "delete_clip",
@@ -145,8 +144,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "PUT /admin/mixtapes/{mixtapeId}/members": "set_mixtape_members",
 };
 
-// Routes that stay on TanStack by design (docs/orpc-migration-brief.md
-// "Carve-outs"), keyed by their TanStack file basename (relative to the admin
+// Routes that stay on TanStack by design (carve-outs), keyed by their TanStack
+// file basename (relative to the admin
 // route dir). NOT counted against coverage — they will never have a contract —
 // but listed so the enumeration is total and a new carve-out is a deliberate edit.
 //

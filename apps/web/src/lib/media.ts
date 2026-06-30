@@ -193,7 +193,7 @@ const MEDIA_TRANSFORM_BASE = `${FOUND_BASE}/cdn-cgi/media`;
  * Cache-bust token for Media Transformations. Each rendition is edge-cached
  * keyed on its transform URL (which embeds the source master URL), so when a
  * master is overwritten in place at the same R2 key — e.g. the square-footage
- * backfill re-rendered every finding's `footage.mp4` (docs/video-variants.md) —
+ * backfill re-rendered every finding's `footage.mp4` —
  * the cached renditions keep serving the OLD master until their edge entry
  * expires. Riding this token on every transform source as `?v=N` re-keys the
  * whole catalogue's renditions in a single deploy; bump it whenever masters are
@@ -247,7 +247,7 @@ export function videoPoster(logId: string, master = "footage.mp4"): string {
   return `${MEDIA_TRANSFORM_BASE}/mode=frame,time=0s,format=jpg/${source}`;
 }
 
-// ── Two-master crops (docs/video-variants.md) ────────────────────────────────
+// ── Two-master crops ─────────────────────────────────────────────────────────
 //
 // Under the two-master layout (videoSquaredAt set), `footage.mp4` is the CLEAN
 // square 1920×1920 source master. The archive surfaces (/log, radio) never play

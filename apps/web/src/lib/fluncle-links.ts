@@ -53,7 +53,7 @@ export const chromeExtensionUrl =
 // The Tor onion: an onionspray mirror of www.fluncle.com, so it carries the
 // same archive plus the API, RSS, and MCP — off the grid, still in the Galaxy.
 // Tor Browser advertises it via the Onion-Location pill; this is the on-site
-// link kept in sameAs. Runbook: docs/tor.md.
+// link kept in sameAs.
 export const onionUrl = "http://p53pc2uzfu2tnih4cd6wd42ok6zup2uttj6xdmjdccy5kqo33fyppkqd.onion";
 
 // Third-party corroboration anchors (created 2026-06-11): the independent,

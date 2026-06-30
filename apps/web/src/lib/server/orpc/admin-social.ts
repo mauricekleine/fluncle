@@ -241,7 +241,7 @@ export function adminSocialHandlers(os: Implementer) {
           });
         }
 
-        // The PLAYABLE portrait cut both platforms push (docs/video-variants.md):
+        // The PLAYABLE portrait cut both platforms push:
         // under the two-master layout (videoSquaredAt set) that is the baked-text
         // footage.social.mp4 — footage.mp4 is the clean square crop source. A
         // legacy finding (no signal) keeps pushing footage.mp4.

@@ -10,8 +10,8 @@
 //     field written by the agent is a 403 `forbidden` (rejected, not dropped). The
 //     operator may write anything.
 //   - `observe_track` — POST /admin/tracks/{trackId}/observe. FLIPPED to the
-//     agent tier (`adminAuth` only) so the Hermes observation cron can drive it
-//     (docs/hermes-automation-brief.md Build order #3). Idempotent per finding (an
+//     agent tier (`adminAuth` only) so the Hermes observation cron can drive it.
+//     Idempotent per finding (an
 //     existing observation is a no-op). It no longer holds Firecrawl — it reads the
 //     stored `context_note` (written by `context_track`) as fuel; the voice gate
 //     still hard-fails any banned-identity-word / earthly-geography violation.
@@ -282,7 +282,7 @@ export function adminTracksHandlers(os: Implementer) {
         // default `enrichment_status = "pending"`, which is queue-eligible. The
         // on-box `fluncle-enrich` `--no-agent` cron drains the enrich-queue every
         // ~5 min, analyzes on-box (ffmpeg + bun), and writes back via
-        // `fluncle admin tracks update`. See docs/track-lifecycle.md (Phase 2).
+        // `fluncle admin tracks update`.
 
         return { ok: true as const, ...result };
       } catch (error) {
@@ -291,8 +291,7 @@ export function adminTracksHandlers(os: Implementer) {
     });
 
   // POST /admin/tracks/{trackId}/observe — agent tier (`adminAuth` only). FLIPPED
-  // from the operator tier so the Hermes observation cron drives it
-  // (docs/hermes-automation-brief.md Build order #3).
+  // from the operator tier so the Hermes observation cron drives it.
   const observeTrackHandler = os.observe_track.use(adminAuth).handler(async ({ input }) => {
     try {
       const body: ObserveBody = input;
@@ -799,7 +798,7 @@ export function adminTracksHandlers(os: Implementer) {
       // `squared` (the CLI sends it when it uploaded BOTH the square footage.mp4
       // and the portrait footage.social.mp4) flips the two-master layout on:
       // footage.mp4 is now the clean square crop source. Stamp the signal so the
-      // archive surfaces start MT-cropping this finding (docs/video-variants.md).
+      // archive surfaces start MT-cropping this finding.
       const squared = body.squared === true;
 
       // A RE-RENDER: this finding already had a `video_url` (the prior render),

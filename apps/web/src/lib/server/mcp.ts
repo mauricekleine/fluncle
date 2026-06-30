@@ -50,7 +50,7 @@ type ToolResult = {
 
 type McpTool = {
   // A deprecated alias kept in tools/list for a deprecation window. Convention B
-  // (docs/naming-conventions.md §4) renamed `get_recent_tracks` → `list_tracks`;
+  // renamed `get_recent_tracks` → `list_tracks`;
   // existing agents still calling the old name resolve to the same execute.
   deprecated?: boolean;
   description: string;

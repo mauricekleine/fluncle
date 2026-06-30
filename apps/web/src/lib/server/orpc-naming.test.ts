@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { CONTRACT_OPERATION_NAMES } from "@fluncle/contracts/orpc";
 
-// Turns the ratified `verb_noun` cross-surface naming convention
-// (docs/naming-conventions.md, "Convention B") from a review-only rule into a
-// BUILD-FAIL check. The contract registry (`@fluncle/contracts/orpc`) is the
-// source of truth for every machine-facing op name (§4), and every key in it is
+// Turns the ratified `verb_noun` cross-surface naming convention from a
+// review-only rule into a BUILD-FAIL check. The contract registry
+// (`@fluncle/contracts/orpc`) is the
+// source of truth for every machine-facing op name, and every key in it is
 // the canonical op the rest of the surfaces (CLI/API/MCP/SSH) derive from. So
 // asserting the registry keys all obey the convention enforces it everywhere a
 // name is derived from.
@@ -22,7 +22,7 @@ import { CONTRACT_OPERATION_NAMES } from "@fluncle/contracts/orpc";
 // (`enrich`), SCREAMING_CASE, and leading/trailing/double underscores.
 const VERB_NOUN_SHAPE = /^[a-z]+(?:_[a-z0-9]+)+$/;
 
-// The approved leading verbs. The convention (§3, §6) names a small closed set
+// The approved leading verbs. The convention names a small closed set
 // (`list`, `get`, `search`, `submit`, `subscribe`, `create`, `update`, `delete`,
 // `publish`) plus a named non-CRUD action set (`enrich`, `observe`, `render`,
 // `draft`, `distribute`, `backfill`, `authorize`, `finalize`). The live registry
@@ -34,7 +34,7 @@ const VERB_NOUN_SHAPE = /^[a-z]+(?:_[a-z0-9]+)+$/;
 // off-convention coinage (`fetch_track`, `grab_track`) fails here, forcing it
 // back to the registry vocabulary or a deliberate edit of this set with a reason.
 const APPROVED_VERBS = new Set<string>([
-  // The convention's closed CRUD-ish verb set (docs/naming-conventions.md §3, §6).
+  // The convention's closed CRUD-ish verb set.
   "create",
   "delete",
   "get",
@@ -44,12 +44,12 @@ const APPROVED_VERBS = new Set<string>([
   "submit",
   "subscribe",
   "update",
-  // The convention's named non-CRUD action set (§3, §6).
+  // The convention's named non-CRUD action set.
   "authorize",
   "backfill",
   // `capture` (recover the public YouTube/TikTok post URLs Postiz withholds on
   // create, building each from the platform's native content id) — added
-  // deliberately with the `capture_post_urls` sweep (docs/naming-conventions.md §6).
+  // deliberately with the `capture_post_urls` sweep.
   "capture",
   "distribute",
   "draft",
@@ -60,13 +60,13 @@ const APPROVED_VERBS = new Set<string>([
   "note",
   "observe",
   // `purge` (evict a finding's stale Cloudflare video renditions from the edge) —
-  // ratified into the action set with the `purge_video` re-render cache command
-  // (docs/naming-conventions.md §6). The sibling of `requeue` on the video lifecycle:
+  // ratified into the action set with the `purge_video` re-render cache command.
+  // The sibling of `requeue` on the video lifecycle:
   // `requeue_video` clears the render gates, `purge_video` clears the edge cache.
   "purge",
   "render",
   // `requeue` (put a finding's video back on the render queue) — ratified into the
-  // action set with the `requeue_video` re-render command (docs/naming-conventions.md §6, #148).
+  // action set with the `requeue_video` re-render command.
   "requeue",
   // Concrete actions already in the live registry the prose set doesn't spell out
   // verbatim. Adding a genuinely new verb is a deliberate edit here (with a reason),
@@ -109,7 +109,7 @@ describe("oRPC op-name naming convention (verb_noun, Convention B)", () => {
     for (const op of opNames) {
       expect(
         VERB_NOUN_SHAPE.test(op),
-        `op "${op}" is not a lowercase snake_case verb_noun (e.g. "get_track"); see docs/naming-conventions.md Convention B`,
+        `op "${op}" is not a lowercase snake_case verb_noun (e.g. "get_track")`,
       ).toBe(true);
     }
   });
@@ -120,7 +120,7 @@ describe("oRPC op-name naming convention (verb_noun, Convention B)", () => {
 
       expect(
         APPROVED_VERBS.has(verb),
-        `op "${op}" leads with the unapproved verb "${verb}" — reuse a verb from the convention's closed set (docs/naming-conventions.md §6) or add it to APPROVED_VERBS deliberately`,
+        `op "${op}" leads with the unapproved verb "${verb}" — reuse a verb from the convention's closed set or add it to APPROVED_VERBS deliberately`,
       ).toBe(true);
     }
   });

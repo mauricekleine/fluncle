@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { call } from "@orpc/server";
 import { adminProcedure, operatorProcedure } from "./orpc-auth";
 
-// The admin auth spine (docs/orpc-migration-brief.md). The contract op these
+// The admin auth spine. The contract op these
 // procedures are bound to is `get_track`, so each test attaches a trivial
 // `.handler` and invokes it with `call(...)`, exercising the middleware tier in
 // isolation from any route. The role model itself (token → operator/agent → null)

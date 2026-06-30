@@ -75,7 +75,7 @@ ${existing.posted_to_telegram ? "Posted to Telegram" : "Not posted to Telegram"}
   const artistLine = `${track.artists.join(", ")} — ${track.title}`;
   const nowIso = new Date().toISOString();
 
-  // ISRC fallback (the track-add gap, docs/ROADMAP.md): Spotify occasionally
+  // ISRC fallback (the track-add gap): Spotify occasionally
   // omits the ISRC; Deezer usually carries it. Looked up BEFORE the Log ID is
   // computed so the coordinate hashes from the recording's real identity, and
   // the Deezer enrichment below (label + preview, keyed by ISRC) works too.
@@ -129,7 +129,7 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
   // Sync enrichment: HTTP-only and best-effort (label + preview from Deezer), so
   // a miss never blocks the publish. The heavy, audio-derived fields (bpm, key,
   // video) are filled later by the async enrichment agent; the vibe placement is
-  // set by an admin in the tagging tool — see docs/track-lifecycle.md.
+  // set by an admin in the tagging tool.
   const deezer = await enrichFromDeezer(track.isrc);
 
   // Read-only Discogs release-ID enrichment (best-effort, alongside the Deezer
@@ -140,7 +140,7 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
   // `discogs.com/release/{id}` URL becomes a per-finding `sameAs`.
   // discogsResolveRelease swallows its own errors and no-ops without the token, so
   // a miss never blocks the add — same side-channel discipline as Deezer. The
-  // Deezer label feeds the labelSim signal. See docs/track-lifecycle.md.
+  // Deezer label feeds the labelSim signal.
   const discogs = await discogsResolveRelease({
     album: track.album,
     artists: track.artists,

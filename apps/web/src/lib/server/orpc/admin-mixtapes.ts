@@ -438,7 +438,7 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
-  // ── Fluncle Studio: clips + cue backfill (docs/fluncle-studio-rfc.md Unit D) ──
+  // ── Fluncle Studio: clips + cue backfill ──
 
   // GET /admin/clips — admin tier (agent-allowed read). Optional ?mixtapeId/?status.
   const listClipsHandler = os.list_clips.use(adminAuth).handler(async ({ input }) => {

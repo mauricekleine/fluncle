@@ -2,7 +2,7 @@
 // observation. A finding's `note` is its public editorial "why" — the line that
 // shows on `/log/<id>`. Today the operator writes it by hand; this is the path that
 // lets Fluncle AUTO-author it, mirroring the observation pipeline as closely as the
-// difference between heard and read allows (see docs/agents/note-agent.md).
+// difference between heard and read allows.
 //
 // Two registers, two gates:
 //   - the observation SCRIPT is SPOKEN (recovered-audio): scanned by
