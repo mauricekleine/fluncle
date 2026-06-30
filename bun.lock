@@ -226,6 +226,7 @@
       "name": "@fluncle/video",
       "version": "0.1.0",
       "dependencies": {
+        "@fluncle/contracts": "workspace:*",
         "@fluncle/tokens": "workspace:*",
         "@remotion/bundler": "~4.0.481",
         "@remotion/cli": "~4.0.481",

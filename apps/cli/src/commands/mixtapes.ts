@@ -10,6 +10,7 @@ import {
   type MixtapeUpdateResponse,
   type MixtapesResponse,
 } from "@fluncle/contracts";
+import { parseDuration } from "@fluncle/contracts/util";
 import { existsSync, readFileSync } from "node:fs";
 import {
   adminApiDelete,
@@ -351,41 +352,4 @@ function parseCueSheet(text: string): CueEntry[] {
   }
 
   return entries;
-}
-
-function parseDuration(input: string): number | null {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (trimmed.includes(":")) {
-    const parts = trimmed.split(":");
-    if (parts.length !== 2 && parts.length !== 3) {
-      return null;
-    }
-    const nums = parts.map((part) => Number(part));
-    if (nums.some((n) => !Number.isFinite(n) || n < 0)) {
-      return null;
-    }
-    if (parts.length === 3) {
-      const [hours, minutes, seconds] = nums;
-      if (hours === undefined || minutes === undefined || seconds === undefined) {
-        return null;
-      }
-      if (minutes >= 60 || seconds >= 60) {
-        return null;
-      }
-      return Math.round((hours * 3600 + minutes * 60 + seconds) * 1000);
-    }
-    const [minutes, seconds] = nums;
-    if (minutes === undefined || seconds === undefined) {
-      return null;
-    }
-    if (seconds >= 60) {
-      return null;
-    }
-    return Math.round((minutes * 60 + seconds) * 1000);
-  }
-  const value = Number(trimmed);
-  return Number.isFinite(value) && value >= 0 ? value : null;
 }

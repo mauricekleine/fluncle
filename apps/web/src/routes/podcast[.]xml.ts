@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { escapeXml } from "../lib/feed-xml";
 import { mixtapeDisplayTitle } from "../lib/mixtapes";
 import { mixtapeAudioUrl } from "../lib/media";
 import { listMixtapes } from "../lib/server/mixtapes";
@@ -151,11 +152,3 @@ ${items.join("\n")}
     },
   },
 });
-
-function escapeXml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}

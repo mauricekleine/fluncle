@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { parseLimit } from "../../lib/server/query-params";
 import { type ApiHandlers, aliasHandlers } from "./-alias";
 import { decodeTrackCursor, listTracks } from "../../lib/server/tracks";
 
@@ -10,7 +11,7 @@ const maxLimit = 48;
 export const serverHandlers: ApiHandlers = {
   GET: async ({ request }) => {
     const url = new URL(request.url);
-    const limit = parseLimit(url.searchParams.get("limit"));
+    const limit = parseLimit(url.searchParams.get("limit"), defaultLimit, maxLimit);
     const cursor = decodeTrackCursor(url.searchParams.get("cursor"));
 
     return Response.json(await listTracks({ cursor, hasVideo: true, limit }));
@@ -20,17 +21,3 @@ export const serverHandlers: ApiHandlers = {
 export const Route = createFileRoute("/api/stories")({
   server: { handlers: aliasHandlers(serverHandlers) },
 });
-
-function parseLimit(value: string | null): number {
-  if (!value) {
-    return defaultLimit;
-  }
-
-  const limit = Number.parseInt(value, 10);
-
-  if (!Number.isInteger(limit) || limit < 1) {
-    return defaultLimit;
-  }
-
-  return Math.min(limit, maxLimit);
-}
