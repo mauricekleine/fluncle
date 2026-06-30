@@ -85,7 +85,19 @@ describe("videoObjectJsonLd (the finding's video schema)", () => {
 
   it("mirrors the visible prose and dates the upload from the freshest stamp", () => {
     expect(jsonLd.description).toBe(definitionalProse(track));
-    expect(jsonLd.uploadDate).toBe("2026-06-12");
+    // A full ISO 8601 datetime WITH a timezone (Google's VideoObject requirement) —
+    // not a bare date, which trips GSC's "invalid datetime"/"missing a timezone".
+    expect(jsonLd.uploadDate).toBe("2026-06-12T09:30:00.000Z");
+  });
+
+  it("normalizes a bare-date uploadDate to a zoned datetime", () => {
+    const dateOnly = videoObjectJsonLd(track, {
+      contentUrl: "https://found.fluncle.com/004.7.2I/footage.mp4",
+      thumbnailUrl: "https://img/cover.jpg",
+      uploadDate: "2026-06-29",
+    });
+
+    expect(dateOnly.uploadDate).toBe("2026-06-29T00:00:00.000Z");
   });
 });
 
