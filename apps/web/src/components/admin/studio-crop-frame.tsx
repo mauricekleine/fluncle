@@ -2,7 +2,7 @@ import { useCallback, useRef } from "react";
 import { clampCropLeftFraction, cropWidthFraction } from "@/lib/studio-clip";
 
 // The framing rect: a draggable 9:16 portrait window over the LANDSCAPE set preview
-// (docs/fluncle-studio-rfc.md Unit E). Built on the VibeMap pointer model
+// Built on the VibeMap pointer model
 // (getBoundingClientRect + setPointerCapture + clamp), horizontal-only — the window
 // keeps the full frame height and slides left↔right. The committed value is the
 // rect's left-edge fraction; the page bakes it to an integer source-pixel `xOffset`

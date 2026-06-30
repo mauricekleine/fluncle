@@ -45,8 +45,7 @@ export function StoryView({
   // is the CLEAN square master, so Stories requests an MT centre-crop to portrait
   // off it — the same clean crop /log + radio play, sized to the pane. A legacy
   // finding (no signal) has no clean square; it keeps playing its old footage.mp4
-  // portrait+text cut (with the baked text), so un-migrated tracks are unchanged
-  // (docs/video-variants.md).
+  // portrait+text cut (with the baked text), so un-migrated tracks are unchanged.
   const squared = Boolean(track.videoSquaredAt);
   // Both layouts use footage.mp4 as the master: squared findings centre-crop it
   // to portrait; legacy findings play it as-is (its old portrait+text cut). It is

@@ -6,7 +6,7 @@ import {
   msToFraction,
 } from "@/lib/studio-clip";
 
-// The Studio editor's one quiet energy lane (docs/fluncle-studio-rfc.md Unit E): the
+// The Studio editor's one quiet energy lane: the
 // set's loudness curve under the preview, drawn in the warm-neutral ink ramp —
 // Stardust curve, Starlight-Cream played portion (NOT galaxy tints; the panel found
 // they fail AA on the dark plate). It reads the ONE clock (the video's currentMs)

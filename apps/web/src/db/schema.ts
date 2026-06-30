@@ -72,7 +72,7 @@ export const tracks = sqliteTable("tracks", {
   // master that groups a release's versions (Discogs returns it on the search hit);
   // inReleaseId is the specific release. The `discogs.com/release/{inReleaseId}` URL
   // is a per-finding `sameAs` for the track (distinct from the artist-level sameAs).
-  // Both null until a confident match writes them on add. See docs/track-lifecycle.md.
+  // Both null until a confident match writes them on add.
   inMasterId: integer("in_master_id"),
   inReleaseId: integer("in_release_id"),
   isrc: text("isrc"),
@@ -129,8 +129,8 @@ export const tracks = sqliteTable("tracks", {
   // curation/enrichment update, social-post state) bumps it. Null for rows that
   // predate the column; readers fall back to added_at (sitemap lastmod).
   updatedAt: text("updated_at"),
-  // The finding's place in vibe-space (the admin tagging map; see
-  // docs/admin-tagging.md): vibeX = Light(-1)↔Dark(+1) mood, vibeY =
+  // The finding's place in vibe-space (the admin tagging map):
+  // vibeX = Light(-1)↔Dark(+1) mood, vibeY =
   // Floaty(-1)↔Driving(+1) energy, each roughly -1..1. The quadrant is the
   // finding's galaxy (Solar/Nebular/Lunar/Deep). Null = not yet placed; the
   // operator drops it on the map. Replaces sub-genre tags as the grouping.
@@ -149,7 +149,7 @@ export const tracks = sqliteTable("tracks", {
   // we can compare model × thinking level. Defaults to "high" — the existing
   // videos were authored at high reasoning, so existing rows backfill.
   videoModelReasoning: text("video_model_reasoning").default("high"),
-  // The two-master video layout signal (see docs/video-variants.md). NON-NULL once
+  // The two-master video layout signal. NON-NULL once
   // the SQUARE crop source has been uploaded as footage.mp4 — i.e. this finding's
   // footage.mp4 is now the clean 1920×1920 master MT crops on the fly, and a baked
   // portrait footage.social.mp4 rides alongside. NULL = the legacy single-file
@@ -708,7 +708,7 @@ export const mixtapeTracks = sqliteTable(
 );
 
 // A mixtape CLIP — a lightweight 9:16 derivative cut from a mixtape's set video
-// (the Fluncle Studio drip-feed; docs/fluncle-studio-rfc.md Unit D). One set yields
+// (the Fluncle Studio drip-feed). One set yields
 // MANY clips (a backlog to drip-feed), so this is one-to-many via `mixtape_id`.
 // NOT a spine object: a clip carries NO Log ID — the spine namespace is
 // scarce/collectible, and a clip is a re-cuttable trailer, not a checkpoint.
@@ -718,7 +718,7 @@ export const mixtapeTracks = sqliteTable(
 // clean — the `fluncle://` coordinate is appended only at payload-build). `status`
 // tracks the cut queue (`pending` → `done`) AND drives the clip-library filter.
 // Distribution state lands later in a sibling `mixtape_clip_social_posts` table,
-// never `*_url` columns here (docs/fluncle-studio-rfc.md §5/§8).
+// never `*_url` columns here.
 export const mixtapeClips = sqliteTable(
   "mixtape_clips",
   {

@@ -2,7 +2,7 @@ import { earthPalette } from "./palette";
 
 // The Light-Years pass — recovered-footage grain + CRT scanlines applied over
 // the WHOLE frame every tick, never baked into a sprite (DESIGN.md's Light-Years
-// Rule, restated for the game in docs/galaxy-sprites.md). Drawn at the internal
+// Rule). Drawn at the internal
 // (logical) resolution so it upscales chunky with everything else. A few
 // precomputed noise frames cycle so the grain BOILS; reduced-motion freezes it
 // to a single still frame (the texture stays; the crawl stops).

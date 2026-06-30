@@ -8,8 +8,8 @@ export type GameTrack = {
   trackId: string;
 };
 
-// The entity spine (docs/ROADMAP.md, "The expanding frontier"; the frontier
-// RFC). Everything in the galaxy — a banger, the Roadster, a UFO, a black
+// The entity spine (the expanding frontier). Everything in the galaxy — a
+// banger, the Roadster, a UFO, a black
 // hole, an asteroid, a laser bolt — is "a thing at a world coordinate the ship
 // can be near, that may drift, that may collide." That is one shape with a
 // `kind` discriminator and a small per-kind behavior table (see sim.ts), so

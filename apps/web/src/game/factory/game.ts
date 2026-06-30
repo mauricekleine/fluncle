@@ -7,8 +7,8 @@ import { createFactorySim, type FactoryFinding } from "./sim";
 import { buildMachineSprites, makeShip } from "./sprites";
 import { LAUNCH_INDEX, STATIONS } from "./stations";
 
-// The factory engine — an ambient side-on conveyor that RENDERS TRUE STATE
-// (docs/factory-to-orbit-brief.md). A fixed logical viewport pans across a wide
+// The factory engine — an ambient side-on conveyor that RENDERS TRUE STATE.
+// A fixed logical viewport pans across a wide
 // world of machines; findings ride the belt to the furthest step they've reached,
 // pile in front of the slow render bay, and a finished finding boards a ship and
 // lifts off to the Galaxy. Execute calm (DESIGN.md): slow, dark, warm, one gold

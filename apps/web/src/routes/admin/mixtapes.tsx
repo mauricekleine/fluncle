@@ -206,7 +206,7 @@ function AdminMixtapesPage() {
       headerActions={
         <>
           {/* The cross-set clip library lives one click off here, not in the deliberately
-              minimal 3-item admin nav (Unit G IA; docs/fluncle-studio-rfc.md §8). */}
+              minimal 3-item admin nav. */}
           <Button nativeButton={false} render={<a href="/admin/clips" />} size="sm" variant="ghost">
             <FilmStripIcon aria-hidden="true" />
             <span className="hidden sm:inline">Clip library</span>

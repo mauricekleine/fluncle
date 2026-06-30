@@ -3,7 +3,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { preloadDocsPage } from "./-docs-loader";
 import { DocsPage } from "./-docs-page";
 
-// The /docs landing page — renders content/docs/index.mdx through the same
+// The /docs landing page — renders the landing `index.mdx` through the same
 // pipeline as every other doc.
 export const Route = createFileRoute("/docs/")({
   component: Page,

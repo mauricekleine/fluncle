@@ -218,8 +218,8 @@ const fetchCaption = createServerFn({ method: "GET" })
   });
 
 // Lazy context-note read — only when the operator opens a finding's Context cell to
-// view the firecrawl-derived facts that fuel its observation script. Internal fuel
-// (docs/agents/observation-agent.md), so it stays on this gated admin path and off
+// view the firecrawl-derived facts that fuel its observation script. Internal fuel,
+// so it stays on this gated admin path and off
 // the public track contract; never preloaded for the whole page.
 const fetchContextNote = createServerFn({ method: "GET" })
   .validator((data: { trackId: string }) => data)

@@ -7,7 +7,7 @@ import { earthPalette } from "./palette";
 // through `makeSprite` by the registry — so a new prop is data, never a code
 // change here.
 //
-// PNG-or-procedural contract (docs/galaxy-sprites.md): the renderer tries a
+// PNG-or-procedural contract: the renderer tries a
 // curated PNG (`/earth/<prop>.png`) first and falls back to the procedural
 // sprite until it loads (or if it 404s) — so the Gemini pipeline can polish any
 // prop later with zero code change. The look is the upscaling, not the detail.

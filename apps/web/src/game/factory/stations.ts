@@ -1,7 +1,7 @@
 // The factory's data spine — a PURE function of a finding's own public data
 // (the same fields /api/tracks already carries) → which station it sits at on
-// the belt. The factory is a RENDERER OF TRUE STATE, not a cosmetic animation
-// (docs/factory-to-orbit-brief.md): a finding's position is derived, never faked.
+// the belt. The factory is a RENDERER OF TRUE STATE, not a cosmetic animation:
+// a finding's position is derived, never faked.
 //
 // This is the finer-grained sibling of lib/server/track-stage.ts. Where the
 // admin board groups into six lifecycle stages, the factory floor has one
