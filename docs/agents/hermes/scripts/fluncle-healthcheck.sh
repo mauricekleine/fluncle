@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# fluncle-healthcheck.sh — the `fluncle-healthcheck` `--no-agent` Hermes cron's job ENTRY.
+# fluncle-healthcheck.sh — the ENTRY for `fluncle-healthcheck`, the prober behind
+# Fluncle's public /status dashboard.
 #
-# The prober behind Fluncle's public /status dashboard. Version-controlled source;
-# the repo is canonical and the box is a deploy target (fluncle-hermes-operator
-# skill). This pair deploys to the box's scripts dir and the cron is wired there.
-# See ../cron/README.md § The healthcheck cron.
+# Version-controlled source; the repo is canonical and the box is a deploy target
+# (fluncle-hermes-operator skill). This pair lives in the container at /opt/data/scripts/
+# and is TRIGGERED by a rave-02 HOST systemd timer (`docker exec … bash …/fluncle-healthcheck.sh`)
+# every ~10m — NOT a Hermes `--no-agent` gateway cron. It was moved to a host timer so
+# the prober isn't starved by the busy gateway it monitors. See the units + the one-time
+# deploy in ../healthcheck-timer/README.md.
 #
 # WHAT IT DOES: every ~10m it probes each Fluncle service (the Worker, R2, DNS, the
 # SSH app, the on-box automation crons, the scale-to-zero render box, Hermes itself),
@@ -13,10 +16,10 @@
 # spam), and POSTs the snapshot to the agent-tier `POST /api/admin/health`
 # (oRPC `record_health`) that feeds the public page.
 #
-# Why a .sh that execs a .ts: the Hermes `--no-agent --script` runner dispatches by
-# extension — bash for `.sh`/`.bash`, Python for everything else — so a bare `.ts`
-# would be fed to Python. This thin wrapper is the bash entry; all the probe + JSON
-# work lives in the bun orchestrator beside it. Its stdout is the cron's run output.
+# Why a .sh that execs a .ts: this thin bash wrapper sets up the PATH, sources the
+# probe-target env file, pins the bun interpreter, and then execs the bun orchestrator
+# beside it — where all the probe + JSON work lives. The host timer invokes this .sh
+# directly (`bash …/fluncle-healthcheck.sh`); its stdout is the tick's run output.
 #
 # PUBLIC-SAFE BY CONSTRUCTION (this repo is open source): this script carries NO
 # hostnames, IPs, ports, op:// paths, or /opt/... literals beyond the cron user's
@@ -39,18 +42,15 @@
 #                              tick so an outside service alerts if THIS box (the
 #                              prober) ever goes dark. Unset ⇒ no beacon, skipped.
 #
-# FLUNCLE_API_TOKEN (the agent-scoped token that authorizes the snapshot POST)
-# arrives via the CRON ENV — an unrecognized custom var passes Hermes' provider-cred
-# blocklist, same as the other sweeps (../cron/README.md § Operational gotchas). The
-# secrets above are all in the 0600 file because Hermes hard-blocks DISCORD_* (and
-# anything resembling a provider cred) from the cron env.
+# FLUNCLE_API_TOKEN (the agent-scoped token that authorizes the snapshot POST) is
+# already in the running container's environment (set at `docker run` from the
+# operator's --env-file), and `docker exec` inherits the container env — so the host
+# timer needs to pass only `-e HOME=/opt/data/home`. The probe targets + DISCORD_* stay
+# in the 0600 file (a public-safe-by-construction repo keeps them out of git anyway).
 #
-# Operator wires it on the box (image carries bun + the fluncle CLI + dig + nc):
-#   hermes cron create "every 10m" --no-agent --script fluncle-healthcheck.sh \
-#     --deliver local --name fluncle-healthcheck
-#
-# Confirm with `hermes cron list`; per-run output lands in
-# ~/.hermes/cron/output/{job_id}/{timestamp}.md.
+# Operator wires it as a HOST systemd timer (image carries bun + the fluncle CLI + dig +
+# nc). The units + the one-time deploy (install the .service/.timer, enable the timer,
+# and retire the old gateway cron) live in ../healthcheck-timer/README.md.
 set -euo pipefail
 
 # The Hermes cron `--no-agent --script` runner execs this with a minimal PATH that

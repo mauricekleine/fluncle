@@ -817,7 +817,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "cron",
     name: "cron.healthcheck",
     operatorNotes:
-      "every 10m. Pure probing, zero LLM tokens. POSTs to the agent-tier record_health op that /status reads.",
+      "every 10m, run by a rave-02 host systemd timer (docs/agents/hermes/healthcheck-timer/) — decoupled from the Hermes cron gateway so the prober isn't starved by the scheduler it monitors. Pure probing, zero LLM tokens. POSTs to the agent-tier record_health op that /status reads.",
     probeConfig: { cadenceMs: 10 * MINUTE_MS, cronName: "fluncle-healthcheck", kind: "cron" },
     weights: { status: "hidden" },
   },
