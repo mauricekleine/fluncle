@@ -166,7 +166,7 @@ export async function readEnvs<const T extends readonly EnvKey[]>(
   ) as Record<T[number], string>;
 }
 
-// One admin identity, two carriers (see docs/admin-tagging.md): the CLI/agent
+// One admin identity, two carriers: the CLI/agent
 // send FLUNCLE_API_TOKEN as a Bearer header (requireAdmin compares it directly);
 // the browser sends a signed grant COOKIE whose HMAC signing key is the SEPARATE
 // ADMIN_SESSION_SECRET (admin-auth.ts), never a transported value. The two
@@ -179,7 +179,7 @@ export const ADMIN_COOKIE_NAME = "fluncle_admin";
 export const ADMIN_GRANT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const OAUTH_STATE_MAX_AGE_MS = 10 * 60 * 1000;
 
-// Two admin ROLES, not one admin with carriers (see docs/agents/hermes-agent.md):
+// Two admin ROLES, not one admin with carriers:
 //   - "operator" — the human. Carried by the browser grant cookie OR the full
 //     FLUNCLE_API_TOKEN Bearer (the operator's own CLI). Can do everything.
 //   - "agent" — Hermes (and the Discord allow-list). Carried by FLUNCLE_AGENT_TOKEN.

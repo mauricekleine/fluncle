@@ -156,7 +156,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   capture_post_urls: "admin",
   collect_private_galaxy_log: "private-session",
   context_track: "admin",
-  // The Fluncle Studio clip writes (docs/fluncle-studio-rfc.md Unit D) — operator
+  // The Fluncle Studio clip writes — operator
   // tier: the agent never cuts/mints/prunes clips, so an agent token 403s.
   create_clip: "operator",
   create_edition: "admin",

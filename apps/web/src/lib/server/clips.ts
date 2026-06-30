@@ -1,5 +1,5 @@
-// The mixtape-clip data layer (Fluncle Studio Unit D; docs/fluncle-studio-rfc.md
-// §5). A clip is a lightweight 9:16 derivative cut from a mixtape's set video — many
+// The mixtape-clip data layer (Fluncle Studio). A clip is a lightweight 9:16
+// derivative cut from a mixtape's set video — many
 // per set, NOT a spine object (no Log ID). This module owns the clip CRUD the admin
 // `list_clips`/`create_clip`/`update_clip`/`delete_clip` ops are thin wrappers over;
 // the cue backfill (`setMixtapeCues`) lives in `./mixtapes` (it re-times the

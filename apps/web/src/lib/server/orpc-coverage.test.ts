@@ -3,8 +3,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { CONTRACT_OPERATION_NAMES } from "@fluncle/contracts/orpc";
 
-// Coverage scaffold for the oRPC migration (docs/orpc-migration-brief.md,
-// "Definition of done"). It enumerates the PUBLIC HTTP API routes and asserts
+// Coverage scaffold for the oRPC migration. It enumerates the PUBLIC HTTP API
+// routes and asserts
 // each is either:
 //   - CONVERTED — owned by an oRPC contract (named in the registry), or
 //   - PENDING   — on the explicit, shrinking allow-list below, awaiting the
@@ -76,8 +76,8 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   "PUT /me/galaxy-progress": "merge_private_galaxy_progress",
 };
 
-// Routes that stay on TanStack by design (docs/orpc-migration-brief.md
-// "Carve-outs"): OAuth browser-redirect callbacks, and binary/image render
+// Routes that stay on TanStack by design (carve-outs): OAuth browser-redirect
+// callbacks, and binary/image render
 // endpoints that emit non-JSON bytes. These are NOT counted against coverage —
 // they will never have a contract — but they ARE listed so the enumeration is
 // total and a new carve-out is a deliberate edit here, not an omission.

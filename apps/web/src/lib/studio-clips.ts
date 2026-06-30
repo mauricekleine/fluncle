@@ -1,5 +1,5 @@
-// The clip library's pure logic (Fluncle Studio Unit G; docs/fluncle-studio-rfc.md
-// §8). The cross-set library at `/admin/clips` browses every `mixtape_clips` row, so
+// The clip library's pure logic (Fluncle Studio). The cross-set library at
+// `/admin/clips` browses every `mixtape_clips` row, so
 // it needs two DOM-free things kept here for unit-testing (no React, no `<video>`):
 //
 //   1. The FILTER — narrow the loaded clip list by mixtape and/or status (the two

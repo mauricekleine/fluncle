@@ -1,5 +1,5 @@
-// Web admin auth — the browser carrier for the single admin identity (see
-// docs/admin-tagging.md). The operator proves who they are with "Login with
+// Web admin auth — the browser carrier for the single admin identity. The
+// operator proves who they are with "Login with
 // Spotify" (the existing Spotify app, allow-listed to one account), and we hand
 // the browser a SIGNED GRANT COOKIE: `{ role: "admin", iat }` HMAC'd with
 // FLUNCLE_API_TOKEN. The token is the signing KEY, never the cookie's value, so

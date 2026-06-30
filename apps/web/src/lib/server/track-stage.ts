@@ -4,7 +4,7 @@
 // next action is, without storing any stage column: stage is always re-derived,
 // so it can never drift from the underlying record.
 //
-// The lifecycle (docs/track-lifecycle.md): a finding is ADDED the moment it's on
+// The lifecycle: a finding is ADDED the moment it's on
 // Spotify + Telegram (the fast synchronous add); the async agent ENRICHES it
 // (audio analysis → enrichment_status "done"); the operator TAGS it on the vibe
 // map (vibe_x/vibe_y); the video agent FILMS it (video_url in R2); then it's

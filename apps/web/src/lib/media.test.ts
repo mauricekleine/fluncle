@@ -26,7 +26,7 @@ describe("videoRendition", () => {
   });
 
   it("rides the cache-bust token on the source so a re-rendered master re-keys the edge rendition", () => {
-    // docs/video-variants.md: masters are overwritten in place (the square
+    // Masters are overwritten in place (the square
     // backfill), so the transform URL must carry a version or the edge keeps
     // serving the stale rendition. Guard that the token is never silently dropped.
     expect(videoRendition("ABC123", { width: 720 })).toContain("/footage.mp4?v=");
@@ -55,7 +55,7 @@ describe("videoRendition", () => {
   });
 });
 
-// The two-master crops + audio-strip (docs/video-variants.md). The square master
+// The two-master crops + audio-strip. The square master
 // centre-crops to native-resolution portrait/landscape; TikTok strips audio off
 // the social cut via audio=false rather than a stored footage-silent.mp4.
 describe("videoCrop", () => {

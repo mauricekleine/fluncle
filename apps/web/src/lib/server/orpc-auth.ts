@@ -1,6 +1,5 @@
 // The admin auth spine for the oRPC migration — the shared middleware tier every
-// admin contract builds on (docs/orpc-migration-brief.md, "The admin auth
-// middleware"). It is a direct port of the role model in ./env.ts into oRPC
+// admin contract builds on. It is a direct port of the role model in ./env.ts into oRPC
 // middleware: no new auth semantics, just relocated so the per-handler
 // `requireAdmin` / `requireOperator` boilerplate collapses to one typed context.
 //

@@ -1,4 +1,4 @@
-// The Fluncle Studio editor's pure geometry (docs/fluncle-studio-rfc.md Unit E).
+// The Fluncle Studio editor's pure geometry.
 // Two coordinate spaces meet here, kept DOM-free so they are unit-testable on
 // synthetic inputs (no ffmpeg, no `<video>`, no React):
 //

@@ -3,7 +3,7 @@ import { type TrackUpdateResult } from "@fluncle/contracts";
 export type { TrackUpdateResult };
 
 // Generic admin track update — the write-back path for both the async enrichment
-// agent and manual operator curation (see docs/track-lifecycle.md). Writes an
+// agent and manual operator curation. Writes an
 // ALLOW-LIST of curation/enrichment fields only; identity fields (title, artists,
 // Spotify ids, Log ID) are immutable once set — isrc/logId accept a one-time
 // backfill into a null slot (the ISRC-fallback straggler repair), never a
@@ -70,7 +70,7 @@ export type TrackUpdate = {
   /** The reasoning/thinking effort the authoring model ran at (e.g. "high"). */
   videoModelReasoning?: string;
   /**
-   * The two-master layout signal (docs/video-variants.md): an ISO timestamp set
+   * The two-master layout signal: an ISO timestamp set
    * when the SQUARE crop source ships as footage.mp4. Its presence flips archive
    * surfaces to MT crops; absent, they fall back to the legacy portrait footage.
    * Empty string clears it (back to legacy). Idempotent re-ships re-stamp it.

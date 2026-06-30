@@ -12,8 +12,7 @@
 // - Instagram Reel & YouTube Short: the API carries caption + the video's own
 //   (baked-in) audio, so these post DIRECTLY (no inbox, no manual finish) per the
 //   operator's choice. We push the with-audio cut, not the silent one, and set NO
-//   custom YouTube thumbnail — the auto-picked frame reads better (docs/ROADMAP.md
-//   "YouTube thumbnails — decided: leave them"). See docs/track-lifecycle.md (Phase 3).
+//   custom YouTube thumbnail — the auto-picked frame reads better.
 //
 // The Worker owns the Postiz key; the agent/CLI never sees it.
 
@@ -483,13 +482,13 @@ export async function pushTikTokDraft(input: {
 // path. Baking the master into a Reel gets muted/removed on a business/creator
 // account, and IG's licensed library is app-only (and locked for business), so
 // it can't mirror TikTok's add-sound-in-app flow. IG presence is a manual,
-// in-app post. See docs/track-lifecycle.md (Phase 3) and the fluncle-publish skill.
+// in-app post. See the fluncle-publish skill.
 
 /**
  * Push a YouTube Short directly (public). We deliberately set NO custom
  * thumbnail: YouTube's auto-picked frame from each bespoke-shader video reads
- * better than a flat cover plate, so we keep the auto-frame (see docs/ROADMAP.md
- * "YouTube thumbnails — decided: leave them"). The push carries title + caption.
+ * better than a flat cover plate, so we keep the auto-frame. The push carries
+ * title + caption.
  */
 export async function pushYouTubeShort(input: {
   description: string;

@@ -353,14 +353,14 @@ export async function addTracksToMixtape(
 
 // A cue: a member's start offset on the set timeline, keyed by the member's TRACK
 // ID (`ref`), matching the `(mixtape_id, track_id)` unique index. The Fluncle Studio
-// cue-backfill body (docs/fluncle-studio-rfc.md §5, panel M1).
+// cue-backfill body.
 export type MixtapeCueInput = {
   cues?: Array<{ ref?: unknown; startMs?: unknown }>;
 };
 
 // Backfill a MINTED mixtape's per-track cues (`mixtape_tracks.start_ms`) — the
 // narrow, HARDENED write-path that unlocks #1's missing cues post-publish without
-// touching the frozen set/order (docs/fluncle-studio-rfc.md §5, panel M1). Unlike
+// touching the frozen set/order. Unlike
 // the draft member edits (setMixtapeMembers), this does NOT call assertDraftMixtape;
 // instead it is the inverse — it asserts the mixtape exists + is NON-draft, then
 // re-times the EXISTING members only. Its guards (each a state backstop, not handler

@@ -1034,8 +1034,7 @@ type VibePointRow = {
 /**
  * Every placed finding as a lightweight vibe-map point — the backdrop the admin
  * tagging map draws so each new placement is judged RELATIVE to the ones before
- * it. Whole-set fetch is fine at this scale; cluster it when the map gets busy
- * (docs/admin-tagging.md).
+ * it. Whole-set fetch is fine at this scale; cluster it when the map gets busy.
  */
 export async function listVibePoints(): Promise<VibePoint[]> {
   const db = await getDb();
