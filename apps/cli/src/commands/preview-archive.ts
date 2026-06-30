@@ -1,6 +1,6 @@
 import { basename } from "node:path";
+import { baseTitleMatches, stripVersionSuffix, versionMatches } from "@fluncle/contracts/util";
 import { adminApiGet, adminApiPostForm, publicApiGet } from "../api";
-import { baseTitleMatches, stripVersionSuffix, versionMatches } from "../version-match";
 import { type RecentTrack } from "./recent";
 
 // Accept a fuzzy search hit as "the same recording" only when its duration agrees

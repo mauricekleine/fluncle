@@ -26,11 +26,14 @@
 // (`z.unknown()`), so inferring them would erase the CLI's typed send shape.
 
 import { type z } from "zod";
+import { type ServiceHealthStatusSchema } from "./orpc/admin-health.js";
+import { type GalaxyProgressSchema } from "./orpc/me-galaxy.js";
 import {
   type ClipDTOSchema,
   type EditionDTOSchema,
   type MixtapeDTOSchema,
   type MixtapeSocialPostItemSchema,
+  type PublicUserSchema,
   type RadioNowPlayingSchema,
   type SocialPostItemSchema,
   type SubmissionSchema,
@@ -57,6 +60,39 @@ export type ApiFailure = {
 
 /** The four vibe-map galaxies (the admin tagging quadrants). The web keeps the runtime `GALAXIES` map + `GalaxyMeta`. */
 export type Galaxy = "astral" | "lunar" | "nebular" | "solar";
+
+// ── Me (the private user tier) ───────────────────────────────────────────────
+
+/**
+ * A signed-in public user as the `/me` private tier returns it. Inferred from
+ * `PublicUserSchema` (./orpc/_shared.ts) — the cookie-session identity, distinct
+ * from the admin grant. `username`/`displayUsername` are absent until claimed.
+ */
+export type PublicUser = z.infer<typeof PublicUserSchema>;
+
+/**
+ * `GET /me` (`get_current_private_user`): `{ ok: true, user }` where `user` is the
+ * signed-in `PublicUser` or `null` when there is no session. The hand-written
+ * envelope over the inferred `PublicUser`, matching `getCurrentPrivateUser.output`.
+ */
+export type MeResponse = Ok<{ user: PublicUser | null }>;
+
+/**
+ * A user's Galaxy progress (the game's cross-device save) as
+ * `GET/PUT /me/galaxy-progress` returns it. Inferred from `GalaxyProgressSchema`
+ * (./orpc/me-galaxy.ts); carries its own `ok: true` (the live helper's object is
+ * returned verbatim). `lastPlayedAt`/`updatedAt` are absent until the first play.
+ */
+export type GalaxyProgress = z.infer<typeof GalaxyProgressSchema>;
+
+// ── Service health (the public /status dashboard) ────────────────────────────
+
+/**
+ * The three-state service-health enum the status surfaces emit. Inferred from
+ * `ServiceHealthStatusSchema` (./orpc/admin-health.ts), the `admin-health`
+ * contract's shared enum.
+ */
+export type ServiceHealthStatus = z.infer<typeof ServiceHealthStatusSchema>;
 
 // ── Track ────────────────────────────────────────────────────────────────────
 

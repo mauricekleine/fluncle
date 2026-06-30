@@ -3,6 +3,7 @@ import { type ApiHandlers, aliasHandlers } from "../-alias";
 import { backfillLastfmLoves } from "../../../lib/server/backfill";
 import { requireOperator } from "../../../lib/server/env";
 import { apiErrorResponse } from "../../../lib/server/http-errors";
+import { parseBool, parseLimit } from "../../../lib/server/query-params";
 
 // POST /api/admin/backfill/lastfm — back-fill Last.fm `track.love` over published
 // findings (a Loved Track = an endorsement, never a scrobble).
@@ -23,24 +24,6 @@ import { apiErrorResponse } from "../../../lib/server/http-errors";
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 500;
 
-function parseLimit(value: string | null): number {
-  if (!value) {
-    return DEFAULT_LIMIT;
-  }
-
-  const limit = Number.parseInt(value, 10);
-
-  if (!Number.isInteger(limit) || limit < 1) {
-    return DEFAULT_LIMIT;
-  }
-
-  return Math.min(limit, MAX_LIMIT);
-}
-
-function parseBool(value: string | null): boolean {
-  return value === "1" || value === "true";
-}
-
 export const serverHandlers: ApiHandlers = {
   POST: async ({ request }) => {
     const unauthorized = await requireOperator(request);
@@ -52,7 +35,7 @@ export const serverHandlers: ApiHandlers = {
     try {
       const url = new URL(request.url);
       const result = await backfillLastfmLoves(
-        parseLimit(url.searchParams.get("limit")),
+        parseLimit(url.searchParams.get("limit"), DEFAULT_LIMIT, MAX_LIMIT),
         parseBool(url.searchParams.get("dryRun")),
         url.searchParams.get("cursor") ?? undefined,
       );

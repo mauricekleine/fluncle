@@ -44,8 +44,7 @@ import {
   updateSocialStatus,
   upsertPost,
 } from "../social";
-import { getTrackByIdOrLogId } from "../tracks";
-import { apiFault, parseLimit, type Implementer } from "./_shared";
+import { apiFault, parseLimit, requireTrack, type Implementer } from "./_shared";
 
 // Ported verbatim from the live draft route. TikTok is the SELF_ONLY inbox draft
 // (agent-allowed); YouTube is the direct PUBLIC upload (operator only).
@@ -72,15 +71,7 @@ export function adminSocialHandlers(os: Implementer) {
   const listTrackSocialHandler = os.list_track_social.use(adminAuth).handler(async ({ input }) => {
     try {
       const idOrLogId = input.trackId;
-      const track = await getTrackByIdOrLogId(idOrLogId);
-
-      if (!track) {
-        throw new ORPCError("NOT_FOUND", {
-          data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
-          message: `No track with id ${idOrLogId}`,
-          status: 404,
-        });
-      }
+      const track = await requireTrack(idOrLogId);
 
       const posts = await listSocialPosts(track.trackId);
 
@@ -131,15 +122,7 @@ export function adminSocialHandlers(os: Implementer) {
           update.scheduledFor = body.scheduledFor;
         }
 
-        const track = await getTrackByIdOrLogId(idOrLogId);
-
-        if (!track) {
-          throw new ORPCError("NOT_FOUND", {
-            data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
-            message: `No track with id ${idOrLogId}`,
-            status: 404,
-          });
-        }
+        const track = await requireTrack(idOrLogId);
 
         const updated = await updateSocialStatus(track.trackId, platform, update);
 
@@ -208,15 +191,7 @@ export function adminSocialHandlers(os: Implementer) {
           });
         }
 
-        const track = await getTrackByIdOrLogId(idOrLogId);
-
-        if (!track) {
-          throw new ORPCError("NOT_FOUND", {
-            data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
-            message: `No track with id ${idOrLogId}`,
-            status: 404,
-          });
-        }
+        const track = await requireTrack(idOrLogId);
 
         if (!track.logId) {
           throw new ORPCError("BAD_REQUEST", {

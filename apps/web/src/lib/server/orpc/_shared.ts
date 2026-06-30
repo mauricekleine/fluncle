@@ -6,6 +6,7 @@
 import { contract } from "@fluncle/contracts/orpc";
 import { type implement, ORPCError } from "@orpc/server";
 import { type OrpcContext } from "../orpc-auth";
+import { type TrackListItem, getTrackByIdOrLogId } from "../tracks";
 import { ApiError } from "../spotify";
 
 /**
@@ -16,26 +17,29 @@ import { ApiError } from "../spotify";
  */
 export type Implementer = ReturnType<typeof implement<typeof contract, OrpcContext>>;
 
+// The tolerant `limit`/`dryRun` query coercion the live routes used. One definition
+// in `../query-params`; re-exported here so the oRPC handlers keep importing their
+// rails helpers from `./_shared`.
+export { parseBool, parseLimit } from "../query-params";
+
 /**
- * Parse + clamp an incoming `limit` query param exactly as the live routes did: a
- * missing, non-integer, or `< 1` value degrades to `fallback`; otherwise it is
- * capped at `max`. The contracts keep `limit` a raw string (coercion would 400 on
- * `?limit=abc`), so this reproduces the legacy tolerance. One copy for every handler
- * (tracks/stories list, the admin board, the enrich sweep) — each passes its own
- * DEFAULT/MAX so the bounds stay where they read.
+ * Fetch a track by id or Log ID, or throw the canonical NOT_FOUND fault. The single
+ * source of the `not_found` / "No track with id …" 404 that the admin track/social
+ * handlers raised inline; the wire body (apiCode/apiMessage/status) is preserved
+ * byte-for-byte (the contract-coverage tests pin it).
  */
-export function parseLimit(value: string | undefined, fallback: number, max: number): number {
-  if (!value) {
-    return fallback;
+export async function requireTrack(idOrLogId: string): Promise<TrackListItem> {
+  const track = await getTrackByIdOrLogId(idOrLogId);
+
+  if (!track) {
+    throw new ORPCError("NOT_FOUND", {
+      data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
+      message: `No track with id ${idOrLogId}`,
+      status: 404,
+    });
   }
 
-  const limit = Number.parseInt(value, 10);
-
-  if (!Number.isInteger(limit) || limit < 1) {
-    return fallback;
-  }
-
-  return Math.min(limit, max);
+  return track;
 }
 
 // ── Error wire-shape parity (the fault converter half) ───────────────────────

@@ -1,25 +1,12 @@
+import { type GalaxyProgress, type MeResponse, type PublicUser } from "@fluncle/contracts";
 import { userApiGet } from "../api";
 
 // `fluncle me` — the authed read that proves the login worked. It presents the
 // USER session token (stored by `fluncle login`) as a Bearer header and reads the
 // signed-in user's own account: their identity + their Galaxy lifetime markers.
-// This is a USER-tier read; it never touches the admin API.
-
-type MeResponse = {
-  ok: true;
-  user: null | {
-    createdAt: string;
-    displayUsername?: string;
-    id: string;
-    username?: string;
-  };
-};
-
-type GalaxyProgress = {
-  collectedLogIds: string[];
-  deaths: number;
-  wins: number;
-};
+// This is a USER-tier read; it never touches the admin API. The wire shapes
+// (`MeResponse`, `GalaxyProgress`, the signed-in `PublicUser`) are the single
+// source of truth in `@fluncle/contracts`, so this thin client can't drift.
 
 export type Me = {
   collectedCount: number;
@@ -42,12 +29,14 @@ export async function meCommand(): Promise<Me> {
     throw new Error("Your sign-in expired. Run `fluncle login` to link this device again.");
   }
 
+  const user: PublicUser = me.user;
+
   return {
     collectedCount: progress.collectedLogIds.length,
     deaths: progress.deaths,
-    joinedAt: me.user.createdAt,
-    name: me.user.displayUsername ?? me.user.username ?? "cosmonaut",
-    userId: me.user.id,
+    joinedAt: user.createdAt,
+    name: user.displayUsername ?? user.username ?? "cosmonaut",
+    userId: user.id,
     wins: progress.wins,
   };
 }

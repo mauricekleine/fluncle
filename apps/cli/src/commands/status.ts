@@ -1,12 +1,11 @@
+import { type ServiceHealthStatus } from "@fluncle/contracts";
 import { liveSurfaces } from "@fluncle/registry";
 import { publicApiGet } from "../api";
 
-// The three-state service health enum the /api/status endpoint emits. It mirrors
-// the server's `ServiceHealthStatusSchema` (the `admin-health` contract), which
-// is not re-exported from the contracts package root; the CLI is a thin client,
-// so this small union is declared at the wire boundary like the rest of the
-// /api/status shape below.
-export type ServiceHealthStatus = "degraded" | "down" | "ok";
+// The three-state service-health enum the /api/status endpoint emits is the
+// `admin-health` contract's `ServiceHealthStatus` (single source of truth in
+// `@fluncle/contracts`). The rest of the /api/status shape below is a non-oRPC
+// resource read (carved out of the contract-coverage net), so it is mirrored here.
 
 // One service row as the public /api/status endpoint emits it. This is the
 // machine-readable sibling of the /status HTML dashboard — a non-oRPC resource

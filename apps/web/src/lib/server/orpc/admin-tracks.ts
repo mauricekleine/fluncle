@@ -50,13 +50,12 @@ import {
   type EnrichmentStatusFilter,
   ENRICHMENT_STATUS_FILTERS,
   decodeTrackCursor,
-  getTrackByIdOrLogId,
   getTrackContextNote,
   listTracks,
   searchTracks,
 } from "../tracks";
 import { type VideoArtifact, artifactByField } from "../video-bundle";
-import { apiFault, type Implementer, parseLimit } from "./_shared";
+import { apiFault, type Implementer, parseLimit, requireTrack } from "./_shared";
 
 // Fields only the operator may write: editorial voice (note), the vehicle/video
 // (videoUrl), the map placement (vibeX/vibeY), and the immutable identity fields
@@ -296,15 +295,7 @@ export function adminTracksHandlers(os: Implementer) {
     try {
       const body: ObserveBody = input;
       const idOrLogId = body.trackId;
-      const track = await getTrackByIdOrLogId(idOrLogId);
-
-      if (!track) {
-        throw new ORPCError("NOT_FOUND", {
-          data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
-          message: `No track with id ${idOrLogId}`,
-          status: 404,
-        });
-      }
+      const track = await requireTrack(idOrLogId);
 
       if (!track.logId) {
         throw new ORPCError("BAD_REQUEST", {
@@ -472,15 +463,7 @@ export function adminTracksHandlers(os: Implementer) {
   const contextTrackHandler = os.context_track.use(adminAuth).handler(async ({ input }) => {
     try {
       const idOrLogId = input.trackId;
-      const track = await getTrackByIdOrLogId(idOrLogId);
-
-      if (!track) {
-        throw new ORPCError("NOT_FOUND", {
-          data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
-          message: `No track with id ${idOrLogId}`,
-          status: 404,
-        });
-      }
+      const track = await requireTrack(idOrLogId);
 
       if (!track.logId) {
         throw new ORPCError("BAD_REQUEST", {
@@ -577,15 +560,7 @@ export function adminTracksHandlers(os: Implementer) {
     try {
       const body: NoteBody = input;
       const idOrLogId = body.trackId;
-      const track = await getTrackByIdOrLogId(idOrLogId);
-
-      if (!track) {
-        throw new ORPCError("NOT_FOUND", {
-          data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
-          message: `No track with id ${idOrLogId}`,
-          status: 404,
-        });
-      }
+      const track = await requireTrack(idOrLogId);
 
       if (!track.logId) {
         throw new ORPCError("BAD_REQUEST", {
@@ -647,15 +622,7 @@ export function adminTracksHandlers(os: Implementer) {
     .handler(async ({ input }) => {
       try {
         const idOrLogId = input.trackId;
-        const track = await getTrackByIdOrLogId(idOrLogId);
-
-        if (!track) {
-          throw new ORPCError("NOT_FOUND", {
-            data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
-            message: `No track with id ${idOrLogId}`,
-            status: 404,
-          });
-        }
+        const track = await requireTrack(idOrLogId);
 
         if (!track.logId) {
           throw new ORPCError("BAD_REQUEST", {
@@ -755,15 +722,7 @@ export function adminTracksHandlers(os: Implementer) {
     try {
       const body: AdminTrackInputs["finalize_track_video"] = input;
       const idOrLogId = body.trackId;
-      const track = await getTrackByIdOrLogId(idOrLogId);
-
-      if (!track) {
-        throw new ORPCError("NOT_FOUND", {
-          data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
-          message: `No track with id ${idOrLogId}`,
-          status: 404,
-        });
-      }
+      const track = await requireTrack(idOrLogId);
 
       if (!track.logId) {
         throw new ORPCError("BAD_REQUEST", {
@@ -854,15 +813,7 @@ export function adminTracksHandlers(os: Implementer) {
     .handler(async ({ input }) => {
       try {
         const idOrLogId = input.trackId;
-        const track = await getTrackByIdOrLogId(idOrLogId);
-
-        if (!track) {
-          throw new ORPCError("NOT_FOUND", {
-            data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
-            message: `No track with id ${idOrLogId}`,
-            status: 404,
-          });
-        }
+        const track = await requireTrack(idOrLogId);
 
         if (!track.logId) {
           throw new ORPCError("BAD_REQUEST", {
@@ -910,15 +861,7 @@ export function adminTracksHandlers(os: Implementer) {
     .handler(async ({ input }) => {
       try {
         const idOrLogId = input.trackId;
-        const track = await getTrackByIdOrLogId(idOrLogId);
-
-        if (!track) {
-          throw new ORPCError("NOT_FOUND", {
-            data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
-            message: `No track with id ${idOrLogId}`,
-            status: 404,
-          });
-        }
+        const track = await requireTrack(idOrLogId);
 
         if (!track.logId) {
           throw new ORPCError("BAD_REQUEST", {
