@@ -110,8 +110,8 @@ bun is baked into the image, declared as the repo's `packageManager`, and reques
 - **Marker:** `curl -fsSL https://box.ascii.dev/install` (the comment says `box.ascii is pre-1.0 and its installer offers no version pin … this is the one image dependency not version-pinned … Re-verify the conductor after a base rebuild.`)
 - **Current pin:** **none.** The installer tracks the `ascii-prod` channel and the CLI self-updates. There is no version to read and nothing to bump.
 - **Check latest:** N/A — not pinnable. Do not try to pin it; that is by design.
-- **Action on a sweep:** there is **no bump**. The only maintenance is to **re-verify the render conductor after a rebuild** (a `box status` → authed, then a conductor dry-run) — which the on-box pin-watch post-smoke already does whenever it rebuilds for another baked pin. If a sweep finds nothing else to do, box.ascii contributes a one-line "unpinnable, re-verify post-rebuild" note and nothing more.
-- **Safety:** always **brake** in the sense that the routine never bumps it. The pin-watch post-smoke re-verifies the conductor as part of any rebuild it does; the routine itself never SSHes to the box to do so.
+- **Action on a sweep:** there is **no bump**. The only maintenance is to **re-verify the render conductor after a rebuild** (a `box status` → authed, then a conductor dry-run) — which is operator / `fluncle-healthcheck` work, NOT something the pin-watch post-swap smoke does (that smoke is only `fluncle version` + container-running). If a sweep finds nothing else to do, box.ascii contributes a one-line "unpinnable, re-verify post-rebuild" note and nothing more.
+- **Safety:** always **brake** in the sense that the routine never bumps it. Re-verifying the conductor is operator / healthcheck-side; the routine itself never SSHes to the box to do so.
 
 ---
 

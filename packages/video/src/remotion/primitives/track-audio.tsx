@@ -11,8 +11,9 @@ import { type CosmosAudio } from "../types";
 //
 // It starts at the analysed clip window (`audio.startMs`) so picture and sound
 // share the same beat grid, and plays for the whole composition (durationInFrames
-// is the clip length). The `ship` step separately strips audio for the
-// `footage-silent.mp4` TikTok cut; the review `footage.mp4` keeps this sound.
+// is the clip length). Under the two-master model both shipped cuts keep this
+// audio (`footage.social.mp4` + the square `footage.mp4`); TikTok's silent cut is
+// derived on the fly by an `audio=false` Media Transformation, not a stored file.
 export const TrackAudio: React.FC<{ audio: CosmosAudio }> = ({ audio }) => {
   const { fps } = useVideoConfig();
   return (

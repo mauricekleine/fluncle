@@ -50,7 +50,7 @@ A mixtape slips **quietly into the existing track surfaces** (the feed, `recent`
 - **Web** — a `/mixtapes` index (the mixtape archive, newest first).
 - **API** — `/api/mixtapes` (mixtapes as JSON).
 - **CLI** — `fluncle mixtapes`.
-- **SSH** — a mixtapes view in the rave terminal (still a future surface).
+- **SSH** — a mixtapes view in the rave terminal (`screenMixtapes` / `screenMixtapeDetail` / `fetchMixtapes` in `apps/ssh/main.go`).
 
 ## Mixtape-aware for machines (SEO / AEO)
 
@@ -65,7 +65,7 @@ Crawlers, bots, and AI answer engines must read a mixtape **as a DJ mixtape**, n
 - **Mixcloud — primary home.** Properly licensed (direct deals with the majors + indies like Ninja Tune / XL via Merlin): it plays legally and pays the featured artists, within the Featured-Artist / SRPC limits. Two failure tiers to stay clear of: exceeding the consecutive rule (≤ 3 per artist consecutive, ≤ 2 per release consecutive) makes the show **regionally unavailable**; **4–8 tracks from one artist makes the whole show Premium / subscriber-only globally** (a hard paywall). The curator waiver doesn't apply. Trivial for a varied D&B set — observe, don't pre-lint; if a show ever gets gated it's visible on Mixcloud and fixable by hand (audio can't be swapped — delete + re-upload). Upload is **CLI-direct** (the Worker can't proxy a multi-GB master) but the **token is server-side** (`mixcloud_auth`); the CLI fetches it just-in-time. One length caveat: a **full-length mixtape is a licensed _show_**, but a **short single clip is classified as an unlicensed _track_ and copyright-blocked** — so test with real-length audio, not a short clip.
 - **YouTube — reach mirror.** Content ID claims it: the video stays up but the labels monetize it. Good for reach, not revenue. The **mixtape video** lives here, uploaded via `youtube_auth` — published unlisted, flipped public by the operator.
 - **SoundCloud — secondary mirror.** Patchier (takedown risk). Profile presence is a separate roadmap item; hosting actual audio there is the licensing-gated question.
-- **Teaser clips.** Short clips cut from the set go to the social surfaces (TikTok / Shorts / IG) the same way a finding's clip does — the clip is a trailer, captioned with the mixtape's `fluncle://<id>` coordinate. (Clip-of-a-mixtape has no pipeline yet; see Open questions.)
+- **Teaser clips.** Short clips cut from the set go to the social surfaces (TikTok / Shorts / IG) the same way a finding's clip does — the clip is a trailer, captioned with the mixtape's `fluncle://<id>` coordinate. The Fluncle Studio clip pipeline cuts them from the set master on R2 (`mixtape_clips`, `fluncle admin clips list|cut`, `/admin/studio/$logId` + `/admin/clips`, the `fluncle-studio-clip` cron; see `docs/fluncle-studio.md`).
 
 ## Titles + covers
 
@@ -109,7 +109,7 @@ Where a mixtape lands and what each surface renders (all built):
 | API                    | `/api/tracks/<id>` | mixtape-typed payload (members, external URLs, duration); `/api/mixtapes` index                          |
 | RSS                    | observation entry  | a flagged **mixtape** entry in the feed                                                                  |
 | MCP                    | list/random/search | the mixtape reachable as the same typed object                                                           |
-| SSH                    | the rave terminal  | a checkpoint + a mixtapes view (the view is still future)                                                |
+| SSH                    | the rave terminal  | a checkpoint + a mixtapes view (`screenMixtapes` / `screenMixtapeDetail`)                                |
 | Machines               | `MusicRecording`   | `MusicAlbum` / `DJMixAlbum` schema, RSS category, llms.txt Mixtapes section                              |
 | MusicBrainz / Wikidata | artist anchors     | the DJ-mix release → the Wikidata fact                                                                   |
 
@@ -122,8 +122,6 @@ A mixtape sits at its sector, which the Galaxy game maps to a distance from Eart
 The internal plumbing and the external distribution chain are **shipped**. Remaining follow-ups (also tracked in `docs/ROADMAP.md` → _Fluncle's own mixtapes_):
 
 - **Member tracks that aren't findings yet:** add them as findings first, or allow non-finding members in a mixtape's tracklist.
-- **SSH mixtapes view:** the web/API/CLI/MCP front doors exist; the rave terminal view is still future.
-- **Clip-of-a-mixtape pipeline:** how teaser clips get cut, captioned, and pushed.
 - **Per-track cue offsets:** Rekordbox load times can't supply them (see Tracklist); if wanted, capture them against the final video.
 
 ## Cross-links

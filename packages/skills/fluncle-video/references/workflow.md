@@ -43,7 +43,7 @@ Create your composition at `packages/video/src/remotion/workbench/<CompId>.tsx`.
 - Honor the quad law (doctrine 6): every `ShaderLayer` drives color AND alpha to 0.0 inside its quad. Motion law (doctrine 7) for any background/field you author yourself (a star drift, motes — the core ships no Starfield): a smooth baseline drift that audio may bend only through smoothed envelopes, never a raw-beat snap.
 - Render the facts through `TypePlate` (doctrine 4): one drop-in, fixed homes, prescriptive timing — pass scene-derived `ink`/`dimInk`, and nudge `identityInSec`/`telemetryInSec` onto a musical seam if the intro asks. Never hand-place the facts with raw `FloatingType`.
 - End with `CloseCard`, driven by the journey's `"arrive"` phase — it owns its lower-left home; pass it the scene `palette` for ink + emphasis accent.
-- **Play the audio (MANDATORY):** drop `<TrackAudio audio={audio} />` in once. The hooks drive only the VISUALS; this is what makes the render carry SOUND. Omit it and the cut is silent (the render fails on a silence check). `ship` strips audio separately for the `footage-silent.mp4` TikTok cut — your review `footage.mp4` keeps it.
+- **Play the audio (MANDATORY):** drop `<TrackAudio audio={audio} />` in once. The hooks drive only the VISUALS; this is what makes the render carry SOUND. Omit it and the cut is silent (the render fails on a silence check). `ship` keeps audio in both masters; TikTok's silent cut is derived on the fly by an `audio=false` Media Transformation, not stored.
 - **Determinism:** remotion `random(seed)` and frame-derived values only. Never `Math.random` / `Date.now` / `new Date()`. Audio reactivity only through the hooks.
 - **Reactivity bus:** prefer `useAudioReactivity` and pass its `uniforms` into `ShaderLayer` (or pass `onsets`/`reactivity` directly to `ShaderLayer` for built-in `u_audio*` uniforms). Map those uniforms to material disturbance — width, density, threshold, radius, warp amplitude, wall sharpness, refraction, grain, dither, glow — and route the fast bands (`u_bassFast`/`u_midFast`/`u_trebleFast`, `u_audioHit`, `u_onsetPulse`) onto in-place STRUCTURAL deformation as sharply as the music hits (the gate-safe binding idiom). Keep GLOBAL translation (travel, flow, convergence) an audio-free constant clock — `u_time` / `arc` / a steady eased rise — by default; if audio must bend it at all, only the smoothed envelopes (`u_audioSwell` / `u_audioDrop` / `u_energy`) with a small coefficient over a dominant constant base, never the raw per-beat transient (doctrine 7).
 - Open the file with a header comment that states, at minimum: the track and label, the **vehicle** (so the next agent's diversity check works), the texture family, and the two-sentence concept. Keep it useful as future rerender context because this exact file is shipped as `composition.tsx`.
@@ -94,18 +94,20 @@ It measures the clip's short-lag motion reversal — whether the picture jumps t
 Once the render passes its gates, package the bundle and link it to the track. All local; the operator runs it.
 
 1. **Package** — `bun run --cwd packages/video ship <trackId|log-id> --vehicle "<your vehicle>" --grain "<your grain family>"` builds `out/<log-id>/` (the `--vehicle` and `--grain` tags, e.g. `"caustic web"` / `"grainCoarseSilver"`, land in `render.json` and become the track's diversity-ledger entries on upload):
-   - `footage.mp4` — with audio; the public/web cut (becomes `video_url`) + your QA pass
-   - `footage-silent.mp4` — audio-less remux (`ffmpeg -c copy -an`); the cut you upload to TikTok and attach the official sound to by hand (keeps licensing inside TikTok)
+   - `footage.mp4` — square 1920×1920, with audio, CLEAN (no overlay); the crop-source master the Media Transformations derive every other orientation from (never a feed cut itself)
+   - `footage.social.mp4` — portrait 1080×1920, with audio, BAKED TEXT; the playable social cut (becomes `video_url`, plays on Stories + YouTube as-is, TikTok via an `audio=false` MT) + your QA pass
    - `poster.jpg` — a ~80% drop frame
-   - `note.txt` — the fixed-template caption that accompanies the footage: `Artist — Title (Year)` / Label / `Found <date>: fluncle://<log-id>` / `#dnb #drumnbass #drumandbass` + sub-genre tags (lowercased, deduped)
+   - `cover.jpg` — the profile-grid cover: loud centered identity over the art
+   - `note.txt` — the fixed-template caption that accompanies the footage: `Artist — Title (Year)` / Label / `Found <date>: fluncle://<log-id>` / `#dnb #drumnbass #drumandbass`
    - `composition.tsx` — the exact Remotion source used for the render (copied from `workbench/<CompId>.tsx`)
    - `props.json` — analyzed audio curves, beat grid, palette, and track props
+   - `intent.json` — the render-intent contract (`fluncle.render-intent/1`): vehicle, texture family, reactivity bindings (a missing intent is warn-and-stub)
    - `render.json` — composition id, rerender pointers, and the `vehicle` + `grain` tags (the diversity-ledger entries, read by the upload step into `video_vehicle` / `video_grain`)
 
    The track MUST have a Log ID (no Log ID → no ship; backfill the ISRC first). Requires an existing render (`out/<trackId>.mp4`) — run step 7 first.
 
 2. **Upload + link** — `fluncle admin tracks video <log-id> --dir packages/video/out/<log-id>` uploads the bundle to R2 under `<log-id>/` (served at `found.fluncle.com`) and sets the track's `video_url` to the review cut. The Worker owns R2; you never hold R2 credentials.
-3. **Post (manual)** — grab `footage-silent.mp4`, upload to TikTok, attach the official sound, paste `note.txt`, post. Auto-draft is deferred.
+3. **Post (manual)** — the publish step pushes `footage.social.mp4` (TikTok gets it silenced via an `audio=false` MT); the operator attaches the official sound in-app, pastes `note.txt`, and posts. See the `fluncle-publish` skill.
 
 No cleanup step: the composition lives in the gitignored `workbench/` and `root.tsx` was never edited, so there is nothing to remove and nothing can leak into a commit. The durable copy is the R2 bundle; the local `workbench/` file and `out/` render are disposable scratch (an ephemeral agent VM discards them; a fresh agent starts clean from source).
 
@@ -126,7 +128,7 @@ The operator reviews the MP4, runs the ship step, and posts; you never auto-publ
 ## Safety rails (also in SKILL.md; they survive even if the rest is skipped)
 
 - One video per run. The render is local; the only thing that leaves the machine is the operator-run ship step (the bundle → R2 via the admin endpoint, linked as `video_url`). No auto-publish to TikTok or any social platform — that stays manual.
-- Preview audio comes only from the pipeline's resolver (Deezer/iTunes). Never source audio from YouTube or rip full tracks. The `footage-silent.mp4` cut you ship is audio-less by design.
+- Preview audio comes only from the pipeline's resolver (Deezer/iTunes). Never source audio from YouTube or rip full tracks. Both shipped masters carry audio; TikTok's silent cut is derived on the fly by an `audio=false` Media Transformation, never a stored audio-less file.
 - The constants are not yours to restyle: if your concept fights the grammar, change the concept.
 - Every word on screen and in the caption passes VOICE.md; every fact on screen has a source; the track metadata needs none.
 - Do not commit, push, or delete anything; your artifacts are the MP4 bundle, the linked `video_url`, and your report.

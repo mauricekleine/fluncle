@@ -29,24 +29,24 @@
       "computedHash": "0cff66229c8b123db7cb1ee964735100b7ed3f8dffda99599775969419501ce7"
     },
     "fluncle-goal-writer": {
-      "source": "/Users/maurice/Projects/fluncle/packages/skills/goal-writer",
+      "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/goal-writer",
       "sourceType": "local",
-      "computedHash": "ab3290ff51f3a3fdf0a9ce690da460f45090664bca4b93987814a4502cf0b8f4"
+      "computedHash": "ca57c2cd6ff63e354232d718f6cf1c0bb9aa9c8a3f0a7dba6cbcfdc1884ca7e0"
     },
     "fluncle-hermes-operator": {
-      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-hermes-operator",
+      "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/fluncle-hermes-operator",
       "sourceType": "local",
-      "computedHash": "56640a659f2a55545598b73518db6a759eab5870e10a809e3f7fd11093fb425e"
+      "computedHash": "084e6077d6fbb4554cf5a0094ffe41b3d30d359b02f67a232553c5453f83e229"
     },
     "fluncle-maintenance": {
-      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-maintenance",
+      "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/fluncle-maintenance",
       "sourceType": "local",
-      "computedHash": "1edcf414abcf9482c21308c7547bd410178483ca1b07df3f2f0b02ccfe811701"
+      "computedHash": "2eb25c26a11e6a8bd4c954f9426654583304a890227813954c299b0dd2099b27"
     },
     "fluncle-mixtapes": {
-      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-mixtapes",
+      "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/fluncle-mixtapes",
       "sourceType": "local",
-      "computedHash": "a860a3e46ddcebf1f2de55e3ff699a8e63908db5aba2ef280724e86c42c7c723"
+      "computedHash": "1e56082b649fbfd2cb23fe9a1500ef65e989f11f45d4f6d17c249e5045c66ddc"
     },
     "fluncle-operator": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-operator",
@@ -54,9 +54,9 @@
       "computedHash": "8b4074a2ba5811bdb62e6e02510a2f92c7db9b7bcebfe398f65bfad620ced483"
     },
     "fluncle-publish": {
-      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-publish",
+      "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/fluncle-publish",
       "sourceType": "local",
-      "computedHash": "0782df2411af5e76666e242b16d15df053f7f18441e58f4d055e5bb38f6b0038"
+      "computedHash": "12469cd779ca5b69991e512b6af14120f4d787ff5517139955980cafca1f4a78"
     },
     "fluncle-rfc-writer": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-rfc-writer",
@@ -64,14 +64,14 @@
       "computedHash": "baae9dd979cd98d1d7c6ee5fd6eef91541950e054e4d01482b16ab716031ee46"
     },
     "fluncle-sprites": {
-      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-sprites",
+      "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/fluncle-sprites",
       "sourceType": "local",
-      "computedHash": "0deb8442a1cc56ff771ed688d5ffbcbe46da6568cc83accb66138cd297a8e726"
+      "computedHash": "927f279d335c48f90065e55dd4a4d13a480cb68eeffc192ae4c824329b8606d7"
     },
     "fluncle-surfaces": {
-      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-surfaces",
+      "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/fluncle-surfaces",
       "sourceType": "local",
-      "computedHash": "6b4c82efb04c91e086378c8978aeb670a1d590d5bdb9dc391ef739bc0a67dafd"
+      "computedHash": "46beb4386aefbeafb73dd3ae886b519c503f1fac9de67e3c369d2208e45e1b47"
     },
     "fluncle-track-enrichment": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-track-enrichment",
@@ -79,14 +79,14 @@
       "computedHash": "ee0b06da4fda6ee1eec24270dc5f718383e7a4403f2e0de03f73d88cee288209"
     },
     "fluncle-video": {
-      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-video",
+      "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/fluncle-video",
       "sourceType": "local",
-      "computedHash": "ad6002bbe687cc2672c95226d6d6fb808ef6337d3ac6a189114ff2e2f22498a8"
+      "computedHash": "b73437808368a8e4e673dd63a773e2cc2badb9889fd001f842df1620f5df1e07"
     },
     "hetzner-devbox": {
-      "source": "/Users/maurice/Projects/fluncle/packages/skills/hetzner-devbox",
+      "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/hetzner-devbox",
       "sourceType": "local",
-      "computedHash": "a84d188f8f823624e2892e93b0b67bf09e61c468bf2d109a338138c12e90699d"
+      "computedHash": "440c535abf505741746daa47472173d03669ed58cf610cc8fd7353a9a9c23f35"
     },
     "postiz": {
       "source": "gitroomhq/postiz-agent",

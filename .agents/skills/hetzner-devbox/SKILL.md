@@ -40,13 +40,13 @@ Use `scripts/check-prereqs.sh` before provisioning. It checks commands, required
 1. Check prerequisites:
 
 ```sh
-skills/hetzner-devbox/scripts/check-prereqs.sh
+packages/skills/hetzner-devbox/scripts/check-prereqs.sh
 ```
 
 2. Create or reuse the server:
 
 ```sh
-skills/hetzner-devbox/scripts/create-server.sh
+packages/skills/hetzner-devbox/scripts/create-server.sh
 ```
 
 Set `SERVER_NAME`, `SERVER_TYPE`, `LOCATION`, `IMAGE`, or `HCLOUD_SSH_KEY_NAME` to override defaults. The script prints the public IPv4 address needed for the first root SSH bootstrap.
@@ -54,7 +54,7 @@ Set `SERVER_NAME`, `SERVER_TYPE`, `LOCATION`, `IMAGE`, or `HCLOUD_SSH_KEY_NAME` 
 3. Run the remote hardening bootstrap:
 
 ```sh
-SERVER_IPV4=<public-ip> skills/hetzner-devbox/scripts/bootstrap-hardening.sh
+SERVER_IPV4=<public-ip> packages/skills/hetzner-devbox/scripts/bootstrap-hardening.sh
 ```
 
 This streams the vendored `scripts/bootstrap-private-vps.sh` over SSH, passes `TS_AUTHKEY` without putting the key on the command line, and configures the server as Tailscale-only. Admin access is **plain OpenSSH on `:2222`** reached over the tailnet (tunneled through WireGuard/UDP `41641`), **not** Tailscale SSH on `:22`. Tailscale SSH (`--ssh`) is deliberately NOT used: on a tailnet whose ACL sets the SSH `action` to `"check"`, it forces a per-session browser re-auth that blocks every headless/agent connection — plain sshd avoids it, and key-only auth + tailnet membership remain the two factors (no public exposure either way). After it finishes, verify `ssh -p 2222 admin@<tailscale-hostname>` works before relying on the firewall. **Disable Tailscale key expiry for the node** (admin console → Machines → ⋯ → Disable key expiry), or pass `TS_TAGS=tag:server` so the node joins tag-owned and is exempt from expiry — a private box has no public fallback, so an expired key is a total lockout.
@@ -62,7 +62,7 @@ This streams the vendored `scripts/bootstrap-private-vps.sh` over SSH, passes `T
 4. Apply the Hetzner provider firewall:
 
 ```sh
-skills/hetzner-devbox/scripts/apply-firewall.sh
+packages/skills/hetzner-devbox/scripts/apply-firewall.sh
 ```
 
 The provider firewall allows only inbound ICMP and UDP `41641` for Tailscale direct WireGuard connections. It deliberately does not allow public TCP/SSH. Host UFW remains the stricter inner layer.
@@ -70,7 +70,7 @@ The provider firewall allows only inbound ICMP and UDP `41641` for Tailscale dir
 5. Install the devbox toolchain:
 
 ```sh
-skills/hetzner-devbox/scripts/install-toolchain.sh
+packages/skills/hetzner-devbox/scripts/install-toolchain.sh
 ```
 
 This installs base packages, Docker Engine plus Compose, GitHub CLI, Bun, `uv`, current Node LTS user-locally, Codex CLI, and Claude Code by default. Set `INSTALL_*` flags to `0` to opt out of optional groups. Set `INSTALL_REMOTION_LIBS=1` to include headless Chromium runtime libraries.
@@ -82,14 +82,14 @@ Use this for `ssh rave.fluncle.com`-style services. Prefer a dedicated small VPS
 1. Create the server with public-app naming:
 
 ```sh
-SERVER_NAME=fluncle-rave-01 SERVER_TYPE=cx23 skills/hetzner-devbox/scripts/create-server.sh
+SERVER_NAME=<server-name> SERVER_TYPE=cx23 packages/skills/hetzner-devbox/scripts/create-server.sh
 ```
 
 2. Bootstrap the host for a public SSH app:
 
 ```sh
-SERVER_NAME=fluncle-rave-01 SERVER_IPV4=<public-ip> TS_HOSTNAME=fluncle-rave-01 \
-  skills/hetzner-devbox/scripts/bootstrap-hardening.sh --profile public-ssh
+SERVER_NAME=<server-name> SERVER_IPV4=<public-ip> TS_HOSTNAME=<server-name> \
+  packages/skills/hetzner-devbox/scripts/bootstrap-hardening.sh --profile public-ssh
 ```
 
 This streams `scripts/bootstrap-rave-vps.sh` to root. It:
@@ -105,8 +105,8 @@ This streams `scripts/bootstrap-rave-vps.sh` to root. It:
 3. Apply the public SSH app Hetzner firewall:
 
 ```sh
-SERVER_NAME=fluncle-rave-01 FIREWALL_PROFILE=public-ssh \
-  skills/hetzner-devbox/scripts/apply-firewall.sh
+SERVER_NAME=<server-name> FIREWALL_PROFILE=public-ssh \
+  packages/skills/hetzner-devbox/scripts/apply-firewall.sh
 ```
 
 This allows only ICMP, UDP `41641`, and public TCP `22` at the provider layer.
@@ -114,9 +114,9 @@ This allows only ICMP, UDP `41641`, and public TCP `22` at the provider layer.
 4. Deploy the built SSH app binary:
 
 ```sh
-SERVER_NAME=fluncle-rave-01 BINARY_PATH=./apps/ssh-rave/dist/fluncle-ssh \
+SERVER_NAME=<server-name> BINARY_PATH=./apps/ssh/dist/fluncle-ssh-linux-x64 \
   FLUNCLE_API_URL=https://www.fluncle.com \
-  skills/hetzner-devbox/scripts/deploy-ssh-app-service.sh
+  packages/skills/hetzner-devbox/scripts/deploy-ssh-app-service.sh
 ```
 
 The service runs as `fluncle-ssh`, binds TCP/22 with `CAP_NET_BIND_SERVICE`, and keeps writable state confined to `/var/lib/fluncle-ssh`.
