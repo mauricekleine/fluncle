@@ -80,13 +80,11 @@ export function meGalaxyHandlers(os: Implementer) {
     .use(privateUserMutation({ action: "account.galaxy.log", limit: 120 }))
     .handler(async ({ context, input }) => {
       try {
-        const body = input as { logId?: unknown };
-
-        if (typeof body.logId !== "string") {
+        if (typeof input.logId !== "string") {
           throw await missingLogIdFault();
         }
 
-        const result = await collectLogId(context.user, body.logId);
+        const result = await collectLogId(context.user, input.logId);
 
         if (result instanceof Response) {
           throw await responseFault(result);

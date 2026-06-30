@@ -90,8 +90,7 @@ export function adminSocialHandlers(os: Implementer) {
       try {
         const idOrLogId = input.trackId;
         const platform = input.platform;
-        const body = input as { scheduledFor?: unknown; status?: unknown; url?: unknown };
-        const status = body.status;
+        const status = input.status;
 
         if (status !== "scheduled" && status !== "published" && status !== "failed") {
           throw new ORPCError("BAD_REQUEST", {
@@ -104,7 +103,7 @@ export function adminSocialHandlers(os: Implementer) {
           });
         }
 
-        if (status === "published" && typeof body.url !== "string") {
+        if (status === "published" && typeof input.url !== "string") {
           throw new ORPCError("BAD_REQUEST", {
             data: { apiCode: "url_required", apiMessage: "Publishing requires the post --url" },
             message: "Publishing requires the post --url",
@@ -114,12 +113,12 @@ export function adminSocialHandlers(os: Implementer) {
 
         const update: SocialStatusUpdate = { status };
 
-        if (typeof body.url === "string") {
-          update.url = body.url;
+        if (typeof input.url === "string") {
+          update.url = input.url;
         }
 
-        if (typeof body.scheduledFor === "string") {
-          update.scheduledFor = body.scheduledFor;
+        if (typeof input.scheduledFor === "string") {
+          update.scheduledFor = input.scheduledFor;
         }
 
         const track = await requireTrack(idOrLogId);
@@ -294,7 +293,7 @@ export function adminSocialHandlers(os: Implementer) {
   // than throw, so one lagging post never burns the batch.
   const capturePostUrlsHandler = os.capture_post_urls.use(adminAuth).handler(async ({ input }) => {
     try {
-      const limit = parseLimit((input as { limit?: string }).limit, 25, 100);
+      const limit = parseLimit(typeof input.limit === "string" ? input.limit : undefined, 25, 100);
       const pending = await listPostsAwaitingUrl(limit);
 
       const captured: Array<{ platform: string; trackId: string; url: string }> = [];

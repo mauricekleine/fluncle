@@ -30,7 +30,6 @@ type AdminListOptions = {
 };
 
 type AdminQueueOptions = AdminListOptions & {
-  hasContext?: boolean;
   hasObservation?: boolean;
 };
 
@@ -399,12 +398,10 @@ function addMetaCommands(program: Command): void {
 }
 
 function addTrackCommands(program: Command): void {
-  // Convention B: public CLI groups are PLURAL.
-  // The canonical public lookup group is `tracks`; the old singular `track` is kept
-  // as a hidden alias so `track get <id>` still resolves (mirrors the admin
-  // `tracks`-alias-`track` pattern).
+  // Convention B: public CLI groups are PLURAL. The canonical public lookup group is
+  // `tracks`.
   const tracks = configureCommand(
-    program.command("tracks", { hidden: true }).alias("track").description("Public track lookups"),
+    program.command("tracks", { hidden: true }).description("Public track lookups"),
   );
 
   tracks
@@ -435,25 +432,19 @@ function addAdminCommands(program: Command): void {
       admin.outputHelp();
     });
 
-  // Convention B: the admin CLI is `group
-  // noun-verb` with PLURAL groups. The canonical track group is `tracks`; the old
-  // singular `track` group is kept as a hidden alias so `admin track <cmd>` still
-  // resolves. The formerly-flat `admin add|queue|vehicles` commands move under
-  // `tracks` (canonical) and stay registered as hidden flat commands (back-compat
-  // for crons + muscle memory). A verb's worklist is a `--queue` view flag on the
-  // verb itself (`tracks enrich --queue`, `tracks observe --queue`, `tracks
-  // context --queue`), not a dash-compound command (§6.4) — the box `fluncle-enrich`
-  // cron reads `tracks enrich --queue` to drain the queue (the Worker no longer
-  // re-fires enrichment itself).
-  const adminTracks = configureCommand(
-    admin.command("tracks").alias("track").description("Track admin commands"),
-  );
+  // Convention B: the admin CLI is `group noun-verb` with PLURAL groups. The canonical
+  // track group is `tracks`. A verb's worklist is a `--queue` view flag on the verb
+  // itself (`tracks enrich --queue`, `tracks observe --queue`, `tracks context
+  // --queue`), not a dash-compound command (§6.4) — the box `fluncle-enrich` cron reads
+  // `tracks enrich --queue` to drain the queue (the Worker no longer re-fires
+  // enrichment itself).
+  const adminTracks = configureCommand(admin.command("tracks").description("Track admin commands"));
 
   adminTracks.action(() => {
     adminTracks.outputHelp();
   });
 
-  // `add_track` → `admin tracks publish` (canonical). Hidden flat `admin add` alias.
+  // `add_track` → `admin tracks publish` (canonical).
   adminTracks
     .command("publish")
     .description("Publish a Spotify track")
@@ -467,41 +458,14 @@ function addAdminCommands(program: Command): void {
       await runAdd(spotifyUrl, options, addCommand);
     });
 
-  admin
-    .command("add", { hidden: true })
-    .description("Publish a Spotify track (alias of `admin tracks publish`)")
-    .argument("[spotifyUrl]")
-    .option("--note <text>", "Operator note")
-    .option("--dry-run", "Preview without publishing", false)
-    .option("--json", "Print JSON", false)
-    .allowExcessArguments()
-    .action(async (spotifyUrl: string | undefined, options: AddOptions) => {
-      const { addCommand } = await import("./commands/add");
-      await runAdd(spotifyUrl, options, addCommand);
-    });
-
   // The video render queue. It is HARD-GATED on `hasContext=true`: it only ever
   // surfaces findings that already carry a stored context note, so the render's
-  // context read is a guaranteed cached no-op (never a Firecrawl trigger). The
-  // `--has-context` flag is therefore always-on here and kept only for back-compat;
-  // `--has-observation` still narrows it to the already-voiced subset.
+  // context read is a guaranteed cached no-op (never a Firecrawl trigger).
+  // `--has-observation` narrows it to the already-voiced subset.
   adminTracks
     .command("queue")
     .description("Findings awaiting a video, oldest first (the next to film is first)")
     .option("--limit <limit>", "Number of findings to show", "10")
-    .option("--has-context", "No-op: the render queue is always context-gated")
-    .option("--has-observation", "Only findings that already have a spoken observation")
-    .option("--json", "Print JSON", false)
-    .action(async (options: AdminQueueOptions) => {
-      const { queueCommand } = await import("./commands/admin-tracks");
-      await runAdminQueue(options, queueCommand);
-    });
-
-  admin
-    .command("queue", { hidden: true })
-    .description("Render queue (alias of `admin tracks queue`)")
-    .option("--limit <limit>", "Number of findings to show", "10")
-    .option("--has-context", "No-op: the render queue is always context-gated")
     .option("--has-observation", "Only findings that already have a spoken observation")
     .option("--json", "Print JSON", false)
     .action(async (options: AdminQueueOptions) => {
@@ -540,16 +504,6 @@ function addAdminCommands(program: Command): void {
   adminTracks
     .command("vehicles")
     .description("Recent video vehicles, newest first (the style ledger for diversity)")
-    .option("--limit <limit>", "Number of vehicles to show", "10")
-    .option("--json", "Print JSON", false)
-    .action(async (options: AdminListOptions) => {
-      const { vehiclesCommand } = await import("./commands/admin-tracks");
-      await runAdminVehicles(options, vehiclesCommand);
-    });
-
-  admin
-    .command("vehicles", { hidden: true })
-    .description("Video vehicles (alias of `admin tracks vehicles`)")
     .option("--limit <limit>", "Number of vehicles to show", "10")
     .option("--json", "Print JSON", false)
     .action(async (options: AdminListOptions) => {
@@ -1120,10 +1074,9 @@ function addAdminCommands(program: Command): void {
       await authLastfmCommand(options);
     });
 
-  // `backfill_*` ops → plural `backfills` group (Convention B). `backfill` kept as
-  // a hidden alias so `admin backfill <provider>` still resolves.
+  // `backfill_*` ops → plural `backfills` group (Convention B).
   const backfill = configureCommand(
-    admin.command("backfills").alias("backfill").description("Backfill operator-only archives"),
+    admin.command("backfills").description("Backfill operator-only archives"),
   );
 
   backfill.action(() => {
@@ -2287,7 +2240,6 @@ async function runAdminQueue(
 ): Promise<void> {
   const limit = parseListLimit(options.limit);
   const tracks = await queueCommand(limit, {
-    hasContext: options.hasContext ? true : undefined,
     hasObservation: options.hasObservation ? true : undefined,
   });
 

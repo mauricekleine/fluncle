@@ -143,14 +143,4 @@ describe("video render queue — hasContext hard-gate", () => {
     expect(logIds).toContain("001.1.1");
     expect(logIds).not.toContain("001.1.2");
   });
-
-  test("a passed hasContext=false filter cannot un-gate the render queue", async () => {
-    // The render queue is hard-gated: even if a caller passes `hasContext: false`
-    // (the back-compat seam on QueueFilters), the queue still asks for the gated
-    // set — the automation can never be tricked into filming note-less findings.
-    await queueCommand(10, { hasContext: false });
-
-    const url = new URL(requestedPaths[0] ?? "", "https://fluncle.test");
-    expect(url.searchParams.get("hasContext")).toBe("true");
-  });
 });

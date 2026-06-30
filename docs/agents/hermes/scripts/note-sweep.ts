@@ -16,7 +16,7 @@
 //      hasNote=false`, oldest first). Empty → fast no-op, exit.
 //   2. per finding (bounded batch, BATCH_CAP small — authoring spends subscription
 //      quota):
-//      a. GATHER (deterministic): `fluncle track get <id> --json` → the finding's
+//      a. GATHER (deterministic): `fluncle tracks get <id> --json` → the finding's
 //         identity metadata (artists, title, label, release year, galaxy, vibe), AND
 //         `fluncle admin tracks context <id> --json` → the stored `context_note` (the
 //         firecrawl facts the context sweep distilled). The note is the PRIMARY
@@ -437,7 +437,7 @@ function noteOne(queued: QueueFinding): Outcome {
   // (a) Gather the finding's identity metadata. `track get` is the SINGULAR public
   // read; it returns the raw finding (galaxy + vibe intact). A mixtape arm can't
   // appear here (the queue is findings), but guard anyway.
-  const response = fluncleJson<TrackGetResponse>(["track", "get", id]);
+  const response = fluncleJson<TrackGetResponse>(["tracks", "get", id]);
   const finding = response.track;
 
   if (!finding || !finding.title || !finding.artists?.length) {
