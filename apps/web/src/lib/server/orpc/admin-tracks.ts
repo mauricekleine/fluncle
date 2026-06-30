@@ -55,7 +55,7 @@ import {
   searchTracks,
 } from "../tracks";
 import { type VideoArtifact, artifactByField } from "../video-bundle";
-import { apiFault, type Implementer, parseLimit, requireTrack } from "./_shared";
+import { type Implementer, parseLimit, requireTrack, toFault } from "./_shared";
 
 // Fields only the operator may write: editorial voice (note), the vehicle/video
 // (videoUrl), the map placement (vibeX/vibeY), and the immutable identity fields
@@ -117,19 +117,6 @@ function resolveDurationTargetSec(value: unknown): number {
   }
 
   return 30;
-}
-
-// The canonical fault wrapper for these handlers: an ORPCError (a guard the
-// procedure or the field check threw) passes through untouched; anything else
-// (an ApiError from a reused helper — note_too_long, voice_gate, not_found,
-// no_log_id — or an unexpected throw) becomes a wire-compatible fault via
-// `apiFault`, so the rails encoder reproduces the legacy `{ code, message }` body.
-function toFault(error: unknown): ORPCError<string, unknown> {
-  if (error instanceof ORPCError) {
-    return error;
-  }
-
-  return apiFault(error);
 }
 
 /**

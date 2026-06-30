@@ -44,22 +44,11 @@ import {
   updateSocialStatus,
   upsertPost,
 } from "../social";
-import { apiFault, parseLimit, requireTrack, type Implementer } from "./_shared";
+import { parseLimit, requireTrack, type Implementer, toFault } from "./_shared";
 
 // Ported verbatim from the live draft route. TikTok is the SELF_ONLY inbox draft
 // (agent-allowed); YouTube is the direct PUBLIC upload (operator only).
 const SUPPORTED = new Set(["tiktok", "youtube"]);
-
-// The fault wrapper: an ORPCError (a guard or an in-handler reject) passes through
-// untouched; anything else (an ApiError from a reused helper, or an unexpected
-// throw) becomes a wire-compatible fault via `apiFault`.
-function toFault(error: unknown): ORPCError<string, unknown> {
-  if (error instanceof ORPCError) {
-    return error;
-  }
-
-  return apiFault(error);
-}
 
 /**
  * Build the `admin-social` domain's handlers. Each reuses the live route logic
