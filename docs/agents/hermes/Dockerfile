@@ -36,8 +36,9 @@ RUN apt-get update \
 # the binary in /root/.bun (root's HOME, mode 700). The `--no-agent` cron runner
 # execs as a NON-root user that can't traverse /root, so a symlink there fails
 # (126 Permission denied). COPY the binary to /usr/local/bin (world-traversable)
-# instead — a real file outside /root that any user can exec. `fluncle` (npm -g in
-# /usr/local/lib) is already world-accessible, so only bun needs this.
+# instead — a real file outside /root that any user can exec. `fluncle` is the standalone
+# binary copied to /usr/local/bin (the install block below), already world-accessible, so
+# only bun needs this cp-out-of-/root dance.
 ENV BUN_INSTALL=/root/.bun
 ENV PATH=/usr/local/bin:$PATH
 RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14" \
