@@ -81,7 +81,7 @@ Each leg records into `mixtape_social_posts` — the single source of truth for 
 fluncle admin mixtapes distribute <idOrLogId> --video <master>.mp4 --set-video
 ```
 
-It derives one **1080p faststart rendition** with ffmpeg (CRF 20, AAC, ~2s GOP for scrubbing; ~1.5–2 GB), multipart-uploads it straight to R2 at `<logId>/set.mp4`, and flips `setVideoAt` — the player + the sitemap `<video:video>` + the VideoObject JSON-LD all light up. The raw multi-GB master **stays local** (only the rendition goes to R2; it also serves the editor scrub + the clip cut). `--set-video` is opt-in and additive: combine it with the YouTube/Mixcloud legs, or run it **alone** to backfill an already-published set (`distribute <id> --video x.mp4 --set-video`). Idempotent — a re-run re-stages + re-flips. Needs ffmpeg on PATH (the operator's Mac). See `docs/fluncle-studio.md` (Unit A) + `docs/fluncle-studio-rfc.md`.
+It derives one **1080p faststart rendition** with ffmpeg (CRF 20, AAC, ~2s GOP for scrubbing; ~1.5–2 GB), multipart-uploads it straight to R2 at `<logId>/set.mp4`, and flips `setVideoAt` — the player + the sitemap `<video:video>` + the VideoObject JSON-LD all light up. The raw multi-GB master **stays local** (only the rendition goes to R2; it also serves the editor scrub + the clip cut). `--set-video` is opt-in and additive: combine it with the YouTube/Mixcloud legs, or run it **alone** to backfill an already-published set (`distribute <id> --video x.mp4 --set-video`). Idempotent — a re-run re-stages + re-flips. Needs ffmpeg on PATH (the operator's Mac). See `docs/fluncle-studio.md`.
 
 ### D. Make YouTube public
 

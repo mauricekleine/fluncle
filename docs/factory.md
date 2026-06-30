@@ -2,7 +2,7 @@
 
 `/factory` is Fluncle's assembly line: the **works** where a find is made. The galaxy game (`/galaxy`) is the sky and `/earth` is the ground; the factory is the underworld between them — the pipeline that turns a fresh find into a launched finding. A finding enters on the left, rides a **station per lifecycle step**, piles up in front of the slow machines, and a finished finding boards a ship and lifts off to the Galaxy. _Found → assembled → launched → collected._
 
-Built per [docs/factory-to-orbit-brief.md](./factory-to-orbit-brief.md) (Phase 1 — the public page). A client-only Canvas app, the same shape as `/earth` and `/galaxy` (`apps/web/src/game/*`): the route boots it via a dynamic import in `useEffect`, the server never touches browser APIs, the bundle stays light.
+Phase 1 (the public page) of the From-Earth-to-Orbit arc (see [docs/ROADMAP.md](./ROADMAP.md) "From Earth to Orbit"). A client-only Canvas app, the same shape as `/earth` and `/galaxy` (`apps/web/src/game/*`): the route boots it via a dynamic import in `useEffect`, the server never touches browser APIs, the bundle stays light.
 
 ## The shape
 

@@ -1,6 +1,6 @@
 # Hermes automation crons
 
-The version-controlled **source** for the Hermes automation cron jobs (`docs/hermes-automation-brief.md`). The repo is canonical; the box is a deploy target (see the `fluncle-hermes-operator` skill). This directory records the canonical intent so a rebuilt box can be made to match.
+The version-controlled **source** for the Hermes automation cron jobs. The repo is canonical; the box is a deploy target (see the `fluncle-hermes-operator` skill). This directory records the canonical intent so a rebuilt box can be made to match.
 
 Every step is a "read a queue → act per item, idempotently" loop over the `fluncle` CLI. There is **no on-add push**: a new find lands at `enrichment_status = pending` (queue-eligible) and is caught on the next tick.
 

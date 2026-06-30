@@ -34,9 +34,9 @@
       "computedHash": "ca57c2cd6ff63e354232d718f6cf1c0bb9aa9c8a3f0a7dba6cbcfdc1884ca7e0"
     },
     "fluncle-hermes-operator": {
-      "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/fluncle-hermes-operator",
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-hermes-operator",
       "sourceType": "local",
-      "computedHash": "084e6077d6fbb4554cf5a0094ffe41b3d30d359b02f67a232553c5453f83e229"
+      "computedHash": "8e41576a1577c5568e852e0d421dc3c369f260fa4017cb5c77b5f1fad515d092"
     },
     "fluncle-maintenance": {
       "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/fluncle-maintenance",
@@ -44,9 +44,9 @@
       "computedHash": "2eb25c26a11e6a8bd4c954f9426654583304a890227813954c299b0dd2099b27"
     },
     "fluncle-mixtapes": {
-      "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/fluncle-mixtapes",
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-mixtapes",
       "sourceType": "local",
-      "computedHash": "1e56082b649fbfd2cb23fe9a1500ef65e989f11f45d4f6d17c249e5045c66ddc"
+      "computedHash": "59977ed6ecd3217b08c0cdf1e3d13c71a20ca5c18292d7a3edbc7ca1f2c96dd5"
     },
     "fluncle-operator": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-operator",

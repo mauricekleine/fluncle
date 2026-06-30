@@ -1,6 +1,6 @@
 # Fluncle Studio — set-video staging + the footage cut
 
-The mixtape set → clip pipeline (full design: `docs/fluncle-studio-rfc.md`). This doc covers the shipped **set-video staging** (Unit A — the automation of the manual three-step staging the `fluncle-mixtapes` skill used to document) and the **footage cut** (Unit C — the deterministic box job that turns a `pending` clip into a framed 9:16 clip on R2).
+The mixtape set → clip pipeline. This doc covers the shipped **set-video staging** (Unit A — the automation of the manual three-step staging the `fluncle-mixtapes` skill used to document) and the **footage cut** (Unit C — the deterministic box job that turns a `pending` clip into a framed 9:16 clip on R2).
 
 ## What it does
 
@@ -37,7 +37,7 @@ The bytes never traverse the Cloudflare zone; only the tiny presign/complete con
 
 ### Embargo (later hook, not built)
 
-`--set-video` runs at `distribute` (= publish), so the default stages the rendition **public**. The only private-then-flip case is **pre-release backlog clipping** (stage the rendition early to build clips before launch, private until publish) — a deliberate opt-in deferred to a later concern (`docs/fluncle-studio-rfc.md` §2 "Embargo").
+`--set-video` runs at `distribute` (= publish), so the default stages the rendition **public**. The only private-then-flip case is **pre-release backlog clipping** (stage the rendition early to build clips before launch, private until publish) — a deliberate opt-in deferred to a later concern.
 
 ## The pieces
 
@@ -50,7 +50,7 @@ The bytes never traverse the Cloudflare zone; only the tiny presign/complete con
 
 # Unit C — the footage cut (the box)
 
-The deterministic cut that turns each `pending` `mixtape_clips` row into a framed 9:16 clip on R2, then marks it `done`. It runs on the **always-on Hermes box (rave-02)**, not the GPU render box — a CPU-trivial ffmpeg trim, no GPU, no `claude -p`, none of the render box's agent machinery (`docs/fluncle-studio-rfc.md` Decision 1).
+The deterministic cut that turns each `pending` `mixtape_clips` row into a framed 9:16 clip on R2, then marks it `done`. It runs on the **always-on Hermes box (rave-02)**, not the GPU render box — a CPU-trivial ffmpeg trim, no GPU, no `claude -p`, none of the render box's agent machinery.
 
 ## What it does
 

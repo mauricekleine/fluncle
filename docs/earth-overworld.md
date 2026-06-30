@@ -2,7 +2,7 @@
 
 `/earth` is Fluncle's top-down overworld game: the **ground Fluncle left from**. The galaxy game (`/galaxy`) is first-person among the stars; Earth is the ground under that sky, walked top-down (Pokémon-on-a-Game-Boy-Color, in the Nostalgic Cosmos). Every device you bump is a **door into a real Fluncle surface**, and the rocket on the northern launch pad is the door into the Galaxy game. _"We have the sky but not the ground"_ — now both, joined.
 
-Built per [docs/earth-overworld-rfc.md](./earth-overworld-rfc.md). A client-only Canvas app, the same shape as the galaxy game (`apps/web/src/game/*`): the route boots it via a dynamic import in `useEffect`, the server never touches browser APIs, the bundle stays light.
+A client-only Canvas app, the same shape as the galaxy game (`apps/web/src/game/*`): the route boots it via a dynamic import in `useEffect`, the server never touches browser APIs, the bundle stays light.
 
 ## The shape
 
