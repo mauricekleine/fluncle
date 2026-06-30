@@ -1,0 +1,20 @@
+[Unit]
+Description=fluncle-healthcheck — rave-02 host trigger for the Hermes /status prober (decoupled from the busy gateway it monitors)
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/healthcheck-timer/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+# Runs as root: it drives the Docker daemon (docker exec into the hermes container).
+# The probe WORK lives in the container (the .sh/.ts pair under /opt/data/scripts/);
+# this host unit only TRIGGERS it, so the prober no longer rides — and is no longer
+# starved by — the Hermes cron gateway it is meant to monitor.
+ExecStart=/usr/bin/docker exec -e HOME=/opt/data/home hermes bash /opt/data/scripts/fluncle-healthcheck.sh
+# Matches the old --no-agent cron's 120s job budget (a clean tick runs ~5s).
+TimeoutStartSec=120
+# Modest hardening for a root docker-driving oneshot.
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true

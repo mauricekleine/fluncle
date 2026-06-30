@@ -1,11 +1,13 @@
 #!/usr/bin/env bun
-// fluncle-healthcheck.ts — the bun orchestrator behind the `fluncle-healthcheck`
-// `--no-agent` Hermes cron. The prober for Fluncle's public /status dashboard.
+// fluncle-healthcheck.ts — the bun orchestrator behind `fluncle-healthcheck`, the
+// prober for Fluncle's public /status dashboard.
 //
 // Version-controlled source; the repo is canonical and the box is a deploy target
 // (fluncle-hermes-operator skill). Invoked by the bash wrapper (fluncle-healthcheck.sh)
-// the cron runner execs every ~10m — see that file's header for the env keys + the
-// `hermes cron create` wire-up, and ../cron/README.md § The healthcheck cron.
+// which a rave-02 HOST systemd timer `docker exec`s every ~10m — NOT a Hermes
+// `--no-agent` gateway cron. It was moved to a host timer so the prober isn't starved
+// by the busy gateway it monitors; see ../healthcheck-timer/README.md (the units + the
+// one-time deploy) and that .sh's header for the env keys.
 //
 // THE TICK (all deterministic — no model time):
 //   1. PROBE each service in parallel, each with a short timeout (3–5s) so one hung
@@ -21,7 +23,9 @@
 //                      shows every humming system on its own row — not one aggregate.
 //        render-box  — read ${HOME}/.render-conductor/state (idle|rendering both ok;
 //                      missing = "not yet provisioned", ok). NEVER wakes the box.
-//        hermes      — self-evident: this cron runs ON the box, so ok.
+//        hermes      — self-evident: this prober runs ON the box, so ok.
+//        cron.healthcheck — self-evident: this IS the prober; reaching here means its
+//                      host timer fired → ok (it has no gateway output dir to read).
 //      (onion — OUT OF SCOPE for v1; see the TODO below.)
 //   2. TRANSITIONS: load ${HOME}/.healthcheck/state.json (service → last status); a
 //      probe `transitioned` when prev !== current. Write the new map back.
@@ -353,7 +357,10 @@ const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 30 * 60_000, match: "backfill", service: "cron.backfill" },
   { cadenceMs: 10 * 60_000, match: "social-capture", service: "cron.social-capture" },
   { cadenceMs: 60 * 60_000, match: "render", service: "cron.render" },
-  { cadenceMs: 10 * 60_000, match: "healthcheck", service: "cron.healthcheck" },
+  // NB: cron.healthcheck is NOT here — this prober IS that cron, now run by a host
+  // systemd timer (../healthcheck-timer/), so it has no gateway output dir to read and
+  // a self-read would be circular. Its /status row is emitted self-evidently by
+  // probeHealthcheck() below instead.
   { cadenceMs: 7 * 24 * 60 * 60_000, match: "newsletter", service: "cron.newsletter" }, // weekly — a generous floor
 ];
 
@@ -617,6 +624,24 @@ function probeHermes(): Check {
 }
 
 // ---------------------------------------------------------------------------
+// PROBE: cron.healthcheck — this prober IS the healthcheck cron, now run by its own
+// rave-02 host systemd timer (../healthcheck-timer/). Reaching this line means the
+// timer fired and the tick is executing, so its liveness is self-evident → ok. It is
+// deliberately NOT in AUTOMATION_CRONS: a host-timer prober has no Hermes gateway
+// output dir to read, and reading its own would be circular. Emitting the row here
+// keeps the `cron.healthcheck` line populated on /status without a gateway-dir read.
+// ---------------------------------------------------------------------------
+
+function probeHealthcheck(): Check {
+  return {
+    latencyMs: null,
+    message: msg("prober tick live"),
+    service: "cron.healthcheck",
+    status: "ok",
+  };
+}
+
+// ---------------------------------------------------------------------------
 // State: the transition memory. Load the prior map, compute `transitioned` per
 // check, write the new map back. A read/parse failure starts from an empty map (so
 // the FIRST tick after a state loss reports every service as a fresh transition —
@@ -840,12 +865,16 @@ async function main(): Promise<void> {
   const crons = probeCrons();
   const renderBox = probeRenderBox();
   const hermes = probeHermes();
+  // The prober's own row — self-evident (it's run by a host timer, not the gateway,
+  // so it has no cron output dir for probeCrons() to read).
+  const healthcheck = probeHealthcheck();
 
   // One row per cron (cron.*) instead of a single `automation` aggregate, so /status
   // shows every humming system on its own line. Transitions still fire per-service
   // (the state map is keyed by service id), so a single cron going down/recovering
-  // pings on its own.
-  const checks: Check[] = [web, r2, dns, ssh, ...crons, renderBox, hermes];
+  // pings on its own. cron.healthcheck rides alongside the gateway crons even though
+  // it's emitted self-evidently.
+  const checks: Check[] = [web, r2, dns, ssh, ...crons, healthcheck, renderBox, hermes];
 
   // Transitions against the prior state map.
   const prev = loadState();
