@@ -146,11 +146,11 @@ The `.deepsec` scan (`.deepsec/data/fluncle/reports/`) flags every workflow acti
 
 ## Quick reference table
 
-| #   | Item                | File (marker)                                                                     | Current pin (read)          | Check latest                                 | Ship end-to-end?                  |
-| --- | ------------------- | --------------------------------------------------------------------------------- | --------------------------- | -------------------------------------------- | --------------------------------- |
-| 1   | Hermes base image   | `Dockerfile` `FROM nousresearch/hermes-agent:`                                    | `grep '^FROM nousresearch'` | Docker Hub tags API                          | **Never** (pre-1.0)               |
-| 2   | bun (×3)            | `Dockerfile` `bun-v` + `package.json` `packageManager` + workflows `bun-version:` | the three greps above       | bun GH `releases/latest`                     | patch/minor yes, major brake      |
-| 3   | `fluncle` CLI       | `Dockerfile` `releases/download/v<ver>/fluncle-linux-` (standalone binary)        | `grep 'download/v.*/fluncle-'` | `npm view fluncle version`                | patch/minor yes, major brake      |
-| 4   | Claude Code CLI     | `Dockerfile` `@anthropic-ai/claude-code@`                                         | `grep 'claude-code@'`       | `npm view @anthropic-ai/claude-code version` | patch/minor yes, major/auth brake |
-| 5   | box.ascii CLI       | `Dockerfile` `box.ascii.dev/install`                                              | unpinned                    | N/A                                          | **Never** (re-verify only)        |
-| 6   | GitHub Actions tags | `.github/workflows/*.yml` `uses: …@vN`                                            | `grep 'uses:.*@'`           | `gh api …/git/refs/tags/<tag>`               | **Renovate (auto-pins + tracks)** |
+| #   | Item                | File (marker)                                                                     | Current pin (read)             | Check latest                                 | Ship end-to-end?                  |
+| --- | ------------------- | --------------------------------------------------------------------------------- | ------------------------------ | -------------------------------------------- | --------------------------------- |
+| 1   | Hermes base image   | `Dockerfile` `FROM nousresearch/hermes-agent:`                                    | `grep '^FROM nousresearch'`    | Docker Hub tags API                          | **Never** (pre-1.0)               |
+| 2   | bun (×3)            | `Dockerfile` `bun-v` + `package.json` `packageManager` + workflows `bun-version:` | the three greps above          | bun GH `releases/latest`                     | patch/minor yes, major brake      |
+| 3   | `fluncle` CLI       | `Dockerfile` `releases/download/v<ver>/fluncle-linux-` (standalone binary)        | `grep 'download/v.*/fluncle-'` | `npm view fluncle version`                   | patch/minor yes, major brake      |
+| 4   | Claude Code CLI     | `Dockerfile` `@anthropic-ai/claude-code@`                                         | `grep 'claude-code@'`          | `npm view @anthropic-ai/claude-code version` | patch/minor yes, major/auth brake |
+| 5   | box.ascii CLI       | `Dockerfile` `box.ascii.dev/install`                                              | unpinned                       | N/A                                          | **Never** (re-verify only)        |
+| 6   | GitHub Actions tags | `.github/workflows/*.yml` `uses: …@vN`                                            | `grep 'uses:.*@'`              | `gh api …/git/refs/tags/<tag>`               | **Renovate (auto-pins + tracks)** |
