@@ -1,8 +1,6 @@
 import {
   ArrowCounterClockwiseIcon,
   GearSixIcon,
-  PauseIcon,
-  PlayIcon,
   ScissorsIcon,
   SparkleIcon,
   TrashIcon,
@@ -26,12 +24,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { formatClock, VideoScrubber } from "@/components/mixtape-video-player";
+import { formatClock, useVideo, Video } from "@/components/video";
 import { mixtapeSetVideoUrl, mixtapeStudioEnvelopeUrl } from "@/lib/media";
 import { type MixtapeDTO, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { getMixtapeForRender } from "@/lib/server/mixtapes";
-import { useVideoStallRecovery } from "@/lib/use-video-recovery";
 import {
   type StudioEnvelope,
   type TimelineRegion,
@@ -48,10 +45,10 @@ import {
 // The Studio clip editor. One landscape set
 // rendition (the `<log-id>/set.mp4` master) → many framed 9:16 footage clips. Entered
 // from the "Clip this set" action on a minted mixtape row (/admin/mixtapes). A full
-// AdminShell fill page, assembled from the pieces the RFC's reuse inventory names:
-// the `VideoScrubber` (#208), `useVideoStallRecovery`, the radio "one clock"
-// discipline (the video's rVFC mediaTime is the single source of truth), the VibeMap
-// pointer model (the crop rect), and Shadcn ui/* only.
+// AdminShell fill page composed from the shared `<Video>` compound (Root owns the "one
+// clock" machine + stall recovery; the scrubber + transport read it) plus the editor's
+// own chrome — the VibeMap-pointer crop rect and the energy lane — over the same
+// element, with Shadcn ui/* only.
 
 const SEEK_STEP_SECONDS = 5;
 const CLIP_LENGTH_PRESETS_MS = [15_000, 30_000, 60_000] as const;
@@ -155,6 +152,10 @@ function StudioPage() {
   );
 }
 
+// The outer shell mounts `Video.Root` (the "one clock" state machine + stall recovery)
+// so the editor body can read the machine through context. The body holds the
+// studio-specific state (the in/out band, the framing rect, suggestions, the keyboard
+// loop) and the chrome (the crop frame, the energy lane, the toolbar).
 function StudioEditor({
   logId,
   mixtapeId,
@@ -164,17 +165,32 @@ function StudioEditor({
   mixtapeId: string;
   title: string;
 }) {
-  const queryClient = useQueryClient();
-  const videoRef = useRef<HTMLVideoElement | null>(null);
   const src = mixtapeSetVideoUrl(logId);
   const poster = mixtapeCoverUrl(logId, "card");
 
-  const [playing, setPlaying] = useState(false);
-  const [currentSeconds, setCurrentSeconds] = useState(0);
-  const [durationSeconds, setDurationSeconds] = useState(0);
-  // The intrinsic rendition geometry, read from the element — the crop xOffset is in
-  // SOURCE pixels, so it needs the real dimensions (defaults to a 1080p landscape).
-  const [videoSize, setVideoSize] = useState({ height: 1080, width: 1920 });
+  return (
+    <Video.Root src={src}>
+      <StudioEditorBody logId={logId} mixtapeId={mixtapeId} poster={poster} title={title} />
+    </Video.Root>
+  );
+}
+
+function StudioEditorBody({
+  logId,
+  mixtapeId,
+  poster,
+  title,
+}: {
+  logId: string;
+  mixtapeId: string;
+  poster: string;
+  title: string;
+}) {
+  const queryClient = useQueryClient();
+  // The one clock + element geometry come from Video.Root; the crop xOffset is in SOURCE
+  // pixels, so it needs `videoSize` (a 1080p landscape default until the rendition
+  // reports its real dimensions).
+  const { currentSeconds, durationSeconds, seek, togglePlay, videoSize } = useVideo();
 
   const [band, setBand] = useState<Band | null>(null);
   // The framing rect starts centred (a centred top-down set crops cleanly there) and
@@ -214,140 +230,15 @@ function StudioEditor({
   const durationMs = envelope?.durationMs ?? Math.round(durationSeconds * 1000);
   const currentMs = Math.round(currentSeconds * 1000);
 
-  // ── The one clock: every UI value derives from the element's currentTime, sampled
-  // per presented frame (requestVideoFrameCallback), with a rAF fallback — the radio
-  // discipline (mixtape-video-player.tsx). The scrubber + lane only reflect it.
-  useEffect(() => {
-    const video = videoRef.current;
-
-    if (!video) {
-      return;
-    }
-
-    const rvfc =
-      "requestVideoFrameCallback" in video
-        ? (video.requestVideoFrameCallback.bind(video) as (cb: () => void) => number)
-        : null;
-    const cancelRvfc =
-      "cancelVideoFrameCallback" in video
-        ? (video.cancelVideoFrameCallback.bind(video) as (handle: number) => void)
-        : null;
-
-    let rafId = 0;
-    let frameId = 0;
-
-    const sampleClock = () => setCurrentSeconds(video.currentTime);
-
-    const schedule = () => {
-      if (video.paused || video.ended) {
-        return;
-      }
-
-      if (rvfc) {
-        frameId = rvfc(() => {
-          sampleClock();
-          schedule();
-        });
-      } else {
-        rafId = window.requestAnimationFrame(() => {
-          sampleClock();
-          schedule();
-        });
-      }
-    };
-
-    const readMeta = () => {
-      setDurationSeconds(Number.isFinite(video.duration) ? video.duration : 0);
-
-      if (video.videoWidth > 0 && video.videoHeight > 0) {
-        setVideoSize({ height: video.videoHeight, width: video.videoWidth });
-      }
-    };
-
-    const onPlay = () => {
-      setPlaying(true);
-      schedule();
-    };
-    const onPause = () => setPlaying(false);
-    const onEnded = () => setPlaying(false);
-
-    video.addEventListener("play", onPlay);
-    video.addEventListener("playing", onPlay);
-    video.addEventListener("pause", onPause);
-    video.addEventListener("ended", onEnded);
-    video.addEventListener("timeupdate", sampleClock);
-    video.addEventListener("seeked", sampleClock);
-    video.addEventListener("loadedmetadata", readMeta);
-    video.addEventListener("durationchange", readMeta);
-    video.addEventListener("resize", readMeta);
-
-    readMeta();
-    sampleClock();
-
-    if (!video.paused) {
-      setPlaying(true);
-      schedule();
-    }
-
-    return () => {
-      if (rafId) {
-        window.cancelAnimationFrame(rafId);
-      }
-
-      if (frameId && cancelRvfc) {
-        cancelRvfc(frameId);
-      }
-
-      video.removeEventListener("play", onPlay);
-      video.removeEventListener("playing", onPlay);
-      video.removeEventListener("pause", onPause);
-      video.removeEventListener("ended", onEnded);
-      video.removeEventListener("timeupdate", sampleClock);
-      video.removeEventListener("seeked", sampleClock);
-      video.removeEventListener("loadedmetadata", readMeta);
-      video.removeEventListener("durationchange", readMeta);
-      video.removeEventListener("resize", readMeta);
-    };
-  }, [src]);
-
-  const togglePlay = useCallback(() => {
-    const video = videoRef.current;
-
-    if (!video) {
-      return;
-    }
-
-    if (video.paused) {
-      video.play().catch(() => {
-        // Autoplay/gesture rules can deny play(); the poster + control hold.
-      });
-    } else {
-      video.pause();
-    }
-  }, []);
-
-  const seekSeconds = useCallback((seconds: number) => {
-    const video = videoRef.current;
-
-    if (!video) {
-      return;
-    }
-
-    const max = Number.isFinite(video.duration) ? video.duration : seconds;
-    video.currentTime = Math.max(0, Math.min(max, seconds));
-    setCurrentSeconds(video.currentTime);
-  }, []);
-
+  // The lane seeks against the envelope's analysed duration (the curve + suggestions
+  // are keyed to it), not the video's own — they coincide, but this keeps the ghosts on
+  // the same axis. The compound's `seek` (seconds) is the one mutation of the clock.
   const seekFraction = useCallback(
     (fraction: number) => {
-      seekSeconds(Math.floor(fractionToMs(fraction, durationMs) / 1000));
+      seek(Math.floor(fractionToMs(fraction, durationMs) / 1000));
     },
-    [durationMs, seekSeconds],
+    [durationMs, seek],
   );
-
-  // ── Stall recovery: re-arm a wedged faststart load while playback is expected.
-  const recoverStuck = useCallback(() => videoRef.current?.load(), []);
-  useVideoStallRecovery({ expectsPlayback: playing, onStall: recoverStuck, src, videoRef });
 
   // Re-centre the framing when the real rendition geometry loads, until the operator
   // has nudged it (then it's theirs to keep).
@@ -414,10 +305,10 @@ function StudioEditor({
         inFraction: msToFraction(suggestion.startMs, durationMs),
         outFraction: msToFraction(suggestion.startMs + suggestion.durationMs, durationMs),
       });
-      seekSeconds(suggestion.anchorMs / 1000);
+      seek(suggestion.anchorMs / 1000);
       setLiveMessage(`Accepted a drop at ${formatClock(suggestion.anchorMs / 1000)}`);
     },
-    [durationMs, envelope, seekSeconds],
+    [durationMs, envelope, seek],
   );
 
   const resetFraming = useCallback(() => {
@@ -507,14 +398,14 @@ function StudioEditor({
           break;
         case "ArrowLeft":
           event.preventDefault();
-          seekSeconds(currentSeconds - SEEK_STEP_SECONDS);
+          seek(currentSeconds - SEEK_STEP_SECONDS);
           setLiveMessage(
             `Playhead ${formatClock(Math.max(0, currentSeconds - SEEK_STEP_SECONDS))}`,
           );
           break;
         case "ArrowRight":
           event.preventDefault();
-          seekSeconds(currentSeconds + SEEK_STEP_SECONDS);
+          seek(currentSeconds + SEEK_STEP_SECONDS);
           setLiveMessage(`Playhead ${formatClock(currentSeconds + SEEK_STEP_SECONDS)}`);
           break;
         case "[":
@@ -542,7 +433,7 @@ function StudioEditor({
       createClip,
       currentSeconds,
       markAtPlayhead,
-      seekSeconds,
+      seek,
       setInToPlayhead,
       setOutToPlayhead,
       togglePlay,
@@ -569,54 +460,25 @@ function StudioEditor({
       {/* Hero preview + the framing rect. The wrapper takes the rendition's intrinsic
           aspect so the 9:16 crop overlay maps 1:1 onto source pixels. */}
       <div className="mx-auto w-full max-w-3xl">
-        <div
+        <Video.Surface
           className="studio-stage"
+          mediaClassName="studio-stage-media"
+          poster={poster}
           style={{ aspectRatio: `${videoSize.width} / ${videoSize.height}` }}
         >
-          <video
-            className="studio-stage-media"
-            playsInline
-            poster={poster}
-            preload="metadata"
-            ref={videoRef}
-            src={src}
-          >
-            <track kind="captions" />
-          </video>
           <StudioCropFrame
             leftFraction={cropLeftFraction}
             onChange={handleCropChange}
             videoHeight={videoSize.height}
             videoWidth={videoSize.width}
           />
-        </div>
+        </Video.Surface>
 
-        {/* Transport: play/pause, the reused scrubber, the time readout, the cog. */}
+        {/* Transport: play/pause, the shared scrubber, the time readout, the cog. */}
         <div className="mt-3 flex items-center gap-3">
-          <Button
-            aria-label={playing ? "Pause" : "Play"}
-            aria-pressed={playing}
-            onClick={togglePlay}
-            size="icon"
-          >
-            {playing ? (
-              <PauseIcon aria-hidden="true" weight="fill" />
-            ) : (
-              <PlayIcon aria-hidden="true" weight="fill" />
-            )}
-          </Button>
-
-          <VideoScrubber
-            currentSeconds={currentSeconds}
-            durationSeconds={durationSeconds}
-            label={`Seek through ${title}`}
-            onSeek={seekSeconds}
-            onTogglePlayback={togglePlay}
-          />
-
-          <span className="studio-time shrink-0">
-            {formatClock(currentSeconds)} / {formatClock(durationSeconds)}
-          </span>
+          <Video.PlayButton />
+          <Video.Scrubber label={`Seek through ${title}`} />
+          <Video.Time className="studio-time shrink-0" />
 
           <SettingsCog
             clipLengthMs={clipLengthMs}
@@ -720,7 +582,7 @@ function StudioEditor({
                   deleting={deleteClip.isPending && deleteClip.variables === clip.id}
                   onDelete={() => deleteClip.mutate(clip.id)}
                   onPreview={() => {
-                    seekSeconds(clip.inMs / 1000);
+                    seek(clip.inMs / 1000);
                     setBand({
                       inFraction: msToFraction(clip.inMs, durationMs),
                       outFraction: msToFraction(clip.outMs, durationMs),

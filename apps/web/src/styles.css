@@ -1083,15 +1083,27 @@ body::before {
   width: min(100%, 20rem);
 }
 
+/* The position:relative stage every `<Video.Surface>` mounts the element inside —
+   it's what lets the per-surface chrome (the crop frame, the energy lane) and the
+   auto-hiding overlay controls sit OVER the same `<video>`. */
+.video-stage {
+  position: relative;
+}
+
 /* The mixtape set player: the branded scrubber-driven video for a ~72-min set
    (the finding footage is play/pause-only). Dark, warm-neutral; the scrubber
    rides the Stardust → Starlight-Cream ramp (no galaxy tints — they fail AA on
-   the dark plate), the play/pause is the one Eclipse-Gold light (One Sun). */
+   the dark plate), the play/pause is the one Eclipse-Gold light (One Sun). The
+   transport rides as an auto-hiding overlay over the frame (the /log polish). */
 .mixtape-player {
-  display: grid;
-  gap: 0.75rem;
   margin: 0 auto;
   width: min(100%, 34rem);
+}
+
+/* Clip the bottom overlay scrim to the player's rounded corners. */
+.mixtape-stage {
+  border-radius: var(--rounded-lg);
+  overflow: hidden;
 }
 
 .mixtape-player-media {
@@ -1102,12 +1114,6 @@ body::before {
   display: block;
   object-fit: cover;
   width: 100%;
-}
-
-.mixtape-player-controls {
-  align-items: center;
-  display: flex;
-  gap: 0.75rem;
 }
 
 .mixtape-player-toggle {
@@ -1410,11 +1416,17 @@ body::before {
   color: var(--stardust);
 }
 
-/* The inline preview transport, pinned along the bottom of the stage over a near-solid
-   scrim so the cream scrubber + gold play button clear AA against arbitrary (including
-   bright) footage. The band stays opaque across the controls' own height and fades only
-   in its top third, so nothing sits over a transparent stretch (the Legible Sky Rule). */
-.clip-preview-controls {
+/* The auto-hiding overlay transport (`<Video.Controls overlay>`), pinned along the
+   bottom of any video stage over a near-solid scrim so the cream scrubber + gold play
+   button clear AA against arbitrary (including bright) footage. The band stays opaque
+   across the controls' own height and fades only in its top third, so nothing sits over
+   a transparent stretch (the Legible Sky Rule).
+
+   Auto-hide: `data-visible="false"` (driven by Root: PLAYING and idle) fades it out;
+   hovering the stage or moving keyboard focus into it brings it back, so it never hides
+   a control the pointer or focus is on. The fade itself is reduced-motion-gated — the
+   show/hide collapses to an instant toggle. */
+.video-overlay-controls {
   align-items: center;
   background: linear-gradient(
     to top,
@@ -1426,13 +1438,30 @@ body::before {
   display: flex;
   gap: 0.5rem;
   left: 0;
+  opacity: 1;
   padding: 0.5rem 0.5rem 0.6rem;
   position: absolute;
   right: 0;
+  transition: opacity 180ms ease-out;
+}
+
+.video-overlay-controls[data-visible="false"] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.video-stage:hover .video-overlay-controls,
+.video-stage:focus-within .video-overlay-controls {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .clip-stage-play {
+    transition: none;
+  }
+
+  .video-overlay-controls {
     transition: none;
   }
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatClock, pointerFraction } from "./mixtape-video-player";
+import { clampSeconds, formatClock, pointerFraction } from "./video-format";
 
 // The scrubber's pure pointer→time mapping (the VibeMap model): a pointer x over
 // a track rect → a 0..1 fraction → seconds against the set duration. Unit-tested
@@ -52,5 +52,31 @@ describe("formatClock", () => {
   it("guards NaN/negative input to 0:00", () => {
     expect(formatClock(Number.NaN)).toBe("0:00");
     expect(formatClock(-5)).toBe("0:00");
+  });
+});
+
+// The seek clamp — the one-clock machine's only mutation of `currentTime` runs through
+// this. A negative seek floors at 0; a seek past the end pins to the duration; before
+// the duration is known the request itself is the ceiling (so an early seek still
+// floors at 0 and never goes backwards past the request).
+describe("clampSeconds", () => {
+  const duration = 4320; // a 72-min set
+
+  it("floors a negative seek at 0", () => {
+    expect(clampSeconds(-30, duration)).toBe(0);
+  });
+
+  it("pins a seek past the end to the duration", () => {
+    expect(clampSeconds(duration + 500, duration)).toBe(duration);
+  });
+
+  it("passes an in-range seek through untouched", () => {
+    expect(clampSeconds(1080, duration)).toBe(1080);
+  });
+
+  it("treats a non-finite duration (not loaded yet) as the request being the ceiling", () => {
+    expect(clampSeconds(42, Number.NaN)).toBe(42);
+    expect(clampSeconds(-42, Number.NaN)).toBe(0);
+    expect(clampSeconds(42, Number.POSITIVE_INFINITY)).toBe(42);
   });
 });
