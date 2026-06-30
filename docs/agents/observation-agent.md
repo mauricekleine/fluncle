@@ -30,7 +30,7 @@ fluncle admin tracks observe <track_id|log_id> --script-file observation.txt [--
 - `--voice-id`: overrides the configured `CARTESIA_VOICE_ID` (the cloned Fluncle voice — the live default).
 - `--context-note`: pass a pre-fetched context note to skip the Worker's firecrawl call.
 
-Backed by `POST /api/admin/tracks/:id/observe` (`requireAdmin`-gated, mirrors the video-finalize structure, requires a Log ID). The `observe` command is **auto-allowed** in the command gate (it writes an internal R2 artifact + private field + enrichment fields, posts to **no** public feed) — but each call **spends a Cartesia render**, so de-dupe per Log ID (one render per track, not per poll).
+Backed by `POST /api/admin/tracks/:id/observe` (`requireAdmin`-gated, mirrors the video-finalize structure, requires a Log ID). The `observe` command is **agent-tier** — the boundary is the server-side role, not any local command gate (it writes an internal R2 artifact + private field + enrichment fields and posts to **no** public feed, so the box's agent-scoped token drives it) — but each call **spends a Cartesia render**, so de-dupe per Log ID (one render per track, not per poll).
 
 ## The voice gate (a hard ship requirement)
 

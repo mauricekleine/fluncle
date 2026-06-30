@@ -1,14 +1,14 @@
 # Newsletter Cron Doctrine
 
-The weekly newsletter runs as the **`fluncle-newsletter` Hermes agent cron** on the devbox (Friday 15:00 Europe/Amsterdam) — the same on-box automation home as the enrichment / context / observation crons. It authors the edition in Fluncle's voice, persists it as a **draft** server-side, then offers the operator a Discord **Send** button. The send stays operator-gated.
+The weekly newsletter runs as the **`fluncle-newsletter` Hermes `--no-agent` sweep** on the devbox (Friday 15:00 Europe/Amsterdam) — the same on-box automation home as the enrichment / context / observation sweeps. It is deterministic end to end (window → gather → persist → deliver) except **one** bounded `claude -p` authoring call that writes the edition copy in Fluncle's voice. It persists the edition as a **draft** server-side, then posts a one-line Discord summary + the `fluncle admin newsletter send <id>` command. The send stays operator-gated.
 
-This file is the **authoring doctrine** — the window logic, the voice rails, the zero-find rule, the tidbit discipline. The self-contained cron prompt in [`hermes/cron/jobs.json`](./hermes/cron/jobs.json) (job `fluncle-newsletter`) restates it for the fresh, isolated session each Friday tick runs in; the operator wiring + the DST and `clarify`-gate mechanics live in [`hermes/cron/README.md`](./hermes/cron/README.md). The server build (the `editions` table, the Resend Broadcast send, the `/newsletter` archive) has shipped; this doc is the authoring layer on top of it.
+This file is the **authoring doctrine** — the window logic, the voice rails, the zero-find rule, the tidbit discipline. The sweep source ([`hermes/scripts/newsletter-sweep.{sh,ts}`](./hermes/scripts/)) restates the authoring prompt for the fresh, isolated `claude -p` call each Friday tick makes; the operator wiring + the DST mechanics live in [`hermes/cron/README.md`](./hermes/cron/README.md). The server build (the `editions` table, the Resend Broadcast send, the `/newsletter` archive) has shipped; this doc is the authoring layer on top of it.
 
 ## The shape (Hermes + Resend, not Spinup + Loops)
 
-- **Compute:** an on-box Hermes **agent** cron (Sonnet + the installed `copywriting-fluncle` skill). Not a `--no-agent` script — the newsletter authors copy, so it needs the LLM. Each Friday tick is a fresh session, so the prompt is fully self-contained.
-- **Persist:** the authored edition is written as a **draft `editions` row** (no number yet) via `fluncle admin newsletter draft` (Worker op `create_edition`, admin tier — agent-allowed). This is the durable artifact; it happens **before** the send button (persist-then-offer), so a missed button never loses the work.
-- **Send:** the operator taps the Discord **Send** button (the `clarify` gate) → the agent calls `fluncle admin newsletter send <id>` (Worker op `send_edition`, **operator tier** — a valid agent token gets a 403). The Worker renders the email HTML from the stored `content`, creates + sends the **Resend broadcast**, and mints the sequential edition number. The send is the human gate that replaces the old Loops dashboard tap.
+- **Compute:** an on-box Hermes **`--no-agent` sweep** — deterministic window/gather/persist/deliver with **one** bounded `claude -p` authoring call (Claude Code on subscription auth + the baked `copywriting-fluncle` skill; zero OpenRouter). The newsletter authors copy, so that one step needs the LLM — but it is a single call, not a full agent session. (It replaced the old full-agent cron on 2026-06-27, after an agent run flailed 83 model calls on one trigger.) Each Friday tick is a fresh, self-contained invocation.
+- **Persist:** the authored edition is written as a **draft `editions` row** (no number yet) via `fluncle admin newsletter draft` (Worker op `create_edition`, admin tier — agent-allowed). This is the durable artifact; it happens **before** the Discord offer (persist-then-offer), so a missed send never loses the work.
+- **Send:** the sweep posts a one-line Discord summary + the literal `fluncle admin newsletter send <id>` command; the **operator** runs it (Worker op `send_edition`, **operator tier** — a valid agent token gets a 403). The Worker renders the email HTML from the stored `content`, creates + sends the **Resend broadcast**, and mints the sequential edition number. The operator-run command is the human gate that replaces the old Loops dashboard tap. (The old interactive `clarify` Send/Hold button needed the agent loop and is gone with it.)
 - **Secrets:** `RESEND_API_KEY` + the segment id stay **Worker secrets**. The box holds only its agent-scoped admin token; it never touches Resend directly.
 - **Archive:** the sent edition lands in the `/newsletter` archive — the same structured `content` payload renders both the email HTML and the archive page (one source → two renders).
 
@@ -16,7 +16,7 @@ The CLI relays the cron uses (Convention B `verb_noun`): `fluncle admin newslett
 
 ## Voice (non-negotiable)
 
-You are Fluncle: the uncle with the good records, writing a letter to the people on his list. Load and apply the **`copywriting-fluncle`** skill (installed on the box at `~/.hermes/skills/copywriting-fluncle`) — it is the full voice canon and overrides everything below. The rules that most often save you:
+You are Fluncle: the uncle with the good records, writing a letter to the people on his list. Load and apply the **`copywriting-fluncle`** skill (baked into the image at `/opt/claude/skills/copywriting-fluncle`, discovered via `CLAUDE_CONFIG_DIR=/opt/claude` so the `claude -p` authoring call finds it) — it is the full voice canon and overrides everything below. The rules that most often save you:
 
 - Email register: a letter from a bruv. Open with "Ahoy cosmonauts," close with "Happy raving," then "Fluncle". First person ("I"), no "we".
 - No exclamation marks, no marketing buzzwords, never the words "transmission", "signal" (as identity), "curated", or "content". The collection is "Fluncle's Findings"; dates are "Found".
@@ -31,7 +31,7 @@ The discovery window is `[since, until)`. `until` is NOW. `since` is the `window
 
 Only **sent** editions anchor the window — that is what makes it self-heal. A skipped Friday, or a drafted-but-never-sent edition, leaves the window open: the next run's `since` is still the last _sent_ cutoff, so those finds re-enter the next window instead of being dropped. (This replaces the old "parse the cutoff out of the Loops campaign name" hack — the cutoff now lives in `editions.windowUntil`, a real column.)
 
-**Miss-recovery comes first.** Before authoring anything, read `admin newsletter list` for an existing **unsent draft** (status `draft`, no `number`). If one exists, do not author a new edition — re-offer _that_ draft's Send button. The draft is updated in place, never duplicated; the send is idempotent on the edition id, so a re-offered button never double-mails.
+**Miss-recovery comes first.** Before authoring anything, read `admin newsletter list` for an existing **unsent draft** (status `draft`, no `number`). If one exists, do not author a new edition — re-offer _that_ draft's send command. The draft is updated in place, never duplicated; the send is idempotent on the edition id, so a re-offered command never double-mails.
 
 ## The content (one structured payload)
 
@@ -64,8 +64,8 @@ The `"Ahoy cosmonauts,"` open and `"Happy raving," / "Fluncle"` close are added 
 
 ## Safety rails
 
-- **Persist before the button, always.** The draft row is the durable artifact; the Send button is convenience. Author + `admin newsletter draft` first, _then_ offer `clarify`.
-- **Never send unprompted; never auto-send on a `clarify` timeout.** Silence is treated as Hold — it is not consent for a publish-class action. The draft persists and is re-offered next Friday.
-- **The send is operator-only by design.** Your agent token gets a 403 on `admin newsletter send`. Do not work around it; offer the button and let the operator tap.
+- **Persist before the offer, always.** The draft row is the durable artifact; the Discord summary is convenience. Author + `admin newsletter draft` first, _then_ post the summary + the send command.
+- **Never send unprompted; never auto-send.** Silence is treated as Hold — it is not consent for a publish-class action. The draft persists and is re-offered next Friday.
+- **The send is operator-only by design.** Your agent token gets a 403 on `admin newsletter send`. Do not work around it; post the `fluncle admin newsletter send <id>` command and let the operator run it.
 - **Every fact comes from the API response or a source-linked tidbit.** The uncle never makes things up; the music is impressive enough. Never invent a track, artist, date, Log ID, or stat.
 - **One draft per window, updated not duplicated.** Re-running finds the existing unsent draft and re-offers it rather than authoring a second one.
