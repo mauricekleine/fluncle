@@ -86,6 +86,21 @@ export function apiFault(error: unknown): ORPCError<string, ApiFaultData> {
   });
 }
 
+/**
+ * The canonical catch wrapper every admin handler uses: an `ORPCError` (a guard
+ * the procedure or a field check threw) passes through untouched so its status /
+ * code / message survive; anything else (an `ApiError` from a reused helper, or
+ * an unexpected throw) becomes a wire-compatible fault via `apiFault`, so the
+ * rails encoder reproduces the legacy `{ code, message }` body.
+ */
+export function toFault(error: unknown): ORPCError<string, unknown> {
+  if (error instanceof ORPCError) {
+    return error;
+  }
+
+  return apiFault(error);
+}
+
 // ── Response → fault parity (the `/me` private tier) ─────────────────────────
 // The live `/me` route helpers (account-data.ts, public-auth.ts) signal failure
 // by RETURNING a `jsonError` `Response` (body `{ code, message, ok: false }`,

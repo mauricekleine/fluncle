@@ -32,18 +32,10 @@ import { adminAuth, operatorGuard } from "../orpc-auth";
 import { R2_MAX_PARTS, VIDEOS_BUCKET, presignMultipartUpload, presignUploads } from "../r2-presign";
 import { purgeClipCache } from "../video-cache";
 import { getYouTubeAccessToken } from "../youtube";
-import { apiFault, type Implementer } from "./_shared";
+import { apiFault, type Implementer, toFault } from "./_shared";
 
 // YouTube's thumbnail cap, ported verbatim from the live finalize route.
 const THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024;
-
-function toFault(error: unknown): ORPCError<string, unknown> {
-  if (error instanceof ORPCError) {
-    return error;
-  }
-
-  return apiFault(error);
-}
 
 // Ported verbatim from the live youtube/finalize route: a best-effort custom
 // thumbnail (the wide cover, rendered in-process). A thumbnail failure must not

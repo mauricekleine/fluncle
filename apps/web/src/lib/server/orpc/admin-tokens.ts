@@ -9,15 +9,7 @@ import { lastfmGetSession, lastfmGetToken } from "../lastfm";
 import { getMixcloudAccessToken } from "../mixcloud";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { getYouTubeAccessToken } from "../youtube";
-import { apiFault, type Implementer } from "./_shared";
-
-function toFault(error: unknown): ORPCError<string, unknown> {
-  if (error instanceof ORPCError) {
-    return error;
-  }
-
-  return apiFault(error);
-}
+import { apiFault, type Implementer, toFault } from "./_shared";
 
 /**
  * Build the `admin-tokens` domain's handlers. Each reuses the live route logic
