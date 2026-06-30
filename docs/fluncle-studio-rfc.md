@@ -157,7 +157,7 @@ Most are resolved (operator). Remaining:
 - **Multi-tempo BPM** — local per-peak estimation only; a global grid silently no-ops (validated as an acceptance criterion).
 - **Render-box contention avoided** by running on rave-02, not the GPU conductor.
 - **Out of scope (inherited constraint):** IG/TikTok distribution — IG 2026 AI fingerprinting mutes copyrighted audio on API Reels; the in-app post is the irreducible manual beat; when it lands it's a sibling `*_social_posts` table.
-- **Doc-drift to fix in passing:** `docs/video-variants.md` still says `fit=crop`; the code uses `fit=cover` (bare `crop` 400s). Correct it so the next builder doesn't copy the wrong param.
+- **Doc-drift (fixed):** `docs/video-variants.md` now uses `fit=cover` to match the code (bare `crop` 400s) — corrected, so the next builder copies the right param.
 
 ## Appendix — verifications & sources
 

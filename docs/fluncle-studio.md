@@ -4,7 +4,7 @@ The mixtape set → clip pipeline (full design: `docs/fluncle-studio-rfc.md`). T
 
 ## What it does
 
-`fluncle admin mixtapes distribute <idOrLogId> --video <master>.mp4 --set-video` stages **one 1080p faststart rendition** of the set to R2 at `<logId>/set.mp4` and flips the mixtape's `setVideoAt`. That single rendition serves three surfaces: the `/log/<mixtapeLogId>` set-video player (Unit F, shipped), the `/admin/studio` editor scrub-preview (Unit E), and the clip cut (Unit C). The **raw multi-GB master never goes to R2** — it stays a local archive; a 9:16 social clip cropped from a 1080p rendition is plenty (the platforms re-encode anyway).
+`fluncle admin mixtapes distribute <idOrLogId> --video <master>.mp4 --set-video` stages **one 1080p faststart rendition** of the set to R2 at `<logId>/set.mp4` and flips the mixtape's `setVideoAt`. That single rendition serves three surfaces: the `/log/<mixtapeLogId>` set-video player (Unit F, shipped), the `/admin/studio/$logId` editor scrub-preview (Unit E), and the clip cut (Unit C). The **raw multi-GB master never goes to R2** — it stays a local archive; a 9:16 social clip cropped from a 1080p rendition is plenty (the platforms re-encode anyway).
 
 It is **opt-in** and an **additional** leg of `distribute`:
 
