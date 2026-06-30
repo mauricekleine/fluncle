@@ -10,7 +10,7 @@ import { fetchTracks } from "@/lib/tracks";
 import { listTracks } from "@/lib/server/tracks";
 import { factoryPalette as p } from "@/game/factory/palette";
 
-// The factory — a finding's life, made playable (docs/factory-to-orbit-brief.md).
+// The factory — a finding's life, made playable.
 // A client-only Canvas conveyor that renders the REAL pipeline state every finding
 // is in (the same fields /api/tracks already carries), polled near-realtime. A
 // finding rides the belt to the furthest step it has reached, piles in front of

@@ -45,8 +45,8 @@ import {
   xOffsetToLeftFraction,
 } from "@/lib/studio-clip";
 
-// Unit E — the Studio clip editor (docs/fluncle-studio-rfc.md). One landscape set
-// rendition (Unit A's `<log-id>/set.mp4`) → many framed 9:16 footage clips. Entered
+// The Studio clip editor. One landscape set
+// rendition (the `<log-id>/set.mp4` master) → many framed 9:16 footage clips. Entered
 // from the "Clip this set" action on a minted mixtape row (/admin/mixtapes). A full
 // AdminShell fill page, assembled from the pieces the RFC's reuse inventory names:
 // the `VideoScrubber` (#208), `useVideoStallRecovery`, the radio "one clock"

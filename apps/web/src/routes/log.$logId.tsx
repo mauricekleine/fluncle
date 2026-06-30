@@ -39,8 +39,8 @@ import {
 
 // The standalone log page: one finding's permanent, readable, indexable record
 // (the archival-plate register). The cinematic full-bleed register is the
-// Stories dialog over the home feed — same data, different presentation
-// (docs/track-lifecycle.md). This page is what a crawler, an AI agent, or
+// Stories dialog over the home feed — same data, different presentation.
+// This page is what a crawler, an AI agent, or
 // a shared link sees at the coordinate.
 
 type LogPageData =

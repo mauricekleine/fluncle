@@ -29,7 +29,7 @@ export function LogFootage({ track }: { track: Track }) {
   // an MT centre-crop to the pane the viewport wants: a 16:9 landscape on desktop
   // (the deliberate "show off the asset" moment) and a 9:16 portrait on mobile.
   // A legacy finding (no signal) keeps playing footage.mp4 as today's
-  // portrait+text cut (docs/video-variants.md). NEVER footage.social.mp4 — that
+  // portrait+text cut. NEVER footage.social.mp4 — that
   // baked-text cut is the homepage Stories format; /log + radio stay clean.
   const squared = Boolean(track.videoSquaredAt);
   // The desktop verdict drives BOTH the requested crop and the pane aspect (the

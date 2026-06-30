@@ -1,8 +1,8 @@
 import { type FrontierEntity, type GameTrack, type Star, type Vec2 } from "./types";
 import { fnv1a, sectorDay } from "../lib/log-id-shared";
 
-// Deterministic star placement from the Log ID (docs/ROADMAP.md, "The
-// expanding frontier"). The sector (days since the Fluncle epoch) maps to
+// Deterministic star placement from the Log ID (the expanding frontier). The
+// sector (days since the Fluncle epoch) maps to
 // radial distance from Earth — the oldest findings orbit close to home and
 // every new finding pushes the frontier outward, deliberately uncompressed.
 // The hash tail spreads same-day findings around their shared orbital ring.

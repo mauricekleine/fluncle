@@ -21,8 +21,8 @@ import {
 } from "@/lib/studio-clips";
 import { useVideoStallRecovery } from "@/lib/use-video-recovery";
 
-// One clip in the cross-set library grid (Fluncle Studio Unit G; docs/fluncle-studio-rfc.md
-// §8). A 9:16 poster tile that reveals an inline preview (the shared VideoScrubber +
+// One clip in the cross-set library grid (the Fluncle Studio clip library).
+// A 9:16 poster tile that reveals an inline preview (the shared VideoScrubber +
 // the radio "one clock" discipline) and the hand-off: download WITH audio (Instagram)
 // or audio-STRIPPED (TikTok). A `pending` clip — minted in the editor, not yet cut by
 // the box — shows a quiet "cutting" state instead of a poster (no preview/download).

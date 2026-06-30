@@ -11,7 +11,7 @@ import { usePreviewControls } from "@/lib/preview-player";
 import { cn } from "@/lib/utils";
 
 // The vibe map: a 2D field where the operator drops a banger relative to the
-// others (see docs/admin-tagging.md). X = Light(-1)↔Dark(+1) mood, Y =
+// others. X = Light(-1)↔Dark(+1) mood, Y =
 // Floaty(-1)↔Driving(+1) energy. The four quadrants are the four galaxies, each
 // its own colour. Placement is relative, not absolute — that's what makes review
 // fast. Position is never CSS-animated (it tracks the pointer), so reduced-motion

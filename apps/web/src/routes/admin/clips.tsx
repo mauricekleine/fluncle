@@ -26,8 +26,8 @@ import {
   filterClips,
 } from "@/lib/studio-clips";
 
-// Unit G — the cross-mixtape clip library (docs/fluncle-studio-rfc.md §8). A set yields
-// MANY clips, so beyond the per-set editor (/admin/studio/$logId, Unit E) this is
+// The cross-mixtape clip library. A set yields
+// MANY clips, so beyond the per-set editor (/admin/studio/$logId) this is
 // the grid of EVERY clip across every set: browse, filter (by set + status), preview
 // inline, and DOWNLOAD one to hand-post (the irreducible in-app beat). Reads `list_clips`
 // (Unit D); `delete_clip` prunes a bad cut. Distribution is deferred — the card carries

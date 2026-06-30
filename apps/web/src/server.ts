@@ -15,7 +15,7 @@ export default createServerEntry({
     // `/api/v1` and `/api`. It returns null when no procedure matched (the
     // `matched: false` fall-through), so every unconverted route — and every
     // non-API request — flows on to the existing handlers unchanged. This is the
-    // incremental-migration seam (docs/orpc-migration-brief.md); it sits ahead of
+    // incremental-migration seam; it sits ahead of
     // the router so a converted route is served by its contract, not the stale
     // TanStack file route, while the rest of the surface is untouched.
     const orpc = await handleOrpc(request);

@@ -14,7 +14,7 @@ import {
 // the spectral features that feed tagging + the video kit. Pressing the button
 // marks the finding "pending" (queue-eligible); the on-box `fluncle-enrich`
 // `--no-agent` cron picks it up on its next ~5-min tick, analyzes on-box, and
-// flips the status to "done"/"failed" (docs/track-lifecycle.md, Phase 2). The
+// flips the status to "done"/"failed". The
 // cell reflects whichever state it's in.
 
 type EnrichDialogProps = {

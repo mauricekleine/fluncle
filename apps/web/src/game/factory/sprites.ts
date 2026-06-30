@@ -9,7 +9,7 @@ import { factoryPalette as P } from "./palette";
 // stays sparse and meaningful. The launch gantry is the one exception: its beacon
 // is the sun on the horizon, the way up.
 //
-// PNG-or-procedural contract (docs/galaxy-sprites.md): a curated /factory/<id>.png
+// PNG-or-procedural contract: a curated /factory/<id>.png
 // overrides any of these on load, so the Gemini pass can polish a machine later
 // with zero code change. The look is the upscaling, not the detail.
 

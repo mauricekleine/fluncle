@@ -17,7 +17,7 @@ import { useVideoStallRecovery } from "@/lib/use-video-recovery";
 // discipline: the element is the single source of truth, the UI only reflects it.
 //
 // `VideoScrubber` is split out as a controlled, presentation-only seek bar so the
-// planned Fluncle Studio editor (docs/fluncle-studio-rfc.md Unit E) can reuse the
+// planned Fluncle Studio editor can reuse the
 // exact scrubber over its own preview element.
 
 const SEEK_STEP_SECONDS = 5;

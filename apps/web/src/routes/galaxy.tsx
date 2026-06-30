@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 import { siteUrl } from "@/lib/fluncle-links";
 
-// Fluncle's Galaxy — the game (docs/ROADMAP.md, Galaxy game section). The whole game is a
+// Fluncle's Galaxy — the game. The whole game is a
 // client-only canvas app, loaded as its own chunk inside useEffect so the
 // archive's bundle stays light and the server never touches browser APIs.
 

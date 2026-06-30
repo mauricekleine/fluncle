@@ -10,8 +10,8 @@ import {
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
-// The view dialogs for the two audio-observation columns on the admin board
-// (docs/agents/observation-agent.md). Both are READ-ONLY first-pass overviews:
+// The view dialogs for the two audio-observation columns on the admin board.
+// Both are READ-ONLY first-pass overviews:
 //
 //   Context     — the firecrawl-derived `context_note` (internal creative fuel for
 //                 the observation script). The dialog reads the note text lazily.
@@ -20,9 +20,9 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 //
 // TODO(backfill): neither dialog generates anything. Authoring + rendering an
 // observation needs an agent-authored, voice-gated script posted to the
-// `observe` endpoint (the agent holds copywriting-fluncle) — see
-// docs/agents/observation-agent.md. When that operator-trigger path exists, wire a
-// "generate" action in here; for now the board surfaces status + a view.
+// `observe` endpoint (the agent holds copywriting-fluncle). When that
+// operator-trigger path exists, wire a "generate" action in here; for now the
+// board surfaces status + a view.
 
 type ContextDialogProps = {
   /** The context-note text once fetched ("" = still absent / not yet fetched). */
@@ -152,7 +152,7 @@ export function ObservationDialog({
         ) : (
           <p className="text-sm text-muted-foreground">
             No observation rendered yet — the enrich agent authors and voices it after the video
-            step (docs/agents/observation-agent.md).
+            step.
           </p>
         )}
       </DialogContent>

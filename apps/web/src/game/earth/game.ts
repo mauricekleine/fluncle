@@ -70,7 +70,7 @@ export function createEarth(container: HTMLElement, options: Options): EarthGame
   const props = buildPropSprites();
   const grain = createGrain(VIEW_W, VIEW_H);
 
-  // PNG overrides for any prop (docs/galaxy-sprites.md contract).
+  // PNG overrides for any prop (the PNG-or-procedural contract).
   const pngs: Record<string, HTMLImageElement> = {};
   for (const propId of Object.keys(props)) {
     const img = new Image();
