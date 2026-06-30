@@ -103,6 +103,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 ## Architecture
 
 - MUST: Keep `apps/web` as the owner of public and admin API routes, including Spotify, Telegram, Discord, and Turso mutation behavior.
+- MUST: Put public/admin HTTP surfaces on oRPC contract ops by default (`packages/contracts/src/orpc/**`, registered in the `apps/web/src/lib/server/orpc/**` router); `handleOrpc` is mounted ahead of the TanStack router in `server.ts`, so a contract op shadows any file-route at the same method+path. New surfaces go on oRPC. The only `apps/web/src/routes/api/**` file-route carve-outs are: auth/OAuth redirects (Spotify/YouTube/Mixcloud/Discord starts+callbacks, admin login/logout); large-body/streaming/direct-upload routes (multipart uploads, media proxies/presigns); non-JSON emitters (feeds/sitemap/robots/`llms.txt`/`.well-known`/the CLI install script/OG + cover images/the generated OpenAPI+Postman specs); and the `/status`+`/health` resource-reads. The build-fail coverage tests (`orpc-coverage` / `orpc-admin-coverage`) enforce this: any non-carve-out route without a contract fails the build.
 - MUST: Keep the CLI as a thin HTTP client for public reads/submissions and authenticated admin commands.
 - MUST: Keep Raycast commands calling the `fluncle` CLI rather than reimplementing Spotify, Telegram, Turso, or HTTP API behavior.
 - MUST: Keep publishing authority behind the authenticated admin API.

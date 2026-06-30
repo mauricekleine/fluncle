@@ -66,9 +66,9 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   "POST /devices": "register_device",
   "POST /me/delete": "delete_private_account",
   "POST /me/export": "export_private_account_data",
-  // The only `/me/galaxy-progress/logs` route is this POST collect-one (the game's
-  // per-find write → `collectLogId`); there is no list-logs route, so the op is
-  // named for what it does (see ../../routes/api/me/galaxy-progress/logs.ts).
+  // The only `/me/galaxy-progress/logs` op is this POST collect-one (the game's
+  // per-find write → `collectLogId`); there is no list-logs op, so it is named for
+  // what it does (see ../orpc/me-galaxy.ts — oRPC owns the path directly now).
   "POST /me/galaxy-progress/logs": "collect_private_galaxy_log",
   "POST /me/saved-findings": "save_private_finding",
   "POST /newsletter": "subscribe_newsletter",
