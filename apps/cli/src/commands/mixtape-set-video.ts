@@ -1,9 +1,8 @@
-// Fluncle Studio Unit A — `distribute --set-video`. Derive ONE 1080p faststart
+// Fluncle Studio — `distribute --set-video`. Derive ONE 1080p faststart
 // rendition of the set with ffmpeg (the operator's Mac), multipart-upload it straight
 // to R2 at `<logId>/set.mp4`, and flip `setVideoAt` so the `/log` player + the video
 // SEO light up. The raw multi-GB master never goes to R2 — only this rendition does
-// (it serves the `/log` player, the editor scrub, and the clip cut). See
-// docs/fluncle-studio-rfc.md §2 / docs/fluncle-studio.md.
+// (it serves the `/log` player, the editor scrub, and the clip cut).
 //
 // The bytes move CLI-direct: the rendition is ~1.5GB, past the single-PUT presign
 // budget, so the Worker OPENS a multipart upload + presigns the parts (operator-tier
@@ -24,7 +23,7 @@ import { CliError } from "../output";
 // The public read base for stored artifacts (matches the Worker's FOUND_BASE).
 const FOUND_BASE = "https://found.fluncle.com";
 
-// The 1080p faststart rendition spec (docs/fluncle-studio-rfc.md §2): clip-capable,
+// The 1080p faststart rendition spec: clip-capable,
 // dense-ish GOP for scrubbing, H.264 + AAC. ~CRF 20 lands a 48-min set near 1.5–2 GB.
 export const SET_VIDEO_RENDITION = {
   audioBitrate: "192k",
@@ -147,7 +146,7 @@ export type StageSetVideoResult = { key: string; url: string };
  * → flip `setVideoAt`. Idempotent: a re-run on a published mixtape re-stages + re-
  * flips (backfills an older set). Default stages public (distribute = publish); the
  * pre-release embargo (stage private, flip on release) is a documented later hook,
- * not built here (docs/fluncle-studio-rfc.md §2 "Embargo").
+ * not built here.
  */
 export async function stageSetVideo(
   mixtapeId: string,

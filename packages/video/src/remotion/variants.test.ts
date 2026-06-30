@@ -1,7 +1,7 @@
 // Self-running check for the render-variant provenance helper — no framework.
 // Asserts buildVariants() emits the correct per-master render flags so the bundle
 // render.json stays self-describing (a clean re-render from source reproduces the
-// right cut, not the portrait default). See docs/video-variants.md.
+// right cut, not the portrait default).
 // Run: `bun src/remotion/variants.test.ts` (exits non-zero on failure).
 
 import assert from "node:assert/strict";

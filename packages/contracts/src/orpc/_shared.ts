@@ -254,7 +254,7 @@ export const EditionDTOSchema = z
 
 /**
  * A clip — a lightweight 9:16 derivative cut from a mixtape's set video
- * (`mixtape_clips`; docs/fluncle-studio-rfc.md Unit D; `ClipDTO` below). NOT a spine
+ * (`mixtape_clips`; `ClipDTO` below). NOT a spine
  * object: it carries no Log ID. Many per mixtape (the drip-feed backlog). This is the
  * wire shape the clip ops emit and the editor / clip library read. `xOffset` is the
  * 9:16 framing offset; `status` is the cut-queue + library-filter state.

@@ -138,7 +138,7 @@ export async function trackVideoCommand(
   // model comes from --model, else render.json, else the default. When the bundle
   // carried BOTH the square footage.mp4 and the portrait footage.social.mp4,
   // footage.mp4 is the clean square crop source, so signal `squared` to stamp the
-  // two-master layout (docs/video-variants.md).
+  // two-master layout.
   const manifest = files.render ? await readManifestFields(files.render) : {};
   const videoModel = files.model?.trim().slice(0, 120) || manifest.model || DEFAULT_VIDEO_MODEL;
   const videoModelReasoning =
@@ -308,7 +308,7 @@ export async function trackUpdateCommand(
 // CACHE NOTE: re-shipping footage.mp4 to the same R2 key leaves Cloudflare
 // Media-Transformation renditions cached separately. The video ship purges them
 // automatically on a re-render; `fluncle admin tracks purge-video` is the manual
-// twin (docs/video-variants.md).
+// twin.
 export type TrackRequeueVideoResponse = {
   alreadyClear?: boolean;
   logId: string;

@@ -1,5 +1,5 @@
 // The runtime oRPC contract registry — the contract-first source of truth the
-// oRPC migration is built on (docs/orpc-migration-brief.md). This is the
+// oRPC migration is built on. This is the
 // `@fluncle/contracts/orpc` subpath entry.
 //
 // The pure-types `../index.ts` is the package's ZOD-FREE surface: the CLI,
@@ -16,7 +16,7 @@
 // here — it touches no other domain's file, so parallel agents converting
 // different domains never collide.
 //
-// Naming follows the ratified Convention B (docs/naming-conventions.md): each op
+// Naming follows the ratified Convention B: each op
 // has a canonical `verb_noun` registry key whose camelCase projection is the
 // OpenAPI `operationId` (`get_track` → `getTrack`). The REST path mirrors the
 // live route; resources are plural, the op noun stays singular.

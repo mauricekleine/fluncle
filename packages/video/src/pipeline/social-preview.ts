@@ -92,7 +92,7 @@ async function main(): Promise<void> {
   // the output dimensions. Portrait (1080×1920) stays the default; landscape
   // (1920×1080) is the radio full-screen cut; square (1920×1920) is the clean
   // source master MT crops to either orientation on the fly — the 9:16 shaders
-  // reflow under landscape/square (see docs/video-variants.md).
+  // reflow under landscape/square.
   const aspectFlagIndex = args.indexOf("--aspect");
   const aspectArg = aspectFlagIndex >= 0 ? args[aspectFlagIndex + 1] : undefined;
   const aspect: CosmosAspect =

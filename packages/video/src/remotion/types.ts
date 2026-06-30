@@ -127,7 +127,7 @@ export type CosmosPalette = {
  * the bespoke 9:16 shaders reflow under it (expected — landscape is scaffold, not
  * a polished catalogue pass). `square` is 1920×1920 — the clean source master MT
  * centre-crops to portrait (1080×1920) and landscape (1920×1080) on the fly, so
- * one render feeds both archive orientations (see docs/video-variants.md). Square
+ * one render feeds both archive orientations. Square
  * compositions must read at 1:1 and keep their centre of gravity centered, since
  * only the centre "plus" of the square survives either crop. Resolved to concrete
  * dimensions in `root.tsx`'s `calculateMetadata`; portrait stays the default when
@@ -140,7 +140,7 @@ export type CosmosAspect = "portrait" | "landscape" | "square";
  * so a future "clean re-render from source" reproduces THIS cut and not the other.
  * The composition + props are shared across both masters; only these flags differ
  * (footage.mp4 = square/clean, footage.social.mp4 = portrait/text). Re-rendering an
- * output is `render(composition, props, variants[<output>])`. See docs/video-variants.md.
+ * output is `render(composition, props, variants[<output>])`.
  */
 export type RenderVariant = {
   aspect: CosmosAspect;

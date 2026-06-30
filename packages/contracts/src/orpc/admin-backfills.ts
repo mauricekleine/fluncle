@@ -1,6 +1,6 @@
 // The `admin-backfills` domain contract module — the operator-gated maintenance
-// sweeps (the Discogs + Last.fm back-fills). Part of the admin fan-out
-// (docs/orpc-migration-brief.md), built on the same pattern as `./admin-tracks.ts`.
+// sweeps (the Discogs + Last.fm back-fills). Part of the admin fan-out, built on
+// the same pattern as `./admin-tracks.ts`.
 //
 //   - `backfill_discogs` / `backfill_lastfm` — operator tier (live
 //     `requireOperator`). Batched: one request handles a bounded pass and returns

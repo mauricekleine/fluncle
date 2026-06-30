@@ -1,5 +1,5 @@
 // Package a rendered track video into an uploadable two-master bundle keyed by
-// Log ID (see docs/video-variants.md):
+// Log ID:
 //
 //   out/<log-id>/
 //     footage.mp4        (square 1920×1920, audio, CLEAN — the crop source master;
@@ -279,7 +279,7 @@ writeFileSync(
       // The per-master render-flag provenance: ship produces BOTH masters
       // (footage.mp4 = square/clean, footage.social.mp4 = portrait/text), so a
       // future "clean re-render from source" reproduces the right cut per output
-      // instead of the portrait default. See docs/video-variants.md.
+      // instead of the portrait default.
       variants: buildVariants(),
       // The diversity-ledger entry: the upload endpoint reads this and stores it
       // as the track's video_vehicle (surfaced in /api/tracks for the next agent).

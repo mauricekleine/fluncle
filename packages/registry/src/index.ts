@@ -347,7 +347,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "subdomain",
     name: "subdomain.onion",
     operatorNotes:
-      "An onionspray mirror. Advertised via Tor Browser's Onion-Location pill. Probed on /status as service `onion`. Runbook: docs/tor.md.",
+      "An onionspray mirror. Advertised via Tor Browser's Onion-Location pill. Probed on /status as service `onion`.",
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     subdomain: "p53pc2uzfu2tnih4cd6wd42ok6zup2uttj6xdmjdccy5kqo33fyppkqd.onion",
     url: "http://p53pc2uzfu2tnih4cd6wd42ok6zup2uttj6xdmjdccy5kqo33fyppkqd.onion",

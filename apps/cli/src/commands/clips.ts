@@ -1,8 +1,7 @@
-// Fluncle Studio Unit C — the footage cut (docs/fluncle-studio-rfc.md §4 /
-// docs/fluncle-studio.md). Turn one `pending` clip into a framed, brand-stamped 9:16
-// clip on R2, then mark it `done`.
+// Fluncle Studio — the footage cut. Turn one `pending` clip into a framed,
+// brand-stamped 9:16 clip on R2, then mark it `done`.
 //
-// A clip is a real ffmpeg cut from the landscape 1080p set rendition (Unit A's
+// A clip is a real ffmpeg cut from the landscape 1080p set rendition (the
 // `<logId>/set.mp4`): trim `[inMs,outMs]`, crop 16:9 → 9:16 at the operator's
 // `xOffset`, bake a minimal brand frame (the mixtape title + the `fluncle://<logId>`
 // coordinate over a scrim that clears AA over arbitrary footage), and store it as the

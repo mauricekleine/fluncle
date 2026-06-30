@@ -4,7 +4,7 @@ import { adminApiDelete, adminApiGet, adminApiPatch, adminApiPost } from "../api
 import { CliError } from "../output";
 
 // The CLI relay for the newsletter edition control plane (the Hermes Friday cron's
-// hands; docs/agents/newsletter-agent.md). Convention B `verb_noun`:
+// hands). Convention B `verb_noun`:
 //   - `admin newsletter draft`  → create_edition (POST /admin/newsletter/editions) — admin tier.
 //   - `admin newsletter update` → update_edition (PATCH /admin/newsletter/editions/{id}) — admin tier.
 //   - `admin newsletter send`   → send_edition (POST /admin/newsletter/editions/{id}/send) — OPERATOR tier (agent → 403).
