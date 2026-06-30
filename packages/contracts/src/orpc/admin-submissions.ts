@@ -1,6 +1,6 @@
 // The `admin-submissions` domain contract module — the submission-review queue
-// (list/show + approve/reject). Part of the admin fan-out
-// (docs/orpc-migration-brief.md), built on the same pattern as `./admin-tracks.ts`.
+// (list/show + approve/reject). Part of the admin fan-out, built on the same
+// pattern as `./admin-tracks.ts`.
 //
 //   - `list_submissions` / `get_submission` — admin tier (live `requireAdmin`):
 //     reads, so the agent role authenticates too.

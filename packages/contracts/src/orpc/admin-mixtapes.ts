@@ -1,7 +1,6 @@
 // The `admin-mixtapes` domain contract module — the mixtape authoring + the
 // audio→Mixcloud / video→YouTube distribution control plane. Part of the admin
-// fan-out (docs/orpc-migration-brief.md), built on the same pattern as
-// `./admin-tracks.ts`.
+// fan-out, built on the same pattern as `./admin-tracks.ts`.
 //
 // VERIFIED auth tiers against the live handlers:
 //   - `list_mixtapes_admin` (GET) and `get_mixtape_social` (GET) — admin tier
@@ -268,7 +267,7 @@ export const publishMixtapeYoutube = oc
   .input(z.object({ mixtapeId: z.string() }))
   .output(z.object({ ok: z.literal(true), url: z.string() }));
 
-// ── Fluncle Studio: clips + cue backfill (docs/fluncle-studio-rfc.md Unit D) ───
+// ── Fluncle Studio: clips + cue backfill ──────────────────────────────────────
 // A clip is a lightweight 9:16 derivative of a mixtape's set video — many per set.
 // LOOSE/passthrough bodies, like the rest of the domain: the server helpers
 // (`createClip`/`updateClip`/`setMixtapeCues`) validate + throw their own codes, so

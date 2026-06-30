@@ -1,7 +1,6 @@
 // The `admin-social` domain contract module — a finding's per-platform
 // publication control plane (list state, update status, push a draft). Part of
-// the admin fan-out (docs/orpc-migration-brief.md), built on the same pattern as
-// `./admin-tracks.ts`.
+// the admin fan-out, built on the same pattern as `./admin-tracks.ts`.
 //
 //   - `list_track_social` — admin tier (live `requireAdmin`): a read.
 //   - `update_track_social` — operator tier (live `requireOperator`): the manual

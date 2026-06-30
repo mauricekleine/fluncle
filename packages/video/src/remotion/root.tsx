@@ -36,7 +36,7 @@ declare global {
 const FPS = 30;
 // Portrait is the unchanged default for every clip to date. Landscape is the
 // 1920×1080 radio.fluncle.com full-screen cut; square is the 1920×1920 clean
-// source master MT crops to either orientation on the fly (docs/video-variants.md).
+// source master MT crops to either orientation on the fly.
 // Each is selected per-render via the `aspect` prop (the bespoke 9:16 shaders
 // reflow under landscape/square — expected, scaffold not catalogue). WIDTH/HEIGHT
 // remain the portrait Composition defaults so Studio and any aspect-less producer

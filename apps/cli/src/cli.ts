@@ -399,7 +399,7 @@ function addMetaCommands(program: Command): void {
 }
 
 function addTrackCommands(program: Command): void {
-  // Convention B (docs/naming-conventions.md §6.3): public CLI groups are PLURAL.
+  // Convention B: public CLI groups are PLURAL.
   // The canonical public lookup group is `tracks`; the old singular `track` is kept
   // as a hidden alias so `track get <id>` still resolves (mirrors the admin
   // `tracks`-alias-`track` pattern).
@@ -435,7 +435,7 @@ function addAdminCommands(program: Command): void {
       admin.outputHelp();
     });
 
-  // Convention B (docs/naming-conventions.md §4): the admin CLI is `group
+  // Convention B: the admin CLI is `group
   // noun-verb` with PLURAL groups. The canonical track group is `tracks`; the old
   // singular `track` group is kept as a hidden alias so `admin track <cmd>` still
   // resolves. The formerly-flat `admin add|queue|vehicles` commands move under
@@ -913,8 +913,8 @@ function addAdminCommands(program: Command): void {
       await runMixtapePublishYoutube(idOrLogId, options, publishYoutubeCommand);
     });
 
-  // Fluncle Studio clips (docs/fluncle-studio.md). `list` is the agent-allowed read
-  // (Unit G); `cut` is the box's footage cut (Unit C) — the `fluncle-studio-clip` cron
+  // Fluncle Studio clips. `list` is the agent-allowed read;
+  // `cut` is the box's footage cut — the `fluncle-studio-clip` cron
   // calls `admin clips cut <clipId>` per pending clip (presign + ffmpeg + ship +
   // finalize, all behind the agent token).
   const adminClips = configureCommand(

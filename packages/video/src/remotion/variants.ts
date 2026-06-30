@@ -1,5 +1,5 @@
-// The render-flag provenance for the two-master video bundle (see
-// docs/video-variants.md). The two masters are the SAME composition + props
+// The render-flag provenance for the two-master video bundle.
+// The two masters are the SAME composition + props
 // rendered with DIFFERENT flags; recording those flags per output in render.json
 // is what lets a future "clean re-render from source" reproduce the right cut
 // instead of naively re-rendering the portrait default. Every writer of the

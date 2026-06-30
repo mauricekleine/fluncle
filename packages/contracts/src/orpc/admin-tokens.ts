@@ -1,8 +1,8 @@
 // The `admin-tokens` domain contract module — the just-in-time credential reads
 // the CLI needs for its CLI-direct uploads (the bytes can't proxy through the
 // Worker, but the credential lives server-side), plus the Last.fm desktop-auth
-// JSON exchange. Part of the admin fan-out (docs/orpc-migration-brief.md), built
-// on the same pattern as `./admin-tracks.ts`.
+// JSON exchange. Part of the admin fan-out, built on the same pattern as
+// `./admin-tracks.ts`.
 //
 // ALL four are operator tier (live `requireOperator`). VERIFIED against the live
 // handlers. None redirect — they return RPC JSON — so they are convertible (the
