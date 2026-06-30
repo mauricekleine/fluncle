@@ -4,11 +4,11 @@
 // terminal, the MCP server, the CLI, and the on-box Hermes crons.
 //
 // It is PURE DATA (no runtime side effects, no I/O): just a typed catalog plus a
-// few selectors over it. Nothing consumes it yet — it exists so the surfaces that
-// will (a `/status` prober, the homepage dev-row, llms.txt, the sitemap, and a
-// surfaces-doctrine doc) all read the same list instead of each hand-maintaining a
-// drifting copy. When a new surface ships, add it here once; every consumer picks
-// it up.
+// few selectors over it. It is consumed across the app — the `/status` probe, the
+// CLI `status` command, the MCP `get_status` tool, the homepage dev-row, llms.txt,
+// the sitemap, and the surfaces-doctrine doc all read the same list instead of each
+// hand-maintaining a drifting copy. When a new surface ships, add it here once;
+// every consumer picks it up.
 //
 // Scope discipline: this catalogs PUBLIC-facing and operator-known surfaces — the
 // reach of Fluncle's tentacles across the web. It is NOT a route table (the web app
