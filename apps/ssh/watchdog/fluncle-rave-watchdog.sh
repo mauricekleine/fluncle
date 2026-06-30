@@ -64,7 +64,9 @@ DISCORD_ALERT_WEBHOOK="${DISCORD_ALERT_WEBHOOK:-}"
 # the four below and the onion job is skipped silently.
 WATCH_ONION_URL="${WATCH_ONION_URL:-}"               # the onion health URL (http://<addr>.onion/api/health)
 WATCH_TOR_SOCKS="${WATCH_TOR_SOCKS:-127.0.0.1:9050}" # rave-01's Tor SOCKS proxy (tor default)
-WATCH_ONION_TIMEOUT="${WATCH_ONION_TIMEOUT:-30}"     # seconds — Tor is slow, give it room
+WATCH_ONION_TIMEOUT="${WATCH_ONION_TIMEOUT:-30}"     # seconds per attempt — Tor is slow, give it room
+WATCH_ONION_ATTEMPTS="${WATCH_ONION_ATTEMPTS:-3}"    # retries before declaring down (filters flaky Tor circuits)
+WATCH_ONION_RETRY_SLEEP="${WATCH_ONION_RETRY_SLEEP:-5}" # seconds between retry attempts
 WATCH_WORKER_URL="${WATCH_WORKER_URL:-}"             # the Worker origin for the record_health POST
 FLUNCLE_API_TOKEN="${FLUNCLE_API_TOKEN:-}"           # the agent-scoped token (POST authorization)
 
@@ -225,7 +227,9 @@ write_onion_down() {
 # rave-01 hosts the onion and runs Tor, so it is the only box that can route a .onion
 # request. ANY HTTP response (curl http_code != 000) = reachable — the onion service
 # is published AND the Tor circuit + onionspray + the Worker all answered; a timeout /
-# refusal (http_code 000) = down. This is the onion PATH's health, independent of the
+# refusal (http_code 000) on EVERY retry = down (transient Tor circuit flakiness is
+# retried away over fresh circuits, so only a real outage trips it). The onion PATH's
+# health, independent of the
 # Worker's own (that is the `web` row). Posts an `onion` check to record_health
 # (agent-tier) so /status shows it, and Discord-pings on a transition, no-spam.
 probe_and_post_onion() {
@@ -234,20 +238,31 @@ probe_and_post_onion() {
     return 0
   fi
 
-  # Probe through Tor. -o /dev/null; capture "<http_code> <time_total>". A failed curl
-  # (timeout / refused) yields code 000.
-  local out code time_total
-  out="$("${CURL_BIN}" --socks5-hostname "${WATCH_TOR_SOCKS}" -s -o /dev/null \
-    -w '%{http_code} %{time_total}' --max-time "${WATCH_ONION_TIMEOUT}" \
-    "${WATCH_ONION_URL}" 2>/dev/null || true)"
-  code="${out%% *}"
-  time_total="${out##* }"
-  [ -z "${code}" ] && code="000"
+  # Probe through Tor, retrying over ISOLATED circuits before declaring down. A single
+  # probe through a slow/dead Tor circuit yields code 000 (timeout / refused) even when the
+  # onion service is up — that flapped DOWN→recovered a few times a day. So retry up to
+  # WATCH_ONION_ATTEMPTS times, each with a DISTINCT SOCKS username (`onion-probe-N:x`) so
+  # Tor's IsolateSOCKSAuth builds a FRESH circuit per attempt (a plain retry could reuse the
+  # same bad circuit), and only treat the onion as down if EVERY attempt fails. The first
+  # reachable response (http_code != 000) wins. -o /dev/null; capture "<http_code> <time>".
+  local out code time_total attempt
+  code="000"
+  time_total="0"
+  for attempt in $(seq 1 "${WATCH_ONION_ATTEMPTS}"); do
+    out="$("${CURL_BIN}" -x "socks5h://onion-probe-${attempt}:x@${WATCH_TOR_SOCKS}" -s -o /dev/null \
+      -w '%{http_code} %{time_total}' --max-time "${WATCH_ONION_TIMEOUT}" \
+      "${WATCH_ONION_URL}" 2>/dev/null || true)"
+    code="${out%% *}"
+    time_total="${out##* }"
+    [ -z "${code}" ] && code="000"
+    [ "${code}" != "000" ] && break
+    [ "${attempt}" -lt "${WATCH_ONION_ATTEMPTS}" ] && sleep "${WATCH_ONION_RETRY_SLEEP}"
+  done
 
   local status message latency_ms
   if [ "${code}" = "000" ]; then
     status="down"
-    message="unreachable over Tor"
+    message="unreachable over Tor (${WATCH_ONION_ATTEMPTS} attempts)"
     latency_ms="null"
   else
     status="ok"
