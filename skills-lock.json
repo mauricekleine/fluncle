@@ -63,6 +63,11 @@
       "sourceType": "local",
       "computedHash": "baae9dd979cd98d1d7c6ee5fd6eef91541950e054e4d01482b16ab716031ee46"
     },
+    "fluncle-smoke": {
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-smoke",
+      "sourceType": "local",
+      "computedHash": "9680879b9b7380781fa3c040ced857b529fd757a90ece2ba7baad5254afdc8a0"
+    },
     "fluncle-sprites": {
       "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/fluncle-sprites",
       "sourceType": "local",
