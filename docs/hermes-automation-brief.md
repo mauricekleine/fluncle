@@ -134,6 +134,6 @@ All gates are now cleared — the crons are wired and live on the box ([cron REA
 - ☑ **Fluncle's voice** — locked (#73/#74); observation automation unblocked.
 - ☑ **The auth spine** — `orpc-auth.ts` (`adminProcedure` / `operatorProcedure`); role flips are tier changes.
 
-The reliability columns + resolver refactor shipped with the `backfill` crons; the endpoints were built as oRPC contracts on the existing tiers and the crons wired up in the order above.
+The reliability columns + resolver refactor shipped with the `backfill` crons — but **under different names than this brief proposed**: they landed as the timestamp pair `backfill_lastfm_done_at` / `backfill_discogs_done_at` (plus `*_attempted_at` / `*_attempts` / `*_failures` siblings; see `apps/web/src/db/schema.ts` and `apps/web/src/components/admin/pipeline/board-model.ts`), not the `lastfm_loved_at` / `discogs_status` this brief sketched. The endpoints were built as oRPC contracts on the existing tiers and the crons wired up in the order above.
 
 **Update the operator skill when this lands.** The `fluncle-hermes-operator` skill (`packages/skills/fluncle-hermes-operator`) is the operator runbook for changing the Hermes agent, grounded in what's live _today_. When this brief's work ships — the scheduled crons, the `backfill_*` / `observe_track` role flips, and the newsletter `draft` / `send` commands — add those levers to the skill so it stays in step with the agent's real capabilities (it carries the same reminder in its own footer).

@@ -11,7 +11,7 @@ Two axes, stored as a coordinate per track (`vibe_x`, `vibe_y`, roughly `-1..1`)
 - **X — mood:** Light ← → Dark
 - **Y — energy:** Floaty ↓ ↑ Driving
 
-The four quadrants are the four galaxies (the galaxy is _derived_ from the coordinate's sign — `vibeQuadrant()` in `vibe-map.tsx`), each with its own colour:
+The four quadrants are the four galaxies (the galaxy is _derived_ from the coordinate's sign — `galaxyForVibe(x, y)` in `apps/web/src/lib/galaxies.ts`, which `vibe-map.tsx` imports and calls), each with its own colour:
 
 ```
             ▲ DRIVING

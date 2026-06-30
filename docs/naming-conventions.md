@@ -84,7 +84,7 @@ So the API is mostly clean REST (method = verb, path = resource), with a recurri
 
 ### 1.3 MCP / WebMCP tools
 
-`apps/web/src/lib/server/mcp.ts` (server) and `apps/web/src/lib/webmcp.ts` (browser) expose the **same five tool names**, and they match each other exactly — the one place cross-surface naming is already coherent:
+`apps/web/src/lib/server/mcp.ts` (server) exposes **six** tools; `apps/web/src/lib/webmcp.ts` (browser) exposes **five**. The five below are shared and match each other exactly — the one place cross-surface naming is already coherent. The sixth, `get_status` (the live service-health summary), is **server-only**: a known, intended asymmetry, since the browser MCP has no reason to probe service health.
 
 | Tool name              | Title                       | API equivalent                             | CLI equivalent  |
 | ---------------------- | --------------------------- | ------------------------------------------ | --------------- |
@@ -102,7 +102,7 @@ Two naming surfaces: the **deep-link command argument** (`ssh rave.fluncle.com <
 
 Deep links (`parseBootCommand`): `latest`, `random`, or a bare Log ID coordinate (e.g. `004.7.2I`, `019.F.1A`). Lowercase, single words.
 
-Menu item labels (`menuItems()`): `Enter the Galaxy`, `Latest bangers`, `Mixtape archive`, `Random banger`, `Submit a track`, `Subscribe`, `Install CLI`, `About`, `Quit`. Title Case, in-fiction nouns.
+Menu item labels (`menuItems()`, 10 items): `Enter the Galaxy`, `Latest bangers`, `Mixtape archive`, `Random banger`, `Submit a track`, `Subscribe`, `Install CLI`, `System status`, `About`, `Quit`. Title Case, in-fiction nouns.
 
 Note the deep-link `latest` maps to the CLI's `recent`, the API's `listTracks`, and the MCP's `get_recent_tracks` — **four names for one read.**
 
@@ -158,7 +158,7 @@ Tradeoffs. **+** One mental model (REST) for CLI, API, MCP. **+** Mechanical `op
 
 Keep the CLI's verb-first ergonomics for the _public_ surface (it reads like speech: `fluncle submit …`, `fluncle random`), make the _admin_ CLI consistently `group noun-verb`, keep the API as REST, and define the **derivation rule** so MCP and `operationId`s are generated, not hand-named. The canonical registry is `verb_noun`; each surface has a fixed projection:
 
-- **MCP/WebMCP tool** = `verb_noun` (snake_case), verbatim from the registry. (Already true for the 5 public tools.)
+- **MCP/WebMCP tool** = `verb_noun` (snake_case), verbatim from the registry. (Already true for the 5 shared public tools; the server's 6th tool `get_status` is intentionally server-only.)
 - **OpenAPI `operationId`** = `verbNoun` (camelCase) — the same words, re-cased. So `list_tracks` ⇒ `listTracks`, and `submit_track` ⇒ path `POST /submissions` keeps `operationId: submitTrack` (the op name, not the path noun, is canonical — and the mismatch is _documented as intentional_ because the resource and the action noun legitimately differ).
 - **API path** = REST resource; method = verb. **Resources are plural** (`/tracks`, `/submissions`, `/editions`); a **singleton** stays singular (`/me`, `/auth`, and `/newsletter` — there is exactly one newsletter, so its editions are a plural sub-collection nested under it: `GET /newsletter/editions/{number}`). The op _noun_ stays singular (`get_edition`) while the path resource is plural (`/editions`), exactly as `get_track` ⇒ `GET /tracks/{id}`. Non-CRUD actions are a **named action sub-resource**: `POST /{resource}/{id}/{action}` where `{action}` is a single lowercase word from the closed action set (`observe`, `publish`, `draft`, `distribute`, `finalize`). Multi-word actions are avoided — `enrich-sweep` ⇒ `POST /admin/tracks/enrich`, `preview-archive` ⇒ `POST /admin/tracks/{id}/preview`.
 - **Public CLI** = bare verb at root (`submit`, `subscribe`, `random`, `recent`, `open`), because that's the spoken register and the existing contract. Each maps to a registry op via an explicit alias note in the registry (`recent → list_tracks`, `submit → submit_track`).
@@ -194,7 +194,7 @@ Tradeoffs. **+** Maximally on-brand; one noun (`finding`) everywhere, matching t
 
 ## 4. Recommendation
 
-**Convention B.** It fixes the real defects — arbitrary CLI pluralization, dash-compound coinage, undocumented routes, and the missing one-name-per-operation rule — while protecting the two things that are already good: the spoken public CLI verbs and the existing five-tool MCP parity. It restructures only operator-facing surfaces (admin CLI, a few API action segments) where churn is cheap, and it keeps `track` as the precise machine noun while _naming_ the voice-noun boundary rather than erasing one side (Convention C) or flattening the voice into REST (Convention A).
+**Convention B.** It fixes the real defects — arbitrary CLI pluralization, dash-compound coinage, undocumented routes, and the missing one-name-per-operation rule — while protecting the two things that are already good: the spoken public CLI verbs and the existing five-tool shared MCP parity (with `get_status` an intended server-only sixth). It restructures only operator-facing surfaces (admin CLI, a few API action segments) where churn is cheap, and it keeps `track` as the precise machine noun while _naming_ the voice-noun boundary rather than erasing one side (Convention C) or flattening the voice into REST (Convention A).
 
 Concretely, ratifying B means landing, in order, lowest-risk first:
 

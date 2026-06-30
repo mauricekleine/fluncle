@@ -85,9 +85,9 @@ All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertise
 
 ### MCP — the Model Context Protocol server
 
-| Surface      | Route  | Exposes                                                                                                                                         | Weight  |
-| ------------ | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `mcp.server` | `/mcp` | the archive as MCP tools (Streamable HTTP, no auth): `list_tracks`, `get_random_track`, `search_tracks`, `submit_track`, `subscribe_newsletter` | primary |
+| Surface      | Route  | Exposes                                                                                                                                                       | Weight  |
+| ------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `mcp.server` | `/mcp` | the archive as MCP tools (Streamable HTTP, no auth): `list_tracks`, `get_random_track`, `get_status`, `search_tracks`, `submit_track`, `subscribe_newsletter` | primary |
 
 ### DNS — the delegated authoritative zone
 
@@ -97,9 +97,9 @@ All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertise
 
 ### SSH — the rave terminal
 
-| Surface    | Command                | Exposes                                                                                                                                                                                  | Weight  |
-| ---------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `ssh.rave` | `ssh rave.fluncle.com` | the rave terminal TUI (Enter the Galaxy, Latest bangers, Mixtape archive, Submit, Subscribe, Install CLI, About), plus the deep-register one-shots `ssh rave.fluncle.com latest\|random` | primary |
+| Surface    | Command                | Exposes                                                                                                                                                                                                                | Weight  |
+| ---------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `ssh.rave` | `ssh rave.fluncle.com` | the rave terminal TUI (Enter the Galaxy, Latest bangers, Mixtape archive, Random banger, Submit, Subscribe, Install CLI, System status, About), plus the deep-register one-shots `ssh rave.fluncle.com latest\|random` | primary |
 
 ### CLI — the `fluncle` thin client
 
@@ -128,16 +128,17 @@ Listings on a third-party store, not pages we host. Their uptime is the store's,
 
 Checked by their last-run freshness (not an HTTP hit), so they carry a `cronName` + cadence instead of a URL probe.
 
-| Surface             | Cron job               | Cadence             | Exposes                                                                                                                              | Weight    |
-| ------------------- | ---------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | --------- |
-| `cron.newsletter`   | `fluncle-newsletter`   | Fri 15:00 Amsterdam | draft + persist the weekly edition, then offer the operator a Discord Send button (the only full-agent cron; send is operator-gated) | secondary |
-| `cron.enrich`       | `fluncle-enrich`       | every 5m            | BPM / key / spectral analysis on the box, write-back (`--no-agent`, on-box DSP, zero LLM tokens)                                     | hidden    |
-| `cron.context-note` | `fluncle-context-note` | every 5m            | Firecrawl facts → distilled `context_note` + a Texture line (Worker-side Haiku, zero on-box tokens)                                  | hidden    |
-| `cron.note`         | `fluncle-note`         | every 10m           | auto-author the editorial `/log` note, fill-empty-only (hybrid: one `claude -p` call; never clobbers an operator note)               | hidden    |
-| `cron.observation`  | `fluncle-observation`  | every 60m           | author the recovered-audio script → Worker Cartesia render (hybrid: one `claude -p` call, Worker voice-gates + renders)              | hidden    |
-| `cron.backfill`     | `fluncle-backfill`     | every 30m           | Discogs id + Last.fm love catalogue repair (`--no-agent`, Worker HTTP, zero LLM tokens)                                              | hidden    |
-| `cron.render`       | `fluncle-render`       | every 60m           | wake the render box → render + ship one finding's video → park (a conductor; never posts to social)                                  | hidden    |
-| `cron.healthcheck`  | `fluncle-healthcheck`  | every 10m           | probe each service → Discord-ping on a status flip → POST the `/status` snapshot (`--no-agent`)                                      | hidden    |
+| Surface               | Cron job                 | Cadence             | Exposes                                                                                                                              | Weight    |
+| --------------------- | ------------------------ | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | --------- |
+| `cron.newsletter`     | `fluncle-newsletter`     | Fri 15:00 Amsterdam | draft + persist the weekly edition, then offer the operator a Discord Send button (the only full-agent cron; send is operator-gated) | secondary |
+| `cron.enrich`         | `fluncle-enrich`         | every 5m            | BPM / key / spectral analysis on the box, write-back (`--no-agent`, on-box DSP, zero LLM tokens)                                     | hidden    |
+| `cron.context-note`   | `fluncle-context-note`   | every 5m            | Firecrawl facts → distilled `context_note` + a Texture line (Worker-side Haiku, zero on-box tokens)                                  | hidden    |
+| `cron.note`           | `fluncle-note`           | every 10m           | auto-author the editorial `/log` note, fill-empty-only (hybrid: one `claude -p` call; never clobbers an operator note)               | hidden    |
+| `cron.observation`    | `fluncle-observation`    | every 60m           | author the recovered-audio script → Worker Cartesia render (hybrid: one `claude -p` call, Worker voice-gates + renders)              | hidden    |
+| `cron.backfill`       | `fluncle-backfill`       | every 30m           | Discogs id + Last.fm love catalogue repair (`--no-agent`, Worker HTTP, zero LLM tokens)                                              | hidden    |
+| `cron.social-capture` | `fluncle-social-capture` | every 10m           | capture the YouTube/TikTok post URLs Postiz withholds on create → write back (`--no-agent`, Worker HTTP)                             | hidden    |
+| `cron.render`         | `fluncle-render`         | every 60m           | wake the render box → render + ship one finding's video → park (a conductor; never posts to social)                                  | hidden    |
+| `cron.healthcheck`    | `fluncle-healthcheck`    | every 10m           | probe each service → Discord-ping on a status flip → POST the `/status` snapshot (`--no-agent`)                                      | hidden    |
 
 ## 3. The per-context weight matrix
 
@@ -216,6 +217,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `cron.note`                 |           |           |           | hidden    |
 | `cron.observation`          |           |           |           | hidden    |
 | `cron.backfill`             |           |           |           | hidden    |
+| `cron.social-capture`       |           |           |           | hidden    |
 | `cron.render`               |           |           |           | hidden    |
 | `cron.healthcheck`          |           |           |           | hidden    |
 

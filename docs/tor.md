@@ -99,15 +99,9 @@ sudo systemctl status tor --no-pager
 
 ## 6. Ship the `Onion-Location` header (Unit C — repo + normal deploy)
 
-This is the only repo change, and it is already merged inert. `appendOnionLocation` (`apps/web/src/lib/server/agent-discovery.ts`) advertises the onion twin on every HTML response, per-path, gated to `text/html` so the JSON/XML surfaces (`/api/v1/*`, `/rss.xml`, `/mcp`) stay clean. It reads the web onion from the `WEB_ONION_HOSTNAME` module constant, which ships empty — while empty the helper is a no-op, so nothing is advertised until the address exists.
+This is the only repo change, and it is **done and live in prod**. `appendOnionLocation` (`apps/web/src/lib/server/agent-discovery.ts`) advertises the onion twin on every HTML response, per-path, gated to `text/html` so the JSON/XML surfaces (`/api/v1/*`, `/rss.xml`, `/mcp`) stay clean. The web onion address is set in the `WEB_ONION_HOSTNAME` module constant, so the header ships on every HTML page (and `@fluncle/registry`'s `subdomain.onion` is non-`pending`).
 
-**To go live, set the constant and push.** In `apps/web/src/lib/server/agent-discovery.ts`, set:
-
-```ts
-const WEB_ONION_HOSTNAME = "<the-web-onion-56-char-host>"; // no scheme, no trailing .onion
-```
-
-then `git push`. Workers Builds deploys it (watch for build coalescing if pushing rapidly). No DNS record, no Cloudflare dashboard toggle — an onion has no DNS and the header is pure code.
+**Rollback only.** The constant doubles as the kill switch: `WEB_ONION_HOSTNAME` reads as a `56-char host` (no scheme, no trailing `.onion`); set it back to the empty string (`""`) and push, and the helper becomes a no-op so nothing is advertised. Workers Builds deploys either change (watch for build coalescing if pushing rapidly). No DNS record, no Cloudflare dashboard toggle — an onion has no DNS and the header is pure code.
 
 ## 7. Verify
 
