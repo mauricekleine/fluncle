@@ -124,7 +124,7 @@ export function adminMixtapesHandlers(os: Implementer) {
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        const { mixtapeId, ...body } = input as { mixtapeId: string } & Record<string, unknown>;
+        const { mixtapeId, ...body } = input;
         const mixtape = await updateMixtape(mixtapeId, body);
 
         return { mixtape, ok: true as const };
@@ -154,7 +154,7 @@ export function adminMixtapesHandlers(os: Implementer) {
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        const { mixtapeId, ...body } = input as { mixtapeId: string } & Record<string, unknown>;
+        const { mixtapeId, ...body } = input;
         const mixtape = await addTracksToMixtape(mixtapeId, body);
 
         return { mixtape, ok: true as const };
@@ -170,7 +170,7 @@ export function adminMixtapesHandlers(os: Implementer) {
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        const { mixtapeId, ...body } = input as { mixtapeId: string } & Record<string, unknown>;
+        const { mixtapeId, ...body } = input;
         const mixtape = await setMixtapeMembers(mixtapeId, body);
 
         return { mixtape, ok: true as const };
@@ -214,9 +214,7 @@ export function adminMixtapesHandlers(os: Implementer) {
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        const body = input as { externalId?: unknown; url?: unknown };
-
-        if (typeof body.url !== "string" || body.url.length === 0) {
+        if (typeof input.url !== "string" || input.url.length === 0) {
           throw new ORPCError("BAD_REQUEST", {
             data: {
               apiCode: "invalid_request",
@@ -228,8 +226,8 @@ export function adminMixtapesHandlers(os: Implementer) {
         }
 
         const mixtape = await finalizeMixtapeDistribution(input.mixtapeId, "mixcloud", {
-          externalId: typeof body.externalId === "string" ? body.externalId : undefined,
-          url: body.url,
+          externalId: typeof input.externalId === "string" ? input.externalId : undefined,
+          url: input.url,
         });
 
         return { mixtape, ok: true as const, platform: "mixcloud" };
@@ -245,10 +243,11 @@ export function adminMixtapesHandlers(os: Implementer) {
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        const body = input as { contentLength?: unknown; contentType?: unknown };
-        const contentLength = Number(body.contentLength);
+        const contentLength = Number(input.contentLength);
         const contentType =
-          typeof body.contentType === "string" && body.contentType ? body.contentType : "video/mp4";
+          typeof input.contentType === "string" && input.contentType
+            ? input.contentType
+            : "video/mp4";
 
         if (!Number.isFinite(contentLength) || contentLength <= 0) {
           throw new ORPCError("BAD_REQUEST", {
@@ -351,8 +350,7 @@ export function adminMixtapesHandlers(os: Implementer) {
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        const body = input as { videoId?: unknown };
-        const videoId = typeof body.videoId === "string" ? body.videoId.trim() : "";
+        const videoId = typeof input.videoId === "string" ? input.videoId.trim() : "";
 
         if (!videoId) {
           throw new ORPCError("BAD_REQUEST", {
@@ -458,7 +456,7 @@ export function adminMixtapesHandlers(os: Implementer) {
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        const { mixtapeId, ...body } = input as { mixtapeId: string } & Record<string, unknown>;
+        const { mixtapeId, ...body } = input;
 
         return { clip: await createClip(mixtapeId, body), ok: true as const };
       } catch (error) {
@@ -472,7 +470,7 @@ export function adminMixtapesHandlers(os: Implementer) {
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        const { clipId, ...body } = input as { clipId: string } & Record<string, unknown>;
+        const { clipId, ...body } = input;
 
         return { clip: await updateClip(clipId, body), ok: true as const };
       } catch (error) {
@@ -502,9 +500,10 @@ export function adminMixtapesHandlers(os: Implementer) {
     .use(adminAuth)
     .handler(async ({ input }) => {
       try {
-        const body = input as { contentType?: unknown };
         const contentType =
-          typeof body.contentType === "string" && body.contentType ? body.contentType : "video/mp4";
+          typeof input.contentType === "string" && input.contentType
+            ? input.contentType
+            : "video/mp4";
 
         // Confirm the clip exists for a clean 404 before signing (getClip throws
         // `clip_not_found`/404). The footage key is the clip's pseudo-finding master
@@ -560,8 +559,7 @@ export function adminMixtapesHandlers(os: Implementer) {
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        const body = input as { contentType?: unknown; partCount?: unknown };
-        const partCount = Number(body.partCount);
+        const partCount = Number(input.partCount);
 
         if (!Number.isInteger(partCount) || partCount < 1 || partCount > R2_MAX_PARTS) {
           throw new ORPCError("BAD_REQUEST", {
@@ -575,7 +573,9 @@ export function adminMixtapesHandlers(os: Implementer) {
         }
 
         const contentType =
-          typeof body.contentType === "string" && body.contentType ? body.contentType : "video/mp4";
+          typeof input.contentType === "string" && input.contentType
+            ? input.contentType
+            : "video/mp4";
 
         const mixtape = await getMixtapeById(input.mixtapeId, { includeDrafts: true });
 
@@ -628,7 +628,7 @@ export function adminMixtapesHandlers(os: Implementer) {
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        const { mixtapeId, ...body } = input as { mixtapeId: string } & Record<string, unknown>;
+        const { mixtapeId, ...body } = input;
         const mixtape = await setMixtapeCues(mixtapeId, body);
 
         return { mixtape, ok: true as const };

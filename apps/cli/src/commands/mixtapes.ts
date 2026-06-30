@@ -2,7 +2,6 @@ import {
   type CueEntry,
   type MixtapeCreateResponse,
   type MixtapeDeleteResponse,
-  type MixtapeDTO,
   type MixtapeMember,
   type MixtapeMembersRequest,
   type MixtapePublishResponse,
@@ -12,17 +11,15 @@ import {
 } from "@fluncle/contracts";
 import { parseDuration } from "@fluncle/contracts/util";
 import { existsSync, readFileSync } from "node:fs";
-import {
-  adminApiDelete,
-  adminApiGet,
-  adminApiPost,
-  adminApiPut,
-  adminApiPatch,
-  publicApiGet,
-} from "../api";
+import { adminApiDelete, adminApiPost, adminApiPut, adminApiPatch, publicApiGet } from "../api";
+import { type MixtapeListItem, mixtapeGetCommand, mixtapeListCommand } from "./mixtape-api";
 import { CliError } from "../output";
 
-export type MixtapeListItem = MixtapeDTO;
+// Re-exported from the leaf `mixtape-api` module so existing CLI import sites keep
+// resolving these from `./mixtapes` (the cycle-breaking split in section D).
+export { mixtapeGetCommand, mixtapeListCommand };
+export type { MixtapeListItem };
+
 export type MixtapeMemberItem = MixtapeMember;
 
 export type MixtapeCreateOptions = {
@@ -93,23 +90,6 @@ export async function mixtapePublishCommand(id: string): Promise<MixtapePublishR
 
 export async function mixtapeDeleteCommand(id: string): Promise<MixtapeDeleteResponse> {
   return adminApiDelete<MixtapeDeleteResponse>(`/api/admin/mixtapes/${encodeURIComponent(id)}`);
-}
-
-export async function mixtapeListCommand(): Promise<MixtapeListItem[]> {
-  const response = await adminApiGet<MixtapesResponse>("/api/admin/mixtapes");
-
-  return response.mixtapes;
-}
-
-export async function mixtapeGetCommand(idOrLogId: string): Promise<MixtapeListItem> {
-  const mixtapes = await mixtapeListCommand();
-  const match = mixtapes.find((mixtape) => mixtape.id === idOrLogId || mixtape.logId === idOrLogId);
-
-  if (!match) {
-    throw new CliError("mixtape_not_found", `No mixtape with id or log id ${idOrLogId}`);
-  }
-
-  return match;
 }
 
 export type MixtapeDistributeOptions = {

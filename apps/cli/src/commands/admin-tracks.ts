@@ -79,7 +79,6 @@ async function fetchAdminTracks(options: {
 }
 
 export type QueueFilters = {
-  hasContext?: boolean;
   hasObservation?: boolean;
 };
 
@@ -95,9 +94,8 @@ export type QueueFilters = {
 // video therefore waits until it's context-noted — fine: the context cron runs
 // every ~5 min, and a render with the Texture fuel is the one worth filming.
 //
-// `hasContext=true` is hard-set here (not overridable); `filters.hasContext` is
-// kept only as a no-op compatibility seam. The optional `hasObservation` filter
-// still narrows it (so a cron can ask "what's context'd but still needs a voice?").
+// `hasContext=true` is hard-set here (not overridable). The optional `hasObservation`
+// filter still narrows it (so a cron can ask "what's context'd but still needs a voice?").
 export async function queueCommand(
   limit: number,
   filters: QueueFilters = {},

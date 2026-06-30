@@ -23,10 +23,6 @@ import { mkdtempSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// ---------------------------------------------------------------------------
-// Args
-// ---------------------------------------------------------------------------
-
 function arg(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
 
@@ -383,10 +379,6 @@ function multiWindow(samples: Float32Array): {
     windows,
   };
 }
-
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
 
 try {
   log(`decoding ${audioFile}`);

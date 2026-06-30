@@ -73,7 +73,7 @@ export function adminTokensHandlers(os: Implementer) {
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        const token = (input as { token?: unknown }).token;
+        const token = input.token;
 
         if (typeof token !== "string" || !token.trim()) {
           throw new ORPCError("BAD_REQUEST", {

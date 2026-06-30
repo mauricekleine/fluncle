@@ -46,7 +46,7 @@ export function adminEditionsHandlers(os: Implementer) {
   // PATCH /admin/newsletter/editions/{id} — admin tier.
   const updateEditionHandler = os.update_edition.use(adminAuth).handler(async ({ input }) => {
     try {
-      const { id, ...body } = input as { id: string } & Record<string, unknown>;
+      const { id, ...body } = input;
       const edition = await updateEdition(id, body);
 
       return { edition, ok: true as const };
@@ -61,12 +61,11 @@ export function adminEditionsHandlers(os: Implementer) {
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        const body = input as { id: string; scheduledAt?: unknown };
         const scheduledAt =
-          typeof body.scheduledAt === "string" && body.scheduledAt.trim()
-            ? body.scheduledAt.trim()
+          typeof input.scheduledAt === "string" && input.scheduledAt.trim()
+            ? input.scheduledAt.trim()
             : undefined;
-        const edition = await sendEdition(body.id, { scheduledAt });
+        const edition = await sendEdition(input.id, { scheduledAt });
 
         return { edition, ok: true as const };
       } catch (error) {

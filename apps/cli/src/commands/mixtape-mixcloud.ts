@@ -16,7 +16,7 @@
 import { type MixcloudAuthStartResponse, type MixcloudTokenResponse } from "@fluncle/contracts";
 import { adminApiGet, adminApiPost } from "../api";
 import { CliError } from "../output";
-import { type MixtapeListItem, mixtapeGetCommand } from "./mixtapes";
+import { type MixtapeListItem, mixtapeGetCommand } from "./mixtape-api";
 
 export type MixcloudDistributeResult = { url: string };
 

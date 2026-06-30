@@ -29,15 +29,6 @@ export function requireParam(value: string | undefined, name: string): string {
   return value;
 }
 
-/** The canonical 400 for a track that has no Log ID (video/social flows need one). */
-export function noLogIdResponse(): Response {
-  return jsonError(
-    400,
-    "no_log_id",
-    "Track has no Log ID; every video needs a coordinate. Backfill the ISRC/Log ID first.",
-  );
-}
-
 /**
  * Parse a request body as JSON, returning a 400 `invalid_request` Response when
  * the body is malformed (so a bad body becomes a clean 400, not an uncaught

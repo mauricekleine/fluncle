@@ -33,8 +33,6 @@ const envKeys = [
   // own CLI) and the browser grant cookie are the "operator" role. OPTIONAL —
   // unset means no agent principal exists and the surface is operator-only.
   "FLUNCLE_AGENT_TOKEN",
-  "LOOPS_API_KEY",
-  "LOOPS_TRANSACTIONAL_ID",
   // Resend — the newsletter's send-of-record.
   // The Worker owns the key; the agent box never holds it (the agent calls the
   // admin send op, the Worker creates + sends the broadcast). RESEND_API_KEY is the

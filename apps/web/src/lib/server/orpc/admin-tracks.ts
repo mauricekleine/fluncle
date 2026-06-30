@@ -636,7 +636,7 @@ export function adminTracksHandlers(os: Implementer) {
           });
         }
 
-        const requested = Array.isArray(input.fields) ? (input.fields as unknown[]) : undefined;
+        const requested = Array.isArray(input.fields) ? input.fields : undefined;
 
         if (!requested || requested.length === 0) {
           throw new ORPCError("BAD_REQUEST", {
