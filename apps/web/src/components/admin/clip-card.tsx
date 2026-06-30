@@ -1,16 +1,15 @@
 import {
   DownloadSimpleIcon,
   PaperPlaneTiltIcon,
-  PauseIcon,
   PlayIcon,
   ScissorsIcon,
   TrashIcon,
 } from "@phosphor-icons/react";
 import { type ClipDTO } from "@fluncle/contracts/orpc";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { formatClock, VideoScrubber } from "@/components/mixtape-video-player";
+import { useState } from "react";
 import { InstagramIcon, TiktokIcon } from "@/components/platform-icons";
 import { Button } from "@/components/ui/button";
+import { formatClock, Video } from "@/components/video";
 import { type MixtapeDTO, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import {
   type ClipDownloadUrls,
@@ -19,7 +18,6 @@ import {
   clipPosterUrl,
   clipPreviewUrl,
 } from "@/lib/studio-clips";
-import { useVideoStallRecovery } from "@/lib/use-video-recovery";
 
 // One clip in the cross-set library grid (the Fluncle Studio clip library).
 // A 9:16 poster tile that reveals an inline preview (the shared VideoScrubber +
@@ -159,165 +157,22 @@ function CuttingStage() {
   );
 }
 
-// The inline preview: the clip rendition over `<video>` + the shared VideoScrubber,
-// driven off the element's own clock (requestVideoFrameCallback, rAF fallback) — the
-// radio "one clock" discipline, the same as MixtapeVideoPlayer and the editor.
+// The inline preview: the clip rendition over the shared `<Video>` compound, driven
+// off the element's own clock (the radio "one clock" discipline). `autoPlay` force-plays
+// on mount (mounted on the operator's click); the transport rides as the auto-hiding
+// overlay over the 9:16 frame.
 function ClipPreview({ clipId, title }: { clipId: string; title: string }) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
   const src = clipPreviewUrl(clipId);
 
-  const [playing, setPlaying] = useState(false);
-  const [currentSeconds, setCurrentSeconds] = useState(0);
-  const [durationSeconds, setDurationSeconds] = useState(0);
-
-  useEffect(() => {
-    const video = videoRef.current;
-
-    if (!video) {
-      return;
-    }
-
-    const rvfc =
-      "requestVideoFrameCallback" in video
-        ? (video.requestVideoFrameCallback.bind(video) as (cb: () => void) => number)
-        : null;
-    const cancelRvfc =
-      "cancelVideoFrameCallback" in video
-        ? (video.cancelVideoFrameCallback.bind(video) as (handle: number) => void)
-        : null;
-
-    let rafId = 0;
-    let frameId = 0;
-
-    const sampleClock = () => setCurrentSeconds(video.currentTime);
-
-    const schedule = () => {
-      if (video.paused || video.ended) {
-        return;
-      }
-
-      if (rvfc) {
-        frameId = rvfc(() => {
-          sampleClock();
-          schedule();
-        });
-      } else {
-        rafId = window.requestAnimationFrame(() => {
-          sampleClock();
-          schedule();
-        });
-      }
-    };
-
-    const readDuration = () =>
-      setDurationSeconds(Number.isFinite(video.duration) ? video.duration : 0);
-
-    const onPlay = () => {
-      setPlaying(true);
-      schedule();
-    };
-    const onPause = () => setPlaying(false);
-    const onEnded = () => setPlaying(false);
-
-    video.addEventListener("play", onPlay);
-    video.addEventListener("playing", onPlay);
-    video.addEventListener("pause", onPause);
-    video.addEventListener("ended", onEnded);
-    video.addEventListener("timeupdate", sampleClock);
-    video.addEventListener("seeked", sampleClock);
-    video.addEventListener("loadedmetadata", readDuration);
-    video.addEventListener("durationchange", readDuration);
-
-    // Mounted on the operator's click — start playing the preview immediately.
-    video.play().catch(() => {
-      // Autoplay/gesture rules can deny play(); the control + scrubber still hold.
-    });
-
-    return () => {
-      if (rafId) {
-        window.cancelAnimationFrame(rafId);
-      }
-
-      if (frameId && cancelRvfc) {
-        cancelRvfc(frameId);
-      }
-
-      video.removeEventListener("play", onPlay);
-      video.removeEventListener("playing", onPlay);
-      video.removeEventListener("pause", onPause);
-      video.removeEventListener("ended", onEnded);
-      video.removeEventListener("timeupdate", sampleClock);
-      video.removeEventListener("seeked", sampleClock);
-      video.removeEventListener("loadedmetadata", readDuration);
-      video.removeEventListener("durationchange", readDuration);
-    };
-  }, [src]);
-
-  const togglePlay = useCallback(() => {
-    const video = videoRef.current;
-
-    if (!video) {
-      return;
-    }
-
-    if (video.paused) {
-      video.play().catch(() => {
-        // Gesture rules can deny play(); the control holds.
-      });
-    } else {
-      video.pause();
-    }
-  }, []);
-
-  const seek = useCallback((seconds: number) => {
-    const video = videoRef.current;
-
-    if (!video) {
-      return;
-    }
-
-    const max = Number.isFinite(video.duration) ? video.duration : seconds;
-    video.currentTime = Math.max(0, Math.min(max, seconds));
-    setCurrentSeconds(video.currentTime);
-  }, []);
-
-  const recoverStuck = useCallback(() => videoRef.current?.load(), []);
-  useVideoStallRecovery({ expectsPlayback: playing, onStall: recoverStuck, src, videoRef });
-
   return (
-    <div className="clip-stage">
-      <video
-        autoPlay
-        className="clip-stage-media"
-        playsInline
-        preload="metadata"
-        ref={videoRef}
-        src={src}
-      >
-        <track kind="captions" />
-      </video>
-      <div className="clip-preview-controls">
-        <Button
-          aria-label={playing ? "Pause" : "Play"}
-          aria-pressed={playing}
-          onClick={togglePlay}
-          size="icon-sm"
-        >
-          {playing ? (
-            <PauseIcon aria-hidden="true" weight="fill" />
-          ) : (
-            <PlayIcon aria-hidden="true" weight="fill" />
-          )}
-        </Button>
-        <VideoScrubber
-          currentSeconds={currentSeconds}
-          durationSeconds={durationSeconds}
-          label={`Seek through the clip from ${title}`}
-          onSeek={seek}
-          onTogglePlayback={togglePlay}
-        />
-      </div>
-    </div>
+    <Video.Root autoPlay src={src}>
+      <Video.Surface className="clip-stage" mediaClassName="clip-stage-media">
+        <Video.Controls overlay>
+          <Video.PlayButton size="icon-sm" />
+          <Video.Scrubber label={`Seek through the clip from ${title}`} />
+        </Video.Controls>
+      </Video.Surface>
+    </Video.Root>
   );
 }
 
