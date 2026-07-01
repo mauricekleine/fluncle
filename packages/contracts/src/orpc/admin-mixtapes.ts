@@ -368,6 +368,32 @@ export const setMixtapeCues = oc
   .output(MixtapeEnvelope);
 
 /**
+ * `update_mixtape_cue` → `PUT /admin/mixtapes/{mixtapeId}/cues/{ref}` (operationId
+ * `updateMixtapeCue`).
+ *
+ * Operator tier (`requireOperator`). The INTERACTIVE single-cue write behind the
+ * Fluncle Studio cue rail — upsert ONE minted member's `start_ms` (by track `ref`), or
+ * clear it (`startMs: null`). Deliberately NOT `set_mixtape_cues` (plural): that op is
+ * the ALL-OR-NOTHING cue-sheet backfill (one cue per member, start-at-0, strictly
+ * monotonic — the CLI full-backfill path); this singular op has NO coverage/order
+ * constraint, so the operator marks tracks one at a time, out of order, mid-session. It
+ * nests under the same `/cues` collection, distinguished by the `{ref}` member segment
+ * — REST-symmetric with the batch PUT, a distinct op. Published-safe (a minted
+ * `distributing`/`published` set). LOOSE body — `setMixtapeCue` validates `startMs` +
+ * asserts non-draft + membership. Preserves `{ mixtape, ok }`.
+ */
+export const updateMixtapeCue = oc
+  .route({
+    method: "PUT",
+    operationId: "updateMixtapeCue",
+    path: "/admin/mixtapes/{mixtapeId}/cues/{ref}",
+    summary: "Set or clear one member's cue (start_ms) on a minted mixtape",
+    tags: ["Admin"],
+  })
+  .input(z.looseObject({ mixtapeId: z.string(), ref: z.string(), startMs: z.unknown().optional() }))
+  .output(MixtapeEnvelope);
+
+/**
  * `presign_set_video_upload` → `POST /admin/mixtapes/{mixtapeId}/set-video/presign`
  * (operationId `presignSetVideoUpload`).
  *
@@ -489,4 +515,5 @@ export const adminMixtapesContract = {
   set_mixtape_members: setMixtapeMembers,
   update_clip: updateClip,
   update_mixtape: updateMixtape,
+  update_mixtape_cue: updateMixtapeCue,
 };

@@ -21,6 +21,7 @@ const getMixtapeById = vi.fn();
 const listMixtapeSocialPosts = vi.fn();
 const finalizeMixtapeDistribution = vi.fn();
 const setMixtapeCues = vi.fn();
+const setMixtapeCue = vi.fn();
 const listClips = vi.fn();
 const createClip = vi.fn();
 const updateClip = vi.fn();
@@ -33,6 +34,7 @@ vi.mock("./mixtapes", () => ({
   getMixtapeById: (...args: unknown[]) => getMixtapeById(...args),
   listMixtapes: (...args: unknown[]) => listMixtapes(...args),
   publishMixtape: (...args: unknown[]) => publishMixtape(...args),
+  setMixtapeCue: (...args: unknown[]) => setMixtapeCue(...args),
   setMixtapeCues: (...args: unknown[]) => setMixtapeCues(...args),
   setMixtapeMembers: (...args: unknown[]) => setMixtapeMembers(...args),
   updateMixtape: (...args: unknown[]) => updateMixtape(...args),
@@ -440,5 +442,41 @@ describe("oRPC set_mixtape_cues (PUT /admin/mixtapes/{mixtapeId}/cues)", () => {
 
     expect(response?.status).toBe(200);
     expect(setMixtapeCues).toHaveBeenCalledWith(MIXTAPE_ID, { cues });
+  });
+});
+
+describe("oRPC update_mixtape_cue (PUT /admin/mixtapes/{mixtapeId}/cues/{ref})", () => {
+  it("403s the AGENT (operator-only)", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(`/admin/mixtapes/${MIXTAPE_ID}/cues/t1`, "PUT", AGENT_TOKEN, { startMs: 0 }),
+    );
+
+    expect(response?.status).toBe(403);
+    expect(setMixtapeCue).not.toHaveBeenCalled();
+  });
+
+  it("sets one cue for the operator (ref off the path, startMs forwarded)", async () => {
+    setMixtapeCue.mockResolvedValueOnce({ ...MIXTAPE, status: "published" });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(`/admin/mixtapes/${MIXTAPE_ID}/cues/t2`, "PUT", OPERATOR_TOKEN, { startMs: 180_000 }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(setMixtapeCue).toHaveBeenCalledWith(MIXTAPE_ID, { ref: "t2", startMs: 180_000 });
+  });
+
+  it("clears a cue when startMs is null", async () => {
+    setMixtapeCue.mockResolvedValueOnce({ ...MIXTAPE, status: "published" });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(`/admin/mixtapes/${MIXTAPE_ID}/cues/t2`, "PUT", OPERATOR_TOKEN, { startMs: null }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(setMixtapeCue).toHaveBeenCalledWith(MIXTAPE_ID, { ref: "t2", startMs: null });
   });
 });

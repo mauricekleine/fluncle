@@ -481,6 +481,97 @@ export async function setMixtapeCues(id: string, input: MixtapeCueInput): Promis
   return purgeMixtapeLogCache(await getMixtapeById(id, { includeDrafts: true }));
 }
 
+// One interactive cue write, keyed by a single member's TRACK ID (`ref` — a trackId,
+// or a logId resolved to its trackId). The Fluncle Studio cue-rail body.
+export type MixtapeCueUpdateInput = {
+  ref?: unknown;
+  startMs?: unknown;
+};
+
+// Upsert ONE minted member's cue (`mixtape_tracks.start_ms`) — the INTERACTIVE
+// counterpart to setMixtapeCues. Where setMixtapeCues is the all-or-nothing cue-sheet
+// backfill (one cue per member, start-at-0, strictly monotonic — the CLI path), this
+// marks a single track with NO coverage/order constraint, so the operator can mark the
+// set out of order and leave it partly cued mid-session; the downstream (YouTube
+// chapters, Mixcloud sections, /log) already tolerates partial + non-monotonic cues.
+// It is the inverse of setMixtapeMembers: published-safe (works on a minted
+// `distributing`/`published` set) and it rejects a DRAFT (draft start_ms is owned by
+// the member edits). Passing `startMs: null` CLEARS the cue.
+export async function setMixtapeCue(id: string, input: MixtapeCueUpdateInput): Promise<MixtapeDTO> {
+  const ref = typeof input.ref === "string" ? input.ref.trim() : "";
+
+  if (!ref) {
+    throw new ApiError("invalid_cue", "A cue needs a track ref", 400);
+  }
+
+  // `null` clears the cue; a non-negative integer sets it; anything else is invalid.
+  let startMs: number | null;
+
+  if (input.startMs === null) {
+    startMs = null;
+  } else if (
+    typeof input.startMs === "number" &&
+    Number.isInteger(input.startMs) &&
+    input.startMs >= 0
+  ) {
+    startMs = input.startMs;
+  } else {
+    throw new ApiError(
+      "invalid_start_ms",
+      "A cue timestamp must be a non-negative integer (ms), or null to clear it",
+      400,
+    );
+  }
+
+  // The cue rail re-times a MINTED set, so reject a draft here (getMixtapeById throws
+  // mixtape_not_found/404). This is the inverse of assertDraftMixtape.
+  const mixtape = await getMixtapeById(id, { includeDrafts: true });
+
+  if (mixtape.status === "draft") {
+    throw new ApiError(
+      "mixtape_is_draft",
+      "Cues mark a minted set — publish the mixtape first",
+      409,
+    );
+  }
+
+  // Resolve the ref (a trackId or logId) to its trackId, then confirm it's a current
+  // member — the cue can only re-time the frozen tracklist, never add a row.
+  const track = await getTrackByIdOrLogId(ref);
+
+  if (!track) {
+    throw new ApiError("member_not_found", `No finding with id ${ref}`, 400);
+  }
+
+  const db = await getDb();
+  const membersResult = await db.execute({
+    args: [id],
+    sql: `select track_id, position from mixtape_tracks where mixtape_id = ? order by position`,
+  });
+  const members = typedRows<{ position: number; track_id: string }>(membersResult.rows);
+
+  if (!members.some((member) => member.track_id === track.trackId)) {
+    throw new ApiError("non_member_cue", `No current member with id ${ref}`, 404);
+  }
+
+  // Re-time the one member + bump the mixtape's updated_at (the cue changes its public
+  // /mixtapes + /log surface). No monotonic/coverage check — a transient out-of-order
+  // or partial state is allowed; the downstream tolerates it.
+  const now = new Date().toISOString();
+  await db.batch(
+    [
+      {
+        args: [startMs, id, track.trackId],
+        sql: `update mixtape_tracks set start_ms = ? where mixtape_id = ? and track_id = ?`,
+      },
+      { args: [now, id], sql: `update mixtapes set updated_at = ? where id = ?` },
+    ],
+    "write",
+  );
+
+  return purgeMixtapeLogCache(await getMixtapeById(id, { includeDrafts: true }));
+}
+
 // Which mixtapes each of these findings sits in, keyed by trackId — one query, no
 // N+1, mirroring listSocialPostsForTracks. The board reads this for a page of
 // findings to mark what's already spoken for; a finding in no mixtape is absent.

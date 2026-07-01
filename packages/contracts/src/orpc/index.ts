@@ -74,6 +74,7 @@ export {
   setMixtapeMembers,
   updateClip,
   updateMixtape,
+  updateMixtapeCue,
 } from "./admin-mixtapes";
 export { draftTrackSocial, listTrackSocial, updateTrackSocial } from "./admin-social";
 export { deregisterDevice, registerDevice, sweepPushReceipts } from "./devices";

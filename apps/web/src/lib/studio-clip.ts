@@ -238,3 +238,92 @@ export function defaultBandAt(
 
   return { inMs, outMs: Math.min(total, inMs + length) };
 }
+
+// ── Cue space (per-member start offsets on the set timeline) ───────────────────
+// A cue is one member's `start_ms` — the moment that track mixes in. The cue rail
+// marks them at the playhead; these pure helpers do the drop-snapping assist and the
+// order/completeness read the rail draws, kept DOM-free so they are unit-testable.
+
+/**
+ * How close (ms) a playhead mark snaps to a `StudioPeak` drop. The audible mix-in of a
+ * track usually lands on a loudness rise, so a mark near a drop is nudged onto it as an
+ * assist — the operator scrubs roughly to the transition and the cue lands clean.
+ */
+export const CUE_SNAP_WINDOW_MS = 2_000;
+
+/**
+ * A playhead ms, snapped to the nearest drop within `windowMs` (else left raw, rounded
+ * to a whole ms and floored at 0). `snapped` tells the UI whether the assist fired, so
+ * it can say so and offer the exact (un-snapped) value.
+ */
+export function snapCueToPeak(
+  ms: number,
+  peaks: Pick<StudioPeak, "atMs">[],
+  windowMs: number = CUE_SNAP_WINDOW_MS,
+): { ms: number; snapped: boolean } {
+  const raw = Math.max(0, Math.round(ms));
+  let best: number | null = null;
+  let bestDist = Number.POSITIVE_INFINITY;
+
+  for (const peak of peaks) {
+    const dist = Math.abs(peak.atMs - raw);
+
+    if (dist <= windowMs && dist < bestDist) {
+      best = Math.max(0, Math.round(peak.atMs));
+      bestDist = dist;
+    }
+  }
+
+  return best === null ? { ms: raw, snapped: false } : { ms: best, snapped: true };
+}
+
+/** A member as the cue rail reads it: its stable track id + its current cue (ms). */
+export type CueMember = { startMs?: number | null; trackId: string };
+
+/**
+ * The set's cue completeness, computed in tracklist order.
+ *   - `complete` is the EXACT state YouTube chapters + the batch `set_mixtape_cues`
+ *     want: every member cued, the first at 0, strictly increasing.
+ *   - `outOfOrderTrackIds` flags any cued member whose cue is NOT strictly after the
+ *     previous cued member's — the out-of-order mark the operator should see (the
+ *     interactive path allows it transiently; the rail surfaces it, never blocks it).
+ *   - `firstNotZero` explains an otherwise-cued set whose first track isn't at 0:00.
+ */
+export type CueProgress = {
+  complete: boolean;
+  firstNotZero: boolean;
+  marked: number;
+  outOfOrderTrackIds: string[];
+  total: number;
+};
+
+export function cueProgress(members: CueMember[]): CueProgress {
+  const total = members.length;
+  let marked = 0;
+  let previousCue: number | null = null;
+  let monotonic = true;
+  const outOfOrderTrackIds: string[] = [];
+
+  for (const member of members) {
+    const cue = member.startMs;
+
+    if (cue == null) {
+      continue;
+    }
+
+    marked += 1;
+
+    if (previousCue !== null && cue <= previousCue) {
+      monotonic = false;
+      outOfOrderTrackIds.push(member.trackId);
+    }
+
+    previousCue = cue;
+  }
+
+  const firstCue = members[0]?.startMs;
+  const firstNotZero = marked > 0 && firstCue != null && firstCue !== 0;
+  const complete = total > 0 && marked === total && firstCue === 0 && monotonic;
+
+  return { complete, firstNotZero, marked, outOfOrderTrackIds, total };
+}

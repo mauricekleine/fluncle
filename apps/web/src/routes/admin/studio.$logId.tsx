@@ -19,11 +19,13 @@ import {
 } from "react";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { StudioCropFrame } from "@/components/admin/studio-crop-frame";
+import { StudioCueRail } from "@/components/admin/studio-cue-rail";
 import { StudioEnergyLane } from "@/components/admin/studio-energy-lane";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Switch } from "@/components/ui/switch";
 import { formatClock, useVideo, Video } from "@/components/video";
 import { mixtapeSetVideoUrl, mixtapeStudioEnvelopeUrl } from "@/lib/media";
 import { type MixtapeDTO, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
@@ -35,9 +37,11 @@ import {
   bandToWindow,
   centredCropLeftFraction,
   cropRectToXOffset,
+  cueProgress,
   defaultBandAt,
   fractionToMs,
   msToFraction,
+  snapCueToPeak,
   suggestionToRegion,
   xOffsetToLeftFraction,
 } from "@/lib/studio-clip";
@@ -135,7 +139,12 @@ function StudioPage() {
       title={`Studio: ${title}`}
     >
       {logId ? (
-        <StudioEditor logId={logId} mixtapeId={mixtape.id ?? ""} title={title} />
+        <StudioEditor
+          initialMixtape={mixtape}
+          logId={logId}
+          mixtapeId={mixtape.id ?? ""}
+          title={title}
+        />
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 p-10 text-center">
           <p className="font-medium">No set video yet</p>
@@ -157,10 +166,12 @@ function StudioPage() {
 // studio-specific state (the in/out band, the framing rect, suggestions, the keyboard
 // loop) and the chrome (the crop frame, the energy lane, the toolbar).
 function StudioEditor({
+  initialMixtape,
   logId,
   mixtapeId,
   title,
 }: {
+  initialMixtape: MixtapeDTO;
   logId: string;
   mixtapeId: string;
   title: string;
@@ -170,17 +181,25 @@ function StudioEditor({
 
   return (
     <Video.Root src={src}>
-      <StudioEditorBody logId={logId} mixtapeId={mixtapeId} poster={poster} title={title} />
+      <StudioEditorBody
+        initialMixtape={initialMixtape}
+        logId={logId}
+        mixtapeId={mixtapeId}
+        poster={poster}
+        title={title}
+      />
     </Video.Root>
   );
 }
 
 function StudioEditorBody({
+  initialMixtape,
   logId,
   mixtapeId,
   poster,
   title,
 }: {
+  initialMixtape: MixtapeDTO;
   logId: string;
   mixtapeId: string;
   poster: string;
@@ -203,6 +222,10 @@ function StudioEditorBody({
   const [liveMessage, setLiveMessage] = useState("");
   const [error, setError] = useAutoNotice();
   const [notice, setNotice] = useAutoNotice();
+  // The cue rail: which member the keyboard mark (`c`) / clear (`x`) targets, and
+  // whether a mark snaps to the nearest loudness drop (an assist, toggleable in the cog).
+  const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
+  const [snapCues, setSnapCues] = useState(true);
 
   // ── The envelope — fetched SERVER-SIDE (the R2 object is cross-origin with no
   // CORS header; see fetchStudioEnvelope). Graceful absence: null means "not staged
@@ -222,6 +245,18 @@ function StudioEditorBody({
     queryKey: ["admin", "clips", mixtapeId],
     refetchOnWindowFocus: true,
   });
+
+  // ── The mixtape itself (its ordered members carry each cue's start_ms). Seeded from
+  // the loader so there's no flash, then kept live: focus-refetch ON (admin
+  // convention), and each cue write updates it optimistically via setQueryData.
+  const cueQueryKey = ["admin", "studio-mixtape", logId] as const;
+  const { data: mixtape } = useQuery<MixtapeDTO>({
+    initialData: initialMixtape,
+    queryFn: () => fetchStudioMixtape({ data: { logId } }),
+    queryKey: cueQueryKey,
+    refetchOnWindowFocus: true,
+  });
+  const members = mixtape.members;
 
   // The timeline length: the envelope's analysed duration when present (the curve +
   // suggestions are keyed to it), else the video's own duration. Both are the whole
@@ -372,6 +407,109 @@ function StudioEditorBody({
     },
   });
 
+  // ── Cue one member (set/clear its start_ms) via `update_mixtape_cue`. Each mark saves
+  // instantly, with an optimistic setQueryData so the rail + lane update before the round
+  // trip; a failure rolls back to the snapshot. `startMs: null` clears the cue.
+  const setCue = useMutation<
+    void,
+    Error,
+    { ref: string; startMs: number | null },
+    { previous: MixtapeDTO | undefined }
+  >({
+    mutationFn: async ({ ref, startMs }) => {
+      const response = await fetch(
+        `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/cues/${encodeURIComponent(ref)}`,
+        {
+          body: JSON.stringify({ startMs }),
+          headers: { "Content-Type": "application/json" },
+          method: "PUT",
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+    },
+    onError: (caught, _variables, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(cueQueryKey, context.previous);
+      }
+
+      setError(caught instanceof Error ? caught.message : String(caught));
+    },
+    onMutate: async ({ ref, startMs }) => {
+      await queryClient.cancelQueries({ queryKey: cueQueryKey });
+      const previous = queryClient.getQueryData<MixtapeDTO>(cueQueryKey);
+
+      queryClient.setQueryData<MixtapeDTO>(cueQueryKey, (old) =>
+        old
+          ? {
+              ...old,
+              members: old.members.map((member) =>
+                member.trackId === ref ? { ...member, startMs: startMs ?? undefined } : member,
+              ),
+            }
+          : old,
+      );
+
+      return { previous };
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: cueQueryKey }),
+  });
+
+  // Mark the given member at the playhead (snapped to the nearest drop when snapping is
+  // on), then select it. The mark saves via the optimistic mutation above.
+  const markCue = useCallback(
+    (trackId: string) => {
+      const snap = snapCues
+        ? snapCueToPeak(currentMs, envelope?.peaks ?? [])
+        : { ms: Math.max(0, currentMs), snapped: false };
+
+      setCue.mutate({ ref: trackId, startMs: snap.ms });
+      setSelectedTrackId(trackId);
+      setLiveMessage(
+        snap.snapped
+          ? `Cued at drop ${formatClock(snap.ms / 1000)}`
+          : `Cued at ${formatClock(snap.ms / 1000)}`,
+      );
+    },
+    [currentMs, envelope, setCue, snapCues],
+  );
+
+  const clearCue = useCallback(
+    (trackId: string) => {
+      setCue.mutate({ ref: trackId, startMs: null });
+      setLiveMessage("Cue cleared");
+    },
+    [setCue],
+  );
+
+  // Move the cue-rail selection (the ↑/↓ keyboard target), clamped to the tracklist.
+  const moveSelection = useCallback(
+    (delta: number) => {
+      if (members.length === 0) {
+        return;
+      }
+
+      const currentIndex = members.findIndex((member) => member.trackId === selectedTrackId);
+      const baseIndex = currentIndex === -1 ? 0 : currentIndex;
+      const next = members[Math.max(0, Math.min(members.length - 1, baseIndex + delta))];
+
+      if (next) {
+        setSelectedTrackId(next.trackId);
+        setLiveMessage(`Selected ${next.artists.join(", ")} — ${next.title}`);
+      }
+    },
+    [members, selectedTrackId],
+  );
+
+  // Default the selection to the first member once the tracklist is known.
+  useEffect(() => {
+    if (selectedTrackId === null && members.length > 0) {
+      setSelectedTrackId(members[0]?.trackId ?? null);
+    }
+  }, [members, selectedTrackId]);
+
   // ── The keyboard loop (role="application"). Skip when typing in a field, and when
   // the scrubber already handled the key (it preventDefaults space/arrows/Home/End).
   const handleKeyDown = useCallback(
@@ -421,6 +559,28 @@ function StudioEditorBody({
           event.preventDefault();
           markAtPlayhead();
           break;
+        case "ArrowUp":
+          event.preventDefault();
+          moveSelection(-1);
+          break;
+        case "ArrowDown":
+          event.preventDefault();
+          moveSelection(1);
+          break;
+        case "c":
+        case "C":
+          event.preventDefault();
+          if (selectedTrackId) {
+            markCue(selectedTrackId);
+          }
+          break;
+        case "x":
+        case "X":
+          event.preventDefault();
+          if (selectedTrackId) {
+            clearCue(selectedTrackId);
+          }
+          break;
         case "Enter":
           event.preventDefault();
           createClip.mutate();
@@ -430,10 +590,14 @@ function StudioEditorBody({
       }
     },
     [
+      clearCue,
       createClip,
       currentSeconds,
       markAtPlayhead,
+      markCue,
+      moveSelection,
       seek,
+      selectedTrackId,
       setInToPlayhead,
       setOutToPlayhead,
       togglePlay,
@@ -442,6 +606,18 @@ function StudioEditorBody({
 
   const bandWindow = band ? bandToWindow(band.inFraction, band.outFraction, durationMs) : null;
   const bandValid = bandWindow !== null && bandWindow.outMs - bandWindow.inMs >= MIN_CLIP_MS;
+
+  // The cue pins the lane draws: one per marked member, reddened when out of order.
+  const cueOutOfOrder = new Set(cueProgress(members).outOfOrderTrackIds);
+  const cueTicks = members
+    .filter((member) => member.startMs != null)
+    .map((member) => ({
+      outOfOrder: cueOutOfOrder.has(member.trackId),
+      startMs: member.startMs ?? 0,
+      trackId: member.trackId,
+    }));
+  // The trackId whose cue write is currently in flight (per-row saving indicator).
+  const savingCueTrackId = setCue.isPending ? (setCue.variables?.ref ?? null) : null;
 
   return (
     // role="application" so the editor's single-key shortcuts ([ ] M Enter, space,
@@ -484,6 +660,8 @@ function StudioEditorBody({
             clipLengthMs={clipLengthMs}
             onClipLengthChange={setClipLengthMs}
             onResetFraming={resetFraming}
+            onSnapCuesChange={setSnapCues}
+            snapCues={snapCues}
           />
         </div>
 
@@ -493,6 +671,7 @@ function StudioEditorBody({
           <StudioEnergyLane
             band={band ? { aFraction: band.inFraction, bFraction: band.outFraction } : null}
             clips={clips ?? []}
+            cues={cueTicks}
             currentMs={currentMs}
             durationMs={durationMs}
             envelope={envelope ?? undefined}
@@ -570,6 +749,18 @@ function StudioEditorBody({
           </div>
         ) : null}
 
+        {/* The cue rail — mark each track's start in the set. The times feed YouTube
+            chapters, the /log per-track times, and (later) clip auto-crediting. */}
+        <StudioCueRail
+          members={members}
+          onClear={clearCue}
+          onMark={markCue}
+          onSeek={(ms) => seek(ms / 1000)}
+          onSelect={setSelectedTrackId}
+          savingTrackId={savingCueTrackId}
+          selectedTrackId={selectedTrackId}
+        />
+
         {/* The set's clips so far (this set only; the cross-set library is Unit G). */}
         <div className="mt-6">
           <Label>Clips ({clips?.length ?? 0})</Label>
@@ -645,10 +836,14 @@ function SettingsCog({
   clipLengthMs,
   onClipLengthChange,
   onResetFraming,
+  onSnapCuesChange,
+  snapCues,
 }: {
   clipLengthMs: number;
   onClipLengthChange: (ms: number) => void;
   onResetFraming: () => void;
+  onSnapCuesChange: (snap: boolean) => void;
+  snapCues: boolean;
 }) {
   return (
     <Popover>
@@ -676,6 +871,20 @@ function SettingsCog({
             ))}
           </div>
           <p className="text-xs text-muted-foreground">The window a Mark drops at the playhead.</p>
+        </div>
+
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between gap-3">
+            <Label htmlFor="studio-snap-cues">Snap cues to drops</Label>
+            <Switch
+              checked={snapCues}
+              id="studio-snap-cues"
+              onCheckedChange={(checked) => onSnapCuesChange(checked)}
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            A cue mark jumps to the nearest loudness drop. Off marks the exact playhead.
+          </p>
         </div>
 
         <Button className="w-full" onClick={onResetFraming} size="sm" variant="outline">

@@ -24,6 +24,7 @@ import {
   getMixtapeById,
   listMixtapes,
   publishMixtape,
+  setMixtapeCue,
   setMixtapeCues,
   setMixtapeMembers,
   updateMixtape,
@@ -629,6 +630,27 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
+  // PUT /admin/mixtapes/{mixtapeId}/cues/{ref} — operator tier. The INTERACTIVE
+  // single-cue write behind the Studio cue rail (mark/clear one member at the
+  // playhead). LOOSE body → setMixtapeCue, which owns the startMs validation + the
+  // non-draft + membership guards; `startMs: null` clears the cue. No coverage/order
+  // constraint (that is the batch set_mixtape_cues' job).
+  const updateMixtapeCueHandler = os.update_mixtape_cue
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const mixtape = await setMixtapeCue(input.mixtapeId, {
+          ref: input.ref,
+          startMs: input.startMs,
+        });
+
+        return { mixtape, ok: true as const };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   return {
     add_mixtape_members: addMixtapeMembersHandler,
     create_clip: createClipHandler,
@@ -650,5 +672,6 @@ export function adminMixtapesHandlers(os: Implementer) {
     set_mixtape_members: setMixtapeMembersHandler,
     update_clip: updateClipHandler,
     update_mixtape: updateMixtapeHandler,
+    update_mixtape_cue: updateMixtapeCueHandler,
   };
 }

@@ -1341,6 +1341,49 @@ body::before {
   width: 2px;
 }
 
+/* Cue pins — one per marked member's start_ms. A thin static Stardust tick with a
+   brighter Stardust notch at the top: warm-neutral and static, so the moving 2px
+   Starlight-Cream playhead stays the ONE cream mark on the lane (they never merge even
+   when a cue sits under the playhead). Distinct from the translucent suggestion/clip
+   bands too. An out-of-order cue reddens (the same Reentry-Red warning the rail shows). */
+.studio-cue-tick {
+  background: color-mix(in oklch, var(--stardust) 55%, transparent);
+  bottom: 0;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  width: 1px;
+}
+
+.studio-cue-tick::before {
+  background: var(--stardust);
+  border-radius: 1px;
+  content: "";
+  height: 5px;
+  left: 50%;
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  width: 5px;
+}
+
+.studio-cue-tick[data-out-of-order="true"] {
+  background: color-mix(in oklch, var(--destructive) 75%, transparent);
+}
+
+.studio-cue-tick[data-out-of-order="true"]::before {
+  background: var(--destructive);
+}
+
+/* Oxanium tabular numerals for the cue rail (positions + times), matching the studio
+   time readout — the DESIGN.md numeral convention. */
+.studio-numeral {
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
 /* A shortcut hint chip on the toolbar buttons. Kept in the system sans (the One
    Voice Rule reserves mono for the terminal surfaces, not an admin editor). */
 .studio-kbd {

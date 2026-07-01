@@ -139,6 +139,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The hardened post-publish cue backfill (Fluncle Studio Unit D, panel M1):
   // re-times an existing minted tracklist's start_ms; operator tier.
   "PUT /admin/mixtapes/{mixtapeId}/cues": "set_mixtape_cues",
+  // The interactive single-cue write behind the Studio cue rail — contract-only oRPC
+  // (no TanStack route file; oRPC owns the path directly). Operator tier: upsert/clear
+  // ONE minted member's start_ms; distinct from the batch cues PUT above (nested under
+  // the `{ref}` member segment, no coverage/order constraint).
+  "PUT /admin/mixtapes/{mixtapeId}/cues/{ref}": "update_mixtape_cue",
   // The PUT shares the `members` file/path with the POST above (append vs replace);
   // oRPC routes the two methods to distinct ops, so each gets its own entry.
   "PUT /admin/mixtapes/{mixtapeId}/members": "set_mixtape_members",

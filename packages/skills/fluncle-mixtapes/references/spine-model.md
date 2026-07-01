@@ -89,7 +89,7 @@ Publishing is the irreversible-ish step, but only the **coordinate** is truly fr
 
 ## Tracklist — the breadcrumb
 
-The required tracklist **is the breadcrumb**, and the AEO/SEO play. Write each track as its finding: `Artist — Title`, its `fluncle://<log-id>` coordinate, and a `/log/<id>` link (Mixcloud tracklist; YouTube description + chapters). Owned surfaces and authentic scene presence pointing back at fluncle.com. A member track that isn't a finding yet is added as a finding first (or allowed as a non-finding member — an open question). The ordered identity comes out of Rekordbox history (see `scripts/rekordbox-tracklist.py`); its load timestamps are **not** usable as cue offsets (deck-load time precedes the audible mix-in by a variable lead), so the tracklist carries order + identity, not jump-to times.
+The required tracklist **is the breadcrumb**, and the AEO/SEO play. Write each track as its finding: `Artist — Title`, its `fluncle://<log-id>` coordinate, and a `/log/<id>` link (Mixcloud tracklist; YouTube description + chapters). Owned surfaces and authentic scene presence pointing back at fluncle.com. A member track that isn't a finding yet is added as a finding first (or allowed as a non-finding member — an open question). The ordered identity comes out of Rekordbox history (see `scripts/rekordbox-tracklist.py`); its load timestamps are **not** usable as cue offsets (deck-load time precedes the audible mix-in by a variable lead), so the Rekordbox export carries order + identity only. The **jump-to cue times** (`mixtape_tracks.start_ms`) are captured separately, against the final recording, in the Fluncle Studio cue rail (`/admin/studio/$logId`; see `docs/fluncle-studio.md`) — where they feed the YouTube chapters, Mixcloud sections, and the `/log` per-track times.
 
 ## MusicBrainz + Wikidata
 
@@ -122,7 +122,7 @@ A mixtape sits at its sector, which the Galaxy game maps to a distance from Eart
 The internal plumbing and the external distribution chain are **shipped**. Remaining follow-ups (also tracked in `docs/ROADMAP.md` → _Fluncle's own mixtapes_):
 
 - **Member tracks that aren't findings yet:** add them as findings first, or allow non-finding members in a mixtape's tracklist.
-- **Per-track cue offsets:** Rekordbox load times can't supply them (see Tracklist); if wanted, capture them against the final video.
+- **Per-track cue offsets — shipped.** Rekordbox load times can't supply them (see Tracklist), so they're marked against the final recording in the Fluncle Studio cue rail (`/admin/studio/$logId`; `update_mixtape_cue`, see `docs/fluncle-studio.md`). They feed the YouTube chapters, Mixcloud sections, and `/log` times.
 
 ## Cross-links
 
