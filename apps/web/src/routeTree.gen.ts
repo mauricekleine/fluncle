@@ -62,6 +62,7 @@ import { Route as ApiV1MixtapeCoverLogIdRouteImport } from './routes/api/v1/mixt
 import { Route as ApiV1AdminLogoutRouteImport } from './routes/api/v1/admin/logout'
 import { Route as ApiAdminYoutubeAuthStartRouteImport } from './routes/api/admin/youtube/auth/start'
 import { Route as ApiAdminYoutubeAuthCallbackRouteImport } from './routes/api/admin/youtube/auth/callback'
+import { Route as ApiAdminTracksTrackIdSilentClipRouteImport } from './routes/api/admin/tracks.$trackId.silent-clip'
 import { Route as ApiAdminTracksTrackIdPreviewRouteImport } from './routes/api/admin/tracks.$trackId.preview'
 import { Route as ApiAdminSpotifyAuthStartRouteImport } from './routes/api/admin/spotify/auth/start'
 import { Route as ApiAdminSpotifyAuthLoginRouteImport } from './routes/api/admin/spotify/auth/login'
@@ -70,6 +71,7 @@ import { Route as ApiAdminMixcloudAuthStartRouteImport } from './routes/api/admi
 import { Route as ApiAdminMixcloudAuthCallbackRouteImport } from './routes/api/admin/mixcloud/auth/callback'
 import { Route as ApiV1AdminYoutubeAuthStartRouteImport } from './routes/api/v1/admin/youtube/auth/start'
 import { Route as ApiV1AdminYoutubeAuthCallbackRouteImport } from './routes/api/v1/admin/youtube/auth/callback'
+import { Route as ApiV1AdminTracksTrackIdSilentClipRouteImport } from './routes/api/v1/admin/tracks.$trackId.silent-clip'
 import { Route as ApiV1AdminTracksTrackIdPreviewRouteImport } from './routes/api/v1/admin/tracks.$trackId.preview'
 import { Route as ApiV1AdminSpotifyAuthStartRouteImport } from './routes/api/v1/admin/spotify/auth/start'
 import { Route as ApiV1AdminSpotifyAuthLoginRouteImport } from './routes/api/v1/admin/spotify/auth/login'
@@ -345,6 +347,12 @@ const ApiAdminYoutubeAuthCallbackRoute =
     path: '/api/admin/youtube/auth/callback',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiAdminTracksTrackIdSilentClipRoute =
+  ApiAdminTracksTrackIdSilentClipRouteImport.update({
+    id: '/api/admin/tracks/$trackId/silent-clip',
+    path: '/api/admin/tracks/$trackId/silent-clip',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiAdminTracksTrackIdPreviewRoute =
   ApiAdminTracksTrackIdPreviewRouteImport.update({
     id: '/api/admin/tracks/$trackId/preview',
@@ -391,6 +399,12 @@ const ApiV1AdminYoutubeAuthCallbackRoute =
   ApiV1AdminYoutubeAuthCallbackRouteImport.update({
     id: '/api/v1/admin/youtube/auth/callback',
     path: '/api/v1/admin/youtube/auth/callback',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiV1AdminTracksTrackIdSilentClipRoute =
+  ApiV1AdminTracksTrackIdSilentClipRouteImport.update({
+    id: '/api/v1/admin/tracks/$trackId/silent-clip',
+    path: '/api/v1/admin/tracks/$trackId/silent-clip',
     getParentRoute: () => rootRouteImport,
   } as any)
 const ApiV1AdminTracksTrackIdPreviewRoute =
@@ -488,6 +502,7 @@ export interface FileRoutesByFullPath {
   '/api/admin/spotify/auth/login': typeof ApiAdminSpotifyAuthLoginRoute
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
   '/api/admin/tracks/$trackId/preview': typeof ApiAdminTracksTrackIdPreviewRoute
+  '/api/admin/tracks/$trackId/silent-clip': typeof ApiAdminTracksTrackIdSilentClipRoute
   '/api/admin/youtube/auth/callback': typeof ApiAdminYoutubeAuthCallbackRoute
   '/api/admin/youtube/auth/start': typeof ApiAdminYoutubeAuthStartRoute
   '/api/v1/admin/mixcloud/auth/callback': typeof ApiV1AdminMixcloudAuthCallbackRoute
@@ -496,6 +511,7 @@ export interface FileRoutesByFullPath {
   '/api/v1/admin/spotify/auth/login': typeof ApiV1AdminSpotifyAuthLoginRoute
   '/api/v1/admin/spotify/auth/start': typeof ApiV1AdminSpotifyAuthStartRoute
   '/api/v1/admin/tracks/$trackId/preview': typeof ApiV1AdminTracksTrackIdPreviewRoute
+  '/api/v1/admin/tracks/$trackId/silent-clip': typeof ApiV1AdminTracksTrackIdSilentClipRoute
   '/api/v1/admin/youtube/auth/callback': typeof ApiV1AdminYoutubeAuthCallbackRoute
   '/api/v1/admin/youtube/auth/start': typeof ApiV1AdminYoutubeAuthStartRoute
 }
@@ -555,6 +571,7 @@ export interface FileRoutesByTo {
   '/api/admin/spotify/auth/login': typeof ApiAdminSpotifyAuthLoginRoute
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
   '/api/admin/tracks/$trackId/preview': typeof ApiAdminTracksTrackIdPreviewRoute
+  '/api/admin/tracks/$trackId/silent-clip': typeof ApiAdminTracksTrackIdSilentClipRoute
   '/api/admin/youtube/auth/callback': typeof ApiAdminYoutubeAuthCallbackRoute
   '/api/admin/youtube/auth/start': typeof ApiAdminYoutubeAuthStartRoute
   '/api/v1/admin/mixcloud/auth/callback': typeof ApiV1AdminMixcloudAuthCallbackRoute
@@ -563,6 +580,7 @@ export interface FileRoutesByTo {
   '/api/v1/admin/spotify/auth/login': typeof ApiV1AdminSpotifyAuthLoginRoute
   '/api/v1/admin/spotify/auth/start': typeof ApiV1AdminSpotifyAuthStartRoute
   '/api/v1/admin/tracks/$trackId/preview': typeof ApiV1AdminTracksTrackIdPreviewRoute
+  '/api/v1/admin/tracks/$trackId/silent-clip': typeof ApiV1AdminTracksTrackIdSilentClipRoute
   '/api/v1/admin/youtube/auth/callback': typeof ApiV1AdminYoutubeAuthCallbackRoute
   '/api/v1/admin/youtube/auth/start': typeof ApiV1AdminYoutubeAuthStartRoute
 }
@@ -625,6 +643,7 @@ export interface FileRoutesById {
   '/api/admin/spotify/auth/login': typeof ApiAdminSpotifyAuthLoginRoute
   '/api/admin/spotify/auth/start': typeof ApiAdminSpotifyAuthStartRoute
   '/api/admin/tracks/$trackId/preview': typeof ApiAdminTracksTrackIdPreviewRoute
+  '/api/admin/tracks/$trackId/silent-clip': typeof ApiAdminTracksTrackIdSilentClipRoute
   '/api/admin/youtube/auth/callback': typeof ApiAdminYoutubeAuthCallbackRoute
   '/api/admin/youtube/auth/start': typeof ApiAdminYoutubeAuthStartRoute
   '/api/v1/admin/mixcloud/auth/callback': typeof ApiV1AdminMixcloudAuthCallbackRoute
@@ -633,6 +652,7 @@ export interface FileRoutesById {
   '/api/v1/admin/spotify/auth/login': typeof ApiV1AdminSpotifyAuthLoginRoute
   '/api/v1/admin/spotify/auth/start': typeof ApiV1AdminSpotifyAuthStartRoute
   '/api/v1/admin/tracks/$trackId/preview': typeof ApiV1AdminTracksTrackIdPreviewRoute
+  '/api/v1/admin/tracks/$trackId/silent-clip': typeof ApiV1AdminTracksTrackIdSilentClipRoute
   '/api/v1/admin/youtube/auth/callback': typeof ApiV1AdminYoutubeAuthCallbackRoute
   '/api/v1/admin/youtube/auth/start': typeof ApiV1AdminYoutubeAuthStartRoute
 }
@@ -696,6 +716,7 @@ export interface FileRouteTypes {
     | '/api/admin/spotify/auth/login'
     | '/api/admin/spotify/auth/start'
     | '/api/admin/tracks/$trackId/preview'
+    | '/api/admin/tracks/$trackId/silent-clip'
     | '/api/admin/youtube/auth/callback'
     | '/api/admin/youtube/auth/start'
     | '/api/v1/admin/mixcloud/auth/callback'
@@ -704,6 +725,7 @@ export interface FileRouteTypes {
     | '/api/v1/admin/spotify/auth/login'
     | '/api/v1/admin/spotify/auth/start'
     | '/api/v1/admin/tracks/$trackId/preview'
+    | '/api/v1/admin/tracks/$trackId/silent-clip'
     | '/api/v1/admin/youtube/auth/callback'
     | '/api/v1/admin/youtube/auth/start'
   fileRoutesByTo: FileRoutesByTo
@@ -763,6 +785,7 @@ export interface FileRouteTypes {
     | '/api/admin/spotify/auth/login'
     | '/api/admin/spotify/auth/start'
     | '/api/admin/tracks/$trackId/preview'
+    | '/api/admin/tracks/$trackId/silent-clip'
     | '/api/admin/youtube/auth/callback'
     | '/api/admin/youtube/auth/start'
     | '/api/v1/admin/mixcloud/auth/callback'
@@ -771,6 +794,7 @@ export interface FileRouteTypes {
     | '/api/v1/admin/spotify/auth/login'
     | '/api/v1/admin/spotify/auth/start'
     | '/api/v1/admin/tracks/$trackId/preview'
+    | '/api/v1/admin/tracks/$trackId/silent-clip'
     | '/api/v1/admin/youtube/auth/callback'
     | '/api/v1/admin/youtube/auth/start'
   id:
@@ -832,6 +856,7 @@ export interface FileRouteTypes {
     | '/api/admin/spotify/auth/login'
     | '/api/admin/spotify/auth/start'
     | '/api/admin/tracks/$trackId/preview'
+    | '/api/admin/tracks/$trackId/silent-clip'
     | '/api/admin/youtube/auth/callback'
     | '/api/admin/youtube/auth/start'
     | '/api/v1/admin/mixcloud/auth/callback'
@@ -840,6 +865,7 @@ export interface FileRouteTypes {
     | '/api/v1/admin/spotify/auth/login'
     | '/api/v1/admin/spotify/auth/start'
     | '/api/v1/admin/tracks/$trackId/preview'
+    | '/api/v1/admin/tracks/$trackId/silent-clip'
     | '/api/v1/admin/youtube/auth/callback'
     | '/api/v1/admin/youtube/auth/start'
   fileRoutesById: FileRoutesById
@@ -893,6 +919,7 @@ export interface RootRouteChildren {
   ApiAdminSpotifyAuthLoginRoute: typeof ApiAdminSpotifyAuthLoginRoute
   ApiAdminSpotifyAuthStartRoute: typeof ApiAdminSpotifyAuthStartRoute
   ApiAdminTracksTrackIdPreviewRoute: typeof ApiAdminTracksTrackIdPreviewRoute
+  ApiAdminTracksTrackIdSilentClipRoute: typeof ApiAdminTracksTrackIdSilentClipRoute
   ApiAdminYoutubeAuthCallbackRoute: typeof ApiAdminYoutubeAuthCallbackRoute
   ApiAdminYoutubeAuthStartRoute: typeof ApiAdminYoutubeAuthStartRoute
   ApiV1AdminMixcloudAuthCallbackRoute: typeof ApiV1AdminMixcloudAuthCallbackRoute
@@ -901,6 +928,7 @@ export interface RootRouteChildren {
   ApiV1AdminSpotifyAuthLoginRoute: typeof ApiV1AdminSpotifyAuthLoginRoute
   ApiV1AdminSpotifyAuthStartRoute: typeof ApiV1AdminSpotifyAuthStartRoute
   ApiV1AdminTracksTrackIdPreviewRoute: typeof ApiV1AdminTracksTrackIdPreviewRoute
+  ApiV1AdminTracksTrackIdSilentClipRoute: typeof ApiV1AdminTracksTrackIdSilentClipRoute
   ApiV1AdminYoutubeAuthCallbackRoute: typeof ApiV1AdminYoutubeAuthCallbackRoute
   ApiV1AdminYoutubeAuthStartRoute: typeof ApiV1AdminYoutubeAuthStartRoute
 }
@@ -1278,6 +1306,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminYoutubeAuthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/admin/tracks/$trackId/silent-clip': {
+      id: '/api/admin/tracks/$trackId/silent-clip'
+      path: '/api/admin/tracks/$trackId/silent-clip'
+      fullPath: '/api/admin/tracks/$trackId/silent-clip'
+      preLoaderRoute: typeof ApiAdminTracksTrackIdSilentClipRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/admin/tracks/$trackId/preview': {
       id: '/api/admin/tracks/$trackId/preview'
       path: '/api/admin/tracks/$trackId/preview'
@@ -1332,6 +1367,13 @@ declare module '@tanstack/react-router' {
       path: '/api/v1/admin/youtube/auth/callback'
       fullPath: '/api/v1/admin/youtube/auth/callback'
       preLoaderRoute: typeof ApiV1AdminYoutubeAuthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/admin/tracks/$trackId/silent-clip': {
+      id: '/api/v1/admin/tracks/$trackId/silent-clip'
+      path: '/api/v1/admin/tracks/$trackId/silent-clip'
+      fullPath: '/api/v1/admin/tracks/$trackId/silent-clip'
+      preLoaderRoute: typeof ApiV1AdminTracksTrackIdSilentClipRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/v1/admin/tracks/$trackId/preview': {
@@ -1465,6 +1507,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAdminSpotifyAuthLoginRoute: ApiAdminSpotifyAuthLoginRoute,
   ApiAdminSpotifyAuthStartRoute: ApiAdminSpotifyAuthStartRoute,
   ApiAdminTracksTrackIdPreviewRoute: ApiAdminTracksTrackIdPreviewRoute,
+  ApiAdminTracksTrackIdSilentClipRoute: ApiAdminTracksTrackIdSilentClipRoute,
   ApiAdminYoutubeAuthCallbackRoute: ApiAdminYoutubeAuthCallbackRoute,
   ApiAdminYoutubeAuthStartRoute: ApiAdminYoutubeAuthStartRoute,
   ApiV1AdminMixcloudAuthCallbackRoute: ApiV1AdminMixcloudAuthCallbackRoute,
@@ -1473,6 +1516,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiV1AdminSpotifyAuthLoginRoute: ApiV1AdminSpotifyAuthLoginRoute,
   ApiV1AdminSpotifyAuthStartRoute: ApiV1AdminSpotifyAuthStartRoute,
   ApiV1AdminTracksTrackIdPreviewRoute: ApiV1AdminTracksTrackIdPreviewRoute,
+  ApiV1AdminTracksTrackIdSilentClipRoute:
+    ApiV1AdminTracksTrackIdSilentClipRoute,
   ApiV1AdminYoutubeAuthCallbackRoute: ApiV1AdminYoutubeAuthCallbackRoute,
   ApiV1AdminYoutubeAuthStartRoute: ApiV1AdminYoutubeAuthStartRoute,
 }

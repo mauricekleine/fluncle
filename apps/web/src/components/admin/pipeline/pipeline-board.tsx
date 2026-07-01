@@ -1,4 +1,4 @@
-import { DotsThreeVerticalIcon, FolderOpenIcon } from "@phosphor-icons/react";
+import { DotsThreeVerticalIcon, DownloadSimpleIcon, FolderOpenIcon } from "@phosphor-icons/react";
 
 import {
   type BoardActions,
@@ -176,7 +176,7 @@ function RowMenu({ row }: { row: BoardRow }) {
         >
           <DotsThreeVerticalIcon aria-hidden="true" className="size-4" weight="bold" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-44">
+        <DropdownMenuContent align="end" className="min-w-52">
           <DropdownMenuItem
             disabled={!row.logId}
             render={
@@ -187,6 +187,15 @@ function RowMenu({ row }: { row: BoardRow }) {
           >
             <FolderOpenIcon aria-hidden="true" className="size-4" />
             Open in R2
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={!row.logId}
+            render={
+              row.logId ? <a href={`/api/admin/tracks/${row.trackId}/silent-clip`} /> : undefined
+            }
+          >
+            <DownloadSimpleIcon aria-hidden="true" className="size-4" />
+            Download silent clip
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

@@ -167,6 +167,7 @@ const ADMIN_CARVE_OUT_ROUTE_PREFIXES = ["spotify/auth/", "youtube/auth/", "mixcl
 const ADMIN_CARVE_OUT_ROUTES = new Set([
   "logout", // a 302 redirect (expire the grant cookie, bounce to /admin/login), not RPC JSON.
   "tracks.$trackId.preview", // multipart-file body (formData → File).
+  "tracks.$trackId.silent-clip", // a same-origin download proxy: streams the audio-stripped social cut as an attachment, not RPC JSON.
 ]);
 
 const ADMIN_DIR = fileURLToPath(new URL("../../routes/api/admin", import.meta.url));
