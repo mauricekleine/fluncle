@@ -429,6 +429,118 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
+  // POST /admin/mixtapes/{mixtapeId}/youtube/resync — operator tier. Re-derive the
+  // description + chapters from the mixtape's CURRENT cues and push them to the live
+  // video via videos.update — no re-upload. Server-side (the Worker holds the refresh
+  // token), like publish_mixtape_youtube. videos.update replaces the WHOLE snippet
+  // part, so we first videos.list the current snippet (title, categoryId, tags, …) and
+  // patch ONLY its description — nothing else about the video moves.
+  const resyncMixtapeYoutubeHandler = os.resync_mixtape_youtube
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const posts = await listMixtapeSocialPosts(input.mixtapeId);
+        const youtube = posts.find((post) => post.platform === "youtube");
+        const videoId = youtube?.externalId;
+
+        if (!videoId) {
+          throw new ORPCError("CONFLICT", {
+            data: {
+              apiCode: "youtube_not_distributed",
+              apiMessage: "No YouTube video to re-sync — distribute the mixtape first",
+            },
+            message: "No YouTube video to re-sync — distribute the mixtape first",
+            status: 409,
+          });
+        }
+
+        const mixtape = await getMixtapeById(input.mixtapeId, { includeDrafts: true });
+
+        if (!mixtape.logId) {
+          throw new ORPCError("CONFLICT", {
+            data: { apiCode: "mixtape_no_log_id", apiMessage: "Mixtape has no committed Log ID" },
+            message: "Mixtape has no committed Log ID",
+            status: 409,
+          });
+        }
+
+        const accessToken = await getYouTubeAccessToken();
+
+        // videos.update needs the FULL snippet (title + categoryId are required); read
+        // the current one so the update preserves everything except the description.
+        const listResponse = await fetch(
+          `https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${encodeURIComponent(videoId)}`,
+          { headers: { Authorization: `Bearer ${accessToken}` } },
+        );
+
+        if (!listResponse.ok) {
+          const detail = (await listResponse.text().catch(() => "")).slice(0, 500);
+          throw new ORPCError("BAD_GATEWAY", {
+            data: {
+              apiCode: "youtube_resync_failed",
+              apiMessage: `YouTube rejected the snippet read (${listResponse.status} ${listResponse.statusText})${detail ? `: ${detail}` : ""}`,
+            },
+            message: `YouTube rejected the snippet read (${listResponse.status} ${listResponse.statusText})${detail ? `: ${detail}` : ""}`,
+            status: 502,
+          });
+        }
+
+        const listData = (await listResponse.json().catch(() => ({}))) as {
+          items?: { snippet?: Record<string, unknown> }[];
+        };
+        const currentSnippet = listData.items?.[0]?.snippet;
+
+        if (!currentSnippet) {
+          throw new ORPCError("BAD_GATEWAY", {
+            data: {
+              apiCode: "youtube_video_not_found",
+              apiMessage: `YouTube returned no snippet for video ${videoId}`,
+            },
+            message: `YouTube returned no snippet for video ${videoId}`,
+            status: 502,
+          });
+        }
+
+        const description = youtubeDescription(mixtape.note ?? "", mixtape.logId, mixtape.members);
+
+        const updateResponse = await fetch(
+          "https://www.googleapis.com/youtube/v3/videos?part=snippet",
+          {
+            body: JSON.stringify({
+              id: videoId,
+              // Keep the whole existing snippet (title, categoryId, tags, …); replace
+              // only the description with the freshly-derived prose + chapter block.
+              snippet: { ...currentSnippet, description },
+            }),
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "Content-Type": "application/json",
+            },
+            method: "PUT",
+          },
+        );
+
+        if (!updateResponse.ok) {
+          const detail = (await updateResponse.text().catch(() => "")).slice(0, 500);
+          throw new ORPCError("BAD_GATEWAY", {
+            data: {
+              apiCode: "youtube_resync_failed",
+              apiMessage: `YouTube rejected the description update (${updateResponse.status} ${updateResponse.statusText})${detail ? `: ${detail}` : ""}`,
+            },
+            message: `YouTube rejected the description update (${updateResponse.status} ${updateResponse.statusText})${detail ? `: ${detail}` : ""}`,
+            status: 502,
+          });
+        }
+
+        const url = youtube.url ?? `https://youtu.be/${videoId}`;
+
+        return { ok: true as const, url, videoId };
+      } catch (error) {
+        throw toFault(error);
+      }
+    });
+
   // ── Fluncle Studio: clips + cue backfill ──
 
   // GET /admin/clips — admin tier (agent-allowed read). Optional ?mixtapeId/?status.
@@ -668,6 +780,7 @@ export function adminMixtapesHandlers(os: Implementer) {
     presign_set_video_upload: presignSetVideoUploadHandler,
     publish_mixtape: publishMixtapeHandler,
     publish_mixtape_youtube: publishMixtapeYoutubeHandler,
+    resync_mixtape_youtube: resyncMixtapeYoutubeHandler,
     set_mixtape_cues: setMixtapeCuesHandler,
     set_mixtape_members: setMixtapeMembersHandler,
     update_clip: updateClipHandler,

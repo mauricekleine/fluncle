@@ -188,6 +188,12 @@ type MixtapeDistributeOptions = {
   youtube?: boolean;
 };
 
+type MixtapeResyncOptions = {
+  json: boolean;
+  mixcloud?: boolean;
+  youtube?: boolean;
+};
+
 type NewsletterDraftOptions = {
   contentFile?: string;
   json: boolean;
@@ -865,6 +871,21 @@ function addAdminCommands(program: Command): void {
     .action(async (idOrLogId: string | undefined, options: { json: boolean }) => {
       const { publishYoutubeCommand } = await import("./commands/mixtape-youtube");
       await runMixtapePublishYoutube(idOrLogId, options, publishYoutubeCommand);
+    });
+
+  adminMixtapes
+    .command("resync")
+    .description(
+      "Re-push a published mixtape's YouTube chapters + Mixcloud sections from its current cues (no re-upload)",
+    )
+    .argument("[idOrLogId]")
+    .option("--youtube", "Only re-sync YouTube")
+    .option("--mixcloud", "Only re-sync Mixcloud")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (idOrLogId: string | undefined, options: MixtapeResyncOptions) => {
+      const { mixtapeResyncCommand } = await import("./commands/mixtapes");
+      await runMixtapeResync(idOrLogId, options, mixtapeResyncCommand);
     });
 
   // Fluncle Studio clips. `list` is the agent-allowed read;
@@ -1883,6 +1904,27 @@ async function runMixtapePublishYoutube(
   }
 
   console.log(`YouTube video is now public: ${result.url}`);
+}
+
+async function runMixtapeResync(
+  idOrLogId: string | undefined,
+  options: MixtapeResyncOptions,
+  mixtapeResyncCommand: typeof import("./commands/mixtapes").mixtapeResyncCommand,
+): Promise<void> {
+  if (!idOrLogId) {
+    throw new Error("Missing mixtape id. Usage: fluncle admin mixtapes resync <idOrLogId>");
+  }
+
+  const onProgress = options.json ? () => {} : (message: string) => console.log(message);
+  const result = await mixtapeResyncCommand(idOrLogId, options, onProgress);
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  const links = result.results.map((r) => `  ${r.platform}: ${r.url}`).join("\n");
+  console.log(`Re-synced ${result.logId} (fluncle://${result.logId}).\n${links}`);
 }
 
 async function runMixtapeDelete(

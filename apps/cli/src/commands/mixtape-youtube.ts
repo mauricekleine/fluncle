@@ -10,12 +10,14 @@ import {
   type MixtapeDistributeFinalizeResponse,
   type MixtapesResponse,
   type MixtapeYouTubeInitiateResponse,
+  type MixtapeYouTubeResyncResponse,
   type YouTubeAuthStartResponse,
 } from "@fluncle/contracts";
 import { adminApiGet, adminApiPost } from "../api";
 import { CliError } from "../output";
 
 export type YoutubeDistributeResult = { url: string; videoId: string };
+export type YoutubeResyncResult = { url: string; videoId: string };
 
 // YouTube's resumable session can outlive the access token on a multi-GB upload; a
 // fresh token is re-minted on 401 and the upload resumes at the recorded offset.
@@ -106,6 +108,20 @@ export async function publishYoutubeCommand(idOrLogId: string): Promise<{ url: s
   );
 
   return { url: response.url };
+}
+
+/**
+ * Re-sync the live YouTube video's description + chapters from the mixtape's CURRENT
+ * cues — no re-upload. Fully server-side (the Worker holds the refresh token +
+ * runs videos.list/videos.update); the CLI just triggers it and reports the link.
+ * The `mixtapeId` is already resolved by the orchestrating resync command.
+ */
+export async function resyncYoutube(mixtapeId: string): Promise<YoutubeResyncResult> {
+  const response = await adminApiPost<MixtapeYouTubeResyncResponse>(
+    `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/youtube/resync`,
+  );
+
+  return { url: response.url, videoId: response.videoId };
 }
 
 export async function authYoutubeCommand(): Promise<void> {

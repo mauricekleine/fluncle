@@ -89,6 +89,26 @@ It derives one **1080p faststart rendition** with ffmpeg (CRF 20, AAC, ~2s GOP f
 
 The one recurring human gate: the `/admin/mixtapes` **Make YouTube public** button, or `fluncle admin mixtapes publish-youtube <idOrLogId>` (server-side `videos.update`).
 
+### D2. Re-sync cues → live YouTube chapters + Mixcloud sections
+
+The tracklist cues are often refined **after** a set is already live (the initial upload rarely has precise jump points — see the Rekordbox note in §B, which writes order + identity, not timestamps). Once you mark or change cues on a **published** mixtape, re-push the derived metadata to the platforms **without re-uploading the audio**:
+
+```bash
+# Mark/adjust cues first (Fluncle Studio cue rail, or the CLI cue backfill):
+fluncle admin mixtapes members <idOrLogId> --from cues.txt   # "m:ss Artist — Title" lines, or a JSON cue array
+# …then re-sync the derived metadata to the live platforms:
+fluncle admin mixtapes resync <idOrLogId>                    # both platforms it's distributed to
+fluncle admin mixtapes resync <idOrLogId> --youtube          # only YouTube
+fluncle admin mixtapes resync <idOrLogId> --mixcloud         # only Mixcloud
+```
+
+`resync` regenerates the exact same metadata `distribute` builds — the YouTube description (dream note + `fluncle://<logId>` + the cued chapter block, YouTube's ≥3-chapters/first-at-0:00/≥10s-spacing rules honored) and the Mixcloud `sections[]` — from the mixtape's **current** cues, and pushes them to the already-uploaded video + cloudcast:
+
+- **YouTube** is fully server-side (`videos.list` to read the live snippet, then `videos.update` on `part=snippet`): it refreshes **only** the description; the title, category, tags, and the video itself are read back and preserved untouched.
+- **Mixcloud** edits the cloudcast in place via its edit endpoint (`POST /upload/<user>/<slug>/edit/`, all upload fields except `mp3`). Posting the `sections-*` fields overwrites the whole tracklist with the fresh cue set; name/description/picture are left alone. CLI-side with the just-in-time token, exactly like the upload.
+
+It is **operator-only** (it edits live published content — the agent token 403s) and **idempotent** (re-run any time; the cloudcast key/url never change, so there's nothing to re-finalize). With no `--youtube`/`--mixcloud` flag it re-syncs every platform the mixtape is distributed to. SoundCloud is manual — out of scope.
+
 ### E. Mirror + anchor (manual, optional)
 
 - **SoundCloud** — paste the link via the editor when you have it (API registration is externally gated). The data model accepts it with no rework.

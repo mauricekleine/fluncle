@@ -6,12 +6,20 @@ import {
   type MixtapeMembersRequest,
   type MixtapePublishResponse,
   type MixtapeRequestBody,
+  type MixtapeSocialShowResponse,
   type MixtapeUpdateResponse,
   type MixtapesResponse,
 } from "@fluncle/contracts";
 import { parseDuration } from "@fluncle/contracts/util";
 import { existsSync, readFileSync } from "node:fs";
-import { adminApiDelete, adminApiPost, adminApiPut, adminApiPatch, publicApiGet } from "../api";
+import {
+  adminApiDelete,
+  adminApiGet,
+  adminApiPost,
+  adminApiPut,
+  adminApiPatch,
+  publicApiGet,
+} from "../api";
 import { type MixtapeListItem, mixtapeGetCommand, mixtapeListCommand } from "./mixtape-api";
 import { CliError } from "../output";
 
@@ -219,6 +227,92 @@ export async function mixtapeDistributeCommand(
   }
 
   return { logId, mixtapeId, results };
+}
+
+export type MixtapeResyncOptions = {
+  json: boolean;
+  mixcloud?: boolean;
+  youtube?: boolean;
+};
+
+export type MixtapeResyncResult = {
+  logId: string;
+  mixtapeId: string;
+  results: { platform: string; url: string }[];
+};
+
+/**
+ * Re-sync a PUBLISHED mixtape's distribution metadata from its current cues — WITHOUT
+ * re-uploading the audio: regenerate the YouTube chapter description + the Mixcloud
+ * `sections[]` and push them to the live video + cloudcast. With no platform selector,
+ * does both. YouTube is server-side (`videos.update` via the op); Mixcloud edits the
+ * cloudcast sections CLI-side with the just-in-time token, like the upload. Idempotent
+ * per platform (a re-run pushes the same fresh metadata again).
+ *
+ * In the no-selector default it re-syncs only the platforms the mixtape is actually
+ * distributed to (a set on Mixcloud only isn't failed by a missing YouTube video); an
+ * EXPLICIT `--youtube`/`--mixcloud` attempts that platform and surfaces its own
+ * `*_not_distributed` error if the link isn't there.
+ */
+export async function mixtapeResyncCommand(
+  idOrLogId: string,
+  options: MixtapeResyncOptions,
+  onProgress: (message: string) => void = () => {},
+): Promise<MixtapeResyncResult> {
+  const mixtape = await mixtapeGetCommand(idOrLogId);
+
+  if (!mixtape.id) {
+    throw new CliError("mixtape_not_found", `No mixtape with id or log id ${idOrLogId}`);
+  }
+
+  if (!mixtape.logId) {
+    throw new CliError(
+      "mixtape_no_log_id",
+      "The mixtape isn't published yet — distribute it before re-syncing.",
+    );
+  }
+
+  const mixtapeId = mixtape.id;
+  const explicit = Boolean(options.youtube) || Boolean(options.mixcloud);
+  let doYoutube = Boolean(options.youtube);
+  let doMixcloud = Boolean(options.mixcloud);
+
+  // No selector → re-sync every platform the mixtape is actually distributed to.
+  if (!explicit) {
+    const social = await adminApiGet<MixtapeSocialShowResponse>(
+      `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/social`,
+    );
+    const platforms = new Set(social.posts.map((post) => post.platform));
+    doYoutube = platforms.has("youtube");
+    doMixcloud = platforms.has("mixcloud");
+
+    if (!doYoutube && !doMixcloud) {
+      throw new CliError(
+        "mixtape_not_distributed",
+        "The mixtape has no YouTube or Mixcloud link to re-sync.",
+      );
+    }
+  }
+
+  const results: { platform: string; url: string }[] = [];
+
+  if (doYoutube) {
+    onProgress("YouTube: re-syncing description + chapters…");
+    const { resyncYoutube } = await import("./mixtape-youtube");
+    const result = await resyncYoutube(mixtapeId);
+    results.push({ platform: "youtube", url: result.url });
+    onProgress(`YouTube: ${result.url}`);
+  }
+
+  if (doMixcloud) {
+    onProgress("Mixcloud: re-syncing sections…");
+    const { resyncMixcloud } = await import("./mixtape-mixcloud");
+    const result = await resyncMixcloud(mixtapeId, onProgress);
+    results.push({ platform: "mixcloud", url: result.url });
+    onProgress(`Mixcloud: ${result.url}`);
+  }
+
+  return { logId: mixtape.logId, mixtapeId, results };
 }
 
 // The media run-time in ms via ffprobe, or undefined if it isn't available/parseable.

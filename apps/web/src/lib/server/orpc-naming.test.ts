@@ -68,6 +68,10 @@ const APPROVED_VERBS = new Set<string>([
   // `requeue` (put a finding's video back on the render queue) — ratified into the
   // action set with the `requeue_video` re-render command.
   "requeue",
+  // `resync` (re-derive a published mixtape's distribution metadata from its current
+  // cues and push it to the live platform — no re-upload) — added deliberately with
+  // the `resync_mixtape_youtube` op (the Mixcloud leg edits sections CLI-side).
+  "resync",
   // Concrete actions already in the live registry the prose set doesn't spell out
   // verbatim. Adding a genuinely new verb is a deliberate edit here (with a reason),
   // which is exactly the gate this test exists to enforce.

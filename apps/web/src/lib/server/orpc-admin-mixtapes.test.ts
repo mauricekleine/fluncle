@@ -52,6 +52,12 @@ vi.mock("./mixtape-social", () => ({
   listMixtapeSocialPosts: (...args: unknown[]) => listMixtapeSocialPosts(...args),
 }));
 
+const getYouTubeAccessToken = vi.fn();
+
+vi.mock("./youtube", () => ({
+  getYouTubeAccessToken: (...args: unknown[]) => getYouTubeAccessToken(...args),
+}));
+
 const MIXTAPE_ID = "mix-123";
 
 const MIXTAPE = {
@@ -77,6 +83,7 @@ beforeEach(() => {
   getMixtapeById.mockReset();
   listMixtapeSocialPosts.mockReset();
   finalizeMixtapeDistribution.mockReset();
+  getYouTubeAccessToken.mockReset();
   setMixtapeCues.mockReset();
   listClips.mockReset();
   createClip.mockReset();
@@ -319,6 +326,102 @@ describe("oRPC publish_mixtape_youtube (POST .../youtube/publish)", () => {
 
     expect(response?.status).toBe(409);
     expect(((await readJson(response)) as { code: string }).code).toBe("youtube_not_distributed");
+  });
+});
+
+// ── resync_mixtape_youtube — operator tier + description regeneration ─────────
+describe("oRPC resync_mixtape_youtube (POST .../youtube/resync)", () => {
+  it("403s the AGENT (edits live published content)", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(`/admin/mixtapes/${MIXTAPE_ID}/youtube/resync`, "POST", AGENT_TOKEN),
+    );
+
+    expect(response?.status).toBe(403);
+    expect(listMixtapeSocialPosts).not.toHaveBeenCalled();
+  });
+
+  it("409s `youtube_not_distributed` when no youtube row exists", async () => {
+    listMixtapeSocialPosts.mockResolvedValueOnce([]);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(`/admin/mixtapes/${MIXTAPE_ID}/youtube/resync`, "POST", OPERATOR_TOKEN),
+    );
+
+    expect(response?.status).toBe(409);
+    expect(((await readJson(response)) as { code: string }).code).toBe("youtube_not_distributed");
+  });
+
+  it("re-derives the description from the CURRENT cues + preserves the rest of the snippet", async () => {
+    listMixtapeSocialPosts.mockResolvedValueOnce([
+      {
+        createdAt: "t",
+        externalId: "vid-1",
+        platform: "youtube",
+        status: "published",
+        updatedAt: "t",
+        url: "https://youtu.be/vid-1",
+      },
+    ]);
+    getMixtapeById.mockResolvedValueOnce({
+      ...MIXTAPE,
+      logId: "019.F.1A",
+      members: [
+        { artists: ["A"], startMs: 0, title: "One" },
+        { artists: ["B"], startMs: 60_000, title: "Two" },
+        { artists: ["C"], startMs: 120_000, title: "Three" },
+      ],
+      note: "a dream",
+      status: "published",
+    });
+    getYouTubeAccessToken.mockResolvedValueOnce("ya29-token");
+
+    let updateBody: { id?: string; snippet?: Record<string, unknown> } = {};
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (_input, init?: RequestInit) => {
+        if (init?.method === "PUT") {
+          updateBody = JSON.parse(typeof init.body === "string" ? init.body : "{}");
+
+          return new Response("{}", { status: 200 });
+        }
+
+        // videos.list — return the current snippet (title + categoryId must survive).
+        return new Response(
+          JSON.stringify({
+            items: [
+              { snippet: { categoryId: "10", description: "stale text", title: "Set title" } },
+            ],
+          }),
+          { status: 200 },
+        );
+      });
+
+    try {
+      const { handleOrpc } = await import("./orpc");
+      const response = await handleOrpc(
+        req(`/admin/mixtapes/${MIXTAPE_ID}/youtube/resync`, "POST", OPERATOR_TOKEN),
+      );
+
+      expect(response?.status).toBe(200);
+      expect(await readJson(response)).toEqual({
+        ok: true,
+        url: "https://youtu.be/vid-1",
+        videoId: "vid-1",
+      });
+
+      // The update targets the right video and keeps the whole snippet, swapping only
+      // the description for the freshly-derived prose + breadcrumb + chapter block.
+      expect(updateBody.id).toBe("vid-1");
+      expect(updateBody.snippet?.title).toBe("Set title");
+      expect(updateBody.snippet?.categoryId).toBe("10");
+      expect(updateBody.snippet?.description).toBe(
+        "a dream\n\nfluncle://019.F.1A\n\n0:00 A - One\n1:00 B - Two\n2:00 C - Three",
+      );
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 });
 

@@ -228,6 +228,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // re-render — operator-only (adminAuth + operatorGuard); the box agent never
   // clears videos, so an agent token 403s.
   requeue_video: "operator",
+  // The YouTube metadata re-sync — operator tier: it EDITS a LIVE published video's
+  // description (videos.update), so the agent token 403s (like publish_mixtape_youtube).
+  // The Mixcloud re-sync leg is CLI-side via mint_mixcloud_token (also operator).
+  resync_mixtape_youtube: "operator",
   save_private_finding: "private-session",
   send_edition: "operator",
   // The hardened post-publish cue backfill — operator tier: it rewrites a published
