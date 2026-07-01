@@ -70,7 +70,11 @@ export type MixtapeRowLike = {
   youtube_url?: string | null;
 };
 
-export function rowToMixtape(row: MixtapeRowLike, members: MixtapeMember[] = []): MixtapeDTO {
+export function rowToMixtape(
+  row: MixtapeRowLike,
+  members: MixtapeMember[] = [],
+  reservedLogId?: string,
+): MixtapeDTO {
   return {
     addedAt: row.added_at ?? undefined,
     artists: ["Fluncle"],
@@ -92,6 +96,9 @@ export function rowToMixtape(row: MixtapeRowLike, members: MixtapeMember[] = [])
     plannedFor: row.planned_for ?? undefined,
     publishedAt: row.published_at ?? undefined,
     recordedAt: row.recorded_at ?? undefined,
+    // Reserved coordinate for a draft (server-computed via predictedMixtapeLogId);
+    // absent on a minted mixtape, which carries the real logId above.
+    reservedLogId,
     sequenceNumber: row.sequence_number ?? undefined,
     setVideoAt: row.set_video_at ?? undefined,
     status: row.status ?? "draft",

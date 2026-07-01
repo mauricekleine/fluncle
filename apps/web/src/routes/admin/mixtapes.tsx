@@ -19,7 +19,9 @@ import {
   CaretDownIcon,
   CaretRightIcon,
   CassetteTapeIcon,
+  CheckIcon,
   CircleNotchIcon,
+  CopyIcon,
   DotsSixVerticalIcon,
   FilmStripIcon,
   ScissorsIcon,
@@ -73,6 +75,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { beatportSearchUrl } from "@/lib/beatport";
 import { formatAlbumDuration, formatDurationField, parseDuration } from "@/lib/format";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { predictedMixtapeLogId } from "@/lib/mixtape-log-id";
 import { type MixtapeDTO, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { type MixtapeInput, type MixtapeMembership } from "@/lib/server/mixtapes";
@@ -154,6 +157,14 @@ function AdminMixtapesPage() {
   // intact below.
   const sortedMixtapes = useMemo(
     () => [...mixtapes].sort((a, b) => draftRank(a.status) - draftRank(b.status)),
+    [mixtapes],
+  );
+
+  // The sequence the next mint will claim = max minted sequence + 1. The whole spine
+  // (≤ 54) is loaded here, so this matches the server's nextMixtapeSequence exactly;
+  // the editor recomputes a draft's reserved coordinate live from it as dates change.
+  const nextSequence = useMemo(
+    () => mixtapes.reduce((max, mixtape) => Math.max(max, mixtape.sequenceNumber ?? 0), 0) + 1,
     [mixtapes],
   );
 
@@ -260,6 +271,7 @@ function AdminMixtapesPage() {
                   expanded={expanded.has(id)}
                   membershipByTrack={membershipByTrack}
                   mixtape={mixtape}
+                  nextSequence={nextSequence}
                   onToggle={() => toggleExpanded(id)}
                   refresh={refresh}
                 />
@@ -281,12 +293,14 @@ function MixtapeEditor({
   expanded,
   membershipByTrack,
   mixtape,
+  nextSequence,
   onToggle,
   refresh,
 }: {
   expanded: boolean;
   membershipByTrack: Map<string, MixtapeMembership[]>;
   mixtape: MixtapeDTO;
+  nextSequence: number;
   onToggle: () => void;
   refresh: () => Promise<void>;
 }) {
@@ -310,6 +324,20 @@ function MixtapeEditor({
   // (members, recorded date) and show the Log ID + cover; only a real draft offers
   // Publish / Discard. The server enforces the same (assertDraftMixtape).
   const minted = mixtape.status !== "draft";
+
+  // The coordinate this draft will mint into, RESERVED so the operator can name
+  // their Beatport playlist / USB folders / Rekordbox playlist with it before
+  // recording. Recomputed live from the local date fields via the same pure helper
+  // the mint uses (so it equals the minted ID), falling back to the server's
+  // reservedLogId. `undefined` when there's no date basis yet — the field then
+  // prompts for a live session instead of showing a drifting today-based guess.
+  const reservedLogId = minted
+    ? undefined
+    : (predictedMixtapeLogId({
+        nextSequence,
+        plannedFor: fromLocalDateTime(plannedFor) || undefined,
+        recordedAt: recordedAt || undefined,
+      }) ?? mixtape.reservedLogId);
 
   const stateRef = useRef({
     durationField,
@@ -481,8 +509,16 @@ function MixtapeEditor({
           <CaretRightIcon aria-hidden="true" className="shrink-0 text-muted-foreground" />
         )}
         {mixtape.logId ? (
-          <span className="shrink-0 font-mono text-xs tracking-tight text-muted-foreground tabular-nums">
+          <span className="shrink-0 font-display text-xs tracking-[-0.01em] text-muted-foreground tabular-nums">
             {mixtape.logId}
+          </span>
+        ) : reservedLogId ? (
+          // A draft's RESERVED coordinate — dimmed to signal "not yet minted".
+          <span
+            className="shrink-0 font-display text-xs tracking-[-0.01em] text-muted-foreground/60 tabular-nums"
+            title="Reserved coordinate — not yet minted"
+          >
+            {reservedLogId}
           </span>
         ) : null}
         <Badge className="shrink-0" variant={minted ? "default" : "outline"}>
@@ -565,9 +601,14 @@ function MixtapeEditor({
               ) : null}
             </div>
           ) : (
-            // A draft is the editor: the tracklist (the centerpiece) plus the deferred
-            // details and the CLI publish help.
+            // A draft is the editor: the reserved coordinate (copy it before you
+            // record), the tracklist (the centerpiece), the deferred details, and the
+            // CLI publish help.
             <>
+              <div className="mb-4">
+                <ReservedLogIdField reservedLogId={reservedLogId} />
+              </div>
+
               <MembersBuilder
                 currentMixtapeId={mixtape.id}
                 members={members}
@@ -589,7 +630,7 @@ function MixtapeEditor({
                     onChange={setRecordedAt}
                   />
                   <Field
-                    hint="Set a future live session to announce it on /calendar.ics. Clear to hide."
+                    hint="Set a future live session to announce it on /calendar.ics and reserve the Log ID above. Clear to hide."
                     label="Live session"
                     type="datetime-local"
                     value={plannedFor}
@@ -1219,6 +1260,55 @@ function MemberTapeBadge({ memberships }: { memberships: MixtapeMembership[] }) 
       <CassetteTapeIcon className="size-3" weight="fill" />
       {memberships.length > 1 ? memberships.length : null}
     </span>
+  );
+}
+
+// The reserved coordinate a draft will mint into — read-only, one-tap copyable, so
+// the operator can name their Beatport playlist / USB folders / Rekordbox playlist
+// with it BEFORE recording. The coordinate is Oxanium tabular (DESIGN.md, like the
+// public rows). Empty when there's no date basis yet: it prompts for a live session
+// rather than showing a drifting today-based guess.
+function ReservedLogIdField({ reservedLogId }: { reservedLogId?: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = () => {
+    if (!reservedLogId) {
+      return;
+    }
+    void navigator.clipboard?.writeText(reservedLogId).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    });
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <Label>Reserved Log ID</Label>
+      {reservedLogId ? (
+        <div className="flex items-center gap-2">
+          <span className="font-display text-sm tracking-[-0.01em] text-foreground tabular-nums">
+            {reservedLogId}
+          </span>
+          <Button aria-label="Copy the reserved Log ID" onClick={copy} size="sm" variant="outline">
+            {copied ? (
+              <CheckIcon aria-hidden="true" className="text-primary" weight="bold" />
+            ) : (
+              <CopyIcon aria-hidden="true" />
+            )}
+            {copied ? "Copied" : "Copy"}
+          </Button>
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          Set a live session to reserve the coordinate.
+        </p>
+      )}
+      <p className="text-xs text-muted-foreground">
+        Reserved from the live session (day-granular). Name your Beatport playlist, USB folders, and
+        Rekordbox playlist with it. It moves if you change the session date, and locks in when you
+        publish.
+      </p>
+    </div>
   );
 }
 
