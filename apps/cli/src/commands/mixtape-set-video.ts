@@ -9,10 +9,7 @@
 // `presign_set_video_upload`) and the CLI streams each part to R2 and completes the
 // upload itself — the same direct-to-R2 constraint as the YouTube/Mixcloud legs.
 
-import {
-  type MixtapeSetVideoPresignResponse,
-  type MixtapeUpdateResponse,
-} from "@fluncle/contracts";
+import { type MixtapeUpdateResponse } from "@fluncle/contracts";
 import { randomUUID } from "node:crypto";
 import { existsSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -141,16 +138,25 @@ export function renditionFfmpegArgs(inputPath: string, outputPath: string): stri
 
 export type StageSetVideoResult = { key: string; url: string };
 
+// The presign response shape both set-video presigns share (mixtape's `<logId>/set.mp4`
+// and the recording's owned `recordings/<id>/set.mp4`): every leg the CLI drives.
+type RenditionPresign = {
+  abortUrl: string;
+  completeUrl: string;
+  key: string;
+  parts: { partNumber: number; url: string }[];
+};
+
 /**
- * Stage the set-video rendition end to end: derive (ffmpeg) → multipart-upload to R2
- * → flip `setVideoAt`. Idempotent: a re-run on a published mixtape re-stages + re-
- * flips (backfills an older set). Default stages public (distribute = publish); the
- * pre-release embargo (stage private, flip on release) is a documented later hook,
- * not built here.
+ * Derive the 1080p faststart rendition (ffmpeg) → multipart-upload it straight to R2 via
+ * the given presign endpoint. Shared by the mixtape set-video stage and the RFC recording
+ * upload — the only difference is the presign PATH (the mixtape's derived `<logId>/set.mp4`
+ * vs the recording's OWNED `recordings/<id>/set.mp4`) and whether the caller flips a
+ * `setVideoAt` afterward. Returns the R2 key + public URL.
  */
-export async function stageSetVideo(
-  mixtapeId: string,
+export async function uploadRenditionMultipart(
   masterPath: string,
+  presignPath: string,
   onProgress: (message: string) => void = () => {},
 ): Promise<StageSetVideoResult> {
   if (!existsSync(masterPath)) {
@@ -172,10 +178,9 @@ export async function stageSetVideo(
       `Set video: uploading ${(size / 1_000_000_000).toFixed(2)} GB in ${plan.partCount} part(s)…`,
     );
 
-    const presign = await adminApiPost<MixtapeSetVideoPresignResponse>(
-      `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/set-video/presign`,
-      { partCount: plan.partCount },
-    );
+    const presign = await adminApiPost<{ ok: true } & RenditionPresign>(presignPath, {
+      partCount: plan.partCount,
+    });
 
     const urlByPart = new Map(presign.parts.map((part) => [part.partNumber, part.url]));
     const completed: CompletedPart[] = [];
@@ -203,19 +208,42 @@ export async function stageSetVideo(
       throw error;
     }
 
-    // Flip `setVideoAt` via the operator-tier update_mixtape (loose passthrough body)
-    // → the /log player + the <video:video> sitemap entry + the VideoObject light up.
-    await adminApiPatch<MixtapeUpdateResponse>(
-      `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}`,
-      { setVideoAt: new Date().toISOString() },
-    );
-
-    onProgress("Set video: flipped setVideoAt — the /log player + video SEO are live.");
-
     return { key: presign.key, url: `${FOUND_BASE}/${presign.key}` };
   } finally {
     rmSync(renditionPath, { force: true });
   }
+}
+
+/**
+ * Stage the set-video rendition end to end: derive → multipart-upload to R2 →
+ * flip `setVideoAt`. Idempotent: a re-run on a published mixtape re-stages + re-
+ * flips (backfills an older set). Default stages public (distribute = publish); the
+ * pre-release embargo (stage private, flip on release) is a documented later hook,
+ * not built here.
+ */
+export async function stageSetVideo(
+  mixtapeId: string,
+  masterPath: string,
+  onProgress: (message: string) => void = () => {},
+): Promise<StageSetVideoResult> {
+  const result = await uploadRenditionMultipart(
+    masterPath,
+    `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/set-video/presign`,
+    onProgress,
+  );
+
+  // Flip `setVideoAt` via the operator-tier update_mixtape (loose passthrough body)
+  // → the /log player + the <video:video> sitemap entry + the VideoObject light up.
+  await adminApiPatch<MixtapeUpdateResponse>(
+    `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}`,
+    {
+      setVideoAt: new Date().toISOString(),
+    },
+  );
+
+  onProgress("Set video: flipped setVideoAt — the /log player + video SEO are live.");
+
+  return result;
 }
 
 // PUT one chunk straight to its presigned URL and return the ETag R2 reports (needed

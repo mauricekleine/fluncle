@@ -51,6 +51,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // Operator tier: a hard delete that reaches a SENT edition too (pulling a sent
   // test edition from the public archive); the agent token 403s.
   "DELETE /admin/newsletter/editions/{id}": "delete_edition",
+  // The RFC recording-primitive ops (Design B) — contract-only oRPC (no TanStack route
+  // files; oRPC owns the paths directly). Reads are admin tier (agent-allowed — the box's
+  // clip-cut cron resolves a recording); the writes + `promote` (mints a coordinate) are
+  // operator tier.
+  "DELETE /admin/recordings/{recordingId}": "delete_recording",
   "GET /admin/clips": "list_clips",
   "GET /admin/lastfm/auth/start": "start_lastfm_auth",
   "GET /admin/mixtapes": "list_mixtapes_admin",
@@ -59,6 +64,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // route file (oRPC serves it off the registry). Admin tier (agent-allowed): the
   // Friday cron reads it from a fresh session to find an unsent draft + the window.
   "GET /admin/newsletter/editions": "list_editions_admin",
+  "GET /admin/recordings": "list_recordings",
+  "GET /admin/recordings/{recordingId}": "get_recording",
   "GET /admin/submissions": "list_submissions",
   "GET /admin/submissions/{submissionId}": "get_submission",
   "GET /admin/tracks": "list_tracks_admin",
@@ -71,6 +78,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // they live here to satisfy the "registry holds EXACTLY this map's ops" check.
   // create/update are admin tier (agent-allowed drafting); send is operator-only.
   "PATCH /admin/newsletter/editions/{id}": "update_edition",
+  "PATCH /admin/recordings/{recordingId}": "update_recording",
   "PATCH /admin/tracks/{trackId}": "update_track",
   "PATCH /admin/tracks/{trackId}/social/{platform}": "update_track_social",
   "POST /admin/backfill/discogs": "backfill_discogs",
@@ -90,7 +98,6 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/lastfm/auth/session": "exchange_lastfm_session",
   "POST /admin/mixcloud/token": "mint_mixcloud_token",
   "POST /admin/mixtapes": "create_mixtape",
-  "POST /admin/mixtapes/{mixtapeId}/clips": "create_clip",
   "POST /admin/mixtapes/{mixtapeId}/members": "add_mixtape_members",
   "POST /admin/mixtapes/{mixtapeId}/mixcloud/finalize": "finalize_mixtape_mixcloud",
   // The Mixcloud metadata re-sync — contract-only oRPC (no TanStack route file; oRPC
@@ -116,6 +123,12 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // entry; it lives here only to satisfy the "registry holds EXACTLY this map's
   // ops" check. An EXTERNAL cron calls it (TanStack has no `scheduled()`).
   "POST /admin/push/receipts/sweep": "sweep_push_receipts",
+  "POST /admin/recordings": "create_recording",
+  // create_clip is now recording-scoped (RFC recording-primitive, Design B): the legacy
+  // `POST /admin/mixtapes/{mixtapeId}/clips` path is retired.
+  "POST /admin/recordings/{recordingId}/clips": "create_clip",
+  "POST /admin/recordings/{recordingId}/promote": "promote_recording",
+  "POST /admin/recordings/{recordingId}/set-video/presign": "presign_recording_upload",
   // capture_post_urls — contract-only oRPC (no TanStack route file; oRPC owns the
   // path directly). A collection-level sweep that recovers the public YouTube/TikTok
   // post URLs Postiz withholds on create. Admin tier — the on-box capture cron drives

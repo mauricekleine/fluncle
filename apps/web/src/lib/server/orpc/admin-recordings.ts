@@ -1,0 +1,157 @@
+// The `admin-recordings` domain router module — the RFC recording-primitive (Design B)
+// control plane. Each handler is a thin wrapper over the `../recordings` data layer; the
+// auth tier lives on the oRPC procedure middleware (../orpc-auth).
+//
+// VERIFIED auth tiers:
+//   - `list_recordings` / `get_recording` — admin tier (`adminAuth`): agent-allowed reads
+//     (the box's clip-cut cron resolves a clip's recording via `get_recording`).
+//   - everything else — operator tier (`adminAuth` + `operatorGuard`): create/update/
+//     delete, the upload presign, and `promote` (it mints a scarce coordinate).
+
+import { ORPCError } from "@orpc/server";
+import {
+  createRecording,
+  deleteRecording,
+  getRecording,
+  listRecordings,
+  promoteRecording,
+  updateRecording,
+} from "../recordings";
+import { adminAuth, operatorGuard } from "../orpc-auth";
+import { R2_MAX_PARTS, VIDEOS_BUCKET, presignMultipartUpload } from "../r2-presign";
+import { apiFault, type Implementer, toFault } from "./_shared";
+
+/** Build the `admin-recordings` domain's handlers. */
+export function adminRecordingsHandlers(os: Implementer) {
+  // POST /admin/recordings — operator tier. LOOSE body → createRecording.
+  const createRecordingHandler = os.create_recording
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        return { ok: true as const, recording: await createRecording(input) };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  // GET /admin/recordings — admin tier (agent-allowed read).
+  const listRecordingsHandler = os.list_recordings.use(adminAuth).handler(async () => {
+    try {
+      return { ok: true as const, recordings: await listRecordings() };
+    } catch (error) {
+      throw apiFault(error);
+    }
+  });
+
+  // GET /admin/recordings/{recordingId} — admin tier (agent-allowed read).
+  const getRecordingHandler = os.get_recording.use(adminAuth).handler(async ({ input }) => {
+    try {
+      return { ok: true as const, recording: await getRecording(input.recordingId) };
+    } catch (error) {
+      throw apiFault(error);
+    }
+  });
+
+  // PATCH /admin/recordings/{recordingId} — operator tier. LOOSE body → updateRecording.
+  const updateRecordingHandler = os.update_recording
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const { recordingId, ...body } = input;
+
+        return { ok: true as const, recording: await updateRecording(recordingId, body) };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  // DELETE /admin/recordings/{recordingId} — operator tier (cascade its clips).
+  const deleteRecordingHandler = os.delete_recording
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        await deleteRecording(input.recordingId);
+
+        return { ok: true as const };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  // POST /admin/recordings/{recordingId}/set-video/presign — operator tier. The
+  // `presign_set_video_upload` clone: open a multipart direct-to-R2 upload targeting the
+  // recording's OWNED key `recordings/<id>/set.mp4` + presign every leg; the CLI streams
+  // the ~1.5GB rendition straight to R2.
+  const presignRecordingUploadHandler = os.presign_recording_upload
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const partCount = Number(input.partCount);
+
+        if (!Number.isInteger(partCount) || partCount < 1 || partCount > R2_MAX_PARTS) {
+          throw new ORPCError("BAD_REQUEST", {
+            data: {
+              apiCode: "invalid_request",
+              apiMessage: `partCount must be an integer 1..${R2_MAX_PARTS}`,
+            },
+            message: `partCount must be an integer 1..${R2_MAX_PARTS}`,
+            status: 400,
+          });
+        }
+
+        const contentType =
+          typeof input.contentType === "string" && input.contentType
+            ? input.contentType
+            : "video/mp4";
+
+        // The recording OWNS its key — read it off the row (getRecording throws
+        // `recording_not_found`/404 if it's gone).
+        const recording = await getRecording(input.recordingId);
+        const presign = await presignMultipartUpload(
+          VIDEOS_BUCKET,
+          recording.r2Key,
+          contentType,
+          partCount,
+        );
+
+        return {
+          abortUrl: presign.abortUrl,
+          completeUrl: presign.completeUrl,
+          key: presign.key,
+          ok: true as const,
+          parts: presign.parts,
+          recordingId: input.recordingId,
+          uploadId: presign.uploadId,
+        };
+      } catch (error) {
+        throw toFault(error);
+      }
+    });
+
+  // POST /admin/recordings/{recordingId}/promote — operator tier (it mints a coordinate).
+  // Idempotent mint-or-reuse; re-runnable end to end.
+  const promoteRecordingHandler = os.promote_recording
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        return { ok: true as const, recording: await promoteRecording(input.recordingId) };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  return {
+    create_recording: createRecordingHandler,
+    delete_recording: deleteRecordingHandler,
+    get_recording: getRecordingHandler,
+    list_recordings: listRecordingsHandler,
+    presign_recording_upload: presignRecordingUploadHandler,
+    promote_recording: promoteRecordingHandler,
+    update_recording: updateRecordingHandler,
+  };
+}

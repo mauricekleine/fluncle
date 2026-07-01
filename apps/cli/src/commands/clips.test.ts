@@ -236,6 +236,67 @@ describe("clipCutFilterComplex", () => {
   });
 });
 
+// A clip cut from an UN-PROMOTED recording carries no coordinate (RFC recording-primitive,
+// clip-domain D4): the `fluncle://` line is omitted and the title collapses onto the safe-
+// area floor so it doesn't float above the dead space the coordinate would have filled.
+describe("clipCutFilterComplex — un-promoted recording (no coordinate)", () => {
+  const noCoordinate = { title: "Warehouse set, take 2", xOffset: 240 };
+
+  test("omits the fluncle:// coordinate line entirely — no bare `fluncle://`", () => {
+    const filter = clipCutFilterComplex(noCoordinate);
+
+    // No coordinate text at all, and never a bare `fluncle://` sigil.
+    expect(filter).not.toContain("fluncle://");
+    expect(filter).not.toContain("fluncle\\:");
+    // The Stardust coordinate ink (size 22) is gone; only the title (40) remains.
+    expect(filter).not.toContain(`fontcolor=${CLIP_COORDINATE_COLOR}`);
+    expect(filter).not.toContain("fontsize=22");
+  });
+
+  test("collapses the title onto the safe-area floor (h-SAFE_BOTTOM-th), not lifted above it", () => {
+    const filter = clipCutFilterComplex(noCoordinate);
+
+    // With no coordinate below it, the title sits exactly at the safe-area floor…
+    expect(filter).toContain(`y=h-${CLIP_SAFE_BOTTOM}-th`);
+    // …not lifted by the coordinate's line box + gap (the promoted-clip 266 offset is gone).
+    expect(filter).not.toContain("y=h-266-th");
+  });
+
+  test("draws only the title line (once for the halo, once sharp) — two nodes total", () => {
+    const filter = clipCutFilterComplex(noCoordinate);
+
+    // The title still appears twice (halo + sharp); nothing else.
+    expect(filter.match(/drawtext=text='Warehouse set\\, take 2'/g)).toHaveLength(2);
+    expect(filter.match(/drawtext=/g)).toHaveLength(2);
+  });
+
+  test("treats a blank logId the same as absent (guards the bare `fluncle://`)", () => {
+    const filter = clipCutFilterComplex({ ...noCoordinate, logId: "   " });
+
+    expect(filter).not.toContain("fluncle://");
+    expect(filter).toContain(`y=h-${CLIP_SAFE_BOTTOM}-th`);
+  });
+
+  test("still renders the changing per-cue Track-ID for a cued un-promoted recording", () => {
+    const members: ClipTrackInput[] = [
+      { artists: ["Alpha"], startMs: 0, title: "One" },
+      { artists: ["Beta"], startMs: 30_000, title: "Two" },
+    ];
+    const filter = clipCutFilterComplex({
+      ...noCoordinate,
+      inMs: 10_000,
+      members,
+      outMs: 40_000,
+      setDurationMs: 60_000,
+    });
+
+    // Both straddled tracks get gated title lines (halo + sharp = 2 each) — but no coordinate.
+    expect(filter.match(/drawtext=text='Alpha — One'/g)).toHaveLength(2);
+    expect(filter.match(/drawtext=text='Beta — Two'/g)).toHaveLength(2);
+    expect(filter).not.toContain("fluncle://");
+  });
+});
+
 describe("clipCutFfmpegArgs", () => {
   const args = clipCutFfmpegArgs({
     inMs: 65_500,

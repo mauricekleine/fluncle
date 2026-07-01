@@ -576,11 +576,17 @@ describe("oRPC list_clips (GET /admin/clips)", () => {
   });
 });
 
-describe("oRPC create_clip (POST /admin/mixtapes/{mixtapeId}/clips)", () => {
+// create_clip is now recording-scoped (RFC recording-primitive, Design B).
+describe("oRPC create_clip (POST /admin/recordings/{recordingId}/clips)", () => {
+  const RECORDING_ID = "rec-1";
+
   it("403s the AGENT (operator-only)", async () => {
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(
-      req(`/admin/mixtapes/${MIXTAPE_ID}/clips`, "POST", AGENT_TOKEN, { inMs: 0, outMs: 30_000 }),
+      req(`/admin/recordings/${RECORDING_ID}/clips`, "POST", AGENT_TOKEN, {
+        inMs: 0,
+        outMs: 30_000,
+      }),
     );
 
     expect(response?.status).toBe(403);
@@ -592,7 +598,7 @@ describe("oRPC create_clip (POST /admin/mixtapes/{mixtapeId}/clips)", () => {
 
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(
-      req(`/admin/mixtapes/${MIXTAPE_ID}/clips`, "POST", OPERATOR_TOKEN, {
+      req(`/admin/recordings/${RECORDING_ID}/clips`, "POST", OPERATOR_TOKEN, {
         inMs: 0,
         outMs: 30_000,
         xOffset: 240,
@@ -601,7 +607,7 @@ describe("oRPC create_clip (POST /admin/mixtapes/{mixtapeId}/clips)", () => {
 
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({ clip: CLIP, ok: true });
-    expect(createClip).toHaveBeenCalledWith(MIXTAPE_ID, { inMs: 0, outMs: 30_000, xOffset: 240 });
+    expect(createClip).toHaveBeenCalledWith(RECORDING_ID, { inMs: 0, outMs: 30_000, xOffset: 240 });
   });
 });
 

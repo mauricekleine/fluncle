@@ -35,6 +35,8 @@ import {
   type MixtapeSocialPostItemSchema,
   type PublicUserSchema,
   type RadioNowPlayingSchema,
+  type RecordingDTOSchema,
+  type RecordingTracklistItemSchema,
   type SocialPostItemSchema,
   type SubmissionSchema,
   type TrackFeaturesSchema,
@@ -211,6 +213,40 @@ export type ClipPresignResponse = Ok<{
 
 /** `POST /api/admin/clips/:clipId/cut/finalize` response (Unit C): the clip, marked done. */
 export type ClipCutFinalizeResponse = Ok<{ clip: ClipDTO }>;
+
+// ── Recordings (RFC recording-primitive, Design B) ───────────────────────────
+// A recording is a captured DJ set that is NOT (yet) a published mixtape — it OWNS its
+// R2 key, carries an optional cue tracklist, and is coordinate-less until `promote`.
+// Inferred from the Zod schemas (./orpc/_shared) so the wire shape cannot drift. The
+// CLI (`fluncle admin recordings …`) + the box clip-cut cron read these.
+
+/** A recording tracklist cue (`{ id, artists, title, startMs? }`). */
+export type RecordingTracklistItem = z.infer<typeof RecordingTracklistItemSchema>;
+
+/** A recording row as the recording ops emit it (with the promoted logId/mixtapeId if any). */
+export type RecordingDTO = z.infer<typeof RecordingDTOSchema>;
+
+/** `GET /api/admin/recordings` response: every recording, newest first. */
+export type RecordingsResponse = Ok<{ recordings: RecordingDTO[] }>;
+
+/** The `{ recording }` envelope create/get/update/promote return. */
+export type RecordingResponse = Ok<{ recording: RecordingDTO }>;
+
+/**
+ * `POST /api/admin/recordings/:recordingId/set-video/presign` response: the opened
+ * multipart upload's id + owned key plus every presigned URL the CLI needs to drive it
+ * (one PUT URL per part, the completion POST URL, the abort DELETE URL). The clone of
+ * the mixtape set-video presign targeting `recordings/<recordingId>/set.mp4`.
+ */
+export type RecordingSetVideoPresignResponse = Ok<{
+  abortUrl: string;
+  completeUrl: string;
+  key: string;
+  parts: { partNumber: number; url: string }[];
+  recordingId: string;
+  uploadId: string;
+}>;
+
 export type MixtapeUpdateResponse = Ok<{ mixtape: MixtapeDTO }>;
 export type MixtapePublishResponse = Ok<{ mixtape: MixtapeDTO }>;
 export type MixtapeDeleteResponse = Ok<{}>;

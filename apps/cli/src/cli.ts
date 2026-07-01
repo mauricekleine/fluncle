@@ -43,7 +43,23 @@ type AdminQueueViewOptions = AdminListOptions & {
 type ClipListOptions = {
   json: boolean;
   mixtape?: string;
+  recording?: string;
   status?: string;
+};
+
+// The Fluncle Studio recording admin options (`admin recordings create|update`).
+type RecordingCreateOptions = {
+  json: boolean;
+  recordedAt?: string;
+  title?: string;
+  video?: string;
+};
+
+type RecordingUpdateOptions = {
+  json: boolean;
+  recordedAt?: string;
+  title?: string;
+  tracklistFile?: string;
 };
 
 type OpenOptions = {
@@ -902,8 +918,11 @@ function addAdminCommands(program: Command): void {
 
   adminClips
     .command("list")
-    .description("List clips (filter by --status pending|done and/or --mixtape <id>)")
+    .description(
+      "List clips (filter by --status pending|done, --recording <id>, and/or --mixtape <id>)",
+    )
     .option("--status <status>", "Filter by cut status (pending|done)")
+    .option("--recording <id>", "Filter by recording id")
     .option("--mixtape <id>", "Filter by mixtape id")
     .option("--json", "Print JSON", false)
     .allowExcessArguments()
@@ -921,6 +940,87 @@ function addAdminCommands(program: Command): void {
     .action(async (clipId: string | undefined, options: { json: boolean }) => {
       const { clipCutCommand } = await import("./commands/clips");
       await runClipsCut(clipId, options, clipCutCommand);
+    });
+
+  // Fluncle Studio recordings (RFC recording-primitive, Design B). A recording is a
+  // captured set clipped WITHOUT minting a coordinate; `promote` turns it into a full
+  // published mixtape later (reusing the already-staged video, no re-upload).
+  const adminRecordings = configureCommand(
+    admin.command("recordings").description("Recording (unpublished set) commands"),
+  );
+
+  adminRecordings.action(() => {
+    adminRecordings.outputHelp();
+  });
+
+  adminRecordings
+    .command("create")
+    .description("Create a recording + stage its set video (from --video)")
+    .option("--title <text>", "Recording title")
+    .option("--video <file>", "Set-video master to stage (a 1080p rendition is derived)")
+    .option("--recorded-at <date>", "Recorded date (ISO)")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: RecordingCreateOptions) => {
+      const { recordingCreateCommand } = await import("./commands/recordings");
+      await recordingCreateCommand(options);
+    });
+
+  adminRecordings
+    .command("list")
+    .description("List every recording")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: { json: boolean }) => {
+      const { recordingsListCommand } = await import("./commands/recordings");
+      await recordingsListCommand(options);
+    });
+
+  adminRecordings
+    .command("get")
+    .description("Show one recording by id")
+    .argument("[id]")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (id: string | undefined, options: { json: boolean }) => {
+      const { recordingGetCommand } = await import("./commands/recordings");
+      await recordingGetCommand(id, options);
+    });
+
+  adminRecordings
+    .command("update")
+    .description("Update a recording's title, recorded date, or tracklist (--tracklist-file)")
+    .argument("[id]")
+    .option("--title <text>", "Recording title")
+    .option("--recorded-at <date>", "Recorded date (ISO)")
+    .option("--tracklist-file <file>", "JSON file with the whole cue tracklist array")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (id: string | undefined, options: RecordingUpdateOptions) => {
+      const { recordingUpdateCommand } = await import("./commands/recordings");
+      await recordingUpdateCommand(id, options);
+    });
+
+  adminRecordings
+    .command("delete")
+    .description("Delete a recording (cascade its clips)")
+    .argument("[id]")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (id: string | undefined, options: { json: boolean }) => {
+      const { recordingDeleteCommand } = await import("./commands/recordings");
+      await recordingDeleteCommand(id, options);
+    });
+
+  adminRecordings
+    .command("promote")
+    .description("Promote a recording to a published mixtape (mint-or-reuse; idempotent)")
+    .argument("[id]")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (id: string | undefined, options: { json: boolean }) => {
+      const { recordingPromoteCommand } = await import("./commands/recordings");
+      await recordingPromoteCommand(id, options);
     });
 
   const adminNewsletter = configureCommand(
@@ -1977,7 +2077,11 @@ async function runClipsList(
   options: ClipListOptions,
   clipsListCommand: typeof import("./commands/clips").clipsListCommand,
 ): Promise<void> {
-  const clips = await clipsListCommand({ mixtapeId: options.mixtape, status: options.status });
+  const clips = await clipsListCommand({
+    mixtapeId: options.mixtape,
+    recordingId: options.recording,
+    status: options.status,
+  });
 
   if (options.json) {
     printJson({ clips, ok: true });
@@ -1990,8 +2094,9 @@ async function runClipsList(
   }
 
   for (const clip of clips) {
+    const source = clip.recordingId ?? clip.mixtapeId ?? "—";
     console.log(
-      `${clip.id}\t${clip.status}\t${clip.mixtapeId}\t${clip.inMs}-${clip.outMs}ms\tx=${clip.xOffset}`,
+      `${clip.id}\t${clip.status}\t${source}\t${clip.inMs}-${clip.outMs}ms\tx=${clip.xOffset}`,
     );
   }
 }

@@ -1,14 +1,15 @@
-// The mixtape-clip data layer (Fluncle Studio). A clip is a lightweight 9:16
-// derivative cut from a mixtape's set video — many
-// per set, NOT a spine object (no Log ID). This module owns the clip CRUD the admin
-// `list_clips`/`create_clip`/`update_clip`/`delete_clip` ops are thin wrappers over;
+// The clip data layer (Fluncle Studio). A clip is a lightweight 9:16 derivative cut
+// from a set video — many per set, NOT a spine object (no Log ID). Under the RFC
+// recording-primitive (Design B) a clip is cut from a RECORDING (`recording_id`), not a
+// mixtape; a legacy clip carries `mixtape_id` instead. This module owns the clip CRUD the
+// admin `list_clips`/`create_clip`/`update_clip`/`delete_clip` ops are thin wrappers over;
 // the cue backfill (`setMixtapeCues`) lives in `./mixtapes` (it re-times the
 // tracklist, not a clip). Mirrors the validate-and-throw style of `./mixtapes`.
 
 import { randomUUID } from "node:crypto";
 import { type ClipDTO } from "@fluncle/contracts/orpc";
 import { getDb, typedRow, typedRows } from "./db";
-import { getMixtapeById } from "./mixtapes";
+import { getRecording } from "./recordings";
 import { ApiError } from "./spotify";
 
 const captionMaxLength = 600;
@@ -18,8 +19,12 @@ type ClipRow = {
   created_at: string;
   id: string;
   in_ms: number;
+  // NOT NULL in the schema (no migration this wave), so a recording clip stores the
+  // empty-string sentinel here and carries `recording_id` instead; `rowToClip` maps ""
+  // back to `undefined`.
   mixtape_id: string;
   out_ms: number;
+  recording_id: string | null;
   status: "done" | "pending";
   updated_at: string;
   x_offset: number;
@@ -43,8 +48,10 @@ function rowToClip(row: ClipRow): ClipDTO {
     createdAt: row.created_at,
     id: row.id,
     inMs: row.in_ms,
-    mixtapeId: row.mixtape_id,
+    // "" is the recording-clip sentinel (the column is NOT NULL) — expose it as absent.
+    mixtapeId: row.mixtape_id || undefined,
     outMs: row.out_ms,
+    recordingId: row.recording_id ?? undefined,
     status: row.status,
     updatedAt: row.updated_at,
     xOffset: row.x_offset,
@@ -108,7 +115,7 @@ async function getClipRow(clipId: string): Promise<ClipRow> {
   const db = await getDb();
   const result = await db.execute({
     args: [clipId],
-    sql: `select id, mixtape_id, in_ms, out_ms, x_offset, caption, status, created_at, updated_at
+    sql: `select id, mixtape_id, recording_id, in_ms, out_ms, x_offset, caption, status, created_at, updated_at
           from mixtape_clips where id = ? limit 1`,
   });
   const row = typedRow<ClipRow>(result.rows);
@@ -134,10 +141,9 @@ export async function markClipCutDone(clipId: string): Promise<ClipDTO> {
   return updateClip(clipId, { status: "done" });
 }
 
-export async function createClip(mixtapeId: string, input: ClipInput): Promise<ClipDTO> {
-  // The mixtape must exist (drafts included — pre-release backlog clipping stages
-  // the set early). getMixtapeById throws `mixtape_not_found`/404 if it doesn't.
-  await getMixtapeById(mixtapeId, { includeDrafts: true });
+export async function createClip(recordingId: string, input: ClipInput): Promise<ClipDTO> {
+  // The recording must exist. getRecording throws `recording_not_found`/404 if it doesn't.
+  await getRecording(recordingId);
 
   const inMs = requireNonNegativeInteger(input.inMs, "inMs");
   const outMs = requireNonNegativeInteger(input.outMs, "outMs");
@@ -151,11 +157,13 @@ export async function createClip(mixtapeId: string, input: ClipInput): Promise<C
   const now = new Date().toISOString();
   const db = await getDb();
 
+  // `mixtape_id` is NOT NULL in the schema (no migration this wave), so a recording clip
+  // stores the empty-string sentinel there and keys off `recording_id`.
   await db.execute({
-    args: [id, mixtapeId, inMs, outMs, xOffset, caption, status, now, now],
+    args: [id, recordingId, inMs, outMs, xOffset, caption, status, now, now],
     sql: `insert into mixtape_clips
-            (id, mixtape_id, in_ms, out_ms, x_offset, caption, status, created_at, updated_at)
-          values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            (id, mixtape_id, recording_id, in_ms, out_ms, x_offset, caption, status, created_at, updated_at)
+          values (?, '', ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 
   return rowToClip(await getClipRow(id));
@@ -215,10 +223,15 @@ export async function deleteClip(clipId: string): Promise<void> {
 // editor (Unit E, `mixtapeId` set) and the cross-set clip library (Unit G, all sets).
 // Newest first, so the most recent cuts surface at the top of the library grid.
 export async function listClips(
-  filter: { mixtapeId?: string; status?: string } = {},
+  filter: { mixtapeId?: string; recordingId?: string; status?: string } = {},
 ): Promise<ClipDTO[]> {
   const conditions: string[] = [];
   const args: string[] = [];
+
+  if (filter.recordingId) {
+    conditions.push("recording_id = ?");
+    args.push(filter.recordingId);
+  }
 
   if (filter.mixtapeId) {
     conditions.push("mixtape_id = ?");
@@ -238,7 +251,7 @@ export async function listClips(
   const db = await getDb();
   const result = await db.execute({
     args,
-    sql: `select id, mixtape_id, in_ms, out_ms, x_offset, caption, status, created_at, updated_at
+    sql: `select id, mixtape_id, recording_id, in_ms, out_ms, x_offset, caption, status, created_at, updated_at
           from mixtape_clips ${where} order by created_at desc, id desc`,
   });
 

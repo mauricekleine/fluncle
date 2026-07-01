@@ -25,6 +25,7 @@ import { adminBackfillsContract } from "./admin-backfills";
 import { adminEditionsContract } from "./admin-editions";
 import { adminHealthContract } from "./admin-health";
 import { adminMixtapesContract } from "./admin-mixtapes";
+import { adminRecordingsContract } from "./admin-recordings";
 import { adminSocialContract } from "./admin-social";
 import { adminSubmissionsContract } from "./admin-submissions";
 import { adminTokensContract } from "./admin-tokens";
@@ -76,6 +77,15 @@ export {
   updateMixtape,
   updateMixtapeCue,
 } from "./admin-mixtapes";
+export {
+  createRecording,
+  deleteRecording,
+  getRecording,
+  listRecordings,
+  presignRecordingUpload,
+  promoteRecording,
+  updateRecording,
+} from "./admin-recordings";
 export { draftTrackSocial, listTrackSocial, updateTrackSocial } from "./admin-social";
 export { deregisterDevice, registerDevice, sweepPushReceipts } from "./devices";
 export { getEdition, listEditions } from "./editions";
@@ -133,6 +143,10 @@ export {
   MixtapeSocialPostItemSchema,
   PublicUserSchema,
   RadioNowPlayingSchema,
+  type RecordingDTO,
+  RecordingDTOSchema,
+  type RecordingTracklistItem,
+  RecordingTracklistItemSchema,
   SocialPostItemSchema,
   SubmissionSchema,
   TrackListItemSchema,
@@ -154,6 +168,7 @@ export const contract = {
   ...adminEditionsContract,
   ...adminHealthContract,
   ...adminMixtapesContract,
+  ...adminRecordingsContract,
   ...adminSocialContract,
   ...adminSubmissionsContract,
   ...adminTokensContract,

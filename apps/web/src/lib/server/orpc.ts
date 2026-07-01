@@ -34,6 +34,7 @@ import { adminBackfillsHandlers } from "./orpc/admin-backfills";
 import { adminEditionsHandlers } from "./orpc/admin-editions";
 import { adminHealthHandlers } from "./orpc/admin-health";
 import { adminMixtapesHandlers } from "./orpc/admin-mixtapes";
+import { adminRecordingsHandlers } from "./orpc/admin-recordings";
 import { adminSocialHandlers } from "./orpc/admin-social";
 import { adminSubmissionsHandlers } from "./orpc/admin-submissions";
 import { adminTokensHandlers } from "./orpc/admin-tokens";
@@ -71,6 +72,7 @@ export const router = os.router({
   ...adminEditionsHandlers(os),
   ...adminHealthHandlers(os),
   ...adminMixtapesHandlers(os),
+  ...adminRecordingsHandlers(os),
   ...adminSocialHandlers(os),
   ...adminSubmissionsHandlers(os),
   ...adminTokensHandlers(os),

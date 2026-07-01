@@ -270,8 +270,15 @@ export const ClipDTOSchema = z
     createdAt: z.string(),
     id: z.string(),
     inMs: z.number(),
-    mixtapeId: z.string(),
+    // The mixtape a LEGACY clip was cut from (its published set). Under the RFC
+    // recording-primitive (Design B) a NEW clip is cut from a `recording` instead, so
+    // this is now OPTIONAL: a recording clip carries `recordingId` and no `mixtapeId`.
+    mixtapeId: z.string().optional(),
     outMs: z.number(),
+    // The `recording` a clip was cut from (the RFC recording-primitive path). Set on
+    // every new clip; absent on a legacy mixtape clip. The cut prefers this over
+    // `mixtapeId`.
+    recordingId: z.string().optional(),
     status: z.enum(["done", "pending"]),
     updatedAt: z.string(),
     xOffset: z.number(),
@@ -280,6 +287,50 @@ export const ClipDTOSchema = z
 
 /** The TS shape of a clip, derived from the schema (one definition, no drift). */
 export type ClipDTO = z.infer<typeof ClipDTOSchema>;
+
+/**
+ * A recording tracklist cue (`recordings.tracklist_json`; RFC recording-primitive,
+ * Design B). `id` is a stable cue ref; `artists`/`title` feed the clip overlay's
+ * changing on-screen Track-ID (`resolveClipTracks`) with no re-splitting, and seed
+ * `mixtape_tracks` on promote. `startMs` is the cue's start on the set timeline.
+ */
+export const RecordingTracklistItemSchema = z
+  .object({
+    artists: z.array(z.string()),
+    id: z.string(),
+    startMs: z.number().optional(),
+    title: z.string(),
+  })
+  .meta({ id: "RecordingTracklistItem" });
+
+/** The TS shape of a recording tracklist cue, derived from the schema. */
+export type RecordingTracklistItem = z.infer<typeof RecordingTracklistItemSchema>;
+
+/**
+ * A RECORDING — a captured DJ set that is NOT (yet) a published mixtape (RFC
+ * recording-primitive, Design B). It OWNS its R2 key (`r2Key`) and carries an optional
+ * cue tracklist. Coordinate-less until `promote` mints a mixtape from it; `logId` +
+ * `mixtapeId` are then the promoted mixtape's coordinate + id (absent while un-promoted).
+ */
+export const RecordingDTOSchema = z
+  .object({
+    createdAt: z.string(),
+    durationMs: z.number().optional(),
+    id: z.string(),
+    // The promoted mixtape's committed Log ID coordinate (absent until promoted).
+    logId: z.string().optional(),
+    // The promoted mixtape's id (absent until promoted).
+    mixtapeId: z.string().optional(),
+    r2Key: z.string(),
+    recordedAt: z.string().optional(),
+    title: z.string(),
+    tracklist: z.array(RecordingTracklistItemSchema),
+    updatedAt: z.string(),
+  })
+  .meta({ id: "RecordingDTO" });
+
+/** The TS shape of a recording, derived from the schema (one definition, no drift). */
+export type RecordingDTO = z.infer<typeof RecordingDTOSchema>;
 
 /** A mixtape per-platform distribution row (`MixtapeSocialPostItem`; `mixtape_social_posts`). */
 export const MixtapeSocialPostItemSchema = z
