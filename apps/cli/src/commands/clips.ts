@@ -57,15 +57,22 @@ export const MAX_CLIP_BYTES = 100 * 1024 * 1024;
 // The brand-frame ink (DESIGN.md tokens). The overlay MIRRORS the Remotion per-track
 // TypePlate identity block (packages/video: floating-type.tsx `trackLine` + `logId`,
 // laid out by type-plate.tsx) so a mixtape clip reads as the same object as a track clip.
-// Print floating over the cosmos, not a screen-grab caption bar: glyphs lifted off the
-// footage by a warm-dark ink-halo (a Deep-Field border + a small Deep-Field drop shadow,
-// the ffmpeg approximation of FloatingType's `inkHalo`) — the Warm Dark + Through-the-Glass
-// + Legible Sky rules. NO #000, NO gold: the overlay stays quiet, well under the One-Sun
-// budget (gold is spent elsewhere in the brand).
+// Print floating over the cosmos, not a screen-grab caption bar. NO #000, NO gold: the
+// overlay stays quiet, well under the One-Sun budget (gold is spent elsewhere in the brand).
+//
+// The HALO is a 1:1 port of FloatingType's `inkHalo`: a SOFT, SYMMETRIC, BLURRED glow-out
+// in Deep-Field — NOT a hard outline and NOT an offset drop shadow. floating-type.tsx layers
+// `0 0 Npx` blurred shadows (radii ~1/2/4/8/14px, dense at the glyph edge, feathering out);
+// ffmpeg `drawtext` can't blur, so the graph below draws the glyphs onto a transparent layer
+// in Deep-Field, `gblur`s it in two passes (a tight dense CORE + a wider FEATHER), and
+// overlays that under the sharp ink — a symmetric dark glow, no offset (Warm Dark / Legible
+// Sky). The sharp ink carries at most a 1px symmetric border for the tightest core.
 export const CLIP_TITLE_COLOR = "0xf4ead7"; // Starlight Cream — the title (trackLine ink)
 export const CLIP_COORDINATE_COLOR = "0xb7ab95"; // Stardust — the coordinate, dim/subordinate
-export const CLIP_HALO_COLOR = "0x090a0b"; // Deep Field (#090a0b), the warm near-black halo
-export const CLIP_SHADOW_OFFSET = 2; // px; a soft Deep-Field drop shadow for depth
+export const CLIP_HALO_COLOR = "0x090a0b"; // Deep Field (#090a0b), the warm near-black glow
+export const CLIP_HALO_CORE_SIGMA = 3; // gblur sigma: the tight, dense inky core at the glyph
+export const CLIP_HALO_FEATHER_SIGMA = 9; // gblur sigma: the wide, soft feather bleeding out
+export const CLIP_SHARP_BORDERW = 1; // px; a 1px symmetric core outline on the sharp ink (no offset)
 
 // Type scale + placement, 1:1 with the Remotion canvas (both are 1080×1920, so px map
 // directly). The title is the mixtape name (trackLine: system sans, size 40); the
@@ -149,14 +156,20 @@ export function escapeDrawtextValue(text: string): string {
 }
 
 export type BrandDrawtextOptions = {
-  /** Ink color (ffmpeg color, e.g. `0xf4ead7`). Cream for the title, Stardust for the coordinate. */
+  /**
+   * Symmetric outline width in px (default 0 = none). Used ONLY for the tight 1px core on
+   * the sharp ink; the soft glow comes from the blurred halo layer, never a hard border and
+   * never an offset drop shadow. A `bordercolor` of Deep-Field is emitted with it.
+   */
+  borderw?: number;
+  /** Ink color (ffmpeg color, e.g. `0xf4ead7`). Cream/Stardust for sharp ink, Deep-Field for the halo. */
   color: string;
   /**
    * Absolute path to the .ttf/.otf for THIS line's font role — the bold sans for the
    * title/track lines, Oxanium for the coordinate. Omitted → fontconfig default.
    */
   fontFile?: string;
-  /** The font size in px. Drives the ink-halo weight so it scales with the glyphs. */
+  /** The font size in px. */
   size: number;
   /** RAW text (unescaped) — the helper runs it through `escapeDrawtextValue`. */
   text: string;
@@ -166,25 +179,25 @@ export type BrandDrawtextOptions = {
 };
 
 /**
- * One brand `drawtext` node in the Nostalgic-Cosmos treatment: ink lifted off the footage
- * by a warm-dark ink-halo — a generous Deep-Field `borderw` plus a small Deep-Field drop
- * shadow — NOT a `#000` box. The two font ROLES are parameterized (color + fontFile), so
- * the title takes the bold sans and the coordinate takes Oxanium from the same helper —
- * and Slice C's per-cue Track-ID lines reuse it with the title's sans role. The halo scales
- * with `size` so the outline stays proportional across sizes. Takes RAW text and escapes it.
+ * One `drawtext` node. Draws the glyphs in `color` at the given size/position — NO offset
+ * shadow, and a border only when `borderw` is set (a symmetric outline, never a directional
+ * drop shadow). The two font ROLES are parameterized (color + fontFile), so the title takes
+ * the bold sans and the coordinate takes Oxanium from the same helper — and Slice C's
+ * per-cue Track-ID lines reuse it with the title's sans role. Takes RAW text and escapes it.
+ * The soft glow-out halo is applied around these glyphs by the filtergraph (`gblur`), not here.
  */
 export function brandDrawtext(options: BrandDrawtextOptions): string {
   const value = escapeDrawtextValue(options.text);
   const font = options.fontFile ? `:fontfile='${options.fontFile}'` : "";
-  // A generous halo (~13% of the cap height) reads as an ink outline, not a hairline.
-  const borderw = Math.max(2, Math.round(options.size * 0.13));
+  const border =
+    options.borderw && options.borderw > 0
+      ? `:borderw=${options.borderw}:bordercolor=${CLIP_HALO_COLOR}`
+      : "";
 
   return (
     `drawtext=text='${value}'${font}:` +
     `fontcolor=${options.color}:fontsize=${options.size}:` +
-    `x=${options.x}:y=${options.y}:` +
-    `borderw=${borderw}:bordercolor=${CLIP_HALO_COLOR}:` +
-    `shadowcolor=${CLIP_HALO_COLOR}:shadowx=${CLIP_SHADOW_OFFSET}:shadowy=${CLIP_SHADOW_OFFSET}`
+    `x=${options.x}:y=${options.y}${border}`
   );
 }
 
@@ -199,56 +212,81 @@ export type ClipCutFilterOptions = {
   xOffset: number;
 };
 
+/** The shared per-line geometry (font role, size, safe-area position). */
+type ClipLine = Pick<BrandDrawtextOptions, "fontFile" | "size" | "text" | "x" | "y">;
+
 /**
- * Build the single `-vf` filtergraph: crop 16:9 → 9:16 at `xOffset`, scale to 1080×1920,
+ * Build the `-filter_complex` graph: crop 16:9 → 9:16 at `xOffset`, scale to 1080×1920,
  * then the brand frame — a 1:1 mirror of the Remotion TypePlate identity block. Two
- * bottom-left lines: the mixtape TITLE (system-sans stand-in, Starlight Cream, size 40,
- * the trackLine) over the `fluncle://<logId>` COORDINATE (Oxanium, Stardust/dim, size 22,
- * the logId), each a `brandDrawtext` (warm-dark ink-halo, no #000 box). The block sits in
- * the platform safe-area: `CLIP_MARGIN_X` from the left, its BOTTOM edge `CLIP_SAFE_BOTTOM`
- * above the frame bottom, lines stacked with `CLIP_LINE_GAP`. Pure + testable; per-cue
- * per-TRACK lines are Phase-2 (Slice C) — v1 stamps the mixtape level (no top-right
- * meta/Found block, unlike a per-track clip).
+ * bottom-left lines: the mixtape TITLE (system-sans stand-in, Starlight Cream, size 40, the
+ * trackLine) over the `fluncle://<logId>` COORDINATE (Oxanium, Stardust/dim, size 22, the
+ * logId). The block sits in the platform safe-area: `CLIP_MARGIN_X` from the left, its
+ * BOTTOM edge `CLIP_SAFE_BOTTOM` above the frame bottom, lines stacked with `CLIP_LINE_GAP`
+ * (`th` = each drawtext's own text height, so the stack reads from the safe-area floor up
+ * regardless of the font's exact metrics). No top-right meta/Found block (unlike a per-track
+ * clip). Per-cue per-TRACK lines are Phase-2 (Slice C); v1 stamps the mixtape level.
  *
- * `th` (each drawtext's own text height) anchors each line's BOTTOM, so the stack reads
- * from the safe-area floor up regardless of the font's exact metrics. ffmpeg drawtext has
- * no letter-spacing, so the Remotion logId's `0.12em` tracking is not reproduced (a known
- * minor gap; the dim, small Oxanium is the match that carries).
+ * THE HALO is FloatingType's soft `inkHalo`, not a hard outline or offset shadow: the same
+ * glyphs are drawn in Deep-Field onto a transparent RGBA layer, `gblur`ed in two passes (a
+ * tight dense CORE + a wider FEATHER), overlaid UNDER the sharp ink — a symmetric dark
+ * glow-out that lifts the type off bright ground. `drawtext` alone cannot blur, hence the
+ * `-filter_complex`. The graph's final video pad is `[out]` (mapped by `clipCutFfmpegArgs`).
+ *
+ * ffmpeg drawtext has no letter-spacing, so the Remotion logId's `0.12em` tracking is not
+ * reproduced (a known minor gap; the dim, small Oxanium is the match that carries).
  *
  * LEGIBILITY (the Legible Sky Rule): the set footage is a home-studio DJ deck (mid-tones,
- * no lasers), so the ink-halo holds AA there without an occluding box. If a FUTURE clip
- * has white-strobe frames that break the halo, the AA fallback is a warm-dark *translucent*
- * box — `box=1:boxcolor=0x10100d@0.6` (Sleeve Black, never `#000`) — added per line, not a
- * return to the hard black scrim. Pick per footage; the ink-halo is the default.
+ * no lasers), so the soft halo holds AA there without an occluding box. If a FUTURE clip has
+ * white-strobe frames that break the halo, the AA fallback is a warm-dark *translucent* box
+ * (`box=1:boxcolor=0x10100d@0.6`, Sleeve Black, never `#000`) on the sharp pass — not a
+ * return to the hard black scrim. Pick per footage; the soft halo is the default.
  */
-export function clipCutVideoFilter(options: ClipCutFilterOptions): string {
+export function clipCutFilterComplex(options: ClipCutFilterOptions): string {
   const xOffset = Math.max(0, Math.round(options.xOffset));
   const crop = `crop=ih*9/16:ih:${xOffset}:0,scale=${CLIP_WIDTH}:${CLIP_HEIGHT}`;
 
   // Stack from the safe-area floor: the coordinate's bottom sits CLIP_SAFE_BOTTOM above the
-  // frame bottom; the title sits above it by (the coordinate's line box + the gap). Anchor
-  // each line's bottom with its own text height `th`.
+  // frame bottom; the title sits above it by (the coordinate's line box + the gap).
   const coordinateBox = Math.round(CLIP_COORDINATE_SIZE * 1.18); // approx line-box height
   const titleBottomOffset = CLIP_SAFE_BOTTOM + coordinateBox + CLIP_LINE_GAP;
 
-  const titleDraw = brandDrawtext({
-    color: CLIP_TITLE_COLOR,
+  const title: ClipLine = {
     fontFile: options.sansFontFile,
     size: CLIP_TITLE_SIZE,
     text: options.title,
     x: CLIP_MARGIN_X,
     y: `h-${titleBottomOffset}-th`,
-  });
-  const coordinateDraw = brandDrawtext({
-    color: CLIP_COORDINATE_COLOR,
+  };
+  const coordinate: ClipLine = {
     fontFile: options.oxaniumFontFile,
     size: CLIP_COORDINATE_SIZE,
     text: `fluncle://${options.logId}`,
     x: CLIP_MARGIN_X,
     y: `h-${CLIP_SAFE_BOTTOM}-th`,
-  });
+  };
 
-  return `${crop},${titleDraw},${coordinateDraw}`;
+  // The halo source: both lines in Deep-Field on a transparent layer, no border/shadow.
+  const haloGlyphs = [
+    brandDrawtext({ ...title, color: CLIP_HALO_COLOR }),
+    brandDrawtext({ ...coordinate, color: CLIP_HALO_COLOR }),
+  ].join(",");
+
+  // The sharp ink on top: title cream, coordinate dim Stardust, a 1px symmetric core only.
+  const sharpGlyphs = [
+    brandDrawtext({ ...title, borderw: CLIP_SHARP_BORDERW, color: CLIP_TITLE_COLOR }),
+    brandDrawtext({ ...coordinate, borderw: CLIP_SHARP_BORDERW, color: CLIP_COORDINATE_COLOR }),
+  ].join(",");
+
+  return [
+    `[0:v]${crop},setsar=1[base]`,
+    `color=c=black@0:s=${CLIP_WIDTH}x${CLIP_HEIGHT},format=rgba,${haloGlyphs}[ink]`,
+    `[ink]split[ink1][ink2]`,
+    `[ink1]gblur=sigma=${CLIP_HALO_CORE_SIGMA}[core]`,
+    `[ink2]gblur=sigma=${CLIP_HALO_FEATHER_SIGMA}[feather]`,
+    `[base][feather]overlay=0:0[b1]`,
+    `[b1][core]overlay=0:0[b2]`,
+    `[b2]${sharpGlyphs}[out]`,
+  ].join(";");
 }
 
 export type ClipCutFfmpegOptions = ClipCutFilterOptions & {
@@ -267,11 +305,15 @@ export type ClipCutFfmpegOptions = ClipCutFilterOptions & {
  * with the re-encode below it is frame-accurate in modern ffmpeg. The bitrate cap
  * (`-maxrate`/`-bufsize` + CRF) keeps the output under 100 MB; `+faststart` puts the
  * moov atom up front so the result range-streams + survives MT.
+ *
+ * The brand frame is a `-filter_complex` (the soft blurred halo needs `gblur`, which a
+ * simple `-vf` chain can't feed), so the video output pad `[out]` is mapped explicitly and
+ * the source audio rides through with `-map 0:a?` (optional — a set with no audio still cuts).
  */
 export function clipCutFfmpegArgs(options: ClipCutFfmpegOptions): string[] {
   const inSeconds = (options.inMs / 1000).toFixed(3);
   const durationSeconds = ((options.outMs - options.inMs) / 1000).toFixed(3);
-  const filter = clipCutVideoFilter(options);
+  const filter = clipCutFilterComplex(options);
 
   return [
     "-y",
@@ -281,8 +323,12 @@ export function clipCutFfmpegArgs(options: ClipCutFfmpegOptions): string[] {
     options.setUrl,
     "-t",
     durationSeconds,
-    "-vf",
+    "-filter_complex",
     filter,
+    "-map",
+    "[out]",
+    "-map",
+    "0:a?",
     "-c:v",
     "libx264",
     "-preset",
