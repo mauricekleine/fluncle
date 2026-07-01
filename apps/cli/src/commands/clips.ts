@@ -3,9 +3,10 @@
 //
 // A clip is a real ffmpeg cut from the landscape 1080p set rendition (the
 // `<logId>/set.mp4`): trim `[inMs,outMs]`, crop 16:9 → 9:16 at the operator's
-// `xOffset`, bake a minimal brand frame (the mixtape title + the `fluncle://<logId>`
-// coordinate as Starlight-Cream print held legible by a warm-dark ink-halo — the
-// Nostalgic Cosmos, not a #000 caption box; DESIGN.md), and store it as the
+// `xOffset`, bake a minimal brand frame (the changing on-screen Track-ID — the track(s)
+// playing in the window, resolved from the mixtape cues, or the mixtape title when un-cued
+// — over the `fluncle://<logId>` coordinate, as Starlight-Cream print held legible by a
+// warm-dark ink-halo — the Nostalgic Cosmos, not a #000 caption box; DESIGN.md), and store it as the
 // clip's pseudo-finding master `<clipId>/footage.mp4` so the merged `videoCrop(clipId)`
 // / `videoCropPoster` / `videoAudioStripped` MT helpers finish it (the resolution
 // ladder, the poster, the silent TikTok variant) — see apps/web/src/lib/media.ts.
@@ -28,6 +29,7 @@ import {
   type ClipsResponse,
   type ClipDTO,
 } from "@fluncle/contracts";
+import { type ClipTrackInput, resolveClipTracks } from "@fluncle/contracts/util";
 import { randomUUID } from "node:crypto";
 import { existsSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -165,6 +167,12 @@ export type BrandDrawtextOptions = {
   /** Ink color (ffmpeg color, e.g. `0xf4ead7`). Cream/Stardust for sharp ink, Deep-Field for the halo. */
   color: string;
   /**
+   * A drawtext `enable` expression (e.g. `between(t,0.000,5.000)`) that time-gates the
+   * line — used for the changing per-cue Track-ID, so each track's line shows only over
+   * its sub-window of the clip. Omitted → the line is always drawn.
+   */
+  enable?: string;
+  /**
    * Absolute path to the .ttf/.otf for THIS line's font role — the bold sans for the
    * title/track lines, Oxanium for the coordinate. Omitted → fontconfig default.
    */
@@ -193,38 +201,107 @@ export function brandDrawtext(options: BrandDrawtextOptions): string {
     options.borderw && options.borderw > 0
       ? `:borderw=${options.borderw}:bordercolor=${CLIP_HALO_COLOR}`
       : "";
+  // The enable expression's commas are protected by the single quotes (ffmpeg only
+  // splits unquoted `:`/`,`), so `between(t,a,b)` rides through as one option value.
+  const enable = options.enable ? `:enable='${options.enable}'` : "";
 
   return (
     `drawtext=text='${value}'${font}:` +
     `fontcolor=${options.color}:fontsize=${options.size}:` +
-    `x=${options.x}:y=${options.y}${border}`
+    `x=${options.x}:y=${options.y}${border}${enable}`
   );
 }
 
 export type ClipCutFilterOptions = {
+  /**
+   * The clip window start in the set (ms). With `members` + `setDurationMs` it resolves
+   * the changing per-cue Track-ID; defaults to 0 (the un-cued fallback ignores it).
+   */
+  inMs?: number;
   logId: string;
+  /**
+   * The mixtape's cued members (each `Artist — Title` + `startMs`). When the set is cued,
+   * the primary line becomes the CHANGING track(s) playing in `[inMs, outMs)`. Empty /
+   * omitted / un-cued ⇒ the static mixtape-title fallback (unchanged behavior).
+   */
+  members?: ClipTrackInput[];
   /** Oxanium for the coordinate line (env CLIP_FONT_FILE / the baked box path). */
   oxaniumFontFile?: string;
+  /** The clip window end in the set (ms). Pairs with `inMs` to gate the per-cue lines. */
+  outMs?: number;
   /** Bold sans for the title line (env CLIP_SANS_FONT_FILE / the baked box path). */
   sansFontFile?: string;
+  /** The full set duration (ms) — the last cued member runs to it. */
+  setDurationMs?: number;
   title: string;
   /** The 9:16 framing offset (px from the left of the landscape source). */
   xOffset: number;
 };
 
-/** The shared per-line geometry (font role, size, safe-area position). */
-type ClipLine = Pick<BrandDrawtextOptions, "fontFile" | "size" | "text" | "x" | "y">;
+/** The shared per-line geometry (font role, size, safe-area position, optional time gate). */
+type ClipLine = Pick<BrandDrawtextOptions, "enable" | "fontFile" | "size" | "text" | "x" | "y">;
+
+/**
+ * The primary title line(s) for the brand frame at title row `y`. A CUED set resolves the
+ * clip window → the track(s) playing in it, one line per track, each gated
+ * `enable='between(t,relStart,relEnd)'` in seconds relative to the clip start
+ * (`relStart = clamp((track.startMs - inMs)/1000, [0, clipDur])`, `relEnd` = the next
+ * track's relStart or the clip duration) — so the on-screen Track-ID changes at each blend
+ * boundary as the clip plays. An UN-CUED set (or a call without members) yields a single
+ * static mixtape-title line — today's behavior. All lines share the title font role/size/
+ * position; at any playhead only one cued line is enabled.
+ */
+function resolveTitleLines(options: ClipCutFilterOptions, y: string): ClipLine[] {
+  const inMs = options.inMs ?? 0;
+  const outMs = options.outMs ?? 0;
+  const clipDur = Math.max(0, (outMs - inMs) / 1000);
+  const base = { fontFile: options.sansFontFile, size: CLIP_TITLE_SIZE, x: CLIP_MARGIN_X, y };
+
+  const resolved =
+    options.members && options.members.length > 0
+      ? resolveClipTracks({
+          inMs,
+          members: options.members,
+          outMs,
+          setDurationMs: options.setDurationMs ?? 0,
+        })
+      : [];
+
+  if (resolved.length === 0) {
+    return [{ ...base, text: options.title }];
+  }
+
+  const clamp = (seconds: number): number => Math.min(Math.max(seconds, 0), clipDur);
+
+  return resolved.map((track, index): ClipLine => {
+    const relStart = clamp((track.startMs - inMs) / 1000);
+    const next = resolved[index + 1];
+    const relEnd = next ? clamp((next.startMs - inMs) / 1000) : clipDur;
+
+    return {
+      ...base,
+      enable: `between(t,${relStart.toFixed(3)},${relEnd.toFixed(3)})`,
+      text: track.label,
+    };
+  });
+}
 
 /**
  * Build the `-filter_complex` graph: crop 16:9 → 9:16 at `xOffset`, scale to 1080×1920,
  * then the brand frame — a 1:1 mirror of the Remotion TypePlate identity block. Two
- * bottom-left lines: the mixtape TITLE (system-sans stand-in, Starlight Cream, size 40, the
- * trackLine) over the `fluncle://<logId>` COORDINATE (Oxanium, Stardust/dim, size 22, the
- * logId). The block sits in the platform safe-area: `CLIP_MARGIN_X` from the left, its
+ * bottom-left lines: a PRIMARY track line (system-sans stand-in, Starlight Cream, size 40,
+ * the trackLine) over the `fluncle://<logId>` COORDINATE (Oxanium, Stardust/dim, size 22,
+ * the logId). The block sits in the platform safe-area: `CLIP_MARGIN_X` from the left, its
  * BOTTOM edge `CLIP_SAFE_BOTTOM` above the frame bottom, lines stacked with `CLIP_LINE_GAP`
  * (`th` = each drawtext's own text height, so the stack reads from the safe-area floor up
  * regardless of the font's exact metrics). No top-right meta/Found block (unlike a per-track
- * clip). Per-cue per-TRACK lines are Phase-2 (Slice C); v1 stamps the mixtape level.
+ * clip).
+ *
+ * THE CHANGING ON-SCREEN TRACK-ID: when the set is CUED (`members` carry `startMs`), the
+ * primary line is resolved per clip window (`resolveClipTracks`) to the track(s) PLAYING in
+ * `[inMs, outMs)` — one gated `drawtext` per track (`enable='between(t,relStart,relEnd)'`),
+ * so the ID changes at each blend boundary as the clip plays (see `resolveTitleLines`). An
+ * UN-CUED set resolves to `[]` and the primary line falls back to the static mixtape title.
  *
  * THE HALO is FloatingType's soft `inkHalo`, not a hard outline or offset shadow: the same
  * glyphs are drawn in Deep-Field onto a transparent RGBA layer, `gblur`ed in two passes (a
@@ -249,14 +326,14 @@ export function clipCutFilterComplex(options: ClipCutFilterOptions): string {
   // frame bottom; the title sits above it by (the coordinate's line box + the gap).
   const coordinateBox = Math.round(CLIP_COORDINATE_SIZE * 1.18); // approx line-box height
   const titleBottomOffset = CLIP_SAFE_BOTTOM + coordinateBox + CLIP_LINE_GAP;
+  const titleY = `h-${titleBottomOffset}-th`;
 
-  const title: ClipLine = {
-    fontFile: options.sansFontFile,
-    size: CLIP_TITLE_SIZE,
-    text: options.title,
-    x: CLIP_MARGIN_X,
-    y: `h-${titleBottomOffset}-th`,
-  };
+  // The PRIMARY line(s). Resolve the clip window → the track(s) playing in it. When the
+  // set is cued, each resolved track is its own title line, time-gated to its sub-window
+  // (so the on-screen Track-ID CHANGES across a blend). An un-cued set resolves to `[]`,
+  // and the primary line falls back to the static mixtape title (unchanged behavior).
+  const titleLines = resolveTitleLines(options, titleY);
+
   const coordinate: ClipLine = {
     fontFile: options.oxaniumFontFile,
     size: CLIP_COORDINATE_SIZE,
@@ -265,15 +342,18 @@ export function clipCutFilterComplex(options: ClipCutFilterOptions): string {
     y: `h-${CLIP_SAFE_BOTTOM}-th`,
   };
 
-  // The halo source: both lines in Deep-Field on a transparent layer, no border/shadow.
+  // The halo source: every line in Deep-Field on a transparent layer, no border/shadow.
+  // Each title line keeps its `enable` gate so its halo appears/disappears with its ink.
   const haloGlyphs = [
-    brandDrawtext({ ...title, color: CLIP_HALO_COLOR }),
+    ...titleLines.map((line) => brandDrawtext({ ...line, color: CLIP_HALO_COLOR })),
     brandDrawtext({ ...coordinate, color: CLIP_HALO_COLOR }),
   ].join(",");
 
   // The sharp ink on top: title cream, coordinate dim Stardust, a 1px symmetric core only.
   const sharpGlyphs = [
-    brandDrawtext({ ...title, borderw: CLIP_SHARP_BORDERW, color: CLIP_TITLE_COLOR }),
+    ...titleLines.map((line) =>
+      brandDrawtext({ ...line, borderw: CLIP_SHARP_BORDERW, color: CLIP_TITLE_COLOR }),
+    ),
     brandDrawtext({ ...coordinate, borderw: CLIP_SHARP_BORDERW, color: CLIP_COORDINATE_COLOR }),
   ].join(",");
 
@@ -423,10 +503,14 @@ export async function clipCutCommand(
     await runClipCut({
       inMs: clip.inMs,
       logId: mixtape.logId,
+      // The cued members drive the changing on-screen Track-ID; an un-cued set (no
+      // startMs on any member) resolves to [] and the cut falls back to the title.
+      members: mixtape.members,
       outMs: clip.outMs,
       outputPath,
       oxaniumFontFile: resolveClipFontFile(),
       sansFontFile: resolveClipSansFontFile(),
+      setDurationMs: mixtape.durationMs ?? 0,
       setUrl,
       title: mixtape.title,
       xOffset: clip.xOffset,

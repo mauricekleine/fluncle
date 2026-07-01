@@ -1,3 +1,4 @@
+import { type ClipTrackInput, resolveClipTracks, trackLabel } from "@fluncle/contracts/util";
 import { describe, expect, test } from "bun:test";
 import {
   CLIP_AUDIO_BITRATE,
@@ -21,6 +22,15 @@ import {
   escapeDrawtextValue,
   setVideoUrl,
 } from "./clips";
+
+// Synthetic cue sheet: three tracks at 0 / 60s / 120s in a 180s set. `resolveClipTracks`
+// keys off `startMs` only, so the other MixtapeMember fields are omitted here.
+const CUED_MEMBERS: ClipTrackInput[] = [
+  { artists: ["Alpha"], startMs: 0, title: "First" },
+  { artists: ["Beta", "Gamma"], startMs: 60_000, title: "Second" },
+  { artists: ["Delta"], startMs: 120_000, title: "Third" },
+];
+const SET_DURATION_MS = 180_000;
 
 // CI has NO ffmpeg, so every test here exercises the PURE logic only — the footage key,
 // the drawtext escaping, the brand-frame filtergraph, and the ffmpeg arg SHAPE (a string
@@ -274,5 +284,186 @@ describe("clipCutFfmpegArgs", () => {
     expect(flagValue("-c:a")).toBe("aac");
     expect(flagValue("-b:a")).toBe(CLIP_AUDIO_BITRATE);
     expect(flagValue("-movflags")).toBe("+faststart");
+  });
+});
+
+describe("trackLabel", () => {
+  test("joins Artist — Title with the sanctioned em dash", () => {
+    expect(trackLabel(["Alix Perez"], "Forsaken")).toBe("Alix Perez — Forsaken");
+  });
+
+  test("joins multiple artists with a comma", () => {
+    expect(trackLabel(["Calyx", "TeeBee"], "Elevate This Sound")).toBe(
+      "Calyx, TeeBee — Elevate This Sound",
+    );
+  });
+
+  test("degrades to the title alone when there is no artist", () => {
+    expect(trackLabel([], "Untitled")).toBe("Untitled");
+  });
+});
+
+describe("resolveClipTracks", () => {
+  const resolve = (inMs: number, outMs: number, members = CUED_MEMBERS) =>
+    resolveClipTracks({ inMs, members, outMs, setDurationMs: SET_DURATION_MS });
+
+  test("single track — a window inside one cue's interval", () => {
+    const tracks = resolve(10_000, 40_000);
+
+    expect(tracks.map((t) => t.label)).toEqual(["Alpha — First"]);
+    expect(tracks[0]?.startMs).toBe(0);
+  });
+
+  test("blend — a window straddling a cue boundary returns both, in play order", () => {
+    const tracks = resolve(55_000, 70_000);
+
+    expect(tracks.map((t) => t.label)).toEqual(["Alpha — First", "Beta, Gamma — Second"]);
+  });
+
+  test("blend across two boundaries returns all three straddled tracks", () => {
+    const tracks = resolve(55_000, 125_000);
+
+    expect(tracks.map((t) => t.label)).toEqual([
+      "Alpha — First",
+      "Beta, Gamma — Second",
+      "Delta — Third",
+    ]);
+  });
+
+  test("boundary is half-open — a window opening exactly on a cue belongs to the later track", () => {
+    const tracks = resolve(60_000, 90_000);
+
+    expect(tracks.map((t) => t.label)).toEqual(["Beta, Gamma — Second"]);
+  });
+
+  test("before-first — a window before the first cue clamps to the first track", () => {
+    // A set whose first cue is at 5s; a window at [1s, 3s) resolves to that first track.
+    const members: ClipTrackInput[] = [
+      { artists: ["Alpha"], startMs: 5_000, title: "First" },
+      { artists: ["Beta"], startMs: 60_000, title: "Second" },
+    ];
+    const tracks = resolveClipTracks({
+      inMs: 1_000,
+      members,
+      outMs: 3_000,
+      setDurationMs: 120_000,
+    });
+
+    expect(tracks.map((t) => t.label)).toEqual(["Alpha — First"]);
+  });
+
+  test("after-last — a window past the last cue clamps to the last track", () => {
+    const tracks = resolve(130_000, 175_000);
+
+    expect(tracks.map((t) => t.label)).toEqual(["Delta — Third"]);
+  });
+
+  test("after-last — a window past setDurationMs still clamps to the last track", () => {
+    const tracks = resolve(190_000, 210_000);
+
+    expect(tracks.map((t) => t.label)).toEqual(["Delta — Third"]);
+  });
+
+  test("sorts unordered members by startMs before resolving", () => {
+    const shuffled = [CUED_MEMBERS[2], CUED_MEMBERS[0], CUED_MEMBERS[1]].filter(
+      (m): m is ClipTrackInput => m != null,
+    );
+    const tracks = resolveClipTracks({
+      inMs: 55_000,
+      members: shuffled,
+      outMs: 70_000,
+      setDurationMs: SET_DURATION_MS,
+    });
+
+    expect(tracks.map((t) => t.label)).toEqual(["Alpha — First", "Beta, Gamma — Second"]);
+  });
+
+  test("un-cued set (no startMs anywhere) → [] so the cut falls back to the title", () => {
+    const uncued: ClipTrackInput[] = [
+      { artists: ["Alpha"], title: "First" },
+      { artists: ["Beta"], title: "Second" },
+    ];
+
+    expect(
+      resolveClipTracks({ inMs: 10_000, members: uncued, outMs: 40_000, setDurationMs: 180_000 }),
+    ).toEqual([]);
+  });
+
+  test("empty members → []", () => {
+    expect(resolveClipTracks({ inMs: 0, members: [], outMs: 30_000, setDurationMs: 0 })).toEqual(
+      [],
+    );
+  });
+});
+
+describe("clipCutFilterComplex — the changing on-screen Track-ID (cued set)", () => {
+  const cued = {
+    inMs: 55_000,
+    logId: "019.F.1A",
+    members: CUED_MEMBERS,
+    outMs: 70_000,
+    setDurationMs: SET_DURATION_MS,
+    title: "Fluncle Dreaming 002",
+    xOffset: 240,
+  };
+
+  test("a 1-track window stamps ONE gated track line + the coordinate (not the mixtape title)", () => {
+    const filter = clipCutFilterComplex({ ...cued, inMs: 10_000, outMs: 40_000 });
+
+    // The single resolved track (Alpha — First), gated across the whole clip (halo + sharp).
+    expect(filter.match(/drawtext=text='Alpha — First'/g)).toHaveLength(2);
+    // Its gate spans the whole 30s clip window (relStart 0 → clipDur 30).
+    expect(filter.match(/enable='between\(t,0\.000,30\.000\)'/g)).toHaveLength(2);
+    // The coordinate is still present (halo + sharp), ungated.
+    expect(filter.match(/drawtext=text='fluncle\\:\/\/019\.F\.1A'/g)).toHaveLength(2);
+    // The static mixtape title is NOT stamped when the set is cued.
+    expect(filter).not.toContain("Fluncle Dreaming 002");
+  });
+
+  test("a 2-track-blend window stamps two gated track lines that change at the boundary", () => {
+    const filter = clipCutFilterComplex(cued);
+
+    // Both track IDs appear, each twice (halo + sharp).
+    expect(filter.match(/drawtext=text='Alpha — First'/g)).toHaveLength(2);
+    expect(filter.match(/drawtext=text='Beta\\, Gamma — Second'/g)).toHaveLength(2);
+
+    // Track A shows from the clip start until the 60s cue (relStart 0 → 5s into the clip);
+    // Track B takes over from 5s to the clip end (15s). Two `enable` gates, each twice.
+    expect(filter.match(/enable='between\(t,0\.000,5\.000\)'/g)).toHaveLength(2);
+    expect(filter.match(/enable='between\(t,5\.000,15\.000\)'/g)).toHaveLength(2);
+
+    // The coordinate rides along ungated (halo + sharp).
+    expect(filter.match(/drawtext=text='fluncle\\:\/\/019\.F\.1A'/g)).toHaveLength(2);
+    // Same brand style as before: cream title role, dim Stardust coordinate, the soft halo.
+    expect(filter).toContain(`fontcolor=${CLIP_TITLE_COLOR}:fontsize=40`);
+    expect(filter).toContain(`fontcolor=${CLIP_COORDINATE_COLOR}:fontsize=22`);
+    expect(filter).toContain(`[ink1]gblur=sigma=${CLIP_HALO_CORE_SIGMA}[core]`);
+    expect(filter.endsWith("[out]")).toBe(true);
+  });
+
+  test("un-cued members fall back to the static mixtape-title overlay (today's behavior)", () => {
+    const uncued: ClipTrackInput[] = [
+      { artists: ["Alpha"], title: "First" },
+      { artists: ["Beta"], title: "Second" },
+    ];
+    const filter = clipCutFilterComplex({ ...cued, members: uncued });
+
+    // Falls back to the mixtape title, byte-identical to the no-members call.
+    expect(filter).toBe(
+      clipCutFilterComplex({ logId: "019.F.1A", title: "Fluncle Dreaming 002", xOffset: 240 }),
+    );
+    expect(filter.match(/drawtext=text='Fluncle Dreaming 002'/g)).toHaveLength(2);
+    expect(filter).not.toContain("enable=");
+  });
+
+  test("omitting members entirely keeps the legacy static-title overlay unchanged", () => {
+    const filter = clipCutFilterComplex({
+      logId: "019.F.1A",
+      title: "Fluncle Dreaming 002",
+      xOffset: 240,
+    });
+
+    expect(filter.match(/drawtext=text='Fluncle Dreaming 002'/g)).toHaveLength(2);
+    expect(filter).not.toContain("enable=");
   });
 });
