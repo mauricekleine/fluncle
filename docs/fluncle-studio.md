@@ -62,7 +62,7 @@ For one pending clip: pull the mixtape's staged set rendition `<mixtapeLogId>/se
 
 1. Resolve the clip (`list_clips`) + its mixtape (`mixtapeGetCommand`). It asserts the mixtape is minted (a committed Log ID) and its set video is **staged** (`setVideoAt` set, i.e. `distribute --set-video` ran) — else `set_not_staged` (the clip stays `pending`).
 2. ffmpeg, one pass (`clipCutFfmpegArgs`): `-ss <inMs> -i <set.mp4 URL> -t <durMs> -vf "crop=ih*9/16:ih:<xOffset>:0,scale=1080:1920,<brand frame>" -c:v libx264 -crf 21 -maxrate 10M -bufsize 20M -c:a aac -b:a 192k -movflags +faststart`. `-ss` **before** `-i` is an input seek — over HTTP against the faststart `set.mp4` it range-requests to the offset instead of downloading the whole ~1.5 GB rendition, and with the re-encode it is frame-accurate. The **bitrate cap** keeps the output `footage.mp4` **< 100 MB** (a 60 s 1080×1920 cut lands ~75 MB), so Cloudflare MT (100 MB source ceiling) doesn't 400 the fan-out; the cut command also asserts the rendered file is under the cap before upload.
-3. The **brand frame** (`clipCutVideoFilter`): two `drawtext` lines bottom-left — the **mixtape display title** + the `fluncle://<mixtapeLogId>` coordinate (Starlight Cream `#f4ead7`) — each over a semi-transparent **scrim box** (`box=1:boxcolor=black@0.55`) so the text clears AA over arbitrary (bright/busy) footage. Per-track titles are Phase-2 (they need cues); v1 stamps the mixtape level. The font is fontconfig's default unless `CLIP_FONT_FILE` points at an installed `.ttf`/`.otf`. NOT the full cosmos composition (a later enhancement).
+3. The **brand frame** (`clipCutVideoFilter` → the reusable `brandDrawtext` node): two `drawtext` lines bottom-left — the **mixtape display title** + the `fluncle://<mixtapeLogId>` coordinate — both **Starlight-Cream `#f4ead7`** print lifted off the footage by a **warm-dark ink-halo** (a Deep-Field `#090a0b` `borderw` scaled to the glyph + a small Deep-Field drop shadow), NOT a `#000` caption box (the Nostalgic Cosmos: Warm Dark / Through-the-Glass / Legible Sky; DESIGN.md). No gold — the overlay stays quiet, under the One-Sun budget. On the mid-tone DJ-deck footage the ink-halo holds AA without an occluding box; the AA fallback for a future white-strobe clip is a warm-dark **translucent** box (`box=1:boxcolor=0x10100d@0.6`, Sleeve Black — never `#000`), not the old hard scrim. Per-track titles are Phase-2 (they need cues); v1 stamps the mixtape level, and `brandDrawtext` is factored so the Phase-2 per-cue Track-ID line reuses this exact style. The font resolves via `resolveClipFontFile()`: **Oxanium SemiBold** (the box bakes it at `/opt/fonts/Oxanium-SemiBold.ttf`; `CLIP_FONT_FILE` overrides), falling back to fontconfig's default only when neither is present. NOT the full cosmos composition (a later enhancement).
 4. **Upload** the cut single-PUT to R2 at `<clipId>/footage.mp4` via the agent-tier **`presign_clip_upload`** (a clip is < 100 MB, so the single-PUT `r2-presign.ts` path — no multipart). The box holds no R2 creds — the Worker signs; the box PUTs.
 5. **Finalize** via the agent-tier **`finalize_clip_cut`**: mark the clip `done` AND purge the clip's stale edge renditions **server-side** (`purgeClipCache` over `clipPurgeUrls`; the box holds no Cloudflare creds), so a **re-cut** to the same `clipId` never keeps serving the old cut (#152 lesson).
 
@@ -86,13 +86,7 @@ The box drives everything with its **agent-scoped** `FLUNCLE_API_TOKEN`, so the 
 
 Cron scripts deploy by **`docker cp` into the running container**, NOT baked into the image and NOT auto-deployed (the cron-scripts reality — see `../agents/hermes/cron/README.md`). The CLI **is** baked (`fluncle`/`bun` already in the image), so only the new cron pair + ffmpeg need to land on the box.
 
-1. **Install ffmpeg + a font on rave-02** (inside the Hermes container, or bake it into the image on the next rebuild):
-
-   ```bash
-   apt-get update && apt-get install -y ffmpeg fonts-dejavu-core
-   # optional: export CLIP_FONT_FILE=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
-   #           (else drawtext uses fontconfig's default font)
-   ```
+1. **ffmpeg + Oxanium are baked into the Hermes image** (`docs/agents/hermes/Dockerfile`): ffmpeg via apt, and Oxanium SemiBold at `/opt/fonts/Oxanium-SemiBold.ttf`, which `resolveClipFontFile()` picks up automatically (no `CLIP_FONT_FILE` needed). A rebuilt/self-freshened box gets both with no manual step. To render on a bare shell without the baked path, point `CLIP_FONT_FILE` at any installed `.ttf`/`.otf` (else drawtext falls back to fontconfig's default).
 
 2. **Copy the cron pair into the container** (the `docker cp` to `hermes:/opt/data/scripts/` reality):
 

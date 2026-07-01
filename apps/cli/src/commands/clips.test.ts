@@ -3,9 +3,12 @@ import {
   CLIP_AUDIO_BITRATE,
   CLIP_BUFSIZE,
   CLIP_CRF,
+  CLIP_HALO_COLOR,
   CLIP_HEIGHT,
   CLIP_MAXRATE,
+  CLIP_TEXT_COLOR,
   CLIP_WIDTH,
+  brandDrawtext,
   clipCutFfmpegArgs,
   clipCutVideoFilter,
   clipFootageKey,
@@ -57,6 +60,40 @@ describe("escapeDrawtextValue", () => {
   });
 });
 
+describe("brandDrawtext", () => {
+  test("emits Starlight-Cream glyphs over a warm-dark ink-halo, never a #000 box", () => {
+    const node = brandDrawtext({ size: 46, text: "Fluncle", x: 56, y: "h-208" });
+
+    expect(node.startsWith("drawtext=text='Fluncle'")).toBe(true);
+    expect(node).toContain(`fontcolor=${CLIP_TEXT_COLOR}`);
+    expect(node).toContain("fontsize=46");
+    expect(node).toContain(`bordercolor=${CLIP_HALO_COLOR}`);
+    expect(node).toContain(`shadowcolor=${CLIP_HALO_COLOR}`);
+    expect(node).toContain("shadowx=2");
+    expect(node).toContain("shadowy=2");
+    expect(node).not.toContain("box=1");
+    expect(node).not.toContain("boxcolor");
+  });
+
+  test("scales the ink-halo borderw with the font size (~13% of cap height)", () => {
+    expect(brandDrawtext({ size: 46, text: "T", x: 0, y: 0 })).toContain("borderw=6");
+    expect(brandDrawtext({ size: 30, text: "T", x: 0, y: 0 })).toContain("borderw=4");
+  });
+
+  test("escapes raw text and threads an installed fontfile", () => {
+    const node = brandDrawtext({
+      fontFile: "/opt/fonts/Oxanium-SemiBold.ttf",
+      size: 30,
+      text: "fluncle://019.F.1A",
+      x: 56,
+      y: "h-132",
+    });
+
+    expect(node).toContain("drawtext=text='fluncle\\://019.F.1A'");
+    expect(node).toContain("fontfile='/opt/fonts/Oxanium-SemiBold.ttf'");
+  });
+});
+
 describe("clipCutVideoFilter", () => {
   const base = { logId: "019.F.1A", title: "Fluncle Dreaming 002", xOffset: 240 };
 
@@ -73,14 +110,26 @@ describe("clipCutVideoFilter", () => {
     expect(clipCutVideoFilter({ ...base, xOffset: 12.7 })).toContain("crop=ih*9/16:ih:13:0");
   });
 
-  test("bakes the mixtape title + the fluncle:// coordinate, each over a scrim", () => {
+  test("bakes the mixtape title + the fluncle:// coordinate, both as brand ink", () => {
     const filter = clipCutVideoFilter(base);
 
     expect(filter).toContain("drawtext=text='Fluncle Dreaming 002'");
     // The coordinate's `://` colon is escaped so ffmpeg doesn't split the filtergraph.
     expect(filter).toContain("drawtext=text='fluncle\\://019.F.1A'");
-    // Two scrim boxes (AA over arbitrary footage) — one per line.
-    expect(filter.match(/box=1:boxcolor=black@0\.55/g)).toHaveLength(2);
+  });
+
+  test("styles both lines as Starlight-Cream print with a warm-dark ink-halo, no #000 box", () => {
+    const filter = clipCutVideoFilter(base);
+
+    // Both lines are Starlight Cream over a Deep-Field ink-halo (border + drop shadow).
+    expect(filter.match(new RegExp(`fontcolor=${CLIP_TEXT_COLOR}`, "g"))).toHaveLength(2);
+    expect(filter.match(new RegExp(`bordercolor=${CLIP_HALO_COLOR}`, "g"))).toHaveLength(2);
+    expect(filter.match(new RegExp(`shadowcolor=${CLIP_HALO_COLOR}`, "g"))).toHaveLength(2);
+    // The off-brand hard black caption box is gone (Warm Dark Rule).
+    expect(filter).not.toContain("boxcolor=black");
+    expect(filter).not.toContain("box=1");
+    // No gold in the overlay — it stays quiet, under the One-Sun budget.
+    expect(filter.toLowerCase()).not.toContain("f5b800");
   });
 
   test("threads an installed fontfile when provided", () => {

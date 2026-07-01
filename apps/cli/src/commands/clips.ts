@@ -4,7 +4,8 @@
 // A clip is a real ffmpeg cut from the landscape 1080p set rendition (the
 // `<logId>/set.mp4`): trim `[inMs,outMs]`, crop 16:9 → 9:16 at the operator's
 // `xOffset`, bake a minimal brand frame (the mixtape title + the `fluncle://<logId>`
-// coordinate over a scrim that clears AA over arbitrary footage), and store it as the
+// coordinate as Starlight-Cream print held legible by a warm-dark ink-halo — the
+// Nostalgic Cosmos, not a #000 caption box; DESIGN.md), and store it as the
 // clip's pseudo-finding master `<clipId>/footage.mp4` so the merged `videoCrop(clipId)`
 // / `videoCropPoster` / `videoAudioStripped` MT helpers finish it (the resolution
 // ladder, the poster, the silent TikTok variant) — see apps/web/src/lib/media.ts.
@@ -28,7 +29,7 @@ import {
   type ClipDTO,
 } from "@fluncle/contracts";
 import { randomUUID } from "node:crypto";
-import { rmSync, statSync } from "node:fs";
+import { existsSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { adminApiGet, adminApiPost } from "../api";
@@ -53,9 +54,41 @@ export const CLIP_AUDIO_BITRATE = "192k";
 // the primary guard, this is the backstop the cut command asserts on the rendered file).
 export const MAX_CLIP_BYTES = 100 * 1024 * 1024;
 
+// The brand-frame ink (DESIGN.md tokens). The overlay is print floating over the cosmos,
+// not a screen-grab caption bar: Starlight-Cream glyphs lifted off the footage by a
+// warm-dark ink-halo (a Deep-Field border + a small Deep-Field drop shadow) — the Warm
+// Dark + Through-the-Glass + Legible Sky rules. NO #000, NO gold: the overlay stays quiet
+// and well under the One-Sun budget (the eclipse gold is spent elsewhere in the brand).
+export const CLIP_TEXT_COLOR = "0xf4ead7"; // Starlight Cream (#f4ead7)
+export const CLIP_HALO_COLOR = "0x090a0b"; // Deep Field (#090a0b), the warm near-black
+export const CLIP_SHADOW_OFFSET = 2; // px; a soft Deep-Field drop shadow for depth
+
+// The Oxanium SemiBold the brand speaks in (DESIGN.md "One Voice"). freetype (ffmpeg's
+// drawtext) can only read a .ttf/.otf, never the app's .woff2 — so the box bakes a static
+// TTF here (docs/agents/hermes/Dockerfile) and the cut defaults to it with no manual step.
+// The repo copy for local renders lives at apps/cli/assets/fonts/Oxanium-SemiBold.ttf.
+export const BOX_CLIP_FONT_FILE = "/opt/fonts/Oxanium-SemiBold.ttf";
+
 /** The clip's pseudo-finding master key on R2 — what every MT helper resolves against. */
 export function clipFootageKey(clipId: string): string {
   return `${clipId}/footage.mp4`;
+}
+
+/**
+ * Resolve the drawtext font with no manual step: an explicit `CLIP_FONT_FILE` wins;
+ * otherwise fall back to the Oxanium the Hermes image bakes at `BOX_CLIP_FONT_FILE` when
+ * it's present (the box always has it, so the cron cut speaks Oxanium automatically). When
+ * neither exists — a bare local shell without the baked path — return `undefined` so the
+ * filter omits `fontfile=` and freetype uses fontconfig's default rather than failing.
+ */
+export function resolveClipFontFile(): string | undefined {
+  const explicit = process.env.CLIP_FONT_FILE;
+
+  if (explicit) {
+    return explicit;
+  }
+
+  return existsSync(BOX_CLIP_FONT_FILE) ? BOX_CLIP_FONT_FILE : undefined;
 }
 
 /** The landscape set rendition the cut reads from R2 (Unit A's `<logId>/set.mp4`). */
@@ -82,6 +115,41 @@ export function escapeDrawtextValue(text: string): string {
     .replace(/'/g, "'\\''");
 }
 
+export type BrandDrawtextOptions = {
+  /** Optional absolute path to a .ttf/.otf freetype can read (Oxanium on the box). */
+  fontFile?: string;
+  /** The font size in px. Drives the ink-halo weight so it scales with the glyphs. */
+  size: number;
+  /** RAW text (unescaped) — the helper runs it through `escapeDrawtextValue`. */
+  text: string;
+  /** ffmpeg drawtext x/y expressions (e.g. `56`, `h-208`). */
+  x: number | string;
+  y: number | string;
+};
+
+/**
+ * One brand `drawtext` node in the Nostalgic-Cosmos treatment: Starlight-Cream glyphs
+ * (Oxanium when `fontFile` is threaded) lifted off the footage by a warm-dark ink-halo —
+ * a generous Deep-Field `borderw` plus a small Deep-Field drop shadow — NOT a `#000` box.
+ * The halo scales with `size` so the outline stays proportional across the title and the
+ * smaller coordinate. Reusable so a later Phase-2 per-cue Track-ID line stamps identically
+ * (it becomes the changing text over this exact style). Takes RAW text and escapes it.
+ */
+export function brandDrawtext(options: BrandDrawtextOptions): string {
+  const value = escapeDrawtextValue(options.text);
+  const font = options.fontFile ? `:fontfile='${options.fontFile}'` : "";
+  // A generous halo (~13% of the cap height) reads as an ink outline, not a hairline.
+  const borderw = Math.max(2, Math.round(options.size * 0.13));
+
+  return (
+    `drawtext=text='${value}'${font}:` +
+    `fontcolor=${CLIP_TEXT_COLOR}:fontsize=${options.size}:` +
+    `x=${options.x}:y=${options.y}:` +
+    `borderw=${borderw}:bordercolor=${CLIP_HALO_COLOR}:` +
+    `shadowcolor=${CLIP_HALO_COLOR}:shadowx=${CLIP_SHADOW_OFFSET}:shadowy=${CLIP_SHADOW_OFFSET}`
+  );
+}
+
 export type ClipCutFilterOptions = {
   /** Optional absolute path to a .ttf/.otf the box has installed (env CLIP_FONT_FILE). */
   fontFile?: string;
@@ -94,25 +162,34 @@ export type ClipCutFilterOptions = {
 /**
  * Build the single `-vf` filtergraph: crop 16:9 → 9:16 at `xOffset`, scale to
  * 1080×1920, then the minimal brand frame — the mixtape title + the `fluncle://<logId>`
- * coordinate, each over a semi-transparent scrim box (`box=1:boxcolor=black@0.55`) so the
- * text clears AA over arbitrary (bright/busy) footage (the RFC's hard requirement). Pure
+ * coordinate, both as `brandDrawtext` (Starlight-Cream print + warm-dark ink-halo). Pure
  * + testable; the per-track title is Phase-2 (needs cues) — v1 stamps the mixtape level.
+ *
+ * LEGIBILITY (the Legible Sky Rule): the set footage is a home-studio DJ deck (mid-tones,
+ * no lasers), so the ink-halo holds AA there without an occluding box. If a FUTURE clip
+ * has white-strobe frames that break the halo, the AA fallback is a warm-dark *translucent*
+ * box — `box=1:boxcolor=0x10100d@0.6` (Sleeve Black, never `#000`) — added per line, not a
+ * return to the hard black scrim. Pick per footage; the ink-halo is the default.
  */
 export function clipCutVideoFilter(options: ClipCutFilterOptions): string {
   const xOffset = Math.max(0, Math.round(options.xOffset));
   const crop = `crop=ih*9/16:ih:${xOffset}:0,scale=${CLIP_WIDTH}:${CLIP_HEIGHT}`;
-  const font = options.fontFile ? `:fontfile='${options.fontFile}'` : "";
-  const title = escapeDrawtextValue(options.title);
-  const coordinate = escapeDrawtextValue(`fluncle://${options.logId}`);
 
-  // The wordmark/coordinate uses Starlight Cream (#f4ead7, DESIGN.md) — the title is
-  // plain white for max legibility. Both sit bottom-left over their own scrim box.
-  const titleDraw =
-    `drawtext=text='${title}'${font}:fontcolor=white:fontsize=46:` +
-    `x=56:y=h-208:box=1:boxcolor=black@0.55:boxborderw=18`;
-  const coordinateDraw =
-    `drawtext=text='${coordinate}'${font}:fontcolor=0xF4EAD7:fontsize=30:` +
-    `x=56:y=h-132:box=1:boxcolor=black@0.55:boxborderw=12`;
+  // Both lines bottom-left: the mixtape title over the fluncle:// coordinate.
+  const titleDraw = brandDrawtext({
+    fontFile: options.fontFile,
+    size: 46,
+    text: options.title,
+    x: 56,
+    y: "h-208",
+  });
+  const coordinateDraw = brandDrawtext({
+    fontFile: options.fontFile,
+    size: 30,
+    text: `fluncle://${options.logId}`,
+    x: 56,
+    y: "h-132",
+  });
 
   return `${crop},${titleDraw},${coordinateDraw}`;
 }
@@ -241,7 +318,7 @@ export async function clipCutCommand(
   try {
     onProgress(`Clip ${clipId}: cutting [${clip.inMs}–${clip.outMs}ms] from ${mixtape.logId}…`);
     await runClipCut({
-      fontFile: process.env.CLIP_FONT_FILE,
+      fontFile: resolveClipFontFile(),
       inMs: clip.inMs,
       logId: mixtape.logId,
       outMs: clip.outMs,

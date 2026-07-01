@@ -98,6 +98,17 @@ RUN arch="$(uname -m)" \
        -o /usr/local/bin/fluncle \
   && chmod 755 /usr/local/bin/fluncle
 
+# Oxanium SemiBold for the Fluncle Studio clip cut. The `admin clips cut` brand frame
+# draws the mixtape title + `fluncle://<logId>` coordinate with ffmpeg's drawtext, which
+# goes through freetype — freetype reads only .ttf/.otf, never the app's .woff2. Bake the
+# static TTF (OFL, redistributable; instanced at weight 600 from the repo's Oxanium) at
+# BOX_CLIP_FONT_FILE so the cut resolves it with NO manual step: apps/cli/src/commands/
+# clips.ts `resolveClipFontFile()` defaults to /opt/fonts/Oxanium-SemiBold.ttf when
+# CLIP_FONT_FILE is unset and the file exists. COPY needs the repo root as build context
+# (see the header). World-readable (a+rX) so the non-root cron user can read it.
+COPY apps/cli/assets/fonts/Oxanium-SemiBold.ttf /opt/fonts/Oxanium-SemiBold.ttf
+RUN chmod -R a+rX /opt/fonts
+
 # Claude Code — the `fluncle-observation` `--no-agent` cron's ONE agentic step shells
 # out to `claude -p` to author the recovered-audio observation script in Fluncle's
 # voice (subscription auth via CLAUDE_CODE_OAUTH_TOKEN at run time; zero OpenRouter
