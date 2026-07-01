@@ -2,11 +2,14 @@ import { describe, expect, test } from "bun:test";
 import {
   CLIP_AUDIO_BITRATE,
   CLIP_BUFSIZE,
+  CLIP_COORDINATE_COLOR,
   CLIP_CRF,
   CLIP_HALO_COLOR,
   CLIP_HEIGHT,
+  CLIP_MARGIN_X,
   CLIP_MAXRATE,
-  CLIP_TEXT_COLOR,
+  CLIP_SAFE_BOTTOM,
+  CLIP_TITLE_COLOR,
   CLIP_WIDTH,
   brandDrawtext,
   clipCutFfmpegArgs,
@@ -61,12 +64,19 @@ describe("escapeDrawtextValue", () => {
 });
 
 describe("brandDrawtext", () => {
-  test("emits Starlight-Cream glyphs over a warm-dark ink-halo, never a #000 box", () => {
-    const node = brandDrawtext({ size: 46, text: "Fluncle", x: 56, y: "h-208" });
+  test("emits the given ink over a warm-dark ink-halo, never a #000 box", () => {
+    const node = brandDrawtext({
+      color: CLIP_TITLE_COLOR,
+      size: 40,
+      text: "Fluncle",
+      x: 96,
+      y: "h-266-th",
+    });
 
     expect(node.startsWith("drawtext=text='Fluncle'")).toBe(true);
-    expect(node).toContain(`fontcolor=${CLIP_TEXT_COLOR}`);
-    expect(node).toContain("fontsize=46");
+    expect(node).toContain(`fontcolor=${CLIP_TITLE_COLOR}`);
+    expect(node).toContain("fontsize=40");
+    expect(node).toContain("x=96:y=h-266-th");
     expect(node).toContain(`bordercolor=${CLIP_HALO_COLOR}`);
     expect(node).toContain(`shadowcolor=${CLIP_HALO_COLOR}`);
     expect(node).toContain("shadowx=2");
@@ -75,18 +85,31 @@ describe("brandDrawtext", () => {
     expect(node).not.toContain("boxcolor");
   });
 
+  test("takes the ink color per role (cream title vs stardust coordinate)", () => {
+    const title = brandDrawtext({ color: CLIP_TITLE_COLOR, size: 40, text: "T", x: 0, y: 0 });
+    const coord = brandDrawtext({ color: CLIP_COORDINATE_COLOR, size: 22, text: "c", x: 0, y: 0 });
+
+    expect(title).toContain(`fontcolor=${CLIP_TITLE_COLOR}`);
+    expect(coord).toContain(`fontcolor=${CLIP_COORDINATE_COLOR}`);
+  });
+
   test("scales the ink-halo borderw with the font size (~13% of cap height)", () => {
-    expect(brandDrawtext({ size: 46, text: "T", x: 0, y: 0 })).toContain("borderw=6");
-    expect(brandDrawtext({ size: 30, text: "T", x: 0, y: 0 })).toContain("borderw=4");
+    expect(brandDrawtext({ color: CLIP_TITLE_COLOR, size: 40, text: "T", x: 0, y: 0 })).toContain(
+      "borderw=5",
+    );
+    expect(
+      brandDrawtext({ color: CLIP_COORDINATE_COLOR, size: 22, text: "T", x: 0, y: 0 }),
+    ).toContain("borderw=3");
   });
 
   test("escapes raw text and threads an installed fontfile", () => {
     const node = brandDrawtext({
+      color: CLIP_COORDINATE_COLOR,
       fontFile: "/opt/fonts/Oxanium-SemiBold.ttf",
-      size: 30,
+      size: 22,
       text: "fluncle://019.F.1A",
-      x: 56,
-      y: "h-132",
+      x: 96,
+      y: "h-230-th",
     });
 
     expect(node).toContain("drawtext=text='fluncle\\://019.F.1A'");
@@ -118,27 +141,49 @@ describe("clipCutVideoFilter", () => {
     expect(filter).toContain("drawtext=text='fluncle\\://019.F.1A'");
   });
 
-  test("styles both lines as Starlight-Cream print with a warm-dark ink-halo, no #000 box", () => {
+  test("mirrors the Remotion TypePlate: cream title (40) over dim Stardust coordinate (22)", () => {
     const filter = clipCutVideoFilter(base);
 
-    // Both lines are Starlight Cream over a Deep-Field ink-halo (border + drop shadow).
-    expect(filter.match(new RegExp(`fontcolor=${CLIP_TEXT_COLOR}`, "g"))).toHaveLength(2);
+    // Title = Starlight Cream at size 40 (trackLine); coordinate = Stardust at size 22 (logId).
+    expect(filter).toContain(`fontcolor=${CLIP_TITLE_COLOR}:fontsize=40`);
+    expect(filter).toContain(`fontcolor=${CLIP_COORDINATE_COLOR}:fontsize=22`);
+    // A warm-dark ink-halo on BOTH lines, and no #000 caption box (Warm Dark Rule).
     expect(filter.match(new RegExp(`bordercolor=${CLIP_HALO_COLOR}`, "g"))).toHaveLength(2);
-    expect(filter.match(new RegExp(`shadowcolor=${CLIP_HALO_COLOR}`, "g"))).toHaveLength(2);
-    // The off-brand hard black caption box is gone (Warm Dark Rule).
-    expect(filter).not.toContain("boxcolor=black");
+    expect(filter).not.toContain("boxcolor");
     expect(filter).not.toContain("box=1");
     // No gold in the overlay — it stays quiet, under the One-Sun budget.
     expect(filter.toLowerCase()).not.toContain("f5b800");
   });
 
-  test("threads an installed fontfile when provided", () => {
-    const filter = clipCutVideoFilter({ ...base, fontFile: "/opt/fonts/Inter.ttf" });
+  test("places both lines bottom-left in the platform safe-area (MARGIN_X, SAFE_BOTTOM)", () => {
+    const filter = clipCutVideoFilter(base);
 
-    expect(filter).toContain("fontfile='/opt/fonts/Inter.ttf'");
+    // Both lines share the left inset; each line's BOTTOM is anchored via its own `th`.
+    expect(filter.match(new RegExp(`x=${CLIP_MARGIN_X}:`, "g"))).toHaveLength(2);
+    // Coordinate is the lower line: bottom exactly SAFE_BOTTOM above the frame bottom.
+    expect(filter).toContain(`y=h-${CLIP_SAFE_BOTTOM}-th`);
+    // Title sits above it (SAFE_BOTTOM + the coordinate's line box + the gap = 230+26+10).
+    expect(filter).toContain("y=h-266-th");
   });
 
-  test("omits fontfile when none is given (fontconfig default)", () => {
+  test("threads both font roles: the sans for the title, Oxanium for the coordinate", () => {
+    const filter = clipCutVideoFilter({
+      ...base,
+      oxaniumFontFile: "/opt/fonts/Oxanium-SemiBold.ttf",
+      sansFontFile: "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    });
+
+    // The title (cream, 40) carries the sans; the coordinate (stardust, 22) carries Oxanium.
+    expect(filter).toContain(
+      "fontfile='/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf':fontcolor=" +
+        `${CLIP_TITLE_COLOR}:fontsize=40`,
+    );
+    expect(filter).toContain(
+      `fontfile='/opt/fonts/Oxanium-SemiBold.ttf':fontcolor=${CLIP_COORDINATE_COLOR}:fontsize=22`,
+    );
+  });
+
+  test("omits fontfile for a role when none is given (fontconfig default)", () => {
     expect(clipCutVideoFilter(base)).not.toContain("fontfile=");
   });
 

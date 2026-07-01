@@ -54,20 +54,43 @@ export const CLIP_AUDIO_BITRATE = "192k";
 // the primary guard, this is the backstop the cut command asserts on the rendered file).
 export const MAX_CLIP_BYTES = 100 * 1024 * 1024;
 
-// The brand-frame ink (DESIGN.md tokens). The overlay is print floating over the cosmos,
-// not a screen-grab caption bar: Starlight-Cream glyphs lifted off the footage by a
-// warm-dark ink-halo (a Deep-Field border + a small Deep-Field drop shadow) — the Warm
-// Dark + Through-the-Glass + Legible Sky rules. NO #000, NO gold: the overlay stays quiet
-// and well under the One-Sun budget (the eclipse gold is spent elsewhere in the brand).
-export const CLIP_TEXT_COLOR = "0xf4ead7"; // Starlight Cream (#f4ead7)
-export const CLIP_HALO_COLOR = "0x090a0b"; // Deep Field (#090a0b), the warm near-black
+// The brand-frame ink (DESIGN.md tokens). The overlay MIRRORS the Remotion per-track
+// TypePlate identity block (packages/video: floating-type.tsx `trackLine` + `logId`,
+// laid out by type-plate.tsx) so a mixtape clip reads as the same object as a track clip.
+// Print floating over the cosmos, not a screen-grab caption bar: glyphs lifted off the
+// footage by a warm-dark ink-halo (a Deep-Field border + a small Deep-Field drop shadow,
+// the ffmpeg approximation of FloatingType's `inkHalo`) — the Warm Dark + Through-the-Glass
+// + Legible Sky rules. NO #000, NO gold: the overlay stays quiet, well under the One-Sun
+// budget (gold is spent elsewhere in the brand).
+export const CLIP_TITLE_COLOR = "0xf4ead7"; // Starlight Cream — the title (trackLine ink)
+export const CLIP_COORDINATE_COLOR = "0xb7ab95"; // Stardust — the coordinate, dim/subordinate
+export const CLIP_HALO_COLOR = "0x090a0b"; // Deep Field (#090a0b), the warm near-black halo
 export const CLIP_SHADOW_OFFSET = 2; // px; a soft Deep-Field drop shadow for depth
 
-// The Oxanium SemiBold the brand speaks in (DESIGN.md "One Voice"). freetype (ffmpeg's
-// drawtext) can only read a .ttf/.otf, never the app's .woff2 — so the box bakes a static
-// TTF here (docs/agents/hermes/Dockerfile) and the cut defaults to it with no manual step.
-// The repo copy for local renders lives at apps/cli/assets/fonts/Oxanium-SemiBold.ttf.
+// Type scale + placement, 1:1 with the Remotion canvas (both are 1080×1920, so px map
+// directly). The title is the mixtape name (trackLine: system sans, size 40); the
+// coordinate is `fluncle://<logId>` (logId: Oxanium, size 22, dim). Bottom-left, lifted
+// into the platform safe-area: MARGIN_X left inset, the block's BOTTOM edge SAFE_BOTTOM
+// above the frame bottom (clears the TikTok/IG/YT bottom chrome), lines stacked with LINE_GAP.
+export const CLIP_MARGIN_X = 96; // MARGIN_X (type-plate.tsx)
+export const CLIP_SAFE_BOTTOM = 230; // SAFE_BOTTOM (type-plate.tsx)
+export const CLIP_LINE_GAP = 10; // IDENTITY_STYLE gap
+export const CLIP_TITLE_SIZE = 40; // trackLine fontSize
+export const CLIP_COORDINATE_SIZE = 22; // logId fontSize
+
+// The two font faces freetype (ffmpeg drawtext) draws with — it reads only .ttf/.otf,
+// never the app's .woff2. Both are baked into the Hermes image (docs/agents/hermes/
+// Dockerfile) so the on-box cut resolves them with no manual step:
+//   - TITLE = a bold grotesque standing in for the Remotion trackLine's `ui-sans-serif,
+//     system-ui, sans-serif`. That family is NOT an embedded webfont in packages/video,
+//     so the render box's headless Chromium falls to its generic `sans-serif` — DejaVu
+//     Sans on Debian — which is exactly what we bake here, so the clip matches the render.
+//   - COORDINATE = Oxanium (DESIGN.md "One Voice": Oxanium for marks/numerals only).
+// The repo Oxanium copy for local renders lives at apps/cli/assets/fonts/Oxanium-SemiBold.ttf;
+// DejaVu is an OS package (fonts-dejavu-core), so point CLIP_SANS_FONT_FILE at a local copy
+// for a local render.
 export const BOX_CLIP_FONT_FILE = "/opt/fonts/Oxanium-SemiBold.ttf";
+export const BOX_CLIP_SANS_FONT_FILE = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
 
 /** The clip's pseudo-finding master key on R2 — what every MT helper resolves against. */
 export function clipFootageKey(clipId: string): string {
@@ -75,20 +98,30 @@ export function clipFootageKey(clipId: string): string {
 }
 
 /**
- * Resolve the drawtext font with no manual step: an explicit `CLIP_FONT_FILE` wins;
- * otherwise fall back to the Oxanium the Hermes image bakes at `BOX_CLIP_FONT_FILE` when
- * it's present (the box always has it, so the cron cut speaks Oxanium automatically). When
- * neither exists — a bare local shell without the baked path — return `undefined` so the
- * filter omits `fontfile=` and freetype uses fontconfig's default rather than failing.
+ * Resolve a baked font with no manual step: an explicit env override wins; otherwise fall
+ * back to the path the Hermes image bakes when it exists (the box always has it, so the
+ * cron cut is styled automatically). When neither exists — a bare local shell without the
+ * baked path — return `undefined` so the filter omits `fontfile=` and freetype uses
+ * fontconfig's default rather than failing.
  */
-export function resolveClipFontFile(): string | undefined {
-  const explicit = process.env.CLIP_FONT_FILE;
+function resolveFontFile(envVar: string, bakedPath: string): string | undefined {
+  const explicit = process.env[envVar];
 
   if (explicit) {
     return explicit;
   }
 
-  return existsSync(BOX_CLIP_FONT_FILE) ? BOX_CLIP_FONT_FILE : undefined;
+  return existsSync(bakedPath) ? bakedPath : undefined;
+}
+
+/** The Oxanium the coordinate line is drawn in (`CLIP_FONT_FILE` overrides the baked path). */
+export function resolveClipFontFile(): string | undefined {
+  return resolveFontFile("CLIP_FONT_FILE", BOX_CLIP_FONT_FILE);
+}
+
+/** The bold sans the title line is drawn in (`CLIP_SANS_FONT_FILE` overrides the baked path). */
+export function resolveClipSansFontFile(): string | undefined {
+  return resolveFontFile("CLIP_SANS_FONT_FILE", BOX_CLIP_SANS_FONT_FILE);
 }
 
 /** The landscape set rendition the cut reads from R2 (Unit A's `<logId>/set.mp4`). */
@@ -116,24 +149,29 @@ export function escapeDrawtextValue(text: string): string {
 }
 
 export type BrandDrawtextOptions = {
-  /** Optional absolute path to a .ttf/.otf freetype can read (Oxanium on the box). */
+  /** Ink color (ffmpeg color, e.g. `0xf4ead7`). Cream for the title, Stardust for the coordinate. */
+  color: string;
+  /**
+   * Absolute path to the .ttf/.otf for THIS line's font role — the bold sans for the
+   * title/track lines, Oxanium for the coordinate. Omitted → fontconfig default.
+   */
   fontFile?: string;
   /** The font size in px. Drives the ink-halo weight so it scales with the glyphs. */
   size: number;
   /** RAW text (unescaped) — the helper runs it through `escapeDrawtextValue`. */
   text: string;
-  /** ffmpeg drawtext x/y expressions (e.g. `56`, `h-208`). */
+  /** ffmpeg drawtext x/y expressions (e.g. `96`, `h-230-th`). */
   x: number | string;
   y: number | string;
 };
 
 /**
- * One brand `drawtext` node in the Nostalgic-Cosmos treatment: Starlight-Cream glyphs
- * (Oxanium when `fontFile` is threaded) lifted off the footage by a warm-dark ink-halo —
- * a generous Deep-Field `borderw` plus a small Deep-Field drop shadow — NOT a `#000` box.
- * The halo scales with `size` so the outline stays proportional across the title and the
- * smaller coordinate. Reusable so a later Phase-2 per-cue Track-ID line stamps identically
- * (it becomes the changing text over this exact style). Takes RAW text and escapes it.
+ * One brand `drawtext` node in the Nostalgic-Cosmos treatment: ink lifted off the footage
+ * by a warm-dark ink-halo — a generous Deep-Field `borderw` plus a small Deep-Field drop
+ * shadow — NOT a `#000` box. The two font ROLES are parameterized (color + fontFile), so
+ * the title takes the bold sans and the coordinate takes Oxanium from the same helper —
+ * and Slice C's per-cue Track-ID lines reuse it with the title's sans role. The halo scales
+ * with `size` so the outline stays proportional across sizes. Takes RAW text and escapes it.
  */
 export function brandDrawtext(options: BrandDrawtextOptions): string {
   const value = escapeDrawtextValue(options.text);
@@ -143,7 +181,7 @@ export function brandDrawtext(options: BrandDrawtextOptions): string {
 
   return (
     `drawtext=text='${value}'${font}:` +
-    `fontcolor=${CLIP_TEXT_COLOR}:fontsize=${options.size}:` +
+    `fontcolor=${options.color}:fontsize=${options.size}:` +
     `x=${options.x}:y=${options.y}:` +
     `borderw=${borderw}:bordercolor=${CLIP_HALO_COLOR}:` +
     `shadowcolor=${CLIP_HALO_COLOR}:shadowx=${CLIP_SHADOW_OFFSET}:shadowy=${CLIP_SHADOW_OFFSET}`
@@ -151,19 +189,31 @@ export function brandDrawtext(options: BrandDrawtextOptions): string {
 }
 
 export type ClipCutFilterOptions = {
-  /** Optional absolute path to a .ttf/.otf the box has installed (env CLIP_FONT_FILE). */
-  fontFile?: string;
   logId: string;
+  /** Oxanium for the coordinate line (env CLIP_FONT_FILE / the baked box path). */
+  oxaniumFontFile?: string;
+  /** Bold sans for the title line (env CLIP_SANS_FONT_FILE / the baked box path). */
+  sansFontFile?: string;
   title: string;
   /** The 9:16 framing offset (px from the left of the landscape source). */
   xOffset: number;
 };
 
 /**
- * Build the single `-vf` filtergraph: crop 16:9 → 9:16 at `xOffset`, scale to
- * 1080×1920, then the minimal brand frame — the mixtape title + the `fluncle://<logId>`
- * coordinate, both as `brandDrawtext` (Starlight-Cream print + warm-dark ink-halo). Pure
- * + testable; the per-track title is Phase-2 (needs cues) — v1 stamps the mixtape level.
+ * Build the single `-vf` filtergraph: crop 16:9 → 9:16 at `xOffset`, scale to 1080×1920,
+ * then the brand frame — a 1:1 mirror of the Remotion TypePlate identity block. Two
+ * bottom-left lines: the mixtape TITLE (system-sans stand-in, Starlight Cream, size 40,
+ * the trackLine) over the `fluncle://<logId>` COORDINATE (Oxanium, Stardust/dim, size 22,
+ * the logId), each a `brandDrawtext` (warm-dark ink-halo, no #000 box). The block sits in
+ * the platform safe-area: `CLIP_MARGIN_X` from the left, its BOTTOM edge `CLIP_SAFE_BOTTOM`
+ * above the frame bottom, lines stacked with `CLIP_LINE_GAP`. Pure + testable; per-cue
+ * per-TRACK lines are Phase-2 (Slice C) — v1 stamps the mixtape level (no top-right
+ * meta/Found block, unlike a per-track clip).
+ *
+ * `th` (each drawtext's own text height) anchors each line's BOTTOM, so the stack reads
+ * from the safe-area floor up regardless of the font's exact metrics. ffmpeg drawtext has
+ * no letter-spacing, so the Remotion logId's `0.12em` tracking is not reproduced (a known
+ * minor gap; the dim, small Oxanium is the match that carries).
  *
  * LEGIBILITY (the Legible Sky Rule): the set footage is a home-studio DJ deck (mid-tones,
  * no lasers), so the ink-halo holds AA there without an occluding box. If a FUTURE clip
@@ -175,20 +225,27 @@ export function clipCutVideoFilter(options: ClipCutFilterOptions): string {
   const xOffset = Math.max(0, Math.round(options.xOffset));
   const crop = `crop=ih*9/16:ih:${xOffset}:0,scale=${CLIP_WIDTH}:${CLIP_HEIGHT}`;
 
-  // Both lines bottom-left: the mixtape title over the fluncle:// coordinate.
+  // Stack from the safe-area floor: the coordinate's bottom sits CLIP_SAFE_BOTTOM above the
+  // frame bottom; the title sits above it by (the coordinate's line box + the gap). Anchor
+  // each line's bottom with its own text height `th`.
+  const coordinateBox = Math.round(CLIP_COORDINATE_SIZE * 1.18); // approx line-box height
+  const titleBottomOffset = CLIP_SAFE_BOTTOM + coordinateBox + CLIP_LINE_GAP;
+
   const titleDraw = brandDrawtext({
-    fontFile: options.fontFile,
-    size: 46,
+    color: CLIP_TITLE_COLOR,
+    fontFile: options.sansFontFile,
+    size: CLIP_TITLE_SIZE,
     text: options.title,
-    x: 56,
-    y: "h-208",
+    x: CLIP_MARGIN_X,
+    y: `h-${titleBottomOffset}-th`,
   });
   const coordinateDraw = brandDrawtext({
-    fontFile: options.fontFile,
-    size: 30,
+    color: CLIP_COORDINATE_COLOR,
+    fontFile: options.oxaniumFontFile,
+    size: CLIP_COORDINATE_SIZE,
     text: `fluncle://${options.logId}`,
-    x: 56,
-    y: "h-132",
+    x: CLIP_MARGIN_X,
+    y: `h-${CLIP_SAFE_BOTTOM}-th`,
   });
 
   return `${crop},${titleDraw},${coordinateDraw}`;
@@ -318,11 +375,12 @@ export async function clipCutCommand(
   try {
     onProgress(`Clip ${clipId}: cutting [${clip.inMs}–${clip.outMs}ms] from ${mixtape.logId}…`);
     await runClipCut({
-      fontFile: resolveClipFontFile(),
       inMs: clip.inMs,
       logId: mixtape.logId,
       outMs: clip.outMs,
       outputPath,
+      oxaniumFontFile: resolveClipFontFile(),
+      sansFontFile: resolveClipSansFontFile(),
       setUrl,
       title: mixtape.title,
       xOffset: clip.xOffset,

@@ -26,9 +26,15 @@ FROM nousresearch/hermes-agent:v2026.6.19
 # `box ssh`/`box scp` — the `fluncle-render` conductor's transport to the render
 # box — shells out to system ssh/scp; dnsutils (`dig`) because the
 # `fluncle-healthcheck` cron's dns probe shells out to `dig` to query the
-# `dig.fluncle.com` nameserver. One layer, lists cleaned, no recommends.
+# `dig.fluncle.com` nameserver; fonts-dejavu-core supplies DejaVu Sans Bold at
+# /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf — the TITLE face for the
+# Fluncle Studio clip cut (BOX_CLIP_SANS_FONT_FILE in apps/cli/src/commands/clips.ts).
+# It stands in for the Remotion trackLine's `ui-sans-serif, system-ui, sans-serif`,
+# which is not an embedded webfont there, so headless Chromium renders it as its generic
+# `sans-serif` = DejaVu on Debian; baking the same font makes the clip match the render.
+# One layer, lists cleaned, no recommends.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg unzip openssh-client dnsutils \
+  && apt-get install -y --no-install-recommends ffmpeg unzip openssh-client dnsutils fonts-dejavu-core \
   && rm -rf /var/lib/apt/lists/*
 
 # Bun — pinned to the repo's toolchain (packageManager bun@1.3.14) so the box runs
@@ -98,12 +104,13 @@ RUN arch="$(uname -m)" \
        -o /usr/local/bin/fluncle \
   && chmod 755 /usr/local/bin/fluncle
 
-# Oxanium SemiBold for the Fluncle Studio clip cut. The `admin clips cut` brand frame
-# draws the mixtape title + `fluncle://<logId>` coordinate with ffmpeg's drawtext, which
-# goes through freetype — freetype reads only .ttf/.otf, never the app's .woff2. Bake the
-# static TTF (OFL, redistributable; instanced at weight 600 from the repo's Oxanium) at
-# BOX_CLIP_FONT_FILE so the cut resolves it with NO manual step: apps/cli/src/commands/
-# clips.ts `resolveClipFontFile()` defaults to /opt/fonts/Oxanium-SemiBold.ttf when
+# Oxanium SemiBold for the Fluncle Studio clip cut — the COORDINATE face. The `admin clips
+# cut` brand frame draws the `fluncle://<logId>` coordinate in Oxanium (DESIGN.md "One
+# Voice": Oxanium for marks/numerals; the title uses the DejaVu sans above) with ffmpeg's
+# drawtext, which goes through freetype — freetype reads only .ttf/.otf, never the app's
+# .woff2. Bake the static TTF (OFL, redistributable; instanced at weight 600 from the repo's
+# Oxanium) at BOX_CLIP_FONT_FILE so the cut resolves it with NO manual step: apps/cli/src/
+# commands/clips.ts `resolveClipFontFile()` defaults to /opt/fonts/Oxanium-SemiBold.ttf when
 # CLIP_FONT_FILE is unset and the file exists. COPY needs the repo root as build context
 # (see the header). World-readable (a+rX) so the non-root cron user can read it.
 COPY apps/cli/assets/fonts/Oxanium-SemiBold.ttf /opt/fonts/Oxanium-SemiBold.ttf
