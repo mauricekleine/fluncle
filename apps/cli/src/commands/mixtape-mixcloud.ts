@@ -16,17 +16,15 @@
 import {
   type MixcloudAuthStartResponse,
   type MixcloudTokenResponse,
-  type MixtapeSocialShowResponse,
+  type MixtapeMixcloudResyncResponse,
 } from "@fluncle/contracts";
+import { mixcloudSectionFields, mixcloudSections } from "@fluncle/contracts/util";
 import { adminApiGet, adminApiPost } from "../api";
 import { CliError } from "../output";
 import { type MixtapeListItem, mixtapeGetCommand } from "./mixtape-api";
 
 export type MixcloudDistributeResult = { url: string };
 export type MixcloudResyncResult = { url: string };
-
-/** A Mixcloud tracklist section (the API's shape). `start_time` is integer seconds. */
-export type MixcloudSection = { artist: string; song: string; start_time: number };
 
 const MIXCLOUD_API = "https://api.mixcloud.com";
 // Mixcloud's documented description cap; the fluncle:// breadcrumb adds ~25 chars.
@@ -142,75 +140,21 @@ export async function distributeMixcloud(
 // ── Re-sync (metadata only, no re-upload) ────────────────────────────────────
 
 /**
- * Re-sync the live cloudcast's `sections[]` tracklist from the mixtape's CURRENT
- * cues — NO audio re-upload. Mixcloud's edit endpoint
- * (`POST /upload/{user}/{slug}/edit/`) accepts every upload field except `mp3`, and
- * posting ANY `sections-*` field overwrites the whole tracklist — exactly the resync
- * intent (the fresh cue set becomes the tracklist). We send ONLY the section fields,
- * so name/description/picture are left untouched (they only change if included).
- * Bytes-free but credential-bearing, so it stays CLI-side like the upload: the token
- * is fetched just-in-time from the Worker (operator tier — the agent 403s). The
- * cloudcast key comes from the `mixcloud` `mixtape_social_posts` row (the SSOT), so
- * the recorded url/key never change and there is nothing to finalize.
+ * Re-sync the live cloudcast's `sections[]` tracklist from the mixtape's CURRENT cues
+ * — NO audio re-upload. Fully SERVER-SIDE now (the parity twin of `resyncYoutube`):
+ * the Worker holds the `mixcloud_auth` token and runs the sections-only edit POST,
+ * so the CLI just triggers the op and reports the link. The edit is bytes-free (unlike
+ * the multi-GB upload, which stays CLI-direct), so it belongs server-side; this keeps
+ * CLI ⇄ Studio button ⇄ one server-side path. The op 403s the agent token (it edits
+ * live published content). The `mixtapeId` is already resolved by the orchestrating
+ * resync command.
  */
-export async function resyncMixcloud(
-  mixtapeId: string,
-  onProgress?: (message: string) => void,
-): Promise<MixcloudResyncResult> {
-  const token = await fetchMixcloudToken();
-  const mixtape = await mixtapeGetCommand(mixtapeId);
-  const sections = mixcloudSections(mixtape.members);
-
-  if (sections.length === 0) {
-    throw new CliError(
-      "mixcloud_no_cues",
-      "No cued members to sync — mark cues on the mixtape first.",
-    );
-  }
-
-  // The cloudcast key/url live on the mixcloud distribution row (single source of
-  // truth); `externalId` is the key `/fluncle/<slug>/`.
-  const social = await adminApiGet<MixtapeSocialShowResponse>(
-    `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/social`,
-  );
-  const mixcloud = social.posts.find((post) => post.platform === "mixcloud");
-  const key = mixcloud?.externalId;
-
-  if (!key) {
-    throw new CliError(
-      "mixcloud_not_distributed",
-      "No Mixcloud cloudcast to re-sync — distribute the mixtape first.",
-    );
-  }
-
-  const form = new FormData();
-  for (const [name, value] of mixcloudSectionFields(sections)) {
-    form.append(name, value);
-  }
-
-  onProgress?.(`Mixcloud: re-syncing ${sections.length} sections (no re-upload)…`);
-  const response = await fetch(
-    `${mixcloudEditUrl(key)}?access_token=${encodeURIComponent(token)}`,
-    { body: form, method: "POST" },
+export async function resyncMixcloud(mixtapeId: string): Promise<MixcloudResyncResult> {
+  const response = await adminApiPost<MixtapeMixcloudResyncResponse>(
+    `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/mixcloud/resync`,
   );
 
-  const text = await response.text();
-
-  if (!response.ok) {
-    throwMixcloudError(response.status, text);
-  }
-
-  // Mixcloud answers 200 even on a validation failure; the body carries the outcome.
-  const result = parseUploadResult(text);
-
-  if (!result.success) {
-    throw new CliError(
-      "mixcloud_edit_rejected",
-      `Mixcloud rejected the section edit: ${result.message ?? text.slice(0, 300)}`,
-    );
-  }
-
-  return { url: mixcloud?.url ?? `https://www.mixcloud.com${key}` };
+  return { url: response.url };
 }
 
 // ── Auth (thin trigger) ──────────────────────────────────────────────────────
@@ -248,43 +192,10 @@ export function mixtapeDescription(note: string | undefined, logId: string): str
   return trimmedNote ? `${trimmedNote}\n\n${breadcrumb}` : breadcrumb;
 }
 
-/** Mixcloud `sections[]` from cued members: filter out un-cued, sort by offset. */
-export function mixcloudSections(members: MixtapeListItem["members"]): MixcloudSection[] {
-  return members
-    .filter(
-      (member): member is typeof member & { startMs: number } => typeof member.startMs === "number",
-    )
-    .sort((a, b) => a.startMs - b.startMs)
-    .map((member) => ({
-      artist: member.artists.join(", "),
-      song: member.title,
-      start_time: Math.floor(member.startMs / 1000),
-    }));
-}
-
-/**
- * The `sections-N-*` multipart field pairs Mixcloud expects, shared by the upload
- * and the re-sync edit so the wire shape can never drift between them.
- */
-export function mixcloudSectionFields(sections: MixcloudSection[]): [string, string][] {
-  return sections.flatMap((section, index) => [
-    [`sections-${index}-artist`, section.artist],
-    [`sections-${index}-song`, section.song],
-    [`sections-${index}-start_time`, String(section.start_time)],
-  ]);
-}
-
-/**
- * The Mixcloud edit endpoint for a cloudcast key. The stored key is `/fluncle/<slug>/`
- * (leading + trailing slash), and the edit URL is `/upload/<user>/<slug>/edit/`, so
- * this splices `edit/` after the key under `/upload`. Normalizes a stray missing slash.
- */
-export function mixcloudEditUrl(key: string): string {
-  const withLeading = key.startsWith("/") ? key : `/${key}`;
-  const path = withLeading.endsWith("/") ? withLeading : `${withLeading}/`;
-
-  return `${MIXCLOUD_API}/upload${path}edit/`;
-}
+// The Mixcloud `sections[]` derivation + the `sections-N-*` wire fields moved to the
+// byte-shared `@fluncle/contracts/util` (`mixcloudSections` / `mixcloudSectionFields`),
+// so the CLI upload here and the server-side re-sync edit can't drift. The re-sync's
+// `mixcloudEditUrl` moved there too (it now runs in the Worker).
 
 // Up to 5 tags. Fluncle's archive is drum & bass; lead with the genre tag.
 function mixtapeTags(_mixtape: MixtapeListItem): string[] {

@@ -283,6 +283,14 @@ export type MixtapeYouTubeInitiateResponse = Ok<{ accessToken: string; sessionUr
 export type MixtapeYouTubeResyncResponse = Ok<{ url: string; videoId: string }>;
 
 /**
+ * `/api/admin/mixtapes/:id/mixcloud/resync` response: the live cloudcast URL after
+ * its `sections[]` tracklist was re-derived from the current cues and pushed via the
+ * Mixcloud edit endpoint (sections-only, no audio re-upload). Server-side (the Worker
+ * holds the `mixcloud_auth` token), the parity twin of the YouTube leg.
+ */
+export type MixtapeMixcloudResyncResponse = Ok<{ url: string }>;
+
+/**
  * `/api/admin/mixtapes/:id/set-video/presign` response (Fluncle Studio Unit A): the
  * opened multipart upload's id + key plus every presigned URL the CLI needs to drive
  * it — one PUT URL per part, the completion POST URL, and the abort DELETE URL. The

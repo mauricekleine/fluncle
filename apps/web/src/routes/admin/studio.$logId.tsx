@@ -1,10 +1,15 @@
 import {
   ArrowCounterClockwiseIcon,
+  ArrowsClockwiseIcon,
+  CheckCircleIcon,
+  CircleNotchIcon,
   GearSixIcon,
   ScissorsIcon,
   SparkleIcon,
   TrashIcon,
+  WarningIcon,
 } from "@phosphor-icons/react";
+import { type MixtapeSocialPostItem } from "@fluncle/contracts";
 import { type ClipDTO } from "@fluncle/contracts/orpc";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
@@ -21,6 +26,17 @@ import { AdminShell } from "@/components/admin/admin-shell";
 import { StudioCropFrame } from "@/components/admin/studio-crop-frame";
 import { StudioCueRail } from "@/components/admin/studio-cue-rail";
 import { StudioEnergyLane } from "@/components/admin/studio-energy-lane";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -660,6 +676,10 @@ function StudioEditorBody({
           selectedTrackId={selectedTrackId}
         />
 
+        {/* Re-sync the live distribution from the cues just marked. Only present when
+            the set is published (has a youtube/mixcloud row); disabled until ≥1 cue. */}
+        <ResyncFromCues members={members} mixtapeId={mixtapeId} />
+
         {/* The set's clips so far (this set only; the cross-set library is Unit G). */}
         <div className="mt-6">
           <Label>Clips ({clips?.length ?? 0})</Label>
@@ -919,6 +939,144 @@ function SettingsCog({
   );
 }
 
+// The platforms a mixtape can be re-synced to, in push order (YouTube first).
+const RESYNC_PLATFORMS = ["youtube", "mixcloud"] as const;
+type ResyncPlatform = (typeof RESYNC_PLATFORMS)[number];
+type ResyncLeg = { message?: string; ok: boolean; platform: ResyncPlatform };
+
+const PLATFORM_LABEL: Record<ResyncPlatform, string> = {
+  mixcloud: "Mixcloud show",
+  youtube: "YouTube video",
+};
+
+// ── Re-sync from cues ──────────────────────────────────────────────────────────
+// Push the freshly-marked cues to the mixtape's ALREADY-published distribution:
+// re-derive the YouTube chapters + Mixcloud sections and edit the live video + show
+// (no re-upload — the same server-side `resync_mixtape_*` ops the CLI now calls). It
+// edits LIVE public content, so it is confirm-gated. Only rendered once the set is
+// published (has a youtube/mixcloud row); the button is disabled until ≥1 cue exists.
+// A platform without a distribution row is skipped, never errored.
+function ResyncFromCues({
+  members,
+  mixtapeId,
+}: {
+  members: MixtapeDTO["members"];
+  mixtapeId: string;
+}) {
+  const [results, setResults] = useState<ResyncLeg[] | null>(null);
+
+  // The set's per-platform distribution rows tell us what's actually published (and so
+  // what to push to). Focus-refetch ON (admin convention), like the clips/mixtape reads.
+  const { data: posts } = useQuery<MixtapeSocialPostItem[]>({
+    queryFn: () => fetchMixtapeSocial(mixtapeId),
+    queryKey: ["admin", "mixtape-social", mixtapeId],
+    refetchOnWindowFocus: true,
+  });
+
+  const distributed = new Set((posts ?? []).map((post) => post.platform));
+  const legs = RESYNC_PLATFORMS.filter((platform) => distributed.has(platform));
+  const published = legs.length > 0;
+  const cuedCount = members.filter((member) => member.startMs != null).length;
+  const canResync = published && cuedCount > 0;
+
+  const resync = useMutation<ResyncLeg[]>({
+    mutationFn: async () => {
+      const out: ResyncLeg[] = [];
+
+      // Sequential so the two live edits don't race, and each leg reports its own
+      // outcome — one platform failing never aborts the other.
+      for (const platform of legs) {
+        const response = await fetch(
+          `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/${platform}/resync`,
+          { method: "POST" },
+        );
+
+        out.push(
+          response.ok
+            ? { ok: true, platform }
+            : { message: await readError(response), ok: false, platform },
+        );
+      }
+
+      return out;
+    },
+    onMutate: () => setResults(null),
+    onSuccess: (out) => setResults(out),
+  });
+
+  // Not published yet → nothing to re-sync; the control stays out of the way entirely.
+  if (!published) {
+    return null;
+  }
+
+  const platformList = legs.map((platform) => PLATFORM_LABEL[platform]).join(" + ");
+
+  return (
+    <div className="mt-6">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Label className="flex items-center gap-1.5">
+          <ArrowsClockwiseIcon aria-hidden="true" weight="bold" />
+          Live distribution
+        </Label>
+        <AlertDialog>
+          <AlertDialogTrigger
+            render={
+              // Quiet outline — the One Sun stays on Create clip. Disabled until there
+              // is a cue to push.
+              <Button disabled={!canResync || resync.isPending} size="sm" variant="outline">
+                {resync.isPending ? (
+                  <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+                ) : (
+                  <ArrowsClockwiseIcon aria-hidden="true" weight="bold" />
+                )}
+                Re-sync from cues
+              </Button>
+            }
+          />
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Push fresh chapters to the live {platformList}?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This re-derives the tracklist from the {cuedCount} marked cue
+                {cuedCount === 1 ? "" : "s"} and edits the already-published {platformList}. The
+                title, audio, and video don't change — only the chapters and sections.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={() => resync.mutate()}>Re-sync</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </div>
+
+      {!canResync ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Mark at least one cue above, then push it to the live {platformList}.
+        </p>
+      ) : null}
+
+      {results ? (
+        <ul aria-live="polite" className="mt-2 space-y-1">
+          {results.map((leg) => (
+            <li className="flex items-center gap-1.5 text-xs" key={leg.platform}>
+              {leg.ok ? (
+                <CheckCircleIcon aria-hidden="true" className="text-foreground" weight="fill" />
+              ) : (
+                <WarningIcon aria-hidden="true" className="text-destructive" weight="fill" />
+              )}
+              <span className={leg.ok ? "text-muted-foreground" : "text-destructive"}>
+                {PLATFORM_LABEL[leg.platform]}
+                {leg.ok ? " synced" : `: ${leg.message ?? "failed"}`}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 // ── small shared bits ─────────────────────────────────────────────────────────
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -950,6 +1108,18 @@ async function fetchClips(mixtapeId: string): Promise<ClipDTO[]> {
   const body = (await response.json()) as { clips?: ClipDTO[] };
 
   return body.clips ?? [];
+}
+
+async function fetchMixtapeSocial(mixtapeId: string): Promise<MixtapeSocialPostItem[]> {
+  const response = await fetch(`/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/social`);
+
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+
+  const body = (await response.json()) as { posts?: MixtapeSocialPostItem[] };
+
+  return body.posts ?? [];
 }
 
 async function readError(response: Response): Promise<string> {

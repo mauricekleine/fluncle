@@ -69,8 +69,8 @@ const APPROVED_VERBS = new Set<string>([
   // action set with the `requeue_video` re-render command.
   "requeue",
   // `resync` (re-derive a published mixtape's distribution metadata from its current
-  // cues and push it to the live platform — no re-upload) — added deliberately with
-  // the `resync_mixtape_youtube` op (the Mixcloud leg edits sections CLI-side).
+  // cues and push it to the live platform — no re-upload) — added deliberately with the
+  // `resync_mixtape_youtube` + `resync_mixtape_mixcloud` ops (both server-side).
   "resync",
   // Concrete actions already in the live registry the prose set doesn't spell out
   // verbatim. Adding a genuinely new verb is a deliberate edit here (with a reason),

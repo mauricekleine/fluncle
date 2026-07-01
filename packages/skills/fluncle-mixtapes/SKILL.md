@@ -91,7 +91,10 @@ The one recurring human gate: the `/admin/mixtapes` **Make YouTube public** butt
 
 ### D2. Re-sync cues → live YouTube chapters + Mixcloud sections
 
-The tracklist cues are often refined **after** a set is already live (the initial upload rarely has precise jump points — see the Rekordbox note in §B, which writes order + identity, not timestamps). Once you mark or change cues on a **published** mixtape, re-push the derived metadata to the platforms **without re-uploading the audio**:
+The tracklist cues are often refined **after** a set is already live (the initial upload rarely has precise jump points — see the Rekordbox note in §B, which writes order + identity, not timestamps). Once you mark or change cues on a **published** mixtape, re-push the derived metadata to the platforms **without re-uploading the audio**. Two equivalent entry points hit the **same server-side ops**:
+
+- **Fluncle Studio button** — mark cues on the `/admin/studio/$logId` cue rail, then hit **Re-sync from cues** (in the left pane's "Live distribution" block). It fires **both** platform ops the set is distributed to, confirm-gated (it edits live public content), with a ✓ / error per platform. It only appears once the set is published and enables once there's ≥1 cue.
+- **CLI**:
 
 ```bash
 # Mark/adjust cues first (Fluncle Studio cue rail, or the CLI cue backfill):
@@ -102,10 +105,10 @@ fluncle admin mixtapes resync <idOrLogId> --youtube          # only YouTube
 fluncle admin mixtapes resync <idOrLogId> --mixcloud         # only Mixcloud
 ```
 
-`resync` regenerates the exact same metadata `distribute` builds — the YouTube description (dream note + `fluncle://<logId>` + the cued chapter block, YouTube's ≥3-chapters/first-at-0:00/≥10s-spacing rules honored) and the Mixcloud `sections[]` — from the mixtape's **current** cues, and pushes them to the already-uploaded video + cloudcast:
+`resync` regenerates the exact same metadata `distribute` builds — the YouTube description (dream note + `fluncle://<logId>` + the cued chapter block, YouTube's ≥3-chapters/first-at-0:00/≥10s-spacing rules honored) and the Mixcloud `sections[]` — from the mixtape's **current** cues, and pushes them to the already-uploaded video + cloudcast. **Both legs are server-side ops** (`resync_mixtape_youtube` / `resync_mixtape_mixcloud`); the CLI and the Studio button are thin triggers over the one path:
 
-- **YouTube** is fully server-side (`videos.list` to read the live snippet, then `videos.update` on `part=snippet`): it refreshes **only** the description; the title, category, tags, and the video itself are read back and preserved untouched.
-- **Mixcloud** edits the cloudcast in place via its edit endpoint (`POST /upload/<user>/<slug>/edit/`, all upload fields except `mp3`). Posting the `sections-*` fields overwrites the whole tracklist with the fresh cue set; name/description/picture are left alone. CLI-side with the just-in-time token, exactly like the upload.
+- **YouTube** (`videos.list` to read the live snippet, then `videos.update` on `part=snippet`): it refreshes **only** the description; the title, category, tags, and the video itself are read back and preserved untouched.
+- **Mixcloud** edits the cloudcast in place via its edit endpoint (`POST /upload/<user>/<slug>/edit/`, all upload fields except `mp3`), run **server-side** in the Worker with the stored `mixcloud_auth` token (the sections edit is bytes-free, so — unlike the multi-GB upload, which stays CLI-direct — it belongs server-side). Posting the `sections-*` fields overwrites the whole tracklist with the fresh cue set; name/description/picture are left alone.
 
 It is **operator-only** (it edits live published content — the agent token 403s) and **idempotent** (re-run any time; the cloudcast key/url never change, so there's nothing to re-finalize). With no `--youtube`/`--mixcloud` flag it re-syncs every platform the mixtape is distributed to. SoundCloud is manual — out of scope.
 

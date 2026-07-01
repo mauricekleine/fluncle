@@ -245,9 +245,10 @@ export type MixtapeResyncResult = {
  * Re-sync a PUBLISHED mixtape's distribution metadata from its current cues — WITHOUT
  * re-uploading the audio: regenerate the YouTube chapter description + the Mixcloud
  * `sections[]` and push them to the live video + cloudcast. With no platform selector,
- * does both. YouTube is server-side (`videos.update` via the op); Mixcloud edits the
- * cloudcast sections CLI-side with the just-in-time token, like the upload. Idempotent
- * per platform (a re-run pushes the same fresh metadata again).
+ * does both. BOTH legs are now server-side ops (YouTube `videos.update`; Mixcloud the
+ * sections-only edit) — the CLI is a thin trigger through the same server path the
+ * Studio button uses. Idempotent per platform (a re-run pushes the same fresh metadata
+ * again).
  *
  * In the no-selector default it re-syncs only the platforms the mixtape is actually
  * distributed to (a set on Mixcloud only isn't failed by a missing YouTube video); an
@@ -307,7 +308,7 @@ export async function mixtapeResyncCommand(
   if (doMixcloud) {
     onProgress("Mixcloud: re-syncing sections…");
     const { resyncMixcloud } = await import("./mixtape-mixcloud");
-    const result = await resyncMixcloud(mixtapeId, onProgress);
+    const result = await resyncMixcloud(mixtapeId);
     results.push({ platform: "mixcloud", url: result.url });
     onProgress(`Mixcloud: ${result.url}`);
   }

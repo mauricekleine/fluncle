@@ -270,6 +270,62 @@ export function resolveClipTracks(options: {
     }));
 }
 
+// ── Mixcloud tracklist sections (the mixtape `sections[]` wire shape) ─────────
+//
+// A published Mixcloud cloudcast carries a tracklist as indexed `sections-N-*`
+// multipart fields. Both the DISTRIBUTE upload (CLI-direct) and the RE-SYNC edit
+// (server-side, in the Worker) derive that tracklist from the mixtape's cued
+// members, so the derivation + the wire-field shape + the edit-endpoint URL live
+// here — the one byte-shared place a copy can't drift (the `resolveClipTracks`
+// precedent above). Pure + dependency-free; the base URL is a bare literal.
+
+/** A Mixcloud tracklist section (the API's shape). `start_time` is integer seconds. */
+export type MixcloudSection = { artist: string; song: string; start_time: number };
+
+const MIXCLOUD_API_BASE = "https://api.mixcloud.com";
+
+/**
+ * Mixcloud `sections[]` from a mixtape's members: keep only the cued ones (a
+ * `startMs`), sort by offset, and convert ms → integer seconds. The minimal member
+ * shape (`artists`/`title`/`startMs?`) is the same `ClipTrackInput` the clip
+ * resolver reads, so both the CLI `MixtapeMemberItem` and the web `MixtapeMember`
+ * pass structurally.
+ */
+export function mixcloudSections(members: ClipTrackInput[]): MixcloudSection[] {
+  return members
+    .filter((member): member is ClipTrackInput & { startMs: number } => member.startMs != null)
+    .sort((a, b) => a.startMs - b.startMs)
+    .map((member) => ({
+      artist: member.artists.join(", "),
+      song: member.title,
+      start_time: Math.floor(member.startMs / 1000),
+    }));
+}
+
+/**
+ * The `sections-N-*` multipart field pairs Mixcloud expects, shared by the upload
+ * and the re-sync edit so the wire shape can never drift between them.
+ */
+export function mixcloudSectionFields(sections: MixcloudSection[]): [string, string][] {
+  return sections.flatMap((section, index) => [
+    [`sections-${index}-artist`, section.artist],
+    [`sections-${index}-song`, section.song],
+    [`sections-${index}-start_time`, String(section.start_time)],
+  ]);
+}
+
+/**
+ * The Mixcloud edit endpoint for a cloudcast key. The stored key is `/fluncle/<slug>/`
+ * (leading + trailing slash), and the edit URL is `/upload/<user>/<slug>/edit/`, so
+ * this splices `edit/` after the key under `/upload`. Normalizes a stray missing slash.
+ */
+export function mixcloudEditUrl(key: string): string {
+  const withLeading = key.startsWith("/") ? key : `/${key}`;
+  const path = withLeading.endsWith("/") ? withLeading : `${withLeading}/`;
+
+  return `${MIXCLOUD_API_BASE}/upload${path}edit/`;
+}
+
 /** True when every base-title token of the finding appears in the candidate's. */
 export function baseTitleMatches(findingTitle: string, candidateTitle: string): boolean {
   const want = new Set(tokenize(stripVersionSuffix(findingTitle)));
