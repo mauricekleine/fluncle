@@ -48,11 +48,13 @@ import {
 
 // The Studio clip editor. One landscape set
 // rendition (the `<log-id>/set.mp4` master) → many framed 9:16 footage clips. Entered
-// from the "Clip this set" action on a minted mixtape row (/admin/mixtapes). A full
-// AdminShell fill page composed from the shared `<Video>` compound (Root owns the "one
-// clock" machine + stall recovery; the scrubber + transport read it) plus the editor's
-// own chrome — the VibeMap-pointer crop rect and the energy lane — over the same
-// element, with Shadcn ui/* only.
+// from the "Clip this set" action on a minted mixtape row (/admin/mixtapes). A wide,
+// full-height AdminShell fill page (a dense operator workstation) composed from the
+// shared `<Video>` compound (Root owns the "one clock" machine + stall recovery; the
+// scrubber + transport read it) plus the editor's own chrome — the VibeMap-pointer crop
+// rect and the energy lane — over the same element, with Shadcn ui/* only. At xl+ the
+// body is a two-pane workstation (cue list left / visualiser right); below xl it falls
+// back to a single scrolling column.
 
 const SEEK_STEP_SECONDS = 5;
 const CLIP_LENGTH_PRESETS_MS = [15_000, 30_000, 60_000] as const;
@@ -129,6 +131,7 @@ function StudioPage() {
     <AdminShell
       current="mixtapes"
       fill
+      wide
       subtitle={
         <>
           {mixtape.logId ? <span className="font-mono tabular-nums">{mixtape.logId}</span> : null}
@@ -623,9 +626,17 @@ function StudioEditorBody({
     // role="application" so the editor's single-key shortcuts ([ ] M Enter, space,
     // arrows) reach the handler instead of being eaten by browse mode. aria-label +
     // the aria-live readout give a screen reader the context + the action feedback.
+    //
+    // Layout: below `xl` this is a single scrolling column (cue list, then the
+    // visualiser) — reachable on a phone/tablet. At `xl+` it becomes the two-pane
+    // workstation: a CSS grid with the cue list on the LEFT (track 1, flexible, scrolls
+    // on its own) and the visualiser on the RIGHT (track 2, capped, stays put), split by
+    // a Dust Line seam. The cue list is FIRST in the DOM so tab/focus order matches the
+    // visual left-to-right at every breakpoint (no `order` reversal — WCAG 2.4.3). The
+    // keyboard loop lives on this wrapper, so shortcuts fire from either pane.
     <div
       aria-label={`Studio clip editor for ${title}`}
-      className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 sm:p-5"
+      className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 sm:p-5 xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(0,48rem)] xl:grid-rows-[minmax(0,1fr)] xl:gap-0 xl:overflow-hidden"
       onKeyDown={handleKeyDown}
       role="application"
     >
@@ -633,122 +644,10 @@ function StudioEditorBody({
         {liveMessage}
       </span>
 
-      {/* Hero preview + the framing rect. The wrapper takes the rendition's intrinsic
-          aspect so the 9:16 crop overlay maps 1:1 onto source pixels. */}
-      <div className="mx-auto w-full max-w-3xl">
-        <Video.Surface
-          className="studio-stage"
-          mediaClassName="studio-stage-media"
-          poster={poster}
-          style={{ aspectRatio: `${videoSize.width} / ${videoSize.height}` }}
-        >
-          <StudioCropFrame
-            leftFraction={cropLeftFraction}
-            onChange={handleCropChange}
-            videoHeight={videoSize.height}
-            videoWidth={videoSize.width}
-          />
-        </Video.Surface>
-
-        {/* Transport: play/pause, the shared scrubber, the time readout, the cog. */}
-        <div className="mt-3 flex items-center gap-3">
-          <Video.PlayButton />
-          <Video.Scrubber label={`Seek through ${title}`} />
-          <Video.Time className="studio-time shrink-0" />
-
-          <SettingsCog
-            clipLengthMs={clipLengthMs}
-            onClipLengthChange={setClipLengthMs}
-            onResetFraming={resetFraming}
-            onSnapCuesChange={setSnapCues}
-            snapCues={snapCues}
-          />
-        </div>
-
-        {/* The one quiet energy lane (warm-neutral ramp). Absent envelope → just the
-            rail + playhead + committed clips + the active band. */}
-        <div className="mt-3">
-          <StudioEnergyLane
-            band={band ? { aFraction: band.inFraction, bFraction: band.outFraction } : null}
-            clips={clips ?? []}
-            cues={cueTicks}
-            currentMs={currentMs}
-            durationMs={durationMs}
-            envelope={envelope ?? undefined}
-            onBandPaint={(a, b) =>
-              setBand({ inFraction: Math.min(a, b), outFraction: Math.max(a, b) })
-            }
-            onSeekFraction={seekFraction}
-            suggestions={suggestionRegions}
-          />
-          {!envelope ? (
-            <p className="mt-1 text-xs text-muted-foreground">
-              No energy analysis staged yet. Mark in/out by hand; the lane and drop suggestions
-              appear once the set is analysed.
-            </p>
-          ) : null}
-        </div>
-
-        {/* The clip-making toolbar. Gold lives ONLY on Create clip (the One Sun). */}
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <Button onClick={markAtPlayhead} size="sm" variant="outline">
-            Mark <kbd className="studio-kbd">M</kbd>
-          </Button>
-          <Button onClick={setInToPlayhead} size="sm" variant="outline">
-            Set in <kbd className="studio-kbd">[</kbd>
-          </Button>
-          <Button onClick={setOutToPlayhead} size="sm" variant="outline">
-            Set out <kbd className="studio-kbd">]</kbd>
-          </Button>
-          <span className="text-xs tabular-nums text-muted-foreground">
-            {bandWindow
-              ? `${formatClock(bandWindow.inMs / 1000)} – ${formatClock(bandWindow.outMs / 1000)}`
-              : "No band yet"}
-          </span>
-          <Button
-            className="ml-auto"
-            disabled={!bandValid || createClip.isPending}
-            onClick={() => createClip.mutate()}
-            size="sm"
-          >
-            <ScissorsIcon aria-hidden="true" weight="bold" />
-            Create clip <kbd className="studio-kbd studio-kbd-on-gold">⏎</kbd>
-          </Button>
-        </div>
-
-        {error ? (
-          <p className="mt-2 text-sm text-destructive" role="alert">
-            {error}
-          </p>
-        ) : null}
-        {notice ? (
-          <p aria-live="polite" className="mt-2 text-sm text-muted-foreground">
-            {notice}
-          </p>
-        ) : null}
-
-        {/* Suggestion chips (suggestion-first, keyboard-reachable). */}
-        {envelope && envelope.suggestions.length > 0 ? (
-          <div className="mt-4">
-            <Label className="flex items-center gap-1.5">
-              <SparkleIcon aria-hidden="true" weight="fill" />
-              Suggested drops
-            </Label>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {envelope.suggestions.map((suggestion, index) => (
-                <Button
-                  key={suggestion.anchorMs}
-                  onClick={() => acceptSuggestion(index)}
-                  size="sm"
-                  variant="outline"
-                >
-                  {formatClock(suggestion.anchorMs / 1000)}
-                </Button>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
+      {/* Left pane (the cue list) — the ordered tracklist (each markable at the
+          playhead) plus the set's committed clips. It scrolls independently at xl+ so
+          all tracks stay reachable while the visualiser holds its place. */}
+      <div className="flex min-w-0 flex-col xl:min-h-0 xl:overflow-y-auto xl:pr-6">
         {/* The cue rail — mark each track's start in the set. The times feed YouTube
             chapters, the /log per-track times, and (later) clip auto-crediting. */}
         <StudioCueRail
@@ -790,6 +689,130 @@ function StudioEditorBody({
               No clips yet. Mark a window and create one; a session mints many.
             </p>
           )}
+        </div>
+      </div>
+
+      {/* Right pane (the visualiser) — the preview, transport, energy lane, clip
+          toolbar, and suggestions. It stays in view while the operator marks on the
+          left: capped at max-w-3xl (bounds the landscape preview's height) and given
+          its own overflow only as a safety net for very short screens. A Dust Line seam
+          (border-l) separates it from the cue list at xl+. */}
+      <div className="min-w-0 xl:min-h-0 xl:overflow-y-auto xl:border-l xl:border-border xl:pl-6">
+        <div className="mx-auto w-full max-w-3xl">
+          {/* Hero preview + the framing rect. The wrapper takes the rendition's
+              intrinsic aspect so the 9:16 crop overlay maps 1:1 onto source pixels. */}
+          <Video.Surface
+            className="studio-stage"
+            mediaClassName="studio-stage-media"
+            poster={poster}
+            style={{ aspectRatio: `${videoSize.width} / ${videoSize.height}` }}
+          >
+            <StudioCropFrame
+              leftFraction={cropLeftFraction}
+              onChange={handleCropChange}
+              videoHeight={videoSize.height}
+              videoWidth={videoSize.width}
+            />
+          </Video.Surface>
+
+          {/* Transport: play/pause, the shared scrubber, the time readout, the cog. */}
+          <div className="mt-3 flex items-center gap-3">
+            <Video.PlayButton />
+            <Video.Scrubber label={`Seek through ${title}`} />
+            <Video.Time className="studio-time shrink-0" />
+
+            <SettingsCog
+              clipLengthMs={clipLengthMs}
+              onClipLengthChange={setClipLengthMs}
+              onResetFraming={resetFraming}
+              onSnapCuesChange={setSnapCues}
+              snapCues={snapCues}
+            />
+          </div>
+
+          {/* The one quiet energy lane (warm-neutral ramp). Absent envelope → just the
+              rail + playhead + committed clips + the active band. */}
+          <div className="mt-3">
+            <StudioEnergyLane
+              band={band ? { aFraction: band.inFraction, bFraction: band.outFraction } : null}
+              clips={clips ?? []}
+              cues={cueTicks}
+              currentMs={currentMs}
+              durationMs={durationMs}
+              envelope={envelope ?? undefined}
+              onBandPaint={(a, b) =>
+                setBand({ inFraction: Math.min(a, b), outFraction: Math.max(a, b) })
+              }
+              onSeekFraction={seekFraction}
+              suggestions={suggestionRegions}
+            />
+            {!envelope ? (
+              <p className="mt-1 text-xs text-muted-foreground">
+                No energy analysis staged yet. Mark in/out by hand; the lane and drop suggestions
+                appear once the set is analysed.
+              </p>
+            ) : null}
+          </div>
+
+          {/* The clip-making toolbar. Gold lives ONLY on Create clip (the One Sun). */}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Button onClick={markAtPlayhead} size="sm" variant="outline">
+              Mark <kbd className="studio-kbd">M</kbd>
+            </Button>
+            <Button onClick={setInToPlayhead} size="sm" variant="outline">
+              Set in <kbd className="studio-kbd">[</kbd>
+            </Button>
+            <Button onClick={setOutToPlayhead} size="sm" variant="outline">
+              Set out <kbd className="studio-kbd">]</kbd>
+            </Button>
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {bandWindow
+                ? `${formatClock(bandWindow.inMs / 1000)} – ${formatClock(bandWindow.outMs / 1000)}`
+                : "No band yet"}
+            </span>
+            <Button
+              className="ml-auto"
+              disabled={!bandValid || createClip.isPending}
+              onClick={() => createClip.mutate()}
+              size="sm"
+            >
+              <ScissorsIcon aria-hidden="true" weight="bold" />
+              Create clip <kbd className="studio-kbd studio-kbd-on-gold">⏎</kbd>
+            </Button>
+          </div>
+
+          {error ? (
+            <p className="mt-2 text-sm text-destructive" role="alert">
+              {error}
+            </p>
+          ) : null}
+          {notice ? (
+            <p aria-live="polite" className="mt-2 text-sm text-muted-foreground">
+              {notice}
+            </p>
+          ) : null}
+
+          {/* Suggestion chips (suggestion-first, keyboard-reachable). */}
+          {envelope && envelope.suggestions.length > 0 ? (
+            <div className="mt-4">
+              <Label className="flex items-center gap-1.5">
+                <SparkleIcon aria-hidden="true" weight="fill" />
+                Suggested drops
+              </Label>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {envelope.suggestions.map((suggestion, index) => (
+                  <Button
+                    key={suggestion.anchorMs}
+                    onClick={() => acceptSuggestion(index)}
+                    size="sm"
+                    variant="outline"
+                  >
+                    {formatClock(suggestion.anchorMs / 1000)}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

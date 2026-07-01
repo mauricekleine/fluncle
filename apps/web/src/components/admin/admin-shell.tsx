@@ -15,6 +15,9 @@ import { cn } from "@/lib/utils";
 //     tagging tool's three-pane layout). lg+ only — on a phone it falls back to
 //     the growing layout so the controls stay reachable.
 //
+// `wide` is an orthogonal knob: it only widens the plate's max-width cap (for the
+// Studio's two-pane workstation), leaving the surface, header, and nav untouched.
+//
 // The header (title + optional subtitle, an actions slot, and the nav) is
 // identical on every surface; only the body differs.
 
@@ -35,6 +38,13 @@ type AdminShellProps = {
   title: string;
   /** A small inline accessory rendered immediately right of the title (e.g. the streak chip). */
   titleAccessory?: ReactNode;
+  /**
+   * Widen the plate toward the viewport for a dense workstation body (the Studio's
+   * two-pane layout). Keeps the same One-Pane surface + header/nav; only the max-width
+   * cap grows (from `max-w-6xl` to `max-w-[96rem]`), so every other admin surface is
+   * unaffected.
+   */
+  wide?: boolean;
 };
 
 export function AdminShell({
@@ -46,6 +56,7 @@ export function AdminShell({
   subtitle,
   title,
   titleAccessory,
+  wide = false,
 }: AdminShellProps) {
   return (
     <main
@@ -56,7 +67,8 @@ export function AdminShell({
     >
       <div
         className={cn(
-          "mx-auto flex w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-border bg-card/80 outline outline-1 outline-border/40 outline-offset-4 backdrop-blur-xl",
+          "mx-auto flex w-full flex-col overflow-hidden rounded-xl border border-border bg-card/80 outline outline-1 outline-border/40 outline-offset-4 backdrop-blur-xl",
+          wide ? "max-w-[96rem]" : "max-w-6xl",
           fill && "min-h-0 lg:h-full",
         )}
       >
