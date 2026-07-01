@@ -188,6 +188,88 @@ export function versionMatches(findingTitle: string, candidateTitle: string): bo
   return !candidateIsRemix;
 }
 
+// ── Clip track resolution (the changing on-screen Track-ID) ──────────────────
+//
+// A Fluncle set-cut clip is a window `[inMs, outMs)` of a mixtape's staged set
+// video. When the set is cued (each member carries a `startMs`), the clip should
+// stamp the track(s) actually PLAYING in that window as its primary overlay —
+// changing across a blend when the window straddles a cue boundary. These helpers
+// resolve the window → the ordered track(s), shared by the CLI cut (which turns
+// the result into gated `drawtext` lines) so the interval logic can't drift and is
+// unit-tested without ffmpeg. Un-cued sets return `[]` and the cut falls back to
+// the static mixtape title.
+
+/** The minimal member shape the resolver reads (a structural subset of `MixtapeMember`). */
+export type ClipTrackInput = {
+  artists: string[];
+  /** The member's cue start in the set (ms). Absent ⇒ un-cued. */
+  startMs?: number;
+  title: string;
+};
+
+/** A resolved clip track: its "Artist — Title" label + its cue start (ms). */
+export type ResolvedClipTrack = {
+  /** `Artist — Title` (em dash — the sanctioned trackLine format; multiple artists join with ", "). */
+  label: string;
+  /** The track's cue start in the set (ms). */
+  startMs: number;
+};
+
+/** The trackLine label: `Artist — Title` (em dash), mirroring @fluncle/video's FloatingType. */
+export function trackLabel(artists: string[], title: string): string {
+  const joined = artists.join(", ");
+
+  return joined && title ? `${joined} — ${title}` : joined || title;
+}
+
+/**
+ * Resolve which track(s) play in a clip window `[inMs, outMs)` from a mixtape's
+ * cued members. Each cued member owns the half-open interval `[startMs, nextStartMs)`;
+ * the last cued member runs to `setDurationMs`. Returns the members (in play order)
+ * whose interval overlaps the window — length 1 = a single track, ≥2 = a blend (the
+ * window straddles a cue boundary). The window is CLAMPED to the cued span: a window
+ * before the first cue resolves to the first track, one after the last cue to the last
+ * track. An UN-CUED set (no member has a `startMs`) returns `[]` — the caller then
+ * falls back to the static mixtape title.
+ */
+export function resolveClipTracks(options: {
+  inMs: number;
+  members: ClipTrackInput[];
+  outMs: number;
+  setDurationMs: number;
+}): ResolvedClipTrack[] {
+  const { inMs, members, outMs, setDurationMs } = options;
+
+  // Only cued members can be placed on the timeline; sort by start so intervals line up.
+  const cued = members
+    .filter((member): member is ClipTrackInput & { startMs: number } => member.startMs != null)
+    .sort((a, b) => a.startMs - b.startMs);
+
+  if (cued.length === 0) {
+    return [];
+  }
+
+  const lastIndex = cued.length - 1;
+
+  return cued
+    .filter((member, index) => {
+      // The half-open interval this member owns. Clamp the two ENDS so a window that
+      // spills before the first cue or past the last cue still resolves to that track.
+      const lo = index === 0 ? Math.min(member.startMs, inMs) : member.startMs;
+      const hi =
+        index === lastIndex
+          ? Math.max(setDurationMs, outMs)
+          : (cued[index + 1]?.startMs ?? Number.POSITIVE_INFINITY);
+
+      // Half-open overlap of `[lo, hi)` with the window `[inMs, outMs)`.
+      return lo < outMs && inMs < hi;
+    })
+    .map((member) => ({
+      label: trackLabel(member.artists, member.title),
+      startMs: member.startMs,
+    }));
+}
+
 /** True when every base-title token of the finding appears in the candidate's. */
 export function baseTitleMatches(findingTitle: string, candidateTitle: string): boolean {
   const want = new Set(tokenize(stripVersionSuffix(findingTitle)));
