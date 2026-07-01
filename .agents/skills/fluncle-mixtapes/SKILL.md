@@ -38,11 +38,13 @@ For the Rekordbox tracklist step, also cache the database key once (see that ste
 2. Capture the assets: the audio master, the mixtape video, any teaser clips (raw material you don't want to re-shoot — and the Fluncle Studio clip pipeline can cut more later from the set master on R2: the `mixtape_clips` table, `fluncle admin clips list|cut`, `/admin/studio/$logId` + `/admin/clips`, the `fluncle-studio-clip` cron; see `docs/fluncle-studio.md`).
 3. Archive the raw assets to the operator path (R2), like a finding's analysis archive.
 
-**Audio — Track 2 is the clean master.** The OBS recording carries two audio tracks (Advanced Output records tracks 1 + 2): **Track 1 = mix + mic** (the Twitch live feed), **Track 2 = the clean stereo mix only** (BlackHole / PC MASTER OUT, no mic). Always take the **clean Track 2** for the Mixcloud audio master and for any clip audio — never Track 1, it carries the mic. In ffmpeg that is the second audio stream: `-map 0:a:1`. The recording is 1080p H.264 (OBS Output (Scaled) Resolution must be 1920×1080, not 720p; keep H.264 so the clip pipeline / Cloudflare Media Transformations can read it). Full OBS / BlackHole recording setup lives in `docs/mixtape-recording-setup.md`.
+**Audio — Track 1 is the clean master.** The OBS recording carries two audio tracks (Advanced Output records tracks 1 + 2): **Track 1 = the clean stereo mix only** (BlackHole / PC MASTER OUT, no mic — the file's default audio), **Track 2 = the isolated mic**. (A third track, mix + mic, feeds the Twitch stream but isn't recorded.) Always take the **clean Track 1** for the Mixcloud audio master and for any clip audio — it's the default stream, so `-map 0:a:0` (or no `-map` at all); Track 2 is the voice-only mic. The recording is 1080p H.264 (OBS Output (Scaled) Resolution must be 1920×1080, not 720p; keep H.264 so the clip pipeline / Cloudflare Media Transformations can read it; the master encoder is a dedicated Apple VT H264 Hardware encoder at CBR 40000, not "Use stream encoder"). Full OBS / BlackHole recording setup lives in `docs/mixtape-recording-setup.md`.
 
 ### B. Build the draft + tracklist
 
 A draft is **just the operator-authored subset**: a recorded date (defaults to today), an optional dream note, and the tracklist. Duration is derived from the upload at distribute time, not entered. Build the draft in `/admin/mixtapes` (or via `fluncle admin mixtapes create`).
+
+**Reserve the coordinate before you record.** The draft editor shows a **reserved Log ID** — the `XXX.F.ZZ` coordinate the mixtape will mint into — so you can name your Beatport playlist, USB folders, and Rekordbox playlist with it up front. It is a pure function of the sector day (from the **live session date**, which wins as the committed record day; else the recorded date) and the next mint sequence, so it is day-granular and **moves if you change the session date**; set a live session to reserve it (with no date basis the editor prompts for one rather than showing a drifting today-based guess). The publish mint uses the identical resolution, so the minted ID equals the reserved one — copy it from the read-only field (or the dimmed coordinate on the draft row) and it locks in on publish.
 
 **Get the tracklist from Rekordbox.** Rekordbox logs the set in load order, which is the reliable signal — track identity and order. Run:
 
@@ -66,7 +68,7 @@ Feed the pruned list into the tracklist: attach each track as a **member finding
 fluncle admin mixtapes distribute <idOrLogId> --video <mixtape>.mp4 --audio <master>
 ```
 
-The `--audio <master>` must be the **clean mix (Track 2, no mic)** — extract it from the OBS `.mov` first, mapping the second audio stream: `ffmpeg -i <recording>.mov -map 0:a:1 -c:a libmp3lame -b:a 320k <master>.mp3` (Track 1 carries the mic — see §A). The `--video` can be the raw `.mov` (it keeps both tracks) or a clean-audio cut — your call on whether the YouTube video carries your voice.
+The `--audio <master>` must be the **clean mix (Track 1, no mic)** — extract it from the OBS `.mov` first, mapping the first audio stream: `ffmpeg -i <recording>.mov -map 0:a:0 -c:a libmp3lame -b:a 320k <master>.mp3` (Track 2 is the isolated mic — see §A). The `--video` can be the raw `.mov` (it keeps both tracks) or a clean-audio cut — your call on whether the YouTube video carries your voice.
 
 Omit a flag to target one platform. The command is **mint-first**: a `draft` mints the `XXX.F.ZZ` Log ID + number + title into a non-public `distributing` state (the cover renders, public surfaces stay hidden), the uploads carry the committed Log ID, and the **first successful platform link flips it `published`** — so a public mixtape always has somewhere to listen. It is **idempotent per platform**: re-running resumes a `distributing` mixtape and reuses its Log ID.
 
@@ -86,6 +88,29 @@ It derives one **1080p faststart rendition** with ffmpeg (CRF 20, AAC, ~2s GOP f
 ### D. Make YouTube public
 
 The one recurring human gate: the `/admin/mixtapes` **Make YouTube public** button, or `fluncle admin mixtapes publish-youtube <idOrLogId>` (server-side `videos.update`).
+
+### D2. Re-sync cues → live YouTube chapters + Mixcloud sections
+
+The tracklist cues are often refined **after** a set is already live (the initial upload rarely has precise jump points — see the Rekordbox note in §B, which writes order + identity, not timestamps). Once you mark or change cues on a **published** mixtape, re-push the derived metadata to the platforms **without re-uploading the audio**. Two equivalent entry points hit the **same server-side ops**:
+
+- **Fluncle Studio button** — mark cues on the `/admin/studio/$logId` cue rail, then hit **Re-sync from cues** (in the left pane's "Live distribution" block). It fires **both** platform ops the set is distributed to, confirm-gated (it edits live public content), with a ✓ / error per platform. It only appears once the set is published and enables once there's ≥1 cue.
+- **CLI**:
+
+```bash
+# Mark/adjust cues first (Fluncle Studio cue rail, or the CLI cue backfill):
+fluncle admin mixtapes members <idOrLogId> --from cues.txt   # "m:ss Artist — Title" lines, or a JSON cue array
+# …then re-sync the derived metadata to the live platforms:
+fluncle admin mixtapes resync <idOrLogId>                    # both platforms it's distributed to
+fluncle admin mixtapes resync <idOrLogId> --youtube          # only YouTube
+fluncle admin mixtapes resync <idOrLogId> --mixcloud         # only Mixcloud
+```
+
+`resync` regenerates the exact same metadata `distribute` builds — the YouTube description (dream note + `fluncle://<logId>` + the cued chapter block, YouTube's ≥3-chapters/first-at-0:00/≥10s-spacing rules honored) and the Mixcloud `sections[]` — from the mixtape's **current** cues, and pushes them to the already-uploaded video + cloudcast. **Both legs are server-side ops** (`resync_mixtape_youtube` / `resync_mixtape_mixcloud`); the CLI and the Studio button are thin triggers over the one path:
+
+- **YouTube** (`videos.list` to read the live snippet, then `videos.update` on `part=snippet`): it refreshes **only** the description; the title, category, tags, and the video itself are read back and preserved untouched.
+- **Mixcloud** edits the cloudcast in place via its edit endpoint (`POST /upload/<user>/<slug>/edit/`, all upload fields except `mp3`), run **server-side** in the Worker with the stored `mixcloud_auth` token (the sections edit is bytes-free, so — unlike the multi-GB upload, which stays CLI-direct — it belongs server-side). Posting the `sections-*` fields overwrites the whole tracklist with the fresh cue set; name/description/picture are left alone.
+
+It is **operator-only** (it edits live published content — the agent token 403s) and **idempotent** (re-run any time; the cloudcast key/url never change, so there's nothing to re-finalize). With no `--youtube`/`--mixcloud` flag it re-syncs every platform the mixtape is distributed to. SoundCloud is manual — out of scope.
 
 ### E. Mirror + anchor (manual, optional)
 
