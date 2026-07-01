@@ -592,35 +592,46 @@ export const socialPosts = sqliteTable(
 // `mixtape_social_posts` (one row per platform, with status + external_id). The
 // public DTO's `externalUrls` is derived from the published rows via a subquery in
 // MIXTAPE_SELECT; nothing is dual-written onto the mixtape row.
-export const mixtapes = sqliteTable("mixtapes", {
-  addedAt: text("added_at"),
-  createdAt: text("created_at").notNull(),
-  durationMs: integer("duration_ms"),
-  id: text("id").primaryKey(),
-  logId: text("log_id").unique(),
-  note: text("note"),
-  // The scheduled date/time (ISO) of an upcoming live session this mixtape is the
-  // draft of — distinct from `recorded_at` (which is what publish derives the Log
-  // ID sector from). A future `planned_for` surfaces the mixtape as an upcoming
-  // event in the subscribe-able /calendar.ics, even while it's still a draft.
-  plannedFor: text("planned_for"),
-  publishedAt: text("published_at"),
-  recordedAt: text("recorded_at"),
-  sequenceNumber: integer("sequence_number").unique(),
-  // When set (an ISO timestamp), the full set video has been uploaded to R2 at
-  // `<log-id>/set.mp4` and the mixtape `/log` page shows the branded scrubber
-  // player. Operator-flipped from /admin/mixtapes AFTER the upload; null until
-  // then. A flag, not a URL — the URL derives from the Log ID (mixtapeSetVideoUrl).
-  setVideoAt: text("set_video_at"),
-  // "distributing" is the minted-but-uploading state between draft and published
-  // (see MixtapeStatus in @fluncle/contracts). Plain TEXT, the enum only narrows
-  // the type.
-  status: text("status", { enum: ["draft", "distributing", "published"] })
-    .notNull()
-    .default("draft"),
-  title: text("title").notNull(),
-  updatedAt: text("updated_at").notNull(),
-});
+export const mixtapes = sqliteTable(
+  "mixtapes",
+  {
+    addedAt: text("added_at"),
+    createdAt: text("created_at").notNull(),
+    durationMs: integer("duration_ms"),
+    id: text("id").primaryKey(),
+    logId: text("log_id").unique(),
+    note: text("note"),
+    // The scheduled date/time (ISO) of an upcoming live session this mixtape is the
+    // draft of — distinct from `recorded_at` (which is what publish derives the Log
+    // ID sector from). A future `planned_for` surfaces the mixtape as an upcoming
+    // event in the subscribe-able /calendar.ics, even while it's still a draft.
+    plannedFor: text("planned_for"),
+    publishedAt: text("published_at"),
+    recordedAt: text("recorded_at"),
+    // The `recordings` row this mixtape was PROMOTED from (RFC recording-primitive,
+    // Design B). Nullable: a mixtape born the old way (minted directly) has none;
+    // set only when `promote` links a coordinate-less recording to this mixtape.
+    // Plain text id, no declared FK — this schema declares none. ADDED beside the
+    // existing columns (SQLite ADD COLUMN can't be NOT NULL without a default;
+    // pre-existing rows carry NULL).
+    recordingId: text("recording_id"),
+    sequenceNumber: integer("sequence_number").unique(),
+    // When set (an ISO timestamp), the full set video has been uploaded to R2 at
+    // `<log-id>/set.mp4` and the mixtape `/log` page shows the branded scrubber
+    // player. Operator-flipped from /admin/mixtapes AFTER the upload; null until
+    // then. A flag, not a URL — the URL derives from the Log ID (mixtapeSetVideoUrl).
+    setVideoAt: text("set_video_at"),
+    // "distributing" is the minted-but-uploading state between draft and published
+    // (see MixtapeStatus in @fluncle/contracts). Plain TEXT, the enum only narrows
+    // the type.
+    status: text("status", { enum: ["draft", "distributing", "published"] })
+      .notNull()
+      .default("draft"),
+    title: text("title").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [index("mixtapes_recording_id_idx").on(table.recordingId)],
+);
 
 // Per-platform distribution state for a mixtape's audio/video, mirroring
 // `social_posts` for findings: one row per (mixtape, platform). This is the SINGLE
@@ -730,14 +741,53 @@ export const mixtapeClips = sqliteTable(
     // `mixtape_social_posts` (this schema declares no SQLite/libSQL FKs anywhere).
     mixtapeId: text("mixtape_id").notNull(),
     outMs: integer("out_ms").notNull(),
+    // The `recordings` row this clip was cut from (RFC recording-primitive,
+    // Design B). Nullable and ADDED BESIDE `mixtape_id` (never a rename): a clip
+    // cut from an un-promoted recording carries `recording_id` and NO
+    // `mixtape_id`; a legacy clip cut from a published mixtape carries
+    // `mixtape_id` and NO `recording_id`. The cut prefers `recording_id`, falling
+    // back to `mixtape_id → mixtape → logId`. `mixtape_id` is dropped only in a
+    // LATER migration, after prod is confirmed backfilled. Plain text id, no FK.
+    recordingId: text("recording_id"),
     status: text("status", { enum: ["pending", "done"] })
       .notNull()
       .default("pending"),
     updatedAt: text("updated_at").notNull(),
     xOffset: integer("x_offset").notNull(),
   },
-  (table) => [index("mixtape_clips_mixtape_id_idx").on(table.mixtapeId)],
+  (table) => [
+    index("mixtape_clips_mixtape_id_idx").on(table.mixtapeId),
+    index("mixtape_clips_recording_id_idx").on(table.recordingId),
+  ],
 );
+
+// A RECORDING — a captured DJ set that is NOT (yet) a published mixtape (RFC
+// recording-primitive, Design B). The clip pipeline (Fluncle Studio + the cut
+// engine) cuts clips from a recording's set video WITHOUT minting a scarce Log ID
+// coordinate; only `promote` (→ a full published mixtape) ever mints one. So a
+// recording is deliberately COORDINATE-LESS — no `logId`, no spine entry — and
+// OWNS its own R2 key (unlike a mixtape, whose set video derives from its logId).
+// Standalone recordings live at `recordings/<id>/set.mp4` in the existing
+// `fluncle-videos` bucket (unguessable, never listed — accept-obscurity, no
+// private bucket). Plain text id, no declared FK (this schema declares none).
+export const recordings = sqliteTable("recordings", {
+  createdAt: text("created_at").notNull(),
+  durationMs: integer("duration_ms"),
+  // `randomUUID()` at insert — the repo's universal id. A recording is
+  // coordinate-less, so there is no `logId` here.
+  id: text("id").primaryKey(),
+  // The R2 object key the recording OWNS (unlike a mixtape, which derives its key
+  // from its logId). Standalone recordings: `recordings/<id>/set.mp4` in the
+  // existing `fluncle-videos` bucket.
+  r2Key: text("r2_key").notNull(),
+  recordedAt: text("recorded_at"),
+  title: text("title").notNull(),
+  // Optional cues, a JSON array of `{ id, artists, title, startMs }` — `id` is a
+  // stable cue ref, `artists` a string[]. Feeds `resolveClipTracks` with zero
+  // change and seeds `mixtape_tracks` on promote with no re-splitting. Nullable.
+  tracklistJson: text("tracklist_json"),
+  updatedAt: text("updated_at").notNull(),
+});
 
 // A newsletter EDITION — the weekly dispatch from the mothership, now persisted so
 // every Friday letter has a permanent home.
