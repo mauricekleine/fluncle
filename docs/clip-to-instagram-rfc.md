@@ -26,7 +26,7 @@ The Studio already cuts vertical clips from a set's `set.mp4` on R2; they go now
 
 **The prior is negative, not 50/50.** 2026 sources are explicit that Meta's fingerprinting reliably catches **tempo-matched, segmented, pitch/speed-altered** catalog audio — a DJ blend is squarely in that transform class. Treat a pass as a _long shot_, and size all downstream IG investment as contingent on a surprising pass.
 
-**The spike (operator-run; provision an IG Business token FIRST):** cut one real ~30–60s blend clip (Unit 1 must land first so it's mic-free), then post the **same file two ways** — via Graph `media_publish` **and** in-app — and compare. Query `copyright_check_status` on the API container _before_ publishing and record whether it predicts the outcome. Measure **three** outcomes, not two: **survives / muted / blocked-with-strike**, and watch account standing. The **API arm is the main event** (it's the real architecture in the survive branch), not an optional extra — the point is to confirm there's no app-vs-API gap for baked audio.
+**The spike, cheapest-decisive-first (operator-run):** cut one real ~30–60s blend clip (Unit 1 must land first so it's mic-free), then **post it in-app** — no token, no App Review, zero setup — and watch ~24h for the **three** outcomes: **survives / muted / blocked-with-strike** (and account standing). This alone answers the kill question, because fingerprinting is **path-independent** (app ≈ API for baked audio), so the in-app verdict predicts the API verdict. **Only if it survives** is an IG Business token worth provisioning — _then_ post the **same file** via Graph `media_publish`, query `copyright_check_status` on the container before publishing, and confirm the automated path also survives (that's the pipeline you'd ship). Do not pay the token + App-Review cost to answer a question a free in-app post already settles; the API arm is the _second_ step, gated on the first.
 
 **Branches:** survives-clean → the automated, approval-gated `media_publish` pipeline (Units 4–5). Muted/blocked → **IG-for-set-cuts is dead**; pivot is a separate RFC (e.g. silent set-cut + in-app library audio, or IG deprioritized). **Do not build Unit 5 or the overlay's distribution wiring until this clears.**
 
@@ -95,7 +95,7 @@ If the spike passes, IG posting is **fully automated** — a `pushInstagramReel`
 
 ## Decisions needed BEFORE handoff
 
-1. **Spike outcome** (Maurice; token first) — does the blend survive `media_publish`? Gates all IG work. Expect a likely "caught."
+1. **Spike outcome** (Maurice) — post one blend clip **in-app first** (free); does it survive? Gates all IG work; expect a likely "caught." Provision the IG Business token + test `media_publish` only _after_ an in-app survival.
 2. **Account-safety gate** — operator-approval-before-publish (recommended given the negative prior + strike risk)?
 3. **IG auth path** — IG Login vs FB Login; pursue the `content_publish` App Review only on a spike pass.
 4. **Cue-marking** — add an incremental `set_mixtape_cues` path, or accept mark-all-then-save (the all-or-nothing PUT)?
