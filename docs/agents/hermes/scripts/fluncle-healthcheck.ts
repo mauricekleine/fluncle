@@ -71,6 +71,15 @@ const BEACON_URL = process.env.HEALTHCHECK_BEACON_URL ?? "";
 // "down" well inside the ~120s runner kill rather than starving the budget.
 const PROBE_TIMEOUT_MS = Number.parseInt(process.env.HEALTHCHECK_TIMEOUT_MS ?? "", 10) || 4000;
 
+// The snapshot POST is a Turso WRITE through the Worker, not a cheap probe GET, so it
+// needs a far longer budget than PROBE_TIMEOUT_MS — a cold Worker + DB write under box
+// load runs many seconds. Sharing the 4s probe timeout was aborting the vast majority
+// of posts, starving /status and flapping the rave-01 watchdog. It also retries a
+// transient abort before giving up (best-effort delivery of an already-computed
+// snapshot; a lost tick simply goes stale on /status). Both env-overridable.
+const POST_TIMEOUT_MS = Number.parseInt(process.env.HEALTHCHECK_POST_TIMEOUT_MS ?? "", 10) || 20000;
+const POST_ATTEMPTS = Number.parseInt(process.env.HEALTHCHECK_POST_ATTEMPTS ?? "", 10) || 3;
+
 // State (the transition memory) lives in the mounted, writable HOME.
 const STATE_DIR = join(HOME, ".healthcheck");
 const STATE_FILE = join(STATE_DIR, "state.json");
@@ -129,9 +138,13 @@ function msg(text: string): string | null {
 }
 
 /** A `fetch` with a hard AbortController timeout — resolves or throws, never hangs. */
-async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number = PROBE_TIMEOUT_MS,
+): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     return await fetch(url, { ...init, redirect: "follow", signal: controller.signal });
@@ -824,30 +837,48 @@ async function postSnapshot(at: string, checks: CheckWithTransition[]): Promise<
     })),
   });
 
-  try {
-    const response = await fetchWithTimeout(`${WORKER_URL}/api/admin/health`, {
-      body,
-      headers: {
-        Authorization: `Bearer ${FLUNCLE_API_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      method: "POST",
-    });
+  for (let attempt = 1; attempt <= POST_ATTEMPTS; attempt++) {
+    try {
+      const response = await fetchWithTimeout(
+        `${WORKER_URL}/api/admin/health`,
+        {
+          body,
+          headers: {
+            Authorization: `Bearer ${FLUNCLE_API_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        },
+        POST_TIMEOUT_MS,
+      );
 
-    if (!response.ok) {
+      if (response.ok) {
+        return true;
+      }
+
+      // A 4xx/5xx is a definitive answer, not a transient abort — don't retry it.
       log(`record_health POST returned HTTP ${response.status} (best-effort, ignored)`);
 
       return false;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+
+      if (attempt < POST_ATTEMPTS) {
+        log(`record_health POST attempt ${attempt}/${POST_ATTEMPTS} failed (${detail}); retrying`);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+
+        continue;
+      }
+
+      log(
+        `record_health POST failed after ${POST_ATTEMPTS} attempts (best-effort, ignored): ${detail}`,
+      );
+
+      return false;
     }
-
-    return true;
-  } catch (error) {
-    log(
-      `record_health POST failed (best-effort, ignored): ${error instanceof Error ? error.message : String(error)}`,
-    );
-
-    return false;
   }
+
+  return false;
 }
 
 // ---------------------------------------------------------------------------
