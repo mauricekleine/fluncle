@@ -246,3 +246,78 @@ export async function presignMultipartUpload(
 
   return { abortUrl, completeUrl, key, parts, uploadId };
 }
+
+// ── Server-side object copy + delete (the RFC recording-primitive promote path) ──
+//
+// No copy/delete existed in the repo before this — the video pipeline only ever
+// PRESIGNED uploads for the CLI. `promote` needs a SAME-bucket (`fluncle-videos`)
+// server-side copy (`recordings/<id>/set.mp4` → `<logId>/set.mp4`) plus a delete of
+// the old key; both run in the Worker with the R2 creds (no presign, no bytes through
+// the Worker — R2 does the copy internally from the `x-amz-copy-source` header).
+
+// R2/S3's single-request CopyObject ceiling. A ~2 GB set rendition is comfortably
+// under it; assert the source clears it before copying (a multi-part copy is not built).
+const COPY_OBJECT_MAX_BYTES = 5 * 1024 * 1024 * 1024;
+
+/**
+ * Server-side copy of one object to another key WITHIN `fluncle-videos` (SigV4 via the
+ * same aws4fetch client as the multipart create — no presign, no bytes through the
+ * Worker). Asserts the source is ≤ 5 GiB (the single-copy ceiling) via a HEAD first,
+ * then issues the `PUT` copy. R2 answers 200 for CopyObject; a `<Error>` in the body is
+ * a failure even on 200, so the body is parsed for `<CopyObjectResult>`.
+ */
+export async function copyObject(srcKey: string, destKey: string): Promise<void> {
+  const { client, endpoint } = await r2Client();
+  const source = `/${VIDEOS_BUCKET}/${encodeKey(srcKey)}`;
+  const srcUrl = `${endpoint}/${VIDEOS_BUCKET}/${encodeKey(srcKey)}`;
+  const destUrl = `${endpoint}/${VIDEOS_BUCKET}/${encodeKey(destKey)}`;
+
+  // Assert the source is within the single-copy ceiling before attempting the copy.
+  const head = await client.fetch(srcUrl, { method: "HEAD" });
+
+  if (!head.ok) {
+    throw new Error(
+      `R2 HEAD of copy source failed (${head.status} ${head.statusText}) for ${srcKey}`,
+    );
+  }
+
+  const contentLength = Number(head.headers.get("content-length") ?? "0");
+
+  if (contentLength > COPY_OBJECT_MAX_BYTES) {
+    throw new Error(
+      `R2 CopyObject source ${srcKey} is ${contentLength} bytes (> 5 GiB single-copy ceiling)`,
+    );
+  }
+
+  const copied = await client.fetch(destUrl, {
+    headers: { "x-amz-copy-source": source },
+    method: "PUT",
+  });
+
+  const body = (await copied.text().catch(() => "")).slice(0, 500);
+
+  if (!copied.ok || body.includes("<Error>") || !body.includes("<CopyObjectResult")) {
+    throw new Error(
+      `R2 CopyObject failed (${copied.status} ${copied.statusText})${body ? `: ${body}` : ""}`,
+    );
+  }
+}
+
+/**
+ * Server-side delete of one object in `fluncle-videos` (SigV4 via the same client). S3
+ * DELETE is idempotent — it answers 204 whether or not the key existed — so an
+ * already-gone key is not an error (the promote's best-effort old-key cleanup relies on
+ * this). Any other non-2xx is a genuine failure.
+ */
+export async function deleteObject(key: string): Promise<void> {
+  const { client, endpoint } = await r2Client();
+  const url = `${endpoint}/${VIDEOS_BUCKET}/${encodeKey(key)}`;
+  const deleted = await client.fetch(url, { method: "DELETE" });
+
+  if (!deleted.ok && deleted.status !== 404) {
+    const body = (await deleted.text().catch(() => "")).slice(0, 300);
+    throw new Error(
+      `R2 DeleteObject failed (${deleted.status} ${deleted.statusText})${body ? `: ${body}` : ""}`,
+    );
+  }
+}

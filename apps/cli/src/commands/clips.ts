@@ -218,9 +218,15 @@ export type ClipCutFilterOptions = {
    * the changing per-cue Track-ID; defaults to 0 (the un-cued fallback ignores it).
    */
   inMs?: number;
-  logId: string;
   /**
-   * The mixtape's cued members (each `Artist — Title` + `startMs`). When the set is cued,
+   * The promoted coordinate for the `fluncle://<logId>` line. OPTIONAL: a clip cut from an
+   * un-promoted RECORDING has no coordinate — the line is omitted and the title collapses
+   * onto the safe-area floor (RFC recording-primitive, clip-domain D4). A legacy mixtape
+   * clip always has one.
+   */
+  logId?: string;
+  /**
+   * The set's cued members (each `Artist — Title` + `startMs`). When the set is cued,
    * the primary line becomes the CHANGING track(s) playing in `[inMs, outMs)`. Empty /
    * omitted / un-cued ⇒ the static mixtape-title fallback (unchanged behavior).
    */
@@ -322,31 +328,42 @@ export function clipCutFilterComplex(options: ClipCutFilterOptions): string {
   const xOffset = Math.max(0, Math.round(options.xOffset));
   const crop = `crop=ih*9/16:ih:${xOffset}:0,scale=${CLIP_WIDTH}:${CLIP_HEIGHT}`;
 
-  // Stack from the safe-area floor: the coordinate's bottom sits CLIP_SAFE_BOTTOM above the
-  // frame bottom; the title sits above it by (the coordinate's line box + the gap).
+  // The coordinate line stamps ONLY when the set has a committed Log ID (a promoted
+  // recording or a legacy mixtape). An un-promoted recording has none — guard against a
+  // bare `fluncle://` and collapse the title onto the safe-area floor so it doesn't float
+  // above dead space (RFC recording-primitive, clip-domain D4).
+  const logId = options.logId?.trim();
+  const hasCoordinate = Boolean(logId);
+
+  // Stack from the safe-area floor: with a coordinate the title sits above it by (the
+  // coordinate's line box + the gap); without one the title collapses to the floor.
   const coordinateBox = Math.round(CLIP_COORDINATE_SIZE * 1.18); // approx line-box height
-  const titleBottomOffset = CLIP_SAFE_BOTTOM + coordinateBox + CLIP_LINE_GAP;
+  const titleBottomOffset = hasCoordinate
+    ? CLIP_SAFE_BOTTOM + coordinateBox + CLIP_LINE_GAP
+    : CLIP_SAFE_BOTTOM;
   const titleY = `h-${titleBottomOffset}-th`;
 
   // The PRIMARY line(s). Resolve the clip window → the track(s) playing in it. When the
   // set is cued, each resolved track is its own title line, time-gated to its sub-window
   // (so the on-screen Track-ID CHANGES across a blend). An un-cued set resolves to `[]`,
-  // and the primary line falls back to the static mixtape title (unchanged behavior).
+  // and the primary line falls back to the static mixtape/recording title.
   const titleLines = resolveTitleLines(options, titleY);
 
-  const coordinate: ClipLine = {
-    fontFile: options.oxaniumFontFile,
-    size: CLIP_COORDINATE_SIZE,
-    text: `fluncle://${options.logId}`,
-    x: CLIP_MARGIN_X,
-    y: `h-${CLIP_SAFE_BOTTOM}-th`,
-  };
+  const coordinate: ClipLine | undefined = hasCoordinate
+    ? {
+        fontFile: options.oxaniumFontFile,
+        size: CLIP_COORDINATE_SIZE,
+        text: `fluncle://${logId}`,
+        x: CLIP_MARGIN_X,
+        y: `h-${CLIP_SAFE_BOTTOM}-th`,
+      }
+    : undefined;
 
   // The halo source: every line in Deep-Field on a transparent layer, no border/shadow.
   // Each title line keeps its `enable` gate so its halo appears/disappears with its ink.
   const haloGlyphs = [
     ...titleLines.map((line) => brandDrawtext({ ...line, color: CLIP_HALO_COLOR })),
-    brandDrawtext({ ...coordinate, color: CLIP_HALO_COLOR }),
+    ...(coordinate ? [brandDrawtext({ ...coordinate, color: CLIP_HALO_COLOR })] : []),
   ].join(",");
 
   // The sharp ink on top: title cream, coordinate dim Stardust, a 1px symmetric core only.
@@ -354,7 +371,15 @@ export function clipCutFilterComplex(options: ClipCutFilterOptions): string {
     ...titleLines.map((line) =>
       brandDrawtext({ ...line, borderw: CLIP_SHARP_BORDERW, color: CLIP_TITLE_COLOR }),
     ),
-    brandDrawtext({ ...coordinate, borderw: CLIP_SHARP_BORDERW, color: CLIP_COORDINATE_COLOR }),
+    ...(coordinate
+      ? [
+          brandDrawtext({
+            ...coordinate,
+            borderw: CLIP_SHARP_BORDERW,
+            color: CLIP_COORDINATE_COLOR,
+          }),
+        ]
+      : []),
   ].join(",");
 
   return [
@@ -433,9 +458,13 @@ export function clipCutFfmpegArgs(options: ClipCutFfmpegOptions): string[] {
 
 /** List clips via the admin API (Unit G `list_clips`; agent token clears requireAdmin). */
 export async function clipsListCommand(
-  filter: { mixtapeId?: string; status?: string } = {},
+  filter: { mixtapeId?: string; recordingId?: string; status?: string } = {},
 ): Promise<ClipDTO[]> {
   const params = new URLSearchParams();
+
+  if (filter.recordingId) {
+    params.set("recordingId", filter.recordingId);
+  }
 
   if (filter.mixtapeId) {
     params.set("mixtapeId", filter.mixtapeId);
@@ -454,31 +483,60 @@ export async function clipsListCommand(
 export type ClipCutResult = {
   clipId: string;
   key: string;
-  logId: string;
+  // The promoted coordinate, if any. A clip from an un-promoted recording carries none.
+  logId?: string;
   sizeBytes: number;
   url: string;
 };
 
-/**
- * Cut one clip end to end: resolve its mixtape's staged set rendition → ffmpeg
- * (trim + crop + brand frame) → single-PUT upload to R2 (`presign_clip_upload`) →
- * `finalize_clip_cut` (mark done + server-side edge purge). Idempotent: re-cutting the
- * same clipId re-ships `<clipId>/footage.mp4` to the same key and the finalize purges
- * the stale renditions.
- */
-export async function clipCutCommand(
-  clipId: string,
-  onProgress: (message: string) => void = () => {},
-): Promise<ClipCutResult> {
-  const clips = await clipsListCommand();
-  const clip = clips.find((candidate) => candidate.id === clipId);
+// The set the cut reads from — resolved from EITHER the clip's recording (the RFC
+// recording-primitive path) or, for a legacy clip, its mixtape. `logId` is the promoted
+// coordinate (absent for an un-promoted recording → no `fluncle://` line on the clip).
+type ClipSource = {
+  logId?: string;
+  members: ClipTrackInput[];
+  setDurationMs: number;
+  setUrl: string;
+  title: string;
+};
 
-  if (!clip) {
-    throw new CliError("clip_not_found", `No clip with id ${clipId}`);
+// Resolve a clip's source set. A recording clip reads the recording's OWNED r2Key +
+// tracklist (the coordinate only if the recording is promoted); a legacy mixtape clip
+// keeps the old `mixtape → setVideoUrl(logId)` path.
+async function resolveClipSource(clip: ClipDTO): Promise<ClipSource> {
+  if (clip.recordingId) {
+    const { recordingGet } = await import("./recordings");
+    const recording = await recordingGet(clip.recordingId);
+
+    if (!recording.r2Key) {
+      throw new CliError(
+        "recording_not_staged",
+        `Recording ${clip.recordingId} has no staged set video`,
+      );
+    }
+
+    return {
+      // Present only when the recording has been promoted (its linked mixtape has a logId).
+      logId: recording.logId,
+      members: recording.tracklist.map((cue) => ({
+        artists: cue.artists,
+        startMs: cue.startMs,
+        title: cue.title,
+      })),
+      setDurationMs: recording.durationMs ?? 0,
+      setUrl: `${FOUND_BASE}/${recording.r2Key.split("/").map(encodeURIComponent).join("/")}`,
+      title: recording.title,
+    };
   }
 
-  // Resolve the mixtape (its committed Log ID + display title) — mixtapeGetCommand lists
-  // admin mixtapes (drafts included) and matches by id or log id.
+  // Legacy fallback: an un-backfilled clip still keyed by a published mixtape.
+  if (!clip.mixtapeId) {
+    throw new CliError(
+      "clip_unlinked",
+      `Clip ${clip.id} is linked to neither a recording nor a mixtape`,
+    );
+  }
+
   const { mixtapeGetCommand } = await import("./mixtapes");
   const mixtape = await mixtapeGetCommand(clip.mixtapeId);
 
@@ -493,26 +551,57 @@ export async function clipCutCommand(
     );
   }
 
+  return {
+    logId: mixtape.logId,
+    members: mixtape.members,
+    setDurationMs: mixtape.durationMs ?? 0,
+    setUrl: setVideoUrl(mixtape.logId),
+    title: mixtape.title,
+  };
+}
+
+/**
+ * Cut one clip end to end: resolve its recording (or, for a legacy clip, its mixtape)
+ * staged set rendition → ffmpeg (trim + crop + brand frame) → single-PUT upload to R2
+ * (`presign_clip_upload`) → `finalize_clip_cut` (mark done + server-side edge purge).
+ * Idempotent: re-cutting the same clipId re-ships `<clipId>/footage.mp4` to the same key
+ * and the finalize purges the stale renditions.
+ */
+export async function clipCutCommand(
+  clipId: string,
+  onProgress: (message: string) => void = () => {},
+): Promise<ClipCutResult> {
+  const clips = await clipsListCommand();
+  const clip = clips.find((candidate) => candidate.id === clipId);
+
+  if (!clip) {
+    throw new CliError("clip_not_found", `No clip with id ${clipId}`);
+  }
+
+  const source = await resolveClipSource(clip);
+
   await assertFfmpeg();
 
-  const setUrl = setVideoUrl(mixtape.logId);
   const outputPath = join(tmpdir(), `fluncle-clip-${randomUUID()}.mp4`);
 
   try {
-    onProgress(`Clip ${clipId}: cutting [${clip.inMs}–${clip.outMs}ms] from ${mixtape.logId}…`);
+    onProgress(
+      `Clip ${clipId}: cutting [${clip.inMs}–${clip.outMs}ms]${source.logId ? ` from ${source.logId}` : ""}…`,
+    );
     await runClipCut({
       inMs: clip.inMs,
-      logId: mixtape.logId,
+      // Absent for an un-promoted recording → the cut omits the `fluncle://` coordinate.
+      logId: source.logId,
       // The cued members drive the changing on-screen Track-ID; an un-cued set (no
       // startMs on any member) resolves to [] and the cut falls back to the title.
-      members: mixtape.members,
+      members: source.members,
       outMs: clip.outMs,
       outputPath,
       oxaniumFontFile: resolveClipFontFile(),
       sansFontFile: resolveClipSansFontFile(),
-      setDurationMs: mixtape.durationMs ?? 0,
-      setUrl,
-      title: mixtape.title,
+      setDurationMs: source.setDurationMs,
+      setUrl: source.setUrl,
+      title: source.title,
       xOffset: clip.xOffset,
     });
 
@@ -544,7 +633,7 @@ export async function clipCutCommand(
     return {
       clipId,
       key: presign.key,
-      logId: mixtape.logId,
+      logId: source.logId,
       sizeBytes,
       url: `${FOUND_BASE}/${presign.key}`,
     };

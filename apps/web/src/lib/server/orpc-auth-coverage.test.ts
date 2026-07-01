@@ -156,15 +156,20 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   capture_post_urls: "admin",
   collect_private_galaxy_log: "private-session",
   context_track: "admin",
-  // The Fluncle Studio clip writes — operator
-  // tier: the agent never cuts/mints/prunes clips, so an agent token 403s.
+  // The Fluncle Studio clip writes — operator tier: the agent never cuts/mints/prunes
+  // clips, so an agent token 403s. `create_clip` is now recording-scoped (RFC
+  // recording-primitive, Design B).
   create_clip: "operator",
   create_edition: "admin",
   create_mixtape: "operator",
+  // The RFC recording-primitive writes — operator tier: create/update/delete a captured
+  // set + `promote` (mints a coordinate). The agent token 403s.
+  create_recording: "operator",
   delete_clip: "operator",
   delete_edition: "operator",
   delete_mixtape: "operator",
   delete_private_account: "private-session",
+  delete_recording: "operator",
   draft_track_social: "admin",
   exchange_lastfm_session: "operator",
   export_private_account_data: "private-session",
@@ -181,6 +186,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   get_private_account_export: "private-session",
   get_private_galaxy_progress: "private-session",
   get_private_mutation_token: "private-session",
+  // The recording reads — admin tier (agent-allowed): the box's clip-cut cron resolves a
+  // clip's recording (r2Key + tracklist + promoted logId) via `get_recording`.
+  get_recording: "admin",
   get_submission: "admin",
   initiate_mixtape_youtube: "operator",
   // The clip library/editor read — admin tier (agent-allowed), the list_*_admin
@@ -190,6 +198,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   list_mixtapes_admin: "admin",
   list_private_saved_findings: "private-session",
   list_private_submissions: "private-session",
+  list_recordings: "admin",
   list_submissions: "admin",
   list_track_social: "admin",
   list_tracks_admin: "admin",
@@ -205,6 +214,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // signs its OWN clip output (`<clipId>/footage.mp4`) with the agent token. Distinct
   // from presign_set_video_upload below, which is OPERATOR-driven at distribute time.
   presign_clip_upload: "admin",
+  // The recording set-video staging presign — operator tier (adminAuth + operatorGuard):
+  // the `presign_set_video_upload` clone targeting the recording's owned key. Operator-
+  // driven, like the mixtape set-video presign.
+  presign_recording_upload: "operator",
   // The set-video staging presign (Fluncle Studio Unit A) — operator tier (adminAuth
   // + operatorGuard): it opens an upload that flips a public mixtape surface, so the
   // agent token 403s (unlike the agent-tier track/clip presigns).
@@ -212,6 +225,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The autonomous render box signs its own R2 upload URLs — agent tier (adminAuth
   // only, no operatorGuard); the box's agent token publishes its renders.
   presign_track_video_uploads: "admin",
+  // Promote a recording → a published mixtape — operator tier: it mints a scarce
+  // coordinate, so the agent token 403s.
+  promote_recording: "operator",
   publish_mixtape: "operator",
   publish_mixtape_youtube: "operator",
   publish_track: "operator",
@@ -251,6 +267,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // published set's surface, so the agent token 403s (like set_mixtape_cues).
   update_mixtape_cue: "operator",
   update_private_profile: "private-session",
+  update_recording: "operator",
   update_track: "admin",
   update_track_social: "operator",
 };

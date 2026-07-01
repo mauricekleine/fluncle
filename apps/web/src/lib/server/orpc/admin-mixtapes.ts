@@ -646,11 +646,15 @@ export function adminMixtapesHandlers(os: Implementer) {
 
   // ── Fluncle Studio: clips + cue backfill ──
 
-  // GET /admin/clips — admin tier (agent-allowed read). Optional ?mixtapeId/?status.
+  // GET /admin/clips — admin tier (agent-allowed read). Optional ?recordingId/?mixtapeId/?status.
   const listClipsHandler = os.list_clips.use(adminAuth).handler(async ({ input }) => {
     try {
       return {
-        clips: await listClips({ mixtapeId: input.mixtapeId, status: input.status }),
+        clips: await listClips({
+          mixtapeId: input.mixtapeId,
+          recordingId: input.recordingId,
+          status: input.status,
+        }),
         ok: true as const,
       };
     } catch (error) {
@@ -658,15 +662,16 @@ export function adminMixtapesHandlers(os: Implementer) {
     }
   });
 
-  // POST /admin/mixtapes/{mixtapeId}/clips — operator tier. LOOSE body → createClip.
+  // POST /admin/recordings/{recordingId}/clips — operator tier. LOOSE body → createClip
+  // (recording-scoped under the RFC recording-primitive; the legacy mixtape path is gone).
   const createClipHandler = os.create_clip
     .use(adminAuth)
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        const { mixtapeId, ...body } = input;
+        const { recordingId, ...body } = input;
 
-        return { clip: await createClip(mixtapeId, body), ok: true as const };
+        return { clip: await createClip(recordingId, body), ok: true as const };
       } catch (error) {
         throw apiFault(error);
       }

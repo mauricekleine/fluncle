@@ -1,9 +1,11 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   MULTIPART_PRESIGN_TTL_SECONDS,
   PRESIGN_TTL_SECONDS,
   VIDEOS_BUCKET,
+  copyObject,
+  deleteObject,
   parseUploadId,
   presignMultipartAction,
   presignMultipartParts,
@@ -134,6 +136,108 @@ describe("presignMultipartParts", () => {
     await expect(presignMultipartParts(VIDEOS_BUCKET, KEY, UPLOAD_ID, 10_001)).rejects.toThrow(
       /partCount/,
     );
+  });
+});
+
+// The server-side copy + delete (the promote path). aws4fetch signs locally then calls
+// the global `fetch`, so spying on it captures the exact signed Request without a live R2.
+describe("copyObject / deleteObject request shapes", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("HEADs the source, then PUTs a same-bucket copy with x-amz-copy-source", async () => {
+    const requests: Request[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const request = input as Request;
+      requests.push(request);
+
+      if (request.method === "HEAD") {
+        return new Response(null, { headers: { "content-length": "2000000000" }, status: 200 });
+      }
+
+      return new Response(
+        `<?xml version="1.0"?><CopyObjectResult><ETag>"abc"</ETag></CopyObjectResult>`,
+        { status: 200 },
+      );
+    });
+
+    await copyObject("recordings/rec-1/set.mp4", "020.F.1A/set.mp4");
+
+    expect(requests).toHaveLength(2);
+    const [head, put] = requests;
+
+    if (!head || !put) {
+      throw new Error("expected a HEAD then a PUT");
+    }
+
+    // First: a HEAD of the source (the ≤ 5 GiB ceiling check).
+    expect(head.method).toBe("HEAD");
+    expect(new URL(head.url).pathname).toBe(`/${VIDEOS_BUCKET}/recordings/rec-1/set.mp4`);
+
+    // Then: a PUT of the DEST carrying the copy-source header pointing at the SAME bucket.
+    expect(put.method).toBe("PUT");
+    expect(new URL(put.url).pathname).toBe(`/${VIDEOS_BUCKET}/020.F.1A/set.mp4`);
+    expect(put.headers.get("x-amz-copy-source")).toBe(`/${VIDEOS_BUCKET}/recordings/rec-1/set.mp4`);
+  });
+
+  it("treats a <Error> body as failure even on a 200", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const request = input as Request;
+
+      if (request.method === "HEAD") {
+        return new Response(null, { headers: { "content-length": "1000" }, status: 200 });
+      }
+
+      return new Response(`<Error><Code>AccessDenied</Code></Error>`, { status: 200 });
+    });
+
+    await expect(copyObject("recordings/rec-1/set.mp4", "020.F.1A/set.mp4")).rejects.toThrow(
+      /CopyObject/,
+    );
+  });
+
+  it("refuses a source over the 5 GiB single-copy ceiling (no PUT issued)", async () => {
+    let puts = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const request = input as Request;
+
+      if (request.method === "HEAD") {
+        // 6 GiB — over the ceiling.
+        return new Response(null, {
+          headers: { "content-length": String(6 * 1024 * 1024 * 1024) },
+          status: 200,
+        });
+      }
+
+      puts += 1;
+      return new Response("<CopyObjectResult/>", { status: 200 });
+    });
+
+    await expect(copyObject("recordings/rec-1/set.mp4", "020.F.1A/set.mp4")).rejects.toThrow(
+      /5 GiB/,
+    );
+    expect(puts).toBe(0);
+  });
+
+  it("DELETEs a key and tolerates an already-gone (404) object", async () => {
+    const requests: Request[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      requests.push(input as Request);
+      return new Response(null, { status: 404 });
+    });
+
+    // A 404 is not an error (S3 DELETE is idempotent) — this must not throw.
+    await expect(deleteObject("recordings/rec-1/set.mp4")).resolves.toBeUndefined();
+
+    const [del] = requests;
+
+    if (!del) {
+      throw new Error("expected a DELETE");
+    }
+
+    expect(del.method).toBe("DELETE");
+    expect(new URL(del.url).pathname).toBe(`/${VIDEOS_BUCKET}/recordings/rec-1/set.mp4`);
   });
 });
 

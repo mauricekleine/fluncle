@@ -340,25 +340,33 @@ export const listClips = oc
     summary: "List clips (optionally filtered by mixtape and/or status)",
     tags: ["Admin"],
   })
-  .input(z.object({ mixtapeId: z.string().optional(), status: z.string().optional() }))
+  .input(
+    z.object({
+      mixtapeId: z.string().optional(),
+      recordingId: z.string().optional(),
+      status: z.string().optional(),
+    }),
+  )
   .output(z.object({ clips: z.array(ClipDTOSchema), ok: z.literal(true) }));
 
 /**
- * `create_clip` → `POST /admin/mixtapes/{mixtapeId}/clips` (operationId `createClip`).
+ * `create_clip` → `POST /admin/recordings/{recordingId}/clips` (operationId
+ * `createClip`).
  *
- * Operator tier (`requireOperator`). Mint one clip row for a mixtape (the editor
- * queues a cut). LOOSE body — `createClip` validates the cut window + framing.
- * Preserves `{ clip, ok }`.
+ * Operator tier (`requireOperator`). Mint one clip row for a RECORDING (the RFC
+ * recording-primitive, Design B: all new clips are recording-scoped; the legacy
+ * mixtape-scoped create path is retired). LOOSE body — `createClip` validates the cut
+ * window + framing. Preserves `{ clip, ok }`.
  */
 export const createClip = oc
   .route({
     method: "POST",
     operationId: "createClip",
-    path: "/admin/mixtapes/{mixtapeId}/clips",
-    summary: "Create a clip for a mixtape (queues a cut)",
+    path: "/admin/recordings/{recordingId}/clips",
+    summary: "Create a clip for a recording (queues a cut)",
     tags: ["Admin"],
   })
-  .input(z.looseObject({ mixtapeId: z.string() }))
+  .input(z.looseObject({ recordingId: z.string() }))
   .output(ClipEnvelope);
 
 /**
