@@ -267,6 +267,30 @@ export const publishMixtapeYoutube = oc
   .input(z.object({ mixtapeId: z.string() }))
   .output(z.object({ ok: z.literal(true), url: z.string() }));
 
+/**
+ * `resync_mixtape_youtube` → `POST /admin/mixtapes/{mixtapeId}/youtube/resync`
+ * (operationId `resyncMixtapeYoutube`).
+ *
+ * Operator tier (live `requireOperator`). Re-derive the YouTube description
+ * (prose + `fluncle://<logId>` + the chapter block) from the mixtape's CURRENT
+ * cues and push it to the already-uploaded video via `videos.update` — no
+ * re-upload. Server-side (the Worker holds the refresh token), like
+ * `publish_mixtape_youtube`. It EDITS live published content, so the agent token
+ * 403s. Gates on the youtube distribution row (`youtube_not_distributed`/409) +
+ * the committed Log ID (`mixtape_no_log_id`/409) + YouTube errors (502).
+ * Preserves a `{ ok, url, videoId }` envelope.
+ */
+export const resyncMixtapeYoutube = oc
+  .route({
+    method: "POST",
+    operationId: "resyncMixtapeYoutube",
+    path: "/admin/mixtapes/{mixtapeId}/youtube/resync",
+    summary: "Re-sync a mixtape's live YouTube description + chapters from its current cues",
+    tags: ["Admin"],
+  })
+  .input(z.object({ mixtapeId: z.string() }))
+  .output(z.object({ ok: z.literal(true), url: z.string(), videoId: z.string() }));
+
 // ── Fluncle Studio: clips + cue backfill ──────────────────────────────────────
 // A clip is a lightweight 9:16 derivative of a mixtape's set video — many per set.
 // LOOSE/passthrough bodies, like the rest of the domain: the server helpers
@@ -511,6 +535,7 @@ export const adminMixtapesContract = {
   presign_set_video_upload: presignSetVideoUpload,
   publish_mixtape: publishMixtape,
   publish_mixtape_youtube: publishMixtapeYoutube,
+  resync_mixtape_youtube: resyncMixtapeYoutube,
   set_mixtape_cues: setMixtapeCues,
   set_mixtape_members: setMixtapeMembers,
   update_clip: updateClip,

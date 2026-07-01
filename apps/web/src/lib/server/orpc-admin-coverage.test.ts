@@ -101,6 +101,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/mixtapes/{mixtapeId}/youtube/finalize": "finalize_mixtape_youtube",
   "POST /admin/mixtapes/{mixtapeId}/youtube/initiate": "initiate_mixtape_youtube",
   "POST /admin/mixtapes/{mixtapeId}/youtube/publish": "publish_mixtape_youtube",
+  // The YouTube metadata re-sync — contract-only oRPC (no TanStack route file; oRPC
+  // owns the path directly, like publish_mixtape_youtube). Operator tier: re-derives
+  // the live video's description + chapters from the current cues via videos.update.
+  "POST /admin/mixtapes/{mixtapeId}/youtube/resync": "resync_mixtape_youtube",
   "POST /admin/newsletter/editions": "create_edition",
   "POST /admin/newsletter/editions/{id}/send": "send_edition",
   // The push receipts sweep is a contract-only admin op (no TanStack route file —
