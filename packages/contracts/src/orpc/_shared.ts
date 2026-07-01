@@ -123,6 +123,11 @@ export const MixtapeDTOSchema = z
     plannedFor: z.string().optional(),
     publishedAt: z.string().optional(),
     recordedAt: z.string().optional(),
+    // The coordinate a DRAFT will mint into — reserved from its live session (or
+    // recorded date) so the operator can name their Beatport playlist / USB folders
+    // with it before recording. Present only on a draft with a date basis; a minted
+    // mixtape carries the real `logId` instead. Kept in lock-step with the mint.
+    reservedLogId: z.string().optional(),
     sequenceNumber: z.number().optional(),
     // Set (ISO) once the full set video is uploaded to R2 — the `/log` page then
     // shows the branded scrubber player. Absent ⇒ no set video yet.

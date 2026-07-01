@@ -44,6 +44,8 @@ For the Rekordbox tracklist step, also cache the database key once (see that ste
 
 A draft is **just the operator-authored subset**: a recorded date (defaults to today), an optional dream note, and the tracklist. Duration is derived from the upload at distribute time, not entered. Build the draft in `/admin/mixtapes` (or via `fluncle admin mixtapes create`).
 
+**Reserve the coordinate before you record.** The draft editor shows a **reserved Log ID** — the `XXX.F.ZZ` coordinate the mixtape will mint into — so you can name your Beatport playlist, USB folders, and Rekordbox playlist with it up front. It is a pure function of the sector day (from the **live session date**, which wins as the committed record day; else the recorded date) and the next mint sequence, so it is day-granular and **moves if you change the session date**; set a live session to reserve it (with no date basis the editor prompts for one rather than showing a drifting today-based guess). The publish mint uses the identical resolution, so the minted ID equals the reserved one — copy it from the read-only field (or the dimmed coordinate on the draft row) and it locks in on publish.
+
 **Get the tracklist from Rekordbox.** Rekordbox logs the set in load order, which is the reliable signal — track identity and order. Run:
 
 ```bash

@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { mixtapeLogId, predictedMixtapeLogId } from "../mixtape-log-id";
 import { type MixtapeDTO, type MixtapeStatus, rowToMixtape } from "../mixtapes";
 import { getDb, typedRow, typedRows } from "./db";
 import { purgeLogCache } from "./edge-cache";
-import { mixtapeLogId } from "./mixtape-log-id";
 import { ApiError } from "./spotify";
 import { getTrackByIdOrLogId, getTracksForMixtape } from "./tracks";
 
@@ -648,7 +648,12 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
     throw new ApiError("mixtape_cap_reached", "The mixtape spine is full (54)", 409);
   }
 
-  const recordedAt = draft.recordedAt ?? new Date().toISOString();
+  // The coordinate's sector day. The live session (`plannedFor`) wins — it's the
+  // committed record day — then the recorded date, then today. This is the SAME
+  // resolution predictedMixtapeLogId uses to RESERVE the coordinate on the draft,
+  // so the minted ID equals the one the admin copied before recording. (Forward
+  // only: already-minted mixtapes keep their frozen coordinate.)
+  const recordedAt = draft.plannedFor ?? draft.recordedAt ?? new Date().toISOString();
   const sectorPrefix = mixtapeLogId(recordedAt, 1).slice(0, -2);
   const now = new Date().toISOString();
   const db = await getDb();
@@ -812,9 +817,24 @@ export async function listMixtapes({
 
   const rows = typedRows<MixtapeRow>(result.rows);
 
+  // Reserve the coordinate a still-draft mixtape will mint into, so the admin can
+  // copy it before recording. Only a draft needs it (a minted mixtape already
+  // carries its logId); compute the next mint sequence once, then predict per draft
+  // from its dates. Skipped entirely when there's no draft in the page.
+  const hasDraft = rows.some((row) => row.status === "draft" && !row.log_id);
+  const nextSequence = hasDraft ? await nextMixtapeSequence() : undefined;
+  const reservedFor = (row: MixtapeRow): string | undefined =>
+    row.status === "draft" && nextSequence !== undefined
+      ? predictedMixtapeLogId({
+          nextSequence,
+          plannedFor: row.planned_for,
+          recordedAt: row.recorded_at,
+        })
+      : undefined;
+
   return hydrateMembers
-    ? Promise.all(rows.map(hydrateMixtape))
-    : rows.map((row) => rowToMixtape(row));
+    ? Promise.all(rows.map((row) => hydrateMixtape(row, reservedFor(row))))
+    : rows.map((row) => rowToMixtape(row, [], reservedFor(row)));
 }
 
 /**
@@ -840,7 +860,7 @@ export async function listCalendarMixtapes(nowIso: string): Promise<MixtapeDTO[]
 
   const rows = typedRows<MixtapeRow>(result.rows);
 
-  return Promise.all(rows.map(hydrateMixtape));
+  return Promise.all(rows.map((row) => hydrateMixtape(row)));
 }
 
 const MIXTAPE_SELECT = `select
@@ -870,8 +890,8 @@ const MIXTAPE_SELECT = `select
   (select count(*) from mixtape_tracks mt where mt.mixtape_id = m.id) as member_count
   from mixtapes m`;
 
-async function hydrateMixtape(row: MixtapeRow): Promise<MixtapeDTO> {
-  return rowToMixtape(row, await getTracksForMixtape(row.id));
+async function hydrateMixtape(row: MixtapeRow, reservedLogId?: string): Promise<MixtapeDTO> {
+  return rowToMixtape(row, await getTracksForMixtape(row.id), reservedLogId);
 }
 
 async function assertDraftMixtape(id: string): Promise<void> {

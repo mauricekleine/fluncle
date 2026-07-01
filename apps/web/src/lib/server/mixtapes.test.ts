@@ -32,13 +32,20 @@ const execute = vi.hoisted(() =>
 );
 
 const batch = vi.hoisted(() =>
-  vi.fn(async () => {
+  vi.fn(async (queries: Array<{ args: unknown[] }>) => {
     // The mint batch stamps the minted coordinate onto the row (status →
     // 'distributing', NOT 'published' — the first platform link publishes it later).
+    // Mirror the real SQL: the sector PREFIX is the query's first arg, the sequence
+    // comes from the cap-checked next_sequence, and the tail is 1A..9F — so the
+    // minted coordinate reflects the resolved sector date (plannedFor-wins) instead
+    // of a hard-coded value.
+    const [sectorPrefix] = (queries[0]?.args ?? []) as [string];
+    const sequence = state.nextSequence;
+    const logId = `${sectorPrefix}${Math.floor((sequence - 1) / 6) + 1}${"ABCDEF"[(sequence - 1) % 6]}`;
     state.row.status = "distributing";
-    state.row.log_id = "020.F.1A";
-    state.row.sequence_number = 1;
-    return [{ rows: [{ log_id: "020.F.1A", sequence_number: 1 }] }];
+    state.row.log_id = logId;
+    state.row.sequence_number = sequence;
+    return [{ rows: [{ log_id: logId, sequence_number: sequence }] }];
   }),
 );
 
@@ -86,6 +93,19 @@ describe("publishMixtape — mint into distributing", () => {
 
     expect(minted.status).toBe("distributing");
     expect(minted.logId).toBe("020.F.1A");
+  });
+
+  it("mints off the live session — plannedFor wins over recordedAt (the committed record day)", async () => {
+    seedDraft({
+      planned_for: "2026-07-01T20:00:00.000Z",
+      recorded_at: "2026-06-18T20:00:00.000Z",
+    });
+
+    const minted = await publishMixtape("draft-id");
+
+    // The sector is 2026-07-01 (the live session), NOT 2026-06-18 — the same
+    // resolution predictedMixtapeLogId reserves, so the minted ID equals the shown one.
+    expect(minted.logId).toBe("032.F.1A");
   });
 
   it("canonicalizes the stub title and derives the cover from the minted Log ID", async () => {
