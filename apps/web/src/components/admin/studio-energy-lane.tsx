@@ -82,9 +82,13 @@ function areaPath(curve: number[]): string {
 
 type Clip = { id: string; inMs: number; outMs: number };
 
+/** A member's cue pinned on the lane: its start offset (ms) + whether it's out of order. */
+type CueTick = { outOfOrder: boolean; startMs: number; trackId: string };
+
 export function StudioEnergyLane({
   band,
   clips,
+  cues,
   currentMs,
   durationMs,
   envelope,
@@ -95,6 +99,8 @@ export function StudioEnergyLane({
   /** The active hand-pick band as two edge fractions, or null when none is pending. */
   band: { aFraction: number; bFraction: number } | null;
   clips: Clip[];
+  /** The member cues to pin (start_ms). Empty when nothing is marked yet. */
+  cues?: CueTick[];
   /** The playhead, from the one clock (ms). */
   currentMs: number;
   durationMs: number;
@@ -284,6 +290,18 @@ export function StudioEnergyLane({
             style={{ left: `${bandRegion.left * 100}%`, width: `${bandRegion.width * 100}%` }}
           />
         ) : null}
+
+        {/* Cue pins — one per marked member (start_ms): a thin Stardust tick with a
+            Starlight-Cream notch, so the operator sees each cue against the drops. An
+            out-of-order cue reddens (the same warning the rail shows). */}
+        {(cues ?? []).map((cue) => (
+          <span
+            className="studio-cue-tick"
+            data-out-of-order={cue.outOfOrder ? "true" : undefined}
+            key={cue.trackId}
+            style={{ left: `${msToFraction(cue.startMs, durationMs) * 100}%` }}
+          />
+        ))}
 
         {/* The playhead — Starlight Cream (clock-tracked content motion, never gated). */}
         <span className="studio-playhead" style={{ left: `${playheadFraction * 100}%` }} />

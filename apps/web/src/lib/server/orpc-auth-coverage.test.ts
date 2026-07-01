@@ -240,6 +240,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   update_clip: "operator",
   update_edition: "admin",
   update_mixtape: "operator",
+  // The interactive single-cue write (Studio cue rail) — operator tier: it re-times a
+  // published set's surface, so the agent token 403s (like set_mixtape_cues).
+  update_mixtape_cue: "operator",
   update_private_profile: "private-session",
   update_track: "admin",
   update_track_social: "operator",

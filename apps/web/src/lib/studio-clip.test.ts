@@ -7,10 +7,12 @@ import {
   cropRectToXOffset,
   cropWidthFraction,
   cropWindowWidthPx,
+  cueProgress,
   defaultBandAt,
   fractionToMs,
   maxXOffset,
   msToFraction,
+  snapCueToPeak,
   suggestionToRegion,
   xOffsetToLeftFraction,
 } from "./studio-clip";
@@ -141,5 +143,83 @@ describe("timeline geometry", () => {
     expect(nearEnd.outMs).toBe(TOTAL);
     expect(nearEnd.outMs - nearEnd.inMs).toBe(15_000);
     expect(nearEnd.inMs).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("cue snapping", () => {
+  const peaks = [{ atMs: 60_000 }, { atMs: 181_200 }, { atMs: 360_000 }];
+
+  it("snaps a mark to the nearest drop within the window", () => {
+    // 500ms shy of a drop → snapped onto it.
+    expect(snapCueToPeak(180_700, peaks)).toEqual({ ms: 181_200, snapped: true });
+    // Past a drop, still inside the window → snapped back onto it.
+    expect(snapCueToPeak(361_500, peaks)).toEqual({ ms: 360_000, snapped: true });
+  });
+
+  it("leaves a mark raw when no drop is inside the window", () => {
+    expect(snapCueToPeak(120_000, peaks)).toEqual({ ms: 120_000, snapped: false });
+    // No peaks at all (no envelope) → always raw.
+    expect(snapCueToPeak(45_678.9, [])).toEqual({ ms: 45_679, snapped: false });
+  });
+
+  it("picks the closest of two nearby drops and floors at zero", () => {
+    expect(snapCueToPeak(-500, [{ atMs: 200 }])).toEqual({ ms: 200, snapped: true });
+    expect(snapCueToPeak(0, [{ atMs: 900 }, { atMs: 1_400 }])).toEqual({ ms: 900, snapped: true });
+  });
+});
+
+describe("cue progress", () => {
+  it("reports an incomplete set: some marked, first at 0, in order", () => {
+    const progress = cueProgress([
+      { startMs: 0, trackId: "t1" },
+      { startMs: 180_000, trackId: "t2" },
+      { trackId: "t3" },
+    ]);
+    expect(progress).toEqual({
+      complete: false,
+      firstNotZero: false,
+      marked: 2,
+      outOfOrderTrackIds: [],
+      total: 3,
+    });
+  });
+
+  it("marks a set complete only when every cue is set, first at 0, strictly increasing", () => {
+    const progress = cueProgress([
+      { startMs: 0, trackId: "t1" },
+      { startMs: 180_000, trackId: "t2" },
+      { startMs: 360_000, trackId: "t3" },
+    ]);
+    expect(progress.complete).toBe(true);
+    expect(progress.marked).toBe(3);
+  });
+
+  it("flags an out-of-order cue (not strictly after the previous cued track)", () => {
+    const progress = cueProgress([
+      { startMs: 0, trackId: "t1" },
+      { startMs: 200_000, trackId: "t2" },
+      { startMs: 150_000, trackId: "t3" }, // earlier than t2 → out of order
+    ]);
+    expect(progress.complete).toBe(false);
+    expect(progress.outOfOrderTrackIds).toEqual(["t3"]);
+  });
+
+  it("flags a first cue that isn't at 0:00", () => {
+    const progress = cueProgress([
+      { startMs: 5_000, trackId: "t1" },
+      { startMs: 180_000, trackId: "t2" },
+    ]);
+    expect(progress.complete).toBe(false);
+    expect(progress.firstNotZero).toBe(true);
+  });
+
+  it("treats an empty tracklist as not complete", () => {
+    expect(cueProgress([])).toEqual({
+      complete: false,
+      firstNotZero: false,
+      marked: 0,
+      outOfOrderTrackIds: [],
+      total: 0,
+    });
   });
 });

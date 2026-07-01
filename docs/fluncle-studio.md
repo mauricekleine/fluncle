@@ -48,6 +48,36 @@ The bytes never traverse the Cloudflare zone; only the tiny presign/complete con
 
 ---
 
+# Cue marking — the cue rail (the editor)
+
+The operator marks each track's start time in the set by scrubbing the staged set video and pinning it — the cue rail in `/admin/studio/$logId`. Those cues (`mixtape_tracks.start_ms`) feed the YouTube description chapters + Mixcloud sections (`apps/web/src/lib/mixtape-chapters.ts`), the `/log` per-track times, and (later) clip auto-crediting. This is the interactive counterpart to the CLI cue-sheet backfill: it captures cues where they can only be captured — against the final recording — since Rekordbox load times precede the audible mix-in by a variable lead and can't supply them.
+
+## Two cue write-paths (deliberately distinct)
+
+- **`update_mixtape_cue` — the interactive single-cue write** (`PUT /admin/mixtapes/{mixtapeId}/cues/{ref}`, operator tier). Upserts ONE member's `start_ms` (or clears it with `startMs: null`), keyed by track `ref`. NO coverage/order constraint — the operator marks tracks one at a time, out of order, mid-session; a transient partial or non-monotonic state is allowed because the downstream tolerates it. Published-safe (a minted `distributing`/`published` set); it rejects only a draft (`setMixtapeCue` in `apps/web/src/lib/server/mixtapes.ts`). This is the cue rail's write.
+- **`set_mixtape_cues` — the all-or-nothing cue-sheet backfill** (`PUT /admin/mixtapes/{mixtapeId}/cues`, operator tier). Requires exactly one cue per member, start-at-0, strictly monotonic — the CLI full-backfill path (`setMixtapeCues`). Unchanged; NOT the interactive path.
+
+The singular verb (`update`) + the `{ref}` member segment keep the two REST-symmetric yet unambiguous (a near-collision with the plural `set_mixtape_cues` the naming convention flagged; see `docs/naming-conventions.md`).
+
+## The rail (the marking flow)
+
+`StudioCueRail` (`apps/web/src/components/admin/studio-cue-rail.tsx`) renders the ordered tracklist under the energy lane — each row shows `Artist — Title` and its cue time (`m:ss`, Oxanium) or "unmarked". The flow, built to make marking a set a pleasure:
+
+- **Mark at the playhead.** Scrub/play the set (the shared `<Video>` clock gives the playhead ms); a row's "Mark here" pins that member's `startMs = playhead`. Each mark **saves instantly** (`update_mixtape_cue`, optimistic `setQueryData` + focus-refetch, the admin react-query convention). A re-mark overwrites; the ✕ clears.
+- **Drop snapping (an assist).** A mark **snaps to the nearest `StudioPeak` drop** within a small window (`snapCueToPeak`, `CUE_SNAP_WINDOW_MS`) — the drop ≈ the audible mix-in. A cog toggle turns snapping off to mark the **exact** playhead.
+- **Feedback.** The header shows `N / total marked` and whether the set is **chapter-ready** (the exact state chapters want: every track cued, first at 0:00, strictly increasing — `cueProgress`). An out-of-order cue (earlier than the previous track's) is flagged in the rail and reddened on the energy-lane cue pins.
+- **Keyboard.** The editor's `role="application"` loop extends: `↑/↓` select a track, `C` marks the selected track at the playhead, `X` clears it (alongside the existing space / arrows / `[` `]` / `M` / `Enter`).
+- **On the lane.** Each cue is a Stardust pin with a cream notch on the energy lane, so the operator sees the cues against the loudness drops.
+
+## The pieces
+
+- Pure helpers: `apps/web/src/lib/studio-clip.ts` (`snapCueToPeak` / `CUE_SNAP_WINDOW_MS` / `cueProgress`), tested in `studio-clip.test.ts`.
+- Server: `setMixtapeCue` in `apps/web/src/lib/server/mixtapes.ts` (tested in `mixtapes-cue.test.ts`).
+- The op: contract `packages/contracts/src/orpc/admin-mixtapes.ts` (`update_mixtape_cue`), handler `apps/web/src/lib/server/orpc/admin-mixtapes.ts`, coverage `orpc-admin-coverage.test.ts` + `orpc-auth-coverage.test.ts` (operator tier), end-to-end auth proof in `orpc-admin-mixtapes.test.ts`.
+- UI: `apps/web/src/routes/admin/studio.$logId.tsx` (the rail wiring + the keyboard loop + the snap toggle), `apps/web/src/components/admin/studio-cue-rail.tsx`, and the cue pins in `apps/web/src/components/admin/studio-energy-lane.tsx`.
+
+---
+
 # Unit C — the footage cut (the box)
 
 The deterministic cut that turns each `pending` `mixtape_clips` row into a framed 9:16 clip on R2, then marks it `done`. It runs on the **always-on Hermes box (rave-02)**, not the GPU render box — a CPU-trivial ffmpeg trim, no GPU, no `claude -p`, none of the render box's agent machinery.
