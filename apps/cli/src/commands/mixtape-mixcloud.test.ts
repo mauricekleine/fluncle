@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import {
-  mixcloudEditUrl,
-  mixcloudSectionFields,
-  mixcloudSections,
-  mixtapeDescription,
-} from "./mixtape-mixcloud";
+import { mixcloudEditUrl, mixcloudSectionFields, mixcloudSections } from "@fluncle/contracts/util";
+import { mixtapeDescription } from "./mixtape-mixcloud";
 import { type MixtapeMemberItem } from "./mixtapes";
 
 const member = (overrides: Partial<MixtapeMemberItem>): MixtapeMemberItem =>

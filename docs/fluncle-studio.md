@@ -69,9 +69,14 @@ The singular verb (`update`) + the `{ref}` member segment keep the two REST-symm
 - **Keyboard.** The editor's `role="application"` loop extends: `↑/↓` select a track, `C` marks the selected track at the playhead, `X` clears it (alongside the existing space / arrows / `[` `]` / `M` / `Enter`).
 - **On the lane.** Each cue is a Stardust pin with a cream notch on the energy lane, so the operator sees the cues against the loudness drops.
 
+## Re-sync from cues (the live-distribution push)
+
+Cues are usually refined **after** the set is already live, so the cue rail's left-pane companion is the **"Re-sync from cues"** button (the "Live distribution" block). It re-derives the YouTube chapters + Mixcloud sections from the CURRENT cues and edits the already-published video + show in place — **no re-upload**. It fires **both** platform ops the set is distributed to (a platform with no distribution row is skipped, never errored), is confirm-gated (it edits live public content), and reports a ✓ / error per platform. The block only appears once the set is published (has a `youtube`/`mixcloud` `mixtape_social_posts` row) and the button enables once ≥1 cue exists. Both legs are the SAME server-side ops the `fluncle admin mixtapes resync` CLI now calls — `resync_mixtape_youtube` (`videos.update`, description only) and `resync_mixtape_mixcloud` (the Mixcloud sections-only edit, run server-side in the Worker with the stored `mixcloud_auth` token). See the `fluncle-mixtapes` skill §D2 for the full doctrine.
+
 ## The pieces
 
 - Pure helpers: `apps/web/src/lib/studio-clip.ts` (`snapCueToPeak` / `CUE_SNAP_WINDOW_MS` / `cueProgress`), tested in `studio-clip.test.ts`.
+- Re-sync: the button `ResyncFromCues` in `apps/web/src/routes/admin/studio.$logId.tsx`; the shared section derivation `mixcloudSections` / `mixcloudSectionFields` / `mixcloudEditUrl` in `@fluncle/contracts/util`; the ops `resync_mixtape_youtube` / `resync_mixtape_mixcloud` (contract `packages/contracts/src/orpc/admin-mixtapes.ts`, handlers `apps/web/src/lib/server/orpc/admin-mixtapes.ts`, e2e proof in `orpc-admin-mixtapes.test.ts`).
 - Server: `setMixtapeCue` in `apps/web/src/lib/server/mixtapes.ts` (tested in `mixtapes-cue.test.ts`).
 - The op: contract `packages/contracts/src/orpc/admin-mixtapes.ts` (`update_mixtape_cue`), handler `apps/web/src/lib/server/orpc/admin-mixtapes.ts`, coverage `orpc-admin-coverage.test.ts` + `orpc-auth-coverage.test.ts` (operator tier), end-to-end auth proof in `orpc-admin-mixtapes.test.ts`.
 - UI: `apps/web/src/routes/admin/studio.$logId.tsx` (the rail wiring + the keyboard loop + the snap toggle), `apps/web/src/components/admin/studio-cue-rail.tsx`, and the cue pins in `apps/web/src/components/admin/studio-energy-lane.tsx`.

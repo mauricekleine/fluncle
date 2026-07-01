@@ -14,8 +14,10 @@
 // 502s) byte-for-byte.
 
 import { ORPCError } from "@orpc/server";
+import { mixcloudEditUrl, mixcloudSectionFields, mixcloudSections } from "@fluncle/contracts/util";
 import { createClip, deleteClip, getClip, listClips, markClipCutDone, updateClip } from "../clips";
 import { youtubeDescription } from "../../mixtape-chapters";
+import { getMixcloudAccessToken } from "../mixcloud";
 import { finalizeMixtapeDistribution, listMixtapeSocialPosts } from "../mixtape-social";
 import {
   addTracksToMixtape,
@@ -541,6 +543,107 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
+  // POST /admin/mixtapes/{mixtapeId}/mixcloud/resync — operator tier. Re-derive the
+  // Mixcloud `sections[]` tracklist from the mixtape's CURRENT cues and push it to the
+  // live cloudcast via the Mixcloud edit endpoint — sections-only, NO audio re-upload.
+  // Server-side parity with resync_mixtape_youtube: the Worker holds the mixcloud_auth
+  // token (getMixcloudAccessToken), so this bytes-free edit runs here rather than
+  // CLI-side. Posting any `sections-*` field overwrites the whole tracklist; sending
+  // ONLY the section fields leaves name/description/picture untouched.
+  const resyncMixtapeMixcloudHandler = os.resync_mixtape_mixcloud
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const posts = await listMixtapeSocialPosts(input.mixtapeId);
+        const mixcloud = posts.find((post) => post.platform === "mixcloud");
+        // The cloudcast key/url live on the mixcloud distribution row (the SSOT);
+        // `externalId` is the key `/fluncle/<slug>/`. The recorded url/key never change
+        // on a re-sync, so there is nothing to finalize.
+        const key = mixcloud?.externalId;
+
+        if (!key) {
+          throw new ORPCError("CONFLICT", {
+            data: {
+              apiCode: "mixcloud_not_distributed",
+              apiMessage: "No Mixcloud cloudcast to re-sync — distribute the mixtape first",
+            },
+            message: "No Mixcloud cloudcast to re-sync — distribute the mixtape first",
+            status: 409,
+          });
+        }
+
+        const mixtape = await getMixtapeById(input.mixtapeId, { includeDrafts: true });
+        const sections = mixcloudSections(mixtape.members);
+
+        if (sections.length === 0) {
+          throw new ORPCError("CONFLICT", {
+            data: {
+              apiCode: "mixcloud_no_cues",
+              apiMessage: "No cued members to sync — mark cues on the mixtape first",
+            },
+            message: "No cued members to sync — mark cues on the mixtape first",
+            status: 409,
+          });
+        }
+
+        const token = await getMixcloudAccessToken();
+
+        const form = new FormData();
+        for (const [name, value] of mixcloudSectionFields(sections)) {
+          form.append(name, value);
+        }
+
+        // Mixcloud diverges from Bearer auth — the token rides as a query param.
+        const response = await fetch(
+          `${mixcloudEditUrl(key)}?access_token=${encodeURIComponent(token)}`,
+          { body: form, method: "POST" },
+        );
+
+        const text = await response.text();
+
+        if (!response.ok) {
+          throw new ORPCError("BAD_GATEWAY", {
+            data: {
+              apiCode: "mixcloud_resync_failed",
+              apiMessage: `Mixcloud rejected the section edit (${response.status} ${response.statusText})${text ? `: ${text.slice(0, 300)}` : ""}`,
+            },
+            message: `Mixcloud rejected the section edit (${response.status} ${response.statusText})`,
+            status: 502,
+          });
+        }
+
+        // Mixcloud answers 200 even on a validation failure; the body carries the real
+        // outcome (`{ result: { success, message } }`).
+        let success = false;
+        let detail = text.slice(0, 300);
+        try {
+          const data = JSON.parse(text) as { result?: { message?: string; success?: boolean } };
+          success = data.result?.success === true;
+          detail = data.result?.message ?? detail;
+        } catch {
+          success = false;
+        }
+
+        if (!success) {
+          throw new ORPCError("BAD_GATEWAY", {
+            data: {
+              apiCode: "mixcloud_resync_failed",
+              apiMessage: `Mixcloud rejected the section edit: ${detail}`,
+            },
+            message: `Mixcloud rejected the section edit: ${detail}`,
+            status: 502,
+          });
+        }
+
+        const url = mixcloud?.url ?? `https://www.mixcloud.com${key}`;
+
+        return { ok: true as const, url };
+      } catch (error) {
+        throw toFault(error);
+      }
+    });
+
   // ── Fluncle Studio: clips + cue backfill ──
 
   // GET /admin/clips — admin tier (agent-allowed read). Optional ?mixtapeId/?status.
@@ -780,6 +883,7 @@ export function adminMixtapesHandlers(os: Implementer) {
     presign_set_video_upload: presignSetVideoUploadHandler,
     publish_mixtape: publishMixtapeHandler,
     publish_mixtape_youtube: publishMixtapeYoutubeHandler,
+    resync_mixtape_mixcloud: resyncMixtapeMixcloudHandler,
     resync_mixtape_youtube: resyncMixtapeYoutubeHandler,
     set_mixtape_cues: setMixtapeCuesHandler,
     set_mixtape_members: setMixtapeMembersHandler,

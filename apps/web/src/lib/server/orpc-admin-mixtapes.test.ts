@@ -58,6 +58,12 @@ vi.mock("./youtube", () => ({
   getYouTubeAccessToken: (...args: unknown[]) => getYouTubeAccessToken(...args),
 }));
 
+const getMixcloudAccessToken = vi.fn();
+
+vi.mock("./mixcloud", () => ({
+  getMixcloudAccessToken: (...args: unknown[]) => getMixcloudAccessToken(...args),
+}));
+
 const MIXTAPE_ID = "mix-123";
 
 const MIXTAPE = {
@@ -84,6 +90,7 @@ beforeEach(() => {
   listMixtapeSocialPosts.mockReset();
   finalizeMixtapeDistribution.mockReset();
   getYouTubeAccessToken.mockReset();
+  getMixcloudAccessToken.mockReset();
   setMixtapeCues.mockReset();
   listClips.mockReset();
   createClip.mockReset();
@@ -419,6 +426,129 @@ describe("oRPC resync_mixtape_youtube (POST .../youtube/resync)", () => {
       expect(updateBody.snippet?.description).toBe(
         "a dream\n\nfluncle://019.F.1A\n\n0:00 A - One\n1:00 B - Two\n2:00 C - Three",
       );
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});
+
+// ── resync_mixtape_mixcloud — operator tier + section-only edit ───────────────
+describe("oRPC resync_mixtape_mixcloud (POST .../mixcloud/resync)", () => {
+  it("403s the AGENT (edits live published content)", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(`/admin/mixtapes/${MIXTAPE_ID}/mixcloud/resync`, "POST", AGENT_TOKEN),
+    );
+
+    expect(response?.status).toBe(403);
+    expect(listMixtapeSocialPosts).not.toHaveBeenCalled();
+  });
+
+  it("409s `mixcloud_not_distributed` when no mixcloud row exists", async () => {
+    listMixtapeSocialPosts.mockResolvedValueOnce([]);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(`/admin/mixtapes/${MIXTAPE_ID}/mixcloud/resync`, "POST", OPERATOR_TOKEN),
+    );
+
+    expect(response?.status).toBe(409);
+    expect(((await readJson(response)) as { code: string }).code).toBe("mixcloud_not_distributed");
+  });
+
+  it("409s `mixcloud_no_cues` when the mixtape has no cued members", async () => {
+    listMixtapeSocialPosts.mockResolvedValueOnce([
+      {
+        createdAt: "t",
+        externalId: "/fluncle/a-set/",
+        platform: "mixcloud",
+        status: "published",
+        updatedAt: "t",
+        url: "https://www.mixcloud.com/fluncle/a-set/",
+      },
+    ]);
+    getMixtapeById.mockResolvedValueOnce({
+      ...MIXTAPE,
+      logId: "019.F.1A",
+      members: [{ artists: ["A"], title: "Uncued" }],
+      status: "published",
+    });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(`/admin/mixtapes/${MIXTAPE_ID}/mixcloud/resync`, "POST", OPERATOR_TOKEN),
+    );
+
+    expect(response?.status).toBe(409);
+    expect(((await readJson(response)) as { code: string }).code).toBe("mixcloud_no_cues");
+  });
+
+  it("pushes ONLY the section fields from the CURRENT cues to the edit endpoint", async () => {
+    listMixtapeSocialPosts.mockResolvedValueOnce([
+      {
+        createdAt: "t",
+        externalId: "/fluncle/a-set/",
+        platform: "mixcloud",
+        status: "published",
+        updatedAt: "t",
+        url: "https://www.mixcloud.com/fluncle/a-set/",
+      },
+    ]);
+    getMixtapeById.mockResolvedValueOnce({
+      ...MIXTAPE,
+      logId: "019.F.1A",
+      members: [
+        { artists: ["A"], startMs: 0, title: "One" },
+        { artists: ["B", "C"], startMs: 90_000, title: "Two" },
+        { artists: ["D"], title: "Uncued" },
+      ],
+      status: "published",
+    });
+    getMixcloudAccessToken.mockResolvedValueOnce("mc-token");
+
+    let editUrl = "";
+    let postedFields: [string, string][] = [];
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input, init?: RequestInit) => {
+        editUrl = typeof input === "string" ? input : input instanceof URL ? input.href : "";
+        const body = init?.body;
+
+        if (body instanceof FormData) {
+          postedFields = [...body.entries()].map(([name, value]) => [name, String(value)]);
+        }
+
+        return new Response(JSON.stringify({ result: { success: true } }), { status: 200 });
+      });
+
+    try {
+      const { handleOrpc } = await import("./orpc");
+      const response = await handleOrpc(
+        req(`/admin/mixtapes/${MIXTAPE_ID}/mixcloud/resync`, "POST", OPERATOR_TOKEN),
+      );
+
+      expect(response?.status).toBe(200);
+      expect(await readJson(response)).toEqual({
+        ok: true,
+        url: "https://www.mixcloud.com/fluncle/a-set/",
+      });
+
+      // The edit endpoint URL carries the token as a query param (Mixcloud diverges
+      // from Bearer auth) and splices `edit/` after the cloudcast key.
+      expect(editUrl).toContain(
+        "https://api.mixcloud.com/upload/fluncle/a-set/edit/?access_token=mc-token",
+      );
+
+      // ONLY the section fields are posted (no mp3/name/description) — the cued members
+      // in play order, un-cued members omitted, ms → integer seconds, artists joined.
+      expect(postedFields).toEqual([
+        ["sections-0-artist", "A"],
+        ["sections-0-song", "One"],
+        ["sections-0-start_time", "0"],
+        ["sections-1-artist", "B, C"],
+        ["sections-1-song", "Two"],
+        ["sections-1-start_time", "90"],
+      ]);
     } finally {
       fetchSpy.mockRestore();
     }

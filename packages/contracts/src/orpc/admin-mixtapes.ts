@@ -291,6 +291,32 @@ export const resyncMixtapeYoutube = oc
   .input(z.object({ mixtapeId: z.string() }))
   .output(z.object({ ok: z.literal(true), url: z.string(), videoId: z.string() }));
 
+/**
+ * `resync_mixtape_mixcloud` → `POST /admin/mixtapes/{mixtapeId}/mixcloud/resync`
+ * (operationId `resyncMixtapeMixcloud`).
+ *
+ * Operator tier (live `requireOperator`). Re-derive the Mixcloud `sections[]`
+ * tracklist from the mixtape's CURRENT cues and push it to the already-uploaded
+ * cloudcast via the Mixcloud edit endpoint — sections-only, NO audio re-upload
+ * (posting any `sections-*` field overwrites the whole tracklist; name/description/
+ * picture are untouched). Server-side parity with `resync_mixtape_youtube`: the
+ * Worker holds the `mixcloud_auth` token, so this bytes-free edit belongs server-side
+ * (unlike the multi-GB upload). It EDITS live published content, so the agent token
+ * 403s. Gates on the mixcloud distribution row (`mixcloud_not_distributed`/409), at
+ * least one cued member (`mixcloud_no_cues`/409), and Mixcloud errors (502). Preserves
+ * a `{ ok, url }` envelope.
+ */
+export const resyncMixtapeMixcloud = oc
+  .route({
+    method: "POST",
+    operationId: "resyncMixtapeMixcloud",
+    path: "/admin/mixtapes/{mixtapeId}/mixcloud/resync",
+    summary: "Re-sync a mixtape's live Mixcloud tracklist sections from its current cues",
+    tags: ["Admin"],
+  })
+  .input(z.object({ mixtapeId: z.string() }))
+  .output(z.object({ ok: z.literal(true), url: z.string() }));
+
 // ── Fluncle Studio: clips + cue backfill ──────────────────────────────────────
 // A clip is a lightweight 9:16 derivative of a mixtape's set video — many per set.
 // LOOSE/passthrough bodies, like the rest of the domain: the server helpers
@@ -535,6 +561,7 @@ export const adminMixtapesContract = {
   presign_set_video_upload: presignSetVideoUpload,
   publish_mixtape: publishMixtape,
   publish_mixtape_youtube: publishMixtapeYoutube,
+  resync_mixtape_mixcloud: resyncMixtapeMixcloud,
   resync_mixtape_youtube: resyncMixtapeYoutube,
   set_mixtape_cues: setMixtapeCues,
   set_mixtape_members: setMixtapeMembers,

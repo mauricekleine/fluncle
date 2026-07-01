@@ -93,6 +93,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/mixtapes/{mixtapeId}/clips": "create_clip",
   "POST /admin/mixtapes/{mixtapeId}/members": "add_mixtape_members",
   "POST /admin/mixtapes/{mixtapeId}/mixcloud/finalize": "finalize_mixtape_mixcloud",
+  // The Mixcloud metadata re-sync — contract-only oRPC (no TanStack route file; oRPC
+  // owns the path directly, like resync_mixtape_youtube). Operator tier: re-derives the
+  // live cloudcast's sections[] from the current cues via the Mixcloud edit endpoint.
+  "POST /admin/mixtapes/{mixtapeId}/mixcloud/resync": "resync_mixtape_mixcloud",
   "POST /admin/mixtapes/{mixtapeId}/publish": "publish_mixtape",
   // The set-video staging presign (Fluncle Studio Unit A) — contract-only oRPC (no
   // TanStack route file; oRPC owns the path directly). Operator tier: it opens a
