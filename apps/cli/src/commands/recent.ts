@@ -42,6 +42,7 @@ export function mapTrack(track: RecentTrack | RecentMixtape): RecentItem {
     videoGrain: track.videoGrain,
     videoModel: track.videoModel,
     videoModelReasoning: track.videoModelReasoning,
+    videoRegister: track.videoRegister,
     videoUrl: track.videoUrl,
     videoVehicle: track.videoVehicle,
   };

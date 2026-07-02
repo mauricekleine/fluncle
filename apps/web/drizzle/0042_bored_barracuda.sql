@@ -1,0 +1,1 @@
+ALTER TABLE `tracks` ADD `video_register` text;

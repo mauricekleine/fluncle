@@ -1,0 +1,38 @@
+{
+  "schema": "fluncle.calibration-verdicts/1",
+  "note": "Operator-labeled ground truth for the deterministic video gates. Seeded from the video-aliveness audit. calibrate.ts fetches each entry's PUBLIC poster (+ footage.social.mp4 when --footage is passed, since those files are large), runs the relevant gate, and prints gate-verdict vs operator-verdict so thresholds stay re-earnable as verdicts accumulate. Add rows over time; keep notes concrete. Dimensions: arc (needs footage), diversity (poster-pair, offline).",
+  "entries": [
+    {
+      "logId": "032.0.4L",
+      "dimension": "arc",
+      "verdict": "pass",
+      "notes": "a real arc — the structural evolution across the clip the arc gate must PASS (wholeClipChange ~0.356)"
+    },
+    {
+      "logId": "032.0.6R",
+      "dimension": "arc",
+      "verdict": "fail",
+      "notes": "20s of near-static bars, cool palette — the dead clip the arc gate must FAIL (wholeClipChange ~0.220)"
+    },
+    {
+      "logId": "027.2.8R",
+      "dimension": "judge",
+      "verdict": "fail",
+      "notes": "uniform wallpaper, cool palette — an AESTHETIC/monotony rejection, NOT structural deadness: the arc gate correctly reads it evolving (~0.511). Kept here as a documented coverage boundary — this failure mode belongs to the LLM judge (or a future texture-variety/palette metric), not the deterministic arc floor. calibrate prints its arc score for transparency but does not score it."
+    },
+    {
+      "logId": "027.5.4D",
+      "dimension": "diversity",
+      "pairedWith": "025.5.5T",
+      "verdict": "fail",
+      "notes": "the same primitive as 025.5.5T recolored — a diversity repaint; the immediate-neighbour distance must read TOO SIMILAR"
+    },
+    {
+      "logId": "025.5.5T",
+      "dimension": "diversity",
+      "pairedWith": "027.5.4D",
+      "verdict": "fail",
+      "notes": "the other half of the repaint pair"
+    }
+  ]
+}
