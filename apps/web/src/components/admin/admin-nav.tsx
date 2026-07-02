@@ -1,4 +1,5 @@
 import { FilmStripIcon, GearSixIcon, SignOutIcon } from "@phosphor-icons/react";
+import { useId } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -58,6 +59,7 @@ const NOTATION_OPTIONS: { label: string; value: KeyNotation }[] = [
 
 function KeyNotationCog() {
   const { notation, setNotation } = useKeyNotation();
+  const labelId = useId();
 
   return (
     <Popover>
@@ -70,8 +72,8 @@ function KeyNotationCog() {
       />
       <PopoverContent align="end" className="w-64 space-y-3">
         <div className="space-y-1.5">
-          <Label>Key notation</Label>
-          <div className="flex gap-1.5">
+          <Label id={labelId}>Key notation</Label>
+          <div aria-labelledby={labelId} className="flex gap-1.5" role="group">
             {NOTATION_OPTIONS.map((option) => (
               <Button
                 key={option.value}
