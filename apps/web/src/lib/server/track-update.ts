@@ -81,6 +81,8 @@ export type TrackUpdate = {
   videoVehicle?: string;
   /** The video's grain FAMILY (grain ledger; surfaced in /api/tracks). */
   videoGrain?: string;
+  /** The video's visual REGISTER (register ledger; surfaced in /api/tracks). */
+  videoRegister?: string;
   /** Vibe-map placement (the admin tagging tool). vibeX = Light↔Dark mood. */
   vibeX?: number;
   /** vibeY = Floaty↔Driving energy. Both set together when a track is placed. */
@@ -106,6 +108,7 @@ const VISIBLE_FIELDS = new Set<keyof TrackUpdate>([
   "videoGrain",
   "videoModel",
   "videoModelReasoning",
+  "videoRegister",
   "videoSquaredAt",
   "videoUrl",
   "videoVehicle",
@@ -165,6 +168,11 @@ export async function updateTrack(
   if (update.videoGrain !== undefined) {
     sets.push("video_grain = ?");
     args.push(update.videoGrain);
+  }
+
+  if (update.videoRegister !== undefined) {
+    sets.push("video_register = ?");
+    args.push(update.videoRegister);
   }
 
   if (update.videoModel !== undefined) {

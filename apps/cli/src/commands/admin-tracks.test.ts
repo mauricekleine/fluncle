@@ -32,6 +32,7 @@ function finding(trackId: string, logId: string): TrackListItem {
     videoGrain: undefined,
     videoModel: undefined,
     videoModelReasoning: undefined,
+    videoRegister: undefined,
     videoUrl: undefined,
     videoVehicle: undefined,
   };

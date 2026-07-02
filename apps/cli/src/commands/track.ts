@@ -152,16 +152,18 @@ export async function trackVideoCommand(
       ...(squared ? { squared: true } : {}),
       ...(manifest.vehicle ? { videoVehicle: manifest.vehicle } : {}),
       ...(manifest.grain ? { videoGrain: manifest.grain } : {}),
+      ...(manifest.register ? { videoRegister: manifest.register } : {}),
     },
   );
 
   return { logId: finalize.logId, ok: true, trackId: finalize.trackId, urls };
 }
 
-// Reads the bundle's render.json once and returns the three string fields the
-// finalize call needs (vehicle/model/reasoning). A missing or unparseable value
-// just leaves that field absent (the caller defaults), never fails the upload.
-type RenderManifestField = "grain" | "model" | "reasoning" | "vehicle";
+// Reads the bundle's render.json once and returns the string fields the finalize
+// call needs (vehicle/grain/register — the diversity ledgers — plus model/reasoning).
+// A missing or unparseable value just leaves that field absent (the caller
+// defaults), never fails the upload.
+type RenderManifestField = "grain" | "model" | "reasoning" | "register" | "vehicle";
 
 async function readManifestFields(
   renderPath: string,
@@ -170,7 +172,7 @@ async function readManifestFields(
     const manifest = (await Bun.file(renderPath).json()) as Record<RenderManifestField, unknown>;
     const result: Partial<Record<RenderManifestField, string>> = {};
 
-    for (const key of ["vehicle", "grain", "model", "reasoning"] as const) {
+    for (const key of ["vehicle", "grain", "model", "reasoning", "register"] as const) {
       const value = manifest[key];
 
       if (typeof value === "string" && value.trim()) {
