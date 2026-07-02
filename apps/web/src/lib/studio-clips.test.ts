@@ -9,6 +9,7 @@ import {
   clipPurgeUrls,
   DEFAULT_CLIP_FILTER,
   filterClips,
+  sortClipsNewestFirst,
 } from "./studio-clips";
 
 // The clip library's pure logic (Fluncle Studio Unit G): the two-dropdown filter and
@@ -66,6 +67,34 @@ describe("filterClips", () => {
     const result = filterClips(clips, { recordingId: ALL_FILTER, status: "done" });
 
     expect(result).toEqual([clips[0], clips[2]]);
+  });
+});
+
+describe("sortClipsNewestFirst", () => {
+  it("orders a mixed-recording list by createdAt, newest first (one flat grid)", () => {
+    const clips = [
+      clip({ createdAt: "2026-06-01T00:00:00.000Z", id: "oldest", recordingId: "rec-1" }),
+      clip({ createdAt: "2026-06-30T12:00:00.000Z", id: "newest", recordingId: "rec-2" }),
+      clip({ createdAt: "2026-06-15T00:00:00.000Z", id: "middle", recordingId: "rec-1" }),
+    ];
+
+    expect(sortClipsNewestFirst(clips).map((c) => c.id)).toEqual(["newest", "middle", "oldest"]);
+  });
+
+  it("does not mutate the input array", () => {
+    const clips = [
+      clip({ createdAt: "2026-06-01T00:00:00.000Z", id: "a" }),
+      clip({ createdAt: "2026-06-30T00:00:00.000Z", id: "b" }),
+    ];
+    const before = clips.map((c) => c.id);
+
+    sortClipsNewestFirst(clips);
+
+    expect(clips.map((c) => c.id)).toEqual(before);
+  });
+
+  it("returns an empty array untouched", () => {
+    expect(sortClipsNewestFirst([])).toEqual([]);
   });
 });
 
