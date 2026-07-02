@@ -23,21 +23,24 @@ import {
   type ClipStatusFilter,
   DEFAULT_CLIP_FILTER,
   filterClips,
+  sortClipsNewestFirst,
 } from "@/lib/studio-clips";
 
 // The cross-recording clip library + the recordings index (RFC recording-primitive,
 // Design B — Wave 3). A captured set (a RECORDING) yields MANY clips; beyond the per-set
-// editor (/admin/studio/$recordingId) this is the grid of EVERY clip, GROUPED by its
-// source recording, plus a recordings index so the operator can find + open a CLI-created
-// recording to clip it. A promoted recording shows its `fluncle://<logId>` coordinate in
-// the group header (else the recording title). Browse, filter (by recording + status),
-// preview inline, download to hand-post (the irreducible in-app beat). Reads `list_clips`
-// + `list_recordings`; `delete_clip` prunes a bad cut. Distribution is deferred (a
-// disabled seam on the card).
+// editor (/admin/studio/$recordingId) this is ONE continuous grid of EVERY clip, sorted
+// newest-first (by clip `createdAt`) — no per-recording grouping, but each card still
+// carries its own recording label so the operator can tell which set/mixtape a clip is
+// from. Above the grid sits a recordings index so the operator can find + open a
+// CLI-created recording to clip it. Browse, filter (by recording + status), preview
+// inline, download to hand-post (the irreducible in-app beat). Reads `list_clips` +
+// `list_recordings`; `delete_clip` prunes a bad cut. Distribution is deferred (a disabled
+// seam on the card).
 //
 // The grid, recordings, and dropdown load SERVER-SIDE (a createServerFn calling the
-// server helpers in-process) — not a cross-origin client fetch. Grouping + filtering then
-// run client-side over the loaded set (the backlog is small; instant, no refetch).
+// server helpers in-process) — not a cross-origin client fetch. Filtering + newest-first
+// sorting then run client-side over the loaded set (the backlog is small; instant, no
+// refetch).
 
 const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
   if (!(await isAdminRequest())) {
@@ -80,13 +83,6 @@ export const Route = createFileRoute("/admin/clips")({
 // (a mixtape published before recordings, never backfilled) keeps `recordingId` undefined.
 type LibraryClip = ClipDTO & { resolvedRecordingId: string | undefined };
 
-// A group of clips under one recording header (or an orphan legacy bucket).
-type ClipGroup = {
-  clips: LibraryClip[];
-  key: string;
-  recording: RecordingDTO | undefined;
-};
-
 function ClipLibraryPage() {
   const { clips: initialClips, recordings } = Route.useLoaderData();
   const queryClient = useQueryClient();
@@ -110,6 +106,13 @@ function ClipLibraryPage() {
           .filter((rec) => rec.mixtapeId)
           .map((rec) => [rec.mixtapeId as string, rec] as const),
       ),
+    [recordings],
+  );
+
+  // Every recording by its id — the per-card recording label lookup (each flat-grid card
+  // still shows which set/mixtape its clip is from).
+  const recordingById = useMemo(
+    () => new Map(recordings.map((rec) => [rec.id, rec] as const)),
     [recordings],
   );
 
@@ -141,43 +144,12 @@ function ClipLibraryPage() {
     }
   }, [recordingId, recordingsWithClips]);
 
-  const visible = useMemo(
-    () => filterClips(libraryClips, { recordingId, status }) as LibraryClip[],
+  // Filter, then flatten to ONE continuous grid sorted newest-first by clip `createdAt`
+  // (no per-recording grouping — each card keeps its own recording label).
+  const visible = useMemo<LibraryClip[]>(
+    () => sortClipsNewestFirst(filterClips(libraryClips, { recordingId, status }) as LibraryClip[]),
     [libraryClips, recordingId, status],
   );
-
-  // Group the visible clips by their source recording (in the recordings' newest-first
-  // order), with any orphan legacy clips collected into a trailing bucket.
-  const groups = useMemo<ClipGroup[]>(() => {
-    const byRecording = new Map<string, LibraryClip[]>();
-    const orphans: LibraryClip[] = [];
-
-    for (const clip of visible) {
-      if (clip.resolvedRecordingId) {
-        const bucket = byRecording.get(clip.resolvedRecordingId) ?? [];
-        bucket.push(clip);
-        byRecording.set(clip.resolvedRecordingId, bucket);
-      } else {
-        orphans.push(clip);
-      }
-    }
-
-    const ordered: ClipGroup[] = [];
-
-    for (const rec of recordings) {
-      const bucket = byRecording.get(rec.id);
-
-      if (bucket && bucket.length > 0) {
-        ordered.push({ clips: bucket, key: rec.id, recording: rec });
-      }
-    }
-
-    if (orphans.length > 0) {
-      ordered.push({ clips: orphans, key: "orphans", recording: undefined });
-    }
-
-    return ordered;
-  }, [recordings, visible]);
 
   const deleteClip = useMutation({
     mutationFn: async (clipId: string) => {
@@ -287,46 +259,27 @@ function ClipLibraryPage() {
 
         {clips.length === 0 ? (
           <EmptyLibrary />
-        ) : groups.length === 0 ? (
+        ) : visible.length === 0 ? (
           <p className="py-10 text-center text-sm text-muted-foreground">
             No clips match this filter.
           </p>
         ) : (
-          <div className="space-y-8">
-            {groups.map((group) => (
-              <section aria-label={groupHeading(group)} key={group.key}>
-                <div className="mb-3 flex items-baseline gap-2">
-                  {group.recording ? (
-                    <a
-                      className="font-mono text-sm tabular-nums hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"
-                      href={`/admin/studio/${encodeURIComponent(group.recording.id)}`}
-                    >
-                      {groupHeading(group)}
-                    </a>
-                  ) : (
-                    <span className="text-sm font-medium text-muted-foreground">
-                      {groupHeading(group)}
-                    </span>
-                  )}
-                  <span className="text-xs text-muted-foreground">
-                    {group.clips.length} clip{group.clips.length === 1 ? "" : "s"}
-                  </span>
-                </div>
-                <ul className="grid list-none grid-cols-2 gap-4 p-0 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-                  {group.clips.map((clip) => (
-                    <li key={clip.id}>
-                      <ClipCard
-                        clip={clip}
-                        deleting={deleteClip.isPending && deleteClip.variables === clip.id}
-                        onDelete={() => deleteClip.mutate(clip.id)}
-                        recording={group.recording}
-                      />
-                    </li>
-                  ))}
-                </ul>
-              </section>
+          <ul className="grid list-none grid-cols-2 gap-4 p-0 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+            {visible.map((clip) => (
+              <li key={clip.id}>
+                <ClipCard
+                  clip={clip}
+                  deleting={deleteClip.isPending && deleteClip.variables === clip.id}
+                  onDelete={() => deleteClip.mutate(clip.id)}
+                  recording={
+                    clip.resolvedRecordingId
+                      ? recordingById.get(clip.resolvedRecordingId)
+                      : undefined
+                  }
+                />
+              </li>
             ))}
-          </div>
+          </ul>
         )}
       </div>
     </AdminShell>
@@ -384,8 +337,8 @@ function RecordingsIndex({
   );
 }
 
-// A recording's display label for the dropdown + group header: its coordinate once
-// promoted (`fluncle://<logId>`), else its title.
+// A recording's display label for the filter dropdown: its coordinate once promoted
+// (`fluncle://<logId>`), else its title.
 function recordingLabel(recording: RecordingDTO): string {
   return recording.logId ? `fluncle://${recording.logId}` : recording.title;
 }
@@ -395,10 +348,6 @@ function recordingSelectItems(recordings: RecordingDTO[]): Record<string, string
     [ALL_FILTER]: "All recordings",
     ...Object.fromEntries(recordings.map((rec) => [rec.id, recordingLabel(rec)] as const)),
   };
-}
-
-function groupHeading(group: ClipGroup): string {
-  return group.recording ? recordingLabel(group.recording) : "Legacy clips (no recording)";
 }
 
 function EmptyLibrary() {
