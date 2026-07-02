@@ -8,6 +8,7 @@ const pageSize = 48;
 
 async function fetchAdminTracks(options: {
   hasContext?: boolean;
+  hasKey?: boolean;
   hasNote?: boolean;
   hasObservation?: boolean;
   hasVideo?: boolean;
@@ -16,8 +17,17 @@ async function fetchAdminTracks(options: {
   retryEmptyContext?: boolean;
   status?: string;
 }): Promise<RecentTrack[]> {
-  const { hasContext, hasNote, hasObservation, hasVideo, max, order, retryEmptyContext, status } =
-    options;
+  const {
+    hasContext,
+    hasKey,
+    hasNote,
+    hasObservation,
+    hasVideo,
+    max,
+    order,
+    retryEmptyContext,
+    status,
+  } = options;
   const results: RecentTrack[] = [];
   let cursor: string | undefined;
 
@@ -26,6 +36,10 @@ async function fetchAdminTracks(options: {
 
     if (hasVideo !== undefined) {
       params.set("hasVideo", String(hasVideo));
+    }
+
+    if (hasKey !== undefined) {
+      params.set("hasKey", String(hasKey));
     }
 
     if (hasContext !== undefined) {
@@ -76,6 +90,23 @@ async function fetchAdminTracks(options: {
   } while (cursor);
 
   return results;
+}
+
+// A filterable admin listing of findings. Currently the missing-musical-key
+// backlog the Rekordbox key-backfill targets: `hasKey=false` lists findings whose
+// stored `key` is null, `hasKey=true` those that already carry one, absent = all.
+// This is what makes the backlog COUNTABLE + TARGETABLE — the backfill script reads
+// `list --no-key --json` as its input query.
+export async function listCommand(options: {
+  hasKey?: boolean;
+  limit: number;
+  order: "asc" | "desc";
+}): Promise<RecentTrack[]> {
+  return fetchAdminTracks({
+    hasKey: options.hasKey,
+    max: options.limit,
+    order: options.order,
+  });
 }
 
 export type QueueFilters = {

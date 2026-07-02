@@ -38,6 +38,11 @@
       "sourceType": "local",
       "computedHash": "8e41576a1577c5568e852e0d421dc3c369f260fa4017cb5c77b5f1fad515d092"
     },
+    "fluncle-key-backfill": {
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-key-backfill",
+      "sourceType": "local",
+      "computedHash": "09918e47cf9e6db41a9b57b1e3d03aa13de258c7a1d1cdc6f0c23945364d15a8"
+    },
     "fluncle-maintenance": {
       "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/fluncle-maintenance",
       "sourceType": "local",
