@@ -214,7 +214,7 @@ function ClipLibraryPage() {
 
   return (
     <AdminShell
-      current="mixtapes"
+      current="clips"
       subtitle={`${clips.length} ${clips.length === 1 ? "clip" : "clips"} across every recording`}
       title="Clip library"
     >
