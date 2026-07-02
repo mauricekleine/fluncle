@@ -30,6 +30,26 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - NEVER: Stop at a plan when the user asked for implementation and the implementation is feasible.
 - NEVER: Present a workaround as complete when a known real fix remains.
 
+## Picking the right models for workflows and subagents
+
+Rankings, higher = better. Cost reflects what I actually pay, not list price. Intelligence is how hard a problem you can hand the model unsupervised. Taste covers UI/UX, code quality, API design, and copy.
+
+| model    | cost | intelligence | taste |
+| -------- | ---- | ------------ | ----- |
+| sonnet-5 | 5    | 5            | 7     |
+| opus-4.8 | 4    | 7            | 8     |
+| fable-5  | 2    | 9            | 9     |
+
+How to apply:
+
+- These are defaults, not limits. You have standing permission to override them: if a cheaper model's output doesn't meet the bar, rerun or redo the work with a smarter model without asking. Judge the output, not the price tag. Escalating costs less than shipping mediocre work.
+- Cost is a tie-breaker only; when axes conflict for anything that ships, intelligence > taste > cost.
+- Brainstorm, orchestration, delegation, and review — the "decide" and hold-the-overview work — run on fable-5 (top of the intelligence and taste axes). The [agent-orchestration](./packages/skills/agent-orchestration) skill is driven by fable-5; it offloads execution to sub-agents picked per this matrix. Pull in opus-4.8 for a second, cheaper review perspective when one helps.
+- Bulk/mechanical work (clear-spec implementation, data analysis, migrations): sonnet-5 — it's the cheapest.
+- Anything user-facing (UI, copy, API design) needs taste ≥ 7.
+- Never use Haiku.
+- Mechanics: Claude models (sonnet-5, opus-4.8, fable-5) run via the Agent/Workflow model parameter.
+
 ## Before Editing
 
 - MUST: Inspect existing code patterns before changing implementation.

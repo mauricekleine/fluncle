@@ -4,7 +4,7 @@
     "agent-orchestration": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/agent-orchestration",
       "sourceType": "local",
-      "computedHash": "11256a78ddd0c1c28f039b27afe522afe549ca69234caf24e876a0d37fac01be"
+      "computedHash": "2bf97b7a49ca38c3855e5e458b8b6b387ec0bdd5cc92b9d8b21a4bfac4e63b9d"
     },
     "ai-seo": {
       "source": "coreyhaines31/marketingskills",
