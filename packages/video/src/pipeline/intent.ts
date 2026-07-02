@@ -24,7 +24,11 @@ export type IntentTextureFamily =
   | "duotone"
   | "smear";
 
-export type IntentRegister = "abstract" | "representational";
+// The diversity register — how the vehicle reads. "framed" is the doctrine addition:
+// a composed, bordered/matted read (vs a full-bleed abstract field or a
+// representational subject). Kept a REQUIRED field (it predates this and every
+// existing intent supplies one); the doctrine change is the third value.
+export type IntentRegister = "abstract" | "representational" | "framed";
 
 export type IntentArcSource = "energyCurve" | "scripted";
 
@@ -93,6 +97,16 @@ export type RenderIntent = {
   bindings: IntentBinding[];
   /** optional, future (judge fuel). */
   secondaryPeaks?: number[];
+  /**
+   * Doctrine additions (OPTIONAL, backward compatible — schema string unchanged).
+   * They give the judge + the diversity metric fuel without breaking old intents.
+   */
+  /** The declared DEPTH MECHANISM — how the scene earns its third dimension (e.g.
+   *  "parallax layers", "atmospheric haze", "occlusion", "focal blur"). Free text. */
+  depthMechanism?: string;
+  /** The FOCAL POINT — where the eye is meant to land (e.g. "centre bloom",
+   *  "lower-third horizon", "the drifting mote"). Free text. */
+  focalPoint?: string;
 };
 
 // Axis groups — one source of truth for the type, the validator, and the
@@ -111,14 +125,14 @@ export const LIGHT_AXES: readonly IntentAxis[] = ["brightness", "exposure", "glo
 export const TEXTURE_AXES: readonly IntentAxis[] = ["grain", "chroma", "dither", "edgeRough"];
 export const MOTION_AXES: readonly IntentAxis[] = ["translation"];
 
-const ALL_AXES: readonly IntentAxis[] = [
+export const ALL_AXES: readonly IntentAxis[] = [
   ...STRUCTURAL_AXES,
   ...LIGHT_AXES,
   ...TEXTURE_AXES,
   ...MOTION_AXES,
 ];
 
-const ALL_BANDS: readonly IntentBand[] = [
+export const ALL_BANDS: readonly IntentBand[] = [
   "bass",
   "mid",
   "treble",
@@ -131,6 +145,25 @@ const ALL_BANDS: readonly IntentBand[] = [
   "hit",
   "onset",
   "flux",
+];
+
+// Closed value sets for the remaining enum fields — the source of truth the strict
+// validator (validate-intent.ts) checks against.
+export const REGISTERS: readonly IntentRegister[] = ["abstract", "representational", "framed"];
+export const ARC_SOURCES: readonly IntentArcSource[] = ["energyCurve", "scripted"];
+export const MOTION_MODELS: readonly IntentMotionModel[] = [
+  "constant-drift",
+  "directed-front",
+  "static-field",
+];
+export const TEXTURE_FAMILIES: readonly IntentTextureFamily[] = [
+  "nebula",
+  "analog",
+  "dither",
+  "paint",
+  "fluent",
+  "duotone",
+  "smear",
 ];
 
 // A fast band on `axis: "translation"` is a self-reported beat-pull. The

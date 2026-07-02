@@ -41,6 +41,7 @@ import { type RgbFrames } from "./frames";
 import { type RenderIntent, RENDER_INTENT_SCHEMA } from "./intent";
 import {
   checkIntent,
+  scoreArc,
   scoreBeatReactivity,
   scoreCoupling,
   scoreFlashSafety,
@@ -532,4 +533,87 @@ console.log(
 );
 console.log(
   "✓ beat-grid reactivity: on-beat spikes read reactive, flat reads dead, calm→vibrant scores an arc",
+);
+
+// ---------------------------------------------------------------------------
+// ARC / DEADNESS (C4 — the HARD long-timescale gate). Synthetic RGB strips whose
+// structure either reorganizes across the whole span (evolving) or is frozen under
+// grain/recolor (dead). Mirrors the real calibration anchors validated on
+// footage.social.mp4 (032.0.4L wholeClipChange=0.356 PASS / 032.0.6R=0.220 FAIL).
+// ---------------------------------------------------------------------------
+
+const ARC_FRAMES = 200;
+
+// EVOLVING: a bright horizontal band that sweeps top→bottom over the clip. Its
+// gross form + edges reorganize between every anchor → wholeClipChange >> floor.
+const arcBandFrame = (t: number): Float32Array => {
+  const f = new Float32Array(PIX * 3);
+  const bandY = Math.floor((t / ARC_FRAMES) * FH);
+  for (let y = 0; y < FH; y++) {
+    for (let x = 0; x < FW; x++) {
+      const v = Math.abs(y - bandY) < 10 ? 220 : 40;
+      const idx = (y * FW + x) * 3;
+      f[idx] = v;
+      f[idx + 1] = v;
+      f[idx + 2] = v;
+    }
+  }
+  return f;
+};
+const arcEvolving = wrapRgb(Array.from({ length: ARC_FRAMES }, (_, t) => arcBandFrame(t)));
+const evolvingArc = scoreArc({ fps: FPS, intent: null, rgb: arcEvolving });
+assert.equal(evolvingArc.verdict, "evolving", "a sweeping structural band must read EVOLVING");
+assert.equal(evolvingArc.dead, false, "an evolving clip is not dead");
+assert.ok(
+  evolvingArc.wholeClipChange >= evolvingArc.floor,
+  `evolving change must clear the floor (got ${evolvingArc.wholeClipChange.toFixed(3)} vs ${evolvingArc.floor})`,
+);
+
+// DEAD: fixed vertical bars that never move, with per-frame grain on top. The grain
+// (a recolor/noise trick) must NOT rescue the frozen structure → dead. This is the
+// laundering guard: the edge map is frozen even as grain churns.
+const arcStaticBars = (t: number): Float32Array => {
+  const f = new Float32Array(PIX * 3);
+  for (let y = 0; y < FH; y++) {
+    for (let x = 0; x < FW; x++) {
+      const bar = Math.floor(x / 8) % 2 === 0;
+      const v = clamp8((bar ? 180 : 40) + speckle(y * FW + x, t, 30));
+      const idx = (y * FW + x) * 3;
+      f[idx] = v;
+      f[idx + 1] = v;
+      f[idx + 2] = v;
+    }
+  }
+  return f;
+};
+const arcDeadStrip = wrapRgb(Array.from({ length: ARC_FRAMES }, (_, t) => arcStaticBars(t)));
+const deadArc = scoreArc({ fps: FPS, intent: null, rgb: arcDeadStrip });
+assert.equal(deadArc.dead, true, "frozen bars under grain must read DEAD (the laundering guard)");
+assert.equal(deadArc.verdict, "dead", "dead verdict on a frozen structure");
+assert.ok(
+  deadArc.wholeClipChange < deadArc.floor,
+  `dead change must sit below the floor (got ${deadArc.wholeClipChange.toFixed(3)})`,
+);
+
+// SHORT clip → inconclusive, never a false dead-fail.
+const arcShort = wrapRgb(Array.from({ length: 4 }, () => grayFrame(120)));
+const shortArc = scoreArc({ fps: FPS, intent: null, rgb: arcShort });
+assert.equal(shortArc.verdict, "inconclusive", "too few frames → inconclusive");
+assert.equal(shortArc.dead, false, "a too-short clip never hard-fails as dead");
+
+// INTENT ARC FOLD: a uniform sweep with a drop declared mid-clip → the climax
+// segment carries at least the clip mean → meetsArc true.
+const arcWithIntent = scoreArc({
+  fps: FPS,
+  intent: intentAt(Math.round(((ARC_FRAMES / 2 / FPS) * 1000) / 1) - 100),
+  rgb: arcEvolving,
+});
+assert.ok(arcWithIntent.intentArc?.declared, "an intent with a drop declares an arc check");
+assert.equal(arcWithIntent.intentArc?.meetsArc, true, "a uniform sweep meets its declared arc");
+
+console.log(
+  `arc: evolving=${evolvingArc.wholeClipChange.toFixed(3)}(${evolvingArc.verdict}) dead=${deadArc.wholeClipChange.toFixed(3)}(${deadArc.verdict}) short=${shortArc.verdict} intentArc.meets=${arcWithIntent.intentArc?.meetsArc}`,
+);
+console.log(
+  "✓ arc/deadness: a sweeping structure reads evolving, frozen bars under grain read DEAD (laundering guard), short is inconclusive, intent arc folds",
 );
