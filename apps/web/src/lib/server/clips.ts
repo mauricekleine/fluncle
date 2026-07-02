@@ -19,10 +19,11 @@ type ClipRow = {
   created_at: string;
   id: string;
   in_ms: number;
-  // NOT NULL in the schema (no migration this wave), so a recording clip stores the
-  // empty-string sentinel here and carries `recording_id` instead; `rowToClip` maps ""
-  // back to `undefined`.
-  mixtape_id: string;
+  // NULLABLE since the plan→recording→mixtape Deploy-1: a recording clip carries
+  // `recording_id` and NULL here. Legacy rows may still hold the old `''`
+  // sentinel until the folded `db:backfill` clears them; `rowToClip` maps both
+  // to `undefined`.
+  mixtape_id: string | null;
   out_ms: number;
   recording_id: string | null;
   status: "done" | "pending";
@@ -48,7 +49,7 @@ function rowToClip(row: ClipRow): ClipDTO {
     createdAt: row.created_at,
     id: row.id,
     inMs: row.in_ms,
-    // "" is the recording-clip sentinel (the column is NOT NULL) — expose it as absent.
+    // NULL (or the legacy "" sentinel, until backfilled) — expose it as absent.
     mixtapeId: row.mixtape_id || undefined,
     outMs: row.out_ms,
     recordingId: row.recording_id ?? undefined,
@@ -157,13 +158,14 @@ export async function createClip(recordingId: string, input: ClipInput): Promise
   const now = new Date().toISOString();
   const db = await getDb();
 
-  // `mixtape_id` is NOT NULL in the schema (no migration this wave), so a recording clip
-  // stores the empty-string sentinel there and keys off `recording_id`.
+  // A recording clip has ONE owner: `recording_id`. `mixtape_id` is NULL (the
+  // column is nullable since the plan→recording→mixtape Deploy-1 — the old `''`
+  // sentinel is retired at the write source; readers already treat both as absent).
   await db.execute({
     args: [id, recordingId, inMs, outMs, xOffset, caption, status, now, now],
     sql: `insert into mixtape_clips
             (id, mixtape_id, recording_id, in_ms, out_ms, x_offset, caption, status, created_at, updated_at)
-          values (?, '', ?, ?, ?, ?, ?, ?, ?, ?)`,
+          values (?, null, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 
   return rowToClip(await getClipRow(id));

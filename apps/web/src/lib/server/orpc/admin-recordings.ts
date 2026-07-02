@@ -109,8 +109,24 @@ export function adminRecordingsHandlers(os: Implementer) {
             : "video/mp4";
 
         // The recording OWNS its key — read it off the row (getRecording throws
-        // `recording_not_found`/404 if it's gone).
+        // `recording_not_found`/404 if it's gone). A PLAN owns no key yet (r2Key
+        // NULL since the plan→recording→mixtape Deploy-1); attaching a take to a
+        // plan is a later slice, so presigning one is a clean 409 for now.
         const recording = await getRecording(input.recordingId);
+
+        if (!recording.r2Key) {
+          throw new ORPCError("CONFLICT", {
+            data: {
+              apiCode: "recording_has_no_video",
+              apiMessage:
+                "This recording is a plan (no owned video key) — create a recording to upload a take",
+            },
+            message:
+              "This recording is a plan (no owned video key) — create a recording to upload a take",
+            status: 409,
+          });
+        }
+
         const presign = await presignMultipartUpload(
           VIDEOS_BUCKET,
           recording.r2Key,

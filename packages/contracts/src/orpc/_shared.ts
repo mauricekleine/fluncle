@@ -328,7 +328,9 @@ export const RecordingDTOSchema = z
     logId: z.string().optional(),
     // The promoted mixtape's id (absent until promoted).
     mixtapeId: z.string().optional(),
-    r2Key: z.string(),
+    // The owned R2 key. ABSENT for a PLAN (a recording with no video — RFC
+    // plan→recording→mixtape): "has video" = `r2Key` present.
+    r2Key: z.string().optional(),
     recordedAt: z.string().optional(),
     title: z.string(),
     tracklist: z.array(RecordingTracklistItemSchema),
