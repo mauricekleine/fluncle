@@ -83,10 +83,35 @@ export type CosmosAudio = {
   /** Clip length, 10000-30000; 20s default, agent-overridable via --duration-ms */
   durationMs: number;
   bpm: number;
+  /**
+   * 0..1 confidence in `bpm` (autocorrelation peak prominence + harmonic-comb
+   * agreement). `bpm` is HONEST — never clamped into the D&B family — so a low
+   * confidence or an out-of-family tempo is a signal to verify by ear, not a
+   * failure. Optional so old props.json on disk still typecheck.
+   */
+  bpmConfidence?: number;
   /** ms offsets relative to clip start */
   beatGrid: number[];
+  /**
+   * Bar downbeats (every 4th beat at the kick-scored bar phase), ms relative to
+   * clip start. Optional so old props.json still typecheck (missing reads as no
+   * downbeat pulse, matching prior behaviour).
+   */
+  downbeats?: number[];
   /** ms offsets relative to clip start */
   onsets: number[];
+  /**
+   * The primary detected drop (quiet-breakdown→loud-slam novelty, re-entry-flux
+   * weighted), ms relative to clip start. The drop envelope's default peak when
+   * present (explicit reactivity config still wins). Absent when the clip window
+   * carries no confident drop.
+   */
+  dropMs?: number;
+  /**
+   * All scored drop candidates in the clip window, score-descending; `score` is
+   * the 0..1 window-normalized novelty. Fuel for choosing an alternate climax.
+   */
+  dropCandidates?: { timeMs: number; score: number }[];
   energyCurve: EnergySample[];
   /** Low band, <150Hz (kick/sub). 0..1, normalized. */
   bassCurve: EnergySample[];
@@ -100,6 +125,26 @@ export type CosmosAudio = {
    * still typecheck (a missing curve reads 0, today's behaviour).
    */
   fluxCurve?: EnergySample[];
+  /**
+   * Sub weight, <60Hz — the low-end floor under the kick. 0..1, shared-normalized
+   * with kick/snare/air (cross-band loudness survives). Optional like fluxCurve.
+   */
+  subCurve?: EnergySample[];
+  /**
+   * Kick punch, 60-150Hz with the attack transient emphasized — the strike, not
+   * the sustained body. 0..1, shared-normalized with sub/snare/air. Optional.
+   */
+  kickCurve?: EnergySample[];
+  /**
+   * Snare crack/presence, 2-5kHz, transient-emphasized. 0..1, shared-normalized
+   * with sub/kick/air. Optional like fluxCurve.
+   */
+  snareCurve?: EnergySample[];
+  /**
+   * Air/sparkle, >5kHz (hat tails, cymbal wash, vinyl hiss). 0..1,
+   * shared-normalized with sub/kick/snare. Optional like fluxCurve.
+   */
+  airCurve?: EnergySample[];
   /** Pre-normalization per-band crest factor; lets the motion checker tell a flat track from a normalizer-flattened one. */
   rawDynamicsHint?: { bass: number; mid: number; treble: number };
 };

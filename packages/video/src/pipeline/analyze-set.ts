@@ -27,6 +27,8 @@ import {
   type Bands,
   HOP_MS,
   computeBands,
+  meanRange,
+  movingAverage,
   normalizeBandsShared,
   normalizeInPlace,
   onsetEnvelope,
@@ -211,25 +213,6 @@ async function decodeSetMono(setPath: string, sampleRate: number): Promise<Float
 // Small numeric helpers
 // ---------------------------------------------------------------------------
 
-/** Box-blur moving average via a prefix sum — O(n), window = 2*halfWin+1 hops. */
-function movingAverage(arr: Float32Array, halfWin: number): Float32Array {
-  const n = arr.length;
-  const out = new Float32Array(n);
-  if (n === 0) {
-    return out;
-  }
-  const prefix = new Float64Array(n + 1);
-  for (let i = 0; i < n; i++) {
-    prefix[i + 1] = prefix[i] + arr[i];
-  }
-  for (let i = 0; i < n; i++) {
-    const lo = Math.max(0, i - halfWin);
-    const hi = Math.min(n - 1, i + halfWin);
-    out[i] = (prefix[hi + 1] - prefix[lo]) / (hi - lo + 1);
-  }
-  return out;
-}
-
 /**
  * Centred sliding-window max via a monotonic deque — O(n), window
  * [c-halfWin, c+halfWin] (clamped at the edges). The deque holds indices in
@@ -265,19 +248,6 @@ function slidingMax(arr: Float32Array, halfWin: number): Float32Array {
     out[c] = head < dq.length ? arr[dq[head]] : 0;
   }
   return out;
-}
-
-function meanRange(arr: Float32Array, fromHop: number, toHop: number): number {
-  const lo = Math.max(0, fromHop);
-  const hi = Math.min(arr.length - 1, toHop);
-  if (hi < lo) {
-    return 0;
-  }
-  let s = 0;
-  for (let i = lo; i <= hi; i++) {
-    s += arr[i];
-  }
-  return s / (hi - lo + 1);
 }
 
 /** Average groups of `factor` hops to decimate a 20ms curve to the display hop. */
