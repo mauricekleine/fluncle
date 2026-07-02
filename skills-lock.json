@@ -89,9 +89,9 @@
       "computedHash": "ee0b06da4fda6ee1eec24270dc5f718383e7a4403f2e0de03f73d88cee288209"
     },
     "fluncle-video": {
-      "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/fluncle-video",
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-video",
       "sourceType": "local",
-      "computedHash": "b73437808368a8e4e673dd63a773e2cc2badb9889fd001f842df1620f5df1e07"
+      "computedHash": "49adcdc98757897261ce610ae2e307d8ece9fffa4a4655c832bd45546f90fc34"
     },
     "hetzner-devbox": {
       "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/hetzner-devbox",
