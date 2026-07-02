@@ -53,6 +53,18 @@ export type ShaderLayerProps = {
   trebleCurve?: EnergySample[];
   /** Flux curve (continuous transient/attack) for `u_flux` via useFlux. Omitted = u_flux stays 0. */
   fluxCurve?: EnergySample[];
+  /** Sub curve (<60Hz weight) for `u_sub` via useSub. Omitted = u_sub stays 0. */
+  subCurve?: EnergySample[];
+  /** Kick curve (60-150Hz, transient-emphasized) for `u_kickHit` via useKick. Omitted = 0. */
+  kickCurve?: EnergySample[];
+  /** Snare curve (2-5kHz, transient-emphasized) for `u_snareHit` via useSnare. Omitted = 0. */
+  snareCurve?: EnergySample[];
+  /** Air curve (>5kHz) for `u_air` via useAir. Omitted = u_air stays 0. */
+  airCurve?: EnergySample[];
+  /** Bar downbeats (ms offsets) for `u_downbeatPulse` via useDownbeat. Omitted = pulse stays 0. */
+  downbeats?: number[];
+  /** Detected drop time (ms) — the drop envelope's default peak (u_audioDrop). */
+  dropMs?: number;
   /**
    * Shared audio-reactivity profile. Use these to disturb MATERIAL (width,
    * density, threshold, glow, grain, refraction, exposure) on the immediate
@@ -104,6 +116,11 @@ uniform float u_bassFast;  // near-raw bass, for pressure without smoothing lag
 uniform float u_midFast;   // near-raw mid, snappier lead-driven reactions
 uniform float u_trebleFast;// near-raw treble, snappy hat/cymbal sparkle
 uniform float u_flux;      // 0..1 continuous transient/attack envelope (between-onset shimmer)
+uniform float u_sub;       // 0..1 smoothed sub weight <60Hz (low-end pressure/mass)
+uniform float u_kickHit;   // 0..1 near-raw transient-emphasized kick punch 60-150Hz (MATERIAL only)
+uniform float u_snareHit;  // 0..1 near-raw transient-emphasized snare crack 2-5kHz (MATERIAL only)
+uniform float u_air;       // 0..1 air band >5kHz (hat tails/cymbal wash, fine sparkle)
+uniform float u_downbeatPulse; // 0..1, snaps on each bar downbeat and decays across the bar
 uniform float u_seed;      // per-track seed
 uniform vec3  u_palette[4];// Retint ramp stops, dark -> light
 
@@ -393,6 +410,12 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
   midCurve,
   trebleCurve,
   fluxCurve,
+  subCurve,
+  kickCurve,
+  snareCurve,
+  airCurve,
+  downbeats,
+  dropMs,
   reactivity,
   uniforms,
   opacity = 1,
@@ -410,12 +433,18 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
   // Audio uniforms from the shared bus (no-op when no curve/grid supplied).
   const audio = useAudioReactivity(
     {
+      airCurve: airCurve ?? [],
       bassCurve: bassCurve ?? [],
       beatGrid: beatGrid ?? [],
+      downbeats: downbeats ?? [],
+      dropMs,
       energyCurve: energyCurve ?? [],
       fluxCurve: fluxCurve ?? [],
+      kickCurve: kickCurve ?? [],
       midCurve: midCurve ?? [],
       onsets: onsets ?? [],
+      snareCurve: snareCurve ?? [],
+      subCurve: subCurve ?? [],
       trebleCurve: trebleCurve ?? [],
     },
     {
@@ -576,6 +605,11 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
     gl.uniform1f(u("u_midFast"), audio.midFast);
     gl.uniform1f(u("u_trebleFast"), audio.trebleFast);
     gl.uniform1f(u("u_flux"), audio.flux);
+    gl.uniform1f(u("u_sub"), audio.sub);
+    gl.uniform1f(u("u_kickHit"), audio.kickHit);
+    gl.uniform1f(u("u_snareHit"), audio.snareHit);
+    gl.uniform1f(u("u_air"), audio.air);
+    gl.uniform1f(u("u_downbeatPulse"), audio.downbeat);
     gl.uniform1f(u("u_seed"), seed);
 
     const flatPalette = new Float32Array(stops.flatMap((hex) => toVec3(hex)));

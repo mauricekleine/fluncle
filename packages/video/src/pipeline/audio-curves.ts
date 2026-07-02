@@ -14,6 +14,16 @@ import { fftInPlace, hannWindow, nextPow2 } from "./fft";
 export const HOP_MS = 20;
 export const BASS_CUTOFF_HZ = 150;
 export const MID_CUTOFF_HZ = 2000;
+// Fine-band boundaries for the optional instrument-keyed curves. These sit
+// INSIDE the coarse three-band split (sub+kick partition bass; snare+air live
+// in the high band) so the classic bass/mid/treble curves are untouched.
+export const SUB_CUTOFF_HZ = 60;
+export const SNARE_MIN_HZ = 2000;
+export const SNARE_MAX_HZ = 5000;
+// Log-compression gain for the superflux onset envelope (log1p(gain * mag)).
+// Compresses loud-section dynamics so quiet-intro transients keep comparable
+// flux to transients inside a loud drop (the local-median picker finishes the job).
+const SUPERFLUX_LOG_GAIN = 50;
 
 export type DecodedWav = {
   samples: Float32Array;
@@ -26,6 +36,22 @@ export type Bands = {
   bass: Float32Array;
   mid: Float32Array;
   high: Float32Array;
+  /** Fine bands (same peak-bin discipline as the coarse three): <60Hz sub weight. */
+  sub: Float32Array;
+  /** 60-150Hz — the kick body (transient emphasis is applied downstream, not here). */
+  kick: Float32Array;
+  /** 2-5kHz — snare crack / presence. */
+  snare: Float32Array;
+  /** >5kHz — air/sparkle. Near-empty at the set path's 11025Hz (Nyquist 5.5kHz); fine. */
+  air: Float32Array;
+  /**
+   * Per-hop SUPERFLUX onset envelope: log-compressed per-bin spectral flux with a
+   * ±1-bin maximum-filter on the previous frame (suppresses vibrato/pitch-drift
+   * false positives), summed over positive bin deltas. Sharper and more
+   * loudness-robust than the 3-band delta envelope; the render path feeds this to
+   * the onset picker + BPM/grid estimation.
+   */
+  superflux: Float32Array;
   hopCount: number;
 };
 
@@ -58,6 +84,10 @@ export function computeBands(decoded: DecodedWav): Bands {
   const binHz = sampleRate / fftSize;
   const bassMaxBin = Math.max(1, Math.floor(BASS_CUTOFF_HZ / binHz));
   const midMaxBin = Math.max(bassMaxBin + 1, Math.floor(MID_CUTOFF_HZ / binHz));
+  // Fine-band boundaries (Hz-derived like the coarse ones, so they auto-recompute).
+  const subMaxBin = Math.max(1, Math.floor(SUB_CUTOFF_HZ / binHz));
+  const snareMinBin = Math.max(midMaxBin, Math.floor(SNARE_MIN_HZ / binHz));
+  const snareMaxBin = Math.max(snareMinBin + 1, Math.floor(SNARE_MAX_HZ / binHz));
 
   const re = new Float64Array(fftSize);
   const im = new Float64Array(fftSize);
@@ -66,6 +96,16 @@ export function computeBands(decoded: DecodedWav): Bands {
   const bass = new Float32Array(hopCount);
   const mid = new Float32Array(hopCount);
   const high = new Float32Array(hopCount);
+  const sub = new Float32Array(hopCount);
+  const kick = new Float32Array(hopCount);
+  const snare = new Float32Array(hopCount);
+  const air = new Float32Array(hopCount);
+  const superflux = new Float32Array(hopCount);
+
+  // Previous frame's log-compressed per-bin magnitudes for the superflux delta.
+  // prevLog[k] holds log1p(gain * mag) at hop h-1; maxed over ±1 bin at read time.
+  const prevLog = new Float64Array(half + 1);
+  const currLog = new Float64Array(half + 1);
 
   for (let h = 0; h < hopCount; h++) {
     const start = h * hopSamples;
@@ -93,6 +133,11 @@ export function computeBands(decoded: DecodedWav): Bands {
     let pBass = 0;
     let pMid = 0;
     let pHigh = 0;
+    let pSub = 0;
+    let pKick = 0;
+    let pSnare = 0;
+    let pAir = 0;
+    let sf = 0;
     for (let k = 1; k <= half; k++) {
       const p = re[k] * re[k] + im[k] * im[k];
       if (k <= bassMaxBin) {
@@ -108,13 +153,98 @@ export function computeBands(decoded: DecodedWav): Bands {
           pHigh = p;
         }
       }
+      // Fine bands (independent boundaries; sub+kick partition bass, snare+air
+      // carve the high band).
+      if (k <= subMaxBin) {
+        if (p > pSub) {
+          pSub = p;
+        }
+      } else if (k <= bassMaxBin) {
+        if (p > pKick) {
+          pKick = p;
+        }
+      } else if (k > snareMinBin && k <= snareMaxBin) {
+        if (p > pSnare) {
+          pSnare = p;
+        }
+      } else if (k > snareMaxBin) {
+        if (p > pAir) {
+          pAir = p;
+        }
+      }
+      // Superflux: log-compressed magnitude vs the previous frame's ±1-bin max.
+      currLog[k] = Math.log1p(SUPERFLUX_LOG_GAIN * Math.sqrt(p));
+      if (h > 0) {
+        const prevMax = Math.max(prevLog[k - 1], prevLog[k], prevLog[Math.min(half, k + 1)]);
+        const d = currLog[k] - prevMax;
+        if (d > 0) {
+          sf += d;
+        }
+      }
     }
     bass[h] = Math.sqrt(pBass);
     mid[h] = Math.sqrt(pMid);
     high[h] = Math.sqrt(pHigh);
+    sub[h] = Math.sqrt(pSub);
+    kick[h] = Math.sqrt(pKick);
+    snare[h] = Math.sqrt(pSnare);
+    air[h] = Math.sqrt(pAir);
+    superflux[h] = h > 0 ? sf : 0;
+    prevLog.set(currLog);
   }
 
-  return { bass, full, high, hopCount, mid };
+  return { air, bass, full, high, hopCount, kick, mid, snare, sub, superflux };
+}
+
+/**
+ * Transient emphasis for the punch bands (kick/snare): boost each hop by its
+ * positive delta so the ATTACK reads over the sustained body — a held bass note
+ * stays level while the kick that strikes it spikes. Returns a new array (the
+ * raw band is untouched); run BEFORE normalization so the emphasized attacks
+ * take part in the shared-percentile reference. Pure + deterministic.
+ */
+export function emphasizeTransients(band: Float32Array, amount = 1.5): Float32Array {
+  const out = new Float32Array(band.length);
+  if (band.length > 0) {
+    out[0] = band[0];
+  }
+  for (let h = 1; h < band.length; h++) {
+    out[h] = band[h] + amount * Math.max(0, band[h] - band[h - 1]);
+  }
+  return out;
+}
+
+/** Box-blur moving average via a prefix sum — O(n), window = 2*halfWin+1 hops. */
+export function movingAverage(arr: Float32Array, halfWin: number): Float32Array {
+  const n = arr.length;
+  const out = new Float32Array(n);
+  if (n === 0) {
+    return out;
+  }
+  const prefix = new Float64Array(n + 1);
+  for (let i = 0; i < n; i++) {
+    prefix[i + 1] = prefix[i] + arr[i];
+  }
+  for (let i = 0; i < n; i++) {
+    const lo = Math.max(0, i - halfWin);
+    const hi = Math.min(n - 1, i + halfWin);
+    out[i] = (prefix[hi + 1] - prefix[lo]) / (hi - lo + 1);
+  }
+  return out;
+}
+
+/** Mean of arr[fromHop..toHop] inclusive, clamped to the array. 0 on an empty range. */
+export function meanRange(arr: Float32Array, fromHop: number, toHop: number): number {
+  const lo = Math.max(0, fromHop);
+  const hi = Math.min(arr.length - 1, toHop);
+  if (hi < lo) {
+    return 0;
+  }
+  let s = 0;
+  for (let i = lo; i <= hi; i++) {
+    s += arr[i];
+  }
+  return s / (hi - lo + 1);
 }
 
 /** Half-wave-rectified summed band-energy delta = onset envelope (per hop). */

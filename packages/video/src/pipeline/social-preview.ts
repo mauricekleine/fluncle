@@ -218,7 +218,10 @@ async function main(): Promise<void> {
     bassSamples: audio.bassCurve.length,
     beatCount: audio.beatGrid.length,
     bpm: audio.bpm,
+    bpmConfidence: audio.bpmConfidence,
     confidence: preview.confidence,
+    downbeatCount: audio.downbeats?.length ?? 0,
+    dropMs: audio.dropMs,
     durationMs: audio.durationMs,
     energySamples: audio.energyCurve.length,
     glow: palette.glow,
@@ -233,8 +236,19 @@ async function main(): Promise<void> {
   };
   console.log(`[social-preview] summary:\n${JSON.stringify(summary, null, 2)}`);
 
-  if (audio.bpm < 160 || audio.bpm > 185) {
-    throw new Error(`[social-preview] assertion failed: bpm ${audio.bpm} not in [160,185]`);
+  // The BPM is HONEST now (never clamped into [160,185] — the old hard fold
+  // fabricated grids), so an out-of-family tempo or a weak estimate is a loud
+  // WARNING to verify by ear, never a failure.
+  const bpmConfidence = audio.bpmConfidence ?? 0;
+  if (audio.bpm < 150 || audio.bpm > 190) {
+    console.warn(
+      `[social-preview] WARN: bpm ${audio.bpm} sits outside the D&B family [150,190] — the tempo is unclamped and honest, so trust the grid, but sanity-check the cut by ear before shipping.`,
+    );
+  }
+  if (bpmConfidence < 0.3) {
+    console.warn(
+      `[social-preview] WARN: bpm confidence ${bpmConfidence.toFixed(3)} is low — the beat grid may be off; verify the beat lock by ear before shipping.`,
+    );
   }
   if (audio.beatGrid.length <= 20) {
     throw new Error(

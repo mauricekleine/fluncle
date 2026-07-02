@@ -1,21 +1,42 @@
 import { useMemo } from "react";
 import { useCurrentFrame, useVideoConfig } from "remotion";
 import { type CosmosAudio, type EnergySample } from "../types";
+import { useAir } from "./use-air";
 import { useBass } from "./use-bass";
 import { useBeat } from "./use-beat";
+import { useDownbeat } from "./use-downbeat";
 import { useEnergy, type UseCurveOptions } from "./use-energy";
 import { useFlux } from "./use-flux";
+import { useKick } from "./use-kick";
 import { useMid } from "./use-mid";
 import { useOnset } from "./use-onset";
+import { useSnare } from "./use-snare";
+import { useSub } from "./use-sub";
 import { useTreble } from "./use-treble";
 
 type AudioReactivityInput = Pick<
   CosmosAudio,
-  "bassCurve" | "beatGrid" | "energyCurve" | "fluxCurve" | "midCurve" | "onsets" | "trebleCurve"
+  | "airCurve"
+  | "bassCurve"
+  | "beatGrid"
+  | "downbeats"
+  | "dropMs"
+  | "energyCurve"
+  | "fluxCurve"
+  | "kickCurve"
+  | "midCurve"
+  | "onsets"
+  | "snareCurve"
+  | "subCurve"
+  | "trebleCurve"
 >;
 
 export type DropEnvelopeOptions = {
-  /** Defaults to the strongest energy sample in the clip. */
+  /**
+   * Defaults to the analyzer's detected drop (`audio.dropMs` — breakdown→slam
+   * novelty) when present, else the strongest energy sample in the clip. Set
+   * explicitly to override both.
+   */
   peakTimeMs?: number;
   /** Milliseconds before the peak used for the rise. Default 700. */
   riseMs?: number;
@@ -29,6 +50,8 @@ export type DropEnvelopeOptions = {
 
 export type AudioReactivityOptions = {
   beatDecay?: number;
+  /** Exponential decay of the bar-downbeat pulse. Default 2.2 (breathes across the bar). */
+  downbeatDecay?: number;
   swellDecay?: number;
   onsetWindowMs?: number;
   energy?: UseCurveOptions;
@@ -36,6 +59,10 @@ export type AudioReactivityOptions = {
   mid?: UseCurveOptions;
   treble?: UseCurveOptions;
   flux?: UseCurveOptions;
+  sub?: UseCurveOptions;
+  kick?: UseCurveOptions;
+  snare?: UseCurveOptions;
+  air?: UseCurveOptions;
   fastEnergy?: UseCurveOptions;
   fastBass?: UseCurveOptions;
   fastMid?: UseCurveOptions;
@@ -67,8 +94,18 @@ export type AudioReactivity = {
   trebleFast: number;
   /** Continuous transient/attack (flux) envelope — between-onset shimmer. */
   flux: number;
+  /** Smoothed sub weight (<60Hz) — low-end pressure/mass, slower than bass. 0 without subCurve. */
+  sub: number;
+  /** Near-raw transient-emphasized kick punch (60-150Hz) — the strike, a MATERIAL signal. 0 without kickCurve. */
+  kickHit: number;
+  /** Near-raw transient-emphasized snare crack (2-5kHz) — the backbeat, a MATERIAL signal. 0 without snareCurve. */
+  snareHit: number;
+  /** Air band (>5kHz) — hat tails/cymbal wash, fine sparkle. 0 without airCurve. */
+  air: number;
   /** Beat-grid pulse, snap-to-one and exponential decay. */
   beat: number;
+  /** Bar-downbeat pulse — snaps on the one, decays across the bar. 0 without downbeats. */
+  downbeat: number;
   /** Onset transient pulse, usually shorter than beat. */
   onset: number;
   /** Beat + onset composite for immediate material hits. */
@@ -77,7 +114,7 @@ export type AudioReactivity = {
   swell: number;
   /** Peak envelope, usually around the strongest musical moment in the cut. */
   drop: number;
-  /** The energy peak used for drop when one could be found. */
+  /** The drop time driving the envelope: `audio.dropMs` when the analyzer found a real drop, else the loudest energy sample. */
   peakTimeMs?: number;
   /**
    * Ready-to-spread shader uniforms. These are intentionally named as audio
@@ -85,6 +122,8 @@ export type AudioReactivity = {
    */
   uniforms: Record<string, number>;
 };
+
+// --- Pure composite math (exported for tests: no React/Remotion needed) ------
 
 const clamp01 = (n: number): number => Math.min(1, Math.max(0, n));
 
@@ -96,7 +135,8 @@ const smoothstep = (edge0: number, edge1: number, x: number): number => {
   return t * t * (3 - 2 * t);
 };
 
-const findPeakTimeMs = (curve: EnergySample[]): number | undefined => {
+/** The loudest sample's time — the drop fallback when the analyzer shipped no dropMs. */
+export const findPeakTimeMs = (curve: EnergySample[]): number | undefined => {
   if (curve.length === 0) {
     return undefined;
   }
@@ -110,7 +150,8 @@ const findPeakTimeMs = (curve: EnergySample[]): number | undefined => {
   return peak.timeMs;
 };
 
-const dropEnvelope = (
+/** Rise/hold/fall envelope around the drop. Explicit `options.peakTimeMs` wins over the detected peak. */
+export const dropEnvelope = (
   nowMs: number,
   peakTimeMs: number | undefined,
   options: DropEnvelopeOptions | undefined,
@@ -130,6 +171,42 @@ const dropEnvelope = (
   const fall = 1 - smoothstep(peak + holdMs, peak + holdMs + fallMs, nowMs);
   return clamp01(floor + (1 - floor) * rise * fall);
 };
+
+/** Beat + onset composite for immediate MATERIAL hits (see the bus doc). */
+export const computeHit = (
+  beat: number,
+  onset: number,
+  beatWeight = 0.62,
+  onsetWeight = 0.5,
+): number => clamp01(beat * beatWeight + onset * onsetWeight);
+
+/**
+ * The bass/energy-led MOTION composite. The per-beat term defaults to 0 (see
+ * the swell rationale in the hook body); bass+energy weights sum to 1.0 so a
+ * real drop drives swell to the full 1.0.
+ */
+export const computeSwell = (
+  swellBeat: number,
+  bass: number,
+  energy: number,
+  beatWeight = 0,
+  bassWeight = 0.6,
+  energyWeight = 0.4,
+): number => clamp01(swellBeat * beatWeight + bass * bassWeight + energy * energyWeight);
+
+/** hit+swell+drop — the general material disruption signal (u_audioDisturbance). */
+export const computeDisturbance = (hit: number, swell: number, drop: number): number =>
+  clamp01(hit * 0.6 + swell * 0.45 + drop * 0.25);
+
+/**
+ * The drop envelope's default peak: the analyzer's detected drop when present
+ * (`audio.dropMs`, breakdown→slam novelty — the musical moment), else the
+ * loudest energy sample (which on spiky D&B picks an arbitrary kick).
+ */
+export const resolveDropPeakTimeMs = (
+  dropMs: number | undefined,
+  energyCurve: EnergySample[],
+): number | undefined => dropMs ?? findPeakTimeMs(energyCurve);
 
 /**
  * A shared audio-reactivity bus for track compositions.
@@ -176,19 +253,28 @@ export const useAudioReactivity = (
     ...options.fastTreble,
   });
   const flux = useFlux(audio.fluxCurve ?? [], options.flux);
+  const sub = useSub(audio.subCurve ?? [], options.sub);
+  const kickHit = useKick(audio.kickCurve ?? [], options.kick);
+  const snareHit = useSnare(audio.snareCurve ?? [], options.snare);
+  const air = useAir(audio.airCurve ?? [], options.air);
   const { pulse: beat } = useBeat(audio.beatGrid, { decay: options.beatDecay ?? 3.2 });
+  const { pulse: downbeat } = useDownbeat(audio.downbeats ?? [], {
+    decay: options.downbeatDecay ?? 2.2,
+  });
   // swellBeat feeds MOTION, so it decays slowly: at high BPM a fast decay leaves a
   // per-beat sawtooth that makes movement lurch. A slow decay blurs consecutive
   // beats into a continuous breath instead.
   const { pulse: swellBeat } = useBeat(audio.beatGrid, { decay: options.swellDecay ?? 0.8 });
   const onset = useOnset(audio.onsets, options.onsetWindowMs ?? 140);
 
-  const peakTimeMs = useMemo(() => findPeakTimeMs(audio.energyCurve), [audio.energyCurve]);
+  // Explicit `options.drop.peakTimeMs` still wins inside dropEnvelope.
+  const peakTimeMs = useMemo(
+    () => resolveDropPeakTimeMs(audio.dropMs, audio.energyCurve),
+    [audio.dropMs, audio.energyCurve],
+  );
   const drop = dropEnvelope(nowMs, peakTimeMs, options.drop);
 
-  const hit = clamp01(
-    beat * (options.hitBeatWeight ?? 0.62) + onset * (options.hitOnsetWeight ?? 0.5),
-  );
+  const hit = computeHit(beat, onset, options.hitBeatWeight, options.hitOnsetWeight);
   // swell drives MOTION, so it is purely bass/energy-led: the per-beat term
   // (swellBeatWeight) defaults to 0. ANY beat weight here makes the picture surge
   // on every 1/4 note, which reads as jitter at high BPM — proven on the 173 BPM
@@ -198,26 +284,34 @@ export const useAudioReactivity = (
   // faint motional beat-lock genuinely won't strobe. The bass+energy weights sum
   // to 1.0 (0.6 + 0.4) so a real drop where both peak drives swell to the full
   // 1.0; clamp01 is now a guarantee, not a ceiling.
-  const swell = clamp01(
-    swellBeat * (options.swellBeatWeight ?? 0) +
-      bass * (options.swellBassWeight ?? 0.6) +
-      energy * (options.swellEnergyWeight ?? 0.4),
+  const swell = computeSwell(
+    swellBeat,
+    bass,
+    energy,
+    options.swellBeatWeight,
+    options.swellBassWeight,
+    options.swellEnergyWeight,
   );
-  const disturbance = clamp01(hit * 0.6 + swell * 0.45 + drop * 0.25);
+  const disturbance = computeDisturbance(hit, swell, drop);
 
   return {
+    air,
     bass,
     bassFast,
     beat,
+    downbeat,
     drop,
     energy,
     energyFast,
     flux,
     hit,
+    kickHit,
     mid,
     midFast,
     onset,
     peakTimeMs,
+    snareHit,
+    sub,
     swell,
     treble,
     trebleFast,
