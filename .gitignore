@@ -30,6 +30,11 @@ packages/video/out/
 packages/video/public/*.mp3
 packages/video/public/*.m4a
 packages/video/public/*.wav
+# Generated/probe images dropped into public/ for local shader verification
+# (textures, posters). Bitmaps are banned in renders (README "No static assets"),
+# so any png here is throwaway working state, never a committed asset.
+packages/video/public/*.png
+packages/video/public/*.jpg
 # Generated/scratch track compositions (output, not codebase history); root.tsx
 # auto-registers these. Keep the dir (.gitkeep) so require.context resolves.
 packages/video/src/remotion/workbench/*
