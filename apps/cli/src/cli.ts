@@ -33,6 +33,15 @@ type AdminQueueOptions = AdminListOptions & {
   hasObservation?: boolean;
 };
 
+// `admin tracks list` filters. `--no-key` is Commander's negation of a `key`
+// boolean (default true), so `key === false` means the flag was passed; `--has-key
+// <bool>` is the explicit tri-state form. Absent both ⇒ no key filter (list all).
+type AdminTracksListOptions = AdminListOptions & {
+  hasKey?: string;
+  key?: boolean;
+  order?: string;
+};
+
 // A verb whose worklist is a `--queue` view flag (`tracks enrich|observe|context|
 // note --queue`): the worklist runners read `json`/`limit` off it (AdminListOptions).
 type AdminQueueViewOptions = AdminListOptions & {
@@ -498,6 +507,24 @@ function addAdminCommands(program: Command): void {
     .action(async (options: AdminQueueOptions) => {
       const { queueCommand } = await import("./commands/admin-tracks");
       await runAdminQueue(options, queueCommand);
+    });
+
+  // A filterable listing of findings. Primary use: `--no-key` surfaces the
+  // missing-musical-key backlog (findings the DSP left key-null below its
+  // confidence floor) so it's countable + targetable — the input query for the
+  // Rekordbox key-backfill (fluncle-key-backfill skill). `--has-key <bool>` is the
+  // explicit tri-state (list only those WITH, or only those WITHOUT, a key).
+  adminTracks
+    .command("list")
+    .description("List findings, filterable by musical-key presence (--no-key / --has-key)")
+    .option("--limit <limit>", "Number of findings to show", "50")
+    .option("--no-key", "Only findings with NO stored musical key (the key-backfill backlog)")
+    .option("--has-key <bool>", "Filter by key presence: true (has key) or false (missing)")
+    .option("--order <order>", "Sort: asc (oldest first) or desc (newest first)", "desc")
+    .option("--json", "Print JSON", false)
+    .action(async (options: AdminTracksListOptions) => {
+      const { listCommand } = await import("./commands/admin-tracks");
+      await runAdminTracksList(options, listCommand);
     });
 
   // The enrichment verb. Enrichment itself runs as the on-box `fluncle-enrich`
@@ -2397,6 +2424,53 @@ function parseListLimit(value: string | undefined): number {
   }
 
   return limit;
+}
+
+// Resolve the tri-state key filter from the two accepted forms: `--no-key`
+// (Commander sets `key === false`) or `--has-key true|false`. Absent both ⇒
+// undefined (no filter — list everything). `--no-key` wins if both are given.
+function resolveHasKey(options: AdminTracksListOptions): boolean | undefined {
+  if (options.key === false) {
+    return false;
+  }
+
+  if (options.hasKey === "false") {
+    return false;
+  }
+
+  if (options.hasKey === "true") {
+    return true;
+  }
+
+  return undefined;
+}
+
+async function runAdminTracksList(
+  options: AdminTracksListOptions,
+  listCommand: typeof import("./commands/admin-tracks").listCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const order = options.order === "asc" ? "asc" : "desc";
+  const hasKey = resolveHasKey(options);
+  const tracks = await listCommand({ hasKey, limit, order });
+
+  if (options.json) {
+    printJson({ ok: true, tracks });
+    return;
+  }
+
+  if (tracks.length === 0) {
+    const scope = hasKey === false ? " missing a key" : hasKey === true ? " with a key" : "";
+    console.log(`No findings${scope}.`);
+    return;
+  }
+
+  const { trackRows } = await import("./format");
+  const scope =
+    hasKey === false ? " missing a musical key" : hasKey === true ? " with a musical key" : "";
+  const noun = tracks.length === 1 ? "finding" : "findings";
+  console.log(`${tracks.length} ${noun}${scope}:`);
+  console.log(trackRows(tracks).join("\n"));
 }
 
 async function runAdminQueue(

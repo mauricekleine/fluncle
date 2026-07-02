@@ -466,6 +466,10 @@ export const listTracksAdmin = oc
       // `hasNote=false`). Tri-state tolerant strings ("true"/"false"), parsed +
       // clamped in-handler exactly like `hasVideo`.
       hasContext: z.string().optional(),
+      // `hasKey` powers the Rekordbox key-backfill's queue: `hasKey=false` lists
+      // findings whose stored musical `key` is null (the missing-key backlog).
+      // Tri-state tolerant string, parsed + clamped in-handler like `hasVideo`.
+      hasKey: z.string().optional(),
       hasNote: z.string().optional(),
       hasObservation: z.string().optional(),
       hasVideo: z.string().optional(),

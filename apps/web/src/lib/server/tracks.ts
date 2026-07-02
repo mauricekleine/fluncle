@@ -645,6 +645,13 @@ type ListTracksOptions = {
    * public reads.
    */
   hasNote?: boolean;
+  /**
+   * Musical-key presence (admin only) — the Rekordbox key-backfill's queue.
+   * `false` = `key IS NULL` (no stored key yet: the DSP left it null below its
+   * confidence floor — the missing-key backlog the backfill targets); `true` = a
+   * key is on file. Omitted for public reads. Mirrors `hasVideo`'s tri-state.
+   */
+  hasKey?: boolean;
   /** Only findings with a rendered video — the Stories feed's filter. */
   hasVideo?: boolean;
   includeMixtapes?: boolean;
@@ -685,6 +692,7 @@ export function listTracks(options: ListTracksOptions): Promise<TrackListPage>;
 export async function listTracks({
   cursor,
   hasContext,
+  hasKey,
   hasNote,
   hasObservation,
   hasVideo,
@@ -720,6 +728,14 @@ export async function listTracks({
     filterClauses.push("video_url is not null");
   } else if (hasVideo === false) {
     filterClauses.push("video_url is null");
+  }
+
+  // The key-backfill queue: `key IS NULL` (no stored musical key — the DSP left it
+  // null below its confidence floor). `true` = a key is on file. Mirrors hasVideo.
+  if (hasKey === true) {
+    filterClauses.push("key is not null");
+  } else if (hasKey === false) {
+    filterClauses.push("key is null");
   }
 
   // The context queue. `true` = resolved (a note is stored). `false` = the work
