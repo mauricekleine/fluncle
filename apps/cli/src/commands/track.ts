@@ -37,7 +37,12 @@ export type TrackVideoOptions = {
   composition?: string;
   cover?: string;
   footage?: string;
+  footageLandscape?: string;
+  footageLandscapeSocial?: string;
+  footageNotext?: string;
   footageSocial?: string;
+  intent?: string;
+  metrics?: string;
   model?: string;
   note?: string;
   poster?: string;
@@ -70,12 +75,17 @@ const FOUND_BASE = "https://found.fluncle.com";
 const VIDEO_FIELDS: ReadonlyArray<{ field: string; option: keyof TrackVideoOptions }> = [
   { field: "footage", option: "footage" },
   { field: "footage-social", option: "footageSocial" },
+  { field: "footage-notext", option: "footageNotext" },
+  { field: "footage-landscape", option: "footageLandscape" },
+  { field: "footage-landscape-social", option: "footageLandscapeSocial" },
   { field: "poster", option: "poster" },
   { field: "cover", option: "cover" },
   { field: "note", option: "note" },
   { field: "composition", option: "composition" },
   { field: "props", option: "props" },
   { field: "render", option: "render" },
+  { field: "intent", option: "intent" },
+  { field: "metrics", option: "metrics" },
 ];
 
 // Uploads a track's video bundle DIRECTLY to R2 via short-lived presigned PUT
