@@ -8,6 +8,7 @@
     ".": "./src/index.ts",
     "./orpc": "./src/orpc/index.ts",
     "./util": "./src/util.ts",
+    "./util/galaxy-slug": "./src/util/galaxy-slug.ts",
     "./util/tracklist-export": "./src/util/tracklist-export.ts"
   },
   "scripts": {
