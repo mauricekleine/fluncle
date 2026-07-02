@@ -1,4 +1,4 @@
-import { FilmStripIcon, GearSixIcon, SignOutIcon } from "@phosphor-icons/react";
+import { GearSixIcon, SignOutIcon } from "@phosphor-icons/react";
 import { useId } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -30,7 +30,6 @@ export function AdminNav({ current }: { current: AdminNavCurrent }) {
           size="sm"
           variant={current === link.key ? "secondary" : "ghost"}
         >
-          {link.key === "clips" ? <FilmStripIcon aria-hidden="true" /> : undefined}
           {link.label}
         </Button>
       ))}
