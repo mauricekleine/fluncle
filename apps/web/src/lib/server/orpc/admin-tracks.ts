@@ -225,6 +225,7 @@ export function adminTracksHandlers(os: Implementer) {
       return await listTracks({
         cursor: decodeTrackCursor(input.cursor ?? null),
         hasContext: parseTriStateBool(input.hasContext),
+        hasKey: parseTriStateBool(input.hasKey),
         hasNote: parseTriStateBool(input.hasNote),
         hasObservation: parseTriStateBool(input.hasObservation),
         hasVideo: parseTriStateBool(input.hasVideo),

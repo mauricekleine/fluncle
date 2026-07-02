@@ -1064,6 +1064,17 @@ describe("oRPC list_tracks_admin (GET /admin/tracks)", () => {
     expect(opts.hasNote).toBe(false);
   });
 
+  it("parses the key-backfill queue filter (hasKey=false)", async () => {
+    listTracks.mockResolvedValueOnce({ totalCount: 0, tracks: [] });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(adminGet("?hasKey=false&order=asc", AGENT_TOKEN));
+
+    expect(response?.status).toBe(200);
+    const [opts] = listTracks.mock.calls[0] as [Record<string, unknown>];
+    expect(opts.hasKey).toBe(false);
+  });
+
   it("leaves the new filters undefined when absent (tri-state)", async () => {
     listTracks.mockResolvedValueOnce({ totalCount: 0, tracks: [] });
 
@@ -1073,6 +1084,7 @@ describe("oRPC list_tracks_admin (GET /admin/tracks)", () => {
     expect(response?.status).toBe(200);
     const [opts] = listTracks.mock.calls[0] as [Record<string, unknown>];
     expect(opts.hasContext).toBeUndefined();
+    expect(opts.hasKey).toBeUndefined();
     expect(opts.hasNote).toBeUndefined();
     expect(opts.hasObservation).toBeUndefined();
   });

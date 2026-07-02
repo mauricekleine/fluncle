@@ -8,6 +8,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { formatKey, useKeyNotation } from "@/lib/key-notation";
 
 // The Enrich cell's dialog — queue (or re-queue) one finding for the on-box
 // enrichment cron. Enrichment is the audio-analysis pass: BPM, musical key, and
@@ -33,6 +34,7 @@ export function EnrichDialog({
   row,
   triggering,
 }: EnrichDialogProps) {
+  const { notation } = useKeyNotation();
   const status = row?.enrichmentStatus;
   const done = status === "done";
   const running = status === "processing";
@@ -62,7 +64,7 @@ export function EnrichDialog({
             </div>
             <div>
               <dt className="text-xs text-muted-foreground">Key</dt>
-              <dd className="font-mono">{row?.key ?? "—"}</dd>
+              <dd className="font-mono">{row?.key ? formatKey(row.key, notation) : "—"}</dd>
             </div>
             <p className="col-span-2 text-xs text-muted-foreground">
               {row?.features ? "Spectral features captured." : "Analysis complete."}

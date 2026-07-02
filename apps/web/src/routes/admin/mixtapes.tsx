@@ -23,7 +23,6 @@ import {
   CircleNotchIcon,
   CopyIcon,
   DotsSixVerticalIcon,
-  FilmStripIcon,
   ScissorsIcon,
   TrashIcon,
   XIcon,
@@ -74,6 +73,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { beatportSearchUrl } from "@/lib/beatport";
 import { formatAlbumDuration, formatDurationField, parseDuration } from "@/lib/format";
+import { formatKey, useKeyNotation } from "@/lib/key-notation";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
 import { predictedMixtapeLogId } from "@/lib/mixtape-log-id";
 import { type MixtapeDTO, mixtapeDisplayTitle } from "@/lib/mixtapes";
@@ -215,28 +215,19 @@ function AdminMixtapesPage() {
     <AdminShell
       current="mixtapes"
       headerActions={
-        <>
-          {/* The cross-set clip library lives one click off here, not in the deliberately
-              minimal 3-item admin nav. */}
-          <Button nativeButton={false} render={<a href="/admin/clips" />} size="sm" variant="ghost">
-            <FilmStripIcon aria-hidden="true" />
-            <span className="hidden sm:inline">Clip library</span>
-            <span className="sm:hidden">Clips</span>
-          </Button>
-          <Button disabled={creating} onClick={() => void createDraft()} size="sm">
-            {creating ? (
-              <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
-            ) : undefined}
-            {creating ? (
-              "Logging…"
-            ) : (
-              <>
-                <span className="sm:hidden">New draft</span>
-                <span className="hidden sm:inline">New mixtape draft</span>
-              </>
-            )}
-          </Button>
-        </>
+        <Button disabled={creating} onClick={() => void createDraft()} size="sm">
+          {creating ? (
+            <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+          ) : undefined}
+          {creating ? (
+            "Logging…"
+          ) : (
+            <>
+              <span className="sm:hidden">New draft</span>
+              <span className="hidden sm:inline">New mixtape draft</span>
+            </>
+          )}
+        </Button>
       }
       title="Mixtapes"
     >
@@ -1216,7 +1207,11 @@ function MemberSearch({
 // banger reads next to its neighbours). Tabular numerals like the Log ID column;
 // nothing renders until enrichment has produced a BPM or a key.
 function MemberMeta({ bpm, musicalKey }: { bpm?: number; musicalKey?: string }) {
-  const parts = [bpm ? `${Math.round(bpm)} BPM` : undefined, musicalKey].filter(Boolean);
+  // The key reads in the operator's chosen notation (scales default, Camelot for
+  // harmonic mixing) via the admin cog's useKeyNotation store.
+  const { notation } = useKeyNotation();
+  const formattedKey = formatKey(musicalKey, notation) || undefined;
+  const parts = [bpm ? `${Math.round(bpm)} BPM` : undefined, formattedKey].filter(Boolean);
   if (parts.length === 0) {
     return null;
   }
