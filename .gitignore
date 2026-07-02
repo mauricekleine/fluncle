@@ -30,6 +30,11 @@ packages/video/out/
 packages/video/public/*.mp3
 packages/video/public/*.m4a
 packages/video/public/*.wav
+# Generated/probe images dropped into public/ for local shader verification
+# (textures, posters). Bitmaps are banned in renders (README "No static assets"),
+# so any png here is throwaway working state, never a committed asset.
+packages/video/public/*.png
+packages/video/public/*.jpg
 # Hash-keyed on-disk Remotion bundle cache (render.ts) — a build artifact, not
 # codebase history; correctness comes from the hash gate, not from git.
 packages/video/.cache/

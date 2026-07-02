@@ -731,6 +731,10 @@ export function adminTracksHandlers(os: Implementer) {
         typeof body.videoGrain === "string" && body.videoGrain.trim()
           ? body.videoGrain.trim().slice(0, 120)
           : undefined;
+      const videoRegister =
+        typeof body.videoRegister === "string" && body.videoRegister.trim()
+          ? body.videoRegister.trim().slice(0, 120)
+          : undefined;
       const videoModel =
         typeof body.videoModel === "string" && body.videoModel.trim()
           ? body.videoModel.trim().slice(0, 120)
@@ -761,6 +765,7 @@ export function adminTracksHandlers(os: Implementer) {
         ...(squared ? { videoSquaredAt: new Date().toISOString() } : {}),
         ...(videoVehicle ? { videoVehicle } : {}),
         ...(videoGrain ? { videoGrain } : {}),
+        ...(videoRegister ? { videoRegister } : {}),
       });
 
       // Drop stale edge renditions on EVERY finalize, not just when track.videoUrl was

@@ -49,28 +49,35 @@ A finding with no `logId` cannot be shipped (ship requires a Log ID). If `tracks
 fluncle admin tracks vehicles --json
 ```
 
-This returns `{ "ok": true, "vehicles": [ ... ] }`, recently-used findings newest-found first — the diversity ledger (doctrine 3 of the `@fluncle-video` skill), in FEED ORDER: videos post in found-date / Log ID order, so the top entry is the video that will sit RIGHT NEXT TO this one in the YouTube/TikTok grid. Each entry carries both `vehicle` and `grain`. **Judge the picture, not the label:** FETCH AND VIEW the posters of the immediate predecessor and the last ~3 (`curl -s "https://found.fluncle.com/<log-id>/poster.jpg" -o /tmp/ref-<log-id>.jpg`, then view), because two different vehicle words routinely render as the same soft smear. The immediate neighbour is the HARD constraint — pick a medium/primitive AND a grain family clearly DIFFERENT from it in **palette AND form AND contrast** (a rhyme 4–5 findings back is acceptable; the immediate neighbour is not). **Swing the register, don't repaint it:** soft, blurry, low-contrast liquid (fog / smoke / membrane folds) is the basin these renders collapse into run after run — if the last one or two were that, make THIS one legible hard structure WITH DEPTH and higher contrast (dot-screen, dither/halftone, crisp-walled cellular, lines-with-depth); recolouring the same fog is not a new vehicle. Never repeat the most-recent vehicle or grain family.
+This returns `{ "ok": true, "vehicles": [ ... ] }`, recently-used findings newest-found first — the diversity ledger (doctrine 3 of the `@fluncle-video` skill), in FEED ORDER: videos post in found-date / Log ID order, so the top entry is the video that will sit RIGHT NEXT TO this one in the YouTube/TikTok grid. Each entry carries both `vehicle` and `grain`. **Judge the picture, not the label:** FETCH AND VIEW the posters of the immediate predecessor and the last ~3 (`curl -s "https://found.fluncle.com/<log-id>/poster.jpg" -o /tmp/ref-<log-id>.jpg`, then view), because two different vehicle words routinely render as the same soft smear. The immediate neighbour is the HARD constraint — pick a medium/primitive AND a grain family clearly DIFFERENT from it in **palette AND form AND contrast** (a rhyme 4–5 findings back is acceptable; the immediate neighbour is not). **Swing the structural register, don't repaint it:** soft, blurry, low-contrast liquid (fog / smoke / membrane folds) is the basin these renders collapse into run after run — if the last one or two were that, make THIS one legible hard structure WITH DEPTH and higher contrast (dot-screen, dither/halftone, crisp-walled cellular, lines-with-depth); recolouring the same fog is not a new vehicle. Track the REGISTER too — fully-abstract / representational / framing-device — the third diversity axis (doctrine 3): if the last two findings were fully-abstract fields, reach for the representational register or a framing device (portal, sleeve-as-logbook, floating plate, horizon). Never repeat the most-recent vehicle or grain family.
 
 ### 3. Render the video — via `@fluncle-video`, end to end
 
-Run the `@fluncle-video` skill against this finding's `trackId`. Follow its workflow exactly (it is the constitution): props → metadata → concept (vehicle first, honoring the diversity check above) → author the composition in `workbench/` → still-critique loop (minimum two rounds, VIEW the stills) → gates (`typecheck` + `oxlint`) → render and wait for the encode to finish → confirm with `ffprobe` (1080×1920, h264, aac, 15–30s).
+Run the `@fluncle-video` skill against this finding's `trackId`. Follow its workflow exactly (it is the constitution): props → metadata → concept (vehicle first, honoring the diversity check above) → author the composition in `workbench/` → still-critique loop (minimum two rounds, VIEW the stills) → gates (`typecheck` + `oxlint` + `lint:composition` on the workbench file) → render and wait for the encode to finish → confirm with `ffprobe` (1080×1920, h264, aac, 15–30s).
 
 Do **not** shortcut the skill. The hourly cadence does not justify skipping the critique loop or the gates — a bad video that ships is worse than a tick that produced nothing.
 
-**After the render, run the beat-pull gate (do not skip):**
+**After the render, run the metrics gate (do not skip):**
 
 ```
-bun run --cwd packages/video detect-beat-pull <trackId>
+bun run --cwd packages/video judge:metrics <trackId>
 ```
 
-This is the objective catch for the one defect you cannot see in stills: motion locked to the kick (the picture lurching and snapping on every beat — Motion law). If it reports **BEAT-PULL DETECTED** (exits non-zero), the composition is driving position/travel off the raw kick. Do **not** ship it — revise the composition (move that reactivity into material: brightness/width/scale) and re-render until the gate passes. A pass (or an inconclusive verdict) is required before you ship.
+One command, BOTH hard gates; either exits non-zero and blocks ship:
+
+- **Beat-pull** (Motion law): motion locked to the kick — the picture lurching and snapping on every beat, the one defect you cannot see in stills. A fail means the composition is driving position/travel off the raw kick: revise it (move that reactivity into material: brightness/width/scale) and re-render.
+- **Flash safety** (WCAG 2.3.1): a coherent, large-area, >3/sec strobe. This pipeline runs unattended — this gate is the only thing standing between an over-driven bind and shipping a photosensitivity-unsafe clip. A fail means the reactivity is strobing: smooth the offending bind and re-render. Never pass `--allow-flash`.
+
+A pass (or an inconclusive beat-pull verdict) is required before you ship; iterate until it passes. (`detect-beat-pull` is only the fast directional read on the half-res draft while iterating; the verdict that counts is `judge:metrics` on the full render.)
+
+**Then the taste pass (the skill's workflow step 8):** place the render's poster frame NEXT TO the 3 feed-neighbour posters you fetched in step 2, at thumbnail size, and answer the doom-scroll question — would a thumb stop on yours? If it reads as safe wallpaper next to them (same density everywhere, nothing to land on, a recolour of the neighbours' energy), iterate toward the BOLDER move before shipping. A compliant-but-forgettable clip is worse than a slower tick.
 
 ### 4. Ship — package, upload, link
 
 Per the skill's ship step:
 
 ```
-bun run --cwd packages/video ship <log-id> --vehicle "<your vehicle>" --grain "<your grain family>"
+bun run --cwd packages/video ship <log-id> --vehicle "<your vehicle>" --grain "<your grain family>" --register <abstract|representational|framed>
 fluncle admin tracks video <log-id> --dir packages/video/out/<log-id>
 ```
 
@@ -78,7 +85,7 @@ The `track video` upload sets the finding's `video_url`. **This is the act that 
 
 ### 5. Stop
 
-You have filmed exactly one finding. **Do not loop back to step 1 to film another.** One finding per tick — the next tick films the next one. Output a tight report (finding `logId`/title, vehicle + texture family, the one-line concept, the metadata-to-pixels trace, the shipped `video_url`) and exit.
+You have filmed exactly one finding. **Do not loop back to step 1 to film another.** One finding per tick — the next tick films the next one. Output a tight report (finding `logId`/title, vehicle + grain family + register, texture family, the one-line concept with its depth mechanism and landing point, the duration decision, the metadata-to-pixels trace, the shipped `video_url`) and exit.
 
 ## Hard rails (these survive even if the rest is skipped)
 
@@ -89,4 +96,4 @@ You have filmed exactly one finding. **Do not loop back to step 1 to film anothe
 - **Never commit or push.** The composition lives in the gitignored `workbench/`; the durable artifact is the R2 bundle. Nothing enters git.
 - **`fluncle` is the installed binary, run plainly.** Never the from-source `bun run --cwd apps/cli fluncle …` (it loads the wrong env and reflects uncommitted edits) and never piped through `tail`/`head`. `bun` is only for the `packages/video` render/ship steps.
 - **Re-runs must not double-render.** Trust the queue gate. Always re-read the queue at the start; never carry a finding id across runs.
-- **Never ship a beat-pulled clip.** After the render, `bun run --cwd packages/video detect-beat-pull <trackId>` must pass (or be inconclusive). A non-zero exit means the motion is locked to the kick — revise the composition and re-render, never ship past it.
+- **Never ship past the metrics gate.** After the render, `bun run --cwd packages/video judge:metrics <trackId>` must pass (or the beat-pull read be inconclusive). It carries BOTH hard gates: beat-pull (motion locked to the kick) and WCAG flash safety (a photosensitivity-unsafe strobe). A non-zero exit means revise the composition and re-render — never ship past it, never `--allow-flash`.

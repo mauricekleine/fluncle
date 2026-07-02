@@ -1,6 +1,7 @@
 import { getInputProps } from "remotion";
 import { colors } from "@fluncle/tokens";
 import { FloatingType } from "../primitives/floating-type";
+import { closeCardProgress, closeCardReveal } from "./close-card-timing";
 
 // <CloseCard> — the constant ending every Fluncle video shares.
 //
@@ -26,23 +27,36 @@ import { FloatingType } from "../primitives/floating-type";
 //     a scene truly cannot give the lower-left to the close.
 //
 // The agent owns CREATIVITY: WHEN the card arrives. This component does NOT
-// compute its own timeline — it accepts the journey's "arrive" phase as an `arc`
-// or `progress` 0..1 and renders the reveal from that, so the close stays in lock
+// compute its own timeline — it accepts the journey's "arrive" phase as
+// `progress` 0..1 and renders the reveal from that, so the close stays in lock
 // step with whatever journey is driving the scene.
 //
-// Determinism: the reveal is a pure function of the `arc` value the caller passes
-// (itself frame-derived upstream). No random, no wall clock.
+// THE ARC TRAP (fixed): the reveal used to fall back to `arc ?? progress`, and
+// callers reach for the journey's GLOBAL `arc` (useJourney().arc) — already
+// non-zero through most of the clip — so the sign-off printed mid-clip. The reveal
+// is now driven ONLY by `progress` (the "arrive" phase's phaseProgress, ~0 until
+// the close begins); `arc` is accepted for runtime-compat with archived
+// compositions but IGNORED (see close-card-timing.ts). The timing math lives in
+// that pure module with a regression test.
+//
+// Determinism: the reveal is a pure function of the `progress` value the caller
+// passes (itself frame-derived upstream). No random, no wall clock.
 
 export type CloseCardProps = {
   /**
    * The journey's "arrive" phase, 0..1. 0 = the close has not begun (card hidden),
    * 1 = fully arrived (card settled). Drive this from the scene's final-phase
    * progress — e.g. interpolate(sec, [closeIn, closeIn + 0.9], [0, 1]) — so the
-   * card reveals exactly as the journey arrives. Aliased by `progress`.
+   * card reveals exactly as the journey arrives.
+   */
+  progress?: number;
+  /**
+   * @deprecated Legacy alias — accepted for runtime-compat with archived
+   * compositions but IGNORED. Passing the journey's global `arc` here used to
+   * reveal the sign-off mid-clip (the arc trap); drive the card from `progress`
+   * instead (the "arrive" phase's phaseProgress). See close-card-timing.ts.
    */
   arc?: number;
-  /** Alias for `arc`; pass whichever name reads better at the call site. */
-  progress?: number;
   /**
    * Scene-matched palette. `ink` colours the tagline (default Starlight Cream);
    * `accent` colours the signature — its emphasis highlight, drawn from the
@@ -71,12 +85,10 @@ const TAGLINE = "Drum & bass bangers from another dimension";
 /** The locked selector signature — the emphasis line; ink follows the scene. */
 const SIGNATURE = "selected by Fluncle";
 
-const clamp01 = (n: number): number => Math.min(1, Math.max(0, n));
-
 /**
- * The shared close card. Fades and lifts in from the `arc`/`progress` the caller
- * passes (the journey's arrive phase), then holds. Returns null until the reveal
- * begins so it never costs layout earlier in the clip.
+ * The shared close card. Fades and lifts in from the `progress` the caller passes
+ * (the journey's arrive phase), then holds. Returns null until the reveal begins
+ * so it never costs layout earlier in the clip.
  *
  * Composes over any scene: drop it last, inside the safe inset, above the scene.
  */
@@ -108,7 +120,8 @@ export const CloseCard: React.FC<CloseCardProps> = ({
   align = "left",
   style,
 }) => {
-  const p = clamp01(arc ?? progress ?? 0);
+  // Drive from `progress` only; `arc` is accepted but ignored (the arc trap).
+  const p = closeCardProgress(progress, arc);
 
   if (p <= 0.001) {
     return null;
@@ -123,10 +136,9 @@ export const CloseCard: React.FC<CloseCardProps> = ({
   }
 
   // Two-beat reveal: the tagline settles first, the signature lands on its
-  // heels. Both are pure remappings of the caller's arc, so the stagger stays
-  // locked to the journey's arrive phase.
-  const taglineP = clamp01(p / 0.65);
-  const signatureP = clamp01((p - 0.3) / 0.7);
+  // heels. Both are pure remappings of `progress`, so the stagger stays locked to
+  // the journey's arrive phase (close-card-timing.ts).
+  const { signatureP, taglineP } = closeCardReveal(p);
 
   const ink = palette?.ink ?? colors.starlightCream;
   // The signature is the emphasis line; its ink follows the COMPOSITION, not a
