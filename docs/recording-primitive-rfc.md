@@ -4,7 +4,7 @@ Status: Shipped
 Owner: Fluncle
 Catalyst: an operator recorded a set they don't want to publish as a mixtape, but wants to salvage filmed tidbits into Instagram clips. Today, clipping requires publishing a mixtape.
 
-Shipped across three waves: #239 (the `recordings` table + nullable `recording_id` + the `019.F.1A` backfill), #240 (the recordings data layer + oRPC + CLI + the recording-based clip pipeline), and #<this PR> (the admin UI — the `/admin/studio/<recordingId>` re-key, the net-new cue-authoring editor, the `/admin/clips` grouping + recordings index — and docs).
+Shipped across three waves: #239 (the `recordings` table + nullable `recording_id` + the `019.F.1A` backfill), #240 (the recordings data layer + oRPC + CLI + the recording-based clip pipeline), and #244 (the admin UI — the `/admin/studio/<recordingId>` re-key, the net-new cue-authoring editor, the `/admin/clips` grouping + recordings index — and docs).
 
 ## Outcome
 
