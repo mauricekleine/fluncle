@@ -239,6 +239,16 @@ if [ -n "$boxid" ] && "$BOX_BIN" resume "$boxid" >/dev/null 2>&1; then
     log "resumed box $boxid lost its ~/fluncle checkout — stopping it + reprovisioning"
     "$BOX_BIN" stop "$boxid" >/dev/null 2>&1 || true
     boxid=""
+  # The checkout freshens above, but the CLI does NOT ride the checkout: provision
+  # copies the conductor's bundled binary ONCE, so a resumed snapshot keeps that
+  # vintage forever while the pin moves on (a register-aware upload needs a newer
+  # binary than the box may have been provisioned with). Re-copy it at every wake —
+  # one small scp against an ~85m render — and BEST-EFFORT: a failed copy logs and
+  # renders on the existing CLI (the same discipline as freshen itself).
+  elif "$BOX_BIN" scp "$FLUNCLE_BIN" "$boxid:/home/user/.local/lib/fluncle.mjs" >>"$LOG_FILE" 2>&1; then
+    log "box CLI refreshed from the conductor's bundled fluncle"
+  else
+    log "box CLI refresh failed — rendering with the existing CLI"
   fi
 else
   boxid=""
