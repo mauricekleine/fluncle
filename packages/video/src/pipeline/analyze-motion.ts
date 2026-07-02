@@ -218,9 +218,11 @@ function resampleToFrames(curve: EnergySample[], frameCount: number, fps: number
 // Band → EMA group delay (frames). The shader smooths the curve with a one-pole
 // EMA whose group delay ≈ the smoothingFrames constant of the hook. We align the
 // structural delta against the curve by THAT single principled lag — never a scan.
-//   useEnergy sf=4 (~135ms@30) · useBass sf=3 (~100ms) · useMid/useTreble sf=2
-//   (~70ms) · *Fast sf=1 (~33ms) · useFlux sf=2 (~67ms). drop/swell/hit/onset
-//   ride energy/smoothed bands → energy's delay.
+//   useEnergy sf=4 (~135ms@30) · useBass/useMid sf=3 (~100ms) · useTreble/useFlux
+//   sf=2 (~70ms) · *Fast sf=1 (~33ms). drop/swell/hit/onset ride energy/smoothed
+//   bands → energy's delay. These MUST mirror each hook's default smoothingFrames
+//   (use-mid.ts is sf=3, use-treble.ts / use-flux.ts are sf=2) so the metric's lag
+//   matches the shader's group delay.
 // ---------------------------------------------------------------------------
 
 const BAND_SMOOTHING_FRAMES: Record<IntentBand, number> = {
@@ -230,7 +232,7 @@ const BAND_SMOOTHING_FRAMES: Record<IntentBand, number> = {
   energy: 4,
   flux: 2,
   hit: 1,
-  mid: 2,
+  mid: 3,
   midFast: 1,
   onset: 1,
   swell: 4,
@@ -1363,6 +1365,292 @@ export function scoreBeatReactivity(input: BeatReactivityInput): BeatReactivity 
 }
 
 // ---------------------------------------------------------------------------
+// ARC / DEADNESS (C4 — the structural TWIN of beat-pull). Beat-pull is the HARD
+// gate on the SHORT timescale (the picture jitters back and forth on the beat);
+// this is the HARD gate on the LONG timescale (the picture never reorganizes at
+// all — a frozen field, a looping wallpaper, near-static bars). Neither survives
+// a still critique: beat-pull is invisible in stills, and a dead clip's stills
+// each look fine — the deadness only exists across the WHOLE span.
+//
+// Method: pick 5 anchor frames at ~5/25/50/75/95% of the clip and measure how far
+// the picture STRUCTURALLY reorganizes between adjacent anchors. Each pairwise
+// change combines three views, so no single laundering trick (recolor only, or
+// translate a fixed pattern only) passes:
+//   - grayMad   : mean-abs-diff of the downscaled+blurred luma plane (gross form).
+//   - edgeMad   : mean-abs-diff of the Sobel edge-magnitude map (where the
+//                 structure/contours sit — the strongest discriminator: a frozen
+//                 field's edges don't move even when its colour cycles).
+//   - colorDist : Bhattacharyya distance of an HSV histogram (palette evolution) —
+//                 weighted LIGHTLY (ARC_COLOR_WEIGHT) so a pure recolor of a frozen
+//                 field can't rescue it, but genuine colour arc still counts.
+// Grain robustness reuses the file's fencing tricks: frames arrive already
+// area-downscaled (frames.ts `flags=area` box-averages grain spatially), and a
+// 3×3 box blur pre-smooths each anchor before the diff (grain is incoherent, so
+// it cancels in both the MAD and the edge map).
+//
+// The headline scalar `wholeClipChange` = MEAN of the 4 adjacent combined changes:
+// the average magnitude by which the picture reorganizes across the arc. HARD gate
+// "dead clip": wholeClipChange < ARC_FLOOR exits non-zero like the other hard
+// gates. When intent declares an arc (a drop), the arc block also folds an
+// advisory actual-vs-intent read: does the declared-climax anchor segment carry at
+// least the clip's own mean change (the arc actually moves where it was promised)?
+//
+// CALIBRATED ON REAL GROUND TRUTH (footage.social.mp4, 64×114, 3×3 blur, colorW=0.25):
+//   032.0.4L (a real arc — must PASS)          wholeClipChange = 0.356
+//   032.0.6R (20s near-static bars — must FAIL) wholeClipChange = 0.220
+// ARC_FLOOR = 0.29 sits ~23% below the pass anchor and ~24% above the fail anchor
+// (symmetric margin). 6R's frozen middle shows plainly in the edge component
+// (adjacent edgeMad collapses to ~0.07 vs 4L's steady ~0.27). Re-earn the floor as
+// verdicts accumulate via calibrate.ts.
+// ---------------------------------------------------------------------------
+
+export const ARC_ANCHOR_PCTS = [0.05, 0.25, 0.5, 0.75, 0.95] as const;
+const ARC_COLOR_WEIGHT = 0.25;
+const ARC_FLOOR = 0.29;
+const ARC_MIN_FRAMES = 10; // fewer frames → inconclusive (never a false dead-fail)
+// HSV histogram bins (hue×sat×val). Coarse on purpose — the arc cares about broad
+// palette drift, not fine colour, and coarse bins are grain-robust.
+const ARC_HUE_BINS = 8;
+const ARC_SAT_BINS = 4;
+const ARC_VAL_BINS = 4;
+
+export type ArcSegmentChange = {
+  grayMad: number;
+  edgeMad: number;
+  colorDist: number;
+  combined: number;
+};
+
+export type ArcIntentCheck = {
+  /** intent declares an arc (dropMs > 0). */
+  declared: boolean;
+  dropMs: number;
+  /** index of the anchor segment [k,k+1] whose time span contains the drop. */
+  dropSegment: number;
+  dropSegmentChange: number;
+  /** the declared-climax segment carries >= the clip's mean change. */
+  meetsArc: boolean;
+};
+
+export type ArcResult = {
+  deterministic: true;
+  hard: true;
+  dead: boolean;
+  verdict: "evolving" | "dead" | "inconclusive";
+  /** headline: mean of the adjacent combined structural changes. */
+  wholeClipChange: number;
+  /** the deadest adjacent transition (a sustained-freeze tell), reported. */
+  minSegmentChange: number;
+  floor: number;
+  anchorPcts: number[];
+  anchorFrames: number[];
+  segments: ArcSegmentChange[];
+  intentArc: ArcIntentCheck | null;
+};
+
+/** Downscaled+blurred luma plane (0..1) of one rgb frame. 3×3 box blur = grain fence. */
+function arcLumaPlane(frame: Float32Array, width: number, height: number): Float32Array {
+  const pix = width * height;
+  const gray = new Float32Array(pix);
+  for (let p = 0; p < pix; p++) {
+    gray[p] = (0.299 * frame[p * 3] + 0.587 * frame[p * 3 + 1] + 0.114 * frame[p * 3 + 2]) / 255;
+  }
+  const out = new Float32Array(pix);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let sum = 0;
+      let n = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const yy = y + dy;
+          const xx = x + dx;
+          if (yy >= 0 && yy < height && xx >= 0 && xx < width) {
+            sum += gray[yy * width + xx];
+            n += 1;
+          }
+        }
+      }
+      out[y * width + x] = sum / n;
+    }
+  }
+  return out;
+}
+
+/** Sobel edge-magnitude map of a luma plane (borders left 0). */
+function sobelMap(plane: Float32Array, width: number, height: number): Float32Array {
+  const out = new Float32Array(plane.length);
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const i = y * width + x;
+      const gx =
+        -plane[i - width - 1] -
+        2 * plane[i - 1] -
+        plane[i + width - 1] +
+        plane[i - width + 1] +
+        2 * plane[i + 1] +
+        plane[i + width + 1];
+      const gy =
+        -plane[i - width - 1] -
+        2 * plane[i - width] -
+        plane[i - width + 1] +
+        plane[i + width - 1] +
+        2 * plane[i + width] +
+        plane[i + width + 1];
+      out[i] = Math.hypot(gx, gy);
+    }
+  }
+  return out;
+}
+
+/** Normalized HSV histogram of one rgb frame (ARC_HUE_BINS×ARC_SAT_BINS×ARC_VAL_BINS). */
+function hsvHistogram(frame: Float32Array, width: number, height: number): Float32Array {
+  const pix = width * height;
+  const hist = new Float32Array(ARC_HUE_BINS * ARC_SAT_BINS * ARC_VAL_BINS);
+  for (let p = 0; p < pix; p++) {
+    const r = frame[p * 3] / 255;
+    const g = frame[p * 3 + 1] / 255;
+    const b = frame[p * 3 + 2] / 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const c = max - min;
+    let hue = 0;
+    if (c > 1e-6) {
+      if (max === r) {
+        hue = ((g - b) / c) % 6;
+      } else if (max === g) {
+        hue = (b - r) / c + 2;
+      } else {
+        hue = (r - g) / c + 4;
+      }
+      hue /= 6;
+      if (hue < 0) {
+        hue += 1;
+      }
+    }
+    const sat = max > 1e-6 ? c / max : 0;
+    const hi = Math.min(ARC_HUE_BINS - 1, Math.floor(hue * ARC_HUE_BINS));
+    const si = Math.min(ARC_SAT_BINS - 1, Math.floor(sat * ARC_SAT_BINS));
+    const vi = Math.min(ARC_VAL_BINS - 1, Math.floor(max * ARC_VAL_BINS));
+    hist[(hi * ARC_SAT_BINS + si) * ARC_VAL_BINS + vi] += 1;
+  }
+  for (let i = 0; i < hist.length; i++) {
+    hist[i] /= pix;
+  }
+  return hist;
+}
+
+/** Bhattacharyya distance of two normalized histograms (0 identical, 1 disjoint). */
+function bhattacharyya(a: Float32Array, b: Float32Array): number {
+  let bc = 0;
+  for (let i = 0; i < a.length; i++) {
+    bc += Math.sqrt(a[i] * b[i]);
+  }
+  return 1 - Math.min(1, bc);
+}
+
+function madFloat(a: Float32Array, b: Float32Array): number {
+  let d = 0;
+  for (let p = 0; p < a.length; p++) {
+    d += Math.abs(a[p] - b[p]);
+  }
+  return d / a.length;
+}
+
+export type ArcInput = {
+  rgb: RgbFrames;
+  fps: number;
+  intent: RenderIntent | null;
+};
+
+/** Pure arc/deadness scorer over the decoded rgb frames + intent. No ffmpeg. HARD. */
+export function scoreArc(input: ArcInput): ArcResult {
+  const { rgb, fps, intent } = input;
+  const { width, height, frames } = rgb;
+  const n = frames.length;
+
+  const anchorPcts = [...ARC_ANCHOR_PCTS];
+  if (n < ARC_MIN_FRAMES) {
+    return {
+      anchorFrames: [],
+      anchorPcts,
+      dead: false,
+      deterministic: true,
+      floor: ARC_FLOOR,
+      hard: true,
+      intentArc: null,
+      minSegmentChange: 0,
+      segments: [],
+      verdict: "inconclusive",
+      wholeClipChange: 0,
+    };
+  }
+
+  const anchorFrames = anchorPcts.map((p) => Math.min(n - 1, Math.max(0, Math.round(p * (n - 1)))));
+  const luma = anchorFrames.map((idx) => arcLumaPlane(frames[idx], width, height));
+  const edges = luma.map((plane) => sobelMap(plane, width, height));
+  const hists = anchorFrames.map((idx) => hsvHistogram(frames[idx], width, height));
+
+  const segments: ArcSegmentChange[] = [];
+  for (let k = 0; k < anchorFrames.length - 1; k++) {
+    const grayMad = madFloat(luma[k], luma[k + 1]);
+    const edgeMad = madFloat(edges[k], edges[k + 1]);
+    const colorDist = bhattacharyya(hists[k], hists[k + 1]);
+    segments.push({
+      colorDist,
+      combined: grayMad + edgeMad + ARC_COLOR_WEIGHT * colorDist,
+      edgeMad,
+      grayMad,
+    });
+  }
+
+  const combinedList = segments.map((s) => s.combined);
+  const wholeClipChange = mean(combinedList);
+  const minSegmentChange = Math.min(...combinedList);
+  const dead = wholeClipChange < ARC_FLOOR;
+
+  // Intent arc fold (advisory): if the intent declares a drop, locate the anchor
+  // segment whose [startPct,endPct] span contains it and check its change carries
+  // at least the clip mean — the promised climax actually reorganizes the picture.
+  let intentArc: ArcIntentCheck | null = null;
+  if (intent && intent.dropMs > 0) {
+    const durationMs = (n / Math.max(1, fps)) * 1000;
+    const dropPct = durationMs > 0 ? intent.dropMs / durationMs : 0;
+    let dropSegment = 0;
+    for (let k = 0; k < anchorPcts.length - 1; k++) {
+      if (dropPct >= anchorPcts[k] && dropPct <= anchorPcts[k + 1]) {
+        dropSegment = k;
+        break;
+      }
+      if (dropPct > anchorPcts[anchorPcts.length - 1]) {
+        dropSegment = segments.length - 1;
+      }
+    }
+    const dropSegmentChange = segments[dropSegment]?.combined ?? 0;
+    intentArc = {
+      declared: true,
+      dropMs: intent.dropMs,
+      dropSegment,
+      dropSegmentChange,
+      meetsArc: dropSegmentChange >= wholeClipChange,
+    };
+  }
+
+  return {
+    anchorFrames,
+    anchorPcts,
+    dead,
+    deterministic: true,
+    floor: ARC_FLOOR,
+    hard: true,
+    intentArc,
+    minSegmentChange,
+    segments,
+    verdict: dead ? "dead" : "evolving",
+    wholeClipChange,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // The orchestrator + report assembly (C6)
 // ---------------------------------------------------------------------------
 
@@ -1383,6 +1671,7 @@ export type MotionReport = {
   unreliable: boolean;
   flashSafety: FlashSafetyResult;
   beatPull: BeatPullResult & { deterministic: true; hard: true };
+  arc: ArcResult;
   coupling: CouplingResult | null;
   beatReactivity: BeatReactivity | null;
   intent: IntentCheckResult | null;
@@ -1440,13 +1729,24 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
   const rgb = extractRgbFrames(video, { height: FLASH_H, probeFps: true, width: FLASH_W });
   const flashSafety = scoreFlashSafety(rgb);
 
-  // Read intent + props.
+  // Read intent + props. A PRESENT-but-invalid intent is a loud warning (a
+  // silently-swallowed parse error hides a real authoring bug — the checker then
+  // runs blind). A MISSING file stays warn-and-stub (v1 law): intent is optional.
   const intentFile = options.intentPath ?? path.join(OUT_DIR, `${trackId}.intent.json`);
   let intent: RenderIntent | null = null;
   if (existsSync(intentFile)) {
     try {
-      intent = validateRenderIntent(JSON.parse(readFileSync(intentFile, "utf8")));
-    } catch {
+      const parsed = JSON.parse(readFileSync(intentFile, "utf8"));
+      intent = validateRenderIntent(parsed);
+      if (intent === null) {
+        console.warn(
+          `! intent: ${intentFile} is present but FAILED validation (schema/shape mismatch) — running WITHOUT intent checks. Re-run \`validate:intent ${intentFile}\` for per-field errors.`,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        `! intent: ${intentFile} is present but could not be parsed — running WITHOUT intent checks. Parse error: ${err instanceof Error ? err.message : String(err)}`,
+      );
       intent = null;
     }
   }
@@ -1472,6 +1772,9 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
 
   // The per-frame luminance series (reused by beat-reactivity + the intent check).
   const perFrame = decodeFlashFrames(rgb);
+
+  // ARC / DEADNESS — the long-timescale HARD gate, on the same rgb extraction.
+  const arc = scoreArc({ fps: reportFps, intent, rgb });
 
   let coupling: CouplingResult | null = null;
   let beatReactivity: BeatReactivity | null = null;
@@ -1510,6 +1813,14 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
   }
   if (beatPull.beatLocked) {
     blockingFailures.push("beatPull");
+  }
+  if (arc.dead) {
+    blockingFailures.push("arc.dead");
+  } else if (arc.verdict === "inconclusive") {
+    advisories.push("arc.inconclusive(tooShort)");
+  }
+  if (arc.intentArc && !arc.intentArc.meetsArc) {
+    advisories.push(`arc.intentMismatch(seg${arc.intentArc.dropSegment})`);
   }
 
   if (coupling) {
@@ -1558,6 +1869,7 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
   const hardPass = blockingFailures.length === 0;
 
   return {
+    arc,
     beatPull,
     beatReactivity,
     coupling,
@@ -1616,6 +1928,10 @@ if (import.meta.main) {
     );
     console.log(
       `${report.beatPull.beatLocked ? "✗" : "✓"} beat-pull: ${report.beatPull.beatLocked ? "DETECTED" : "flows"} (reversal ${report.beatPull.score.toFixed(2)})`,
+    );
+    const arc = report.arc;
+    console.log(
+      `${arc.dead ? "✗" : "✓"} arc: ${arc.verdict} (change ${arc.wholeClipChange.toFixed(3)} vs floor ${arc.floor}, min-seg ${arc.minSegmentChange.toFixed(3)})${arc.intentArc ? `; drop-seg ${arc.intentArc.meetsArc ? "meets" : "MISSES"} arc` : ""}`,
     );
     if (report.coupling) {
       const c = report.coupling;
