@@ -36,8 +36,6 @@ type AdminShellProps = {
   subtitle?: ReactNode;
   /** The page heading. Quiet, small, bold — never a marketing masthead. */
   title: string;
-  /** A small inline accessory rendered immediately right of the title (e.g. the streak chip). */
-  titleAccessory?: ReactNode;
   /**
    * Widen the plate toward the viewport for a dense workstation body (the Studio's
    * two-pane layout). Keeps the same One-Pane surface + header/nav; only the max-width
@@ -55,7 +53,6 @@ export function AdminShell({
   subheader,
   subtitle,
   title,
-  titleAccessory,
   wide = false,
 }: AdminShellProps) {
   return (
@@ -72,12 +69,12 @@ export function AdminShell({
           fill && "min-h-0 lg:h-full",
         )}
       >
-        <header className="flex items-center justify-between gap-4 border-b border-border px-4 py-3 sm:px-5">
+        {/* Fixed row height so the header never jumps between admin pages — a
+            page-action button (the Mixtapes "New draft") no longer makes the row
+            taller than a button-less page (Board/Newsletter). Controls stay centered. */}
+        <header className="flex min-h-14 items-center justify-between gap-4 border-b border-border px-4 py-3 sm:px-5">
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h1 className="text-sm font-bold">{title}</h1>
-              {titleAccessory}
-            </div>
+            <h1 className="text-sm font-bold">{title}</h1>
             {subtitle ? <p className="text-xs text-muted-foreground">{subtitle}</p> : undefined}
           </div>
           <div className="flex shrink-0 items-center gap-2">

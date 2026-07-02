@@ -17,7 +17,6 @@ import {
 } from "@/components/admin/pipeline/board-model";
 import { PipelineBoard } from "@/components/admin/pipeline/pipeline-board";
 import { EnrichDialog } from "@/components/admin/enrich-dialog";
-import { FindStreakChip } from "@/components/admin/find-streak-chip";
 import { NoteDialog } from "@/components/admin/note-dialog";
 import { ContextDialog, ObservationDialog } from "@/components/admin/observation-dialogs";
 import { PLATFORMS } from "@/components/admin/platform-cell";
@@ -39,11 +38,7 @@ import {
   getObservationScript,
   listContextNotePresenceForTracks,
 } from "@/lib/server/observation-board";
-import {
-  listPublishedPostDays,
-  listSocialPostsForTracks,
-  type PublishedPostDay,
-} from "@/lib/server/social";
+import { listSocialPostsForTracks } from "@/lib/server/social";
 import { getSpotifyAuthStatus, type SpotifyAuthStatus } from "@/lib/server/spotify";
 import { type BlockedOn, trackStage } from "@/lib/server/track-stage";
 import { decodeTrackCursor, listTracks, listVibePoints, type VibePoint } from "@/lib/server/tracks";
@@ -78,8 +73,6 @@ const DRAFT_MIXTAPES_KEY = ["admin", "mixtapes", "drafts"] as const;
 const CONTEXT_NOTE_KEY = ["admin", "context-note"] as const;
 // The lazily-read observation script (transcript) for the Observation dialog, keyed by trackId.
 const OBSERVATION_SCRIPT_KEY = ["admin", "observation-script"] as const;
-// The published-post days behind the header's publish-streak chip; focus-refetched.
-const PUBLISHED_POST_DAYS_KEY = ["admin", "published-post-days"] as const;
 
 // The worklists — a `blockedOn` filter (the next action) plus "all" and a "done"
 // terminal bucket. The active one lives in `?stage` so it's deep-linkable and
@@ -246,20 +239,6 @@ const fetchObservationScript = createServerFn({ method: "GET" })
     return { script: await getObservationScript(data.trackId) };
   });
 
-// The publish-streak input — the full (platform, published_at) set for every
-// published post, read straight from social_posts (independent of the board's
-// finding pagination, so the streak counts every qualifying day). Focus-refetched
-// like the board, so the chip warms the moment a fresh publish lands.
-const fetchPublishedPostDays = createServerFn({ method: "GET" }).handler(
-  async (): Promise<PublishedPostDay[]> => {
-    if (!(await isAdminRequest())) {
-      throw redirect({ to: "/admin/login" });
-    }
-
-    return listPublishedPostDays();
-  },
-);
-
 // The Spotify connection light. Read-only (no token refresh) and focus-refetched,
 // so the moment a publish/search trips invalid_grant and clears the stored token,
 // tabbing back to the board surfaces the Reconnect banner. See spotify.ts.
@@ -305,17 +284,14 @@ export const Route = createFileRoute("/admin/")({
     await ensureAdmin();
   },
   loader: async () => {
-    const [board, publishedPostDays] = await Promise.all([
-      fetchBoard({ data: {} }),
-      fetchPublishedPostDays(),
-    ]);
-    return { board, publishedPostDays };
+    const board = await fetchBoard({ data: {} });
+    return { board };
   },
   component: AdminBoardPage,
 });
 
 function AdminBoardPage() {
-  const { board: initial, publishedPostDays } = Route.useLoaderData();
+  const { board: initial } = Route.useLoaderData();
   const { mix: activeMix, stage: activeWorklist } = Route.useSearch();
   const navigate = Route.useNavigate();
   const queryClient = useQueryClient();
@@ -340,23 +316,6 @@ function AdminBoardPage() {
   });
 
   const rows = useMemo(() => data?.pages.flatMap((page) => page.tracks) ?? [], [data]);
-
-  // The header's publish-streak input — read independently of the board pagination
-  // so the streak counts every qualifying day, not just the loaded window. Seeded
-  // from the loader and focus-refetched, so it warms when a publish lands.
-  const { data: postDays } = useQuery({
-    initialData: publishedPostDays,
-    queryFn: fetchPublishedPostDays,
-    queryKey: PUBLISHED_POST_DAYS_KEY,
-    refetchOnWindowFocus: true,
-  });
-
-  // Every published-post day is, by definition, published — tag each so the streak
-  // helper's status gate reads them.
-  const streakPosts = useMemo(
-    () => postDays.map((day) => ({ ...day, status: "published" })),
-    [postDays],
-  );
 
   const { busy, error, pushDraft, setError, setStatus } = usePublish(BOARD_KEY);
 
@@ -876,12 +835,7 @@ function AdminBoardPage() {
   );
 
   return (
-    <AdminShell
-      current="board"
-      subheader={subheader}
-      title="Board"
-      titleAccessory={<FindStreakChip posts={streakPosts} />}
-    >
+    <AdminShell current="board" subheader={subheader} title="Board">
       {rows.length === 0 ? (
         <EmptyState body="Logged bangers will show up here." title="No findings yet" />
       ) : visible.length === 0 ? (
