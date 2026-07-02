@@ -205,6 +205,62 @@ export function extractRgbFrames(
   return { fps, frames, height, width };
 }
 
+export type RgbImage = {
+  width: number;
+  height: number;
+  /** Interleaved RGB, 3 bytes/pixel, raw 0..255 (length = width*height*3). */
+  data: Float32Array;
+};
+
+/**
+ * Decode a single still image (jpg/png/…) to area-downscaled raw rgb24 (0..255).
+ * One ffmpeg invocation, same `flags=area` grain/detail box-average as the frame
+ * extractors. Reused by the diversity metric + the calibration harness (a poster is
+ * just a single frame). Throws if ffmpeg fails or produces the wrong byte count.
+ */
+export function decodeImageRgb(
+  imagePath: string,
+  opts: { width: number; height: number },
+): RgbImage {
+  const { width, height } = opts;
+  const result = spawnSync(
+    "ffmpeg",
+    [
+      "-v",
+      "error",
+      "-i",
+      imagePath,
+      "-vf",
+      `scale=${width}:${height}:flags=area,format=rgb24`,
+      "-frames:v",
+      "1",
+      "-f",
+      "rawvideo",
+      "-pix_fmt",
+      "rgb24",
+      "-",
+    ],
+    { maxBuffer: 128 * 1024 * 1024 },
+  );
+  if (result.status !== 0 || !result.stdout) {
+    throw new Error(
+      `ffmpeg image decode failed for ${imagePath}: ${result.stderr?.toString() ?? "no output"}`,
+    );
+  }
+  const buf = result.stdout;
+  const expected = width * height * 3;
+  if (buf.length < expected) {
+    throw new Error(
+      `ffmpeg image decode for ${imagePath} produced ${buf.length} bytes, expected ${expected}`,
+    );
+  }
+  const data = new Float32Array(expected);
+  for (let p = 0; p < expected; p++) {
+    data[p] = buf[p];
+  }
+  return { data, height, width };
+}
+
 const meanAbsDiff = (a: Float32Array, b: Float32Array): number => {
   let d = 0;
   for (let p = 0; p < a.length; p++) {

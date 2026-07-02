@@ -6,292 +6,508 @@
 //                         MT crops it to portrait/landscape + strips audio on demand)
 //     footage.social.mp4 (portrait 1080×1920, audio, BAKED TEXT — the playable
 //                         social cut: Stories, YouTube as-is, TikTok via audio=false MT)
-//     poster.jpg         (a late/drop frame ~80% in)
-//     cover.jpg          (the profile-grid cover: loud centered identity over art)
-//     note.txt           (the fixed-template caption)
+//     footage.landscape.mp4        (optional — the clean landscape escape hatch,
+//                                   packaged only if out/<trackId>.notext.landscape.mp4 exists)
+//     footage.landscape.social.mp4 (optional — a baked-text landscape cut, if rendered)
+//     footage.notext.mp4           (optional — a clean portrait cut, if rendered)
+//     poster.jpg          (a late/drop frame ~80% in)
+//     cover.jpg           (the profile-grid cover: loud centered identity over art)
+//     note.txt            (the fixed-template caption)
 //     composition.tsx — exact temporary Remotion composition source used
 //     props.json    — analyzed props: beat grid, energy/bass curves, palette
-//     render.json   — composition id + rerender pointers
+//     render.json   — composition id + rerender pointers + the diversity-ledger
+//                     entries (vehicle/grain/model/reasoning/register)
 //
-// Usage: bun src/pipeline/ship.ts <trackId|log-id>
+// Usage: bun src/pipeline/ship.ts <trackId|log-id> [--vehicle <tag>] [--grain <family>] [--model <provider/model>] [--reasoning <level>] [--register <abstract|representational|framed>]
 // Requires the PORTRAIT render to exist already (out/<trackId>.mp4) — run
 // social-preview first if it doesn't. The SQUARE crop source (out/<trackId>.square.mp4)
 // is rendered here in-process from the same composition + props if it's missing
-// (one composition, two renders). Upload the bundle with `fluncle admin track video`.
+// (one composition, two renders). Any extra variant renders present at
+// out/<trackId>{.notext,.landscape,.notext.landscape}.mp4 (see EXTRA_VARIANT_SOURCES)
+// are packaged too. Upload the bundle with `fluncle admin track video`.
+//
+// Side effects run only when this file is the process entrypoint (import.meta.main) —
+// importing ship.ts (e.g. from a test) is side-effect-free. The pure bundle-
+// assembly logic (resolveBundlePaths, buildRenderJson, buildNoteText,
+// EXTRA_VARIANT_SOURCES) is exported and covered by ship.test.ts.
 
 import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { type NostalgicCosmosProps } from "../remotion/types";
-import { buildVariants } from "../remotion/variants";
+import {
+  buildVariants,
+  FOOTAGE_FILENAME,
+  FOOTAGE_LANDSCAPE_FILENAME,
+  FOOTAGE_LANDSCAPE_SOCIAL_FILENAME,
+  FOOTAGE_NOTEXT_FILENAME,
+  FOOTAGE_SOCIAL_FILENAME,
+} from "../remotion/variants";
 
+import { parseArgs } from "./args";
 import { buildCaption, type CaptionTrack, fetchReleaseYear, yearFromReleaseDate } from "./caption";
+import { deletePreviewAudio } from "./download-preview";
+import { fluncleBin, fluncleSpawnEnv } from "./fluncle-bin";
 import { generateIntentStub } from "./intent";
 import { renderCover } from "./render-cover";
 
 const OUT_DIR = path.resolve(import.meta.dirname, "../../out");
 const PACKAGE_ROOT = path.resolve(import.meta.dirname, "../..");
 
-const input = process.argv[2];
-if (!input) {
-  console.error(
-    "usage: bun src/pipeline/ship.ts <trackId|log-id> [--vehicle <tag>] [--grain <family>] [--model <provider/model>] [--reasoning <level>]",
-  );
-  process.exit(1);
-}
-
-// The travelling vehicle tag (e.g. "voronoi cellular"), written into render.json
-// so the upload step records it as the diversity ledger entry. Falls back to any
-// `vehicle` already in the render manifest.
-const vehicleFlagIndex = process.argv.indexOf("--vehicle");
-const vehicleArg =
-  vehicleFlagIndex >= 0 ? process.argv[vehicleFlagIndex + 1]?.trim() || undefined : undefined;
-
-// The grain FAMILY tag (e.g. "grainCoarseSilver"), written into render.json so the
-// upload step records it as the grain ledger entry. Falls back to any `grain`
-// already in the render manifest.
-const grainFlagIndex = process.argv.indexOf("--grain");
-const grainArg =
-  grainFlagIndex >= 0 ? process.argv[grainFlagIndex + 1]?.trim() || undefined : undefined;
-
-// The authoring AI model (<provider>/<model>), written into render.json so the
-// upload step records it alongside the vehicle. Falls back to any `model` already
-// in the render manifest, then to the default.
+// The authoring AI model (<provider>/<model>) and reasoning effort, written into
+// render.json alongside the vehicle so the upload step records the full
+// diversity-ledger entry. Fall back to any value already in the render manifest.
 const DEFAULT_VIDEO_MODEL = "anthropic/claude-opus-4-8";
-const modelFlagIndex = process.argv.indexOf("--model");
-const modelArg =
-  modelFlagIndex >= 0 ? process.argv[modelFlagIndex + 1]?.trim() || undefined : undefined;
-
-// The reasoning/thinking effort the authoring model ran at (e.g. "high"), written
-// into render.json so the upload step records it alongside the model. Falls back
-// to any `reasoning` already in the render manifest, then to the default.
 const DEFAULT_VIDEO_REASONING = "high";
-const reasoningFlagIndex = process.argv.indexOf("--reasoning");
-const reasoningArg =
-  reasoningFlagIndex >= 0 ? process.argv[reasoningFlagIndex + 1]?.trim() || undefined : undefined;
 
-const log = (message: string) => console.error(`[ship] ${message}`);
+// The register — the third diversity-ledger axis (composition style), written
+// into render.json beside vehicle/grain. A missing register WARNS loudly but
+// never fails the ship (a parallel apps/web PR consumes it from render.json).
+const REGISTERS = ["abstract", "representational", "framed"] as const;
+export type ShipRegister = (typeof REGISTERS)[number];
 
-// 1. Resolve the track (id or log-id → canonical trackId + metadata).
-const get = spawnSync("fluncle", ["track", "get", input, "--json"]);
-let track: CaptionTrack & { trackId: string };
-try {
-  const parsed = JSON.parse(get.stdout.toString()) as { ok: boolean; track?: typeof track };
-  if (!parsed.ok || !parsed.track) {
-    throw new Error(get.stdout.toString().slice(0, 200));
-  }
-  track = parsed.track;
-} catch (error) {
-  console.error(
-    `[ship] track get failed: ${error instanceof Error ? error.message : String(error)}`,
-  );
-  process.exit(1);
-}
+const USAGE =
+  "usage: bun src/pipeline/ship.ts <trackId|log-id> [--vehicle <tag>] [--grain <family>] [--model <provider/model>] [--reasoning <level>] [--register <abstract|representational|framed>]";
 
-if (!track.logId) {
-  console.error(`[ship] ${track.trackId} has no Log ID — every video needs a coordinate. Stop.`);
-  process.exit(1);
-}
+export type ShipFlags = {
+  trackInput: string;
+  vehicle: string | undefined;
+  grain: string | undefined;
+  model: string | undefined;
+  reasoning: string | undefined;
+  register: ShipRegister | undefined;
+};
 
-// 2. The render must already exist (renders are slow; keep ship fast + idempotent).
-const reviewSrc = path.join(OUT_DIR, `${track.trackId}.mp4`);
-if (!existsSync(reviewSrc)) {
-  // A draft is a half-res/jpeg proof with the load-bearing grain hidden — it must
-  // never reach R2. If only a draft exists, say so explicitly.
-  if (existsSync(path.join(OUT_DIR, `${track.trackId}.draft.mp4`))) {
-    console.error(
-      `[ship] only a DRAFT render exists (${track.trackId}.draft.mp4). Drafts are half-res/jpeg proofs and are NOT shippable — run a full render first: bun src/pipeline/social-preview.ts ${track.trackId} --composition <Id>`,
-    );
-  } else {
-    console.error(
-      `[ship] no render at ${reviewSrc} — run: bun src/pipeline/social-preview.ts ${track.trackId}`,
-    );
-  }
-  process.exit(1);
-}
-
-// 3. Assemble the bundle under out/<log-id>/.
-const bundle = path.join(OUT_DIR, track.logId);
-mkdirSync(bundle, { recursive: true });
-
-const footage = path.join(bundle, "footage.mp4");
-const footageSocial = path.join(bundle, "footage.social.mp4");
-const poster = path.join(bundle, "poster.jpg");
-const notePath = path.join(bundle, "note.txt");
-const compositionPath = path.join(bundle, "composition.tsx");
-const propsOutPath = path.join(bundle, "props.json");
-const intentOutPath = path.join(bundle, "intent.json");
-const renderOutPath = path.join(bundle, "render.json");
-
-// The render manifest (composition id + the props the portrait master rendered
-// from) is read up front: the square crop source re-renders that same
-// composition + props with aspect=square, hideOverlay=true.
-const renderManifestPath = path.join(OUT_DIR, `${track.trackId}.render.json`);
-let renderManifest: {
-  compositionId?: string;
-  compositionSource?: string;
-  grain?: string;
-  model?: string;
-  props?: string;
-  reasoning?: string;
-  vehicle?: string;
-} = {};
-
-if (existsSync(renderManifestPath)) {
+/** Parse + validate ship's CLI flags. Throws (with the usage string) on a bad invocation. */
+export function parseShipArgs(argv: string[]): ShipFlags {
+  let parsed: ReturnType<
+    typeof parseArgs<{
+      grain: "string";
+      model: "string";
+      reasoning: "string";
+      register: "string";
+      vehicle: "string";
+    }>
+  >;
   try {
-    renderManifest = JSON.parse(readFileSync(renderManifestPath, "utf8")) as typeof renderManifest;
+    parsed = parseArgs(argv, {
+      grain: "string",
+      model: "string",
+      reasoning: "string",
+      register: "string",
+      vehicle: "string",
+    });
   } catch (error) {
-    log(`render.json ignored: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`${USAGE}\n${error instanceof Error ? error.message : String(error)}`);
   }
-}
 
-// footage.social.mp4 — the portrait, text, audio social cut: exactly today's
-// review render (out/<trackId>.mp4). It is the playable cut for Stories, YouTube,
-// and (audio-stripped via MT) TikTok.
-log("footage.social.mp4 (portrait, text, audio — the social cut)");
-copyFileSync(reviewSrc, footageSocial);
+  const trackInput = parsed.positionals[0];
+  if (!trackInput) {
+    throw new Error(USAGE);
+  }
 
-// footage.mp4 — the SQUARE crop source: 1920×1920, audio, CLEAN (no overlay). MT
-// centre-crops it to portrait/landscape on the fly, so this is the one stored
-// orientation master. Re-render it from the same composition + props with
-// aspect=square + hideOverlay; cache it at out/<trackId>.square.mp4 so a re-ship
-// is fast and idempotent.
-const squareSrc = path.join(OUT_DIR, `${track.trackId}.square.mp4`);
-if (existsSync(squareSrc)) {
-  log("footage.mp4 (square crop source — cached render)");
-} else {
-  const propsInPath = path.join(OUT_DIR, `${track.trackId}.props.json`);
-  if (!renderManifest.compositionId || !existsSync(propsInPath)) {
-    console.error(
-      `[ship] cannot render the square crop source: missing ${!renderManifest.compositionId ? "composition id (out/<trackId>.render.json)" : "props (out/<trackId>.props.json)"}. Render the portrait master with social-preview first, or render the square directly:\n  bun src/pipeline/social-preview.ts ${track.trackId} --composition <Id> --aspect square --no-overlay`,
+  const registerRaw = parsed.flags.register?.trim();
+  if (registerRaw !== undefined && !REGISTERS.includes(registerRaw as ShipRegister)) {
+    throw new Error(
+      `--register must be one of ${REGISTERS.join(", ")}; got "${registerRaw}"\n${USAGE}`,
     );
-    process.exit(1);
   }
 
-  log("footage.mp4 (square crop source — rendering 1920×1920, clean)");
-  const portraitProps = JSON.parse(readFileSync(propsInPath, "utf8")) as NostalgicCosmosProps;
-  const squareProps: NostalgicCosmosProps = {
-    ...portraitProps,
-    aspect: "square",
-    hideOverlay: true,
+  return {
+    grain: parsed.flags.grain?.trim() || undefined,
+    model: parsed.flags.model?.trim() || undefined,
+    reasoning: parsed.flags.reasoning?.trim() || undefined,
+    register: registerRaw as ShipRegister | undefined,
+    trackInput,
+    vehicle: parsed.flags.vehicle?.trim() || undefined,
   };
-  const { render } = await import("./render");
-  await render(squareProps, squareSrc, renderManifest.compositionId);
-}
-copyFileSync(squareSrc, footage);
-
-log("poster.jpg (~80% in)");
-const durProbe = spawnSync("ffprobe", [
-  "-v",
-  "error",
-  "-show_entries",
-  "format=duration",
-  "-of",
-  "csv=p=0",
-  footage,
-]);
-const duration = Number.parseFloat(durProbe.stdout.toString().trim()) || 20;
-spawnSync(
-  "ffmpeg",
-  ["-y", "-ss", String(duration * 0.8), "-i", footage, "-frames:v", "1", "-q:v", "3", poster],
-  { stdio: ["ignore", "ignore", "ignore"] },
-);
-
-log("note.txt");
-// Prefer the stored release_date (from track get); fall back to Deezer for any
-// track not yet backfilled.
-const year = yearFromReleaseDate(track.releaseDate) ?? (await fetchReleaseYear(track.isrc));
-const note = buildCaption(track, year);
-writeFileSync(notePath, note);
-
-const propsPath = path.join(OUT_DIR, `${track.trackId}.props.json`);
-if (existsSync(propsPath)) {
-  log("props.json (analyzed audio + palette)");
-  copyFileSync(propsPath, propsOutPath);
 }
 
-// intent.json — the render-intent spine. The author writes out/<trackId>.intent.json
-// at concept time; copy it into the bundle. v1 warn-and-stub: a missing intent is a
-// WARNING, not a ship blocker — write a generated stub so the bundle always carries
-// one and the metrics/judge never hit a missing-file path.
-const intentPath = path.join(OUT_DIR, `${track.trackId}.intent.json`);
-if (existsSync(intentPath)) {
-  log("intent.json (render-intent spine)");
-  copyFileSync(intentPath, intentOutPath);
-} else {
-  log("intent.json MISSING — shipping a generated stub (the author declared no intent)");
-  writeFileSync(
-    intentOutPath,
-    JSON.stringify(generateIntentStub(track.trackId, track.logId), null, 2),
-  );
-}
+/**
+ * Resolve the track (id or log-id → canonical trackId + metadata) via the
+ * `fluncle` CLI. Throws with the spawn error, exit status, and stderr — never
+ * silently swallows a broken/missing binary.
+ */
+export function resolveTrack(input: string): CaptionTrack & { trackId: string } {
+  const result = spawnSync(fluncleBin(), ["tracks", "get", input, "--json"], {
+    encoding: "utf8",
+    env: fluncleSpawnEnv(),
+  });
 
-// cover.jpg — the profile-grid cover (loud, centered identity over a clean late
-// frame). Needs props.json in the bundle; the operator AirDrops it to Photos and
-// sets it as the post's cover. Render failure is non-fatal — the rest of the
-// bundle still ships.
-if (existsSync(propsOutPath)) {
-  log("cover.jpg (profile-grid cover)");
+  if (result.error) {
+    throw new Error(`fluncle track get failed to spawn: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    const stderr = (result.stderr ?? "").trim();
+    throw new Error(
+      `fluncle track get exited with ${result.status ?? "unknown"}${stderr ? `\n${stderr.slice(-2000)}` : ""}`,
+    );
+  }
+
+  let parsed: { ok: boolean; track?: CaptionTrack & { trackId: string } };
   try {
-    await renderCover([bundle]);
+    parsed = JSON.parse(result.stdout) as typeof parsed;
   } catch (error) {
-    log(`cover.jpg skipped: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(
+      `fluncle track get returned invalid JSON: ${error instanceof Error ? error.message : String(error)}\n${result.stdout.slice(0, 200)}`,
+    );
   }
+  if (!parsed.ok || !parsed.track) {
+    throw new Error(`fluncle track get failed: ${result.stdout.slice(0, 200)}`);
+  }
+  return parsed.track;
 }
 
-const sourcePath =
-  typeof renderManifest.compositionSource === "string"
-    ? path.resolve(PACKAGE_ROOT, renderManifest.compositionSource)
-    : undefined;
+export type BundlePaths = {
+  bundle: string;
+  compositionPath: string;
+  footage: string;
+  footageLandscape: string;
+  footageLandscapeSocial: string;
+  footageNotext: string;
+  footageSocial: string;
+  intentOutPath: string;
+  notePath: string;
+  poster: string;
+  propsOutPath: string;
+  renderOutPath: string;
+};
 
-if (sourcePath && existsSync(sourcePath)) {
-  if (path.resolve(sourcePath) === path.resolve(compositionPath)) {
-    log("composition.tsx already bundled");
+/** The file list: every path inside a bundle, joined once so writers can't drift. */
+export function resolveBundlePaths(outDir: string, logId: string): BundlePaths {
+  const bundle = path.join(outDir, logId);
+  return {
+    bundle,
+    compositionPath: path.join(bundle, "composition.tsx"),
+    footage: path.join(bundle, FOOTAGE_FILENAME),
+    footageLandscape: path.join(bundle, FOOTAGE_LANDSCAPE_FILENAME),
+    footageLandscapeSocial: path.join(bundle, FOOTAGE_LANDSCAPE_SOCIAL_FILENAME),
+    footageNotext: path.join(bundle, FOOTAGE_NOTEXT_FILENAME),
+    footageSocial: path.join(bundle, FOOTAGE_SOCIAL_FILENAME),
+    intentOutPath: path.join(bundle, "intent.json"),
+    notePath: path.join(bundle, "note.txt"),
+    poster: path.join(bundle, "poster.jpg"),
+    propsOutPath: path.join(bundle, "props.json"),
+    renderOutPath: path.join(bundle, "render.json"),
+  };
+}
+
+type ExtraVariantMasterFlag = "footageLandscape" | "footageLandscapeSocial" | "footageNotext";
+
+export type ExtraVariantSource = {
+  /** The suffix social-preview.ts writes: out/<trackId><suffix>.mp4. */
+  suffix: string;
+  /** The buildVariants() master flag this maps to. */
+  masterFlag: ExtraVariantMasterFlag;
+  /** The resolveBundlePaths() key holding this variant's bundle destination. */
+  pathKey: ExtraVariantMasterFlag;
+};
+
+/**
+ * The extra (non-default) variant renders ship packages when present — closing
+ * the "no ship pointer / no R2 key scheme yet" thread social-preview.ts used to
+ * leave open. Each entry's `suffix` is exactly the variantSuffix social-preview
+ * computes from `--no-overlay`/`--aspect landscape`; `.notext.landscape` is the
+ * documented clean-landscape escape hatch (docs/video-variants.md "The
+ * square-crop quality dial") — footage.mp4 (square, clean) already covers the
+ * plain `.notext`/`.square` cases via MT crop once a finding is squared, so
+ * only these three combinations are worth a stored file.
+ */
+export const EXTRA_VARIANT_SOURCES: ExtraVariantSource[] = [
+  { masterFlag: "footageNotext", pathKey: "footageNotext", suffix: ".notext" },
+  {
+    masterFlag: "footageLandscapeSocial",
+    pathKey: "footageLandscapeSocial",
+    suffix: ".landscape",
+  },
+  { masterFlag: "footageLandscape", pathKey: "footageLandscape", suffix: ".notext.landscape" },
+];
+
+export type RenderManifestInput = {
+  compositionId: string | null;
+  grain: string | null;
+  hasCompositionFile: boolean;
+  hasIntentFile: boolean;
+  hasPropsFile: boolean;
+  model: string;
+  reasoning: string;
+  register: string | null;
+  trackId: string;
+  variants: ReturnType<typeof buildVariants>;
+  vehicle: string | null;
+};
+
+/** The bundle render.json build: pure, so a change to its shape is testable without fs. */
+export function buildRenderJson(input: RenderManifestInput): Record<string, unknown> {
+  return {
+    compositionId: input.compositionId,
+    compositionSource: input.hasCompositionFile ? "composition.tsx" : null,
+    // The grain-ledger entry: the upload endpoint reads this and stores it as the
+    // track's video_grain (surfaced in /api/tracks beside the vehicle).
+    grain: input.grain,
+    // The render-intent spine: shipped beside props (the author's file or a stub).
+    intent: input.hasIntentFile ? "intent.json" : null,
+    // The authoring AI model: the upload endpoint reads this and stores it as
+    // the track's video_model (surfaced in /api/tracks alongside the vehicle).
+    model: input.model,
+    props: input.hasPropsFile ? "props.json" : null,
+    // The authoring model's reasoning effort: the upload endpoint reads this and
+    // stores it as the track's video_model_reasoning (surfaced in /api/tracks).
+    reasoning: input.reasoning,
+    // The third diversity-ledger axis (composition style): abstract /
+    // representational / framed. Null when unset — a warn, not a ship blocker.
+    register: input.register,
+    trackId: input.trackId,
+    // The per-master render-flag provenance: ship produces the two-master
+    // bundle plus any extra variants it found on disk, so a future "clean
+    // re-render from source" reproduces the right cut per output.
+    variants: input.variants,
+    // The diversity-ledger entry: the upload endpoint reads this and stores it
+    // as the track's video_vehicle (surfaced in /api/tracks for the next agent).
+    vehicle: input.vehicle,
+  };
+}
+
+/** The note.txt build: the fixed-template caption for this track + release year. */
+export function buildNoteText(track: CaptionTrack, year: number | null): string {
+  return buildCaption(track, year);
+}
+
+async function main(argv: string[]): Promise<void> {
+  const flags = parseShipArgs(argv);
+  const log = (message: string) => console.error(`[ship] ${message}`);
+
+  // 1. Resolve the track.
+  const track = resolveTrack(flags.trackInput);
+
+  if (!track.logId) {
+    throw new Error(`${track.trackId} has no Log ID — every video needs a coordinate. Stop.`);
+  }
+
+  // 2. The render must already exist (renders are slow; keep ship fast + idempotent).
+  const reviewSrc = path.join(OUT_DIR, `${track.trackId}.mp4`);
+  if (!existsSync(reviewSrc)) {
+    // A draft is a half-res/jpeg proof with the load-bearing grain hidden — it must
+    // never reach R2. If only a draft exists, say so explicitly.
+    if (existsSync(path.join(OUT_DIR, `${track.trackId}.draft.mp4`))) {
+      throw new Error(
+        `only a DRAFT render exists (${track.trackId}.draft.mp4). Drafts are half-res/jpeg proofs and are NOT shippable — run a full render first: bun src/pipeline/social-preview.ts ${track.trackId} --composition <Id>`,
+      );
+    }
+    throw new Error(
+      `no render at ${reviewSrc} — run: bun src/pipeline/social-preview.ts ${track.trackId}`,
+    );
+  }
+
+  // 3. Assemble the bundle under out/<log-id>/.
+  const paths = resolveBundlePaths(OUT_DIR, track.logId);
+  mkdirSync(paths.bundle, { recursive: true });
+
+  // The render manifest (composition id + the props the portrait master rendered
+  // from) is read up front: the square crop source re-renders that same
+  // composition + props with aspect=square, hideOverlay=true.
+  const renderManifestPath = path.join(OUT_DIR, `${track.trackId}.render.json`);
+  let renderManifest: {
+    compositionId?: string;
+    compositionSource?: string;
+    grain?: string;
+    model?: string;
+    props?: string;
+    reasoning?: string;
+    register?: string;
+    vehicle?: string;
+  } = {};
+
+  if (existsSync(renderManifestPath)) {
+    try {
+      renderManifest = JSON.parse(
+        readFileSync(renderManifestPath, "utf8"),
+      ) as typeof renderManifest;
+    } catch (error) {
+      log(`render.json ignored: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // footage.social.mp4 — the portrait, text, audio social cut: exactly today's
+  // review render (out/<trackId>.mp4). It is the playable cut for Stories, YouTube,
+  // and (audio-stripped via MT) TikTok.
+  log("footage.social.mp4 (portrait, text, audio — the social cut)");
+  copyFileSync(reviewSrc, paths.footageSocial);
+
+  // footage.mp4 — the SQUARE crop source: 1920×1920, audio, CLEAN (no overlay). MT
+  // centre-crops it to portrait/landscape on the fly, so this is the one stored
+  // orientation master. Re-render it from the same composition + props with
+  // aspect=square + hideOverlay; cache it at out/<trackId>.square.mp4 so a re-ship
+  // is fast and idempotent.
+  const squareSrc = path.join(OUT_DIR, `${track.trackId}.square.mp4`);
+  if (existsSync(squareSrc)) {
+    log("footage.mp4 (square crop source — cached render)");
   } else {
-    log("composition.tsx (render source)");
-    copyFileSync(sourcePath, compositionPath);
+    const propsInPath = path.join(OUT_DIR, `${track.trackId}.props.json`);
+    if (!renderManifest.compositionId || !existsSync(propsInPath)) {
+      throw new Error(
+        `cannot render the square crop source: missing ${!renderManifest.compositionId ? "composition id (out/<trackId>.render.json)" : "props (out/<trackId>.props.json)"}. Render the portrait master with social-preview first, or render the square directly:\n  bun src/pipeline/social-preview.ts ${track.trackId} --composition <Id> --aspect square --no-overlay`,
+      );
+    }
+
+    log("footage.mp4 (square crop source — rendering 1920×1920, clean)");
+    const portraitProps = JSON.parse(readFileSync(propsInPath, "utf8")) as NostalgicCosmosProps;
+    const squareProps: NostalgicCosmosProps = {
+      ...portraitProps,
+      aspect: "square",
+      hideOverlay: true,
+    };
+    const { render } = await import("./render");
+    await render(squareProps, squareSrc, renderManifest.compositionId);
   }
-} else {
-  log("composition.tsx skipped (no render manifest/source found)");
+  copyFileSync(squareSrc, paths.footage);
+
+  log("poster.jpg (~80% in)");
+  const durProbe = spawnSync("ffprobe", [
+    "-v",
+    "error",
+    "-show_entries",
+    "format=duration",
+    "-of",
+    "csv=p=0",
+    paths.footage,
+  ]);
+  const duration = Number.parseFloat(durProbe.stdout.toString().trim()) || 20;
+  spawnSync(
+    "ffmpeg",
+    [
+      "-y",
+      "-ss",
+      String(duration * 0.8),
+      "-i",
+      paths.footage,
+      "-frames:v",
+      "1",
+      "-q:v",
+      "3",
+      paths.poster,
+    ],
+    { stdio: ["ignore", "ignore", "ignore"] },
+  );
+
+  log("note.txt");
+  // Prefer the stored release_date (from track get); fall back to Deezer for any
+  // track not yet backfilled.
+  const year = yearFromReleaseDate(track.releaseDate) ?? (await fetchReleaseYear(track.isrc));
+  const note = buildNoteText(track, year);
+  writeFileSync(paths.notePath, note);
+
+  const propsPath = path.join(OUT_DIR, `${track.trackId}.props.json`);
+  if (existsSync(propsPath)) {
+    log("props.json (analyzed audio + palette)");
+    copyFileSync(propsPath, paths.propsOutPath);
+  }
+
+  // intent.json — the render-intent spine. The author writes out/<trackId>.intent.json
+  // at concept time; copy it into the bundle. v1 warn-and-stub: a missing intent is a
+  // WARNING, not a ship blocker — write a generated stub so the bundle always carries
+  // one and the metrics/judge never hit a missing-file path.
+  const intentPath = path.join(OUT_DIR, `${track.trackId}.intent.json`);
+  if (existsSync(intentPath)) {
+    log("intent.json (render-intent spine)");
+    copyFileSync(intentPath, paths.intentOutPath);
+  } else {
+    log("intent.json MISSING — shipping a generated stub (the author declared no intent)");
+    writeFileSync(
+      paths.intentOutPath,
+      JSON.stringify(generateIntentStub(track.trackId, track.logId), null, 2),
+    );
+  }
+
+  // cover.jpg — the profile-grid cover (loud, centered identity over a clean late
+  // frame). Needs props.json in the bundle; the operator AirDrops it to Photos and
+  // sets it as the post's cover. Render failure is non-fatal — the rest of the
+  // bundle still ships.
+  if (existsSync(paths.propsOutPath)) {
+    log("cover.jpg (profile-grid cover)");
+    try {
+      await renderCover([paths.bundle]);
+    } catch (error) {
+      log(`cover.jpg skipped: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  const sourcePath =
+    typeof renderManifest.compositionSource === "string"
+      ? path.resolve(PACKAGE_ROOT, renderManifest.compositionSource)
+      : undefined;
+
+  if (sourcePath && existsSync(sourcePath)) {
+    if (path.resolve(sourcePath) === path.resolve(paths.compositionPath)) {
+      log("composition.tsx already bundled");
+    } else {
+      log("composition.tsx (render source)");
+      copyFileSync(sourcePath, paths.compositionPath);
+    }
+  } else {
+    log("composition.tsx skipped (no render manifest/source found)");
+  }
+
+  // Extra variants: package whichever landscape/notext cuts a prior social-preview
+  // run produced (see EXTRA_VARIANT_SOURCES). Never fabricated — only what's on disk.
+  const extraMasters: Partial<Record<ExtraVariantMasterFlag, boolean>> = {};
+  for (const source of EXTRA_VARIANT_SOURCES) {
+    const src = path.join(OUT_DIR, `${track.trackId}${source.suffix}.mp4`);
+    if (existsSync(src)) {
+      const dest = paths[source.pathKey];
+      log(`${path.basename(dest)} (extra variant — packaging ${path.basename(src)})`);
+      copyFileSync(src, dest);
+      extraMasters[source.masterFlag] = true;
+    }
+  }
+
+  const register = flags.register ?? (renderManifest.register as ShipRegister | undefined) ?? null;
+  if (!register) {
+    log(
+      "WARNING: no --register set (flag or render manifest) — the diversity ledger's third axis is unset for this ship. Pass --register <abstract|representational|framed>.",
+    );
+  }
+
+  log("render.json");
+  writeFileSync(
+    paths.renderOutPath,
+    JSON.stringify(
+      buildRenderJson({
+        compositionId: renderManifest.compositionId ?? null,
+        grain: flags.grain ?? renderManifest.grain ?? null,
+        hasCompositionFile: existsSync(paths.compositionPath),
+        hasIntentFile: existsSync(paths.intentOutPath),
+        hasPropsFile: existsSync(paths.propsOutPath),
+        model: flags.model ?? renderManifest.model ?? DEFAULT_VIDEO_MODEL,
+        reasoning: flags.reasoning ?? renderManifest.reasoning ?? DEFAULT_VIDEO_REASONING,
+        register,
+        trackId: track.trackId,
+        variants: buildVariants({ footage: true, footageSocial: true, ...extraMasters }),
+        vehicle: flags.vehicle ?? renderManifest.vehicle ?? null,
+      }),
+      null,
+      2,
+    ),
+  );
+
+  // Bounded audio cache: the analysis pass that needed public/<trackId>.m4a is
+  // done, and R2 now holds the durable copy inside the bundle — drop it.
+  const removedPreviewAudio = await deletePreviewAudio(track.trackId);
+  if (removedPreviewAudio) {
+    log(`public/${track.trackId}.m4a removed (shipped — preview cache no longer needed)`);
+  }
+
+  console.error(`\n[ship] bundle ready → out/${track.logId}/`);
+  console.error(
+    `[ship] upload with: fluncle admin track video ${track.logId} --dir packages/video/out/${track.logId}\n`,
+  );
+  console.log(note);
 }
 
-log("render.json");
-writeFileSync(
-  renderOutPath,
-  JSON.stringify(
-    {
-      compositionId: renderManifest.compositionId ?? null,
-      compositionSource: existsSync(compositionPath) ? "composition.tsx" : null,
-      // The grain-ledger entry: the upload endpoint reads this and stores it as the
-      // track's video_grain (surfaced in /api/tracks beside the vehicle).
-      grain: grainArg ?? renderManifest.grain ?? null,
-      // The render-intent spine: shipped beside props (the author's file or a stub).
-      intent: existsSync(intentOutPath) ? "intent.json" : null,
-      // The authoring AI model: the upload endpoint reads this and stores it as
-      // the track's video_model (surfaced in /api/tracks alongside the vehicle).
-      model: modelArg ?? renderManifest.model ?? DEFAULT_VIDEO_MODEL,
-      props: existsSync(propsOutPath) ? "props.json" : null,
-      // The authoring model's reasoning effort: the upload endpoint reads this and
-      // stores it as the track's video_model_reasoning (surfaced in /api/tracks).
-      reasoning: reasoningArg ?? renderManifest.reasoning ?? DEFAULT_VIDEO_REASONING,
-      trackId: track.trackId,
-      // The per-master render-flag provenance: ship produces BOTH masters
-      // (footage.mp4 = square/clean, footage.social.mp4 = portrait/text), so a
-      // future "clean re-render from source" reproduces the right cut per output
-      // instead of the portrait default.
-      variants: buildVariants(),
-      // The diversity-ledger entry: the upload endpoint reads this and stores it
-      // as the track's video_vehicle (surfaced in /api/tracks for the next agent).
-      vehicle: vehicleArg ?? renderManifest.vehicle ?? null,
-    },
-    null,
-    2,
-  ),
-);
-
-console.error(`\n[ship] bundle ready → out/${track.logId}/`);
-console.error(
-  `[ship] upload with: fluncle admin track video ${track.logId} --dir packages/video/out/${track.logId}\n`,
-);
-console.log(note);
+if (import.meta.main) {
+  main(process.argv.slice(2)).catch((error) => {
+    console.error(`[ship] ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  });
+}

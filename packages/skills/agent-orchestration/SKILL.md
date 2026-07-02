@@ -10,6 +10,8 @@ description: >-
 
 You are the **orchestrator and reviewer**, not the implementer. You hold the plan, the context, the safety judgment, and the merge authority. Sub-agents hold the file-level grind; their final message is the _conclusion_ you keep, not the file dumps that would flood your context. The whole point is leverage: you stay oriented across a dozen moving slices because you never load the weeds of any one of them.
 
+This orchestrator-and-reviewer role runs on **fable-5** — the top of the intelligence-and-taste matrix in `AGENTS.md` ("Picking the right models for workflows and subagents"). Holding the plan and judging the diffs is exactly the high-intelligence, high-taste work fable-5 is for. Execution is what you offload: pick each sub-agent's model per that matrix rather than defaulting them all to fable-5.
+
 Use this loop when the work is decomposable — several independent build slices, a backfill or migration across many items, a review across many files, or a multi-step feature where parallelism or a clean separation of "decide" from "execute" buys you speed or clarity. For a single edit you already understand, just do it; the orchestration overhead only pays off at scale.
 
 ## The loop
@@ -20,7 +22,7 @@ Use this loop when the work is decomposable — several independent build slices
 
 **3. Brief precisely.** The brief is the entire contract. Give it: the scope, the recon facts, the constraints (build-only vs. ship, hold-for-merge, voice/canon, safety rails), the exact verification steps, and **what to report back**. Embed the gotchas you already know so the agent doesn't rediscover them. Tell prod-touching agents what they may and may not mutate, and to _stop and flag_ rather than hack around a blocker.
 
-**4. Delegate to worktree sub-agents.** Use `isolation: "worktree"` so each agent works on an isolated copy and parallel agents can't collide — essential when they mutate files. Worktree agents branch from the **last pushed commit**, so push first if a local-only change must be visible to them, or inline that change into the brief. The agent builds, runs the relevant checks (typecheck / build / test / lint), and opens a PR.
+**4. Delegate to worktree sub-agents.** Use `isolation: "worktree"` so each agent works on an isolated copy and parallel agents can't collide — essential when they mutate files. Worktree agents branch from the **last pushed commit**, so push first if a local-only change must be visible to them, or inline that change into the brief. The agent builds, runs the relevant checks (typecheck / build / test / lint), and opens a PR. Match each agent's `model` to the slice per the `AGENTS.md` matrix: cheap/mechanical grind → sonnet-5, user-facing or high-taste work → opus-4.8/fable-5. Don't spend fable-5 on execution the matrix says a cheaper model handles.
 
 **5. Review the diff, not the summary.** Read the actual changes. On anything load-bearing or prod-touching, review _adversarially_ and verify the safety-critical property yourself — e.g., "does this truly deploy as a no-op until the flag flips?", "is this auth gate actually first?", "is this SQL parameterized?". The agent's confident report is a hypothesis; the diff is the evidence.
 

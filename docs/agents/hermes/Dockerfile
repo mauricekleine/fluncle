@@ -4,7 +4,7 @@
 #
 # BUILD CONTEXT: build from the REPO ROOT (not docs/agents/hermes/) so the
 # `copywriting-fluncle` skill is reachable for the COPY below:
-#   docker build -f docs/agents/hermes/Dockerfile -t fluncle-hermes:v2026.6.19 .
+#   docker build -f docs/agents/hermes/Dockerfile -t fluncle-hermes:v2026.7.1 .
 #
 # RUNTIME SECRET (not baked): the `fluncle-observation` `--no-agent` cron shells out
 # to `claude -p` (Claude Code, SUBSCRIPTION auth), which authenticates from the
@@ -15,7 +15,7 @@
 # Hermes BLOCKS provider credentials from `--no-agent` cron script envs (GHSA-rhgp-j443-p4rf),
 # so observe-sweep.sh reads the token from a 0600 file instead — see
 # docs/agents/hermes/cron/README.md § Operational gotchas (do not re-debug these).
-FROM nousresearch/hermes-agent:v2026.6.19
+FROM nousresearch/hermes-agent:v2026.7.1
 
 # Enrichment toolchain (docs/agents/hermes/cron/README.md): the
 # fluncle-track-enrichment skill's analyze-track.ts is `#!/usr/bin/env bun` and
@@ -100,7 +100,7 @@ RUN arch="$(uname -m)" \
        x86_64|amd64)  cpu="x64" ;; \
        *) echo "unsupported arch for the fluncle binary: $arch" >&2; exit 1 ;; \
      esac \
-  && curl -fsSL "https://github.com/mauricekleine/fluncle/releases/download/v0.79.0/fluncle-linux-${cpu}" \
+  && curl -fsSL "https://github.com/mauricekleine/fluncle/releases/download/v0.83.0/fluncle-linux-${cpu}" \
        -o /usr/local/bin/fluncle \
   && chmod 755 /usr/local/bin/fluncle
 

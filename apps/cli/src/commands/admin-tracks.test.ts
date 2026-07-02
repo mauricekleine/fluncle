@@ -68,7 +68,8 @@ await mock.module("../api", () => ({
   },
 }));
 
-const { contextQueueCommand, noteQueueCommand, queueCommand } = await import("./admin-tracks");
+const { contextQueueCommand, listCommand, noteQueueCommand, queueCommand } =
+  await import("./admin-tracks");
 
 describe("context queue — --retry-empty plumbing", () => {
   beforeEach(() => {
@@ -116,6 +117,29 @@ describe("auto-note queue — hasContext=true AND hasNote=false", () => {
     expect(url.searchParams.get("hasContext")).toBe("true");
     expect(url.searchParams.get("hasNote")).toBe("false");
     expect(url.searchParams.get("order")).toBe("asc");
+  });
+});
+
+describe("tracks list — key-backfill backlog filter", () => {
+  beforeEach(() => {
+    requestedPaths = [];
+  });
+
+  test("--no-key emits hasKey=false (the missing-key backlog query)", async () => {
+    await listCommand({ hasKey: false, limit: 10, order: "desc" });
+
+    expect(requestedPaths).toHaveLength(1);
+    const url = new URL(requestedPaths[0] ?? "", "https://fluncle.test");
+    expect(url.searchParams.get("hasKey")).toBe("false");
+    expect(url.searchParams.get("order")).toBe("desc");
+  });
+
+  test("no key filter omits the hasKey param entirely (list all)", async () => {
+    await listCommand({ limit: 10, order: "desc" });
+
+    expect(requestedPaths).toHaveLength(1);
+    const url = new URL(requestedPaths[0] ?? "", "https://fluncle.test");
+    expect(url.searchParams.has("hasKey")).toBe(false);
   });
 });
 

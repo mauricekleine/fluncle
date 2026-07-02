@@ -68,6 +68,16 @@ Consequence to confirm in the UI slice: today `/log` plays the text portrait; un
 
 A center-crop is **not** the bespoke 16:9 reflow a dedicated landscape render produces. For abstract shader vehicles (fbm/flow/voronoi fields) the crop reads beautifully; for vehicles with a strong off-centre subject it can feel arbitrary. Play it by ear: when a crop fails the eye test, render a dedicated **`footage.landscape.mp4`** (landscape, clean, audio) for that finding and let `media.ts` prefer it over the cropped square. That file is the escape hatch, not the default.
 
+## Optional stored variant cuts
+
+Beyond the two masters, the bundle may carry up to three EXTRA rendered cuts — escape hatches for the findings where a Media Transformation crop isn't good enough. They are **optional and dir-convention**: `ship` packages one only when its source file is already on disk (it never fabricates a cut), and `fluncle admin tracks video` presigns and uploads only the files the bundle actually contains, so a finding without them uploads exactly as before. When present, each lands at `found.fluncle.com/<log-id>/<name>` beside the masters:
+
+- **`footage.notext.mp4`** — the portrait cut, CLEAN (no baked text). The text-free sibling of `footage.social.mp4` for a surface that wants portrait footage but draws its own chrome.
+- **`footage.landscape.mp4`** — a bespoke landscape render, CLEAN. The escape hatch above: a dedicated 16:9 reflow for a finding whose off-centre subject the square centre-crop mangles.
+- **`footage.landscape.social.mp4`** — a bespoke landscape render with BAKED text. Landscape where the page does not own the chrome.
+
+The full presigned upload field set (`footage`, `footage-social`, `footage-notext`, `footage-landscape`, `footage-landscape-social`, `poster`, `cover`, `note`, `composition`, `props`, `render`, `intent`, `metrics`) lives in `apps/web/src/lib/server/video-bundle.ts` (`VIDEO_ARTIFACTS`), and the CLI's `--dir` resolves the conventional filenames in `apps/cli/src/commands/track.ts`. Only `footage` is required; the rest ride along when present.
+
 ## Constraints and watch-items
 
 - **MT input ≤ 100 MB, output ≤ 1 min, input must be MP4 H.264 + AAC/MP3.** A `1920×1920` master is heavier than a portrait one, so keep its CRF in check — the existing masters already flirt with the cap.

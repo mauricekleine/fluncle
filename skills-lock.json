@@ -4,7 +4,7 @@
     "agent-orchestration": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/agent-orchestration",
       "sourceType": "local",
-      "computedHash": "11256a78ddd0c1c28f039b27afe522afe549ca69234caf24e876a0d37fac01be"
+      "computedHash": "2bf97b7a49ca38c3855e5e458b8b6b387ec0bdd5cc92b9d8b21a4bfac4e63b9d"
     },
     "ai-seo": {
       "source": "coreyhaines31/marketingskills",
@@ -37,6 +37,11 @@
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-hermes-operator",
       "sourceType": "local",
       "computedHash": "8e41576a1577c5568e852e0d421dc3c369f260fa4017cb5c77b5f1fad515d092"
+    },
+    "fluncle-key-backfill": {
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-key-backfill",
+      "sourceType": "local",
+      "computedHash": "09918e47cf9e6db41a9b57b1e3d03aa13de258c7a1d1cdc6f0c23945364d15a8"
     },
     "fluncle-maintenance": {
       "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/fluncle-maintenance",
@@ -84,9 +89,9 @@
       "computedHash": "ee0b06da4fda6ee1eec24270dc5f718383e7a4403f2e0de03f73d88cee288209"
     },
     "fluncle-video": {
-      "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/fluncle-video",
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-video",
       "sourceType": "local",
-      "computedHash": "b73437808368a8e4e673dd63a773e2cc2badb9889fd001f842df1620f5df1e07"
+      "computedHash": "49adcdc98757897261ce610ae2e307d8ece9fffa4a4655c832bd45546f90fc34"
     },
     "hetzner-devbox": {
       "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/hetzner-devbox",

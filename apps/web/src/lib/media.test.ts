@@ -354,6 +354,17 @@ describe("videoPurgeUrls", () => {
     }
   });
 
+  it("always includes the bundle's static images (the agents' diversity-check reads)", () => {
+    const media = trackMedia(LOG_ID);
+
+    for (const squared of [true, false]) {
+      const urls = videoPurgeUrls(LOG_ID, { squared });
+
+      expect(urls).toContain(media.posterUrl);
+      expect(urls).toContain(media.coverUrl);
+    }
+  });
+
   it("returns a de-duplicated set (no URL listed twice)", () => {
     for (const squared of [true, false]) {
       const urls = videoPurgeUrls(LOG_ID, { squared });
@@ -403,9 +414,11 @@ describe("videoPurgeUrls", () => {
     expect(urls).not.toContain(videoPoster(LOG_ID));
   });
 
-  it("stays within Cloudflare's 30-URL-per-request purge cap before chunking", () => {
-    // The squared family is the larger set; keep it small enough that a single
-    // finding rarely needs more than a couple of purge requests (the helper chunks).
-    expect(videoPurgeUrls(LOG_ID, { squared: true }).length).toBeLessThanOrEqual(30);
+  it("stays within two Cloudflare purge requests (the helper chunks at 30 URLs)", () => {
+    // The squared family is the larger set: 30 video/rendition URLs + the two
+    // bundle images (poster.jpg/cover.jpg) = 32, i.e. exactly two chunks. Keep it
+    // from creeping past that — a purge should stay a couple of requests, not a fan-out.
+    expect(videoPurgeUrls(LOG_ID, { squared: true }).length).toBeLessThanOrEqual(60);
+    expect(videoPurgeUrls(LOG_ID, { squared: true }).length).toBe(32);
   });
 });

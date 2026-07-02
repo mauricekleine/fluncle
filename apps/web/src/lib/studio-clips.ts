@@ -60,6 +60,17 @@ export function filterClips(clips: ClipDTO[], filter: ClipLibraryFilter): ClipDT
   });
 }
 
+/**
+ * Sort clips newest-first by `createdAt` (descending). The clip library renders every clip
+ * in ONE continuous grid ordered by when it was cut — newest at the top, no per-recording
+ * grouping (each card still carries its own recording label). Pure — returns a new array,
+ * leaving the input untouched. `createdAt` is an ISO-8601 UTC string, so a lexical compare
+ * is chronological.
+ */
+export function sortClipsNewestFirst<T extends Pick<ClipDTO, "createdAt">>(clips: T[]): T[] {
+  return [...clips].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
 /** A clip's length in milliseconds (out − in), floored at 0 for a malformed window. */
 export function clipDurationMs(clip: Pick<ClipDTO, "inMs" | "outMs">): number {
   return Math.max(0, clip.outMs - clip.inMs);

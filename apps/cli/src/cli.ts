@@ -33,6 +33,15 @@ type AdminQueueOptions = AdminListOptions & {
   hasObservation?: boolean;
 };
 
+// `admin tracks list` filters. `--no-key` is Commander's negation of a `key`
+// boolean (default true), so `key === false` means the flag was passed; `--has-key
+// <bool>` is the explicit tri-state form. Absent both ⇒ no key filter (list all).
+type AdminTracksListOptions = AdminListOptions & {
+  hasKey?: string;
+  key?: boolean;
+  order?: string;
+};
+
 // A verb whose worklist is a `--queue` view flag (`tracks enrich|observe|context|
 // note --queue`): the worklist runners read `json`/`limit` off it (AdminListOptions).
 type AdminQueueViewOptions = AdminListOptions & {
@@ -94,8 +103,13 @@ type TrackVideoOptions = {
   cover?: string;
   dir?: string;
   footage?: string;
+  footageLandscape?: string;
+  footageLandscapeSocial?: string;
+  footageNotext?: string;
   footageSocial?: string;
+  intent?: string;
   json: boolean;
+  metrics?: string;
   model?: string;
   note?: string;
   poster?: string;
@@ -495,6 +509,24 @@ function addAdminCommands(program: Command): void {
       await runAdminQueue(options, queueCommand);
     });
 
+  // A filterable listing of findings. Primary use: `--no-key` surfaces the
+  // missing-musical-key backlog (findings the DSP left key-null below its
+  // confidence floor) so it's countable + targetable — the input query for the
+  // Rekordbox key-backfill (fluncle-key-backfill skill). `--has-key <bool>` is the
+  // explicit tri-state (list only those WITH, or only those WITHOUT, a key).
+  adminTracks
+    .command("list")
+    .description("List findings, filterable by musical-key presence (--no-key / --has-key)")
+    .option("--limit <limit>", "Number of findings to show", "50")
+    .option("--no-key", "Only findings with NO stored musical key (the key-backfill backlog)")
+    .option("--has-key <bool>", "Filter by key presence: true (has key) or false (missing)")
+    .option("--order <order>", "Sort: asc (oldest first) or desc (newest first)", "desc")
+    .option("--json", "Print JSON", false)
+    .action(async (options: AdminTracksListOptions) => {
+      const { listCommand } = await import("./commands/admin-tracks");
+      await runAdminTracksList(options, listCommand);
+    });
+
   // The enrichment verb. Enrichment itself runs as the on-box `fluncle-enrich`
   // `--no-agent` cron (it analyzes on-box and writes back via `tracks update`), so
   // the CLI surface is the worklist view: `--queue` shows findings needing
@@ -560,8 +592,13 @@ function addAdminCommands(program: Command): void {
     .option("--cover <file>", "Cover image")
     .option("--dir <dir>", "Bundle directory")
     .option("--footage <file>", "Video footage (square crop source)")
+    .option("--footage-landscape <file>", "Clean landscape cut (optional escape hatch)")
+    .option("--footage-landscape-social <file>", "Landscape cut with baked text (optional)")
+    .option("--footage-notext <file>", "Portrait cut without the type layer (optional)")
     .option("--footage-social <file>", "Portrait social cut (baked text)")
+    .option("--intent <file>", "Render-intent JSON (optional)")
     .option("--json", "Print JSON", false)
+    .option("--metrics <file>", "Gate metrics JSON (optional)")
     .option("--model <model>", "Authoring AI model (<provider>/<model>)")
     .option("--note <file>", "Note file")
     .option("--poster <file>", "Poster image")
@@ -1581,7 +1618,7 @@ async function runTrackVideo(
 ): Promise<void> {
   if (!idOrLogId) {
     throw new Error(
-      "Missing id. Usage: fluncle admin tracks video <track_id|log_id> (--dir <dir> | --footage <file> [--footage-social <file>] [--poster <file>] [--cover <file>] [--note <file>] [--composition <file>] [--props <file>] [--render <file>])",
+      "Missing id. Usage: fluncle admin tracks video <track_id|log_id> (--dir <dir> | --footage <file> [--footage-social <file>] [--footage-notext <file>] [--footage-landscape <file>] [--footage-landscape-social <file>] [--poster <file>] [--cover <file>] [--note <file>] [--composition <file>] [--props <file>] [--render <file>] [--intent <file>] [--metrics <file>])",
     );
   }
 
@@ -1611,7 +1648,15 @@ async function runTrackVideo(
     composition: resolveFile(options.composition, "composition.tsx"),
     cover: resolveFile(options.cover, "cover.jpg"),
     footage: resolveFile(options.footage, "footage.mp4"),
+    footageLandscape: resolveFile(options.footageLandscape, "footage.landscape.mp4"),
+    footageLandscapeSocial: resolveFile(
+      options.footageLandscapeSocial,
+      "footage.landscape.social.mp4",
+    ),
+    footageNotext: resolveFile(options.footageNotext, "footage.notext.mp4"),
     footageSocial: resolveFile(options.footageSocial, "footage.social.mp4"),
+    intent: resolveFile(options.intent, "intent.json"),
+    metrics: resolveFile(options.metrics, "metrics.json"),
     model: options.model,
     note: resolveFile(options.note, "note.txt"),
     poster: resolveFile(options.poster, "poster.jpg"),
@@ -2381,6 +2426,53 @@ function parseListLimit(value: string | undefined): number {
   return limit;
 }
 
+// Resolve the tri-state key filter from the two accepted forms: `--no-key`
+// (Commander sets `key === false`) or `--has-key true|false`. Absent both ⇒
+// undefined (no filter — list everything). `--no-key` wins if both are given.
+function resolveHasKey(options: AdminTracksListOptions): boolean | undefined {
+  if (options.key === false) {
+    return false;
+  }
+
+  if (options.hasKey === "false") {
+    return false;
+  }
+
+  if (options.hasKey === "true") {
+    return true;
+  }
+
+  return undefined;
+}
+
+async function runAdminTracksList(
+  options: AdminTracksListOptions,
+  listCommand: typeof import("./commands/admin-tracks").listCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const order = options.order === "asc" ? "asc" : "desc";
+  const hasKey = resolveHasKey(options);
+  const tracks = await listCommand({ hasKey, limit, order });
+
+  if (options.json) {
+    printJson({ ok: true, tracks });
+    return;
+  }
+
+  if (tracks.length === 0) {
+    const scope = hasKey === false ? " missing a key" : hasKey === true ? " with a key" : "";
+    console.log(`No findings${scope}.`);
+    return;
+  }
+
+  const { trackRows } = await import("./format");
+  const scope =
+    hasKey === false ? " missing a musical key" : hasKey === true ? " with a musical key" : "";
+  const noun = tracks.length === 1 ? "finding" : "findings";
+  console.log(`${tracks.length} ${noun}${scope}:`);
+  console.log(trackRows(tracks).join("\n"));
+}
+
 async function runAdminQueue(
   options: AdminQueueOptions,
   queueCommand: typeof import("./commands/admin-tracks").queueCommand,
@@ -2844,10 +2936,15 @@ const stringOptions = new Set([
   "--features",
   "--file",
   "--footage",
+  "--footage-landscape",
+  "--footage-landscape-social",
+  "--footage-notext",
   "--footage-social",
   "--from",
+  "--intent",
   "--key",
   "--limit",
+  "--metrics",
   "--mime",
   "--note",
   "--platform",
