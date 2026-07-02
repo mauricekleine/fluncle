@@ -48,6 +48,7 @@ import {
 import { parseArgs } from "./args";
 import { buildCaption, type CaptionTrack, fetchReleaseYear, yearFromReleaseDate } from "./caption";
 import { deletePreviewAudio } from "./download-preview";
+import { fluncleBin, fluncleSpawnEnv } from "./fluncle-bin";
 import { generateIntentStub } from "./intent";
 import { renderCover } from "./render-cover";
 
@@ -129,7 +130,10 @@ export function parseShipArgs(argv: string[]): ShipFlags {
  * silently swallows a broken/missing binary.
  */
 export function resolveTrack(input: string): CaptionTrack & { trackId: string } {
-  const result = spawnSync("fluncle", ["track", "get", input, "--json"], { encoding: "utf8" });
+  const result = spawnSync(fluncleBin(), ["tracks", "get", input, "--json"], {
+    encoding: "utf8",
+    env: fluncleSpawnEnv(),
+  });
 
   if (result.error) {
     throw new Error(`fluncle track get failed to spawn: ${result.error.message}`);
