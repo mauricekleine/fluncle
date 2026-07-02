@@ -5,9 +5,12 @@
 //     similar). This is the laundering-by-recolor guard: a colour-only metric would
 //     read them as very different; the structure-dominant distance must not.
 //   - 032.0.4L vs 032.0.6R : genuinely distinct → must read HIGH.
-// If the posters are absent (a shallow checkout), the check no-ops with a note.
+// If the posters are absent (a shallow checkout) or ffmpeg is not on PATH (the
+// decode shells out to it; CI without ffmpeg stays green — the analyze-set
+// convention), the check no-ops with a note.
 
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
@@ -18,7 +21,12 @@ const POSTERS = path.resolve(import.meta.dirname, "..", "..", "calibration", "po
 const poster = (id: string): string => path.join(POSTERS, `${id}.jpg`);
 const ids = ["027.5.4D", "025.5.5T", "032.0.4L", "032.0.6R"];
 
-if (!ids.every((id) => existsSync(poster(id)))) {
+// decodeImageRgb spawns the bare `ffmpeg` binary, so probe exactly that.
+const hasFfmpeg = spawnSync("ffmpeg", ["-version"], { stdio: "ignore" }).status === 0;
+
+if (!hasFfmpeg) {
+  console.log("~ diversity: ffmpeg absent — poster-decode anchors skipped.");
+} else if (!ids.every((id) => existsSync(poster(id)))) {
   console.log(
     "~ diversity: calibration posters not present — skipping (run from a full checkout).",
   );
