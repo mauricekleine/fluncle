@@ -7,7 +7,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./orpc": "./src/orpc/index.ts",
-    "./util": "./src/util.ts"
+    "./util": "./src/util.ts",
+    "./util/tracklist-export": "./src/util/tracklist-export.ts"
   },
   "scripts": {
     "test": "bun test",
