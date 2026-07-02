@@ -15,6 +15,10 @@ type Row = Record<string, unknown>;
 
 const state = vi.hoisted(() => ({
   calls: [] as string[],
+  // The findings catalogue backing the legacy text-match fallback.
+  catalogue: [] as Row[],
+  // The recording's `recording_cues` rows (the forward cue home).
+  cues: [] as Row[],
   joinLogId: null as string | null,
   joinMixtapeId: null as string | null,
   linked: undefined as { id: string; log_id: string | null } | undefined,
@@ -32,6 +36,16 @@ const execute = vi.hoisted(() =>
           { ...state.recording, mixtape_id: state.joinMixtapeId, mixtape_log_id: state.joinLogId },
         ],
       };
+    }
+
+    // getCueRows — the recording's cue rows (the finding-linked resolution path).
+    if (sql.includes("from recording_cues")) {
+      return { rows: state.cues };
+    }
+
+    // The findings catalogue read backing resolveFindingIdsByText.
+    if (sql.includes("artists_json from tracks")) {
+      return { rows: state.catalogue };
     }
 
     // getRecordingRow — the raw recordings row.
@@ -114,10 +128,6 @@ const deleteObject = vi.hoisted(() =>
 
 vi.mock("./r2-presign", () => ({ copyObject, deleteObject }));
 
-vi.mock("./tracks", () => ({
-  getTrackByIdOrLogId: async () => ({ trackId: "t1" }),
-}));
-
 function seedRecording(overrides: Row = {}): void {
   state.recording = {
     created_at: "2026-06-30T00:00:00.000Z",
@@ -130,10 +140,23 @@ function seedRecording(overrides: Row = {}): void {
     updated_at: "2026-06-30T00:00:00.000Z",
     ...overrides,
   };
+  // The backfilled cue home: one finding-linked cue (the promote members source).
+  state.cues = [
+    {
+      artists_text: "A",
+      finding_id: "t1",
+      id: "cue-1",
+      position: 1,
+      start_ms: 0,
+      title_text: "T",
+    },
+  ];
 }
 
 beforeEach(() => {
   state.calls = [];
+  state.catalogue = [];
+  state.cues = [];
   state.linked = undefined;
   state.joinLogId = null;
   state.joinMixtapeId = null;
@@ -206,10 +229,69 @@ describe("promoteRecording", () => {
     expect(state.calls.indexOf("delete")).toBeGreaterThan(state.calls.indexOf("repoint"));
   });
 
-  it("refuses to mint a recording whose tracklist resolves to no finding", async () => {
+  it("seeds the mixtape members from the cues' finding_id links (the S4 fix)", async () => {
+    seedRecording();
+    state.cues = [
+      { artists_text: "A", finding_id: "t1", id: "c1", position: 1, start_ms: 0, title_text: "T" },
+      // A non-finding cue (played but not canon) is skipped, never guessed.
+      {
+        artists_text: "B",
+        finding_id: null,
+        id: "c2",
+        position: 2,
+        start_ms: 90_000,
+        title_text: "U",
+      },
+      // A repeated finding dedupes (a set can play a track twice).
+      {
+        artists_text: "A",
+        finding_id: "t1",
+        id: "c3",
+        position: 3,
+        start_ms: 180_000,
+        title_text: "T",
+      },
+    ];
+
+    await promoteRecording("rec-1");
+
+    expect(setMixtapeMembers).toHaveBeenCalledWith("mix-1", {
+      members: [{ ref: "t1", startMs: 0 }],
+    });
+  });
+
+  it("falls back to tracklist_json resolved by NORMALIZED text when no cues exist (dual-read)", async () => {
+    seedRecording({
+      tracklist_json: JSON.stringify([
+        { artists: ["Dawn Wall"], id: "random-uuid", startMs: 45_000, title: "I See You" },
+      ]),
+    });
+    state.cues = [];
+    state.catalogue = [
+      { artists_json: JSON.stringify(["Dawn Wall"]), title: "I See You", track_id: "t2" },
+    ];
+
+    await promoteRecording("rec-1");
+
+    // Resolved by title+artist — NEVER by the random cue id (the old trap).
+    expect(setMixtapeMembers).toHaveBeenCalledWith("mix-1", {
+      members: [{ ref: "t2", startMs: 45_000 }],
+    });
+  });
+
+  it("refuses to mint a recording whose cues resolve to no finding", async () => {
     seedRecording({ tracklist_json: JSON.stringify([]) });
+    state.cues = [];
 
     await expect(promoteRecording("rec-1")).rejects.toThrow(/no Fluncle finding|resolvable/i);
     expect(createMixtape).not.toHaveBeenCalled();
+  });
+
+  it("refuses to promote a PLAN (no set video — r2_key NULL)", async () => {
+    seedRecording({ r2_key: null });
+
+    await expect(promoteRecording("rec-1")).rejects.toThrow(/no set video/i);
+    expect(createMixtape).not.toHaveBeenCalled();
+    expect(copyObject).not.toHaveBeenCalled();
   });
 });

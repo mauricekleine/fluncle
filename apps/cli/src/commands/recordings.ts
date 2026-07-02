@@ -81,7 +81,8 @@ export async function recordingGetCommand(
   }
 
   console.log(formatRecordingSummary(recording));
-  console.log(`  r2Key: ${recording.r2Key}`);
+  // A PLAN (no video yet) owns no key — print the honest absence.
+  console.log(`  r2Key: ${recording.r2Key ?? "— (no set video)"}`);
 
   for (const cue of recording.tracklist) {
     const at = cue.startMs === undefined ? "—" : `${(cue.startMs / 1000).toFixed(1)}s`;
