@@ -469,6 +469,13 @@ export function videoPurgeUrls(logId: string, { squared }: { squared: boolean })
   // social master. Built from a full URL, so pass the social master.
   urls.add(videoAudioStripped(media.socialVideoUrl));
 
+  // The bundle's static images. Not player surfaces, but the render agents'
+  // diversity check fetches the bare poster.jpg of the feed neighbours — a
+  // re-render that leaves the OLD poster cached (max-age 4h) would show the
+  // next agent the video this one just replaced.
+  urls.add(media.posterUrl); // poster.jpg (the ~80% drop frame)
+  urls.add(media.coverUrl); // cover.jpg (the profile-grid identity card)
+
   if (squared) {
     // Two-master crops: every orientation × every ladder width (Stories sizes the
     // crop to the measured pane; /log + radio use the native width). Plus the
