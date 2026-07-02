@@ -29,6 +29,19 @@ export function mixtapeSetVideoUrl(logId: string): string {
 }
 
 /**
+ * A RECORDING's set VIDEO on R2, by its OWNED key (`r2Key` — `recordings/<id>/set.mp4`
+ * while un-promoted, `<log-id>/set.mp4` after promote). Unlike a mixtape's set video,
+ * a recording owns its key, so the Studio reaches for `r2Key` directly rather than
+ * deriving from a coordinate. Served as a bare range-streamed, faststart object (the
+ * same ~1.5GB rendition, NOT a Media Transformation). The key's own slashes are the
+ * path (never `encodeURIComponent`'d — that would escape the separators); its segments
+ * (a UUID or a dot-safe Log ID) are already URL-safe.
+ */
+export function recordingSetVideoUrl(r2Key: string): string {
+  return `${FOUND_BASE}/${r2Key}`;
+}
+
+/**
  * The mixtape's set-analysis artifact on R2 (`<log-id>/studio-envelope.json`), by
  * its Log ID — the `StudioEnvelope` (energy/bass/flux curves + candidate drops)
  * Unit B's `analyze-set` stages and the Studio editor (Unit E) reads to draw its

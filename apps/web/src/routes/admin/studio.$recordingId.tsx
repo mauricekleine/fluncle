@@ -5,12 +5,15 @@ import {
   CircleNotchIcon,
   GearSixIcon,
   ScissorsIcon,
-  SparkleIcon,
   TrashIcon,
   WarningIcon,
 } from "@phosphor-icons/react";
 import { type MixtapeSocialPostItem } from "@fluncle/contracts";
-import { type ClipDTO } from "@fluncle/contracts/orpc";
+import {
+  type ClipDTO,
+  type RecordingDTO,
+  type RecordingTracklistItem,
+} from "@fluncle/contracts/orpc";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
@@ -23,8 +26,8 @@ import {
   useState,
 } from "react";
 import { AdminShell } from "@/components/admin/admin-shell";
+import { RecordingCueRail } from "@/components/admin/recording-cue-rail";
 import { StudioCropFrame } from "@/components/admin/studio-crop-frame";
-import { StudioCueRail } from "@/components/admin/studio-cue-rail";
 import { StudioEnergyLane } from "@/components/admin/studio-energy-lane";
 import {
   AlertDialog,
@@ -41,36 +44,44 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Switch } from "@/components/ui/switch";
 import { formatClock, useVideo, Video } from "@/components/video";
-import { mixtapeSetVideoUrl, mixtapeStudioEnvelopeUrl } from "@/lib/media";
-import { type MixtapeDTO, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
-import { isAdminRequest } from "@/lib/server/admin-auth";
-import { getMixtapeForRender } from "@/lib/server/mixtapes";
+import { recordingSetVideoUrl } from "@/lib/media";
 import {
-  type StudioEnvelope,
+  addCue,
+  clearCue,
+  editCue,
+  markCue,
+  type NewCue,
+  recordingCueProgress,
+  removeCue,
+} from "@/lib/recording-cues";
+import { isAdminRequest } from "@/lib/server/admin-auth";
+import { getRecording } from "@/lib/server/recordings";
+import {
   type TimelineRegion,
   bandToWindow,
   centredCropLeftFraction,
   cropRectToXOffset,
-  cueProgress,
   defaultBandAt,
   fractionToMs,
   msToFraction,
-  snapCueToPeak,
-  suggestionToRegion,
   xOffsetToLeftFraction,
 } from "@/lib/studio-clip";
 
-// The Studio clip editor. One landscape set
-// rendition (the `<log-id>/set.mp4` master) → many framed 9:16 footage clips. Entered
-// from the "Clip this set" action on a minted mixtape row (/admin/mixtapes). A wide,
-// full-height AdminShell fill page (a dense operator workstation) composed from the
-// shared `<Video>` compound (Root owns the "one clock" machine + stall recovery; the
-// scrubber + transport read it) plus the editor's own chrome — the VibeMap-pointer crop
-// rect and the energy lane — over the same element, with Shadcn ui/* only. At xl+ the
-// body is a two-pane workstation (cue list left / visualiser right); below xl it falls
-// back to a single scrolling column.
+// The Studio clip editor, keyed on a RECORDING (RFC recording-primitive, Design B —
+// Wave 3). One landscape set rendition (the recording's OWNED `r2Key` master) → many
+// framed 9:16 footage clips. A recording is a captured set that is NOT (yet) a published
+// mixtape: it is clippable without minting a scarce Log ID coordinate. Entered from the
+// recordings index on `/admin/clips` (a CLI-created recording) or the "Clip this set"
+// action on a promoted mixtape (which links to its recording's Studio).
+//
+// Vs. the old mixtape-keyed Studio: the preview sources the recording's owned key
+// directly; clips are created against `/admin/recordings/{id}/clips`; the cue rail is the
+// NET-NEW authoring editor (a recording starts with an EMPTY tracklist — the operator
+// types + marks each cue, persisted as the whole `tracklistJson` array via
+// `update_recording`). A raw recording degrades gracefully: no cover → a neutral poster;
+// no energy envelope (recordings carry no `studio-envelope.json`) → the drop-suggestion
+// lane is absent, manual in/out only; `ResyncFromCues` appears only once promoted.
 
 const SEEK_STEP_SECONDS = 5;
 const CLIP_LENGTH_PRESETS_MS = [15_000, 30_000, 60_000] as const;
@@ -84,64 +95,35 @@ const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
   }
 });
 
-const fetchStudioMixtape = createServerFn({ method: "GET" })
-  .validator((data: { logId: string }) => data)
-  .handler(async ({ data: { logId } }): Promise<MixtapeDTO> => {
-    if (!(await isAdminRequest())) {
-      throw redirect({ to: "/admin/login" });
-    }
-
-    // Resolve by the minted coordinate (published or mid-distribute). A draft has no
-    // logId, so the studio is only reachable for a clippable set — and the URL carries
-    // the `XXX.F.ZZ` coordinate, never the internal UUID.
-    const mixtape = await getMixtapeForRender(logId);
-
-    if (!mixtape) {
-      throw redirect({ to: "/admin/mixtapes" });
-    }
-
-    return mixtape;
-  });
-
-// The set-analysis envelope is a bare R2 object on found.fluncle.com — a DIFFERENT
-// origin from www.fluncle.com with no `access-control-allow-origin`, so a browser
-// fetch is CORS-blocked. We fetch it SERVER-SIDE (server-to-server, no CORS) and
-// return the parsed envelope or null. A 404/non-OK is the normal "not staged yet"
-// state (the editor degrades to manual in/out), never an error.
-const fetchStudioEnvelope = createServerFn({ method: "GET" })
-  .validator((data: { logId: string }) => data)
-  .handler(async ({ data: { logId } }): Promise<StudioEnvelope | null> => {
+// Resolve the recording in-process (a createServerFn calling the server helper directly,
+// the pattern the clip library uses — no client fetch, no CORS). A missing recording
+// bounces back to the clip library rather than 500-ing.
+const fetchStudioRecording = createServerFn({ method: "GET" })
+  .validator((data: { recordingId: string }) => data)
+  .handler(async ({ data: { recordingId } }): Promise<RecordingDTO> => {
     if (!(await isAdminRequest())) {
       throw redirect({ to: "/admin/login" });
     }
 
     try {
-      const response = await fetch(mixtapeStudioEnvelopeUrl(logId));
-
-      if (!response.ok) {
-        return null;
-      }
-
-      return (await response.json()) as StudioEnvelope;
+      return await getRecording(recordingId);
     } catch {
-      // A network hiccup reads as "not staged yet" — the preview + manual in/out hold.
-      return null;
+      throw redirect({ to: "/admin/clips" });
     }
   });
 
-export const Route = createFileRoute("/admin/studio/$logId")({
+export const Route = createFileRoute("/admin/studio/$recordingId")({
   beforeLoad: () => ensureAdmin(),
   component: StudioPage,
-  loader: ({ params }) => fetchStudioMixtape({ data: { logId: params.logId } }),
+  loader: ({ params }) => fetchStudioRecording({ data: { recordingId: params.recordingId } }),
 });
 
 // An active hand-pick band, as ordered in/out fractions of the set duration.
 type Band = { inFraction: number; outFraction: number };
 
 function StudioPage() {
-  const mixtape = Route.useLoaderData();
-  const title = mixtapeDisplayTitle(mixtape.title);
-  const logId = mixtape.logId;
+  const recording = Route.useLoaderData();
+  const title = recording.title;
 
   return (
     <AdminShell
@@ -150,81 +132,51 @@ function StudioPage() {
       wide
       subtitle={
         <>
-          {mixtape.logId ? <span className="font-mono tabular-nums">{mixtape.logId}</span> : null}
-          {mixtape.logId ? " · " : ""}
+          {recording.logId ? (
+            <span className="font-mono tabular-nums">fluncle://{recording.logId}</span>
+          ) : (
+            "Un-promoted recording"
+          )}
+          {" · "}
           Clip this set into framed 9:16 footage
         </>
       }
       title={`Studio: ${title}`}
     >
-      {logId ? (
-        <StudioEditor
-          initialMixtape={mixtape}
-          logId={logId}
-          mixtapeId={mixtape.id ?? ""}
-          title={title}
-        />
-      ) : (
-        <div className="flex flex-1 flex-col items-center justify-center gap-2 p-10 text-center">
-          <p className="font-medium">No set video yet</p>
-          <p className="max-w-sm text-sm text-muted-foreground">
-            This mixtape has no minted coordinate, so there's no set rendition to clip. Publish it,
-            then stage its set video.
-          </p>
-          <Button nativeButton={false} render={<a href="/admin/mixtapes" />} variant="outline">
-            Back to mixtapes
-          </Button>
-        </div>
-      )}
+      <StudioEditor initialRecording={recording} title={title} />
     </AdminShell>
   );
 }
 
 // The outer shell mounts `Video.Root` (the "one clock" state machine + stall recovery)
-// so the editor body can read the machine through context. The body holds the
-// studio-specific state (the in/out band, the framing rect, suggestions, the keyboard
-// loop) and the chrome (the crop frame, the energy lane, the toolbar).
+// so the editor body can read the machine through context. The preview sources the
+// recording's OWNED key directly; a recording has no cover, so the poster is a neutral
+// stage (no card image).
 function StudioEditor({
-  initialMixtape,
-  logId,
-  mixtapeId,
+  initialRecording,
   title,
 }: {
-  initialMixtape: MixtapeDTO;
-  logId: string;
-  mixtapeId: string;
+  initialRecording: RecordingDTO;
   title: string;
 }) {
-  const src = mixtapeSetVideoUrl(logId);
-  const poster = mixtapeCoverUrl(logId, "card");
+  const src = recordingSetVideoUrl(initialRecording.r2Key);
 
   return (
     <Video.Root src={src}>
-      <StudioEditorBody
-        initialMixtape={initialMixtape}
-        logId={logId}
-        mixtapeId={mixtapeId}
-        poster={poster}
-        title={title}
-      />
+      <StudioEditorBody initialRecording={initialRecording} title={title} />
     </Video.Root>
   );
 }
 
 function StudioEditorBody({
-  initialMixtape,
-  logId,
-  mixtapeId,
-  poster,
+  initialRecording,
   title,
 }: {
-  initialMixtape: MixtapeDTO;
-  logId: string;
-  mixtapeId: string;
-  poster: string;
+  initialRecording: RecordingDTO;
   title: string;
 }) {
   const queryClient = useQueryClient();
+  const recordingId = initialRecording.id;
   // The one clock + element geometry come from Video.Root; the crop xOffset is in SOURCE
   // pixels, so it needs `videoSize` (a 1080p landscape default until the rendition
   // reports its real dimensions).
@@ -241,52 +193,34 @@ function StudioEditorBody({
   const [liveMessage, setLiveMessage] = useState("");
   const [error, setError] = useAutoNotice();
   const [notice, setNotice] = useAutoNotice();
-  // The cue rail: which member the keyboard mark (`c`) / clear (`x`) targets, and
-  // whether a mark snaps to the nearest loudness drop (an assist, toggleable in the cog).
-  const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
-  const [snapCues, setSnapCues] = useState(true);
+  // The cue rail: which cue the keyboard mark (`c`) / clear (`x`) targets.
+  const [selectedCueId, setSelectedCueId] = useState<string | null>(null);
 
-  // ── The envelope — fetched SERVER-SIDE (the R2 object is cross-origin with no
-  // CORS header; see fetchStudioEnvelope). Graceful absence: null means "not staged
-  // yet" (a normal state), so no curve, no suggestions — the preview + manual in/out
-  // still work, never an error.
-  const { data: envelope } = useQuery<StudioEnvelope | null>({
-    queryFn: () => fetchStudioEnvelope({ data: { logId } }),
-    queryKey: ["admin", "studio-envelope", logId],
-    retry: false,
-    staleTime: 5 * 60_000,
+  // ── The recording itself (its `tracklist` carries every authored cue). Seeded from the
+  // loader so there's no flash, then kept live: focus-refetch ON (admin convention), and
+  // each cue write updates it optimistically via setQueryData.
+  const recordingQueryKey = ["admin", "studio-recording", recordingId] as const;
+  const { data: recording } = useQuery<RecordingDTO>({
+    initialData: initialRecording,
+    queryFn: () => fetchStudioRecording({ data: { recordingId } }),
+    queryKey: recordingQueryKey,
+    refetchOnWindowFocus: true,
   });
+  const tracklist = recording.tracklist;
 
-  // ── The set's existing clips (the editor reads its own set; the cross-set library
-  // is Unit G). Focus-refetch ON (admin convention).
+  // ── The recording's clips. Focus-refetch ON (admin convention).
   const { data: clips } = useQuery<ClipDTO[]>({
-    queryFn: () => fetchClips(mixtapeId),
-    queryKey: ["admin", "clips", mixtapeId],
+    queryFn: () => fetchClips(recordingId),
+    queryKey: ["admin", "clips", "recording", recordingId],
     refetchOnWindowFocus: true,
   });
 
-  // ── The mixtape itself (its ordered members carry each cue's start_ms). Seeded from
-  // the loader so there's no flash, then kept live: focus-refetch ON (admin
-  // convention), and each cue write updates it optimistically via setQueryData.
-  const cueQueryKey = ["admin", "studio-mixtape", logId] as const;
-  const { data: mixtape } = useQuery<MixtapeDTO>({
-    initialData: initialMixtape,
-    queryFn: () => fetchStudioMixtape({ data: { logId } }),
-    queryKey: cueQueryKey,
-    refetchOnWindowFocus: true,
-  });
-  const members = mixtape.members;
-
-  // The timeline length: the envelope's analysed duration when present (the curve +
-  // suggestions are keyed to it), else the video's own duration. Both are the whole
-  // set, so they coincide; preferring the envelope keeps the curve and the ghosts
-  // aligned to the same axis.
-  const durationMs = envelope?.durationMs ?? Math.round(durationSeconds * 1000);
+  // No energy envelope for a recording (it carries no `studio-envelope.json`), so the
+  // lane degrades to the playhead + committed clips + the active band, and there are no
+  // drop suggestions. The timeline axis is the video's own duration.
+  const durationMs = Math.round(durationSeconds * 1000);
   const currentMs = Math.round(currentSeconds * 1000);
 
-  // The lane seeks against the envelope's analysed duration (the curve + suggestions
-  // are keyed to it), not the video's own — they coincide, but this keeps the ghosts on
-  // the same axis. The compound's `seek` (seconds) is the one mutation of the clock.
   const seekFraction = useCallback(
     (fraction: number) => {
       seek(Math.floor(fractionToMs(fraction, durationMs) / 1000));
@@ -308,10 +242,8 @@ function StudioEditorBody({
     setCropLeftFraction(next);
   }, []);
 
-  // ── Suggestions → ghost regions (suggestion-first). Absent envelope → none.
-  const suggestionRegions: TimelineRegion[] = (envelope?.suggestions ?? []).map((suggestion) =>
-    suggestionToRegion(suggestion, durationMs),
-  );
+  // Recordings have no envelope → no suggestion ghosts.
+  const suggestionRegions: TimelineRegion[] = [];
 
   const playheadFraction = msToFraction(currentMs, durationMs);
 
@@ -347,31 +279,14 @@ function StudioEditorBody({
     setLiveMessage(`Out point ${formatClock(currentSeconds)}`);
   }, [currentSeconds, playheadFraction]);
 
-  const acceptSuggestion = useCallback(
-    (index: number) => {
-      const suggestion = envelope?.suggestions[index];
-
-      if (!suggestion) {
-        return;
-      }
-
-      setBand({
-        inFraction: msToFraction(suggestion.startMs, durationMs),
-        outFraction: msToFraction(suggestion.startMs + suggestion.durationMs, durationMs),
-      });
-      seek(suggestion.anchorMs / 1000);
-      setLiveMessage(`Accepted a drop at ${formatClock(suggestion.anchorMs / 1000)}`);
-    },
-    [durationMs, envelope, seek],
-  );
-
   const resetFraming = useCallback(() => {
     framingTouched.current = false;
     setCropLeftFraction(centredCropLeftFraction(videoSize.width, videoSize.height));
     setLiveMessage("Framing reset to centre");
   }, [videoSize]);
 
-  // ── Create a clip: the active band + the framing xOffset → a `create_clip` row.
+  // ── Create a clip: the active band + the framing xOffset → a `create_clip` row on the
+  // recording (`POST /admin/recordings/{id}/clips`).
   const createClip = useMutation({
     mutationFn: async () => {
       if (!band) {
@@ -390,11 +305,14 @@ function StudioEditorBody({
         videoWidth: videoSize.width,
       });
 
-      const response = await fetch(`/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/clips`, {
-        body: JSON.stringify({ inMs: window.inMs, outMs: window.outMs, xOffset }),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      });
+      const response = await fetch(
+        `/api/admin/recordings/${encodeURIComponent(recordingId)}/clips`,
+        {
+          body: JSON.stringify({ inMs: window.inMs, outMs: window.outMs, xOffset }),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+      );
 
       if (!response.ok) {
         throw new Error(await readError(response));
@@ -405,7 +323,9 @@ function StudioEditorBody({
       setBand(null);
       setNotice("Clip queued.");
       setLiveMessage("Clip queued.");
-      await queryClient.invalidateQueries({ queryKey: ["admin", "clips", mixtapeId] });
+      await queryClient.invalidateQueries({
+        queryKey: ["admin", "clips", "recording", recordingId],
+      });
     },
   });
 
@@ -422,112 +342,123 @@ function StudioEditorBody({
     onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
     onSuccess: async () => {
       setNotice("Clip removed.");
-      await queryClient.invalidateQueries({ queryKey: ["admin", "clips", mixtapeId] });
+      await queryClient.invalidateQueries({
+        queryKey: ["admin", "clips", "recording", recordingId],
+      });
     },
   });
 
-  // ── Cue one member (set/clear its start_ms) via `update_mixtape_cue`. Each mark saves
-  // instantly, with an optimistic setQueryData so the rail + lane update before the round
-  // trip; a failure rolls back to the snapshot. `startMs: null` clears the cue.
-  const setCue = useMutation<
+  // ── Persist the WHOLE cue tracklist via `update_recording` (the array is the unit of
+  // truth). Each edit computes the next array locally (the pure `recording-cues` helpers),
+  // updates the cache optimistically so the rail + lane move before the round trip, and a
+  // failure rolls back to the snapshot.
+  const saveTracklist = useMutation<
     void,
     Error,
-    { ref: string; startMs: number | null },
-    { previous: MixtapeDTO | undefined }
+    RecordingTracklistItem[],
+    { previous: RecordingDTO | undefined }
   >({
-    mutationFn: async ({ ref, startMs }) => {
-      const response = await fetch(
-        `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/cues/${encodeURIComponent(ref)}`,
-        {
-          body: JSON.stringify({ startMs }),
-          headers: { "Content-Type": "application/json" },
-          method: "PUT",
-        },
-      );
+    mutationFn: async (next) => {
+      const response = await fetch(`/api/admin/recordings/${encodeURIComponent(recordingId)}`, {
+        body: JSON.stringify({ tracklistJson: next }),
+        headers: { "Content-Type": "application/json" },
+        method: "PATCH",
+      });
 
       if (!response.ok) {
         throw new Error(await readError(response));
       }
     },
-    onError: (caught, _variables, context) => {
+    onError: (caught, _next, context) => {
       if (context?.previous) {
-        queryClient.setQueryData(cueQueryKey, context.previous);
+        queryClient.setQueryData(recordingQueryKey, context.previous);
       }
 
       setError(caught instanceof Error ? caught.message : String(caught));
     },
-    onMutate: async ({ ref, startMs }) => {
-      await queryClient.cancelQueries({ queryKey: cueQueryKey });
-      const previous = queryClient.getQueryData<MixtapeDTO>(cueQueryKey);
+    onMutate: async (next) => {
+      await queryClient.cancelQueries({ queryKey: recordingQueryKey });
+      const previous = queryClient.getQueryData<RecordingDTO>(recordingQueryKey);
 
-      queryClient.setQueryData<MixtapeDTO>(cueQueryKey, (old) =>
-        old
-          ? {
-              ...old,
-              members: old.members.map((member) =>
-                member.trackId === ref ? { ...member, startMs: startMs ?? undefined } : member,
-              ),
-            }
-          : old,
+      queryClient.setQueryData<RecordingDTO>(recordingQueryKey, (old) =>
+        old ? { ...old, tracklist: next } : old,
       );
 
       return { previous };
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: cueQueryKey }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: recordingQueryKey }),
   });
 
-  // Mark the given member at the playhead (snapped to the nearest drop when snapping is
-  // on), then select it. The mark saves via the optimistic mutation above.
-  const markCue = useCallback(
-    (trackId: string) => {
-      const snap = snapCues
-        ? snapCueToPeak(currentMs, envelope?.peaks ?? [])
-        : { ms: Math.max(0, currentMs), snapped: false };
-
-      setCue.mutate({ ref: trackId, startMs: snap.ms });
-      setSelectedTrackId(trackId);
-      setLiveMessage(
-        snap.snapped
-          ? `Cued at drop ${formatClock(snap.ms / 1000)}`
-          : `Cued at ${formatClock(snap.ms / 1000)}`,
-      );
+  // ── Cue authoring (the net-new editor). Each handler computes the next array via a
+  // pure helper and persists it.
+  const addCueTrack = useCallback(
+    (cue: NewCue) => {
+      const id = crypto.randomUUID();
+      saveTracklist.mutate(addCue(tracklist, cue, () => id));
+      setSelectedCueId(id);
+      setLiveMessage(`Added ${cue.artists.join(", ")} — ${cue.title}`);
     },
-    [currentMs, envelope, setCue, snapCues],
+    [saveTracklist, tracklist],
   );
 
-  const clearCue = useCallback(
-    (trackId: string) => {
-      setCue.mutate({ ref: trackId, startMs: null });
+  const markCueTrack = useCallback(
+    (id: string) => {
+      saveTracklist.mutate(markCue(tracklist, id, currentMs));
+      setSelectedCueId(id);
+      setLiveMessage(`Cued at ${formatClock(currentMs / 1000)}`);
+    },
+    [currentMs, saveTracklist, tracklist],
+  );
+
+  const clearCueTrack = useCallback(
+    (id: string) => {
+      saveTracklist.mutate(clearCue(tracklist, id));
       setLiveMessage("Cue cleared");
     },
-    [setCue],
+    [saveTracklist, tracklist],
+  );
+
+  const editCueTrack = useCallback(
+    (id: string, patch: Partial<NewCue>) => {
+      saveTracklist.mutate(editCue(tracklist, id, patch));
+    },
+    [saveTracklist, tracklist],
+  );
+
+  const removeCueTrack = useCallback(
+    (id: string) => {
+      saveTracklist.mutate(removeCue(tracklist, id));
+      setSelectedCueId((current) => (current === id ? null : current));
+      setLiveMessage("Track removed");
+    },
+    [saveTracklist, tracklist],
   );
 
   // Move the cue-rail selection (the ↑/↓ keyboard target), clamped to the tracklist.
   const moveSelection = useCallback(
     (delta: number) => {
-      if (members.length === 0) {
+      if (tracklist.length === 0) {
         return;
       }
 
-      const currentIndex = members.findIndex((member) => member.trackId === selectedTrackId);
+      const currentIndex = tracklist.findIndex((cue) => cue.id === selectedCueId);
       const baseIndex = currentIndex === -1 ? 0 : currentIndex;
-      const next = members[Math.max(0, Math.min(members.length - 1, baseIndex + delta))];
+      const next = tracklist[Math.max(0, Math.min(tracklist.length - 1, baseIndex + delta))];
 
       if (next) {
-        setSelectedTrackId(next.trackId);
+        setSelectedCueId(next.id);
         setLiveMessage(`Selected ${next.artists.join(", ")} — ${next.title}`);
       }
     },
-    [members, selectedTrackId],
+    [selectedCueId, tracklist],
   );
 
-  // Default the selection to the first member once the tracklist is known.
+  // Default the selection to the first cue once the tracklist is known.
   useEffect(() => {
-    if (selectedTrackId === null && members.length > 0) {
-      setSelectedTrackId(members[0]?.trackId ?? null);
+    if (selectedCueId === null && tracklist.length > 0) {
+      setSelectedCueId(tracklist[0]?.id ?? null);
     }
-  }, [members, selectedTrackId]);
+  }, [selectedCueId, tracklist]);
 
   // ── The keyboard loop (role="application"). Skip when typing in a field, and when
   // the scrubber already handled the key (it preventDefaults space/arrows/Home/End).
@@ -538,8 +469,7 @@ function StudioEditorBody({
       }
 
       // Space + Enter ACTIVATE a focused button/link; let the control own them so a
-      // shortcut never double-fires (e.g. Enter on the focused Create button already
-      // creates; Enter on a Delete button must delete, not also create).
+      // shortcut never double-fires.
       if (
         (event.key === " " || event.key === "Spacebar" || event.key === "Enter") &&
         isActivationTarget(event.target)
@@ -589,15 +519,15 @@ function StudioEditorBody({
         case "c":
         case "C":
           event.preventDefault();
-          if (selectedTrackId) {
-            markCue(selectedTrackId);
+          if (selectedCueId) {
+            markCueTrack(selectedCueId);
           }
           break;
         case "x":
         case "X":
           event.preventDefault();
-          if (selectedTrackId) {
-            clearCue(selectedTrackId);
+          if (selectedCueId) {
+            clearCueTrack(selectedCueId);
           }
           break;
         case "Enter":
@@ -609,14 +539,14 @@ function StudioEditorBody({
       }
     },
     [
-      clearCue,
+      clearCueTrack,
       createClip,
       currentSeconds,
       markAtPlayhead,
-      markCue,
+      markCueTrack,
       moveSelection,
       seek,
-      selectedTrackId,
+      selectedCueId,
       setInToPlayhead,
       setOutToPlayhead,
       togglePlay,
@@ -626,30 +556,14 @@ function StudioEditorBody({
   const bandWindow = band ? bandToWindow(band.inFraction, band.outFraction, durationMs) : null;
   const bandValid = bandWindow !== null && bandWindow.outMs - bandWindow.inMs >= MIN_CLIP_MS;
 
-  // The cue pins the lane draws: one per marked member, reddened when out of order.
-  const cueOutOfOrder = new Set(cueProgress(members).outOfOrderTrackIds);
-  const cueTicks = members
-    .filter((member) => member.startMs != null)
-    .map((member) => ({
-      outOfOrder: cueOutOfOrder.has(member.trackId),
-      startMs: member.startMs ?? 0,
-      trackId: member.trackId,
-    }));
-  // The trackId whose cue write is currently in flight (per-row saving indicator).
-  const savingCueTrackId = setCue.isPending ? (setCue.variables?.ref ?? null) : null;
+  // The cue pins the lane draws: one per marked cue.
+  const cueTicks = tracklist
+    .filter((cue) => cue.startMs != null)
+    .map((cue) => ({ outOfOrder: false, startMs: cue.startMs ?? 0, trackId: cue.id }));
+
+  const cueProgress = recordingCueProgress(tracklist);
 
   return (
-    // role="application" so the editor's single-key shortcuts ([ ] M Enter, space,
-    // arrows) reach the handler instead of being eaten by browse mode. aria-label +
-    // the aria-live readout give a screen reader the context + the action feedback.
-    //
-    // Layout: below `xl` this is a single scrolling column (cue list, then the
-    // visualiser) — reachable on a phone/tablet. At `xl+` it becomes the two-pane
-    // workstation: a CSS grid with the cue list on the LEFT (track 1, flexible, scrolls
-    // on its own) and the visualiser on the RIGHT (track 2, capped, stays put), split by
-    // a Dust Line seam. The cue list is FIRST in the DOM so tab/focus order matches the
-    // visual left-to-right at every breakpoint (no `order` reversal — WCAG 2.4.3). The
-    // keyboard loop lives on this wrapper, so shortcuts fire from either pane.
     <div
       aria-label={`Studio clip editor for ${title}`}
       className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 sm:p-5 xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(0,48rem)] xl:grid-rows-[minmax(0,1fr)] xl:gap-0 xl:overflow-hidden"
@@ -660,27 +574,29 @@ function StudioEditorBody({
         {liveMessage}
       </span>
 
-      {/* Left pane (the cue list) — the ordered tracklist (each markable at the
-          playhead) plus the set's committed clips. It scrolls independently at xl+ so
-          all tracks stay reachable while the visualiser holds its place. */}
+      {/* Left pane (the cue list) — the AUTHORED tracklist (add/type/mark/remove) plus the
+          recording's committed clips. It scrolls independently at xl+. */}
       <div className="flex min-w-0 flex-col xl:min-h-0 xl:overflow-y-auto xl:pr-6">
-        {/* The cue rail — mark each track's start in the set. The times feed YouTube
-            chapters, the /log per-track times, and (later) clip auto-crediting. */}
-        <StudioCueRail
-          members={members}
-          onClear={clearCue}
-          onMark={markCue}
+        <RecordingCueRail
+          onAdd={addCueTrack}
+          onClear={clearCueTrack}
+          onEdit={editCueTrack}
+          onMark={markCueTrack}
+          onRemove={removeCueTrack}
           onSeek={(ms) => seek(ms / 1000)}
-          onSelect={setSelectedTrackId}
-          savingTrackId={savingCueTrackId}
-          selectedTrackId={selectedTrackId}
+          onSelect={setSelectedCueId}
+          saving={saveTracklist.isPending}
+          selectedId={selectedCueId}
+          tracklist={tracklist}
         />
 
-        {/* Re-sync the live distribution from the cues just marked. Only present when
-            the set is published (has a youtube/mixcloud row); disabled until ≥1 cue. */}
-        <ResyncFromCues members={members} mixtapeId={mixtapeId} />
+        {/* Re-sync the live distribution from the cues — only once the recording is
+            PROMOTED (its linked published mixtape exists). Un-promoted → return null. */}
+        {recording.mixtapeId ? (
+          <ResyncFromCues cuedCount={cueProgress.marked} mixtapeId={recording.mixtapeId} />
+        ) : null}
 
-        {/* The set's clips so far (this set only; the cross-set library is Unit G). */}
+        {/* The recording's clips so far. */}
         <div className="mt-6">
           <Label>Clips ({clips?.length ?? 0})</Label>
           {clips && clips.length > 0 ? (
@@ -713,18 +629,12 @@ function StudioEditorBody({
       </div>
 
       {/* Right pane (the visualiser) — the preview, transport, energy lane, clip
-          toolbar, and suggestions. It stays in view while the operator marks on the
-          left: capped at max-w-3xl (bounds the landscape preview's height) and given
-          its own overflow only as a safety net for very short screens. A Dust Line seam
-          (border-l) separates it from the cue list at xl+. */}
+          toolbar. */}
       <div className="min-w-0 xl:min-h-0 xl:overflow-y-auto xl:border-l xl:border-border xl:pl-6">
         <div className="mx-auto w-full max-w-3xl">
-          {/* Hero preview + the framing rect. The wrapper takes the rendition's
-              intrinsic aspect so the 9:16 crop overlay maps 1:1 onto source pixels. */}
           <Video.Surface
             className="studio-stage"
             mediaClassName="studio-stage-media"
-            poster={poster}
             style={{ aspectRatio: `${videoSize.width} / ${videoSize.height}` }}
           >
             <StudioCropFrame
@@ -745,12 +655,10 @@ function StudioEditorBody({
               clipLengthMs={clipLengthMs}
               onClipLengthChange={setClipLengthMs}
               onResetFraming={resetFraming}
-              onSnapCuesChange={setSnapCues}
-              snapCues={snapCues}
             />
           </div>
 
-          {/* The one quiet energy lane (warm-neutral ramp). Absent envelope → just the
+          {/* The one quiet energy lane. A recording has no envelope, so this is just the
               rail + playhead + committed clips + the active band. */}
           <div className="mt-3">
             <StudioEnergyLane
@@ -759,19 +667,16 @@ function StudioEditorBody({
               cues={cueTicks}
               currentMs={currentMs}
               durationMs={durationMs}
-              envelope={envelope ?? undefined}
+              envelope={undefined}
               onBandPaint={(a, b) =>
                 setBand({ inFraction: Math.min(a, b), outFraction: Math.max(a, b) })
               }
               onSeekFraction={seekFraction}
               suggestions={suggestionRegions}
             />
-            {!envelope ? (
-              <p className="mt-1 text-xs text-muted-foreground">
-                No energy analysis staged yet. Mark in/out by hand; the lane and drop suggestions
-                appear once the set is analysed.
-              </p>
-            ) : null}
+            <p className="mt-1 text-xs text-muted-foreground">
+              A recording has no energy analysis — mark in/out by hand.
+            </p>
           </div>
 
           {/* The clip-making toolbar. Gold lives ONLY on Create clip (the One Sun). */}
@@ -810,28 +715,6 @@ function StudioEditorBody({
             <p aria-live="polite" className="mt-2 text-sm text-muted-foreground">
               {notice}
             </p>
-          ) : null}
-
-          {/* Suggestion chips (suggestion-first, keyboard-reachable). */}
-          {envelope && envelope.suggestions.length > 0 ? (
-            <div className="mt-4">
-              <Label className="flex items-center gap-1.5">
-                <SparkleIcon aria-hidden="true" weight="fill" />
-                Suggested drops
-              </Label>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {envelope.suggestions.map((suggestion, index) => (
-                  <Button
-                    key={suggestion.anchorMs}
-                    onClick={() => acceptSuggestion(index)}
-                    size="sm"
-                    variant="outline"
-                  >
-                    {formatClock(suggestion.anchorMs / 1000)}
-                  </Button>
-                ))}
-              </div>
-            </div>
           ) : null}
         </div>
       </div>
@@ -879,14 +762,10 @@ function SettingsCog({
   clipLengthMs,
   onClipLengthChange,
   onResetFraming,
-  onSnapCuesChange,
-  snapCues,
 }: {
   clipLengthMs: number;
   onClipLengthChange: (ms: number) => void;
   onResetFraming: () => void;
-  onSnapCuesChange: (snap: boolean) => void;
-  snapCues: boolean;
 }) {
   return (
     <Popover>
@@ -916,20 +795,6 @@ function SettingsCog({
           <p className="text-xs text-muted-foreground">The window a Mark drops at the playhead.</p>
         </div>
 
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between gap-3">
-            <Label htmlFor="studio-snap-cues">Snap cues to drops</Label>
-            <Switch
-              checked={snapCues}
-              id="studio-snap-cues"
-              onCheckedChange={(checked) => onSnapCuesChange(checked)}
-            />
-          </div>
-          <p className="text-xs text-muted-foreground">
-            A cue mark jumps to the nearest loudness drop. Off marks the exact playhead.
-          </p>
-        </div>
-
         <Button className="w-full" onClick={onResetFraming} size="sm" variant="outline">
           <ArrowCounterClockwiseIcon aria-hidden="true" />
           Reset framing
@@ -950,23 +815,14 @@ const PLATFORM_LABEL: Record<ResyncPlatform, string> = {
 };
 
 // ── Re-sync from cues ──────────────────────────────────────────────────────────
-// Push the freshly-marked cues to the mixtape's ALREADY-published distribution:
-// re-derive the YouTube chapters + Mixcloud sections and edit the live video + show
-// (no re-upload — the same server-side `resync_mixtape_*` ops the CLI now calls). It
-// edits LIVE public content, so it is confirm-gated. Only rendered once the set is
-// published (has a youtube/mixcloud row); the button is disabled until ≥1 cue exists.
-// A platform without a distribution row is skipped, never errored.
-function ResyncFromCues({
-  members,
-  mixtapeId,
-}: {
-  members: MixtapeDTO["members"];
-  mixtapeId: string;
-}) {
+// Push the promoted recording's cues to its ALREADY-published distribution: re-derive
+// the YouTube chapters + Mixcloud sections and edit the live video + show (no re-upload
+// — the same server-side `resync_mixtape_*` ops the CLI calls). Only rendered once the
+// recording is promoted (the parent guards on `recording.mixtapeId`); a platform without
+// a distribution row is skipped. Disabled until ≥1 cue exists.
+function ResyncFromCues({ cuedCount, mixtapeId }: { cuedCount: number; mixtapeId: string }) {
   const [results, setResults] = useState<ResyncLeg[] | null>(null);
 
-  // The set's per-platform distribution rows tell us what's actually published (and so
-  // what to push to). Focus-refetch ON (admin convention), like the clips/mixtape reads.
   const { data: posts } = useQuery<MixtapeSocialPostItem[]>({
     queryFn: () => fetchMixtapeSocial(mixtapeId),
     queryKey: ["admin", "mixtape-social", mixtapeId],
@@ -976,15 +832,12 @@ function ResyncFromCues({
   const distributed = new Set((posts ?? []).map((post) => post.platform));
   const legs = RESYNC_PLATFORMS.filter((platform) => distributed.has(platform));
   const published = legs.length > 0;
-  const cuedCount = members.filter((member) => member.startMs != null).length;
   const canResync = published && cuedCount > 0;
 
   const resync = useMutation<ResyncLeg[]>({
     mutationFn: async () => {
       const out: ResyncLeg[] = [];
 
-      // Sequential so the two live edits don't race, and each leg reports its own
-      // outcome — one platform failing never aborts the other.
       for (const platform of legs) {
         const response = await fetch(
           `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/${platform}/resync`,
@@ -1021,8 +874,6 @@ function ResyncFromCues({
         <AlertDialog>
           <AlertDialogTrigger
             render={
-              // Quiet outline — the One Sun stays on Create clip. Disabled until there
-              // is a cue to push.
               <Button disabled={!canResync || resync.isPending} size="sm" variant="outline">
                 {resync.isPending ? (
                   <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
@@ -1098,8 +949,8 @@ function isActivationTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && target.closest("a, button, [role='button']") !== null;
 }
 
-async function fetchClips(mixtapeId: string): Promise<ClipDTO[]> {
-  const response = await fetch(`/api/admin/clips?mixtapeId=${encodeURIComponent(mixtapeId)}`);
+async function fetchClips(recordingId: string): Promise<ClipDTO[]> {
+  const response = await fetch(`/api/admin/clips?recordingId=${encodeURIComponent(recordingId)}`);
 
   if (!response.ok) {
     throw new Error(await readError(response));

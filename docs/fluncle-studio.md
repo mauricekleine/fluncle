@@ -1,10 +1,25 @@
 # Fluncle Studio — set-video staging + the footage cut
 
-The mixtape set → clip pipeline. This doc covers the shipped **set-video staging** (Unit A — the automation of the manual three-step staging the `fluncle-mixtapes` skill used to document) and the **footage cut** (Unit C — the deterministic box job that turns a `pending` clip into a framed 9:16 clip on R2).
+The set → clip pipeline. This doc covers the shipped **set-video staging** (Unit A — the automation of the manual three-step staging the `fluncle-mixtapes` skill used to document), the **footage cut** (Unit C — the deterministic box job that turns a `pending` clip into a framed 9:16 clip on R2), and the **recording primitive** (the object a clip is now cut from — a captured set you can clip _without_ publishing it).
 
-## What it does
+## The recording primitive — clip any captured set without publishing it
 
-`fluncle admin mixtapes distribute <idOrLogId> --video <master>.mp4 --set-video` stages **one 1080p faststart rendition** of the set to R2 at `<logId>/set.mp4` and flips the mixtape's `setVideoAt`. That single rendition serves three surfaces: the `/log/<mixtapeLogId>` set-video player (Unit F, shipped), the `/admin/studio/$logId` editor scrub-preview (Unit E), and the clip cut (Unit C). The **raw multi-GB master never goes to R2** — it stays a local archive; a 9:16 social clip cropped from a 1080p rendition is plenty (the platforms re-encode anyway).
+A **recording** is a captured DJ set that is NOT (yet) a published mixtape (the RFC recording-primitive, Design B — `docs/recording-primitive-rfc.md`). It exists so the operator can salvage filmed tidbits from a set into Instagram/TikTok clips **without minting a scarce Log-ID coordinate**: mixtape coordinates are reserved exclusively for full, finished, published mixtapes, so an un-promoted recording carries **no** `fluncle://` coordinate, and its clips point home to `fluncle.com`.
+
+- A recording **owns its R2 key** (`recordings/<id>/set.mp4` in the public `fluncle-videos` bucket — accept-obscurity, no private bucket), carries an optional cue `tracklistJson` (`[{ id, artists, title, startMs? }]`), and is coordinate-less.
+- **Create + upload is CLI** (the multi-GB rendition can't proxy through the Worker): `fluncle admin recordings create --video <set>.mov` mints the row and streams the set video straight to R2 via the multipart presign (`presign_recording_upload`). See `fluncle admin recordings …` (list/show/update/delete/promote).
+- **Clip it in the Studio** at `/admin/studio/<recordingId>` (below). A clip is cut from the recording (`create_clip` → `POST /admin/recordings/{recordingId}/clips`); the box's footage cut resolves the recording (source from `r2Key`, the changing on-screen Track-ID from `tracklistJson`), so a clip carries the `fluncle://` coordinate **only once the recording is promoted**.
+- **Promote to a mixtape** — `fluncle admin recordings promote <recordingId>` (or the `promote_recording` op) mints a mixtape from the recording (mint-or-reuse; idempotent), copies the set video to `<logId>/set.mp4`, seeds the tracklist, and links `mixtapes.recording_id` back. From there the existing `distribute` flow (YouTube + Mixcloud) publishes it. A mixtape's "Clip this set" entrypoint (`/admin/mixtapes`) links to its recording's Studio, so a mixtape's Studio _is_ its recording's Studio (mixtape #1's backfilled recording included).
+
+### `/admin/studio/<recordingId>` — the Studio, keyed on a recording
+
+The Studio editor is keyed on a **recording** (loaded via `get_recording`). The preview sources the recording's owned key directly (`${FOUND_BASE}/${recording.r2Key}`); clips are created against the recording. It degrades gracefully for a raw recording: **no cover** → a neutral poster (no card image); **no energy envelope** (recordings carry no `<logId>/studio-envelope.json`) → the drop-suggestion lane is absent, manual in/out only; the **"Re-sync from cues"** live-distribution block appears only once the recording is promoted (its linked published mixtape exists).
+
+Its left pane is the **cue-authoring editor** (net-new — the mixtape cue rail only _marks_ a pre-existing catalogue tracklist, but a recording starts EMPTY): **add a track** (type artist(s) + title), **mark it at the playhead** (reusing the `<Video>` clock + the mark-at-playhead feel), **edit/remove** it — keyed by cue `id`, persisted as the whole `tracklistJson` array via `update_recording` (the pure transforms live in `apps/web/src/lib/recording-cues.ts`). This tracklist drives the changing on-screen Track-ID overlay on each clip's cut. `/admin/clips` is the cross-recording clip library: every clip grouped by its source recording (a promoted recording shows its `fluncle://<logId>` in the group header, else the recording title), plus a recordings index that lists every captured set and links each to its Studio.
+
+## Set-video staging (the distribute leg for promoted mixtapes)
+
+`fluncle admin mixtapes distribute <idOrLogId> --video <master>.mp4 --set-video` stages **one 1080p faststart rendition** of the set to R2 at `<logId>/set.mp4` and flips the mixtape's `setVideoAt`. That single rendition serves three surfaces: the `/log/<mixtapeLogId>` set-video player (Unit F, shipped), the `/admin/studio` editor scrub-preview (Unit E), and the clip cut (Unit C). The **raw multi-GB master never goes to R2** — it stays a local archive; a 9:16 social clip cropped from a 1080p rendition is plenty (the platforms re-encode anyway). (For a recording, the equivalent one-time upload is `fluncle admin recordings create --video <set>.mov`, which streams straight to the recording's owned key.)
 
 It is **opt-in** and an **additional** leg of `distribute`:
 
@@ -48,9 +63,11 @@ The bytes never traverse the Cloudflare zone; only the tiny presign/complete con
 
 ---
 
-# Cue marking — the cue rail (the editor)
+# Cue marking — the cue model (mixtape-scoped)
 
-The operator marks each track's start time in the set by scrubbing the staged set video and pinning it — the cue rail in `/admin/studio/$logId`. Those cues (`mixtape_tracks.start_ms`) feed the YouTube description chapters + Mixcloud sections (`apps/web/src/lib/mixtape-chapters.ts`), the `/log` per-track times, and (later) clip auto-crediting. This is the interactive counterpart to the CLI cue-sheet backfill: it captures cues where they can only be captured — against the final recording — since Rekordbox load times precede the audible mix-in by a variable lead and can't supply them.
+> Note: the Studio's **interactive** cue editor is now the recording cue-authoring editor (see "The recording primitive" above) — the operator authors cues on a **recording**'s `tracklistJson`, which `promote` seeds into `mixtape_tracks.start_ms`. This section documents the **mixtape-scoped** cue model those cues land in — what the YouTube/Mixcloud chapter re-sync reads and what the CLI cue-sheet backfill writes. `StudioCueRail` + `update_mixtape_cue` are the retained mixtape-scoped rail (the model below); the recording editor is `RecordingCueRail` + `update_recording`.
+
+The cues (`mixtape_tracks.start_ms`) feed the YouTube description chapters + Mixcloud sections (`apps/web/src/lib/mixtape-chapters.ts`), the `/log` per-track times, and (later) clip auto-crediting. Cues are captured where they can only be captured — against the final recording — since Rekordbox load times precede the audible mix-in by a variable lead and can't supply them.
 
 ## Two cue write-paths (deliberately distinct)
 
@@ -76,10 +93,10 @@ Cues are usually refined **after** the set is already live, so the cue rail's le
 ## The pieces
 
 - Pure helpers: `apps/web/src/lib/studio-clip.ts` (`snapCueToPeak` / `CUE_SNAP_WINDOW_MS` / `cueProgress`), tested in `studio-clip.test.ts`.
-- Re-sync: the button `ResyncFromCues` in `apps/web/src/routes/admin/studio.$logId.tsx`; the shared section derivation `mixcloudSections` / `mixcloudSectionFields` / `mixcloudEditUrl` in `@fluncle/contracts/util`; the ops `resync_mixtape_youtube` / `resync_mixtape_mixcloud` (contract `packages/contracts/src/orpc/admin-mixtapes.ts`, handlers `apps/web/src/lib/server/orpc/admin-mixtapes.ts`, e2e proof in `orpc-admin-mixtapes.test.ts`).
+- Re-sync: the button `ResyncFromCues` in `apps/web/src/routes/admin/studio.$recordingId.tsx` (rendered only once the recording is promoted); the shared section derivation `mixcloudSections` / `mixcloudSectionFields` / `mixcloudEditUrl` in `@fluncle/contracts/util`; the ops `resync_mixtape_youtube` / `resync_mixtape_mixcloud` (contract `packages/contracts/src/orpc/admin-mixtapes.ts`, handlers `apps/web/src/lib/server/orpc/admin-mixtapes.ts`, e2e proof in `orpc-admin-mixtapes.test.ts`).
 - Server: `setMixtapeCue` in `apps/web/src/lib/server/mixtapes.ts` (tested in `mixtapes-cue.test.ts`).
 - The op: contract `packages/contracts/src/orpc/admin-mixtapes.ts` (`update_mixtape_cue`), handler `apps/web/src/lib/server/orpc/admin-mixtapes.ts`, coverage `orpc-admin-coverage.test.ts` + `orpc-auth-coverage.test.ts` (operator tier), end-to-end auth proof in `orpc-admin-mixtapes.test.ts`.
-- UI: `apps/web/src/routes/admin/studio.$logId.tsx` (the rail wiring + the keyboard loop + the snap toggle), `apps/web/src/components/admin/studio-cue-rail.tsx`, and the cue pins in `apps/web/src/components/admin/studio-energy-lane.tsx`.
+- Recording cue-authoring UI (the Studio's interactive editor): `apps/web/src/routes/admin/studio.$recordingId.tsx` (the editor + keyboard loop), `apps/web/src/components/admin/recording-cue-rail.tsx` (add/type/mark/edit/remove), the pure transforms `apps/web/src/lib/recording-cues.ts` (tested in `recording-cues.test.ts`), persisted via `update_recording`; the cue pins ride the shared `apps/web/src/components/admin/studio-energy-lane.tsx`. The mixtape-scoped `studio-cue-rail.tsx` is retained for the cue model above.
 
 ---
 

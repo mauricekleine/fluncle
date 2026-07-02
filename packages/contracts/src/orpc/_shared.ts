@@ -123,6 +123,12 @@ export const MixtapeDTOSchema = z
     plannedFor: z.string().optional(),
     publishedAt: z.string().optional(),
     recordedAt: z.string().optional(),
+    // The RECORDING this mixtape was promoted from (RFC recording-primitive, Design B) —
+    // the source of its set video + clips. Set on a promoted mixtape (and mixtape #1's
+    // backfilled recording); absent on a legacy mixtape published before recordings
+    // existed. The `/admin/mixtapes` "Clip this set" entrypoint links to the recording's
+    // Studio (`/admin/studio/<recordingId>`) when present.
+    recordingId: z.string().optional(),
     // The coordinate a DRAFT will mint into — reserved from its live session (or
     // recorded date) so the operator can name their Beatport playlist / USB folders
     // with it before recording. Present only on a draft with a date basis; a minted

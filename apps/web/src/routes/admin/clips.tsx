@@ -1,12 +1,12 @@
-import { FilmStripIcon } from "@phosphor-icons/react";
-import { type ClipDTO } from "@fluncle/contracts/orpc";
+import { FilmStripIcon, ScissorsIcon } from "@phosphor-icons/react";
+import { type ClipDTO, type RecordingDTO } from "@fluncle/contracts/orpc";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type Dispatch, type SetStateAction, useEffect, useMemo, useState } from "react";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { ClipCard } from "@/components/admin/clip-card";
-import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -15,10 +15,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { type MixtapeDTO, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { listClips } from "@/lib/server/clips";
-import { listMixtapes } from "@/lib/server/mixtapes";
+import { listRecordings } from "@/lib/server/recordings";
 import {
   ALL_FILTER,
   type ClipStatusFilter,
@@ -26,17 +25,19 @@ import {
   filterClips,
 } from "@/lib/studio-clips";
 
-// The cross-mixtape clip library. A set yields
-// MANY clips, so beyond the per-set editor (/admin/studio/$logId) this is
-// the grid of EVERY clip across every set: browse, filter (by set + status), preview
-// inline, and DOWNLOAD one to hand-post (the irreducible in-app beat). Reads `list_clips`
-// (Unit D); `delete_clip` prunes a bad cut. Distribution is deferred — the card carries
-// a disabled seam where push-to-social lands later.
+// The cross-recording clip library + the recordings index (RFC recording-primitive,
+// Design B — Wave 3). A captured set (a RECORDING) yields MANY clips; beyond the per-set
+// editor (/admin/studio/$recordingId) this is the grid of EVERY clip, GROUPED by its
+// source recording, plus a recordings index so the operator can find + open a CLI-created
+// recording to clip it. A promoted recording shows its `fluncle://<logId>` coordinate in
+// the group header (else the recording title). Browse, filter (by recording + status),
+// preview inline, download to hand-post (the irreducible in-app beat). Reads `list_clips`
+// + `list_recordings`; `delete_clip` prunes a bad cut. Distribution is deferred (a
+// disabled seam on the card).
 //
-// The grid + the set dropdown load SERVER-SIDE (a createServerFn calling the server
-// helpers in-process, the same pattern the editor uses) — not a cross-origin client
-// fetch. Filtering then runs client-side over the loaded set (the backlog is small;
-// instant, no refetch per dropdown change).
+// The grid, recordings, and dropdown load SERVER-SIDE (a createServerFn calling the
+// server helpers in-process) — not a cross-origin client fetch. Grouping + filtering then
+// run client-side over the loaded set (the backlog is small; instant, no refetch).
 
 const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
   if (!(await isAdminRequest())) {
@@ -44,8 +45,7 @@ const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
   }
 });
 
-// Every clip, newest-first (the library reads the whole set; the per-mixtape narrowing
-// is a client-side filter). Server-side: in-process, no HTTP, no CORS.
+// Every clip, newest-first. Server-side: in-process, no HTTP, no CORS.
 const fetchAllClips = createServerFn({ method: "GET" }).handler(async (): Promise<ClipDTO[]> => {
   if (!(await isAdminRequest())) {
     throw redirect({ to: "/admin/login" });
@@ -54,15 +54,14 @@ const fetchAllClips = createServerFn({ method: "GET" }).handler(async (): Promis
   return listClips();
 });
 
-// The sets (incl. drafts) the set dropdown labels itself from, and the cards link back
-// to. Static for the page's life — loaded once.
-const fetchClipMixtapes = createServerFn({ method: "GET" }).handler(
-  async (): Promise<MixtapeDTO[]> => {
+// Every recording (the group headers + the recordings index + the filter dropdown).
+const fetchRecordings = createServerFn({ method: "GET" }).handler(
+  async (): Promise<RecordingDTO[]> => {
     if (!(await isAdminRequest())) {
       throw redirect({ to: "/admin/login" });
     }
 
-    return listMixtapes({ includeDrafts: true });
+    return listRecordings();
   },
 );
 
@@ -71,16 +70,27 @@ export const Route = createFileRoute("/admin/clips")({
   component: ClipLibraryPage,
   loader: async () => ({
     clips: await fetchAllClips(),
-    mixtapes: await fetchClipMixtapes(),
+    recordings: await fetchRecordings(),
   }),
 });
 
+// A clip normalised onto its source recording id — a recording clip carries `recordingId`
+// directly; a LEGACY mixtape clip is mapped onto its promoted recording (via the
+// recording's `mixtapeId`), so both group + filter under one axis. An orphan legacy clip
+// (a mixtape published before recordings, never backfilled) keeps `recordingId` undefined.
+type LibraryClip = ClipDTO & { resolvedRecordingId: string | undefined };
+
+// A group of clips under one recording header (or an orphan legacy bucket).
+type ClipGroup = {
+  clips: LibraryClip[];
+  key: string;
+  recording: RecordingDTO | undefined;
+};
+
 function ClipLibraryPage() {
-  const { clips: initialClips, mixtapes } = Route.useLoaderData();
+  const { clips: initialClips, recordings } = Route.useLoaderData();
   const queryClient = useQueryClient();
 
-  // Seeded from the SSR loader (the web's react-query convention), so the first paint
-  // is the server grid; a delete invalidates + refetches via the same server fn.
   const { data: clips } = useQuery<ClipDTO[]>({
     initialData: initialClips,
     queryFn: () => fetchAllClips(),
@@ -88,35 +98,86 @@ function ClipLibraryPage() {
     refetchOnWindowFocus: true,
   });
 
-  const [mixtapeId, setMixtapeId] = useState<string>(DEFAULT_CLIP_FILTER.mixtapeId);
+  const [recordingId, setRecordingId] = useState<string>(DEFAULT_CLIP_FILTER.recordingId);
   const [status, setStatus] = useState<ClipStatusFilter>(DEFAULT_CLIP_FILTER.status);
   const [error, setError] = useAutoNotice();
   const [notice, setNotice] = useAutoNotice();
 
-  const mixtapeById = useMemo(
-    () => new Map(mixtapes.filter((m) => m.id).map((m) => [m.id, m] as const)),
-    [mixtapes],
+  const recordingByMixtapeId = useMemo(
+    () =>
+      new Map(
+        recordings
+          .filter((rec) => rec.mixtapeId)
+          .map((rec) => [rec.mixtapeId as string, rec] as const),
+      ),
+    [recordings],
   );
 
-  // The set dropdown only offers sets that actually yielded a clip — no empty options.
-  const setsWithClips = useMemo(() => {
-    const ids = new Set(clips.map((clip) => clip.mixtapeId));
+  // Normalise every clip onto its source recording id (a legacy mixtape clip → its
+  // promoted recording), so grouping + filtering share the one axis.
+  const libraryClips = useMemo<LibraryClip[]>(
+    () =>
+      clips.map((clip) => {
+        const resolved =
+          clip.recordingId ??
+          (clip.mixtapeId ? recordingByMixtapeId.get(clip.mixtapeId)?.id : undefined);
 
-    return mixtapes.filter((m) => m.id && ids.has(m.id));
-  }, [clips, mixtapes]);
+        return { ...clip, recordingId: resolved, resolvedRecordingId: resolved };
+      }),
+    [clips, recordingByMixtapeId],
+  );
 
-  // If the active set filter no longer has clips (its last clip was deleted), fall back
-  // to "all" so the grid never strands the operator on an empty filtered view.
+  // The dropdown only offers recordings that actually yielded a clip — no empty options.
+  const recordingsWithClips = useMemo(() => {
+    const ids = new Set(libraryClips.map((clip) => clip.resolvedRecordingId).filter(Boolean));
+
+    return recordings.filter((rec) => ids.has(rec.id));
+  }, [libraryClips, recordings]);
+
+  // If the active recording filter no longer has clips, fall back to "all".
   useEffect(() => {
-    if (mixtapeId !== ALL_FILTER && !setsWithClips.some((m) => m.id === mixtapeId)) {
-      setMixtapeId(ALL_FILTER);
+    if (recordingId !== ALL_FILTER && !recordingsWithClips.some((rec) => rec.id === recordingId)) {
+      setRecordingId(ALL_FILTER);
     }
-  }, [mixtapeId, setsWithClips]);
+  }, [recordingId, recordingsWithClips]);
 
   const visible = useMemo(
-    () => filterClips(clips, { mixtapeId, status }),
-    [clips, mixtapeId, status],
+    () => filterClips(libraryClips, { recordingId, status }) as LibraryClip[],
+    [libraryClips, recordingId, status],
   );
+
+  // Group the visible clips by their source recording (in the recordings' newest-first
+  // order), with any orphan legacy clips collected into a trailing bucket.
+  const groups = useMemo<ClipGroup[]>(() => {
+    const byRecording = new Map<string, LibraryClip[]>();
+    const orphans: LibraryClip[] = [];
+
+    for (const clip of visible) {
+      if (clip.resolvedRecordingId) {
+        const bucket = byRecording.get(clip.resolvedRecordingId) ?? [];
+        bucket.push(clip);
+        byRecording.set(clip.resolvedRecordingId, bucket);
+      } else {
+        orphans.push(clip);
+      }
+    }
+
+    const ordered: ClipGroup[] = [];
+
+    for (const rec of recordings) {
+      const bucket = byRecording.get(rec.id);
+
+      if (bucket && bucket.length > 0) {
+        ordered.push({ clips: bucket, key: rec.id, recording: rec });
+      }
+    }
+
+    if (orphans.length > 0) {
+      ordered.push({ clips: orphans, key: "orphans", recording: undefined });
+    }
+
+    return ordered;
+  }, [recordings, visible]);
 
   const deleteClip = useMutation({
     mutationFn: async (clipId: string) => {
@@ -135,46 +196,54 @@ function ClipLibraryPage() {
     },
   });
 
-  const setItems = useMemo(
-    () => ({
-      [ALL_FILTER]: "All sets",
-      ...Object.fromEntries(
-        setsWithClips.map((m) => [m.id, mixtapeDisplayTitle(m.title)] as const),
-      ),
-    }),
-    [setsWithClips],
-  );
+  // The clip count per recording (for the recordings index), over ALL clips (not the
+  // filtered view) so the index is a stable map of the backlog.
+  const clipCountByRecording = useMemo(() => {
+    const counts = new Map<string, number>();
+
+    for (const clip of libraryClips) {
+      if (clip.resolvedRecordingId) {
+        counts.set(clip.resolvedRecordingId, (counts.get(clip.resolvedRecordingId) ?? 0) + 1);
+      }
+    }
+
+    return counts;
+  }, [libraryClips]);
 
   const statusItems = { all: "Any state", done: "Ready", pending: "Cutting" } as const;
 
   return (
     <AdminShell
       current="mixtapes"
-      subtitle={`${clips.length} ${clips.length === 1 ? "clip" : "clips"} across every set`}
+      subtitle={`${clips.length} ${clips.length === 1 ? "clip" : "clips"} across every recording`}
       title="Clip library"
     >
       <div className="p-4 sm:p-5">
+        {/* The recordings index — every captured set, promoted or not, linking to its
+            Studio. This is how the operator finds + opens a CLI-created recording. */}
+        <RecordingsIndex clipCountByRecording={clipCountByRecording} recordings={recordings} />
+
         <div className="mb-4 flex flex-wrap items-end gap-4">
           <div className="space-y-1.5">
-            <Label htmlFor="clip-set-filter">Set</Label>
+            <Label htmlFor="clip-recording-filter">Recording</Label>
             <Select
-              items={setItems}
-              onValueChange={(value) => setMixtapeId(value as string)}
-              value={mixtapeId}
+              items={recordingSelectItems(recordingsWithClips)}
+              onValueChange={(value) => setRecordingId(value as string)}
+              value={recordingId}
             >
               <SelectTrigger
-                aria-label="Filter by set"
+                aria-label="Filter by recording"
                 className="w-52"
-                id="clip-set-filter"
+                id="clip-recording-filter"
                 size="sm"
               >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={ALL_FILTER}>All sets</SelectItem>
-                {setsWithClips.map((m) => (
-                  <SelectItem key={m.id} value={m.id ?? ""}>
-                    {mixtapeDisplayTitle(m.title)}
+                <SelectItem value={ALL_FILTER}>All recordings</SelectItem>
+                {recordingsWithClips.map((rec) => (
+                  <SelectItem key={rec.id} value={rec.id}>
+                    {recordingLabel(rec)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -218,27 +287,118 @@ function ClipLibraryPage() {
 
         {clips.length === 0 ? (
           <EmptyLibrary />
-        ) : visible.length === 0 ? (
+        ) : groups.length === 0 ? (
           <p className="py-10 text-center text-sm text-muted-foreground">
             No clips match this filter.
           </p>
         ) : (
-          <ul className="grid list-none grid-cols-2 gap-4 p-0 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-            {visible.map((clip) => (
-              <li key={clip.id}>
-                <ClipCard
-                  clip={clip}
-                  deleting={deleteClip.isPending && deleteClip.variables === clip.id}
-                  mixtape={mixtapeById.get(clip.mixtapeId)}
-                  onDelete={() => deleteClip.mutate(clip.id)}
-                />
-              </li>
+          <div className="space-y-8">
+            {groups.map((group) => (
+              <section aria-label={groupHeading(group)} key={group.key}>
+                <div className="mb-3 flex items-baseline gap-2">
+                  {group.recording ? (
+                    <a
+                      className="font-mono text-sm tabular-nums hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"
+                      href={`/admin/studio/${encodeURIComponent(group.recording.id)}`}
+                    >
+                      {groupHeading(group)}
+                    </a>
+                  ) : (
+                    <span className="text-sm font-medium text-muted-foreground">
+                      {groupHeading(group)}
+                    </span>
+                  )}
+                  <span className="text-xs text-muted-foreground">
+                    {group.clips.length} clip{group.clips.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+                <ul className="grid list-none grid-cols-2 gap-4 p-0 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                  {group.clips.map((clip) => (
+                    <li key={clip.id}>
+                      <ClipCard
+                        clip={clip}
+                        deleting={deleteClip.isPending && deleteClip.variables === clip.id}
+                        onDelete={() => deleteClip.mutate(clip.id)}
+                        recording={group.recording}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              </section>
             ))}
-          </ul>
+          </div>
         )}
       </div>
     </AdminShell>
   );
+}
+
+// The recordings index: every captured set with its title, clip count, and a promoted
+// badge, each linking to its Studio. A recording with no clips still appears — that's the
+// point (open it to cut the first clip).
+function RecordingsIndex({
+  clipCountByRecording,
+  recordings,
+}: {
+  clipCountByRecording: Map<string, number>;
+  recordings: RecordingDTO[];
+}) {
+  if (recordings.length === 0) {
+    return (
+      <div className="mb-6 rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
+        No recordings yet. Create one from the CLI (
+        <code className="font-mono text-xs">fluncle admin recordings create --video set.mov</code>
+        ), then open it here to clip it.
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-6">
+      <Label className="flex items-center gap-1.5">
+        <ScissorsIcon aria-hidden="true" />
+        Recordings ({recordings.length})
+      </Label>
+      <ul className="mt-2 divide-y divide-border rounded-lg border border-border">
+        {recordings.map((rec) => (
+          <li className="flex items-center gap-3 px-3 py-2" key={rec.id}>
+            <a
+              className="min-w-0 flex-1 truncate text-sm font-medium hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"
+              href={`/admin/studio/${encodeURIComponent(rec.id)}`}
+            >
+              {rec.title}
+            </a>
+            {rec.logId ? (
+              <Badge variant="default">promoted · fluncle://{rec.logId}</Badge>
+            ) : (
+              <Badge variant="outline">recording</Badge>
+            )}
+            <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+              {clipCountByRecording.get(rec.id) ?? 0} clip
+              {(clipCountByRecording.get(rec.id) ?? 0) === 1 ? "" : "s"}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// A recording's display label for the dropdown + group header: its coordinate once
+// promoted (`fluncle://<logId>`), else its title.
+function recordingLabel(recording: RecordingDTO): string {
+  return recording.logId ? `fluncle://${recording.logId}` : recording.title;
+}
+
+function recordingSelectItems(recordings: RecordingDTO[]): Record<string, string> {
+  return {
+    [ALL_FILTER]: "All recordings",
+    ...Object.fromEntries(recordings.map((rec) => [rec.id, recordingLabel(rec)] as const)),
+  };
+}
+
+function groupHeading(group: ClipGroup): string {
+  return group.recording ? recordingLabel(group.recording) : "Legacy clips (no recording)";
 }
 
 function EmptyLibrary() {
@@ -247,12 +407,9 @@ function EmptyLibrary() {
       <FilmStripIcon aria-hidden="true" className="size-7 text-muted-foreground/70" />
       <p className="font-medium">No clips yet</p>
       <p className="max-w-sm text-sm text-muted-foreground">
-        Open a set in the Studio and cut a few framed 9:16 clips. They land here, ready to
+        Open a recording in the Studio and cut a few framed 9:16 clips. They land here, ready to
         hand-post.
       </p>
-      <Button nativeButton={false} render={<a href="/admin/mixtapes" />} variant="outline">
-        Go to mixtapes
-      </Button>
     </div>
   );
 }

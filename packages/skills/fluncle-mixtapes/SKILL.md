@@ -35,8 +35,16 @@ For the Rekordbox tracklist step, also cache the database key once (see that ste
 ### A. Record + archive
 
 1. Record the set.
-2. Capture the assets: the audio master, the mixtape video, any teaser clips (raw material you don't want to re-shoot — and the Fluncle Studio clip pipeline can cut more later from the set master on R2: the `mixtape_clips` table, `fluncle admin clips list|cut`, `/admin/studio/$logId` + `/admin/clips`, the `fluncle-studio-clip` cron; see `docs/fluncle-studio.md`).
+2. Capture the assets: the audio master, the mixtape video, any teaser clips (raw material you don't want to re-shoot — and the Fluncle Studio clip pipeline can cut more later from a **recording**'s set video on R2: the `recordings` table + `mixtape_clips`, `fluncle admin recordings …` + `fluncle admin clips list|cut`, `/admin/studio/<recordingId>` + `/admin/clips`, the `fluncle-studio-clip` cron; see `docs/fluncle-studio.md`).
 3. Archive the raw assets to the operator path (R2), like a finding's analysis archive.
+
+> **Clip-first via a recording, promote later** (RFC recording-primitive, Design B — `docs/recording-primitive-rfc.md`). You do NOT have to publish a mixtape to clip a set. Create a **recording** (a captured set that carries NO coordinate) and clip it first; promote it to a full mixtape only when you decide to publish:
+>
+> 1. `fluncle admin recordings create --title "…" --video <set>.mov` — mints a coordinate-less recording and streams the set video to its own R2 key.
+> 2. Clip it in the Studio at `/admin/studio/<recordingId>` — author the cue tracklist (add each track, mark it at the playhead) and cut framed 9:16 clips. They land in `/admin/clips` grouped under the recording. Un-promoted, a clip points home to `fluncle.com` (no `fluncle://` coordinate — coordinates are for published mixtapes only).
+> 3. When you're ready to publish the full thing: `fluncle admin recordings promote <recordingId>`. Promote is idempotent (mint-or-reuse): it mints a mixtape from the recording (seeding its tracklist), copies the set video to `<logId>/set.mp4`, links `mixtapes.recording_id` back, and hands off to the ordinary `distribute` flow below (§C). The recording's existing clips keep working; re-cut a clip to gain the new `fluncle://<logId>` coordinate. A mixtape's "Clip this set" (`/admin/mixtapes`) then links to its recording's Studio.
+>
+> Skip this and go straight to §B when a set is definitely becoming a mixtape now (the recording is created for you on promote-time only if you use the recording path; the classic distribute path stays a mixtape from the start).
 
 **Audio — Track 1 is the clean master.** The OBS recording carries two audio tracks (Advanced Output records tracks 1 + 2): **Track 1 = the clean stereo mix only** (BlackHole / PC MASTER OUT, no mic — the file's default audio), **Track 2 = the isolated mic**. (A third track, mix + mic, feeds the Twitch stream but isn't recorded.) Always take the **clean Track 1** for the Mixcloud audio master and for any clip audio — it's the default stream, so `-map 0:a:0` (or no `-map` at all); Track 2 is the voice-only mic. The recording is 1080p H.264 (OBS Output (Scaled) Resolution must be 1920×1080, not 720p; keep H.264 so the clip pipeline / Cloudflare Media Transformations can read it; the master encoder is a dedicated Apple VT H264 Hardware encoder at CBR 40000, not "Use stream encoder"). Full OBS / BlackHole recording setup lives in `docs/mixtape-recording-setup.md`.
 
@@ -93,7 +101,7 @@ The one recurring human gate: the `/admin/mixtapes` **Make YouTube public** butt
 
 The tracklist cues are often refined **after** a set is already live (the initial upload rarely has precise jump points — see the Rekordbox note in §B, which writes order + identity, not timestamps). Once you mark or change cues on a **published** mixtape, re-push the derived metadata to the platforms **without re-uploading the audio**. Two equivalent entry points hit the **same server-side ops**:
 
-- **Fluncle Studio button** — mark cues on the `/admin/studio/$logId` cue rail, then hit **Re-sync from cues** (in the left pane's "Live distribution" block). It fires **both** platform ops the set is distributed to, confirm-gated (it edits live public content), with a ✓ / error per platform. It only appears once the set is published and enables once there's ≥1 cue.
+- **Fluncle Studio button** — author cues on the recording's `/admin/studio/<recordingId>` cue editor (a promoted mixtape's set is its recording's Studio), then hit **Re-sync from cues** (in the left pane's "Live distribution" block, shown only once the recording is promoted). It fires **both** platform ops the set is distributed to, confirm-gated (it edits live public content), with a ✓ / error per platform. It only appears once the set is published and enables once there's ≥1 cue.
 - **CLI**:
 
 ```bash
