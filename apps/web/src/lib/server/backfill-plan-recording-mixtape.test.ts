@@ -1,4 +1,5 @@
 import { type Client } from "@libsql/client";
+import { galaxySlug } from "@fluncle/contracts/util/galaxy-slug";
 import { beforeEach, describe, expect, it } from "vitest";
 import { backfillPlanRecordingMixtape } from "../../../scripts/backfill-plan-recording-mixtape";
 import { createIntegrationDb, rowCount, seedTrack } from "./integration-db";
@@ -248,8 +249,10 @@ describe("backfillPlanRecordingMixtape", () => {
     expect(plan?.version).toBe(1);
     expect(plan?.note).toBe("warm-up plan");
     expect(plan?.planned_for).toBe("2026-07-10T20:00:00.000Z");
-    // The draft's title is the empty publish-time stub → the date-derived label.
-    expect(plan?.title).toBe("Plan 2026-07-10");
+    // The plan's title IS its Galaxy-vocab handle — a three-word slug (RFC
+    // §6/D-handle), deterministic in the draft id.
+    expect(plan?.title).toMatch(/^[a-z]+(-[a-z]+){2}$/);
+    expect(plan?.title).toBe(galaxySlug(DRAFT));
 
     const cues = (
       await db.execute({
@@ -264,11 +267,17 @@ describe("backfillPlanRecordingMixtape", () => {
     expect(cues[0]?.title_text).toBe("Burning Babylon");
   });
 
-  it("re-syncs a still-draft plan's fields from the draft on a later run", async () => {
+  it("re-syncs a still-draft plan's note/planned_for but never re-mints the handle", async () => {
     await backfillPlanRecordingMixtape(db);
+    const handleBefore = (
+      await db.execute({
+        sql: `select r.title as title from recordings r join mixtapes m on m.recording_id = r.id where m.id = '${DRAFT}'`,
+      })
+    ).rows[0]?.title;
+
     await db.execute({
       args: [DRAFT],
-      sql: "update mixtapes set note = 'rewritten plan note' where id = ?",
+      sql: "update mixtapes set note = 'rewritten plan note', title = 'operator typed a title' where id = ?",
     });
 
     const second = await backfillPlanRecordingMixtape(db);
@@ -277,10 +286,63 @@ describe("backfillPlanRecordingMixtape", () => {
 
     const plan = (
       await db.execute({
-        sql: `select r.note as note from recordings r join mixtapes m on m.recording_id = r.id where m.id = '${DRAFT}'`,
+        sql: `select r.note as note, r.title as title from recordings r join mixtapes m on m.recording_id = r.id where m.id = '${DRAFT}'`,
       })
     ).rows[0];
     expect(plan?.note).toBe("rewritten plan note");
+    // The handle is minted once — a draft title edit never overwrites it.
+    expect(plan?.title).toBe(handleBefore);
+    expect(plan?.title).toBe(galaxySlug(DRAFT));
+  });
+
+  it("mints a deterministic handle — the same draft yields the same slug on a re-run", async () => {
+    await backfillPlanRecordingMixtape(db);
+    const first = (
+      await db.execute({
+        sql: `select r.title as title from recordings r join mixtapes m on m.recording_id = r.id where m.id = '${DRAFT}'`,
+      })
+    ).rows[0]?.title;
+
+    // A re-run creates no new plan and leaves the handle untouched.
+    const second = await backfillPlanRecordingMixtape(db);
+    expect(second.plansCreated).toBe(0);
+
+    const after = (
+      await db.execute({
+        sql: `select r.title as title from recordings r join mixtapes m on m.recording_id = r.id where m.id = '${DRAFT}'`,
+      })
+    ).rows[0]?.title;
+    expect(after).toBe(first);
+    expect(after).toBe(galaxySlug(DRAFT));
+  });
+
+  it("salts the handle on collision so two drafts never share a slug", async () => {
+    // A second draft whose id would collide is re-rolled; both plans get a valid,
+    // distinct three-word slug.
+    const draftB = "mixtape-draft-b";
+    await insertMixtape(db, { id: draftB, status: "draft", title: "" });
+    // Pre-seat draftB's attempt-0 slug on an unrelated recording to FORCE the
+    // salted re-roll path.
+    await insertRecording(db, { id: "collide", r2Key: null, title: galaxySlug(draftB) });
+
+    await backfillPlanRecordingMixtape(db);
+
+    const slugs = (
+      await db.execute({
+        sql: `select r.title as title from recordings r
+              join mixtapes m on m.recording_id = r.id
+              where m.id in ('${DRAFT}', '${draftB}')`,
+      })
+    ).rows.map((row) => (typeof row.title === "string" ? row.title : ""));
+
+    expect(slugs).toHaveLength(2);
+    expect(new Set(slugs).size).toBe(2);
+    for (const slug of slugs) {
+      expect(slug).toMatch(/^[a-z]+(-[a-z]+){2}$/);
+    }
+    // draftB re-rolled off its taken attempt-0 slug.
+    expect(slugs).not.toContain(galaxySlug(draftB));
+    expect(slugs).toContain(galaxySlug(draftB, 1));
   });
 
   it("reuses #1's existing recording (never re-synthesizes) and seeds its cues from mixtape_tracks, not tracklist_json", async () => {

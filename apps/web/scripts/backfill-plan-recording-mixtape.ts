@@ -39,6 +39,7 @@
  * (same loading as drizzle.config.ts).
  */
 import { type Client, createClient, type InArgs } from "@libsql/client";
+import { galaxySlug } from "@fluncle/contracts/util/galaxy-slug";
 import { config } from "dotenv";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
@@ -208,6 +209,32 @@ async function mixtapeMemberRows(
   }));
 }
 
+/**
+ * The plan's handle — the auto Galaxy-vocab slug (RFC §6/D-handle: the generated
+ * slug IS the handle). Deterministic in the draft's stable id, so the same draft
+ * always yields the same slug (idempotent — a re-run mints nothing new). Salted
+ * re-roll on collision: bump `attempt` until the slug is free among existing
+ * recordings (a plan's title holds its handle). Never date-derived, so the drift
+ * bug that killed `predictedMixtapeLogId` can't return.
+ */
+async function mintPlanHandle(client: Client, draftId: string): Promise<string> {
+  for (let attempt = 0; attempt < 64; attempt++) {
+    const slug = galaxySlug(draftId, attempt);
+    const clash = await client.execute({
+      args: [slug],
+      sql: `select 1 from recordings where title = ? limit 1`,
+    });
+
+    if (clash.rows.length === 0) {
+      return slug;
+    }
+  }
+
+  // 64 salted attempts colliding is astronomically unlikely — fall back to a
+  // slug carrying the draft id tail so it is still deterministic + unique.
+  return `${galaxySlug(draftId, 0)}-${draftId.slice(0, 8)}`;
+}
+
 async function cueCount(client: Client, recordingId: string): Promise<number> {
   const result = await client.execute({
     args: [recordingId],
@@ -246,18 +273,10 @@ export async function backfillPlanRecordingMixtape(
 
   for (const draft of unlinkedDrafts.rows) {
     const draftId = asText(draft.id);
-    const rawTitle = asText(draft.title).trim();
-    // A draft's title is a stub until publish canonicalizes it — "" today,
-    // "Untitled mixtape" (legacy) or the default series stub on older rows
-    // (the mixtapes.ts stub set). A stub never names a plan.
-    const draftTitle =
-      rawTitle === "Untitled mixtape" || rawTitle === "Fluncle Drum & Bass Mixtape" ? "" : rawTitle;
-    // TODO(galaxy-slug): once `packages/contracts/src/util/galaxy-slug.ts` (the
-    // auto Galaxy-vocab handle, RFC §6/D-handle) lands, mint the plan's handle
-    // here instead of this date-derived fallback label.
-    const title =
-      draftTitle ||
-      `Plan ${asText(draft.planned_for).slice(0, 10) || asText(draft.created_at).slice(0, 10)}`;
+    // The plan's title IS its Galaxy-vocab handle (RFC §6/D-handle), minted once
+    // from the draft's stable id — deterministic, collision-salted, never
+    // date-derived.
+    const title = await mintPlanHandle(client, draftId);
     const planId = randomUUID();
 
     await client.batch(
@@ -279,25 +298,19 @@ export async function backfillPlanRecordingMixtape(
   }
 
   // While the draft rows survive (Deploy-2 drains them) they stay the editing
-  // surface — converge the plan's authored fields onto them each run. `is not`
-  // is SQLite's null-safe comparison, so an unchanged run updates zero rows.
+  // surface — converge the plan's authored fields onto them each run. The handle
+  // (`title`) is minted ONCE and never re-derived, so only `note`/`planned_for`
+  // sync here. `is not` is SQLite's null-safe comparison, so an unchanged run
+  // updates zero rows.
   const synced = await client.execute({
     args: [now],
     sql: `update recordings set
             note = m.note,
             planned_for = m.planned_for,
-            title = case
-              when m.title not in ('', 'Untitled mixtape', 'Fluncle Drum & Bass Mixtape')
-                then m.title
-              else recordings.title
-            end,
             updated_at = ?
           from mixtapes m
           where m.status = 'draft' and m.recording_id = recordings.id
-            and (recordings.note is not m.note
-              or recordings.planned_for is not m.planned_for
-              or (m.title not in ('', 'Untitled mixtape', 'Fluncle Drum & Bass Mixtape')
-                and recordings.title != m.title))`,
+            and (recordings.note is not m.note or recordings.planned_for is not m.planned_for)`,
   });
 
   result.plansSynced = synced.rowsAffected;
