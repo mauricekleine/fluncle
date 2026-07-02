@@ -94,8 +94,13 @@ type TrackVideoOptions = {
   cover?: string;
   dir?: string;
   footage?: string;
+  footageLandscape?: string;
+  footageLandscapeSocial?: string;
+  footageNotext?: string;
   footageSocial?: string;
+  intent?: string;
   json: boolean;
+  metrics?: string;
   model?: string;
   note?: string;
   poster?: string;
@@ -560,8 +565,13 @@ function addAdminCommands(program: Command): void {
     .option("--cover <file>", "Cover image")
     .option("--dir <dir>", "Bundle directory")
     .option("--footage <file>", "Video footage (square crop source)")
+    .option("--footage-landscape <file>", "Clean landscape cut (optional escape hatch)")
+    .option("--footage-landscape-social <file>", "Landscape cut with baked text (optional)")
+    .option("--footage-notext <file>", "Portrait cut without the type layer (optional)")
     .option("--footage-social <file>", "Portrait social cut (baked text)")
+    .option("--intent <file>", "Render-intent JSON (optional)")
     .option("--json", "Print JSON", false)
+    .option("--metrics <file>", "Gate metrics JSON (optional)")
     .option("--model <model>", "Authoring AI model (<provider>/<model>)")
     .option("--note <file>", "Note file")
     .option("--poster <file>", "Poster image")
@@ -1581,7 +1591,7 @@ async function runTrackVideo(
 ): Promise<void> {
   if (!idOrLogId) {
     throw new Error(
-      "Missing id. Usage: fluncle admin tracks video <track_id|log_id> (--dir <dir> | --footage <file> [--footage-social <file>] [--poster <file>] [--cover <file>] [--note <file>] [--composition <file>] [--props <file>] [--render <file>])",
+      "Missing id. Usage: fluncle admin tracks video <track_id|log_id> (--dir <dir> | --footage <file> [--footage-social <file>] [--footage-notext <file>] [--footage-landscape <file>] [--footage-landscape-social <file>] [--poster <file>] [--cover <file>] [--note <file>] [--composition <file>] [--props <file>] [--render <file>] [--intent <file>] [--metrics <file>])",
     );
   }
 
@@ -1611,7 +1621,15 @@ async function runTrackVideo(
     composition: resolveFile(options.composition, "composition.tsx"),
     cover: resolveFile(options.cover, "cover.jpg"),
     footage: resolveFile(options.footage, "footage.mp4"),
+    footageLandscape: resolveFile(options.footageLandscape, "footage.landscape.mp4"),
+    footageLandscapeSocial: resolveFile(
+      options.footageLandscapeSocial,
+      "footage.landscape.social.mp4",
+    ),
+    footageNotext: resolveFile(options.footageNotext, "footage.notext.mp4"),
     footageSocial: resolveFile(options.footageSocial, "footage.social.mp4"),
+    intent: resolveFile(options.intent, "intent.json"),
+    metrics: resolveFile(options.metrics, "metrics.json"),
     model: options.model,
     note: resolveFile(options.note, "note.txt"),
     poster: resolveFile(options.poster, "poster.jpg"),
@@ -2844,10 +2862,15 @@ const stringOptions = new Set([
   "--features",
   "--file",
   "--footage",
+  "--footage-landscape",
+  "--footage-landscape-social",
+  "--footage-notext",
   "--footage-social",
   "--from",
+  "--intent",
   "--key",
   "--limit",
+  "--metrics",
   "--mime",
   "--note",
   "--platform",

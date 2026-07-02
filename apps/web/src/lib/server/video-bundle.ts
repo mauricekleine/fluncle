@@ -10,19 +10,35 @@
 // Transformation, so the ship pipeline no longer writes footage-silent.mp4.
 // cover.jpg is the profile-grid cover, retrieved by convention with no dedicated
 // column. composition.tsx + props.json + render.json make the source
-// re-renderable. The rest are stored alongside at <log-id>/<name>.
+// re-renderable; intent.json + metrics.json carry the render-intent contract and
+// the deterministic gate report beside it. The rest are stored alongside at
+// <log-id>/<name>.
+//
+// Everything past the two masters is OPTIONAL: the CLI only requests presigns
+// for files the bundle actually contains, so a bundle without the extra
+// variants (the notext/landscape escape hatches ship packages when present) or
+// without intent/metrics uploads exactly as before.
 
 export type VideoArtifact = { contentType: string; field: string; name: string };
 
 export const VIDEO_ARTIFACTS: readonly VideoArtifact[] = [
   { contentType: "video/mp4", field: "footage", name: "footage.mp4" },
   { contentType: "video/mp4", field: "footage-social", name: "footage.social.mp4" },
+  { contentType: "video/mp4", field: "footage-notext", name: "footage.notext.mp4" },
+  { contentType: "video/mp4", field: "footage-landscape", name: "footage.landscape.mp4" },
+  {
+    contentType: "video/mp4",
+    field: "footage-landscape-social",
+    name: "footage.landscape.social.mp4",
+  },
   { contentType: "image/jpeg", field: "poster", name: "poster.jpg" },
   { contentType: "image/jpeg", field: "cover", name: "cover.jpg" },
   { contentType: "text/plain; charset=utf-8", field: "note", name: "note.txt" },
   { contentType: "text/plain; charset=utf-8", field: "composition", name: "composition.tsx" },
   { contentType: "application/json; charset=utf-8", field: "props", name: "props.json" },
   { contentType: "application/json; charset=utf-8", field: "render", name: "render.json" },
+  { contentType: "application/json; charset=utf-8", field: "intent", name: "intent.json" },
+  { contentType: "application/json; charset=utf-8", field: "metrics", name: "metrics.json" },
 ];
 
 export function artifactByField(field: string): VideoArtifact | undefined {
