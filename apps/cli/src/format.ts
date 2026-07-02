@@ -62,19 +62,20 @@ export function foundDate(addedAt: string): string {
 
 /**
  * The recent-vehicle ledger, one finding per line:
- *   007.8.1B  2026-06-06  caustic membrane
- * Coordinate column padded to the widest; a finding with no recorded vehicle
+ *   007.8.1B  2026-06-06  caustic membrane  ·  abstract
+ * Coordinate column padded to the widest; the vehicle and its visual register
+ * (the two diversity ledgers) trail the found date. A finding missing either
  * shows the em-dash fallback.
  */
 export function vehicleRows(
-  rows: Array<{ addedAt: string; logId?: string; vehicle?: string }>,
+  rows: Array<{ addedAt: string; logId?: string; register?: string; vehicle?: string }>,
 ): string[] {
   const coordWidth = rows.reduce((width, row) => {
     return Math.max(width, coordinate(row).length);
   }, 0);
 
   return rows.map((row) => {
-    return `${coordinate(row).padEnd(coordWidth)}  ${foundDate(row.addedAt)}  ${row.vehicle ?? COORD_FALLBACK}`;
+    return `${coordinate(row).padEnd(coordWidth)}  ${foundDate(row.addedAt)}  ${row.vehicle ?? COORD_FALLBACK}  ·  ${row.register ?? COORD_FALLBACK}`;
   });
 }
 

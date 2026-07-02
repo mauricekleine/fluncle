@@ -241,6 +241,7 @@ export type VehicleEntry = {
   artists: string[];
   logId?: string;
   grain?: string;
+  register?: string;
   title: string;
   vehicle?: string;
 };
@@ -255,6 +256,7 @@ export async function vehiclesCommand(limit: number): Promise<VehicleEntry[]> {
     artists: track.artists,
     grain: track.videoGrain,
     logId: track.logId,
+    register: track.videoRegister,
     title: track.title,
     vehicle: track.videoVehicle,
   }));

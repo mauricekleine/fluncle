@@ -149,6 +149,12 @@ export const tracks = sqliteTable("tracks", {
   // we can compare model × thinking level. Defaults to "high" — the existing
   // videos were authored at high reasoning, so existing rows backfill.
   videoModelReasoning: text("video_model_reasoning").default("high"),
+  // The visual REGISTER of the track's video — the composition's mode:
+  // "abstract" | "representational" | "framed". Set when the video is uploaded;
+  // surfaced in /api/tracks alongside the vehicle and grain so the next
+  // (ephemeral) video agent reads recent registers and diversifies (the register
+  // ledger). Null = not recorded (older rows predate the column).
+  videoRegister: text("video_register"),
   // The two-master video layout signal. NON-NULL once
   // the SQUARE crop source has been uploaded as footage.mp4 — i.e. this finding's
   // footage.mp4 is now the clean 1920×1920 master MT crops on the fly, and a baked
