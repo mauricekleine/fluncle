@@ -88,6 +88,16 @@ Spread these strings ahead of `void main()`; mind the dependency chain. (Signatu
 | `grainFamilies`       | six named `GrainOpts` presets (`grainFineEmulsion`/`grainCoarseSilver`/`grainHalftone`/`grainChemicalDye`/`grainVhsScanline`/`grainDither`) — grain families below. Needs `filmGrain`+`u_seed`.         |
 | `vignette`            | radial darkening `vignette(uv, radius, softness) -> 0..1`.                                                                                                                                              |
 | `chromaticAberration` | per-channel UV offset helpers `caOffsetR` / `caOffsetB` for an edge-growing RGB split.                                                                                                                  |
+| `caustic`             | true water caustics `caustic(uv, t, scale, iterations) -> 0..~` (6-iter rotate + sin/cos, squared). Adopted from Paper. Self-contained.                                                                 |
+| `neuroWeb`            | glowing organic filament web `neuroWeb(uv, t, iterations) -> 0..~` (15-iter self-interfering sine). Adopted from Paper. Self-contained.                                                                 |
+| `swirlWarp`           | N-iteration sine swirl cascade `swirlWarp(uv, t, swirl, iterations) -> vec2` — a cheaper, more liquid `domainWarp`. Adopted from Paper. Self-contained.                                                 |
+| `oklab`               | OKLab/OKLCH conversions + `paletteRampOk(t) -> vec3` (perceptual short-arc ramp over `u_palette`, fixes red→gold sRGB mud) + `mixOklch(a,b,m)`. Adopted from Paper.                                     |
+| `colorSpots`          | inverse-distance (`1/d^3.5`) moving colour spots `colorSpots(uv, colors[6], count, t) -> vec3` + `colorSpotPosition` / `colorSpotSwirl` (Lissajous). Adopted from Paper. Self-contained.                |
+| `grainDisplace`       | signed field displacement `grainDisplace(uv, t, scale, amt) -> float` — grain that roughens BOUNDARIES (add to a shape/threshold/coord). Needs `valueNoise`+`hash`.                                     |
+| `bayer`               | exact ordered-dither matrices `bayer2` / `bayer4` / `bayer8(coord) -> [0,1)` (WebGL1 mod-arithmetic; threshold with `step`). Self-contained.                                                            |
+| `liquidMetal`         | procedural chrome material `liquidMetal(uv, edge, repetition, shiftRed, shiftBlue, t, tint, tintA) -> vec3` over a caller shape field. Adopted from Paper. Needs `simplexNoise`.                        |
+| `tonemap`             | filmic soft-clip `acesFilmic` / `reinhardJodie` + `liftGammaGain(col, lift, gamma, gain)` — cap the climax, not `min()`. Self-contained.                                                                |
+| `noise3`              | 3D noise family `valueNoise3` / `fbm3` / `voronoi3` / `curl3` — the monotonic z-phase advance (roil in place). Adds `hash33`; needs `hash`.                                                             |
 
 Always finish a shader with `dither8(col, uv)` to kill 8-bit banding on smooth gradients.
 
@@ -116,6 +126,43 @@ The fluid/organic/alive north star now has helpers — reach for these before ha
 - **`domainWarp(p, octaves)`** — fbm-of-fbm. Marbled, flowing fields that never read as gridded; the antidote to clean noise. Use as a base field or warp another field's coordinates through it.
 - **ridged turbulence → glowing FILAMENTS** (liquid-fire / plasma / veins / lightning / molten tendrils) — the robust go-to when you want a dense, alive field. Warp an fbm field `n` (`domainWarp`, or `fbm` of curl-advected coords), RIDGE it — `float ridges = pow(1.0 - abs(2.0 * n - 1.0), 2.7);` (k ≈ 2.5–3) — then THRESHOLD so only strong ridges survive as thin tendrils on a near-black field: `float fil = smoothstep(thr, thr + w, ridges * detail);`. Why it beats dots/haze: brightness comes from the CONTINUOUS field (no coverage trilemma — see the dots note below), structure from the ridges (never foggy, never flat), and warm-dark dominance is AUTOMATIC — everything under `thr` stays the void. Grade it with a `dotField` multiply + heavy `filmGrain` for recovered-footage texture (no moiré-driving grid). Climax (doctrine 1): the filament CORES igniting — a tightly-gated core term `smoothstep(0.72, 1.0, fire)`, CAPPED (`tone = min(tone, 0.90)`) so it never washes to flat cream, plus `bloom` on those hot cores. Do NOT drop `thr` enough to flood the frame — that's the pale-wash blowout. Drive its evolution off the energy curve + drop: a churning network through the build, thinning to near-black embers in the breakdown, then flooding back with the cores flaring on the drop.
   - GLSL gotchas that cost rounds: don't reuse a header-injected name or re-declare one already in scope (e.g. a local `float t` after `t = u_time`) → fragment-shader `redefinition` → the ShaderLayer ERROR OVERLAY (tell: a ~1MB output file). Diagonalize a near-vertical advection vector to avoid vertical streaking.
+
+## adopted techniques (vendored from Paper Shaders)
+
+Eight primitives lifted from Paper Shaders (Apache-2.0, `github.com/paper-design/shaders`; their README explicitly permits use in videos) and retinted to canon. Each is a FIELD or MATERIAL — route its output through `paletteRamp`/`paletteRampOk`, never ship Paper's own colours: keep the warm-dark ground dominant, Eclipse Gold as one accent when the material genuinely runs hot, cool hues as minor counter-accents only (the Retint Rule). Audio disturbs the MATERIAL in place — amplitude, threshold, width, brightness — on `u_audioHit`/`u_audioSwell`/the bands; the coordinate and time terms stay a constant clock (Motion law, doctrine 7).
+
+- **`caustic(uv, t, scale, iterations)`** — true water-caustic filaments (the 6-iteration rotate + sin/cos accumulation, squared): thin bright light-veins over a dark field, the light-through-water look. Retint low through `paletteRamp` so the filaments burn and the gaps stay Deep Field. Audio: drive `scale` and the output strength off `u_audioSwell` (the caustics tighten and brighten as the music surges); never put audio on `t`.
+- **`neuroWeb(uv, t, iterations)`** — zozuar's 15-iteration self-interfering sine web: a glowing organic filament mesh (neural, veined, mycelial). Square + `pow` it for contrast, then retint through `paletteRamp`. Audio: contrast on the hit (`u_audioHit` lifts the `pow` exponent / a harder threshold so the web crisps on the kick); brightness on `u_audioSwell`.
+- **`swirlWarp(uv, t, swirl, iterations)`** — an N-iteration sine swirl cascade returning a WARPED COORDINATE; a cheaper, more liquid `domainWarp`. Feed the result to any field (`fbm(swirlWarp(uv, u_time, s, 12) * 2.0, 5)`). Audio: the `swirl` amount rides a SMOOTHED band (`u_mid`/`u_audioSwell`) so the fabric folds harder IN PLACE; NEVER bend the `t` term (that translates the field → reversal).
+- **OKLab / `paletteRampOk(t)`** — the perceptual sibling of `paletteRamp` over the same `u_palette` stops. OKLCH interpolation holds lightness+chroma and takes the short hue arc, so the red→gold belt stays saturated instead of sagging into sRGB mud, and near-neutral darks (Deep Field) ramp cleanly with no spurious blue excursion. Drop it in wherever a ramp reads muddy; `paletteRamp` is untouched. `mixOklch(a, b, m)` mixes any two sRGB colours perceptually.
+- **`colorSpots(uv, colors[6], count, t)`** — inverse-distance-weighted (`1/d^3.5`) moving colour spots on per-index Lissajous paths (`colorSpotPosition`): a soft, always-moving smear of up to six colours. Pass RETINTED `colors` (canon stops or `paletteRamp` samples) so the smear stays on-brand. `firstFrameOffset`: seed `t` at a non-degenerate offset (`float t = 0.5 * (u_time + 41.5);`) so frame 0 isn't the collapsed pose where every spot sits on its Lissajous origin. `colorSpotSwirl(uv, amount)` adds an optional radius-scaled vortex. Audio: the spots already move on `t`; ride the swirl amount / a brightness gain on `u_audioSwell`.
+- **`liquidMetal(uv, edge, repetition, shiftRed, shiftBlue, t, tint, tintA)`** — Paper's procedural chrome: a stripe ramp bent by an edge-gradient bump, a per-channel R/B dispersion shift, and a color-burn tint, over an SDF-ish shape field `edge` (0..1) YOU supply (an `sdf` coverage, a `voronoi` wall, a filament field). Returns grey chrome — retint through `retint()`/`paletteRamp`. Audio: the bump amount on `u_bassFast` (the metal swells and the highlight rolls under pressure). Skips Paper's image path (WebGL2-only `textureGrad`).
+
+Two supporting techniques ship alongside:
+
+- **`grainDisplace(uv, t, scale, amt)` — grain that displaces the FIELD, not the pixels.** Returns a signed displacement you ADD to a shape / threshold / coordinate (`shape += grainDisplace(uv, u_time, 60.0, 0.06);`), so the colour BOUNDARIES themselves go grainy — a rough, chewed edge instead of a clean vector line with grain merely laid over the fill. The recovered-footage grade where the emulsion ate the edge; pair it with `filmGrain` on the fill for a fully degraded plate.
+- **exact `bayer2/bayer4/bayer8(coord)` — crisp ordered dither.** The true printing matrices (WebGL1-safe mod-arithmetic; `step(bayer8(gl_FragCoord.xy), value)` to threshold), distinct from the header's `dither8` banding-killer and from `filmGrain`'s `grainBayer*` boil basis. `grainDither` gains a crisper basis if you trivially wire `bayer8` in (leave `grainFamilies` alone otherwise).
+
+**tonemap — cap the climax with `tonemap`, not `min()`.** When a hot core would blow past cream, don't hard-clip with `min(col, vec3(k))` — that leaves a flat, clipped plateau. Roll the highlights off with a filmic soft-clip: `col = acesFilmic(col);` (or `reinhardJodie(col)`) saturates smoothly toward cream so the crest reads as burning, not blown. `liftGammaGain(col, lift, gamma, gain)` (scalar or vec3 args) is the lift/gamma/gain trim — push the ground warm-dark and lift the mids before the ramp. Apply just before `dither8`.
+
+## the third dimension: roil in place
+
+The beat-pull gate punishes reversal, not evolution (motion doctrine above): a field that only translates glides but reads DEAD, and a curl-advected field ORBITS (returns → reversal). The cure is a MONOTONIC third-dimension phase advance — feed a field a coordinate whose z streams forward on `u_time`, so the forms roil and re-form IN PLACE as they stream, never returning. `GLSL.noise3` gives the 3D primitives — `valueNoise3` / `fbm3` / `voronoi3` / `curl3` — so the third axis IS the phase clock. Keep the z-advance SLOW and BROAD (fast/fine in-place churn flickers and bumps the gate).
+
+```glsl
+${GLSL.hash} ${GLSL.valueNoise} ${GLSL.fbm} ${GLSL.paletteRamp} ${GLSL.noise3}
+// ... in main(), uv = gl_FragCoord.xy / u_res:
+vec2 drift = vec2(0.13, 0.09) * (u_time * 0.06);   // constant one-way clock (global translation)
+float z = u_time * 0.25;                            // monotonic phase advance (the third dimension)
+float f = fbm3(vec3((uv + drift) * 3.0, z), 5);     // rivers roil in place as they stream
+vec3 vor = voronoi3(vec3(uv * 4.0, z));             // cells re-form, never return
+// audio drives WIDTH/THRESHOLD in place; z and drift stay constant clocks:
+float thr = mix(0.06, 0.02, u_audioSwell);
+float wall = smoothstep(thr, 0.0, vor.y - vor.x);
+vec3 col = paletteRamp(mix(f, wall, 0.35));
+```
+
+`z` and `drift` advance on a constant clock; only the field AMPLITUDE / THRESHOLD / WIDTH take the audio. Forward-only evolution never returns → no reversal → the gate stays satisfied and the picture breathes. `curl3(p, t)` is the flowing counterpart: its z=t advance keeps the divergence-free flow forever fresh instead of scrolling a frozen 2D curl (dodging the curl-orbit trap in organic fields).
 
 ## smear: velocity written into the frame (the smear family)
 
