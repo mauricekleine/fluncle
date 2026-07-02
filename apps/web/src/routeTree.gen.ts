@@ -55,7 +55,7 @@ import { Route as ApiOgLogIdRouteImport } from './routes/api/og.$logId'
 import { Route as ApiMixtapeCoverLogIdRouteImport } from './routes/api/mixtape-cover.$logId'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiAdminLogoutRouteImport } from './routes/api/admin/logout'
-import { Route as AdminStudioLogIdRouteImport } from './routes/admin/studio.$logId'
+import { Route as AdminStudioRecordingIdRouteImport } from './routes/admin/studio.$recordingId'
 import { Route as ApiV1PreviewIdOrLogIdRouteImport } from './routes/api/v1/preview.$idOrLogId'
 import { Route as ApiV1OgLogIdRouteImport } from './routes/api/v1/og.$logId'
 import { Route as ApiV1MixtapeCoverLogIdRouteImport } from './routes/api/v1/mixtape-cover.$logId'
@@ -310,9 +310,9 @@ const ApiAdminLogoutRoute = ApiAdminLogoutRouteImport.update({
   path: '/api/admin/logout',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AdminStudioLogIdRoute = AdminStudioLogIdRouteImport.update({
-  id: '/studio/$logId',
-  path: '/studio/$logId',
+const AdminStudioRecordingIdRoute = AdminStudioRecordingIdRouteImport.update({
+  id: '/studio/$recordingId',
+  path: '/studio/$recordingId',
   getParentRoute: () => AdminRouteRoute,
 } as any)
 const ApiV1PreviewIdOrLogIdRoute = ApiV1PreviewIdOrLogIdRouteImport.update({
@@ -483,7 +483,7 @@ export interface FileRoutesByFullPath {
   '/mixtapes/': typeof MixtapesIndexRoute
   '/newsletter/': typeof NewsletterIndexRoute
   '/stories/': typeof StoriesIndexRoute
-  '/admin/studio/$logId': typeof AdminStudioLogIdRoute
+  '/admin/studio/$recordingId': typeof AdminStudioRecordingIdRoute
   '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/mixtape-cover/$logId': typeof ApiMixtapeCoverLogIdRoute
@@ -552,7 +552,7 @@ export interface FileRoutesByTo {
   '/mixtapes': typeof MixtapesIndexRoute
   '/newsletter': typeof NewsletterIndexRoute
   '/stories': typeof StoriesIndexRoute
-  '/admin/studio/$logId': typeof AdminStudioLogIdRoute
+  '/admin/studio/$recordingId': typeof AdminStudioRecordingIdRoute
   '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/mixtape-cover/$logId': typeof ApiMixtapeCoverLogIdRoute
@@ -624,7 +624,7 @@ export interface FileRoutesById {
   '/mixtapes/': typeof MixtapesIndexRoute
   '/newsletter/': typeof NewsletterIndexRoute
   '/stories/': typeof StoriesIndexRoute
-  '/admin/studio/$logId': typeof AdminStudioLogIdRoute
+  '/admin/studio/$recordingId': typeof AdminStudioRecordingIdRoute
   '/api/admin/logout': typeof ApiAdminLogoutRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/mixtape-cover/$logId': typeof ApiMixtapeCoverLogIdRoute
@@ -697,7 +697,7 @@ export interface FileRouteTypes {
     | '/mixtapes/'
     | '/newsletter/'
     | '/stories/'
-    | '/admin/studio/$logId'
+    | '/admin/studio/$recordingId'
     | '/api/admin/logout'
     | '/api/auth/$'
     | '/api/mixtape-cover/$logId'
@@ -766,7 +766,7 @@ export interface FileRouteTypes {
     | '/mixtapes'
     | '/newsletter'
     | '/stories'
-    | '/admin/studio/$logId'
+    | '/admin/studio/$recordingId'
     | '/api/admin/logout'
     | '/api/auth/$'
     | '/api/mixtape-cover/$logId'
@@ -837,7 +837,7 @@ export interface FileRouteTypes {
     | '/mixtapes/'
     | '/newsletter/'
     | '/stories/'
-    | '/admin/studio/$logId'
+    | '/admin/studio/$recordingId'
     | '/api/admin/logout'
     | '/api/auth/$'
     | '/api/mixtape-cover/$logId'
@@ -1257,11 +1257,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminLogoutRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin/studio/$logId': {
-      id: '/admin/studio/$logId'
-      path: '/studio/$logId'
-      fullPath: '/admin/studio/$logId'
-      preLoaderRoute: typeof AdminStudioLogIdRouteImport
+    '/admin/studio/$recordingId': {
+      id: '/admin/studio/$recordingId'
+      path: '/studio/$recordingId'
+      fullPath: '/admin/studio/$recordingId'
+      preLoaderRoute: typeof AdminStudioRecordingIdRouteImport
       parentRoute: typeof AdminRouteRoute
     }
     '/api/v1/preview/$idOrLogId': {
@@ -1427,7 +1427,7 @@ interface AdminRouteRouteChildren {
   AdminMixtapesRoute: typeof AdminMixtapesRoute
   AdminNewsletterRoute: typeof AdminNewsletterRoute
   AdminIndexRoute: typeof AdminIndexRoute
-  AdminStudioLogIdRoute: typeof AdminStudioLogIdRoute
+  AdminStudioRecordingIdRoute: typeof AdminStudioRecordingIdRoute
 }
 
 const AdminRouteRouteChildren: AdminRouteRouteChildren = {
@@ -1436,7 +1436,7 @@ const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminMixtapesRoute: AdminMixtapesRoute,
   AdminNewsletterRoute: AdminNewsletterRoute,
   AdminIndexRoute: AdminIndexRoute,
-  AdminStudioLogIdRoute: AdminStudioLogIdRoute,
+  AdminStudioRecordingIdRoute: AdminStudioRecordingIdRoute,
 }
 
 const AdminRouteRouteWithChildren = AdminRouteRoute._addFileChildren(

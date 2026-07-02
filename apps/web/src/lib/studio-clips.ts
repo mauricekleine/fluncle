@@ -20,9 +20,13 @@ import { trackMedia, videoAudioStripped, videoCrop, videoCropPoster } from "@/li
 /** The library's status dropdown values: every clip, or one cut-queue state. */
 export type ClipStatusFilter = "all" | "done" | "pending";
 
-/** The two-dropdown library filter. `mixtapeId` is "all" or a concrete mixtape id. */
+/**
+ * The two-dropdown library filter. `recordingId` is "all" or a concrete RECORDING id
+ * (the RFC recording-primitive is the clip's source; a legacy mixtape clip is normalised
+ * onto its promoted recording's id upstream, so this one axis covers both).
+ */
 export type ClipLibraryFilter = {
-  mixtapeId: string;
+  recordingId: string;
   status: ClipStatusFilter;
 };
 
@@ -31,18 +35,20 @@ export const ALL_FILTER = "all";
 
 /** The default (unfiltered) library view. */
 export const DEFAULT_CLIP_FILTER: ClipLibraryFilter = {
-  mixtapeId: ALL_FILTER,
+  recordingId: ALL_FILTER,
   status: ALL_FILTER,
 };
 
 /**
- * Narrow a clip list by mixtape and/or status. "all" on either axis is a no-op for
- * that axis, so the default filter returns the list untouched. Pure — the order of
- * the input list is preserved (the server already sorts newest-first).
+ * Narrow a clip list by recording and/or status. "all" on either axis is a no-op for
+ * that axis, so the default filter returns the list untouched. Matches `clip.recordingId`
+ * — the caller normalises a legacy mixtape clip onto its promoted recording's id before
+ * filtering. Pure — the order of the input list is preserved (the server already sorts
+ * newest-first).
  */
 export function filterClips(clips: ClipDTO[], filter: ClipLibraryFilter): ClipDTO[] {
   return clips.filter((clip) => {
-    if (filter.mixtapeId !== ALL_FILTER && clip.mixtapeId !== filter.mixtapeId) {
+    if (filter.recordingId !== ALL_FILTER && clip.recordingId !== filter.recordingId) {
       return false;
     }
 

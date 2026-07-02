@@ -38,6 +38,7 @@ type MixtapeRow = {
   planned_for: string | null;
   published_at: string | null;
   recorded_at: string | null;
+  recording_id: string | null;
   sequence_number: number | null;
   set_video_at: string | null;
   soundcloud_url: string | null;
@@ -882,6 +883,7 @@ const MIXTAPE_SELECT = `select
      order by published_at desc limit 1) as soundcloud_url,
   m.added_at,
   m.recorded_at,
+  m.recording_id,
   m.planned_for,
   m.published_at,
   m.set_video_at,

@@ -20,8 +20,8 @@ function clip(overrides: Partial<ClipDTO> = {}): ClipDTO {
     createdAt: "2026-06-29T00:00:00.000Z",
     id: "clip-1",
     inMs: 1_000,
-    mixtapeId: "tape-1",
     outMs: 16_000,
+    recordingId: "rec-1",
     status: "done",
     updatedAt: "2026-06-29T00:00:00.000Z",
     xOffset: 0,
@@ -31,39 +31,39 @@ function clip(overrides: Partial<ClipDTO> = {}): ClipDTO {
 
 describe("filterClips", () => {
   const clips = [
-    clip({ id: "a", mixtapeId: "tape-1", status: "done" }),
-    clip({ id: "b", mixtapeId: "tape-1", status: "pending" }),
-    clip({ id: "c", mixtapeId: "tape-2", status: "done" }),
+    clip({ id: "a", recordingId: "rec-1", status: "done" }),
+    clip({ id: "b", recordingId: "rec-1", status: "pending" }),
+    clip({ id: "c", recordingId: "rec-2", status: "done" }),
   ];
 
   it("returns the whole list untouched under the default (all/all) filter", () => {
     expect(filterClips(clips, DEFAULT_CLIP_FILTER)).toEqual(clips);
   });
 
-  it("narrows by mixtape", () => {
-    const result = filterClips(clips, { mixtapeId: "tape-1", status: ALL_FILTER });
+  it("narrows by recording", () => {
+    const result = filterClips(clips, { recordingId: "rec-1", status: ALL_FILTER });
 
     expect(result.map((c) => c.id)).toEqual(["a", "b"]);
   });
 
   it("narrows by status", () => {
-    const result = filterClips(clips, { mixtapeId: ALL_FILTER, status: "done" });
+    const result = filterClips(clips, { recordingId: ALL_FILTER, status: "done" });
 
     expect(result.map((c) => c.id)).toEqual(["a", "c"]);
   });
 
-  it("narrows by mixtape AND status together", () => {
-    const result = filterClips(clips, { mixtapeId: "tape-1", status: "pending" });
+  it("narrows by recording AND status together", () => {
+    const result = filterClips(clips, { recordingId: "rec-1", status: "pending" });
 
     expect(result.map((c) => c.id)).toEqual(["b"]);
   });
 
   it("returns an empty list when nothing matches", () => {
-    expect(filterClips(clips, { mixtapeId: "tape-2", status: "pending" })).toEqual([]);
+    expect(filterClips(clips, { recordingId: "rec-2", status: "pending" })).toEqual([]);
   });
 
   it("preserves the input order (server sorts newest-first)", () => {
-    const result = filterClips(clips, { mixtapeId: ALL_FILTER, status: "done" });
+    const result = filterClips(clips, { recordingId: ALL_FILTER, status: "done" });
 
     expect(result).toEqual([clips[0], clips[2]]);
   });

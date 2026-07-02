@@ -5,12 +5,11 @@ import {
   ScissorsIcon,
   TrashIcon,
 } from "@phosphor-icons/react";
-import { type ClipDTO } from "@fluncle/contracts/orpc";
+import { type ClipDTO, type RecordingDTO } from "@fluncle/contracts/orpc";
 import { useState } from "react";
 import { InstagramIcon, TiktokIcon } from "@/components/platform-icons";
 import { Button } from "@/components/ui/button";
 import { formatClock, Video } from "@/components/video";
-import { type MixtapeDTO, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import {
   type ClipDownloadUrls,
   clipDownloadUrls,
@@ -32,17 +31,17 @@ import {
 export function ClipCard({
   clip,
   deleting,
-  mixtape,
   onDelete,
+  recording,
 }: {
   clip: ClipDTO;
   deleting: boolean;
-  /** The source set, when it's in the loaded list (for the title + the back-link). */
-  mixtape: MixtapeDTO | undefined;
   onDelete: () => void;
+  /** The source recording, when it's in the loaded list (title + the Studio back-link). */
+  recording: RecordingDTO | undefined;
 }) {
   const isDone = clip.status === "done";
-  const setTitle = mixtape ? mixtapeDisplayTitle(mixtape.title) : "Unknown set";
+  const setTitle = recording ? recording.title : "Unknown set";
   const lengthLabel = formatClock(clipDurationMs(clip) / 1000);
   const rangeLabel = `${formatClock(clip.inMs / 1000)} – ${formatClock(clip.outMs / 1000)}`;
   const downloads = clipDownloadUrls(clip.id);
@@ -53,19 +52,19 @@ export function ClipCard({
 
       <div className="flex min-w-0 flex-1 flex-col gap-2 p-3">
         <div className="flex items-baseline justify-between gap-2">
-          {mixtape?.id ? (
+          {recording?.id ? (
             <a
               className="min-w-0 truncate text-sm font-medium hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"
-              href={`/admin/studio/${encodeURIComponent(mixtape.id)}`}
+              href={`/admin/studio/${encodeURIComponent(recording.id)}`}
             >
               {setTitle}
             </a>
           ) : (
             <span className="min-w-0 truncate text-sm font-medium">{setTitle}</span>
           )}
-          {mixtape?.logId ? (
+          {recording?.logId ? (
             <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
-              {mixtape.logId}
+              fluncle://{recording.logId}
             </span>
           ) : null}
         </div>

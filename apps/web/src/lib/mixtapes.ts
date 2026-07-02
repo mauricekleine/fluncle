@@ -61,6 +61,7 @@ export type MixtapeRowLike = {
   planned_for?: string | null;
   published_at?: string | null;
   recorded_at?: string | null;
+  recording_id?: string | null;
   sequence_number?: number | null;
   set_video_at?: string | null;
   soundcloud_url?: string | null;
@@ -96,6 +97,8 @@ export function rowToMixtape(
     plannedFor: row.planned_for ?? undefined,
     publishedAt: row.published_at ?? undefined,
     recordedAt: row.recorded_at ?? undefined,
+    // The recording this mixtape was promoted from (its set video + clips live there).
+    recordingId: row.recording_id ?? undefined,
     // Reserved coordinate for a draft (server-computed via predictedMixtapeLogId);
     // absent on a minted mixtape, which carries the real logId above.
     reservedLogId,
