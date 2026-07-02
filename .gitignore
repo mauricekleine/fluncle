@@ -30,6 +30,9 @@ packages/video/out/
 packages/video/public/*.mp3
 packages/video/public/*.m4a
 packages/video/public/*.wav
+# Hash-keyed on-disk Remotion bundle cache (render.ts) — a build artifact, not
+# codebase history; correctness comes from the hash gate, not from git.
+packages/video/.cache/
 # Generated/scratch track compositions (output, not codebase history); root.tsx
 # auto-registers these. Keep the dir (.gitkeep) so require.context resolves.
 packages/video/src/remotion/workbench/*
