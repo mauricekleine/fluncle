@@ -601,7 +601,8 @@ async function acquire(deviceId?: string): Promise<void> {
   track.addEventListener("ended", () => {
     err("audio device lost — reacquiring…");
     silenceHold = true;
-    reacquireLoop();
+    // Fire-and-forget: the loop retries internally; a terminal failure surfaces live.
+    reacquireLoop().catch((e: unknown) => err("audio reacquire failed: " + String(e)));
   });
 }
 let reacquiring = false;
@@ -642,7 +643,8 @@ function demo(): void {
     return;
   }
   demoOn = true;
-  dsp.ctx.resume();
+  // Resume failure would leave the demo silent — surface it live rather than swallow.
+  dsp.ctx.resume().catch((e: unknown) => err("audio context resume failed: " + String(e)));
   deviceName = "demo beat";
   updateHud();
   const AC = dsp.ctx;

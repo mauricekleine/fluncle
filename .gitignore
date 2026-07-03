@@ -42,6 +42,11 @@ packages/video/.cache/
 # auto-registers these. Keep the dir (.gitkeep) so require.context resolves.
 packages/video/src/remotion/workbench/*
 !packages/video/src/remotion/workbench/.gitkeep
+# Unit O (the set-video hour render): prepped chapter compositions + the render
+# workbench/output are generated, never codebase history (same contract as workbench/).
+packages/video/src/remotion/set-workbench/*
+!packages/video/src/remotion/set-workbench/.gitkeep
+packages/video/set-out/
 
 # TanStack Start temp/cache
 apps/web/.tanstack/

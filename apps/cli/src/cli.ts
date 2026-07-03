@@ -117,6 +117,7 @@ type TrackVideoOptions = {
   props?: string;
   reasoning?: string;
   render?: string;
+  scene?: string;
 };
 
 type TrackDraftOptions = {
@@ -587,6 +588,7 @@ function addAdminCommands(program: Command): void {
     .option("--props <file>", "Render props JSON")
     .option("--reasoning <level>", "Authoring model reasoning effort (e.g. high)")
     .option("--render <file>", "Render metadata JSON")
+    .option("--scene <file>", "Scene replay manifest JSON (fluncle.scene/1, optional)")
     .allowExcessArguments()
     .action(async (idOrLogId: string | undefined, options: TrackVideoOptions) => {
       const { trackVideoCommand } = await import("./commands/track");
@@ -1558,7 +1560,7 @@ async function runTrackVideo(
 ): Promise<void> {
   if (!idOrLogId) {
     throw new Error(
-      "Missing id. Usage: fluncle admin tracks video <track_id|log_id> (--dir <dir> | --footage <file> [--footage-social <file>] [--footage-notext <file>] [--footage-landscape <file>] [--footage-landscape-social <file>] [--poster <file>] [--cover <file>] [--note <file>] [--composition <file>] [--props <file>] [--render <file>] [--intent <file>] [--metrics <file>])",
+      "Missing id. Usage: fluncle admin tracks video <track_id|log_id> (--dir <dir> | --footage <file> [--footage-social <file>] [--footage-notext <file>] [--footage-landscape <file>] [--footage-landscape-social <file>] [--poster <file>] [--cover <file>] [--note <file>] [--composition <file>] [--props <file>] [--render <file>] [--intent <file>] [--metrics <file>] [--scene <file>])",
     );
   }
 
@@ -1603,6 +1605,7 @@ async function runTrackVideo(
     props: resolveFile(options.props, "props.json"),
     reasoning: options.reasoning,
     render: resolveFile(options.render, "render.json"),
+    scene: resolveFile(options.scene, "scene.json"),
   };
 
   if (!files.footage) {
@@ -2807,6 +2810,7 @@ const stringOptions = new Set([
   "--query",
   "--recorded-at",
   "--render",
+  "--scene",
   "--scheduled-for",
   "--soundcloud-url",
   "--source",

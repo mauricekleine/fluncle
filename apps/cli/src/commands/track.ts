@@ -49,6 +49,7 @@ export type TrackVideoOptions = {
   props?: string;
   reasoning?: string;
   render?: string;
+  scene?: string;
 };
 
 // The authoring AI model recorded for a video, in <provider>/<model> notation.
@@ -86,6 +87,7 @@ const VIDEO_FIELDS: ReadonlyArray<{ field: string; option: keyof TrackVideoOptio
   { field: "render", option: "render" },
   { field: "intent", option: "intent" },
   { field: "metrics", option: "metrics" },
+  { field: "scene", option: "scene" },
 ];
 
 // Uploads a track's video bundle DIRECTLY to R2 via short-lived presigned PUT
