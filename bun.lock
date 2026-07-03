@@ -184,6 +184,9 @@
     "packages/live": {
       "name": "@fluncle/live",
       "version": "0.1.0",
+      "dependencies": {
+        "@fluncle/video": "workspace:*",
+      },
       "devDependencies": {
         "@types/bun": "catalog:",
         "@typescript/native-preview": "catalog:",

@@ -33,10 +33,16 @@ export type PlanEntry = {
   replay?: {
     replayable: boolean;
     body?: string;
+    /**
+     * The composition's own (non-header) uniforms, classified for live re-drive.
+     * Names match the extractor + the glass v0.6 runtime: rise ramps -> dwell,
+     * tail dimmers -> pinned, audio aliases -> the live DSP, colour vec3s -> palette.
+     */
     customUniforms?: Array<{
       name: string;
-      class: "rise" | "settle" | "audio" | "color";
-      params?: Record<string, number>;
+      type: string;
+      class: "riseRamp" | "settleDim" | "audioAlias" | "color" | "unknown";
+      params?: Record<string, unknown>;
     }>;
     reason?: string;
   };
@@ -49,16 +55,43 @@ export type ShowState = {
   plan: { pointer: number; total: number; source: "fingerprint" | "manual" | "boot" };
   /** Fingerprint matcher verdict for the CURRENT audio window. */
   match?: { logId: string; confidence: number };
-  /** The next planned finding, pre-armed (prefetch target). */
-  pending?: { logId: string };
+  /** The next planned finding, pre-armed (prefetch target + the remote's "up next"). */
+  pending?: { logId: string; title: string; artists: string[] };
   channels: { audio: "live" | "stale" | "silent"; matcher: "ready" | "off" };
+  /** The energy dip->surge PRE-ARM hint is active (heightened match sensitivity; never advances alone). */
+  prearmed: boolean;
+  /** Global reactivity multiplier the operator dials (mirrors the glass's intensity key). */
+  intensity: number;
+  /** The held-breath rail: the glass is easing to the holding scene. */
+  blackout: boolean;
+  /** The current planned finding at the pointer (the plate identity), if any. */
+  current?: { logId: string; title: string; artists: string[] };
 };
 
-/** Commands the glass (or the phone remote) sends the bridge over the same WS. */
+/**
+ * Commands the glass (or the phone remote) sends the bridge over the same WS.
+ * The `mel` frame is the glass's live audio fingerprint feed (Unit L -> Unit B):
+ * 40 log-mel bins spanning 0-8kHz, emitted at 10Hz. It is the ONLY channel the
+ * plan-scoped fingerprint matcher consumes; everything else is control. Manual
+ * advance/rewind/goto ALWAYS win over the matcher, instantly.
+ */
 export type ShowCommand =
   | { cmd: "advance" } // manual next (the arrow key / remote tap)
   | { cmd: "rewind" }
   | { cmd: "goto"; index: number }
   | { cmd: "blackout"; on: boolean }
   | { cmd: "intensity"; value: number }
-  | { cmd: "heartbeat"; renderFrame: number }; // the watchdog feed
+  | { cmd: "heartbeat"; renderFrame: number } // the watchdog feed
+  // 40 log-mel bins (log1p power, 0-8kHz) @ 10Hz. RAW (un-normalized): the bridge
+  // L2-normalizes for the cosine match AND reads the frame's magnitude as the
+  // pre-arm energy proxy (an already-normalized frame still matches, but its energy
+  // hint goes flat — the hint is advisory only, so either is safe).
+  | { cmd: "mel"; t: number; frame: number[] };
+
+/** The number of log-mel bins in a `mel` frame (the glass <-> matcher contract). */
+export const MEL_BINS = 40;
+/** The mel frame cadence the glass emits at (Hz). */
+export const MEL_RATE_HZ = 10;
+/** The mel band span (Hz). Both the glass and the server-side preview fingerprints use it. */
+export const MEL_FMIN = 0;
+export const MEL_FMAX = 8000;

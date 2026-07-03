@@ -8,7 +8,11 @@
     "glass": "bun src/glass/serve.ts",
     "bridge": "bun src/bridge/serve.ts",
     "test": "bun test",
+    "test:matcher-accuracy": "bun src/bridge/accuracy.ts",
     "typecheck": "tsgo --noEmit"
+  },
+  "dependencies": {
+    "@fluncle/video": "workspace:*"
   },
   "devDependencies": {
     "@types/bun": "catalog:",
