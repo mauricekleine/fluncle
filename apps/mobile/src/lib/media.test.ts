@@ -53,11 +53,13 @@ function finding(overrides: Partial<TrackListItem>): TrackListItem {
     // The feed plays the RAW square master (iOS AVPlayer needs HTTP Range, which
     // the MT crop does not honor), cropped to portrait by the player.
     assertEqual(media.videoUrl, `${FOUND_BASE}/LOG123/footage.mp4`, "video plays the raw master");
-    // A cheap edge-cached opening frame for first paint.
+    // A cheap edge-cached opening frame for first paint, versioned by the video
+    // VINTAGE (?v=<videoSquaredAt epoch>) so a re-render mints a fresh MT URL —
+    // MT's internal output cache is keyed on the URL and not purgeable (web media.ts).
     assertEqual(
       media.posterUrl,
-      `${FOUND_BASE}/cdn-cgi/media/mode=frame,time=0s,format=jpg/${FOUND_BASE}/LOG123/footage.mp4`,
-      "poster is the same-zone mode=frame transform",
+      `${FOUND_BASE}/cdn-cgi/media/mode=frame,time=0s,format=jpg/${FOUND_BASE}/LOG123/footage.mp4?v=${Date.parse("2026-06-21T10:00:00.000Z")}`,
+      "poster is the same-zone mode=frame transform, vintage-versioned",
     );
     assertEqual(media.hasAudio, true, "the video rung carries audio");
     // The raw master is the onError fallback target, never an MT transform.
