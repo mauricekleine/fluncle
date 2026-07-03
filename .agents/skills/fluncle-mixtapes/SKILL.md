@@ -30,9 +30,73 @@ Two durable OAuth grants, stored **server-side** so the CLI stays a thin client:
 
 For the Rekordbox tracklist step, quit Rekordbox fully before running any script — it holds an exclusive lock on `master.db`. pyrekordbox auto-extracts the SQLCipher key from your Rekordbox install; no separate key step is needed (see §B for the manual fallback).
 
+## Two-machine setup (a separate Rekordbox Mac)
+
+The work splits across two Macs, and the split is non-obvious:
+
+- 🖥️ **Build Mac** — the compose/author laptop: a browser (`/admin/plans`, `/admin/studio`, `/admin/clips`) and the `fluncle` CLI hitting prod (`https://www.fluncle.com`). This is where you plan, promote, mark cues, and clip.
+- 🎛️ **Mixing Mac** — the DJ laptop where **Rekordbox + its `master.db`, OBS, and the audio/video masters live**. The two Rekordbox scripts (`rekordbox-plan-export.py`, `rekordbox-derive-cues.py`) run **only here** — they read/write `master.db`, which exists only on this machine. The recording upload and audio extraction (`ffmpeg`) also run here, because the multi-GB masters live here.
+
+The runbook steps below are tagged 🖥️ / 🎛️ so you know which Mac each one runs on.
+
+### One-time mixing-Mac setup
+
+1. **Install the full CLI via Homebrew:**
+
+   ```bash
+   brew install mauricekleine/fluncle/fluncle
+   ```
+
+   This installs the standalone binary **with the `admin` commands**. Do **NOT** `npm i -g fluncle` — the npm package is a lightweight public shim **without** the `admin` commands (a real gotcha: `fluncle admin …` simply won't exist). Homebrew is the only install that carries the operator surface.
+
+2. **Install the media + Python tooling:**
+
+   ```bash
+   brew install ffmpeg   # recording upload + audio extraction need it
+   brew install uv       # runs the pyrekordbox scripts (or use the curl installer)
+   ```
+
+3. **Move the prod operator token — without exposing the value.** The CLI reads `FLUNCLE_API_TOKEN` from `~/.config/fluncle/.env.production` (the default `production` profile; the CLI targets `https://www.fluncle.com`). To copy it from the build Mac to the mixing Mac without the token ever printing to a terminal, run this on the **build Mac** — it puts a self-contained heredoc on the clipboard that writes the file when pasted:
+
+   ```bash
+   { echo "mkdir -p ~/.config/fluncle && cat > ~/.config/fluncle/.env.production <<'FLUNCLE_EOF'"; cat ~/.config/fluncle/.env.production; echo; echo "FLUNCLE_EOF"; } | pbcopy
+   ```
+
+   Then **paste into a shell on the mixing Mac**. This works via Universal Clipboard between two Macs on the same Apple ID (Handoff on, Bluetooth + Wi-Fi, same iCloud account); if that's not set up, AirDrop the `.env.production` file to `~/.config/fluncle/` instead. Never commit or inline the token value.
+
+4. **Get the scripts — clone the repo** (public), don't copy a single file: the two scripts import `_matching.py` / `_cue_formats.py` siblings, so they need the whole directory.
+
+   ```bash
+   git clone https://github.com/mauricekleine/fluncle.git
+   # scripts live at packages/skills/fluncle-mixtapes/scripts/
+   ```
+
+5. **The Rekordbox key — no setup step.** pyrekordbox **auto-extracts** the `master.db` SQLCipher key when Rekordbox is installed on the Mac; there is nothing to run. (The old `python -m pyrekordbox download-key` command was removed upstream at AlphaTheta's request — do not re-add it.) Sanity-check the auto-extract with Rekordbox quit:
+
+   ```bash
+   uv run --with pyrekordbox python -c "from pyrekordbox import Rekordbox6Database; db=Rekordbox6Database(); print('OK', sum(1 for _ in db.get_content()))"
+   ```
+
+   It should print `OK <track count>`. If it ever fails, cache the key once in Python: `from pyrekordbox.config import write_db6_key_cache; write_db6_key_cache("<key>")`.
+
 ## The per-mixtape runbook
 
-### A. Record + archive
+The steps are tagged 🖥️ (build Mac / browser) or 🎛️ (mixing Mac — Rekordbox / OBS / masters) per the two-machine split above.
+
+**The canonical flow at a glance:**
+
+| Step                     | Where          | What                                                                                   |
+| ------------------------ | -------------- | -------------------------------------------------------------------------------------- |
+| Compose the plan         | 🖥️ browser     | `/admin/plans` — auto galaxy-slug handle, add findings, order, set the Live session date |
+| Export to tools          | 🎛️ mixing Mac  | Rekordbox quit: `recordings list --kind plan` → `rekordbox-plan-export.py <planId>`; buy on Beatport; load Rekordbox |
+| Mix + record             | 🎛️ mixing Mac  | OBS 3-track (music T1 / mic T2)                                                          |
+| Upload take + attach     | 🎛️ mixing Mac  | `recordings create --title … --video <take.mov>` → `recordings update <takeId> --parent-id <planId>` |
+| Derive cues              | 🎛️ mixing Mac  | Rekordbox quit: `rekordbox-derive-cues.py` dry-run → `--apply <takeId>`                  |
+| Mark cue times + clip    | 🖥️ browser     | `/admin/studio/<takeId>` — mark mix-ins; set in/out → Create clip; `/admin/clips` copy caption → IG Reel |
+| Promote (if you love it) | 🖥️ Studio      | "Publish as mixtape" (or `recordings promote <takeId>`) — mints `.F.`, seeds the tracklist, publishes the `/log` set video |
+| Distribute               | 🎛️ mixing Mac  | extract audio (`ffmpeg`) → `mixtapes distribute <logId> --video … --audio master.mp3` → `publish-youtube` → optional `resync` |
+
+### A. Record + archive 🎛️
 
 1. Record the set.
 2. Capture the assets: the audio master, the mixtape video, any teaser clips (raw material you don't want to re-shoot — and the Fluncle Studio clip pipeline can cut more later from a **recording**'s set video on R2: the `recordings` table + `mixtape_clips`, `fluncle admin recordings …` + `fluncle admin clips list|cut`, `/admin/studio/<recordingId>` + `/admin/clips`, the `fluncle-studio-clip` cron; see `docs/fluncle-studio.md`).
@@ -46,11 +110,20 @@ For the Rekordbox tracklist step, quit Rekordbox fully before running any script
 
 **Audio — Track 1 is the clean master.** The OBS recording carries two audio tracks (Advanced Output records tracks 1 + 2): **Track 1 = the clean stereo mix only** (BlackHole / PC MASTER OUT, no mic — the file's default audio), **Track 2 = the isolated mic**. (A third track, mix + mic, feeds the Twitch stream but isn't recorded.) Always take the **clean Track 1** for the Mixcloud audio master and for any clip audio — it's the default stream, so `-map 0:a:0` (or no `-map` at all); Track 2 is the voice-only mic. The recording is 1080p H.264 (OBS Output (Scaled) Resolution must be 1920×1080, not 720p; keep H.264 so the clip pipeline / Cloudflare Media Transformations can read it; the master encoder is a dedicated Apple VT H264 Hardware encoder at CBR 40000, not "Use stream encoder"). Full OBS / BlackHole recording setup lives in `docs/mixtape-recording-setup.md`.
 
-### B. Build the plan + tracklist
+### B. Build the plan + tracklist 🖥️ compose · 🎛️ derive cues
 
 Pre-publish authoring is a **PLAN** — a videoless `recordings` row, not a mixtape (draft mixtapes retired; a mixtape is only ever born via `promote_recording`). A plan is just the lined-up findings plus an optional live-session date. Duration is derived from the upload at distribute time, not entered. Build the plan in `/admin/plans` (via `fluncle admin recordings create --plan`, or `kind: "plan"` on `create_recording`); the board's Mixtape cell also pencils a single finding straight into a plan ("Add to a plan").
 
-**The handle replaces the reserved coordinate.** The plan carries an auto-minted **Galaxy-vocab handle** (e.g. `liquid-nebula-roller`) — the fixed label you name your Beatport playlist, USB folders, and Rekordbox crate with up front. Unlike the old date-derived reserved Log ID, it never drifts; the real `XXX.F.ZZ` coordinate is minted only at promote. The dream note and recorded date live on the PUBLISHED mixtape (the post-promote edit), not on the plan.
+**The handle replaces the reserved coordinate.** The plan carries an auto-minted **Galaxy-vocab handle** (e.g. `liquid-nebula-roller`) — the fixed label you name your Beatport playlist, USB folders, and Rekordbox crate with up front. Unlike the old date-derived reserved Log ID, it never drifts; the real `XXX.F.ZZ` coordinate is minted only at promote. The dream note and recorded date live on the PUBLISHED mixtape (the post-promote edit), not on the plan. Composing the plan is a 🖥️ browser step (`/admin/plans`); exporting it to Rekordbox (§B2) and deriving the take's cues (below) are 🎛️ mixing-Mac steps.
+
+**Upload the take and attach it to the plan** 🎛️ (mixing Mac — the take `.mov` lives here). After recording, create the take as a recording and point it at its plan:
+
+```bash
+fluncle admin recordings create --title "…" --video <take>.mov   # → takeRecordingId
+fluncle admin recordings update <takeRecordingId> --parent-id <planId>
+```
+
+The plan (videoless) stays the authoring row; the take is the versioned recording that gets clipped, promoted, and distributed. Attaching links the take's derived cues + clips back to the plan.
 
 **Derive the take's cue tracklist from Rekordbox automatically.** After recording a take, run `rekordbox-derive-cues.py` to read the session history, match each track against the Fluncle catalogue, and write the ordered cue array directly to the take's `recording_cues` via `replace-cues`. This replaces the "feed the pruned list by hand" step entirely.
 
@@ -72,9 +145,9 @@ The older `rekordbox-tracklist.py` (prints a plain `Artist — Title` list for m
 
 **After the cue write, attach each unmatched track as a finding** (`fluncle add <spotifyUrl>` or the `/admin` add flow) and re-run with `--apply` to fill in the remaining `findingId=null` slots. A finding that isn't in the catalogue yet is never auto-created — stay honest, add it first. Each linked finding gets its own `/log/<id>` breadcrumb in the published mixtape tracklist (the AEO/SEO play; see the spine model).
 
-### B2. Export a plan to tools (Rekordbox playlist + Beatport + m3u8)
+### B2. Export a plan to tools (Rekordbox playlist + Beatport + m3u8) 🎛️
 
-Once a plan recording has its cues (see §B above), export them to every tool you need before recording:
+Runs on the mixing Mac (it reads/writes `master.db`). Once a plan recording has its cues (see §B above), export them to every tool you need before recording:
 
 ```bash
 # Dry-run output: Beatport links + m3u8 + checklist, and the XML safe-fallback.
@@ -101,11 +174,15 @@ The script does five things in one pass:
 
 **Safety:** the script prints a clear instruction to quit Rekordbox before asking for confirmation; `--yes` / `-y` skips the prompt. `--no-db-write` skips the DB write entirely and only emits the text formats — safe to run with Rekordbox open. The XML export (step 2) never touches `master.db` regardless. If pyrekordbox can't open the DB (wrong key, running Rekordbox), the script falls back to text-only output.
 
-### C. Promote the recording, then distribute
+### B3. Mark cue times + clip 🖥️
+
+In the Studio at `/admin/studio/<takeId>` (browser): mark each mix-in at the playhead (the `C`/`X`/↑/↓ loop) so the derived cues (§B) gain their `startMs` jump points, and cut framed 9:16 clips (set in/out → **Create clip**). Clips land in `/admin/clips` grouped under the take; copy a clip's caption there and post it as an IG Reel. Un-promoted, a clip points home to `fluncle.com`; after promote it earns the mixtape's `fluncle://<logId>` coordinate (re-cut to pick it up).
+
+### C. Promote the recording, then distribute 🖥️ promote · 🎛️ distribute
 
 The unified publish path (RFC plan→recording→mixtape §7 / Wave 3-D) is:
 
-**1. Promote the recording** — this mints the coordinate AND stages the set video:
+**1. Promote the recording** 🖥️ — this mints the coordinate AND stages the set video. Do it from the Studio's **Publish as mixtape** button (`/admin/studio/<recordingId>`, browser) or the CLI on either Mac:
 
 ```bash
 fluncle admin recordings promote <recordingId>
@@ -113,7 +190,7 @@ fluncle admin recordings promote <recordingId>
 
 `promote` is **idempotent** (mint-or-reuse): it mints the `XXX.F.ZZ` Log ID, copies the set-video rendition from `recordings/<id>/set.mp4` to `<logId>/set.mp4`, and flips `setVideoAt` so the `/log` player + video SEO light up. The mixtape is now in `distributing` state (coordinate committed, public surfaces stay hidden until a platform link lands).
 
-**2. Distribute** — push the promoted mixtape to platforms:
+**2. Distribute** 🎛️ — push the promoted mixtape to platforms (run on the mixing Mac — the masters live there):
 
 ```bash
 fluncle admin mixtapes distribute <idOrLogId> --video <mixtape>.mp4 --audio <master>
@@ -132,11 +209,11 @@ Each leg records into `mixtape_social_posts` — the single source of truth for 
 
 > **Retired flags (Wave 3-D):** `distribute --set-video` and the `draft`-to-`distributing` mint that `distribute` used to perform are both retired. The set video is staged by `promote`, and the coordinate is minted there too. There is now one publish path: record → upload as a recording → promote → distribute.
 
-### D. Make YouTube public
+### D. Make YouTube public 🖥️
 
 The one recurring human gate: the Studio's **Make YouTube public** button (`/admin/studio/<recordingId>`, in the Live distribution block), or `fluncle admin mixtapes publish-youtube <idOrLogId>` (server-side `videos.update`).
 
-### D2. Re-sync cues → live YouTube chapters + Mixcloud sections
+### D2. Re-sync cues → live YouTube chapters + Mixcloud sections 🖥️
 
 The tracklist cues are often refined **after** a set is already live (the initial upload rarely has precise jump points — see the Rekordbox note in §B, which writes order + identity, not timestamps). Once you mark or change cues on a **published** mixtape, re-push the derived metadata to the platforms **without re-uploading the audio**. Two equivalent entry points hit the **same server-side ops**:
 
