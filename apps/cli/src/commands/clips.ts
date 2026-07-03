@@ -222,7 +222,7 @@ async function resolveClipSource(clip: ClipDTO): Promise<ClipSource> {
   if (!mixtape.setVideoAt) {
     throw new CliError(
       "set_not_staged",
-      `Mixtape ${mixtape.logId} has no staged set video — run \`distribute --set-video\` first`,
+      `Mixtape ${mixtape.logId} has no staged set video — run \`recordings promote <recordingId>\` first`,
     );
   }
 

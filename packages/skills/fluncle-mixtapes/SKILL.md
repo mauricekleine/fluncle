@@ -38,13 +38,11 @@ For the Rekordbox tracklist step, also cache the database key once (see that ste
 2. Capture the assets: the audio master, the mixtape video, any teaser clips (raw material you don't want to re-shoot — and the Fluncle Studio clip pipeline can cut more later from a **recording**'s set video on R2: the `recordings` table + `mixtape_clips`, `fluncle admin recordings …` + `fluncle admin clips list|cut`, `/admin/studio/<recordingId>` + `/admin/clips`, the `fluncle-studio-clip` cron; see `docs/fluncle-studio.md`).
 3. Archive the raw assets to the operator path (R2), like a finding's analysis archive.
 
-> **Clip-first via a recording, promote later** (RFC recording-primitive, Design B — `docs/recording-primitive-rfc.md`). You do NOT have to publish a mixtape to clip a set. Create a **recording** (a captured set that carries NO coordinate) and clip it first; promote it to a full mixtape only when you decide to publish:
+> **The one publish path (RFC plan→recording→mixtape §7 / Wave 3-D).** Every mixtape goes through a recording: upload the set as a recording, promote it (mints the coordinate + stages the set video), then distribute. The clip-first path is:
 >
-> 1. `fluncle admin recordings create --title "…" --video <set>.mov` — mints a coordinate-less recording and streams the set video to its own R2 key.
+> 1. `fluncle admin recordings create --title "…" --video <set>.mov` — creates a coordinate-less recording and stages the set video to its own R2 key.
 > 2. Clip it in the Studio at `/admin/studio/<recordingId>` — author the cue tracklist (add each track, mark it at the playhead) and cut framed 9:16 clips. They land in `/admin/clips` grouped under the recording. Un-promoted, a clip points home to `fluncle.com` (no `fluncle://` coordinate — coordinates are for published mixtapes only).
-> 3. When you're ready to publish the full thing: `fluncle admin recordings promote <recordingId>`. Promote is idempotent (mint-or-reuse): it mints a mixtape from the recording (seeding its tracklist), copies the set video to `<logId>/set.mp4`, links `mixtapes.recording_id` back, and hands off to the ordinary `distribute` flow below (§C). The recording's existing clips keep working; re-cut a clip to gain the new `fluncle://<logId>` coordinate. A mixtape's "Clip this set" (`/admin/mixtapes`) then links to its recording's Studio.
->
-> Skip this and go straight to §B when a set is definitely becoming a mixtape now (the recording is created for you on promote-time only if you use the recording path; the classic distribute path stays a mixtape from the start).
+> 3. When ready to publish: `fluncle admin recordings promote <recordingId>` → then `distribute` (§C). Promote is idempotent (mint-or-reuse): it mints the mixtape from the recording (seeding its tracklist), copies the set video to `<logId>/set.mp4`, and flips `setVideoAt`. The recording's existing clips keep working; re-cut a clip to gain the new `fluncle://<logId>` coordinate.
 
 **Audio — Track 1 is the clean master.** The OBS recording carries two audio tracks (Advanced Output records tracks 1 + 2): **Track 1 = the clean stereo mix only** (BlackHole / PC MASTER OUT, no mic — the file's default audio), **Track 2 = the isolated mic**. (A third track, mix + mic, feeds the Twitch stream but isn't recorded.) Always take the **clean Track 1** for the Mixcloud audio master and for any clip audio — it's the default stream, so `-map 0:a:0` (or no `-map` at all); Track 2 is the voice-only mic. The recording is 1080p H.264 (OBS Output (Scaled) Resolution must be 1920×1080, not 720p; keep H.264 so the clip pipeline / Cloudflare Media Transformations can read it; the master encoder is a dedicated Apple VT H264 Hardware encoder at CBR 40000, not "Use stream encoder"). Full OBS / BlackHole recording setup lives in `docs/mixtape-recording-setup.md`.
 
@@ -70,28 +68,36 @@ The script prints the ordered `Artist — Title` list and flags `DUP` rows. **Pr
 
 Feed the pruned list into the tracklist: attach each track as a **member finding** (`fluncle admin mixtapes members <idOrLogId> ...`, or the `/admin` add-to-mixtape flow). A track that isn't a finding yet gets added as a finding first. Each member links to its own `/log/<id>` — the tracklist is the breadcrumb and the AEO/SEO play (see the spine model).
 
-### C. Distribute
+### C. Promote the recording, then distribute
+
+The unified publish path (RFC plan→recording→mixtape §7 / Wave 3-D) is:
+
+**1. Promote the recording** — this mints the coordinate AND stages the set video:
+
+```bash
+fluncle admin recordings promote <recordingId>
+```
+
+`promote` is **idempotent** (mint-or-reuse): it mints the `XXX.F.ZZ` Log ID, copies the set-video rendition from `recordings/<id>/set.mp4` to `<logId>/set.mp4`, and flips `setVideoAt` so the `/log` player + video SEO light up. The mixtape is now in `distributing` state (coordinate committed, public surfaces stay hidden until a platform link lands).
+
+**2. Distribute** — push the promoted mixtape to platforms:
 
 ```bash
 fluncle admin mixtapes distribute <idOrLogId> --video <mixtape>.mp4 --audio <master>
 ```
 
-The `--audio <master>` must be the **clean mix (Track 1, no mic)** — extract it from the OBS `.mov` first, mapping the first audio stream: `ffmpeg -i <recording>.mov -map 0:a:0 -c:a libmp3lame -b:a 320k <master>.mp3` (Track 2 is the isolated mic — see §A). The `--video` can be the raw `.mov` (it keeps both tracks) or a clean-audio cut — your call on whether the YouTube video carries your voice.
+`distribute` is **push-only**: it operates on an already-minted (`distributing` or `published`) mixtape and errors on a `draft`. The `--audio <master>` must be the **clean mix (Track 1, no mic)** — extract it from the OBS `.mov` first: `ffmpeg -i <recording>.mov -map 0:a:0 -c:a libmp3lame -b:a 320k <master>.mp3` (Track 2 is the isolated mic — see §A). The `--video` can be the raw `.mov` or a clean-audio cut — your call on whether the YouTube video carries your voice.
 
-Omit a flag to target one platform. The command is **mint-first**: a `draft` mints the `XXX.F.ZZ` Log ID + number + title into a non-public `distributing` state (the cover renders, public surfaces stay hidden), the uploads carry the committed Log ID, and the **first successful platform link flips it `published`** — so a public mixtape always has somewhere to listen. It is **idempotent per platform**: re-running resumes a `distributing` mixtape and reuses its Log ID.
+Omit a flag to target one platform. The **first successful platform link flips it `published`** — so a public mixtape always has somewhere to listen. It is **idempotent per platform**: re-running a `distributing` or `published` mixtape reuses its Log ID.
 
 - **YouTube** always lands **unlisted** (made public in a separate gate); title + description ending in `fluncle://<logId>` + a cued chapter block; the wide cover set best-effort as the thumbnail; resumes on a mid-upload token expiry or dropped session.
 - **Mixcloud** publishes **listed/public immediately**; full-quality master, square cover, a per-track `sections[]` tracklist from members. Add `--unlisted` to keep it private (a test run, or a cautious first upload to flip by hand). **Test with real-length audio**: a full mixtape is a licensed _show_, but a short clip is classified as an unlicensed _track_ and copyright-blocked. Watch the Featured-Artist / SRPC limits (see the spine model's Hosting section); observe, don't pre-lint.
 
 Each leg records into `mixtape_social_posts` — the single source of truth for a mixtape's listen links. The public `externalUrls` (mixcloud/youtube/soundcloud) derives from the `published` rows there; there are no `mixtapes.*_url` columns. SoundCloud has no `distribute` leg — set it manually from the admin editor (it too becomes a `mixtape_social_posts` row).
 
-**Set video on `/log` (a leg of `distribute`).** Once the set video is on R2, the mixtape `/log/<logId>` page shows it as the hero (replacing the cover) and it is crawled/indexed like the finding clips (a `<video:video>` sitemap entry + a VideoObject + og:video). This is **automated** — add `--set-video` to `distribute` with the set master:
+**Set video on `/log`** is automatic via `promote`. Once promoted, the mixtape `/log/<logId>` page shows the set video as the hero (replacing the cover) and it is crawled/indexed (a `<video:video>` sitemap entry + a VideoObject + og:video). No extra flag needed.
 
-```bash
-fluncle admin mixtapes distribute <idOrLogId> --video <master>.mp4 --set-video
-```
-
-It derives one **1080p faststart rendition** with ffmpeg (CRF 20, AAC, ~2s GOP for scrubbing; ~1.5–2 GB), multipart-uploads it straight to R2 at `<logId>/set.mp4`, and flips `setVideoAt` — the player + the sitemap `<video:video>` + the VideoObject JSON-LD all light up. The raw multi-GB master **stays local** (only the rendition goes to R2; it also serves the editor scrub + the clip cut). `--set-video` is opt-in and additive: combine it with the YouTube/Mixcloud legs, or run it **alone** to backfill an already-published set (`distribute <id> --video x.mp4 --set-video`). Idempotent — a re-run re-stages + re-flips. Needs ffmpeg on PATH (the operator's Mac). See `docs/fluncle-studio.md`.
+> **Retired flags (Wave 3-D):** `distribute --set-video` and the `draft`-to-`distributing` mint that `distribute` used to perform are both retired. The set video is staged by `promote`, and the coordinate is minted there too. There is now one publish path: record → upload as a recording → promote → distribute.
 
 ### D. Make YouTube public
 
