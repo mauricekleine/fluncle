@@ -335,6 +335,10 @@ export const RecordingDTOSchema = z
     // The take→plan link (RFC plan→recording→mixtape §3): a TAKE points at its PLAN;
     // absent for a plan or an orphan take (e.g. the rolling set).
     parentId: z.string().optional(),
+    // The scheduled date/time (ISO) of the upcoming live session a PLAN is for — the
+    // plan-side home of `mixtapes.planned_for` (RFC §6, D-plannedFor). Absent when unset
+    // and on takes/legacy rows. The plan editor's Live-session field reads + writes it.
+    plannedFor: z.string().optional(),
     // The owned R2 key. ABSENT for a PLAN (a recording with no video — RFC
     // plan→recording→mixtape): "has video" = `r2Key` present.
     r2Key: z.string().optional(),

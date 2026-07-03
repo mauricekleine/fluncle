@@ -278,6 +278,36 @@ export async function getTracksByLogIds(logIds: string[]): Promise<Record<string
 }
 
 /**
+ * Hydrate a batch of findings by their `track_id` in ONE query (no N+1), keyed by
+ * `trackId` for O(1) lookup. The plan editor holds each finding only as a cue's
+ * `finding_id` (`recording_cues`); this resolves the live `Artist — Title` + cover +
+ * BPM/key so the findings builder renders rich rows. A `trackId` with no live finding is
+ * simply absent from the map; bound args only, never interpolated.
+ */
+export async function getTracksByIds(trackIds: string[]): Promise<Record<string, TrackListItem>> {
+  const unique = [...new Set(trackIds.filter((id) => id.trim()))];
+
+  if (unique.length === 0) {
+    return {};
+  }
+
+  const db = await getDb();
+  const placeholders = unique.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: unique,
+    sql: `select ${TRACK_SELECT} from tracks where track_id in (${placeholders})`,
+  });
+
+  const byTrackId: Record<string, TrackListItem> = {};
+
+  for (const row of typedRows<TrackRow>(result.rows)) {
+    byTrackId[row.track_id] = toTrackListItem(row);
+  }
+
+  return byTrackId;
+}
+
+/**
  * Read the INTERNAL `context_note` for a track (the Firecrawl-derived facts).
  * `context_note` is deliberately OUTSIDE `TRACK_SELECT` (internal-only fuel,
  * never surfaced through `toTrackListItem`), so the observe steps read it

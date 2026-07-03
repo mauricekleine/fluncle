@@ -37,6 +37,7 @@ type RecordingRow = {
   duration_ms: number | null;
   id: string;
   parent_id: string | null;
+  planned_for: string | null;
   r2_key: string | null;
   recorded_at: string | null;
   title: string;
@@ -74,6 +75,9 @@ export type RecordingInput = {
   // The take→plan link (update only): attach a take to its plan. Setting it assigns the
   // take's `version` atomically among the plan's takes. RFC §2/§3.
   parentId?: unknown;
+  // The upcoming live session (ISO) a PLAN is for (update only) — the plan editor's
+  // Live-session field. `""`/null clears it. RFC §6, D-plannedFor.
+  plannedFor?: unknown;
   recordedAt?: unknown;
   title?: unknown;
   // The whole cue tracklist, an array of `{ id, artists, title, startMs? }` (update only).
@@ -171,6 +175,7 @@ function rowToRecording(row: RecordingJoinRow, cues: RecordingTracklistItem[]): 
     logId: row.mixtape_log_id ?? undefined,
     mixtapeId: row.mixtape_id ?? undefined,
     parentId: row.parent_id ?? undefined,
+    plannedFor: row.planned_for ?? undefined,
     r2Key: row.r2_key ?? undefined,
     recordedAt: row.recorded_at ?? undefined,
     title: row.title,
@@ -216,6 +221,7 @@ const RECORDING_SELECT = `select
   r.duration_ms,
   r.id,
   r.parent_id,
+  r.planned_for,
   r.r2_key,
   r.recorded_at,
   r.title,
@@ -233,7 +239,7 @@ async function getRecordingRow(id: string): Promise<RecordingRow> {
   const db = await getDb();
   const result = await db.execute({
     args: [id],
-    sql: `select created_at, duration_ms, id, parent_id, r2_key, recorded_at, title, tracklist_json, updated_at, version
+    sql: `select created_at, duration_ms, id, parent_id, planned_for, r2_key, recorded_at, title, tracklist_json, updated_at, version
           from recordings where id = ? limit 1`,
   });
   const row = typedRow<RecordingRow>(result.rows);
@@ -363,6 +369,13 @@ export async function updateRecording(id: string, input: RecordingInput): Promis
   if (input.recordedAt !== undefined) {
     sets.push("recorded_at = ?");
     args.push(optionalIsoDate(input.recordedAt, "recordedAt") ?? null);
+  }
+
+  // The plan's upcoming live session — the plan editor's Live-session field. `""`/null
+  // clears it (`/calendar.ics` + `getUpcoming` repoint here in Deploy-2; RFC §6).
+  if (input.plannedFor !== undefined) {
+    sets.push("planned_for = ?");
+    args.push(optionalIsoDate(input.plannedFor, "plannedFor") ?? null);
   }
 
   let tracklistItems: RecordingTracklistItem[] | undefined;

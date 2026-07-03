@@ -7,19 +7,25 @@ import { type KeyNotation, useKeyNotation } from "@/lib/key-notation";
 
 // Shared chrome for the authenticated admin surface: the board is `/admin` (the
 // operator's home, the pipeline view of every finding — it absorbed the old Posts
-// and Tag pages), the mixtape builder, the cross-set clip library, and the
-// newsletter, plus the display-settings cog and sign out. Rendered inside
-// AdminShell's header.
+// and Tag pages), the plan editor (where a set is lined up before it's played and
+// promoted to a mixtape), the cross-set clip library, and the newsletter, plus the
+// display-settings cog and sign out. Rendered inside AdminShell's header.
 const LINKS = [
   { key: "board", label: "Board", to: "/admin" },
-  { key: "mixtapes", label: "Mixtapes", to: "/admin/mixtapes" },
+  { key: "plans", label: "Plans", to: "/admin/plans" },
   { key: "clips", label: "Clip library", to: "/admin/clips" },
   { key: "newsletter", label: "Newsletter", to: "/admin/newsletter" },
 ] as const;
 
-export type AdminNavCurrent = (typeof LINKS)[number]["key"];
+// A surface's nav key, plus `"mixtapes"` — a LEGACY alias the Studio still passes (it
+// belongs under the plan → take → Studio flow); it highlights the Plans link until that
+// surface adopts `"plans"`. The `/admin/mixtapes` route itself now just redirects here.
+export type AdminNavCurrent = (typeof LINKS)[number]["key"] | "mixtapes";
 
 export function AdminNav({ current }: { current: AdminNavCurrent }) {
+  // The legacy `"mixtapes"` current highlights the Plans link (same section).
+  const activeKey = current === "mixtapes" ? "plans" : current;
+
   return (
     <nav aria-label="Admin" className="flex shrink-0 items-center gap-1">
       {LINKS.map((link) => (
@@ -28,7 +34,7 @@ export function AdminNav({ current }: { current: AdminNavCurrent }) {
           nativeButton={false}
           render={<a href={link.to} />}
           size="sm"
-          variant={current === link.key ? "secondary" : "ghost"}
+          variant={activeKey === link.key ? "secondary" : "ghost"}
         >
           {link.label}
         </Button>
