@@ -89,6 +89,7 @@ describe("resolveBundlePaths", () => {
     expect(paths.propsOutPath).toBe(path.join("/out", "004.6.0K", "props.json"));
     expect(paths.intentOutPath).toBe(path.join("/out", "004.6.0K", "intent.json"));
     expect(paths.renderOutPath).toBe(path.join("/out", "004.6.0K", "render.json"));
+    expect(paths.sceneOutPath).toBe(path.join("/out", "004.6.0K", "scene.json"));
   });
 });
 

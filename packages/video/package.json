@@ -11,6 +11,8 @@
     "judge:metrics": "bun src/pipeline/analyze-motion.ts",
     "judge:diversity": "bun src/pipeline/judge-diversity.ts",
     "validate:intent": "bun src/pipeline/validate-intent.ts",
+    "validate:scene": "bun src/pipeline/validate-scene.ts",
+    "test:scene-roundtrip": "bun src/pipeline/scene-roundtrip.ts",
     "calibrate": "bun src/pipeline/calibrate.ts",
     "lint:composition": "bun src/pipeline/lint-composition.ts",
     "ship": "bun src/pipeline/ship.ts",
