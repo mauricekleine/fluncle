@@ -1,20 +1,47 @@
-import { MapPinAreaIcon, PlusIcon, TrashIcon, XIcon } from "@phosphor-icons/react";
+import {
+  CircleNotchIcon,
+  LinkSimpleIcon,
+  MapPinAreaIcon,
+  PlusIcon,
+  TrashIcon,
+  XIcon,
+} from "@phosphor-icons/react";
 import { type RecordingTracklistItem } from "@fluncle/contracts/orpc";
-import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Command,
+  CommandEmpty,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { formatClock } from "@/components/video";
+import { spotifyAlbumImageAtSize } from "@/lib/media";
 import { type NewCue, parseArtists, recordingCueProgress } from "@/lib/recording-cues";
 
-// The recording cue-authoring rail (RFC recording-primitive, Design B — Wave 3). Unlike
-// the mixtape `StudioCueRail` (which only MARKS a pre-existing catalogue tracklist), a
-// RECORDING starts EMPTY: the operator AUTHORS each cue here — type a track (artist(s) +
-// title), mark it at the playhead, edit or remove it. It reuses the mixtape rail's row
-// shape (numbered rows, a Mark-here button, a seekable cue time, a clear ✕) but the
-// authoring (add / free-text edit / remove) is net-new. Every mutation goes through the
-// pure `@/lib/recording-cues` helpers in the parent, which persists the whole array via
-// `update_recording`. This tracklist drives the clip cut's changing on-screen Track-ID.
+// The recording cue-authoring rail (RFC plan→recording→mixtape §8, surface 3). A TAKE's
+// cues carry the tracks the operator played, each ideally LINKED to a real Fluncle finding
+// (`finding_id`, the honest link to canon) so a promoted mixtape + every clip caption
+// resolve to a coordinate — not fuzzy text. So the primary add path is a FINDING-PICKER
+// (search canon, attach the finding); free-text stays the escape hatch for a non-finding
+// track. The operator's job is then to MARK each cue at its mix-in (the `C`/`X`/↑/↓ loop,
+// unchanged). This drives the clip cut's changing on-screen Log ID (`resolveClipTracks`).
+
+// What the finding-picker search returns (a subset of the admin track row). Kept local so
+// the rail stays a thin view over `/api/admin/tracks`.
+type CueFinding = {
+  albumImageUrl?: string;
+  artists: string[];
+  logId?: string;
+  title: string;
+  trackId: string;
+};
 
 export function RecordingCueRail({
   onAdd,
@@ -28,7 +55,7 @@ export function RecordingCueRail({
   selectedId,
   tracklist,
 }: {
-  /** Append a new cue (artist(s) + title), then mark it at the playhead. */
+  /** Append a new cue (a finding link or free text), then mark it at the playhead. */
   onAdd: (cue: NewCue) => void;
   /** Clear one cue's startMs (back to unmarked), keyed by id. */
   onClear: (id: string) => void;
@@ -42,7 +69,7 @@ export function RecordingCueRail({
   onSeek: (ms: number) => void;
   /** Select a cue (drives the keyboard mark/clear target). */
   onSelect: (id: string) => void;
-  /** Whether a tracklist write is in flight (the whole array persists at once). */
+  /** Whether a cue write is in flight (the whole array persists at once). */
   saving: boolean;
   selectedId: string | null;
   tracklist: RecordingTracklistItem[];
@@ -57,7 +84,7 @@ export function RecordingCueRail({
           Cue the set
         </Label>
         <span className="studio-numeral text-xs text-muted-foreground">
-          {progress.marked} / {progress.total} marked
+          {progress.marked} of {progress.total} tracks marked
           {saving ? " · saving…" : ""}
         </span>
       </div>
@@ -84,22 +111,121 @@ export function RecordingCueRail({
         </ol>
       ) : (
         <p className="mt-2 text-sm text-muted-foreground">
-          No cues yet. Add a track above, then Mark it at the playhead — the on-screen Track-ID on
-          each clip changes as the set plays through your cues.
+          No tracks cued yet. Add the findings you played, then mark each one at its mix-in. The
+          on-screen Log ID follows your cues as the set plays through.
         </p>
       )}
 
       <p className="mt-2 text-xs text-muted-foreground">
-        Type a track, scrub to its mix-in, then Mark it (or select a row and press{" "}
+        Add a finding, scrub to its mix-in, then Mark it (or select a row and press{" "}
         <kbd className="studio-kbd">C</kbd>). Edits save automatically.
       </p>
     </div>
   );
 }
 
-// The add-a-track form: an artist(s) field + a title field. Enter in either (or the Add
-// button) appends the cue and clears the form. A blank title is a no-op.
+// The add-a-cue form: a FINDING-PICKER (search canon, attach a real finding) as the primary
+// path, with a free-text row below as the escape hatch for a non-finding track. A finding
+// carries its `trackId` as the cue's honest `finding_id`; a free-text cue omits it.
 function AddCueForm({ onAdd }: { onAdd: (cue: NewCue) => void }) {
+  return (
+    <div className="mt-2 space-y-2">
+      <FindingPicker
+        onPick={(finding) =>
+          onAdd({
+            artists: finding.artists,
+            findingId: finding.trackId,
+            title: finding.title,
+          })
+        }
+      />
+      <FreeTextCueForm onAdd={onAdd} />
+    </div>
+  );
+}
+
+// Search a Fluncle finding by Log ID / title / artist and attach it as a cue (its `trackId`
+// becomes the cue's honest `finding_id`). Mirrors the plan editor's finding search so the
+// operator picks from the same canon.
+function FindingPicker({ onPick }: { onPick: (finding: CueFinding) => void }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const debounced = useDebounced(query, 250);
+  const trimmed = debounced.trim();
+
+  const { data, isFetching } = useQuery({
+    enabled: trimmed.length > 0,
+    placeholderData: (prev) => prev,
+    queryFn: () => searchCueFindings(trimmed),
+    queryKey: ["admin", "cue-finding-search", trimmed],
+    staleTime: 30_000,
+  });
+
+  const results = data ?? [];
+
+  return (
+    <Popover onOpenChange={setOpen} open={open}>
+      <PopoverTrigger
+        render={
+          <Button className="w-full justify-start" variant="outline">
+            <LinkSimpleIcon aria-hidden="true" weight="bold" />
+            Add a finding…
+          </Button>
+        }
+      />
+      <PopoverContent align="start" className="w-(--anchor-width) p-0">
+        <Command shouldFilter={false}>
+          <CommandInput
+            onValueChange={setQuery}
+            placeholder="Search by Log ID, title, or artist"
+            value={query}
+          />
+          <CommandList>
+            {trimmed.length === 0 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">
+                Type to search your findings.
+              </p>
+            ) : isFetching && results.length === 0 ? (
+              <p className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
+                <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+                Searching…
+              </p>
+            ) : (
+              <>
+                <CommandEmpty>No findings match.</CommandEmpty>
+                {results.map((finding) => (
+                  <CommandItem
+                    key={finding.trackId}
+                    onSelect={() => {
+                      onPick(finding);
+                      setQuery("");
+                      setOpen(false);
+                    }}
+                    value={finding.trackId}
+                  >
+                    <CueThumb src={finding.albumImageUrl} />
+                    <span className="min-w-0 flex-1 truncate">
+                      {finding.artists.join(", ")} — {finding.title}
+                    </span>
+                    <span className="studio-numeral shrink-0 text-xs text-muted-foreground tabular-nums">
+                      {finding.logId ?? finding.trackId}
+                    </span>
+                  </CommandItem>
+                ))}
+              </>
+            )}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+// The escape hatch: a track that isn't a Fluncle finding (an unreleased dubplate, a bootleg)
+// still needs a cue so the clip overlay + tracklist carry it — typed as free text, no
+// `finding_id`. Enter in either field (or the Add button) appends and clears; a blank title
+// is a no-op.
+function FreeTextCueForm({ onAdd }: { onAdd: (cue: NewCue) => void }) {
   const [artists, setArtists] = useState("");
   const [title, setTitle] = useState("");
 
@@ -114,47 +240,53 @@ function AddCueForm({ onAdd }: { onAdd: (cue: NewCue) => void }) {
   };
 
   return (
-    <form
-      className="mt-2 flex flex-wrap items-end gap-2"
-      onSubmit={(event) => {
-        event.preventDefault();
-        submit();
-      }}
-    >
-      <div className="min-w-0 flex-1 space-y-1">
-        <Label className="text-xs text-muted-foreground" htmlFor="recording-cue-artists">
-          Artist(s)
-        </Label>
-        <Input
-          autoComplete="off"
-          id="recording-cue-artists"
-          onChange={(event) => setArtists(event.target.value)}
-          placeholder="Alix Perez, Monty"
-          value={artists}
-        />
-      </div>
-      <div className="min-w-0 flex-1 space-y-1">
-        <Label className="text-xs text-muted-foreground" htmlFor="recording-cue-title">
-          Title
-        </Label>
-        <Input
-          autoComplete="off"
-          id="recording-cue-title"
-          onChange={(event) => setTitle(event.target.value)}
-          placeholder="Forsaken"
-          value={title}
-        />
-      </div>
-      <Button disabled={!title.trim()} size="sm" type="submit" variant="outline">
-        <PlusIcon aria-hidden="true" weight="bold" />
-        Add track
-      </Button>
-    </form>
+    <details className="rounded-lg border border-border px-3 py-2">
+      <summary className="cursor-pointer text-xs text-muted-foreground">
+        Not a finding? Type it in.
+      </summary>
+      <form
+        className="mt-2 flex flex-wrap items-end gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          submit();
+        }}
+      >
+        <div className="min-w-0 flex-1 space-y-1">
+          <Label className="text-xs text-muted-foreground" htmlFor="recording-cue-artists">
+            Artist(s)
+          </Label>
+          <Input
+            autoComplete="off"
+            id="recording-cue-artists"
+            onChange={(event) => setArtists(event.target.value)}
+            placeholder="Alix Perez, Monty"
+            value={artists}
+          />
+        </div>
+        <div className="min-w-0 flex-1 space-y-1">
+          <Label className="text-xs text-muted-foreground" htmlFor="recording-cue-title">
+            Title
+          </Label>
+          <Input
+            autoComplete="off"
+            id="recording-cue-title"
+            onChange={(event) => setTitle(event.target.value)}
+            placeholder="Forsaken"
+            value={title}
+          />
+        </div>
+        <Button disabled={!title.trim()} size="sm" type="submit" variant="outline">
+          <PlusIcon aria-hidden="true" weight="bold" />
+          Add track
+        </Button>
+      </form>
+    </details>
   );
 }
 
-// One authored cue: a numbered, selectable row with inline free-text artist + title
-// fields (save on blur), a seekable cue time, and Mark / clear / remove controls.
+// One authored cue: a numbered, selectable row with inline free-text artist + title fields
+// (save on blur), a "linked" badge when the cue carries a `finding_id`, a seekable cue time,
+// and Mark / clear / remove controls.
 function CueRow({
   cue,
   index,
@@ -179,6 +311,7 @@ function CueRow({
   selected: boolean;
 }) {
   const cued = cue.startMs != null;
+  const linked = Boolean(cue.findingId);
   const artistsText = cue.artists.join(", ");
 
   return (
@@ -201,6 +334,7 @@ function CueRow({
         autoComplete="off"
         className="h-8 min-w-0 flex-1"
         defaultValue={artistsText}
+        key={`artists-${artistsText}`}
         onBlur={(event) => {
           const next = parseArtists(event.target.value);
 
@@ -216,6 +350,7 @@ function CueRow({
         autoComplete="off"
         className="h-8 min-w-0 flex-1"
         defaultValue={cue.title}
+        key={`title-${cue.title}`}
         onBlur={(event) => {
           const next = event.target.value.trim();
 
@@ -226,6 +361,13 @@ function CueRow({
         onFocus={() => onSelect(cue.id)}
         placeholder="Title"
       />
+
+      {linked ? (
+        <Badge className="shrink-0 gap-1" title="Linked to a Fluncle finding" variant="secondary">
+          <LinkSimpleIcon aria-hidden="true" weight="bold" />
+          Finding
+        </Badge>
+      ) : null}
 
       {cued ? (
         <button
@@ -271,4 +413,42 @@ function CueRow({
       </Button>
     </li>
   );
+}
+
+function CueThumb({ src }: { src?: string }) {
+  if (src) {
+    return (
+      <img
+        alt=""
+        className="size-8 shrink-0 rounded-sm border border-border object-cover"
+        src={spotifyAlbumImageAtSize(src, "small")}
+      />
+    );
+  }
+
+  return <div className="track-artwork-fallback size-8 shrink-0 rounded-sm border border-border" />;
+}
+
+function useDebounced<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebounced(value), delayMs);
+
+    return () => window.clearTimeout(timer);
+  }, [value, delayMs]);
+
+  return debounced;
+}
+
+async function searchCueFindings(q: string): Promise<CueFinding[]> {
+  const response = await fetch(`/api/admin/tracks?q=${encodeURIComponent(q)}&limit=20`);
+
+  if (!response.ok) {
+    return [];
+  }
+
+  const body = (await response.json()) as { tracks?: CueFinding[] };
+
+  return body.tracks ?? [];
 }

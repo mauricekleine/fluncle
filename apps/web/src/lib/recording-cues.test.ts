@@ -51,6 +51,27 @@ describe("addCue", () => {
   it("is a no-op for a blank title", () => {
     expect(addCue(base, { artists: ["Nobody"], title: "   " })).toBe(base);
   });
+
+  it("carries a findingId when the cue links a real finding", () => {
+    const next = addCue(
+      base,
+      { artists: ["Skeptical"], findingId: "trk-1", title: "Blue Eyes" },
+      () => "c",
+    );
+
+    expect(next[2]).toEqual({
+      artists: ["Skeptical"],
+      findingId: "trk-1",
+      id: "c",
+      title: "Blue Eyes",
+    });
+  });
+
+  it("omits findingId for a free-text cue (no empty-string key)", () => {
+    const next = addCue([], { artists: ["Free"], title: "Text Cue" }, () => "c");
+
+    expect("findingId" in (next[0] ?? {})).toBe(false);
+  });
 });
 
 describe("markCue / clearCue", () => {
@@ -82,6 +103,34 @@ describe("editCue", () => {
 
   it("ignores a blank title (a cue must keep one)", () => {
     expect(editCue(base, "b", { title: "  " }).find((c) => c.id === "b")?.title).toBe("Zeal");
+  });
+
+  it("keeps an existing finding link when only the text is edited", () => {
+    const linked: RecordingTracklistItem[] = [
+      { artists: ["Alix Perez"], findingId: "trk-1", id: "a", title: "Forsaken" },
+    ];
+
+    expect(editCue(linked, "a", { title: "Forsaken (VIP)" }).find((c) => c.id === "a")).toEqual({
+      artists: ["Alix Perez"],
+      findingId: "trk-1",
+      id: "a",
+      title: "Forsaken (VIP)",
+    });
+  });
+
+  it("sets a finding link when the patch carries a findingId", () => {
+    expect(editCue(base, "b", { findingId: "trk-2" }).find((c) => c.id === "b")?.findingId).toBe(
+      "trk-2",
+    );
+  });
+
+  it("clears the finding link when the patch carries an empty findingId (back to free-text)", () => {
+    const linked: RecordingTracklistItem[] = [
+      { artists: ["Monty"], findingId: "trk-2", id: "b", title: "Zeal" },
+    ];
+    const next = editCue(linked, "b", { findingId: "" }).find((c) => c.id === "b");
+
+    expect("findingId" in (next ?? {})).toBe(false);
   });
 });
 

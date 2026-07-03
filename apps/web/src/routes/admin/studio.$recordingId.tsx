@@ -1,11 +1,13 @@
 import {
   ArrowCounterClockwiseIcon,
   ArrowsClockwiseIcon,
+  CassetteTapeIcon,
   CheckCircleIcon,
   CircleNotchIcon,
   GearSixIcon,
   ScissorsIcon,
   TrashIcon,
+  UploadSimpleIcon,
   WarningIcon,
 } from "@phosphor-icons/react";
 import { type MixtapeSocialPostItem } from "@fluncle/contracts";
@@ -15,13 +17,14 @@ import {
   type RecordingTracklistItem,
 } from "@fluncle/contracts/orpc";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import {
   type Dispatch,
   type SetStateAction,
   useCallback,
   useEffect,
+  useId,
   useRef,
   useState,
 } from "react";
@@ -42,10 +45,14 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { formatClock, useVideo, Video } from "@/components/video";
 import { recordingSetVideoUrl } from "@/lib/media";
+import { type MixtapeDTO } from "@/lib/mixtapes";
 import {
   addCue,
   clearCue,
@@ -56,6 +63,7 @@ import {
   removeCue,
 } from "@/lib/recording-cues";
 import { isAdminRequest } from "@/lib/server/admin-auth";
+import { getMixtapeById } from "@/lib/server/mixtapes";
 import { getRecording } from "@/lib/server/recordings";
 import {
   type TimelineRegion,
@@ -112,6 +120,23 @@ const fetchStudioRecording = createServerFn({ method: "GET" })
     }
   });
 
+// Resolve the promoted mixtape in-process for the management block. `includeDrafts` so a
+// mixtape still `distributing` (post-mint, pre-public) resolves; a bad id returns null
+// (the block hides) rather than 500-ing.
+const fetchStudioMixtape = createServerFn({ method: "GET" })
+  .validator((data: { mixtapeId: string }) => data)
+  .handler(async ({ data: { mixtapeId } }): Promise<MixtapeDTO | null> => {
+    if (!(await isAdminRequest())) {
+      throw redirect({ to: "/admin/login" });
+    }
+
+    try {
+      return await getMixtapeById(mixtapeId, { includeDrafts: true });
+    } catch {
+      return null;
+    }
+  });
+
 export const Route = createFileRoute("/admin/studio/$recordingId")({
   beforeLoad: () => ensureAdmin(),
   component: StudioPage,
@@ -127,9 +152,19 @@ function StudioPage() {
 
   return (
     <AdminShell
-      current="mixtapes"
+      current="plans"
       fill
       wide
+      // The Publish action lives in the HEADER — its own section, structurally apart from
+      // the clip toolbar's gold "Create clip" deep in the body, so the One Sun never has
+      // two gold actions competing in one region (RFC §8, DESIGN "The One Sun Rule"). It
+      // shows only on an UN-PROMOTED take (a recording that owns a set video but hasn't
+      // minted a coordinate); a plan (no video) and an already-promoted take show nothing.
+      headerActions={
+        recording.hasVideo && !recording.mixtapeId ? (
+          <PublishAction recordingId={recording.id} />
+        ) : undefined
+      }
       subtitle={
         <>
           {recording.logId ? (
@@ -164,7 +199,7 @@ function StudioEditor({
   if (!initialRecording.r2Key) {
     return (
       <p className="text-sm text-muted-foreground">
-        No set video yet — upload a take before clipping.
+        No set video yet. Upload a take before clipping.
       </p>
     );
   }
@@ -358,10 +393,12 @@ function StudioEditorBody({
     },
   });
 
-  // ── Persist the WHOLE cue tracklist via `update_recording` (the array is the unit of
-  // truth). Each edit computes the next array locally (the pure `recording-cues` helpers),
-  // updates the cache optimistically so the rail + lane move before the round trip, and a
-  // failure rolls back to the snapshot.
+  // ── Persist the WHOLE cue tracklist via `replace_recording_cues` (the array is the unit
+  // of truth). This is the FINDING-LINKED write path: each cue carries its `findingId`
+  // (the honest link to canon) verbatim — no server-side text re-resolution — so a
+  // promoted mixtape + every clip caption resolve to a real coordinate. Each edit computes
+  // the next array locally (the pure `recording-cues` helpers), updates the cache
+  // optimistically so the rail + lane move before the round trip, and a failure rolls back.
   const saveTracklist = useMutation<
     void,
     Error,
@@ -369,11 +406,22 @@ function StudioEditorBody({
     { previous: RecordingDTO | undefined }
   >({
     mutationFn: async (next) => {
-      const response = await fetch(`/api/admin/recordings/${encodeURIComponent(recordingId)}`, {
-        body: JSON.stringify({ tracklistJson: next }),
-        headers: { "Content-Type": "application/json" },
-        method: "PATCH",
-      });
+      const response = await fetch(
+        `/api/admin/recordings/${encodeURIComponent(recordingId)}/cues`,
+        {
+          body: JSON.stringify({
+            cues: next.map((cue, index) => ({
+              artistsText: cue.artists.join(", "),
+              findingId: cue.findingId,
+              position: index + 1,
+              startMs: cue.startMs,
+              titleText: cue.title,
+            })),
+          }),
+          headers: { "Content-Type": "application/json" },
+          method: "PUT",
+        },
+      );
 
       if (!response.ok) {
         throw new Error(await readError(response));
@@ -404,6 +452,7 @@ function StudioEditorBody({
   const addCueTrack = useCallback(
     (cue: NewCue) => {
       const id = crypto.randomUUID();
+      // `addCue` carries the cue's `findingId` (a picked finding) or omits it (free text).
       saveTracklist.mutate(addCue(tracklist, cue, () => id));
       setSelectedCueId(id);
       setLiveMessage(`Added ${cue.artists.join(", ")} — ${cue.title}`);
@@ -606,6 +655,13 @@ function StudioEditorBody({
           <ResyncFromCues cuedCount={cueProgress.marked} mixtapeId={recording.mixtapeId} />
         ) : null}
 
+        {/* The promoted-mixtape management block — the publish-time fields (the dream note,
+            SoundCloud, distribution, the set-video toggle) resurface here once the take is a
+            published mixtape (RFC §8, surface 5). Un-promoted → nothing. */}
+        {recording.mixtapeId ? (
+          <PromotedMixtapeBlock logId={recording.logId} mixtapeId={recording.mixtapeId} />
+        ) : null}
+
         {/* The recording's clips so far. */}
         <div className="mt-6">
           <Label>Clips ({clips?.length ?? 0})</Label>
@@ -685,7 +741,7 @@ function StudioEditorBody({
               suggestions={suggestionRegions}
             />
             <p className="mt-1 text-xs text-muted-foreground">
-              A recording has no energy analysis — mark in/out by hand.
+              A recording has no energy analysis. Mark in/out by hand.
             </p>
           </div>
 
@@ -938,6 +994,397 @@ function ResyncFromCues({ cuedCount, mixtapeId }: { cuedCount: number; mixtapeId
   );
 }
 
+// ── Publish as mixtape ─────────────────────────────────────────────────────────
+// The publish action on an UN-PROMOTED take: mint a scarce Log ID coordinate and turn the
+// take into a published mixtape (a checkpoint of Fluncle dreaming). `promote_recording` is
+// idempotent (mint-or-reuse); on success we invalidate the route so the header + the
+// management block reflect the freshly-minted `logId`/`mixtapeId`.
+//
+// One Sun: the Studio's everyday gold is "Create clip" (the surface's whole job is clipping;
+// publishing is a rarer, terminal action). So this HEADER trigger stays a quiet OUTLINE —
+// the gold reappears only at the moment of commitment, on the confirm dialog's action — so
+// no two golds ever compete in one viewport (RFC §8, DESIGN "The One Sun Rule").
+function PublishAction({ recordingId }: { recordingId: string }) {
+  const router = useRouter();
+  const [error, setError] = useAutoNotice();
+
+  const promote = useMutation({
+    mutationFn: async () => {
+      const response = await fetch(
+        `/api/admin/recordings/${encodeURIComponent(recordingId)}/promote`,
+        { method: "POST" },
+      );
+
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+    },
+    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
+    onSuccess: async () => {
+      await router.invalidate();
+    },
+  });
+
+  return (
+    <>
+      <AlertDialog>
+        <AlertDialogTrigger
+          render={
+            <Button disabled={promote.isPending} size="sm" variant="outline">
+              {promote.isPending ? (
+                <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+              ) : (
+                <UploadSimpleIcon aria-hidden="true" weight="bold" />
+              )}
+              Publish as mixtape
+            </Button>
+          }
+        />
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Publish this take as a mixtape?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This mints a scarce Log ID coordinate and turns the take into a published mixtape: a
+              checkpoint of Fluncle dreaming. The coordinate is permanent. You can still edit the
+              note, links, and distribution after.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={promote.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction disabled={promote.isPending} onClick={() => promote.mutate()}>
+              Publish
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      {error ? (
+        <span className="sr-only" role="alert">
+          {error}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+// ── The promoted-mixtape management block ──────────────────────────────────────
+// Once a take is promoted, the publish-time fields the plan editor dropped (B1) resurface
+// here (RFC §8, surface 5): the dream note, the SoundCloud link, the per-platform
+// distribution strip, and the set-video toggle. Reuses the same server-side ops the old
+// mixtape editor called (`update_mixtape` PATCH + the `/social` read). Fetches the mixtape
+// DTO in-process; a null (a race, a missing row) hides the block.
+function PromotedMixtapeBlock({ logId, mixtapeId }: { logId?: string; mixtapeId: string }) {
+  const queryClient = useQueryClient();
+
+  const { data: mixtape } = useQuery<MixtapeDTO | null>({
+    queryFn: () => fetchStudioMixtape({ data: { mixtapeId } }),
+    queryKey: ["admin", "studio-mixtape", mixtapeId],
+    refetchOnWindowFocus: true,
+  });
+
+  const refresh = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: ["admin", "studio-mixtape", mixtapeId] }),
+    [queryClient, mixtapeId],
+  );
+
+  if (!mixtape) {
+    return null;
+  }
+
+  return (
+    <div className="mt-6 space-y-4 rounded-lg border border-border p-3">
+      <div className="flex items-center gap-1.5">
+        <CassetteTapeIcon aria-hidden="true" weight="fill" />
+        <Label>Published mixtape</Label>
+        {logId ? (
+          <span className="studio-numeral text-xs text-muted-foreground tabular-nums">
+            fluncle://{logId}
+          </span>
+        ) : null}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        It's a checkpoint now. The note, links, and distribution live here.
+      </p>
+
+      <NoteAndLinks mixtape={mixtape} refresh={refresh} />
+
+      <DistributionStrip mixtapeId={mixtapeId} status={mixtape.status ?? "distributing"} />
+
+      {logId ? <SetVideoToggle mixtape={mixtape} refresh={refresh} /> : null}
+
+      {logId ? (
+        <a
+          className="inline-flex text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:underline focus-visible:outline-2 focus-visible:outline-ring"
+          href={`/log/${encodeURIComponent(logId)}`}
+          rel="noreferrer"
+          target="_blank"
+        >
+          View the public log page ↗
+        </a>
+      ) : null}
+    </div>
+  );
+}
+
+// The dream note + the one manual link (SoundCloud). Both PATCH `update_mixtape` on save
+// (YouTube + Mixcloud are recorded by `distribute`, not editable here). Save-on-blur for
+// the note; the SoundCloud field validates as an optional http(s) URL.
+function NoteAndLinks({ mixtape, refresh }: { mixtape: MixtapeDTO; refresh: () => Promise<void> }) {
+  const noteId = useId();
+  const scId = useId();
+  const [note, setNote] = useState(mixtape.note ?? "");
+  const [soundcloudUrl, setSoundcloudUrl] = useState(mixtape.externalUrls.soundcloud ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useAutoNotice();
+  const id = mixtape.id;
+  const urlInvalid = !isOptionalHttpUrl(soundcloudUrl);
+
+  const save = async (body: { note?: string; soundcloudUrl?: string }) => {
+    if (!id) {
+      return;
+    }
+
+    setBusy(true);
+    setError(undefined);
+
+    try {
+      await saveMixtape(id, body);
+      await refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1.5">
+        <Label htmlFor={noteId}>Note</Label>
+        <Textarea
+          defaultValue={note}
+          disabled={busy}
+          id={noteId}
+          onBlur={(event) => {
+            const next = event.target.value;
+
+            if (next !== (mixtape.note ?? "")) {
+              setNote(next);
+              void save({ note: next });
+            }
+          }}
+        />
+        <p className="text-xs text-muted-foreground">
+          The dream note. It becomes the platform descriptions and the /log prose.
+        </p>
+      </div>
+
+      <div className="space-y-1.5">
+        <Label htmlFor={scId}>SoundCloud URL</Label>
+        <Input
+          aria-invalid={urlInvalid}
+          defaultValue={soundcloudUrl}
+          disabled={busy}
+          id={scId}
+          onBlur={(event) => {
+            const next = event.target.value.trim();
+
+            if (next !== (mixtape.externalUrls.soundcloud ?? "") && isOptionalHttpUrl(next)) {
+              setSoundcloudUrl(next);
+              void save({ soundcloudUrl: next });
+            }
+          }}
+          placeholder="https://soundcloud.com/fluncle/…"
+        />
+        <p className="text-xs text-muted-foreground">
+          {urlInvalid ? "Must be a full http(s) URL." : "Paste after a manual SoundCloud upload."}
+        </p>
+      </div>
+
+      {error ? (
+        <p className="text-sm text-destructive" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+// The per-platform distribution status: one row per platform (uploading / published /
+// failed), a link once published, and the unlisted→public flip for YouTube while the
+// mixtape is still `distributing`. Read from `/social` with focus-refetch ON.
+const PLATFORM_LABELS: Record<string, string> = {
+  mixcloud: "Mixcloud",
+  soundcloud: "SoundCloud",
+  youtube: "YouTube",
+};
+
+function DistributionStrip({ mixtapeId, status }: { mixtapeId: string; status: string }) {
+  const queryClient = useQueryClient();
+  const queryKey = ["admin", "mixtape-social", mixtapeId] as const;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useAutoNotice();
+  const [notice, setNotice] = useAutoNotice();
+
+  const { data: posts } = useQuery({
+    queryFn: () => fetchMixtapeSocial(mixtapeId),
+    queryKey,
+    refetchOnWindowFocus: true,
+  });
+
+  const youtube = posts?.find((post) => post.platform === "youtube");
+  const canMakePublic = status === "distributing" && youtube !== undefined;
+
+  const makePublic = async () => {
+    setBusy(true);
+    setError(undefined);
+
+    try {
+      const response = await fetch(
+        `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/youtube/publish`,
+        { method: "POST" },
+      );
+
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+
+      setNotice("YouTube video is public.");
+      await queryClient.invalidateQueries({ queryKey });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <Label>Distribution</Label>
+      {posts && posts.length > 0 ? (
+        <div className="divide-y divide-border">
+          {posts.map((post) => (
+            <div className="flex items-center gap-3 py-2" key={post.platform}>
+              <span className="w-20 shrink-0 text-sm">
+                {PLATFORM_LABELS[post.platform] ?? post.platform}
+              </span>
+              <DistributionStatusBadge status={post.status} />
+              {post.url ? (
+                <a
+                  className="min-w-0 flex-1 truncate text-xs text-muted-foreground underline-offset-2 hover:underline focus-visible:underline focus-visible:outline-2 focus-visible:outline-ring"
+                  href={post.url}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  {post.url}
+                </a>
+              ) : (
+                <span className="min-w-0 flex-1" />
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          No platforms yet. Run <code className="font-mono">fluncle admin mixtapes distribute</code>{" "}
+          from the CLI.
+        </p>
+      )}
+
+      {canMakePublic ? (
+        <Button disabled={busy} onClick={() => void makePublic()} size="sm" variant="outline">
+          {busy ? (
+            <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+          ) : undefined}
+          {busy ? "Publishing…" : "Make YouTube public"}
+        </Button>
+      ) : null}
+
+      {error ? (
+        <p className="text-sm text-destructive" role="alert">
+          {error}
+        </p>
+      ) : null}
+      {notice ? (
+        <p aria-live="polite" className="text-sm text-muted-foreground">
+          {notice}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function DistributionStatusBadge({ status }: { status: string }) {
+  const variant =
+    status === "published" ? "default" : status === "failed" ? "destructive" : "outline";
+
+  return (
+    <Badge className="shrink-0 capitalize" variant={variant}>
+      {status}
+    </Badge>
+  );
+}
+
+// The set-video gate: flip on AFTER uploading the full set video to R2 (`<log-id>/set.mp4`)
+// and the mixtape's /log page shows the branded scrubber player. A flag, not an upload —
+// writes `setVideoAt` through `update_mixtape`. Only shown once the coordinate is minted.
+function SetVideoToggle({
+  mixtape,
+  refresh,
+}: {
+  mixtape: MixtapeDTO;
+  refresh: () => Promise<void>;
+}) {
+  const switchId = useId();
+  const on = Boolean(mixtape.setVideoAt);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useAutoNotice();
+  const id = mixtape.id;
+
+  const toggle = async (next: boolean) => {
+    if (!id) {
+      return;
+    }
+
+    setBusy(true);
+    setError(undefined);
+
+    try {
+      await saveMixtape(id, { setVideoAt: next ? new Date().toISOString() : "" });
+      await refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor={switchId}>Set video</Label>
+      <div className="flex items-center gap-3">
+        <Switch
+          checked={on}
+          disabled={busy}
+          id={switchId}
+          onCheckedChange={(next) => void toggle(next)}
+        />
+        <span className="text-sm text-muted-foreground">
+          {on ? "The set player is live on the log page." : "Off. No set player yet."}
+        </span>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Flip on after uploading the set video to{" "}
+        <code className="font-mono">{mixtape.logId}/set.mp4</code> on R2.
+      </p>
+      {error ? (
+        <p className="text-sm text-destructive" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 // ── small shared bits ─────────────────────────────────────────────────────────
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -981,6 +1428,42 @@ async function fetchMixtapeSocial(mixtapeId: string): Promise<MixtapeSocialPostI
   const body = (await response.json()) as { posts?: MixtapeSocialPostItem[] };
 
   return body.posts ?? [];
+}
+
+// PATCH the promoted mixtape (`update_mixtape`): the dream note, the SoundCloud link, or the
+// set-video flag. Each is its own field on the operator-tier op — a published mixtape stays
+// editable there without touching its immutable minted coordinate.
+async function saveMixtape(
+  id: string,
+  body: { note?: string; setVideoAt?: string; soundcloudUrl?: string },
+) {
+  const response = await fetch(`/api/admin/mixtapes/${encodeURIComponent(id)}`, {
+    body: JSON.stringify(body),
+    headers: { "Content-Type": "application/json" },
+    method: "PATCH",
+  });
+
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+}
+
+// An optional http(s) URL: empty is fine (clears the link), otherwise it must parse as
+// http/https (the SoundCloud field).
+function isOptionalHttpUrl(value: string): boolean {
+  const trimmed = value.trim();
+
+  if (trimmed.length === 0) {
+    return true;
+  }
+
+  try {
+    const url = new URL(trimmed);
+
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 async function readError(response: Response): Promise<string> {
