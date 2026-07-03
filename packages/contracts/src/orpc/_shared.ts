@@ -304,6 +304,12 @@ export type ClipDTO = z.infer<typeof ClipDTOSchema>;
 export const RecordingTracklistItemSchema = z
   .object({
     artists: z.array(z.string()),
+    // The honest link to canon (the cue's `recording_cues.finding_id`), when the operator
+    // picked a real Fluncle finding rather than typing a non-finding track. Absent for a
+    // free-text cue. Additive + OPTIONAL: legacy readers and the Rekordbox derivation
+    // script (which reads cues server-side, not via this DTO) are unaffected. The Studio
+    // cue rail reads it to render the finding-linked vs snapshot distinction.
+    findingId: z.string().optional(),
     id: z.string(),
     startMs: z.number().optional(),
     title: z.string(),

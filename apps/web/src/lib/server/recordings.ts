@@ -153,6 +153,10 @@ function parseTracklist(json: string | null): RecordingTracklistItem[] {
 function cueRowToTracklistItem(row: CueRow): RecordingTracklistItem {
   return {
     artists: row.artists_text ? row.artists_text.split(", ") : [],
+    // Carry the honest link to canon into the DTO so the Studio cue rail can render a
+    // finding-linked cue as such (the plan editor + Rekordbox script read cues server-side
+    // via `getRecordingCues`; the DTO now carries `finding_id` too for the Studio reader).
+    findingId: row.finding_id ?? undefined,
     id: row.id,
     startMs: row.start_ms ?? undefined,
     title: row.title_text ?? "",
@@ -554,7 +558,14 @@ export async function replaceRecordingCues(
                 (id, recording_id, finding_id, artists_text, title_text, position, start_ms, created_at, updated_at)
               values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       })),
-      { args: [now, id], sql: `update recordings set updated_at = ? where id = ?` },
+      // Clear the legacy `tracklist_json` so `recording_cues` becomes the single source of
+      // truth for a recording edited via this cues-only path (the Studio cue rail + the
+      // plan editor + the Rekordbox script all write here). Otherwise the Deploy-1
+      // dual-read (`rowToRecording`) would keep preferring the now-stale JSON snapshot.
+      {
+        args: [now, id],
+        sql: `update recordings set tracklist_json = NULL, updated_at = ? where id = ?`,
+      },
     ],
     "write",
   );

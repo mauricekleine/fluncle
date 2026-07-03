@@ -11,9 +11,15 @@
 
 import { type RecordingTracklistItem } from "@fluncle/contracts/orpc";
 
-/** A fresh cue's authored text — what the add-a-track form collects. */
+/**
+ * A fresh cue's identity — what the add-a-cue form collects. Either a real Fluncle
+ * finding (`findingId` set, the honest link to canon) OR a free-text non-finding track
+ * (`findingId` absent). Both carry the `artists`/`title` snapshot the clip overlay
+ * renders and the promoted mixtape freezes.
+ */
 export type NewCue = {
   artists: string[];
+  findingId?: string;
   title: string;
 };
 
@@ -51,7 +57,15 @@ export function addCue(
     return tracklist;
   }
 
-  return [...tracklist, { artists: cue.artists, id: makeId(), title }];
+  const next: RecordingTracklistItem = { artists: cue.artists, id: makeId(), title };
+
+  // Carry the honest link to canon when the operator picked a real finding; a free-text
+  // cue omits it (the field stays absent, never an empty string).
+  if (cue.findingId) {
+    next.findingId = cue.findingId;
+  }
+
+  return [...tracklist, next];
 }
 
 /** Set one cue's `startMs` (the playhead), keyed by `id`. Returns a new array. */
@@ -83,8 +97,10 @@ export function clearCue(
 
 /**
  * Edit a cue's authored text (artist(s) and/or title), keyed by `id`. A title given as
- * blank is ignored (a cue must keep a title); the `startMs` is untouched. Returns a new
- * array.
+ * blank is ignored (a cue must keep a title); the `startMs` is untouched. A `findingId`
+ * in the patch sets the link to canon (or clears it — an empty string switches the cue
+ * back to free-text); an absent `findingId` leaves the existing link untouched, so a text
+ * edit on a finding-linked cue keeps its link. Returns a new array.
  */
 export function editCue(
   tracklist: RecordingTracklistItem[],
@@ -97,12 +113,21 @@ export function editCue(
     }
 
     const title = patch.title !== undefined ? patch.title.trim() : cue.title;
-
-    return {
+    const next: RecordingTracklistItem = {
       ...cue,
       artists: patch.artists ?? cue.artists,
       title: title || cue.title,
     };
+
+    if (patch.findingId !== undefined) {
+      if (patch.findingId) {
+        next.findingId = patch.findingId;
+      } else {
+        delete next.findingId;
+      }
+    }
+
+    return next;
   });
 }
 
