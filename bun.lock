@@ -181,6 +181,15 @@
         "typescript": "catalog:",
       },
     },
+    "packages/live": {
+      "name": "@fluncle/live",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "@typescript/native-preview": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
     "packages/media": {
       "name": "@fluncle/media",
       "version": "0.1.0",
@@ -668,6 +677,8 @@
     "@fluncle/contracts": ["@fluncle/contracts@workspace:packages/contracts"],
 
     "@fluncle/extension": ["@fluncle/extension@workspace:apps/extension"],
+
+    "@fluncle/live": ["@fluncle/live@workspace:packages/live"],
 
     "@fluncle/media": ["@fluncle/media@workspace:packages/media"],
 
