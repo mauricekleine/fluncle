@@ -2,6 +2,8 @@
 
 Your pre-flight checklist before hitting the decks: how to wire the audio/video rig for recording a Fluncle mixtape — DJ in Rekordbox on a Pioneer DDJ-FLX4, stream to Twitch and record in OBS, and come out with a clean stereo master for Mixcloud and a video for YouTube. It's hardware/app configuration, not code, but it's load-bearing for every mixtape, so it lives here. (Once you've got the recording, the `fluncle-mixtapes` skill takes it from there.)
 
+**Going live with visuals?** The two-machine rig — the M-Track analog splitter, the glass on the show display, and the `run show` orchestrator — is its sibling doc, [live-show-setup.md](./live-show-setup.md); it builds on this OBS 3-track model rather than restating it.
+
 ## The one rule that matters
 
 **PC MASTER OUT good. Aggregate Device bad.**

@@ -7,6 +7,7 @@
   "scripts": {
     "glass": "bun src/glass/serve.ts",
     "bridge": "bun src/bridge/serve.ts",
+    "show": "bun src/show.ts",
     "test": "bun test",
     "typecheck": "tsgo --noEmit"
   },
