@@ -48,7 +48,7 @@ For the Rekordbox tracklist step, also cache the database key once (see that ste
 
 ### B. Build the plan + tracklist
 
-Pre-publish authoring is a **PLAN** — a videoless `recordings` row, not a mixtape (draft mixtapes retired; a mixtape is only ever born via `promote_recording`). A plan is just the lined-up findings plus an optional live-session date. Duration is derived from the upload at distribute time, not entered. Build the plan in `/admin/plans` (or via `fluncle admin recordings create` with `kind: plan` through the API); the board's Mixtape cell also pencils a single finding straight into a plan ("Add to a plan").
+Pre-publish authoring is a **PLAN** — a videoless `recordings` row, not a mixtape (draft mixtapes retired; a mixtape is only ever born via `promote_recording`). A plan is just the lined-up findings plus an optional live-session date. Duration is derived from the upload at distribute time, not entered. Build the plan in `/admin/plans` (via `fluncle admin recordings create --plan`, or `kind: "plan"` on `create_recording`); the board's Mixtape cell also pencils a single finding straight into a plan ("Add to a plan").
 
 **The handle replaces the reserved coordinate.** The plan carries an auto-minted **Galaxy-vocab handle** (e.g. `liquid-nebula-roller`) — the fixed label you name your Beatport playlist, USB folders, and Rekordbox crate with up front. Unlike the old date-derived reserved Log ID, it never drifts; the real `XXX.F.ZZ` coordinate is minted only at promote. The dream note and recorded date live on the PUBLISHED mixtape (the post-promote edit), not on the plan.
 

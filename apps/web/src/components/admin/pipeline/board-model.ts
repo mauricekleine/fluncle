@@ -266,7 +266,7 @@ export function boardSteps(row: BoardRow): BoardStep[] {
     mixtape: {
       actionable: true,
       gated: false,
-      hint: onTape ? "On a mixtape — open the plan picker" : "Add to a plan",
+      hint: onTape ? "On a mixtape: open the plan picker" : "Add to a plan",
       state: onTape ? "done" : inPlan ? "partial" : "open",
       statusLabel: onTape ? "On a tape" : inPlan ? "In a plan" : "Add",
     },

@@ -204,6 +204,9 @@ export function AddToPlanDialog({
                 <ul className="space-y-1.5">
                   {plans.map((plan) => {
                     const pencilled = plan.cues.some((cue) => cue.findingId === track.trackId);
+                    // Count only finding-linked cues, not text-only snapshot rows — the
+                    // "banger" is the certified finding, and /admin/plans counts the same.
+                    const bangerCount = plan.cues.filter((cue) => cue.findingId).length;
                     return (
                       <li key={plan.id}>
                         <Button
@@ -226,7 +229,7 @@ export function AddToPlanDialog({
                           <span className="shrink-0 text-xs tabular-nums opacity-80">
                             {pencilled
                               ? "Pencilled in"
-                              : `${plan.cues.length} banger${plan.cues.length === 1 ? "" : "s"}`}
+                              : `${bangerCount} banger${bangerCount === 1 ? "" : "s"}`}
                           </span>
                         </Button>
                       </li>
@@ -234,7 +237,7 @@ export function AddToPlanDialog({
                   })}
                 </ul>
               ) : (
-                <p className="text-sm text-muted-foreground">No plans yet — start the first one.</p>
+                <p className="text-sm text-muted-foreground">No plans yet. Start the first one.</p>
               )}
 
               <Button
