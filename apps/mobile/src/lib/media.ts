@@ -11,9 +11,17 @@ function master(logId: string, file: "footage.mp4" | "footage.social.mp4") {
   return `${FOUND_BASE}/${logId}/${file}`;
 }
 
-/** A poster still (first frame) of the clean master, for first paint. */
-function videoPoster(logId: string) {
-  return `${MT}/mode=frame,time=0s,format=jpg/${master(logId, "footage.mp4")}`;
+/**
+ * A poster still (first frame) of the clean master, for first paint. The video
+ * VINTAGE rides the source as its `?v` token (mirrors web media.ts videoVersion):
+ * Media Transformations caches outputs in its own internal layer keyed on the
+ * full URL, which the zone purge cannot evict — a re-render bumps videoSquaredAt,
+ * so the URL changes and MT derives the fresh master.
+ */
+function videoPoster(logId: string, videoSquaredAt: string) {
+  const epoch = Date.parse(videoSquaredAt);
+  const version = Number.isNaN(epoch) ? 1 : epoch;
+  return `${MT}/mode=frame,time=0s,format=jpg/${master(logId, "footage.mp4")}?v=${version}`;
 }
 
 /** The raw clean master (onError fallback target — MT can cold-fail / >100MB). */
@@ -54,7 +62,7 @@ export function resolveCardMedia(f: TrackListItem): CardMedia {
     return {
       hasAudio: true,
       kind: "video",
-      posterUrl: videoPoster(f.logId),
+      posterUrl: videoPoster(f.logId, f.videoSquaredAt),
       videoUrl: videoMaster(f.logId),
     };
   }
