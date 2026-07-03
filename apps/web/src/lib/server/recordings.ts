@@ -8,13 +8,19 @@
 
 import { randomUUID } from "node:crypto";
 import { type RecordingDTO, type RecordingTracklistItem } from "@fluncle/contracts/orpc";
+import { galaxySlug } from "@fluncle/contracts/util/galaxy-slug";
 import { getDb, typedRow, typedRows } from "./db";
-import { createMixtape, publishMixtape, setMixtapeMembers, updateMixtape } from "./mixtapes";
+import { publishMixtape, setMixtapeMembers, updateMixtape } from "./mixtapes";
 import { copyObject, deleteObject } from "./r2-presign";
 import { ApiError } from "./spotify";
 import { buildTrackMatchIndex, resolveTrackByText } from "./track-match";
 
 const titleMaxLength = 200;
+// The salted re-roll ceiling for the plan handle: `galaxySlug(id, attempt)` is
+// re-rolled up to this many times against existing recording titles before falling
+// back to an id-tailed slug. Mirrors the backfill's `mintPlanHandle`. 64 collisions
+// across the ~3k-combination space is astronomically unlikely.
+const planHandleMaxAttempts = 64;
 
 // The recording's OWNED R2 key — derived from its id, so the key exists the moment the
 // row does (the upload presign targets exactly this). Standalone recordings live under
@@ -30,16 +36,20 @@ type RecordingRow = {
   created_at: string;
   duration_ms: number | null;
   id: string;
+  parent_id: string | null;
   r2_key: string | null;
   recorded_at: string | null;
   title: string;
   tracklist_json: string | null;
   updated_at: string;
+  version: number;
 };
 
 // One `recording_cues` row (the forward home of a recording's cues; RFC
-// plan→recording→mixtape §2). `finding_id` is the honest link to canon.
-type CueRow = {
+// plan→recording→mixtape §2). `finding_id` is the honest link to canon. EXPORTED so
+// `buildClipCaption` can read a recording's cues with their `finding_id` (the DTO's
+// tracklist item drops it).
+export type CueRow = {
   artists_text: string | null;
   finding_id: string | null;
   id: string;
@@ -57,10 +67,32 @@ type RecordingJoinRow = RecordingRow & {
 
 /** The operator-authored fields a recording create/update accepts. */
 export type RecordingInput = {
+  // "plan" ⇒ a videoless recording (create only): no title needed, the server mints a
+  // Galaxy-vocab handle and leaves `r2_key` NULL. Anything else (the default) is a TAKE
+  // that owns a set video. RFC plan→recording→mixtape §1.
+  kind?: unknown;
+  // The take→plan link (update only): attach a take to its plan. Setting it assigns the
+  // take's `version` atomically among the plan's takes. RFC §2/§3.
+  parentId?: unknown;
   recordedAt?: unknown;
   title?: unknown;
   // The whole cue tracklist, an array of `{ id, artists, title, startMs? }` (update only).
   tracklistJson?: unknown;
+};
+
+/** A single cue in a `replace_recording_cues` body (RFC §4). */
+export type RecordingCueInput = {
+  artistsText?: unknown;
+  findingId?: unknown;
+  position?: unknown;
+  startMs?: unknown;
+  titleText?: unknown;
+};
+
+/** A recording list filter (the plan/take split + a plan's takes). RFC §7. */
+export type RecordingListFilter = {
+  kind?: "plan" | "take";
+  parentId?: string;
 };
 
 // Parse the stored tracklist JSON into the DTO's `tracklist` array, defensively (a
@@ -133,14 +165,18 @@ function rowToRecording(row: RecordingJoinRow, cues: RecordingTracklistItem[]): 
   return {
     createdAt: row.created_at,
     durationMs: row.duration_ms ?? undefined,
+    // "has video" = the recording owns a set-video key. A PLAN has none.
+    hasVideo: row.r2_key !== null,
     id: row.id,
     logId: row.mixtape_log_id ?? undefined,
     mixtapeId: row.mixtape_id ?? undefined,
+    parentId: row.parent_id ?? undefined,
     r2Key: row.r2_key ?? undefined,
     recordedAt: row.recorded_at ?? undefined,
     title: row.title,
     tracklist: legacy.length > 0 ? legacy : cues,
     updatedAt: row.updated_at,
+    version: row.version,
   };
 }
 
@@ -179,11 +215,13 @@ const RECORDING_SELECT = `select
   r.created_at,
   r.duration_ms,
   r.id,
+  r.parent_id,
   r.r2_key,
   r.recorded_at,
   r.title,
   r.tracklist_json,
   r.updated_at,
+  r.version,
   m.id as mixtape_id,
   m.log_id as mixtape_log_id
   from recordings r
@@ -195,7 +233,7 @@ async function getRecordingRow(id: string): Promise<RecordingRow> {
   const db = await getDb();
   const result = await db.execute({
     args: [id],
-    sql: `select created_at, duration_ms, id, r2_key, recorded_at, title, tracklist_json, updated_at
+    sql: `select created_at, duration_ms, id, parent_id, r2_key, recorded_at, title, tracklist_json, updated_at, version
           from recordings where id = ? limit 1`,
   });
   const row = typedRow<RecordingRow>(result.rows);
@@ -205,6 +243,14 @@ async function getRecordingRow(id: string): Promise<RecordingRow> {
   }
 
   return row;
+}
+
+// Every cue for one recording, in position order — EXPORTED for `buildClipCaption`
+// (`./clip-caption`), which needs the raw cue rows (with `finding_id`) the tracklist
+// DTO doesn't carry. The DTO's `RecordingTracklistItem` drops `finding_id`, so the
+// caption builder reads the cues directly here.
+export async function getRecordingCues(recordingId: string): Promise<CueRow[]> {
+  return getCueRows(recordingId);
 }
 
 export async function getRecording(id: string): Promise<RecordingDTO> {
@@ -222,10 +268,28 @@ export async function getRecording(id: string): Promise<RecordingDTO> {
   return rowToRecording(row, (await getCueRows(id)).map(cueRowToTracklistItem));
 }
 
-export async function listRecordings(): Promise<RecordingDTO[]> {
+export async function listRecordings(filter: RecordingListFilter = {}): Promise<RecordingDTO[]> {
+  // The plan/take split is structural: a PLAN owns no video (`r2_key IS NULL`), a TAKE
+  // owns one (`r2_key IS NOT NULL`). `parentId` narrows to one plan's takes (RFC §7).
+  const conditions: string[] = [];
+  const args: string[] = [];
+
+  if (filter.kind === "plan") {
+    conditions.push("r.r2_key is null");
+  } else if (filter.kind === "take") {
+    conditions.push("r.r2_key is not null");
+  }
+
+  if (filter.parentId) {
+    conditions.push("r.parent_id = ?");
+    args.push(filter.parentId);
+  }
+
+  const where = conditions.length > 0 ? `where ${conditions.join(" and ")}` : "";
   const db = await getDb();
   const result = await db.execute({
-    sql: `${RECORDING_SELECT} order by r.created_at desc, r.id desc`,
+    args,
+    sql: `${RECORDING_SELECT} ${where} order by r.created_at desc, r.id desc`,
   });
   const cueTracklists = await getCueTracklists();
 
@@ -234,13 +298,46 @@ export async function listRecordings(): Promise<RecordingDTO[]> {
   );
 }
 
+// The plan's handle — the auto Galaxy-vocab slug (RFC §6, D-handle: the generated slug
+// IS the handle). Deterministic in the new id, salted re-roll on collision among
+// existing recording titles (a plan's title holds its handle). Never date-derived, so
+// the drift bug that killed `predictedMixtapeLogId` can't return. Mirrors the backfill's
+// `mintPlanHandle`.
+async function mintPlanHandle(id: string): Promise<string> {
+  const db = await getDb();
+
+  for (let attempt = 0; attempt < planHandleMaxAttempts; attempt++) {
+    const slug = galaxySlug(id, attempt);
+    const clash = await db.execute({
+      args: [slug],
+      sql: `select 1 from recordings where title = ? limit 1`,
+    });
+
+    if (clash.rows.length === 0) {
+      return slug;
+    }
+  }
+
+  // 64 salted collisions is astronomically unlikely — fall back to an id-tailed slug
+  // (still deterministic + unique).
+  return `${galaxySlug(id, 0)}-${id.slice(0, 8)}`;
+}
+
 export async function createRecording(input: RecordingInput): Promise<RecordingDTO> {
-  const title = requireText(input.title, "title", titleMaxLength);
   const recordedAt = optionalIsoDate(input.recordedAt, "recordedAt");
   const id = randomUUID();
-  const r2Key = recordingR2Key(id);
   const now = new Date().toISOString();
   const db = await getDb();
+
+  // A PLAN (`kind: "plan"`) is a VIDELESS recording: `r2_key` stays NULL and the server
+  // mints a Galaxy-vocab handle as the title (RFC §1). A TAKE (the default) owns a set
+  // video: its `r2_key` is derived from the id and the video is uploaded separately, and
+  // it requires an operator title.
+  const isPlan = input.kind === "plan";
+  const title = isPlan
+    ? await mintPlanHandle(id)
+    : requireText(input.title, "title", titleMaxLength);
+  const r2Key = isPlan ? null : recordingR2Key(id);
 
   await db.execute({
     args: [id, title, r2Key, recordedAt ?? null, now, now],
@@ -274,6 +371,30 @@ export async function updateRecording(id: string, input: RecordingInput): Promis
     tracklistItems = serializeTracklist(input.tracklistJson);
     sets.push("tracklist_json = ?");
     args.push(JSON.stringify(tracklistItems));
+  }
+
+  // Attach a take to its plan (RFC §2/§3). Setting a non-null `parentId` assigns the
+  // take's `version` ATOMICALLY in the same UPDATE — `coalesce(max(version),0)+1` over
+  // the plan's OTHER takes — so two concurrent attaches can't collide on the
+  // `(parent_id, version)` unique index (a TS read-then-write would race; RFC §3, S6).
+  // A null `parentId` detaches the take back to an orphan (its `version` is left as-is;
+  // the unique index treats NULL parents as distinct).
+  if (input.parentId !== undefined) {
+    const parentId = optionalRecordingId(input.parentId);
+
+    if (parentId === null) {
+      sets.push("parent_id = ?");
+      args.push(null);
+    } else {
+      // A clean 404 if the plan doesn't exist (getRecordingRow throws).
+      await getRecordingRow(parentId);
+      sets.push("parent_id = ?");
+      args.push(parentId);
+      sets.push(
+        "version = (select coalesce(max(version), 0) + 1 from recordings where parent_id is ? and id <> ?)",
+      );
+      args.push(parentId, id);
+    }
   }
 
   if (sets.length === 0) {
@@ -338,11 +459,107 @@ export async function deleteRecording(id: string): Promise<void> {
 }
 
 /**
+ * Transactionally REPLACE a recording's whole `recording_cues` set (RFC §4, the
+ * `replace_recording_cues` op). The body is the ORDERED cue array `{ findingId?,
+ * artistsText, titleText, position, startMs? }[]` — the Wave-3 Rekordbox derivation
+ * script resolves each cue's `finding_id` by normalized title+artist and PUTs the
+ * result here. Positions are REINDEXED 1..n from the given order (the array IS the
+ * order), so the `(recording_id, position)` unique index always holds regardless of the
+ * sparse positions the script emits. An empty array clears the recording's cues. Unlike
+ * `update_recording`'s tracklist dual-write, this does NOT touch `tracklist_json` — it
+ * is the forward, cues-only write path.
+ */
+export async function replaceRecordingCues(
+  id: string,
+  cues: RecordingCueInput[],
+): Promise<RecordingDTO> {
+  // Confirm the recording exists (clean 404).
+  await getRecordingRow(id);
+
+  if (!Array.isArray(cues)) {
+    throw new ApiError("invalid_cues", "cues must be an array", 400);
+  }
+
+  // Validate + normalize each cue, keeping the given array ORDER (position is reindexed).
+  const normalized = cues.map((raw, index) => {
+    if (!raw || typeof raw !== "object") {
+      throw new ApiError("invalid_cues", `Cue ${index + 1} must be an object`, 400);
+    }
+
+    const findingId = typeof raw.findingId === "string" && raw.findingId ? raw.findingId : null;
+    const artistsText =
+      typeof raw.artistsText === "string" && raw.artistsText.trim() ? raw.artistsText.trim() : null;
+    const titleText =
+      typeof raw.titleText === "string" && raw.titleText.trim() ? raw.titleText.trim() : null;
+
+    // A cue must carry SOME identity — a finding link or snapshot text — or it renders
+    // as an empty row and cannot resolve to canon.
+    if (!findingId && !artistsText && !titleText) {
+      throw new ApiError(
+        "invalid_cues",
+        `Cue ${index + 1} needs a findingId or artistsText/titleText`,
+        400,
+      );
+    }
+
+    let startMs: number | null = null;
+
+    if (raw.startMs !== undefined && raw.startMs !== null) {
+      if (typeof raw.startMs !== "number" || !Number.isInteger(raw.startMs) || raw.startMs < 0) {
+        throw new ApiError(
+          "invalid_cues",
+          `Cue ${index + 1} startMs must be a non-negative integer (ms)`,
+          400,
+        );
+      }
+
+      startMs = raw.startMs;
+    }
+
+    return { artistsText, findingId, position: index + 1, startMs, titleText };
+  });
+
+  const now = new Date().toISOString();
+  const db = await getDb();
+
+  await db.batch(
+    [
+      { args: [id], sql: `delete from recording_cues where recording_id = ?` },
+      ...normalized.map((cue) => ({
+        args: [
+          randomUUID(),
+          id,
+          cue.findingId,
+          cue.artistsText,
+          cue.titleText,
+          cue.position,
+          cue.startMs,
+          now,
+          now,
+        ],
+        sql: `insert into recording_cues
+                (id, recording_id, finding_id, artists_text, title_text, position, start_ms, created_at, updated_at)
+              values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      })),
+      { args: [now, id], sql: `update recordings set updated_at = ? where id = ?` },
+    ],
+    "write",
+  );
+
+  return getRecording(id);
+}
+
+/**
  * Promote a recording to a published mixtape — IDEMPOTENT (mint-or-reuse; re-runnable
  * end to end). Minting burns a scarce coordinate, so a recording that already links a
  * mixtape reuses it and NEVER re-mints. The sequence:
- *   1. mint-or-reuse — reuse `mixtapes.recording_id`'s mixtape if present; else create a
- *      draft, seed it from the tracklist, mint it (`publishMixtape`), and link it back.
+ *   1. CLAIM-BEFORE-MINT — reuse `mixtapes.recording_id`'s mixtape if present; else
+ *      CLAIM the link with an atomic conditional insert (a guarded draft insert carrying
+ *      `recording_id`), THEN seed + mint it (`publishMixtape`). The claim is the guard
+ *      (RFC §2, staff-eng SF-6): the old check-then-mint path could burn a second scarce
+ *      coordinate on a concurrent double-promote (both saw no link, both minted). Now two
+ *      concurrent promoters serialize on the claim insert — the loser inserts 0 rows and
+ *      reuses the winner's row, so at most ONE coordinate is ever minted per recording.
  *   2. copy the set video to `<logId>/set.mp4` (overwrite-safe; skipped if already there).
  *   3. flip the mixtape's `setVideoAt` (the /log player + video SEO).
  *   4. repoint the recording's owned `r2Key` to `<logId>/set.mp4`.
@@ -364,7 +581,8 @@ export async function promoteRecording(id: string): Promise<RecordingDTO> {
 
   const db = await getDb();
 
-  // (1) mint-or-reuse. A minted mixtape already linked to this recording is reused as-is.
+  // (1) Read any mixtape already linked to this recording. A fully-minted one is reused
+  // as-is (its coordinate is already spent).
   const linkedResult = await db.execute({
     args: [id],
     sql: `select id, log_id from mixtapes where recording_id = ? limit 1`,
@@ -379,8 +597,8 @@ export async function promoteRecording(id: string): Promise<RecordingDTO> {
     mixtapeId = linked.id;
     logId = linked.log_id;
   } else {
-    // Create + mint a fresh mixtape from the recording. Seed the tracklist FIRST (mint
-    // requires ≥1 member), resolving each cue to an existing finding.
+    // Resolve the members FIRST (read-only), so a recording whose cues resolve to no
+    // finding errors BEFORE any coordinate is at risk.
     const members = await resolveTracklistMembers(id, recording.tracklist_json);
 
     if (members.length === 0) {
@@ -391,13 +609,44 @@ export async function promoteRecording(id: string): Promise<RecordingDTO> {
       );
     }
 
-    const draft = await createMixtape({ recordedAt: recording.recorded_at ?? undefined });
+    if (linked) {
+      // A prior run CLAIMED the link but crashed before minting (a draft with no log_id):
+      // reuse that same row and finish minting it — no new coordinate.
+      mixtapeId = linked.id;
+    } else {
+      // CLAIM the link with an atomic conditional insert: create the draft mixtape
+      // carrying `recording_id`, but only if no mixtape already claims it. This is the
+      // race guard — writes serialize, so a second concurrent promoter inserts 0 rows.
+      const claimId = randomUUID();
+      const claimNow = new Date().toISOString();
+      const claim = await db.execute({
+        args: [claimId, id, recording.recorded_at ?? null, claimNow, claimNow, id],
+        sql: `insert into mixtapes (id, recording_id, status, title, recorded_at, created_at, updated_at)
+              select ?, ?, 'draft', '', ?, ?, ?
+              where not exists (select 1 from mixtapes where recording_id = ?)`,
+      });
 
-    if (!draft.id) {
-      throw new ApiError("promote_failed", "Could not create the mixtape draft", 500);
+      if (claim.rowsAffected === 1) {
+        mixtapeId = claimId;
+      } else {
+        // Lost the race — reuse the winner's row (it now owns the link).
+        const winnerResult = await db.execute({
+          args: [id],
+          sql: `select id from mixtapes where recording_id = ? limit 1`,
+        });
+        const winner = typedRow<{ id: string }>(winnerResult.rows);
+
+        if (!winner) {
+          throw new ApiError("promote_failed", "Could not claim the recording link", 409);
+        }
+
+        mixtapeId = winner.id;
+      }
     }
 
-    mixtapeId = draft.id;
+    // Seed the claimed draft's tracklist + mint it — the ONLY mint. `publishMixtape`'s
+    // `status = 'draft'` guard means a concurrent loser targeting the SAME row mints
+    // nothing new (it errors; a retry reuses via the `linked?.log_id` branch above).
     await setMixtapeMembers(mixtapeId, { members });
     const minted = await publishMixtape(mixtapeId);
 
@@ -406,12 +655,6 @@ export async function promoteRecording(id: string): Promise<RecordingDTO> {
     }
 
     logId = minted.logId;
-
-    // Link the minted mixtape back to the recording (so a re-run reuses, never re-mints).
-    await db.execute({
-      args: [id, mixtapeId],
-      sql: `update mixtapes set recording_id = ? where id = ?`,
-    });
   }
 
   const destKey = `${logId}/set.mp4`;
@@ -578,6 +821,20 @@ function requireText(value: unknown, field: string, maxLength: number): string {
   }
 
   return value.trim().slice(0, maxLength);
+}
+
+// A take→plan link value: a non-empty recording id (attach), or `null`/`""` (detach to
+// an orphan). `undefined` is filtered out by the caller before this runs.
+function optionalRecordingId(value: unknown): string | null {
+  if (value === null || value === "") {
+    return null;
+  }
+
+  if (typeof value !== "string" || !value.trim()) {
+    throw new ApiError("invalid_parent", "parentId must be a recording id or null", 400);
+  }
+
+  return value.trim();
 }
 
 function optionalIsoDate(value: unknown, field: string): string | null | undefined {

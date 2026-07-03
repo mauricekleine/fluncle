@@ -15,6 +15,7 @@ import {
   getRecording,
   listRecordings,
   promoteRecording,
+  replaceRecordingCues,
   updateRecording,
 } from "../recordings";
 import { adminAuth, operatorGuard } from "../orpc-auth";
@@ -35,10 +36,16 @@ export function adminRecordingsHandlers(os: Implementer) {
       }
     });
 
-  // GET /admin/recordings — admin tier (agent-allowed read).
-  const listRecordingsHandler = os.list_recordings.use(adminAuth).handler(async () => {
+  // GET /admin/recordings — admin tier (agent-allowed read). Optionally filtered by the
+  // plan/take split (`kind=plan|take`) and/or one plan's takes (`parentId`).
+  const listRecordingsHandler = os.list_recordings.use(adminAuth).handler(async ({ input }) => {
     try {
-      return { ok: true as const, recordings: await listRecordings() };
+      const kind = input.kind === "plan" || input.kind === "take" ? input.kind : undefined;
+
+      return {
+        ok: true as const,
+        recordings: await listRecordings({ kind, parentId: input.parentId }),
+      };
     } catch (error) {
       throw apiFault(error);
     }
@@ -161,6 +168,25 @@ export function adminRecordingsHandlers(os: Implementer) {
       }
     });
 
+  // PUT /admin/recordings/{recordingId}/cues — operator tier. Transactionally replace
+  // the recording's whole cue set from the body's ordered `cues` array (the Rekordbox
+  // derivation write target). LOOSE body → replaceRecordingCues validates each cue.
+  const replaceRecordingCuesHandler = os.replace_recording_cues
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const cues = Array.isArray(input.cues) ? input.cues : [];
+
+        return {
+          ok: true as const,
+          recording: await replaceRecordingCues(input.recordingId, cues),
+        };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   return {
     create_recording: createRecordingHandler,
     delete_recording: deleteRecordingHandler,
@@ -168,6 +194,7 @@ export function adminRecordingsHandlers(os: Implementer) {
     list_recordings: listRecordingsHandler,
     presign_recording_upload: presignRecordingUploadHandler,
     promote_recording: promoteRecordingHandler,
+    replace_recording_cues: replaceRecordingCuesHandler,
     update_recording: updateRecordingHandler,
   };
 }

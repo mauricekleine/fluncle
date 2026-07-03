@@ -25,55 +25,65 @@ const state = vi.hoisted(() => ({
   recording: {} as Row,
 }));
 
-const execute = vi.hoisted(() =>
-  vi.fn(async (query: { args: unknown[]; sql: string }) => {
-    const sql = query.sql;
+// The default SQL-shape mock. Extracted + re-applied in `beforeEach` so a test that
+// overrides the implementation (the claim-race test) can't leak into the next test.
+const defaultExecute = vi.hoisted(() => async (query: { args: unknown[]; sql: string }) => {
+  const sql = query.sql;
 
-    // getRecording (the DTO read) — recordings LEFT JOIN mixtapes.
-    if (sql.includes("left join mixtapes")) {
-      return {
-        rows: [
-          { ...state.recording, mixtape_id: state.joinMixtapeId, mixtape_log_id: state.joinLogId },
-        ],
-      };
-    }
+  // getRecording (the DTO read) — recordings LEFT JOIN mixtapes.
+  if (sql.includes("left join mixtapes")) {
+    return {
+      rows: [
+        { ...state.recording, mixtape_id: state.joinMixtapeId, mixtape_log_id: state.joinLogId },
+      ],
+    };
+  }
 
-    // getCueRows — the recording's cue rows (the finding-linked resolution path).
-    if (sql.includes("from recording_cues")) {
-      return { rows: state.cues };
-    }
+  // getCueRows — the recording's cue rows (the finding-linked resolution path).
+  if (sql.includes("from recording_cues")) {
+    return { rows: state.cues };
+  }
 
-    // The findings catalogue read backing resolveFindingIdsByText.
-    if (sql.includes("artists_json from tracks")) {
-      return { rows: state.catalogue };
-    }
+  // The findings catalogue read backing resolveFindingIdsByText.
+  if (sql.includes("artists_json from tracks")) {
+    return { rows: state.catalogue };
+  }
 
-    // getRecordingRow — the raw recordings row.
-    if (sql.includes("from recordings where id")) {
-      return { rows: [state.recording] };
-    }
+  // getRecordingRow — the raw recordings row.
+  if (sql.includes("from recordings where id")) {
+    return { rows: [state.recording] };
+  }
 
-    // mint-or-reuse probe.
-    if (sql.includes("from mixtapes where recording_id")) {
-      return { rows: state.linked ? [state.linked] : [] };
-    }
+  // CLAIM-BEFORE-MINT: the atomic conditional insert that claims the recording link.
+  // rowsAffected 1 = won the claim (no existing link); 0 = lost (a row already links).
+  if (sql.startsWith("insert into mixtapes")) {
+    state.calls.push("claim");
+    return { rows: [], rowsAffected: state.linked ? 0 : 1 };
+  }
 
-    // link the freshly minted mixtape back to the recording.
-    if (sql.startsWith("update mixtapes set recording_id")) {
-      state.calls.push("link");
-      return { rows: [] };
-    }
+  // mint-or-reuse probe + the loser's winner re-read.
+  if (sql.includes("from mixtapes where recording_id")) {
+    return { rows: state.linked ? [state.linked] : [] };
+  }
 
-    // repoint the recording's owned key to the promoted mixtape's key.
-    if (sql.startsWith("update recordings set r2_key")) {
-      state.calls.push("repoint");
-      state.recording.r2_key = query.args[0];
-      return { rows: [] };
-    }
-
+  // link the freshly minted mixtape back to the recording (legacy path — unused since
+  // the link now lands at claim time; kept so a stray call is still answered).
+  if (sql.startsWith("update mixtapes set recording_id")) {
+    state.calls.push("link");
     return { rows: [] };
-  }),
-);
+  }
+
+  // repoint the recording's owned key to the promoted mixtape's key.
+  if (sql.startsWith("update recordings set r2_key")) {
+    state.calls.push("repoint");
+    state.recording.r2_key = query.args[0];
+    return { rows: [] };
+  }
+
+  return { rows: [] };
+});
+
+const execute = vi.hoisted(() => vi.fn());
 
 vi.mock("./db", () => ({
   getDb: async () => ({ execute }),
@@ -81,12 +91,6 @@ vi.mock("./db", () => ({
   typedRows: <T extends object>(rows: T[]) => rows,
 }));
 
-const createMixtape = vi.hoisted(() =>
-  vi.fn(async () => {
-    state.calls.push("create");
-    return { id: "mix-1" };
-  }),
-);
 const publishMixtape = vi.hoisted(() =>
   vi.fn(async () => {
     state.calls.push("mint");
@@ -109,7 +113,6 @@ const updateMixtape = vi.hoisted(() =>
 );
 
 vi.mock("./mixtapes", () => ({
-  createMixtape,
   publishMixtape,
   setMixtapeMembers,
   updateMixtape,
@@ -160,8 +163,8 @@ beforeEach(() => {
   state.linked = undefined;
   state.joinLogId = null;
   state.joinMixtapeId = null;
-  execute.mockClear();
-  createMixtape.mockClear();
+  execute.mockReset();
+  execute.mockImplementation(defaultExecute);
   publishMixtape.mockClear();
   setMixtapeMembers.mockClear();
   updateMixtape.mockClear();
@@ -175,8 +178,10 @@ describe("promoteRecording", () => {
 
     const recording = await promoteRecording("rec-1");
 
-    // Minted exactly one mixtape, seeded from the resolved tracklist.
-    expect(createMixtape).toHaveBeenCalledTimes(1);
+    // CLAIMED the link (the conditional insert) BEFORE minting, then minted exactly one
+    // mixtape, seeded from the resolved tracklist.
+    expect(state.calls).toContain("claim");
+    expect(state.calls.indexOf("claim")).toBeLessThan(state.calls.indexOf("mint"));
     expect(setMixtapeMembers).toHaveBeenCalledTimes(1);
     expect(publishMixtape).toHaveBeenCalledTimes(1);
 
@@ -202,8 +207,8 @@ describe("promoteRecording", () => {
 
     await promoteRecording("rec-1");
 
-    // NEVER re-mints a scarce coordinate.
-    expect(createMixtape).not.toHaveBeenCalled();
+    // NEVER re-mints a scarce coordinate (no claim, no mint).
+    expect(state.calls).not.toContain("claim");
     expect(publishMixtape).not.toHaveBeenCalled();
     // No copy-onto-itself, no delete of the live key.
     expect(copyObject).not.toHaveBeenCalled();
@@ -222,7 +227,7 @@ describe("promoteRecording", () => {
     await promoteRecording("rec-1");
 
     // No second mint (reuse) …
-    expect(createMixtape).not.toHaveBeenCalled();
+    expect(state.calls).not.toContain("claim");
     expect(publishMixtape).not.toHaveBeenCalled();
     // … but the copy + repoint + delete-last still complete the promotion.
     expect(copyObject).toHaveBeenCalledWith("recordings/rec-1/set.mp4", "020.F.1A/set.mp4");
@@ -255,7 +260,8 @@ describe("promoteRecording", () => {
 
     await promoteRecording("rec-1");
 
-    expect(setMixtapeMembers).toHaveBeenCalledWith("mix-1", {
+    // The claimed draft carries a random id; assert the seeded members, not the id.
+    expect(setMixtapeMembers).toHaveBeenCalledWith(expect.any(String), {
       members: [{ ref: "t1", startMs: 0 }],
     });
   });
@@ -274,24 +280,95 @@ describe("promoteRecording", () => {
     await promoteRecording("rec-1");
 
     // Resolved by title+artist — NEVER by the random cue id (the old trap).
-    expect(setMixtapeMembers).toHaveBeenCalledWith("mix-1", {
+    expect(setMixtapeMembers).toHaveBeenCalledWith(expect.any(String), {
       members: [{ ref: "t2", startMs: 45_000 }],
     });
   });
 
-  it("refuses to mint a recording whose cues resolve to no finding", async () => {
+  it("refuses to mint a recording whose cues resolve to no finding (BEFORE claiming a link)", async () => {
     seedRecording({ tracklist_json: JSON.stringify([]) });
     state.cues = [];
 
     await expect(promoteRecording("rec-1")).rejects.toThrow(/no Fluncle finding|resolvable/i);
-    expect(createMixtape).not.toHaveBeenCalled();
+    // Errors before any coordinate is at risk — no link claimed, no mint.
+    expect(state.calls).not.toContain("claim");
+    expect(publishMixtape).not.toHaveBeenCalled();
+  });
+
+  it("recovers a half-claimed draft (linked, no log_id): reuses the row, mints no new coordinate", async () => {
+    // A prior run claimed the link but crashed before minting (a draft with no log_id).
+    seedRecording();
+    state.linked = { id: "mix-1", log_id: null };
+
+    await promoteRecording("rec-1");
+
+    // Reuses the claimed row — no SECOND claim insert — then finishes minting IT.
+    expect(state.calls).not.toContain("claim");
+    expect(setMixtapeMembers).toHaveBeenCalledWith("mix-1", {
+      members: [{ ref: "t1", startMs: 0 }],
+    });
+    expect(publishMixtape).toHaveBeenCalledTimes(1);
+  });
+
+  it("loses the claim race → reuses the winner's row, never mints a second coordinate", async () => {
+    // No link yet at the first probe, but the CLAIM insert affects 0 rows: a concurrent
+    // promoter won the race between the probe and the insert. `state.linked` is the winner
+    // the loser re-reads.
+    seedRecording();
+    let probed = 0;
+    execute.mockImplementation(async (query: { args: unknown[]; sql: string }) => {
+      const sql = query.sql;
+
+      if (sql.includes("left join mixtapes")) {
+        return {
+          rows: [
+            {
+              ...state.recording,
+              mixtape_id: state.joinMixtapeId,
+              mixtape_log_id: state.joinLogId,
+            },
+          ],
+        };
+      }
+      if (sql.includes("from recording_cues")) {
+        return { rows: state.cues };
+      }
+      if (sql.includes("from recordings where id")) {
+        return { rows: [state.recording] };
+      }
+      // The claim insert affects 0 rows (the winner already inserted).
+      if (sql.startsWith("insert into mixtapes")) {
+        state.calls.push("claim");
+        return { rows: [], rowsAffected: 0 };
+      }
+      // First probe: no link yet. After the lost claim: the winner's row.
+      if (sql.includes("from mixtapes where recording_id")) {
+        probed += 1;
+        return { rows: probed === 1 ? [] : [{ id: "winner-mix" }] };
+      }
+      if (sql.startsWith("update recordings set r2_key")) {
+        state.calls.push("repoint");
+        state.recording.r2_key = query.args[0];
+        return { rows: [] };
+      }
+
+      return { rows: [] };
+    });
+
+    await promoteRecording("rec-1");
+
+    // Reused the WINNER's row — the loser seeds + mints that row (publishMixtape's
+    // draft-guard means no second coordinate is spent), never its own.
+    expect(setMixtapeMembers).toHaveBeenCalledWith("winner-mix", {
+      members: [{ ref: "t1", startMs: 0 }],
+    });
   });
 
   it("refuses to promote a PLAN (no set video — r2_key NULL)", async () => {
     seedRecording({ r2_key: null });
 
     await expect(promoteRecording("rec-1")).rejects.toThrow(/no set video/i);
-    expect(createMixtape).not.toHaveBeenCalled();
+    expect(state.calls).not.toContain("claim");
     expect(copyObject).not.toHaveBeenCalled();
   });
 });

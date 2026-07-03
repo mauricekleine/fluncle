@@ -323,11 +323,18 @@ export const RecordingDTOSchema = z
   .object({
     createdAt: z.string(),
     durationMs: z.number().optional(),
+    // "has video" = the recording OWNS a set-video key. A PLAN has none (`false`);
+    // a TAKE has one (`true`). Derived server-side from `r2Key` presence so the UI
+    // never re-derives the plan/take split from a nullable key (RFC §1, taste #1).
+    hasVideo: z.boolean(),
     id: z.string(),
     // The promoted mixtape's committed Log ID coordinate (absent until promoted).
     logId: z.string().optional(),
     // The promoted mixtape's id (absent until promoted).
     mixtapeId: z.string().optional(),
+    // The take→plan link (RFC plan→recording→mixtape §3): a TAKE points at its PLAN;
+    // absent for a plan or an orphan take (e.g. the rolling set).
+    parentId: z.string().optional(),
     // The owned R2 key. ABSENT for a PLAN (a recording with no video — RFC
     // plan→recording→mixtape): "has video" = `r2Key` present.
     r2Key: z.string().optional(),
@@ -335,6 +342,9 @@ export const RecordingDTOSchema = z
     title: z.string(),
     tracklist: z.array(RecordingTracklistItemSchema),
     updatedAt: z.string(),
+    // The human display label ("v2") among a plan's takes (RFC §3, D-version).
+    // Every recording carries one (defaults to 1 in the schema).
+    version: z.number(),
   })
   .meta({ id: "RecordingDTO" });
 

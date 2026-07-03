@@ -59,6 +59,7 @@ type ClipListOptions = {
 // The Fluncle Studio recording admin options (`admin recordings create|update`).
 type RecordingCreateOptions = {
   json: boolean;
+  plan?: boolean;
   recordedAt?: string;
   title?: string;
   video?: string;
@@ -66,6 +67,7 @@ type RecordingCreateOptions = {
 
 type RecordingUpdateOptions = {
   json: boolean;
+  parentId?: string;
   recordedAt?: string;
   title?: string;
   tracklistFile?: string;
@@ -992,8 +994,9 @@ function addAdminCommands(program: Command): void {
 
   adminRecordings
     .command("create")
-    .description("Create a recording + stage its set video (from --video)")
-    .option("--title <text>", "Recording title")
+    .description("Create a recording (--video to stage a take, or --plan for a videoless plan)")
+    .option("--plan", "Create a videoless PLAN (server mints a Galaxy-vocab handle)", false)
+    .option("--title <text>", "Recording title (a take)")
     .option("--video <file>", "Set-video master to stage (a 1080p rendition is derived)")
     .option("--recorded-at <date>", "Recorded date (ISO)")
     .option("--json", "Print JSON", false)
@@ -1005,10 +1008,12 @@ function addAdminCommands(program: Command): void {
 
   adminRecordings
     .command("list")
-    .description("List every recording")
+    .description("List recordings (--kind plan|take, --parent-id <plan> for a plan's takes)")
+    .option("--kind <kind>", "Filter by kind: plan | take")
+    .option("--parent-id <id>", "List the takes attached to this plan")
     .option("--json", "Print JSON", false)
     .allowExcessArguments()
-    .action(async (options: { json: boolean }) => {
+    .action(async (options: { json: boolean; kind?: string; parentId?: string }) => {
       const { recordingsListCommand } = await import("./commands/recordings");
       await recordingsListCommand(options);
     });
@@ -1026,16 +1031,29 @@ function addAdminCommands(program: Command): void {
 
   adminRecordings
     .command("update")
-    .description("Update a recording's title, recorded date, or tracklist (--tracklist-file)")
+    .description("Update a recording's title/recorded date/tracklist, or attach it to a plan")
     .argument("[id]")
     .option("--title <text>", "Recording title")
     .option("--recorded-at <date>", "Recorded date (ISO)")
+    .option("--parent-id <id>", "Attach this take to its plan (assigns the take's version)")
     .option("--tracklist-file <file>", "JSON file with the whole cue tracklist array")
     .option("--json", "Print JSON", false)
     .allowExcessArguments()
     .action(async (id: string | undefined, options: RecordingUpdateOptions) => {
       const { recordingUpdateCommand } = await import("./commands/recordings");
       await recordingUpdateCommand(id, options);
+    });
+
+  adminRecordings
+    .command("replace-cues")
+    .description("Replace a recording's whole cue tracklist from a JSON file (--cues-file)")
+    .argument("[id]")
+    .option("--cues-file <file>", "JSON file with the ordered cue array")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (id: string | undefined, options: { cuesFile?: string; json: boolean }) => {
+      const { recordingReplaceCuesCommand } = await import("./commands/recordings");
+      await recordingReplaceCuesCommand(id, options);
     });
 
   adminRecordings

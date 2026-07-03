@@ -182,6 +182,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The autonomous render box links its own cut + sets video_url — agent tier
   // (adminAuth only, no operatorGuard); the box's agent token publishes its renders.
   finalize_track_video: "admin",
+  // The built clip caption read — admin tier (agent-allowed), the list_clips precedent:
+  // a read the clip-card UI + the box can both consume.
+  get_clip_caption: "admin",
   get_mixtape_social: "admin",
   get_private_account_export: "private-session",
   get_private_galaxy_progress: "private-session",
@@ -240,6 +243,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // internal service_status/status_events tables (no publish), so the agent token drives it.
   record_health: "admin",
   reject_submission: "operator",
+  // Replace a recording's whole cue set — operator tier (the Rekordbox derivation write
+  // target): a write that reshapes what a clip/promote resolves to, so the agent 403s.
+  replace_recording_cues: "operator",
   // Clears a LIVE published video (video_url + video_squared_at) to re-queue a
   // re-render — operator-only (adminAuth + operatorGuard); the box agent never
   // clears videos, so an agent token 403s.

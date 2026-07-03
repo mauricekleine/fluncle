@@ -15,6 +15,7 @@
 
 import { ORPCError } from "@orpc/server";
 import { mixcloudEditUrl, mixcloudSectionFields, mixcloudSections } from "@fluncle/contracts/util";
+import { buildClipCaption } from "../clip-caption";
 import { createClip, deleteClip, getClip, listClips, markClipCutDone, updateClip } from "../clips";
 import { youtubeDescription } from "../../mixtape-chapters";
 import { getMixcloudAccessToken } from "../mixcloud";
@@ -662,6 +663,24 @@ export function adminMixtapesHandlers(os: Implementer) {
     }
   });
 
+  // GET /admin/clips/{clipId}/caption — admin tier (agent-allowed read). Build the
+  // clip's caption: the stored-clean caption + the `fluncle://` coordinate line(s).
+  const getClipCaptionHandler = os.get_clip_caption.use(adminAuth).handler(async ({ input }) => {
+    try {
+      const built = await buildClipCaption(input.clipId);
+
+      return {
+        builtCaption: built.builtCaption,
+        caption: built.caption,
+        clipId: built.clipId,
+        coordinates: built.coordinates,
+        ok: true as const,
+      };
+    } catch (error) {
+      throw apiFault(error);
+    }
+  });
+
   // POST /admin/recordings/{recordingId}/clips — operator tier. LOOSE body → createClip
   // (recording-scoped under the RFC recording-primitive; the legacy mixtape path is gone).
   const createClipHandler = os.create_clip
@@ -880,6 +899,7 @@ export function adminMixtapesHandlers(os: Implementer) {
     finalize_clip_cut: finalizeClipCutHandler,
     finalize_mixtape_mixcloud: finalizeMixtapeMixcloudHandler,
     finalize_mixtape_youtube: finalizeMixtapeYoutubeHandler,
+    get_clip_caption: getClipCaptionHandler,
     get_mixtape_social: getMixtapeSocialHandler,
     initiate_mixtape_youtube: initiateMixtapeYoutubeHandler,
     list_clips: listClipsHandler,
