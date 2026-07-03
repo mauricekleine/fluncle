@@ -277,6 +277,53 @@ export async function listUpcomingPlans(nowIso: string): Promise<RecordingDTO[]>
   );
 }
 
+// A finding's membership in one PLAN — the pencilled-in link the admin board reads
+// beside the minted-mixtape memberships (`listMixtapeMembershipsForTracks` in
+// ./mixtapes). Keyed by trackId; a finding can sit in more than one plan.
+export type PlanMembership = {
+  recordingId: string;
+  title: string;
+};
+
+// Which PLANS each of these findings is pencilled into, keyed by trackId — one
+// query, no N+1, mirroring listMixtapeMembershipsForTracks. A plan is a videoless
+// recording (`r2_key IS NULL`); its cues carry the honest `finding_id` link.
+export async function listPlanMembershipsForTracks(
+  trackIds: string[],
+): Promise<Record<string, PlanMembership[]>> {
+  if (trackIds.length === 0) {
+    return {};
+  }
+
+  const db = await getDb();
+  const placeholders = trackIds.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: trackIds,
+    sql: `select rc.finding_id, r.id as recording_id, r.title
+          from recording_cues rc
+          join recordings r on r.id = rc.recording_id
+          where r.r2_key is null and rc.finding_id in (${placeholders})
+          order by r.created_at, r.id, rc.position`,
+  });
+
+  const byTrack: Record<string, PlanMembership[]> = {};
+
+  for (const row of typedRows<{
+    finding_id: string;
+    recording_id: string;
+    title: string;
+  }>(result.rows)) {
+    const memberships = (byTrack[row.finding_id] ??= []);
+
+    // A set can cue the same finding twice — one membership per plan is enough.
+    if (!memberships.some((membership) => membership.recordingId === row.recording_id)) {
+      memberships.push({ recordingId: row.recording_id, title: row.title });
+    }
+  }
+
+  return byTrack;
+}
+
 // The plan's handle — the auto Galaxy-vocab slug (RFC §6, D-handle: the generated slug
 // IS the handle). Deterministic in the new id, salted re-roll on collision among
 // existing recording titles (a plan's title holds its handle). Never date-derived, so
@@ -599,19 +646,22 @@ export async function promoteRecording(id: string): Promise<RecordingDTO> {
     }
 
     if (linked) {
-      // A prior run CLAIMED the link but crashed before minting (a draft with no log_id):
-      // reuse that same row and finish minting it — no new coordinate.
+      // A prior run CLAIMED the link but crashed before minting (an unminted claim
+      // with no log_id): reuse that same row and finish minting it — no new
+      // coordinate.
       mixtapeId = linked.id;
     } else {
-      // CLAIM the link with an atomic conditional insert: create the draft mixtape
+      // CLAIM the link with an atomic conditional insert: create the mixtape row
       // carrying `recording_id`, but only if no mixtape already claims it. This is the
       // race guard — writes serialize, so a second concurrent promoter inserts 0 rows.
+      // The claim is born `distributing` with a NULL `log_id` (unminted): there is no
+      // draft state — the mint below commits the coordinate in the same promote.
       const claimId = randomUUID();
       const claimNow = new Date().toISOString();
       const claim = await db.execute({
         args: [claimId, id, recording.recorded_at ?? null, claimNow, claimNow, id],
         sql: `insert into mixtapes (id, recording_id, status, title, recorded_at, created_at, updated_at)
-              select ?, ?, 'draft', '', ?, ?, ?
+              select ?, ?, 'distributing', '', ?, ?, ?
               where not exists (select 1 from mixtapes where recording_id = ?)`,
       });
 
@@ -633,8 +683,8 @@ export async function promoteRecording(id: string): Promise<RecordingDTO> {
       }
     }
 
-    // Seed the claimed draft's tracklist + mint it — the ONLY mint. `publishMixtape`'s
-    // `status = 'draft'` guard means a concurrent loser targeting the SAME row mints
+    // Seed the claimed row's tracklist + mint it — the ONLY mint. `publishMixtape`'s
+    // `log_id is null` mint gate means a concurrent loser targeting the SAME row mints
     // nothing new (it errors; a retry reuses via the `linked?.log_id` branch above).
     await setMixtapeMembers(mixtapeId, { members });
     const minted = await publishMixtape(mixtapeId);

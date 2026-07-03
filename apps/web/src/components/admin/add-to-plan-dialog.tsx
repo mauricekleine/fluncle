@@ -2,6 +2,7 @@ import {
   ArrowSquareOutIcon,
   CassetteTapeIcon,
   CircleNotchIcon,
+  ListChecksIcon,
   PlusIcon,
 } from "@phosphor-icons/react";
 import { useState } from "react";
@@ -15,15 +16,19 @@ import {
 } from "@/components/ui/dialog";
 import { beatportSearchUrl } from "@/lib/beatport";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
-import { mixtapeDisplayTitle, type MixtapeDTO } from "@/lib/mixtapes";
+import { mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { type MixtapeMembership } from "@/lib/server/mixtapes";
+import { type PlanMembership } from "@/lib/server/recordings";
 
-// The board's Mixtape-cell picker: drop one finding into a draft checkpoint, or
-// start a fresh draft around it. Only DRAFT mixtapes take members (the server
-// enforces it), so a minted/published tape never appears as a target. Adding
-// APPENDS (POST /members) — the tracklist is never clobbered, and a finding already
-// on the tape is skipped. The finding carries a Beatport search link so the
-// buy-then-mix run starts right here.
+// The board's Mixtape-cell picker: pencil one finding into a PLAN (a videoless
+// `recordings` row — the pre-publish authoring surface since draft mixtapes
+// retired; RFC plan→recording→mixtape), or start a fresh plan around it. A minted
+// tape never appears as a target — a mixtape is only ever born via
+// `promote_recording`, and its tracklist is frozen at the mint. Adding APPENDS a
+// cue (`replace_recording_cues` with the plan's current cues + this finding), so
+// the plan's tracklist is never clobbered; a plan already carrying the finding is
+// disabled rather than duplicated. The finding carries a Beatport search link so
+// the buy-then-mix run starts right here.
 
 type DialogTrack = {
   albumImageUrl?: string;
@@ -33,19 +38,38 @@ type DialogTrack = {
   trackId: string;
 };
 
-export function AddToMixtapeDialog({
-  drafts,
-  draftsLoading,
+// One cue of a plan, in the `replace_recording_cues` body shape — the dialog
+// carries the plan's CURRENT cues so an append can replay them untouched
+// (including non-finding snapshot rows and any marked start times).
+export type PlanTargetCue = {
+  artistsText?: string;
+  findingId?: string;
+  startMs?: number;
+  titleText?: string;
+};
+
+// A plan the picker can pencil the finding into.
+export type PlanTarget = {
+  cues: PlanTargetCue[];
+  id: string;
+  title: string;
+};
+
+export function AddToPlanDialog({
   memberships,
   onAdded,
   onOpenChange,
+  planMemberships,
+  plans,
+  plansLoading,
   track,
 }: {
-  drafts: MixtapeDTO[];
-  draftsLoading: boolean;
   memberships: MixtapeMembership[];
-  onAdded: (mixtapeId: string) => void;
+  onAdded: (planId: string) => void;
   onOpenChange: (open: boolean) => void;
+  planMemberships: PlanMembership[];
+  plans: PlanTarget[];
+  plansLoading: boolean;
   track: DialogTrack | null;
 }) {
   const [busyId, setBusyId] = useState<string | undefined>();
@@ -53,15 +77,15 @@ export function AddToMixtapeDialog({
   const [error, setError] = useState<string | undefined>();
   const busy = creating || busyId !== undefined;
 
-  const addTo = async (mixtapeId: string) => {
+  const addTo = async (plan: PlanTarget) => {
     if (!track) {
       return;
     }
-    setBusyId(mixtapeId);
+    setBusyId(plan.id);
     setError(undefined);
     try {
-      await appendMember(mixtapeId, track.trackId);
-      onAdded(mixtapeId);
+      await appendCue(plan, track);
+      onAdded(plan.id);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -76,8 +100,8 @@ export function AddToMixtapeDialog({
     setCreating(true);
     setError(undefined);
     try {
-      const created = await createDraft();
-      await appendMember(created, track.trackId);
+      const created = await createPlan();
+      await appendCue({ cues: [], id: created, title: "" }, track);
       onAdded(created);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -90,9 +114,9 @@ export function AddToMixtapeDialog({
     <Dialog onOpenChange={(next) => !busy && onOpenChange(next)} open={track !== null}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Add to a mixtape</DialogTitle>
+          <DialogTitle>Add to a plan</DialogTitle>
           <DialogDescription>
-            Drop this finding into a draft mixtape, or start a new one.
+            Pencil this finding into a plan for an upcoming set, or start a new one.
           </DialogDescription>
         </DialogHeader>
 
@@ -123,12 +147,12 @@ export function AddToMixtapeDialog({
               </a>
             </div>
 
-            {memberships.length > 0 ? (
+            {memberships.length > 0 || planMemberships.length > 0 ? (
               <div className="space-y-1">
                 <p className="text-xs font-bold text-muted-foreground">Already on</p>
                 <ul className="space-y-0.5">
                   {memberships.map((membership) => {
-                    const name = mixtapeDisplayTitle(membership.title) || "Draft";
+                    const name = mixtapeDisplayTitle(membership.title) || "Mixtape";
                     const label = membership.logId ? `${membership.logId} · ${name}` : name;
                     return (
                       <li
@@ -146,54 +170,63 @@ export function AddToMixtapeDialog({
                             {label}
                           </a>
                         ) : (
-                          <span className="truncate">
-                            {label}
-                            {membership.status === "draft" ? " (draft)" : ""}
-                          </span>
+                          <span className="truncate">{label}</span>
                         )}
                       </li>
                     );
                   })}
+                  {planMemberships.map((membership) => (
+                    <li
+                      className="flex items-center gap-1.5 text-sm text-muted-foreground"
+                      key={membership.recordingId}
+                    >
+                      <ListChecksIcon aria-hidden="true" className="size-3.5 shrink-0" />
+                      <span className="truncate font-mono text-xs">{membership.title}</span>
+                      <span className="shrink-0 text-xs">(plan)</span>
+                    </li>
+                  ))}
                 </ul>
               </div>
             ) : null}
 
             <div className="space-y-2">
-              <p className="text-xs font-bold text-muted-foreground">Add to a draft</p>
+              <p className="text-xs font-bold text-muted-foreground">Plans</p>
 
-              {/* The drafts are the primary target — listed first and prominent. A
-                  draft row is a filled action button; "New draft" sits below as the
-                  secondary path (promoted to primary only when there are no drafts). */}
-              {draftsLoading ? (
+              {/* The plans are the primary target — listed first and prominent. A
+                  plan row is a filled action button; "New plan" sits below as the
+                  secondary path (promoted to primary only when there are no plans). */}
+              {plansLoading ? (
                 <p className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
                   <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
-                  Loading drafts…
+                  Loading plans…
                 </p>
-              ) : drafts.length > 0 ? (
+              ) : plans.length > 0 ? (
                 <ul className="space-y-1.5">
-                  {drafts.map((draft) => {
-                    const id = draft.id as string;
+                  {plans.map((plan) => {
+                    const pencilled = plan.cues.some((cue) => cue.findingId === track.trackId);
                     return (
-                      <li key={id}>
+                      <li key={plan.id}>
                         <Button
                           className="w-full justify-start gap-2.5"
-                          disabled={busy}
-                          onClick={() => void addTo(id)}
+                          disabled={busy || pencilled}
+                          onClick={() => void addTo(plan)}
                         >
-                          {busyId === id ? (
+                          {busyId === plan.id ? (
                             <CircleNotchIcon
                               aria-hidden="true"
                               className="animate-spin"
                               weight="bold"
                             />
                           ) : (
-                            <CassetteTapeIcon aria-hidden="true" weight="fill" />
+                            <ListChecksIcon aria-hidden="true" weight="fill" />
                           )}
-                          <span className="min-w-0 flex-1 truncate text-left">
-                            {draft.title ? mixtapeDisplayTitle(draft.title) : "Mixtape draft"}
+                          <span className="min-w-0 flex-1 truncate text-left font-mono text-sm">
+                            {plan.title}
                           </span>
                           <span className="shrink-0 text-xs tabular-nums opacity-80">
-                            {draft.memberCount} banger{draft.memberCount === 1 ? "" : "s"}
+                            {pencilled
+                              ? "Pencilled in"
+                              : `${plan.cues.length} banger${plan.cues.length === 1 ? "" : "s"}`}
                           </span>
                         </Button>
                       </li>
@@ -201,23 +234,21 @@ export function AddToMixtapeDialog({
                   })}
                 </ul>
               ) : (
-                <p className="text-sm text-muted-foreground">
-                  No draft mixtapes yet — start the first one.
-                </p>
+                <p className="text-sm text-muted-foreground">No plans yet — start the first one.</p>
               )}
 
               <Button
                 className="w-full justify-start"
                 disabled={busy}
                 onClick={() => void addToNew()}
-                variant={drafts.length === 0 ? "default" : "outline"}
+                variant={plans.length === 0 ? "default" : "outline"}
               >
                 {creating ? (
                   <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
                 ) : (
                   <PlusIcon aria-hidden="true" weight="bold" />
                 )}
-                New draft mixtape
+                New plan
               </Button>
             </div>
 
@@ -233,9 +264,11 @@ export function AddToMixtapeDialog({
   );
 }
 
-async function createDraft(): Promise<string> {
-  const response = await fetch("/api/admin/mixtapes", {
-    body: JSON.stringify({}),
+// Start a fresh plan (`create_recording` kind=plan) — the server mints its
+// Galaxy-vocab handle; the caller then appends the finding as its first cue.
+async function createPlan(): Promise<string> {
+  const response = await fetch("/api/admin/recordings", {
+    body: JSON.stringify({ kind: "plan" }),
     credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
     method: "POST",
@@ -243,20 +276,32 @@ async function createDraft(): Promise<string> {
   if (!response.ok) {
     throw new Error(await readError(response));
   }
-  const body = (await response.json()) as { mixtape?: { id?: string } };
-  const id = body.mixtape?.id;
+  const body = (await response.json()) as { recording?: { id?: string } };
+  const id = body.recording?.id;
   if (!id) {
-    throw new Error("The new draft came back without an id.");
+    throw new Error("The new plan came back without an id.");
   }
   return id;
 }
 
-async function appendMember(mixtapeId: string, ref: string): Promise<void> {
-  const response = await fetch(`/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/members`, {
-    body: JSON.stringify({ members: [ref] }),
+// Append the finding as a cue: replay the plan's current cues untouched and add
+// this finding at the end (`replace_recording_cues` reindexes positions from the
+// array order). The cue carries the honest `finding_id` plus the snapshot text.
+async function appendCue(plan: PlanTarget, track: DialogTrack): Promise<void> {
+  const response = await fetch(`/api/admin/recordings/${encodeURIComponent(plan.id)}/cues`, {
+    body: JSON.stringify({
+      cues: [
+        ...plan.cues,
+        {
+          artistsText: track.artists.join(", "),
+          findingId: track.trackId,
+          titleText: track.title,
+        },
+      ],
+    }),
     credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
-    method: "POST",
+    method: "PUT",
   });
   if (!response.ok) {
     throw new Error(await readError(response));

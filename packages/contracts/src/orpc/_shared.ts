@@ -126,14 +126,16 @@ export const MixtapeDTOSchema = z
     // The RECORDING this mixtape was promoted from (RFC recording-primitive, Design B) —
     // the source of its set video + clips. Set on a promoted mixtape (and mixtape #1's
     // backfilled recording); absent on a legacy mixtape published before recordings
-    // existed. The `/admin/mixtapes` "Clip this set" entrypoint links to the recording's
-    // Studio (`/admin/studio/<recordingId>`) when present.
+    // existed. A mixtape's Studio IS its recording's Studio
+    // (`/admin/studio/<recordingId>`) when present.
     recordingId: z.string().optional(),
     sequenceNumber: z.number().optional(),
     // Set (ISO) once the full set video is uploaded to R2 — the `/log` page then
     // shows the branded scrubber player. Absent ⇒ no set video yet.
     setVideoAt: z.string().optional(),
-    status: z.enum(["distributing", "draft", "published"]),
+    // No "draft" arm: a mixtape is only ever born minted-or-minting via
+    // `promote_recording`; pre-publish authoring lives on plans.
+    status: z.enum(["distributing", "published"]),
     title: z.string(),
     type: z.literal("mixtape"),
     updatedAt: z.string().optional(),

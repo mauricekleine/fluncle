@@ -147,7 +147,6 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
 // private     = the `/me` cookie-session tier (read via privateUserAuth, write via
 //               privateUserMutation).
 const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> = {
-  add_mixtape_members: "operator",
   approve_submission: "operator",
   backfill_discogs: "admin",
   backfill_lastfm: "admin",
@@ -161,13 +160,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // recording-primitive, Design B).
   create_clip: "operator",
   create_edition: "admin",
-  create_mixtape: "operator",
   // The RFC recording-primitive writes — operator tier: create/update/delete a captured
   // set + `promote` (mints a coordinate). The agent token 403s.
   create_recording: "operator",
   delete_clip: "operator",
   delete_edition: "operator",
-  delete_mixtape: "operator",
   delete_private_account: "private-session",
   delete_recording: "operator",
   draft_track_social: "admin",
@@ -231,7 +228,6 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // Promote a recording → a published mixtape — operator tier: it mints a scarce
   // coordinate, so the agent token 403s.
   promote_recording: "operator",
-  publish_mixtape: "operator",
   publish_mixtape_youtube: "operator",
   publish_track: "operator",
   // Purges a LIVE published video's stale edge renditions (the re-render cache twin
@@ -262,7 +258,6 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The hardened post-publish cue backfill — operator tier: it rewrites a published
   // set's surface, so the agent token 403s.
   set_mixtape_cues: "operator",
-  set_mixtape_members: "operator",
   start_lastfm_auth: "operator",
   sweep_push_receipts: "admin",
   unsave_private_finding: "private-session",

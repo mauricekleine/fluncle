@@ -2,11 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_MIXTAPE_TITLE, publishMixtape } from "./mixtapes";
 
 // publishMixtape's DB choreography: getMixtapeById (a MIXTAPE_SELECT execute) → the
-// cap pre-check (a max(sequence_number) execute) → the mint batch (returning log_id
-// + sequence_number, status → 'distributing') → an optional title update execute →
-// a final getMixtapeById readback. We back it with a single mutable row and answer
-// each query by its SQL shape — enough to prove the gate + mint-to-distributing +
-// canonicalization without a real libsql instance.
+// cap pre-check (a max(sequence_number) execute) → the mint batch (gated on
+// `log_id is null`, returning log_id + sequence_number) → an optional title update
+// execute → a final getMixtapeById readback. The row arrives as promote's CLAIM
+// (status `distributing`, log_id NULL — there is no draft state); the mint commits
+// the coordinate. We back it with a single mutable row and answer each query by
+// its SQL shape — enough to prove the gate + mint + canonicalization without a
+// real libsql instance.
 
 type Row = Record<string, unknown>;
 
@@ -60,45 +62,46 @@ vi.mock("./tracks", () => ({
   getTracksForMixtape: async () => [],
 }));
 
-// A complete, mintable draft. Individual tests blank a field to prove the gate.
-// Note: NO external link — distribution supplies it, so the gate no longer requires one.
-function seedDraft(overrides: Partial<Row> = {}): void {
+// A complete, mintable claim (the row promote inserts before minting). Individual
+// tests blank a field to prove the gate. Note: NO external link — distribution
+// supplies it, so the gate no longer requires one.
+function seedClaim(overrides: Partial<Row> = {}): void {
   state.nextSequence = 1;
   state.row = {
     created_at: "2026-06-19T00:00:00.000Z",
     duration_ms: 3_480_000,
-    id: "draft-id",
+    id: "claim-id",
     log_id: null,
     member_count: 1,
     note: "A late checkpoint, dreamt.",
     recorded_at: "2026-06-19T00:00:00.000Z",
     sequence_number: null,
-    status: "draft",
+    status: "distributing",
     title: "",
     updated_at: "2026-06-19T00:00:00.000Z",
     ...overrides,
   };
 }
 
-describe("publishMixtape — mint into distributing", () => {
+describe("publishMixtape — mint the claimed coordinate", () => {
   beforeEach(() => {
     execute.mockClear();
     batch.mockClear();
   });
 
-  it("mints a draft into 'distributing' — not yet public — with no external link", async () => {
-    seedDraft();
+  it("mints an unminted claim — committing its Log ID, not yet public", async () => {
+    seedClaim();
 
-    const minted = await publishMixtape("draft-id");
+    const minted = await publishMixtape("claim-id");
 
     expect(minted.status).toBe("distributing");
     expect(minted.logId).toBe("020.F.1A");
   });
 
   it("mints off the recorded date (the sector day)", async () => {
-    seedDraft({ recorded_at: "2026-07-01T20:00:00.000Z" });
+    seedClaim({ recorded_at: "2026-07-01T20:00:00.000Z" });
 
-    const minted = await publishMixtape("draft-id");
+    const minted = await publishMixtape("claim-id");
 
     // The sector is 2026-07-01, the recorded date. (The old plannedFor-wins
     // resolution retired with `mixtapes.planned_for` in the Deploy-2 cutover.)
@@ -106,9 +109,9 @@ describe("publishMixtape — mint into distributing", () => {
   });
 
   it("canonicalizes the stub title and derives the cover from the minted Log ID", async () => {
-    seedDraft();
+    seedClaim();
 
-    const minted = await publishMixtape("draft-id");
+    const minted = await publishMixtape("claim-id");
 
     expect(minted.title).toBe("Fluncle Drum & Bass Mixtape #1 | 020.F.1A");
     expect(minted.coverImageUrl).toBe(
@@ -117,17 +120,17 @@ describe("publishMixtape — mint into distributing", () => {
   });
 
   it("treats the DEFAULT stub title as canonicalizable", async () => {
-    seedDraft({ title: DEFAULT_MIXTAPE_TITLE });
+    seedClaim({ title: DEFAULT_MIXTAPE_TITLE });
 
-    const minted = await publishMixtape("draft-id");
+    const minted = await publishMixtape("claim-id");
 
     expect(minted.title).toBe("Fluncle Drum & Bass Mixtape #1 | 020.F.1A");
   });
 
   it("leaves an operator-set (future-series) title untouched, cover still derived", async () => {
-    seedDraft({ title: "Fluncle Ambient Mixtape" });
+    seedClaim({ title: "Fluncle Ambient Mixtape" });
 
-    const minted = await publishMixtape("draft-id");
+    const minted = await publishMixtape("claim-id");
 
     expect(minted.title).toBe("Fluncle Ambient Mixtape");
     expect(minted.coverImageUrl).toBe(
@@ -142,42 +145,47 @@ describe("publishMixtape — mint guards + cap", () => {
     batch.mockClear();
   });
 
-  // A draft is just the tracklist — that's the only hard requirement to mint.
+  // A claim is just the tracklist — that's the only hard requirement to mint.
   // The recorded date defaults to today, the dream note is written via the
   // post-publish edit, and the duration is derived from the upload by distribute.
   it("mints without a recorded date — it defaults to today", async () => {
-    seedDraft({ recorded_at: null });
-    await expect(publishMixtape("draft-id")).resolves.toMatchObject({ status: "distributing" });
+    seedClaim({ recorded_at: null });
+    await expect(publishMixtape("claim-id")).resolves.toMatchObject({ status: "distributing" });
   });
 
   it("mints without a note — the dream note is written after publishing", async () => {
-    seedDraft({ note: "   " });
-    await expect(publishMixtape("draft-id")).resolves.toMatchObject({ status: "distributing" });
+    seedClaim({ note: "   " });
+    await expect(publishMixtape("claim-id")).resolves.toMatchObject({ status: "distributing" });
   });
 
   it("mints without a duration — distribution derives it from the upload", async () => {
-    seedDraft({ duration_ms: null });
-    await expect(publishMixtape("draft-id")).resolves.toMatchObject({ status: "distributing" });
+    seedClaim({ duration_ms: null });
+    await expect(publishMixtape("claim-id")).resolves.toMatchObject({ status: "distributing" });
   });
 
   it("mints even with no external link (distribution supplies it)", async () => {
-    seedDraft();
-    await expect(publishMixtape("draft-id")).resolves.toMatchObject({ status: "distributing" });
+    seedClaim();
+    await expect(publishMixtape("claim-id")).resolves.toMatchObject({ status: "distributing" });
   });
 
   it("rejects an empty tracklist", async () => {
-    seedDraft({ member_count: 0 });
-    await expect(publishMixtape("draft-id")).rejects.toThrow(/finding/i);
+    seedClaim({ member_count: 0 });
+    await expect(publishMixtape("claim-id")).rejects.toThrow(/finding/i);
   });
 
-  it("rejects re-minting a mixtape already distributing", async () => {
-    seedDraft({ status: "distributing" });
-    await expect(publishMixtape("draft-id")).rejects.toThrow(/in progress/i);
+  it("rejects re-minting a mixtape whose coordinate is already committed", async () => {
+    seedClaim({ log_id: "020.F.1A", sequence_number: 1 });
+    await expect(publishMixtape("claim-id")).rejects.toThrow(/in progress/i);
+  });
+
+  it("rejects re-minting a published mixtape", async () => {
+    seedClaim({ log_id: "020.F.1A", sequence_number: 1, status: "published" });
+    await expect(publishMixtape("claim-id")).rejects.toThrow(/keep their coordinate/i);
   });
 
   it("rejects when the spine is full (sequence would exceed 54)", async () => {
-    seedDraft();
+    seedClaim();
     state.nextSequence = 55;
-    await expect(publishMixtape("draft-id")).rejects.toThrow(/full/i);
+    await expect(publishMixtape("claim-id")).rejects.toThrow(/full/i);
   });
 });

@@ -126,7 +126,7 @@ export async function finalizeMixtapeDistribution(
   const ownedTransition = (batchResults[1]?.rowsAffected ?? 0) > 0;
 
   // A new listen link changes the published mixtape's `/log` page; drop it from cache.
-  const mixtape = await getMixtapeById(mixtapeId, { includeDrafts: true });
+  const mixtape = await getMixtapeById(mixtapeId);
   purgeLogCache(mixtape.logId);
 
   // Best-effort push to the mobile crew — ONLY on the actual distributing→published

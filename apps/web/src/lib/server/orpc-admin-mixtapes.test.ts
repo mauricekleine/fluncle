@@ -3,20 +3,17 @@ import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, req, setAdminTokenEnv } from "./
 
 // The admin wave's `admin-mixtapes` parity + auth proof, driven end-to-end
 // through `handleOrpc`. Covers the auth tiers (reads = admin; everything else =
-// operator), the members POST(append)/PUT(replace) method split on one path, and
-// the distribution-step validation (mixcloud `url`, youtube `not_distributed`).
+// operator), the retirement of the draft-authoring ops (create/members/publish/
+// delete no longer exist on the wire — a mixtape is only ever born via
+// `promote_recording`), and the distribution-step validation (mixcloud `url`,
+// youtube `not_distributed`).
 //
 //   - list_mixtapes_admin / get_mixtape_social — admin tier (live `requireAdmin`).
-//   - create/update/delete/members/publish + every distribution step — operator
-//     tier (live `requireOperator`): the agent is a 403.
+//   - update + every distribution step — operator tier (live `requireOperator`):
+//     the agent is a 403.
 
 const listMixtapes = vi.fn();
-const createMixtape = vi.fn();
 const updateMixtape = vi.fn();
-const deleteMixtape = vi.fn();
-const addTracksToMixtape = vi.fn();
-const setMixtapeMembers = vi.fn();
-const publishMixtape = vi.fn();
 const getMixtapeById = vi.fn();
 const listMixtapeSocialPosts = vi.fn();
 const finalizeMixtapeDistribution = vi.fn();
@@ -28,15 +25,10 @@ const updateClip = vi.fn();
 const deleteClip = vi.fn();
 
 vi.mock("./mixtapes", () => ({
-  addTracksToMixtape: (...args: unknown[]) => addTracksToMixtape(...args),
-  createMixtape: (...args: unknown[]) => createMixtape(...args),
-  deleteMixtape: (...args: unknown[]) => deleteMixtape(...args),
   getMixtapeById: (...args: unknown[]) => getMixtapeById(...args),
   listMixtapes: (...args: unknown[]) => listMixtapes(...args),
-  publishMixtape: (...args: unknown[]) => publishMixtape(...args),
   setMixtapeCue: (...args: unknown[]) => setMixtapeCue(...args),
   setMixtapeCues: (...args: unknown[]) => setMixtapeCues(...args),
-  setMixtapeMembers: (...args: unknown[]) => setMixtapeMembers(...args),
   updateMixtape: (...args: unknown[]) => updateMixtape(...args),
 }));
 
@@ -71,7 +63,7 @@ const MIXTAPE = {
   externalUrls: {},
   memberCount: 0,
   members: [],
-  status: "draft",
+  status: "distributing",
   title: "Mixtape #1",
   type: "mixtape",
 };
@@ -80,12 +72,7 @@ beforeAll(setAdminTokenEnv);
 
 beforeEach(() => {
   listMixtapes.mockReset();
-  createMixtape.mockReset();
   updateMixtape.mockReset();
-  deleteMixtape.mockReset();
-  addTracksToMixtape.mockReset();
-  setMixtapeMembers.mockReset();
-  publishMixtape.mockReset();
   getMixtapeById.mockReset();
   listMixtapeSocialPosts.mockReset();
   finalizeMixtapeDistribution.mockReset();
@@ -116,7 +103,7 @@ describe("oRPC list_mixtapes_admin (GET /admin/mixtapes)", () => {
     expect((await handleOrpc(req("/admin/mixtapes", "GET", undefined)))?.status).toBe(401);
   });
 
-  it("lets the AGENT read (hydrated, including drafts)", async () => {
+  it("lets the AGENT read (hydrated, including distributing)", async () => {
     listMixtapes.mockResolvedValueOnce([MIXTAPE]);
 
     const { handleOrpc } = await import("./orpc");
@@ -124,123 +111,48 @@ describe("oRPC list_mixtapes_admin (GET /admin/mixtapes)", () => {
 
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({ mixtapes: [MIXTAPE], ok: true });
-    expect(listMixtapes).toHaveBeenCalledWith({ hydrateMembers: true, includeDrafts: true });
+    expect(listMixtapes).toHaveBeenCalledWith({ hydrateMembers: true, includeUnpublished: true });
   });
 });
 
-// ── create_mixtape — operator tier ───────────────────────────────────────────
-describe("oRPC create_mixtape (POST /admin/mixtapes)", () => {
-  it("403s the AGENT (operator-only)", async () => {
+// ── the retired draft-authoring ops ──────────────────────────────────────────
+// A mixtape is only ever born via `promote_recording` now: the create/members/
+// publish/delete ops are OFF THE WIRE. `handleOrpc` returns undefined for an
+// unmatched route (it falls through to the file-route router, where none of these
+// paths exist either — returning null), so a null here proves no draft mixtape
+// can be created, seeded, minted, or deleted over HTTP anymore.
+describe("oRPC retired draft-mixtape ops", () => {
+  it("no longer matches POST /admin/mixtapes (create_mixtape retired)", async () => {
     const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(req("/admin/mixtapes", "POST", AGENT_TOKEN, { note: "x" }));
-
-    expect(response?.status).toBe(403);
-    expect(createMixtape).not.toHaveBeenCalled();
+    expect(await handleOrpc(req("/admin/mixtapes", "POST", OPERATOR_TOKEN, {}))).toBeNull();
   });
 
-  it("creates for the operator and returns the live envelope", async () => {
-    createMixtape.mockResolvedValueOnce(MIXTAPE);
-
+  it("no longer matches the members writes (append + replace retired)", async () => {
     const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(
-      req("/admin/mixtapes", "POST", OPERATOR_TOKEN, { note: "a dream" }),
-    );
-
-    expect(response?.status).toBe(200);
-    expect(await readJson(response)).toEqual({ mixtape: MIXTAPE, ok: true });
-    expect(createMixtape).toHaveBeenCalledWith({ note: "a dream" });
-  });
-});
-
-// ── members: POST appends, PUT replaces (one path, two ops) ──────────────────
-describe("oRPC mixtape members (POST append / PUT replace)", () => {
-  it("403s the AGENT on POST append", async () => {
-    const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(
-      req(`/admin/mixtapes/${MIXTAPE_ID}/members`, "POST", AGENT_TOKEN, { members: [] }),
-    );
-
-    expect(response?.status).toBe(403);
-    expect(addTracksToMixtape).not.toHaveBeenCalled();
+    expect(
+      await handleOrpc(
+        req(`/admin/mixtapes/${MIXTAPE_ID}/members`, "POST", OPERATOR_TOKEN, { members: ["t1"] }),
+      ),
+    ).toBeNull();
+    expect(
+      await handleOrpc(
+        req(`/admin/mixtapes/${MIXTAPE_ID}/members`, "PUT", OPERATOR_TOKEN, { members: ["t1"] }),
+      ),
+    ).toBeNull();
   });
 
-  it("APPENDS for the operator on POST", async () => {
-    addTracksToMixtape.mockResolvedValueOnce(MIXTAPE);
-
+  it("no longer matches POST .../publish (publish_mixtape retired — promote mints)", async () => {
     const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(
-      req(`/admin/mixtapes/${MIXTAPE_ID}/members`, "POST", OPERATOR_TOKEN, {
-        members: [{ trackId: "t1" }],
-      }),
-    );
-
-    expect(response?.status).toBe(200);
-    expect(addTracksToMixtape).toHaveBeenCalledWith(MIXTAPE_ID, { members: [{ trackId: "t1" }] });
-    expect(setMixtapeMembers).not.toHaveBeenCalled();
+    expect(
+      await handleOrpc(req(`/admin/mixtapes/${MIXTAPE_ID}/publish`, "POST", OPERATOR_TOKEN)),
+    ).toBeNull();
   });
 
-  it("REPLACES for the operator on PUT", async () => {
-    setMixtapeMembers.mockResolvedValueOnce(MIXTAPE);
-
+  it("no longer matches DELETE /admin/mixtapes/{id} (delete_mixtape retired)", async () => {
     const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(
-      req(`/admin/mixtapes/${MIXTAPE_ID}/members`, "PUT", OPERATOR_TOKEN, {
-        members: [{ trackId: "t2" }],
-      }),
-    );
-
-    expect(response?.status).toBe(200);
-    expect(setMixtapeMembers).toHaveBeenCalledWith(MIXTAPE_ID, { members: [{ trackId: "t2" }] });
-    expect(addTracksToMixtape).not.toHaveBeenCalled();
-  });
-});
-
-// ── delete_mixtape — operator tier ───────────────────────────────────────────
-describe("oRPC delete_mixtape (DELETE /admin/mixtapes/{mixtapeId})", () => {
-  it("403s the AGENT", async () => {
-    const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(req(`/admin/mixtapes/${MIXTAPE_ID}`, "DELETE", AGENT_TOKEN));
-
-    expect(response?.status).toBe(403);
-    expect(deleteMixtape).not.toHaveBeenCalled();
-  });
-
-  it("deletes for the operator and returns `{ ok: true }`", async () => {
-    deleteMixtape.mockResolvedValueOnce(undefined);
-
-    const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(
-      req(`/admin/mixtapes/${MIXTAPE_ID}`, "DELETE", OPERATOR_TOKEN),
-    );
-
-    expect(response?.status).toBe(200);
-    expect(await readJson(response)).toEqual({ ok: true });
-    expect(deleteMixtape).toHaveBeenCalledWith(MIXTAPE_ID);
-  });
-});
-
-// ── publish_mixtape — operator tier ──────────────────────────────────────────
-describe("oRPC publish_mixtape (POST .../publish)", () => {
-  it("403s the AGENT", async () => {
-    const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(
-      req(`/admin/mixtapes/${MIXTAPE_ID}/publish`, "POST", AGENT_TOKEN),
-    );
-
-    expect(response?.status).toBe(403);
-    expect(publishMixtape).not.toHaveBeenCalled();
-  });
-
-  it("mints for the operator (bodyless POST)", async () => {
-    publishMixtape.mockResolvedValueOnce({ ...MIXTAPE, status: "distributing" });
-
-    const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(
-      req(`/admin/mixtapes/${MIXTAPE_ID}/publish`, "POST", OPERATOR_TOKEN),
-    );
-
-    expect(response?.status).toBe(200);
-    expect(publishMixtape).toHaveBeenCalledWith(MIXTAPE_ID);
+    expect(
+      await handleOrpc(req(`/admin/mixtapes/${MIXTAPE_ID}`, "DELETE", OPERATOR_TOKEN)),
+    ).toBeNull();
   });
 });
 

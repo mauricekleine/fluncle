@@ -132,7 +132,7 @@ describe("mixtapeAlbumJsonLd", () => {
         },
       ],
       note: "A checkpoint in the archive.",
-      status: "draft",
+      status: "published",
       title: "Checkpoint one",
       type: "mixtape",
     });

@@ -9,7 +9,7 @@ import { setMixtapeCues } from "./mixtapes";
 //   - it rejects a non-member ref;
 //   - it rejects a non-start-at-0 / non-monotonic cue set;
 //   - it rejects an attempt that would change the member set;
-//   - (and it rejects a draft, the inverse of assertDraftMixtape).
+//   - (and it rejects an unminted claim, the inverse of assertUnmintedMixtape).
 
 type Row = Record<string, unknown>;
 
@@ -168,8 +168,8 @@ describe("setMixtapeCues — post-publish cue backfill", () => {
     expect(batch).not.toHaveBeenCalled();
   });
 
-  it("rejects a draft (cues are a post-publish backfill)", async () => {
-    seed({ log_id: null, status: "draft" });
+  it("rejects an unminted claim (cues are a post-publish backfill)", async () => {
+    seed({ log_id: null, status: "distributing" });
 
     await expect(
       setMixtapeCues("mix-1", {
@@ -179,7 +179,7 @@ describe("setMixtapeCues — post-publish cue backfill", () => {
           { ref: "t3", startMs: 360_000 },
         ],
       }),
-    ).rejects.toThrow(/publish the mixtape first/i);
+    ).rejects.toThrow(/promote the recording first/i);
 
     expect(batch).not.toHaveBeenCalled();
   });

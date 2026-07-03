@@ -700,7 +700,7 @@ export const SURFACES: readonly Surface[] = [
   {
     command: "fluncle admin",
     exposedContent: [
-      "the operator/agent command group (hidden): tracks publish|update|enrich|video|draft|social|preview|observe|context|note, mixtapes create|update|members|publish|delete, newsletter draft|update|send|list, backfills, auth",
+      "the operator/agent command group (hidden): tracks publish|update|enrich|video|draft|social|preview|observe|context|note, recordings create|promote, mixtapes update|distribute|resync, newsletter draft|update|send|list, backfills, auth",
     ],
     kind: "cli",
     name: "cli.admin",

@@ -72,10 +72,8 @@ Admin operations (cookie-or-bearer, **not in the public OpenAPI spec**), express
 | Capture missing post URLs (the sweep)               | `POST /admin/social/posts/capture` (`capture_post_urls`; collection-level action, no track id)             |
 | Record an observation                               | `POST /admin/tracks/{trackId}/observe` (**verb segment on a REST path**)                                   |
 | Archive a preview                                   | `POST /admin/tracks/{trackId}/preview` (single-word action; `…/preview-archive` retired)                   |
-| List/create mixtapes                                | `GET/POST /admin/mixtapes`                                                                                 |
-| Update/delete a mixtape                             | `PATCH/DELETE /admin/mixtapes/{mixtapeId}`                                                                 |
-| Publish a mixtape                                   | `POST /admin/mixtapes/{mixtapeId}/publish` (**verb segment**)                                              |
-| Set mixtape members                                 | `POST /admin/mixtapes/{mixtapeId}/members`                                                                 |
+| List mixtapes                                       | `GET /admin/mixtapes` (create/publish/members/delete retired — a mixtape is born via `promote_recording`)  |
+| Update a mixtape                                    | `PATCH /admin/mixtapes/{mixtapeId}`                                                                        |
 | YouTube / Mixcloud distribution                     | `…/youtube/initiate`, `…/youtube/finalize`, `…/youtube/publish`, `…/mixcloud/finalize` (**verb segments**) |
 | Enrich sweep                                        | `POST /admin/tracks/enrich` (canonical; `…/enrich-sweep` kept as a back-compat alias)                      |
 | Backfill                                            | `POST /admin/backfill/lastfm`, `…/backfill/discogs`                                                        |
@@ -114,7 +112,7 @@ The web admin board (`apps/web/src/components/admin/*`, `apps/web/src/routes/adm
 - Tag: `Save placement` / `Save & next` / `Tag`
 - Publish: `Post to {platform}` / `Re-post` / `Push draft to inbox` / `Re-push draft` / `Push` / `Mark live` / `Mark failed` / `Drafted` / `Live`
 - Note: `Save note` / `Save & next`
-- Mixtape: `Add to a mixtape` / `New draft mixtape` / `New mixtape draft` / `Discard draft` / `Make YouTube public`
+- Mixtape/plan: `Add to a plan` / `New plan` / `Discard plan` / `Make YouTube public`
 
 The same publish action is `Push draft to inbox` (board) / `admin track draft` (CLI) / `POST …/social/{platform}/draft` (API). The same enrich action is `Run enrichment` (board) / `admin enrich-sweep` (CLI) / `POST /admin/enrich-sweep` (API). The board verbs are fine as voice (they're crew-facing copy), but they're not derivable from the CLI/API name and vice versa.
 
@@ -150,7 +148,7 @@ Mapping rule: canonical op `list_tracks` ⇒ API `GET /tracks` + `listTracks`; M
 | admin publish a track | `admin add` / —                                                 | CLI `admin tracks publish`                                                                                        |
 | enrich sweep          | `admin enrich-sweep` / `POST /admin/enrich-sweep`               | CLI `admin tracks enrich --all`; API `POST /admin/tracks/enrich`                                                  |
 | push draft            | `admin track draft` / `…/social/{platform}/draft`               | CLI `admin tracks draft`; API unchanged                                                                           |
-| mixtape publish       | `admin mixtapes publish` / `…/publish`                          | unchanged (already conformant)                                                                                    |
+| mixtape mint          | `admin recordings promote` / `…/recordings/{id}/promote`        | the only mint path (`promote_recording`); the old `mixtapes publish` draft mint retired                           |
 
 Tradeoffs. **+** One mental model (REST) for CLI, API, MCP. **+** Mechanical `operationId → cli/mcp` derivation; the registry is the only thing to maintain. **+** Plays well with the existing `/api` REST design — least churn on the server. **−** Heavy CLI churn: every root verb (`recent`, `random`, `submit`, `subscribe`, `open`) becomes `noun verb`, which reads stiffer and breaks muscle memory and docs/screenshots. **−** Fights the SSH/voice register, where `latest` and `Random banger` are the point; you'd keep those as aliases, reintroducing a second name.
 

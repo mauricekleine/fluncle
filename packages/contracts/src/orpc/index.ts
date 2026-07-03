@@ -56,11 +56,8 @@ export {
   updateEdition,
 } from "./admin-editions";
 export {
-  addMixtapeMembers,
   createClip,
-  createMixtape,
   deleteClip,
-  deleteMixtape,
   finalizeClipCut,
   finalizeMixtapeMixcloud,
   finalizeMixtapeYoutube,
@@ -69,10 +66,8 @@ export {
   listClips,
   listMixtapesAdmin,
   presignClipUpload,
-  publishMixtape,
   publishMixtapeYoutube,
   setMixtapeCues,
-  setMixtapeMembers,
   updateClip,
   updateMixtape,
   updateMixtapeCue,
