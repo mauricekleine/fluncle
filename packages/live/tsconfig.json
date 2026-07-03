@@ -1,6 +1,7 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
+    "allowImportingTsExtensions": true,
     "lib": ["DOM", "DOM.Iterable", "ES2022"],
     "moduleResolution": "Bundler",
     // Deliberate opt-out mirroring packages/video: live DSP/shader hot-loop code.
