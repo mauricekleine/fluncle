@@ -28,7 +28,7 @@ Two durable OAuth grants, stored **server-side** so the CLI stays a thin client:
 - `fluncle admin auth youtube` — opens Google's consent screen; the refresh token is stored in `youtube_auth`. **At the consent screen pick the `@fluncle` channel (a Brand Account), not a personal Google account** — the wrong identity fails the upload with `youtubeSignupRequired`. The `@fluncle` channel must be phone-verified (done) or uploads over 15 min fail at insert.
 - `fluncle admin auth mixcloud` — prints a Mixcloud authorize URL; approve, and the callback exchanges the code into `mixcloud_auth`. The CLI fetches this token just-in-time at upload (only the bytes are CLI-side). Re-run if a later upload reports an invalid token. Secrets live on Cloudflare (`MIXCLOUD_CLIENT_ID/SECRET`; the redirect is derived from the request origin, no var).
 
-For the Rekordbox tracklist step, also cache the database key once (see that step).
+For the Rekordbox tracklist step, quit Rekordbox fully before running any script — it holds an exclusive lock on `master.db`. pyrekordbox auto-extracts the SQLCipher key from your Rekordbox install; no separate key step is needed (see §B for the manual fallback).
 
 ## The per-mixtape runbook
 
@@ -54,10 +54,9 @@ Pre-publish authoring is a **PLAN** — a videoless `recordings` row, not a mixt
 
 **Derive the take's cue tracklist from Rekordbox automatically.** After recording a take, run `rekordbox-derive-cues.py` to read the session history, match each track against the Fluncle catalogue, and write the ordered cue array directly to the take's `recording_cues` via `replace-cues`. This replaces the "feed the pruned list by hand" step entirely.
 
-```bash
-# One-time: quit Rekordbox, then cache the SQLCipher key.
-uv run --with pyrekordbox python -m pyrekordbox download-key
+**Rekordbox prerequisite:** quit Rekordbox fully before running any script — it holds an exclusive lock on `master.db`. pyrekordbox **auto-extracts the SQLCipher key from your Rekordbox install** when it opens the database, so there is no separate key step. (`python -m pyrekordbox download-key` was removed upstream at AlphaTheta's request — do not re-add it.) If auto-extraction ever fails, cache the key once in Python: `from pyrekordbox.config import write_db6_key_cache; write_db6_key_cache("<key>")`.
 
+```bash
 # Dry-run: see the proposed cues (matched / unmatched / flagged) without writing anything.
 uv run packages/skills/fluncle-mixtapes/scripts/rekordbox-derive-cues.py            # latest session
 uv run packages/skills/fluncle-mixtapes/scripts/rekordbox-derive-cues.py --list     # choose a session
