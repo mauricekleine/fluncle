@@ -7,6 +7,7 @@ import {
   videoCrop,
   videoPoster,
   videoRendition,
+  videoVersion,
 } from "@/lib/media";
 import { usePreviewPlayer } from "@/lib/preview-player";
 import { type Track } from "@/lib/tracks";
@@ -32,6 +33,9 @@ export function LogFootage({ track }: { track: Track }) {
   // portrait+text cut. NEVER footage.social.mp4 — that
   // baked-text cut is the homepage Stories format; /log + radio stay clean.
   const squared = Boolean(track.videoSquaredAt);
+  // The video vintage rides every transform URL as its `?v` token — a re-render
+  // bumps videoSquaredAt, so MT derives off the new master (media.ts).
+  const version = videoVersion(track.videoSquaredAt);
   // The desktop verdict drives BOTH the requested crop and the pane aspect (the
   // `--squared` class flips 9:16 → 16:9 at the same min-width: 768px boundary).
   // `false` until mounted, so SSR/first paint is the mobile-first portrait pane.
@@ -56,10 +60,10 @@ export function LogFootage({ track }: { track: Track }) {
       ? squared
         ? // Two-master: a clean centre-crop off the square master — landscape on
           // desktop, portrait on mobile, matching the responsive pane.
-          videoCrop(track.logId, isDesktop ? "landscape" : "portrait")
+          videoCrop(track.logId, isDesktop ? "landscape" : "portrait", undefined, false, version)
         : // Legacy: a width-ladder rendition off the portrait footage.mp4.
           renditionWidth
-          ? videoRendition(track.logId, { width: renditionWidth })
+          ? videoRendition(track.logId, { version, width: renditionWidth })
           : masterVideoUrl
       : masterVideoUrl;
   const onMaster = !videoUrl || videoUrl === masterVideoUrl;
@@ -91,7 +95,8 @@ export function LogFootage({ track }: { track: Track }) {
   // A cheap edge-extracted opening frame; falls back to the bundle poster, then
   // album art. The poster attribute has no error event, so an Image() probe
   // validates the frame transform.
-  const framePoster = track.logId && !framePosterFailed ? videoPoster(track.logId) : undefined;
+  const framePoster =
+    track.logId && !framePosterFailed ? videoPoster(track.logId, undefined, version) : undefined;
   const posterUrl =
     framePoster ??
     (!posterFailed ? media?.posterUrl : undefined) ??

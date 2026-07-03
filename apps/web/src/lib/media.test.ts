@@ -11,6 +11,7 @@ import {
   videoPoster,
   videoPurgeUrls,
   videoRendition,
+  videoVersion,
 } from "./media";
 
 // The Media Transformations URLs are same-zone: the /cdn-cgi/media prefix lives
@@ -420,5 +421,53 @@ describe("videoPurgeUrls", () => {
     // from creeping past that — a purge should stay a couple of requests, not a fan-out.
     expect(videoPurgeUrls(LOG_ID, { squared: true }).length).toBeLessThanOrEqual(60);
     expect(videoPurgeUrls(LOG_ID, { squared: true }).length).toBe(32);
+  });
+});
+
+describe("videoVersion (the transform vintage token)", () => {
+  const STAMP = "2026-07-02T08:00:30.940Z";
+  const EPOCH = Date.parse(STAMP);
+
+  it("parses a videoSquaredAt/updatedAt stamp to its epoch", () => {
+    expect(videoVersion(STAMP)).toBe(EPOCH);
+  });
+
+  it("is undefined (-> the constant token) for absent or garbage stamps", () => {
+    expect(videoVersion(undefined)).toBeUndefined();
+    expect(videoVersion(null)).toBeUndefined();
+    expect(videoVersion("")).toBeUndefined();
+    expect(videoVersion("not-a-date")).toBeUndefined();
+  });
+
+  it("rides every transform source as ?v=<epoch>; absent keeps the constant", () => {
+    expect(videoCrop("004.7.2I", "portrait", 720, false, EPOCH)).toContain(`?v=${EPOCH}`);
+    expect(videoCrop("004.7.2I", "portrait", 720)).toContain("?v=1");
+    expect(videoCropPoster("004.7.2I", "portrait", 720, 0, EPOCH)).toContain(`?v=${EPOCH}`);
+    expect(videoRendition("004.7.2I", { version: EPOCH, width: 720 })).toContain(`?v=${EPOCH}`);
+    expect(videoPoster("004.7.2I", undefined, EPOCH)).toContain(`?v=${EPOCH}`);
+    expect(videoClipCrop("004.7.2I", "portrait", 5, undefined, 60, EPOCH)).toContain(`?v=${EPOCH}`);
+    expect(videoAudioStripped(`${FOUND_BASE}/004.7.2I/footage.social.mp4`, EPOCH)).toContain(
+      `?v=${EPOCH}`,
+    );
+  });
+
+  it("videoPurgeUrls carries the vintage on every transform and never on bare objects", () => {
+    const media = trackMedia("004.7.2I");
+    const urls = videoPurgeUrls("004.7.2I", { squared: true, version: EPOCH });
+    const transforms = urls.filter((u) => u.includes("/cdn-cgi/media/"));
+    const bare = urls.filter((u) => !u.includes("/cdn-cgi/media/"));
+
+    expect(transforms.length).toBeGreaterThan(0);
+
+    for (const u of transforms) {
+      expect(u).toContain(`?v=${EPOCH}`);
+    }
+
+    for (const u of bare) {
+      expect(u).not.toContain("?v=");
+    }
+
+    expect(bare).toContain(media.videoUrl);
+    expect(bare).toContain(media.posterUrl);
   });
 });

@@ -27,7 +27,7 @@ import { env } from "cloudflare:workers";
 import { type InferContractRouterInputs } from "@orpc/contract";
 import { ORPCError } from "@orpc/server";
 import { type contract } from "@fluncle/contracts/orpc";
-import { FOUND_BASE, trackMedia } from "../../media";
+import { FOUND_BASE, trackMedia, videoVersion } from "../../media";
 import { recordNoteAttempt } from "../backfill";
 import { parseEditorialNote } from "../http-errors";
 import { gateNoteText } from "../note";
@@ -755,27 +755,36 @@ export function adminTracksHandlers(os: Implementer) {
       // A RE-RENDER: this finding already had a `video_url` (the prior render),
       // and finalize re-ships `footage.mp4` to the SAME R2 key. The bare master
       // URL is byte-identical (the queue gates on presence, not content), so the
-      // DB write below is a no-op for `video_url` — but the edge keeps serving the
-      // OLD master's cached Media-Transformation renditions. Purge them so the
-      // player picks up the fresh render. Best-effort, fired off the request
+      // DB write below is a no-op for `video_url` — but stale renditions live on.
+      // The NEW `videoSquaredAt` below is the vintage every surface rides as the
+      // transform `?v` token (media.ts `videoVersion`), which is what actually
+      // evicts MT's internally-cached renditions; the purge covers the bare R2
+      // objects + any zone-edge copies. Best-effort, fired off the request
       // lifecycle (waitUntil) BELOW after the DB write commits.
+      const squaredAt = squared ? new Date().toISOString() : undefined;
+
       await updateTrack(track.trackId, {
         videoModel,
         videoModelReasoning,
         videoUrl,
-        ...(squared ? { videoSquaredAt: new Date().toISOString() } : {}),
+        ...(squaredAt ? { videoSquaredAt: squaredAt } : {}),
         ...(videoVehicle ? { videoVehicle } : {}),
         ...(videoGrain ? { videoGrain } : {}),
         ...(videoRegister ? { videoRegister } : {}),
       });
 
-      // Drop stale edge renditions on EVERY finalize, not just when track.videoUrl was
+      // Drop stale edge entries on EVERY finalize, not just when track.videoUrl was
       // already set: the requeue flow clears video_url to re-queue a finding, so a
       // re-render's finalize sees no prior url and would otherwise skip the purge (the
       // gap the manual heartbeat used to cover). On a genuine first render nothing is
       // cached yet, so this is a harmless no-op. `squared` reflects the layout the
-      // finding now carries, so the purge set matches what the surfaces will request.
-      purgeVideoCache(track.logId, squared || Boolean(track.videoSquaredAt));
+      // finding now carries, so the purge set matches what the surfaces will request —
+      // built with the NEW vintage, the same `?v` the surfaces mint from now on.
+      purgeVideoCache(
+        track.logId,
+        squared || Boolean(track.videoSquaredAt),
+        videoVersion(squaredAt ?? track.videoSquaredAt),
+      );
 
       return { logId: track.logId, ok: true as const, trackId: track.trackId, videoUrl };
     } catch (error) {
@@ -881,7 +890,11 @@ export function adminTracksHandlers(os: Implementer) {
 
         // Fire-and-forget (waitUntil inside). `squared` mirrors the finding's layout
         // so the purge set matches the rendition family the surfaces actually serve.
-        purgeVideoCache(track.logId, Boolean(track.videoSquaredAt));
+        purgeVideoCache(
+          track.logId,
+          Boolean(track.videoSquaredAt),
+          videoVersion(track.videoSquaredAt),
+        );
 
         return { logId: track.logId, ok: true as const, trackId: track.trackId };
       } catch (error) {

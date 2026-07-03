@@ -30,7 +30,7 @@
 //     `published`. The box capture cron drives this.
 
 import { ORPCError } from "@orpc/server";
-import { trackMedia, videoAudioStripped } from "../../media";
+import { trackMedia, videoAudioStripped, videoVersion } from "../../media";
 import { readCaptions } from "../captions";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { postizSetReleaseId, pushTikTokDraft, pushYouTubeShort, resolveSocialUrl } from "../postiz";
@@ -218,7 +218,7 @@ export function adminSocialHandlers(os: Implementer) {
 
         if (platform === "tiktok") {
           const silent = track.videoSquaredAt
-            ? videoAudioStripped(social)
+            ? videoAudioStripped(social, videoVersion(track.videoSquaredAt))
             : social.replace(/footage\.mp4$/, "footage-silent.mp4");
           ({ postId } = await pushTikTokDraft({ caption, videoUrl: silent }));
           status = "draft";
