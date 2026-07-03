@@ -57,6 +57,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // operator tier.
   "DELETE /admin/recordings/{recordingId}": "delete_recording",
   "GET /admin/clips": "list_clips",
+  // The built clip caption (clean copy + the fluncle:// coordinate line(s)) —
+  // contract-only oRPC (no TanStack route file). Admin tier (agent-allowed read); the
+  // clip-card UI (Wave 3-B) shows + copies it. `get_clip_caption` matches the public
+  // `get_` prefix so the "holds exactly" check skips it; it lives here for completeness.
+  "GET /admin/clips/{clipId}/caption": "get_clip_caption",
   "GET /admin/lastfm/auth/start": "start_lastfm_auth",
   "GET /admin/mixtapes": "list_mixtapes_admin",
   "GET /admin/mixtapes/{mixtapeId}/social": "get_mixtape_social",
@@ -168,6 +173,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The PUT shares the `members` file/path with the POST above (append vs replace);
   // oRPC routes the two methods to distinct ops, so each gets its own entry.
   "PUT /admin/mixtapes/{mixtapeId}/members": "set_mixtape_members",
+  // Replace a recording's whole cue set (RFC plan→recording→mixtape §4) — contract-only
+  // oRPC (no TanStack route file; oRPC owns the path directly). Operator tier: the
+  // Wave-3 Rekordbox derivation script PUTs the ordered, finding-resolved cues here.
+  "PUT /admin/recordings/{recordingId}/cues": "replace_recording_cues",
 };
 
 // Routes that stay on TanStack by design (carve-outs), keyed by their TanStack

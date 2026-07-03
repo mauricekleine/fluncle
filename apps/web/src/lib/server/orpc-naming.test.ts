@@ -95,6 +95,11 @@ const APPROVED_VERBS = new Set<string>([
   "record",
   "register",
   "reject",
+  // `replace` (transactionally swap a recording's WHOLE cue set for a new ordered one)
+  // — added deliberately with the `replace_recording_cues` op (the Wave-3 Rekordbox
+  // derivation write target). Distinct from `set_*` (re-time an existing set) and
+  // `update_*` (edit fields): this REPLACES all the rows.
+  "replace",
   "reset",
   "save",
   "send",

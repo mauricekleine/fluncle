@@ -551,6 +551,37 @@ export const finalizeClipCut = oc
   .input(z.object({ clipId: z.string() }))
   .output(ClipEnvelope);
 
+/**
+ * `get_clip_caption` → `GET /admin/clips/{clipId}/caption` (operationId
+ * `getClipCaption`).
+ *
+ * Admin tier (agent-allowed read). The BUILT caption for a clip (RFC
+ * plan→recording→mixtape §5) — the stored-clean caption with the `fluncle://`
+ * coordinate line(s) appended: one line for the promoted mixtape's `.F.` Log ID if the
+ * clip's source recording is published, else one line per finding the clip window
+ * overlaps (a blend = multiple lines). The clip-card UI (Wave 3-B) shows + copies
+ * `builtCaption`; `caption`/`coordinates` are returned split for a card that renders
+ * the coordinate chips separately. Preserves an `{ ok, clipId, … }` envelope.
+ */
+export const getClipCaption = oc
+  .route({
+    method: "GET",
+    operationId: "getClipCaption",
+    path: "/admin/clips/{clipId}/caption",
+    summary: "Build a clip's caption (clean copy + the fluncle:// coordinate line(s))",
+    tags: ["Admin"],
+  })
+  .input(z.object({ clipId: z.string() }))
+  .output(
+    z.object({
+      builtCaption: z.string(),
+      caption: z.string().optional(),
+      clipId: z.string(),
+      coordinates: z.array(z.string()),
+      ok: z.literal(true),
+    }),
+  );
+
 /** The `admin-mixtapes` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminMixtapesContract = {
   add_mixtape_members: addMixtapeMembers,
@@ -561,6 +592,7 @@ export const adminMixtapesContract = {
   finalize_clip_cut: finalizeClipCut,
   finalize_mixtape_mixcloud: finalizeMixtapeMixcloud,
   finalize_mixtape_youtube: finalizeMixtapeYoutube,
+  get_clip_caption: getClipCaption,
   get_mixtape_social: getMixtapeSocial,
   initiate_mixtape_youtube: initiateMixtapeYoutube,
   list_clips: listClips,

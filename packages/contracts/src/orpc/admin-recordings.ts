@@ -24,9 +24,13 @@ const RecordingEnvelope = z.object({ ok: z.literal(true), recording: RecordingDT
 /**
  * `create_recording` → `POST /admin/recordings` (operationId `createRecording`).
  *
- * Operator tier. Mint a coordinate-less recording row (its R2 key is derived from the
- * new id). LOOSE body — `createRecording` validates `title`/`recordedAt`. The set video
- * is presigned + uploaded separately. Preserves `{ ok, recording }`.
+ * Operator tier. Mint a coordinate-less recording row. Two shapes (RFC
+ * plan→recording→mixtape §1), both LOOSE-body (the handler validates + throws):
+ *   - a TAKE (default) — a set video follows: the R2 key is derived from the new id
+ *     and presigned + uploaded separately. `title` is required.
+ *   - a PLAN (`kind: "plan"`) — a VIDELESS recording (`r2_key` stays NULL): no title
+ *     needed, the server mints a Galaxy-vocab handle (`galaxySlug`) as the title.
+ * Preserves `{ ok, recording }`.
  */
 export const createRecording = oc
   .route({
@@ -42,17 +46,22 @@ export const createRecording = oc
 /**
  * `list_recordings` → `GET /admin/recordings` (operationId `listRecordings`).
  *
- * Admin tier (agent-allowed read). Every recording, newest first. Preserves
- * `{ ok, recordings }`.
+ * Admin tier (agent-allowed read). Every recording, newest first. Optionally narrowed
+ * by the plan/take split (RFC plan→recording→mixtape §7):
+ *   - `kind=plan` → videoless recordings (a PLAN: `r2_key IS NULL`),
+ *   - `kind=take` → recordings that own a set video (a TAKE: `r2_key IS NOT NULL`),
+ *   - `parentId` → the takes attached to one plan (its child recordings).
+ * The handler validates `kind`; an unknown value is ignored. Preserves `{ ok, recordings }`.
  */
 export const listRecordings = oc
   .route({
     method: "GET",
     operationId: "listRecordings",
     path: "/admin/recordings",
-    summary: "List every recording",
+    summary: "List every recording (optionally filtered by kind=plan|take and/or parentId)",
     tags: ["Admin"],
   })
+  .input(z.object({ kind: z.string().optional(), parentId: z.string().optional() }))
   .output(z.object({ ok: z.literal(true), recordings: z.array(RecordingDTOSchema) }));
 
 /**
@@ -167,6 +176,28 @@ export const promoteRecording = oc
   .input(z.object({ recordingId: z.string() }))
   .output(RecordingEnvelope);
 
+/**
+ * `replace_recording_cues` → `PUT /admin/recordings/{recordingId}/cues` (operationId
+ * `replaceRecordingCues`).
+ *
+ * Operator tier. Transactionally REPLACE a recording's whole `recording_cues` set with
+ * the ordered array in the body (`{ findingId?, artistsText, titleText, position,
+ * startMs? }[]`). This is the write target for the Wave-3 Rekordbox derivation script
+ * (RFC §4): the script resolves each cue's `finding_id` by normalized title+artist and
+ * PUTs the ordered result here. LOOSE body — `replaceRecordingCues` validates each cue
+ * + reindexes positions. Preserves `{ ok, recording }`.
+ */
+export const replaceRecordingCues = oc
+  .route({
+    method: "PUT",
+    operationId: "replaceRecordingCues",
+    path: "/admin/recordings/{recordingId}/cues",
+    summary: "Replace a recording's cue tracklist (the Rekordbox-derivation write target)",
+    tags: ["Admin"],
+  })
+  .input(z.looseObject({ cues: z.unknown().optional(), recordingId: z.string() }))
+  .output(RecordingEnvelope);
+
 /** The `admin-recordings` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminRecordingsContract = {
   create_recording: createRecording,
@@ -175,5 +206,6 @@ export const adminRecordingsContract = {
   list_recordings: listRecordings,
   presign_recording_upload: presignRecordingUpload,
   promote_recording: promoteRecording,
+  replace_recording_cues: replaceRecordingCues,
   update_recording: updateRecording,
 };

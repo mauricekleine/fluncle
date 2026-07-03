@@ -202,6 +202,13 @@ export function versionMatches(findingTitle: string, candidateTitle: string): bo
 /** The minimal member shape the resolver reads (a structural subset of `MixtapeMember`). */
 export type ClipTrackInput = {
   artists: string[];
+  /**
+   * The finding's Log ID coordinate, when the member is a Fluncle finding. Carried
+   * through to `ResolvedClipTrack.logId` so `buildClipCaption` can emit the covered
+   * finding's `fluncle://<logId>` line (RFC plan→recording→mixtape §5). Absent for a
+   * played-but-not-a-finding cue (a non-finding track has no coordinate to emit).
+   */
+  logId?: string;
   /** The member's cue start in the set (ms). Absent ⇒ un-cued. */
   startMs?: number;
   title: string;
@@ -211,6 +218,8 @@ export type ClipTrackInput = {
 export type ResolvedClipTrack = {
   /** `Artist — Title` (em dash — the sanctioned trackLine format; multiple artists join with ", "). */
   label: string;
+  /** The covered finding's Log ID coordinate, when it is a finding (carried from the input). */
+  logId?: string;
   /** The track's cue start in the set (ms). */
   startMs: number;
 };
@@ -266,6 +275,7 @@ export function resolveClipTracks(options: {
     })
     .map((member) => ({
       label: trackLabel(member.artists, member.title),
+      logId: member.logId,
       startMs: member.startMs,
     }));
 }
