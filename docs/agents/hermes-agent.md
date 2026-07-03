@@ -35,7 +35,7 @@ The dividing line: _could a stranger see the result, or could it not be taken ba
 | `track video` / `preview` / `observe`                                                                                             | operator | Durable artifacts                                                      |
 | `newsletter draft/update/list`                                                                                                    | agent    | Drafts a reversible edition row + reads it back; the cron authors it   |
 | `newsletter send`                                                                                                                 | operator | Publish-class: sends the Resend broadcast to the real list             |
-| `mixtapes publish/distribute/delete/create/update/members`                                                                        | operator | Publishes/mutates the spine                                            |
+| `recordings promote`, `mixtapes update/distribute/resync`                                                                         | operator | Publishes/mutates the spine (mint = promote; draft commands retired)   |
 | `submissions approve/reject`                                                                                                      | operator | Editorial decision; approve can publish                                |
 | `auth *`, `backfill *`                                                                                                            | operator | Credentials / bulk mutation                                            |
 

@@ -26,6 +26,7 @@ function makeRow(overrides: Partial<BoardRow>): BoardRow {
     lastfmRan: false,
     mixtapes: [],
     noteRan: false,
+    plans: [],
     postedToTelegram: true,
     posts: [],
     spotifyUrl: "https://open.spotify.com/track/x",

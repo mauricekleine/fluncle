@@ -633,12 +633,16 @@ export const mixtapes = sqliteTable(
     // player. Operator-flipped from /admin/mixtapes AFTER the upload; null until
     // then. A flag, not a URL — the URL derives from the Log ID (mixtapeSetVideoUrl).
     setVideoAt: text("set_video_at"),
-    // "distributing" is the minted-but-uploading state between draft and published
-    // (see MixtapeStatus in @fluncle/contracts). Plain TEXT, the enum only narrows
-    // the type.
-    status: text("status", { enum: ["draft", "distributing", "published"] })
+    // "distributing" is the minted-but-uploading state before published (see
+    // MixtapeStatus in @fluncle/contracts). Plain TEXT, the enum only narrows the
+    // type — there is no "draft": a mixtape is only ever born via
+    // `promote_recording`, whose claim inserts `distributing` explicitly (unminted
+    // while `log_id` is null). The raw-SQL `'draft'` default is vestigial and kept
+    // byte-identical so the narrow emits ZERO DDL (RFC §9/SF-4: no insert relies
+    // on the default; changing it would rebuild the table for nothing).
+    status: text("status", { enum: ["distributing", "published"] })
       .notNull()
-      .default("draft"),
+      .default(sql`'draft'`),
     title: text("title").notNull(),
     updatedAt: text("updated_at").notNull(),
   },

@@ -9,7 +9,7 @@ import { setMixtapeCue } from "./mixtapes";
 //   - it marks one member on a published set (the happy path);
 //   - it clears a cue when startMs is null;
 //   - it rejects a non-member ref;
-//   - it rejects a draft (cues mark a minted set);
+//   - it rejects an unminted claim (cues mark a minted set);
 //   - it rejects a bad startMs shape.
 
 type Row = Record<string, unknown>;
@@ -134,11 +134,11 @@ describe("setMixtapeCue — interactive single-cue write", () => {
     expect(batch).not.toHaveBeenCalled();
   });
 
-  it("rejects a draft (cues mark a minted set)", async () => {
-    seed({ log_id: null, status: "draft" });
+  it("rejects an unminted claim (cues mark a minted set)", async () => {
+    seed({ log_id: null, status: "distributing" });
 
     await expect(setMixtapeCue("mix-1", { ref: "t2", startMs: 0 })).rejects.toThrow(
-      /publish the mixtape first/i,
+      /promote the recording first/i,
     );
     expect(batch).not.toHaveBeenCalled();
   });

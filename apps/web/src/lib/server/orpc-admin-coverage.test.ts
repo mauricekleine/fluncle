@@ -46,7 +46,6 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // the hardened post-publish cue backfill. `list_clips` is admin tier
   // (agent-allowed read); the writes are operator tier.
   "DELETE /admin/clips/{clipId}": "delete_clip",
-  "DELETE /admin/mixtapes/{mixtapeId}": "delete_mixtape",
   // The newsletter edition delete — contract-only oRPC (no TanStack route file).
   // Operator tier: a hard delete that reaches a SENT edition too (pulling a sent
   // test edition from the public archive); the agent token 403s.
@@ -102,14 +101,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/health": "record_health",
   "POST /admin/lastfm/auth/session": "exchange_lastfm_session",
   "POST /admin/mixcloud/token": "mint_mixcloud_token",
-  "POST /admin/mixtapes": "create_mixtape",
-  "POST /admin/mixtapes/{mixtapeId}/members": "add_mixtape_members",
   "POST /admin/mixtapes/{mixtapeId}/mixcloud/finalize": "finalize_mixtape_mixcloud",
   // The Mixcloud metadata re-sync — contract-only oRPC (no TanStack route file; oRPC
   // owns the path directly, like resync_mixtape_youtube). Operator tier: re-derives the
   // live cloudcast's sections[] from the current cues via the Mixcloud edit endpoint.
   "POST /admin/mixtapes/{mixtapeId}/mixcloud/resync": "resync_mixtape_mixcloud",
-  "POST /admin/mixtapes/{mixtapeId}/publish": "publish_mixtape",
   // The set-video staging presign (Fluncle Studio Unit A) — contract-only oRPC (no
   // TanStack route file; oRPC owns the path directly). Operator tier: it opens a
   // multipart direct-to-R2 upload for the mixtape's `<logId>/set.mp4` rendition.
@@ -172,7 +168,6 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "PUT /admin/mixtapes/{mixtapeId}/cues/{ref}": "update_mixtape_cue",
   // The PUT shares the `members` file/path with the POST above (append vs replace);
   // oRPC routes the two methods to distinct ops, so each gets its own entry.
-  "PUT /admin/mixtapes/{mixtapeId}/members": "set_mixtape_members",
   // Replace a recording's whole cue set (RFC plan→recording→mixtape §4) — contract-only
   // oRPC (no TanStack route file; oRPC owns the path directly). Operator tier: the
   // Wave-3 Rekordbox derivation script PUTs the ordered, finding-resolved cues here.

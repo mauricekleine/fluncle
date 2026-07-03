@@ -9,18 +9,23 @@
  *
  * The steps, in dependency order. The plan→recording→mixtape Deploy-2 cutover
  * dropped `recordings.tracklist_json`, `mixtapes.planned_for`, and
- * `mixtape_clips.mixtape_id`, so the legacy-column steps (the old tracklist_json
- * migration + the clip-owner normalization) retired — the LIVE Deploy-1 backfill
- * already migrated every prod row before those columns were dropped. What remains
- * runs on every deploy (all idempotent, guarded):
- *   1. PLANS — every draft mixtape becomes a plan-recording (`r2_key = NULL`,
- *      `planned_for` + `note` copied over), linked back via `mixtapes.recording_id`
- *      (the idempotency key AND draft→plan mapping). Drafts stay the editing
- *      surface (they are NOT retired in this cutover), so each run RE-SYNCS the
- *      plan's `planned_for`/`note` from its draft (convergent); the `title` handle
- *      is minted once and never re-derived.
- *   2. PLAN CUES — each draft's `mixtape_tracks` copy into `recording_cues`
- *      (`finding_id = track_id` — exact links; snapshot from the tracks join).
+ * `mixtape_clips.mixtape_id`; the draft-retirement cutover then removed every
+ * draft-mixtape creator (the board's "Add to mixtape" flow repointed onto plans,
+ * the `create_mixtape`/members/publish/delete ops deleted, the promote claim born
+ * `distributing`), so `status = 'draft'` rows can no longer be CREATED — this
+ * sweep DRAINS any that remain (or ever slip in) and keeps the TS-only
+ * `MixtapeStatus` narrow (`distributing | published`) honest. What runs on every
+ * deploy (all idempotent, guarded):
+ *   1. PLANS — every residual draft mixtape (without a linked recording) becomes a
+ *      plan-recording (`r2_key = NULL`, `note` copied over), linked back via
+ *      `mixtapes.recording_id` (the idempotency key AND draft→plan mapping).
+ *      The `title` handle is minted once and never re-derived.
+ *   2. DRAIN — each plan-linked draft's `mixtape_tracks` MERGE into the plan's
+ *      `recording_cues` (append findings the plan doesn't already carry —
+ *      `finding_id = track_id`, snapshot from the tracks join), then the draft row
+ *      + its members are DELETED. A draft linked to a TAKE (`r2_key` set) is a
+ *      pre-cutover crashed promote claim: it is normalized to `distributing`
+ *      (unminted — `log_id` stays NULL; the next promote finishes the mint).
  *   3. TAKES — a published/distributing mixtape lacking a `recording_id` gets a
  *      synthesized take-recording pointing at its EXISTING `<logId>/set.mp4`
  *      (mixtape #1 already links `recording_id`, so it is REUSED, never
@@ -30,7 +35,7 @@
  *   5. FINDING LINKS — `mixtape_tracks.finding_id` (the eventual rename of
  *      `track_id`) is filled `= track_id` wherever NULL. Finding-backed rows keep
  *      NULL snapshots (the tracks JOIN stays their truth). Self-heals rows the
- *      still-live draft `setMixtapeMembers` path writes between deploys.
+ *      promote seed path (`setMixtapeMembers`) writes between deploys.
  *
  * Runs wherever `db:migrate` runs: the Cloudflare deploy environment provides
  * `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN`; locally they come from `.dev.vars`
@@ -44,9 +49,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export type PlanRecordingBackfillResult = {
+  claimsNormalized: number;
+  draftsDrained: number;
   planCuesInserted: number;
   plansCreated: number;
-  plansSynced: number;
   takeCuesInserted: number;
   takesSynthesized: number;
   trackFindingIdsFilled: number;
@@ -190,18 +196,20 @@ export async function backfillPlanRecordingMixtape(
 ): Promise<PlanRecordingBackfillResult> {
   const now = new Date().toISOString();
   const result: PlanRecordingBackfillResult = {
+    claimsNormalized: 0,
+    draftsDrained: 0,
     planCuesInserted: 0,
     plansCreated: 0,
-    plansSynced: 0,
     takeCuesInserted: 0,
     takesSynthesized: 0,
     trackFindingIdsFilled: 0,
   };
 
-  // ── 1. PLANS — drafts without a linked recording become plan-recordings.
-  // (`planned_for` is NOT copied here — the Deploy-2 cutover dropped
-  // `mixtapes.planned_for`; the LIVE Deploy-1 backfill already carried each draft's
-  // live-session date onto its plan, and the plan editor owns it from here on.)
+  // ── 1. PLANS — residual drafts without a linked recording become
+  // plan-recordings. (No draft can be CREATED anymore — the board's picker writes
+  // plans and the promote claim is born `distributing` — so this only catches a
+  // row that slipped in pre-cutover. `planned_for` is NOT copied here — the
+  // Deploy-2 cutover dropped `mixtapes.planned_for`.)
   const unlinkedDrafts = await client.execute({
     sql: `select id, title, note, created_at
           from mixtapes where status = 'draft' and recording_id is null
@@ -234,48 +242,59 @@ export async function backfillPlanRecordingMixtape(
     result.plansCreated += 1;
   }
 
-  // While the draft rows survive (drafts are NOT retired in this cutover) they stay
-  // the "Add to mixtape" editing surface — converge the plan's `note` onto them each
-  // run. The handle (`title`) is minted ONCE and never re-derived; `planned_for` now
-  // lives only on the plan (the dropped `mixtapes.planned_for` can't be synced). `is
-  // not` is SQLite's null-safe comparison, so an unchanged run updates zero rows.
-  const synced = await client.execute({
+  // ── 2. DRAIN — drafts are retired: the TS `MixtapeStatus` narrow
+  // (`distributing | published`) is honest only when no `draft` row survives.
+  //
+  // 2a. A draft linked to a TAKE (`r2_key` set) is a pre-cutover crashed promote
+  // claim: normalize it to `distributing` (unminted — `log_id` stays NULL, so the
+  // next promote reuses the claim and finishes the mint; no coordinate moves).
+  const normalized = await client.execute({
     args: [now],
-    sql: `update recordings set
-            note = m.note,
-            updated_at = ?
-          from mixtapes m
-          where m.status = 'draft' and m.recording_id = recordings.id
-            and recordings.note is not m.note`,
+    sql: `update mixtapes set status = 'distributing', updated_at = ?
+          where status = 'draft'
+            and recording_id in (select id from recordings where r2_key is not null)`,
   });
 
-  result.plansSynced = synced.rowsAffected;
+  result.claimsNormalized = normalized.rowsAffected;
 
-  // ── 2. PLAN CUES — copy each draft's mixtape_tracks into its plan's cues
-  // (exact finding links; snapshot from the tracks join). Only a plan with ZERO
-  // cues is seeded, so a later cue editor owns the rows after first fill.
+  // 2b. A draft linked to a PLAN: MERGE its `mixtape_tracks` into the plan's cues
+  // (append any finding the plan doesn't already carry — both were live editing
+  // surfaces before the cutover, so neither side alone is authoritative), then
+  // DELETE the draft row + its members.
   const linkedDrafts = await client.execute({
-    sql: `select id, recording_id from mixtapes
-          where status = 'draft' and recording_id is not null`,
+    sql: `select m.id, m.recording_id from mixtapes m
+          join recordings r on r.id = m.recording_id
+          where m.status = 'draft' and r.r2_key is null`,
   });
 
   for (const draft of linkedDrafts.rows) {
     const planId = asText(draft.recording_id);
+    const draftId = asText(draft.id);
 
-    if ((await cueCount(client, planId)) > 0) {
-      continue;
-    }
+    const existing = await client.execute({
+      args: [planId],
+      sql: `select finding_id, coalesce(max(position) over (), 0) as max_position
+            from recording_cues where recording_id = ?`,
+    });
+    const present = new Set(
+      existing.rows.map((row) => asText(row.finding_id)).filter((id) => id.length > 0),
+    );
+    let position = Number(existing.rows[0]?.max_position ?? 0);
 
-    const members = await mixtapeMemberRows(client, asText(draft.id));
+    for (const member of await mixtapeMemberRows(client, draftId)) {
+      if (present.has(member.trackId)) {
+        continue;
+      }
 
-    for (const member of members) {
+      present.add(member.trackId);
+      position += 1;
       const insert = await client.execute(
         insertCueStatement({
           artistsText: member.artistsText || null,
           findingId: member.trackId,
           id: randomUUID(),
           now,
-          position: member.position,
+          position,
           recordingId: planId,
           startMs: member.startMs,
           titleText: member.titleText || null,
@@ -284,6 +303,15 @@ export async function backfillPlanRecordingMixtape(
 
       result.planCuesInserted += insert.rowsAffected;
     }
+
+    await client.batch(
+      [
+        { args: [draftId], sql: `delete from mixtape_tracks where mixtape_id = ?` },
+        { args: [draftId], sql: `delete from mixtapes where id = ? and status = 'draft'` },
+      ],
+      "write",
+    );
+    result.draftsDrained += 1;
   }
 
   // ── 3. TAKES — synthesize a take-recording for any published/distributing
@@ -373,8 +401,8 @@ export async function backfillPlanRecordingMixtape(
   }
 
   // ── 5. FINDING LINKS — fill `mixtape_tracks.finding_id` (the eventual rename
-  // of `track_id`). Also self-heals rows written by `setMixtapeMembers` (the draft
-  // member path, still live: drafts are not retired in this cutover).
+  // of `track_id`). Also self-heals rows written by `setMixtapeMembers` (the
+  // promote path's member seed) between deploys.
   const filled = await client.execute({
     sql: `update mixtape_tracks set finding_id = track_id where finding_id is null`,
   });
@@ -404,9 +432,9 @@ async function main(): Promise<void> {
 
   console.log(
     `plan→recording→mixtape backfill: ${result.plansCreated} plans created, ` +
-      `${result.plansSynced} plans synced, ${result.planCuesInserted} plan cues, ` +
-      `${result.takesSynthesized} takes synthesized, ${result.takeCuesInserted} take cues, ` +
-      `${result.trackFindingIdsFilled} finding links filled.`,
+      `${result.draftsDrained} drafts drained, ${result.claimsNormalized} claims normalized, ` +
+      `${result.planCuesInserted} plan cues, ${result.takesSynthesized} takes synthesized, ` +
+      `${result.takeCuesInserted} take cues, ${result.trackFindingIdsFilled} finding links filled.`,
   );
 }
 

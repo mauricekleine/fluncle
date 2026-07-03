@@ -74,8 +74,9 @@ export function rowToMixtape(row: MixtapeRowLike, members: MixtapeMember[] = [])
   return {
     addedAt: row.added_at ?? undefined,
     artists: ["Fluncle"],
-    // The cover is derived, never stored: a published mixtape's Log ID resolves
-    // to the on-the-fly cover endpoint (mixtapeCoverUrl); a draft has no cover yet.
+    // The cover is derived, never stored: a minted mixtape's Log ID resolves to
+    // the on-the-fly cover endpoint (mixtapeCoverUrl); an unminted claim (no Log
+    // ID yet) has no cover.
     coverImageUrl: row.log_id ? mixtapeCoverUrl(row.log_id, "square") : undefined,
     createdAt: row.created_at ?? undefined,
     durationMs: row.duration_ms ?? undefined,
@@ -95,7 +96,9 @@ export function rowToMixtape(row: MixtapeRowLike, members: MixtapeMember[] = [])
     recordingId: row.recording_id ?? undefined,
     sequenceNumber: row.sequence_number ?? undefined,
     setVideoAt: row.set_video_at ?? undefined,
-    status: row.status ?? "draft",
+    // The column is NOT NULL, so the fallback never fires in practice; it only
+    // satisfies the loose `MixtapeRowLike` input shape.
+    status: row.status ?? "published",
     title: row.title,
     type: "mixtape",
     updatedAt: row.updated_at ?? undefined,

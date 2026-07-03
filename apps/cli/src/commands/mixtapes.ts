@@ -1,25 +1,12 @@
 import {
-  type CueEntry,
-  type MixtapeCreateResponse,
-  type MixtapeDeleteResponse,
   type MixtapeMember,
-  type MixtapeMembersRequest,
-  type MixtapePublishResponse,
   type MixtapeRequestBody,
   type MixtapeSocialShowResponse,
   type MixtapeUpdateResponse,
   type MixtapesResponse,
 } from "@fluncle/contracts";
 import { parseDuration } from "@fluncle/contracts/util";
-import { existsSync, readFileSync } from "node:fs";
-import {
-  adminApiDelete,
-  adminApiGet,
-  adminApiPost,
-  adminApiPut,
-  adminApiPatch,
-  publicApiGet,
-} from "../api";
+import { adminApiGet, adminApiPatch, publicApiGet } from "../api";
 import { type MixtapeListItem, mixtapeGetCommand, mixtapeListCommand } from "./mixtape-api";
 import { CliError } from "../output";
 
@@ -30,14 +17,6 @@ export type { MixtapeListItem };
 
 export type MixtapeMemberItem = MixtapeMember;
 
-export type MixtapeCreateOptions = {
-  durationMs?: string;
-  json: boolean;
-  note?: string;
-  recordedAt?: string;
-  soundcloudUrl?: string;
-};
-
 export type MixtapeUpdateOptions = {
   durationMs?: string;
   json: boolean;
@@ -46,21 +25,10 @@ export type MixtapeUpdateOptions = {
   soundcloudUrl?: string;
 };
 
-export type MixtapeMembersOptions = {
-  from?: string;
-  json: boolean;
-};
-
 export async function mixtapesCommand(): Promise<MixtapeListItem[]> {
   const response = await publicApiGet<MixtapesResponse>("/api/mixtapes");
 
   return response.mixtapes;
-}
-
-export async function mixtapeCreateCommand(
-  options: MixtapeCreateOptions,
-): Promise<MixtapeCreateResponse> {
-  return adminApiPost<MixtapeCreateResponse>("/api/admin/mixtapes", buildBody(options));
 }
 
 export async function mixtapeUpdateCommand(
@@ -71,33 +39,6 @@ export async function mixtapeUpdateCommand(
     `/api/admin/mixtapes/${encodeURIComponent(id)}`,
     buildBody(options),
   );
-}
-
-export async function mixtapeMembersCommand(
-  id: string,
-  refs: string[],
-  options: MixtapeMembersOptions,
-): Promise<MixtapeUpdateResponse> {
-  const members: CueEntry[] = refs.map((ref) => ({ ref }));
-
-  if (options.from) {
-    members.push(...parseCueFile(options.from));
-  }
-
-  return adminApiPut<MixtapeUpdateResponse>(
-    `/api/admin/mixtapes/${encodeURIComponent(id)}/members`,
-    { members } satisfies MixtapeMembersRequest,
-  );
-}
-
-export async function mixtapePublishCommand(id: string): Promise<MixtapePublishResponse> {
-  return adminApiPost<MixtapePublishResponse>(
-    `/api/admin/mixtapes/${encodeURIComponent(id)}/publish`,
-  );
-}
-
-export async function mixtapeDeleteCommand(id: string): Promise<MixtapeDeleteResponse> {
-  return adminApiDelete<MixtapeDeleteResponse>(`/api/admin/mixtapes/${encodeURIComponent(id)}`);
 }
 
 export type MixtapeDistributeOptions = {
@@ -135,17 +76,6 @@ export async function mixtapeDistributeCommand(
     throw new CliError("mixtape_not_found", `No mixtape with id or log id ${idOrLogId}`);
   }
 
-  // Distribute is push-only: a draft has not been promoted yet. Use
-  // `fluncle admin recordings promote <recordingId>` to mint the coordinate
-  // and stage the set video, then come back here to push to the platforms.
-  if (mixtape.status === "draft") {
-    throw new CliError(
-      "mixtape_not_promoted",
-      `${mixtape.id} is still a draft — promote its recording first:\n` +
-        "  fluncle admin recordings promote <recordingId>",
-    );
-  }
-
   // No platform selector → default (YouTube + Mixcloud).
   const both = !options.youtube && !options.mixcloud;
   const doYoutube = both || Boolean(options.youtube);
@@ -161,10 +91,14 @@ export async function mixtapeDistributeCommand(
   const mixtapeId = mixtape.id;
   const logId = mixtape.logId;
 
+  // Distribute is push-only: no coordinate means the recording was never promoted
+  // (or a promote crashed mid-mint). `fluncle admin recordings promote
+  // <recordingId>` mints the coordinate and stages the set video; then come back.
   if (!logId) {
     throw new CliError(
-      "missing_log_id",
-      "The mixtape has no Log ID — was it promoted successfully?",
+      "mixtape_not_promoted",
+      `${mixtapeId} has no coordinate yet — promote its recording first:\n` +
+        "  fluncle admin recordings promote <recordingId>",
     );
   }
 
@@ -317,7 +251,7 @@ async function probeDurationMs(filePath: string): Promise<number | undefined> {
   }
 }
 
-function buildBody(options: MixtapeCreateOptions | MixtapeUpdateOptions): MixtapeRequestBody {
+function buildBody(options: MixtapeUpdateOptions): MixtapeRequestBody {
   const body: MixtapeRequestBody = {};
 
   if (options.note !== undefined) {
@@ -341,74 +275,4 @@ function buildBody(options: MixtapeCreateOptions | MixtapeUpdateOptions): Mixtap
   }
 
   return body;
-}
-
-function parseCueFile(filePath: string): CueEntry[] {
-  if (!existsSync(filePath)) {
-    throw new CliError("file_not_found", `Cue file not found: ${filePath}`);
-  }
-
-  const text = readFileSync(filePath, "utf-8");
-  const trimmed = text.trim();
-
-  if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      if (!Array.isArray(parsed)) {
-        throw new Error("not an array");
-      }
-      return (parsed as unknown[]).map((entry, index) => {
-        if (typeof entry === "string") {
-          return { ref: entry.trim() };
-        }
-        const obj = entry as Record<string, unknown>;
-        if (typeof obj?.ref !== "string") {
-          throw new CliError("invalid_cue_json", `Entry ${index + 1} missing "ref" string`);
-        }
-        const cue: CueEntry = { ref: obj.ref.trim() };
-        if (typeof obj.startMs === "number" && Number.isInteger(obj.startMs) && obj.startMs >= 0) {
-          cue.startMs = obj.startMs;
-        }
-        return cue;
-      });
-    } catch (error) {
-      if (error instanceof CliError) {
-        throw error;
-      }
-      throw new CliError(
-        "invalid_cue_json",
-        `Cue JSON parse failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  }
-
-  return parseCueSheet(text);
-}
-
-function parseCueSheet(text: string): CueEntry[] {
-  const entries: CueEntry[] = [];
-
-  for (const line of text.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) {
-      continue;
-    }
-
-    const match = trimmed.match(/^(\d{1,2}:\d{2}(?::\d{2})?)\s+(.+)$/);
-    if (match) {
-      const [, time, ref] = match;
-      if (time === undefined || ref === undefined) {
-        continue;
-      }
-      const startMs = parseDuration(time);
-      if (startMs === null) {
-        continue;
-      }
-      entries.push({ ref: ref.trim(), startMs });
-    } else {
-      entries.push({ ref: trimmed });
-    }
-  }
-
-  return entries;
 }

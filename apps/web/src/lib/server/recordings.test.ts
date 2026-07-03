@@ -259,7 +259,7 @@ describe("promoteRecording", () => {
 
     await promoteRecording("rec-1");
 
-    // The claimed draft carries a random id; assert the seeded members, not the id.
+    // The claimed row carries a random id; assert the seeded members, not the id.
     expect(setMixtapeMembers).toHaveBeenCalledWith(expect.any(String), {
       members: [{ ref: "t1", startMs: 0 }],
     });
@@ -289,8 +289,8 @@ describe("promoteRecording", () => {
     expect(publishMixtape).not.toHaveBeenCalled();
   });
 
-  it("recovers a half-claimed draft (linked, no log_id): reuses the row, mints no new coordinate", async () => {
-    // A prior run claimed the link but crashed before minting (a draft with no log_id).
+  it("recovers a half-claimed row (linked, no log_id): reuses the row, mints no new coordinate", async () => {
+    // A prior run claimed the link but crashed before minting (a claim with no log_id).
     seedRecording();
     state.linked = { id: "mix-1", log_id: null };
 

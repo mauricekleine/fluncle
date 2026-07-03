@@ -8,10 +8,13 @@ import { createIntegrationDb, rowCount, seedTrack } from "./integration-db";
 // in-memory libSQL harness (integration-db applies every generated Drizzle migration,
 // including 0045 — the Deploy-2 cutover that dropped `recordings.tracklist_json`,
 // `mixtapes.planned_for`, and `mixtape_clips.mixtape_id`). The legacy-column steps
-// (the tracklist_json migration + the clip-owner normalization) retired with those
-// columns — the LIVE Deploy-1 backfill migrated every prod row first. What remains,
-// and is under test here, runs on EVERY deploy (all idempotent, guarded):
-//   - drafts → plan-recordings + their cues from `mixtape_tracks` (exact track_id);
+// retired with those columns; the draft-retirement cutover then added the DRAIN.
+// What remains, and is under test here, runs on EVERY deploy (idempotent, guarded):
+//   - residual drafts → plan-recordings + their cues from `mixtape_tracks` (exact
+//     track_id), the draft members MERGED into the plan, then the draft DELETED —
+//     no `status = 'draft'` row survives (the TS status narrow is honest);
+//   - a draft linked to a TAKE (a pre-cutover crashed promote claim) is normalized
+//     to `distributing` (log_id stays NULL; the next promote finishes the mint);
 //   - mixtape #1's existing recording is REUSED, never re-synthesized; an unlinked
 //     published/distributing mixtape gets a synthesized take + cues from its tracks;
 //   - `mixtape_tracks.finding_id` fills `= track_id`;
@@ -197,16 +200,30 @@ describe("backfillPlanRecordingMixtape", () => {
     await seedProdShape(db);
   });
 
-  it("turns the draft into a plan-recording (r2Key NULL) with exact finding-linked cues", async () => {
+  it("turns the draft into a plan-recording (r2Key NULL) with exact finding-linked cues, then drains it", async () => {
+    // Capture the plan link BEFORE the run deletes the draft row.
     const result = await backfillPlanRecordingMixtape(db);
 
     expect(result.plansCreated).toBe(1);
     expect(result.planCuesInserted).toBe(1);
+    expect(result.draftsDrained).toBe(1);
 
-    const draft = (
-      await db.execute({ args: [DRAFT], sql: "select recording_id from mixtapes where id = ?" })
+    // The draft row is GONE — no `status = 'draft'` mixtape survives a run.
+    const drafts = (
+      await db.execute({ sql: "select count(*) as n from mixtapes where status = 'draft'" })
     ).rows[0];
-    const planId = draft?.recording_id;
+    expect(Number(drafts?.n)).toBe(0);
+    expect(
+      (await db.execute({ args: [DRAFT], sql: "select id from mixtapes where id = ?" })).rows,
+    ).toHaveLength(0);
+
+    // Its plan carries the members as cues; find it by the deterministic handle.
+    const planId = (
+      await db.execute({
+        args: [galaxySlug(DRAFT)],
+        sql: "select id from recordings where title = ?",
+      })
+    ).rows[0]?.id;
     expect(typeof planId).toBe("string");
 
     const plan = (
@@ -237,82 +254,103 @@ describe("backfillPlanRecordingMixtape", () => {
     expect(cues[0]?.title_text).toBe("Burning Babylon");
   });
 
-  it("re-syncs a still-draft plan's note but never re-mints the handle", async () => {
-    await backfillPlanRecordingMixtape(db);
-    const handleBefore = (
-      await db.execute({
-        sql: `select r.title as title from recordings r join mixtapes m on m.recording_id = r.id where m.id = '${DRAFT}'`,
-      })
-    ).rows[0]?.title;
-
+  it("MERGES a plan-linked draft's members into the plan's existing cues, then drains it", async () => {
+    // A pre-cutover state: the LIVE Deploy-1 linked the draft to a plan and seeded
+    // its cue; the operator then added a second finding via the (now retired)
+    // board "Add to mixtape" — the plan's cues and the draft's members diverged.
+    const planId = "plan-existing";
+    await insertRecording(db, { id: planId, r2Key: null, title: "warm-up-plan-handle" });
     await db.execute({
-      args: [DRAFT],
-      sql: "update mixtapes set note = 'rewritten plan note', title = 'operator typed a title' where id = ?",
+      args: [planId, "t3", NOW, NOW],
+      sql: `insert into recording_cues
+              (id, recording_id, finding_id, artists_text, title_text, position, start_ms, created_at, updated_at)
+            values ('rc-plan', ?, ?, 'Alix Perez', 'Burning Babylon', 1, null, ?, ?)`,
     });
+    const linkedDraft = "mixtape-draft-linked";
+    await insertMixtape(db, { id: linkedDraft, recordingId: planId, status: "draft" });
+    await insertMember(db, linkedDraft, "t3", 1, null); // already on the plan
+    await insertMember(db, linkedDraft, "t4", 2, null); // the board-added straggler
 
-    const second = await backfillPlanRecordingMixtape(db);
-    expect(second.plansCreated).toBe(0);
-    expect(second.plansSynced).toBe(1);
+    const result = await backfillPlanRecordingMixtape(db);
+
+    // 2 drafts drained (the seed's unlinked one + this linked one).
+    expect(result.draftsDrained).toBe(2);
+    expect(
+      (await db.execute({ args: [linkedDraft], sql: "select id from mixtapes where id = ?" })).rows,
+    ).toHaveLength(0);
+
+    // The plan kept its cue and gained ONLY the straggler, appended after it.
+    const cues = (
+      await db.execute({
+        args: [planId],
+        sql: "select finding_id, position from recording_cues where recording_id = ? order by position",
+      })
+    ).rows;
+    expect(cues).toHaveLength(2);
+    expect(cues[0]).toMatchObject({ finding_id: "t3", position: 1 });
+    expect(cues[1]).toMatchObject({ finding_id: "t4", position: 2 });
+  });
+
+  it("normalizes a crashed promote claim (a draft linked to a TAKE) to distributing", async () => {
+    // Pre-cutover promote crashed between the claim insert and the mint: a draft
+    // row linked to a take, no log_id. The sweep flips its status so the TS
+    // narrow holds; the log_id stays NULL so the next promote finishes the mint.
+    const claim = "mixtape-crashed-claim";
+    await insertMixtape(db, { id: claim, recordingId: REC_ROLLING, status: "draft" });
+
+    const result = await backfillPlanRecordingMixtape(db);
+
+    expect(result.claimsNormalized).toBe(1);
+    const row = (
+      await db.execute({
+        args: [claim],
+        sql: "select status, log_id, recording_id from mixtapes where id = ?",
+      })
+    ).rows[0];
+    expect(row).toMatchObject({ log_id: null, recording_id: REC_ROLLING, status: "distributing" });
+  });
+
+  it("mints a deterministic handle for the drained draft", async () => {
+    await backfillPlanRecordingMixtape(db);
 
     const plan = (
       await db.execute({
-        sql: `select r.note as note, r.title as title from recordings r join mixtapes m on m.recording_id = r.id where m.id = '${DRAFT}'`,
+        args: [galaxySlug(DRAFT)],
+        sql: "select title from recordings where title = ?",
       })
     ).rows[0];
-    expect(plan?.note).toBe("rewritten plan note");
-    // The handle is minted once — a draft title edit never overwrites it.
-    expect(plan?.title).toBe(handleBefore);
     expect(plan?.title).toBe(galaxySlug(DRAFT));
-  });
-
-  it("mints a deterministic handle — the same draft yields the same slug on a re-run", async () => {
-    await backfillPlanRecordingMixtape(db);
-    const first = (
-      await db.execute({
-        sql: `select r.title as title from recordings r join mixtapes m on m.recording_id = r.id where m.id = '${DRAFT}'`,
-      })
-    ).rows[0]?.title;
-
-    // A re-run creates no new plan and leaves the handle untouched.
-    const second = await backfillPlanRecordingMixtape(db);
-    expect(second.plansCreated).toBe(0);
-
-    const after = (
-      await db.execute({
-        sql: `select r.title as title from recordings r join mixtapes m on m.recording_id = r.id where m.id = '${DRAFT}'`,
-      })
-    ).rows[0]?.title;
-    expect(after).toBe(first);
-    expect(after).toBe(galaxySlug(DRAFT));
   });
 
   it("salts the handle on collision so two drafts never share a slug", async () => {
     // A second draft whose id would collide is re-rolled; both plans get a valid,
-    // distinct three-word slug.
+    // distinct three-word slug. (The drafts drain, so assert on the plan rows.)
     const draftB = "mixtape-draft-b";
     await insertMixtape(db, { id: draftB, status: "draft", title: "" });
     // Pre-seat draftB's attempt-0 slug on an unrelated recording to FORCE the
     // salted re-roll path.
     await insertRecording(db, { id: "collide", r2Key: null, title: galaxySlug(draftB) });
 
-    await backfillPlanRecordingMixtape(db);
+    const result = await backfillPlanRecordingMixtape(db);
+    expect(result.plansCreated).toBe(2);
 
-    const slugs = (
-      await db.execute({
-        sql: `select r.title as title from recordings r
-              join mixtapes m on m.recording_id = r.id
-              where m.id in ('${DRAFT}', '${draftB}')`,
-      })
-    ).rows.map((row) => (typeof row.title === "string" ? row.title : ""));
-
-    expect(slugs).toHaveLength(2);
-    expect(new Set(slugs).size).toBe(2);
+    const slugs = [galaxySlug(DRAFT), galaxySlug(draftB, 1)];
     for (const slug of slugs) {
       expect(slug).toMatch(/^[a-z]+(-[a-z]+){2}$/);
+      expect(
+        (await db.execute({ args: [slug], sql: "select id from recordings where title = ?" })).rows,
+      ).toHaveLength(1);
     }
-    // draftB re-rolled off its taken attempt-0 slug.
-    expect(slugs).not.toContain(galaxySlug(draftB));
-    expect(slugs).toContain(galaxySlug(draftB, 1));
+    // draftB re-rolled off its taken attempt-0 slug — only the pre-seated
+    // collision row carries it, no second plan does.
+    expect(
+      (
+        await db.execute({
+          args: [galaxySlug(draftB)],
+          sql: "select id from recordings where title = ?",
+        })
+      ).rows,
+    ).toHaveLength(1);
   });
 
   it("reuses #1's existing recording (never re-synthesizes) and leaves its seeded cues intact", async () => {
@@ -366,10 +404,11 @@ describe("backfillPlanRecordingMixtape", () => {
     expect(cues[0]).toMatchObject({ finding_id: "t4", start_ms: 30000 });
   });
 
-  it("fills mixtape_tracks.finding_id for every member", async () => {
+  it("fills mixtape_tracks.finding_id for every surviving member", async () => {
     const result = await backfillPlanRecordingMixtape(db);
 
-    expect(result.trackFindingIdsFilled).toBe(4);
+    // 3, not 4 — the draft's member row drained with it.
+    expect(result.trackFindingIdsFilled).toBe(3);
     const unfilled = (
       await db.execute({ sql: "select count(*) as n from mixtape_tracks where finding_id is null" })
     ).rows[0];
@@ -396,9 +435,10 @@ describe("backfillPlanRecordingMixtape", () => {
     const second = await backfillPlanRecordingMixtape(db);
 
     expect(second).toEqual({
+      claimsNormalized: 0,
+      draftsDrained: 0,
       planCuesInserted: 0,
       plansCreated: 0,
-      plansSynced: 0,
       takeCuesInserted: 0,
       takesSynthesized: 0,
       trackFindingIdsFilled: 0,
@@ -409,12 +449,13 @@ describe("backfillPlanRecordingMixtape", () => {
     expect(await rowCount(db, "mixtape_clips")).toBe(rowCounts.clips);
   });
 
-  it("preserves every pre-existing row (nothing deleted)", async () => {
+  it("preserves every minted row (only the draft drains)", async () => {
     await backfillPlanRecordingMixtape(db);
 
-    // All 3 mixtapes, all 4 members, the 1 clip survive.
-    expect(await rowCount(db, "mixtapes")).toBe(3);
-    expect(await rowCount(db, "mixtape_tracks")).toBe(4);
+    // The 2 minted mixtapes + their 3 members + the 1 clip survive; ONLY the
+    // draft row (and its member) drained.
+    expect(await rowCount(db, "mixtapes")).toBe(2);
+    expect(await rowCount(db, "mixtape_tracks")).toBe(3);
     expect(await rowCount(db, "mixtape_clips")).toBe(1);
     // 2 seeded recordings (#1 + rolling) + M2's synthesized take + the draft's plan.
     expect(await rowCount(db, "recordings")).toBe(4);

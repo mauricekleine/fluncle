@@ -130,7 +130,11 @@ export type TrackListPage = {
 // "distributing" = minted (Log ID + title committed, cover renders) but assets are
 // still uploading to the platforms; not yet public. The first successful platform
 // link flips it to "published". So a published mixtape always has ≥1 listen link.
-export type MixtapeStatus = "distributing" | "draft" | "published";
+// There is no "draft": a mixtape is only ever BORN via `promote_recording` (RFC
+// plan→recording→mixtape) — pre-publish authoring lives on PLANS (`recordings`
+// kind=plan), and the promote claim inserts straight into `distributing`
+// (unminted while `logId` is still null, minted within the same promote).
+export type MixtapeStatus = "distributing" | "published";
 
 export type MixtapeExternalUrls = {
   mixcloud?: string;
@@ -185,7 +189,6 @@ export type RadioNowPlayingResponse = Ok<{ nowPlaying: RadioNowPlaying }>;
 // ── Mixtape API envelopes ────────────────────────────────────────────────────
 
 export type MixtapesResponse = Ok<{ mixtapes: MixtapeDTO[] }>;
-export type MixtapeCreateResponse = Ok<{ mixtape: MixtapeDTO }>;
 
 // ── Mixtape clips (Fluncle Studio Unit C/D/G) ────────────────────────────────
 // A clip is a lightweight 9:16 derivative cut from a mixtape's set video — many per
@@ -248,8 +251,6 @@ export type RecordingSetVideoPresignResponse = Ok<{
 }>;
 
 export type MixtapeUpdateResponse = Ok<{ mixtape: MixtapeDTO }>;
-export type MixtapePublishResponse = Ok<{ mixtape: MixtapeDTO }>;
-export type MixtapeDeleteResponse = Ok<{}>;
 
 // ── Edition (the newsletter archive) ─────────────────────────────────────────
 
@@ -484,10 +485,4 @@ export type MixtapeRequestBody = {
   // YouTube + Mixcloud links come from `distribute` (mixtape_social_posts); only the
   // manual SoundCloud link is settable here (it too becomes a distribution row).
   soundcloudUrl?: string;
-};
-
-export type CueEntry = { ref: string; startMs?: number };
-
-export type MixtapeMembersRequest = {
-  members: Array<CueEntry | string>;
 };

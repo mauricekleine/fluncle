@@ -120,9 +120,9 @@ const fetchStudioRecording = createServerFn({ method: "GET" })
     }
   });
 
-// Resolve the promoted mixtape in-process for the management block. `includeDrafts` so a
-// mixtape still `distributing` (post-mint, pre-public) resolves; a bad id returns null
-// (the block hides) rather than 500-ing.
+// Resolve the promoted mixtape in-process for the management block. The by-id read
+// admits any status, so a mixtape still `distributing` (post-mint, pre-public)
+// resolves; a bad id returns null (the block hides) rather than 500-ing.
 const fetchStudioMixtape = createServerFn({ method: "GET" })
   .validator((data: { mixtapeId: string }) => data)
   .handler(async ({ data: { mixtapeId } }): Promise<MixtapeDTO | null> => {
@@ -131,7 +131,7 @@ const fetchStudioMixtape = createServerFn({ method: "GET" })
     }
 
     try {
-      return await getMixtapeById(mixtapeId, { includeDrafts: true });
+      return await getMixtapeById(mixtapeId);
     } catch {
       return null;
     }

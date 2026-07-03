@@ -1,7 +1,10 @@
-// The `admin-mixtapes` domain router module — mixtape authoring + the
-// audio→Mixcloud / video→YouTube distribution control plane. Each handler reuses
-// the live `/api/admin/mixtapes/*` route logic verbatim; the auth tier moves to
-// the oRPC procedure middleware (../orpc-auth).
+// The `admin-mixtapes` domain router module — the audio→Mixcloud /
+// video→YouTube distribution control plane for PROMOTED mixtapes. Each handler
+// reuses the live `/api/admin/mixtapes/*` route logic verbatim; the auth tier
+// moves to the oRPC procedure middleware (../orpc-auth). The draft-authoring
+// handlers (create/members/publish/delete) retired with draft mixtapes — a
+// mixtape is only ever born via `promote_recording`; plans own pre-publish
+// authoring.
 //
 // VERIFIED auth tiers (against the live handlers):
 //   - `list_mixtapes_admin` / `get_mixtape_social` — admin tier (`adminAuth`).
@@ -21,15 +24,10 @@ import { youtubeDescription } from "../../mixtape-chapters";
 import { getMixcloudAccessToken } from "../mixcloud";
 import { finalizeMixtapeDistribution, listMixtapeSocialPosts } from "../mixtape-social";
 import {
-  addTracksToMixtape,
-  createMixtape,
-  deleteMixtape,
   getMixtapeById,
   listMixtapes,
-  publishMixtape,
   setMixtapeCue,
   setMixtapeCues,
-  setMixtapeMembers,
   updateMixtape,
 } from "../mixtapes";
 import { adminAuth, operatorGuard } from "../orpc-auth";
@@ -95,25 +93,13 @@ export function adminMixtapesHandlers(os: Implementer) {
   const listMixtapesAdminHandler = os.list_mixtapes_admin.use(adminAuth).handler(async () => {
     try {
       return {
-        mixtapes: await listMixtapes({ hydrateMembers: true, includeDrafts: true }),
+        mixtapes: await listMixtapes({ hydrateMembers: true, includeUnpublished: true }),
         ok: true as const,
       };
     } catch (error) {
       throw apiFault(error);
     }
   });
-
-  // POST /admin/mixtapes — operator tier (live `requireOperator`).
-  const createMixtapeHandler = os.create_mixtape
-    .use(adminAuth)
-    .use(operatorGuard)
-    .handler(async ({ input }) => {
-      try {
-        return { mixtape: await createMixtape(input), ok: true as const };
-      } catch (error) {
-        throw apiFault(error);
-      }
-    });
 
   // PATCH /admin/mixtapes/{mixtapeId} — operator tier (live `requireOperator`).
   const updateMixtapeHandler = os.update_mixtape
@@ -123,67 +109,6 @@ export function adminMixtapesHandlers(os: Implementer) {
       try {
         const { mixtapeId, ...body } = input;
         const mixtape = await updateMixtape(mixtapeId, body);
-
-        return { mixtape, ok: true as const };
-      } catch (error) {
-        throw apiFault(error);
-      }
-    });
-
-  // DELETE /admin/mixtapes/{mixtapeId} — operator tier (live `requireOperator`).
-  const deleteMixtapeHandler = os.delete_mixtape
-    .use(adminAuth)
-    .use(operatorGuard)
-    .handler(async ({ input }) => {
-      try {
-        await deleteMixtape(input.mixtapeId);
-
-        return { ok: true as const };
-      } catch (error) {
-        throw apiFault(error);
-      }
-    });
-
-  // POST /admin/mixtapes/{mixtapeId}/members — operator tier (live
-  // `requireOperator`). APPEND to the tracklist.
-  const addMixtapeMembersHandler = os.add_mixtape_members
-    .use(adminAuth)
-    .use(operatorGuard)
-    .handler(async ({ input }) => {
-      try {
-        const { mixtapeId, ...body } = input;
-        const mixtape = await addTracksToMixtape(mixtapeId, body);
-
-        return { mixtape, ok: true as const };
-      } catch (error) {
-        throw apiFault(error);
-      }
-    });
-
-  // PUT /admin/mixtapes/{mixtapeId}/members — operator tier (live
-  // `requireOperator`). REPLACE the whole tracklist.
-  const setMixtapeMembersHandler = os.set_mixtape_members
-    .use(adminAuth)
-    .use(operatorGuard)
-    .handler(async ({ input }) => {
-      try {
-        const { mixtapeId, ...body } = input;
-        const mixtape = await setMixtapeMembers(mixtapeId, body);
-
-        return { mixtape, ok: true as const };
-      } catch (error) {
-        throw apiFault(error);
-      }
-    });
-
-  // POST /admin/mixtapes/{mixtapeId}/publish — operator tier (live
-  // `requireOperator`).
-  const publishMixtapeHandler = os.publish_mixtape
-    .use(adminAuth)
-    .use(operatorGuard)
-    .handler(async ({ input }) => {
-      try {
-        const mixtape = await publishMixtape(input.mixtapeId);
 
         return { mixtape, ok: true as const };
       } catch (error) {
@@ -257,7 +182,7 @@ export function adminMixtapesHandlers(os: Implementer) {
           });
         }
 
-        const mixtape = await getMixtapeById(input.mixtapeId, { includeDrafts: true });
+        const mixtape = await getMixtapeById(input.mixtapeId);
 
         if (mixtape.status !== "distributing" && mixtape.status !== "published") {
           throw new ORPCError("CONFLICT", {
@@ -459,7 +384,7 @@ export function adminMixtapesHandlers(os: Implementer) {
           });
         }
 
-        const mixtape = await getMixtapeById(input.mixtapeId, { includeDrafts: true });
+        const mixtape = await getMixtapeById(input.mixtapeId);
 
         if (!mixtape.logId) {
           throw new ORPCError("CONFLICT", {
@@ -575,7 +500,7 @@ export function adminMixtapesHandlers(os: Implementer) {
           });
         }
 
-        const mixtape = await getMixtapeById(input.mixtapeId, { includeDrafts: true });
+        const mixtape = await getMixtapeById(input.mixtapeId);
         const sections = mixcloudSections(mixtape.members);
 
         if (sections.length === 0) {
@@ -811,7 +736,7 @@ export function adminMixtapesHandlers(os: Implementer) {
             ? input.contentType
             : "video/mp4";
 
-        const mixtape = await getMixtapeById(input.mixtapeId, { includeDrafts: true });
+        const mixtape = await getMixtapeById(input.mixtapeId);
 
         if (mixtape.status !== "distributing" && mixtape.status !== "published") {
           throw new ORPCError("CONFLICT", {
@@ -855,7 +780,7 @@ export function adminMixtapesHandlers(os: Implementer) {
     });
 
   // PUT /admin/mixtapes/{mixtapeId}/cues — operator tier. The hardened post-publish
-  // cue backfill. LOOSE body → setMixtapeCues, which owns the non-draft + member-set
+  // cue backfill. LOOSE body → setMixtapeCues, which owns the minted-only + member-set
   // + monotonic/start-at-0 guards.
   const setMixtapeCuesHandler = os.set_mixtape_cues
     .use(adminAuth)
@@ -874,7 +799,7 @@ export function adminMixtapesHandlers(os: Implementer) {
   // PUT /admin/mixtapes/{mixtapeId}/cues/{ref} — operator tier. The INTERACTIVE
   // single-cue write behind the Studio cue rail (mark/clear one member at the
   // playhead). LOOSE body → setMixtapeCue, which owns the startMs validation + the
-  // non-draft + membership guards; `startMs: null` clears the cue. No coverage/order
+  // minted-only + membership guards; `startMs: null` clears the cue. No coverage/order
   // constraint (that is the batch set_mixtape_cues' job).
   const updateMixtapeCueHandler = os.update_mixtape_cue
     .use(adminAuth)
@@ -893,11 +818,8 @@ export function adminMixtapesHandlers(os: Implementer) {
     });
 
   return {
-    add_mixtape_members: addMixtapeMembersHandler,
     create_clip: createClipHandler,
-    create_mixtape: createMixtapeHandler,
     delete_clip: deleteClipHandler,
-    delete_mixtape: deleteMixtapeHandler,
     finalize_clip_cut: finalizeClipCutHandler,
     finalize_mixtape_mixcloud: finalizeMixtapeMixcloudHandler,
     finalize_mixtape_youtube: finalizeMixtapeYoutubeHandler,
@@ -908,12 +830,10 @@ export function adminMixtapesHandlers(os: Implementer) {
     list_mixtapes_admin: listMixtapesAdminHandler,
     presign_clip_upload: presignClipUploadHandler,
     presign_set_video_upload: presignSetVideoUploadHandler,
-    publish_mixtape: publishMixtapeHandler,
     publish_mixtape_youtube: publishMixtapeYoutubeHandler,
     resync_mixtape_mixcloud: resyncMixtapeMixcloudHandler,
     resync_mixtape_youtube: resyncMixtapeYoutubeHandler,
     set_mixtape_cues: setMixtapeCuesHandler,
-    set_mixtape_members: setMixtapeMembersHandler,
     update_clip: updateClipHandler,
     update_mixtape: updateMixtapeHandler,
     update_mixtape_cue: updateMixtapeCueHandler,

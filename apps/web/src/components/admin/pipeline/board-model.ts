@@ -58,7 +58,7 @@ export type StepKind = "auto" | "human";
  * open    — nothing yet; for a human step this is your move (when not gated).
  * running — an agent step in flight (enrichment processing).
  * partial — touched, not closed (a pushed-but-not-live draft; context gathered but
- *           not voiced; a finding sitting in a draft tape).
+ *           not voiced; a finding pencilled into a plan).
  * done    — closed.
  * planned — designed-in, not wired yet; ghosted, never actionable.
  */
@@ -187,8 +187,10 @@ export function boardSteps(row: BoardRow): BoardStep[] {
       : undefined);
   const note = row.note?.trim();
   const rendered = Boolean(row.observationAudioUrl);
-  const onTape = row.mixtapes.some((m) => m.status === "published" || m.status === "distributing");
-  const inDraftTape = !onTape && row.mixtapes.length > 0;
+  // Every mixtape membership is a minted checkpoint now (drafts retired); a plan
+  // membership is the pencilled-in in-between.
+  const onTape = row.mixtapes.length > 0;
+  const inPlan = !onTape && row.plans.length > 0;
 
   const partials: Record<
     StepKey,
@@ -264,9 +266,9 @@ export function boardSteps(row: BoardRow): BoardStep[] {
     mixtape: {
       actionable: true,
       gated: false,
-      hint: row.mixtapes.length > 0 ? "On a mixtape — open the picker" : "Add to a mixtape",
-      state: onTape ? "done" : inDraftTape ? "partial" : "open",
-      statusLabel: onTape ? "On a tape" : inDraftTape ? "In a draft" : "Add",
+      hint: onTape ? "On a mixtape: open the plan picker" : "Add to a plan",
+      state: onTape ? "done" : inPlan ? "partial" : "open",
+      statusLabel: onTape ? "On a tape" : inPlan ? "In a plan" : "Add",
     },
     note: {
       // An `auto` step (the auto-note cron authors it) that stays `actionable` so the

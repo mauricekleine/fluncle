@@ -183,30 +183,12 @@ type BackfillSyncOptions = {
   limit?: string;
 };
 
-type MixtapeCreateOptions = {
-  durationMs?: string;
-  json: boolean;
-  note?: string;
-  recordedAt?: string;
-  soundcloudUrl?: string;
-};
-
 type MixtapeUpdateOptions = {
   durationMs?: string;
   json: boolean;
   note?: string;
   recordedAt?: string;
   soundcloudUrl?: string;
-};
-
-type MixtapeMembersOptions = {
-  from?: string;
-  json: boolean;
-};
-
-type MixtapeDeleteOptions = {
-  json: boolean;
-  yes: boolean;
 };
 
 type MixtapeDistributeOptions = {
@@ -801,23 +783,6 @@ function addAdminCommands(program: Command): void {
   });
 
   adminMixtapes
-    .command("create")
-    .description("Log a new mixtape draft")
-    .option("--duration-ms <duration>", "Duration (mm:ss, h:mm:ss, or ms)")
-    .option("--json", "Print JSON", false)
-    .option("--note <text>", "Operator note")
-    .option("--recorded-at <date>", "Recorded date (ISO)")
-    .option(
-      "--soundcloud-url <url>",
-      "SoundCloud URL (manual; YouTube + Mixcloud come from distribute)",
-    )
-    .allowExcessArguments()
-    .action(async (options: MixtapeCreateOptions) => {
-      const { mixtapeCreateCommand } = await import("./commands/mixtapes");
-      await runMixtapeCreate(options, mixtapeCreateCommand);
-    });
-
-  adminMixtapes
     .command("update")
     .description("Update a mixtape's fields")
     .argument("[id]")
@@ -836,44 +801,8 @@ function addAdminCommands(program: Command): void {
     });
 
   adminMixtapes
-    .command("members")
-    .description("Set a mixtape's tracklist (refs and/or a cue-sheet file)")
-    .argument("[id]")
-    .argument("[refs...]")
-    .option("--from <file>", "Cue-sheet or JSON file with members")
-    .option("--json", "Print JSON", false)
-    .allowExcessArguments()
-    .action(async (id: string | undefined, refs: string[], options: MixtapeMembersOptions) => {
-      const { mixtapeMembersCommand } = await import("./commands/mixtapes");
-      await runMixtapeMembers(id, refs, options, mixtapeMembersCommand);
-    });
-
-  adminMixtapes
-    .command("publish")
-    .description("Publish a mixtape draft")
-    .argument("[id]")
-    .option("--json", "Print JSON", false)
-    .allowExcessArguments()
-    .action(async (id: string | undefined, options: { json: boolean }) => {
-      const { mixtapePublishCommand } = await import("./commands/mixtapes");
-      await runMixtapePublish(id, options, mixtapePublishCommand);
-    });
-
-  adminMixtapes
-    .command("delete")
-    .description("Discard a mixtape draft (published mixtapes can't be deleted)")
-    .argument("[id]")
-    .option("--json", "Print JSON", false)
-    .option("--yes", "Skip confirmation", false)
-    .allowExcessArguments()
-    .action(async (id: string | undefined, options: MixtapeDeleteOptions) => {
-      const { mixtapeDeleteCommand } = await import("./commands/mixtapes");
-      await runMixtapeDelete(id, options, mixtapeDeleteCommand);
-    });
-
-  adminMixtapes
     .command("list")
-    .description("List all mixtapes (including drafts)")
+    .description("List all mixtapes (including distributing)")
     .option("--json", "Print JSON", false)
     .allowExcessArguments()
     .action(async (options: { json: boolean }) => {
@@ -1937,20 +1866,6 @@ async function runTrackPurgeVideo(
   );
 }
 
-async function runMixtapeCreate(
-  options: MixtapeCreateOptions,
-  mixtapeCreateCommand: typeof import("./commands/mixtapes").mixtapeCreateCommand,
-): Promise<void> {
-  const result = await mixtapeCreateCommand(options);
-
-  if (options.json) {
-    printJson(result);
-    return;
-  }
-
-  console.log(`Logged draft ${result.mixtape.id}. It stays a draft until you publish it.`);
-}
-
 async function runMixtapeUpdate(
   id: string | undefined,
   options: MixtapeUpdateOptions,
@@ -1968,54 +1883,6 @@ async function runMixtapeUpdate(
   }
 
   console.log(`Saved ${result.mixtape.id}.`);
-}
-
-async function runMixtapeMembers(
-  id: string | undefined,
-  refs: string[],
-  options: MixtapeMembersOptions,
-  mixtapeMembersCommand: typeof import("./commands/mixtapes").mixtapeMembersCommand,
-): Promise<void> {
-  if (!id) {
-    throw new Error("Missing mixtape id. Usage: fluncle admin mixtapes members <id> [refs...]");
-  }
-
-  if (refs.length === 0 && !options.from) {
-    throw new Error("Provide refs as arguments or a cue-sheet file with --from");
-  }
-
-  const result = await mixtapeMembersCommand(id, refs, options);
-
-  if (options.json) {
-    printJson(result);
-    return;
-  }
-
-  console.log(
-    `Saved the tracklist: ${result.mixtape.memberCount} bangers on ${result.mixtape.id}.`,
-  );
-}
-
-async function runMixtapePublish(
-  id: string | undefined,
-  options: { json: boolean },
-  mixtapePublishCommand: typeof import("./commands/mixtapes").mixtapePublishCommand,
-): Promise<void> {
-  if (!id) {
-    throw new Error("Missing mixtape id. Usage: fluncle admin mixtapes publish <id>");
-  }
-
-  const result = await mixtapePublishCommand(id);
-
-  if (options.json) {
-    printJson(result);
-    return;
-  }
-
-  console.log(
-    `Minted ${result.mixtape.logId} (fluncle://${result.mixtape.logId}) — distributing. ` +
-      "Run `distribute` to push it to the platforms.",
-  );
 }
 
 async function runMixtapeDistribute(
@@ -2083,29 +1950,6 @@ async function runMixtapeResync(
   console.log(`Re-synced ${result.logId} (fluncle://${result.logId}).\n${links}`);
 }
 
-async function runMixtapeDelete(
-  id: string | undefined,
-  options: MixtapeDeleteOptions,
-  mixtapeDeleteCommand: typeof import("./commands/mixtapes").mixtapeDeleteCommand,
-): Promise<void> {
-  if (!id) {
-    throw new Error("Missing mixtape id. Usage: fluncle admin mixtapes delete <id> --yes");
-  }
-
-  if (!options.yes) {
-    throw new Error("Pass --yes to confirm the discard. Published mixtapes can't be deleted.");
-  }
-
-  await mixtapeDeleteCommand(id);
-
-  if (options.json) {
-    printJson({ id, ok: true });
-    return;
-  }
-
-  console.log(`Discarded draft ${id}.`);
-}
-
 async function runMixtapeList(
   options: { json: boolean },
   mixtapeListCommand: typeof import("./commands/mixtapes").mixtapeListCommand,
@@ -2123,8 +1967,8 @@ async function runMixtapeList(
   }
 
   for (const mixtape of mixtapes) {
-    const status = mixtape.status ?? "draft";
-    const coordinate = mixtape.logId ?? "draft";
+    const status = mixtape.status ?? "distributing";
+    const coordinate = mixtape.logId ?? "unminted";
     console.log(`${coordinate}\t${status}\t${mixtape.memberCount} bangers\t${mixtape.title}`);
   }
 }
@@ -2194,8 +2038,8 @@ async function runMixtapeGet(
     return;
   }
 
-  const coordinate = mixtape.logId ?? "draft";
-  const status = mixtape.status ?? "draft";
+  const coordinate = mixtape.logId ?? "unminted";
+  const status = mixtape.status ?? "distributing";
   console.log(`${mixtape.title}`);
   console.log(`  ${coordinate} · ${status} · ${mixtape.memberCount} bangers`);
   if (mixtape.note) {

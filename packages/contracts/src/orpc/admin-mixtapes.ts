@@ -1,20 +1,24 @@
-// The `admin-mixtapes` domain contract module — the mixtape authoring + the
-// audio→Mixcloud / video→YouTube distribution control plane. Part of the admin
-// fan-out, built on the same pattern as `./admin-tracks.ts`.
+// The `admin-mixtapes` domain contract module — the audio→Mixcloud /
+// video→YouTube distribution control plane for PROMOTED mixtapes. Part of the
+// admin fan-out, built on the same pattern as `./admin-tracks.ts`.
+//
+// A mixtape is only ever BORN via `promote_recording` (RFC plan→recording→mixtape):
+// the draft-authoring ops (`create_mixtape`, the members writes, `publish_mixtape`,
+// `delete_mixtape`) retired with draft mixtapes — plans (`recordings` kind=plan)
+// own pre-publish authoring now.
 //
 // VERIFIED auth tiers against the live handlers:
 //   - `list_mixtapes_admin` (GET) and `get_mixtape_social` (GET) — admin tier
 //     (live `requireAdmin`): reads, agent-allowed.
-//   - everything else — operator tier (live `requireOperator`): create/update/
-//     delete, the members writes (POST append + PUT replace), publish, and every
-//     distribution step. The agent gets a 403.
+//   - everything else — operator tier (live `requireOperator`): the post-publish
+//     update and every distribution step. The agent gets a 403.
 //
 // Mutating bodies stay LOOSE/passthrough by design — the live routes pass the raw
-// JSON straight to the server helpers (`createMixtape`/`updateMixtape`/
-// `addTracksToMixtape`/`setMixtapeMembers`), which validate + throw their own
-// codes — so the contract must not pre-reject. The distribution steps validate
-// their own narrow fields in-handler (`invalid_request`/`mixtape_not_distributing`
-// /`mixtape_no_log_id`/the YouTube 502s), kept byte-for-byte.
+// JSON straight to the server helpers (`updateMixtape`/`setMixtapeCues`), which
+// validate + throw their own codes — so the contract must not pre-reject. The
+// distribution steps validate their own narrow fields in-handler
+// (`invalid_request`/`mixtape_not_distributing`/`mixtape_no_log_id`/the YouTube
+// 502s), kept byte-for-byte.
 
 import { oc } from "@orpc/contract";
 import * as z from "zod";
@@ -30,34 +34,18 @@ const ClipEnvelope = z.object({ clip: ClipDTOSchema, ok: z.literal(true) });
  * `list_mixtapes_admin` → `GET /admin/mixtapes` (operationId `listMixtapesAdmin`).
  *
  * Admin tier (live `requireAdmin`). The full mixtape list, hydrated + including
- * drafts (distinct from the public `list_mixtapes`). Preserves `{ mixtapes, ok }`.
+ * the minted-but-uploading `distributing` state (distinct from the public
+ * `list_mixtapes`, which is published-only). Preserves `{ mixtapes, ok }`.
  */
 export const listMixtapesAdmin = oc
   .route({
     method: "GET",
     operationId: "listMixtapesAdmin",
     path: "/admin/mixtapes",
-    summary: "List every mixtape (hydrated, including drafts)",
+    summary: "List every mixtape (hydrated, including distributing)",
     tags: ["Admin"],
   })
   .output(z.object({ mixtapes: z.array(MixtapeDTOSchema), ok: z.literal(true) }));
-
-/**
- * `create_mixtape` → `POST /admin/mixtapes` (operationId `createMixtape`).
- *
- * Operator tier (live `requireOperator`). LOOSE body — `createMixtape` validates.
- * Preserves `{ mixtape, ok }`.
- */
-export const createMixtape = oc
-  .route({
-    method: "POST",
-    operationId: "createMixtape",
-    path: "/admin/mixtapes",
-    summary: "Create a mixtape (draft)",
-    tags: ["Admin"],
-  })
-  .input(z.looseObject({}))
-  .output(MixtapeEnvelope);
 
 /**
  * `update_mixtape` → `PATCH /admin/mixtapes/{mixtapeId}` (operationId
@@ -75,80 +63,6 @@ export const updateMixtape = oc
     tags: ["Admin"],
   })
   .input(z.looseObject({ mixtapeId: z.string() }))
-  .output(MixtapeEnvelope);
-
-/**
- * `delete_mixtape` → `DELETE /admin/mixtapes/{mixtapeId}` (operationId
- * `deleteMixtape`).
- *
- * Operator tier (live `requireOperator`). Preserves the live `{ ok }` envelope.
- */
-export const deleteMixtape = oc
-  .route({
-    method: "DELETE",
-    operationId: "deleteMixtape",
-    path: "/admin/mixtapes/{mixtapeId}",
-    summary: "Delete a mixtape",
-    tags: ["Admin"],
-  })
-  .input(z.object({ mixtapeId: z.string() }))
-  .output(z.object({ ok: z.literal(true) }));
-
-/**
- * `add_mixtape_members` → `POST /admin/mixtapes/{mixtapeId}/members` (operationId
- * `addMixtapeMembers`).
- *
- * Operator tier (live `requireOperator`). APPEND to the tracklist (the board's
- * "Add to mixtape"). LOOSE body — `addTracksToMixtape` validates. Preserves
- * `{ mixtape, ok }`.
- */
-export const addMixtapeMembers = oc
-  .route({
-    method: "POST",
-    operationId: "addMixtapeMembers",
-    path: "/admin/mixtapes/{mixtapeId}/members",
-    summary: "Append tracks to a mixtape's tracklist (draft-only)",
-    tags: ["Admin"],
-  })
-  .input(z.looseObject({ mixtapeId: z.string() }))
-  .output(MixtapeEnvelope);
-
-/**
- * `set_mixtape_members` → `PUT /admin/mixtapes/{mixtapeId}/members` (operationId
- * `setMixtapeMembers`).
- *
- * Operator tier (live `requireOperator`). REPLACE the whole tracklist (the
- * editor's drag-reorder). The SAME path as `add_mixtape_members`, distinguished by
- * the PUT method. LOOSE body — `setMixtapeMembers` validates. Preserves
- * `{ mixtape, ok }`.
- */
-export const setMixtapeMembers = oc
-  .route({
-    method: "PUT",
-    operationId: "setMixtapeMembers",
-    path: "/admin/mixtapes/{mixtapeId}/members",
-    summary: "Replace a mixtape's whole tracklist (draft-only)",
-    tags: ["Admin"],
-  })
-  .input(z.looseObject({ mixtapeId: z.string() }))
-  .output(MixtapeEnvelope);
-
-/**
- * `publish_mixtape` → `POST /admin/mixtapes/{mixtapeId}/publish` (operationId
- * `publishMixtape`).
- *
- * Operator tier (live `requireOperator`). Mint the mixtape (draft → distributing,
- * committing its Log ID). Preserves `{ mixtape, ok }`.
- */
-export const publishMixtape = oc
-  .route({
-    method: "POST",
-    operationId: "publishMixtape",
-    path: "/admin/mixtapes/{mixtapeId}/publish",
-    summary: "Mint a mixtape (publish): commit its Log ID",
-    tags: ["Admin"],
-  })
-  .input(z.object({ mixtapeId: z.string() }))
   .output(MixtapeEnvelope);
 
 /**
@@ -584,11 +498,8 @@ export const getClipCaption = oc
 
 /** The `admin-mixtapes` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminMixtapesContract = {
-  add_mixtape_members: addMixtapeMembers,
   create_clip: createClip,
-  create_mixtape: createMixtape,
   delete_clip: deleteClip,
-  delete_mixtape: deleteMixtape,
   finalize_clip_cut: finalizeClipCut,
   finalize_mixtape_mixcloud: finalizeMixtapeMixcloud,
   finalize_mixtape_youtube: finalizeMixtapeYoutube,
@@ -599,12 +510,10 @@ export const adminMixtapesContract = {
   list_mixtapes_admin: listMixtapesAdmin,
   presign_clip_upload: presignClipUpload,
   presign_set_video_upload: presignSetVideoUpload,
-  publish_mixtape: publishMixtape,
   publish_mixtape_youtube: publishMixtapeYoutube,
   resync_mixtape_mixcloud: resyncMixtapeMixcloud,
   resync_mixtape_youtube: resyncMixtapeYoutube,
   set_mixtape_cues: setMixtapeCues,
-  set_mixtape_members: setMixtapeMembers,
   update_clip: updateClip,
   update_mixtape: updateMixtape,
   update_mixtape_cue: updateMixtapeCue,
