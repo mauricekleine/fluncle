@@ -1,20 +1,14 @@
-// Fluncle Studio — `distribute --set-video`. Derive ONE 1080p faststart
-// rendition of the set with ffmpeg (the operator's Mac), multipart-upload it straight
-// to R2 at `<logId>/set.mp4`, and flip `setVideoAt` so the `/log` player + the video
-// SEO light up. The raw multi-GB master never goes to R2 — only this rendition does
-// (it serves the `/log` player, the editor scrub, and the clip cut).
-//
-// The bytes move CLI-direct: the rendition is ~1.5GB, past the single-PUT presign
-// budget, so the Worker OPENS a multipart upload + presigns the parts (operator-tier
-// `presign_set_video_upload`) and the CLI streams each part to R2 and completes the
-// upload itself — the same direct-to-R2 constraint as the YouTube/Mixcloud legs.
+// Multipart upload helpers for CLI-direct R2 transfers (set-video renditions). The
+// rendition is ~1.5GB, past the single-PUT presign budget, so the Worker OPENS a
+// multipart upload + presigns the parts and the CLI streams each part to R2 and
+// completes the upload itself. Used by the recording upload (`recordings create`)
+// via `uploadRenditionMultipart`.
 
-import { type MixtapeUpdateResponse } from "@fluncle/contracts";
 import { randomUUID } from "node:crypto";
 import { existsSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { adminApiPatch, adminApiPost } from "../api";
+import { adminApiPost } from "../api";
 import { CliError } from "../output";
 
 // The public read base for stored artifacts (matches the Worker's FOUND_BASE).
@@ -138,8 +132,8 @@ export function renditionFfmpegArgs(inputPath: string, outputPath: string): stri
 
 export type StageSetVideoResult = { key: string; url: string };
 
-// The presign response shape both set-video presigns share (mixtape's `<logId>/set.mp4`
-// and the recording's owned `recordings/<id>/set.mp4`): every leg the CLI drives.
+// The presign response shape for a set-video upload (the recording's owned
+// `recordings/<id>/set.mp4`, or — via promote — the mixtape's `<logId>/set.mp4`).
 type RenditionPresign = {
   abortUrl: string;
   completeUrl: string;
@@ -148,11 +142,10 @@ type RenditionPresign = {
 };
 
 /**
- * Derive the 1080p faststart rendition (ffmpeg) → multipart-upload it straight to R2 via
- * the given presign endpoint. Shared by the mixtape set-video stage and the RFC recording
- * upload — the only difference is the presign PATH (the mixtape's derived `<logId>/set.mp4`
- * vs the recording's OWNED `recordings/<id>/set.mp4`) and whether the caller flips a
- * `setVideoAt` afterward. Returns the R2 key + public URL.
+ * Derive the 1080p faststart rendition (ffmpeg) → multipart-upload it straight to R2
+ * via the given presign endpoint. The presign PATH is the recording's OWNED key
+ * (`recordings/<id>/set.mp4`); `promote_recording` server-side copies it to
+ * `<logId>/set.mp4` when the recording is promoted. Returns the R2 key + public URL.
  */
 export async function uploadRenditionMultipart(
   masterPath: string,
@@ -212,38 +205,6 @@ export async function uploadRenditionMultipart(
   } finally {
     rmSync(renditionPath, { force: true });
   }
-}
-
-/**
- * Stage the set-video rendition end to end: derive → multipart-upload to R2 →
- * flip `setVideoAt`. Idempotent: a re-run on a published mixtape re-stages + re-
- * flips (backfills an older set). Default stages public (distribute = publish); the
- * pre-release embargo (stage private, flip on release) is a documented later hook,
- * not built here.
- */
-export async function stageSetVideo(
-  mixtapeId: string,
-  masterPath: string,
-  onProgress: (message: string) => void = () => {},
-): Promise<StageSetVideoResult> {
-  const result = await uploadRenditionMultipart(
-    masterPath,
-    `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/set-video/presign`,
-    onProgress,
-  );
-
-  // Flip `setVideoAt` via the operator-tier update_mixtape (loose passthrough body)
-  // → the /log player + the <video:video> sitemap entry + the VideoObject light up.
-  await adminApiPatch<MixtapeUpdateResponse>(
-    `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}`,
-    {
-      setVideoAt: new Date().toISOString(),
-    },
-  );
-
-  onProgress("Set video: flipped setVideoAt — the /log player + video SEO are live.");
-
-  return result;
 }
 
 // PUT one chunk straight to its presigned URL and return the ETag R2 reports (needed

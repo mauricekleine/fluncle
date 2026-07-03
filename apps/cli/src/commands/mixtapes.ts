@@ -104,7 +104,6 @@ export type MixtapeDistributeOptions = {
   audio?: string;
   json: boolean;
   mixcloud?: boolean;
-  setVideo?: boolean;
   unlisted?: boolean;
   video?: string;
   youtube?: boolean;
@@ -117,16 +116,13 @@ export type MixtapeDistributeResult = {
 };
 
 /**
- * Distribute a mixtape end to end: mint the coordinate if it's still a draft, then
- * move the local bytes to each requested platform (video→YouTube, audio→Mixcloud).
- * With no platform selector at all, does YouTube + Mixcloud. The first successful
- * platform link flips the mixtape `distributing → published` (server-side, in each
- * finalize). `--set-video` is an ADDITIONAL leg (Fluncle Studio Unit A): it derives a
- * 1080p rendition of the set and stages it to R2 at `<logId>/set.mp4`, flipping
- * `setVideoAt` so the `/log` player + video SEO light up. It is opt-in (never part of
- * the no-selector default — it needs a video master + ffmpeg) and runs ONLY-set-video
- * when it is the sole selector (the backfill case). Idempotent: re-running resumes a
- * `distributing` mixtape, reusing its Log ID, and re-stages the set video.
+ * Distribute a promoted mixtape to YouTube (video) and Mixcloud (audio). This is
+ * push-only — it operates on an already-minted mixtape (`distributing` or `published`).
+ * The mint path is `promote_recording` (`fluncle admin recordings promote <recordingId>`),
+ * which also stages the set video to R2 at `<logId>/set.mp4`. With no platform selector,
+ * does YouTube + Mixcloud. The first successful platform link flips `distributing →
+ * published` (server-side). Idempotent: re-running a `distributing` or `published`
+ * mixtape reuses its Log ID.
  */
 export async function mixtapeDistributeCommand(
   idOrLogId: string,
@@ -139,13 +135,21 @@ export async function mixtapeDistributeCommand(
     throw new CliError("mixtape_not_found", `No mixtape with id or log id ${idOrLogId}`);
   }
 
-  // No platform selector → the legacy default (YouTube + Mixcloud). `--set-video` is
-  // an additional, opt-in leg, so it never triggers the default; running it alone (the
-  // backfill case) stages only the set video.
-  const both = !options.youtube && !options.mixcloud && !options.setVideo;
+  // Distribute is push-only: a draft has not been promoted yet. Use
+  // `fluncle admin recordings promote <recordingId>` to mint the coordinate
+  // and stage the set video, then come back here to push to the platforms.
+  if (mixtape.status === "draft") {
+    throw new CliError(
+      "mixtape_not_promoted",
+      `${mixtape.id} is still a draft — promote its recording first:\n` +
+        "  fluncle admin recordings promote <recordingId>",
+    );
+  }
+
+  // No platform selector → default (YouTube + Mixcloud).
+  const both = !options.youtube && !options.mixcloud;
   const doYoutube = both || Boolean(options.youtube);
   const doMixcloud = both || Boolean(options.mixcloud);
-  const doSetVideo = Boolean(options.setVideo);
 
   if (doYoutube && !options.video) {
     throw new CliError("missing_video", "YouTube distribution needs --video <mp4>");
@@ -153,16 +157,19 @@ export async function mixtapeDistributeCommand(
   if (doMixcloud && !options.audio) {
     throw new CliError("missing_audio", "Mixcloud distribution needs --audio <file>");
   }
-  if (doSetVideo && !options.video) {
-    throw new CliError("missing_video", "--set-video needs --video <master.mp4>");
-  }
 
   const mixtapeId = mixtape.id;
-  let logId = mixtape.logId;
+  const logId = mixtape.logId;
 
-  // Derive the run-time from the upload if the draft has no duration — a draft is
-  // just the tracklist, so duration isn't an input. Display-only, best-effort
-  // (skipped if ffprobe isn't on PATH).
+  if (!logId) {
+    throw new CliError(
+      "missing_log_id",
+      "The mixtape has no Log ID — was it promoted successfully?",
+    );
+  }
+
+  // Derive the run-time from the upload if the mixtape has no duration.
+  // Display-only, best-effort (skipped if ffprobe isn't on PATH).
   if (!mixtape.durationMs) {
     const source = options.audio ?? options.video;
     const durationMs = source ? await probeDurationMs(source) : undefined;
@@ -173,22 +180,10 @@ export async function mixtapeDistributeCommand(
     }
   }
 
-  // Mint first: the cover endpoint and the uploaded assets must embed the real Log
-  // ID, so it has to exist BEFORE upload. A draft mints to `distributing`; an
-  // already-minted mixtape reuses its committed coordinate.
-  if (mixtape.status === "draft") {
-    onProgress("Minting the coordinate…");
-    const published = await mixtapePublishCommand(mixtapeId);
-    logId = published.mixtape.logId;
-    onProgress(`Minted ${logId}.`);
-  } else if (mixtape.status === "published") {
+  if (mixtape.status === "published") {
     onProgress(`Already published (${logId}); re-distributing.`);
   } else {
-    onProgress(`Resuming distribution for ${logId}.`);
-  }
-
-  if (!logId) {
-    throw new CliError("mint_failed", "The mixtape has no Log ID after minting");
+    onProgress(`Distributing ${logId} (promoted — coordinate already minted).`);
   }
 
   const results: { platform: string; url: string }[] = [];
@@ -213,17 +208,6 @@ export async function mixtapeDistributeCommand(
     const result = await distributeMixcloud(mixtapeId, options.audio, onProgress, options.unlisted);
     results.push({ platform: "mixcloud", url: result.url });
     onProgress(`Mixcloud: ${result.url}`);
-  }
-
-  if (doSetVideo) {
-    if (!options.video) {
-      throw new CliError("missing_video", "--set-video needs --video <master.mp4>");
-    }
-    onProgress("Set video: staging the 1080p rendition…");
-    const { stageSetVideo } = await import("./mixtape-set-video");
-    const result = await stageSetVideo(mixtapeId, options.video, onProgress);
-    results.push({ platform: "set-video", url: result.url });
-    onProgress(`Set video: ${result.url}`);
   }
 
   return { logId, mixtapeId, results };

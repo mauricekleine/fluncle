@@ -35,8 +35,16 @@ For the Rekordbox tracklist step, also cache the database key once (see that ste
 ### A. Record + archive
 
 1. Record the set.
-2. Capture the assets: the audio master, the mixtape video, any teaser clips (raw material you don't want to re-shoot — and the Fluncle Studio clip pipeline can cut more later from the set master on R2: the `mixtape_clips` table, `fluncle admin clips list|cut`, `/admin/studio/$logId` + `/admin/clips`, the `fluncle-studio-clip` cron; see `docs/fluncle-studio.md`).
+2. Capture the assets: the audio master, the mixtape video, any teaser clips (raw material you don't want to re-shoot — and the Fluncle Studio clip pipeline can cut more later from a **recording**'s set video on R2: the `recordings` table + `mixtape_clips`, `fluncle admin recordings …` + `fluncle admin clips list|cut`, `/admin/studio/<recordingId>` + `/admin/clips`, the `fluncle-studio-clip` cron; see `docs/fluncle-studio.md`).
 3. Archive the raw assets to the operator path (R2), like a finding's analysis archive.
+
+> **Clip-first via a recording, promote later** (RFC recording-primitive, Design B — `docs/recording-primitive-rfc.md`). You do NOT have to publish a mixtape to clip a set. Create a **recording** (a captured set that carries NO coordinate) and clip it first; promote it to a full mixtape only when you decide to publish:
+>
+> 1. `fluncle admin recordings create --title "…" --video <set>.mov` — mints a coordinate-less recording and streams the set video to its own R2 key.
+> 2. Clip it in the Studio at `/admin/studio/<recordingId>` — author the cue tracklist (add each track, mark it at the playhead) and cut framed 9:16 clips. They land in `/admin/clips` grouped under the recording. Un-promoted, a clip points home to `fluncle.com` (no `fluncle://` coordinate — coordinates are for published mixtapes only).
+> 3. When you're ready to publish the full thing: `fluncle admin recordings promote <recordingId>`. Promote is idempotent (mint-or-reuse): it mints a mixtape from the recording (seeding its tracklist), copies the set video to `<logId>/set.mp4`, links `mixtapes.recording_id` back, and hands off to the ordinary `distribute` flow below (§C). The recording's existing clips keep working; re-cut a clip to gain the new `fluncle://<logId>` coordinate. A mixtape's "Clip this set" (`/admin/mixtapes`) then links to its recording's Studio.
+>
+> Skip this and go straight to §B when a set is definitely becoming a mixtape now (the recording is created for you on promote-time only if you use the recording path; the classic distribute path stays a mixtape from the start).
 
 **Audio — Track 1 is the clean master.** The OBS recording carries two audio tracks (Advanced Output records tracks 1 + 2): **Track 1 = the clean stereo mix only** (BlackHole / PC MASTER OUT, no mic — the file's default audio), **Track 2 = the isolated mic**. (A third track, mix + mic, feeds the Twitch stream but isn't recorded.) Always take the **clean Track 1** for the Mixcloud audio master and for any clip audio — it's the default stream, so `-map 0:a:0` (or no `-map` at all); Track 2 is the voice-only mic. The recording is 1080p H.264 (OBS Output (Scaled) Resolution must be 1920×1080, not 720p; keep H.264 so the clip pipeline / Cloudflare Media Transformations can read it; the master encoder is a dedicated Apple VT H264 Hardware encoder at CBR 40000, not "Use stream encoder"). Full OBS / BlackHole recording setup lives in `docs/mixtape-recording-setup.md`.
 
@@ -46,21 +54,54 @@ A draft is **just the operator-authored subset**: a recorded date (defaults to t
 
 **Reserve the coordinate before you record.** The draft editor shows a **reserved Log ID** — the `XXX.F.ZZ` coordinate the mixtape will mint into — so you can name your Beatport playlist, USB folders, and Rekordbox playlist with it up front. It is a pure function of the sector day (from the **live session date**, which wins as the committed record day; else the recorded date) and the next mint sequence, so it is day-granular and **moves if you change the session date**; set a live session to reserve it (with no date basis the editor prompts for one rather than showing a drifting today-based guess). The publish mint uses the identical resolution, so the minted ID equals the reserved one — copy it from the read-only field (or the dimmed coordinate on the draft row) and it locks in on publish.
 
-**Get the tracklist from Rekordbox.** Rekordbox logs the set in load order, which is the reliable signal — track identity and order. Run:
+**Derive the take's cue tracklist from Rekordbox automatically.** After recording a take, run `rekordbox-derive-cues.py` to read the session history, match each track against the Fluncle catalogue, and write the ordered cue array directly to the take's `recording_cues` via `replace-cues`. This replaces the "feed the pruned list by hand" step entirely.
 
 ```bash
 # One-time: quit Rekordbox, then cache the SQLCipher key.
 uv run --with pyrekordbox python -m pyrekordbox download-key
 
-# Then, with Rekordbox quit:
-uv run packages/skills/fluncle-mixtapes/scripts/rekordbox-tracklist.py            # latest session
-uv run packages/skills/fluncle-mixtapes/scripts/rekordbox-tracklist.py --list     # choose a session
-uv run packages/skills/fluncle-mixtapes/scripts/rekordbox-tracklist.py --plain    # bare "Artist — Title" lines
+# Dry-run: see the proposed cues (matched / unmatched / flagged) without writing anything.
+uv run packages/skills/fluncle-mixtapes/scripts/rekordbox-derive-cues.py            # latest session
+uv run packages/skills/fluncle-mixtapes/scripts/rekordbox-derive-cues.py --list     # choose a session
+uv run packages/skills/fluncle-mixtapes/scripts/rekordbox-derive-cues.py --session "2026-07" --json
+
+# Write the cues to the take once happy with the dry-run output:
+uv run packages/skills/fluncle-mixtapes/scripts/rekordbox-derive-cues.py --apply <takeRecordingId>
 ```
 
-The script prints the ordered `Artist — Title` list and flags `DUP` rows. **Prune the spurious rows by hand**: a track loaded during soundcheck or cued and never aired shows up as a history row just like a played one, and re-loading a track makes a second row. There is no reliable timestamp tell — Rekordbox's per-row time is the deck-LOAD time, which precedes the audible mix-in by a variable lead, so the script shows it as dim reference only and never as a cue offset. **The skill writes track order + identity, not jump-to timestamps.** If precise per-track cue points are ever wanted, capture them another way (mark them against the final video).
+The script reads the Rekordbox session in `TrackNo` order (the reliable DJ-load order) and matches each row to a Fluncle finding by normalized title+artist — the same matcher the key-backfill uses (`_fold` / `_normalize_artists` / `_split_title` / `match_key`). Three buckets: **matched** (exactly 1 finding → `findingId` set), **ambiguous** (>1 candidates → flagged, `findingId=null`), **unmatched** (no candidate → flagged, `findingId=null`). **Consecutive same-identity rows are automatically pruned** (a re-load); non-consecutive repeats are kept but flagged. `startMs` is left absent on every cue — mark each mix-in on the Studio cue rail (`C`/`X`/↑/↓ loop).
 
-Feed the pruned list into the tracklist: attach each track as a **member finding** (`fluncle admin mixtapes members <idOrLogId> ...`, or the `/admin` add-to-mixtape flow). A track that isn't a finding yet gets added as a finding first. Each member links to its own `/log/<id>` — the tracklist is the breadcrumb and the AEO/SEO play (see the spine model).
+The older `rekordbox-tracklist.py` (prints a plain `Artist — Title` list for manual use) is still present and useful for a quick read-only session review; it is not the write path.
+
+**After the cue write, attach each unmatched track as a finding** (`fluncle add <spotifyUrl>` or the `/admin` add flow) and re-run with `--apply` to fill in the remaining `findingId=null` slots. A finding that isn't in the catalogue yet is never auto-created — stay honest, add it first. Each linked finding gets its own `/log/<id>` breadcrumb in the published mixtape tracklist (the AEO/SEO play; see the spine model).
+
+### B2. Export a plan to tools (Rekordbox playlist + Beatport + m3u8)
+
+Once a plan recording has its cues (see §B above), export them to every tool you need before recording:
+
+```bash
+# Dry-run output: Beatport links + m3u8 + checklist, and the XML safe-fallback.
+# Rekordbox must be QUIT before running — the script writes to the encrypted master.db.
+uv run packages/skills/fluncle-mixtapes/scripts/rekordbox-plan-export.py <planId>
+
+# Skip the direct DB write (text exports only — safe to run with Rekordbox open):
+uv run packages/skills/fluncle-mixtapes/scripts/rekordbox-plan-export.py <planId> --no-db-write
+
+# Skip the confirmation prompt:
+uv run packages/skills/fluncle-mixtapes/scripts/rekordbox-plan-export.py <planId> --yes
+
+# Custom XML output path:
+uv run packages/skills/fluncle-mixtapes/scripts/rekordbox-plan-export.py <planId> --xml my-plan.xml
+```
+
+The script does five things in one pass:
+1. **Rekordbox playlist (direct DB write — the star).** Matches each plan cue to the operator's collection by normalized title+artist (the same matcher as the derivation script), creates a playlist named with the plan's Galaxy-vocab slug inside a "Fluncle Plans" folder, adds matched tracks in cue order, and commits. Backs up `master.db` to `master.db.bak-<timestamp>` before writing. Unmatched cues are skipped with a warning; the operator can buy them on Beatport first and re-export.
+2. **Rekordbox XML (`<slug>.xml`).** A safe no-write fallback the operator can import into Rekordbox via File → Import Playlist without touching the encrypted DB. Always emitted.
+3. **Beatport search links.** One `beatport.com/search?q=…` URL per cue — click to buy. No open add-to-cart API (partner-gated).
+4. **m3u8.** An ordered reference list (metadata only, no local file paths).
+5. **Checklist.** Plain numbered `Artist — Title` list; paste into Rekordbox USB folder names, Beatport cart, or a note.
+
+**Safety:** the script prints a clear instruction to quit Rekordbox before asking for confirmation; `--yes` / `-y` skips the prompt. `--no-db-write` skips the DB write entirely and only emits the text formats — safe to run with Rekordbox open. The XML export (step 2) never touches `master.db` regardless. If pyrekordbox can't open the DB (wrong key, running Rekordbox), the script falls back to text-only output.
 
 ### C. Distribute
 
@@ -93,7 +134,7 @@ The one recurring human gate: the `/admin/mixtapes` **Make YouTube public** butt
 
 The tracklist cues are often refined **after** a set is already live (the initial upload rarely has precise jump points — see the Rekordbox note in §B, which writes order + identity, not timestamps). Once you mark or change cues on a **published** mixtape, re-push the derived metadata to the platforms **without re-uploading the audio**. Two equivalent entry points hit the **same server-side ops**:
 
-- **Fluncle Studio button** — mark cues on the `/admin/studio/$logId` cue rail, then hit **Re-sync from cues** (in the left pane's "Live distribution" block). It fires **both** platform ops the set is distributed to, confirm-gated (it edits live public content), with a ✓ / error per platform. It only appears once the set is published and enables once there's ≥1 cue.
+- **Fluncle Studio button** — author cues on the recording's `/admin/studio/<recordingId>` cue editor (a promoted mixtape's set is its recording's Studio), then hit **Re-sync from cues** (in the left pane's "Live distribution" block, shown only once the recording is promoted). It fires **both** platform ops the set is distributed to, confirm-gated (it edits live public content), with a ✓ / error per platform. It only appears once the set is published and enables once there's ≥1 cue.
 - **CLI**:
 
 ```bash

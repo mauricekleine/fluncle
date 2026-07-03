@@ -214,7 +214,6 @@ type MixtapeDistributeOptions = {
   audio?: string;
   json: boolean;
   mixcloud?: boolean;
-  setVideo?: boolean;
   unlisted?: boolean;
   video?: string;
   youtube?: boolean;
@@ -896,16 +895,14 @@ function addAdminCommands(program: Command): void {
 
   adminMixtapes
     .command("distribute")
-    .description("Mint + push a mixtape to YouTube (video) and Mixcloud (audio)")
+    .description(
+      "Push a promoted mixtape to YouTube (video) and Mixcloud (audio). The mixtape must already be promoted (`recordings promote`) — distribute is push-only.",
+    )
     .argument("[idOrLogId]")
     .option("--video <file>", "Video file for YouTube")
     .option("--audio <file>", "Audio file for Mixcloud")
     .option("--youtube", "Only distribute to YouTube")
     .option("--mixcloud", "Only distribute to Mixcloud")
-    .option(
-      "--set-video",
-      "Also stage a 1080p set-video rendition (from --video) to R2 + flip setVideoAt for the /log player",
-    )
     .option(
       "--unlisted",
       "Keep Mixcloud private too (YouTube is always unlisted until publish-youtube)",
