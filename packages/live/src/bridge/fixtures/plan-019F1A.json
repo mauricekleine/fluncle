@@ -1,0 +1,121 @@
+[
+  {
+    "logId": "012.4.4D",
+    "title": "Let's Leave Tomorrow",
+    "artists": ["Netsky", "Bev Lee Harling"],
+    "durationMs": 274520,
+    "bpm": 172.58
+  },
+  {
+    "logId": "011.9.8I",
+    "title": "I See You",
+    "artists": ["Dawn Wall"],
+    "durationMs": 358027,
+    "bpm": 172.1
+  },
+  {
+    "logId": "018.7.5J",
+    "title": "Trust",
+    "artists": ["Anwius"],
+    "durationMs": 253836,
+    "bpm": 172.26
+  },
+  {
+    "logId": "019.8.6S",
+    "title": "Cardamom Mountains",
+    "artists": ["C41"],
+    "durationMs": 245891,
+    "bpm": 173.14
+  },
+  {
+    "logId": "009.7.6X",
+    "title": "Spears",
+    "artists": ["Dawn Wall"],
+    "durationMs": 260747,
+    "bpm": 171.62
+  },
+  {
+    "logId": "012.1.0A",
+    "title": "It's Whatever",
+    "artists": ["GLXY"],
+    "durationMs": 337217,
+    "bpm": 173.48
+  },
+  {
+    "logId": "011.6.8K",
+    "title": "Sea Air",
+    "artists": ["Krakota"],
+    "durationMs": 367002,
+    "bpm": 171.82
+  },
+  {
+    "logId": "012.2.4L",
+    "title": "See For Miles",
+    "artists": ["Krakota"],
+    "durationMs": 292168,
+    "bpm": 172.51
+  },
+  {
+    "logId": "004.6.0K",
+    "title": "Teddy's Gate",
+    "artists": ["Whiney", "LaMeduza"],
+    "durationMs": 309943,
+    "bpm": 172.27
+  },
+  {
+    "logId": "004.6.0Q",
+    "title": "Some People",
+    "artists": ["Mitekiss"],
+    "durationMs": 274453,
+    "bpm": 172.49
+  },
+  {
+    "logId": "004.6.8K",
+    "title": "Sudden Change",
+    "artists": ["Mohican Sun"],
+    "durationMs": 289071,
+    "bpm": 172.27
+  },
+  {
+    "logId": "011.1.3X",
+    "title": "Dreaming",
+    "artists": ["S.P.Y"],
+    "durationMs": 283402,
+    "bpm": 170.09
+  },
+  {
+    "logId": "019.3.9J",
+    "title": "Empty Love - GLXY Remix",
+    "artists": ["Submotion Orchestra", "Ed Thomas", "GLXY"],
+    "durationMs": 338979,
+    "bpm": 172.45
+  },
+  {
+    "logId": "007.0.0Z",
+    "title": "4 Seasons",
+    "artists": ["System & Wise"],
+    "durationMs": 364224,
+    "bpm": 171.25
+  },
+  {
+    "logId": "019.1.7X",
+    "title": "Strength",
+    "artists": ["Technimatic"],
+    "durationMs": 270815,
+    "bpm": 172.56
+  },
+  {
+    "logId": "004.0.1C",
+    "title": "Oxford Road",
+    "artists": ["Whiney"],
+    "durationMs": 327394,
+    "bpm": 172.83
+  },
+  {
+    "logId": "011.1.6E",
+    "title": "I See The Future In Your Eyes",
+    "artists": ["Netsky"],
+    "durationMs": 255260,
+    "bpm": 171.09
+  }
+]
