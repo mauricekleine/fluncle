@@ -45,12 +45,15 @@ import {
   FOOTAGE_SOCIAL_FILENAME,
 } from "../remotion/variants";
 
+import { GLSL } from "../remotion/journey/glsl";
+
 import { parseArgs } from "./args";
 import { buildCaption, type CaptionTrack, fetchReleaseYear, yearFromReleaseDate } from "./caption";
 import { deletePreviewAudio } from "./download-preview";
 import { fluncleBin, fluncleSpawnEnv } from "./fluncle-bin";
 import { generateIntentStub } from "./intent";
 import { renderCover } from "./render-cover";
+import { buildScene, type ScenePalette } from "./scene";
 
 const OUT_DIR = path.resolve(import.meta.dirname, "../../out");
 const PACKAGE_ROOT = path.resolve(import.meta.dirname, "../..");
@@ -172,6 +175,7 @@ export type BundlePaths = {
   poster: string;
   propsOutPath: string;
   renderOutPath: string;
+  sceneOutPath: string;
 };
 
 /** The file list: every path inside a bundle, joined once so writers can't drift. */
@@ -190,6 +194,7 @@ export function resolveBundlePaths(outDir: string, logId: string): BundlePaths {
     poster: path.join(bundle, "poster.jpg"),
     propsOutPath: path.join(bundle, "props.json"),
     renderOutPath: path.join(bundle, "render.json"),
+    sceneOutPath: path.join(bundle, "scene.json"),
   };
 }
 
@@ -490,6 +495,76 @@ async function main(argv: string[]): Promise<void> {
       2,
     ),
   );
+
+  // scene.json — the fluncle.scene/1 replay manifest (RFC Unit S). The offline/live
+  // hosts re-run the RESOLVED body from this file with no composition module in
+  // reach. Emission is best-effort by contract: a hiccup (no composition source, an
+  // unresolvable interpolation, a missing gate report) WARNS and skips the file —
+  // ship NEVER fails because scene emission stumbled.
+  try {
+    if (existsSync(paths.compositionPath)) {
+      const source = readFileSync(paths.compositionPath, "utf8");
+
+      // Palette + grain from props (the finding's identity) — the four stops the
+      // host feeds u_palette, dark→light.
+      let palette: ScenePalette = ["#0b0a10", "#171611", "#8e8378", "#f4ead7"];
+      if (existsSync(paths.propsOutPath)) {
+        try {
+          const props = JSON.parse(
+            readFileSync(paths.propsOutPath, "utf8"),
+          ) as NostalgicCosmosProps;
+          const p = props.palette;
+          if (p) {
+            palette = [p.background, p.accent, p.glow, p.ink];
+          }
+        } catch (error) {
+          log(`scene palette fell back: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+
+      // Fold the ship-time gate verdicts from the metrics report (if analyze-motion
+      // ran). Absent → `cleared` reads `unknown`, never a failure.
+      const metricsPath = path.join(OUT_DIR, `${track.trackId}.metrics.json`);
+      let metricsReport: unknown = null;
+      if (existsSync(metricsPath)) {
+        try {
+          metricsReport = JSON.parse(readFileSync(metricsPath, "utf8"));
+        } catch (error) {
+          log(
+            `scene cleared unresolved: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+
+      const { scene, warnings } = buildScene({
+        at: new Date().toISOString(),
+        glsl: GLSL as unknown as Record<string, string>,
+        grainFamily: flags.grain ?? renderManifest.grain ?? null,
+        id: track.logId,
+        kind: "finding",
+        metricsReport,
+        palette,
+        source,
+      });
+      for (const warning of warnings) {
+        log(`scene: ${warning}`);
+      }
+      if (scene) {
+        log(
+          `scene.json (${scene.liveReady ? "live-ready" : "replay-only"}${scene.liveReady ? "" : `: ${scene.liveReadyReasons.join("; ")}`})`,
+        );
+        writeFileSync(paths.sceneOutPath, JSON.stringify(scene, null, 2));
+      } else {
+        log("scene.json skipped (see warnings above) — bundle ships without it");
+      }
+    } else {
+      log("scene.json skipped (no composition source in the bundle)");
+    }
+  } catch (error) {
+    log(
+      `scene.json skipped (emission error): ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 
   // Bounded audio cache: the analysis pass that needed public/<trackId>.m4a is
   // done, and R2 now holds the durable copy inside the bundle — drop it.

@@ -30,16 +30,36 @@ export type PlanEntry = {
     swatches?: string[];
   };
   seed?: number;
+  /**
+   * The dream-replay scene — the glass's scene-extract `Scene` shape, mirrored here
+   * so both worlds keep importing only this file. Layers carry resolved GLSL bodies;
+   * custom uniforms are classified for live re-drive (rise ramps -> dwell, tail
+   * dimmers -> pinned, audio aliases -> the live DSP, colour vec3s -> palette stops,
+   * velocity pairs -> JS-integrated position motion).
+   */
   replay?: {
     replayable: boolean;
-    body?: string;
-    customUniforms?: Array<{
-      name: string;
-      class: "rise" | "settle" | "audio" | "color";
-      params?: Record<string, number>;
-    }>;
     reason?: string;
+    /** One layer for a single-ShaderLayer comp; N for a composited one. */
+    layers?: Array<{
+      body: string;
+      customUniforms: PlanCustomUniform[];
+      blend: "opaque" | "over";
+    }>;
+    /** Convenience mirror of layers[0] (the single-layer path). */
+    body?: string;
+    customUniforms?: PlanCustomUniform[];
+    /** Bloom config read from the composition's ShaderLayer `bloom` prop. */
+    bloom?: { threshold?: number; intensity?: number; radius?: number };
   };
+};
+
+/** A classified custom (non-header) uniform in a replay scene. */
+export type PlanCustomUniform = {
+  name: string;
+  type: string;
+  class: "riseRamp" | "settleDim" | "audioAlias" | "color" | "velocityPos" | "velocity";
+  params?: Record<string, unknown>;
 };
 
 /** The bridge's fused state stream, emitted at a fixed cadence (30-60Hz). */
@@ -49,16 +69,43 @@ export type ShowState = {
   plan: { pointer: number; total: number; source: "fingerprint" | "manual" | "boot" };
   /** Fingerprint matcher verdict for the CURRENT audio window. */
   match?: { logId: string; confidence: number };
-  /** The next planned finding, pre-armed (prefetch target). */
-  pending?: { logId: string };
+  /** The next planned finding, pre-armed (prefetch target + the remote's "up next"). */
+  pending?: { logId: string; title: string; artists: string[] };
   channels: { audio: "live" | "stale" | "silent"; matcher: "ready" | "off" };
+  /** The energy dip->surge PRE-ARM hint is active (heightened match sensitivity; never advances alone). */
+  prearmed: boolean;
+  /** Global reactivity multiplier the operator dials (mirrors the glass's intensity key). */
+  intensity: number;
+  /** The held-breath rail: the glass is easing to the holding scene. */
+  blackout: boolean;
+  /** The current planned finding at the pointer (the plate identity), if any. */
+  current?: { logId: string; title: string; artists: string[] };
 };
 
-/** Commands the glass (or the phone remote) sends the bridge over the same WS. */
+/**
+ * Commands the glass (or the phone remote) sends the bridge over the same WS.
+ * The `mel` frame is the glass's live audio fingerprint feed (Unit L -> Unit B):
+ * 40 log-mel bins spanning 0-8kHz, emitted at 10Hz. It is the ONLY channel the
+ * plan-scoped fingerprint matcher consumes; everything else is control. Manual
+ * advance/rewind/goto ALWAYS win over the matcher, instantly.
+ */
 export type ShowCommand =
   | { cmd: "advance" } // manual next (the arrow key / remote tap)
   | { cmd: "rewind" }
   | { cmd: "goto"; index: number }
   | { cmd: "blackout"; on: boolean }
   | { cmd: "intensity"; value: number }
-  | { cmd: "heartbeat"; renderFrame: number }; // the watchdog feed
+  | { cmd: "heartbeat"; renderFrame: number } // the watchdog feed
+  // 40 log-mel bins (log1p power, 0-8kHz) @ 10Hz. RAW (un-normalized): the bridge
+  // L2-normalizes for the cosine match AND reads the frame's magnitude as the
+  // pre-arm energy proxy (an already-normalized frame still matches, but its energy
+  // hint goes flat — the hint is advisory only, so either is safe).
+  | { cmd: "mel"; t: number; frame: number[] };
+
+/** The number of log-mel bins in a `mel` frame (the glass <-> matcher contract). */
+export const MEL_BINS = 40;
+/** The mel frame cadence the glass emits at (Hz). */
+export const MEL_RATE_HZ = 10;
+/** The mel band span (Hz). Both the glass and the server-side preview fingerprints use it. */
+export const MEL_FMIN = 0;
+export const MEL_FMAX = 8000;
