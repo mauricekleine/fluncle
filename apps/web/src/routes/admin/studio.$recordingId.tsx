@@ -159,6 +159,16 @@ function StudioEditor({
   initialRecording: RecordingDTO;
   title: string;
 }) {
+  // A PLAN (a recording with no video — `r2Key` absent since the
+  // plan→recording→mixtape Deploy-1) has nothing to clip yet.
+  if (!initialRecording.r2Key) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        No set video yet — upload a take before clipping.
+      </p>
+    );
+  }
+
   const src = recordingSetVideoUrl(initialRecording.r2Key);
 
   return (

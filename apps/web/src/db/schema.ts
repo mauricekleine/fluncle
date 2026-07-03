@@ -1,5 +1,13 @@
 import { sql } from "drizzle-orm";
-import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import {
+  check,
+  index,
+  integer,
+  real,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
 
 export const tracks = sqliteTable("tracks", {
   addedAt: text("added_at").notNull(),
@@ -709,18 +717,32 @@ export const pushReceipts = sqliteTable(
   (table) => [index("push_receipts_created_at_idx").on(table.createdAt)],
 );
 
+// A published mixtape's FROZEN tracklist (RFC plan→recording→mixtape). Under the
+// two-table model this stays the immutable published copy: `promote` COPIES the
+// winning take's `recording_cues` in here; editing a take's cues afterwards never
+// touches these rows. Deploy-1 additions (all nullable, additive):
+//   - `finding_id` — the eventual rename of the NOT-NULL `track_id` (the finding
+//     link). The folded `db:backfill` fills it (`= track_id`) on every deploy;
+//     Deploy-2 repoints readers and drops `track_id`. Nullable so a published
+//     mixtape can later carry a NON-finding live-added track as a plain row.
+//   - `artists_text`/`title_text` — the snapshot for those non-finding rows.
+//     Finding-backed rows keep NULL snapshots (the tracks JOIN stays the truth).
 export const mixtapeTracks = sqliteTable(
   "mixtape_tracks",
   {
+    artistsText: text("artists_text"),
+    findingId: text("finding_id"),
     mixtapeId: text("mixtape_id").notNull(),
     position: integer("position").notNull(),
     startMs: integer("start_ms"),
+    titleText: text("title_text"),
     trackId: text("track_id").notNull(),
   },
   (table) => [
     index("mixtape_tracks_mixtape_id_idx").on(table.mixtapeId),
     uniqueIndex("mixtape_tracks_mixtape_position_idx").on(table.mixtapeId, table.position),
     uniqueIndex("mixtape_tracks_mixtape_track_idx").on(table.mixtapeId, table.trackId),
+    index("mixtape_tracks_finding_id_idx").on(table.findingId),
   ],
 );
 
@@ -745,7 +767,10 @@ export const mixtapeClips = sqliteTable(
     inMs: integer("in_ms").notNull(),
     // Plain text id, no declared FK — matching the sibling `mixtape_tracks` /
     // `mixtape_social_posts` (this schema declares no SQLite/libSQL FKs anywhere).
-    mixtapeId: text("mixtape_id").notNull(),
+    // NULLABLE since Deploy-1 of the plan→recording→mixtape RFC: a recording clip
+    // carries `recording_id` and a NULL `mixtape_id` (the old `''` sentinel is
+    // retired — the folded `db:backfill` normalizes legacy rows to one owner).
+    mixtapeId: text("mixtape_id"),
     outMs: integer("out_ms").notNull(),
     // The `recordings` row this clip was cut from (RFC recording-primitive,
     // Design B). Nullable and ADDED BESIDE `mixtape_id` (never a rename): a clip
@@ -768,7 +793,9 @@ export const mixtapeClips = sqliteTable(
 );
 
 // A RECORDING — a captured DJ set that is NOT (yet) a published mixtape (RFC
-// recording-primitive, Design B). The clip pipeline (Fluncle Studio + the cut
+// recording-primitive, Design B; extended by the plan→recording→mixtape RFC's
+// two-table model: a PLAN is just a recording with no video and untimed cues, a
+// TAKE is a recording with video). The clip pipeline (Fluncle Studio + the cut
 // engine) cuts clips from a recording's set video WITHOUT minting a scarce Log ID
 // coordinate; only `promote` (→ a full published mixtape) ever mints one. So a
 // recording is deliberately COORDINATE-LESS — no `logId`, no spine entry — and
@@ -776,24 +803,88 @@ export const mixtapeClips = sqliteTable(
 // Standalone recordings live at `recordings/<id>/set.mp4` in the existing
 // `fluncle-videos` bucket (unguessable, never listed — accept-obscurity, no
 // private bucket). Plain text id, no declared FK (this schema declares none).
-export const recordings = sqliteTable("recordings", {
-  createdAt: text("created_at").notNull(),
-  durationMs: integer("duration_ms"),
-  // `randomUUID()` at insert — the repo's universal id. A recording is
-  // coordinate-less, so there is no `logId` here.
-  id: text("id").primaryKey(),
-  // The R2 object key the recording OWNS (unlike a mixtape, which derives its key
-  // from its logId). Standalone recordings: `recordings/<id>/set.mp4` in the
-  // existing `fluncle-videos` bucket.
-  r2Key: text("r2_key").notNull(),
-  recordedAt: text("recorded_at"),
-  title: text("title").notNull(),
-  // Optional cues, a JSON array of `{ id, artists, title, startMs }` — `id` is a
-  // stable cue ref, `artists` a string[]. Feeds `resolveClipTracks` with zero
-  // change and seeds `mixtape_tracks` on promote with no re-splitting. Nullable.
-  tracklistJson: text("tracklist_json"),
-  updatedAt: text("updated_at").notNull(),
-});
+export const recordings = sqliteTable(
+  "recordings",
+  {
+    createdAt: text("created_at").notNull(),
+    durationMs: integer("duration_ms"),
+    // `randomUUID()` at insert — the repo's universal id. A recording is
+    // coordinate-less, so there is no `logId` here.
+    id: text("id").primaryKey(),
+    // The plan's public editorial note (moves here from the draft mixtape per
+    // D-plannedFor's sibling move; NULL for takes/legacy rows).
+    note: text("note"),
+    // The take→plan link: a take points at its plan; NULL for a plan or an
+    // orphan take (e.g. the rolling set). Plain text id, no declared FK.
+    parentId: text("parent_id"),
+    // The scheduled date/time (ISO) of the upcoming live session this PLAN is
+    // for — the plan-side home of `mixtapes.planned_for` (D-plannedFor: moves to
+    // the plan; `/calendar.ics` + `getUpcoming` repoint here in Deploy-2).
+    plannedFor: text("planned_for"),
+    // The R2 object key the recording OWNS (unlike a mixtape, which derives its
+    // key from its logId). Standalone recordings: `recordings/<id>/set.mp4` in
+    // the existing `fluncle-videos` bucket. NULLABLE since Deploy-1: a PLAN has
+    // no video — "has video" = `r2_key IS NOT NULL`, an explicit signal.
+    r2Key: text("r2_key"),
+    recordedAt: text("recorded_at"),
+    title: text("title").notNull(),
+    // Optional cues, a JSON array of `{ id, artists, title, startMs }` — `id` is a
+    // stable cue ref, `artists` a string[]. LEGACY under the plan→recording→mixtape
+    // RFC: `recording_cues` is the forward home (the folded `db:backfill` migrates
+    // this column's rows there); readers dual-read until the Deploy-2 cutover
+    // drops it. Nullable.
+    tracklistJson: text("tracklist_json"),
+    updatedAt: text("updated_at").notNull(),
+    // A human display label ("v2") for a take among its plan's takes — stable and
+    // explicit rather than derived from created_at order (D-version). Assigned by
+    // an atomic `INSERT … SELECT coalesce(max(version),0)+1` when take-creation
+    // lands (a later slice); every existing/plan row is v1.
+    version: integer("version").notNull().default(1),
+  },
+  (table) => [
+    index("recordings_parent_id_idx").on(table.parentId),
+    // SQLite treats NULLs as distinct in a unique index, so orphan takes/plans
+    // (parent_id NULL) coexist freely; versions are only unique WITHIN a plan.
+    uniqueIndex("recordings_parent_version_idx").on(table.parentId, table.version),
+  ],
+);
+
+// A recording's CUE — the recording-side unified cue row (RFC
+// plan→recording→mixtape §2). One owner, always: `recording_id` is NOT NULL (the
+// ownership invariant is structural — no XOR `check()` is needed beyond the NOT
+// NULL itself; the checks below guard the two genuine remaining data invariants).
+// Cues are MUTABLE working state (a plan's intended order, a take's played
+// order); the published mixtape's tracklist stays the separate, frozen
+// `mixtape_tracks` copy. `finding_id` is NULL for a played track that is not a
+// Fluncle finding; `artists_text`/`title_text` snapshot the identity so a
+// non-finding cue survives (and feeds the clip overlay). `start_ms` is NULL
+// until the operator marks the cue's start on the set timeline in the Studio.
+// Plain text ids, no declared FK (this schema declares none).
+export const recordingCues = sqliteTable(
+  "recording_cues",
+  {
+    artistsText: text("artists_text"),
+    createdAt: text("created_at").notNull(),
+    findingId: text("finding_id"),
+    // A stable cue ref (the clip overlay keys off it) — `randomUUID()` at insert.
+    id: text("id").primaryKey(),
+    position: integer("position").notNull(),
+    recordingId: text("recording_id").notNull(),
+    startMs: integer("start_ms"),
+    titleText: text("title_text"),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("recording_cues_recording_position_idx").on(table.recordingId, table.position),
+    index("recording_cues_recording_id_idx").on(table.recordingId),
+    index("recording_cues_finding_id_idx").on(table.findingId),
+    // The repo's first `check()` constraints (the RFC asked the invariants to be
+    // structural): positions are 1-based like `mixtape_tracks`, and a marked
+    // start time is never negative.
+    check("recording_cues_position_positive", sql`"position" >= 1`),
+    check("recording_cues_start_ms_non_negative", sql`"start_ms" is null or "start_ms" >= 0`),
+  ],
+);
 
 // A newsletter EDITION — the weekly dispatch from the mothership, now persisted so
 // every Friday letter has a permanent home.

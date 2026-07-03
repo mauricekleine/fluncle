@@ -12,7 +12,7 @@ import { getDb, typedRow, typedRows } from "./db";
 import { createMixtape, publishMixtape, setMixtapeMembers, updateMixtape } from "./mixtapes";
 import { copyObject, deleteObject } from "./r2-presign";
 import { ApiError } from "./spotify";
-import { getTrackByIdOrLogId } from "./tracks";
+import { buildTrackMatchIndex, resolveTrackByText } from "./track-match";
 
 const titleMaxLength = 200;
 
@@ -23,16 +23,29 @@ export function recordingR2Key(id: string): string {
   return `recordings/${id}/set.mp4`;
 }
 
-// The recordings table row (no join).
+// The recordings table row (no join). `r2_key` is nullable since the
+// plan→recording→mixtape Deploy-1: a PLAN has no video ("has video" =
+// `r2_key IS NOT NULL`).
 type RecordingRow = {
   created_at: string;
   duration_ms: number | null;
   id: string;
-  r2_key: string;
+  r2_key: string | null;
   recorded_at: string | null;
   title: string;
   tracklist_json: string | null;
   updated_at: string;
+};
+
+// One `recording_cues` row (the forward home of a recording's cues; RFC
+// plan→recording→mixtape §2). `finding_id` is the honest link to canon.
+type CueRow = {
+  artists_text: string | null;
+  finding_id: string | null;
+  id: string;
+  position: number;
+  start_ms: number | null;
+  title_text: string | null;
 };
 
 // The recordings row LEFT JOINed to the mixtape it was promoted into (if any), for the
@@ -98,19 +111,68 @@ function parseTracklist(json: string | null): RecordingTracklistItem[] {
   return items;
 }
 
-function rowToRecording(row: RecordingJoinRow): RecordingDTO {
+// Map a `recording_cues` row into the DTO's tracklist item shape. The cue stores
+// `artists_text` as one ", "-joined string; the DTO wants a string[] — split at
+// the boundary (RFC plan→recording→mixtape §5, the N-8 shim).
+function cueRowToTracklistItem(row: CueRow): RecordingTracklistItem {
+  return {
+    artists: row.artists_text ? row.artists_text.split(", ") : [],
+    id: row.id,
+    startMs: row.start_ms ?? undefined,
+    title: row.title_text ?? "",
+  };
+}
+
+// DUAL-READ (Deploy-1): the legacy `tracklist_json` stays the DTO's first source
+// so pre-cutover rows read byte-identically; a row with no legacy JSON (a PLAN,
+// whose cues live only in `recording_cues`) reads its cues. The Deploy-2 cutover
+// flips this to cues-only and drops the column.
+function rowToRecording(row: RecordingJoinRow, cues: RecordingTracklistItem[]): RecordingDTO {
+  const legacy = parseTracklist(row.tracklist_json);
+
   return {
     createdAt: row.created_at,
     durationMs: row.duration_ms ?? undefined,
     id: row.id,
     logId: row.mixtape_log_id ?? undefined,
     mixtapeId: row.mixtape_id ?? undefined,
-    r2Key: row.r2_key,
+    r2Key: row.r2_key ?? undefined,
     recordedAt: row.recorded_at ?? undefined,
     title: row.title,
-    tracklist: parseTracklist(row.tracklist_json),
+    tracklist: legacy.length > 0 ? legacy : cues,
     updatedAt: row.updated_at,
   };
+}
+
+const CUE_SELECT = `select id, recording_id, finding_id, artists_text, title_text, position, start_ms
+  from recording_cues`;
+
+// Every cue for one recording, in position order.
+async function getCueRows(recordingId: string): Promise<CueRow[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [recordingId],
+    sql: `${CUE_SELECT} where recording_id = ? order by position`,
+  });
+
+  return typedRows<CueRow>(result.rows);
+}
+
+// The cue tracklists for MANY recordings in one query (the list read), keyed by
+// recording id.
+async function getCueTracklists(): Promise<Map<string, RecordingTracklistItem[]>> {
+  const db = await getDb();
+  const result = await db.execute({ sql: `${CUE_SELECT} order by recording_id, position` });
+  const byRecording = new Map<string, RecordingTracklistItem[]>();
+
+  for (const row of typedRows<CueRow & { recording_id: string }>(result.rows)) {
+    const items = byRecording.get(row.recording_id) ?? [];
+
+    items.push(cueRowToTracklistItem(row));
+    byRecording.set(row.recording_id, items);
+  }
+
+  return byRecording;
 }
 
 const RECORDING_SELECT = `select
@@ -157,7 +219,7 @@ export async function getRecording(id: string): Promise<RecordingDTO> {
     throw new ApiError("recording_not_found", "Recording not found", 404);
   }
 
-  return rowToRecording(row);
+  return rowToRecording(row, (await getCueRows(id)).map(cueRowToTracklistItem));
 }
 
 export async function listRecordings(): Promise<RecordingDTO[]> {
@@ -165,8 +227,11 @@ export async function listRecordings(): Promise<RecordingDTO[]> {
   const result = await db.execute({
     sql: `${RECORDING_SELECT} order by r.created_at desc, r.id desc`,
   });
+  const cueTracklists = await getCueTracklists();
 
-  return typedRows<RecordingJoinRow>(result.rows).map(rowToRecording);
+  return typedRows<RecordingJoinRow>(result.rows).map((row) =>
+    rowToRecording(row, cueTracklists.get(row.id) ?? []),
+  );
 }
 
 export async function createRecording(input: RecordingInput): Promise<RecordingDTO> {
@@ -203,20 +268,56 @@ export async function updateRecording(id: string, input: RecordingInput): Promis
     args.push(optionalIsoDate(input.recordedAt, "recordedAt") ?? null);
   }
 
+  let tracklistItems: RecordingTracklistItem[] | undefined;
+
   if (input.tracklistJson !== undefined) {
+    tracklistItems = serializeTracklist(input.tracklistJson);
     sets.push("tracklist_json = ?");
-    args.push(serializeTracklist(input.tracklistJson));
+    args.push(JSON.stringify(tracklistItems));
   }
 
   if (sets.length === 0) {
     throw new ApiError("no_fields", "No updatable fields provided", 400);
   }
 
+  const now = new Date().toISOString();
+
   sets.push("updated_at = ?");
-  args.push(new Date().toISOString(), id);
+  args.push(now, id);
 
   const db = await getDb();
   await db.execute({ args, sql: `update recordings set ${sets.join(", ")} where id = ?` });
+
+  // DUAL-WRITE (Deploy-1): a tracklist edit mirrors into `recording_cues` (the
+  // forward home) so the two stay in lockstep until the Deploy-2 cutover retires
+  // `tracklist_json`. Each cue's `finding_id` resolves by normalized title+artist
+  // (never by its random-UUID `id` — the `no_resolvable_members` trap).
+  if (tracklistItems !== undefined) {
+    const findingIds = await resolveFindingIdsByText(tracklistItems);
+
+    await db.batch(
+      [
+        { args: [id], sql: `delete from recording_cues where recording_id = ?` },
+        ...tracklistItems.map((item, index) => ({
+          args: [
+            item.id,
+            id,
+            findingIds[index] ?? null,
+            item.artists.length > 0 ? item.artists.join(", ") : null,
+            item.title || null,
+            index + 1,
+            item.startMs ?? null,
+            now,
+            now,
+          ],
+          sql: `insert into recording_cues
+                  (id, recording_id, finding_id, artists_text, title_text, position, start_ms, created_at, updated_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        })),
+      ],
+      "write",
+    );
+  }
 
   return getRecording(id);
 }
@@ -229,6 +330,7 @@ export async function deleteRecording(id: string): Promise<void> {
   await db.batch(
     [
       { args: [id], sql: `delete from mixtape_clips where recording_id = ?` },
+      { args: [id], sql: `delete from recording_cues where recording_id = ?` },
       { args: [id], sql: `delete from recordings where id = ?` },
     ],
     "write",
@@ -249,6 +351,17 @@ export async function deleteRecording(id: string): Promise<void> {
  */
 export async function promoteRecording(id: string): Promise<RecordingDTO> {
   const recording = await getRecordingRow(id);
+
+  // A PLAN (no video — `r2_key IS NULL`) has nothing to publish: promoting it
+  // would mint a coordinate for a mixtape with no set. Capture a take first.
+  if (!recording.r2_key) {
+    throw new ApiError(
+      "recording_has_no_video",
+      "This recording has no set video — upload a take before promoting",
+      409,
+    );
+  }
+
   const db = await getDb();
 
   // (1) mint-or-reuse. A minted mixtape already linked to this recording is reused as-is.
@@ -268,7 +381,7 @@ export async function promoteRecording(id: string): Promise<RecordingDTO> {
   } else {
     // Create + mint a fresh mixtape from the recording. Seed the tracklist FIRST (mint
     // requires ≥1 member), resolving each cue to an existing finding.
-    const members = await resolveTracklistMembers(parseTracklist(recording.tracklist_json));
+    const members = await resolveTracklistMembers(id, recording.tracklist_json);
 
     if (members.length === 0) {
       throw new ApiError(
@@ -328,38 +441,96 @@ export async function promoteRecording(id: string): Promise<RecordingDTO> {
   return getRecording(id);
 }
 
-// Resolve a recording's cue tracklist to the `setMixtapeMembers` shape: each cue whose
-// `id` resolves to an existing Fluncle finding becomes a `{ ref, startMs }` member,
-// deduped by resolved trackId (a set can play a track twice), in tracklist order. Cues
-// that resolve to no finding are skipped — the clip overlay still reads them from
-// `tracklist_json`, but the spine tracklist only holds real findings. (Findings are
-// Spotify-backed and cannot be minted from a bare `{ artists, title }`, so this resolves
-// rather than creates.)
+// Resolve a recording's cues to the `setMixtapeMembers` shape: each cue with a
+// `finding_id` becomes a `{ ref, startMs }` member, deduped by finding (a set can
+// play a track twice), in cue order. `recording_cues.finding_id` is the honest
+// link — the old `getTrackByIdOrLogId(cue.id)` lookup is DELETED (cue ids are
+// random UUIDs, so it resolved to ZERO findings: the live `no_resolvable_members`
+// trap; RFC plan→recording→mixtape §4/S4). DUAL-READ: a recording whose cues have
+// not been backfilled yet falls back to `tracklist_json`, resolved by NORMALIZED
+// title+artist. Cues that resolve to no finding are skipped — the clip overlay
+// still reads them, but the spine tracklist only holds real findings. (Findings
+// are Spotify-backed and cannot be minted from a bare `{ artists, title }`, so
+// this resolves rather than creates.)
 async function resolveTracklistMembers(
-  tracklist: RecordingTracklistItem[],
+  recordingId: string,
+  tracklistJson: string | null,
 ): Promise<Array<{ ref: string; startMs?: number }>> {
   const members: Array<{ ref: string; startMs?: number }> = [];
   const seen = new Set<string>();
-
-  for (const cue of tracklist) {
-    const track = await getTrackByIdOrLogId(cue.id);
-
-    if (!track || seen.has(track.trackId)) {
-      continue;
+  const push = (findingId: string | null, startMs: number | null | undefined): void => {
+    if (!findingId || seen.has(findingId)) {
+      return;
     }
 
-    seen.add(track.trackId);
+    seen.add(findingId);
     members.push(
-      cue.startMs === undefined ? { ref: cue.id } : { ref: cue.id, startMs: cue.startMs },
+      startMs === null || startMs === undefined ? { ref: findingId } : { ref: findingId, startMs },
     );
+  };
+
+  const cues = await getCueRows(recordingId);
+
+  if (cues.length > 0) {
+    for (const cue of cues) {
+      push(cue.finding_id, cue.start_ms);
+    }
+
+    return members;
+  }
+
+  // Legacy fallback (pre-backfill rows): resolve the JSON cues by text.
+  const tracklist = parseTracklist(tracklistJson);
+  const findingIds = await resolveFindingIdsByText(tracklist);
+
+  for (const [index, cue] of tracklist.entries()) {
+    push(findingIds[index] ?? null, cue.startMs);
   }
 
   return members;
 }
 
+// Resolve each `{ artists, title }` item to a finding's trackId (or null) by
+// normalized title+artist against the full catalogue — the key_backfill matcher
+// discipline (see ./track-match). One catalogue read per call; tracklists are
+// tiny and this path is admin-only.
+async function resolveFindingIdsByText(
+  items: RecordingTracklistItem[],
+): Promise<Array<string | null>> {
+  if (items.length === 0) {
+    return [];
+  }
+
+  const db = await getDb();
+  const result = await db.execute({ sql: `select track_id, title, artists_json from tracks` });
+  const index = buildTrackMatchIndex(
+    typedRows<{ artists_json: string; title: string; track_id: string }>(result.rows).map(
+      (row) => ({
+        artists: parseArtistsJson(row.artists_json),
+        title: row.title,
+        trackId: row.track_id,
+      }),
+    ),
+  );
+
+  return items.map((item) => resolveTrackByText(index, item.artists, item.title));
+}
+
+/** Parse a `tracks.artists_json` cell into a string[] (tolerating bad JSON). */
+function parseArtistsJson(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw);
+
+    return Array.isArray(parsed) ? parsed.map((value) => String(value)) : [];
+  } catch {
+    return [];
+  }
+}
+
 // Validate the update's `tracklistJson` (the whole `[{ id, artists, title, startMs? }]`
-// array) and serialize it to the stored JSON text. A cue with no `id` gets a fresh one.
-function serializeTracklist(value: unknown): string {
+// array) into the canonical items the caller both stores as JSON text AND mirrors
+// into `recording_cues` (the Deploy-1 dual-write). A cue with no `id` gets a fresh one.
+function serializeTracklist(value: unknown): RecordingTracklistItem[] {
   if (!Array.isArray(value)) {
     throw new ApiError("invalid_tracklist", "tracklistJson must be an array of cues", 400);
   }
@@ -398,7 +569,7 @@ function serializeTracklist(value: unknown): string {
     return startMs === undefined ? { artists, id, title } : { artists, id, startMs, title };
   });
 
-  return JSON.stringify(items);
+  return items;
 }
 
 function requireText(value: unknown, field: string, maxLength: number): string {
