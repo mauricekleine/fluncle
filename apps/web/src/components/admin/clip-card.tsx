@@ -1,14 +1,19 @@
 import {
+  CheckIcon,
+  CopyIcon,
   DownloadSimpleIcon,
   PaperPlaneTiltIcon,
+  PencilSimpleIcon,
   PlayIcon,
   ScissorsIcon,
   TrashIcon,
 } from "@phosphor-icons/react";
 import { type ClipDTO, type RecordingDTO } from "@fluncle/contracts/orpc";
-import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
 import { InstagramIcon, TiktokIcon } from "@/components/platform-icons";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { formatClock, Video } from "@/components/video";
 import {
   type ClipDownloadUrls,
@@ -25,9 +30,51 @@ import { videoVersion } from "@/lib/media";
 // or audio-STRIPPED (TikTok). A `pending` clip — minted in the editor, not yet cut by
 // the box — shows a quiet "cutting" state instead of a poster (no preview/download).
 //
+// The card also stamps the clip's CANON: the `fluncle://` coordinate chip(s) it resolves
+// to (the promoted mixtape's `.F.` if its source recording is published, else the
+// finding(s) the clip window overlaps — a blend = multiple), and an inline-editable
+// caption with a copy button that yields the BUILT caption (clean copy + those
+// coordinate line(s)) so the operator pastes it straight into Instagram. Both read
+// `get_clip_caption` (RFC plan→recording→mixtape §8 surface 4) — the one server-side
+// place that resolves a cue's `finding_id` to its published Log ID.
+//
 // Distribution is DEFERRED (the operator hand-posts; IG/TikTok have no API music path,
 // see RFC §1): the "Distribute" affordance is a disabled seam. When push-to-social
 // lands it becomes the live action here, writing `mixtape_clip_social_posts` rows.
+
+/** The built-caption shape from `GET /admin/clips/{clipId}/caption` (drops the `ok` flag). */
+type ClipCaption = {
+  builtCaption: string;
+  caption?: string;
+  clipId: string;
+  coordinates: string[];
+};
+
+// Fetch the clip's BUILT caption (clean copy + resolved `fluncle://` coordinate line(s))
+// once the clip is cut. A pending clip has no cut window worth resolving, so we skip the
+// read until it's `done`. Keyed by clip id + its re-cut vintage so a re-cut re-resolves.
+function useClipCaption(clip: ClipDTO, enabled: boolean) {
+  return useQuery<ClipCaption>({
+    enabled,
+    queryFn: async () => {
+      const response = await fetch(`/api/admin/clips/${encodeURIComponent(clip.id)}/caption`);
+
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+
+      const body = (await response.json()) as ClipCaption & { ok: true };
+
+      return {
+        builtCaption: body.builtCaption,
+        caption: body.caption,
+        clipId: body.clipId,
+        coordinates: body.coordinates,
+      };
+    },
+    queryKey: ["admin", "clip-caption", clip.id, clip.updatedAt],
+  });
+}
 
 export function ClipCard({
   clip,
@@ -41,6 +88,7 @@ export function ClipCard({
   /** The source recording, when it's in the loaded list (title + the Studio back-link). */
   recording: RecordingDTO | undefined;
 }) {
+  const queryClient = useQueryClient();
   const isDone = clip.status === "done";
   const setTitle = recording ? recording.title : "Unknown set";
   const lengthLabel = formatClock(clipDurationMs(clip) / 1000);
@@ -51,6 +99,65 @@ export function ClipCard({
   const version = videoVersion(clip.updatedAt);
   const downloads = clipDownloadUrls(clip.id, version);
 
+  // The built caption (clean copy + coordinate line(s)) + the resolved coordinates for
+  // the chip row. Only the cut clip has a window worth resolving; a pending clip skips it.
+  const { data: built } = useClipCaption(clip, isDone);
+  const coordinates = built?.coordinates ?? [];
+
+  const [editing, setEditing] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const saveCaption = useMutation<ClipDTO, Error, string>({
+    mutationFn: async (caption: string) => {
+      const response = await fetch(`/api/admin/clips/${encodeURIComponent(clip.id)}`, {
+        body: JSON.stringify({ caption }),
+        headers: { "content-type": "application/json" },
+        method: "PATCH",
+      });
+
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+
+      const body = (await response.json()) as { clip: ClipDTO };
+
+      return body.clip;
+    },
+    onSuccess: async () => {
+      setEditing(false);
+      // Re-read both the grid (the stored-clean caption) and this clip's built caption
+      // (the copy payload + the chips fold the fresh caption in).
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["admin", "clips"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin", "clip-caption", clip.id] }),
+      ]);
+    },
+  });
+
+  const onCopy = () => {
+    // Prefer the freshly-built caption; fall back to the stored clean caption if the
+    // build hasn't landed yet (still copies something honest to paste).
+    const payload = built?.builtCaption ?? clip.caption ?? "";
+
+    if (!payload) {
+      return;
+    }
+
+    void navigator.clipboard?.writeText(payload);
+    setCopied(true);
+  };
+
+  // Clear the "Copied" flash after a beat.
+  useEffect(() => {
+    if (!copied) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => setCopied(false), 2000);
+
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+
   return (
     <article className="flex flex-col overflow-hidden rounded-lg border border-border bg-card">
       {isDone ? (
@@ -60,23 +167,16 @@ export function ClipCard({
       )}
 
       <div className="flex min-w-0 flex-1 flex-col gap-2 p-3">
-        <div className="flex items-baseline justify-between gap-2">
-          {recording?.id ? (
-            <a
-              className="min-w-0 truncate text-sm font-medium hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"
-              href={`/admin/studio/${encodeURIComponent(recording.id)}`}
-            >
-              {setTitle}
-            </a>
-          ) : (
-            <span className="min-w-0 truncate text-sm font-medium">{setTitle}</span>
-          )}
-          {recording?.logId ? (
-            <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
-              fluncle://{recording.logId}
-            </span>
-          ) : null}
-        </div>
+        {recording?.id ? (
+          <a
+            className="min-w-0 truncate text-sm font-medium hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"
+            href={`/admin/studio/${encodeURIComponent(recording.id)}`}
+          >
+            {setTitle}
+          </a>
+        ) : (
+          <span className="min-w-0 truncate text-sm font-medium">{setTitle}</span>
+        )}
 
         <p className="flex items-center gap-2 text-xs tabular-nums text-muted-foreground">
           <span className="font-medium text-foreground">{lengthLabel}</span>
@@ -84,13 +184,34 @@ export function ClipCard({
           <span>{rangeLabel}</span>
         </p>
 
-        {clip.caption ? (
-          <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">
-            {clip.caption}
-          </p>
-        ) : (
-          <p className="text-xs italic text-muted-foreground/70">No caption yet.</p>
-        )}
+        {/* The clip's canon: the resolved `fluncle://` coordinate chip(s) — the promoted
+            mixtape's `.F.` when its source recording is published, else one per finding the
+            window overlaps (a blend = ≥2). Quiet Oxanium tabular (the Track-Row Log ID
+            face), muted — never gold (the One-Sun budget). An un-cued/no-coordinate clip
+            shows none (honest silence beats misattribution). */}
+        {coordinates.length > 0 ? (
+          <ul className="flex list-none flex-wrap gap-x-2 gap-y-1 p-0">
+            {coordinates.map((coordinate) => (
+              <li
+                className="font-display text-xs tabular-nums tracking-[-0.01em] text-muted-foreground"
+                key={coordinate}
+              >
+                {coordinate}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+
+        <ClipCaption
+          caption={clip.caption}
+          copied={copied}
+          editing={editing}
+          onCancel={() => setEditing(false)}
+          onCopy={onCopy}
+          onEdit={() => setEditing(true)}
+          onSave={(value) => saveCaption.mutate(value)}
+          saving={saveCaption.isPending}
+        />
 
         <div className="mt-auto flex items-center gap-1.5 pt-1">
           {isDone ? (
@@ -126,6 +247,106 @@ export function ClipCard({
         </div>
       </div>
     </article>
+  );
+}
+
+// The clip's caption block: click-to-edit prose + a copy button that yields the BUILT
+// caption (clean copy + the `fluncle://` coordinate line(s)) for a straight Instagram
+// paste. At rest it shows the stored-clean caption (or the quiet empty state) with an
+// Edit + Copy pair; editing swaps to a Textarea with Save/Cancel. An empty save clears
+// the caption (the server folds "" → no caption).
+function ClipCaption({
+  caption,
+  copied,
+  editing,
+  onCancel,
+  onCopy,
+  onEdit,
+  onSave,
+  saving,
+}: {
+  caption: string | undefined;
+  copied: boolean;
+  editing: boolean;
+  onCancel: () => void;
+  onCopy: () => void;
+  onEdit: () => void;
+  onSave: (value: string) => void;
+  saving: boolean;
+}) {
+  const [draft, setDraft] = useState(caption ?? "");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Reset the draft to the stored caption whenever an edit opens (a fresh edit starts
+  // from the current value, not a stale prior draft), and focus the field.
+  useEffect(() => {
+    if (editing) {
+      setDraft(caption ?? "");
+      textareaRef.current?.focus();
+    }
+  }, [caption, editing]);
+
+  if (editing) {
+    return (
+      <div className="flex flex-col gap-1.5">
+        <Textarea
+          aria-label="Clip caption"
+          className="min-h-16 text-xs"
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              onCancel();
+            }
+          }}
+          ref={textareaRef}
+          value={draft}
+        />
+        <div className="flex items-center gap-1.5">
+          <Button disabled={saving} onClick={() => onSave(draft.trim())} size="sm">
+            Save
+          </Button>
+          <Button disabled={saving} onClick={onCancel} size="sm" variant="ghost">
+            Cancel
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-start justify-between gap-1.5">
+      {caption ? (
+        <p className="line-clamp-2 min-w-0 text-xs leading-relaxed text-muted-foreground">
+          {caption}
+        </p>
+      ) : (
+        <p className="min-w-0 text-xs italic text-muted-foreground/70">No caption yet.</p>
+      )}
+      <div className="flex shrink-0 items-center gap-0.5">
+        <Button
+          aria-label={copied ? "Caption copied" : "Copy caption with its coordinate"}
+          onClick={onCopy}
+          size="icon-sm"
+          title="Copy the caption + fluncle:// coordinate for Instagram"
+          variant="ghost"
+        >
+          {copied ? (
+            <CheckIcon aria-hidden="true" className="text-primary" weight="bold" />
+          ) : (
+            <CopyIcon aria-hidden="true" />
+          )}
+        </Button>
+        <Button
+          aria-label="Edit caption"
+          onClick={onEdit}
+          size="icon-sm"
+          title="Edit the caption"
+          variant="ghost"
+        >
+          <PencilSimpleIcon aria-hidden="true" />
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -233,4 +454,22 @@ function ClipDownloads({ downloads, title }: { downloads: ClipDownloadUrls; titl
       </Button>
     </>
   );
+}
+
+// Extract a human error from a failed clip request (mirrors the library route's reader):
+// prefer a JSON `message`, fall back to text/status.
+async function readError(response: Response): Promise<string> {
+  try {
+    const body = (await response.clone().json()) as { message?: unknown };
+
+    if (typeof body.message === "string" && body.message.trim()) {
+      return body.message;
+    }
+  } catch {
+    // Fall through to text/status below.
+  }
+
+  const text = await response.text().catch(() => "");
+
+  return text.trim() || response.statusText || `Request failed (${response.status})`;
 }
