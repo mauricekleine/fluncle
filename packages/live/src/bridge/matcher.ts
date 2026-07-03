@@ -32,10 +32,10 @@
 
 import { MEL_BINS } from "../contract";
 
-/** A server-side preview fingerprint: L2-normalized log-mel frames + its logId. */
+/** A server-side preview fingerprint: SHAPE-normalized log-mel frames + its logId. */
 export type Fingerprint = {
   logId: string;
-  /** 10Hz L2-normalized log-mel frames (each length MEL_BINS), or null when the
+  /** 10Hz shape-normalized log-mel frames (each length MEL_BINS), or null when the
    * finding has no preview (unfingerprintable → the matcher skips over it). */
   frames: Float32Array[] | null;
 };
@@ -65,28 +65,39 @@ export type MatcherConfig = {
   firstDwellMs: number;
   /** Threshold relief while the pre-arm hint is active (added to sensitivity). */
   prearmBonus: number;
+  /** SKIP-AHEAD floor: pending+1 confirming at/above this (while the pending stays
+   * weak) advances TWO — a weak/unmatchable preview must not park the pointer. */
+  skipThreshold: number;
+  /** How far pending+1 must beat the pending for a skip (clear evidence). */
+  skipMargin: number;
+  /** Sustain for the skip path — shorter than sustainMs: a skip peak is narrow
+   * (tight tail mixing) and the gate is already double-conditioned. */
+  skipSustainMs: number;
   /** The mel frame hop (ms). */
   hopMs: number;
 };
 
 // Defaults calibrated against the de-risk spike's real set (mixtape 019.F.1A;
-// accuracy.ts). The operating point balances recall against a clean pointer: at
-// midThreshold 0.87 the matcher catches every well-separated transition and most of
-// the tightly-mixed tail (only the two genuinely-ambiguous tail tracks — where the
-// outgoing preview outscores the incoming one — need a manual nudge), at the cost of
-// a few "early" advances that fire at a long blend's mix-in rather than its hook.
-// Ordering stays monotone; there are no phantom or out-of-order advances.
+// accuracy.ts) in the SHAPE-normalized domain (mean-subtract + L2 — see mel.ts):
+// self-at-hook cosines run ~0.6-0.9 while foreign material sits ~0.0-0.5, so the
+// gate floors live far lower than plain-L2 cosines would suggest. The operating
+// point keeps the pointer monotone with zero phantom/out-of-order advances; a
+// weak/unmatchable preview (a remix mismatch, a preview-less finding) is escaped by
+// the skip-ahead rule or the manual nudge rather than lowering the floors.
 export const DEFAULT_MATCHER_CONFIG: MatcherConfig = {
   firstDwellMs: 200_000,
-  highThreshold: 0.95,
+  highThreshold: 0.8,
   hopMs: 100,
-  margin: 0.03,
-  midThreshold: 0.87,
+  margin: 0.1,
+  midThreshold: 0.6,
   minDwellMs: 100_000,
   offsetStep: 3,
-  prearmBonus: 0.015,
-  sustainDecayMs: 300,
-  sustainMs: 6_000,
+  prearmBonus: 0.03,
+  skipMargin: 0.08,
+  skipSustainMs: 1_500,
+  skipThreshold: 0.7,
+  sustainDecayMs: 200,
+  sustainMs: 4_000,
   sustainStepMs: 100,
   windowFrames: 220,
 };
@@ -227,6 +238,7 @@ export class PlanMatcher {
   private pointer = 0;
   private source: PointerSource = "boot";
   private sustain = 0;
+  private skipSustain = 0;
   private lastAdvanceMs = 0;
   private advanceCount = 0;
   private lastScore = 0;
@@ -256,16 +268,13 @@ export class PlanMatcher {
     return p;
   }
 
-  /** Feed one 10Hz mel frame (L2-normalized) + its raw energy + timestamp. */
+  /** Feed one 10Hz mel frame (shape-normalized) + its raw energy + timestamp. */
   pushFrame(frame: Float32Array, energy: number, tMs: number): MatchTick {
     this.window.push(frame);
     if (this.window.length > this.cfg.windowFrames) {
       this.window.shift();
     }
-    const prearmFired = this.prearm.push(energy, tMs);
-    if (prearmFired) {
-      // A transition just fired; the active window is tracked by the detector.
-    }
+    this.prearm.push(energy, tMs);
     const prearmed = this.prearm.activeAt(tMs, this.prearmActiveMs);
 
     const pending = this.pendingAfter(this.pointer);
@@ -298,15 +307,46 @@ export class PlanMatcher {
       this.sustain = Math.max(0, this.sustain - this.cfg.sustainDecayMs);
     }
 
+    // SKIP-AHEAD: a weak/unmatchable pending preview (a remix mismatch) must not
+    // park the pointer for the rest of the show. When pending+1 confirms STRONGLY
+    // while the pending stays clearly weaker, advance TWO — still monotone-forward,
+    // gated by the same dwell + its own sustain accumulator (measured: t12 of the
+    // calibration set never exceeds ~0.48 anywhere while t13 hits 0.79 at its hook).
+    const pending2 = this.pendingAfter(pending);
+    let sSkip = 0;
+    if (eligible && pending2 < this.fps.length) {
+      const skipFp = this.fps[pending2].frames;
+      sSkip = skipFp ? bestOffsetScore(this.window, skipFp, this.cfg.offsetStep) : 0;
+      const skipOk =
+        sSkip >= this.cfg.skipThreshold - bonus && sSkip >= sPend + this.cfg.skipMargin;
+      if (skipOk) {
+        this.skipSustain += this.cfg.sustainStepMs;
+      } else {
+        this.skipSustain = Math.max(0, this.skipSustain - this.cfg.sustainDecayMs);
+      }
+    } else {
+      this.skipSustain = 0;
+    }
+
     if (this.sustain >= this.cfg.sustainMs) {
       this.pointer = pending;
-      this.source = "fingerprint";
-      this.lastAdvanceMs = tMs;
-      this.advanceCount++;
-      this.sustain = 0;
-      return this.tick(true, this.pendingAfter(this.pointer), sPend, sCur, prearmed);
+      return this.commitAuto(tMs, sPend, sCur, prearmed);
+    }
+    if (this.skipSustain >= this.cfg.skipSustainMs) {
+      this.pointer = pending2;
+      return this.commitAuto(tMs, sSkip, sCur, prearmed);
     }
     return this.tick(false, pending, sPend, sCur, prearmed);
+  }
+
+  /** Shared bookkeeping for a fingerprint-driven pointer move. */
+  private commitAuto(tMs: number, score: number, sCur: number, prearmed: boolean): MatchTick {
+    this.source = "fingerprint";
+    this.lastAdvanceMs = tMs;
+    this.advanceCount++;
+    this.sustain = 0;
+    this.skipSustain = 0;
+    return this.tick(true, this.pendingAfter(this.pointer), score, sCur, prearmed);
   }
 
   private tick(
@@ -354,6 +394,7 @@ export class PlanMatcher {
     this.lastAdvanceMs = tMs;
     this.advanceCount++;
     this.sustain = 0;
+    this.skipSustain = 0;
   }
 
   /** Diagnostics for the state/HUD without pushing a frame. */

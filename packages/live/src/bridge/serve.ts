@@ -76,7 +76,12 @@ async function main(): Promise<void> {
         const logId = url.searchParams.get("logId") ?? "";
         const entry = plan.find((p) => p.logId === logId);
         return Response.json(
-          entry?.replay ?? { customUniforms: [], reason: "unknown logId", replayable: false },
+          entry?.replay ?? {
+            customUniforms: [],
+            layers: [],
+            reason: "unknown logId",
+            replayable: false,
+          },
         );
       }
       if (url.pathname === BRIDGE_REMOTE_PATH || url.pathname === `${BRIDGE_REMOTE_PATH}/`) {

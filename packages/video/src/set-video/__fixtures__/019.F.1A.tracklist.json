@@ -1,0 +1,155 @@
+[
+  {
+    "i": 0,
+    "logId": "012.4.4D",
+    "bpm": 172.58,
+    "title": "Let's Leave Tomorrow",
+    "artists": ["Netsky", "Bev Lee Harling"],
+    "previewUrl": "https://cdnt-preview.dzcdn.net/api/1/1/c/f/7/0/cf76b935f81a26825989ccd1e755ae07.mp3?hdnea=exp=1781181370~acl=/api/1/1/c/f/7/0/cf76b935f81a26825989ccd1e755ae07.mp3*~data=user_id=0,application_id=42~hmac=6c8d5fb4edf2038a59f0f5001e50c341011b33fd458985c54ac9dc35393e2018",
+    "durationMs": 274520
+  },
+  {
+    "i": 1,
+    "logId": "011.9.8I",
+    "bpm": 172.1,
+    "title": "I See You",
+    "artists": ["Dawn Wall"],
+    "previewUrl": "https://cdnt-preview.dzcdn.net/api/1/1/8/2/d/0/82dc548e5edb4cd522723cd4f74bf9b5.mp3?hdnea=exp=1781101163~acl=/api/1/1/8/2/d/0/82dc548e5edb4cd522723cd4f74bf9b5.mp3*~data=user_id=0,application_id=42~hmac=659fe445369a8241209f14ea7ddb64c645f01752dbc4f86a320e02f7af8e42e5",
+    "durationMs": 358027
+  },
+  {
+    "i": 2,
+    "logId": "018.7.5J",
+    "bpm": 172.26,
+    "title": "Trust",
+    "artists": ["Anwius"],
+    "previewUrl": "https://cdnt-preview.dzcdn.net/api/1/1/a/6/1/0/a612816ab4dc44355a0b1f336a274334.mp3?hdnea=exp=1781717335~acl=/api/1/1/a/6/1/0/a612816ab4dc44355a0b1f336a274334.mp3*~data=user_id=0,application_id=42~hmac=e32dc4f74d80ef78eadb1de64bb3262a787b9657915af3ebf1a29d48bc246c53",
+    "durationMs": 253836
+  },
+  {
+    "i": 3,
+    "logId": "019.8.6S",
+    "bpm": 173.14,
+    "title": "Cardamom Mountains",
+    "artists": ["C41"],
+    "previewUrl": "https://cdnt-preview.dzcdn.net/api/1/1/b/e/0/0/be0585a0c24bc6a014e0e4a96272a8a4.mp3?hdnea=exp=1781770526~acl=/api/1/1/b/e/0/0/be0585a0c24bc6a014e0e4a96272a8a4.mp3*~data=user_id=0,application_id=42~hmac=ba8a5dbc31cd09847c29bc812356ce649eec1ae8bbb9f82c8ca34e6eaab1bca4",
+    "durationMs": 245891
+  },
+  {
+    "i": 4,
+    "logId": "009.7.6X",
+    "bpm": 171.62,
+    "title": "Spears",
+    "artists": ["Dawn Wall"],
+    "previewUrl": null,
+    "durationMs": 260747
+  },
+  {
+    "i": 5,
+    "logId": "012.1.0A",
+    "bpm": 173.48,
+    "title": "It's Whatever",
+    "artists": ["GLXY"],
+    "previewUrl": "https://cdnt-preview.dzcdn.net/api/1/1/e/3/4/0/e34e1ade296a80c4dae9707f646cdde4.mp3?hdnea=exp=1781172471~acl=/api/1/1/e/3/4/0/e34e1ade296a80c4dae9707f646cdde4.mp3*~data=user_id=0,application_id=42~hmac=fa660dc3882d16e61532b7a50d9ab7054ae10eb3a09ab56e4c7242ca6884649e",
+    "durationMs": 337217
+  },
+  {
+    "i": 6,
+    "logId": "011.6.8K",
+    "bpm": 171.82,
+    "title": "Sea Air",
+    "artists": ["Krakota"],
+    "previewUrl": "https://cdnt-preview.dzcdn.net/api/1/1/a/9/1/0/a91f2469e3d608a5e0e30f67d5944ccc.mp3?hdnea=exp=1781104358~acl=/api/1/1/a/9/1/0/a91f2469e3d608a5e0e30f67d5944ccc.mp3*~data=user_id=0,application_id=42~hmac=e292fb800385ec6b05684373bddc59934a6eda625b08d523ee8288e1cfdf130a",
+    "durationMs": 367002
+  },
+  {
+    "i": 7,
+    "logId": "012.2.4L",
+    "bpm": 172.51,
+    "title": "See For Miles",
+    "artists": ["Krakota"],
+    "previewUrl": "https://cdnt-preview.dzcdn.net/api/1/1/d/0/9/0/d093305bdb1dcc02760a89f649b7cce6.mp3?hdnea=exp=1781184755~acl=/api/1/1/d/0/9/0/d093305bdb1dcc02760a89f649b7cce6.mp3*~data=user_id=0,application_id=42~hmac=f4eccbadde571eb4915592b5a6def6ba57008fdb8e1d36720f9b34ab1d874df6",
+    "durationMs": 292168
+  },
+  {
+    "i": 8,
+    "logId": "004.6.0K",
+    "bpm": 172.27,
+    "title": "Teddy's Gate",
+    "artists": ["Whiney", "LaMeduza"],
+    "previewUrl": "https://cdnt-preview.dzcdn.net/api/1/1/2/b/7/0/2b7e943ace4a9cc1f6c02f6b90d71869.mp3?hdnea=exp=1780900940~acl=/api/1/1/2/b/7/0/2b7e943ace4a9cc1f6c02f6b90d71869.mp3*~data=user_id=0,application_id=42~hmac=e76bb6bc3ee1f7d106ca953fdccfd729d2be87b914d7e72397f0c6e47127d8f8",
+    "durationMs": 309943
+  },
+  {
+    "i": 9,
+    "logId": "004.6.0Q",
+    "bpm": 172.49,
+    "title": "Some People",
+    "artists": ["Mitekiss"],
+    "previewUrl": "https://cdnt-preview.dzcdn.net/api/1/1/5/7/f/0/57faef116930e40e25d568c5cfc74d92.mp3?hdnea=exp=1780900877~acl=/api/1/1/5/7/f/0/57faef116930e40e25d568c5cfc74d92.mp3*~data=user_id=0,application_id=42~hmac=b2a3201c27f79b8807e045ac45cbea69f4bf768f8edab6e1ae6bac354ecffef7",
+    "durationMs": 274453
+  },
+  {
+    "i": 10,
+    "logId": "004.6.8K",
+    "bpm": 172.27,
+    "title": "Sudden Change",
+    "artists": ["Mohican Sun"],
+    "previewUrl": "https://cdnt-preview.dzcdn.net/api/1/1/4/4/b/0/44b02384e0eda54895ec7a917ece7dc5.mp3?hdnea=exp=1780900856~acl=/api/1/1/4/4/b/0/44b02384e0eda54895ec7a917ece7dc5.mp3*~data=user_id=0,application_id=42~hmac=04851fab8cacd6260eb65920cfff9b9d3ee4ec0b5e34ea64e0413bbd60a2faa8",
+    "durationMs": 289071
+  },
+  {
+    "i": 11,
+    "logId": "011.1.3X",
+    "bpm": 170.09,
+    "title": "Dreaming",
+    "artists": ["S.P.Y"],
+    "previewUrl": null,
+    "durationMs": 283402
+  },
+  {
+    "i": 12,
+    "logId": "019.3.9J",
+    "bpm": 172.45,
+    "title": "Empty Love - GLXY Remix",
+    "artists": ["Submotion Orchestra", "Ed Thomas", "GLXY"],
+    "previewUrl": "https://cdnt-preview.dzcdn.net/api/1/1/2/1/3/0/2131a8ea484afe3f77526abc29133e34.mp3?hdnea=exp=1781799781~acl=/api/1/1/2/1/3/0/2131a8ea484afe3f77526abc29133e34.mp3*~data=user_id=0,application_id=42~hmac=d49caf46cc9cd96c6cdfc89c832c458af94009e084722ab8122f9b0a7e737a6b",
+    "durationMs": 338979
+  },
+  {
+    "i": 13,
+    "logId": "007.0.0Z",
+    "bpm": 171.25,
+    "title": "4 Seasons",
+    "artists": ["System & Wise"],
+    "previewUrl": "https://cdnt-preview.dzcdn.net/api/1/1/d/7/f/0/d7ffb78d426504b1b8fe9ceecc576e88.mp3?hdnea=exp=1780900973~acl=/api/1/1/d/7/f/0/d7ffb78d426504b1b8fe9ceecc576e88.mp3*~data=user_id=0,application_id=42~hmac=2d13d5df1689c40a4765ad2af11a9288c57dd2ee3b5448d933d159bd16606fe4",
+    "durationMs": 364224
+  },
+  {
+    "i": 14,
+    "logId": "019.1.7X",
+    "bpm": 172.56,
+    "title": "Strength",
+    "artists": ["Technimatic"],
+    "previewUrl": "https://cdnt-preview.dzcdn.net/api/1/1/c/8/a/0/c8ae15874914d7c5bdfe0806272c6131.mp3?hdnea=exp=1781799792~acl=/api/1/1/c/8/a/0/c8ae15874914d7c5bdfe0806272c6131.mp3*~data=user_id=0,application_id=42~hmac=4ce890f1de797500df4edba7b0c3fc949b0854304d251e00c11059d486d5a331",
+    "durationMs": 270815
+  },
+  {
+    "i": 15,
+    "logId": "004.0.1C",
+    "bpm": 172.83,
+    "title": "Oxford Road",
+    "artists": ["Whiney"],
+    "previewUrl": "https://cdnt-preview.dzcdn.net/api/1/1/c/1/6/0/c16d9ac068d13e26a1bddc563dc2b4d7.mp3?hdnea=exp=1780900888~acl=/api/1/1/c/1/6/0/c16d9ac068d13e26a1bddc563dc2b4d7.mp3*~data=user_id=0,application_id=42~hmac=92443f4a13ac225492e6d18aabf2a481a24461c19fa8465b431c625894ad7790",
+    "durationMs": 327394
+  },
+  {
+    "i": 16,
+    "logId": "011.1.6E",
+    "bpm": 171.09,
+    "title": "I See The Future In Your Eyes",
+    "artists": ["Netsky"],
+    "previewUrl": "https://cdnt-preview.dzcdn.net/api/1/1/a/7/a/0/a7af8805da5c3ac81671257114d58294.mp3?hdnea=exp=1781101961~acl=/api/1/1/a/7/a/0/a7af8805da5c3ac81671257114d58294.mp3*~data=user_id=0,application_id=42~hmac=66fb27df4dcea37e58e9e7da163e6c5356b23c5859daadaad8fd41fd224fd039",
+    "durationMs": 255260
+  }
+]

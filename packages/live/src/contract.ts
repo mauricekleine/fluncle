@@ -30,22 +30,36 @@ export type PlanEntry = {
     swatches?: string[];
   };
   seed?: number;
+  /**
+   * The dream-replay scene — the glass's scene-extract `Scene` shape, mirrored here
+   * so both worlds keep importing only this file. Layers carry resolved GLSL bodies;
+   * custom uniforms are classified for live re-drive (rise ramps -> dwell, tail
+   * dimmers -> pinned, audio aliases -> the live DSP, colour vec3s -> palette stops,
+   * velocity pairs -> JS-integrated position motion).
+   */
   replay?: {
     replayable: boolean;
-    body?: string;
-    /**
-     * The composition's own (non-header) uniforms, classified for live re-drive.
-     * Names match the extractor + the glass v0.6 runtime: rise ramps -> dwell,
-     * tail dimmers -> pinned, audio aliases -> the live DSP, colour vec3s -> palette.
-     */
-    customUniforms?: Array<{
-      name: string;
-      type: string;
-      class: "riseRamp" | "settleDim" | "audioAlias" | "color" | "unknown";
-      params?: Record<string, unknown>;
-    }>;
     reason?: string;
+    /** One layer for a single-ShaderLayer comp; N for a composited one. */
+    layers?: Array<{
+      body: string;
+      customUniforms: PlanCustomUniform[];
+      blend: "opaque" | "over";
+    }>;
+    /** Convenience mirror of layers[0] (the single-layer path). */
+    body?: string;
+    customUniforms?: PlanCustomUniform[];
+    /** Bloom config read from the composition's ShaderLayer `bloom` prop. */
+    bloom?: { threshold?: number; intensity?: number; radius?: number };
   };
+};
+
+/** A classified custom (non-header) uniform in a replay scene. */
+export type PlanCustomUniform = {
+  name: string;
+  type: string;
+  class: "riseRamp" | "settleDim" | "audioAlias" | "color" | "velocityPos" | "velocity";
+  params?: Record<string, unknown>;
 };
 
 /** The bridge's fused state stream, emitted at a fixed cadence (30-60Hz). */

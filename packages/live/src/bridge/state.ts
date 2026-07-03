@@ -7,7 +7,7 @@
 import { type PlanEntry, type ShowCommand, type ShowState } from "../contract";
 import { MEL_BINS } from "../contract";
 import { type Fingerprint, type MatcherConfig, PlanMatcher } from "./matcher";
-import { l2Normalize } from "./mel";
+import { shapeNormalize } from "./mel";
 
 /** Audio is "stale" if no mel frame arrived within this window; "silent" past it. */
 const AUDIO_STALE_MS = 1_500;
@@ -38,13 +38,15 @@ export function createShowState(
       case "mel": {
         lastMelMs = tMs;
         // Read magnitude BEFORE normalizing (the pre-arm energy proxy), then
-        // L2-normalize for the cosine match.
+        // SHAPE-normalize (mean-subtract + L2) for the cosine match — the same
+        // normalization the server-side fingerprints get, so the wire's raw
+        // log-mel and the previews compare content, not analyzer tilt.
         const raw = Float32Array.from(cmd.frame.slice(0, MEL_BINS));
         let energy = 0;
         for (let i = 0; i < raw.length; i++) {
           energy += raw[i];
         }
-        const normalized = l2Normalize(Float32Array.from(raw));
+        const normalized = shapeNormalize(Float32Array.from(raw));
         const tick = matcher.pushFrame(normalized, energy, tMs);
         prearmed = tick.prearmed;
         const pendEntry = plan[tick.pending];

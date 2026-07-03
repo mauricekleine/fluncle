@@ -82,10 +82,33 @@ export function l2Normalize(frame: Float32Array): Float32Array {
 }
 
 /**
- * Compute one L2-normalized log-mel frame from a windowed slice of mono PCM.
+ * SHAPE-normalize a mel frame in place: subtract the per-frame mean, then L2.
+ * This is the matcher's frame normalization on BOTH sides of the wire, and it is
+ * load-bearing for cross-analyzer robustness: it removes each source's spectral
+ * tilt/level (browser AnalyserNode vs ffmpeg FFT; preview master vs live mix), and
+ * because log-power ≈ 2·log-amplitude per band, mean-subtraction + L2 collapses the
+ * amplitude-vs-power analyzer difference to (nearly) the same unit vector. Raw
+ * plain-L2 log-mel cosines on near-identical liquid DnB sit at 0.86+ everywhere
+ * (tilt-dominated); shape cosines separate content (~0.6-0.9 self vs ~0.0-0.5
+ * foreign, measured in the accuracy harness).
+ */
+export function shapeNormalize(frame: Float32Array): Float32Array {
+  let mean = 0;
+  for (let i = 0; i < frame.length; i++) {
+    mean += frame[i];
+  }
+  mean /= frame.length || 1;
+  for (let i = 0; i < frame.length; i++) {
+    frame[i] -= mean;
+  }
+  return l2Normalize(frame);
+}
+
+/**
+ * Compute one SHAPE-normalized log-mel frame from a windowed slice of mono PCM.
  * Pure and deterministic. `signal` must have at least `offset + MEL_FFT_SIZE`
- * samples. Exported for tests and for a single-frame path; the glass's browser
- * DSP must produce a byte-comparable vector for a matching signal.
+ * samples. The glass streams RAW log-mel; the bridge shape-normalizes both the
+ * wire frames and these fingerprints so the cosine compares content, not tilt.
  */
 export function melFrameAt(signal: Float32Array, offset: number): Float32Array {
   const re = new Float64Array(MEL_FFT_SIZE);
@@ -102,12 +125,16 @@ export function melFrameAt(signal: Float32Array, offset: number): Float32Array {
     for (let k = filter.start; k < filter.end; k++) {
       const w = filter.weights[k - filter.start];
       if (w > 0) {
-        acc += w * (re[k] * re[k] + im[k] * im[k]);
+        // AMPLITUDE accumulation (|X|, not |X|^2) — mirrors the glass's browser DSP,
+        // which sums 10^(dB/20) per band (glass/client/dsp.ts melFrame). The live
+        // window and the server-side preview fingerprints must share one definition
+        // for the cosine to mean the same thing across the wire.
+        acc += w * Math.sqrt(re[k] * re[k] + im[k] * im[k]);
       }
     }
     out[m] = Math.log1p(acc);
   }
-  return l2Normalize(out);
+  return shapeNormalize(out);
 }
 
 /**

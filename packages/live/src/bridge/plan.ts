@@ -9,7 +9,10 @@
 //   2. Each finding's palette + seed + Found date come from its props.json on R2
 //      (found.fluncle.com/<logId>/props.json, open CORS).
 //   3. Each finding's replay scene comes from its composition.tsx (also on R2),
-//      resolved + classified by `scene.ts` (the dream-replay half).
+//      resolved + classified by the glass's `scene-extract.ts` — the ONE extractor
+//      in the package (multi-layer + velocity-pair aware, 17/17 replay). The bridge
+//      reuses that pure module server-side instead of carrying a lagging duplicate;
+//      the runtime boundary between the two PROCESSES stays contract.ts.
 //
 // The result is the PlanEntry[] contract shape the glass consumes over /plan, and
 // the ordered logId list the matcher fingerprints (`fingerprint.ts`).
@@ -18,7 +21,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import { type PlanEntry } from "../contract";
-import { extractScene } from "./scene";
+import { extractScene } from "../glass/scene-extract.ts";
 
 const WEB_BASE = process.env.FLUNCLE_WEB_BASE ?? "https://www.fluncle.com";
 const FOUND_BASE = process.env.FLUNCLE_FOUND_BASE ?? "https://found.fluncle.com";
@@ -92,20 +95,23 @@ async function enrich(member: PlanMember): Promise<PlanEntry> {
     // props.json missing -> canon palette at render time (the glass falls back).
   }
 
-  // composition.tsx -> the replay-ready scene (resolved body + classified uniforms).
+  // composition.tsx -> the replay-ready scene (resolved layers + classified uniforms).
   try {
     const res = await fetch(`${FOUND_BASE}/${member.logId}/composition.tsx`);
     if (res.ok) {
       const scene = extractScene(await res.text());
       entry.replay = {
+        bloom: scene.bloom,
         body: scene.body,
         customUniforms: scene.customUniforms,
+        layers: scene.layers,
         reason: scene.reason,
         replayable: scene.replayable,
       };
     } else {
       entry.replay = {
         customUniforms: [],
+        layers: [],
         reason: "composition.tsx unavailable",
         replayable: false,
       };
@@ -113,6 +119,7 @@ async function enrich(member: PlanMember): Promise<PlanEntry> {
   } catch {
     entry.replay = {
       customUniforms: [],
+      layers: [],
       reason: "composition.tsx fetch failed",
       replayable: false,
     };

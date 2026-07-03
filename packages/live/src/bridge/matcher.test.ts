@@ -14,15 +14,19 @@ import {
   frameCosine,
   PlanMatcher,
 } from "./matcher";
-import { l2Normalize } from "./mel";
+import { shapeNormalize } from "./mel";
 
-/** A deterministic L2-normalized frame from a seed (a stable "spectral shape"). */
+/** A deterministic SHAPE-normalized frame from a seed: a spectral bump whose
+ * position is seed-keyed, so distinct seeds are near-orthogonal after
+ * mean-subtraction (mirroring how real distinct tracks separate in this domain). */
 function frame(seed: number, jitter = 0): Float32Array {
   const v = new Float32Array(MEL_BINS);
+  const center = (seed * 7) % MEL_BINS;
   for (let i = 0; i < MEL_BINS; i++) {
-    v[i] = Math.abs(Math.sin(seed * 1.7 + i * 0.31)) + jitter * Math.sin(i * 2.1 + seed);
+    const d = Math.min(Math.abs(i - center), MEL_BINS - Math.abs(i - center));
+    v[i] = Math.exp(-(d * d) / 8) + jitter * Math.sin(i * 2.1 + seed);
   }
-  return l2Normalize(v);
+  return shapeNormalize(v);
 }
 
 /** A run of frames all sharing one seed = one track's stable "sound". */
@@ -133,9 +137,25 @@ describe("PlanMatcher", () => {
     const m = new PlanMatcher(fps([1, 2, 3]), cfg);
     let t = 0;
     for (let i = 0; i < 200; i++, t += 100) {
-      m.pushFrame(frame(99), 0.5, t); // matches neither current nor pending
+      m.pushFrame(frame(5), 0.5, t); // a spectral bump far from every planned one
     }
     expect(m.pointerIndex).toBe(0);
+  });
+
+  test("skip-ahead: a weak pending is skipped when pending+1 confirms strongly", () => {
+    // Pointer 0; pending = 1; pending+1 = 2. Play track 2's audio: the pending
+    // never matches, but pending+1 does — the pointer must advance TWO (monotone),
+    // not park behind the weak preview.
+    const m = new PlanMatcher(fps([1, 2, 3]), cfg);
+    let t = 0;
+    let advanced = false;
+    for (let i = 0; i < 140; i++, t += 100) {
+      const tick = m.pushFrame(frame(3), 0.5, t);
+      advanced = advanced || tick.advanced;
+    }
+    expect(advanced).toBe(true);
+    expect(m.pointerIndex).toBe(2);
+    expect(m.pointerSource).toBe("fingerprint");
   });
 
   test("manual advance/rewind/goto always win instantly", () => {
