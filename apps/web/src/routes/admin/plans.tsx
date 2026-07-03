@@ -559,7 +559,7 @@ function PlanHandleField({ handle }: { handle: string }) {
       </div>
       <p className="text-xs text-muted-foreground">
         The name this plan carries. Copy it onto your Beatport playlist, Rekordbox crate, and USB
-        folders — it's fixed, so it won't drift like a date.
+        folders. It's fixed, so it won't drift like a date.
       </p>
     </div>
   );
@@ -635,7 +635,7 @@ function AttachTake({
                         {take.title}
                       </span>
                       {take.logId ? (
-                        <Badge variant="default">promoted</Badge>
+                        <Badge variant="secondary">promoted</Badge>
                       ) : (
                         <Badge variant="outline">take</Badge>
                       )}
@@ -667,7 +667,7 @@ function TakeRow({ clipCount, take }: { clipCount: number; take: RecordingDTO })
         {take.title}
       </a>
       {take.logId ? (
-        <Badge variant="default">promoted · fluncle://{take.logId}</Badge>
+        <Badge variant="secondary">promoted · fluncle://{take.logId}</Badge>
       ) : (
         <Badge variant="outline">take</Badge>
       )}
