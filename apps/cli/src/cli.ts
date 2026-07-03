@@ -51,7 +51,6 @@ type AdminQueueViewOptions = AdminListOptions & {
 // The Fluncle Studio clip-library list filter (`admin clips list`).
 type ClipListOptions = {
   json: boolean;
-  mixtape?: string;
   recording?: string;
   status?: string;
 };
@@ -954,12 +953,9 @@ function addAdminCommands(program: Command): void {
 
   adminClips
     .command("list")
-    .description(
-      "List clips (filter by --status pending|done, --recording <id>, and/or --mixtape <id>)",
-    )
+    .description("List clips (filter by --status pending|done and/or --recording <id>)")
     .option("--status <status>", "Filter by cut status (pending|done)")
     .option("--recording <id>", "Filter by recording id")
-    .option("--mixtape <id>", "Filter by mixtape id")
     .option("--json", "Print JSON", false)
     .allowExcessArguments()
     .action(async (options: ClipListOptions) => {
@@ -2138,7 +2134,6 @@ async function runClipsList(
   clipsListCommand: typeof import("./commands/clips").clipsListCommand,
 ): Promise<void> {
   const clips = await clipsListCommand({
-    mixtapeId: options.mixtape,
     recordingId: options.recording,
     status: options.status,
   });
@@ -2154,7 +2149,7 @@ async function runClipsList(
   }
 
   for (const clip of clips) {
-    const source = clip.recordingId ?? clip.mixtapeId ?? "—";
+    const source = clip.recordingId ?? "—";
     console.log(
       `${clip.id}\t${clip.status}\t${source}\t${clip.inMs}-${clip.outMs}ms\tx=${clip.xOffset}`,
     );

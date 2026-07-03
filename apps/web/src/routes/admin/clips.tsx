@@ -77,10 +77,9 @@ export const Route = createFileRoute("/admin/clips")({
   }),
 });
 
-// A clip normalised onto its source recording id — a recording clip carries `recordingId`
-// directly; a LEGACY mixtape clip is mapped onto its promoted recording (via the
-// recording's `mixtapeId`), so both group + filter under one axis. An orphan legacy clip
-// (a mixtape published before recordings, never backfilled) keeps `recordingId` undefined.
+// A clip carries `recordingId` directly — the one grouping/filtering axis, since the
+// plan→recording→mixtape Deploy-2 cutover dropped the legacy `mixtapeId` owner (every
+// legacy mixtape clip was repointed onto its mixtape's recording first).
 type LibraryClip = ClipDTO & { resolvedRecordingId: string | undefined };
 
 function ClipLibraryPage() {
@@ -99,16 +98,6 @@ function ClipLibraryPage() {
   const [error, setError] = useAutoNotice();
   const [notice, setNotice] = useAutoNotice();
 
-  const recordingByMixtapeId = useMemo(
-    () =>
-      new Map(
-        recordings
-          .filter((rec) => rec.mixtapeId)
-          .map((rec) => [rec.mixtapeId as string, rec] as const),
-      ),
-    [recordings],
-  );
-
   // Every recording by its id — the per-card recording label lookup (each flat-grid card
   // still shows which set/mixtape its clip is from).
   const recordingById = useMemo(
@@ -116,18 +105,10 @@ function ClipLibraryPage() {
     [recordings],
   );
 
-  // Normalise every clip onto its source recording id (a legacy mixtape clip → its
-  // promoted recording), so grouping + filtering share the one axis.
+  // Every clip's source recording id is the one grouping/filter axis.
   const libraryClips = useMemo<LibraryClip[]>(
-    () =>
-      clips.map((clip) => {
-        const resolved =
-          clip.recordingId ??
-          (clip.mixtapeId ? recordingByMixtapeId.get(clip.mixtapeId)?.id : undefined);
-
-        return { ...clip, recordingId: resolved, resolvedRecordingId: resolved };
-      }),
-    [clips, recordingByMixtapeId],
+    () => clips.map((clip) => ({ ...clip, resolvedRecordingId: clip.recordingId })),
+    [clips],
   );
 
   // The dropdown only offers recordings that actually yielded a clip — no empty options.

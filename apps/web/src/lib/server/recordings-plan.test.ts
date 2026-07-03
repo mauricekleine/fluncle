@@ -75,7 +75,6 @@ function seedRecording(overrides: Row = {}): void {
     r2_key: null,
     recorded_at: null,
     title: "liquid-nebula-roller",
-    tracklist_json: null,
     updated_at: "2026-07-03T00:00:00.000Z",
     version: 1,
     ...overrides,

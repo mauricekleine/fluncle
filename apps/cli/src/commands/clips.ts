@@ -148,16 +148,12 @@ export function clipCutFfmpegArgs(options: ClipCutFfmpegOptions): string[] {
 
 /** List clips via the admin API (Unit G `list_clips`; agent token clears requireAdmin). */
 export async function clipsListCommand(
-  filter: { mixtapeId?: string; recordingId?: string; status?: string } = {},
+  filter: { recordingId?: string; status?: string } = {},
 ): Promise<ClipDTO[]> {
   const params = new URLSearchParams();
 
   if (filter.recordingId) {
     params.set("recordingId", filter.recordingId);
-  }
-
-  if (filter.mixtapeId) {
-    params.set("mixtapeId", filter.mixtapeId);
   }
 
   if (filter.status) {
@@ -177,56 +173,34 @@ export type ClipCutResult = {
   url: string;
 };
 
-// The set the cut reads from — resolved from EITHER the clip's recording (the RFC
-// recording-primitive path) or, for a legacy clip, its mixtape. The cut is a pure crop, so
-// all it needs is the source rendition URL (plus the staging assertions that guard it).
+// The set the cut reads from — the clip's recording's OWNED r2Key. The cut is a pure
+// crop, so all it needs is the source rendition URL (plus the staging assertion).
 type ClipSource = {
   setUrl: string;
 };
 
-// Resolve a clip's source set. A recording clip reads the recording's OWNED r2Key; a legacy
-// mixtape clip keeps the old `mixtape → setVideoUrl(logId)` path. Both assert the set video
-// is actually staged before the cut runs.
+// Resolve a clip's source set: the recording's OWNED r2Key. A clip's only owner is its
+// recording since the plan→recording→mixtape Deploy-2 cutover dropped the legacy
+// `mixtape_id` (every legacy mixtape clip was repointed onto its mixtape's recording
+// first). Asserts the set video is actually staged before the cut runs.
 async function resolveClipSource(clip: ClipDTO): Promise<ClipSource> {
-  if (clip.recordingId) {
-    const { recordingGet } = await import("./recordings");
-    const recording = await recordingGet(clip.recordingId);
-
-    if (!recording.r2Key) {
-      throw new CliError(
-        "recording_not_staged",
-        `Recording ${clip.recordingId} has no staged set video`,
-      );
-    }
-
-    return {
-      setUrl: `${FOUND_BASE}/${recording.r2Key.split("/").map(encodeURIComponent).join("/")}`,
-    };
+  if (!clip.recordingId) {
+    throw new CliError("clip_unlinked", `Clip ${clip.id} is linked to no recording`);
   }
 
-  // Legacy fallback: an un-backfilled clip still keyed by a published mixtape.
-  if (!clip.mixtapeId) {
+  const { recordingGet } = await import("./recordings");
+  const recording = await recordingGet(clip.recordingId);
+
+  if (!recording.r2Key) {
     throw new CliError(
-      "clip_unlinked",
-      `Clip ${clip.id} is linked to neither a recording nor a mixtape`,
+      "recording_not_staged",
+      `Recording ${clip.recordingId} has no staged set video`,
     );
   }
 
-  const { mixtapeGetCommand } = await import("./mixtapes");
-  const mixtape = await mixtapeGetCommand(clip.mixtapeId);
-
-  if (!mixtape.logId) {
-    throw new CliError("mixtape_no_log_id", `Mixtape ${clip.mixtapeId} has no committed Log ID`);
-  }
-
-  if (!mixtape.setVideoAt) {
-    throw new CliError(
-      "set_not_staged",
-      `Mixtape ${mixtape.logId} has no staged set video — run \`recordings promote <recordingId>\` first`,
-    );
-  }
-
-  return { setUrl: setVideoUrl(mixtape.logId) };
+  return {
+    setUrl: `${FOUND_BASE}/${recording.r2Key.split("/").map(encodeURIComponent).join("/")}`,
+  };
 }
 
 /**

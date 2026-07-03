@@ -648,12 +648,11 @@ export function adminMixtapesHandlers(os: Implementer) {
 
   // ── Fluncle Studio: clips + cue backfill ──
 
-  // GET /admin/clips — admin tier (agent-allowed read). Optional ?recordingId/?mixtapeId/?status.
+  // GET /admin/clips — admin tier (agent-allowed read). Optional ?recordingId/?status.
   const listClipsHandler = os.list_clips.use(adminAuth).handler(async ({ input }) => {
     try {
       return {
         clips: await listClips({
-          mixtapeId: input.mixtapeId,
           recordingId: input.recordingId,
           status: input.status,
         }),

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mixtapeLogId, predictedMixtapeLogId } from "../mixtape-log-id";
+import { mixtapeLogId } from "../mixtape-log-id";
 import { type MixtapeDTO, type MixtapeStatus, rowToMixtape } from "../mixtapes";
 import { getDb, typedRow, typedRows } from "./db";
 import { purgeLogCache } from "./edge-cache";
@@ -35,7 +35,6 @@ type MixtapeRow = {
   member_count: number | null;
   mixcloud_url: string | null;
   note: string | null;
-  planned_for: string | null;
   published_at: string | null;
   recorded_at: string | null;
   recording_id: string | null;
@@ -65,7 +64,6 @@ type StatusRow = {
 export type MixtapeInput = {
   durationMs?: unknown;
   note?: unknown;
-  plannedFor?: unknown;
   recordedAt?: unknown;
   setVideoAt?: unknown;
   soundcloudUrl?: unknown;
@@ -101,14 +99,13 @@ export async function createMixtape(input: MixtapeInput): Promise<MixtapeDTO> {
       fields.durationMs ?? null,
       fields.note ?? null,
       fields.recordedAt ?? null,
-      fields.plannedFor ?? null,
       now,
       now,
     ],
     sql: `insert into mixtapes (
         id, status, title, duration_ms, note,
-        recorded_at, planned_for, created_at, updated_at
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        recorded_at, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 
   // A manual SoundCloud link given at creation becomes a published distribution row.
@@ -143,7 +140,6 @@ export async function updateMixtape(id: string, input: MixtapeInput): Promise<Mi
     ["duration_ms", fields.durationMs],
     ["note", fields.note],
     ["recorded_at", fields.recordedAt],
-    ["planned_for", fields.plannedFor],
     ["set_video_at", fields.setVideoAt],
   ] as const) {
     if (value !== undefined) {
@@ -649,12 +645,12 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
     throw new ApiError("mixtape_cap_reached", "The mixtape spine is full (54)", 409);
   }
 
-  // The coordinate's sector day. The live session (`plannedFor`) wins — it's the
-  // committed record day — then the recorded date, then today. This is the SAME
-  // resolution predictedMixtapeLogId uses to RESERVE the coordinate on the draft,
-  // so the minted ID equals the one the admin copied before recording. (Forward
-  // only: already-minted mixtapes keep their frozen coordinate.)
-  const recordedAt = draft.plannedFor ?? draft.recordedAt ?? new Date().toISOString();
+  // The coordinate's sector day: the recorded date, else today. (The old
+  // `plannedFor`-wins resolution retired with `mixtapes.planned_for` — the live
+  // session lives on the PLAN now, and the promote path stamps the take's
+  // `recorded_at` onto the claim. Forward only: already-minted mixtapes keep
+  // their frozen coordinate.)
+  const recordedAt = draft.recordedAt ?? new Date().toISOString();
   const sectorPrefix = mixtapeLogId(recordedAt, 1).slice(0, -2);
   const now = new Date().toISOString();
   const db = await getDb();
@@ -818,44 +814,24 @@ export async function listMixtapes({
 
   const rows = typedRows<MixtapeRow>(result.rows);
 
-  // Reserve the coordinate a still-draft mixtape will mint into, so the admin can
-  // copy it before recording. Only a draft needs it (a minted mixtape already
-  // carries its logId); compute the next mint sequence once, then predict per draft
-  // from its dates. Skipped entirely when there's no draft in the page.
-  const hasDraft = rows.some((row) => row.status === "draft" && !row.log_id);
-  const nextSequence = hasDraft ? await nextMixtapeSequence() : undefined;
-  const reservedFor = (row: MixtapeRow): string | undefined =>
-    row.status === "draft" && nextSequence !== undefined
-      ? predictedMixtapeLogId({
-          nextSequence,
-          plannedFor: row.planned_for,
-          recordedAt: row.recorded_at,
-        })
-      : undefined;
-
   return hydrateMembers
-    ? Promise.all(rows.map((row) => hydrateMixtape(row, reservedFor(row))))
-    : rows.map((row) => rowToMixtape(row, [], reservedFor(row)));
+    ? Promise.all(rows.map((row) => hydrateMixtape(row)))
+    : rows.map((row) => rowToMixtape(row, []));
 }
 
 /**
- * The mixtapes the subscribe-able /calendar.ics surfaces:
- *   - every `published` mixtape (a past event, dated by recorded_at), and
- *   - any mixtape with a FUTURE `planned_for` — including drafts, which is the
- *     intended teaser: an upcoming live session announced before it's recorded.
- *
- * A draft WITHOUT `planned_for` stays fully hidden (it's neither published nor
- * future-planned), so the calendar never leaks unannounced drafts. Members are
- * hydrated so the .ics description can carry the tracklist.
+ * The mixtapes the subscribe-able /calendar.ics surfaces: every `published`
+ * mixtape — a past event, dated by recorded_at. (Upcoming live sessions come
+ * from the PLAN side now — `listUpcomingPlans` in ./recordings — since
+ * `mixtapes.planned_for` retired in the plan→recording→mixtape Deploy-2.)
+ * Members are hydrated so the .ics description can carry the tracklist.
  */
-export async function listCalendarMixtapes(nowIso: string): Promise<MixtapeDTO[]> {
+export async function listCalendarMixtapes(): Promise<MixtapeDTO[]> {
   const db = await getDb();
   const result = await db.execute({
-    args: [nowIso],
     sql: `${MIXTAPE_SELECT}
           where m.status = 'published'
-             or (m.planned_for is not null and m.planned_for > ?)
-          order by coalesce(m.planned_for, m.recorded_at, m.added_at, m.created_at) asc, m.id asc
+          order by coalesce(m.recorded_at, m.added_at, m.created_at) asc, m.id asc
           limit 108`,
   });
 
@@ -884,7 +860,6 @@ const MIXTAPE_SELECT = `select
   m.added_at,
   m.recorded_at,
   m.recording_id,
-  m.planned_for,
   m.published_at,
   m.set_video_at,
   m.created_at,
@@ -892,8 +867,8 @@ const MIXTAPE_SELECT = `select
   (select count(*) from mixtape_tracks mt where mt.mixtape_id = m.id) as member_count
   from mixtapes m`;
 
-async function hydrateMixtape(row: MixtapeRow, reservedLogId?: string): Promise<MixtapeDTO> {
-  return rowToMixtape(row, await getTracksForMixtape(row.id), reservedLogId);
+async function hydrateMixtape(row: MixtapeRow): Promise<MixtapeDTO> {
+  return rowToMixtape(row, await getTracksForMixtape(row.id));
 }
 
 async function assertDraftMixtape(id: string): Promise<void> {
@@ -920,7 +895,6 @@ async function assertDraftMixtape(id: string): Promise<void> {
 function validateMixtapeInput(input: MixtapeInput): {
   durationMs?: number | null;
   note?: string | null;
-  plannedFor?: string | null;
   recordedAt?: string | null;
   setVideoAt?: string | null;
   soundcloudUrl?: string | null;
@@ -928,7 +902,6 @@ function validateMixtapeInput(input: MixtapeInput): {
   return {
     durationMs: optionalInteger(input.durationMs, "durationMs"),
     note: optionalText(input.note, noteMaxLength),
-    plannedFor: optionalIsoDate(input.plannedFor, "plannedFor"),
     recordedAt: optionalIsoDate(input.recordedAt, "recordedAt"),
     setVideoAt: optionalIsoDate(input.setVideoAt, "setVideoAt"),
     soundcloudUrl: optionalUrl(input.soundcloudUrl),
