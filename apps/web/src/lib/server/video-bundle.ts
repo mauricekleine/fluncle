@@ -11,13 +11,14 @@
 // cover.jpg is the profile-grid cover, retrieved by convention with no dedicated
 // column. composition.tsx + props.json + render.json make the source
 // re-renderable; intent.json + metrics.json carry the render-intent contract and
-// the deterministic gate report beside it. The rest are stored alongside at
-// <log-id>/<name>.
+// the deterministic gate report beside it; scene.json is the fluncle.scene/1 replay
+// manifest (the resolved shader body a live/offline host re-runs). The rest are
+// stored alongside at <log-id>/<name>.
 //
 // Everything past the two masters is OPTIONAL: the CLI only requests presigns
 // for files the bundle actually contains, so a bundle without the extra
 // variants (the notext/landscape escape hatches ship packages when present) or
-// without intent/metrics uploads exactly as before.
+// without intent/metrics/scene uploads exactly as before.
 
 export type VideoArtifact = { contentType: string; field: string; name: string };
 
@@ -39,6 +40,7 @@ export const VIDEO_ARTIFACTS: readonly VideoArtifact[] = [
   { contentType: "application/json; charset=utf-8", field: "render", name: "render.json" },
   { contentType: "application/json; charset=utf-8", field: "intent", name: "intent.json" },
   { contentType: "application/json; charset=utf-8", field: "metrics", name: "metrics.json" },
+  { contentType: "application/json; charset=utf-8", field: "scene", name: "scene.json" },
 ];
 
 export function artifactByField(field: string): VideoArtifact | undefined {
