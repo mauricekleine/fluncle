@@ -1,19 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildClipCaption } from "./clip-caption";
 
-// buildClipCaption (RFC plan→recording→mixtape §5). The three coordinate shapes:
+// buildClipCaption (RFC plan→recording→mixtape §5). The coordinate shapes:
 //   - PUBLISHED source recording → ONE line (the promoted mixtape's `.F.` Log ID);
 //   - un-promoted, window over ONE finding → one line;
 //   - un-promoted, window straddling TWO cues → a BLEND (two lines);
-//   - a legacy mixtape clip → the mixtape's Log ID.
-// The clip/recording/mixtape reads are mocked; only the finding_id→log_id lookup hits
-// the (mocked) DB, so the test drives the derivation, not libsql.
+//   - a non-finding cue → honest silence (no coordinate).
+// A clip's only owner is its recording since the plan→recording→mixtape Deploy-2
+// cutover dropped `mixtape_clips.mixtape_id`. The clip/recording reads are mocked;
+// only the finding_id→log_id lookup hits the (mocked) DB, so the test drives the
+// derivation, not libsql.
 
 type Clip = {
   caption?: string;
   id: string;
   inMs: number;
-  mixtapeId?: string;
   outMs: number;
   recordingId?: string;
 };
@@ -24,7 +25,6 @@ const state = vi.hoisted(() => ({
   clip: {} as Clip,
   // finding_id (trackId) → log_id, for published findings only.
   logIdByFinding: {} as Record<string, string>,
-  mixtapeLogId: undefined as string | undefined,
   recording: {} as Recording,
   // The recording's raw cues (with finding_id).
   recordingCues: [] as Array<{
@@ -38,7 +38,6 @@ const state = vi.hoisted(() => ({
 const getClip = vi.hoisted(() => vi.fn(async () => state.clip));
 const getRecording = vi.hoisted(() => vi.fn(async () => state.recording));
 const getRecordingCues = vi.hoisted(() => vi.fn(async () => state.recordingCues));
-const getMixtapeById = vi.hoisted(() => vi.fn(async () => ({ logId: state.mixtapeLogId })));
 
 const execute = vi.hoisted(() =>
   vi.fn(async (query: { args: unknown[]; sql: string }) => {
@@ -57,7 +56,6 @@ const execute = vi.hoisted(() =>
 
 vi.mock("./clips", () => ({ getClip }));
 vi.mock("./recordings", () => ({ getRecording, getRecordingCues }));
-vi.mock("./mixtapes", () => ({ getMixtapeById }));
 vi.mock("./db", () => ({
   getDb: async () => ({ execute }),
   typedRow: <T extends object>(rows: T[]) => rows[0],
@@ -69,11 +67,9 @@ beforeEach(() => {
   state.recording = {};
   state.recordingCues = [];
   state.logIdByFinding = {};
-  state.mixtapeLogId = undefined;
   getClip.mockClear();
   getRecording.mockClear();
   getRecordingCues.mockClear();
-  getMixtapeById.mockClear();
   execute.mockClear();
 });
 
@@ -148,13 +144,12 @@ describe("buildClipCaption", () => {
     expect(built.builtCaption).toBe("");
   });
 
-  it("legacy mixtape clip → the published mixtape's coordinate", async () => {
-    state.clip = { id: "c", inMs: 0, mixtapeId: "mix-1", outMs: 30_000 };
-    state.mixtapeLogId = "019.F.2A";
+  it("a clip with no recording links nothing (honest silence)", async () => {
+    state.clip = { id: "c", inMs: 0, outMs: 30_000 };
 
     const built = await buildClipCaption("c");
 
-    expect(built.coordinates).toEqual(["fluncle://019.F.2A"]);
-    expect(getMixtapeById).toHaveBeenCalledWith("mix-1", { includeDrafts: true });
+    expect(built.coordinates).toEqual([]);
+    expect(built.builtCaption).toBe("");
   });
 });

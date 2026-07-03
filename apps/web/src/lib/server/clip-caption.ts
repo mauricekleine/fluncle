@@ -15,7 +15,6 @@ import { type ClipDTO } from "@fluncle/contracts/orpc";
 import { type ClipTrackInput, resolveClipTracks } from "@fluncle/contracts/util";
 import { getClip } from "./clips";
 import { getDb, typedRows } from "./db";
-import { getMixtapeById } from "./mixtapes";
 import { type CueRow, getRecording, getRecordingCues } from "./recordings";
 
 /** A built clip caption: the clean caption, the coordinate line(s), and the two joined. */
@@ -105,13 +104,9 @@ async function coordinateLines(clip: ClipDTO): Promise<string[]> {
     return lines;
   }
 
-  // A legacy mixtape clip: the published mixtape's coordinate.
-  if (clip.mixtapeId) {
-    const mixtape = await getMixtapeById(clip.mixtapeId, { includeDrafts: true });
-
-    return mixtape.logId ? [`fluncle://${mixtape.logId}`] : [];
-  }
-
+  // A clip with no recording is unlinked (the legacy `mixtape_id` owner was dropped
+  // in the plan→recording→mixtape Deploy-2 cutover — every legacy clip was repointed
+  // onto its mixtape's recording first). Nothing to link.
   return [];
 }
 

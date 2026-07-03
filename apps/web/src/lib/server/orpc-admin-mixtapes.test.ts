@@ -102,8 +102,8 @@ const CLIP = {
   createdAt: "2026-06-29T00:00:00.000Z",
   id: "clip-1",
   inMs: 0,
-  mixtapeId: MIXTAPE_ID,
   outMs: 30_000,
+  recordingId: "rec-1",
   status: "pending" as const,
   updatedAt: "2026-06-29T00:00:00.000Z",
   xOffset: 240,
@@ -562,17 +562,17 @@ describe("oRPC list_clips (GET /admin/clips)", () => {
     expect((await handleOrpc(req("/admin/clips", "GET", undefined)))?.status).toBe(401);
   });
 
-  it("lets the AGENT read, passing the ?mixtapeId/?status filters through", async () => {
+  it("lets the AGENT read, passing the ?recordingId/?status filters through", async () => {
     listClips.mockResolvedValueOnce([CLIP]);
 
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(
-      req(`/admin/clips?mixtapeId=${MIXTAPE_ID}&status=pending`, "GET", AGENT_TOKEN),
+      req(`/admin/clips?recordingId=rec-1&status=pending`, "GET", AGENT_TOKEN),
     );
 
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({ clips: [CLIP], ok: true });
-    expect(listClips).toHaveBeenCalledWith({ mixtapeId: MIXTAPE_ID, status: "pending" });
+    expect(listClips).toHaveBeenCalledWith({ recordingId: "rec-1", status: "pending" });
   });
 });
 

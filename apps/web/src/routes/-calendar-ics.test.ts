@@ -1,14 +1,18 @@
-import { type MixtapeDTO } from "@fluncle/contracts";
+import { type MixtapeDTO, type RecordingDTO } from "@fluncle/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The /calendar.ics route emits a hand-rolled VCALENDAR: future-planned mixtapes
-// (incl. drafts — the teaser) as upcoming live-on-Twitch VEVENTs, published
-// mixtapes as past /log events. We mock the server query and assert the .ics
-// shape (escaping, CRLF, folding, the Twitch action, the draft-teaser surface).
+// The /calendar.ics route emits a hand-rolled VCALENDAR: future-planned PLANS
+// (a videoless recording with a future `plannedFor`) as upcoming live-on-Twitch
+// VEVENTs, published mixtapes as past /log events. We mock both server queries and
+// assert the .ics shape (escaping, CRLF, folding, the Twitch action, the plan teaser).
+// Upcoming sessions come from the PLAN side since the plan→recording→mixtape Deploy-2
+// cutover dropped `mixtapes.planned_for`.
 
-const listCalendarMixtapes = vi.hoisted(() => vi.fn<(now: string) => Promise<MixtapeDTO[]>>());
+const listCalendarMixtapes = vi.hoisted(() => vi.fn<() => Promise<MixtapeDTO[]>>());
+const listUpcomingPlans = vi.hoisted(() => vi.fn<(now: string) => Promise<RecordingDTO[]>>());
 
 vi.mock("../lib/server/mixtapes", () => ({ listCalendarMixtapes }));
+vi.mock("../lib/server/recordings", () => ({ listUpcomingPlans }));
 
 const { Route } = await import("./calendar[.]ics");
 
@@ -28,15 +32,29 @@ function mixtape(overrides: Partial<MixtapeDTO>): MixtapeDTO {
     externalUrls: {},
     memberCount: 0,
     members: [],
-    status: "draft",
+    status: "published",
     title: "Fluncle Drum & Bass Mixtape",
     type: "mixtape",
     ...overrides,
   };
 }
 
-async function render(mixtapes: MixtapeDTO[]): Promise<string> {
+function plan(overrides: Partial<RecordingDTO>): RecordingDTO {
+  return {
+    createdAt: "2026-06-18T00:00:00.000Z",
+    hasVideo: false,
+    id: "plan-1",
+    title: "liquid-nebula-roller",
+    tracklist: [],
+    updatedAt: "2026-06-18T00:00:00.000Z",
+    version: 1,
+    ...overrides,
+  };
+}
+
+async function render(mixtapes: MixtapeDTO[], plans: RecordingDTO[] = []): Promise<string> {
   listCalendarMixtapes.mockResolvedValue(mixtapes);
+  listUpcomingPlans.mockResolvedValue(plans);
   const response = await getHandler()({});
   return response.text();
 }
@@ -47,10 +65,12 @@ const PAST = "2026-06-18T00:00:00.000Z";
 describe("/calendar.ics", () => {
   beforeEach(() => {
     listCalendarMixtapes.mockReset();
+    listUpcomingPlans.mockReset();
   });
 
   it("serves a text/calendar VCALENDAR with CRLF line endings", async () => {
     listCalendarMixtapes.mockResolvedValue([]);
+    listUpcomingPlans.mockResolvedValue([]);
     const response = await getHandler()({});
 
     expect(response.headers.get("Content-Type")).toBe("text/calendar; charset=utf-8");
@@ -64,32 +84,35 @@ describe("/calendar.ics", () => {
     expect(body.split("\n").every((line) => line === "" || line.endsWith("\r"))).toBe(true);
   });
 
-  it("emits a future-planned draft as an upcoming live-on-Twitch event", async () => {
-    const body = await render([
-      mixtape({
-        id: "draft-1",
-        members: [
-          { artists: ["Artist A"], durationMs: 1, title: "Tune A", trackId: "t1" } as never,
-          { artists: ["Artist B"], durationMs: 1, title: "Tune B", trackId: "t2" } as never,
-        ],
-        plannedFor: FUTURE,
-        status: "draft",
-        title: "Fluncle Drum & Bass Mixtape",
-      }),
-    ]);
+  it("emits a future-planned PLAN as an upcoming live-on-Twitch event", async () => {
+    const body = await render(
+      [],
+      [
+        plan({
+          id: "plan-1",
+          plannedFor: FUTURE,
+          tracklist: [
+            { artists: ["Artist A"], id: "c1", title: "Tune A" },
+            { artists: ["Artist B"], id: "c2", title: "Tune B" },
+          ],
+        }),
+      ],
+    );
 
     expect(body).toContain("BEGIN:VEVENT");
     expect(body).toContain("DTSTART:20990102T200000Z");
-    expect(body).toContain("SUMMARY:Fluncle Drum & Bass Mixtape");
+    // The plan's internal handle never appears — the public SUMMARY is quiet.
+    expect(body).toContain("SUMMARY:Fluncle live");
+    expect(body).not.toContain("liquid-nebula-roller");
     // The dated action is "tune in live on Twitch": URL + LOCATION are the channel.
     expect(body).toContain("URL:https://www.twitch.tv/flunclelive");
     expect(body).toContain("LOCATION:https://www.twitch.tv/flunclelive");
-    // The teaser exposes the tracklist (folded lines re-joined for the assertion).
+    // The teaser exposes the queued tracklist (folded lines re-joined for the assertion).
     const unfolded = body.replaceAll("\r\n ", "");
     expect(unfolded).toContain("Artist A — Tune A");
     expect(unfolded).toContain("Artist B — Tune B");
-    // A future draft has a stable live UID.
-    expect(body).toContain("UID:live-draft-1@fluncle.com");
+    // A future plan has a stable live UID keyed off its recording id.
+    expect(body).toContain("UID:live-plan-1@fluncle.com");
   });
 
   it("emits a published mixtape as a past event pointing at its /log home", async () => {
@@ -150,21 +173,11 @@ describe("/calendar.ics", () => {
     expect(body.replaceAll("\r\n ", "")).toContain(longNote);
   });
 
-  it("treats a planned date that is already past as a non-upcoming event", async () => {
-    // A published mixtape whose `plannedFor` is in the past is NOT upcoming; it
-    // falls through to the published past-event branch (dated by recordedAt).
+  it("omits a published mixtape with no recorded date (no datable anchor)", async () => {
     const body = await render([
-      mixtape({
-        id: "pub-4",
-        logId: "020.F.1D",
-        plannedFor: PAST,
-        recordedAt: PAST,
-        status: "published",
-        title: "Fluncle Drum & Bass Mixtape #2 | 020.F.1D",
-      }),
+      mixtape({ id: "pub-4", logId: "020.F.1D", recordedAt: undefined, status: "published" }),
     ]);
 
-    expect(body).toContain("UID:mixtape-020.F.1D@fluncle.com");
-    expect(body).not.toContain("URL:https://www.twitch.tv/flunclelive");
+    expect(body).not.toContain("BEGIN:VEVENT");
   });
 });

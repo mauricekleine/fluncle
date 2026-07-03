@@ -139,7 +139,6 @@ function seedRecording(overrides: Row = {}): void {
     r2_key: "recordings/rec-1/set.mp4",
     recorded_at: "2026-06-30T00:00:00.000Z",
     title: "Warehouse set",
-    tracklist_json: JSON.stringify([{ artists: ["A"], id: "cue-1", startMs: 0, title: "T" }]),
     updated_at: "2026-06-30T00:00:00.000Z",
     ...overrides,
   };
@@ -266,31 +265,26 @@ describe("promoteRecording", () => {
     });
   });
 
-  it("falls back to tracklist_json resolved by NORMALIZED text when no cues exist (dual-read)", async () => {
-    seedRecording({
-      tracklist_json: JSON.stringify([
-        { artists: ["Dawn Wall"], id: "random-uuid", startMs: 45_000, title: "I See You" },
-      ]),
-    });
-    state.cues = [];
-    state.catalogue = [
-      { artists_json: JSON.stringify(["Dawn Wall"]), title: "I See You", track_id: "t2" },
-    ];
-
-    await promoteRecording("rec-1");
-
-    // Resolved by title+artist — NEVER by the random cue id (the old trap).
-    expect(setMixtapeMembers).toHaveBeenCalledWith(expect.any(String), {
-      members: [{ ref: "t2", startMs: 45_000 }],
-    });
-  });
-
   it("refuses to mint a recording whose cues resolve to no finding (BEFORE claiming a link)", async () => {
-    seedRecording({ tracklist_json: JSON.stringify([]) });
+    // No cues at all — the cutover removed the legacy tracklist_json fallback, so a
+    // recording with no finding-linked cue resolves to zero members.
+    seedRecording();
     state.cues = [];
 
     await expect(promoteRecording("rec-1")).rejects.toThrow(/no Fluncle finding|resolvable/i);
     // Errors before any coordinate is at risk — no link claimed, no mint.
+    expect(state.calls).not.toContain("claim");
+    expect(publishMixtape).not.toHaveBeenCalled();
+  });
+
+  it("refuses to mint a recording whose only cue is a non-finding (no finding_id)", async () => {
+    seedRecording();
+    // A played-but-not-canon cue — resolves to no finding, never guessed.
+    state.cues = [
+      { artists_text: "B", finding_id: null, id: "c1", position: 1, start_ms: 0, title_text: "U" },
+    ];
+
+    await expect(promoteRecording("rec-1")).rejects.toThrow(/no Fluncle finding|resolvable/i);
     expect(state.calls).not.toContain("claim");
     expect(publishMixtape).not.toHaveBeenCalled();
   });

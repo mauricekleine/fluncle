@@ -615,11 +615,9 @@ export const mixtapes = sqliteTable(
     id: text("id").primaryKey(),
     logId: text("log_id").unique(),
     note: text("note"),
-    // The scheduled date/time (ISO) of an upcoming live session this mixtape is the
-    // draft of — distinct from `recorded_at` (which is what publish derives the Log
-    // ID sector from). A future `planned_for` surfaces the mixtape as an upcoming
-    // event in the subscribe-able /calendar.ics, even while it's still a draft.
-    plannedFor: text("planned_for"),
+    // `planned_for` moved to the PLAN (`recordings.planned_for`) in the
+    // plan→recording→mixtape Deploy-2 cutover (RFC §6, D-plannedFor): upcoming live
+    // sessions are plans now, and `/calendar.ics` reads them there.
     publishedAt: text("published_at"),
     recordedAt: text("recorded_at"),
     // The `recordings` row this mixtape was PROMOTED from (RFC recording-primitive,
@@ -723,7 +721,7 @@ export const pushReceipts = sqliteTable(
 // touches these rows. Deploy-1 additions (all nullable, additive):
 //   - `finding_id` — the eventual rename of the NOT-NULL `track_id` (the finding
 //     link). The folded `db:backfill` fills it (`= track_id`) on every deploy;
-//     Deploy-2 repoints readers and drops `track_id`. Nullable so a published
+//     a later slice repoints readers and drops `track_id`. Nullable so a published
 //     mixtape can later carry a NON-finding live-added track as a plain row.
 //   - `artists_text`/`title_text` — the snapshot for those non-finding rows.
 //     Finding-backed rows keep NULL snapshots (the tracks JOIN stays the truth).
@@ -746,9 +744,9 @@ export const mixtapeTracks = sqliteTable(
   ],
 );
 
-// A mixtape CLIP — a lightweight 9:16 derivative cut from a mixtape's set video
+// A CLIP — a lightweight 9:16 derivative cut from a recording's set video
 // (the Fluncle Studio drip-feed). One set yields
-// MANY clips (a backlog to drip-feed), so this is one-to-many via `mixtape_id`.
+// MANY clips (a backlog to drip-feed), so this is one-to-many via `recording_id`.
 // NOT a spine object: a clip carries NO Log ID — the spine namespace is
 // scarce/collectible, and a clip is a re-cuttable trailer, not a checkpoint.
 // `in_ms`/`out_ms` are the cut window into the set; `x_offset` is the 9:16 framing
@@ -765,20 +763,13 @@ export const mixtapeClips = sqliteTable(
     createdAt: text("created_at").notNull(),
     id: text("id").primaryKey(),
     inMs: integer("in_ms").notNull(),
-    // Plain text id, no declared FK — matching the sibling `mixtape_tracks` /
-    // `mixtape_social_posts` (this schema declares no SQLite/libSQL FKs anywhere).
-    // NULLABLE since Deploy-1 of the plan→recording→mixtape RFC: a recording clip
-    // carries `recording_id` and a NULL `mixtape_id` (the old `''` sentinel is
-    // retired — the folded `db:backfill` normalizes legacy rows to one owner).
-    mixtapeId: text("mixtape_id"),
     outMs: integer("out_ms").notNull(),
-    // The `recordings` row this clip was cut from (RFC recording-primitive,
-    // Design B). Nullable and ADDED BESIDE `mixtape_id` (never a rename): a clip
-    // cut from an un-promoted recording carries `recording_id` and NO
-    // `mixtape_id`; a legacy clip cut from a published mixtape carries
-    // `mixtape_id` and NO `recording_id`. The cut prefers `recording_id`, falling
-    // back to `mixtape_id → mixtape → logId`. `mixtape_id` is dropped only in a
-    // LATER migration, after prod is confirmed backfilled. Plain text id, no FK.
+    // The `recordings` row this clip was cut from — a clip's ONE owner since the
+    // plan→recording→mixtape Deploy-2 cutover dropped the legacy `mixtape_id`
+    // (every legacy mixtape-owned clip was repointed onto its mixtape's recording
+    // by the folded `db:backfill` first). Still nullable at the DDL level (the
+    // column predates the cutover); `createClip` always sets it. Plain text id,
+    // no declared FK — matching the sibling tables (this schema declares none).
     recordingId: text("recording_id"),
     status: text("status", { enum: ["pending", "done"] })
       .notNull()
@@ -786,10 +777,7 @@ export const mixtapeClips = sqliteTable(
     updatedAt: text("updated_at").notNull(),
     xOffset: integer("x_offset").notNull(),
   },
-  (table) => [
-    index("mixtape_clips_mixtape_id_idx").on(table.mixtapeId),
-    index("mixtape_clips_recording_id_idx").on(table.recordingId),
-  ],
+  (table) => [index("mixtape_clips_recording_id_idx").on(table.recordingId)],
 );
 
 // A RECORDING — a captured DJ set that is NOT (yet) a published mixtape (RFC
@@ -818,8 +806,8 @@ export const recordings = sqliteTable(
     // orphan take (e.g. the rolling set). Plain text id, no declared FK.
     parentId: text("parent_id"),
     // The scheduled date/time (ISO) of the upcoming live session this PLAN is
-    // for — the plan-side home of `mixtapes.planned_for` (D-plannedFor: moves to
-    // the plan; `/calendar.ics` + `getUpcoming` repoint here in Deploy-2).
+    // for — the plan-side home of the retired `mixtapes.planned_for`
+    // (D-plannedFor). `/calendar.ics` reads upcoming sessions from here.
     plannedFor: text("planned_for"),
     // The R2 object key the recording OWNS (unlike a mixtape, which derives its
     // key from its logId). Standalone recordings: `recordings/<id>/set.mp4` in
@@ -828,12 +816,9 @@ export const recordings = sqliteTable(
     r2Key: text("r2_key"),
     recordedAt: text("recorded_at"),
     title: text("title").notNull(),
-    // Optional cues, a JSON array of `{ id, artists, title, startMs }` — `id` is a
-    // stable cue ref, `artists` a string[]. LEGACY under the plan→recording→mixtape
-    // RFC: `recording_cues` is the forward home (the folded `db:backfill` migrates
-    // this column's rows there); readers dual-read until the Deploy-2 cutover
-    // drops it. Nullable.
-    tracklistJson: text("tracklist_json"),
+    // The legacy `tracklist_json` column was dropped in the plan→recording→mixtape
+    // Deploy-2 cutover: `recording_cues` is a recording's ONE cue home (the folded
+    // `db:backfill` migrated every legacy row there first).
     updatedAt: text("updated_at").notNull(),
     // A human display label ("v2") for a take among its plan's takes — stable and
     // explicit rather than derived from created_at order (D-version). Assigned by

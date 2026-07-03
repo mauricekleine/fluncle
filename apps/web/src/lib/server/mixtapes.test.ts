@@ -95,16 +95,13 @@ describe("publishMixtape — mint into distributing", () => {
     expect(minted.logId).toBe("020.F.1A");
   });
 
-  it("mints off the live session — plannedFor wins over recordedAt (the committed record day)", async () => {
-    seedDraft({
-      planned_for: "2026-07-01T20:00:00.000Z",
-      recorded_at: "2026-06-18T20:00:00.000Z",
-    });
+  it("mints off the recorded date (the sector day)", async () => {
+    seedDraft({ recorded_at: "2026-07-01T20:00:00.000Z" });
 
     const minted = await publishMixtape("draft-id");
 
-    // The sector is 2026-07-01 (the live session), NOT 2026-06-18 — the same
-    // resolution predictedMixtapeLogId reserves, so the minted ID equals the shown one.
+    // The sector is 2026-07-01, the recorded date. (The old plannedFor-wins
+    // resolution retired with `mixtapes.planned_for` in the Deploy-2 cutover.)
     expect(minted.logId).toBe("032.F.1A");
   });
 

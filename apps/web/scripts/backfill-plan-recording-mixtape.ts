@@ -7,32 +7,30 @@
  * guarded (`where not exists` / null-guards / convergent updates), so re-running on
  * every deploy is a no-op once done.
  *
- * The steps, in dependency order:
+ * The steps, in dependency order. The plan→recording→mixtape Deploy-2 cutover
+ * dropped `recordings.tracklist_json`, `mixtapes.planned_for`, and
+ * `mixtape_clips.mixtape_id`, so the legacy-column steps (the old tracklist_json
+ * migration + the clip-owner normalization) retired — the LIVE Deploy-1 backfill
+ * already migrated every prod row before those columns were dropped. What remains
+ * runs on every deploy (all idempotent, guarded):
  *   1. PLANS — every draft mixtape becomes a plan-recording (`r2_key = NULL`,
  *      `planned_for` + `note` copied over), linked back via `mixtapes.recording_id`
- *      (the idempotency key AND Deploy-2's draft→plan mapping). While the draft row
- *      survives (until the Deploy-2 drain) it stays the editing surface, so each run
- *      RE-SYNCS the plan's `planned_for`/`note`/`title` from its draft (convergent).
+ *      (the idempotency key AND draft→plan mapping). Drafts stay the editing
+ *      surface (they are NOT retired in this cutover), so each run RE-SYNCS the
+ *      plan's `planned_for`/`note` from its draft (convergent); the `title` handle
+ *      is minted once and never re-derived.
  *   2. PLAN CUES — each draft's `mixtape_tracks` copy into `recording_cues`
  *      (`finding_id = track_id` — exact links; snapshot from the tracks join).
  *   3. TAKES — a published/distributing mixtape lacking a `recording_id` gets a
- *      synthesized take-recording pointing at its EXISTING `<logId>/set.mp4` (the
- *      019 backfill generalized — mixtape #1 already links `recording_id`, so it is
- *      REUSED, never re-synthesized). Legacy mixtape-only clips are repointed.
+ *      synthesized take-recording pointing at its EXISTING `<logId>/set.mp4`
+ *      (mixtape #1 already links `recording_id`, so it is REUSED, never
+ *      re-synthesized).
  *   4. TAKE CUES — a published/distributing mixtape's recording with ZERO cues is
- *      seeded from `mixtape_tracks` (exact `track_id`), NEVER from `tracklist_json`
- *      (the 019 backfill discarded `track_id` when it built that JSON).
- *   5. LEGACY CUES — any remaining recording with a `tracklist_json` and ZERO cues
- *      (e.g. the rolling set) has its cues migrated, resolving `finding_id` by
- *      NORMALIZED title+artist (the key_backfill matcher, ported to
- *      `src/lib/server/track-match.ts`) — never by `cue.id` (a random UUID, the
- *      live `no_resolvable_members` trap). Unresolved → NULL + snapshot.
- *   6. FINDING LINKS — `mixtape_tracks.finding_id` (the eventual rename of
+ *      seeded from `mixtape_tracks` (exact `track_id`).
+ *   5. FINDING LINKS — `mixtape_tracks.finding_id` (the eventual rename of
  *      `track_id`) is filled `= track_id` wherever NULL. Finding-backed rows keep
- *      NULL snapshots (the tracks JOIN stays their truth).
- *   7. CLIP OWNERS — a clip carrying BOTH `mixtape_id` and `recording_id` (the 019
- *      backfill linked without unlinking) keeps only `recording_id`; the legacy
- *      `''` mixtape_id sentinel is cleared to NULL.
+ *      NULL snapshots (the tracks JOIN stays their truth). Self-heals rows the
+ *      still-live draft `setMixtapeMembers` path writes between deploys.
  *
  * Runs wherever `db:migrate` runs: the Cloudflare deploy environment provides
  * `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN`; locally they come from `.dev.vars`
@@ -44,22 +42,14 @@ import { config } from "dotenv";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  buildTrackMatchIndex,
-  type CatalogueTrack,
-  resolveTrackByText,
-} from "../src/lib/server/track-match";
 
 export type PlanRecordingBackfillResult = {
-  clipsNormalized: number;
   planCuesInserted: number;
   plansCreated: number;
   plansSynced: number;
   takeCuesInserted: number;
   takesSynthesized: number;
   trackFindingIdsFilled: number;
-  tracklistCuesInserted: number;
-  tracklistCuesUnresolved: number;
 };
 
 /** Coerce a libSQL scalar cell to text — these columns are TEXT, always strings. */
@@ -88,59 +78,6 @@ function parseArtists(raw: unknown): string[] {
   } catch {
     return [];
   }
-}
-
-/** A `tracklist_json` cue, defensively parsed (the recordings.ts parse discipline). */
-type LegacyCue = {
-  artists: string[];
-  id: string | null;
-  startMs: number | null;
-  title: string;
-};
-
-function parseTracklistJson(json: unknown): LegacyCue[] {
-  if (typeof json !== "string" || !json) {
-    return [];
-  }
-
-  let parsed: unknown;
-
-  try {
-    parsed = JSON.parse(json);
-  } catch {
-    return [];
-  }
-
-  if (!Array.isArray(parsed)) {
-    return [];
-  }
-
-  const cues: LegacyCue[] = [];
-
-  for (const raw of parsed) {
-    if (!raw || typeof raw !== "object") {
-      continue;
-    }
-
-    const entry = raw as Record<string, unknown>;
-    const title = typeof entry.title === "string" ? entry.title : "";
-    const artists = Array.isArray(entry.artists)
-      ? entry.artists.filter((value): value is string => typeof value === "string")
-      : [];
-    const startMs =
-      typeof entry.startMs === "number" && Number.isInteger(entry.startMs) && entry.startMs >= 0
-        ? entry.startMs
-        : null;
-
-    cues.push({
-      artists,
-      id: typeof entry.id === "string" && entry.id ? entry.id : null,
-      startMs,
-      title,
-    });
-  }
-
-  return cues;
 }
 
 /** Insert one cue row, guarded on `(recording_id, position)` not existing yet. */
@@ -253,20 +190,20 @@ export async function backfillPlanRecordingMixtape(
 ): Promise<PlanRecordingBackfillResult> {
   const now = new Date().toISOString();
   const result: PlanRecordingBackfillResult = {
-    clipsNormalized: 0,
     planCuesInserted: 0,
     plansCreated: 0,
     plansSynced: 0,
     takeCuesInserted: 0,
     takesSynthesized: 0,
     trackFindingIdsFilled: 0,
-    tracklistCuesInserted: 0,
-    tracklistCuesUnresolved: 0,
   };
 
   // ── 1. PLANS — drafts without a linked recording become plan-recordings.
+  // (`planned_for` is NOT copied here — the Deploy-2 cutover dropped
+  // `mixtapes.planned_for`; the LIVE Deploy-1 backfill already carried each draft's
+  // live-session date onto its plan, and the plan editor owns it from here on.)
   const unlinkedDrafts = await client.execute({
-    sql: `select id, title, note, planned_for, created_at
+    sql: `select id, title, note, created_at
           from mixtapes where status = 'draft' and recording_id is null
           order by created_at`,
   });
@@ -282,10 +219,10 @@ export async function backfillPlanRecordingMixtape(
     await client.batch(
       [
         {
-          args: [planId, title, draft.note ?? null, draft.planned_for ?? null, now, now],
+          args: [planId, title, draft.note ?? null, now, now],
           sql: `insert into recordings
-                  (id, title, note, planned_for, r2_key, parent_id, version, created_at, updated_at)
-                values (?, ?, ?, ?, null, null, 1, ?, ?)`,
+                  (id, title, note, r2_key, parent_id, version, created_at, updated_at)
+                values (?, ?, ?, null, null, 1, ?, ?)`,
         },
         {
           args: [planId, draftId],
@@ -297,20 +234,19 @@ export async function backfillPlanRecordingMixtape(
     result.plansCreated += 1;
   }
 
-  // While the draft rows survive (Deploy-2 drains them) they stay the editing
-  // surface — converge the plan's authored fields onto them each run. The handle
-  // (`title`) is minted ONCE and never re-derived, so only `note`/`planned_for`
-  // sync here. `is not` is SQLite's null-safe comparison, so an unchanged run
-  // updates zero rows.
+  // While the draft rows survive (drafts are NOT retired in this cutover) they stay
+  // the "Add to mixtape" editing surface — converge the plan's `note` onto them each
+  // run. The handle (`title`) is minted ONCE and never re-derived; `planned_for` now
+  // lives only on the plan (the dropped `mixtapes.planned_for` can't be synced). `is
+  // not` is SQLite's null-safe comparison, so an unchanged run updates zero rows.
   const synced = await client.execute({
     args: [now],
     sql: `update recordings set
             note = m.note,
-            planned_for = m.planned_for,
             updated_at = ?
           from mixtapes m
           where m.status = 'draft' and m.recording_id = recordings.id
-            and (recordings.note is not m.note or recordings.planned_for is not m.planned_for)`,
+            and recordings.note is not m.note`,
   });
 
   result.plansSynced = synced.rowsAffected;
@@ -352,8 +288,10 @@ export async function backfillPlanRecordingMixtape(
 
   // ── 3. TAKES — synthesize a take-recording for any published/distributing
   // mixtape lacking one (mixtape #1 already links its recording — reused as-is,
-  // NEVER re-synthesized). Points at the EXISTING `<logId>/set.mp4`; repoints
-  // legacy mixtape-only clips, exactly like the 019 backfill.
+  // NEVER re-synthesized). Points at the EXISTING `<logId>/set.mp4`. (The legacy
+  // mixtape-clip repoint that lived here retired with the `mixtape_clips.mixtape_id`
+  // column in the Deploy-2 cutover — every legacy clip was already repointed onto
+  // its recording by the LIVE Deploy-1 backfill.)
   const unlinkedPublished = await client.execute({
     sql: `select id, log_id, title, recorded_at, duration_ms from mixtapes
           where status in ('published', 'distributing') and recording_id is null`,
@@ -391,11 +329,6 @@ export async function backfillPlanRecordingMixtape(
         {
           args: [recordingId, mixtapeId],
           sql: `update mixtapes set recording_id = ? where id = ? and recording_id is null`,
-        },
-        {
-          args: [recordingId, mixtapeId],
-          sql: `update mixtape_clips set recording_id = ?
-                where mixtape_id = ? and recording_id is null`,
         },
       ],
       "write",
@@ -439,97 +372,14 @@ export async function backfillPlanRecordingMixtape(
     }
   }
 
-  // ── 5. LEGACY CUES — any remaining recording with a tracklist_json and ZERO
-  // cues (e.g. a hand-authored standalone recording). `finding_id` resolves by
-  // NORMALIZED title+artist against the findings catalogue — never by `cue.id`
-  // (a random UUID, the live `no_resolvable_members` trap). Unresolved → NULL +
-  // the snapshot text (honest silence over a wrong link).
-  const withTracklist = await client.execute({
-    sql: `select id, tracklist_json from recordings
-          where tracklist_json is not null and tracklist_json != '' and tracklist_json != '[]'`,
-  });
-
-  // The catalogue index is built lazily — only when a legacy tracklist needs it.
-  let matchIndex: Map<string, string | null> | null = null;
-
-  for (const recording of withTracklist.rows) {
-    const recordingId = asText(recording.id);
-
-    if ((await cueCount(client, recordingId)) > 0) {
-      continue;
-    }
-
-    const cues = parseTracklistJson(recording.tracklist_json);
-
-    if (cues.length === 0) {
-      continue;
-    }
-
-    if (!matchIndex) {
-      const catalogue = await client.execute({
-        sql: `select track_id, title, artists_json from tracks`,
-      });
-
-      matchIndex = buildTrackMatchIndex(
-        catalogue.rows.map(
-          (row): CatalogueTrack => ({
-            artists: parseArtists(row.artists_json),
-            title: asText(row.title),
-            trackId: asText(row.track_id),
-          }),
-        ),
-      );
-    }
-
-    const usedIds = new Set<string>();
-
-    for (const [index, cue] of cues.entries()) {
-      const findingId = resolveTrackByText(matchIndex, cue.artists, cue.title);
-      // Reuse the legacy cue's stable id (the clip overlay keys off it) unless
-      // it is missing or duplicated within this tracklist.
-      const cueId = cue.id && !usedIds.has(cue.id) ? cue.id : randomUUID();
-
-      usedIds.add(cueId);
-
-      const insert = await client.execute(
-        insertCueStatement({
-          artistsText: cue.artists.length > 0 ? cue.artists.join(", ") : null,
-          findingId,
-          id: cueId,
-          now,
-          position: index + 1,
-          recordingId,
-          startMs: cue.startMs,
-          titleText: cue.title || null,
-        }),
-      );
-
-      result.tracklistCuesInserted += insert.rowsAffected;
-
-      if (insert.rowsAffected > 0 && findingId === null) {
-        result.tracklistCuesUnresolved += 1;
-      }
-    }
-  }
-
-  // ── 6. FINDING LINKS — fill `mixtape_tracks.finding_id` (the eventual rename
-  // of `track_id`). Also self-heals rows written by the not-yet-cutover
-  // `setMixtapeMembers` between deploys.
+  // ── 5. FINDING LINKS — fill `mixtape_tracks.finding_id` (the eventual rename
+  // of `track_id`). Also self-heals rows written by `setMixtapeMembers` (the draft
+  // member path, still live: drafts are not retired in this cutover).
   const filled = await client.execute({
     sql: `update mixtape_tracks set finding_id = track_id where finding_id is null`,
   });
 
   result.trackFindingIdsFilled = filled.rowsAffected;
-
-  // ── 7. CLIP OWNERS — one owner per clip: recording_id wins where both are set
-  // (the 019 backfill linked without unlinking), and the legacy `''` sentinel
-  // clears to NULL now the column is nullable.
-  const normalized = await client.execute({
-    sql: `update mixtape_clips set mixtape_id = null
-          where (recording_id is not null and mixtape_id is not null) or mixtape_id = ''`,
-  });
-
-  result.clipsNormalized = normalized.rowsAffected;
 
   return result;
 }
@@ -556,9 +406,7 @@ async function main(): Promise<void> {
     `plan→recording→mixtape backfill: ${result.plansCreated} plans created, ` +
       `${result.plansSynced} plans synced, ${result.planCuesInserted} plan cues, ` +
       `${result.takesSynthesized} takes synthesized, ${result.takeCuesInserted} take cues, ` +
-      `${result.tracklistCuesInserted} legacy cues (${result.tracklistCuesUnresolved} unresolved), ` +
-      `${result.trackFindingIdsFilled} finding links filled, ` +
-      `${result.clipsNormalized} clips normalized.`,
+      `${result.trackFindingIdsFilled} finding links filled.`,
   );
 }
 

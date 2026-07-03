@@ -121,7 +121,6 @@ export const MixtapeDTOSchema = z
     memberCount: z.number(),
     members: z.array(MixtapeMemberSchema),
     note: z.string().optional(),
-    plannedFor: z.string().optional(),
     publishedAt: z.string().optional(),
     recordedAt: z.string().optional(),
     // The RECORDING this mixtape was promoted from (RFC recording-primitive, Design B) —
@@ -130,11 +129,6 @@ export const MixtapeDTOSchema = z
     // existed. The `/admin/mixtapes` "Clip this set" entrypoint links to the recording's
     // Studio (`/admin/studio/<recordingId>`) when present.
     recordingId: z.string().optional(),
-    // The coordinate a DRAFT will mint into — reserved from its live session (or
-    // recorded date) so the operator can name their Beatport playlist / USB folders
-    // with it before recording. Present only on a draft with a date basis; a minted
-    // mixtape carries the real `logId` instead. Kept in lock-step with the mint.
-    reservedLogId: z.string().optional(),
     sequenceNumber: z.number().optional(),
     // Set (ISO) once the full set video is uploaded to R2 — the `/log` page then
     // shows the branded scrubber player. Absent ⇒ no set video yet.
@@ -265,9 +259,9 @@ export const EditionDTOSchema = z
   .meta({ id: "EditionDTO" });
 
 /**
- * A clip — a lightweight 9:16 derivative cut from a mixtape's set video
+ * A clip — a lightweight 9:16 derivative cut from a recording's set video
  * (`mixtape_clips`; `ClipDTO` below). NOT a spine
- * object: it carries no Log ID. Many per mixtape (the drip-feed backlog). This is the
+ * object: it carries no Log ID. Many per set (the drip-feed backlog). This is the
  * wire shape the clip ops emit and the editor / clip library read. `xOffset` is the
  * 9:16 framing offset; `status` is the cut-queue + library-filter state.
  */
@@ -277,14 +271,11 @@ export const ClipDTOSchema = z
     createdAt: z.string(),
     id: z.string(),
     inMs: z.number(),
-    // The mixtape a LEGACY clip was cut from (its published set). Under the RFC
-    // recording-primitive (Design B) a NEW clip is cut from a `recording` instead, so
-    // this is now OPTIONAL: a recording clip carries `recordingId` and no `mixtapeId`.
-    mixtapeId: z.string().optional(),
     outMs: z.number(),
-    // The `recording` a clip was cut from (the RFC recording-primitive path). Set on
-    // every new clip; absent on a legacy mixtape clip. The cut prefers this over
-    // `mixtapeId`.
+    // The `recording` a clip was cut from — a clip's ONE owner since the
+    // plan→recording→mixtape Deploy-2 cutover dropped the legacy `mixtapeId`
+    // (every legacy mixtape clip was repointed onto its mixtape's recording first).
+    // Optional at the wire level (the column is nullable); `createClip` always sets it.
     recordingId: z.string().optional(),
     status: z.enum(["done", "pending"]),
     updatedAt: z.string(),
@@ -296,8 +287,8 @@ export const ClipDTOSchema = z
 export type ClipDTO = z.infer<typeof ClipDTOSchema>;
 
 /**
- * A recording tracklist cue (`recordings.tracklist_json`; RFC recording-primitive,
- * Design B). `id` is a stable cue ref; `artists`/`title` feed the clip overlay's
+ * A recording tracklist cue (`recording_cues`; RFC plan→recording→mixtape). `id` is
+ * a stable cue ref; `artists`/`title` feed the clip overlay's
  * changing on-screen Track-ID (`resolveClipTracks`) with no re-splitting, and seed
  * `mixtape_tracks` on promote. `startMs` is the cue's start on the set timeline.
  */

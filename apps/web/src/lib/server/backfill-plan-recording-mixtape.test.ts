@@ -4,16 +4,18 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { backfillPlanRecordingMixtape } from "../../../scripts/backfill-plan-recording-mixtape";
 import { createIntegrationDb, rowCount, seedTrack } from "./integration-db";
 
-// The plan→recording→mixtape Deploy-1 backfill runs against the REAL migrated
-// schema via the in-memory libSQL harness (integration-db applies every generated
-// Drizzle migration, including 0043/0044). Because `db:backfill` runs on EVERY
-// deploy, the load-bearing cases are the idempotency guarantee (a second run is a
-// byte-identical no-op) and the S3/S4/S5 data-loss guards from the RFC:
-//   - mixtape #1's existing recording is REUSED, never re-synthesized, and its
-//     cues seed from `mixtape_tracks` (exact track_id), NOT from tracklist_json;
-//   - legacy tracklist_json cues resolve findings by NORMALIZED title+artist,
-//     never by cue.id; unresolved stays NULL + snapshot;
-//   - both-owned / sentinel clips normalize to a single owner.
+// The plan→recording→mixtape backfill runs against the REAL migrated schema via the
+// in-memory libSQL harness (integration-db applies every generated Drizzle migration,
+// including 0045 — the Deploy-2 cutover that dropped `recordings.tracklist_json`,
+// `mixtapes.planned_for`, and `mixtape_clips.mixtape_id`). The legacy-column steps
+// (the tracklist_json migration + the clip-owner normalization) retired with those
+// columns — the LIVE Deploy-1 backfill migrated every prod row first. What remains,
+// and is under test here, runs on EVERY deploy (all idempotent, guarded):
+//   - drafts → plan-recordings + their cues from `mixtape_tracks` (exact track_id);
+//   - mixtape #1's existing recording is REUSED, never re-synthesized; an unlinked
+//     published/distributing mixtape gets a synthesized take + cues from its tracks;
+//   - `mixtape_tracks.finding_id` fills `= track_id`;
+//   - a second run is a byte-identical no-op.
 
 const NOW = "2026-06-18T18:27:21.000Z";
 
@@ -26,10 +28,9 @@ const REC_019 = "rec-019";
 const M2 = "mixtape-2";
 const M2_LOG = "020.F.1B";
 
-// A draft (→ plan) and the standalone recordings.
+// A draft (→ plan) and the standalone rolling-set recording.
 const DRAFT = "mixtape-draft";
-const REC_ROLLING = "rec-rolling"; // the empty rolling set (no tracklist_json)
-const REC_HAND = "rec-hand"; // hand-authored tracklist_json, resolved by text
+const REC_ROLLING = "rec-rolling"; // the empty rolling set (a cue-less standalone)
 
 async function insertMixtape(
   db: Client,
@@ -37,7 +38,6 @@ async function insertMixtape(
     id: string;
     logId?: string | null;
     note?: string | null;
-    plannedFor?: string | null;
     recordingId?: string | null;
     status: string;
     title?: string;
@@ -50,14 +50,13 @@ async function insertMixtape(
       row.title ?? "",
       row.status,
       row.note ?? null,
-      row.plannedFor ?? null,
       row.recordingId ?? null,
       NOW,
       NOW,
     ],
     sql: `insert into mixtapes
-      (id, log_id, title, status, note, planned_for, recording_id, recorded_at, duration_ms, created_at, updated_at)
-      values (?, ?, ?, ?, ?, ?, ?, '2026-06-01T00:00:00.000Z', 4304790, ?, ?)`,
+      (id, log_id, title, status, note, recording_id, recorded_at, duration_ms, created_at, updated_at)
+      values (?, ?, ?, ?, ?, ?, '2026-06-01T00:00:00.000Z', 4304790, ?, ?)`,
   });
 }
 
@@ -76,28 +75,25 @@ async function insertMember(
 
 async function insertRecording(
   db: Client,
-  row: { id: string; r2Key: string | null; title: string; tracklistJson?: string | null },
+  row: { id: string; r2Key: string | null; title: string },
 ): Promise<void> {
   await db.execute({
-    args: [row.id, row.title, row.r2Key, row.tracklistJson ?? null, NOW, NOW],
-    sql: `insert into recordings (id, title, r2_key, tracklist_json, created_at, updated_at)
-          values (?, ?, ?, ?, ?, ?)`,
+    args: [row.id, row.title, row.r2Key, NOW, NOW],
+    sql: `insert into recordings (id, title, r2_key, created_at, updated_at)
+          values (?, ?, ?, ?, ?)`,
   });
 }
 
-async function insertClip(
-  db: Client,
-  row: { id: string; mixtapeId: string | null; recordingId: string | null },
-): Promise<void> {
+async function insertClip(db: Client, row: { id: string; recordingId: string }): Promise<void> {
   await db.execute({
-    args: [row.id, row.mixtapeId, row.recordingId, NOW, NOW],
+    args: [row.id, row.recordingId, NOW, NOW],
     sql: `insert into mixtape_clips
-      (id, mixtape_id, recording_id, in_ms, out_ms, x_offset, status, created_at, updated_at)
-      values (?, ?, ?, 1000, 20000, 0, 'done', ?, ?)`,
+      (id, recording_id, in_ms, out_ms, x_offset, status, created_at, updated_at)
+      values (?, ?, 1000, 20000, 0, 'done', ?, ?)`,
   });
 }
 
-/** The prod-shaped seed from the RFC's acceptance criteria. */
+/** The prod-shaped seed from the RFC's acceptance criteria (post-cutover schema). */
 async function seedProdShape(db: Client): Promise<void> {
   await seedTrack(db, {
     artists: ["Netsky", "Bev Lee Harling"],
@@ -119,22 +115,12 @@ async function seedProdShape(db: Client): Promise<void> {
   });
   await seedTrack(db, { artists: ["Hedex"], logId: "ddd.3C", title: "Bam Bam", trackId: "t4" });
 
-  // #1: published + already linked to its recording; tracklist_json was built by
-  // the 019 backfill with RANDOM cue ids (no track ids) — the trap this Deploy
-  // fixes. Its mixtape_tracks hold the EXACT links.
+  // #1: published + already linked to its recording; its `mixtape_tracks` hold the
+  // EXACT links the cue seed copies from.
   await insertRecording(db, {
     id: REC_019,
     r2Key: `${M1_LOG}/set.mp4`,
     title: "Fluncle Drum & Bass Mixtape #1",
-    tracklistJson: JSON.stringify([
-      {
-        artists: ["Netsky", "Bev Lee Harling"],
-        id: "cue-uuid-1",
-        startMs: null,
-        title: "Let's Leave Tomorrow",
-      },
-      { artists: ["Dawn Wall"], id: "cue-uuid-2", startMs: 125000, title: "I See You" },
-    ]),
   });
   await insertMixtape(db, {
     id: M1,
@@ -145,8 +131,16 @@ async function seedProdShape(db: Client): Promise<void> {
   });
   await insertMember(db, M1, "t1", 1, null);
   await insertMember(db, M1, "t2", 2, 125000);
+  // #1's recording already carries its cues (the LIVE Deploy-1 seeded them).
+  await db.execute({
+    args: [REC_019, "t1", NOW, NOW, REC_019, "t2", 125000, NOW, NOW],
+    sql: `insert into recording_cues
+            (id, recording_id, finding_id, artists_text, title_text, position, start_ms, created_at, updated_at)
+          values ('rc1', ?, ?, 'Netsky, Bev Lee Harling', 'Let''s Leave Tomorrow', 1, null, ?, ?),
+                 ('rc2', ?, ?, 'Dawn Wall', 'I See You', 2, ?, ?, ?)`,
+  });
 
-  // #2: distributing, no recording yet, one legacy mixtape-only clip.
+  // #2: distributing, no recording yet — the synthesize-a-take case.
   await insertMixtape(db, {
     id: M2,
     logId: M2_LOG,
@@ -154,43 +148,22 @@ async function seedProdShape(db: Client): Promise<void> {
     title: "Fluncle Drum & Bass Mixtape #2",
   });
   await insertMember(db, M2, "t4", 1, 30000);
-  await insertClip(db, { id: "clip-legacy", mixtapeId: M2, recordingId: null });
 
-  // A draft (→ plan) with a pencilled member + planned date + note.
+  // A draft (→ plan) with a pencilled member + note.
   await insertMixtape(db, {
     id: DRAFT,
     note: "warm-up plan",
-    plannedFor: "2026-07-10T20:00:00.000Z",
     status: "draft",
   });
   await insertMember(db, DRAFT, "t3", 1, null);
 
-  // The rolling set (no cues at all) + a hand-authored standalone recording.
+  // The rolling set (a cue-less standalone recording) + a clip cut from it.
   await insertRecording(db, {
     id: REC_ROLLING,
     r2Key: `recordings/${REC_ROLLING}/set.mp4`,
     title: "Rolling set",
   });
-  await insertRecording(db, {
-    id: REC_HAND,
-    r2Key: `recordings/${REC_HAND}/set.mp4`,
-    title: "Warehouse set",
-    tracklistJson: JSON.stringify([
-      // Reordered + case-varied identity — resolved by NORMALIZED text (the
-      // matcher needs the same artist SET, so both credited artists appear).
-      {
-        artists: ["Bev Lee Harling", "NETSKY"],
-        id: "hand-cue-1",
-        startMs: 0,
-        title: "let's leave tomorrow",
-      },
-      { artists: ["Unknown Artist"], id: "hand-cue-2", startMs: 90000, title: "Dubplate 7" },
-    ]),
-  });
-
-  // The both-owned clip (019 linked without unlinking) + a sentinel clip.
-  await insertClip(db, { id: "clip-both", mixtapeId: M1, recordingId: REC_019 });
-  await insertClip(db, { id: "clip-sentinel", mixtapeId: "", recordingId: REC_ROLLING });
+  await insertClip(db, { id: "clip-rolling", recordingId: REC_ROLLING });
 }
 
 /** Snapshot every table the backfill touches, for byte-identical comparison. */
@@ -205,9 +178,7 @@ async function snapshot(db: Client): Promise<string> {
   const members = await db.execute(
     "select mixtape_id, position, track_id, finding_id, artists_text, title_text from mixtape_tracks order by mixtape_id, position",
   );
-  const clips = await db.execute(
-    "select id, mixtape_id, recording_id from mixtape_clips order by id",
-  );
+  const clips = await db.execute("select id, recording_id from mixtape_clips order by id");
 
   return JSON.stringify({
     clips: clips.rows,
@@ -248,7 +219,6 @@ describe("backfillPlanRecordingMixtape", () => {
     expect(plan?.parent_id).toBeNull();
     expect(plan?.version).toBe(1);
     expect(plan?.note).toBe("warm-up plan");
-    expect(plan?.planned_for).toBe("2026-07-10T20:00:00.000Z");
     // The plan's title IS its Galaxy-vocab handle — a three-word slug (RFC
     // §6/D-handle), deterministic in the draft id.
     expect(plan?.title).toMatch(/^[a-z]+(-[a-z]+){2}$/);
@@ -267,7 +237,7 @@ describe("backfillPlanRecordingMixtape", () => {
     expect(cues[0]?.title_text).toBe("Burning Babylon");
   });
 
-  it("re-syncs a still-draft plan's note/planned_for but never re-mints the handle", async () => {
+  it("re-syncs a still-draft plan's note but never re-mints the handle", async () => {
     await backfillPlanRecordingMixtape(db);
     const handleBefore = (
       await db.execute({
@@ -345,7 +315,7 @@ describe("backfillPlanRecordingMixtape", () => {
     expect(slugs).toContain(galaxySlug(draftB, 1));
   });
 
-  it("reuses #1's existing recording (never re-synthesizes) and seeds its cues from mixtape_tracks, not tracklist_json", async () => {
+  it("reuses #1's existing recording (never re-synthesizes) and leaves its seeded cues intact", async () => {
     const result = await backfillPlanRecordingMixtape(db);
 
     expect(result.takesSynthesized).toBe(1); // M2 only — M1 is reused.
@@ -356,7 +326,8 @@ describe("backfillPlanRecordingMixtape", () => {
     ).rows[0];
     expect(m1?.recording_id).toBe(REC_019);
 
-    // Cues carry the EXACT mixtape_tracks links (S3), not text-matched JSON.
+    // Its pre-seeded cues (from the LIVE Deploy-1) are left untouched — the zero-cue
+    // gate skips a recording that already has cues.
     const cues = (
       await db.execute({
         args: [REC_019],
@@ -368,7 +339,7 @@ describe("backfillPlanRecordingMixtape", () => {
     expect(cues[1]).toMatchObject({ finding_id: "t2", position: 2, start_ms: 125000 });
   });
 
-  it("synthesizes a take for the un-linked distributing mixtape and repoints its legacy clip", async () => {
+  it("synthesizes a take for the un-linked distributing mixtape and seeds its cues", async () => {
     await backfillPlanRecordingMixtape(db);
 
     const m2 = (
@@ -393,51 +364,9 @@ describe("backfillPlanRecordingMixtape", () => {
     ).rows;
     expect(cues).toHaveLength(1);
     expect(cues[0]).toMatchObject({ finding_id: "t4", start_ms: 30000 });
-
-    // The legacy clip now carries the recording as its single owner.
-    const clip = (
-      await db.execute({
-        sql: "select mixtape_id, recording_id from mixtape_clips where id = 'clip-legacy'",
-      })
-    ).rows[0];
-    expect(clip?.recording_id).toBe(recordingId);
-    expect(clip?.mixtape_id).toBeNull();
   });
 
-  it("migrates legacy tracklist_json cues by normalized text (never cue.id), leaving unresolved NULL + snapshot", async () => {
-    const result = await backfillPlanRecordingMixtape(db);
-
-    expect(result.tracklistCuesInserted).toBe(2);
-    expect(result.tracklistCuesUnresolved).toBe(1);
-
-    const cues = (
-      await db.execute({
-        args: [REC_HAND],
-        sql: "select id, finding_id, artists_text, title_text, position, start_ms from recording_cues where recording_id = ? order by position",
-      })
-    ).rows;
-    expect(cues).toHaveLength(2);
-    // Resolved across feat./case variance — by TEXT, not by the random cue id.
-    expect(cues[0]).toMatchObject({ finding_id: "t1", id: "hand-cue-1", position: 1, start_ms: 0 });
-    // Unresolved → NULL + the honest snapshot.
-    expect(cues[1]).toMatchObject({
-      artists_text: "Unknown Artist",
-      finding_id: null,
-      id: "hand-cue-2",
-      title_text: "Dubplate 7",
-    });
-
-    // The empty rolling set stays cue-less (nothing invented).
-    const rolling = (
-      await db.execute({
-        args: [REC_ROLLING],
-        sql: "select count(*) as n from recording_cues where recording_id = ?",
-      })
-    ).rows[0];
-    expect(Number(rolling?.n)).toBe(0);
-  });
-
-  it("fills mixtape_tracks.finding_id and normalizes every clip to a single owner", async () => {
+  it("fills mixtape_tracks.finding_id for every member", async () => {
     const result = await backfillPlanRecordingMixtape(db);
 
     expect(result.trackFindingIdsFilled).toBe(4);
@@ -451,24 +380,6 @@ describe("backfillPlanRecordingMixtape", () => {
       })
     ).rows[0];
     expect(Number(mismatched?.n)).toBe(0);
-
-    // Every clip now has exactly one owner; the '' sentinel is gone.
-    const both = (
-      await db.execute({
-        sql: "select count(*) as n from mixtape_clips where recording_id is not null and mixtape_id is not null",
-      })
-    ).rows[0];
-    expect(Number(both?.n)).toBe(0);
-    const sentinel = (
-      await db.execute({ sql: "select count(*) as n from mixtape_clips where mixtape_id = ''" })
-    ).rows[0];
-    expect(Number(sentinel?.n)).toBe(0);
-    const owned = (
-      await db.execute({
-        sql: "select count(*) as n from mixtape_clips where recording_id is not null",
-      })
-    ).rows[0];
-    expect(Number(owned?.n)).toBe(3);
   });
 
   it("is idempotent — a second run reports zero work and leaves identical state", async () => {
@@ -485,15 +396,12 @@ describe("backfillPlanRecordingMixtape", () => {
     const second = await backfillPlanRecordingMixtape(db);
 
     expect(second).toEqual({
-      clipsNormalized: 0,
       planCuesInserted: 0,
       plansCreated: 0,
       plansSynced: 0,
       takeCuesInserted: 0,
       takesSynthesized: 0,
       trackFindingIdsFilled: 0,
-      tracklistCuesInserted: 0,
-      tracklistCuesUnresolved: 0,
     });
     expect(await snapshot(db)).toBe(before);
     expect(await rowCount(db, "recordings")).toBe(rowCounts.recordings);
@@ -501,23 +409,15 @@ describe("backfillPlanRecordingMixtape", () => {
     expect(await rowCount(db, "mixtape_clips")).toBe(rowCounts.clips);
   });
 
-  it("preserves every pre-existing row (nothing deleted, tracklist_json untouched)", async () => {
+  it("preserves every pre-existing row (nothing deleted)", async () => {
     await backfillPlanRecordingMixtape(db);
 
-    // All 3 mixtapes, all 4 members, all 3 clips survive.
+    // All 3 mixtapes, all 4 members, the 1 clip survive.
     expect(await rowCount(db, "mixtapes")).toBe(3);
     expect(await rowCount(db, "mixtape_tracks")).toBe(4);
-    expect(await rowCount(db, "mixtape_clips")).toBe(3);
-    // 3 seeded recordings + M2's synthesized take + the draft's plan.
-    expect(await rowCount(db, "recordings")).toBe(5);
-
-    // Dual-read safety: the legacy tracklist_json columns are NOT cleared.
-    const legacy = (
-      await db.execute({
-        sql: "select count(*) as n from recordings where tracklist_json is not null",
-      })
-    ).rows[0];
-    expect(Number(legacy?.n)).toBe(2);
+    expect(await rowCount(db, "mixtape_clips")).toBe(1);
+    // 2 seeded recordings (#1 + rolling) + M2's synthesized take + the draft's plan.
+    expect(await rowCount(db, "recordings")).toBe(4);
   });
 
   it("no-ops cleanly on an empty database", async () => {

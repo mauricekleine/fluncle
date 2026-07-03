@@ -329,20 +329,20 @@ export const resyncMixtapeMixcloud = oc
  * `list_clips` → `GET /admin/clips` (operationId `listClips`).
  *
  * Admin tier (`requireAdmin`, agent-allowed). Every clip, optionally filtered by
- * `mixtapeId` and/or `status` — the SAME read the per-set editor (one mixtape) and
- * the cross-set clip library (all mixtapes) both consume. Preserves `{ clips, ok }`.
+ * `recordingId` and/or `status` — the SAME read the per-set editor (one recording)
+ * and the cross-set clip library (all recordings) both consume. Preserves
+ * `{ clips, ok }`.
  */
 export const listClips = oc
   .route({
     method: "GET",
     operationId: "listClips",
     path: "/admin/clips",
-    summary: "List clips (optionally filtered by mixtape and/or status)",
+    summary: "List clips (optionally filtered by recording and/or status)",
     tags: ["Admin"],
   })
   .input(
     z.object({
-      mixtapeId: z.string().optional(),
       recordingId: z.string().optional(),
       status: z.string().optional(),
     }),
