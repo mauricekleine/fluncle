@@ -45,7 +45,7 @@
 // when it can (header-uniform-only bodies), and re-shape it through a cleared
 // vehicle when it can't. The dream distorts what was lived, by design — the live
 // re-drive of a clip's journey uniforms is NOT the offline render 1:1.
-import { GLSL } from "/Users/maurice/Projects/fluncle/packages/video/src/remotion/journey/glsl.ts";
+import { GLSL } from "../../../video/src/remotion/journey/glsl";
 
 // ===========================================================================
 // SERVER-SIDE SCENE EXTRACTION — resolve an archived composition's fragment body
@@ -276,7 +276,11 @@ function extractScene(src: string): Scene {
     return "";
   });
   if (bad) {
-    return { customUniforms: [], reason: `non-GLSL interpolation: ${bad}`, replayable: false };
+    return {
+      customUniforms: [],
+      reason: `non-GLSL interpolation: ${String(bad)}`,
+      replayable: false,
+    };
   }
 
   // 3. Custom uniform declarations (the composition's own; the header set excluded).
@@ -307,30 +311,6 @@ function extractScene(src: string): Scene {
   }
 
   return { body, customUniforms: customs, replayable: true };
-}
-
-// Map a descriptive videoVehicle tag → the default base-vehicle scene index.
-//   0 caustic wall · 1 neuro web · 2 fbm3 roil · -1 = unknown (fall back to hash).
-function vehicleToScene(tag: string | null | undefined): number {
-  if (!tag) {
-    return -1;
-  }
-  const t = tag.toLowerCase();
-  // caustic is the most specific material term — check it before the "web" group.
-  if (/caustic|liquid|ripple|refract|glass|water|crystal|iridescent|thin-film|film|veil/.test(t)) {
-    return 0;
-  }
-  if (/filament|vein|wire|dendrite|weft|sinew|thread|web|strand|neuro|nerve/.test(t)) {
-    return 1;
-  }
-  if (
-    /roil|smoke|cloud|field|drape|bloom|swarm|murmur|spindrift|flux|drift|haze|plume|mist|billow|dust|vapor|fog/.test(
-      t,
-    )
-  ) {
-    return 2;
-  }
-  return -1;
 }
 
 const FRAG = /* glsl */ `
@@ -669,7 +649,7 @@ function arrive(idx){
 }
 function vehicleTag(e){ return vehicleToScene(e.videoVehicle); }
 function vehName(i){ return i===0?"caustic": i===1?"neuro": i===2?"roil":"hash"; }
-// server-side helper mirrored client-side (kept in sync with vehicleToScene above)
+// Map a descriptive videoVehicle tag -> default vehicle index (0 caustic / 1 neuro / 2 roil / -1 hash fallback).
 function vehicleToScene(tag){
   if(!tag) return -1; const t=tag.toLowerCase();
   if(/caustic|liquid|ripple|refract|glass|water|crystal|iridescent|thin-film|film|veil/.test(t)) return 0;
