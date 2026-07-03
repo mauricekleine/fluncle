@@ -34,7 +34,7 @@ Four modules under `src/set-video/`, each with tests inside it:
    - **whole-clip ramp** (starts ~0, ends ~authored length) → **rescaled**: keyframes × `scale` (`chapterMs / authoredMs`), so the ease spans the whole chapter.
    - **tail settle/event** (a short window pinned to the authored end) → interior chapter **suppressed** (held at the pre-settle value, no mid-set dim); final chapter **shifted** to the set's own tail so the piece resolves.
    - **interior one-shot** (a mid-clip climax) → **left** as data, flagged for judgment (drive it from the chapter drop envelope if it should re-slam).
-   It also strips `<TrackAudio>` (audio is muxed once, at the end) and emits a per-comp **audit report** (what was rescaled/suppressed, judgment flags). Prepped comps land in the gitignored `src/remotion/set-workbench/<logId>.tsx` (the same auto-registration contract as the per-track workbench).
+     It also strips `<TrackAudio>` (audio is muxed once, at the end) and emits a per-comp **audit report** (what was rescaled/suppressed, judgment flags). Prepped comps land in the gitignored `src/remotion/set-workbench/<logId>.tsx` (the same auto-registration contract as the per-track workbench).
 
 2. **`chapter-props.ts` — the audio.** Slices the mastered set audio at the cue boundaries (ffmpeg) and analyzes each slice into a **full-length** per-chapter `CosmosAudio` — the whole chapter is on screen, so every second becomes reactive curves (energy/bass/mid/treble + the fine sub/kick/snare/air bands + flux), not a 20 s window. It reuses the exact shared DSP kernel (`pipeline/audio-curves.ts`) and the render-path estimators (`pipeline/analyze-audio.ts`) + the set-path multi-drop picker (`pipeline/analyze-set.ts`) — no DSP is forked. It passes **multiple `dropCandidates`** so a long chapter can re-slam; a chapter that should re-slam either wires those in or leans on the continuous energy/swell envelopes (a pinned `reactivity.drop.peakTimeMs` fires only once — the audit report flags it).
 
@@ -50,7 +50,7 @@ Full renders use the RFC §6 encode (h264, `crf 20` under a `~22 Mbit` VBV cap, 
 
 ## QA
 
-- **Arc gate per chapter** — `judge:metrics` (`analyze-motion.ts`) runs on the rendered piece; a chapter-length clip evolves *more* than a 20 s clip, so it passes the arc floor comfortably (the recalibration note + a chapter-length reference verdict live in `packages/video/calibration/verdicts.json`). The gate's `qa.json` is written beside the output.
+- **Arc gate per chapter** — `judge:metrics` (`analyze-motion.ts`) runs on the rendered piece; a chapter-length clip evolves _more_ than a 20 s clip, so it passes the arc floor comfortably (the recalibration note + a chapter-length reference verdict live in `packages/video/calibration/verdicts.json`). The gate's `qa.json` is written beside the output.
 - **Flash on transition spans** — the travel transitions are the only fast-motion moments; the flash gate covers the chunks that span a seam (and the composited whole).
 - The whole-piece read is judged off the set energy envelope (the dreamer's continuity is derived from `analyze-set.ts`'s `StudioEnvelope`).
 
