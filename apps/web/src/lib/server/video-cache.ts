@@ -33,20 +33,32 @@ import { clipPurgeUrls } from "../studio-clips";
 const CLOUDFLARE_PURGE_MAX_FILES = 30;
 
 /**
- * Purge a re-rendered finding's Media-Transformation renditions from the edge.
+ * Purge a re-rendered finding's ZONE-edge-cached entries — the bare R2 objects
+ * (masters + poster/cover) plus any zone-edge copies of current-vintage
+ * renditions. NOTE the reach: Media Transformations caches video outputs in its
+ * OWN internal layer this API cannot evict — the per-vintage `?v` token
+ * (media.ts `videoVersion`) is the rendition-eviction mechanism; this purge is
+ * its bare-object complement.
  *
  * Best-effort, fire-and-extend via `waitUntil`: the caller (the video ship
  * finalize step) never awaits the purge and never fails because of it. Safe to
  * call with a missing/blank logId — a no-op. `squared` mirrors the finding's
  * two-master layout (`video_squared_at` set): it selects which rendition family
- * the surfaces emit, so the purge set matches exactly what was cached.
+ * the surfaces emit; `version` is the vintage the surfaces mint from now on.
  */
-export function purgeVideoCache(logId: string | null | undefined, squared: boolean): void {
+export function purgeVideoCache(
+  logId: string | null | undefined,
+  squared: boolean,
+  version?: number,
+): void {
   if (!logId?.trim()) {
     return;
   }
 
-  fireAndForget(logId.trim(), purgeFiles(logId.trim(), videoPurgeUrls(logId.trim(), { squared })));
+  fireAndForget(
+    logId.trim(),
+    purgeFiles(logId.trim(), videoPurgeUrls(logId.trim(), { squared, version })),
+  );
 }
 
 /**
@@ -57,12 +69,12 @@ export function purgeVideoCache(logId: string | null | undefined, squared: boole
  * does it server-side. `clipPurgeUrls` is the EXACT set the clip surfaces request (the
  * clip twin of `videoPurgeUrls`). Same best-effort discipline as `purgeVideoCache`.
  */
-export function purgeClipCache(clipId: string | null | undefined): void {
+export function purgeClipCache(clipId: string | null | undefined, version?: number): void {
   if (!clipId?.trim()) {
     return;
   }
 
-  fireAndForget(clipId.trim(), purgeFiles(clipId.trim(), clipPurgeUrls(clipId.trim())));
+  fireAndForget(clipId.trim(), purgeFiles(clipId.trim(), clipPurgeUrls(clipId.trim(), version)));
 }
 
 // Run a purge task off the request lifecycle (waitUntil), or detached outside the

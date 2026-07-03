@@ -82,8 +82,8 @@ export function clipDurationMs(clip: Pick<ClipDTO, "inMs" | "outMs">): number {
  * the cover crop just scales it down). `width` keeps the grid thumbnail light on the
  * wire instead of shipping the native 1080-wide poster.
  */
-export function clipPosterUrl(clipId: string, width = 480): string {
-  return videoCropPoster(clipId, "portrait", width);
+export function clipPosterUrl(clipId: string, width = 480, version?: number): string {
+  return videoCropPoster(clipId, "portrait", width, 0, version);
 }
 
 /**
@@ -91,8 +91,8 @@ export function clipPosterUrl(clipId: string, width = 480): string {
  * — a downscaled `videoCrop` off the clip's `footage.mp4`, not the bare master, so a
  * scrub stays cheap on a phone.
  */
-export function clipPreviewUrl(clipId: string, width = 720): string {
-  return videoCrop(clipId, "portrait", width);
+export function clipPreviewUrl(clipId: string, width = 720, version?: number): string {
+  return videoCrop(clipId, "portrait", width, false, version);
 }
 
 /** A clip's two download targets, both keyed off its pseudo-finding `footage.mp4`. */
@@ -109,10 +109,10 @@ export type ClipDownloadUrls = {
  * Transformation. Distribution is deferred (the operator hand-posts), so these are
  * the v1 hand-off.
  */
-export function clipDownloadUrls(clipId: string): ClipDownloadUrls {
+export function clipDownloadUrls(clipId: string, version?: number): ClipDownloadUrls {
   const withAudio = trackMedia(clipId).videoUrl;
 
-  return { silent: videoAudioStripped(withAudio), withAudio };
+  return { silent: videoAudioStripped(withAudio, version), withAudio };
 }
 
 /**
@@ -132,8 +132,15 @@ export function clipDownloadUrls(clipId: string): ClipDownloadUrls {
  * (`audio=false` off `footage.mp4`). This precise set is why the cut path purges THIS,
  * not the squared finding set.
  */
-export function clipPurgeUrls(clipId: string): string[] {
-  const { silent, withAudio } = clipDownloadUrls(clipId);
+export function clipPurgeUrls(clipId: string, version?: number): string[] {
+  const { silent, withAudio } = clipDownloadUrls(clipId, version);
 
-  return [...new Set([withAudio, silent, clipPosterUrl(clipId), clipPreviewUrl(clipId)])];
+  return [
+    ...new Set([
+      withAudio,
+      silent,
+      clipPosterUrl(clipId, undefined, version),
+      clipPreviewUrl(clipId, undefined, version),
+    ]),
+  ];
 }
