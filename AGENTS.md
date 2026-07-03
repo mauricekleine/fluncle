@@ -17,6 +17,12 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - Public runtime IDENTIFIERS are fine (the R2 account id, the IndexNow token — both allowlisted in `.gitleaks.toml`): they grant nothing without the matching secret.
 - Keep committed docs and skills at the architecture/procedure level; secret-bearing operator commands stay in the Ops Runbook note + the relevant operator skill.
 
+## Which machine am I on?
+
+- This repo is worked from two Macs; the machine determines what is SAFE, so detect it before large uploads or commits. Detect with `sysctl -n machdep.cpu.brand_string` and match loosely on the chip generation (the string is like `Apple M5 Pro` / `Apple M2` — key off `M5` / `M2`).
+- **M5 (build/compose):** browser + prod `fluncle` CLI. Orchestrate and dev here.
+- **M2 (mixing):** Rekordbox + OBS + the audio/video masters live here; the `fluncle-mixtapes` Rekordbox scripts run here. **THE LOAD-BEARING RULE — on the M2, large media uploads (`fluncle admin recordings create --video`, `fluncle admin mixtapes distribute`) and git commits need `dangerouslyDisableSandbox: true`:** the Bash sandbox silently drops sustained large transfers (`socket closed`), and SSH-signed commits go through the 1Password agent socket. Full operator workflow is the [fluncle-mixtapes](./packages/skills/fluncle-mixtapes) skill.
+
 ## Work Standard
 
 - MUST: If it can be automated, it should be automated. When the choice is "automation is possible but it will require work" versus "do it manually," choose automation every time — with AI the marginal cost of completeness is near zero. The point of this project is reach: how far Fluncle's tentacles stretch across the web (search engines, AI crawlers, and ultimately real humans — DnB fans, artists). A manual step is reach that does not scale. The ONLY exception is a genuine, documented platform constraint with no automatable path (e.g. TikTok licensed audio must be attached in the app) — and even then, automate everything up to and after the irreducible manual step, and capture its result automatically.

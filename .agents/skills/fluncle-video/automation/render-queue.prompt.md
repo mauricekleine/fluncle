@@ -63,10 +63,11 @@ Do **not** shortcut the skill. The hourly cadence does not justify skipping the 
 bun run --cwd packages/video judge:metrics <trackId>
 ```
 
-One command, BOTH hard gates; either exits non-zero and blocks ship:
+One command, ALL THREE hard gates; any one exits non-zero and blocks ship:
 
 - **Beat-pull** (Motion law): motion locked to the kick — the picture lurching and snapping on every beat, the one defect you cannot see in stills. A fail means the composition is driving position/travel off the raw kick: revise it (move that reactivity into material: brightness/width/scale) and re-render.
 - **Flash safety** (WCAG 2.3.1): a coherent, large-area, >3/sec strobe. This pipeline runs unattended — this gate is the only thing standing between an over-driven bind and shipping a photosensitivity-unsafe clip. A fail means the reactivity is strobing: smooth the offending bind and re-render. Never pass `--allow-flash`.
+- **Arc/deadness** (doctrine 10): the whole-clip structural evolution below the calibrated floor — a composition that never reorganizes across its span (the dead-bars failure), invisible in any single still. A fail means the clip holds one look for 20s: give the field a real arc (the live envelopes driving density/threshold/exposure across the build → drop → main) and re-render.
 
 A pass (or an inconclusive beat-pull verdict) is required before you ship; iterate until it passes. (`detect-beat-pull` is only the fast directional read on the half-res draft while iterating; the verdict that counts is `judge:metrics` on the full render.)
 
@@ -96,4 +97,4 @@ You have filmed exactly one finding. **Do not loop back to step 1 to film anothe
 - **Never commit or push.** The composition lives in the gitignored `workbench/`; the durable artifact is the R2 bundle. Nothing enters git.
 - **`fluncle` is the installed binary, run plainly.** Never the from-source `bun run --cwd apps/cli fluncle …` (it loads the wrong env and reflects uncommitted edits) and never piped through `tail`/`head`. `bun` is only for the `packages/video` render/ship steps.
 - **Re-runs must not double-render.** Trust the queue gate. Always re-read the queue at the start; never carry a finding id across runs.
-- **Never ship past the metrics gate.** After the render, `bun run --cwd packages/video judge:metrics <trackId>` must pass (or the beat-pull read be inconclusive). It carries BOTH hard gates: beat-pull (motion locked to the kick) and WCAG flash safety (a photosensitivity-unsafe strobe). A non-zero exit means revise the composition and re-render — never ship past it, never `--allow-flash`.
+- **Never ship past the metrics gate.** After the render, `bun run --cwd packages/video judge:metrics <trackId>` must pass (or the beat-pull read be inconclusive). It carries ALL THREE hard gates: beat-pull (motion locked to the kick), WCAG flash safety (a photosensitivity-unsafe strobe), and arc/deadness (a clip that never reorganizes). A non-zero exit means revise the composition and re-render — never ship past it, never `--allow-flash`.

@@ -123,6 +123,8 @@ fluncle admin recordings create --title "…" --video <take>.mov   # → takeRec
 fluncle admin recordings update <takeRecordingId> --parent-id <planId>
 ```
 
+`recordings create --video` pushes a multi-GB take to R2 — run it with the Bash sandbox disabled (`dangerouslyDisableSandbox`) or it fails with `socket closed`.
+
 The plan (videoless) stays the authoring row; the take is the versioned recording that gets clipped, promoted, and distributed. Attaching links the take's derived cues + clips back to the plan.
 
 **Derive the take's cue tracklist from Rekordbox automatically.** After recording a take, run `rekordbox-derive-cues.py` to read the session history, match each track against the Fluncle catalogue, and write the ordered cue array directly to the take's `recording_cues` via `replace-cues`. This replaces the "feed the pruned list by hand" step entirely.
@@ -195,6 +197,8 @@ fluncle admin recordings promote <recordingId>
 ```bash
 fluncle admin mixtapes distribute <idOrLogId> --video <mixtape>.mp4 --audio <master>
 ```
+
+`distribute` pushes multi-GB masters to R2 — run it with the Bash sandbox disabled (`dangerouslyDisableSandbox`) or it fails with `socket closed`.
 
 `distribute` is **push-only**: it operates on an already-minted (`distributing` or `published`) mixtape and errors when the coordinate hasn't been minted (promote the recording first). The `--audio <master>` must be the **clean mix (Track 1, no mic)** — extract it from the OBS `.mov` first: `ffmpeg -i <recording>.mov -map 0:a:0 -c:a libmp3lame -b:a 320k <master>.mp3` (Track 2 is the isolated mic — see §A). The `--video` can be the raw `.mov` or a clean-audio cut — your call on whether the YouTube video carries your voice.
 

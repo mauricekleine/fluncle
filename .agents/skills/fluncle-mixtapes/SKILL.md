@@ -85,16 +85,16 @@ The steps are tagged 🖥️ (build Mac / browser) or 🎛️ (mixing Mac — Re
 
 **The canonical flow at a glance:**
 
-| Step                     | Where          | What                                                                                   |
-| ------------------------ | -------------- | -------------------------------------------------------------------------------------- |
-| Compose the plan         | 🖥️ browser     | `/admin/plans` — auto galaxy-slug handle, add findings, order, set the Live session date |
-| Export to tools          | 🎛️ mixing Mac  | Rekordbox quit: `recordings list --kind plan` → `rekordbox-plan-export.py <planId>`; buy on Beatport; load Rekordbox |
-| Mix + record             | 🎛️ mixing Mac  | OBS 3-track (music T1 / mic T2)                                                          |
-| Upload take + attach     | 🎛️ mixing Mac  | `recordings create --title … --video <take.mov>` → `recordings update <takeId> --parent-id <planId>` |
-| Derive cues              | 🎛️ mixing Mac  | Rekordbox quit: `rekordbox-derive-cues.py` dry-run → `--apply <takeId>`                  |
-| Mark cue times + clip    | 🖥️ browser     | `/admin/studio/<takeId>` — mark mix-ins; set in/out → Create clip; `/admin/clips` copy caption → IG Reel |
-| Promote (if you love it) | 🖥️ Studio      | "Publish as mixtape" (or `recordings promote <takeId>`) — mints `.F.`, seeds the tracklist, publishes the `/log` set video |
-| Distribute               | 🎛️ mixing Mac  | extract audio (`ffmpeg`) → `mixtapes distribute <logId> --video … --audio master.mp3` → `publish-youtube` → optional `resync` |
+| Step                     | Where         | What                                                                                                                          |
+| ------------------------ | ------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Compose the plan         | 🖥️ browser    | `/admin/plans` — auto galaxy-slug handle, add findings, order, set the Live session date                                      |
+| Export to tools          | 🎛️ mixing Mac | Rekordbox quit: `recordings list --kind plan` → `rekordbox-plan-export.py <planId>`; buy on Beatport; load Rekordbox          |
+| Mix + record             | 🎛️ mixing Mac | OBS 3-track (music T1 / mic T2)                                                                                               |
+| Upload take + attach     | 🎛️ mixing Mac | `recordings create --title … --video <take.mov>` → `recordings update <takeId> --parent-id <planId>`                          |
+| Derive cues              | 🎛️ mixing Mac | Rekordbox quit: `rekordbox-derive-cues.py` dry-run → `--apply <takeId>`                                                       |
+| Mark cue times + clip    | 🖥️ browser    | `/admin/studio/<takeId>` — mark mix-ins; set in/out → Create clip; `/admin/clips` copy caption → IG Reel                      |
+| Promote (if you love it) | 🖥️ Studio     | "Publish as mixtape" (or `recordings promote <takeId>`) — mints `.F.`, seeds the tracklist, publishes the `/log` set video    |
+| Distribute               | 🎛️ mixing Mac | extract audio (`ffmpeg`) → `mixtapes distribute <logId> --video … --audio master.mp3` → `publish-youtube` → optional `resync` |
 
 ### A. Record + archive 🎛️
 
@@ -122,6 +122,8 @@ Pre-publish authoring is a **PLAN** — a videoless `recordings` row, not a mixt
 fluncle admin recordings create --title "…" --video <take>.mov   # → takeRecordingId
 fluncle admin recordings update <takeRecordingId> --parent-id <planId>
 ```
+
+`recordings create --video` pushes a multi-GB take to R2 — run it with the Bash sandbox disabled (`dangerouslyDisableSandbox`) or it fails with `socket closed`.
 
 The plan (videoless) stays the authoring row; the take is the versioned recording that gets clipped, promoted, and distributed. Attaching links the take's derived cues + clips back to the plan.
 
@@ -195,6 +197,8 @@ fluncle admin recordings promote <recordingId>
 ```bash
 fluncle admin mixtapes distribute <idOrLogId> --video <mixtape>.mp4 --audio <master>
 ```
+
+`distribute` pushes multi-GB masters to R2 — run it with the Bash sandbox disabled (`dangerouslyDisableSandbox`) or it fails with `socket closed`.
 
 `distribute` is **push-only**: it operates on an already-minted (`distributing` or `published`) mixtape and errors when the coordinate hasn't been minted (promote the recording first). The `--audio <master>` must be the **clean mix (Track 1, no mic)** — extract it from the OBS `.mov` first: `ffmpeg -i <recording>.mov -map 0:a:0 -c:a libmp3lame -b:a 320k <master>.mp3` (Track 2 is the isolated mic — see §A). The `--video` can be the raw `.mov` or a clean-audio cut — your call on whether the YouTube video carries your voice.
 
