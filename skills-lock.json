@@ -49,9 +49,9 @@
       "computedHash": "2eb25c26a11e6a8bd4c954f9426654583304a890227813954c299b0dd2099b27"
     },
     "fluncle-mixtapes": {
-      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-mixtapes",
+      "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a6d44b889907eadcc/packages/skills/fluncle-mixtapes",
       "sourceType": "local",
-      "computedHash": "06cd1e2bf100a9f93c12e2ed1969e8bb4d6340ca7b0a98dc0a1ae133bfa64274"
+      "computedHash": "ed69f6049d26792c736db200dd573019af5ce584755090fcd7dbff9239a78225"
     },
     "fluncle-operator": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-operator",
