@@ -50,11 +50,15 @@ Two hard rules, because it has real-world side effects:
 Identical to the mixtapes tracklist script:
 
 1. **Quit Rekordbox fully** — it locks `master.db`.
-2. Cache the decryption key once:
+2. pyrekordbox **auto-extracts the SQLCipher key from your Rekordbox install** when it opens the database, so with Rekordbox installed there is no separate key step. (`python -m pyrekordbox download-key` was removed upstream at AlphaTheta's request — do not re-add it.)
 
-   ```bash
-   uv run --with pyrekordbox python -m pyrekordbox download-key
+   If auto-extraction ever fails, cache the key once in Python:
+
+   ```python
+   from pyrekordbox.config import write_db6_key_cache; write_db6_key_cache("<key>")
    ```
+
+   Or pass it directly: `Rekordbox6Database(key="<key>")`.
 
 ## The flow
 
@@ -143,5 +147,6 @@ outcome the DSP's null-over-fake design (and this tool's dry-run gate) prevents.
   ```bash
   uv run --with pytest pytest packages/skills/fluncle-key-backfill/scripts/test_key_backfill.py
   ```
+
 - `pyrekordbox` tracks Rekordbox's encrypted schema and can break on a Rekordbox
   update — another reason this is a local, on-demand operator tool, not a cron.

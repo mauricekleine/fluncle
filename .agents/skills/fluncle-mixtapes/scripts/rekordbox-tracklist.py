@@ -23,9 +23,12 @@ Two real-world wrinkles it surfaces rather than guesses about:
 
 Prerequisites (one-time, on this Mac):
   1. Quit Rekordbox fully — it holds an exclusive lock on master.db.
-  2. Cache the SQLCipher key once:  uv run --with pyrekordbox python -m pyrekordbox download-key
-     (Rekordbox > 6.6.5 obfuscates the key; download-key fetches it from the
-     community source and caches it under ~/Library/Application Support/pyrekordbox.)
+  2. pyrekordbox auto-extracts the SQLCipher key from your Rekordbox install when it
+     opens the database — no separate key step needed. (`python -m pyrekordbox
+     download-key` was removed upstream at AlphaTheta's request; do not re-add it.)
+     If auto-extraction ever fails, cache the key once:
+       from pyrekordbox.config import write_db6_key_cache; write_db6_key_cache("<key>")
+     or pass it directly: Rekordbox6Database(key="<key>")
 
 Usage:
   uv run rekordbox-tracklist.py                 # latest session, human-readable
@@ -61,8 +64,10 @@ def open_db(db_path: str | None):
         msg = str(exc).lower()
         if "key" in msg:
             die(
-                "no decryption key for the Rekordbox database",
-                "run once: uv run --with pyrekordbox python -m pyrekordbox download-key",
+                "auto-extraction of the Rekordbox SQLCipher key failed",
+                "make sure Rekordbox is installed; if it still fails, cache the key manually:"
+                " from pyrekordbox.config import write_db6_key_cache; write_db6_key_cache('<key>')"
+                " (python -m pyrekordbox download-key was removed upstream)",
             )
         if "locked" in msg or "running" in msg:
             die("the Rekordbox database is locked", "quit Rekordbox fully, then retry")

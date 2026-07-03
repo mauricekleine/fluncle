@@ -28,7 +28,12 @@ Match discipline:
 
 Prerequisites (one-time, on this Mac), identical to rekordbox-tracklist.py:
   1. Quit Rekordbox fully — it holds an exclusive lock on master.db.
-  2. Cache the SQLCipher key once:  uv run --with pyrekordbox python -m pyrekordbox download-key
+  2. pyrekordbox auto-extracts the SQLCipher key from your Rekordbox install when it
+     opens the database — no separate key step needed. (`python -m pyrekordbox
+     download-key` was removed upstream at AlphaTheta's request.)
+     If auto-extraction ever fails, cache the key once:
+       from pyrekordbox.config import write_db6_key_cache; write_db6_key_cache("<key>")
+     or pass it directly: Rekordbox6Database(key="<key>")
 
 The `fluncle` CLI must be on PATH and, for `--apply`, authenticated
 (FLUNCLE_API_TOKEN) — the reads/writes go through the admin API, not the DB.
@@ -277,8 +282,10 @@ def open_db(db_path: str | None):
 
         if "key" in msg:
             die(
-                "no decryption key for the Rekordbox database",
-                "run once: uv run --with pyrekordbox python -m pyrekordbox download-key",
+                "auto-extraction of the Rekordbox SQLCipher key failed",
+                "make sure Rekordbox is installed; if it still fails, cache the key manually:"
+                " from pyrekordbox.config import write_db6_key_cache; write_db6_key_cache('<key>')"
+                " (python -m pyrekordbox download-key was removed upstream)",
             )
 
         if "locked" in msg or "running" in msg:
