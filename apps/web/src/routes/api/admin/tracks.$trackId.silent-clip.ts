@@ -7,7 +7,7 @@ import {
   requireParam,
   trackNotFoundResponse,
 } from "../../../lib/server/http-errors";
-import { trackMedia, videoAudioStripped } from "../../../lib/media";
+import { trackMedia, videoAudioStripped, videoVersion } from "../../../lib/media";
 import { getTrackByIdOrLogId } from "../../../lib/server/tracks";
 
 // GET /api/admin/tracks/:idOrLogId/silent-clip — a same-origin download proxy for
@@ -43,7 +43,10 @@ export const serverHandlers: ApiHandlers = {
         return jsonError(404, "no_log_id", "This finding has no Log ID, so it has no video yet");
       }
 
-      const source = videoAudioStripped(trackMedia(track.logId).socialVideoUrl);
+      const source = videoAudioStripped(
+        trackMedia(track.logId).socialVideoUrl,
+        videoVersion(track.videoSquaredAt),
+      );
       const upstream = await fetch(source);
 
       if (!upstream.ok || !upstream.body) {

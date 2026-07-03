@@ -34,6 +34,7 @@ import {
 } from "../mixtapes";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { R2_MAX_PARTS, VIDEOS_BUCKET, presignMultipartUpload, presignUploads } from "../r2-presign";
+import { videoVersion } from "../../media";
 import { purgeClipCache } from "../video-cache";
 import { getYouTubeAccessToken } from "../youtube";
 import { apiFault, type Implementer, toFault } from "./_shared";
@@ -773,7 +774,9 @@ export function adminMixtapesHandlers(os: Implementer) {
 
       // Best-effort, off the request lifecycle (waitUntil). A genuine first cut has
       // nothing cached yet, so this is a harmless no-op; a re-cut evicts the stale set.
-      purgeClipCache(input.clipId);
+      // The fresh `updatedAt` is the vintage the clip surfaces mint as their `?v`
+      // token from now on (media.ts videoVersion) — the actual MT-rendition evictor.
+      purgeClipCache(input.clipId, videoVersion(clip.updatedAt));
 
       return { clip, ok: true as const };
     } catch (error) {

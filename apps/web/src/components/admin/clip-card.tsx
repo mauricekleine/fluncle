@@ -17,6 +17,7 @@ import {
   clipPosterUrl,
   clipPreviewUrl,
 } from "@/lib/studio-clips";
+import { videoVersion } from "@/lib/media";
 
 // One clip in the cross-set library grid (the Fluncle Studio clip library).
 // A 9:16 poster tile that reveals an inline preview (the shared VideoScrubber +
@@ -44,11 +45,19 @@ export function ClipCard({
   const setTitle = recording ? recording.title : "Unknown set";
   const lengthLabel = formatClock(clipDurationMs(clip) / 1000);
   const rangeLabel = `${formatClock(clip.inMs / 1000)} – ${formatClock(clip.outMs / 1000)}`;
-  const downloads = clipDownloadUrls(clip.id);
+  // The clip's re-cut vintage rides every transform URL as its `?v` token, so a
+  // re-cut (which bumps updatedAt) mints new URLs and MT derives the fresh cut
+  // (its internal output cache is not purgeable — media.ts).
+  const version = videoVersion(clip.updatedAt);
+  const downloads = clipDownloadUrls(clip.id, version);
 
   return (
     <article className="flex flex-col overflow-hidden rounded-lg border border-border bg-card">
-      {isDone ? <ClipStage clipId={clip.id} title={setTitle} /> : <CuttingStage />}
+      {isDone ? (
+        <ClipStage clipId={clip.id} title={setTitle} version={version} />
+      ) : (
+        <CuttingStage />
+      )}
 
       <div className="flex min-w-0 flex-1 flex-col gap-2 p-3">
         <div className="flex items-baseline justify-between gap-2">
@@ -123,11 +132,19 @@ export function ClipCard({
 // The done clip's 9:16 stage: a poster that, on play, mounts the inline preview. The
 // video is only loaded once the operator actually previews (lazy — a grid of many
 // clips never fetches every body).
-function ClipStage({ clipId, title }: { clipId: string; title: string }) {
+function ClipStage({
+  clipId,
+  title,
+  version,
+}: {
+  clipId: string;
+  title: string;
+  version?: number;
+}) {
   const [previewing, setPreviewing] = useState(false);
 
   if (previewing) {
-    return <ClipPreview clipId={clipId} title={title} />;
+    return <ClipPreview clipId={clipId} title={title} version={version} />;
   }
 
   return (
@@ -137,7 +154,12 @@ function ClipStage({ clipId, title }: { clipId: string; title: string }) {
       onClick={() => setPreviewing(true)}
       type="button"
     >
-      <img alt="" className="clip-stage-media" loading="lazy" src={clipPosterUrl(clipId)} />
+      <img
+        alt=""
+        className="clip-stage-media"
+        loading="lazy"
+        src={clipPosterUrl(clipId, undefined, version)}
+      />
       <span aria-hidden="true" className="clip-stage-play">
         <PlayIcon weight="fill" />
       </span>
@@ -160,8 +182,16 @@ function CuttingStage() {
 // off the element's own clock (the radio "one clock" discipline). `autoPlay` force-plays
 // on mount (mounted on the operator's click); the transport rides as the auto-hiding
 // overlay over the 9:16 frame.
-function ClipPreview({ clipId, title }: { clipId: string; title: string }) {
-  const src = clipPreviewUrl(clipId);
+function ClipPreview({
+  clipId,
+  title,
+  version,
+}: {
+  clipId: string;
+  title: string;
+  version?: number;
+}) {
+  const src = clipPreviewUrl(clipId, undefined, version);
 
   return (
     <Video.Root autoPlay src={src}>
