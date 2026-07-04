@@ -91,7 +91,7 @@
     "fluncle-video": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-video",
       "sourceType": "local",
-      "computedHash": "0a3689dfc657d9e54a86749732d1245488ca3a9b3aa53996658d1454fb988669"
+      "computedHash": "6ab7dc483450f8d8c5a080c917cddf9dff0deb6d866ecea1cc7491883aa78b29"
     },
     "hetzner-devbox": {
       "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/hetzner-devbox",
