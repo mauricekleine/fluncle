@@ -14,6 +14,7 @@ import {
   keyToBinding,
 } from "../keybindings.ts";
 import { type Scene } from "../scene-extract.ts";
+import { settleGain } from "../settle.ts";
 import { BridgeClient } from "./bridge.ts";
 import { Dsp, MIC_CONSTRAINTS } from "./dsp.ts";
 import { GlassPipeline } from "./pipeline.ts";
@@ -177,6 +178,15 @@ let worldStatus = "world: —";
 let outputTripCooldown = 0; // frames of forced holding after an output-side trip
 let smokeResult = "not run";
 
+// Arrival settle guard (fix for the "racing" arrival): eases the audio-reactive input
+// gains up from a floor over ~1.5s so a fresh world wakes rather than spawns mid-sprint,
+// and snaps the raw seed (a world's identity is never swept through). `?noSettle=1`
+// disables it for an A/B; `?trace=1` prints the 100ms arrival uniform trace to console.
+const PARAMS = new URLSearchParams(location.search);
+const settleGuardOn = !PARAMS.has("noSettle");
+const traceOn = PARAMS.has("trace");
+let traceLastMs = 0;
+
 // ---- plate -----------------------------------------------------------------
 function foundStr(iso: string | null): string {
   if (!iso) {
@@ -210,9 +220,18 @@ function arrive(idx: number): void {
   palTarR = flat(paletteReplay(e));
   seedTar = ((e.seed || 0) % 100000) / 100000;
   seedRawTar = e.seed || 0;
+  // ROOT FIX for the racing arrival: snap the RAW seed instead of easing it. seedRawCur
+  // eased toward a large new seed at 0.06/frame, sweeping u_seed through ~a thousand
+  // intermediate values over the first ~1.5s — for any world whose field offset keys off
+  // u_seed, that sweep IS the "scene zooming past". A seed is a world's fixed identity;
+  // the palette crossfade + arrival fade own the transition, the seed just arrives.
+  if (settleGuardOn) {
+    seedRawCur = seedRawTar;
+  }
   autoMorph = false;
   manualHold = false;
   arriveMs = performance.now();
+  traceLastMs = 0;
   replayExpectedLenMs = e.durationMs || 300000;
 
   const rp = e.replay;
@@ -298,7 +317,10 @@ const HANDLERS: Record<KeybindingId, (ev: KeyboardEvent) => void> = {
     if (ev.key === "-" || ev.key === "_") {
       intensity = Math.max(0.4, +(intensity - 0.1).toFixed(2));
     } else {
-      intensity = Math.min(1.3, +(intensity + 0.1).toFixed(2));
+      // Ceiling 1.6 (was 1.3): operator headroom on the reactive INPUT drive. The
+      // OUTPUT rails still bound the frame — the Warm-Dark clamp (crossfade shader),
+      // the per-band 1.15 clamp (`cl`), and the source+output flash nets all hold.
+      intensity = Math.min(1.6, +(intensity + 0.1).toFixed(2));
     }
     bridge.send({ cmd: "intensity", value: intensity });
     updateHud();
@@ -530,48 +552,90 @@ function frame(): void {
   const replayPalette = new Float32Array(palCurR);
   const dwellSec = (nowMs - arriveMs) / 1000;
 
+  // Arrival settle: the eased audio-reactive INPUT gain (floor→1 over ~1.5s). `rx`
+  // scales the band/transient drive; `sw` scales swell; drop rides it too. It is NOT
+  // applied to time / drift / progress / seed / palette — the constant clock never
+  // pauses, so the world keeps breathing and travelling while its reactivity comes up.
+  const settle = settleGuardOn ? settleGain(nowMs - arriveMs) : 1;
+  const rx = (x: number): number => cl(x) * settle;
+  const sw = Math.min(a.swell * intensity, 1.1) * settle;
+  const progress = Math.min((nowMs - arriveMs) / replayExpectedLenMs, 1);
+
   const bloomCfg = !bloomEnabled ? null : replayActive ? currentBloom : DEFAULT_BLOOM;
 
   pipeline.render(
     {
-      bass: cl(a.bass),
-      energy: cl(a.energy),
+      bass: rx(a.bass),
+      energy: rx(a.energy),
       holding: holdCur,
-      kick: cl(a.kick),
-      mid: cl(a.mid),
+      kick: rx(a.kick),
+      mid: rx(a.mid),
       palette: basePalette,
       scene: scene % 3,
       seed: seedCur,
-      swell: Math.min(a.swell * intensity, 1.1),
+      swell: sw,
       time: now,
-      treble: cl(a.treble),
+      treble: rx(a.treble),
     },
     replayActive
       ? {
           active: true,
           fade: effFade,
           inputs: {
-            bass: cl(a.bass),
-            bassFast: cl(a.bassFast),
-            drop: a.drop,
+            bass: rx(a.bass),
+            bassFast: rx(a.bassFast),
+            drop: a.drop * settle,
             dwellSec,
-            energy: cl(a.energy),
-            energyFast: cl(a.energyFast),
-            kick: cl(a.kick),
-            mid: cl(a.mid),
-            midFast: cl(a.midFast),
+            energy: rx(a.energy),
+            energyFast: rx(a.energyFast),
+            kick: rx(a.kick),
+            mid: rx(a.mid),
+            midFast: rx(a.midFast),
             palette: replayPalette,
-            progress: Math.min((nowMs - arriveMs) / replayExpectedLenMs, 1),
+            progress,
             seedRaw: seedRawCur,
-            swell: Math.min(a.swell * intensity, 1.1),
+            swell: sw,
             time: now,
-            treble: cl(a.treble),
-            trebleFast: cl(a.trebleFast),
+            treble: rx(a.treble),
+            trebleFast: rx(a.trebleFast),
           },
         }
       : null,
     bloomCfg,
   );
+
+  // Arrival instrumentation (`?trace=1`): dump every replay-fed signal at 100ms
+  // intervals across the first 6s of an arrival, so the racing fix is provable
+  // before/after (A/B via `?noSettle=1`) from the same trace.
+  if (traceOn && arriveMs > 0 && nowMs - arriveMs <= 6000 && nowMs - traceLastMs >= 100) {
+    traceLastMs = nowMs;
+    const ls = limiter.status(nowMs);
+    const it0 = pipeline.debugIntegrators()[0] ?? null;
+    // eslint-disable-next-line no-console
+    console.log(
+      "[trace] " +
+        JSON.stringify({
+          bass: +a.bass.toFixed(3),
+          bassFast: +a.bassFast.toFixed(3),
+          drop: +a.drop.toFixed(3),
+          eases: ls.eases,
+          energy: +a.energy.toFixed(3),
+          gen: ls.generalCount,
+          intPos: it0 ? +it0.pos.toFixed(3) : null,
+          intStep: it0 ? +it0.step.toFixed(4) : null,
+          kick: +a.kick.toFixed(3),
+          mid: +a.mid.toFixed(3),
+          progress: +progress.toFixed(4),
+          red: ls.redCount,
+          seedCur: +seedRawCur.toFixed(1),
+          seedTar: +seedRawTar.toFixed(1),
+          settle: +settle.toFixed(3),
+          swell: +a.swell.toFixed(3),
+          t: +((nowMs - arriveMs) / 1000).toFixed(2),
+          treble: +a.treble.toFixed(3),
+        }),
+    );
+  }
 
   // bridge: heartbeat (1Hz) + mel (10Hz)
   bridge.heartbeat(nowMs, renderFrame);
