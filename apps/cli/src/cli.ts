@@ -100,6 +100,7 @@ type TrackUpdateOptions = {
 };
 
 type TrackVideoOptions = {
+  allowPartial?: boolean;
   composition?: string;
   cover?: string;
   dir?: string;
@@ -571,6 +572,11 @@ function addAdminCommands(program: Command): void {
     .command("video")
     .description("Upload a track's video bundle to R2 and link it")
     .argument("[idOrLogId]")
+    .option(
+      "--allow-partial",
+      "Allow an intentionally partial upload (skip the re-render-contract check; e.g. poster-only)",
+      false,
+    )
     .option("--composition <file>", "Composition source file")
     .option("--cover <file>", "Cover image")
     .option("--dir <dir>", "Bundle directory")
@@ -1560,7 +1566,7 @@ async function runTrackVideo(
 ): Promise<void> {
   if (!idOrLogId) {
     throw new Error(
-      "Missing id. Usage: fluncle admin tracks video <track_id|log_id> (--dir <dir> | --footage <file> [--footage-social <file>] [--footage-notext <file>] [--footage-landscape <file>] [--footage-landscape-social <file>] [--poster <file>] [--cover <file>] [--note <file>] [--composition <file>] [--props <file>] [--render <file>] [--intent <file>] [--metrics <file>] [--scene <file>])",
+      "Missing id. Usage: fluncle admin tracks video <track_id|log_id> (--dir <dir> | --footage <file> [--footage-social <file>] [--footage-notext <file>] [--footage-landscape <file>] [--footage-landscape-social <file>] [--poster <file>] [--cover <file>] [--note <file>] [--composition <file>] [--props <file>] [--render <file>] [--intent <file>] [--metrics <file>] [--scene <file>]) [--allow-partial]",
     );
   }
 
@@ -1608,16 +1614,20 @@ async function runTrackVideo(
     scene: resolveFile(options.scene, "scene.json"),
   };
 
-  if (!files.footage) {
+  // A footage cut is required for the normal (full-bundle) upload; --allow-partial
+  // lifts that for a deliberate partial refresh (e.g. poster-only).
+  if (!files.footage && !options.allowPartial) {
     throw new Error(
-      "A footage cut is required (--footage <file>, or --dir containing footage.mp4)",
+      "A footage cut is required (--footage <file>, or --dir containing footage.mp4). Pass --allow-partial for a deliberate partial refresh (e.g. poster-only).",
     );
   }
 
   // Progress per file as the bytes go straight to R2 (suppressed under --json so
   // the output stays a single parseable object).
   const onProgress = options.json ? undefined : (message: string) => console.log(message);
-  const result = await trackVideoCommand(idOrLogId, files, onProgress);
+  const result = await trackVideoCommand(idOrLogId, files, onProgress, {
+    allowPartial: options.allowPartial,
+  });
 
   if (options.json) {
     printJson(result);

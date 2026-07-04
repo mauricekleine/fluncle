@@ -45,6 +45,7 @@ import {
   scoreBeatReactivity,
   scoreCoupling,
   scoreFlashSafety,
+  scoreSeam,
 } from "./analyze-motion";
 
 const FPS = 30;
@@ -664,4 +665,153 @@ console.log(
 );
 console.log(
   "✓ arc/deadness: a sweeping structure reads evolving, frozen bars under grain read DEAD (laundering guard), a concentrated subject-reveal is rescued by the best-window read, short is inconclusive, intent arc folds",
+);
+
+// ---------------------------------------------------------------------------
+// SPATIAL SEAM (WARN — the atan branch-cut tell)
+// ---------------------------------------------------------------------------
+
+const SEAM_FRAMES = 40;
+const SEAM_ROW = 57; // the vertical centre — where a negative-x-ray cut sits
+const SEAM_COL = 22;
+
+// A full-width horizontal discontinuity at SEAM_ROW: a gentle vertical gradient
+// (no spike) with a hard luma jump across one row-pair, plus light grain. This is
+// the branch-cut seam a shader draws when a raw atan angle feeds noise/warp.
+const seamRowFrame = (t: number): Float32Array => {
+  const f = new Float32Array(PIX * 3);
+  for (let y = 0; y < FH; y++) {
+    for (let x = 0; x < FW; x++) {
+      const base = 40 + (y / FH) * 40; // gentle gradient — tiny row-to-row change
+      const jump = y > SEAM_ROW ? 120 : 0; // the hard discontinuity
+      const v = clamp8(base + jump + speckle(y * FW + x, t, 8));
+      const p = (y * FW + x) * 3;
+      f[p] = v;
+      f[p + 1] = v;
+      f[p + 2] = v;
+    }
+  }
+  return f;
+};
+
+// The REALISTIC negative-x-ray seam: the discontinuity paints only the LEFT half
+// (x < FW/2), exactly like an atan(y,x) ±π cut, so the full-width row diff is
+// diluted ~½ — the detector must still catch it (mirrors 032.0.4L on the live site).
+const seamHalfRowFrame = (t: number): Float32Array => {
+  const f = new Float32Array(PIX * 3);
+  for (let y = 0; y < FH; y++) {
+    for (let x = 0; x < FW; x++) {
+      const base = 40 + (y / FH) * 40;
+      const jump = y > SEAM_ROW && x < FW / 2 ? 120 : 0;
+      const v = clamp8(base + jump + speckle(y * FW + x, t, 8));
+      const p = (y * FW + x) * 3;
+      f[p] = v;
+      f[p + 1] = v;
+      f[p + 2] = v;
+    }
+  }
+  return f;
+};
+
+// A full-height vertical discontinuity at SEAM_COL (the column-axis twin).
+const seamColFrame = (t: number): Float32Array => {
+  const f = new Float32Array(PIX * 3);
+  for (let y = 0; y < FH; y++) {
+    for (let x = 0; x < FW; x++) {
+      const base = 40 + (x / FW) * 40;
+      const jump = x > SEAM_COL ? 120 : 0;
+      const v = clamp8(base + jump + speckle(y * FW + x, t, 8));
+      const p = (y * FW + x) * 3;
+      f[p] = v;
+      f[p + 1] = v;
+      f[p + 2] = v;
+    }
+  }
+  return f;
+};
+
+// A CLEAN field: a smooth 2-D gradient with NO discontinuity, plus heavier grain.
+// Adjacent-line diffs are uniform everywhere, so no line spikes above its
+// neighbours — the detector must NOT warn (the false-positive guard, like 027.9.5H).
+const cleanFrame = (t: number): Float32Array => {
+  const f = new Float32Array(PIX * 3);
+  for (let y = 0; y < FH; y++) {
+    for (let x = 0; x < FW; x++) {
+      const v = clamp8(
+        70 +
+          40 * Math.sin((x / FW) * Math.PI) * Math.cos((y / FH) * Math.PI) +
+          speckle(y * FW + x, t, 26),
+      );
+      const p = (y * FW + x) * 3;
+      f[p] = v;
+      f[p + 1] = v;
+      f[p + 2] = v;
+    }
+  }
+  return f;
+};
+
+// 1) A full-width horizontal seam → detected, row axis, position ≈ SEAM_ROW.
+const seamRow = scoreSeam(wrapRgb(Array.from({ length: SEAM_FRAMES }, (_, t) => seamRowFrame(t))));
+assert.equal(seamRow.detected, true, "a hard horizontal discontinuity must be detected as a seam");
+assert.equal(seamRow.seam?.axis, "row", "a horizontal seam is a ROW-axis discontinuity");
+assert.ok(
+  seamRow.seam !== null && Math.abs(seamRow.seam.positionPct - SEAM_ROW / FH) < 0.05,
+  `the seam position must sit at the discontinuity (~${((SEAM_ROW / FH) * 100).toFixed(0)}%, got ${((seamRow.seam?.positionPct ?? 0) * 100).toFixed(0)}%)`,
+);
+assert.ok(
+  (seamRow.seam?.frames ?? 0) >= SEAM_FRAMES / 4,
+  "a baked-in seam persists across (nearly) every sampled frame",
+);
+
+// 2) The realistic HALF-WIDTH negative-x-ray seam → still detected (the ~½ dilution
+//    must not hide it) — the direct de-risk of the real-artifact check.
+const seamHalf = scoreSeam(
+  wrapRgb(Array.from({ length: SEAM_FRAMES }, (_, t) => seamHalfRowFrame(t))),
+);
+assert.equal(
+  seamHalf.detected,
+  true,
+  "a half-width negative-x-ray seam (left half only) must still be detected",
+);
+assert.equal(
+  seamHalf.seam?.axis,
+  "row",
+  "the half-width negative-x-ray seam is a row discontinuity",
+);
+
+// 3) A vertical seam → detected, column axis, position ≈ SEAM_COL.
+const seamCol = scoreSeam(wrapRgb(Array.from({ length: SEAM_FRAMES }, (_, t) => seamColFrame(t))));
+assert.equal(seamCol.detected, true, "a hard vertical discontinuity must be detected as a seam");
+assert.equal(seamCol.seam?.axis, "column", "a vertical seam is a COLUMN-axis discontinuity");
+assert.ok(
+  seamCol.seam !== null && Math.abs(seamCol.seam.positionPct - SEAM_COL / FW) < 0.06,
+  `the column seam must sit at the discontinuity (~${((SEAM_COL / FW) * 100).toFixed(0)}%, got ${((seamCol.seam?.positionPct ?? 0) * 100).toFixed(0)}%)`,
+);
+
+// 4) A clean smooth field under grain → NOT detected (the false-positive guard).
+const clean = scoreSeam(wrapRgb(Array.from({ length: SEAM_FRAMES }, (_, t) => cleanFrame(t))));
+assert.equal(
+  clean.detected,
+  false,
+  "a smooth field with no discontinuity must NOT warn (grain guard)",
+);
+assert.equal(clean.seam, null, "a clean field reports no seam");
+
+// 5) A TRANSIENT seam (only the first 2 frames) → NOT detected (persistence guard:
+//    a real branch cut is baked into geometry and holds for the whole clip).
+const transient = scoreSeam(
+  wrapRgb(Array.from({ length: SEAM_FRAMES }, (_, t) => (t < 2 ? seamRowFrame(t) : cleanFrame(t)))),
+);
+assert.equal(
+  transient.detected,
+  false,
+  "a 2-frame transient must NOT trip the seam warn (persistence ≥3 sampled frames)",
+);
+
+console.log(
+  `seam: full=${seamRow.detected}@${((seamRow.seam?.positionPct ?? 0) * 100).toFixed(0)}%(${seamRow.seam?.frames}/${seamRow.sampledFrames}) half=${seamHalf.detected} col=${seamCol.detected}@${((seamCol.seam?.positionPct ?? 0) * 100).toFixed(0)}% clean=${clean.detected} transient=${transient.detected}`,
+);
+console.log(
+  "✓ spatial seam: a hard row/column discontinuity (incl. a half-width negative-x-ray cut) warns at the right position, a smooth grained field does NOT, and a 2-frame transient never trips the persistence guard",
 );

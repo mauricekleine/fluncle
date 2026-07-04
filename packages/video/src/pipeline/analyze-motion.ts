@@ -1813,6 +1813,221 @@ export function scoreArc(input: ArcInput): ArcResult {
 }
 
 // ---------------------------------------------------------------------------
+// SPATIAL SEAM (WARN — the branch-cut tell). A hard, static, one-line-wide
+// discontinuity the still critique rarely catches: the classic atan(y,x) ±π
+// branch cut fed into noise/warp draws a seam along the negative-x ray, and a
+// tiling / mirror fold leaves one too. Cheap detector: per sampled frame, the
+// row-to-row (and column-to-column) mean-abs-luma diff; a line-pair whose diff
+// SPIKES far above its neighbours AND holds at the SAME position across ≥3 sampled
+// frames is a seam. WARN, never FAIL — a legitimate hard horizon reads the same way
+// and presence renders will have them, so the report says to EYEBALL it (scrub the
+// negative-x ray) rather than blocking ship. Deterministic: fixed sample positions,
+// no Math.random / Date.now.
+//
+// TWO things keep it off the baked TEXT (measured on the real social cuts). (1) It
+// collects EVERY in-band spike per frame, not just the strongest — the softer
+// center seam would otherwise be masked by a text edge that spikes harder in the
+// same frame (032.0.4L's vortex cut sat under its title block). (2) It scans only a
+// CENTRAL BAND [margin, 1-margin]: a from-center atan cut is mid-frame, whereas the
+// fixed TypePlate / CloseCard homes (identity lower ~85%, telemetry upper, the
+// closing card) draw real hard horizontal edges near the top/bottom that are NOT
+// shader seams and are transient (they fade before the drop). The band is the
+// difference between flagging 032.0.4L's mid-frame cut and NOT flagging every
+// text-baked social cut (e.g. clean 027.9.5H, whose only edges are its text).
+// ---------------------------------------------------------------------------
+
+const SEAM_SAMPLES = 16; // evenly-spaced frames to sample across the clip
+const SEAM_MIN_FRAMES = 3; // a seam must persist across ≥3 sampled frames
+const SEAM_SPIKE_RATIO = 3; // the spike line's diff ≥ 3× its local-median neighbours
+const SEAM_ABS_FLOOR = 6; // …and ≥ 6 raw-luma units (a real discontinuity, not grain)
+const SEAM_NEIGHBORHOOD = 4; // ± lines for the local-median baseline
+const SEAM_POS_TOL = 2; // lines within ± this cluster as the same seam position
+const SEAM_BAND_MARGIN = 0.18; // scan only [margin, 1-margin] — mid-frame, off the text homes
+
+export type SeamAxis = "row" | "column";
+
+export type Seam = {
+  axis: SeamAxis;
+  /** the discontinuity as a fraction 0..1 (y for a row seam, x for a column seam). */
+  positionPct: number;
+  /** how many of the sampled frames showed the seam at this position. */
+  frames: number;
+  /** the median spike ratio (line diff ÷ local-median baseline) across the hits. */
+  ratio: number;
+};
+
+export type SeamResult = {
+  deterministic: true;
+  hard: false;
+  detected: boolean;
+  /** the strongest sustained seam, or null when none persisted. */
+  seam: Seam | null;
+  sampledFrames: number;
+};
+
+/** Raw 0..255 luma plane of one interleaved rgb frame (BT.601 weights, no blur —
+ *  the sharp discontinuity is exactly the signal, so it must NOT be smoothed). */
+function seamLuma(frame: Float32Array, width: number, height: number): Float32Array {
+  const pix = width * height;
+  const out = new Float32Array(pix);
+  for (let p = 0; p < pix; p++) {
+    out[p] = 0.299 * frame[p * 3] + 0.587 * frame[p * 3 + 1] + 0.114 * frame[p * 3 + 2];
+  }
+  return out;
+}
+
+/** Per-row-pair mean-abs-luma diff (adjacent rows), length height-1. */
+function rowDiffs(luma: Float32Array, width: number, height: number): number[] {
+  const out: number[] = [];
+  for (let r = 0; r < height - 1; r++) {
+    let d = 0;
+    for (let x = 0; x < width; x++) {
+      d += Math.abs(luma[r * width + x] - luma[(r + 1) * width + x]);
+    }
+    out.push(d / width);
+  }
+  return out;
+}
+
+/** Per-column-pair mean-abs-luma diff (adjacent columns), length width-1. */
+function colDiffs(luma: Float32Array, width: number, height: number): number[] {
+  const out: number[] = [];
+  for (let c = 0; c < width - 1; c++) {
+    let d = 0;
+    for (let y = 0; y < height; y++) {
+      d += Math.abs(luma[y * width + c] - luma[y * width + c + 1]);
+    }
+    out.push(d / height);
+  }
+  return out;
+}
+
+/** One qualifying spike: which sampled `frame` it came from, its line `index`, and
+ *  the spike `ratio`. Tagged by frame so a cluster counts DISTINCT frames. */
+type SeamHit = { frame: number; index: number; ratio: number };
+
+/** EVERY in-band local-max spike in a diff series (≥ floor, ≥ ratio× its local
+ *  median, higher than its immediate neighbours so a broad ramp never counts, and
+ *  inside the central band so the fixed text homes are skipped). All spikes, not
+ *  just the strongest, so the softer center seam is never masked by a harder edge. */
+function bandSpikes(diffs: number[], frame: number, extent: number): SeamHit[] {
+  const out: SeamHit[] = [];
+  for (let i = 0; i < diffs.length; i++) {
+    const pct = (i + 0.5) / extent;
+    if (pct < SEAM_BAND_MARGIN || pct > 1 - SEAM_BAND_MARGIN) {
+      continue;
+    }
+    const here = diffs[i];
+    if (here < SEAM_ABS_FLOOR) {
+      continue;
+    }
+    // A seam is a NARROW spike, never part of a gradual ramp — reject if either
+    // immediate neighbour is higher.
+    if (i > 0 && diffs[i - 1] > here) {
+      continue;
+    }
+    if (i < diffs.length - 1 && diffs[i + 1] > here) {
+      continue;
+    }
+    const neighbours: number[] = [];
+    for (let d = -SEAM_NEIGHBORHOOD; d <= SEAM_NEIGHBORHOOD; d++) {
+      if (d === 0) {
+        continue;
+      }
+      const j = i + d;
+      if (j >= 0 && j < diffs.length) {
+        neighbours.push(diffs[j]);
+      }
+    }
+    if (neighbours.length === 0) {
+      continue;
+    }
+    // Floor the baseline at 1 luma unit so a seam over a perfectly flat field
+    // (baseline ~0) reads a large finite ratio instead of dividing by ~0.
+    const base = Math.max(median(neighbours), 1);
+    const ratio = here / base;
+    if (ratio >= SEAM_SPIKE_RATIO) {
+      out.push({ frame, index: i, ratio });
+    }
+  }
+  return out;
+}
+
+/** Cluster spike hits by position (within ±SEAM_POS_TOL); the largest cluster
+ *  spanning ≥SEAM_MIN_FRAMES DISTINCT frames is a sustained seam, or null. */
+function clusterSeam(hits: SeamHit[], axis: SeamAxis, extent: number): Seam | null {
+  if (hits.length < SEAM_MIN_FRAMES) {
+    return null;
+  }
+  let best: Seam | null = null;
+  for (const anchor of hits) {
+    const cluster = hits.filter((h) => Math.abs(h.index - anchor.index) <= SEAM_POS_TOL);
+    // One representative (max-ratio) spike per distinct frame — two nearby spikes in
+    // the same frame must not inflate the persistence count.
+    const perFrame = new Map<number, SeamHit>();
+    for (const hit of cluster) {
+      const prev = perFrame.get(hit.frame);
+      if (!prev || hit.ratio > prev.ratio) {
+        perFrame.set(hit.frame, hit);
+      }
+    }
+    if (perFrame.size < SEAM_MIN_FRAMES) {
+      continue;
+    }
+    const reps = [...perFrame.values()];
+    const ratio = median(reps.map((c) => c.ratio));
+    const positionPct = (median(reps.map((c) => c.index)) + 0.5) / extent;
+    if (
+      best === null ||
+      perFrame.size > best.frames ||
+      (perFrame.size === best.frames && ratio > best.ratio)
+    ) {
+      best = { axis, frames: perFrame.size, positionPct, ratio };
+    }
+  }
+  return best;
+}
+
+/** Pure spatial-seam scorer over the decoded rgb frames. No ffmpeg. Advisory. */
+export function scoreSeam(rgb: RgbFrames): SeamResult {
+  const { width, height, frames } = rgb;
+  const n = frames.length;
+
+  const sampleCount = Math.min(SEAM_SAMPLES, n);
+  const sampled = new Set<number>();
+  for (let k = 0; k < sampleCount; k++) {
+    const idx = sampleCount <= 1 ? 0 : Math.round((k / (sampleCount - 1)) * (n - 1));
+    sampled.add(idx);
+  }
+  const sampledFrames = sampled.size;
+
+  const rowHits: SeamHit[] = [];
+  const colHits: SeamHit[] = [];
+  for (const fi of sampled) {
+    const luma = seamLuma(frames[fi], width, height);
+    if (height >= 2) {
+      rowHits.push(...bandSpikes(rowDiffs(luma, width, height), fi, height));
+    }
+    if (width >= 2) {
+      colHits.push(...bandSpikes(colDiffs(luma, width, height), fi, width));
+    }
+  }
+
+  const candidates = [clusterSeam(rowHits, "row", height), clusterSeam(colHits, "column", width)]
+    .filter((s): s is Seam => s !== null)
+    .sort((a, b) => b.frames - a.frames || b.ratio - a.ratio);
+  const seam = candidates[0] ?? null;
+
+  return {
+    detected: seam !== null,
+    deterministic: true,
+    hard: false,
+    sampledFrames,
+    seam,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // The orchestrator + report assembly (C6)
 // ---------------------------------------------------------------------------
 
@@ -1834,6 +2049,7 @@ export type MotionReport = {
   flashSafety: FlashSafetyResult;
   beatPull: BeatPullResult & { deterministic: true; hard: true };
   arc: ArcResult;
+  seam: SeamResult;
   coupling: CouplingResult | null;
   beatReactivity: BeatReactivity | null;
   intent: IntentCheckResult | null;
@@ -1938,6 +2154,9 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
   // ARC / DEADNESS — the long-timescale HARD gate, on the same rgb extraction.
   const arc = scoreArc({ fps: reportFps, intent, rgb });
 
+  // SPATIAL SEAM — the WARN-level branch-cut tell, on the same rgb extraction.
+  const seam = scoreSeam(rgb);
+
   let coupling: CouplingResult | null = null;
   let beatReactivity: BeatReactivity | null = null;
   if (audio) {
@@ -1988,6 +2207,14 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
   }
   if (arc.intentArc && !arc.intentArc.meetsArc) {
     advisories.push(`arc.intentMismatch(seg${arc.intentArc.dropSegment})`);
+  }
+
+  // The spatial-seam WARN — never blocks (a legitimate hard horizon reads the same
+  // way), but flags a possible atan branch-cut / tiling seam for the operator's eye.
+  if (seam.detected && seam.seam) {
+    const s = seam.seam;
+    const pos = `${s.axis === "row" ? "y" : "x"}≈${Math.round(s.positionPct * 100)}%`;
+    advisories.push(`seam.possible(${pos})`);
   }
 
   if (coupling) {
@@ -2049,6 +2276,7 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
     intentDeclaredBand: coupling?.intentDeclaredBand ?? null,
     logId,
     probedFps,
+    seam,
     trackId,
     unreliable,
     video,
@@ -2100,6 +2328,13 @@ if (import.meta.main) {
     console.log(
       `${arc.dead ? "✗" : "✓"} arc: ${arc.verdict} (change ${arc.wholeClipChange.toFixed(3)} vs floor ${arc.floor}, best-window ${arc.bestWindowChange.toFixed(3)} vs region ${arc.regionFloor}, min-seg ${arc.minSegmentChange.toFixed(3)})${arc.intentArc ? `; drop-seg ${arc.intentArc.meetsArc ? "meets" : "MISSES"} arc` : ""}`,
     );
+    if (report.seam.detected && report.seam.seam) {
+      const s = report.seam.seam;
+      const pos = `${s.axis === "row" ? "y" : "x"}≈${Math.round(s.positionPct * 100)}%`;
+      console.log(
+        `! seam: possible ${s.axis} discontinuity at ${pos} (${s.frames}/${report.seam.sampledFrames} frames, ${s.ratio.toFixed(1)}× local) — WARN only; EYEBALL it, scrub the negative-x ray for an atan branch cut (a hard horizon is legitimate)`,
+      );
+    }
     if (report.coupling) {
       const c = report.coupling;
       console.log(

@@ -90,22 +90,118 @@ const VIDEO_FIELDS: ReadonlyArray<{ field: string; option: keyof TrackVideoOptio
   { field: "scene", option: "scene" },
 ];
 
+// The RE-RENDERABLE-SOURCE contract: the three artifacts that MUST accompany any
+// footage upload so the R2 bundle stays a complete, re-renderable source and its
+// render.json stays in sync with the DB ledger. Shipping footage WITHOUT these
+// desyncs the bundle — the 2026-07 partial-upload regression (footage/social/poster
+// uploaded, composition/props/render left stale). Keyed by conventional filename so
+// the error names exactly what to add.
+const RERENDER_CONTRACT_FIELDS: ReadonlyArray<{ file: string; option: keyof TrackVideoOptions }> = [
+  { file: "composition.tsx", option: "composition" },
+  { file: "props.json", option: "props" },
+  { file: "render.json", option: "render" },
+];
+
+// The warn-only companions: shipped for provenance/eval but not load-bearing for a
+// re-render, so a missing one is a warning, never a hard error.
+const RERENDER_ADVISORY_FIELDS: ReadonlyArray<{ file: string; option: keyof TrackVideoOptions }> = [
+  { file: "intent.json", option: "intent" },
+  { file: "metrics.json", option: "metrics" },
+  { file: "scene.json", option: "scene" },
+];
+
+// Any of these present means "footage is being uploaded", which arms the re-render
+// contract check (a poster-only or cover-only refresh uploads none of them).
+const FOOTAGE_FIELDS: ReadonlyArray<keyof TrackVideoOptions> = [
+  "footage",
+  "footageSocial",
+  "footageNotext",
+  "footageLandscape",
+  "footageLandscapeSocial",
+];
+
+export type BundleCompleteness = {
+  /** true when at least one footage master is in the upload set. */
+  uploadingFootage: boolean;
+  /** missing re-render-contract filenames (hard-error unless --allow-partial). */
+  missingContract: string[];
+  /** missing advisory filenames (warn-only). */
+  missingAdvisory: string[];
+};
+
+// Pure check over the resolved file set: is this a complete re-renderable bundle?
+// A field counts as "present" when its path is set (—dir resolves conventional
+// names only when the file exists; an explicit flag sets the path). The contract is
+// only armed when footage is being uploaded — a poster-only refresh is exempt.
+export function checkBundleCompleteness(files: TrackVideoOptions): BundleCompleteness {
+  const uploadingFootage = FOOTAGE_FIELDS.some((option) => Boolean(files[option]));
+  const missingFrom = (specs: ReadonlyArray<{ file: string; option: keyof TrackVideoOptions }>) =>
+    uploadingFootage ? specs.filter((spec) => !files[spec.option]).map((spec) => spec.file) : [];
+  return {
+    missingAdvisory: missingFrom(RERENDER_ADVISORY_FIELDS),
+    missingContract: missingFrom(RERENDER_CONTRACT_FIELDS),
+    uploadingFootage,
+  };
+}
+
+export type TrackVideoCommandOptions = {
+  /** Ship an intentionally partial bundle (e.g. a poster-only refresh), skipping the
+   *  re-render-contract requirement. The escape hatch, never the default. */
+  allowPartial?: boolean;
+};
+
 // Uploads a track's video bundle DIRECTLY to R2 via short-lived presigned PUT
 // URLs the Worker signs. The bytes go straight to R2's S3 endpoint, not through
 // the Worker, so they bypass Cloudflare's ~100MB edge body limit (a crf-20 cut
 // is ~99MB and the bundle ships two of them). Three phases: presign → PUT each
 // file → finalize (links the footage cut as video_url + stores the vehicle).
 //
+// Before any of that, the bundle-completeness guard: a footage upload MUST carry the
+// re-render contract (composition + props + render), or the R2 bundle desyncs from
+// the DB ledger. Missing contract files hard-error (naming them) unless --allow-partial.
+//
 // onProgress is called per file so the caller can print clear progress.
 export async function trackVideoCommand(
   idOrLogId: string,
   files: TrackVideoOptions,
   onProgress?: (message: string) => void,
+  options: TrackVideoCommandOptions = {},
 ): Promise<TrackVideoResult> {
+  const completeness = checkBundleCompleteness(files);
+  if (
+    completeness.uploadingFootage &&
+    completeness.missingContract.length > 0 &&
+    !options.allowPartial
+  ) {
+    throw new CliError(
+      "bundle_incomplete",
+      `Refusing to upload a PARTIAL bundle: footage is being uploaded but the re-render contract is missing ${completeness.missingContract.join(", ")}. ` +
+        `A footage-only upload leaves composition.tsx/props.json/render.json stale on R2 and desyncs the render.json from the DB ledger. ` +
+        `Ship the complete bundle (re-run \`ship\` and upload with --dir), or pass --allow-partial for a deliberate partial refresh (e.g. poster-only).`,
+    );
+  }
+  if (completeness.uploadingFootage) {
+    if (completeness.missingContract.length > 0) {
+      onProgress?.(
+        `warning: --allow-partial — uploading WITHOUT the re-render contract (${completeness.missingContract.join(", ")}); the R2 bundle will NOT be re-renderable`,
+      );
+    }
+    for (const missing of completeness.missingAdvisory) {
+      onProgress?.(`warning: ${missing} missing (provenance/eval only) — shipping without it`);
+    }
+  }
+
   const present = VIDEO_FIELDS.map((spec) => ({
     field: spec.field,
     path: files[spec.option],
   })).filter((spec): spec is { field: string; path: string } => Boolean(spec.path));
+
+  if (present.length === 0) {
+    throw new CliError(
+      "nothing_to_upload",
+      "No bundle files resolved to upload (pass --dir <bundle> or explicit file flags).",
+    );
+  }
 
   // Phase 1: ask the Worker to sign a PUT URL for each artifact we have.
   const presign = await adminApiPost<PresignResponse>(
