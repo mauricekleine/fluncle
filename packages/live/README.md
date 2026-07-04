@@ -53,7 +53,17 @@ Module map (`src/glass/`):
 
 Operator keys: `→/n` advance · `←/p` rewind · `0` holding · `b` blackout (hold) ·
 `-/=` intensity · `1/2/3` vehicle · `m` auto · `v` replay · `g` bloom · `r` scale ·
-`h` HUD · `d` demo · `l` low-latency DSP (A/B) · `Shift+X` context-loss smoke.
+`h` HUD · `d` demo · `l` low-latency DSP (A/B) · `Shift+X` context-loss smoke ·
+`i` the keys overlay (`Esc` also closes).
+
+Press `i` in the glass for an on-screen legend of all of the above. That overlay,
+the keydown dispatch, and this list's runtime siblings (the boot cheat-sheet in
+`serve.ts`) are all generated from the ONE `KEYBINDINGS` table in
+`src/glass/keybindings.ts` — the single source of truth, so the legend can never
+drift from the behaviour. Add a binding there and it lights up everywhere;
+`keybindings.test.ts` guards the table's integrity, and `main.ts`'s handler map
+is typed against it so a table entry without a handler fails typecheck. This
+Markdown table is the only human-maintained mirror — keep it in step by hand.
 
 ## The bridge (`src/bridge/`, Unit B — RFC §4)
 

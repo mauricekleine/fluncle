@@ -159,6 +159,7 @@ Run this once before the first real show, and again after any change to the rig 
 | `l`             | low-latency DSP A/B — dual-resolution (default) ↔ legacy single-4096 (the HUD shows `dsp: low-latency \| legacy`; run the slow-mo probe below on each) |
 | `b`             | blackout — **hold to engage**, eases into the holding scene                                                                                            |
 | `Shift+X`       | context-loss smoke (`WEBGL_lose_context` — checklist step 8)                                                                                           |
+| `i`             | the keys overlay — an on-screen legend of this whole table (`Esc` also closes); generated from the same `KEYBINDINGS` source, so it never drifts       |
 
 The phone web-remote (served by the bridge at `http://<lan-ip>:4180/remote`) is the second-tier control for the two-machine rig; it earns its place after a rehearsal shows the reach across the room is needed.
 

@@ -6,6 +6,13 @@ import { type ShowState } from "../../contract.ts";
 import { type BloomConfig } from "../glsl-runtime.ts";
 import { DEFAULT_BLOOM } from "../glsl-runtime.ts";
 import { FlashLimiter, FlashMonitor, isSaturatedRed, redValue } from "../flash-limiter.ts";
+import {
+  bindingsByGroup,
+  GROUP_LABEL,
+  KEY_GROUPS,
+  type KeybindingId,
+  keyToBinding,
+} from "../keybindings.ts";
 import { type Scene } from "../scene-extract.ts";
 import { BridgeClient } from "./bridge.ts";
 import { Dsp, MIC_CONSTRAINTS } from "./dsp.ts";
@@ -242,62 +249,22 @@ function arrive(idx: number): void {
 }
 
 // ---- keys ------------------------------------------------------------------
-addEventListener("keydown", (ev: KeyboardEvent) => {
-  const k = ev.key;
-  if (k >= "1" && k <= "3") {
-    sceneTarget = +k - 1;
-    autoMorph = false;
-    replayActive = false;
-    pipeline.disposeReplay();
-    worldStatus = "world: default[" + vehName(+k - 1) + "] (manual vehicle)";
-    updateHud();
-  } else if (k === "m") {
-    autoMorph = !autoMorph;
-  } else if (k === "v") {
-    replayEnabled = !replayEnabled;
-    if (pointer >= 0) {
-      arrive(pointer);
-    }
-  } else if (k === "g") {
-    bloomEnabled = !bloomEnabled;
-    updateHud();
-  } else if (k === "h") {
-    const el = $("hud");
-    el.style.display = el.style.display === "none" ? "block" : "none";
-  } else if (k === "r") {
-    renderScale = renderScale === 1 ? 0.75 : renderScale === 0.75 ? 0.5 : 1;
-  } else if (k === "d") {
-    demo();
-  } else if (k === "l") {
-    // A/B the low-latency dual-resolution DSP against the legacy single-4096 path.
-    dsp.lowLatency = !dsp.lowLatency;
-    updateHud();
-  } else if (k === "X") {
-    // pre-show smoke: force a context loss (shift+x), then restore — the rails must
-    // rebuild via the SAME path as cold boot. webglcontextrestored writes the verdict.
-    smokeResult = "running…";
-    updateHud();
-    pipeline.loseContextForSmoke();
-    setTimeout(() => pipeline.restoreContextForSmoke(), 500);
-  } else if (k === "ArrowRight" || k === "n") {
+// Every action is dispatched through the ONE keybindings table (../keybindings.ts):
+// the handler map below is typed `Record<KeybindingId, …>`, so the compiler forces
+// it to match the table exactly, and the `i` overlay renders from the SAME table —
+// the legend can never drift from the behaviour. `blackout` (press-and-hold, with a
+// keyup partner) and `smoke` (Shift+X) stay special-cased inside their handlers, but
+// both still ride the table so they appear in the legend.
+const HANDLERS: Record<KeybindingId, (ev: KeyboardEvent) => void> = {
+  advance: (ev) => {
     ev.preventDefault();
     arrive(pointer < 0 ? 0 : pointer + 1);
     bridge.send({ cmd: "advance" });
-  } else if (k === "ArrowLeft" || k === "p") {
-    ev.preventDefault();
-    arrive(pointer < 0 ? 0 : pointer - 1);
-    bridge.send({ cmd: "rewind" });
-  } else if (k === "0") {
-    manualHold = !manualHold;
-  } else if (k === "-" || k === "_") {
-    intensity = Math.max(0.4, +(intensity - 0.1).toFixed(2));
-    bridge.send({ cmd: "intensity", value: intensity });
-    updateHud();
-  } else if (k === "=" || k === "+") {
-    intensity = Math.min(1.3, +(intensity + 0.1).toFixed(2));
-    bridge.send({ cmd: "intensity", value: intensity });
-    updateHud();
-  } else if (k === "b") {
+  },
+  auto: () => {
+    autoMorph = !autoMorph;
+  },
+  blackout: () => {
     if (blackoutEngaged) {
       blackoutEngaged = false;
       bridge.send({ cmd: "blackout", on: false });
@@ -312,7 +279,86 @@ addEventListener("keydown", (ev: KeyboardEvent) => {
         updateHud();
       }, 360);
     }
+  },
+  bloom: () => {
+    bloomEnabled = !bloomEnabled;
+    updateHud();
+  },
+  demo: () => {
+    demo();
+  },
+  holding: () => {
+    manualHold = !manualHold;
+  },
+  hud: () => {
+    const el = $("hud");
+    el.style.display = el.style.display === "none" ? "block" : "none";
+  },
+  intensity: (ev) => {
+    if (ev.key === "-" || ev.key === "_") {
+      intensity = Math.max(0.4, +(intensity - 0.1).toFixed(2));
+    } else {
+      intensity = Math.min(1.3, +(intensity + 0.1).toFixed(2));
+    }
+    bridge.send({ cmd: "intensity", value: intensity });
+    updateHud();
+  },
+  keys: () => {
+    toggleKeysOverlay();
+  },
+  lowLatency: () => {
+    // A/B the low-latency dual-resolution DSP against the legacy single-4096 path.
+    dsp.lowLatency = !dsp.lowLatency;
+    updateHud();
+  },
+  replay: () => {
+    replayEnabled = !replayEnabled;
+    if (pointer >= 0) {
+      arrive(pointer);
+    }
+  },
+  rewind: (ev) => {
+    ev.preventDefault();
+    arrive(pointer < 0 ? 0 : pointer - 1);
+    bridge.send({ cmd: "rewind" });
+  },
+  scale: () => {
+    renderScale = renderScale === 1 ? 0.75 : renderScale === 0.75 ? 0.5 : 1;
+  },
+  smoke: () => {
+    // pre-show smoke: force a context loss (Shift+X), then restore — the rails must
+    // rebuild via the SAME path as cold boot. webglcontextrestored writes the verdict.
+    smokeResult = "running…";
+    updateHud();
+    pipeline.loseContextForSmoke();
+    setTimeout(() => pipeline.restoreContextForSmoke(), 500);
+  },
+  vehicle: (ev) => {
+    const v = +ev.key - 1;
+    sceneTarget = v;
+    autoMorph = false;
+    replayActive = false;
+    pipeline.disposeReplay();
+    worldStatus = "world: default[" + vehName(v) + "] (manual vehicle)";
+    updateHud();
+  },
+};
+const BY_KEY = keyToBinding();
+addEventListener("keydown", (ev: KeyboardEvent) => {
+  // Escape only ever closes the overlay; it never dispatches a show action.
+  if (ev.key === "Escape") {
+    if (keysOverlayOpen) {
+      closeKeysOverlay();
+    }
+    return;
   }
+  const binding = BY_KEY.get(ev.key);
+  if (!binding) {
+    return;
+  }
+  // Show-safe: the overlay captures nothing but its own close — every show key still
+  // acts while it is open (and stays open; `i`/Esc are the only ways out).
+  HANDLERS[binding.id](ev);
 });
 addEventListener("keyup", (ev: KeyboardEvent) => {
   if (ev.key === "b" && blackoutTimer) {
@@ -321,6 +367,42 @@ addEventListener("keyup", (ev: KeyboardEvent) => {
     $("plate").classList.remove("blackarm");
   }
 });
+
+// ---- keys overlay (the `i` legend) -----------------------------------------
+// Generated from the ONE table at boot, hidden until summoned, and never pausing
+// the render (the world keeps breathing behind the scrim).
+let keysOverlayOpen = false;
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function buildKeysOverlay(): void {
+  $("keys-grid").innerHTML = KEY_GROUPS.map((g) => {
+    const rows = bindingsByGroup(g)
+      .map(
+        (b) =>
+          `<div class="krow"><span class="k">${escapeHtml(b.label)}</span>` +
+          `<span class="a">${escapeHtml(b.action)}</span></div>`,
+      )
+      .join("");
+    return `<div class="kgroup"><div class="khead">${escapeHtml(GROUP_LABEL[g])}</div>${rows}</div>`;
+  }).join("");
+}
+function openKeysOverlay(): void {
+  keysOverlayOpen = true;
+  $("keys").classList.add("show");
+}
+function closeKeysOverlay(): void {
+  keysOverlayOpen = false;
+  $("keys").classList.remove("show");
+}
+function toggleKeysOverlay(): void {
+  if (keysOverlayOpen) {
+    closeKeysOverlay();
+  } else {
+    openKeysOverlay();
+  }
+}
+buildKeysOverlay();
 
 // ---- reliability rail: WebGL context loss (RFC §4) -------------------------
 canvas.addEventListener(
