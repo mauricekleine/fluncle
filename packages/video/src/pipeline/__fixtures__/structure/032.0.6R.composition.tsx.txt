@@ -1,0 +1,194 @@
+// PROVENANCE: shipped Fluncle finding composition source, fetched from
+// https://found.fluncle.com/032.0.6R/composition.tsx on 2026-07-04 (offline fixture,
+// read as raw text + GLSL-resolved by the test — never imported/compiled).
+//
+// pressure-strata.tsx
+// "The Inevitable" — Monrroe, 2015 | Influenza Media
+//
+// Vehicle: pressure strata — geological cross-section in constant upward drift;
+// horizontal strata bands in teal-slate with deep crimson seams.
+// The whole frame is the composition (fully abstract register): an anisotropically-
+// warped fbm field with strong vertical stretch creates organic, slightly undulating
+// strata bands. A constant-clock upward drift (u_time only, no audio on translation).
+//
+// Reactivity map (all in-place, gate-safe):
+//   u_mid       → warp amplitude (bands bow laterally — the complex layered midrange)
+//   u_bass      → seam/crack width (the kick broadens the crimson fault lines)
+//   u_trebleFast → seam-edge sparkle (brief warm glint on treble transients)
+//   u_audioSwell → strata face highlight brightness (slow organic breath)
+//   u_audioDrop  → crimson seam blazing + exposure lift (the climax at 5.92s)
+//
+// Drop at 5.92s: the crimson seam(s) blaze to their hottest stop in the scene's own
+// palette (#781c0b). Not a gold sun — the vehicle's own material running hot.
+// Grain: grainCoarseSilver at amount 0.048 — mineral weight, liquid register.
+
+import {
+  type NostalgicCosmosProps,
+  CloseCard,
+  GLSL,
+  ShaderLayer,
+  TrackAudio,
+  TypePlate,
+  useJourney,
+} from "../cosmos";
+
+// oxlint-disable-next-line sort-keys
+const FRAG = /* glsl */ `
+${GLSL.hash}
+${GLSL.valueNoise}
+${GLSL.fbm}
+${GLSL.domainWarp}
+${GLSL.filmGrain}
+${GLSL.grainFamilies}
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / u_res;
+
+  // --- GLOBAL DRIFT: constant-clock upward, NO audio on translation ---
+  // Subtracting u_time * speed from y makes strata move upward monotonically.
+  float driftY = uv.y - u_time * 0.026;
+
+  // --- INTERNAL DEFORMATION: warp amplitude driven by u_mid (gate-safe) ---
+  // The complex, textured midrange (midFlatness 0.826) bows the fabric in-place.
+  float warpAmp = 0.042 + 0.072 * u_mid + 0.028 * u_audioSwell;
+  float warpField = domainWarp(vec2(uv.x * 1.05, driftY * 0.40) + vec2(31.73, 0.0), 3);
+  float warpX = (warpField - 0.5) * warpAmp;
+
+  // Working strata coordinate (warp only on x — y translation stays constant-clock)
+  vec2 p = vec2(uv.x + warpX, driftY);
+
+  // --- STRATA LAYER SYSTEM ---
+  float FREQ = 7.5;
+  float rawLayer = p.y * FREQ;
+  float lf = fract(rawLayer);      // 0..1 within each band
+  float li = floor(rawLayer);      // band index as float
+
+  // Per-band stable hashes (driven from band index, not screen pos)
+  float lh  = hash21(vec2(li, 13.71));   // primary: colour variant + crimson gate
+  float lh2 = hash21(vec2(li + 0.5, 7.33)); // secondary: slate A vs B
+
+  // --- SEAM (band boundary) ---
+  // u_bass widens the seam in-place — the kick broadens the fault lines.
+  float seamW = 0.030 + u_bass * 0.032 + u_audioDrop * 0.055;
+  float seamDist = min(lf, 1.0 - lf);
+  float inSeam = smoothstep(seamW + 0.013, seamW, seamDist);
+
+  // ~30% of seams are crimson (lh > 0.70), the rest are near-black void gaps.
+  float isCrimson = step(0.70, lh);
+
+  // --- LIT FACE: upper portion of each band catches warm side-light ---
+  // u_audioSwell lifts face brightness in-place — slow organic breath.
+  float faceT = smoothstep(0.58, 0.92, lf) * (1.0 - inSeam);
+  float swellLift = u_audioSwell * 0.70 + u_mid * 0.32;
+  float faceStrength = faceT * (0.40 + swellLift * 0.50);
+
+  // --- DEPTH SHADING: top of frame = deeper in the cross-section, dimmer ---
+  float depthFade = mix(1.0, 0.48, uv.y * 0.82);
+
+  // --- COLOURS (drawn from scene palette + geological register) ---
+  vec3 VOID_COL    = vec3(0.026, 0.022, 0.030);   // near-black void between strata
+  vec3 SLATE_A     = vec3(0.095, 0.185, 0.255);   // deep teal-slate (primary strata)
+  vec3 SLATE_B     = vec3(0.128, 0.158, 0.218);   // blue-slate variant (alternating)
+  vec3 ROSE_COL    = vec3(0.710, 0.525, 0.482);   // dusty rose = palette.glow #b5867b
+  vec3 CRIMSON_COL = vec3(0.471, 0.110, 0.043);   // deep crimson = palette.accent #781c0b
+  vec3 SEAM_DARK   = vec3(0.016, 0.012, 0.016);   // very dark gap (non-crimson seams)
+
+  // Strata body: alternate tones per band hash
+  float isAltSlate = step(0.5, lh2);
+  vec3 bodyCol = mix(SLATE_A, SLATE_B, isAltSlate);
+  bodyCol *= depthFade;
+
+  // Per-band brightness variation — each stratum has its own tonal weight
+  float bandBright = mix(0.65, 1.0, hash21(vec2(li + 1.3, 5.77)));
+  bodyCol *= bandBright;
+
+  // Lit face: dusty rose where swellLift says the light hits
+  bodyCol = mix(bodyCol, ROSE_COL, faceStrength);
+
+  // Seam colour: crimson or void
+  vec3 seamCol = mix(SEAM_DARK, CRIMSON_COL, isCrimson);
+
+  // Blend body + seam
+  vec3 col = mix(bodyCol, seamCol, inSeam);
+
+  // --- CLIMAX: drop at 5.92s — crimson seam blazes, whole field breathes brighter ---
+  float exposureLift = u_audioDrop * 0.80 + u_audioSwell * 0.25;
+  col = col * (1.0 + exposureLift * 0.55);
+
+  float dropBlaze = u_audioDrop * 1.5 * isCrimson * inSeam;
+  vec3 blazeCrimson = CRIMSON_COL * 1.65;
+  col = mix(col, blazeCrimson, clamp(dropBlaze, 0.0, 0.82));
+
+  // Cap to preserve texture at climax — never wash to flat white
+  col = min(col, vec3(0.87));
+
+  // Treble edge sparkle: brief warm glint at seam walls on hat/cymbal transients
+  float edgeSparkle = smoothstep(seamW + 0.006, seamW, seamDist) * u_trebleFast * 0.28;
+  col += vec3(edgeSparkle * 0.58, edgeSparkle * 0.32, edgeSparkle * 0.22);
+  col = min(col, vec3(0.87));
+
+  // Directional depth vignette — slightly darker toward the top (deeper ground).
+  // NOT a centred radial crop; bias is vertical-only to avoid the porthole.
+  col *= 1.0 - 0.22 * smoothstep(0.25, 1.0, uv.y);
+
+  // --- GRAIN: grainCoarseSilver — mineral weight, slow boil ---
+  GrainOpts grain = grainCoarseSilver();
+  grain.amount = 0.048;
+  col = filmGrain(col, uv, u_time, grain);
+
+  col = clamp(col, 0.0, 1.0);
+  col = dither8(col, uv);
+
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+const PressureStrata: React.FC<NostalgicCosmosProps> = ({ audio, palette, seed, track }) => {
+  // Journey phases: quick depart (8%), long travel through the strata, settle into close
+  const { phase, phaseProgress } = useJourney({ split: [0.08, 0.85] });
+
+  // Close card arrives in the "arrive" phase (~85% of 20s = 17s)
+  const closeArc = phase === "arrive" ? phaseProgress : 0;
+
+  return (
+    <>
+      <TrackAudio audio={audio} />
+      <ShaderLayer
+        fragmentShader={FRAG}
+        palette={palette}
+        seed={seed}
+        beatGrid={audio.beatGrid}
+        energyCurve={audio.energyCurve}
+        bassCurve={audio.bassCurve}
+        midCurve={audio.midCurve}
+        trebleCurve={audio.trebleCurve}
+        fluxCurve={audio.fluxCurve}
+        onsets={audio.onsets}
+        reactivity={{
+          // Drop envelope: the energy peak is at 5920ms; broad ramp (2s rise) so
+          // the build-up feels gradual and the hold (600ms) gives the seam time to
+          // blaze before settling over 3.5s back to calm.
+          drop: { fallMs: 3500, holdMs: 600, peakTimeMs: 5920, riseMs: 2000 },
+        }}
+        bloom={{ intensity: 0.65, radius: 1.1, threshold: 0.68 }}
+      />
+      <TypePlate
+        track={track}
+        ink={palette.glow}
+        dimInk="#6a8599"
+        identityInSec={0.8}
+        telemetryInSec={1.9}
+        holdSec={4.0}
+      />
+      <CloseCard
+        arc={closeArc}
+        palette={{
+          accent: palette.accent,
+          ink: palette.glow,
+        }}
+      />
+    </>
+  );
+};
+
+export default PressureStrata;

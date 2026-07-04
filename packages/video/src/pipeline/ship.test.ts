@@ -119,12 +119,13 @@ describe("buildRenderJson", () => {
     model: "anthropic/claude-opus-4-8",
     reasoning: "high",
     register: "abstract",
+    structure: { confidence: 0.9, dominant: "cellular" as const },
     trackId: "abc123",
     variants: { "footage.mp4": { aspect: "square" as const, hideOverlay: true } },
     vehicle: "voronoi cellular",
   };
 
-  test("carries every field through, including the new register axis", () => {
+  test("carries every field through, including the register + structure axes", () => {
     const json = buildRenderJson(base);
 
     expect(json).toMatchObject({
@@ -136,9 +137,16 @@ describe("buildRenderJson", () => {
       props: "props.json",
       reasoning: "high",
       register: "abstract",
+      structure: { confidence: 0.9, dominant: "cellular" },
       trackId: "abc123",
       vehicle: "voronoi cellular",
     });
+  });
+
+  test("a null structure is preserved as null (warn-not-fail contract)", () => {
+    const json = buildRenderJson({ ...base, structure: null });
+
+    expect(json.structure).toBeNull();
   });
 
   test("missing composition/intent/props files null out their pointers", () => {

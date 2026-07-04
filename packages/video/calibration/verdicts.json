@@ -1,6 +1,6 @@
 {
   "schema": "fluncle.calibration-verdicts/1",
-  "note": "Operator-labeled ground truth for the deterministic video gates. Seeded from the video-aliveness audit. calibrate.ts fetches each entry's PUBLIC poster (+ footage.social.mp4 when --footage is passed, since those files are large), runs the relevant gate, and prints gate-verdict vs operator-verdict so thresholds stay re-earnable as verdicts accumulate. Add rows over time; keep notes concrete. Dimensions: arc (needs footage), diversity (poster-pair, offline).",
+  "note": "Operator-labeled ground truth for the deterministic video gates. Seeded from the video-aliveness audit. calibrate.ts fetches each entry's PUBLIC poster (+ footage.social.mp4 when --footage is passed, since those files are large), runs the relevant gate, and prints gate-verdict vs operator-verdict so thresholds stay re-earnable as verdicts accumulate. Add rows over time; keep notes concrete. Dimensions: arc (needs footage), diversity (poster-pair, offline), structure (shader-family taste, offline — the classified dominant family of a finding's shader body).",
   "entries": [
     {
       "logId": "032.0.4L",
@@ -39,6 +39,27 @@
       "dimension": "judge",
       "verdict": "pass",
       "notes": "CHAPTER-LENGTH coverage boundary (Unit O, the set-video hour render). Provenance: the 019.F.1A pilot rendered 012.2.4L as a 148s set chapter (caustic web) — the sec-driven `rise` ramp rescaled to span the chapter (no 20s freeze), the tail settle suppressed. Rendered stills at 12s/62s/136s are visibly alive (sparse -> flooded -> distinct), yet the deterministic structural-arc gate reads wholeClipChange ~0.231 at chapter length, BELOW the 20s floor of 0.29. This is a false-fail by construction: the arc floor is calibrated for a 20s per-track JOURNEY (depart->arrive structural reorganization), but a minutes-long chapter is a STEADY-STATE slice of one vehicle that floods/churns (brightness + density) without structurally reorganizing. So the per-track structural arc floor does NOT apply to set chapters — the arc gate is ADVISORY at chapter length (render-set treats it so); chapter aliveness is judged off the StudioEnvelope + a visual review, and the strobe/flash gate stays HARD. calibrate fetches 012.2.4L's public 20s footage for transparency but does not score this row (like 027.2.8R)."
+    },
+    {
+      "logId": "027.5.4D",
+      "dimension": "structure",
+      "structure": "cellular",
+      "verdict": "fail",
+      "notes": "STRUCTURAL-AXIS failure exemplar, dated 2026-07-04. The vehicle name reads 'crystal scaffold' but the shader body is a voronoi/cellular field. First of the cellular 3-in-6: three findings inside six shipped the SAME structural primitive (027.5.4D / 027.2.8R / 033.0.1O) under three different poetic names, so a name-only diversity check let them through. cellular is the operator's LEAST-FAVORITE family and is currently SATURATED — this trio is why the structural gate exists. Not an outright ban: pick a family the recent window lacks first."
+    },
+    {
+      "logId": "027.2.8R",
+      "dimension": "structure",
+      "structure": "cellular",
+      "verdict": "fail",
+      "notes": "STRUCTURAL-AXIS failure exemplar, dated 2026-07-04. Second of the cellular 3-in-6 (027.5.4D / 027.2.8R / 033.0.1O). Same voronoi/cellular primitive as its siblings under a distinct vehicle name; already flagged on the 'judge' dimension for aesthetic monotony, and now on 'structure' as part of the over-shipped cellular window. cellular = operator's least-favorite, currently saturated."
+    },
+    {
+      "logId": "033.0.1O",
+      "dimension": "structure",
+      "structure": "cellular",
+      "verdict": "fail",
+      "notes": "STRUCTURAL-AXIS failure exemplar, dated 2026-07-04. Third of the cellular 3-in-6 (027.5.4D / 027.2.8R / 033.0.1O) — the one that pushed three cellular fields inside six findings. This is the concrete case the structural gate now catches: same dominant family within the last 4 shipped => FAIL. cellular = operator's least-favorite, currently saturated; the fix is to author a family the recent window lacks, then name the world freely."
     }
   ]
 }

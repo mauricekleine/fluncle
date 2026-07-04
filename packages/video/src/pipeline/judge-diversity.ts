@@ -26,15 +26,36 @@
 // CLI: bun src/pipeline/judge-diversity.ts <posterPathOrLogId> [--neighbours N]
 //      [--strict] [--json]
 
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { GLSL } from "../remotion/journey/glsl";
+
 import { decodeImageRgb, type RgbImage } from "./frames";
+import {
+  classifyCompositionStructure,
+  labelWithStructure,
+  type StructureFamily,
+  STRUCTURE_FAMILIES,
+} from "./shader-structure";
 
 const DECODE_SIZE = 160;
 const DEFAULT_NEIGHBOURS = 4;
 export const DIVERSITY_MIN = 0.35;
+
+// The structural axis: the SAME dominant family within this many shipped findings is a
+// hard repeat (FAIL); within the wider window it is a soft rhyme (WARN). Distance-
+// weighted exactly like the poster gate — the immediate neighbours are the hard
+// constraint, a rhyme further back is tolerated.
+const STRUCTURE_FAIL_WINDOW = 4;
+const STRUCTURE_WARN_WINDOW = 8;
+const DEFAULT_STRUCTURE_NEIGHBOURS = STRUCTURE_WARN_WINDOW;
+
+const OUT_DIR = path.resolve(import.meta.dirname, "../../out");
+const glslSnippets = GLSL as unknown as Record<string, string>;
+const compositionUrl = (logId: string): string =>
+  `https://found.fluncle.com/${logId}/composition.tsx`;
 
 const HUE_BINS = 12;
 const SAT_BINS = 4;
@@ -203,22 +224,195 @@ export function diversityDistance(a: DiversityFeature, b: DiversityFeature): Div
 // Fetching (public surfaces only)
 // ---------------------------------------------------------------------------
 
-type FeedTrack = { logId?: string | null; videoVehicle?: string | null };
+type FeedTrack = {
+  logId?: string | null;
+  videoVehicle?: string | null;
+  videoStructure?: string | null;
+};
+
+/** A recent published finding that has a video: its coordinate + poetic vehicle name +
+ *  the structural family recorded in the feed (when the feed already carries it). */
+export type LedgerEntry = {
+  logId: string;
+  vehicle: string | null;
+  /** The structure family from the feed, if it exposes one yet; else null (classify on the fly). */
+  feedStructure: StructureFamily | null;
+};
+
+function asFamily(value: unknown): StructureFamily | null {
+  return typeof value === "string" && (STRUCTURE_FAMILIES as readonly string[]).includes(value)
+    ? (value as StructureFamily)
+    : null;
+}
 
 /** The most-recent published findings that HAVE a video (videoVehicle set), newest first. */
-export async function fetchRecentVideoLogIds(limit: number): Promise<string[]> {
+export async function fetchRecentLedger(limit: number): Promise<LedgerEntry[]> {
   const res = await fetch(`${FEED_URL}?limit=${Math.max(limit * 3, 12)}`);
   if (!res.ok) {
     throw new Error(`feed fetch failed: ${res.status} ${res.statusText}`);
   }
   const body = (await res.json()) as { tracks?: FeedTrack[] };
-  const ids: string[] = [];
+  const entries: LedgerEntry[] = [];
   for (const t of body.tracks ?? []) {
     if (t.videoVehicle && t.logId) {
-      ids.push(t.logId);
+      entries.push({
+        feedStructure: asFamily(t.videoStructure),
+        logId: t.logId,
+        vehicle: t.videoVehicle,
+      });
     }
   }
-  return ids.slice(0, limit);
+  return entries.slice(0, limit);
+}
+
+/** Back-compat: just the logIds (the poster gate only needs coordinates). */
+export async function fetchRecentVideoLogIds(limit: number): Promise<string[]> {
+  return (await fetchRecentLedger(limit)).map((e) => e.logId);
+}
+
+// ---------------------------------------------------------------------------
+// The structural axis — classify the shader body, not the vehicle NAME
+// ---------------------------------------------------------------------------
+
+/** Read a composition source for a logId: the local bundle first, then the public host.
+ *  Returns null (never throws) when neither is reachable. */
+async function loadCompositionSource(logId: string): Promise<string | null> {
+  const local = path.join(OUT_DIR, logId, "composition.tsx");
+  if (existsSync(local)) {
+    try {
+      return readFileSync(local, "utf8");
+    } catch {
+      // fall through to the network copy
+    }
+  }
+  try {
+    const res = await fetch(compositionUrl(logId));
+    if (!res.ok) {
+      return null;
+    }
+    return await res.text();
+  } catch {
+    return null;
+  }
+}
+
+/** The structural family for a logId, resolved best-effort: the local render.json's
+ *  recorded structure first (no re-classify), then a fresh classification of the
+ *  composition source (local or fetched). Null when nothing is reachable. */
+export async function structureOfLogId(logId: string): Promise<StructureFamily | null> {
+  const manifest = path.join(OUT_DIR, logId, "render.json");
+  if (existsSync(manifest)) {
+    try {
+      const parsed = JSON.parse(readFileSync(manifest, "utf8")) as {
+        structure?: { dominant?: string } | null;
+      };
+      const recorded = asFamily(parsed.structure?.dominant);
+      if (recorded) {
+        return recorded;
+      }
+    } catch {
+      // fall through to classify
+    }
+  }
+  const source = await loadCompositionSource(logId);
+  if (!source) {
+    return null;
+  }
+  return classifyCompositionStructure(source, glslSnippets)?.dominant ?? null;
+}
+
+/** A recent neighbour with its resolved structural family (null when unclassifiable). */
+export type StructureNeighbour = {
+  logId: string;
+  vehicle: string | null;
+  family: StructureFamily | null;
+};
+
+export type StructureGateStatus = "pass" | "warn" | "fail" | "skipped";
+
+export type StructureGate = {
+  /** The subject's dominant structural family, or null when it couldn't be resolved. */
+  subject: StructureFamily | null;
+  neighbours: StructureNeighbour[];
+  /** Index (0 = immediate) of the nearest neighbour sharing the subject's family, or null. */
+  repeatAt: number | null;
+  status: StructureGateStatus;
+  verdict: string;
+};
+
+/** Ordinal helper: 1 → "1 finding ago", n → "n findings ago". */
+function findingsAgo(index: number): string {
+  const n = index + 1;
+  return `${n} finding${n === 1 ? "" : "s"} ago`;
+}
+
+/**
+ * The PURE structural-gate decision: given the subject's family and the ordered
+ * (newest-first) neighbour families, decide pass / warn / fail. A repeat inside the
+ * FAIL window (the immediate neighbours) is a hard fail; inside the wider WARN window
+ * a soft rhyme; beyond it, clear. A null subject family skips the gate (never fails a
+ * ship because a body couldn't be classified). No fs, no network — heavily tested.
+ */
+export function evaluateStructureGate(
+  subject: StructureFamily | null,
+  neighbours: StructureNeighbour[],
+): StructureGate {
+  if (!subject) {
+    return {
+      neighbours,
+      repeatAt: null,
+      status: "skipped",
+      subject,
+      verdict: "structure unresolved — structural axis skipped (pass)",
+    };
+  }
+  const repeatAt = neighbours.findIndex((n) => n.family === subject);
+  if (repeatAt < 0) {
+    return {
+      neighbours,
+      repeatAt: null,
+      status: "pass",
+      subject,
+      verdict: `${subject} is absent from the last ${neighbours.length} findings — a fresh structural family`,
+    };
+  }
+  const neighbour = neighbours[repeatAt];
+  const label = labelWithStructure(neighbour.vehicle, neighbour.family);
+  if (repeatAt < STRUCTURE_FAIL_WINDOW) {
+    return {
+      neighbours,
+      repeatAt,
+      status: "fail",
+      subject,
+      verdict: `${subject} shipped ${findingsAgo(repeatAt)} as ${label} — pick a different structural family (the recent window is saturated)`,
+    };
+  }
+  if (repeatAt < STRUCTURE_WARN_WINDOW) {
+    return {
+      neighbours,
+      repeatAt,
+      status: "warn",
+      subject,
+      verdict: `${subject} last shipped ${findingsAgo(repeatAt)} as ${label} — a rhyme, but outside the hard window; a distinct family is safer`,
+    };
+  }
+  return {
+    neighbours,
+    repeatAt,
+    status: "pass",
+    subject,
+    verdict: `${subject} last shipped ${findingsAgo(repeatAt)} — clear of the recent window`,
+  };
+}
+
+/** Fetch + classify the structural family of each recent ledger entry (best-effort). */
+export async function classifyLedger(entries: LedgerEntry[]): Promise<StructureNeighbour[]> {
+  const out: StructureNeighbour[] = [];
+  for (const entry of entries) {
+    const family = entry.feedStructure ?? (await structureOfLogId(entry.logId));
+    out.push({ family, logId: entry.logId, vehicle: entry.vehicle });
+  }
+  return out;
 }
 
 /** Decode a poster given a local path or a logId (fetched from the public host). */
@@ -244,25 +438,44 @@ export type DiversityReport = {
   neighbours: { logId: string; immediate: boolean; distance: DiversityDistance }[];
   immediateDistance: number | null;
   threshold: number;
+  /** The structural-family axis (the checked claim beside the vehicle NAME). */
+  structure: StructureGate;
+  /** Poster gate: distinct from the immediate neighbour's picture. */
+  posterPass: boolean;
+  /** Overall: the poster gate AND the structural gate did not FAIL. */
   pass: boolean;
   verdict: string;
 };
 
-/** Judge the subject poster against the recent published neighbours. */
+/**
+ * Judge the subject against the recent published neighbours on BOTH axes: the poster
+ * picture-distance (structure-of-the-image) and the shader STRUCTURAL family (the
+ * checked claim the vehicle name can't carry). `structureNeighbours` sets the
+ * structural window (default 8; the last 4 are the hard FAIL window). `assumeStructure`
+ * overrides the subject's classified family — for what-if / dry runs of the gate.
+ */
 export async function judgeDiversity(
   subject: string,
-  opts: { neighbours?: number } = {},
+  opts: {
+    neighbours?: number;
+    structureNeighbours?: number;
+    assumeStructure?: StructureFamily;
+  } = {},
 ): Promise<DiversityReport> {
   const wanted = opts.neighbours ?? DEFAULT_NEIGHBOURS;
+  const structureWanted = opts.structureNeighbours ?? DEFAULT_STRUCTURE_NEIGHBOURS;
   const scratchDir = mkdtempSync(path.join(tmpdir(), "fluncle-diversity-"));
   try {
     const subjectImg = await decodePoster(subject, scratchDir);
     const subjectFeat = featureOf(subjectImg);
 
-    // Recent neighbours, excluding the subject itself if it is one of them.
+    // Recent neighbours, excluding the subject itself if it is one of them. Fetch enough
+    // for the WIDER of the two windows, then slice each axis from the same ledger.
     const subjectLogId = subject.endsWith(".jpg") || subject.endsWith(".png") ? null : subject;
-    const recent = (await fetchRecentVideoLogIds(wanted + 1)).filter((id) => id !== subjectLogId);
-    const neighbourIds = recent.slice(0, wanted);
+    const ledger = (await fetchRecentLedger(Math.max(wanted, structureWanted) + 1)).filter(
+      (e) => e.logId !== subjectLogId,
+    );
+    const neighbourIds = ledger.slice(0, wanted).map((e) => e.logId);
 
     const neighbours: DiversityReport["neighbours"] = [];
     for (let i = 0; i < neighbourIds.length; i++) {
@@ -276,15 +489,33 @@ export async function judgeDiversity(
     }
 
     const immediateDistance = neighbours.length > 0 ? neighbours[0].distance.combined : null;
-    const pass = immediateDistance === null || immediateDistance >= DIVERSITY_MIN;
-    const verdict =
+    const posterPass = immediateDistance === null || immediateDistance >= DIVERSITY_MIN;
+    const posterVerdict =
       immediateDistance === null
         ? "no published neighbour to compare against (pass)"
-        : pass
+        : posterPass
           ? `distinct from the immediate neighbour (${immediateDistance.toFixed(3)} >= ${DIVERSITY_MIN})`
           : `TOO SIMILAR to the immediate neighbour ${neighbours[0].logId} (${immediateDistance.toFixed(3)} < ${DIVERSITY_MIN}) — likely the same primitive recolored`;
 
-    return { immediateDistance, neighbours, pass, subject, threshold: DIVERSITY_MIN, verdict };
+    // The structural axis: classify the subject + the recent ledger, then the pure gate.
+    const subjectFamily =
+      opts.assumeStructure ?? (subjectLogId ? await structureOfLogId(subjectLogId) : null);
+    const structureEntries = await classifyLedger(ledger.slice(0, structureWanted));
+    const structure = evaluateStructureGate(subjectFamily, structureEntries);
+
+    const pass = posterPass && structure.status !== "fail";
+    const verdict = `poster: ${posterVerdict} | structure: ${structure.verdict}`;
+
+    return {
+      immediateDistance,
+      neighbours,
+      pass,
+      posterPass,
+      structure,
+      subject,
+      threshold: DIVERSITY_MIN,
+      verdict,
+    };
   } finally {
     rmSync(scratchDir, { force: true, recursive: true });
   }
@@ -294,32 +525,67 @@ if (import.meta.main) {
   const args = process.argv.slice(2);
   const asJson = args.includes("--json");
   const strict = args.includes("--strict");
-  const nFlag = args.indexOf("--neighbours");
-  const neighbours = nFlag >= 0 ? Number(args[nFlag + 1]) : undefined;
-  const subject = args.find((a, i) => !a.startsWith("--") && args[i - 1] !== "--neighbours");
+  const flagValue = (name: string): string | undefined => {
+    const i = args.indexOf(name);
+    return i >= 0 ? args[i + 1] : undefined;
+  };
+  const neighboursRaw = flagValue("--neighbours");
+  const neighbours = neighboursRaw !== undefined ? Number(neighboursRaw) : undefined;
+  const structureNeighboursRaw = flagValue("--structure-neighbours");
+  const structureNeighbours =
+    structureNeighboursRaw !== undefined ? Number(structureNeighboursRaw) : undefined;
+  const assumeRaw = flagValue("--assume-structure");
+  const assumeStructure = assumeRaw ? (asFamily(assumeRaw) ?? undefined) : undefined;
+  if (assumeRaw && !assumeStructure) {
+    console.error(
+      `--assume-structure must be one of ${STRUCTURE_FAMILIES.join(", ")}; got "${assumeRaw}"`,
+    );
+    process.exit(2);
+  }
+  const valueFlags = new Set(["--neighbours", "--structure-neighbours", "--assume-structure"]);
+  const subject = args.find((a, i) => !a.startsWith("--") && !valueFlags.has(args[i - 1] ?? ""));
 
   if (!subject) {
     console.error(
-      "usage: judge-diversity <posterPathOrLogId> [--neighbours N] [--strict] [--json]",
+      "usage: judge-diversity <posterPathOrLogId> [--neighbours N] [--structure-neighbours N] [--assume-structure <family>] [--strict] [--json]",
     );
     process.exit(2);
   }
 
-  const report = await judgeDiversity(subject, { neighbours });
+  const report = await judgeDiversity(subject, {
+    assumeStructure,
+    neighbours,
+    structureNeighbours,
+  });
   if (asJson) {
     console.log(JSON.stringify(report, null, 2));
   } else {
     console.log(
       `diversity of ${report.subject} vs the last ${report.neighbours.length} published:`,
     );
+    console.log("  poster (picture distance):");
     for (const n of report.neighbours) {
       const d = n.distance;
       console.log(
-        `  ${n.immediate ? "→" : " "} ${n.logId}: ${d.combined.toFixed(3)} (edge ${d.edgeOrient.toFixed(2)}, color ${d.colorHist.toFixed(2)}, luma ${d.lumaContrast.toFixed(2)})${n.immediate ? "  [immediate neighbour — hard constraint]" : ""}`,
+        `    ${n.immediate ? "→" : " "} ${n.logId}: ${d.combined.toFixed(3)} (edge ${d.edgeOrient.toFixed(2)}, color ${d.colorHist.toFixed(2)}, luma ${d.lumaContrast.toFixed(2)})${n.immediate ? "  [immediate neighbour — hard constraint]" : ""}`,
       );
     }
-    console.log(`${report.pass ? "✓" : "✗"} ${report.verdict}`);
+    const posterVerdict = report.verdict.split(" | ")[0]?.replace("poster: ", "") ?? "";
+    console.log(`  ${report.posterPass ? "✓" : "✗"} poster: ${posterVerdict}`);
+    const s = report.structure;
+    console.log(`  structure (family — the checked claim): subject = ${s.subject ?? "unresolved"}`);
+    for (let i = 0; i < s.neighbours.length; i++) {
+      const n = s.neighbours[i];
+      const hit = s.repeatAt === i ? "  ← repeat" : "";
+      console.log(
+        `    ${i === 0 ? "→" : " "} ${n.logId}: ${labelWithStructure(n.vehicle, n.family)}${hit}`,
+      );
+    }
+    const mark = s.status === "fail" ? "✗" : s.status === "warn" ? "⚠" : "✓";
+    console.log(`  ${mark} structure: ${s.verdict}`);
+    console.log(`${report.pass ? "✓" : "✗"} ${report.pass ? "diverse on both axes" : "FAIL"}`);
   }
-  // Advisory by default; --strict makes an immediate-neighbour clone a hard failure.
+  // Advisory by default; --strict makes an immediate-neighbour clone OR a structural
+  // repeat inside the hard window a non-zero exit.
   process.exit(strict && !report.pass ? 1 : 0);
 }
