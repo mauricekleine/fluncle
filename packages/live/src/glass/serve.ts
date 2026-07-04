@@ -9,7 +9,8 @@
 //
 // Keys (operator cheat-sheet):
 //   →/n advance · ←/p rewind · 0 holding · b blackout(hold) · -/= intensity
-//   1/2/3 vehicle · m auto · v replay · g bloom · r scale · h HUD · d demo · Shift+X context-loss smoke
+//   1/2/3 vehicle · m auto · v replay · g bloom · r scale · h HUD · d demo
+//   l low-latency DSP (A/B) · Shift+X context-loss smoke
 import { GLASS_PORT } from "../contract.ts";
 import { renderPage } from "./page.ts";
 import { buildPlan, logSummary } from "./plan.ts";
@@ -59,7 +60,7 @@ Bun.serve({
 
 console.log(
   `Fluncle LIVE — the glass → http://localhost:${port}\n` +
-    "  →/n advance · ←/p rewind · 0 holding · b blackout(hold) · -/= intensity · 1/2/3 vehicle · m auto · v replay · g bloom · r scale · h HUD · d demo · Shift+X smoke",
+    "  →/n advance · ←/p rewind · 0 holding · b blackout(hold) · -/= intensity · 1/2/3 vehicle · m auto · v replay · g bloom · r scale · h HUD · d demo · l low-latency DSP · Shift+X smoke",
 );
 
 // Pre-extract every scene at boot and print the replayability table.

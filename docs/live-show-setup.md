@@ -113,7 +113,7 @@ Flags: `--plan <logId>` loads a planned set so the bridge can fingerprint its tr
 6. **OBS captures real pixels** — the **video meter-bounce**, per scene: flip through every scene in the collection and confirm each source shows actual moving pixels — the overhead camera framing the Arzopa + FLX4, and, if the glass cut-to scene exists, its Display Capture showing the glass moving, not a black rectangle. macOS screen-recording permission resets after an update and captures black silently (the video analogue of a dead audio route); re-grant it after any update. The glass must be fullscreen on the show display.
 7. **DND / Focus on, notifications + display sleep off, update nags suppressed** — nothing may draw over the fullscreen glass or sleep the display mid-set.
 8. **Channels reading, flash limiter armed, watchdog answering, context-loss smoke passed, permissions confirmed** — the glass's rails are live (the flash limiter armed, the watchdog heartbeat answering), the `WEBGL_lose_context` smoke (press **`Shift+X`** at the glass) recovers to the holding scene, and no permission dialog is hiding behind the fullscreen window.
-9. **AV-sync profile loaded** — the calibrated audio-to-visual offset for this rig (the four-on-the-floor calibration recipe in the RFC).
+9. **AV-sync profile loaded** — the calibrated audio-to-visual offset for this rig, measured with the slow-mo probe ("AV-sync — the audio-to-pixel offset" below; run it on both `l` DSP modes).
 10. **30-second Twitch test stream, zero dropped frames** — a real short stream, watched for drops, before the set.
 11. **VideoToolbox + CBR confirmed** — the recording encoder is the dedicated hardware encoder at CBR (recording doc), not the stream encoder.
 12. **Rekordbox REC armed** on the M2 — the belt-and-braces WAV master, zero routing in its path.
@@ -143,23 +143,30 @@ Run this once before the first real show, and again after any change to the rig 
 
 **The glass (the show window):** the keyboard control surface is the glass's own (the verified table, mirrored from [`packages/live/README.md`](../packages/live/README.md)):
 
-| Key             | Does                                                         |
-| --------------- | ------------------------------------------------------------ |
-| `→` / `n`       | advance to the next finding                                  |
-| `←` / `p`       | rewind to the previous finding                               |
-| `0`             | the holding scene                                            |
-| `-` / `=`       | intensity down / up (under the white-out cap)                |
-| `1` / `2` / `3` | select the vehicle                                           |
-| `m`             | auto — the matcher drives the advance                        |
-| `v`             | replay the arrival scene                                     |
-| `g`             | bloom toggle                                                 |
-| `r`             | render-scale cycle (the degrade lever)                       |
-| `h`             | HUD toggle                                                   |
-| `d`             | demo                                                         |
-| `b`             | blackout — **hold to engage**, eases into the holding scene  |
-| `Shift+X`       | context-loss smoke (`WEBGL_lose_context` — checklist step 8) |
+| Key             | Does                                                                                                                                                   |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `→` / `n`       | advance to the next finding                                                                                                                            |
+| `←` / `p`       | rewind to the previous finding                                                                                                                         |
+| `0`             | the holding scene                                                                                                                                      |
+| `-` / `=`       | intensity down / up (under the white-out cap)                                                                                                          |
+| `1` / `2` / `3` | select the vehicle                                                                                                                                     |
+| `m`             | auto — the matcher drives the advance                                                                                                                  |
+| `v`             | replay the arrival scene                                                                                                                               |
+| `g`             | bloom toggle                                                                                                                                           |
+| `r`             | render-scale cycle (the degrade lever)                                                                                                                 |
+| `h`             | HUD toggle                                                                                                                                             |
+| `d`             | demo                                                                                                                                                   |
+| `l`             | low-latency DSP A/B — dual-resolution (default) ↔ legacy single-4096 (the HUD shows `dsp: low-latency \| legacy`; run the slow-mo probe below on each) |
+| `b`             | blackout — **hold to engage**, eases into the holding scene                                                                                            |
+| `Shift+X`       | context-loss smoke (`WEBGL_lose_context` — checklist step 8)                                                                                           |
 
 The phone web-remote (served by the bridge at `http://<lan-ip>:4180/remote`) is the second-tier control for the two-machine rig; it earns its place after a rehearsal shows the reach across the room is needed.
+
+## AV-sync — the audio-to-pixel offset (checklist step 9)
+
+The rig has a real, measurable delay between a kick hitting the speakers and the pixels answering it: the input buffer, the FFT window, the render loop, the display, and the encoder all add latency. Checklist step 9 loads the calibrated offset for this rig; this is how you measure it, and how you confirm the `l` low-latency DSP toggle actually buys what it claims.
+
+**The slow-mo probe (run it before and after toggling `l`).** Play the demo beat (`d`) or a track with a clean four-on-the-floor kick. Frame the iPhone so it sees BOTH the show display and a speaker cone (or any physical thing that visibly moves on the kick — a subwoofer grille, a hanging object) in one shot, and film at **240fps** slow-motion. In the clip, scrub to a kick: find the frame where the cone punches out (the audio transient) and the frame where the glass visibly flashes/pulses in answer. Count the frames between them and multiply by **4.17ms** (1000 ÷ 240) — that is the rig's true audio→pixel latency. Run it once with `dsp: low-latency` (the default) and once with `dsp: legacy` (press `l`); the low-latency path should shave roughly a 4096→1024 FFT window (~60ms) off the transient. **Record both numbers in the pre-show notes** so the AV-sync profile (step 9) is grounded in a measurement, not a guess, and so any rig change that regresses it is caught.
 
 ## The one-Mac fallback
 

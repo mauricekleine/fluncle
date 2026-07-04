@@ -268,6 +268,10 @@ addEventListener("keydown", (ev: KeyboardEvent) => {
     renderScale = renderScale === 1 ? 0.75 : renderScale === 0.75 ? 0.5 : 1;
   } else if (k === "d") {
     demo();
+  } else if (k === "l") {
+    // A/B the low-latency dual-resolution DSP against the legacy single-4096 path.
+    dsp.lowLatency = !dsp.lowLatency;
+    updateHud();
   } else if (k === "X") {
     // pre-show smoke: force a context loss (shift+x), then restore — the rails must
     // rebuild via the SAME path as cold boot. webglcontextrestored writes the verdict.
@@ -466,17 +470,21 @@ function frame(): void {
           fade: effFade,
           inputs: {
             bass: cl(a.bass),
+            bassFast: cl(a.bassFast),
             drop: a.drop,
             dwellSec,
             energy: cl(a.energy),
+            energyFast: cl(a.energyFast),
             kick: cl(a.kick),
             mid: cl(a.mid),
+            midFast: cl(a.midFast),
             palette: replayPalette,
             progress: Math.min((nowMs - arriveMs) / replayExpectedLenMs, 1),
             seedRaw: seedRawCur,
             swell: Math.min(a.swell * intensity, 1.1),
             time: now,
             treble: cl(a.treble),
+            trebleFast: cl(a.trebleFast),
           },
         }
       : null,
@@ -527,7 +535,7 @@ function updateHud(): void {
   hi.textContent =
     planLine +
     "\n" +
-    `dev ${deviceName}  ·  ${fps}fps  ·  scene ${(scene % 3).toFixed(1)}${autoMorph ? " auto" : ""}  ·  intensity ${intensity.toFixed(1)}  ·  ${rest}${replayEnabled ? "" : "  ·  replay OFF"}${bloomEnabled ? "" : "  ·  bloom OFF"}` +
+    `dev ${deviceName}  ·  ${fps}fps  ·  scene ${(scene % 3).toFixed(1)}${autoMorph ? " auto" : ""}  ·  intensity ${intensity.toFixed(1)}  ·  ${rest}  ·  dsp: ${dsp.lowLatency ? "low-latency" : "legacy"}${replayEnabled ? "" : "  ·  replay OFF"}${bloomEnabled ? "" : "  ·  bloom OFF"}` +
     "\n" +
     limiterLine +
     "\n" +
@@ -651,6 +659,7 @@ function demo(): void {
   const bus = AC.createGain();
   bus.gain.value = 0.9;
   bus.connect(dsp.analyserNode);
+  bus.connect(dsp.fastAnalyserNode); // feed the low-latency analyser too
   const out = AC.createGain();
   out.gain.value = 0.4;
   bus.connect(out);

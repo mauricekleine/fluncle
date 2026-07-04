@@ -63,6 +63,12 @@ export type ReplayFrameInputs = {
   treble: number;
   energy: number;
   kick: number;
+  // The transient-class low-latency siblings (1024-FFT when low-latency DSP is on,
+  // else a mirror of the slow bands) — feed ONLY the *Fast / onset / snare uniforms.
+  bassFast: number;
+  midFast: number;
+  trebleFast: number;
+  energyFast: number;
   swell: number;
   drop: number;
   seedRaw: number;
@@ -467,14 +473,15 @@ export class GlassPipeline {
       this.u(p, "u_audioDisturbance"),
       Math.min(inp.kick * 0.5 + inp.swell * 0.3 + inp.drop * 0.5, 1.2),
     );
-    gl.uniform1f(this.u(p, "u_energyFast"), inp.energy);
-    gl.uniform1f(this.u(p, "u_bassFast"), inp.bass);
-    gl.uniform1f(this.u(p, "u_midFast"), inp.mid);
-    gl.uniform1f(this.u(p, "u_trebleFast"), inp.treble);
+    // transient class → the low-latency (fast) siblings.
+    gl.uniform1f(this.u(p, "u_energyFast"), inp.energyFast);
+    gl.uniform1f(this.u(p, "u_bassFast"), inp.bassFast);
+    gl.uniform1f(this.u(p, "u_midFast"), inp.midFast);
+    gl.uniform1f(this.u(p, "u_trebleFast"), inp.trebleFast);
     gl.uniform1f(this.u(p, "u_flux"), inp.kick);
     gl.uniform1f(this.u(p, "u_sub"), inp.bass);
     gl.uniform1f(this.u(p, "u_kickHit"), inp.kick);
-    gl.uniform1f(this.u(p, "u_snareHit"), inp.mid * inp.kick);
+    gl.uniform1f(this.u(p, "u_snareHit"), inp.midFast * inp.kick);
     gl.uniform1f(this.u(p, "u_air"), inp.treble);
     gl.uniform1f(this.u(p, "u_downbeatPulse"), inp.kick);
     gl.uniform1f(this.u(p, "u_seed"), inp.seedRaw);
