@@ -97,6 +97,8 @@ type VelEntry = {
   dir: [number, number];
   x: number;
   y: number;
+  /** Magnitude of this frame's position advance — read by the arrival trace. */
+  step: number;
 };
 
 export class GlassPipeline {
@@ -313,6 +315,7 @@ export class GlassPipeline {
         this.integrators.push({
           dir: [Math.cos(a), Math.sin(a)],
           pos: c.name,
+          step: 0,
           type,
           vel: c.name + "Vel",
           x: 0,
@@ -341,6 +344,14 @@ export class GlassPipeline {
 
   get replayLayerCount(): number {
     return this.replayLayers.length;
+  }
+
+  /** The velocity integrators' current position magnitude + last per-frame step (trace). */
+  debugIntegrators(): Array<{ pos: number; step: number }> {
+    return this.integrators.map((it) => ({
+      pos: it.type === "vec2" ? Math.hypot(it.x, it.y) : it.x,
+      step: it.step,
+    }));
   }
 
   // ---- a fullscreen-triangle pass ----
@@ -532,6 +543,7 @@ export class GlassPipeline {
       if (it.type === "vec2") {
         it.x += it.dir[0] * speed * dt;
         it.y += it.dir[1] * speed * dt;
+        it.step = Math.hypot(it.dir[0] * speed * dt, it.dir[1] * speed * dt);
         const lp = this.u(p, it.pos);
         if (lp) {
           gl.uniform2f(lp, it.x, it.y);
@@ -542,6 +554,7 @@ export class GlassPipeline {
         }
       } else {
         it.x += speed * dt;
+        it.step = speed * dt;
         const lp = this.u(p, it.pos);
         if (lp) {
           gl.uniform1f(lp, it.x);

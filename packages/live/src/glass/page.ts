@@ -8,12 +8,15 @@ const STYLE = `
   html,body{margin:0;height:100%;background:#090a0b;overflow:hidden;font:12px/1.5 ui-monospace,Menlo,monospace;color:#f4ead7}
   canvas{display:block;position:fixed;inset:0;width:100vw;height:100vh}
   #c{z-index:0}
-  /* The currently-playing PLATE — top-left, DOM overlay, Stories grammar (non-interactive). */
-  #plate{position:fixed;top:24px;left:26px;max-width:min(48vw,560px);z-index:3;
-    background:rgba(9,10,11,0.55);backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px);
-    border-radius:8px;padding:14px 18px;pointer-events:none;
-    opacity:0;transform:translateY(-8px);transition:opacity .3s ease,transform .3s ease}
+  /* The currently-playing PLATE — BOTTOM-LEFT, DOM overlay, social-clip grammar: text set
+     DIRECTLY on the art (no card/box/scrim/rounded background). Legibility comes from a soft
+     FloatingType-style ink halo (layered text-shadow), never a panel. Non-interactive; eases
+     in on arrival (rises from just below); blanks to nothing in uncharted space. */
+  #plate{position:fixed;bottom:30px;left:34px;max-width:min(52vw,620px);z-index:3;
+    pointer-events:none;
+    opacity:0;transform:translateY(8px);transition:opacity .34s ease,transform .34s ease}
   #plate.show{opacity:1;transform:none}
+  #plate>div{text-shadow:0 1px 2px rgba(9,10,11,0.9),0 2px 12px rgba(9,10,11,0.72)}
   #p-coord{font-family:Oxanium,ui-sans-serif,system-ui,sans-serif;font-weight:600;
     font-variant-numeric:tabular-nums;letter-spacing:.02em;color:#f5b800;font-size:.95rem;line-height:1;margin-bottom:8px}
   #p-title{font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,sans-serif;font-weight:800;
@@ -22,8 +25,11 @@ const STYLE = `
     color:#b7ab95;font-size:1rem;line-height:1.2;margin-top:5px}
   #p-found{font-family:Oxanium,ui-sans-serif,system-ui,sans-serif;font-variant-numeric:tabular-nums;
     color:#b7ab95;font-size:.78rem;letter-spacing:.03em;margin-top:9px}
-  #plate.blackarm{outline:1px solid #f5b80055}
-  #hud{position:fixed;left:12px;bottom:12px;z-index:3;background:#10100dcc;padding:10px 12px;border:1px solid #d0b99029;border-radius:8px;white-space:pre;max-width:60vw}
+  /* Blackout-arming feedback stays boxless — a gold glow on the coordinate, not an outline. */
+  #plate.blackarm #p-coord{text-shadow:0 0 10px #f5b800aa,0 1px 2px rgba(9,10,11,0.9)}
+  /* HUD moved to the bottom-RIGHT so it (and the "press i for keys" hint it carries) never
+     overlaps the bottom-left plate; the keys overlay is centered and #err is top-right. */
+  #hud{position:fixed;right:12px;bottom:12px;z-index:3;background:#10100dcc;padding:10px 12px;border:1px solid #d0b99029;border-radius:8px;white-space:pre;max-width:min(60vw,520px)}
   #err{position:fixed;top:12px;right:12px;z-index:3;color:#ff6b57;white-space:pre-wrap;max-width:60vw;text-align:right}
   button,select{background:#171611;color:#f4ead7;border:1px solid #d0b99029;border-radius:6px;padding:4px 8px;font:inherit;margin-right:6px}
   .dim{color:#b7ab95}
