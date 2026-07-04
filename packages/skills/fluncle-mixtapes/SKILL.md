@@ -263,3 +263,4 @@ YouTube `videos.insert` is metered in the **Video Uploads bucket (~100/day)**, 2
 - Object model, identity, hosting/licensing, covers, lifecycle, the fan-out map, open questions: **[references/spine-model.md](references/spine-model.md)**.
 - Voice for titles, notes, and announce copy: the `copywriting-fluncle` skill.
 - Cover art iteration: the `fluncle-video` kit; backgrounds rendered by `bun run --cwd packages/media render:mixtape-bg`.
+- The hour-long **set video** — turn a published mixtape into one long-form artwork (chapters travelling through the findings' own worlds): `bun run --cwd packages/video set:render <logId>`, the `packages/video/src/set-video/` pipeline, runbook in `docs/set-video.md`.

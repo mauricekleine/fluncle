@@ -32,6 +32,32 @@ const BROADCAST_HZ = 30;
 
 type Boot = { plan: PlanEntry[]; fingerprints: Fingerprint[] };
 
+/**
+ * Resolve the requested plan id from the bridge's argv, honouring BOTH `--plan <id>`
+ * (the shape `run show` passes) and a bare positional id, with `FLUNCLE_PLAN_MIXTAPE`
+ * as the fallback. Returns undefined when nothing is requested — `buildPlan` then
+ * builds the default plan (fixture floor). Pure so the arg contract is unit-testable.
+ */
+export function parsePlanArg(
+  argv: string[],
+  env = process.env.FLUNCLE_PLAN_MIXTAPE,
+): string | undefined {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--plan") {
+      const next = argv[i + 1];
+      if (next !== undefined && !next.startsWith("--")) {
+        return next;
+      }
+      continue; // a dangling `--plan` with no value falls through to the env/default
+    }
+    if (!arg.startsWith("--")) {
+      return arg; // a bare positional id
+    }
+  }
+  return env;
+}
+
 /** Build the plan and fingerprint its previews. */
 async function boot(mixtapeLogId?: string): Promise<Boot> {
   const plan = await buildPlan(mixtapeLogId);
@@ -43,7 +69,7 @@ async function boot(mixtapeLogId?: string): Promise<Boot> {
 }
 
 async function main(): Promise<void> {
-  const mixtape = process.argv[2] ?? process.env.FLUNCLE_PLAN_MIXTAPE;
+  const mixtape = parsePlanArg(process.argv.slice(2));
   const { plan, fingerprints } = await boot(mixtape);
   const state = createShowState(plan, fingerprints);
 

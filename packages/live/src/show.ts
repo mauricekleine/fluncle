@@ -20,7 +20,7 @@
 // [dark] unreadable here — never a traffic light.
 
 import net from "node:net";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 
 import { BRIDGE_PORT, BRIDGE_WS_PATH, GLASS_PORT } from "./contract";
 
@@ -445,15 +445,39 @@ function waitForSocket(url: string, timeoutMs = 8_000): Promise<boolean> {
 
 // ── Chromium placement (JXA reads the displays; System Events moves the window) ─
 
-/** Locate a pinned Chromium; fall back to Google Chrome. */
+/**
+ * Resolve a `FLUNCLE_CHROMIUM` value to the executable we spawn + the process name
+ * AppleScript drives. Accepts BOTH a `.app` bundle and a bare binary path — the same
+ * two shapes the bridge supervisor honours — so one env value pins both launch paths.
+ */
+function resolveChromiumEnv(value: string): { bin: string; procName: string } {
+  const trimmed = value.replace(/\/+$/, "");
+  if (trimmed.endsWith(".app")) {
+    const name = basename(trimmed).replace(/\.app$/, "");
+    return { bin: `${trimmed}/Contents/MacOS/${name}`, procName: name };
+  }
+  return { bin: trimmed, procName: basename(trimmed) };
+}
+
+/**
+ * Locate the Chromium to drive. `FLUNCLE_CHROMIUM` wins first — the same binary the
+ * bridge supervisor relaunches — so the initial launch and every watchdog relaunch
+ * agree; otherwise fall to a pinned Chromium, then Google Chrome (auto-updating —
+ * fine for rehearsal, not the show-night rail; see docs/live-show-setup.md).
+ */
 function findChromium(): { bin: string; procName: string } | undefined {
-  const candidates: Array<{ bin: string; procName: string }> = [
+  const pinned = process.env.FLUNCLE_CHROMIUM;
+  const candidates: Array<{ bin: string; procName: string }> = [];
+  if (pinned !== undefined && pinned.length > 0) {
+    candidates.push(resolveChromiumEnv(pinned));
+  }
+  candidates.push(
     { bin: "/Applications/Chromium.app/Contents/MacOS/Chromium", procName: "Chromium" },
     {
       bin: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
       procName: "Google Chrome",
     },
-  ];
+  );
   return candidates.find((c) => existsSync(c.bin));
 }
 

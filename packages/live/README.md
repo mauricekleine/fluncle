@@ -15,7 +15,11 @@ doctrine and architecture live in
 may hold it — tests boot elsewhere). `$FLUNCLE_SHOW_PLAN` points at a tracklist a
 `fluncle run show --plan` bridge writes; absent that, the committed
 `src/plan-pointer/tracklist.json` demo fixture drives arrivals, and absent even a
-tracklist the glass runs uncharted-space standalone (the failure floor).
+tracklist the glass runs uncharted-space standalone (the failure floor). The two
+diverge deliberately: the standalone demo `tracklist.json` is a 5-entry stand-in,
+while the bridge's `/plan` serves the real 17-entry mixtape — and `/plan` on `:4180`
+takes precedence whenever the bridge is up, so `--plan` / `$FLUNCLE_SHOW_PLAN`
+unifies them at show time.
 
 Module map (`src/glass/`):
 

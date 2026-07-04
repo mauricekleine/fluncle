@@ -56,6 +56,17 @@ Follow the recording doc's **3-track model** unchanged, with these live-rig subs
 
 They come up under `run show` (next section) — you do not launch them by hand. For reference: the glass is a pinned Chromium serving the WebGL page on `http://localhost:4173`; the bridge serves the plan + the state stream on `http://localhost:4180` and hosts the phone remote at `http://<lan-ip>:4180/remote`. Both are LAN-local by design — no public surface, nothing in `@fluncle/registry`, nothing reachable off the network (the never-crash rail: the show has no network dependency mid-set).
 
+### 3b. The pinned Chromium
+
+The glass runs in a **pinned** Chromium so a silent auto-update can never change the renderer out from under a live set. Install one and point the rig at it once:
+
+```bash
+brew install --cask chromium --no-quarantine
+export FLUNCLE_CHROMIUM=/Applications/Chromium.app/Contents/MacOS/Chromium
+```
+
+Chromium carries **no Sparkle auto-updater** — it stays exactly the build you installed until you bump it by hand, the opposite of Google Chrome (which self-updates in the background). `FLUNCLE_CHROMIUM` is the single pin both launch paths read — `run show`'s initial launch **and** the bridge watchdog's relaunch — so a wedged glass comes back on the same binary it left on. Point it at the binary (`…/Contents/MacOS/Chromium`) or the `.app` bundle; either works. The honest fallback: with `FLUNCLE_CHROMIUM` unset and no Chromium installed, `run show` falls to **Google Chrome** — auto-updating, acceptable for rehearsal but **not the show-night rail**. Set the pin before the dress rehearsal.
+
 ### 4. The show display and the cameras
 
 - **The show display** is whatever the glass takes over: the office rig is a small **Arzopa portable display** hung off the M5, filmed by an overhead **Continuity Camera iPhone** for the vertical social clips, while OBS streams the composited feed to Twitch. A real-venue big screen is the same HDMI port on the M5 — the architecture already supports it, it is not a separate setup.
@@ -101,7 +112,7 @@ Flags: `--plan <logId>` loads a planned set so the bridge can fingerprint its tr
 5. **Mic present on the M5, Track 2 clean** — the mic reads on Mic/Aux, and Track 2 sits near-silent when you are not talking (music is monitor/headphone-only, so any music on Track 2 is acoustic leakage — gate it).
 6. **OBS captures real pixels** — the **video meter-bounce**, per scene: flip through every scene in the collection and confirm each source shows actual moving pixels — the overhead camera framing the Arzopa + FLX4, and, if the glass cut-to scene exists, its Display Capture showing the glass moving, not a black rectangle. macOS screen-recording permission resets after an update and captures black silently (the video analogue of a dead audio route); re-grant it after any update. The glass must be fullscreen on the show display.
 7. **DND / Focus on, notifications + display sleep off, update nags suppressed** — nothing may draw over the fullscreen glass or sleep the display mid-set.
-8. **Channels reading, flash limiter armed, watchdog answering, context-loss smoke passed, permissions confirmed** — the glass's rails are live (the flash limiter armed, the watchdog heartbeat answering), the `WEBGL_lose_context` smoke recovers to the holding scene, and no permission dialog is hiding behind the fullscreen window.
+8. **Channels reading, flash limiter armed, watchdog answering, context-loss smoke passed, permissions confirmed** — the glass's rails are live (the flash limiter armed, the watchdog heartbeat answering), the `WEBGL_lose_context` smoke (press **`Shift+X`** at the glass) recovers to the holding scene, and no permission dialog is hiding behind the fullscreen window.
 9. **AV-sync profile loaded** — the calibrated audio-to-visual offset for this rig (the four-on-the-floor calibration recipe in the RFC).
 10. **30-second Twitch test stream, zero dropped frames** — a real short stream, watched for drops, before the set.
 11. **VideoToolbox + CBR confirmed** — the recording encoder is the dedicated hardware encoder at CBR (recording doc), not the stream encoder.
@@ -130,7 +141,25 @@ Run this once before the first real show, and again after any change to the rig 
 | `q`      | stand the rig down (kills children, releases `caffeinate`)           |
 | `Ctrl-C` | same as `q` — full teardown                                          |
 
-**The glass (the show window):** the keyboard control surface is the glass's own (scene keys, the finding-cue, the guarded hold-to-engage blackout that eases into the holding scene, intensity, render-scale `r`, the HUD) — see the RFC §3 and the glass's own reference. The phone web-remote (served by the bridge at `http://<lan-ip>:4180/remote`) is the second-tier control for the two-machine rig; it earns its place after a rehearsal shows the reach across the room is needed.
+**The glass (the show window):** the keyboard control surface is the glass's own (the verified table, mirrored from [`packages/live/README.md`](../packages/live/README.md)):
+
+| Key             | Does                                                         |
+| --------------- | ------------------------------------------------------------ |
+| `→` / `n`       | advance to the next finding                                  |
+| `←` / `p`       | rewind to the previous finding                               |
+| `0`             | the holding scene                                            |
+| `-` / `=`       | intensity down / up (under the white-out cap)                |
+| `1` / `2` / `3` | select the vehicle                                           |
+| `m`             | auto — the matcher drives the advance                        |
+| `v`             | replay the arrival scene                                     |
+| `g`             | bloom toggle                                                 |
+| `r`             | render-scale cycle (the degrade lever)                       |
+| `h`             | HUD toggle                                                   |
+| `d`             | demo                                                         |
+| `b`             | blackout — **hold to engage**, eases into the holding scene  |
+| `Shift+X`       | context-loss smoke (`WEBGL_lose_context` — checklist step 8) |
+
+The phone web-remote (served by the bridge at `http://<lan-ip>:4180/remote`) is the second-tier control for the two-machine rig; it earns its place after a rehearsal shows the reach across the room is needed.
 
 ## The one-Mac fallback
 

@@ -10,6 +10,8 @@ Every surface is **one entry in `@fluncle/registry`** (`packages/registry/src/in
 
 The point is that one entry **fans out**. Add a surface to the registry once and every consumer — the `/status` prober, the homepage dev-row, `llms.txt`, the sitemap, and this doc — picks it up from the same list instead of each hand-maintaining a drifting copy. This doc is organized around the registry's own shape: its `SurfaceKind` families (§2) and its per-context `SurfaceWeight` matrix (§3).
 
+One class stays out by design: the **live glass and its phone remote** (`packages/live`, on `:4173` / `:4180`) are LAN-local operator surfaces — reachable only on the show network, never public — so per the live-longform RFC they are intentionally absent from `@fluncle/registry`; the `run_show` orchestrator that raises them registers as a local-exec op instead ([naming-conventions.md §7](./naming-conventions.md#7-local-exec-ops-the-registrys-non-http-tail)).
+
 Each entry carries: a stable `name` (unique, e.g. `web.log`, `api.tracks`), a `kind`, a `weights` matrix (per-context prominence — see §3), the address it lives at (`url` / `route` / `subdomain` / `command`, populated per kind), `exposedContent` (what it serves, in plain words), and — where applicable — `apiFormat`, a `probeConfig` (how `/status` checks it), a `discoveryUrl` (what advertises it), `pending` (pre-staged but dark — see §3.5), and `operatorNotes` (tier, caveats, where the source lives; never secrets).
 
 ## 2. The surface inventory, by kind
