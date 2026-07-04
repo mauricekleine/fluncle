@@ -7,11 +7,11 @@
 // Run:  bun run glass   then open  http://localhost:4173
 // Port: $FLUNCLE_GLASS_PORT overrides 4173 (the operator's live instance may hold it).
 //
-// Keys (operator cheat-sheet):
-//   →/n advance · ←/p rewind · 0 holding · b blackout(hold) · -/= intensity
-//   1/2/3 vehicle · m auto · v replay · g bloom · r scale · h HUD · d demo
-//   l low-latency DSP (A/B) · Shift+X context-loss smoke
+// The operator cheat-sheet is generated from the ONE keybindings table (keybindings.ts)
+// — the same table drives the keydown dispatch and the in-glass `i` legend overlay, so
+// the boot line below can never drift from the behaviour.
 import { GLASS_PORT } from "../contract.ts";
+import { legendLine } from "./keybindings.ts";
 import { renderPage } from "./page.ts";
 import { buildPlan, logSummary } from "./plan.ts";
 
@@ -58,10 +58,7 @@ Bun.serve({
   port,
 });
 
-console.log(
-  `Fluncle LIVE — the glass → http://localhost:${port}\n` +
-    "  →/n advance · ←/p rewind · 0 holding · b blackout(hold) · -/= intensity · 1/2/3 vehicle · m auto · v replay · g bloom · r scale · h HUD · d demo · l low-latency DSP · Shift+X smoke",
-);
+console.log(`Fluncle LIVE — the glass → http://localhost:${port}\n  ${legendLine()}`);
 
 // Pre-extract every scene at boot and print the replayability table.
 buildPlan()
