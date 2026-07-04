@@ -1,0 +1,173 @@
+// PROVENANCE: shipped Fluncle finding composition source, fetched from
+// https://found.fluncle.com/026.4.0E/composition.tsx on 2026-07-04 (offline fixture,
+// read as raw text + GLSL-resolved by the test — never imported/compiled).
+//
+// Whole Place Lift — Lens & Eva Lazarus (026.4.0E)
+// Vehicle: caustic uprising — true water-caustic light filaments, abstract
+//   full-frame field drifting upward on a constant clock.
+// Texture family: fluent (liquid light)
+// Grain: grainChemicalDye — per-channel color-film dye-cloud, low amount
+// Depth: scale gradient (fine/dense/bright at top, coarse/dim at bottom)
+// Landing point: upper third of frame — caustic nodes converge there at the peak
+// Climax: ~14 s, caustic nodes bloom warm-cream at the landing zone
+// Duration: 20 s — build → crest at 14 s → quiet break (16–17 s) → re-lift
+// Metadata trace: "Lens" = caustics are literally a lens phenomenon (light
+//   focused through water); tonal vocal (midFlatness 0.871) maps to mid-band
+//   brightening the field; centroidHz 3838 means brighter/finer at the top;
+//   "whole place lifts" = the whole frame rises.
+
+import React from "react";
+import { interpolate, useCurrentFrame, useVideoConfig } from "remotion";
+import {
+  CloseCard,
+  GLSL,
+  ShaderLayer,
+  TrackAudio,
+  TypePlate,
+  useJourney,
+  type NostalgicCosmosProps,
+} from "../cosmos";
+
+export default function CausticUprising({ audio, palette, track }: NostalgicCosmosProps) {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const sec = frame / fps;
+
+  // Journey clock: arrive phase begins at 85% (≈ 17 s of 20 s)
+  const { phase, phaseProgress } = useJourney();
+  const closeProgress = phase === "arrive" ? phaseProgress : 0;
+
+  // Close card enters during the quiet breakdown at ~17 s
+  const closeIn = interpolate(sec, [16.8, 17.6], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+
+  // Copper from artwork swatches (#a85a45) — warm accent for CloseCard
+  const copperAccent = (palette.swatches[3] as string | undefined) ?? palette.glow;
+
+  const frag = `
+    ${GLSL.hash}
+    ${GLSL.valueNoise}
+    ${GLSL.caustic}
+    ${GLSL.paletteRamp}
+    ${GLSL.filmGrain}
+    ${GLSL.grainFamilies}
+    ${GLSL.vignette}
+    ${GLSL.tonemap}
+
+    void main() {
+      vec2 uv = gl_FragCoord.xy / u_res.xy;
+
+      // ── Global translation: constant upward drift, audio-free ──
+      float driftUp = u_time * 0.088;
+      vec2 driftUV = uv + vec2(0.018, -driftUp);
+
+      // ── Depth via scale gradient — audio-free ──
+      // uv.y: 0 = bottom, 1 = top (WebGL y-up)
+      float heightRatio = uv.y;
+      // Lower scale → finer, denser filaments that fill the frame edge-to-edge
+      float causticScale = mix(1.5, 3.0, heightRatio);
+
+      // ── Two caustic layers — different scales and UV offsets for depth ──
+      // t is always an audio-free constant clock (cookbook: never put audio on t)
+      // Scale is also audio-free: changing scale zooms the pattern → beat-pull
+      float c1 = caustic(driftUV, u_time * 0.110, causticScale, 6);
+      float c2 = caustic(
+        driftUV * 1.38 + vec2(0.26, 0.13),
+        u_time * 0.082,
+        causticScale * 0.71,
+        5
+      );
+
+      // Caustic has a DC baseline ~1.44 (from initial N=vec2(0.1), giving v≈1.2, v*v≈1.44).
+      // Lower threshold (1.2) lets the ambient filament web show as a dim glow;
+      // peaks above it light up as the bright caustic nodes.
+      float cVal = c1 * 0.62 + c2 * 0.38;
+      float peaks = max(cVal - 1.2, 0.0);
+      float raw = min(peaks * 0.55, 2.0);
+
+      // ── Landing zone: upper third, convergence on energy build ──
+      float landing = smoothstep(0.48, 0.80, heightRatio);
+
+      // ── Energy-driven exposure (light reactions) ──
+      float exposure = 0.52 + u_audioSwell * 0.34 + u_audioDrop * 0.20;
+      float landingBoost = landing * (u_audioSwell * 0.52 + u_audioDrop * 0.38);
+
+      float lit = raw * exposure + raw * landingBoost;
+      lit = clamp(lit, 0.0, 1.12);
+
+      // ── Palette ramp: dark near-black → slate grey → cream ──
+      float rampT = clamp(lit * 0.87, 0.0, 1.0);
+      vec3 col = paletteRamp(rampT);
+
+      // ── Warm-copper heat at caustic hot spots during the drop climax ──
+      // Artwork copper #a85a45 brightened — only at landing zone, only at peak
+      vec3 hotCopper = vec3(0.84, 0.54, 0.37);
+      float heatMask = smoothstep(0.60, 0.92, lit) * u_audioDrop * 0.45 * landing;
+      col = mix(col, mix(col, hotCopper * 1.45, 0.35), heatMask);
+
+      // ── Mid-band brightens field (Eva Lazarus vocal → the voice IS the light) ──
+      col *= 1.0 + u_mid * 0.12;
+
+      // ── Kick: uniform frame-wide brightness pulse — gate-normalized (no centroid shift) ──
+      col *= 1.0 + u_kickHit * 0.18;
+
+      // ── Gentle off-centre vignette — NOT a porthole ──
+      // Shifted slightly up-left to let the landing zone breathe at full brightness
+      float vig = vignette(uv + vec2(-0.08, 0.10), 1.38, 0.58);
+      col *= mix(0.74, 1.0, vig);
+
+      // ── Chemical dye grain — per-channel color-film boil ──
+      GrainOpts gOpts = grainChemicalDye();
+      gOpts.amount = 0.038;   // low for electric, bright finding — boiling but quiet
+      col = filmGrain(col, uv, u_time, gOpts);
+
+      // ── Filmic soft-clip: never blow to flat white ──
+      col = acesFilmic(col);
+
+      // ── Kill 8-bit banding ──
+      col = dither8(col, uv);
+
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `;
+
+  return (
+    <div style={{ height: "100%", position: "relative", width: "100%" }}>
+      <ShaderLayer
+        airCurve={audio.airCurve}
+        bassCurve={audio.bassCurve}
+        beatGrid={audio.beatGrid}
+        dropMs={14000}
+        energyCurve={audio.energyCurve}
+        fluxCurve={audio.fluxCurve}
+        fragmentShader={frag}
+        kickCurve={audio.kickCurve}
+        midCurve={audio.midCurve}
+        onsets={audio.onsets}
+        palette={palette}
+        reactivity={{
+          drop: { fallMs: 1200, holdMs: 500, peakTimeMs: 14000, riseMs: 1400 },
+          swellBeatWeight: 0,
+        }}
+        snareCurve={audio.snareCurve}
+        subCurve={audio.subCurve}
+        trebleCurve={audio.trebleCurve}
+      />
+      <TrackAudio audio={audio} />
+      <TypePlate
+        dimInk={palette.glow}
+        holdSec={6.0}
+        identityInSec={1.0}
+        ink={palette.ink}
+        telemetryInSec={2.2}
+        track={track}
+      />
+      <CloseCard
+        palette={{ accent: copperAccent, ink: palette.ink }}
+        progress={Math.max(closeProgress, closeIn)}
+      />
+    </div>
+  );
+}

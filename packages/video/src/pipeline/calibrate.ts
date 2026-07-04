@@ -20,14 +20,20 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { GLSL } from "../remotion/journey/glsl";
+
 import { scoreArc } from "./analyze-motion";
 import { decodeImageRgb, extractRgbFrames } from "./frames";
 import { diversityDistance, DIVERSITY_MIN, featureOf } from "./judge-diversity";
+import { classifyCompositionStructure } from "./shader-structure";
 
 const POSTER_SIZE = 160;
 const posterUrl = (logId: string): string => `https://found.fluncle.com/${logId}/poster.jpg`;
 const footageUrl = (logId: string): string =>
   `https://found.fluncle.com/${logId}/footage.social.mp4`;
+const compositionUrl = (logId: string): string =>
+  `https://found.fluncle.com/${logId}/composition.tsx`;
+const glslSnippets = GLSL as unknown as Record<string, string>;
 
 type Entry = {
   logId: string;
@@ -35,9 +41,13 @@ type Entry = {
   // "judge" is a documented coverage BOUNDARY: a failure no current deterministic
   // gate measures (aesthetic monotony, palette). We print any available signal for
   // transparency but do NOT score it or let it move the exit code.
-  dimension: "arc" | "diversity" | "judge";
+  dimension: "arc" | "diversity" | "judge" | "structure";
   verdict: "pass" | "fail";
   pairedWith?: string;
+  // For "structure" rows: the operator's labeled dominant shader family. The gate
+  // fetches the composition, classifies it OFFLINE, and agrees when the classified
+  // dominant matches this label — scoring the CLASSIFIER against the ground truth.
+  structure?: string;
   notes?: string;
 };
 type Corpus = { schema: string; note?: string; entries: Entry[] };
@@ -119,6 +129,31 @@ async function classify(entry: Entry, scratch: string, withFootage: boolean): Pr
       score: d,
       suggestion: agree ? "" : suggest("diversity", entry.verdict, d, DIVERSITY_MIN),
       threshold: DIVERSITY_MIN,
+    };
+  }
+
+  if (entry.dimension === "structure") {
+    // Offline + footage-free: fetch the composition source, classify the RESOLVED
+    // shader body, and check the classified dominant against the operator's labeled
+    // family. This scores the CLASSIFIER (does it read the body the way the operator
+    // does?), independent of poster/footage.
+    const res = await fetch(compositionUrl(entry.logId));
+    if (!res.ok) {
+      return { ...base, suggestion: `composition fetch failed: ${res.status} ${res.statusText}` };
+    }
+    const classified = classifyCompositionStructure(await res.text(), glslSnippets);
+    if (!classified) {
+      return { ...base, suggestion: "composition body could not be located/resolved" };
+    }
+    const agree = entry.structure ? classified.dominant === entry.structure : null;
+    return {
+      ...base,
+      agree,
+      gate: agree === null ? "advisory" : agree ? "pass" : "fail",
+      suggestion:
+        entry.structure && !agree
+          ? `classifier read '${classified.dominant}' but operator labeled '${entry.structure}' → check the classifier heuristics for this body`
+          : `classified '${classified.dominant}'${classified.secondary ? ` (+${classified.secondary})` : ""} @ confidence ${classified.confidence}`,
     };
   }
 

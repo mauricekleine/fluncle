@@ -1,0 +1,184 @@
+// PROVENANCE: shipped Fluncle finding composition source, fetched from
+// https://found.fluncle.com/027.2.8R/composition.tsx on 2026-07-04 (offline fixture,
+// read as raw text + GLSL-resolved by the test — never imported/compiled).
+//
+// [BORDERS] — Eternity | Pilot. 2026 | logId: 027.2.8R
+// vehicle: basalt organ | texture: dither | grain: grainChemicalDye | register: representational
+//
+// Top-down field of columnar basalt hexagonal cross-sections: deep black shaft
+// interiors recede below, cold indigo-blue mineral seams between columns catch
+// chemical-dye light. At the drop (15.24s), sub-bass floods the system — geothermal
+// heat erupts upward through the shafts, the seam network blazing cold-bright.
+//
+// Depth: shaft interiors = absolute black voids; seam walls = lit mineral surfaces;
+//        sub-bass drives shaft glow from below — depth through differential illumination.
+// Landing point: off-center cluster (below-left) — densest mineral saturation.
+// Duration: 20s — drop lands at 15.24s, punchy stop 4.76s into the main section.
+// BPM (analyzed): 172.05 | Drop: 15240ms | Drop candidates: [15240ms]
+// Energy arc: oscillating build 0–6s → breakdown at 6s → rolling build 8–15s → drop flood
+
+import React from "react";
+import {
+  ShaderLayer,
+  GLSL,
+  useAudioReactivity,
+  useJourney,
+  TrackAudio,
+  TypePlate,
+  CloseCard,
+  paletteMix,
+  withAlpha,
+  type NostalgicCosmosProps,
+} from "../cosmos";
+
+const FRAG = /* glsl */ `
+${GLSL.hash}
+${GLSL.valueNoise}
+${GLSL.noise3}
+${GLSL.filmGrain}
+${GLSL.grainFamilies}
+${GLSL.paletteRamp}
+${GLSL.tonemap}
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / u_res;
+
+  // Aspect-corrected centered coordinates: cells appear circular in portrait frame
+  float asp = u_res.x / u_res.y;
+  vec2 uvC = (uv - 0.5) * vec2(asp, 1.0);
+
+  // Global clock — audio-free constant drift (doctrine 7)
+  // Diagonal pan at field-crossing speed — enough directed motion to clear beat-pull gate
+  vec2 drift = vec2(0.038, 0.025) * u_time;
+
+  // Monotonic z-phase advance — cells roil/shift in place without returning
+  float z = u_time * 0.036;
+
+  // Voronoi3: ~5.6 columns across portrait width, ~10 tall (roughly circular)
+  float cellScale = 10.2;
+  vec3 vor = voronoi3(vec3((uvC + drift) * cellScale, z));
+  float F1 = vor.x;        // distance to nearest cell center (0=deep inside shaft)
+  float F2 = vor.y;        // distance to 2nd nearest cell
+  float edge = F2 - F1;    // wall proximity — near 0 = at mineral seam
+  float cellId = vor.z;    // per-cell hash 0..1 (geological variation)
+
+  // === MINERAL SEAM (the lit walls between column shafts) ===
+  // Width expands on kick (structural, in-place deformation) and at drop
+  float seamW = 0.028
+    + u_kickHit * 0.024          // kick widens the crack (fast, in-place)
+    + u_audioDrop * 0.038        // drop widens substantially (ignition event)
+    + u_audioSwell * 0.009;      // swell adds a slow breath
+  float seam = smoothstep(seamW * 1.6, 0.0, edge);
+
+  // Per-cell geological tonal variation (some columns slightly different stone)
+  float geol = 0.88 + cellId * cellId * 0.18;
+
+  // === SHAFT GLOW FROM BELOW (sub-bass — arrives at the drop) ===
+  // Sub is ~0.1 during build, jumps to ~0.7 after drop → natural ignition
+  float subStr = pow(u_sub, 1.3);
+  float shaftDepth = max(0.0, 0.95 - F1 * 2.0); // brightest at column center
+  float shaftGlow = subStr * shaftDepth;
+
+  // === LANDING POINT BIAS (off-center cluster) ===
+  // Slightly below-left: the "hydrothermal vent pocket"
+  vec2 landCtr = vec2(-0.042, -0.038);
+  float landDist = length(uvC - landCtr);
+  float landBias = 1.0 - smoothstep(0.0, 0.52, landDist) * 0.26;
+
+  // === MINERAL BRIGHTNESS (energy envelope) ===
+  float mineralE = u_bass * 0.52 + u_audioSwell * 0.42 + u_audioDrop * 0.80;
+  mineralE *= landBias;
+
+  // === COLOR CONSTRUCTION ===
+
+  // Background: hardcoded warm near-black (artwork palette is all cool indigo — Warm Dark canon
+  // requires warmth here regardless of swatches; coal-brown base with faint violet lean)
+  vec3 bgCol = mix(vec3(0.068, 0.044, 0.028), vec3(0.052, 0.032, 0.058), 0.25) * geol;
+
+  // Seam color: cold indigo-blue from artwork swatches, evolving with energy
+  // Chemical dye character: per-channel chroma shift driven by mid-band
+  float midShift = u_mid * 0.12;
+  vec3 seamBase = vec3(
+    0.14 + midShift * 0.25,   // slight red component from mids (chemical bleed)
+    0.22 - midShift * 0.08,   // green dims with mids
+    0.68 + midShift * 0.10    // blue dominant (cold mineral seam)
+  );
+  // At drop: seams brighten toward cold blue-white
+  vec3 seamPeak = vec3(0.45, 0.60, 0.92);
+  vec3 seamCol = mix(seamBase, seamPeak, u_audioDrop * 0.65 + mineralE * 0.25);
+  seamCol *= seam * (0.38 + mineralE * 0.90);
+
+  // Shaft glow: warm amber-copper rising from below as sub-bass arrives (geothermal heat)
+  // Warm hue keeps background warm-dark compliant; cold blue is for the seams only
+  vec3 glowCol = vec3(0.48, 0.26, 0.08) * shaftGlow * landBias * 0.85;
+
+  // Combine
+  vec3 col = bgCol + seamCol + glowCol;
+
+  // Gentle edge-darkening — non-porthole (subtle, center ≥ 1.3)
+  float vr = length((uv - 0.5) * vec2(1.0, 0.62) - landCtr * 0.4);
+  col *= 1.0 - smoothstep(0.30, 0.82, vr) * 0.32;
+
+  // Filmic tonemap before grain (rolls highlights off, prevents blowout)
+  col = acesFilmic(col * 1.40);
+
+  // === GRAIN: grainChemicalDye ===
+  // Per-channel RGB grain, soft clumps — suits cold mineral seepage character.
+  // Amount: moderate (these are far-travelled geological records, not electric pop).
+  // Flux adds subtle agitation on transients.
+  GrainOpts g = grainChemicalDye();
+  g.amount = 0.040 + u_flux * 0.011;
+  col = filmGrain(col, uv, u_time, g);
+
+  gl_FragColor = vec4(dither8(col, uv), 1.0);
+}
+`;
+
+const DROP_ENV = { fallMs: 5800, holdMs: 2200, riseMs: 1300 };
+
+const BasaltOrgan: React.FC<NostalgicCosmosProps> = ({ track, audio, palette, seed }) => {
+  const audioRx = useAudioReactivity(audio, { drop: DROP_ENV });
+  const { phase, phaseProgress } = useJourney();
+  const pal = paletteMix(palette.swatches);
+
+  return (
+    <div style={{ background: "#000", height: "100%", position: "relative", width: "100%" }}>
+      <TrackAudio audio={audio} />
+      <ShaderLayer
+        fragmentShader={FRAG}
+        beatGrid={audio.beatGrid}
+        onsets={audio.onsets}
+        energyCurve={audio.energyCurve}
+        bassCurve={audio.bassCurve}
+        midCurve={audio.midCurve}
+        trebleCurve={audio.trebleCurve}
+        subCurve={audio.subCurve}
+        kickCurve={audio.kickCurve}
+        snareCurve={audio.snareCurve}
+        airCurve={audio.airCurve}
+        fluxCurve={audio.fluxCurve}
+        downbeats={audio.downbeats}
+        dropMs={audio.dropMs}
+        reactivity={{ drop: DROP_ENV }}
+        uniforms={audioRx.uniforms}
+        seed={seed}
+        palette={pal}
+        bloom={{ intensity: 0.95, radius: 1.3, threshold: 0.6 }}
+      />
+      <TypePlate
+        track={track}
+        ink={pal.ink}
+        dimInk={withAlpha(pal.glow, 0.85)}
+        identityInSec={0.7}
+        telemetryInSec={2.1}
+        holdSec={7}
+      />
+      <CloseCard
+        progress={phase === "arrive" ? phaseProgress : 0}
+        palette={{ accent: pal.glow, ink: pal.ink }}
+      />
+    </div>
+  );
+};
+
+export default BasaltOrgan;

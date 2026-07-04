@@ -1,0 +1,230 @@
+// PROVENANCE: shipped Fluncle finding composition source, fetched from
+// https://found.fluncle.com/024.7.3Y/composition.tsx on 2026-07-04 (offline fixture,
+// read as raw text + GLSL-resolved by the test — never imported/compiled).
+//
+// Days Like These - Original Mix — Monrroe (Soul Deep Digital, 2016) · log 024.7.3Y · Found Jun 23.
+//
+// VEHICLE: abyssal swell — recovered footage of a deep black-green sea swelling in
+//   the dark. The WHOLE frame is one heavy LIQUID body, edge to edge: a marbled
+//   domain-warp surface (the rolling water) carrying BIOLUMINESCENT vein-filaments
+//   that live in the troughs and ignite along the crests. Fully ABSTRACT — the
+//   liquid field IS the image, never an object on dead space. A slow ONE-WAY roll
+//   carries the whole mass (constant clock, audio-free); ALL reactivity is the
+//   liquid's material deforming IN PLACE (the lead bows the fabric, the kick fattens
+//   the veins, the build lowers the survival gate). ONE driver: the swell. ONE
+//   climax: at the ~8.5s DROP the vein-cores IGNITE along a crest — the liquid's OWN
+//   bioluminescence flaring, bloomed (delete the swell and the bright moment is gone;
+//   it is keyed to `core` × the drop). COOL scene => COOL climax: warm-dark ground ->
+//   deep teal -> sea-green vein -> pale green-cream cores. NO gold, NO bolted-on sun,
+//   capped below cream.
+//
+// TEXTURE FAMILY: fluent (liquid) — a heavy marbled domain-warp body + ridged
+//   bioluminescent filaments + the on-brand COLOURED chemical-dye grain (the green
+//   dye-cloud IS the bioluminescence grade) + dither, so it reads as a recovered
+//   deep-sea transmission, not a clean shader.
+//
+// METADATA -> PIXELS (doctrine 5):
+//   • Context texture "deep, soulful, half-step pocket, introspective, rolling,
+//     nocturnal" + a green/teal cover (accent #4cb27f, glow #80c8a4 on near-black)
+//     -> a DEEP, dark, nocturnal liquid that ROLLS slowly (the half-step swell), lit
+//     only by its own sea-green bioluminescence. Introspective = dim/sparse in the
+//     long breakdown; the drop is where it comes alive.
+//   • centroidHz 677 + highRatio 0.006 (DARK, almost no treble air) -> NO sparkle
+//     layer; the picture is carried by the low end, treble only faintly stirs grain.
+//   • subBassRatio 0.183 (heavy low end) -> a dense, weighty liquid MASS (not an airy
+//     field); the kick fattens the veins and lifts the body.
+//   • midFlatness 0.463 (tonal/melodic) -> a flowing, marbled, liquid surface rather
+//     than a gritty noisy one; the lead (mid) bows the fabric.
+//   • energy 0.25 (0-7s) -> 0.73 (8.6s, the DROP) sustained to the end -> the reactive
+//     scene-change: a dim, slow, sparse breakdown that FLOODS denser/brighter on the
+//     drop and rolls alive through the main.
+//
+// DIVERSITY: the recent ledger is banded glow-sheets (cloud strata), a woven net
+//   (signal weave), drifting embers/relics, silk/ion drifts, rain glass, caustic
+//   tide, cathode bloom, aurora veil, plasma veins. A heavy MARBLED LIQUID body with
+//   ridged bioluminescent veins lit FROM BELOW is none of those: not banded sheets,
+//   not a net, not a sparse plasma filament-net on black (the mass and the rolling
+//   surface are the point), not a smear. Gate-safe: a one-way roll + forward-only
+//   phase churn; no per-beat term ever touches a coordinate.
+//
+// REACTIVITY (doctrine 9): bass/bassFast (kick) -> vein WIDTH + body lift (MATERIAL);
+//   mid/midFast (lead/roll) -> warp AMPLITUDE, the fabric bowing in place; energy +
+//   swell (smoothed) -> exposure + the ridge-survival THRESHOLD (more veins on the
+//   build); drop -> the vein-core IGNITION (the climax); hit -> subtle on-beat
+//   material lift; treble (near-silent) -> faint dye-grain stir. MOTION rides only
+//   u_time + a monotonic u_rise — never the raw beat (Motion law, doctrine 7).
+
+import { type FC } from "react";
+import { AbsoluteFill, Easing, interpolate, useCurrentFrame, useVideoConfig } from "remotion";
+import {
+  CloseCard,
+  GLSL,
+  type NostalgicCosmosProps,
+  ShaderLayer,
+  TrackAudio,
+  TypePlate,
+  useJourney,
+  withAlpha,
+} from "../cosmos";
+
+const DROP_MS = 8_500; // energy 0.35 -> 0.73 at ~8.6s — the drop lands, the veins ignite
+
+const FRAGMENT = /* glsl */ `
+${GLSL.hash}
+${GLSL.valueNoise}
+${GLSL.fbm}
+${GLSL.domainWarp}
+${GLSL.paletteRamp}
+${GLSL.filmGrain}
+${GLSL.grainFamilies}
+
+uniform float u_rise;   // monotonic 0..1 — eases the roll into the drop, never reverses
+uniform float u_settle; // 1.0 -> ~0.66 over the final ~1.7s, a calm bed for the close
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / u_res;
+  vec2 p = (gl_FragCoord.xy - 0.5 * u_res) / u_res.y; // aspect-correct, centered
+
+  float sd = fract(u_seed * 0.00013) * 7.0; // tame the raw seed (~4e9)
+
+  // --- motion: a slow ONE-WAY roll + forward-only phase (Motion law) ----------
+  // audio NEVER touches a coordinate; the kick lives in MATERIAL below.
+  float roll = u_time * 0.050 + u_rise * 0.10;       // one-way, monotonic
+  vec2 drift = vec2(0.36, -0.93) * roll + sd;        // diagonalized, no axis streak
+  float ph = u_time * 0.066 + u_rise * 0.12;         // re-form in place, forward only
+
+  // --- the heavy liquid: a marbled domain-warp surface filling the frame ------
+  vec2 sp = p * 1.45 + drift;
+  // the lead/roll bows the fabric HARDER in place (warp-amplitude on a band)
+  float warpAmp = 0.16 + 0.14 * u_mid + 0.06 * u_midFast;
+  vec2 q = vec2(
+    fbm(sp * 0.85 + vec2(ph, sd), 4),
+    fbm(sp * 0.85 + vec2(4.3, 1.7) - vec2(0.0, ph), 4)
+  );
+  vec2 wp = sp + warpAmp * (q - 0.5);
+  float n = domainWarp(wp * 1.55 + vec2(ph * 1.05, -ph * 0.7), 4); // marbled liquid 0..1
+
+  // the liquid BODY — a continuous surface, always present (a heavy mass, not a
+  // sparse net): the marble shown as tonal flow, dark in the troughs.
+  float body = smoothstep(0.12, 0.92, n);
+
+  // --- bioluminescent vein-filaments: ridged crests on the liquid -------------
+  float ridge = pow(1.0 - abs(2.0 * n - 1.0), 2.6);
+  // the build/drop lowers the survival gate (more veins); the kick fattens them.
+  float open = clamp(u_audioSwell * 0.65 + u_energy * 0.40 + u_audioDrop * 0.55, 0.0, 1.0);
+  float thr  = mix(0.60, 0.43, open);
+  float wdt  = 0.12 + u_bass * 0.10 + u_bassFast * 0.05 + u_audioDrop * 0.05;
+  float fil  = smoothstep(thr, thr + wdt, ridge);
+
+  // the hottest vein cores — the climax ignition (tightly gated, capped, textured).
+  float core = smoothstep(0.78, 1.0, ridge) * fil;
+
+  // --- brightness: introspective + dim in the breakdown, floods on the drop ---
+  float exposure = 0.24 + 0.42 * u_energy + 0.22 * u_audioSwell + 0.40 * u_audioDrop;
+  // the broad sea-green field — the heavy liquid + its veins — CAPPED at sea-green
+  // (t=0.66 = stop2) so the drop floods the field WITHOUT washing it to white.
+  float baseTone = body * (0.12 + 0.22 * exposure) + fil * (0.30 + 0.45 * exposure);
+  baseTone += body * u_treble * 0.04;         // faint hat stir (treble ~silent)
+  baseTone *= 1.0 + u_audioHit * 0.08;        // subtle on-beat material lift (MATERIAL, not motion)
+  baseTone = clamp(baseTone, 0.0, 0.66);
+
+  // --- colour: the GREEN ramp, NO gold ---------------------------------------
+  // warm-dark ground -> deep teal -> sea-green; the broad field stops at sea-green.
+  vec3 col = paletteRamp(baseTone);
+  col = mix(u_palette[0], col, smoothstep(0.0, 0.18, baseTone));
+
+  // the climax: THIN bioluminescent vein-cores ignite to pale green-cream — ONLY on
+  // the drop (drop-gated), so the bright moment is the veins flaring, never a wash.
+  float ignite = clamp(core * (0.12 + 1.0 * u_audioDrop), 0.0, 0.85);
+  col = mix(col, u_palette[3], ignite);
+
+  // --- gentle directional mood: bioluminescence wells up from BELOW -----------
+  // brighter low, the deep falls away up top. A vertical falloff, NOT a centred
+  // radial porthole — the corners keep a real value, the bottom never lifts >1.
+  col *= mix(0.98, 0.72, smoothstep(0.05, 1.0, uv.y));
+  col *= u_settle;
+  col = min(col, vec3(0.90)); // hard ceiling — even the hottest core keeps texture
+
+  // --- recovered-footage grade: the on-brand COLOURED dye-cloud grain ---------
+  // the green dye IS the bioluminescence grade; faint (an electric finding), boiling.
+  GrainOpts go = grainChemicalDye();
+  go.amount = 0.05 + 0.03 * u_treble;
+  col = filmGrain(col, uv, u_time, go);
+  col = dither8(col, uv);
+
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+const AbyssalSwell: FC<NostalgicCosmosProps> = ({ track, audio, palette, seed }) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const sec = frame / fps;
+  // Push the close late so the 8.5–18s flood plays on pure art before the sign-off.
+  const { phase, phaseProgress, arc } = useJourney({ split: [0.12, 0.86] });
+
+  // Monotonic roll ramp — eases the swell faster into the drop, never reverses
+  // (the only frame-derived signal allowed to touch travel).
+  const rise = interpolate(sec, [0, DROP_MS / 1000, 20], [0, 0.5, 1], {
+    easing: Easing.inOut(Easing.cubic),
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+
+  // Ease the bed down for the final ~1.7s so the close sign-off gets a calm
+  // ground (and the clip resolves instead of cutting at full brightness).
+  const settle = interpolate(sec, [18.3, 20], [1, 0.66], {
+    easing: Easing.inOut(Easing.cubic),
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+
+  // The GREEN ramp, built from the artwork's own sea-green swatches so the
+  // ignition stays in-palette and never reaches for gold (doctrine 1): warm-dark
+  // ground -> deep teal liquid -> sea-green vein -> pale green-cream core.
+  const stops: [string, string, string, string] = [
+    palette.background,
+    "#123a2c",
+    "#4cb27f",
+    "#cdeede",
+  ];
+
+  return (
+    <AbsoluteFill style={{ backgroundColor: palette.background }}>
+      <ShaderLayer
+        fragmentShader={FRAGMENT}
+        paletteStops={stops}
+        seed={seed}
+        progress={arc}
+        beatGrid={audio.beatGrid}
+        onsets={audio.onsets}
+        energyCurve={audio.energyCurve}
+        bassCurve={audio.bassCurve}
+        midCurve={audio.midCurve}
+        trebleCurve={audio.trebleCurve}
+        reactivity={{
+          drop: { fallMs: 4500, floor: 0, holdMs: 1800, peakTimeMs: DROP_MS, riseMs: 1200 },
+        }}
+        uniforms={{ u_rise: rise, u_settle: settle }}
+        bloom={{ intensity: 0.6, radius: 1.0, threshold: 0.8 }}
+      />
+
+      <TrackAudio audio={audio} />
+
+      <TypePlate
+        track={track}
+        ink="#e8f0e6"
+        dimInk={withAlpha("#86ab98", 0.92)}
+        identityInSec={1.0}
+        telemetryInSec={2.6}
+        holdSec={4.6}
+      />
+
+      {phase === "arrive" ? (
+        <CloseCard arc={phaseProgress} palette={{ accent: "#80c8a4", ink: "#e6f1ea" }} />
+      ) : null}
+    </AbsoluteFill>
+  );
+};
+
+export default AbyssalSwell;

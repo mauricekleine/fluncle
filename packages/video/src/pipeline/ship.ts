@@ -53,7 +53,13 @@ import { deletePreviewAudio } from "./download-preview";
 import { fluncleBin, fluncleSpawnEnv } from "./fluncle-bin";
 import { generateIntentStub } from "./intent";
 import { renderCover } from "./render-cover";
-import { buildScene, type ScenePalette } from "./scene";
+import { buildScene, locateFragmentLiteral, resolveGlslBody, type ScenePalette } from "./scene";
+import {
+  classifyShaderStructure,
+  labelWithStructure,
+  type StructureManifest,
+  toStructureManifest,
+} from "./shader-structure";
 
 const OUT_DIR = path.resolve(import.meta.dirname, "../../out");
 const PACKAGE_ROOT = path.resolve(import.meta.dirname, "../..");
@@ -238,6 +244,10 @@ export type RenderManifestInput = {
   model: string;
   reasoning: string;
   register: string | null;
+  /** The structural family the resolved shader body classifies to (the CHECKED
+   *  diversity axis, beside the free-text vehicle NAME). Null when the body could
+   *  not be resolved/classified — a warn, never a ship blocker. */
+  structure: StructureManifest | null;
   trackId: string;
   variants: ReturnType<typeof buildVariants>;
   vehicle: string | null;
@@ -263,6 +273,12 @@ export function buildRenderJson(input: RenderManifestInput): Record<string, unkn
     // The third diversity-ledger axis (composition style): abstract /
     // representational / framed. Null when unset — a warn, not a ship blocker.
     register: input.register,
+    // The STRUCTURAL diversity axis: the family the resolved shader body classifies
+    // to (cellular / flow / caustic / filament / lattice / radial / metaball / other).
+    // The vehicle NAME is free poetic identity; this is the checked claim the gate
+    // reads so creatively-named repeats (three voronoi worlds under three names) can't
+    // slip through. Null when the body couldn't be resolved — a warn, not a blocker.
+    structure: input.structure,
     trackId: input.trackId,
     // The per-master render-flag provenance: ship produces the two-master
     // bundle plus any extra variants it found on disk, so a future "clean
@@ -474,6 +490,38 @@ async function main(argv: string[]): Promise<void> {
     );
   }
 
+  // Classify the STRUCTURAL family from the RESOLVED shader body — the diversity axis
+  // the vehicle name can't carry. Best-effort by contract: any hiccup (no composition
+  // source, an unresolvable interpolation, a classifier throw) WARNS and omits the
+  // block — ship NEVER fails because structural classification stumbled.
+  const vehicle = flags.vehicle ?? renderManifest.vehicle ?? null;
+  let structure: StructureManifest | null = null;
+  try {
+    if (existsSync(paths.compositionPath)) {
+      const source = readFileSync(paths.compositionPath, "utf8");
+      const located = locateFragmentLiteral(source);
+      if (!located.ok) {
+        log(`structure unclassified: ${located.error}`);
+      } else {
+        const resolved = resolveGlslBody(located.raw, GLSL as unknown as Record<string, string>);
+        if (!resolved.ok) {
+          log(`structure unclassified: ${resolved.error}`);
+        } else {
+          const classification = classifyShaderStructure(resolved.body);
+          structure = toStructureManifest(classification);
+          const secondary = classification.secondary ? ` +${classification.secondary}` : "";
+          log(
+            `structure: ${labelWithStructure(vehicle, structure.dominant)}${secondary} (confidence ${structure.confidence})`,
+          );
+        }
+      }
+    } else {
+      log("structure unclassified (no composition source in the bundle)");
+    }
+  } catch (error) {
+    log(`structure unclassified: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
   log("render.json");
   writeFileSync(
     paths.renderOutPath,
@@ -487,9 +535,10 @@ async function main(argv: string[]): Promise<void> {
         model: flags.model ?? renderManifest.model ?? DEFAULT_VIDEO_MODEL,
         reasoning: flags.reasoning ?? renderManifest.reasoning ?? DEFAULT_VIDEO_REASONING,
         register,
+        structure,
         trackId: track.trackId,
         variants: buildVariants({ footage: true, footageSocial: true, ...extraMasters }),
-        vehicle: flags.vehicle ?? renderManifest.vehicle ?? null,
+        vehicle,
       }),
       null,
       2,
