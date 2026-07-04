@@ -204,6 +204,26 @@ export function resolveBundlePaths(outDir: string, logId: string): BundlePaths {
   };
 }
 
+// The re-renderable-source contract: the bundle files that MUST exist after a ship
+// or the bundle is a PARTIAL (footage with no re-renderable source), the exact shape
+// the CLI upload guard also enforces. ship copies props.json only when the analyzed
+// props exist and composition.tsx only when the render manifest resolves a source, so
+// a missing input would otherwise ship a silently-incomplete bundle — this asserts
+// against that. Keyed by BundlePaths so writers and the check can't drift.
+export const RERENDER_CONTRACT_KEYS: ReadonlyArray<keyof BundlePaths> = [
+  "compositionPath",
+  "propsOutPath",
+  "renderOutPath",
+];
+
+/** The contract files missing from an assembled bundle (basenames). Pure over an
+ *  existence predicate so ship.test.ts can exercise it without touching the fs. */
+export function missingContractFiles(paths: BundlePaths, exists: (p: string) => boolean): string[] {
+  return RERENDER_CONTRACT_KEYS.filter((key) => !exists(paths[key])).map((key) =>
+    path.basename(paths[key]),
+  );
+}
+
 type ExtraVariantMasterFlag = "footageLandscape" | "footageLandscapeSocial" | "footageNotext";
 
 export type ExtraVariantSource = {
@@ -612,6 +632,20 @@ async function main(argv: string[]): Promise<void> {
   } catch (error) {
     log(
       `scene.json skipped (emission error): ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  // Bundle-completeness self-check (fail loudly): ship's job is a COMPLETE,
+  // re-renderable bundle. If props.json (no analyzed props) or composition.tsx (no
+  // resolved render source) never got copied, the bundle would ship footage with no
+  // re-renderable source and desync render.json from the DB ledger downstream. Refuse
+  // to hand off a half-bundle — this is the ship-side twin of the CLI upload guard.
+  const missingContract = missingContractFiles(paths, existsSync);
+  if (missingContract.length > 0) {
+    throw new Error(
+      `bundle INCOMPLETE — the re-render contract is missing ${missingContract.join(", ")} in out/${track.logId}/. ` +
+        `props.json needs out/${track.trackId}.props.json (run social-preview first) and composition.tsx needs a resolvable compositionSource in out/${track.trackId}.render.json. ` +
+        `Refusing to leave a partial bundle a later \`track video\` would upload footage-only.`,
     );
   }
 

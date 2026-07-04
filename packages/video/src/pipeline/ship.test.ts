@@ -12,7 +12,9 @@ import {
   buildNoteText,
   buildRenderJson,
   EXTRA_VARIANT_SOURCES,
+  missingContractFiles,
   parseShipArgs,
+  RERENDER_CONTRACT_KEYS,
   resolveBundlePaths,
 } from "./ship";
 
@@ -166,6 +168,31 @@ describe("buildRenderJson", () => {
     const json = buildRenderJson({ ...base, register: null });
 
     expect(json.register).toBeNull();
+  });
+});
+
+describe("missingContractFiles", () => {
+  const paths = resolveBundlePaths("/out", "032.0.4L");
+
+  test("the contract is composition.tsx + props.json + render.json", () => {
+    expect(RERENDER_CONTRACT_KEYS).toEqual(["compositionPath", "propsOutPath", "renderOutPath"]);
+  });
+
+  test("a complete bundle reports nothing missing", () => {
+    expect(missingContractFiles(paths, () => true)).toEqual([]);
+  });
+
+  test("a bundle missing props + composition names both by basename (the ship regression)", () => {
+    const present = new Set([paths.renderOutPath, paths.footage, paths.footageSocial]);
+    expect(missingContractFiles(paths, (p) => present.has(p))).toEqual([
+      "composition.tsx",
+      "props.json",
+    ]);
+  });
+
+  test("a bundle with only render.json missing names it alone", () => {
+    const present = new Set([paths.compositionPath, paths.propsOutPath]);
+    expect(missingContractFiles(paths, (p) => present.has(p))).toEqual(["render.json"]);
   });
 });
 
