@@ -134,6 +134,16 @@ async function enrich(member: PlanMember): Promise<PlanEntry> {
  * the source of the matcher's ordered logId list.
  */
 export async function buildPlan(mixtapeLogId = DEFAULT_PLAN_MIXTAPE): Promise<PlanEntry[]> {
-  const members = (await fetchMembers(mixtapeLogId)) ?? (await fixtureMembers());
+  const fetched = await fetchMembers(mixtapeLogId);
+  const members = fetched ?? (await fixtureMembers());
+  // Never silently swap the tracklist: if the requested plan didn't load, say so
+  // loudly (the show.ts `[hold]` register) — naming what was asked for vs. what ran.
+  if (fetched === null) {
+    console.error(
+      `[hold]  plan ${mixtapeLogId} did not load from ${WEB_BASE}/api/tracks/${mixtapeLogId} — ` +
+        `falling back to the committed fixture (${DEFAULT_PLAN_MIXTAPE}, ${members.length} findings). ` +
+        `The glass is running the FIXTURE tracklist, not ${mixtapeLogId}.`,
+    );
+  }
   return await Promise.all(members.map(enrich));
 }
