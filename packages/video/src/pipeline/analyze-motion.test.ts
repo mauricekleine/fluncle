@@ -644,6 +644,82 @@ assert.equal(
 );
 assert.equal(revealArc.verdict, "evolving", "the reveal reads evolving via the subregion read");
 
+// PRESENCE-QUIET RELIEF: a quiet presence render whose whole-frame mean is far below
+// the floor (intentional dark sky) AND whose best subregion lands JUST under the
+// regional floor — in the striking-distance band [0.4, region). It is NOT rescued by
+// either arc read, so the pre-relief gate reads it DEAD. But when both HARD safety
+// gates passed (beat-pull flows, flash safe), the gate downgrades the dead-fail to an
+// ADVISORY inconclusive("presenceQuiet") — pass-with-note, eyeball the reveal. A dimmer
+// + wider subject than arcReveal (bright 125, half-width 4) lands the region read mid-band.
+const arcQuietRevealFrame = (t: number): Float32Array => {
+  const f = new Float32Array(PIX * 3);
+  const prog = t / ARC_FRAMES;
+  for (let y = 0; y < FH; y++) {
+    for (let x = 0; x < FW; x++) {
+      let v = clamp8(30 + speckle(y * FW + x, t, 6));
+      if (x >= 40 && y >= 70) {
+        const sx = 44 + Math.floor(prog * 14);
+        if (Math.abs(x - sx) < 4 && prog > 0.15) {
+          v = clamp8(125 + speckle(y * FW + x, t, 6));
+        }
+      }
+      const idx = (y * FW + x) * 3;
+      f[idx] = v;
+      f[idx + 1] = v;
+      f[idx + 2] = v;
+    }
+  }
+  return f;
+};
+const arcQuietReveal = wrapRgb(
+  Array.from({ length: ARC_FRAMES }, (_, t) => arcQuietRevealFrame(t)),
+);
+// The band precondition: whole-frame below floor, region read in [striking, regionFloor).
+const quietBare = scoreArc({ fps: FPS, intent: null, rgb: arcQuietReveal });
+assert.ok(
+  quietBare.wholeClipChange < quietBare.floor,
+  `presence-quiet: whole-frame mean must sit below the floor (got ${quietBare.wholeClipChange.toFixed(3)})`,
+);
+assert.ok(
+  quietBare.bestWindowChange >= 0.4 && quietBare.bestWindowChange < quietBare.regionFloor,
+  `presence-quiet: region read must land in the striking band [0.4, ${quietBare.regionFloor}) (got ${quietBare.bestWindowChange.toFixed(3)})`,
+);
+// A BARE scoreArc call (no gate flags) is unchanged — the relief never fires → DEAD.
+assert.equal(
+  quietBare.verdict,
+  "dead",
+  "presence-quiet: no gate flags → the pre-relief dead read holds",
+);
+assert.equal(quietBare.dead, true, "presence-quiet: bare call still hard-fails as dead");
+// BOTH hard gates passed → the relief fires: advisory inconclusive, never dead.
+const quietRelieved = scoreArc({
+  beatPullPass: true,
+  flashPass: true,
+  fps: FPS,
+  intent: null,
+  rgb: arcQuietReveal,
+});
+assert.equal(
+  quietRelieved.verdict,
+  "inconclusive",
+  "presence-quiet: both gates pass → inconclusive",
+);
+assert.equal(
+  quietRelieved.inconclusive,
+  "presenceQuiet",
+  "presence-quiet: the reason is presenceQuiet",
+);
+assert.equal(quietRelieved.dead, false, "presence-quiet relief is an advisory PASS, never dead");
+// ONE gate failing (flash unsafe here) → no relief, back to DEAD. The relief needs BOTH.
+const quietOneGate = scoreArc({
+  beatPullPass: true,
+  flashPass: false,
+  fps: FPS,
+  intent: null,
+  rgb: arcQuietReveal,
+});
+assert.equal(quietOneGate.verdict, "dead", "presence-quiet: one gate failing → no relief, dead");
+
 // SHORT clip → inconclusive, never a false dead-fail.
 const arcShort = wrapRgb(Array.from({ length: 4 }, () => grayFrame(120)));
 const shortArc = scoreArc({ fps: FPS, intent: null, rgb: arcShort });

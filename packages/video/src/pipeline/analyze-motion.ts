@@ -1424,6 +1424,18 @@ const ARC_FLOOR = 0.29;
 // presence exemplar (see calibration/verdicts.json). The window is ~1/3 of each
 // dimension so a quadrant-scale subject reads without a single hot pixel dominating.
 const ARC_REGION_FLOOR = 0.5;
+// The presence-quiet relief band (pilot 033.0.1O "The Passing Hull", 2026-07-04). A
+// QUIET presence render is structurally UNABLE to reach the whole-frame floor — most
+// of the frame is intentional dark sky that breathes with the bass, so the mean of
+// the adjacent changes stays low by design (the pilot: wholeClipChange 0.136). The
+// region path is what carries it, and it can land JUST under ARC_REGION_FLOOR (the
+// pilot cleared it at 0.543, barely). When the whole-frame read misses AND the region
+// read is within STRIKING DISTANCE of its floor (≥ this) AND both HARD safety gates
+// passed (beat-pull flows, flash is safe — a quiet render that also jitters or strobes
+// earns no relief), the gate returns inconclusive("presenceQuiet") — an advisory
+// PASS-with-note to eyeball the reveal — instead of a hard dead-fail. PROVISIONAL:
+// re-earn the band as presence renders accumulate (calibration/verdicts.json).
+const ARC_PRESENCE_STRIKING = 0.4;
 const ARC_WINDOW_DIV = 3; // sub-window ≈ width/DIV × height/DIV
 const ARC_WINDOW_STRIDE_DIV = 2; // stride ≈ window / DIV (coarse — we take the max)
 const ARC_MIN_FRAMES = 10; // fewer frames → inconclusive (never a false dead-fail)
@@ -1456,6 +1468,11 @@ export type ArcResult = {
   hard: true;
   dead: boolean;
   verdict: "evolving" | "dead" | "inconclusive";
+  /** the inconclusive reason when verdict is "inconclusive": "tooShort" (too few
+   *  frames to judge) or "presenceQuiet" (the presence-class relief — a near-miss
+   *  regional reveal on a clip that cleared both hard safety gates; advisory pass,
+   *  eyeball the reveal). Absent on evolving/dead. */
+  inconclusive?: string;
   /** headline: mean of the adjacent combined structural changes. */
   wholeClipChange: number;
   /** the deadest adjacent transition (a sustained-freeze tell), reported. */
@@ -1694,11 +1711,18 @@ export type ArcInput = {
   rgb: RgbFrames;
   fps: number;
   intent: RenderIntent | null;
+  /** Did the two HARD safety gates PASS? The presence-quiet relief fires only when
+   *  BOTH are true — a quiet presence render that clears beat-pull (flows) and flash
+   *  (safe) earns an advisory pass on a near-miss regional reveal instead of a hard
+   *  dead-fail. Omitted (a bare scoreArc call — a test, a calibration read) → the
+   *  relief never fires and the pre-relief dead logic holds unchanged. */
+  beatPullPass?: boolean;
+  flashPass?: boolean;
 };
 
 /** Pure arc/deadness scorer over the decoded rgb frames + intent. No ffmpeg. HARD. */
 export function scoreArc(input: ArcInput): ArcResult {
-  const { rgb, fps, intent } = input;
+  const { rgb, fps, intent, beatPullPass, flashPass } = input;
   const { width, height, frames } = rgb;
   const n = frames.length;
 
@@ -1712,6 +1736,7 @@ export function scoreArc(input: ArcInput): ArcResult {
       deterministic: true,
       floor: ARC_FLOOR,
       hard: true,
+      inconclusive: "tooShort",
       intentArc: null,
       minSegmentChange: 0,
       regionFloor: ARC_REGION_FLOOR,
@@ -1763,10 +1788,26 @@ export function scoreArc(input: ArcInput): ArcResult {
     }
   }
 
-  // Dead only when NEITHER the whole frame reorganizes NOR any subregion does — a
-  // field that changes as a whole passes on wholeClipChange; a subject that reveals
-  // in one region passes on bestWindowChange; a frozen frame fails both.
-  const dead = wholeClipChange < ARC_FLOOR && bestWindowChange < ARC_REGION_FLOOR;
+  // Evolving when the whole frame reorganizes OR a subregion does — a field that
+  // changes as a whole passes on wholeClipChange; a subject that reveals in one
+  // region passes on bestWindowChange.
+  const evolving = wholeClipChange >= ARC_FLOOR || bestWindowChange >= ARC_REGION_FLOOR;
+
+  // Presence-quiet relief: a quiet presence render can't reach the whole-frame floor
+  // (intentional dark sky) and its region read lands JUST under the regional floor.
+  // When both HARD safety gates passed and the regional reveal is within striking
+  // distance, the would-be dead-fail downgrades to an ADVISORY inconclusive
+  // ("presenceQuiet") — pass-with-note, eyeball the reveal — never a block. The relief
+  // requires BOTH gate flags EXPLICITLY true, so a bare scoreArc call is unchanged.
+  const presenceQuiet =
+    !evolving &&
+    beatPullPass === true &&
+    flashPass === true &&
+    bestWindowChange >= ARC_PRESENCE_STRIKING;
+
+  // Dead only when NOT evolving AND the relief did not apply — a frozen frame changes
+  // nowhere, so no subregion clears even the striking-distance band.
+  const dead = !evolving && !presenceQuiet;
 
   // Intent arc fold (advisory): if the intent declares a drop, locate the anchor
   // segment whose [startPct,endPct] span contains it and check its change carries
@@ -1803,11 +1844,12 @@ export function scoreArc(input: ArcInput): ArcResult {
     deterministic: true,
     floor: ARC_FLOOR,
     hard: true,
+    ...(presenceQuiet ? { inconclusive: "presenceQuiet" } : {}),
     intentArc,
     minSegmentChange,
     regionFloor: ARC_REGION_FLOOR,
     segments,
-    verdict: dead ? "dead" : "evolving",
+    verdict: presenceQuiet ? "inconclusive" : dead ? "dead" : "evolving",
     wholeClipChange,
   };
 }
@@ -2151,8 +2193,17 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
   // The per-frame luminance series (reused by beat-reactivity + the intent check).
   const perFrame = decodeFlashFrames(rgb);
 
-  // ARC / DEADNESS — the long-timescale HARD gate, on the same rgb extraction.
-  const arc = scoreArc({ fps: reportFps, intent, rgb });
+  // ARC / DEADNESS — the long-timescale HARD gate, on the same rgb extraction. The
+  // two HARD safety verdicts (beat-pull flows, flash safe) feed the presence-quiet
+  // relief: a quiet presence render that cleared both earns an advisory pass on a
+  // near-miss regional reveal instead of a dead-fail.
+  const arc = scoreArc({
+    beatPullPass: !beatPull.beatLocked,
+    flashPass: !flashSafety.unsafe,
+    fps: reportFps,
+    intent,
+    rgb,
+  });
 
   // SPATIAL SEAM — the WARN-level branch-cut tell, on the same rgb extraction.
   const seam = scoreSeam(rgb);
@@ -2203,7 +2254,15 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
   if (arc.dead) {
     blockingFailures.push("arc.dead");
   } else if (arc.verdict === "inconclusive") {
-    advisories.push("arc.inconclusive(tooShort)");
+    // Pass-with-note: an inconclusive arc never blocks. presenceQuiet is the
+    // presence-class relief (a near-miss regional reveal on a clip that cleared both
+    // hard safety gates) — flagged so the operator eyeballs the reveal; tooShort is
+    // the too-few-frames case.
+    advisories.push(
+      arc.inconclusive === "presenceQuiet"
+        ? "arc.inconclusive(presenceQuiet — eyeball the reveal)"
+        : `arc.inconclusive(${arc.inconclusive ?? "tooShort"})`,
+    );
   }
   if (arc.intentArc && !arc.intentArc.meetsArc) {
     advisories.push(`arc.intentMismatch(seg${arc.intentArc.dropSegment})`);
@@ -2326,7 +2385,7 @@ if (import.meta.main) {
     );
     const arc = report.arc;
     console.log(
-      `${arc.dead ? "✗" : "✓"} arc: ${arc.verdict} (change ${arc.wholeClipChange.toFixed(3)} vs floor ${arc.floor}, best-window ${arc.bestWindowChange.toFixed(3)} vs region ${arc.regionFloor}, min-seg ${arc.minSegmentChange.toFixed(3)})${arc.intentArc ? `; drop-seg ${arc.intentArc.meetsArc ? "meets" : "MISSES"} arc` : ""}`,
+      `${arc.dead ? "✗" : "✓"} arc: ${arc.verdict}${arc.inconclusive ? `(${arc.inconclusive})` : ""} (change ${arc.wholeClipChange.toFixed(3)} vs floor ${arc.floor}, best-window ${arc.bestWindowChange.toFixed(3)} vs region ${arc.regionFloor}, min-seg ${arc.minSegmentChange.toFixed(3)})${arc.intentArc ? `; drop-seg ${arc.intentArc.meetsArc ? "meets" : "MISSES"} arc` : ""}`,
     );
     if (report.seam.detected && report.seam.seam) {
       const s = report.seam.seam;
