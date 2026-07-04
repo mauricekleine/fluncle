@@ -24,6 +24,7 @@ import {
   featureOf,
   type StructureNeighbour,
 } from "./judge-diversity";
+import { type IntentRegister } from "./intent";
 import { type StructureFamily } from "./shader-structure";
 
 const POSTERS = path.resolve(import.meta.dirname, "..", "..", "calibration", "posters");
@@ -78,13 +79,20 @@ describe("evaluateStructureGate", () => {
     family: StructureFamily | null,
     logId: string,
     vehicle: string,
+    register: IntentRegister | null = null,
   ): StructureNeighbour => ({
     family,
     logId,
+    register,
     vehicle,
   });
   const window = (families: (StructureFamily | null)[]): StructureNeighbour[] =>
     families.map((f, i) => n(f, `03${i}.0.0X`, `world ${i}`));
+  // A window where every neighbour is tagged with a register (for the presence-nuance tests).
+  const windowReg = (
+    families: (StructureFamily | null)[],
+    register: IntentRegister,
+  ): StructureNeighbour[] => families.map((f, i) => n(f, `03${i}.0.0X`, `world ${i}`, register));
 
   test("a repeat in the immediate window (index < 4) FAILS and names the repeat", () => {
     const gate = evaluateStructureGate(
@@ -150,5 +158,60 @@ describe("evaluateStructureGate", () => {
     );
     expect(atFour.status).toBe("warn");
     expect(atFour.repeatAt).toBe(4);
+  });
+
+  // ── the presence nuance: representational subjects classify alike ──────────
+  test("two REPRESENTATIONAL subjects sharing a family DEMOTE a hard FAIL to WARN", () => {
+    // metaball is the family every raymarched/SDF subject classifies as; a ship and a
+    // ruin are different worlds, so the hard repeat softens to a rhyme.
+    const gate = evaluateStructureGate(
+      "metaball",
+      windowReg(["metaball", "flow", "caustic", "filament"], "representational"),
+      "representational",
+    );
+    expect(gate.status).toBe("warn");
+    expect(gate.repeatAt).toBe(0);
+    expect(gate.verdict).toContain("representational");
+  });
+
+  test("a REPRESENTATIONAL subject repeating an ABSTRACT (texture) neighbour stays a hard FAIL", () => {
+    // The neighbour is a texture-register field of the same family — not a subject; the
+    // saturation guard the gate was built for still bites.
+    const neighbours = windowReg(["metaball", "flow", "caustic", "filament"], "abstract");
+    const gate = evaluateStructureGate("metaball", neighbours, "representational");
+    expect(gate.status).toBe("fail");
+    expect(gate.repeatAt).toBe(0);
+  });
+
+  test("two ABSTRACT (texture) subjects sharing a family stay a hard FAIL (the cellular 3-in-6 case)", () => {
+    const gate = evaluateStructureGate(
+      "cellular",
+      windowReg(["cellular", "flow", "caustic", "filament"], "abstract"),
+      "abstract",
+    );
+    expect(gate.status).toBe("fail");
+  });
+
+  test("the demotion only touches the FAIL window: a representational rhyme in the WARN window is still WARN", () => {
+    const gate = evaluateStructureGate(
+      "metaball",
+      windowReg(
+        ["flow", "caustic", "filament", "radial", "metaball", "flow", "caustic", "lattice"],
+        "representational",
+      ),
+      "representational",
+    );
+    expect(gate.status).toBe("warn");
+    expect(gate.repeatAt).toBe(4);
+  });
+
+  test("no subjectRegister passed → the strict texture-era FAIL is preserved (back-compat)", () => {
+    // The existing 2-arg callers keep the hard-fail behavior even against a
+    // representational-tagged neighbour, because the subject's own register is unknown.
+    const gate = evaluateStructureGate(
+      "metaball",
+      windowReg(["metaball", "flow", "caustic", "filament"], "representational"),
+    );
+    expect(gate.status).toBe("fail");
   });
 });

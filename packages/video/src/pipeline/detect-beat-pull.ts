@@ -56,6 +56,19 @@ export type BeatPullOptions = {
    * scored as snap-back, leaving structural MOTION. 0 disables it.
    */
   smoothFrames?: number;
+  /**
+   * The low-motion carve-out (the presence clause). Below this mean per-frame
+   * structural change (picture activity), a would-be FAIL is reported as
+   * `inconclusive("lowMotion")` instead — because a near-static composition has
+   * almost no directed motion to dilute the grain's ~0.2 reversal floor, so the
+   * score sits at that floor even when the picture does NOT lurch (the calm-
+   * presence case: a still monolith over a quiet sky, reactivity in light/
+   * atmosphere). A real beat-pull (a DJ-scratch) requires actual oscillating
+   * motion, which raises picture activity well above this floor — so the carve-out
+   * can only ever soften the grain-dominated false FAIL, never a genuine one, and
+   * the deadness question passes to the arc + coupling reads. 0 disables it.
+   */
+  lowMotionFloor?: number;
 };
 
 export type BeatPullResult = {
@@ -67,13 +80,27 @@ export type BeatPullResult = {
   samples: number;
   /** The lag (frames) reversal was measured over. */
   lagFrames: number;
-  /** Set when the clip can't be judged (too few frames / no motion). */
+  /** Mean per-frame structural change (the picture-activity used by the low-motion carve-out). */
+  pictureActivity: number;
+  /** Set when the clip can't be judged (too few frames / no motion / lowMotion). */
   inconclusive?: string;
 };
 
 const DEFAULTS = {
   fps: DEFAULT_FPS,
   lagMs: 67, // ~2 frames at 30fps — the fast-jitter band where snap-back lives
+  // The low-motion carve-out floor (PROVISIONAL, in the fenced 48×86 raw-luma units
+  // of `structuralDelta`). Below this MEAN per-frame structural change, the reversal
+  // ratio is grain-dominated (there is not enough directed motion to make `path`
+  // meaningful), so a would-be FAIL is downgraded to inconclusive rather than
+  // failing a calm presence clip on the grain floor. Set BELOW the grain-buried-drift
+  // fixture's activity (~8.9 on the synthetic strip, and real footage is lower still
+  // after the 48px area-downscale) and it only ever fires on genuinely near-static
+  // clips — a real DJ-scratch pull carries oscillating motion far above it. This is
+  // the beat-pull sibling of the arc gate's deadness read: a clip that clears the
+  // carve-out is handed to the arc + coupling reads, so a truly dead frame is still
+  // caught. Re-earn against the first real presence render (like ARC_FLOOR).
+  lowMotionFloor: 1.5,
   minFrames: 30,
   smoothFrames: 1, // ±1 → 3-frame box low-pass; kills ~24Hz grain, keeps ~3Hz beat motion
   // Calibrated against rendered clips on the GRAIN-HARDENED signal (3-frame
@@ -89,6 +116,17 @@ const DEFAULTS = {
   // 0.164 while the alive exemplar sat at 0.157. 0.16 splits that gap: it catches
   // the jumpers and passes the alive clip. Re-validate as more labelled clips land.
   threshold: 0.16,
+};
+
+const meanArray = (xs: number[]): number => {
+  if (xs.length === 0) {
+    return 0;
+  }
+  let s = 0;
+  for (const x of xs) {
+    s += x;
+  }
+  return s / xs.length;
 };
 
 const meanAbsDiff = (a: Float32Array, b: Float32Array): number => {
@@ -131,6 +169,7 @@ export function scoreBeatPull(
   const threshold = options.threshold ?? DEFAULTS.threshold;
   const minFrames = options.minFrames ?? DEFAULTS.minFrames;
   const smoothFrames = options.smoothFrames ?? DEFAULTS.smoothFrames;
+  const lowMotionFloor = options.lowMotionFloor ?? DEFAULTS.lowMotionFloor;
 
   const lag = Math.max(1, Math.round((lagMs / 1000) * fps));
   const n = rawFrames.length;
@@ -138,6 +177,7 @@ export function scoreBeatPull(
   const base: Omit<BeatPullResult, "inconclusive"> = {
     beatLocked: false,
     lagFrames: lag,
+    pictureActivity: 0,
     samples: n,
     score: 0,
   };
@@ -160,6 +200,11 @@ export function scoreBeatPull(
     return { ...base, inconclusive: "no motion variation" };
   }
 
+  // Picture activity: the mean per-frame structural change. It is the amount of
+  // directed motion available to dilute the grain floor — the discriminator the
+  // low-motion carve-out keys off (below).
+  const pictureActivity = meanArray(step);
+
   // Reversal at lag L: 1 − (net change over 2L) / (path travelled over 2L). High
   // when the picture returned toward where it was — the snap-back.
   let sum = 0;
@@ -179,7 +224,23 @@ export function scoreBeatPull(
 
   const score = count > 0 ? sum / count : 0;
 
-  return { ...base, beatLocked: score >= threshold, score };
+  // The low-motion carve-out (the presence clause). A would-be FAIL on a clip with
+  // almost no directed motion is grain-floor-dominated, not a real snap-back: there
+  // is not enough picture activity to trust the reversal ratio. Report it as
+  // inconclusive (which passes, like the too-few-frames case) and let the arc +
+  // coupling reads own the deadness question. This ONLY ever softens a FAIL — a
+  // clip that already passes stays a clean pass, and a genuine beat-pull carries
+  // oscillating motion far above the floor, so it is never reached.
+  if (score >= threshold && lowMotionFloor > 0 && pictureActivity < lowMotionFloor) {
+    return {
+      ...base,
+      inconclusive: "lowMotion",
+      pictureActivity,
+      score,
+    };
+  }
+
+  return { ...base, beatLocked: score >= threshold, pictureActivity, score };
 }
 
 function resolveVideo(target: string): string {

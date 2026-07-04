@@ -396,7 +396,10 @@ mat2 rot2(float a) { float c = cos(a); float s = sin(a); return mat2(c, -s, s, c
  * calcNormal(p)->vec3. Keep it modest — this runs per pixel; soften the result
  * with grain so it never reads as clean CGI (the Light-Years Rule). */
 const raymarch = /* glsl */ `
+#ifndef FLUNCLE_MAP_FWD
+#define FLUNCLE_MAP_FWD
 float map(vec3 p);
+#endif
 float raymarch(vec3 ro, vec3 rd, float tmax) {
   float t = 0.0;
   for (int i = 0; i < 96; i++) {
@@ -808,6 +811,168 @@ vec2 curl3(vec3 p, float t) {
   return vec2(dPdy, -dPdx);
 }`;
 
+/** sdfPresence: the SHAPED-THING vocabulary — put a nameable SUBJECT (a limb, a hull,
+ * a ruin, a creature) in the fragment shader, the "subject with presence" half of the
+ * moodboard formula (a nameable silhouette under heavy abstracting treatment). All
+ * WebGL1-safe (no `round()` — see `sdfRound`). The IQ distance-function corpus, the
+ * sculpting operators, plus the march primitives presence scenes need:
+ *   - creature/limb SDFs:  sdCapsule (segment+radius), sdRoundCone (tapering limb —
+ *                          the best "limb" primitive), sdEllipsoid (a body; a BOUND,
+ *                          march conservatively).
+ *   - 2D silhouette SDFs:  sd2dSegment (a stroke/trunk), sd2dTriangle (a fin/wing/
+ *                          spire) — for the cheap 2.5D layered register.
+ *   - operators:           smax (smooth CARVING — masonry→RUINS, windows in a hull),
+ *                          sminV (vec2 smooth-union returning distance + BLEND factor,
+ *                          so material/emissive can blend where a limb meets a body).
+ *   - domain repetition:   opRepeat / opRepeatLim (the forest/colonnade machine —
+ *                          infinite/limited copies for the price of ONE eval) via the
+ *                          WebGL1-safe `sdfRound` = floor(p/s+0.5). Caveat: with
+ *                          per-cell variation the nearest object can live in a NEIGHBOUR
+ *                          cell; under fog+grain the 1-cell version is usually fine —
+ *                          check 2 cells along the travel axis only if a silhouette pops.
+ *   - shading:             calcNormal4 — the 4-tap TETRAHEDRAL normal (4 map evals vs
+ *                          the kit's 6-tap `calcNormal`); like `raymarch` it needs you
+ *                          to define `float map(vec3 p)` (forward-declared here — the
+ *                          prototype is duplicate-safe if you also compose `raymarch`).
+ *   - march jitter:        ign — standalone interleaved-gradient (blue-noise-ish) value
+ *                          for dithering the ray start (`t0 += stepLen * ign(gl_FragCoord.xy)`)
+ *                          so undersampling reads as grain, not bands (the Light-Years
+ *                          Rule IS the fog-forgiveness). Self-contained. */
+const sdfPresence = /* glsl */ `
+// WebGL1 has no round(): floor(v + 0.5) is the exact substitute for repetition.
+vec3 sdfRound(vec3 v) { return floor(v + 0.5); }
+// Standalone interleaved-gradient noise (blue-noise-ish), for march-start jitter.
+float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
+// Smooth intersection / carving: smax(a,b,k) = -smin(-a,-b,k). Carve fbm from a
+// colonnade for RUINS, or a window from a hull.
+float smax(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (a - b) / k, 0.0, 1.0);
+  return mix(b, a, h) + k * h * (1.0 - h);
+}
+// Smooth union that also returns the BLEND factor (x=distance, y=0..1 blend, 1=all a):
+// blend material where a limb fuses into a body.
+vec2 sminV(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return vec2(mix(b, a, h) - k * h * (1.0 - h), h);
+}
+// Infinite domain repetition (IQ): fold p into one cell of size s.
+vec3 opRepeat(vec3 p, vec3 s) { return p - s * sdfRound(p / s); }
+// Limited repetition: l cells each way from the origin (the forest that ENDS).
+vec3 opRepeatLim(vec3 p, float s, vec3 l) { return p - s * clamp(sdfRound(p / s), -l, l); }
+// 3D capsule: a segment a→b of radius r (limbs, necks, tentacles).
+float sdCapsule(vec3 p, vec3 a, vec3 b, float r) {
+  vec3 pa = p - a, ba = b - a;
+  float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+  return length(pa - ba * h) - r;
+}
+// 3D round cone along +Y: radius r1 at the base, r2 at height h — the tapering limb.
+float sdRoundCone(vec3 p, float r1, float r2, float h) {
+  vec2 q = vec2(length(p.xz), p.y);
+  float b = (r1 - r2) / h;
+  float a = sqrt(max(1.0 - b * b, 0.0));
+  float k = dot(q, vec2(-b, a));
+  if (k < 0.0) return length(q) - r1;
+  if (k > a * h) return length(q - vec2(0.0, h)) - r2;
+  return dot(q, vec2(a, b)) - r1;
+}
+// 3D ellipsoid — a BOUND (not exact); march conservatively. Guarded at the centre.
+float sdEllipsoid(vec3 p, vec3 r) {
+  float k1 = length(p / (r * r));
+  if (k1 < 1e-5) return -min(r.x, min(r.y, r.z));
+  float k0 = length(p / r);
+  return k0 * (k0 - 1.0) / k1;
+}
+// 2D segment (unsigned) — a stroke, a trunk, rigging.
+float sd2dSegment(vec2 p, vec2 a, vec2 b) {
+  vec2 pa = p - a, ba = b - a;
+  float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+  return length(pa - ba * h);
+}
+// 2D triangle (signed) — a fin, a wing membrane, a spire.
+float sd2dTriangle(vec2 p, vec2 p0, vec2 p1, vec2 p2) {
+  vec2 e0 = p1 - p0, e1 = p2 - p1, e2 = p0 - p2;
+  vec2 v0 = p - p0, v1 = p - p1, v2 = p - p2;
+  vec2 pq0 = v0 - e0 * clamp(dot(v0, e0) / dot(e0, e0), 0.0, 1.0);
+  vec2 pq1 = v1 - e1 * clamp(dot(v1, e1) / dot(e1, e1), 0.0, 1.0);
+  vec2 pq2 = v2 - e2 * clamp(dot(v2, e2) / dot(e2, e2), 0.0, 1.0);
+  float s = sign(e0.x * e2.y - e0.y * e2.x);
+  vec2 d = min(
+    min(
+      vec2(dot(pq0, pq0), s * (v0.x * e0.y - v0.y * e0.x)),
+      vec2(dot(pq1, pq1), s * (v1.x * e1.y - v1.y * e1.x))
+    ),
+    vec2(dot(pq2, pq2), s * (v2.x * e2.y - v2.y * e2.x))
+  );
+  return -sqrt(d.x) * sign(d.y);
+}
+// 4-tap tetrahedral normal (IQ) — define your own float map(vec3 p). The prototype is
+// guarded so composing this alongside \`raymarch\` (which also declares map) is legal
+// (GLSL ES rejects a duplicate prototype).
+#ifndef FLUNCLE_MAP_FWD
+#define FLUNCLE_MAP_FWD
+float map(vec3 p);
+#endif
+vec3 calcNormal4(vec3 p) {
+  const vec2 k = vec2(1.0, -1.0);
+  const float e = 0.001;
+  return normalize(
+    k.xyy * map(p + k.xyy * e) +
+    k.yyx * map(p + k.yyx * e) +
+    k.yxy * map(p + k.yxy * e) +
+    k.xxx * map(p + k.xxx * e)
+  );
+}`;
+
+/** glowWithDirt(col, glowColor, glow, uv, t, seed)->vec3: additive light through a
+ * DIRTY medium — the single cheapest "recovered exposure" upgrade (moodboard R8).
+ * Adds the glow, then subtracts dark speckle whose density rises with the light's
+ * luminance ("dirt-in-the-light" — the inverse of the usual grain-hides-in-shadows
+ * habit), so the glow reads as light through emulsion, never a computed orb. Boils on
+ * an integer time slice (keep `t` the constant clock; derive `seed` from u_seed).
+ * Self-contained. */
+const glowWithDirt = /* glsl */ `
+// Cheap clumpy speckle, boiled on an integer time slice (self-contained hash).
+float glowDirtSpeckle(vec2 uv, float t, float seed) {
+  vec2 c = floor(uv * 480.0 + floor(t * 12.0) * 7.13 + seed);
+  return fract(sin(dot(c, vec2(127.1, 311.7))) * 43758.5453123);
+}
+vec3 glowWithDirt(vec3 col, vec3 glowColor, float glow, vec2 uv, float t, float seed) {
+  col += glowColor * glow;                                                 // the additive light
+  float lum = clamp(dot(glowColor, vec3(0.299, 0.587, 0.114)) * glow, 0.0, 1.0);
+  float n = glowDirtSpeckle(uv, t, seed);
+  float dirt = step(0.82 - 0.30 * lum, n);                                  // more specks where hotter
+  return col - glowColor * (0.28 * glow) * dirt;                            // dark motes inside the glow
+}`;
+
+/** hiddenLine(y, h, peak, thickness, aa)->float: hidden-line occlusion for a stacked-
+ * ridge field (the waveform-ridge / Unknown Pleasures move). Occlusion = solidity: a
+ * line drawn only where it clears every NEARER line flips a chart into terrain. March
+ * the lines FRONT-to-back; maintain a running-max `peak` (inout) across the loop and
+ * call this per line at the pixel's column — it returns the stroke coverage gated by
+ * visibility (drawn only where the displaced height `h` rises above `peak`) and raises
+ * `peak`. `thickness`/`aa` in the same units as `y`/`h`. Self-contained. */
+const hiddenLineOcclusion = /* glsl */ `
+float hiddenLine(float y, float h, inout float peak, float thickness, float aa) {
+  float stroke = smoothstep(thickness + aa, thickness - aa, abs(y - h));
+  float visible = step(peak, h);   // shows only where it clears every nearer line
+  peak = max(peak, h);
+  return stroke * visible;
+}`;
+
+/** rampRetint(src)->vec3: the strict monotonic luma→hue Retint (the thermal-remap of
+ * the moodboard). Recolours by LUMINANCE through the palette ramp, then RE-IMPOSES the
+ * source luma so brightness ORDER is exactly preserved — hue may go anywhere the ramp
+ * allows, luma may never reorder. This is the legibility guarantee under the most
+ * extreme colour abuse (the mask survives a heatmap). Stronger than `retint` (which
+ * takes the ramp's luma as-is). Needs `paletteRamp`. */
+const rampRetint = /* glsl */ `
+vec3 rampRetint(vec3 src) {
+  float l = dot(src, vec3(0.299, 0.587, 0.114));
+  vec3 hue = paletteRamp(l);                          // the warm-dark→cream hue arc
+  float hl = dot(hue, vec3(0.299, 0.587, 0.114));
+  return hue * (hl > 1e-4 ? l / hl : 1.0);            // rescale so output luma == input luma
+}`;
+
 /**
  * The GLSL snippet library. Spread the strings you need into a fragment shader
  * ahead of `void main()`. Mind dependencies: `valueNoise`/`simplexNoise` need
@@ -832,12 +997,16 @@ export const GLSL = {
   fbm,
   /** Organic emulsion-clumping film grain. Two overloads: filmGrain(col,uv,time,float) (legacy) + filmGrain(col,uv,time,GrainOpts) (full knob set, amount→0=off). Needs valueNoise+hash. */
   filmGrain,
+  /** Additive light through a dirty medium glowWithDirt(col,glowColor,glow,uv,t,seed)->vec3 — dark speckle inside the glow, density ∝ luminance (moodboard R8). Self-contained. */
+  glowWithDirt,
   /** Signed field displacement grainDisplace(uv,t,scale,amt)->float — grain that roughens BOUNDARIES (add to a shape/threshold/coord). Needs valueNoise+hash. */
   grainDisplace,
   /** Six named GrainOpts presets (fineEmulsion/coarseSilver/halftone/chemicalDye/vhsScanline/dither) for the filmGrain knob set. Needs filmGrain + u_seed. */
   grainFamilies,
   /** Deterministic value hashes: hash21, hash22, hash13. Base for all noise. */
   hash,
+  /** Hidden-line occlusion hiddenLine(y,h,peak,thickness,aa)->float for stacked-ridge terrain (Unknown Pleasures) — front-to-back running-max flips a chart into terrain. Self-contained. */
+  hiddenLineOcclusion,
   /** Procedural liquid-metal material liquidMetal(uv,edge,repetition,shiftRed,shiftBlue,t,tint,tintA)->vec3 over a caller shape field. Needs simplexNoise. */
   liquidMetal,
   /** Glowing organic filament web neuroWeb(uv,t,iterations)->0..~ (15-iter self-interfering sine). Self-contained. */
@@ -850,12 +1019,16 @@ export const GLSL = {
   paletteRamp,
   /** Kaleidoscope wedge fold polarFold(uv, segments)->vec2 around center. */
   polarFold,
+  /** Strict monotonic luma→hue Retint rampRetint(src)->vec3 — recolour by luma, re-impose luma so brightness order never reorders (thermal remap). Needs paletteRamp. */
+  rampRetint,
   /** Sphere-tracer raymarch(ro,rd,tmax) + calcNormal(p); define your own float map(vec3). */
   raymarch,
   /** Signed-distance primitives sdCircle/sdBox + smooth union smin. */
   sdf,
   /** 3D SDF primitives sdSphere3/sdBox3/sdTorus3 + rot2, for raymarched scenes. */
   sdf3d,
+  /** Presence SDF kit: sdCapsule/sdRoundCone/sdEllipsoid + 2D sd2dSegment/sd2dTriangle, smax, vec2 sminV, opRepeat/opRepeatLim (WebGL1 sdfRound), calcNormal4 (needs map), ign. WebGL1-safe. */
+  sdfPresence,
   /** Gradient (simplex-style) noise simplexNoise(p)->~-1..1. Needs hash. */
   simplexNoise,
   /** N-iteration sine swirl cascade swirlWarp(uv,t,swirl,iterations)->vec2 (cheaper, more liquid domainWarp). Self-contained. */

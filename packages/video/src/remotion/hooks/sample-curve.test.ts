@@ -4,7 +4,7 @@
 import { expect, test } from "bun:test";
 
 import { type EnergySample } from "../types";
-import { sampleCurve, smoothCurveAtFrame } from "./sample-curve";
+import { accumulateCurveAtFrame, sampleCurve, smoothCurveAtFrame } from "./sample-curve";
 
 const curve: EnergySample[] = [
   { energy: 0.0, timeMs: 0 },
@@ -104,5 +104,81 @@ test("smoothCurveAtFrame: startMs shifts the sampling window", () => {
 test("smoothCurveAtFrame: deterministic (same inputs, same output)", () => {
   const a = smoothCurveAtFrame(curve, 7, FPS, 0, 3);
   const b = smoothCurveAtFrame(curve, 7, FPS, 0, 3);
+  expect(a).toBe(b);
+});
+
+// ---------------------------------------------------------------------------
+// accumulateCurveAtFrame (leaky integrator — "the world remembers the drop")
+// ---------------------------------------------------------------------------
+
+// A drop that spikes to 1 for 500–1000ms and then returns to 0.
+const dropCurve: EnergySample[] = [
+  { energy: 0, timeMs: 0 },
+  { energy: 0, timeMs: 480 },
+  { energy: 1, timeMs: 500 },
+  { energy: 1, timeMs: 1000 },
+  { energy: 0, timeMs: 1020 },
+  { energy: 0, timeMs: 4000 },
+];
+
+test("accumulateCurveAtFrame: empty curve reads 0", () => {
+  expect(accumulateCurveAtFrame([], 10, FPS, 0, 0.9)).toBe(0);
+});
+
+test("accumulateCurveAtFrame: decay 0 is the raw sample (no memory)", () => {
+  const f = 25;
+  expect(accumulateCurveAtFrame(dropCurve, f, FPS, 0, 0)).toBeCloseTo(
+    sampleCurve(dropCurve, (f / FPS) * 1000),
+    6,
+  );
+});
+
+test("accumulateCurveAtFrame: a 0..1 curve stays in [0,1]", () => {
+  for (let f = 0; f <= 200; f += 10) {
+    const v = accumulateCurveAtFrame(dropCurve, f, FPS, 0, 0.9);
+    expect(v).toBeGreaterThanOrEqual(0);
+    expect(v).toBeLessThanOrEqual(1);
+  }
+});
+
+test("accumulateCurveAtFrame: the world REMEMBERS the drop — after it ends, memory lingers", () => {
+  // Frame ~60 = 1200ms, well after the drop ended (1020ms): the raw signal is 0.
+  const after = Math.round((1200 / 1000) * FPS);
+  const raw = sampleCurve(dropCurve, (after / FPS) * 1000);
+  expect(raw).toBeCloseTo(0, 6);
+
+  const highDecay = accumulateCurveAtFrame(dropCurve, after, FPS, 0, 0.92);
+  const lowDecay = accumulateCurveAtFrame(dropCurve, after, FPS, 0, 0.3);
+
+  // The high-decay world still glows from a drop the low-decay world has forgotten.
+  expect(highDecay).toBeGreaterThan(0.05);
+  expect(highDecay).toBeGreaterThan(lowDecay);
+  expect(lowDecay).toBeLessThan(0.02);
+});
+
+test("accumulateCurveAtFrame: during a sustained surge the value CLIMBS toward 1", () => {
+  const early = accumulateCurveAtFrame(dropCurve, Math.round((520 / 1000) * FPS), FPS, 0, 0.9);
+  const mid = accumulateCurveAtFrame(dropCurve, Math.round((760 / 1000) * FPS), FPS, 0, 0.9);
+  const late = accumulateCurveAtFrame(dropCurve, Math.round((1000 / 1000) * FPS), FPS, 0, 0.9);
+  expect(mid).toBeGreaterThan(early);
+  expect(late).toBeGreaterThan(mid);
+  expect(late).toBeGreaterThan(0);
+  expect(late).toBeLessThan(1);
+});
+
+test("accumulateCurveAtFrame: a held-1 curve converges toward 1 (normalized integrator)", () => {
+  const held: EnergySample[] = [
+    { energy: 1, timeMs: 0 },
+    { energy: 1, timeMs: 10_000 },
+  ];
+  const settled = accumulateCurveAtFrame(held, 500, FPS, 0, 0.9);
+  expect(settled).toBeGreaterThan(0.99);
+});
+
+test("accumulateCurveAtFrame: deterministic + frame-pure (same frame → same value regardless of start)", () => {
+  // The bounded-lookback walk means the value at frame N is a pure function of N —
+  // computing it fresh (as a later render chunk would) gives the identical result.
+  const a = accumulateCurveAtFrame(dropCurve, 90, FPS, 0, 0.9);
+  const b = accumulateCurveAtFrame(dropCurve, 90, FPS, 0, 0.9);
   expect(a).toBe(b);
 });

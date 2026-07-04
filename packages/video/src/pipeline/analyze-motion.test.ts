@@ -594,6 +594,54 @@ assert.ok(
   deadArc.wholeClipChange < deadArc.floor,
   `dead change must sit below the floor (got ${deadArc.wholeClipChange.toFixed(3)})`,
 );
+// A frozen frame changes nowhere: no subregion clears the higher regional floor
+// either — dead fails BOTH reads (the best-window carve-out cannot launder it).
+assert.ok(
+  deadArc.bestWindowChange < deadArc.regionFloor,
+  `a frozen clip must fail the best-window read too (got ${deadArc.bestWindowChange.toFixed(3)} vs region ${deadArc.regionFloor})`,
+);
+
+// BEST-WINDOW (subregion) PRESENCE READ: a subject that reveals/crosses in PART of
+// the frame. Most of the frame is a static dark field under faint grain (so the
+// whole-frame mean sits BELOW the arc floor — the texture-era gate would call it
+// dead), but a bright subject grows + slides across one bottom-right region, so a
+// coherent subregion reorganizes strongly and the best-window read rescues it.
+const arcRevealFrame = (t: number): Float32Array => {
+  const f = new Float32Array(PIX * 3);
+  const prog = t / ARC_FRAMES;
+  for (let y = 0; y < FH; y++) {
+    for (let x = 0; x < FW; x++) {
+      let v = clamp8(30 + speckle(y * FW + x, t, 6));
+      if (x >= 40 && y >= 70) {
+        const sx = 44 + Math.floor(prog * 14);
+        if (Math.abs(x - sx) < 5 && prog > 0.15) {
+          v = clamp8(210 + speckle(y * FW + x, t, 6));
+        }
+      }
+      const idx = (y * FW + x) * 3;
+      f[idx] = v;
+      f[idx + 1] = v;
+      f[idx + 2] = v;
+    }
+  }
+  return f;
+};
+const arcReveal = wrapRgb(Array.from({ length: ARC_FRAMES }, (_, t) => arcRevealFrame(t)));
+const revealArc = scoreArc({ fps: FPS, intent: null, rgb: arcReveal });
+assert.ok(
+  revealArc.wholeClipChange < revealArc.floor,
+  `the reveal's WHOLE-frame mean must sit below the floor — the change is concentrated (got ${revealArc.wholeClipChange.toFixed(3)})`,
+);
+assert.ok(
+  revealArc.bestWindowChange >= revealArc.regionFloor,
+  `a concentrated subject-reveal must clear the regional floor (got ${revealArc.bestWindowChange.toFixed(3)} vs region ${revealArc.regionFloor})`,
+);
+assert.equal(
+  revealArc.dead,
+  false,
+  "a subject revealing in part of the frame must NOT read as dead (best-window rescues it)",
+);
+assert.equal(revealArc.verdict, "evolving", "the reveal reads evolving via the subregion read");
 
 // SHORT clip → inconclusive, never a false dead-fail.
 const arcShort = wrapRgb(Array.from({ length: 4 }, () => grayFrame(120)));
@@ -612,8 +660,8 @@ assert.ok(arcWithIntent.intentArc?.declared, "an intent with a drop declares an 
 assert.equal(arcWithIntent.intentArc?.meetsArc, true, "a uniform sweep meets its declared arc");
 
 console.log(
-  `arc: evolving=${evolvingArc.wholeClipChange.toFixed(3)}(${evolvingArc.verdict}) dead=${deadArc.wholeClipChange.toFixed(3)}(${deadArc.verdict}) short=${shortArc.verdict} intentArc.meets=${arcWithIntent.intentArc?.meetsArc}`,
+  `arc: evolving=${evolvingArc.wholeClipChange.toFixed(3)}(${evolvingArc.verdict}) dead=${deadArc.wholeClipChange.toFixed(3)}/win${deadArc.bestWindowChange.toFixed(3)}(${deadArc.verdict}) reveal=${revealArc.wholeClipChange.toFixed(3)}/win${revealArc.bestWindowChange.toFixed(3)}(${revealArc.verdict}) short=${shortArc.verdict} intentArc.meets=${arcWithIntent.intentArc?.meetsArc}`,
 );
 console.log(
-  "✓ arc/deadness: a sweeping structure reads evolving, frozen bars under grain read DEAD (laundering guard), short is inconclusive, intent arc folds",
+  "✓ arc/deadness: a sweeping structure reads evolving, frozen bars under grain read DEAD (laundering guard), a concentrated subject-reveal is rescued by the best-window read, short is inconclusive, intent arc folds",
 );
