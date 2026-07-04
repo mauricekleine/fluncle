@@ -44,13 +44,16 @@ Module map (`src/glass/`):
   one shared FBO chain: base → multi-layer replay composite → crossfade + Warm-Dark
   /grain rails → bloom → screen + async PBO output readback; the `build()` path is
   shared by cold boot AND `webglcontextrestored`), `dsp.ts` (live band DSP + the
-  40-bin log-mel frame), `bridge.ts` (the contract client — consumes `ShowState`,
+  40-bin log-mel frame — dual-resolution: the slow/bass/mel signals keep the 4096-FFT
+  window while the transient class rides a second 1024-FFT analyser for ~60ms lower
+  onset latency; the operator A/Bs it against the legacy single-4096 path with `l`),
+  `bridge.ts` (the contract client — consumes `ShowState`,
   sends heartbeats + mel + commands, standalone-safe), and `main.ts` (arrivals,
   plate, HUD, keys, and the RFC §4 reliability rails).
 
 Operator keys: `→/n` advance · `←/p` rewind · `0` holding · `b` blackout (hold) ·
 `-/=` intensity · `1/2/3` vehicle · `m` auto · `v` replay · `g` bloom · `r` scale ·
-`h` HUD · `d` demo · `Shift+X` context-loss smoke.
+`h` HUD · `d` demo · `l` low-latency DSP (A/B) · `Shift+X` context-loss smoke.
 
 ## The bridge (`src/bridge/`, Unit B — RFC §4)
 
