@@ -134,7 +134,39 @@ export type ShaderLayerProps = {
    * and auto-enabled under WebGL1 when the host supports it.
    */
   glsl3?: boolean;
+  /**
+   * Fragment-cost lever for expensive (marched) scenes. Renders the canvas BACKING
+   * STORE at `resolutionScale ×` the composition size, then CSS upscales it to fill —
+   * so `0.5` runs the fragment shader at quarter the pixels (≈4× cheaper per frame),
+   * and the browser's bilinear upscale reads as the brand's "through degraded glass"
+   * softness. `u_res`, the viewport, and the bloom targets all follow the backing
+   * store, so the shader is unaware. Default `1` (byte-identical to before). Frame-
+   * stable — keep it a constant per render (determinism). Values clamp to (0, 1]; use
+   * it for raymarched/volumetric scenes, leave it 1 for field shaders.
+   */
+  resolutionScale?: number;
 };
+
+/**
+ * The canvas backing-store size for a composition size + resolutionScale. Pure and
+ * frame-stable: `scale` clamps to (0, 1] (a non-finite / ≤0 value falls back to 1) and
+ * each dimension is a positive integer. `scale === 1` returns the exact size, so the
+ * default path is byte-identical. Exported for the unit test.
+ */
+export function backingStoreSize(
+  width: number,
+  height: number,
+  resolutionScale: number | undefined,
+): { width: number; height: number } {
+  const scale =
+    typeof resolutionScale === "number" && Number.isFinite(resolutionScale) && resolutionScale > 0
+      ? Math.min(resolutionScale, 1)
+      : 1;
+  return {
+    height: Math.max(1, Math.round(height * scale)),
+    width: Math.max(1, Math.round(width * scale)),
+  };
+}
 
 // The audio/journey/brand uniform block injected ahead of every fragmentShader
 // body — anything a shader can rely on: the audio/journey/brand uniforms and the
@@ -590,9 +622,13 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
   bloom,
   textures,
   glsl3 = false,
+  resolutionScale,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height, durationInFrames } = useVideoConfig();
+  // The backing store may render below composition size (marched-scene cost lever);
+  // the canvas CSS still fills 100%, so the browser upscales it (default 1 = no-op).
+  const backing = backingStoreSize(width, height, resolutionScale);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const bundleRef = useRef<GlBundle | null>(null);
   const bloomGlRef = useRef<BloomGl | null>(null);
@@ -919,6 +955,8 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
     };
   }, [
     audio,
+    backing.height,
+    backing.width,
     bloom,
     clipProgress,
     ensureBundle,
@@ -946,8 +984,8 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
     <AbsoluteFill style={{ mixBlendMode: blendMode, opacity }}>
       <canvas
         ref={canvasRef}
-        width={width}
-        height={height}
+        width={backing.width}
+        height={backing.height}
         style={{ height: "100%", width: "100%" }}
       />
     </AbsoluteFill>

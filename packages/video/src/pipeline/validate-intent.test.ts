@@ -31,6 +31,93 @@ assert.equal(
   "the framed register + doctrine fields are valid",
 );
 
+// ── PRESENCE fields ─────────────────────────────────────────────────────────
+// The generated stub declares subjectClass "none" and stays valid (no subject → no
+// cross-field lint fires).
+assert.equal(stub.subjectClass, "none", "the stub declares the honest no-subject class");
+
+// A fully-declared presence intent validates: a colossus on the constant clock, a
+// drop binding driving the resolve, every audio binding on in-place material.
+const presence = {
+  ...stub,
+  bindings: [
+    { axis: "density", band: "bass", element: "fog", intendedStrength: "strong" },
+    { axis: "ignition", band: "drop", element: "key shaft", intendedStrength: "strong" },
+    { axis: "grain", band: "treble", element: "emulsion", intendedStrength: "subtle" },
+  ],
+  disclosure: "resolved-at-drop" as const,
+  register: "representational" as const,
+  subjectClass: "colossus" as const,
+  subjectClock: "constant" as const,
+  viewpoint: "passage" as const,
+};
+const presenceResult = validateIntentStrict(presence);
+assert.equal(
+  presenceResult.valid,
+  true,
+  `a well-formed presence intent is valid: ${JSON.stringify(presenceResult.errors)}`,
+);
+
+// A bad presence enum is caught with the exact path.
+const badClass = validateIntentStrict({ ...stub, subjectClass: "leviathan" });
+assert.equal(badClass.valid, false, "an unknown subjectClass is invalid");
+assert.ok(
+  badClass.errors.some((e) => e.path === "subjectClass"),
+  "the subjectClass error names the subjectClass path",
+);
+
+// disclosure=resolved-at-drop WITHOUT a drop binding is a cross-field error.
+const noDropBinding = validateIntentStrict({
+  ...stub,
+  bindings: [{ axis: "density", band: "bass", element: "fog", intendedStrength: "strong" }],
+  disclosure: "resolved-at-drop",
+});
+assert.equal(noDropBinding.valid, false, "resolved-at-drop needs a drop binding");
+assert.ok(
+  noDropBinding.errors.some((e) => e.path === "disclosure"),
+  "the missing-drop-binding error names disclosure",
+);
+
+// A subject present + a translation binding: the environment must own the audio.
+const subjectTranslates = validateIntentStrict({
+  ...stub,
+  bindings: [
+    { axis: "translation", band: "swell", element: "the hull", intendedStrength: "strong" },
+  ],
+  subjectClass: "vessel",
+});
+assert.equal(
+  subjectTranslates.valid,
+  false,
+  "a present subject may not carry a translation binding",
+);
+assert.ok(
+  subjectTranslates.errors.some((e) => e.path === "bindings"),
+  "the translation-on-a-subject error names bindings",
+);
+
+// subjectClock alone (no subjectClass) still marks a subject present → same lint.
+const clockTranslates = validateIntentStrict({
+  ...stub,
+  bindings: [
+    { axis: "translation", band: "energy", element: "camera", intendedStrength: "subtle" },
+  ],
+  subjectClock: "biological",
+});
+assert.equal(
+  clockTranslates.valid,
+  false,
+  "a declared subjectClock also forbids translation bindings",
+);
+
+// subjectClass "none" with a translation binding is FINE (no subject present).
+const abstractTranslates = validateIntentStrict({
+  ...stub,
+  bindings: [{ axis: "translation", band: "swell", element: "field", intendedStrength: "subtle" }],
+  subjectClass: "none",
+});
+assert.equal(abstractTranslates.valid, true, "an abstract field may translate on a smoothed band");
+
 // A bad schema string is caught with the exact path.
 const badSchema = validateIntentStrict({ ...stub, schema: "nope" });
 assert.equal(badSchema.valid, false, "a wrong schema is invalid");

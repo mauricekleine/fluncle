@@ -167,25 +167,34 @@ async function classify(entry: Entry, scratch: string, withFootage: boolean): Pr
   const arc = scoreArc({ fps: rgb.fps, intent: null, rgb });
 
   if (entry.dimension === "judge") {
-    // A documented coverage boundary — print the arc score, do NOT score it.
+    // A documented coverage boundary — print the arc scores, do NOT score it.
     return {
       ...base,
       agree: null,
       gate: "advisory",
       score: arc.wholeClipChange,
-      suggestion: `out of deterministic reach — arc reads ${arc.verdict} (${arc.wholeClipChange.toFixed(3)}); the operator FAIL is aesthetic (monotony/palette) → the LLM judge's call`,
+      suggestion: `out of deterministic reach — arc reads ${arc.verdict} (whole ${arc.wholeClipChange.toFixed(3)}, best-window ${arc.bestWindowChange.toFixed(3)} vs region ${arc.regionFloor}); the operator FAIL is aesthetic (monotony/palette) → the LLM judge's call`,
       threshold: arc.floor,
     };
   }
 
   const gate: "pass" | "fail" = arc.dead ? "fail" : "pass";
   const agree = gate === entry.verdict;
+  // The best-window read is the presence carve-out: report which read carried the
+  // pass so a re-calibration can see whether it was whole-frame or a subregion.
+  const via = arc.dead
+    ? "dead on both reads"
+    : arc.wholeClipChange >= arc.floor
+      ? "whole-frame"
+      : `subregion (best-window ${arc.bestWindowChange.toFixed(3)} >= ${arc.regionFloor})`;
   return {
     ...base,
     agree,
     gate,
     score: arc.wholeClipChange,
-    suggestion: agree ? "" : suggest("arc", entry.verdict, arc.wholeClipChange, arc.floor),
+    suggestion: agree
+      ? `${via}; best-window ${arc.bestWindowChange.toFixed(3)}`
+      : suggest("arc", entry.verdict, arc.wholeClipChange, arc.floor),
     threshold: arc.floor,
   };
 }

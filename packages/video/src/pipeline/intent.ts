@@ -34,6 +34,44 @@ export type IntentArcSource = "energyCurve" | "scripted";
 
 export type IntentMotionModel = "constant-drift" | "directed-front" | "static-field";
 
+// ── The PRESENCE fields (OPTIONAL, backward compatible) ──────────────────────
+// The presence direction puts a nameable SUBJECT in the frame (a colossus, a ruin,
+// a passing hull) that the music does NOT touch — the world answers the music, the
+// thing keeps its own clock. These optional fields let the intent DECLARE the
+// subject so the judge (and the diversity ledger) can check the claim. None of them
+// is load-bearing for the deterministic metrics today; validate-intent lints their
+// cross-field consistency (see validate-intent.ts).
+
+/** What the subject IS — a nameable, placed thing. "none" = an abstract field (no subject). */
+export type IntentSubjectClass =
+  | "colossus"
+  | "ruin"
+  | "vessel"
+  | "flora"
+  | "creature"
+  | "terrain"
+  | "figure"
+  | "threshold"
+  | "none";
+
+/** Where the observer stands relative to the subject — the spatial relation. */
+export type IntentViewpoint =
+  | "approach"
+  | "passage"
+  | "overlook"
+  | "beneath"
+  | "threshold"
+  | "adrift";
+
+/** How much of the subject is shown, and when. "felt-from-frame-one" = present as a
+ *  silhouette/mass from frame one; "resolved-at-drop" = the drop resolves it (occlusion,
+ *  never absence — requires a drop binding); "full" = disclosed throughout. */
+export type IntentDisclosure = "felt-from-frame-one" | "resolved-at-drop" | "full";
+
+/** The subject's own clock. "constant" = audio-free drift/transit (indifference);
+ *  "biological" = an in-place breath at its own rate (never on the beat). */
+export type IntentSubjectClock = "constant" | "biological";
+
 export type IntentBand =
   | "bass"
   | "mid"
@@ -107,6 +145,16 @@ export type RenderIntent = {
   /** The FOCAL POINT — where the eye is meant to land (e.g. "centre bloom",
    *  "lower-third horizon", "the drifting mote"). Free text. */
   focalPoint?: string;
+  /** PRESENCE (all optional). The nameable subject's class; its default "none" means
+   *  an abstract field. A subject present (≠ "none") makes the intent a presence render:
+   *  the environment must own the audio (no translation binding — validate-intent lints it). */
+  subjectClass?: IntentSubjectClass;
+  /** PRESENCE. The observer's spatial relation to the subject. */
+  viewpoint?: IntentViewpoint;
+  /** PRESENCE. How/when the subject is shown. "resolved-at-drop" requires a drop binding. */
+  disclosure?: IntentDisclosure;
+  /** PRESENCE. The subject's own audio-free clock (indifference). Declaring it marks a subject present. */
+  subjectClock?: IntentSubjectClock;
 };
 
 // Axis groups — one source of truth for the type, the validator, and the
@@ -165,6 +213,33 @@ export const TEXTURE_FAMILIES: readonly IntentTextureFamily[] = [
   "duotone",
   "smear",
 ];
+
+// The presence value sets — the closed enums the strict validator checks against.
+export const SUBJECT_CLASSES: readonly IntentSubjectClass[] = [
+  "colossus",
+  "ruin",
+  "vessel",
+  "flora",
+  "creature",
+  "terrain",
+  "figure",
+  "threshold",
+  "none",
+];
+export const VIEWPOINTS: readonly IntentViewpoint[] = [
+  "approach",
+  "passage",
+  "overlook",
+  "beneath",
+  "threshold",
+  "adrift",
+];
+export const DISCLOSURES: readonly IntentDisclosure[] = [
+  "felt-from-frame-one",
+  "resolved-at-drop",
+  "full",
+];
+export const SUBJECT_CLOCKS: readonly IntentSubjectClock[] = ["constant", "biological"];
 
 // A fast band on `axis: "translation"` is a self-reported beat-pull. The
 // smoothed bands are the only legitimate translation drivers.
@@ -254,6 +329,9 @@ export function generateIntentStub(trackId: string, logId: string | null): Rende
     register: "abstract",
     schema: RENDER_INTENT_SCHEMA,
     secondaryPeaks: [],
+    // The generated stub is an abstract field: no subject. Declaring it explicitly
+    // keeps the presence fields exercised and the honest "no subject" state legible.
+    subjectClass: "none",
     textureFamily: "nebula",
     trackId,
     vehicle: "unknown",

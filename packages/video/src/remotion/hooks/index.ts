@@ -20,4 +20,5 @@ export {
   type AudioReactivityOptions,
   type DropEnvelopeOptions,
 } from "./use-audio-reactivity";
-export { sampleCurve, smoothCurveAtFrame } from "./sample-curve";
+export { accumulateCurveAtFrame, sampleCurve, smoothCurveAtFrame } from "./sample-curve";
+export { useAccumulated, type UseAccumulatedOptions } from "./use-accumulated";

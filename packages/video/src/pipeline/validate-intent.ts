@@ -17,11 +17,15 @@ import {
   ALL_AXES,
   ALL_BANDS,
   ARC_SOURCES,
+  DISCLOSURES,
   MOTION_MODELS,
   REGISTERS,
   RENDER_INTENT_SCHEMA,
   type RenderIntent,
+  SUBJECT_CLASSES,
+  SUBJECT_CLOCKS,
   TEXTURE_FAMILIES,
+  VIEWPOINTS,
 } from "./intent";
 
 export type IntentError = { path: string; message: string };
@@ -150,6 +154,55 @@ export function validateIntentStrict(raw: unknown): ValidateIntentResult {
   }
   if (raw.focalPoint !== undefined && typeof raw.focalPoint !== "string") {
     err("focalPoint", "when present, must be a string");
+  }
+
+  // ── The PRESENCE fields (optional) — enum-checked only when present ─────────
+  const optEnum = (key: string, allowed: readonly string[]): void => {
+    if (
+      raw[key] !== undefined &&
+      (typeof raw[key] !== "string" || !allowed.includes(raw[key] as string))
+    ) {
+      err(
+        key,
+        `when present, must be one of ${allowed.join(" | ")} (got ${JSON.stringify(raw[key])})`,
+      );
+    }
+  };
+  optEnum("subjectClass", SUBJECT_CLASSES);
+  optEnum("viewpoint", VIEWPOINTS);
+  optEnum("disclosure", DISCLOSURES);
+  optEnum("subjectClock", SUBJECT_CLOCKS);
+
+  // ── Cross-field presence lints (fire only when the presence fields opt in, so
+  // every pre-presence intent stays valid) ───────────────────────────────────
+  const bindingsList = Array.isArray(raw.bindings) ? raw.bindings : [];
+  const hasBand = (band: string): boolean =>
+    bindingsList.some((b) => isRecord(b) && b.band === band);
+  const translationBindings = bindingsList.filter(
+    (b) => isRecord(b) && b.axis === "translation",
+  ).length;
+
+  // A drop-resolved disclosure MUST bind the drop — the reveal is driven by the drop
+  // envelope; without a drop binding the "resolved-at-drop" claim has no driver.
+  if (raw.disclosure === "resolved-at-drop" && !hasBand("drop")) {
+    err(
+      "disclosure",
+      'is "resolved-at-drop" but no binding uses the "drop" band — the reveal needs a drop binding to drive it',
+    );
+  }
+
+  // A subject present (subjectClass ≠ "none", or a subjectClock declared) means the
+  // world answers the music while the thing keeps its own clock: the environment must
+  // own EVERY audio binding, so there can be no `translation`-axis binding (an
+  // indifferent subject and the constant-clock world never translate on audio).
+  const subjectPresent =
+    (raw.subjectClass !== undefined && raw.subjectClass !== "none") ||
+    raw.subjectClock !== undefined;
+  if (subjectPresent && translationBindings > 0) {
+    err(
+      "bindings",
+      `a subject is present (subjectClass/subjectClock) so the environment must own every audio binding, but ${translationBindings} binding(s) drive the "translation" axis — move the reactivity to in-place material (the subject keeps its own clock)`,
+    );
   }
 
   const valid = errors.length === 0;

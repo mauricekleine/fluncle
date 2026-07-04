@@ -55,6 +55,10 @@ const jitter = Array.from({ length: FRAMES }, (_, t) =>
 );
 // GRAIN: the same glide as drift, buried in heavy per-frame speckle.
 const grainy = Array.from({ length: FRAMES }, (_, t) => strip(12 + (40 * t) / FRAMES, t, 80));
+// NEAR-STATIC: a fixed bump under faint grain — the calm-presence case. The grain
+// drives a would-be FAIL (reversal sits on the ~0.5 grain floor of this synthetic
+// strip) while the picture barely moves, so picture activity is tiny.
+const nearStatic = Array.from({ length: FRAMES }, (_, t) => strip(32, t, 6));
 
 const driftR = scoreBeatPull(drift);
 const jitterR = scoreBeatPull(jitter);
@@ -102,4 +106,43 @@ const sparse = scoreBeatPull(jitter.slice(0, 6));
 assert.ok(sparse.inconclusive, "a handful of frames is inconclusive");
 assert.equal(sparse.beatLocked, false, "inconclusive never fails the gate");
 
-console.log("✓ beat-pull scorer: drift passes, oscillation fails, the grain fence cuts flicker");
+// LOW-MOTION CARVE-OUT (the presence clause). The near-static clip's grain drives a
+// score above threshold, but its picture activity is tiny — a calm presence clip,
+// not a snap-back. With the carve-out armed (floor above its activity) the would-be
+// FAIL is reported as inconclusive("lowMotion") and does NOT fail the gate.
+const nearStaticOff = scoreBeatPull(nearStatic, { lowMotionFloor: 0 });
+const nearStaticOn = scoreBeatPull(nearStatic, {
+  lowMotionFloor: nearStaticOff.pictureActivity + 1,
+});
+console.log("nearStatic:", JSON.stringify({ off: nearStaticOff, on: nearStaticOn }));
+assert.ok(nearStaticOff.score >= 0.16, "the near-static grain drives a would-be FAIL score");
+assert.equal(nearStaticOff.beatLocked, true, "with the carve-out disabled the grain floor FAILS");
+assert.equal(nearStaticOn.inconclusive, "lowMotion", "below the floor a FAIL becomes lowMotion");
+assert.equal(nearStaticOn.beatLocked, false, "the carve-out never fails the gate");
+assert.equal(nearStaticOn.score, nearStaticOff.score, "the carve-out reports the same raw score");
+
+// SURGICAL: the carve-out only fires below the floor. A genuine oscillation carries
+// high picture activity, so the SAME floor never softens it — the jitter still FAILS.
+const jitterFloored = scoreBeatPull(jitter, { lowMotionFloor: nearStaticOff.pictureActivity + 1 });
+assert.equal(
+  jitterFloored.beatLocked,
+  true,
+  "a real oscillation stays FAIL — activity is above the floor",
+);
+assert.ok(
+  jitterFloored.pictureActivity > nearStaticOff.pictureActivity,
+  "oscillation activity dwarfs the near-static clip's",
+);
+
+// A clip that already PASSES is never turned inconclusive by the carve-out.
+const driftFloored = scoreBeatPull(drift, { lowMotionFloor: 1e6 });
+assert.equal(driftFloored.beatLocked, false, "a clean glide stays a pass under any floor");
+assert.equal(
+  driftFloored.inconclusive,
+  undefined,
+  "the carve-out only ever softens a would-be FAIL",
+);
+
+console.log(
+  "✓ beat-pull scorer: drift passes, oscillation fails, the grain fence cuts flicker, the low-motion carve-out softens calm presence without disarming the jump detector",
+);

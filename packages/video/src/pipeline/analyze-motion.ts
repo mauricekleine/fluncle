@@ -1407,6 +1407,25 @@ export function scoreBeatReactivity(input: BeatReactivityInput): BeatReactivity 
 export const ARC_ANCHOR_PCTS = [0.05, 0.25, 0.5, 0.75, 0.95] as const;
 const ARC_COLOR_WEIGHT = 0.25;
 const ARC_FLOOR = 0.29;
+// The best-window (subregion) read — the presence carve-out, mirroring the flash
+// gate's sliding 10° sub-window. The whole-frame MEAN is a texture-era statistic: it
+// dilutes a change concentrated in PART of the frame (a distant ship crossing 15% of a
+// dark sky, a ruin resolving inside one fog band) below the floor even when that
+// change is dramatic. So beside `wholeClipChange` the gate also finds the strongest
+// reorganizing SUBREGION and passes when EITHER clears its floor — a field that
+// reorganizes as a whole (wholeClipChange ≥ ARC_FLOOR) OR a subject that
+// arrives/reveals/crosses in one region (bestWindowChange ≥ ARC_REGION_FLOOR). A
+// frame where nothing changes anywhere still fails both (the dead clip: its edges are
+// frozen in EVERY window, so no subregion clears the regional floor even as grain
+// churns). The regional floor is HIGHER than the whole-frame floor because a small
+// window naturally concentrates its change and averages grain less. PROVISIONAL —
+// calibrated so the frozen-bars anchor (032.0.6R, wholeClipChange ~0.220) stays DEAD
+// in every window and a concentrated reveal clears it; re-earn against the first real
+// presence exemplar (see calibration/verdicts.json). The window is ~1/3 of each
+// dimension so a quadrant-scale subject reads without a single hot pixel dominating.
+const ARC_REGION_FLOOR = 0.5;
+const ARC_WINDOW_DIV = 3; // sub-window ≈ width/DIV × height/DIV
+const ARC_WINDOW_STRIDE_DIV = 2; // stride ≈ window / DIV (coarse — we take the max)
 const ARC_MIN_FRAMES = 10; // fewer frames → inconclusive (never a false dead-fail)
 // HSV histogram bins (hue×sat×val). Coarse on purpose — the arc cares about broad
 // palette drift, not fine colour, and coarse bins are grain-robust.
@@ -1441,7 +1460,11 @@ export type ArcResult = {
   wholeClipChange: number;
   /** the deadest adjacent transition (a sustained-freeze tell), reported. */
   minSegmentChange: number;
+  /** the strongest reorganizing SUBREGION across all adjacent pairs (the presence read). */
+  bestWindowChange: number;
   floor: number;
+  /** the higher floor the best-window read must clear to rescue a small whole-frame mean. */
+  regionFloor: number;
   anchorPcts: number[];
   anchorFrames: number[];
   segments: ArcSegmentChange[];
@@ -1556,6 +1579,117 @@ function madFloat(a: Float32Array, b: Float32Array): number {
   return d / a.length;
 }
 
+/** Mean-abs-diff of two planes restricted to a [x0,y0]+[w,h] sub-window. */
+function madFloatWindow(
+  a: Float32Array,
+  b: Float32Array,
+  width: number,
+  x0: number,
+  y0: number,
+  w: number,
+  h: number,
+): number {
+  let d = 0;
+  let count = 0;
+  for (let y = y0; y < y0 + h; y++) {
+    for (let x = x0; x < x0 + w; x++) {
+      const i = y * width + x;
+      d += Math.abs(a[i] - b[i]);
+      count += 1;
+    }
+  }
+  return count > 0 ? d / count : 0;
+}
+
+/** Normalized HSV histogram of one rgb frame restricted to a sub-window. */
+function hsvHistogramWindow(
+  frame: Float32Array,
+  width: number,
+  x0: number,
+  y0: number,
+  w: number,
+  h: number,
+): Float32Array {
+  const hist = new Float32Array(ARC_HUE_BINS * ARC_SAT_BINS * ARC_VAL_BINS);
+  let count = 0;
+  for (let y = y0; y < y0 + h; y++) {
+    for (let x = x0; x < x0 + w; x++) {
+      const p = y * width + x;
+      const r = frame[p * 3] / 255;
+      const g = frame[p * 3 + 1] / 255;
+      const b = frame[p * 3 + 2] / 255;
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const c = max - min;
+      let hue = 0;
+      if (c > 1e-6) {
+        if (max === r) {
+          hue = ((g - b) / c) % 6;
+        } else if (max === g) {
+          hue = (b - r) / c + 2;
+        } else {
+          hue = (r - g) / c + 4;
+        }
+        hue /= 6;
+        if (hue < 0) {
+          hue += 1;
+        }
+      }
+      const sat = max > 1e-6 ? c / max : 0;
+      const hi = Math.min(ARC_HUE_BINS - 1, Math.floor(hue * ARC_HUE_BINS));
+      const si = Math.min(ARC_SAT_BINS - 1, Math.floor(sat * ARC_SAT_BINS));
+      const vi = Math.min(ARC_VAL_BINS - 1, Math.floor(max * ARC_VAL_BINS));
+      hist[(hi * ARC_SAT_BINS + si) * ARC_VAL_BINS + vi] += 1;
+      count += 1;
+    }
+  }
+  if (count > 0) {
+    for (let i = 0; i < hist.length; i++) {
+      hist[i] /= count;
+    }
+  }
+  return hist;
+}
+
+/**
+ * The strongest reorganizing SUBREGION between two anchor frames: slide a
+ * ~(width/DIV × height/DIV) window across the frame and return the MAX windowed
+ * `combined` (grayMad + edgeMad + colorW·colorDist) — the same metric as the
+ * whole-frame read, restricted to a region. This is how a change concentrated in
+ * part of the frame (a subject arriving/crossing) survives a small whole-frame mean.
+ * Mirrors `worstWindowFlashFraction`'s sliding-window design.
+ */
+function bestSubWindowChange(
+  lumaA: Float32Array,
+  lumaB: Float32Array,
+  edgeA: Float32Array,
+  edgeB: Float32Array,
+  frameA: Float32Array,
+  frameB: Float32Array,
+  width: number,
+  height: number,
+): number {
+  const w = Math.max(1, Math.min(width, Math.round(width / ARC_WINDOW_DIV)));
+  const h = Math.max(1, Math.min(height, Math.round(height / ARC_WINDOW_DIV)));
+  const stride = Math.max(1, Math.round(Math.min(w, h) / ARC_WINDOW_STRIDE_DIV));
+  let best = 0;
+  for (let y0 = 0; y0 + h <= height; y0 += stride) {
+    for (let x0 = 0; x0 + w <= width; x0 += stride) {
+      const grayMad = madFloatWindow(lumaA, lumaB, width, x0, y0, w, h);
+      const edgeMad = madFloatWindow(edgeA, edgeB, width, x0, y0, w, h);
+      const colorDist = bhattacharyya(
+        hsvHistogramWindow(frameA, width, x0, y0, w, h),
+        hsvHistogramWindow(frameB, width, x0, y0, w, h),
+      );
+      const combined = grayMad + edgeMad + ARC_COLOR_WEIGHT * colorDist;
+      if (combined > best) {
+        best = combined;
+      }
+    }
+  }
+  return best;
+}
+
 export type ArcInput = {
   rgb: RgbFrames;
   fps: number;
@@ -1573,12 +1707,14 @@ export function scoreArc(input: ArcInput): ArcResult {
     return {
       anchorFrames: [],
       anchorPcts,
+      bestWindowChange: 0,
       dead: false,
       deterministic: true,
       floor: ARC_FLOOR,
       hard: true,
       intentArc: null,
       minSegmentChange: 0,
+      regionFloor: ARC_REGION_FLOOR,
       segments: [],
       verdict: "inconclusive",
       wholeClipChange: 0,
@@ -1606,7 +1742,31 @@ export function scoreArc(input: ArcInput): ArcResult {
   const combinedList = segments.map((s) => s.combined);
   const wholeClipChange = mean(combinedList);
   const minSegmentChange = Math.min(...combinedList);
-  const dead = wholeClipChange < ARC_FLOOR;
+
+  // The best-window (subregion) read: the strongest reorganizing region across all
+  // adjacent anchor pairs. A subject that arrives/reveals/crosses in part of the
+  // frame produces a large windowed change even when the whole-frame mean is small.
+  let bestWindowChange = 0;
+  for (let k = 0; k < anchorFrames.length - 1; k++) {
+    const w = bestSubWindowChange(
+      luma[k],
+      luma[k + 1],
+      edges[k],
+      edges[k + 1],
+      frames[anchorFrames[k]],
+      frames[anchorFrames[k + 1]],
+      width,
+      height,
+    );
+    if (w > bestWindowChange) {
+      bestWindowChange = w;
+    }
+  }
+
+  // Dead only when NEITHER the whole frame reorganizes NOR any subregion does — a
+  // field that changes as a whole passes on wholeClipChange; a subject that reveals
+  // in one region passes on bestWindowChange; a frozen frame fails both.
+  const dead = wholeClipChange < ARC_FLOOR && bestWindowChange < ARC_REGION_FLOOR;
 
   // Intent arc fold (advisory): if the intent declares a drop, locate the anchor
   // segment whose [startPct,endPct] span contains it and check its change carries
@@ -1638,12 +1798,14 @@ export function scoreArc(input: ArcInput): ArcResult {
   return {
     anchorFrames,
     anchorPcts,
+    bestWindowChange,
     dead,
     deterministic: true,
     floor: ARC_FLOOR,
     hard: true,
     intentArc,
     minSegmentChange,
+    regionFloor: ARC_REGION_FLOOR,
     segments,
     verdict: dead ? "dead" : "evolving",
     wholeClipChange,
@@ -1813,6 +1975,11 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
   }
   if (beatPull.beatLocked) {
     blockingFailures.push("beatPull");
+  } else if (beatPull.inconclusive) {
+    // Pass-with-note: an inconclusive beat-pull never blocks (like the too-few-frames
+    // case). The low-motion carve-out lands here for calm presence clips — the
+    // deadness question is owned by the arc + coupling reads below.
+    advisories.push(`beatPull.inconclusive(${beatPull.inconclusive})`);
   }
   if (arc.dead) {
     blockingFailures.push("arc.dead");
@@ -1931,7 +2098,7 @@ if (import.meta.main) {
     );
     const arc = report.arc;
     console.log(
-      `${arc.dead ? "✗" : "✓"} arc: ${arc.verdict} (change ${arc.wholeClipChange.toFixed(3)} vs floor ${arc.floor}, min-seg ${arc.minSegmentChange.toFixed(3)})${arc.intentArc ? `; drop-seg ${arc.intentArc.meetsArc ? "meets" : "MISSES"} arc` : ""}`,
+      `${arc.dead ? "✗" : "✓"} arc: ${arc.verdict} (change ${arc.wholeClipChange.toFixed(3)} vs floor ${arc.floor}, best-window ${arc.bestWindowChange.toFixed(3)} vs region ${arc.regionFloor}, min-seg ${arc.minSegmentChange.toFixed(3)})${arc.intentArc ? `; drop-seg ${arc.intentArc.meetsArc ? "meets" : "MISSES"} arc` : ""}`,
     );
     if (report.coupling) {
       const c = report.coupling;
