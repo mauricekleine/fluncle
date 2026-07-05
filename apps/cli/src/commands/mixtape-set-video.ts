@@ -23,9 +23,11 @@ export const SET_VIDEO_RENDITION = {
   height: 1080,
 } as const;
 
-// 100 MB default part — well above R2's 5 MB floor, well under the 10k-part cap for a
-// multi-GB set, and a sane chunk to retry on a home line.
-export const DEFAULT_PART_SIZE = 100 * 1024 * 1024;
+// 16 MB default part — small enough that a home uplink reliably completes each PUT (100 MB
+// parts dropped the socket intermittently mid-upload), well above R2's 5 MB floor, and well
+// under the 10k-part cap for a multi-GB set. Paired with per-part retry (`putPart`) so a
+// single transient drop resumes instead of aborting the whole upload.
+export const DEFAULT_PART_SIZE = 16 * 1024 * 1024;
 
 // S3/R2's minimum part size (every part except the last must clear it).
 export const MIN_PART_SIZE = 5 * 1024 * 1024;
@@ -190,7 +192,7 @@ export async function uploadRenditionMultipart(
         }
 
         onProgress(`Set video: part ${part.partNumber}/${plan.partCount}`);
-        const etag = await putPart(url, renditionPath, part);
+        const etag = await putPart(url, renditionPath, part, onProgress);
         completed.push({ etag, partNumber: part.partNumber });
       }
 
@@ -207,20 +209,72 @@ export async function uploadRenditionMultipart(
   }
 }
 
-// PUT one chunk straight to its presigned URL and return the ETag R2 reports (needed
-// to complete the upload). Bun.file().slice() is a lazy, FS-backed Blob, so only the
-// part's bytes are read, not the whole rendition.
-async function putPart(url: string, path: string, part: MultipartPlanPart): Promise<string> {
-  const response = await fetch(url, {
-    body: Bun.file(path).slice(part.start, part.end),
-    method: "PUT",
-  });
+// Attempts per part before giving up. R2 PUTs drop the socket ("socket connection was
+// closed unexpectedly") intermittently on a home uplink — one flaky part must not abort a
+// multi-hundred-part upload, so each part retries with exponential backoff.
+export const MAX_PART_ATTEMPTS = 5;
+
+// PUT one chunk to its presigned URL, WITH RETRY, and return the ETag R2 reports (needed to
+// complete the upload). `Bun.file().slice()` reads only the part's bytes (not the whole
+// rendition), materialized to a concrete ArrayBuffer so fetch sets Content-Length. The
+// load-bearing reliability fix is the retry loop: a transient socket drop or 5xx is retried;
+// a permanent 4xx / missing ETag is surfaced immediately.
+export async function putPart(
+  url: string,
+  path: string,
+  part: MultipartPlanPart,
+  onProgress: (message: string) => void = () => {},
+): Promise<string> {
+  const body = await Bun.file(path).slice(part.start, part.end).arrayBuffer();
+
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await putPartOnce(url, body, part);
+    } catch (error) {
+      // A CliError is permanent (bad request/signature, or a missing ETag) — never retried.
+      // Anything else (a dropped socket → fetch rejects; a 5xx) is transient.
+      if (error instanceof CliError) {
+        throw error;
+      }
+
+      if (attempt >= MAX_PART_ATTEMPTS) {
+        throw new CliError(
+          "r2_part_failed",
+          `Part ${part.partNumber} failed after ${MAX_PART_ATTEMPTS} attempts: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+
+      const backoffMs = 500 * 2 ** (attempt - 1);
+      onProgress(
+        `Set video: part ${part.partNumber} dropped — retry ${attempt}/${MAX_PART_ATTEMPTS - 1} in ${backoffMs}ms…`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+    }
+  }
+}
+
+// One PUT attempt. A permanent failure (4xx / missing ETag) throws a `CliError` so the retry
+// loop stops; a transient one (a dropped socket makes fetch reject; a 5xx) throws a plain
+// Error so the caller retries.
+async function putPartOnce(
+  url: string,
+  body: ArrayBuffer,
+  part: MultipartPlanPart,
+): Promise<string> {
+  const response = await fetch(url, { body, method: "PUT" });
 
   if (!response.ok) {
     const detail = (await response.text().catch(() => "")).slice(0, 300);
-    throw new CliError(
-      "r2_part_failed",
-      `R2 rejected part ${part.partNumber} (${response.status} ${response.statusText})${detail ? `: ${detail}` : ""}`,
+
+    if (response.status < 500) {
+      throw new CliError(
+        "r2_part_failed",
+        `R2 rejected part ${part.partNumber} (${response.status} ${response.statusText})${detail ? `: ${detail}` : ""}`,
+      );
+    }
+
+    throw new Error(
+      `R2 ${response.status} ${response.statusText} on part ${part.partNumber}${detail ? `: ${detail}` : ""}`,
     );
   }
 

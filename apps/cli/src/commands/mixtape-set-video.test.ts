@@ -1,13 +1,15 @@
-import { describe, expect, test } from "bun:test";
-import { rmSync } from "node:fs";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildCompleteXml,
   DEFAULT_PART_SIZE,
+  MAX_PART_ATTEMPTS,
   MAX_PARTS,
   MIN_PART_SIZE,
   planMultipart,
+  putPart,
   renditionFfmpegArgs,
   SET_VIDEO_RENDITION,
 } from "./mixtape-set-video";
@@ -81,7 +83,7 @@ describe("planMultipart", () => {
     expect(plan.partSize).toBeGreaterThan(DEFAULT_PART_SIZE);
   });
 
-  test("a realistic ~1.6GB rendition splits into 100MB parts", () => {
+  test("a realistic ~1.6GB rendition splits into the default part size", () => {
     const plan = planMultipart(1_600_000_000);
 
     expect(plan.partSize).toBe(DEFAULT_PART_SIZE);
@@ -186,5 +188,61 @@ describe("renditionFfmpegArgs (real ffmpeg)", () => {
       rmSync(source, { force: true });
       rmSync(out, { force: true });
     }
+  });
+});
+
+// The load-bearing reliability fix: a single dropped R2 PUT ("socket closed") must be
+// retried, not abort the whole multi-hundred-part upload — while a permanent 4xx stops
+// immediately. Mocks global fetch + a tmp file (putPart slices the file per part).
+describe("putPart retry", () => {
+  const tmpFile = join(tmpdir(), `putpart-test-${crypto.randomUUID()}.bin`);
+  writeFileSync(tmpFile, Buffer.alloc(2048, 1));
+  const part = { end: 2048, partNumber: 3, size: 2048, start: 0 } as const;
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+  afterAll(() => {
+    rmSync(tmpFile, { force: true });
+  });
+
+  test("retries a dropped socket, then returns the ETag on success", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      if (calls < 3) {
+        throw new Error("The socket connection was closed unexpectedly");
+      }
+      return new Response(null, { headers: { etag: '"deadbeef"' }, status: 200 });
+    }) as unknown as typeof fetch;
+
+    const etag = await putPart("https://r2.example/part", tmpFile, part);
+    expect(etag).toBe('"deadbeef"');
+    expect(calls).toBe(3); // failed twice, succeeded on the third
+  });
+
+  test("does NOT retry a permanent 4xx (bad signature)", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response("SignatureDoesNotMatch", { status: 403 });
+    }) as unknown as typeof fetch;
+
+    let error: unknown;
+    try {
+      await putPart("https://r2.example/part", tmpFile, part);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/rejected part/);
+    expect(calls).toBe(1); // one attempt, no retry
+  });
+
+  test("caps the total attempts at MAX_PART_ATTEMPTS", () => {
+    // A guard on the retry budget (the exhaustion path leans on real backoff, too slow for a
+    // unit test — the cap is what keeps a bad part from looping forever).
+    expect(MAX_PART_ATTEMPTS).toBe(5);
   });
 });
