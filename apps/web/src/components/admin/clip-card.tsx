@@ -450,7 +450,7 @@ function DripChip({ drip }: { drip: ClipDrip | undefined }) {
     return (
       <>
         <WarningCircleIcon aria-hidden="true" className="text-destructive" />
-        <span>Post failed — reschedule to retry</span>
+        <span>Post failed. Reschedule to retry.</span>
       </>
     );
   }
