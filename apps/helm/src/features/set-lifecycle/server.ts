@@ -1,20 +1,25 @@
 // set-lifecycle server routes — the post-set ritual's control plane. The reads
-// (the shelf, the ~/Movies scan) and the mutations (attach cues, promote) go
+// (the shelf, the scan-roots scan) and the mutations (attach cues, promote) go
 // through the daemon's in-process admin client; the heavy, local-direct actions
 // (upload a take, derive cues, export a plan, distribute) spawn child processes
 // via the run registry and stream to the drawer. The multi-GB rule is satisfied
 // by construction: the upload + distribute children are the operator's own
 // process class, spawned straight off the daemon, never proxied.
+//
+// Every operator-supplied path that reaches a spawn is FENCED (fence.ts): it
+// must realpath-resolve inside the scan roots (~/Movies + FLUNCLE_HELM_MEDIA_DIRS)
+// or the request is refused before any argv exists.
 
 import { existsSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { type RunStartedResponse } from "../../contract";
 import { json } from "../../server/features";
+import { type RunStreamedOptions } from "../../server/runs";
 import { type HelmApp } from "../types";
 import { parseDeriveCuesOutput } from "./cues";
+import { fenceMediaPath, mediaRoots } from "./fence";
 import {
   isMasterAudioFile,
   isSetVideoFile,
@@ -37,8 +42,26 @@ const PLAN_EXPORT_SCRIPT = resolve(
   "packages/skills/fluncle-mixtapes/scripts/rekordbox-plan-export.py",
 );
 
-const MOVIES_DIR = join(homedir(), "Movies");
 const MOVIES_SCAN_LIMIT = 16;
+
+// The hardened run registry (feat/helm-shell) spawns children with a least-
+// privilege env and honours `adminToken: true` for the legs that genuinely need
+// the CLI credentials. All four spawn legs here qualify, deliberately: upload +
+// distribute ARE the `fluncle` CLI, and the Rekordbox derive/plan scripts shell
+// out to the `fluncle` CLI themselves. Typed as an intersection so this unit
+// also stands alone on the pre-hardening shell, where the flag is simply inert.
+type StreamedOptions = RunStreamedOptions & { adminToken?: boolean };
+
+/** The deadpan 400 for a path the fence refused. */
+function pathRefused(): Response {
+  return json(
+    {
+      code: "path_outside_roots",
+      message: "That file is outside the scan roots. The helm ships only what the scan can see.",
+    },
+    400,
+  );
+}
 
 // Absolute tool paths survive launchd's minimal PATH; fall back to the bare name
 // (a login shell resolves it) when Homebrew isn't where we expect.
@@ -101,31 +124,35 @@ async function probeDurationMs(path: string): Promise<number | undefined> {
   }
 }
 
-/** Stat a directory's files, keeping only those a predicate admits. */
+/** Stat each scan root's files, keeping only those a predicate admits. */
 async function scanMasters(predicate: (name: string) => boolean): Promise<MovieEntry[]> {
-  let names: string[];
+  const entries: MovieEntry[] = [];
 
-  try {
-    names = await readdir(MOVIES_DIR);
-  } catch {
-    return [];
+  for (const dir of mediaRoots()) {
+    let names: string[];
+
+    try {
+      names = await readdir(dir);
+    } catch {
+      continue;
+    }
+
+    const stated = await Promise.all(
+      names.filter(predicate).map(async (name): Promise<MovieEntry | undefined> => {
+        const path = join(dir, name);
+
+        try {
+          const info = await stat(path);
+
+          return { modifiedMs: info.mtimeMs, name, path, sizeBytes: info.size };
+        } catch {
+          return undefined;
+        }
+      }),
+    );
+
+    entries.push(...stated.filter((entry): entry is MovieEntry => entry !== undefined));
   }
-
-  const stated = await Promise.all(
-    names.filter(predicate).map(async (name): Promise<MovieEntry | undefined> => {
-      const path = join(MOVIES_DIR, name);
-
-      try {
-        const info = await stat(path);
-
-        return { modifiedMs: info.mtimeMs, name, path, sizeBytes: info.size };
-      } catch {
-        return undefined;
-      }
-    }),
-  );
-
-  const entries = stated.filter((entry): entry is MovieEntry => entry !== undefined);
 
   return sortMoviesNewestFirst(entries).slice(0, MOVIES_SCAN_LIMIT);
 }
@@ -136,7 +163,8 @@ export function registerRoutes(app: HelmApp): void {
     guarded(() => app.context.admin.get("/api/admin/recordings")),
   );
 
-  // The ~/Movies scan — recent captures (with duration) + audio masters (for distribute).
+  // The scan-roots scan (~/Movies + FLUNCLE_HELM_MEDIA_DIRS) — recent captures
+  // (with duration) + audio masters (for distribute).
   app.get("/api/set-lifecycle/masters", async () => {
     const [videos, audios] = await Promise.all([
       scanMasters(isSetVideoFile),
@@ -150,6 +178,7 @@ export function registerRoutes(app: HelmApp): void {
   });
 
   // Upload a take (M5) — spawn the CLI create, local-direct, streamed to the drawer.
+  // The path is fenced: only a file the scan roots can see ever reaches the argv.
   app.post("/api/set-lifecycle/upload", async (req) => {
     const body = await readJsonBody(req);
     const path = requireString(body, "path");
@@ -163,6 +192,12 @@ export function registerRoutes(app: HelmApp): void {
       );
     }
 
+    const fenced = fenceMediaPath(path);
+
+    if (!fenced.ok) {
+      return pathRefused();
+    }
+
     const argv = [
       process.execPath,
       CLI_ENTRY,
@@ -170,17 +205,19 @@ export function registerRoutes(app: HelmApp): void {
       "recordings",
       "create",
       "--video",
-      path,
+      fenced.path,
       "--title",
       title,
       ...(recordedAt ? ["--recorded-at", recordedAt] : []),
       "--json",
     ];
-    const { runId } = app.context.runs.runStreamed(argv, {
+    const opts: StreamedOptions = {
+      adminToken: true,
       cwd: REPO_ROOT,
       feature: "set-lifecycle",
       title: `upload: ${title}`,
-    });
+    };
+    const { runId } = app.context.runs.runStreamed(argv, opts);
     const started: RunStartedResponse = { runId };
 
     return json(started);
@@ -201,11 +238,13 @@ export function registerRoutes(app: HelmApp): void {
       fluncleBin(),
       ...(session ? ["--session", session] : []),
     ];
-    const { runId } = app.context.runs.runStreamed(argv, {
+    const opts: StreamedOptions = {
+      adminToken: true,
       cwd: REPO_ROOT,
       feature: "set-lifecycle",
       title: session ? `derive cues: ${session}` : "derive cues",
-    });
+    };
+    const { runId } = app.context.runs.runStreamed(argv, opts);
     const started: RunStartedResponse = { runId };
 
     return json(started);
@@ -292,11 +331,13 @@ export function registerRoutes(app: HelmApp): void {
       "--yes",
       "--json",
     ];
-    const { runId } = app.context.runs.runStreamed(argv, {
+    const opts: StreamedOptions = {
+      adminToken: true,
       cwd: REPO_ROOT,
       feature: "set-lifecycle",
       title: `export plan: ${planId}`,
-    });
+    };
+    const { runId } = app.context.runs.runStreamed(argv, opts);
     const started: RunStartedResponse = { runId };
 
     return json(started);
@@ -326,6 +367,14 @@ export function registerRoutes(app: HelmApp): void {
       );
     }
 
+    // Both masters are fenced before either reaches the argv.
+    const fencedVideo = video ? fenceMediaPath(video) : undefined;
+    const fencedAudio = audio ? fenceMediaPath(audio) : undefined;
+
+    if ((fencedVideo && !fencedVideo.ok) || (fencedAudio && !fencedAudio.ok)) {
+      return pathRefused();
+    }
+
     const argv = [
       process.execPath,
       CLI_ENTRY,
@@ -333,15 +382,17 @@ export function registerRoutes(app: HelmApp): void {
       "mixtapes",
       "distribute",
       logId,
-      ...(video ? ["--video", video] : []),
-      ...(audio ? ["--audio", audio] : []),
+      ...(fencedVideo?.ok ? ["--video", fencedVideo.path] : []),
+      ...(fencedAudio?.ok ? ["--audio", fencedAudio.path] : []),
       "--json",
     ];
-    const { runId } = app.context.runs.runStreamed(argv, {
+    const opts: StreamedOptions = {
+      adminToken: true,
       cwd: REPO_ROOT,
       feature: "set-lifecycle",
       title: `distribute: ${logId}`,
-    });
+    };
+    const { runId } = app.context.runs.runStreamed(argv, opts);
     const started: RunStartedResponse = { runId };
 
     return json(started);
