@@ -12,7 +12,7 @@ import { cn } from "@fluncle/ui/lib/utils";
 
 import { type RunLine, type RunStatus, type RunSummary } from "../contract";
 import { apiPost, streamRun } from "./api";
-import { parseStatusLine } from "./status-line";
+import { LogLine } from "./token-styles";
 
 const STATUS_MARKS: Record<RunStatus, string> = {
   failed: "x",
@@ -200,7 +200,8 @@ function RunLogView({ run, selected }: RunLogViewProps) {
         <div className="flex min-w-0 items-baseline gap-3">
           <span className="truncate text-sm font-extrabold text-foreground">{live.title}</span>
           <span className="text-xs text-muted-foreground">
-            {live.feature} · {live.status} · {elapsedLabel(live, now)}
+            {live.feature} · {live.status} ·{" "}
+            <span className="tabular-nums">{elapsedLabel(live, now)}</span>
           </span>
         </div>
         {live.status === "running" ? (
@@ -233,41 +234,6 @@ function RunLogView({ run, selected }: RunLogViewProps) {
           lines.map((line) => <LogLine key={line.seq} line={line} />)
         )}
       </div>
-    </div>
-  );
-}
-
-const TOKEN_STYLES = {
-  clear: "font-bold text-foreground",
-  dark: "text-muted-foreground",
-  hold: "font-bold text-destructive",
-} as const;
-
-function LogLine({ line }: { line: RunLine }) {
-  const row = line.stream === "system" ? undefined : parseStatusLine(line.text);
-
-  if (row) {
-    return (
-      <div className="flex gap-3 whitespace-pre-wrap">
-        <span className={TOKEN_STYLES[row.token]}>[{row.token}]</span>
-        <span className="text-foreground">{row.label}</span>
-        {row.note ? <span className="text-muted-foreground">{row.note}</span> : null}
-      </div>
-    );
-  }
-
-  if (line.stream === "system") {
-    return <div className="whitespace-pre-wrap text-muted-foreground">— {line.text}</div>;
-  }
-
-  return (
-    <div
-      className={cn(
-        "whitespace-pre-wrap",
-        line.stream === "stderr" ? "text-foreground/70" : "text-foreground/90",
-      )}
-    >
-      {line.text}
     </div>
   );
 }

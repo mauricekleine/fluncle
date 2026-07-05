@@ -123,7 +123,7 @@ export function App() {
             </p>
           </div>
           <Badge className="font-display tracking-wide" title={machine.brand} variant="outline">
-            {machine.machine === "unknown" ? "machine unknown" : machine.machine.toUpperCase()}
+            {machine.machine === "unknown" ? "Machine unknown" : machine.machine.toUpperCase()}
           </Badge>
         </header>
 
