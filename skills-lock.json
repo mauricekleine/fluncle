@@ -51,7 +51,7 @@
     "fluncle-mixtapes": {
       "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-aa84ec808240f028e/packages/skills/fluncle-mixtapes",
       "sourceType": "local",
-      "computedHash": "cc61ff404ddaa87f8f88a90deebb3b64bb8bc2ad1b56158d4a442ce70607a65e"
+      "computedHash": "7b23125b30547f0ca0b7b213fc731903aba531908c0ef2e07862eda4417f0e11"
     },
     "fluncle-operator": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-operator",

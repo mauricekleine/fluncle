@@ -34,14 +34,16 @@ For the Rekordbox tracklist step, quit Rekordbox fully before running any script
 
 The work splits across two Macs, and the split is non-obvious:
 
-- 🖥️ **Build Mac** — the compose/author laptop: a browser (`/admin/plans`, `/admin/studio`, `/admin/clips`) and the `fluncle` CLI hitting prod (`https://www.fluncle.com`). This is where you plan, promote, mark cues, and clip.
-- 🎛️ **Mixing Mac** — the DJ laptop where **Rekordbox + its `master.db`, OBS, and the audio/video masters live**. The two Rekordbox scripts (`rekordbox-plan-export.py`, `rekordbox-derive-cues.py`) run **only here** — they read/write `master.db`, which exists only on this machine. The recording upload and audio extraction (`ffmpeg`) also run here, because the multi-GB masters live here.
+- 🖥️ **M5 (capture/stream + CLI)** — the compose/author/stream laptop: a browser (`/admin/plans`, `/admin/studio`, `/admin/clips`), the `fluncle` CLI hitting prod (`https://www.fluncle.com`), **OBS + the audio/video masters, the recording upload, audio extraction (`ffmpeg`), and distribute**. This is where you plan, mix + record, upload the take, promote, mark cues, clip, and distribute.
+- 🎛️ **M2 (mixing)** — the DJ laptop where **Rekordbox + its `master.db`** live. **Only** the two Rekordbox scripts (`rekordbox-plan-export.py`, `rekordbox-derive-cues.py`) run here — they read/write `master.db`, which exists only on this machine. No OBS, no browser: the FLX4's master leaves as analog, an M-Track splits it to the monitors + USB into the M5, and OBS captures on the M5. The physical rig is [docs/live-show-setup.md](../../../docs/live-show-setup.md).
 
-The runbook steps below are tagged 🖥️ / 🎛️ so you know which Mac each one runs on.
+The runbook steps below are tagged 🖥️ (M5 — capture/stream + CLI) / 🎛️ (M2 — Rekordbox / `master.db`) so you know which Mac each one runs on.
 
-### One-time mixing-Mac setup
+### One-time setup
 
-1. **Install the full CLI via Homebrew:**
+The M5 carries the CLI, the operator token, and `ffmpeg` (the upload/extract/distribute machine); the M2 carries `uv` + the scripts (the Rekordbox machine).
+
+1. **On the 🖥️ M5 — install the full CLI via Homebrew:**
 
    ```bash
    brew install mauricekleine/fluncle/fluncle
@@ -49,29 +51,28 @@ The runbook steps below are tagged 🖥️ / 🎛️ so you know which Mac each 
 
    This installs the standalone binary **with the `admin` commands**. Do **NOT** `npm i -g fluncle` — the npm package is a lightweight public shim **without** the `admin` commands (a real gotcha: `fluncle admin …` simply won't exist). Homebrew is the only install that carries the operator surface.
 
-2. **Install the media + Python tooling:**
+2. **On the 🖥️ M5 — install `ffmpeg`** (audio extraction for distribute):
 
    ```bash
-   brew install ffmpeg   # recording upload + audio extraction need it
-   brew install uv       # runs the pyrekordbox scripts (or use the curl installer)
+   brew install ffmpeg
    ```
 
-3. **Move the prod operator token — without exposing the value.** The CLI reads `FLUNCLE_API_TOKEN` from `~/.config/fluncle/.env.production` (the default `production` profile; the CLI targets `https://www.fluncle.com`). To copy it from the build Mac to the mixing Mac without the token ever printing to a terminal, run this on the **build Mac** — it puts a self-contained heredoc on the clipboard that writes the file when pasted:
+   The prod operator token also lives on the M5: the CLI reads `FLUNCLE_API_TOKEN` from `~/.config/fluncle/.env.production` (the default `production` profile; the CLI targets `https://www.fluncle.com`).
+
+3. **On the 🎛️ M2 — install `uv`** (runs the pyrekordbox scripts; or use the curl installer):
 
    ```bash
-   { echo "mkdir -p ~/.config/fluncle && cat > ~/.config/fluncle/.env.production <<'FLUNCLE_EOF'"; cat ~/.config/fluncle/.env.production; echo; echo "FLUNCLE_EOF"; } | pbcopy
+   brew install uv
    ```
 
-   Then **paste into a shell on the mixing Mac**. This works via Universal Clipboard between two Macs on the same Apple ID (Handoff on, Bluetooth + Wi-Fi, same iCloud account); if that's not set up, AirDrop the `.env.production` file to `~/.config/fluncle/` instead. Never commit or inline the token value.
-
-4. **Get the scripts — clone the repo** (public), don't copy a single file: the two scripts import `_matching.py` / `_cue_formats.py` siblings, so they need the whole directory.
+4. **On the 🎛️ M2 — get the scripts, clone the repo** (public), don't copy a single file: the two scripts import `_matching.py` / `_cue_formats.py` siblings, so they need the whole directory.
 
    ```bash
    git clone https://github.com/mauricekleine/fluncle.git
    # scripts live at packages/skills/fluncle-mixtapes/scripts/
    ```
 
-5. **The Rekordbox key — no setup step.** pyrekordbox **auto-extracts** the `master.db` SQLCipher key when Rekordbox is installed on the Mac; there is nothing to run. (The old `python -m pyrekordbox download-key` command was removed upstream at AlphaTheta's request — do not re-add it.) Sanity-check the auto-extract with Rekordbox quit:
+5. **On the 🎛️ M2 — the Rekordbox key, no setup step.** pyrekordbox **auto-extracts** the `master.db` SQLCipher key when Rekordbox is installed on the Mac; there is nothing to run. (The old `python -m pyrekordbox download-key` command was removed upstream at AlphaTheta's request — do not re-add it.) Sanity-check the auto-extract with Rekordbox quit:
 
    ```bash
    uv run --with pyrekordbox python -c "from pyrekordbox import Rekordbox6Database; db=Rekordbox6Database(); print('OK', sum(1 for _ in db.get_content()))"
@@ -81,22 +82,22 @@ The runbook steps below are tagged 🖥️ / 🎛️ so you know which Mac each 
 
 ## The per-mixtape runbook
 
-The steps are tagged 🖥️ (build Mac / browser) or 🎛️ (mixing Mac — Rekordbox / OBS / masters) per the two-machine split above.
+The steps are tagged 🖥️ (M5 — capture/stream + CLI: browser / OBS / masters) or 🎛️ (M2 — Rekordbox / `master.db`) per the two-machine split above.
 
 **The canonical flow at a glance:**
 
 | Step                     | Where         | What                                                                                                                          |
 | ------------------------ | ------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Compose the plan         | 🖥️ browser    | `/admin/plans` — auto galaxy-slug handle, add findings, order, set the Live session date                                      |
-| Export to tools          | 🎛️ mixing Mac | Rekordbox quit: `recordings list --kind plan` → `rekordbox-plan-export.py <planId>`; buy on Beatport; load Rekordbox          |
-| Mix + record             | 🎛️ mixing Mac | OBS 3-track (music T1 / mic T2)                                                                                               |
-| Upload take + attach     | 🎛️ mixing Mac | `recordings create --title … --video <take.mov>` → `recordings update <takeId> --parent-id <planId>`                          |
-| Derive cues              | 🎛️ mixing Mac | Rekordbox quit: `rekordbox-derive-cues.py` dry-run → `--apply <takeId>`                                                       |
-| Mark cue times + clip    | 🖥️ browser    | `/admin/studio/<takeId>` — mark mix-ins; set in/out → Create clip; `/admin/clips` copy caption → IG Reel                      |
-| Promote (if you love it) | 🖥️ Studio     | "Publish as mixtape" (or `recordings promote <takeId>`) — mints `.F.`, seeds the tracklist, publishes the `/log` set video    |
-| Distribute               | 🎛️ mixing Mac | extract audio (`ffmpeg`) → `mixtapes distribute <logId> --video … --audio master.mp3` → `publish-youtube` → optional `resync` |
+| Compose the plan         | 🖥️ M5 browser | `/admin/plans` — auto galaxy-slug handle, add findings, order, set the Live session date                                      |
+| Export to tools          | 🎛️ M2         | Rekordbox quit: `recordings list --kind plan` → `rekordbox-plan-export.py <planId>`; buy on Beatport; load Rekordbox          |
+| Mix + record             | 🖥️ M5 OBS     | OBS 3-track on the M5 (music T1 / mic T2); the M2 mixes, the FLX4 master feeds the M5 analog                                  |
+| Upload take + attach     | 🖥️ M5         | `recordings create --title … --video <take.mov>` → `recordings update <takeId> --parent-id <planId>` (operator-run directly)  |
+| Derive cues              | 🎛️ M2         | Rekordbox quit: `rekordbox-derive-cues.py` dry-run → `--apply <takeId>`                                                       |
+| Mark cue times + clip    | 🖥️ M5 browser | `/admin/studio/<takeId>` — mark mix-ins; set in/out → Create clip; `/admin/clips` copy caption → IG Reel                      |
+| Promote (if you love it) | 🖥️ M5 Studio  | "Publish as mixtape" (or `recordings promote <takeId>`) — mints `.F.`, seeds the tracklist, publishes the `/log` set video    |
+| Distribute               | 🖥️ M5         | extract audio (`ffmpeg`) → `mixtapes distribute <logId> --video … --audio master.mp3` (operator-run directly) → `publish-youtube` → optional `resync` |
 
-### A. Record + archive 🎛️
+### A. Record + archive 🖥️ M5
 
 1. Record the set.
 2. Capture the assets: the audio master, the mixtape video, any teaser clips (raw material you don't want to re-shoot — and the Fluncle Studio clip pipeline can cut more later from a **recording**'s set video on R2: the `recordings` table + `mixtape_clips`, `fluncle admin recordings …` + `fluncle admin clips list|cut`, `/admin/studio/<recordingId>` + `/admin/clips`, the `fluncle-studio-clip` cron; see `docs/fluncle-studio.md`).
@@ -108,22 +109,22 @@ The steps are tagged 🖥️ (build Mac / browser) or 🎛️ (mixing Mac — Re
 > 2. Clip it in the Studio at `/admin/studio/<recordingId>` — author the cue tracklist (add each track, mark it at the playhead) and cut framed 9:16 clips. They land in `/admin/clips` grouped under the recording. Un-promoted, a clip points home to `fluncle.com` (no `fluncle://` coordinate — coordinates are for published mixtapes only).
 > 3. When ready to publish: `fluncle admin recordings promote <recordingId>` → then `distribute` (§C). Promote is idempotent (mint-or-reuse): it mints the mixtape from the recording (seeding its tracklist), copies the set video to `<logId>/set.mp4`, and flips `setVideoAt`. The recording's existing clips keep working; re-cut a clip to gain the new `fluncle://<logId>` coordinate.
 
-**Audio — Track 1 is the clean master.** The OBS recording carries two audio tracks (Advanced Output records tracks 1 + 2): **Track 1 = the clean stereo mix only** (BlackHole / PC MASTER OUT, no mic — the file's default audio), **Track 2 = the isolated mic**. (A third track, mix + mic, feeds the Twitch stream but isn't recorded.) Always take the **clean Track 1** for the Mixcloud audio master and for any clip audio — it's the default stream, so `-map 0:a:0` (or no `-map` at all); Track 2 is the voice-only mic. The recording is 1080p H.264 (OBS Output (Scaled) Resolution must be 1920×1080, not 720p; keep H.264 so the clip pipeline / Cloudflare Media Transformations can read it; the master encoder is a dedicated Apple VT H264 Hardware encoder at CBR 40000, not "Use stream encoder"). Full OBS / BlackHole recording setup lives in `docs/mixtape-recording-setup.md`.
+**Audio — Track 1 is the clean master.** OBS runs on the 🖥️ M5, capturing the FLX4's master off the M-Track analog input (in the two-machine rig; the BlackHole / PC MASTER OUT software path is the one-Mac fallback — see [docs/live-show-setup.md](../../../docs/live-show-setup.md)). The recording carries two audio tracks (Advanced Output records tracks 1 + 2): **Track 1 = the clean stereo mix only** (no mic — the file's default audio), **Track 2 = the isolated mic**. (A third track, mix + mic, feeds the Twitch stream but isn't recorded.) Always take the **clean Track 1** for the Mixcloud audio master and for any clip audio — it's the default stream, so `-map 0:a:0` (or no `-map` at all); Track 2 is the voice-only mic. The recording is 1080p H.264 (OBS Output (Scaled) Resolution must be 1920×1080, not 720p; keep H.264 so the clip pipeline / Cloudflare Media Transformations can read it; the master encoder is a dedicated Apple VT H264 Hardware encoder at CBR 40000, not "Use stream encoder"). Full OBS recording setup lives in `docs/mixtape-recording-setup.md`.
 
-### B. Build the plan + tracklist 🖥️ compose · 🎛️ derive cues
+### B. Build the plan + tracklist 🖥️ M5 compose · 🎛️ M2 derive cues
 
 Pre-publish authoring is a **PLAN** — a videoless `recordings` row, not a mixtape (draft mixtapes retired; a mixtape is only ever born via `promote_recording`). A plan is just the lined-up findings plus an optional live-session date. Duration is derived from the upload at distribute time, not entered. Build the plan in `/admin/plans` (via `fluncle admin recordings create --plan`, or `kind: "plan"` on `create_recording`); the board's Mixtape cell also pencils a single finding straight into a plan ("Add to a plan").
 
-**The handle replaces the reserved coordinate.** The plan carries an auto-minted **Galaxy-vocab handle** (e.g. `liquid-nebula-roller`) — the fixed label you name your Beatport playlist, USB folders, and Rekordbox crate with up front. Unlike the old date-derived reserved Log ID, it never drifts; the real `XXX.F.ZZ` coordinate is minted only at promote. The dream note and recorded date live on the PUBLISHED mixtape (the post-promote edit), not on the plan. Composing the plan is a 🖥️ browser step (`/admin/plans`); exporting it to Rekordbox (§B2) and deriving the take's cues (below) are 🎛️ mixing-Mac steps.
+**The handle replaces the reserved coordinate.** The plan carries an auto-minted **Galaxy-vocab handle** (e.g. `liquid-nebula-roller`) — the fixed label you name your Beatport playlist, USB folders, and Rekordbox crate with up front. Unlike the old date-derived reserved Log ID, it never drifts; the real `XXX.F.ZZ` coordinate is minted only at promote. The dream note and recorded date live on the PUBLISHED mixtape (the post-promote edit), not on the plan. Composing the plan is a 🖥️ M5 browser step (`/admin/plans`); exporting it to Rekordbox (§B2) and deriving the take's cues (below) are 🎛️ M2 steps.
 
-**Upload the take and attach it to the plan** 🎛️ (mixing Mac — the take `.mov` lives here). After recording, create the take as a recording and point it at its plan:
+**Upload the take and attach it to the plan** 🖥️ M5 (the OBS `.mov` master lives on the M5). After recording, create the take as a recording and point it at its plan:
 
 ```bash
 fluncle admin recordings create --title "…" --video <take>.mov   # → takeRecordingId
 fluncle admin recordings update <takeRecordingId> --parent-id <planId>
 ```
 
-`recordings create --video` pushes a multi-GB take to R2 — run it with the Bash sandbox disabled (`dangerouslyDisableSandbox`) or it fails with `socket closed`.
+`recordings create --video` pushes a **multi-GB** take to R2 — run it **operator-direct, in your own Terminal on the M5**. An agent's Bash session throttles sustained multi-GB transfers even with `dangerouslyDisableSandbox` and drops partway with `socket closed`; `dangerouslyDisableSandbox` covers commits and moderate transfers but does not make a multi-GB upload reliable through the harness (AGENTS.md "Which machine am I on?" — THE LOAD-BEARING RULE).
 
 The plan (videoless) stays the authoring row; the take is the versioned recording that gets clipped, promoted, and distributed. Attaching links the take's derived cues + clips back to the plan.
 
@@ -149,7 +150,7 @@ The older `rekordbox-tracklist.py` (prints a plain `Artist — Title` list for m
 
 ### B2. Export a plan to tools (Rekordbox playlist + Beatport + m3u8) 🎛️
 
-Runs on the mixing Mac (it reads/writes `master.db`). Once a plan recording has its cues (see §B above), export them to every tool you need before recording:
+Runs on the 🎛️ M2 (it reads/writes `master.db`). Once a plan recording has its cues (see §B above), export them to every tool you need before recording:
 
 ```bash
 # Dry-run output: Beatport links + m3u8 + checklist, and the XML safe-fallback.
@@ -180,11 +181,11 @@ The script does five things in one pass:
 
 In the Studio at `/admin/studio/<takeId>` (browser): mark each mix-in at the playhead (the `C`/`X`/↑/↓ loop) so the derived cues (§B) gain their `startMs` jump points, and cut framed 9:16 clips (set in/out → **Create clip**). Clips land in `/admin/clips` grouped under the take; copy a clip's caption there and post it as an IG Reel. Un-promoted, a clip points home to `fluncle.com`; after promote it earns the mixtape's `fluncle://<logId>` coordinate (re-cut to pick it up).
 
-### C. Promote the recording, then distribute 🖥️ promote · 🎛️ distribute
+### C. Promote the recording, then distribute 🖥️ M5 (promote · distribute)
 
 The unified publish path (RFC plan→recording→mixtape §7 / Wave 3-D) is:
 
-**1. Promote the recording** 🖥️ — this mints the coordinate AND stages the set video. Do it from the Studio's **Publish as mixtape** button (`/admin/studio/<recordingId>`, browser) or the CLI on either Mac:
+**1. Promote the recording** 🖥️ M5 — this mints the coordinate AND stages the set video. Do it from the Studio's **Publish as mixtape** button (`/admin/studio/<recordingId>`, browser) or the CLI on the M5:
 
 ```bash
 fluncle admin recordings promote <recordingId>
@@ -192,13 +193,13 @@ fluncle admin recordings promote <recordingId>
 
 `promote` is **idempotent** (mint-or-reuse): it mints the `XXX.F.ZZ` Log ID, copies the set-video rendition from `recordings/<id>/set.mp4` to `<logId>/set.mp4`, and flips `setVideoAt` so the `/log` player + video SEO light up. The mixtape is now in `distributing` state (coordinate committed, public surfaces stay hidden until a platform link lands).
 
-**2. Distribute** 🎛️ — push the promoted mixtape to platforms (run on the mixing Mac — the masters live there):
+**2. Distribute** 🖥️ M5 — push the promoted mixtape to platforms (run on the M5 — the masters live there):
 
 ```bash
 fluncle admin mixtapes distribute <idOrLogId> --video <mixtape>.mp4 --audio <master>
 ```
 
-`distribute` pushes multi-GB masters to R2 — run it with the Bash sandbox disabled (`dangerouslyDisableSandbox`) or it fails with `socket closed`.
+`distribute` pushes **multi-GB** masters to R2 — run it **operator-direct, in your own Terminal on the M5**. An agent's Bash session throttles sustained multi-GB transfers even with `dangerouslyDisableSandbox` and drops partway with `socket closed`; `dangerouslyDisableSandbox` covers commits and moderate transfers but does not make a multi-GB upload reliable through the harness (AGENTS.md "Which machine am I on?" — THE LOAD-BEARING RULE).
 
 `distribute` is **push-only**: it operates on an already-minted (`distributing` or `published`) mixtape and errors when the coordinate hasn't been minted (promote the recording first). The `--audio <master>` must be the **clean mix (Track 1, no mic)** — extract it from the OBS `.mov` first: `ffmpeg -i <recording>.mov -map 0:a:0 -c:a libmp3lame -b:a 320k <master>.mp3` (Track 2 is the isolated mic — see §A). The `--video` can be the raw `.mov` or a clean-audio cut — your call on whether the YouTube video carries your voice.
 
@@ -263,3 +264,4 @@ YouTube `videos.insert` is metered in the **Video Uploads bucket (~100/day)**, 2
 - Object model, identity, hosting/licensing, covers, lifecycle, the fan-out map, open questions: **[references/spine-model.md](references/spine-model.md)**.
 - Voice for titles, notes, and announce copy: the `copywriting-fluncle` skill.
 - Cover art iteration: the `fluncle-video` kit; backgrounds rendered by `bun run --cwd packages/media render:mixtape-bg`.
+- The hour-long **set video** — turn a published mixtape into one long-form artwork (chapters travelling through the findings' own worlds): `bun run --cwd packages/video set:render <logId>`, the `packages/video/src/set-video/` pipeline, runbook in `docs/set-video.md`.
