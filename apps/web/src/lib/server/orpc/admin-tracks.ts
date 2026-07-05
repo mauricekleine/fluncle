@@ -206,6 +206,23 @@ export function adminTracksHandlers(os: Implementer) {
     }
   });
 
+  // GET /admin/tracks/{trackId} — admin tier (live `requireAdmin`, agent-allowed).
+  // The single-finding by-coordinate lookup: fetch ONE finding with its full
+  // admin-tier fields (vibe coords, the video ledger, the observation, the note), or
+  // the canonical 404. Distinct from list_tracks_admin — a single authoritative read,
+  // so an ad-hoc list-scan can't misread a live finding as nonexistent. `requireTrack`
+  // resolves by Spotify trackId OR Log ID and raises the shared `not_found`/404,
+  // DISTINCT from the procedure's auth 401/403.
+  const getTrackAdminHandler = os.get_track_admin.use(adminAuth).handler(async ({ input }) => {
+    try {
+      const track = await requireTrack(input.trackId);
+
+      return { ok: true as const, track };
+    } catch (error) {
+      throw toFault(error);
+    }
+  });
+
   // GET /admin/tracks — admin tier (live `requireAdmin`). The admin board query:
   // a `?q=` free-text search (flat `{ tracks }`) OR the paginated list page (the
   // page body itself, filtered by order/hasVideo/status). Both shapes preserved.
@@ -915,6 +932,7 @@ export function adminTracksHandlers(os: Implementer) {
   return {
     context_track: contextTrackHandler,
     finalize_track_video: finalizeVideoHandler,
+    get_track_admin: getTrackAdminHandler,
     list_tracks_admin: listTracksAdminHandler,
     note_track: noteTrackHandler,
     observe_track: observeTrackHandler,

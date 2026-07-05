@@ -559,6 +559,21 @@ function addAdminCommands(program: Command): void {
 
   const adminTrack = adminTracks;
 
+  // `get_track_admin` → `admin tracks get` (Convention B). The authoritative
+  // single-finding lookup with FULL admin fields (vibe coords, the video ledger, the
+  // observation, the note) — so a lookup never has to scan a list (and can't misread a
+  // live finding as nonexistent). Accepts a Spotify id OR a Log ID. Agent-allowed read.
+  adminTrack
+    .command("get")
+    .description("Look up one finding by id or Log ID, with full admin fields")
+    .argument("[idOrLogId]")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (idOrLogId: string | undefined, options: JsonOptions) => {
+      const { trackGetAdminCommand } = await import("./commands/track");
+      await runTrackGetAdmin(idOrLogId, options, trackGetAdminCommand);
+    });
+
   adminTrack
     .command("update")
     .description("Certify a track into the archive")
@@ -1813,6 +1828,61 @@ async function runTrackGet(
       .filter(Boolean)
       .join(" · "),
   );
+
+  if (t.logPageUrl) {
+    console.log(`Log: ${t.logPageUrl}`);
+  }
+}
+
+async function runTrackGetAdmin(
+  idOrLogId: string | undefined,
+  options: JsonOptions,
+  trackGetAdminCommand: typeof import("./commands/track").trackGetAdminCommand,
+): Promise<void> {
+  if (!idOrLogId) {
+    throw new Error("Missing id. Usage: fluncle admin tracks get <track_id|log_id> [--json]");
+  }
+
+  const result = await trackGetAdminCommand(idOrLogId);
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  const t = result.track;
+
+  console.log(`${t.logId ? `${t.logId}  ` : ""}${t.artists.join(", ")} — ${t.title}`);
+  console.log(
+    [t.bpm ? `${t.bpm} bpm` : undefined, t.key, t.label, t.enrichmentStatus]
+      .filter(Boolean)
+      .join(" · "),
+  );
+
+  // The admin-only state a public list row hides — the reason this read exists over
+  // `fluncle tracks get`: where it sits on the map, whether it's filmed and voiced.
+  const placed = t.galaxy && t.vibeX !== undefined && t.vibeY !== undefined;
+  console.log(
+    `Placement: ${placed && t.galaxy ? `${t.galaxy.name} (${t.vibeX?.toFixed(2)}, ${t.vibeY?.toFixed(2)})` : "unplaced"}`,
+  );
+  console.log(
+    `Video: ${
+      t.videoUrl
+        ? [t.videoSquaredAt ? "squared master" : "linked", t.videoVehicle]
+            .filter(Boolean)
+            .join(" · ")
+        : "none (in the render queue)"
+    }`,
+  );
+  console.log(
+    `Observation: ${
+      t.observationAudioUrl
+        ? `voiced${t.observationDurationMs ? ` · ${Math.round(t.observationDurationMs / 1000)}s` : ""}`
+        : "none"
+    }`,
+  );
+  console.log(`Note: ${t.note ? t.note : "none"}`);
+  console.log(`Spotify: ${t.spotifyUrl}`);
 
   if (t.logPageUrl) {
     console.log(`Log: ${t.logPageUrl}`);

@@ -2,6 +2,7 @@ import {
   type FinalizeResponse,
   type PresignResponse,
   type TrackGetResponse,
+  type TrackListItem,
   type TrackSocialShowResponse,
   type TrackSocialUpdateResponse,
   type TrackUpdateResponse,
@@ -13,6 +14,18 @@ export type TrackGetResult = TrackGetResponse;
 
 export async function trackGetCommand(idOrLogId: string): Promise<TrackGetResult> {
   return publicApiGet<TrackGetResult>(`/api/tracks/${encodeURIComponent(idOrLogId)}`);
+}
+
+// `fluncle admin tracks get <id|logId>` — the ADMIN single-finding lookup. Fetches
+// ONE finding with its FULL admin fields (the vibe coords, the video ledger, the
+// observation, the editorial note) — the authoritative by-coordinate read, so a
+// lookup never has to scan a list (and can't misread a live finding as nonexistent).
+// Agent-allowed read (the admin tier). Distinct from the public `tracks get`, which
+// hits `/api/tracks/{idOrLogId}` and only carries the public projection.
+export type TrackGetAdminResult = { ok: true; track: TrackListItem };
+
+export async function trackGetAdminCommand(idOrLogId: string): Promise<TrackGetAdminResult> {
+  return adminApiGet<TrackGetAdminResult>(`/api/admin/tracks/${encodeURIComponent(idOrLogId)}`);
 }
 
 export type TrackUpdateOptions = {
