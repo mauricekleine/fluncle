@@ -5,7 +5,8 @@
 //                                  show's liveness (read-only probes to :4173/:4180).
 //   GET  /api/pulse/next         — the single next-to-post card + the nudge status.
 //   POST /api/pulse/nudge/check  — run the 18h nudge tick now (dry, or fire; the
-//                                  test hook forces the clock past the threshold).
+//                                  `force` test hook — LOOPBACK-ONLY — pushes the
+//                                  clock past the threshold).
 //   POST /api/pulse/ping         — the line check (a streamed run) — the run-drawer
 //                                  proof kept from the pulse-lite reference.
 //
@@ -17,6 +18,7 @@ import { resolve } from "node:path";
 import { HELM_PORT, type RunStartedResponse } from "../../contract";
 import { adminTokenAboard } from "../../server/admin";
 import { json } from "../../server/features";
+import { requestIsLocal } from "../../server/locality";
 import { type AdminClient, type HelmApp } from "../types";
 import {
   type LiveProbe,
@@ -28,7 +30,7 @@ import {
 } from "./contract";
 import { mapQueue, mapSurfaces, type QueueTrackInput, type StatusProbeInput } from "./logic";
 import { createPostingGatherer } from "./posting-state";
-import { createNudgeScheduler, readNudgeConfig } from "./scheduler";
+import { createNudgeScheduler, fileNudgeStore, readNudgeConfig } from "./scheduler";
 
 const SITE_BASE = "https://www.fluncle.com";
 const GLASS_PORT = 4173;
@@ -39,16 +41,21 @@ const PROBE_TIMEOUT_MS = 700;
 // The line check (a tiny streamed child), narrated in the pre-flight vocabulary
 // ([clear]/[hold]/[dark], packages/live/src/show.ts) so the run drawer renders it
 // as status rows. Kept from pulse-lite: it proves the streamed-run path still
-// answers from the pulse station.
-const LINE_CHECK_SCRIPT = [
-  'echo "line check — the helm sounds its own wiring"',
-  "sleep 0.4",
-  'echo "  [clear] spawn                  a child ran under the daemon"',
-  "sleep 0.4",
-  'echo "  [clear] stream                 you are reading it live"',
-  "sleep 0.4",
-  'echo "  [clear] line check             the wiring holds"',
-].join("\n");
+// answers from the pulse station. A PURE ARGV spawn — the daemon's own runtime
+// (`bun -e`) evaluates this fixed source; no shell ever parses a string.
+const LINE_CHECK_LINES = [
+  "line check — the helm sounds its own wiring",
+  "  [clear] spawn                  a child ran under the daemon",
+  "  [clear] stream                 you are reading it live",
+  "  [clear] line check             the wiring holds",
+] as const;
+
+const LINE_CHECK_SOURCE = `for (const line of ${JSON.stringify(LINE_CHECK_LINES)}) { console.log(line); await Bun.sleep(400); }`;
+
+/** The line check's argv: the runtime, `-e`, the fixed source — never a shell. */
+export function lineCheckArgv(execPath: string): string[] {
+  return [execPath, "-e", LINE_CHECK_SOURCE];
+}
 
 const HELM_PKG = resolve(import.meta.dir, "../../../package.json");
 let versionCache: string | undefined;
@@ -101,6 +108,7 @@ export function registerRoutes(app: HelmApp): void {
   const scheduler = createNudgeScheduler({
     config: readNudgeConfig(),
     notify: (title, body) => app.context.notify(title, body),
+    store: fileNudgeStore(),
   });
 
   // The nudge rises with the daemon — hourly, windowless under launchd.
@@ -167,6 +175,16 @@ export function registerRoutes(app: HelmApp): void {
   app.post("/api/pulse/nudge/check", async (req) => {
     const options = await readCheckBody(req);
 
+    // The forced clock is a test hook — loopback only, even though LAN peers
+    // are already key-authed (the daemon's fetch gate stamps locality by remote
+    // address, so a header can never forge this).
+    if (options.force && !requestIsLocal(req)) {
+      return json(
+        { code: "local_only", message: "The forced clock answers only from this Mac." },
+        403,
+      );
+    }
+
     try {
       const state = await gather({ force: options.force });
       const result: NudgeCheckResponse = await scheduler.check(state, {
@@ -181,7 +199,7 @@ export function registerRoutes(app: HelmApp): void {
   });
 
   app.post("/api/pulse/ping", () => {
-    const { runId } = runs.runStreamed(["/bin/sh", "-c", LINE_CHECK_SCRIPT], {
+    const { runId } = runs.runStreamed(lineCheckArgv(process.execPath), {
       feature: "pulse",
       title: "line check",
     });

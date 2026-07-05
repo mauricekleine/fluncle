@@ -5,9 +5,15 @@
 // deduped to one nudge per local day so it never turns into a nag storm.
 //
 // The decision itself is the pure `nudgeTick` (logic.ts) — this file is the thin
-// impure shell around it: the config, the interval, the per-day dedupe state, and
-// the osascript fire. The tick is what the tests pin with an injected clock; this
-// is what the live proof drives through the check route.
+// impure shell around it: the config, the interval, the per-day dedupe state
+// (PERSISTED at ~/.config/fluncle/helm-nudge.json so a daemon restart can't
+// re-nudge an already-nudged day), and the osascript fire. The tick is what the
+// tests pin with an injected clock; this is what the live proof drives through
+// the check route.
+
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 
 import { type NudgeCheckResponse, type NudgeStatus } from "./contract";
 import { type NudgeInput, nudgeTick } from "./logic";
@@ -15,6 +21,48 @@ import { type GatheredPosting } from "./posting-state";
 
 const DEFAULT_THRESHOLD_HOURS = 18;
 const DEFAULT_INTERVAL_MS = 60 * 60 * 1000;
+
+/** Where the per-day dedupe survives a daemon restart. */
+export const NUDGE_STATE_FILE = join(homedir(), ".config/fluncle/helm-nudge.json");
+
+/** The dedupe's persistence seam — the file store in production, memory in tests. */
+export type NudgeStore = {
+  load(): string | null;
+  save(day: string): void;
+};
+
+/** Pure parse of the state file — anything malformed reads as "never nudged". */
+export function parseNudgeState(text: string): string | null {
+  try {
+    const parsed = JSON.parse(text) as { lastNudgeDay?: unknown } | null;
+    const day = parsed?.lastNudgeDay;
+
+    return typeof day === "string" && day.length > 0 ? day : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The on-disk store. A failed persist means at most one repeat nudge — never a crash. */
+export function fileNudgeStore(path: string = NUDGE_STATE_FILE): NudgeStore {
+  return {
+    load() {
+      try {
+        return parseNudgeState(readFileSync(path, "utf8"));
+      } catch {
+        return null;
+      }
+    },
+    save(day) {
+      try {
+        mkdirSync(dirname(path), { mode: 0o700, recursive: true });
+        writeFileSync(path, `${JSON.stringify({ lastNudgeDay: day })}\n`);
+      } catch {
+        // Unwritable config dir — the in-memory dedupe still holds for this boot.
+      }
+    },
+  };
+}
 
 export type NudgeConfig = {
   disabled: boolean;
@@ -74,9 +122,11 @@ export type NudgeScheduler = {
 export function createNudgeScheduler(deps: {
   config: NudgeConfig;
   notify: (title: string, body: string) => Promise<void>;
+  /** The dedupe persistence; omitted, the dedupe lives (and dies) with the process. */
+  store?: NudgeStore;
 }): NudgeScheduler {
-  const { config, notify } = deps;
-  let lastNudgeDay: string | null = null;
+  const { config, notify, store } = deps;
+  let lastNudgeDay: string | null = store?.load() ?? null;
   let timer: ReturnType<typeof setInterval> | undefined;
 
   function buildInput(state: GatheredPosting, now: number, dedupe: string | null): NudgeInput {
@@ -125,9 +175,11 @@ export function createNudgeScheduler(deps: {
         await notify(decision.title, decision.body);
         notified = true;
 
-        // Only a natural (unforced) fire arms the per-day dedupe.
+        // Only a natural (unforced) fire arms the per-day dedupe — in memory
+        // AND on disk, so a daemon restart can't re-nudge the day.
         if (!forced) {
           lastNudgeDay = decision.nudgeDay;
+          store?.save(decision.nudgeDay);
         }
       } catch {
         // osascript refused (notification permissions) — leave the dedupe unset so

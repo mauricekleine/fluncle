@@ -1,8 +1,18 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { type NextToPostCard } from "./contract";
 import { type GatheredPosting } from "./posting-state";
-import { createNudgeScheduler, type NudgeConfig, readNudgeConfig } from "./scheduler";
+import {
+  createNudgeScheduler,
+  fileNudgeStore,
+  type NudgeConfig,
+  type NudgeStore,
+  parseNudgeState,
+  readNudgeConfig,
+} from "./scheduler";
 
 const HOUR = 3_600_000;
 
@@ -185,5 +195,76 @@ describe("createNudgeScheduler", () => {
     scheduler.stop();
 
     expect(gathered).toBe(false);
+  });
+});
+
+function memoryStore(initial: string | null = null): NudgeStore & { saved: string[] } {
+  let day = initial;
+  const saved: string[] = [];
+
+  return {
+    load: () => day,
+    save(value) {
+      day = value;
+      saved.push(value);
+    },
+    saved,
+  };
+}
+
+describe("the persisted dedupe (L10)", () => {
+  test("a natural fire persists the day, and a fresh scheduler on the same store stays deduped — the restart case", async () => {
+    const store = memoryStore();
+    const first = fakeNotify();
+    const before = createNudgeScheduler({ config: CONFIG, notify: first.notify, store });
+    const ancient = state({ hasNext: true, newestPostedAt: 0 });
+
+    const fired = await before.check(ancient, { fire: true });
+
+    expect(fired.notified).toBe(true);
+    expect(store.saved).toHaveLength(1);
+
+    // The daemon restarts: a new scheduler over the SAME store must not re-nudge.
+    const second = fakeNotify();
+    const after = createNudgeScheduler({ config: CONFIG, notify: second.notify, store });
+    const again = await after.check(ancient, { fire: true });
+
+    expect(again.notified).toBe(false);
+    expect(again.decision.reason).toBe("already-nudged-today");
+    expect(second.calls).toHaveLength(0);
+  });
+
+  test("a forced fire never touches the store (a synthetic clock persists nothing)", async () => {
+    const store = memoryStore();
+    const { notify } = fakeNotify();
+    const scheduler = createNudgeScheduler({ config: CONFIG, notify, store });
+
+    await scheduler.check(state({ hasNext: true, newestPostedAt: Date.now() }), {
+      fire: true,
+      force: true,
+    });
+
+    expect(store.saved).toHaveLength(0);
+  });
+
+  test("parseNudgeState: the happy shape, and every malformation reads as never-nudged", () => {
+    expect(parseNudgeState('{"lastNudgeDay":"2026-07-06"}')).toBe("2026-07-06");
+    expect(parseNudgeState('{"lastNudgeDay":""}')).toBeNull();
+    expect(parseNudgeState('{"lastNudgeDay":7}')).toBeNull();
+    expect(parseNudgeState("{}")).toBeNull();
+    expect(parseNudgeState("null")).toBeNull();
+    expect(parseNudgeState("not json")).toBeNull();
+  });
+
+  test("fileNudgeStore round-trips through the disk", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "helm-nudge-")), "nested", "helm-nudge.json");
+    const store = fileNudgeStore(path);
+
+    expect(store.load()).toBeNull();
+
+    store.save("2026-07-06");
+
+    expect(store.load()).toBe("2026-07-06");
+    expect(fileNudgeStore(path).load()).toBe("2026-07-06");
   });
 });
