@@ -37,6 +37,7 @@ type AdminQueueOptions = AdminListOptions & {
 // boolean (default true), so `key === false` means the flag was passed; `--has-key
 // <bool>` is the explicit tri-state form. Absent both ⇒ no key filter (list all).
 type AdminTracksListOptions = AdminListOptions & {
+  all?: boolean;
   hasKey?: string;
   key?: boolean;
   order?: string;
@@ -503,7 +504,12 @@ function addAdminCommands(program: Command): void {
   adminTracks
     .command("list")
     .description("List findings, filterable by musical-key presence (--no-key / --has-key)")
-    .option("--limit <limit>", "Number of findings to show", "50")
+    .option("--limit <limit>", "Number of findings to show (1-100)", "50")
+    .option(
+      "--all",
+      "Fetch the ENTIRE catalogue, paginating past the 100-row cap (overrides --limit)",
+      false,
+    )
     .option("--no-key", "Only findings with NO stored musical key (the key-backfill backlog)")
     .option("--has-key <bool>", "Filter by key presence: true (has key) or false (missing)")
     .option("--order <order>", "Sort: asc (oldest first) or desc (newest first)", "desc")
@@ -2328,7 +2334,10 @@ async function runAdminTracksList(
   options: AdminTracksListOptions,
   listCommand: typeof import("./commands/admin-tracks").listCommand,
 ): Promise<void> {
-  const limit = parseListLimit(options.limit);
+  // `--all` fetches the entire catalogue by paging past the per-request 100-row cap
+  // (listCommand pages via cursor until the archive is exhausted); otherwise the
+  // explicit `--limit` is parsed and clamped to 1-100.
+  const limit = options.all ? Number.POSITIVE_INFINITY : parseListLimit(options.limit);
   const order = options.order === "asc" ? "asc" : "desc";
   const hasKey = resolveHasKey(options);
   const tracks = await listCommand({ hasKey, limit, order });
