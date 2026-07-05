@@ -164,6 +164,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // set + `promote` (mints a coordinate). The agent token 403s.
   create_recording: "operator",
   delete_clip: "operator",
+  // The operator's "unschedule" (take a clip off the drip queue) — operator tier, symmetric
+  // with set_clip_schedule; the agent token 403s.
+  delete_clip_schedule: "operator",
   delete_edition: "operator",
   delete_private_account: "private-session",
   delete_recording: "operator",

@@ -5,8 +5,9 @@ import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type Dispatch, type SetStateAction, useEffect, useMemo, useState } from "react";
 import { AdminShell } from "@/components/admin/admin-shell";
-import { ClipCard } from "@/components/admin/clip-card";
+import { type ClipDrip, ClipCard } from "@/components/admin/clip-card";
 import { Badge } from "@fluncle/ui/components/badge";
+import { Button } from "@fluncle/ui/components/button";
 import { Label } from "@fluncle/ui/components/label";
 import {
   Select,
@@ -15,7 +16,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@fluncle/ui/components/select";
+import { Switch } from "@fluncle/ui/components/switch";
 import { isAdminRequest } from "@/lib/server/admin-auth";
+import {
+  type ClipSocialPost,
+  isDripPaused,
+  listClipPosts,
+  nextDripSlot,
+  upsertClipPost,
+} from "@/lib/server/clip-social";
+import { buildClipCaption } from "@/lib/server/clip-caption";
 import { listClips } from "@/lib/server/clips";
 import { listRecordings } from "@/lib/server/recordings";
 import {
@@ -33,14 +43,19 @@ import {
 // carries its own recording label so the operator can tell which set/mixtape a clip is
 // from. Above the grid sits a recordings index so the operator can find + open a
 // CLI-created recording to clip it. Browse, filter (by recording + status), preview
-// inline, download to hand-post (the irreducible in-app beat). Reads `list_clips` +
-// `list_recordings`; `delete_clip` prunes a bad cut. Distribution is deferred (a disabled
-// seam on the card).
+// inline, download to hand-post. Reads `list_clips` + `list_recordings`; `delete_clip`
+// prunes a bad cut.
 //
-// The grid, recordings, and dropdown load SERVER-SIDE (a createServerFn calling the
-// server helpers in-process) — not a cross-origin client fetch. Filtering + newest-first
-// sorting then run client-side over the loaded set (the backlog is small; instant, no
-// refetch).
+// Distribution rides the Instagram DRIP-FEED (clip-drip-feed RFC §3.6): the page header
+// carries the global KILL SWITCH (a Switch → `set_clip_drip`) and a BATCH schedule action
+// over a selection (chaining the jittered ~daily slots server-side, `nextDripSlot`); each
+// card shows its own drip state + a slot-override popover. The per-clip drip schedule (the
+// `list_clip_posts` read) is merged onto the cards.
+//
+// The grid, recordings, dropdown, drip rows, and paused state load SERVER-SIDE (a
+// createServerFn calling the server helpers in-process) — not a cross-origin client fetch.
+// Filtering + newest-first sorting then run client-side over the loaded set (the backlog is
+// small; instant, no refetch).
 
 const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
   if (!(await isAdminRequest())) {
@@ -68,11 +83,51 @@ const fetchRecordings = createServerFn({ method: "GET" }).handler(
   },
 );
 
+// Every clip's Instagram drip row + whether the drip is paused (the kill switch's live
+// state) — read together so the header switch and every card's chip hydrate from the loader.
+const fetchDripState = createServerFn({ method: "GET" }).handler(
+  async (): Promise<{ paused: boolean; posts: ClipSocialPost[] }> => {
+    if (!(await isAdminRequest())) {
+      throw redirect({ to: "/admin/login" });
+    }
+
+    return { paused: await isDripPaused(), posts: await listClipPosts() };
+  },
+);
+
+// Batch-schedule a selection onto the drip queue. Chains the jittered ~daily slots
+// SERVER-SIDE (one `nextDripSlot` roll per clip, each reading the extending queue tail so
+// consecutive slots drift in [23h, 25h]), snapshotting a fresh caption per clip. Gated by
+// the web admin grant — the "Login with Spotify" operator identity (the one web carrier),
+// the same tier the `set_clip_schedule` op it stands in for requires.
+const batchScheduleClips = createServerFn({ method: "POST" })
+  .validator((data: { clipIds: string[] }) => data)
+  .handler(async ({ data }): Promise<{ scheduled: number }> => {
+    if (!(await isAdminRequest())) {
+      throw redirect({ to: "/admin/login" });
+    }
+
+    let scheduled = 0;
+
+    for (const clipId of data.clipIds) {
+      // Chain off the live queue tail: each upsert extends it, so the next slot rolls ~24h
+      // past this one (real jitter, no bot-at-10:00 cadence). Sequential by design.
+      const scheduledFor = await nextDripSlot();
+      const built = await buildClipCaption(clipId);
+
+      await upsertClipPost({ caption: built.builtCaption, clipId, scheduledFor });
+      scheduled += 1;
+    }
+
+    return { scheduled };
+  });
+
 export const Route = createFileRoute("/admin/clips")({
   beforeLoad: () => ensureAdmin(),
   component: ClipLibraryPage,
   loader: async () => ({
     clips: await fetchAllClips(),
+    drip: await fetchDripState(),
     recordings: await fetchRecordings(),
   }),
 });
@@ -83,7 +138,7 @@ export const Route = createFileRoute("/admin/clips")({
 type LibraryClip = ClipDTO & { resolvedRecordingId: string | undefined };
 
 function ClipLibraryPage() {
-  const { clips: initialClips, recordings } = Route.useLoaderData();
+  const { clips: initialClips, drip: initialDrip, recordings } = Route.useLoaderData();
   const queryClient = useQueryClient();
 
   const { data: clips } = useQuery<ClipDTO[]>({
@@ -93,10 +148,38 @@ function ClipLibraryPage() {
     refetchOnWindowFocus: true,
   });
 
+  // The per-clip drip rows + the paused state, hydrated from the loader and refetched on
+  // focus (so a slot the drip cron fires while the operator is away re-reads as `posted`).
+  const { data: drip } = useQuery({
+    initialData: initialDrip,
+    queryFn: () => fetchDripState(),
+    queryKey: ["admin", "clip-posts"],
+    refetchOnWindowFocus: true,
+  });
+
+  // The drip row per clip id — merged onto each card as its `scheduled`/`posted`/`failed`
+  // state (only the `instagram` platform rows exist today; keyed by clip).
+  const dripByClip = useMemo(() => {
+    const map = new Map<string, ClipDrip>();
+
+    for (const post of drip.posts) {
+      map.set(post.clipId, {
+        postedUrl: post.postedUrl,
+        scheduledFor: post.scheduledFor,
+        status: post.status,
+      });
+    }
+
+    return map;
+  }, [drip.posts]);
+
   const [recordingId, setRecordingId] = useState<string>(DEFAULT_CLIP_FILTER.recordingId);
   const [status, setStatus] = useState<ClipStatusFilter>(DEFAULT_CLIP_FILTER.status);
   const [error, setError] = useAutoNotice();
   const [notice, setNotice] = useAutoNotice();
+
+  // The batch-schedule selection: a set of clip ids the operator ticked to schedule together.
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
 
   // Every recording by its id — the per-card recording label lookup (each flat-grid card
   // still shows which set/mixtape its clip is from).
@@ -149,6 +232,55 @@ function ClipLibraryPage() {
     },
   });
 
+  // The kill switch: pause / resume the whole drip. Optimistic — flip the cached paused
+  // state at once (the Switch tracks it instantly), roll back on error, re-read on settle.
+  const setPaused = useMutation<void, Error, boolean, { previous?: typeof drip }>({
+    mutationFn: async (paused: boolean) => {
+      const response = await fetch("/api/admin/clips/drip/state", {
+        body: JSON.stringify({ paused }),
+        headers: { "content-type": "application/json" },
+        method: "PUT",
+      });
+
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+    },
+    onError: (caught, _paused, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(["admin", "clip-posts"], context.previous);
+      }
+
+      setError(caught.message);
+    },
+    onMutate: async (paused) => {
+      await queryClient.cancelQueries({ queryKey: ["admin", "clip-posts"] });
+      const previous = queryClient.getQueryData<typeof drip>(["admin", "clip-posts"]);
+
+      if (previous) {
+        queryClient.setQueryData(["admin", "clip-posts"], { ...previous, paused });
+      }
+
+      return { previous };
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["admin", "clip-posts"] }),
+  });
+
+  // Batch-schedule the current selection onto the jittered drip queue (server-side chain).
+  const batchSchedule = useMutation<{ scheduled: number }, Error, string[]>({
+    mutationFn: (clipIds: string[]) => batchScheduleClips({ data: { clipIds } }),
+    onError: (caught) => setError(caught.message),
+    onSuccess: async (result) => {
+      setNotice(
+        result.scheduled === 1
+          ? "Scheduled 1 clip onto the drip."
+          : `Scheduled ${result.scheduled} clips onto the drip.`,
+      );
+      setSelected(new Set());
+      await queryClient.invalidateQueries({ queryKey: ["admin", "clip-posts"] });
+    },
+  });
+
   // The clip count per recording (for the recordings index), over ALL clips (not the
   // filtered view) so the index is a stable map of the backlog.
   const clipCountByRecording = useMemo(() => {
@@ -165,6 +297,32 @@ function ClipLibraryPage() {
 
   const statusItems = { all: "Any state", done: "Ready", pending: "Cutting" } as const;
 
+  // Toggle one clip in the batch-schedule selection.
+  const toggleSelected = (clipId: string) =>
+    setSelected((current) => {
+      const next = new Set(current);
+
+      if (next.has(clipId)) {
+        next.delete(clipId);
+      } else {
+        next.add(clipId);
+      }
+
+      return next;
+    });
+
+  // Prune selections that scroll out of the filtered view (a filter change shouldn't leave a
+  // hidden clip selected). Only cut, visible clips are selectable.
+  const visibleIds = useMemo(() => new Set(visible.map((clip) => clip.id)), [visible]);
+
+  useEffect(() => {
+    setSelected((current) => {
+      const next = new Set([...current].filter((id) => visibleIds.has(id)));
+
+      return next.size === current.size ? current : next;
+    });
+  }, [visibleIds]);
+
   return (
     <AdminShell
       current="clips"
@@ -172,6 +330,15 @@ function ClipLibraryPage() {
       title="Clip library"
     >
       <div className="p-4 sm:p-5">
+        {/* The kill switch: pause / resume the whole Instagram drip-feed. Prominent at the top
+            of the page — one flip halts every future scheduled post (the schedule stays
+            intact). */}
+        <DripKillSwitch
+          onToggle={(paused) => setPaused.mutate(paused)}
+          paused={drip.paused}
+          pending={setPaused.isPending}
+        />
+
         {/* The recordings index — every captured set, promoted or not, linking to its
             Studio. This is how the operator finds + opens a CLI-created recording. */}
         <RecordingsIndex clipCountByRecording={clipCountByRecording} recordings={recordings} />
@@ -238,6 +405,17 @@ function ClipLibraryPage() {
           </p>
         ) : null}
 
+        {/* The batch-schedule bar — appears once the operator ticks one or more cut clips.
+            Schedules the whole selection onto the jittered drip chain in one move. */}
+        {selected.size > 0 ? (
+          <BatchScheduleBar
+            count={selected.size}
+            onClear={() => setSelected(new Set())}
+            onSchedule={() => batchSchedule.mutate([...selected])}
+            pending={batchSchedule.isPending}
+          />
+        ) : null}
+
         {clips.length === 0 ? (
           <EmptyLibrary />
         ) : visible.length === 0 ? (
@@ -251,12 +429,15 @@ function ClipLibraryPage() {
                 <ClipCard
                   clip={clip}
                   deleting={deleteClip.isPending && deleteClip.variables === clip.id}
+                  drip={dripByClip.get(clip.id)}
                   onDelete={() => deleteClip.mutate(clip.id)}
+                  onToggleSelected={() => toggleSelected(clip.id)}
                   recording={
                     clip.resolvedRecordingId
                       ? recordingById.get(clip.resolvedRecordingId)
                       : undefined
                   }
+                  selected={selected.has(clip.id)}
                 />
               </li>
             ))}
@@ -264,6 +445,73 @@ function ClipLibraryPage() {
         )}
       </div>
     </AdminShell>
+  );
+}
+
+// The kill switch: a prominent Switch that pauses / resumes the entire Instagram drip-feed.
+// Paused keeps every scheduled row intact — nothing fires until the operator flips it live.
+function DripKillSwitch({
+  onToggle,
+  paused,
+  pending,
+}: {
+  onToggle: (paused: boolean) => void;
+  paused: boolean;
+  pending: boolean;
+}) {
+  return (
+    <div className="mb-6 flex items-start gap-3 rounded-lg border border-border bg-card p-4">
+      <div className="flex items-center gap-3">
+        <Switch
+          aria-label="Pause the Instagram drip-feed"
+          checked={!paused}
+          disabled={pending}
+          id="drip-kill-switch"
+          onCheckedChange={(next) => onToggle(!next)}
+        />
+      </div>
+      <div className="min-w-0 space-y-0.5">
+        <Label htmlFor="drip-kill-switch">Instagram drip-feed</Label>
+        <p className="text-sm text-muted-foreground">
+          {paused
+            ? "Paused. Nothing fires until you flip it back."
+            : "Live. Posting to Instagram, roughly one a day."}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// The batch-schedule action bar: shown while a selection exists. Schedules the whole
+// selection onto the jittered drip chain server-side, or clears the selection.
+function BatchScheduleBar({
+  count,
+  onClear,
+  onSchedule,
+  pending,
+}: {
+  count: number;
+  onClear: () => void;
+  onSchedule: () => void;
+  pending: boolean;
+}) {
+  return (
+    <div
+      aria-live="polite"
+      className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card p-3"
+    >
+      <span className="text-sm text-muted-foreground">
+        {count} {count === 1 ? "clip" : "clips"} selected
+      </span>
+      <div className="ml-auto flex items-center gap-1.5">
+        <Button disabled={pending} onClick={onSchedule} size="sm">
+          {count === 1 ? "Schedule 1 clip" : `Schedule ${count} clips`}
+        </Button>
+        <Button disabled={pending} onClick={onClear} size="sm" variant="ghost">
+          Clear
+        </Button>
+      </div>
+    </div>
   );
 }
 

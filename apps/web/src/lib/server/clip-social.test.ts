@@ -19,6 +19,7 @@ import {
   DRIP_MIN_GAP_MS,
   computeNextDripSlot,
   countRecentPostedInWindow,
+  deleteClipPost,
   dueClipPosts,
   isDripPaused,
   setDripPaused,
@@ -140,5 +141,20 @@ describe("countRecentPostedInWindow", () => {
     const call = execute.mock.calls[0]?.[0] as { sql: string };
     expect(call.sql).toContain("status = 'posted'");
     expect(call.sql).toContain("updated_at >= ?");
+  });
+});
+
+describe("deleteClipPost (unschedule)", () => {
+  it("deletes the clip's un-posted instagram row, sparing a posted one", async () => {
+    execute.mockResolvedValueOnce({ rows: [] });
+
+    await deleteClipPost("c1");
+
+    const call = execute.mock.calls[0]?.[0] as { args: unknown[]; sql: string };
+    expect(call.sql).toContain("delete from mixtape_clip_social_posts");
+    expect(call.sql).toContain("clip_id = ?");
+    // A posted clip keeps its permalink record — only un-posted rows are pruned.
+    expect(call.sql).toContain("status <> 'posted'");
+    expect(call.args).toEqual(["c1", "instagram"]);
   });
 });

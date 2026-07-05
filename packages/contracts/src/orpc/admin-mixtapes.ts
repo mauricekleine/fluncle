@@ -577,6 +577,26 @@ export const setClipSchedule = oc
   .output(z.object({ ok: z.literal(true), post: ClipSocialPostSchema }));
 
 /**
+ * `delete_clip_schedule` → `DELETE /admin/clips/{clipId}/schedule` (operationId
+ * `deleteClipSchedule`).
+ *
+ * OPERATOR tier (`adminAuth` + `operatorGuard`): the operator's "unschedule" — take a clip
+ * off the drip queue (delete its un-posted schedule row). Idempotent (no row ⇒ still `ok`);
+ * an already-`posted` row is left intact (unscheduling is for the queue, not for un-recording
+ * a live post). REST-symmetric with `set_clip_schedule` (same path, DELETE vs PATCH).
+ */
+export const deleteClipSchedule = oc
+  .route({
+    method: "DELETE",
+    operationId: "deleteClipSchedule",
+    path: "/admin/clips/{clipId}/schedule",
+    summary: "Unschedule a clip (take it off the Instagram drip queue)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ clipId: z.string() }))
+  .output(z.object({ ok: z.literal(true) }));
+
+/**
  * `set_clip_drip` → `PUT /admin/clips/drip/state` (operationId `setClipDrip`).
  *
  * OPERATOR tier (`adminAuth` + `operatorGuard`): the global kill switch. `paused: true`
@@ -598,6 +618,7 @@ export const setClipDrip = oc
 export const adminMixtapesContract = {
   create_clip: createClip,
   delete_clip: deleteClip,
+  delete_clip_schedule: deleteClipSchedule,
   drip_clips: dripClips,
   finalize_clip_cut: finalizeClipCut,
   finalize_mixtape_mixcloud: finalizeMixtapeMixcloud,

@@ -46,6 +46,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // the hardened post-publish cue backfill. `list_clips` is admin tier
   // (agent-allowed read); the writes are operator tier.
   "DELETE /admin/clips/{clipId}": "delete_clip",
+  // The operator's "unschedule" — contract-only oRPC. Operator tier: take a clip off the
+  // Instagram drip queue (delete its un-posted schedule row).
+  "DELETE /admin/clips/{clipId}/schedule": "delete_clip_schedule",
   // The newsletter edition delete — contract-only oRPC (no TanStack route file).
   // Operator tier: a hard delete that reaches a SENT edition too (pulling a sent
   // test edition from the public archive); the agent token 403s.

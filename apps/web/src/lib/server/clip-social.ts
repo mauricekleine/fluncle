@@ -291,6 +291,21 @@ export async function getClipPost(clipId: string): Promise<ClipSocialPost | unde
   return row ? rowToPost(row) : undefined;
 }
 
+/**
+ * Take a clip off the drip queue — delete its `scheduled` row (the operator's "unschedule"
+ * on the clip card). Idempotent: a missing row is a no-op. Only removes an un-posted row, so
+ * an already-`posted` clip keeps its permalink record (unscheduling is for the queue, not
+ * for un-recording a live post).
+ */
+export async function deleteClipPost(clipId: string): Promise<void> {
+  const db = await getDb();
+  await db.execute({
+    args: [clipId, CLIP_DRIP_PLATFORM],
+    sql: `delete from mixtape_clip_social_posts
+          where clip_id = ? and platform = ? and status <> 'posted'`,
+  });
+}
+
 // --- The lean global-flag KV (`settings`) ------------------------------------------
 
 /** Read a global flag from the `settings` KV, or undefined if unset. */
