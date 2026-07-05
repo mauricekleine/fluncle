@@ -20,8 +20,10 @@ import { decodeImageRgb } from "./frames";
 import {
   DIVERSITY_MIN,
   diversityDistance,
+  evaluatePlateSubjectGate,
   evaluateStructureGate,
   featureOf,
+  type PlateSubjectNeighbour,
   type StructureNeighbour,
 } from "./judge-diversity";
 import { type IntentRegister } from "./intent";
@@ -213,5 +215,55 @@ describe("evaluateStructureGate", () => {
       windowReg(["metaball", "flow", "caustic", "filament"], "representational"),
     );
     expect(gate.status).toBe("fail");
+  });
+});
+
+// The PURE plate-subject gate — the subject-kind rotation the structural fingerprint
+// can't see (a hull, a ruin, and a creature all classify by their treatment family's
+// marks). Advisory by design: a same-kind repeat inside the window WARNS, never fails;
+// a plate-less render (null subject) skips.
+describe("evaluatePlateSubjectGate", () => {
+  const n = (plateSubject: string | null, i: number): PlateSubjectNeighbour => ({
+    logId: `03${i}.0.0X`,
+    plateSubject,
+  });
+  const window = (subjects: (string | null)[]): PlateSubjectNeighbour[] =>
+    subjects.map((s, i) => n(s, i));
+
+  test("a same-kind repeat inside the window WARNS and names the neighbour", () => {
+    const gate = evaluatePlateSubjectGate("hull", window([null, "hull", "flora", null]));
+
+    expect(gate.status).toBe("warn");
+    expect(gate.repeatAt).toBe(1);
+    expect(gate.verdict).toContain('"hull"');
+    expect(gate.verdict).toContain("031.0.0X");
+  });
+
+  test("a fresh kind PASSES against plate-less and different-kind neighbours", () => {
+    const gate = evaluatePlateSubjectGate("ruin", window([null, "hull", "flora", null]));
+
+    expect(gate.status).toBe("pass");
+    expect(gate.repeatAt).toBeNull();
+  });
+
+  test("a plate-less render (null subject) SKIPS — the axis never blocks abstract work", () => {
+    const gate = evaluatePlateSubjectGate(null, window(["hull", "flora", null, "ruin"]));
+
+    expect(gate.status).toBe("skipped");
+  });
+
+  test("only the WARN window counts: a repeat beyond 4 findings back is clear", () => {
+    const gate = evaluatePlateSubjectGate(
+      "hull",
+      window([null, "flora", null, "ruin", "hull", "creature"]),
+    );
+
+    expect(gate.status).toBe("pass");
+  });
+
+  test("plate-less neighbours (null) never count as a repeat", () => {
+    const gate = evaluatePlateSubjectGate("hull", window([null, null, null, null]));
+
+    expect(gate.status).toBe("pass");
   });
 });

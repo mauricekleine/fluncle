@@ -819,6 +819,57 @@ describe("oRPC presign_track_video_uploads (POST .../video/uploads)", () => {
     expect(presignUploads).not.toHaveBeenCalled();
   });
 
+  it("signs a PLATES-ONLY set without footage (the plate-lane pre-upload)", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+    presignUploads.mockResolvedValueOnce([
+      { contentType: "image/png", key: "004.7.2I/plate.png", url: "https://r2/put?sig=p" },
+      {
+        contentType: "image/png",
+        key: "004.7.2I/plate.background.png",
+        url: "https://r2/put?sig=b",
+      },
+    ]);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      post("/video/uploads", AGENT_TOKEN, { fields: ["plate", "plate-background"] }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toEqual({
+      logId: "004.7.2I",
+      ok: true,
+      trackId: TRACK_ID,
+      uploads: [
+        {
+          contentType: "image/png",
+          field: "plate",
+          key: "004.7.2I/plate.png",
+          url: "https://r2/put?sig=p",
+        },
+        {
+          contentType: "image/png",
+          field: "plate-background",
+          key: "004.7.2I/plate.background.png",
+          url: "https://r2/put?sig=b",
+        },
+      ],
+    });
+  });
+
+  it("a plate MIXED with a non-plate footage-less field still 400s `no_footage`", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      post("/video/uploads", OPERATOR_TOKEN, { fields: ["plate", "cover"] }),
+    );
+
+    expect(response?.status).toBe(400);
+    expect(((await readJson(response)) as { code: string }).code).toBe("no_footage");
+    expect(presignUploads).not.toHaveBeenCalled();
+  });
+
   it("400s `no_fields` for an empty request", async () => {
     getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
 

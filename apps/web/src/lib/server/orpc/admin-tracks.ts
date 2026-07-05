@@ -664,7 +664,17 @@ export function adminTracksHandlers(os: Implementer) {
           artifacts.push(artifact);
         }
 
-        if (!artifacts.some((artifact) => artifact.field === "footage")) {
+        // The one sanctioned footage-less upload: the plate-lane PRE-upload. Plates
+        // (plate.png + plate.background.png) go up BEFORE the composition exists so
+        // the composition can reference the durable found.fluncle.com URL — the
+        // upload-first order. Any other footage-less set still 400s.
+        const platesOnly =
+          artifacts.length > 0 &&
+          artifacts.every(
+            (artifact) => artifact.field === "plate" || artifact.field === "plate-background",
+          );
+
+        if (!platesOnly && !artifacts.some((artifact) => artifact.field === "footage")) {
           throw new ORPCError("BAD_REQUEST", {
             data: {
               apiCode: "no_footage",

@@ -77,7 +77,7 @@ const REGISTERS = ["abstract", "representational", "framed"] as const;
 export type ShipRegister = (typeof REGISTERS)[number];
 
 const USAGE =
-  "usage: bun src/pipeline/ship.ts <trackId|log-id> [--vehicle <tag>] [--grain <family>] [--model <provider/model>] [--reasoning <level>] [--register <abstract|representational|framed>]";
+  "usage: bun src/pipeline/ship.ts <trackId|log-id> [--vehicle <tag>] [--grain <family>] [--model <provider/model>] [--reasoning <level>] [--register <abstract|representational|framed>] [--plate-subject <kind>]";
 
 export type ShipFlags = {
   trackInput: string;
@@ -86,6 +86,7 @@ export type ShipFlags = {
   model: string | undefined;
   reasoning: string | undefined;
   register: ShipRegister | undefined;
+  plateSubject: string | undefined;
 };
 
 /** Parse + validate ship's CLI flags. Throws (with the usage string) on a bad invocation. */
@@ -94,6 +95,7 @@ export function parseShipArgs(argv: string[]): ShipFlags {
     typeof parseArgs<{
       grain: "string";
       model: "string";
+      "plate-subject": "string";
       reasoning: "string";
       register: "string";
       vehicle: "string";
@@ -103,6 +105,7 @@ export function parseShipArgs(argv: string[]): ShipFlags {
     parsed = parseArgs(argv, {
       grain: "string",
       model: "string",
+      "plate-subject": "string",
       reasoning: "string",
       register: "string",
       vehicle: "string",
@@ -126,6 +129,11 @@ export function parseShipArgs(argv: string[]): ShipFlags {
   return {
     grain: parsed.flags.grain?.trim() || undefined,
     model: parsed.flags.model?.trim() || undefined,
+    // The plate-lane subject KIND (hull / ruin / flora / creature / terrain /
+    // threshold …) — recorded in render.json when a plate render ships, so
+    // judge:diversity can rotate the subject kind the way it rotates everything
+    // else. Free text by design (the kinds are a vocabulary, not an enum).
+    plateSubject: parsed.flags["plate-subject"]?.trim().toLowerCase() || undefined,
     reasoning: parsed.flags.reasoning?.trim() || undefined,
     register: registerRaw as ShipRegister | undefined,
     trackInput,
@@ -262,6 +270,9 @@ export type RenderManifestInput = {
   hasIntentFile: boolean;
   hasPropsFile: boolean;
   model: string;
+  /** The plate-lane subject KIND when a plate render ships (hull / ruin / flora /
+   *  creature / terrain / threshold …); null on abstract/procedural renders. */
+  plateSubject: string | null;
   reasoning: string;
   register: string | null;
   /** The structural family the resolved shader body classifies to (the CHECKED
@@ -286,6 +297,11 @@ export function buildRenderJson(input: RenderManifestInput): Record<string, unkn
     // The authoring AI model: the upload endpoint reads this and stores it as
     // the track's video_model (surfaced in /api/tracks alongside the vehicle).
     model: input.model,
+    // The plate-lane subject-kind ledger entry: judge:diversity reads it (from the
+    // local bundle or the public render.json) and WARNs on a same-kind repeat
+    // inside the recent window, so plate subjects rotate like every other axis.
+    // Null on plate-less renders.
+    plateSubject: input.plateSubject,
     props: input.hasPropsFile ? "props.json" : null,
     // The authoring model's reasoning effort: the upload endpoint reads this and
     // stores it as the track's video_model_reasoning (surfaced in /api/tracks).
@@ -354,6 +370,7 @@ async function main(argv: string[]): Promise<void> {
     compositionSource?: string;
     grain?: string;
     model?: string;
+    plateSubject?: string;
     props?: string;
     reasoning?: string;
     register?: string;
@@ -553,6 +570,7 @@ async function main(argv: string[]): Promise<void> {
         hasIntentFile: existsSync(paths.intentOutPath),
         hasPropsFile: existsSync(paths.propsOutPath),
         model: flags.model ?? renderManifest.model ?? DEFAULT_VIDEO_MODEL,
+        plateSubject: flags.plateSubject ?? renderManifest.plateSubject ?? null,
         reasoning: flags.reasoning ?? renderManifest.reasoning ?? DEFAULT_VIDEO_REASONING,
         register,
         structure,
