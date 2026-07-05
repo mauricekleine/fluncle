@@ -19,7 +19,20 @@
 import { ORPCError } from "@orpc/server";
 import { mixcloudEditUrl, mixcloudSectionFields, mixcloudSections } from "@fluncle/contracts/util";
 import { buildClipCaption } from "../clip-caption";
+import {
+  countDueClipPosts,
+  countRecentPostedInWindow,
+  dueClipPosts,
+  getClipPost,
+  isDripPaused,
+  listClipPosts,
+  setClipPostStatus,
+  setDripPaused,
+  upsertClipPost,
+} from "../clip-social";
 import { createClip, deleteClip, getClip, listClips, markClipCutDone, updateClip } from "../clips";
+import { pushInstagramReel } from "../postiz";
+import { clipDownloadUrls } from "../../studio-clips";
 import { youtubeDescription } from "../../mixtape-chapters";
 import { getMixcloudAccessToken } from "../mixcloud";
 import { finalizeMixtapeDistribution, listMixtapeSocialPosts } from "../mixtape-social";
@@ -39,6 +52,13 @@ import { apiFault, type Implementer, toFault } from "./_shared";
 
 // YouTube's thumbnail cap, ported verbatim from the live finalize route.
 const THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024;
+
+// The clip drip-feed's per-tick + rolling-24h caps (clip-drip-feed RFC §3/§4). At ~1
+// clip/day these never bite; they are the safety backstops. The 24h cap sits well under
+// Meta's ~25/day so the account never trips a rate flag.
+const DRIP_PER_TICK_CAP = 3;
+const DRIP_IG_DAILY_CAP = 10;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Ported verbatim from the live youtube/finalize route: a best-effort custom
 // thumbnail (the wide cover, rendered in-process). A thumbnail failure must not
@@ -606,6 +626,129 @@ export function adminMixtapesHandlers(os: Implementer) {
     }
   });
 
+  // GET /admin/clips/social — admin tier (agent-allowed read). Every clip's IG drip row,
+  // so the library / CLI can show each clip's scheduled/posted/failed state.
+  const listClipPostsHandler = os.list_clip_posts.use(adminAuth).handler(async () => {
+    try {
+      return { ok: true as const, posts: await listClipPosts() };
+    } catch (error) {
+      throw apiFault(error);
+    }
+  });
+
+  // POST /admin/clips/drip — ADMIN tier (agent-allowed), NOT operator: the on-box
+  // `fluncle-clip-drip` cron drives it with the agent token (the `finalize_clip_cut` /
+  // `record_health` precedent — the box holds no Postiz key, so it only TRIGGERS the
+  // Worker, which owns the key). One bounded, idempotent tick of the drip-feed.
+  const dripClipsHandler = os.drip_clips.use(adminAuth).handler(async () => {
+    try {
+      // (a) The kill switch — a paused tick posts nothing (the schedule stays intact).
+      if (await isDripPaused()) {
+        return {
+          attempted: 0,
+          failed: 0,
+          ok: true as const,
+          paused: true,
+          posted: 0,
+          skippedCapped: 0,
+        };
+      }
+
+      // (b) The budget: the per-tick cap AND the rolling-24h IG cap, whichever is smaller.
+      const sinceIso = new Date(Date.now() - DAY_MS).toISOString();
+      const recentPosted = await countRecentPostedInWindow(sinceIso);
+      const remaining24h = Math.max(0, DRIP_IG_DAILY_CAP - recentPosted);
+      const budget = Math.min(DRIP_PER_TICK_CAP, remaining24h);
+
+      const totalDue = await countDueClipPosts();
+      const due = await dueClipPosts({ limit: budget });
+      // What the cap deferred to a later tick (the due backlog beyond this tick's budget).
+      const skippedCapped = Math.max(0, totalDue - due.length);
+
+      let posted = 0;
+      let failed = 0;
+
+      // (c) Post each due, cut clip. A single failure marks its row `failed` (retryable by
+      // the operator rescheduling it) and never aborts the rest of the tick.
+      for (const item of due) {
+        try {
+          // Rebuild the caption fresh at fire time, so a late re-cut / edit is reflected.
+          const built = await buildClipCaption(item.clipId);
+          const { withAudio } = clipDownloadUrls(item.clipId);
+          const { postId } = await pushInstagramReel({
+            caption: built.builtCaption,
+            videoUrl: withAudio,
+          });
+
+          await setClipPostStatus(item.clipId, "posted", { postizId: postId });
+          posted += 1;
+        } catch (error) {
+          console.warn(`drip_clips: failed to post clip ${item.clipId} to Instagram`, error);
+          await setClipPostStatus(item.clipId, "failed");
+          failed += 1;
+        }
+      }
+
+      // TODO(clip-drip capture-back): backfill `posted_url` with the IG permalink from
+      // Postiz's dated `/posts` list (the `resolveSocialUrl` reader, extended for
+      // "instagram"), the way the social-capture sweep does for YouTube/TikTok. Deferred
+      // to a follow-up: the post itself succeeds now; the permalink is a display nicety.
+      return {
+        attempted: due.length,
+        failed,
+        ok: true as const,
+        paused: false,
+        posted,
+        skippedCapped,
+      };
+    } catch (error) {
+      throw apiFault(error);
+    }
+  });
+
+  // PATCH /admin/clips/{clipId}/schedule — operator tier. The operator's schedule control:
+  // set/override a clip's drip slot. Confirms the clip exists (clean 404), re-snapshots the
+  // caption, and re-arms the row (a `failed`/`posted` row can be rescheduled).
+  const setClipScheduleHandler = os.set_clip_schedule
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        await getClip(input.clipId);
+        const built = await buildClipCaption(input.clipId);
+        await upsertClipPost({
+          caption: built.builtCaption,
+          clipId: input.clipId,
+          scheduledFor: input.scheduledFor,
+        });
+
+        const post = await getClipPost(input.clipId);
+
+        if (!post) {
+          throw apiFault(new Error("Failed to read back the scheduled clip post"));
+        }
+
+        return { ok: true as const, post };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  // PUT /admin/clips/drip/state — operator tier. The global kill switch. Pausing halts
+  // every future scheduled post within one tick; resuming continues the drip.
+  const setClipDripHandler = os.set_clip_drip
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        await setDripPaused(input.paused);
+
+        return { ok: true as const, paused: input.paused };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   // POST /admin/recordings/{recordingId}/clips — operator tier. LOOSE body → createClip
   // (recording-scoped under the RFC recording-primitive; the legacy mixtape path is gone).
   const createClipHandler = os.create_clip
@@ -820,12 +963,14 @@ export function adminMixtapesHandlers(os: Implementer) {
   return {
     create_clip: createClipHandler,
     delete_clip: deleteClipHandler,
+    drip_clips: dripClipsHandler,
     finalize_clip_cut: finalizeClipCutHandler,
     finalize_mixtape_mixcloud: finalizeMixtapeMixcloudHandler,
     finalize_mixtape_youtube: finalizeMixtapeYoutubeHandler,
     get_clip_caption: getClipCaptionHandler,
     get_mixtape_social: getMixtapeSocialHandler,
     initiate_mixtape_youtube: initiateMixtapeYoutubeHandler,
+    list_clip_posts: listClipPostsHandler,
     list_clips: listClipsHandler,
     list_mixtapes_admin: listMixtapesAdminHandler,
     presign_clip_upload: presignClipUploadHandler,
@@ -833,6 +978,8 @@ export function adminMixtapesHandlers(os: Implementer) {
     publish_mixtape_youtube: publishMixtapeYoutubeHandler,
     resync_mixtape_mixcloud: resyncMixtapeMixcloudHandler,
     resync_mixtape_youtube: resyncMixtapeYoutubeHandler,
+    set_clip_drip: setClipDripHandler,
+    set_clip_schedule: setClipScheduleHandler,
     set_mixtape_cues: setMixtapeCuesHandler,
     update_clip: updateClipHandler,
     update_mixtape: updateMixtapeHandler,

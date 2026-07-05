@@ -9,6 +9,8 @@
 
 import { randomUUID } from "node:crypto";
 import { type ClipDTO } from "@fluncle/contracts/orpc";
+import { buildClipCaption } from "./clip-caption";
+import { nextDripSlot, upsertClipPost } from "./clip-social";
 import { getDb, typedRow, typedRows } from "./db";
 import { getRecording } from "./recordings";
 import { ApiError } from "./spotify";
@@ -160,6 +162,21 @@ export async function createClip(recordingId: string, input: ClipInput): Promise
             (id, recording_id, in_ms, out_ms, x_offset, caption, status, created_at, updated_at)
           values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
+
+  // Auto-queue the clip onto the Instagram drip-feed (clip-drip-feed RFC §3): every clip
+  // enters the queue at a jittered ~24h after the tail. Best-effort — the clip is already
+  // created, so a scheduling hiccup must not fail the create; the operator can re-schedule
+  // it from /admin/clips, and the drip cron never picks a clip that has no scheduled row.
+  try {
+    const built = await buildClipCaption(id);
+    await upsertClipPost({
+      caption: built.builtCaption,
+      clipId: id,
+      scheduledFor: await nextDripSlot(),
+    });
+  } catch (error) {
+    console.warn(`createClip: failed to auto-queue clip ${id} onto the drip-feed`, error);
+  }
 
   return rowToClip(await getClipRow(id));
 }

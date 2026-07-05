@@ -27,7 +27,11 @@
 
 import {
   type ClipCutFinalizeResponse,
+  type ClipDripStateResponse,
   type ClipPresignResponse,
+  type ClipScheduleResponse,
+  type ClipSocialPost,
+  type ClipSocialPostsResponse,
   type ClipsResponse,
   type ClipDTO,
 } from "@fluncle/contracts";
@@ -35,7 +39,7 @@ import { randomUUID } from "node:crypto";
 import { rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { adminApiGet, adminApiPost } from "../api";
+import { adminApiGet, adminApiPatch, adminApiPost, adminApiPut } from "../api";
 import { CliError } from "../output";
 
 // The public read base for stored artifacts (matches the Worker's FOUND_BASE). The set
@@ -164,6 +168,37 @@ export async function clipsListCommand(
   const response = await adminApiGet<ClipsResponse>(`/api/admin/clips${query ? `?${query}` : ""}`);
 
   return response.clips;
+}
+
+/** Every clip's Instagram drip-feed row (schedule + status). `list` merges these onto the
+ *  clip rows so each clip shows its `scheduled/posted/failed` state. */
+export async function clipPostsListCommand(): Promise<ClipSocialPost[]> {
+  const response = await adminApiGet<ClipSocialPostsResponse>("/api/admin/clips/social");
+
+  return response.posts;
+}
+
+/** Set or override a clip's Instagram drip slot (operator tier). `scheduledFor` is an ISO
+ *  timestamp; the server re-snapshots the caption and re-arms the row. */
+export async function clipScheduleCommand(
+  clipId: string,
+  scheduledFor: string,
+): Promise<ClipSocialPost> {
+  const response = await adminApiPatch<ClipScheduleResponse>(
+    `/api/admin/clips/${encodeURIComponent(clipId)}/schedule`,
+    { scheduledFor },
+  );
+
+  return response.post;
+}
+
+/** Pause or resume the whole clip drip-feed — the kill switch (operator tier). */
+export async function clipDripPauseCommand(paused: boolean): Promise<boolean> {
+  const response = await adminApiPut<ClipDripStateResponse>("/api/admin/clips/drip/state", {
+    paused,
+  });
+
+  return response.paused;
 }
 
 export type ClipCutResult = {

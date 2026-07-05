@@ -56,6 +56,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // operator tier.
   "DELETE /admin/recordings/{recordingId}": "delete_recording",
   "GET /admin/clips": "list_clips",
+  // Every clip's Instagram drip-feed row (schedule + status) — contract-only oRPC (no
+  // TanStack route file). Admin tier (agent-allowed read); the clip library / CLI merge
+  // it onto the clips.
+  "GET /admin/clips/social": "list_clip_posts",
   // The built clip caption (clean copy + the fluncle:// coordinate line(s)) —
   // contract-only oRPC (no TanStack route file). Admin tier (agent-allowed read); the
   // clip-card UI (Wave 3-B) shows + copies it. `get_clip_caption` matches the public
@@ -80,6 +84,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "GET /admin/tracks/{trackId}": "get_track_admin",
   "GET /admin/tracks/{trackId}/social": "list_track_social",
   "PATCH /admin/clips/{clipId}": "update_clip",
+  // The operator's clip-drip schedule control — contract-only oRPC. Operator tier:
+  // set/override a clip's Instagram drip slot.
+  "PATCH /admin/clips/{clipId}/schedule": "set_clip_schedule",
   "PATCH /admin/mixtapes/{mixtapeId}": "update_mixtape",
   // The newsletter edition control plane. Contract-only oRPC — no TanStack route
   // files under /api/admin/newsletter
@@ -92,6 +99,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "PATCH /admin/tracks/{trackId}/social/{platform}": "update_track_social",
   "POST /admin/backfill/discogs": "backfill_discogs",
   "POST /admin/backfill/lastfm": "backfill_lastfm",
+  // The clip drip-feed tick — contract-only oRPC (no TanStack route file). ADMIN tier
+  // (agent-allowed): the on-box `fluncle-clip-drip` cron triggers it with the agent token
+  // (the box holds no Postiz key; the Worker owns it). Kill-switch aware, bounded, idempotent.
+  "POST /admin/clips/drip": "drip_clips",
   // The box's clip-cut finalize (Fluncle Studio Unit C) — contract-only oRPC (no
   // TanStack route file; oRPC owns the path directly, like finalize_track_video). Agent
   // tier: the box marks its own cut done + the handler purges the stale edge renditions.
@@ -163,6 +174,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/tracks/{trackId}/video/requeue": "requeue_video",
   "POST /admin/tracks/{trackId}/video/uploads": "presign_track_video_uploads",
   "POST /admin/youtube/token": "mint_youtube_token",
+  // The clip drip-feed kill switch — contract-only oRPC (no TanStack route file).
+  // Operator tier: pause/resume every future scheduled Instagram post.
+  "PUT /admin/clips/drip/state": "set_clip_drip",
   // The hardened post-publish cue backfill (Fluncle Studio Unit D, panel M1):
   // re-times an existing minted tracklist's start_ms; operator tier.
   "PUT /admin/mixtapes/{mixtapeId}/cues": "set_mixtape_cues",

@@ -217,6 +217,32 @@ export type ClipPresignResponse = Ok<{
 /** `POST /api/admin/clips/:clipId/cut/finalize` response (Unit C): the clip, marked done. */
 export type ClipCutFinalizeResponse = Ok<{ clip: ClipDTO }>;
 
+// ── Clip drip-feed (clip-drip-feed RFC) ──────────────────────────────────────
+// One clip's Instagram drip-feed schedule + status (the `mixtape_clip_social_posts`
+// row). The CLI (`fluncle admin clips list|schedule|drip-pause|drip-resume`) reads these.
+
+/** A clip's Instagram drip-feed state. */
+export type ClipSocialPost = {
+  caption?: string;
+  clipId: string;
+  createdAt: string;
+  platform: string;
+  postedUrl?: string;
+  postizId?: string;
+  scheduledFor: string;
+  status: "failed" | "posted" | "scheduled";
+  updatedAt: string;
+};
+
+/** `GET /api/admin/clips/social` response: every clip's drip-feed row. */
+export type ClipSocialPostsResponse = Ok<{ posts: ClipSocialPost[] }>;
+
+/** `PATCH /api/admin/clips/:clipId/schedule` response: the (re)scheduled clip post. */
+export type ClipScheduleResponse = Ok<{ post: ClipSocialPost }>;
+
+/** `PUT /api/admin/clips/drip/state` response: the resulting paused state. */
+export type ClipDripStateResponse = Ok<{ paused: boolean }>;
+
 // ── Recordings (RFC recording-primitive, Design B) ───────────────────────────
 // A recording is a captured DJ set that is NOT (yet) a published mixtape — it OWNS its
 // R2 key, carries an optional cue tracklist, and is coordinate-less until `promote`.
