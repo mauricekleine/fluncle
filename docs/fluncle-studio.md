@@ -4,7 +4,7 @@ The set → clip pipeline. This doc covers the shipped **set-video staging** (Un
 
 ## The recording primitive — clip any captured set without publishing it
 
-A **recording** is a captured DJ set that is NOT (yet) a published mixtape (the RFC recording-primitive, Design B — `docs/recording-primitive-rfc.md`). It exists so the operator can salvage filmed tidbits from a set into Instagram/TikTok clips **without minting a scarce Log-ID coordinate**: mixtape coordinates are reserved exclusively for full, finished, published mixtapes, so an un-promoted recording carries **no** `fluncle://` coordinate, and its clips point home to `fluncle.com`.
+A **recording** is a captured DJ set that is NOT (yet) a published mixtape. It exists so the operator can salvage filmed tidbits from a set into Instagram/TikTok clips **without minting a scarce Log-ID coordinate**: mixtape coordinates are reserved exclusively for full, finished, published mixtapes, so an un-promoted recording carries **no** `fluncle://` coordinate of its own — a clip instead credits the finding(s) it plays (or the promoted mixtape's `.F.`) in its caption.
 
 - A recording **owns its R2 key** (`recordings/<id>/set.mp4` in the public `fluncle-videos` bucket — accept-obscurity, no private bucket), carries an optional cue `tracklistJson` (`[{ id, artists, title, startMs? }]`), and is coordinate-less.
 - **Create + upload is CLI** (the multi-GB rendition can't proxy through the Worker): `fluncle admin recordings create --video <set>.mov` mints the row and streams the set video straight to R2 via the multipart presign (`presign_recording_upload`). See `fluncle admin recordings …` (list/show/update/delete/promote).
