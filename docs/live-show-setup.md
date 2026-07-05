@@ -42,6 +42,7 @@ The M-Track **is** the splitter — no Y-cables. It line-captures the FLX4 maste
 - **M-Track MAIN OUTS (RCA) → the BX5 monitor speakers**, via the second RCA→TS pair.
 - **M-Track USB-B → the M5.** In macOS the device shows up as a 48 kHz stereo input. It caps at exactly 48 kHz, which is the chain rate — nothing to set, nothing to drift.
 - To buy if missing: one RCA→(TS or XLR, to match the speakers' inputs) pair and a USB-B cable (~€10–15). The existing FLX4→M-Track RCA→TS pair covers the input side.
+- **A/B verified (2026-07-05):** FLX4 MASTER OUT straight to the monitors vs. the M-Track inline — no audible difference. The inline M-Track is the standing topology: it earns its place as the splitter and the 48 kHz USB capture at no cost to what the room hears.
 
 ### 2. OBS on the M5
 
@@ -72,6 +73,15 @@ Chromium carries **no Sparkle auto-updater** — it stays exactly the build you 
 - **The show display** is whatever the glass takes over: the office rig is a small **Arzopa portable display** hung off the M5, filmed by an overhead **Continuity Camera iPhone** for the vertical social clips, while OBS streams the composited feed to Twitch. A real-venue big screen is the same HDMI port on the M5 — the architecture already supports it, it is not a separate setup.
 - **Cameras** pair with the machine running OBS (the M5). The overhead Continuity iPhone survives a full set today; wired USB is the documented fallback if a rehearsal ever shows drops. If you keep two cameras, USB controller bandwidth is a rehearsal check.
 
+### 5. Terminal permissions (one-time — macOS gates two of `run show`'s pre-flight moves)
+
+`run show` runs inside your terminal, so macOS attributes the permissions it needs to that terminal app (Terminal, iTerm, or whatever hosts the session). Grant both once, or the first live run holds on them:
+
+- **Microphone** — the audio meter-bounce captures 3 s of the input to read its level (via `ffmpeg`/`avfoundation`). The first capture should trigger the system prompt; if you dismissed it, grant it by hand in **System Settings → Privacy & Security → Microphone → [your terminal]**. Without it the capture reads dead even when the deck is playing.
+- **Accessibility** — the show places the glass window on the show display and fullscreens it with an AppleScript (System Events). macOS gates window control behind Accessibility; when it is missing, `run show` prints a `[dark]` line naming it (`couldn't drive the window (grant Accessibility to your terminal)`). Grant it in **System Settings → Privacy & Security → Accessibility → [your terminal]**, then re-run.
+
+Both reset after some macOS updates (like screen recording — checklist step 6), so the permission dry-run in the dress rehearsal covers them.
+
 ### Scene composition — the optical shot is the signature
 
 The signature look is deliberate: the overhead iPhone films the **physical scene** — the Arzopa glowing with the glass, the FLX4, your hands on it. The glass reaches the stream **optically**, a screen filmed by a camera, and that is the point: the shot picks up the room, the moiré, the glow spilling onto the deck — the Light-Years Rule happening in real life, the journey arriving lossy because of how it travelled. This shot is the default program, and it is where the vertical social crops come from.
@@ -88,18 +98,18 @@ The rehearsal is where you feel out the cuts — how long the glass scene holds 
 Canonical invocation (this is a **local orchestration**, not a `fluncle` CLI command — see [naming-conventions.md §7](./naming-conventions.md#7-local-exec-ops-the-registrys-non-http-tail); the registry op is `run_show`):
 
 ```bash
-bun run --cwd packages/live show --plan <logId>
+bun run --cwd packages/live show --plan <handle-or-logId>
 ```
 
-It brings the rig up in order and holds it up until you stand it down:
+`--plan` takes a **plan handle** (a galaxy-slug like `dark-aurora-roller`, the ordered tracklist you built at `/admin/plans`) **or** a mixtape logId (`019.F.1A`). The plan handle is the normal live flow — a plan exists before the set is played, which is exactly when the glass needs it; the bridge resolves the handle to its ordered findings and fingerprints their previews. It brings the rig up in order and holds it up until you stand it down:
 
-1. **Pre-flight** — reads the automatable checks and prints each as a deadpan status line (`[clear]` verified · `[hold]` a blocker · `[dark]` unreadable here): the **audio meter-bounce** (captures the M-Track input for 3 s and confirms the RMS actually moved — a dead route or a silent deck holds the launch), **48 kHz** on the input where the system will tell us, **disk headroom** (~40 GB floor), and **port availability** (4173 + 4180 free). A `[hold]` stops the launch unless you pass `--force`.
+1. **Pre-flight** — reads the automatable checks and prints each as a deadpan status line (`[clear]` verified · `[hold]` a blocker · `[dark]` unreadable here): the **audio meter-bounce** (captures the M-Track input for 3 s and reads its level — it tells a dead route, a connected-but-silent deck, and a live signal apart, and either of the first two holds the launch), **48 kHz** on the input where the system will tell us (a device off 48 kHz is held **by name**), **disk headroom** (~40 GB floor), and **port availability** (4173 + 4180 free). A `[hold]` stops the launch unless you pass `--force`.
 2. **The bridge** — starts it, waits for `/plan` to answer and the state socket to open.
 3. **The glass** — starts the server, waits for the page.
 4. **Chromium on the show display** — launches the pinned Chromium `--app` fullscreen with the RFC §3 flags (no backgrounding/throttling of an occluded show, its own profile), runs `caffeinate -dis` alongside to hold the machine awake, then **places the window on the show display** (the last display by default; `--display-index N` picks another) and fullscreens it. It then **prints a placement-verification prompt** and waits: press **Enter** to confirm the glass is on the show display, **`p`** to re-place it (display IDs reorder on reconnect — this is the re-place path the RFC demands), **`p N`** to re-place on display N, or **`q`** to stand the rig down.
 5. **OBS is yours** — the orchestrator hands OBS to you (arm the capture + record; do the video meter-bounce). `Ctrl-C` (SIGINT) tears the whole rig down: children killed, `caffeinate` released.
 
-Flags: `--plan <logId>` loads a planned set so the bridge can fingerprint its tracklist; `--one-mac` the fallback topology; `--display-index N` the show display; `--audio-index N` the avfoundation input to meter; `--check-only` runs pre-flight and launches nothing; `--no-browser` raises the servers without Chromium; `--force` departs past a holding check. `--help` prints them all.
+Flags: `--plan <handle-or-logId>` loads a planned set — a plan handle (the live flow) or a mixtape logId — so the bridge can fingerprint its tracklist; `--one-mac` the fallback topology; `--display-index N` the show display; `--audio-index N` the avfoundation input to meter; `--check-only` runs pre-flight and launches nothing; `--no-browser` raises the servers without Chromium; `--force` departs past a holding check. `--help` prints them all.
 
 ## The pre-show checklist (every set — ordered, catastrophic-first)
 

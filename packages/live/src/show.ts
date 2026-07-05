@@ -119,7 +119,8 @@ Chromium fullscreen on the show display, with caffeinate holding the machine
 awake. SIGINT (Ctrl-C) tears it all back down.
 
 Flags
-  --plan <logId>        load a planned set; the bridge fingerprints its tracklist
+  --plan <handle|logId> load a plan (a galaxy-slug handle — the normal live flow — or a
+                        mixtape logId); the bridge fingerprints its tracklist
   --one-mac             the fallback topology (mixing + streaming on one machine)
   --display-index <N>   which display the glass takes (default: the last one)
   --audio-index <N>     the avfoundation audio input to meter (default: auto — prefers M-Track/USB audio, never an Aggregate)
@@ -237,10 +238,14 @@ async function checkAudio(audioIndex: number): Promise<CheckResult> {
       audioDevices[0];
     audioIndex = Number(pick?.[1] ?? 0);
   }
-  // Capture ~3s and read the RMS. A live input clocks frames (silence reads a
-  // finite low dB); a dead route delivers NO frames, so astats never summarizes
-  // and the capture wedges — the SIGKILL-on-timeout in run() catches that and
-  // we read it as a dead route, not a hang.
+  // Capture ~3s and read the level with volumedetect: it prints ONE easy-to-parse summary
+  // (`mean_volume: X dB` / `max_volume: X dB`) at EOF. The old astats parse looked for
+  // `Overall.RMS_level=` — the METADATA-print format, which `astats=metadata=1` attaches to
+  // frames but never PRINTS without an `ametadata` filter — so it always read zero matches
+  // and reported [dark] "meter unread" even when frames flowed (the first-set symptom). A
+  // live input clocks frames (silence still summarizes, ≈ −91 dB); a dead route delivers NO
+  // frames, so volumedetect never summarizes and the capture wedges — the SIGKILL-on-timeout
+  // in run() catches that, and interpretMeter reads it as a dead route, not a hang.
   const cap = await run(
     [
       "ffmpeg",
@@ -252,24 +257,54 @@ async function checkAudio(audioIndex: number): Promise<CheckResult> {
       "-t",
       "3",
       "-af",
-      "astats=metadata=1:reset=0",
+      "volumedetect",
       "-f",
       "null",
       "-",
     ],
     7_000,
   );
-  const rms = [...cap.stderr.matchAll(/Overall\.RMS_level=(-?\d+(?:\.\d+)?|-?inf)/g)].map(
-    (m) => m[1],
-  );
-  if (rms.length === 0) {
+  return interpretMeter(cap, audioIndex);
+}
+
+/** dB at or below which a capture is "silent" — a connected-but-not-playing route. */
+const METER_SILENCE_FLOOR_DB = -70;
+
+/**
+ * Read the meter verdict from an ffmpeg `volumedetect` capture. Pure over the captured
+ * stderr + the timeout flag, so it unit-tests against real fixture stderr. Four outcomes,
+ * each its OWN message (the debrief wanted these disentangled):
+ *   - a level above the floor              → [clear] route alive AND carrying signal;
+ *   - a level at/below the floor (≈ −91 dB) → [hold] route alive, signal silent (is music
+ *     playing?) — distinct from a dead route;
+ *   - no summary + the capture wedged      → [hold] dead route, no frames in 3s;
+ *   - no summary, capture returned         → [dark] can't-open (device error) or unread.
+ */
+export function interpretMeter(
+  cap: { stderr: string; timedOut: boolean },
+  audioIndex: number,
+): CheckResult {
+  const parseDb = (m: RegExpMatchArray | null): number | null => {
+    if (!m) {
+      return null;
+    }
+    const raw = (m[1] ?? "").toLowerCase();
+    if (raw === "-inf" || raw === "nan") {
+      return -Infinity;
+    }
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  };
+  const mean = parseDb(cap.stderr.match(/mean_volume:\s*(-?\d+(?:\.\d+)?|-?inf|nan)\s*dB/i));
+  const max = parseDb(cap.stderr.match(/max_volume:\s*(-?\d+(?:\.\d+)?|-?inf|nan)\s*dB/i));
+  if (mean === null) {
     if (cap.timedOut) {
       return {
-        note: `input :${audioIndex} delivered no meter in 3s — dead route (nothing playing, or the wrong input; route the master through PC MASTER OUT)`,
+        note: `input :${audioIndex} delivered no meter in 3s — dead route (nothing playing, or the wrong input; route the master through the M-Track / PC MASTER OUT)`,
         status: "hold",
       };
     }
-    if (/Input\/output error|Error opening/i.test(cap.stderr)) {
+    if (/Input\/output error|Error opening|Invalid device/i.test(cap.stderr)) {
       return {
         note: `couldn't open input :${audioIndex} — pick another with --audio-index N`,
         status: "dark",
@@ -280,38 +315,80 @@ async function checkAudio(audioIndex: number): Promise<CheckResult> {
       status: "dark",
     };
   }
-  const bounced = rms.some((v) => v !== "-inf" && Number(v) > -70);
-  return bounced
-    ? { note: `input :${audioIndex} bounced (RMS ${rms.join(", ")} dB)`, status: "clear" }
-    : {
-        note: `input :${audioIndex} sat silent — the meter never bounced; play a track and re-check`,
-        status: "hold",
-      };
+  if (mean > METER_SILENCE_FLOOR_DB) {
+    const peak = max !== null && Number.isFinite(max) ? `, peak ${max} dB` : "";
+    return { note: `input :${audioIndex} bounced (mean ${mean} dB${peak})`, status: "clear" };
+  }
+  return {
+    note: `input :${audioIndex} — route alive, signal silent (mean ${mean === -Infinity ? "−inf" : mean} dB); is music playing?`,
+    status: "hold",
+  };
 }
 
-/** Best-effort: the input device is running at 48 kHz where the system will tell us. */
+/** One audio device + its current sample rate, from `system_profiler -json SPAudioDataType`. */
+export type AudioDevice = { name: string; sampleRate: number };
+
+/**
+ * Parse `system_profiler -json SPAudioDataType` into { name, sampleRate } pairs — the
+ * device name lives at `SPAudioDataType[]._items[]._name`, its rate at
+ * `coreaudio_device_srate`. Pure, so the 44.1 kHz-offender NAMING is unit-tested against a
+ * fixture. Tolerant of a shapeless / non-JSON body (returns []), so a parse miss degrades
+ * to "unread" rather than throwing.
+ */
+export function parseAudioDevices(json: string): AudioDevice[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  const groups = (parsed as { SPAudioDataType?: unknown }).SPAudioDataType;
+  if (!Array.isArray(groups)) {
+    return [];
+  }
+  const out: AudioDevice[] = [];
+  for (const group of groups) {
+    const items = (group as { _items?: unknown })._items;
+    if (!Array.isArray(items)) {
+      continue;
+    }
+    for (const item of items) {
+      const rec = item as { _name?: unknown; coreaudio_device_srate?: unknown };
+      const name = typeof rec._name === "string" ? rec._name : null;
+      const rate = Number(rec.coreaudio_device_srate);
+      if (name !== null && Number.isFinite(rate)) {
+        out.push({ name, sampleRate: rate });
+      }
+    }
+  }
+  return out;
+}
+
+/** Best-effort: every audio device is at 48 kHz; NAME the offenders so the hold is actionable. */
 async function checkSampleRate(): Promise<CheckResult> {
-  const prof = await run(["system_profiler", "SPAudioDataType"]);
+  const prof = await run(["system_profiler", "-json", "SPAudioDataType"]);
   if (prof.stderr.includes("no system_profiler aboard") || prof.stdout.length === 0) {
     return {
       note: "sample rate unread — confirm 48 kHz by hand (Audio MIDI Setup)",
       status: "dark",
     };
   }
-  const rates = [...prof.stdout.matchAll(/Current SampleRate:\s*(\d+)/g)].map((m) => Number(m[1]));
-  if (rates.length === 0) {
+  const devices = parseAudioDevices(prof.stdout);
+  if (devices.length === 0) {
     return {
       note: "sample rate unread — confirm 48 kHz by hand (Audio MIDI Setup)",
       status: "dark",
     };
   }
-  const off = rates.filter((r) => r !== REQUIRED_SAMPLE_RATE);
-  return off.length === 0
-    ? { note: `every input reads ${REQUIRED_SAMPLE_RATE / 1000} kHz`, status: "clear" }
-    : {
-        note: `a device is off 48 kHz (${off.join(", ")} Hz) — resample crackle risk`,
-        status: "hold",
-      };
+  const off = devices.filter((d) => d.sampleRate !== REQUIRED_SAMPLE_RATE);
+  if (off.length === 0) {
+    return { note: `every device reads ${REQUIRED_SAMPLE_RATE / 1000} kHz`, status: "clear" };
+  }
+  const named = off.map((d) => `${d.name} @${d.sampleRate}`).join(", ");
+  return {
+    note: `${named} — set to ${REQUIRED_SAMPLE_RATE} in Audio MIDI Setup (resample crackle risk)`,
+    status: "hold",
+  };
 }
 
 /** Disk headroom on the volume holding this checkout (the recording lands near here). */
@@ -753,4 +830,8 @@ async function main(): Promise<void> {
   });
 }
 
-void main();
+// Only orchestrate when run as the entrypoint — importing this module (the pure-parser
+// tests do) must NOT spawn Chromium / caffeinate / the servers.
+if (import.meta.main) {
+  void main();
+}
