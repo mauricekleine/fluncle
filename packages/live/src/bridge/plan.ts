@@ -22,8 +22,17 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { type PlanEntry } from "../contract";
-import { extractScene } from "../glass/scene-extract.ts";
+import { type PlanEntry, type PlanTexture } from "../contract";
+import {
+  extractScene,
+  resolveSceneTextureUrls,
+  type SceneTexture,
+} from "../glass/scene-extract.ts";
+
+/** Narrow resolved scene samplers to the contract's PlanTexture (url guaranteed present). */
+function toPlanTextures(textures: SceneTexture[]): PlanTexture[] {
+  return textures.flatMap((t) => (t.url ? [{ name: t.name, source: t.source, url: t.url }] : []));
+}
 
 const WEB_BASE = process.env.FLUNCLE_WEB_BASE ?? "https://www.fluncle.com";
 const FOUND_BASE = process.env.FLUNCLE_FOUND_BASE ?? "https://found.fluncle.com";
@@ -275,13 +284,21 @@ async function enrich(member: PlanMember): Promise<PlanEntry> {
   };
 
   // props.json -> palette + seed + Found date (+ authoritative title/artists/duration).
+  // artworkUrl feeds any `source: "artwork"` texture sampler a composition declares.
+  let artworkUrl: string | null = null;
   try {
     const res = await fetch(`${FOUND_BASE}/${member.logId}/props.json`);
     if (res.ok) {
       const p = (await res.json()) as {
         palette?: PlanEntry["palette"];
         seed?: number;
-        track?: { title?: string; artists?: string[]; discoveredAt?: string; durationMs?: number };
+        track?: {
+          title?: string;
+          artists?: string[];
+          discoveredAt?: string;
+          durationMs?: number;
+          artworkUrl?: string;
+        };
       };
       entry.palette = p.palette ?? entry.palette;
       entry.seed = p.seed ?? entry.seed;
@@ -289,23 +306,36 @@ async function enrich(member: PlanMember): Promise<PlanEntry> {
       entry.artists = p.track?.artists ?? entry.artists;
       entry.foundAt = p.track?.discoveredAt ?? entry.foundAt;
       entry.durationMs = p.track?.durationMs ?? entry.durationMs;
+      artworkUrl = p.track?.artworkUrl ?? null;
     }
   } catch {
     // props.json missing -> canon palette at render time (the glass falls back).
   }
 
-  // composition.tsx -> the replay-ready scene (resolved layers + classified uniforms).
+  // composition.tsx -> the replay-ready scene (resolved layers + classified uniforms +
+  // plate/artwork samplers resolved to concrete R2 URLs the glass loads).
   try {
     const res = await fetch(`${FOUND_BASE}/${member.logId}/composition.tsx`);
     if (res.ok) {
-      const scene = extractScene(await res.text());
+      const scene = resolveSceneTextureUrls(
+        extractScene(await res.text()),
+        member.logId,
+        artworkUrl,
+        FOUND_BASE,
+      );
       entry.replay = {
         bloom: scene.bloom,
         body: scene.body,
         customUniforms: scene.customUniforms,
-        layers: scene.layers,
+        layers: scene.layers.map((layer) => ({
+          blend: layer.blend,
+          body: layer.body,
+          customUniforms: layer.customUniforms,
+          textures: toPlanTextures(layer.textures),
+        })),
         reason: scene.reason,
         replayable: scene.replayable,
+        textures: toPlanTextures(scene.textures),
       };
     } else {
       entry.replay = {

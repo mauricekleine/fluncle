@@ -170,6 +170,9 @@ let silentSince = 0;
 let replayEnabled = true;
 let replayActive = false;
 let replayFade = 0;
+// Monotonic arrival id: a plate's async texture load only applies if it is still the
+// current arrival (a newer arrive() supersedes an in-flight load — no stale reveal).
+let arrivalToken = 0;
 let arriveMs = 0;
 let replayExpectedLenMs = 300000;
 let bloomEnabled = true;
@@ -238,35 +241,76 @@ function arrive(idx: number): void {
   traceLastMs = 0;
   replayExpectedLenMs = e.durationMs || 300000;
 
+  const token = ++arrivalToken;
   const rp = e.replay;
   const vehScene = vehicleToScene(e.videoVehicle);
-  let ok = false;
+
+  // Fall to the default vehicle (also the "holding" look while a plate loads): drop any
+  // replay, pick the tag-mapped base, and narrate why. NEVER a black show.
+  const toDefault = (suffix: string): void => {
+    replayActive = false;
+    pipeline.disposeReplay();
+    currentBloom = null;
+    sceneTarget = vehScene >= 0 ? vehScene : hashStr(e.logId) % 3;
+    worldStatus = `world: default[${vehName(vehScene)}]${suffix}`;
+  };
+  // Reveal the replay: the crossfade rail eases it in (replayFade) so a plate whose
+  // textures just finished loading fades up rather than snapping.
+  const activateReplay = (): void => {
+    replayActive = true;
+    currentBloom = rp?.bloom ?? null;
+    sceneTarget = hashStr(e.logId) % 3;
+    const layers = rp && rp.layers.length > 1 ? `${rp.layers.length} layers · ` : "";
+    const tex = rp && rp.textures.length > 0 ? `${rp.textures.length} tex · ` : "";
+    worldStatus = `world: replayed (own shader) · ${layers}${tex}${rp?.customUniforms.length ?? 0} custom u`;
+    updateHud();
+  };
+
   if (replayEnabled && rp?.replayable && rp.layers.length > 0) {
     try {
       pipeline.setReplay(rp.layers);
-      replayActive = true;
-      ok = true;
-      const layers = rp.layers.length > 1 ? `${rp.layers.length} layers · ` : "";
-      worldStatus = `world: replayed (own shader) · ${layers}${rp.customUniforms.length} custom u`;
     } catch (ex) {
       err("replay compile [" + e.logId + "]: " + (ex as Error).message);
+      toDefault(" (replay FAILED to compile — free fallback)");
+      showPlate(e);
+      updateHud();
+      return;
+    }
+    if (pipeline.replayNeedsTextures) {
+      // Hold the default vehicle until the plate images are resident, then reveal.
       replayActive = false;
-      pipeline.disposeReplay();
-      worldStatus = `world: default[${vehName(vehScene)}] (replay FAILED to compile — free fallback)`;
+      currentBloom = null;
+      sceneTarget = vehScene >= 0 ? vehScene : hashStr(e.logId) % 3;
+      worldStatus = `world: loading plate… (${rp.textures.length} tex)`;
+      pipeline
+        .loadReplayTextures()
+        .then(() => {
+          if (token === arrivalToken) {
+            activateReplay();
+          }
+        })
+        .catch((ex: unknown) => {
+          if (token !== arrivalToken) {
+            return;
+          }
+          err("plate load [" + e.logId + "]: " + String(ex));
+          toDefault(" (plate textures unavailable — free fallback)");
+          updateHud();
+        });
+    } else {
+      activateReplay();
     }
   } else {
-    replayActive = false;
-    pipeline.disposeReplay();
-    worldStatus =
-      `world: default[${vehName(vehScene)}]` +
-      (rp?.replayable ? "" : ` (reason: ${rp?.reason || "n/a"})`);
+    toDefault(rp?.replayable ? "" : ` (reason: ${rp?.reason || "n/a"})`);
   }
-  currentBloom = ok ? (rp.bloom ?? null) : null;
-  sceneTarget = replayActive
-    ? hashStr(e.logId) % 3
-    : vehScene >= 0
-      ? vehScene
-      : hashStr(e.logId) % 3;
+
+  // Warm the LRU cache with the NEXT finding's plate (cheap; instant reveal on advance).
+  const next = PLAN[(pointer + 1) % PLAN.length];
+  const nextUrls = (next?.replay?.textures ?? []).flatMap((t) => (t.url ? [t.url] : []));
+  if (nextUrls.length > 0) {
+    pipeline.prefetchTextures(nextUrls);
+  }
+
   showPlate(e);
   updateHud();
 }
@@ -371,6 +415,7 @@ const HANDLERS: Record<KeybindingId, (ev: KeyboardEvent) => void> = {
     sceneTarget = v;
     autoMorph = false;
     replayActive = false;
+    arrivalToken++; // cancel any in-flight plate load so it can't reveal over the manual pick
     pipeline.disposeReplay();
     worldStatus = "world: default[" + vehName(v) + "] (manual vehicle)";
     updateHud();

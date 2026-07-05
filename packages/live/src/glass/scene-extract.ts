@@ -11,6 +11,10 @@
 //     a position uniform with a matching `…Vel` sibling is classified as a
 //     `velocityPos` (JS-integrated at frame rate) + its `velocity` — no longer a
 //     hard "not replayable" (the seed rejected all vec2/Vel/glide motion).
+import {
+  type SceneTextureSource,
+  textureSourceForName,
+} from "../../../video/src/pipeline/scene.ts";
 import { GLSL } from "../../../video/src/remotion/journey/glsl.ts";
 import { type BloomConfig } from "./glsl-runtime.ts";
 import { HEADER_UNIFORMS } from "./glsl-runtime.ts";
@@ -30,12 +34,28 @@ export type CustomU = {
   params?: Record<string, unknown>;
 };
 
+/**
+ * An image sampler a plate/artwork composition declares. The NAME + SOURCE are pure
+ * extraction (the sampler-name convention, `textureSourceForName`); the `url` is filled
+ * by the plan enrichment (it needs the finding's logId), so a replay layer carries a
+ * concrete, crossOrigin-loadable URL the glass fetches + binds. Empty for the abstract
+ * (textureless) vehicles — those replay exactly as before.
+ */
+export type SceneTexture = {
+  name: string;
+  source: SceneTextureSource;
+  /** Resolved https URL — set by the enrichment; pure extraction leaves it undefined. */
+  url?: string;
+};
+
 export type SceneLayer = {
   /** The resolved fragment body (GLSL.* deps inlined, ready for REPLAY_HEADER). */
   body: string;
   customUniforms: CustomU[];
   /** First layer paints opaque; later layers alpha-composite over (multi-layer). */
   blend: "opaque" | "over";
+  /** Image samplers THIS layer's body reads (plate/plate-background/artwork). */
+  textures: SceneTexture[];
 };
 
 export type Scene = {
@@ -48,6 +68,8 @@ export type Scene = {
   customUniforms: CustomU[];
   /** Bloom config read from the composition's ShaderLayer `bloom` prop, if present. */
   bloom?: BloomConfig;
+  /** Every image sampler the scene declares, unioned across layers (the boot-table count). */
+  textures: SceneTexture[];
 };
 
 function audioFieldOf(name: string, driver: string | null): string {
@@ -201,11 +223,123 @@ function resolveGlsl(raw: string): { body: string } | { bad: string } {
   return bad ? { bad } : { body };
 }
 
+/** The public read base for stored bundle artifacts — where the plate textures live. */
+const FOUND_BASE = "https://found.fluncle.com";
+
+/** Slice a balanced `{ … }` region starting at/after `from` (braces included), or null. */
+function balancedBraces(text: string, from: number): string | null {
+  const start = text.indexOf("{", from);
+  if (start < 0) {
+    return null;
+  }
+  let depth = 0;
+  for (let i = start; i < text.length; i++) {
+    if (text[i] === "{") {
+      depth += 1;
+    } else if (text[i] === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(start, i + 1);
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * The sampler names + SOURCES a composition declares via `textures={{ name: expr, … }}`
+ * on its ShaderLayer(s) — the SAME prop the offline emitter reads. The prop VALUES are
+ * runtime expressions (a signed URL, `track.artworkUrl`), so the NAME is the contract:
+ * `textureSourceForName` maps `u_plate`/`u_plateBackground` to the plate-lane files and
+ * every other name to the finding's artwork. Reads ALL props (a multi-layer comp carries
+ * one per ShaderLayer); a texture is attached to the LAYER whose body samples it.
+ */
+export function extractTextureSources(src: string): Map<string, SceneTextureSource> {
+  const out = new Map<string, SceneTextureSource>();
+  const needle = "textures=";
+  let idx = 0;
+  while ((idx = src.indexOf(needle, idx)) !== -1) {
+    const outer = balancedBraces(src, idx + needle.length); // the JSX expr `{{ … }}`
+    idx += needle.length;
+    if (!outer) {
+      continue;
+    }
+    const obj = balancedBraces(outer, 1); // the object literal `{ … }`
+    if (!obj) {
+      continue;
+    }
+    const keyRe = /([A-Za-z_$][\w$]*)\s*:/g;
+    let m: RegExpExecArray | null;
+    while ((m = keyRe.exec(obj.slice(1, -1))) !== null) {
+      out.set(m[1], textureSourceForName(m[1]));
+    }
+  }
+  return out;
+}
+
+/** True when a resolved body references the sampler `name` (a `texture2D(name, …)` read). */
+function bodyReferences(body: string, name: string): boolean {
+  return new RegExp(`\\b${name.replace(/\$/g, "\\$")}\\b`).test(body);
+}
+
+/**
+ * Resolve a declared texture SOURCE to a concrete, crossOrigin-loadable URL for a finding.
+ * Pure + unit-tested: plate/plate-background map to the finding bundle's durable R2 keys
+ * (the same files the composition rendered from); artwork binds the finding's `artworkUrl`.
+ * Returns undefined when nothing resolves (an artwork sampler with no known cover) — the
+ * caller drops that entry and the glass falls back rather than binding a broken image.
+ */
+export function resolveTextureUrl(
+  source: SceneTextureSource,
+  logId: string,
+  artworkUrl?: string | null,
+  base: string = FOUND_BASE,
+): string | undefined {
+  if (source === "plate") {
+    return `${base}/${logId}/plate.png`;
+  }
+  if (source === "plate-background") {
+    return `${base}/${logId}/plate.background.png`;
+  }
+  return artworkUrl ?? undefined;
+}
+
+/**
+ * Fill every declared texture's `url` for a finding (the pure half of the enrichment):
+ * resolve each layer's + the scene-level roster's samplers to concrete R2/artwork URLs,
+ * dropping any that cannot resolve (an artwork sampler with no cover). A non-replayable or
+ * textureless scene passes through untouched. Returns a NEW scene (no mutation), so the
+ * bridge + the glass share one resolver instead of a lagging duplicate.
+ */
+export function resolveSceneTextureUrls(
+  scene: Scene,
+  logId: string,
+  artworkUrl?: string | null,
+  base?: string,
+): Scene {
+  if (!scene.replayable) {
+    return scene;
+  }
+  const fill = (textures: SceneTexture[]): SceneTexture[] =>
+    textures
+      .map((t) => ({ ...t, url: resolveTextureUrl(t.source, logId, artworkUrl, base) }))
+      .filter((t) => t.url !== undefined);
+  return {
+    ...scene,
+    layers: scene.layers.map((layer) => ({ ...layer, textures: fill(layer.textures) })),
+    textures: fill(scene.textures),
+  };
+}
+
 // Classify a resolved body's custom uniforms; returns null (with a reason) if the
-// body carries a motion/texture uniform the live host cannot re-drive.
+// body carries a motion/texture uniform the live host cannot re-drive. `textured` is
+// the set of sampler names the composition supplies via its `textures=` prop — a
+// body-declared `sampler2D` covered by that set is a real, loadable texture (not a
+// rejection); one WITHOUT a source has no live upload path and still bails.
 function classifyLayer(
   raw: string,
   src: string,
+  textured: ReadonlySet<string>,
 ): { customUniforms: CustomU[] } | { reason: string } {
   // 1. gather all custom uniform declarations (name -> type).
   const decls: Array<{ name: string; type: string }> = [];
@@ -223,8 +357,12 @@ function classifyLayer(
 
   const customs: CustomU[] = [];
   for (const { name, type } of decls) {
-    // A texture the live host has no upload path for -> not replayable.
+    // A sampler the composition supplies via `textures=` is a real, loadable image (the
+    // glass fetches + binds it); one with no source has no live upload path -> bail.
     if (type === "sampler2D") {
+      if (textured.has(name)) {
+        continue;
+      }
       return { reason: `texture uniform ${name} (no live upload path)` };
     }
     // Velocity pair: a position with a matching `…Vel` sibling is JS-integrated.
@@ -272,6 +410,7 @@ const NOT_REPLAYABLE = (reason: string): Scene => ({
   layers: [],
   reason,
   replayable: false,
+  textures: [],
 });
 
 export function extractScene(src: string): Scene {
@@ -306,6 +445,9 @@ export function extractScene(src: string): Scene {
   }
 
   const bloom = extractBloom(src);
+  // The sampler names + sources the composition declares via `textures=` (the plate lane).
+  const textureSources = extractTextureSources(src);
+  const textureNames = new Set(textureSources.keys());
   const layers: SceneLayer[] = [];
   for (let i = 0; i < rawBodies.length; i++) {
     const raw = rawBodies[i];
@@ -313,15 +455,37 @@ export function extractScene(src: string): Scene {
     if ("bad" in resolved) {
       return NOT_REPLAYABLE(`non-GLSL interpolation: ${resolved.bad}`);
     }
-    const classified = classifyLayer(raw, src);
+    const classified = classifyLayer(raw, src, textureNames);
     if ("reason" in classified) {
       return NOT_REPLAYABLE(classified.reason);
+    }
+    // Attach each declared texture to the layer whose resolved body samples it (a
+    // multi-layer comp splits its plate/artwork samplers across layers by reference).
+    const textures: SceneTexture[] = [];
+    for (const [name, source] of textureSources) {
+      if (bodyReferences(resolved.body, name)) {
+        textures.push({ name, source });
+      }
     }
     layers.push({
       blend: i === 0 ? "opaque" : "over",
       body: resolved.body,
       customUniforms: classified.customUniforms,
+      textures,
     });
+  }
+
+  // Union of every layer's textures (dedup by name) — the scene-level roster the boot
+  // table counts and the enrichment resolves to URLs.
+  const sceneTextures: SceneTexture[] = [];
+  const seen = new Set<string>();
+  for (const layer of layers) {
+    for (const t of layer.textures) {
+      if (!seen.has(t.name)) {
+        seen.add(t.name);
+        sceneTextures.push(t);
+      }
+    }
   }
 
   return {
@@ -330,5 +494,6 @@ export function extractScene(src: string): Scene {
     customUniforms: layers[0].customUniforms,
     layers,
     replayable: true,
+    textures: sceneTextures,
   };
 }
