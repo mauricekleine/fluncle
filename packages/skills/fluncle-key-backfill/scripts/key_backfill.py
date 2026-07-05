@@ -42,7 +42,6 @@ Usage:
   uv run key_backfill.py                       # dry-run: propose, write nothing
   uv run key_backfill.py --json                # dry-run, structured output
   uv run key_backfill.py --apply               # perform the writes (after eyeballing)
-  uv run key_backfill.py --limit 500           # cap the Fluncle missing-key page
   uv run key_backfill.py --fluncle-bin ./fluncle
 """
 
@@ -53,6 +52,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 import unicodedata
 from dataclasses import dataclass
 
@@ -324,19 +324,31 @@ def read_rekordbox_keys(db) -> list[RekordboxKey]:
     return rows
 
 
-def fetch_fluncle_missing_key(fluncle_bin: str, limit: int) -> list[dict]:
-    """Fluncle's findings with NO stored key, via `admin tracks list --no-key --json`."""
-    cmd = [fluncle_bin, "admin", "tracks", "list", "--no-key", "--json", "--limit", str(limit)]
+def fetch_fluncle_missing_key(fluncle_bin: str) -> list[dict]:
+    """The ENTIRE missing-key backlog via `admin tracks list --no-key --all --json`.
+
+    `--all` (fluncle CLI >= 0.91.0) pages the whole `--no-key` backlog via cursor, past
+    the per-request 100-row cap — so a backlog larger than 100 is never silently cut.
+
+    The CLI's JSON stdout is written to a temp FILE, not captured through a pipe: an
+    older `fluncle` binary truncates large stdout at the ~64KB OS pipe buffer when it
+    exits (a Bun stdout-flush-on-exit bug fixed in 0.91.0). A regular file has no such
+    cap, so the full backlog always lands regardless of CLI version.
+    """
+    cmd = [fluncle_bin, "admin", "tracks", "list", "--no-key", "--all", "--json"]
+
+    with tempfile.TemporaryFile("w+b") as out:
+        try:
+            subprocess.run(cmd, stdout=out, stderr=subprocess.PIPE, text=True, check=True)
+        except FileNotFoundError:
+            die(f"`{fluncle_bin}` not found on PATH", "install the fluncle CLI or pass --fluncle-bin")
+        except subprocess.CalledProcessError as exc:
+            die(f"`fluncle admin tracks list` failed: {(exc.stderr or '').strip() or exc}")
+        out.seek(0)
+        raw = out.read().decode("utf-8")
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    except FileNotFoundError:
-        die(f"`{fluncle_bin}` not found on PATH", "install the fluncle CLI or pass --fluncle-bin")
-    except subprocess.CalledProcessError as exc:
-        die(f"`fluncle admin tracks list` failed: {exc.stderr.strip() or exc}")
-
-    try:
-        payload = json.loads(result.stdout)
+        payload = json.loads(raw)
     except json.JSONDecodeError:
         die("could not parse `fluncle admin tracks list --json` output")
 
@@ -454,9 +466,6 @@ def main() -> None:
     parser.add_argument(
         "--fluncle-bin", default="fluncle", help="the fluncle CLI to shell out to (default: fluncle)"
     )
-    parser.add_argument(
-        "--limit", type=int, default=1000, help="cap the Fluncle missing-key page (default: 1000)"
-    )
     parser.add_argument("--json", action="store_true", help="emit structured JSON")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
@@ -467,7 +476,7 @@ def main() -> None:
 
     apply = args.apply  # dry-run is the default; --apply is the only way to write.
 
-    fluncle_tracks = fetch_fluncle_missing_key(args.fluncle_bin, args.limit)
+    fluncle_tracks = fetch_fluncle_missing_key(args.fluncle_bin)
     db = open_db(args.db)
     rekordbox_keys = read_rekordbox_keys(db)
     proposals, flagged, unmatched = reconcile(fluncle_tracks, rekordbox_keys)

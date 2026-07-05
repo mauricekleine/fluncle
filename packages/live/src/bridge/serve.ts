@@ -33,10 +33,11 @@ const BROADCAST_HZ = 30;
 type Boot = { plan: PlanEntry[]; fingerprints: Fingerprint[] };
 
 /**
- * Resolve the requested plan id from the bridge's argv, honouring BOTH `--plan <id>`
- * (the shape `run show` passes) and a bare positional id, with `FLUNCLE_PLAN_MIXTAPE`
- * as the fallback. Returns undefined when nothing is requested — `buildPlan` then
- * builds the default plan (fixture floor). Pure so the arg contract is unit-testable.
+ * Resolve the requested plan ref from the bridge's argv, honouring BOTH `--plan <ref>`
+ * (the shape `run show` passes) and a bare positional ref, with `FLUNCLE_PLAN_MIXTAPE`
+ * as the fallback. The ref is a mixtape logId OR a plan handle — `buildPlan` decides by
+ * shape. Returns undefined when nothing is requested — `buildPlan` then builds the default
+ * plan (fixture floor). Pure so the arg contract is unit-testable.
  */
 export function parsePlanArg(
   argv: string[],
@@ -58,10 +59,12 @@ export function parsePlanArg(
   return env;
 }
 
-/** Build the plan and fingerprint its previews. */
-async function boot(mixtapeLogId?: string): Promise<Boot> {
-  const plan = await buildPlan(mixtapeLogId);
-  console.error(`bridge: plan built — ${plan.length} findings; fingerprinting previews…`);
+/** Build the plan (mixtape logId or plan handle) and fingerprint its previews. */
+async function boot(planRef?: string): Promise<Boot> {
+  const plan = await buildPlan(planRef);
+  console.error(
+    `bridge: plan built — ${plan.length} findings${planRef ? ` (${planRef})` : ""}; fingerprinting previews…`,
+  );
   const fingerprints = await fingerprintPlan(plan.map((p) => p.logId));
   const withFp = fingerprints.filter((f) => f.frames !== null).length;
   console.error(`bridge: fingerprinted ${withFp}/${fingerprints.length} previews`);
@@ -69,8 +72,8 @@ async function boot(mixtapeLogId?: string): Promise<Boot> {
 }
 
 async function main(): Promise<void> {
-  const mixtape = parsePlanArg(process.argv.slice(2));
-  const { plan, fingerprints } = await boot(mixtape);
+  const planRef = parsePlanArg(process.argv.slice(2));
+  const { plan, fingerprints } = await boot(planRef);
   const state = createShowState(plan, fingerprints);
 
   // The set of connected sockets (glass + any phone remotes).

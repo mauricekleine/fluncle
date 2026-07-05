@@ -16,7 +16,13 @@ _SCRIPTS_DIR = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, _SCRIPTS_DIR)
 
 import pytest
-from _matching import _fold, _normalize_artists, _split_title, match_key
+from _matching import (
+    _fold,
+    _normalize_artists,
+    _split_title,
+    match_key,
+    tolerant_same_recording,
+)
 
 
 def _import_derive():
@@ -139,6 +145,51 @@ class TestMatchKey:
 
 
 # ---------------------------------------------------------------------------
+# tolerant_same_recording — the remix-credit fallback identity.
+# ---------------------------------------------------------------------------
+
+
+class TestTolerantSameRecording:
+    def test_remixer_as_artist_vs_in_title(self):
+        # Rekordbox keeps the remixer in the "(… Remix)" suffix; the finding also
+        # credits them as an artist. Same recording.
+        rb = match_key(["Nu:Tone"], "System (Matrix and Futurebound Remix)")
+        finding = match_key(
+            ["Nu:Tone", "Matrix & Futurebound"], "System - Matrix and Futurebound Remix"
+        )
+        assert rb != finding  # exact match misses
+        assert tolerant_same_recording(rb, finding)
+
+    def test_extended_remix_matches_remix(self):
+        rb = match_key(["Axwell"], "Nobody Else (1991 Extended Remix)")
+        finding = match_key(["Axwell", "1991"], "Nobody Else - 1991 Remix")
+        assert rb != finding
+        assert tolerant_same_recording(rb, finding)
+
+    def test_never_collapses_remix_onto_original(self):
+        original = match_key(["Calibre"], "Spill")
+        remix = match_key(["Calibre"], "Spill (VIP)")
+        assert not tolerant_same_recording(original, remix)
+
+    def test_different_remixers_stay_apart(self):
+        a = match_key(["Artist"], "Song (Calibre Remix)")
+        b = match_key(["Artist", "Lenzman"], "Song (Lenzman Remix)")
+        assert not tolerant_same_recording(a, b)
+
+    def test_different_song_stays_apart(self):
+        a = match_key(["Nu:Tone"], "System (Matrix and Futurebound Remix)")
+        b = match_key(
+            ["Nu:Tone", "Matrix & Futurebound"], "Other - Matrix and Futurebound Remix"
+        )
+        assert not tolerant_same_recording(a, b)
+
+    def test_identical_original_still_true(self):
+        a = match_key(["Calibre"], "Spill")
+        b = match_key(["Calibre"], "Spill")
+        assert tolerant_same_recording(a, b)
+
+
+# ---------------------------------------------------------------------------
 # derive_cues — bucket assignment.
 # ---------------------------------------------------------------------------
 
@@ -207,6 +258,44 @@ class TestDeriveCues:
         cues = derive_cues(rows, self.index)
         assert cues[0].finding_id is None
         assert cues[0].match_bucket == "unmatched"
+
+    def test_fuzzy_fallback_matches_remixer_credit(self):
+        # Finding credits the remixer as an artist; the Rekordbox row keeps them in
+        # the title suffix. Exact lookup misses; the tolerant fallback matches it and
+        # flags it fuzzy so the operator eyeballs the credit.
+        finding = _make_finding(
+            "rmx1", ["Nu:Tone", "Matrix & Futurebound"], "System - Matrix and Futurebound Remix"
+        )
+        index = build_catalogue_index([finding])
+        rows = [_make_row("Nu:Tone", "System (Matrix and Futurebound Remix)")]
+        cues = derive_cues(rows, index)
+        assert cues[0].match_bucket == "matched"
+        assert cues[0].finding_id == "rmx1"
+        assert cues[0].fuzzy is True
+
+    def test_fuzzy_fallback_extended_remix(self):
+        finding = _make_finding("rmx2", ["Axwell", "1991"], "Nobody Else - 1991 Remix")
+        index = build_catalogue_index([finding])
+        rows = [_make_row("Axwell", "Nobody Else (1991 Extended Remix)")]
+        cues = derive_cues(rows, index)
+        assert cues[0].finding_id == "rmx2"
+        assert cues[0].fuzzy is True
+
+    def test_exact_match_is_not_fuzzy(self):
+        rows = [_make_row("Calibre", "Spill")]
+        cues = derive_cues(rows, self.index)
+        assert cues[0].fuzzy is False
+
+    def test_fuzzy_fallback_multiple_hits_are_ambiguous(self):
+        # Two findings that both tolerantly match the same remix row → ambiguous,
+        # never an auto-pick.
+        f1 = _make_finding("a", ["Nu:Tone", "Matrix & Futurebound"], "System - Matrix and Futurebound Remix")
+        f2 = _make_finding("b", ["Nu:Tone", "Matrix & Futurebound"], "System (Matrix and Futurebound Remix)")
+        index = build_catalogue_index([f1, f2])
+        rows = [_make_row("Nu:Tone", "System (Matrix and Futurebound Remix)")]
+        cues = derive_cues(rows, index)
+        assert cues[0].finding_id is None
+        assert cues[0].match_bucket == "ambiguous"
 
     def test_multiple_rows_ordered_by_track_no(self):
         f1 = _make_finding("id1", ["Calibre"], "Spill")

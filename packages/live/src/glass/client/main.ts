@@ -151,7 +151,7 @@ let sceneTarget = 0;
 let autoMorph = false;
 let dipped = false;
 let dipT = 0;
-let renderScale = 0.75;
+let renderScale = 1; // full-res default: measured ~7% frame budget at 1080p; upscale softness made baked grain read as noise
 let palCur = flat(CANON.map((c) => c.slice()));
 let palTar = flat(CANON.map((c) => c.slice()));
 let palCurR = flat(CANON.map((c) => c.slice()));
@@ -718,21 +718,44 @@ function applyBridgePointer(p: number): void {
     pendingBridgePointer = p;
   }
 }
-bridge.onState = (s: ShowState): void => applyBridgePointer(s.plan.pointer);
-bridge.onStatus = (): void => updateHud();
-bridge.connect();
-
-// ---- load THE PLAN then boot ----------------------------------------------
-fetch("/plan")
-  .then((r) => r.json())
-  .then((list: PlanItem[]) => {
+// ---- load THE PLAN (bridge-first, via the glass server proxy) --------------
+// The glass server resolves /plan bridge-first and marks the winner in `x-plan-source`;
+// the client narrates it. On a bridge that comes up (or back) AFTER a local-fixture boot,
+// re-load so the glass upgrades to the operator's real plan — and the bridge pointer then
+// indexes the SAME list (the first-set debrief fix: no more cycling the 5-entry demo).
+let lastPlanSource: "bridge" | "local" | null = null;
+async function loadPlan(): Promise<void> {
+  try {
+    const res = await fetch("/plan");
+    const list = (await res.json()) as PlanItem[];
     PLAN = list || [];
+    lastPlanSource = res.headers.get("x-plan-source") === "bridge" ? "bridge" : "local";
+    // eslint-disable-next-line no-console
+    console.log(
+      lastPlanSource === "bridge"
+        ? `plan: ${PLAN.length} findings via the bridge`
+        : `plan: ${PLAN.length} findings, local fixture — no bridge`,
+    );
     updateHud();
     if (pendingBridgePointer !== null) {
       applyBridgePointer(pendingBridgePointer);
     }
-  })
-  .catch((e) => err("plan load failed: " + e));
+  } catch (e) {
+    err("plan load failed: " + e);
+  }
+}
+
+bridge.onState = (s: ShowState): void => applyBridgePointer(s.plan.pointer);
+bridge.onStatus = (s): void => {
+  // A bridge that comes up (or back) while we're on the local fixture is the cue to
+  // re-load: its plan wins. If we already hold the bridge's plan, there's nothing to do.
+  if (s === "live" && lastPlanSource === "local") {
+    void loadPlan();
+  }
+  updateHud();
+};
+bridge.connect();
+void loadPlan();
 
 frame();
 

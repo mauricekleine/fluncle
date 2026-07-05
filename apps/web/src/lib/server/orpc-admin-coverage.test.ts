@@ -73,6 +73,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "GET /admin/submissions": "list_submissions",
   "GET /admin/submissions/{submissionId}": "get_submission",
   "GET /admin/tracks": "list_tracks_admin",
+  // The single-finding admin lookup — contract-only oRPC (no TanStack route file; oRPC
+  // owns the path directly, like context_track). Admin tier (agent-allowed read).
+  // `get_track_admin` matches the public `get_` prefix so the "holds exactly" check
+  // skips it; it lives here for completeness (like `get_clip_caption`).
+  "GET /admin/tracks/{trackId}": "get_track_admin",
   "GET /admin/tracks/{trackId}/social": "list_track_social",
   "PATCH /admin/clips/{clipId}": "update_clip",
   "PATCH /admin/mixtapes/{mixtapeId}": "update_mixtape",

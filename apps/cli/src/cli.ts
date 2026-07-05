@@ -37,6 +37,7 @@ type AdminQueueOptions = AdminListOptions & {
 // boolean (default true), so `key === false` means the flag was passed; `--has-key
 // <bool>` is the explicit tri-state form. Absent both ⇒ no key filter (list all).
 type AdminTracksListOptions = AdminListOptions & {
+  all?: boolean;
   hasKey?: string;
   key?: boolean;
   order?: string;
@@ -503,7 +504,12 @@ function addAdminCommands(program: Command): void {
   adminTracks
     .command("list")
     .description("List findings, filterable by musical-key presence (--no-key / --has-key)")
-    .option("--limit <limit>", "Number of findings to show", "50")
+    .option("--limit <limit>", "Number of findings to show (1-100)", "50")
+    .option(
+      "--all",
+      "Fetch the ENTIRE catalogue, paginating past the 100-row cap (overrides --limit)",
+      false,
+    )
     .option("--no-key", "Only findings with NO stored musical key (the key-backfill backlog)")
     .option("--has-key <bool>", "Filter by key presence: true (has key) or false (missing)")
     .option("--order <order>", "Sort: asc (oldest first) or desc (newest first)", "desc")
@@ -552,6 +558,21 @@ function addAdminCommands(program: Command): void {
     });
 
   const adminTrack = adminTracks;
+
+  // `get_track_admin` → `admin tracks get` (Convention B). The authoritative
+  // single-finding lookup with FULL admin fields (vibe coords, the video ledger, the
+  // observation, the note) — so a lookup never has to scan a list (and can't misread a
+  // live finding as nonexistent). Accepts a Spotify id OR a Log ID. Agent-allowed read.
+  adminTrack
+    .command("get")
+    .description("Look up one finding by id or Log ID, with full admin fields")
+    .argument("[idOrLogId]")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (idOrLogId: string | undefined, options: JsonOptions) => {
+      const { trackGetAdminCommand } = await import("./commands/track");
+      await runTrackGetAdmin(idOrLogId, options, trackGetAdminCommand);
+    });
 
   adminTrack
     .command("update")
@@ -1813,6 +1834,61 @@ async function runTrackGet(
   }
 }
 
+async function runTrackGetAdmin(
+  idOrLogId: string | undefined,
+  options: JsonOptions,
+  trackGetAdminCommand: typeof import("./commands/track").trackGetAdminCommand,
+): Promise<void> {
+  if (!idOrLogId) {
+    throw new Error("Missing id. Usage: fluncle admin tracks get <track_id|log_id> [--json]");
+  }
+
+  const result = await trackGetAdminCommand(idOrLogId);
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  const t = result.track;
+
+  console.log(`${t.logId ? `${t.logId}  ` : ""}${t.artists.join(", ")} — ${t.title}`);
+  console.log(
+    [t.bpm ? `${t.bpm} bpm` : undefined, t.key, t.label, t.enrichmentStatus]
+      .filter(Boolean)
+      .join(" · "),
+  );
+
+  // The admin-only state a public list row hides — the reason this read exists over
+  // `fluncle tracks get`: where it sits on the map, whether it's filmed and voiced.
+  const placed = t.galaxy && t.vibeX !== undefined && t.vibeY !== undefined;
+  console.log(
+    `Placement: ${placed && t.galaxy ? `${t.galaxy.name} (${t.vibeX?.toFixed(2)}, ${t.vibeY?.toFixed(2)})` : "unplaced"}`,
+  );
+  console.log(
+    `Video: ${
+      t.videoUrl
+        ? [t.videoSquaredAt ? "squared master" : "linked", t.videoVehicle]
+            .filter(Boolean)
+            .join(" · ")
+        : "none (in the render queue)"
+    }`,
+  );
+  console.log(
+    `Observation: ${
+      t.observationAudioUrl
+        ? `voiced${t.observationDurationMs ? ` · ${Math.round(t.observationDurationMs / 1000)}s` : ""}`
+        : "none"
+    }`,
+  );
+  console.log(`Note: ${t.note ? t.note : "none"}`);
+  console.log(`Spotify: ${t.spotifyUrl}`);
+
+  if (t.logPageUrl) {
+    console.log(`Log: ${t.logPageUrl}`);
+  }
+}
+
 async function runTrackUpdate(
   trackId: string | undefined,
   options: TrackUpdateOptions,
@@ -2328,7 +2404,10 @@ async function runAdminTracksList(
   options: AdminTracksListOptions,
   listCommand: typeof import("./commands/admin-tracks").listCommand,
 ): Promise<void> {
-  const limit = parseListLimit(options.limit);
+  // `--all` fetches the entire catalogue by paging past the per-request 100-row cap
+  // (listCommand pages via cursor until the archive is exhausted); otherwise the
+  // explicit `--limit` is parsed and clamped to 1-100.
+  const limit = options.all ? Number.POSITIVE_INFINITY : parseListLimit(options.limit);
   const order = options.order === "asc" ? "asc" : "desc";
   const hasKey = resolveHasKey(options);
   const tracks = await listCommand({ hasKey, limit, order });

@@ -148,6 +148,21 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Usage: fluncle admin tracks context");
   });
 
+  test("admin tracks get requires an id before any lookup", async () => {
+    // No id fails local validation before the API call, so this runs without a
+    // server or admin token. The usage names the admin `get`, not the public one.
+    const result = await runCli(["admin", "tracks", "get", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe(`{
+  "code": "error",
+  "message": "Missing id. Usage: fluncle admin tracks get <track_id|log_id> [--json]",
+  "ok": false
+}
+`);
+  });
+
   test("admin tracks requeue-video requires an id before any clear", async () => {
     // No id fails local validation before the API call, so this runs without a
     // server or admin token (and never clears a live video).

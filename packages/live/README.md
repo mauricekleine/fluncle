@@ -12,14 +12,19 @@ doctrine and architecture live in
 
 `bun run glass` bundles the browser client and serves a self-contained page.
 `$FLUNCLE_GLASS_PORT` overrides the default `:4173` (the operator's live instance
-may hold it — tests boot elsewhere). `$FLUNCLE_SHOW_PLAN` points at a tracklist a
-`fluncle run show --plan` bridge writes; absent that, the committed
-`src/plan-pointer/tracklist.json` demo fixture drives arrivals, and absent even a
-tracklist the glass runs uncharted-space standalone (the failure floor). The two
-diverge deliberately: the standalone demo `tracklist.json` is a 5-entry stand-in,
-while the bridge's `/plan` serves the real 17-entry mixtape — and `/plan` on `:4180`
-takes precedence whenever the bridge is up, so `--plan` / `$FLUNCLE_SHOW_PLAN`
-unifies them at show time.
+may hold it — tests boot elsewhere). **The glass resolves `/plan` bridge-first:** at
+boot (and whenever the bridge appears or returns) it asks the bridge's `/plan` on
+`:4180` and serves THAT when it answers — the operator's real, full plan — falling to
+its own committed `src/plan-pointer/tracklist.json` demo fixture only when no bridge
+answers, and absent even a tracklist it runs uncharted-space standalone (the failure
+floor). It narrates which source won (`plan: 17 findings via the bridge` vs `plan: 5
+findings, local fixture — no bridge`) so the boot table can never again show the demo
+while the bridge holds the real set (the first-set debrief bug). `$FLUNCLE_BRIDGE_PORT`
+overrides the `:4180` the glass proxies to (default `BRIDGE_PORT`) — a test rig points
+the glass at a scratch bridge without touching the operator's live `:4180`. The
+standalone demo `tracklist.json` is a deliberate 5-entry stand-in; the bridge's `/plan`
+serves the real set, so the two index the SAME list end-to-end (the bridge pointer and
+the glass plan stay in lock-step).
 
 Module map (`src/glass/`):
 
@@ -69,12 +74,17 @@ Markdown table is the only human-maintained mirror — keep it in step by hand.
 
 One stateless-restartable Bun process on `:4180`:
 
-- **`GET /plan`** — the enriched planned tracklist: the mixtape/plan members
-  (public API, committed fixture fallback) each enriched with palette + seed
-  (`props.json`) and the dream-replay scene (`composition.tsx`, resolved +
-  classified by the glass's `scene-extract.ts` — the one extractor in the package).
-  The bridge owns `/plan` here; the glass keeps its standalone copy on `:4173` for
-  bridge-less mode, so **`:4180` takes precedence when the bridge is up**.
+- **`GET /plan`** — the enriched planned tracklist. `--plan` takes a **mixtape logId**
+  (`019.F.1A`, the calibrated default) **or a plan HANDLE** (a galaxy slug like
+  `dark-aurora-roller` — the normal live flow, since a plan exists before the set is
+  played); the shape routes the resolver (`classifyPlanRef`). A handle resolves through
+  the admin API (reusing the CLI's stored token) to its ordered plan cues, each mapped to
+  a finding, then down the SAME enrichment path: palette + seed (`props.json`) and the
+  dream-replay scene (`composition.tsx`, resolved + classified by the glass's
+  `scene-extract.ts` — the one extractor in the package). A miss holds loudly, naming
+  requested-vs-loaded, and falls to the committed fixture. The glass keeps its standalone
+  `/plan` on `:4173` for bridge-less mode, so **`:4180` takes precedence when the bridge
+  is up**.
 - **`ws://:4180/state`** — the fused `ShowState` at 30Hz (`seq`/`t`, per-channel
   staleness, pointer/pending/match, intensity, blackout, pre-arm). Ingests
   `ShowCommand`s on the same socket: the glass's 10Hz `mel` frames (the matcher
@@ -126,4 +136,8 @@ the relaunch seconds.
 ### Env
 
 `FLUNCLE_PLAN_MIXTAPE` (default `019.F.1A`), `FLUNCLE_WEB_BASE`,
-`FLUNCLE_FOUND_BASE`, `FLUNCLE_CHROMIUM`, `FLUNCLE_GLASS_URL`, `FLUNCLE_FFMPEG`.
+`FLUNCLE_FOUND_BASE`, `FLUNCLE_CHROMIUM`, `FLUNCLE_GLASS_URL`, `FLUNCLE_FFMPEG`,
+`FLUNCLE_BRIDGE_PORT` (the `:4180` the glass proxies its `/plan` to; default
+`BRIDGE_PORT`). A plan HANDLE additionally reads the admin API base + token from the
+env (`FLUNCLE_API_TOKEN` / `FLUNCLE_API_BASE_URL`) or `~/.config/fluncle/.env.production`
+(the CLI's stored credential, read-only).

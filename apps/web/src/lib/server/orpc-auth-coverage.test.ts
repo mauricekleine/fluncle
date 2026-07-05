@@ -190,6 +190,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // clip's recording (r2Key + tracklist + promoted logId) via `get_recording`.
   get_recording: "admin",
   get_submission: "admin",
+  // The single-finding admin lookup — admin tier (agent-allowed read), the
+  // list_tracks_admin / get_recording precedent: an authoritative by-coordinate read
+  // the board + CLI + box can all consume.
+  get_track_admin: "admin",
   initiate_mixtape_youtube: "operator",
   // The clip library/editor read — admin tier (agent-allowed), the list_*_admin
   // precedent. Filterable by mixtapeId/status; serves the editor + the library.

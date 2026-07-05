@@ -19,9 +19,10 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 
 ## Which machine am I on?
 
-- This repo is worked from two Macs; the machine determines what is SAFE, so detect it before large uploads or commits. Detect with `sysctl -n machdep.cpu.brand_string` and match loosely on the chip generation (the string is like `Apple M5 Pro` / `Apple M2` — key off `M5` / `M2`).
-- **M5 (build/compose):** browser + prod `fluncle` CLI. Orchestrate and dev here.
-- **M2 (mixing):** Rekordbox + OBS + the audio/video masters live here; the `fluncle-mixtapes` Rekordbox scripts run here. **THE LOAD-BEARING RULE — on the M2, large media uploads (`fluncle admin recordings create --video`, `fluncle admin mixtapes distribute`) and git commits need `dangerouslyDisableSandbox: true`:** the Bash sandbox silently drops sustained large transfers (`socket closed`), and SSH-signed commits go through the 1Password agent socket. Full operator workflow is the [fluncle-mixtapes](./packages/skills/fluncle-mixtapes) skill.
+- This repo is worked from two Macs; the machine determines what is SAFE, so detect it before large uploads or commits. Detect with `sysctl -n machdep.cpu.brand_string` and match loosely on the chip generation (the string is like `Apple M5 Pro` / `Apple M2` — key off `M5` / `M2`). The physical rig behind this split is [docs/live-show-setup.md](./docs/live-show-setup.md).
+- **M5 (build/compose + capture/stream):** browser + prod `fluncle` CLI; OBS + the audio/video masters + the recording upload + `ffmpeg` + distribute + the live glass/bridge all live here. Orchestrate, dev, capture, and stream here.
+- **M2 (mixing):** Rekordbox + the DDJ-FLX4 + `master.db` — _only_ the two `fluncle-mixtapes` Rekordbox scripts run here (they read/write `master.db`). No OBS, no browser.
+- **THE LOAD-BEARING RULE — large media uploads (`fluncle admin recordings create --video`, `fluncle admin mixtapes distribute`) run on the M5 and must be operator-run directly in their own Terminal:** an agent's Bash session throttles sustained _multi-GB_ transfers even with `dangerouslyDisableSandbox: true` — a small upload works, a multi-GB one drops partway with `socket closed`. `dangerouslyDisableSandbox` is still required for git commits (SSH-signed via the 1Password agent socket) and moderate transfers, but it does NOT make a multi-GB upload reliable through the harness — those are operator-direct. Full operator workflow is the [fluncle-mixtapes](./packages/skills/fluncle-mixtapes) skill.
 
 ## Work Standard
 

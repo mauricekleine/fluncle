@@ -116,3 +116,50 @@ def match_key(artists: object, title: str) -> tuple[frozenset[str], str, str]:
     """
     base, descriptor = _split_title(title)
     return (_normalize_artists(artists), base, descriptor)
+
+
+# Descriptor tokens that name a longer cut of the SAME remix, not a different one —
+# dropped when comparing two descriptors in the tolerant fallback so "Extended Remix"
+# still matches "Remix".
+_NEUTRAL_DESC_TOKENS = {"extended"}
+
+
+def _core_artists(artist_set: frozenset[str], descriptor: str) -> frozenset[str]:
+    """The artist set minus any artist whose folded name is wholly named inside the
+    version descriptor — i.e. the REMIXER, credited as a distinct artist on one side
+    but living in the "(… Remix)" suffix on the other."""
+    desc_tokens = set(descriptor.split())
+    return frozenset(
+        a for a in artist_set if not (set(a.split()) and set(a.split()) <= desc_tokens)
+    )
+
+
+def tolerant_same_recording(
+    key_a: tuple[frozenset[str], str, str],
+    key_b: tuple[frozenset[str], str, str],
+) -> bool:
+    """A LOOSER identity than exact `match_key` equality — for a fallback pass only.
+
+    Closes the one systematic gap between a Rekordbox row and a Fluncle finding of
+    the SAME remix: the remixer is credited as a second ARTIST on the finding but
+    only named inside the "(… Remix)" title suffix on the Rekordbox row (and an
+    "Extended Remix" vs "Remix" wording drift). It STILL never collapses a remix onto
+    its original (both sides must carry a descriptor, or neither) and requires an
+    exact base-title match, so it cannot fold two genuinely different recordings
+    together. Two different remixes of the same song keep distinct descriptors and
+    stay apart.
+    """
+    artists_a, base_a, desc_a = key_a
+    artists_b, base_b, desc_b = key_b
+
+    if base_a != base_b:
+        return False
+    # Both a version, or both the original — never a remix onto its original.
+    if bool(desc_a) != bool(desc_b):
+        return False
+    if _core_artists(artists_a, desc_a) != _core_artists(artists_b, desc_b):
+        return False
+
+    desc_norm_a = frozenset(t for t in desc_a.split() if t not in _NEUTRAL_DESC_TOKENS)
+    desc_norm_b = frozenset(t for t in desc_b.split() if t not in _NEUTRAL_DESC_TOKENS)
+    return desc_norm_a == desc_norm_b
