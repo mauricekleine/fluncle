@@ -1,27 +1,26 @@
 // Bundle + render a registered composition to an mp4 via Remotion SSR.
 
-import { createHash } from "node:crypto";
-import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 
 import { bundle } from "@remotion/bundler";
 import { renderMedia, selectComposition } from "@remotion/renderer";
 
 import { type NostalgicCosmosProps } from "../remotion/types";
+// The bundle cache key lives in bundle-hash.ts (shared with ship's square-artifact
+// cache). The bundle is a pure function of TWO trees — src/ (the composition code)
+// and public/ (bundle() bakes a COPY, renderMedia serves staticFile() from it, and
+// the preview audio lives there). Keying on src/ alone let a re-render reuse a
+// bundle whose baked public/ was stale/missing (e.g. after ship deleted the audio)
+// → staticFile 404 with no cache miss. See bundleInputsHash() + resolveBundle().
+import { bundleInputsHash } from "./bundle-hash";
 import { glRenderer } from "./gl";
 
+// Re-exported so the bundle-cache-key regression test (render.test.ts) keeps its
+// import site while the mechanism itself lives in bundle-hash.ts.
+export { hashBundleInputs } from "./bundle-hash";
+
 const ENTRY_POINT = path.resolve(import.meta.dirname, "../remotion/index.ts");
-// The webpack bundle is a pure function of TWO trees:
-//   1. src/     — the composition code (pipeline + remotion, including the
-//                 gitignored workbench/ compositions root.tsx auto-registers).
-//   2. public/  — bundle() COPIES public/ into the bundle output, and renderMedia
-//                 serves staticFile() from that baked copy. The preview audio
-//                 (public/<trackId>.m4a) lives here, so the bundle depends on it.
-// Both must key the cache: keying on src/ alone let a re-render reuse a bundle
-// whose baked public/ was stale/missing (e.g. after ship deleted the audio) →
-// staticFile 404 with no cache miss. See hashBundleInputs() + resolveBundle().
-const SRC_DIR = path.resolve(import.meta.dirname, "..");
-const PUBLIC_DIR = path.resolve(import.meta.dirname, "../../public");
 // A stable on-disk location (gitignored) bundle() writes each distinct input
 // tree's output to, keyed by content hash — see resolveBundle() below.
 const BUNDLE_CACHE_ROOT = path.resolve(import.meta.dirname, "../../.cache/remotion-bundle");
@@ -34,52 +33,6 @@ export type RenderResult = {
   outputPath: string;
   compositionId: string;
 };
-
-/**
- * A stable hash of every file under the given input trees (relative path + mtime
- * + size) — what Remotion's webpack bundle is a pure function of. Any edit to
- * src/ (including a workbench/ composition drop-in) OR to public/ (a
- * changed/restored/evicted staticFile asset — the preview audio) changes the
- * hash, so a stale bundle is never reused; correctness comes first, caching is
- * opportunistic. Each tree's path is folded in so a same-named file under a
- * different root can't collide. A missing tree contributes nothing (no throw).
- * Exported for the cache-key regression test.
- */
-export function hashBundleInputs(dirs: string[]): string {
-  const hash = createHash("sha256");
-
-  for (const dir of dirs) {
-    if (!existsSync(dir)) {
-      continue;
-    }
-    const files: string[] = [];
-    const walk = (current: string): void => {
-      for (const entry of readdirSync(current, { withFileTypes: true })) {
-        if (entry.name === "node_modules" || entry.name.startsWith(".")) {
-          continue;
-        }
-        const full = path.join(current, entry.name);
-        if (entry.isDirectory()) {
-          walk(full);
-        } else if (entry.isFile()) {
-          files.push(full);
-        }
-      }
-    };
-    walk(dir);
-    files.sort();
-
-    hash.update(`\0root:${dir}\0`);
-    for (const file of files) {
-      const stat = statSync(file);
-      hash.update(path.relative(dir, file));
-      hash.update(String(stat.mtimeMs));
-      hash.update(String(stat.size));
-    }
-  }
-
-  return hash.digest("hex").slice(0, 16);
-}
 
 /**
  * Bundle once per DISTINCT input tree (src/ + public/), reused across process
@@ -97,7 +50,7 @@ export function hashBundleInputs(dirs: string[]): string {
 let bundlePromise: Promise<string> | undefined;
 
 async function resolveBundle(): Promise<string> {
-  const hash = hashBundleInputs([SRC_DIR, PUBLIC_DIR]);
+  const hash = bundleInputsHash();
   const cacheDir = path.join(BUNDLE_CACHE_ROOT, hash);
   const marker = path.join(cacheDir, BUNDLE_MARKER_FILE);
 

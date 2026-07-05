@@ -32,6 +32,7 @@
 // EXTRA_VARIANT_SOURCES) is exported and covered by ship.test.ts.
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -48,6 +49,7 @@ import {
 import { GLSL } from "../remotion/journey/glsl";
 
 import { parseArgs } from "./args";
+import { bundleInputsHash } from "./bundle-hash";
 import { buildCaption, type CaptionTrack, fetchReleaseYear, yearFromReleaseDate } from "./caption";
 import { deletePreviewAudio } from "./download-preview";
 import { fluncleBin, fluncleSpawnEnv } from "./fluncle-bin";
@@ -341,6 +343,48 @@ export function buildNoteText(track: CaptionTrack, year: number | null): string 
   return buildCaption(track, year);
 }
 
+/**
+ * The square crop source's cache key: the fingerprint of everything the square
+ * render is a pure function of — the bundle (src/ + public/, the same trees the
+ * render bundle cache keys on), the composition id, and the props the portrait
+ * rendered from. ship stamps this into a sidecar (`<trackId>.square.mp4.hash`)
+ * beside the cached square; a re-ship recomputes it and reuses the cached square
+ * ONLY when it still matches. A portrait re-render (a new composition shifts the
+ * bundle hash, re-analyzed audio shifts the props) shifts this fingerprint, so the
+ * now-stale square is re-rendered rather than silently shipped beside a diverged
+ * portrait. The artifact twin of render.ts's bundle-hash correctness gate.
+ *
+ * NUL separators between the three inputs keep them from bleeding across the
+ * boundary (comp "MyComp" + props "X" can't collide with comp "MyCom" + props "pX").
+ */
+export function squareInputsHash(input: {
+  bundleHash: string;
+  compositionId: string;
+  propsSource: string;
+}): string {
+  return createHash("sha256")
+    .update(input.bundleHash)
+    .update("\0")
+    .update(input.compositionId)
+    .update("\0")
+    .update(input.propsSource)
+    .digest("hex")
+    .slice(0, 16);
+}
+
+/**
+ * Whether a cached square can be reused. A MISSING sidecar (cachedHash === null)
+ * means the square was produced outside a ship render — a direct
+ * `social-preview --aspect square` (the documented escape hatch) or one rendered
+ * before this cache existed — so trust it, never force a wasteful re-render that
+ * could clobber a deliberate manual square. Only a sidecar that EXISTS and
+ * MISMATCHES marks a square stale (the ship → portrait-re-render → re-ship
+ * divergence trap), so ship re-renders it.
+ */
+export function shouldReuseSquare(currentHash: string, cachedHash: string | null): boolean {
+  return cachedHash === null || cachedHash === currentHash;
+}
+
 async function main(argv: string[]): Promise<void> {
   const flags = parseShipArgs(argv);
   const log = (message: string) => console.error(`[ship] ${message}`);
@@ -408,19 +452,61 @@ async function main(argv: string[]): Promise<void> {
   // orientation master. Re-render it from the same composition + props with
   // aspect=square + hideOverlay; cache it at out/<trackId>.square.mp4 so a re-ship
   // is fast and idempotent.
+  //
+  // The cache is FINGERPRINTED (squareInputsHash → the `.square.mp4.hash` sidecar):
+  // a plain "reuse if the file exists" check let a stale square survive a portrait
+  // RE-render (a new composition), shipping two DIVERGED masters. ship now stamps
+  // the inputs' fingerprint when it renders the square and re-renders whenever the
+  // sidecar mismatches — the artifact twin of render.ts's bundle-hash gate (#307).
   const squareSrc = path.join(OUT_DIR, `${track.trackId}.square.mp4`);
-  if (existsSync(squareSrc)) {
-    log("footage.mp4 (square crop source — cached render)");
+  const squareHashPath = `${squareSrc}.hash`;
+  const propsInPath = path.join(OUT_DIR, `${track.trackId}.props.json`);
+  const propsSource = existsSync(propsInPath) ? readFileSync(propsInPath, "utf8") : null;
+
+  const squareFingerprint =
+    renderManifest.compositionId && propsSource !== null
+      ? squareInputsHash({
+          bundleHash: bundleInputsHash(),
+          compositionId: renderManifest.compositionId,
+          propsSource,
+        })
+      : null;
+  const cachedSquareHash = existsSync(squareHashPath)
+    ? readFileSync(squareHashPath, "utf8").trim()
+    : null;
+
+  const squareExists = existsSync(squareSrc);
+  // Reuse the cached square when it exists AND either we can't fingerprint the
+  // inputs (no composition id / no props → can't re-render either; ship what's
+  // there and let the re-render-contract check below catch a truly broken bundle)
+  // or the sidecar still matches (see shouldReuseSquare for the missing-sidecar
+  // escape-hatch rule).
+  const reuseSquare =
+    squareExists &&
+    (squareFingerprint === null || shouldReuseSquare(squareFingerprint, cachedSquareHash));
+
+  if (reuseSquare) {
+    log(
+      squareFingerprint === null
+        ? "footage.mp4 (square crop source — cached render, inputs unverifiable)"
+        : cachedSquareHash === null
+          ? "footage.mp4 (square crop source — cached render, unfingerprinted — trusting it)"
+          : "footage.mp4 (square crop source — cached render, inputs unchanged)",
+    );
   } else {
-    const propsInPath = path.join(OUT_DIR, `${track.trackId}.props.json`);
-    if (!renderManifest.compositionId || !existsSync(propsInPath)) {
+    if (squareExists) {
+      log(
+        "footage.mp4 (square crop source — inputs changed since the cached render → re-rendering)",
+      );
+    }
+    if (!renderManifest.compositionId || propsSource === null) {
       throw new Error(
         `cannot render the square crop source: missing ${!renderManifest.compositionId ? "composition id (out/<trackId>.render.json)" : "props (out/<trackId>.props.json)"}. Render the portrait master with social-preview first, or render the square directly:\n  bun src/pipeline/social-preview.ts ${track.trackId} --composition <Id> --aspect square --no-overlay`,
       );
     }
 
     log("footage.mp4 (square crop source — rendering 1920×1920, clean)");
-    const portraitProps = JSON.parse(readFileSync(propsInPath, "utf8")) as NostalgicCosmosProps;
+    const portraitProps = JSON.parse(propsSource) as NostalgicCosmosProps;
     const squareProps: NostalgicCosmosProps = {
       ...portraitProps,
       aspect: "square",
@@ -428,6 +514,17 @@ async function main(argv: string[]): Promise<void> {
     };
     const { render } = await import("./render");
     await render(squareProps, squareSrc, renderManifest.compositionId);
+
+    // Stamp the sidecar with the fingerprint of the inputs this square rendered
+    // from, so the next ship trusts it — and, on any input change, invalidates it.
+    writeFileSync(
+      squareHashPath,
+      squareInputsHash({
+        bundleHash: bundleInputsHash(),
+        compositionId: renderManifest.compositionId,
+        propsSource,
+      }),
+    );
   }
   copyFileSync(squareSrc, paths.footage);
 

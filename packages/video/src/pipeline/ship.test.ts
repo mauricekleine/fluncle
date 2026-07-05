@@ -16,6 +16,8 @@ import {
   parseShipArgs,
   RERENDER_CONTRACT_KEYS,
   resolveBundlePaths,
+  shouldReuseSquare,
+  squareInputsHash,
 } from "./ship";
 
 describe("parseShipArgs", () => {
@@ -214,6 +216,67 @@ describe("missingContractFiles", () => {
   test("a bundle with only render.json missing names it alone", () => {
     const present = new Set([paths.compositionPath, paths.propsOutPath]);
     expect(missingContractFiles(paths, (p) => present.has(p))).toEqual(["render.json"]);
+  });
+});
+
+describe("squareInputsHash — the square crop source cache key", () => {
+  const base = {
+    bundleHash: "b".repeat(16),
+    compositionId: "MyComp",
+    propsSource: '{"aspect":"portrait","bpm":174}',
+  };
+
+  test("is stable for identical inputs (a fresh square is reused)", () => {
+    expect(squareInputsHash(base)).toBe(squareInputsHash({ ...base }));
+  });
+
+  test("a changed bundle hash (a portrait re-render off a new composition) invalidates it", () => {
+    expect(squareInputsHash({ ...base, bundleHash: "c".repeat(16) })).not.toBe(
+      squareInputsHash(base),
+    );
+  });
+
+  test("a changed composition id invalidates it", () => {
+    expect(squareInputsHash({ ...base, compositionId: "OtherComp" })).not.toBe(
+      squareInputsHash(base),
+    );
+  });
+
+  test("changed props (re-analyzed audio) invalidate it", () => {
+    expect(squareInputsHash({ ...base, propsSource: '{"aspect":"portrait","bpm":140}' })).not.toBe(
+      squareInputsHash(base),
+    );
+  });
+
+  test("the NUL separators stop the three inputs bleeding across their boundary", () => {
+    // comp "MyComp" + props "X" must not hash the same as comp "MyCom" + props "pX".
+    const a = squareInputsHash({
+      bundleHash: base.bundleHash,
+      compositionId: "MyComp",
+      propsSource: "X",
+    });
+    const b = squareInputsHash({
+      bundleHash: base.bundleHash,
+      compositionId: "MyCom",
+      propsSource: "pX",
+    });
+    expect(a).not.toBe(b);
+  });
+});
+
+describe("shouldReuseSquare — the cached-square reuse gate", () => {
+  test("reuses when the sidecar fingerprint matches (fresh square, inputs unchanged)", () => {
+    expect(shouldReuseSquare("abc1230000000000", "abc1230000000000")).toBe(true);
+  });
+
+  test("re-renders when the fingerprint differs (stale square after a portrait re-render)", () => {
+    expect(shouldReuseSquare("abc1230000000000", "def4560000000000")).toBe(false);
+  });
+
+  test("reuses a square with NO sidecar (a direct social-preview square / pre-fix artifact)", () => {
+    // The escape-hatch rule: a missing sidecar means the square came from outside a
+    // ship render, so trust it rather than force a wasteful, possibly-clobbering re-render.
+    expect(shouldReuseSquare("abc1230000000000", null)).toBe(true);
   });
 });
 
