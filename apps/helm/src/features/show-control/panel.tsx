@@ -19,7 +19,7 @@ import { cn } from "@fluncle/ui/lib/utils";
 
 import { type RunLine, type RunStatus, type RunSummary } from "../../contract";
 import { ApiError, apiGet, apiPost, streamRun } from "../../ui/api";
-import { parseStatusLine } from "../../ui/status-line";
+import { LogLine, TOKEN_STYLES } from "../../ui/token-styles";
 import { type ShowChoice, type ShowChoiceKind } from "./choices";
 import {
   checkByLabel,
@@ -39,12 +39,6 @@ const GROUP_LABEL: Record<ShowChoiceKind, string> = {
   plan: "Plans",
   take: "Takes",
 };
-
-const TOKEN_STYLES = {
-  clear: "font-bold text-foreground",
-  dark: "text-muted-foreground",
-  hold: "font-bold text-destructive",
-} as const;
 
 function shortDate(iso: string | null): string {
   if (iso === null) {
@@ -190,7 +184,7 @@ export default function ShowControlPanel() {
       await apiPost(`/api/${SHOW_FEATURE_ID}/runs/${activeRunId}/kill`);
       await refreshActive();
     } catch {
-      setNote("Stand-down didn't land — the run may have already ended.");
+      setNote("Stand-down didn't land. The run may have already ended.");
     }
   }
 
@@ -278,9 +272,7 @@ function RaiseZone({
   return (
     <section aria-label="Tracklists" className="grid gap-3">
       <div className="flex items-center justify-between">
-        <h3 className="text-xs font-extrabold tracking-wide text-muted-foreground uppercase">
-          Tracklist
-        </h3>
+        <h3 className="text-xs font-extrabold text-muted-foreground">Tracklist</h3>
         <Button onClick={onRefresh} size="xs" variant="ghost">
           <ArrowsClockwise aria-hidden data-icon="inline-start" />
           Refresh
@@ -330,14 +322,14 @@ function Picker({
     return (
       <PickerEmpty
         label="admin"
-        note="the admin API didn't answer — is the token aboard? (~/.config/fluncle)"
+        note="the admin API didn't answer: is the token aboard? (~/.config/fluncle)"
       />
     );
   }
 
   if (choices.choices.length === 0) {
     return (
-      <PickerEmpty label="plans" note="no plans or mixtapes yet — author one in /admin/plans" />
+      <PickerEmpty label="plans" note="no plans or mixtapes yet: author one in /admin/plans" />
     );
   }
 
@@ -350,7 +342,7 @@ function Picker({
         return (
           <li key={`${choice.kind}:${choice.ref}`}>
             {heading ? (
-              <p className="px-3 pt-2 pb-1 text-[0.68rem] font-bold tracking-wide text-muted-foreground/70 uppercase">
+              <p className="px-3 pt-2 pb-1 text-[0.68rem] font-bold text-muted-foreground">
                 {GROUP_LABEL[choice.kind]}
               </p>
             ) : null}
@@ -475,8 +467,8 @@ function SignaturePanel({
 
 const PHASE_COPY: Record<ShowPhase, { note: string; tone: "gold" | "hold" | "quiet" }> = {
   clear: { note: "clear to depart", tone: "quiet" },
-  down: { note: "stood down — the glass is dark", tone: "quiet" },
-  holding: { note: "holding — the rig is not clear to depart", tone: "hold" },
+  down: { note: "stood down: the glass is dark", tone: "quiet" },
+  holding: { note: "holding: the rig is not clear to depart", tone: "hold" },
   idle: { note: "waiting on the first line", tone: "quiet" },
   live: { note: "the glass is up", tone: "gold" },
   reading: { note: "reading the rig…", tone: "quiet" },
@@ -514,14 +506,12 @@ function CheckRow({
     <div className="flex gap-3">
       <span
         aria-hidden
-        className={cn("w-14 shrink-0", token ? TOKEN_STYLES[token] : "text-muted-foreground/50")}
+        className={cn("w-14 shrink-0", token ? TOKEN_STYLES[token] : "text-muted-foreground")}
       >
         {token ? `[${token}]` : "[ · ]"}
       </span>
       <dt className="w-28 shrink-0 text-foreground">{label}</dt>
-      <dd className={cn(check ? "text-muted-foreground" : "text-muted-foreground/50")}>
-        {check?.note ?? pendingNote}
-      </dd>
+      <dd className="text-muted-foreground">{check?.note ?? pendingNote}</dd>
     </div>
   );
 }
@@ -549,12 +539,12 @@ function LiveLinks({ bridgeLive, links }: { bridgeLive: boolean; links: ShowLink
           Phone remote
         </a>
       ) : (
-        <span className="font-mono text-xs text-muted-foreground/70">
-          no LAN address — the phone remote wants FLUNCLE_HELM_LAN=1
+        <span className="font-mono text-xs text-muted-foreground">
+          no LAN address: the phone remote wants FLUNCLE_HELM_LAN=1
         </span>
       )}
       {links.remote !== null && !bridgeLive ? (
-        <span className="font-mono text-xs text-muted-foreground/70">
+        <span className="font-mono text-xs text-muted-foreground">
           (the bridge socket hasn&rsquo;t answered yet)
         </span>
       ) : null}
@@ -576,7 +566,7 @@ function RunLog({ lines, title }: { lines: RunLine[]; title: string }) {
 
   return (
     <div className="grid gap-1.5">
-      <p className="font-mono text-[0.7rem] tracking-wide text-muted-foreground/70">{title}</p>
+      <p className="font-mono text-[0.7rem] tracking-wide text-muted-foreground">{title}</p>
       <div
         className="helm-scroll max-h-56 overflow-y-auto rounded-md border bg-background/40 px-3 py-2 font-mono text-[0.78rem] leading-normal"
         onScroll={() => {
@@ -599,33 +589,13 @@ function RunLog({ lines, title }: { lines: RunLine[]; title: string }) {
   );
 }
 
-function LogLine({ line }: { line: RunLine }) {
-  const row = line.stream === "system" ? undefined : parseStatusLine(line.text);
-
-  if (row) {
-    return (
-      <div className="flex gap-3 whitespace-pre-wrap">
-        <span className={TOKEN_STYLES[row.token]}>[{row.token}]</span>
-        <span className="text-foreground">{row.label}</span>
-        {row.note ? <span className="text-muted-foreground">{row.note}</span> : null}
-      </div>
-    );
-  }
-
-  if (line.stream === "system") {
-    return <div className="whitespace-pre-wrap text-muted-foreground">— {line.text}</div>;
-  }
-
-  return <div className="whitespace-pre-wrap text-foreground/90">{line.text}</div>;
-}
-
 function RunningBanner({ run }: { run: RunSummary }) {
   return (
     <section
       aria-label="A show is up"
-      className="flex items-center gap-3 rounded-lg border border-primary/30 bg-[var(--gold-veil)] px-4 py-3"
+      className="flex items-center gap-3 rounded-lg border bg-card/40 px-4 py-3"
     >
-      <Broadcast aria-hidden className="size-4 text-primary" weight="fill" />
+      <Broadcast aria-hidden className="size-4 text-muted-foreground" weight="fill" />
       <div className="grid">
         <span className="text-sm font-bold text-foreground">A show is up.</span>
         <span className="font-mono text-xs text-muted-foreground">{run.title}</span>

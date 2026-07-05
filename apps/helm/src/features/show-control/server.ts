@@ -159,7 +159,7 @@ export function registerRoutes(app: HelmApp): void {
 
     if (ref === undefined) {
       return json(
-        { code: "invalid_request", message: "Pick a tracklist first — raise wants a plan ref." },
+        { code: "invalid_request", message: "Pick a tracklist first. Raise wants a plan ref." },
         400,
       );
     }
