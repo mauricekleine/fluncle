@@ -25,6 +25,8 @@ Per finding, in `found.fluncle.com/<log-id>/`:
 
 ### Render-flag provenance (`render.json` `variants`)
 
+**Plate-era additions (2026-07-05).** Plate-lane bundles carry two more artifacts beside the masters: **`plate.png`** (the photographic subject the shader treats) and **`plate.background.png`** (the subject-removed far layer for parallax), uploaded to R2 BEFORE composing so the composition — and any re-render or live replay — samples the durable `found.fluncle.com/<logId>/plate*.png` URLs. Two framing consequences of the two-master model for plate compositions: the square master must cover-fit a portrait plate (it center-crops top/bottom), and the site's Stories player shows an MT portrait crop OF that square — a double crop ≈ a center-zoom. The doctrine's safe-zone law (fluncle-video cookbook, §the plate lane) exists for exactly this: the subject's essential silhouette + landing point must survive the center-crop chain.
+
 The two masters are the **same composition + props** rendered with **different flags** — `footage.mp4` is `{ aspect: "square", hideOverlay: true }` and `footage.social.mp4` is the portrait default `{ aspect: "portrait", hideOverlay: false }`. Those flags live in the render scripts, not the bundle, so the stored bundle alone would naively re-render the portrait cut. The bundle `render.json` therefore records a `variants` map keyed by output filename → its render flags:
 
 ```jsonc

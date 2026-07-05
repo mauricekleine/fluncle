@@ -159,3 +159,5 @@ the relaunch seconds.
 `BRIDGE_PORT`). A plan HANDLE additionally reads the admin API base + token from the
 env (`FLUNCLE_API_TOKEN` / `FLUNCLE_API_BASE_URL`) or `~/.config/fluncle/.env.production`
 (the CLI's stored credential, read-only).
+
+The plate-era gallery: `FLUNCLE_SHOW_PLAN=src/glass/fixtures/plan-plate-era.json bun src/glass/serve.ts` raises the glass standalone on the first twelve plate-era findings — the lounge-mode demo of the new-era worlds (arrows travel, `v` replays the arrival arc, `f` fires the reveal).

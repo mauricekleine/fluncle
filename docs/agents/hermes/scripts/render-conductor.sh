@@ -274,6 +274,10 @@ creds="$(mktemp)"
   printf 'export FLUNCLE_API_TOKEN=%s\n' "$FLUNCLE_API_TOKEN"
   printf 'export FLUNCLE_API_URL=%s\n' "$API_URL"
   printf 'export FLUNCLE_GL=swangle\n'
+  # The plate lane: the render agent authors photographic plates via Gemini. The key
+  # arrives here from the 1P-injected sweep secrets; absent -> the agent's documented
+  # procedural fallback (never a failure).
+  printf 'export GEMINI_API_KEY=%s\n' "${GEMINI_API_KEY:-}"
 } >"$creds"
 "$BOX_BIN" scp "$creds" "$boxid:/dev/shm/fluncle.env" >/dev/null 2>&1
 rm -f "$creds"
