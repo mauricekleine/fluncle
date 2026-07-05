@@ -146,7 +146,37 @@ export function registerRoutes(app: HelmApp): void {
     return json(body);
   });
 
+  // The single-show guard, race-proof: the body is read FIRST (the only await),
+  // then the check-and-spawn runs synchronously — no interleaving point between
+  // findRunningShow and runStreamed, so two simultaneous raises can never both
+  // pass the check. The in-flight latch is the belt to those braces: it holds
+  // even if a future edit slips an await into the guarded section.
+  let raiseInFlight = false;
+
   app.post("/api/show-control/raise", async (req) => {
+    const body = await readJsonBody(req);
+    const ref = readRef(body);
+
+    if (ref === undefined) {
+      return json(
+        { code: "invalid_request", message: "Pick a tracklist first — raise wants a plan ref." },
+        400,
+      );
+    }
+
+    const force =
+      typeof body === "object" && body !== null && (body as Record<string, unknown>).force === true;
+
+    if (raiseInFlight) {
+      return json(
+        {
+          code: "already_running",
+          message: "A raise is already in hand. One show, one glass.",
+        },
+        409,
+      );
+    }
+
     const running = findRunningShow(app.context.runs.list());
 
     if (running) {
@@ -160,31 +190,27 @@ export function registerRoutes(app: HelmApp): void {
       );
     }
 
-    const body = await readJsonBody(req);
-    const ref = readRef(body);
+    raiseInFlight = true;
 
-    if (ref === undefined) {
-      return json(
-        { code: "invalid_request", message: "Pick a tracklist first — raise wants a plan ref." },
-        400,
-      );
+    try {
+      const argv = [...showBaseArgv(), "--plan", ref];
+
+      if (force) {
+        argv.push("--force");
+      }
+
+      const { runId } = app.context.runs.runStreamed(argv, {
+        cwd: repoRoot,
+        feature: SHOW_FEATURE_ID,
+        title: `raise the glass — ${ref}${force ? " (forced)" : ""}`,
+      });
+      const started: RunStartedResponse = { runId };
+
+      return json(started);
+    } finally {
+      // The run is registered (and findRunningShow sees it) the moment
+      // runStreamed returns — the latch only spans the spawn itself.
+      raiseInFlight = false;
     }
-
-    const force =
-      typeof body === "object" && body !== null && (body as Record<string, unknown>).force === true;
-    const argv = [...showBaseArgv(), "--plan", ref];
-
-    if (force) {
-      argv.push("--force");
-    }
-
-    const { runId } = app.context.runs.runStreamed(argv, {
-      cwd: repoRoot,
-      feature: SHOW_FEATURE_ID,
-      title: `raise the glass — ${ref}${force ? " (forced)" : ""}`,
-    });
-    const started: RunStartedResponse = { runId };
-
-    return json(started);
   });
 }
