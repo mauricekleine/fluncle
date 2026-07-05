@@ -229,9 +229,14 @@ describe("putPart retry", () => {
       return new Response("SignatureDoesNotMatch", { status: 403 });
     }) as unknown as typeof fetch;
 
-    await expect(putPart("https://r2.example/part", tmpFile, part)).rejects.toThrow(
-      /rejected part/,
-    );
+    let error: unknown;
+    try {
+      await putPart("https://r2.example/part", tmpFile, part);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/rejected part/);
     expect(calls).toBe(1); // one attempt, no retry
   });
 
