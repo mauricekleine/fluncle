@@ -151,7 +151,7 @@ let sceneTarget = 0;
 let autoMorph = false;
 let dipped = false;
 let dipT = 0;
-let renderScale = 0.75;
+let renderScale = 1; // full-res default: measured ~7% frame budget at 1080p; upscale softness made baked grain read as noise
 let palCur = flat(CANON.map((c) => c.slice()));
 let palTar = flat(CANON.map((c) => c.slice()));
 let palCurR = flat(CANON.map((c) => c.slice()));
