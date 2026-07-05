@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { featureIds } from "./index";
 import { visibleFeatures } from "./gating";
-import { manifest as pulseLite } from "./pulse-lite/manifest";
+import { manifest as pulse } from "./pulse/manifest";
 import { type FeatureManifest } from "./types";
 
 const m5Only: FeatureManifest = { id: "show", machines: ["m5"], order: 10, title: "Show" };
@@ -38,8 +38,8 @@ describe("the feature registry", () => {
     expect(new Set(featureIds).size).toBe(featureIds.length);
   });
 
-  test("pulse-lite's manifest matches its registered id (the convention the loader enforces)", () => {
-    expect(featureIds as readonly string[]).toContain(pulseLite.id);
-    expect(pulseLite.machines.length).toBeGreaterThan(0);
+  test("pulse's manifest matches its registered id (the convention the loader enforces)", () => {
+    expect(featureIds as readonly string[]).toContain(pulse.id);
+    expect(pulse.machines.length).toBeGreaterThan(0);
   });
 });
