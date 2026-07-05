@@ -13,10 +13,17 @@ export function visibleFeatures(
   manifests: readonly FeatureManifest[],
   machine: MachineId,
 ): FeatureManifest[] {
-  const visible =
-    machine === "unknown"
-      ? [...manifests]
-      : manifests.filter((manifest) => manifest.machines.includes(machine));
+  const visible = manifests.filter((manifest) => featureAllowedOnMachine(manifest, machine));
 
   return visible.sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+}
+
+/**
+ * May this feature ACT on this machine? The same rule the panel gate uses, held
+ * server-side too: the daemon 403s a wrong-machine action POST, so a request
+ * aimed straight at the API (no panel involved) meets the same wall. An unknown
+ * machine gates nothing, matching visibility.
+ */
+export function featureAllowedOnMachine(manifest: FeatureManifest, machine: MachineId): boolean {
+  return machine === "unknown" || manifest.machines.includes(machine);
 }

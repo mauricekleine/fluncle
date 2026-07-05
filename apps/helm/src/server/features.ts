@@ -4,6 +4,7 @@
 // all features — a feature's server.ts only ever starts runs and answers actions.
 
 import { RUN_SSE_LINE_EVENT, RUN_SSE_STATUS_EVENT } from "../contract";
+import { featureAllowedOnMachine } from "../features/gating";
 import { featureIds } from "../features/index";
 import { type FeatureManifest, type HelmApp, type RegisterRoutes } from "../features/types";
 import { type Router } from "./router";
@@ -11,6 +12,36 @@ import { type RunEvent } from "./runs";
 import { SSE_HEADERS, sseComment, sseEvent } from "./sse";
 
 const SSE_KEEPALIVE_MS = 15_000;
+
+/**
+ * The app a feature registers against. Reads (GET) stay open everywhere; action
+ * POSTs from a feature whose manifest excludes this machine answer 403 — the
+ * panel gate (visibleFeatures) enforced SERVER-SIDE, so a request aimed straight
+ * at the API meets the same wall as one from a hidden panel.
+ */
+export function machineGatedApp(app: HelmApp, manifest: FeatureManifest): HelmApp {
+  if (featureAllowedOnMachine(manifest, app.context.machine)) {
+    return app;
+  }
+
+  return {
+    context: app.context,
+    get(pattern, handler) {
+      app.get(pattern, handler);
+    },
+    post(pattern) {
+      app.post(pattern, () =>
+        json(
+          {
+            code: "wrong_machine",
+            message: `The ${manifest.title} station holds on ${manifest.machines.join("/")} — not this Mac.`,
+          },
+          403,
+        ),
+      );
+    },
+  };
+}
 
 export async function registerFeatures(app: HelmApp): Promise<FeatureManifest[]> {
   const manifests: FeatureManifest[] = [];
@@ -30,7 +61,7 @@ export async function registerFeatures(app: HelmApp): Promise<FeatureManifest[]>
     const serverModule = (await import(`../features/${id}/server.ts`)) as {
       registerRoutes: RegisterRoutes;
     };
-    serverModule.registerRoutes(app);
+    serverModule.registerRoutes(machineGatedApp(app, manifest));
   }
 
   return manifests;

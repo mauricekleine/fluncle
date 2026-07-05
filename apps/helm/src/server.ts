@@ -4,12 +4,16 @@
 //   * answers the /api core: /api/machine (which Mac), /api/health, /api/features
 //     (the machine-gated station manifests), /api/runs (the drawer's list),
 //   * hosts the action-streaming core — runStreamed children with per-run SSE
-//     stream + kill routes, stood down when the daemon itself exits,
+//     stream + kill routes, stood down (escalating, awaited) when the daemon exits,
 //   * holds the admin bridge (apps/cli's credentials, in-process, server-side —
 //     the token never reaches the UI) and notify() via osascript.
 //
 // Binds 127.0.0.1 by default; FLUNCLE_HELM_LAN=1 opens it to the LAN/tailnet
-// (the packages/live LAN-local precedent — the phone companion path).
+// (the packages/live LAN-local precedent — the phone companion path). LAN mode is
+// AUTHENTICATED: loopback requests (verified by remote address) pass free, any
+// other peer must present the helm key (auth.ts) — and every request's Host (and
+// Origin, when a browser sends one) must sit on the daemon's own allowlist, which
+// kills DNS-rebinding and cross-origin POSTs.
 // FLUNCLE_HELM_PORT overrides 4190. Ports 4173/4180 are the live glass + bridge:
 // the helm SPAWNS the show, it never serves those.
 //
@@ -18,6 +22,7 @@
 import { resolve } from "node:path";
 
 import {
+  HELM_DEV_PORT,
   HELM_PORT,
   type HealthResponse,
   type MachineResponse,
@@ -25,8 +30,19 @@ import {
 } from "./contract";
 import { visibleFeatures } from "./features/gating";
 import { type HelmApp, type HelmContext } from "./features/types";
-import { adminTokenAboard, createAdminClient } from "./server/admin";
+import { adminChildEnv, adminTokenAboard, createAdminClient } from "./server/admin";
+import {
+  authorizeRequest,
+  buildHostAllowlist,
+  hostAllowed,
+  isLoopbackAddress,
+  lanAddresses,
+  loadHelmKey,
+  originAllowed,
+  presentedKey,
+} from "./server/auth";
 import { json, registerFeatures, registerRunRoutes } from "./server/features";
+import { markRequestLocal } from "./server/locality";
 import { detectMachine } from "./server/machine";
 import { notify } from "./server/notify";
 import { createRouter } from "./server/router";
@@ -55,10 +71,16 @@ function resolvePort(): number {
 async function main(): Promise<void> {
   const startedAt = Date.now();
   const port = resolvePort();
-  const hostname = process.env.FLUNCLE_HELM_LAN === "1" ? "0.0.0.0" : "127.0.0.1";
+  const lanMode = process.env.FLUNCLE_HELM_LAN === "1";
+  const hostname = lanMode ? "0.0.0.0" : "127.0.0.1";
   const { brand, machine } = await detectMachine();
 
-  const runs = createRunRegistry();
+  // The helm key: loopback never needs it; a LAN peer always presents it.
+  const helmKey = loadHelmKey();
+  const lanIps = lanMode ? lanAddresses() : [];
+  const allowedHosts = buildHostAllowlist({ devPort: HELM_DEV_PORT, lanIps, port });
+
+  const runs = createRunRegistry({ adminEnv: adminChildEnv });
   const context: HelmContext = {
     admin: createAdminClient(),
     machine,
@@ -116,8 +138,39 @@ async function main(): Promise<void> {
   const serveStatic = createStaticHandler(DIST_DIR);
 
   const server = Bun.serve({
-    async fetch(req) {
+    async fetch(req, srv) {
       const url = new URL(req.url);
+
+      // The gate, on EVERY request — static and /api alike. Host first (kills
+      // DNS-rebinding), then Origin when a browser sent one (kills cross-origin
+      // POSTs), then the key for any peer that is not the loopback itself.
+      if (!hostAllowed(req.headers.get("host"), allowedHosts)) {
+        return json({ code: "wrong_host", message: "That Host is not this helm." }, 403);
+      }
+
+      if (!originAllowed(req.headers.get("origin"), allowedHosts)) {
+        return json({ code: "wrong_origin", message: "That origin has no seat here." }, 403);
+      }
+
+      const remote = srv.requestIP(req);
+      const isLocal = remote !== null && isLoopbackAddress(remote.address);
+
+      if (
+        !authorizeRequest({
+          isLocal,
+          key: helmKey.key,
+          presented: presentedKey(req.headers.get("authorization"), url),
+        })
+      ) {
+        return json(
+          { code: "unauthorized", message: "The helm wants its key — Bearer, or ?key=." },
+          401,
+        );
+      }
+
+      if (isLocal) {
+        markRequestLocal(req);
+      }
 
       if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
         const match = router.match(req.method, url.pathname);
@@ -146,10 +199,20 @@ async function main(): Promise<void> {
     port,
   });
 
+  // Daemon exit: SIGINT the run groups, await the bounded escalation (SIGKILL
+  // the stragglers), only then stop the server and go.
+  let standingDown = false;
   const standDown = (): void => {
-    runs.standDown();
-    void server.stop(true);
-    process.exit(0);
+    if (standingDown) {
+      return;
+    }
+
+    standingDown = true;
+    void (async () => {
+      await runs.standDown();
+      void server.stop(true);
+      process.exit(0);
+    })();
   };
   process.on("SIGINT", standDown);
   process.on("SIGTERM", standDown);
@@ -159,6 +222,17 @@ async function main(): Promise<void> {
     `helm: holding on ${hostname}:${port} — machine ${machine}` +
       `${brand ? ` (${brand})` : ""} · ${stations} station${stations === 1 ? "" : "s"} wired`,
   );
+
+  if (lanMode) {
+    // The phone path: LAN peers must present the key, so hand the operator the
+    // ready-to-open URL (the key stays out of logs when LAN mode is off).
+    const ip = lanIps[0];
+    console.error(
+      ip
+        ? `helm: LAN mode — phone url http://${ip}:${port}/?key=${helmKey.key}`
+        : `helm: LAN mode — no LAN address found; key (${helmKey.source}) required off-loopback`,
+    );
+  }
 }
 
 if (import.meta.main) {

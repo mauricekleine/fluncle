@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { featureIds } from "./index";
-import { visibleFeatures } from "./gating";
+import { featureAllowedOnMachine, visibleFeatures } from "./gating";
 import { manifest as pulseLite } from "./pulse-lite/manifest";
 import { type FeatureManifest } from "./types";
 
@@ -30,6 +30,20 @@ describe("visibleFeatures (manifest gating)", () => {
     const b: FeatureManifest = { id: "a-station", machines: ["m5"], order: 1, title: "A" };
 
     expect(visibleFeatures([a, b], "m5").map((m) => m.id)).toEqual(["a-station", "b-station"]);
+  });
+});
+
+describe("featureAllowedOnMachine (the server-side action gate)", () => {
+  test("a station acts only on the machines its manifest names", () => {
+    expect(featureAllowedOnMachine(m5Only, "m5")).toBe(true);
+    expect(featureAllowedOnMachine(m5Only, "m2")).toBe(false);
+    expect(featureAllowedOnMachine(m2Only, "m5")).toBe(false);
+    expect(featureAllowedOnMachine(both, "m2")).toBe(true);
+  });
+
+  test("an unknown machine gates nothing, matching visibility", () => {
+    expect(featureAllowedOnMachine(m5Only, "unknown")).toBe(true);
+    expect(featureAllowedOnMachine(m2Only, "unknown")).toBe(true);
   });
 });
 

@@ -1,5 +1,10 @@
 // The glass's thin client over the daemon's /api. Same-origin fetch (the daemon
 // serves the SPA) plus the EventSource wrapper for run streams.
+//
+// The phone path: a LAN peer opens the daemon-printed URL with `?key=` aboard.
+// The key is stashed (sessionStorage) and scrubbed from the address bar, then
+// rides every request — Authorization on fetches, `?key=` on EventSource (which
+// cannot set headers). On the loopback there is no key and nothing is sent.
 
 import {
   RUN_SSE_LINE_EVENT,
@@ -7,6 +12,35 @@ import {
   type RunLine,
   type RunSummary,
 } from "../contract";
+
+const KEY_STORAGE = "fluncle-helm-key";
+
+function adoptKeyFromLocation(): string | null {
+  try {
+    const url = new URL(window.location.href);
+    const fromUrl = url.searchParams.get("key");
+
+    if (fromUrl) {
+      sessionStorage.setItem(KEY_STORAGE, fromUrl);
+      url.searchParams.delete("key");
+      window.history.replaceState(null, "", url.toString());
+    }
+
+    return sessionStorage.getItem(KEY_STORAGE);
+  } catch {
+    return null;
+  }
+}
+
+const helmKey = adoptKeyFromLocation();
+
+function withKey(path: string): string {
+  if (helmKey === null) {
+    return path;
+  }
+
+  return `${path}${path.includes("?") ? "&" : "?"}key=${encodeURIComponent(helmKey)}`;
+}
 
 export class ApiError extends Error {
   code: string;
@@ -19,7 +53,15 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init);
+  let withAuth = init;
+
+  if (helmKey !== null) {
+    const headers = new Headers(init?.headers);
+    headers.set("authorization", `Bearer ${helmKey}`);
+    withAuth = { ...init, headers };
+  }
+
+  const response = await fetch(path, withAuth);
   const data: unknown = await response.json().catch(() => undefined);
 
   if (!response.ok) {
@@ -57,7 +99,7 @@ export type RunStreamHandlers = {
  */
 export function streamRun(feature: string, runId: string, handlers: RunStreamHandlers): () => void {
   const source = new EventSource(
-    `/api/${encodeURIComponent(feature)}/runs/${encodeURIComponent(runId)}/stream`,
+    withKey(`/api/${encodeURIComponent(feature)}/runs/${encodeURIComponent(runId)}/stream`),
   );
   let done = false;
 

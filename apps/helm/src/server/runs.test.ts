@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { type RunSummary } from "../contract";
-import { createRunRegistry, type RunEvent } from "./runs";
+import { createRunRegistry, type RunEvent, wrapInProcessGroup } from "./runs";
 
 /** Wait until the run leaves `running` (its final status event), with a floor. */
 function waitForFinish(
@@ -153,7 +153,7 @@ describe("the run registry state machine", () => {
 
     expect(registry.list().map((run) => run.id)).toEqual([second.runId, first.runId]);
 
-    registry.standDown();
+    void registry.standDown();
 
     const [a, b] = await Promise.all([
       waitForFinish(registry, "test", first.runId),
@@ -162,5 +162,148 @@ describe("the run registry state machine", () => {
 
     expect(a.status).toBe("failed");
     expect(b.status).toBe("failed");
+  });
+});
+
+describe("the least-privilege child env (H3)", () => {
+  test("a child never sees the daemon's own env — only the minimal base + opts.env", async () => {
+    process.env.FLUNCLE_API_TOKEN = process.env.FLUNCLE_API_TOKEN ?? "canary-token";
+    const registry = createRunRegistry();
+    const { runId } = registry.runStreamed(["/usr/bin/printenv"], {
+      env: { HELM_TEST_EXTRA: "aboard" },
+      feature: "test",
+      title: "env audit",
+    });
+
+    await waitForFinish(registry, "test", runId);
+
+    const texts = registry.get("test", runId)?.lines.map((line) => line.text) ?? [];
+
+    expect(texts.some((text) => text.startsWith("FLUNCLE_API_TOKEN="))).toBe(false);
+    expect(texts).toContain("HELM_TEST_EXTRA=aboard");
+    expect(texts.some((text) => text.startsWith("PATH="))).toBe(true);
+
+    if (process.env.FLUNCLE_API_TOKEN === "canary-token") {
+      delete process.env.FLUNCLE_API_TOKEN;
+    }
+  });
+
+  test("adminToken: true presents the injected credentials, deliberately", async () => {
+    const registry = createRunRegistry({ adminEnv: () => ({ FLUNCLE_API_TOKEN: "the-key" }) });
+
+    const tokenless = registry.runStreamed(["/usr/bin/printenv"], {
+      feature: "test",
+      title: "tokenless",
+    });
+    const tokened = registry.runStreamed(["/usr/bin/printenv"], {
+      adminToken: true,
+      feature: "test",
+      title: "tokened",
+    });
+
+    await Promise.all([
+      waitForFinish(registry, "test", tokenless.runId),
+      waitForFinish(registry, "test", tokened.runId),
+    ]);
+
+    const linesOf = (runId: string): string[] =>
+      registry.get("test", runId)?.lines.map((line) => line.text) ?? [];
+
+    expect(linesOf(tokenless.runId)).not.toContain("FLUNCLE_API_TOKEN=the-key");
+    expect(linesOf(tokened.runId)).toContain("FLUNCLE_API_TOKEN=the-key");
+  });
+});
+
+describe("the process group + the drain bound (M6)", () => {
+  test("wrapInProcessGroup wraps only when the wrapper exists", () => {
+    const argv = ["/bin/echo", "hi"];
+
+    expect(wrapInProcessGroup(argv, false)).toEqual(argv);
+
+    const wrapped = wrapInProcessGroup(argv, true);
+
+    expect(wrapped[0]).toBe("/usr/bin/perl");
+    expect(wrapped.slice(-2)).toEqual(argv);
+  });
+
+  test("a run leads its own process group (kills can target the group)", async () => {
+    const registry = createRunRegistry();
+    const { runId } = registry.runStreamed(
+      [
+        "/bin/sh",
+        "-c",
+        'ps -o pid=,pgid= -p "$$" | awk \'{print ($1==$2) ? "leader" : "follower"}\'',
+      ],
+      { feature: "test", title: "pgid audit" },
+    );
+
+    await waitForFinish(registry, "test", runId);
+
+    const texts = registry.get("test", runId)?.lines.map((line) => line.text) ?? [];
+
+    expect(texts).toContain("leader");
+  });
+
+  test("a grandchild holding the pipe can't wedge the run — the drain is bounded", async () => {
+    const registry = createRunRegistry({ timings: { drainGraceMs: 250 } });
+    // The sh exits immediately; the backgrounded sleep inherits (and holds) stdout.
+    const { runId } = registry.runStreamed(["/bin/sh", "-c", "sleep 2 & echo parent-done"], {
+      feature: "test",
+      title: "abandoned pipe",
+    });
+
+    const startedAt = Date.now();
+    const finished = await waitForFinish(registry, "test", runId);
+
+    expect(finished.status).toBe("ok");
+    expect(Date.now() - startedAt).toBeLessThan(1800);
+
+    const texts = registry.get("test", runId)?.lines.map((line) => line.text) ?? [];
+
+    expect(texts).toContain("parent-done");
+    expect(texts).toContain("(output pipe abandoned — grandchildren may hold it)");
+  });
+});
+
+describe("the escalating stand-down (M7)", () => {
+  test("a SIGINT-deaf child gets the SIGKILL escalation, and standDown awaits it", async () => {
+    const registry = createRunRegistry({
+      timings: { standDownSigintGraceMs: 250, standDownSigkillGraceMs: 2000 },
+    });
+    const { runId } = registry.runStreamed(["/bin/sh", "-c", 'trap "" INT; sleep 30'], {
+      feature: "test",
+      title: "deaf to SIGINT",
+    });
+    // Let the shell install its trap before the stand-down begins.
+    await Bun.sleep(150);
+
+    await registry.standDown();
+
+    const run = registry.get("test", runId);
+
+    expect(run?.status).toBe("failed");
+
+    const texts = run?.lines.map((line) => line.text) ?? [];
+
+    expect(texts).toContain("daemon standing down (SIGINT)");
+    expect(texts).toContain("still up after the grace — SIGKILL to the group");
+  });
+
+  test("a polite child never sees the SIGKILL leg", async () => {
+    const registry = createRunRegistry({
+      timings: { standDownSigintGraceMs: 3000, standDownSigkillGraceMs: 2000 },
+    });
+    const { runId } = registry.runStreamed(["/bin/sh", "-c", "sleep 30"], {
+      feature: "test",
+      title: "polite",
+    });
+    await Bun.sleep(100);
+
+    await registry.standDown();
+
+    const texts = registry.get("test", runId)?.lines.map((line) => line.text) ?? [];
+
+    expect(texts).toContain("daemon standing down (SIGINT)");
+    expect(texts).not.toContain("still up after the grace — SIGKILL to the group");
   });
 });
