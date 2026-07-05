@@ -7,7 +7,7 @@
 // space standalone — the failure floor). Everything the arrival needs is already on
 // R2 (props.json + composition.tsx), CORS-clear — no backfill artifact.
 import { type Scene } from "./scene-extract.ts";
-import { extractScene } from "./scene-extract.ts";
+import { extractScene, resolveSceneTextureUrls } from "./scene-extract.ts";
 
 export type PlanEntry = {
   logId: string;
@@ -81,6 +81,7 @@ export async function buildPlan(): Promise<PlanEntry[]> {
       let artists = t.artists ?? [];
       let foundAt: string | null = null;
       let durationMs: number | null = t.durationMs ?? null;
+      let artworkUrl: string | null = null;
       try {
         const r = await fetch(`https://found.fluncle.com/${t.logId}/props.json`);
         if (r.ok) {
@@ -92,6 +93,7 @@ export async function buildPlan(): Promise<PlanEntry[]> {
               artists?: string[];
               discoveredAt?: string;
               durationMs?: number;
+              artworkUrl?: string;
             };
           };
           palette = p.palette ?? null;
@@ -100,6 +102,7 @@ export async function buildPlan(): Promise<PlanEntry[]> {
           artists = p.track?.artists ?? artists;
           foundAt = p.track?.discoveredAt ?? null;
           durationMs = p.track?.durationMs ?? durationMs;
+          artworkUrl = p.track?.artworkUrl ?? null;
         }
       } catch {
         // props.json missing -> canon palette for this arrival
@@ -109,11 +112,13 @@ export async function buildPlan(): Promise<PlanEntry[]> {
         layers: [],
         reason: "composition.tsx unavailable",
         replayable: false,
+        textures: [],
       };
       try {
         const cr = await fetch(`https://found.fluncle.com/${t.logId}/composition.tsx`);
         if (cr.ok) {
-          replay = extractScene(await cr.text());
+          // Resolve plate/artwork samplers to concrete R2 URLs the glass loads + binds.
+          replay = resolveSceneTextureUrls(extractScene(await cr.text()), t.logId, artworkUrl);
         }
       } catch {
         // fetch failed -> non-replayable (tag-map fallback)
@@ -144,7 +149,8 @@ export function logSummary(plan: PlanEntry[]): void {
       pad("logId", 10) +
       pad("replay", 8) +
       pad("layers", 8) +
-      pad("custom uniforms", 46) +
+      pad("tex", 5) +
+      pad("custom uniforms", 42) +
       "reason",
   );
   console.log("-".repeat(118));
@@ -160,7 +166,8 @@ export function logSummary(plan: PlanEntry[]): void {
       pad(e.logId, 10) +
         pad(r?.replayable ? "YES" : "no", 8) +
         pad(String(r?.layers.length ?? 0), 8) +
-        pad(cu || "(none)", 46) +
+        pad(String(r?.textures?.length ?? 0), 5) +
+        pad(cu || "(none)", 42) +
         (r?.replayable ? "" : (r?.reason ?? "")),
     );
   }

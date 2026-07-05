@@ -45,12 +45,16 @@ export type PlanEntry = {
       body: string;
       customUniforms: PlanCustomUniform[];
       blend: "opaque" | "over";
+      /** Image samplers this layer reads, with their resolved crossOrigin URLs. */
+      textures?: PlanTexture[];
     }>;
     /** Convenience mirror of layers[0] (the single-layer path). */
     body?: string;
     customUniforms?: PlanCustomUniform[];
     /** Bloom config read from the composition's ShaderLayer `bloom` prop. */
     bloom?: { threshold?: number; intensity?: number; radius?: number };
+    /** Every image sampler the scene declares (unioned across layers) with resolved URLs. */
+    textures?: PlanTexture[];
   };
 };
 
@@ -60,6 +64,18 @@ export type PlanCustomUniform = {
   type: string;
   class: "riseRamp" | "settleDim" | "audioAlias" | "color" | "velocityPos" | "velocity";
   params?: Record<string, unknown>;
+};
+
+/**
+ * A plate/artwork image sampler in a replay scene: the sampler uniform `name`, its resolved
+ * `source` (the plate lane or the finding's artwork), and the concrete https `url` the glass
+ * loads (crossOrigin anonymous) and binds. The glass reconstructs the offline ShaderLayer's
+ * `sampler2D <name>;` + `float <name>AspectRatio;` header pair around the archived body.
+ */
+export type PlanTexture = {
+  name: string;
+  source: "artwork" | "plate" | "plate-background";
+  url: string;
 };
 
 /** The bridge's fused state stream, emitted at a fixed cadence (30-60Hz). */

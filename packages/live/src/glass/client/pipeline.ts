@@ -15,15 +15,29 @@
 // the matched finding's own layer program(s) and arms the JS velocity integrator.
 import { type BloomConfig } from "../glsl-runtime.ts";
 import {
+  assignTextureUnits,
   BLIT_FRAG,
   BLOOM_BLUR_FRAG,
   BLOOM_BRIGHT_FRAG,
   BLOOM_COMPOSITE_FRAG,
+  bodyDeclaresSampler,
   FRAG,
   REPLAY_HEADER,
+  textureUniformDecls,
   VERT,
 } from "../glsl-runtime.ts";
 import { type CustomU, type SceneLayer } from "../scene-extract.ts";
+
+/** Load an image cross-origin (R2 serves the plate PNGs ACAO:*), rejecting on any failure. */
+function loadImage(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = (): void => resolve(img);
+    img.onerror = (): void => reject(new Error(`texture load failed: ${url}`));
+    img.src = url;
+  });
+}
 
 // The crossfade + shared rails: mix the base and replay fields, clamp to the Warm
 // Dark ceiling, and keep a grain floor so the frame is never a dead flat black.
@@ -124,9 +138,29 @@ export class GlassPipeline {
   private fboSmall!: Target;
 
   // replay (per-arrival) state
-  private replayLayers: Array<{ prog: Program; customs: CustomU[]; blend: "opaque" | "over" }> = [];
+  private replayLayers: Array<{
+    prog: Program;
+    customs: CustomU[];
+    blend: "opaque" | "over";
+    /** The sampler names THIS layer's body reads (bound before its draw). */
+    textureNames: string[];
+  }> = [];
   private integrators: VelEntry[] = [];
   private lastMs = performance.now();
+
+  // ---- plate/artwork textures ----
+  // The current arrival's loaded, bound samplers (name -> GPU texture + aspect), the
+  // scene-wide deterministic unit map, and the URLs to (re)load — a plate scene binds
+  // these before every replay-layer draw. A small LRU cache keeps a few findings' plates
+  // resident (plates are multi-MB) without hoarding the whole plan in VRAM; loads dedupe
+  // in-flight so an arrival + a neighbour prefetch never fetch the same URL twice.
+  private activeTextures = new Map<string, { tex: WebGLTexture; aspect: number }>();
+  private replayUnits: Record<string, number> = {};
+  private replayTextureUrls: Array<{ name: string; url: string }> = [];
+  private texCache = new Map<string, { tex: WebGLTexture; aspect: number; lastUsed: number }>();
+  private texLoading = new Map<string, Promise<{ tex: WebGLTexture; aspect: number }>>();
+  private texClock = 0;
+  private static readonly TEX_CACHE_CAP = 8;
 
   // async readback
   private pbo: WebGLBuffer | null = null;
@@ -296,11 +330,40 @@ export class GlassPipeline {
   }
 
   // ---- replay: compile the matched finding's own layer program(s) ----
+  // A plate layer's body reads samplers the offline ShaderLayer injected but never
+  // declared; the reconstruction prepends the SAME `sampler2D <name>;` + `float
+  // <name>AspectRatio;` pair (textureUniformDecls) so the archived body compiles verbatim.
+  // Compiling is synchronous; the images load asynchronously (loadReplayTextures) — the
+  // caller holds the default vehicle until they are ready so a plate never flashes black.
   setReplay(layers: SceneLayer[]): void {
     this.disposeReplay();
+    // The scene-wide texture roster (union by name) + deterministic units (render-aligned).
+    const urlByName = new Map<string, string>();
     for (const layer of layers) {
-      const prog = this.link(REPLAY_HEADER + layer.body, "replay"); // throws on failure -> caller frees
-      this.replayLayers.push({ blend: layer.blend, customs: layer.customUniforms, prog });
+      for (const t of layer.textures) {
+        if (t.url && !urlByName.has(t.name)) {
+          urlByName.set(t.name, t.url);
+        }
+      }
+    }
+    const sceneNames = [...urlByName.keys()];
+    this.replayUnits = assignTextureUnits(sceneNames);
+    this.replayTextureUrls = sceneNames.flatMap((name) => {
+      const url = urlByName.get(name);
+      return url ? [{ name, url }] : [];
+    });
+
+    for (const layer of layers) {
+      const names = layer.textures.filter((t) => t.url).map((t) => t.name);
+      const declaredInBody = new Set(names.filter((n) => bodyDeclaresSampler(layer.body, n)));
+      const decls = textureUniformDecls(names, declaredInBody);
+      const prog = this.link(REPLAY_HEADER + decls + layer.body, "replay"); // throws -> caller frees
+      this.replayLayers.push({
+        blend: layer.blend,
+        customs: layer.customUniforms,
+        prog,
+        textureNames: names,
+      });
     }
     // Arm the velocity integrator: each velocityPos + its …Vel sibling.
     this.integrators = [];
@@ -325,6 +388,131 @@ export class GlassPipeline {
     }
   }
 
+  /** Does the current replay need images loaded before it can paint its subject? */
+  get replayNeedsTextures(): boolean {
+    return this.replayTextureUrls.length > 0;
+  }
+
+  /**
+   * Load (or reuse from the LRU cache) every texture the current replay declares and arm
+   * them for binding. Resolves true when all are resident; REJECTS on any load failure so
+   * the caller falls back to the default vehicle (never a black show). Loads run in
+   * parallel and dedupe against in-flight fetches + the cache.
+   */
+  async loadReplayTextures(): Promise<void> {
+    const wanted = this.replayTextureUrls;
+    if (wanted.length === 0) {
+      return;
+    }
+    const loaded = await Promise.all(
+      wanted.map(async ({ name, url }) => ({ name, tex: await this.loadTexture(url) })),
+    );
+    const map = new Map<string, { tex: WebGLTexture; aspect: number }>();
+    for (const { name, tex } of loaded) {
+      map.set(name, tex);
+    }
+    this.activeTextures = map;
+  }
+
+  /**
+   * Warm the LRU cache with a neighbour's textures (fire-and-forget, errors swallowed) so
+   * the next arrival binds instantly. Cheap: an already-cached / in-flight URL is a no-op.
+   */
+  prefetchTextures(urls: readonly string[]): void {
+    for (const url of urls) {
+      void this.loadTexture(url).catch(() => undefined);
+    }
+  }
+
+  private async loadTexture(url: string): Promise<{ tex: WebGLTexture; aspect: number }> {
+    const cached = this.texCache.get(url);
+    if (cached) {
+      cached.lastUsed = ++this.texClock;
+      return { aspect: cached.aspect, tex: cached.tex };
+    }
+    const inflight = this.texLoading.get(url);
+    if (inflight) {
+      return inflight;
+    }
+    const p = this.fetchAndUpload(url).finally(() => this.texLoading.delete(url));
+    this.texLoading.set(url, p);
+    return p;
+  }
+
+  private async fetchAndUpload(url: string): Promise<{ tex: WebGLTexture; aspect: number }> {
+    const img = await loadImage(url);
+    const tex = this.uploadTexture(img);
+    const aspect = img.naturalHeight === 0 ? 1 : img.naturalWidth / img.naturalHeight;
+    this.texCache.set(url, { aspect, lastUsed: ++this.texClock, tex });
+    this.evictTextures();
+    return { aspect, tex };
+  }
+
+  /** Upload an image as an NPOT-safe, UPRIGHT sampler2D (flip-Y, LINEAR, clamp) — as offline. */
+  private uploadTexture(img: HTMLImageElement): WebGLTexture {
+    const gl = this.gl;
+    const tex = gl.createTexture();
+    if (!tex) {
+      throw new Error("createTexture failed");
+    }
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return tex;
+  }
+
+  /** Evict the least-recently-used cached textures over the cap, never the current arrival's. */
+  private evictTextures(): void {
+    const pinned = new Set(this.replayTextureUrls.map((u) => u.url));
+    while (this.texCache.size > GlassPipeline.TEX_CACHE_CAP) {
+      let victim: string | null = null;
+      let oldest = Infinity;
+      for (const [url, e] of this.texCache) {
+        if (pinned.has(url)) {
+          continue;
+        }
+        if (e.lastUsed < oldest) {
+          oldest = e.lastUsed;
+          victim = url;
+        }
+      }
+      if (victim === null) {
+        break; // everything left is pinned
+      }
+      const v = this.texCache.get(victim);
+      if (v) {
+        this.gl.deleteTexture(v.tex);
+      }
+      this.texCache.delete(victim);
+    }
+  }
+
+  private bindLayerTextures(p: Program, names: string[]): void {
+    const gl = this.gl;
+    for (const name of names) {
+      const t = this.activeTextures.get(name);
+      if (!t) {
+        continue;
+      }
+      const unit = this.replayUnits[name] ?? 0;
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, t.tex);
+      const sampler = this.u(p, name);
+      if (sampler !== null) {
+        gl.uniform1i(sampler, unit);
+      }
+      const aspect = this.u(p, `${name}AspectRatio`);
+      if (aspect !== null) {
+        gl.uniform1f(aspect, t.aspect);
+      }
+    }
+  }
+
   private hashName(s: string): number {
     let h = 2166136261;
     for (let i = 0; i < s.length; i++) {
@@ -340,6 +528,10 @@ export class GlassPipeline {
     }
     this.replayLayers = [];
     this.integrators = [];
+    // Drop the per-arrival binding; the LRU cache persists (the next arrival may reuse it).
+    this.activeTextures = new Map();
+    this.replayUnits = {};
+    this.replayTextureUrls = [];
   }
 
   get replayLayerCount(): number {
@@ -420,6 +612,7 @@ export class GlassPipeline {
         }
         this.pass(layer.prog, this.fboReplay, this.w, this.h, () => {
           this.setReplayUniforms(layer.prog, layer.customs, replay.inputs, dt);
+          this.bindLayerTextures(layer.prog, layer.textureNames);
         });
       }
       gl.disable(gl.BLEND);
@@ -657,6 +850,13 @@ export class GlassPipeline {
   rebuild(): void {
     this.replayLayers = [];
     this.integrators = [];
+    // Every cached GPU texture died with the lost context — drop the cache (re-arrival
+    // re-loads); never deleteTexture here (the handles belong to the dead context).
+    this.activeTextures = new Map();
+    this.replayUnits = {};
+    this.replayTextureUrls = [];
+    this.texCache = new Map();
+    this.texLoading = new Map();
     this.fence = null;
     this.pbo = null;
     this.freshContext = true; // the old GL objects died with the lost context
@@ -665,6 +865,10 @@ export class GlassPipeline {
 
   destroy(): void {
     this.disposeReplay();
+    for (const e of this.texCache.values()) {
+      this.gl.deleteTexture(e.tex);
+    }
+    this.texCache = new Map();
     this.deleteTarget(this.fboBase);
     this.deleteTarget(this.fboReplay);
     this.deleteTarget(this.fboComposite);
