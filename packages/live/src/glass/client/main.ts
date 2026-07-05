@@ -198,7 +198,11 @@ function foundStr(iso: string | null): string {
   }
   return "Found " + MONTHS[d.getUTCMonth()] + " " + d.getUTCDate();
 }
+let plateVisible = true;
 function showPlate(e: PlanItem): void {
+  if (!plateVisible) {
+    return;
+  }
   $("p-coord").textContent = e.logId;
   $("p-title").textContent = e.title || "";
   $("p-artist").textContent = (e.artists || []).join(", ");
@@ -332,6 +336,13 @@ const HANDLERS: Record<KeybindingId, (ev: KeyboardEvent) => void> = {
     // A/B the low-latency dual-resolution DSP against the legacy single-4096 path.
     dsp.lowLatency = !dsp.lowLatency;
     updateHud();
+  },
+  plate: () => {
+    plateVisible = !plateVisible;
+    const el = document.getElementById("plate");
+    if (el) {
+      el.classList.toggle("show", plateVisible && el.textContent !== "");
+    }
   },
   replay: () => {
     replayEnabled = !replayEnabled;

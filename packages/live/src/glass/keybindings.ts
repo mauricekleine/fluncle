@@ -59,6 +59,7 @@ export const KEYBINDINGS = [
   },
   { action: "auto-morph (matcher drives)", group: "world", id: "auto", keys: ["m"], label: "m" },
   { action: "replay the arrival scene", group: "world", id: "replay", keys: ["v"], label: "v" },
+  { action: "track plate show/hide", group: "plan", id: "plate", keys: ["t"], label: "t" },
   { action: "bloom toggle", group: "world", id: "bloom", keys: ["g"], label: "g" },
   {
     action: "intensity down / up",
