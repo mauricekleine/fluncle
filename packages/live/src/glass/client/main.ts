@@ -13,6 +13,7 @@ import {
   type KeybindingId,
   keyToBinding,
 } from "../keybindings.ts";
+import { DropDetector, DropEnvelope } from "../drop-envelope.ts";
 import { type Scene } from "../scene-extract.ts";
 import { settleGain } from "../settle.ts";
 import { BridgeClient } from "./bridge.ts";
@@ -149,6 +150,12 @@ const dsp = new Dsp();
 const limiter = new FlashLimiter();
 const monitor = new FlashMonitor();
 const bridge = new BridgeClient();
+// The drop-reveal engine + its live drop detector. The engine folds the scripted arrival
+// arc (prong 1) and the live reveal punch — detector or manual `f` (prong 2) — with the
+// DSP's living-idle drop into the one u_audioDrop drive; the detector reads broadband energy.
+const dropEnv = new DropEnvelope();
+const dropDetector = new DropDetector();
+let lastDropValue = 0;
 
 // ---- state -----------------------------------------------------------------
 let PLAN: PlanItem[] = [];
@@ -247,6 +254,10 @@ function arrive(idx: number): void {
   arriveMs = performance.now();
   traceLastMs = 0;
   replayExpectedLenMs = e.durationMs || 300000;
+  // Every arrival resets the scripted drop arc; a drop-reactive replay re-arms it below.
+  // An in-flight reveal (detector/manual) is left to release on its own — it is a live
+  // event, not tied to the arrival.
+  dropEnv.clearArc();
 
   const token = ++arrivalToken;
   const rp = e.replay;
@@ -267,9 +278,17 @@ function arrive(idx: number): void {
     replayActive = true;
     currentBloom = rp?.bloom ?? null;
     sceneTarget = hashStr(e.logId) % 3;
+    // PRONG 1 — the full performance: a drop-reactive plate scene replays its buried→crest→
+    // settle drop arc from arrival, honoring the composition's archived rise/hold/fall when
+    // it declared one (else the canonical surge/settle). Anchored to arriveMs so a slow plate
+    // load doesn't shift the crest; re-fires on every (re)activation (a replay `v`).
+    if (rp?.usesDrop) {
+      dropEnv.triggerArc(arriveMs, e.durationMs ?? undefined, rp.dropShape);
+    }
     const layers = rp && rp.layers.length > 1 ? `${rp.layers.length} layers · ` : "";
     const tex = rp && rp.textures.length > 0 ? `${rp.textures.length} tex · ` : "";
-    worldStatus = `world: replayed (own shader) · ${layers}${tex}${rp?.customUniforms.length ?? 0} custom u`;
+    const arc = rp?.usesDrop ? "drop-arc · " : "";
+    worldStatus = `world: replayed (own shader) · ${arc}${layers}${tex}${rp?.customUniforms.length ?? 0} custom u`;
     updateHud();
   };
 
@@ -400,6 +419,13 @@ const HANDLERS: Record<KeybindingId, (ev: KeyboardEvent) => void> = {
     if (pointer >= 0) {
       arrive(pointer);
     }
+  },
+  reveal: () => {
+    // PRONG 2 (manual) — the operator slams the reveal exactly on the live drop: a fast
+    // ~300ms attack, hold, then an ~8s release back to the living idle. Same envelope the
+    // detector drives; the output-side flash monitor stays authoritative over the flood.
+    dropEnv.fireReveal(performance.now());
+    updateHud();
   },
   rewind: (ev) => {
     ev.preventDefault();
@@ -624,6 +650,17 @@ function frame(): void {
   const sw = Math.min(a.swell * intensity, 1.1) * settle;
   const progress = Math.min((nowMs - arriveMs) / replayExpectedLenMs, 1);
 
+  // PRONG 2 (detector): a live DnB drop (a sustained broadband dip → slam) fires the reveal.
+  // Runs every frame off the smoothed broadband energy; harmless on non-drop scenes (only a
+  // replay reads the drop drive). The one u_audioDrop value = the living idle (settle-gated)
+  // folded, by max, with the scripted arc + any live reveal — so the crest always shows.
+  if (dropDetector.observe(nowMs, a.energy)) {
+    dropEnv.fireReveal(nowMs);
+    // eslint-disable-next-line no-console
+    console.warn(`[drop] detector fired at ${nowMs.toFixed(0)}ms → reveal`);
+  }
+  lastDropValue = dropEnv.value(nowMs, a.drop * settle);
+
   const bloomCfg = !bloomEnabled ? null : replayActive ? currentBloom : DEFAULT_BLOOM;
 
   pipeline.render(
@@ -647,7 +684,7 @@ function frame(): void {
           inputs: {
             bass: rx(a.bass),
             bassFast: rx(a.bassFast),
-            drop: a.drop * settle,
+            drop: lastDropValue,
             dwellSec,
             energy: rx(a.energy),
             energyFast: rx(a.energyFast),
@@ -710,8 +747,15 @@ function frame(): void {
     fpsAcc = 0;
     fpsT = nowMs;
     updateHud();
+    const dropTag = dropEnv.revealActive
+      ? " [reveal]"
+      : dropEnv.arcActive
+        ? " [arc]"
+        : dropDetector.isArmed
+          ? " [armed]"
+          : "";
     $("meters").textContent =
-      `bass ${a.bass.toFixed(2)}  mid ${a.mid.toFixed(2)}  treble ${a.treble.toFixed(2)}  kick ${a.kick.toFixed(2)}  swell ${a.swell.toFixed(2)}  drop ${a.drop.toFixed(2)}`;
+      `bass ${a.bass.toFixed(2)}  mid ${a.mid.toFixed(2)}  treble ${a.treble.toFixed(2)}  kick ${a.kick.toFixed(2)}  swell ${a.swell.toFixed(2)}  drop ${lastDropValue.toFixed(2)}${dropTag}`;
   }
   requestAnimationFrame(frame);
 }

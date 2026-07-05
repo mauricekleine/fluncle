@@ -58,6 +58,9 @@ export type SceneLayer = {
   textures: SceneTexture[];
 };
 
+/** The drop envelope SHAPE a composition archives via its ShaderLayer `reactivity` prop. */
+export type SceneDropShape = { riseMs: number; holdMs: number; fallMs: number };
+
 export type Scene = {
   replayable: boolean;
   reason?: string;
@@ -70,6 +73,18 @@ export type Scene = {
   bloom?: BloomConfig;
   /** Every image sampler the scene declares, unioned across layers (the boot-table count). */
   textures: SceneTexture[];
+  /**
+   * True when the scene builds toward a drop reveal — any layer reads `u_audioDrop` or drives
+   * a drop-class audio alias. The live host runs the scripted arrival arc ONLY on these (an
+   * abstract-era scene with no drop uniform is left exactly as before).
+   */
+  usesDrop: boolean;
+  /**
+   * The archived drop-envelope timing (rise/hold/fall) parsed from the composition's
+   * `reactivity={{ drop: { … } }}` prop, when present — the live arc replays with THIS shape
+   * (the composition's authored dramaturgy) instead of the canonical surge/settle.
+   */
+  dropShape?: SceneDropShape;
 };
 
 function audioFieldOf(name: string, driver: string | null): string {
@@ -388,6 +403,43 @@ function classifyLayer(
   return { customUniforms: customs };
 }
 
+/**
+ * Best-effort drop-shape read: the composition's ShaderLayer `reactivity={{ drop: { riseMs,
+ * holdMs, fallMs, … } }}` prop (033.0.1O carries one; 025.5.5T does not). `peakTimeMs`/`floor`
+ * are ignored — the live arc places the crest canonically and only honors the rise/hold/fall.
+ * Returns undefined when the prop is absent or incomplete (-> the canonical arc shape).
+ */
+export function extractDropShape(src: string): SceneDropShape | undefined {
+  const marker = "reactivity=";
+  const idx = src.indexOf(marker);
+  if (idx === -1) {
+    return undefined;
+  }
+  const outer = balancedBraces(src, idx + marker.length); // the JSX expr `{{ … }}`
+  if (!outer) {
+    return undefined;
+  }
+  const dropIdx = outer.indexOf("drop");
+  if (dropIdx === -1) {
+    return undefined;
+  }
+  const dropObj = balancedBraces(outer, dropIdx); // the `{ riseMs: …, … }` literal
+  if (!dropObj) {
+    return undefined;
+  }
+  const num = (k: string): number | undefined => {
+    const m = dropObj.match(new RegExp(k + "\\s*:\\s*(-?[0-9.]+)"));
+    return m ? parseFloat(m[1]) : undefined;
+  };
+  const riseMs = num("riseMs");
+  const holdMs = num("holdMs");
+  const fallMs = num("fallMs");
+  if (riseMs === undefined || holdMs === undefined || fallMs === undefined) {
+    return undefined;
+  }
+  return { fallMs, holdMs, riseMs };
+}
+
 // Best-effort bloom prop read: `bloom={{ threshold: .., intensity: .., radius: .. }}`.
 function extractBloom(src: string): BloomConfig | undefined {
   const m = src.match(/bloom=\{\{([\s\S]{0,200}?)\}\}/);
@@ -411,7 +463,18 @@ const NOT_REPLAYABLE = (reason: string): Scene => ({
   reason,
   replayable: false,
   textures: [],
+  usesDrop: false,
 });
+
+/** True when a layer body reads `u_audioDrop` or drives a drop-class audio alias. */
+function layerUsesDrop(layer: SceneLayer): boolean {
+  if (/\bu_audioDrop\b/.test(layer.body)) {
+    return true;
+  }
+  return layer.customUniforms.some(
+    (c) => c.class === "audioAlias" && (c.params?.field as string) === "drop",
+  );
+}
 
 export function extractScene(src: string): Scene {
   // 1. Prefer the precise path: the identifiers passed as `fragmentShader={IDENT}`
@@ -492,8 +555,10 @@ export function extractScene(src: string): Scene {
     bloom,
     body: layers[0].body,
     customUniforms: layers[0].customUniforms,
+    dropShape: extractDropShape(src),
     layers,
     replayable: true,
     textures: sceneTextures,
+    usesDrop: layers.some(layerUsesDrop),
   };
 }

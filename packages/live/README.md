@@ -39,7 +39,24 @@ Module map (`src/glass/`):
   GLSL + classifies its custom uniforms. Now returns `layers[]` (multi-layer
   composites like 011.9.8I) and classifies velocity pairs (a position uniform +
   its `…Vel` sibling, e.g. 011.1.3X's `u_glide`/`u_glideVel`) — closing the last
-  two replay gaps to 17/17. Covered by `scene-extract.test.ts`.
+  two replay gaps to 17/17. Also flags `usesDrop` (a layer reads `u_audioDrop` /
+  drives a drop alias — the marker the drop arc keys off) and parses the archived
+  `dropShape` (rise/hold/fall) from the composition's `reactivity` prop. Covered by
+  `scene-extract.test.ts`.
+- **`drop-envelope.ts`** — the drop-reveal engine, pure + isomorphic (the sibling
+  of `flash-limiter.ts`/`settle.ts`). Plate-era compositions build toward a reveal
+  driven by `u_audioDrop`, but live that uniform rode a slow energy-over-swell proxy
+  that never crested — the buildup played, the payoff (025.5.5T the warship) never
+  fired. `DropEnvelope` folds three sources into the one drop drive by `max`: the
+  DSP living idle, a **scripted arrival arc** (buried→crest→settle over the scene's
+  span, fired on arrival at / replay of a drop scene — the composition's authored
+  dramaturgy, honoring its archived `dropShape` or a canonical ~4s surge / slow
+  settle at ~37.5%), and a **live reveal** (a fast ~300ms attack / ~8s release fired
+  by the manual `f` key or the `DropDetector`). `DropDetector` is a hysteresis state
+  machine over broadband energy (a sustained dip→slam = the DnB drop signature,
+  conservative + refractory). The reveal is a smooth seconds-long rise, never a
+  strobe, so the flash limiter's output monitor stays authoritative over the flood.
+  Covered by `drop-envelope.test.ts`.
 - **`glsl-runtime.ts`** — the shared header contract (`CORE_UNIFORMS`), the
   default-vehicle + holding `FRAG`, and the bloom post-pass shaders (mirroring
   `packages/video`'s design). Imports the real `packages/video` GLSL vocabulary.
@@ -54,12 +71,13 @@ Module map (`src/glass/`):
   onset latency; the operator A/Bs it against the legacy single-4096 path with `l`),
   `bridge.ts` (the contract client — consumes `ShowState`,
   sends heartbeats + mel + commands, standalone-safe), and `main.ts` (arrivals,
-  plate, HUD, keys, and the RFC §4 reliability rails).
+  plate, HUD, keys, the `drop-envelope.ts` arc/reveal wiring, and the RFC §4
+  reliability rails).
 
 Operator keys: `→/n` advance · `←/p` rewind · `0` holding · `b` blackout (hold) ·
-`-/=` intensity · `1/2/3` vehicle · `m` auto · `v` replay · `g` bloom · `r` scale ·
-`h` HUD · `d` demo · `l` low-latency DSP (A/B) · `Shift+X` context-loss smoke ·
-`i` the keys overlay (`Esc` also closes).
+`-/=` intensity · `1/2/3` vehicle · `m` auto · `v` replay · `f` reveal (fire the drop
+flood, live) · `g` bloom · `r` scale · `h` HUD · `d` demo · `l` low-latency DSP (A/B) ·
+`Shift+X` context-loss smoke · `i` the keys overlay (`Esc` also closes).
 
 Press `i` in the glass for an on-screen legend of all of the above. That overlay,
 the keydown dispatch, and this list's runtime siblings (the boot cheat-sheet in

@@ -341,6 +341,7 @@ async function enrich(member: PlanMember): Promise<PlanEntry> {
         bloom: scene.bloom,
         body: scene.body,
         customUniforms: scene.customUniforms,
+        dropShape: scene.dropShape,
         layers: scene.layers.map((layer) => ({
           blend: layer.blend,
           body: layer.body,
@@ -350,6 +351,7 @@ async function enrich(member: PlanMember): Promise<PlanEntry> {
         reason: scene.reason,
         replayable: scene.replayable,
         textures: toPlanTextures(scene.textures),
+        usesDrop: scene.usesDrop,
       };
     } else {
       entry.replay = {
