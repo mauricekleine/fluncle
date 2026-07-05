@@ -38,7 +38,6 @@ Usage:
   uv run rekordbox-derive-cues.py --json                        # structured JSON output
   uv run rekordbox-derive-cues.py --apply <recordingId>         # write the cues
   uv run rekordbox-derive-cues.py --apply <recordingId> --json  # write + JSON summary
-  uv run rekordbox-derive-cues.py --limit 5000                  # raise the catalogue cap
   uv run rekordbox-derive-cues.py --fluncle-bin ./fluncle
 """
 
@@ -178,24 +177,19 @@ def session_rows(db, session) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-# `fluncle admin tracks list` hard-caps `--limit` at 100 (it THROWS above that), so the
-# CLI call is clamped here. A catalogue larger than this can't be pulled through this
-# command today — the CLI needs cursor pagination on `admin tracks list` for that (see
-# the follow-up note in the skill); until then the fetch WARNS when it hits the cap.
-_CLI_LIST_MAX = 100
+def fetch_fluncle_catalogue(fluncle_bin: str) -> list[dict]:
+    """The ENTIRE catalogue (findings, mixtapes excluded) via `admin tracks list --all`.
 
-
-def fetch_fluncle_catalogue(fluncle_bin: str, limit: int) -> list[dict]:
-    """All findings (excluding mixtapes) via `admin tracks list --json --limit N`.
+    `--all` (fluncle CLI >= 0.91.0) pages the whole archive via cursor, past the
+    per-request 100-row cap — so the match pool is never silently truncated as the
+    catalogue grows.
 
     The CLI's JSON stdout is written to a temp FILE, not captured through a pipe:
-    the compiled `fluncle` binary truncates large stdout at the ~64KB OS pipe buffer
-    when it exits (a Bun stdout-flush-on-exit bug), silently corrupting the JSON once
-    the catalogue payload crosses ~64KB (~50 findings). A regular file has no such
-    cap, so the full catalogue always lands.
+    an older `fluncle` binary truncates large stdout at the ~64KB OS pipe buffer when
+    it exits (a Bun stdout-flush-on-exit bug fixed in 0.91.0). A regular file has no
+    such cap, so the full catalogue always lands regardless of CLI version.
     """
-    effective = min(limit, _CLI_LIST_MAX)
-    cmd = [fluncle_bin, "admin", "tracks", "list", "--json", "--limit", str(effective)]
+    cmd = [fluncle_bin, "admin", "tracks", "list", "--all", "--json"]
     with tempfile.TemporaryFile("w+b") as out:
         try:
             subprocess.run(cmd, stdout=out, stderr=subprocess.PIPE, text=True, check=True)
@@ -215,15 +209,7 @@ def fetch_fluncle_catalogue(fluncle_bin: str, limit: int) -> list[dict]:
         die("could not parse `fluncle admin tracks list --json` output")
 
     tracks = payload.get("tracks", []) if isinstance(payload, dict) else []
-    findings = [t for t in tracks if isinstance(t, dict) and t.get("type") != "mixtape"]
-    if len(findings) >= _CLI_LIST_MAX:
-        print(
-            f"warning: fetched {len(findings)} findings at the CLI's {_CLI_LIST_MAX}-row "
-            "cap — the catalogue may be larger and some findings won't match. The CLI "
-            "needs cursor pagination on `admin tracks list` to fetch beyond this.",
-            file=sys.stderr,
-        )
-    return findings
+    return [t for t in tracks if isinstance(t, dict) and t.get("type") != "mixtape"]
 
 
 # ---------------------------------------------------------------------------
@@ -442,12 +428,6 @@ def main() -> None:
         help="The fluncle CLI to shell out to (default: fluncle)",
     )
     parser.add_argument(
-        "--limit",
-        type=int,
-        default=5000,
-        help="Cap on findings fetched from the Fluncle catalogue (default: 5000)",
-    )
-    parser.add_argument(
         "--json",
         dest="json_out",
         action="store_true",
@@ -496,7 +476,7 @@ def main() -> None:
         die(f"no tracks in session {session.Name!r}")
 
     # Fetch Fluncle catalogue and match.
-    catalogue = fetch_fluncle_catalogue(args.fluncle_bin, args.limit)
+    catalogue = fetch_fluncle_catalogue(args.fluncle_bin)
     index = build_catalogue_index(catalogue)
     raw_cues = derive_cues(rows, index)
     cues = prune_consecutive_and_flag_repeats(raw_cues)

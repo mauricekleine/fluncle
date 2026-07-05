@@ -42,7 +42,6 @@ Usage:
   uv run key_backfill.py                       # dry-run: propose, write nothing
   uv run key_backfill.py --json                # dry-run, structured output
   uv run key_backfill.py --apply               # perform the writes (after eyeballing)
-  uv run key_backfill.py --limit 500           # cap the Fluncle missing-key page
   uv run key_backfill.py --fluncle-bin ./fluncle
 """
 
@@ -325,23 +324,18 @@ def read_rekordbox_keys(db) -> list[RekordboxKey]:
     return rows
 
 
-# `fluncle admin tracks list` hard-caps `--limit` at 100 (it THROWS above that), so the
-# CLI call is clamped here. A missing-key backlog larger than this can't be pulled
-# through this command today — the CLI needs cursor pagination on `admin tracks list`
-# for that; until then the fetch WARNS when it hits the cap.
-_CLI_LIST_MAX = 100
+def fetch_fluncle_missing_key(fluncle_bin: str) -> list[dict]:
+    """The ENTIRE missing-key backlog via `admin tracks list --no-key --all --json`.
 
+    `--all` (fluncle CLI >= 0.91.0) pages the whole `--no-key` backlog via cursor, past
+    the per-request 100-row cap — so a backlog larger than 100 is never silently cut.
 
-def fetch_fluncle_missing_key(fluncle_bin: str, limit: int) -> list[dict]:
-    """Fluncle's findings with NO stored key, via `admin tracks list --no-key --json`.
-
-    The CLI's JSON stdout is written to a temp FILE, not captured through a pipe: the
-    compiled `fluncle` binary truncates large stdout at the ~64KB OS pipe buffer when it
-    exits (a Bun stdout-flush-on-exit bug), silently corrupting the JSON once the payload
-    crosses ~64KB. A regular file has no such cap.
+    The CLI's JSON stdout is written to a temp FILE, not captured through a pipe: an
+    older `fluncle` binary truncates large stdout at the ~64KB OS pipe buffer when it
+    exits (a Bun stdout-flush-on-exit bug fixed in 0.91.0). A regular file has no such
+    cap, so the full backlog always lands regardless of CLI version.
     """
-    effective = min(limit, _CLI_LIST_MAX)
-    cmd = [fluncle_bin, "admin", "tracks", "list", "--no-key", "--json", "--limit", str(effective)]
+    cmd = [fluncle_bin, "admin", "tracks", "list", "--no-key", "--all", "--json"]
 
     with tempfile.TemporaryFile("w+b") as out:
         try:
@@ -359,15 +353,7 @@ def fetch_fluncle_missing_key(fluncle_bin: str, limit: int) -> list[dict]:
         die("could not parse `fluncle admin tracks list --json` output")
 
     tracks = payload.get("tracks", []) if isinstance(payload, dict) else []
-    findings = [t for t in tracks if isinstance(t, dict) and t.get("type") != "mixtape"]
-    if len(findings) >= _CLI_LIST_MAX:
-        print(
-            f"warning: fetched {len(findings)} findings at the CLI's {_CLI_LIST_MAX}-row "
-            "cap — the backlog may be larger. The CLI needs cursor pagination on "
-            "`admin tracks list` to fetch beyond this.",
-            file=sys.stderr,
-        )
-    return findings
+    return [t for t in tracks if isinstance(t, dict) and t.get("type") != "mixtape"]
 
 
 @dataclass
@@ -480,9 +466,6 @@ def main() -> None:
     parser.add_argument(
         "--fluncle-bin", default="fluncle", help="the fluncle CLI to shell out to (default: fluncle)"
     )
-    parser.add_argument(
-        "--limit", type=int, default=1000, help="cap the Fluncle missing-key page (default: 1000)"
-    )
     parser.add_argument("--json", action="store_true", help="emit structured JSON")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
@@ -493,7 +476,7 @@ def main() -> None:
 
     apply = args.apply  # dry-run is the default; --apply is the only way to write.
 
-    fluncle_tracks = fetch_fluncle_missing_key(args.fluncle_bin, args.limit)
+    fluncle_tracks = fetch_fluncle_missing_key(args.fluncle_bin)
     db = open_db(args.db)
     rekordbox_keys = read_rekordbox_keys(db)
     proposals, flagged, unmatched = reconcile(fluncle_tracks, rekordbox_keys)
