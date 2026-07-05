@@ -45,6 +45,8 @@ export type TrackVideoOptions = {
   metrics?: string;
   model?: string;
   note?: string;
+  plate?: string;
+  plateBackground?: string;
   poster?: string;
   props?: string;
   reasoning?: string;
@@ -81,6 +83,8 @@ const VIDEO_FIELDS: ReadonlyArray<{ field: string; option: keyof TrackVideoOptio
   { field: "footage-landscape-social", option: "footageLandscapeSocial" },
   { field: "poster", option: "poster" },
   { field: "cover", option: "cover" },
+  { field: "plate", option: "plate" },
+  { field: "plate-background", option: "plateBackground" },
   { field: "note", option: "note" },
   { field: "composition", option: "composition" },
   { field: "props", option: "props" },
@@ -120,6 +124,34 @@ const FOOTAGE_FIELDS: ReadonlyArray<keyof TrackVideoOptions> = [
   "footageLandscapeSocial",
 ];
 
+// The plate-lane inputs. OPTIONAL by design: a plate-less (abstract) bundle is fully
+// valid and a plate bundle without its background is fine, so neither ever joins the
+// re-render contract or the advisory set on a footage upload. They matter to the
+// guard in one direction only: a plates-only set is the sanctioned PRE-composition
+// upload (upload-first order — the composition references the durable
+// found.fluncle.com URL, so the plates must be on R2 before it is authored).
+const PLATE_FIELDS: ReadonlyArray<keyof TrackVideoOptions> = ["plate", "plateBackground"];
+
+// The non-file options riding TrackVideoOptions (finalize metadata, not artifacts).
+const NON_FILE_OPTIONS: ReadonlyArray<keyof TrackVideoOptions> = ["model", "reasoning"];
+
+/**
+ * True when the resolved file set is a plate-lane PRE-upload: at least one plate
+ * artifact and nothing else. This set skips both the footage requirement and the
+ * finalize call — plates go up before any render exists, and finalize would set
+ * `video_url` (dequeuing the finding from the render queue before it is filmed).
+ */
+export function isPlatesOnlyUpload(files: TrackVideoOptions): boolean {
+  const hasPlate = PLATE_FIELDS.some((option) => Boolean(files[option]));
+  if (!hasPlate) {
+    return false;
+  }
+  return (Object.keys(files) as Array<keyof TrackVideoOptions>).every(
+    (option) =>
+      !files[option] || PLATE_FIELDS.includes(option) || NON_FILE_OPTIONS.includes(option),
+  );
+}
+
 export type BundleCompleteness = {
   /** true when at least one footage master is in the upload set. */
   uploadingFootage: boolean;
@@ -127,19 +159,31 @@ export type BundleCompleteness = {
   missingContract: string[];
   /** missing advisory filenames (warn-only). */
   missingAdvisory: string[];
+  /** plate-lane advisories (warn-only, armed on any upload): plates are OPTIONAL —
+   *  a plate-less bundle is valid and a plate without its background is fine — so
+   *  the only warnable shape is a background WITHOUT its plate. */
+  plateWarnings: string[];
 };
 
 // Pure check over the resolved file set: is this a complete re-renderable bundle?
 // A field counts as "present" when its path is set (—dir resolves conventional
 // names only when the file exists; an explicit flag sets the path). The contract is
-// only armed when footage is being uploaded — a poster-only refresh is exempt.
+// only armed when footage is being uploaded — a poster-only refresh is exempt, and
+// so is the plate-lane pre-upload (plates ship before any render exists).
 export function checkBundleCompleteness(files: TrackVideoOptions): BundleCompleteness {
   const uploadingFootage = FOOTAGE_FIELDS.some((option) => Boolean(files[option]));
   const missingFrom = (specs: ReadonlyArray<{ file: string; option: keyof TrackVideoOptions }>) =>
     uploadingFootage ? specs.filter((spec) => !files[spec.option]).map((spec) => spec.file) : [];
+  const plateWarnings: string[] = [];
+  if (files.plateBackground && !files.plate) {
+    plateWarnings.push(
+      "plate.background.png without plate.png — the background is the parallax layer OF a plate; pass --plate (or drop it in the --dir) too",
+    );
+  }
   return {
     missingAdvisory: missingFrom(RERENDER_ADVISORY_FIELDS),
     missingContract: missingFrom(RERENDER_CONTRACT_FIELDS),
+    plateWarnings,
     uploadingFootage,
   };
 }
@@ -190,6 +234,9 @@ export async function trackVideoCommand(
       onProgress?.(`warning: ${missing} missing (provenance/eval only) — shipping without it`);
     }
   }
+  for (const warning of completeness.plateWarnings) {
+    onProgress?.(`warning: ${warning}`);
+  }
 
   const present = VIDEO_FIELDS.map((spec) => ({
     field: spec.field,
@@ -202,6 +249,11 @@ export async function trackVideoCommand(
       "No bundle files resolved to upload (pass --dir <bundle> or explicit file flags).",
     );
   }
+
+  // The plate-lane pre-upload (upload-first order): plates go up BEFORE the
+  // composition exists, so this set must NOT finalize — finalize sets `video_url`,
+  // which would dequeue the finding from the render queue before it is filmed.
+  const platesOnly = isPlatesOnlyUpload(files);
 
   // Phase 1: ask the Worker to sign a PUT URL for each artifact we have.
   const presign = await adminApiPost<PresignResponse>(
@@ -239,6 +291,16 @@ export async function trackVideoCommand(
     }
 
     urls[spec.field] = `${FOUND_BASE}/${upload.key}`;
+  }
+
+  // A plates-only pre-upload STOPS here: the artifacts are on R2 at their durable
+  // keys and the composition can now reference them; the finding stays in the
+  // render queue (no video_url write) until the real footage ship finalizes.
+  if (platesOnly) {
+    onProgress?.(
+      `plate pre-upload complete — compose against ${FOUND_BASE}/${presign.logId}/plate.png; finalize is deferred to the footage ship`,
+    );
+    return { logId: presign.logId, ok: true, trackId: presign.trackId, urls };
   }
 
   // Phase 3: finalize — link the footage cut as video_url and record the vehicle

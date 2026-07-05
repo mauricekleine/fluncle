@@ -53,10 +53,19 @@ const STRUCTURE_FAIL_WINDOW = 4;
 const STRUCTURE_WARN_WINDOW = 8;
 const DEFAULT_STRUCTURE_NEIGHBOURS = STRUCTURE_WARN_WINDOW;
 
+// The plate-lane subject-kind axis: a plate render records its subject KIND
+// (hull / ruin / flora / creature / terrain / threshold …) in render.json as
+// `plateSubject`. Structural fingerprints can't see the subject (every plate comp
+// classifies by its treatment family's marks), so subject rotation gets its own
+// window: the SAME kind within this many shipped findings is a WARN — never a
+// fail (the axis is advisory; the poster distance still carries the verdict).
+const PLATE_SUBJECT_WARN_WINDOW = 4;
+
 const OUT_DIR = path.resolve(import.meta.dirname, "../../out");
 const glslSnippets = GLSL as unknown as Record<string, string>;
 const compositionUrl = (logId: string): string =>
   `https://found.fluncle.com/${logId}/composition.tsx`;
+const renderJsonUrl = (logId: string): string => `https://found.fluncle.com/${logId}/render.json`;
 
 const HUE_BINS = 12;
 const SAT_BINS = 4;
@@ -347,6 +356,36 @@ export async function registerOfLogId(logId: string): Promise<IntentRegister | n
   return null;
 }
 
+function asPlateSubject(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : null;
+}
+
+/** The plate-lane subject KIND recorded for a logId's render — the local bundle's
+ *  render.json first, then the public copy (render.json ships in every bundle, so
+ *  neighbours resolve over the network the way compositions do). Null when the
+ *  render was plate-less or nothing is reachable. */
+export async function plateSubjectOfLogId(logId: string): Promise<string | null> {
+  const manifest = path.join(OUT_DIR, logId, "render.json");
+  if (existsSync(manifest)) {
+    try {
+      const parsed = JSON.parse(readFileSync(manifest, "utf8")) as { plateSubject?: unknown };
+      return asPlateSubject(parsed.plateSubject);
+    } catch {
+      // fall through to the network copy
+    }
+  }
+  try {
+    const res = await fetch(renderJsonUrl(logId));
+    if (!res.ok) {
+      return null;
+    }
+    const parsed = (await res.json()) as { plateSubject?: unknown };
+    return asPlateSubject(parsed.plateSubject);
+  } catch {
+    return null;
+  }
+}
+
 /** A recent neighbour with its resolved structural family + register (null when unresolved). */
 export type StructureNeighbour = {
   logId: string;
@@ -456,6 +495,74 @@ export function evaluateStructureGate(
   };
 }
 
+/** A recent neighbour with its recorded plate subject (null = plate-less/unresolved). */
+export type PlateSubjectNeighbour = {
+  logId: string;
+  plateSubject: string | null;
+};
+
+export type PlateSubjectGateStatus = "pass" | "warn" | "skipped";
+
+export type PlateSubjectGate = {
+  /** The subject render's plate subject kind, or null (plate-less → skipped). */
+  subject: string | null;
+  neighbours: PlateSubjectNeighbour[];
+  /** Index (0 = immediate) of the nearest neighbour sharing the kind, or null. */
+  repeatAt: number | null;
+  status: PlateSubjectGateStatus;
+  verdict: string;
+};
+
+/**
+ * The PURE plate-subject decision: WARN when the same subject KIND shipped inside
+ * the recent window, else pass; a plate-less render (null subject) skips. Advisory
+ * by design — never a fail: the structural gate already demotes representational
+ * repeats to WARN because the fingerprint can't see the subject, and this axis is
+ * exactly the subject-kind rotation that demotion defers to. No fs, no network.
+ */
+export function evaluatePlateSubjectGate(
+  subject: string | null,
+  neighbours: PlateSubjectNeighbour[],
+): PlateSubjectGate {
+  if (!subject) {
+    return {
+      neighbours,
+      repeatAt: null,
+      status: "skipped",
+      subject,
+      verdict: "no plate subject declared — plate-subject axis skipped (pass)",
+    };
+  }
+  const window = neighbours.slice(0, PLATE_SUBJECT_WARN_WINDOW);
+  const repeatAt = window.findIndex((n) => n.plateSubject === subject);
+  if (repeatAt < 0) {
+    return {
+      neighbours,
+      repeatAt: null,
+      status: "pass",
+      subject,
+      verdict: `plate subject "${subject}" is absent from the last ${window.length} findings — a fresh kind`,
+    };
+  }
+  return {
+    neighbours,
+    repeatAt,
+    status: "warn",
+    subject,
+    verdict: `plate subject "${subject}" already shipped ${findingsAgo(repeatAt)} (${window[repeatAt].logId}) — rotate the subject kind (hull / ruin / flora / creature / terrain / threshold)`,
+  };
+}
+
+/** Resolve the recorded plate subject of each recent ledger entry (best-effort,
+ *  local bundle then the public render.json). */
+export async function plateSubjectLedger(entries: LedgerEntry[]): Promise<PlateSubjectNeighbour[]> {
+  const out: PlateSubjectNeighbour[] = [];
+  for (const entry of entries) {
+    out.push({ logId: entry.logId, plateSubject: await plateSubjectOfLogId(entry.logId) });
+  }
+  return out;
+}
+
 /** Fetch + classify the structural family + register of each recent ledger entry
  *  (best-effort). Feed values win; the local render.json fills gaps. */
 export async function classifyLedger(entries: LedgerEntry[]): Promise<StructureNeighbour[]> {
@@ -493,6 +600,8 @@ export type DiversityReport = {
   threshold: number;
   /** The structural-family axis (the checked claim beside the vehicle NAME). */
   structure: StructureGate;
+  /** The plate-lane subject-kind axis (advisory: warn on a repeat inside 4). */
+  plateSubject: PlateSubjectGate;
   /** Poster gate: distinct from the immediate neighbour's picture. */
   posterPass: boolean;
   /** Overall: the poster gate AND the structural gate did not FAIL. */
@@ -514,6 +623,7 @@ export async function judgeDiversity(
     structureNeighbours?: number;
     assumeStructure?: StructureFamily;
     assumeRegister?: IntentRegister;
+    assumePlateSubject?: string;
   } = {},
 ): Promise<DiversityReport> {
   const wanted = opts.neighbours ?? DEFAULT_NEIGHBOURS;
@@ -559,13 +669,25 @@ export async function judgeDiversity(
     const structureEntries = await classifyLedger(ledger.slice(0, structureWanted));
     const structure = evaluateStructureGate(subjectFamily, structureEntries, subjectRegister);
 
+    // The plate-subject axis (advisory). Resolve the subject's kind first and only
+    // read the neighbours' render.jsons when there is a kind to compare — the
+    // common (plate-less) path stays network-free.
+    const subjectPlateSubject =
+      asPlateSubject(opts.assumePlateSubject) ??
+      (subjectLogId ? await plateSubjectOfLogId(subjectLogId) : null);
+    const plateNeighbours = subjectPlateSubject
+      ? await plateSubjectLedger(ledger.slice(0, PLATE_SUBJECT_WARN_WINDOW))
+      : [];
+    const plateSubject = evaluatePlateSubjectGate(subjectPlateSubject, plateNeighbours);
+
     const pass = posterPass && structure.status !== "fail";
-    const verdict = `poster: ${posterVerdict} | structure: ${structure.verdict}`;
+    const verdict = `poster: ${posterVerdict} | structure: ${structure.verdict}${plateSubject.status === "skipped" ? "" : ` | plate subject: ${plateSubject.verdict}`}`;
 
     return {
       immediateDistance,
       neighbours,
       pass,
+      plateSubject,
       posterPass,
       structure,
       subject,
@@ -608,22 +730,25 @@ if (import.meta.main) {
     );
     process.exit(2);
   }
+  const assumePlateSubject = flagValue("--assume-plate-subject");
   const valueFlags = new Set([
     "--neighbours",
     "--structure-neighbours",
     "--assume-structure",
     "--assume-register",
+    "--assume-plate-subject",
   ]);
   const subject = args.find((a, i) => !a.startsWith("--") && !valueFlags.has(args[i - 1] ?? ""));
 
   if (!subject) {
     console.error(
-      "usage: judge-diversity <posterPathOrLogId> [--neighbours N] [--structure-neighbours N] [--assume-structure <family>] [--assume-register <register>] [--strict] [--json]",
+      "usage: judge-diversity <posterPathOrLogId> [--neighbours N] [--structure-neighbours N] [--assume-structure <family>] [--assume-register <register>] [--assume-plate-subject <kind>] [--strict] [--json]",
     );
     process.exit(2);
   }
 
   const report = await judgeDiversity(subject, {
+    assumePlateSubject,
     assumeRegister,
     assumeStructure,
     neighbours,
@@ -655,6 +780,17 @@ if (import.meta.main) {
     }
     const mark = s.status === "fail" ? "✗" : s.status === "warn" ? "⚠" : "✓";
     console.log(`  ${mark} structure: ${s.verdict}`);
+    const ps = report.plateSubject;
+    if (ps.status !== "skipped") {
+      for (let i = 0; i < ps.neighbours.length; i++) {
+        const n = ps.neighbours[i];
+        const hit = ps.repeatAt === i ? "  ← repeat" : "";
+        console.log(
+          `    ${i === 0 ? "→" : " "} ${n.logId}: ${n.plateSubject ?? "(no plate)"}${hit}`,
+        );
+      }
+      console.log(`  ${ps.status === "warn" ? "⚠" : "✓"} plate subject: ${ps.verdict}`);
+    }
     console.log(`${report.pass ? "✓" : "✗"} ${report.pass ? "diverse on both axes" : "FAIL"}`);
   }
   // Advisory by default; --strict makes an immediate-neighbour clone OR a structural

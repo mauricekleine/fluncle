@@ -15,10 +15,12 @@ import {
   lintScenePalette,
   locateFragmentLiteral,
   resolveGlslBody,
+  resolveSceneTextures,
   scanCustomUniforms,
   SCENE_HEADER_VERSION,
   SCENE_METRICS_VERSION,
   SCENE_SCHEMA,
+  textureSourceForName,
   validateScene,
 } from "./scene";
 import { validateSceneStrict } from "./validate-scene";
@@ -148,6 +150,86 @@ describe("prop extraction", () => {
       "art",
     ]);
     expect(extractTextureNames("<ShaderLayer fragmentShader={x} />")).toEqual([]);
+  });
+
+  test("textureSourceForName — the sampler-name convention", () => {
+    expect(textureSourceForName("u_plate")).toBe("plate");
+    expect(textureSourceForName("u_plateBackground")).toBe("plate-background");
+    expect(textureSourceForName("art")).toBe("artwork");
+    expect(textureSourceForName("u_plateX")).toBe("artwork");
+  });
+});
+
+describe("resolveSceneTextures — the host-side URL binding", () => {
+  const plateScene = {
+    glsl: {
+      body: "",
+      glsl3: false,
+      headerVersion: SCENE_HEADER_VERSION,
+      textures: [
+        { name: "u_plate", source: "plate" as const },
+        { name: "u_plateBackground", source: "plate-background" as const },
+      ],
+    },
+    id: "033.0.1O",
+    kind: "finding" as const,
+  };
+
+  test("a finding's plate samplers default to the bundle's durable R2 keys", () => {
+    expect(resolveSceneTextures(plateScene, {})).toEqual({
+      u_plate: "https://found.fluncle.com/033.0.1O/plate.png",
+      u_plateBackground: "https://found.fluncle.com/033.0.1O/plate.background.png",
+    });
+  });
+
+  test("explicit plate URLs override the bundle defaults", () => {
+    expect(
+      resolveSceneTextures(plateScene, {
+        plateBackgroundUrl: "https://local/bg.png",
+        plateUrl: "https://local/plate.png",
+      }),
+    ).toEqual({
+      u_plate: "https://local/plate.png",
+      u_plateBackground: "https://local/bg.png",
+    });
+  });
+
+  test("artwork samplers bind the artworkUrl; unresolvable entries are omitted", () => {
+    const scene = {
+      glsl: {
+        body: "",
+        glsl3: false,
+        headerVersion: SCENE_HEADER_VERSION,
+        textures: [{ name: "art", source: "artwork" as const }],
+      },
+      id: "032.0.4L",
+      kind: "finding" as const,
+    };
+    expect(resolveSceneTextures(scene, { artworkUrl: "https://img/cover.jpg" })).toEqual({
+      art: "https://img/cover.jpg",
+    });
+    expect(resolveSceneTextures(scene, {})).toBeUndefined();
+  });
+
+  test("a non-finding scene has no bundle to default to (explicit URLs only)", () => {
+    const scene = { ...plateScene, kind: "default" as const };
+    expect(resolveSceneTextures(scene, {})).toBeUndefined();
+    expect(resolveSceneTextures(scene, { plateUrl: "https://local/plate.png" })).toEqual({
+      u_plate: "https://local/plate.png",
+    });
+  });
+
+  test("a texture-less scene stays undefined", () => {
+    expect(
+      resolveSceneTextures(
+        {
+          glsl: { body: "", glsl3: false, headerVersion: SCENE_HEADER_VERSION },
+          id: "032.0.4L",
+          kind: "finding",
+        },
+        { artworkUrl: "https://img/cover.jpg" },
+      ),
+    ).toBeUndefined();
   });
 });
 

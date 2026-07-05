@@ -114,6 +114,8 @@ type TrackVideoOptions = {
   metrics?: string;
   model?: string;
   note?: string;
+  plate?: string;
+  plateBackground?: string;
   poster?: string;
   props?: string;
   reasoning?: string;
@@ -590,6 +592,11 @@ function addAdminCommands(program: Command): void {
     .option("--metrics <file>", "Gate metrics JSON (optional)")
     .option("--model <model>", "Authoring AI model (<provider>/<model>)")
     .option("--note <file>", "Note file")
+    .option("--plate <file>", "Plate-lane photographic plate (plate.png; uploadable pre-render)")
+    .option(
+      "--plate-background <file>",
+      "The plate's subject-removed background (plate.background.png, optional)",
+    )
     .option("--poster <file>", "Poster image")
     .option("--props <file>", "Render props JSON")
     .option("--reasoning <level>", "Authoring model reasoning effort (e.g. high)")
@@ -1566,7 +1573,7 @@ async function runTrackVideo(
 ): Promise<void> {
   if (!idOrLogId) {
     throw new Error(
-      "Missing id. Usage: fluncle admin tracks video <track_id|log_id> (--dir <dir> | --footage <file> [--footage-social <file>] [--footage-notext <file>] [--footage-landscape <file>] [--footage-landscape-social <file>] [--poster <file>] [--cover <file>] [--note <file>] [--composition <file>] [--props <file>] [--render <file>] [--intent <file>] [--metrics <file>] [--scene <file>]) [--allow-partial]",
+      "Missing id. Usage: fluncle admin tracks video <track_id|log_id> (--dir <dir> | --footage <file> [--footage-social <file>] [--footage-notext <file>] [--footage-landscape <file>] [--footage-landscape-social <file>] [--poster <file>] [--cover <file>] [--note <file>] [--composition <file>] [--props <file>] [--render <file>] [--intent <file>] [--metrics <file>] [--scene <file>] | --plate <file> [--plate-background <file>]) [--allow-partial]",
     );
   }
 
@@ -1607,6 +1614,8 @@ async function runTrackVideo(
     metrics: resolveFile(options.metrics, "metrics.json"),
     model: options.model,
     note: resolveFile(options.note, "note.txt"),
+    plate: resolveFile(options.plate, "plate.png"),
+    plateBackground: resolveFile(options.plateBackground, "plate.background.png"),
     poster: resolveFile(options.poster, "poster.jpg"),
     props: resolveFile(options.props, "props.json"),
     reasoning: options.reasoning,
@@ -1615,10 +1624,13 @@ async function runTrackVideo(
   };
 
   // A footage cut is required for the normal (full-bundle) upload; --allow-partial
-  // lifts that for a deliberate partial refresh (e.g. poster-only).
-  if (!files.footage && !options.allowPartial) {
+  // lifts that for a deliberate partial refresh (e.g. poster-only). The plate-lane
+  // PRE-upload (plates and nothing else — the upload-first order, before the
+  // composition exists) is sanctioned as-is: no footage, no --allow-partial needed.
+  const { isPlatesOnlyUpload } = await import("./commands/track");
+  if (!files.footage && !options.allowPartial && !isPlatesOnlyUpload(files)) {
     throw new Error(
-      "A footage cut is required (--footage <file>, or --dir containing footage.mp4). Pass --allow-partial for a deliberate partial refresh (e.g. poster-only).",
+      "A footage cut is required (--footage <file>, or --dir containing footage.mp4). Pass --allow-partial for a deliberate partial refresh (e.g. poster-only), or upload plates alone (--plate/--plate-background) for the plate-lane pre-upload.",
     );
   }
 
@@ -2814,6 +2826,8 @@ const stringOptions = new Set([
   "--metrics",
   "--mime",
   "--note",
+  "--plate",
+  "--plate-background",
   "--platform",
   "--poster",
   "--props",

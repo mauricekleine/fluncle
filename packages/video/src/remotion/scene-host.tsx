@@ -17,7 +17,7 @@
 import { type FC } from "react";
 import { AbsoluteFill } from "remotion";
 
-import { type Scene } from "../pipeline/scene";
+import { resolveSceneTextures, type Scene } from "../pipeline/scene";
 import { type CosmosAudio } from "./types";
 import { ShaderLayer } from "./journey/shader-layer";
 import { type AudioReactivityOptions } from "./hooks/use-audio-reactivity";
@@ -33,10 +33,18 @@ export type SceneHostProps = {
   progress?: number;
   /**
    * The matched finding's artwork URL, bound to every `glsl.textures` sampler
-   * (`source: "artwork"`). Required when the scene declares textures; ignored
-   * otherwise.
+   * with `source: "artwork"`. Required when the scene declares an artwork
+   * texture; ignored otherwise.
    */
   artworkUrl?: string;
+  /**
+   * Override for a `source: "plate"` sampler. Defaults to the finding bundle's
+   * own durable key (`https://found.fluncle.com/<id>/plate.png`) — the same URL
+   * the composition rendered from, per the plate lane's upload-first order.
+   */
+  plateUrl?: string;
+  /** Override for `source: "plate-background"`; defaults to `<id>/plate.background.png`. */
+  plateBackgroundUrl?: string;
   /** Detected drop time (ms) injected into the drop envelope (offline peak). */
   dropMs?: number;
   /** Layer opacity 0..1. Default 1. */
@@ -67,13 +75,12 @@ export const SceneHost: FC<SceneHostProps> = ({
   seed,
   progress,
   artworkUrl,
+  plateUrl,
+  plateBackgroundUrl,
   dropMs,
   opacity = 1,
 }) => {
-  const textures =
-    scene.glsl.textures && artworkUrl
-      ? Object.fromEntries(scene.glsl.textures.map((t) => [t.name, artworkUrl]))
-      : undefined;
+  const textures = resolveSceneTextures(scene, { artworkUrl, plateBackgroundUrl, plateUrl });
 
   return (
     <AbsoluteFill>

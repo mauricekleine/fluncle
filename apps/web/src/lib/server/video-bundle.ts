@@ -15,10 +15,18 @@
 // manifest (the resolved shader body a live/offline host re-runs). The rest are
 // stored alongside at <log-id>/<name>.
 //
+// plate.png + plate.background.png are the PLATE-LANE inputs (a Gemini-authored
+// photographic plate + its subject-removed background for true parallax): uploaded
+// FIRST, before the composition exists, so the composition can reference the
+// durable https://found.fluncle.com/<log-id>/plate.png URL — renders, archival
+// replay, and live all read the same key. A plate-less (abstract) bundle is fully
+// valid, and a plate bundle without its background is fine; neither is ever part
+// of the re-render contract.
+//
 // Everything past the two masters is OPTIONAL: the CLI only requests presigns
 // for files the bundle actually contains, so a bundle without the extra
 // variants (the notext/landscape escape hatches ship packages when present) or
-// without intent/metrics/scene uploads exactly as before.
+// without intent/metrics/scene/plate uploads exactly as before.
 
 export type VideoArtifact = { contentType: string; field: string; name: string };
 
@@ -34,6 +42,8 @@ export const VIDEO_ARTIFACTS: readonly VideoArtifact[] = [
   },
   { contentType: "image/jpeg", field: "poster", name: "poster.jpg" },
   { contentType: "image/jpeg", field: "cover", name: "cover.jpg" },
+  { contentType: "image/png", field: "plate", name: "plate.png" },
+  { contentType: "image/png", field: "plate-background", name: "plate.background.png" },
   { contentType: "text/plain; charset=utf-8", field: "note", name: "note.txt" },
   { contentType: "text/plain; charset=utf-8", field: "composition", name: "composition.tsx" },
   { contentType: "application/json; charset=utf-8", field: "props", name: "props.json" },

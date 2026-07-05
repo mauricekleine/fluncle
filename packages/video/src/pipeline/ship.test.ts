@@ -28,6 +28,7 @@ describe("parseShipArgs", () => {
     expect(flags.model).toBeUndefined();
     expect(flags.reasoning).toBeUndefined();
     expect(flags.register).toBeUndefined();
+    expect(flags.plateSubject).toBeUndefined();
   });
 
   test("parses every flag, trimming string values", () => {
@@ -50,6 +51,11 @@ describe("parseShipArgs", () => {
     expect(flags.model).toBe("anthropic/claude-opus-4-8");
     expect(flags.reasoning).toBe("high");
     expect(flags.register).toBe("abstract");
+  });
+
+  test("--plate-subject is trimmed + lowercased (the subject-kind ledger entry)", () => {
+    expect(parseShipArgs(["id", "--plate-subject", " Hull "]).plateSubject).toBe("hull");
+    expect(parseShipArgs(["id"]).plateSubject).toBeUndefined();
   });
 
   test("accepts all three register values", () => {
@@ -119,6 +125,7 @@ describe("buildRenderJson", () => {
     hasIntentFile: true,
     hasPropsFile: true,
     model: "anthropic/claude-opus-4-8",
+    plateSubject: null,
     reasoning: "high",
     register: "abstract",
     structure: { confidence: 0.9, dominant: "cellular" as const },
@@ -143,6 +150,14 @@ describe("buildRenderJson", () => {
       trackId: "abc123",
       vehicle: "voronoi cellular",
     });
+    // Plate-less renders record a null subject (the field is always present).
+    expect(json.plateSubject).toBeNull();
+  });
+
+  test("a plate render carries its subject kind through to the ledger", () => {
+    const json = buildRenderJson({ ...base, plateSubject: "hull" });
+
+    expect(json.plateSubject).toBe("hull");
   });
 
   test("a null structure is preserved as null (warn-not-fail contract)", () => {

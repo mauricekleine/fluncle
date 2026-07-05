@@ -105,7 +105,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stderr).toBe("");
     expect(result.stdout).toBe(`{
   "code": "error",
-  "message": "A footage cut is required (--footage <file>, or --dir containing footage.mp4). Pass --allow-partial for a deliberate partial refresh (e.g. poster-only).",
+  "message": "A footage cut is required (--footage <file>, or --dir containing footage.mp4). Pass --allow-partial for a deliberate partial refresh (e.g. poster-only), or upload plates alone (--plate/--plate-background) for the plate-lane pre-upload.",
   "ok": false
 }
 `);

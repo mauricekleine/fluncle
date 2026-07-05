@@ -74,11 +74,45 @@ export const WARM_DARK_CEILING = 0.14;
 
 export type SceneKind = "finding" | "default" | "holding";
 
+/**
+ * Where a host resolves a declared texture sampler from. All three are
+ * host-resolvable without the composition module in reach:
+ *   - `artwork`          — the matched finding's cover (CORS-clear).
+ *   - `plate`            — the bundle's plate-lane photographic plate, the durable
+ *                          `<log-id>/plate.png` R2 key (found.fluncle.com).
+ *   - `plate-background` — the plate's subject-removed background for true
+ *                          parallax, `<log-id>/plate.background.png`.
+ */
+export type SceneTextureSource = "artwork" | "plate" | "plate-background";
+
+export const SCENE_TEXTURE_SOURCES: readonly SceneTextureSource[] = [
+  "artwork",
+  "plate",
+  "plate-background",
+];
+
 export type SceneTexture = {
   name: string;
-  /** Only `artwork` is host-resolvable (the matched finding's cover, CORS-clear). */
-  source: "artwork";
+  source: SceneTextureSource;
 };
+
+/**
+ * The sampler-name convention that lets the emitter resolve a texture's SOURCE
+ * statically (the textures prop's values are runtime expressions, so the NAME is
+ * the contract): a plate-lane composition samples its plate as `u_plate` and the
+ * subject-removed background as `u_plateBackground` — those names map to the
+ * bundle's own `plate.png` / `plate.background.png`; any other sampler name reads
+ * as the finding's artwork.
+ */
+export function textureSourceForName(name: string): SceneTextureSource {
+  if (name === "u_plate") {
+    return "plate";
+  }
+  if (name === "u_plateBackground") {
+    return "plate-background";
+  }
+  return "artwork";
+}
 
 export type SceneGlsl = {
   /** The fully RESOLVED fragment body (`${GLSL.*}` deps inlined; no interpolations left). */
@@ -138,9 +172,56 @@ export type Scene = {
   cleared: SceneCleared;
   /** The body reads HEADER UNIFORMS ONLY (a live host can drive it exactly). */
   liveReady: boolean;
-  /** Why a scene is not live-ready (custom uniforms, non-artwork textures). Empty when ready. */
+  /** Why a scene is not live-ready (custom clip-time uniforms). Empty when ready. */
   liveReadyReasons: string[];
 };
+
+// The public read base for stored bundle artifacts (found.fluncle.com serves the
+// R2 bundle keyed by log-id) — where a host resolves the plate-lane textures from.
+const FOUND_BASE = "https://found.fluncle.com";
+
+export type SceneTextureUrls = {
+  /** The matched finding's artwork (binds every `source: "artwork"` sampler). */
+  artworkUrl?: string;
+  /** Override for `source: "plate"`; defaults to the finding bundle's plate.png. */
+  plateUrl?: string;
+  /** Override for `source: "plate-background"`; defaults to plate.background.png. */
+  plateBackgroundUrl?: string;
+};
+
+/**
+ * Resolve a scene's declared texture samplers to concrete URLs for a host —
+ * the pure half of SceneHost's `textures` prop. Per-source: `artwork` binds the
+ * caller's artworkUrl; `plate` / `plate-background` bind the caller's override or,
+ * for a finding, the bundle's own durable R2 key (the same URL the composition
+ * rendered from — the upload-first order guarantees it exists before any render).
+ * Entries with no resolvable URL are omitted (never a throw); undefined when
+ * nothing resolves, so a texture-less ShaderLayer path stays untouched.
+ */
+export function resolveSceneTextures(
+  scene: Pick<Scene, "glsl" | "id" | "kind">,
+  urls: SceneTextureUrls,
+): Record<string, string> | undefined {
+  const declared = scene.glsl.textures;
+  if (!declared || declared.length === 0) {
+    return undefined;
+  }
+  const bundleBase = scene.kind === "finding" ? `${FOUND_BASE}/${scene.id}` : undefined;
+  const resolved: Record<string, string> = {};
+  for (const texture of declared) {
+    const url =
+      texture.source === "plate"
+        ? (urls.plateUrl ?? (bundleBase ? `${bundleBase}/plate.png` : undefined))
+        : texture.source === "plate-background"
+          ? (urls.plateBackgroundUrl ??
+            (bundleBase ? `${bundleBase}/plate.background.png` : undefined))
+          : urls.artworkUrl;
+    if (url) {
+      resolved[texture.name] = url;
+    }
+  }
+  return Object.keys(resolved).length > 0 ? resolved : undefined;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -353,9 +434,9 @@ export function detectGlsl3(source: string): boolean {
 
 /**
  * The texture sampler names the ShaderLayer is given (`textures={{ name: … }}`).
- * Every entry maps to `source: "artwork"` — the only host-resolvable source. A
- * body sampling a non-artwork texture is out of the emitter's static reach and is
- * flagged not-live-ready by the caller.
+ * Each name resolves to its SOURCE via the sampler-name convention
+ * (`textureSourceForName`): `u_plate` / `u_plateBackground` are the plate-lane
+ * bundle files; every other name is the finding's artwork.
  */
 export function extractTextureNames(source: string): string[] {
   const idx = source.indexOf("textures=");
@@ -552,7 +633,7 @@ export function buildScene(input: BuildSceneInput): BuildSceneResult {
     glsl3,
     headerVersion: SCENE_HEADER_VERSION,
     ...(textureNames.length > 0
-      ? { textures: textureNames.map((name) => ({ name, source: "artwork" as const })) }
+      ? { textures: textureNames.map((name) => ({ name, source: textureSourceForName(name) })) }
       : {}),
   };
 

@@ -13,7 +13,13 @@
 
 import { existsSync, readFileSync } from "node:fs";
 
-import { lintScenePalette, type Scene, SCENE_SCHEMA } from "./scene";
+import {
+  lintScenePalette,
+  type Scene,
+  SCENE_SCHEMA,
+  SCENE_TEXTURE_SOURCES,
+  type SceneTextureSource,
+} from "./scene";
 
 export type SceneError = { path: string; message: string };
 
@@ -79,8 +85,15 @@ export function validateSceneStrict(raw: unknown): ValidateSceneResult {
         err("glsl.textures", "when present, must be an array");
       } else {
         raw.glsl.textures.forEach((t, i) => {
-          if (!isRecord(t) || typeof t.name !== "string" || t.source !== "artwork") {
-            err(`glsl.textures[${i}]`, 'must be { name: string, source: "artwork" }');
+          if (
+            !isRecord(t) ||
+            typeof t.name !== "string" ||
+            !SCENE_TEXTURE_SOURCES.includes(t.source as SceneTextureSource)
+          ) {
+            err(
+              `glsl.textures[${i}]`,
+              `must be { name: string, source: ${SCENE_TEXTURE_SOURCES.map((s) => `"${s}"`).join(" | ")} }`,
+            );
           }
         });
       }
