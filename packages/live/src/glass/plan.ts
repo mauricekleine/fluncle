@@ -15,6 +15,7 @@ export type PlanEntry = {
   artists: string[];
   foundAt: string | null;
   palette: unknown;
+  scenePalette?: string[];
   seed: number | null;
   durationMs: number | null;
   videoVehicle: string | null;
@@ -107,6 +108,18 @@ export async function buildPlan(): Promise<PlanEntry[]> {
       } catch {
         // props.json missing -> canon palette for this arrival
       }
+      let scenePalette: string[] | undefined;
+      try {
+        const sr = await fetch(`https://found.fluncle.com/${t.logId}/scene.json`);
+        if (sr.ok) {
+          const sc = (await sr.json()) as { palette?: string[] };
+          if (Array.isArray(sc.palette) && sc.palette.length >= 4) {
+            scenePalette = sc.palette;
+          }
+        }
+      } catch {
+        // scene.json missing -> the artwork palette carries the replay tint.
+      }
       let replay: Scene = {
         customUniforms: [],
         layers: [],
@@ -130,6 +143,7 @@ export async function buildPlan(): Promise<PlanEntry[]> {
         logId: t.logId,
         palette,
         replay,
+        scenePalette,
         seed,
         title,
         videoVehicle: vehicleMap[t.logId] ?? null,

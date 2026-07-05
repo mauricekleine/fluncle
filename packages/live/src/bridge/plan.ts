@@ -312,6 +312,20 @@ async function enrich(member: PlanMember): Promise<PlanEntry> {
     // props.json missing -> canon palette at render time (the glass falls back).
   }
 
+  // scene.json -> the RENDERED palette stops (a composition may override the artwork
+  // palette; the replay must re-tint with the rendered truth, not the artwork's).
+  try {
+    const res = await fetch(`${FOUND_BASE}/${member.logId}/scene.json`);
+    if (res.ok) {
+      const sc = (await res.json()) as { palette?: string[] };
+      if (Array.isArray(sc.palette) && sc.palette.length >= 4) {
+        entry.scenePalette = sc.palette;
+      }
+    }
+  } catch {
+    // scene.json missing -> the artwork palette carries the replay tint.
+  }
+
   // composition.tsx -> the replay-ready scene (resolved layers + classified uniforms +
   // plate/artwork samplers resolved to concrete R2 URLs the glass loads).
   try {

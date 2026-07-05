@@ -20,6 +20,7 @@ import { Dsp, MIC_CONSTRAINTS } from "./dsp.ts";
 import { GlassPipeline } from "./pipeline.ts";
 
 type PlanItem = {
+  scenePalette?: string[];
   logId: string;
   title: string;
   artists: string[];
@@ -84,6 +85,12 @@ function paletteFromEntry(e: PlanItem): number[][] {
   return [bg, accent.map((c) => c * 0.5), accent, glow];
 }
 function paletteReplay(e: PlanItem): number[][] {
+  // The rendered stops win: a composition that overrode its artwork palette must
+  // replay in ITS colors (scene.json truth), not the artwork's.
+  const S = e.scenePalette;
+  if (S && S.length >= 4) {
+    return [0, 1, 2, 3].map((i) => hexToRgb(S[i]) || CANON[i].slice());
+  }
   const P = e.palette;
   if (!P) {
     return CANON.map((c) => c.slice());

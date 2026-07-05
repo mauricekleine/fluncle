@@ -31,6 +31,13 @@ export type PlanEntry = {
   };
   seed?: number;
   /**
+   * The composition's RENDERED palette stops (scene.json `palette`, emitted from the
+   * composition source since #307) — dark->bright hex ramp. When a composition
+   * overrode the artwork palette, THIS is the truth the replay must re-tint with;
+   * `palette` above stays the artwork-derived morph target for the abstract vehicles.
+   */
+  scenePalette?: string[];
+  /**
    * The dream-replay scene — the glass's scene-extract `Scene` shape, mirrored here
    * so both worlds keep importing only this file. Layers carry resolved GLSL bodies;
    * custom uniforms are classified for live re-drive (rise ramps -> dwell, tail
