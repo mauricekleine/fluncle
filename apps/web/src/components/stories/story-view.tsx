@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { siSpotify, siTiktok } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
-import { Button } from "@/components/ui/button";
+import { Button } from "@fluncle/ui/components/button";
 import { formatDate } from "@/lib/format";
 import {
   spotifyAlbumImageAtSize,

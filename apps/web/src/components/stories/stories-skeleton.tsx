@@ -1,4 +1,4 @@
-import { Skeleton } from "@/components/ui/skeleton";
+import { Skeleton } from "@fluncle/ui/components/skeleton";
 
 // The pending state while a stories loader runs: the same 9:16 pane with the
 // progress rail and meta block sketched in, so the player lands without a

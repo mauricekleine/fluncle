@@ -1,7 +1,7 @@
 import { CheckCircleIcon, MapPinAreaIcon, WarningIcon, XIcon } from "@phosphor-icons/react";
 import { type MixtapeMember } from "@fluncle/contracts";
-import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
+import { Button } from "@fluncle/ui/components/button";
+import { Label } from "@fluncle/ui/components/label";
 import { formatClock } from "@/components/video";
 import { cueProgress } from "@/lib/studio-clip";
 

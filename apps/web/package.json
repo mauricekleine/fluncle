@@ -33,6 +33,7 @@
     "@fluncle/registry": "workspace:*",
     "@fluncle/sprites": "workspace:*",
     "@fluncle/tokens": "workspace:*",
+    "@fluncle/ui": "workspace:*",
     "@libsql/client": "catalog:",
     "@orpc/openapi": "1.14.6",
     "@orpc/server": "1.14.6",

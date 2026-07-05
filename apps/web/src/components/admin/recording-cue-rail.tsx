@@ -9,18 +9,18 @@ import {
 import { type RecordingTracklistItem } from "@fluncle/contracts/orpc";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Badge } from "@fluncle/ui/components/badge";
+import { Button } from "@fluncle/ui/components/button";
 import {
   Command,
   CommandEmpty,
   CommandInput,
   CommandItem,
   CommandList,
-} from "@/components/ui/command";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+} from "@fluncle/ui/components/command";
+import { Input } from "@fluncle/ui/components/input";
+import { Label } from "@fluncle/ui/components/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@fluncle/ui/components/popover";
 import { formatClock } from "@/components/video";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
 import { type NewCue, parseArtists, recordingCueProgress } from "@/lib/recording-cues";

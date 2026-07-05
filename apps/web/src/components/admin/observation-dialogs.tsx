@@ -7,8 +7,8 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { ScrollArea } from "@/components/ui/scroll-area";
+} from "@fluncle/ui/components/dialog";
+import { ScrollArea } from "@fluncle/ui/components/scroll-area";
 
 // The view dialogs for the two audio-observation columns on the admin board.
 // Both are READ-ONLY first-pass overviews:

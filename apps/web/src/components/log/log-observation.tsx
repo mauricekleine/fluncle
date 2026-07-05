@@ -1,6 +1,6 @@
 import { PauseIcon, PlayIcon, WaveformIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@fluncle/ui/components/button";
 
 // The log page's audio-observation control: Fluncle's recovered field
 // observation, heard over the silent footage (the first HEARD surface — the

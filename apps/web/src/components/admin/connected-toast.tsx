@@ -1,7 +1,7 @@
 import { useRouter } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
-import { Toaster } from "@/components/ui/sonner";
+import { Toaster } from "@fluncle/ui/components/sonner";
 
 // The OAuth connect routes (Spotify / YouTube / Mixcloud) redirect to
 // `/admin?<service>=connected` after storing their token server-side. This mounts

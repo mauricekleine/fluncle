@@ -1,6 +1,6 @@
 import { CaretLeftIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
-import { Button } from "@/components/ui/button";
+import { Button } from "@fluncle/ui/components/button";
 
 // Quiet full-screen states for the Stories surface, sitting directly on the
 // cosmos like every other pane (One Pane).

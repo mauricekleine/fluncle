@@ -4,14 +4,14 @@ import { useCallback } from "react";
 import { siMixcloud, siSoundcloud, siSpotify, siTiktok, siYoutube } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
 import { TrackArtwork } from "@/components/track-artwork";
-import { Badge } from "@/components/ui/badge";
+import { Badge } from "@fluncle/ui/components/badge";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@fluncle/ui/components/dropdown-menu";
 import { siteUrl } from "@/lib/fluncle-links";
 import { formatAlbumDuration, formatDuration } from "@/lib/format";
 import { spotifyAlbumImageAtSize } from "@/lib/media";

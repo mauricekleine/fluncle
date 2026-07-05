@@ -20,9 +20,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+} from "@fluncle/ui/components/alert-dialog";
+import { Badge } from "@fluncle/ui/components/badge";
+import { Button } from "@fluncle/ui/components/button";
 import { type EditionDTO, orderedGalaxies } from "@/lib/editions";
 import { logPageUrl } from "@/lib/fluncle-links";
 import { formatDateLong } from "@/lib/format";

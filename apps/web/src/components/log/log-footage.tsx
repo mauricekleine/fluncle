@@ -1,6 +1,6 @@
 import { PauseIcon, PlayIcon } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@fluncle/ui/components/button";
 import {
   spotifyAlbumImageAtSize,
   trackMedia,

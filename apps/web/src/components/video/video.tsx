@@ -11,7 +11,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@fluncle/ui/components/button";
 import { cn } from "@/lib/utils";
 import { type VideoSize, useVideoClock } from "./use-video-clock";
 import { clampFraction, formatClock, pointerFraction } from "./video-format";

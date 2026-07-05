@@ -6,15 +6,15 @@ import { createServerFn } from "@tanstack/react-start";
 import { type Dispatch, type SetStateAction, useEffect, useMemo, useState } from "react";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { ClipCard } from "@/components/admin/clip-card";
-import { Badge } from "@/components/ui/badge";
-import { Label } from "@/components/ui/label";
+import { Badge } from "@fluncle/ui/components/badge";
+import { Label } from "@fluncle/ui/components/label";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
+} from "@fluncle/ui/components/select";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { listClips } from "@/lib/server/clips";
 import { listRecordings } from "@/lib/server/recordings";

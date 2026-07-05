@@ -6,14 +6,14 @@ import {
   PlusIcon,
 } from "@phosphor-icons/react";
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@fluncle/ui/components/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@fluncle/ui/components/dialog";
 import { beatportSearchUrl } from "@/lib/beatport";
 import { spotifyAlbumImageAtSize } from "@/lib/media";
 import { mixtapeDisplayTitle } from "@/lib/mixtapes";

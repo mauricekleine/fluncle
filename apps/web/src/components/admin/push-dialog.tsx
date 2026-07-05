@@ -10,16 +10,16 @@ import {
 import { useState } from "react";
 import { type PlatformConfig } from "@/components/admin/platform-cell";
 import { type BoardRow } from "@/components/admin/use-publish";
-import { Button } from "@/components/ui/button";
+import { Button } from "@fluncle/ui/components/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+} from "@fluncle/ui/components/dialog";
+import { Input } from "@fluncle/ui/components/input";
+import { Label } from "@fluncle/ui/components/label";
 import { trackMedia } from "@/lib/media";
 import { cn } from "@/lib/utils";
 

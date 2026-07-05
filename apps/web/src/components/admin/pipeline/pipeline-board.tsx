@@ -15,7 +15,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@fluncle/ui/components/dropdown-menu";
 
 // The pipeline board — the operator's `/admin` home. The whole pipeline as a
 // pattern: every cell is one state glyph, no label, columns grouped under
