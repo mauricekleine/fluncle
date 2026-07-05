@@ -77,7 +77,7 @@ const REGISTERS = ["abstract", "representational", "framed"] as const;
 export type ShipRegister = (typeof REGISTERS)[number];
 
 const USAGE =
-  "usage: bun src/pipeline/ship.ts <trackId|log-id> [--vehicle <tag>] [--grain <family>] [--model <provider/model>] [--reasoning <level>] [--register <abstract|representational|framed>] [--plate-subject <kind>]";
+  "usage: bun src/pipeline/ship.ts <trackId|log-id> [--vehicle <tag>] [--grain <family>] [--model <provider/model>] [--reasoning <level>] [--register <abstract|representational|framed>] [--plate-subject <kind>] [--prune-audio]";
 
 export type ShipFlags = {
   trackInput: string;
@@ -87,6 +87,13 @@ export type ShipFlags = {
   reasoning: string | undefined;
   register: ShipRegister | undefined;
   plateSubject: string | undefined;
+  /**
+   * Delete the shipped track's cached preview audio (public/<trackId>.m4a) after
+   * packaging. OFF by default — ship KEEPS the audio so a re-render (which re-bundles
+   * on any src/ edit) still finds it and never 404s (the bounded cache is already
+   * capped by sweepPreviewAudioCache in social-preview). Opt in for a clean public/.
+   */
+  pruneAudio: boolean;
 };
 
 /** Parse + validate ship's CLI flags. Throws (with the usage string) on a bad invocation. */
@@ -96,6 +103,7 @@ export function parseShipArgs(argv: string[]): ShipFlags {
       grain: "string";
       model: "string";
       "plate-subject": "string";
+      "prune-audio": "boolean";
       reasoning: "string";
       register: "string";
       vehicle: "string";
@@ -106,6 +114,7 @@ export function parseShipArgs(argv: string[]): ShipFlags {
       grain: "string",
       model: "string",
       "plate-subject": "string",
+      "prune-audio": "boolean",
       reasoning: "string",
       register: "string",
       vehicle: "string",
@@ -134,6 +143,7 @@ export function parseShipArgs(argv: string[]): ShipFlags {
     // judge:diversity can rotate the subject kind the way it rotates everything
     // else. Free text by design (the kinds are a vocabulary, not an enum).
     plateSubject: parsed.flags["plate-subject"]?.trim().toLowerCase() || undefined,
+    pruneAudio: parsed.flags["prune-audio"],
     reasoning: parsed.flags.reasoning?.trim() || undefined,
     register: registerRaw as ShipRegister | undefined,
     trackInput,
@@ -667,11 +677,18 @@ async function main(argv: string[]): Promise<void> {
     );
   }
 
-  // Bounded audio cache: the analysis pass that needed public/<trackId>.m4a is
-  // done, and R2 now holds the durable copy inside the bundle — drop it.
-  const removedPreviewAudio = await deletePreviewAudio(track.trackId);
-  if (removedPreviewAudio) {
-    log(`public/${track.trackId}.m4a removed (shipped — preview cache no longer needed)`);
+  // Preview audio cache: KEEP the audio by default. The Remotion bundle bakes a
+  // COPY of public/ at bundle() time, so deleting public/<trackId>.m4a here left a
+  // later re-render (which re-bundles on any src/ edit) baking a public/ WITHOUT the
+  // audio → staticFile 404 until a manual re-download + bundle-cache clear. The
+  // bounded cache is already capped by sweepPreviewAudioCache (social-preview), so
+  // this delete was redundant AND load-bearing-in-the-wrong-direction. `--prune-audio`
+  // opts back into an immediate clean-up when a tidy public/ is wanted.
+  if (flags.pruneAudio) {
+    const removedPreviewAudio = await deletePreviewAudio(track.trackId);
+    if (removedPreviewAudio) {
+      log(`public/${track.trackId}.m4a removed (--prune-audio)`);
+    }
   }
 
   console.error(`\n[ship] bundle ready → out/${track.logId}/`);

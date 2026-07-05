@@ -29,6 +29,12 @@ describe("parseShipArgs", () => {
     expect(flags.reasoning).toBeUndefined();
     expect(flags.register).toBeUndefined();
     expect(flags.plateSubject).toBeUndefined();
+    // Audio is KEPT by default — the delete is opt-in (avoids the re-render 404 trap).
+    expect(flags.pruneAudio).toBe(false);
+  });
+
+  test("--prune-audio opts into deleting the shipped preview audio", () => {
+    expect(parseShipArgs(["id", "--prune-audio"]).pruneAudio).toBe(true);
   });
 
   test("parses every flag, trimming string values", () => {

@@ -531,6 +531,151 @@ export function extractGrainAmount(source: string): number | undefined {
   return m ? Number(m[1]) : undefined;
 }
 
+// ---------------------------------------------------------------------------
+// Palette fidelity (RFC Unit S): the emitted `palette` must be the stops the
+// COMPOSITION actually feeds ShaderLayer's `u_palette` — which can DIVERGE from
+// the finding's artwork palette (props.json) when a composition hard-codes a
+// retinted override (`paletteStops={["#..", …]}`, or a local `const stops = […]`
+// passed as `paletteStops={stops}`). A host drives `u_palette` from scene.json at
+// replay, so recording the artwork palette instead of the rendered stops re-tints
+// the world wrong (a warm composition replayed with its cool artwork stops — the
+// 026.4.0E finding). These helpers resolve the rendered stops STATICALLY from the
+// source text (the composition is TSX/JSX, not a plain module we can evaluate —
+// same reason the body/prop extractors above read the source). When the stops are
+// runtime-computed and cannot be pinned, buildScene falls back to the props
+// palette and warns.
+//
+// The common `palette={paletteMix(palette.swatches)}` / `palette={props.palette}`
+// path needs no override here: the pipeline BUILDS props.palette as
+// `paletteMix(swatches)` (social-preview.ts), so the props fallback already equals
+// the rendered palette. Only an explicit paletteStops (or a full inline palette
+// object) departs from props — that departure is what these capture.
+// ---------------------------------------------------------------------------
+
+/** A quoted hex-color string literal (`"#0e0a06"`, `'#abc'`). Group 1 is the hex. */
+const HEX_LITERAL_RE = /["'`](#[0-9a-fA-F]{3,8})["'`]/g;
+
+/** The hex-color string literals in a snippet, in source order. */
+function hexLiterals(snippet: string): string[] {
+  const out: string[] = [];
+  HEX_LITERAL_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = HEX_LITERAL_RE.exec(snippet)) !== null) {
+    out.push(m[1]);
+  }
+  return out;
+}
+
+/** The first four hex literals as a ScenePalette, or undefined when there are fewer than four. */
+function fourStops(colors: string[]): ScenePalette | undefined {
+  return colors.length >= 4 ? [colors[0], colors[1], colors[2], colors[3]] : undefined;
+}
+
+/** Escape the regex-special `$` an identifier may legally contain. */
+function escapeIdent(name: string): string {
+  return name.replace(/\$/g, "\\$");
+}
+
+/** The RHS initializer of a `const <name> … = <rhs>;` declaration (up to the `;`), or undefined. */
+function constInitializer(source: string, name: string): string | undefined {
+  const re = new RegExp(`\\bconst\\s+${escapeIdent(name)}\\b[^=;]*=`);
+  const m = re.exec(source);
+  if (!m) {
+    return undefined;
+  }
+  const start = m.index + m[0].length;
+  const end = source.indexOf(";", start);
+  return source.slice(start, end < 0 ? source.length : end);
+}
+
+/**
+ * The expression inside a JSX `name={…}` prop starting at/after `from` (outer
+ * braces stripped, trimmed), plus the index just past the matched `name=` so a
+ * caller can scan for the next occurrence.
+ */
+function jsxPropExpr(
+  source: string,
+  name: string,
+  from: number,
+): { expr: string; end: number } | undefined {
+  const re = new RegExp(`\\b${name}\\s*=`);
+  const m = re.exec(source.slice(from));
+  if (!m) {
+    return undefined;
+  }
+  const at = from + m.index;
+  const block = sliceBalancedBraces(source, at); // includes the outer { }
+  if (!block) {
+    return undefined;
+  }
+  return { end: at + m[0].length, expr: block.slice(1, -1).trim() };
+}
+
+const IDENT_RE = /^[A-Za-z_$][\w$]*$/;
+
+/** A `palette={{ background, accent, glow, ink }}` object literal with all four hex roles. */
+function extractInlinePaletteObject(source: string): ScenePalette | undefined {
+  const re = /\bpalette\s*=\s*\{\{/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source)) !== null) {
+    const block = sliceBalancedBraces(source, m.index);
+    if (!block) {
+      continue;
+    }
+    const fields: Record<string, string> = {};
+    const fieldRe = /([A-Za-z_$][\w$]*)\s*:\s*["'`](#[0-9a-fA-F]{3,8})["'`]/g;
+    let f: RegExpExecArray | null;
+    while ((f = fieldRe.exec(block)) !== null) {
+      fields[f[1]] = f[2];
+    }
+    if (fields.background && fields.accent && fields.glow && fields.ink) {
+      return [fields.background, fields.accent, fields.glow, fields.ink];
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The four palette stops the COMPOSITION feeds ShaderLayer's `u_palette`, resolved
+ * statically from the source — the render's source of truth when it diverges from
+ * the finding's artwork palette. Priority:
+ *   1. `paletteStops={[…]}`   — an inline four-hex array (positional).
+ *   2. `paletteStops={<id>}`  — the local `const <id> = […]` array it names.
+ *   3. `palette={{ background, accent, glow, ink }}` — a full inline object literal.
+ * Returns undefined when the stops are runtime-computed (a prop, a paletteMix, a
+ * partial CloseCard `palette`) — buildScene then records the props palette.
+ */
+export function extractPaletteStops(source: string): ScenePalette | undefined {
+  // 1 + 2 — the explicit paletteStops override (wins over `palette` in ShaderLayer).
+  let from = 0;
+  for (;;) {
+    const prop = jsxPropExpr(source, "paletteStops", from);
+    if (!prop) {
+      break;
+    }
+    from = prop.end;
+    if (prop.expr.startsWith("[")) {
+      const stops = fourStops(hexLiterals(prop.expr));
+      if (stops) {
+        return stops;
+      }
+    } else if (IDENT_RE.test(prop.expr)) {
+      const decl = constInitializer(source, prop.expr);
+      const stops = decl ? fourStops(hexLiterals(decl)) : undefined;
+      if (stops) {
+        return stops;
+      }
+    }
+  }
+  // 3 — a full inline palette object literal (all four roles as hex literals).
+  return extractInlinePaletteObject(source);
+}
+
+/** True when the source declares an explicit `paletteStops` override (resolved or not). */
+export function hasPaletteStopsOverride(source: string): boolean {
+  return /\bpaletteStops\s*=/.test(source);
+}
+
 /**
  * Fold the ship-time gate report (parsed out/<trackId>.metrics.json) into the
  * `cleared` stamp. Maps the two HARD gates (flash, beat-pull) + the arc gate to
@@ -569,7 +714,12 @@ export type BuildSceneInput = {
   source: string;
   /** The imported GLSL snippet object (`GLSL` from remotion/journey/glsl). */
   glsl: Record<string, string>;
-  /** The finding's four palette stops (props.json CosmosPalette, dark→light). */
+  /**
+   * The finding's four artwork palette stops (props.json CosmosPalette, dark→light).
+   * The FALLBACK: the emitter prefers the stops the composition feeds ShaderLayer
+   * (extractPaletteStops) when they can be resolved, and only records these when
+   * the rendered stops are runtime-computed or absent.
+   */
   palette: ScenePalette;
   /** The grain family id (ship's --grain / render manifest), or null. */
   grainFamily: string | null;
@@ -628,6 +778,19 @@ export function buildScene(input: BuildSceneInput): BuildSceneResult {
     warnings.push("grain family unset — recording `unknown`");
   }
 
+  // Palette FIDELITY: prefer the stops the composition actually feeds ShaderLayer
+  // (a hard-coded retint) over the finding's artwork palette (input.palette from
+  // props), so a replay re-tints the world the way the shipped footage looks. Fall
+  // back to props when the stops are runtime-computed — and warn only when the
+  // composition DECLARED an explicit override we could not pin (props may diverge).
+  const renderedStops = extractPaletteStops(input.source);
+  const palette = renderedStops ?? input.palette;
+  if (!renderedStops && hasPaletteStopsOverride(input.source)) {
+    warnings.push(
+      "palette: composition declares a paletteStops override this emitter could not resolve to literal stops — recording the props (artwork) palette, which may DIVERGE from the rendered footage",
+    );
+  }
+
   const glsl: SceneGlsl = {
     body: resolved.body,
     glsl3,
@@ -645,7 +808,7 @@ export function buildScene(input: BuildSceneInput): BuildSceneResult {
     kind: input.kind,
     liveReady: liveReadyReasons.length === 0,
     liveReadyReasons,
-    palette: input.palette,
+    palette,
     schema: SCENE_SCHEMA,
     ...(bloom ? { bloom } : {}),
     ...(reactivity ? { reactivity } : {}),

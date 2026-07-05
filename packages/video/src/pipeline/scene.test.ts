@@ -9,6 +9,7 @@ import {
   buildScene,
   detectGlsl3,
   extractBloom,
+  extractPaletteStops,
   extractReactivity,
   extractTextureNames,
   foldCleared,
@@ -56,6 +57,21 @@ void main() {
   gl_FragColor = vec4(u_palette[0] * u_settle, 1.0);
 }
 \`;
+`;
+
+// A composition that HARD-CODES warm retint stops via a local const + paletteStops
+// (the 024.7.3Y / 026.4.0E shape) — these stops must win over the artwork palette.
+const RETINT_STOPS_SOURCE = `
+const stops: [string, string, string, string] = ["#0e0a06", "#7c391a", "#e59a3f", "#f3e7cf"];
+const FRAG = /* glsl */ \`
+\${GLSL.hash}
+void main() {
+  GrainOpts go = grainChemicalDye();
+  go.amount = 0.06;
+  gl_FragColor = vec4(u_palette[0], 1.0);
+}
+\`;
+<ShaderLayer fragmentShader={FRAG} paletteStops={stops} />
 `;
 
 describe("locateFragmentLiteral", () => {
@@ -157,6 +173,47 @@ describe("prop extraction", () => {
     expect(textureSourceForName("u_plateBackground")).toBe("plate-background");
     expect(textureSourceForName("art")).toBe("artwork");
     expect(textureSourceForName("u_plateX")).toBe("artwork");
+  });
+});
+
+describe("extractPaletteStops — composition palette fidelity", () => {
+  test("resolves an inline paletteStops array", () => {
+    expect(
+      extractPaletteStops(
+        '<ShaderLayer paletteStops={["#0e0a06", "#7c391a", "#e59a3f", "#f3e7cf"]} />',
+      ),
+    ).toEqual(["#0e0a06", "#7c391a", "#e59a3f", "#f3e7cf"]);
+  });
+
+  test("resolves a `paletteStops={stops}` local const array", () => {
+    expect(extractPaletteStops(RETINT_STOPS_SOURCE)).toEqual([
+      "#0e0a06",
+      "#7c391a",
+      "#e59a3f",
+      "#f3e7cf",
+    ]);
+  });
+
+  test("resolves a full inline palette object by role, not position", () => {
+    expect(
+      extractPaletteStops(
+        '<ShaderLayer palette={{ accent: "#7c391a", ink: "#f3e7cf", background: "#0a0a0a", glow: "#e59a3f" }} />',
+      ),
+    ).toEqual(["#0a0a0a", "#7c391a", "#e59a3f", "#f3e7cf"]);
+  });
+
+  test("returns undefined for a computed or prop palette (props stays the source of truth)", () => {
+    // `palette={paletteMix(palette.swatches)}` / `palette={palette}` == props.palette.
+    expect(
+      extractPaletteStops("<ShaderLayer fragmentShader={F} palette={mixedPalette} />"),
+    ).toBeUndefined();
+    expect(
+      extractPaletteStops("<ShaderLayer fragmentShader={F} palette={palette} />"),
+    ).toBeUndefined();
+    // A partial CloseCard palette is NOT a full four-role override.
+    expect(
+      extractPaletteStops('<CloseCard palette={{ accent: "#80c8a4", ink: "#e6f1ea" }} />'),
+    ).toBeUndefined();
   });
 });
 
@@ -367,6 +424,60 @@ describe("buildScene", () => {
     });
     expect(scene).toBeNull();
     expect(warnings[0]).toContain("not live-ready");
+  });
+
+  test("a composition's hard-coded paletteStops win over the artwork palette", () => {
+    // A COOL artwork palette (props) with a WARM hard-coded composition — the 026.4.0E
+    // divergence. The emitted scene must carry the WARM rendered stops so a replay
+    // re-tints the world the way the shipped footage looks, not the cool artwork.
+    const artwork: [string, string, string, string] = ["#0a0f14", "#2f5d6b", "#4a8ea3", "#dfeaf0"];
+    const { scene, warnings } = buildScene({
+      at,
+      glsl: GLSL_FIXTURE,
+      grainFamily: "grainChemicalDye",
+      id: "026.4.0E",
+      kind: "finding",
+      metricsReport: null,
+      palette: artwork,
+      source: RETINT_STOPS_SOURCE,
+    });
+    expect(scene?.palette).toEqual(["#0e0a06", "#7c391a", "#e59a3f", "#f3e7cf"]);
+    // A cleanly resolved override is NOT a divergence — no fallback warning.
+    expect(warnings.some((w) => w.includes("DIVERGE"))).toBe(false);
+  });
+
+  test("an unresolvable paletteStops override records props + warns of the divergence risk", () => {
+    const source = [
+      "const FRAG = `void main(){ gl_FragColor = vec4(u_palette[0], 1.0); }`;",
+      "<ShaderLayer fragmentShader={FRAG} paletteStops={computeStops(track)} />",
+    ].join("\n");
+    const { scene, warnings } = buildScene({
+      at,
+      glsl: GLSL_FIXTURE,
+      grainFamily: "grainChemicalDye",
+      id: "099.9.9Z",
+      kind: "finding",
+      metricsReport: null,
+      palette,
+      source,
+    });
+    expect(scene?.palette).toEqual(palette);
+    expect(warnings.some((w) => w.includes("DIVERGE"))).toBe(true);
+  });
+
+  test("a composition with no palette override records the props (artwork) palette, no warning", () => {
+    const { scene, warnings } = buildScene({
+      at,
+      glsl: GLSL_FIXTURE,
+      grainFamily: "grainChemicalDye",
+      id: "032.0.4L",
+      kind: "finding",
+      metricsReport: null,
+      palette,
+      source: LIVE_READY_SOURCE,
+    });
+    expect(scene?.palette).toEqual(palette);
+    expect(warnings.some((w) => w.includes("DIVERGE"))).toBe(false);
   });
 });
 
