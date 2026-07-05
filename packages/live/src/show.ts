@@ -51,7 +51,7 @@ type Options = {
 
 function parseArgs(argv: string[]): Options {
   const opts: Options = {
-    audioIndex: 0,
+    audioIndex: -1,
     checkOnly: false,
     displayIndex: undefined,
     force: false,
@@ -122,7 +122,7 @@ Flags
   --plan <logId>        load a planned set; the bridge fingerprints its tracklist
   --one-mac             the fallback topology (mixing + streaming on one machine)
   --display-index <N>   which display the glass takes (default: the last one)
-  --audio-index <N>     the avfoundation audio input to meter (default: 0)
+  --audio-index <N>     the avfoundation audio input to meter (default: auto — prefers M-Track/USB audio, never an Aggregate)
   --check-only          run pre-flight and report, launch nothing
   --no-browser          raise the servers but do not launch Chromium
   --force               launch even if a pre-flight check is holding
@@ -223,6 +223,19 @@ async function checkAudio(audioIndex: number): Promise<CheckResult> {
       note: "no avfoundation audio device answered — running dark (no capture rig here?)",
       status: "dark",
     };
+  }
+  // Auto-select the rig's input by name when the operator didn't pin an index —
+  // the same preference order the glass uses. An Aggregate Device is never
+  // auto-picked (the forbidden route: it starves the real input and reads dead).
+  if (audioIndex < 0) {
+    const byName = (re: RegExp) =>
+      audioDevices.find((m) => re.test(m[2] ?? "") && !/aggregate/i.test(m[2] ?? ""));
+    const pick =
+      byName(/m-track|usb audio/i) ??
+      byName(/blackhole/i) ??
+      audioDevices.find((m) => !/aggregate/i.test(m[2] ?? "")) ??
+      audioDevices[0];
+    audioIndex = Number(pick?.[1] ?? 0);
   }
   // Capture ~3s and read the RMS. A live input clocks frames (silence reads a
   // finite low dB); a dead route delivers NO frames, so astats never summarizes
