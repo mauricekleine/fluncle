@@ -53,6 +53,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 import unicodedata
 from dataclasses import dataclass
 
@@ -324,24 +325,49 @@ def read_rekordbox_keys(db) -> list[RekordboxKey]:
     return rows
 
 
+# `fluncle admin tracks list` hard-caps `--limit` at 100 (it THROWS above that), so the
+# CLI call is clamped here. A missing-key backlog larger than this can't be pulled
+# through this command today — the CLI needs cursor pagination on `admin tracks list`
+# for that; until then the fetch WARNS when it hits the cap.
+_CLI_LIST_MAX = 100
+
+
 def fetch_fluncle_missing_key(fluncle_bin: str, limit: int) -> list[dict]:
-    """Fluncle's findings with NO stored key, via `admin tracks list --no-key --json`."""
-    cmd = [fluncle_bin, "admin", "tracks", "list", "--no-key", "--json", "--limit", str(limit)]
+    """Fluncle's findings with NO stored key, via `admin tracks list --no-key --json`.
+
+    The CLI's JSON stdout is written to a temp FILE, not captured through a pipe: the
+    compiled `fluncle` binary truncates large stdout at the ~64KB OS pipe buffer when it
+    exits (a Bun stdout-flush-on-exit bug), silently corrupting the JSON once the payload
+    crosses ~64KB. A regular file has no such cap.
+    """
+    effective = min(limit, _CLI_LIST_MAX)
+    cmd = [fluncle_bin, "admin", "tracks", "list", "--no-key", "--json", "--limit", str(effective)]
+
+    with tempfile.TemporaryFile("w+b") as out:
+        try:
+            subprocess.run(cmd, stdout=out, stderr=subprocess.PIPE, text=True, check=True)
+        except FileNotFoundError:
+            die(f"`{fluncle_bin}` not found on PATH", "install the fluncle CLI or pass --fluncle-bin")
+        except subprocess.CalledProcessError as exc:
+            die(f"`fluncle admin tracks list` failed: {(exc.stderr or '').strip() or exc}")
+        out.seek(0)
+        raw = out.read().decode("utf-8")
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    except FileNotFoundError:
-        die(f"`{fluncle_bin}` not found on PATH", "install the fluncle CLI or pass --fluncle-bin")
-    except subprocess.CalledProcessError as exc:
-        die(f"`fluncle admin tracks list` failed: {exc.stderr.strip() or exc}")
-
-    try:
-        payload = json.loads(result.stdout)
+        payload = json.loads(raw)
     except json.JSONDecodeError:
         die("could not parse `fluncle admin tracks list --json` output")
 
     tracks = payload.get("tracks", []) if isinstance(payload, dict) else []
-    return [t for t in tracks if isinstance(t, dict) and t.get("type") != "mixtape"]
+    findings = [t for t in tracks if isinstance(t, dict) and t.get("type") != "mixtape"]
+    if len(findings) >= _CLI_LIST_MAX:
+        print(
+            f"warning: fetched {len(findings)} findings at the CLI's {_CLI_LIST_MAX}-row "
+            "cap — the backlog may be larger. The CLI needs cursor pagination on "
+            "`admin tracks list` to fetch beyond this.",
+            file=sys.stderr,
+        )
+    return findings
 
 
 @dataclass
