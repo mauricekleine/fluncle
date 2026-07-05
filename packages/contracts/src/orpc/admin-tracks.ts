@@ -437,6 +437,35 @@ const PublishTrackResultSchema = z
   .meta({ id: "PublishTrackResult" });
 
 /**
+ * `get_track_admin` → `GET /admin/tracks/{trackId}` (operationId `getTrackAdmin`).
+ *
+ * The single-finding admin lookup by Spotify trackId OR Log ID — the authoritative
+ * by-coordinate read the admin board + the `fluncle admin tracks get` CLI use so a
+ * lookup never has to scan a list (the incident: an ad-hoc list-scan misread a live
+ * finding as nonexistent). Returns the full admin-tier `TrackListItem` — the same
+ * shape the board renders and `update_track` writes: the vibe coords, the video
+ * ledger (url/vintage/vehicle/grain/model), the observation state, the editorial note.
+ *
+ * Named `get_track_admin` (not `get_track`) to disambiguate from the PUBLIC
+ * `get_track` (`GET /tracks/{idOrLogId}`), mirroring `list_tracks` →
+ * `list_tracks_admin`. On `adminProcedure` (live `requireAdmin` — a read,
+ * agent-allowed). Reuses `requireTrack`, so a genuinely-missing coordinate is the
+ * canonical `not_found`/404 — DISTINCT from the auth 401/403 the procedure raises and
+ * from a validation error. Findings-only (the `tracks` table): a mixtape Log ID is a
+ * 404 here (mixtapes have their own `get_mixtape*` reads).
+ */
+export const getTrackAdmin = oc
+  .route({
+    method: "GET",
+    operationId: "getTrackAdmin",
+    path: "/admin/tracks/{trackId}",
+    summary: "Get one finding with full admin fields (by Spotify trackId or Log ID)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ trackId: z.string() }))
+  .output(z.object({ ok: z.literal(true), track: TrackListItemSchema }));
+
+/**
  * `list_tracks_admin` → `GET /admin/tracks` (operationId `listTracksAdmin`).
  *
  * The admin board's archive query (live `requireAdmin` — a read, agent-allowed).
@@ -528,6 +557,7 @@ export const publishTrack = oc
 export const adminTracksContract = {
   context_track: contextTrack,
   finalize_track_video: finalizeTrackVideo,
+  get_track_admin: getTrackAdmin,
   list_tracks_admin: listTracksAdmin,
   note_track: noteTrack,
   observe_track: observeTrack,

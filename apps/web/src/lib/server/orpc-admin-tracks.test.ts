@@ -1141,6 +1141,66 @@ describe("oRPC list_tracks_admin (GET /admin/tracks)", () => {
   });
 });
 
+// ── get_track_admin — admin tier (the single-finding by-coordinate lookup) ───
+function getOne(id: string, token: string | undefined): Request {
+  const headers: Record<string, string> = {};
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  return new Request(`https://www.fluncle.com/api/v1/admin/tracks/${encodeURIComponent(id)}`, {
+    headers,
+  });
+}
+
+describe("oRPC get_track_admin (GET /admin/tracks/{trackId})", () => {
+  it("401s with no admin token (the adminAuth tier)", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(getOne(TRACK_ID, undefined));
+
+    expect(response?.status).toBe(401);
+    expect(getTrackByIdOrLogId).not.toHaveBeenCalled();
+  });
+
+  it("lets the AGENT read one finding and returns the full admin envelope", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(LIST_ITEM);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(getOne(TRACK_ID, AGENT_TOKEN));
+
+    expect(response?.status).toBe(200);
+    // The authoritative single read: the real finding resolves in full (the incident
+    // was a live finding misread as nonexistent). The lookup accepts an id OR a Log ID.
+    expect(await readJson(response)).toEqual({ ok: true, track: LIST_ITEM });
+    expect(getTrackByIdOrLogId).toHaveBeenCalledWith(TRACK_ID);
+  });
+
+  it("resolves by Log ID too (not just the Spotify trackId)", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(LIST_ITEM);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(getOne("004.7.2I", OPERATOR_TOKEN));
+
+    expect(response?.status).toBe(200);
+    expect(getTrackByIdOrLogId).toHaveBeenCalledWith("004.7.2I");
+  });
+
+  it("404s `not_found` for a genuinely missing coordinate (distinct from auth/validation)", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(undefined);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(getOne("000.0.0X", AGENT_TOKEN));
+
+    expect(response?.status).toBe(404);
+    const body = (await readJson(response)) as { code: string; message: string };
+    // The canonical not_found — a distinct code the caller can trust means "no such
+    // finding", never confused with a 401/403 auth failure or a malformed request.
+    expect(body.code).toBe("not_found");
+    expect(body.message).toBe("No track with id 000.0.0X");
+  });
+});
+
 // ── publish_track — operator tier (publish from a Spotify URL) ───────────────
 describe("oRPC publish_track (POST /admin/tracks)", () => {
   it("403s the AGENT (operator-only)", async () => {

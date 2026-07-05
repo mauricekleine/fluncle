@@ -99,6 +99,7 @@ export {
 export {
   contextTrack,
   finalizeTrackVideo,
+  getTrackAdmin,
   listTracksAdmin,
   observeTrack,
   presignTrackVideoUploads,
