@@ -62,6 +62,13 @@ export type PlanEntry = {
     bloom?: { threshold?: number; intensity?: number; radius?: number };
     /** Every image sampler the scene declares (unioned across layers) with resolved URLs. */
     textures?: PlanTexture[];
+    /**
+     * True when the scene builds toward a drop reveal (a layer reads `u_audioDrop` / drives a
+     * drop alias) — the live host runs the scripted arrival arc only on these.
+     */
+    usesDrop?: boolean;
+    /** The archived drop-envelope timing (rise/hold/fall), when the composition declared one. */
+    dropShape?: { riseMs: number; holdMs: number; fallMs: number };
   };
 };
 

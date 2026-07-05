@@ -126,6 +126,7 @@ export async function buildPlan(): Promise<PlanEntry[]> {
         reason: "composition.tsx unavailable",
         replayable: false,
         textures: [],
+        usesDrop: false,
       };
       try {
         const cr = await fetch(`https://found.fluncle.com/${t.logId}/composition.tsx`);

@@ -81,7 +81,14 @@ Bun.serve({
       const { plan } = await livePlan();
       const e = plan.find((p) => p.logId === logId);
       return Response.json(
-        e?.replay ?? { customUniforms: [], layers: [], reason: "unknown logId", replayable: false },
+        e?.replay ?? {
+          customUniforms: [],
+          layers: [],
+          reason: "unknown logId",
+          replayable: false,
+          textures: [],
+          usesDrop: false,
+        },
       );
     }
     if (url.pathname === "/health") {
