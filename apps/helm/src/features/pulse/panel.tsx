@@ -32,6 +32,7 @@ import { cn } from "@fluncle/ui/lib/utils";
 import { type RunStartedResponse } from "../../contract";
 import { apiGet, apiPost } from "../../ui/api";
 import { useHelm } from "../../ui/helm-context";
+import { TOKEN_STYLES } from "../../ui/token-styles";
 import {
   type NextToPostCard,
   type NudgeCheckResponse,
@@ -131,7 +132,7 @@ export default function PulsePanel() {
           Pulse
         </h2>
         <p className="text-sm text-muted-foreground">
-          The rig&rsquo;s heartbeat — what it&rsquo;s doing, and what it&rsquo;s waiting on.
+          The rig&rsquo;s heartbeat: what it&rsquo;s doing, and what it&rsquo;s waiting on.
         </p>
       </header>
 
@@ -178,7 +179,7 @@ function NextToPost({
           Next to post
         </CardTitle>
         <CardDescription>
-          The oldest dressed finding still off TikTok. Post it by hand — the caption never survives
+          The oldest dressed finding still off TikTok. Post it by hand. The caption never survives
           the inbox, so it&rsquo;s here to copy.
         </CardDescription>
       </CardHeader>
@@ -188,8 +189,8 @@ function NextToPost({
         ) : (
           <p className="font-mono text-[0.82rem] text-muted-foreground">
             {next.error
-              ? `[dark] admin — ${next.error}`
-              : "[clear] caught up — everything dressed has gone out."}
+              ? `[dark] admin: ${next.error}`
+              : "[clear] caught up: everything dressed has gone out."}
           </p>
         )}
         <NudgeBar hasCard={Boolean(next.nextToPost)} nudge={next.nudge} onNudged={onNudged} />
@@ -218,7 +219,7 @@ function NextCard({ card }: { card: NextToPostCard }) {
             {card.artistTitle}
           </p>
           <div className="flex flex-wrap items-center gap-2">
-            <Badge className="font-mono" variant="outline">
+            <Badge className="font-display tabular-nums" variant="outline">
               {card.logId}
             </Badge>
             <span className="text-xs text-muted-foreground">
@@ -266,9 +267,7 @@ function CopyBlock({ caption }: { caption: string | null }) {
   return (
     <div className="grid gap-2 rounded-md border bg-background/40 p-3">
       <div className="flex items-center justify-between gap-3">
-        <span className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-          Caption
-        </span>
+        <span className="text-xs font-semibold text-muted-foreground">Caption</span>
         <Button disabled={!caption} onClick={() => void onCopy()} size="xs" variant="outline">
           {copied ? (
             <Check aria-hidden data-icon="inline-start" />
@@ -324,15 +323,15 @@ function nudgeLine(nudge: NudgeStatus, now: number): string {
 
   switch (nudge.reason) {
     case "already-nudged-today":
-      return `Nudged already today — ${age ?? "nothing"} since the last post.`;
+      return `Nudged already today: ${age ?? "nothing"} since the last post.`;
     case "fresh":
-      return `Last post ${age ?? "—"} ago — quiet until ${threshold}.`;
+      return `Last post ${age ?? "—"} ago, quiet until ${threshold}.`;
     case "no-unposted":
-      return "Nothing dressed and waiting — the queue's clear.";
+      return "Nothing dressed and waiting: the queue's clear.";
     case "stale":
       return age
-        ? `${age} since the last post — a nudge is due.`
-        : "Nothing's gone out yet — a nudge is due.";
+        ? `${age} since the last post. A nudge is due.`
+        : "Nothing's gone out yet. A nudge is due.";
   }
 }
 
@@ -376,7 +375,7 @@ function NudgeBar({
           {state === "sent"
             ? "Sent. Check the corner of your screen."
             : state === "refused"
-              ? "osascript refused it — notification permissions, probably."
+              ? "osascript refused it. Notification permissions, probably."
               : state === "sending"
                 ? "Firing the nudge…"
                 : ""}
@@ -415,7 +414,7 @@ function Queue({ board }: { board: PulseBoard | undefined }) {
               ? "The admin API didn't answer."
               : rows && rows.length > 0
                 ? `${rows.length}${rows.length === 20 ? "+" : ""} awaiting the camera, oldest first.`
-                : "Caught up — nothing's waiting to film."}
+                : "Caught up. Nothing's waiting to film."}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -432,10 +431,12 @@ function Queue({ board }: { board: PulseBoard | undefined }) {
             {rows.map((row) => (
               <li className="flex items-baseline justify-between gap-3 text-sm" key={row.logId}>
                 <span className="flex min-w-0 items-baseline gap-2">
-                  <span className="font-mono text-xs text-muted-foreground">{row.logId}</span>
+                  <span className="font-display text-xs tabular-nums text-muted-foreground">
+                    {row.logId}
+                  </span>
                   <span className="truncate text-foreground/90">{row.artistTitle}</span>
                 </span>
-                <span className="shrink-0 text-xs text-muted-foreground">
+                <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
                   {durationLabel(row.ageMinutes)}
                 </span>
               </li>
@@ -455,7 +456,7 @@ function Queue({ board }: { board: PulseBoard | undefined }) {
 
 const HEALTH_MARK: Record<ServiceHealth, string> = { degraded: "~", down: "x", ok: "+" };
 const HEALTH_STYLE: Record<ServiceHealth, string> = {
-  degraded: "text-primary",
+  degraded: "text-foreground",
   down: "text-destructive",
   ok: "text-foreground",
 };
@@ -559,12 +560,12 @@ function Rig({ board }: { board: PulseBoard | undefined }) {
             <>
               <TokenRow
                 label="glass"
-                note={board.live.glass === "up" ? "up on :4173" : "dark — no show running"}
+                note={board.live.glass === "up" ? "up on :4173" : "dark: no show running"}
                 token={board.live.glass === "up" ? "clear" : "dark"}
               />
               <TokenRow
                 label="bridge"
-                note={board.live.bridge === "up" ? "up on :4180" : "dark — no show running"}
+                note={board.live.bridge === "up" ? "up on :4180" : "dark: no show running"}
                 token={board.live.bridge === "up" ? "clear" : "dark"}
               />
               <TokenRow
@@ -591,8 +592,8 @@ function Rig({ board }: { board: PulseBoard | undefined }) {
                 label="admin token"
                 note={
                   board.vitals.adminTokenAboard
-                    ? "aboard — the queue + next-to-post answer"
-                    : "not aboard — admin reads will refuse (~/.config/fluncle)"
+                    ? "aboard: the queue + next-to-post answer"
+                    : "not aboard: admin reads will refuse (~/.config/fluncle)"
                 }
                 token={board.vitals.adminTokenAboard ? "clear" : "hold"}
               />
@@ -609,12 +610,6 @@ function Rig({ board }: { board: PulseBoard | undefined }) {
     </Card>
   );
 }
-
-const TOKEN_STYLES = {
-  clear: "font-bold text-foreground",
-  dark: "text-muted-foreground",
-  hold: "font-bold text-destructive",
-} as const;
 
 function TokenRow({
   label,

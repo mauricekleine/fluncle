@@ -286,8 +286,8 @@ export function nudgeTick(input: NudgeInput): NudgeDecision {
   const label = input.nextLabel ?? "A finding";
   const body =
     ageMs === null
-      ? "Dressed and waiting — nothing's gone out yet."
-      : `Dressed and waiting — ${Math.round(ageMs / 3_600_000)}h since the last post.`;
+      ? "Dressed and waiting: nothing's gone out yet."
+      : `Dressed and waiting: ${Math.round(ageMs / 3_600_000)}h since the last post.`;
 
   return { ageMs, body, fire: true, nudgeDay, reason: "stale", title: label };
 }
