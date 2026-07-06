@@ -1,8 +1,8 @@
-# Fluncle's Helm — the roadmap
+# The Cockpit — the roadmap
 
 Status: Draft for the forge pass. This is planning, not canon (AGENTS.md doc conventions); where it conflicts with the codebase or DESIGN.md/VOICE.md, those win.
 
-The Helm is the operator's workflow app: a local daemon (`apps/helm`, `:4190`) plus a native window on the M5 and the M2, holding admin authority server-side and local tools (`ffmpeg`, Rekordbox scripts, OBS, the show orchestrator) at arm's reach. This document scopes what it grows into: the primary admin surface, absorbing web `/admin` station by station until the web app is purely the public product.
+The Cockpit (until this rename lands in code: "Fluncle's Helm", `apps/helm`) is the operator's workflow app: a local daemon (`apps/helm`, `:4190`) plus a native window on the M5 and the M2, holding admin authority server-side and local tools (`ffmpeg`, Rekordbox scripts, OBS, the show orchestrator) at arm's reach. This document scopes what it grows into: the primary admin surface, absorbing web `/admin` station by station until the web app is purely the public product.
 
 ## The operating principle
 
@@ -12,7 +12,9 @@ The operator's real problem is context: the pipeline has many small manual actio
 
 This is real workflow software, not a fiction surface. The register is product, not brand (PRODUCT.md's principles carry through palette and typography, never through prose).
 
-- **Everything is an action.** Buttons are verb + object: "Post to TikTok", "Add to tracklist", "Create clip", "Derive cues", "Raise the glass". If a UI element is not an action, a datum, or artwork, it does not ship.
+**The naming law (ratified 2026-07-06): canon lives where the crew looks; tools speak plainly.** Public surfaces carry the fiction (findings, the Galaxy, Log IDs) because there the story is the product. Internal tooling uses functional names, because every invented noun in a tool is a tax on the operator's mental context. Renames this ratifies: **Fluncle's Helm → the Cockpit** (app name, window, tray, Dock, `fluncle cockpit`, docs), **the glass → the visuals** (the live renderer; "Raise the glass" → **[Start visuals]**), **the bridge → the sync server** (the plan/fingerprint backend), raise/stand down → start/stop. The Log ID and finding vocabulary stay everywhere: they are data, not decoration.
+
+- **Everything is an action.** Buttons are verb + object: "Post to TikTok", "Add to tracklist", "Create clip", "Derive cues", "Start visuals". If a UI element is not an action, a datum, or artwork, it does not ship.
 - **No narration.** No section descriptions, no explanatory paragraphs, no personality copy. The failed example, preserved as the counter-example: "The oldest dressed finding still off TikTok. Post it by hand. The caption never survives the inbox, so it's here to copy." The replacement is a row: cover art, `IYRE — Glowing Embers`, `020.2.3Y`, `17d`, [Copy caption] [Copy video URL] [Mark posted]. The data explains itself; the buttons say what happens.
 - **Dense instrument.** Tabular rows over cards; small tight type; minimal padding; a full station visible without scrolling at typical window size. The anchors are Raycast and Linear: keyboard-first, instant, earned familiarity, zero decoration, the tool disappears into the task.
 - **Keyboard-first.** A command palette (Cmd+K) reaching every action on every station; single-key loops where a station is a queue (the tag station's arrow-key placement); every interactive row focusable.
@@ -60,9 +62,9 @@ Each station is listed as its action inventory. Data shown is implied by the act
 
 ### Show (exists; M5)
 
-- Tracklist picker → [Raise the glass]; the pre-flight as checklist rows (the `[clear]`/`[hold]` tokens are real machine output and stay); [Depart anyway] on holds; [Stand down].
+- Tracklist picker → [Start visuals]; the pre-flight as checklist rows (the `[clear]`/`[hold]` tokens are real machine output and stay); [Depart anyway] on holds; [Stand down].
 - OBS stays out of the Helm (decided): the operator is in OBS anyway to start the Twitch stream; the Helm never layers over it. Scene-change mistakes during sets are solved by the matcher driving arrivals against a plan, not by tooling.
-- Links: the visuals page, the phone remote — as buttons, not prose. (A rename of "the glass" is pending the operator's pick.)
+- Links: the visuals page, the phone remote — as buttons, not prose.
 
 ### Set lifecycle (exists)
 
@@ -104,7 +106,7 @@ Decision: the shim is the frame. Revisit only on concrete pain, and Tauri is the
 
 ## Sequencing
 
-- **v1.1 — Attention.** The attention queue as home, the nudge engine generalized, the doctrine pass over the three existing stations (delete every sentence; re-type per the density rules; command palette skeleton).
+- **v1.1 — Attention.** The rename sweep first (Helm→Cockpit, glass→visuals, bridge→sync server: code, CLI verb, LaunchAgent, shim, docs — clean break, no aliases); then the attention queue as home, the nudge engine generalized, the doctrine pass over the three existing stations (delete every sentence; re-type per the density rules; command palette skeleton).
 - **v1.2 — The desk ports.** Tag station; Plans station; [Announce].
 - **v1.3 — The Studio.** Local-ffmpeg clipping, the shared recipe module, drip-queue and posting-tray integration; set-video trigger.
 - **v1.4 — The shrink.** Web /admin reduces to the post card; the admin routes and their tests retire; the surfaces doctrine and docs updated.
@@ -121,5 +123,5 @@ Each phase ships complete per the house standard: implementation, tests, docs, c
 
 ## Open for the forge
 
-- The rename of "the glass" (the live visuals renderer) — candidate names and the sweep's blast radius.
 - The urgency curves per attention source: concrete decay/deadline math.
+- The attention sources' data honesty: which proposed sources have real server-side state today (e.g. TikTok draft expiry is not tracked anywhere) and which need new columns/ops first.
