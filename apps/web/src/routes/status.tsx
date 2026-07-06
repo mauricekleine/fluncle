@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { cronSurfaces } from "@fluncle/registry";
 import { siteUrl } from "@/lib/fluncle-links";
-import { Badge } from "@/components/ui/badge";
+import { Badge } from "@fluncle/ui/components/badge";
 import {
   getRecentStatusEvents,
   getServiceCheckSamples,

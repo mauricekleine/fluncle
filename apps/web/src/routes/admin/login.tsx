@@ -1,8 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { siSpotify } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@fluncle/ui/components/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@fluncle/ui/components/card";
 
 // The admin front door. Plain utility copy — this surface lives behind the
 // curtain (PRODUCT.md: the operator is never the narrator), so no Fluncle voice.

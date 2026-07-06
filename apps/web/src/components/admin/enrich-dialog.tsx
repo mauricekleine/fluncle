@@ -1,13 +1,13 @@
 import { CircleNotchIcon, WaveformIcon } from "@phosphor-icons/react";
 import { type BoardRow } from "@/components/admin/use-publish";
-import { Button } from "@/components/ui/button";
+import { Button } from "@fluncle/ui/components/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@fluncle/ui/components/dialog";
 import { formatKey, useKeyNotation } from "@/lib/key-notation";
 
 // The Enrich cell's dialog — queue (or re-queue) one finding for the on-box

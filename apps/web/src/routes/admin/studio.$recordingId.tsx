@@ -42,14 +42,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
+} from "@fluncle/ui/components/alert-dialog";
+import { Badge } from "@fluncle/ui/components/badge";
+import { Button } from "@fluncle/ui/components/button";
+import { Input } from "@fluncle/ui/components/input";
+import { Label } from "@fluncle/ui/components/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@fluncle/ui/components/popover";
+import { Switch } from "@fluncle/ui/components/switch";
+import { Textarea } from "@fluncle/ui/components/textarea";
 import { formatClock, useVideo, Video } from "@/components/video";
 import { recordingSetVideoUrl } from "@/lib/media";
 import { type MixtapeDTO } from "@/lib/mixtapes";

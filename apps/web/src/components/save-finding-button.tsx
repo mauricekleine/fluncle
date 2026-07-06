@@ -1,6 +1,6 @@
 import { BookmarkSimpleIcon } from "@phosphor-icons/react";
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@fluncle/ui/components/button";
 
 export function SaveFindingButton({ logId, trackId }: { logId: string; trackId: string }) {
   const [label, setLabel] = useState("Save finding");

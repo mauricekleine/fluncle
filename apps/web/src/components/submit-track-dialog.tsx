@@ -2,7 +2,7 @@ import { CircleNotchIcon, MagnifyingGlassIcon, PaperPlaneTiltIcon } from "@phosp
 import { type FormEvent, useReducer, useState } from "react";
 import { HoneypotField } from "@/components/honeypot-field";
 import { TrackSummary } from "@/components/track-summary";
-import { Button } from "@/components/ui/button";
+import { Button } from "@fluncle/ui/components/button";
 import {
   Dialog,
   DialogContent,
@@ -10,12 +10,12 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Textarea } from "@/components/ui/textarea";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+} from "@fluncle/ui/components/dialog";
+import { Input } from "@fluncle/ui/components/input";
+import { Label } from "@fluncle/ui/components/label";
+import { ScrollArea } from "@fluncle/ui/components/scroll-area";
+import { Textarea } from "@fluncle/ui/components/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@fluncle/ui/components/tooltip";
 import { searchTracks, submitTrack, type SearchResult } from "@/lib/submissions";
 
 type FormState = {

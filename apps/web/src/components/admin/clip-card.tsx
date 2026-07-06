@@ -12,8 +12,8 @@ import { type ClipDTO, type RecordingDTO } from "@fluncle/contracts/orpc";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { InstagramIcon, TiktokIcon } from "@/components/platform-icons";
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { Button } from "@fluncle/ui/components/button";
+import { Textarea } from "@fluncle/ui/components/textarea";
 import { formatClock, Video } from "@/components/video";
 import {
   type ClipDownloadUrls,

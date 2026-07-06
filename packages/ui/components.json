@@ -1,18 +1,18 @@
 {
   "$schema": "https://ui.shadcn.com/schema.json",
   "aliases": {
-    "components": "@/components",
-    "hooks": "@/hooks",
-    "lib": "@/lib",
-    "ui": "@fluncle/ui/components",
-    "utils": "@fluncle/ui/lib/utils"
+    "components": "#components",
+    "hooks": "#hooks",
+    "lib": "#lib",
+    "ui": "#components",
+    "utils": "#lib/utils"
   },
   "iconLibrary": "phosphor",
   "rsc": false,
   "style": "base-vega",
   "tailwind": {
     "baseColor": "neutral",
-    "css": "src/styles.css"
+    "css": "src/styles/globals.css"
   },
   "tsx": true
 }

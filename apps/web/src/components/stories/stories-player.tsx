@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 import { StoryView } from "@/components/stories/story-view";
-import { Button } from "@/components/ui/button";
+import { Button } from "@fluncle/ui/components/button";
 import { storyProgress } from "@/lib/story-progress";
 import { type Track } from "@/lib/tracks";
 

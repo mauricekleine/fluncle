@@ -56,19 +56,19 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+} from "@fluncle/ui/components/alert-dialog";
+import { Badge } from "@fluncle/ui/components/badge";
+import { Button } from "@fluncle/ui/components/button";
 import {
   Command,
   CommandEmpty,
   CommandInput,
   CommandItem,
   CommandList,
-} from "@/components/ui/command";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+} from "@fluncle/ui/components/command";
+import { Input } from "@fluncle/ui/components/input";
+import { Label } from "@fluncle/ui/components/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@fluncle/ui/components/popover";
 import { beatportSearchUrl } from "@/lib/beatport";
 import { formatAlbumDuration } from "@/lib/format";
 import { formatKey, useKeyNotation } from "@/lib/key-notation";

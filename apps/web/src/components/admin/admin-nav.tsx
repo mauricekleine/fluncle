@@ -1,8 +1,8 @@
 import { GearSixIcon, SignOutIcon } from "@phosphor-icons/react";
 import { useId } from "react";
-import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Button } from "@fluncle/ui/components/button";
+import { Label } from "@fluncle/ui/components/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@fluncle/ui/components/popover";
 import { type KeyNotation, useKeyNotation } from "@/lib/key-notation";
 
 // Shared chrome for the authenticated admin surface: the board is `/admin` (the

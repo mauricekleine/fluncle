@@ -2,14 +2,14 @@ import { CircleNotchIcon, PauseIcon, PlayIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { type BoardRow } from "@/components/admin/use-publish";
 import { VibeMap } from "@/components/admin/vibe-map";
-import { Button } from "@/components/ui/button";
+import { Button } from "@fluncle/ui/components/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@fluncle/ui/components/dialog";
 import { GALAXIES, galaxyForVibe } from "@/lib/galaxies";
 import { usePreviewPlayer } from "@/lib/preview-player";
 

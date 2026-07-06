@@ -8,7 +8,7 @@ import { LogObservation } from "@/components/log/log-observation";
 import { MixtapeVideoPlayer } from "@/components/mixtape-video-player";
 import { SaveFindingButton } from "@/components/save-finding-button";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
-import { Button } from "@/components/ui/button";
+import { Button } from "@fluncle/ui/components/button";
 import { siteUrl } from "@/lib/fluncle-links";
 import { formatAlbumDuration, formatDateLong, formatDuration } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
