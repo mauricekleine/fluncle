@@ -76,7 +76,7 @@ PROVISION="${PROVISION:-$SCRIPT_DIR/provision-rave-03.sh}"
 
 # --- config ---
 START_INTERVAL="${START_INTERVAL:-3600}" # min seconds between render STARTS (hourly throttle)
-MAX_RENDER="${MAX_RENDER:-9000}"          # a render past 2.5h is stuck -> force-park
+MAX_RENDER="${MAX_RENDER:-12600}"         # a render past 3.5h is stuck -> force-park (plate-lane authoring runs ~2h+; 2.5h killed nearly-done renders)
 DONE_MARKER='${HOME:-/home/user}/conductor-run.done'
 API_URL="${FLUNCLE_API_URL:-https://www.fluncle.com}"
 
@@ -186,22 +186,25 @@ if [ "$state" = "rendering" ]; then
     result="$("$BOX_BIN" ssh "$boxid" "cat $DONE_MARKER" 2>/dev/null | tr -d '\r\n' || printf '?')"
     "$BOX_BIN" stop "$boxid" >/dev/null 2>&1 || true
     printf 'idle' >"$STATE_FILE"
-    log "render finished ($result) — box $boxid parked"
+    state=idle
+    log "render finished ($result) — box $boxid parked; chaining to the next pick"
     emit "render-conductor: render finished ($result), box parked"
+    # Chain: fall out of the rendering block to the idle pick in THIS tick — a
+    # finished render must not cost a dead hour. The hourly START gate below
+    # still holds (the last start is over an hour old once a render finishes).
+  else
+    # Still running -> single-flight: do NOT start another. Stuck guard only.
+    started="$(read_or "$STARTED_FILE" 0)"
+    if [ "$(( $(now) - started ))" -gt "$MAX_RENDER" ]; then
+      "$BOX_BIN" stop "$boxid" >/dev/null 2>&1 || true
+      printf 'idle' >"$STATE_FILE"
+      log "render exceeded ${MAX_RENDER}s — force-parked box $boxid"
+      emit "render-conductor: render stuck >${MAX_RENDER}s, force-parked"
+      exit 0
+    fi
+    emit "render-conductor: render in flight on $boxid — single-flight hold"
     exit 0
   fi
-
-  # Still running -> single-flight: do NOT start another. Stuck guard only.
-  started="$(read_or "$STARTED_FILE" 0)"
-  if [ "$(( $(now) - started ))" -gt "$MAX_RENDER" ]; then
-    "$BOX_BIN" stop "$boxid" >/dev/null 2>&1 || true
-    printf 'idle' >"$STATE_FILE"
-    log "render exceeded ${MAX_RENDER}s — force-parked box $boxid"
-    emit "render-conductor: render stuck >${MAX_RENDER}s, force-parked"
-    exit 0
-  fi
-  emit "render-conductor: render in flight on $boxid — single-flight hold"
-  exit 0
 fi
 
 # ============================== IDLE: maybe start ==============================
