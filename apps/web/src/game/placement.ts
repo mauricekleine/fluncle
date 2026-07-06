@@ -1,23 +1,38 @@
 import { type FrontierEntity, type GameTrack, type Star, type Vec2 } from "./types";
 import { fnv1a, sectorDay } from "../lib/log-id-shared";
 
-// Deterministic star placement from the Log ID (the expanding frontier). The
-// sector (days since the Fluncle epoch) maps to
-// radial distance from Earth — the oldest findings orbit close to home and
-// every new finding pushes the frontier outward, deliberately uncompressed.
-// The hash tail spreads same-day findings around their shared orbital ring.
-// Pure function of the catalogue, so every run is the same galaxy: map
-// knowledge carrying across deaths is the skill curve.
+// Deterministic star placement from the Log ID: the voyage as ONE traceable
+// thread. Earth sits at the center; the findings lay out along a single
+// Archimedean spiral winding outward. A finding's day-sector maps to an angle
+// along the thread (θ linear in the day since the catalogue's first sector), so
+// the radius rises strictly with the sector — every higher coordinate sits a
+// further point along the voyage, oldest findings innermost.
+//
+// Same-day findings share their day's arc segment, ordered by the identity hash
+// and spaced ≥ MIN_ARC_SPACING along the curve; a heavy day stretches its
+// allocation forward (the thread breathes) rather than crowd. Quiet days are
+// left as empty stretches of arc — the voyage's rhythm made visible, never
+// compressed. Pure function of the catalogue, so every run is the same galaxy.
+//
+// The hash tail (fnv1a) also seeds per-finding jitter and the frontier. The
+// spiral is a pure function of the catalogue; only a few frontier CHOICES
+// (which black-hole slot is live this run) use the session seed for variety.
 
 // Re-exported so sim/render/sprites and the parity fixtures keep importing
 // fnv1a from here (the canonical copy now lives in lib/log-id-shared).
 export { fnv1a };
 
-/** Clear space around Earth before the first ring. */
-const FIRST_RING_RADIUS = 620;
-/** Radial gap between consecutive sectors. */
-const RING_GAP = 240;
-/** Minimum arc distance between same-ring stars (keeps orbits + audio apart). */
+/** Clear space around Earth before the voyage thread begins (Earth's approach stays open). */
+const CLEAR_SPACE = 620;
+/** Day-sectors per full spiral wrap: the thread turns once every ~9 days of finds. */
+const SECTORS_PER_TURN = 9;
+/** Radial distance between consecutive spiral arms (one full turn); arms never crowd. */
+const ARM_GAP = 560;
+/** Angular advance per day-sector along the thread. */
+const ANGLE_PER_SECTOR = (Math.PI * 2) / SECTORS_PER_TURN;
+/** Archimedean pitch: radius gained per radian of thread (ARM_GAP over one 2π turn). */
+const SPIRAL_PITCH = ARM_GAP / (Math.PI * 2);
+/** Minimum arc distance between consecutive findings along the thread (orbits + audio apart). */
 const MIN_ARC_SPACING = 700;
 
 const LOG_ID_PATTERN = /^(\d+)\.\d\.\d[A-Z]$/;
@@ -41,6 +56,10 @@ export function makeRng(seed: number): () => number {
   };
 }
 
+function seedOf(track: GameTrack): string {
+  return track.logId ?? track.trackId;
+}
+
 function sectorOf(track: GameTrack): number {
   const match = track.logId?.match(LOG_ID_PATTERN);
 
@@ -53,35 +72,69 @@ function sectorOf(track: GameTrack): number {
   return sectorDay(track.addedAt);
 }
 
-function ringRadius(sector: number): number {
-  return FIRST_RING_RADIUS + sector * RING_GAP;
+/** Radius on the thread at a thread angle θ (the Archimedean law, from Earth out). */
+function spiralRadius(theta: number): number {
+  return CLEAR_SPACE + SPIRAL_PITCH * theta;
 }
 
-/** Place every finding in the field. Deterministic for a given catalogue. */
+/** The thread angle at a radius (inverse of spiralRadius); where the arm passes. */
+function spiralAngleAt(radius: number): number {
+  return (radius - CLEAR_SPACE) / SPIRAL_PITCH;
+}
+
+// Order same-day findings along their arc: primarily by the identity hash (the
+// Log ID tail is a hash, not an intra-day sequence), tie-broken by a plain
+// lexicographic compare so the order is stable and matches the Go authority.
+function intraDayOrder(a: GameTrack, b: GameTrack): number {
+  const ha = fnv1a(seedOf(a));
+  const hb = fnv1a(seedOf(b));
+
+  if (ha !== hb) {
+    return ha - hb;
+  }
+
+  const sa = seedOf(a);
+  const sb = seedOf(b);
+
+  return sa < sb ? -1 : sa > sb ? 1 : 0;
+}
+
+/** Place every finding along the voyage thread. Deterministic for a given catalogue. */
 export function placeStars(tracks: GameTrack[]): Star[] {
-  const rings = new Map<number, Array<{ angle: number; track: GameTrack }>>();
+  if (tracks.length === 0) {
+    return [];
+  }
+
+  const bySector = new Map<number, GameTrack[]>();
 
   for (const track of tracks) {
     const sector = sectorOf(track);
-    const seed = track.logId ?? track.trackId;
-    const angle = (fnv1a(seed) / 0xffffffff) * Math.PI * 2;
-    const ring = rings.get(sector) ?? [];
+    const group = bySector.get(sector) ?? [];
 
-    ring.push({ angle, track });
-    rings.set(sector, ring);
+    group.push(track);
+    bySector.set(sector, group);
   }
 
+  const sectors = [...bySector.keys()].sort((a, b) => a - b);
+  const firstSector = sectors[0] ?? 0;
   const stars: Star[] = [];
+  // The thread head: θ never rewinds. A quiet stretch of days shows as empty arc
+  // (the nominal angle jumps ahead); a heavy day stretches its own allocation
+  // forward (thetaRunning), pushing the next sector further out — the spiral
+  // breathes, but the radius is strictly monotonic per sector.
+  let thetaRunning = 0;
 
-  for (const [sector, ring] of [...rings.entries()].sort(([a], [b]) => a - b)) {
-    const radius = ringRadius(sector);
+  for (const sector of sectors) {
+    const group = (bySector.get(sector) ?? []).slice().sort(intraDayOrder);
+    const thetaNominal = (sector - firstSector) * ANGLE_PER_SECTOR;
+    let theta = Math.max(thetaNominal, thetaRunning);
 
-    for (const placed of spreadRing(ring, radius)) {
-      const { track } = placed;
-      const seed = track.logId ?? track.trackId;
+    for (const track of group) {
+      const seed = seedOf(track);
+      const radius = spiralRadius(theta);
 
       stars.push({
-        angle: placed.angle,
+        angle: theta,
         artistLine: track.artists.join(", "),
         collected: false,
         id: track.logId ?? seed,
@@ -95,69 +148,24 @@ export function placeStars(tracks: GameTrack[]): Star[] {
         vOffset: (fnv1a(`${seed}#v`) % 440) - 220,
         vx: 0,
         vy: 0,
-        x: Math.cos(placed.angle) * radius,
-        y: Math.sin(placed.angle) * radius,
+        x: Math.cos(theta) * radius,
+        y: Math.sin(theta) * radius,
       });
+
+      // Advance along the curve by ≥ MIN_ARC_SPACING of arc length (≈ r·Δθ),
+      // so consecutive findings never crowd — across sector boundaries too.
+      theta += MIN_ARC_SPACING / radius;
     }
+
+    thetaRunning = theta;
   }
 
   return stars;
 }
 
-// Same-day findings share a ring; keep their hash-given angles but walk the
-// ring and push neighbours apart until every arc gap clears MIN_ARC_SPACING.
-// Sorted by Log ID first so the nudge is deterministic for a given catalogue.
-function spreadRing(
-  ring: Array<{ angle: number; track: GameTrack }>,
-  radius: number,
-): Array<{ angle: number; track: GameTrack }> {
-  if (ring.length < 2) {
-    return ring;
-  }
-
-  const minGap = Math.min(MIN_ARC_SPACING / radius, (Math.PI * 2) / ring.length);
-  const sorted = [...ring].sort((a, b) =>
-    (a.track.logId ?? a.track.trackId).localeCompare(b.track.logId ?? b.track.trackId),
-  );
-
-  sorted.sort((a, b) => a.angle - b.angle);
-
-  for (let pass = 0; pass < 8; pass++) {
-    let moved = false;
-
-    for (let index = 0; index < sorted.length; index++) {
-      const current = sorted[index];
-      const next = sorted[(index + 1) % sorted.length];
-
-      if (current === undefined || next === undefined) {
-        continue;
-      }
-
-      const gap =
-        index + 1 === sorted.length
-          ? next.angle + Math.PI * 2 - current.angle
-          : next.angle - current.angle;
-
-      if (gap < minGap) {
-        const push = (minGap - gap) / 2;
-
-        current.angle -= push;
-        next.angle += push;
-        moved = true;
-      }
-    }
-
-    if (!moved) {
-      break;
-    }
-  }
-
-  return sorted;
-}
-
-/** The current frontier: how far out the newest finding sits. */
+/** The current frontier: how far out the newest finding sits (the thread's tip). */
 export function frontierRadius(stars: Star[]): number {
-  return stars.reduce((max, star) => Math.max(max, star.radius), ringRadius(0));
+  return stars.reduce((max, star) => Math.max(max, star.radius), CLEAR_SPACE);
 }
 
 // What the frontier should contain this run. Grows per content unit; each flag
@@ -202,6 +210,20 @@ export function placeFrontier(
 
 /** Inner edge of the strange: near space (the warm early catalogue) stays quiet. */
 const FRONTIER_INNER = 900;
+/** How wide an arc the frontier debris spreads across, trailing the thread's tip. */
+const FRONTIER_ARC = 1;
+
+// The frontier debris rides the emptiest water: at a given radius the thread
+// passes at spiralAngleAt(radius), so a half-turn offset drops the debris into
+// the inter-arm valley (the midpoint between the two neighbouring arms — the
+// place farthest from any banger), with a hash jitter fanning it along the
+// valley near the thread's outer end. Keeps set-dressing, holes, and rocks off
+// the bangers by construction while anchoring them to the voyage's tip.
+function frontierAngle(radius: number, key: string): number {
+  const jitter = ((fnv1a(key) / 0xffffffff) * 2 - 1) * FRONTIER_ARC;
+
+  return spiralAngleAt(radius) + Math.PI + jitter;
+}
 
 // Render-only set-dressing (Unit B): a derelict Roadster and a few UFOs in the
 // empty stretches, more frequent the farther out you are ("the further out,
@@ -244,7 +266,7 @@ function makeDressing(
   radius: number,
   bodyRadius: number,
 ): FrontierEntity {
-  const angle = (fnv1a(seedKey) / 0xffffffff) * Math.PI * 2;
+  const angle = frontierAngle(radius, seedKey);
 
   return {
     bodyRadius,
@@ -277,10 +299,11 @@ function tooCloseToStar(x: number, y: number, stars: Star[], gap: number): boole
 
 // The black-hole teleport network (Unit C). One system per ~50 findings (at
 // least one once the frontier is real). Each system has 5 DETERMINISTIC
-// candidate slots in the empty far stretches, kept off the bangers; the session
-// `seed` picks which slot is live this run and which four become its exits.
-// Crossing the live hole's horizon flings you to one of its exits (sim.ts) —
-// deterministic map you can learn, with run-to-run variety in which slot bites.
+// candidate slots in the inter-arm valleys near the thread's end, kept off the
+// bangers; the session `seed` picks which slot is live this run and which four
+// become its exits. Crossing the live hole's horizon flings you to one of its
+// exits (sim.ts) — deterministic map you can learn, with run-to-run variety in
+// which slot bites.
 export function placeBlackHoles(stars: Star[], seed: number): FrontierEntity[] {
   if (stars.length < MIN_STARS_FOR_BLACKHOLE) {
     return [];
@@ -303,9 +326,9 @@ export function placeBlackHoles(stars: Star[], seed: number): FrontierEntity[] {
     // Walk deterministic candidate positions until five clear the bangers.
     for (let attempt = 0; attempt < 200 && slots.length < SLOTS_PER_SYSTEM; attempt++) {
       const key = `blackhole:${system}:${attempt}`;
-      const angle = (fnv1a(key) / 0xffffffff) * Math.PI * 2;
       const reach = (fnv1a(`${key}#r`) % 1000) / 1000;
       const radius = FRONTIER_INNER + span * (0.3 + 0.7 * reach);
+      const angle = frontierAngle(radius, key);
       const x = Math.cos(angle) * radius;
       const y = Math.sin(angle) * radius;
 
@@ -346,11 +369,11 @@ export function placeBlackHoles(stars: Star[], seed: number): FrontierEntity[] {
 /** Asteroids only in the long far stretches; near space stays clear. */
 const ASTEROID_INNER = 1100;
 
-// Asteroid waves (Unit D, flag-gated): clusters drifting in the empty far
-// stretches, more waves the farther the frontier has pushed. Positions +
-// drift are deterministic off fnv1a (the same galaxy every run; a tow rebuilds
-// them). A hull hit costs fuel (sim.ts), never ends the run; the ship's
-// auto-clearing laser thins them ahead.
+// Asteroid waves (Unit D, flag-gated): clusters drifting in the inter-arm
+// valleys of the far stretches, more waves the farther the frontier has pushed.
+// Positions + drift are deterministic off fnv1a (the same galaxy every run; a
+// tow rebuilds them). A hull hit costs fuel (sim.ts), never ends the run; the
+// ship's auto-clearing laser thins them ahead.
 export function placeAsteroids(stars: Star[]): FrontierEntity[] {
   const frontier = frontierRadius(stars);
 
@@ -363,8 +386,8 @@ export function placeAsteroids(stars: Star[]): FrontierEntity[] {
   const entities: FrontierEntity[] = [];
 
   for (let wave = 0; wave < waves; wave++) {
-    const baseAngle = (fnv1a(`asteroid:${wave}`) / 0xffffffff) * Math.PI * 2;
     const baseRadius = ASTEROID_INNER + (span * (wave + 1)) / (waves + 1);
+    const baseAngle = frontierAngle(baseRadius, `asteroid:${wave}`);
     const count = 3 + (fnv1a(`asteroid:${wave}#n`) % 4);
 
     for (let index = 0; index < count; index++) {

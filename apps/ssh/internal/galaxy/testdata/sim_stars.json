@@ -1,4 +1,382 @@
 {
+  "seed": 12345,
+  "snapshots": [
+    {
+      "atEarth": false,
+      "collected": [false, false, false, false],
+      "collectedCount": 0,
+      "deaths": 0,
+      "events": [],
+      "label": "boot",
+      "nearestCarrier": {
+        "bearing": 1.7928782287003768,
+        "distance": 635.6099432828281,
+        "starIndex": 0,
+        "strength": 0.06527949517231157
+      },
+      "orbitFresh": false,
+      "orbitIndex": -1,
+      "phase": "flying",
+      "radarBlips": [
+        {
+          "bearing": 1.7928782287003768,
+          "distance": 635.6099432828281,
+          "kind": "star",
+          "starIndex": 0
+        },
+        {
+          "bearing": 2.9946060422135266,
+          "distance": 882.6523867442997,
+          "kind": "star",
+          "starIndex": 1
+        },
+        {
+          "bearing": -2.479879167128462,
+          "distance": 934.2222603447951,
+          "kind": "star",
+          "starIndex": 2
+        },
+        {
+          "bearing": -0.6036940234298092,
+          "distance": 874.8946101132407,
+          "kind": "star",
+          "starIndex": 3
+        },
+        {
+          "bearing": 3.141592653589793,
+          "distance": 140,
+          "kind": "earth",
+          "starIndex": -1
+        }
+      ],
+      "ship": {
+        "boosting": false,
+        "fuel": 100,
+        "heading": -1.5707963267948966,
+        "speed": 70,
+        "vx": 0,
+        "vy": 0,
+        "x": 0,
+        "y": -140
+      },
+      "time": 0
+    },
+    {
+      "atEarth": false,
+      "collected": [false, false, false, false],
+      "collectedCount": 0,
+      "deaths": 0,
+      "events": [],
+      "label": "cruise-1s",
+      "nearestCarrier": {
+        "bearing": 1.8973777614855143,
+        "distance": 654.5991139621254,
+        "starIndex": 0,
+        "strength": 0.037354244173344986
+      },
+      "orbitFresh": false,
+      "orbitIndex": -1,
+      "phase": "flying",
+      "radarBlips": [
+        {
+          "bearing": 1.8973777614855143,
+          "distance": 654.5991139621254,
+          "kind": "star",
+          "starIndex": 0
+        },
+        {
+          "bearing": 3.005375748368945,
+          "distance": 951.9527763003864,
+          "kind": "star",
+          "starIndex": 1
+        },
+        {
+          "bearing": -2.5233233936579618,
+          "distance": 990.382573133307,
+          "kind": "star",
+          "starIndex": 2
+        },
+        {
+          "bearing": -0.6522789074548414,
+          "distance": 818.2330429970694,
+          "kind": "star",
+          "starIndex": 3
+        },
+        {
+          "bearing": 3.141592653589793,
+          "distance": 209.99999999999943,
+          "kind": "earth",
+          "starIndex": -1
+        }
+      ],
+      "ship": {
+        "boosting": false,
+        "fuel": 98.05555555555571,
+        "heading": -1.5707963267948966,
+        "speed": 70,
+        "vx": 0,
+        "vy": 0,
+        "x": 4.286263797015732e-15,
+        "y": -209.99999999999943
+      },
+      "time": 1.0000000000000013
+    },
+    {
+      "atEarth": false,
+      "collected": [false, false, false, false],
+      "collectedCount": 0,
+      "deaths": 0,
+      "events": [],
+      "label": "boost-turn-0.5s",
+      "nearestCarrier": {
+        "bearing": 1.268049566640309,
+        "distance": 652.7026006899762,
+        "starIndex": 0,
+        "strength": 0.04014323427944677
+      },
+      "orbitFresh": false,
+      "orbitIndex": -1,
+      "phase": "flying",
+      "radarBlips": [
+        {
+          "bearing": 1.268049566640309,
+          "distance": 652.7026006899762,
+          "kind": "star",
+          "starIndex": 0
+        },
+        {
+          "bearing": 2.320831472070619,
+          "distance": 999.0090036999605,
+          "kind": "star",
+          "starIndex": 1
+        },
+        {
+          "bearing": 3.0362309369324194,
+          "distance": 1043.5748910332682,
+          "kind": "star",
+          "starIndex": 2
+        },
+        {
+          "bearing": -1.4244930452756963,
+          "distance": 792.837154352533,
+          "kind": "star",
+          "starIndex": 3
+        },
+        {
+          "bearing": 2.5109347015902186,
+          "distance": 260.8989033043379,
+          "kind": "earth",
+          "starIndex": -1
+        }
+      ],
+      "ship": {
+        "boosting": true,
+        "fuel": 94.652777777778,
+        "heading": -0.8582963267948978,
+        "speed": 137.39399122384737,
+        "vx": 0,
+        "vy": 0,
+        "x": 21.328671611248208,
+        "y": -260.0256247232295
+      },
+      "time": 1.4999999999999996
+    },
+    {
+      "atEarth": false,
+      "collected": [true, false, false, false],
+      "collectedCount": 1,
+      "deaths": 0,
+      "events": [
+        {
+          "kind": "logged",
+          "starIndex": 0
+        },
+        {
+          "kind": "low-fuel"
+        }
+      ],
+      "label": "orbit-first-star",
+      "nearestCarrier": {
+        "bearing": 3.019266285507433,
+        "distance": 884.4455435018019,
+        "starIndex": 1,
+        "strength": 0
+      },
+      "orbitFresh": true,
+      "orbitIndex": 0,
+      "phase": "orbiting",
+      "radarBlips": [
+        {
+          "bearing": 3.019266285507433,
+          "distance": 884.4455435018019,
+          "kind": "star",
+          "starIndex": 1
+        },
+        {
+          "bearing": -2.2860344561877186,
+          "distance": 621.4723766026083,
+          "kind": "earth",
+          "starIndex": -1
+        }
+      ],
+      "ship": {
+        "boosting": false,
+        "fuel": 19.96759259259259,
+        "heading": -0.8582963267948978,
+        "speed": 134.9228782123063,
+        "vx": 0,
+        "vy": 0,
+        "x": 621.4700469053033,
+        "y": -1.701669654865282
+      },
+      "time": 1.5166666666666662
+    },
+    {
+      "atEarth": false,
+      "collected": [true, false, false, false],
+      "collectedCount": 1,
+      "deaths": 0,
+      "events": [],
+      "label": "orbit-refuel-2s",
+      "nearestCarrier": {
+        "bearing": 3.019266285507433,
+        "distance": 884.4455435018019,
+        "starIndex": 1,
+        "strength": 0
+      },
+      "orbitFresh": true,
+      "orbitIndex": 0,
+      "phase": "orbiting",
+      "radarBlips": [
+        {
+          "bearing": 3.019266285507433,
+          "distance": 884.4455435018019,
+          "kind": "star",
+          "starIndex": 1
+        },
+        {
+          "bearing": -2.2860344561877186,
+          "distance": 621.4723766026083,
+          "kind": "earth",
+          "starIndex": -1
+        }
+      ],
+      "ship": {
+        "boosting": false,
+        "fuel": 36.96759259259248,
+        "heading": -0.8582963267948978,
+        "speed": 0,
+        "vx": 0,
+        "vy": 0,
+        "x": 621.4700469053033,
+        "y": -1.701669654865282
+      },
+      "time": 3.516666666666659
+    },
+    {
+      "atEarth": false,
+      "collected": [true, false, false, false],
+      "collectedCount": 1,
+      "deaths": 0,
+      "events": [],
+      "label": "depart-first-star",
+      "nearestCarrier": {
+        "bearing": 3.0300579215024377,
+        "distance": 969.6125082199884,
+        "starIndex": 1,
+        "strength": 0
+      },
+      "orbitFresh": false,
+      "orbitIndex": -1,
+      "phase": "flying",
+      "radarBlips": [
+        {
+          "bearing": 3.0300579215024377,
+          "distance": 969.6125082199884,
+          "kind": "star",
+          "starIndex": 1
+        },
+        {
+          "bearing": -2.38126870560696,
+          "distance": 680.7927435886324,
+          "kind": "earth",
+          "starIndex": -1
+        }
+      ],
+      "ship": {
+        "boosting": false,
+        "fuel": 36.96759259259248,
+        "heading": -0.8582963267949145,
+        "speed": 70,
+        "vx": 0,
+        "vy": 0,
+        "x": 677.528032034627,
+        "y": -66.59223325751226
+      },
+      "time": 3.516666666666659
+    },
+    {
+      "atEarth": false,
+      "collected": [false, false, false, false],
+      "collectedCount": 0,
+      "deaths": 0,
+      "events": [],
+      "label": "reset",
+      "nearestCarrier": {
+        "bearing": 1.7928782287003768,
+        "distance": 635.6099432828281,
+        "starIndex": 0,
+        "strength": 0.06527949517231157
+      },
+      "orbitFresh": false,
+      "orbitIndex": -1,
+      "phase": "flying",
+      "radarBlips": [
+        {
+          "bearing": 1.7928782287003768,
+          "distance": 635.6099432828281,
+          "kind": "star",
+          "starIndex": 0
+        },
+        {
+          "bearing": 2.9946060422135266,
+          "distance": 882.6523867442997,
+          "kind": "star",
+          "starIndex": 1
+        },
+        {
+          "bearing": -2.479879167128462,
+          "distance": 934.2222603447951,
+          "kind": "star",
+          "starIndex": 2
+        },
+        {
+          "bearing": -0.6036940234298092,
+          "distance": 874.8946101132407,
+          "kind": "star",
+          "starIndex": 3
+        },
+        {
+          "bearing": 3.141592653589793,
+          "distance": 140,
+          "kind": "earth",
+          "starIndex": -1
+        }
+      ],
+      "ship": {
+        "boosting": false,
+        "fuel": 100,
+        "heading": -1.5707963267948966,
+        "speed": 70,
+        "vx": 0,
+        "vy": 0,
+        "x": 0,
+        "y": -140
+      },
+      "time": 3.516666666666659
+    }
+  ],
+  "step": 0.016666666666666666,
   "tracks": [
     {
       "addedAt": "2026-05-30T00:00:00.000Z",
@@ -30,360 +408,6 @@
       "spotifyUrl": "https://open.spotify.com/track/d",
       "title": "Fallback Banger",
       "trackId": "track-d"
-    }
-  ],
-  "seed": 12345,
-  "step": 0.016666666666666666,
-  "snapshots": [
-    {
-      "label": "boot",
-      "phase": "flying",
-      "time": 0,
-      "collectedCount": 0,
-      "orbitIndex": -1,
-      "orbitFresh": false,
-      "atEarth": false,
-      "deaths": 0,
-      "events": [],
-      "ship": {
-        "x": 0,
-        "y": -140,
-        "heading": -1.5707963267948966,
-        "speed": 70,
-        "fuel": 100,
-        "boosting": false,
-        "vx": 0,
-        "vy": 0
-      },
-      "nearestCarrier": {
-        "bearing": 1.662005083110871,
-        "distance": 616.872875289724,
-        "starIndex": 0,
-        "strength": 0.09283400692687649
-      },
-      "radarBlips": [
-        {
-          "bearing": 1.662005083110871,
-          "distance": 616.872875289724,
-          "kind": "star",
-          "starIndex": 0
-        },
-        {
-          "bearing": -1.3941423661649859,
-          "distance": 1066.728775294303,
-          "kind": "star",
-          "starIndex": 1
-        },
-        {
-          "bearing": 1.024682080387787,
-          "distance": 1020.7628622321307,
-          "kind": "star",
-          "starIndex": 2
-        },
-        {
-          "bearing": 3.141592653589793,
-          "distance": 140,
-          "kind": "earth",
-          "starIndex": -1
-        }
-      ],
-      "collected": [false, false, false, false]
-    },
-    {
-      "label": "cruise-1s",
-      "phase": "flying",
-      "time": 1.0000000000000013,
-      "collectedCount": 0,
-      "orbitIndex": -1,
-      "orbitFresh": false,
-      "atEarth": false,
-      "deaths": 0,
-      "events": [],
-      "ship": {
-        "x": 4.286263797015732e-15,
-        "y": -209.99999999999943,
-        "heading": -1.5707963267948966,
-        "speed": 70,
-        "fuel": 98.11218985976268,
-        "boosting": false,
-        "vx": 0,
-        "vy": 0
-      },
-      "nearestCarrier": {
-        "bearing": 1.7733900235698443,
-        "distance": 627.134926791928,
-        "starIndex": 0,
-        "strength": 0.07774275471775294
-      },
-      "radarBlips": [
-        {
-          "bearing": 1.7733900235698443,
-          "distance": 627.134926791928,
-          "kind": "star",
-          "starIndex": 0
-        },
-        {
-          "bearing": -1.4594031519433766,
-          "distance": 1056.6765919908162,
-          "kind": "star",
-          "starIndex": 1
-        },
-        {
-          "bearing": 1.0853734193688174,
-          "distance": 986.222708807954,
-          "kind": "star",
-          "starIndex": 2
-        },
-        {
-          "bearing": 3.141592653589793,
-          "distance": 209.99999999999943,
-          "kind": "earth",
-          "starIndex": -1
-        }
-      ],
-      "collected": [false, false, false, false]
-    },
-    {
-      "label": "boost-turn-0.5s",
-      "phase": "flying",
-      "time": 1.4999999999999996,
-      "collectedCount": 0,
-      "orbitIndex": -1,
-      "orbitFresh": false,
-      "atEarth": false,
-      "deaths": 0,
-      "events": [],
-      "ship": {
-        "x": 21.328671611248208,
-        "y": -260.0256247232295,
-        "heading": -0.8582963267948978,
-        "speed": 137.39399122384737,
-        "fuel": 94.80852211434737,
-        "boosting": true,
-        "vx": 0,
-        "vy": 0
-      },
-      "nearestCarrier": {
-        "bearing": 1.1471485151942808,
-        "distance": 618.6081167402072,
-        "starIndex": 0,
-        "strength": 0.09028218126440124
-      },
-      "radarBlips": [
-        {
-          "bearing": 1.1471485151942808,
-          "distance": 618.6081167402072,
-          "kind": "star",
-          "starIndex": 0
-        },
-        {
-          "bearing": -2.220439047073053,
-          "distance": 1073.5763581362355,
-          "kind": "star",
-          "starIndex": 1
-        },
-        {
-          "bearing": 0.40918621287906787,
-          "distance": 944.6396369728571,
-          "kind": "star",
-          "starIndex": 2
-        },
-        {
-          "bearing": 2.5109347015902186,
-          "distance": 260.89890330433786,
-          "kind": "earth",
-          "starIndex": -1
-        }
-      ],
-      "collected": [false, false, false, false]
-    },
-    {
-      "label": "orbit-first-star",
-      "phase": "orbiting",
-      "time": 1.5166666666666662,
-      "collectedCount": 1,
-      "orbitIndex": 0,
-      "orbitFresh": true,
-      "atEarth": false,
-      "deaths": 0,
-      "events": [
-        {
-          "kind": "logged",
-          "starIndex": 0
-        },
-        {
-          "kind": "low-fuel"
-        }
-      ],
-      "ship": {
-        "x": 615.7788063084956,
-        "y": -85.51544012553886,
-        "heading": -0.8582963267948978,
-        "speed": 134.9228782123063,
-        "fuel": 19.96853649766271,
-        "boosting": false,
-        "vx": 0,
-        "vy": 0
-      },
-      "nearestCarrier": {
-        "bearing": -0.2990366528181754,
-        "distance": 638.4367713657005,
-        "starIndex": 2,
-        "strength": 0.06112239505044048
-      },
-      "radarBlips": [
-        {
-          "bearing": -0.2990366528181754,
-          "distance": 638.4367713657005,
-          "kind": "star",
-          "starIndex": 2
-        },
-        {
-          "bearing": -2.421287383520352,
-          "distance": 621.6883695217247,
-          "kind": "earth",
-          "starIndex": -1
-        }
-      ],
-      "collected": [true, false, false, false]
-    },
-    {
-      "label": "orbit-refuel-2s",
-      "phase": "orbiting",
-      "time": 3.516666666666659,
-      "collectedCount": 1,
-      "orbitIndex": 0,
-      "orbitFresh": true,
-      "atEarth": false,
-      "deaths": 0,
-      "events": [],
-      "ship": {
-        "x": 615.7788063084956,
-        "y": -85.51544012553886,
-        "heading": -0.8582963267948978,
-        "speed": 0,
-        "fuel": 36.9685364976626,
-        "boosting": false,
-        "vx": 0,
-        "vy": 0
-      },
-      "nearestCarrier": {
-        "bearing": -0.2990366528181754,
-        "distance": 638.4367713657005,
-        "starIndex": 2,
-        "strength": 0.06112239505044048
-      },
-      "radarBlips": [
-        {
-          "bearing": -0.2990366528181754,
-          "distance": 638.4367713657005,
-          "kind": "star",
-          "starIndex": 2
-        },
-        {
-          "bearing": -2.421287383520352,
-          "distance": 621.6883695217247,
-          "kind": "earth",
-          "starIndex": -1
-        }
-      ],
-      "collected": [true, false, false, false]
-    },
-    {
-      "label": "depart-first-star",
-      "phase": "flying",
-      "time": 3.516666666666659,
-      "collectedCount": 1,
-      "orbitIndex": -1,
-      "orbitFresh": false,
-      "atEarth": false,
-      "deaths": 0,
-      "events": [],
-      "ship": {
-        "x": 671.8367914378193,
-        "y": -150.40600372818588,
-        "heading": -0.8582963267949152,
-        "speed": 70,
-        "fuel": 36.9685364976626,
-        "boosting": false,
-        "vx": 0,
-        "vy": 0
-      },
-      "nearestCarrier": {
-        "bearing": -0.34440121817797864,
-        "distance": 557.0641701558317,
-        "starIndex": 2,
-        "strength": 0.18078798506495342
-      },
-      "radarBlips": [
-        {
-          "bearing": -0.34440121817797864,
-          "distance": 557.0641701558317,
-          "kind": "star",
-          "starIndex": 2
-        },
-        {
-          "bearing": -2.503537653781332,
-          "distance": 688.4668766810405,
-          "kind": "earth",
-          "starIndex": -1
-        }
-      ],
-      "collected": [true, false, false, false]
-    },
-    {
-      "label": "reset",
-      "phase": "flying",
-      "time": 3.516666666666659,
-      "collectedCount": 0,
-      "orbitIndex": -1,
-      "orbitFresh": false,
-      "atEarth": false,
-      "deaths": 0,
-      "events": [],
-      "ship": {
-        "x": 0,
-        "y": -140,
-        "heading": -1.5707963267948966,
-        "speed": 70,
-        "fuel": 100,
-        "boosting": false,
-        "vx": 0,
-        "vy": 0
-      },
-      "nearestCarrier": {
-        "bearing": 1.662005083110871,
-        "distance": 616.872875289724,
-        "starIndex": 0,
-        "strength": 0.09283400692687649
-      },
-      "radarBlips": [
-        {
-          "bearing": 1.662005083110871,
-          "distance": 616.872875289724,
-          "kind": "star",
-          "starIndex": 0
-        },
-        {
-          "bearing": -1.3941423661649859,
-          "distance": 1066.728775294303,
-          "kind": "star",
-          "starIndex": 1
-        },
-        {
-          "bearing": 1.024682080387787,
-          "distance": 1020.7628622321307,
-          "kind": "star",
-          "starIndex": 2
-        },
-        {
-          "bearing": 3.141592653589793,
-          "distance": 140,
-          "kind": "earth",
-          "starIndex": -1
-        }
-      ],
-      "collected": [false, false, false, false]
     }
   ]
 }
