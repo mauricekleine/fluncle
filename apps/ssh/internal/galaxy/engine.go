@@ -426,7 +426,7 @@ func tuneConfig(stars []Star) SimConfig {
 }
 
 func FrontierRadius(stars []Star) float64 {
-	maxRadius := ringRadius(0)
+	maxRadius := clearSpace
 	for _, star := range stars {
 		maxRadius = math.Max(maxRadius, star.Radius)
 	}

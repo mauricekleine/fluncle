@@ -23,7 +23,7 @@ Default `--if-stale` (the timer); `--force` runs it unconditionally (the operato
 
 1. **Single-flight** (flock) — never two rebuilds at once.
 2. **Sync** the public repo into `/opt/fluncle-build` (clone or fetch + hard-reset to `origin/main`).
-3. **Compare pins:** the `fluncle@` + `@anthropic-ai/claude-code@` versions in `docs/agents/hermes/Dockerfile` vs the running container's `fluncle version` / `claude --version`. Current → **no-op**. The base image (`FROM`) is _not_ watched — a base bump stays a manual operator brake.
+3. **Compare pins:** the `fluncle` binary release-URL version + the `@anthropic-ai/claude-code@` pin in `docs/agents/hermes/Dockerfile` vs the running container's `fluncle version` / `claude --version`. Current → **no-op**. The base image (`FROM`) is _not_ watched — a base bump stays a manual operator brake.
 4. **Capture** the running container's runtime env into a `0600` tmpfs file (the rollback-reversibility step) + record the current image as the rollback target.
 5. **Build** the new image (`fluncle-hermes:v<date>-<sha>`), repo-root context, `-f docs/agents/hermes/Dockerfile`.
 6. **Pre-smoke the NEW image in throwaway `--rm` containers — before the live one is touched:** `fluncle version` == the pin; `claude --version` == the pin; an agent-token read returns `{ok:true}`; a publish-class command is **refused** (role boundary intact). Any failure → abort, alert, **the live box is never touched**.

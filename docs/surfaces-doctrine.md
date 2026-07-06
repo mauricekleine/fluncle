@@ -10,6 +10,8 @@ Every surface is **one entry in `@fluncle/registry`** (`packages/registry/src/in
 
 The point is that one entry **fans out**. Add a surface to the registry once and every consumer — the `/status` prober, the homepage dev-row, `llms.txt`, the sitemap, and this doc — picks it up from the same list instead of each hand-maintaining a drifting copy. This doc is organized around the registry's own shape: its `SurfaceKind` families (§2) and its per-context `SurfaceWeight` matrix (§3).
 
+One class stays out by design: the **live glass and its phone remote** (`packages/live`, on `:4173` / `:4180`) are LAN-local operator surfaces — reachable only on the show network, never public — so per the live-longform RFC they are intentionally absent from `@fluncle/registry`; the `run_show` orchestrator that raises them registers as a local-exec op instead ([naming-conventions.md §7](./naming-conventions.md#7-local-exec-ops-the-registrys-non-http-tail)).
+
 Each entry carries: a stable `name` (unique, e.g. `web.log`, `api.tracks`), a `kind`, a `weights` matrix (per-context prominence — see §3), the address it lives at (`url` / `route` / `subdomain` / `command`, populated per kind), `exposedContent` (what it serves, in plain words), and — where applicable — `apiFormat`, a `probeConfig` (how `/status` checks it), a `discoveryUrl` (what advertises it), `pending` (pre-staged but dark — see §3.5), and `operatorNotes` (tier, caveats, where the source lives; never secrets).
 
 ## 2. The surface inventory, by kind
@@ -85,9 +87,9 @@ All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertise
 
 ### MCP — the Model Context Protocol server
 
-| Surface      | Route  | Exposes                                                                                                                                         | Weight  |
-| ------------ | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `mcp.server` | `/mcp` | the archive as MCP tools (Streamable HTTP, no auth): `list_tracks`, `get_random_track`, `search_tracks`, `submit_track`, `subscribe_newsletter` | primary |
+| Surface      | Route  | Exposes                                                                                                                                                       | Weight  |
+| ------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `mcp.server` | `/mcp` | the archive as MCP tools (Streamable HTTP, no auth): `list_tracks`, `get_random_track`, `get_status`, `search_tracks`, `submit_track`, `subscribe_newsletter` | primary |
 
 ### DNS — the delegated authoritative zone
 
@@ -97,9 +99,9 @@ All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertise
 
 ### SSH — the rave terminal
 
-| Surface    | Command                | Exposes                                                                                                                                                                                  | Weight  |
-| ---------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `ssh.rave` | `ssh rave.fluncle.com` | the rave terminal TUI (Enter the Galaxy, Latest bangers, Mixtape archive, Submit, Subscribe, Install CLI, About), plus the deep-register one-shots `ssh rave.fluncle.com latest\|random` | primary |
+| Surface    | Command                | Exposes                                                                                                                                                                                                                | Weight  |
+| ---------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `ssh.rave` | `ssh rave.fluncle.com` | the rave terminal TUI (Enter the Galaxy, Latest bangers, Mixtape archive, Random banger, Submit, Subscribe, Install CLI, System status, About), plus the deep-register one-shots `ssh rave.fluncle.com latest\|random` | primary |
 
 ### CLI — the `fluncle` thin client
 
@@ -116,20 +118,31 @@ All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertise
 | `cli.version`    | `fluncle version`    | print or check the version (`--check` hits the latest GitHub release)                              | tertiary  |
 | `cli.admin`      | `fluncle admin`      | the operator/agent command group (hidden): `tracks`, `mixtapes`, `newsletter`, `backfills`, `auth` | hidden    |
 
+### Browser extensions — vendor-store surfaces
+
+Listings on a third-party store, not pages we host. Their uptime is the store's, so they carry no `/status` probe.
+
+| Surface          | Store URL                                                           | Exposes                                                                                                                                                                  | Weight    |
+| ---------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- |
+| `extension.lens` | `chromewebstore.google.com/detail/efkkceaofendabikblfjhoepgejfpakk` | Fluncle Lens — the Chrome extension that finds `fluncle://` coordinates on any page and links each to its `/log/<coord>` finding (with a hover card from the public API) | secondary |
+
 ### Crons — the on-box Hermes scheduled jobs
 
 Checked by their last-run freshness (not an HTTP hit), so they carry a `cronName` + cadence instead of a URL probe.
 
-| Surface             | Cron job               | Cadence             | Exposes                                                                                                                              | Weight    |
-| ------------------- | ---------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | --------- |
-| `cron.newsletter`   | `fluncle-newsletter`   | Fri 15:00 Amsterdam | draft + persist the weekly edition, then offer the operator a Discord Send button (the only full-agent cron; send is operator-gated) | secondary |
-| `cron.enrich`       | `fluncle-enrich`       | every 5m            | BPM / key / spectral analysis on the box, write-back (`--no-agent`, on-box DSP, zero LLM tokens)                                     | hidden    |
-| `cron.context-note` | `fluncle-context-note` | every 5m            | Firecrawl facts → distilled `context_note` + a Texture line (Worker-side Haiku, zero on-box tokens)                                  | hidden    |
-| `cron.note`         | `fluncle-note`         | every 10m           | auto-author the editorial `/log` note, fill-empty-only (hybrid: one `claude -p` call; never clobbers an operator note)               | hidden    |
-| `cron.observation`  | `fluncle-observation`  | every 60m           | author the recovered-audio script → Worker Cartesia render (hybrid: one `claude -p` call, Worker voice-gates + renders)              | hidden    |
-| `cron.backfill`     | `fluncle-backfill`     | every 30m           | Discogs id + Last.fm love catalogue repair (`--no-agent`, Worker HTTP, zero LLM tokens)                                              | hidden    |
-| `cron.render`       | `fluncle-render`       | every 60m           | wake the render box → render + ship one finding's video → park (a conductor; never posts to social)                                  | hidden    |
-| `cron.healthcheck`  | `fluncle-healthcheck`  | every 10m           | probe each service → Discord-ping on a status flip → POST the `/status` snapshot (`--no-agent`)                                      | hidden    |
+| Surface               | Cron job                 | Cadence             | Exposes                                                                                                                              | Weight    |
+| --------------------- | ------------------------ | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | --------- |
+| `cron.newsletter`     | `fluncle-newsletter`     | Fri 15:00 Amsterdam | draft + persist the weekly edition, then offer the operator a Discord Send button (the only full-agent cron; send is operator-gated) | secondary |
+| `cron.enrich`         | `fluncle-enrich`         | every 5m            | BPM / key / spectral analysis on the box, write-back (`--no-agent`, on-box DSP, zero LLM tokens)                                     | hidden    |
+| `cron.context-note`   | `fluncle-context-note`   | every 5m            | Firecrawl facts → distilled `context_note` + a Texture line (Worker-side Haiku, zero on-box tokens)                                  | hidden    |
+| `cron.note`           | `fluncle-note`           | every 10m           | auto-author the editorial `/log` note, fill-empty-only (hybrid: one `claude -p` call; never clobbers an operator note)               | hidden    |
+| `cron.observation`    | `fluncle-observation`    | every 60m           | author the recovered-audio script → Worker Cartesia render (hybrid: one `claude -p` call, Worker voice-gates + renders)              | hidden    |
+| `cron.backfill`       | `fluncle-backfill`       | every 30m           | Discogs id + Last.fm love catalogue repair (`--no-agent`, Worker HTTP, zero LLM tokens)                                              | hidden    |
+| `cron.social-capture` | `fluncle-social-capture` | every 10m           | capture the YouTube/TikTok post URLs Postiz withholds on create → write back (`--no-agent`, Worker HTTP)                             | hidden    |
+| `cron.clip-drip`      | `fluncle-clip-drip`      | every 20m           | post the due, cut clips to Instagram on a jittered ~daily cadence via Postiz (`--no-agent`, Worker HTTP; kill-switch aware)          | hidden    |
+| `cron.render`         | `fluncle-render`         | every 60m           | wake the render box → render + ship one finding's video → park (a conductor; never posts to social)                                  | hidden    |
+| `cron.healthcheck`    | `fluncle-healthcheck`    | every 10m           | probe each service → Discord-ping on a status flip → POST the `/status` snapshot (a rave-02 host systemd timer, not a gateway cron)  | hidden    |
+| `cron.backup`         | `fluncle-backup`         | every 24h           | dump the prod DB → gzip → a PRIVATE R2 bucket (owned off-site backup) + prune to 30 daily / 12 monthly (`--no-agent`, zero tokens)   | secondary |
 
 ## 3. The per-context weight matrix
 
@@ -201,12 +214,15 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `cli.about`                 |           |           | tertiary  |           |
 | `cli.version`               |           |           | tertiary  |           |
 | `cli.admin`                 |           |           | hidden    |           |
+| `extension.lens`            | secondary |           |           |           |
 | `cron.newsletter`           |           |           |           | secondary |
 | `cron.enrich`               |           |           |           | hidden    |
 | `cron.context-note`         |           |           |           | hidden    |
 | `cron.note`                 |           |           |           | hidden    |
 | `cron.observation`          |           |           |           | hidden    |
 | `cron.backfill`             |           |           |           | hidden    |
+| `cron.social-capture`       |           |           |           | hidden    |
+| `cron.clip-drip`            |           |           |           | hidden    |
 | `cron.render`               |           |           |           | hidden    |
 | `cron.healthcheck`          |           |           |           | hidden    |
 
@@ -216,7 +232,7 @@ A surface is operator/agent-only where its only display weight is `hidden` (`cli
 
 `hidden` and `pending` are different shapes of "not loud." A `hidden` weight is a **live** surface that one context deliberately doesn't headline (it still probes, still serves, still answers). A surface marked **`pending: true`** is **not live at all yet**: registered (so it is reviewed and one field-flip away) but **DARK everywhere** — `liveSurfaces()` drops it, so every selector (`surfacesForContext`, `surfacesByWeight`, `surfacesByKind`, `statusProbes`, `cronSurfaces`) and every raw-catalog consumer that reads `liveSurfaces()` (the MCP `get_status` labels, the CLI status labels) skips it. It appears on no menu, no `/status` probe, the dev-row, `llms.txt`, or the sitemap, and it stays out of the §2/§3 tables until it goes live.
 
-Use it to land a surface **ahead of an external gate** so the post-approval fan-out is a single, reviewed, no-other-edits flip. **Fluncle Lens** (`extension.lens`, the `apps/extension` Chrome extension) is the first such entry: it is in Chrome Web Store review, so it sits in the catalog `pending: true`. On approval the operator (1) drops `pending` (or sets it false), (2) swaps the placeholder `url` for the store's assigned listing URL, and (3) adds its §2/§3 rows — and every menu, the `/status` probe, and the MCP + CLI status labels light up at once. (The one deliberate exception is `/sprites`, the noindex internal sprite-coverage audit, which iterates raw `SURFACES` so a still-dark surface is counted as needing a sprite — it advertises nothing.)
+Use it to land a surface **ahead of an external gate** so the post-approval fan-out is a single, reviewed, no-other-edits flip. **Fluncle Lens** (`extension.lens`, the `apps/extension` Chrome extension) was the first such entry: it sat `pending: true` through Chrome Web Store review, then went **live on 2026-06-29** by exactly this flip — drop `pending`, swap the placeholder `url` for the store's assigned listing URL (`chromewebstore.google.com/detail/efkkceaofendabikblfjhoepgejfpakk`), and add its §2/§3 rows — and the menus, the dev-row, and the MCP + CLI status labels lit up at once. (A vendor store listing is not one of our own health-probeable endpoints, so it carries no `probeConfig`.) (The one deliberate exception to the dark-everywhere rule is `/sprites`, the noindex internal sprite-coverage audit, which iterates raw `SURFACES` so a still-dark surface is counted as needing a sprite — it advertises nothing.)
 
 ## 4. Adding a surface — the checklist
 

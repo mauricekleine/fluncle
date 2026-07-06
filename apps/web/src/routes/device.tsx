@@ -1,8 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Button } from "@fluncle/ui/components/button";
+import { Input } from "@fluncle/ui/components/input";
+import { Label } from "@fluncle/ui/components/label";
 import { authClient } from "@/lib/auth-client";
 import { siteUrl } from "@/lib/fluncle-links";
 

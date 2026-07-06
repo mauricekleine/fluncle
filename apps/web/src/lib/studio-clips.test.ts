@@ -1,0 +1,170 @@
+import { type ClipDTO } from "@fluncle/contracts/orpc";
+import { describe, expect, it } from "vitest";
+import {
+  ALL_FILTER,
+  clipDownloadUrls,
+  clipDurationMs,
+  clipPosterUrl,
+  clipPreviewUrl,
+  clipPurgeUrls,
+  DEFAULT_CLIP_FILTER,
+  filterClips,
+  sortClipsNewestFirst,
+} from "./studio-clips";
+
+// The clip library's pure logic (Fluncle Studio Unit G): the two-dropdown filter and
+// the download/poster URL builders, tested DOM-free (no ffmpeg, no `<video>`).
+
+function clip(overrides: Partial<ClipDTO> = {}): ClipDTO {
+  return {
+    caption: undefined,
+    createdAt: "2026-06-29T00:00:00.000Z",
+    id: "clip-1",
+    inMs: 1_000,
+    outMs: 16_000,
+    recordingId: "rec-1",
+    status: "done",
+    updatedAt: "2026-06-29T00:00:00.000Z",
+    xOffset: 0,
+    ...overrides,
+  };
+}
+
+describe("filterClips", () => {
+  const clips = [
+    clip({ id: "a", recordingId: "rec-1", status: "done" }),
+    clip({ id: "b", recordingId: "rec-1", status: "pending" }),
+    clip({ id: "c", recordingId: "rec-2", status: "done" }),
+  ];
+
+  it("returns the whole list untouched under the default (all/all) filter", () => {
+    expect(filterClips(clips, DEFAULT_CLIP_FILTER)).toEqual(clips);
+  });
+
+  it("narrows by recording", () => {
+    const result = filterClips(clips, { recordingId: "rec-1", status: ALL_FILTER });
+
+    expect(result.map((c) => c.id)).toEqual(["a", "b"]);
+  });
+
+  it("narrows by status", () => {
+    const result = filterClips(clips, { recordingId: ALL_FILTER, status: "done" });
+
+    expect(result.map((c) => c.id)).toEqual(["a", "c"]);
+  });
+
+  it("narrows by recording AND status together", () => {
+    const result = filterClips(clips, { recordingId: "rec-1", status: "pending" });
+
+    expect(result.map((c) => c.id)).toEqual(["b"]);
+  });
+
+  it("returns an empty list when nothing matches", () => {
+    expect(filterClips(clips, { recordingId: "rec-2", status: "pending" })).toEqual([]);
+  });
+
+  it("preserves the input order (server sorts newest-first)", () => {
+    const result = filterClips(clips, { recordingId: ALL_FILTER, status: "done" });
+
+    expect(result).toEqual([clips[0], clips[2]]);
+  });
+});
+
+describe("sortClipsNewestFirst", () => {
+  it("orders a mixed-recording list by createdAt, newest first (one flat grid)", () => {
+    const clips = [
+      clip({ createdAt: "2026-06-01T00:00:00.000Z", id: "oldest", recordingId: "rec-1" }),
+      clip({ createdAt: "2026-06-30T12:00:00.000Z", id: "newest", recordingId: "rec-2" }),
+      clip({ createdAt: "2026-06-15T00:00:00.000Z", id: "middle", recordingId: "rec-1" }),
+    ];
+
+    expect(sortClipsNewestFirst(clips).map((c) => c.id)).toEqual(["newest", "middle", "oldest"]);
+  });
+
+  it("does not mutate the input array", () => {
+    const clips = [
+      clip({ createdAt: "2026-06-01T00:00:00.000Z", id: "a" }),
+      clip({ createdAt: "2026-06-30T00:00:00.000Z", id: "b" }),
+    ];
+    const before = clips.map((c) => c.id);
+
+    sortClipsNewestFirst(clips);
+
+    expect(clips.map((c) => c.id)).toEqual(before);
+  });
+
+  it("returns an empty array untouched", () => {
+    expect(sortClipsNewestFirst([])).toEqual([]);
+  });
+});
+
+describe("clipDurationMs", () => {
+  it("is out − in", () => {
+    expect(clipDurationMs({ inMs: 1_000, outMs: 16_000 })).toBe(15_000);
+  });
+
+  it("floors a malformed (out ≤ in) window at 0", () => {
+    expect(clipDurationMs({ inMs: 5_000, outMs: 1_000 })).toBe(0);
+  });
+});
+
+describe("clipDownloadUrls", () => {
+  const { silent, withAudio } = clipDownloadUrls("clip-xyz");
+
+  it("with-audio is the clip's bare pseudo-finding master (footage.mp4)", () => {
+    expect(withAudio).toBe("https://found.fluncle.com/clip-xyz/footage.mp4");
+  });
+
+  it("silent strips audio off that master via a Media Transformation", () => {
+    expect(silent).toContain("/cdn-cgi/media/");
+    expect(silent).toContain("audio=false");
+    expect(silent).toContain("clip-xyz/footage.mp4");
+  });
+
+  it("encodes a clipId with unsafe characters", () => {
+    expect(clipDownloadUrls("a b").withAudio).toBe("https://found.fluncle.com/a%20b/footage.mp4");
+  });
+});
+
+describe("clipPosterUrl / clipPreviewUrl", () => {
+  it("the poster is a portrait frame off the clip's footage", () => {
+    const url = clipPosterUrl("clip-xyz");
+
+    expect(url).toContain("/cdn-cgi/media/");
+    expect(url).toContain("mode=frame");
+    expect(url).toContain("clip-xyz/footage.mp4");
+  });
+
+  it("the preview is a portrait video rendition off the clip's footage", () => {
+    const url = clipPreviewUrl("clip-xyz");
+
+    expect(url).toContain("/cdn-cgi/media/");
+    expect(url).toContain("fit=cover");
+    expect(url).toContain("clip-xyz/footage.mp4");
+  });
+});
+
+describe("clipPurgeUrls", () => {
+  const urls = clipPurgeUrls("clip-xyz");
+
+  it("is exactly the four clip surfaces (bare, silent, poster, preview), deduped", () => {
+    const { silent, withAudio } = clipDownloadUrls("clip-xyz");
+
+    expect(new Set(urls)).toEqual(
+      new Set([withAudio, silent, clipPosterUrl("clip-xyz"), clipPreviewUrl("clip-xyz")]),
+    );
+    expect(urls.length).toBe(4);
+  });
+
+  it("covers the clip's REAL silent download (audio=false off footage.mp4)", () => {
+    // The gap videoPurgeUrls({squared:true}) misses (it strips audio off footage.social).
+    expect(urls).toContain(clipDownloadUrls("clip-xyz").silent);
+    expect(
+      urls.some((url) => url.includes("audio=false") && url.includes("clip-xyz/footage.mp4")),
+    ).toBe(true);
+  });
+
+  it("includes the bare master so a re-cut evicts the with-audio download", () => {
+    expect(urls).toContain("https://found.fluncle.com/clip-xyz/footage.mp4");
+  });
+});

@@ -44,4 +44,4 @@ The generation script (`scripts/generate_sprite.py`) holds these as named consta
 
 ## Per-sprite budget
 
-A subset is the spine (`CREAMS + BLACKS`, ~7 swatches) plus one or two accents (`+ REDS`, `+ GOLD1`, `+ COOL`…). ≤ ~6 _used_ colors is typical even when the subset offers more — the quantizer only paints what the render contains. A sprite that wants three loud accents is over-detailed; abstract it down. The master set is the 16-swatch `SPRITE_PALETTE`; the discipline is which slice each sprite draws from.
+A subset is the spine (`CREAMS + BLACKS`, ~7 swatches) plus one or two accents (`+ REDS`, `+ GOLD1`, `+ COOL`…). ≤ ~6 _used_ colors is typical even when the subset offers more — the quantizer only paints what the render contains. A sprite that wants three loud accents is over-detailed; abstract it down. The master set is the 17-swatch `SPRITE_PALETTE` (4 cream + 4 gold + 4 red + 2 cool + 3 black); the discipline is which slice each sprite draws from.

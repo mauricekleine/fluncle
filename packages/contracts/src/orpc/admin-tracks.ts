@@ -1,7 +1,7 @@
 // The `admin-tracks` domain contract module — the admin-gated track ops (the
 // enrichment/curation write path + the video control-plane). This is the ADMIN
-// wave's pattern-complete pilot (docs/orpc-migration-brief.md, the admin
-// section): it exercises every admin pattern the fan-out will reuse —
+// wave's pattern-complete pilot: it exercises every admin pattern the
+// fan-out will reuse —
 //
 //   - the FIELD-LEVEL role guard: `update_track` is on `adminProcedure` (both the
 //     operator and the agent authenticate), and the handler reads `context.role`
@@ -102,6 +102,7 @@ const FinalizeVideoBodySchema = z.looseObject({
   videoGrain: z.unknown().optional(),
   videoModel: z.unknown().optional(),
   videoModelReasoning: z.unknown().optional(),
+  videoRegister: z.unknown().optional(),
   videoVehicle: z.unknown().optional(),
 });
 
@@ -151,7 +152,7 @@ export const updateTrack = oc
  * uploads the artifact to R2, and writes back. It no longer holds Firecrawl — it
  * reads the already-stored `context_note` (written by `context_track`) as its
  * fuel. On `adminProcedure` (agent-allowed): flipped from the operator tier so the
- * Hermes cron can drive it (docs/hermes-automation-brief.md Build order #3). Idempotent
+ * Hermes cron can drive it. Idempotent
  * per finding — an existing `observation_audio_url` is a no-op (`skipped: true`),
  * so re-pulling an in-flight item is safe (`observe:${logId}`). Preserves the
  * `{ ok: true, audioUrl, durationMs, … }` envelope and the `no_script`/400,
@@ -189,9 +190,9 @@ export const observeTrack = oc
  *
  * Fetch the track's FACTUAL context (Firecrawl: label/year/release) and write it
  * to the internal `context_note` column ONLY — no script authoring, no render.
- * This is the split-out context half of the observation pipeline
- * (docs/hermes-automation-brief.md Build order #3): `context_track` fills the
- * note so `observe_track` can author + render from it without holding Firecrawl.
+ * This is the split-out context half of the observation pipeline:
+ * `context_track` fills the note so `observe_track` can author + render from it
+ * without holding Firecrawl.
  * The action segment is the single word `context` (Convention B §6: no dash-compound
  * action segments — the dash-compound `observe-context` is retired with no alias).
  *
@@ -235,7 +236,7 @@ export const contextTrack = oc
  * register's banned-word / earthly-geography / exclamation / "we"-as-company scan,
  * shared with the spoken gate) and stores it into the `note` field. On
  * `adminProcedure` (agent-allowed) so the on-box note cron can drive it — `observe`
- * is the precedent for the tier (docs/agents/note-agent.md).
+ * is the precedent for the tier.
  *
  * SAFETY (the cardinal guarantee): it fills an EMPTY note ONLY. A finding that
  * already carries a note — operator-written OR previously auto-authored — is a no-op
@@ -345,8 +346,7 @@ export const finalizeTrackVideo = oc
  * CACHE NOTE: re-shipping `footage.mp4` to the SAME R2 key leaves Cloudflare
  * Media-Transformation renditions cached separately (the web player streams MT
  * crops, not the master). The video ship's finalize step now purges them
- * automatically on a re-render; `purge_video` is the manual operator twin. See
- * docs/video-variants.md + the r2-purge note.
+ * automatically on a re-render; `purge_video` is the manual operator twin.
  */
 export const requeueVideo = oc
   .route({
@@ -437,6 +437,35 @@ const PublishTrackResultSchema = z
   .meta({ id: "PublishTrackResult" });
 
 /**
+ * `get_track_admin` → `GET /admin/tracks/{trackId}` (operationId `getTrackAdmin`).
+ *
+ * The single-finding admin lookup by Spotify trackId OR Log ID — the authoritative
+ * by-coordinate read the admin board + the `fluncle admin tracks get` CLI use so a
+ * lookup never has to scan a list (the incident: an ad-hoc list-scan misread a live
+ * finding as nonexistent). Returns the full admin-tier `TrackListItem` — the same
+ * shape the board renders and `update_track` writes: the vibe coords, the video
+ * ledger (url/vintage/vehicle/grain/model), the observation state, the editorial note.
+ *
+ * Named `get_track_admin` (not `get_track`) to disambiguate from the PUBLIC
+ * `get_track` (`GET /tracks/{idOrLogId}`), mirroring `list_tracks` →
+ * `list_tracks_admin`. On `adminProcedure` (live `requireAdmin` — a read,
+ * agent-allowed). Reuses `requireTrack`, so a genuinely-missing coordinate is the
+ * canonical `not_found`/404 — DISTINCT from the auth 401/403 the procedure raises and
+ * from a validation error. Findings-only (the `tracks` table): a mixtape Log ID is a
+ * 404 here (mixtapes have their own `get_mixtape*` reads).
+ */
+export const getTrackAdmin = oc
+  .route({
+    method: "GET",
+    operationId: "getTrackAdmin",
+    path: "/admin/tracks/{trackId}",
+    summary: "Get one finding with full admin fields (by Spotify trackId or Log ID)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ trackId: z.string() }))
+  .output(z.object({ ok: z.literal(true), track: TrackListItemSchema }));
+
+/**
  * `list_tracks_admin` → `GET /admin/tracks` (operationId `listTracksAdmin`).
  *
  * The admin board's archive query (live `requireAdmin` — a read, agent-allowed).
@@ -466,6 +495,10 @@ export const listTracksAdmin = oc
       // `hasNote=false`). Tri-state tolerant strings ("true"/"false"), parsed +
       // clamped in-handler exactly like `hasVideo`.
       hasContext: z.string().optional(),
+      // `hasKey` powers the Rekordbox key-backfill's queue: `hasKey=false` lists
+      // findings whose stored musical `key` is null (the missing-key backlog).
+      // Tri-state tolerant string, parsed + clamped in-handler like `hasVideo`.
+      hasKey: z.string().optional(),
       hasNote: z.string().optional(),
       hasObservation: z.string().optional(),
       hasVideo: z.string().optional(),
@@ -524,6 +557,7 @@ export const publishTrack = oc
 export const adminTracksContract = {
   context_track: contextTrack,
   finalize_track_video: finalizeTrackVideo,
+  get_track_admin: getTrackAdmin,
   list_tracks_admin: listTracksAdmin,
   note_track: noteTrack,
   observe_track: observeTrack,

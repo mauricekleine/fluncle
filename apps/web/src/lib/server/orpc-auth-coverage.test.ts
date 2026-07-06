@@ -147,7 +147,6 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
 // private     = the `/me` cookie-session tier (read via privateUserAuth, write via
 //               privateUserMutation).
 const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> = {
-  add_mixtape_members: "operator",
   approve_submission: "operator",
   backfill_discogs: "admin",
   backfill_lastfm: "admin",
@@ -156,29 +155,64 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   capture_post_urls: "admin",
   collect_private_galaxy_log: "private-session",
   context_track: "admin",
+  // The Fluncle Studio clip writes — operator tier: the agent never cuts/mints/prunes
+  // clips, so an agent token 403s. `create_clip` is now recording-scoped (RFC
+  // recording-primitive, Design B).
+  create_clip: "operator",
   create_edition: "admin",
-  create_mixtape: "operator",
+  // The RFC recording-primitive writes — operator tier: create/update/delete a captured
+  // set + `promote` (mints a coordinate). The agent token 403s.
+  create_recording: "operator",
+  delete_clip: "operator",
+  // The operator's "unschedule" (take a clip off the drip queue) — operator tier, symmetric
+  // with set_clip_schedule; the agent token 403s.
+  delete_clip_schedule: "operator",
   delete_edition: "operator",
-  delete_mixtape: "operator",
   delete_private_account: "private-session",
+  delete_recording: "operator",
   draft_track_social: "admin",
+  // The clip drip-feed tick — ADMIN tier (adminAuth only, no operatorGuard): the on-box
+  // `fluncle-clip-drip` cron drives it with the agent token (the `finalize_clip_cut` /
+  // `record_health` box-cron precedent). The Worker owns the Postiz key; the box triggers.
+  drip_clips: "admin",
   exchange_lastfm_session: "operator",
   export_private_account_data: "private-session",
+  // The box's clip-cut finalize (Fluncle Studio Unit C) — agent tier (adminAuth only,
+  // no operatorGuard), the finalize_track_video precedent: the on-box cron marks its
+  // own cut done + the handler purges the stale edge renditions. The agent token drives it.
+  finalize_clip_cut: "admin",
   finalize_mixtape_mixcloud: "operator",
   finalize_mixtape_youtube: "operator",
   // The autonomous render box links its own cut + sets video_url — agent tier
   // (adminAuth only, no operatorGuard); the box's agent token publishes its renders.
   finalize_track_video: "admin",
+  // The built clip caption read — admin tier (agent-allowed), the list_clips precedent:
+  // a read the clip-card UI + the box can both consume.
+  get_clip_caption: "admin",
   get_mixtape_social: "admin",
   get_private_account_export: "private-session",
   get_private_galaxy_progress: "private-session",
   get_private_mutation_token: "private-session",
+  // The recording reads — admin tier (agent-allowed): the box's clip-cut cron resolves a
+  // clip's recording (r2Key + tracklist + promoted logId) via `get_recording`.
+  get_recording: "admin",
   get_submission: "admin",
+  // The single-finding admin lookup — admin tier (agent-allowed read), the
+  // list_tracks_admin / get_recording precedent: an authoritative by-coordinate read
+  // the board + CLI + box can all consume.
+  get_track_admin: "admin",
   initiate_mixtape_youtube: "operator",
+  // Every clip's IG drip row — admin tier (agent-allowed read), the list_*_admin
+  // precedent; the CLI / library merge it onto the clips.
+  list_clip_posts: "admin",
+  // The clip library/editor read — admin tier (agent-allowed), the list_*_admin
+  // precedent. Filterable by mixtapeId/status; serves the editor + the library.
+  list_clips: "admin",
   list_editions_admin: "admin",
   list_mixtapes_admin: "admin",
   list_private_saved_findings: "private-session",
   list_private_submissions: "private-session",
+  list_recordings: "admin",
   list_submissions: "admin",
   list_track_social: "admin",
   list_tracks_admin: "admin",
@@ -189,10 +223,25 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // written-note sibling of observe_track/context_track; the box's agent token drives it.
   note_track: "admin",
   observe_track: "admin",
+  // The box's clip-cut upload presign (Fluncle Studio Unit C) — agent tier (adminAuth
+  // only, no operatorGuard), the presign_track_video_uploads precedent: the on-box cron
+  // signs its OWN clip output (`<clipId>/footage.mp4`) with the agent token. Distinct
+  // from presign_set_video_upload below, which is OPERATOR-driven at distribute time.
+  presign_clip_upload: "admin",
+  // The recording set-video staging presign — operator tier (adminAuth + operatorGuard):
+  // the `presign_set_video_upload` clone targeting the recording's owned key. Operator-
+  // driven, like the mixtape set-video presign.
+  presign_recording_upload: "operator",
+  // The set-video staging presign (Fluncle Studio Unit A) — operator tier (adminAuth
+  // + operatorGuard): it opens an upload that flips a public mixtape surface, so the
+  // agent token 403s (unlike the agent-tier track/clip presigns).
+  presign_set_video_upload: "operator",
   // The autonomous render box signs its own R2 upload URLs — agent tier (adminAuth
   // only, no operatorGuard); the box's agent token publishes its renders.
   presign_track_video_uploads: "admin",
-  publish_mixtape: "operator",
+  // Promote a recording → a published mixtape — operator tier: it mints a scarce
+  // coordinate, so the agent token 403s.
+  promote_recording: "operator",
   publish_mixtape_youtube: "operator",
   publish_track: "operator",
   // Purges a LIVE published video's stale edge renditions (the re-render cache twin
@@ -208,19 +257,41 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // (no publish), so the box agent token drives it each minute.
   record_live_state: "admin",
   reject_submission: "operator",
+  // Replace a recording's whole cue set — operator tier (the Rekordbox derivation write
+  // target): a write that reshapes what a clip/promote resolves to, so the agent 403s.
+  replace_recording_cues: "operator",
   // Clears a LIVE published video (video_url + video_squared_at) to re-queue a
   // re-render — operator-only (adminAuth + operatorGuard); the box agent never
   // clears videos, so an agent token 403s.
   requeue_video: "operator",
+  // The Mixcloud metadata re-sync — operator tier: it EDITS a LIVE published cloudcast's
+  // sections[] (the Mixcloud edit endpoint, server-side with the mixcloud_auth token),
+  // so the agent token 403s (the parity twin of resync_mixtape_youtube).
+  resync_mixtape_mixcloud: "operator",
+  // The YouTube metadata re-sync — operator tier: it EDITS a LIVE published video's
+  // description (videos.update), so the agent token 403s (like publish_mixtape_youtube).
+  resync_mixtape_youtube: "operator",
   save_private_finding: "private-session",
   send_edition: "operator",
-  set_mixtape_members: "operator",
+  // The clip drip-feed kill switch — operator tier: pausing/resuming the whole drip is
+  // the operator's control, not the box's (the box only ticks the drip).
+  set_clip_drip: "operator",
+  // The operator's clip-drip schedule control (set/override a clip's slot) — operator tier.
+  set_clip_schedule: "operator",
+  // The hardened post-publish cue backfill — operator tier: it rewrites a published
+  // set's surface, so the agent token 403s.
+  set_mixtape_cues: "operator",
   start_lastfm_auth: "operator",
   sweep_push_receipts: "admin",
   unsave_private_finding: "private-session",
+  update_clip: "operator",
   update_edition: "admin",
   update_mixtape: "operator",
+  // The interactive single-cue write (Studio cue rail) — operator tier: it re-times a
+  // published set's surface, so the agent token 403s (like set_mixtape_cues).
+  update_mixtape_cue: "operator",
   update_private_profile: "private-session",
+  update_recording: "operator",
   update_track: "admin",
   update_track_social: "operator",
 };

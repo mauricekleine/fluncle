@@ -1,12 +1,21 @@
 // Self-running check for the render-variant provenance helper — no framework.
 // Asserts buildVariants() emits the correct per-master render flags so the bundle
 // render.json stays self-describing (a clean re-render from source reproduces the
-// right cut, not the portrait default). See docs/video-variants.md.
+// right cut, not the portrait default).
 // Run: `bun src/remotion/variants.test.ts` (exits non-zero on failure).
 
 import assert from "node:assert/strict";
 
-import { buildVariants, FOOTAGE_FILENAME, FOOTAGE_SOCIAL_FILENAME } from "./variants";
+import { describe, expect, test } from "bun:test";
+
+import {
+  buildVariants,
+  FOOTAGE_FILENAME,
+  FOOTAGE_LANDSCAPE_FILENAME,
+  FOOTAGE_LANDSCAPE_SOCIAL_FILENAME,
+  FOOTAGE_NOTEXT_FILENAME,
+  FOOTAGE_SOCIAL_FILENAME,
+} from "./variants";
 
 // Default: both masters, each with its canonical flags.
 const both = buildVariants();
@@ -36,3 +45,60 @@ assert.deepEqual(onlySocial, {
 });
 
 console.log("variants.test.ts OK");
+
+// The extra (non-default) variants ship.ts packages when a writer produced
+// them: the landscape escape hatch, an optional landscape social cut, and the
+// optional notext portrait cut. All default OFF so an ordinary bundle's
+// `variants` map is unchanged.
+describe("buildVariants — extra variants", () => {
+  test("default off: no extra entries beyond the two masters", () => {
+    const variants = buildVariants();
+
+    expect(Object.keys(variants)).toEqual([FOOTAGE_FILENAME, FOOTAGE_SOCIAL_FILENAME]);
+  });
+
+  test("footageLandscape adds the clean landscape escape hatch", () => {
+    const variants = buildVariants({ footageLandscape: true });
+
+    expect(variants[FOOTAGE_LANDSCAPE_FILENAME]).toEqual({
+      aspect: "landscape",
+      hideOverlay: true,
+    });
+  });
+
+  test("footageLandscapeSocial adds the baked-text landscape cut", () => {
+    const variants = buildVariants({ footageLandscapeSocial: true });
+
+    expect(variants[FOOTAGE_LANDSCAPE_SOCIAL_FILENAME]).toEqual({
+      aspect: "landscape",
+      hideOverlay: false,
+    });
+  });
+
+  test("footageNotext adds the clean portrait cut", () => {
+    const variants = buildVariants({ footageNotext: true });
+
+    expect(variants[FOOTAGE_NOTEXT_FILENAME]).toEqual({
+      aspect: "portrait",
+      hideOverlay: true,
+    });
+  });
+
+  test("all five together produce a fully-keyed map", () => {
+    const variants = buildVariants({
+      footageLandscape: true,
+      footageLandscapeSocial: true,
+      footageNotext: true,
+    });
+
+    expect(Object.keys(variants).sort()).toEqual(
+      [
+        FOOTAGE_FILENAME,
+        FOOTAGE_SOCIAL_FILENAME,
+        FOOTAGE_LANDSCAPE_FILENAME,
+        FOOTAGE_LANDSCAPE_SOCIAL_FILENAME,
+        FOOTAGE_NOTEXT_FILENAME,
+      ].sort(),
+    );
+  });
+});

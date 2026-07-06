@@ -138,3 +138,5 @@ The velocity region: the journey written into the frame as long-exposure / inten
 ## How to add a reference
 
 Drop the image in this folder (keep files roughly ≤1400px on the long edge; `sips --resampleWidth 1400 <file>` shrinks one), then add an entry above: family, what it communicates, steal, ignore. References without captions get treated as undirected and may be ignored by agents.
+
+- **plate-ascii-merged-reference.png** — the canonical merged-marks bar for the plate lane: ascii ink fully derived from plate tone (the lens law), harsh-grit register; marks alone still show the subject.

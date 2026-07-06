@@ -30,14 +30,47 @@ type AdminListOptions = {
 };
 
 type AdminQueueOptions = AdminListOptions & {
-  hasContext?: boolean;
   hasObservation?: boolean;
+};
+
+// `admin tracks list` filters. `--no-key` is Commander's negation of a `key`
+// boolean (default true), so `key === false` means the flag was passed; `--has-key
+// <bool>` is the explicit tri-state form. Absent both ⇒ no key filter (list all).
+type AdminTracksListOptions = AdminListOptions & {
+  all?: boolean;
+  hasKey?: string;
+  key?: boolean;
+  order?: string;
 };
 
 // A verb whose worklist is a `--queue` view flag (`tracks enrich|observe|context|
 // note --queue`): the worklist runners read `json`/`limit` off it (AdminListOptions).
 type AdminQueueViewOptions = AdminListOptions & {
   queue?: boolean;
+};
+
+// The Fluncle Studio clip-library list filter (`admin clips list`).
+type ClipListOptions = {
+  json: boolean;
+  recording?: string;
+  status?: string;
+};
+
+// The Fluncle Studio recording admin options (`admin recordings create|update`).
+type RecordingCreateOptions = {
+  json: boolean;
+  plan?: boolean;
+  recordedAt?: string;
+  title?: string;
+  video?: string;
+};
+
+type RecordingUpdateOptions = {
+  json: boolean;
+  parentId?: string;
+  recordedAt?: string;
+  title?: string;
+  tracklistFile?: string;
 };
 
 type OpenOptions = {
@@ -68,18 +101,27 @@ type TrackUpdateOptions = {
 };
 
 type TrackVideoOptions = {
+  allowPartial?: boolean;
   composition?: string;
   cover?: string;
   dir?: string;
   footage?: string;
+  footageLandscape?: string;
+  footageLandscapeSocial?: string;
+  footageNotext?: string;
   footageSocial?: string;
+  intent?: string;
   json: boolean;
+  metrics?: string;
   model?: string;
   note?: string;
+  plate?: string;
+  plateBackground?: string;
   poster?: string;
   props?: string;
   reasoning?: string;
   render?: string;
+  scene?: string;
 };
 
 type TrackDraftOptions = {
@@ -146,14 +188,6 @@ type BackfillSyncOptions = {
   limit?: string;
 };
 
-type MixtapeCreateOptions = {
-  durationMs?: string;
-  json: boolean;
-  note?: string;
-  recordedAt?: string;
-  soundcloudUrl?: string;
-};
-
 type MixtapeUpdateOptions = {
   durationMs?: string;
   json: boolean;
@@ -162,22 +196,18 @@ type MixtapeUpdateOptions = {
   soundcloudUrl?: string;
 };
 
-type MixtapeMembersOptions = {
-  from?: string;
-  json: boolean;
-};
-
-type MixtapeDeleteOptions = {
-  json: boolean;
-  yes: boolean;
-};
-
 type MixtapeDistributeOptions = {
   audio?: string;
   json: boolean;
   mixcloud?: boolean;
   unlisted?: boolean;
   video?: string;
+  youtube?: boolean;
+};
+
+type MixtapeResyncOptions = {
+  json: boolean;
+  mixcloud?: boolean;
   youtube?: boolean;
 };
 
@@ -211,6 +241,7 @@ export function createProgram(): Command {
   addMetaCommands(program);
   addTrackCommands(program);
   addAdminCommands(program);
+  addHelmCommands(program);
 
   return program;
 }
@@ -391,12 +422,10 @@ function addMetaCommands(program: Command): void {
 }
 
 function addTrackCommands(program: Command): void {
-  // Convention B (docs/naming-conventions.md §6.3): public CLI groups are PLURAL.
-  // The canonical public lookup group is `tracks`; the old singular `track` is kept
-  // as a hidden alias so `track get <id>` still resolves (mirrors the admin
-  // `tracks`-alias-`track` pattern).
+  // Convention B: public CLI groups are PLURAL. The canonical public lookup group is
+  // `tracks`.
   const tracks = configureCommand(
-    program.command("tracks", { hidden: true }).alias("track").description("Public track lookups"),
+    program.command("tracks", { hidden: true }).description("Public track lookups"),
   );
 
   tracks
@@ -408,6 +437,39 @@ function addTrackCommands(program: Command): void {
     .action(async (idOrLogId: string | undefined, options: JsonOptions) => {
       const { trackGetCommand } = await import("./commands/track");
       await runTrackGet(idOrLogId, options, trackGetCommand);
+    });
+}
+
+// Fluncle's Helm — the operator's mission control (apps/helm). Local
+// orchestration like packages/live's show: `fluncle helm` starts-or-focuses the
+// :4190 daemon + app window; install/uninstall manage the launchd LaunchAgent.
+// Operator-only, so hidden from the public help (like `admin`).
+function addHelmCommands(program: Command): void {
+  const helm = configureCommand(
+    program
+      .command("helm", { hidden: true })
+      .description("Fluncle's Helm — the operator's mission control"),
+  );
+
+  helm.action(async () => {
+    const { helmOpenCommand } = await import("./commands/helm");
+    await helmOpenCommand();
+  });
+
+  helm
+    .command("install")
+    .description("Install the launchd LaunchAgent (the daemon rises at login)")
+    .action(async () => {
+      const { helmInstallCommand } = await import("./commands/helm");
+      await helmInstallCommand();
+    });
+
+  helm
+    .command("uninstall")
+    .description("Remove the LaunchAgent and stand the daemon down")
+    .action(async () => {
+      const { helmUninstallCommand } = await import("./commands/helm");
+      await helmUninstallCommand();
     });
 }
 
@@ -427,25 +489,19 @@ function addAdminCommands(program: Command): void {
       admin.outputHelp();
     });
 
-  // Convention B (docs/naming-conventions.md §4): the admin CLI is `group
-  // noun-verb` with PLURAL groups. The canonical track group is `tracks`; the old
-  // singular `track` group is kept as a hidden alias so `admin track <cmd>` still
-  // resolves. The formerly-flat `admin add|queue|vehicles` commands move under
-  // `tracks` (canonical) and stay registered as hidden flat commands (back-compat
-  // for crons + muscle memory). A verb's worklist is a `--queue` view flag on the
-  // verb itself (`tracks enrich --queue`, `tracks observe --queue`, `tracks
-  // context --queue`), not a dash-compound command (§6.4) — the box `fluncle-enrich`
-  // cron reads `tracks enrich --queue` to drain the queue (the Worker no longer
-  // re-fires enrichment itself).
-  const adminTracks = configureCommand(
-    admin.command("tracks").alias("track").description("Track admin commands"),
-  );
+  // Convention B: the admin CLI is `group noun-verb` with PLURAL groups. The canonical
+  // track group is `tracks`. A verb's worklist is a `--queue` view flag on the verb
+  // itself (`tracks enrich --queue`, `tracks observe --queue`, `tracks context
+  // --queue`), not a dash-compound command (§6.4) — the box `fluncle-enrich` cron reads
+  // `tracks enrich --queue` to drain the queue (the Worker no longer re-fires
+  // enrichment itself).
+  const adminTracks = configureCommand(admin.command("tracks").description("Track admin commands"));
 
   adminTracks.action(() => {
     adminTracks.outputHelp();
   });
 
-  // `add_track` → `admin tracks publish` (canonical). Hidden flat `admin add` alias.
+  // `add_track` → `admin tracks publish` (canonical).
   adminTracks
     .command("publish")
     .description("Publish a Spotify track")
@@ -459,29 +515,14 @@ function addAdminCommands(program: Command): void {
       await runAdd(spotifyUrl, options, addCommand);
     });
 
-  admin
-    .command("add", { hidden: true })
-    .description("Publish a Spotify track (alias of `admin tracks publish`)")
-    .argument("[spotifyUrl]")
-    .option("--note <text>", "Operator note")
-    .option("--dry-run", "Preview without publishing", false)
-    .option("--json", "Print JSON", false)
-    .allowExcessArguments()
-    .action(async (spotifyUrl: string | undefined, options: AddOptions) => {
-      const { addCommand } = await import("./commands/add");
-      await runAdd(spotifyUrl, options, addCommand);
-    });
-
   // The video render queue. It is HARD-GATED on `hasContext=true`: it only ever
   // surfaces findings that already carry a stored context note, so the render's
-  // context read is a guaranteed cached no-op (never a Firecrawl trigger). The
-  // `--has-context` flag is therefore always-on here and kept only for back-compat;
-  // `--has-observation` still narrows it to the already-voiced subset.
+  // context read is a guaranteed cached no-op (never a Firecrawl trigger).
+  // `--has-observation` narrows it to the already-voiced subset.
   adminTracks
     .command("queue")
     .description("Findings awaiting a video, oldest first (the next to film is first)")
     .option("--limit <limit>", "Number of findings to show", "10")
-    .option("--has-context", "No-op: the render queue is always context-gated")
     .option("--has-observation", "Only findings that already have a spoken observation")
     .option("--json", "Print JSON", false)
     .action(async (options: AdminQueueOptions) => {
@@ -489,16 +530,27 @@ function addAdminCommands(program: Command): void {
       await runAdminQueue(options, queueCommand);
     });
 
-  admin
-    .command("queue", { hidden: true })
-    .description("Render queue (alias of `admin tracks queue`)")
-    .option("--limit <limit>", "Number of findings to show", "10")
-    .option("--has-context", "No-op: the render queue is always context-gated")
-    .option("--has-observation", "Only findings that already have a spoken observation")
+  // A filterable listing of findings. Primary use: `--no-key` surfaces the
+  // missing-musical-key backlog (findings the DSP left key-null below its
+  // confidence floor) so it's countable + targetable — the input query for the
+  // Rekordbox key-backfill (fluncle-key-backfill skill). `--has-key <bool>` is the
+  // explicit tri-state (list only those WITH, or only those WITHOUT, a key).
+  adminTracks
+    .command("list")
+    .description("List findings, filterable by musical-key presence (--no-key / --has-key)")
+    .option("--limit <limit>", "Number of findings to show (1-100)", "50")
+    .option(
+      "--all",
+      "Fetch the ENTIRE catalogue, paginating past the 100-row cap (overrides --limit)",
+      false,
+    )
+    .option("--no-key", "Only findings with NO stored musical key (the key-backfill backlog)")
+    .option("--has-key <bool>", "Filter by key presence: true (has key) or false (missing)")
+    .option("--order <order>", "Sort: asc (oldest first) or desc (newest first)", "desc")
     .option("--json", "Print JSON", false)
-    .action(async (options: AdminQueueOptions) => {
-      const { queueCommand } = await import("./commands/admin-tracks");
-      await runAdminQueue(options, queueCommand);
+    .action(async (options: AdminTracksListOptions) => {
+      const { listCommand } = await import("./commands/admin-tracks");
+      await runAdminTracksList(options, listCommand);
     });
 
   // The enrichment verb. Enrichment itself runs as the on-box `fluncle-enrich`
@@ -539,17 +591,22 @@ function addAdminCommands(program: Command): void {
       await runAdminVehicles(options, vehiclesCommand);
     });
 
-  admin
-    .command("vehicles", { hidden: true })
-    .description("Video vehicles (alias of `admin tracks vehicles`)")
-    .option("--limit <limit>", "Number of vehicles to show", "10")
-    .option("--json", "Print JSON", false)
-    .action(async (options: AdminListOptions) => {
-      const { vehiclesCommand } = await import("./commands/admin-tracks");
-      await runAdminVehicles(options, vehiclesCommand);
-    });
-
   const adminTrack = adminTracks;
+
+  // `get_track_admin` → `admin tracks get` (Convention B). The authoritative
+  // single-finding lookup with FULL admin fields (vibe coords, the video ledger, the
+  // observation, the note) — so a lookup never has to scan a list (and can't misread a
+  // live finding as nonexistent). Accepts a Spotify id OR a Log ID. Agent-allowed read.
+  adminTrack
+    .command("get")
+    .description("Look up one finding by id or Log ID, with full admin fields")
+    .argument("[idOrLogId]")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (idOrLogId: string | undefined, options: JsonOptions) => {
+      const { trackGetAdminCommand } = await import("./commands/track");
+      await runTrackGetAdmin(idOrLogId, options, trackGetAdminCommand);
+    });
 
   adminTrack
     .command("update")
@@ -572,18 +629,34 @@ function addAdminCommands(program: Command): void {
     .command("video")
     .description("Upload a track's video bundle to R2 and link it")
     .argument("[idOrLogId]")
+    .option(
+      "--allow-partial",
+      "Allow an intentionally partial upload (skip the re-render-contract check; e.g. poster-only)",
+      false,
+    )
     .option("--composition <file>", "Composition source file")
     .option("--cover <file>", "Cover image")
     .option("--dir <dir>", "Bundle directory")
     .option("--footage <file>", "Video footage (square crop source)")
+    .option("--footage-landscape <file>", "Clean landscape cut (optional escape hatch)")
+    .option("--footage-landscape-social <file>", "Landscape cut with baked text (optional)")
+    .option("--footage-notext <file>", "Portrait cut without the type layer (optional)")
     .option("--footage-social <file>", "Portrait social cut (baked text)")
+    .option("--intent <file>", "Render-intent JSON (optional)")
     .option("--json", "Print JSON", false)
+    .option("--metrics <file>", "Gate metrics JSON (optional)")
     .option("--model <model>", "Authoring AI model (<provider>/<model>)")
     .option("--note <file>", "Note file")
+    .option("--plate <file>", "Plate-lane photographic plate (plate.png; uploadable pre-render)")
+    .option(
+      "--plate-background <file>",
+      "The plate's subject-removed background (plate.background.png, optional)",
+    )
     .option("--poster <file>", "Poster image")
     .option("--props <file>", "Render props JSON")
     .option("--reasoning <level>", "Authoring model reasoning effort (e.g. high)")
     .option("--render <file>", "Render metadata JSON")
+    .option("--scene <file>", "Scene replay manifest JSON (fluncle.scene/1, optional)")
     .allowExcessArguments()
     .action(async (idOrLogId: string | undefined, options: TrackVideoOptions) => {
       const { trackVideoCommand } = await import("./commands/track");
@@ -780,23 +853,6 @@ function addAdminCommands(program: Command): void {
   });
 
   adminMixtapes
-    .command("create")
-    .description("Log a new mixtape draft")
-    .option("--duration-ms <duration>", "Duration (mm:ss, h:mm:ss, or ms)")
-    .option("--json", "Print JSON", false)
-    .option("--note <text>", "Operator note")
-    .option("--recorded-at <date>", "Recorded date (ISO)")
-    .option(
-      "--soundcloud-url <url>",
-      "SoundCloud URL (manual; YouTube + Mixcloud come from distribute)",
-    )
-    .allowExcessArguments()
-    .action(async (options: MixtapeCreateOptions) => {
-      const { mixtapeCreateCommand } = await import("./commands/mixtapes");
-      await runMixtapeCreate(options, mixtapeCreateCommand);
-    });
-
-  adminMixtapes
     .command("update")
     .description("Update a mixtape's fields")
     .argument("[id]")
@@ -815,44 +871,8 @@ function addAdminCommands(program: Command): void {
     });
 
   adminMixtapes
-    .command("members")
-    .description("Set a mixtape's tracklist (refs and/or a cue-sheet file)")
-    .argument("[id]")
-    .argument("[refs...]")
-    .option("--from <file>", "Cue-sheet or JSON file with members")
-    .option("--json", "Print JSON", false)
-    .allowExcessArguments()
-    .action(async (id: string | undefined, refs: string[], options: MixtapeMembersOptions) => {
-      const { mixtapeMembersCommand } = await import("./commands/mixtapes");
-      await runMixtapeMembers(id, refs, options, mixtapeMembersCommand);
-    });
-
-  adminMixtapes
-    .command("publish")
-    .description("Publish a mixtape draft")
-    .argument("[id]")
-    .option("--json", "Print JSON", false)
-    .allowExcessArguments()
-    .action(async (id: string | undefined, options: { json: boolean }) => {
-      const { mixtapePublishCommand } = await import("./commands/mixtapes");
-      await runMixtapePublish(id, options, mixtapePublishCommand);
-    });
-
-  adminMixtapes
-    .command("delete")
-    .description("Discard a mixtape draft (published mixtapes can't be deleted)")
-    .argument("[id]")
-    .option("--json", "Print JSON", false)
-    .option("--yes", "Skip confirmation", false)
-    .allowExcessArguments()
-    .action(async (id: string | undefined, options: MixtapeDeleteOptions) => {
-      const { mixtapeDeleteCommand } = await import("./commands/mixtapes");
-      await runMixtapeDelete(id, options, mixtapeDeleteCommand);
-    });
-
-  adminMixtapes
     .command("list")
-    .description("List all mixtapes (including drafts)")
+    .description("List all mixtapes (including distributing)")
     .option("--json", "Print JSON", false)
     .allowExcessArguments()
     .action(async (options: { json: boolean }) => {
@@ -873,7 +893,9 @@ function addAdminCommands(program: Command): void {
 
   adminMixtapes
     .command("distribute")
-    .description("Mint + push a mixtape to YouTube (video) and Mixcloud (audio)")
+    .description(
+      "Push a promoted mixtape to YouTube (video) and Mixcloud (audio). The mixtape must already be promoted (`recordings promote`) — distribute is push-only.",
+    )
     .argument("[idOrLogId]")
     .option("--video <file>", "Video file for YouTube")
     .option("--audio <file>", "Audio file for Mixcloud")
@@ -899,6 +921,185 @@ function addAdminCommands(program: Command): void {
     .action(async (idOrLogId: string | undefined, options: { json: boolean }) => {
       const { publishYoutubeCommand } = await import("./commands/mixtape-youtube");
       await runMixtapePublishYoutube(idOrLogId, options, publishYoutubeCommand);
+    });
+
+  adminMixtapes
+    .command("resync")
+    .description(
+      "Re-push a published mixtape's YouTube chapters + Mixcloud sections from its current cues (no re-upload)",
+    )
+    .argument("[idOrLogId]")
+    .option("--youtube", "Only re-sync YouTube")
+    .option("--mixcloud", "Only re-sync Mixcloud")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (idOrLogId: string | undefined, options: MixtapeResyncOptions) => {
+      const { mixtapeResyncCommand } = await import("./commands/mixtapes");
+      await runMixtapeResync(idOrLogId, options, mixtapeResyncCommand);
+    });
+
+  // Fluncle Studio clips. `list` is the agent-allowed read;
+  // `cut` is the box's footage cut — the `fluncle-studio-clip` cron
+  // calls `admin clips cut <clipId>` per pending clip (presign + ffmpeg + ship +
+  // finalize, all behind the agent token).
+  const adminClips = configureCommand(
+    admin.command("clips").description("Mixtape clip (Fluncle Studio) commands"),
+  );
+
+  adminClips.action(() => {
+    adminClips.outputHelp();
+  });
+
+  adminClips
+    .command("list")
+    .description("List clips (filter by --status pending|done and/or --recording <id>)")
+    .option("--status <status>", "Filter by cut status (pending|done)")
+    .option("--recording <id>", "Filter by recording id")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: ClipListOptions) => {
+      const { clipsListCommand, clipPostsListCommand } = await import("./commands/clips");
+      await runClipsList(options, clipsListCommand, clipPostsListCommand);
+    });
+
+  adminClips
+    .command("schedule")
+    .description("Set or override a clip's Instagram drip slot (operator)")
+    .argument("[clipId]")
+    .requiredOption("--at <iso>", "The drip slot, an ISO-8601 timestamp")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (clipId: string | undefined, options: { at: string; json: boolean }) => {
+      const { clipScheduleCommand } = await import("./commands/clips");
+      await runClipsSchedule(clipId, options, clipScheduleCommand);
+    });
+
+  adminClips
+    .command("drip-pause")
+    .description("Pause the whole Instagram drip-feed — the kill switch (operator)")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: { json: boolean }) => {
+      const { clipDripPauseCommand } = await import("./commands/clips");
+      await runClipsDripPause(true, options, clipDripPauseCommand);
+    });
+
+  adminClips
+    .command("drip-resume")
+    .description("Resume the Instagram drip-feed — clear the kill switch (operator)")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: { json: boolean }) => {
+      const { clipDripPauseCommand } = await import("./commands/clips");
+      await runClipsDripPause(false, options, clipDripPauseCommand);
+    });
+
+  adminClips
+    .command("cut")
+    .description("Cut one clip's framed 9:16 footage from its set rendition, then ship it")
+    .argument("[clipId]")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (clipId: string | undefined, options: { json: boolean }) => {
+      const { clipCutCommand } = await import("./commands/clips");
+      await runClipsCut(clipId, options, clipCutCommand);
+    });
+
+  // Fluncle Studio recordings (RFC recording-primitive, Design B). A recording is a
+  // captured set clipped WITHOUT minting a coordinate; `promote` turns it into a full
+  // published mixtape later (reusing the already-staged video, no re-upload).
+  const adminRecordings = configureCommand(
+    admin.command("recordings").description("Recording (unpublished set) commands"),
+  );
+
+  adminRecordings.action(() => {
+    adminRecordings.outputHelp();
+  });
+
+  adminRecordings
+    .command("create")
+    .description("Create a recording (--video to stage a take, or --plan for a videoless plan)")
+    .option("--plan", "Create a videoless PLAN (server mints a Galaxy-vocab handle)", false)
+    .option("--title <text>", "Recording title (a take)")
+    .option("--video <file>", "Set-video master to stage (a 1080p rendition is derived)")
+    .option("--recorded-at <date>", "Recorded date (ISO)")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: RecordingCreateOptions) => {
+      const { recordingCreateCommand } = await import("./commands/recordings");
+      await recordingCreateCommand(options);
+    });
+
+  adminRecordings
+    .command("list")
+    .description("List recordings (--kind plan|take, --parent-id <plan> for a plan's takes)")
+    .option("--kind <kind>", "Filter by kind: plan | take")
+    .option("--parent-id <id>", "List the takes attached to this plan")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: { json: boolean; kind?: string; parentId?: string }) => {
+      const { recordingsListCommand } = await import("./commands/recordings");
+      await recordingsListCommand(options);
+    });
+
+  adminRecordings
+    .command("get")
+    .description("Show one recording by id")
+    .argument("[id]")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (id: string | undefined, options: { json: boolean }) => {
+      const { recordingGetCommand } = await import("./commands/recordings");
+      await recordingGetCommand(id, options);
+    });
+
+  adminRecordings
+    .command("update")
+    .description("Update a recording's title/recorded date/tracklist, or attach it to a plan")
+    .argument("[id]")
+    .option("--title <text>", "Recording title")
+    .option("--recorded-at <date>", "Recorded date (ISO)")
+    .option("--parent-id <id>", "Attach this take to its plan (assigns the take's version)")
+    .option("--tracklist-file <file>", "JSON file with the whole cue tracklist array")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (id: string | undefined, options: RecordingUpdateOptions) => {
+      const { recordingUpdateCommand } = await import("./commands/recordings");
+      await recordingUpdateCommand(id, options);
+    });
+
+  adminRecordings
+    .command("replace-cues")
+    .description("Replace a recording's whole cue tracklist from a JSON file (--cues-file)")
+    .argument("[id]")
+    .option("--cues-file <file>", "JSON file with the ordered cue array")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (id: string | undefined, options: { cuesFile?: string; json: boolean }) => {
+      const { recordingReplaceCuesCommand } = await import("./commands/recordings");
+      await recordingReplaceCuesCommand(id, options);
+    });
+
+  adminRecordings
+    .command("delete")
+    .description("Delete a recording (cascade its clips)")
+    .argument("[id]")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (id: string | undefined, options: { json: boolean }) => {
+      const { recordingDeleteCommand } = await import("./commands/recordings");
+      await recordingDeleteCommand(id, options);
+    });
+
+  adminRecordings
+    .command("promote")
+    .description("Promote a recording to a published mixtape (mint-or-reuse; idempotent)")
+    .argument("[id]")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (id: string | undefined, options: { json: boolean }) => {
+      const { recordingPromoteCommand } = await import("./commands/recordings");
+      await recordingPromoteCommand(id, options);
     });
 
   const adminNewsletter = configureCommand(
@@ -1073,10 +1274,9 @@ function addAdminCommands(program: Command): void {
       await authLastfmCommand(options);
     });
 
-  // `backfill_*` ops → plural `backfills` group (Convention B). `backfill` kept as
-  // a hidden alias so `admin backfill <provider>` still resolves.
+  // `backfill_*` ops → plural `backfills` group (Convention B).
   const backfill = configureCommand(
-    admin.command("backfills").alias("backfill").description("Backfill operator-only archives"),
+    admin.command("backfills").description("Backfill operator-only archives"),
   );
 
   backfill.action(() => {
@@ -1460,7 +1660,7 @@ async function runTrackVideo(
 ): Promise<void> {
   if (!idOrLogId) {
     throw new Error(
-      "Missing id. Usage: fluncle admin tracks video <track_id|log_id> (--dir <dir> | --footage <file> [--footage-social <file>] [--poster <file>] [--cover <file>] [--note <file>] [--composition <file>] [--props <file>] [--render <file>])",
+      "Missing id. Usage: fluncle admin tracks video <track_id|log_id> (--dir <dir> | --footage <file> [--footage-social <file>] [--footage-notext <file>] [--footage-landscape <file>] [--footage-landscape-social <file>] [--poster <file>] [--cover <file>] [--note <file>] [--composition <file>] [--props <file>] [--render <file>] [--intent <file>] [--metrics <file>] [--scene <file>] | --plate <file> [--plate-background <file>]) [--allow-partial]",
     );
   }
 
@@ -1490,25 +1690,43 @@ async function runTrackVideo(
     composition: resolveFile(options.composition, "composition.tsx"),
     cover: resolveFile(options.cover, "cover.jpg"),
     footage: resolveFile(options.footage, "footage.mp4"),
+    footageLandscape: resolveFile(options.footageLandscape, "footage.landscape.mp4"),
+    footageLandscapeSocial: resolveFile(
+      options.footageLandscapeSocial,
+      "footage.landscape.social.mp4",
+    ),
+    footageNotext: resolveFile(options.footageNotext, "footage.notext.mp4"),
     footageSocial: resolveFile(options.footageSocial, "footage.social.mp4"),
+    intent: resolveFile(options.intent, "intent.json"),
+    metrics: resolveFile(options.metrics, "metrics.json"),
     model: options.model,
     note: resolveFile(options.note, "note.txt"),
+    plate: resolveFile(options.plate, "plate.png"),
+    plateBackground: resolveFile(options.plateBackground, "plate.background.png"),
     poster: resolveFile(options.poster, "poster.jpg"),
     props: resolveFile(options.props, "props.json"),
     reasoning: options.reasoning,
     render: resolveFile(options.render, "render.json"),
+    scene: resolveFile(options.scene, "scene.json"),
   };
 
-  if (!files.footage) {
+  // A footage cut is required for the normal (full-bundle) upload; --allow-partial
+  // lifts that for a deliberate partial refresh (e.g. poster-only). The plate-lane
+  // PRE-upload (plates and nothing else — the upload-first order, before the
+  // composition exists) is sanctioned as-is: no footage, no --allow-partial needed.
+  const { isPlatesOnlyUpload } = await import("./commands/track");
+  if (!files.footage && !options.allowPartial && !isPlatesOnlyUpload(files)) {
     throw new Error(
-      "A footage cut is required (--footage <file>, or --dir containing footage.mp4)",
+      "A footage cut is required (--footage <file>, or --dir containing footage.mp4). Pass --allow-partial for a deliberate partial refresh (e.g. poster-only), or upload plates alone (--plate/--plate-background) for the plate-lane pre-upload.",
     );
   }
 
   // Progress per file as the bytes go straight to R2 (suppressed under --json so
   // the output stays a single parseable object).
   const onProgress = options.json ? undefined : (message: string) => console.log(message);
-  const result = await trackVideoCommand(idOrLogId, files, onProgress);
+  const result = await trackVideoCommand(idOrLogId, files, onProgress, {
+    allowPartial: options.allowPartial,
+  });
 
   if (options.json) {
     printJson(result);
@@ -1682,6 +1900,61 @@ async function runTrackGet(
   }
 }
 
+async function runTrackGetAdmin(
+  idOrLogId: string | undefined,
+  options: JsonOptions,
+  trackGetAdminCommand: typeof import("./commands/track").trackGetAdminCommand,
+): Promise<void> {
+  if (!idOrLogId) {
+    throw new Error("Missing id. Usage: fluncle admin tracks get <track_id|log_id> [--json]");
+  }
+
+  const result = await trackGetAdminCommand(idOrLogId);
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  const t = result.track;
+
+  console.log(`${t.logId ? `${t.logId}  ` : ""}${t.artists.join(", ")} — ${t.title}`);
+  console.log(
+    [t.bpm ? `${t.bpm} bpm` : undefined, t.key, t.label, t.enrichmentStatus]
+      .filter(Boolean)
+      .join(" · "),
+  );
+
+  // The admin-only state a public list row hides — the reason this read exists over
+  // `fluncle tracks get`: where it sits on the map, whether it's filmed and voiced.
+  const placed = t.galaxy && t.vibeX !== undefined && t.vibeY !== undefined;
+  console.log(
+    `Placement: ${placed && t.galaxy ? `${t.galaxy.name} (${t.vibeX?.toFixed(2)}, ${t.vibeY?.toFixed(2)})` : "unplaced"}`,
+  );
+  console.log(
+    `Video: ${
+      t.videoUrl
+        ? [t.videoSquaredAt ? "squared master" : "linked", t.videoVehicle]
+            .filter(Boolean)
+            .join(" · ")
+        : "none (in the render queue)"
+    }`,
+  );
+  console.log(
+    `Observation: ${
+      t.observationAudioUrl
+        ? `voiced${t.observationDurationMs ? ` · ${Math.round(t.observationDurationMs / 1000)}s` : ""}`
+        : "none"
+    }`,
+  );
+  console.log(`Note: ${t.note ? t.note : "none"}`);
+  console.log(`Spotify: ${t.spotifyUrl}`);
+
+  if (t.logPageUrl) {
+    console.log(`Log: ${t.logPageUrl}`);
+  }
+}
+
 async function runTrackUpdate(
   trackId: string | undefined,
   options: TrackUpdateOptions,
@@ -1760,20 +2033,6 @@ async function runTrackPurgeVideo(
   );
 }
 
-async function runMixtapeCreate(
-  options: MixtapeCreateOptions,
-  mixtapeCreateCommand: typeof import("./commands/mixtapes").mixtapeCreateCommand,
-): Promise<void> {
-  const result = await mixtapeCreateCommand(options);
-
-  if (options.json) {
-    printJson(result);
-    return;
-  }
-
-  console.log(`Logged draft ${result.mixtape.id}. It stays a draft until you publish it.`);
-}
-
 async function runMixtapeUpdate(
   id: string | undefined,
   options: MixtapeUpdateOptions,
@@ -1791,54 +2050,6 @@ async function runMixtapeUpdate(
   }
 
   console.log(`Saved ${result.mixtape.id}.`);
-}
-
-async function runMixtapeMembers(
-  id: string | undefined,
-  refs: string[],
-  options: MixtapeMembersOptions,
-  mixtapeMembersCommand: typeof import("./commands/mixtapes").mixtapeMembersCommand,
-): Promise<void> {
-  if (!id) {
-    throw new Error("Missing mixtape id. Usage: fluncle admin mixtapes members <id> [refs...]");
-  }
-
-  if (refs.length === 0 && !options.from) {
-    throw new Error("Provide refs as arguments or a cue-sheet file with --from");
-  }
-
-  const result = await mixtapeMembersCommand(id, refs, options);
-
-  if (options.json) {
-    printJson(result);
-    return;
-  }
-
-  console.log(
-    `Saved the tracklist: ${result.mixtape.memberCount} bangers on ${result.mixtape.id}.`,
-  );
-}
-
-async function runMixtapePublish(
-  id: string | undefined,
-  options: { json: boolean },
-  mixtapePublishCommand: typeof import("./commands/mixtapes").mixtapePublishCommand,
-): Promise<void> {
-  if (!id) {
-    throw new Error("Missing mixtape id. Usage: fluncle admin mixtapes publish <id>");
-  }
-
-  const result = await mixtapePublishCommand(id);
-
-  if (options.json) {
-    printJson(result);
-    return;
-  }
-
-  console.log(
-    `Minted ${result.mixtape.logId} (fluncle://${result.mixtape.logId}) — distributing. ` +
-      "Run `distribute` to push it to the platforms.",
-  );
 }
 
 async function runMixtapeDistribute(
@@ -1885,27 +2096,25 @@ async function runMixtapePublishYoutube(
   console.log(`YouTube video is now public: ${result.url}`);
 }
 
-async function runMixtapeDelete(
-  id: string | undefined,
-  options: MixtapeDeleteOptions,
-  mixtapeDeleteCommand: typeof import("./commands/mixtapes").mixtapeDeleteCommand,
+async function runMixtapeResync(
+  idOrLogId: string | undefined,
+  options: MixtapeResyncOptions,
+  mixtapeResyncCommand: typeof import("./commands/mixtapes").mixtapeResyncCommand,
 ): Promise<void> {
-  if (!id) {
-    throw new Error("Missing mixtape id. Usage: fluncle admin mixtapes delete <id> --yes");
+  if (!idOrLogId) {
+    throw new Error("Missing mixtape id. Usage: fluncle admin mixtapes resync <idOrLogId>");
   }
 
-  if (!options.yes) {
-    throw new Error("Pass --yes to confirm the discard. Published mixtapes can't be deleted.");
-  }
-
-  await mixtapeDeleteCommand(id);
+  const onProgress = options.json ? () => {} : (message: string) => console.log(message);
+  const result = await mixtapeResyncCommand(idOrLogId, options, onProgress);
 
   if (options.json) {
-    printJson({ id, ok: true });
+    printJson(result);
     return;
   }
 
-  console.log(`Discarded draft ${id}.`);
+  const links = result.results.map((r) => `  ${r.platform}: ${r.url}`).join("\n");
+  console.log(`Re-synced ${result.logId} (fluncle://${result.logId}).\n${links}`);
 }
 
 async function runMixtapeList(
@@ -1925,10 +2134,104 @@ async function runMixtapeList(
   }
 
   for (const mixtape of mixtapes) {
-    const status = mixtape.status ?? "draft";
-    const coordinate = mixtape.logId ?? "draft";
+    const status = mixtape.status ?? "distributing";
+    const coordinate = mixtape.logId ?? "unminted";
     console.log(`${coordinate}\t${status}\t${mixtape.memberCount} bangers\t${mixtape.title}`);
   }
+}
+
+async function runClipsList(
+  options: ClipListOptions,
+  clipsListCommand: typeof import("./commands/clips").clipsListCommand,
+  clipPostsListCommand: typeof import("./commands/clips").clipPostsListCommand,
+): Promise<void> {
+  const [clips, posts] = await Promise.all([
+    clipsListCommand({ recordingId: options.recording, status: options.status }),
+    // The drip-feed rows, merged onto each clip below. Best-effort — a read failure must
+    // not blank the clip list; fall back to no drip column.
+    clipPostsListCommand().catch(() => [] as Awaited<ReturnType<typeof clipPostsListCommand>>),
+  ]);
+  const dripByClip = new Map(posts.map((post) => [post.clipId, post]));
+
+  if (options.json) {
+    printJson({
+      clips: clips.map((clip) => ({ ...clip, drip: dripByClip.get(clip.id) })),
+      ok: true,
+    });
+    return;
+  }
+
+  if (clips.length === 0) {
+    console.log("No clips.");
+    return;
+  }
+
+  for (const clip of clips) {
+    const source = clip.recordingId ?? "—";
+    const post = dripByClip.get(clip.id);
+    // The drip column: e.g. `scheduled 2026-07-06T…` / `posted` / `failed`, or `—` when a
+    // clip has no drip row (never auto-queued, or unscheduled).
+    const drip = post ? `${post.status} ${post.scheduledFor}` : "—";
+    console.log(
+      `${clip.id}\t${clip.status}\t${source}\t${clip.inMs}-${clip.outMs}ms\tx=${clip.xOffset}\t${drip}`,
+    );
+  }
+}
+
+async function runClipsCut(
+  clipId: string | undefined,
+  options: { json: boolean },
+  clipCutCommand: typeof import("./commands/clips").clipCutCommand,
+): Promise<void> {
+  if (!clipId) {
+    throw new Error("Missing clip id. Usage: fluncle admin clips cut <clipId>");
+  }
+
+  const onProgress = options.json ? () => {} : (message: string) => console.log(message);
+  const result = await clipCutCommand(clipId, onProgress);
+
+  if (options.json) {
+    printJson({ ok: true, ...result });
+    return;
+  }
+
+  console.log(
+    `Cut ${result.clipId} → ${result.url} (${(result.sizeBytes / 1_000_000).toFixed(1)} MB).`,
+  );
+}
+
+async function runClipsSchedule(
+  clipId: string | undefined,
+  options: { at: string; json: boolean },
+  clipScheduleCommand: typeof import("./commands/clips").clipScheduleCommand,
+): Promise<void> {
+  if (!clipId) {
+    throw new Error("Missing clip id. Usage: fluncle admin clips schedule <clipId> --at <iso>");
+  }
+
+  const post = await clipScheduleCommand(clipId, options.at);
+
+  if (options.json) {
+    printJson({ ok: true, post });
+    return;
+  }
+
+  console.log(`Scheduled ${post.clipId} for ${post.scheduledFor}.`);
+}
+
+async function runClipsDripPause(
+  paused: boolean,
+  options: { json: boolean },
+  clipDripPauseCommand: typeof import("./commands/clips").clipDripPauseCommand,
+): Promise<void> {
+  const result = await clipDripPauseCommand(paused);
+
+  if (options.json) {
+    printJson({ ok: true, paused: result });
+    return;
+  }
+
+  console.log(result ? "The drip-feed is paused." : "The drip-feed is running.");
 }
 
 async function runMixtapeGet(
@@ -1947,8 +2250,8 @@ async function runMixtapeGet(
     return;
   }
 
-  const coordinate = mixtape.logId ?? "draft";
-  const status = mixtape.status ?? "draft";
+  const coordinate = mixtape.logId ?? "unminted";
+  const status = mixtape.status ?? "distributing";
   console.log(`${mixtape.title}`);
   console.log(`  ${coordinate} · ${status} · ${mixtape.memberCount} bangers`);
   if (mixtape.note) {
@@ -2189,13 +2492,62 @@ function parseListLimit(value: string | undefined): number {
   return limit;
 }
 
+// Resolve the tri-state key filter from the two accepted forms: `--no-key`
+// (Commander sets `key === false`) or `--has-key true|false`. Absent both ⇒
+// undefined (no filter — list everything). `--no-key` wins if both are given.
+function resolveHasKey(options: AdminTracksListOptions): boolean | undefined {
+  if (options.key === false) {
+    return false;
+  }
+
+  if (options.hasKey === "false") {
+    return false;
+  }
+
+  if (options.hasKey === "true") {
+    return true;
+  }
+
+  return undefined;
+}
+
+async function runAdminTracksList(
+  options: AdminTracksListOptions,
+  listCommand: typeof import("./commands/admin-tracks").listCommand,
+): Promise<void> {
+  // `--all` fetches the entire catalogue by paging past the per-request 100-row cap
+  // (listCommand pages via cursor until the archive is exhausted); otherwise the
+  // explicit `--limit` is parsed and clamped to 1-100.
+  const limit = options.all ? Number.POSITIVE_INFINITY : parseListLimit(options.limit);
+  const order = options.order === "asc" ? "asc" : "desc";
+  const hasKey = resolveHasKey(options);
+  const tracks = await listCommand({ hasKey, limit, order });
+
+  if (options.json) {
+    printJson({ ok: true, tracks });
+    return;
+  }
+
+  if (tracks.length === 0) {
+    const scope = hasKey === false ? " missing a key" : hasKey === true ? " with a key" : "";
+    console.log(`No findings${scope}.`);
+    return;
+  }
+
+  const { trackRows } = await import("./format");
+  const scope =
+    hasKey === false ? " missing a musical key" : hasKey === true ? " with a musical key" : "";
+  const noun = tracks.length === 1 ? "finding" : "findings";
+  console.log(`${tracks.length} ${noun}${scope}:`);
+  console.log(trackRows(tracks).join("\n"));
+}
+
 async function runAdminQueue(
   options: AdminQueueOptions,
   queueCommand: typeof import("./commands/admin-tracks").queueCommand,
 ): Promise<void> {
   const limit = parseListLimit(options.limit);
   const tracks = await queueCommand(limit, {
-    hasContext: options.hasContext ? true : undefined,
     hasObservation: options.hasObservation ? true : undefined,
   });
 
@@ -2653,18 +3005,26 @@ const stringOptions = new Set([
   "--features",
   "--file",
   "--footage",
+  "--footage-landscape",
+  "--footage-landscape-social",
+  "--footage-notext",
   "--footage-social",
   "--from",
+  "--intent",
   "--key",
   "--limit",
+  "--metrics",
   "--mime",
   "--note",
+  "--plate",
+  "--plate-background",
   "--platform",
   "--poster",
   "--props",
   "--query",
   "--recorded-at",
   "--render",
+  "--scene",
   "--scheduled-for",
   "--soundcloud-url",
   "--source",

@@ -9,9 +9,9 @@
 // lives on the cover art, and the platform shows the channel name as text.
 //
 // Note: the Spotify playlist cover is NOT generated here — it is the founding
-// cover art (apps/web/public/fluncle-cover.png). See docs/socials/README.md.
+// cover art (apps/web/public/fluncle-cover.png).
 //
-// Dimensions are documented in docs/socials/README.md → "Banners & covers".
+// Per-account banner/cover dimensions are defined in the specs below.
 // `render: true` = a claimed account we output by default; `false` = wired in
 // and previewable in Studio, but not written until the account exists.
 

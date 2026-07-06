@@ -1,6 +1,7 @@
 import { type InfiniteData, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { type MixtapeMembership } from "@/lib/server/mixtapes";
+import { type PlanMembership } from "@/lib/server/recordings";
 import { type SocialPostItem } from "@/lib/server/social";
 import { type TrackListItem } from "@/lib/server/tracks";
 
@@ -34,6 +35,8 @@ export type BoardRow = TrackListItem & {
   // Last.fm cell is a workflow tracker: `done` once it ran, grey only while it's
   // never run; paired with `lastfmLoved` to tell "Loved" from "Checked — not loved".
   lastfmRan: boolean;
+  // The MINTED mixtapes this finding is on (published/distributing — drafts
+  // retired for plans).
   mixtapes: MixtapeMembership[];
   // Whether the auto-note authoring has RUN for this finding — the presence of
   // `backfill_note_attempted_at`, stamped on every authoring attempt by `note_track`.
@@ -42,6 +45,9 @@ export type BoardRow = TrackListItem & {
   // hasn't typed one). Pulled through the admin-only board path, never the public
   // `TrackListItem` contract.
   noteRan: boolean;
+  // The PLANS this finding is pencilled into — the pre-publish sibling of
+  // `mixtapes` (a plan is a videoless recording; its cues carry the finding link).
+  plans: PlanMembership[];
   posts: SocialPostItem[];
 };
 export type BoardPage = { nextCursor?: string; totalCount: number; tracks: BoardRow[] };

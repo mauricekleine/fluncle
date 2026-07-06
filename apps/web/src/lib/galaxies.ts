@@ -1,5 +1,5 @@
 // Single source of truth for the four galaxies — the vibe-map quadrants by which
-// findings are grouped (docs/admin-tagging.md). The NAMES are provisional: rename
+// findings are grouped. The NAMES are provisional: rename
 // them HERE and every surface follows — the /admin board, the newsletter (via the
 // `galaxy` field on /api/tracks), and the game.
 //

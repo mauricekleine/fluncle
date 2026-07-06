@@ -1,5 +1,5 @@
-// The oRPC server seam in the Worker — the production rails for the migration
-// (docs/orpc-migration-brief.md). Proven end to end on workerd by the spike
+// The oRPC server seam in the Worker — the production rails for the migration.
+// Proven end to end on workerd by the spike
 // (PR #58); this is that spike made production-grade.
 //
 //   contract (@fluncle/contracts/orpc)
@@ -34,6 +34,7 @@ import { adminBackfillsHandlers } from "./orpc/admin-backfills";
 import { adminEditionsHandlers } from "./orpc/admin-editions";
 import { adminHealthHandlers } from "./orpc/admin-health";
 import { adminMixtapesHandlers } from "./orpc/admin-mixtapes";
+import { adminRecordingsHandlers } from "./orpc/admin-recordings";
 import { adminSocialHandlers } from "./orpc/admin-social";
 import { adminSubmissionsHandlers } from "./orpc/admin-submissions";
 import { adminTokensHandlers } from "./orpc/admin-tokens";
@@ -72,6 +73,7 @@ export const router = os.router({
   ...adminEditionsHandlers(os),
   ...adminHealthHandlers(os),
   ...adminMixtapesHandlers(os),
+  ...adminRecordingsHandlers(os),
   ...adminSocialHandlers(os),
   ...adminSubmissionsHandlers(os),
   ...adminTokensHandlers(os),
@@ -210,8 +212,8 @@ const generator = new OpenAPIGenerator({
 });
 
 // The PUBLIC spec exposes ONLY the public operations; the admin tier stays OFF the
-// public OpenAPI document (docs/orpc-migration-brief.md — "Admin reads/writes stay
-// OFF the public OpenAPI spec"). The single `contract` router holds BOTH public and
+// public OpenAPI document — admin reads/writes stay OFF the public OpenAPI spec.
+// The single `contract` router holds BOTH public and
 // admin ops (one OpenAPIHandler serves them all), so the generated public doc is
 // drawn from the same router with a path-prefix `filter`: every admin op lives
 // under `/admin/*` (the structural truth that also drives routing), so excluding

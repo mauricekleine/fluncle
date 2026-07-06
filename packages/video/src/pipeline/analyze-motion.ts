@@ -218,9 +218,11 @@ function resampleToFrames(curve: EnergySample[], frameCount: number, fps: number
 // Band → EMA group delay (frames). The shader smooths the curve with a one-pole
 // EMA whose group delay ≈ the smoothingFrames constant of the hook. We align the
 // structural delta against the curve by THAT single principled lag — never a scan.
-//   useEnergy sf=4 (~135ms@30) · useBass sf=3 (~100ms) · useMid/useTreble sf=2
-//   (~70ms) · *Fast sf=1 (~33ms) · useFlux sf=2 (~67ms). drop/swell/hit/onset
-//   ride energy/smoothed bands → energy's delay.
+//   useEnergy sf=4 (~135ms@30) · useBass/useMid sf=3 (~100ms) · useTreble/useFlux
+//   sf=2 (~70ms) · *Fast sf=1 (~33ms). drop/swell/hit/onset ride energy/smoothed
+//   bands → energy's delay. These MUST mirror each hook's default smoothingFrames
+//   (use-mid.ts is sf=3, use-treble.ts / use-flux.ts are sf=2) so the metric's lag
+//   matches the shader's group delay.
 // ---------------------------------------------------------------------------
 
 const BAND_SMOOTHING_FRAMES: Record<IntentBand, number> = {
@@ -230,7 +232,7 @@ const BAND_SMOOTHING_FRAMES: Record<IntentBand, number> = {
   energy: 4,
   flux: 2,
   hit: 1,
-  mid: 2,
+  mid: 3,
   midFast: 1,
   onset: 1,
   swell: 4,
@@ -1363,6 +1365,711 @@ export function scoreBeatReactivity(input: BeatReactivityInput): BeatReactivity 
 }
 
 // ---------------------------------------------------------------------------
+// ARC / DEADNESS (C4 — the structural TWIN of beat-pull). Beat-pull is the HARD
+// gate on the SHORT timescale (the picture jitters back and forth on the beat);
+// this is the HARD gate on the LONG timescale (the picture never reorganizes at
+// all — a frozen field, a looping wallpaper, near-static bars). Neither survives
+// a still critique: beat-pull is invisible in stills, and a dead clip's stills
+// each look fine — the deadness only exists across the WHOLE span.
+//
+// Method: pick 5 anchor frames at ~5/25/50/75/95% of the clip and measure how far
+// the picture STRUCTURALLY reorganizes between adjacent anchors. Each pairwise
+// change combines three views, so no single laundering trick (recolor only, or
+// translate a fixed pattern only) passes:
+//   - grayMad   : mean-abs-diff of the downscaled+blurred luma plane (gross form).
+//   - edgeMad   : mean-abs-diff of the Sobel edge-magnitude map (where the
+//                 structure/contours sit — the strongest discriminator: a frozen
+//                 field's edges don't move even when its colour cycles).
+//   - colorDist : Bhattacharyya distance of an HSV histogram (palette evolution) —
+//                 weighted LIGHTLY (ARC_COLOR_WEIGHT) so a pure recolor of a frozen
+//                 field can't rescue it, but genuine colour arc still counts.
+// Grain robustness reuses the file's fencing tricks: frames arrive already
+// area-downscaled (frames.ts `flags=area` box-averages grain spatially), and a
+// 3×3 box blur pre-smooths each anchor before the diff (grain is incoherent, so
+// it cancels in both the MAD and the edge map).
+//
+// The headline scalar `wholeClipChange` = MEAN of the 4 adjacent combined changes:
+// the average magnitude by which the picture reorganizes across the arc. HARD gate
+// "dead clip": wholeClipChange < ARC_FLOOR exits non-zero like the other hard
+// gates. When intent declares an arc (a drop), the arc block also folds an
+// advisory actual-vs-intent read: does the declared-climax anchor segment carry at
+// least the clip's own mean change (the arc actually moves where it was promised)?
+//
+// CALIBRATED ON REAL GROUND TRUTH (footage.social.mp4, 64×114, 3×3 blur, colorW=0.25):
+//   032.0.4L (a real arc — must PASS)          wholeClipChange = 0.356
+//   032.0.6R (20s near-static bars — must FAIL) wholeClipChange = 0.220
+// ARC_FLOOR = 0.29 sits ~23% below the pass anchor and ~24% above the fail anchor
+// (symmetric margin). 6R's frozen middle shows plainly in the edge component
+// (adjacent edgeMad collapses to ~0.07 vs 4L's steady ~0.27). Re-earn the floor as
+// verdicts accumulate via calibrate.ts.
+// ---------------------------------------------------------------------------
+
+export const ARC_ANCHOR_PCTS = [0.05, 0.25, 0.5, 0.75, 0.95] as const;
+const ARC_COLOR_WEIGHT = 0.25;
+const ARC_FLOOR = 0.29;
+// The best-window (subregion) read — the presence carve-out, mirroring the flash
+// gate's sliding 10° sub-window. The whole-frame MEAN is a texture-era statistic: it
+// dilutes a change concentrated in PART of the frame (a distant ship crossing 15% of a
+// dark sky, a ruin resolving inside one fog band) below the floor even when that
+// change is dramatic. So beside `wholeClipChange` the gate also finds the strongest
+// reorganizing SUBREGION and passes when EITHER clears its floor — a field that
+// reorganizes as a whole (wholeClipChange ≥ ARC_FLOOR) OR a subject that
+// arrives/reveals/crosses in one region (bestWindowChange ≥ ARC_REGION_FLOOR). A
+// frame where nothing changes anywhere still fails both (the dead clip: its edges are
+// frozen in EVERY window, so no subregion clears the regional floor even as grain
+// churns). The regional floor is HIGHER than the whole-frame floor because a small
+// window naturally concentrates its change and averages grain less. PROVISIONAL —
+// calibrated so the frozen-bars anchor (032.0.6R, wholeClipChange ~0.220) stays DEAD
+// in every window and a concentrated reveal clears it; re-earn against the first real
+// presence exemplar (see calibration/verdicts.json). The window is ~1/3 of each
+// dimension so a quadrant-scale subject reads without a single hot pixel dominating.
+const ARC_REGION_FLOOR = 0.5;
+// The presence-quiet relief band (pilot 033.0.1O "The Passing Hull", 2026-07-04). A
+// QUIET presence render is structurally UNABLE to reach the whole-frame floor — most
+// of the frame is intentional dark sky that breathes with the bass, so the mean of
+// the adjacent changes stays low by design (the pilot: wholeClipChange 0.136). The
+// region path is what carries it, and it can land JUST under ARC_REGION_FLOOR (the
+// pilot cleared it at 0.543, barely). When the whole-frame read misses AND the region
+// read is within STRIKING DISTANCE of its floor (≥ this) AND both HARD safety gates
+// passed (beat-pull flows, flash is safe — a quiet render that also jitters or strobes
+// earns no relief), the gate returns inconclusive("presenceQuiet") — an advisory
+// PASS-with-note to eyeball the reveal — instead of a hard dead-fail. PROVISIONAL:
+// re-earn the band as presence renders accumulate (calibration/verdicts.json).
+const ARC_PRESENCE_STRIKING = 0.4;
+const ARC_WINDOW_DIV = 3; // sub-window ≈ width/DIV × height/DIV
+const ARC_WINDOW_STRIDE_DIV = 2; // stride ≈ window / DIV (coarse — we take the max)
+const ARC_MIN_FRAMES = 10; // fewer frames → inconclusive (never a false dead-fail)
+// HSV histogram bins (hue×sat×val). Coarse on purpose — the arc cares about broad
+// palette drift, not fine colour, and coarse bins are grain-robust.
+const ARC_HUE_BINS = 8;
+const ARC_SAT_BINS = 4;
+const ARC_VAL_BINS = 4;
+
+export type ArcSegmentChange = {
+  grayMad: number;
+  edgeMad: number;
+  colorDist: number;
+  combined: number;
+};
+
+export type ArcIntentCheck = {
+  /** intent declares an arc (dropMs > 0). */
+  declared: boolean;
+  dropMs: number;
+  /** index of the anchor segment [k,k+1] whose time span contains the drop. */
+  dropSegment: number;
+  dropSegmentChange: number;
+  /** the declared-climax segment carries >= the clip's mean change. */
+  meetsArc: boolean;
+};
+
+export type ArcResult = {
+  deterministic: true;
+  hard: true;
+  dead: boolean;
+  verdict: "evolving" | "dead" | "inconclusive";
+  /** the inconclusive reason when verdict is "inconclusive": "tooShort" (too few
+   *  frames to judge) or "presenceQuiet" (the presence-class relief — a near-miss
+   *  regional reveal on a clip that cleared both hard safety gates; advisory pass,
+   *  eyeball the reveal). Absent on evolving/dead. */
+  inconclusive?: string;
+  /** headline: mean of the adjacent combined structural changes. */
+  wholeClipChange: number;
+  /** the deadest adjacent transition (a sustained-freeze tell), reported. */
+  minSegmentChange: number;
+  /** the strongest reorganizing SUBREGION across all adjacent pairs (the presence read). */
+  bestWindowChange: number;
+  floor: number;
+  /** the higher floor the best-window read must clear to rescue a small whole-frame mean. */
+  regionFloor: number;
+  anchorPcts: number[];
+  anchorFrames: number[];
+  segments: ArcSegmentChange[];
+  intentArc: ArcIntentCheck | null;
+};
+
+/** Downscaled+blurred luma plane (0..1) of one rgb frame. 3×3 box blur = grain fence. */
+function arcLumaPlane(frame: Float32Array, width: number, height: number): Float32Array {
+  const pix = width * height;
+  const gray = new Float32Array(pix);
+  for (let p = 0; p < pix; p++) {
+    gray[p] = (0.299 * frame[p * 3] + 0.587 * frame[p * 3 + 1] + 0.114 * frame[p * 3 + 2]) / 255;
+  }
+  const out = new Float32Array(pix);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let sum = 0;
+      let n = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const yy = y + dy;
+          const xx = x + dx;
+          if (yy >= 0 && yy < height && xx >= 0 && xx < width) {
+            sum += gray[yy * width + xx];
+            n += 1;
+          }
+        }
+      }
+      out[y * width + x] = sum / n;
+    }
+  }
+  return out;
+}
+
+/** Sobel edge-magnitude map of a luma plane (borders left 0). */
+function sobelMap(plane: Float32Array, width: number, height: number): Float32Array {
+  const out = new Float32Array(plane.length);
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const i = y * width + x;
+      const gx =
+        -plane[i - width - 1] -
+        2 * plane[i - 1] -
+        plane[i + width - 1] +
+        plane[i - width + 1] +
+        2 * plane[i + 1] +
+        plane[i + width + 1];
+      const gy =
+        -plane[i - width - 1] -
+        2 * plane[i - width] -
+        plane[i - width + 1] +
+        plane[i + width - 1] +
+        2 * plane[i + width] +
+        plane[i + width + 1];
+      out[i] = Math.hypot(gx, gy);
+    }
+  }
+  return out;
+}
+
+/** Normalized HSV histogram of one rgb frame (ARC_HUE_BINS×ARC_SAT_BINS×ARC_VAL_BINS). */
+function hsvHistogram(frame: Float32Array, width: number, height: number): Float32Array {
+  const pix = width * height;
+  const hist = new Float32Array(ARC_HUE_BINS * ARC_SAT_BINS * ARC_VAL_BINS);
+  for (let p = 0; p < pix; p++) {
+    const r = frame[p * 3] / 255;
+    const g = frame[p * 3 + 1] / 255;
+    const b = frame[p * 3 + 2] / 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const c = max - min;
+    let hue = 0;
+    if (c > 1e-6) {
+      if (max === r) {
+        hue = ((g - b) / c) % 6;
+      } else if (max === g) {
+        hue = (b - r) / c + 2;
+      } else {
+        hue = (r - g) / c + 4;
+      }
+      hue /= 6;
+      if (hue < 0) {
+        hue += 1;
+      }
+    }
+    const sat = max > 1e-6 ? c / max : 0;
+    const hi = Math.min(ARC_HUE_BINS - 1, Math.floor(hue * ARC_HUE_BINS));
+    const si = Math.min(ARC_SAT_BINS - 1, Math.floor(sat * ARC_SAT_BINS));
+    const vi = Math.min(ARC_VAL_BINS - 1, Math.floor(max * ARC_VAL_BINS));
+    hist[(hi * ARC_SAT_BINS + si) * ARC_VAL_BINS + vi] += 1;
+  }
+  for (let i = 0; i < hist.length; i++) {
+    hist[i] /= pix;
+  }
+  return hist;
+}
+
+/** Bhattacharyya distance of two normalized histograms (0 identical, 1 disjoint). */
+function bhattacharyya(a: Float32Array, b: Float32Array): number {
+  let bc = 0;
+  for (let i = 0; i < a.length; i++) {
+    bc += Math.sqrt(a[i] * b[i]);
+  }
+  return 1 - Math.min(1, bc);
+}
+
+function madFloat(a: Float32Array, b: Float32Array): number {
+  let d = 0;
+  for (let p = 0; p < a.length; p++) {
+    d += Math.abs(a[p] - b[p]);
+  }
+  return d / a.length;
+}
+
+/** Mean-abs-diff of two planes restricted to a [x0,y0]+[w,h] sub-window. */
+function madFloatWindow(
+  a: Float32Array,
+  b: Float32Array,
+  width: number,
+  x0: number,
+  y0: number,
+  w: number,
+  h: number,
+): number {
+  let d = 0;
+  let count = 0;
+  for (let y = y0; y < y0 + h; y++) {
+    for (let x = x0; x < x0 + w; x++) {
+      const i = y * width + x;
+      d += Math.abs(a[i] - b[i]);
+      count += 1;
+    }
+  }
+  return count > 0 ? d / count : 0;
+}
+
+/** Normalized HSV histogram of one rgb frame restricted to a sub-window. */
+function hsvHistogramWindow(
+  frame: Float32Array,
+  width: number,
+  x0: number,
+  y0: number,
+  w: number,
+  h: number,
+): Float32Array {
+  const hist = new Float32Array(ARC_HUE_BINS * ARC_SAT_BINS * ARC_VAL_BINS);
+  let count = 0;
+  for (let y = y0; y < y0 + h; y++) {
+    for (let x = x0; x < x0 + w; x++) {
+      const p = y * width + x;
+      const r = frame[p * 3] / 255;
+      const g = frame[p * 3 + 1] / 255;
+      const b = frame[p * 3 + 2] / 255;
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const c = max - min;
+      let hue = 0;
+      if (c > 1e-6) {
+        if (max === r) {
+          hue = ((g - b) / c) % 6;
+        } else if (max === g) {
+          hue = (b - r) / c + 2;
+        } else {
+          hue = (r - g) / c + 4;
+        }
+        hue /= 6;
+        if (hue < 0) {
+          hue += 1;
+        }
+      }
+      const sat = max > 1e-6 ? c / max : 0;
+      const hi = Math.min(ARC_HUE_BINS - 1, Math.floor(hue * ARC_HUE_BINS));
+      const si = Math.min(ARC_SAT_BINS - 1, Math.floor(sat * ARC_SAT_BINS));
+      const vi = Math.min(ARC_VAL_BINS - 1, Math.floor(max * ARC_VAL_BINS));
+      hist[(hi * ARC_SAT_BINS + si) * ARC_VAL_BINS + vi] += 1;
+      count += 1;
+    }
+  }
+  if (count > 0) {
+    for (let i = 0; i < hist.length; i++) {
+      hist[i] /= count;
+    }
+  }
+  return hist;
+}
+
+/**
+ * The strongest reorganizing SUBREGION between two anchor frames: slide a
+ * ~(width/DIV × height/DIV) window across the frame and return the MAX windowed
+ * `combined` (grayMad + edgeMad + colorW·colorDist) — the same metric as the
+ * whole-frame read, restricted to a region. This is how a change concentrated in
+ * part of the frame (a subject arriving/crossing) survives a small whole-frame mean.
+ * Mirrors `worstWindowFlashFraction`'s sliding-window design.
+ */
+function bestSubWindowChange(
+  lumaA: Float32Array,
+  lumaB: Float32Array,
+  edgeA: Float32Array,
+  edgeB: Float32Array,
+  frameA: Float32Array,
+  frameB: Float32Array,
+  width: number,
+  height: number,
+): number {
+  const w = Math.max(1, Math.min(width, Math.round(width / ARC_WINDOW_DIV)));
+  const h = Math.max(1, Math.min(height, Math.round(height / ARC_WINDOW_DIV)));
+  const stride = Math.max(1, Math.round(Math.min(w, h) / ARC_WINDOW_STRIDE_DIV));
+  let best = 0;
+  for (let y0 = 0; y0 + h <= height; y0 += stride) {
+    for (let x0 = 0; x0 + w <= width; x0 += stride) {
+      const grayMad = madFloatWindow(lumaA, lumaB, width, x0, y0, w, h);
+      const edgeMad = madFloatWindow(edgeA, edgeB, width, x0, y0, w, h);
+      const colorDist = bhattacharyya(
+        hsvHistogramWindow(frameA, width, x0, y0, w, h),
+        hsvHistogramWindow(frameB, width, x0, y0, w, h),
+      );
+      const combined = grayMad + edgeMad + ARC_COLOR_WEIGHT * colorDist;
+      if (combined > best) {
+        best = combined;
+      }
+    }
+  }
+  return best;
+}
+
+export type ArcInput = {
+  rgb: RgbFrames;
+  fps: number;
+  intent: RenderIntent | null;
+  /** Did the two HARD safety gates PASS? The presence-quiet relief fires only when
+   *  BOTH are true — a quiet presence render that clears beat-pull (flows) and flash
+   *  (safe) earns an advisory pass on a near-miss regional reveal instead of a hard
+   *  dead-fail. Omitted (a bare scoreArc call — a test, a calibration read) → the
+   *  relief never fires and the pre-relief dead logic holds unchanged. */
+  beatPullPass?: boolean;
+  flashPass?: boolean;
+};
+
+/** Pure arc/deadness scorer over the decoded rgb frames + intent. No ffmpeg. HARD. */
+export function scoreArc(input: ArcInput): ArcResult {
+  const { rgb, fps, intent, beatPullPass, flashPass } = input;
+  const { width, height, frames } = rgb;
+  const n = frames.length;
+
+  const anchorPcts = [...ARC_ANCHOR_PCTS];
+  if (n < ARC_MIN_FRAMES) {
+    return {
+      anchorFrames: [],
+      anchorPcts,
+      bestWindowChange: 0,
+      dead: false,
+      deterministic: true,
+      floor: ARC_FLOOR,
+      hard: true,
+      inconclusive: "tooShort",
+      intentArc: null,
+      minSegmentChange: 0,
+      regionFloor: ARC_REGION_FLOOR,
+      segments: [],
+      verdict: "inconclusive",
+      wholeClipChange: 0,
+    };
+  }
+
+  const anchorFrames = anchorPcts.map((p) => Math.min(n - 1, Math.max(0, Math.round(p * (n - 1)))));
+  const luma = anchorFrames.map((idx) => arcLumaPlane(frames[idx], width, height));
+  const edges = luma.map((plane) => sobelMap(plane, width, height));
+  const hists = anchorFrames.map((idx) => hsvHistogram(frames[idx], width, height));
+
+  const segments: ArcSegmentChange[] = [];
+  for (let k = 0; k < anchorFrames.length - 1; k++) {
+    const grayMad = madFloat(luma[k], luma[k + 1]);
+    const edgeMad = madFloat(edges[k], edges[k + 1]);
+    const colorDist = bhattacharyya(hists[k], hists[k + 1]);
+    segments.push({
+      colorDist,
+      combined: grayMad + edgeMad + ARC_COLOR_WEIGHT * colorDist,
+      edgeMad,
+      grayMad,
+    });
+  }
+
+  const combinedList = segments.map((s) => s.combined);
+  const wholeClipChange = mean(combinedList);
+  const minSegmentChange = Math.min(...combinedList);
+
+  // The best-window (subregion) read: the strongest reorganizing region across all
+  // adjacent anchor pairs. A subject that arrives/reveals/crosses in part of the
+  // frame produces a large windowed change even when the whole-frame mean is small.
+  let bestWindowChange = 0;
+  for (let k = 0; k < anchorFrames.length - 1; k++) {
+    const w = bestSubWindowChange(
+      luma[k],
+      luma[k + 1],
+      edges[k],
+      edges[k + 1],
+      frames[anchorFrames[k]],
+      frames[anchorFrames[k + 1]],
+      width,
+      height,
+    );
+    if (w > bestWindowChange) {
+      bestWindowChange = w;
+    }
+  }
+
+  // Evolving when the whole frame reorganizes OR a subregion does — a field that
+  // changes as a whole passes on wholeClipChange; a subject that reveals in one
+  // region passes on bestWindowChange.
+  const evolving = wholeClipChange >= ARC_FLOOR || bestWindowChange >= ARC_REGION_FLOOR;
+
+  // Presence-quiet relief: a quiet presence render can't reach the whole-frame floor
+  // (intentional dark sky) and its region read lands JUST under the regional floor.
+  // When both HARD safety gates passed and the regional reveal is within striking
+  // distance, the would-be dead-fail downgrades to an ADVISORY inconclusive
+  // ("presenceQuiet") — pass-with-note, eyeball the reveal — never a block. The relief
+  // requires BOTH gate flags EXPLICITLY true, so a bare scoreArc call is unchanged.
+  const presenceQuiet =
+    !evolving &&
+    beatPullPass === true &&
+    flashPass === true &&
+    bestWindowChange >= ARC_PRESENCE_STRIKING;
+
+  // Dead only when NOT evolving AND the relief did not apply — a frozen frame changes
+  // nowhere, so no subregion clears even the striking-distance band.
+  const dead = !evolving && !presenceQuiet;
+
+  // Intent arc fold (advisory): if the intent declares a drop, locate the anchor
+  // segment whose [startPct,endPct] span contains it and check its change carries
+  // at least the clip mean — the promised climax actually reorganizes the picture.
+  let intentArc: ArcIntentCheck | null = null;
+  if (intent && intent.dropMs > 0) {
+    const durationMs = (n / Math.max(1, fps)) * 1000;
+    const dropPct = durationMs > 0 ? intent.dropMs / durationMs : 0;
+    let dropSegment = 0;
+    for (let k = 0; k < anchorPcts.length - 1; k++) {
+      if (dropPct >= anchorPcts[k] && dropPct <= anchorPcts[k + 1]) {
+        dropSegment = k;
+        break;
+      }
+      if (dropPct > anchorPcts[anchorPcts.length - 1]) {
+        dropSegment = segments.length - 1;
+      }
+    }
+    const dropSegmentChange = segments[dropSegment]?.combined ?? 0;
+    intentArc = {
+      declared: true,
+      dropMs: intent.dropMs,
+      dropSegment,
+      dropSegmentChange,
+      meetsArc: dropSegmentChange >= wholeClipChange,
+    };
+  }
+
+  return {
+    anchorFrames,
+    anchorPcts,
+    bestWindowChange,
+    dead,
+    deterministic: true,
+    floor: ARC_FLOOR,
+    hard: true,
+    ...(presenceQuiet ? { inconclusive: "presenceQuiet" } : {}),
+    intentArc,
+    minSegmentChange,
+    regionFloor: ARC_REGION_FLOOR,
+    segments,
+    verdict: presenceQuiet ? "inconclusive" : dead ? "dead" : "evolving",
+    wholeClipChange,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// SPATIAL SEAM (WARN — the branch-cut tell). A hard, static, one-line-wide
+// discontinuity the still critique rarely catches: the classic atan(y,x) ±π
+// branch cut fed into noise/warp draws a seam along the negative-x ray, and a
+// tiling / mirror fold leaves one too. Cheap detector: per sampled frame, the
+// row-to-row (and column-to-column) mean-abs-luma diff; a line-pair whose diff
+// SPIKES far above its neighbours AND holds at the SAME position across ≥3 sampled
+// frames is a seam. WARN, never FAIL — a legitimate hard horizon reads the same way
+// and presence renders will have them, so the report says to EYEBALL it (scrub the
+// negative-x ray) rather than blocking ship. Deterministic: fixed sample positions,
+// no Math.random / Date.now.
+//
+// TWO things keep it off the baked TEXT (measured on the real social cuts). (1) It
+// collects EVERY in-band spike per frame, not just the strongest — the softer
+// center seam would otherwise be masked by a text edge that spikes harder in the
+// same frame (032.0.4L's vortex cut sat under its title block). (2) It scans only a
+// CENTRAL BAND [margin, 1-margin]: a from-center atan cut is mid-frame, whereas the
+// fixed TypePlate / CloseCard homes (identity lower ~85%, telemetry upper, the
+// closing card) draw real hard horizontal edges near the top/bottom that are NOT
+// shader seams and are transient (they fade before the drop). The band is the
+// difference between flagging 032.0.4L's mid-frame cut and NOT flagging every
+// text-baked social cut (e.g. clean 027.9.5H, whose only edges are its text).
+// ---------------------------------------------------------------------------
+
+const SEAM_SAMPLES = 16; // evenly-spaced frames to sample across the clip
+const SEAM_MIN_FRAMES = 3; // a seam must persist across ≥3 sampled frames
+const SEAM_SPIKE_RATIO = 3; // the spike line's diff ≥ 3× its local-median neighbours
+const SEAM_ABS_FLOOR = 6; // …and ≥ 6 raw-luma units (a real discontinuity, not grain)
+const SEAM_NEIGHBORHOOD = 4; // ± lines for the local-median baseline
+const SEAM_POS_TOL = 2; // lines within ± this cluster as the same seam position
+const SEAM_BAND_MARGIN = 0.18; // scan only [margin, 1-margin] — mid-frame, off the text homes
+
+export type SeamAxis = "row" | "column";
+
+export type Seam = {
+  axis: SeamAxis;
+  /** the discontinuity as a fraction 0..1 (y for a row seam, x for a column seam). */
+  positionPct: number;
+  /** how many of the sampled frames showed the seam at this position. */
+  frames: number;
+  /** the median spike ratio (line diff ÷ local-median baseline) across the hits. */
+  ratio: number;
+};
+
+export type SeamResult = {
+  deterministic: true;
+  hard: false;
+  detected: boolean;
+  /** the strongest sustained seam, or null when none persisted. */
+  seam: Seam | null;
+  sampledFrames: number;
+};
+
+/** Raw 0..255 luma plane of one interleaved rgb frame (BT.601 weights, no blur —
+ *  the sharp discontinuity is exactly the signal, so it must NOT be smoothed). */
+function seamLuma(frame: Float32Array, width: number, height: number): Float32Array {
+  const pix = width * height;
+  const out = new Float32Array(pix);
+  for (let p = 0; p < pix; p++) {
+    out[p] = 0.299 * frame[p * 3] + 0.587 * frame[p * 3 + 1] + 0.114 * frame[p * 3 + 2];
+  }
+  return out;
+}
+
+/** Per-row-pair mean-abs-luma diff (adjacent rows), length height-1. */
+function rowDiffs(luma: Float32Array, width: number, height: number): number[] {
+  const out: number[] = [];
+  for (let r = 0; r < height - 1; r++) {
+    let d = 0;
+    for (let x = 0; x < width; x++) {
+      d += Math.abs(luma[r * width + x] - luma[(r + 1) * width + x]);
+    }
+    out.push(d / width);
+  }
+  return out;
+}
+
+/** Per-column-pair mean-abs-luma diff (adjacent columns), length width-1. */
+function colDiffs(luma: Float32Array, width: number, height: number): number[] {
+  const out: number[] = [];
+  for (let c = 0; c < width - 1; c++) {
+    let d = 0;
+    for (let y = 0; y < height; y++) {
+      d += Math.abs(luma[y * width + c] - luma[y * width + c + 1]);
+    }
+    out.push(d / height);
+  }
+  return out;
+}
+
+/** One qualifying spike: which sampled `frame` it came from, its line `index`, and
+ *  the spike `ratio`. Tagged by frame so a cluster counts DISTINCT frames. */
+type SeamHit = { frame: number; index: number; ratio: number };
+
+/** EVERY in-band local-max spike in a diff series (≥ floor, ≥ ratio× its local
+ *  median, higher than its immediate neighbours so a broad ramp never counts, and
+ *  inside the central band so the fixed text homes are skipped). All spikes, not
+ *  just the strongest, so the softer center seam is never masked by a harder edge. */
+function bandSpikes(diffs: number[], frame: number, extent: number): SeamHit[] {
+  const out: SeamHit[] = [];
+  for (let i = 0; i < diffs.length; i++) {
+    const pct = (i + 0.5) / extent;
+    if (pct < SEAM_BAND_MARGIN || pct > 1 - SEAM_BAND_MARGIN) {
+      continue;
+    }
+    const here = diffs[i];
+    if (here < SEAM_ABS_FLOOR) {
+      continue;
+    }
+    // A seam is a NARROW spike, never part of a gradual ramp — reject if either
+    // immediate neighbour is higher.
+    if (i > 0 && diffs[i - 1] > here) {
+      continue;
+    }
+    if (i < diffs.length - 1 && diffs[i + 1] > here) {
+      continue;
+    }
+    const neighbours: number[] = [];
+    for (let d = -SEAM_NEIGHBORHOOD; d <= SEAM_NEIGHBORHOOD; d++) {
+      if (d === 0) {
+        continue;
+      }
+      const j = i + d;
+      if (j >= 0 && j < diffs.length) {
+        neighbours.push(diffs[j]);
+      }
+    }
+    if (neighbours.length === 0) {
+      continue;
+    }
+    // Floor the baseline at 1 luma unit so a seam over a perfectly flat field
+    // (baseline ~0) reads a large finite ratio instead of dividing by ~0.
+    const base = Math.max(median(neighbours), 1);
+    const ratio = here / base;
+    if (ratio >= SEAM_SPIKE_RATIO) {
+      out.push({ frame, index: i, ratio });
+    }
+  }
+  return out;
+}
+
+/** Cluster spike hits by position (within ±SEAM_POS_TOL); the largest cluster
+ *  spanning ≥SEAM_MIN_FRAMES DISTINCT frames is a sustained seam, or null. */
+function clusterSeam(hits: SeamHit[], axis: SeamAxis, extent: number): Seam | null {
+  if (hits.length < SEAM_MIN_FRAMES) {
+    return null;
+  }
+  let best: Seam | null = null;
+  for (const anchor of hits) {
+    const cluster = hits.filter((h) => Math.abs(h.index - anchor.index) <= SEAM_POS_TOL);
+    // One representative (max-ratio) spike per distinct frame — two nearby spikes in
+    // the same frame must not inflate the persistence count.
+    const perFrame = new Map<number, SeamHit>();
+    for (const hit of cluster) {
+      const prev = perFrame.get(hit.frame);
+      if (!prev || hit.ratio > prev.ratio) {
+        perFrame.set(hit.frame, hit);
+      }
+    }
+    if (perFrame.size < SEAM_MIN_FRAMES) {
+      continue;
+    }
+    const reps = [...perFrame.values()];
+    const ratio = median(reps.map((c) => c.ratio));
+    const positionPct = (median(reps.map((c) => c.index)) + 0.5) / extent;
+    if (
+      best === null ||
+      perFrame.size > best.frames ||
+      (perFrame.size === best.frames && ratio > best.ratio)
+    ) {
+      best = { axis, frames: perFrame.size, positionPct, ratio };
+    }
+  }
+  return best;
+}
+
+/** Pure spatial-seam scorer over the decoded rgb frames. No ffmpeg. Advisory. */
+export function scoreSeam(rgb: RgbFrames): SeamResult {
+  const { width, height, frames } = rgb;
+  const n = frames.length;
+
+  const sampleCount = Math.min(SEAM_SAMPLES, n);
+  const sampled = new Set<number>();
+  for (let k = 0; k < sampleCount; k++) {
+    const idx = sampleCount <= 1 ? 0 : Math.round((k / (sampleCount - 1)) * (n - 1));
+    sampled.add(idx);
+  }
+  const sampledFrames = sampled.size;
+
+  const rowHits: SeamHit[] = [];
+  const colHits: SeamHit[] = [];
+  for (const fi of sampled) {
+    const luma = seamLuma(frames[fi], width, height);
+    if (height >= 2) {
+      rowHits.push(...bandSpikes(rowDiffs(luma, width, height), fi, height));
+    }
+    if (width >= 2) {
+      colHits.push(...bandSpikes(colDiffs(luma, width, height), fi, width));
+    }
+  }
+
+  const candidates = [clusterSeam(rowHits, "row", height), clusterSeam(colHits, "column", width)]
+    .filter((s): s is Seam => s !== null)
+    .sort((a, b) => b.frames - a.frames || b.ratio - a.ratio);
+  const seam = candidates[0] ?? null;
+
+  return {
+    detected: seam !== null,
+    deterministic: true,
+    hard: false,
+    sampledFrames,
+    seam,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // The orchestrator + report assembly (C6)
 // ---------------------------------------------------------------------------
 
@@ -1383,6 +2090,8 @@ export type MotionReport = {
   unreliable: boolean;
   flashSafety: FlashSafetyResult;
   beatPull: BeatPullResult & { deterministic: true; hard: true };
+  arc: ArcResult;
+  seam: SeamResult;
   coupling: CouplingResult | null;
   beatReactivity: BeatReactivity | null;
   intent: IntentCheckResult | null;
@@ -1440,13 +2149,24 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
   const rgb = extractRgbFrames(video, { height: FLASH_H, probeFps: true, width: FLASH_W });
   const flashSafety = scoreFlashSafety(rgb);
 
-  // Read intent + props.
+  // Read intent + props. A PRESENT-but-invalid intent is a loud warning (a
+  // silently-swallowed parse error hides a real authoring bug — the checker then
+  // runs blind). A MISSING file stays warn-and-stub (v1 law): intent is optional.
   const intentFile = options.intentPath ?? path.join(OUT_DIR, `${trackId}.intent.json`);
   let intent: RenderIntent | null = null;
   if (existsSync(intentFile)) {
     try {
-      intent = validateRenderIntent(JSON.parse(readFileSync(intentFile, "utf8")));
-    } catch {
+      const parsed = JSON.parse(readFileSync(intentFile, "utf8"));
+      intent = validateRenderIntent(parsed);
+      if (intent === null) {
+        console.warn(
+          `! intent: ${intentFile} is present but FAILED validation (schema/shape mismatch) — running WITHOUT intent checks. Re-run \`validate:intent ${intentFile}\` for per-field errors.`,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        `! intent: ${intentFile} is present but could not be parsed — running WITHOUT intent checks. Parse error: ${err instanceof Error ? err.message : String(err)}`,
+      );
       intent = null;
     }
   }
@@ -1472,6 +2192,21 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
 
   // The per-frame luminance series (reused by beat-reactivity + the intent check).
   const perFrame = decodeFlashFrames(rgb);
+
+  // ARC / DEADNESS — the long-timescale HARD gate, on the same rgb extraction. The
+  // two HARD safety verdicts (beat-pull flows, flash safe) feed the presence-quiet
+  // relief: a quiet presence render that cleared both earns an advisory pass on a
+  // near-miss regional reveal instead of a dead-fail.
+  const arc = scoreArc({
+    beatPullPass: !beatPull.beatLocked,
+    flashPass: !flashSafety.unsafe,
+    fps: reportFps,
+    intent,
+    rgb,
+  });
+
+  // SPATIAL SEAM — the WARN-level branch-cut tell, on the same rgb extraction.
+  const seam = scoreSeam(rgb);
 
   let coupling: CouplingResult | null = null;
   let beatReactivity: BeatReactivity | null = null;
@@ -1510,6 +2245,35 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
   }
   if (beatPull.beatLocked) {
     blockingFailures.push("beatPull");
+  } else if (beatPull.inconclusive) {
+    // Pass-with-note: an inconclusive beat-pull never blocks (like the too-few-frames
+    // case). The low-motion carve-out lands here for calm presence clips — the
+    // deadness question is owned by the arc + coupling reads below.
+    advisories.push(`beatPull.inconclusive(${beatPull.inconclusive})`);
+  }
+  if (arc.dead) {
+    blockingFailures.push("arc.dead");
+  } else if (arc.verdict === "inconclusive") {
+    // Pass-with-note: an inconclusive arc never blocks. presenceQuiet is the
+    // presence-class relief (a near-miss regional reveal on a clip that cleared both
+    // hard safety gates) — flagged so the operator eyeballs the reveal; tooShort is
+    // the too-few-frames case.
+    advisories.push(
+      arc.inconclusive === "presenceQuiet"
+        ? "arc.inconclusive(presenceQuiet — eyeball the reveal)"
+        : `arc.inconclusive(${arc.inconclusive ?? "tooShort"})`,
+    );
+  }
+  if (arc.intentArc && !arc.intentArc.meetsArc) {
+    advisories.push(`arc.intentMismatch(seg${arc.intentArc.dropSegment})`);
+  }
+
+  // The spatial-seam WARN — never blocks (a legitimate hard horizon reads the same
+  // way), but flags a possible atan branch-cut / tiling seam for the operator's eye.
+  if (seam.detected && seam.seam) {
+    const s = seam.seam;
+    const pos = `${s.axis === "row" ? "y" : "x"}≈${Math.round(s.positionPct * 100)}%`;
+    advisories.push(`seam.possible(${pos})`);
   }
 
   if (coupling) {
@@ -1558,6 +2322,7 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
   const hardPass = blockingFailures.length === 0;
 
   return {
+    arc,
     beatPull,
     beatReactivity,
     coupling,
@@ -1570,6 +2335,7 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
     intentDeclaredBand: coupling?.intentDeclaredBand ?? null,
     logId,
     probedFps,
+    seam,
     trackId,
     unreliable,
     video,
@@ -1617,6 +2383,17 @@ if (import.meta.main) {
     console.log(
       `${report.beatPull.beatLocked ? "✗" : "✓"} beat-pull: ${report.beatPull.beatLocked ? "DETECTED" : "flows"} (reversal ${report.beatPull.score.toFixed(2)})`,
     );
+    const arc = report.arc;
+    console.log(
+      `${arc.dead ? "✗" : "✓"} arc: ${arc.verdict}${arc.inconclusive ? `(${arc.inconclusive})` : ""} (change ${arc.wholeClipChange.toFixed(3)} vs floor ${arc.floor}, best-window ${arc.bestWindowChange.toFixed(3)} vs region ${arc.regionFloor}, min-seg ${arc.minSegmentChange.toFixed(3)})${arc.intentArc ? `; drop-seg ${arc.intentArc.meetsArc ? "meets" : "MISSES"} arc` : ""}`,
+    );
+    if (report.seam.detected && report.seam.seam) {
+      const s = report.seam.seam;
+      const pos = `${s.axis === "row" ? "y" : "x"}≈${Math.round(s.positionPct * 100)}%`;
+      console.log(
+        `! seam: possible ${s.axis} discontinuity at ${pos} (${s.frames}/${report.seam.sampledFrames} frames, ${s.ratio.toFixed(1)}× local) — WARN only; EYEBALL it, scrub the negative-x ray for an atan branch cut (a hard horizon is legitimate)`,
+      );
+    }
     if (report.coupling) {
       const c = report.coupling;
       console.log(

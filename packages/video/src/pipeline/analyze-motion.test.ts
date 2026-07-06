@@ -41,9 +41,11 @@ import { type RgbFrames } from "./frames";
 import { type RenderIntent, RENDER_INTENT_SCHEMA } from "./intent";
 import {
   checkIntent,
+  scoreArc,
   scoreBeatReactivity,
   scoreCoupling,
   scoreFlashSafety,
+  scoreSeam,
 } from "./analyze-motion";
 
 const FPS = 30;
@@ -532,4 +534,360 @@ console.log(
 );
 console.log(
   "✓ beat-grid reactivity: on-beat spikes read reactive, flat reads dead, calm→vibrant scores an arc",
+);
+
+// ---------------------------------------------------------------------------
+// ARC / DEADNESS (C4 — the HARD long-timescale gate). Synthetic RGB strips whose
+// structure either reorganizes across the whole span (evolving) or is frozen under
+// grain/recolor (dead). Mirrors the real calibration anchors validated on
+// footage.social.mp4 (032.0.4L wholeClipChange=0.356 PASS / 032.0.6R=0.220 FAIL).
+// ---------------------------------------------------------------------------
+
+const ARC_FRAMES = 200;
+
+// EVOLVING: a bright horizontal band that sweeps top→bottom over the clip. Its
+// gross form + edges reorganize between every anchor → wholeClipChange >> floor.
+const arcBandFrame = (t: number): Float32Array => {
+  const f = new Float32Array(PIX * 3);
+  const bandY = Math.floor((t / ARC_FRAMES) * FH);
+  for (let y = 0; y < FH; y++) {
+    for (let x = 0; x < FW; x++) {
+      const v = Math.abs(y - bandY) < 10 ? 220 : 40;
+      const idx = (y * FW + x) * 3;
+      f[idx] = v;
+      f[idx + 1] = v;
+      f[idx + 2] = v;
+    }
+  }
+  return f;
+};
+const arcEvolving = wrapRgb(Array.from({ length: ARC_FRAMES }, (_, t) => arcBandFrame(t)));
+const evolvingArc = scoreArc({ fps: FPS, intent: null, rgb: arcEvolving });
+assert.equal(evolvingArc.verdict, "evolving", "a sweeping structural band must read EVOLVING");
+assert.equal(evolvingArc.dead, false, "an evolving clip is not dead");
+assert.ok(
+  evolvingArc.wholeClipChange >= evolvingArc.floor,
+  `evolving change must clear the floor (got ${evolvingArc.wholeClipChange.toFixed(3)} vs ${evolvingArc.floor})`,
+);
+
+// DEAD: fixed vertical bars that never move, with per-frame grain on top. The grain
+// (a recolor/noise trick) must NOT rescue the frozen structure → dead. This is the
+// laundering guard: the edge map is frozen even as grain churns.
+const arcStaticBars = (t: number): Float32Array => {
+  const f = new Float32Array(PIX * 3);
+  for (let y = 0; y < FH; y++) {
+    for (let x = 0; x < FW; x++) {
+      const bar = Math.floor(x / 8) % 2 === 0;
+      const v = clamp8((bar ? 180 : 40) + speckle(y * FW + x, t, 30));
+      const idx = (y * FW + x) * 3;
+      f[idx] = v;
+      f[idx + 1] = v;
+      f[idx + 2] = v;
+    }
+  }
+  return f;
+};
+const arcDeadStrip = wrapRgb(Array.from({ length: ARC_FRAMES }, (_, t) => arcStaticBars(t)));
+const deadArc = scoreArc({ fps: FPS, intent: null, rgb: arcDeadStrip });
+assert.equal(deadArc.dead, true, "frozen bars under grain must read DEAD (the laundering guard)");
+assert.equal(deadArc.verdict, "dead", "dead verdict on a frozen structure");
+assert.ok(
+  deadArc.wholeClipChange < deadArc.floor,
+  `dead change must sit below the floor (got ${deadArc.wholeClipChange.toFixed(3)})`,
+);
+// A frozen frame changes nowhere: no subregion clears the higher regional floor
+// either — dead fails BOTH reads (the best-window carve-out cannot launder it).
+assert.ok(
+  deadArc.bestWindowChange < deadArc.regionFloor,
+  `a frozen clip must fail the best-window read too (got ${deadArc.bestWindowChange.toFixed(3)} vs region ${deadArc.regionFloor})`,
+);
+
+// BEST-WINDOW (subregion) PRESENCE READ: a subject that reveals/crosses in PART of
+// the frame. Most of the frame is a static dark field under faint grain (so the
+// whole-frame mean sits BELOW the arc floor — the texture-era gate would call it
+// dead), but a bright subject grows + slides across one bottom-right region, so a
+// coherent subregion reorganizes strongly and the best-window read rescues it.
+const arcRevealFrame = (t: number): Float32Array => {
+  const f = new Float32Array(PIX * 3);
+  const prog = t / ARC_FRAMES;
+  for (let y = 0; y < FH; y++) {
+    for (let x = 0; x < FW; x++) {
+      let v = clamp8(30 + speckle(y * FW + x, t, 6));
+      if (x >= 40 && y >= 70) {
+        const sx = 44 + Math.floor(prog * 14);
+        if (Math.abs(x - sx) < 5 && prog > 0.15) {
+          v = clamp8(210 + speckle(y * FW + x, t, 6));
+        }
+      }
+      const idx = (y * FW + x) * 3;
+      f[idx] = v;
+      f[idx + 1] = v;
+      f[idx + 2] = v;
+    }
+  }
+  return f;
+};
+const arcReveal = wrapRgb(Array.from({ length: ARC_FRAMES }, (_, t) => arcRevealFrame(t)));
+const revealArc = scoreArc({ fps: FPS, intent: null, rgb: arcReveal });
+assert.ok(
+  revealArc.wholeClipChange < revealArc.floor,
+  `the reveal's WHOLE-frame mean must sit below the floor — the change is concentrated (got ${revealArc.wholeClipChange.toFixed(3)})`,
+);
+assert.ok(
+  revealArc.bestWindowChange >= revealArc.regionFloor,
+  `a concentrated subject-reveal must clear the regional floor (got ${revealArc.bestWindowChange.toFixed(3)} vs region ${revealArc.regionFloor})`,
+);
+assert.equal(
+  revealArc.dead,
+  false,
+  "a subject revealing in part of the frame must NOT read as dead (best-window rescues it)",
+);
+assert.equal(revealArc.verdict, "evolving", "the reveal reads evolving via the subregion read");
+
+// PRESENCE-QUIET RELIEF: a quiet presence render whose whole-frame mean is far below
+// the floor (intentional dark sky) AND whose best subregion lands JUST under the
+// regional floor — in the striking-distance band [0.4, region). It is NOT rescued by
+// either arc read, so the pre-relief gate reads it DEAD. But when both HARD safety
+// gates passed (beat-pull flows, flash safe), the gate downgrades the dead-fail to an
+// ADVISORY inconclusive("presenceQuiet") — pass-with-note, eyeball the reveal. A dimmer
+// + wider subject than arcReveal (bright 125, half-width 4) lands the region read mid-band.
+const arcQuietRevealFrame = (t: number): Float32Array => {
+  const f = new Float32Array(PIX * 3);
+  const prog = t / ARC_FRAMES;
+  for (let y = 0; y < FH; y++) {
+    for (let x = 0; x < FW; x++) {
+      let v = clamp8(30 + speckle(y * FW + x, t, 6));
+      if (x >= 40 && y >= 70) {
+        const sx = 44 + Math.floor(prog * 14);
+        if (Math.abs(x - sx) < 4 && prog > 0.15) {
+          v = clamp8(125 + speckle(y * FW + x, t, 6));
+        }
+      }
+      const idx = (y * FW + x) * 3;
+      f[idx] = v;
+      f[idx + 1] = v;
+      f[idx + 2] = v;
+    }
+  }
+  return f;
+};
+const arcQuietReveal = wrapRgb(
+  Array.from({ length: ARC_FRAMES }, (_, t) => arcQuietRevealFrame(t)),
+);
+// The band precondition: whole-frame below floor, region read in [striking, regionFloor).
+const quietBare = scoreArc({ fps: FPS, intent: null, rgb: arcQuietReveal });
+assert.ok(
+  quietBare.wholeClipChange < quietBare.floor,
+  `presence-quiet: whole-frame mean must sit below the floor (got ${quietBare.wholeClipChange.toFixed(3)})`,
+);
+assert.ok(
+  quietBare.bestWindowChange >= 0.4 && quietBare.bestWindowChange < quietBare.regionFloor,
+  `presence-quiet: region read must land in the striking band [0.4, ${quietBare.regionFloor}) (got ${quietBare.bestWindowChange.toFixed(3)})`,
+);
+// A BARE scoreArc call (no gate flags) is unchanged — the relief never fires → DEAD.
+assert.equal(
+  quietBare.verdict,
+  "dead",
+  "presence-quiet: no gate flags → the pre-relief dead read holds",
+);
+assert.equal(quietBare.dead, true, "presence-quiet: bare call still hard-fails as dead");
+// BOTH hard gates passed → the relief fires: advisory inconclusive, never dead.
+const quietRelieved = scoreArc({
+  beatPullPass: true,
+  flashPass: true,
+  fps: FPS,
+  intent: null,
+  rgb: arcQuietReveal,
+});
+assert.equal(
+  quietRelieved.verdict,
+  "inconclusive",
+  "presence-quiet: both gates pass → inconclusive",
+);
+assert.equal(
+  quietRelieved.inconclusive,
+  "presenceQuiet",
+  "presence-quiet: the reason is presenceQuiet",
+);
+assert.equal(quietRelieved.dead, false, "presence-quiet relief is an advisory PASS, never dead");
+// ONE gate failing (flash unsafe here) → no relief, back to DEAD. The relief needs BOTH.
+const quietOneGate = scoreArc({
+  beatPullPass: true,
+  flashPass: false,
+  fps: FPS,
+  intent: null,
+  rgb: arcQuietReveal,
+});
+assert.equal(quietOneGate.verdict, "dead", "presence-quiet: one gate failing → no relief, dead");
+
+// SHORT clip → inconclusive, never a false dead-fail.
+const arcShort = wrapRgb(Array.from({ length: 4 }, () => grayFrame(120)));
+const shortArc = scoreArc({ fps: FPS, intent: null, rgb: arcShort });
+assert.equal(shortArc.verdict, "inconclusive", "too few frames → inconclusive");
+assert.equal(shortArc.dead, false, "a too-short clip never hard-fails as dead");
+
+// INTENT ARC FOLD: a uniform sweep with a drop declared mid-clip → the climax
+// segment carries at least the clip mean → meetsArc true.
+const arcWithIntent = scoreArc({
+  fps: FPS,
+  intent: intentAt(Math.round(((ARC_FRAMES / 2 / FPS) * 1000) / 1) - 100),
+  rgb: arcEvolving,
+});
+assert.ok(arcWithIntent.intentArc?.declared, "an intent with a drop declares an arc check");
+assert.equal(arcWithIntent.intentArc?.meetsArc, true, "a uniform sweep meets its declared arc");
+
+console.log(
+  `arc: evolving=${evolvingArc.wholeClipChange.toFixed(3)}(${evolvingArc.verdict}) dead=${deadArc.wholeClipChange.toFixed(3)}/win${deadArc.bestWindowChange.toFixed(3)}(${deadArc.verdict}) reveal=${revealArc.wholeClipChange.toFixed(3)}/win${revealArc.bestWindowChange.toFixed(3)}(${revealArc.verdict}) short=${shortArc.verdict} intentArc.meets=${arcWithIntent.intentArc?.meetsArc}`,
+);
+console.log(
+  "✓ arc/deadness: a sweeping structure reads evolving, frozen bars under grain read DEAD (laundering guard), a concentrated subject-reveal is rescued by the best-window read, short is inconclusive, intent arc folds",
+);
+
+// ---------------------------------------------------------------------------
+// SPATIAL SEAM (WARN — the atan branch-cut tell)
+// ---------------------------------------------------------------------------
+
+const SEAM_FRAMES = 40;
+const SEAM_ROW = 57; // the vertical centre — where a negative-x-ray cut sits
+const SEAM_COL = 22;
+
+// A full-width horizontal discontinuity at SEAM_ROW: a gentle vertical gradient
+// (no spike) with a hard luma jump across one row-pair, plus light grain. This is
+// the branch-cut seam a shader draws when a raw atan angle feeds noise/warp.
+const seamRowFrame = (t: number): Float32Array => {
+  const f = new Float32Array(PIX * 3);
+  for (let y = 0; y < FH; y++) {
+    for (let x = 0; x < FW; x++) {
+      const base = 40 + (y / FH) * 40; // gentle gradient — tiny row-to-row change
+      const jump = y > SEAM_ROW ? 120 : 0; // the hard discontinuity
+      const v = clamp8(base + jump + speckle(y * FW + x, t, 8));
+      const p = (y * FW + x) * 3;
+      f[p] = v;
+      f[p + 1] = v;
+      f[p + 2] = v;
+    }
+  }
+  return f;
+};
+
+// The REALISTIC negative-x-ray seam: the discontinuity paints only the LEFT half
+// (x < FW/2), exactly like an atan(y,x) ±π cut, so the full-width row diff is
+// diluted ~½ — the detector must still catch it (mirrors 032.0.4L on the live site).
+const seamHalfRowFrame = (t: number): Float32Array => {
+  const f = new Float32Array(PIX * 3);
+  for (let y = 0; y < FH; y++) {
+    for (let x = 0; x < FW; x++) {
+      const base = 40 + (y / FH) * 40;
+      const jump = y > SEAM_ROW && x < FW / 2 ? 120 : 0;
+      const v = clamp8(base + jump + speckle(y * FW + x, t, 8));
+      const p = (y * FW + x) * 3;
+      f[p] = v;
+      f[p + 1] = v;
+      f[p + 2] = v;
+    }
+  }
+  return f;
+};
+
+// A full-height vertical discontinuity at SEAM_COL (the column-axis twin).
+const seamColFrame = (t: number): Float32Array => {
+  const f = new Float32Array(PIX * 3);
+  for (let y = 0; y < FH; y++) {
+    for (let x = 0; x < FW; x++) {
+      const base = 40 + (x / FW) * 40;
+      const jump = x > SEAM_COL ? 120 : 0;
+      const v = clamp8(base + jump + speckle(y * FW + x, t, 8));
+      const p = (y * FW + x) * 3;
+      f[p] = v;
+      f[p + 1] = v;
+      f[p + 2] = v;
+    }
+  }
+  return f;
+};
+
+// A CLEAN field: a smooth 2-D gradient with NO discontinuity, plus heavier grain.
+// Adjacent-line diffs are uniform everywhere, so no line spikes above its
+// neighbours — the detector must NOT warn (the false-positive guard, like 027.9.5H).
+const cleanFrame = (t: number): Float32Array => {
+  const f = new Float32Array(PIX * 3);
+  for (let y = 0; y < FH; y++) {
+    for (let x = 0; x < FW; x++) {
+      const v = clamp8(
+        70 +
+          40 * Math.sin((x / FW) * Math.PI) * Math.cos((y / FH) * Math.PI) +
+          speckle(y * FW + x, t, 26),
+      );
+      const p = (y * FW + x) * 3;
+      f[p] = v;
+      f[p + 1] = v;
+      f[p + 2] = v;
+    }
+  }
+  return f;
+};
+
+// 1) A full-width horizontal seam → detected, row axis, position ≈ SEAM_ROW.
+const seamRow = scoreSeam(wrapRgb(Array.from({ length: SEAM_FRAMES }, (_, t) => seamRowFrame(t))));
+assert.equal(seamRow.detected, true, "a hard horizontal discontinuity must be detected as a seam");
+assert.equal(seamRow.seam?.axis, "row", "a horizontal seam is a ROW-axis discontinuity");
+assert.ok(
+  seamRow.seam !== null && Math.abs(seamRow.seam.positionPct - SEAM_ROW / FH) < 0.05,
+  `the seam position must sit at the discontinuity (~${((SEAM_ROW / FH) * 100).toFixed(0)}%, got ${((seamRow.seam?.positionPct ?? 0) * 100).toFixed(0)}%)`,
+);
+assert.ok(
+  (seamRow.seam?.frames ?? 0) >= SEAM_FRAMES / 4,
+  "a baked-in seam persists across (nearly) every sampled frame",
+);
+
+// 2) The realistic HALF-WIDTH negative-x-ray seam → still detected (the ~½ dilution
+//    must not hide it) — the direct de-risk of the real-artifact check.
+const seamHalf = scoreSeam(
+  wrapRgb(Array.from({ length: SEAM_FRAMES }, (_, t) => seamHalfRowFrame(t))),
+);
+assert.equal(
+  seamHalf.detected,
+  true,
+  "a half-width negative-x-ray seam (left half only) must still be detected",
+);
+assert.equal(
+  seamHalf.seam?.axis,
+  "row",
+  "the half-width negative-x-ray seam is a row discontinuity",
+);
+
+// 3) A vertical seam → detected, column axis, position ≈ SEAM_COL.
+const seamCol = scoreSeam(wrapRgb(Array.from({ length: SEAM_FRAMES }, (_, t) => seamColFrame(t))));
+assert.equal(seamCol.detected, true, "a hard vertical discontinuity must be detected as a seam");
+assert.equal(seamCol.seam?.axis, "column", "a vertical seam is a COLUMN-axis discontinuity");
+assert.ok(
+  seamCol.seam !== null && Math.abs(seamCol.seam.positionPct - SEAM_COL / FW) < 0.06,
+  `the column seam must sit at the discontinuity (~${((SEAM_COL / FW) * 100).toFixed(0)}%, got ${((seamCol.seam?.positionPct ?? 0) * 100).toFixed(0)}%)`,
+);
+
+// 4) A clean smooth field under grain → NOT detected (the false-positive guard).
+const clean = scoreSeam(wrapRgb(Array.from({ length: SEAM_FRAMES }, (_, t) => cleanFrame(t))));
+assert.equal(
+  clean.detected,
+  false,
+  "a smooth field with no discontinuity must NOT warn (grain guard)",
+);
+assert.equal(clean.seam, null, "a clean field reports no seam");
+
+// 5) A TRANSIENT seam (only the first 2 frames) → NOT detected (persistence guard:
+//    a real branch cut is baked into geometry and holds for the whole clip).
+const transient = scoreSeam(
+  wrapRgb(Array.from({ length: SEAM_FRAMES }, (_, t) => (t < 2 ? seamRowFrame(t) : cleanFrame(t)))),
+);
+assert.equal(
+  transient.detected,
+  false,
+  "a 2-frame transient must NOT trip the seam warn (persistence ≥3 sampled frames)",
+);
+
+console.log(
+  `seam: full=${seamRow.detected}@${((seamRow.seam?.positionPct ?? 0) * 100).toFixed(0)}%(${seamRow.seam?.frames}/${seamRow.sampledFrames}) half=${seamHalf.detected} col=${seamCol.detected}@${((seamCol.seam?.positionPct ?? 0) * 100).toFixed(0)}% clean=${clean.detected} transient=${transient.detected}`,
+);
+console.log(
+  "✓ spatial seam: a hard row/column discontinuity (incl. a half-width negative-x-ray cut) warns at the right position, a smooth grained field does NOT, and a 2-frame transient never trips the persistence guard",
 );

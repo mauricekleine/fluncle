@@ -2,7 +2,7 @@
 /**
  * Give THIS worktree a fresh, isolated local dev database.
  *
- * Clones the golden snapshot (apps/web/.dev/seed.sql — see db-pull-remote.ts)
+ * Clones the golden snapshot (apps/web/.dev/seed.sql — see db-pull-prod.ts)
  * into this worktree's own .dev/local.db, and points this worktree's .dev.vars
  * at a private local libSQL server port. Parallel worktrees therefore never
  * share a database or collide on migrations.

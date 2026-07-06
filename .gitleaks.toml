@@ -3,10 +3,11 @@
 # tight allowlist for values that are intentionally public (runtime identifiers, not
 # secrets) and for non-source directories.
 #
-# This catches accidentally-committed SECRET VALUES (tokens, keys). It is a different
-# concern from the ops-boundary doc cleanup (op:// item PATHS, runbooks, topology) —
-# those are references, not secrets, and live behind the Fluncle ops runbook note in
-# 1Password.
+# This catches accidentally-committed SECRET VALUES (tokens, keys) via the default
+# ruleset over the FULL git history. op:// 1Password PATH hygiene is a separate concern
+# (references, not secrets — and history can't be un-leaked), handled by the working-tree
+# grep step in .github/workflows/gitleaks.yml + AGENTS.md "Public Repo"; concrete vault/
+# item names live behind the private Ops Runbook note in 1Password.
 title = "Fluncle gitleaks config"
 
 [extend]

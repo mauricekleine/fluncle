@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { siSpotify, siTiktok } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
-import { Button } from "@/components/ui/button";
+import { Button } from "@fluncle/ui/components/button";
 import { formatDate } from "@/lib/format";
 import {
   spotifyAlbumImageAtSize,
@@ -10,6 +10,7 @@ import {
   videoCropPoster,
   videoPoster,
   videoRendition,
+  videoVersion,
 } from "@/lib/media";
 import { type Track } from "@/lib/tracks";
 import { useResponsiveWidth } from "@/lib/use-responsive-width";
@@ -45,9 +46,12 @@ export function StoryView({
   // is the CLEAN square master, so Stories requests an MT centre-crop to portrait
   // off it — the same clean crop /log + radio play, sized to the pane. A legacy
   // finding (no signal) has no clean square; it keeps playing its old footage.mp4
-  // portrait+text cut (with the baked text), so un-migrated tracks are unchanged
-  // (docs/video-variants.md).
+  // portrait+text cut (with the baked text), so un-migrated tracks are unchanged.
   const squared = Boolean(track.videoSquaredAt);
+  // The video vintage rides every transform URL as its `?v` token: a re-render
+  // bumps videoSquaredAt, so the URLs change and MT derives off the NEW master
+  // (its internal output cache is not purgeable — media.ts).
+  const version = videoVersion(track.videoSquaredAt);
   // Both layouts use footage.mp4 as the master: squared findings centre-crop it
   // to portrait; legacy findings play it as-is (its old portrait+text cut). It is
   // also the onError fallback the <video> re-points at if the edge transform fails.
@@ -66,8 +70,8 @@ export function StoryView({
   const videoUrl =
     masterVideoUrl && track.logId && renditionWidth && !renditionFailed
       ? squared
-        ? videoCrop(track.logId, "portrait", renditionWidth)
-        : videoRendition(track.logId, { width: renditionWidth })
+        ? videoCrop(track.logId, "portrait", renditionWidth, false, version)
+        : videoRendition(track.logId, { version, width: renditionWidth })
       : masterVideoUrl;
   const onMaster = !videoUrl || videoUrl === masterVideoUrl;
 
@@ -112,8 +116,8 @@ export function StoryView({
   const framePoster =
     track.logId && !framePosterFailed
       ? squared
-        ? videoCropPoster(track.logId, "portrait", renditionWidth)
-        : videoPoster(track.logId)
+        ? videoCropPoster(track.logId, "portrait", renditionWidth, 0, version)
+        : videoPoster(track.logId, undefined, version)
       : undefined;
   const posterUrl =
     framePoster ??

@@ -16,7 +16,7 @@
 //
 //   1. `fluncle admin tracks enrich --queue --json`  → the worklist.
 //   2. per finding (bounded batch):
-//      a. `fluncle track get <id> --json`           → artists, title, isrc, trackId.
+//      a. `fluncle tracks get <id> --json`          → artists, title, isrc, trackId.
 //      b. `bun .../analyze-track.ts --artist <a> --title <t> [--isrc <i>]`
 //                                                    → { bpm, key|null, features }.
 //      c. `fluncle admin tracks update <trackId> --bpm <bpm> [--key "<key>"]
@@ -117,7 +117,7 @@ function enrichOne(finding: QueueFinding): Outcome {
   // queue payload already carries them, but a fresh `track get` is the source of
   // truth and tolerates the queue surface changing shape under us. NOTE: the
   // public lookup is the SINGULAR `track get` (only the admin group is plural).
-  const finder = fluncleJson<QueueFinding>(["track", "get", id]);
+  const finder = fluncleJson<QueueFinding>(["tracks", "get", id]);
   const trackId = finder.trackId ?? finding.trackId;
   const artist = finder.artists?.[0] ?? finding.artists?.[0];
   const title = finder.title ?? finding.title;

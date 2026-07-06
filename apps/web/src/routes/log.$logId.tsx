@@ -5,9 +5,10 @@ import { siMixcloud, siSoundcloud, siSpotify, siTiktok, siYoutube } from "simple
 import { BrandIcon } from "@/components/brand-icon";
 import { LogFootage } from "@/components/log/log-footage";
 import { LogObservation } from "@/components/log/log-observation";
+import { MixtapeVideoPlayer } from "@/components/mixtape-video-player";
 import { SaveFindingButton } from "@/components/save-finding-button";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
-import { Button } from "@/components/ui/button";
+import { Button } from "@fluncle/ui/components/button";
 import { siteUrl } from "@/lib/fluncle-links";
 import { formatAlbumDuration, formatDateLong, formatDuration } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
@@ -22,9 +23,11 @@ import {
   breadcrumbsJsonLd,
   logPageUrl,
   mixtapeAlbumJsonLd,
+  mixtapeVideoObjectJsonLd,
   musicRecordingJsonLd,
+  videoObjectJsonLd,
 } from "@/lib/log-schema";
-import { spotifyAlbumImageAtSize, trackMedia } from "@/lib/media";
+import { mixtapeSetVideoUrl, spotifyAlbumImageAtSize, trackMedia } from "@/lib/media";
 import { type MixtapeDTO, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { resolveLogPageTarget } from "@/lib/server/log-resolver";
 import {
@@ -36,8 +39,8 @@ import {
 
 // The standalone log page: one finding's permanent, readable, indexable record
 // (the archival-plate register). The cinematic full-bleed register is the
-// Stories dialog over the home feed — same data, different presentation
-// (docs/track-lifecycle.md). This page is what a crawler, an AI agent, or
+// Stories dialog over the home feed — same data, different presentation.
+// This page is what a crawler, an AI agent, or
 // a shared link sees at the coordinate.
 
 type LogPageData =
@@ -109,6 +112,17 @@ function logHead(loaderData: LogPageData | undefined) {
     const ogImageUrl = mixtape.logId
       ? mixtapeCoverUrl(logId, "og")
       : (mixtape.coverImageUrl ?? `${siteUrl}/fluncle-cover.png`);
+    // The set video's VideoObject + og:video — parity with the finding video, so
+    // the mixtape's set recording is crawled/indexed like the rendered clips.
+    // Emitted only once the set video is uploaded (setVideoAt); the video file is
+    // the bare R2 set.mp4 (range-streamed, not a Media Transformation).
+    const setVideoSchema = mixtape.setVideoAt
+      ? mixtapeVideoObjectJsonLd(mixtape, {
+          contentUrl: mixtapeSetVideoUrl(logId),
+          thumbnailUrl: mixtapeCoverUrl(logId, "card"),
+          uploadDate: mixtape.setVideoAt,
+        })
+      : undefined;
 
     return {
       links: [{ href: pageUrl, rel: "canonical" }],
@@ -123,6 +137,12 @@ function logHead(loaderData: LogPageData | undefined) {
         { content: "image/png", property: "og:image:type" },
         { content: pageUrl, property: "og:url" },
         { content: "music.album", property: "og:type" },
+        ...(mixtape.setVideoAt
+          ? [
+              { content: mixtapeSetVideoUrl(logId), property: "og:video" },
+              { content: "video/mp4", property: "og:video:type" },
+            ]
+          : []),
         { content: "summary_large_image", name: "twitter:card" },
         { content: title, name: "twitter:title" },
         { content: description, name: "twitter:description" },
@@ -133,7 +153,11 @@ function logHead(loaderData: LogPageData | undefined) {
       // via dangerouslySetInnerHTML), so a `</script>` in mixtape.title / .note /
       // member titles can't break out of the <script> (stored-XSS sink,
       // security review).
-      scripts: [jsonLdScript(mixtapeAlbumJsonLd(mixtape)), jsonLdScript(breadcrumbsJsonLd(logId))],
+      scripts: [
+        jsonLdScript(mixtapeAlbumJsonLd(mixtape)),
+        jsonLdScript(breadcrumbsJsonLd(logId)),
+        ...(setVideoSchema ? [jsonLdScript(setVideoSchema)] : []),
+      ],
     };
   }
 
@@ -153,6 +177,19 @@ function logHead(loaderData: LogPageData | undefined) {
   const ogQuery = Number.isFinite(ogVersion) ? `?v=${ogVersion}` : "";
   const ogImage = `${siteUrl}/api/og/${encodeURIComponent(logId)}${ogQuery}`;
   const breadcrumbs = breadcrumbsJsonLd(logId);
+  // The VideoObject — the richer crawl signal on top of og:video, emitted only
+  // when the finding has a rendered video. uploadDate is the finding's freshest
+  // real timestamp (a fresh square crop counts as the upload moment).
+  const videoSchema = track.videoUrl
+    ? videoObjectJsonLd(
+        { ...track, logId },
+        {
+          contentUrl: media.videoUrl,
+          thumbnailUrl: imageUrl,
+          uploadDate: track.videoSquaredAt ?? track.updatedAt ?? track.addedAt,
+        },
+      )
+    : undefined;
 
   return {
     links: [{ href: pageUrl, rel: "canonical" }],
@@ -184,7 +221,11 @@ function logHead(loaderData: LogPageData | undefined) {
     // title/artist/album or the operator `note` (woven into definitionalProse,
     // the JSON-LD description) can't break out of the <script> (stored-XSS sink,
     // security review).
-    scripts: [jsonLdScript(recording), jsonLdScript(breadcrumbs)],
+    scripts: [
+      jsonLdScript(recording),
+      jsonLdScript(breadcrumbs),
+      ...(videoSchema ? [jsonLdScript(videoSchema)] : []),
+    ],
   };
 }
 
@@ -413,19 +454,23 @@ function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
   return (
     <main className="log-plate-stage">
       <article className="log-plate">
-        <img
-          alt={mixtape.title}
-          className="log-mixtape-cover"
-          height={640}
-          src={mixtapeCoverUrl(logId, "card")}
-          width={640}
-        />
+        {mixtape.setVideoAt ? undefined : (
+          <img
+            alt={mixtape.title}
+            className="log-mixtape-cover"
+            height={640}
+            src={mixtapeCoverUrl(logId, "card")}
+            width={640}
+          />
+        )}
 
         <header className="log-masthead">
           <p className="log-nameplate">Mixtape No. {mixtape.sequenceNumber ?? 1}</p>
           <h1 className="log-coordinate">{logId}</h1>
           <p className="log-coordinate-uri">fluncle://{logId}</p>
         </header>
+
+        {mixtape.setVideoAt ? <MixtapeVideoPlayer logId={logId} title={displayTitle} /> : undefined}
 
         <section aria-label="The checkpoint" className="log-definition">
           <h2 className="log-track-title">{displayTitle}</h2>

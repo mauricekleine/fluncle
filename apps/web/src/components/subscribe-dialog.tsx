@@ -1,7 +1,7 @@
 import { CircleNotchIcon, EnvelopeSimpleIcon } from "@phosphor-icons/react";
 import { type FormEvent, useReducer } from "react";
 import { HoneypotField } from "@/components/honeypot-field";
-import { Button } from "@/components/ui/button";
+import { Button } from "@fluncle/ui/components/button";
 import {
   Dialog,
   DialogContent,
@@ -9,10 +9,10 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+} from "@fluncle/ui/components/dialog";
+import { Input } from "@fluncle/ui/components/input";
+import { Label } from "@fluncle/ui/components/label";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@fluncle/ui/components/tooltip";
 import { subscribeToNewsletter } from "@/lib/newsletter";
 
 type FormState = {

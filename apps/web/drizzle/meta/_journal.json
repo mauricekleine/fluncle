@@ -278,8 +278,64 @@
     {
       "idx": 39,
       "version": "6",
-      "when": 1782568400855,
-      "tag": "0039_sour_scourge",
+      "when": 1782713819862,
+      "tag": "0039_ambitious_lucky_pierre",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "6",
+      "when": 1782728520147,
+      "tag": "0040_complex_leech",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "6",
+      "when": 1782932878796,
+      "tag": "0041_massive_mystique",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "6",
+      "when": 1782967226708,
+      "tag": "0042_bored_barracuda",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "6",
+      "when": 1783011732236,
+      "tag": "0043_tricky_silver_fox",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "6",
+      "when": 1783011751528,
+      "tag": "0044_free_vivisector",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "6",
+      "when": 1783065275130,
+      "tag": "0045_quiet_old_lace",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "6",
+      "when": 1783286905590,
+      "tag": "0046_far_prism",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "6",
+      "when": 1783362577538,
+      "tag": "0047_steady_violations",
       "breakpoints": true
     }
   ]

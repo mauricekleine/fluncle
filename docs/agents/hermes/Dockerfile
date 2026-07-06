@@ -4,7 +4,7 @@
 #
 # BUILD CONTEXT: build from the REPO ROOT (not docs/agents/hermes/) so the
 # `copywriting-fluncle` skill is reachable for the COPY below:
-#   docker build -f docs/agents/hermes/Dockerfile -t fluncle-hermes:v2026.6.19 .
+#   docker build -f docs/agents/hermes/Dockerfile -t fluncle-hermes:v2026.7.1 .
 #
 # RUNTIME SECRET (not baked): the `fluncle-observation` `--no-agent` cron shells out
 # to `claude -p` (Claude Code, SUBSCRIPTION auth), which authenticates from the
@@ -15,7 +15,7 @@
 # Hermes BLOCKS provider credentials from `--no-agent` cron script envs (GHSA-rhgp-j443-p4rf),
 # so observe-sweep.sh reads the token from a 0600 file instead — see
 # docs/agents/hermes/cron/README.md § Operational gotchas (do not re-debug these).
-FROM nousresearch/hermes-agent:v2026.6.19
+FROM nousresearch/hermes-agent:v2026.7.1
 
 # Enrichment toolchain (docs/agents/hermes/cron/README.md): the
 # fluncle-track-enrichment skill's analyze-track.ts is `#!/usr/bin/env bun` and
@@ -26,9 +26,15 @@ FROM nousresearch/hermes-agent:v2026.6.19
 # `box ssh`/`box scp` — the `fluncle-render` conductor's transport to the render
 # box — shells out to system ssh/scp; dnsutils (`dig`) because the
 # `fluncle-healthcheck` cron's dns probe shells out to `dig` to query the
-# `dig.fluncle.com` nameserver. One layer, lists cleaned, no recommends.
+# `dig.fluncle.com` nameserver; fonts-dejavu-core supplies DejaVu Sans Bold at
+# /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf — the TITLE face for the
+# Fluncle Studio clip cut (BOX_CLIP_SANS_FONT_FILE in apps/cli/src/commands/clips.ts).
+# It stands in for the Remotion trackLine's `ui-sans-serif, system-ui, sans-serif`,
+# which is not an embedded webfont there, so headless Chromium renders it as its generic
+# `sans-serif` = DejaVu on Debian; baking the same font makes the clip match the render.
+# One layer, lists cleaned, no recommends.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg unzip openssh-client dnsutils \
+  && apt-get install -y --no-install-recommends ffmpeg unzip openssh-client dnsutils fonts-dejavu-core \
   && rm -rf /var/lib/apt/lists/*
 
 # Bun — pinned to the repo's toolchain (packageManager bun@1.3.14) so the box runs
@@ -36,8 +42,9 @@ RUN apt-get update \
 # the binary in /root/.bun (root's HOME, mode 700). The `--no-agent` cron runner
 # execs as a NON-root user that can't traverse /root, so a symlink there fails
 # (126 Permission denied). COPY the binary to /usr/local/bin (world-traversable)
-# instead — a real file outside /root that any user can exec. `fluncle` (npm -g in
-# /usr/local/lib) is already world-accessible, so only bun needs this.
+# instead — a real file outside /root that any user can exec. `fluncle` is the standalone
+# binary copied to /usr/local/bin (the install block below), already world-accessible, so
+# only bun needs this cp-out-of-/root dance.
 ENV BUN_INSTALL=/root/.bun
 ENV PATH=/usr/local/bin:$PATH
 RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14" \
@@ -75,11 +82,39 @@ RUN export SHELL=/bin/sh \
 # is no local command gate: the box holds an `agent`-scoped token and the Worker
 # refuses publish-/irreversible-class actions for that role server-side, so the
 # CLI runs ungated and an attempted publish comes back as a 403 to relay in voice.
-# Pinned for reproducible rebuilds (the version line also busts the layer cache on
-# a bump); carries the Convention-B renamed surface + `admin newsletter`/backfill
-# commands + the `admin tracks note` auto-note command (the `fluncle-note` cron).
-# Bump deliberately when a newer release is needed on the box.
-RUN npm install -g fluncle@0.68.0
+#
+# This is the STANDALONE bun-compiled binary, NOT the `npm -g` thin client: the
+# clip-cut + media-upload commands use the Bun runtime (Bun.spawn/Bun.file), and the
+# npm package ships a `#!/usr/bin/env node` shebang — so under node those throw "Bun is
+# not defined" (the cut surfaces it as a misleading "ffmpeg missing"). The standalone
+# binary embeds bun, so every command runs on the box. `fluncle version` reports this
+# version (baked via `--define` at release build), which is how pin-watch's pre-smoke
+# validates it. Pinned for reproducible rebuilds (the URL version busts the layer cache);
+# bump deliberately — pin-watch + hermes-pin-drift parse the `releases/download/v<ver>/`
+# URL below. Released by the repo's `cli-release.yml`; carries the Convention-B renamed
+# surface + `admin newsletter`/backfill + `admin tracks note` (the `fluncle-note` cron) +
+# the Fluncle Studio `admin clips list`/`cut` commands (the `fluncle-studio-clip` cron).
+RUN arch="$(uname -m)" \
+  && case "$arch" in \
+       aarch64|arm64) cpu="arm64" ;; \
+       x86_64|amd64)  cpu="x64" ;; \
+       *) echo "unsupported arch for the fluncle binary: $arch" >&2; exit 1 ;; \
+     esac \
+  && curl -fsSL "https://github.com/mauricekleine/fluncle/releases/download/v0.94.0/fluncle-linux-${cpu}" \
+       -o /usr/local/bin/fluncle \
+  && chmod 755 /usr/local/bin/fluncle
+
+# Oxanium SemiBold for the Fluncle Studio clip cut — the COORDINATE face. The `admin clips
+# cut` brand frame draws the `fluncle://<logId>` coordinate in Oxanium (DESIGN.md "One
+# Voice": Oxanium for marks/numerals; the title uses the DejaVu sans above) with ffmpeg's
+# drawtext, which goes through freetype — freetype reads only .ttf/.otf, never the app's
+# .woff2. Bake the static TTF (OFL, redistributable; instanced at weight 600 from the repo's
+# Oxanium) at BOX_CLIP_FONT_FILE so the cut resolves it with NO manual step: apps/cli/src/
+# commands/clips.ts `resolveClipFontFile()` defaults to /opt/fonts/Oxanium-SemiBold.ttf when
+# CLIP_FONT_FILE is unset and the file exists. COPY needs the repo root as build context
+# (see the header). World-readable (a+rX) so the non-root cron user can read it.
+COPY apps/cli/assets/fonts/Oxanium-SemiBold.ttf /opt/fonts/Oxanium-SemiBold.ttf
+RUN chmod -R a+rX /opt/fonts
 
 # Claude Code — the `fluncle-observation` `--no-agent` cron's ONE agentic step shells
 # out to `claude -p` to author the recovered-audio observation script in Fluncle's
@@ -90,7 +125,7 @@ RUN npm install -g fluncle@0.68.0
 # /usr/local/lib + a /usr/local/bin/claude symlink, both world-accessible, so the
 # NON-root cron user can exec it (same world-readable property the `fluncle` CLI relies
 # on). Bump lever: this version line.
-RUN npm install -g @anthropic-ai/claude-code@2.1.195
+RUN npm install -g @anthropic-ai/claude-code@2.1.201
 
 # The `copywriting-fluncle` skill, baked for Claude Code so the cron's `claude -p`
 # can load the full voice canon. CLAUDE DISCOVERS SKILLS UNDER ITS CONFIG DIR

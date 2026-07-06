@@ -380,7 +380,7 @@ describe("oRPC public read — GET /radio/now-playing (get_radio_now_playing)", 
 // The generated PUBLIC OpenAPI document — the spec served at /api/v1/openapi.json
 // (Scalar + Postman read it) since the spec flip retired the static
 // public/openapi.json. The load-bearing constraint: it carries EVERY public op and
-// ZERO admin ops (docs/orpc-migration-brief.md — admin stays OFF the public spec).
+// ZERO admin ops — admin stays OFF the public spec.
 type ErrorSchema = {
   type?: string;
   additionalProperties?: boolean;

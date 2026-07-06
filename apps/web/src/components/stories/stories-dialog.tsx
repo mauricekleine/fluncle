@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { StoriesPlayer } from "@/components/stories/stories-player";
 import { StoriesSkeleton } from "@/components/stories/stories-skeleton";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Dialog, DialogContent } from "@fluncle/ui/components/dialog";
 import { fetchStories } from "@/lib/story-feed";
 
 // Stories as a routed dialog over the home feed: the feed stays mounted (and

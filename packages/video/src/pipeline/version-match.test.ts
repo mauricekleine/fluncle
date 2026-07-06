@@ -6,7 +6,12 @@
 
 import assert from "node:assert/strict";
 
-import { isRemix, stripVersionSuffix, versionMatches, versionTokens } from "./version-match";
+import {
+  isRemix,
+  stripVersionSuffix,
+  versionMatches,
+  versionTokens,
+} from "@fluncle/contracts/util";
 
 const REMIX = "In And Out Of Phase - Calyx & TeeBee Remix";
 

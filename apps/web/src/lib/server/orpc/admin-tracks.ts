@@ -10,8 +10,8 @@
 //     field written by the agent is a 403 `forbidden` (rejected, not dropped). The
 //     operator may write anything.
 //   - `observe_track` — POST /admin/tracks/{trackId}/observe. FLIPPED to the
-//     agent tier (`adminAuth` only) so the Hermes observation cron can drive it
-//     (docs/hermes-automation-brief.md Build order #3). Idempotent per finding (an
+//     agent tier (`adminAuth` only) so the Hermes observation cron can drive it.
+//     Idempotent per finding (an
 //     existing observation is a no-op). It no longer holds Firecrawl — it reads the
 //     stored `context_note` (written by `context_track`) as fuel; the voice gate
 //     still hard-fails any banned-identity-word / earthly-geography violation.
@@ -27,7 +27,7 @@ import { env } from "cloudflare:workers";
 import { type InferContractRouterInputs } from "@orpc/contract";
 import { ORPCError } from "@orpc/server";
 import { type contract } from "@fluncle/contracts/orpc";
-import { FOUND_BASE, trackMedia } from "../../media";
+import { FOUND_BASE, trackMedia, videoVersion } from "../../media";
 import { recordNoteAttempt } from "../backfill";
 import { parseEditorialNote } from "../http-errors";
 import { gateNoteText } from "../note";
@@ -50,13 +50,12 @@ import {
   type EnrichmentStatusFilter,
   ENRICHMENT_STATUS_FILTERS,
   decodeTrackCursor,
-  getTrackByIdOrLogId,
   getTrackContextNote,
   listTracks,
   searchTracks,
 } from "../tracks";
 import { type VideoArtifact, artifactByField } from "../video-bundle";
-import { apiFault, type Implementer, parseLimit } from "./_shared";
+import { type Implementer, parseLimit, requireTrack, toFault } from "./_shared";
 
 // Fields only the operator may write: editorial voice (note), the vehicle/video
 // (videoUrl), the map placement (vibeX/vibeY), and the immutable identity fields
@@ -118,19 +117,6 @@ function resolveDurationTargetSec(value: unknown): number {
   }
 
   return 30;
-}
-
-// The canonical fault wrapper for these handlers: an ORPCError (a guard the
-// procedure or the field check threw) passes through untouched; anything else
-// (an ApiError from a reused helper — note_too_long, voice_gate, not_found,
-// no_log_id — or an unexpected throw) becomes a wire-compatible fault via
-// `apiFault`, so the rails encoder reproduces the legacy `{ code, message }` body.
-function toFault(error: unknown): ORPCError<string, unknown> {
-  if (error instanceof ORPCError) {
-    return error;
-  }
-
-  return apiFault(error);
 }
 
 /**
@@ -220,6 +206,23 @@ export function adminTracksHandlers(os: Implementer) {
     }
   });
 
+  // GET /admin/tracks/{trackId} — admin tier (live `requireAdmin`, agent-allowed).
+  // The single-finding by-coordinate lookup: fetch ONE finding with its full
+  // admin-tier fields (vibe coords, the video ledger, the observation, the note), or
+  // the canonical 404. Distinct from list_tracks_admin — a single authoritative read,
+  // so an ad-hoc list-scan can't misread a live finding as nonexistent. `requireTrack`
+  // resolves by Spotify trackId OR Log ID and raises the shared `not_found`/404,
+  // DISTINCT from the procedure's auth 401/403.
+  const getTrackAdminHandler = os.get_track_admin.use(adminAuth).handler(async ({ input }) => {
+    try {
+      const track = await requireTrack(input.trackId);
+
+      return { ok: true as const, track };
+    } catch (error) {
+      throw toFault(error);
+    }
+  });
+
   // GET /admin/tracks — admin tier (live `requireAdmin`). The admin board query:
   // a `?q=` free-text search (flat `{ tracks }`) OR the paginated list page (the
   // page body itself, filtered by order/hasVideo/status). Both shapes preserved.
@@ -239,6 +242,7 @@ export function adminTracksHandlers(os: Implementer) {
       return await listTracks({
         cursor: decodeTrackCursor(input.cursor ?? null),
         hasContext: parseTriStateBool(input.hasContext),
+        hasKey: parseTriStateBool(input.hasKey),
         hasNote: parseTriStateBool(input.hasNote),
         hasObservation: parseTriStateBool(input.hasObservation),
         hasVideo: parseTriStateBool(input.hasVideo),
@@ -282,7 +286,7 @@ export function adminTracksHandlers(os: Implementer) {
         // default `enrichment_status = "pending"`, which is queue-eligible. The
         // on-box `fluncle-enrich` `--no-agent` cron drains the enrich-queue every
         // ~5 min, analyzes on-box (ffmpeg + bun), and writes back via
-        // `fluncle admin tracks update`. See docs/track-lifecycle.md (Phase 2).
+        // `fluncle admin tracks update`.
 
         return { ok: true as const, ...result };
       } catch (error) {
@@ -291,21 +295,12 @@ export function adminTracksHandlers(os: Implementer) {
     });
 
   // POST /admin/tracks/{trackId}/observe — agent tier (`adminAuth` only). FLIPPED
-  // from the operator tier so the Hermes observation cron drives it
-  // (docs/hermes-automation-brief.md Build order #3).
+  // from the operator tier so the Hermes observation cron drives it.
   const observeTrackHandler = os.observe_track.use(adminAuth).handler(async ({ input }) => {
     try {
       const body: ObserveBody = input;
       const idOrLogId = body.trackId;
-      const track = await getTrackByIdOrLogId(idOrLogId);
-
-      if (!track) {
-        throw new ORPCError("NOT_FOUND", {
-          data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
-          message: `No track with id ${idOrLogId}`,
-          status: 404,
-        });
-      }
+      const track = await requireTrack(idOrLogId);
 
       if (!track.logId) {
         throw new ORPCError("BAD_REQUEST", {
@@ -473,15 +468,7 @@ export function adminTracksHandlers(os: Implementer) {
   const contextTrackHandler = os.context_track.use(adminAuth).handler(async ({ input }) => {
     try {
       const idOrLogId = input.trackId;
-      const track = await getTrackByIdOrLogId(idOrLogId);
-
-      if (!track) {
-        throw new ORPCError("NOT_FOUND", {
-          data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
-          message: `No track with id ${idOrLogId}`,
-          status: 404,
-        });
-      }
+      const track = await requireTrack(idOrLogId);
 
       if (!track.logId) {
         throw new ORPCError("BAD_REQUEST", {
@@ -578,15 +565,7 @@ export function adminTracksHandlers(os: Implementer) {
     try {
       const body: NoteBody = input;
       const idOrLogId = body.trackId;
-      const track = await getTrackByIdOrLogId(idOrLogId);
-
-      if (!track) {
-        throw new ORPCError("NOT_FOUND", {
-          data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
-          message: `No track with id ${idOrLogId}`,
-          status: 404,
-        });
-      }
+      const track = await requireTrack(idOrLogId);
 
       if (!track.logId) {
         throw new ORPCError("BAD_REQUEST", {
@@ -648,15 +627,7 @@ export function adminTracksHandlers(os: Implementer) {
     .handler(async ({ input }) => {
       try {
         const idOrLogId = input.trackId;
-        const track = await getTrackByIdOrLogId(idOrLogId);
-
-        if (!track) {
-          throw new ORPCError("NOT_FOUND", {
-            data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
-            message: `No track with id ${idOrLogId}`,
-            status: 404,
-          });
-        }
+        const track = await requireTrack(idOrLogId);
 
         if (!track.logId) {
           throw new ORPCError("BAD_REQUEST", {
@@ -670,7 +641,7 @@ export function adminTracksHandlers(os: Implementer) {
           });
         }
 
-        const requested = Array.isArray(input.fields) ? (input.fields as unknown[]) : undefined;
+        const requested = Array.isArray(input.fields) ? input.fields : undefined;
 
         if (!requested || requested.length === 0) {
           throw new ORPCError("BAD_REQUEST", {
@@ -710,7 +681,17 @@ export function adminTracksHandlers(os: Implementer) {
           artifacts.push(artifact);
         }
 
-        if (!artifacts.some((artifact) => artifact.field === "footage")) {
+        // The one sanctioned footage-less upload: the plate-lane PRE-upload. Plates
+        // (plate.png + plate.background.png) go up BEFORE the composition exists so
+        // the composition can reference the durable found.fluncle.com URL — the
+        // upload-first order. Any other footage-less set still 400s.
+        const platesOnly =
+          artifacts.length > 0 &&
+          artifacts.every(
+            (artifact) => artifact.field === "plate" || artifact.field === "plate-background",
+          );
+
+        if (!platesOnly && !artifacts.some((artifact) => artifact.field === "footage")) {
           throw new ORPCError("BAD_REQUEST", {
             data: {
               apiCode: "no_footage",
@@ -756,15 +737,7 @@ export function adminTracksHandlers(os: Implementer) {
     try {
       const body: AdminTrackInputs["finalize_track_video"] = input;
       const idOrLogId = body.trackId;
-      const track = await getTrackByIdOrLogId(idOrLogId);
-
-      if (!track) {
-        throw new ORPCError("NOT_FOUND", {
-          data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
-          message: `No track with id ${idOrLogId}`,
-          status: 404,
-        });
-      }
+      const track = await requireTrack(idOrLogId);
 
       if (!track.logId) {
         throw new ORPCError("BAD_REQUEST", {
@@ -786,6 +759,10 @@ export function adminTracksHandlers(os: Implementer) {
         typeof body.videoGrain === "string" && body.videoGrain.trim()
           ? body.videoGrain.trim().slice(0, 120)
           : undefined;
+      const videoRegister =
+        typeof body.videoRegister === "string" && body.videoRegister.trim()
+          ? body.videoRegister.trim().slice(0, 120)
+          : undefined;
       const videoModel =
         typeof body.videoModel === "string" && body.videoModel.trim()
           ? body.videoModel.trim().slice(0, 120)
@@ -799,32 +776,42 @@ export function adminTracksHandlers(os: Implementer) {
       // `squared` (the CLI sends it when it uploaded BOTH the square footage.mp4
       // and the portrait footage.social.mp4) flips the two-master layout on:
       // footage.mp4 is now the clean square crop source. Stamp the signal so the
-      // archive surfaces start MT-cropping this finding (docs/video-variants.md).
+      // archive surfaces start MT-cropping this finding.
       const squared = body.squared === true;
 
       // A RE-RENDER: this finding already had a `video_url` (the prior render),
       // and finalize re-ships `footage.mp4` to the SAME R2 key. The bare master
       // URL is byte-identical (the queue gates on presence, not content), so the
-      // DB write below is a no-op for `video_url` — but the edge keeps serving the
-      // OLD master's cached Media-Transformation renditions. Purge them so the
-      // player picks up the fresh render. Best-effort, fired off the request
+      // DB write below is a no-op for `video_url` — but stale renditions live on.
+      // The NEW `videoSquaredAt` below is the vintage every surface rides as the
+      // transform `?v` token (media.ts `videoVersion`), which is what actually
+      // evicts MT's internally-cached renditions; the purge covers the bare R2
+      // objects + any zone-edge copies. Best-effort, fired off the request
       // lifecycle (waitUntil) BELOW after the DB write commits.
+      const squaredAt = squared ? new Date().toISOString() : undefined;
+
       await updateTrack(track.trackId, {
         videoModel,
         videoModelReasoning,
         videoUrl,
-        ...(squared ? { videoSquaredAt: new Date().toISOString() } : {}),
+        ...(squaredAt ? { videoSquaredAt: squaredAt } : {}),
         ...(videoVehicle ? { videoVehicle } : {}),
         ...(videoGrain ? { videoGrain } : {}),
+        ...(videoRegister ? { videoRegister } : {}),
       });
 
-      // Drop stale edge renditions on EVERY finalize, not just when track.videoUrl was
+      // Drop stale edge entries on EVERY finalize, not just when track.videoUrl was
       // already set: the requeue flow clears video_url to re-queue a finding, so a
       // re-render's finalize sees no prior url and would otherwise skip the purge (the
       // gap the manual heartbeat used to cover). On a genuine first render nothing is
       // cached yet, so this is a harmless no-op. `squared` reflects the layout the
-      // finding now carries, so the purge set matches what the surfaces will request.
-      purgeVideoCache(track.logId, squared || Boolean(track.videoSquaredAt));
+      // finding now carries, so the purge set matches what the surfaces will request —
+      // built with the NEW vintage, the same `?v` the surfaces mint from now on.
+      purgeVideoCache(
+        track.logId,
+        squared || Boolean(track.videoSquaredAt),
+        videoVersion(squaredAt ?? track.videoSquaredAt),
+      );
 
       return { logId: track.logId, ok: true as const, trackId: track.trackId, videoUrl };
     } catch (error) {
@@ -855,15 +842,7 @@ export function adminTracksHandlers(os: Implementer) {
     .handler(async ({ input }) => {
       try {
         const idOrLogId = input.trackId;
-        const track = await getTrackByIdOrLogId(idOrLogId);
-
-        if (!track) {
-          throw new ORPCError("NOT_FOUND", {
-            data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
-            message: `No track with id ${idOrLogId}`,
-            status: 404,
-          });
-        }
+        const track = await requireTrack(idOrLogId);
 
         if (!track.logId) {
           throw new ORPCError("BAD_REQUEST", {
@@ -911,15 +890,7 @@ export function adminTracksHandlers(os: Implementer) {
     .handler(async ({ input }) => {
       try {
         const idOrLogId = input.trackId;
-        const track = await getTrackByIdOrLogId(idOrLogId);
-
-        if (!track) {
-          throw new ORPCError("NOT_FOUND", {
-            data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
-            message: `No track with id ${idOrLogId}`,
-            status: 404,
-          });
-        }
+        const track = await requireTrack(idOrLogId);
 
         if (!track.logId) {
           throw new ORPCError("BAD_REQUEST", {
@@ -946,7 +917,11 @@ export function adminTracksHandlers(os: Implementer) {
 
         // Fire-and-forget (waitUntil inside). `squared` mirrors the finding's layout
         // so the purge set matches the rendition family the surfaces actually serve.
-        purgeVideoCache(track.logId, Boolean(track.videoSquaredAt));
+        purgeVideoCache(
+          track.logId,
+          Boolean(track.videoSquaredAt),
+          videoVersion(track.videoSquaredAt),
+        );
 
         return { logId: track.logId, ok: true as const, trackId: track.trackId };
       } catch (error) {
@@ -957,6 +932,7 @@ export function adminTracksHandlers(os: Implementer) {
   return {
     context_track: contextTrackHandler,
     finalize_track_video: finalizeVideoHandler,
+    get_track_admin: getTrackAdminHandler,
     list_tracks_admin: listTracksAdminHandler,
     note_track: noteTrackHandler,
     observe_track: observeTrackHandler,

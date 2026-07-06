@@ -1,0 +1,1 @@
+ALTER TABLE `mixtapes` ADD `set_video_at` text;

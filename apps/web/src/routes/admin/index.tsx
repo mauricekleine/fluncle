@@ -1,4 +1,5 @@
 import { CassetteTapeIcon, CircleNotchIcon } from "@phosphor-icons/react";
+import { isStaleTikTokDraft } from "@fluncle/contracts/util";
 import {
   type InfiniteData,
   useInfiniteQuery,
@@ -8,7 +9,11 @@ import {
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AddToMixtapeDialog } from "@/components/admin/add-to-mixtape-dialog";
+import {
+  AddToPlanDialog,
+  type PlanTarget,
+  type PlanTargetCue,
+} from "@/components/admin/add-to-plan-dialog";
 import { AdminShell } from "@/components/admin/admin-shell";
 import {
   type BoardActions,
@@ -17,7 +22,6 @@ import {
 } from "@/components/admin/pipeline/board-model";
 import { PipelineBoard } from "@/components/admin/pipeline/pipeline-board";
 import { EnrichDialog } from "@/components/admin/enrich-dialog";
-import { FindStreakChip } from "@/components/admin/find-streak-chip";
 import { NoteDialog } from "@/components/admin/note-dialog";
 import { ContextDialog, ObservationDialog } from "@/components/admin/observation-dialogs";
 import { PLATFORMS } from "@/components/admin/platform-cell";
@@ -25,25 +29,25 @@ import { PushDialog } from "@/components/admin/push-dialog";
 import { TagDialog } from "@/components/admin/tag-dialog";
 import { type BoardPage, type BoardRow, usePublish } from "@/components/admin/use-publish";
 import { StoriesPlayer } from "@/components/stories/stories-player";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Badge } from "@fluncle/ui/components/badge";
+import { Button } from "@fluncle/ui/components/button";
+import { Dialog, DialogContent } from "@fluncle/ui/components/dialog";
 import { GALAXIES, galaxyForVibe } from "@/lib/galaxies";
-import { type MixtapeDTO } from "@/lib/mixtapes";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { listBackfillRanForTracks, listLastfmLovedForTracks } from "@/lib/server/backfill";
 import { readCaptions } from "@/lib/server/captions";
-import { listMixtapeMembershipsForTracks, listMixtapes } from "@/lib/server/mixtapes";
+import { listMixtapeMembershipsForTracks } from "@/lib/server/mixtapes";
 import {
   getContextNote,
   getObservationScript,
   listContextNotePresenceForTracks,
 } from "@/lib/server/observation-board";
 import {
-  listPublishedPostDays,
-  listSocialPostsForTracks,
-  type PublishedPostDay,
-} from "@/lib/server/social";
+  getRecordingCues,
+  listPlanMembershipsForTracks,
+  listRecordings,
+} from "@/lib/server/recordings";
+import { listSocialPostsForTracks } from "@/lib/server/social";
 import { getSpotifyAuthStatus, type SpotifyAuthStatus } from "@/lib/server/spotify";
 import { type BlockedOn, trackStage } from "@/lib/server/track-stage";
 import { decodeTrackCursor, listTracks, listVibePoints, type VibePoint } from "@/lib/server/tracks";
@@ -72,14 +76,12 @@ const BOARD_KEY = ["admin", "posts", "board"] as const;
 const POINTS_KEY = ["admin", "tag", "points"] as const;
 // The Spotify connection-status cache for the reconnect banner.
 const SPOTIFY_STATUS_KEY = ["admin", "spotify", "status"] as const;
-// The draft-mixtape targets for the "Add to mixtape" sheet.
-const DRAFT_MIXTAPES_KEY = ["admin", "mixtapes", "drafts"] as const;
+// The plan targets for the "Add to a plan" sheet.
+const PLAN_TARGETS_KEY = ["admin", "plans", "targets"] as const;
 // The lazily-read context_note for the Context cell's view dialog, keyed by trackId.
 const CONTEXT_NOTE_KEY = ["admin", "context-note"] as const;
 // The lazily-read observation script (transcript) for the Observation dialog, keyed by trackId.
 const OBSERVATION_SCRIPT_KEY = ["admin", "observation-script"] as const;
-// The published-post days behind the header's publish-streak chip; focus-refetched.
-const PUBLISHED_POST_DAYS_KEY = ["admin", "published-post-days"] as const;
 
 // The worklists — a `blockedOn` filter (the next action) plus "all" and a "done"
 // terminal bucket. The active one lives in `?stage` so it's deep-linkable and
@@ -105,29 +107,31 @@ const WORKLISTS: WorklistDef[] = [
 const WORKLIST_KEYS = new Set(WORKLISTS.map((worklist) => worklist.key));
 
 // The mixtape lens — a SECOND filter axis, ANDed with the worklist. A finding is
-// "on a tape" once it lands in a published/distributing checkpoint, "in a draft"
-// while it only sits in a draft, and "open" when it's in no mixtape yet. Powers the
-// "show me what I haven't used yet, to build a tape around it" view; deep-linked via
-// ?mix so it survives reload.
-type MixState = "draft" | "open" | "tape";
+// "on a tape" once it lands in a minted checkpoint (every mixtape membership is
+// published/distributing now — drafts retired for plans), "in a plan" while it is
+// only pencilled into a plan's cues, and "open" when it's in neither. Powers the
+// "show me what I haven't used yet, to build a set around it" view; deep-linked via
+// ?mix so it survives reload. (An old ?mix=draft link validates back to "all".)
+type MixState = "open" | "plan" | "tape";
 type MixFilter = "all" | MixState;
 
 const MIX_FILTERS: { key: MixFilter; label: string }[] = [
   { key: "all", label: "Any tape" },
   { key: "open", label: "Not on a tape" },
-  { key: "draft", label: "In a draft" },
+  { key: "plan", label: "In a plan" },
   { key: "tape", label: "On a tape" },
 ];
 
 const MIX_FILTER_KEYS = new Set(MIX_FILTERS.map((filter) => filter.key));
 
-// A finding is "on a tape" the moment it's in a minted checkpoint (distributing or
-// published — the coordinate is committed); "draft" while it only sits in drafts.
+// A finding is "on a tape" the moment it's in a minted checkpoint (every mixtape
+// membership is one — the coordinate is committed); "plan" while it is only
+// pencilled into a plan's cues.
 function mixtapeStateOf(row: BoardRow): MixState {
-  if (row.mixtapes.some((m) => m.status === "published" || m.status === "distributing")) {
+  if (row.mixtapes.length > 0) {
     return "tape";
   }
-  return row.mixtapes.length > 0 ? "draft" : "open";
+  return row.plans.length > 0 ? "plan" : "open";
 }
 
 const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
@@ -152,7 +156,8 @@ const fetchBoard = createServerFn({ method: "GET" })
     });
     const trackIds = page.tracks.map((track) => track.trackId);
     // Batch fetches — one query each for the whole page, no N+1: the per-platform
-    // posts, the mixtape memberships (which tapes each finding is already on), which
+    // posts, the mixtape + plan memberships (which tapes each finding is already
+    // on, and which plans it's pencilled into), which
     // findings carry an internal context_note (the Context column status — pulled
     // admin-only since context_note never rides the public track contract), and the
     // Discogs/Last.fm backfill RAN-stamps (`*_attempted_at`) + the Last.fm LOVED-stamp
@@ -160,10 +165,11 @@ const fetchBoard = createServerFn({ method: "GET" })
     // trackers: `done` once the backfill ran (whether or not it found data), grey
     // only while it's never run — the ran-stamp drives the cell, the data-stamp
     // (release url / loved) only refines the label.
-    const [posts, mixtapes, contextNotes, discogsRan, lastfmRan, lastfmLoved, noteRan] =
+    const [posts, mixtapes, plans, contextNotes, discogsRan, lastfmRan, lastfmLoved, noteRan] =
       await Promise.all([
         listSocialPostsForTracks(trackIds),
         listMixtapeMembershipsForTracks(trackIds),
+        listPlanMembershipsForTracks(trackIds),
         listContextNotePresenceForTracks(trackIds),
         listBackfillRanForTracks(trackIds, "discogs"),
         listBackfillRanForTracks(trackIds, "lastfm"),
@@ -182,23 +188,39 @@ const fetchBoard = createServerFn({ method: "GET" })
         lastfmRan: lastfmRan.has(track.trackId),
         mixtapes: mixtapes[track.trackId] ?? [],
         noteRan: noteRan.has(track.trackId),
+        plans: plans[track.trackId] ?? [],
         posts: posts[track.trackId] ?? [],
       })),
     };
   });
 
-// The draft mixtapes the board's "Add to mixtape" sheet can drop findings into —
-// drafts only (the member edit is draft-only), lightest projection (no member
-// hydration). Lazily fetched the first time the sheet opens, then cached.
-const fetchDraftMixtapes = createServerFn({ method: "GET" }).handler(
-  async (): Promise<MixtapeDTO[]> => {
+// The plans the board's "Add to a plan" sheet can pencil findings into — every
+// plan with its CURRENT cues in the `replace_recording_cues` body shape, so the
+// dialog's append replays them untouched (non-finding snapshot rows and marked
+// start times included). Lazily fetched the first time the sheet opens, then
+// cached + focus-refetched.
+const fetchPlanTargets = createServerFn({ method: "GET" }).handler(
+  async (): Promise<PlanTarget[]> => {
     if (!(await isAdminRequest())) {
       throw redirect({ to: "/admin/login" });
     }
 
-    const all = await listMixtapes({ includeDrafts: true });
+    const plans = await listRecordings({ kind: "plan" });
 
-    return all.filter((mixtape) => mixtape.status === "draft");
+    return Promise.all(
+      plans.map(async (plan) => ({
+        cues: (await getRecordingCues(plan.id)).map(
+          (cue): PlanTargetCue => ({
+            artistsText: cue.artists_text ?? undefined,
+            findingId: cue.finding_id ?? undefined,
+            startMs: cue.start_ms ?? undefined,
+            titleText: cue.title_text ?? undefined,
+          }),
+        ),
+        id: plan.id,
+        title: plan.title,
+      })),
+    );
   },
 );
 
@@ -218,8 +240,8 @@ const fetchCaption = createServerFn({ method: "GET" })
   });
 
 // Lazy context-note read — only when the operator opens a finding's Context cell to
-// view the firecrawl-derived facts that fuel its observation script. Internal fuel
-// (docs/agents/observation-agent.md), so it stays on this gated admin path and off
+// view the firecrawl-derived facts that fuel its observation script. Internal fuel,
+// so it stays on this gated admin path and off
 // the public track contract; never preloaded for the whole page.
 const fetchContextNote = createServerFn({ method: "GET" })
   .validator((data: { trackId: string }) => data)
@@ -245,20 +267,6 @@ const fetchObservationScript = createServerFn({ method: "GET" })
 
     return { script: await getObservationScript(data.trackId) };
   });
-
-// The publish-streak input — the full (platform, published_at) set for every
-// published post, read straight from social_posts (independent of the board's
-// finding pagination, so the streak counts every qualifying day). Focus-refetched
-// like the board, so the chip warms the moment a fresh publish lands.
-const fetchPublishedPostDays = createServerFn({ method: "GET" }).handler(
-  async (): Promise<PublishedPostDay[]> => {
-    if (!(await isAdminRequest())) {
-      throw redirect({ to: "/admin/login" });
-    }
-
-    return listPublishedPostDays();
-  },
-);
 
 // The Spotify connection light. Read-only (no token refresh) and focus-refetched,
 // so the moment a publish/search trips invalid_grant and clears the stored token,
@@ -305,17 +313,14 @@ export const Route = createFileRoute("/admin/")({
     await ensureAdmin();
   },
   loader: async () => {
-    const [board, publishedPostDays] = await Promise.all([
-      fetchBoard({ data: {} }),
-      fetchPublishedPostDays(),
-    ]);
-    return { board, publishedPostDays };
+    const board = await fetchBoard({ data: {} });
+    return { board };
   },
   component: AdminBoardPage,
 });
 
 function AdminBoardPage() {
-  const { board: initial, publishedPostDays } = Route.useLoaderData();
+  const { board: initial } = Route.useLoaderData();
   const { mix: activeMix, stage: activeWorklist } = Route.useSearch();
   const navigate = Route.useNavigate();
   const queryClient = useQueryClient();
@@ -340,23 +345,6 @@ function AdminBoardPage() {
   });
 
   const rows = useMemo(() => data?.pages.flatMap((page) => page.tracks) ?? [], [data]);
-
-  // The header's publish-streak input — read independently of the board pagination
-  // so the streak counts every qualifying day, not just the loaded window. Seeded
-  // from the loader and focus-refetched, so it warms when a publish lands.
-  const { data: postDays } = useQuery({
-    initialData: publishedPostDays,
-    queryFn: fetchPublishedPostDays,
-    queryKey: PUBLISHED_POST_DAYS_KEY,
-    refetchOnWindowFocus: true,
-  });
-
-  // Every published-post day is, by definition, published — tag each so the streak
-  // helper's status gate reads them.
-  const streakPosts = useMemo(
-    () => postDays.map((day) => ({ ...day, status: "published" })),
-    [postDays],
-  );
 
   const { busy, error, pushDraft, setError, setStatus } = usePublish(BOARD_KEY);
 
@@ -471,14 +459,19 @@ function AdminBoardPage() {
   }, [byWorklist]);
 
   // Advisory pending-draft count among loaded rows — surfaced inside the TikTok
-  // push dialog (cap 5/24h), not in the header.
-  const tiktokPending = useMemo(
-    () =>
-      rows.filter((row) =>
-        row.posts.some((post) => post.platform === "tiktok" && post.status === "draft"),
-      ).length,
-    [rows],
-  );
+  // push dialog (cap 5/24h), not in the header. A STALE draft (past the 24h window)
+  // has already left the inbox one way or another — bounced or aged out — so it no
+  // longer occupies a cap slot and is excluded from the count.
+  const tiktokPending = useMemo(() => {
+    const now = Date.now();
+
+    return rows.filter((row) =>
+      row.posts.some(
+        (post) =>
+          post.platform === "tiktok" && post.status === "draft" && !isStaleTikTokDraft(post, now),
+      ),
+    ).length;
+  }, [rows]);
 
   const setWorklist = useCallback(
     (next: Worklist) => {
@@ -494,24 +487,24 @@ function AdminBoardPage() {
     [navigate],
   );
 
-  // The Mixtape stage cell opens a per-finding picker (keyed by trackId, like the
-  // other dialogs). The draft targets load lazily the first time it opens.
+  // The Mixtape stage cell opens a per-finding plan picker (keyed by trackId, like
+  // the other dialogs). The plan targets load lazily the first time it opens.
   const [mixtapeId, setMixtapeId] = useState<string | undefined>();
   const mixtapeRow = rowFor(mixtapeId);
 
-  const { data: draftMixtapes = [], isFetching: draftsFetching } = useQuery({
+  const { data: planTargets = [], isFetching: plansFetching } = useQuery({
     enabled: mixtapeId !== undefined,
-    queryFn: fetchDraftMixtapes,
-    queryKey: DRAFT_MIXTAPES_KEY,
+    queryFn: fetchPlanTargets,
+    queryKey: PLAN_TARGETS_KEY,
     refetchOnWindowFocus: true,
   });
 
   // After a successful add: close the picker and refresh both the board (the Mixtape
-  // cell's state) and the draft list (member counts changed).
-  const onAddedToMixtape = useCallback(() => {
+  // cell's state) and the plan list (cue counts changed).
+  const onAddedToPlan = useCallback(() => {
     setMixtapeId(undefined);
     void queryClient.invalidateQueries({ queryKey: BOARD_KEY });
-    void queryClient.invalidateQueries({ queryKey: DRAFT_MIXTAPES_KEY });
+    void queryClient.invalidateQueries({ queryKey: PLAN_TARGETS_KEY });
   }, [queryClient]);
 
   // Patch one row's own fields in the board cache (the publish hook patches posts;
@@ -876,12 +869,7 @@ function AdminBoardPage() {
   );
 
   return (
-    <AdminShell
-      current="board"
-      subheader={subheader}
-      title="Board"
-      titleAccessory={<FindStreakChip posts={streakPosts} />}
-    >
+    <AdminShell current="dashboard" subheader={subheader} title="Dashboard">
       {rows.length === 0 ? (
         <EmptyState body="Logged bangers will show up here." title="No findings yet" />
       ) : visible.length === 0 ? (
@@ -990,12 +978,13 @@ function AdminBoardPage() {
         </DialogContent>
       </Dialog>
 
-      <AddToMixtapeDialog
-        drafts={draftMixtapes}
-        draftsLoading={draftsFetching && draftMixtapes.length === 0}
+      <AddToPlanDialog
         memberships={mixtapeRow?.mixtapes ?? []}
-        onAdded={onAddedToMixtape}
+        onAdded={onAddedToPlan}
         onOpenChange={(open) => !open && setMixtapeId(undefined)}
+        planMemberships={mixtapeRow?.plans ?? []}
+        plans={planTargets}
+        plansLoading={plansFetching && planTargets.length === 0}
         track={mixtapeRow ?? null}
       />
     </AdminShell>

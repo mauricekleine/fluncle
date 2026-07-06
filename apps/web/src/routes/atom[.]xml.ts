@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { escapeXml } from "../lib/feed-xml";
 import { parseArtistsJson } from "../lib/server/artists";
 import { getDb, typedRows } from "../lib/server/db";
 
@@ -91,11 +92,3 @@ ${entries.join("\n")}
     },
   },
 });
-
-function escapeXml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}

@@ -49,6 +49,7 @@ export type TrackRow = {
   video_grain: string | null;
   video_model: string | null;
   video_model_reasoning: string | null;
+  video_register: string | null;
   video_squared_at: string | null;
   video_url: string | null;
   video_vehicle: string | null;
@@ -77,7 +78,7 @@ type MixtapeFeedRow = {
 // surfaced (parsed) as creative fuel for the video agent.
 const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.title, tracks.album, tracks.album_image_url, tracks.artists_json,
   tracks.bpm, tracks.duration_ms, tracks.enrichment_status, tracks.features_json, tracks.in_release_id, tracks.isrc, tracks.key, tracks.label, tracks.log_id, tracks.popularity,
-  tracks.preview_url, tracks.release_date, tracks.video_url, tracks.video_squared_at, tracks.video_vehicle, tracks.video_grain, tracks.video_model, tracks.video_model_reasoning, tracks.note, tracks.added_at,
+  tracks.preview_url, tracks.release_date, tracks.video_url, tracks.video_squared_at, tracks.video_vehicle, tracks.video_grain, tracks.video_register, tracks.video_model, tracks.video_model_reasoning, tracks.note, tracks.added_at,
   tracks.updated_at, tracks.vibe_x, tracks.vibe_y, tracks.added_to_spotify, tracks.posted_to_telegram,
   tracks.observation_audio_url, tracks.observation_duration_ms, tracks.observation_generated_at, tracks.observation_alignment_json,
   (select url from social_posts
@@ -224,6 +225,7 @@ export function toTrackListItem(row: TrackRow): TrackListItem {
     videoGrain: row.video_grain ?? undefined,
     videoModel: row.video_model ?? undefined,
     videoModelReasoning: row.video_model_reasoning ?? undefined,
+    videoRegister: row.video_register ?? undefined,
     videoSquaredAt: row.video_squared_at ?? undefined,
     videoUrl: row.video_url ?? undefined,
     videoVehicle: row.video_vehicle ?? undefined,
@@ -273,6 +275,36 @@ export async function getTracksByLogIds(logIds: string[]): Promise<Record<string
   }
 
   return byLogId;
+}
+
+/**
+ * Hydrate a batch of findings by their `track_id` in ONE query (no N+1), keyed by
+ * `trackId` for O(1) lookup. The plan editor holds each finding only as a cue's
+ * `finding_id` (`recording_cues`); this resolves the live `Artist — Title` + cover +
+ * BPM/key so the findings builder renders rich rows. A `trackId` with no live finding is
+ * simply absent from the map; bound args only, never interpolated.
+ */
+export async function getTracksByIds(trackIds: string[]): Promise<Record<string, TrackListItem>> {
+  const unique = [...new Set(trackIds.filter((id) => id.trim()))];
+
+  if (unique.length === 0) {
+    return {};
+  }
+
+  const db = await getDb();
+  const placeholders = unique.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: unique,
+    sql: `select ${TRACK_SELECT} from tracks where track_id in (${placeholders})`,
+  });
+
+  const byTrackId: Record<string, TrackListItem> = {};
+
+  for (const row of typedRows<TrackRow>(result.rows)) {
+    byTrackId[row.track_id] = toTrackListItem(row);
+  }
+
+  return byTrackId;
 }
 
 /**
@@ -643,6 +675,13 @@ type ListTracksOptions = {
    * public reads.
    */
   hasNote?: boolean;
+  /**
+   * Musical-key presence (admin only) — the Rekordbox key-backfill's queue.
+   * `false` = `key IS NULL` (no stored key yet: the DSP left it null below its
+   * confidence floor — the missing-key backlog the backfill targets); `true` = a
+   * key is on file. Omitted for public reads. Mirrors `hasVideo`'s tri-state.
+   */
+  hasKey?: boolean;
   /** Only findings with a rendered video — the Stories feed's filter. */
   hasVideo?: boolean;
   includeMixtapes?: boolean;
@@ -683,6 +722,7 @@ export function listTracks(options: ListTracksOptions): Promise<TrackListPage>;
 export async function listTracks({
   cursor,
   hasContext,
+  hasKey,
   hasNote,
   hasObservation,
   hasVideo,
@@ -718,6 +758,14 @@ export async function listTracks({
     filterClauses.push("video_url is not null");
   } else if (hasVideo === false) {
     filterClauses.push("video_url is null");
+  }
+
+  // The key-backfill queue: `key IS NULL` (no stored musical key — the DSP left it
+  // null below its confidence floor). `true` = a key is on file. Mirrors hasVideo.
+  if (hasKey === true) {
+    filterClauses.push("key is not null");
+  } else if (hasKey === false) {
+    filterClauses.push("key is null");
   }
 
   // The context queue. `true` = resolved (a note is stored). `false` = the work
@@ -1034,8 +1082,7 @@ type VibePointRow = {
 /**
  * Every placed finding as a lightweight vibe-map point — the backdrop the admin
  * tagging map draws so each new placement is judged RELATIVE to the ones before
- * it. Whole-set fetch is fine at this scale; cluster it when the map gets busy
- * (docs/admin-tagging.md).
+ * it. Whole-set fetch is fine at this scale; cluster it when the map gets busy.
  */
 export async function listVibePoints(): Promise<VibePoint[]> {
   const db = await getDb();

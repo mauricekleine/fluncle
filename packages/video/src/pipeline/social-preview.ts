@@ -18,8 +18,9 @@ import { Vibrant } from "node-vibrant/node";
 import { paletteMix } from "../remotion/palette-mix";
 import { type CosmosAspect, type NostalgicCosmosProps } from "../remotion/types";
 import { analyzeAudio } from "./analyze-audio";
+import { parseArgs } from "./args";
 import { readContextNote } from "./context-note";
-import { downloadPreview } from "./download-preview";
+import { downloadPreview, sweepPreviewAudioCache } from "./download-preview";
 import { fetchTrack } from "./fetch-track";
 import { resolveArchivedPreview } from "./resolve-archived-preview";
 import { resolvePreview } from "./resolve-preview";
@@ -64,62 +65,59 @@ function findCompositionSource(compositionId: string): string | undefined {
 }
 
 async function main(): Promise<void> {
-  const args = process.argv.slice(2);
-  const skipRender = args.includes("--skip-render");
+  // Flag parsing swapped to the shared args.ts parser (also used by ship.ts) so
+  // `--flag <value>` handling can't drift between the two entrypoints. Same
+  // flags, same semantics as before.
+  const { flags, positionals } = parseArgs(process.argv.slice(2), {
+    aspect: "string",
+    composition: "string",
+    "composition-source": "string",
+    draft: "boolean",
+    "duration-ms": "number",
+    landscape: "boolean",
+    "no-overlay": "boolean",
+    "skip-render": "boolean",
+  });
+  const skipRender = flags["skip-render"];
   // --draft renders a fast, half-res, NON-SHIPPABLE proof (out/<trackId>.draft.mp4)
   // for checking direction + motion + reactivity (and running the beat-pull gate)
   // before the slow ship render. See render.ts.
-  const draft = args.includes("--draft");
+  const draft = flags.draft;
   // --composition <Id> selects a registered composition. The video agent authors
   // a temporary per-track composition and renders it through this flag.
-  const compositionFlagIndex = args.indexOf("--composition");
-  const compositionId = compositionFlagIndex >= 0 ? args[compositionFlagIndex + 1] : undefined;
+  const compositionId = flags.composition;
   // --composition-source <file> records the exact source used for the render so
   // ship can package it as out/<log-id>/composition.tsx and upload it to R2.
-  const compositionSourceFlagIndex = args.indexOf("--composition-source");
-  const compositionSource =
-    compositionSourceFlagIndex >= 0 ? args[compositionSourceFlagIndex + 1] : undefined;
+  const compositionSource = flags["composition-source"];
   // --duration-ms lets the agent pick the clip length from the waveform (end on
   // a drop or just before a transition); 20s default, clamped to the contract.
-  const durationFlagIndex = args.indexOf("--duration-ms");
-  const durationMs = durationFlagIndex >= 0 ? Number(args[durationFlagIndex + 1]) : undefined;
+  const durationMs = flags["duration-ms"];
   // --no-overlay renders the text-free cut (radio.fluncle.com): the scene shader
   // with NO baked-in TypePlate/CloseCard, so a host UI can draw its own metadata
   // over clean footage. Threaded as props.hideOverlay (gated inside the
   // primitives via getInputProps, so no composition edit is needed).
-  const hideOverlay = args.includes("--no-overlay");
+  const hideOverlay = flags["no-overlay"];
   // --aspect <portrait|landscape|square> (or the --landscape shorthand) selects
   // the output dimensions. Portrait (1080×1920) stays the default; landscape
   // (1920×1080) is the radio full-screen cut; square (1920×1920) is the clean
   // source master MT crops to either orientation on the fly — the 9:16 shaders
-  // reflow under landscape/square (see docs/video-variants.md).
-  const aspectFlagIndex = args.indexOf("--aspect");
-  const aspectArg = aspectFlagIndex >= 0 ? args[aspectFlagIndex + 1] : undefined;
+  // reflow under landscape/square.
+  const aspectArg = flags.aspect;
   const aspect: CosmosAspect =
-    args.includes("--landscape") || aspectArg === "landscape"
+    flags.landscape || aspectArg === "landscape"
       ? "landscape"
       : aspectArg === "square"
         ? "square"
         : "portrait";
-  const valueIndexes = new Set(
-    [
-      compositionFlagIndex + 1,
-      compositionSourceFlagIndex + 1,
-      durationFlagIndex + 1,
-      aspectFlagIndex + 1,
-    ].filter((i) => i > 0),
-  );
-  const trackId = args.find((a, index) => !a.startsWith("--") && !valueIndexes.has(index));
+  const trackId = positionals[0];
   if (
     !trackId ||
-    (compositionFlagIndex >= 0 && !compositionId) ||
-    (compositionSourceFlagIndex >= 0 && !compositionSource) ||
-    (aspectFlagIndex >= 0 &&
+    (aspectArg !== undefined &&
       aspectArg !== "portrait" &&
       aspectArg !== "landscape" &&
       aspectArg !== "square") ||
-    (durationFlagIndex >= 0 &&
-      (!Number.isFinite(durationMs) || (durationMs ?? 0) < 10_000 || (durationMs ?? 0) > 30_000))
+    (durationMs !== undefined &&
+      (!Number.isFinite(durationMs) || durationMs < 10_000 || durationMs > 30_000))
   ) {
     throw new Error(
       "usage: bun src/pipeline/social-preview.ts <trackId|logId> [--skip-render] [--composition <Id>] [--composition-source <file>] [--duration-ms <10000-30000>] [--draft] [--no-overlay] [--aspect <portrait|landscape|square>] [--landscape]",
@@ -184,6 +182,20 @@ async function main(): Promise<void> {
     await rm(downloaded.tmpDir, { force: true, recursive: true });
   }
 
+  // Bounded audio cache: keep only the 8 most-recently-downloaded preview m4as
+  // in public/ — an opportunistic sweep so the cache doesn't grow unboundedly
+  // across a batch of tracks. Best-effort; never fatal to the run.
+  try {
+    const swept = await sweepPreviewAudioCache(8);
+    if (swept.length > 0) {
+      console.log(`[social-preview] preview cache sweep: removed ${swept.length} old .m4a file(s)`);
+    }
+  } catch (error) {
+    console.warn(
+      `[social-preview] preview cache sweep skipped: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
   console.log(`[social-preview] extracting palette`);
   const swatches = await extractSwatches(track.artworkUrl);
   const palette = paletteMix(swatches);
@@ -218,7 +230,10 @@ async function main(): Promise<void> {
     bassSamples: audio.bassCurve.length,
     beatCount: audio.beatGrid.length,
     bpm: audio.bpm,
+    bpmConfidence: audio.bpmConfidence,
     confidence: preview.confidence,
+    downbeatCount: audio.downbeats?.length ?? 0,
+    dropMs: audio.dropMs,
     durationMs: audio.durationMs,
     energySamples: audio.energyCurve.length,
     glow: palette.glow,
@@ -233,8 +248,19 @@ async function main(): Promise<void> {
   };
   console.log(`[social-preview] summary:\n${JSON.stringify(summary, null, 2)}`);
 
-  if (audio.bpm < 160 || audio.bpm > 185) {
-    throw new Error(`[social-preview] assertion failed: bpm ${audio.bpm} not in [160,185]`);
+  // The BPM is HONEST now (never clamped into [160,185] — the old hard fold
+  // fabricated grids), so an out-of-family tempo or a weak estimate is a loud
+  // WARNING to verify by ear, never a failure.
+  const bpmConfidence = audio.bpmConfidence ?? 0;
+  if (audio.bpm < 150 || audio.bpm > 190) {
+    console.warn(
+      `[social-preview] WARN: bpm ${audio.bpm} sits outside the D&B family [150,190] — the tempo is unclamped and honest, so trust the grid, but sanity-check the cut by ear before shipping.`,
+    );
+  }
+  if (bpmConfidence < 0.3) {
+    console.warn(
+      `[social-preview] WARN: bpm confidence ${bpmConfidence.toFixed(3)} is low — the beat grid may be off; verify the beat lock by ear before shipping.`,
+    );
   }
   if (audio.beatGrid.length <= 20) {
     throw new Error(

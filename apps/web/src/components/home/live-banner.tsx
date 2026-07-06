@@ -1,6 +1,6 @@
 import { siTwitch } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
-import { Button } from "@/components/ui/button";
+import { Button } from "@fluncle/ui/components/button";
 
 // The live-set callout — the one loud, ephemeral beat (DESIGN.md "The Live
 // Exception"). It rides above the masthead ONLY while Fluncle is on the decks and

@@ -13,12 +13,18 @@
 //     start route and print the consent URL. The OAuth code exchange + token
 //     storage happen server-side; the CLI never holds the durable credential.
 
-import { type MixcloudAuthStartResponse, type MixcloudTokenResponse } from "@fluncle/contracts";
+import {
+  type MixcloudAuthStartResponse,
+  type MixcloudTokenResponse,
+  type MixtapeMixcloudResyncResponse,
+} from "@fluncle/contracts";
+import { mixcloudSectionFields, mixcloudSections } from "@fluncle/contracts/util";
 import { adminApiGet, adminApiPost } from "../api";
 import { CliError } from "../output";
-import { type MixtapeListItem, mixtapeGetCommand } from "./mixtapes";
+import { type MixtapeListItem, mixtapeGetCommand } from "./mixtape-api";
 
 export type MixcloudDistributeResult = { url: string };
+export type MixcloudResyncResult = { url: string };
 
 const MIXCLOUD_API = "https://api.mixcloud.com";
 // Mixcloud's documented description cap; the fluncle:// breadcrumb adds ~25 chars.
@@ -68,10 +74,8 @@ export async function distributeMixcloud(
   }
 
   const sections = mixcloudSections(mixtape.members);
-  for (const [index, section] of sections.entries()) {
-    form.append(`sections-${index}-artist`, section.artist);
-    form.append(`sections-${index}-song`, section.song);
-    form.append(`sections-${index}-start_time`, String(section.start_time));
+  for (const [name, value] of mixcloudSectionFields(sections)) {
+    form.append(name, value);
   }
 
   // Mixcloud's default is a public (listed) cloudcast — the licensed home publishes
@@ -133,6 +137,26 @@ export async function distributeMixcloud(
   return { url };
 }
 
+// ── Re-sync (metadata only, no re-upload) ────────────────────────────────────
+
+/**
+ * Re-sync the live cloudcast's `sections[]` tracklist from the mixtape's CURRENT cues
+ * — NO audio re-upload. Fully SERVER-SIDE now (the parity twin of `resyncYoutube`):
+ * the Worker holds the `mixcloud_auth` token and runs the sections-only edit POST,
+ * so the CLI just triggers the op and reports the link. The edit is bytes-free (unlike
+ * the multi-GB upload, which stays CLI-direct), so it belongs server-side; this keeps
+ * CLI ⇄ Studio button ⇄ one server-side path. The op 403s the agent token (it edits
+ * live published content). The `mixtapeId` is already resolved by the orchestrating
+ * resync command.
+ */
+export async function resyncMixcloud(mixtapeId: string): Promise<MixcloudResyncResult> {
+  const response = await adminApiPost<MixtapeMixcloudResyncResponse>(
+    `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/mixcloud/resync`,
+  );
+
+  return { url: response.url };
+}
+
 // ── Auth (thin trigger) ──────────────────────────────────────────────────────
 
 export async function authMixcloudCommand(): Promise<void> {
@@ -168,21 +192,10 @@ export function mixtapeDescription(note: string | undefined, logId: string): str
   return trimmedNote ? `${trimmedNote}\n\n${breadcrumb}` : breadcrumb;
 }
 
-/** Mixcloud `sections[]` from cued members: filter out un-cued, sort by offset. */
-export function mixcloudSections(
-  members: MixtapeListItem["members"],
-): { artist: string; song: string; start_time: number }[] {
-  return members
-    .filter(
-      (member): member is typeof member & { startMs: number } => typeof member.startMs === "number",
-    )
-    .sort((a, b) => a.startMs - b.startMs)
-    .map((member) => ({
-      artist: member.artists.join(", "),
-      song: member.title,
-      start_time: Math.floor(member.startMs / 1000),
-    }));
-}
+// The Mixcloud `sections[]` derivation + the `sections-N-*` wire fields moved to the
+// byte-shared `@fluncle/contracts/util` (`mixcloudSections` / `mixcloudSectionFields`),
+// so the CLI upload here and the server-side re-sync edit can't drift. The re-sync's
+// `mixcloudEditUrl` moved there too (it now runs in the Worker).
 
 // Up to 5 tags. Fluncle's archive is drum & bass; lead with the genre tag.
 function mixtapeTags(_mixtape: MixtapeListItem): string[] {

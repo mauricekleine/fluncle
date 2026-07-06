@@ -2,11 +2,11 @@
 //
 // A track's "observation" is Fluncle's spoken, recovered FIELD OBSERVATION — what
 // he saw and felt arriving at the coordinate, in the recovered-audio register (a
-// new VOICE.md §5 surface; see docs/agents/observation-agent.md). It rides the
+// new VOICE.md §5 surface). It rides the
 // same R2 rails the video bundle runs on (lib/media.ts), and the Worker holds
 // every vendor secret — the agent only ever carries its admin token.
 //
-// Two artifacts, two registers (see docs/track-lifecycle.md + the RFC):
+// Two artifacts, two registers:
 //   1. context_note — firecrawl-derived FACTS (label/year/release). Internal fuel.
 //      Never on /log, never in JSON-LD/RSS, never quotes lyrics.
 //   2. the observation script — Fluncle's voice, authored by the AGENT (which

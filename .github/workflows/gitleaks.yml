@@ -1,10 +1,11 @@
 name: gitleaks
 
-# The leak-prevention backstop for the open-source repo: scan the full git history
-# for accidentally-committed secret VALUES (tokens, keys) on every PR + push to main.
-# Config + allowlist live in .gitleaks.toml at the repo root. This is a different
-# concern from the ops-boundary doc hygiene (op:// item paths, topology) — those are
-# references, not secrets, and live behind the Fluncle ops runbook note in 1Password.
+# The leak-prevention backstop for the open-source repo. Two checks on every PR +
+# push to main: (1) gitleaks scans the FULL git history for accidentally-committed
+# secret VALUES (tokens, keys); config + allowlist in .gitleaks.toml. (2) a working-
+# TREE grep keeps the current tree free of concrete op:// 1Password paths (references,
+# not secrets — history can't be un-leaked, so this is tree-only; placeholders pass).
+# See AGENTS.md "Public Repo".
 #
 # We run the gitleaks CLI directly (the official pinned image) rather than the
 # gitleaks-action wrapper: the CLI is unconditionally free (the action gates some
@@ -38,3 +39,13 @@ jobs:
           docker run --rm -v "${{ github.workspace }}:/repo" \
             ghcr.io/gitleaks/gitleaks:v8.30.1 \
             git /repo --config=/repo/.gitleaks.toml --redact --exit-code 1 --no-banner
+
+      - name: op:// path hygiene (working tree)
+        # History can't be un-leaked; this keeps the CURRENT tree free of concrete
+        # op:// 1Password paths. Placeholders (op://$VAR/... or op://<vault>/...) pass.
+        # See AGENTS.md "Public Repo".
+        run: |
+          if git grep -nE 'op://[A-Za-z0-9]' -- . ':!.github/workflows/gitleaks.yml'; then
+            echo "::error::Concrete op:// 1Password path in a committed file — use a placeholder (op://\$FLUNCLE_1PASSWORD_ENV_ITEM/...). See AGENTS.md 'Public Repo'."
+            exit 1
+          fi

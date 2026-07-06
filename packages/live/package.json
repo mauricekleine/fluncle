@@ -1,0 +1,23 @@
+{
+  "name": "@fluncle/live",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "glass": "bun src/glass/serve.ts",
+    "bridge": "bun src/bridge/serve.ts",
+    "show": "bun src/show.ts",
+    "test": "bun test",
+    "test:matcher-accuracy": "bun src/bridge/accuracy.ts",
+    "typecheck": "tsgo --noEmit"
+  },
+  "dependencies": {
+    "@fluncle/video": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "@typescript/native-preview": "catalog:",
+    "typescript": "catalog:"
+  }
+}

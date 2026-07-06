@@ -4,7 +4,7 @@
 // next action is, without storing any stage column: stage is always re-derived,
 // so it can never drift from the underlying record.
 //
-// The lifecycle (docs/track-lifecycle.md): a finding is ADDED the moment it's on
+// The lifecycle: a finding is ADDED the moment it's on
 // Spotify + Telegram (the fast synchronous add); the async agent ENRICHES it
 // (audio analysis → enrichment_status "done"); the operator TAGS it on the vibe
 // map (vibe_x/vibe_y); the video agent FILMS it (video_url in R2); then it's
@@ -13,6 +13,7 @@
 // it — which is exactly what the board's worklists ("needs tagging", "needs a
 // video", "ready for YouTube", "ready for TikTok") filter on.
 
+import { isStaleTikTokDraft } from "@fluncle/contracts/util";
 import { type SocialPostItem } from "./social";
 import { type TrackListItem } from "./tracks";
 
@@ -57,19 +58,31 @@ export type StageInput = Pick<
 /** A platform post counts as "done" once it's pushed — a draft, scheduled, or live. */
 const PUBLISHED_OR_PENDING = new Set(["draft", "scheduled", "published"]);
 
-function hasPost(posts: SocialPostItem[] | undefined, platform: string): boolean {
+// A pushed post counts as "gone out" — EXCEPT a TikTok inbox draft that has sat past
+// TikTok's 24h window, which has almost certainly bounced (Postiz reports the push a
+// success, so the row stays `draft` forever). A stale draft re-opens the finding into
+// the "ready for TikTok" worklist rather than reading as posted; the shared rule
+// (`isStaleTikTokDraft`) is the one source of that 24h cutoff.
+function hasPost(posts: SocialPostItem[] | undefined, platform: string, now: number): boolean {
   return Boolean(
-    posts?.some((post) => post.platform === platform && PUBLISHED_OR_PENDING.has(post.status)),
+    posts?.some(
+      (post) =>
+        post.platform === platform &&
+        PUBLISHED_OR_PENDING.has(post.status) &&
+        !isStaleTikTokDraft(post, now),
+    ),
   );
 }
 
 /**
- * Derive a finding's pipeline stage + next action from its data alone. Pure: no
- * I/O, no clock. The order of checks walks the lifecycle backwards from the end,
- * so a finding always reports the FURTHEST stage it has reached and the single
- * action that would move it forward.
+ * Derive a finding's pipeline stage + next action from its data alone. Pure over the
+ * record + an injected clock (`now`, defaulting to the wall clock): the only time
+ * dependence is the TikTok stale-draft cutoff, so tests pin it deterministically. The
+ * order of checks walks the lifecycle backwards from the end, so a finding always
+ * reports the FURTHEST stage it has reached and the single action that would move it
+ * forward.
  */
-export function trackStage(track: StageInput): TrackStage {
+export function trackStage(track: StageInput, now: number = Date.now()): TrackStage {
   const onSpotifyAndTelegram = track.addedToSpotify && track.postedToTelegram;
 
   // Not fully added yet — the synchronous add hasn't landed on both surfaces.
@@ -82,8 +95,8 @@ export function trackStage(track: StageInput): TrackStage {
   const enriched = track.enrichmentStatus === "done";
   const tagged = track.vibeX !== undefined && track.vibeY !== undefined;
   const filmed = Boolean(track.videoUrl);
-  const onYouTube = hasPost(track.posts, "youtube");
-  const onTikTok = hasPost(track.posts, "tiktok");
+  const onYouTube = hasPost(track.posts, "youtube", now);
+  const onTikTok = hasPost(track.posts, "tiktok", now);
 
   // Live on both platforms — the end of the pipeline, nothing blocking.
   if (onYouTube && onTikTok) {

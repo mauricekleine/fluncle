@@ -1,3 +1,19 @@
+// Cross-language parity: the SSH (Go) galaxy must place the same stars, run the
+// same sim, and seed the same frontier as this TypeScript authority. The frozen
+// fixtures under apps/ssh/internal/galaxy/testdata/*.json are the shared golden
+// output — both this suite and the Go tests read them and fail on any drift, so
+// the two implementations can never silently diverge.
+//
+// GEOMETRY NOTE: these fixtures were deliberately regenerated for the voyage
+// SPIRAL layout (placeStars: Earth-centred Archimedean thread, radius strictly
+// monotonic per day-sector) that replaced the old concentric day-rings. They are
+// pinned exactly (toEqual on placement), so regenerating them is a conscious act,
+// never a fudge. To re-pin after an intended placement/sim change: replay these
+// same scripted scenarios against the TS authority UNDER VITEST (V8 — Bun's
+// JavaScriptCore differs by ~1 ULP in Math.sin/cos and would fail the exact
+// compare), writing the recomputed OUTPUT fields back while preserving every
+// INPUT field, then run this suite + `go test ./internal/galaxy/`.
+
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";

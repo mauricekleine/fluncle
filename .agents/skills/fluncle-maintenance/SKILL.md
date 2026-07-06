@@ -1,6 +1,6 @@
 ---
 name: fluncle-maintenance
-description: "Keep Fluncle's pinned/baked supply chain current — the version-drift sweep over the Hermes image's pins (the Nous Research Hermes base image, bun, the fluncle CLI, the Claude Code CLI), the box.ascii render-box CLI, and the GitHub Actions tags. Ships the clearly-safe bumps END-TO-END: edit the pin, open a PR, wait for CI green, merge. For a baked Dockerfile pin the routine's job ends at the merge — the on-box fluncle-pin-watch timer (rave-02) self-deploys it (rebuild → pre-smoke → swap → auto-rollback). Brakes (reports, never ships) on anything risky — a major bump, the base image, or auth/runtime/model. Use whenever checking for version drift, bumping a pinned Hermes dependency, deciding whether a base-image / CLI / Actions-tag bump is safe, SHA-pinning the workflow actions, merging a safe bump, or running the maintenance routine. NOT for the workspace dependency catalog freshness pass (the bunfig minimumReleaseAge flow), and NOT for changing what the agent may do or its voice (the fluncle-hermes-operator skill)."
+description: "Keep Fluncle's pinned/baked supply chain current — the version-drift sweep over the Hermes image's pins (base image, bun, the fluncle CLI, the Claude Code CLI), the box.ascii render-box CLI, and the GitHub Actions tags. Ships the clearly-safe bumps END-TO-END (edit the pin → PR → CI green → merge); a baked Dockerfile pin then self-deploys via the on-box fluncle-pin-watch timer (rave-02): rebuild → pre-smoke → swap → auto-rollback. Brakes (reports, never ships) on anything risky — a major bump, the base image, or auth/runtime/model. Use whenever checking for version drift, bumping a pinned Hermes dependency, judging whether a base-image / CLI / Actions-tag bump is safe, SHA-pinning the workflow actions, merging a safe bump, or running the maintenance routine. NOT for the workspace dependency catalog freshness pass (the bunfig minimumReleaseAge flow), nor for changing what the agent may do or its voice (the fluncle-hermes-operator skill)."
 ---
 
 # Fluncle maintenance
@@ -15,7 +15,7 @@ This file is the doctrine and the decision map. The drift surface (file:line + c
 
 - The **Nous Research Hermes base image** the agent runs on (`docs/agents/hermes/Dockerfile`).
 - **bun** — baked into the image AND mirrored in the repo's `package.json` `packageManager` (and the CI workflows). One version, three places; they move together.
-- The **`fluncle` CLI** baked into the image (`npm -g`).
+- The **`fluncle` CLI** baked into the image (the standalone bun-compiled binary, pinned by release-asset URL — the Bun-runtime commands need it; the `npm -g` thin client runs under node and can't).
 - The **Claude Code CLI** baked into the image (`npm -g`).
 - **box.ascii CLI** — the render box's transport. Pre-1.0, self-updating, **unpinnable** (the installer offers no version). Not a pin to bump; a thing to **re-verify** after a base rebuild.
 - The **GitHub Actions** mutable tags in `.github/workflows/` (`actions/checkout@v6`, `oven-sh/setup-bun@v2`, …) — a `.deepsec` scan flags these as a supply-chain risk and recommends SHA-pinning.

@@ -1,0 +1,159 @@
+// PROVENANCE: shipped Fluncle finding composition source, fetched from
+// https://found.fluncle.com/032.0.4L/composition.tsx on 2026-07-04 (offline fixture,
+// read as raw text + GLSL-resolved by the test — never imported/compiled).
+//
+// Track: "addicted" — James Hiraeth & EJ Kitto | R.O.A.M (2026)
+// vehicle: wound filament | grain: grainChemicalDye | textureFamily: fluent
+//
+// A dense ridged-filament network fills the frame: domain-warped fbm threads
+// that coil and wind around each other, streaming upward at a constant pace —
+// addiction's pull made visible. Palette: deep maroon void (#180d11) → rose/pink
+// filaments (#e1466f accent) → cream cores at the 10700ms peak.
+// Energy collapse at 14-20s thins the field to scattered embers (the crash).
+//
+// Motion law: global drift is audio-free constant (u_time * 0.052 upward).
+// All reactivity is in-place structural deformation:
+//   u_mid        → domain warp amplitude (coil tightness, gate-safe)
+//   u_bass       → filament threshold + width (beat breathes the threads)
+//   u_audioHit   → width jolt on onset (in-place, never translates)
+//   u_audioDrop  → core ignition (climax at 10700ms, peakTimeMs configured)
+//   u_energy     → overall exposure (breakdown dims the field naturally)
+//   u_treble     → grain chroma flutter
+
+import React from "react";
+import {
+  CloseCard,
+  GLSL,
+  ShaderLayer,
+  TrackAudio,
+  TypePlate,
+  useJourney,
+  type NostalgicCosmosProps,
+} from "../cosmos";
+
+const frag = /* glsl */ `
+${GLSL.hash}
+${GLSL.valueNoise}
+${GLSL.fbm}
+${GLSL.domainWarp}
+${GLSL.filmGrain}
+${GLSL.grainFamilies}
+${GLSL.vignette}
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / u_res;
+  vec2 p  = (gl_FragCoord.xy - u_res * 0.5) / u_res.y;
+
+  // --- GLOBAL TRANSLATION: audio-free constant clock (upward stream) ---
+  p += vec2(0.0, -u_time * 0.052);
+  // Spatial winding sway: a fixed sinusoidal wave the drifting field passes through
+  // (not beat-locked — a geometric property of the wound shape, not a reactive kick)
+  p.x += sin(p.y * 3.8 + u_time * 0.28) * 0.022;
+
+  // --- IN-PLACE WARP AMPLITUDE: mid drives coil tightness (gate-safe) ---
+  float warpAmp = 0.20 + 0.18 * u_mid;
+
+  // Two-step domain warp: first pass gives displacement, second pass gives filaments
+  // Higher scale (3.0 / 5.2) → tighter winding cells → thread-like rather than broad sheets
+  vec2 q1    = p * 3.0 + vec2(u_time * 0.033, u_time * 0.021);
+  float disp = (domainWarp(q1, 4) - 0.5) * warpAmp;
+
+  // Apply mid-driven displacement to winding coords → tighter coil under mid pressure
+  vec2 q2 = p * 5.2 + vec2(disp, disp * 0.8) + vec2(u_time * 0.023, u_time * 0.017);
+  float n  = domainWarp(q2, 3);
+
+  // Ridge: sharp power (4.5) → thin crisp tendrils on dark field
+  float ridges = pow(1.0 - abs(2.0 * n - 1.0), 4.5);
+
+  // --- FILAMENT SURVIVAL (structural in-place deformation) ---
+  // Bass widens threads; swell/energy open the gate → more tendrils survive on beat
+  float openVal = clamp(u_audioSwell * 0.65 + u_energy * 0.45, 0.0, 1.0);
+  float thr = mix(0.58, 0.48, openVal);
+  float fw  = 0.08 + u_bass * 0.10 + u_audioHit * 0.07 + u_audioDrop * 0.06;
+  float fil = smoothstep(thr, thr + fw, ridges);
+
+  // --- CORE IGNITION (light reaction, drop envelope peak at 10700ms) ---
+  float core = smoothstep(0.82, 1.0, ridges) * (0.15 + u_audioDrop * 0.85);
+
+  // --- COLOR ---
+  // u_palette layout (background, accent, glow, ink):
+  //   [0] = #180d11 deep maroon void
+  //   [1] = #e1466f rose/pink (the filaments)
+  //   [2] = #b8aa8e warm cream-tan (glow halo on cores)
+  //   [3] = #e9ead1 cream (hot cores at climax)
+  vec3 bg        = u_palette[0];
+  vec3 accentCol = u_palette[1];
+  vec3 glowCol   = u_palette[2];
+  vec3 inkCol    = u_palette[3];
+
+  // Filament body: rose/pink, cores burn toward cream as drop peaks
+  vec3 filCol = accentCol * (0.7 + u_energy * 0.35);
+  filCol = mix(filCol, inkCol, core * 0.65);
+
+  // Composite: dark void → filaments → warm core glow
+  vec3 col = bg;
+  col = mix(col, filCol, fil * (0.80 + u_energy * 0.22));
+  col += core * glowCol * 0.18;
+
+  // Energy exposure: lifts field globally; the 14-20s breakdown collapses naturally
+  col *= 0.85 + u_energy * 0.18;
+  col  = min(col, vec3(0.90)); // cap: never blow to flat cream
+
+  // Gentle corner-only vignette — large radius so centre is unclipped (not a porthole)
+  float vig = vignette(uv, 1.3, 0.7);
+  col *= (0.72 + 0.28 * vig);
+
+  // grainChemicalDye: colored dye-cloud grain, treble flutter for liveliness
+  GrainOpts g  = grainChemicalDye();
+  g.amount     = 0.050 + 0.012 * u_treble;
+  col          = filmGrain(col, uv, u_time, g);
+
+  col          = dither8(col, uv);
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+const WoundFilament: React.FC<NostalgicCosmosProps> = ({ track, audio, palette, seed }) => {
+  const { phase, phaseProgress } = useJourney();
+
+  return (
+    <>
+      <TrackAudio audio={audio} />
+      <ShaderLayer
+        fragmentShader={frag}
+        energyCurve={audio.energyCurve}
+        bassCurve={audio.bassCurve}
+        midCurve={audio.midCurve}
+        trebleCurve={audio.trebleCurve}
+        beatGrid={audio.beatGrid}
+        onsets={audio.onsets}
+        reactivity={{
+          drop: {
+            fallMs: 1500,
+            holdMs: 400,
+            peakTimeMs: 10700,
+            riseMs: 1200,
+          },
+          swellBeatWeight: 0,
+        }}
+        palette={palette}
+        seed={seed}
+        bloom={{ intensity: 0.6, radius: 0.9, threshold: 0.72 }}
+      />
+      <TypePlate
+        track={track}
+        ink={palette.accent}
+        dimInk={palette.glow}
+        identityInSec={1.0}
+        telemetryInSec={2.3}
+        holdSec={7.0}
+      />
+      <CloseCard
+        arc={phase === "arrive" ? phaseProgress : 0}
+        palette={{ accent: palette.accent, ink: palette.glow }}
+      />
+    </>
+  );
+};
+
+export default WoundFilament;

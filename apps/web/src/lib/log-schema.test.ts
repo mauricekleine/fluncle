@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { definitionalProse } from "./log-prose";
-import { breadcrumbsJsonLd, mixtapeAlbumJsonLd, musicRecordingJsonLd } from "./log-schema";
+import {
+  breadcrumbsJsonLd,
+  mixtapeAlbumJsonLd,
+  musicRecordingJsonLd,
+  videoObjectJsonLd,
+} from "./log-schema";
 
 const track = {
   addedAt: "2026-06-03T18:21:00.000Z",
@@ -63,6 +68,39 @@ describe("musicRecordingJsonLd (the log page schema)", () => {
   });
 });
 
+describe("videoObjectJsonLd (the finding's video schema)", () => {
+  const jsonLd = videoObjectJsonLd(track, {
+    contentUrl: "https://found.fluncle.com/004.7.2I/footage.mp4",
+    thumbnailUrl: "https://img/cover.jpg",
+    uploadDate: "2026-06-12T09:30:00.000Z",
+  });
+
+  it("is a VideoObject pointing at the footage, named Artist — Title", () => {
+    expect(jsonLd["@type"]).toBe("VideoObject");
+    expect(jsonLd.contentUrl).toBe("https://found.fluncle.com/004.7.2I/footage.mp4");
+    expect(jsonLd.thumbnailUrl).toBe("https://img/cover.jpg");
+    expect(jsonLd.name).toBe("Axwell, 1991 — Nobody Else - 1991 Remix");
+    expect(jsonLd.url).toBe("https://www.fluncle.com/log/004.7.2I");
+  });
+
+  it("mirrors the visible prose and dates the upload from the freshest stamp", () => {
+    expect(jsonLd.description).toBe(definitionalProse(track));
+    // A full ISO 8601 datetime WITH a timezone (Google's VideoObject requirement) —
+    // not a bare date, which trips GSC's "invalid datetime"/"missing a timezone".
+    expect(jsonLd.uploadDate).toBe("2026-06-12T09:30:00.000Z");
+  });
+
+  it("normalizes a bare-date uploadDate to a zoned datetime", () => {
+    const dateOnly = videoObjectJsonLd(track, {
+      contentUrl: "https://found.fluncle.com/004.7.2I/footage.mp4",
+      thumbnailUrl: "https://img/cover.jpg",
+      uploadDate: "2026-06-29",
+    });
+
+    expect(dateOnly.uploadDate).toBe("2026-06-29T00:00:00.000Z");
+  });
+});
+
 describe("breadcrumbsJsonLd", () => {
   it("walks Fluncle → The log → the coordinate", () => {
     const jsonLd = breadcrumbsJsonLd("004.7.2I") as { itemListElement: Array<{ name: string }> };
@@ -94,7 +132,7 @@ describe("mixtapeAlbumJsonLd", () => {
         },
       ],
       note: "A checkpoint in the archive.",
-      status: "draft",
+      status: "published",
       title: "Checkpoint one",
       type: "mixtape",
     });

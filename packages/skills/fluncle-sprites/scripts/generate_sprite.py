@@ -14,7 +14,7 @@ that make a sprite read as clearly as the reference packs:
 
 Usage (key from the environment ONLY — never commit a key):
 
-    GEMINI_API_KEY="$(op read 'op://Fluncle/GEMINI_API_KEY/credential')" \
+    GEMINI_API_KEY="$(op read 'op://<vault>/GEMINI_API_KEY/credential')" \
       UV_CACHE_DIR=/tmp/uv-cache uv run --with pillow \
       python packages/skills/fluncle-sprites/scripts/generate_sprite.py comms_mailbox
 

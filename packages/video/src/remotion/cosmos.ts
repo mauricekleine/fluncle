@@ -5,12 +5,10 @@
 // and signature render identically), and a SCENE-LED palette helper — and no
 // imposed look: nothing here auto-applies grain or a starfield to a render.
 // Texture/grain and any background are the agent's own, baked into its shader
-// (`GLSL.filmGrain` is a tool, not a mandate). The Grain and Starfield primitives
-// remain exported but ONLY as opt-in legacy components, kept so pre-d662c44
-// findings can re-render for the square backfill; new compositions do not touch
-// them. Each track composition authors its OWN scene code, importing only what is
-// exported here. The creative doctrine — vehicles, texture families, type staging
-// — lives in the fluncle-video skill, not in this code.
+// (`GLSL.filmGrain` is a tool, not a mandate). Each track composition authors its
+// OWN scene code, importing only what is exported here. The creative doctrine —
+// vehicles, texture families, type staging — lives in the fluncle-video skill, not
+// in this code.
 //
 // DESIGN.md is the visual canon; VOICE.md is the copy canon.
 

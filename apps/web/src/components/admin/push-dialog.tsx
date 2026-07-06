@@ -7,19 +7,20 @@ import {
   PaperPlaneTiltIcon,
   WarningIcon,
 } from "@phosphor-icons/react";
+import { isStaleTikTokDraft, tikTokDraftAgeHours } from "@fluncle/contracts/util";
 import { useState } from "react";
 import { type PlatformConfig } from "@/components/admin/platform-cell";
 import { type BoardRow } from "@/components/admin/use-publish";
-import { Button } from "@/components/ui/button";
+import { Button } from "@fluncle/ui/components/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+} from "@fluncle/ui/components/dialog";
+import { Input } from "@fluncle/ui/components/input";
+import { Label } from "@fluncle/ui/components/label";
 import { trackMedia } from "@/lib/media";
 import { cn } from "@/lib/utils";
 
@@ -102,6 +103,12 @@ function PushDialogBody({
   const isTikTok = platform.key === "tiktok";
   const cover = row.logId ? trackMedia(row.logId).coverUrl : undefined;
   const capWarning = isTikTok && !pushed && tiktokPending >= 5;
+  // A TikTok draft past the 24h window has almost certainly bounced (TikTok drops the
+  // 6th+ pending draft silently). It stays `pushed`, so the button already reads
+  // "Re-push draft"; this just names WHY the re-push is needed.
+  const now = Date.now();
+  const staleDraft = Boolean(post && isStaleTikTokDraft(post, now));
+  const staleHours = post ? (tikTokDraftAgeHours(post, now) ?? 0) : 0;
 
   return (
     <>
@@ -145,7 +152,13 @@ function PushDialogBody({
       {/* 2. PUSH — send it (or re-send a failed/earlier push). */}
       <div className="flex flex-col gap-2">
         <Label>{pushed ? "Pushed" : "Push"}</Label>
-        {capWarning ? (
+        {staleDraft ? (
+          <p className="flex items-start gap-1.5 text-xs text-destructive">
+            <WarningIcon aria-hidden="true" className="mt-px shrink-0" weight="fill" />
+            Sat {staleHours}h in the inbox — past TikTok's 24h window, so it likely bounced. Re-push
+            it.
+          </p>
+        ) : capWarning ? (
           <p className="flex items-start gap-1.5 text-xs text-destructive">
             <WarningIcon aria-hidden="true" className="mt-px shrink-0" weight="fill" />
             {tiktokPending} drafts already pending — TikTok caps the inbox at 5 per 24h, so this one

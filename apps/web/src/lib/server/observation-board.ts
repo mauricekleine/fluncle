@@ -2,7 +2,7 @@ import { getDb, typedRows } from "./db";
 
 // Admin-board reads for the two audio-observation columns (Context · Observation).
 //
-// `context_note` is INTERNAL creative fuel (docs/agents/observation-agent.md): it
+// `context_note` is INTERNAL creative fuel: it
 // never rides the public `TrackListItem` contract, JSON-LD, RSS, or llms.txt. So
 // the board pulls it through this admin-only path instead — a batch presence query
 // for the column status, and a single-track text read for the view dialog. Both

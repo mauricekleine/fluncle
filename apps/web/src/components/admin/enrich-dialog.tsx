@@ -1,20 +1,21 @@
 import { CircleNotchIcon, WaveformIcon } from "@phosphor-icons/react";
 import { type BoardRow } from "@/components/admin/use-publish";
-import { Button } from "@/components/ui/button";
+import { Button } from "@fluncle/ui/components/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@fluncle/ui/components/dialog";
+import { formatKey, useKeyNotation } from "@/lib/key-notation";
 
 // The Enrich cell's dialog — queue (or re-queue) one finding for the on-box
 // enrichment cron. Enrichment is the audio-analysis pass: BPM, musical key, and
 // the spectral features that feed tagging + the video kit. Pressing the button
 // marks the finding "pending" (queue-eligible); the on-box `fluncle-enrich`
 // `--no-agent` cron picks it up on its next ~5-min tick, analyzes on-box, and
-// flips the status to "done"/"failed" (docs/track-lifecycle.md, Phase 2). The
+// flips the status to "done"/"failed". The
 // cell reflects whichever state it's in.
 
 type EnrichDialogProps = {
@@ -33,6 +34,7 @@ export function EnrichDialog({
   row,
   triggering,
 }: EnrichDialogProps) {
+  const { notation } = useKeyNotation();
   const status = row?.enrichmentStatus;
   const done = status === "done";
   const running = status === "processing";
@@ -62,7 +64,7 @@ export function EnrichDialog({
             </div>
             <div>
               <dt className="text-xs text-muted-foreground">Key</dt>
-              <dd className="font-mono">{row?.key ?? "—"}</dd>
+              <dd className="font-mono">{row?.key ? formatKey(row.key, notation) : "—"}</dd>
             </div>
             <p className="col-span-2 text-xs text-muted-foreground">
               {row?.features ? "Spectral features captured." : "Analysis complete."}

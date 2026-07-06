@@ -2,6 +2,7 @@ import {
   type FinalizeResponse,
   type PresignResponse,
   type TrackGetResponse,
+  type TrackListItem,
   type TrackSocialShowResponse,
   type TrackSocialUpdateResponse,
   type TrackUpdateResponse,
@@ -13,6 +14,18 @@ export type TrackGetResult = TrackGetResponse;
 
 export async function trackGetCommand(idOrLogId: string): Promise<TrackGetResult> {
   return publicApiGet<TrackGetResult>(`/api/tracks/${encodeURIComponent(idOrLogId)}`);
+}
+
+// `fluncle admin tracks get <id|logId>` — the ADMIN single-finding lookup. Fetches
+// ONE finding with its FULL admin fields (the vibe coords, the video ledger, the
+// observation, the editorial note) — the authoritative by-coordinate read, so a
+// lookup never has to scan a list (and can't misread a live finding as nonexistent).
+// Agent-allowed read (the admin tier). Distinct from the public `tracks get`, which
+// hits `/api/tracks/{idOrLogId}` and only carries the public projection.
+export type TrackGetAdminResult = { ok: true; track: TrackListItem };
+
+export async function trackGetAdminCommand(idOrLogId: string): Promise<TrackGetAdminResult> {
+  return adminApiGet<TrackGetAdminResult>(`/api/admin/tracks/${encodeURIComponent(idOrLogId)}`);
 }
 
 export type TrackUpdateOptions = {
@@ -37,13 +50,21 @@ export type TrackVideoOptions = {
   composition?: string;
   cover?: string;
   footage?: string;
+  footageLandscape?: string;
+  footageLandscapeSocial?: string;
+  footageNotext?: string;
   footageSocial?: string;
+  intent?: string;
+  metrics?: string;
   model?: string;
   note?: string;
+  plate?: string;
+  plateBackground?: string;
   poster?: string;
   props?: string;
   reasoning?: string;
   render?: string;
+  scene?: string;
 };
 
 // The authoring AI model recorded for a video, in <provider>/<model> notation.
@@ -70,13 +91,121 @@ const FOUND_BASE = "https://found.fluncle.com";
 const VIDEO_FIELDS: ReadonlyArray<{ field: string; option: keyof TrackVideoOptions }> = [
   { field: "footage", option: "footage" },
   { field: "footage-social", option: "footageSocial" },
+  { field: "footage-notext", option: "footageNotext" },
+  { field: "footage-landscape", option: "footageLandscape" },
+  { field: "footage-landscape-social", option: "footageLandscapeSocial" },
   { field: "poster", option: "poster" },
   { field: "cover", option: "cover" },
+  { field: "plate", option: "plate" },
+  { field: "plate-background", option: "plateBackground" },
   { field: "note", option: "note" },
   { field: "composition", option: "composition" },
   { field: "props", option: "props" },
   { field: "render", option: "render" },
+  { field: "intent", option: "intent" },
+  { field: "metrics", option: "metrics" },
+  { field: "scene", option: "scene" },
 ];
+
+// The RE-RENDERABLE-SOURCE contract: the three artifacts that MUST accompany any
+// footage upload so the R2 bundle stays a complete, re-renderable source and its
+// render.json stays in sync with the DB ledger. Shipping footage WITHOUT these
+// desyncs the bundle — the 2026-07 partial-upload regression (footage/social/poster
+// uploaded, composition/props/render left stale). Keyed by conventional filename so
+// the error names exactly what to add.
+const RERENDER_CONTRACT_FIELDS: ReadonlyArray<{ file: string; option: keyof TrackVideoOptions }> = [
+  { file: "composition.tsx", option: "composition" },
+  { file: "props.json", option: "props" },
+  { file: "render.json", option: "render" },
+];
+
+// The warn-only companions: shipped for provenance/eval but not load-bearing for a
+// re-render, so a missing one is a warning, never a hard error.
+const RERENDER_ADVISORY_FIELDS: ReadonlyArray<{ file: string; option: keyof TrackVideoOptions }> = [
+  { file: "intent.json", option: "intent" },
+  { file: "metrics.json", option: "metrics" },
+  { file: "scene.json", option: "scene" },
+];
+
+// Any of these present means "footage is being uploaded", which arms the re-render
+// contract check (a poster-only or cover-only refresh uploads none of them).
+const FOOTAGE_FIELDS: ReadonlyArray<keyof TrackVideoOptions> = [
+  "footage",
+  "footageSocial",
+  "footageNotext",
+  "footageLandscape",
+  "footageLandscapeSocial",
+];
+
+// The plate-lane inputs. OPTIONAL by design: a plate-less (abstract) bundle is fully
+// valid and a plate bundle without its background is fine, so neither ever joins the
+// re-render contract or the advisory set on a footage upload. They matter to the
+// guard in one direction only: a plates-only set is the sanctioned PRE-composition
+// upload (upload-first order — the composition references the durable
+// found.fluncle.com URL, so the plates must be on R2 before it is authored).
+const PLATE_FIELDS: ReadonlyArray<keyof TrackVideoOptions> = ["plate", "plateBackground"];
+
+// The non-file options riding TrackVideoOptions (finalize metadata, not artifacts).
+const NON_FILE_OPTIONS: ReadonlyArray<keyof TrackVideoOptions> = ["model", "reasoning"];
+
+/**
+ * True when the resolved file set is a plate-lane PRE-upload: at least one plate
+ * artifact and nothing else. This set skips both the footage requirement and the
+ * finalize call — plates go up before any render exists, and finalize would set
+ * `video_url` (dequeuing the finding from the render queue before it is filmed).
+ */
+export function isPlatesOnlyUpload(files: TrackVideoOptions): boolean {
+  const hasPlate = PLATE_FIELDS.some((option) => Boolean(files[option]));
+  if (!hasPlate) {
+    return false;
+  }
+  return (Object.keys(files) as Array<keyof TrackVideoOptions>).every(
+    (option) =>
+      !files[option] || PLATE_FIELDS.includes(option) || NON_FILE_OPTIONS.includes(option),
+  );
+}
+
+export type BundleCompleteness = {
+  /** true when at least one footage master is in the upload set. */
+  uploadingFootage: boolean;
+  /** missing re-render-contract filenames (hard-error unless --allow-partial). */
+  missingContract: string[];
+  /** missing advisory filenames (warn-only). */
+  missingAdvisory: string[];
+  /** plate-lane advisories (warn-only, armed on any upload): plates are OPTIONAL —
+   *  a plate-less bundle is valid and a plate without its background is fine — so
+   *  the only warnable shape is a background WITHOUT its plate. */
+  plateWarnings: string[];
+};
+
+// Pure check over the resolved file set: is this a complete re-renderable bundle?
+// A field counts as "present" when its path is set (—dir resolves conventional
+// names only when the file exists; an explicit flag sets the path). The contract is
+// only armed when footage is being uploaded — a poster-only refresh is exempt, and
+// so is the plate-lane pre-upload (plates ship before any render exists).
+export function checkBundleCompleteness(files: TrackVideoOptions): BundleCompleteness {
+  const uploadingFootage = FOOTAGE_FIELDS.some((option) => Boolean(files[option]));
+  const missingFrom = (specs: ReadonlyArray<{ file: string; option: keyof TrackVideoOptions }>) =>
+    uploadingFootage ? specs.filter((spec) => !files[spec.option]).map((spec) => spec.file) : [];
+  const plateWarnings: string[] = [];
+  if (files.plateBackground && !files.plate) {
+    plateWarnings.push(
+      "plate.background.png without plate.png — the background is the parallax layer OF a plate; pass --plate (or drop it in the --dir) too",
+    );
+  }
+  return {
+    missingAdvisory: missingFrom(RERENDER_ADVISORY_FIELDS),
+    missingContract: missingFrom(RERENDER_CONTRACT_FIELDS),
+    plateWarnings,
+    uploadingFootage,
+  };
+}
+
+export type TrackVideoCommandOptions = {
+  /** Ship an intentionally partial bundle (e.g. a poster-only refresh), skipping the
+   *  re-render-contract requirement. The escape hatch, never the default. */
+  allowPartial?: boolean;
+};
 
 // Uploads a track's video bundle DIRECTLY to R2 via short-lived presigned PUT
 // URLs the Worker signs. The bytes go straight to R2's S3 endpoint, not through
@@ -84,16 +213,60 @@ const VIDEO_FIELDS: ReadonlyArray<{ field: string; option: keyof TrackVideoOptio
 // is ~99MB and the bundle ships two of them). Three phases: presign → PUT each
 // file → finalize (links the footage cut as video_url + stores the vehicle).
 //
+// Before any of that, the bundle-completeness guard: a footage upload MUST carry the
+// re-render contract (composition + props + render), or the R2 bundle desyncs from
+// the DB ledger. Missing contract files hard-error (naming them) unless --allow-partial.
+//
 // onProgress is called per file so the caller can print clear progress.
 export async function trackVideoCommand(
   idOrLogId: string,
   files: TrackVideoOptions,
   onProgress?: (message: string) => void,
+  options: TrackVideoCommandOptions = {},
 ): Promise<TrackVideoResult> {
+  const completeness = checkBundleCompleteness(files);
+  if (
+    completeness.uploadingFootage &&
+    completeness.missingContract.length > 0 &&
+    !options.allowPartial
+  ) {
+    throw new CliError(
+      "bundle_incomplete",
+      `Refusing to upload a PARTIAL bundle: footage is being uploaded but the re-render contract is missing ${completeness.missingContract.join(", ")}. ` +
+        `A footage-only upload leaves composition.tsx/props.json/render.json stale on R2 and desyncs the render.json from the DB ledger. ` +
+        `Ship the complete bundle (re-run \`ship\` and upload with --dir), or pass --allow-partial for a deliberate partial refresh (e.g. poster-only).`,
+    );
+  }
+  if (completeness.uploadingFootage) {
+    if (completeness.missingContract.length > 0) {
+      onProgress?.(
+        `warning: --allow-partial — uploading WITHOUT the re-render contract (${completeness.missingContract.join(", ")}); the R2 bundle will NOT be re-renderable`,
+      );
+    }
+    for (const missing of completeness.missingAdvisory) {
+      onProgress?.(`warning: ${missing} missing (provenance/eval only) — shipping without it`);
+    }
+  }
+  for (const warning of completeness.plateWarnings) {
+    onProgress?.(`warning: ${warning}`);
+  }
+
   const present = VIDEO_FIELDS.map((spec) => ({
     field: spec.field,
     path: files[spec.option],
   })).filter((spec): spec is { field: string; path: string } => Boolean(spec.path));
+
+  if (present.length === 0) {
+    throw new CliError(
+      "nothing_to_upload",
+      "No bundle files resolved to upload (pass --dir <bundle> or explicit file flags).",
+    );
+  }
+
+  // The plate-lane pre-upload (upload-first order): plates go up BEFORE the
+  // composition exists, so this set must NOT finalize — finalize sets `video_url`,
+  // which would dequeue the finding from the render queue before it is filmed.
+  const platesOnly = isPlatesOnlyUpload(files);
 
   // Phase 1: ask the Worker to sign a PUT URL for each artifact we have.
   const presign = await adminApiPost<PresignResponse>(
@@ -133,12 +306,22 @@ export async function trackVideoCommand(
     urls[spec.field] = `${FOUND_BASE}/${upload.key}`;
   }
 
+  // A plates-only pre-upload STOPS here: the artifacts are on R2 at their durable
+  // keys and the composition can now reference them; the finding stays in the
+  // render queue (no video_url write) until the real footage ship finalizes.
+  if (platesOnly) {
+    onProgress?.(
+      `plate pre-upload complete — compose against ${FOUND_BASE}/${presign.logId}/plate.png; finalize is deferred to the footage ship`,
+    );
+    return { logId: presign.logId, ok: true, trackId: presign.trackId, urls };
+  }
+
   // Phase 3: finalize — link the footage cut as video_url and record the vehicle
   // read from the bundle's render.json (the diversity ledger). The authoring
   // model comes from --model, else render.json, else the default. When the bundle
   // carried BOTH the square footage.mp4 and the portrait footage.social.mp4,
   // footage.mp4 is the clean square crop source, so signal `squared` to stamp the
-  // two-master layout (docs/video-variants.md).
+  // two-master layout.
   const manifest = files.render ? await readManifestFields(files.render) : {};
   const videoModel = files.model?.trim().slice(0, 120) || manifest.model || DEFAULT_VIDEO_MODEL;
   const videoModelReasoning =
@@ -152,16 +335,18 @@ export async function trackVideoCommand(
       ...(squared ? { squared: true } : {}),
       ...(manifest.vehicle ? { videoVehicle: manifest.vehicle } : {}),
       ...(manifest.grain ? { videoGrain: manifest.grain } : {}),
+      ...(manifest.register ? { videoRegister: manifest.register } : {}),
     },
   );
 
   return { logId: finalize.logId, ok: true, trackId: finalize.trackId, urls };
 }
 
-// Reads the bundle's render.json once and returns the three string fields the
-// finalize call needs (vehicle/model/reasoning). A missing or unparseable value
-// just leaves that field absent (the caller defaults), never fails the upload.
-type RenderManifestField = "grain" | "model" | "reasoning" | "vehicle";
+// Reads the bundle's render.json once and returns the string fields the finalize
+// call needs (vehicle/grain/register — the diversity ledgers — plus model/reasoning).
+// A missing or unparseable value just leaves that field absent (the caller
+// defaults), never fails the upload.
+type RenderManifestField = "grain" | "model" | "reasoning" | "register" | "vehicle";
 
 async function readManifestFields(
   renderPath: string,
@@ -170,7 +355,7 @@ async function readManifestFields(
     const manifest = (await Bun.file(renderPath).json()) as Record<RenderManifestField, unknown>;
     const result: Partial<Record<RenderManifestField, string>> = {};
 
-    for (const key of ["vehicle", "grain", "model", "reasoning"] as const) {
+    for (const key of ["vehicle", "grain", "model", "reasoning", "register"] as const) {
       const value = manifest[key];
 
       if (typeof value === "string" && value.trim()) {
@@ -308,7 +493,7 @@ export async function trackUpdateCommand(
 // CACHE NOTE: re-shipping footage.mp4 to the same R2 key leaves Cloudflare
 // Media-Transformation renditions cached separately. The video ship purges them
 // automatically on a re-render; `fluncle admin tracks purge-video` is the manual
-// twin (docs/video-variants.md).
+// twin.
 export type TrackRequeueVideoResponse = {
   alreadyClear?: boolean;
   logId: string;

@@ -1,15 +1,15 @@
 import { randomUUID } from "node:crypto";
+import { mixtapeLogId } from "../mixtape-log-id";
 import { type MixtapeDTO, type MixtapeStatus, rowToMixtape } from "../mixtapes";
 import { getDb, typedRow, typedRows } from "./db";
 import { purgeLogCache } from "./edge-cache";
-import { mixtapeLogId } from "./mixtape-log-id";
 import { ApiError } from "./spotify";
 import { getTrackByIdOrLogId, getTracksForMixtape } from "./tracks";
 
 // A mixtape is also a finding with a `/log/<F-id>` page (and a row in the `/log`
 // index). Any write that changes its published surface must drop those from the
-// edge cache. `purgeLogCache` no-ops on a draft (no coordinate yet), so it is safe
-// to call after every member/metadata edit too.
+// edge cache. `purgeLogCache` no-ops on an unminted claim (no coordinate yet), so
+// it is safe to call after every member/metadata edit too.
 function purgeMixtapeLogCache(mixtape: MixtapeDTO): MixtapeDTO {
   purgeLogCache(mixtape.logId);
 
@@ -19,10 +19,11 @@ function purgeMixtapeLogCache(mixtape: MixtapeDTO): MixtapeDTO {
 const noteMaxLength = 1_200;
 const urlMaxLength = 500;
 
-// The title stub a draft carries until publish. Once the Log ID + sequence number
-// exist, a stub title (empty or this default) is canonicalized to the real format;
-// an operator-set title (a future custom series) is left untouched. The cover is
-// derived from the Log ID, never stored. ("Untitled mixtape" is the legacy stub.)
+// The title stub a claimed-but-unminted mixtape carries until the mint. Once the
+// Log ID + sequence number exist, a stub title (empty or this default) is
+// canonicalized to the real format; an operator-set title (a future custom series)
+// is left untouched. The cover is derived from the Log ID, never stored.
+// ("Untitled mixtape" is the legacy stub.)
 export const DEFAULT_MIXTAPE_TITLE = "Fluncle Drum & Bass Mixtape";
 const LEGACY_MIXTAPE_TITLE = "Untitled mixtape";
 
@@ -35,10 +36,11 @@ type MixtapeRow = {
   member_count: number | null;
   mixcloud_url: string | null;
   note: string | null;
-  planned_for: string | null;
   published_at: string | null;
   recorded_at: string | null;
+  recording_id: string | null;
   sequence_number: number | null;
+  set_video_at: string | null;
   soundcloud_url: string | null;
   status: MixtapeStatus;
   title: string;
@@ -52,19 +54,21 @@ type PublishRow = {
 };
 
 type StatusRow = {
+  log_id: string | null;
   status: MixtapeStatus;
 };
 
-// A draft is the operator-authored subset of a mixtape. The title (auto-set at
-// publish) and cover (derived from the Log ID) are outputs, not inputs. YouTube +
-// Mixcloud links are recorded by `distribute` (mixtape_social_posts), never set
-// here; only the manual SoundCloud link is editable, and it too writes a
-// mixtape_social_posts row (see setMixtapeSoundcloud).
+// The operator-authored subset of a mixtape (the post-promote edit surface). The
+// title (auto-set at mint) and cover (derived from the Log ID) are outputs, not
+// inputs. YouTube + Mixcloud links are recorded by `distribute`
+// (mixtape_social_posts), never set here; only the manual SoundCloud link is
+// editable, and it too writes a mixtape_social_posts row (see
+// setMixtapeSoundcloud).
 export type MixtapeInput = {
   durationMs?: unknown;
   note?: unknown;
-  plannedFor?: unknown;
   recordedAt?: unknown;
+  setVideoAt?: unknown;
   soundcloudUrl?: unknown;
 };
 
@@ -72,9 +76,11 @@ export type MixtapeMemberInput = {
   members?: Array<string | { ref: string; startMs?: number }>;
 };
 
-// A finding's membership in one mixtape — the spine link the admin board reads to
-// mark which bangers are already spoken for (a published checkpoint) or pencilled
-// into a draft. Keyed by trackId; a finding can sit in more than one.
+// A finding's membership in one MINTED mixtape — the spine link the admin board
+// reads to mark which bangers are already spoken for (a published or distributing
+// checkpoint). Keyed by trackId; a finding can sit in more than one. (Pencilled-in
+// membership lives on PLANS now — see listPlanMembershipsForTracks in
+// ./recordings.)
 export type MixtapeMembership = {
   logId?: string;
   mixtapeId: string;
@@ -82,47 +88,13 @@ export type MixtapeMembership = {
   title: string;
 };
 
-export async function createMixtape(input: MixtapeInput): Promise<MixtapeDTO> {
-  const fields = validateMixtapeInput(input);
-  const now = new Date().toISOString();
-  const id = randomUUID();
-  const db = await getDb();
-
-  // Title is empty until publish canonicalizes it; the column stays NOT NULL (and
-  // open for a future custom-series title), so seed it with an empty string.
-  await db.execute({
-    args: [
-      id,
-      "draft",
-      "",
-      fields.durationMs ?? null,
-      fields.note ?? null,
-      fields.recordedAt ?? null,
-      fields.plannedFor ?? null,
-      now,
-      now,
-    ],
-    sql: `insert into mixtapes (
-        id, status, title, duration_ms, note,
-        recorded_at, planned_for, created_at, updated_at
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  });
-
-  // A manual SoundCloud link given at creation becomes a published distribution row.
-  if (fields.soundcloudUrl) {
-    await setMixtapeSoundcloud(id, fields.soundcloudUrl);
-  }
-
-  return getMixtapeById(id, { includeDrafts: true });
-}
-
 export async function updateMixtape(id: string, input: MixtapeInput): Promise<MixtapeDTO> {
   // A published mixtape stays editable — the note, links, and duration can change
   // over time — but its minted coordinate freezes the recorded date the sector was
-  // derived from. Drafts have no such limit. (Members stay draft-only; see
-  // setMixtapeMembers. The YouTube/Mixcloud links live in mixtape_social_posts via
-  // `distribute`; the manual SoundCloud link is handled below.)
-  const current = await getMixtapeById(id, { includeDrafts: true });
+  // derived from. (Members freeze at the mint; see setMixtapeMembers. The
+  // YouTube/Mixcloud links live in mixtape_social_posts via `distribute`; the
+  // manual SoundCloud link is handled below.)
+  const current = await getMixtapeById(id);
   const fields = validateMixtapeInput(input);
 
   if (current.status === "published" && fields.recordedAt !== undefined) {
@@ -140,7 +112,7 @@ export async function updateMixtape(id: string, input: MixtapeInput): Promise<Mi
     ["duration_ms", fields.durationMs],
     ["note", fields.note],
     ["recorded_at", fields.recordedAt],
-    ["planned_for", fields.plannedFor],
+    ["set_video_at", fields.setVideoAt],
   ] as const) {
     if (value !== undefined) {
       sets.push(`${column} = ?`);
@@ -168,7 +140,7 @@ export async function updateMixtape(id: string, input: MixtapeInput): Promise<Mi
     await setMixtapeSoundcloud(id, fields.soundcloudUrl);
   }
 
-  return purgeMixtapeLogCache(await getMixtapeById(id, { includeDrafts: true }));
+  return purgeMixtapeLogCache(await getMixtapeById(id));
 }
 
 // The manual SoundCloud link as a `mixtape_social_posts` row (the single source of
@@ -211,7 +183,7 @@ export async function setMixtapeMembers(
     throw new ApiError("invalid_members", "Add at least one finding to the mixtape", 400);
   }
 
-  await assertDraftMixtape(id);
+  await assertUnmintedMixtape(id);
 
   const seen = new Set<string>();
   const entries: { startMs: number | null; trackId: string }[] = [];
@@ -262,90 +234,228 @@ export async function setMixtapeMembers(
     "write",
   );
 
-  return purgeMixtapeLogCache(await getMixtapeById(id, { includeDrafts: true }));
+  return purgeMixtapeLogCache(await getMixtapeById(id));
 }
 
-// Append findings to a draft's tracklist, keeping the existing order — the board's
-// "Add to mixtape" path, where setMixtapeMembers (a full replace) would clobber the
-// tracklist. Findings already in the tape, or repeated in the input, are skipped
-// silently (a bulk add can overlap), so this is idempotent; a request resolving to
-// no new findings is a no-op, not an error. Draft-only, like every member edit.
-export async function addTracksToMixtape(
-  id: string,
-  input: MixtapeMemberInput,
-): Promise<MixtapeDTO> {
-  if (!Array.isArray(input.members) || input.members.length === 0) {
-    throw new ApiError("invalid_members", "Add at least one finding to the mixtape", 400);
+// A cue: a member's start offset on the set timeline, keyed by the member's TRACK
+// ID (`ref`), matching the `(mixtape_id, track_id)` unique index. The Fluncle Studio
+// cue-backfill body.
+export type MixtapeCueInput = {
+  cues?: Array<{ ref?: unknown; startMs?: unknown }>;
+};
+
+// Backfill a MINTED mixtape's per-track cues (`mixtape_tracks.start_ms`) — the
+// narrow, HARDENED write-path that unlocks #1's missing cues post-publish without
+// touching the frozen set/order. Unlike the pre-mint member seed
+// (setMixtapeMembers), this does NOT call assertUnmintedMixtape; instead it is the
+// inverse — it asserts the mixtape exists + is MINTED, then re-times the EXISTING
+// members only. Its guards (each a state backstop, not handler discipline):
+//   - the mixtape must exist + be minted (cues are a post-publish backfill);
+//   - every `ref` must be a CURRENT member, and the cue set must match the member set
+//     EXACTLY (same count + same trackId set) — so it can only re-time the frozen
+//     tracklist, never add/drop/reorder it (rejects a non-member ref);
+//   - the cues, in tracklist order, must start at 0 and increase monotonically
+//     (YouTube chapter rules).
+// It backfills the DB + `/mixtapes`, but NOT the already-distributed YouTube
+// description chapters (a chapters re-push is out of scope; M2).
+export async function setMixtapeCues(id: string, input: MixtapeCueInput): Promise<MixtapeDTO> {
+  if (!Array.isArray(input.cues) || input.cues.length === 0) {
+    throw new ApiError("invalid_cues", "Provide a cue for every track", 400);
   }
 
-  await assertDraftMixtape(id);
+  // Assert the mixtape exists (getMixtapeById throws mixtape_not_found/404) and is
+  // MINTED — cues backfill a published/distributing set, never an unminted claim
+  // (a claim's start_ms is seeded by setMixtapeMembers on the promote path).
+  const mixtape = await getMixtapeById(id);
 
-  const db = await getDb();
-  const existing = await db.execute({
-    args: [id],
-    sql: `select track_id, position from mixtape_tracks where mixtape_id = ?`,
-  });
-  const present = new Set(
-    typedRows<{ position: number; track_id: string }>(existing.rows).map((row) => row.track_id),
-  );
-  let position = typedRows<{ position: number; track_id: string }>(existing.rows).reduce(
-    (max, row) => Math.max(max, row.position),
-    0,
-  );
-
-  const seen = new Set<string>();
-  const inserts: { startMs: number | null; trackId: string }[] = [];
-
-  for (const raw of input.members) {
-    const ref = typeof raw === "string" ? raw : raw?.ref;
-    const startMs = typeof raw === "string" ? undefined : raw?.startMs;
-    const value = requireText(ref, "member", 80);
-
-    if (startMs !== undefined) {
-      if (typeof startMs !== "number" || !Number.isInteger(startMs) || startMs < 0) {
-        throw new ApiError(
-          "invalid_start_ms",
-          "Cue timestamps must be non-negative integers (ms)",
-          400,
-        );
-      }
-    }
-
-    const track = await getTrackByIdOrLogId(value);
-
-    if (!track) {
-      throw new ApiError("member_not_found", `No finding with id ${value}`, 400);
-    }
-
-    // Already in this tape, or a repeat within this request — skip it.
-    if (present.has(track.trackId) || seen.has(track.trackId)) {
-      continue;
-    }
-
-    seen.add(track.trackId);
-    inserts.push({ startMs: startMs ?? null, trackId: track.trackId });
-  }
-
-  if (inserts.length > 0) {
-    await db.batch(
-      [
-        ...inserts.map((entry) => {
-          position += 1;
-          return {
-            args: [id, entry.trackId, position, entry.startMs],
-            sql: `insert into mixtape_tracks (mixtape_id, track_id, position, start_ms) values (?, ?, ?, ?)`,
-          };
-        }),
-        {
-          args: [new Date().toISOString(), id],
-          sql: `update mixtapes set updated_at = ? where id = ?`,
-        },
-      ],
-      "write",
+  if (!mixtape.logId) {
+    throw new ApiError(
+      "mixtape_not_minted",
+      "Cues backfill a minted set — promote the recording first",
+      409,
     );
   }
 
-  return purgeMixtapeLogCache(await getMixtapeById(id, { includeDrafts: true }));
+  // Validate each cue's shape: a non-empty `ref` (trackId) + a non-negative integer
+  // `startMs`, no duplicate refs.
+  const byRef = new Map<string, number>();
+
+  for (const raw of input.cues) {
+    const ref = typeof raw?.ref === "string" ? raw.ref.trim() : "";
+    const startMs = raw?.startMs;
+
+    if (!ref) {
+      throw new ApiError("invalid_cues", "Each cue needs a track ref", 400);
+    }
+
+    if (typeof startMs !== "number" || !Number.isInteger(startMs) || startMs < 0) {
+      throw new ApiError(
+        "invalid_start_ms",
+        "Cue timestamps must be non-negative integers (ms)",
+        400,
+      );
+    }
+
+    if (byRef.has(ref)) {
+      throw new ApiError("duplicate_cue", "A track can only carry one cue", 400);
+    }
+
+    byRef.set(ref, startMs);
+  }
+
+  // Load the current members in tracklist order. The cue set must match this member
+  // set EXACTLY — the state backstop that keeps this from altering the tracklist.
+  const db = await getDb();
+  const membersResult = await db.execute({
+    args: [id],
+    sql: `select track_id, position from mixtape_tracks where mixtape_id = ? order by position`,
+  });
+  const members = typedRows<{ position: number; track_id: string }>(membersResult.rows);
+
+  if (members.length !== byRef.size) {
+    throw new ApiError(
+      "member_set_changed",
+      "Cues must cover exactly the current tracklist (one per track)",
+      409,
+    );
+  }
+
+  // Reject any ref that isn't a current member. With equal counts + unique refs,
+  // every ref matching a member means the two sets are identical.
+  for (const ref of byRef.keys()) {
+    if (!members.some((member) => member.track_id === ref)) {
+      throw new ApiError("non_member_cue", `No current member with id ${ref}`, 400);
+    }
+  }
+
+  // Validate monotonic, start-at-0 cues along the tracklist order (YouTube chapters).
+  let previous = -1;
+
+  for (const [index, member] of members.entries()) {
+    const startMs = byRef.get(member.track_id) ?? 0;
+
+    if (index === 0 && startMs !== 0) {
+      throw new ApiError("cue_not_start_at_zero", "The first cue must start at 0 ms", 400);
+    }
+
+    if (startMs <= previous) {
+      throw new ApiError(
+        "cue_not_monotonic",
+        "Cues must increase along the tracklist (no repeats, in order)",
+        400,
+      );
+    }
+
+    previous = startMs;
+  }
+
+  // Re-time the existing members only — one UPDATE per member, plus the mixtape's
+  // updated_at bump (the cues change its public /mixtapes surface).
+  const now = new Date().toISOString();
+  await db.batch(
+    [
+      ...members.map((member) => ({
+        args: [byRef.get(member.track_id) ?? 0, id, member.track_id],
+        sql: `update mixtape_tracks set start_ms = ? where mixtape_id = ? and track_id = ?`,
+      })),
+      { args: [now, id], sql: `update mixtapes set updated_at = ? where id = ?` },
+    ],
+    "write",
+  );
+
+  return purgeMixtapeLogCache(await getMixtapeById(id));
+}
+
+// One interactive cue write, keyed by a single member's TRACK ID (`ref` — a trackId,
+// or a logId resolved to its trackId). The Fluncle Studio cue-rail body.
+export type MixtapeCueUpdateInput = {
+  ref?: unknown;
+  startMs?: unknown;
+};
+
+// Upsert ONE minted member's cue (`mixtape_tracks.start_ms`) — the INTERACTIVE
+// counterpart to setMixtapeCues. Where setMixtapeCues is the all-or-nothing cue-sheet
+// backfill (one cue per member, start-at-0, strictly monotonic — the CLI path), this
+// marks a single track with NO coverage/order constraint, so the operator can mark the
+// set out of order and leave it partly cued mid-session; the downstream (YouTube
+// chapters, Mixcloud sections, /log) already tolerates partial + non-monotonic cues.
+// It is the inverse of setMixtapeMembers: published-safe (works on a minted
+// `distributing`/`published` set) and it rejects an UNMINTED claim (whose start_ms
+// is seeded by the promote path). Passing `startMs: null` CLEARS the cue.
+export async function setMixtapeCue(id: string, input: MixtapeCueUpdateInput): Promise<MixtapeDTO> {
+  const ref = typeof input.ref === "string" ? input.ref.trim() : "";
+
+  if (!ref) {
+    throw new ApiError("invalid_cue", "A cue needs a track ref", 400);
+  }
+
+  // `null` clears the cue; a non-negative integer sets it; anything else is invalid.
+  let startMs: number | null;
+
+  if (input.startMs === null) {
+    startMs = null;
+  } else if (
+    typeof input.startMs === "number" &&
+    Number.isInteger(input.startMs) &&
+    input.startMs >= 0
+  ) {
+    startMs = input.startMs;
+  } else {
+    throw new ApiError(
+      "invalid_start_ms",
+      "A cue timestamp must be a non-negative integer (ms), or null to clear it",
+      400,
+    );
+  }
+
+  // The cue rail re-times a MINTED set, so reject an unminted claim here
+  // (getMixtapeById throws mixtape_not_found/404). This is the inverse of
+  // assertUnmintedMixtape.
+  const mixtape = await getMixtapeById(id);
+
+  if (!mixtape.logId) {
+    throw new ApiError(
+      "mixtape_not_minted",
+      "Cues mark a minted set — promote the recording first",
+      409,
+    );
+  }
+
+  // Resolve the ref (a trackId or logId) to its trackId, then confirm it's a current
+  // member — the cue can only re-time the frozen tracklist, never add a row.
+  const track = await getTrackByIdOrLogId(ref);
+
+  if (!track) {
+    throw new ApiError("member_not_found", `No finding with id ${ref}`, 400);
+  }
+
+  const db = await getDb();
+  const membersResult = await db.execute({
+    args: [id],
+    sql: `select track_id, position from mixtape_tracks where mixtape_id = ? order by position`,
+  });
+  const members = typedRows<{ position: number; track_id: string }>(membersResult.rows);
+
+  if (!members.some((member) => member.track_id === track.trackId)) {
+    throw new ApiError("non_member_cue", `No current member with id ${ref}`, 404);
+  }
+
+  // Re-time the one member + bump the mixtape's updated_at (the cue changes its public
+  // /mixtapes + /log surface). No monotonic/coverage check — a transient out-of-order
+  // or partial state is allowed; the downstream tolerates it.
+  const now = new Date().toISOString();
+  await db.batch(
+    [
+      {
+        args: [startMs, id, track.trackId],
+        sql: `update mixtape_tracks set start_ms = ? where mixtape_id = ? and track_id = ?`,
+      },
+      { args: [now, id], sql: `update mixtapes set updated_at = ? where id = ?` },
+    ],
+    "write",
+  );
+
+  return purgeMixtapeLogCache(await getMixtapeById(id));
 }
 
 // Which mixtapes each of these findings sits in, keyed by trackId — one query, no
@@ -389,19 +499,23 @@ export async function listMixtapeMembershipsForTracks(
   return byTrack;
 }
 
-// Mint a draft into the spine: commit its sequence number, Log ID, and canonical
-// title, moving it from `draft` to `distributing`. This is the FIRST half of
-// publishing — the coordinate now exists (so the cover endpoint and the platform
-// assets can embed the real Log ID), but the mixtape is NOT yet public. It becomes
-// `published` only when the first platform link lands (finalizeMixtapeDistribution),
-// which supplies the listen link — there is no link requirement to mint.
+// Mint a claimed mixtape into the spine: commit its sequence number, Log ID, and
+// canonical title. The row arrives here as `promote_recording`'s claim insert
+// (status `distributing`, `log_id` still NULL — unminted); the mint commits the
+// coordinate. This is the FIRST half of publishing — the coordinate now exists (so
+// the cover endpoint and the platform assets can embed the real Log ID), but the
+// mixtape is NOT yet public. It becomes `published` only when the first platform
+// link lands (finalizeMixtapeDistribution), which supplies the listen link — there
+// is no link requirement to mint.
 export async function publishMixtape(id: string): Promise<MixtapeDTO> {
-  const draft = await getMixtapeById(id, { includeDrafts: true });
+  const claim = await getMixtapeById(id);
 
-  if (draft.status === "published") {
-    throw new ApiError("already_published", "Published mixtapes keep their coordinate", 409);
-  }
-  if (draft.status === "distributing") {
+  // Minted = the Log ID exists; a coordinate is spent exactly once per mixtape.
+  if (claim.logId) {
+    if (claim.status === "published") {
+      throw new ApiError("already_published", "Published mixtapes keep their coordinate", 409);
+    }
+
     throw new ApiError(
       "already_minted",
       "This mixtape already has its coordinate — distribution is in progress",
@@ -409,12 +523,12 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
     );
   }
 
-  // A draft is just the tracklist — that's the only hard requirement to mint. The
-  // recorded date defaults to today (set it on the draft only to backdate the
-  // coordinate's sector); the dream note is written later via the post-publish edit;
-  // the duration is derived from the upload by `distribute`. Title + Log ID + cover
-  // are minted/derived here.
-  if (draft.memberCount < 1) {
+  // A claim is just the tracklist — that's the only hard requirement to mint. The
+  // recorded date is stamped by the promote claim (defaulting to today below only
+  // backdates the coordinate's sector when it is missing); the dream note is
+  // written later via the post-publish edit; the duration is derived from the
+  // upload by `distribute`. Title + Log ID + cover are minted/derived here.
+  if (claim.memberCount < 1) {
     throw new ApiError("missing_members", "Add at least one finding before publishing", 409);
   }
 
@@ -424,7 +538,12 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
     throw new ApiError("mixtape_cap_reached", "The mixtape spine is full (54)", 409);
   }
 
-  const recordedAt = draft.recordedAt ?? new Date().toISOString();
+  // The coordinate's sector day: the recorded date, else today. (The old
+  // `plannedFor`-wins resolution retired with `mixtapes.planned_for` — the live
+  // session lives on the PLAN now, and the promote path stamps the take's
+  // `recorded_at` onto the claim. Forward only: already-minted mixtapes keep
+  // their frozen coordinate.)
+  const recordedAt = claim.recordedAt ?? new Date().toISOString();
   const sectorPrefix = mixtapeLogId(recordedAt, 1).slice(0, -2);
   const now = new Date().toISOString();
   const db = await getDb();
@@ -447,7 +566,7 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
                 added_at = ?,
                 updated_at = ?
               where id = ?
-                and status = 'draft'
+                and log_id is null
                 and (select n from next_sequence) <= 54
               returning log_id, sequence_number`,
       },
@@ -467,8 +586,8 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
 
   // The Log ID and sequence number only exist now — canonicalize the title from
   // them. A title an operator set (a future custom series) is left untouched; the
-  // empty/stub title every draft carries today gets the standard format.
-  const currentTitle = draft.title.trim();
+  // empty/stub title every promote claim carries gets the standard format.
+  const currentTitle = claim.title.trim();
   const isStub =
     currentTitle === "" ||
     currentTitle === DEFAULT_MIXTAPE_TITLE ||
@@ -481,31 +600,10 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
     });
   }
 
-  // Read back through the draft-inclusive path: the row is `distributing` now, so
+  // Read back by id (any status): the row is minted `distributing` now, so
   // getMixtapeByLogId (published-only) would not return it. The coordinate now
   // exists, so its `/log` page + the index need to re-render.
-  return purgeMixtapeLogCache(await getMixtapeById(id, { includeDrafts: true }));
-}
-
-export async function deleteMixtape(id: string): Promise<void> {
-  const mixtape = await getMixtapeById(id, { includeDrafts: true });
-
-  if (mixtape.status !== "draft") {
-    throw new ApiError(
-      "published_not_deletable",
-      "A minted mixtape keeps its coordinate and can't be deleted",
-      409,
-    );
-  }
-
-  const db = await getDb();
-  await db.batch(
-    [
-      { args: [id], sql: `delete from mixtape_tracks where mixtape_id = ?` },
-      { args: [id], sql: `delete from mixtapes where id = ?` },
-    ],
-    "write",
-  );
+  return purgeMixtapeLogCache(await getMixtapeById(id));
 }
 
 export async function getMixtapeByLogId(logId: string): Promise<MixtapeDTO | undefined> {
@@ -550,14 +648,14 @@ async function nextMixtapeSequence(): Promise<number> {
   return Number(row?.n ?? 1);
 }
 
-export async function getMixtapeById(
-  id: string,
-  options: { includeDrafts?: boolean } = {},
-): Promise<MixtapeDTO> {
+// The by-id read admits ANY status (a `distributing` mixtape, or a mid-promote
+// unminted claim) — ids only travel admin/internal paths. The public reads are
+// getMixtapeByLogId (published-only) and listMixtapes' default.
+export async function getMixtapeById(id: string): Promise<MixtapeDTO> {
   const db = await getDb();
   const result = await db.execute({
     args: [id],
-    sql: `${MIXTAPE_SELECT} where m.id = ? ${options.includeDrafts ? "" : "and m.status = 'published'"} limit 1`,
+    sql: `${MIXTAPE_SELECT} where m.id = ? limit 1`,
   });
   const row = typedRow<MixtapeRow>(result.rows);
 
@@ -570,18 +668,20 @@ export async function getMixtapeById(
 
 export async function listMixtapes({
   hydrateMembers = false,
-  includeDrafts = false,
+  includeUnpublished = false,
   limit = 54,
 }: {
   hydrateMembers?: boolean;
-  includeDrafts?: boolean;
+  // Admin-only: also list `distributing` mixtapes (minted, assets still
+  // uploading). The public default is published-only.
+  includeUnpublished?: boolean;
   limit?: number;
 } = {}): Promise<MixtapeDTO[]> {
   const db = await getDb();
   const result = await db.execute({
     args: [Math.min(Math.max(limit, 1), 54)],
     sql: `${MIXTAPE_SELECT}
-          ${includeDrafts ? "" : "where m.status = 'published'"}
+          ${includeUnpublished ? "" : "where m.status = 'published'"}
           order by coalesce(m.added_at, m.created_at) desc, m.id desc
           limit ?`,
   });
@@ -589,34 +689,29 @@ export async function listMixtapes({
   const rows = typedRows<MixtapeRow>(result.rows);
 
   return hydrateMembers
-    ? Promise.all(rows.map(hydrateMixtape))
-    : rows.map((row) => rowToMixtape(row));
+    ? Promise.all(rows.map((row) => hydrateMixtape(row)))
+    : rows.map((row) => rowToMixtape(row, []));
 }
 
 /**
- * The mixtapes the subscribe-able /calendar.ics surfaces:
- *   - every `published` mixtape (a past event, dated by recorded_at), and
- *   - any mixtape with a FUTURE `planned_for` — including drafts, which is the
- *     intended teaser: an upcoming live session announced before it's recorded.
- *
- * A draft WITHOUT `planned_for` stays fully hidden (it's neither published nor
- * future-planned), so the calendar never leaks unannounced drafts. Members are
- * hydrated so the .ics description can carry the tracklist.
+ * The mixtapes the subscribe-able /calendar.ics surfaces: every `published`
+ * mixtape — a past event, dated by recorded_at. (Upcoming live sessions come
+ * from the PLAN side now — `listUpcomingPlans` in ./recordings — since
+ * `mixtapes.planned_for` retired in the plan→recording→mixtape Deploy-2.)
+ * Members are hydrated so the .ics description can carry the tracklist.
  */
-export async function listCalendarMixtapes(nowIso: string): Promise<MixtapeDTO[]> {
+export async function listCalendarMixtapes(): Promise<MixtapeDTO[]> {
   const db = await getDb();
   const result = await db.execute({
-    args: [nowIso],
     sql: `${MIXTAPE_SELECT}
           where m.status = 'published'
-             or (m.planned_for is not null and m.planned_for > ?)
-          order by coalesce(m.planned_for, m.recorded_at, m.added_at, m.created_at) asc, m.id asc
+          order by coalesce(m.recorded_at, m.added_at, m.created_at) asc, m.id asc
           limit 108`,
   });
 
   const rows = typedRows<MixtapeRow>(result.rows);
 
-  return Promise.all(rows.map(hydrateMixtape));
+  return Promise.all(rows.map((row) => hydrateMixtape(row)));
 }
 
 const MIXTAPE_SELECT = `select
@@ -638,8 +733,9 @@ const MIXTAPE_SELECT = `select
      order by published_at desc limit 1) as soundcloud_url,
   m.added_at,
   m.recorded_at,
-  m.planned_for,
+  m.recording_id,
   m.published_at,
+  m.set_video_at,
   m.created_at,
   m.updated_at,
   (select count(*) from mixtape_tracks mt where mt.mixtape_id = m.id) as member_count
@@ -649,11 +745,14 @@ async function hydrateMixtape(row: MixtapeRow): Promise<MixtapeDTO> {
   return rowToMixtape(row, await getTracksForMixtape(row.id));
 }
 
-async function assertDraftMixtape(id: string): Promise<void> {
+// The tracklist freezes at the mint: only an UNMINTED claim (no Log ID yet — the
+// row `promote_recording` inserts before minting) accepts member writes. This is
+// the immutability backstop that keeps a published checkpoint's tracklist fixed.
+async function assertUnmintedMixtape(id: string): Promise<void> {
   const db = await getDb();
   const result = await db.execute({
     args: [id],
-    sql: `select status from mixtapes where id = ? limit 1`,
+    sql: `select status, log_id from mixtapes where id = ? limit 1`,
   });
   const row = typedRow<StatusRow>(result.rows);
 
@@ -661,7 +760,7 @@ async function assertDraftMixtape(id: string): Promise<void> {
     throw new ApiError("mixtape_not_found", "Mixtape not found", 404);
   }
 
-  if (row.status !== "draft") {
+  if (row.log_id !== null) {
     throw new ApiError(
       "published_immutable",
       "Published mixtapes keep their checkpoint fixed",
@@ -673,15 +772,15 @@ async function assertDraftMixtape(id: string): Promise<void> {
 function validateMixtapeInput(input: MixtapeInput): {
   durationMs?: number | null;
   note?: string | null;
-  plannedFor?: string | null;
   recordedAt?: string | null;
+  setVideoAt?: string | null;
   soundcloudUrl?: string | null;
 } {
   return {
     durationMs: optionalInteger(input.durationMs, "durationMs"),
     note: optionalText(input.note, noteMaxLength),
-    plannedFor: optionalIsoDate(input.plannedFor, "plannedFor"),
     recordedAt: optionalIsoDate(input.recordedAt, "recordedAt"),
+    setVideoAt: optionalIsoDate(input.setVideoAt, "setVideoAt"),
     soundcloudUrl: optionalUrl(input.soundcloudUrl),
   };
 }

@@ -1,0 +1,2710 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Admin jobs — Fluncle</title>
+    <style>
+      :root {
+        --field: #090a0b;
+        --sleeve: #10100d;
+        --tape: #171611;
+        --cream: #f4ead7;
+        --dust: #b7ab95;
+        --gold: #f5b800;
+        --gold-veil: rgba(245, 184, 0, 0.1);
+        --dust-veil: rgba(208, 185, 144, 0.1);
+        --red: #eb4b4b;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html {
+        color-scheme: dark;
+      }
+      body {
+        background: var(--field);
+        color: var(--cream);
+        font:
+          13px/1.45 ui-sans-serif,
+          system-ui,
+          -apple-system,
+          sans-serif;
+        font-variant-numeric: tabular-nums;
+      }
+      .top {
+        position: sticky;
+        top: 0;
+        background: var(--field);
+        border-bottom: 1px solid var(--tape);
+        padding: 10px 14px 0;
+        z-index: 2;
+      }
+      h1 {
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+        display: inline;
+      }
+      .counts {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin: 8px 0;
+      }
+      .chip {
+        border: 1px solid var(--tape);
+        background: var(--sleeve);
+        color: var(--cream);
+        border-radius: 5px;
+        padding: 3px 9px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .chip b {
+        font-weight: 700;
+      }
+      .chip.on {
+        border-color: var(--gold);
+        background: var(--gold-veil);
+      }
+      .chip:focus-visible,
+      input:focus-visible,
+      th:focus-visible,
+      tr.job:focus-visible {
+        outline: 2px solid var(--gold);
+        outline-offset: 1px;
+      }
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding-bottom: 10px;
+        align-items: center;
+      }
+      input[type="search"] {
+        background: var(--sleeve);
+        border: 1px solid var(--tape);
+        color: var(--cream);
+        border-radius: 5px;
+        padding: 4px 9px;
+        font: inherit;
+        width: 260px;
+      }
+      input::placeholder {
+        color: var(--dust);
+      }
+      .wrap {
+        overflow-x: auto;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        min-width: 1080px;
+      }
+      th {
+        text-align: left;
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--dust);
+        padding: 7px 9px;
+        border-bottom: 1px solid var(--tape);
+        cursor: pointer;
+        position: sticky;
+        top: 0;
+        background: var(--field);
+        white-space: nowrap;
+        user-select: none;
+      }
+      th .dir {
+        color: var(--gold);
+      }
+      td {
+        padding: 6px 9px;
+        border-bottom: 1px solid var(--tape);
+        vertical-align: top;
+      }
+      tr.job {
+        cursor: pointer;
+      }
+      tr.job:hover td {
+        background: var(--sleeve);
+      }
+      .dom {
+        color: var(--dust);
+        font-size: 11px;
+        white-space: nowrap;
+      }
+      .job-name {
+        font-weight: 600;
+      }
+      .mark {
+        font-size: 12px;
+      }
+      .muted {
+        color: var(--dust);
+      }
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+      }
+      .drop {
+        color: var(--dust);
+        font-size: 12px;
+      }
+      .none {
+        color: var(--red);
+      }
+      .detail td {
+        background: var(--sleeve);
+        font-size: 12px;
+        padding: 9px 12px 11px;
+      }
+      .detail dl {
+        display: grid;
+        grid-template-columns: 96px 1fr;
+        gap: 3px 12px;
+        max-width: 900px;
+      }
+      .detail dt {
+        color: var(--dust);
+      }
+      .detail dd {
+        overflow-wrap: anywhere;
+      }
+      .hide {
+        display: none;
+      }
+      .zero {
+        padding: 40px 14px;
+        color: var(--dust);
+      }
+      .foot {
+        padding: 10px 14px 24px;
+        color: var(--dust);
+        font-size: 11px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="top">
+      <h1>Admin jobs</h1>
+      <span class="muted" id="showing"></span>
+      <div class="counts" id="counts" role="group" aria-label="Filters"></div>
+      <div class="controls">
+        <input
+          type="search"
+          id="q"
+          placeholder="Search jobs, notes, ops… ( / )"
+          aria-label="Search jobs"
+        />
+        <span class="counts" id="domains" role="group" aria-label="Domain filter"></span>
+      </div>
+    </div>
+    <div class="wrap">
+      <table id="t" aria-label="The admin jobs inventory">
+        <thead>
+          <tr id="head"></tr>
+        </thead>
+        <tbody id="body"></tbody>
+      </table>
+    </div>
+    <div class="zero hide" id="zero">No rows match. Clear a filter.</div>
+    <div class="foot mono">docs/admin-jobs.csv · regenerate: bun run jobs:html</div>
+    <script>
+      const JOBS = [
+        {
+          domain: "intake-enrichment",
+          order_hint: "10",
+          job: "Submit a candidate finding",
+          status: "live",
+          trigger: "event:crew-submit",
+          executor: "human",
+          runs_on: "cloudflare",
+          input: "a Spotify link or search pick",
+          output: "submissions row (status=pending) + Discord ping",
+          surfaces: "cli-public;api",
+          primary_surface: "cli-public",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "createSubmission submissions.ts; fluncle submit; SSH TUI + MCP/WebMCP also POST /api/submissions; submissions.integration.test.ts",
+        },
+        {
+          domain: "intake-enrichment",
+          order_hint: "15",
+          job: "Review the candidate tray (approve/reject)",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "cloudflare",
+          input: "pending submissions row",
+          output: "submission status approved|rejected (approve publishes via add first)",
+          surfaces: "cli-admin;api",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "list/approve/rejectSubmission orpc/admin-submissions.ts; cli submissions.ts; NO web-admin UI — operator reviews via CLI",
+        },
+        {
+          domain: "intake-enrichment",
+          order_hint: "20",
+          job: "Add a finding (operator publish)",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "cloudflare",
+          input: "a Spotify track URL",
+          output: "tracks row live (Spotify playlist + Telegram + Log ID)",
+          surfaces: "cli-admin;raycast;api",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "publishTrack publish.ts; cli add.ts + raycast quick-add; Spotify/Telegram/push/IndexNow side-channels; no web-admin add UI (gap)",
+        },
+        {
+          domain: "intake-enrichment",
+          order_hint: "25",
+          job: "Add + triage findings from web admin (intake station)",
+          status: "desired",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "browser;cloudflare",
+          input: "a Spotify link or a pending submission",
+          output: "a published finding from the operator's own platform",
+          surfaces: "",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "web add does NOT exist today (CLI+raycast only); cockpit-roadmap.md intake + persona law (web admin = operator platform)",
+        },
+        {
+          domain: "intake-enrichment",
+          order_hint: "30",
+          job: "Mint the Log ID coordinate",
+          status: "live",
+          trigger: "event:add",
+          executor: "system",
+          runs_on: "cloudflare",
+          input: "found date + ISRC (Spotify id fallback)",
+          output: "log_id on tracks row (permanent Galaxy coordinate)",
+          surfaces: "api",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "resolveLogId log-id.ts; Deezer ISRC fallback runs before the hash; minting untested (decode tested log-schema.test.ts)",
+        },
+        {
+          domain: "intake-enrichment",
+          order_hint: "35",
+          job: "Enrich label + live preview from Deezer",
+          status: "live",
+          trigger: "event:add",
+          executor: "system",
+          runs_on: "cloudflare",
+          input: "the finding's ISRC",
+          output: "label + preview_url on tracks row (best-effort)",
+          surfaces: "api",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "enrichFromDeezer/lookupIsrcFromDeezer deezer.ts; preview-live.test.ts exercises Deezer resolve; on-add enrich itself untested",
+        },
+        {
+          domain: "intake-enrichment",
+          order_hint: "40",
+          job: "Resolve the Discogs release id",
+          status: "live",
+          trigger: "event:add;cron:fluncle-backfill",
+          executor: "system",
+          runs_on: "cloudflare;rave-02",
+          input: "artist + title + album (Discogs has no ISRC search)",
+          output: "in_release_id/in_master_id on tracks row (sameAs on /log)",
+          surfaces: "api;box-script",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "discogsResolveRelease discogs.ts + backfill.ts; MB ISRC bridge then gated search; discogs.test.ts + orpc-admin-backfills.test.ts",
+        },
+        {
+          domain: "intake-enrichment",
+          order_hint: "45",
+          job: "Love the finding on Last.fm",
+          status: "live",
+          trigger: "event:add;cron:fluncle-backfill",
+          executor: "system",
+          runs_on: "cloudflare;rave-02",
+          input: "artist + title",
+          output: "a Loved Track on Fluncle's Last.fm; lastfm_loved_at marker",
+          surfaces: "api;box-script",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "lastfmLove lastfm.ts + backfill.ts; idempotent + rate-limited + cooldown; lastfm.test.ts + backfill-loved.test.ts",
+        },
+        {
+          domain: "intake-enrichment",
+          order_hint: "50",
+          job: "Analyze the preview audio (BPM, key, features)",
+          status: "live",
+          trigger: "cron:fluncle-enrich",
+          executor: "system",
+          runs_on: "rave-02",
+          input: "the finding's official 30s preview (Deezer/iTunes)",
+          output: "bpm + key + features_json; enrichment_status=done|failed",
+          surfaces: "cli-admin;box-script;api",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "enrich-sweep.ts (5m) → analyze-track.ts ffmpeg+DSP on-box → admin tracks update; features = auto-vibe training signal; analyze-audio.test.ts",
+        },
+        {
+          domain: "intake-enrichment",
+          order_hint: "45",
+          job: "Embed a track (MuQ)",
+          status: "desired",
+          trigger: "cron:fluncle-embed(new)",
+          executor: "system",
+          runs_on: "rave-02",
+          input: "the track's analysis audio",
+          output: "an embedding vector per track (storage per the MuQ spike)",
+          surfaces: "",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "MuQ on rave-02 as a new cron; replaces manual vibe tagging (spike 2026-07-06: existing data insufficient for auto-tag)",
+        },
+        {
+          domain: "intake-enrichment",
+          order_hint: "46",
+          job: "Place a finding from its embedding (clustering)",
+          status: "desired",
+          trigger: "event:embedded",
+          executor: "system",
+          runs_on: "cloudflare",
+          input: "the track's MuQ embedding",
+          output: "auto placement coords (supersedes vibe_x/vibe_y manual entry)",
+          surfaces: "",
+          primary_surface: "api",
+          drop_from: "web-admin(tag tool retires)",
+          tests: "none",
+          notes:
+            "supersedes /admin/tag + the tag dialog; same embeddings feed similar-tracks (crew feature) later",
+        },
+        {
+          domain: "intake-enrichment",
+          order_hint: "55",
+          job: "Re-queue a finding for enrichment",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "cloudflare",
+          input: "a finding (any enrichment_status)",
+          output: "enrichment_status=pending (queue-eligible again)",
+          surfaces: "web-admin;cli-admin;api",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "EnrichDialog enrich-dialog.tsx → update_track status=pending; on-box cron picks it up next tick; enrich-queue.test.ts",
+        },
+        {
+          domain: "intake-enrichment",
+          order_hint: "60",
+          job: "Archive the analyzed preview (private)",
+          status: "live",
+          trigger: "agent",
+          executor: "system",
+          runs_on: "rave-02;cloudflare",
+          input: "the exact official preview analyzed",
+          output: "R2 operator-only archive path + preview_archive_* metadata",
+          surfaces: "cli-admin;api",
+          primary_surface: "cli-admin",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "preview-archive.ts; fluncle admin tracks preview; NOT run by enrich-sweep — skill/manual only; preview-archive.test.ts",
+        },
+        {
+          domain: "intake-enrichment",
+          order_hint: "65",
+          job: "Gather the context note (Firecrawl facts)",
+          status: "live",
+          trigger: "cron:fluncle-context-note",
+          executor: "system",
+          runs_on: "rave-02;cloudflare",
+          input: "the finding's identity (artist/title/label)",
+          output: "context_note (distilled facts + Texture line) + context_status marker",
+          surfaces: "cli-admin;box-script;api",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "context-sweep.ts (5m) triggers context_track; Worker Firecrawl + OpenRouter distill; fetchTrackContext observation.ts; observation.test.ts",
+        },
+        {
+          domain: "intake-enrichment",
+          order_hint: "70",
+          job: "Auto-author the editorial /log note",
+          status: "live",
+          trigger: "cron:fluncle-note",
+          executor: "ai",
+          runs_on: "rave-02;cloudflare",
+          input: "the stored context_note + identity",
+          output: "note on tracks row (fill-empty-only; voice-gated)",
+          surfaces: "cli-admin;box-script;api",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "note-sweep.ts (10m hybrid) claude -p authors → note_track Worker voice-gate + fill-empty; gateNoteText note.ts; note.test.ts",
+        },
+        {
+          domain: "intake-enrichment",
+          order_hint: "75",
+          job: "Author the spoken audio observation",
+          status: "live",
+          trigger: "cron:fluncle-observation",
+          executor: "ai",
+          runs_on: "rave-02;cloudflare",
+          input: "the stored context_note + identity",
+          output: "observation.{mp3,txt,json} on R2 + observation_audio_url on row",
+          surfaces: "cli-admin;box-script;api",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "observe-sweep.ts (60m hybrid) claude -p authors → observe_track renders Cartesia Sonic; observation.ts; observation.test.ts",
+        },
+        {
+          domain: "intake-enrichment",
+          order_hint: "80",
+          job: "Backfill a finding's BPM (manual repair)",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "M5;cloudflare",
+          input: "a finding with null/fake/stale BPM",
+          output: "corrected bpm on tracks row",
+          surfaces: "cli-admin",
+          primary_surface: "cli-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "fluncle-bpm-backfill skill; AcousticBrainz-by-ISRC then transient yt-dlp+DSP fallback; approval-gated; analyze-track.acousticbrainz.test.ts",
+        },
+        {
+          domain: "intake-enrichment",
+          order_hint: "85",
+          job: "Backfill a finding's musical key from Rekordbox",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "M2;cloudflare",
+          input: "Rekordbox master.db keys + null-key findings",
+          output: "normalized key on tracks row",
+          surfaces: "cli-admin;m2-script",
+          primary_surface: "cli-admin",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "fluncle-key-backfill skill; reads DjmdContent.Key.ScaleName; matches title+artist; dry-run then admin tracks update --key; M2 only",
+        },
+        {
+          domain: "intake-enrichment",
+          order_hint: "90",
+          job: "Backfill a straggler's Log ID or ISRC",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "cloudflare",
+          input: "a finding with a null log_id/isrc slot",
+          output: "one-time log_id (auto-derived) or isrc write, else rejected",
+          surfaces: "cli-admin;api",
+          primary_surface: "cli-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "update_track --isrc/--logId auto; null-slot only, immutable once set; track-update.ts:282; orpc-admin-tracks.test.ts",
+        },
+        {
+          domain: "curation-posting",
+          order_hint: "20",
+          job: "Edit a finding's editorial note (operator)",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "cloudflare",
+          input: "a finding + the 'why' copy",
+          output: "note on the track row (feeds /log prose + JSON-LD)",
+          surfaces: "web-admin;cli-admin",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "note-dialog.tsx; saveNote PATCH {note}; NOTE_MAX_LENGTH; also cli admin tracks update --note; auto-note cron fills-empty-only (note-agent domain)",
+        },
+        {
+          domain: "curation-posting",
+          order_hint: "30",
+          job: "Re-queue a finding for enrichment",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "cloudflare;rave-02",
+          input: "a finding (needs a re-analysis)",
+          output: "enrichmentStatus=pending → box cron re-runs BPM/key/features",
+          surfaces: "web-admin;cli-admin",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "enrich-dialog.tsx; runEnrichment PATCH enrichmentStatus=pending; on-box fluncle-enrich --no-agent cron picks up ~5min; update op tested in orpc-admin-tracks.test.ts",
+        },
+        {
+          domain: "curation-posting",
+          order_hint: "40",
+          job: "View a finding's context note",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "cloudflare",
+          input: "a finding's context_note (firecrawl facts)",
+          output: "read-only view (no write)",
+          surfaces: "web-admin",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "ContextDialog in observation-dialogs.tsx; getContextNote lazy; VIEW-ONLY (generation is the enrich agent's job); internal, off public contract",
+        },
+        {
+          domain: "curation-posting",
+          order_hint: "50",
+          job: "Play a finding's observation",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "cloudflare",
+          input: "a finding's observation.mp3 + script",
+          output: "read-only audio playback + transcript",
+          surfaces: "web-admin",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "ObservationDialog in observation-dialogs.tsx; getObservationScript lazy; VIEW-ONLY; observationAudioUrl on row",
+        },
+        {
+          domain: "curation-posting",
+          order_hint: "60",
+          job: "Preview a finding's clip before posting",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "cloudflare",
+          input: "a finding with a rendered video",
+          output: "in-dialog StoriesPlayer playback (no write)",
+          surfaces: "web-admin",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "onPreview→StoriesPlayer dialog in admin/index.tsx; loads clip on open; used to line up the TikTok official sound",
+        },
+        {
+          domain: "curation-posting",
+          order_hint: "66",
+          job: "Prep a post — copy caption + grab cover",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "cloudflare",
+          input: "a finding's note.txt caption + cover.jpg",
+          output: "caption on clipboard + cover downloaded",
+          surfaces: "web-admin;phone",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "copyCaption→fetchCaption reads public note.txt (gesture-safe clipboard); Download cover in push-dialog.tsx Prep block",
+        },
+        {
+          domain: "curation-posting",
+          order_hint: "70",
+          job: "Push a TikTok draft to the inbox",
+          status: "live",
+          trigger: "operator;agent",
+          executor: "human;ai",
+          runs_on: "cloudflare",
+          input: "a finding with a video + Log ID",
+          output: "social_posts(tiktok,draft) + Postiz inbox draft (SELF_ONLY)",
+          surfaces: "web-admin;cli-admin",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "draft_track_social tiktok in admin-social.ts:136; silenced footage.social.mp4 via audio=false MT; agent-allowed; 5-drafts/24h cap warning; orpc-admin-social.test.ts",
+        },
+        {
+          domain: "curation-posting",
+          order_hint: "80",
+          job: "Post a YouTube Short",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "cloudflare",
+          input: "a finding with a video + Log ID",
+          output: "social_posts(youtube,published) + Postiz public Short + auto-resolved watch URL",
+          surfaces: "web-admin;cli-admin",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "draft_track_social youtube: field-level operator guard (agent=403); direct PUBLIC; youtube_url_pending 409 gate; resolveSocialUrl; orpc-admin-social.test.ts",
+        },
+        {
+          domain: "curation-posting",
+          order_hint: "90",
+          job: "Record a post's outcome — mark live URL or failed",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "cloudflare",
+          input: "the real public post URL (or a failure)",
+          output: "social_posts.status=published+url (or failed → reopens unposted)",
+          surfaces: "web-admin;cli-admin",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "update_track_social operator-tier; markLive/markFailed in admin/index.tsx; PushDialog confirm step; published requires --url; orpc-admin-social.test.ts",
+        },
+        {
+          domain: "curation-posting",
+          order_hint: "100",
+          job: "Capture missing post URLs (Postiz sweep)",
+          status: "live",
+          trigger: "cron:box-capture;agent",
+          executor: "system;ai",
+          runs_on: "rave-02",
+          input: "pushed-but-no-URL youtube/tiktok posts",
+          output: "filled social_posts.url + tiktok draft→published",
+          surfaces: "box-script;cli-admin;api",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "capture_post_urls in admin-social.ts:283 (fluncle admin tracks social --capture); isUrlClaimedByOtherTrack newest-aweme trap; fill-empty-only; orpc-admin-social.test.ts",
+        },
+        {
+          domain: "curation-posting",
+          order_hint: "105",
+          job: "Read a finding's per-platform posted state",
+          status: "live",
+          trigger: "operator;agent",
+          executor: "system",
+          runs_on: "cloudflare",
+          input: "a finding id",
+          output: "its social_posts rows (draft/published/failed + urls)",
+          surfaces: "web-admin;cli-admin",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "list_track_social + board batch listSocialPostsForTracks; social_posts table = posted-state truth; board platform cells + push-dialog read it; orpc-admin-social.test.ts",
+        },
+        {
+          domain: "curation-posting",
+          order_hint: "110",
+          job: "Surface the next finding to post (helm next-to-post card)",
+          status: "live",
+          trigger: "cron:helm-poll",
+          executor: "system",
+          runs_on: "M5;M2",
+          input: "recently-filmed findings + their social state",
+          output: "NextToPostCard (caption/cover/asset + adminUrl deep-link)",
+          surfaces: "helm",
+          primary_surface: "web-admin",
+          drop_from: "helm(frozen)",
+          tests: "yes",
+          notes:
+            "pulse/posting-state.ts gatherer + selectNextToPost; VIEW-only, deep-links to web board for the actual push; logic.test.ts covers selection; conservative (never a false row)",
+        },
+        {
+          domain: "curation-posting",
+          order_hint: "120",
+          job: "Nudge when a dressed finding is unposted ~18h",
+          status: "live",
+          trigger: "cron:helm-18h-scheduler",
+          executor: "system",
+          runs_on: "M5;M2",
+          input: "newest posted-at vs unposted renders",
+          output: "one macOS osascript notification (deduped 1/day)",
+          surfaces: "helm",
+          primary_surface: "helm",
+          drop_from: "helm(frozen)",
+          tests: "yes",
+          notes:
+            "pulse/scheduler.ts + nudgeTick; FLUNCLE_HELM_NUDGE_HOURS default 18; hourly, windowless under launchd; persisted per-day dedupe; scheduler.test.ts+logic.test.ts",
+        },
+        {
+          domain: "curation-posting",
+          order_hint: "130",
+          job: "The attention queue as home (the Cockpit)",
+          status: "desired",
+          trigger: "cron:helm-poll;operator",
+          executor: "system",
+          runs_on: "M5;M2",
+          input: "every actionable state across the pipeline",
+          output:
+            "a row per action; zero rows = success; deep-links non-native tasks to web /admin",
+          surfaces: "helm",
+          primary_surface: "helm",
+          drop_from: "helm(frozen)",
+          tests: "none",
+          notes:
+            "cockpit-roadmap.md 'The queue (home)'; two-tier order; bounded working set; trust rule (never an unconfirmable row); Phase 1",
+        },
+        {
+          domain: "curation-posting",
+          order_hint: "134",
+          job: "Surface unposted-to-TikTok as a queue source",
+          status: "partial",
+          trigger: "cron:helm-poll",
+          executor: "system",
+          runs_on: "M5;M2",
+          input: "social_posts freshness per recent finding",
+          output: "unposted rows in the Cockpit queue",
+          surfaces: "helm",
+          primary_surface: "helm",
+          drop_from: "helm(frozen)",
+          tests: "partial",
+          notes:
+            "roadmap sources = EXISTS (Pulse computes it as the single next-to-post card today); logic.test.ts covers selectNextToPost; full queue-row desired; note: NO 'unposted' worklist on the web board",
+        },
+        {
+          domain: "curation-posting",
+          order_hint: "136",
+          job: "Detect + surface stale TikTok drafts (24h bounce) + fix the freshness bug",
+          status: "partial",
+          trigger: "cron:helm-poll",
+          executor: "system",
+          runs_on: "M5;M2",
+          input: "a draft's push time vs 24h deadline",
+          output: "a deadline queue row for a bounced/over-24h draft",
+          surfaces: "helm",
+          primary_surface: "helm",
+          drop_from: "helm(frozen)",
+          tests: "partial",
+          notes:
+            "roadmap PARTIAL — small build; BUG: postFreshness counts a draft as 'gone out' (LIVE_POST_STATUSES has 'draft') so a bounced draft never resurfaces; deadline math is new; pulse/logic.ts",
+        },
+        {
+          domain: "curation-posting",
+          order_hint: "138",
+          job: 'Snooze or "Won\'t do" a queue row',
+          status: "desired",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "M5;M2",
+          input: "a queue row + a decision",
+          output: "snoozed-until or a permanent undoable dismissal",
+          surfaces: "helm",
+          primary_surface: "helm",
+          drop_from: "helm(frozen)",
+          tests: "none",
+          notes:
+            "cockpit-roadmap.md queue mechanics; 'Won't do' keeps the queue from becoming a guilt list; snooze-until-time is plain",
+        },
+        {
+          domain: "curation-posting",
+          order_hint: "140",
+          job: "Port the desk push into a Cockpit posting row",
+          status: "desired",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "M5;M2",
+          input: "the next finding to post",
+          output: "[Copy caption][Push TikTok draft][Open post asset][Mark failed] in the Cockpit",
+          surfaces: "helm",
+          primary_surface: "helm",
+          drop_from: "web-admin;helm(frozen)",
+          tests: "none",
+          notes:
+            "cockpit-roadmap.md 'the desk push'; capability LIVE today via push-dialog.tsx; 5-drafts/24h warning; Phase-3 port deletes the web desk counterpart at parity",
+        },
+        {
+          domain: "curation-posting",
+          order_hint: "142",
+          job: "The phone finish posting card (dedicated mobile)",
+          status: "partial",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "phone",
+          input: "a TikTok draft already in the inbox",
+          output:
+            "caption-copy + official-sound search string + cover-to-camera-roll + URL-paste + Mark posted",
+          surfaces: "phone;web-admin",
+          primary_surface: "phone",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "cockpit-roadmap.md 'the phone finish' — the one admin surface built for the phone, stays on web; TODAY PushDialog serves it responsively; DESIRED adds the title+artist sound-search string (absent today) + cover-save-to-camera-roll",
+        },
+        {
+          domain: "curation-posting",
+          order_hint: "144",
+          job: "Daily digest nudge → notification-is-its-action",
+          status: "desired",
+          trigger: "cron:helm-daily",
+          executor: "system",
+          runs_on: "M5;M2;cloudflare",
+          input: "the queue's due/aged counts",
+          output:
+            "one daily digest push ('4 waiting, oldest 17d') that opens the Cockpit at the row",
+          surfaces: "helm;telegram",
+          primary_surface: "helm",
+          drop_from: "helm(frozen)",
+          tests: "none",
+          notes:
+            "cockpit-roadmap.md 'one daily digest nudge'; today's 18h osascript nudge (scheduler.ts) is the seed; only true deadlines earn an individual push; future web/telegram",
+        },
+        {
+          domain: "curation-posting",
+          order_hint: "146",
+          job: "Trigger a finding's observation/context render from the board",
+          status: "desired",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "cloudflare",
+          input: "a finding + agent-authored voice-gated script",
+          output: "a rendered observation.mp3 (+ context_note)",
+          surfaces: "web-admin",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "observation-dialogs.tsx TODO(backfill): board is VIEW-ONLY today; needs an operator-trigger path posting an agent-authored script to the observe endpoint (voice-gated)",
+        },
+        {
+          domain: "video-pipeline",
+          order_hint: "10",
+          job: "View the render queue",
+          status: "live",
+          trigger: "operator;agent;cron:fluncle-render",
+          executor: "system",
+          runs_on: "cloudflare",
+          input: "admin auth (no args)",
+          output: "findings needing a video, oldest-first (JSON)",
+          surfaces: "cli-admin;api",
+          primary_surface: "cli-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "fluncle admin tracks queue → list_tracks_admin(hasContext=true,hasVideo=false); admin-tracks.ts:queueCommand; queue depth badges the admin sidebar System entry (admin-sidebar.tsx, Wave 0 shell)",
+        },
+        {
+          domain: "video-pipeline",
+          order_hint: "20",
+          job: "Read the diversity ledger",
+          status: "live",
+          trigger: "agent",
+          executor: "system",
+          runs_on: "cloudflare",
+          input: "admin auth",
+          output: "recent video vehicles+grain, newest-first",
+          surfaces: "cli-admin;api",
+          primary_surface: "cli-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "fluncle admin tracks vehicles; feeds render-queue.prompt diversity check; cli.ts:585",
+        },
+        {
+          domain: "video-pipeline",
+          order_hint: "30",
+          job: "Conduct the hourly render",
+          status: "live",
+          trigger: "cron:fluncle-render",
+          executor: "system",
+          runs_on: "rave-02;rave-03",
+          input: "queue head + a scale-to-zero box",
+          output: "detached render triggered on rave-03; box parked",
+          surfaces: "box-script",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "render-conductor.sh RENDERING/IDLE FSM + single-flight; registry cron.render + render-box probe; web-admin visibility desired",
+        },
+        {
+          domain: "video-pipeline",
+          order_hint: "40",
+          job: "Author + render one finding's video",
+          status: "live",
+          trigger: "cron:fluncle-render;operator",
+          executor: "ai",
+          runs_on: "rave-03;M5",
+          input: "queued finding: trackId + context_note fuel + diversity ledger",
+          output: "out/<trackId>.mp4 + props.json/render.json",
+          surfaces: "box-script;cli-admin",
+          primary_surface: "cli-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "render-queue.prompt.md + @fluncle-video skill; social:preview/render.ts (render.test.ts); box render-detached.sh claude -p",
+        },
+        {
+          domain: "video-pipeline",
+          order_hint: "45",
+          job: "Author a photographic plate (plate lane)",
+          status: "live",
+          trigger: "cron:fluncle-render;agent",
+          executor: "ai",
+          runs_on: "rave-03;M5",
+          input: "subject-kind concept + GEMINI_API_KEY",
+          output: "plate.png (+plate.background.png) at out/<logId>/",
+          surfaces: "box-script;cli-admin",
+          primary_surface: "cli-admin",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "fluncle-video cookbook §plate lane; GEMINI_API_KEY injected by conductor; procedural fallback when absent",
+        },
+        {
+          domain: "video-pipeline",
+          order_hint: "50",
+          job: "Pre-upload plates to R2 (no finalize)",
+          status: "live",
+          trigger: "agent",
+          executor: "system",
+          runs_on: "cloudflare;rave-03",
+          input: "plate.png/plate.background.png",
+          output: "R2 <logId>/plate.png; finding stays queued (no video_url)",
+          surfaces: "cli-admin;api",
+          primary_surface: "cli-admin",
+          drop_from: "",
+          tests: "yes",
+          notes: "isPlatesOnlyUpload guard track.ts; presign only, skips finalize; track.test.ts",
+        },
+        {
+          domain: "video-pipeline",
+          order_hint: "60",
+          job: "Gate the render on motion/flash/arc",
+          status: "live",
+          trigger: "cron:fluncle-render;agent",
+          executor: "system",
+          runs_on: "rave-03;M5",
+          input: "full render + trackId",
+          output: "pass/fail verdict (blocks ship) + metrics.json",
+          surfaces: "box-script;cli-admin",
+          primary_surface: "cli-admin",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "judge:metrics=analyze-motion.ts (beat-pull/WCAG flash/arc); analyze-motion.test.ts, detect-beat-pull.test.ts",
+        },
+        {
+          domain: "video-pipeline",
+          order_hint: "65",
+          job: "Gate the render on diversity",
+          status: "live",
+          trigger: "agent",
+          executor: "system",
+          runs_on: "rave-03;M5",
+          input: "render.json (vehicle/grain/register/plateSubject) + recent window",
+          output: "WARN on same-kind/family repeat in window",
+          surfaces: "box-script;cli-admin",
+          primary_surface: "cli-admin",
+          drop_from: "",
+          tests: "yes",
+          notes: "judge:diversity=judge-diversity.ts; judge-diversity.test.ts",
+        },
+        {
+          domain: "video-pipeline",
+          order_hint: "70",
+          job: "Package the render bundle",
+          status: "live",
+          trigger: "cron:fluncle-render;operator",
+          executor: "system",
+          runs_on: "rave-03;M5",
+          input: "out/<trackId>.mp4 + props + render.json",
+          output:
+            "out/<logId>/ two-master bundle (footage.mp4/footage.social.mp4/poster.jpg/cover.jpg/note.txt/composition/props/render/intent/scene.json)",
+          surfaces: "box-script;cli-admin",
+          primary_surface: "cli-admin",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "packages/video ship.ts; square-crop re-render + fingerprint cache; scene.json RFC Unit S; ship.test.ts",
+        },
+        {
+          domain: "video-pipeline",
+          order_hint: "80",
+          job: "Upload + link the video bundle",
+          status: "live",
+          trigger: "cron:fluncle-render;operator",
+          executor: "system",
+          runs_on: "cloudflare;rave-03;M5",
+          input: "out/<logId>/ bundle",
+          output: "R2 <logId>/* + video_url set (dequeues) + squared vintage + MT purge",
+          surfaces: "cli-admin;api",
+          primary_surface: "cli-admin",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "fluncle admin tracks video --dir; presign+finalize_track_video; re-render-contract guard; orpc-admin-tracks.test.ts",
+        },
+        {
+          domain: "video-pipeline",
+          order_hint: "90",
+          job: "Purge stale MT renditions on re-render",
+          status: "live",
+          trigger: "event:video-finalize",
+          executor: "system",
+          runs_on: "cloudflare",
+          input: "logId + vintage (videoSquaredAt)",
+          output: "evicted CF Media-Transformation renditions (waitUntil)",
+          surfaces: "api",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "purgeVideoCache in finalize handler; vintage ?v=videoVersion(squaredAt); video-cache.ts",
+        },
+        {
+          domain: "video-pipeline",
+          order_hint: "100",
+          job: "Requeue a finding's video (re-render)",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "cloudflare",
+          input: "a finding id/logId",
+          output: "video_url + video_squared_at cleared (re-queues, off radio); ledger kept",
+          surfaces: "cli-admin;api",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "fluncle admin tracks requeue-video (operator-tier); NO web button today (roadmap requeue-from-web); orpc-admin-tracks.test.ts",
+        },
+        {
+          domain: "video-pipeline",
+          order_hint: "110",
+          job: "Purge a finding's MT renditions (manual)",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "cloudflare",
+          input: "a finding id/logId",
+          output: "evicted renditions (manual twin of the auto-purge)",
+          surfaces: "cli-admin;api",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "fluncle admin tracks purge-video (operator-tier); after a manual R2 re-upload; purge_video handler",
+        },
+        {
+          domain: "video-pipeline",
+          order_hint: "120",
+          job: "Preview a shipped clip / see render status",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "browser;cloudflare",
+          input: "the finding row",
+          output: "opens the clip preview (video step Filmed/No clip)",
+          surfaces: "web-admin",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "pipeline board video step is view-only; board-model.ts runStep→onPreview; board-model.test.ts",
+        },
+        {
+          domain: "video-pipeline",
+          order_hint: "130",
+          job: "Review a shipped render (unreviewed-renders queue)",
+          status: "desired",
+          trigger: "operator;agent",
+          executor: "human",
+          runs_on: "browser;cloudflare",
+          input: "a freshly-shipped render + its gate verdicts",
+          output: "video_reviewed_at + [Mark reviewed], OR finalize writes gate.advisories[]",
+          surfaces: "",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "cockpit-roadmap.md queue source 'Unreviewed renders' NEEDS NEW STATE; LLM taste judge was dropped; neither column exists today",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "10",
+          job: "Create a plan (line up findings for a set)",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "M5",
+          input: "a set idea",
+          output: "a videoless plan recording (kind=plan) + galaxy-slug handle",
+          surfaces: "web-admin;cli-admin;api",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "create_recording kind=plan; admin/plans.tsx; apps/cli recordings.ts:129; recordings.test.ts",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "20",
+          job: "Edit a plan (add/reorder/remove findings, set Live session date)",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "M5",
+          input: "a plan + Fluncle findings",
+          output: "plan recording's ordered trackIds + recordedAt",
+          surfaces: "web-admin;api;cli-admin",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "update_recording; plans.tsx findings builder (drag reorder); recordedAt→calendar.ics; recordings.test.ts",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "30",
+          job: "Export a plan to Rekordbox/Beatport/m3u8",
+          status: "live",
+          trigger: "operator",
+          executor: "system",
+          runs_on: "M2",
+          input: "a plan id + master.db",
+          output: "Rekordbox playlist (DB write) + XML + Beatport links + m3u8 + checklist",
+          surfaces: "m2-script;helm",
+          primary_surface: "m2-script",
+          drop_from: "helm(frozen)",
+          tests: "yes",
+          notes: "rekordbox-plan-export.py; helm plan-export spawn; test_plan_export.py",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "35",
+          job: "Buy the plan's tracks on Beatport",
+          status: "partial",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "M2",
+          input: "the plan's Beatport search links",
+          output: "purchased tracks in the Rekordbox collection",
+          surfaces: "m2-script",
+          primary_surface: "m2-script",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "manual buy — no add-to-cart API (partner-gated); links from _cue_formats.py beatport_search_links",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "40",
+          job: "Practice/rehearse the set in Rekordbox",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "M2",
+          input: "the plan's Rekordbox crate",
+          output: "a rehearsed set (no artifact)",
+          surfaces: "",
+          primary_surface: "",
+          drop_from: "",
+          tests: "none",
+          notes: "human, no surface; Rekordbox + DDJ-FLX4 on M2; docs/live-show-setup.md",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "50",
+          job: "Start the visuals + the show",
+          status: "live",
+          trigger: "operator",
+          executor: "human;system",
+          runs_on: "M5",
+          input: "a plan id (optional) + the rig",
+          output: "the glass on the show display + bridge + phone remote up",
+          surfaces: "helm",
+          primary_surface: "helm",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "bun run --cwd packages/live show; helm show-control; show.test.ts + show-control/*.test.ts",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "60",
+          job: "Record the set in OBS",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "M5",
+          input: "the FLX4 analog master + mic",
+          output: "an OBS .mov master (T1 clean, T2 mic) on M5",
+          surfaces: "",
+          primary_surface: "",
+          drop_from: "",
+          tests: "none",
+          notes: "human, no surface; OBS out of scope (decided); docs/mixtape-recording-setup.md",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "70",
+          job: "Upload a recording (take) to R2",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "M5",
+          input: "the OBS .mov master",
+          output: "a coordinate-less recording row + recordings/<id>/set.mp4 on R2",
+          surfaces: "cli-admin;helm;api",
+          primary_surface: "helm",
+          drop_from: "helm(frozen)",
+          tests: "partial",
+          notes:
+            "recordings create --video (multipart presign, operator-direct multi-GB); helm upload; mixtape-set-video.test.ts",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "75",
+          job: "Upload a recording from the browser (web multipart)",
+          status: "desired",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "browser",
+          input: "the OBS .mov master",
+          output: "recordings/<id>/set.mp4 on R2",
+          surfaces: "",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "presign_recording_upload IS multipart already (admin-recordings.ts:130); no browser uploader UI; roadmap Set-lifecycle Capture",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "80",
+          job: "Stage the waveform/envelope at upload",
+          status: "desired",
+          trigger: "event:recording-upload",
+          executor: "system",
+          runs_on: "cloudflare;M5",
+          input: "the uploaded set video",
+          output: "recordings/<id>/studio-envelope.json (peaks[])",
+          surfaces: "",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "roadmap Phase 1: spawned analyze-set + NEW arbitrary-key presign op; analyze-set.test.ts exists",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "90",
+          job: "Attach a take to its plan",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "M5",
+          input: "a take recording + a plan id",
+          output: "take.parentId set + version assigned",
+          surfaces: "web-admin;cli-admin;api",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "partial",
+          notes: "update_recording --parent-id; plans.tsx loose-take attach; recordings.test.ts",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "100",
+          job: "Derive cues from Rekordbox history",
+          status: "live",
+          trigger: "operator",
+          executor: "system",
+          runs_on: "M2",
+          input: "a Rekordbox session + Fluncle catalogue",
+          output: "ordered recording_cues written via replace-cues",
+          surfaces: "m2-script;helm",
+          primary_surface: "m2-script",
+          drop_from: "helm(frozen)",
+          tests: "yes",
+          notes:
+            "rekordbox-derive-cues.py --apply; helm derive-cues; test_derive_cues.py + helm cues.test.ts",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "105",
+          job: "Derive cues via a web-admin button (M2 poller)",
+          status: "desired",
+          trigger: "operator",
+          executor: "system",
+          runs_on: "M2;cloudflare",
+          input: "a take + Rekordbox session",
+          output: "recording_cues",
+          surfaces: "",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "none",
+          notes: "roadmap: M2 poller behind a web button (derivation is M2/master.db-bound today)",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "110",
+          job: "Attach cues to a recording",
+          status: "live",
+          trigger: "operator",
+          executor: "system",
+          runs_on: "M5",
+          input: "the ordered cue array",
+          output: "recording_cues replaced transactionally",
+          surfaces: "cli-admin;helm;api",
+          primary_surface: "helm",
+          drop_from: "helm(frozen)",
+          tests: "partial",
+          notes:
+            "replace_recording_cues; recordings replace-cues; helm attach; recordings.test.ts + cues.test.ts",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "120",
+          job: "Mark cue mix-in times on the cue rail",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "M5",
+          input: "a take/mixtape + the envelope",
+          output: "startMs on each cue",
+          surfaces: "web-admin",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "/admin/studio/<id> cue rail (C/X/↑/↓); update_mixtape_cue for promoted; mixtapes-cues.test.ts",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "130",
+          job: "Promote a recording to a mixtape",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "M5",
+          input: "a take recording with cues",
+          output: "minted .F. mixtape + <logId>/set.mp4 + setVideoAt + seeded members",
+          surfaces: "web-admin;cli-admin;helm;api",
+          primary_surface: "helm",
+          drop_from: "helm(frozen)",
+          tests: "yes",
+          notes:
+            "promote_recording (idempotent mint-or-reuse); Studio button/CLI/helm; recordings.test.ts (10+ cases)",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "140",
+          job: "Edit a mixtape (dream note, date, duration, SoundCloud)",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "M5",
+          input: "a promoted mixtape",
+          output: "updated mixtape fields",
+          surfaces: "web-admin;cli-admin;api",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "partial",
+          notes: "update_mixtape; mixtapes update / Studio editor; orpc-admin-mixtapes.test.ts",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "150",
+          job: "Distribute the video to YouTube",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "M5",
+          input: "the mixtape .mp4 master",
+          output: "unlisted YouTube video + mixtape_social_posts row",
+          surfaces: "cli-admin;helm",
+          primary_surface: "helm",
+          drop_from: "helm(frozen)",
+          tests: "partial",
+          notes:
+            "mixtapes distribute --youtube (multi-GB, operator-direct); resumable; mixtape-youtube.test.ts",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "160",
+          job: "Distribute the audio to Mixcloud",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "M5",
+          input: "the clean Track-1 .mp3 master",
+          output: "public Mixcloud cloudcast + mixtape_social_posts row",
+          surfaces: "cli-admin;helm",
+          primary_surface: "helm",
+          drop_from: "helm(frozen)",
+          tests: "partial",
+          notes:
+            "mixtapes distribute --mixcloud; ffmpeg -map 0:a:0 extract; mixtape-mixcloud.test.ts",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "170",
+          job: "Make the YouTube video public",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "M5",
+          input: "a distributed unlisted mixtape",
+          output: "the YouTube video flipped public",
+          surfaces: "web-admin;cli-admin",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "publish_mixtape_youtube (server-side videos.update); Studio button/CLI; orpc-admin-mixtapes.test.ts",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "180",
+          job: "Re-sync cues → live YouTube chapters + Mixcloud sections",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "M5",
+          input: "the mixtape's current cues",
+          output: "refreshed YT description/chapters + MC sections (no re-upload)",
+          surfaces: "web-admin;cli-admin",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "resync_mixtape_youtube/mixcloud (both server-side); Studio Re-sync from cues; mixtape-chapters.test.ts",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "190",
+          job: "Backfill a published mixtape's cues",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "M5",
+          input: "a published mixtape + start times",
+          output: "re-timed member start_ms",
+          surfaces: "web-admin;api",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "set_mixtape_cues (batch) / update_mixtape_cue (single); Studio cue rail; mixtapes-cues.test.ts",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "200",
+          job: "Render the hour-long set video",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "M5",
+          input: "a published mixtape's cues + archived comps",
+          output: "one long-form set.mp4 (chapters + travel transitions)",
+          surfaces: "",
+          primary_surface: "helm",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "bun run --cwd packages/video set:render <logId> (local GPU); render-set.test.ts; roadmap wants a Cockpit shelf button (not built)",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "210",
+          job: "Toggle the set video on /log",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "M5",
+          input: "a promoted mixtape",
+          output: "setVideoAt flag → /log hero video + video SEO",
+          surfaces: "web-admin;cli-admin;api",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "auto on promote; manual switch in Studio (update_mixtape setVideoAt); log-schema.test.ts",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "220",
+          job: "Register the mixtape on MusicBrainz",
+          status: "partial",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "M5",
+          input: "the published mixtape + tracklist",
+          output: "a DJ-mix release on MusicBrainz",
+          surfaces: "",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "manual; no op; skill §E; substantiates the MB artist; DESIRED automation per Work Standard",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "230",
+          job: "Link the mixtape on Wikidata",
+          status: "partial",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "M5",
+          input: "the MusicBrainz release",
+          output: "a release link on Q140169844",
+          surfaces: "",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "none",
+          notes: "manual; no op; skill §E; closes the off-site KG loop",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "240",
+          job: "Announce the mixtape to the crew",
+          status: "desired",
+          trigger: "operator",
+          executor: "ai;human",
+          runs_on: "M5",
+          input: "the published mixtape URLs",
+          output: "a Telegram crew post (+ newsletter ride-along)",
+          surfaces: "telegram",
+          primary_surface: "helm",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "roadmap: NEW operator-tier announce op (nothing mixtape-shaped exists); today manual skill §F",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "250",
+          job: "Verify the mixtape resolves across surfaces",
+          status: "live",
+          trigger: "operator",
+          executor: "ai",
+          runs_on: "M5",
+          input: "the minted .F. coordinate",
+          output: "pass/fail across feed/mixtapes/log/API/RSS/MCP/llms.txt",
+          surfaces: "",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "skill §G checklist + fluncle-smoke skill (agent-run cross-surface sweep, not a CLI/test)",
+        },
+        {
+          domain: "mixtape-lifecycle",
+          order_hint: "260",
+          job: "Surface mixtape-day tasks in the attention queue",
+          status: "desired",
+          trigger: "cron",
+          executor: "system",
+          runs_on: "cloudflare",
+          input: "list_recordings + list_mixtapes_admin state",
+          output: "queue rows: recordings-without-cues, promoted-undistributed",
+          surfaces: "",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "roadmap The queue (home) Phase 1 (EXISTS sources); Cockpit queue-home not built yet",
+        },
+        {
+          domain: "clips-drip",
+          order_hint: "10",
+          job: "Author finding-linked cues on a recording (Studio cue rail)",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "browser",
+          input: "a recording set video + picked findings",
+          output: "recording tracklistJson via replace_recording_cues",
+          surfaces: "web-admin",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "studio.$recordingId.tsx cue rail; PUT /admin/recordings/{id}/cues; pure helpers recording-cues.test.ts; also fuels mixtape chapters",
+        },
+        {
+          domain: "clips-drip",
+          order_hint: "20",
+          job: "Create a clip (mark in/out + 9:16 crop → queue a pending row)",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "browser",
+          input: "recording set rendition + in/out band + crop xOffset",
+          output: "mixtape_clips pending row (+ auto drip enrol)",
+          surfaces: "web-admin",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "create_clip POST /admin/recordings/{id}/clips; clips.ts createClip; crop-frame/energy-lane UI; clips.test.ts covers auto-queue",
+        },
+        {
+          domain: "clips-drip",
+          order_hint: "30",
+          job: "Cut a clip's framed 9:16 footage (box clip-sweep cron)",
+          status: "live",
+          trigger: "cron:fluncle-studio-clip",
+          executor: "system",
+          runs_on: "rave-02;cloudflare",
+          input: "pending clip + recording r2Key set rendition",
+          output: "<clipId>/footage.mp4 on R2 + status=done",
+          surfaces: "box-script;cli-admin;api",
+          primary_surface: "cli-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "clip-sweep.ts shells `fluncle admin clips cut`; clipCutFfmpegArgs clips.ts; presign_clip_upload/finalize_clip_cut; clips.test.ts args-only, no e2e",
+        },
+        {
+          domain: "clips-drip",
+          order_hint: "40",
+          job: "Browse/filter/preview/delete clips (clip library)",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "browser",
+          input: "mixtape_clips + recordings",
+          output: "rendered grid; delete_clip prunes a bad cut",
+          surfaces: "web-admin;cli-admin",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "routes/admin/clips.tsx + clip-card.tsx; list_clips/delete_clip; studio-clips.test.ts filter/sort; `fluncle admin clips list`",
+        },
+        {
+          domain: "clips-drip",
+          order_hint: "50",
+          job: "Edit + copy a clip caption (built caption w/ fluncle:// coordinate)",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "browser",
+          input: "clip caption + resolved coordinate lines",
+          output: "update_clip caption; clipboard payload",
+          surfaces: "web-admin;api",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "clip-card.tsx ClipCaption; get_clip_caption; buildClipCaption clip-caption.ts; clip-caption.test.ts",
+        },
+        {
+          domain: "clips-drip",
+          order_hint: "55",
+          job: "Download a clip for hand-posting (IG with-audio / TikTok silent)",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "browser",
+          input: "<clipId>/footage.mp4 + audio-stripped MT",
+          output: "downloaded mp4 opens in a new tab",
+          surfaces: "web-admin",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "clip-card.tsx ClipDownloads; clipDownloadUrls studio-clips.ts (videoAudioStripped for TikTok); studio-clips.test.ts",
+        },
+        {
+          domain: "clips-drip",
+          order_hint: "60",
+          job: "Auto-enrol a new clip onto the IG drip queue (jittered ~24h slot)",
+          status: "live",
+          trigger: "event:clip-created",
+          executor: "system",
+          runs_on: "cloudflare",
+          input: "new clip + queue tail",
+          output: "mixtape_clip_social_posts scheduled row",
+          surfaces: "api",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "createClip→upsertClipPost; computeNextDripSlot [23-25h] clip-social.ts; best-effort; clips.test.ts + clip-social.test.ts; visibility on web-admin",
+        },
+        {
+          domain: "clips-drip",
+          order_hint: "70",
+          job: "Drip due clips to Instagram (Postiz Reel push)",
+          status: "live",
+          trigger: "cron:fluncle-clip-drip",
+          executor: "system",
+          runs_on: "rave-02;cloudflare",
+          input: "due scheduled + done clip rows",
+          output: "IG Reel via Postiz; status=posted + postizId",
+          surfaces: "box-script;api",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "clip-drip-sweep.sh→drip_clips op; pushInstagramReel postiz.ts; per-tick cap 3 + 24h cap 10; orpc-clip-drip.test.ts; button on web-admin",
+        },
+        {
+          domain: "clips-drip",
+          order_hint: "80",
+          job: "Pause/resume the whole IG drip (global kill switch)",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "browser;M5",
+          input: "paused flag",
+          output: "settings.clip_drip_paused KV",
+          surfaces: "web-admin;cli-admin;api",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "DripKillSwitch clips.tsx; set_clip_drip; `fluncle admin clips drip-pause`/`drip-resume`; orpc-clip-drip.test.ts",
+        },
+        {
+          domain: "clips-drip",
+          order_hint: "90",
+          job: "Schedule/override or unschedule a clip's drip slot",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "browser",
+          input: "clipId + ISO slot (or unschedule)",
+          output: "upsert/delete mixtape_clip_social_posts row",
+          surfaces: "web-admin;cli-admin;api",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "clip-card.tsx ClipDrip popover; set_clip_schedule/delete_clip_schedule; CLI `clips schedule` only (no unschedule verb); orpc-clip-drip.test.ts",
+        },
+        {
+          domain: "clips-drip",
+          order_hint: "100",
+          job: "Batch-schedule a selection onto the drip chain",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "browser;cloudflare",
+          input: "selected clip ids",
+          output: "chained scheduled rows (one nextDripSlot roll each)",
+          surfaces: "web-admin",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "clips.tsx batchScheduleClips createServerFn→upsertClipPost — a web-only server fn that BYPASSES the oRPC contract op; untested",
+        },
+        {
+          domain: "clips-drip",
+          order_hint: "110",
+          job: "Post a clip to TikTok by hand (manual)",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "phone;browser",
+          input: "silent clip download + built caption",
+          output: "TikTok post (licensed sound attached in-app)",
+          surfaces: "web-admin;phone",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "no clip→TikTok automation: drip is IG-only (CLIP_DRIP_PLATFORM=instagram); download silent + copy caption from clip-card; tiktok-inbox caption quirk",
+        },
+        {
+          domain: "clips-drip",
+          order_hint: "120",
+          job: "Capture the IG permalink back onto a posted clip",
+          status: "desired",
+          trigger: "cron:fluncle-clip-drip",
+          executor: "system",
+          runs_on: "cloudflare",
+          input: "postizId of a posted clip",
+          output: "posted_url (IG permalink) on the drip row",
+          surfaces: "api",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "TODO(clip-drip capture-back) admin-mixtapes.ts:693; posted_url never set today so clip-card 'View on Instagram' stays dark; resolveSocialUrl lacks IG",
+        },
+        {
+          domain: "clips-drip",
+          order_hint: "130",
+          job: "Cut a clip on demand / locally (cut now)",
+          status: "desired",
+          trigger: "operator",
+          executor: "system",
+          runs_on: "M5",
+          input: "recording master (local or R2-cached)",
+          output: "<clipId>/footage.mp4 in seconds",
+          surfaces: "helm",
+          primary_surface: "helm",
+          drop_from: "helm(frozen)",
+          tests: "none",
+          notes:
+            "cockpit-roadmap.md Studio lane [Create clip] locally; clipCutFfmpegArgs→@fluncle/contracts; kills box clip-sweep ~15m latency",
+        },
+        {
+          domain: "clips-drip",
+          order_hint: "140",
+          job: "Surface 'drip queue empty' as an attention-queue row",
+          status: "desired",
+          trigger: "event:queue-empty",
+          executor: "system",
+          runs_on: "M5",
+          input: "list_clip_posts + pending clip counts",
+          output: "an attention-queue nudge to cut/schedule more",
+          surfaces: "helm",
+          primary_surface: "helm",
+          drop_from: "helm(frozen)",
+          tests: "none",
+          notes:
+            "cockpit-roadmap.md queue sources 'Drip queue empty'; data EXISTS (list_clip_posts + pending) but the Cockpit queue surface is unbuilt",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "10",
+          job: "Announce a finding to Telegram",
+          status: "live",
+          trigger: "event:finding-published",
+          executor: "system",
+          runs_on: "cloudflare",
+          input: "a published finding's metadata + note + logId",
+          output: "a message in the Fluncle's Findings Telegram channel",
+          surfaces: "cli-admin;raycast;web-admin;telegram",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "publish side-effect; apps/web/src/lib/server/telegram.ts + publish.ts:238 postToTelegram (best-effort, blocks the add on failure); publish op covered but the Telegram fetch is a mocked side-channel",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "20",
+          job: "Notify the mobile crew via push",
+          status: "live",
+          trigger: "event:finding-published;event:mixtape-published",
+          executor: "system",
+          runs_on: "cloudflare",
+          input: "a freshly-published finding or mixtape",
+          output: "Expo push fan-out to registered devices",
+          surfaces: "api",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "push.test.ts; apps/web/src/lib/server/push.ts notifyNewFinding; NO-OP until EXPO_ACCESS_TOKEN set; waitUntil, never blocks the publish",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "30",
+          job: "Draft the weekly newsletter",
+          status: "live",
+          trigger: "cron:fluncle-newsletter",
+          executor: "ai",
+          runs_on: "rave-02;cloudflare",
+          input: "findings+mixtapes in the self-healing window (/api/tracks off last SENT edition)",
+          output: "a draft editions row (create_edition) + a Discord summary + the send command",
+          surfaces: "box-script;web-admin;cli-admin",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "newsletter.test.ts+editions.test.ts+edition-email.test.ts; hybrid --no-agent, one claude -p; hermes/scripts/newsletter-sweep.ts; Fri 15:00 Amsterdam; web-admin /admin/newsletter shows drafts",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "40",
+          job: "Send the weekly newsletter",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "cloudflare",
+          input: "a chosen draft edition id",
+          output:
+            "a Resend broadcast to the list + sequential edition number + the /newsletter archive page",
+          surfaces: "web-admin;cli-admin",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "orpc-admin-editions.test.ts/editions.test.ts; send_edition OPERATOR-tier (agent token 403s); apps/web/src/routes/admin/newsletter.tsx SendControl OR `fluncle admin newsletter send`",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "45",
+          job: "Run quality checks on every PR and main",
+          status: "live",
+          trigger: "event:pull-request;event:push-to-main",
+          executor: "system",
+          runs_on: "",
+          input: "a commit / PR",
+          output: "pass-fail lint+format+typecheck+bun-test+go build/vet/test/gofmt",
+          surfaces: "",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "GitHub Actions; .github/workflows/quality-checks.yml; the workflow RUNS the suite (no test of the workflow itself)",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "50",
+          job: "Deploy the web app on push to main",
+          status: "live",
+          trigger: "event:push-to-main",
+          executor: "system",
+          runs_on: "cloudflare",
+          input: "a commit on main",
+          output: "a new fluncle-web Worker deployment",
+          surfaces: "",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "CF Workers Builds rebuilds apps/web on every push; rapid merges COALESCE (drop intermediate builds); no in-product deploy visibility today — only the CF dashboard",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "55",
+          job: "Gate the deploy",
+          status: "live",
+          trigger: "event:push-to-main",
+          executor: "system",
+          runs_on: "cloudflare",
+          input: "the CF build tree",
+          output: "abort-before-wrangler-deploy on a failing gate",
+          surfaces: "",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "root package.json deploy:gate = format:check && lint && typecheck && test; extend HERE not the CF dashboard; runs in the CF Build command ahead of deploy:cf",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "70",
+          job: "Apply DB migrations on deploy",
+          status: "live",
+          trigger: "event:push-to-main",
+          executor: "system",
+          runs_on: "cloudflare",
+          input: "pending drizzle-kit migrations",
+          output: "the migrated Turso prod schema",
+          surfaces: "",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "apps/web deploy:cf = db:migrate && db:backfill && wrangler deploy; auto-applies in the CF build; author via db:generate, never by hand",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "80",
+          job: "Release the CLI",
+          status: "live",
+          trigger: "event:push-to-main",
+          executor: "system",
+          runs_on: "",
+          input: "a push touching apps/cli/**",
+          output: "GH release binaries + npm publish (OIDC) + Homebrew formula bump",
+          surfaces: "cli-public",
+          primary_surface: "cli-public",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "GitHub Actions; .github/workflows/cli-release.yml; auto minor-bump versioning; 4 targets; brew tap step no-ops without HOMEBREW_TAP_TOKEN",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "90",
+          job: "Detect and PR safe Hermes pin bumps",
+          status: "live",
+          trigger: "cron:hermes-pin-drift;event:cli-release-completed",
+          executor: "system",
+          runs_on: "",
+          input: "fluncle/claude-code/bun registry versions vs the baked Dockerfile pins",
+          output: "a same-major bump PR (safe) or an operator-decision issue (major/base image)",
+          surfaces: "",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "GitHub Actions hourly + on release; .github/workflows/hermes-pin-drift.yml + .github/scripts/hermes-pin-drift.sh; auto-merges only with PIN_DRIFT_TOKEN",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "100",
+          job: "Self-deploy the Hermes container",
+          status: "live",
+          trigger: "cron:pin-watch",
+          executor: "system",
+          runs_on: "rave-02",
+          input: "main's baked Dockerfile pins vs the running container",
+          output:
+            "a rebuilt+swapped Hermes image (pre-smoke gated, auto-rollback) + a self-deploy /status check",
+          surfaces: "box-script;api",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "docs/agents/hermes/pin-watch/rebuild-hermes.sh host systemd timer; credential-free (public repo + reuse running env); posts self-deploy to record_health",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "110",
+          job: "Keep GitHub Actions digests current",
+          status: "desired",
+          trigger: "cron",
+          executor: "system",
+          runs_on: "",
+          input: "Action digest/tag drift",
+          output: "a digest-bump PR",
+          surfaces: "",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "cockpit + memory fluncle-maintenance-bump-half-ci: NO renovate.json committed; Renovate GitHub App unset (pending operator); hermes-pin-drift covers the CLI/claude/bun pins only",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "115",
+          job: "Scan for committed secrets",
+          status: "live",
+          trigger: "event:pull-request;event:push-to-main",
+          executor: "system",
+          runs_on: "",
+          input: "the full git history + working tree",
+          output: "pass-fail (blocks a leaked secret value or a concrete op:// path)",
+          surfaces: "",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "GitHub Actions; .github/workflows/gitleaks.yml gitleaks v8.30.1 (history) + a working-tree op:// path grep; .gitleaks.toml allowlist",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "120",
+          job: "Sync box secrets from 1Password",
+          status: "live",
+          trigger: "cron:fluncle-secrets-sync",
+          executor: "system",
+          runs_on: "rave-02",
+          input: "1Password items via op inject templates",
+          output: "/etc/hermes.env (gateway) + .fluncle-secrets.env (sweeps), 0600, atomic",
+          surfaces: "box-script",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "docs/agents/hermes/secrets/fluncle-secrets-sync.sh systemd timer+boot; sanity-checked so an op outage can't write a partial file; bootstrap token /etc/hermes-bootstrap.env; ~15m rotate window",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "130",
+          job: "Log in as admin",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "cloudflare",
+          input: "the operator's Spotify identity",
+          output: "an operator grant cookie (browser session)",
+          surfaces: "web-admin",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "admin-auth.test.ts; apps/web/src/routes/api/admin/spotify/auth/login.ts is the PUBLIC identity front door; the shared callback branches on purpose",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "140",
+          job: "Reconnect the Spotify publishing token",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "cloudflare",
+          input: "operator OAuth consent (also triggered by a reauth-required publish)",
+          output: "a refreshed spotify_auth token stored server-side",
+          surfaces: "web-admin;api",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "spotify/auth/start.ts (operator-tier) + callback; staleDays=150, refresh-token 6-mo expiry from 2026-07-20; SPOTIFY_REAUTH_REQUIRED surfaces the reconnect affordance",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "150",
+          job: "Reconnect the YouTube distribution token",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "cloudflare",
+          input: "operator OAuth consent",
+          output: "a YouTube token stored server-side (mixtape video distribution)",
+          surfaces: "web-admin;api",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "apps/web/src/routes/api/admin/youtube/auth/start.ts (operator-tier) + callback; the CLI never holds the durable credential",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "160",
+          job: "Reconnect the Mixcloud distribution token",
+          status: "live",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "cloudflare",
+          input: "operator OAuth consent",
+          output: "a Mixcloud token stored server-side (mixtape audio distribution)",
+          surfaces: "web-admin;api",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "apps/web/src/routes/api/admin/mixcloud/auth/start.ts (operator-tier) + callback; mirrors the Spotify/YouTube start route",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "180",
+          job: "Probe services and record a health snapshot",
+          status: "live",
+          trigger: "cron:fluncle-healthcheck",
+          executor: "system",
+          runs_on: "rave-02;cloudflare",
+          input: "live services: web/r2/dns/ssh/render-box/hermes + one row per Hermes cron",
+          output:
+            "a snapshot POST to record_health + a Discord ping on a status flip + a beacon ping",
+          surfaces: "box-script;api",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "status.test.ts covers the store; the PROBE script (fluncle-healthcheck.ts) is untested; rave-02 HOST systemd timer ~10m; AUTOMATION_CRONS lists 9 crons — studio-clip is MISSING",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "190",
+          job: "Show service health",
+          status: "live",
+          trigger: "event:page-request",
+          executor: "system",
+          runs_on: "cloudflare",
+          input: "the service_status / status_events / service_check_samples tables",
+          output: "the public /status dashboard + /api/status JSON (+ CLI status + MCP ln)",
+          surfaces: "api;cli-public",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "status.test.ts; apps/web/src/routes/status.tsx + api/status.ts; renders cron.* rows + uptime bar; /api/status exposes secondsSinceProberReport for the cross-ping; the admin sidebar System entry deep-links /status (Wave 0 shell)",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "200",
+          job: "Cross-ping the prober and beacon the edge",
+          status: "live",
+          trigger: "cron:fluncle-rave-watchdog",
+          executor: "system",
+          runs_on: "rave-01",
+          input: "/api/status secondsSinceProberReport + an external beacon URL",
+          output: "a Discord ping when rave-02 goes dark + rave-01's own dead-man beacon ping",
+          surfaces: "box-script",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "apps/ssh/watchdog/fluncle-rave-watchdog.sh systemd timer ~10m; keys on the `hermes` self-liveness so rave-01's own onion post can't mask it; dead-man's-switch triad",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "210",
+          job: "Probe Tor onion reachability",
+          status: "live",
+          trigger: "cron:fluncle-rave-watchdog",
+          executor: "system",
+          runs_on: "rave-01",
+          input: "the .onion via rave-01's local Tor SOCKS proxy",
+          output: "an `onion` check POSTed to record_health + a Discord flip ping",
+          surfaces: "box-script;api",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "watchdog job 3 (only box that can route .onion); any HTTP response = reachable; shows as an onion row on /status; all onion vars optional",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "220",
+          job: "Beacon both boxes to an external uptime service",
+          status: "live",
+          trigger: "event:beacon-stops",
+          executor: "system",
+          runs_on: "rave-01;rave-02",
+          input: "periodic liveness pings from both boxes",
+          output: "an external alert when the pings STOP (the both-boxes-down catch)",
+          surfaces: "",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "HEALTHCHECK_BEACON_URL (rave-02) + RAVE01_BEACON_URL (rave-01); healthchecks.io/BetterUptime/self-hosted; the only leg that fires when no on-box job can run",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "240",
+          job: "Surface every cron's last-run and next-run on web-admin",
+          status: "desired",
+          trigger: "operator",
+          executor: "human",
+          runs_on: "browser;cloudflare",
+          input:
+            "cron freshness (already on /status) + next-run (only on the box via `hermes cron list`)",
+          output: "a web-admin Pulse grid — every humming system as data",
+          surfaces: "",
+          primary_surface: "web-admin",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "cockpit-roadmap.md the queue(home)/Pulse; /status shows last-run freshness PUBLICLY but next-run + the operator Pulse view are unbuilt — the `I can't see it so I don't know it exists` gap",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "250",
+          job: "Surface cron.studio-clip on /status",
+          status: "partial",
+          trigger: "cron:fluncle-healthcheck",
+          executor: "system",
+          runs_on: "rave-02;cloudflare",
+          input: "the fluncle-studio-clip cron output dir",
+          output: "a cron.studio-clip row on /status",
+          surfaces: "api",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "documented follow-up: fluncle-studio-clip is NOT in AUTOMATION_CRONS (docs/agents/hermes/scripts/fluncle-healthcheck.ts:365) so its liveness is invisible on the board",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "260",
+          job: "Show a live-on-Twitch on-the-decks callout",
+          status: "partial",
+          trigger: "cron;event:live-state-change",
+          executor: "system",
+          runs_on: "rave-02;cloudflare",
+          input: "the Twitch live state (box poll)",
+          output: "a live_state row fanned to web banner / Telegram pin / SSH / CLI / MCP",
+          surfaces: "",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "NOT on main (record_live_state/live_state grep empty); PR #199 open feat/live-twitch-callout; new brand colour Nebula Violet #ab7bff; awaiting operator wiring + merge",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "270",
+          job: "Back up the production database",
+          status: "desired",
+          trigger: "cron",
+          executor: "system",
+          runs_on: "cloudflare",
+          input: "the Turso prod database",
+          output: "a durable off-site backup + a tested restore path",
+          surfaces: "",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "none",
+          notes:
+            "NO in-repo backup job — db-pull-prod.ts/db-refresh.ts are DEV seeding (prod->local), not backup; relies solely on Turso's managed point-in-time restore; docs/local-database.md",
+        },
+        {
+          domain: "curation-posting",
+          order_hint: "136",
+          job: "Detect + surface stale TikTok drafts (24h bounce)",
+          status: "live",
+          trigger: "event:board-render;cron:helm-poll",
+          executor: "system",
+          runs_on: "cloudflare;M5;M2",
+          input: "a draft's push time (updated_at) vs the 24h window",
+          output:
+            "a bounced draft re-opens: a distinct `stale` board cell + re-entry into next-to-post/nudge",
+          surfaces: "web-admin;helm",
+          primary_surface: "web-admin",
+          drop_from: "helm(frozen)",
+          tests: "yes",
+          notes:
+            "SHIPPED: shared isStaleTikTokDraft + TIKTOK_DRAFT_STALE_MS in @fluncle/contracts/util (clock-injected; 24h off updated_at) is the ONE source of the cutoff. A bounced draft re-opens across all 3 readers — board publishStep `stale` cell + track-stage.ts worklist bucketing + helm pulse postFreshness; push dialog offers re-push; tiktokPending drops stale from the 5/24h count. Tests: util.test.ts + board-model.test.ts + track-stage.test.ts + logic.test.ts",
+        },
+        {
+          domain: "video-pipeline",
+          order_hint: "10",
+          job: "View the render queue",
+          status: "live",
+          trigger: "operator;agent;cron:fluncle-render",
+          executor: "system",
+          runs_on: "cloudflare",
+          input: "admin auth (no args)",
+          output: "findings needing a video, oldest-first (JSON)",
+          surfaces: "cli-admin;api",
+          primary_surface: "cli-admin",
+          drop_from: "",
+          tests: "partial",
+          notes:
+            "fluncle admin tracks queue → list_tracks_admin(hasContext=true,hasVideo=false); admin-tracks.ts:queueCommand",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "190",
+          job: "Show service health",
+          status: "live",
+          trigger: "event:page-request",
+          executor: "system",
+          runs_on: "cloudflare",
+          input: "the service_status / status_events / service_check_samples tables",
+          output: "the public /status dashboard + /api/status JSON (+ CLI status + MCP ln)",
+          surfaces: "api;cli-public",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "status.test.ts; apps/web/src/routes/status.tsx + api/status.ts; renders cron.* rows + uptime bar; /api/status exposes secondsSinceProberReport for the cross-ping",
+        },
+        {
+          domain: "platform-ops",
+          order_hint: "270",
+          job: "Back up the production database",
+          status: "live",
+          trigger: "cron:fluncle-backup",
+          executor: "system",
+          runs_on: "rave-02",
+          input: "the Turso prod database",
+          output:
+            "a daily gzip SQL dump + integrity manifest on a PRIVATE R2 bucket (30 daily/12 monthly) + a tested restore drill",
+          surfaces: "box-script;api",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "backup-sweep.{sh,ts} dumps over the libSQL HTTP pipeline (zero deps) → gzip → the private fluncle-backups R2 bucket (NEVER found.fluncle.com's world-served fluncle-videos) + prune; owned off-Cloudflare backup, Turso PITR is the belt this is the braces. Restore drill = apps/web/scripts/restore-drill.ts (ran green: 28 tables/1097 rows); pure logic unit-tested (db-dump.test.ts + aws-sigv4.test.ts vs aws4fetch). Probed as cron.backup. Operator-gated: create the bucket + a read-only Turso token + a backup-bucket-only R2 token (see cron/README § The database-backup cron)",
+        },
+      ];
+      const DOMAINS = [
+        "intake-enrichment",
+        "curation-posting",
+        "video-pipeline",
+        "mixtape-lifecycle",
+        "clips-drip",
+        "platform-ops",
+      ];
+      const MARK = { live: "\u25CF live", partial: "\u25D0 partial", desired: "\u25CB desired" };
+      const TESTS = { yes: "\u25CF yes", partial: "\u25D0 partial", none: "\u25CB none" };
+      const COLS = [
+        ["domain", "Domain"],
+        ["job", "Job"],
+        ["status", "Status"],
+        ["trigger", "Trigger"],
+        ["executor", "Exec"],
+        ["runs_on", "Runs on"],
+        ["primary_surface", "Primary"],
+        ["drop_from", "Drop from"],
+        ["tests", "Tests"],
+      ];
+
+      const state = { q: "", domain: "", status: "", tests: "", drop: false, sort: "", dir: 1 };
+
+      const strip = [
+        [
+          "all",
+          () => JOBS.length,
+          () => {
+            state.status = "";
+            state.tests = "";
+            state.drop = false;
+          },
+          () => !state.status && !state.tests && !state.drop,
+        ],
+        [
+          "live",
+          () => JOBS.filter((j) => j.status === "live").length,
+          () => {
+            state.status = state.status === "live" ? "" : "live";
+          },
+          () => state.status === "live",
+        ],
+        [
+          "partial",
+          () => JOBS.filter((j) => j.status === "partial").length,
+          () => {
+            state.status = state.status === "partial" ? "" : "partial";
+          },
+          () => state.status === "partial",
+        ],
+        [
+          "desired",
+          () => JOBS.filter((j) => j.status === "desired").length,
+          () => {
+            state.status = state.status === "desired" ? "" : "desired";
+          },
+          () => state.status === "desired",
+        ],
+        [
+          "tests: none",
+          () => JOBS.filter((j) => j.tests === "none").length,
+          () => {
+            state.tests = state.tests === "none" ? "" : "none";
+          },
+          () => state.tests === "none",
+        ],
+        [
+          "tests: partial",
+          () => JOBS.filter((j) => j.tests === "partial").length,
+          () => {
+            state.tests = state.tests === "partial" ? "" : "partial";
+          },
+          () => state.tests === "partial",
+        ],
+        [
+          "drop candidates",
+          () => JOBS.filter((j) => j.drop_from.trim()).length,
+          () => {
+            state.drop = !state.drop;
+          },
+          () => state.drop,
+        ],
+      ];
+
+      function filtered() {
+        const q = state.q.toLowerCase();
+
+        let rows = JOBS.filter(
+          (j) =>
+            (!state.domain || j.domain === state.domain) &&
+            (!state.status || j.status === state.status) &&
+            (!state.tests || j.tests === state.tests) &&
+            (!state.drop || j.drop_from.trim()) &&
+            (!q || Object.values(j).join(" ").toLowerCase().includes(q)),
+        );
+
+        if (state.sort) {
+          rows = rows.slice().sort(
+            (a, b) =>
+              state.dir *
+              String(a[state.sort]).localeCompare(String(b[state.sort]), undefined, {
+                numeric: true,
+              }),
+          );
+        }
+
+        return rows;
+      }
+
+      function esc(s) {
+        return String(s).replace(
+          /[&<>"]/g,
+          (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c],
+        );
+      }
+
+      function render() {
+        document.getElementById("counts").innerHTML = strip
+          .map(
+            ([label, n], i) =>
+              '<button class="chip' +
+              (strip[i][3]() ? " on" : "") +
+              '" data-strip="' +
+              i +
+              '"><b>' +
+              n() +
+              "</b> " +
+              label +
+              "</button>",
+          )
+          .join("");
+
+        document.getElementById("domains").innerHTML = [
+          '<button class="chip' +
+            (!state.domain ? " on" : "") +
+            '" data-dom="">all domains</button>',
+        ]
+          .concat(
+            DOMAINS.map(
+              (d) =>
+                '<button class="chip' +
+                (state.domain === d ? " on" : "") +
+                '" data-dom="' +
+                d +
+                '">' +
+                d +
+                "</button>",
+            ),
+          )
+          .join("");
+
+        document.getElementById("head").innerHTML = COLS.map(
+          ([k, label]) =>
+            '<th tabindex="0" data-sort="' +
+            k +
+            '">' +
+            label +
+            (state.sort === k
+              ? ' <span class="dir">' + (state.dir > 0 ? "\u2193" : "\u2191") + "</span>"
+              : "") +
+            "</th>",
+        ).join("");
+
+        const rows = filtered();
+
+        document.getElementById("showing").textContent = rows.length + " of " + JOBS.length;
+        document.getElementById("zero").classList.toggle("hide", rows.length > 0);
+
+        document.getElementById("body").innerHTML = rows
+          .map((j, i) => {
+            const testsClass = j.tests === "none" ? "mark none" : "mark muted";
+
+            return (
+              '<tr class="job" tabindex="0" data-i="' +
+              i +
+              '" aria-expanded="false">' +
+              '<td class="dom">' +
+              esc(j.domain) +
+              "</td>" +
+              '<td class="job-name">' +
+              esc(j.job) +
+              "</td>" +
+              '<td class="mark">' +
+              (MARK[j.status] || esc(j.status)) +
+              "</td>" +
+              '<td class="mono muted">' +
+              esc(j.trigger) +
+              "</td>" +
+              '<td class="muted">' +
+              esc(j.executor) +
+              "</td>" +
+              '<td class="mono muted">' +
+              esc(j.runs_on) +
+              "</td>" +
+              "<td>" +
+              esc(j.primary_surface) +
+              "</td>" +
+              '<td class="drop">' +
+              esc(j.drop_from) +
+              "</td>" +
+              '<td class="' +
+              testsClass +
+              '">' +
+              (TESTS[j.tests] || esc(j.tests)) +
+              "</td></tr>" +
+              '<tr class="detail hide"><td colspan="9"><dl>' +
+              "<dt>input</dt><dd>" +
+              esc(j.input) +
+              "</dd>" +
+              "<dt>output</dt><dd>" +
+              esc(j.output) +
+              "</dd>" +
+              "<dt>surfaces</dt><dd>" +
+              esc(j.surfaces) +
+              "</dd>" +
+              "<dt>notes</dt><dd>" +
+              esc(j.notes) +
+              "</dd></dl></td></tr>"
+            );
+          })
+          .join("");
+      }
+
+      document.addEventListener("click", (e) => {
+        const chip = e.target.closest("[data-strip]");
+        const dom = e.target.closest("[data-dom]");
+        const th = e.target.closest("[data-sort]");
+        const row = e.target.closest("tr.job");
+
+        if (chip) {
+          strip[Number(chip.dataset.strip)][2]();
+          render();
+        } else if (dom) {
+          state.domain = dom.dataset.dom;
+          render();
+        } else if (th) {
+          const k = th.dataset.sort;
+
+          if (state.sort === k) {
+            state.dir = -state.dir;
+          } else {
+            state.sort = k;
+            state.dir = 1;
+          }
+
+          if (state.sort === k && state.dir === 1 && th.dataset.third === "1") {
+            state.sort = "";
+            th.dataset.third = "";
+          } else if (state.dir === -1) {
+            th.dataset.third = "1";
+          }
+
+          render();
+        } else if (row) {
+          const d = row.nextElementSibling;
+          const open = d.classList.toggle("hide");
+
+          row.setAttribute("aria-expanded", String(!open));
+        }
+      });
+
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "/" && document.activeElement !== document.getElementById("q")) {
+          e.preventDefault();
+          document.getElementById("q").focus();
+        } else if (e.key === "Enter" && document.activeElement?.classList?.contains("job")) {
+          document.activeElement.click();
+        } else if (e.key === "Enter" && document.activeElement?.dataset?.sort) {
+          document.activeElement.click();
+        }
+      });
+
+      document.getElementById("q").addEventListener("input", (e) => {
+        state.q = e.target.value;
+        render();
+      });
+      render();
+    </script>
+  </body>
+</html>

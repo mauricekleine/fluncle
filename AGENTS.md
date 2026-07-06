@@ -9,6 +9,21 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - If instructions conflict with system/tool safety rules, follow the higher-priority rule and mention the conflict.
 - Prefer the smallest change that fully solves the task.
 
+## Public Repo
+
+- This repository is **open source and public** (`github.com/mauricekleine/fluncle`). Everything committed is world-readable forever, git history included — write every file for that audience.
+- NEVER commit secret VALUES (tokens, keys, passwords). gitleaks guards this in CI; never rely on it alone.
+- NEVER commit the secret-management MAP either: concrete `op://<vault>/<item>` 1Password paths, hostnames, IPs, ports, internal URLs, tailnet names, webhook URLs, or local `/Users/...` paths. They are references rather than secrets, but they hand out the topology. Use a PLACEHOLDER (`op://$FLUNCLE_1PASSWORD_ENV_ITEM/<field>` as in `apps/web/.dev.vars.tpl`, or `op://<vault>/<item>/<field>`); concrete names live in the private "Fluncle — Ops Runbook" 1Password note. A working-tree grep in CI (`.github/workflows/gitleaks.yml`) backstops the `op://` case.
+- Public runtime IDENTIFIERS are fine (the R2 account id, the IndexNow token — both allowlisted in `.gitleaks.toml`): they grant nothing without the matching secret.
+- Keep committed docs and skills at the architecture/procedure level; secret-bearing operator commands stay in the Ops Runbook note + the relevant operator skill.
+
+## Which machine am I on?
+
+- This repo is worked from two Macs; the machine determines what is SAFE, so detect it before large uploads or commits. Detect with `sysctl -n machdep.cpu.brand_string` and match loosely on the chip generation (the string is like `Apple M5 Pro` / `Apple M2` — key off `M5` / `M2`). The physical rig behind this split is [docs/live-show-setup.md](./docs/live-show-setup.md).
+- **M5 (build/compose + capture/stream):** browser + prod `fluncle` CLI; OBS + the audio/video masters + the recording upload + `ffmpeg` + distribute + the live glass/bridge all live here. Orchestrate, dev, capture, and stream here.
+- **M2 (mixing):** Rekordbox + the DDJ-FLX4 + `master.db` — _only_ the two `fluncle-mixtapes` Rekordbox scripts run here (they read/write `master.db`). No OBS, no browser.
+- **THE LOAD-BEARING RULE — large media uploads (`fluncle admin recordings create --video`, `fluncle admin mixtapes distribute`) run on the M5 and must be operator-run directly in their own Terminal:** an agent's Bash session throttles sustained _multi-GB_ transfers even with `dangerouslyDisableSandbox: true` — a small upload works, a multi-GB one drops partway with `socket closed`. `dangerouslyDisableSandbox` is still required for git commits (SSH-signed via the 1Password agent socket) and moderate transfers, but it does NOT make a multi-GB upload reliable through the harness — those are operator-direct. Full operator workflow is the [fluncle-mixtapes](./packages/skills/fluncle-mixtapes) skill.
+
 ## Work Standard
 
 - MUST: If it can be automated, it should be automated. When the choice is "automation is possible but it will require work" versus "do it manually," choose automation every time — with AI the marginal cost of completeness is near zero. The point of this project is reach: how far Fluncle's tentacles stretch across the web (search engines, AI crawlers, and ultimately real humans — DnB fans, artists). A manual step is reach that does not scale. The ONLY exception is a genuine, documented platform constraint with no automatable path (e.g. TikTok licensed audio must be attached in the app) — and even then, automate everything up to and after the irreducible manual step, and capture its result automatically.
@@ -21,6 +36,26 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - SHOULD: Ask before expanding scope into unrelated refactors, production changes, paid infrastructure, destructive operations, or work that changes product direction.
 - NEVER: Stop at a plan when the user asked for implementation and the implementation is feasible.
 - NEVER: Present a workaround as complete when a known real fix remains.
+
+## Picking the right models for workflows and subagents
+
+Rankings, higher = better. Cost reflects what I actually pay, not list price. Intelligence is how hard a problem you can hand the model unsupervised. Taste covers UI/UX, code quality, API design, and copy.
+
+| model    | cost | intelligence | taste |
+| -------- | ---- | ------------ | ----- |
+| sonnet-5 | 5    | 5            | 7     |
+| opus-4.8 | 4    | 7            | 8     |
+| fable-5  | 2    | 9            | 9     |
+
+How to apply:
+
+- These are defaults, not limits. You have standing permission to override them: if a cheaper model's output doesn't meet the bar, rerun or redo the work with a smarter model without asking. Judge the output, not the price tag. Escalating costs less than shipping mediocre work.
+- Cost is a tie-breaker only; when axes conflict for anything that ships, intelligence > taste > cost.
+- Brainstorm, orchestration, delegation, and review — the "decide" and hold-the-overview work — run on fable-5 (top of the intelligence and taste axes). The [agent-orchestration](./packages/skills/agent-orchestration) skill is driven by fable-5; it offloads execution to sub-agents picked per this matrix. Pull in opus-4.8 for a second, cheaper review perspective when one helps.
+- Bulk/mechanical work (clear-spec implementation, data analysis, migrations): sonnet-5 — it's the cheapest.
+- Anything user-facing (UI, copy, API design) needs taste ≥ 7.
+- Never use Haiku.
+- Mechanics: Claude models (sonnet-5, opus-4.8, fable-5) run via the Agent/Workflow model parameter.
 
 ## Before Editing
 
@@ -79,6 +114,11 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - [docs/agents/newsletter-agent.md](./docs/agents/newsletter-agent.md) - the weekly newsletter authoring doctrine for the on-box `fluncle-newsletter` Hermes cron (Friday 15:00 Amsterdam): the self-healing discovery window off the last sent edition, the voice rails, the persist-draft-then-`clarify`-Send-button flow (Resend Broadcast, operator-gated send), and its `/api/tracks` contract.
 - [packages/video/README.md](./packages/video/README.md) - Remotion video machinery + the dated, self-contained archive under `src/remotion/tracks/`: the core surface, the archive contract, and the pipeline.
 - [docs/video-variants.md](./docs/video-variants.md) - the two-master video model: a clean square `footage.mp4` source + a portrait baked-text `footage.social.mp4`, with Cloudflare Media Transformations deriving every other orientation/audio variant on the fly; the surface map and the one-time migration.
+- [docs/live-show-setup.md](./docs/live-show-setup.md) - the live-show runbook (macOS): the two-machine rig (mixing machine + streaming machine), the M-Track analog splitter, `bun run --cwd packages/live show` as the orchestrator, the pinned-Chromium setup, the ordered pre-show checklist, and the dress-rehearsal acceptance gate.
+- [docs/set-video.md](./docs/set-video.md) - the hour-long set-video render runbook (Unit O): `bun run set:render <mixtapeLogId>` turns a published mixtape into one long-form artwork — chapters from the archived compositions, travel transitions, the dreamer's-continuity driver, chunked/resumable render, and the per-chapter QA gates.
+- [docs/live-longform-visuals-rfc.md](./docs/live-longform-visuals-rfc.md) - the executed live+longform RFC (shipped planning, non-canonical per the brief/roadmap convention): the fiction (Fluncle dreaming through the findings' worlds), the scene contract, the glass, the plan-scoped fingerprint bridge, the two-machine topology, and the offline hour render.
+- [packages/live/README.md](./packages/live/README.md) - the live runtime package (`@fluncle/live`): the glass (the WebGL renderer on `:4173`) + the bridge (plan + fingerprint identity + supervisor + phone remote on `:4180`), bound by `src/contract.ts`, LAN-local by design.
+- [docs/helm.md](./docs/helm.md) - the operator's mission control: Fluncle's Helm (`apps/helm`, the LAN-local Bun daemon on `:4190` + on-brand app window), the two-machine station gating (M2 cues / M5 show+upload+distribute), the pre-set/post-set/pulse flows, `fluncle helm` install/uninstall, the security posture (localhost-first, the helm key for LAN peers, Host/Origin allowlists, least-privilege child spawns, fenced media paths), and why it stays out of `@fluncle/registry` (a local-exec surface like the live glass). The daemon internals + feature-module contract live in [apps/helm/README.md](./apps/helm/README.md).
 - [packages/media/README.md](./packages/media/README.md) - Remotion image-asset rendering; the Galaxy gate-screen OG card is the first asset, with room to grow.
 - [docs/galaxy-sprites.md](./docs/galaxy-sprites.md) - how the Galaxy game's 8-bit sprite + audio assets are made: the canon ramp, the Nano-Banana (Gemini) workflow, the procedural-fallback contract, and the amen placeholder.
 - [docs/agents/enrichment-agent.md](./docs/agents/enrichment-agent.md) - thin bootstrap for the async track agent (the enrich → video → publish chain; enrichment runs as the on-box Hermes `fluncle-enrich` `--no-agent` cron; tools + safety rails); its full constitution is the fluncle-track-enrichment skill at [packages/skills/fluncle-track-enrichment](./packages/skills/fluncle-track-enrichment). Video render is a separate capability whose doctrine is the fluncle-video skill at [packages/skills/fluncle-video](./packages/skills/fluncle-video); publishing rendered videos to social platforms as drafts is the fluncle-publish skill at [packages/skills/fluncle-publish](./packages/skills/fluncle-publish).
@@ -87,6 +127,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - [docs/agents/note-agent.md](./docs/agents/note-agent.md) - the auto-note, the written-note sibling of the observation: auto-authoring a finding's public editorial `note` from the `context_note` fuel, the AGENT-tier `note` CLI command + `note_track` route, the written-note voice gate, the fill-empty-only safety guarantee (an operator note is never clobbered), the `context --refresh` backfill flag, and the `fluncle-note` box cron.
 - [docs/socials/](./docs/socials/) - the map of social accounts, owned channels, profile assets, bio conventions, and the generated banners.
 - [packages/skills/fluncle-mixtapes](./packages/skills/fluncle-mixtapes) - the skill for publishing Fluncle's own DJ mixtapes: the repeatable per-mixtape runbook (build draft + tracklist, distribute video→YouTube + audio→Mixcloud, flip public, announce), a Rekordbox ordered-tracklist extraction script, and the spine model in `references/spine-model.md` (the mixtape as a spine-native object — Fluncle dreaming, a checkpoint; its `F`-marked Log ID, the `/log` + `/mixtapes` surfaces, mixtape-aware schema/RSS/llms.txt, the hosting/MusicBrainz/Wikidata map, surface fan-out).
+- [docs/admin-jobs.md](./docs/admin-jobs.md) - the admin jobs inventory: the CSV working document for the workflow-centralization epic — every job-to-be-done (live + desired) with trigger/executor/location/surfaces/primary-surface/drop-candidates/tests, time-ordered from "a track got added".
 - [docs/naming-conventions.md](./docs/naming-conventions.md) - the ratified cross-surface `verb_noun` naming convention (Convention B): one operation, one name across CLI / API / MCP / SSH, with the registry as the source of truth for new features.
 - [docs/surfaces-doctrine.md](./docs/surfaces-doctrine.md) - the registry-driven map of every Fluncle surface (web routes, subdomains, API, feeds, discovery, DNS, SSH, MCP, CLI, crons), grouped by `SurfaceKind` with the per-context `SurfaceWeight` matrix (rows=surfaces, columns=display contexts web/ssh/cli/status), and the "add a registry entry → it lights up /status, the homepage dev-row, llms.txt, the sitemap, this doc" checklist; `@fluncle/registry` (`packages/registry/src/index.ts`) is the single source of truth.
 - [packages/skills/fluncle-surfaces](./packages/skills/fluncle-surfaces) - the agent-facing add-a-surface runbook (companion to the doctrine doc): what `@fluncle/registry` is (the `Surface` type + the per-context `weights` matrix), how it is consumed across the app (the /status probe, the homepage dev-row/nav, the SSH menu, the MCP `get_status` tool, llms.txt, the sitemap, the doctrine doc — with the real files), and the runbook + fan-out checklist for registering a new surface so no consumer is forgotten.
@@ -95,6 +136,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 ## Architecture
 
 - MUST: Keep `apps/web` as the owner of public and admin API routes, including Spotify, Telegram, Discord, and Turso mutation behavior.
+- MUST: Put public/admin HTTP surfaces on oRPC contract ops by default (`packages/contracts/src/orpc/**`, registered in the `apps/web/src/lib/server/orpc/**` router); `handleOrpc` is mounted ahead of the TanStack router in `server.ts`, so a contract op shadows any file-route at the same method+path. New surfaces go on oRPC. The only `apps/web/src/routes/api/**` file-route carve-outs are: auth/OAuth redirects (Spotify/YouTube/Mixcloud/Discord starts+callbacks, admin login/logout); large-body/streaming/direct-upload routes (multipart uploads, media proxies/presigns); non-JSON emitters (feeds/sitemap/robots/`llms.txt`/`.well-known`/the CLI install script/OG + cover images/the generated OpenAPI+Postman specs); and the `/status`+`/health` resource-reads. The build-fail coverage tests (`orpc-coverage` / `orpc-admin-coverage`) enforce this: any non-carve-out route without a contract fails the build.
 - MUST: Keep the CLI as a thin HTTP client for public reads/submissions and authenticated admin commands.
 - MUST: Keep Raycast commands calling the `fluncle` CLI rather than reimplementing Spotify, Telegram, Turso, or HTTP API behavior.
 - MUST: Keep publishing authority behind the authenticated admin API.

@@ -6,15 +6,16 @@
 // recording. Only when there is no ISRC (or the ISRC lookup yields no preview) do
 // we fall back to an artist+title search, and that fallback is VERSION-AWARE: it
 // requires the candidate's version descriptor to agree with the finding's (a remix
-// finding resolves to the matching remix, never the bare original — see
-// version-match.ts, which mirrors apps/web/src/lib/server/discogs.ts).
+// finding resolves to the matching remix, never the bare original — see the
+// version-match helpers in @fluncle/contracts/util, which mirror
+// apps/web/src/lib/server/discogs.ts).
 //
 // iTunes is the last-resort fuzzy fallback. Returns null when nothing clears the
 // confidence floor.
 
-import { normalize, stripVersionSuffix, versionMatches } from "./version-match";
+import { normalize, stripVersionSuffix, versionMatches } from "@fluncle/contracts/util";
 
-export { isRemix, normalize, stripVersionSuffix, versionMatches } from "./version-match";
+export { isRemix, normalize, stripVersionSuffix, versionMatches } from "@fluncle/contracts/util";
 
 type PreviewSource = "deezer" | "itunes" | "archive";
 

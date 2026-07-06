@@ -18,8 +18,7 @@
 
 import { spawnSync } from "node:child_process";
 
-/** The `fluncle` CLI binary; overridable for non-PATH installs (mirrors observe-sweep). */
-const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
+import { fluncleBin, fluncleSpawnEnv } from "./fluncle-bin";
 
 export type ContextNote = {
   /** The full distilled note (prose + the trailing `Texture:` line), as stored. */
@@ -89,8 +88,9 @@ export function readContextNote(idOrLogId: string): ContextNote | undefined {
   let result: { code: number; stderr: string; stdout: string };
 
   try {
-    const spawned = spawnSync(FLUNCLE_BIN, ["admin", "tracks", "context", idOrLogId, "--json"], {
+    const spawned = spawnSync(fluncleBin(), ["admin", "tracks", "context", idOrLogId, "--json"], {
       encoding: "utf8",
+      env: fluncleSpawnEnv(),
       maxBuffer: 8 * 1024 * 1024,
     });
 

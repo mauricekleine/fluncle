@@ -1,18 +1,91 @@
 // Bundle + render a registered composition to an mp4 via Remotion SSR.
 
+import { existsSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 
 import { bundle } from "@remotion/bundler";
 import { renderMedia, selectComposition } from "@remotion/renderer";
 
 import { type NostalgicCosmosProps } from "../remotion/types";
+// The bundle cache key lives in bundle-hash.ts (shared with ship's square-artifact
+// cache). The bundle is a pure function of TWO trees — src/ (the composition code)
+// and public/ (bundle() bakes a COPY, renderMedia serves staticFile() from it, and
+// the preview audio lives there). Keying on src/ alone let a re-render reuse a
+// bundle whose baked public/ was stale/missing (e.g. after ship deleted the audio)
+// → staticFile 404 with no cache miss. See bundleInputsHash() + resolveBundle().
+import { bundleInputsHash } from "./bundle-hash";
 import { glRenderer } from "./gl";
 
+// Re-exported so the bundle-cache-key regression test (render.test.ts) keeps its
+// import site while the mechanism itself lives in bundle-hash.ts.
+export { hashBundleInputs } from "./bundle-hash";
+
 const ENTRY_POINT = path.resolve(import.meta.dirname, "../remotion/index.ts");
+// A stable on-disk location (gitignored) bundle() writes each distinct input
+// tree's output to, keyed by content hash — see resolveBundle() below.
+const BUNDLE_CACHE_ROOT = path.resolve(import.meta.dirname, "../../.cache/remotion-bundle");
+// The webpack output always includes this; its presence is the on-disk
+// cache-hit marker (a directory that exists but never finished bundling —
+// e.g. a killed process — will not have it, so the next call re-bundles).
+const BUNDLE_MARKER_FILE = "index.html";
+
 export type RenderResult = {
   outputPath: string;
   compositionId: string;
 };
+
+/**
+ * Bundle once per DISTINCT input tree (src/ + public/), reused across process
+ * invocations via an on-disk cache keyed on hashBundleInputs(), and once per
+ * PROCESS via this in-memory promise — the stills -> draft -> full render ladder
+ * within one `ship`/`social-preview` run pays the bundle cost at most once either
+ * way.
+ *
+ * bundle()'s own webpack cache (`enableCaching`, on by default) speeds up a
+ * changed-input rebuild; this hash gate is the correctness backstop that
+ * skips calling bundle() entirely on an unchanged input tree, which the
+ * webpack cache alone does not guarantee to make free (it still re-emits to a
+ * fresh temp dir unless outDir is stable — hence outDir: cacheDir below).
+ */
+let bundlePromise: Promise<string> | undefined;
+
+async function resolveBundle(): Promise<string> {
+  const hash = bundleInputsHash();
+  const cacheDir = path.join(BUNDLE_CACHE_ROOT, hash);
+  const marker = path.join(cacheDir, BUNDLE_MARKER_FILE);
+
+  if (existsSync(marker)) {
+    console.error(`[render] bundle cache hit (${hash})`);
+    return cacheDir;
+  }
+
+  console.error(`[render] bundle cache miss (${hash}) — bundling`);
+  const serveUrl = await bundle({
+    entryPoint: ENTRY_POINT,
+    outDir: cacheDir,
+    webpackOverride: (config) => config,
+  });
+
+  // Prune stale hash dirs (best-effort) so an active edit loop doesn't grow
+  // the cache unboundedly — only the current hash's bundle is worth keeping.
+  try {
+    for (const name of readdirSync(BUNDLE_CACHE_ROOT)) {
+      if (name !== hash) {
+        rmSync(path.join(BUNDLE_CACHE_ROOT, name), { force: true, recursive: true });
+      }
+    }
+  } catch {
+    // BUNDLE_CACHE_ROOT not created yet, or a race with another process —
+    // pruning is opportunistic, never load-bearing.
+  }
+
+  return serveUrl;
+}
+
+function getBundle(): Promise<string> {
+  bundlePromise ??= resolveBundle();
+  return bundlePromise;
+}
 
 /**
  * Render the composition with the given inputProps to `outputPath` (h264 mp4).
@@ -35,10 +108,7 @@ export async function render(
   // path below keeps its tuned settings untouched.
   const draft = options.draft ?? false;
 
-  const serveUrl = await bundle({
-    entryPoint: ENTRY_POINT,
-    webpackOverride: (config) => config,
-  });
+  const serveUrl = await getBundle();
 
   const composition = await selectComposition({
     // GPU shaders need a real GL context: ANGLE (Metal) locally, swangle (software)

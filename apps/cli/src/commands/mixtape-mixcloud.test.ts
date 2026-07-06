@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { mixcloudSections, mixtapeDescription } from "./mixtape-mixcloud";
+import { mixcloudEditUrl, mixcloudSectionFields, mixcloudSections } from "@fluncle/contracts/util";
+import { mixtapeDescription } from "./mixtape-mixcloud";
 import { type MixtapeMemberItem } from "./mixtapes";
 
 const member = (overrides: Partial<MixtapeMemberItem>): MixtapeMemberItem =>
@@ -61,5 +62,41 @@ describe("mixcloudSections", () => {
     ]);
 
     expect(sections[0]?.artist).toBe("A, B");
+  });
+});
+
+describe("mixcloudSectionFields", () => {
+  test("builds the indexed sections-N-* multipart field pairs", () => {
+    const fields = mixcloudSectionFields([
+      { artist: "A", song: "First", start_time: 0 },
+      { artist: "B, C", song: "Second", start_time: 90 },
+    ]);
+
+    expect(fields).toEqual([
+      ["sections-0-artist", "A"],
+      ["sections-0-song", "First"],
+      ["sections-0-start_time", "0"],
+      ["sections-1-artist", "B, C"],
+      ["sections-1-song", "Second"],
+      ["sections-1-start_time", "90"],
+    ]);
+  });
+
+  test("is empty for no sections (nothing to overwrite)", () => {
+    expect(mixcloudSectionFields([])).toEqual([]);
+  });
+});
+
+describe("mixcloudEditUrl", () => {
+  test("splices edit/ after the cloudcast key under /upload", () => {
+    expect(mixcloudEditUrl("/fluncle/a-set/")).toBe(
+      "https://api.mixcloud.com/upload/fluncle/a-set/edit/",
+    );
+  });
+
+  test("normalizes a key missing its leading/trailing slash", () => {
+    expect(mixcloudEditUrl("fluncle/a-set")).toBe(
+      "https://api.mixcloud.com/upload/fluncle/a-set/edit/",
+    );
   });
 });

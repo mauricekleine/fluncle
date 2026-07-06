@@ -25,13 +25,20 @@ Crawler and discovery surfaces (all under <https://www.fluncle.com>): `/robots.t
 ## Monorepo Layout
 
 ```text
-apps/cli         Bun/TypeScript CLI. Thin client for public reads and admin API calls.
-apps/extension   Fluncle Lens, an MV3 Chrome extension. Linkifies fluncle:// coordinates on any page.
-apps/raycast     Raycast extension. Thin client that shells out to the CLI.
-apps/ssh         Go Wish/Bubble Tea SSH terminal behind ssh rave.fluncle.com. Thin client of the public API.
-apps/web         TanStack Start public web app and server-side Fluncle API.
-packages/tokens  Shared design tokens (colors, typography, radii, motion) from DESIGN.md.
-packages/video   Remotion kit for per-track social videos (the Nostalgic Cosmos).
+apps/cli            Bun/TypeScript CLI. Thin client for public reads and admin API calls.
+apps/extension      Fluncle Lens, an MV3 Chrome extension. Linkifies fluncle:// coordinates on any page.
+apps/helm           Fluncle's Helm, the operator's mission control: a local Bun daemon (:4190) + app window. `fluncle helm` opens it.
+apps/raycast        Raycast extension. Thin client that shells out to the CLI.
+apps/ssh            Go Wish/Bubble Tea SSH terminal behind ssh rave.fluncle.com. Thin client of the public API.
+apps/web            TanStack Start public web app and server-side Fluncle API.
+packages/contracts  oRPC contracts for the public + admin HTTP API (the contract-first surface).
+packages/live       The live runtime: the glass (WebGL renderer) + the bridge (plan + fingerprint identity + supervisor + phone remote).
+packages/media      Remotion kit for static image assets (link-preview cards, covers).
+packages/registry   The typed catalog of every Fluncle surface (@fluncle/registry, the source of truth).
+packages/sprites    Fluncle's pixel-sprite family — one per surface, plus the game props.
+packages/tokens     Shared design tokens (colors, typography, radii, motion) from DESIGN.md.
+packages/ui         Shared @fluncle/ui design system: the Shadcn base + the Nostalgic Cosmos tokens, consumed by apps/web and apps/helm.
+packages/video      Remotion kit for per-track social videos (the Nostalgic Cosmos).
 ```
 
 The deployed web app owns the Spotify, Telegram, Turso, and Resend secrets. Every API route is served canonically under `/api/v1/*`, with the bare `/api/*` path kept as a permanent back-compat alias (a shared handler mounted at both paths, not a redirect, so POST bodies survive). Public reads are served by `/api/v1/tracks` (with `since`/`until` discovery windows), `/api/v1/tracks/random`, and `/rss.xml`. Newsletter signups post to `/api/v1/newsletter`, which the web app relays to Resend. The mobile app registers for push via `/api/v1/devices` (`register_device` / `deregister_device`); the web app then relays a notification to the Expo Push Service when a finding or mixtape publishes — best-effort and a no-op until `EXPO_ACCESS_TOKEN` is set, like the Telegram/Last.fm side-channels. Admin mutations are served by authenticated `/api/v1/admin/*` routes. Raycast must keep calling `fluncle`.

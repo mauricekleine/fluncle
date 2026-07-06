@@ -15,8 +15,8 @@ import { BrandIcon } from "@/components/brand-icon";
 import { HomeStatusPill } from "@/components/home/status-pill";
 import { SubmitTrackDialog } from "@/components/submit-track-dialog";
 import { SubscribeDialog } from "@/components/subscribe-dialog";
-import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button } from "@fluncle/ui/components/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@fluncle/ui/components/tooltip";
 import {
   galaxyUrl,
   instagramUrl,

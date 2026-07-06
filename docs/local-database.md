@@ -56,7 +56,7 @@ So a new worktree comes up with its own isolated, prod-shaped database and a pri
 
 ## Keeping dev in sync with prod
 
-The snapshot comes straight from production, so it is as fresh as the last `db:pull-prod`. Everyday local work needs no credentials at all — it only reads the already-dumped `seed.sql`. When you want newer data, unlock 1Password and run `db:pull-prod` in the main checkout, then `db:refresh-dev` in each worktree to adopt it. The pull is read-only (`SELECT`s); production credentials are read from the `Turso Production Credentials` item in the Fluncle 1Password vault and never touch `.dev.vars`.
+The snapshot comes straight from production, so it is as fresh as the last `db:pull-prod`. Everyday local work needs no credentials at all — it only reads the already-dumped `seed.sql`. When you want newer data, unlock 1Password and run `db:pull-prod` in the main checkout, then `db:refresh-dev` in each worktree to adopt it. The pull is read-only (`SELECT`s); production credentials are read at run time from the 1Password item that `FLUNCLE_TURSO_OP_ITEM` points at (`db-pull-prod.ts` reads that env var; the concrete item lives in the ops runbook note) and never touch `.dev.vars`.
 
 ## Production deploy & migrations
 
@@ -64,8 +64,10 @@ Cloudflare deploys via Workers Builds, and migrations run as part of the **deplo
 
 ```jsonc
 // apps/web/package.json
-"deploy:cf": "bun run db:migrate && wrangler deploy"
+"deploy:cf": "bun run db:migrate && bun run db:backfill && wrangler deploy"
 ```
+
+`db:backfill` is the idempotent data-backfill step folded into the deploy (currently `scripts/backfill-plan-recording-mixtape.ts`): DDL and the data it populates ship atomically, and because every backfill step is guarded (`where not exists` / convergent updates), re-running it on every deploy is a no-op once done. A new schema change that needs a data backfill extends this script (or swaps in its successor) rather than relying on a manual post-deploy step.
 
 The Cloudflare **Deploy command** is `bun run --cwd apps/web deploy:cf` (build still runs separately as the Build command). Prod `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` come from the Cloudflare build/deploy environment, so the same `db:migrate` runs against prod there.
 

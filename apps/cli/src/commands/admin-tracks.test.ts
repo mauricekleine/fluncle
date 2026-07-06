@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { type TrackListItem } from "@fluncle/contracts";
 import * as realApi from "../api";
 
@@ -32,6 +32,7 @@ function finding(trackId: string, logId: string): TrackListItem {
     videoGrain: undefined,
     videoModel: undefined,
     videoModelReasoning: undefined,
+    videoRegister: undefined,
     videoUrl: undefined,
     videoVehicle: undefined,
   };
@@ -48,12 +49,26 @@ const contextedFinding = finding("track_context", "001.1.1");
 // absent, so a test can prove the render queue never asks for the note-less one.
 let requestedPaths: string[] = [];
 
+// When set, the mock models a 2-page catalogue for a plain (unfiltered) list so an
+// `--all` fetch must follow the cursor across pages. Off by default so the
+// single-page queue/filter tests below keep asserting exactly one request.
+let paginateCatalogue = false;
+
 await mock.module("../api", () => ({
   ...realApi,
   adminApiGet: async (path: string) => {
     requestedPaths.push(path);
     const url = new URL(path, "https://fluncle.test");
     const hasContext = url.searchParams.get("hasContext");
+
+    if (paginateCatalogue && hasContext === null && url.searchParams.get("hasKey") === null) {
+      // Two pages: page 1 hands back a cursor, page 2 ends it. An --all fetch
+      // (Infinity max) must request both; a finite limit would stop after page 1.
+      const cursor = url.searchParams.get("cursor");
+      return cursor
+        ? { nextCursor: undefined, totalCount: 2, tracks: [finding("track_page2", "002.1.2")] }
+        : { nextCursor: "page2", totalCount: 2, tracks: [finding("track_page1", "002.1.1")] };
+    }
 
     // Model the server: `hasContext=true` ⇒ `context_note is not null`, so only
     // the context'd finding comes back. Absent the gate, a note-less finding would
@@ -67,7 +82,8 @@ await mock.module("../api", () => ({
   },
 }));
 
-const { contextQueueCommand, noteQueueCommand, queueCommand } = await import("./admin-tracks");
+const { contextQueueCommand, listCommand, noteQueueCommand, queueCommand } =
+  await import("./admin-tracks");
 
 describe("context queue — --retry-empty plumbing", () => {
   beforeEach(() => {
@@ -118,6 +134,29 @@ describe("auto-note queue — hasContext=true AND hasNote=false", () => {
   });
 });
 
+describe("tracks list — key-backfill backlog filter", () => {
+  beforeEach(() => {
+    requestedPaths = [];
+  });
+
+  test("--no-key emits hasKey=false (the missing-key backlog query)", async () => {
+    await listCommand({ hasKey: false, limit: 10, order: "desc" });
+
+    expect(requestedPaths).toHaveLength(1);
+    const url = new URL(requestedPaths[0] ?? "", "https://fluncle.test");
+    expect(url.searchParams.get("hasKey")).toBe("false");
+    expect(url.searchParams.get("order")).toBe("desc");
+  });
+
+  test("no key filter omits the hasKey param entirely (list all)", async () => {
+    await listCommand({ limit: 10, order: "desc" });
+
+    expect(requestedPaths).toHaveLength(1);
+    const url = new URL(requestedPaths[0] ?? "", "https://fluncle.test");
+    expect(url.searchParams.has("hasKey")).toBe(false);
+  });
+});
+
 describe("video render queue — hasContext hard-gate", () => {
   beforeEach(() => {
     requestedPaths = [];
@@ -143,14 +182,37 @@ describe("video render queue — hasContext hard-gate", () => {
     expect(logIds).toContain("001.1.1");
     expect(logIds).not.toContain("001.1.2");
   });
+});
 
-  test("a passed hasContext=false filter cannot un-gate the render queue", async () => {
-    // The render queue is hard-gated: even if a caller passes `hasContext: false`
-    // (the back-compat seam on QueueFilters), the queue still asks for the gated
-    // set — the automation can never be tricked into filming note-less findings.
-    await queueCommand(10, { hasContext: false });
+describe("tracks list — --all paginates the full catalogue", () => {
+  beforeEach(() => {
+    requestedPaths = [];
+    paginateCatalogue = true;
+  });
 
-    const url = new URL(requestedPaths[0] ?? "", "https://fluncle.test");
-    expect(url.searchParams.get("hasContext")).toBe("true");
+  afterEach(() => {
+    paginateCatalogue = false;
+  });
+
+  test("an Infinity limit follows the cursor across every page", async () => {
+    const tracks = await listCommand({ limit: Number.POSITIVE_INFINITY, order: "desc" });
+
+    // Both pages fetched: the second request carries the page-1 cursor.
+    expect(requestedPaths).toHaveLength(2);
+    const secondUrl = new URL(requestedPaths[1] ?? "", "https://fluncle.test");
+    expect(secondUrl.searchParams.get("cursor")).toBe("page2");
+
+    // Findings from both pages are accumulated.
+    const logIds = tracks.map((track) => track.logId);
+    expect(logIds).toContain("002.1.1");
+    expect(logIds).toContain("002.1.2");
+  });
+
+  test("a finite limit stops after the first page", async () => {
+    const tracks = await listCommand({ limit: 1, order: "desc" });
+
+    // max=1 is reached on page 1, so the cursor is never followed.
+    expect(requestedPaths).toHaveLength(1);
+    expect(tracks).toHaveLength(1);
   });
 });

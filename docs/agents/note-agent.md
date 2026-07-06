@@ -43,9 +43,9 @@ The note is a live, **public**, **written** Fluncle voice surface — it lands s
 
 The pipeline board's **Note** cell is an `auto` step that stays **actionable** (the operator can still hand-write). It reads `done` when a note exists (auto-authored OR operator-typed); `noteRan` (the `backfill_note_attempted_at` stamp) refines the grey state so a finding the cron visited but couldn't fill reads "Checked — no note" rather than a bare "Note" — exactly the done-when-ran pattern Discogs/Last.fm use, keyed off the same `listBackfillRanForTracks` machinery.
 
-## The box cron (PREPARED, NOT YET WIRED)
+## The box cron (LIVE)
 
-`fluncle-note` is the on-box `--no-agent` hybrid sweep — deterministic queue + ONE `claude -p` authoring + deterministic delivery — mirroring `fluncle-observation`. Source: [`hermes/scripts/note-sweep.{sh,ts}`](./hermes/scripts/). The operator wires it on the devbox; the full runbook (the token file-source, the auth-fail ping, `BATCH_CAP=1`, the `hermes cron create` command) is in [`hermes/cron/README.md`](./hermes/cron/README.md) § The HYBRID `--no-agent` auto-note cron.
+`fluncle-note` is the on-box `--no-agent` hybrid sweep — deterministic queue + ONE `claude -p` authoring + deterministic delivery — mirroring `fluncle-observation`, and it runs **live on the box every 10 min** (confirmed in the cron roster + the `fluncle-healthcheck` `CRON_SPECS`). Source: [`hermes/scripts/note-sweep.{sh,ts}`](./hermes/scripts/). The full runbook (the token file-source, the auth-fail ping, `BATCH_CAP=1`, the `hermes cron create` command) is in [`hermes/cron/README.md`](./hermes/cron/README.md) § The HYBRID `--no-agent` auto-note cron.
 
 ## Safety rails (inline so they survive even if the skill fails to load)
 

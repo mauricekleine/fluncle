@@ -1,9 +1,23 @@
 import { colors } from "@fluncle/tokens";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AbsoluteFill, useCurrentFrame, useVideoConfig } from "remotion";
+import {
+  AbsoluteFill,
+  cancelRender,
+  continueRender,
+  delayRender,
+  staticFile,
+  useCurrentFrame,
+  useVideoConfig,
+} from "remotion";
 import { hexToRgb } from "../color";
 import { useAudioReactivity, type AudioReactivityOptions } from "../hooks/use-audio-reactivity";
 import { type CosmosPalette, type EnergySample } from "../types";
+import {
+  assignTextureUnits,
+  buildFragmentHeader,
+  buildVertexShader,
+  isRemoteSrc,
+} from "./shader-header";
 
 /**
  * A custom uniform value. Floats, vec2 (`[x, y]`), and vec3 (`[x, y, z]`) are
@@ -53,6 +67,18 @@ export type ShaderLayerProps = {
   trebleCurve?: EnergySample[];
   /** Flux curve (continuous transient/attack) for `u_flux` via useFlux. Omitted = u_flux stays 0. */
   fluxCurve?: EnergySample[];
+  /** Sub curve (<60Hz weight) for `u_sub` via useSub. Omitted = u_sub stays 0. */
+  subCurve?: EnergySample[];
+  /** Kick curve (60-150Hz, transient-emphasized) for `u_kickHit` via useKick. Omitted = 0. */
+  kickCurve?: EnergySample[];
+  /** Snare curve (2-5kHz, transient-emphasized) for `u_snareHit` via useSnare. Omitted = 0. */
+  snareCurve?: EnergySample[];
+  /** Air curve (>5kHz) for `u_air` via useAir. Omitted = u_air stays 0. */
+  airCurve?: EnergySample[];
+  /** Bar downbeats (ms offsets) for `u_downbeatPulse` via useDownbeat. Omitted = pulse stays 0. */
+  downbeats?: number[];
+  /** Detected drop time (ms) — the drop envelope's default peak (u_audioDrop). */
+  dropMs?: number;
   /**
    * Shared audio-reactivity profile. Use these to disturb MATERIAL (width,
    * density, threshold, glow, grain, refraction, exposure) on the immediate
@@ -78,15 +104,77 @@ export type ShaderLayerProps = {
    * material — NOT a licence for the banned bolted-on glow-orb (doctrine 1).
    */
   bloom?: BloomOptions;
+  /**
+   * Image inputs, keyed by the GLSL uniform name your shader samples. The value is
+   * an https URL (e.g. `track.artworkUrl` passed straight in) or a `staticFile()`
+   * path / bare `public/` filename. For each entry `<name>` the injected header
+   * gains:
+   *
+   *   uniform sampler2D <name>;      // the image, CLAMP_TO_EDGE + LINEAR, no mipmaps
+   *   uniform float <name>AspectRatio; // image width / height, for aspect-correct sampling
+   *
+   * Every image is loaded once (crossOrigin="anonymous") behind Remotion's
+   * `delayRender()`/`continueRender()`, so no frame is captured before the
+   * textures are ready; a load failure `cancelRender`s with a clear message.
+   * Uploads flip Y (UNPACK_FLIP_Y_WEBGL), so sampling with the canonical
+   * `uv = gl_FragCoord.xy / u_res` (y-up) shows the image UPRIGHT. Units are
+   * assigned deterministically in sorted name order. Re-uploaded on context
+   * restore. Remote URLs work headless (the render fetches them directly). Keep
+   * `textures` identity stable across frames (frame-derived props only).
+   */
+  textures?: Record<string, string>;
+  /**
+   * Opt in to WebGL2 / GLSL ES 3.00: the context becomes `webgl2`, the header is
+   * emitted as `#version 300 es`, and the body writes to the injected
+   * `out vec4 fragColor;` (declare no color output yourself) and samples textures
+   * with `texture(...)`. The injected uniform NAMES are unchanged. There is NO
+   * silent fallback — if webgl2 is unavailable the error overlay shows. Absent
+   * (default) stays WebGL1 with byte-identical behavior. Purpose: verbatim GLSL3
+   * lifts. `OES_standard_derivatives` (`fwidth`/`dFdx`) is built in under GLSL3
+   * and auto-enabled under WebGL1 when the host supports it.
+   */
+  glsl3?: boolean;
+  /**
+   * Fragment-cost lever for expensive (marched) scenes. Renders the canvas BACKING
+   * STORE at `resolutionScale ×` the composition size, then CSS upscales it to fill —
+   * so `0.5` runs the fragment shader at quarter the pixels (≈4× cheaper per frame),
+   * and the browser's bilinear upscale reads as the brand's "through degraded glass"
+   * softness. `u_res`, the viewport, and the bloom targets all follow the backing
+   * store, so the shader is unaware. Default `1` (byte-identical to before). Frame-
+   * stable — keep it a constant per render (determinism). Values clamp to (0, 1]; use
+   * it for raymarched/volumetric scenes, leave it 1 for field shaders.
+   */
+  resolutionScale?: number;
 };
 
-// The standard header injected ahead of every fragmentShader body. Anything an
-// agent's shader can rely on lives here: precision, the audio/journey/brand
-// uniforms, the four palette stops, and dither8() to break 8-bit banding on
-// smooth gradients. Keep in sync with the prop docs and the returned API.
-const HEADER = /* glsl */ `precision highp float;
+/**
+ * The canvas backing-store size for a composition size + resolutionScale. Pure and
+ * frame-stable: `scale` clamps to (0, 1] (a non-finite / ≤0 value falls back to 1) and
+ * each dimension is a positive integer. `scale === 1` returns the exact size, so the
+ * default path is byte-identical. Exported for the unit test.
+ */
+export function backingStoreSize(
+  width: number,
+  height: number,
+  resolutionScale: number | undefined,
+): { width: number; height: number } {
+  const scale =
+    typeof resolutionScale === "number" && Number.isFinite(resolutionScale) && resolutionScale > 0
+      ? Math.min(resolutionScale, 1)
+      : 1;
+  return {
+    height: Math.max(1, Math.round(height * scale)),
+    width: Math.max(1, Math.round(width * scale)),
+  };
+}
 
-uniform float u_time;      // seconds since clip start (frame / fps)
+// The audio/journey/brand uniform block injected ahead of every fragmentShader
+// body — anything a shader can rely on: the audio/journey/brand uniforms and the
+// four palette stops. This block is OWNED HERE: a new uniform is declared here
+// and pushed by name in the draw effect below (keep the two in sync). The header
+// is assembled by buildFragmentHeader (shader-header.ts), which frames this block
+// with precision/version/extension/texture lines. Keep in sync with the prop docs.
+const CORE_UNIFORMS = /* glsl */ `uniform float u_time;      // seconds since clip start (frame / fps)
 uniform vec2  u_res;       // canvas resolution in px
 uniform float u_progress;  // 0..1 clip progress
 uniform float u_energy;    // 0..1 smoothed overall energy
@@ -104,10 +192,17 @@ uniform float u_bassFast;  // near-raw bass, for pressure without smoothing lag
 uniform float u_midFast;   // near-raw mid, snappier lead-driven reactions
 uniform float u_trebleFast;// near-raw treble, snappy hat/cymbal sparkle
 uniform float u_flux;      // 0..1 continuous transient/attack envelope (between-onset shimmer)
+uniform float u_sub;       // 0..1 smoothed sub weight <60Hz (low-end pressure/mass)
+uniform float u_kickHit;   // 0..1 near-raw transient-emphasized kick punch 60-150Hz (MATERIAL only)
+uniform float u_snareHit;  // 0..1 near-raw transient-emphasized snare crack 2-5kHz (MATERIAL only)
+uniform float u_air;       // 0..1 air band >5kHz (hat tails/cymbal wash, fine sparkle)
+uniform float u_downbeatPulse; // 0..1, snaps on each bar downbeat and decays across the bar
 uniform float u_seed;      // per-track seed
-uniform vec3  u_palette[4];// Retint ramp stops, dark -> light
+uniform vec3  u_palette[4];// Retint ramp stops, dark -> light`;
 
-// Ordered-dither (Bayer-ish via a hash) applied at ~1/255 to break banding when
+// Ordered-dither banding-killer helpers (GLSL1/GLSL3-agnostic — no gl_FragColor
+// or texture2D). Framed into the header by buildFragmentHeader.
+const DITHER_HELPERS = /* glsl */ `// Ordered-dither (Bayer-ish via a hash) applied at ~1/255 to break banding when
 // quantizing smooth gradients to 8-bit. Call on the final color before output.
 float ditherValue(vec2 fragCoord) {
   vec2 p = fract(fragCoord * vec2(0.7548776662, 0.5698402909));
@@ -116,9 +211,11 @@ float ditherValue(vec2 fragCoord) {
 }
 vec3 dither8(vec3 col, vec2 uv) {
   return col + ditherValue(uv * u_res);
-}
-`;
+}`;
 
+// The fullscreen-triangle vertex shader for the BLOOM helper passes (GLSL ES 1.00;
+// a WebGL2 context still compiles version-100 shaders, so bloom is glsl3-safe).
+// The MAIN program's vertex shader comes from buildVertexShader(glsl3).
 const VERT = `attribute vec2 p;void main(){gl_Position=vec4(p,0.0,1.0);}`;
 
 // Neutral warm-dark ramp — the fallback when a layer is given no palette. Kept
@@ -188,9 +285,12 @@ uniform vec2 u_res;
 uniform float u_intensity;
 void main() {
   vec2 uv = gl_FragCoord.xy / u_res;
-  vec3 scene = texture2D(u_scene, uv).rgb;
+  // Bloom adds RGB ENERGY only; the alpha stays the SCENE's, so a localized
+  // alpha-composited layer (orb/glow that fades to true zero) keeps its soft edge
+  // under bloom instead of printing an opaque rectangle (the quad law).
+  vec4 scene = texture2D(u_scene, uv);
   vec3 bloom = texture2D(u_bloom, uv).rgb;
-  gl_FragColor = vec4(scene + bloom * u_intensity, 1.0);
+  gl_FragColor = vec4(scene.rgb + bloom * u_intensity, scene.a);
 }`;
 
 type RenderTarget = { tex: WebGLTexture; fbo: WebGLFramebuffer };
@@ -342,10 +442,46 @@ const runBloom = (
   });
 };
 
-type GlBundle = {
+// --- Texture inputs: artwork-as-texture, the biggest expressive lane ----------
+// Each `textures` entry uploads an image as a sampler2D the shader can read.
+// NPOT-safe (CLAMP_TO_EDGE + LINEAR, no mipmaps) so any artwork size works in
+// WebGL1. Y is flipped on upload so the canonical y-up `uv = gl_FragCoord/u_res`
+// samples the image UPRIGHT. Loading (crossOrigin) is gated by delayRender so a
+// frame is never captured before the pixels arrive.
+
+/** Upload an already-loaded image as an NPOT-safe, upright sampler2D (null on failure). */
+const uploadTexture = (gl: WebGLRenderingContext, image: TexSource): WebGLTexture | null => {
+  const tex = gl.createTexture();
+  if (!tex) {
+    return null;
+  }
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return tex;
+};
+
+// The subset of HTMLImageElement texImage2D accepts; kept narrow for testability.
+type TexSource = TexImageSource & { height: number; width: number };
+
+// The GL-side texture cache: which images are uploaded, on which context, keyed by
+// the loaded-image identity so a context restore or a new image set re-uploads.
+type TextureCache = {
   gl: WebGLRenderingContext;
-  program: WebGLProgram;
+  key: string;
+  textures: Record<string, WebGLTexture>;
+};
+
+type GlBundle = {
   buffer: WebGLBuffer;
+  gl: WebGLRenderingContext;
+  glsl3: boolean;
+  program: WebGLProgram;
 };
 
 /**
@@ -364,7 +500,87 @@ type GlBundle = {
  * GPU is available via ANGLE/Metal (see remotion.config.ts + render.ts); a
  * frame is drawn in a useEffect keyed on the frame so headless captures get a
  * painted canvas.
+ *
+ * Beyond the header + audio bus it also carries: `textures` (artwork-as-texture,
+ * loaded behind delayRender and exposed as `sampler2D <name>` + `float
+ * <name>AspectRatio`), opt-in `glsl3` (a `#version 300 es` / WebGL2 context for
+ * verbatim GLSL3 lifts — writes `out vec4 fragColor`), and auto-enabled
+ * `OES_standard_derivatives` (`fwidth`) on WebGL1. See the prop docs above.
  */
+/** The loaded texture images + a content key that changes only when the set does. */
+type LoadedTextures = { images: Record<string, HTMLImageElement>; key: string };
+
+/**
+ * Load every `textures` entry once as an HTMLImageElement (crossOrigin), gated by
+ * Remotion's delayRender so no frame is captured before the pixels are ready; a
+ * load failure cancelRenders with a clear message. Re-runs only when the CONTENT
+ * of the map changes (a stable string key), never on mere prop-identity churn, so
+ * a per-frame-recreated `textures` object does not reload every frame.
+ */
+const useTextureImages = (textures: Record<string, string> | undefined): LoadedTextures => {
+  const texturesRef = useRef(textures);
+  texturesRef.current = textures;
+
+  // A stable content key: sorted "name=src" pairs. Same content → same string →
+  // the loader effect does not re-run even if the object identity changed.
+  const key = useMemo(() => {
+    const t = textures ?? {};
+    return Object.keys(t)
+      .sort()
+      .map((name) => `${name}=${t[name]}`)
+      .join("|");
+  }, [textures]);
+
+  const [loaded, setLoaded] = useState<LoadedTextures>({ images: {}, key: "" });
+
+  useEffect(() => {
+    const current = texturesRef.current ?? {};
+    const names = Object.keys(current).sort();
+    if (names.length === 0) {
+      setLoaded({ images: {}, key });
+      return;
+    }
+
+    let cancelled = false;
+    const handle = delayRender(`ShaderLayer: loading ${names.length} texture(s)`);
+    const images: Record<string, HTMLImageElement> = {};
+    let remaining = names.length;
+
+    for (const name of names) {
+      const src = current[name] ?? "";
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => {
+        if (cancelled) {
+          return;
+        }
+        images[name] = img;
+        remaining -= 1;
+        if (remaining === 0) {
+          setLoaded({ images, key });
+          continueRender(handle);
+        }
+      };
+      img.onerror = () => {
+        if (cancelled) {
+          return;
+        }
+        cancelRender(new Error(`ShaderLayer texture "${name}" failed to load from ${src}`));
+      };
+      img.src = isRemoteSrc(src) ? src : staticFile(src);
+    }
+
+    return () => {
+      cancelled = true;
+      // Release the delay if this set is torn down before it finished loading.
+      continueRender(handle);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on content, not identity
+  }, [key]);
+
+  return loaded;
+};
+
 // The error-overlay surface — a static fallback shown only when WebGL setup
 // fails. All fixed, so it stays stable instead of rebuilding each render.
 const ERROR_STYLE: React.CSSProperties = {
@@ -393,29 +609,55 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
   midCurve,
   trebleCurve,
   fluxCurve,
+  subCurve,
+  kickCurve,
+  snareCurve,
+  airCurve,
+  downbeats,
+  dropMs,
   reactivity,
   uniforms,
   opacity = 1,
   blendMode = "normal",
   bloom,
+  textures,
+  glsl3 = false,
+  resolutionScale,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height, durationInFrames } = useVideoConfig();
+  // The backing store may render below composition size (marched-scene cost lever);
+  // the canvas CSS still fills 100%, so the browser upscales it (default 1 = no-op).
+  const backing = backingStoreSize(width, height, resolutionScale);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const bundleRef = useRef<GlBundle | null>(null);
   const bloomGlRef = useRef<BloomGl | null>(null);
+  const texGlRef = useRef<TextureCache | null>(null);
   const shaderKeyRef = useRef<string>("");
   const [error, setError] = useState<null | string>(null);
+
+  // Load the artwork/texture images once (delayRender-gated). The stable string of
+  // sorted names is what the header + unit assignment key off, so a per-frame
+  // re-created `textures` object never triggers a recompile or reload.
+  const loadedTextures = useTextureImages(textures);
+  const textureNames = useMemo(() => Object.keys(textures ?? {}).sort(), [textures]);
+  const textureNamesKey = useMemo(() => textureNames.join(","), [textureNames]);
 
   // Audio uniforms from the shared bus (no-op when no curve/grid supplied).
   const audio = useAudioReactivity(
     {
+      airCurve: airCurve ?? [],
       bassCurve: bassCurve ?? [],
       beatGrid: beatGrid ?? [],
+      downbeats: downbeats ?? [],
+      dropMs,
       energyCurve: energyCurve ?? [],
       fluxCurve: fluxCurve ?? [],
+      kickCurve: kickCurve ?? [],
       midCurve: midCurve ?? [],
       onsets: onsets ?? [],
+      snareCurve: snareCurve ?? [],
+      subCurve: subCurve ?? [],
       trebleCurve: trebleCurve ?? [],
     },
     {
@@ -445,19 +687,51 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
   // (re)acquire the context on loss. Returns a live bundle or null on failure.
   const ensureBundle = useCallback(
     (canvas: HTMLCanvasElement): GlBundle | null => {
-      const fullFrag = HEADER + "\n" + fragmentShader;
+      const names = textureNamesKey ? textureNamesKey.split(",") : [];
+      // OES_standard_derivatives is a header line under WebGL1 only (WebGL2 has it
+      // built in). Computing it needs the live context, so a full-frag rebuild
+      // reads it off whichever context is in play.
+      const buildFrag = (derivatives: boolean): string =>
+        buildFragmentHeader({
+          coreUniforms: CORE_UNIFORMS,
+          derivatives,
+          ditherHelpers: DITHER_HELPERS,
+          glsl3,
+          textureNames: names,
+        }) +
+        "\n" +
+        fragmentShader;
+
       const existing = bundleRef.current;
-      if (existing && !existing.gl.isContextLost() && shaderKeyRef.current === fullFrag) {
-        return existing;
+      if (existing && !existing.gl.isContextLost() && existing.glsl3 === glsl3) {
+        const derivatives = !glsl3 && Boolean(existing.gl.getExtension("OES_standard_derivatives"));
+        if (shaderKeyRef.current === buildFrag(derivatives)) {
+          return existing;
+        }
       }
 
-      const gl = canvas.getContext("webgl", { preserveDrawingBuffer: true });
+      // No silent fallback: glsl3 demands a real webgl2 context. The context is a
+      // superset of WebGL1 at runtime, so it is typed as WebGLRenderingContext for
+      // the shared GPU helpers; the `#version 300 es` source is what selects the
+      // dialect, not the TS type.
+      const gl = (
+        glsl3
+          ? canvas.getContext("webgl2", { preserveDrawingBuffer: true })
+          : canvas.getContext("webgl", { preserveDrawingBuffer: true })
+      ) as WebGLRenderingContext | null;
       if (!gl) {
         setError(
-          "WebGL unavailable (no context). Renders need a GL renderer — angle or swangle (FLUNCLE_GL).",
+          glsl3
+            ? "WebGL2 unavailable (no webgl2 context). glsl3 needs a WebGL2/ANGLE renderer; drop glsl3 or use a webgl2-capable host."
+            : "WebGL unavailable (no context). Renders need a GL renderer — angle or swangle (FLUNCLE_GL).",
         );
         return null;
       }
+
+      // Enable derivatives on WebGL1 when present (guarded — absent just means a
+      // shader can't use fwidth; no crash). WebGL2 has it built in.
+      const derivatives = !glsl3 && Boolean(gl.getExtension("OES_standard_derivatives"));
+      const fullFrag = buildFrag(derivatives);
 
       const compile = (type: number, src: string): WebGLShader | null => {
         const sh = gl.createShader(type);
@@ -477,7 +751,7 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
         return sh;
       };
 
-      const vs = compile(gl.VERTEX_SHADER, VERT);
+      const vs = compile(gl.VERTEX_SHADER, buildVertexShader(glsl3));
       const fs = compile(gl.FRAGMENT_SHADER, fullFrag);
       if (!vs || !fs) {
         return null;
@@ -505,13 +779,16 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
       // Fullscreen triangle (covers the clip space with one primitive).
       gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
 
-      const bundle: GlBundle = { buffer, gl, program };
+      // A fresh program/context invalidates any textures uploaded to the old one.
+      texGlRef.current = null;
+
+      const bundle: GlBundle = { buffer, gl, glsl3, program };
       bundleRef.current = bundle;
       shaderKeyRef.current = fullFrag;
       setError(null);
       return bundle;
     },
-    [fragmentShader],
+    [fragmentShader, glsl3, textureNamesKey],
   );
 
   useEffect(() => {
@@ -524,6 +801,7 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
       e.preventDefault();
       bundleRef.current = null;
       bloomGlRef.current = null;
+      texGlRef.current = null;
       shaderKeyRef.current = "";
     };
     canvas.addEventListener("webglcontextlost", onLost, false);
@@ -576,6 +854,11 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
     gl.uniform1f(u("u_midFast"), audio.midFast);
     gl.uniform1f(u("u_trebleFast"), audio.trebleFast);
     gl.uniform1f(u("u_flux"), audio.flux);
+    gl.uniform1f(u("u_sub"), audio.sub);
+    gl.uniform1f(u("u_kickHit"), audio.kickHit);
+    gl.uniform1f(u("u_snareHit"), audio.snareHit);
+    gl.uniform1f(u("u_air"), audio.air);
+    gl.uniform1f(u("u_downbeatPulse"), audio.downbeat);
     gl.uniform1f(u("u_seed"), seed);
 
     const flatPalette = new Float32Array(stops.flatMap((hex) => toVec3(hex)));
@@ -595,6 +878,53 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
           gl.uniform2f(l, value[0], value[1]);
         } else {
           gl.uniform3f(l, value[0], value[1], value[2]);
+        }
+      }
+    }
+
+    // Textures: (re)upload for this context/image-set, then bind each to its
+    // deterministic unit and set the sampler + <name>AspectRatio uniforms. Done
+    // BEFORE drawScene so both the bloom and non-bloom paths sample them.
+    if (textureNames.length > 0) {
+      const cache = texGlRef.current;
+      if (!cache || cache.gl !== gl || cache.key !== loadedTextures.key) {
+        if (cache && cache.gl === gl) {
+          for (const old of Object.values(cache.textures)) {
+            gl.deleteTexture(old);
+          }
+        }
+        const uploaded: Record<string, WebGLTexture> = {};
+        for (const name of textureNames) {
+          const img = loadedTextures.images[name];
+          if (!img) {
+            continue;
+          }
+          const tex = uploadTexture(gl, img);
+          if (tex) {
+            uploaded[name] = tex;
+          }
+        }
+        texGlRef.current = { gl, key: loadedTextures.key, textures: uploaded };
+      }
+
+      const units = assignTextureUnits(textureNames);
+      const built = texGlRef.current?.textures ?? {};
+      for (const name of textureNames) {
+        const tex = built[name];
+        if (!tex) {
+          continue;
+        }
+        const unit = units[name] ?? 0;
+        gl.activeTexture(gl.TEXTURE0 + unit);
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        const sampler = u(name);
+        if (sampler !== null) {
+          gl.uniform1i(sampler, unit);
+        }
+        const aspect = u(`${name}AspectRatio`);
+        const img = loadedTextures.images[name];
+        if (aspect !== null && img) {
+          gl.uniform1f(aspect, img.height === 0 ? 1 : img.width / img.height);
         }
       }
     }
@@ -623,7 +953,21 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
     return () => {
       canvas.removeEventListener("webglcontextlost", onLost, false);
     };
-  }, [audio, bloom, clipProgress, ensureBundle, fps, frame, seed, stops, uniforms]);
+  }, [
+    audio,
+    backing.height,
+    backing.width,
+    bloom,
+    clipProgress,
+    ensureBundle,
+    fps,
+    frame,
+    loadedTextures,
+    seed,
+    stops,
+    textureNames,
+    uniforms,
+  ]);
 
   if (error) {
     return (
@@ -640,8 +984,8 @@ export const ShaderLayer: React.FC<ShaderLayerProps> = ({
     <AbsoluteFill style={{ mixBlendMode: blendMode, opacity }}>
       <canvas
         ref={canvasRef}
-        width={width}
-        height={height}
+        width={backing.width}
+        height={backing.height}
         style={{ height: "100%", width: "100%" }}
       />
     </AbsoluteFill>

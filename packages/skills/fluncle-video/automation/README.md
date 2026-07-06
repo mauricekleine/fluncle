@@ -4,7 +4,7 @@ A cron that films the Fluncle render queue, one finding per tick, hands-off. The
 
 ## What it does
 
-Each tick, the prompt runs as a Claude Code agent: it reads `fluncle admin tracks queue --limit 1 --json`, and if a finding is waiting (no video yet) it renders and ships **exactly one** video for it via the `fluncle-video` skill, then stops. An empty queue is a silent no-op. Because the ship step sets the finding's `video_url`, the filmed finding leaves the queue — so at-least-once delivery is safe: a re-run sees an empty (or advanced) queue and won't re-render the same finding. The full per-tick contract (the at-least-once invariant, the diversity check, the `detect-beat-pull` gate, the hard rails) lives in the prompt; this file is just orientation.
+Each tick, the prompt runs as a Claude Code agent: it reads `fluncle admin tracks queue --limit 1 --json`, and if a finding is waiting (no video yet) it renders and ships **exactly one** video for it via the `fluncle-video` skill, then stops. An empty queue is a silent no-op. Because the ship step sets the finding's `video_url`, the filmed finding leaves the queue — so at-least-once delivery is safe: a re-run sees an empty (or advanced) queue and won't re-render the same finding. The full per-tick contract (the at-least-once invariant, the diversity check, the `judge:metrics` gate — beat-pull + WCAG flash safety, both hard — the hard rails) lives in the prompt; this file is just orientation.
 
 ## Where it runs (since 2026-06-24): the Hermes `fluncle-render` conductor
 
@@ -16,7 +16,7 @@ The prompt is triggered by the **`fluncle-render` `--no-agent` cron on the Herme
 
 ## The per-tick behaviors (what a healthy tick does)
 
-1. **Films the queue head.** With at least one finding waiting, the run picks `tracks[0]` from `fluncle admin tracks queue --limit 1 --json` (the oldest finding with no video), does the diversity check, renders via the `fluncle-video` skill, passes `detect-beat-pull`, ships it, and `fluncle admin tracks video` sets the finding's `video_url` — so that finding leaves the queue.
+1. **Films the queue head.** With at least one finding waiting, the run picks `tracks[0]` from `fluncle admin tracks queue --limit 1 --json` (the oldest finding with no video), does the diversity check, renders via the `fluncle-video` skill, passes `judge:metrics` (the beat-pull + flash-safety hard gates), ships it, and `fluncle admin tracks video` sets the finding's `video_url` — so that finding leaves the queue.
 2. **Empty-queue no-op.** With every finding already filmed (queue returns `tracks: []`), the run stops immediately: no render, no upload, no output beyond a one-line "queue empty". This is the common steady-state tick.
 3. **Double-run doesn't double-render.** Under at-least-once delivery, a second run does NOT re-render the finding the first just shipped — once `video_url` is set, that finding has left the queue. The worst acceptable case is one wasted render on a tight race (the conductor's single-flight also prevents two concurrent renders), never two published videos for one finding.
 

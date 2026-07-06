@@ -4,11 +4,11 @@
 // terminal, the MCP server, the CLI, and the on-box Hermes crons.
 //
 // It is PURE DATA (no runtime side effects, no I/O): just a typed catalog plus a
-// few selectors over it. Nothing consumes it yet — it exists so the surfaces that
-// will (a `/status` prober, the homepage dev-row, llms.txt, the sitemap, and a
-// surfaces-doctrine doc) all read the same list instead of each hand-maintaining a
-// drifting copy. When a new surface ships, add it here once; every consumer picks
-// it up.
+// few selectors over it. It is consumed across the app — the `/status` probe, the
+// CLI `status` command, the MCP `get_status` tool, the homepage dev-row, llms.txt,
+// the sitemap, and the surfaces-doctrine doc all read the same list instead of each
+// hand-maintaining a drifting copy. When a new surface ships, add it here once;
+// every consumer picks it up.
 //
 // Scope discipline: this catalogs PUBLIC-facing and operator-known surfaces — the
 // reach of Fluncle's tentacles across the web. It is NOT a route table (the web app
@@ -347,7 +347,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "subdomain",
     name: "subdomain.onion",
     operatorNotes:
-      "An onionspray mirror. Advertised via Tor Browser's Onion-Location pill. Probed on /status as service `onion`. Runbook: docs/tor.md.",
+      "An onionspray mirror. Advertised via Tor Browser's Onion-Location pill. Probed on /status as service `onion`.",
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     subdomain: "p53pc2uzfu2tnih4cd6wd42ok6zup2uttj6xdmjdccy5kqo33fyppkqd.onion",
     url: "http://p53pc2uzfu2tnih4cd6wd42ok6zup2uttj6xdmjdccy5kqo33fyppkqd.onion",
@@ -700,7 +700,7 @@ export const SURFACES: readonly Surface[] = [
   {
     command: "fluncle admin",
     exposedContent: [
-      "the operator/agent command group (hidden): tracks publish|update|enrich|video|draft|social|preview|observe|context|note, mixtapes create|update|members|publish|delete, newsletter draft|update|send|list, backfills, auth",
+      "the operator/agent command group (hidden): tracks publish|update|enrich|video|draft|social|preview|observe|context|note, recordings create|promote, mixtapes update|distribute|resync, newsletter draft|update|send|list, backfills, auth",
     ],
     kind: "cli",
     name: "cli.admin",
@@ -715,20 +715,16 @@ export const SURFACES: readonly Surface[] = [
     ],
     kind: "extension",
     name: "extension.lens",
-    // DARK until the Chrome Web Store review clears (submitted 2026-06-21; the
-    // `<all_urls>` content-script match triggers a long Broad-Host-Permissions
-    // review). PRE-STAGED so the post-approval fan-out is one field-flip:
-    //   1. drop `pending: true` (or set it false),
-    //   2. swap `url` for the assigned listing URL
-    //      (https://chromewebstore.google.com/detail/<assigned-extension-id>),
-    //   3. add the §2/§3 doctrine rows (it is now a live web surface).
-    // No other consumer needs touching — the menus, /status probe, MCP + CLI status
-    // labels all read the catalog and light up at once. Source: apps/extension.
+    // LIVE on the Chrome Web Store (published 2026-06-29, extension id
+    // efkkceaofendabikblfjhoepgejfpakk). A `secondary` web surface: advertised on
+    // the homepage dev-row and the /about page, not a homepage headline. No
+    // probeConfig — a vendor store listing is not one of our own health-probeable
+    // endpoints (the on-box healthcheck walks web/r2/dns/ssh + the crons, never an
+    // external GET), and Google's store would bot-block / redirect a bare GET and
+    // read back as a false "down". Source: apps/extension.
     operatorNotes:
-      "Fluncle Lens (apps/extension), MV3. PENDING Chrome Web Store review — DARK until approval, then flip `pending` + set the assigned listing URL. The placeholder `url` is the store search for the listing; probeConfig is the post-approval /status check.",
-    pending: true,
-    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
-    url: "https://chromewebstore.google.com/search/Fluncle%20Lens",
+      "Fluncle Lens (apps/extension), MV3, LIVE on the Chrome Web Store (published 2026-06-29). Store listing reachability is Google's, not ours, so it is not on the /status board.",
+    url: "https://chromewebstore.google.com/detail/efkkceaofendabikblfjhoepgejfpakk",
     weights: { web: "secondary" },
   },
 
@@ -803,6 +799,18 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    command: "fluncle admin clips drip-pause",
+    exposedContent: [
+      "post the due, cut clips to Instagram on a jittered ~daily cadence via Postiz (--no-agent, Worker HTTP)",
+    ],
+    kind: "cron",
+    name: "cron.clip-drip",
+    operatorNotes:
+      "every 20m. Pure HTTP trigger, zero LLM tokens. Admin tier (needs the Worker's Postiz key, which the box never sees — the box only triggers; the `finalize_clip_cut` / `record_health` precedent). The Worker checks the global kill switch FIRST (paused → no-op), then posts due clips bounded by a per-tick cap AND a rolling-24h IG cap. Every clip auto-enters the schedule at a jittered ~23-25h after the queue tail. The operator pauses/resumes with `fluncle admin clips drip-pause` / `drip-resume`. Source: docs/agents/hermes/scripts/clip-drip-sweep.sh. Probed on /status as cron.clip-drip.",
+    probeConfig: { cadenceMs: 20 * MINUTE_MS, cronName: "fluncle-clip-drip", kind: "cron" },
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin tracks queue",
     exposedContent: [
       "wake the rave-03 render box → render + ship one finding's video → park (conductor)",
@@ -821,7 +829,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "cron",
     name: "cron.healthcheck",
     operatorNotes:
-      "every 10m. Pure probing, zero LLM tokens. POSTs to the agent-tier record_health op that /status reads.",
+      "every 10m, run by a rave-02 host systemd timer (docs/agents/hermes/healthcheck-timer/) — decoupled from the Hermes cron gateway so the prober isn't starved by the scheduler it monitors. Pure probing, zero LLM tokens. POSTs to the agent-tier record_health op that /status reads.",
     probeConfig: { cadenceMs: 10 * MINUTE_MS, cronName: "fluncle-healthcheck", kind: "cron" },
     weights: { status: "hidden" },
   },
@@ -839,6 +847,17 @@ export const SURFACES: readonly Surface[] = [
       cronName: "fluncle-newsletter",
       kind: "cron",
     },
+    weights: { status: "secondary" },
+  },
+  {
+    exposedContent: [
+      "daily gzip dump of the prod database → a PRIVATE R2 bucket (owned off-site backup) + 30 daily / 12 monthly retention (--no-agent)",
+    ],
+    kind: "cron",
+    name: "cron.backup",
+    operatorNotes:
+      "daily. An OWNED, off-Cloudflare backup: dumps prod Turso over the libSQL HTTP pipeline → gzip → a PRIVATE R2 bucket (never fluncle-videos, which is world-served at found.fluncle.com) + prune. Zero LLM tokens; talks to Turso + R2 directly (no fluncle CLI, no agent token). Turso's managed PITR is the belt; this is the braces. Restore is proven by apps/web/scripts/restore-drill.ts. Source: docs/agents/hermes/scripts/backup-sweep.*",
+    probeConfig: { cadenceMs: 24 * 60 * MINUTE_MS, cronName: "fluncle-backup", kind: "cron" },
     weights: { status: "secondary" },
   },
 ];

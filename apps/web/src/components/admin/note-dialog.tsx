@@ -1,15 +1,15 @@
 import { ArrowRightIcon, CircleNotchIcon, PauseIcon, PlayIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { type BoardRow } from "@/components/admin/use-publish";
-import { Button } from "@/components/ui/button";
+import { Button } from "@fluncle/ui/components/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Textarea } from "@/components/ui/textarea";
+} from "@fluncle/ui/components/dialog";
+import { Textarea } from "@fluncle/ui/components/textarea";
 import { NOTE_MAX_LENGTH } from "@/lib/log-prose";
 import { usePreviewPlayer } from "@/lib/preview-player";
 

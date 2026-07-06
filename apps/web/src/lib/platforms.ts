@@ -8,7 +8,7 @@
 // `directPost` distinguishes the push shapes: TikTok pushes a private inbox DRAFT
 // (the operator finishes in-app), YouTube posts DIRECTLY and publicly on click.
 // Instagram is intentionally absent — there's no legitimate automated audio path
-// (docs/track-lifecycle.md, postiz.ts).
+// (see postiz.ts).
 
 export type PlatformMeta = {
   directPost: boolean;

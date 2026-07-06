@@ -20,9 +20,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+} from "@fluncle/ui/components/alert-dialog";
+import { Badge } from "@fluncle/ui/components/badge";
+import { Button } from "@fluncle/ui/components/button";
 import { type EditionDTO, orderedGalaxies } from "@/lib/editions";
 import { logPageUrl } from "@/lib/fluncle-links";
 import { formatDateLong } from "@/lib/format";
@@ -35,7 +35,7 @@ import { listEditions } from "@/lib/server/editions";
 // — the operator tap that the Friday agent can't make (send_edition is operator
 // tier; the agent token 403s, the browser grant is operator). The send is a real
 // Resend broadcast, gated behind an explicit confirm. Surfaced from the test that
-// found the editions were CLI/API-only (docs/ROADMAP.md, Newsletter follow-ups).
+// found the editions were CLI/API-only.
 
 // The loader hydrates every finding's logId to its `Artist — Title` label (server-side,
 // one batched read across all editions) and ships the label strings to the client.

@@ -5,7 +5,12 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { baseTitleMatches, isRemix, stripVersionSuffix, versionMatches } from "./version-match";
+import {
+  baseTitleMatches,
+  isRemix,
+  stripVersionSuffix,
+  versionMatches,
+} from "@fluncle/contracts/util";
 
 const REMIX = "In And Out Of Phase - Calyx & TeeBee Remix";
 

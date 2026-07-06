@@ -1,5 +1,6 @@
 import { env, waitUntil } from "cloudflare:workers";
 import { videoPurgeUrls } from "../media";
+import { clipPurgeUrls } from "../studio-clips";
 
 // Per-URL Cloudflare cache purge for a re-rendered finding's video.
 //
@@ -32,32 +33,67 @@ import { videoPurgeUrls } from "../media";
 const CLOUDFLARE_PURGE_MAX_FILES = 30;
 
 /**
- * Purge a re-rendered finding's Media-Transformation renditions from the edge.
+ * Purge a re-rendered finding's ZONE-edge-cached entries — the bare R2 objects
+ * (masters + poster/cover) plus any zone-edge copies of current-vintage
+ * renditions. NOTE the reach: Media Transformations caches video outputs in its
+ * OWN internal layer this API cannot evict — the per-vintage `?v` token
+ * (media.ts `videoVersion`) is the rendition-eviction mechanism; this purge is
+ * its bare-object complement.
  *
  * Best-effort, fire-and-extend via `waitUntil`: the caller (the video ship
  * finalize step) never awaits the purge and never fails because of it. Safe to
  * call with a missing/blank logId — a no-op. `squared` mirrors the finding's
  * two-master layout (`video_squared_at` set): it selects which rendition family
- * the surfaces emit, so the purge set matches exactly what was cached.
+ * the surfaces emit; `version` is the vintage the surfaces mint from now on.
  */
-export function purgeVideoCache(logId: string | null | undefined, squared: boolean): void {
+export function purgeVideoCache(
+  logId: string | null | undefined,
+  squared: boolean,
+  version?: number,
+): void {
   if (!logId?.trim()) {
     return;
   }
 
-  const task = purgeVideoCacheNow(logId.trim(), squared);
+  fireAndForget(
+    logId.trim(),
+    purgeFiles(logId.trim(), videoPurgeUrls(logId.trim(), { squared, version })),
+  );
+}
 
-  // Outside the Workers runtime (Node tests, the `turso dev` data layer) there is
-  // no execution context, so `waitUntil` throws — fall back to letting the promise
-  // run detached (mirrors push.ts). The purge is best-effort either way.
+/**
+ * Purge a re-CUT clip's Media-Transformation renditions from the edge (Fluncle Studio
+ * Unit C `finalize_clip_cut`). A clip is its own pseudo-finding `<clipId>/footage.mp4`,
+ * so it has the same edge-cache-staleness-on-overwrite problem as a re-rendered finding
+ * — and the box, which has NO Cloudflare creds, can't purge, so the finalize handler
+ * does it server-side. `clipPurgeUrls` is the EXACT set the clip surfaces request (the
+ * clip twin of `videoPurgeUrls`). Same best-effort discipline as `purgeVideoCache`.
+ */
+export function purgeClipCache(clipId: string | null | undefined, version?: number): void {
+  if (!clipId?.trim()) {
+    return;
+  }
+
+  fireAndForget(clipId.trim(), purgeFiles(clipId.trim(), clipPurgeUrls(clipId.trim(), version)));
+}
+
+// Run a purge task off the request lifecycle (waitUntil), or detached outside the
+// Workers runtime (Node tests / `turso dev`, where waitUntil throws) — mirrors push.ts.
+// The purge is best-effort either way.
+function fireAndForget(label: string, task: Promise<void>): void {
   try {
     waitUntil(task);
   } catch {
     void task;
   }
+
+  void label;
 }
 
-async function purgeVideoCacheNow(logId: string, squared: boolean): Promise<void> {
+// Purge an exact list of public URLs from Cloudflare's edge. Shared by the finding
+// re-render purge and the clip re-cut purge — both feed it a finite, builder-derived
+// URL set. Best-effort: a missing token / a failed chunk never throws.
+async function purgeFiles(label: string, files: string[]): Promise<void> {
   // Skipped (not an error) when the operator hasn't wired the zone token. The
   // renditions' own edge TTLs still bound staleness; the purge just shortens it.
   const zoneId = readPurgeBinding("CF_CACHE_PURGE_ZONE_ID");
@@ -65,13 +101,11 @@ async function purgeVideoCacheNow(logId: string, squared: boolean): Promise<void
 
   if (!zoneId || !token) {
     console.warn(
-      `[purgeVideoCache] CF_CACHE_PURGE_ZONE_ID / CF_CACHE_PURGE_TOKEN not set; skipping edge purge for ${logId}. Provision the zone-scoped Cache-Purge token to evict stale renditions on re-render.`,
+      `[purgeVideoCache] CF_CACHE_PURGE_ZONE_ID / CF_CACHE_PURGE_TOKEN not set; skipping edge purge for ${label}. Provision the zone-scoped Cache-Purge token to evict stale renditions on re-render.`,
     );
 
     return;
   }
-
-  const files = videoPurgeUrls(logId, { squared });
 
   if (files.length === 0) {
     return;
@@ -97,11 +131,11 @@ async function purgeVideoCacheNow(logId: string, squared: boolean): Promise<void
 
       if (!response.ok) {
         console.warn(
-          `[purgeVideoCache] purge_cache returned ${response.status} for ${logId} (${chunk.length} urls)`,
+          `[purgeVideoCache] purge_cache returned ${response.status} for ${label} (${chunk.length} urls)`,
         );
       }
     } catch (error) {
-      console.warn(`[purgeVideoCache] purge_cache failed for ${logId}:`, error);
+      console.warn(`[purgeVideoCache] purge_cache failed for ${label}:`, error);
     }
   }
 }

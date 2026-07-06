@@ -11,6 +11,7 @@ import {
   videoPoster,
   videoPurgeUrls,
   videoRendition,
+  videoVersion,
 } from "./media";
 
 // The Media Transformations URLs are same-zone: the /cdn-cgi/media prefix lives
@@ -26,7 +27,7 @@ describe("videoRendition", () => {
   });
 
   it("rides the cache-bust token on the source so a re-rendered master re-keys the edge rendition", () => {
-    // docs/video-variants.md: masters are overwritten in place (the square
+    // Masters are overwritten in place (the square
     // backfill), so the transform URL must carry a version or the edge keeps
     // serving the stale rendition. Guard that the token is never silently dropped.
     expect(videoRendition("ABC123", { width: 720 })).toContain("/footage.mp4?v=");
@@ -55,7 +56,7 @@ describe("videoRendition", () => {
   });
 });
 
-// The two-master crops + audio-strip (docs/video-variants.md). The square master
+// The two-master crops + audio-strip. The square master
 // centre-crops to native-resolution portrait/landscape; TikTok strips audio off
 // the social cut via audio=false rather than a stored footage-silent.mp4.
 describe("videoCrop", () => {
@@ -354,6 +355,17 @@ describe("videoPurgeUrls", () => {
     }
   });
 
+  it("always includes the bundle's static images (the agents' diversity-check reads)", () => {
+    const media = trackMedia(LOG_ID);
+
+    for (const squared of [true, false]) {
+      const urls = videoPurgeUrls(LOG_ID, { squared });
+
+      expect(urls).toContain(media.posterUrl);
+      expect(urls).toContain(media.coverUrl);
+    }
+  });
+
   it("returns a de-duplicated set (no URL listed twice)", () => {
     for (const squared of [true, false]) {
       const urls = videoPurgeUrls(LOG_ID, { squared });
@@ -403,9 +415,59 @@ describe("videoPurgeUrls", () => {
     expect(urls).not.toContain(videoPoster(LOG_ID));
   });
 
-  it("stays within Cloudflare's 30-URL-per-request purge cap before chunking", () => {
-    // The squared family is the larger set; keep it small enough that a single
-    // finding rarely needs more than a couple of purge requests (the helper chunks).
-    expect(videoPurgeUrls(LOG_ID, { squared: true }).length).toBeLessThanOrEqual(30);
+  it("stays within two Cloudflare purge requests (the helper chunks at 30 URLs)", () => {
+    // The squared family is the larger set: 30 video/rendition URLs + the two
+    // bundle images (poster.jpg/cover.jpg) = 32, i.e. exactly two chunks. Keep it
+    // from creeping past that — a purge should stay a couple of requests, not a fan-out.
+    expect(videoPurgeUrls(LOG_ID, { squared: true }).length).toBeLessThanOrEqual(60);
+    expect(videoPurgeUrls(LOG_ID, { squared: true }).length).toBe(32);
+  });
+});
+
+describe("videoVersion (the transform vintage token)", () => {
+  const STAMP = "2026-07-02T08:00:30.940Z";
+  const EPOCH = Date.parse(STAMP);
+
+  it("parses a videoSquaredAt/updatedAt stamp to its epoch", () => {
+    expect(videoVersion(STAMP)).toBe(EPOCH);
+  });
+
+  it("is undefined (-> the constant token) for absent or garbage stamps", () => {
+    expect(videoVersion(undefined)).toBeUndefined();
+    expect(videoVersion(null)).toBeUndefined();
+    expect(videoVersion("")).toBeUndefined();
+    expect(videoVersion("not-a-date")).toBeUndefined();
+  });
+
+  it("rides every transform source as ?v=<epoch>; absent keeps the constant", () => {
+    expect(videoCrop("004.7.2I", "portrait", 720, false, EPOCH)).toContain(`?v=${EPOCH}`);
+    expect(videoCrop("004.7.2I", "portrait", 720)).toContain("?v=1");
+    expect(videoCropPoster("004.7.2I", "portrait", 720, 0, EPOCH)).toContain(`?v=${EPOCH}`);
+    expect(videoRendition("004.7.2I", { version: EPOCH, width: 720 })).toContain(`?v=${EPOCH}`);
+    expect(videoPoster("004.7.2I", undefined, EPOCH)).toContain(`?v=${EPOCH}`);
+    expect(videoClipCrop("004.7.2I", "portrait", 5, undefined, 60, EPOCH)).toContain(`?v=${EPOCH}`);
+    expect(videoAudioStripped(`${FOUND_BASE}/004.7.2I/footage.social.mp4`, EPOCH)).toContain(
+      `?v=${EPOCH}`,
+    );
+  });
+
+  it("videoPurgeUrls carries the vintage on every transform and never on bare objects", () => {
+    const media = trackMedia("004.7.2I");
+    const urls = videoPurgeUrls("004.7.2I", { squared: true, version: EPOCH });
+    const transforms = urls.filter((u) => u.includes("/cdn-cgi/media/"));
+    const bare = urls.filter((u) => !u.includes("/cdn-cgi/media/"));
+
+    expect(transforms.length).toBeGreaterThan(0);
+
+    for (const u of transforms) {
+      expect(u).toContain(`?v=${EPOCH}`);
+    }
+
+    for (const u of bare) {
+      expect(u).not.toContain("?v=");
+    }
+
+    expect(bare).toContain(media.videoUrl);
+    expect(bare).toContain(media.posterUrl);
   });
 });

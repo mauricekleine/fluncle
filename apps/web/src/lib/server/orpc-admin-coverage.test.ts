@@ -3,8 +3,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { CONTRACT_OPERATION_NAMES } from "@fluncle/contracts/orpc";
 
-// The ADMIN coverage scaffold for the oRPC migration (docs/orpc-migration-brief.md,
-// the admin section + "Definition of done"). The sibling orpc-coverage.test.ts
+// The ADMIN coverage scaffold for the oRPC migration. The sibling orpc-coverage.test.ts
 // draws the same net over the PUBLIC surface; this one extends it to ADMIN, which
 // the public net deliberately skips (it `continue`s past the `admin/` directory).
 //
@@ -43,11 +42,32 @@ const PENDING = "__pending__" as const;
 // every route maps to its canonical converted op; the PENDING sentinel is retained
 // for future admin routes (a new route lands here as PENDING until it converts).
 const ADMIN_ROUTE_OPS: Record<string, string> = {
-  "DELETE /admin/mixtapes/{mixtapeId}": "delete_mixtape",
+  // The Fluncle Studio clip ops: clip CRUD +
+  // the hardened post-publish cue backfill. `list_clips` is admin tier
+  // (agent-allowed read); the writes are operator tier.
+  "DELETE /admin/clips/{clipId}": "delete_clip",
+  // The operator's "unschedule" — contract-only oRPC. Operator tier: take a clip off the
+  // Instagram drip queue (delete its un-posted schedule row).
+  "DELETE /admin/clips/{clipId}/schedule": "delete_clip_schedule",
   // The newsletter edition delete — contract-only oRPC (no TanStack route file).
   // Operator tier: a hard delete that reaches a SENT edition too (pulling a sent
   // test edition from the public archive); the agent token 403s.
   "DELETE /admin/newsletter/editions/{id}": "delete_edition",
+  // The RFC recording-primitive ops (Design B) — contract-only oRPC (no TanStack route
+  // files; oRPC owns the paths directly). Reads are admin tier (agent-allowed — the box's
+  // clip-cut cron resolves a recording); the writes + `promote` (mints a coordinate) are
+  // operator tier.
+  "DELETE /admin/recordings/{recordingId}": "delete_recording",
+  "GET /admin/clips": "list_clips",
+  // Every clip's Instagram drip-feed row (schedule + status) — contract-only oRPC (no
+  // TanStack route file). Admin tier (agent-allowed read); the clip library / CLI merge
+  // it onto the clips.
+  "GET /admin/clips/social": "list_clip_posts",
+  // The built clip caption (clean copy + the fluncle:// coordinate line(s)) —
+  // contract-only oRPC (no TanStack route file). Admin tier (agent-allowed read); the
+  // clip-card UI (Wave 3-B) shows + copies it. `get_clip_caption` matches the public
+  // `get_` prefix so the "holds exactly" check skips it; it lives here for completeness.
+  "GET /admin/clips/{clipId}/caption": "get_clip_caption",
   "GET /admin/lastfm/auth/start": "start_lastfm_auth",
   "GET /admin/mixtapes": "list_mixtapes_admin",
   "GET /admin/mixtapes/{mixtapeId}/social": "get_mixtape_social",
@@ -55,10 +75,21 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // route file (oRPC serves it off the registry). Admin tier (agent-allowed): the
   // Friday cron reads it from a fresh session to find an unsent draft + the window.
   "GET /admin/newsletter/editions": "list_editions_admin",
+  "GET /admin/recordings": "list_recordings",
+  "GET /admin/recordings/{recordingId}": "get_recording",
   "GET /admin/submissions": "list_submissions",
   "GET /admin/submissions/{submissionId}": "get_submission",
   "GET /admin/tracks": "list_tracks_admin",
+  // The single-finding admin lookup — contract-only oRPC (no TanStack route file; oRPC
+  // owns the path directly, like context_track). Admin tier (agent-allowed read).
+  // `get_track_admin` matches the public `get_` prefix so the "holds exactly" check
+  // skips it; it lives here for completeness (like `get_clip_caption`).
+  "GET /admin/tracks/{trackId}": "get_track_admin",
   "GET /admin/tracks/{trackId}/social": "list_track_social",
+  "PATCH /admin/clips/{clipId}": "update_clip",
+  // The operator's clip-drip schedule control — contract-only oRPC. Operator tier:
+  // set/override a clip's Instagram drip slot.
+  "PATCH /admin/clips/{clipId}/schedule": "set_clip_schedule",
   "PATCH /admin/mixtapes/{mixtapeId}": "update_mixtape",
   // The newsletter edition control plane. Contract-only oRPC — no TanStack route
   // files under /api/admin/newsletter
@@ -66,23 +97,45 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // they live here to satisfy the "registry holds EXACTLY this map's ops" check.
   // create/update are admin tier (agent-allowed drafting); send is operator-only.
   "PATCH /admin/newsletter/editions/{id}": "update_edition",
+  "PATCH /admin/recordings/{recordingId}": "update_recording",
   "PATCH /admin/tracks/{trackId}": "update_track",
   "PATCH /admin/tracks/{trackId}/social/{platform}": "update_track_social",
   "POST /admin/backfill/discogs": "backfill_discogs",
   "POST /admin/backfill/lastfm": "backfill_lastfm",
+  // The clip drip-feed tick — contract-only oRPC (no TanStack route file). ADMIN tier
+  // (agent-allowed): the on-box `fluncle-clip-drip` cron triggers it with the agent token
+  // (the box holds no Postiz key; the Worker owns it). Kill-switch aware, bounded, idempotent.
+  "POST /admin/clips/drip": "drip_clips",
+  // The box's clip-cut finalize (Fluncle Studio Unit C) — contract-only oRPC (no
+  // TanStack route file; oRPC owns the path directly, like finalize_track_video). Agent
+  // tier: the box marks its own cut done + the handler purges the stale edge renditions.
+  "POST /admin/clips/{clipId}/cut/finalize": "finalize_clip_cut",
+  // The box's clip-cut upload presign (Fluncle Studio Unit C) — contract-only oRPC.
+  // Agent tier: a single-PUT presign for the clip's `<clipId>/footage.mp4`. Path-symmetric
+  // with the finalize above (both nest under `/cut/`).
+  "POST /admin/clips/{clipId}/cut/presign": "presign_clip_upload",
   // record_health (the public /status dashboard's write) is contract-only oRPC —
   // no TanStack route file; oRPC owns the path directly, like context_track. Admin
   // tier (agent-allowed): the box's status cron POSTs a snapshot with its agent token.
   "POST /admin/health": "record_health",
   "POST /admin/lastfm/auth/session": "exchange_lastfm_session",
   "POST /admin/mixcloud/token": "mint_mixcloud_token",
-  "POST /admin/mixtapes": "create_mixtape",
-  "POST /admin/mixtapes/{mixtapeId}/members": "add_mixtape_members",
   "POST /admin/mixtapes/{mixtapeId}/mixcloud/finalize": "finalize_mixtape_mixcloud",
-  "POST /admin/mixtapes/{mixtapeId}/publish": "publish_mixtape",
+  // The Mixcloud metadata re-sync — contract-only oRPC (no TanStack route file; oRPC
+  // owns the path directly, like resync_mixtape_youtube). Operator tier: re-derives the
+  // live cloudcast's sections[] from the current cues via the Mixcloud edit endpoint.
+  "POST /admin/mixtapes/{mixtapeId}/mixcloud/resync": "resync_mixtape_mixcloud",
+  // The set-video staging presign (Fluncle Studio Unit A) — contract-only oRPC (no
+  // TanStack route file; oRPC owns the path directly). Operator tier: it opens a
+  // multipart direct-to-R2 upload for the mixtape's `<logId>/set.mp4` rendition.
+  "POST /admin/mixtapes/{mixtapeId}/set-video/presign": "presign_set_video_upload",
   "POST /admin/mixtapes/{mixtapeId}/youtube/finalize": "finalize_mixtape_youtube",
   "POST /admin/mixtapes/{mixtapeId}/youtube/initiate": "initiate_mixtape_youtube",
   "POST /admin/mixtapes/{mixtapeId}/youtube/publish": "publish_mixtape_youtube",
+  // The YouTube metadata re-sync — contract-only oRPC (no TanStack route file; oRPC
+  // owns the path directly, like publish_mixtape_youtube). Operator tier: re-derives
+  // the live video's description + chapters from the current cues via videos.update.
+  "POST /admin/mixtapes/{mixtapeId}/youtube/resync": "resync_mixtape_youtube",
   "POST /admin/newsletter/editions": "create_edition",
   "POST /admin/newsletter/editions/{id}/send": "send_edition",
   // The push receipts sweep is a contract-only admin op (no TanStack route file —
@@ -90,6 +143,12 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // entry; it lives here only to satisfy the "registry holds EXACTLY this map's
   // ops" check. An EXTERNAL cron calls it (TanStack has no `scheduled()`).
   "POST /admin/push/receipts/sweep": "sweep_push_receipts",
+  "POST /admin/recordings": "create_recording",
+  // create_clip is now recording-scoped (RFC recording-primitive, Design B): the legacy
+  // `POST /admin/mixtapes/{mixtapeId}/clips` path is retired.
+  "POST /admin/recordings/{recordingId}/clips": "create_clip",
+  "POST /admin/recordings/{recordingId}/promote": "promote_recording",
+  "POST /admin/recordings/{recordingId}/set-video/presign": "presign_recording_upload",
   // capture_post_urls — contract-only oRPC (no TanStack route file; oRPC owns the
   // path directly). A collection-level sweep that recovers the public YouTube/TikTok
   // post URLs Postiz withholds on create. Admin tier — the on-box capture cron drives
@@ -123,13 +182,27 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // state with its agent token each minute.
   "POST /admin/twitch/live": "record_live_state",
   "POST /admin/youtube/token": "mint_youtube_token",
+  // The clip drip-feed kill switch — contract-only oRPC (no TanStack route file).
+  // Operator tier: pause/resume every future scheduled Instagram post.
+  "PUT /admin/clips/drip/state": "set_clip_drip",
+  // The hardened post-publish cue backfill (Fluncle Studio Unit D, panel M1):
+  // re-times an existing minted tracklist's start_ms; operator tier.
+  "PUT /admin/mixtapes/{mixtapeId}/cues": "set_mixtape_cues",
+  // The interactive single-cue write behind the Studio cue rail — contract-only oRPC
+  // (no TanStack route file; oRPC owns the path directly). Operator tier: upsert/clear
+  // ONE minted member's start_ms; distinct from the batch cues PUT above (nested under
+  // the `{ref}` member segment, no coverage/order constraint).
+  "PUT /admin/mixtapes/{mixtapeId}/cues/{ref}": "update_mixtape_cue",
   // The PUT shares the `members` file/path with the POST above (append vs replace);
   // oRPC routes the two methods to distinct ops, so each gets its own entry.
-  "PUT /admin/mixtapes/{mixtapeId}/members": "set_mixtape_members",
+  // Replace a recording's whole cue set (RFC plan→recording→mixtape §4) — contract-only
+  // oRPC (no TanStack route file; oRPC owns the path directly). Operator tier: the
+  // Wave-3 Rekordbox derivation script PUTs the ordered, finding-resolved cues here.
+  "PUT /admin/recordings/{recordingId}/cues": "replace_recording_cues",
 };
 
-// Routes that stay on TanStack by design (docs/orpc-migration-brief.md
-// "Carve-outs"), keyed by their TanStack file basename (relative to the admin
+// Routes that stay on TanStack by design (carve-outs), keyed by their TanStack
+// file basename (relative to the admin
 // route dir). NOT counted against coverage — they will never have a contract —
 // but listed so the enumeration is total and a new carve-out is a deliberate edit.
 //
@@ -151,6 +224,7 @@ const ADMIN_CARVE_OUT_ROUTE_PREFIXES = ["spotify/auth/", "youtube/auth/", "mixcl
 const ADMIN_CARVE_OUT_ROUTES = new Set([
   "logout", // a 302 redirect (expire the grant cookie, bounce to /admin/login), not RPC JSON.
   "tracks.$trackId.preview", // multipart-file body (formData → File).
+  "tracks.$trackId.silent-clip", // a same-origin download proxy: streams the audio-stripped social cut as an attachment, not RPC JSON.
 ]);
 
 const ADMIN_DIR = fileURLToPath(new URL("../../routes/api/admin", import.meta.url));

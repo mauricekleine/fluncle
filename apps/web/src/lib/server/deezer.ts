@@ -44,7 +44,7 @@ const DURATION_TOLERANCE_S = 4;
 
 /**
  * Look up a recording's ISRC on Deezer when Spotify omits it (the track-add
- * ISRC fallback, docs/ROADMAP.md): search by artist + title, take the first
+ * ISRC fallback): search by artist + title, take the first
  * duration-confirmed hit, and read the ISRC from its track detail. Best-effort:
  * any failure resolves to undefined and the Log ID falls back to the Spotify id.
  */

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { call } from "@orpc/server";
 
-// The PRIVATE-USER auth tier (Wave B, docs/orpc-migration-brief.md) — the `/me`
+// The PRIVATE-USER auth tier — the `/me`
 // cookie-session spine, analogous to the admin spine's focused test. The tier
 // just delegates to the live `requirePublicUser` / `requireAccountMutation`
 // helpers (whose own checks are covered in public-auth.test.ts /

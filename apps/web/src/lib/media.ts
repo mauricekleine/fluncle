@@ -18,6 +18,42 @@ export function mixtapeAudioUrl(logId: string): string {
 }
 
 /**
+ * The mixtape's full set VIDEO on R2 (`<log-id>/set.mp4`), by its Log ID. Served
+ * as a bare range-streamed, faststart object — NOT a Media Transformation: the
+ * ~72-min set is well past Cloudflare MT's 100MB source ceiling, so the player
+ * fetches the master directly and the browser range-seeks it. Gated on the
+ * mixtape's `setVideoAt` flag (the upload exists) before any surface reaches for it.
+ */
+export function mixtapeSetVideoUrl(logId: string): string {
+  return `${FOUND_BASE}/${encodeURIComponent(logId)}/set.mp4`;
+}
+
+/**
+ * A RECORDING's set VIDEO on R2, by its OWNED key (`r2Key` — `recordings/<id>/set.mp4`
+ * while un-promoted, `<log-id>/set.mp4` after promote). Unlike a mixtape's set video,
+ * a recording owns its key, so the Studio reaches for `r2Key` directly rather than
+ * deriving from a coordinate. Served as a bare range-streamed, faststart object (the
+ * same ~1.5GB rendition, NOT a Media Transformation). The key's own slashes are the
+ * path (never `encodeURIComponent`'d — that would escape the separators); its segments
+ * (a UUID or a dot-safe Log ID) are already URL-safe.
+ */
+export function recordingSetVideoUrl(r2Key: string): string {
+  return `${FOUND_BASE}/${r2Key}`;
+}
+
+/**
+ * The mixtape's set-analysis artifact on R2 (`<log-id>/studio-envelope.json`), by
+ * its Log ID — the `StudioEnvelope` (energy/bass/flux curves + candidate drops)
+ * Unit B's `analyze-set` stages and the Studio editor (Unit E) reads to draw its
+ * energy lane + suggestions. It is NOT always present (the box stages it lazily),
+ * so callers MUST treat a 404 as "no waveform yet" and degrade to manual in/out —
+ * never an error. A plain GET object like the set video, no Media Transform.
+ */
+export function mixtapeStudioEnvelopeUrl(logId: string): string {
+  return `${FOUND_BASE}/${encodeURIComponent(logId)}/studio-envelope.json`;
+}
+
+/**
  * Cache-bust the observation audio URL by its render timestamp.
  *
  * Re-`observe`ing a finding overwrites `<log-id>/observation.mp3` in place at the
@@ -167,23 +203,45 @@ export function spotifyAlbumImageAtSize(
 const MEDIA_TRANSFORM_BASE = `${FOUND_BASE}/cdn-cgi/media`;
 
 /**
- * Cache-bust token for Media Transformations. Each rendition is edge-cached
- * keyed on its transform URL (which embeds the source master URL), so when a
- * master is overwritten in place at the same R2 key — e.g. the square-footage
- * backfill re-rendered every finding's `footage.mp4` (docs/video-variants.md) —
- * the cached renditions keep serving the OLD master until their edge entry
- * expires. Riding this token on every transform source as `?v=N` re-keys the
- * whole catalogue's renditions in a single deploy; bump it whenever masters are
- * overwritten in bulk. R2 ignores the query (the master resolves byte-identically,
- * verified), so only the transform cache key changes — never the bytes fetched.
- * This mirrors the `?n=<version>` cache-bust the OG/cover images already use on
- * this zone.
+ * Cache-bust token for Media Transformations. Each rendition is cached keyed on
+ * its transform URL (which embeds the source master URL), so when a master is
+ * overwritten in place at the same R2 key the cached renditions keep serving the
+ * OLD master's bytes. Crucially, MT caches video outputs in its OWN internal
+ * layer (responses arrive `cf-cache-status: BYPASS`), which the zone purge API
+ * CANNOT evict — verified live on the 027.9.5H re-render (2026-07-03): the crop
+ * kept serving the replaced clip on a fresh BYPASS fetch, while the same URL
+ * with a bumped `?v` derived the new master instantly. So changing the URL is
+ * the ONLY reliable rendition eviction: every transform source carries a `?v`
+ * token that is per-finding video VINTAGE where one exists (`videoVersion` off
+ * `videoSquaredAt`, bumped by every squared re-upload; clips use `updatedAt`),
+ * falling back to this catalogue-wide constant for legacy masters that predate
+ * the two-master layout. R2 ignores the query (the master resolves
+ * byte-identically, verified), so only the transform cache key changes — never
+ * the bytes fetched. Mirrors the `?n=<version>` cache-bust the OG/cover images
+ * already use on this zone.
  */
 const TRANSFORM_VERSION = 1;
 
+/**
+ * A finding's (or clip's) video vintage for the `?v` transform token: the epoch
+ * of its re-render-sensitive timestamp (`videoSquaredAt` for findings — bumped by
+ * every squared upload; `updatedAt` for clips). Undefined (→ the constant token)
+ * when the stamp is absent or unparseable, so legacy masters keep their existing
+ * URLs and nothing mass-re-derives.
+ */
+export function videoVersion(stamp: string | null | undefined): number | undefined {
+  if (!stamp) {
+    return undefined;
+  }
+
+  const epoch = Date.parse(stamp);
+
+  return Number.isNaN(epoch) ? undefined : epoch;
+}
+
 /** Append the cache-bust token to a transform's source master URL. */
-function versionedSource(source: string): string {
-  return `${source}?v=${TRANSFORM_VERSION}`;
+function versionedSource(source: string, version?: number): string {
+  return `${source}?v=${version ?? TRANSFORM_VERSION}`;
 }
 
 /**
@@ -203,9 +261,13 @@ export type RenditionWidth = 360 | 480 | 720 | 1080;
  */
 export function videoRendition(
   logId: string,
-  { master = "footage.mp4", width }: { master?: string; width: RenditionWidth },
+  {
+    master = "footage.mp4",
+    version,
+    width,
+  }: { master?: string; version?: number; width: RenditionWidth },
 ): string {
-  const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/${master}`);
+  const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/${master}`, version);
 
   return `${MEDIA_TRANSFORM_BASE}/mode=video,width=${width}/${source}`;
 }
@@ -218,13 +280,13 @@ export function videoRendition(
  * JPEG. Used as the <video> poster so the first paint is a light edge-cached
  * image, not the full poster asset.
  */
-export function videoPoster(logId: string, master = "footage.mp4"): string {
-  const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/${master}`);
+export function videoPoster(logId: string, master = "footage.mp4", version?: number): string {
+  const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/${master}`, version);
 
   return `${MEDIA_TRANSFORM_BASE}/mode=frame,time=0s,format=jpg/${source}`;
 }
 
-// ── Two-master crops (docs/video-variants.md) ────────────────────────────────
+// ── Two-master crops ─────────────────────────────────────────────────────────
 //
 // Under the two-master layout (videoSquaredAt set), `footage.mp4` is the CLEAN
 // square 1920×1920 source master. The archive surfaces (/log, radio) never play
@@ -272,8 +334,9 @@ export function videoCrop(
   orientation: CropOrientation,
   width?: number,
   silent = false,
+  version?: number,
 ): string {
-  const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`);
+  const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`, version);
   const { nativeWidth, ratio } = CROP_GEOMETRY[orientation];
   const cropWidth = width ?? nativeWidth;
   const cropHeight = Math.round(cropWidth * ratio);
@@ -305,8 +368,9 @@ export function videoCropPoster(
   orientation: CropOrientation,
   width?: number,
   atSeconds = 0,
+  version?: number,
 ): string {
-  const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`);
+  const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`, version);
   const { nativeWidth, ratio } = CROP_GEOMETRY[orientation];
   const cropWidth = width ?? nativeWidth;
   const cropHeight = Math.round(cropWidth * ratio);
@@ -339,8 +403,9 @@ export function videoClipCrop(
   startSeconds: number,
   width?: number,
   durationSeconds = 60,
+  version?: number,
 ): string {
-  const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`);
+  const source = versionedSource(`${FOUND_BASE}/${encodeURIComponent(logId)}/footage.mp4`, version);
   const { nativeWidth, ratio } = CROP_GEOMETRY[orientation];
   const cropWidth = width ?? nativeWidth;
   const cropHeight = Math.round(cropWidth * ratio);
@@ -371,34 +436,34 @@ const AUDIO_STRIPPED_WIDTH = 1080;
  * must be at least 720p". Pinning the native 1080 portrait width emits a proper
  * ≥720p H264 cut with the audio dropped.
  */
-export function videoAudioStripped(source: string): string {
-  return `${MEDIA_TRANSFORM_BASE}/mode=video,audio=false,width=${AUDIO_STRIPPED_WIDTH}/${versionedSource(source)}`;
+export function videoAudioStripped(source: string, version?: number): string {
+  return `${MEDIA_TRANSFORM_BASE}/mode=video,audio=false,width=${AUDIO_STRIPPED_WIDTH}/${versionedSource(source, version)}`;
 }
 
 // ── Cache-purge URL set (the re-render purge) ────────────────────────────────
 //
 // Re-shipping `footage.mp4` to the SAME R2 key (a re-render via the video ship
-// finalize step) leaves every Media-Transformation rendition above cached at the
-// edge — each keyed on its own transform URL — still pointing at the OLD master's
-// bytes until its TTL expires, so the player keeps serving the stale clip. The
-// `?v=N` TRANSFORM_VERSION token only re-keys the WHOLE catalogue in a deploy; a
-// single re-rendered finding needs a per-URL purge of exactly its renditions.
+// finalize step) is handled by TWO mechanisms with distinct reach:
 //
-// `videoPurgeUrls` is the inverse of the builders above: given a finding's logId
-// (and whether it carries the two-master square layout), it returns the full,
-// FINITE set of public URLs the surfaces actually generate for that finding — the
-// masters plus every deterministic rendition. The Cloudflare purge-by-URL API
-// (`{ files: [...] }`) only evicts the exact URLs listed, so this set must mirror
-// the builders precisely: a width the surfaces never request is wasted purge
-// budget; a width they do request that's missing here stays stale.
+//   1. The `?v=<videoVersion>` vintage token on every transform source (above) —
+//      the ONLY thing that evicts stale RENDITIONS. Media Transformations caches
+//      video outputs in its own internal layer (`cf-cache-status: BYPASS`), which
+//      the zone purge API cannot touch — verified live on the 027.9.5H re-render:
+//      the purge-covered crop URL kept serving the replaced clip until its URL
+//      changed. A squared finalize bumps `videoSquaredAt`, every surface mints
+//      new transform URLs, MT derives fresh. Nothing to purge.
+//
+//   2. `videoPurgeUrls` + the zone purge-by-URL API — evicts the zone-edge-cached
+//      BARE R2 objects (both masters, poster.jpg/cover.jpg; 4h max-age), which the
+//      vintage token cannot re-key (bare object URLs carry no `?v`). The versioned
+//      transform URLs are still listed so any zone-edge copies of CURRENT-vintage
+//      renditions drop too, but they are belt-and-suspenders, not the eviction
+//      mechanism for MT's own cache.
 //
 // What is deliberately NOT enumerable, and why it's safe to omit:
 //   - radio time-offset CLIPS (`videoClipCrop`, `time=…s,duration=…s`): a joiner
 //     mints a fresh cache key per snapped offset, so the keyspace is unbounded —
-//     not purgeable by exhaustive URL listing. They're short by construction (one
-//     clip covers the rest of a segment, then the page swaps to the warm looping
-//     `videoCrop`), so they self-heal within a segment. A bulk re-render that must
-//     evict them too bumps `TRANSFORM_VERSION` (a whole-catalogue re-key).
+//     and the vintage token already re-keys them all on re-render.
 //   - the offset poster frames (`videoCropPoster` with `atSeconds > 0`): same
 //     unbounded-offset reasoning; the opening-frame poster (atSeconds=0) IS listed.
 
@@ -419,7 +484,10 @@ const PURGE_RENDITION_WIDTHS: readonly RenditionWidth[] = [360, 480, 720, 1080];
  * portrait master (`videoRendition`/`videoPoster`, /log + Stories). Both families'
  * masters and the audio-stripped social cut are always included.
  */
-export function videoPurgeUrls(logId: string, { squared }: { squared: boolean }): string[] {
+export function videoPurgeUrls(
+  logId: string,
+  { squared, version }: { squared: boolean; version?: number },
+): string[] {
   const media = trackMedia(logId);
   const urls = new Set<string>();
 
@@ -431,7 +499,14 @@ export function videoPurgeUrls(logId: string, { squared }: { squared: boolean })
 
   // The audio-stripped social cut (TikTok push) — `videoAudioStripped` off the
   // social master. Built from a full URL, so pass the social master.
-  urls.add(videoAudioStripped(media.socialVideoUrl));
+  urls.add(videoAudioStripped(media.socialVideoUrl, version));
+
+  // The bundle's static images. Not player surfaces, but the render agents'
+  // diversity check fetches the bare poster.jpg of the feed neighbours — a
+  // re-render that leaves the OLD poster cached (max-age 4h) would show the
+  // next agent the video this one just replaced.
+  urls.add(media.posterUrl); // poster.jpg (the ~80% drop frame)
+  urls.add(media.coverUrl); // cover.jpg (the profile-grid identity card)
 
   if (squared) {
     // Two-master crops: every orientation × every ladder width (Stories sizes the
@@ -439,26 +514,26 @@ export function videoPurgeUrls(logId: string, { squared }: { squared: boolean })
     // silent (audio=false) crop radio loops, and the opening-frame crop poster.
     for (const orientation of ["landscape", "portrait"] as const) {
       for (const width of PURGE_RENDITION_WIDTHS) {
-        urls.add(videoCrop(logId, orientation, width));
-        urls.add(videoCrop(logId, orientation, width, true)); // radio silent loop
-        urls.add(videoCropPoster(logId, orientation, width)); // opening-frame poster
+        urls.add(videoCrop(logId, orientation, width, false, version));
+        urls.add(videoCrop(logId, orientation, width, true, version)); // radio silent loop
+        urls.add(videoCropPoster(logId, orientation, width, 0, version)); // opening-frame poster
       }
 
       // The native-width crops (no explicit width → the orientation's native): the
       // fixed-resolution /log + radio-head requests, distinct cache keys from the
       // ladder rungs above.
-      urls.add(videoCrop(logId, orientation));
-      urls.add(videoCrop(logId, orientation, undefined, true));
-      urls.add(videoCropPoster(logId, orientation));
+      urls.add(videoCrop(logId, orientation, undefined, false, version));
+      urls.add(videoCrop(logId, orientation, undefined, true, version));
+      urls.add(videoCropPoster(logId, orientation, undefined, 0, version));
     }
   } else {
     // Legacy portrait renditions: the width-ladder video off footage.mp4, plus the
     // opening-frame poster (mode=frame).
     for (const width of PURGE_RENDITION_WIDTHS) {
-      urls.add(videoRendition(logId, { width }));
+      urls.add(videoRendition(logId, { version, width }));
     }
 
-    urls.add(videoPoster(logId));
+    urls.add(videoPoster(logId, undefined, version));
   }
 
   return [...urls];

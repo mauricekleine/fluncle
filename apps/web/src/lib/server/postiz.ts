@@ -12,8 +12,7 @@
 // - Instagram Reel & YouTube Short: the API carries caption + the video's own
 //   (baked-in) audio, so these post DIRECTLY (no inbox, no manual finish) per the
 //   operator's choice. We push the with-audio cut, not the silent one, and set NO
-//   custom YouTube thumbnail — the auto-picked frame reads better (docs/ROADMAP.md
-//   "YouTube thumbnails — decided: leave them"). See docs/track-lifecycle.md (Phase 3).
+//   custom YouTube thumbnail — the auto-picked frame reads better.
 //
 // The Worker owns the Postiz key; the agent/CLI never sees it.
 
@@ -53,7 +52,9 @@ async function postizFetch(path: string, init: RequestInit): Promise<Response> {
  * first connected match. On a miss we name what *is* connected, to make a
  * mis-set identifier obvious from the error alone.
  */
-async function resolveIntegrationId(candidates: string[]): Promise<string> {
+async function resolveIntegration(
+  candidates: string[],
+): Promise<{ id: string; identifier: string }> {
   const response = await postizFetch("/integrations", { method: "GET" });
 
   if (!response.ok) {
@@ -71,7 +72,7 @@ async function resolveIntegrationId(candidates: string[]): Promise<string> {
     const match = live.find((item) => item.identifier === candidate);
 
     if (match) {
-      return match.id;
+      return { id: match.id, identifier: match.identifier };
     }
   }
 
@@ -82,6 +83,13 @@ async function resolveIntegrationId(candidates: string[]): Promise<string> {
     `No connected ${candidates[0]} channel in Postiz (looked for ${candidates.join("/")}; connected: ${connected})`,
     400,
   );
+}
+
+/** The connected channel id for a platform (the `resolveIntegration` id, discarding the
+ *  matched identifier). Most callers only need the id; the Reel push also needs the
+ *  identifier (its `__type`), so it uses `resolveIntegration` directly. */
+async function resolveIntegrationId(candidates: string[]): Promise<string> {
+  return (await resolveIntegration(candidates)).id;
 }
 
 /** Register a public HTTPS media URL with Postiz (it pulls it). Returns the ref. */
@@ -479,17 +487,40 @@ export async function pushTikTokDraft(input: {
   });
 }
 
-// Instagram is intentionally not wired: there's no legitimate automated audio
-// path. Baking the master into a Reel gets muted/removed on a business/creator
-// account, and IG's licensed library is app-only (and locked for business), so
-// it can't mirror TikTok's add-sound-in-app flow. IG presence is a manual,
-// in-app post. See docs/track-lifecycle.md (Phase 3) and the fluncle-publish skill.
+/**
+ * Push an Instagram Reel directly (public). The clip drip-feed's IG leg: the clip's own
+ * live-mixed set audio survives (a set fingerprints differently from a single copyrighted
+ * master — the audio-survival spike passed, clip-drip-feed RFC Unit 0), so unlike the
+ * old manual-only IG path we post the with-audio cut straight through Postiz. A single
+ * video + `post_type: "post"` = a Reel; `type: "now"` fires it (the drip cron calls this
+ * at the clip's due time). The `__type` MUST be the connected integration's own
+ * identifier (Creator accounts surface as `instagram` or `instagram-standalone`), so we
+ * resolve it live and echo it back. The operator validates ONE real post before the drip
+ * cron is enabled; the global kill switch (clip-social.ts) is the ongoing guard.
+ */
+export async function pushInstagramReel(input: {
+  caption: string;
+  videoUrl: string;
+}): Promise<{ postId: string }> {
+  const integration = await resolveIntegration(["instagram", "instagram-standalone"]);
+  const media = await uploadFromUrl(input.videoUrl);
+
+  return createPost({
+    content: input.caption,
+    integrationId: integration.id,
+    media,
+    settings: {
+      __type: integration.identifier,
+      post_type: "post",
+    },
+  });
+}
 
 /**
  * Push a YouTube Short directly (public). We deliberately set NO custom
  * thumbnail: YouTube's auto-picked frame from each bespoke-shader video reads
- * better than a flat cover plate, so we keep the auto-frame (see docs/ROADMAP.md
- * "YouTube thumbnails — decided: leave them"). The push carries title + caption.
+ * better than a flat cover plate, so we keep the auto-frame. The push carries
+ * title + caption.
  */
 export async function pushYouTubeShort(input: {
   description: string;

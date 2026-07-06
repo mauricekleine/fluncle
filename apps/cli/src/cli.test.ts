@@ -30,14 +30,6 @@ describe("fluncle CLI parsing and JSON output", () => {
 `);
   });
 
-  test("the singular `track get` alias still resolves to the same handler", async () => {
-    const result = await runCli(["track", "get", "--json"]);
-
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Missing id. Usage: fluncle tracks get");
-  });
-
   test("preserves the recent alias and limit validation before fetching", async () => {
     const result = await runCli(["list", "--limit", "0", "--json"]);
 
@@ -59,24 +51,8 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
-  test("admin queue (back-compat alias) still resolves to the same handler", async () => {
-    const result = await runCli(["admin", "queue", "--limit", "0", "--json"]);
-
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
-  });
-
   test("admin tracks vehicles validates --limit before fetching", async () => {
     const result = await runCli(["admin", "tracks", "vehicles", "--limit", "0", "--json"]);
-
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
-  });
-
-  test("admin vehicles (back-compat alias) still resolves to the same handler", async () => {
-    const result = await runCli(["admin", "vehicles", "--limit", "0", "--json"]);
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe("");
@@ -129,13 +105,13 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stderr).toBe("");
     expect(result.stdout).toBe(`{
   "code": "error",
-  "message": "A footage cut is required (--footage <file>, or --dir containing footage.mp4)",
+  "message": "A footage cut is required (--footage <file>, or --dir containing footage.mp4). Pass --allow-partial for a deliberate partial refresh (e.g. poster-only), or upload plates alone (--plate/--plate-background) for the plate-lane pre-upload.",
   "ok": false
 }
 `);
   });
 
-  test("admin track video (back-compat group alias) still resolves", async () => {
+  test("the singular `admin track` group alias is gone", async () => {
     const result = await runCli([
       "admin",
       "track",
@@ -146,9 +122,10 @@ describe("fluncle CLI parsing and JSON output", () => {
       "--json",
     ]);
 
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("A footage cut is required");
+    // The back-compat singular group was removed: `admin track` no longer resolves to
+    // the canonical `admin tracks` handler.
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).not.toContain("A footage cut is required");
   });
 
   test("admin tracks observe requires a script before any render", async () => {
@@ -169,6 +146,21 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage: fluncle admin tracks context");
+  });
+
+  test("admin tracks get requires an id before any lookup", async () => {
+    // No id fails local validation before the API call, so this runs without a
+    // server or admin token. The usage names the admin `get`, not the public one.
+    const result = await runCli(["admin", "tracks", "get", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe(`{
+  "code": "error",
+  "message": "Missing id. Usage: fluncle admin tracks get <track_id|log_id> [--json]",
+  "ok": false
+}
+`);
   });
 
   test("admin tracks requeue-video requires an id before any clear", async () => {
@@ -213,13 +205,12 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
-  test("admin tracks queue accepts the observation-cron filters", async () => {
-    // The boolean filters parse cleanly; --limit still validates first.
+  test("admin tracks queue accepts the --has-observation filter", async () => {
+    // The boolean filter parses cleanly; --limit still validates first.
     const result = await runCli([
       "admin",
       "tracks",
       "queue",
-      "--has-context",
       "--has-observation",
       "--limit",
       "0",
@@ -231,15 +222,25 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
-  test("admin tracks publish (new name) and admin add (alias) both resolve", async () => {
-    const canonical = await runCli(["admin", "tracks", "publish", "--json"]);
-    const alias = await runCli(["admin", "add", "--json"]);
+  test("the --has-context no-op flag is gone from admin tracks queue", async () => {
+    // The render queue is always context-gated, so the no-op flag was removed:
+    // commander now rejects it as an unknown option (surfaced as a JSON error).
+    const result = await runCli(["admin", "tracks", "queue", "--has-context", "--json"]);
 
-    // Both reach the same handler and fail identically (no Spotify URL given).
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).toContain("Unknown option '--has-context'");
+  });
+
+  test("admin tracks publish resolves; the old flat admin add alias is gone", async () => {
+    const canonical = await runCli(["admin", "tracks", "publish", "--json"]);
+    const removed = await runCli(["admin", "add", "--json"]);
+
     expect(canonical.exitCode).toBe(1);
-    expect(alias.exitCode).toBe(1);
     expect(canonical.stdout).toContain("Missing Spotify track URL");
-    expect(alias.stdout).toContain("Missing Spotify track URL");
+    // The back-compat flat alias was removed: `admin add` no longer reaches the
+    // publish handler.
+    expect(removed.exitCode).not.toBe(0);
+    expect(removed.stdout).not.toContain("Missing Spotify track URL");
   });
 
   test("admin tracks preview resolves; the old preview-archive name is gone", async () => {
@@ -377,8 +378,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(adminHelp.stderr).toBe("");
     expect(adminHelp.stdout).not.toContain(fluncleAsciiLogo);
     expect(adminHelp.stdout).toContain("Usage: fluncle admin [options] [command]");
-    // Canonical Convention B groups show; the back-compat flat aliases (add,
-    // queue, …) are hidden, so they do not clutter the operator help.
+    // The canonical Convention B groups show in the operator help.
     expect(adminHelp.stdout).toContain("tracks");
     expect(adminHelp.stdout).toContain("submissions");
     expect(adminHelp.stdout).toContain("backfills");

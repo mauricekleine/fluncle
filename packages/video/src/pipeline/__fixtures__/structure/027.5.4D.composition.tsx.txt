@@ -1,0 +1,177 @@
+// PROVENANCE: shipped Fluncle finding composition source, fetched from
+// https://found.fluncle.com/027.5.4D/composition.tsx on 2026-07-04 (offline fixture,
+// read as raw text + GLSL-resolved by the test — never imported/compiled).
+//
+// crystal-scaffold.tsx
+//
+// "If Only" by 1991 | Label: 1991 (2025) | Found: 2026-06-26 | 027.5.4D
+// Vehicle: crystal scaffold — two-layer angular voronoi facets in dusty rose
+// Texture family: dither (grainHalftone — the print-decay register)
+// Register: fully abstract
+//
+// Concept: Two overlapping domain-warped voronoi crystal-facet layers drift
+// upward at different constant speeds (parallax depth), filling the frame
+// edge-to-edge in dusty rose on near-black. The near layer ignites to cream
+// at the end-of-clip energy peak. All audio reactivity is in-place material
+// deformation — no audio on drift.
+//
+// Metadata-to-pixels trace:
+//   subBassRatio 0.034 (very low) → fine walls, not thick heavy structures
+//   centroidHz 3591 (mid-high) → dusty rose palette, treble-driven grain kick
+//   midFlatness 0.862 (noisy) → domain-warped irregular cells, halftone grain
+//   texture "breakbeat-driven, rolling" → forward monotonic drift, bass wall-width pulse
+//   palette.accent #ec94a4 (dusty rose) → wall color; no gold (no genuine heat)
+
+import React from "react";
+import { AbsoluteFill } from "remotion";
+import {
+  CloseCard,
+  GLSL,
+  ShaderLayer,
+  TrackAudio,
+  TypePlate,
+  paletteMix,
+  useJourney,
+  withAlpha,
+  type NostalgicCosmosProps,
+} from "../cosmos";
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Fragment shader
+// ──────────────────────────────────────────────────────────────────────────────
+const FRAG = /* glsl */ `
+  ${GLSL.hash}
+  ${GLSL.valueNoise}
+  ${GLSL.fbm}
+  ${GLSL.voronoi}
+  ${GLSL.filmGrain}
+  ${GLSL.grainFamilies}
+  ${GLSL.vignette}
+
+  void main() {
+    vec2 uv = gl_FragCoord.xy / u_res;
+    // Centered, aspect-corrected (portrait: x is narrow relative to y)
+    float aspect = u_res.x / u_res.y;
+    vec2 p = (uv - 0.5) * vec2(aspect, 1.0);
+
+    // Precomputed rotation matrices (col-major, CCW)
+    // mat2(cos, sin, -sin, cos) rotates by +theta
+    // Far: 30 deg  cos=0.8660, sin=0.5000
+    mat2 rotFar  = mat2(0.8660,  0.5000, -0.5000, 0.8660);
+    // Near: -15 deg  cos=0.9659, sin=-0.2588
+    mat2 rotNear = mat2(0.9659, -0.2588,  0.2588, 0.9659);
+
+    // ── Far layer: small cells, slow constant upward drift ─────────────────
+    vec2 pf = p * 5.5 + vec2(0.31, -u_time * 0.10);
+    // 2-fbm domain warp to break grid regularity (mid bows the fabric in place)
+    float wampF = 0.10 + u_mid * 0.08;
+    vec2 wf = (vec2(fbm(pf * 0.8 + vec2(3.7, 1.3), 3),
+                    fbm(pf * 0.8 + vec2(1.3, 3.7), 3)) - 0.5) * 2.0 * wampF;
+    vec3 vorf = voronoi(rotFar * (pf + wf));
+    float wallF = smoothstep(0.042, 0.0, vorf.y - vorf.x);
+
+    // ── Near layer: larger cells, faster constant upward drift ─────────────
+    vec2 pn = p * 10.0 + vec2(1.73, -u_time * 0.22);
+    float wampN = 0.12 + u_mid * 0.12;
+    vec2 wn = (vec2(fbm(pn * 0.6 + vec2(7.3, 2.1), 3),
+                    fbm(pn * 0.6 + vec2(2.1, 7.3), 3)) - 0.5) * 2.0 * wampN;
+    vec3 vorn = voronoi(rotNear * (pn + wn));
+    // Wall width: in-place structural deformation on bass (gate-safe)
+    float wallW = 0.028 + u_bass * 0.018 + u_audioDrop * 0.010;
+    float wallN = smoothstep(wallW, 0.0, vorn.y - vorn.x);
+    // Crystal core (innermost edge stripe — ignites at drop)
+    float coreN = smoothstep(wallW * 0.35, 0.0, vorn.y - vorn.x);
+
+    // ── Background: warm near-black with faint rose undertone ─────────────
+    vec3 bg = u_palette[0]
+              + 0.018 * vec3(0.35, 0.10, 0.20) * fbm((p + 0.5) * 3.0, 3);
+
+    // ── Colors: scene-led, no gold (palette doesn't run hot) ─────────────
+    vec3 roseDim = mix(u_palette[0], u_palette[1], 0.55);  // dim rose, far layer
+    vec3 roseAcc = u_palette[1];                            // full accent rose
+    vec3 roseHot = u_palette[3];                            // cream for hot cores
+
+    // ── Light reaction: swell lifts brightness, drop ignites cores ────────
+    float brightSwell = 0.50 + u_audioSwell * 0.45 + u_audioDrop * 0.30;
+    float coreIgnite  = u_audioDrop * 0.85 + u_audioSwell * 0.20;
+
+    // Far layer contribution (always present, dimmer)
+    vec3 farContrib = wallF * roseDim * 0.55;
+
+    // Near layer: walls in rose, cores mix toward cream at drop
+    vec3 nearWallColor = mix(roseAcc, roseHot, coreN * coreIgnite);
+    vec3 nearContrib   = wallN * nearWallColor * brightSwell;
+
+    // Composite
+    vec3 col = bg + farContrib + nearContrib;
+
+    // Cap below cream stop — no blowout, keep grain texture visible
+    col = min(col, vec3(0.87));
+
+    // Gentle vignette — wide radius keeps all four corners lit (not a porthole)
+    col *= vignette(uv, 1.1, 0.5);
+
+    // Grain: grainHalftone, LOW amount (electric / dancefloor finding)
+    GrainOpts gOpts = grainHalftone();
+    gOpts.amount = 0.030 + u_trebleFast * 0.018;
+    col = filmGrain(col, uv, u_time, gOpts);
+
+    // Kill 8-bit banding
+    col = dither8(col, uv);
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Composition
+// ──────────────────────────────────────────────────────────────────────────────
+const CrystalScaffold: React.FC<NostalgicCosmosProps> = ({
+  track,
+  audio,
+  palette: rawPalette,
+  seed,
+}) => {
+  const palette = paletteMix(rawPalette.swatches);
+  // arrive phase starts at 88% (17.6 s of 20 s) — 2.4 s for the close card
+  const { phase, phaseProgress } = useJourney({ split: [0.04, 0.88] });
+  const closeProgress = phase === "arrive" ? phaseProgress : 0;
+
+  return (
+    <AbsoluteFill>
+      <TrackAudio audio={audio} />
+      <ShaderLayer
+        fragmentShader={FRAG}
+        beatGrid={audio.beatGrid}
+        onsets={audio.onsets}
+        energyCurve={audio.energyCurve}
+        bassCurve={audio.bassCurve}
+        midCurve={audio.midCurve}
+        trebleCurve={audio.trebleCurve}
+        fluxCurve={audio.fluxCurve}
+        palette={palette}
+        seed={seed}
+        reactivity={{
+          drop: {
+            fallMs: 1500,
+            holdMs: 300,
+            peakTimeMs: 19280,
+            riseMs: 1200,
+          },
+          swellBeatWeight: 0,
+        }}
+        bloom={{ intensity: 0.65, radius: 0.9, threshold: 0.7 }}
+      />
+      <TypePlate
+        track={track}
+        ink={palette.accent}
+        dimInk={withAlpha(palette.accent, 0.65)}
+        identityInSec={1.0}
+        telemetryInSec={2.3}
+        holdSec={5.5}
+      />
+      <CloseCard arc={closeProgress} palette={{ accent: palette.glow, ink: palette.accent }} />
+    </AbsoluteFill>
+  );
+};
+
+export default CrystalScaffold;

@@ -2,22 +2,22 @@ import { CircleNotchIcon, PauseIcon, PlayIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { type BoardRow } from "@/components/admin/use-publish";
 import { VibeMap } from "@/components/admin/vibe-map";
-import { Button } from "@/components/ui/button";
+import { Button } from "@fluncle/ui/components/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@fluncle/ui/components/dialog";
 import { GALAXIES, galaxyForVibe } from "@/lib/galaxies";
 import { usePreviewPlayer } from "@/lib/preview-player";
 
 // The Tag cell's dialog — vibe-map placement for one finding. Drop it on the
 // energy×mood field (relative to the others, drawn faint for context), play the
 // preview to feel it, Save writes vibe_x/vibe_y. This is the board's placement
-// surface (it replaced the standalone /admin/tag tool); see docs/admin-tagging.md
-// for the vibe model + the four galaxies.
+// surface (it replaced the standalone /admin/tag tool); vibe_x is Light↔Dark mood,
+// vibe_y is Floaty↔Driving energy, and the four quadrants are the four galaxies.
 
 type Point = { artists?: string[]; title: string; trackId: string; vibeX: number; vibeY: number };
 type Pos = { x: number; y: number };

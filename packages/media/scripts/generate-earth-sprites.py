@@ -9,7 +9,7 @@ name == the prop id (the renderer loads /earth/<propId>.png).
 
 Usage (reads the key from the environment only — never commit a key):
 
-    GEMINI_API_KEY="$(op read 'op://Fluncle/GEMINI_API_KEY/credential')" \
+    GEMINI_API_KEY="$(op read 'op://<vault>/GEMINI_API_KEY/credential')" \
       UV_CACHE_DIR=/tmp/uv-cache uv run --with pillow \
       python packages/media/scripts/generate-earth-sprites.py [crt boombox ...]
 

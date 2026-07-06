@@ -14,9 +14,9 @@ import { HomeLinkHub } from "@/components/home/link-hub";
 import { LiveBanner } from "@/components/home/live-banner";
 import { StoriesDialog } from "@/components/stories/stories-dialog";
 import { TrackRow } from "@/components/track-row";
-import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { Button } from "@fluncle/ui/components/button";
+import { ScrollArea } from "@fluncle/ui/components/scroll-area";
+import { TooltipProvider } from "@fluncle/ui/components/tooltip";
 import {
   discogsUrl,
   instagramUrl,

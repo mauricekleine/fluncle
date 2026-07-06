@@ -4,13 +4,7 @@
 // `fluncle://<logId>` breadcrumb). No I/O — unit-tested in mixtape-chapters.test.ts.
 
 import { type MixtapeMember } from "@fluncle/contracts";
-
-/** A Mixcloud tracklist section. `start_time` is integer seconds (the API's shape). */
-export type MixcloudSection = {
-  artist: string;
-  song: string;
-  start_time: number;
-};
+import { type MixcloudSection, mixcloudSections } from "@fluncle/contracts/util";
 
 export type MixtapeChapters = {
   /** Cued members (have a startMs) — the ones that could be placed on a timeline. */
@@ -50,12 +44,9 @@ export function mixtapeChapters(members: MixtapeMember[]): MixtapeChapters {
     .filter((member): member is MixtapeMember & { startMs: number } => member.startMs != null)
     .sort((a, b) => a.startMs - b.startMs);
 
-  // Mixcloud: every cued member, no spacing rule, integer-second offsets.
-  const mixcloudSections: MixcloudSection[] = cued.map((member) => ({
-    artist: artistOf(member),
-    song: member.title,
-    start_time: Math.floor(member.startMs / 1000),
-  }));
+  // Mixcloud: every cued member, no spacing rule, integer-second offsets — the shared
+  // derivation (byte-identical to the CLI upload + the server-side re-sync edit).
+  const sections = mixcloudSections(members);
 
   // YouTube: force the first chapter to 0:00, then keep only members ≥10s after the
   // prior kept one.
@@ -75,7 +66,7 @@ export function mixtapeChapters(members: MixtapeMember[]): MixtapeChapters {
 
   return {
     cuedCount: cued.length,
-    mixcloudSections,
+    mixcloudSections: sections,
     totalCount: members.length,
     youtubeChapters: lines.length >= MIN_CHAPTERS ? lines.join("\n") : null,
   };

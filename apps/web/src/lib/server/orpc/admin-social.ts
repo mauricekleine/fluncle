@@ -30,7 +30,7 @@
 //     `published`. The box capture cron drives this.
 
 import { ORPCError } from "@orpc/server";
-import { trackMedia, videoAudioStripped } from "../../media";
+import { trackMedia, videoAudioStripped, videoVersion } from "../../media";
 import { readCaptions } from "../captions";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { postizSetReleaseId, pushTikTokDraft, pushYouTubeShort, resolveSocialUrl } from "../postiz";
@@ -44,23 +44,11 @@ import {
   updateSocialStatus,
   upsertPost,
 } from "../social";
-import { getTrackByIdOrLogId } from "../tracks";
-import { apiFault, parseLimit, type Implementer } from "./_shared";
+import { parseLimit, requireTrack, type Implementer, toFault } from "./_shared";
 
 // Ported verbatim from the live draft route. TikTok is the SELF_ONLY inbox draft
 // (agent-allowed); YouTube is the direct PUBLIC upload (operator only).
 const SUPPORTED = new Set(["tiktok", "youtube"]);
-
-// The fault wrapper: an ORPCError (a guard or an in-handler reject) passes through
-// untouched; anything else (an ApiError from a reused helper, or an unexpected
-// throw) becomes a wire-compatible fault via `apiFault`.
-function toFault(error: unknown): ORPCError<string, unknown> {
-  if (error instanceof ORPCError) {
-    return error;
-  }
-
-  return apiFault(error);
-}
 
 /**
  * Build the `admin-social` domain's handlers. Each reuses the live route logic
@@ -72,15 +60,7 @@ export function adminSocialHandlers(os: Implementer) {
   const listTrackSocialHandler = os.list_track_social.use(adminAuth).handler(async ({ input }) => {
     try {
       const idOrLogId = input.trackId;
-      const track = await getTrackByIdOrLogId(idOrLogId);
-
-      if (!track) {
-        throw new ORPCError("NOT_FOUND", {
-          data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
-          message: `No track with id ${idOrLogId}`,
-          status: 404,
-        });
-      }
+      const track = await requireTrack(idOrLogId);
 
       const posts = await listSocialPosts(track.trackId);
 
@@ -99,8 +79,7 @@ export function adminSocialHandlers(os: Implementer) {
       try {
         const idOrLogId = input.trackId;
         const platform = input.platform;
-        const body = input as { scheduledFor?: unknown; status?: unknown; url?: unknown };
-        const status = body.status;
+        const status = input.status;
 
         if (status !== "scheduled" && status !== "published" && status !== "failed") {
           throw new ORPCError("BAD_REQUEST", {
@@ -113,7 +92,7 @@ export function adminSocialHandlers(os: Implementer) {
           });
         }
 
-        if (status === "published" && typeof body.url !== "string") {
+        if (status === "published" && typeof input.url !== "string") {
           throw new ORPCError("BAD_REQUEST", {
             data: { apiCode: "url_required", apiMessage: "Publishing requires the post --url" },
             message: "Publishing requires the post --url",
@@ -123,23 +102,15 @@ export function adminSocialHandlers(os: Implementer) {
 
         const update: SocialStatusUpdate = { status };
 
-        if (typeof body.url === "string") {
-          update.url = body.url;
+        if (typeof input.url === "string") {
+          update.url = input.url;
         }
 
-        if (typeof body.scheduledFor === "string") {
-          update.scheduledFor = body.scheduledFor;
+        if (typeof input.scheduledFor === "string") {
+          update.scheduledFor = input.scheduledFor;
         }
 
-        const track = await getTrackByIdOrLogId(idOrLogId);
-
-        if (!track) {
-          throw new ORPCError("NOT_FOUND", {
-            data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
-            message: `No track with id ${idOrLogId}`,
-            status: 404,
-          });
-        }
+        const track = await requireTrack(idOrLogId);
 
         const updated = await updateSocialStatus(track.trackId, platform, update);
 
@@ -208,15 +179,7 @@ export function adminSocialHandlers(os: Implementer) {
           });
         }
 
-        const track = await getTrackByIdOrLogId(idOrLogId);
-
-        if (!track) {
-          throw new ORPCError("NOT_FOUND", {
-            data: { apiCode: "not_found", apiMessage: `No track with id ${idOrLogId}` },
-            message: `No track with id ${idOrLogId}`,
-            status: 404,
-          });
-        }
+        const track = await requireTrack(idOrLogId);
 
         if (!track.logId) {
           throw new ORPCError("BAD_REQUEST", {
@@ -241,7 +204,7 @@ export function adminSocialHandlers(os: Implementer) {
           });
         }
 
-        // The PLAYABLE portrait cut both platforms push (docs/video-variants.md):
+        // The PLAYABLE portrait cut both platforms push:
         // under the two-master layout (videoSquaredAt set) that is the baked-text
         // footage.social.mp4 — footage.mp4 is the clean square crop source. A
         // legacy finding (no signal) keeps pushing footage.mp4.
@@ -255,7 +218,7 @@ export function adminSocialHandlers(os: Implementer) {
 
         if (platform === "tiktok") {
           const silent = track.videoSquaredAt
-            ? videoAudioStripped(social)
+            ? videoAudioStripped(social, videoVersion(track.videoSquaredAt))
             : social.replace(/footage\.mp4$/, "footage-silent.mp4");
           ({ postId } = await pushTikTokDraft({ caption, videoUrl: silent }));
           status = "draft";
@@ -319,7 +282,7 @@ export function adminSocialHandlers(os: Implementer) {
   // than throw, so one lagging post never burns the batch.
   const capturePostUrlsHandler = os.capture_post_urls.use(adminAuth).handler(async ({ input }) => {
     try {
-      const limit = parseLimit((input as { limit?: string }).limit, 25, 100);
+      const limit = parseLimit(typeof input.limit === "string" ? input.limit : undefined, 25, 100);
       const pending = await listPostsAwaitingUrl(limit);
 
       const captured: Array<{ platform: string; trackId: string; url: string }> = [];

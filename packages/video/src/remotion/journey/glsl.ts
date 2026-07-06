@@ -396,7 +396,10 @@ mat2 rot2(float a) { float c = cos(a); float s = sin(a); return mat2(c, -s, s, c
  * calcNormal(p)->vec3. Keep it modest — this runs per pixel; soften the result
  * with grain so it never reads as clean CGI (the Light-Years Rule). */
 const raymarch = /* glsl */ `
+#ifndef FLUNCLE_MAP_FWD
+#define FLUNCLE_MAP_FWD
 float map(vec3 p);
+#endif
 float raymarch(vec3 ro, vec3 rd, float tmax) {
   float t = 0.0;
   for (int i = 0; i < 96; i++) {
@@ -416,14 +419,574 @@ vec3 calcNormal(vec3 p) {
   ));
 }`;
 
+/** caustic(uv, t, scale, iterations)->0..~: true water-caustic filaments — the
+ * 6-iteration rotate + sin/cos accumulation, squared. `scale` sets filament
+ * frequency (≈1.5 like Paper's water), `iterations` the layering (6 canonical,
+ * up to 12). t advances the field; keep it a constant clock and drive scale/
+ * strength off a SMOOTHED band (Motion law). Route the result through
+ * `paletteRamp`/`paletteRampOk`. Self-contained. */
+const caustic = /* glsl */ `
+// Adapted from Paper Shaders (github.com/paper-design/shaders), Apache-2.0
+float caustic(vec2 uv, float t, float scale, int iterations) {
+  vec2 n = vec2(0.1);
+  vec2 N = vec2(0.1);
+  float c = cos(0.5);
+  float s = sin(0.5);
+  mat2 m = mat2(c, s, -s, c); // rotate2D(0.5), matches Paper's getCausticNoise
+  for (int j = 0; j < 12; j++) {
+    if (j >= iterations) break;
+    uv *= m;
+    n *= m;
+    vec2 q = uv * scale + float(j) + n + (0.5 + 0.5 * float(j)) * (mod(float(j), 2.0) - 1.0) * t;
+    n += sin(q);
+    N += cos(q) / scale;
+    scale *= 1.1;
+  }
+  float v = N.x + N.y + 1.0;
+  return v * v; // squared -> true caustic filaments (Paper squares causticNoise)
+}`;
+
+/** neuroWeb(uv, t, iterations)->0..~: a glowing organic filament web — zozuar's
+ * 15-iteration self-interfering sine accumulator (Paper's neuro-noise). Each
+ * iteration rotates the coord + the running sine sum by 1 rad and folds a new
+ * sine layer in, so the tendrils interfere into a neural mesh. Square + `pow` it
+ * for contrast (brightness on the swell, contrast on the hit); threshold for a
+ * near-black field. `iterations` 15 canonical (up to 24). Self-contained. */
+const neuroWeb = /* glsl */ `
+// Adapted from Paper Shaders (github.com/paper-design/shaders), Apache-2.0
+float neuroWeb(vec2 uv, float t, int iterations) {
+  vec2 sine_acc = vec2(0.0);
+  vec2 res = vec2(0.0);
+  float scale = 8.0;
+  float c = cos(1.0);
+  float s = sin(1.0);
+  mat2 rr = mat2(c, -s, s, c); // rotate by 1 rad per iteration
+  for (int j = 0; j < 24; j++) {
+    if (j >= iterations) break;
+    uv = rr * uv;
+    sine_acc = rr * sine_acc;
+    vec2 layer = uv * scale + float(j) + sine_acc - t;
+    sine_acc += sin(layer);
+    res += (0.5 + 0.5 * cos(layer)) / scale;
+    scale *= 1.2;
+  }
+  return res.x + res.y;
+}`;
+
+/** swirlWarp(uv, t, swirl, iterations)->vec2: an N-iteration sine swirl cascade
+ * (Paper's warp loop) — a cheaper, more liquid alternative to `domainWarp` that
+ * returns a WARPED COORDINATE (feed it to any field). Each iteration bends the
+ * coord by `swirl/i·cos(t + k·i·uv.yx)`, so early iterations make broad folds and
+ * later ones fine curls. Drive `swirl` off a smoothed band; keep `t` a constant
+ * clock (never put audio on the time term — Motion law). `iterations` up to 20.
+ * Self-contained. */
+const swirlWarp = /* glsl */ `
+// Adapted from Paper Shaders (github.com/paper-design/shaders), Apache-2.0
+vec2 swirlWarp(vec2 uv, float t, float swirl, int iterations) {
+  for (int i = 1; i <= 20; i++) {
+    if (i > iterations) break;
+    float iF = float(i);
+    uv.x += swirl / iF * cos(t + iF * 1.5 * uv.y);
+    uv.y += swirl / iF * cos(t + iF * 1.0 * uv.x);
+  }
+  return uv;
+}`;
+
+/** oklab: sRGB<->linear<->OKLab/OKLCH conversions + a shortest-arc OKLCH mix,
+ * plus `paletteRampOk(t)` — the perceptual sibling of `paletteRamp` over the SAME
+ * `u_palette` stops. OKLCH interpolation keeps lightness+chroma even and takes the
+ * short hue arc, so the red->gold belt stays saturated instead of dipping through
+ * sRGB mud. Drop-in for `paletteRamp` when a ramp reads muddy; `paletteRamp` is
+ * untouched. Reads `u_palette` from the header; otherwise self-contained. */
+const oklab = /* glsl */ `
+// Adapted from Paper Shaders (github.com/paper-design/shaders), Apache-2.0
+vec3 srgbToLinearOk(vec3 c) { return pow(c, vec3(2.2)); }
+vec3 linearToSrgbOk(vec3 c) { return pow(max(c, 0.0), vec3(1.0 / 2.2)); }
+vec3 linearToOklab(vec3 rgb) {
+  float L = pow(0.4122214708 * rgb.r + 0.5363325363 * rgb.g + 0.0514459929 * rgb.b, 1.0 / 3.0);
+  float M = pow(0.2119034982 * rgb.r + 0.6806995451 * rgb.g + 0.1073969566 * rgb.b, 1.0 / 3.0);
+  float S = pow(0.0883024619 * rgb.r + 0.2817188376 * rgb.g + 0.6299787005 * rgb.b, 1.0 / 3.0);
+  return vec3(
+    0.2104542553 * L + 0.7936177850 * M - 0.0040720468 * S,
+    1.9779984951 * L - 2.4285922050 * M + 0.4505937099 * S,
+    0.0259040371 * L + 0.7827717662 * M - 0.8086757660 * S
+  );
+}
+vec3 oklabToLinear(vec3 lab) {
+  float l_ = lab.x + 0.3963377774 * lab.y + 0.2158037573 * lab.z;
+  float m_ = lab.x - 0.1055613458 * lab.y - 0.0638541728 * lab.z;
+  float s_ = lab.x - 0.0894841775 * lab.y - 1.2914855480 * lab.z;
+  float l = l_ * l_ * l_;
+  float m = m_ * m_ * m_;
+  float s = s_ * s_ * s_;
+  return vec3(
+    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+   -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+   -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s
+  );
+}
+vec3 oklabToOklch(vec3 lab) {
+  return vec3(lab.x, length(lab.yz), atan(lab.z, lab.y));
+}
+vec3 oklchToOklab(vec3 lch) {
+  return vec3(lch.x, lch.y * cos(lch.z), lch.y * sin(lch.z));
+}
+vec3 srgbToOklch(vec3 c) { return oklabToOklch(linearToOklab(srgbToLinearOk(c))); }
+vec3 oklchToSrgb(vec3 lch) { return linearToSrgbOk(oklabToLinear(oklchToOklab(lch))); }
+float mixHueOk(float h1, float h2, float mixer) {
+  float d = mod(h2 - h1 + 3.14159265359, 6.28318530718) - 3.14159265359;
+  return h1 + mixer * d; // shortest-arc hue interpolation
+}
+// Perceptual OKLCH mix of two sRGB colors (returns sRGB).
+vec3 mixOklch(vec3 a, vec3 b, float mixer) {
+  vec3 la = srgbToOklch(a);
+  vec3 lb = srgbToOklch(b);
+  float L = mix(la.x, lb.x, mixer);
+  float C = mix(la.y, lb.y, mixer);
+  // Treat near-neutral endpoints (warm-dark grounds like Deep Field carry a tiny
+  // residual chroma) as hueless, so a dark->chromatic ramp holds the chromatic
+  // hue and ramps chroma from ~0 instead of arcing through a spurious blue/purple.
+  float H = la.z;
+  if (la.y > 0.02 && lb.y > 0.02) {
+    H = mixHueOk(la.z, lb.z, mixer);
+  } else if (lb.y > 0.02) {
+    H = lb.z;
+  }
+  return oklchToSrgb(vec3(L, C, H));
+}
+// The Retint ramp mixed perceptually — same stops as paletteRamp, no sRGB mud.
+vec3 paletteRampOk(float t) {
+  t = clamp(t, 0.0, 1.0);
+  float s = t * 3.0;
+  if (s < 1.0) return mixOklch(u_palette[0], u_palette[1], smoothstep(0.0, 1.0, s));
+  if (s < 2.0) return mixOklch(u_palette[1], u_palette[2], smoothstep(0.0, 1.0, s - 1.0));
+  return mixOklch(u_palette[2], u_palette[3], smoothstep(0.0, 1.0, s - 2.0));
+}`;
+
+/** colorSpots(uv, colors[6], count, t)->vec3: inverse-distance-weighted (1/d^3.5)
+ * moving color spots — Paper's mesh-gradient. Each spot rides a per-index sin/cos
+ * Lissajous (`colorSpotPosition`), so the field is a soft, always-moving smear of
+ * up to 6 colors. Pass RETINTED colors (canon stops / `paletteRamp` samples), so
+ * the smear stays on-brand. `firstFrameOffset`: start `t` at a non-degenerate
+ * offset (e.g. `t = 0.5 * (u_time + 41.5)`) so frame 0 isn't the collapsed pose
+ * where every spot sits on its Lissajous origin. `colorSpotSwirl` rotates the
+ * sample point around center by a radius-scaled angle for an optional vortex.
+ * Self-contained. */
+const colorSpots = /* glsl */ `
+// Adapted from Paper Shaders (github.com/paper-design/shaders), Apache-2.0
+vec2 colorSpotPosition(int i, float t) {
+  float a = float(i) * 0.37;
+  float b = 0.6 + fract(float(i) / 3.0) * 0.9;
+  float c = 0.8 + fract(float(i + 1) / 4.0);
+  return 0.5 + 0.5 * vec2(sin(t * b + a), cos(t * c + a * 1.5));
+}
+// Optional radius-scaled swirl of the sample point around (0.5,0.5).
+vec2 colorSpotSwirl(vec2 uv, float amount) {
+  vec2 p = uv - 0.5;
+  float r = length(p);
+  float ang = amount * r;
+  float c = cos(ang);
+  float s = sin(ang);
+  return mat2(c, -s, s, c) * p + 0.5;
+}
+vec3 colorSpots(vec2 uv, vec3 colors[6], int count, float t) {
+  vec3 col = vec3(0.0);
+  float total = 0.0;
+  for (int i = 0; i < 6; i++) {
+    if (i >= count) break;
+    vec2 pos = colorSpotPosition(i, t);
+    float d = pow(length(uv - pos), 3.5);
+    float w = 1.0 / (d + 1e-3);
+    col += colors[i] * w;
+    total += w;
+  }
+  return col / max(1e-4, total);
+}`;
+
+/** grainDisplace(uv, t, scale, amt)->signed float: the Paper grainMixer idea —
+ * grain that DISPLACES the field, not just tints pixels. Returns a signed
+ * displacement in ~[-amt/2, amt/2] the caller ADDS to a shape / threshold /
+ * coordinate (`shape += grainDisplace(uv, t, scale, amt);` or
+ * `pos += grainDisplace(...)`), so color boundaries themselves go grainy —
+ * recovered-footage texture where the edges roughen, not just the fill. Boils on
+ * an integer time slice like `filmGrain`. Needs `valueNoise`+`hash`. */
+const grainDisplace = /* glsl */ `
+float grainDisplace(vec2 uv, float t, float scale, float amt) {
+  float slice = floor(t * 24.0);
+  float g = valueNoise(uv * scale + vec2(slice * 1.7, slice * 0.9 + 3.1));
+  return amt * (g - 0.5);
+}`;
+
+/** bayer: EXACT ordered-dither (Bayer) threshold matrices via WebGL1-safe
+ * mod-arithmetic (no int arrays, no bit ops). `bayer2/bayer4/bayer8(coord)`
+ * return the true matrix value in [0,1) for the pixel `coord` (pass
+ * `gl_FragCoord.xy`). Threshold a 0..1 value against it for a crisp ordered
+ * dither: `step(bayer8(gl_FragCoord.xy), value)`. Distinct from the header's
+ * `dither8` (a hash banding-KILLER) and from `filmGrain`'s `grainBayer*` (a boil
+ * basis): these are the exact printing matrices — `grainDither` gains a crisper
+ * basis if you wire `bayer8` in. Self-contained. */
+const bayer = /* glsl */ `
+float bayer2i(vec2 c) {
+  vec2 p = mod(floor(c), 2.0);
+  return mod(2.0 * p.x + 3.0 * p.y, 4.0); // matrix [0 2 / 3 1], value 0..3
+}
+float bayer4i(vec2 c) {
+  return 4.0 * bayer2i(mod(c, 2.0)) + bayer2i(floor(c / 2.0)); // 0..15
+}
+float bayer8i(vec2 c) {
+  return 4.0 * bayer4i(mod(c, 4.0)) + bayer2i(floor(c / 4.0)); // 0..63
+}
+float bayer2(vec2 c) { return bayer2i(c) / 4.0; }
+float bayer4(vec2 c) { return bayer4i(c) / 16.0; }
+float bayer8(vec2 c) { return bayer8i(c) / 64.0; }`;
+
+/** liquidMetal(uv, edge, repetition, shiftRed, shiftBlue, t, tint, tintA)->vec3:
+ * Paper's liquid-metal PROCEDURAL material — a chrome stripe ramp bent by an
+ * edge-gradient bump, a per-channel R/B dispersion shift, and a color-burn tint —
+ * evaluated over an SDF-ish shape field `edge` (0..1) the CALLER supplies (a
+ * coverage/bump from `sdf`, `voronoi`, a filament field…). `repetition` = stripe
+ * count, `shiftRed`/`shiftBlue` = dispersion (~0..20 like Paper), `tint`+`tintA` =
+ * the burn tint. Returns a grey chrome material — retint through
+ * `paletteRamp`/`retint`. Drive the bump amount off `u_bassFast`. Skips Paper's
+ * image path (needs WebGL2 textureGrad). Needs `simplexNoise`. */
+const liquidMetal = /* glsl */ `
+// Adapted from Paper Shaders (github.com/paper-design/shaders), Apache-2.0
+float liquidMetalChannel(float c1, float c2, float sp, vec3 w, float blur, float bump, float tint, float tintA) {
+  float ch = mix(c2, c1, smoothstep(0.0, 2.0 * blur, sp));
+  float border = w[0];
+  ch = mix(ch, c2, smoothstep(border, border + 2.0 * blur, sp));
+  border = w[0] + 0.4 * (1.0 - bump) * w[1];
+  ch = mix(ch, c1, smoothstep(border, border + 2.0 * blur, sp));
+  border = w[0] + 0.5 * (1.0 - bump) * w[1];
+  ch = mix(ch, c2, smoothstep(border, border + 2.0 * blur, sp));
+  border = w[0] + w[1];
+  ch = mix(ch, c1, smoothstep(border, border + 2.0 * blur, sp));
+  float gt = (sp - w[0] - w[1]) / w[2];
+  float gradient = mix(c1, c2, smoothstep(0.0, 1.0, gt));
+  ch = mix(ch, gradient, smoothstep(border, border + 0.5 * blur, sp));
+  // Tint via color-burn blending (Paper).
+  ch = mix(ch, 1.0 - min(1.0, (1.0 - ch) / max(tint, 0.0001)), tintA);
+  return ch;
+}
+vec3 liquidMetal(vec2 uv, float edge, float repetition, float shiftRed, float shiftBlue, float t, vec3 tint, float tintA) {
+  float cycleWidth = max(repetition, 0.001);
+  vec2 g = uv - 0.5;
+  float diagBLtoTR = g.x - g.y;
+  // Edge-gradient bump: a soft radial swell weighted up the frame (no fwidth).
+  float bump = pow(clamp(1.8 * length(g), 0.0, 2.0), 1.2);
+  bump = (1.0 - bump) * pow(clamp(uv.y, 0.0, 1.0), 0.3);
+  bump = clamp(bump, 0.0, 1.0);
+  float thin1 = 0.12 / cycleWidth * (1.0 - 0.4 * bump);
+  float thin2 = 0.07 / cycleWidth * (1.0 + 0.4 * bump);
+  float wide = 1.0 - thin1 - thin2;
+  vec3 w = vec3(cycleWidth * thin1, cycleWidth * thin2, wide);
+  float noise = simplexNoise(uv - t);
+  edge += (1.0 - edge) * 0.2 * noise;
+  // Diagonal stripe coordinate bent by the shape edge + bump.
+  float direction = g.x + diagBLtoTR;
+  float edgeBand = smoothstep(0.0, 1.0, edge) * (1.0 - smoothstep(0.0, 1.0, edge));
+  direction -= 2.0 * noise * diagBLtoTR * edgeBand;
+  direction *= (0.1 + (1.1 - edge) * bump);
+  direction *= (0.4 + 0.6 * (1.0 - smoothstep(0.5, 1.0, edge)));
+  direction *= (0.5 + 0.5 * pow(clamp(uv.y, 0.0, 1.0), 2.0));
+  direction *= cycleWidth;
+  direction -= t;
+  // Per-channel R/B dispersion shift.
+  float disp = clamp(1.0 - bump, 0.0, 1.0);
+  float dispRed = (disp - diagBLtoTR) * (shiftRed / 20.0);
+  float dispBlue = (disp * 1.3) * (shiftBlue / 20.0);
+  float blur = 0.07; // small analytic blur (WebGL1: no fwidth)
+  vec3 c1 = vec3(0.98, 0.98, 1.0);
+  vec3 c2 = vec3(0.1, 0.1, 0.1 + 0.1 * smoothstep(0.7, 1.3, g.x + g.y + 1.0));
+  float r = liquidMetalChannel(c1.r, c2.r, fract(direction + dispRed), w, blur, bump, tint.r, tintA);
+  float gc = liquidMetalChannel(c1.g, c2.g, fract(direction), w, blur, bump, tint.g, tintA);
+  float b = liquidMetalChannel(c1.b, c2.b, fract(direction - dispBlue), w, blur, bump, tint.b, tintA);
+  return vec3(r, gc, b);
+}`;
+
+/** tonemap: cap the climax below blowout the sanctioned way — a filmic soft-clip
+ * instead of `min(col, vec3(k))`. `acesFilmic(col)` (Narkowicz ACES approx) or
+ * `reinhardJodie(col)` roll highlights off smoothly so a hot core saturates to
+ * cream without a flat clipped plateau; `liftGammaGain(col, lift, gamma, gain)`
+ * (scalar or vec3 args) is the lift/gamma/gain colour trim for the warm-dark
+ * grade. Apply just before `dither8`. Not from Paper; self-contained. */
+const tonemap = /* glsl */ `
+vec3 acesFilmic(vec3 x) {
+  const float a = 2.51;
+  const float b = 0.03;
+  const float c = 2.43;
+  const float d = 0.59;
+  const float e = 0.14;
+  return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+vec3 reinhardJodie(vec3 c) {
+  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  vec3 tc = c / (1.0 + c);
+  return mix(c / (1.0 + l), tc, tc);
+}
+vec3 liftGammaGain(vec3 col, vec3 lift, vec3 gamma, vec3 gain) {
+  col = col * gain + lift * (1.0 - col);
+  return pow(max(col, 0.0), 1.0 / max(gamma, vec3(1e-3)));
+}
+vec3 liftGammaGain(vec3 col, float lift, float gamma, float gain) {
+  return liftGammaGain(col, vec3(lift), vec3(gamma), vec3(gain));
+}`;
+
+/** noise3: a 3D noise family for the MONOTONIC third-dimension phase advance —
+ * feed a coordinate whose z streams forward on `u_time` and the field ROILS IN
+ * PLACE (evolves without returning) instead of scrolling a frozen 2D texture, so
+ * it breathes without tripping the beat-pull gate (cookbook "roil in place").
+ * `valueNoise3(p)->0..1`, `fbm3(p, octaves)->0..1`, `voronoi3(p)->vec3` (F1, F2,
+ * cellHash), `curl3(p, t)->vec2` (a divergence-free 2D flow from a 3D potential
+ * whose z=t advance keeps the flow forever fresh). Adds `hash33`; needs `hash`
+ * (for `hash13`). Not from Paper; standard technique. */
+const noise3 = /* glsl */ `
+vec3 hash33(vec3 p) {
+  p = vec3(
+    dot(p, vec3(127.1, 311.7, 74.7)),
+    dot(p, vec3(269.5, 183.3, 246.1)),
+    dot(p, vec3(113.5, 271.9, 124.6))
+  );
+  return fract(sin(p) * 43758.5453);
+}
+float valueNoise3(vec3 p) {
+  vec3 i = floor(p);
+  vec3 f = fract(p);
+  vec3 u = f * f * (3.0 - 2.0 * f);
+  float n000 = hash13(i + vec3(0.0, 0.0, 0.0));
+  float n100 = hash13(i + vec3(1.0, 0.0, 0.0));
+  float n010 = hash13(i + vec3(0.0, 1.0, 0.0));
+  float n110 = hash13(i + vec3(1.0, 1.0, 0.0));
+  float n001 = hash13(i + vec3(0.0, 0.0, 1.0));
+  float n101 = hash13(i + vec3(1.0, 0.0, 1.0));
+  float n011 = hash13(i + vec3(0.0, 1.0, 1.0));
+  float n111 = hash13(i + vec3(1.0, 1.0, 1.0));
+  float x00 = mix(n000, n100, u.x);
+  float x10 = mix(n010, n110, u.x);
+  float x01 = mix(n001, n101, u.x);
+  float x11 = mix(n011, n111, u.x);
+  return mix(mix(x00, x10, u.y), mix(x01, x11, u.y), u.z);
+}
+float fbm3(vec3 p, int octaves) {
+  float sum = 0.0;
+  float amp = 0.5;
+  float norm = 0.0;
+  mat3 rot = mat3(0.0, 0.8, 0.6, -0.8, 0.36, -0.48, -0.6, -0.48, 0.64); // decorrelate octaves
+  for (int i = 0; i < 8; i++) {
+    if (i >= octaves) break;
+    sum += amp * valueNoise3(p);
+    norm += amp;
+    p = rot * p * 2.0 + 7.3;
+    amp *= 0.5;
+  }
+  return sum / max(norm, 1e-4);
+}
+vec3 voronoi3(vec3 p) {
+  vec3 n = floor(p);
+  vec3 f = fract(p);
+  float f1 = 8.0;
+  float f2 = 8.0;
+  float id = 0.0;
+  for (int k = -1; k <= 1; k++) {
+    for (int j = -1; j <= 1; j++) {
+      for (int i = -1; i <= 1; i++) {
+        vec3 g = vec3(float(i), float(j), float(k));
+        vec3 o = hash33(n + g);
+        vec3 r = g + o - f;
+        float d = dot(r, r);
+        if (d < f1) { f2 = f1; f1 = d; id = hash13(n + g); }
+        else if (d < f2) { f2 = d; }
+      }
+    }
+  }
+  return vec3(sqrt(f1), sqrt(f2), id);
+}
+// Divergence-free 2D flow from a 3D potential; z=t advances monotonically so the
+// flow roils in place (never returns) instead of scrolling a frozen field.
+vec2 curl3(vec3 p, float t) {
+  float e = 0.01;
+  vec3 P = vec3(p.xy, p.z + t);
+  float dPdy = (fbm3(P + vec3(0.0, e, 0.0), 3) - fbm3(P - vec3(0.0, e, 0.0), 3)) / (2.0 * e);
+  float dPdx = (fbm3(P + vec3(e, 0.0, 0.0), 3) - fbm3(P - vec3(e, 0.0, 0.0), 3)) / (2.0 * e);
+  return vec2(dPdy, -dPdx);
+}`;
+
+/** sdfPresence: the SHAPED-THING vocabulary — put a nameable SUBJECT (a limb, a hull,
+ * a ruin, a creature) in the fragment shader, the "subject with presence" half of the
+ * moodboard formula (a nameable silhouette under heavy abstracting treatment). All
+ * WebGL1-safe (no `round()` — see `sdfRound`). The IQ distance-function corpus, the
+ * sculpting operators, plus the march primitives presence scenes need:
+ *   - creature/limb SDFs:  sdCapsule (segment+radius), sdRoundCone (tapering limb —
+ *                          the best "limb" primitive), sdEllipsoid (a body; a BOUND,
+ *                          march conservatively).
+ *   - 2D silhouette SDFs:  sd2dSegment (a stroke/trunk), sd2dTriangle (a fin/wing/
+ *                          spire) — for the cheap 2.5D layered register.
+ *   - operators:           smax (smooth CARVING — masonry→RUINS, windows in a hull),
+ *                          sminV (vec2 smooth-union returning distance + BLEND factor,
+ *                          so material/emissive can blend where a limb meets a body).
+ *   - domain repetition:   opRepeat / opRepeatLim (the forest/colonnade machine —
+ *                          infinite/limited copies for the price of ONE eval) via the
+ *                          WebGL1-safe `sdfRound` = floor(p/s+0.5). Caveat: with
+ *                          per-cell variation the nearest object can live in a NEIGHBOUR
+ *                          cell; under fog+grain the 1-cell version is usually fine —
+ *                          check 2 cells along the travel axis only if a silhouette pops.
+ *   - shading:             calcNormal4 — the 4-tap TETRAHEDRAL normal (4 map evals vs
+ *                          the kit's 6-tap `calcNormal`); like `raymarch` it needs you
+ *                          to define `float map(vec3 p)` (forward-declared here — the
+ *                          prototype is duplicate-safe if you also compose `raymarch`).
+ *   - march jitter:        ign — standalone interleaved-gradient (blue-noise-ish) value
+ *                          for dithering the ray start (`t0 += stepLen * ign(gl_FragCoord.xy)`)
+ *                          so undersampling reads as grain, not bands (the Light-Years
+ *                          Rule IS the fog-forgiveness). Self-contained. */
+const sdfPresence = /* glsl */ `
+// WebGL1 has no round(): floor(v + 0.5) is the exact substitute for repetition.
+vec3 sdfRound(vec3 v) { return floor(v + 0.5); }
+// Standalone interleaved-gradient noise (blue-noise-ish), for march-start jitter.
+float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
+// Smooth intersection / carving: smax(a,b,k) = -smin(-a,-b,k). Carve fbm from a
+// colonnade for RUINS, or a window from a hull.
+float smax(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (a - b) / k, 0.0, 1.0);
+  return mix(b, a, h) + k * h * (1.0 - h);
+}
+// Smooth union that also returns the BLEND factor (x=distance, y=0..1 blend, 1=all a):
+// blend material where a limb fuses into a body.
+vec2 sminV(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return vec2(mix(b, a, h) - k * h * (1.0 - h), h);
+}
+// Infinite domain repetition (IQ): fold p into one cell of size s.
+vec3 opRepeat(vec3 p, vec3 s) { return p - s * sdfRound(p / s); }
+// Limited repetition: l cells each way from the origin (the forest that ENDS).
+vec3 opRepeatLim(vec3 p, float s, vec3 l) { return p - s * clamp(sdfRound(p / s), -l, l); }
+// 3D capsule: a segment a→b of radius r (limbs, necks, tentacles).
+float sdCapsule(vec3 p, vec3 a, vec3 b, float r) {
+  vec3 pa = p - a, ba = b - a;
+  float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+  return length(pa - ba * h) - r;
+}
+// 3D round cone along +Y: radius r1 at the base, r2 at height h — the tapering limb.
+float sdRoundCone(vec3 p, float r1, float r2, float h) {
+  vec2 q = vec2(length(p.xz), p.y);
+  float b = (r1 - r2) / h;
+  float a = sqrt(max(1.0 - b * b, 0.0));
+  float k = dot(q, vec2(-b, a));
+  if (k < 0.0) return length(q) - r1;
+  if (k > a * h) return length(q - vec2(0.0, h)) - r2;
+  return dot(q, vec2(a, b)) - r1;
+}
+// 3D ellipsoid — a BOUND (not exact); march conservatively. Guarded at the centre.
+float sdEllipsoid(vec3 p, vec3 r) {
+  float k1 = length(p / (r * r));
+  if (k1 < 1e-5) return -min(r.x, min(r.y, r.z));
+  float k0 = length(p / r);
+  return k0 * (k0 - 1.0) / k1;
+}
+// 2D segment (unsigned) — a stroke, a trunk, rigging.
+float sd2dSegment(vec2 p, vec2 a, vec2 b) {
+  vec2 pa = p - a, ba = b - a;
+  float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+  return length(pa - ba * h);
+}
+// 2D triangle (signed) — a fin, a wing membrane, a spire.
+float sd2dTriangle(vec2 p, vec2 p0, vec2 p1, vec2 p2) {
+  vec2 e0 = p1 - p0, e1 = p2 - p1, e2 = p0 - p2;
+  vec2 v0 = p - p0, v1 = p - p1, v2 = p - p2;
+  vec2 pq0 = v0 - e0 * clamp(dot(v0, e0) / dot(e0, e0), 0.0, 1.0);
+  vec2 pq1 = v1 - e1 * clamp(dot(v1, e1) / dot(e1, e1), 0.0, 1.0);
+  vec2 pq2 = v2 - e2 * clamp(dot(v2, e2) / dot(e2, e2), 0.0, 1.0);
+  float s = sign(e0.x * e2.y - e0.y * e2.x);
+  vec2 d = min(
+    min(
+      vec2(dot(pq0, pq0), s * (v0.x * e0.y - v0.y * e0.x)),
+      vec2(dot(pq1, pq1), s * (v1.x * e1.y - v1.y * e1.x))
+    ),
+    vec2(dot(pq2, pq2), s * (v2.x * e2.y - v2.y * e2.x))
+  );
+  return -sqrt(d.x) * sign(d.y);
+}
+// 4-tap tetrahedral normal (IQ) — define your own float map(vec3 p). The prototype is
+// guarded so composing this alongside \`raymarch\` (which also declares map) is legal
+// (GLSL ES rejects a duplicate prototype).
+#ifndef FLUNCLE_MAP_FWD
+#define FLUNCLE_MAP_FWD
+float map(vec3 p);
+#endif
+vec3 calcNormal4(vec3 p) {
+  const vec2 k = vec2(1.0, -1.0);
+  const float e = 0.001;
+  return normalize(
+    k.xyy * map(p + k.xyy * e) +
+    k.yyx * map(p + k.yyx * e) +
+    k.yxy * map(p + k.yxy * e) +
+    k.xxx * map(p + k.xxx * e)
+  );
+}`;
+
+/** glowWithDirt(col, glowColor, glow, uv, t, seed)->vec3: additive light through a
+ * DIRTY medium — the single cheapest "recovered exposure" upgrade (moodboard R8).
+ * Adds the glow, then subtracts dark speckle whose density rises with the light's
+ * luminance ("dirt-in-the-light" — the inverse of the usual grain-hides-in-shadows
+ * habit), so the glow reads as light through emulsion, never a computed orb. Boils on
+ * an integer time slice (keep `t` the constant clock; derive `seed` from u_seed).
+ * Self-contained. */
+const glowWithDirt = /* glsl */ `
+// Cheap clumpy speckle, boiled on an integer time slice (self-contained hash).
+float glowDirtSpeckle(vec2 uv, float t, float seed) {
+  vec2 c = floor(uv * 480.0 + floor(t * 12.0) * 7.13 + seed);
+  return fract(sin(dot(c, vec2(127.1, 311.7))) * 43758.5453123);
+}
+vec3 glowWithDirt(vec3 col, vec3 glowColor, float glow, vec2 uv, float t, float seed) {
+  col += glowColor * glow;                                                 // the additive light
+  float lum = clamp(dot(glowColor, vec3(0.299, 0.587, 0.114)) * glow, 0.0, 1.0);
+  float n = glowDirtSpeckle(uv, t, seed);
+  float dirt = step(0.82 - 0.30 * lum, n);                                  // more specks where hotter
+  return col - glowColor * (0.28 * glow) * dirt;                            // dark motes inside the glow
+}`;
+
+/** hiddenLine(y, h, peak, thickness, aa)->float: hidden-line occlusion for a stacked-
+ * ridge field (the waveform-ridge / Unknown Pleasures move). Occlusion = solidity: a
+ * line drawn only where it clears every NEARER line flips a chart into terrain. March
+ * the lines FRONT-to-back; maintain a running-max `peak` (inout) across the loop and
+ * call this per line at the pixel's column — it returns the stroke coverage gated by
+ * visibility (drawn only where the displaced height `h` rises above `peak`) and raises
+ * `peak`. `thickness`/`aa` in the same units as `y`/`h`. Self-contained. */
+const hiddenLineOcclusion = /* glsl */ `
+float hiddenLine(float y, float h, inout float peak, float thickness, float aa) {
+  float stroke = smoothstep(thickness + aa, thickness - aa, abs(y - h));
+  float visible = step(peak, h);   // shows only where it clears every nearer line
+  peak = max(peak, h);
+  return stroke * visible;
+}`;
+
+/** rampRetint(src)->vec3: the strict monotonic luma→hue Retint (the thermal-remap of
+ * the moodboard). Recolours by LUMINANCE through the palette ramp, then RE-IMPOSES the
+ * source luma so brightness ORDER is exactly preserved — hue may go anywhere the ramp
+ * allows, luma may never reorder. This is the legibility guarantee under the most
+ * extreme colour abuse (the mask survives a heatmap). Stronger than `retint` (which
+ * takes the ramp's luma as-is). Needs `paletteRamp`. */
+const rampRetint = /* glsl */ `
+vec3 rampRetint(vec3 src) {
+  float l = dot(src, vec3(0.299, 0.587, 0.114));
+  vec3 hue = paletteRamp(l);                          // the warm-dark→cream hue arc
+  float hl = dot(hue, vec3(0.299, 0.587, 0.114));
+  return hue * (hl > 1e-4 ? l / hl : 1.0);            // rescale so output luma == input luma
+}`;
+
 /**
  * The GLSL snippet library. Spread the strings you need into a fragment shader
  * ahead of `void main()`. Mind dependencies: `valueNoise`/`simplexNoise` need
  * `hash`; `fbm` needs `valueNoise`; `filmGrain` needs `valueNoise`+`hash`.
  */
 export const GLSL = {
+  /** EXACT ordered-dither Bayer matrices bayer2/bayer4/bayer8(coord)->[0,1). WebGL1-safe mod-arithmetic; threshold with step(). Self-contained. */
+  bayer,
+  /** True water caustics caustic(uv,t,scale,iterations)->0..~ (6-iter rotate+sin/cos, squared). Self-contained. */
+  caustic,
   /** Per-channel UV offset helpers for an edge-growing RGB chromatic split. */
   chromaticAberration,
+  /** Inverse-distance (1/d^3.5) moving color spots colorSpots(uv,colors[6],count,t)->vec3 + colorSpotPosition/colorSpotSwirl (Lissajous). Self-contained. */
+  colorSpots,
   /** Divergence-free 2D flow field curlNoise(p)->vec2 (organic advection). Needs valueNoise. */
   curlNoise,
   /** IQ domain warp domainWarp(p, octaves)->0..1 (marbled flowing fields). Needs fbm. */
@@ -434,22 +997,44 @@ export const GLSL = {
   fbm,
   /** Organic emulsion-clumping film grain. Two overloads: filmGrain(col,uv,time,float) (legacy) + filmGrain(col,uv,time,GrainOpts) (full knob set, amount→0=off). Needs valueNoise+hash. */
   filmGrain,
+  /** Additive light through a dirty medium glowWithDirt(col,glowColor,glow,uv,t,seed)->vec3 — dark speckle inside the glow, density ∝ luminance (moodboard R8). Self-contained. */
+  glowWithDirt,
+  /** Signed field displacement grainDisplace(uv,t,scale,amt)->float — grain that roughens BOUNDARIES (add to a shape/threshold/coord). Needs valueNoise+hash. */
+  grainDisplace,
   /** Six named GrainOpts presets (fineEmulsion/coarseSilver/halftone/chemicalDye/vhsScanline/dither) for the filmGrain knob set. Needs filmGrain + u_seed. */
   grainFamilies,
   /** Deterministic value hashes: hash21, hash22, hash13. Base for all noise. */
   hash,
+  /** Hidden-line occlusion hiddenLine(y,h,peak,thickness,aa)->float for stacked-ridge terrain (Unknown Pleasures) — front-to-back running-max flips a chart into terrain. Self-contained. */
+  hiddenLineOcclusion,
+  /** Procedural liquid-metal material liquidMetal(uv,edge,repetition,shiftRed,shiftBlue,t,tint,tintA)->vec3 over a caller shape field. Needs simplexNoise. */
+  liquidMetal,
+  /** Glowing organic filament web neuroWeb(uv,t,iterations)->0..~ (15-iter self-interfering sine). Self-contained. */
+  neuroWeb,
+  /** 3D noise family valueNoise3/fbm3/voronoi3/curl3 — the monotonic z-phase advance (roil in place). Adds hash33; needs hash. */
+  noise3,
+  /** OKLab/OKLCH conversions + perceptual paletteRampOk(t)->vec3 (short-arc hue mix over u_palette). Self-contained. */
+  oklab,
   /** The Retint gradient-map paletteRamp(t)->vec3 + retint(src) over u_palette. */
   paletteRamp,
   /** Kaleidoscope wedge fold polarFold(uv, segments)->vec2 around center. */
   polarFold,
+  /** Strict monotonic luma→hue Retint rampRetint(src)->vec3 — recolour by luma, re-impose luma so brightness order never reorders (thermal remap). Needs paletteRamp. */
+  rampRetint,
   /** Sphere-tracer raymarch(ro,rd,tmax) + calcNormal(p); define your own float map(vec3). */
   raymarch,
   /** Signed-distance primitives sdCircle/sdBox + smooth union smin. */
   sdf,
   /** 3D SDF primitives sdSphere3/sdBox3/sdTorus3 + rot2, for raymarched scenes. */
   sdf3d,
+  /** Presence SDF kit: sdCapsule/sdRoundCone/sdEllipsoid + 2D sd2dSegment/sd2dTriangle, smax, vec2 sminV, opRepeat/opRepeatLim (WebGL1 sdfRound), calcNormal4 (needs map), ign. WebGL1-safe. */
+  sdfPresence,
   /** Gradient (simplex-style) noise simplexNoise(p)->~-1..1. Needs hash. */
   simplexNoise,
+  /** N-iteration sine swirl cascade swirlWarp(uv,t,swirl,iterations)->vec2 (cheaper, more liquid domainWarp). Self-contained. */
+  swirlWarp,
+  /** Filmic tonemap acesFilmic/reinhardJodie + liftGammaGain(col,lift,gamma,gain) — cap the climax, not min(). Self-contained. */
+  tonemap,
   /** Smooth bilinear value noise valueNoise(p)->0..1. Needs hash. */
   valueNoise,
   /** Radial darkening multiplier vignette(uv, radius, softness)->0..1. */

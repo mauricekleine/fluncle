@@ -11,13 +11,13 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { siSpotify } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
-import { Button } from "@/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Switch } from "@/components/ui/switch";
+import { Button } from "@fluncle/ui/components/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@fluncle/ui/components/popover";
+import { Switch } from "@fluncle/ui/components/switch";
 import { siteUrl } from "@/lib/fluncle-links";
 import { formatDateLong } from "@/lib/format";
 import { activeSliceForOffset } from "@/lib/observation-slices";
-import { videoClipCrop, videoCrop, videoCropPoster } from "@/lib/media";
+import { videoClipCrop, videoCrop, videoCropPoster, videoVersion } from "@/lib/media";
 import {
   breatherDimAt,
   OFFSET_SNAP_GRID_MS,
@@ -132,11 +132,14 @@ function silentVideoUrl(track: Track, desktop: boolean, startSeconds?: number): 
   }
 
   const orientation = desktop ? "landscape" : "portrait";
+  // The video vintage as the `?v` token — a re-render bumps videoSquaredAt, so MT
+  // derives off the new master (media.ts).
+  const version = videoVersion(track.videoSquaredAt);
 
   // ONE combined transform (crop + audio-strip [+ clip]), never nested — see media.ts.
   return startSeconds && startSeconds > 0
-    ? videoClipCrop(track.logId, orientation, startSeconds)
-    : videoCrop(track.logId, orientation, undefined, true);
+    ? videoClipCrop(track.logId, orientation, startSeconds, undefined, 60, version)
+    : videoCrop(track.logId, orientation, undefined, true, version);
 }
 
 /** The cheap cropped poster frame at the join offset (0 for a head start). */
@@ -145,7 +148,13 @@ function silentPosterUrl(track: Track, desktop: boolean, atSeconds = 0): string 
     return undefined;
   }
 
-  return videoCropPoster(track.logId, desktop ? "landscape" : "portrait", undefined, atSeconds);
+  return videoCropPoster(
+    track.logId,
+    desktop ? "landscape" : "portrait",
+    undefined,
+    atSeconds,
+    videoVersion(track.videoSquaredAt),
+  );
 }
 
 type Playhead = {

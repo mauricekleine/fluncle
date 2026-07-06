@@ -819,6 +819,57 @@ describe("oRPC presign_track_video_uploads (POST .../video/uploads)", () => {
     expect(presignUploads).not.toHaveBeenCalled();
   });
 
+  it("signs a PLATES-ONLY set without footage (the plate-lane pre-upload)", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+    presignUploads.mockResolvedValueOnce([
+      { contentType: "image/png", key: "004.7.2I/plate.png", url: "https://r2/put?sig=p" },
+      {
+        contentType: "image/png",
+        key: "004.7.2I/plate.background.png",
+        url: "https://r2/put?sig=b",
+      },
+    ]);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      post("/video/uploads", AGENT_TOKEN, { fields: ["plate", "plate-background"] }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toEqual({
+      logId: "004.7.2I",
+      ok: true,
+      trackId: TRACK_ID,
+      uploads: [
+        {
+          contentType: "image/png",
+          field: "plate",
+          key: "004.7.2I/plate.png",
+          url: "https://r2/put?sig=p",
+        },
+        {
+          contentType: "image/png",
+          field: "plate-background",
+          key: "004.7.2I/plate.background.png",
+          url: "https://r2/put?sig=b",
+        },
+      ],
+    });
+  });
+
+  it("a plate MIXED with a non-plate footage-less field still 400s `no_footage`", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      post("/video/uploads", OPERATOR_TOKEN, { fields: ["plate", "cover"] }),
+    );
+
+    expect(response?.status).toBe(400);
+    expect(((await readJson(response)) as { code: string }).code).toBe("no_footage");
+    expect(presignUploads).not.toHaveBeenCalled();
+  });
+
   it("400s `no_fields` for an empty request", async () => {
     getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
 
@@ -852,6 +903,7 @@ describe("oRPC finalize_track_video (POST .../video/finalize)", () => {
       post("/video/finalize", OPERATOR_TOKEN, {
         squared: true,
         videoGrain: "grainCoarseSilver",
+        videoRegister: "abstract",
         videoVehicle: "submarine",
       }),
     );
@@ -865,6 +917,7 @@ describe("oRPC finalize_track_video (POST .../video/finalize)", () => {
     const [, update] = updateTrack.mock.calls[0] as [string, Record<string, unknown>];
     expect(update.videoVehicle).toBe("submarine");
     expect(update.videoGrain).toBe("grainCoarseSilver");
+    expect(update.videoRegister).toBe("abstract");
     expect(update.videoModel).toBe("anthropic/claude-opus-4-8");
     expect(update.videoModelReasoning).toBe("high");
     expect(typeof update.videoSquaredAt).toBe("string");
@@ -1062,6 +1115,17 @@ describe("oRPC list_tracks_admin (GET /admin/tracks)", () => {
     expect(opts.hasNote).toBe(false);
   });
 
+  it("parses the key-backfill queue filter (hasKey=false)", async () => {
+    listTracks.mockResolvedValueOnce({ totalCount: 0, tracks: [] });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(adminGet("?hasKey=false&order=asc", AGENT_TOKEN));
+
+    expect(response?.status).toBe(200);
+    const [opts] = listTracks.mock.calls[0] as [Record<string, unknown>];
+    expect(opts.hasKey).toBe(false);
+  });
+
   it("leaves the new filters undefined when absent (tri-state)", async () => {
     listTracks.mockResolvedValueOnce({ totalCount: 0, tracks: [] });
 
@@ -1071,8 +1135,69 @@ describe("oRPC list_tracks_admin (GET /admin/tracks)", () => {
     expect(response?.status).toBe(200);
     const [opts] = listTracks.mock.calls[0] as [Record<string, unknown>];
     expect(opts.hasContext).toBeUndefined();
+    expect(opts.hasKey).toBeUndefined();
     expect(opts.hasNote).toBeUndefined();
     expect(opts.hasObservation).toBeUndefined();
+  });
+});
+
+// ── get_track_admin — admin tier (the single-finding by-coordinate lookup) ───
+function getOne(id: string, token: string | undefined): Request {
+  const headers: Record<string, string> = {};
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  return new Request(`https://www.fluncle.com/api/v1/admin/tracks/${encodeURIComponent(id)}`, {
+    headers,
+  });
+}
+
+describe("oRPC get_track_admin (GET /admin/tracks/{trackId})", () => {
+  it("401s with no admin token (the adminAuth tier)", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(getOne(TRACK_ID, undefined));
+
+    expect(response?.status).toBe(401);
+    expect(getTrackByIdOrLogId).not.toHaveBeenCalled();
+  });
+
+  it("lets the AGENT read one finding and returns the full admin envelope", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(LIST_ITEM);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(getOne(TRACK_ID, AGENT_TOKEN));
+
+    expect(response?.status).toBe(200);
+    // The authoritative single read: the real finding resolves in full (the incident
+    // was a live finding misread as nonexistent). The lookup accepts an id OR a Log ID.
+    expect(await readJson(response)).toEqual({ ok: true, track: LIST_ITEM });
+    expect(getTrackByIdOrLogId).toHaveBeenCalledWith(TRACK_ID);
+  });
+
+  it("resolves by Log ID too (not just the Spotify trackId)", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(LIST_ITEM);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(getOne("004.7.2I", OPERATOR_TOKEN));
+
+    expect(response?.status).toBe(200);
+    expect(getTrackByIdOrLogId).toHaveBeenCalledWith("004.7.2I");
+  });
+
+  it("404s `not_found` for a genuinely missing coordinate (distinct from auth/validation)", async () => {
+    getTrackByIdOrLogId.mockResolvedValueOnce(undefined);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(getOne("000.0.0X", AGENT_TOKEN));
+
+    expect(response?.status).toBe(404);
+    const body = (await readJson(response)) as { code: string; message: string };
+    // The canonical not_found — a distinct code the caller can trust means "no such
+    // finding", never confused with a 401/403 auth failure or a malformed request.
+    expect(body.code).toBe("not_found");
+    expect(body.message).toBe("No track with id 000.0.0X");
   });
 });
 

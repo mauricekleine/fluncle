@@ -1,8 +1,4 @@
 @import "tailwindcss";
-@import "shadcn/tailwind.css";
-/* Canon tokens (DESIGN.md → @fluncle/tokens → tokens.css); the single source of
-   the palette hexes. :root below only maps them onto the shadcn variable names. */
-@import "@fluncle/tokens/tokens.css";
 
 /* Fumadocs UI, folded into THIS one global stylesheet (the only sheet the app
    links, from __root) and compiled by the single @tailwindcss/vite instance —
@@ -22,6 +18,19 @@
    inside the docs subtree (DESIGN.md, the Retint Rule). */
 @import "fumadocs-ui/css/neutral.css";
 @import "fumadocs-ui/css/preset.css";
+
+/* The shared design system: the Shadcn base preset + the Nostalgic Cosmos token
+   bridge (the @theme mapping, the canon :root, and the @layer base reset),
+   extracted to @fluncle/ui so every web surface consumes one system instead of
+   re-inventing it. Imported after the Fumadocs sheets so its Shadcn base + base
+   reset keep winning where the two overlap — the values resolve to the same canon
+   hexes via the fd bridge below, so the render is unchanged. */
+@import "@fluncle/ui/globals.css";
+/* Tailwind v4 auto-detects source files from THIS stylesheet's own tree only, so
+   register the shared package's component sources explicitly; otherwise the
+   utility classes used solely inside the package components (e.g. the button
+   group / size data-attr variants) never generate. Relative to this file. */
+@source "../../../packages/ui/src";
 
 /* The token bridge: re-point every `--color-fd-*` onto Fluncle's canon palette
    (DESIGN.md, the Nostalgic Cosmos). This `:root` block follows neutral.css in
@@ -52,14 +61,6 @@
   --color-fd-info: #ffd057;
   --color-fd-overlay: #090a0bcc;
 }
-
-/* Fluncle is dark-only: the palette lives once in :root (no second theme).
-   Tailwind v4's default would make `dark:` track `prefers-color-scheme`, so
-   shadcn components' `dark:` overrides fired only on OS-dark devices and diverged
-   the render (e.g. outline buttons lost their border). Bind `dark:` to a `.dark`
-   ancestor instead — one we never add — so every `dark:` utility stays inert and
-   the single intended theme renders identically on every device. */
-@custom-variant dark (&:where(.dark, .dark *));
 
 /* Oxanium variable font (SIL OFL), self-hosted; one file covers weights 200-800. */
 @font-face {
@@ -103,85 +104,6 @@
   font-weight: 700;
   font-display: swap;
   src: url("/fonts/monaspace-krypton-700.woff2") format("woff2");
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-destructive: var(--destructive);
-  --color-border: var(--border);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
-  --color-chart-1: var(--chart-1);
-  --color-chart-2: var(--chart-2);
-  --color-chart-3: var(--chart-3);
-  --color-chart-4: var(--chart-4);
-  --color-chart-5: var(--chart-5);
-  --color-sidebar: var(--sidebar);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-ring: var(--sidebar-ring);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
-}
-
-:root {
-  /* Dark-only: keep UA-rendered chrome (scrollbars, form controls, autofill)
-     dark regardless of the device's OS appearance setting. */
-  color-scheme: dark;
-  --radius: var(--rounded-lg);
-  --background: var(--deep-field);
-  --foreground: var(--starlight-cream);
-  --card: var(--sleeve-black);
-  --card-foreground: var(--starlight-cream);
-  --popover: var(--sleeve-black);
-  --popover-foreground: var(--starlight-cream);
-  --primary: var(--eclipse-gold);
-  --primary-foreground: var(--ink-on-gold);
-  --secondary: var(--tape-black);
-  --secondary-foreground: var(--starlight-cream);
-  --muted: var(--dust-veil);
-  --muted-foreground: var(--stardust);
-  --accent: var(--gold-veil);
-  --accent-foreground: var(--eclipse-glow);
-  --destructive: var(--reentry-red);
-  --border: var(--dust-line);
-  --input: var(--tape-black);
-  --ring: var(--eclipse-gold);
-  --chart-1: var(--eclipse-gold);
-  --chart-2: var(--stardust);
-  --chart-3: var(--reentry-red);
-  --chart-4: var(--eclipse-glow);
-  --chart-5: var(--stardust);
-  --sidebar: var(--sleeve-black);
-  --sidebar-foreground: var(--starlight-cream);
-  --sidebar-primary: var(--eclipse-gold);
-  --sidebar-primary-foreground: var(--ink-on-gold);
-  --sidebar-accent: var(--gold-veil);
-  --sidebar-accent-foreground: var(--eclipse-glow);
-  --sidebar-border: var(--dust-line);
-  --sidebar-ring: var(--eclipse-gold);
 }
 
 /* The Light-Years grain architecture (web-overhaul RFC §6): dense grain lives
@@ -1081,6 +1003,432 @@ body::before {
   margin: 0 auto;
   object-fit: cover;
   width: min(100%, 20rem);
+}
+
+/* The position:relative stage every `<Video.Surface>` mounts the element inside —
+   it's what lets the per-surface chrome (the crop frame, the energy lane) and the
+   auto-hiding overlay controls sit OVER the same `<video>`. */
+.video-stage {
+  position: relative;
+}
+
+/* The mixtape set player: the branded scrubber-driven video for a ~72-min set
+   (the finding footage is play/pause-only). Dark, warm-neutral; the scrubber
+   rides the Stardust → Starlight-Cream ramp (no galaxy tints — they fail AA on
+   the dark plate), the play/pause is the one Eclipse-Gold light (One Sun). The
+   transport rides as an auto-hiding overlay over the frame (the /log polish). */
+.mixtape-player {
+  margin: 0 auto;
+  width: min(100%, 34rem);
+}
+
+/* Clip the bottom overlay scrim to the player's rounded corners. */
+.mixtape-stage {
+  border-radius: var(--rounded-lg);
+  overflow: hidden;
+}
+
+.mixtape-player-media {
+  aspect-ratio: 16 / 9;
+  background: var(--sleeve-black);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-lg);
+  display: block;
+  object-fit: cover;
+  width: 100%;
+}
+
+.mixtape-player-toggle {
+  flex: none;
+}
+
+.mixtape-player-time {
+  color: var(--stardust);
+  flex: none;
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* The scrubber: a click/drag seek bar on the VibeMap pointer model. The fill +
+   thumb track the video clock (content motion) with no transition, so they keep
+   moving under reduced motion; only the focus/hover lift is eased + gated. */
+.video-scrubber {
+  cursor: pointer;
+  flex: 1 1 auto;
+  min-width: 0;
+  outline: none;
+  padding-block: 0.6rem;
+  position: relative;
+  touch-action: none;
+}
+
+.video-scrubber-track {
+  /* The unfilled rail: warm Stardust, lifted enough to read the full seekable
+     length before any fill, with a Dust-Line hairline (the system's one edge
+     treatment) so the empty rail stays discoverable. The state indicators (fill +
+     thumb, Starlight Cream) carry the affordance and clear AA 3:1 on their own. */
+  background: color-mix(in oklch, var(--stardust) 45%, transparent);
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px var(--dust-line);
+  height: 4px;
+  overflow: hidden;
+  width: 100%;
+}
+
+.video-scrubber-fill {
+  background: var(--starlight-cream);
+  height: 100%;
+}
+
+.video-scrubber-thumb {
+  background: var(--starlight-cream);
+  border-radius: 999px;
+  height: 12px;
+  pointer-events: none;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  transition: scale 150ms ease-out;
+  width: 12px;
+}
+
+.video-scrubber:hover .video-scrubber-thumb,
+.video-scrubber:focus-visible .video-scrubber-thumb {
+  scale: 1.25;
+}
+
+.video-scrubber:focus-visible .video-scrubber-thumb {
+  box-shadow: 0 0 0 4px color-mix(in oklch, var(--eclipse-gold) 50%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .video-scrubber-thumb {
+    transition: none;
+  }
+
+  .video-scrubber:hover .video-scrubber-thumb,
+  .video-scrubber:focus-visible .video-scrubber-thumb {
+    scale: 1;
+  }
+}
+
+/* Fluncle Studio — the clip editor (docs/fluncle-studio-rfc.md Unit E). Warm-neutral
+   ink ramp throughout (Stardust → Starlight Cream); Eclipse Gold is reserved for the
+   Create-clip action only (the One Sun). Pointer/clock-tracked values (the playhead,
+   the crop window, the regions) are CONTENT, so they carry no transition and nothing
+   is reduced-motion-gated — the VibeMap precedent. */
+
+/* The hero preview stage: the landscape set rendition with the 9:16 framing overlay
+   on top. The wrapper takes the rendition's intrinsic aspect (set inline) so the
+   crop overlay maps 1:1 onto source pixels with no letterbox. */
+.studio-stage {
+  background: var(--sleeve-black);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-lg);
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+}
+
+.studio-stage-media {
+  display: block;
+  height: 100%;
+  inset: 0;
+  object-fit: cover;
+  position: absolute;
+  width: 100%;
+}
+
+/* The framing rect: bright 9:16 keep window between two dimming scrims. */
+.studio-crop {
+  cursor: ew-resize;
+  inset: 0;
+  position: absolute;
+  touch-action: none;
+}
+
+.studio-crop-scrim {
+  background: color-mix(in oklch, var(--deep-field) 62%, transparent);
+  bottom: 0;
+  position: absolute;
+  top: 0;
+}
+
+.studio-crop-window {
+  border: 2px solid var(--starlight-cream);
+  border-radius: var(--rounded-sm);
+  bottom: 0;
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--deep-field) 70%, transparent);
+  position: absolute;
+  top: 0;
+}
+
+.studio-crop-label {
+  background: color-mix(in oklch, var(--deep-field) 70%, transparent);
+  border-radius: var(--rounded-sm);
+  color: var(--starlight-cream);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  left: 0.35rem;
+  letter-spacing: -0.01em;
+  padding: 0.05rem 0.3rem;
+  position: absolute;
+  top: 0.35rem;
+}
+
+.studio-time {
+  color: var(--stardust);
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* The energy lane: the set loudness curve + the playhead + the three region
+   families. Click seeks; a horizontal drag paints an in/out band. */
+.studio-lane {
+  background: var(--tape-black);
+  border: 1px solid var(--dust-line);
+  border-radius: var(--rounded-md);
+  cursor: pointer;
+  height: 96px;
+  overflow: hidden;
+  position: relative;
+  touch-action: none;
+  width: 100%;
+}
+
+.studio-lane-svg {
+  height: 100%;
+  inset: 0;
+  position: absolute;
+  width: 100%;
+}
+
+.studio-lane-curve {
+  fill: color-mix(in oklch, var(--stardust) 55%, transparent);
+}
+
+.studio-lane-curve-played {
+  fill: color-mix(in oklch, var(--starlight-cream) 80%, transparent);
+}
+
+.studio-lane-flat {
+  stroke: color-mix(in oklch, var(--stardust) 60%, transparent);
+  stroke-width: 2;
+}
+
+/* Region bands span the full lane height. Colour governance: dashed Stardust =
+   suggestion candidate; Gold-Veil = committed clip; dashed Starlight-Cream = the
+   active hand-pick band. */
+.studio-region {
+  bottom: 0;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+}
+
+.studio-region-suggestion {
+  background: color-mix(in oklch, var(--stardust) 10%, transparent);
+  border-left: 1px dashed color-mix(in oklch, var(--stardust) 85%, transparent);
+  border-right: 1px dashed color-mix(in oklch, var(--stardust) 85%, transparent);
+}
+
+.studio-region-clip {
+  /* The committed band is the sanctioned Gold-Veil confirmation tint (light, not a
+     surface). Its edges stay a quiet Dust Line so Create remains the one saturated
+     sun on the lane (The One Sun Rule). */
+  background: var(--gold-veil);
+  border-left: 1px solid var(--dust-line);
+  border-right: 1px solid var(--dust-line);
+}
+
+.studio-region-band {
+  background: color-mix(in oklch, var(--starlight-cream) 12%, transparent);
+  border-left: 1px dashed var(--starlight-cream);
+  border-right: 1px dashed var(--starlight-cream);
+}
+
+/* The playhead — Starlight Cream, clock-tracked content (no transition). */
+.studio-playhead {
+  background: var(--starlight-cream);
+  bottom: 0;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  width: 2px;
+}
+
+/* Cue pins — one per marked member's start_ms. A thin static Stardust tick with a
+   brighter Stardust notch at the top: warm-neutral and static, so the moving 2px
+   Starlight-Cream playhead stays the ONE cream mark on the lane (they never merge even
+   when a cue sits under the playhead). Distinct from the translucent suggestion/clip
+   bands too. An out-of-order cue reddens (the same Reentry-Red warning the rail shows). */
+.studio-cue-tick {
+  background: color-mix(in oklch, var(--stardust) 55%, transparent);
+  bottom: 0;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  width: 1px;
+}
+
+.studio-cue-tick::before {
+  background: var(--stardust);
+  border-radius: 1px;
+  content: "";
+  height: 5px;
+  left: 50%;
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  width: 5px;
+}
+
+.studio-cue-tick[data-out-of-order="true"] {
+  background: color-mix(in oklch, var(--destructive) 75%, transparent);
+}
+
+.studio-cue-tick[data-out-of-order="true"]::before {
+  background: var(--destructive);
+}
+
+/* Oxanium tabular numerals for the cue rail (positions + times), matching the studio
+   time readout — the DESIGN.md numeral convention. */
+.studio-numeral {
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* A shortcut hint chip on the toolbar buttons. Kept in the system sans (the One
+   Voice Rule reserves mono for the terminal surfaces, not an admin editor). */
+.studio-kbd {
+  background: color-mix(in oklch, var(--tape-black) 80%, transparent);
+  border: 1px solid var(--dust-line);
+  border-radius: var(--rounded-sm);
+  color: var(--stardust);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  margin-left: 0.35rem;
+  padding: 0 0.3rem;
+}
+
+.studio-kbd-on-gold {
+  background: color-mix(in oklch, var(--ink-on-gold) 18%, transparent);
+  border-color: color-mix(in oklch, var(--ink-on-gold) 30%, transparent);
+  color: var(--ink-on-gold);
+}
+
+/* The clip library (Unit G) — a cross-set grid of 9:16 poster tiles. The stage is a
+   portrait window on the warm dark ground; a done clip shows its poster (revealing an
+   inline preview on play), a pending clip shows the quiet cutting placeholder. */
+.clip-stage {
+  align-items: center;
+  aspect-ratio: 9 / 16;
+  background: var(--sleeve-black);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+}
+
+.clip-stage-media {
+  height: 100%;
+  inset: 0;
+  object-fit: cover;
+  position: absolute;
+  width: 100%;
+}
+
+/* The play affordance over a poster — a quiet cream glyph that ignites to Eclipse
+   Glow on hover/focus (the Ignition Rule; never a dim). */
+.clip-stage-play {
+  align-items: center;
+  background: color-mix(in oklch, var(--deep-field) 55%, transparent);
+  border-radius: 9999px;
+  color: var(--starlight-cream);
+  display: flex;
+  height: 2.75rem;
+  justify-content: center;
+  position: relative;
+  transition:
+    color 150ms ease-out,
+    background-color 150ms ease-out;
+  width: 2.75rem;
+}
+
+.clip-stage:hover .clip-stage-play,
+.clip-stage:focus-visible .clip-stage-play {
+  background: color-mix(in oklch, var(--deep-field) 65%, transparent);
+  color: var(--eclipse-glow, var(--primary));
+}
+
+.clip-stage:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.clip-stage-pending {
+  color: var(--stardust);
+}
+
+/* The auto-hiding overlay transport (`<Video.Controls overlay>`), pinned along the
+   bottom of any video stage over a near-solid scrim so the cream scrubber + gold play
+   button clear AA against arbitrary (including bright) footage. The band stays opaque
+   across the controls' own height and fades only in its top third, so nothing sits over
+   a transparent stretch (the Legible Sky Rule).
+
+   Auto-hide: `data-visible="false"` (driven by Root: PLAYING and idle) fades it out;
+   hovering the stage or moving keyboard focus into it brings it back, so it never hides
+   a control the pointer or focus is on. The fade itself is reduced-motion-gated — the
+   show/hide collapses to an instant toggle. */
+.video-overlay-controls {
+  align-items: center;
+  background: linear-gradient(
+    to top,
+    color-mix(in oklch, var(--deep-field) 88%, transparent) 0%,
+    color-mix(in oklch, var(--deep-field) 88%, transparent) 68%,
+    transparent 100%
+  );
+  bottom: 0;
+  display: flex;
+  gap: 0.5rem;
+  left: 0;
+  opacity: 1;
+  padding: 0.5rem 0.5rem 0.6rem;
+  position: absolute;
+  right: 0;
+  transition: opacity 180ms ease-out;
+}
+
+.video-overlay-controls[data-visible="false"] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.video-stage:hover .video-overlay-controls,
+.video-stage:focus-within .video-overlay-controls {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clip-stage-play {
+    transition: none;
+  }
+
+  .video-overlay-controls {
+    transition: none;
+  }
 }
 
 .log-definition {
@@ -2363,17 +2711,34 @@ body::before {
   --font-mono: "Monaspace Krypton", ui-monospace, "SF Mono", Menlo, monospace;
 }
 
-@layer base {
-  * {
-    @apply border-border outline-ring/50;
-  }
+/* The admin workspace sidebar (docs/admin-shell.md): its own pane sitting
+   directly on the cosmos (One Pane), in the plate's glass grammar — a
+   translucent Sleeve-Black tint that blurs the starfield behind it. Browsers
+   without backdrop-filter get the more opaque tint (Legible Sky holds either
+   way). The mobile sheet stays opaque like every floating dialog surface. */
+[data-slot="sidebar-inner"] {
+  background: color-mix(in oklch, var(--sidebar) 86%, transparent);
+}
 
-  body {
-    @apply bg-background text-foreground;
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  [data-slot="sidebar-inner"] {
+    -webkit-backdrop-filter: blur(18px) saturate(125%);
+    backdrop-filter: blur(18px) saturate(125%);
+    background: color-mix(in oklch, var(--sidebar) 55%, transparent);
   }
+}
 
-  button:not(:disabled),
-  [role="button"]:not(:disabled) {
-    cursor: pointer;
-  }
+/* The admin wordmark — the sidebar's nameplate, the brand mark at instrument
+   size (Oxanium caps like the home nameplate, dialled down to a label; The One
+   Voice Rule: Oxanium speaks only for the brand). */
+.admin-wordmark {
+  color: var(--starlight-cream);
+  display: block;
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  line-height: 1.2;
+  text-transform: uppercase;
+  white-space: nowrap;
 }

@@ -1,36 +1,21 @@
 import {
-  type CueEntry,
-  type MixtapeCreateResponse,
-  type MixtapeDeleteResponse,
-  type MixtapeDTO,
   type MixtapeMember,
-  type MixtapeMembersRequest,
-  type MixtapePublishResponse,
   type MixtapeRequestBody,
+  type MixtapeSocialShowResponse,
   type MixtapeUpdateResponse,
   type MixtapesResponse,
 } from "@fluncle/contracts";
-import { existsSync, readFileSync } from "node:fs";
-import {
-  adminApiDelete,
-  adminApiGet,
-  adminApiPost,
-  adminApiPut,
-  adminApiPatch,
-  publicApiGet,
-} from "../api";
+import { parseDuration } from "@fluncle/contracts/util";
+import { adminApiGet, adminApiPatch, publicApiGet } from "../api";
+import { type MixtapeListItem, mixtapeGetCommand, mixtapeListCommand } from "./mixtape-api";
 import { CliError } from "../output";
 
-export type MixtapeListItem = MixtapeDTO;
-export type MixtapeMemberItem = MixtapeMember;
+// Re-exported from the leaf `mixtape-api` module so existing CLI import sites keep
+// resolving these from `./mixtapes` (the cycle-breaking split in section D).
+export { mixtapeGetCommand, mixtapeListCommand };
+export type { MixtapeListItem };
 
-export type MixtapeCreateOptions = {
-  durationMs?: string;
-  json: boolean;
-  note?: string;
-  recordedAt?: string;
-  soundcloudUrl?: string;
-};
+export type MixtapeMemberItem = MixtapeMember;
 
 export type MixtapeUpdateOptions = {
   durationMs?: string;
@@ -40,21 +25,10 @@ export type MixtapeUpdateOptions = {
   soundcloudUrl?: string;
 };
 
-export type MixtapeMembersOptions = {
-  from?: string;
-  json: boolean;
-};
-
 export async function mixtapesCommand(): Promise<MixtapeListItem[]> {
   const response = await publicApiGet<MixtapesResponse>("/api/mixtapes");
 
   return response.mixtapes;
-}
-
-export async function mixtapeCreateCommand(
-  options: MixtapeCreateOptions,
-): Promise<MixtapeCreateResponse> {
-  return adminApiPost<MixtapeCreateResponse>("/api/admin/mixtapes", buildBody(options));
 }
 
 export async function mixtapeUpdateCommand(
@@ -65,50 +39,6 @@ export async function mixtapeUpdateCommand(
     `/api/admin/mixtapes/${encodeURIComponent(id)}`,
     buildBody(options),
   );
-}
-
-export async function mixtapeMembersCommand(
-  id: string,
-  refs: string[],
-  options: MixtapeMembersOptions,
-): Promise<MixtapeUpdateResponse> {
-  const members: CueEntry[] = refs.map((ref) => ({ ref }));
-
-  if (options.from) {
-    members.push(...parseCueFile(options.from));
-  }
-
-  return adminApiPut<MixtapeUpdateResponse>(
-    `/api/admin/mixtapes/${encodeURIComponent(id)}/members`,
-    { members } satisfies MixtapeMembersRequest,
-  );
-}
-
-export async function mixtapePublishCommand(id: string): Promise<MixtapePublishResponse> {
-  return adminApiPost<MixtapePublishResponse>(
-    `/api/admin/mixtapes/${encodeURIComponent(id)}/publish`,
-  );
-}
-
-export async function mixtapeDeleteCommand(id: string): Promise<MixtapeDeleteResponse> {
-  return adminApiDelete<MixtapeDeleteResponse>(`/api/admin/mixtapes/${encodeURIComponent(id)}`);
-}
-
-export async function mixtapeListCommand(): Promise<MixtapeListItem[]> {
-  const response = await adminApiGet<MixtapesResponse>("/api/admin/mixtapes");
-
-  return response.mixtapes;
-}
-
-export async function mixtapeGetCommand(idOrLogId: string): Promise<MixtapeListItem> {
-  const mixtapes = await mixtapeListCommand();
-  const match = mixtapes.find((mixtape) => mixtape.id === idOrLogId || mixtape.logId === idOrLogId);
-
-  if (!match) {
-    throw new CliError("mixtape_not_found", `No mixtape with id or log id ${idOrLogId}`);
-  }
-
-  return match;
 }
 
 export type MixtapeDistributeOptions = {
@@ -127,11 +57,13 @@ export type MixtapeDistributeResult = {
 };
 
 /**
- * Distribute a mixtape end to end: mint the coordinate if it's still a draft, then
- * move the local bytes to each requested platform (video→YouTube, audio→Mixcloud).
- * With neither --youtube nor --mixcloud, does both. The first successful platform
- * link flips the mixtape `distributing → published` (server-side, in each finalize).
- * Idempotent: re-running resumes a `distributing` mixtape, reusing its Log ID.
+ * Distribute a promoted mixtape to YouTube (video) and Mixcloud (audio). This is
+ * push-only — it operates on an already-minted mixtape (`distributing` or `published`).
+ * The mint path is `promote_recording` (`fluncle admin recordings promote <recordingId>`),
+ * which also stages the set video to R2 at `<logId>/set.mp4`. With no platform selector,
+ * does YouTube + Mixcloud. The first successful platform link flips `distributing →
+ * published` (server-side). Idempotent: re-running a `distributing` or `published`
+ * mixtape reuses its Log ID.
  */
 export async function mixtapeDistributeCommand(
   idOrLogId: string,
@@ -144,6 +76,7 @@ export async function mixtapeDistributeCommand(
     throw new CliError("mixtape_not_found", `No mixtape with id or log id ${idOrLogId}`);
   }
 
+  // No platform selector → default (YouTube + Mixcloud).
   const both = !options.youtube && !options.mixcloud;
   const doYoutube = both || Boolean(options.youtube);
   const doMixcloud = both || Boolean(options.mixcloud);
@@ -156,11 +89,21 @@ export async function mixtapeDistributeCommand(
   }
 
   const mixtapeId = mixtape.id;
-  let logId = mixtape.logId;
+  const logId = mixtape.logId;
 
-  // Derive the run-time from the upload if the draft has no duration — a draft is
-  // just the tracklist, so duration isn't an input. Display-only, best-effort
-  // (skipped if ffprobe isn't on PATH).
+  // Distribute is push-only: no coordinate means the recording was never promoted
+  // (or a promote crashed mid-mint). `fluncle admin recordings promote
+  // <recordingId>` mints the coordinate and stages the set video; then come back.
+  if (!logId) {
+    throw new CliError(
+      "mixtape_not_promoted",
+      `${mixtapeId} has no coordinate yet — promote its recording first:\n` +
+        "  fluncle admin recordings promote <recordingId>",
+    );
+  }
+
+  // Derive the run-time from the upload if the mixtape has no duration.
+  // Display-only, best-effort (skipped if ffprobe isn't on PATH).
   if (!mixtape.durationMs) {
     const source = options.audio ?? options.video;
     const durationMs = source ? await probeDurationMs(source) : undefined;
@@ -171,22 +114,10 @@ export async function mixtapeDistributeCommand(
     }
   }
 
-  // Mint first: the cover endpoint and the uploaded assets must embed the real Log
-  // ID, so it has to exist BEFORE upload. A draft mints to `distributing`; an
-  // already-minted mixtape reuses its committed coordinate.
-  if (mixtape.status === "draft") {
-    onProgress("Minting the coordinate…");
-    const published = await mixtapePublishCommand(mixtapeId);
-    logId = published.mixtape.logId;
-    onProgress(`Minted ${logId}.`);
-  } else if (mixtape.status === "published") {
+  if (mixtape.status === "published") {
     onProgress(`Already published (${logId}); re-distributing.`);
   } else {
-    onProgress(`Resuming distribution for ${logId}.`);
-  }
-
-  if (!logId) {
-    throw new CliError("mint_failed", "The mixtape has no Log ID after minting");
+    onProgress(`Distributing ${logId} (promoted — coordinate already minted).`);
   }
 
   const results: { platform: string; url: string }[] = [];
@@ -216,6 +147,93 @@ export async function mixtapeDistributeCommand(
   return { logId, mixtapeId, results };
 }
 
+export type MixtapeResyncOptions = {
+  json: boolean;
+  mixcloud?: boolean;
+  youtube?: boolean;
+};
+
+export type MixtapeResyncResult = {
+  logId: string;
+  mixtapeId: string;
+  results: { platform: string; url: string }[];
+};
+
+/**
+ * Re-sync a PUBLISHED mixtape's distribution metadata from its current cues — WITHOUT
+ * re-uploading the audio: regenerate the YouTube chapter description + the Mixcloud
+ * `sections[]` and push them to the live video + cloudcast. With no platform selector,
+ * does both. BOTH legs are now server-side ops (YouTube `videos.update`; Mixcloud the
+ * sections-only edit) — the CLI is a thin trigger through the same server path the
+ * Studio button uses. Idempotent per platform (a re-run pushes the same fresh metadata
+ * again).
+ *
+ * In the no-selector default it re-syncs only the platforms the mixtape is actually
+ * distributed to (a set on Mixcloud only isn't failed by a missing YouTube video); an
+ * EXPLICIT `--youtube`/`--mixcloud` attempts that platform and surfaces its own
+ * `*_not_distributed` error if the link isn't there.
+ */
+export async function mixtapeResyncCommand(
+  idOrLogId: string,
+  options: MixtapeResyncOptions,
+  onProgress: (message: string) => void = () => {},
+): Promise<MixtapeResyncResult> {
+  const mixtape = await mixtapeGetCommand(idOrLogId);
+
+  if (!mixtape.id) {
+    throw new CliError("mixtape_not_found", `No mixtape with id or log id ${idOrLogId}`);
+  }
+
+  if (!mixtape.logId) {
+    throw new CliError(
+      "mixtape_no_log_id",
+      "The mixtape isn't published yet — distribute it before re-syncing.",
+    );
+  }
+
+  const mixtapeId = mixtape.id;
+  const explicit = Boolean(options.youtube) || Boolean(options.mixcloud);
+  let doYoutube = Boolean(options.youtube);
+  let doMixcloud = Boolean(options.mixcloud);
+
+  // No selector → re-sync every platform the mixtape is actually distributed to.
+  if (!explicit) {
+    const social = await adminApiGet<MixtapeSocialShowResponse>(
+      `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/social`,
+    );
+    const platforms = new Set(social.posts.map((post) => post.platform));
+    doYoutube = platforms.has("youtube");
+    doMixcloud = platforms.has("mixcloud");
+
+    if (!doYoutube && !doMixcloud) {
+      throw new CliError(
+        "mixtape_not_distributed",
+        "The mixtape has no YouTube or Mixcloud link to re-sync.",
+      );
+    }
+  }
+
+  const results: { platform: string; url: string }[] = [];
+
+  if (doYoutube) {
+    onProgress("YouTube: re-syncing description + chapters…");
+    const { resyncYoutube } = await import("./mixtape-youtube");
+    const result = await resyncYoutube(mixtapeId);
+    results.push({ platform: "youtube", url: result.url });
+    onProgress(`YouTube: ${result.url}`);
+  }
+
+  if (doMixcloud) {
+    onProgress("Mixcloud: re-syncing sections…");
+    const { resyncMixcloud } = await import("./mixtape-mixcloud");
+    const result = await resyncMixcloud(mixtapeId);
+    results.push({ platform: "mixcloud", url: result.url });
+    onProgress(`Mixcloud: ${result.url}`);
+  }
+
+  return { logId: mixtape.logId, mixtapeId, results };
+}
+
 // The media run-time in ms via ffprobe, or undefined if it isn't available/parseable.
 async function probeDurationMs(filePath: string): Promise<number | undefined> {
   try {
@@ -233,7 +251,7 @@ async function probeDurationMs(filePath: string): Promise<number | undefined> {
   }
 }
 
-function buildBody(options: MixtapeCreateOptions | MixtapeUpdateOptions): MixtapeRequestBody {
+function buildBody(options: MixtapeUpdateOptions): MixtapeRequestBody {
   const body: MixtapeRequestBody = {};
 
   if (options.note !== undefined) {
@@ -257,111 +275,4 @@ function buildBody(options: MixtapeCreateOptions | MixtapeUpdateOptions): Mixtap
   }
 
   return body;
-}
-
-function parseCueFile(filePath: string): CueEntry[] {
-  if (!existsSync(filePath)) {
-    throw new CliError("file_not_found", `Cue file not found: ${filePath}`);
-  }
-
-  const text = readFileSync(filePath, "utf-8");
-  const trimmed = text.trim();
-
-  if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      if (!Array.isArray(parsed)) {
-        throw new Error("not an array");
-      }
-      return (parsed as unknown[]).map((entry, index) => {
-        if (typeof entry === "string") {
-          return { ref: entry.trim() };
-        }
-        const obj = entry as Record<string, unknown>;
-        if (typeof obj?.ref !== "string") {
-          throw new CliError("invalid_cue_json", `Entry ${index + 1} missing "ref" string`);
-        }
-        const cue: CueEntry = { ref: obj.ref.trim() };
-        if (typeof obj.startMs === "number" && Number.isInteger(obj.startMs) && obj.startMs >= 0) {
-          cue.startMs = obj.startMs;
-        }
-        return cue;
-      });
-    } catch (error) {
-      if (error instanceof CliError) {
-        throw error;
-      }
-      throw new CliError(
-        "invalid_cue_json",
-        `Cue JSON parse failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  }
-
-  return parseCueSheet(text);
-}
-
-function parseCueSheet(text: string): CueEntry[] {
-  const entries: CueEntry[] = [];
-
-  for (const line of text.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) {
-      continue;
-    }
-
-    const match = trimmed.match(/^(\d{1,2}:\d{2}(?::\d{2})?)\s+(.+)$/);
-    if (match) {
-      const [, time, ref] = match;
-      if (time === undefined || ref === undefined) {
-        continue;
-      }
-      const startMs = parseDuration(time);
-      if (startMs === null) {
-        continue;
-      }
-      entries.push({ ref: ref.trim(), startMs });
-    } else {
-      entries.push({ ref: trimmed });
-    }
-  }
-
-  return entries;
-}
-
-function parseDuration(input: string): number | null {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (trimmed.includes(":")) {
-    const parts = trimmed.split(":");
-    if (parts.length !== 2 && parts.length !== 3) {
-      return null;
-    }
-    const nums = parts.map((part) => Number(part));
-    if (nums.some((n) => !Number.isFinite(n) || n < 0)) {
-      return null;
-    }
-    if (parts.length === 3) {
-      const [hours, minutes, seconds] = nums;
-      if (hours === undefined || minutes === undefined || seconds === undefined) {
-        return null;
-      }
-      if (minutes >= 60 || seconds >= 60) {
-        return null;
-      }
-      return Math.round((hours * 3600 + minutes * 60 + seconds) * 1000);
-    }
-    const [minutes, seconds] = nums;
-    if (minutes === undefined || seconds === undefined) {
-      return null;
-    }
-    if (seconds >= 60) {
-      return null;
-    }
-    return Math.round((minutes * 60 + seconds) * 1000);
-  }
-  const value = Number(trimmed);
-  return Number.isFinite(value) && value >= 0 ? value : null;
 }

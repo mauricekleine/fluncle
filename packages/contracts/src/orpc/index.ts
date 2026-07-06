@@ -1,5 +1,5 @@
 // The runtime oRPC contract registry — the contract-first source of truth the
-// oRPC migration is built on (docs/orpc-migration-brief.md). This is the
+// oRPC migration is built on. This is the
 // `@fluncle/contracts/orpc` subpath entry.
 //
 // The pure-types `../index.ts` is the package's ZOD-FREE surface: the CLI,
@@ -16,7 +16,7 @@
 // here — it touches no other domain's file, so parallel agents converting
 // different domains never collide.
 //
-// Naming follows the ratified Convention B (docs/naming-conventions.md): each op
+// Naming follows the ratified Convention B: each op
 // has a canonical `verb_noun` registry key whose camelCase projection is the
 // OpenAPI `operationId` (`get_track` → `getTrack`). The REST path mirrors the
 // live route; resources are plural, the op noun stays singular.
@@ -25,6 +25,7 @@ import { adminBackfillsContract } from "./admin-backfills";
 import { adminEditionsContract } from "./admin-editions";
 import { adminHealthContract } from "./admin-health";
 import { adminMixtapesContract } from "./admin-mixtapes";
+import { adminRecordingsContract } from "./admin-recordings";
 import { adminSocialContract } from "./admin-social";
 import { adminSubmissionsContract } from "./admin-submissions";
 import { adminTokensContract } from "./admin-tokens";
@@ -56,19 +57,31 @@ export {
   updateEdition,
 } from "./admin-editions";
 export {
-  addMixtapeMembers,
-  createMixtape,
-  deleteMixtape,
+  createClip,
+  deleteClip,
+  finalizeClipCut,
   finalizeMixtapeMixcloud,
   finalizeMixtapeYoutube,
   getMixtapeSocial,
   initiateMixtapeYoutube,
+  listClips,
   listMixtapesAdmin,
-  publishMixtape,
+  presignClipUpload,
   publishMixtapeYoutube,
-  setMixtapeMembers,
+  setMixtapeCues,
+  updateClip,
   updateMixtape,
+  updateMixtapeCue,
 } from "./admin-mixtapes";
+export {
+  createRecording,
+  deleteRecording,
+  getRecording,
+  listRecordings,
+  presignRecordingUpload,
+  promoteRecording,
+  updateRecording,
+} from "./admin-recordings";
 export { draftTrackSocial, listTrackSocial, updateTrackSocial } from "./admin-social";
 export { deregisterDevice, registerDevice, sweepPushReceipts } from "./devices";
 export { getEdition, listEditions } from "./editions";
@@ -87,6 +100,7 @@ export {
 export {
   contextTrack,
   finalizeTrackVideo,
+  getTrackAdmin,
   listTracksAdmin,
   observeTrack,
   presignTrackVideoUploads,
@@ -119,12 +133,18 @@ export { type SubmissionBody, submitTrack } from "./submissions";
 export { getRandomTrack, getTrack, listTracks } from "./tracks";
 export { recordLiveState } from "./admin-twitch";
 export {
+  type ClipDTO,
+  ClipDTOSchema,
   EditionContentSchema,
   EditionDTOSchema,
   MixtapeDTOSchema,
   MixtapeSocialPostItemSchema,
   PublicUserSchema,
   RadioNowPlayingSchema,
+  type RecordingDTO,
+  RecordingDTOSchema,
+  type RecordingTracklistItem,
+  RecordingTracklistItemSchema,
   SocialPostItemSchema,
   SubmissionSchema,
   TrackListItemSchema,
@@ -146,6 +166,7 @@ export const contract = {
   ...adminEditionsContract,
   ...adminHealthContract,
   ...adminMixtapesContract,
+  ...adminRecordingsContract,
   ...adminSocialContract,
   ...adminSubmissionsContract,
   ...adminTokensContract,

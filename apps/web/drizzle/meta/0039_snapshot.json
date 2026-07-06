@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "b2953b51-1048-4dce-8f6d-9256e8435cd3",
+  "id": "46f5ad78-efee-43c1-bd6d-8bcae68fa802",
   "prevId": "fbecfb15-0845-4cf6-b128-b0a9aebd085c",
   "tables": {
     "account": {
@@ -347,58 +347,6 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
-    "live_state": {
-      "name": "live_state",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "live": {
-          "name": "live",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "title": {
-          "name": "title",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "started_at": {
-          "name": "started_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "tg_message_id": {
-          "name": "tg_message_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
     "mixcloud_auth": {
       "name": "mixcloud_auth",
       "columns": {
@@ -632,6 +580,13 @@
         "sequence_number": {
           "name": "sequence_number",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "set_video_at": {
+          "name": "set_video_at",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

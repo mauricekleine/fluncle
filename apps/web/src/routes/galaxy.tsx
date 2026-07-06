@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 import { siteUrl } from "@/lib/fluncle-links";
 
-// Fluncle's Galaxy — the game (docs/ROADMAP.md, Galaxy game section). The whole game is a
+// Fluncle's Galaxy — the game. The whole game is a
 // client-only canvas app, loaded as its own chunk inside useEffect so the
 // archive's bundle stays light and the server never touches browser APIs.
 
@@ -92,7 +92,8 @@ function GalaxyPage() {
       <h1 className="sr-only">Fluncle's Galaxy</h1>
       <p className="sr-only">
         A flight through Fluncle's Findings: every banger is a star at its Log ID coordinate. Steer
-        with the arrow keys, hold space to boost, fly to a star to log it and refuel.
+        with the arrow keys, hold space to boost, fly to a star to log it and refuel. Press C for
+        the atlas, a top-down map of the whole voyage; C or Escape closes it.
       </p>
       <div
         aria-label="Fluncle's Galaxy"

@@ -7,7 +7,7 @@
     // Deliberate opt-out: this package is DSP/shader hot-loop code where typed-array indexing is pervasive; guarding every sample adds noise/overhead for little safety value (a bug degrades a frame, not data).
     "noUncheckedIndexedAccess": false,
     "strict": true,
-    "types": ["node", "react", "react-dom"]
+    "types": ["node", "react", "react-dom", "bun"]
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "remotion.config.ts"]
 }

@@ -10,19 +10,33 @@ import (
 	"unicode/utf16"
 )
 
+// Deterministic star placement from the Log ID: the voyage as ONE traceable
+// thread. Earth at the center; findings lay out along a single Archimedean
+// spiral winding outward. A finding's day-sector maps to a thread angle (linear
+// in the day since the catalogue's first sector), so the radius rises strictly
+// with the sector. This mirrors game/placement.ts (the TypeScript authority);
+// the parity fixtures in testdata/ pin the two together.
+
 const (
 	epochMS              = int64(1780099200000)
 	dayMS                = int64(86400000)
-	firstRing            = 620.0
-	ringGap              = 240.0
+	clearSpace           = 620.0
+	sectorsPerTurn       = 9.0
+	armGap               = 560.0
 	minArcSpacing        = 700.0
 	frontierInner        = 900.0
+	frontierArc          = 1.0
 	slotsPerSystem       = 5
 	starsPerBlackhole    = 50
 	minStarsForBlackhole = 12
 	blackholeHorizon     = 34.0
 	blackholeMinStarGap  = 220.0
 	asteroidInner        = 1100.0
+)
+
+var (
+	anglePerSector = (math.Pi * 2) / sectorsPerTurn
+	spiralPitch    = armGap / (math.Pi * 2)
 )
 
 var logIDPattern = regexp.MustCompile(`^(\d+)\.\d\.\d[A-Z]$`)
@@ -46,39 +60,58 @@ func MakeRNG(seed uint32) func() float64 {
 	}
 }
 
+// spiralRadius is the radius on the thread at a thread angle (Archimedean).
+func spiralRadius(theta float64) float64 {
+	return clearSpace + spiralPitch*theta
+}
+
+// spiralAngleAt is the inverse of spiralRadius: where the arm passes at a radius.
+func spiralAngleAt(radius float64) float64 {
+	return (radius - clearSpace) / spiralPitch
+}
+
 func PlaceStars(tracks []GameTrack) []Star {
-	rings := map[int][]placedTrack{}
-	for _, track := range tracks {
-		sector := sectorOf(track)
-		seed := track.LogID
-		if seed == "" {
-			seed = track.TrackID
-		}
-		angle := (float64(FNV1a(seed)) / 0xffffffff) * math.Pi * 2
-		rings[sector] = append(rings[sector], placedTrack{angle: angle, track: track})
+	if len(tracks) == 0 {
+		return []Star{}
 	}
 
-	sectors := make([]int, 0, len(rings))
-	for sector := range rings {
+	bySector := map[int][]GameTrack{}
+	for _, track := range tracks {
+		sector := sectorOf(track)
+		bySector[sector] = append(bySector[sector], track)
+	}
+
+	sectors := make([]int, 0, len(bySector))
+	for sector := range bySector {
 		sectors = append(sectors, sector)
 	}
 	sort.Ints(sectors)
+	firstSector := sectors[0]
 
 	stars := make([]Star, 0, len(tracks))
+	// The thread head: theta never rewinds. Quiet days show as empty arc (the
+	// nominal angle jumps ahead); a heavy day stretches its own allocation
+	// forward, pushing the next sector further out — radius strictly monotonic.
+	thetaRunning := 0.0
+
 	for _, sector := range sectors {
-		radius := ringRadius(sector)
-		for _, placed := range spreadRing(rings[sector], radius) {
-			track := placed.track
-			seed := track.LogID
-			if seed == "" {
-				seed = track.TrackID
-			}
+		group := append([]GameTrack(nil), bySector[sector]...)
+		sort.SliceStable(group, func(i, j int) bool {
+			return intraDayLess(group[i], group[j])
+		})
+
+		thetaNominal := float64(sector-firstSector) * anglePerSector
+		theta := math.Max(thetaNominal, thetaRunning)
+
+		for _, track := range group {
+			seed := seedOf(track)
+			radius := spiralRadius(theta)
 			logID := track.LogID
 			if logID == "" {
 				logID = seed
 			}
 			stars = append(stars, Star{
-				Angle:      placed.angle,
+				Angle:      theta,
 				ArtistLine: strings.Join(track.Artists, ", "),
 				Collected:  false,
 				ID:         logID,
@@ -92,17 +125,35 @@ func PlaceStars(tracks []GameTrack) []Star {
 				VOffset:    float64(FNV1a(seed+"#v")%440) - 220,
 				VX:         0,
 				VY:         0,
-				X:          math.Cos(placed.angle) * radius,
-				Y:          math.Sin(placed.angle) * radius,
+				X:          math.Cos(theta) * radius,
+				Y:          math.Sin(theta) * radius,
 			})
+
+			// Advance along the curve by >= MIN_ARC_SPACING of arc length.
+			theta += minArcSpacing / radius
 		}
+
+		thetaRunning = theta
 	}
 	return stars
 }
 
-type placedTrack struct {
-	angle float64
-	track GameTrack
+func seedOf(track GameTrack) string {
+	if track.LogID != "" {
+		return track.LogID
+	}
+	return track.TrackID
+}
+
+// intraDayLess orders same-day findings along their arc: primarily by the
+// identity hash, tie-broken by a plain lexicographic compare (mirrors the TS).
+func intraDayLess(a, b GameTrack) bool {
+	ha := FNV1a(seedOf(a))
+	hb := FNV1a(seedOf(b))
+	if ha != hb {
+		return ha < hb
+	}
+	return seedOf(a) < seedOf(b)
 }
 
 func sectorOf(track GameTrack) int {
@@ -124,55 +175,6 @@ func sectorOf(track GameTrack) int {
 	return int(days)
 }
 
-func ringRadius(sector int) float64 {
-	return firstRing + float64(sector)*ringGap
-}
-
-func spreadRing(ring []placedTrack, radius float64) []placedTrack {
-	if len(ring) < 2 {
-		return ring
-	}
-
-	minGap := math.Min(minArcSpacing/radius, (math.Pi*2)/float64(len(ring)))
-	sorted := append([]placedTrack(nil), ring...)
-	sort.Slice(sorted, func(i, j int) bool {
-		return trackSortKey(sorted[i].track) < trackSortKey(sorted[j].track)
-	})
-	sort.SliceStable(sorted, func(i, j int) bool {
-		return sorted[i].angle < sorted[j].angle
-	})
-
-	for pass := 0; pass < 8; pass++ {
-		moved := false
-		for index := range sorted {
-			current := &sorted[index]
-			next := &sorted[(index+1)%len(sorted)]
-			gap := next.angle - current.angle
-			if index+1 == len(sorted) {
-				gap = next.angle + math.Pi*2 - current.angle
-			}
-			if gap < minGap {
-				push := (minGap - gap) / 2
-				current.angle -= push
-				next.angle += push
-				moved = true
-			}
-		}
-		if !moved {
-			break
-		}
-	}
-
-	return sorted
-}
-
-func trackSortKey(track GameTrack) string {
-	if track.LogID != "" {
-		return track.LogID
-	}
-	return track.TrackID
-}
-
 func PlaceFrontier(stars []Star, config FrontierConfig, seed uint32) []FrontierEntity {
 	entities := []FrontierEntity{}
 	if config.SetDressing {
@@ -185,6 +187,14 @@ func PlaceFrontier(stars []Star, config FrontierConfig, seed uint32) []FrontierE
 		entities = append(entities, PlaceAsteroids(stars)...)
 	}
 	return entities
+}
+
+// frontierAngle rides the emptiest water: a half-turn offset from the local
+// thread angle drops debris into the inter-arm valley (farthest from any
+// banger), with a hash jitter fanning it along the valley near the thread's tip.
+func frontierAngle(radius float64, key string) float64 {
+	jitter := ((float64(FNV1a(key))/0xffffffff)*2 - 1) * frontierArc
+	return spiralAngleAt(radius) + math.Pi + jitter
 }
 
 func placeSetDressing(stars []Star) []FrontierEntity {
@@ -206,7 +216,7 @@ func placeSetDressing(stars []Star) []FrontierEntity {
 }
 
 func makeDressing(kind, seedKey string, radius, bodyRadius float64) FrontierEntity {
-	angle := (float64(FNV1a(seedKey)) / 0xffffffff) * math.Pi * 2
+	angle := frontierAngle(radius, seedKey)
 	return FrontierEntity{
 		BodyRadius: bodyRadius,
 		ID:         kind + ":" + seedKey,
@@ -240,9 +250,9 @@ func PlaceBlackHoles(stars []Star, seed uint32) []FrontierEntity {
 		slots := []Vec2{}
 		for attempt := 0; attempt < 200 && len(slots) < slotsPerSystem; attempt++ {
 			key := "blackhole:" + strconv.Itoa(system) + ":" + strconv.Itoa(attempt)
-			angle := (float64(FNV1a(key)) / 0xffffffff) * math.Pi * 2
 			reach := float64(FNV1a(key+"#r")%1000) / 1000
 			radius := frontierInner + span*(0.3+0.7*reach)
+			angle := frontierAngle(radius, key)
 			x := math.Cos(angle) * radius
 			y := math.Sin(angle) * radius
 			if !tooCloseToStar(x, y, stars, blackholeMinStarGap) {
@@ -290,8 +300,8 @@ func PlaceAsteroids(stars []Star) []FrontierEntity {
 	entities := []FrontierEntity{}
 
 	for wave := 0; wave < waves; wave++ {
-		baseAngle := (float64(FNV1a("asteroid:"+strconv.Itoa(wave))) / 0xffffffff) * math.Pi * 2
 		baseRadius := asteroidInner + (span*float64(wave+1))/float64(waves+1)
+		baseAngle := frontierAngle(baseRadius, "asteroid:"+strconv.Itoa(wave))
 		count := 3 + int(FNV1a("asteroid:"+strconv.Itoa(wave)+"#n")%4)
 
 		for index := 0; index < count; index++ {

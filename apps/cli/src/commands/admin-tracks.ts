@@ -8,6 +8,7 @@ const pageSize = 48;
 
 async function fetchAdminTracks(options: {
   hasContext?: boolean;
+  hasKey?: boolean;
   hasNote?: boolean;
   hasObservation?: boolean;
   hasVideo?: boolean;
@@ -16,8 +17,17 @@ async function fetchAdminTracks(options: {
   retryEmptyContext?: boolean;
   status?: string;
 }): Promise<RecentTrack[]> {
-  const { hasContext, hasNote, hasObservation, hasVideo, max, order, retryEmptyContext, status } =
-    options;
+  const {
+    hasContext,
+    hasKey,
+    hasNote,
+    hasObservation,
+    hasVideo,
+    max,
+    order,
+    retryEmptyContext,
+    status,
+  } = options;
   const results: RecentTrack[] = [];
   let cursor: string | undefined;
 
@@ -26,6 +36,10 @@ async function fetchAdminTracks(options: {
 
     if (hasVideo !== undefined) {
       params.set("hasVideo", String(hasVideo));
+    }
+
+    if (hasKey !== undefined) {
+      params.set("hasKey", String(hasKey));
     }
 
     if (hasContext !== undefined) {
@@ -78,8 +92,24 @@ async function fetchAdminTracks(options: {
   return results;
 }
 
+// A filterable admin listing of findings. Currently the missing-musical-key
+// backlog the Rekordbox key-backfill targets: `hasKey=false` lists findings whose
+// stored `key` is null, `hasKey=true` those that already carry one, absent = all.
+// This is what makes the backlog COUNTABLE + TARGETABLE — the backfill script reads
+// `list --no-key --json` as its input query.
+export async function listCommand(options: {
+  hasKey?: boolean;
+  limit: number;
+  order: "asc" | "desc";
+}): Promise<RecentTrack[]> {
+  return fetchAdminTracks({
+    hasKey: options.hasKey,
+    max: options.limit,
+    order: options.order,
+  });
+}
+
 export type QueueFilters = {
-  hasContext?: boolean;
   hasObservation?: boolean;
 };
 
@@ -95,9 +125,8 @@ export type QueueFilters = {
 // video therefore waits until it's context-noted — fine: the context cron runs
 // every ~5 min, and a render with the Texture fuel is the one worth filming.
 //
-// `hasContext=true` is hard-set here (not overridable); `filters.hasContext` is
-// kept only as a no-op compatibility seam. The optional `hasObservation` filter
-// still narrows it (so a cron can ask "what's context'd but still needs a voice?").
+// `hasContext=true` is hard-set here (not overridable). The optional `hasObservation`
+// filter still narrows it (so a cron can ask "what's context'd but still needs a voice?").
 export async function queueCommand(
   limit: number,
   filters: QueueFilters = {},
@@ -243,6 +272,7 @@ export type VehicleEntry = {
   artists: string[];
   logId?: string;
   grain?: string;
+  register?: string;
   title: string;
   vehicle?: string;
 };
@@ -257,6 +287,7 @@ export async function vehiclesCommand(limit: number): Promise<VehicleEntry[]> {
     artists: track.artists,
     grain: track.videoGrain,
     logId: track.logId,
+    register: track.videoRegister,
     title: track.title,
     vehicle: track.videoVehicle,
   }));

@@ -1,12 +1,13 @@
 import { PauseIcon, PlayIcon } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@fluncle/ui/components/button";
 import {
   spotifyAlbumImageAtSize,
   trackMedia,
   videoCrop,
   videoPoster,
   videoRendition,
+  videoVersion,
 } from "@/lib/media";
 import { usePreviewPlayer } from "@/lib/preview-player";
 import { type Track } from "@/lib/tracks";
@@ -29,9 +30,12 @@ export function LogFootage({ track }: { track: Track }) {
   // an MT centre-crop to the pane the viewport wants: a 16:9 landscape on desktop
   // (the deliberate "show off the asset" moment) and a 9:16 portrait on mobile.
   // A legacy finding (no signal) keeps playing footage.mp4 as today's
-  // portrait+text cut (docs/video-variants.md). NEVER footage.social.mp4 — that
+  // portrait+text cut. NEVER footage.social.mp4 — that
   // baked-text cut is the homepage Stories format; /log + radio stay clean.
   const squared = Boolean(track.videoSquaredAt);
+  // The video vintage rides every transform URL as its `?v` token — a re-render
+  // bumps videoSquaredAt, so MT derives off the new master (media.ts).
+  const version = videoVersion(track.videoSquaredAt);
   // The desktop verdict drives BOTH the requested crop and the pane aspect (the
   // `--squared` class flips 9:16 → 16:9 at the same min-width: 768px boundary).
   // `false` until mounted, so SSR/first paint is the mobile-first portrait pane.
@@ -56,10 +60,10 @@ export function LogFootage({ track }: { track: Track }) {
       ? squared
         ? // Two-master: a clean centre-crop off the square master — landscape on
           // desktop, portrait on mobile, matching the responsive pane.
-          videoCrop(track.logId, isDesktop ? "landscape" : "portrait")
+          videoCrop(track.logId, isDesktop ? "landscape" : "portrait", undefined, false, version)
         : // Legacy: a width-ladder rendition off the portrait footage.mp4.
           renditionWidth
-          ? videoRendition(track.logId, { width: renditionWidth })
+          ? videoRendition(track.logId, { version, width: renditionWidth })
           : masterVideoUrl
       : masterVideoUrl;
   const onMaster = !videoUrl || videoUrl === masterVideoUrl;
@@ -91,7 +95,8 @@ export function LogFootage({ track }: { track: Track }) {
   // A cheap edge-extracted opening frame; falls back to the bundle poster, then
   // album art. The poster attribute has no error event, so an Image() probe
   // validates the frame transform.
-  const framePoster = track.logId && !framePosterFailed ? videoPoster(track.logId) : undefined;
+  const framePoster =
+    track.logId && !framePosterFailed ? videoPoster(track.logId, undefined, version) : undefined;
   const posterUrl =
     framePoster ??
     (!posterFailed ? media?.posterUrl : undefined) ??

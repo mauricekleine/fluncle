@@ -17,6 +17,16 @@ A finding is one banger Fluncle found. A mixtape is a consolidation of findings 
 - It is **not** a track (no single ISRC, no BPM/key chip row).
 - It **is** a first-class object on the Log ID spine, with its own permanent identity and its own `/log` page.
 
+### Three objects: plan → recording → mixtape
+
+A published mixtape is the last of three objects (the plan→recording→mixtape model, shipped in Waves 3-A…3-D). Draft mixtapes were retired — a mixtape can only be born by promoting a recording.
+
+- **Plan** — the pre-publish authoring object: a videoless `recordings` row (`kind: "plan"`), carrying an auto-minted **Galaxy-vocab handle** (a stable slug like `liquid-nebula-roller`, no drifting reserved coordinate), the lined-up findings, and an optional live-session date. **ID-less on the Log ID spine** — it has no `XXX.F.ZZ` coordinate. Surfaced at `/admin/plans`.
+- **Recording (a take)** — a captured set that carries a video and **still no coordinate**. Its cue tracklist lives in mutable `recording_cues` (derived from Rekordbox, refined on the Studio cue rail). A recording is **clippable before promotion** (`mixtape_clips`, `/admin/studio/<recordingId>`, `/admin/clips`); an un-promoted clip points home to `fluncle.com`. Multiple takes can hang off one plan; you promote the one you love.
+- **Mixtape** — a **promoted** recording, and the **only** object that mints an `XXX.F.ZZ` Log ID. `promote_recording` is the single mint path (mint-or-reuse, idempotent): it freezes the recording's cues into the mixtape's `mixtape_tracks`, copies the set video, and hands off to `distribute`. No draft mixtapes, no `publishMixtape` mint from a draft.
+
+So the coordinate is minted **once, at promote** — the plan and the take live coordinate-free, and the frozen `mixtape_tracks` is the published record while `recording_cues` stays editable on the take.
+
 ## Identity — the mixtape Log ID
 
 A mixtape gets a real Log ID in the same `XXX.Y.ZZ` family as a finding, distinguished by one fixed slot:
@@ -50,7 +60,7 @@ A mixtape slips **quietly into the existing track surfaces** (the feed, `recent`
 - **Web** — a `/mixtapes` index (the mixtape archive, newest first).
 - **API** — `/api/mixtapes` (mixtapes as JSON).
 - **CLI** — `fluncle mixtapes`.
-- **SSH** — a mixtapes view in the rave terminal (still a future surface).
+- **SSH** — a mixtapes view in the rave terminal (`screenMixtapes` / `screenMixtapeDetail` / `fetchMixtapes` in `apps/ssh/main.go`).
 
 ## Mixtape-aware for machines (SEO / AEO)
 
@@ -65,11 +75,11 @@ Crawlers, bots, and AI answer engines must read a mixtape **as a DJ mixtape**, n
 - **Mixcloud — primary home.** Properly licensed (direct deals with the majors + indies like Ninja Tune / XL via Merlin): it plays legally and pays the featured artists, within the Featured-Artist / SRPC limits. Two failure tiers to stay clear of: exceeding the consecutive rule (≤ 3 per artist consecutive, ≤ 2 per release consecutive) makes the show **regionally unavailable**; **4–8 tracks from one artist makes the whole show Premium / subscriber-only globally** (a hard paywall). The curator waiver doesn't apply. Trivial for a varied D&B set — observe, don't pre-lint; if a show ever gets gated it's visible on Mixcloud and fixable by hand (audio can't be swapped — delete + re-upload). Upload is **CLI-direct** (the Worker can't proxy a multi-GB master) but the **token is server-side** (`mixcloud_auth`); the CLI fetches it just-in-time. One length caveat: a **full-length mixtape is a licensed _show_**, but a **short single clip is classified as an unlicensed _track_ and copyright-blocked** — so test with real-length audio, not a short clip.
 - **YouTube — reach mirror.** Content ID claims it: the video stays up but the labels monetize it. Good for reach, not revenue. The **mixtape video** lives here, uploaded via `youtube_auth` — published unlisted, flipped public by the operator.
 - **SoundCloud — secondary mirror.** Patchier (takedown risk). Profile presence is a separate roadmap item; hosting actual audio there is the licensing-gated question.
-- **Teaser clips.** Short clips cut from the set go to the social surfaces (TikTok / Shorts / IG) the same way a finding's clip does — the clip is a trailer, captioned with the mixtape's `fluncle://<id>` coordinate. (Clip-of-a-mixtape has no pipeline yet; see Open questions.)
+- **Teaser clips.** Short clips cut from the set go to the social surfaces (TikTok / Shorts / IG) the same way a finding's clip does — the clip is a trailer, captioned with the mixtape's `fluncle://<id>` coordinate. The Fluncle Studio clip pipeline cuts them from the set master on R2 (`mixtape_clips`, `fluncle admin clips list|cut`, `/admin/studio/<recordingId>` + `/admin/clips`, the `fluncle-studio-clip` cron; see `docs/fluncle-studio.md`).
 
 ## Titles + covers
 
-- **Title — the same string everywhere** (`/log`, Mixcloud, YouTube, SoundCloud): `Fluncle Drum & Bass Mixtape #N | XXX.F.ZZ`. Searchable genre up front, the coordinate as the unique tail. It's an **output, not an input** — `publishMixtape` mints it from the number + coordinate; there's no title field on the draft. The `title` column stays so a future non-"Mixtape #N" series can carry its own name (publish leaves a non-stub title untouched). The **dream note** carries the cryptic/evocative weight.
+- **Title — the same string everywhere** (`/log`, Mixcloud, YouTube, SoundCloud): `Fluncle Drum & Bass Mixtape #N | XXX.F.ZZ`. Searchable genre up front, the coordinate as the unique tail. It's an **output, not an input** — `promote_recording` mints it from the number + coordinate; there's no title field to author on the plan or take. The `title` column stays so a future non-"Mixtape #N" series can carry its own name (promote leaves a non-stub title untouched). The **dream note** carries the cryptic/evocative weight.
 - **The note → the description, with a `fluncle://` breadcrumb (external only).** The dream note doubles as the YouTube / Mixcloud description, with the mixtape's `fluncle://<logId>` coordinate appended as a derived suffix (the note, a blank line, then `fluncle://<logId>`). The marker is **never stored in the `note` column** and is **appended only when the description is built for the platforms at upload**. Internally, `/log` shows the clean stored note — the coordinate is already on the page as the mixtape's identity.
 - **Covers render on the fly, fully derived** — no per-mixtape render step, no stored cover, no input. `GET /api/mixtape-cover/<logId>?size=square|og|wide` is an edge route (`workers-og`/Satori, same path as the finding OG card) that stamps `MIXTAPE #N` + the coordinate over a fixed Deep-Field background. A published mixtape's cover URL is derived from its Log ID (`mixtapeCoverUrl`); the `cover_image_url` column was dropped.
   - **Square 1500×1500** (`size=square`) → Mixcloud + SoundCloud artwork, and the mixtape's `coverImageUrl` on `/log`.
@@ -79,17 +89,21 @@ Crawlers, bots, and AI answer engines must read a mixtape **as a DJ mixtape**, n
 
 ## Editing after publish — the lifecycle
 
-Publishing is the irreversible-ish step, but only the **coordinate** is truly frozen (enforced in `updateMixtape`):
+Promotion is the irreversible-ish step, but only the **coordinate** is truly frozen:
 
-- **Minting requires the substance, not the links** — a recorded date, a dream note, a duration, and ≥ 1 tracklist member. A draft is just the operator-authored subset; `publishMixtape` verifies it, then mints the Log ID + number + title into the `distributing` state. The external link is **not** a mint gate — distribution supplies it (the mint-first reshape). No empty, substance-less mixtape goes live.
-- **The lifecycle:** `draft` → (mint) `distributing` (coordinate committed, cover renders, hidden from public) → (first platform link) `published`. A `distributing` mixtape is edit-locked like a published one and can't be deleted (it owns a committed coordinate); a totally failed distribution leaves it `distributing` with its Log ID held for retry, never a linkless public mixtape.
-- **After publish you can still edit** the note and the external links — add YouTube after Mixcloud, add SoundCloud later. (Title and cover are derived from the coordinate, so there's nothing to edit there.)
+- **A mixtape is born by promoting a recording** — `promote_recording` is the single mint path (there are no draft mixtapes; the old `publishMixtape`-from-a-draft mint was retired). Promote needs a recording with a video and ≥ 1 cue; it mints the Log ID + number + title into the `distributing` state, freezes the recording's `recording_cues` into the mixtape's `mixtape_tracks`, and copies the set video. The external link is **not** a mint gate — `distribute` supplies it (the mint-first reshape). No empty, substance-less mixtape goes live.
+- **The lifecycle:** recording → (promote) `distributing` (coordinate committed, set video staged, cover renders, hidden from public) → (first platform link) `published`. A `distributing` mixtape is edit-locked like a published one and can't be deleted (it owns a committed coordinate); a totally failed distribution leaves it `distributing` with its Log ID held for retry, never a linkless public mixtape.
+- **After promote you can still edit** the dream note, the recorded date, and the external links — add YouTube after Mixcloud, add SoundCloud later. (Title and cover are derived from the coordinate, so there's nothing to edit there.) The **cue times** stay editable on the recording (`recording_cues`) and re-sync to the live platforms without a re-upload (see the SKILL's §D2).
 - **You can never remove the last link** — a published mixtape must always keep somewhere to listen.
-- **Frozen once minted:** the Log ID + sequence number, the title + cover derived from them, the `recordedAt` (its sector is baked into the coordinate), and the **tracklist** (the minted set is the record).
+- **Frozen once minted:** the Log ID + sequence number, the title + cover derived from them, and the promoted **tracklist** in `mixtape_tracks` (the minted set is the record; the take's `recording_cues` remain mutable and drive re-sync).
 
 ## Tracklist — the breadcrumb
 
-The required tracklist **is the breadcrumb**, and the AEO/SEO play. Write each track as its finding: `Artist — Title`, its `fluncle://<log-id>` coordinate, and a `/log/<id>` link (Mixcloud tracklist; YouTube description + chapters). Owned surfaces and authentic scene presence pointing back at fluncle.com. A member track that isn't a finding yet is added as a finding first (or allowed as a non-finding member — an open question). The ordered identity comes out of Rekordbox history (see `scripts/rekordbox-tracklist.py`); its load timestamps are **not** usable as cue offsets (deck-load time precedes the audible mix-in by a variable lead), so the tracklist carries order + identity, not jump-to times.
+The tracklist **is the breadcrumb**, and the AEO/SEO play. Each track reads as its finding: `Artist — Title`, its `fluncle://<log-id>` coordinate, and a `/log/<id>` link (Mixcloud tracklist; YouTube description + chapters). Owned surfaces and authentic scene presence pointing back at fluncle.com. A track that isn't a finding yet is added as a finding first (the derive step never auto-creates one — it leaves the cue's `findingId` null and flagged).
+
+The ordered identity comes out of Rekordbox session history, matched to the catalogue by `scripts/rekordbox-derive-cues.py` (the `rekordbox-tracklist.py` plain-text print is a read-only convenience, not the write path). Rekordbox load timestamps are **not** usable as cue offsets (deck-load time precedes the audible mix-in by a variable lead), so the derived cues carry order + identity only — `startMs` is left absent. The **jump-to cue times** are marked separately, against the take, on the Fluncle Studio cue rail (`/admin/studio/<recordingId>`; see `docs/fluncle-studio.md`).
+
+Two stores, one frozen and one live: the take's **`recording_cues`** stay mutable (re-derive, re-mark, re-sync any time), while **promote freezes them into `mixtape_tracks`** — the minted, published record. Editing cues after publish edits `recording_cues` and re-syncs to the live YouTube chapters / Mixcloud sections / `/log` per-track times without re-uploading the audio (the SKILL's §D2).
 
 ## MusicBrainz + Wikidata
 
@@ -109,7 +123,7 @@ Where a mixtape lands and what each surface renders (all built):
 | API                    | `/api/tracks/<id>` | mixtape-typed payload (members, external URLs, duration); `/api/mixtapes` index                          |
 | RSS                    | observation entry  | a flagged **mixtape** entry in the feed                                                                  |
 | MCP                    | list/random/search | the mixtape reachable as the same typed object                                                           |
-| SSH                    | the rave terminal  | a checkpoint + a mixtapes view (the view is still future)                                                |
+| SSH                    | the rave terminal  | a checkpoint + a mixtapes view (`screenMixtapes` / `screenMixtapeDetail`)                                |
 | Machines               | `MusicRecording`   | `MusicAlbum` / `DJMixAlbum` schema, RSS category, llms.txt Mixtapes section                              |
 | MusicBrainz / Wikidata | artist anchors     | the DJ-mix release → the Wikidata fact                                                                   |
 
@@ -122,9 +136,7 @@ A mixtape sits at its sector, which the Galaxy game maps to a distance from Eart
 The internal plumbing and the external distribution chain are **shipped**. Remaining follow-ups (also tracked in `docs/ROADMAP.md` → _Fluncle's own mixtapes_):
 
 - **Member tracks that aren't findings yet:** add them as findings first, or allow non-finding members in a mixtape's tracklist.
-- **SSH mixtapes view:** the web/API/CLI/MCP front doors exist; the rave terminal view is still future.
-- **Clip-of-a-mixtape pipeline:** how teaser clips get cut, captioned, and pushed.
-- **Per-track cue offsets:** Rekordbox load times can't supply them (see Tracklist); if wanted, capture them against the final video.
+- **Per-track cue offsets — shipped.** Rekordbox load times can't supply them (see Tracklist), so they're marked against the take in the Fluncle Studio cue rail (`/admin/studio/<recordingId>`, `set_mixtape_cues` / `update_mixtape_cue` over `recording_cues`; see `docs/fluncle-studio.md`). They feed the YouTube chapters, Mixcloud sections, and `/log` times.
 
 ## Cross-links
 

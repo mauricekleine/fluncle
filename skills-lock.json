@@ -4,7 +4,7 @@
     "agent-orchestration": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/agent-orchestration",
       "sourceType": "local",
-      "computedHash": "11256a78ddd0c1c28f039b27afe522afe549ca69234caf24e876a0d37fac01be"
+      "computedHash": "2bf97b7a49ca38c3855e5e458b8b6b387ec0bdd5cc92b9d8b21a4bfac4e63b9d"
     },
     "ai-seo": {
       "source": "coreyhaines31/marketingskills",
@@ -26,27 +26,32 @@
     "fluncle-bpm-backfill": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-bpm-backfill",
       "sourceType": "local",
-      "computedHash": "0cff66229c8b123db7cb1ee964735100b7ed3f8dffda99599775969419501ce7"
+      "computedHash": "d80e9d4113b2c6c92a3c0c0a7e29df7729cb92fbd36a780900e4aae731a7c626"
     },
     "fluncle-goal-writer": {
-      "source": "/Users/maurice/Projects/fluncle/packages/skills/goal-writer",
+      "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/goal-writer",
       "sourceType": "local",
-      "computedHash": "ab3290ff51f3a3fdf0a9ce690da460f45090664bca4b93987814a4502cf0b8f4"
+      "computedHash": "ca57c2cd6ff63e354232d718f6cf1c0bb9aa9c8a3f0a7dba6cbcfdc1884ca7e0"
     },
     "fluncle-hermes-operator": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-hermes-operator",
       "sourceType": "local",
-      "computedHash": "56640a659f2a55545598b73518db6a759eab5870e10a809e3f7fd11093fb425e"
+      "computedHash": "8e41576a1577c5568e852e0d421dc3c369f260fa4017cb5c77b5f1fad515d092"
+    },
+    "fluncle-key-backfill": {
+      "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-ab948c4adb8f8635a/packages/skills/fluncle-key-backfill",
+      "sourceType": "local",
+      "computedHash": "8dc40c3c5c54b50300688e7dbaf12e2f9f7d50b2b022608d773e247cbb0d4971"
     },
     "fluncle-maintenance": {
-      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-maintenance",
+      "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/fluncle-maintenance",
       "sourceType": "local",
-      "computedHash": "00a6e346f0f9b03f53752853943b70eb8d411200e25e8541049f6282fd7c8242"
+      "computedHash": "2eb25c26a11e6a8bd4c954f9426654583304a890227813954c299b0dd2099b27"
     },
     "fluncle-mixtapes": {
-      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-mixtapes",
+      "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-aa84ec808240f028e/packages/skills/fluncle-mixtapes",
       "sourceType": "local",
-      "computedHash": "6a519615c8ec222167ab3972fa11d6b935dbb33a7df9ed5900ee455837bd0d53"
+      "computedHash": "7b23125b30547f0ca0b7b213fc731903aba531908c0ef2e07862eda4417f0e11"
     },
     "fluncle-operator": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-operator",
@@ -54,39 +59,44 @@
       "computedHash": "8b4074a2ba5811bdb62e6e02510a2f92c7db9b7bcebfe398f65bfad620ced483"
     },
     "fluncle-publish": {
-      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-publish",
+      "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/fluncle-publish",
       "sourceType": "local",
-      "computedHash": "0782df2411af5e76666e242b16d15df053f7f18441e58f4d055e5bb38f6b0038"
+      "computedHash": "7e549e2998a99e1790caa0cc1308a8993747f5da9523421a895d484b6041d884"
     },
     "fluncle-rfc-writer": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-rfc-writer",
       "sourceType": "local",
       "computedHash": "baae9dd979cd98d1d7c6ee5fd6eef91541950e054e4d01482b16ab716031ee46"
     },
-    "fluncle-sprites": {
-      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-sprites",
+    "fluncle-smoke": {
+      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-smoke",
       "sourceType": "local",
-      "computedHash": "0deb8442a1cc56ff771ed688d5ffbcbe46da6568cc83accb66138cd297a8e726"
+      "computedHash": "9680879b9b7380781fa3c040ced857b529fd757a90ece2ba7baad5254afdc8a0"
+    },
+    "fluncle-sprites": {
+      "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/fluncle-sprites",
+      "sourceType": "local",
+      "computedHash": "927f279d335c48f90065e55dd4a4d13a480cb68eeffc192ae4c824329b8606d7"
     },
     "fluncle-surfaces": {
-      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-surfaces",
+      "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/fluncle-surfaces",
       "sourceType": "local",
-      "computedHash": "6b4c82efb04c91e086378c8978aeb670a1d590d5bdb9dc391ef739bc0a67dafd"
+      "computedHash": "fcd8efb58da7c448a0a3f8e13be378c8105f9c25022db2e11d0b1c7d6300c472"
     },
     "fluncle-track-enrichment": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-track-enrichment",
       "sourceType": "local",
-      "computedHash": "ee0b06da4fda6ee1eec24270dc5f718383e7a4403f2e0de03f73d88cee288209"
+      "computedHash": "f3420d9a30fe13db3d1eb47afbdf509199eb6a357a18e699ba8765fdaab66fe9"
     },
     "fluncle-video": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-video",
       "sourceType": "local",
-      "computedHash": "ad6002bbe687cc2672c95226d6d6fb808ef6337d3ac6a189114ff2e2f22498a8"
+      "computedHash": "c70fbf00f0b0e61cb800fbba43c1f57c238c16d805a2eff43e300be406e15053"
     },
     "hetzner-devbox": {
-      "source": "/Users/maurice/Projects/fluncle/packages/skills/hetzner-devbox",
+      "source": "/Users/maurice/Projects/fluncle/.claude/worktrees/agent-a3f5caa150d26d0e7/packages/skills/hetzner-devbox",
       "sourceType": "local",
-      "computedHash": "a84d188f8f823624e2892e93b0b67bf09e61c468bf2d109a338138c12e90699d"
+      "computedHash": "440c535abf505741746daa47472173d03669ed58cf610cc8fd7353a9a9c23f35"
     },
     "postiz": {
       "source": "gitroomhq/postiz-agent",
@@ -134,6 +144,12 @@
       "source": "/Users/maurice/Projects/fluncle/packages/skills/taste",
       "sourceType": "local",
       "computedHash": "5f5843ddbf100be24ad706491b9ec54e29e6ad7f373c364849f830eb5f8a11c2"
+    },
+    "vercel-composition-patterns": {
+      "source": "vercel-labs/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/composition-patterns/SKILL.md",
+      "computedHash": "575757e3e25761c8c562d6e395d29f0b76c98b1273c0bd72d88e6ab1bc9c7d42"
     },
     "vercel-react-best-practices": {
       "source": "vercel-labs/agent-skills",

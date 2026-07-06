@@ -58,10 +58,11 @@ export type MixtapeRowLike = {
   member_count?: number | null;
   mixcloud_url?: string | null;
   note?: string | null;
-  planned_for?: string | null;
   published_at?: string | null;
   recorded_at?: string | null;
+  recording_id?: string | null;
   sequence_number?: number | null;
+  set_video_at?: string | null;
   soundcloud_url?: string | null;
   status?: MixtapeStatus | null;
   title: string;
@@ -73,8 +74,9 @@ export function rowToMixtape(row: MixtapeRowLike, members: MixtapeMember[] = [])
   return {
     addedAt: row.added_at ?? undefined,
     artists: ["Fluncle"],
-    // The cover is derived, never stored: a published mixtape's Log ID resolves
-    // to the on-the-fly cover endpoint (mixtapeCoverUrl); a draft has no cover yet.
+    // The cover is derived, never stored: a minted mixtape's Log ID resolves to
+    // the on-the-fly cover endpoint (mixtapeCoverUrl); an unminted claim (no Log
+    // ID yet) has no cover.
     coverImageUrl: row.log_id ? mixtapeCoverUrl(row.log_id, "square") : undefined,
     createdAt: row.created_at ?? undefined,
     durationMs: row.duration_ms ?? undefined,
@@ -88,11 +90,15 @@ export function rowToMixtape(row: MixtapeRowLike, members: MixtapeMember[] = [])
     memberCount: Number(row.member_count ?? members.length),
     members,
     note: row.note?.trim() ? row.note : undefined,
-    plannedFor: row.planned_for ?? undefined,
     publishedAt: row.published_at ?? undefined,
     recordedAt: row.recorded_at ?? undefined,
+    // The recording this mixtape was promoted from (its set video + clips live there).
+    recordingId: row.recording_id ?? undefined,
     sequenceNumber: row.sequence_number ?? undefined,
-    status: row.status ?? "draft",
+    setVideoAt: row.set_video_at ?? undefined,
+    // The column is NOT NULL, so the fallback never fires in practice; it only
+    // satisfies the loose `MixtapeRowLike` input shape.
+    status: row.status ?? "published",
     title: row.title,
     type: "mixtape",
     updatedAt: row.updated_at ?? undefined,

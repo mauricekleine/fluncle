@@ -76,7 +76,7 @@ PROVISION="${PROVISION:-$SCRIPT_DIR/provision-rave-03.sh}"
 
 # --- config ---
 START_INTERVAL="${START_INTERVAL:-3600}" # min seconds between render STARTS (hourly throttle)
-MAX_RENDER="${MAX_RENDER:-9000}"          # a render past 2.5h is stuck -> force-park
+MAX_RENDER="${MAX_RENDER:-12600}"         # a render past 3.5h is stuck -> force-park (plate-lane authoring runs ~2h+; 2.5h killed nearly-done renders)
 DONE_MARKER='${HOME:-/home/user}/conductor-run.done'
 API_URL="${FLUNCLE_API_URL:-https://www.fluncle.com}"
 
@@ -186,22 +186,25 @@ if [ "$state" = "rendering" ]; then
     result="$("$BOX_BIN" ssh "$boxid" "cat $DONE_MARKER" 2>/dev/null | tr -d '\r\n' || printf '?')"
     "$BOX_BIN" stop "$boxid" >/dev/null 2>&1 || true
     printf 'idle' >"$STATE_FILE"
-    log "render finished ($result) — box $boxid parked"
+    state=idle
+    log "render finished ($result) — box $boxid parked; chaining to the next pick"
     emit "render-conductor: render finished ($result), box parked"
+    # Chain: fall out of the rendering block to the idle pick in THIS tick — a
+    # finished render must not cost a dead hour. The hourly START gate below
+    # still holds (the last start is over an hour old once a render finishes).
+  else
+    # Still running -> single-flight: do NOT start another. Stuck guard only.
+    started="$(read_or "$STARTED_FILE" 0)"
+    if [ "$(( $(now) - started ))" -gt "$MAX_RENDER" ]; then
+      "$BOX_BIN" stop "$boxid" >/dev/null 2>&1 || true
+      printf 'idle' >"$STATE_FILE"
+      log "render exceeded ${MAX_RENDER}s — force-parked box $boxid"
+      emit "render-conductor: render stuck >${MAX_RENDER}s, force-parked"
+      exit 0
+    fi
+    emit "render-conductor: render in flight on $boxid — single-flight hold"
     exit 0
   fi
-
-  # Still running -> single-flight: do NOT start another. Stuck guard only.
-  started="$(read_or "$STARTED_FILE" 0)"
-  if [ "$(( $(now) - started ))" -gt "$MAX_RENDER" ]; then
-    "$BOX_BIN" stop "$boxid" >/dev/null 2>&1 || true
-    printf 'idle' >"$STATE_FILE"
-    log "render exceeded ${MAX_RENDER}s — force-parked box $boxid"
-    emit "render-conductor: render stuck >${MAX_RENDER}s, force-parked"
-    exit 0
-  fi
-  emit "render-conductor: render in flight on $boxid — single-flight hold"
-  exit 0
 fi
 
 # ============================== IDLE: maybe start ==============================
@@ -239,6 +242,16 @@ if [ -n "$boxid" ] && "$BOX_BIN" resume "$boxid" >/dev/null 2>&1; then
     log "resumed box $boxid lost its ~/fluncle checkout — stopping it + reprovisioning"
     "$BOX_BIN" stop "$boxid" >/dev/null 2>&1 || true
     boxid=""
+  # The checkout freshens above, but the CLI does NOT ride the checkout: provision
+  # copies the conductor's bundled binary ONCE, so a resumed snapshot keeps that
+  # vintage forever while the pin moves on (a register-aware upload needs a newer
+  # binary than the box may have been provisioned with). Re-copy it at every wake —
+  # one small scp against an ~85m render — and BEST-EFFORT: a failed copy logs and
+  # renders on the existing CLI (the same discipline as freshen itself).
+  elif "$BOX_BIN" scp "$FLUNCLE_BIN" "$boxid:/home/user/.local/lib/fluncle.mjs" >>"$LOG_FILE" 2>&1; then
+    log "box CLI refreshed from the conductor's bundled fluncle"
+  else
+    log "box CLI refresh failed — rendering with the existing CLI"
   fi
 else
   boxid=""
@@ -264,6 +277,10 @@ creds="$(mktemp)"
   printf 'export FLUNCLE_API_TOKEN=%s\n' "$FLUNCLE_API_TOKEN"
   printf 'export FLUNCLE_API_URL=%s\n' "$API_URL"
   printf 'export FLUNCLE_GL=swangle\n'
+  # The plate lane: the render agent authors photographic plates via Gemini. The key
+  # arrives here from the 1P-injected sweep secrets; absent -> the agent's documented
+  # procedural fallback (never a failure).
+  printf 'export GEMINI_API_KEY=%s\n' "${GEMINI_API_KEY:-}"
 } >"$creds"
 "$BOX_BIN" scp "$creds" "$boxid:/dev/shm/fluncle.env" >/dev/null 2>&1
 rm -f "$creds"

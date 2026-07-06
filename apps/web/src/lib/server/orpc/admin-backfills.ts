@@ -15,15 +15,11 @@
 
 import { backfillDiscogsIds, backfillLastfmLoves } from "../backfill";
 import { adminAuth } from "../orpc-auth";
-import { apiFault, type Implementer, parseLimit } from "./_shared";
+import { apiFault, type Implementer, parseBool, parseLimit } from "./_shared";
 
 // Ported verbatim from the live backfill routes.
 const BACKFILL_DEFAULT_LIMIT = 50;
 const BACKFILL_MAX_LIMIT = 500;
-
-function parseBool(value: string | undefined): boolean {
-  return value === "1" || value === "true";
-}
 
 /**
  * Build the `admin-backfills` domain's handlers. Each reuses the live route logic

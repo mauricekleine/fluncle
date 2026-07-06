@@ -1,6 +1,6 @@
 import { logPageUrl, siteUrl } from "./fluncle-links";
 import { formatIsoDuration } from "./format";
-import { definitionalProse, type LogProseInput } from "./log-prose";
+import { artistTitleLine, definitionalProse, type LogProseInput } from "./log-prose";
 import { type MixtapeDTO } from "./mixtapes";
 
 // Re-exported for callers that have always reached the log-URL builder through
@@ -52,6 +52,74 @@ export function musicRecordingJsonLd(
       ...(track.discogsReleaseUrl ? [track.discogsReleaseUrl] : []),
     ],
     url: logPageUrl(track.logId),
+  };
+}
+
+/**
+ * Normalize a DB timestamp (or a bare date) to a full ISO 8601 datetime WITH a
+ * timezone (the trailing `Z` = UTC) for schema.org. Google's VideoObject wants a
+ * full datetime in `uploadDate` — a date-only value ("2026-06-29") trips GSC's
+ * "Invalid datetime value for uploadDate" + "missing a timezone". Falls back to the
+ * raw value if it can't be parsed (best-effort; never throws on the /log page).
+ */
+function uploadDateIso(value: string): string {
+  const parsed = new Date(value);
+
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();
+}
+
+/**
+ * The finding's VideoObject — the richer crawl signal on top of the working
+ * og:video, emitted only when the finding carries a rendered video. The
+ * description mirrors the visible definitional prose (schema that contradicts the
+ * page gets discounted); `uploadDate` is the finding's freshest real timestamp,
+ * as a full ISO 8601 datetime with timezone.
+ */
+export function videoObjectJsonLd(
+  track: LogSchemaInput,
+  {
+    contentUrl,
+    thumbnailUrl,
+    uploadDate,
+  }: { contentUrl: string; thumbnailUrl: string; uploadDate: string },
+): Record<string, unknown> {
+  return {
+    "@context": "https://schema.org",
+    "@type": "VideoObject",
+    contentUrl,
+    description: definitionalProse(track),
+    name: artistTitleLine(track),
+    thumbnailUrl,
+    uploadDate: uploadDateIso(uploadDate),
+    url: logPageUrl(track.logId),
+  };
+}
+
+/**
+ * The mixtape set video's VideoObject — parity with the finding VideoObject (the
+ * crawl signal that gets the set video indexed like the rendered finding clips),
+ * emitted only when the mixtape carries a set video (setVideoAt). uploadDate is
+ * the set-video timestamp, as a full ISO 8601 datetime with timezone.
+ */
+export function mixtapeVideoObjectJsonLd(
+  mixtape: MixtapeDTO,
+  {
+    contentUrl,
+    thumbnailUrl,
+    uploadDate,
+  }: { contentUrl: string; thumbnailUrl: string; uploadDate: string },
+): Record<string, unknown> {
+  const logId = mixtape.logId as string;
+
+  return {
+    "@context": "https://schema.org",
+    "@type": "VideoObject",
+    contentUrl,
+    description: mixtape.note ?? `Fluncle drum & bass mixtape — ${mixtape.title}.`,
+    name: mixtape.title,
+    thumbnailUrl,
+    uploadDate: uploadDateIso(uploadDate),
+    url: logPageUrl(logId),
   };
 }
 

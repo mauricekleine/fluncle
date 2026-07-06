@@ -24,11 +24,53 @@ export type IntentTextureFamily =
   | "duotone"
   | "smear";
 
-export type IntentRegister = "abstract" | "representational";
+// The diversity register — how the vehicle reads. "framed" is the doctrine addition:
+// a composed, bordered/matted read (vs a full-bleed abstract field or a
+// representational subject). Kept a REQUIRED field (it predates this and every
+// existing intent supplies one); the doctrine change is the third value.
+export type IntentRegister = "abstract" | "representational" | "framed";
 
 export type IntentArcSource = "energyCurve" | "scripted";
 
 export type IntentMotionModel = "constant-drift" | "directed-front" | "static-field";
+
+// ── The PRESENCE fields (OPTIONAL, backward compatible) ──────────────────────
+// The presence direction puts a nameable SUBJECT in the frame (a colossus, a ruin,
+// a passing hull) that the music does NOT touch — the world answers the music, the
+// thing keeps its own clock. These optional fields let the intent DECLARE the
+// subject so the judge (and the diversity ledger) can check the claim. None of them
+// is load-bearing for the deterministic metrics today; validate-intent lints their
+// cross-field consistency (see validate-intent.ts).
+
+/** What the subject IS — a nameable, placed thing. "none" = an abstract field (no subject). */
+export type IntentSubjectClass =
+  | "colossus"
+  | "ruin"
+  | "vessel"
+  | "flora"
+  | "creature"
+  | "terrain"
+  | "figure"
+  | "threshold"
+  | "none";
+
+/** Where the observer stands relative to the subject — the spatial relation. */
+export type IntentViewpoint =
+  | "approach"
+  | "passage"
+  | "overlook"
+  | "beneath"
+  | "threshold"
+  | "adrift";
+
+/** How much of the subject is shown, and when. "felt-from-frame-one" = present as a
+ *  silhouette/mass from frame one; "resolved-at-drop" = the drop resolves it (occlusion,
+ *  never absence — requires a drop binding); "full" = disclosed throughout. */
+export type IntentDisclosure = "felt-from-frame-one" | "resolved-at-drop" | "full";
+
+/** The subject's own clock. "constant" = audio-free drift/transit (indifference);
+ *  "biological" = an in-place breath at its own rate (never on the beat). */
+export type IntentSubjectClock = "constant" | "biological";
 
 export type IntentBand =
   | "bass"
@@ -93,6 +135,26 @@ export type RenderIntent = {
   bindings: IntentBinding[];
   /** optional, future (judge fuel). */
   secondaryPeaks?: number[];
+  /**
+   * Doctrine additions (OPTIONAL, backward compatible — schema string unchanged).
+   * They give the judge + the diversity metric fuel without breaking old intents.
+   */
+  /** The declared DEPTH MECHANISM — how the scene earns its third dimension (e.g.
+   *  "parallax layers", "atmospheric haze", "occlusion", "focal blur"). Free text. */
+  depthMechanism?: string;
+  /** The FOCAL POINT — where the eye is meant to land (e.g. "centre bloom",
+   *  "lower-third horizon", "the drifting mote"). Free text. */
+  focalPoint?: string;
+  /** PRESENCE (all optional). The nameable subject's class; its default "none" means
+   *  an abstract field. A subject present (≠ "none") makes the intent a presence render:
+   *  the environment must own the audio (no translation binding — validate-intent lints it). */
+  subjectClass?: IntentSubjectClass;
+  /** PRESENCE. The observer's spatial relation to the subject. */
+  viewpoint?: IntentViewpoint;
+  /** PRESENCE. How/when the subject is shown. "resolved-at-drop" requires a drop binding. */
+  disclosure?: IntentDisclosure;
+  /** PRESENCE. The subject's own audio-free clock (indifference). Declaring it marks a subject present. */
+  subjectClock?: IntentSubjectClock;
 };
 
 // Axis groups — one source of truth for the type, the validator, and the
@@ -111,14 +173,14 @@ export const LIGHT_AXES: readonly IntentAxis[] = ["brightness", "exposure", "glo
 export const TEXTURE_AXES: readonly IntentAxis[] = ["grain", "chroma", "dither", "edgeRough"];
 export const MOTION_AXES: readonly IntentAxis[] = ["translation"];
 
-const ALL_AXES: readonly IntentAxis[] = [
+export const ALL_AXES: readonly IntentAxis[] = [
   ...STRUCTURAL_AXES,
   ...LIGHT_AXES,
   ...TEXTURE_AXES,
   ...MOTION_AXES,
 ];
 
-const ALL_BANDS: readonly IntentBand[] = [
+export const ALL_BANDS: readonly IntentBand[] = [
   "bass",
   "mid",
   "treble",
@@ -132,6 +194,52 @@ const ALL_BANDS: readonly IntentBand[] = [
   "onset",
   "flux",
 ];
+
+// Closed value sets for the remaining enum fields — the source of truth the strict
+// validator (validate-intent.ts) checks against.
+export const REGISTERS: readonly IntentRegister[] = ["abstract", "representational", "framed"];
+export const ARC_SOURCES: readonly IntentArcSource[] = ["energyCurve", "scripted"];
+export const MOTION_MODELS: readonly IntentMotionModel[] = [
+  "constant-drift",
+  "directed-front",
+  "static-field",
+];
+export const TEXTURE_FAMILIES: readonly IntentTextureFamily[] = [
+  "nebula",
+  "analog",
+  "dither",
+  "paint",
+  "fluent",
+  "duotone",
+  "smear",
+];
+
+// The presence value sets — the closed enums the strict validator checks against.
+export const SUBJECT_CLASSES: readonly IntentSubjectClass[] = [
+  "colossus",
+  "ruin",
+  "vessel",
+  "flora",
+  "creature",
+  "terrain",
+  "figure",
+  "threshold",
+  "none",
+];
+export const VIEWPOINTS: readonly IntentViewpoint[] = [
+  "approach",
+  "passage",
+  "overlook",
+  "beneath",
+  "threshold",
+  "adrift",
+];
+export const DISCLOSURES: readonly IntentDisclosure[] = [
+  "felt-from-frame-one",
+  "resolved-at-drop",
+  "full",
+];
+export const SUBJECT_CLOCKS: readonly IntentSubjectClock[] = ["constant", "biological"];
 
 // A fast band on `axis: "translation"` is a self-reported beat-pull. The
 // smoothed bands are the only legitimate translation drivers.
@@ -221,6 +329,9 @@ export function generateIntentStub(trackId: string, logId: string | null): Rende
     register: "abstract",
     schema: RENDER_INTENT_SCHEMA,
     secondaryPeaks: [],
+    // The generated stub is an abstract field: no subject. Declaring it explicitly
+    // keeps the presence fields exercised and the honest "no subject" state legible.
+    subjectClass: "none",
     textureFamily: "nebula",
     trackId,
     vehicle: "unknown",

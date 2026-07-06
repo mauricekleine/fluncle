@@ -1,21 +1,23 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { type MixtapeDTO } from "@fluncle/contracts";
+import { type MixtapeDTO, type RecordingDTO } from "@fluncle/contracts";
 import { logPageUrl, siteUrl, twitchUrl } from "../lib/fluncle-links";
 import { mixtapeDisplayTitle } from "../lib/mixtapes";
 import { listCalendarMixtapes } from "../lib/server/mixtapes";
+import { listUpcomingPlans } from "../lib/server/recordings";
 
 // A subscribe-able calendar (RFC 5545) of Fluncle's live sessions. Two kinds of
 // VEVENT:
-//   - upcoming live sessions: any mixtape with a FUTURE `plannedFor` (including
-//     drafts — the teaser). The dated action is "tune in live on Twitch", so the
-//     event's URL/LOCATION is the Twitch channel.
+//   - upcoming live sessions: any PLAN (a videoless recording) with a FUTURE
+//     `plannedFor` — the teaser (RFC plan→recording→mixtape §6, D-plannedFor:
+//     upcoming sets are plans now). The dated action is "tune in live on
+//     Twitch", so the event's URL/LOCATION is the Twitch channel.
 //   - past mixtapes: every `published` mixtape, dated by `recordedAt`, pointing
 //     at its permanent /log home.
 //
-// A draft WITHOUT `plannedFor` is neither published nor future-planned, so the
-// query (listCalendarMixtapes) never returns it — unannounced drafts stay hidden.
-// A future-planned draft exposes ONLY its title, date, and tracklist here; the
-// teaser is intentional.
+// A plan WITHOUT `plannedFor` is neither published nor future-planned, so the
+// query (listUpcomingPlans) never returns it — unannounced plans stay hidden.
+// A future-planned plan exposes ONLY its date and queued tracklist here (never
+// its internal Galaxy-vocab handle); the teaser is intentional.
 
 const PRODID = "-//Fluncle//Live Sessions//EN";
 const CALENDAR_NAME = "Fluncle — Live Sessions";
@@ -25,13 +27,20 @@ export const Route = createFileRoute("/calendar.ics")({
     handlers: {
       GET: async () => {
         const now = new Date();
-        const mixtapes = await listCalendarMixtapes(now.toISOString());
+        const [mixtapes, plans] = await Promise.all([
+          listCalendarMixtapes(),
+          listUpcomingPlans(now.toISOString()),
+        ]);
         const dtstamp = toIcsUtc(now);
 
-        const events = mixtapes
-          .map((mixtape) => buildEvent(mixtape, now, dtstamp))
-          .filter((block): block is string[] => block !== null)
-          .flat();
+        const events = [
+          ...plans
+            .map((plan) => buildPlanEvent(plan, now, dtstamp))
+            .filter((block): block is string[] => block !== null),
+          ...mixtapes
+            .map((mixtape) => buildMixtapeEvent(mixtape, dtstamp))
+            .filter((block): block is string[] => block !== null),
+        ].flat();
 
         const lines = [
           "BEGIN:VCALENDAR",
@@ -61,42 +70,43 @@ export const Route = createFileRoute("/calendar.ics")({
   },
 });
 
-// One mixtape → its VEVENT lines, or null when it has no datable anchor. A future
-// `plannedFor` makes it an upcoming live session; otherwise a published mixtape is
-// a past event.
-function buildEvent(mixtape: MixtapeDTO, now: Date, dtstamp: string): string[] | null {
-  const title = mixtapeDisplayTitle(mixtape.title) || "Fluncle live";
-  const tracklist = formatTracklist(mixtape);
+// One upcoming PLAN → its live-session VEVENT lines, or null when its planned
+// date is unusable. The action is "tune in live on Twitch", so the Twitch channel
+// is the URL + LOCATION. The SUMMARY is the quiet public label — a plan's title
+// is its internal Galaxy-vocab handle, which stays off the public calendar.
+function buildPlanEvent(plan: RecordingDTO, now: Date, dtstamp: string): string[] | null {
+  const plannedFor = plan.plannedFor ? new Date(plan.plannedFor) : null;
 
-  const plannedFor = mixtape.plannedFor ? new Date(mixtape.plannedFor) : null;
-  const isUpcoming =
-    plannedFor !== null &&
-    !Number.isNaN(plannedFor.getTime()) &&
-    plannedFor.getTime() > now.getTime();
-
-  if (isUpcoming) {
-    // An upcoming live session: the action is "tune in live on Twitch", so the
-    // Twitch channel is the URL + LOCATION. A draft teaser lands here.
-    const description = [
-      "Fluncle goes live — fresh drum & bass, mixed live across the Galaxy. Tune in on Twitch.",
-      tracklist ? `\n\nWhat's queued:\n${tracklist}` : "",
-    ].join("");
-
-    return [
-      "BEGIN:VEVENT",
-      `UID:${escapeText(eventUid(mixtape, "live"))}`,
-      `DTSTAMP:${dtstamp}`,
-      `DTSTART:${toIcsUtc(plannedFor)}`,
-      `SUMMARY:${escapeText(title)}`,
-      `URL:${escapeText(twitchUrl)}`,
-      `LOCATION:${escapeText(twitchUrl)}`,
-      `DESCRIPTION:${escapeText(description)}`,
-      "END:VEVENT",
-    ];
+  if (
+    plannedFor === null ||
+    Number.isNaN(plannedFor.getTime()) ||
+    plannedFor.getTime() <= now.getTime()
+  ) {
+    return null;
   }
 
-  // A past event: only `published` mixtapes (the query guarantees it) with a
-  // recorded date. Point at the permanent /log home.
+  const tracklist = formatCueTracklist(plan);
+  const description = [
+    "Fluncle goes live — fresh drum & bass, mixed live across the Galaxy. Tune in on Twitch.",
+    tracklist ? `\n\nWhat's queued:\n${tracklist}` : "",
+  ].join("");
+
+  return [
+    "BEGIN:VEVENT",
+    `UID:${escapeText(`live-${plan.id}@fluncle.com`)}`,
+    `DTSTAMP:${dtstamp}`,
+    `DTSTART:${toIcsUtc(plannedFor)}`,
+    "SUMMARY:Fluncle live",
+    `URL:${escapeText(twitchUrl)}`,
+    `LOCATION:${escapeText(twitchUrl)}`,
+    `DESCRIPTION:${escapeText(description)}`,
+    "END:VEVENT",
+  ];
+}
+
+// One published mixtape → its past-event VEVENT lines, or null when it has no
+// recorded date to anchor on. Points at the permanent /log home.
+function buildMixtapeEvent(mixtape: MixtapeDTO, dtstamp: string): string[] | null {
   if (mixtape.status !== "published") {
     return null;
   }
@@ -106,6 +116,8 @@ function buildEvent(mixtape: MixtapeDTO, now: Date, dtstamp: string): string[] |
     return null;
   }
 
+  const title = mixtapeDisplayTitle(mixtape.title) || "Fluncle live";
+  const tracklist = formatMemberTracklist(mixtape);
   const link = mixtape.logId ? logPageUrl(mixtape.logId) : siteUrl;
   const description = [
     mixtape.note?.trim()
@@ -117,7 +129,7 @@ function buildEvent(mixtape: MixtapeDTO, now: Date, dtstamp: string): string[] |
 
   return [
     "BEGIN:VEVENT",
-    `UID:${escapeText(eventUid(mixtape, "mixtape"))}`,
+    `UID:${escapeText(eventUid(mixtape))}`,
     `DTSTAMP:${dtstamp}`,
     `DTSTART:${toIcsUtc(recordedAt)}`,
     `SUMMARY:${escapeText(title)}`,
@@ -127,15 +139,26 @@ function buildEvent(mixtape: MixtapeDTO, now: Date, dtstamp: string): string[] |
   ];
 }
 
-// A stable, globally-unique UID (RFC 5545 §3.8.4.7). The kind keeps a single
-// mixtape's live-session event and (later) mixtape event distinct.
-function eventUid(mixtape: MixtapeDTO, kind: "live" | "mixtape"): string {
+// A stable, globally-unique UID (RFC 5545 §3.8.4.7). Plans key their live event
+// off the recording id; a mixtape keys its past event off its coordinate.
+function eventUid(mixtape: MixtapeDTO): string {
   const anchor = mixtape.logId ?? mixtape.id ?? mixtape.title;
-  return `${kind}-${anchor}@fluncle.com`;
+  return `mixtape-${anchor}@fluncle.com`;
+}
+
+// A plan's queued cues as "Artist — Title" lines (no offsets), for the teaser
+// DESCRIPTION. A cue with no artists renders as its title alone.
+function formatCueTracklist(plan: RecordingDTO): string {
+  if (plan.tracklist.length === 0) {
+    return "";
+  }
+  return plan.tracklist
+    .map((cue) => (cue.artists.length > 0 ? `${cue.artists.join(", ")} — ${cue.title}` : cue.title))
+    .join("\n");
 }
 
 // The member list as "Artist — Title" lines (no offsets), for the DESCRIPTION.
-function formatTracklist(mixtape: MixtapeDTO): string {
+function formatMemberTracklist(mixtape: MixtapeDTO): string {
   if (!mixtape.members || mixtape.members.length === 0) {
     return "";
   }

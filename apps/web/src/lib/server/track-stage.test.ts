@@ -10,12 +10,22 @@ const added: StageInput = {
   postedToTelegram: true,
 };
 
-function post(platform: string, status: string): SocialPostItem {
+// A fixed clock for the publishing-stage cases, where the TikTok stale-draft
+// cutoff makes `trackStage` clock-dependent. `updatedAt` defaults FRESH (2h before
+// NOW) so a draft reads as still in the inbox; pass an older stamp to exercise the
+// bounced-draft path.
+const NOW = Date.parse("2026-07-06T20:00:00.000Z");
+
+function post(
+  platform: string,
+  status: string,
+  updatedAt = "2026-07-06T18:00:00.000Z",
+): SocialPostItem {
   return {
     createdAt: "2026-06-01T00:00:00.000Z",
     platform,
     status,
-    updatedAt: "2026-06-01T00:00:00.000Z",
+    updatedAt,
   };
 }
 
@@ -86,37 +96,64 @@ describe("trackStage — publishing stages", () => {
   };
 
   it("on YouTube but not TikTok → `youtube`, ready for TikTok", () => {
-    expect(trackStage({ ...filmed, posts: [post("youtube", "published")] })).toEqual({
+    expect(trackStage({ ...filmed, posts: [post("youtube", "published")] }, NOW)).toEqual({
       blockedOn: "ready for TikTok",
       stage: "youtube",
     });
   });
 
-  it("a TikTok draft (not yet live) counts as pushed → reaches `tiktok`", () => {
-    expect(trackStage({ ...filmed, posts: [post("tiktok", "draft")] })).toEqual({
+  it("a FRESH TikTok draft (in the inbox, under 24h) counts as pushed → reaches `tiktok`", () => {
+    expect(trackStage({ ...filmed, posts: [post("tiktok", "draft")] }, NOW)).toEqual({
       blockedOn: "ready for YouTube",
       stage: "tiktok",
     });
   });
 
+  it("a STALE TikTok draft (past 24h, likely bounced) re-opens the finding as ready for TikTok", () => {
+    // The live bug: TikTok async-bounces the draft, Postiz still reports success, the
+    // row stays `draft` — so a bounced draft used to read as posted forever. Past 24h
+    // it must re-surface in the "ready for TikTok" worklist.
+    expect(
+      trackStage(
+        {
+          ...filmed,
+          posts: [
+            post("youtube", "published"),
+            post("tiktok", "draft", "2026-07-05T10:00:00.000Z"),
+          ],
+        },
+        NOW,
+      ),
+    ).toEqual({ blockedOn: "ready for TikTok", stage: "youtube" });
+  });
+
+  it("a STALE TikTok draft with no other push falls back to `filmed` (nothing has gone out)", () => {
+    expect(
+      trackStage({ ...filmed, posts: [post("tiktok", "draft", "2026-07-05T10:00:00.000Z")] }, NOW),
+    ).toEqual({ blockedOn: "ready for YouTube", stage: "filmed" });
+  });
+
   it("live on both platforms → `tiktok`, nothing blocking", () => {
     expect(
-      trackStage({
-        ...filmed,
-        posts: [post("youtube", "published"), post("tiktok", "published")],
-      }),
+      trackStage(
+        {
+          ...filmed,
+          posts: [post("youtube", "published"), post("tiktok", "published")],
+        },
+        NOW,
+      ),
     ).toEqual({ blockedOn: null, stage: "tiktok" });
   });
 
   it("a failed push does NOT count as pushed → stays `filmed`", () => {
-    expect(trackStage({ ...filmed, posts: [post("youtube", "failed")] })).toEqual({
+    expect(trackStage({ ...filmed, posts: [post("youtube", "failed")] }, NOW)).toEqual({
       blockedOn: "ready for YouTube",
       stage: "filmed",
     });
   });
 
   it("posts present but for an unrelated platform are ignored", () => {
-    expect(trackStage({ ...filmed, posts: [post("instagram", "published")] })).toEqual({
+    expect(trackStage({ ...filmed, posts: [post("instagram", "published")] }, NOW)).toEqual({
       blockedOn: "ready for YouTube",
       stage: "filmed",
     });

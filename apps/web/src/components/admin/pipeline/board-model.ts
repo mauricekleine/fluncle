@@ -10,6 +10,7 @@ import {
   VinylRecordIcon,
   WaveformIcon,
 } from "@phosphor-icons/react";
+import { isStaleTikTokDraft, tikTokDraftAgeHours } from "@fluncle/contracts/util";
 import { type ComponentType } from "react";
 import { TiktokIcon, YoutubeIcon } from "@/components/platform-icons";
 import { GALAXIES, galaxyForVibe } from "@/lib/galaxies";
@@ -58,11 +59,15 @@ export type StepKind = "auto" | "human";
  * open    — nothing yet; for a human step this is your move (when not gated).
  * running — an agent step in flight (enrichment processing).
  * partial — touched, not closed (a pushed-but-not-live draft; context gathered but
- *           not voiced; a finding sitting in a draft tape).
+ *           not voiced; a finding pencilled into a plan).
  * done    — closed.
+ * stale   — pushed but the push has almost certainly bounced: a TikTok inbox draft
+ *           past TikTok's 24h window (Postiz reports success, TikTok drops the 6th+
+ *           pending draft silently). Your move again — re-push — so it never reads as
+ *           gone-out. Distinct from `open` (never pushed) and `partial` (in-flight).
  * planned — designed-in, not wired yet; ghosted, never actionable.
  */
-export type StepState = "open" | "running" | "partial" | "done" | "planned";
+export type StepState = "open" | "running" | "partial" | "done" | "stale" | "planned";
 
 /** The callbacks the board hands every variant — one per openable step dialog. */
 export type BoardActions = {
@@ -133,23 +138,32 @@ const STEP_DEFS: { key: StepKey; kind: StepKind; label: string; Icon: StepIcon }
 function publishStep(
   row: BoardRow,
   platform: "youtube" | "tiktok",
+  now: number,
 ): Pick<BoardStep, "state" | "statusLabel" | "hint" | "actionable" | "gated"> {
   const post = row.posts.find((entry) => entry.platform === platform);
   const status = post?.status;
   const hasLiveUrl = Boolean(post?.url);
+  // A TikTok inbox draft past the 24h window has almost certainly bounced (Postiz
+  // reports the push a success but TikTok silently drops the 6th+ pending draft), so
+  // it re-opens as `stale` — your move again — rather than reading `partial`/gone-out
+  // forever. The shared `isStaleTikTokDraft` rule is the one source of that cutoff.
+  const staleDraft = post ? isStaleTikTokDraft(post, now) : false;
+  const staleHours = post ? (tikTokDraftAgeHours(post, now) ?? 0) : 0;
   // Live only closes the circuit once a public URL is recorded; YouTube auto-posts
   // and TikTok is finished in-app, so both land "published" with the link missing —
-  // a partial, not done. A failed push re-opens it as a retry.
-  const state: StepState =
-    status === "published"
+  // a partial, not done. A failed push re-opens it as a retry; a bounced draft as stale.
+  const state: StepState = staleDraft
+    ? "stale"
+    : status === "published"
       ? hasLiveUrl
         ? "done"
         : "partial"
       : status === "draft" || status === "scheduled"
         ? "partial"
         : "open";
-  const statusLabel =
-    status === "published"
+  const statusLabel = staleDraft
+    ? `Stale ${staleHours}h`
+    : status === "published"
       ? hasLiveUrl
         ? "Live"
         : "Add link"
@@ -163,22 +177,28 @@ function publishStep(
   // Nothing to push until there's a video — unless a post already exists.
   const gated = !row.videoUrl && !post;
   const label = platform === "youtube" ? "YouTube" : "TikTok";
+  const hint = gated
+    ? "No video yet — render first"
+    : staleDraft
+      ? `Draft stale ${staleHours}h — likely bounced; re-push`
+      : `${label} publish`;
 
   return {
     actionable: !gated,
     gated,
-    hint: gated ? "No video yet — render first" : `${label} publish`,
+    hint,
     state,
     statusLabel,
   };
 }
 
 /**
- * Derive every step for one finding. Pure — reads the row's own fields plus its
- * social posts and mixtape memberships, exactly like the live board's cells, so the
- * variants never drift from the real state.
+ * Derive every step for one finding. Pure over the row + an injected clock (`now`,
+ * defaulting to the wall clock): the only time dependence is the TikTok stale-draft
+ * cutoff. Reads the row's own fields plus its social posts and mixtape memberships,
+ * exactly like the live board's cells, so the variants never drift from the real state.
  */
-export function boardSteps(row: BoardRow): BoardStep[] {
+export function boardSteps(row: BoardRow, now: number = Date.now()): BoardStep[] {
   const tagged = row.vibeX !== undefined && row.vibeY !== undefined;
   const galaxy =
     row.galaxy?.key ??
@@ -187,8 +207,10 @@ export function boardSteps(row: BoardRow): BoardStep[] {
       : undefined);
   const note = row.note?.trim();
   const rendered = Boolean(row.observationAudioUrl);
-  const onTape = row.mixtapes.some((m) => m.status === "published" || m.status === "distributing");
-  const inDraftTape = !onTape && row.mixtapes.length > 0;
+  // Every mixtape membership is a minted checkpoint now (drafts retired); a plan
+  // membership is the pencilled-in in-between.
+  const onTape = row.mixtapes.length > 0;
+  const inPlan = !onTape && row.plans.length > 0;
 
   const partials: Record<
     StepKey,
@@ -202,13 +224,17 @@ export function boardSteps(row: BoardRow): BoardStep[] {
       statusLabel: row.hasContextNote ? "Context" : "No context",
     },
     discogs: {
-      // The board is a WORKFLOW tracker, not a data-existence tracker. The Discogs
-      // backfill ran-but-found-no-release is a SUCCESS (the workflow checked, there
-      // just was no Discogs release to link) — so the cell closes `done` the moment
-      // the backfill RAN (`discogsRan`, the `backfill_discogs_attempted_at` stamp),
-      // whether or not it linked a release. Grey/`open` means ONE thing: not run yet.
-      // No manual trigger — the agent resolves the release; clicking opens the link
-      // (still only actionable when there's a release to open).
+      // The board is a WORKFLOW tracker, not a data-existence tracker. The cell
+      // closes `done` once the lookup has resolved a release OR ran without finding
+      // one — both are a SUCCESS (the workflow checked). A release can be linked by
+      // EITHER path: the on-add resolve (publishTrack writes `in_release_id` directly,
+      // without ever stamping `backfill_discogs_attempted_at`) or the backfill sweep
+      // (which stamps `discogsRan`, then SKIPS already-linked findings forever). So a
+      // finding resolved on add carries `discogsReleaseUrl` but NOT `discogsRan` — it
+      // must still read `done`, or a linked release renders as an un-filled "Pending"
+      // cell. Hence: linked (either path) OR ran ⇒ done. Grey/`open` means ONE thing:
+      // never resolved AND never swept. No manual trigger — the agent resolves the
+      // release; clicking opens the link (only actionable when there's one to open).
       actionable: Boolean(row.discogsReleaseUrl),
       gated: false,
       hint: row.discogsReleaseUrl
@@ -216,7 +242,7 @@ export function boardSteps(row: BoardRow): BoardStep[] {
         : row.discogsRan
           ? "Checked — no Discogs release found"
           : "Discogs lookup hasn't run yet",
-      state: row.discogsRan ? "done" : "open",
+      state: row.discogsReleaseUrl || row.discogsRan ? "done" : "open",
       statusLabel: row.discogsReleaseUrl
         ? "Linked"
         : row.discogsRan
@@ -260,9 +286,9 @@ export function boardSteps(row: BoardRow): BoardStep[] {
     mixtape: {
       actionable: true,
       gated: false,
-      hint: row.mixtapes.length > 0 ? "On a mixtape — open the picker" : "Add to a mixtape",
-      state: onTape ? "done" : inDraftTape ? "partial" : "open",
-      statusLabel: onTape ? "On a tape" : inDraftTape ? "In a draft" : "Add",
+      hint: onTape ? "On a mixtape: open the plan picker" : "Add to a plan",
+      state: onTape ? "done" : inPlan ? "partial" : "open",
+      statusLabel: onTape ? "On a tape" : inPlan ? "In a plan" : "Add",
     },
     note: {
       // An `auto` step (the auto-note cron authors it) that stays `actionable` so the
@@ -300,7 +326,7 @@ export function boardSteps(row: BoardRow): BoardStep[] {
       state: tagged ? "done" : "open",
       statusLabel: tagged ? (galaxy ? GALAXIES[galaxy].name : "Tagged") : "Tag",
     },
-    tiktok: publishStep(row, "tiktok"),
+    tiktok: publishStep(row, "tiktok", now),
     video: {
       // Agent-rendered; clicking previews when there's a clip, otherwise it waits.
       actionable: Boolean(row.videoUrl),
@@ -309,7 +335,7 @@ export function boardSteps(row: BoardRow): BoardStep[] {
       state: row.videoUrl ? "done" : "open",
       statusLabel: row.videoUrl ? "Filmed" : "No clip",
     },
-    youtube: publishStep(row, "youtube"),
+    youtube: publishStep(row, "youtube", now),
   };
 
   return STEP_DEFS.map((def) => ({

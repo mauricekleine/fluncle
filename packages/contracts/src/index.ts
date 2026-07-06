@@ -26,11 +26,17 @@
 // (`z.unknown()`), so inferring them would erase the CLI's typed send shape.
 
 import { type z } from "zod";
+import { type ServiceHealthStatusSchema } from "./orpc/admin-health.js";
+import { type GalaxyProgressSchema } from "./orpc/me-galaxy.js";
 import {
+  type ClipDTOSchema,
   type EditionDTOSchema,
   type MixtapeDTOSchema,
   type MixtapeSocialPostItemSchema,
+  type PublicUserSchema,
   type RadioNowPlayingSchema,
+  type RecordingDTOSchema,
+  type RecordingTracklistItemSchema,
   type SocialPostItemSchema,
   type SubmissionSchema,
   type TrackFeaturesSchema,
@@ -56,6 +62,39 @@ export type ApiFailure = {
 
 /** The four vibe-map galaxies (the admin tagging quadrants). The web keeps the runtime `GALAXIES` map + `GalaxyMeta`. */
 export type Galaxy = "astral" | "lunar" | "nebular" | "solar";
+
+// ── Me (the private user tier) ───────────────────────────────────────────────
+
+/**
+ * A signed-in public user as the `/me` private tier returns it. Inferred from
+ * `PublicUserSchema` (./orpc/_shared.ts) — the cookie-session identity, distinct
+ * from the admin grant. `username`/`displayUsername` are absent until claimed.
+ */
+export type PublicUser = z.infer<typeof PublicUserSchema>;
+
+/**
+ * `GET /me` (`get_current_private_user`): `{ ok: true, user }` where `user` is the
+ * signed-in `PublicUser` or `null` when there is no session. The hand-written
+ * envelope over the inferred `PublicUser`, matching `getCurrentPrivateUser.output`.
+ */
+export type MeResponse = Ok<{ user: PublicUser | null }>;
+
+/**
+ * A user's Galaxy progress (the game's cross-device save) as
+ * `GET/PUT /me/galaxy-progress` returns it. Inferred from `GalaxyProgressSchema`
+ * (./orpc/me-galaxy.ts); carries its own `ok: true` (the live helper's object is
+ * returned verbatim). `lastPlayedAt`/`updatedAt` are absent until the first play.
+ */
+export type GalaxyProgress = z.infer<typeof GalaxyProgressSchema>;
+
+// ── Service health (the public /status dashboard) ────────────────────────────
+
+/**
+ * The three-state service-health enum the status surfaces emit. Inferred from
+ * `ServiceHealthStatusSchema` (./orpc/admin-health.ts), the `admin-health`
+ * contract's shared enum.
+ */
+export type ServiceHealthStatus = z.infer<typeof ServiceHealthStatusSchema>;
 
 // ── Track ────────────────────────────────────────────────────────────────────
 
@@ -91,7 +130,11 @@ export type TrackListPage = {
 // "distributing" = minted (Log ID + title committed, cover renders) but assets are
 // still uploading to the platforms; not yet public. The first successful platform
 // link flips it to "published". So a published mixtape always has ≥1 listen link.
-export type MixtapeStatus = "distributing" | "draft" | "published";
+// There is no "draft": a mixtape is only ever BORN via `promote_recording` (RFC
+// plan→recording→mixtape) — pre-publish authoring lives on PLANS (`recordings`
+// kind=plan), and the promote claim inserts straight into `distributing`
+// (unminted while `logId` is still null, minted within the same promote).
+export type MixtapeStatus = "distributing" | "published";
 
 export type MixtapeExternalUrls = {
   mixcloud?: string;
@@ -146,10 +189,94 @@ export type RadioNowPlayingResponse = Ok<{ nowPlaying: RadioNowPlaying }>;
 // ── Mixtape API envelopes ────────────────────────────────────────────────────
 
 export type MixtapesResponse = Ok<{ mixtapes: MixtapeDTO[] }>;
-export type MixtapeCreateResponse = Ok<{ mixtape: MixtapeDTO }>;
+
+// ── Mixtape clips (Fluncle Studio Unit C/D/G) ────────────────────────────────
+// A clip is a lightweight 9:16 derivative cut from a mixtape's set video — many per
+// set, NOT a spine object (no Log ID). Inferred from `ClipDTOSchema` (./orpc/_shared)
+// so the wire shape cannot drift. The CLI (`fluncle admin clips list|cut`) + the box
+// clip-cut cron read these.
+
+/** A clip row as the clip ops emit it. */
+export type ClipDTO = z.infer<typeof ClipDTOSchema>;
+
+/** `GET /api/admin/clips` response: every clip (optionally filtered by mixtape/status). */
+export type ClipsResponse = Ok<{ clips: ClipDTO[] }>;
+
+/**
+ * `POST /api/admin/clips/:clipId/cut/presign` response (Unit C): the single presigned
+ * PUT URL the box streams `<clipId>/footage.mp4` to, plus the exact `contentType`
+ * it MUST replay on the PUT (baked into the signature).
+ */
+export type ClipPresignResponse = Ok<{
+  clipId: string;
+  contentType: string;
+  key: string;
+  url: string;
+}>;
+
+/** `POST /api/admin/clips/:clipId/cut/finalize` response (Unit C): the clip, marked done. */
+export type ClipCutFinalizeResponse = Ok<{ clip: ClipDTO }>;
+
+// ── Clip drip-feed (clip-drip-feed RFC) ──────────────────────────────────────
+// One clip's Instagram drip-feed schedule + status (the `mixtape_clip_social_posts`
+// row). The CLI (`fluncle admin clips list|schedule|drip-pause|drip-resume`) reads these.
+
+/** A clip's Instagram drip-feed state. */
+export type ClipSocialPost = {
+  caption?: string;
+  clipId: string;
+  createdAt: string;
+  platform: string;
+  postedUrl?: string;
+  postizId?: string;
+  scheduledFor: string;
+  status: "failed" | "posted" | "scheduled";
+  updatedAt: string;
+};
+
+/** `GET /api/admin/clips/social` response: every clip's drip-feed row. */
+export type ClipSocialPostsResponse = Ok<{ posts: ClipSocialPost[] }>;
+
+/** `PATCH /api/admin/clips/:clipId/schedule` response: the (re)scheduled clip post. */
+export type ClipScheduleResponse = Ok<{ post: ClipSocialPost }>;
+
+/** `PUT /api/admin/clips/drip/state` response: the resulting paused state. */
+export type ClipDripStateResponse = Ok<{ paused: boolean }>;
+
+// ── Recordings (RFC recording-primitive, Design B) ───────────────────────────
+// A recording is a captured DJ set that is NOT (yet) a published mixtape — it OWNS its
+// R2 key, carries an optional cue tracklist, and is coordinate-less until `promote`.
+// Inferred from the Zod schemas (./orpc/_shared) so the wire shape cannot drift. The
+// CLI (`fluncle admin recordings …`) + the box clip-cut cron read these.
+
+/** A recording tracklist cue (`{ id, artists, title, startMs? }`). */
+export type RecordingTracklistItem = z.infer<typeof RecordingTracklistItemSchema>;
+
+/** A recording row as the recording ops emit it (with the promoted logId/mixtapeId if any). */
+export type RecordingDTO = z.infer<typeof RecordingDTOSchema>;
+
+/** `GET /api/admin/recordings` response: every recording, newest first. */
+export type RecordingsResponse = Ok<{ recordings: RecordingDTO[] }>;
+
+/** The `{ recording }` envelope create/get/update/promote return. */
+export type RecordingResponse = Ok<{ recording: RecordingDTO }>;
+
+/**
+ * `POST /api/admin/recordings/:recordingId/set-video/presign` response: the opened
+ * multipart upload's id + owned key plus every presigned URL the CLI needs to drive it
+ * (one PUT URL per part, the completion POST URL, the abort DELETE URL). The clone of
+ * the mixtape set-video presign targeting `recordings/<recordingId>/set.mp4`.
+ */
+export type RecordingSetVideoPresignResponse = Ok<{
+  abortUrl: string;
+  completeUrl: string;
+  key: string;
+  parts: { partNumber: number; url: string }[];
+  recordingId: string;
+  uploadId: string;
+}>;
+
 export type MixtapeUpdateResponse = Ok<{ mixtape: MixtapeDTO }>;
-export type MixtapePublishResponse = Ok<{ mixtape: MixtapeDTO }>;
-export type MixtapeDeleteResponse = Ok<{}>;
 
 // ── Edition (the newsletter archive) ─────────────────────────────────────────
 
@@ -210,6 +337,37 @@ export type MixcloudTokenResponse = Ok<{ accessToken: string }>;
  * so the CLI needs the Bearer token alongside the URI.
  */
 export type MixtapeYouTubeInitiateResponse = Ok<{ accessToken: string; sessionUri: string }>;
+
+/**
+ * `/api/admin/mixtapes/:id/youtube/resync` response: the live video URL + id after
+ * its description + chapters were re-derived from the current cues and pushed via
+ * `videos.update` (no re-upload).
+ */
+export type MixtapeYouTubeResyncResponse = Ok<{ url: string; videoId: string }>;
+
+/**
+ * `/api/admin/mixtapes/:id/mixcloud/resync` response: the live cloudcast URL after
+ * its `sections[]` tracklist was re-derived from the current cues and pushed via the
+ * Mixcloud edit endpoint (sections-only, no audio re-upload). Server-side (the Worker
+ * holds the `mixcloud_auth` token), the parity twin of the YouTube leg.
+ */
+export type MixtapeMixcloudResyncResponse = Ok<{ url: string }>;
+
+/**
+ * `/api/admin/mixtapes/:id/set-video/presign` response (Fluncle Studio Unit A): the
+ * opened multipart upload's id + key plus every presigned URL the CLI needs to drive
+ * it — one PUT URL per part, the completion POST URL, and the abort DELETE URL. The
+ * ~1.5GB rendition streams straight to R2; the Worker never proxies the bytes.
+ */
+export type MixtapeSetVideoPresignResponse = Ok<{
+  abortUrl: string;
+  completeUrl: string;
+  key: string;
+  logId: string;
+  mixtapeId: string;
+  parts: { partNumber: number; url: string }[];
+  uploadId: string;
+}>;
 
 // ── Submission ───────────────────────────────────────────────────────────────
 
@@ -353,10 +511,4 @@ export type MixtapeRequestBody = {
   // YouTube + Mixcloud links come from `distribute` (mixtape_social_posts); only the
   // manual SoundCloud link is settable here (it too becomes a distribution row).
   soundcloudUrl?: string;
-};
-
-export type CueEntry = { ref: string; startMs?: number };
-
-export type MixtapeMembersRequest = {
-  members: Array<CueEntry | string>;
 };

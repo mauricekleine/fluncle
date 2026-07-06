@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    // The glass + bridge run directly under bun (which imports .ts by path).
+    "allowImportingTsExtensions": true,
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "moduleResolution": "Bundler",
+    // Deliberate opt-out mirroring packages/video: live DSP/shader hot-loop code.
+    "noUncheckedIndexedAccess": false,
+    "strict": true,
+    "types": ["node", "bun"]
+  },
+  "include": ["src/**/*.ts"]
+}

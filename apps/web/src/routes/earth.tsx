@@ -6,7 +6,7 @@ import { earthPalette as p } from "@/game/earth/palette";
 import { type PlacedDoor } from "@/game/earth/registry";
 import { siteUrl, spotifyPlaylistUrl, telegramUrl } from "@/lib/fluncle-links";
 
-// Earth — the top-down overworld (docs/earth-overworld-rfc.md). "We have the sky
+// Earth — the top-down overworld. "We have the sky
 // but not the ground": the galaxy game is first-person among the stars; this is
 // the ground Fluncle left from. A client-only Canvas walker (apps/web/src/game/
 // earth/*) where every device is a door into a real Fluncle surface — owned

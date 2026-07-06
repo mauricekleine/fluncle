@@ -1,0 +1,14 @@
+[Unit]
+Description=fluncle-healthcheck timer — trigger the /status prober every 10m on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# First tick shortly after boot, then every 10m — the prober's original cadence.
+# Persistent catches up a missed window (box reboot) on the next wake. A tick is a
+# cheap ~5s probe, so 10m is free; unlike a Hermes cron, the host scheduler is never
+# busy with long sweeps, so the tick always fires on time.
+OnBootSec=2min
+OnUnitActiveSec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

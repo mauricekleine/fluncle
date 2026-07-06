@@ -71,6 +71,7 @@ export const TrackListItemSchema = z
     videoGrain: z.string().optional(),
     videoModel: z.string().optional(),
     videoModelReasoning: z.string().optional(),
+    videoRegister: z.string().optional(),
     videoSquaredAt: z.string().optional(),
     videoUrl: z.string().optional(),
     videoVehicle: z.string().optional(),
@@ -120,11 +121,21 @@ export const MixtapeDTOSchema = z
     memberCount: z.number(),
     members: z.array(MixtapeMemberSchema),
     note: z.string().optional(),
-    plannedFor: z.string().optional(),
     publishedAt: z.string().optional(),
     recordedAt: z.string().optional(),
+    // The RECORDING this mixtape was promoted from (RFC recording-primitive, Design B) —
+    // the source of its set video + clips. Set on a promoted mixtape (and mixtape #1's
+    // backfilled recording); absent on a legacy mixtape published before recordings
+    // existed. A mixtape's Studio IS its recording's Studio
+    // (`/admin/studio/<recordingId>`) when present.
+    recordingId: z.string().optional(),
     sequenceNumber: z.number().optional(),
-    status: z.enum(["distributing", "draft", "published"]),
+    // Set (ISO) once the full set video is uploaded to R2 — the `/log` page then
+    // shows the branded scrubber player. Absent ⇒ no set video yet.
+    setVideoAt: z.string().optional(),
+    // No "draft" arm: a mixtape is only ever born minted-or-minting via
+    // `promote_recording`; pre-publish authoring lives on plans.
+    status: z.enum(["distributing", "published"]),
     title: z.string(),
     type: z.literal("mixtape"),
     updatedAt: z.string().optional(),
@@ -248,6 +259,100 @@ export const EditionDTOSchema = z
     windowUntil: z.string().optional(),
   })
   .meta({ id: "EditionDTO" });
+
+/**
+ * A clip — a lightweight 9:16 derivative cut from a recording's set video
+ * (`mixtape_clips`; `ClipDTO` below). NOT a spine
+ * object: it carries no Log ID. Many per set (the drip-feed backlog). This is the
+ * wire shape the clip ops emit and the editor / clip library read. `xOffset` is the
+ * 9:16 framing offset; `status` is the cut-queue + library-filter state.
+ */
+export const ClipDTOSchema = z
+  .object({
+    caption: z.string().optional(),
+    createdAt: z.string(),
+    id: z.string(),
+    inMs: z.number(),
+    outMs: z.number(),
+    // The `recording` a clip was cut from — a clip's ONE owner since the
+    // plan→recording→mixtape Deploy-2 cutover dropped the legacy `mixtapeId`
+    // (every legacy mixtape clip was repointed onto its mixtape's recording first).
+    // Optional at the wire level (the column is nullable); `createClip` always sets it.
+    recordingId: z.string().optional(),
+    status: z.enum(["done", "pending"]),
+    updatedAt: z.string(),
+    xOffset: z.number(),
+  })
+  .meta({ id: "ClipDTO" });
+
+/** The TS shape of a clip, derived from the schema (one definition, no drift). */
+export type ClipDTO = z.infer<typeof ClipDTOSchema>;
+
+/**
+ * A recording tracklist cue (`recording_cues`; RFC plan→recording→mixtape). `id` is
+ * a stable cue ref; `artists`/`title` feed the clip overlay's
+ * changing on-screen Track-ID (`resolveClipTracks`) with no re-splitting, and seed
+ * `mixtape_tracks` on promote. `startMs` is the cue's start on the set timeline.
+ */
+export const RecordingTracklistItemSchema = z
+  .object({
+    artists: z.array(z.string()),
+    // The honest link to canon (the cue's `recording_cues.finding_id`), when the operator
+    // picked a real Fluncle finding rather than typing a non-finding track. Absent for a
+    // free-text cue. Additive + OPTIONAL: legacy readers and the Rekordbox derivation
+    // script (which reads cues server-side, not via this DTO) are unaffected. The Studio
+    // cue rail reads it to render the finding-linked vs snapshot distinction.
+    findingId: z.string().optional(),
+    id: z.string(),
+    startMs: z.number().optional(),
+    title: z.string(),
+  })
+  .meta({ id: "RecordingTracklistItem" });
+
+/** The TS shape of a recording tracklist cue, derived from the schema. */
+export type RecordingTracklistItem = z.infer<typeof RecordingTracklistItemSchema>;
+
+/**
+ * A RECORDING — a captured DJ set that is NOT (yet) a published mixtape (RFC
+ * recording-primitive, Design B). It OWNS its R2 key (`r2Key`) and carries an optional
+ * cue tracklist. Coordinate-less until `promote` mints a mixtape from it; `logId` +
+ * `mixtapeId` are then the promoted mixtape's coordinate + id (absent while un-promoted).
+ */
+export const RecordingDTOSchema = z
+  .object({
+    createdAt: z.string(),
+    durationMs: z.number().optional(),
+    // "has video" = the recording OWNS a set-video key. A PLAN has none (`false`);
+    // a TAKE has one (`true`). Derived server-side from `r2Key` presence so the UI
+    // never re-derives the plan/take split from a nullable key (RFC §1, taste #1).
+    hasVideo: z.boolean(),
+    id: z.string(),
+    // The promoted mixtape's committed Log ID coordinate (absent until promoted).
+    logId: z.string().optional(),
+    // The promoted mixtape's id (absent until promoted).
+    mixtapeId: z.string().optional(),
+    // The take→plan link (RFC plan→recording→mixtape §3): a TAKE points at its PLAN;
+    // absent for a plan or an orphan take (e.g. the rolling set).
+    parentId: z.string().optional(),
+    // The scheduled date/time (ISO) of the upcoming live session a PLAN is for — the
+    // plan-side home of `mixtapes.planned_for` (RFC §6, D-plannedFor). Absent when unset
+    // and on takes/legacy rows. The plan editor's Live-session field reads + writes it.
+    plannedFor: z.string().optional(),
+    // The owned R2 key. ABSENT for a PLAN (a recording with no video — RFC
+    // plan→recording→mixtape): "has video" = `r2Key` present.
+    r2Key: z.string().optional(),
+    recordedAt: z.string().optional(),
+    title: z.string(),
+    tracklist: z.array(RecordingTracklistItemSchema),
+    updatedAt: z.string(),
+    // The human display label ("v2") among a plan's takes (RFC §3, D-version).
+    // Every recording carries one (defaults to 1 in the schema).
+    version: z.number(),
+  })
+  .meta({ id: "RecordingDTO" });
+
+/** The TS shape of a recording, derived from the schema (one definition, no drift). */
+export type RecordingDTO = z.infer<typeof RecordingDTOSchema>;
 
 /** A mixtape per-platform distribution row (`MixtapeSocialPostItem`; `mixtape_social_posts`). */
 export const MixtapeSocialPostItemSchema = z
