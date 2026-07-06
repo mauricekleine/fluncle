@@ -34,6 +34,10 @@ import { FeedItemSchema, TrackListItemSchema } from "./_shared";
  */
 const UpdateTrackBodySchema = z.looseObject({
   bpm: z.unknown().optional(),
+  // The MuQ audio embedding (a JSON array of 1024 floats) — an agent-writable
+  // analysis field the on-box `fluncle-embed` cron sets. LOOSE like the rest: the
+  // handler validates the 1024-d shape itself and emits `invalid_embedding`/400.
+  embedding: z.unknown().optional(),
   enrichmentStatus: z.unknown().optional(),
   features: z.unknown().optional(),
   isrc: z.unknown().optional(),
@@ -495,6 +499,10 @@ export const listTracksAdmin = oc
       // `hasNote=false`). Tri-state tolerant strings ("true"/"false"), parsed +
       // clamped in-handler exactly like `hasVideo`.
       hasContext: z.string().optional(),
+      // `hasEmbedding` powers the MuQ embed queue: `hasEmbedding=false` lists findings
+      // with no `embedding_json` yet (the `fluncle-embed` cron's worklist). Tri-state
+      // tolerant string, parsed + clamped in-handler like `hasVideo`.
+      hasEmbedding: z.string().optional(),
       // `hasKey` powers the Rekordbox key-backfill's queue: `hasKey=false` lists
       // findings whose stored musical `key` is null (the missing-key backlog).
       // Tri-state tolerant string, parsed + clamped in-handler like `hasVideo`.

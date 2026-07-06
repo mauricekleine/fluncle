@@ -29,6 +29,15 @@ export type TrackUpdate = {
    * writing it does NOT bump updated_at. See schema.ts `contextStatus`.
    */
   contextStatus?: "pending" | "resolved" | "empty" | "failed";
+  /**
+   * The finding's MuQ audio embedding as a JSON array of 1024 floats (the
+   * `embedding_json` column). Internal analysis fuel like `features` — written by the
+   * on-box `fluncle-embed` cron, never rendered, so writing it does NOT bump
+   * updated_at (a whole-archive embed backfill must move no public lastmod). It IS the
+   * sonic-similarity space `get_similar_findings` ranks over; the handler validates the
+   * 1024-d shape before it reaches here. See docs/audio-embedding-rfc.md.
+   */
+  embedding?: string;
   enrichmentStatus?: "pending" | "processing" | "done" | "failed";
   /** Raw audio feature vector as a JSON string (training data for the classifier). */
   features?: string;
@@ -201,6 +210,13 @@ export async function updateTrack(
   if (update.features !== undefined) {
     sets.push("features_json = ?");
     args.push(update.features);
+  }
+
+  if (update.embedding !== undefined) {
+    // Empty string clears the vector — null, not "", so the `embedding_json IS NULL`
+    // embed queue treats a cleared row as un-embedded (re-embed on the next tick).
+    sets.push("embedding_json = ?");
+    args.push(update.embedding === "" ? null : update.embedding);
   }
 
   if (update.note !== undefined) {

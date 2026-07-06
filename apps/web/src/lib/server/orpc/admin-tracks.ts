@@ -29,6 +29,7 @@ import { ORPCError } from "@orpc/server";
 import { type contract } from "@fluncle/contracts/orpc";
 import { FOUND_BASE, trackMedia, videoVersion } from "../../media";
 import { recordNoteAttempt } from "../backfill";
+import { coerceEmbedding, EMBEDDING_DIMS } from "../embedding";
 import { parseEditorialNote } from "../http-errors";
 import { gateNoteText } from "../note";
 import { publishTrack } from "../publish";
@@ -119,6 +120,15 @@ function resolveDurationTargetSec(value: unknown): number {
   return 30;
 }
 
+/** JSON.parse that returns `null` instead of throwing — for the embedding string form. */
+function safeJsonParse(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Build the `admin-tracks` domain's handlers. Each reuses the live route logic
  * verbatim; only the auth gate is relocated to the procedure middleware.
@@ -142,6 +152,35 @@ export function adminTracksHandlers(os: Implementer) {
 
       if (typeof body.features === "string") {
         update.features = body.features;
+      }
+
+      // The MuQ embedding: an analysis field the agent may write. Accept the vector
+      // as a real JSON array (the CLI parses `--embedding`/`--embedding-file` into
+      // one) or, defensively, a JSON-string of one; validate the 1024-d shape and
+      // store the canonical serialization. `""` clears it (re-embed on the next tick).
+      // A malformed vector is a 400 `invalid_embedding`, never a silent drop, so a
+      // truncated MuQ run can't poison the similarity space.
+      if (body.embedding !== undefined) {
+        if (body.embedding === "") {
+          update.embedding = "";
+        } else {
+          const raw =
+            typeof body.embedding === "string" ? safeJsonParse(body.embedding) : body.embedding;
+          const vector = coerceEmbedding(raw);
+
+          if (!vector) {
+            throw new ORPCError("BAD_REQUEST", {
+              data: {
+                apiCode: "invalid_embedding",
+                apiMessage: `embedding must be a JSON array of ${EMBEDDING_DIMS} finite numbers`,
+              },
+              message: `embedding must be a JSON array of ${EMBEDDING_DIMS} finite numbers`,
+              status: 400,
+            });
+          }
+
+          update.embedding = JSON.stringify(vector);
+        }
       }
 
       if (typeof body.videoUrl === "string") {
@@ -242,6 +281,7 @@ export function adminTracksHandlers(os: Implementer) {
       return await listTracks({
         cursor: decodeTrackCursor(input.cursor ?? null),
         hasContext: parseTriStateBool(input.hasContext),
+        hasEmbedding: parseTriStateBool(input.hasEmbedding),
         hasKey: parseTriStateBool(input.hasKey),
         hasNote: parseTriStateBool(input.hasNote),
         hasObservation: parseTriStateBool(input.hasObservation),

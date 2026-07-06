@@ -364,6 +364,7 @@ type CronDef = { cadenceMs: number; match: string; service: string };
 
 const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 5 * 60_000, match: "enrich", service: "cron.enrich" },
+  { cadenceMs: 5 * 60_000, match: "embed", service: "cron.embed" },
   { cadenceMs: 5 * 60_000, match: "context-note", service: "cron.context-note" },
   { cadenceMs: 10 * 60_000, match: "note", service: "cron.note" },
   { cadenceMs: 60 * 60_000, match: "observation", service: "cron.observation" },

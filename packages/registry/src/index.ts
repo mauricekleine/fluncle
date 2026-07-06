@@ -742,6 +742,18 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    command: "fluncle admin tracks embed --queue",
+    exposedContent: [
+      "MuQ-large audio embedding (1024-d) for sonic similarity + clusters (--no-agent, on-box torch)",
+    ],
+    kind: "cron",
+    name: "cron.embed",
+    operatorNotes:
+      "every 5m. On-box MuQ (torch, ~16s/track), zero LLM tokens. Writes the vector via the agent-tier update_track. Source: docs/agents/hermes/scripts/embed-sweep.* + embed-track.py. See docs/audio-embedding-rfc.md.",
+    probeConfig: { cadenceMs: 5 * MINUTE_MS, cronName: "fluncle-embed", kind: "cron" },
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin tracks context --queue",
     exposedContent: [
       "Firecrawl facts → distilled context_note + a Texture: line (Worker-side Haiku)",

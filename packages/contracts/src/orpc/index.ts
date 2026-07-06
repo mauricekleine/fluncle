@@ -129,7 +129,7 @@ export { getRadioNowPlaying, getRandomRadioTrack } from "./radio";
 export { searchTracks } from "./search";
 export { listStories } from "./stories";
 export { type SubmissionBody, submitTrack } from "./submissions";
-export { getRandomTrack, getTrack, listTracks } from "./tracks";
+export { getRandomTrack, getSimilarFindings, getTrack, listTracks } from "./tracks";
 export {
   type ClipDTO,
   ClipDTOSchema,
