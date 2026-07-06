@@ -20,7 +20,7 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 ## Which machine am I on?
 
 - This repo is worked from two Macs; the machine determines what is SAFE, so detect it before large uploads or commits. Detect with `sysctl -n machdep.cpu.brand_string` and match loosely on the chip generation (the string is like `Apple M5 Pro` / `Apple M2` — key off `M5` / `M2`). The physical rig behind this split is [docs/live-show-setup.md](./docs/live-show-setup.md).
-- **M5 (build/compose + capture/stream):** browser + prod `fluncle` CLI; OBS + the audio/video masters + the recording upload + `ffmpeg` + distribute + the live glass/bridge all live here. Orchestrate, dev, capture, and stream here.
+- **M5 (build/compose + capture/stream):** browser + prod `fluncle` CLI; OBS + the audio/video masters + the recording upload + `ffmpeg` + distribute + the live glass/bridge all live here. Orchestrate, dev, capture, and stream here. Heavy render batches run as a sliding window — 3 concurrent attended, 4 max overnight, never wider (this CPU is also the show rig).
 - **M2 (mixing):** Rekordbox + the DDJ-FLX4 + `master.db` — _only_ the two `fluncle-mixtapes` Rekordbox scripts run here (they read/write `master.db`). No OBS, no browser.
 - **THE LOAD-BEARING RULE — large media uploads (`fluncle admin recordings create --video`, `fluncle admin mixtapes distribute`) run on the M5 and must be operator-run directly in their own Terminal:** an agent's Bash session throttles sustained _multi-GB_ transfers even with `dangerouslyDisableSandbox: true` — a small upload works, a multi-GB one drops partway with `socket closed`. `dangerouslyDisableSandbox` is still required for git commits (SSH-signed via the 1Password agent socket) and moderate transfers, but it does NOT make a multi-GB upload reliable through the harness — those are operator-direct. Full operator workflow is the [fluncle-mixtapes](./packages/skills/fluncle-mixtapes) skill.
 
@@ -33,25 +33,27 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 - MUST: Search the codebase before adding new patterns, helpers, dependencies, or abstractions.
 - MUST: Carry implementation work through verification: update focused tests/docs when behavior changes, run the relevant checks, and report any checks that could not be run.
 - MUST: Close obvious follow-through items discovered during the task when they are directly related and low-risk.
+- MUST: Never silently drop queued or delegated work: before ending a session, reconcile everything launched (sub-agents, renders, box crons, background jobs) and report anything still in flight.
 - SHOULD: Ask before expanding scope into unrelated refactors, production changes, paid infrastructure, destructive operations, or work that changes product direction.
 - NEVER: Stop at a plan when the user asked for implementation and the implementation is feasible.
 - NEVER: Present a workaround as complete when a known real fix remains.
 
 ## Picking the right models for workflows and subagents
 
-Rankings, higher = better. Cost reflects what I actually pay, not list price. Intelligence is how hard a problem you can hand the model unsupervised. Taste covers UI/UX, code quality, API design, and copy.
+Rankings, higher = better. Cost reflects what I actually pay, not list price (fable-5 moved from subscription to API pricing on 2026-07-07 — the cost column reflects that). Intelligence is how hard a problem you can hand the model unsupervised. Taste covers UI/UX, code quality, API design, and copy.
 
 | model    | cost | intelligence | taste |
 | -------- | ---- | ------------ | ----- |
 | sonnet-5 | 5    | 5            | 7     |
 | opus-4.8 | 4    | 7            | 8     |
-| fable-5  | 2    | 9            | 9     |
+| fable-5  | 1    | 9            | 9     |
 
 How to apply:
 
 - These are defaults, not limits. You have standing permission to override them: if a cheaper model's output doesn't meet the bar, rerun or redo the work with a smarter model without asking. Judge the output, not the price tag. Escalating costs less than shipping mediocre work.
 - Cost is a tie-breaker only; when axes conflict for anything that ships, intelligence > taste > cost.
-- Brainstorm, orchestration, delegation, and review — the "decide" and hold-the-overview work — run on fable-5 (top of the intelligence and taste axes). The [agent-orchestration](./packages/skills/agent-orchestration) skill is driven by fable-5; it offloads execution to sub-agents picked per this matrix. Pull in opus-4.8 for a second, cheaper review perspective when one helps.
+- Brainstorm, orchestration, delegation, and review — the "decide" and hold-the-overview work — run on opus-4.8, the top of the intelligence and taste axes among the models affordable day-to-day. The [agent-orchestration](./packages/skills/agent-orchestration) skill is driven by opus-4.8; it offloads execution to sub-agents picked per this matrix. Pull in a second review perspective (a fresh opus-4.8 pass, or sonnet-5 for a cheap first sweep) when one helps.
+- fable-5 outranks opus-4.8 on every quality axis but is API-priced — by far the most expensive tier. Reach for it deliberately, never by default: the rare problem opus-4.8 demonstrably can't crack after a real attempt, and flag the spend when you do.
 - Bulk/mechanical work (clear-spec implementation, data analysis, migrations): sonnet-5 — it's the cheapest.
 - Anything user-facing (UI, copy, API design) needs taste ≥ 7.
 - Never use Haiku.
@@ -90,7 +92,8 @@ How to apply:
 - MUST: Report when required validation depends on external services and could not be run locally.
 - NEVER: Invent secrets, credentials, listener data, analytics data, or production state.
 - MUST: Treat a push to `main` as a production deploy — Cloudflare Workers Builds rebuilds `apps/web` on every push; rapid successive pushes/merges coalesce and can drop an intermediate build, so space deploy-triggering merges and confirm a build ran on the final commit.
-- The prod deploy is gated by `bun run deploy:gate` (typecheck across all packages) in the Cloudflare Build command — a failing gate aborts the build before `wrangler deploy`. Extend `deploy:gate` in `package.json` (not the dashboard) to add checks to the deploy boundary.
+- The prod deploy is gated by `bun run deploy:gate` (format check + type-aware lint + typecheck + every package's tests) in the Cloudflare Build command — a failing gate aborts the build before `wrangler deploy`.
+- MUST: After any push to `main`, watch GitHub Actions and the Cloudflare Workers Build through to green before moving on — a red check is your work item, not background noise. Extend `deploy:gate` in `package.json` (not the dashboard) to add checks to the deploy boundary.
 
 ## Library and API Docs
 
@@ -108,9 +111,9 @@ How to apply:
 - [PRODUCT.md](./PRODUCT.md) - product purpose, brand direction, design principles, and accessibility.
 - [DESIGN.md](./DESIGN.md) - the visual canon (the Nostalgic Cosmos): palette, typography, elevation, components, named visual rules.
 - [VOICE.md](./VOICE.md) - the language canon: persona, vocabulary, named voice rules, surface registers, and copy mechanics.
-- [docs/local-database.md](./docs/local-database.md) - how databases work across prod, dev, and worktrees: prod/dev both Turso, everyday dev on a per-worktree local libSQL server (`turso dev` + `.dev/local.db`) seeded from `fluncle-dev`, the `dev`/`db:refresh-dev`/`db:pull-remote` scripts, Superset worktree provisioning, and the committed `deploy:cf` migrate step.
+- [docs/local-database.md](./docs/local-database.md) - how databases work across prod, dev, and worktrees: prod/dev both Turso, everyday dev on a per-worktree local libSQL server (`turso dev` + `.dev/local.db`) seeded from `fluncle-dev`, the `dev`/`db:refresh-dev`/`db:pull-prod` scripts, Superset worktree provisioning, and the committed `deploy:cf` migrate step.
 - [docs/track-lifecycle.md](./docs/track-lifecycle.md) - canonical architecture for a track's life: fast synchronous add (Worker) + async agent enrichment (audio analysis, video, R2), the generic admin update path, tag provenance, and the enrichment data model.
-- [docs/admin-tagging.md](./docs/admin-tagging.md) - the admin-gated `/admin/tag` vibe-map tagging tool: place each finding by energy×mood (the four galaxies), web admin auth (one identity, two carriers; Login with Spotify), the queue, the keyboard loop, and the `vibe_x`/`vibe_y` data model.
+- [docs/admin-shell.md](./docs/admin-shell.md) - the contract for every `/admin` surface: the AdminShell workspace chrome, the placement contract (where each kind of control goes), the flat object nav + attention-queue dashboard, web admin auth (one identity, two carriers; Login with Spotify), and the browser-verification fixtures (`loginAsAdmin`, the shell/queue smokes).
 - [docs/agents/newsletter-agent.md](./docs/agents/newsletter-agent.md) - the weekly newsletter authoring doctrine for the on-box `fluncle-newsletter` Hermes cron (Friday 15:00 Amsterdam): the self-healing discovery window off the last sent edition, the voice rails, the persist-draft-then-`clarify`-Send-button flow (Resend Broadcast, operator-gated send), and its `/api/tracks` contract.
 - [packages/video/README.md](./packages/video/README.md) - Remotion video machinery + the dated, self-contained archive under `src/remotion/tracks/`: the core surface, the archive contract, and the pipeline.
 - [docs/video-variants.md](./docs/video-variants.md) - the two-master video model: a clean square `footage.mp4` source + a portrait baked-text `footage.social.mp4`, with Cloudflare Media Transformations deriving every other orientation/audio variant on the fly; the surface map and the one-time migration.
@@ -182,6 +185,7 @@ bunx --bun shadcn@latest add dialog
 
 - SHOULD: Two git modes, decided by **where the work runs**, not by who is running it. Work in the **main checkout** commits straight on `main` — no feature branch, no PR. Work running in a **delegated sub-agent's isolated worktree is delivered as a PR**: a worktree sub-agent opens a PR and does **not** push to `main` (unless its brief says otherwise); the orchestrating session reviews the diff and merges it (`gh pr merge --squash --admin --delete-branch`). See the `agent-orchestration` skill. Either way, a push to `main` auto-deploys (mind the coalescing note under External Effects).
 - MUST: If `git commit` fails because Git cannot write commit metadata or access signing helpers, retry the commit with elevated permissions before changing Git config.
+- On headless/automation runs the 1Password SSH agent can be unavailable — signing and SSH push fail even with the sandbox off; fetch/push over HTTPS with `git -c credential.helper='!gh auth git-credential'` instead (`gh` itself is keyring-backed, so it also needs the sandbox off).
 - NEVER: Disable commit signing with `commit.gpgsign=false` unless the user explicitly asks for an unsigned commit.
 
 ## Agent Skills
