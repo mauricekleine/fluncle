@@ -1,6 +1,6 @@
 ---
 name: fluncle-track-enrichment
-description: Enrich a Fluncle track from audio — analyze a preview for BPM, musical key, and a spectral feature vector, then write them back via the fluncle CLI. Use when given a Fluncle track id or log_id to analyze/enrich, when computing key/BPM for a track, or when running the track enrichment agent (locally or on the Hermes box). Also for the audio feature vector that will train the vibe-placement model.
+description: Enrich a Fluncle track from audio — analyze a preview for BPM, musical key, and a spectral feature vector, then write them back via the fluncle CLI. Use when given a Fluncle track id or log_id to analyze/enrich, when computing key/BPM for a track, or when running the track enrichment agent (locally or on the Hermes box). The feature vector is internal creative fuel (the vibe-placement model it once fed is retired); sonic similarity now comes from the separate MuQ audio-embedding step (the fluncle-embed cron).
 ---
 
 # Fluncle track enrichment agent
@@ -56,7 +56,7 @@ The analysis script (`scripts/analyze-track.ts`) is **self-contained** — zero 
 
    - Pass `--bpm` only if the analysis returned a non-null bpm (syncopated/build-up previews can't be measured — better null than a wrong guess).
    - Pass `--key` only if the analysis returned a non-null key.
-   - Always pass `--features` (the JSON vector) — it is the training data for the future vibe-placement model (energy ≈ onset rate, mood ≈ brightness; in the Fluncle repo, `docs/admin-tagging.md` has the full vibe-map mapping). The agent does NOT place a track on the vibe map; that's the operator's call in the tagging tool.
+   - Always pass `--features` (the JSON vector) — internal creative fuel for the video agent. It once seeded a vibe-placement model, but that is retired: audio can't learn the manual map, so sonic grouping moved to the separate MuQ audio embedding (see "Audio embedding" below). You do NOT place a track on the vibe map.
    - Set `--status done`.
 
 That's the whole loop: get → analyze → archive → update.
@@ -67,6 +67,10 @@ That's the whole loop: get → analyze → archive → update.
 - **Archive only the analysis preview.** Store one official 30s preview, the one behind `archivePreview`, for private analysis/model training. It is not a playback source.
 - **Key honesty.** Only write a key the analysis was confident about (the script already gates this; respect the `null`).
 - One track per run.
+
+## Audio embedding (separate, the `fluncle-embed` cron)
+
+The finding's **MuQ audio embedding** — a 1024-d sonic-similarity vector (`embedding_json`) — is **not** part of this analysis loop. It is computed by its own on-box cron (`fluncle-embed`: torch/MuQ over the preview), which writes it back through `fluncle admin tracks update <id> --embedding-file`. It powers the `/log` "more like this" row (`get_similar_findings` cosine-ranks the vectors) and the future browse-by-feel clusters + the game's solar systems. This is what retired the manual vibe-map tagging: audio can't learn the placement, but it groups the sonically-similar cleanly. Build-ready spec + the on-box deploy: `docs/audio-embedding-rfc.md` + `docs/agents/hermes/cron/README.md`.
 
 ## Video render (separate, requires the kit)
 

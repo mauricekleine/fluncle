@@ -60,6 +60,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -98,20 +99,29 @@ def confirm(prompt: str) -> bool:
 
 
 def fetch_plan(fluncle_bin: str, plan_id: str) -> dict:
-    """Fetch a recording's full DTO via `fluncle admin recordings get <id> --json`."""
+    """Fetch a recording's full DTO via `fluncle admin recordings get <id> --json`.
+
+    The CLI's JSON stdout is written to a temp FILE, not captured through a pipe: the
+    compiled `fluncle` binary truncates large stdout at the ~64KB OS pipe buffer when it
+    exits (a Bun stdout-flush-on-exit bug), which would silently corrupt a large plan's
+    JSON. A regular file has no such cap.
+    """
     cmd = [fluncle_bin, "admin", "recordings", "get", plan_id, "--json"]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    except FileNotFoundError:
-        die(
-            f"`{fluncle_bin}` not found on PATH",
-            "install the fluncle CLI or pass --fluncle-bin",
-        )
-    except subprocess.CalledProcessError as exc:
-        die(f"`fluncle admin recordings get` failed: {exc.stderr.strip() or exc}")
+    with tempfile.TemporaryFile("w+b") as out:
+        try:
+            subprocess.run(cmd, stdout=out, stderr=subprocess.PIPE, text=True, check=True)
+        except FileNotFoundError:
+            die(
+                f"`{fluncle_bin}` not found on PATH",
+                "install the fluncle CLI or pass --fluncle-bin",
+            )
+        except subprocess.CalledProcessError as exc:
+            die(f"`fluncle admin recordings get` failed: {(exc.stderr or '').strip() or exc}")
+        out.seek(0)
+        raw = out.read().decode("utf-8")
 
     try:
-        payload = json.loads(result.stdout)
+        payload = json.loads(raw)
     except json.JSONDecodeError:
         die("could not parse `fluncle admin recordings get --json` output")
 
