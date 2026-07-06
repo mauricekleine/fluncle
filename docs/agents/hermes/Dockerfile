@@ -48,11 +48,17 @@ RUN apt-get update \
 # resolves offline on a cold start. Heavy + rarely-changing → early for cache reuse.
 #
 # OPERATOR GATE (verify on the first build / a base bump): this assumes the Debian
-# base ships `python3.11` in apt (bookworm does). If the base moved off 3.11, install
-# an explicit `python3.11` (e.g. via deadsnakes) and re-point the venv — the CPU torch
-# wheels are cp311. Reconcile the pinned versions below with the exact set the spike
-# validated on rave-02 (RFC appendix) before building; a mismatch is why the ad-hoc
-# install took four attempts. World-readable (a+rX) so the non-root cron user reads it.
+# base ships `python3.11` in apt (bookworm does). muq requires Python <3.12, so if the
+# base moved off 3.11 install an explicit `python3.11` (e.g. via deadsnakes) and
+# re-point the venv — the CPU torch wheels are cp311.
+#
+# THE ORDERING LAW (spike-verified on rave-02 CPX32; a mismatch is why the ad-hoc
+# install took four attempts): install the CPU torch TRIO from the pytorch CPU index
+# in its OWN pip step, THEN `muq` (+ numpy) in a SECOND step. If muq installs in the
+# same resolve as torch, it drags in CUDA torchaudio/torchvision and the import fails.
+# The `--index-url .../cpu` is what resolves torch==2.12.1 to the +cpu build. Pins are
+# the exact set the spike validated (torch trio + muq 0.1.0 + numpy 2.4.4; ~2.85 GB
+# peak, ~16 s/track). World-readable (a+rX) so the non-root cron user reads it.
 ENV MUQ_VENV=/opt/muq-venv
 ENV HF_HOME=/opt/muq-cache
 RUN apt-get update \
@@ -62,8 +68,8 @@ RUN apt-get update \
   && "${MUQ_VENV}/bin/pip" install --no-cache-dir --upgrade pip \
   && "${MUQ_VENV}/bin/pip" install --no-cache-dir \
        --index-url https://download.pytorch.org/whl/cpu \
-       torch==2.4.1 torchaudio==2.4.1 torchvision==0.19.1 \
-  && "${MUQ_VENV}/bin/pip" install --no-cache-dir muq==0.1.0 \
+       torch==2.12.1 torchaudio==2.11.0 torchvision==0.27.1 \
+  && "${MUQ_VENV}/bin/pip" install --no-cache-dir muq==0.1.0 numpy==2.4.4 \
   && HF_HOME="${HF_HOME}" "${MUQ_VENV}/bin/python" -c \
        "from muq import MuQ; MuQ.from_pretrained('OpenMuQ/MuQ-large-msd-iter')" \
   && chmod -R a+rX "${MUQ_VENV}" "${HF_HOME}"
