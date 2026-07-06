@@ -54,6 +54,10 @@ So a new worktree comes up with its own isolated, prod-shaped database and a pri
 
 > One caveat for _simultaneous_ dev servers: Vite (and `BETTER_AUTH_URL` / the Spotify redirect) is pinned to `:3000`, so only one `bun run dev` can serve at a time. The database isolation holds regardless — `db:migrate`, tests, and scripts in each worktree hit that worktree's own database whether or not its dev server is running.
 
+### Previewing a worktree's DB-backed routes on localhost
+
+To preview a worktree's DB-backed route in a browser without provisioning anything, copy the main checkout's rendered `apps/web/.dev.vars` into the worktree and run `bun run --cwd apps/web dev:vite` directly — Vite serves the worktree's code against main's already-running `turso dev` (the copied `TURSO_DATABASE_URL` points at main's local server). The plain `dev` script is the wrong entry here: its orchestrator reads that same copied local URL and boots a second `turso dev` on the same port, colliding with main's.
+
 ## Keeping dev in sync with prod
 
 The snapshot comes straight from production, so it is as fresh as the last `db:pull-prod`. Everyday local work needs no credentials at all — it only reads the already-dumped `seed.sql`. When you want newer data, unlock 1Password and run `db:pull-prod` in the main checkout, then `db:refresh-dev` in each worktree to adopt it. The pull is read-only (`SELECT`s); production credentials are read at run time from the 1Password item that `FLUNCLE_TURSO_OP_ITEM` points at (`db-pull-prod.ts` reads that env var; the concrete item lives in the ops runbook note) and never touch `.dev.vars`.
