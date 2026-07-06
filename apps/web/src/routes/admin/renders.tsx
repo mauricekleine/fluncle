@@ -149,7 +149,7 @@ function RendersPage() {
     onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
     onSettled: () => setConfirm(undefined),
     onSuccess: async () => {
-      setNotice("Requeued — back in the render queue.");
+      setNotice("Requeued. Back in the render queue.");
       await refresh();
     },
   });
@@ -282,11 +282,11 @@ function BoxCell({
           {service?.message?.trim() ? service.message : hint}
         </p>
         {service ? (
-          <p className="mt-1 text-xs text-muted-foreground/80 tabular-nums">
+          <p className="mt-1 text-xs text-muted-foreground tabular-nums">
             reported {elapsedShort(service.checkedAt, now)} ago
           </p>
         ) : (
-          <p className="mt-1 text-xs text-muted-foreground/80">no report yet</p>
+          <p className="mt-1 text-xs text-muted-foreground">no report yet</p>
         )}
       </div>
       <StatusIndicator status={service?.status ?? null} />
@@ -359,7 +359,7 @@ function QueueSection({
     <section aria-label="Render queue">
       <SectionHeading count={total} label="Awaiting a video" />
       {queue.length === 0 ? (
-        <EmptyRow>Queue’s clear — nothing’s waiting on the box.</EmptyRow>
+        <EmptyRow>Queue’s clear. Nothing’s waiting on the box.</EmptyRow>
       ) : (
         <ol className="divide-y divide-border rounded-lg border border-border">
           {queue.map((track, index) => (
@@ -415,11 +415,11 @@ function ShippedSection({
               <div className="flex w-full shrink-0 flex-col items-end gap-1.5 sm:w-auto">
                 <Ledger track={track} />
                 {track.videoSquaredAt ? (
-                  <span className="text-xs text-muted-foreground/80 tabular-nums">
+                  <span className="text-xs text-muted-foreground tabular-nums">
                     {elapsedShort(track.videoSquaredAt, now)} ago
                   </span>
                 ) : (
-                  <span className="text-xs text-muted-foreground/60">legacy cut</span>
+                  <span className="text-xs text-muted-foreground">legacy cut</span>
                 )}
                 <div className="flex items-center gap-1">
                   <Button
@@ -555,8 +555,8 @@ function ConfirmDialog({
         <ul className="space-y-1.5 text-sm text-muted-foreground">
           {(copy?.consequences ?? []).map((line) => (
             <li className="flex gap-2" key={line}>
-              <span aria-hidden="true" className="select-none text-muted-foreground/60">
-                —
+              <span aria-hidden="true" className="select-none text-muted-foreground">
+                ·
               </span>
               <span>{line}</span>
             </li>
@@ -566,7 +566,11 @@ function ConfirmDialog({
           <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
           <AlertDialogAction disabled={pending} onClick={onConfirm} variant="destructive">
             {pending ? (
-              <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+              <CircleNotchIcon
+                aria-hidden="true"
+                className="motion-safe:animate-spin"
+                weight="bold"
+              />
             ) : undefined}
             {pending ? `${copy?.pendingLabel ?? "Working"}…` : (copy?.action ?? "Confirm")}
           </AlertDialogAction>
