@@ -2343,7 +2343,7 @@
           domain: "platform-ops",
           order_hint: "260",
           job: "Show a live-on-Twitch on-the-decks callout",
-          status: "partial",
+          status: "done",
           trigger: "cron;event:live-state-change",
           executor: "system",
           runs_on: "rave-02;cloudflare",
@@ -2354,7 +2354,7 @@
           drop_from: "",
           tests: "none",
           notes:
-            "NOT on main (record_live_state/live_state grep empty); PR #199 open feat/live-twitch-callout; new brand colour Nebula Violet #ab7bff; awaiting operator wiring + merge",
+            "SHIPPED 2026-07-06 (#199 merged 134e0a7); fluncle-live poll cron on rave-02 + Go SSH/DNS apps redeployed on rave-01; verified end-to-end; Nebula Violet #ab7bff",
         },
         {
           domain: "platform-ops",
