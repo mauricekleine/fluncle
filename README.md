@@ -37,6 +37,7 @@ packages/media      Remotion kit for static image assets (link-preview cards, co
 packages/registry   The typed catalog of every Fluncle surface (@fluncle/registry, the source of truth).
 packages/sprites    Fluncle's pixel-sprite family — one per surface, plus the game props.
 packages/tokens     Shared design tokens (colors, typography, radii, motion) from DESIGN.md.
+packages/ui         Shared @fluncle/ui design system: the Shadcn base + the Nostalgic Cosmos tokens, consumed by apps/web and apps/helm.
 packages/video      Remotion kit for per-track social videos (the Nostalgic Cosmos).
 ```
 
