@@ -32,10 +32,12 @@ import { type MixtapeDTO, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mix
 import { resolveLogPageTarget } from "@/lib/server/log-resolver";
 import {
   getRelatedTracks,
+  getSimilarFindings,
   getTrackNeighbors,
   type TrackListItem,
   type TrackNeighbor,
 } from "@/lib/server/tracks";
+import { TrackArtwork } from "@/components/track-artwork";
 
 // The standalone log page: one finding's permanent, readable, indexable record
 // (the archival-plate register). The cinematic full-bleed register is the
@@ -49,6 +51,7 @@ type LogPageData =
       newer?: TrackNeighbor;
       older?: TrackNeighbor;
       related: TrackNeighbor[];
+      similar: TrackListItem[];
       track: TrackListItem;
     }
   | {
@@ -84,12 +87,13 @@ const fetchLogPage = createServerFn({ method: "GET" })
       return { logId: track.logId, status: "moved" };
     }
 
-    const [neighbors, related] = await Promise.all([
+    const [neighbors, related, similar] = await Promise.all([
       getTrackNeighbors(track),
       getRelatedTracks(track),
+      getSimilarFindings(track.logId),
     ]);
 
-    return { ...neighbors, related, status: "found", track };
+    return { ...neighbors, related, similar, status: "found", track };
   });
 
 // Typed helper outside the route options: an inline head() that reads
@@ -273,7 +277,7 @@ function LogPage() {
     return null;
   }
 
-  const { newer, older, related, track } = data;
+  const { newer, older, related, similar, track } = data;
   const logId = track.logId as string;
   const { sector, tail } = splitLogId(logId);
 
@@ -388,6 +392,28 @@ function LogPage() {
             <Link to="/about">More on Log IDs and the Galaxy</Link>.
           </p>
         </section>
+
+        {similar.length > 0 ? (
+          <section aria-label="Close in sound" className="log-similar">
+            <h2>Close in sound</h2>
+            <ul className="log-similar-list">
+              {similar.map((finding) =>
+                finding.logId ? (
+                  <li key={finding.trackId}>
+                    <Link params={{ logId: finding.logId }} to="/log/$logId">
+                      <TrackArtwork
+                        alt=""
+                        className="log-similar-cover"
+                        src={spotifyAlbumImageAtSize(finding.albumImageUrl, "small")}
+                      />
+                      <span className="log-similar-line">{artistTitleLine(finding)}</span>
+                    </Link>
+                  </li>
+                ) : null,
+              )}
+            </ul>
+          </section>
+        ) : undefined}
 
         {track.galaxy && related.length > 0 ? (
           <section aria-label={`More in the ${track.galaxy.name} galaxy`} className="log-related">

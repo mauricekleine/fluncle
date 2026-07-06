@@ -30,6 +30,7 @@ export async function trackGetAdminCommand(idOrLogId: string): Promise<TrackGetA
 
 export type TrackUpdateOptions = {
   bpm?: number;
+  embedding?: number[];
   features?: string;
   key?: string;
   note?: string;
@@ -39,6 +40,7 @@ export type TrackUpdateOptions = {
 
 type TrackUpdateBody = {
   bpm?: number;
+  embedding?: number[];
   enrichmentStatus?: string;
   features?: string;
   key?: string;
@@ -471,6 +473,9 @@ export async function trackUpdateCommand(
   }
   if (options.features !== undefined) {
     body.features = options.features;
+  }
+  if (options.embedding !== undefined) {
+    body.embedding = options.embedding;
   }
   if (options.note !== undefined) {
     body.note = options.note;

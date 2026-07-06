@@ -120,6 +120,7 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
   "get_radio_now_playing",
   "get_random_radio_track",
   "get_random_track",
+  "get_similar_findings",
   "get_track",
   "list_editions",
   "list_mixtapes",

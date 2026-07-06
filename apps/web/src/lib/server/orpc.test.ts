@@ -419,6 +419,7 @@ const PUBLIC_OPERATION_IDS = [
   "getRadioNowPlaying",
   "getRandomRadioTrack",
   "getRandomTrack",
+  "getSimilarFindings",
   "getTrack",
   "listEditions",
   "listMixtapes",

@@ -95,9 +95,38 @@ export const getRandomTrack = oc
   })
   .output(z.object({ ok: z.literal(true), track: TrackListItemSchema }));
 
+/**
+ * `get_similar_findings` → `GET /tracks/{idOrLogId}/similar` (operationId
+ * `getSimilarFindings`).
+ *
+ * The N sonically-nearest findings to the given one — the automatic "more like this"
+ * cluster (docs/audio-embedding-rfc.md, Phase 1). Loads the target's MuQ audio
+ * embedding, cosine-ranks it against every other coordinate-bearing finding's
+ * embedding, and returns the top-N (self excluded, similarity order). A public read;
+ * the same op backs the `/log` "more like this" row and a future radio "play
+ * something like this" hook.
+ *
+ * `limit` is a tolerant optional string (default 6, clamped to 24), parsed in-handler
+ * so a bad value degrades to the default rather than 400-ing — mirrors `list_tracks`.
+ * An unknown coordinate, a finding with no embedding yet (the embed cron hasn't
+ * drained it), or an otherwise-empty archive all yield `{ ok: true, findings: [] }` —
+ * a quiet empty row, never an error.
+ */
+export const getSimilarFindings = oc
+  .route({
+    method: "GET",
+    operationId: "getSimilarFindings",
+    path: "/tracks/{idOrLogId}/similar",
+    summary: "Get the sonically-nearest findings to one (by Spotify trackId or Log ID)",
+    tags: ["Tracks"],
+  })
+  .input(z.object({ idOrLogId: z.string(), limit: z.string().optional() }))
+  .output(z.object({ findings: z.array(TrackListItemSchema), ok: z.literal(true) }));
+
 /** The `tracks` domain's ops, merged into the root contract by `./index.ts`. */
 export const tracksContract = {
   get_random_track: getRandomTrack,
+  get_similar_findings: getSimilarFindings,
   get_track: getTrack,
   list_tracks: listTracks,
 };

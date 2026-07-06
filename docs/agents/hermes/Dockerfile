@@ -37,6 +37,37 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends ffmpeg unzip openssh-client dnsutils fonts-dejavu-core \
   && rm -rf /var/lib/apt/lists/*
 
+# ── MuQ audio-embedding toolchain (the `fluncle-embed` cron) ──────────────────
+# The `fluncle-embed` `--no-agent` cron (docs/agents/hermes/scripts/embed-sweep.*)
+# runs MuQ-large on the box to compute a 1024-d audio embedding per finding — the
+# sonic-similarity space that powers "more like this" (docs/audio-embedding-rfc.md).
+# The spike's load-bearing lesson: MuQ's torch family (torch + torchaudio +
+# torchvision) must be MATCHED CPU builds, installed together from the pytorch CPU
+# index BEFORE `muq`, on Python 3.11 — so it is a PINNED image layer (never a runtime
+# `pip install`), in its own venv, with the model weights baked so `from_pretrained`
+# resolves offline on a cold start. Heavy + rarely-changing → early for cache reuse.
+#
+# OPERATOR GATE (verify on the first build / a base bump): this assumes the Debian
+# base ships `python3.11` in apt (bookworm does). If the base moved off 3.11, install
+# an explicit `python3.11` (e.g. via deadsnakes) and re-point the venv — the CPU torch
+# wheels are cp311. Reconcile the pinned versions below with the exact set the spike
+# validated on rave-02 (RFC appendix) before building; a mismatch is why the ad-hoc
+# install took four attempts. World-readable (a+rX) so the non-root cron user reads it.
+ENV MUQ_VENV=/opt/muq-venv
+ENV HF_HOME=/opt/muq-cache
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3.11 python3.11-venv \
+  && rm -rf /var/lib/apt/lists/* \
+  && python3.11 -m venv "${MUQ_VENV}" \
+  && "${MUQ_VENV}/bin/pip" install --no-cache-dir --upgrade pip \
+  && "${MUQ_VENV}/bin/pip" install --no-cache-dir \
+       --index-url https://download.pytorch.org/whl/cpu \
+       torch==2.4.1 torchaudio==2.4.1 torchvision==0.19.1 \
+  && "${MUQ_VENV}/bin/pip" install --no-cache-dir muq==0.1.0 \
+  && HF_HOME="${HF_HOME}" "${MUQ_VENV}/bin/python" -c \
+       "from muq import MuQ; MuQ.from_pretrained('OpenMuQ/MuQ-large-msd-iter')" \
+  && chmod -R a+rX "${MUQ_VENV}" "${HF_HOME}"
+
 # Bun — pinned to the repo's toolchain (packageManager bun@1.3.14) so the box runs
 # the same interpreter the skill is authored against. The official installer drops
 # the binary in /root/.bun (root's HOME, mode 700). The `--no-agent` cron runner

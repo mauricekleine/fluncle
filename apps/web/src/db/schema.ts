@@ -73,6 +73,16 @@ export const tracks = sqliteTable("tracks", {
     enum: ["pending", "resolved", "empty", "failed"],
   }),
   durationMs: integer("duration_ms").notNull(),
+  // The finding's MuQ audio embedding — a 1024-d float vector (mean-pooled over
+  // `MuQ-large-msd-iter`'s `last_hidden_state`, L2-normalized), stored as a JSON
+  // array. Written by the on-box `fluncle-embed` cron (torch on rave-02) via the
+  // agent-tier `update_track` path; internal analysis fuel like `features_json`, so
+  // writing it moves no public lastmod. It is the sonic-similarity space: the public
+  // `get_similar_findings` op cosine-ranks these vectors to power the "more like this"
+  // row on `/log` (and, later, browse-by-feel clusters + the game's solar systems).
+  // NULL until the embed cron drains it (`embedding_json IS NULL` is the queue). See
+  // docs/audio-embedding-rfc.md + docs/track-lifecycle.md.
+  embeddingJson: text("embedding_json"),
   enrichmentStatus: text("enrichment_status").notNull().default("pending"),
   featuresJson: text("features_json"),
   // The Discogs release the finding resolves to (read-only enrichment, best-effort,

@@ -11,6 +11,7 @@ Live on the box as of the **2026-06-23 cutover** (+ `fluncle-render` wired **202
 | Job                      | Cadence             | Mode                   | Box authoring             | What it does                                                                                                                                               |
 | ------------------------ | ------------------- | ---------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `fluncle-enrich`         | every 5m            | `--no-agent`           | none (on-box DSP)         | BPM / key / spectral analysis on the box, write-back                                                                                                       |
+| `fluncle-embed` ⏳       | every 5m            | `--no-agent`           | none (on-box torch/MuQ)   | MuQ-large audio embedding (1024-d) → sonic "more like this" + clusters (**PREPARED**, awaiting the MuQ image layer — see § below)                          |
 | `fluncle-context-note`   | every 5m            | `--no-agent`           | none (Worker Haiku)       | Firecrawl facts → distilled `context_note` + a `Texture:` line                                                                                             |
 | `fluncle-note`           | every 10m           | `--no-agent` hybrid    | one `claude -p`           | auto-author the editorial `/log` note (fill-empty-only)                                                                                                    |
 | `fluncle-observation`    | every 60m           | `--no-agent` hybrid    | one `claude -p`           | author the recovered-audio script → Worker Cartesia render                                                                                                 |
@@ -28,6 +29,26 @@ The per-cron sections below carry the full mechanism, schedule rationale, and th
 ## The `--no-agent` enrichment cron (LIVE)
 
 `fluncle-enrich` is **live on the box**. It does not carry a prompt: enrichment is pure compute (get → analyze → update, zero LLM tokens), so it is a `--no-agent --script` job. Its script source lives beside the build context at [`../scripts/`](../scripts/) — a bash wrapper (`enrich-sweep.sh`) the cron runner execs by extension, which in turn `exec`s the bun orchestrator (`enrich-sweep.ts`). It is created on the box directly (not in `jobs.json`, which now holds no jobs — every cron, including the newsletter, is a `--no-agent` sweep).
+
+## The `--no-agent` audio-embedding cron (PREPARED — not yet deployed)
+
+`fluncle-embed` computes a **MuQ-large audio embedding** (1024-d) per finding — the sonic-similarity space behind the `/log` "more like this" row and the future browse-by-feel clusters + the game's solar systems (docs/audio-embedding-rfc.md). Like enrichment it carries no prompt — the embedding is pure on-box compute (**zero LLM tokens**) — so it is a `--no-agent --script` job. Its source lives beside the enrich sweep at [`../scripts/`](../scripts/): `embed-sweep.sh` (the bash entry the runner execs by extension) → `embed-sweep.ts` (the bun orchestrator) → `embed-track.py` (the MuQ inference, run under the baked venv).
+
+**On-box torch, unlike the Worker-paced sweeps.** MuQ runs **on the box** (torch, ~16s/track on 2 cores / ~8s on the CPX32's 4, ~2.85 GB peak — spike-validated on rave-02). The orchestrator drains `admin tracks embed --queue` (`hasEmbedding=false`, oldest-first), downloads each finding's preview from the Worker's self-refreshing `/api/preview/<id>` relay, runs one `embed-track.py` over the batch (the MuQ model load amortized), and writes each 1024-d vector back through `admin tracks update <id> --embedding-file`. `update_track` is **agent tier** (the vector is an analysis field, like `features`), so the box's existing agent-scoped token drives it; no operator token, matching the `fluncle-enrich` precedent. Idempotent: the queue is `embedding_json IS NULL`, so an embedded finding is already out of it.
+
+| Job             | Schedule | What it does                                                                                                                                                                                                                                                                               | Server slice                                                                               |
+| --------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| `fluncle-embed` | every 5m | Drain `admin tracks embed --queue` (`hasEmbedding=false`, oldest-first); per finding (bounded batch, cap 3/tick): fetch `/api/preview/<id>` → `embed-track.py` (ffmpeg decode + MuQ mean-pool + L2-normalize, on the box) → `admin tracks update <id> --embedding-file`. No-op when empty. | The `embedding_json` column + the agent-tier `update_track` write + `hasEmbedding` filter. |
+
+**Two gates before wiring (operator).** Unlike the other sweeps, this one needs the **MuQ image layer** first: the pinned torch trio + `muq` + baked model weights + the `/opt/muq-venv` interpreter (see the Dockerfile MuQ layer — it self-deploys via `fluncle-pin-watch` on merge, unless the base image moved off Python 3.11, which is a manual base rebuild). Reconcile the pinned torch/muq versions with the spike's validated set before the first build. Then deploy the scripts and create the cron:
+
+```bash
+# Deploy the script trio (after the MuQ image layer is live on the box), then create the no-agent cron.
+scp docs/agents/hermes/scripts/embed-sweep.{sh,ts} docs/agents/hermes/scripts/embed-track.py <box>:~/.hermes/scripts/
+hermes cron create "every 5m" --no-agent --script embed-sweep.sh --deliver local --name fluncle-embed
+```
+
+Confirm with `hermes cron list`; per-run output lands in `~/.hermes/cron/output/{job_id}/{timestamp}.md`. It is already registered in `@fluncle/registry` (`cron.embed`) + the healthcheck `AUTOMATION_CRONS`, so `/status` shows it (as stale/down until the first tick lands).
 
 ## The `--no-agent` context-note cron (LIVE)
 

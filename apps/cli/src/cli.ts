@@ -92,6 +92,8 @@ type VersionOptions = {
 
 type TrackUpdateOptions = {
   bpm?: string;
+  embedding?: string;
+  embeddingFile?: string;
   features?: string;
   json: boolean;
   key?: string;
@@ -581,6 +583,33 @@ function addAdminCommands(program: Command): void {
       await runAdminEnrichQueue(options, enrichQueueCommand);
     });
 
+  // The audio-embedding verb. The MuQ embedding runs as the on-box `fluncle-embed`
+  // `--no-agent` cron (it embeds on-box with torch and writes the vector back via
+  // `tracks update <id> --embedding-file`), so the CLI surface is the worklist view:
+  // `--queue` shows findings with no embedding yet. The box cron reads this to drain
+  // the queue. See docs/audio-embedding-rfc.md.
+  adminTracks
+    .command("embed")
+    .description("Audio-embedding worklist (findings with no MuQ vector yet) — use --queue")
+    .option("--queue", "Show the embedding worklist, oldest first", false)
+    .option("--limit <limit>", "Number of findings to show with --queue", "10")
+    .option("--json", "Print JSON", false)
+    .action(async (options: AdminQueueViewOptions) => {
+      // `--queue` is the worklist view — the on-box `fluncle-embed` cron's worklist.
+      // Embedding has no single-track CLI form (it runs on the box), so without
+      // `--queue` there's nothing to act on; require it, mirroring `enrich`.
+      if (!options.queue) {
+        console.error(
+          "`tracks embed` is a worklist view — embedding runs on the on-box `fluncle-embed` cron.\nUse `tracks embed --queue` to see findings needing an audio embedding.",
+        );
+        process.exitCode = 1;
+        return;
+      }
+
+      const { embedQueueCommand } = await import("./commands/admin-tracks");
+      await runAdminEmbedQueue(options, embedQueueCommand);
+    });
+
   adminTracks
     .command("vehicles")
     .description("Recent video vehicles, newest first (the style ledger for diversity)")
@@ -613,6 +642,8 @@ function addAdminCommands(program: Command): void {
     .description("Certify a track into the archive")
     .argument("[trackId]")
     .option("--bpm <number>", "Track BPM")
+    .option("--embedding <json>", "MuQ audio embedding as a JSON array of 1024 floats")
+    .option("--embedding-file <file>", "Read the MuQ embedding JSON array from a file")
     .option("--features <json>", "Audio feature JSON")
     .option("--json", "Print JSON", false)
     .option("--key <key>", "Musical key")
@@ -1955,6 +1986,33 @@ async function runTrackGetAdmin(
   }
 }
 
+// Parse a `--embedding` / `--embedding-file` value into a MuQ vector. `undefined`
+// (the flag absent) stays undefined; anything present must be a JSON array of finite
+// numbers (the server enforces the exact 1024-d width). Fails fast so a truncated
+// on-box MuQ run errors locally instead of round-tripping to a 400.
+function parseEmbeddingArg(raw: string | undefined): number[] | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("Invalid --embedding: expected a JSON array of 1024 floats");
+  }
+
+  if (
+    !Array.isArray(parsed) ||
+    parsed.some((value) => typeof value !== "number" || !Number.isFinite(value))
+  ) {
+    throw new Error("Invalid --embedding: expected a JSON array of 1024 finite numbers");
+  }
+
+  return parsed as number[];
+}
+
 async function runTrackUpdate(
   trackId: string | undefined,
   options: TrackUpdateOptions,
@@ -1970,8 +2028,17 @@ async function runTrackUpdate(
     throw new Error(`Invalid --bpm: ${options.bpm}`);
   }
 
+  // The MuQ embedding: read from a file (--embedding-file, the box orchestrator's
+  // path — a 1024-float array is large) or inline (--embedding), parse to a number
+  // array, and let the server validate the 1024-d shape. An empty string clears it.
+  const embeddingRaw = options.embeddingFile
+    ? readFileSync(options.embeddingFile, "utf8")
+    : options.embedding;
+  const embedding = parseEmbeddingArg(embeddingRaw);
+
   const result = await trackUpdateCommand(trackId, {
     bpm,
+    embedding,
     features: options.features,
     key: options.key,
     note: options.note,
@@ -2675,6 +2742,32 @@ async function runAdminEnrichQueue(
   const { trackRows } = await import("./format");
   const noun = tracks.length === 1 ? "finding" : "findings";
   console.log(`${tracks.length} ${noun} needing (re-)enrichment, oldest first:`);
+  console.log(trackRows(tracks).join("\n"));
+}
+
+async function runAdminEmbedQueue(
+  options: AdminListOptions,
+  embedQueueCommand: typeof import("./commands/admin-tracks").embedQueueCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const tracks = await embedQueueCommand(limit);
+
+  if (options.json) {
+    printJson({
+      ok: true,
+      tracks,
+    });
+    return;
+  }
+
+  if (tracks.length === 0) {
+    console.log("Nothing awaiting an embedding. Every finding is embedded.");
+    return;
+  }
+
+  const { trackRows } = await import("./format");
+  const noun = tracks.length === 1 ? "finding" : "findings";
+  console.log(`${tracks.length} ${noun} needing an audio embedding, oldest first:`);
   console.log(trackRows(tracks).join("\n"));
 }
 

@@ -1529,7 +1529,8 @@ body::before {
   gap: 0.6rem;
 }
 
-.log-related h2 {
+.log-related h2,
+.log-similar h2 {
   color: var(--starlight-cream);
   font-size: 1.02rem;
   font-weight: 800;
@@ -1587,6 +1588,54 @@ body::before {
   font-size: 0.78rem;
   font-variant-numeric: tabular-nums;
   margin-left: auto;
+}
+
+/* The "more like this" cluster — the automatic sonic neighbours (MuQ embeddings,
+   docs/audio-embedding-rfc.md). Cover-led + quiet: a strip of album covers that
+   WRAPS on the narrow plate rather than forcing a horizontal page scroll. */
+.log-similar {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.log-similar-list {
+  display: grid;
+  gap: 0.85rem 0.6rem;
+  grid-template-columns: repeat(auto-fill, minmax(4.75rem, 1fr));
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.log-similar-list a {
+  color: var(--stardust);
+  display: grid;
+  gap: 0.4rem;
+  text-decoration: none;
+}
+
+/* Fill the grid cell; the reused .track-artwork carries the border/radius/aspect. */
+.log-similar-cover {
+  width: 100%;
+}
+
+.log-similar-list a:hover .log-similar-cover,
+.log-similar-list a:focus-visible .log-similar-cover {
+  border-color: color-mix(in oklch, var(--primary) 42%, transparent);
+}
+
+.log-similar-line {
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  display: -webkit-box;
+  font-size: 0.72rem;
+  line-height: 1.25;
+  overflow: hidden;
+}
+
+.log-similar-list a:hover .log-similar-line,
+.log-similar-list a:focus-visible .log-similar-line {
+  color: var(--starlight-cream);
 }
 
 .log-neighbors {

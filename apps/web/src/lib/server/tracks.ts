@@ -14,6 +14,7 @@ import { type FeedItem, type MixtapeMember, rowToMixtape } from "../mixtapes";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 import { discogsReleaseUrl } from "./discogs";
+import { type EmbeddingCandidate, parseEmbedding, rankBySimilarity } from "./embedding";
 
 export type { FeedListPage, TrackCursor, TrackFeatures, TrackListPage, TrackListItem };
 export type { RadioScheduleEntry };
@@ -616,6 +617,82 @@ export async function getRelatedTracks(
   }));
 }
 
+type EmbeddingRow = {
+  embedding_json: string;
+  track_id: string;
+};
+
+/**
+ * The N sonically-nearest findings to a given one — the automatic "more like this"
+ * cluster (docs/audio-embedding-rfc.md, Phase 1). Loads the target's MuQ embedding,
+ * cosine-ranks it against every OTHER coordinate-bearing finding's embedding, and
+ * hydrates the winners in similarity order. Powers the `/log` "more like this" row and
+ * the public `get_similar_findings` op; a future "play something like this" radio hook
+ * reads the same function.
+ *
+ * Returns `[]` (never throws) when the finding is unknown, has no embedding yet
+ * (`embedding_json IS NULL` — the embed cron hasn't drained it), or nothing else is
+ * embedded. Brute-force cosine over the whole embedded set is instant at the
+ * catalogue's scale (dozens → low thousands); libSQL `vector_top_k` is the escape
+ * hatch past ~10k. Only coordinate-bearing candidates (`log_id IS NOT NULL`) are
+ * considered — every result links to a `/log` page — and the target is excluded.
+ */
+export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<TrackListItem[]> {
+  if (limit <= 0) {
+    return [];
+  }
+
+  const db = await getDb();
+  const targetResult = await db.execute({
+    args: [idOrLogId, idOrLogId],
+    sql: `select track_id, embedding_json from tracks where track_id = ? or log_id = ? limit 1`,
+  });
+  const targetRow = typedRow<{ embedding_json: string | null; track_id: string }>(
+    targetResult.rows,
+  );
+
+  if (!targetRow) {
+    return [];
+  }
+
+  const target = parseEmbedding(targetRow.embedding_json);
+
+  if (!target) {
+    return [];
+  }
+
+  const candidateResult = await db.execute({
+    args: [targetRow.track_id],
+    sql: `select track_id, embedding_json from tracks
+          where log_id is not null and embedding_json is not null and track_id != ?`,
+  });
+
+  const candidates: EmbeddingCandidate<string>[] = [];
+
+  for (const row of typedRows<EmbeddingRow>(candidateResult.rows)) {
+    const embedding = parseEmbedding(row.embedding_json);
+
+    if (embedding) {
+      candidates.push({ embedding, item: row.track_id });
+    }
+  }
+
+  const topIds = rankBySimilarity(target, candidates, limit);
+
+  if (topIds.length === 0) {
+    return [];
+  }
+
+  // Hydrate the winners in ONE batched query, then re-order to the ranking (the map
+  // is by trackId, unordered). A winner that vanished between the two reads is dropped.
+  const byId = await getTracksByIds(topIds);
+
+  return topIds.flatMap((id) => {
+    const item = byId[id];
+    return item ? [item] : [];
+  });
+}
+
 type TrackCountRow = {
   total_count: number;
 };
@@ -660,6 +737,13 @@ type ListTracksOptions = {
    * public reads. Pair `false` with `retryEmptyContext` to also re-pick `empty`.
    */
   hasContext?: boolean;
+  /**
+   * Audio-embedding presence (admin only) — the MuQ embed queue's filter.
+   * `false` = `embedding_json IS NULL` (no MuQ vector yet — the `fluncle-embed`
+   * cron's worklist); `true` = a vector is on file. Omitted for public reads.
+   * Mirrors `hasVideo`/`hasKey`'s tri-state. See docs/audio-embedding-rfc.md.
+   */
+  hasEmbedding?: boolean;
   /**
    * Observation presence (admin only) — the observation queue's filter.
    * `false` = `observation_audio_url IS NULL` (no spoken observation yet);
@@ -722,6 +806,7 @@ export function listTracks(options: ListTracksOptions): Promise<TrackListPage>;
 export async function listTracks({
   cursor,
   hasContext,
+  hasEmbedding,
   hasKey,
   hasNote,
   hasObservation,
@@ -766,6 +851,14 @@ export async function listTracks({
     filterClauses.push("key is not null");
   } else if (hasKey === false) {
     filterClauses.push("key is null");
+  }
+
+  // The MuQ embed queue: `embedding_json IS NULL` (no audio embedding yet — the
+  // `fluncle-embed` cron's worklist). `true` = a vector is on file. Mirrors hasKey.
+  if (hasEmbedding === true) {
+    filterClauses.push("embedding_json is not null");
+  } else if (hasEmbedding === false) {
+    filterClauses.push("embedding_json is null");
   }
 
   // The context queue. `true` = resolved (a note is stored). `false` = the work

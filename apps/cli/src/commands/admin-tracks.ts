@@ -8,6 +8,7 @@ const pageSize = 48;
 
 async function fetchAdminTracks(options: {
   hasContext?: boolean;
+  hasEmbedding?: boolean;
   hasKey?: boolean;
   hasNote?: boolean;
   hasObservation?: boolean;
@@ -19,6 +20,7 @@ async function fetchAdminTracks(options: {
 }): Promise<RecentTrack[]> {
   const {
     hasContext,
+    hasEmbedding,
     hasKey,
     hasNote,
     hasObservation,
@@ -40,6 +42,10 @@ async function fetchAdminTracks(options: {
 
     if (hasKey !== undefined) {
       params.set("hasKey", String(hasKey));
+    }
+
+    if (hasEmbedding !== undefined) {
+      params.set("hasEmbedding", String(hasEmbedding));
     }
 
     if (hasContext !== undefined) {
@@ -145,6 +151,14 @@ export async function queueCommand(
 // sweep re-fires these; this read just surfaces what's stuck.
 export async function enrichQueueCommand(limit: number): Promise<RecentTrack[]> {
   return fetchAdminTracks({ max: limit, order: "asc", status: "queue" });
+}
+
+// The EMBED queue: findings with no MuQ audio embedding yet (`hasEmbedding=false`),
+// oldest first — the on-box `fluncle-embed` cron's worklist (each row is a finding to
+// embed on the box, then write back via `tracks update <id> --embedding-file`). See
+// docs/audio-embedding-rfc.md.
+export async function embedQueueCommand(limit: number): Promise<RecentTrack[]> {
+  return fetchAdminTracks({ hasEmbedding: false, max: limit, order: "asc" });
 }
 
 // The CONTEXT queue: findings whose factual field notes haven't been gathered yet

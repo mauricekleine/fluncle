@@ -3,13 +3,18 @@
 // op here and one spread line in the root — no other domain's file is touched.
 
 import { ORPCError } from "@orpc/server";
-import { decodeTrackCursor, getRandomTrack, listTracks } from "../tracks";
+import { decodeTrackCursor, getRandomTrack, getSimilarFindings, listTracks } from "../tracks";
 import { resolveLogPageTarget } from "../log-resolver";
 import { apiFault, type Implementer, parseLimit } from "./_shared";
 
 // Feed page-size bounds, ported verbatim from the live /api/tracks route.
 const LIST_DEFAULT_LIMIT = 16;
 const LIST_MAX_LIMIT = 48;
+
+// "More like this" row bounds — a small default (matches the `/log` row) with a
+// modest ceiling; the op parses the limit tolerantly like the feed's `list_tracks`.
+const SIMILAR_DEFAULT_LIMIT = 6;
+const SIMILAR_MAX_LIMIT = 24;
 
 /**
  * Normalize a discovery-window bound exactly as the live route's `parseTimestamp`
@@ -106,8 +111,26 @@ export function tracksHandlers(os: Implementer) {
     }
   });
 
+  // `get_similar_findings` — the N sonically-nearest findings (the "more like this"
+  // cluster). Cosine-ranks the target's MuQ embedding against every other
+  // coordinate-bearing finding's, self excluded, similarity order. An unknown
+  // coordinate / an un-embedded finding / an empty archive all resolve to
+  // `{ ok: true, findings: [] }` (a quiet empty row, never a fault). The limit is
+  // parsed tolerantly like the feed's, degrading to the default rather than 400-ing.
+  const getSimilarFindingsHandler = os.get_similar_findings.handler(async ({ input }) => {
+    try {
+      const limit = parseLimit(input.limit, SIMILAR_DEFAULT_LIMIT, SIMILAR_MAX_LIMIT);
+      const findings = await getSimilarFindings(input.idOrLogId, limit);
+
+      return { findings, ok: true } as const;
+    } catch (error) {
+      throw apiFault(error);
+    }
+  });
+
   return {
     get_random_track: getRandomTrackHandler,
+    get_similar_findings: getSimilarFindingsHandler,
     get_track: getTrack,
     list_tracks: listTracksHandler,
   };
