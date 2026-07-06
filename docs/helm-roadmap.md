@@ -61,8 +61,8 @@ Each station is listed as its action inventory. Data shown is implied by the act
 ### Show (exists; M5)
 
 - Tracklist picker → [Raise the glass]; the pre-flight as checklist rows (the `[clear]`/`[hold]` tokens are real machine output and stay); [Depart anyway] on holds; [Stand down].
-- OBS custody (new): [Arm recording] / [Stop recording] via obs-websocket, the audio meter as a live datum beside it.
-- Links: the glass, the phone remote — as buttons, not prose.
+- OBS stays out of the Helm (decided): the operator is in OBS anyway to start the Twitch stream; the Helm never layers over it. Scene-change mistakes during sets are solved by the matcher driving arrivals against a plan, not by tooling.
+- Links: the visuals page, the phone remote — as buttons, not prose. (A rename of "the glass" is pending the operator's pick.)
 
 ### Set lifecycle (exists)
 
@@ -105,16 +105,21 @@ Decision: the shim is the frame. Revisit only on concrete pain, and Tauri is the
 ## Sequencing
 
 - **v1.1 — Attention.** The attention queue as home, the nudge engine generalized, the doctrine pass over the three existing stations (delete every sentence; re-type per the density rules; command palette skeleton).
-- **v1.2 — The desk ports.** Tag station; Plans station; OBS custody; [Announce].
+- **v1.2 — The desk ports.** Tag station; Plans station; [Announce].
 - **v1.3 — The Studio.** Local-ffmpeg clipping, the shared recipe module, drip-queue and posting-tray integration; set-video trigger.
 - **v1.4 — The shrink.** Web /admin reduces to the post card; the admin routes and their tests retire; the surfaces doctrine and docs updated.
 
 Each phase ships complete per the house standard: implementation, tests, docs, canon/product review, and the doctrine check that no narration crept in.
 
-## Open questions for the forge
+## Decided (operator, 2026-07-06)
 
-- The command palette's scope: actions only, or also object search (findings by name → jump to their row anywhere)?
-- The attention queue's ordering: pure age, or a weighted urgency (TikTok draft expiry outranks tagging)?
-- OBS custody depth: arm/stop only, or scene selection and the meter check absorbed into pre-flight?
-- Does the tag station want the plate-era poster instead of cover art as the placement visual?
-- Waveform rendering in the Studio: precompute server-side per take, or generate locally on open?
+- The command palette reaches actions AND objects: typing a track or plan name jumps to its row on the right station, selected. The palette is the app's front door.
+- Attention orders by weighted urgency: deadline-bearing rows (a TikTok draft expiring) outrank age; each source declares its urgency curve; ties fall back to oldest-first.
+- No OBS integration, at any depth (see Show).
+- The tag station places against cover art: the track's own identity, always present.
+- Waveforms precompute at take-upload; the waveform is part of the take's bundle.
+
+## Open for the forge
+
+- The rename of "the glass" (the live visuals renderer) — candidate names and the sweep's blast radius.
+- The urgency curves per attention source: concrete decay/deadline math.
