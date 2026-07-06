@@ -849,6 +849,17 @@ export const SURFACES: readonly Surface[] = [
     },
     weights: { status: "secondary" },
   },
+  {
+    exposedContent: [
+      "daily gzip dump of the prod database → a PRIVATE R2 bucket (owned off-site backup) + 30 daily / 12 monthly retention (--no-agent)",
+    ],
+    kind: "cron",
+    name: "cron.backup",
+    operatorNotes:
+      "daily. An OWNED, off-Cloudflare backup: dumps prod Turso over the libSQL HTTP pipeline → gzip → a PRIVATE R2 bucket (never fluncle-videos, which is world-served at found.fluncle.com) + prune. Zero LLM tokens; talks to Turso + R2 directly (no fluncle CLI, no agent token). Turso's managed PITR is the belt; this is the braces. Restore is proven by apps/web/scripts/restore-drill.ts. Source: docs/agents/hermes/scripts/backup-sweep.*",
+    probeConfig: { cadenceMs: 24 * 60 * MINUTE_MS, cronName: "fluncle-backup", kind: "cron" },
+    weights: { status: "secondary" },
+  },
 ];
 
 // ── Selectors ────────────────────────────────────────────────────────────────
