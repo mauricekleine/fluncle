@@ -7,6 +7,10 @@
 // These types are also the wire shape the panel reads — the daemon serialises them
 // straight to the glass, so a field named here is a field the panel can render.
 
+// The one import: the byte-shared TikTok stale-draft rule (pure + clock-injected), so
+// the helm's freshness and the web board agree on when a bounced draft re-opens.
+import { isStaleTikTokDraft } from "@fluncle/contracts/util";
+
 // ─── The render queue ────────────────────────────────────────────────────────
 
 /** One awaiting finding on the render queue (no video yet), as the panel shows it. */
@@ -120,15 +124,24 @@ export type PostRecord = {
 
 // A post counts as "gone out" once it's drafted, scheduled, or published — a TikTok
 // draft is already in the inbox, a scheduled post is committed. A `failed` (or any
-// other) status re-opens the finding as unposted.
+// other) status re-opens the finding as unposted. THE EXCEPTION: a TikTok inbox draft
+// past TikTok's 24h window has almost certainly BOUNCED (Postiz reports the push a
+// success, but TikTok silently drops the 6th+ pending draft), so `postFreshness` treats
+// a stale draft like a `failed` post — it re-opens the finding as unposted and never
+// counts as a "we posted something" moment. The shared `isStaleTikTokDraft` rule is the
+// one source of that cutoff (see @fluncle/contracts/util).
 const LIVE_POST_STATUSES = new Set(["draft", "published", "scheduled"]);
 
 /**
  * Read a finding's per-platform posts into the two signals the board needs:
  * whether it has already gone to TikTok, and the freshest "we posted something"
- * moment across ALL platforms (the nudge's staleness clock). Pure over the rows.
+ * moment across ALL platforms (the nudge's staleness clock). Pure + clock-injected
+ * (`now`) — a stale TikTok draft is decided against the same wall clock the tick reads.
  */
-export function postFreshness(posts: PostRecord[]): {
+export function postFreshness(
+  posts: PostRecord[],
+  now: number,
+): {
   postedAt: number | null;
   postedToTikTok: boolean;
 } {
@@ -136,7 +149,7 @@ export function postFreshness(posts: PostRecord[]): {
   let postedAt: number | null = null;
 
   for (const post of posts) {
-    if (!LIVE_POST_STATUSES.has(post.status)) {
+    if (!LIVE_POST_STATUSES.has(post.status) || isStaleTikTokDraft(post, now)) {
       continue;
     }
 

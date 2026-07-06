@@ -10,6 +10,7 @@ import {
   VinylRecordIcon,
   WaveformIcon,
 } from "@phosphor-icons/react";
+import { isStaleTikTokDraft, tikTokDraftAgeHours } from "@fluncle/contracts/util";
 import { type ComponentType } from "react";
 import { TiktokIcon, YoutubeIcon } from "@/components/platform-icons";
 import { GALAXIES, galaxyForVibe } from "@/lib/galaxies";
@@ -60,9 +61,13 @@ export type StepKind = "auto" | "human";
  * partial — touched, not closed (a pushed-but-not-live draft; context gathered but
  *           not voiced; a finding pencilled into a plan).
  * done    — closed.
+ * stale   — pushed but the push has almost certainly bounced: a TikTok inbox draft
+ *           past TikTok's 24h window (Postiz reports success, TikTok drops the 6th+
+ *           pending draft silently). Your move again — re-push — so it never reads as
+ *           gone-out. Distinct from `open` (never pushed) and `partial` (in-flight).
  * planned — designed-in, not wired yet; ghosted, never actionable.
  */
-export type StepState = "open" | "running" | "partial" | "done" | "planned";
+export type StepState = "open" | "running" | "partial" | "done" | "stale" | "planned";
 
 /** The callbacks the board hands every variant — one per openable step dialog. */
 export type BoardActions = {
@@ -133,23 +138,32 @@ const STEP_DEFS: { key: StepKey; kind: StepKind; label: string; Icon: StepIcon }
 function publishStep(
   row: BoardRow,
   platform: "youtube" | "tiktok",
+  now: number,
 ): Pick<BoardStep, "state" | "statusLabel" | "hint" | "actionable" | "gated"> {
   const post = row.posts.find((entry) => entry.platform === platform);
   const status = post?.status;
   const hasLiveUrl = Boolean(post?.url);
+  // A TikTok inbox draft past the 24h window has almost certainly bounced (Postiz
+  // reports the push a success but TikTok silently drops the 6th+ pending draft), so
+  // it re-opens as `stale` — your move again — rather than reading `partial`/gone-out
+  // forever. The shared `isStaleTikTokDraft` rule is the one source of that cutoff.
+  const staleDraft = post ? isStaleTikTokDraft(post, now) : false;
+  const staleHours = post ? (tikTokDraftAgeHours(post, now) ?? 0) : 0;
   // Live only closes the circuit once a public URL is recorded; YouTube auto-posts
   // and TikTok is finished in-app, so both land "published" with the link missing —
-  // a partial, not done. A failed push re-opens it as a retry.
-  const state: StepState =
-    status === "published"
+  // a partial, not done. A failed push re-opens it as a retry; a bounced draft as stale.
+  const state: StepState = staleDraft
+    ? "stale"
+    : status === "published"
       ? hasLiveUrl
         ? "done"
         : "partial"
       : status === "draft" || status === "scheduled"
         ? "partial"
         : "open";
-  const statusLabel =
-    status === "published"
+  const statusLabel = staleDraft
+    ? `Stale ${staleHours}h`
+    : status === "published"
       ? hasLiveUrl
         ? "Live"
         : "Add link"
@@ -163,22 +177,28 @@ function publishStep(
   // Nothing to push until there's a video — unless a post already exists.
   const gated = !row.videoUrl && !post;
   const label = platform === "youtube" ? "YouTube" : "TikTok";
+  const hint = gated
+    ? "No video yet — render first"
+    : staleDraft
+      ? `Draft stale ${staleHours}h — likely bounced; re-push`
+      : `${label} publish`;
 
   return {
     actionable: !gated,
     gated,
-    hint: gated ? "No video yet — render first" : `${label} publish`,
+    hint,
     state,
     statusLabel,
   };
 }
 
 /**
- * Derive every step for one finding. Pure — reads the row's own fields plus its
- * social posts and mixtape memberships, exactly like the live board's cells, so the
- * variants never drift from the real state.
+ * Derive every step for one finding. Pure over the row + an injected clock (`now`,
+ * defaulting to the wall clock): the only time dependence is the TikTok stale-draft
+ * cutoff. Reads the row's own fields plus its social posts and mixtape memberships,
+ * exactly like the live board's cells, so the variants never drift from the real state.
  */
-export function boardSteps(row: BoardRow): BoardStep[] {
+export function boardSteps(row: BoardRow, now: number = Date.now()): BoardStep[] {
   const tagged = row.vibeX !== undefined && row.vibeY !== undefined;
   const galaxy =
     row.galaxy?.key ??
@@ -306,7 +326,7 @@ export function boardSteps(row: BoardRow): BoardStep[] {
       state: tagged ? "done" : "open",
       statusLabel: tagged ? (galaxy ? GALAXIES[galaxy].name : "Tagged") : "Tag",
     },
-    tiktok: publishStep(row, "tiktok"),
+    tiktok: publishStep(row, "tiktok", now),
     video: {
       // Agent-rendered; clicking previews when there's a clip, otherwise it waits.
       actionable: Boolean(row.videoUrl),
@@ -315,7 +335,7 @@ export function boardSteps(row: BoardRow): BoardStep[] {
       state: row.videoUrl ? "done" : "open",
       statusLabel: row.videoUrl ? "Filmed" : "No clip",
     },
-    youtube: publishStep(row, "youtube"),
+    youtube: publishStep(row, "youtube", now),
   };
 
   return STEP_DEFS.map((def) => ({

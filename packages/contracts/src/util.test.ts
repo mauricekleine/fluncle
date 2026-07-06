@@ -8,7 +8,12 @@
 
 import assert from "node:assert/strict";
 
-import { resolveClipTracks } from "./util";
+import {
+  isStaleTikTokDraft,
+  resolveClipTracks,
+  TIKTOK_DRAFT_STALE_MS,
+  tikTokDraftAgeHours,
+} from "./util";
 
 // A window inside one cue's interval resolves to that single member, carrying its logId.
 {
@@ -73,3 +78,67 @@ import { resolveClipTracks } from "./util";
 }
 
 console.log("resolveClipTracks logId carry-through: OK");
+
+// ── TikTok stale-draft rule (clock-injected) ─────────────────────────────────
+// TikTok bounces the 6th+ pending inbox draft asynchronously; a `draft` row older
+// than 24h off `updatedAt` has almost certainly bounced and must read as UNPOSTED.
+{
+  const NOW = Date.parse("2026-07-06T20:00:00.000Z");
+  const fresh = { platform: "tiktok", status: "draft", updatedAt: "2026-07-06T12:00:00.000Z" };
+  const stale = { platform: "tiktok", status: "draft", updatedAt: "2026-07-05T10:00:00.000Z" };
+
+  // A fresh draft (8h old) is still trusted as in the inbox.
+  assert.equal(isStaleTikTokDraft(fresh, NOW), false, "a fresh TikTok draft is not stale");
+  assert.equal(tikTokDraftAgeHours(fresh, NOW), 8, "a fresh draft reports its age in hours");
+
+  // A stale draft (>24h) reads as bounced.
+  assert.equal(isStaleTikTokDraft(stale, NOW), true, "a >24h TikTok draft is stale");
+  assert.equal(tikTokDraftAgeHours(stale, NOW), 34, "a stale draft reports its age in hours");
+
+  // The boundary: exactly 24h is stale; a second short of it is not.
+  const at24h = {
+    platform: "tiktok",
+    status: "draft",
+    updatedAt: new Date(NOW - TIKTOK_DRAFT_STALE_MS).toISOString(),
+  };
+  const under24h = {
+    platform: "tiktok",
+    status: "draft",
+    updatedAt: new Date(NOW - TIKTOK_DRAFT_STALE_MS + 1000).toISOString(),
+  };
+  assert.equal(isStaleTikTokDraft(at24h, NOW), true, "exactly 24h old is stale");
+  assert.equal(isStaleTikTokDraft(under24h, NOW), false, "a second under 24h is fresh");
+
+  // Only a tiktok draft can be stale; every other row is exempt.
+  const oldPublished = {
+    platform: "tiktok",
+    status: "published",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const oldYoutubeDraft = {
+    platform: "youtube",
+    status: "draft",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  assert.equal(
+    isStaleTikTokDraft(oldPublished, NOW),
+    false,
+    "a published TikTok post is never stale",
+  );
+  assert.equal(isStaleTikTokDraft(oldYoutubeDraft, NOW), false, "a YouTube draft is never stale");
+  assert.equal(tikTokDraftAgeHours(oldPublished, NOW), null, "age is null for a non-draft");
+
+  // Conservative on bad data: no stamp / unparseable → NOT stale (no false re-push).
+  assert.equal(
+    isStaleTikTokDraft({ platform: "tiktok", status: "draft" }, NOW),
+    false,
+    "a draft with no updatedAt is not stale",
+  );
+  assert.equal(
+    isStaleTikTokDraft({ platform: "tiktok", status: "draft", updatedAt: "not-a-date" }, NOW),
+    false,
+    "a draft with an unparseable updatedAt is not stale",
+  );
+}
+
+console.log("isStaleTikTokDraft / tikTokDraftAgeHours: OK");

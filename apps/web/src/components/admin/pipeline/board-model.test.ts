@@ -74,3 +74,87 @@ describe("boardSteps — Discogs cell", () => {
     expect(step.statusLabel).toBe("Pending");
   });
 });
+
+// The TikTok cell reads its state from the finding's `social_posts` row. The live
+// bug: TikTok async-bounces the 6th+ pending inbox draft (Postiz still reports the
+// push a success), so a `draft` row would read `partial`/gone-out forever. Past 24h
+// (off `updatedAt`, the push time) the cell must re-open as a DISTINCT `stale` state —
+// your move again — never silently merged with either the gold `partial` (in-flight)
+// or the hollow "Push" (never pushed).
+const NOW = Date.parse("2026-07-06T20:00:00.000Z");
+
+function tiktokStep(row: BoardRow, now: number) {
+  const step = boardSteps(row, now).find((s) => s.key === "tiktok");
+
+  if (!step) {
+    throw new Error("tiktok step missing");
+  }
+
+  return step;
+}
+
+function tiktokDraftRow(updatedAt: string): BoardRow {
+  return makeRow({
+    posts: [
+      {
+        createdAt: "2026-07-05T00:00:00.000Z",
+        platform: "tiktok",
+        status: "draft",
+        updatedAt,
+      },
+    ],
+    videoUrl: "https://found.fluncle.com/241.7.3A/footage.mp4",
+  });
+}
+
+describe("boardSteps — TikTok publish cell (stale-draft rule)", () => {
+  it("a FRESH draft (under 24h) reads partial/Drafted — it's genuinely in the inbox", () => {
+    const step = tiktokStep(tiktokDraftRow("2026-07-06T18:00:00.000Z"), NOW);
+
+    expect(step.state).toBe("partial");
+    expect(step.statusLabel).toBe("Drafted");
+    expect(step.actionable).toBe(true);
+  });
+
+  it("a STALE draft (past 24h, likely bounced) reads the distinct `stale` state + deadpan hint", () => {
+    // 34h old → "Stale 34h".
+    const step = tiktokStep(tiktokDraftRow("2026-07-05T10:00:00.000Z"), NOW);
+
+    expect(step.state).toBe("stale");
+    expect(step.statusLabel).toBe("Stale 34h");
+    expect(step.hint).toBe("Draft stale 34h — likely bounced; re-push");
+    // Still actionable — the Push dialog offers the re-push.
+    expect(step.actionable).toBe(true);
+  });
+
+  it("a never-pushed TikTok cell reads a plain open 'Push' — distinct from a stale draft", () => {
+    const step = tiktokStep(
+      makeRow({ videoUrl: "https://found.fluncle.com/241.7.3A/footage.mp4" }),
+      NOW,
+    );
+
+    expect(step.state).toBe("open");
+    expect(step.statusLabel).toBe("Push");
+  });
+
+  it("a published TikTok post never reads stale, even if old", () => {
+    const step = tiktokStep(
+      makeRow({
+        posts: [
+          {
+            createdAt: "2026-01-01T00:00:00.000Z",
+            platform: "tiktok",
+            status: "published",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            url: "https://www.tiktok.com/@fluncle/video/1",
+          },
+        ],
+        videoUrl: "https://found.fluncle.com/241.7.3A/footage.mp4",
+      }),
+      NOW,
+    );
+
+    expect(step.state).toBe("done");
+    expect(step.statusLabel).toBe("Live");
+  });
+});
