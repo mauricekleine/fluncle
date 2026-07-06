@@ -24,6 +24,14 @@ So full-song embedding requires a real decision about the copyright posture and 
 
 Three findings were embedded on previews during the Phase-1 proof (2fyMcl41…, 7tqoT2vU…, 44iDh0Jq…). When the full-song path lands, null their `embedding_json` so they re-queue (the queue is `embedding_json IS NULL`); the rest of the archive was never preview-embedded (the cron was paused after the proof tick).
 
-## The one question for the operator
+## What we actually store in R2 today (checked)
 
-Which mechanism: **A** (a hosted actor the box calls, autonomous, needs a token + a posture nod) or **B** (a local-only lane, posture-safe, not hands-off)? On the answer, the build is: the fetch helper, the embed-sweep source swap, the cap/timeout adjustment, the re-embed of the 3, resume the cron. All small once the mechanism is chosen.
+Only the **preview** is archived: `preview-archive.ts` persists the ~30-second Deezer/iTunes clip to `n/previews/<logId>/<hash>.mp3` so it survives a stale source URL. There is **no full-song artifact** anywhere in the pipeline (every audio R2 key was searched). The `audio-source-policy` note's "full audio via an Apify downloader" was an intent that was never implemented — no Apify code exists.
+
+## Option C — capture the full song once at add-time (the best shape)
+
+Extend ingestion to fetch the full song once and store it in the same private analysis structure (e.g. `n/source/<logId>/…`), then the embed cron becomes a **pure box-side R2 read**: it downloads nothing, just pulls the stored full audio and embeds. This is cleaner than A or B — the copyrighted fetch happens once, at ingestion, wherever the operator decides is proper; the box stays fully autonomous with zero posture concern at embed-time; and the stored full audio is durable analysis fuel for anything future (better BPM, structure analysis, stems). It does NOT escape the core question — the download-and-store still happens somewhere at ingestion via some mechanism — but it pays it once per finding instead of per-embed, and confines the posture decision to one ingestion step.
+
+## The one question for the operator (revised)
+
+Not "which of A/B" but: **do we capture the full song once at add-time into private R2 (Option C), and by what mechanism** (a hosted actor, or a local ingestion lane)? On the answer, the build is: the ingestion fetch+store, a `source_audio_key` column, the embed-sweep source swap (R2 read), the cap/timeout adjustment for full-length inference, re-embed the 3 previews, resume the cron.
