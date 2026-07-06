@@ -98,7 +98,7 @@ async function gatherFresh(admin: AdminClient, now: number): Promise<GatheredPos
         const social = await admin.get<SocialResponse>(
           `/api/admin/tracks/${encodeURIComponent(track.trackId)}/social`,
         );
-        const { postedAt, postedToTikTok } = postFreshness(social.posts ?? []);
+        const { postedAt, postedToTikTok } = postFreshness(social.posts ?? [], now);
 
         return { candidate: toCandidate(track, postedAt, postedToTikTok), track };
       } catch {

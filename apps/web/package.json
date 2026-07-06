@@ -11,6 +11,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:pull-prod": "bun run scripts/db-pull-prod.ts",
     "db:refresh-dev": "bun run scripts/db-refresh.ts",
+    "db:restore-drill": "bun run scripts/restore-drill.ts",
     "db:secrets": "bun run scripts/render-dev-vars.ts",
     "deploy": "bun run build && wrangler deploy",
     "deploy:cf": "bun run db:migrate && bun run db:backfill && wrangler deploy",

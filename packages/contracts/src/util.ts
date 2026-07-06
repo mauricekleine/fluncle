@@ -336,6 +336,66 @@ export function mixcloudEditUrl(key: string): string {
   return `${MIXCLOUD_API_BASE}/upload${path}edit/`;
 }
 
+// ── TikTok stale-draft detection ─────────────────────────────────────────────
+//
+// TikTok bounces the 6th+ pending inbox draft ASYNCHRONOUSLY: Postiz reports the
+// push a success, so the `social_posts` row lands `draft` and stays there — but the
+// video never actually reached the inbox. A `draft` row is therefore only honestly
+// "gone out" for its first ~24h; past that it has almost certainly bounced (TikTok
+// caps unpublished inbox drafts at 5 per rolling 24h) and the finding must re-enter
+// "needs posting" rather than count as posted forever. This is the ONE place that
+// 24h rule lives: the web board's posted-state derivation (`board-model.ts` +
+// `track-stage.ts`) AND the helm's pulse freshness (`pulse/logic.ts`) all import it,
+// so the honest rule can't drift between the sites that read post state. Pure +
+// clock-injected (`now` is passed, never read ambiently) so it's provable without
+// waiting 24h.
+
+/** How long a TikTok inbox draft is trusted as "in the inbox" before it reads as bounced. */
+export const TIKTOK_DRAFT_STALE_MS = 24 * 60 * 60 * 1000;
+
+/** The minimal social-post shape the staleness rule reads (a structural subset of a post row). */
+export type SocialPostStaleInput = {
+  platform: string;
+  status: string;
+  /** The push / re-push time (`social_posts.updated_at`) — the staleness clock. */
+  updatedAt?: string;
+};
+
+/**
+ * Whole hours a TikTok `draft` has been sitting since its last push (`updatedAt`),
+ * or `null` when the post isn't a TikTok `draft` or the stamp is unparseable. Drives
+ * the board's deadpan "Stale 26h" label; the staleness cutoff below reads the raw ms.
+ */
+export function tikTokDraftAgeHours(post: SocialPostStaleInput, now: number): number | null {
+  if (post.platform !== "tiktok" || post.status !== "draft") {
+    return null;
+  }
+  const stamp = post.updatedAt ? Date.parse(post.updatedAt) : Number.NaN;
+  if (Number.isNaN(stamp)) {
+    return null;
+  }
+  return Math.max(0, Math.floor((now - stamp) / (60 * 60 * 1000)));
+}
+
+/**
+ * Whether a TikTok `draft` has gone STALE — older than 24h off its `updatedAt` (the
+ * push/re-push time). A stale draft has almost certainly bounced, so every reader
+ * treats it as UNPOSTED, not gone-out. CONSERVATIVE on bad data: an absent or
+ * unparseable stamp is NOT stale — the helm never manufactures a false "re-push"
+ * from a read it can't trust. Only a `tiktok` + `draft` row can be stale; every
+ * other platform/status returns false.
+ */
+export function isStaleTikTokDraft(post: SocialPostStaleInput, now: number): boolean {
+  if (post.platform !== "tiktok" || post.status !== "draft") {
+    return false;
+  }
+  const stamp = post.updatedAt ? Date.parse(post.updatedAt) : Number.NaN;
+  if (Number.isNaN(stamp)) {
+    return false;
+  }
+  return now - stamp >= TIKTOK_DRAFT_STALE_MS;
+}
+
 /** True when every base-title token of the finding appears in the candidate's. */
 export function baseTitleMatches(findingTitle: string, candidateTitle: string): boolean {
   const want = new Set(tokenize(stripVersionSuffix(findingTitle)));

@@ -17,7 +17,7 @@
     "source under ../scripts/): fluncle-enrich (5m), fluncle-context-note (5m), fluncle-note",
     "(10m, hybrid), fluncle-backfill (30m), fluncle-observation (60m, hybrid), fluncle-render",
     "(60m, video conductor), fluncle-social-capture (10m), fluncle-studio-clip (15m,",
-    "ffmpeg cut), fluncle-newsletter (`0 15 * * 5`, hybrid). A pure",
+    "ffmpeg cut), fluncle-newsletter (`0 15 * * 5`, hybrid), fluncle-backup (24h, DB dump -> private R2). A pure",
     "trigger ships deterministic stdout; a HYBRID (note/observation/newsletter) wraps ONE",
     "`claude -p` authoring call in a deterministic gather/persist/deliver shell.",
     "",

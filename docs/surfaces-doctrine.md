@@ -142,6 +142,7 @@ Checked by their last-run freshness (not an HTTP hit), so they carry a `cronName
 | `cron.clip-drip`      | `fluncle-clip-drip`      | every 20m           | post the due, cut clips to Instagram on a jittered ~daily cadence via Postiz (`--no-agent`, Worker HTTP; kill-switch aware)          | hidden    |
 | `cron.render`         | `fluncle-render`         | every 60m           | wake the render box → render + ship one finding's video → park (a conductor; never posts to social)                                  | hidden    |
 | `cron.healthcheck`    | `fluncle-healthcheck`    | every 10m           | probe each service → Discord-ping on a status flip → POST the `/status` snapshot (a rave-02 host systemd timer, not a gateway cron)  | hidden    |
+| `cron.backup`         | `fluncle-backup`         | every 24h           | dump the prod DB → gzip → a PRIVATE R2 bucket (owned off-site backup) + prune to 30 daily / 12 monthly (`--no-agent`, zero tokens)   | secondary |
 
 ## 3. The per-context weight matrix
 
