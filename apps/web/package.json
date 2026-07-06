@@ -21,6 +21,7 @@
     "postinstall": "fumadocs-mdx",
     "preview": "bun run build && wrangler dev",
     "pretypecheck": "fumadocs-mdx",
+    "r2:cors": "wrangler r2 bucket cors set fluncle-videos --file r2-cors.json",
     "typecheck": "tsgo --noEmit",
     "test": "vitest run --coverage"
   },
