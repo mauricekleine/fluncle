@@ -100,6 +100,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "PATCH /admin/recordings/{recordingId}": "update_recording",
   "PATCH /admin/tracks/{trackId}": "update_track",
   "PATCH /admin/tracks/{trackId}/social/{platform}": "update_track_social",
+  // The artist-entity backfill (Unit 1 of the artist-relationship RFC) —
+  // contract-only oRPC (no TanStack route file; oRPC owns the path directly).
+  // Agent tier: the box's `fluncle-artist-backfill` cron drives it with its agent token.
+  "POST /admin/backfill/artists": "backfill_artists",
   "POST /admin/backfill/discogs": "backfill_discogs",
   "POST /admin/backfill/lastfm": "backfill_lastfm",
   // The clip drip-feed tick — contract-only oRPC (no TanStack route file). ADMIN tier

@@ -1354,6 +1354,19 @@ function addAdminCommands(program: Command): void {
       const { backfillDiscogsCommand } = await import("./commands/admin-tracks");
       await runBackfillDiscogs(options, backfillDiscogsCommand);
     });
+
+  // `backfill_artists` → `admin backfills artists`. Back-fills the artist entity
+  // tables (artists + track_artists) for existing findings that predate Unit 1.
+  backfill
+    .command("artists")
+    .description("Back-fill the artist entity (artists + track_artists) for existing findings")
+    .option("--dry-run", "Report which findings would be upserted without touching the DB", false)
+    .option("--limit <limit>", "Max findings to process", "50")
+    .option("--json", "Print JSON", false)
+    .action(async (options: BackfillSyncOptions) => {
+      const { backfillArtistsCommand } = await import("./commands/admin-artists");
+      await runBackfillArtists(options, backfillArtistsCommand);
+    });
 }
 
 async function runTrackPreviewArchive(
@@ -1681,6 +1694,67 @@ async function runBackfillDiscogs(
   for (const item of resolved) {
     const master = item.masterId ? ` (master ${item.masterId})` : "";
     console.log(`  ${item.logId}: release ${item.releaseId}${master}`);
+  }
+}
+
+async function runBackfillArtists(
+  options: BackfillSyncOptions,
+  backfillArtistsCommand: typeof import("./commands/admin-artists").backfillArtistsCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const upserted: string[] = [];
+  const failed: Array<{ error: string; logId: string }> = [];
+  const skipped: string[] = [];
+  let cursor: string | undefined;
+  let dryRun = options.dryRun;
+
+  while (upserted.length + failed.length < limit) {
+    const remaining = limit - (upserted.length + failed.length);
+    const result = await backfillArtistsCommand(remaining, options.dryRun, cursor);
+    dryRun = result.dryRun;
+    upserted.push(...result.upserted);
+    failed.push(...result.failed);
+    skipped.push(...result.skipped);
+
+    if (!options.json) {
+      const verb = result.dryRun ? "would upsert" : "upserted";
+      console.log(
+        `  …${verb} ${result.upsertedCount}; ${result.failedCount} failed; ${result.skippedCount} skipped`,
+      );
+    }
+
+    if (result.nextCursor === null) {
+      break;
+    }
+
+    cursor = result.nextCursor;
+  }
+
+  if (options.json) {
+    printJson({
+      dryRun,
+      failed,
+      failedCount: failed.length,
+      ok: true,
+      skipped,
+      skippedCount: skipped.length,
+      upserted,
+      upsertedCount: upserted.length,
+    });
+    return;
+  }
+
+  const verb = dryRun ? "Would upsert" : "Upserted";
+  console.log(
+    `${verb} ${upserted.length} artist entity row(s); ${failed.length} failed; ${skipped.length} skipped.`,
+  );
+
+  for (const logId of upserted) {
+    console.log(`  ${logId}`);
+  }
+
+  for (const item of failed) {
+    console.log(`  ${item.logId}: ${item.error}`);
   }
 }
 
