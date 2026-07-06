@@ -7,6 +7,7 @@
   "scripts": {
     "build": "vite build",
     "dev": "bun run scripts/dev.ts",
+    "shim:build": "bash shim/build.sh",
     "start": "bun src/server.ts",
     "test": "bun test --timeout 20000",
     "typecheck": "tsgo --noEmit"
