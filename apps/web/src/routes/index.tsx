@@ -11,6 +11,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { colors } from "@fluncle/tokens";
 import { useCallback, useEffect, useRef } from "react";
 import { HomeLinkHub } from "@/components/home/link-hub";
+import { LiveBanner } from "@/components/home/live-banner";
 import { StoriesDialog } from "@/components/stories/stories-dialog";
 import { TrackRow } from "@/components/track-row";
 import { Button } from "@fluncle/ui/components/button";
@@ -35,6 +36,7 @@ import {
 import { fluncleAsciiLogo, fluncleDescription } from "@/lib/identity";
 import { jsonLdScript } from "@/lib/json-ld";
 import { type FeedItem } from "@/lib/mixtapes";
+import { getLiveState } from "@/lib/server/live";
 import { listTracks } from "@/lib/server/tracks";
 import { fetchTracks, type TracksResponse } from "@/lib/tracks";
 import { registerWebMcpTools } from "@/lib/webmcp";
@@ -53,12 +55,15 @@ type HomeSearch = {
 // isn't on the first page (it usually isn't, once newer findings land before
 // their footage does). Same ordering as the stories feed, so it lines up.
 const fetchHomeData = createServerFn({ method: "GET" }).handler(async () => {
-  const [page, latestStory] = await Promise.all([
+  const [page, latestStory, live] = await Promise.all([
     listTracks({ includeMixtapes: true, limit: pageSize }),
     listTracks({ hasVideo: true, limit: 1 }),
+    // The live-set callout, read server-side so the banner SSRs with no flash
+    // (staleness already applied). Offline almost always — a quiet, cheap read.
+    getLiveState(),
   ]);
 
-  return { ...page, newestStoryLogId: latestStory.tracks[0]?.logId };
+  return { ...page, live, newestStoryLogId: latestStory.tracks[0]?.logId };
 });
 
 // Route options follow TanStack's create-route-property-order (each step feeds the
@@ -253,6 +258,8 @@ function HomePage() {
   // The stories entry opens at the newest finding with footage — resolved on
   // the server across the whole archive (above), not just this first page.
   const newestStoryLogId = initialPage.newestStoryLogId;
+  // The live-set callout, SSR'd from the loader (offline almost always).
+  const live = initialPage.live;
 
   useEffect(() => {
     console.log(
@@ -305,6 +312,10 @@ function HomePage() {
   return (
     <TooltipProvider>
       <main className="min-h-screen overflow-x-hidden p-4 text-foreground sm:p-6 lg:flex lg:flex-col lg:p-8">
+        {/* The live-set callout — the one loud, ephemeral beat, above the plate.
+            Renders nothing unless Fluncle is on the decks (DESIGN.md "The Live
+            Exception"); it clears itself the moment the set ends. */}
+        <LiveBanner live={live} />
         {/* A0: the page as ONE recovered logbook plate — a real masthead, the
             cover and the list mounted flat on a single document (the silhouette
             change; DESIGN.md). The plate sizes to its taller column: the feed

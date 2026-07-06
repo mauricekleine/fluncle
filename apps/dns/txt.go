@@ -56,6 +56,26 @@ func buildTXT(t *track, c config) []string {
 	return splitStrings(strings.Join(pairs, "; "))
 }
 
+// buildLiveTXT renders the live-set callout (the `live` label) as one TXT record:
+// always `v=fluncle1; live=0|1`, and when on, the Twitch url + stream title. A
+// machine-readable sibling of the web banner / SSH line — "is Fluncle on the decks".
+func buildLiveTXT(info liveInfo) []string {
+	on := "0"
+	if info.On {
+		on = "1"
+	}
+	pairs := []string{kv("v", txtVersion), kv("live", on)}
+	if info.On {
+		if info.URL != "" {
+			pairs = append(pairs, kv("url", info.URL))
+		}
+		if info.Title != "" {
+			pairs = append(pairs, kv("title", info.Title))
+		}
+	}
+	return splitStrings(strings.Join(pairs, "; "))
+}
+
 // kv formats one pair, escaping the separator characters so the payload stays
 // machine-splittable on "; ".
 func kv(key, value string) string {

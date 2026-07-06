@@ -2622,6 +2622,46 @@ body::before {
    never competes with the Galaxy CTA's one sun (One Sun budget governs the total).
    The button's own outline border still carries the resting frame + focus ring;
    this is light laid on top. Reduced motion freezes it to a steady gold-lit frame. */
+/* The live-set banner pane (DESIGN.md "The Live Exception" + "The Legible Sky
+   Rule"). It rides ABOVE the plate, directly over the raw cosmos backdrop where the
+   gold sun-bloom is brightest, so the ground must DIM the backdrop enough to hold
+   WCAG AA — a near-opaque warm-dark card scrim under a faint Nebula-Violet wash, the
+   violet carried by the accents (dot, heading, border, CTA). More opaque than the
+   plate (52%) on purpose: the banner overlaps the brightest backdrop region. */
+.live-banner {
+  background:
+    linear-gradient(var(--nebula-veil), var(--nebula-veil)),
+    color-mix(in oklch, var(--card) 92%, transparent);
+  border-color: color-mix(in oklch, var(--nebula-violet) 40%, transparent);
+}
+
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .live-banner {
+    -webkit-backdrop-filter: blur(18px) saturate(125%);
+    backdrop-filter: blur(18px) saturate(125%);
+    background:
+      linear-gradient(var(--nebula-veil), var(--nebula-veil)),
+      color-mix(in oklch, var(--card) 85%, transparent);
+  }
+}
+
+/* The live-set CTA — the violet sibling of the gold ignition (DESIGN.md "The Live
+   Exception"). Resting: a Nebula-Violet outline on the dark plate. Hover/focus heats
+   to a violet FILL (the Ignition Rule, expressed in the one sanctioned second light),
+   dark ink on top. Unlayered so it beats the outline variant's gold hover utilities.
+   Used ONLY on the live banner, only while Fluncle is on the decks. */
+.live-cta {
+  background-color: transparent;
+  border-color: var(--nebula-violet);
+  color: var(--nebula-violet);
+}
+
+.live-cta:hover {
+  background-color: var(--nebula-violet);
+  border-color: var(--nebula-violet);
+  color: var(--deep-field);
+}
+
 @property --crew-glow-angle {
   inherits: false;
   initial-value: 0deg;

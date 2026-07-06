@@ -1,1 +1,0 @@
-ALTER TABLE `tracks` ADD `embedding_json` text;

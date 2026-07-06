@@ -1,6 +1,7 @@
 import { liveSurfaces } from "@fluncle/registry";
-import { siteUrl } from "../fluncle-links";
+import { siteUrl, twitchUrl } from "../fluncle-links";
 import { fluncleDescription } from "../identity";
+import { getLiveState, type LiveState } from "./live";
 import { subscribeToNewsletter } from "./newsletter";
 import { ApiError, searchTrackCandidates } from "./spotify";
 import { getServiceStatuses, type ServiceHealthStatus } from "./status";
@@ -366,7 +367,10 @@ async function dispatch(message: unknown, request: Request): Promise<JsonRpcResp
       const args = isObject(params?.arguments) ? params.arguments : {};
 
       try {
-        return success(id, toolResult(await tool.execute(args, request)));
+        // Read the live state alongside the tool call so a successful result can
+        // carry the live-set note while Fluncle is on the decks (offline ⇒ no note).
+        const [result, live] = await Promise.all([tool.execute(args, request), getLiveState()]);
+        return success(id, toolResult(result, false, live));
       } catch (error) {
         if (error instanceof ApiError) {
           return success(
@@ -521,8 +525,24 @@ function failure(id: JsonRpcId, code: number, message: string): JsonRpcFailure {
   return { error: { code, message }, id, jsonrpc: "2.0" };
 }
 
-function toolResult(data: unknown, isError = false): ToolResult {
-  return { content: [{ text: JSON.stringify(data), type: "text" }], isError };
+// A plain, agent-facing note teaching every tool's caller that Fluncle is on the
+// decks right now (machine-facing third-person, no faked warmth — VOICE.md narrator
+// rule). Appended as a second content block alongside the tool's data while live.
+function liveNote(live: LiveState): string {
+  const set = live.title ? ` Set: “${live.title}”.` : "";
+  return `Fluncle is on the decks right now, mixing live at ${twitchUrl}.${set}`;
+}
+
+function toolResult(data: unknown, isError = false, live?: LiveState): ToolResult {
+  const content: ToolResult["content"] = [{ text: JSON.stringify(data), type: "text" }];
+
+  // While Fluncle is live, ride a live-set note alongside the result so the agent
+  // learns the live state with every successful call (DESIGN.md "The Live Exception").
+  if (live?.on) {
+    content.push({ text: liveNote(live), type: "text" });
+  }
+
+  return { content, isError };
 }
 
 function jsonRpcResponse(body: JsonRpcResponse | JsonRpcResponse[], status = 200): Response {
