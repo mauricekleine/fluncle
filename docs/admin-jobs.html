@@ -1840,12 +1840,12 @@
           runs_on: "browser;cloudflare",
           input: "selected clip ids",
           output: "chained scheduled rows (one nextDripSlot roll each)",
-          surfaces: "web-admin",
+          surfaces: "web-admin;api",
           primary_surface: "web-admin",
           drop_from: "",
-          tests: "none",
+          tests: "yes",
           notes:
-            "clips.tsx batchScheduleClips createServerFn→upsertClipPost — a web-only server fn that BYPASSES the oRPC contract op; untested",
+            "now the operator-tier set_clip_schedules oRPC op (POST /admin/clips/schedule); clips.tsx batch bar fetches it (the web-only createServerFn that bypassed the contract is retired); orpc-clip-drip.test.ts + coverage nets",
         },
         {
           domain: "clips-drip",
@@ -1868,7 +1868,7 @@
           domain: "clips-drip",
           order_hint: "120",
           job: "Capture the IG permalink back onto a posted clip",
-          status: "desired",
+          status: "live",
           trigger: "cron:fluncle-clip-drip",
           executor: "system",
           runs_on: "cloudflare",
@@ -1877,9 +1877,9 @@
           surfaces: "api",
           primary_surface: "api",
           drop_from: "",
-          tests: "none",
+          tests: "yes",
           notes:
-            "TODO(clip-drip capture-back) admin-mixtapes.ts:693; posted_url never set today so clip-card 'View on Instagram' stays dark; resolveSocialUrl lacks IG",
+            "drip_clips runs a capture pass each tick (resolveSocialUrl now handles instagram — captures Postiz's Graph-API permalink verbatim off the dated /posts list + links the release-id); postedClipPostsAwaitingUrl feeds it; clip-card 'View on Instagram' now renders; orpc-clip-drip.test.ts + postiz.test.ts",
         },
         {
           domain: "clips-drip",

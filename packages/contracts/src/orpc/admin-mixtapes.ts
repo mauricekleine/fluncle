@@ -515,9 +515,12 @@ const ClipSocialPostSchema = z.object({
  * ADMIN tier (`adminAuth`, NOT `operatorGuard`): the box's on-box `fluncle-clip-drip`
  * cron drives this with its AGENT token — the `finalize_clip_cut` / `record_health`
  * precedent (the box holds no Postiz key, so it just TRIGGERS the Worker, which owns the
- * key). One bounded tick of the drip-feed: if the kill switch is on it no-ops (`paused`);
- * else it posts the due, cut clips to Instagram via Postiz, bounded by a per-tick cap AND
- * the rolling-24h IG cap. Idempotent (a `posted` row never re-fires). Empty body (`{}`).
+ * key). One bounded tick of the drip-feed: it first runs a CAPTURE pass (back-filling the
+ * live IG permalink onto prior-tick posts — Instagram publishes the Reel async, so the
+ * permalink lands a tick later; reported as `captured`), then, if the kill switch is on it
+ * no-ops (`paused`), else it posts the due, cut clips to Instagram via Postiz, bounded by a
+ * per-tick cap AND the rolling-24h IG cap. Idempotent (a `posted` row never re-fires). Empty
+ * body (`{}`).
  */
 export const dripClips = oc
   .route({
@@ -531,9 +534,12 @@ export const dripClips = oc
   .output(
     z.object({
       attempted: z.number(),
+      // Live IG permalinks back-filled onto prior-tick posts this pass (the capture-back:
+      // Instagram publishes the Reel async, so its permalink lands a tick after the push).
+      captured: z.number(),
       failed: z.number(),
       ok: z.literal(true),
-      // The kill switch was on this tick — nothing was posted.
+      // The kill switch was on this tick — nothing was posted (the capture pass still ran).
       paused: z.boolean(),
       posted: z.number(),
       // Due rows the per-tick / 24h cap deferred to a later tick.
@@ -575,6 +581,26 @@ export const setClipSchedule = oc
   })
   .input(z.object({ clipId: z.string(), scheduledFor: z.string() }))
   .output(z.object({ ok: z.literal(true), post: ClipSocialPostSchema }));
+
+/**
+ * `set_clip_schedules` → `POST /admin/clips/schedule` (operationId `setClipSchedules`).
+ *
+ * OPERATOR tier (`adminAuth` + `operatorGuard`): the batch sibling of `set_clip_schedule`.
+ * Schedules a whole selection of clips onto the jittered drip queue in one move — each clip
+ * rolls a fresh slot off the LIVE queue tail (so consecutive slots chain ~24h apart with
+ * real jitter) and snapshots a fresh caption, server-side and sequential. The web clip
+ * library's batch bar drives it; not the box's. Returns how many rows were scheduled.
+ */
+export const setClipSchedules = oc
+  .route({
+    method: "POST",
+    operationId: "setClipSchedules",
+    path: "/admin/clips/schedule",
+    summary: "Batch-schedule clips onto the Instagram drip queue (jittered ~daily chain)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ clipIds: z.array(z.string()) }))
+  .output(z.object({ ok: z.literal(true), scheduled: z.number() }));
 
 /**
  * `delete_clip_schedule` → `DELETE /admin/clips/{clipId}/schedule` (operationId
@@ -636,6 +662,7 @@ export const adminMixtapesContract = {
   resync_mixtape_youtube: resyncMixtapeYoutube,
   set_clip_drip: setClipDrip,
   set_clip_schedule: setClipSchedule,
+  set_clip_schedules: setClipSchedules,
   set_mixtape_cues: setMixtapeCues,
   update_clip: updateClip,
   update_mixtape: updateMixtape,

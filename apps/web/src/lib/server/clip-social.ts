@@ -261,6 +261,35 @@ export async function countRecentPostedInWindow(sinceIso: string): Promise<numbe
   return typedRow<{ n: number }>(result.rows)?.n ?? 0;
 }
 
+/** A posted clip row whose live IG permalink hasn't been captured yet. */
+export type UnlinkedClipPost = { clipId: string; postizId: string };
+
+/**
+ * Posted clip rows still missing their `posted_url` — `status = 'posted'`, a Postiz id
+ * present, but no captured permalink. Instagram publishes the Reel asynchronously, so its
+ * permalink lands a tick AFTER the push; the drip tick's capture pass resolves each of
+ * these off Postiz's dated `/posts` list and back-fills the URL (mirrors the YouTube/TikTok
+ * social-capture sweep). Oldest first so the backlog drains in order.
+ */
+export async function postedClipPostsAwaitingUrl(): Promise<UnlinkedClipPost[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [CLIP_DRIP_PLATFORM],
+    sql: `select clip_id, postiz_id
+          from mixtape_clip_social_posts
+          where platform = ?
+            and status = 'posted'
+            and postiz_id is not null
+            and posted_url is null
+          order by updated_at asc`,
+  });
+
+  return typedRows<{ clip_id: string; postiz_id: string }>(result.rows).map((row) => ({
+    clipId: row.clip_id,
+    postizId: row.postiz_id,
+  }));
+}
+
 /** Every clip post (optionally narrowed to a set of clip ids) — the CLI `clips list`
  *  merges these onto the clip rows to show each clip's drip state. Newest slot first. */
 export async function listClipPosts(clipIds?: string[]): Promise<ClipSocialPost[]> {

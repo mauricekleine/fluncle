@@ -20,6 +20,7 @@ import { ORPCError } from "@orpc/server";
 import { mixcloudEditUrl, mixcloudSectionFields, mixcloudSections } from "@fluncle/contracts/util";
 import { buildClipCaption } from "../clip-caption";
 import {
+  CLIP_DRIP_PLATFORM,
   countDueClipPosts,
   countRecentPostedInWindow,
   deleteClipPost,
@@ -27,12 +28,14 @@ import {
   getClipPost,
   isDripPaused,
   listClipPosts,
+  nextDripSlot,
+  postedClipPostsAwaitingUrl,
   setClipPostStatus,
   setDripPaused,
   upsertClipPost,
 } from "../clip-social";
 import { createClip, deleteClip, getClip, listClips, markClipCutDone, updateClip } from "../clips";
-import { pushInstagramReel } from "../postiz";
+import { postizSetReleaseId, pushInstagramReel, resolveSocialUrl } from "../postiz";
 import { clipDownloadUrls } from "../../studio-clips";
 import { youtubeDescription } from "../../mixtape-chapters";
 import { getMixcloudAccessToken } from "../mixcloud";
@@ -60,6 +63,40 @@ const THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024;
 const DRIP_PER_TICK_CAP = 3;
 const DRIP_IG_DAILY_CAP = 10;
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The clip drip-feed's capture-back pass: resolve the live Instagram permalink for every
+ * posted-but-unlinked clip row and back-fill its `posted_url` (so the clip card's "View the
+ * post on Instagram" link renders). Instagram publishes the Reel asynchronously — Postiz
+ * auto-populates the real Graph-API permalink onto the post object a tick after the push —
+ * so this runs at the head of each drip tick, draining the prior tick's posts. Mirrors the
+ * YouTube/TikTok social-capture sweep: per row, `resolveSocialUrl(..., "instagram")` reads
+ * the dated `/posts` list, and on a hit we set the URL + link the analytics release-id.
+ * Best-effort — a not-yet-published post is simply skipped (retried next tick), and a single
+ * failure never aborts the tick. Returns how many URLs were captured this pass.
+ */
+async function captureDripPermalinks(): Promise<number> {
+  const pending = await postedClipPostsAwaitingUrl();
+  let captured = 0;
+
+  for (const row of pending) {
+    try {
+      const resolved = await resolveSocialUrl(row.postizId, CLIP_DRIP_PLATFORM);
+
+      if (!resolved) {
+        continue;
+      }
+
+      await setClipPostStatus(row.clipId, "posted", { postedUrl: resolved.url });
+      await postizSetReleaseId(row.postizId, resolved.nativeId);
+      captured += 1;
+    } catch (error) {
+      console.warn(`drip_clips: failed to capture the IG permalink for clip ${row.clipId}`, error);
+    }
+  }
+
+  return captured;
+}
 
 // Ported verbatim from the live youtube/finalize route: a best-effort custom
 // thumbnail (the wide cover, rendered in-process). A thumbnail failure must not
@@ -643,10 +680,16 @@ export function adminMixtapesHandlers(os: Implementer) {
   // Worker, which owns the key). One bounded, idempotent tick of the drip-feed.
   const dripClipsHandler = os.drip_clips.use(adminAuth).handler(async () => {
     try {
-      // (a) The kill switch — a paused tick posts nothing (the schedule stays intact).
+      // (a) Capture pass — back-fill `posted_url` for any posted-but-unlinked rows from a
+      // prior tick (Instagram publishes the Reel async, so its permalink lands a tick after
+      // the push). Read-only w.r.t. posting, so it runs even on a paused tick.
+      const captured = await captureDripPermalinks();
+
+      // (b) The kill switch — a paused tick posts nothing (the schedule stays intact).
       if (await isDripPaused()) {
         return {
           attempted: 0,
+          captured,
           failed: 0,
           ok: true as const,
           paused: true,
@@ -655,7 +698,7 @@ export function adminMixtapesHandlers(os: Implementer) {
         };
       }
 
-      // (b) The budget: the per-tick cap AND the rolling-24h IG cap, whichever is smaller.
+      // (c) The budget: the per-tick cap AND the rolling-24h IG cap, whichever is smaller.
       const sinceIso = new Date(Date.now() - DAY_MS).toISOString();
       const recentPosted = await countRecentPostedInWindow(sinceIso);
       const remaining24h = Math.max(0, DRIP_IG_DAILY_CAP - recentPosted);
@@ -669,8 +712,9 @@ export function adminMixtapesHandlers(os: Implementer) {
       let posted = 0;
       let failed = 0;
 
-      // (c) Post each due, cut clip. A single failure marks its row `failed` (retryable by
-      // the operator rescheduling it) and never aborts the rest of the tick.
+      // (d) Post each due, cut clip. A single failure marks its row `failed` (retryable by
+      // the operator rescheduling it) and never aborts the rest of the tick. The permalink
+      // is captured next tick (the Reel isn't published in-request), by the (a) pass above.
       for (const item of due) {
         try {
           // Rebuild the caption fresh at fire time, so a late re-cut / edit is reflected.
@@ -690,12 +734,9 @@ export function adminMixtapesHandlers(os: Implementer) {
         }
       }
 
-      // TODO(clip-drip capture-back): backfill `posted_url` with the IG permalink from
-      // Postiz's dated `/posts` list (the `resolveSocialUrl` reader, extended for
-      // "instagram"), the way the social-capture sweep does for YouTube/TikTok. Deferred
-      // to a follow-up: the post itself succeeds now; the permalink is a display nicety.
       return {
         attempted: due.length,
+        captured,
         failed,
         ok: true as const,
         paused: false,
@@ -730,6 +771,32 @@ export function adminMixtapesHandlers(os: Implementer) {
         }
 
         return { ok: true as const, post };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  // POST /admin/clips/schedule — operator tier (the batch sibling of set_clip_schedule).
+  // Schedules a whole selection onto the jittered drip queue in one move: each clip rolls a
+  // fresh `nextDripSlot` off the LIVE queue tail (so consecutive slots chain ~24h apart with
+  // real jitter, not a bot cadence) and snapshots a fresh caption. Sequential by design — each
+  // upsert extends the tail the next roll reads. The web clip library's batch bar drives it;
+  // operator tier, so the box agent token 403s (like the single set_clip_schedule).
+  const setClipSchedulesHandler = os.set_clip_schedules
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        let scheduled = 0;
+
+        for (const clipId of input.clipIds) {
+          const scheduledFor = await nextDripSlot();
+          const built = await buildClipCaption(clipId);
+          await upsertClipPost({ caption: built.builtCaption, clipId, scheduledFor });
+          scheduled += 1;
+        }
+
+        return { ok: true as const, scheduled };
       } catch (error) {
         throw apiFault(error);
       }
@@ -1000,6 +1067,7 @@ export function adminMixtapesHandlers(os: Implementer) {
     resync_mixtape_youtube: resyncMixtapeYoutubeHandler,
     set_clip_drip: setClipDripHandler,
     set_clip_schedule: setClipScheduleHandler,
+    set_clip_schedules: setClipSchedulesHandler,
     set_mixtape_cues: setMixtapeCuesHandler,
     update_clip: updateClipHandler,
     update_mixtape: updateMixtapeHandler,

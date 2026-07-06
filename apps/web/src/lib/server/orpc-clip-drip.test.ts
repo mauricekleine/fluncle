@@ -19,8 +19,10 @@ const upsertClipPost = vi.fn();
 const deleteClipPost = vi.fn();
 const getClipPost = vi.fn();
 const listClipPosts = vi.fn();
+const postedClipPostsAwaitingUrl = vi.fn();
 
 vi.mock("./clip-social", () => ({
+  CLIP_DRIP_PLATFORM: "instagram",
   countDueClipPosts: (...a: unknown[]) => countDueClipPosts(...a),
   countRecentPostedInWindow: (...a: unknown[]) => countRecentPostedInWindow(...a),
   deleteClipPost: (...a: unknown[]) => deleteClipPost(...a),
@@ -29,15 +31,20 @@ vi.mock("./clip-social", () => ({
   isDripPaused: (...a: unknown[]) => isDripPaused(...a),
   listClipPosts: (...a: unknown[]) => listClipPosts(...a),
   nextDripSlot: async () => "2026-07-06T12:00:00.000Z",
+  postedClipPostsAwaitingUrl: (...a: unknown[]) => postedClipPostsAwaitingUrl(...a),
   setClipPostStatus: (...a: unknown[]) => setClipPostStatus(...a),
   setDripPaused: (...a: unknown[]) => setDripPaused(...a),
   upsertClipPost: (...a: unknown[]) => upsertClipPost(...a),
 }));
 
 const pushInstagramReel = vi.fn();
+const resolveSocialUrl = vi.fn();
+const postizSetReleaseId = vi.fn();
 
 vi.mock("./postiz", () => ({
+  postizSetReleaseId: (...a: unknown[]) => postizSetReleaseId(...a),
   pushInstagramReel: (...a: unknown[]) => pushInstagramReel(...a),
+  resolveSocialUrl: (...a: unknown[]) => resolveSocialUrl(...a),
 }));
 
 const buildClipCaption = vi.fn();
@@ -65,6 +72,10 @@ beforeEach(() => {
   countRecentPostedInWindow.mockResolvedValue(0);
   countDueClipPosts.mockResolvedValue(0);
   dueClipPosts.mockResolvedValue([]);
+  // The capture-back pass: no posted-but-unlinked rows by default (captured: 0).
+  postedClipPostsAwaitingUrl.mockResolvedValue([]);
+  resolveSocialUrl.mockResolvedValue(null);
+  postizSetReleaseId.mockResolvedValue(undefined);
   buildClipCaption.mockImplementation(async (clipId: string) => ({
     builtCaption: `caption for ${clipId}`,
     clipId,
@@ -89,6 +100,7 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({
       attempted: 0,
+      captured: 0,
       failed: 0,
       ok: true,
       paused: true,
@@ -115,6 +127,7 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({
       attempted: 2,
+      captured: 0,
       failed: 0,
       ok: true,
       paused: false,
@@ -146,6 +159,7 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
     expect(dueClipPosts).toHaveBeenCalledWith({ limit: 1 });
     expect(await readJson(response)).toEqual({
       attempted: 1,
+      captured: 0,
       failed: 0,
       ok: true,
       paused: false,
@@ -169,6 +183,7 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
 
     expect(await readJson(response)).toEqual({
       attempted: 2,
+      captured: 0,
       failed: 1,
       ok: true,
       paused: false,
@@ -177,6 +192,76 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
     });
     expect(setClipPostStatus).toHaveBeenCalledWith("clip-1", "failed");
     expect(setClipPostStatus).toHaveBeenCalledWith("clip-2", "posted", { postizId: "p2" });
+  });
+
+  it("captures the IG permalink back onto a posted-but-unlinked clip (capture pass)", async () => {
+    // A prior tick posted clip-9 (postiz id post-9) but its permalink wasn't up yet.
+    postedClipPostsAwaitingUrl.mockResolvedValue([{ clipId: "clip-9", postizId: "post-9" }]);
+    // This tick, Postiz's dated /posts list has published the Reel with its real permalink.
+    resolveSocialUrl.mockResolvedValue({
+      nativeId: "media-9",
+      url: "https://www.instagram.com/reel/AbC123/",
+    });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req("/admin/clips/drip", "POST", AGENT_TOKEN, {}));
+
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toEqual({
+      attempted: 0,
+      captured: 1,
+      failed: 0,
+      ok: true,
+      paused: false,
+      posted: 0,
+      skippedCapped: 0,
+    });
+    // Resolved against the IG platform, the URL back-filled, and the analytics id linked.
+    expect(resolveSocialUrl).toHaveBeenCalledWith("post-9", "instagram");
+    expect(setClipPostStatus).toHaveBeenCalledWith("clip-9", "posted", {
+      postedUrl: "https://www.instagram.com/reel/AbC123/",
+    });
+    expect(postizSetReleaseId).toHaveBeenCalledWith("post-9", "media-9");
+  });
+
+  it("leaves an unresolved post unlinked (retried next tick) — captured 0", async () => {
+    postedClipPostsAwaitingUrl.mockResolvedValue([{ clipId: "clip-9", postizId: "post-9" }]);
+    resolveSocialUrl.mockResolvedValue(null); // not published yet
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req("/admin/clips/drip", "POST", AGENT_TOKEN, {}));
+
+    const body = (await readJson(response)) as { captured: number };
+    expect(body.captured).toBe(0);
+    expect(setClipPostStatus).not.toHaveBeenCalled();
+    expect(postizSetReleaseId).not.toHaveBeenCalled();
+  });
+
+  it("runs the capture pass even when the drip is paused", async () => {
+    isDripPaused.mockResolvedValue(true);
+    postedClipPostsAwaitingUrl.mockResolvedValue([{ clipId: "clip-9", postizId: "post-9" }]);
+    resolveSocialUrl.mockResolvedValue({
+      nativeId: "media-9",
+      url: "https://www.instagram.com/reel/AbC123/",
+    });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req("/admin/clips/drip", "POST", AGENT_TOKEN, {}));
+
+    // Paused: nothing posted, but the read-only capture-back still ran.
+    expect(await readJson(response)).toEqual({
+      attempted: 0,
+      captured: 1,
+      failed: 0,
+      ok: true,
+      paused: true,
+      posted: 0,
+      skippedCapped: 0,
+    });
+    expect(pushInstagramReel).not.toHaveBeenCalled();
+    expect(setClipPostStatus).toHaveBeenCalledWith("clip-9", "posted", {
+      postedUrl: "https://www.instagram.com/reel/AbC123/",
+    });
   });
 });
 
@@ -242,6 +327,50 @@ describe("oRPC set_clip_schedule (PATCH /admin/clips/{clipId}/schedule)", () => 
     });
     const body = (await readJson(response)) as { ok: boolean; post: { scheduledFor: string } };
     expect(body.post.scheduledFor).toBe("2026-07-07T12:00:00.000Z");
+  });
+});
+
+// ── set_clip_schedules — OPERATOR tier (batch) ───────────────────────────────
+describe("oRPC set_clip_schedules (POST /admin/clips/schedule)", () => {
+  it("403s the AGENT (operator-only, like the single sibling)", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/clips/schedule", "POST", AGENT_TOKEN, { clipIds: ["clip-1", "clip-2"] }),
+    );
+    expect(response?.status).toBe(403);
+  });
+
+  it("lets the OPERATOR batch-schedule a selection (a fresh caption + slot per clip)", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/clips/schedule", "POST", OPERATOR_TOKEN, { clipIds: ["clip-1", "clip-2"] }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toEqual({ ok: true, scheduled: 2 });
+    // One upsert per clip, each with its own snapshotted caption + the chained slot.
+    expect(upsertClipPost).toHaveBeenCalledTimes(2);
+    expect(upsertClipPost).toHaveBeenCalledWith({
+      caption: "caption for clip-1",
+      clipId: "clip-1",
+      scheduledFor: "2026-07-06T12:00:00.000Z",
+    });
+    expect(upsertClipPost).toHaveBeenCalledWith({
+      caption: "caption for clip-2",
+      clipId: "clip-2",
+      scheduledFor: "2026-07-06T12:00:00.000Z",
+    });
+  });
+
+  it("is a no-op for an empty selection (scheduled 0)", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/clips/schedule", "POST", OPERATOR_TOKEN, { clipIds: [] }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toEqual({ ok: true, scheduled: 0 });
+    expect(upsertClipPost).not.toHaveBeenCalled();
   });
 });
 

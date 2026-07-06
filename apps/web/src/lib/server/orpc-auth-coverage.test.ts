@@ -279,6 +279,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   set_clip_drip: "operator",
   // The operator's clip-drip schedule control (set/override a clip's slot) — operator tier.
   set_clip_schedule: "operator",
+  // The batch clip-schedule sibling (schedule a selection at once) — operator tier, like
+  // its single sibling; the box agent token 403s.
+  set_clip_schedules: "operator",
   // The hardened post-publish cue backfill — operator tier: it rewrites a published
   // set's surface, so the agent token 403s.
   set_mixtape_cues: "operator",
