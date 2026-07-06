@@ -30,5 +30,10 @@ export default defineConfig({
     },
     environment: "node",
     include: ["src/**/*.test.{ts,tsx}"],
+    // 20s (not vitest's 5s default): the first test in each admin oRPC file cold-imports
+    // the whole ./orpc app graph (the router + every contract + the server modules) before
+    // its first request, which can exceed 5s on a loaded Cloudflare build box — a false-fail
+    // that intermittently blocked deploy:gate. The warm-module tests that follow run in ms.
+    testTimeout: 20000,
   },
 });

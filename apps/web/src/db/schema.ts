@@ -278,6 +278,38 @@ export const serviceCheckSamples = sqliteTable(
   (table) => [index("service_check_samples_service_at_idx").on(table.service, table.at)],
 );
 
+// The live-set callout flag — the single, ephemeral "Fluncle is on the decks
+// right now" beat that fans out across every surface while the Twitch stream is
+// on, then clears the moment it ends. ONE row (PK = the constant `"twitch"`),
+// upserted each minute by the on-box `fluncle-live` poller via the agent-tier
+// `record_live_state` op — exactly the `service_status` shape (a box cron writes, every
+// surface reads), just a single boolean+title instead of a per-service grid.
+//
+// Auto-clear is READ-side: a consumer treats the flag as offline when `updated_at`
+// is older than the staleness window, so a dead cron mid-set can never strand a
+// permanent "LIVE" banner — it self-heals regardless of cron health.
+//
+// PUBLIC-SAFE by construction: only the live boolean, the public stream title,
+// the Twitch `started_at`, and our own timestamps live here. `tg_message_id` is
+// the pinned crew message's id (so the on→off transition can unpin it) — a
+// Telegram message id in our own channel, not sensitive.
+export const liveState = sqliteTable("live_state", {
+  // Single-row PK — the constant "twitch". One channel, one row.
+  id: text("id").primaryKey(),
+  // Whether Fluncle is live on the decks right now (the last POSTed Twitch state).
+  live: integer("live", { mode: "boolean" }).notNull(),
+  // When the current stream started (ISO, Twitch `started_at`). Null when offline.
+  startedAt: text("started_at"),
+  // The pinned crew Telegram message's id — captured on go-live so the on→off
+  // transition can unpin it. Null when nothing is pinned.
+  tgMessageId: integer("tg_message_id"),
+  // The stream title, when live (public Twitch metadata). Null when offline.
+  title: text("title"),
+  // When this row was last refreshed by the poller (ISO) — the staleness anchor
+  // the read-side auto-clear measures against.
+  updatedAt: text("updated_at").notNull(),
+});
+
 export const spotifyAuth = sqliteTable("spotify_auth", {
   accessToken: text("access_token").notNull(),
   expiresAt: text("expires_at").notNull(),

@@ -14,6 +14,8 @@ colors:
   dust-veil: "#d0b9901a"
   dust-line: "#d0b99029"
   reentry-red: "#ff6b57"
+  nebula-violet: "#ab7bff"
+  nebula-veil: "#ab7bff1a"
 typography:
   display:
     fontFamily: "Oxanium, ui-sans-serif, system-ui, sans-serif"
@@ -140,10 +142,13 @@ A night-sky palette lit by one sun: warm blacks, sleeve-paper cream, and a singl
 ### Tertiary
 
 - **Re-entry Red** (#ff6b57): Errors and destructive actions only; the heat of coming back down. Also blended at low opacity into the cover-frame gradient.
+- **Nebula Violet** (#ab7bff): The live-set colour, and the only second light in the system. Reserved exclusively for the cross-surface live-set callout — Fluncle on the decks, live on Twitch — and never used for anything else. Complementary to Eclipse Gold (yellow and violet pair across the wheel) and Twitch-adjacent without quoting Twitch's own purple. Clears WCAG AA on the warm blacks (6.6:1 on Deep Field, 6.0:1 on Tape Black). Its 10% veil is **Nebula Veil** (#ab7bff1a), the wash behind the live banner.
 
 ### Named Rules
 
 **The One Sun Rule.** Eclipse Gold is the single light source. It appears as the primary action, the focus ring, and identity moments, and on no more than roughly 10% of any screen. Two gold elements competing in one view means one of them is wrong.
+
+**The Live Exception.** There is exactly one sanctioned second light: Nebula Violet, and only while Fluncle is live on the decks. The live-set callout is the one loud, ephemeral beat in an otherwise gold-and-dark product — it appears across every surface the moment the Twitch stream goes on and clears itself the moment it ends, so the violet is present only for the duration of a set and nowhere else. Outside that callout the One Sun Rule holds absolutely: no violet in everyday UI, ever. The exception proves the rule by being rare. Three sub-rules keep it coherent with the rest of the canon: the callout still obeys **The Legible Sky Rule** — its banner is a near-opaque warm-dark pane (more opaque than the standard plate, since it rides over the brightest backdrop region), the violet carried by the accents, never by a translucent wash that lets the cosmos break contrast; its live pulse is the **one sanctioned ephemeral third movement** beyond the "exactly two" ambient budget (§5), allowed only because it exists solely while live and is reduced-motion-gated; and its CTA obeys **The Ignition Rule** in violet — it heats to a Nebula-Violet fill on hover (dark ink on top), it never dims.
 
 **The Warm Dark Rule.** Every black and every neutral leans warm (toward the cream/dust hue). Cool grays and blue-tinted darks are prohibited; the night sky of this cosmos is warm and inhabited.
 
