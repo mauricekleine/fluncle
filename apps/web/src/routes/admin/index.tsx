@@ -869,7 +869,7 @@ function AdminBoardPage() {
   );
 
   return (
-    <AdminShell current="board" subheader={subheader} title="Board">
+    <AdminShell current="dashboard" subheader={subheader} title="Dashboard">
       {rows.length === 0 ? (
         <EmptyState body="Logged bangers will show up here." title="No findings yet" />
       ) : visible.length === 0 ? (

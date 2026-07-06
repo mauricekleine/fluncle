@@ -6,11 +6,19 @@
   "type": "module",
   "imports": {
     "#components/*": "./src/components/*.tsx",
+    "#hooks/*": [
+      "./src/hooks/*.ts",
+      "./src/hooks/*.tsx"
+    ],
     "#lib/*": "./src/lib/*.ts"
   },
   "exports": {
     "./globals.css": "./src/styles/globals.css",
     "./components/*": "./src/components/*.tsx",
+    "./hooks/*": [
+      "./src/hooks/*.ts",
+      "./src/hooks/*.tsx"
+    ],
     "./lib/*": "./src/lib/*.ts"
   },
   "scripts": {
