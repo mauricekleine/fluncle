@@ -32,6 +32,21 @@ Only the **preview** is archived: `preview-archive.ts` persists the ~30-second D
 
 Extend ingestion to fetch the full song once and store it in the same private analysis structure (e.g. `n/source/<logId>/…`), then the embed cron becomes a **pure box-side R2 read**: it downloads nothing, just pulls the stored full audio and embeds. This is cleaner than A or B — the copyrighted fetch happens once, at ingestion, wherever the operator decides is proper; the box stays fully autonomous with zero posture concern at embed-time; and the stored full audio is durable analysis fuel for anything future (better BPM, structure analysis, stems). It does NOT escape the core question — the download-and-store still happens somewhere at ingestion via some mechanism — but it pays it once per finding instead of per-embed, and confines the posture decision to one ingestion step.
 
-## The one question for the operator (revised)
+## The full song is useful for ENRICHMENT too — which changes everything
 
-Not "which of A/B" but: **do we capture the full song once at add-time into private R2 (Option C), and by what mechanism** (a hosted actor, or a local ingestion lane)? On the answer, the build is: the ingestion fetch+store, a `source_audio_key` column, the embed-sweep source swap (R2 read), the cap/timeout adjustment for full-length inference, re-embed the 3 previews, resume the cron.
+Confirmed in the repo's own words. The `fluncle-bpm-backfill` skill exists precisely because preview-based analysis fails: "the automated enrichment agent only ever sees a 30-second preview; some drum & bass previews are beatless build-ups, so the analyzer honestly returns `null` (or, from older clamping code, a fake `160`)." Its tier-2 fix is full-song audio, re-analyzed. So the SAME root failure that clusters a piano-intro embedding wrong also breaks BPM detection — and there is an entire manual repair tool that exists only because we don't capture the full song.
+
+This unifies the architecture: capture the full song ONCE, EARLY (at add), and it feeds the whole analysis layer — enrichment reads it (correct BPM/key/features first time, no null, no fake-160), embedding reads it (structurally-honest vectors), and **the bpm-backfill skill retires** (its reason to exist dissolves). Propagation is one `source_audio_key` on the track, written at capture, read by both `enrich-sweep` and `embed-sweep`. This is the real prize: not "embed on full audio" but "capture once, analyze everything correctly, delete the manual repair tool."
+
+## The capture-point fork (the actual decision)
+
+Capture must happen BEFORE enrichment (the enrich cron runs shortly after add). WHERE an add originates determines what's possible:
+
+- **CLI / Raycast add** — runs on the operator's own machine, where yt-dlp is already posture-sanctioned (bpm-backfill's "local only" rule). Capture locally at add-time, upload full audio to private R2, done.
+- **Web `Add finding`** (the new Wave-1 dialog) — runs on the Worker (Cloudflare); it cannot run yt-dlp. It would need a hosted actor (Apify-style) or a deferred capture job the operator's machine or the box picks up.
+
+So the fork: **(1) funnel ALL captures through a local lane** — simplest, fully posture-safe, but a web-add's audio waits until a local capture runs (a small deferred queue); or **(2) capture works Worker-side too via a hosted actor** — web-adds self-serve, at the cost of the actor's token + per-call cost + the posture nod that a hosted actor is an acceptable place for the transient fetch.
+
+## The one question for the operator (final)
+
+Capture the full song once at add-time into private R2 (`source_audio_key`), feeding BOTH enrichment and embedding and retiring bpm-backfill — yes? And the capture-point fork: **(1) a local lane only** (posture-safe, web-adds wait on a small deferred queue) or **(2) a hosted actor too** (web-adds self-serve, needs a token + posture nod)? On the answer the build is one coherent slice: the capture step, the `source_audio_key` column, enrich-sweep + embed-sweep both reading it, the cap/timeout for full-length inference, re-embed the 3, resume the cron, retire the bpm-backfill fallback.
