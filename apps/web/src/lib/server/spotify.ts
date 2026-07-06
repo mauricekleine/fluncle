@@ -7,7 +7,9 @@ import { readEnvs } from "./env";
 
 const spotifyAccountsBaseUrl = "https://accounts.spotify.com";
 const spotifyApiBaseUrl = "https://api.spotify.com/v1";
-const spotifyScopes = ["playlist-modify-public", "playlist-modify-private"];
+// user-follow-modify: lets Fluncle follow the artists it features (the artist-relationship
+// epic) with the same grant that manages the playlist. Additive — a re-auth grants it.
+const spotifyScopes = ["playlist-modify-public", "playlist-modify-private", "user-follow-modify"];
 // Admin web login asks for identity only — never the playlist-write scopes the
 // publish flow uses. The login exchange reads /v1/me and discards the tokens.
 const spotifyLoginScopes = ["user-read-email"];
