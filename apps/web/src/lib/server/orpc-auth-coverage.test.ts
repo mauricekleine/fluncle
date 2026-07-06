@@ -149,6 +149,10 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
 //               privateUserMutation).
 const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> = {
   approve_submission: "operator",
+  // The artist-entity backfill — agent tier (adminAuth only, no operatorGuard):
+  // internal + reversible metadata enrichment (no publish), so the box's agent-token
+  // `fluncle-artist-backfill` cron drives it without an operator token.
+  backfill_artists: "admin",
   backfill_discogs: "admin",
   backfill_lastfm: "admin",
   // The capture sweep is agent-allowed (admin tier): it only fills the public URL

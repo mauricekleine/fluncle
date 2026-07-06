@@ -39,6 +39,7 @@ type SpotifyTrackResponse = {
     release_date?: string;
   };
   artists: Array<{
+    id: string;
     name: string;
   }>;
   external_ids?: {
@@ -101,6 +102,10 @@ export type TrackMetadata = {
   spotifyUri: string;
   title: string;
   artists: string[];
+  // Parallel to `artists`: the Spotify artist IDs in the same order. Populated
+  // at ingest from the Spotify `/tracks/{id}` response so the artist entity
+  // (artists + track_artists tables) can be upserted without an extra API call.
+  spotifyArtistIds: string[];
   album?: string;
   albumImageUrl?: string;
   durationMs: number;
@@ -234,6 +239,7 @@ export async function fetchTrackMetadata(trackId: string): Promise<TrackMetadata
     isrc: data.external_ids?.isrc,
     popularity: data.popularity,
     releaseDate: data.album?.release_date,
+    spotifyArtistIds: data.artists.map((artist) => artist.id),
     spotifyUri: data.uri,
     spotifyUrl: data.external_urls?.spotify ?? `https://open.spotify.com/track/${data.id}`,
     title: data.name,

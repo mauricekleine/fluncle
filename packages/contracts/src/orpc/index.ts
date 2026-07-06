@@ -21,6 +21,7 @@
 // OpenAPI `operationId` (`get_track` → `getTrack`). The REST path mirrors the
 // live route; resources are plural, the op noun stays singular.
 
+import { adminArtistsContract } from "./admin-artists";
 import { adminBackfillsContract } from "./admin-backfills";
 import { adminEditionsContract } from "./admin-editions";
 import { adminHealthContract } from "./admin-health";
@@ -47,6 +48,7 @@ import { tracksContract } from "./tracks";
 
 // Re-export the per-op contracts so existing importers (and the typed client)
 // keep their entrypoints.
+export { backfillArtists } from "./admin-artists";
 export { backfillDiscogs, backfillLastfm } from "./admin-backfills";
 export { recordHealth, ServiceHealthStatusSchema } from "./admin-health";
 export {
@@ -162,6 +164,7 @@ export {
  * a domain joins the registry.
  */
 export const contract = {
+  ...adminArtistsContract,
   ...adminBackfillsContract,
   ...adminEditionsContract,
   ...adminHealthContract,
