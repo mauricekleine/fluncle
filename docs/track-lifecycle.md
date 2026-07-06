@@ -71,7 +71,7 @@ Public playback is live-only. `/api/preview/:idOrLogId` tries the stored Deezer 
 
 ## Vibe placement (retired — superseded by audio embeddings)
 
-Findings were grouped by **vibe**, not sub-genre. There's no finite, agreed drum & bass sub-genre taxonomy, and an absolute label is an argument; a _relative_ placement is answerable. The operator dropped each finding on a 2D map (energy × mood) in the admin tagging tool, storing a coordinate (`vibe_x`/`vibe_y`); the quadrant was the finding's galaxy (Solar / Nebular / Lunar / Deep). See [admin-tagging.md](./admin-tagging.md).
+Findings were grouped by **vibe**, not sub-genre. There's no finite, agreed drum & bass sub-genre taxonomy, and an absolute label is an argument; a _relative_ placement is answerable. The operator dropped each finding on a 2D map (energy × mood) in the admin tagging tool, storing a coordinate (`vibe_x`/`vibe_y`); the quadrant was the finding's galaxy (Solar / Nebular / Lunar / Astral). See [admin-tagging.md](./admin-tagging.md).
 
 A signal test (n=45) settled the "automate it later": audio **can't** learn the manual placement (the mood axis lands at coin-flip; RFC appendix), so the `features_json` training-signal plan is dead and the manual tag step is retired. Grouping now comes for free from the **audio embedding** (`embedding_json`): sonic nearest-neighbours drive the `/log` "more like this" row today, and k-means clusters will drive a browse-by-feel lens + the game's solar systems next (build-ready in [audio-embedding-rfc.md](./audio-embedding-rfc.md)). The four galaxies stay as brand/narrative fiction — they don't need per-track placement to exist.
 

@@ -26,8 +26,10 @@ Crawler and discovery surfaces (all under <https://www.fluncle.com>): `/robots.t
 
 ```text
 apps/cli            Bun/TypeScript CLI. Thin client for public reads and admin API calls.
+apps/dns            Go DNS server behind dig.fluncle.com — findings answered over DNS TXT (docs/dig.md).
 apps/extension      Fluncle Lens, an MV3 Chrome extension. Linkifies fluncle:// coordinates on any page.
 apps/helm           Fluncle's Helm, the operator's mission control: a local Bun daemon (:4190) + app window. `fluncle helm` opens it.
+apps/mobile         Expo React Native app (feed-first Stories + push). Thin client of the public API.
 apps/raycast        Raycast extension. Thin client that shells out to the CLI.
 apps/ssh            Go Wish/Bubble Tea SSH terminal behind ssh rave.fluncle.com. Thin client of the public API.
 apps/web            TanStack Start public web app and server-side Fluncle API.
@@ -236,7 +238,7 @@ bun run --cwd apps/web db:refresh-dev
 bun run --cwd apps/web preview
 ```
 
-Production keeps using the `fluncle` Turso database through Wrangler secrets. Deploys run through Cloudflare Workers Builds on push to `main`, and migrations apply as part of the deploy step: the Cloudflare **Deploy command** is `bun run --cwd apps/web deploy:cf`, which is the committed script `db:migrate && wrangler deploy`. Prod Turso credentials come from the Cloudflare build/deploy environment, so `db:migrate` runs against `fluncle`. To run a production migration by hand instead, use the `Turso - Production` item in the Fluncle 1Password vault through the `op` CLI, then run `db:migrate` deliberately.
+Production keeps using the `fluncle` Turso database through Wrangler secrets. Deploys run through Cloudflare Workers Builds on push to `main`, and migrations apply as part of the deploy step: the Cloudflare **Deploy command** is `bun run --cwd apps/web deploy:cf`, which is the committed script `db:migrate && db:backfill && wrangler deploy`. Prod Turso credentials come from the Cloudflare build/deploy environment, so `db:migrate` runs against `fluncle`. To run a production migration by hand instead, use the `Turso - Production` item in the Fluncle 1Password vault through the `op` CLI, then run `db:migrate` deliberately.
 
 To deploy manually from a checkout (builds locally, no migrate):
 

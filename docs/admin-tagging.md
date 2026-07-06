@@ -1,44 +1,13 @@
-# Admin tagging — the vibe map
+# Admin tagging — the vibe map (retired)
 
-A fast, admin-gated way to place each finding in **vibe-space**: where a banger sits by energy and mood, relative to the others. It lives in the `/admin` board (the Tag cell → placement dialog); it used to be a standalone `/admin/tag` page, now folded in. The placement groups findings into the four galaxies of Fluncle's Galaxy, and (later) becomes the training data that lets the enrichment agent auto-place new finds. See also [track-lifecycle.md](./track-lifecycle.md).
+**Retired 2026-07-06.** Manual vibe placement is no longer part of the pipeline: a signal test (n=45, leave-one-out) proved audio cannot learn the placement — the mood axis lands at coin-flip — so the manual step, whose only forward justification was training an auto-placement model, was dropped rather than enshrined. Sonic grouping now comes free from the per-finding MuQ audio embedding; the decision record and successor design are [audio-embedding-rfc.md](./audio-embedding-rfc.md), and the live data model is [track-lifecycle.md](./track-lifecycle.md). The four galaxies survive as brand fiction. Web admin auth, which used to live in this doc, moved to [admin-shell.md](./admin-shell.md).
 
-It deliberately does **not** use drum & bass sub-genres. There's no finite, agreed sub-genre list, and "is this techstep?" is an argument; "is this floatier than that one?" is answerable. Placement is relative, which is what makes review fast and consistent.
+This page stays as the record of what the retired system left behind and the operator-loop pattern worth reusing.
 
-## The vibe space
+## The dormant columns
 
-Two axes, stored as a coordinate per track (`vibe_x`, `vibe_y`, roughly `-1..1`):
+`tracks.vibe_x` / `tracks.vibe_y` (`real`, nullable, roughly `-1..1`) remain in the schema, unread: X was mood (Light ← → Dark), Y was energy (Floaty ↓ ↑ Driving). The galaxy was always derived, never stored — `galaxyForVibe(x, y)` in `apps/web/src/lib/galaxies.ts` maps the quadrant signs to Solar (driving + light), Nebular (driving + dark), Lunar (floaty + light), and Astral (floaty + dark). Grouping now derives from `embedding_json` clusters instead.
 
-- **X — mood:** Light ← → Dark
-- **Y — energy:** Floaty ↓ ↑ Driving
+## The operator-loop pattern (what to reuse)
 
-The four quadrants are the four galaxies (the galaxy is _derived_ from the coordinate's sign — `galaxyForVibe(x, y)` in `apps/web/src/lib/galaxies.ts`, which `vibe-map.tsx` imports and calls), each with its own colour:
-
-```
-            ▲ DRIVING
-     SOLAR    │   NEBULAR        Solar   = driving + light  (gold)
-  dancefloor  │   neuro · dark   Nebular = driving + dark   (crimson)
- LIGHT ───────┼─────── DARK ▶    Lunar   = floaty + light   (blue)
-     LUNAR    │   DEEP           Deep    = floaty + dark     (violet)
-  liquid      │   dubwise
-            ▼ FLOATY
-```
-
-(_Solar / Nebular / Lunar / Deep_ are working names — final naming is a VOICE pass.)
-
-## How it works
-
-- **Surface:** the `/admin` board (gated). A finding's **Tag** cell is the open action until it's placed; click it to open the placement dialog. The "Needs tagging" worklist narrows the board to the unplaced backlog. Login at `/admin/login`, sign out at `/api/admin/logout`.
-- **Place:** click or drag the marker onto the map; already-placed findings show as faint coloured dots so you place **relative** to them (hover a dot for its title). Play the preview to feel it.
-- **Save:** writes `(vibe_x, vibe_y)` via `PATCH /api/admin/tracks/:id`, optimistically flips the cell to its galaxy, and keeps the map backdrop in step. Save is disabled until you've placed the marker.
-
-## Logging in
-
-Auth is **one identity, two carriers**: the CLI/agent send `FLUNCLE_API_TOKEN` as a `Bearer` header; the browser carries a signed grant **cookie** (`{ role: "admin" }` HMAC'd with the same token — the token is the signing key, never the cookie value). `requireAdmin` accepts either.
-
-The browser proves identity with **Login with Spotify**, allow-listed to the operator account (the allow-list lives in `admin-auth.ts`). The login reuses the Spotify app's already-registered redirect URI (`/api/admin/spotify/auth/callback`, which branches on `state.purpose`); it exchanges the code only to read `/v1/me` and **discards the tokens** — it never touches the publish refresh token in `spotify_auth`. On success it sets the grant cookie (`Path=/`, 30-day window) and redirects to `/admin`. The gate is active in dev too (just without `Secure` on localhost).
-
-## Data model & what's next
-
-- `tracks.vibe_x` / `tracks.vibe_y` (`real`, nullable). Null = unplaced. The galaxy is derived, not stored, so re-coloring or re-bucketing is a code change, not a migration.
-- Sub-genres are gone end to end: the `tags_json` / `tags_source` columns, `normalizeTags`, the CLI `--tag` flags, and the enrichment agent's sub-genre suggestion were all removed. The agent now writes only `bpm` / `key` / `features`; the operator owns placement.
-- **Deferred:** clustering the map when it gets crowded (100+ findings — single circles with hover); and audio-driven **auto-placement** once there's enough placed data to train on (the spectral feature vector in `features_json` already approximates these axes — brightness ≈ mood, onset-rate/energy ≈ the energy axis).
+The tagging loop was the proven per-item operator loop, and new admin queues reuse its shape: a worklist that narrows the board to the not-yet-done backlog, one keyboard-driven dialog per item, placement made **relative** to already-done siblings shown in context, and an optimistic save that flips the cell and keeps the backdrop in step. The artist follow queue ([artist-relationship-rfc.md](./artist-relationship-rfc.md)) picks this up as its pattern precedent.

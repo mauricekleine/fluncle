@@ -2,9 +2,10 @@
 // operator proves who they are with "Login with
 // Spotify" (the existing Spotify app, allow-listed to one account), and we hand
 // the browser a SIGNED GRANT COOKIE: `{ role: "admin", iat }` HMAC'd with
-// FLUNCLE_API_TOKEN. The token is the signing KEY, never the cookie's value, so
-// the secret never reaches the client. requireAdmin (env.ts) accepts this cookie
-// OR the CLI's Bearer token — one identity, two carriers.
+// ADMIN_SESSION_SECRET (signState in env.ts). The secret is the signing KEY,
+// never the cookie's value, so it never reaches the client. requireAdmin
+// (env.ts) accepts this cookie OR the CLI's Bearer token — one identity, two
+// carriers.
 
 import { getCookie } from "@tanstack/react-start/server";
 import {

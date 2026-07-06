@@ -18,6 +18,10 @@ One home per kind of control. Put each control in its slot and nowhere else.
 
 The sidebar is a flat object nav: Dashboard, then the objects in pipeline order (Findings, Plans, Recordings, Mixtapes, Clips, Newsletter), then System. Dashboard owns `/admin` — the attention queue (docs/cockpit-roadmap.md "The queue"): every action the system needs as a row, zero rows the success state, snooze/won't-do persisted client-side (one operator, one browser — a localStorage map, since a server column could not see this browser's working set). Findings owns `/admin/findings`, the pipeline board (the queue's deep-link target for the publish loop; the board's `?stage`/`?mix` deep-links survive — old `/admin?stage=…` links redirect). An entry whose station doesn't exist yet points at the best current home for that object and stays unlit there; it lights only on the page that declares it as owner. Count badges carry live, cheap, honest server counts (a scoped `COUNT` per number); a number that can only be estimated stays off the rail.
 
+## Auth
+
+One identity, two carriers: the CLI and agents send `FLUNCLE_API_TOKEN` as a `Bearer` header; the browser carries a signed grant cookie (`{ role: "admin", iat }`, HMAC'd with `ADMIN_SESSION_SECRET` via `signState` in `env.ts` — the key never reaches the client). `requireAdmin` accepts either. The browser proves identity with **Login with Spotify**, allow-listed to the operator through `ADMIN_ALLOWED_EMAILS` (+ optional `ADMIN_ALLOWED_SPOTIFY_IDS`) in `admin-auth.ts`; the login exchanges the code only to read the profile and discards the tokens — it never touches the publish refresh token in `spotify_auth`. On success it sets the grant cookie (`Path=/`, 30-day window) and redirects to `/admin`. Login at `/admin/login`, sign out at `/api/admin/logout`; the gate is active in dev too (just without `Secure` on localhost).
+
 ## The chrome gate
 
 - Admin UI ships through the impeccable flow (`shape` → build → `audit`) and honors DESIGN.md, PRODUCT.md, and VOICE.md.
