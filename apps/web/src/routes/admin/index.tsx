@@ -1,4 +1,5 @@
 import { CassetteTapeIcon, CircleNotchIcon } from "@phosphor-icons/react";
+import { isStaleTikTokDraft } from "@fluncle/contracts/util";
 import {
   type InfiniteData,
   useInfiniteQuery,
@@ -458,14 +459,19 @@ function AdminBoardPage() {
   }, [byWorklist]);
 
   // Advisory pending-draft count among loaded rows — surfaced inside the TikTok
-  // push dialog (cap 5/24h), not in the header.
-  const tiktokPending = useMemo(
-    () =>
-      rows.filter((row) =>
-        row.posts.some((post) => post.platform === "tiktok" && post.status === "draft"),
-      ).length,
-    [rows],
-  );
+  // push dialog (cap 5/24h), not in the header. A STALE draft (past the 24h window)
+  // has already left the inbox one way or another — bounced or aged out — so it no
+  // longer occupies a cap slot and is excluded from the count.
+  const tiktokPending = useMemo(() => {
+    const now = Date.now();
+
+    return rows.filter((row) =>
+      row.posts.some(
+        (post) =>
+          post.platform === "tiktok" && post.status === "draft" && !isStaleTikTokDraft(post, now),
+      ),
+    ).length;
+  }, [rows]);
 
   const setWorklist = useCallback(
     (next: Worklist) => {
@@ -863,7 +869,7 @@ function AdminBoardPage() {
   );
 
   return (
-    <AdminShell current="board" subheader={subheader} title="Board">
+    <AdminShell current="dashboard" subheader={subheader} title="Dashboard">
       {rows.length === 0 ? (
         <EmptyState body="Logged bangers will show up here." title="No findings yet" />
       ) : visible.length === 0 ? (

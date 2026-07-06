@@ -394,9 +394,8 @@ function LogPage() {
         </section>
 
         {similar.length > 0 ? (
-          <section aria-label="More like this" className="log-similar">
-            <h2>More like this</h2>
-            <p className="log-similar-lede">Findings that sit near this one in sound.</p>
+          <section aria-label="Close in sound" className="log-similar">
+            <h2>Close in sound</h2>
             <ul className="log-similar-list">
               {similar.map((finding) =>
                 finding.logId ? (

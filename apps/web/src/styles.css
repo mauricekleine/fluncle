@@ -1529,7 +1529,8 @@ body::before {
   gap: 0.6rem;
 }
 
-.log-related h2 {
+.log-related h2,
+.log-similar h2 {
   color: var(--starlight-cream);
   font-size: 1.02rem;
   font-weight: 800;
@@ -1595,18 +1596,6 @@ body::before {
 .log-similar {
   display: grid;
   gap: 0.6rem;
-}
-
-.log-similar h2 {
-  color: var(--starlight-cream);
-  font-size: 1.02rem;
-  font-weight: 800;
-}
-
-.log-similar-lede {
-  color: var(--muted-foreground);
-  font-size: 0.85rem;
-  margin: -0.35rem 0 0;
 }
 
 .log-similar-list {
@@ -2729,4 +2718,36 @@ body::before {
      stack. Monaspace Krypton (GitHub Next's mechanical mono) leads, system
      mono as the fallback while it loads. Single source — one place to retune. */
   --font-mono: "Monaspace Krypton", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+/* The admin workspace sidebar (docs/admin-shell.md): its own pane sitting
+   directly on the cosmos (One Pane), in the plate's glass grammar — a
+   translucent Sleeve-Black tint that blurs the starfield behind it. Browsers
+   without backdrop-filter get the more opaque tint (Legible Sky holds either
+   way). The mobile sheet stays opaque like every floating dialog surface. */
+[data-slot="sidebar-inner"] {
+  background: color-mix(in oklch, var(--sidebar) 86%, transparent);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  [data-slot="sidebar-inner"] {
+    -webkit-backdrop-filter: blur(18px) saturate(125%);
+    backdrop-filter: blur(18px) saturate(125%);
+    background: color-mix(in oklch, var(--sidebar) 55%, transparent);
+  }
+}
+
+/* The admin wordmark — the sidebar's nameplate, the brand mark at instrument
+   size (Oxanium caps like the home nameplate, dialled down to a label; The One
+   Voice Rule: Oxanium speaks only for the brand). */
+.admin-wordmark {
+  color: var(--starlight-cream);
+  display: block;
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  line-height: 1.2;
+  text-transform: uppercase;
+  white-space: nowrap;
 }

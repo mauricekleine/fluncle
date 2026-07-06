@@ -152,9 +152,8 @@ function StudioPage() {
 
   return (
     <AdminShell
-      current="plans"
+      current="recordings"
       fill
-      wide
       // The Publish action lives in the HEADER — its own section, structurally apart from
       // the clip toolbar's gold "Create clip" deep in the body, so the One Sun never has
       // two gold actions competing in one region (RFC §8, DESIGN "The One Sun Rule"). It

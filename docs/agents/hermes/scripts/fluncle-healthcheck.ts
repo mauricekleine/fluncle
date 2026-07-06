@@ -377,6 +377,7 @@ const AUTOMATION_CRONS: CronDef[] = [
   // a self-read would be circular. Its /status row is emitted self-evidently by
   // probeHealthcheck() below instead.
   { cadenceMs: 7 * 24 * 60 * 60_000, match: "newsletter", service: "cron.newsletter" }, // weekly — a generous floor
+  { cadenceMs: 24 * 60 * 60_000, match: "backup", service: "cron.backup" }, // daily DB backup → private R2
 ];
 
 type CronVerdict = "fresh-ok" | "lagging" | "failed" | "no-data";
