@@ -131,6 +131,7 @@ export function createRunRegistry(deps: RunRegistryDeps = {}): RunRegistry {
   const runs = new Map<string, Run>();
   const children = new Map<string, Bun.Subprocess>();
   const killTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const settledByRun = new Map<string, Promise<void>>();
   const listeners = new Map<string, Set<RunListener>>();
 
   /** Signal the child's whole process group; fall back to the child alone. */
@@ -292,7 +293,7 @@ export function createRunRegistry(deps: RunRegistryDeps = {}): RunRegistry {
         pump(run, child.stderr, "stderr"),
       ]);
 
-      void (async () => {
+      const settled = (async () => {
         const exitCode = await child.exited;
         // Let the pipes drain so the final lines land before the status does —
         // BOUNDED, because a grandchild that inherited the pipe can hold it
@@ -323,9 +324,12 @@ export function createRunRegistry(deps: RunRegistryDeps = {}): RunRegistry {
               : `failed (exit ${exitCode})`,
         );
         children.delete(runId);
+        settledByRun.delete(runId);
         emit(runId, { kind: "status", run: summarize(run) });
         pruneFinished();
       })();
+      settledByRun.set(runId, settled);
+      void settled;
 
       return { runId };
     },
@@ -344,7 +348,9 @@ export function createRunRegistry(deps: RunRegistryDeps = {}): RunRegistry {
 
           signal(child, "SIGINT");
 
-          if (await within(timings.standDownSigintGraceMs, child.exited)) {
+          const settled = settledByRun.get(runId) ?? child.exited.then(() => undefined);
+
+          if (await within(timings.standDownSigintGraceMs, settled)) {
             return;
           }
 
@@ -353,7 +359,7 @@ export function createRunRegistry(deps: RunRegistryDeps = {}): RunRegistry {
           }
 
           signal(child, "SIGKILL");
-          await within(timings.standDownSigkillGraceMs, child.exited);
+          await within(timings.standDownSigkillGraceMs, settled);
         }),
       );
     },
