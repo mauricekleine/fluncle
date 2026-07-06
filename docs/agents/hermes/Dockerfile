@@ -47,10 +47,12 @@ RUN apt-get update \
 # `pip install`), in its own venv, with the model weights baked so `from_pretrained`
 # resolves offline on a cold start. Heavy + rarely-changing → early for cache reuse.
 #
-# OPERATOR GATE (verify on the first build / a base bump): this assumes the Debian
-# base ships `python3.11` in apt (bookworm does). muq requires Python <3.12, so if the
-# base moved off 3.11 install an explicit `python3.11` (e.g. via deadsnakes) and
-# re-point the venv — the CPU torch wheels are cp311.
+# THE PYTHON 3.11 SOURCE: muq requires Python <3.12, but the Nous Hermes base is now
+# Debian trixie (13), which ships only python3.13 in apt (verified: the apt-python3.11
+# path failed a build). The base already carries `uv` (astral), so we install a
+# standalone python3.11 with it (`uv python install 3.11` → a cp311 python-build-
+# standalone) and seed a venv from it — no PPA, no from-source build. Re-verify on a
+# base bump: if `uv` ever leaves the base, install it (curl https://astral.sh/uv).
 #
 # THE ORDERING LAW (spike-verified on rave-02 CPX32; a mismatch is why the ad-hoc
 # install took four attempts): install the CPU torch TRIO from the pytorch CPU index
@@ -58,13 +60,12 @@ RUN apt-get update \
 # same resolve as torch, it drags in CUDA torchaudio/torchvision and the import fails.
 # The `--index-url .../cpu` is what resolves torch==2.12.1 to the +cpu build. Pins are
 # the exact set the spike validated (torch trio + muq 0.1.0 + numpy 2.4.4; ~2.85 GB
-# peak, ~16 s/track). World-readable (a+rX) so the non-root cron user reads it.
+# peak, ~16 s/track). The venv is cp311, so the CPU torch wheels match. World-readable
+# (a+rX) so the non-root cron user reads it.
 ENV MUQ_VENV=/opt/muq-venv
 ENV HF_HOME=/opt/muq-cache
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3.11 python3.11-venv \
-  && rm -rf /var/lib/apt/lists/* \
-  && python3.11 -m venv "${MUQ_VENV}" \
+RUN uv python install 3.11 \
+  && uv venv --python 3.11 --seed "${MUQ_VENV}" \
   && "${MUQ_VENV}/bin/pip" install --no-cache-dir --upgrade pip \
   && "${MUQ_VENV}/bin/pip" install --no-cache-dir \
        --index-url https://download.pytorch.org/whl/cpu \
