@@ -1,4 +1,24 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(bun run typecheck)",
+      "Bash(bun run check)",
+      "Bash(bun run lint)",
+      "Bash(bun run test)",
+      "Bash(bun run format:check)",
+      "Bash(bun run deploy:gate)",
+      "Bash(bunx oxfmt:*)",
+      "Bash(bunx oxlint:*)",
+      "Bash(rg:*)",
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git stash list)",
+      "Bash(git worktree list)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {
@@ -7,6 +27,15 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard-protected-files.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/remind-main-push.sh"
           }
         ]
       }
