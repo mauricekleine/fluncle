@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
 import { featureIds } from "./index";
-import { featureAllowedOnMachine, visibleFeatures } from "./gating";
-import { manifest as pulseLite } from "./pulse-lite/manifest";
+import { visibleFeatures } from "./gating";
+import { manifest as pulse } from "./pulse/manifest";
 import { type FeatureManifest } from "./types";
 
 const m5Only: FeatureManifest = { id: "show", machines: ["m5"], order: 10, title: "Show" };
@@ -33,27 +33,13 @@ describe("visibleFeatures (manifest gating)", () => {
   });
 });
 
-describe("featureAllowedOnMachine (the server-side action gate)", () => {
-  test("a station acts only on the machines its manifest names", () => {
-    expect(featureAllowedOnMachine(m5Only, "m5")).toBe(true);
-    expect(featureAllowedOnMachine(m5Only, "m2")).toBe(false);
-    expect(featureAllowedOnMachine(m2Only, "m5")).toBe(false);
-    expect(featureAllowedOnMachine(both, "m2")).toBe(true);
-  });
-
-  test("an unknown machine gates nothing, matching visibility", () => {
-    expect(featureAllowedOnMachine(m5Only, "unknown")).toBe(true);
-    expect(featureAllowedOnMachine(m2Only, "unknown")).toBe(true);
-  });
-});
-
 describe("the feature registry", () => {
   test("ids are unique", () => {
     expect(new Set(featureIds).size).toBe(featureIds.length);
   });
 
-  test("pulse-lite's manifest matches its registered id (the convention the loader enforces)", () => {
-    expect(featureIds as readonly string[]).toContain(pulseLite.id);
-    expect(pulseLite.machines.length).toBeGreaterThan(0);
+  test("pulse's manifest matches its registered id (the convention the loader enforces)", () => {
+    expect(featureIds as readonly string[]).toContain(pulse.id);
+    expect(pulse.machines.length).toBeGreaterThan(0);
   });
 });
