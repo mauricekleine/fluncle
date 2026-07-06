@@ -4,7 +4,7 @@
 // daemon rises at login. Like packages/live's show, this is LOCAL orchestration —
 // it spawns processes on this Mac, it never talks to the Fluncle Worker.
 
-import { existsSync, mkdirSync, openSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -23,26 +23,10 @@ function helmLogPath(): string {
   return join(homedir(), "Library/Logs/fluncle-helm.log");
 }
 
-/**
- * Where apps/helm lives. FLUNCLE_HELM_DIR wins; otherwise walk up from this file
- * (running from the repo via `bun run` puts us at apps/cli/src/commands). The
- * compiled binary has no repo around it — then the env var is the way in.
- */
-export function resolveHelmDir(): string {
-  const fromEnv = process.env.FLUNCLE_HELM_DIR;
+const HELM_DIR_FILE = join(homedir(), ".config/fluncle/helm-dir");
 
-  if (fromEnv) {
-    if (!existsSync(join(fromEnv, "src/server.ts"))) {
-      throw new CliError(
-        "helm_not_found",
-        `FLUNCLE_HELM_DIR points at ${fromEnv}, but there's no helm there (src/server.ts missing).`,
-      );
-    }
-
-    return resolve(fromEnv);
-  }
-
-  let dir = import.meta.dir;
+function walkUpForHelm(start: string): string | null {
+  let dir = start;
 
   for (let depth = 0; depth < 8; depth++) {
     const candidate = join(dir, "apps/helm");
@@ -60,9 +44,60 @@ export function resolveHelmDir(): string {
     dir = parent;
   }
 
+  return null;
+}
+
+/** Remember where the helm lives, so the command answers from any directory. */
+function persistHelmDir(dir: string): void {
+  try {
+    mkdirSync(dirname(HELM_DIR_FILE), { recursive: true });
+    writeFileSync(HELM_DIR_FILE, `${dir}\n`, { mode: 0o600 });
+  } catch {
+    // best-effort: a read-only home never blocks the helm itself
+  }
+}
+
+/**
+ * Where apps/helm lives. FLUNCLE_HELM_DIR wins; then a walk up from the cwd and
+ * from this file (in-repo runs); then the path remembered from the last
+ * successful run (~/.config/fluncle/helm-dir) — so the compiled binary answers
+ * from ANY directory once it has found the repo a single time.
+ */
+export function resolveHelmDir(): string {
+  const fromEnv = process.env.FLUNCLE_HELM_DIR;
+
+  if (fromEnv) {
+    if (!existsSync(join(fromEnv, "src/server.ts"))) {
+      throw new CliError(
+        "helm_not_found",
+        `FLUNCLE_HELM_DIR points at ${fromEnv}, but there's no helm there (src/server.ts missing).`,
+      );
+    }
+
+    return resolve(fromEnv);
+  }
+
+  const found = walkUpForHelm(process.cwd()) ?? walkUpForHelm(import.meta.dir);
+
+  if (found) {
+    persistHelmDir(found);
+
+    return found;
+  }
+
+  try {
+    const remembered = readFileSync(HELM_DIR_FILE, "utf8").trim();
+
+    if (remembered && existsSync(join(remembered, "src/server.ts"))) {
+      return remembered;
+    }
+  } catch {
+    // nothing remembered yet
+  }
+
   throw new CliError(
     "helm_not_found",
-    "No helm aboard. Run this from the fluncle repo, or set FLUNCLE_HELM_DIR to the apps/helm checkout.",
+    "No helm aboard. Run this once from the fluncle repo (the helm remembers the way after that), or set FLUNCLE_HELM_DIR.",
   );
 }
 
