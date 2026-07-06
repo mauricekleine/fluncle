@@ -130,6 +130,9 @@ export function createGame(container: HTMLElement): Game {
   // read never burns fuel) but the audio keeps playing — an instrument, not a
   // pause.
   let atlasOpen = false;
+  // One persistent view object so the renderer's sticky-hover write-back
+  // (lastHoverIndex) survives across frames; reset on every open.
+  const atlasView: import("./render").AtlasView = {};
   let atlasPointer: { x: number; y: number } | undefined;
 
   // Hover for the atlas's readout: track the latest pointer position in
@@ -351,6 +354,10 @@ export function createGame(container: HTMLElement): Game {
     // C toggles the atlas in flight; it never opens over the pause screen.
     if (input.consumeAtlasToggle() && phase === "play" && sim && !paused) {
       atlasOpen = !atlasOpen;
+
+      if (atlasOpen) {
+        atlasView.lastHoverIndex = undefined;
+      }
     }
 
     if (input.consumePauseToggle() && phase === "play") {
@@ -445,7 +452,10 @@ export function createGame(container: HTMLElement): Game {
       cardSpotifyUrl = cardView?.spotifyUrl;
 
       const view: RenderView = {
-        atlas: atlasOpen && phase === "play" ? { pointer: atlasPointer } : undefined,
+        atlas:
+          atlasOpen && phase === "play"
+            ? ((atlasView.pointer = atlasPointer), atlasView)
+            : undefined,
         bootT: Math.min(1, bootT),
         carrier: nearestCarrier(sim),
         endT,

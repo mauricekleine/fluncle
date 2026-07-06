@@ -67,6 +67,12 @@ type HitRect = {
 export type AtlasView = {
   /** Latest pointer position in internal canvas px, for the hover label. */
   pointer?: { x: number; y: number };
+  /**
+   * Sticky hover: the last star the pointer actually hit. A pointer sweeping the
+   * gap BETWEEN marks holds this label instead of flashing the keyboard fallback
+   * (nearest-to-ship reads as "the first star" from Earth's parking orbit).
+   */
+  lastHoverIndex?: number;
 };
 
 export type RenderView = {
@@ -1583,7 +1589,8 @@ export function createRenderer(container: HTMLElement): Renderer {
       return;
     }
 
-    const pointer = view.atlas?.pointer;
+    const atlas = view.atlas;
+    const pointer = atlas?.pointer;
     let index = -1;
 
     if (pointer) {
@@ -1591,9 +1598,18 @@ export function createRenderer(container: HTMLElement): Renderer {
       const worldY = (pointer.y - height / 2) / scale;
 
       index = nearestStarIndex(stars, worldX, worldY, 14 / scale);
+
+      if (index >= 0 && atlas) {
+        atlas.lastHoverIndex = index;
+      } else if (atlas?.lastHoverIndex !== undefined) {
+        // The pointer is between marks — hold the last hover instead of flashing
+        // the ship fallback.
+        index = atlas.lastHoverIndex;
+      }
     }
 
     if (index < 0) {
+      // No pointer at all (keyboard-only): the star nearest the ship.
       index = nearestStarIndex(stars, sim.ship.x, sim.ship.y);
     }
 
