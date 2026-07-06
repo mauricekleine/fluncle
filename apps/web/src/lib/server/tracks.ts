@@ -369,6 +369,32 @@ export async function searchTracks(options: {
   return typedRows<TrackRow>(result.rows).map(toTrackListItem);
 }
 
+/**
+ * The most-recently-SHIPPED findings — the admin Renders view's "recently shipped"
+ * list (the operator's morning render review). Every finding that carries a video,
+ * ordered by its video VINTAGE (`video_squared_at`, the two-master ship stamp)
+ * newest-first, so a fresh overnight render surfaces at the top even though the
+ * finding it filmed is an OLD find (the render queue is worked oldest-first).
+ *
+ * DISTINCT from `listTracks({ hasVideo: true })`, which orders by FOUND order and so
+ * would bury an overnight render of an old find below the newest-added catalogue. A
+ * legacy single-master finding (no `video_squared_at`) sorts last — SQLite orders
+ * NULLs last under DESC — then by found-order, so the freshest two-master renders
+ * always lead.
+ */
+export async function listRecentlyRenderedFindings(limit: number): Promise<TrackListItem[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [limit],
+    sql: `select ${TRACK_SELECT} from tracks
+          where video_url is not null
+          order by video_squared_at desc, added_at desc, track_id desc
+          limit ?`,
+  });
+
+  return typedRows<TrackRow>(result.rows).map(toTrackListItem);
+}
+
 export async function getTracksForMixtape(mixtapeId: string): Promise<MixtapeMember[]> {
   const db = await getDb();
   const result = await db.execute({

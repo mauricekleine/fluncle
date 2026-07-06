@@ -925,12 +925,12 @@
           runs_on: "cloudflare",
           input: "admin auth (no args)",
           output: "findings needing a video, oldest-first (JSON)",
-          surfaces: "cli-admin;api",
+          surfaces: "cli-admin;api;web-admin",
           primary_surface: "cli-admin",
           drop_from: "",
           tests: "partial",
           notes:
-            "fluncle admin tracks queue → list_tracks_admin(hasContext=true,hasVideo=false); admin-tracks.ts:queueCommand",
+            "fluncle admin tracks queue → list_tracks_admin(hasContext=true,hasVideo=false); admin-tracks.ts:queueCommand; /admin/renders 'Awaiting a video' queue view (web-admin)",
         },
         {
           domain: "video-pipeline",
@@ -964,7 +964,7 @@
           drop_from: "",
           tests: "none",
           notes:
-            "render-conductor.sh RENDERING/IDLE FSM + single-flight; registry cron.render + render-box probe; web-admin visibility desired",
+            "render-conductor.sh RENDERING/IDLE FSM + single-flight; registry cron.render + render-box probe; web-admin visibility = /admin/renders Box-state cells (cron.render + render-box freshness",
         },
         {
           domain: "video-pipeline",
@@ -1111,12 +1111,12 @@
           runs_on: "cloudflare",
           input: "a finding id/logId",
           output: "video_url + video_squared_at cleared (re-queues, off radio); ledger kept",
-          surfaces: "cli-admin;api",
+          surfaces: "cli-admin;api;web-admin",
           primary_surface: "web-admin",
           drop_from: "",
           tests: "yes",
           notes:
-            "fluncle admin tracks requeue-video (operator-tier); NO web button today (roadmap requeue-from-web); orpc-admin-tracks.test.ts",
+            "fluncle admin tracks requeue-video (operator-tier); /admin/renders 'Recently shipped' Requeue button (confirm dialog) hits the SAME requeue_video op; orpc-admin-tracks.test.ts",
         },
         {
           domain: "video-pipeline",
@@ -1128,12 +1128,12 @@
           runs_on: "cloudflare",
           input: "a finding id/logId",
           output: "evicted renditions (manual twin of the auto-purge)",
-          surfaces: "cli-admin;api",
+          surfaces: "cli-admin;api;web-admin",
           primary_surface: "web-admin",
           drop_from: "",
           tests: "partial",
           notes:
-            "fluncle admin tracks purge-video (operator-tier); after a manual R2 re-upload; purge_video handler",
+            "fluncle admin tracks purge-video (operator-tier); /admin/renders 'Recently shipped' Purge button (confirm dialog) hits the SAME purge_video op; after a manual R2 re-upload",
         },
         {
           domain: "video-pipeline",
@@ -1150,7 +1150,7 @@
           drop_from: "",
           tests: "partial",
           notes:
-            "pipeline board video step is view-only; board-model.ts runStep→onPreview; board-model.test.ts",
+            "pipeline board video step is view-only; board-model.ts runStep→onPreview; /admin/renders adds a dedicated 'Recently shipped' Watch (StoriesPlayer) + render-status view; board-model.test.ts",
         },
         {
           domain: "video-pipeline",
@@ -2417,12 +2417,12 @@
           runs_on: "cloudflare",
           input: "admin auth (no args)",
           output: "findings needing a video, oldest-first (JSON)",
-          surfaces: "cli-admin;api",
+          surfaces: "cli-admin;api;web-admin",
           primary_surface: "cli-admin",
           drop_from: "",
           tests: "partial",
           notes:
-            "fluncle admin tracks queue → list_tracks_admin(hasContext=true,hasVideo=false); admin-tracks.ts:queueCommand; queue depth badges the admin sidebar System entry (admin-sidebar.tsx, Wave 0 shell)",
+            "fluncle admin tracks queue → list_tracks_admin(hasContext=true,hasVideo=false); admin-tracks.ts:queueCommand; queue depth badges the admin sidebar Renders entry + /admin/renders is its web-admin queue view (admin-sidebar.tsx)",
         },
         {
           domain: "platform-ops",
