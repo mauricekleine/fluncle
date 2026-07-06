@@ -1,6 +1,6 @@
 ---
 name: fluncle-publish
-description: Publish a Fluncle track's video to social platforms and track per-platform publication status. Use when pushing a track's video to TikTok (an inbox draft the operator finishes by hand) or YouTube Shorts (a direct public post on the push) — recording that a draft/published post exists, updating a post's status, or running the "publish" step of the track lifecycle. Pushes go via Postiz. Instagram is manual-only (no legitimate automated audio path), not part of the pipeline.
+description: Publish a Fluncle track's video to social platforms and track per-platform publication status. Use when pushing a track's video to TikTok (an inbox draft the operator finishes by hand) or YouTube Shorts (a direct public post on the push) — recording that a draft/published post exists, updating a post's status, or running the "publish" step of the track lifecycle. Pushes go via Postiz. For a FINDING, Instagram is manual-only (no legitimate automated audio path); automated IG posting exists only for set CLIPS (the clip drip-feed, in the fluncle-mixtapes skill).
 ---
 
 # Fluncle social publishing
@@ -69,9 +69,11 @@ fluncle admin tracks draft <track_id|log_id> --platform youtube     # uploads a 
 - **The push is the publish.** The operator's run/click is the only gate — there's no review stage, so push only when the video is final. Postiz doesn't return the public URL on create, so the row lands at `published` with no `url`; record the real link later with `… social … --platform youtube --url <url>`.
 - **Content ID is expected.** A short clip with the master usually gets _claimed_ (the rights holder monetizes it, we don't) rather than blocked — that's accepted; the goal is reach, not revenue. (`unlisted`/`private` is in the schema if a review gate is ever wanted — change `type` in `pushYouTubeShort`.)
 
-## Instagram — manual, not in the pipeline
+## Instagram — manual for FINDINGS; automated for set CLIPS
 
-Don't push Instagram from the CLI/board. Baking the master into a Reel gets muted/removed on our business/creator account, and IG's licensed audio is app-only (and locked for business), so there's no legitimate automated path. Any Instagram presence is a hand-made post in the IG app.
+Don't push a **finding's** video to Instagram from the CLI/board. Baking a single copyrighted master into a Reel gets muted/removed on our business/creator account, and IG's licensed audio is app-only (and locked for business), so there's no legitimate automated path for a finding. Any Instagram presence for a finding is a hand-made post in the IG app.
+
+**A set CLIP is the exception, and it IS automated** (the clip drip-feed — a separate object from a finding). A clip is cut from a live-mixed DJ _set_, which fingerprints differently from a single master, so its own audio survives on IG (the audio-survival spike passed). Clips auto-enter a jittered ~daily Instagram queue and drip out through Postiz as Reels; a global kill switch halts everything if a clip gets struck. That flow lives in the `fluncle-mixtapes` skill (clips are set-derived), not here. This skill stays finding-only: **no `--platform instagram` for a finding.**
 
 ## Platforms
 

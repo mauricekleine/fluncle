@@ -369,6 +369,7 @@ const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 60 * 60_000, match: "observation", service: "cron.observation" },
   { cadenceMs: 30 * 60_000, match: "backfill", service: "cron.backfill" },
   { cadenceMs: 10 * 60_000, match: "social-capture", service: "cron.social-capture" },
+  { cadenceMs: 20 * 60_000, match: "clip-drip", service: "cron.clip-drip" },
   { cadenceMs: 60 * 60_000, match: "render", service: "cron.render" },
   // NB: cron.healthcheck is NOT here — this prober IS that cron, now run by a host
   // systemd timer (../healthcheck-timer/), so it has no gateway output dir to read and

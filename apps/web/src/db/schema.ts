@@ -758,8 +758,8 @@ export const mixtapeTracks = sqliteTable(
 // here, not as an MT param); `caption` is the operator/agent-authored copy (stored
 // clean — the `fluncle://` coordinate is appended only at payload-build). `status`
 // tracks the cut queue (`pending` → `done`) AND drives the clip-library filter.
-// Distribution state lands later in a sibling `mixtape_clip_social_posts` table,
-// never `*_url` columns here.
+// Distribution state lives in the sibling `mixtape_clip_social_posts` table
+// (below), never `*_url` columns here.
 export const mixtapeClips = sqliteTable(
   "mixtape_clips",
   {
@@ -783,6 +783,48 @@ export const mixtapeClips = sqliteTable(
   },
   (table) => [index("mixtape_clips_recording_id_idx").on(table.recordingId)],
 );
+
+// The clip drip-feed schedule + distribution state — the sibling to `social_posts`
+// (findings) and `mixtape_social_posts` (mixtapes), one row per (clip, platform).
+// Unlike those two (passive after-the-fact tracking), THIS IS THE SCHEDULE: a
+// `scheduled` row carries the `scheduled_for` due time the drip cron fires at, so
+// creating a clip auto-enrols it (clip-drip-feed RFC §3). `platform` is
+// instagram-only today (the drip is an IG experiment); the enum leaves room to grow.
+// `caption` is the built caption SNAPSHOT taken when the row was scheduled (the drip
+// op rebuilds it fresh at fire time, so this is provenance, not the posted copy).
+// `postiz_id` is the Postiz post id; `posted_url` the IG permalink (captured back
+// later). Status: `scheduled` → `posted` (idempotent — a posted row never re-fires) or
+// `failed` (retryable by the operator rescheduling it).
+export const mixtapeClipSocialPosts = sqliteTable(
+  "mixtape_clip_social_posts",
+  {
+    caption: text("caption"),
+    clipId: text("clip_id").notNull(),
+    createdAt: text("created_at").notNull(),
+    id: text("id").primaryKey(),
+    platform: text("platform", { enum: ["instagram"] }).notNull(),
+    postedUrl: text("posted_url"),
+    postizId: text("postiz_id"),
+    scheduledFor: text("scheduled_for").notNull(),
+    status: text("status", { enum: ["scheduled", "posted", "failed"] }).notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("mixtape_clip_social_posts_clip_platform_idx").on(table.clipId, table.platform),
+    index("mixtape_clip_social_posts_status_idx").on(table.status),
+  ],
+);
+
+// A lean global-flag key/value store — the reusable home for cross-cutting runtime
+// switches that don't belong on any one domain row. First key: `clip_drip_paused`
+// (the clip drip-feed kill switch — `'true'` pauses every future scheduled IG post
+// while leaving the schedule intact; clearing it resumes the drip). `value` is opaque
+// text; a boolean flag is stored as the string `'true'`/`'false'`. Add a new key here
+// rather than a new single-purpose table when a flag is genuinely global.
+export const settings = sqliteTable("settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+});
 
 // A RECORDING — a captured DJ set that is NOT (yet) a published mixtape (RFC
 // recording-primitive, Design B; extended by the plan→recording→mixtape RFC's

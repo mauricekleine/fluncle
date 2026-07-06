@@ -168,6 +168,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   delete_private_account: "private-session",
   delete_recording: "operator",
   draft_track_social: "admin",
+  // The clip drip-feed tick — ADMIN tier (adminAuth only, no operatorGuard): the on-box
+  // `fluncle-clip-drip` cron drives it with the agent token (the `finalize_clip_cut` /
+  // `record_health` box-cron precedent). The Worker owns the Postiz key; the box triggers.
+  drip_clips: "admin",
   exchange_lastfm_session: "operator",
   export_private_account_data: "private-session",
   // The box's clip-cut finalize (Fluncle Studio Unit C) — agent tier (adminAuth only,
@@ -195,6 +199,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // the board + CLI + box can all consume.
   get_track_admin: "admin",
   initiate_mixtape_youtube: "operator",
+  // Every clip's IG drip row — admin tier (agent-allowed read), the list_*_admin
+  // precedent; the CLI / library merge it onto the clips.
+  list_clip_posts: "admin",
   // The clip library/editor read — admin tier (agent-allowed), the list_*_admin
   // precedent. Filterable by mixtapeId/status; serves the editor + the library.
   list_clips: "admin",
@@ -259,6 +266,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   resync_mixtape_youtube: "operator",
   save_private_finding: "private-session",
   send_edition: "operator",
+  // The clip drip-feed kill switch — operator tier: pausing/resuming the whole drip is
+  // the operator's control, not the box's (the box only ticks the drip).
+  set_clip_drip: "operator",
+  // The operator's clip-drip schedule control (set/override a clip's slot) — operator tier.
+  set_clip_schedule: "operator",
   // The hardened post-publish cue backfill — operator tier: it rewrites a published
   // set's surface, so the agent token 403s.
   set_mixtape_cues: "operator",

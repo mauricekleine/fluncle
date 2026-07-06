@@ -496,16 +496,116 @@ export const getClipCaption = oc
     }),
   );
 
+/** One clip's Instagram drip-feed state (the `mixtape_clip_social_posts` row). */
+const ClipSocialPostSchema = z.object({
+  caption: z.string().optional(),
+  clipId: z.string(),
+  createdAt: z.string(),
+  platform: z.string(),
+  postedUrl: z.string().optional(),
+  postizId: z.string().optional(),
+  scheduledFor: z.string(),
+  status: z.enum(["failed", "posted", "scheduled"]),
+  updatedAt: z.string(),
+});
+
+/**
+ * `drip_clips` → `POST /admin/clips/drip` (operationId `dripClips`).
+ *
+ * ADMIN tier (`adminAuth`, NOT `operatorGuard`): the box's on-box `fluncle-clip-drip`
+ * cron drives this with its AGENT token — the `finalize_clip_cut` / `record_health`
+ * precedent (the box holds no Postiz key, so it just TRIGGERS the Worker, which owns the
+ * key). One bounded tick of the drip-feed: if the kill switch is on it no-ops (`paused`);
+ * else it posts the due, cut clips to Instagram via Postiz, bounded by a per-tick cap AND
+ * the rolling-24h IG cap. Idempotent (a `posted` row never re-fires). Empty body (`{}`).
+ */
+export const dripClips = oc
+  .route({
+    method: "POST",
+    operationId: "dripClips",
+    path: "/admin/clips/drip",
+    summary: "Post one bounded tick of due, cut clips to Instagram (kill-switch aware)",
+    tags: ["Admin"],
+  })
+  .input(z.looseObject({}))
+  .output(
+    z.object({
+      attempted: z.number(),
+      failed: z.number(),
+      ok: z.literal(true),
+      // The kill switch was on this tick — nothing was posted.
+      paused: z.boolean(),
+      posted: z.number(),
+      // Due rows the per-tick / 24h cap deferred to a later tick.
+      skippedCapped: z.number(),
+    }),
+  );
+
+/**
+ * `list_clip_posts` → `GET /admin/clips/social` (operationId `listClipPosts`).
+ *
+ * Admin tier (agent-allowed read). Every clip's Instagram drip-feed row, so the clip
+ * library / CLI can show each clip's `scheduled/posted/failed` state alongside the clip.
+ */
+export const listClipPosts = oc
+  .route({
+    method: "GET",
+    operationId: "listClipPosts",
+    path: "/admin/clips/social",
+    summary: "List every clip's Instagram drip-feed schedule + status",
+    tags: ["Admin"],
+  })
+  .output(z.object({ ok: z.literal(true), posts: z.array(ClipSocialPostSchema) }));
+
+/**
+ * `set_clip_schedule` → `PATCH /admin/clips/{clipId}/schedule` (operationId
+ * `setClipSchedule`).
+ *
+ * OPERATOR tier (`adminAuth` + `operatorGuard`): the operator's schedule control — set or
+ * override a clip's drip slot (a fresh caption snapshot is rebuilt server-side). Not the
+ * box's — the box only ticks the drip. `scheduledFor` is an ISO timestamp.
+ */
+export const setClipSchedule = oc
+  .route({
+    method: "PATCH",
+    operationId: "setClipSchedule",
+    path: "/admin/clips/{clipId}/schedule",
+    summary: "Set or override a clip's Instagram drip slot",
+    tags: ["Admin"],
+  })
+  .input(z.object({ clipId: z.string(), scheduledFor: z.string() }))
+  .output(z.object({ ok: z.literal(true), post: ClipSocialPostSchema }));
+
+/**
+ * `set_clip_drip` → `PUT /admin/clips/drip/state` (operationId `setClipDrip`).
+ *
+ * OPERATOR tier (`adminAuth` + `operatorGuard`): the global kill switch. `paused: true`
+ * halts every future scheduled post within one tick (the schedule stays intact);
+ * `paused: false` resumes the drip. The operator's control, not the box's.
+ */
+export const setClipDrip = oc
+  .route({
+    method: "PUT",
+    operationId: "setClipDrip",
+    path: "/admin/clips/drip/state",
+    summary: "Pause or resume the clip drip-feed (the kill switch)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ paused: z.boolean() }))
+  .output(z.object({ ok: z.literal(true), paused: z.boolean() }));
+
 /** The `admin-mixtapes` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminMixtapesContract = {
   create_clip: createClip,
   delete_clip: deleteClip,
+  drip_clips: dripClips,
   finalize_clip_cut: finalizeClipCut,
   finalize_mixtape_mixcloud: finalizeMixtapeMixcloud,
   finalize_mixtape_youtube: finalizeMixtapeYoutube,
   get_clip_caption: getClipCaption,
   get_mixtape_social: getMixtapeSocial,
   initiate_mixtape_youtube: initiateMixtapeYoutube,
+  list_clip_posts: listClipPosts,
   list_clips: listClips,
   list_mixtapes_admin: listMixtapesAdmin,
   presign_clip_upload: presignClipUpload,
@@ -513,6 +613,8 @@ export const adminMixtapesContract = {
   publish_mixtape_youtube: publishMixtapeYoutube,
   resync_mixtape_mixcloud: resyncMixtapeMixcloud,
   resync_mixtape_youtube: resyncMixtapeYoutube,
+  set_clip_drip: setClipDrip,
+  set_clip_schedule: setClipSchedule,
   set_mixtape_cues: setMixtapeCues,
   update_clip: updateClip,
   update_mixtape: updateMixtape,

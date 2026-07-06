@@ -53,6 +53,11 @@ const APPROVED_VERBS = new Set<string>([
   "capture",
   "distribute",
   "draft",
+  // `drip` (post one bounded tick of due clips to Instagram) — added deliberately with
+  // the clip-drip-feed `drip_clips` op. The drip-feed's own verb: neither `publish` (a
+  // one-shot direct post) nor `distribute` (the multi-GB mixtape byte-move) fits the
+  // paced, kill-switch-aware, capped queue-drain this names.
+  "drip",
   "enrich",
   "finalize",
   // `note` (auto-author a finding's editorial note) — the written-note sibling of

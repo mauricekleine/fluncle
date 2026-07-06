@@ -139,6 +139,7 @@ Checked by their last-run freshness (not an HTTP hit), so they carry a `cronName
 | `cron.observation`    | `fluncle-observation`    | every 60m           | author the recovered-audio script → Worker Cartesia render (hybrid: one `claude -p` call, Worker voice-gates + renders)              | hidden    |
 | `cron.backfill`       | `fluncle-backfill`       | every 30m           | Discogs id + Last.fm love catalogue repair (`--no-agent`, Worker HTTP, zero LLM tokens)                                              | hidden    |
 | `cron.social-capture` | `fluncle-social-capture` | every 10m           | capture the YouTube/TikTok post URLs Postiz withholds on create → write back (`--no-agent`, Worker HTTP)                             | hidden    |
+| `cron.clip-drip`      | `fluncle-clip-drip`      | every 20m           | post the due, cut clips to Instagram on a jittered ~daily cadence via Postiz (`--no-agent`, Worker HTTP; kill-switch aware)          | hidden    |
 | `cron.render`         | `fluncle-render`         | every 60m           | wake the render box → render + ship one finding's video → park (a conductor; never posts to social)                                  | hidden    |
 | `cron.healthcheck`    | `fluncle-healthcheck`    | every 10m           | probe each service → Discord-ping on a status flip → POST the `/status` snapshot (a rave-02 host systemd timer, not a gateway cron)  | hidden    |
 
@@ -220,6 +221,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `cron.observation`          |           |           |           | hidden    |
 | `cron.backfill`             |           |           |           | hidden    |
 | `cron.social-capture`       |           |           |           | hidden    |
+| `cron.clip-drip`            |           |           |           | hidden    |
 | `cron.render`               |           |           |           | hidden    |
 | `cron.healthcheck`          |           |           |           | hidden    |
 

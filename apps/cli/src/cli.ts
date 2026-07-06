@@ -958,8 +958,40 @@ function addAdminCommands(program: Command): void {
     .option("--json", "Print JSON", false)
     .allowExcessArguments()
     .action(async (options: ClipListOptions) => {
-      const { clipsListCommand } = await import("./commands/clips");
-      await runClipsList(options, clipsListCommand);
+      const { clipsListCommand, clipPostsListCommand } = await import("./commands/clips");
+      await runClipsList(options, clipsListCommand, clipPostsListCommand);
+    });
+
+  adminClips
+    .command("schedule")
+    .description("Set or override a clip's Instagram drip slot (operator)")
+    .argument("[clipId]")
+    .requiredOption("--at <iso>", "The drip slot, an ISO-8601 timestamp")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (clipId: string | undefined, options: { at: string; json: boolean }) => {
+      const { clipScheduleCommand } = await import("./commands/clips");
+      await runClipsSchedule(clipId, options, clipScheduleCommand);
+    });
+
+  adminClips
+    .command("drip-pause")
+    .description("Pause the whole Instagram drip-feed — the kill switch (operator)")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: { json: boolean }) => {
+      const { clipDripPauseCommand } = await import("./commands/clips");
+      await runClipsDripPause(true, options, clipDripPauseCommand);
+    });
+
+  adminClips
+    .command("drip-resume")
+    .description("Resume the Instagram drip-feed — clear the kill switch (operator)")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (options: { json: boolean }) => {
+      const { clipDripPauseCommand } = await import("./commands/clips");
+      await runClipsDripPause(false, options, clipDripPauseCommand);
     });
 
   adminClips
@@ -2111,14 +2143,21 @@ async function runMixtapeList(
 async function runClipsList(
   options: ClipListOptions,
   clipsListCommand: typeof import("./commands/clips").clipsListCommand,
+  clipPostsListCommand: typeof import("./commands/clips").clipPostsListCommand,
 ): Promise<void> {
-  const clips = await clipsListCommand({
-    recordingId: options.recording,
-    status: options.status,
-  });
+  const [clips, posts] = await Promise.all([
+    clipsListCommand({ recordingId: options.recording, status: options.status }),
+    // The drip-feed rows, merged onto each clip below. Best-effort — a read failure must
+    // not blank the clip list; fall back to no drip column.
+    clipPostsListCommand().catch(() => [] as Awaited<ReturnType<typeof clipPostsListCommand>>),
+  ]);
+  const dripByClip = new Map(posts.map((post) => [post.clipId, post]));
 
   if (options.json) {
-    printJson({ clips, ok: true });
+    printJson({
+      clips: clips.map((clip) => ({ ...clip, drip: dripByClip.get(clip.id) })),
+      ok: true,
+    });
     return;
   }
 
@@ -2129,8 +2168,12 @@ async function runClipsList(
 
   for (const clip of clips) {
     const source = clip.recordingId ?? "—";
+    const post = dripByClip.get(clip.id);
+    // The drip column: e.g. `scheduled 2026-07-06T…` / `posted` / `failed`, or `—` when a
+    // clip has no drip row (never auto-queued, or unscheduled).
+    const drip = post ? `${post.status} ${post.scheduledFor}` : "—";
     console.log(
-      `${clip.id}\t${clip.status}\t${source}\t${clip.inMs}-${clip.outMs}ms\tx=${clip.xOffset}`,
+      `${clip.id}\t${clip.status}\t${source}\t${clip.inMs}-${clip.outMs}ms\tx=${clip.xOffset}\t${drip}`,
     );
   }
 }
@@ -2155,6 +2198,40 @@ async function runClipsCut(
   console.log(
     `Cut ${result.clipId} → ${result.url} (${(result.sizeBytes / 1_000_000).toFixed(1)} MB).`,
   );
+}
+
+async function runClipsSchedule(
+  clipId: string | undefined,
+  options: { at: string; json: boolean },
+  clipScheduleCommand: typeof import("./commands/clips").clipScheduleCommand,
+): Promise<void> {
+  if (!clipId) {
+    throw new Error("Missing clip id. Usage: fluncle admin clips schedule <clipId> --at <iso>");
+  }
+
+  const post = await clipScheduleCommand(clipId, options.at);
+
+  if (options.json) {
+    printJson({ ok: true, post });
+    return;
+  }
+
+  console.log(`Scheduled ${post.clipId} for ${post.scheduledFor}.`);
+}
+
+async function runClipsDripPause(
+  paused: boolean,
+  options: { json: boolean },
+  clipDripPauseCommand: typeof import("./commands/clips").clipDripPauseCommand,
+): Promise<void> {
+  const result = await clipDripPauseCommand(paused);
+
+  if (options.json) {
+    printJson({ ok: true, paused: result });
+    return;
+  }
+
+  console.log(result ? "The drip-feed is paused." : "The drip-feed is running.");
 }
 
 async function runMixtapeGet(
