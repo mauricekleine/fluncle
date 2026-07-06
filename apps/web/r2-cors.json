@@ -1,19 +1,25 @@
-[
-  {
-    "AllowedOrigins": ["*"],
-    "AllowedMethods": ["GET", "HEAD"],
-    "MaxAgeSeconds": 86400
-  },
-  {
-    "AllowedOrigins": [
-      "https://www.fluncle.com",
-      "https://fluncle.com",
-      "http://localhost:3000",
-      "http://127.0.0.1:3000"
-    ],
-    "AllowedMethods": ["PUT", "POST", "DELETE"],
-    "AllowedHeaders": ["*"],
-    "ExposeHeaders": ["ETag"],
-    "MaxAgeSeconds": 86400
-  }
-]
+{
+  "rules": [
+    {
+      "allowed": {
+        "origins": ["*"],
+        "methods": ["GET", "HEAD"]
+      },
+      "maxAgeSeconds": 86400
+    },
+    {
+      "allowed": {
+        "origins": [
+          "https://www.fluncle.com",
+          "https://fluncle.com",
+          "http://localhost:3000",
+          "http://127.0.0.1:3000"
+        ],
+        "methods": ["PUT", "POST", "DELETE"],
+        "headers": ["*"]
+      },
+      "exposeHeaders": ["ETag"],
+      "maxAgeSeconds": 86400
+    }
+  ]
+}
