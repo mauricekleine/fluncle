@@ -5,6 +5,72 @@
     "0.0.1A#v": 2335785502
   },
   "rng1234": [0.07329497812315822, 0.7034119898453355, 0.9028560190927237],
+  "stars": [
+    {
+      "angle": 0,
+      "artistLine": "Artist One, Artist Two",
+      "collected": false,
+      "id": "0.0.1A",
+      "kind": "star",
+      "logId": "0.0.1A",
+      "radius": 620,
+      "sector": 0,
+      "spotifyUrl": "https://open.spotify.com/track/a",
+      "title": "First Banger",
+      "trackId": "track-a",
+      "vOffset": -38,
+      "x": 620,
+      "y": 0
+    },
+    {
+      "angle": 1.3962634015954636,
+      "artistLine": "Artist Three",
+      "collected": false,
+      "id": "2.0.1B",
+      "kind": "star",
+      "logId": "2.0.1B",
+      "radius": 744.4444444444445,
+      "sector": 2,
+      "spotifyUrl": "https://open.spotify.com/track/b",
+      "title": "Second Banger",
+      "trackId": "track-b",
+      "vOffset": 1,
+      "x": 129.2714211520482,
+      "y": 733.1346605757549
+    },
+    {
+      "angle": 2.33656190905815,
+      "artistLine": "Artist Four",
+      "collected": false,
+      "id": "2.0.2C",
+      "kind": "star",
+      "logId": "2.0.2C",
+      "radius": 828.2502114934305,
+      "sector": 2,
+      "spotifyUrl": "https://open.spotify.com/track/c",
+      "title": "Third Banger",
+      "trackId": "track-c",
+      "vOffset": 85,
+      "x": -574.0511713736935,
+      "y": 597.0457817315207
+    },
+    {
+      "angle": 4.1887902047863905,
+      "artistLine": "Fallback Artist",
+      "collected": false,
+      "id": "track-d",
+      "kind": "star",
+      "logId": "track-d",
+      "radius": 993.3333333333333,
+      "sector": 6,
+      "spotifyUrl": "https://open.spotify.com/track/d",
+      "title": "Fallback Banger",
+      "trackId": "track-d",
+      "vOffset": 168,
+      "x": -496.6666666666671,
+      "y": -860.2519010925422
+    }
+  ],
   "tracks": [
     {
       "addedAt": "2026-05-30T00:00:00.000Z",
@@ -36,72 +102,6 @@
       "spotifyUrl": "https://open.spotify.com/track/d",
       "title": "Fallback Banger",
       "trackId": "track-d"
-    }
-  ],
-  "stars": [
-    {
-      "id": "0.0.1A",
-      "logId": "0.0.1A",
-      "trackId": "track-a",
-      "title": "First Banger",
-      "artistLine": "Artist One, Artist Two",
-      "sector": 0,
-      "radius": 620,
-      "angle": 6.147586646256651,
-      "x": 614.3087594031923,
-      "y": -83.81377047067357,
-      "vOffset": -38,
-      "collected": false,
-      "kind": "star",
-      "spotifyUrl": "https://open.spotify.com/track/a"
-    },
-    {
-      "id": "2.0.1B",
-      "logId": "2.0.1B",
-      "trackId": "track-b",
-      "title": "Second Banger",
-      "artistLine": "Artist Three",
-      "sector": 2,
-      "radius": 1100,
-      "angle": 3.443868769610852,
-      "x": -1050.1275144499511,
-      "y": -327.4632855682717,
-      "vOffset": 1,
-      "collected": false,
-      "kind": "star",
-      "spotifyUrl": "https://open.spotify.com/track/b"
-    },
-    {
-      "id": "2.0.2C",
-      "logId": "2.0.2C",
-      "trackId": "track-c",
-      "title": "Third Banger",
-      "artistLine": "Artist Four",
-      "sector": 2,
-      "radius": 1100,
-      "angle": 5.628094694616439,
-      "x": 872.2920001021796,
-      "y": -670.1542110273869,
-      "vOffset": 85,
-      "collected": false,
-      "kind": "star",
-      "spotifyUrl": "https://open.spotify.com/track/c"
-    },
-    {
-      "id": "track-d",
-      "logId": "track-d",
-      "trackId": "track-d",
-      "title": "Fallback Banger",
-      "artistLine": "Fallback Artist",
-      "sector": 6,
-      "radius": 2060,
-      "angle": 0.48658383472881933,
-      "x": 1820.9070121865545,
-      "y": 963.2744432246892,
-      "vOffset": 168,
-      "collected": false,
-      "kind": "star",
-      "spotifyUrl": "https://open.spotify.com/track/d"
     }
   ]
 }
