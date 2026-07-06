@@ -23,11 +23,11 @@ import { fnv1a, sectorDay } from "../lib/log-id-shared";
 export { fnv1a };
 
 /** Clear space around Earth before the voyage thread begins (Earth's approach stays open). */
-const CLEAR_SPACE = 620;
+export const CLEAR_SPACE = 620;
 /** Day-sectors per full spiral wrap: the thread turns once every ~9 days of finds. */
-const SECTORS_PER_TURN = 9;
+export const SECTORS_PER_TURN = 9;
 /** Radial distance between consecutive spiral arms (one full turn); arms never crowd. */
-const ARM_GAP = 560;
+export const ARM_GAP = 560;
 /** Angular advance per day-sector along the thread. */
 const ANGLE_PER_SECTOR = (Math.PI * 2) / SECTORS_PER_TURN;
 /** Archimedean pitch: radius gained per radian of thread (ARM_GAP over one 2π turn). */
@@ -72,13 +72,25 @@ function sectorOf(track: GameTrack): number {
   return sectorDay(track.addedAt);
 }
 
+// The shared curve — ONE source of truth for the voyage thread. `placeStars`
+// builds every star's coordinate from `spiralPoint`, and the atlas (the top-down
+// map, render.ts) DRAWS the same `spiralPoint`, so the thread the map paints and
+// the stars it dots can never drift apart (asserted in placement.test.ts).
+
 /** Radius on the thread at a thread angle θ (the Archimedean law, from Earth out). */
-function spiralRadius(theta: number): number {
+export function spiralRadius(theta: number): number {
   return CLEAR_SPACE + SPIRAL_PITCH * theta;
 }
 
+/** World coordinate on the voyage thread at a thread angle θ. */
+export function spiralPoint(theta: number): Vec2 {
+  const radius = spiralRadius(theta);
+
+  return { x: Math.cos(theta) * radius, y: Math.sin(theta) * radius };
+}
+
 /** The thread angle at a radius (inverse of spiralRadius); where the arm passes. */
-function spiralAngleAt(radius: number): number {
+export function spiralAngleAt(radius: number): number {
   return (radius - CLEAR_SPACE) / SPIRAL_PITCH;
 }
 
@@ -132,6 +144,8 @@ export function placeStars(tracks: GameTrack[]): Star[] {
     for (const track of group) {
       const seed = seedOf(track);
       const radius = spiralRadius(theta);
+      // The star's coordinate comes from the shared curve the atlas also draws.
+      const point = spiralPoint(theta);
 
       stars.push({
         angle: theta,
@@ -148,8 +162,8 @@ export function placeStars(tracks: GameTrack[]): Star[] {
         vOffset: (fnv1a(`${seed}#v`) % 440) - 220,
         vx: 0,
         vy: 0,
-        x: Math.cos(theta) * radius,
-        y: Math.sin(theta) * radius,
+        x: point.x,
+        y: point.y,
       });
 
       // Advance along the curve by ≥ MIN_ARC_SPACING of arc length (≈ r·Δθ),

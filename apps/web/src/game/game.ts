@@ -126,6 +126,33 @@ export function createGame(container: HTMLElement): Game {
   let wasOrbiting = false;
   let orbitEnteredAt = 0;
   let paused = false;
+  // The atlas (C): the top-down chart. While it is open the sim freezes (a map
+  // read never burns fuel) but the audio keeps playing — an instrument, not a
+  // pause.
+  let atlasOpen = false;
+  let atlasPointer: { x: number; y: number } | undefined;
+
+  // Hover for the atlas's readout: track the latest pointer position in
+  // internal canvas px (the same mapping as handleUiTap). Letterbox positions
+  // fall outside [0, canvas.width] and simply miss every mark.
+  function onPointerHover(event: PointerEvent): void {
+    const bounds = renderer.canvas.getBoundingClientRect();
+
+    if (bounds.width === 0 || bounds.height === 0) {
+      atlasPointer = undefined;
+
+      return;
+    }
+
+    atlasPointer = {
+      x: ((event.clientX - bounds.left) / bounds.width) * renderer.canvas.width,
+      y: ((event.clientY - bounds.top) / bounds.height) * renderer.canvas.height,
+    };
+  }
+
+  function onPointerHoverEnd(): void {
+    atlasPointer = undefined;
+  }
 
   const telemetry: TelemetryLine[] = [];
 
@@ -321,14 +348,27 @@ export function createGame(container: HTMLElement): Game {
       audio.setMuted(!audio.muted());
     }
 
+    // C toggles the atlas in flight; it never opens over the pause screen.
+    if (input.consumeAtlasToggle() && phase === "play" && sim && !paused) {
+      atlasOpen = !atlasOpen;
+    }
+
     if (input.consumePauseToggle() && phase === "play") {
-      setPaused(!paused);
+      // Esc closes the chart first; pausing is the next press.
+      if (atlasOpen) {
+        atlasOpen = false;
+      } else {
+        setPaused(!paused);
+      }
     }
 
     const acted = input.consumeAction();
 
     if (acted) {
-      if (paused) {
+      if (atlasOpen) {
+        // The chart holds the helm: keys steer nothing and depart nothing
+        // while the atlas is up (C or Esc puts you back in the cockpit).
+      } else if (paused) {
         // Any key or tap also resumes; Esc isn't the only way back.
         setPaused(false);
       } else if (phase === "play") {
@@ -358,7 +398,8 @@ export function createGame(container: HTMLElement): Game {
       towedT = Math.max(0, towedT - dt);
     }
 
-    if (phase === "play" && sim && !paused) {
+    // The atlas freezes the flight too: a chart read never burns fuel.
+    if (phase === "play" && sim && !paused && !atlasOpen) {
       accumulator += dt;
 
       let steps = 0;
@@ -404,6 +445,7 @@ export function createGame(container: HTMLElement): Game {
       cardSpotifyUrl = cardView?.spotifyUrl;
 
       const view: RenderView = {
+        atlas: atlasOpen && phase === "play" ? { pointer: atlasPointer } : undefined,
         bootT: Math.min(1, bootT),
         carrier: nearestCarrier(sim),
         endT,
@@ -499,6 +541,9 @@ export function createGame(container: HTMLElement): Game {
 
   resizeObserver.observe(container);
   document.addEventListener("visibilitychange", onVisibility);
+  container.addEventListener("pointermove", onPointerHover);
+  container.addEventListener("pointerleave", onPointerHoverEnd);
+  container.addEventListener("pointercancel", onPointerHoverEnd);
   rafId = window.requestAnimationFrame(frame);
 
   installFlightComputer();
@@ -670,6 +715,9 @@ export function createGame(container: HTMLElement): Game {
       window.cancelAnimationFrame(rafId);
       resizeObserver.disconnect();
       document.removeEventListener("visibilitychange", onVisibility);
+      container.removeEventListener("pointermove", onPointerHover);
+      container.removeEventListener("pointerleave", onPointerHoverEnd);
+      container.removeEventListener("pointercancel", onPointerHoverEnd);
       delete (window as GalaxyWindow).fluncle;
       input.destroy();
       audio.destroy();

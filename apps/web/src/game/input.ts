@@ -1,7 +1,8 @@
 // Keyboard + touch input. Keyboard: arrows or A/D steer, space (or up/W)
 // boosts. Touch: left/right halves steer, a bottom-center zone boosts. Any
 // key or tap doubles as the menu action (launch / skip / fly again); M
-// toggles mute, Escape pauses.
+// toggles mute, C toggles the atlas (the game says "Charting the galaxy…" —
+// C is the chart key), Escape pauses.
 
 const STEER_LEFT_KEYS = new Set(["a", "arrowleft"]);
 const STEER_RIGHT_KEYS = new Set(["d", "arrowright"]);
@@ -19,6 +20,8 @@ type InputState = {
 export type InputManager = {
   /** True once if an action (any key / tap) fired since the last call. */
   consumeAction: () => boolean;
+  /** True once if C (the atlas) was pressed since the last call. */
+  consumeAtlasToggle: () => boolean;
   /** True once if M was pressed since the last call. */
   consumeMuteToggle: () => boolean;
   /** True once if Escape was pressed since the last call. */
@@ -38,6 +41,7 @@ export function createInput(
   const pointers = new Map<number, "boost" | "left" | "right">();
 
   let actionPending = false;
+  let atlasPending = false;
   let mutePending = false;
   let pausePending = false;
   let sawTouch = false;
@@ -63,6 +67,14 @@ export function createInput(
 
     if (key === "m") {
       mutePending = true;
+
+      return;
+    }
+
+    // C is the chart key: it only ever toggles the atlas, never steers or
+    // fires the menu action (same contract as M).
+    if (key === "c") {
+      atlasPending = true;
 
       return;
     }
@@ -134,6 +146,13 @@ export function createInput(
       const pending = actionPending;
 
       actionPending = false;
+
+      return pending;
+    },
+    consumeAtlasToggle: () => {
+      const pending = atlasPending;
+
+      atlasPending = false;
 
       return pending;
     },
