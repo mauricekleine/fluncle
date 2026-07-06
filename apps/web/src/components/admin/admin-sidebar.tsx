@@ -1,5 +1,6 @@
 import {
   CassetteTapeIcon,
+  FilmReelIcon,
   FilmSlateIcon,
   FilmStripIcon,
   GearSixIcon,
@@ -40,10 +41,10 @@ import { listTracks } from "@/lib/server/tracks";
 // and only lights up once a page declares it as its owner key — so the nav is
 // stable across waves while stations land behind it.
 //
-// Owner keys today: `/admin` (the board, the landing) → dashboard; `/admin/plans`
-// → plans; `/admin/clips` → clips; `/admin/newsletter` → newsletter; the Studio
-// (`/admin/studio/$recordingId`, a recording's workstation) → recordings.
-// Findings shares the board until the Wave-1 queue splits them; Recordings'
+// Owner keys today: `/admin` (the board, the landing) → dashboard; `/admin/renders`
+// → renders; `/admin/plans` → plans; `/admin/clips` → clips; `/admin/newsletter` →
+// newsletter; the Studio (`/admin/studio/$recordingId`, a recording's workstation) →
+// recordings. Findings shares the board until the Wave-1 queue splits them; Recordings'
 // list home is the recordings index on Clips; Mixtapes' closest home is Plans
 // (where a take is promoted); System is the live service map at /status.
 
@@ -56,6 +57,7 @@ export type AdminNavCurrent =
   | "newsletter"
   | "plans"
   | "recordings"
+  | "renders"
   | "system";
 
 type NavEntry = {
@@ -76,10 +78,19 @@ const HOME_ENTRY: NavEntry = {
   to: "/admin",
 };
 
-// The objects, in pipeline order: a finding is logged, planned into a set,
-// captured as a recording, promoted to a mixtape, clipped, and written up.
+// The objects, in pipeline order: a finding is logged, filmed into a render,
+// planned into a set, captured as a recording, promoted to a mixtape, clipped, and
+// written up. Renders sits with Findings (its object is a finding's video) and
+// carries the render backlog badge — the count's dedicated home now it has a page.
 const OBJECT_ENTRIES: NavEntry[] = [
   { count: "untagged", icon: VinylRecordIcon, key: "findings", label: "Findings", to: "/admin" },
+  {
+    count: "renderQueue",
+    icon: FilmReelIcon,
+    key: "renders",
+    label: "Renders",
+    to: "/admin/renders",
+  },
   { icon: ListNumbersIcon, key: "plans", label: "Plans", to: "/admin/plans" },
   { icon: FilmSlateIcon, key: "recordings", label: "Recordings", to: "/admin/clips" },
   { icon: CassetteTapeIcon, key: "mixtapes", label: "Mixtapes", to: "/admin/plans" },
@@ -92,9 +103,9 @@ const OBJECT_ENTRIES: NavEntry[] = [
   },
 ];
 
-// The machine itself: the live service map, carrying the render backlog.
+// The machine itself: the live service map. The render backlog badge moved to the
+// Renders entry (its dedicated page); System stays the deep-link to /status.
 const SYSTEM_ENTRY: NavEntry = {
-  count: "renderQueue",
   icon: PulseIcon,
   key: "system",
   label: "System",
