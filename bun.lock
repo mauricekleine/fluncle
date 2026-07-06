@@ -50,6 +50,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@fluncle/cli": "workspace:*",
+        "@fluncle/contracts": "workspace:*",
         "@fluncle/ui": "workspace:*",
         "@phosphor-icons/react": "~2.1.10",
         "react": "~19.2.7",

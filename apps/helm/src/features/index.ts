@@ -5,6 +5,6 @@
 // then loads src/features/<id>/{manifest.ts,server.ts} and the glass lazy-loads
 // src/features/<id>/panel.tsx by the same convention — nothing else to wire.
 
-export const featureIds = ["pulse-lite"] as const;
+export const featureIds = ["show-control", "set-lifecycle", "pulse"] as const;
 
 export type FeatureId = (typeof featureIds)[number];

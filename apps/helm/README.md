@@ -34,7 +34,7 @@ src/features/<id>/panel.tsx     export default function Panel() { … }
 
 ```ts
 // src/features/index.ts — add your id to the array; that is the whole registration.
-export const featureIds = ["pulse-lite", "<your-id>"] as const;
+export const featureIds = ["pulse", "<your-id>"] as const;
 ```
 
 The daemon loads `manifest.ts` + `server.ts` by that convention (and enforces `manifest.id === <id>`); the glass lazy-loads `panel.tsx` the same way, and only for stations `/api/features` says are visible on this machine. All contract types are in `src/features/types.ts` (`FeatureManifest`, `HelmApp`, `HelmContext`, `AdminClient`).
@@ -46,7 +46,7 @@ What `registerRoutes(app)` gets on `app.context`:
 - `notify(title, body)` — a macOS notification via osascript; works windowless under launchd.
 - `machine`, `machineBrand`, `startedAt`.
 
-Panel side: `useHelm()` (`src/ui/helm-context.tsx`) gives a panel `{ machine, machineBrand, openRun }` — start an action with `apiPost`, hand its `runId` to `openRun(feature, runId)`, and the run drawer opens on the live stream. Pre-flight tokens in the output (`[clear] / [hold] / [dark]`, the `packages/live/src/show.ts` vocabulary) render as status rows; everything else is the monospace log. `pulse-lite` is the end-to-end reference implementation of all of this.
+Panel side: `useHelm()` (`src/ui/helm-context.tsx`) gives a panel `{ machine, machineBrand, openRun }` — start an action with `apiPost`, hand its `runId` to `openRun(feature, runId)`, and the run drawer opens on the live stream. Pre-flight tokens in the output (`[clear] / [hold] / [dark]`, the `packages/live/src/show.ts` vocabulary) render as status rows; everything else is the monospace log. `pulse` is the reference implementation of all of this — a board (`GET /api/pulse/board`), a slower read (`GET /api/pulse/next`), a streamed run (the line check), a notification (the 18h nudge), and its own daemon-side scheduler.
 
 ## Run it
 
