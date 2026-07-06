@@ -6,7 +6,7 @@ The Helm is the operator's cockpit: one local app window per machine that gather
 
 A **LAN-local Bun daemon** (`apps/helm`, port **4190**) plus an **on-brand app window**, admin-authed. The daemon owns the machine identity, the run registry, macOS notifications, and the in-process admin bridge; the window is a React SPA on `@fluncle/ui` (Warm Dark, Phosphor icons, the CLI/admin voice register) that renders one panel per station.
 
-It is **frame-agnostic**. v1 is a Chrome app-mode window (a chrome-less frame at `http://127.0.0.1:4190`); a native tray shim could wrap the same daemon later without the daemon ever knowing what frame it is in. The daemon is the product; the window is one way to look at it.
+It is **frame-agnostic**. v1 is a Chrome app-mode window (a chrome-less frame at `http://127.0.0.1:4190`); a native tray shim ([The shim](#the-shim--a-native-mac-frame)) wraps the same daemon without the daemon ever knowing what frame it is in. The daemon is the product; the window is one way to look at it.
 
 It is **local orchestration, not a Worker**. The Helm spawns processes on this Mac — the show, an upload, a Python cue script — and streams their stdout/stderr back to you. It never becomes a public endpoint and holds no place in the Galaxy's surface map (see [Not a Galaxy surface](#not-a-galaxy-surface)). It is the same class as the live glass: the operator's own machine, reachable by the operator alone.
 
@@ -56,6 +56,34 @@ fluncle helm uninstall  # stand the agent down and remove it
 `fluncle helm install` writes a `com.fluncle.helm` LaunchAgent (RunAtLoad, crash-restart on a non-clean exit), so the daemon rises at login and holds the port windowless — which is what lets the nudge fire without anyone opening the window. `uninstall` boots the agent out and removes the plist. Both are macOS-only (launchd), and both are safe to re-run.
 
 Running from a repo checkout, the launcher finds `apps/helm` by walking up from the CLI; running the standalone binary outside the repo, point it at the checkout with `FLUNCLE_HELM_DIR=<path>/apps/helm`. Day-to-day development of the Helm itself uses the workspace scripts (`bun run --cwd apps/helm dev|build|start|test`) documented in [`apps/helm/README.md`](../apps/helm/README.md).
+
+## The shim — a native Mac frame
+
+The Helm is frame-agnostic, and the shim is the second frame: a thin native macOS app (`apps/helm/shim`, one Swift file) that wraps the very same daemon in a **menu-bar presence** and a **real Dock-visible window** — because a browser tab is hard to find again once it slips behind everything else. It adds no brain; the daemon is still the whole product, and the shim only gives it a face the operating system knows how to surface. Chrome app-mode (`fluncle helm`) still works exactly as before — the shim is optional, and the daemon never learns which frame it is wearing.
+
+What it puts on screen:
+
+- **A menu-bar glyph** — the ship's-wheel `helm` SF Symbol (template-tinted, so it reads on a light or dark bar). Its menu is short: _Open the Helm_ (the window), _Open in browser_ (hands the URL to the default browser), a deadpan health line (`holding :4190` when the daemon answers, `daemon down — starting…` while custody works, `daemon down` when it can't), a separator, and _Quit the shim_. A 30-second health poll dims the glyph when the daemon is unreachable.
+- **A real window** — a WKWebView onto the daemon, titled _Fluncle's Helm_, 1280×860 with a restorable frame. `Cmd-W` closes the **window**, not the app: the shim stays in the tray and the Dock, and clicking the Dock icon (or _Open the Helm_) brings the same window back with its frame and scroll intact.
+- **Daemon custody** — at launch and on the open actions the shim health-checks `:4190`, and if nothing answers it raises the daemon itself: `launchctl kickstart` the `com.fluncle.helm` LaunchAgent when it is installed (daemon-only, no second window), otherwise it falls back to the `fluncle` CLI launcher (resolved off PATH, with a Homebrew fallback). It waits for health on a bounded retry, holding the `starting…` line in the menu meanwhile.
+
+The window loads the daemon through an in-app `helm://` scheme rather than `http://127.0.0.1:4190` directly, and this is load-bearing: on macOS 15+ WKWebView's network process is gated by Local Network privacy and silently drops loopback loads, even though the app's own URLSession reaches the daemon fine. The shim bridges that gap with a small streaming proxy (`DaemonProxy`) that serves every WKWebView request through URLSession — so the glass renders, `fetch` reads work, and an SSE run stream flows — with no permission prompt for the operator. The daemon still sees a plain loopback request, so its own auth (loopback needs no helm key) is satisfied by construction.
+
+### Build and install
+
+The shim is **Mac-built on demand**: CI never touches it (the GitHub runners are Linux and have no Swift toolchain), and it is not a turbo task, so it stays out of the deploy gate. Build it locally:
+
+```bash
+bun run --cwd apps/helm shim:build   # swiftc -O → dist/"Fluncle's Helm.app" (ad-hoc signed)
+```
+
+`shim/build.sh` compiles the one Swift file, assembles the bundle with its `Info.plist` and an app icon composed from Fluncle's falling-figure mark on a Deep Field tile, and ad-hoc codesigns it. The build prints the install line; run it yourself to put the app in place:
+
+```bash
+cp -R apps/helm/shim/dist/"Fluncle's Helm.app" /Applications/
+```
+
+The bundle lives under `shim/dist/` (gitignored). Pair it with `fluncle helm install` so the LaunchAgent holds the daemon at login and the shim's custody stays on the clean, windowless path.
 
 ## Ports, LAN mode, and the phone
 
