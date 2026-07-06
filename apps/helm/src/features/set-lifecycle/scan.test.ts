@@ -73,21 +73,21 @@ describe("takeDefaultsFromFilename", () => {
     // The operator's real set file (the live-proof anchor).
     const defaults = takeDefaultsFromFilename("2026-07-05 11-29-50.mov", 0);
 
-    expect(defaults.title).toBe("Set — 2026-07-05");
+    expect(defaults.title).toBe("Set 2026-07-05");
     // 11:29:50 local wall-clock → a real ISO instant on that date.
     expect(defaults.recordedAt.startsWith("2026-07-05")).toBe(true);
     expect(Number.isNaN(Date.parse(defaults.recordedAt))).toBe(false);
   });
 
   test("also reads an underscore-separated stamp", () => {
-    expect(takeDefaultsFromFilename("2026-01-02_03-04-05.mkv", 0).title).toBe("Set — 2026-01-02");
+    expect(takeDefaultsFromFilename("2026-01-02_03-04-05.mkv", 0).title).toBe("Set 2026-01-02");
   });
 
   test("falls back to the file's modified date when the name has no stamp", () => {
     const modifiedMs = Date.UTC(2026, 5, 18, 12, 0, 0);
     const defaults = takeDefaultsFromFilename("rave-master.mov", modifiedMs);
 
-    expect(defaults.title).toBe("Set — 2026-06-18");
+    expect(defaults.title).toBe("Set 2026-06-18");
     expect(defaults.recordedAt).toBe(new Date(modifiedMs).toISOString());
   });
 });

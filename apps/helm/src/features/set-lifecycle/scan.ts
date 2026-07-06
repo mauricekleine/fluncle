@@ -102,7 +102,7 @@ export function takeDefaultsFromFilename(name: string, modifiedMs: number): Take
       Number(second),
     );
 
-    return { recordedAt: when.toISOString(), title: `Set — ${year}-${month}-${day}` };
+    return { recordedAt: when.toISOString(), title: `Set ${year}-${month}-${day}` };
   }
 
   const fallback = new Date(modifiedMs);
@@ -111,6 +111,6 @@ export function takeDefaultsFromFilename(name: string, modifiedMs: number): Take
 
   return {
     recordedAt: Number.isFinite(modifiedMs) ? fallback.toISOString() : "",
-    title: dateLabel ? `Set — ${dateLabel}` : bareName,
+    title: dateLabel ? `Set ${dateLabel}` : bareName,
   };
 }

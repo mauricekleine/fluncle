@@ -16,7 +16,6 @@ import {
   ListNumbers,
   UploadSimple,
   VinylRecord,
-  Warning,
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useState } from "react";
 
@@ -114,7 +113,7 @@ export default function SetLifecyclePanel() {
     } catch (caught) {
       setError(
         caught instanceof ApiError && caught.code === "admin_error"
-          ? "The admin token isn't aboard — the shelf can't answer (~/.config/fluncle)."
+          ? "The admin token isn't aboard: the shelf can't answer (~/.config/fluncle)."
           : caught instanceof Error
             ? caught.message
             : "The shelf didn't answer.",
@@ -151,8 +150,8 @@ export default function SetLifecyclePanel() {
           className="rounded-md border border-primary/40 bg-primary/5 px-4 py-2 font-mono text-[0.82rem] text-foreground"
         >
           <span className="font-bold">[F]</span> minted{" "}
-          <span className="font-bold">fluncle://{minted.logId}</span> from “{minted.title}”. It rode
-          into the promoted lane.
+          <span className="font-display font-bold tabular-nums">fluncle://{minted.logId}</span> from
+          “{minted.title}”. It rode into the promoted lane.
         </p>
       ) : null}
 
@@ -286,7 +285,9 @@ function RecordingRow({ machine, onChanged, onPromoted, recording }: RecordingRo
         </div>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[0.72rem] text-muted-foreground">
           {stage === "promoted" && recording.logId ? (
-            <span className="font-bold text-primary">fluncle://{recording.logId}</span>
+            <span className="font-display font-bold tabular-nums text-primary">
+              fluncle://{recording.logId}
+            </span>
           ) : null}
           <span>{cues === 0 ? "no cues" : `${cues} cue${cues === 1 ? "" : "s"}`}</span>
           <span>rec {formatDate(recording.recordedAt)}</span>
@@ -413,7 +414,7 @@ function CaptureTake({ onUploaded }: { onUploaded: () => void }) {
           Nothing in ~/Movies to stage. Record a set with OBS and it lands here.
         </p>
       ) : (
-        <ul className="grid max-h-44 gap-1 overflow-y-auto">
+        <ul className="helm-scroll grid max-h-44 gap-1 overflow-y-auto">
           {videos.map((video) => (
             <li key={video.path}>
               <button
@@ -445,7 +446,7 @@ function CaptureTake({ onUploaded }: { onUploaded: () => void }) {
             <Input
               id="take-title"
               onChange={(event) => setTitle(event.target.value)}
-              placeholder="Set — 2026-07-05"
+              placeholder="Set 2026-07-05"
               value={title}
             />
           </div>
@@ -465,7 +466,7 @@ function CaptureTake({ onUploaded }: { onUploaded: () => void }) {
               {busy ? "Staging…" : "Upload take"}
             </Button>
             <p className="text-xs text-muted-foreground">
-              Runs local-direct — the multi-GB push streams to the drawer.
+              Runs local-direct: the multi-GB push streams to the drawer.
             </p>
           </div>
         </div>
@@ -511,16 +512,14 @@ function PlanExportButton({ planId }: { planId: string }) {
           <DialogDescription>
             Writes a playlist straight into <span className="font-mono">master.db</span> (backed up
             first), and prints the Beatport links, m3u8, and a checklist.{" "}
-            <span className="font-medium text-foreground">Quit Rekordbox fully before running</span>{" "}
-            — it holds an exclusive lock on the database.
+            <span className="font-medium text-foreground">Quit Rekordbox fully before running</span>
+            . It holds an exclusive lock on the database.
           </DialogDescription>
         </DialogHeader>
-        <div className="flex items-start gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
-          <Warning aria-hidden className="mt-0.5 size-4 shrink-0 text-primary" />
-          <span>
-            The run streams to the drawer. If Rekordbox is open, it falls back to text-only.
-          </span>
-        </div>
+        <p className="rounded-md border bg-card/40 px-3 py-2 font-mono text-[0.82rem] text-muted-foreground">
+          <span className="font-bold text-destructive">[hold]</span> The run streams to the drawer.
+          If Rekordbox is open, it falls back to text-only.
+        </p>
         <DialogFooter>
           <DialogClose render={<Button variant="ghost">Hold</Button>} />
           <Button disabled={busy} onClick={() => void run()}>
@@ -536,7 +535,7 @@ function PlanExportButton({ planId }: { planId: string }) {
 
 type CuePhase = "deriving" | "error" | "idle" | "ready";
 
-const BUCKET_MARK = { ambiguous: "?", matched: "✓", unmatched: "?" } as const;
+const BUCKET_MARK = { ambiguous: "?", matched: "+", unmatched: "x" } as const;
 
 function CueDialog({ onAttached, recording }: { onAttached: () => void; recording: Recording }) {
   const { openRun } = useHelm();
@@ -590,7 +589,7 @@ function CueDialog({ onAttached, recording }: { onAttached: () => void; recordin
         }
 
         setMessage(
-          caught instanceof Error ? caught.message : "The derivation failed — read the run log.",
+          caught instanceof Error ? caught.message : "The derivation failed. Read the run log.",
         );
         setPhase("error");
       }
@@ -667,7 +666,7 @@ function CueDialog({ onAttached, recording }: { onAttached: () => void; recordin
           <DialogDescription>
             Reads the latest Rekordbox session, matches each track to a finding, and attaches the
             ordered cues to this take.{" "}
-            <span className="font-medium text-foreground">Quit Rekordbox fully first</span> — it
+            <span className="font-medium text-foreground">Quit Rekordbox fully first</span>. It
             locks <span className="font-mono">master.db</span>. Mix-in times are marked later on the
             Studio cue rail.
           </DialogDescription>
@@ -681,7 +680,7 @@ function CueDialog({ onAttached, recording }: { onAttached: () => void; recordin
         ) : (
           <>
             <div className="grid gap-1.5">
-              <Label htmlFor="cue-session">Session (optional — a name substring)</Label>
+              <Label htmlFor="cue-session">Session (optional, a name substring)</Label>
               <Input
                 disabled={phase === "deriving"}
                 id="cue-session"
@@ -693,8 +692,11 @@ function CueDialog({ onAttached, recording }: { onAttached: () => void; recordin
 
             {phase === "deriving" ? (
               <p className="flex items-center gap-2 font-mono text-[0.82rem] text-muted-foreground">
-                <CircleNotch aria-hidden className="size-4 animate-spin" />
-                reading Rekordbox — watch the drawer…
+                <CircleNotch
+                  aria-hidden
+                  className="size-4 animate-spin motion-reduce:animate-none"
+                />
+                reading Rekordbox, watch the drawer…
               </p>
             ) : null}
 
@@ -819,7 +821,7 @@ function PromoteButton({
           <AlertDialogDescription>
             A mixtape is born only via promote. This mints a scarce, permanent{" "}
             <span className="font-bold text-foreground">F</span>-marked Log ID from “
-            {recording.title}”, seeds its tracklist, and stages the set video. Idempotent — if it
+            {recording.title}”, seeds its tracklist, and stages the set video. Idempotent: if it
             already links a mixtape, that one is reused.
           </AlertDialogDescription>
         </AlertDialogHeader>
@@ -909,9 +911,9 @@ function DistributeDialog({ logId, title }: { logId: string; title: string }) {
         <DialogHeader>
           <DialogTitle>Distribute “{title}”</DialogTitle>
           <DialogDescription>
-            <span className="font-mono text-foreground">fluncle://{logId}</span> — pushes the video
-            to YouTube (unlisted until you publish it) and the audio master to Mixcloud. Pick at
-            least one. Runs local-direct — the multi-GB push streams to the drawer.
+            <span className="font-display tabular-nums text-foreground">fluncle://{logId}</span>.
+            Pushes the video to YouTube (unlisted until you publish it) and the audio master to
+            Mixcloud. Pick at least one. Runs local-direct: the multi-GB push streams to the drawer.
           </DialogDescription>
         </DialogHeader>
 
