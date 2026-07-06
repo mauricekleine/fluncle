@@ -1,149 +1,120 @@
 # The Cockpit — the roadmap
 
-Status: Forged draft (post-research, pre-panel). This is planning, not canon (AGENTS.md doc conventions); where it conflicts with the codebase or DESIGN.md/VOICE.md, those win.
+Status: Final (forge-passed: 3 research threads, taste pass, 3-role adversarial panel). Planning, not canon; where it conflicts with the codebase or DESIGN.md/VOICE.md, those win. Decisions for the operator are at the end.
 
-The Cockpit (today: "Fluncle's Helm", `apps/helm` — the rename is v1.1 item 0) is the operator's workflow app: a local Bun daemon (`:4190`) plus a native shim window on the M5 and the M2, holding admin authority server-side (the CLI's stored credentials, in-process) and local tools (`ffmpeg`, the Rekordbox scripts, the visuals orchestrator) at arm's reach. Three stations already exist (Show, Set lifecycle, Pulse). This document scopes what it grows into: the primary admin surface, absorbing web `/admin` station by station until the web app is purely the public product.
+The Cockpit (today: "Fluncle's Helm", `apps/helm`) is the operator's workflow app: a local Bun daemon (`:4190`) plus a native shim window on the M5 and the M2, holding admin authority server-side (the CLI's stored credentials, in-process) and local tools (`ffmpeg`, the Rekordbox scripts, the visuals orchestrator) at arm's reach. Three stations exist (Show, Set lifecycle, Pulse).
+
+## What the panel changed (read this first)
+
+The draft planned a full strangler: port every web /admin surface into the Cockpit, then shrink web /admin to one card. The panel refuted the port-everything half with two findings the plan now follows:
+
+1. **Porting pure CRUD buys nothing and costs resilience.** Tag, plan-editing, the board dialogs are the same @fluncle/ui React in a browser tab or a WKWebView, on the same machine. Moving them creates the two-surface tax and migrates the whole admin capability onto a bespoke local stack (which already needed one macOS workaround) while deleting the always-up Cloudflare fallback.
+2. **"Retire everything" would have broken production.** The "web admin" contract ops have live headless callers — the Instagram drip cron (`drip_clips`), the newsletter cron, the Rekordbox scripts, the box clip-sweep, and the Cockpit itself. UI routes and contract ops are different retirement classes.
+
+**The amended shape: the Cockpit owns what a browser cannot — the attention queue and local-tool custody. Web /admin CRUD stays, reached through the queue's deep-links, and web /admin survives as the durable break-glass admin. Ports happen later, on felt pain, one station at a time, each PR deleting its web counterpart at parity (never a terminal shrink phase).**
 
 ## The operating principle
 
-The operator's real problem is context: the pipeline has many small manual actions spread across two machines and several days, and keeping the state machine in his head is the tax. The Cockpit's job is to BE the context. Its home surface is an attention queue: every manual action the system currently needs, as an actionable row, each knowing its machine, its object, and its age. The operator opens the Cockpit, does the top rows, and closes it. Zero rows is the success state.
+The operator's real problem is context: many small manual actions across two machines and several days, and keeping the state machine in his head is the tax. The Cockpit's job is to BE the context. One system at three zooms:
+
+- **The queue** (home — state zoom): every action the system needs, as a row. Zero rows is the success state.
+- **The loop** (source zoom): entering a queue group becomes its focused single-key loop — the tag matrix, the posting row. Tag/Posting/Renders are not stations; they are the queue's drill-ins.
+- **The workbench** (object zoom): Show, Set lifecycle, Studio-lane, Plans-lane — surfaces you visit with an object in mind.
+
+The palette and the finding inspector are lenses over the same three zooms, not additional systems. Home is the queue; the palette is the accelerator.
 
 ## The design doctrine
 
-This is real workflow software, not a fiction surface. The register is product, not brand (PRODUCT.md's principles carry through palette and typography, never through prose).
+Real workflow software, not a fiction surface. Register: product, not brand.
 
-**The naming law (ratified 2026-07-06): canon lives where the crew looks; tools speak plainly.** Public surfaces carry the fiction (findings, the Galaxy, Log IDs) because there the story is the product. Internal tooling uses functional names, because every invented noun in a tool is a tax on the operator's mental context. Renames this ratifies: **Fluncle's Helm → the Cockpit** (app name, window, tray, Dock, `fluncle cockpit`, docs), **the glass → the visuals** ([Start visuals]), **the bridge → the sync server**, raise/stand down → start/stop. The Log ID and finding vocabulary stay everywhere: they are data, not decoration.
+**The naming law (ratified 2026-07-06): canon lives where the crew looks; tools speak plainly.** Public surfaces carry the fiction; internal tooling uses functional names. **Amended by the taste pass: rename the face, keep the plumbing.** Visible strings say Cockpit / the visuals / start / stop (window title, tray, Dock, docs, `fluncle cockpit` as the CLI verb, every UI string including the pre-flight's narration lines); internal identifiers (`com.fluncle.helm`, `helm.key`, `helm://`, `apps/helm`, `packages/live/src/glass`, env vars) keep their names — invisible to the operator, and renaming them bought four migration hazards for zero tax relief. The word is **recording**, not "take" (the schema's word; the law cuts both ways). DESIGN.md's doctrine uses of "glass" (the Through-the-Glass Rule) are web-canon, not the renderer — excluded. The rename is its own zero-feature PR, landed after the queue ships, never coupled to a feature.
 
-- **Everything is an action.** Buttons are verb + object: "Post to TikTok", "Add to tracklist", "Create clip", "Derive cues", "Start visuals". If a UI element is not an action, a datum, or artwork, it does not ship.
-- **No narration.** No section descriptions, no explanatory paragraphs, no personality copy. The failed example, preserved as the counter-example: "The oldest dressed finding still off TikTok. Post it by hand. The caption never survives the inbox, so it's here to copy." The replacement is a row: cover art, `IYRE — Glowing Embers`, `020.2.3Y`, `17d`, [Copy caption] [Copy video URL] [Mark posted]. The data explains itself; the buttons say what happens.
-- **Dense instrument.** Tabular rows over cards; small tight type; minimal padding; a full station visible without scrolling at typical window size. The anchors are Raycast and Linear: keyboard-first, instant, earned familiarity, zero decoration, the tool disappears into the task.
-- **Keyboard-first.** The command palette (below) reaches every action; single-key loops where a station is a queue; every interactive row focusable.
-- **The visual warmth is the music's.** Album art and video posters are the only images. The Warm Dark tokens (via @fluncle/ui) carry the identity; gold marks primary actions and the current selection, never status.
-- **Numbers behave.** Oxanium `tabular-nums` for every count, age, coordinate, and duration; ages and clocks never jitter their neighbors.
-- **States, not spinners.** Every action shows default / running / done / failed inline; long runs stream real output into the run drawer (the existing SSE pattern). Skeletons for loading surfaces; empty states state the fact and offer the action ("No plans. [Create plan]") in five words, not a paragraph.
-- **Motion conveys state only.** 150–250ms, ease-out, reduced-motion collapses to instant. No entrances, no choreography.
+- **Everything is an action.** Verb + object: "Post to TikTok", "Add to tracklist", "Create clip", "Derive cues", "Start visuals". If an element is not an action, a datum, or artwork, it does not ship.
+- **No narration.** The preserved counter-example: "The oldest dressed finding still off TikTok. Post it by hand. The caption never survives the inbox, so it's here to copy." The replacement is a row: cover, `IYRE — Glowing Embers`, `020.2.3Y`, `17d`, [Copy caption] [Copy video URL] [Mark posted].
+- **Dense instrument.** Tabular rows; small tight type; minimal padding; a surface visible without scrolling. Anchors: Raycast, Linear.
+- **Keyboard-first.** Single-key loops in the queue; every row focusable; the palette reaches everything.
+- **The visual warmth is the music's.** Cover art and posters are the only images; gold marks actions and selection, never status.
+- **Numbers behave.** Oxanium `tabular-nums` everywhere; nothing jitters.
+- **States, not spinners.** Inline default/running/done/failed; long runs stream into the run drawer; empty states are a fact plus an action.
+- **Motion conveys state only** — with one sanctioned exception: **the zero state may celebrate.** The three mandated delight moments: (1) the zero-state reward — the last cover cleared, warmly lit, one word (`clear`), a 200ms settle; (2) tactile action-fire — gold flash, the row completing, an optional soft tick (muteable, reduced-motion-gated); (3) music scores the work — preview audio auto-plays in the tag loop and the posting row. Zero prose, pure Fluncle.
 
-## The command palette
+## The queue (home)
 
-Built on the Command primitive already vendored in @fluncle/ui (cmdk 1.1.1, proven under React 19 in this repo — zero new dependencies). Two groups: Actions and Objects (findings, plans, takes, mixtapes — server-searched async with `shouldFilter` off, `keywords` carrying Log IDs and galaxy-slug handles so `020.2.3Y` finds its row). Linear's law applies: **actions scope to the active station and selection**, with the station shown as a badge above the input; the nested-pages pattern (Backspace pops) drills from an object into its actions. The palette is the app's front door.
+Mechanics (proven Linear/Superhuman shapes, trimmed to one operator):
 
-## Attention (home)
+- Single-key primary action per row, **auto-advancing**.
+- **Two-tier ordering**, not per-source curves: deadline rows by time-to-deadline, everything else oldest-first. (The curve framework was speculative generality for exactly one deadline source.)
+- **Snooze until time** (plain); **"Won't do"** as a distinct, undoable, permanent dismissal — without it, deliberately-ignored rows make the queue a guilt list.
+- **A bounded working set**: due-today/top-N counts toward zero; older rows age into a cold backlog visible on demand. Zero stays winnable.
+- **One daily digest nudge** ("4 waiting, oldest 17d"); only true deadlines (the TikTok bounce) earn an individual push. A notification IS its action: it opens the Cockpit at the row.
+- **Trust rule**: never surface a row the daemon cannot confirm is actionable (inherit the posting gatherer's conservatism). One false row kills the queue.
 
-The mechanics are the proven Linear/Superhuman queue shape: each row has a single-key primary action that fires and **auto-advances** to the next row; snooze hides a row **until a chosen time or until its state changes, whichever comes first** (never a dumb timer); the zero state is the design's whole point. Ordering is weighted urgency: deadline-bearing sources decay toward now, age-based sources grow linearly, ties fall to oldest-first; each source declares its own curve.
+The sources (data-honesty verified):
 
-The sources, with their data-honesty verdicts (T1-verified):
+| Source                                           | State today                                                                                                                                                                                                                                                                              | Verdict               |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| Untagged findings                                | `listTracks({placement:"unplaced"})` + count                                                                                                                                                                                                                                             | EXISTS                |
+| Unposted to TikTok                               | `social_posts`; Pulse computes it today                                                                                                                                                                                                                                                  | EXISTS                |
+| Recordings without cues                          | `hasVideo && tracklist.length===0` off `list_recordings`                                                                                                                                                                                                                                 | EXISTS                |
+| Promoted, undistributed                          | `mixtapes.status='distributing'` + null social URLs                                                                                                                                                                                                                                      | EXISTS                |
+| TikTok draft stale (24h bounce)                  | draft rows carry push time; deadline math is new; the current freshness logic counts a draft as "gone out" — fix both                                                                                                                                                                    | PARTIAL — small build |
+| Unreviewed renders (renamed from "taste review") | No verdict state exists; the LLM taste judge was prototyped and dropped. Honest options: `finalize_track_video` (agent-tier, the box's natural last POST) also writes a `gate.advisories[]` summary, or a `video_reviewed_at` column + an operator [Mark reviewed]. Phase 2, either way. | NEEDS NEW STATE       |
+| Drip queue empty                                 | `list_clip_posts` + pending counts                                                                                                                                                                                                                                                       | EXISTS                |
 
-| Source                               | State today                                                                                                                                                                          | Verdict                       |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------- |
-| Untagged findings                    | `listTracks({placement:"unplaced"})` + free count                                                                                                                                    | EXISTS                        |
-| Unposted to TikTok                   | `social_posts` reads; the Pulse station computes it today                                                                                                                            | EXISTS                        |
-| Takes without cues                   | `hasVideo && tracklist.length===0` off `list_recordings`                                                                                                                             | EXISTS                        |
-| Promoted, undistributed              | `mixtapes.status='distributing'` + null social URLs                                                                                                                                  | EXISTS                        |
-| TikTok draft gone stale (24h bounce) | `status='draft'` rows carry their push time; the deadline math is new, and the current freshness logic counts a draft as "gone out" — a bounced draft never resurfaces. Fix both.    | PARTIAL — small honest build  |
-| Render awaiting taste review         | No gate verdict exists server-side (judge outputs live in R2 bundles only). Needs a verdict write-back (one column or table the render box POSTs into) before this source can exist. | NEEDS NEW STATE — scoped v1.2 |
-| Drip queue empty                     | `list_clip_posts` + pending-clip counts                                                                                                                                              | EXISTS                        |
+Rows for sources whose actions are not yet native **deep-link to the web /admin surface** — the queue routes; the operator never has to remember which world a task lives in.
 
-The nudge engine generalizes the shipped 18h rule: one rule per source, daemon-side, per-day dedupe, native notifications; a notification IS its action (clicking opens the Cockpit at the row).
-
-## The stations
-
-Each station is its action inventory. Three exist today (Show, Set lifecycle, Pulse); the rest port from web /admin, which is bigger than a first look suggests: the pipeline board alone carries the Tag, Enrich, Note, Context, Observation, and Push dialogs plus the Discogs/Last.fm workflow cells, and every one of those needs a home before the board retires.
-
-### Intake
-
-- [Add finding] — paste a Spotify link; enrichment stages render as passive state.
-- A candidates tray: parked links, each [Add] / [Discard].
-
-### The finding inspector (new in this revision — the board's orphan home)
-
-Reached from any finding row or the palette: one drawer with the per-finding actions the web board's dialogs own today — [Tag], [Enrich], [Edit note], [Edit context], [Observation], [Push] — plus the workflow cells (Discogs/Last.fm state) as data. The board retires only when this inspector covers every cell.
-
-### Tag (port #1)
-
-- The untagged queue, one finding at a time: cover art large (decided), preview audio auto-playing, the vibe matrix under the arrow keys, Enter places and advances. [Skip] [Undo last].
-- `12 left` from the existing filtered count. Done state: the empty queue.
-
-### Renders
-
-- The render queue as rows: [Requeue video], [Watch]. Box state (conductor phase, current render age, last result) as data.
-- Gate flags surface in Attention once the verdict write-back exists (v1.2).
-
-### Posting
-
-- The next-unposted row with the full set: [Copy caption] [Copy video URL] [Open post asset] [Push TikTok draft] [Mark posted] [Mark failed] — the web Push dialog's exact capabilities (it is the proven prototype; the TikTok 5-per-24h cap warning carries over).
-- History rows: platform, date, link.
-
-### Plans (port #2)
-
-- [Create plan]; the editor: search-and-add from the archive, drag to order, [Remove], autosave, [Copy handle], Beatport deep-links (all exist on web and port).
-- New work, not ports: [Export to Rekordbox] (M2, wraps the existing script) and [Copy tracklist text].
+## The workbenches
 
 ### Show (exists; M5)
 
-- Tracklist picker → [Start visuals]; the pre-flight as checklist rows (the `[clear]`/`[hold]` tokens are real machine output and stay); [Depart anyway]; [Stop].
-- OBS stays out (decided): the operator is in OBS anyway for the Twitch stream; the Cockpit never layers over it.
-- Links: the visuals page, the phone remote.
+- Picker → [Start visuals]; the pre-flight checklist ([clear]/[hold] are real machine output); [Depart anyway]; [Stop]. OBS stays out (decided). Links: the visuals page, the phone remote. `packages/live` internals and the `show` script are rename-excluded (the Cockpit walks up to them by path).
 
-### Set lifecycle (exists)
+### Set lifecycle (exists; grows the local-tool wins)
 
-- Capture (M5): the ~/Movies scan → [Upload as take]. At upload, the daemon also generates the take's two analysis artifacts locally and uploads them beside it: the visual waveform (`audiowaveform -b 8` peaks JSON) and the energy envelope (`analyze-set`, today staged only at mixtape-distribute time — this moves it to take-upload, keyed by recording id). New wiring, local-run, no Worker involvement.
-- Cues (M2): [Derive cues] → preview rows → [Attach to take]. [Export plan to Rekordbox].
-- The shelf: plan / take / promoted lanes; [Promote to mixtape] (confirm); [Distribute] (M5).
-- [Announce] is NEW plumbing, not a port: no mixtape announce op exists (the Telegram machinery is findings-only today). Scope: one operator-tier op + button for the Telegram crew announcement; the newsletter mention stays in the newsletter flow.
-- [Render set video] runs LOCALLY (corrected: `set:render` is the operator's evening GPU job and the M5 is the GPU machine) — a streamed run, not a box conduction.
+- Capture (M5): ~/Movies scan → [Upload as recording]. **At upload, a spawned streamed run** executes `analyze-set` (first-time staging — it exists as code but was never staged to R2 for anything; its envelope already contains `peaks[]`, so the separate audiowaveform binary is dropped) and uploads `recordings/<id>/studio-envelope.json` via a **net-new agent-tier arbitrary-key presign op** (the current recording presign is multipart-only with a hardcoded key); `promote_recording` copies the artifact forward to the mixtape's key.
+- Cues (M2): [Derive cues] → preview → [Attach]. [Export to Rekordbox] lives HERE (it already exists in this station; the draft's Plans-station copy was an ownership overlap — resolved to one owner).
+- The shelf: plan / recording / promoted lanes; [Promote to mixtape]; [Distribute] (M5); **[Announce]** — new plumbing (one operator-tier op: the Telegram crew announcement; nothing mixtape-shaped exists today); [Render set video] — a local streamed run of the operator's GPU job.
 
-### Studio (port #3 — the local-ffmpeg station, scoped at its TRUE size)
+### The Studio lane (the local-ffmpeg win, cut to what earns the move)
 
-The web Studio is 1,500 lines and owns more than clipping. The port covers all of it:
+- **[Create clip], locally**: the one existing recipe `clipCutFfmpegArgs` — extracted to **@fluncle/contracts** (dep-light, already shared by CLI and Cockpit; the box needs no import, it runs the compiled CLI) — cuts in seconds against the local or R2-cached master; the clip plays inline; [Re-cut]. This kills the hidden out-of-band CLI render step in today's flow.
+- The cue rail renders against the upload-time envelope (wavesurfer v7 Regions for in/out handles).
+- The clip library's drip controls (kill switch, schedule) stay web for now, deep-linked; they move only if felt pain says so — and no further web-side drip UI gets built either way.
+- [Caption clip] does not ship (decided): clips go out clean per the standing decision; captions belong to the platform post.
+- Publish-as-mixtape, the promoted-mixtape block, resync-from-cues: stay web, deep-linked. Port on felt pain.
 
-- The cue rail (ports: RecordingCueRail, the energy lane, the Video scrubber and crop frame — all Worker-free components), rendered against the take's precomputed peaks + envelope; region in/out handles via wavesurfer v7 Regions.
-- [Create clip] — the local lane calls the ONE existing recipe: `clipCutFfmpegArgs` (already pure, tested, and single-sourced in apps/cli; extracted to a shared package so CLI, box, and Cockpit import one function — byte-identical output by construction). An optional `h264_videotoolbox` throwaway preview gives instant [Re-cut] feedback and is never the published artifact.
-- The clip library + drip controls (absorbing web /admin/clips, including #325's kill switch, batch schedule, per-clip drip state): [Pause drip] / [Resume], [Schedule clip], [Remove from schedule]. Same table, same ops — a clip auto-enrols on create; no parallel queue exists or ever will.
-- [Publish as mixtape], the promoted-mixtape block (dream note, SoundCloud link, the distribution strip, [Make YouTube public], the set-video toggle), and [Resync from cues] — the second half of the real Studio, previously unscoped.
-- OPEN DECISION (operator): [Caption clip] burn-in contradicts the shipped deliberate choice that clips go out clean (set footage reads badly under captions; the caption belongs to the platform post). If it ships anyway, it is libass with a semi-transparent box, never drawtext — but the default position is: clips stay clean, the action does not ship.
+### Plans, Tag, the finding inspector, Newsletter
 
-### Newsletter (previously unaddressed)
+- Stay web, deep-linked from the queue. If daily use later argues for a port, each port PR deletes its web counterpart at parity, and the tag loop ships as the queue's drill-in first (one component, three doors: the loop, the inspector action, the palette).
 
-The weekly authoring/send surface exists on web /admin and is desk work. It ports late (v1.3) as a small station (the draft view + [Send] against the existing flow) or explicitly stays web until absorbed; it is named here so the strangler never orphans it.
+## The posting cards (two rituals, two cards)
 
-### Pulse (exists, tightened)
-
-- The system grid as data. [Send test nudge], [Open /status].
+- **The desk push** (Cockpit posting row): [Copy caption] [Push TikTok draft] [Open post asset] [Mark failed] — the web Push dialog's capabilities, with the 5-drafts-per-24h warning.
+- **The phone finish** (web, always-up, deliberately mobile — the one admin surface designed for the phone): the draft is already in the TikTok inbox; the card carries caption-copy, **the official-sound search string** (title + artist), cover-save to camera roll, and **a URL-paste field + [Mark posted]** (the flow requires the real share URL). This card is the web /admin end-state's centerpiece and never leaves the web.
 
 ## The machine model
 
-State lives in the Worker; both Cockpits read and write the same truth through the admin API. The Cockpit adds asset geography: machine-bound files (takes in ~/Movies, master.db) badge their actions server-enforced per manifest, shown as a muted `→ M2` hint elsewhere. Heavy files move through R2, never peer-to-peer.
+State lives in the Worker; both Cockpits read/write the same truth through the admin API. Machine-bound assets (recordings in ~/Movies, master.db) badge their actions, server-enforced. Heavy files move through R2.
 
-## The shrink end-state (corrected)
+## The permanent API (what never retires)
 
-Web /admin ends as: **the post card** (the Push dialog's capabilities as one always-up route: video download, caption copy, push draft, mark posted) **plus the permanent auth plumbing** — the four OAuth start/callback pairs (Spotify admin-login AND Spotify API, YouTube, Mixcloud) and logout are the only way to mint the provider tokens the CLI, box, and enrichment depend on, and they survive forever. The Spotify callback multiplexes admin-login with API reconnect; neither purpose may be deleted. Everything else — board, tag, plans, studio, clips, newsletter routes and their server functions — retires as its Cockpit station absorbs its daily use.
-
-The drip tension is ratified: #325's web drip controls shipped as the only operator control while this direction formed; they are throwaway by construction. No further web-side drip UI; the Studio station absorbs the controls in v1.3; v1.4 deletes /admin/clips including them.
+UI routes and contract ops retire separately. The admin/agent contract ops with headless callers survive regardless of any UI decision — among them: `drip_clips` (the drip cron), the newsletter ops (the Friday cron), the clip-cut chain (the box sweep + CLI), the recordings/cues ops (Rekordbox scripts + the Cockpit), the track enrichment ops (the box crons + skills). The four OAuth start/callback pairs (Spotify login AND API, YouTube, Mixcloud) + logout are permanent plumbing — the only way to mint provider tokens. The Spotify callback multiplexes admin-login with API reconnect; neither purpose may be deleted.
 
 ## The frame decision
 
-- **The Swift shim (current, shipped).** 517 lines, `swiftc`, tray + Dock + WKWebView + daemon custody + the `helm://` loopback proxy (macOS Local Network privacy blanks WKWebView on loopback; the proxy serves via URLSession — bespoke but stable).
-- **Tauri v2 (the named successor, criteria sharpened).** Its webview layer ships, as a maintained primitive, exactly the custom-protocol plumbing the shim hand-rolled. Flip to Tauri only when (a) the proxy/window plumbing becomes a recurring maintenance tax, or (b) a real mobile target materializes (Tauri v2 iOS/Android is GA). Neither is true today.
-- **Electron**: never (a second Chromium for a two-Mac internal tool). **Full native Swift**: structurally wrong (abandons @fluncle/ui and the strangler reuse).
+The Swift shim stays (517 lines, tray + Dock + WKWebView + custody + the `helm://` loopback proxy). Tauri v2 is the named successor — its webview layer ships the custom-protocol plumbing the shim hand-rolled — triggered only by recurring proxy/window maintenance tax or a real mobile target. Electron never; full native Swift structurally wrong.
 
-## The rename sweep (v1.1 item 0 — measured radius)
+## Sequencing (inverted by the panel: value first, churn last)
 
-- **glass → visuals**: ~245 sites (packages/live 22 files + apps/helm show-control/shim + 9 docs). Careful: incidental "glass" in apps/web styles/game files is NOT the renderer — excluded.
-- **bridge → sync server**: ~214 sites (15 files + docs + contract).
-- **helm → cockpit**: ~241 sites. The five tricky pieces: (1) the LaunchAgent label migration (`launchctl bootout` the old `com.fluncle.helm` before installing `com.fluncle.cockpit` — the CLI owns the transition); (2) persisted config filenames (`helm.key`, `helm-dir`, `helm-nudge.json`, the log) migrate-on-first-boot so the key and nudge dedupe survive; (3) the /Applications app is a NEW bundle id — the installer removes the old app; (4) the `helm://` URL scheme may stay as internal plumbing (invisible, shrinks the radius) — decided at sweep time; (5) the tray glyph needs a new SF Symbol (no "cockpit" wheel exists).
-- Non-sites, verified: no registry entries, no turbo.json references — the sweep is code+docs+launchd+configs only.
+- **Phase 1 — The queue + the mixtape-day wins.** The attention queue as home (the five EXISTS sources; two-tier order; snooze/won't-do; bounded working set; digest nudge; the zero-state reward; deep-links for everything non-native). The local clip-cut (@fluncle/contracts extraction). The [Announce] op. Upload-time envelope staging (the new presign op + spawned analyze-set). The stale-draft fix. **Then stop and see what's actually still wanted.**
+- **Phase 2 — Names + the second ring, on felt pain.** The face-only rename as its own zero-feature PR (visible strings; counts corrected: the raw radius was ~888 sites, which is exactly why the plumbing keeps its names). The unreviewed-renders source (pick the honest write-back). The palette (the vendored cmdk primitive; actions + objects, Linear's scoping law) — deferred here because station tabs + the queue already reach everything for one operator. The tag loop as the first drill-in port if tagging friction persists.
+- **Phase 3+ — Ports on felt pain only.** Each port PR deletes its web counterpart at parity. No terminal shrink phase exists; web /admin converges naturally toward the finish card + OAuth plumbing + whatever never earned a port.
 
-## Sequencing
+Each phase ships complete: implementation, tests, docs, product review, and the doctrine check that no narration crept in.
 
-- **v1.1 — Names + Attention.** The rename sweep (clean break, migrations above); the attention queue as home with the five EXISTS sources; the nudge engine generalized; the doctrine pass over the three existing stations (delete every sentence; re-type per density rules); the command palette on the vendored primitive; the finding inspector skeleton.
-- **v1.2 — The desk ports.** Tag; Plans (+ the two new export actions); the finding inspector completed (board-cell parity); the announce op; the gate-verdict write-back (unlocks the taste-review attention source); the stale-draft fix.
-- **v1.3 — The Studio, whole.** The cue rail against upload-time peaks+envelope; the shared clip-recipe module; local cut + videotoolbox preview; the clip library + drip controls absorbed; publish-as-mixtape + the promoted block + resync; the newsletter station (or its explicit deferral).
-- **v1.4 — The shrink.** Web /admin reduces to the post card + the permanent OAuth plumbing; every retired route's tests and server functions go with it; the surfaces doctrine and docs updated.
+## Decisions before handoff (operator)
 
-Each phase ships complete per the house standard: implementation, tests, docs, product review, and the doctrine check that no narration crept in.
-
-## Open decisions (operator)
-
-- [Caption clip]: ship it (libass, boxed) or honor the standing clips-ship-clean decision? Default: clean, no action.
-- The newsletter: port as a v1.3 station, or keep web until a later phase?
-- The `helm://` scheme: rename with the sweep or keep as invisible plumbing? Default: keep.
+1. **The direction amendment** — the panel's strongest recommendation, adopted in this Final: the Cockpit is additive (queue + local tools), web /admin CRUD survives as break-glass, ports happen on felt pain instead of by program. This softens the ratified "remove it entirely from the web app." Confirm or override.
+2. **Phase 1 as scoped** — the queue + local clip-cut + announce + envelope staging, nothing else. Confirm.
+3. **[Caption clip] stays unshipped** (clips go out clean) — confirm.
+4. **The face-only rename** (Cockpit/visuals on every visible string; plumbing keeps helm/glass identifiers) — confirm, or order the full 888-site sweep knowing its cost.
