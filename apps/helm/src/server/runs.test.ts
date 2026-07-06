@@ -3,12 +3,15 @@ import { describe, expect, test } from "bun:test";
 import { type RunSummary } from "../contract";
 import { createRunRegistry, type RunEvent, wrapInProcessGroup } from "./runs";
 
-/** Wait until the run leaves `running` (its final status event), with a floor. */
+/** Wait until the run leaves `running` (its final status event), with a floor.
+ *  15s (not 5s): these tests spawn real child processes and SIGINT them, and the
+ *  spawn + signal + exit round-trip can exceed 5s on a loaded CI box — a false-fail
+ *  that intermittently blocked deploy:gate. The pair with `bun test --timeout 20000`. */
 function waitForFinish(
   registry: ReturnType<typeof createRunRegistry>,
   feature: string,
   runId: string,
-  timeoutMs = 5000,
+  timeoutMs = 15000,
 ): Promise<RunSummary> {
   return new Promise((resolvePromise, rejectPromise) => {
     const timer = setTimeout(() => {
