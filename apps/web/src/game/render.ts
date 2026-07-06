@@ -1,5 +1,16 @@
+import {
+  ATLAS_MARGIN,
+  THREAD_STEP,
+  atlasCaption,
+  atlasMarkState,
+  atlasScale,
+  atlasThreadEnd,
+  atlasWorldRadius,
+  frontierTipIndex,
+  nearestStarIndex,
+} from "./atlas";
 import { palette } from "./palette";
-import { fnv1a } from "./placement";
+import { fnv1a, spiralPoint } from "./placement";
 import { type CarrierInfo, type RadarBlip, type SimState, wrapAngle } from "./sim";
 import {
   ASTEROID_SIZE,
@@ -52,7 +63,14 @@ type HitRect = {
   y: number;
 };
 
+/** The atlas overlay's per-frame inputs (open when present). */
+export type AtlasView = {
+  /** Latest pointer position in internal canvas px, for the hover label. */
+  pointer?: { x: number; y: number };
+};
+
 export type RenderView = {
+  atlas?: AtlasView;
   bootT: number;
   carrier?: CarrierInfo;
   endT: number;
@@ -268,6 +286,10 @@ export function createRenderer(container: HTMLElement): Renderer {
       drawFilmTexture(view.nowS, 1);
       drawHud(view);
 
+      if (view.atlas) {
+        drawAtlas(view);
+      }
+
       if (view.paused) {
         drawPause(view);
       }
@@ -301,6 +323,10 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     if (view.towedT > 0) {
       drawTowed(view);
+    }
+
+    if (view.atlas) {
+      drawAtlas(view);
     }
 
     if (view.paused) {
@@ -1145,6 +1171,8 @@ export function createRenderer(container: HTMLElement): Renderer {
       ? "Touch sides to steer · hold centre to boost"
       : "Steer with arrows · hold space to boost";
     const restLine = "Fly to a star to log it and refuel. Dry tank, towed home.";
+    // The atlas is a keyboard instrument; touch gates skip the line.
+    const atlasLines = view.touch ? [] : ["C opens the atlas."];
     const lines =
       width < 330
         ? [
@@ -1153,8 +1181,9 @@ export function createRenderer(container: HTMLElement): Renderer {
               : ["Steer with arrows", "Hold space to boost"]),
             "Fly to a star to log it and refuel.",
             "Dry tank, towed home.",
+            ...atlasLines,
           ]
-        : [steerLine, restLine];
+        : [steerLine, restLine, ...atlasLines];
 
     for (let index = 0; index < lines.length; index++) {
       const line = lines[index];
@@ -1375,27 +1404,249 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.fillRect(0, 0, width, height);
     ctx.globalAlpha = 1;
 
+    const baseY = Math.round(height * 0.42);
+
     ctx.textAlign = "center";
     ctx.fillStyle = palette.cream;
     ctx.font = "800 14px ui-sans-serif, system-ui, sans-serif";
-    ctx.fillText("Paused", width / 2, Math.round(height * 0.42));
+    ctx.fillText("Paused", width / 2, baseY);
 
     ctx.fillStyle = palette.creamMuted;
     ctx.font = "9px ui-sans-serif, system-ui, sans-serif";
-    ctx.fillText("The galaxy will wait.", width / 2, Math.round(height * 0.42) + 18);
+    ctx.fillText("The galaxy will wait.", width / 2, baseY + 18);
+
+    let hintY = baseY + 36;
+
+    // Keyboard players get the chart reminder; touch has no atlas key.
+    if (!view.touch) {
+      ctx.fillStyle = palette.creamDim;
+      ctx.font = "8px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillText("The atlas is on C.", width / 2, baseY + 32);
+      hintY = baseY + 48;
+    }
 
     const blink = reducedMotion ? 1 : 0.5 + 0.5 * Math.sin(view.nowS * 3);
 
     ctx.globalAlpha = blink;
     ctx.fillStyle = palette.goldBright;
     ctx.font = '8px "Oxanium", monospace';
-    ctx.fillText(
-      view.touch ? "Tap to fly on" : "Esc to fly on",
-      width / 2,
-      Math.round(height * 0.42) + 36,
-    );
+    ctx.fillText(view.touch ? "Tap to fly on" : "Esc to fly on", width / 2, hintY);
     ctx.globalAlpha = 1;
     ctx.textAlign = "left";
+  }
+
+  // The atlas (C): the top-down map of the voyage — the in-game chart and the
+  // demo surface in one. The spiral is drawn from placement.ts's own
+  // spiralPoint — the exact function that placed the stars — so the thread and
+  // its marks share one source of truth and cannot drift apart. Warm Dark
+  // canon: the thread is a dim warm line (never neon), logged findings are
+  // small filled cream marks, uncharted ones dim hollow gold rings, Earth
+  // keeps the radar's blue idiom, and the ship is a cream chevron. The view is
+  // a static zoom-to-fit (no pan/zoom easing to gate); the only motion is the
+  // close-hint blink, stilled under reduced-motion.
+  function drawAtlas(view: RenderView): void {
+    const { sim } = view;
+    const stars = sim.stars;
+
+    // The chart is its own plate: an opaque Deep Field ground so the bright
+    // cockpit (ship sprite, HUD) never ghosts through the map. The film pass
+    // that follows keeps it on the same tube as everything else.
+    ctx.fillStyle = palette.deepField;
+    ctx.fillRect(0, 0, width, height);
+
+    const threadEnd = atlasThreadEnd(stars);
+    const scale = atlasScale(atlasWorldRadius(stars, sim.ship), width, height, ATLAS_MARGIN);
+    const cx = width / 2;
+    const cy = height / 2;
+    const toX = (worldX: number): number => cx + worldX * scale;
+    const toY = (worldY: number): number => cy + worldY * scale;
+
+    // The voyage thread: one faint warm line from the clear-space edge to just
+    // past the frontier tip.
+    ctx.strokeStyle = palette.creamDim;
+    ctx.globalAlpha = 0.55;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+
+    const start = spiralPoint(0);
+
+    ctx.moveTo(toX(start.x), toY(start.y));
+
+    for (let theta = THREAD_STEP; theta < threadEnd; theta += THREAD_STEP) {
+      const point = spiralPoint(theta);
+
+      ctx.lineTo(toX(point.x), toY(point.y));
+    }
+
+    const end = spiralPoint(threadEnd);
+
+    ctx.lineTo(toX(end.x), toY(end.y));
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // Earth at the center — the radar's own idiom, a notch larger.
+    const earthX = Math.round(toX(0));
+    const earthY = Math.round(toY(0));
+
+    ctx.fillStyle = palette.coolBlue;
+    ctx.fillRect(earthX - 2, earthY - 2, 5, 5);
+    ctx.fillStyle = palette.creamBright;
+    ctx.fillRect(earthX, earthY, 1, 1);
+
+    // The frontier tip, subtly marked: a dim gold diamond around the newest finding.
+    const tip = stars[frontierTipIndex(stars)];
+
+    if (tip !== undefined) {
+      ctx.save();
+      ctx.translate(Math.round(toX(tip.x)), Math.round(toY(tip.y)));
+      ctx.rotate(Math.PI / 4);
+      ctx.strokeStyle = palette.goldDim;
+      ctx.globalAlpha = 0.8;
+      ctx.strokeRect(-3.5, -3.5, 7, 7);
+      ctx.restore();
+      ctx.globalAlpha = 1;
+    }
+
+    // Every finding at its true position: logged burns cream, the lifetime log
+    // fills quieter (map knowledge carries across deaths), uncharted stays a
+    // dim hollow ring.
+    for (const star of stars) {
+      const starX = Math.round(toX(star.x));
+      const starY = Math.round(toY(star.y));
+      const state = atlasMarkState(star);
+
+      if (state === "uncharted") {
+        ctx.strokeStyle = palette.goldDim;
+        ctx.globalAlpha = 0.7;
+        ctx.beginPath();
+        ctx.arc(starX, starY, 1.8, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        continue;
+      }
+
+      pixelDiamond(starX, starY, 1, state === "logged" ? palette.creamBright : palette.creamMuted);
+    }
+
+    // The ship: a small cream chevron at its position, nose along its heading.
+    ctx.save();
+    ctx.translate(Math.round(toX(sim.ship.x)), Math.round(toY(sim.ship.y)));
+    ctx.rotate(sim.ship.heading);
+    ctx.fillStyle = palette.cream;
+    ctx.beginPath();
+    ctx.moveTo(4, 0);
+    ctx.lineTo(-3, -3);
+    ctx.lineTo(-1.5, 0);
+    ctx.lineTo(-3, 3);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    drawAtlasLabel(view, toX, toY, scale);
+
+    // The frame text: title, the growth caption, the way back.
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = palette.cream;
+    ctx.font = '800 12px "Oxanium", monospace';
+    ctx.fillText("THE ATLAS", cx, 5);
+
+    ctx.textAlign = "left";
+    ctx.font = '7px "Oxanium", monospace';
+    ctx.fillStyle = palette.creamMuted;
+    ctx.fillText(atlasCaption(stars), 8, height - 12);
+
+    const blink = reducedMotion ? 1 : 0.5 + 0.5 * Math.sin(view.nowS * 3);
+
+    ctx.globalAlpha = blink;
+    ctx.textAlign = "right";
+    ctx.fillStyle = palette.goldBright;
+    ctx.font = '7px "Oxanium", monospace';
+    ctx.fillText("C to fly on", width - 8, height - 12);
+    ctx.globalAlpha = 1;
+    ctx.textAlign = "left";
+  }
+
+  // The chart's readout: the star under the pointer (when one is over the map)
+  // or the star nearest the ship — its coordinate in the log-card idiom plus
+  // the Artist — Title line, on a small tape-black chip clamped on-screen.
+  function drawAtlasLabel(
+    view: RenderView,
+    toX: (worldX: number) => number,
+    toY: (worldY: number) => number,
+    scale: number,
+  ): void {
+    const { sim } = view;
+    const stars = sim.stars;
+
+    if (stars.length === 0) {
+      return;
+    }
+
+    const pointer = view.atlas?.pointer;
+    let index = -1;
+
+    if (pointer) {
+      const worldX = (pointer.x - width / 2) / scale;
+      const worldY = (pointer.y - height / 2) / scale;
+
+      index = nearestStarIndex(stars, worldX, worldY, 14 / scale);
+    }
+
+    if (index < 0) {
+      index = nearestStarIndex(stars, sim.ship.x, sim.ship.y);
+    }
+
+    const star = stars[index];
+
+    if (star === undefined) {
+      return;
+    }
+
+    const markX = Math.round(toX(star.x));
+    const markY = Math.round(toY(star.y));
+
+    // A cream ring singles the labelled star out.
+    ctx.strokeStyle = palette.cream;
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    ctx.arc(markX, markY, 4, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    const coordinate = `fluncle://${star.logId}`;
+    const detail = `${star.artistLine} — ${star.title}`;
+
+    ctx.font = '9px "Oxanium", monospace';
+
+    const coordinateWidth = ctx.measureText(coordinate).width;
+
+    ctx.font = "8px ui-sans-serif, system-ui, sans-serif";
+
+    const detailWidth = Math.min(ctx.measureText(detail).width, 170);
+    const chipWidth = Math.round(Math.max(coordinateWidth, detailWidth)) + 12;
+    const chipHeight = 26;
+    const chipX = Math.max(4, Math.min(width - 4 - chipWidth, markX + 8));
+    const chipY = Math.max(
+      18,
+      Math.min(height - 18 - chipHeight, markY - Math.round(chipHeight / 2)),
+    );
+
+    ctx.globalAlpha = 0.92;
+    ctx.fillStyle = palette.dustLine;
+    ctx.fillRect(chipX - 1, chipY - 1, chipWidth + 2, chipHeight + 2);
+    ctx.fillStyle = palette.tapeBlack;
+    ctx.fillRect(chipX, chipY, chipWidth, chipHeight);
+    ctx.globalAlpha = 1;
+
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = palette.gold;
+    ctx.font = '9px "Oxanium", monospace';
+    ctx.fillText(coordinate, chipX + 6, chipY + 4);
+    ctx.fillStyle = palette.cream;
+    ctx.font = "8px ui-sans-serif, system-ui, sans-serif";
+    ctx.fillText(clip(detail, chipWidth - 12), chipX + 6, chipY + 15);
   }
 
   resize(container.clientWidth || window.innerWidth, container.clientHeight || window.innerHeight);

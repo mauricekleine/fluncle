@@ -92,7 +92,8 @@ function GalaxyPage() {
       <h1 className="sr-only">Fluncle's Galaxy</h1>
       <p className="sr-only">
         A flight through Fluncle's Findings: every banger is a star at its Log ID coordinate. Steer
-        with the arrow keys, hold space to boost, fly to a star to log it and refuel.
+        with the arrow keys, hold space to boost, fly to a star to log it and refuel. Press C for
+        the atlas, a top-down map of the whole voyage; C or Escape closes it.
       </p>
       <div
         aria-label="Fluncle's Galaxy"
