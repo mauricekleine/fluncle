@@ -6,6 +6,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { type Dispatch, type SetStateAction, useEffect, useMemo, useState } from "react";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { type ClipDrip, ClipCard } from "@/components/admin/clip-card";
+import { UploadRecordingDialog } from "@/components/admin/upload-recording-dialog";
 import { Badge } from "@fluncle/ui/components/badge";
 import { Button } from "@fluncle/ui/components/button";
 import { Label } from "@fluncle/ui/components/label";
@@ -138,13 +139,27 @@ export const Route = createFileRoute("/admin/clips")({
 type LibraryClip = ClipDTO & { resolvedRecordingId: string | undefined };
 
 function ClipLibraryPage() {
-  const { clips: initialClips, drip: initialDrip, recordings } = Route.useLoaderData();
+  const {
+    clips: initialClips,
+    drip: initialDrip,
+    recordings: initialRecordings,
+  } = Route.useLoaderData();
   const queryClient = useQueryClient();
 
   const { data: clips } = useQuery<ClipDTO[]>({
     initialData: initialClips,
     queryFn: () => fetchAllClips(),
     queryKey: ["admin", "clips"],
+    refetchOnWindowFocus: true,
+  });
+
+  // The recordings shelf/index + the filter dropdown, seeded from the loader and refetched on
+  // focus — so a browser-uploaded recording lands here without a reload (the header
+  // "Upload recording" action invalidates this key on success).
+  const { data: recordings } = useQuery<RecordingDTO[]>({
+    initialData: initialRecordings,
+    queryFn: () => fetchRecordings(),
+    queryKey: ["admin", "recordings"],
     refetchOnWindowFocus: true,
   });
 
@@ -326,6 +341,13 @@ function ClipLibraryPage() {
   return (
     <AdminShell
       current="clips"
+      headerActions={
+        <UploadRecordingDialog
+          onUploaded={() =>
+            void queryClient.invalidateQueries({ queryKey: ["admin", "recordings"] })
+          }
+        />
+      }
       subtitle={`${clips.length} ${clips.length === 1 ? "clip" : "clips"} across every recording`}
       title="Clip library"
     >
@@ -528,9 +550,8 @@ function RecordingsIndex({
   if (recordings.length === 0) {
     return (
       <div className="mb-6 rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
-        No recordings yet. Create one from the CLI (
-        <code className="font-mono text-xs">fluncle admin recordings create --video set.mov</code>
-        ), then open it here to clip it.
+        No recordings yet. Hit <span className="font-medium text-foreground">Upload recording</span>{" "}
+        up top to stage a captured set, then open it here to clip it.
       </div>
     );
   }

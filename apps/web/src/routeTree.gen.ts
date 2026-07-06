@@ -43,6 +43,7 @@ import { Route as DocsSplatRouteImport } from './routes/docs.$'
 import { Route as DocsDotmdSplatRouteImport } from './routes/docs[.]md.$'
 import { Route as CliLatestDotshRouteImport } from './routes/cli/latest[.]sh'
 import { Route as ApiStatusRouteImport } from './routes/api/status'
+import { Route as AdminRendersRouteImport } from './routes/admin/renders'
 import { Route as AdminPlansRouteImport } from './routes/admin/plans'
 import { Route as AdminNewsletterRouteImport } from './routes/admin/newsletter'
 import { Route as AdminMixtapesRouteImport } from './routes/admin/mixtapes'
@@ -251,6 +252,11 @@ const ApiStatusRoute = ApiStatusRouteImport.update({
   id: '/api/status',
   path: '/api/status',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AdminRendersRoute = AdminRendersRouteImport.update({
+  id: '/renders',
+  path: '/renders',
+  getParentRoute: () => AdminRouteRoute,
 } as any)
 const AdminPlansRoute = AdminPlansRouteImport.update({
   id: '/plans',
@@ -483,6 +489,7 @@ export interface FileRoutesByFullPath {
   '/admin/mixtapes': typeof AdminMixtapesRoute
   '/admin/newsletter': typeof AdminNewsletterRoute
   '/admin/plans': typeof AdminPlansRoute
+  '/admin/renders': typeof AdminRendersRoute
   '/api/status': typeof ApiStatusRoute
   '/cli/latest.sh': typeof CliLatestDotshRoute
   '/docs.md/$': typeof DocsDotmdSplatRoute
@@ -554,6 +561,7 @@ export interface FileRoutesByTo {
   '/admin/mixtapes': typeof AdminMixtapesRoute
   '/admin/newsletter': typeof AdminNewsletterRoute
   '/admin/plans': typeof AdminPlansRoute
+  '/admin/renders': typeof AdminRendersRoute
   '/api/status': typeof ApiStatusRoute
   '/cli/latest.sh': typeof CliLatestDotshRoute
   '/docs.md/$': typeof DocsDotmdSplatRoute
@@ -628,6 +636,7 @@ export interface FileRoutesById {
   '/admin/mixtapes': typeof AdminMixtapesRoute
   '/admin/newsletter': typeof AdminNewsletterRoute
   '/admin/plans': typeof AdminPlansRoute
+  '/admin/renders': typeof AdminRendersRoute
   '/api/status': typeof ApiStatusRoute
   '/cli/latest.sh': typeof CliLatestDotshRoute
   '/docs.md/$': typeof DocsDotmdSplatRoute
@@ -703,6 +712,7 @@ export interface FileRouteTypes {
     | '/admin/mixtapes'
     | '/admin/newsletter'
     | '/admin/plans'
+    | '/admin/renders'
     | '/api/status'
     | '/cli/latest.sh'
     | '/docs.md/$'
@@ -774,6 +784,7 @@ export interface FileRouteTypes {
     | '/admin/mixtapes'
     | '/admin/newsletter'
     | '/admin/plans'
+    | '/admin/renders'
     | '/api/status'
     | '/cli/latest.sh'
     | '/docs.md/$'
@@ -847,6 +858,7 @@ export interface FileRouteTypes {
     | '/admin/mixtapes'
     | '/admin/newsletter'
     | '/admin/plans'
+    | '/admin/renders'
     | '/api/status'
     | '/cli/latest.sh'
     | '/docs.md/$'
@@ -1197,6 +1209,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiStatusRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/renders': {
+      id: '/admin/renders'
+      path: '/renders'
+      fullPath: '/admin/renders'
+      preLoaderRoute: typeof AdminRendersRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
     '/admin/plans': {
       id: '/admin/plans'
       path: '/plans'
@@ -1466,6 +1485,7 @@ interface AdminRouteRouteChildren {
   AdminMixtapesRoute: typeof AdminMixtapesRoute
   AdminNewsletterRoute: typeof AdminNewsletterRoute
   AdminPlansRoute: typeof AdminPlansRoute
+  AdminRendersRoute: typeof AdminRendersRoute
   AdminIndexRoute: typeof AdminIndexRoute
   AdminStudioRecordingIdRoute: typeof AdminStudioRecordingIdRoute
 }
@@ -1477,6 +1497,7 @@ const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminMixtapesRoute: AdminMixtapesRoute,
   AdminNewsletterRoute: AdminNewsletterRoute,
   AdminPlansRoute: AdminPlansRoute,
+  AdminRendersRoute: AdminRendersRoute,
   AdminIndexRoute: AdminIndexRoute,
   AdminStudioRecordingIdRoute: AdminStudioRecordingIdRoute,
 }

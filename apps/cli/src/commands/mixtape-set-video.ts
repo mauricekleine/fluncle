@@ -4,6 +4,15 @@
 // completes the upload itself. Used by the recording upload (`recordings create`)
 // via `uploadRenditionMultipart`.
 
+import {
+  buildCompleteXml,
+  type CompletedPart,
+  DEFAULT_PART_SIZE,
+  MAX_PARTS,
+  MIN_PART_SIZE,
+  type MultipartPlanPart,
+  planMultipart,
+} from "@fluncle/contracts/util/multipart";
 import { randomUUID } from "node:crypto";
 import { existsSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,81 +32,12 @@ export const SET_VIDEO_RENDITION = {
   height: 1080,
 } as const;
 
-// 16 MB default part — small enough that a home uplink reliably completes each PUT (100 MB
-// parts dropped the socket intermittently mid-upload), well above R2's 5 MB floor, and well
-// under the 10k-part cap for a multi-GB set. Paired with per-part retry (`putPart`) so a
-// single transient drop resumes instead of aborting the whole upload.
-export const DEFAULT_PART_SIZE = 16 * 1024 * 1024;
-
-// S3/R2's minimum part size (every part except the last must clear it).
-export const MIN_PART_SIZE = 5 * 1024 * 1024;
-
-// S3/R2's hard cap on parts per upload (mirrors the Worker's R2_MAX_PARTS).
-export const MAX_PARTS = 10_000;
-
-export type MultipartPlanPart = { end: number; partNumber: number; size: number; start: number };
-export type MultipartPlan = { partCount: number; partSize: number; parts: MultipartPlanPart[] };
-
-/**
- * Split a file of `contentLength` bytes into ordered, contiguous multipart chunks.
- * Grows the part size if the default would exceed the 10k-part cap, so any size fits.
- * Pure — the directly testable core of the upload (no ffmpeg, no network).
- */
-export function planMultipart(contentLength: number, partSize = DEFAULT_PART_SIZE): MultipartPlan {
-  if (!Number.isInteger(contentLength) || contentLength <= 0) {
-    throw new CliError(
-      "invalid_size",
-      `The rendition size must be a positive integer (got ${contentLength})`,
-    );
-  }
-
-  let effective = Math.max(partSize, MIN_PART_SIZE);
-
-  // Grow the part size so the chunk count never exceeds the cap (a huge set still fits
-  // in 10k parts). Only the last part may fall below the floor.
-  if (Math.ceil(contentLength / effective) > MAX_PARTS) {
-    effective = Math.ceil(contentLength / MAX_PARTS);
-  }
-
-  const parts: MultipartPlanPart[] = [];
-  let start = 0;
-  let partNumber = 1;
-
-  while (start < contentLength) {
-    const end = Math.min(start + effective, contentLength);
-    parts.push({ end, partNumber, size: end - start, start });
-    start = end;
-    partNumber += 1;
-  }
-
-  return { partCount: parts.length, partSize: effective, parts };
-}
-
-export type CompletedPart = { etag: string; partNumber: number };
-
-function escapeXml(value: string): string {
-  return value.replace(
-    /[<>&'"]/g,
-    (char) =>
-      ({ '"': "&quot;", "&": "&amp;", "'": "&apos;", "<": "&lt;", ">": "&gt;" })[char] ?? char,
-  );
-}
-
-/**
- * Build the CompleteMultipartUpload XML body S3/R2 expects: every part in ascending
- * partNumber order with its returned ETag. Pure + testable.
- */
-export function buildCompleteXml(parts: CompletedPart[]): string {
-  const ordered = [...parts].sort((a, b) => a.partNumber - b.partNumber);
-  const body = ordered
-    .map(
-      (part) =>
-        `<Part><PartNumber>${part.partNumber}</PartNumber><ETag>${escapeXml(part.etag)}</ETag></Part>`,
-    )
-    .join("");
-
-  return `<CompleteMultipartUpload>${body}</CompleteMultipartUpload>`;
-}
+// The multipart plan + completion XML are the PURE core of the upload — one source of
+// truth in `@fluncle/contracts/util/multipart`, shared with the browser recording uploader
+// (`apps/web/.../recording-upload.ts`). Re-exported so the CLI's callers + tests keep
+// importing them from this module; only the impure transport below (ffmpeg + the R2 PUTs)
+// lives in the CLI.
+export { buildCompleteXml, DEFAULT_PART_SIZE, MAX_PARTS, MIN_PART_SIZE, planMultipart };
 
 /**
  * The ffmpeg argv that derives the 1080p faststart rendition from the master. Pure
