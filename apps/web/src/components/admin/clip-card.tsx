@@ -1,18 +1,31 @@
 import {
+  ArrowSquareOutIcon,
+  CalendarBlankIcon,
   CheckIcon,
   CopyIcon,
   DownloadSimpleIcon,
-  PaperPlaneTiltIcon,
   PencilSimpleIcon,
   PlayIcon,
   ScissorsIcon,
   TrashIcon,
+  WarningCircleIcon,
 } from "@phosphor-icons/react";
 import { type ClipDTO, type RecordingDTO } from "@fluncle/contracts/orpc";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { InstagramIcon, TiktokIcon } from "@/components/platform-icons";
 import { Button } from "@fluncle/ui/components/button";
+import { Checkbox } from "@fluncle/ui/components/checkbox";
+import { Input } from "@fluncle/ui/components/input";
+import { Label } from "@fluncle/ui/components/label";
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@fluncle/ui/components/popover";
 import { Textarea } from "@fluncle/ui/components/textarea";
 import { formatClock, Video } from "@/components/video";
 import {
@@ -38,9 +51,12 @@ import { videoVersion } from "@/lib/media";
 // `get_clip_caption` (RFC plan→recording→mixtape §8 surface 4) — the one server-side
 // place that resolves a cue's `finding_id` to its published Log ID.
 //
-// Distribution is DEFERRED (the operator hand-posts; IG/TikTok have no API music path,
-// see RFC §1): the "Distribute" affordance is a disabled seam. When push-to-social
-// lands it becomes the live action here, writing `mixtape_clip_social_posts` rows.
+// Distribution rides the Instagram DRIP-FEED (clip-drip-feed RFC §3.6): every clip
+// auto-enters a queue and posts to Instagram on a jittered ~daily cadence. The old inert
+// "Distribute" seam is now the DRIP STATE — a chip reading `Scheduled for <date>` /
+// `Posted` (linking the permalink) / `Post failed`, with a popover to override the slot or
+// unschedule the clip (the operator-tier `set_clip_schedule` op). The page's global kill
+// switch pauses the whole drip. Reads `list_clip_posts` (merged onto the clip by the page).
 
 /** The built-caption shape from `GET /admin/clips/{clipId}/caption` (drops the `ok` flag). */
 type ClipCaption = {
@@ -48,6 +64,16 @@ type ClipCaption = {
   caption?: string;
   clipId: string;
   coordinates: string[];
+};
+
+/**
+ * One clip's Instagram drip-feed row (`GET /admin/clips/social` → `list_clip_posts`), the
+ * subset the card renders. `undefined` on the card means the clip has no schedule row yet.
+ */
+export type ClipDrip = {
+  postedUrl?: string;
+  scheduledFor: string;
+  status: "failed" | "posted" | "scheduled";
 };
 
 // Fetch the clip's BUILT caption (clean copy + resolved `fluncle://` coordinate line(s))
@@ -79,14 +105,23 @@ function useClipCaption(clip: ClipDTO, enabled: boolean) {
 export function ClipCard({
   clip,
   deleting,
+  drip,
   onDelete,
+  onToggleSelected,
   recording,
+  selected,
 }: {
   clip: ClipDTO;
   deleting: boolean;
+  /** This clip's Instagram drip-feed row, when it has one (merged from `list_clip_posts`). */
+  drip: ClipDrip | undefined;
   onDelete: () => void;
+  /** Toggle this clip in the page's batch-schedule selection (cut clips only). */
+  onToggleSelected: () => void;
   /** The source recording, when it's in the loaded list (title + the Studio back-link). */
   recording: RecordingDTO | undefined;
+  /** Whether this clip is in the batch-schedule selection. */
+  selected: boolean;
 }) {
   const queryClient = useQueryClient();
   const isDone = clip.status === "done";
@@ -213,26 +248,29 @@ export function ClipCard({
           saving={saveCaption.isPending}
         />
 
+        {/* The Instagram drip state: a chip reading this clip's schedule/post status, with a
+            popover to override the slot or unschedule; a select checkbox joins it to the page's
+            batch-schedule action. Only a cut (`done`) clip is postable — a pending clip shows
+            nothing here (the drip cron skips uncut clips server-side). */}
+        {isDone ? (
+          <div className="flex items-center gap-2">
+            <label className="flex shrink-0 cursor-pointer items-center">
+              <Checkbox
+                aria-label={selected ? "Deselect clip" : "Select clip to schedule"}
+                checked={selected}
+                onCheckedChange={onToggleSelected}
+              />
+            </label>
+            <ClipDrip clipId={clip.id} drip={drip} />
+          </div>
+        ) : null}
+
         <div className="mt-auto flex items-center gap-1.5 pt-1">
           {isDone ? (
             <ClipDownloads downloads={downloads} title={setTitle} />
           ) : (
             <span className="text-xs text-muted-foreground">Cutting…</span>
           )}
-
-          {/* Distribution seam (deferred): push-to-social lands here, writing
-              mixtape_clip_social_posts rows. A clearly-inert disabled affordance — the
-              aria-label carries the meaning for AT (a tooltip on a disabled control is
-              keyboard-unreachable), the native title hints for a hovering mouse. */}
-          <Button
-            aria-label="Distribute — lands later"
-            disabled
-            size="icon-sm"
-            title="Pushing to a platform lands here later"
-            variant="ghost"
-          >
-            <PaperPlaneTiltIcon aria-hidden="true" />
-          </Button>
 
           <Button
             aria-label="Delete clip"
@@ -248,6 +286,229 @@ export function ClipCard({
       </div>
     </article>
   );
+}
+
+// The clip's Instagram drip-feed control: at rest a quiet status chip (scheduled/posted/
+// failed, or "Not scheduled" when the clip has no row yet), and a popover that sets or
+// overrides the drip slot (a `datetime-local` field → the operator-tier `set_clip_schedule`
+// op) or unschedules the clip. Writing the schedule invalidates the page's `clip-posts` read
+// so the chip re-reads. A `posted`/`failed` row can be re-armed by re-scheduling it.
+function ClipDrip({ clipId, drip }: { clipId: string; drip: ClipDrip | undefined }) {
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string>();
+
+  // The datetime-local field seed: the clip's current slot (rendered in local time) if it has
+  // one, else the browser default (empty ⇒ the operator picks).
+  const [when, setWhen] = useState("");
+
+  useEffect(() => {
+    if (open) {
+      setWhen(drip ? toLocalInput(drip.scheduledFor) : "");
+      setError(undefined);
+    }
+  }, [drip, open]);
+
+  const schedule = useMutation<void, Error, string | null>({
+    mutationFn: async (scheduledFor: string | null) => {
+      // `null` unschedules (delete the row); a value sets/overrides the slot. Both funnel
+      // through the same route pair (delete vs the operator schedule op).
+      if (scheduledFor === null) {
+        const response = await fetch(`/api/admin/clips/${encodeURIComponent(clipId)}/schedule`, {
+          method: "DELETE",
+        });
+
+        if (!response.ok) {
+          throw new Error(await readError(response));
+        }
+
+        return;
+      }
+
+      const response = await fetch(`/api/admin/clips/${encodeURIComponent(clipId)}/schedule`, {
+        body: JSON.stringify({ scheduledFor }),
+        headers: { "content-type": "application/json" },
+        method: "PATCH",
+      });
+
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+    },
+    onError: (caught) => setError(caught.message),
+    onSuccess: async () => {
+      setOpen(false);
+      await queryClient.invalidateQueries({ queryKey: ["admin", "clip-posts"] });
+    },
+  });
+
+  const onSave = () => {
+    if (!when) {
+      setError("Pick a date and time first.");
+
+      return;
+    }
+
+    // The `datetime-local` value is local wall-clock; the op wants an ISO instant.
+    const iso = new Date(when).toISOString();
+
+    schedule.mutate(iso);
+  };
+
+  return (
+    <Popover onOpenChange={setOpen} open={open}>
+      <PopoverTrigger
+        render={
+          <button
+            aria-label={dripTriggerLabel(drip)}
+            className="flex items-center gap-1.5 self-start rounded-md px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+            type="button"
+          />
+        }
+      >
+        <DripChip drip={drip} />
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64">
+        <PopoverHeader>
+          <PopoverTitle>Drip slot</PopoverTitle>
+          <PopoverDescription>
+            When this clip posts to Instagram. Set it, move it, or take it off the queue.
+          </PopoverDescription>
+        </PopoverHeader>
+
+        {/* The permalink to the live post, once it's up — the one place to jump out to Instagram. */}
+        {drip?.status === "posted" && drip.postedUrl ? (
+          <a
+            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+            href={drip.postedUrl}
+            rel="noopener noreferrer"
+            target="_blank"
+          >
+            <ArrowSquareOutIcon aria-hidden="true" />
+            View the post on Instagram
+          </a>
+        ) : null}
+
+        <div className="space-y-1.5">
+          <Label htmlFor={`drip-when-${clipId}`}>Post at</Label>
+          <Input
+            id={`drip-when-${clipId}`}
+            onChange={(event) => setWhen(event.target.value)}
+            type="datetime-local"
+            value={when}
+          />
+        </div>
+
+        {error ? (
+          <p className="text-xs text-destructive" role="alert">
+            {error}
+          </p>
+        ) : null}
+
+        <div className="flex items-center gap-1.5">
+          <Button disabled={schedule.isPending} onClick={onSave} size="sm">
+            {drip ? "Move slot" : "Schedule"}
+          </Button>
+          {drip ? (
+            <Button
+              disabled={schedule.isPending}
+              onClick={() => schedule.mutate(null)}
+              size="sm"
+              variant="ghost"
+            >
+              Unschedule
+            </Button>
+          ) : null}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+// The at-rest drip chip: an icon + a one-line status. `scheduled` is a calendar + the local
+// date; `posted` a check; `failed` a warning; no row ⇒ the quiet "Not scheduled".
+function DripChip({ drip }: { drip: ClipDrip | undefined }) {
+  if (!drip) {
+    return (
+      <>
+        <CalendarBlankIcon aria-hidden="true" />
+        <span>Not scheduled</span>
+      </>
+    );
+  }
+
+  if (drip.status === "posted") {
+    return (
+      <>
+        <CheckIcon aria-hidden="true" className="text-primary" weight="bold" />
+        <span>Posted to Instagram</span>
+      </>
+    );
+  }
+
+  if (drip.status === "failed") {
+    return (
+      <>
+        <WarningCircleIcon aria-hidden="true" className="text-destructive" />
+        <span>Post failed. Reschedule to retry.</span>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <CalendarBlankIcon aria-hidden="true" />
+      <span className="tabular-nums">Scheduled for {formatDripSlot(drip.scheduledFor)}</span>
+    </>
+  );
+}
+
+/** The accessible name for the drip trigger — states the status + that it opens the slot editor. */
+function dripTriggerLabel(drip: ClipDrip | undefined): string {
+  if (!drip) {
+    return "Not scheduled for Instagram — schedule this clip";
+  }
+
+  if (drip.status === "posted") {
+    return "Posted to Instagram — reschedule this clip";
+  }
+
+  if (drip.status === "failed") {
+    return "Instagram post failed — reschedule this clip";
+  }
+
+  return `Scheduled for ${formatDripSlot(drip.scheduledFor)} — change the slot`;
+}
+
+// A drip slot for the chip: a short, local, human date (e.g. "Jul 8, 14:20"). Tabular numbers
+// carry it (the copy Tabular Rule). Falls back to the raw ISO if it can't parse.
+function formatDripSlot(iso: string): string {
+  const date = new Date(iso);
+
+  if (Number.isNaN(date.getTime())) {
+    return iso;
+  }
+
+  return date.toLocaleString(undefined, {
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    month: "short",
+  });
+}
+
+// An ISO instant → the `datetime-local` field value (local wall-clock, `YYYY-MM-DDTHH:mm`).
+// The field has no timezone, so we shift by the local offset before slicing.
+function toLocalInput(iso: string): string {
+  const date = new Date(iso);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+
+  return local.toISOString().slice(0, 16);
 }
 
 // The clip's caption block: click-to-edit prose + a copy button that yields the BUILT

@@ -16,12 +16,14 @@ const countDueClipPosts = vi.fn();
 const dueClipPosts = vi.fn();
 const setClipPostStatus = vi.fn();
 const upsertClipPost = vi.fn();
+const deleteClipPost = vi.fn();
 const getClipPost = vi.fn();
 const listClipPosts = vi.fn();
 
 vi.mock("./clip-social", () => ({
   countDueClipPosts: (...a: unknown[]) => countDueClipPosts(...a),
   countRecentPostedInWindow: (...a: unknown[]) => countRecentPostedInWindow(...a),
+  deleteClipPost: (...a: unknown[]) => deleteClipPost(...a),
   dueClipPosts: (...a: unknown[]) => dueClipPosts(...a),
   getClipPost: (...a: unknown[]) => getClipPost(...a),
   isDripPaused: (...a: unknown[]) => isDripPaused(...a),
@@ -240,6 +242,29 @@ describe("oRPC set_clip_schedule (PATCH /admin/clips/{clipId}/schedule)", () => 
     });
     const body = (await readJson(response)) as { ok: boolean; post: { scheduledFor: string } };
     expect(body.post.scheduledFor).toBe("2026-07-07T12:00:00.000Z");
+  });
+});
+
+// ── delete_clip_schedule — OPERATOR tier (unschedule) ────────────────────────
+describe("oRPC delete_clip_schedule (DELETE /admin/clips/{clipId}/schedule)", () => {
+  it("403s the AGENT (operator-only)", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req("/admin/clips/clip-1/schedule", "DELETE", AGENT_TOKEN));
+    expect(response?.status).toBe(403);
+  });
+
+  it("lets the OPERATOR unschedule a clip (confirms it exists, deletes its row)", async () => {
+    getClip.mockResolvedValue({ id: "clip-1" });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/clips/clip-1/schedule", "DELETE", OPERATOR_TOKEN),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toEqual({ ok: true });
+    expect(getClip).toHaveBeenCalledWith("clip-1");
+    expect(deleteClipPost).toHaveBeenCalledWith("clip-1");
   });
 });
 

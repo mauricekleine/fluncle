@@ -22,6 +22,7 @@ import { buildClipCaption } from "../clip-caption";
 import {
   countDueClipPosts,
   countRecentPostedInWindow,
+  deleteClipPost,
   dueClipPosts,
   getClipPost,
   isDripPaused,
@@ -734,6 +735,24 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
+  // DELETE /admin/clips/{clipId}/schedule — operator tier. The operator's "unschedule":
+  // take a clip off the drip queue (delete its un-posted row). Idempotent — a missing row is
+  // a clean no-op; a `posted` row is left intact (unscheduling is a queue action, not an
+  // un-post). Confirms the clip exists first (clean 404), symmetric with set_clip_schedule.
+  const deleteClipScheduleHandler = os.delete_clip_schedule
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        await getClip(input.clipId);
+        await deleteClipPost(input.clipId);
+
+        return { ok: true as const };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   // PUT /admin/clips/drip/state — operator tier. The global kill switch. Pausing halts
   // every future scheduled post within one tick; resuming continues the drip.
   const setClipDripHandler = os.set_clip_drip
@@ -963,6 +982,7 @@ export function adminMixtapesHandlers(os: Implementer) {
   return {
     create_clip: createClipHandler,
     delete_clip: deleteClipHandler,
+    delete_clip_schedule: deleteClipScheduleHandler,
     drip_clips: dripClipsHandler,
     finalize_clip_cut: finalizeClipCutHandler,
     finalize_mixtape_mixcloud: finalizeMixtapeMixcloudHandler,
