@@ -1,7 +1,13 @@
 // Regenerate docs/admin-jobs.html from docs/admin-jobs.csv (`bun run jobs:html`).
 // One source of truth: the CSV. The HTML is committed output so the inventory
 // opens with zero tooling. Deterministic (no timestamps) to keep diffs clean.
+//
+// The emitted HTML is formatted in place with the repo-pinned oxfmt — the same
+// binary `format:check` runs — so `bun run jobs:html` alone yields committable
+// output. No separate `oxfmt --write` step to forget, and no drift when an
+// unpinned `bunx oxfmt` resolves a different version than the pinned one.
 
+import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -276,5 +282,32 @@ render();
 </html>
 `;
 
-writeFileSync(join(root, "docs/admin-jobs.html"), html);
+const out = join(root, "docs/admin-jobs.html");
+writeFileSync(out, html);
+
+// oxfmt is not idempotent on this file in a single pass: the compact emitted
+// markup takes two passes to reach the canonical wrapping that `format:check`
+// accepts. Run the pinned oxfmt to a fixed point so one `bun run jobs:html`
+// always yields check-clean output.
+const oxfmt = join(root, "node_modules", ".bin", "oxfmt");
+let converged = false;
+for (let pass = 0; pass < 5; pass++) {
+  const before = readFileSync(out, "utf8");
+  const result = spawnSync(oxfmt, ["--write", out], { cwd: root, stdio: "inherit" });
+  if (result.status !== 0) {
+    console.error(`oxfmt failed to format ${out} (exit ${result.status ?? "signal"})`);
+    process.exit(1);
+  }
+
+  if (readFileSync(out, "utf8") === before) {
+    converged = true;
+    break;
+  }
+}
+
+if (!converged) {
+  console.error(`oxfmt did not converge on ${out} within 5 passes`);
+  process.exit(1);
+}
+
 console.log(`docs/admin-jobs.html: ${jobs.length} jobs`);
