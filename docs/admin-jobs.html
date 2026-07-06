@@ -2343,18 +2343,19 @@
           domain: "platform-ops",
           order_hint: "270",
           job: "Back up the production database",
-          status: "desired",
-          trigger: "cron",
+          status: "live",
+          trigger: "cron:fluncle-backup",
           executor: "system",
-          runs_on: "cloudflare",
+          runs_on: "rave-02",
           input: "the Turso prod database",
-          output: "a durable off-site backup + a tested restore path",
-          surfaces: "",
+          output:
+            "a daily gzip SQL dump + integrity manifest on a PRIVATE R2 bucket (30 daily/12 monthly) + a tested restore drill",
+          surfaces: "box-script;api",
           primary_surface: "api",
           drop_from: "",
-          tests: "none",
+          tests: "yes",
           notes:
-            "NO in-repo backup job — db-pull-prod.ts/db-refresh.ts are DEV seeding (prod->local), not backup; relies solely on Turso's managed point-in-time restore; docs/local-database.md",
+            "backup-sweep.{sh,ts} dumps over the libSQL HTTP pipeline (zero deps) → gzip → the private fluncle-backups R2 bucket (NEVER found.fluncle.com's world-served fluncle-videos) + prune; owned off-Cloudflare backup, Turso PITR is the belt this is the braces. Restore drill = apps/web/scripts/restore-drill.ts (ran green: 28 tables/1097 rows); pure logic unit-tested (db-dump.test.ts + aws-sigv4.test.ts vs aws4fetch). Probed as cron.backup. Operator-gated: create the bucket + a read-only Turso token + a backup-bucket-only R2 token (see cron/README § The database-backup cron)",
         },
       ];
       const DOMAINS = [
