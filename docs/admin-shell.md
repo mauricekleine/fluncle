@@ -16,7 +16,7 @@ One home per kind of control. Put each control in its slot and nowhere else.
 
 ## The nav model
 
-The sidebar is a flat object nav: Dashboard, then the objects in pipeline order (Findings, Plans, Recordings, Mixtapes, Clips, Newsletter), then System. An entry whose station doesn't exist yet points at the best current home for that object and stays unlit there; it lights only on the page that declares it as owner. Count badges carry live, cheap, honest server counts (a scoped `COUNT` per number); a number that can only be estimated stays off the rail.
+The sidebar is a flat object nav: Dashboard, then the objects in pipeline order (Findings, Plans, Recordings, Mixtapes, Clips, Newsletter), then System. Dashboard owns `/admin` — the attention queue (docs/cockpit-roadmap.md "The queue"): every action the system needs as a row, zero rows the success state, snooze/won't-do persisted client-side (one operator, one browser — a localStorage map, since a server column could not see this browser's working set). Findings owns `/admin/findings`, the pipeline board (the queue's deep-link target for the publish loop; the board's `?stage`/`?mix` deep-links survive — old `/admin?stage=…` links redirect). An entry whose station doesn't exist yet points at the best current home for that object and stays unlit there; it lights only on the page that declares it as owner. Count badges carry live, cheap, honest server counts (a scoped `COUNT` per number); a number that can only be estimated stays off the rail.
 
 ## The chrome gate
 
@@ -37,4 +37,10 @@ Browser-verification fixtures live in `apps/web/tests/browser/` (playwright-core
 BASE_URL=http://127.0.0.1:3000 OUT_DIR=/tmp/shell-smoke bun tests/browser/shell-smoke.ts
 ```
 
-Run it against a live dev server (per [docs/local-database.md](./local-database.md); in a worktree, copy main's `.dev.vars` and run `bun run --cwd apps/web dev:vite`). Read the screenshots after every shell or admin-chrome change.
+- `queue-smoke.ts` — drives the `/admin` attention queue end-to-end (the j/k+Enter loop past hydration, a caption copy into the real clipboard, snooze, won't-do + Undo, [Show all], draining to the zero state, and the legacy `?stage`/`?mix` redirect to `/admin/findings`), desktop + phone, screenshots each stop. `SEED=1` self-seeds the local dev DB with rows for every queue source around the run (removed in a `finally`; it refuses a non-local database URL):
+
+```bash
+BASE_URL=http://127.0.0.1:3000 OUT_DIR=/tmp/queue-smoke SEED=1 bun tests/browser/queue-smoke.ts
+```
+
+Run them against a live dev server (per [docs/local-database.md](./local-database.md); in a worktree, copy main's `.dev.vars` and run `bun run --cwd apps/web dev:vite`). Read the screenshots after every shell or admin-chrome change.

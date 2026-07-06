@@ -40,12 +40,12 @@ import { listTracks } from "@/lib/server/tracks";
 // and only lights up once a page declares it as its owner key — so the nav is
 // stable across waves while stations land behind it.
 //
-// Owner keys today: `/admin` (the board, the landing) → dashboard; `/admin/plans`
-// → plans; `/admin/clips` → clips; `/admin/newsletter` → newsletter; the Studio
+// Owner keys today: `/admin` (the attention queue, the landing) → dashboard;
+// `/admin/findings` (the pipeline board) → findings; `/admin/plans` → plans;
+// `/admin/clips` → clips; `/admin/newsletter` → newsletter; the Studio
 // (`/admin/studio/$recordingId`, a recording's workstation) → recordings.
-// Findings shares the board until the Wave-1 queue splits them; Recordings'
-// list home is the recordings index on Clips; Mixtapes' closest home is Plans
-// (where a take is promoted); System is the live service map at /status.
+// Recordings' list home is the recordings index on Clips; Mixtapes' closest home
+// is Plans (where a take is promoted); System is the live service map at /status.
 
 /** A sidebar entry's key. A page passes the entry it OWNS as `current`. */
 export type AdminNavCurrent =
@@ -67,8 +67,8 @@ type NavEntry = {
   to: string;
 };
 
-// The landing. Today it renders the board; the Wave-1 queue replaces its body,
-// never its entry.
+// The landing — the attention queue (docs/cockpit-roadmap.md, "The queue"):
+// every action the system needs as a row; zero rows is the success state.
 const HOME_ENTRY: NavEntry = {
   icon: SquaresFourIcon,
   key: "dashboard",
@@ -79,7 +79,13 @@ const HOME_ENTRY: NavEntry = {
 // The objects, in pipeline order: a finding is logged, planned into a set,
 // captured as a recording, promoted to a mixtape, clipped, and written up.
 const OBJECT_ENTRIES: NavEntry[] = [
-  { count: "untagged", icon: VinylRecordIcon, key: "findings", label: "Findings", to: "/admin" },
+  {
+    count: "untagged",
+    icon: VinylRecordIcon,
+    key: "findings",
+    label: "Findings",
+    to: "/admin/findings",
+  },
   { icon: ListNumbersIcon, key: "plans", label: "Plans", to: "/admin/plans" },
   { icon: FilmSlateIcon, key: "recordings", label: "Recordings", to: "/admin/clips" },
   { icon: CassetteTapeIcon, key: "mixtapes", label: "Mixtapes", to: "/admin/plans" },

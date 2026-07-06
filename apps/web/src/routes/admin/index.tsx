@@ -1,138 +1,69 @@
-import { CassetteTapeIcon, CircleNotchIcon } from "@phosphor-icons/react";
-import { isStaleTikTokDraft } from "@fluncle/contracts/util";
 import {
-  type InfiniteData,
-  useInfiniteQuery,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
+  ArrowCounterClockwiseIcon,
+  CassetteTapeIcon,
+  CircleNotchIcon,
+  ClockCountdownIcon,
+  FilmSlateIcon,
+  ProhibitIcon,
+} from "@phosphor-icons/react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  AddToPlanDialog,
-  type PlanTarget,
-  type PlanTargetCue,
-} from "@/components/admin/add-to-plan-dialog";
+  type ComponentType,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { toast } from "sonner";
 import { AdminShell } from "@/components/admin/admin-shell";
-import {
-  type BoardActions,
-  type BoardEntry,
-  boardSteps,
-} from "@/components/admin/pipeline/board-model";
-import { PipelineBoard } from "@/components/admin/pipeline/pipeline-board";
-import { EnrichDialog } from "@/components/admin/enrich-dialog";
-import { NoteDialog } from "@/components/admin/note-dialog";
-import { ContextDialog, ObservationDialog } from "@/components/admin/observation-dialogs";
-import { PLATFORMS } from "@/components/admin/platform-cell";
-import { PushDialog } from "@/components/admin/push-dialog";
-import { TagDialog } from "@/components/admin/tag-dialog";
-import { type BoardPage, type BoardRow, usePublish } from "@/components/admin/use-publish";
-import { StoriesPlayer } from "@/components/stories/stories-player";
+import { InstagramIcon, MixcloudIcon, TiktokIcon, YoutubeIcon } from "@/components/platform-icons";
 import { Badge } from "@fluncle/ui/components/badge";
 import { Button } from "@fluncle/ui/components/button";
-import { Dialog, DialogContent } from "@fluncle/ui/components/dialog";
-import { GALAXIES, galaxyForVibe } from "@/lib/galaxies";
+import { Input } from "@fluncle/ui/components/input";
+import { Label } from "@fluncle/ui/components/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@fluncle/ui/components/popover";
+import {
+  type AttentionItem,
+  type AttentionSource,
+  deadlineReadout,
+  formatAge,
+  orderQueue,
+  type PrimaryAction,
+  primaryFor,
+  snoozeReadout,
+  snoozeSlots,
+} from "@/lib/attention";
+import {
+  dismissRow,
+  pruneQueuePrefs,
+  restoreRow,
+  snoozeRow,
+  useQueuePrefs,
+} from "@/lib/queue-prefs";
 import { isAdminRequest } from "@/lib/server/admin-auth";
-import { listBackfillRanForTracks, listLastfmLovedForTracks } from "@/lib/server/backfill";
+import { readAttentionSnapshot } from "@/lib/server/attention";
 import { readCaptions } from "@/lib/server/captions";
-import { listMixtapeMembershipsForTracks } from "@/lib/server/mixtapes";
-import {
-  getContextNote,
-  getObservationScript,
-  listContextNotePresenceForTracks,
-} from "@/lib/server/observation-board";
-import {
-  getRecordingCues,
-  listPlanMembershipsForTracks,
-  listRecordings,
-} from "@/lib/server/recordings";
-import { listSocialPostsForTracks } from "@/lib/server/social";
-import { getSpotifyAuthStatus, type SpotifyAuthStatus } from "@/lib/server/spotify";
-import { type BlockedOn, trackStage } from "@/lib/server/track-stage";
-import { decodeTrackCursor, listTracks, listVibePoints, type VibePoint } from "@/lib/server/tracks";
 import { cn } from "@/lib/utils";
 
-// The operator's `/admin` home. This route owns the data (the social-joined
-// infinite query), the filters (worklist + mixtape lens), and every stage dialog;
-// the rendering is the PipelineBoard grid (components/admin/pipeline). Each finding
-// is a row, each pipeline step a cell, the steps split into two column groups —
-// Agents (an agent does it) and Yours (your hands) — because the pipeline isn't a
-// strict chain: steps run in parallel, fail, and retry. A cell reads by SHAPE
-// (round = agent, square = yours) and FILL (open → in-flight → done), and clicking
-// it opens that step's dialog (Tag → the vibe map; Enrich → re-queue for the box cron;
-// YouTube/TikTok → the publish loop). The board derives its steps from a pure model
-// (pipeline/board-model) and wires every cell back to the dialogs through `actions`.
+// The operator's `/admin` home — the attention queue (docs/cockpit-roadmap.md,
+// "The queue"). Every action the system needs is a row: cover art, the object
+// line, its data, and the primary action inline (or a deep-link with the object
+// selected). Two-tier order (deadlines by time-left, then oldest-first), a
+// bounded working set, snooze / won't-do, a single-key loop (j/k + Enter), and a
+// zero state that celebrates. Zero rows is the success state.
 //
-// Reads + writes go through the same gated admin API the CLI uses. This board is the
-// single admin surface — it folded in the old Posts and Tag pages.
+// The pure mechanics live in lib/attention.ts; the server reads in
+// lib/server/attention.ts; the snooze/won't-do map in lib/queue-prefs.ts
+// (localStorage — one operator, one browser; a server column couldn't see this
+// browser's snoozes). The findings board this page replaced lives at
+// /admin/findings; its old ?stage/?mix deep-links redirect there.
 
-const PAGE_SIZE = 50;
-
-// The board's react-query cache key. Optimistic publish patches + window-focus
-// refetch land on this one entry.
-const BOARD_KEY = ["admin", "posts", "board"] as const;
-// The placed-findings cache for the Tag dialog's map backdrop.
-const POINTS_KEY = ["admin", "tag", "points"] as const;
-// The Spotify connection-status cache for the reconnect banner.
-const SPOTIFY_STATUS_KEY = ["admin", "spotify", "status"] as const;
-// The plan targets for the "Add to a plan" sheet.
-const PLAN_TARGETS_KEY = ["admin", "plans", "targets"] as const;
-// The lazily-read context_note for the Context cell's view dialog, keyed by trackId.
-const CONTEXT_NOTE_KEY = ["admin", "context-note"] as const;
-// The lazily-read observation script (transcript) for the Observation dialog, keyed by trackId.
-const OBSERVATION_SCRIPT_KEY = ["admin", "observation-script"] as const;
-
-// The worklists — a `blockedOn` filter (the next action) plus "all" and a "done"
-// terminal bucket. The active one lives in `?stage` so it's deep-linkable and
-// survives reload. The checklist columns show each stage's own state; this just
-// narrows the rows to a focus ("show me everything still needing a video").
-type Worklist = "all" | "needs-tagging" | "needs-video" | "ready-youtube" | "ready-tiktok" | "done";
-
-// The worklists kept to the ones actually worked from: everything, the only manual
-// gate (tagging), and the terminal "Live" bucket. The render/publish-readiness
-// buckets were dropped as noise — each stage's own cell already shows its state, and
-// the per-stage worklists went unused. ?stage values stay back-compatible: an old
-// link to a dropped bucket validates back to "all" (WORKLIST_KEYS no longer has it).
-type WorklistDef = { blockedOn?: BlockedOn; key: Worklist; label: string };
-// The "all" worklist is the canonical fallback when no key matches; naming it
-// keeps the fallback statically defined (not an unchecked index).
-const ALL_WORKLIST: WorklistDef = { key: "all", label: "All" };
-const WORKLISTS: WorklistDef[] = [
-  ALL_WORKLIST,
-  { blockedOn: "needs tagging", key: "needs-tagging", label: "Needs tagging" },
-  { blockedOn: null, key: "done", label: "Live" },
-];
-
-const WORKLIST_KEYS = new Set(WORKLISTS.map((worklist) => worklist.key));
-
-// The mixtape lens — a SECOND filter axis, ANDed with the worklist. A finding is
-// "on a tape" once it lands in a minted checkpoint (every mixtape membership is
-// published/distributing now — drafts retired for plans), "in a plan" while it is
-// only pencilled into a plan's cues, and "open" when it's in neither. Powers the
-// "show me what I haven't used yet, to build a set around it" view; deep-linked via
-// ?mix so it survives reload. (An old ?mix=draft link validates back to "all".)
-type MixState = "open" | "plan" | "tape";
-type MixFilter = "all" | MixState;
-
-const MIX_FILTERS: { key: MixFilter; label: string }[] = [
-  { key: "all", label: "Any tape" },
-  { key: "open", label: "Not on a tape" },
-  { key: "plan", label: "In a plan" },
-  { key: "tape", label: "On a tape" },
-];
-
-const MIX_FILTER_KEYS = new Set(MIX_FILTERS.map((filter) => filter.key));
-
-// A finding is "on a tape" the moment it's in a minted checkpoint (every mixtape
-// membership is one — the coordinate is committed); "plan" while it is only
-// pencilled into a plan's cues.
-function mixtapeStateOf(row: BoardRow): MixState {
-  if (row.mixtapes.length > 0) {
-    return "tape";
-  }
-  return row.plans.length > 0 ? "plan" : "open";
-}
+const QUEUE_KEY = ["admin", "attention"] as const;
 
 const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
   if (!(await isAdminRequest())) {
@@ -142,91 +73,16 @@ const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
 
 // Every admin server function re-checks the grant — the page guard only protects
 // the render, not the RPC behind a server function.
-const fetchBoard = createServerFn({ method: "GET" })
-  .validator((data: { cursor?: string }) => data)
-  .handler(async ({ data }): Promise<BoardPage> => {
-    if (!(await isAdminRequest())) {
-      throw redirect({ to: "/admin/login" });
-    }
+const fetchAttention = createServerFn({ method: "GET" }).handler(async () => {
+  if (!(await isAdminRequest())) {
+    throw redirect({ to: "/admin/login" });
+  }
 
-    const page = await listTracks({
-      cursor: decodeTrackCursor(data.cursor ?? null),
-      limit: PAGE_SIZE,
-      order: "desc",
-    });
-    const trackIds = page.tracks.map((track) => track.trackId);
-    // Batch fetches — one query each for the whole page, no N+1: the per-platform
-    // posts, the mixtape + plan memberships (which tapes each finding is already
-    // on, and which plans it's pencilled into), which
-    // findings carry an internal context_note (the Context column status — pulled
-    // admin-only since context_note never rides the public track contract), and the
-    // Discogs/Last.fm backfill RAN-stamps (`*_attempted_at`) + the Last.fm LOVED-stamp
-    // (`backfill_lastfm_done_at`). The board's Discogs/Last.fm cells are workflow
-    // trackers: `done` once the backfill ran (whether or not it found data), grey
-    // only while it's never run — the ran-stamp drives the cell, the data-stamp
-    // (release url / loved) only refines the label.
-    const [posts, mixtapes, plans, contextNotes, discogsRan, lastfmRan, lastfmLoved, noteRan] =
-      await Promise.all([
-        listSocialPostsForTracks(trackIds),
-        listMixtapeMembershipsForTracks(trackIds),
-        listPlanMembershipsForTracks(trackIds),
-        listContextNotePresenceForTracks(trackIds),
-        listBackfillRanForTracks(trackIds, "discogs"),
-        listBackfillRanForTracks(trackIds, "lastfm"),
-        listLastfmLovedForTracks(trackIds),
-        listBackfillRanForTracks(trackIds, "note"),
-      ]);
+  return readAttentionSnapshot();
+});
 
-    return {
-      nextCursor: page.nextCursor,
-      totalCount: page.totalCount,
-      tracks: page.tracks.map((track) => ({
-        ...track,
-        discogsRan: discogsRan.has(track.trackId),
-        hasContextNote: contextNotes.has(track.trackId),
-        lastfmLoved: lastfmLoved.has(track.trackId),
-        lastfmRan: lastfmRan.has(track.trackId),
-        mixtapes: mixtapes[track.trackId] ?? [],
-        noteRan: noteRan.has(track.trackId),
-        plans: plans[track.trackId] ?? [],
-        posts: posts[track.trackId] ?? [],
-      })),
-    };
-  });
-
-// The plans the board's "Add to a plan" sheet can pencil findings into — every
-// plan with its CURRENT cues in the `replace_recording_cues` body shape, so the
-// dialog's append replays them untouched (non-finding snapshot rows and marked
-// start times included). Lazily fetched the first time the sheet opens, then
-// cached + focus-refetched.
-const fetchPlanTargets = createServerFn({ method: "GET" }).handler(
-  async (): Promise<PlanTarget[]> => {
-    if (!(await isAdminRequest())) {
-      throw redirect({ to: "/admin/login" });
-    }
-
-    const plans = await listRecordings({ kind: "plan" });
-
-    return Promise.all(
-      plans.map(async (plan) => ({
-        cues: (await getRecordingCues(plan.id)).map(
-          (cue): PlanTargetCue => ({
-            artistsText: cue.artists_text ?? undefined,
-            findingId: cue.finding_id ?? undefined,
-            startMs: cue.start_ms ?? undefined,
-            titleText: cue.title_text ?? undefined,
-          }),
-        ),
-        id: plan.id,
-        title: plan.title,
-      })),
-    );
-  },
-);
-
-// Lazy caption read — only when the operator copies a finding's caption, never
-// preloaded for the whole page. Reads the public note.txt server-side (no CORS;
-// works in dev too, the binding is just empty there).
+// Lazy caption read for [Copy caption] — reads the public note.txt server-side
+// inside the tap (the board's gesture-safe clipboard pattern).
 const fetchCaption = createServerFn({ method: "GET" })
   .validator((data: { logId: string }) => data)
   .handler(async ({ data }): Promise<{ caption: string }> => {
@@ -239,830 +95,944 @@ const fetchCaption = createServerFn({ method: "GET" })
     return { caption: captions[data.logId] ?? "" };
   });
 
-// Lazy context-note read — only when the operator opens a finding's Context cell to
-// view the firecrawl-derived facts that fuel its observation script. Internal fuel,
-// so it stays on this gated admin path and off
-// the public track contract; never preloaded for the whole page.
-const fetchContextNote = createServerFn({ method: "GET" })
-  .validator((data: { trackId: string }) => data)
-  .handler(async ({ data }): Promise<{ contextNote: string }> => {
-    if (!(await isAdminRequest())) {
-      throw redirect({ to: "/admin/login" });
-    }
-
-    return { contextNote: await getContextNote(data.trackId) };
-  });
-
-// Lazy observation-script read — only when the operator opens a finding's
-// Observation dialog, to read the spoken transcript under the audio player. The
-// script mirrors the R2 observation.json `text` on the row (written by the observe
-// render); internal like the context note, so it rides this gated admin path and
-// never the public track contract. Never preloaded for the whole page.
-const fetchObservationScript = createServerFn({ method: "GET" })
-  .validator((data: { trackId: string }) => data)
-  .handler(async ({ data }): Promise<{ script: string }> => {
-    if (!(await isAdminRequest())) {
-      throw redirect({ to: "/admin/login" });
-    }
-
-    return { script: await getObservationScript(data.trackId) };
-  });
-
-// The Spotify connection light. Read-only (no token refresh) and focus-refetched,
-// so the moment a publish/search trips invalid_grant and clears the stored token,
-// tabbing back to the board surfaces the Reconnect banner. See spotify.ts.
-const fetchSpotifyStatus = createServerFn({ method: "GET" }).handler(
-  async (): Promise<SpotifyAuthStatus> => {
-    if (!(await isAdminRequest())) {
-      throw redirect({ to: "/admin/login" });
-    }
-
-    return getSpotifyAuthStatus();
-  },
-);
-
-// The placed-findings backdrop for the Tag dialog's map — lazily fetched the first
-// time a Tag cell is opened (no preload), then cached + focus-refetched.
-const fetchVibePoints = createServerFn({ method: "GET" }).handler(
-  async (): Promise<VibePoint[]> => {
-    if (!(await isAdminRequest())) {
-      throw redirect({ to: "/admin/login" });
-    }
-
-    return listVibePoints();
-  },
-);
-
-type BoardSearch = { mix: MixFilter; stage: Worklist };
+type QueueSearch = {
+  /** The [Show all] view state — deep-linked so the widened view survives reload. */
+  all?: true;
+  /** Legacy board search params — redirected to /admin/findings in beforeLoad. */
+  mix?: string;
+  stage?: string;
+};
 
 // Route options follow TanStack's create-route-property-order (each step feeds the
 // next's inferred types), which isn't alphabetical — so sort-keys is off here.
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/admin/")({
-  validateSearch: (search: Record<string, unknown>): BoardSearch => ({
-    mix:
-      typeof search.mix === "string" && MIX_FILTER_KEYS.has(search.mix as MixFilter)
-        ? (search.mix as MixFilter)
-        : "all",
-    stage:
-      typeof search.stage === "string" && WORKLIST_KEYS.has(search.stage as Worklist)
-        ? (search.stage as Worklist)
-        : "all",
+  validateSearch: (search: Record<string, unknown>): QueueSearch => ({
+    ...(search.all === true || search.all === "1" || search.all === 1
+      ? { all: true as const }
+      : {}),
+    ...(typeof search.mix === "string" ? { mix: search.mix } : {}),
+    ...(typeof search.stage === "string" ? { stage: search.stage } : {}),
   }),
-  beforeLoad: async () => {
+  beforeLoad: async ({ search }) => {
+    // The findings board owned `/admin` before the queue; its ?stage/?mix
+    // deep-links (bookmarks, the helm card) land here and carry straight over.
+    if (search.stage !== undefined || search.mix !== undefined) {
+      const params = new URLSearchParams();
+      if (search.stage !== undefined) {
+        params.set("stage", search.stage);
+      }
+      if (search.mix !== undefined) {
+        params.set("mix", search.mix);
+      }
+      throw redirect({ href: `/admin/findings?${params.toString()}` });
+    }
     await ensureAdmin();
   },
-  loader: async () => {
-    const board = await fetchBoard({ data: {} });
-    return { board };
-  },
-  component: AdminBoardPage,
+  loader: async () => ({ snapshot: await fetchAttention() }),
+  component: AdminQueuePage,
 });
 
-function AdminBoardPage() {
-  const { board: initial } = Route.useLoaderData();
-  const { mix: activeMix, stage: activeWorklist } = Route.useSearch();
+/** Where a visible row sits — due rows count toward zero, the rest ride [Show all]. */
+type RowState = "backlog" | "dismissed" | "due" | "snoozed";
+
+type VisibleRow = { item: AttentionItem; state: RowState };
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function prefersReducedMotion(): boolean {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+function AdminQueuePage() {
+  const { snapshot: initial } = Route.useLoaderData();
+  const { all: showAll = false } = Route.useSearch();
   const navigate = Route.useNavigate();
   const queryClient = useQueryClient();
 
-  // The board reads through react-query so it refetches on window focus — when the
-  // operator tabs back from TikTok/YouTube, the per-platform statuses come back
-  // fresh without a manual reload. Seeded with the SSR loader page so the first
-  // paint is instant and no client fetch fires on mount.
-  const {
-    data,
-    error: queryError,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-  } = useInfiniteQuery({
-    getNextPageParam: (lastPage) => lastPage.nextCursor,
-    initialData: { pageParams: [undefined], pages: [initial] },
-    initialPageParam: undefined as string | undefined,
-    queryFn: ({ pageParam }) => fetchBoard({ data: { cursor: pageParam } }),
-    queryKey: BOARD_KEY,
+  // Seeded from the SSR loader; window-focus refetch keeps the rows honest when
+  // the operator tabs back from TikTok / the Studio / a terminal.
+  const { data, error: queryError } = useQuery({
+    initialData: initial,
+    queryFn: () => fetchAttention(),
+    queryKey: QUEUE_KEY,
     refetchOnWindowFocus: true,
   });
 
-  const rows = useMemo(() => data?.pages.flatMap((page) => page.tracks) ?? [], [data]);
+  const prefs = useQueuePrefs();
 
-  const { busy, error, pushDraft, setError, setStatus } = usePublish(BOARD_KEY);
-
-  // Dialogs are keyed by identity (not a row snapshot) so they always render the
-  // LIVE row — right after a push the cache patches, the row updates, and the open
-  // dialog shows the next step without reopening.
-  const [tagId, setTagId] = useState<string | undefined>();
-  const [enrichId, setEnrichId] = useState<string | undefined>();
-  const [push, setPush] = useState<{ platformKey: string; trackId: string } | undefined>();
-  const [preview, setPreview] = useState<BoardRow | undefined>();
-  const [copiedId, setCopiedId] = useState<string | undefined>();
-  const [tagSaving, setTagSaving] = useState(false);
-  const [tagError, setTagError] = useState<string | undefined>();
-  const [enrichBusy, setEnrichBusy] = useState(false);
-  const [enrichError, setEnrichError] = useState<string | undefined>();
-  const [noteId, setNoteId] = useState<string | undefined>();
-  const [noteSaving, setNoteSaving] = useState(false);
-  const [noteError, setNoteError] = useState<string | undefined>();
-  // The two audio-observation view cells (Context · Observation). View-only for now
-  // — backfill (authoring + the observe render) needs an agent-authored script via
-  // the observe endpoint, so the board reflects status and lets the operator read
-  // the context note / play the observation; generating is left to the agent.
-  const [contextId, setContextId] = useState<string | undefined>();
-  const [observationId, setObservationId] = useState<string | undefined>();
-
-  const rowFor = useCallback(
-    (trackId?: string) => (trackId ? rows.find((row) => row.trackId === trackId) : undefined),
-    [rows],
-  );
-  const tagRow = rowFor(tagId);
-  const enrichRow = rowFor(enrichId);
-  const noteRow = rowFor(noteId);
-  const contextRow = rowFor(contextId);
-  const observationRow = rowFor(observationId);
-  const pushRow = rowFor(push?.trackId);
-  const pushPlatform = push
-    ? (PLATFORMS.find((platform) => platform.key === push.platformKey) ?? null)
-    : null;
-
-  // A failed load-more shouldn't be swallowed; surface it next to mutation errors
-  // and use it to pause the infinite-scroll observer until a manual retry.
-  const loadError = queryError
-    ? queryError instanceof Error
-      ? queryError.message
-      : String(queryError)
-    : undefined;
-  const shownError = error ?? loadError;
-
-  // Each row carries its derived stage so the worklist filter reads the same
-  // source as the lifecycle model. In-memory filtering is fine at current scale.
-  const staged = useMemo(() => rows.map((row) => ({ ...trackStage(row), row })), [rows]);
-
-  const worklistDef = WORKLISTS.find((worklist) => worklist.key === activeWorklist) ?? ALL_WORKLIST;
-  // Both filters AND together: the worklist narrows by pipeline stage, the mixtape
-  // lens by tape membership. In-memory, like the worklist — fine at current scale.
-  const visible = useMemo(
-    () =>
-      staged.filter(
-        (entry) =>
-          (worklistDef.key === "all" || entry.blockedOn === worklistDef.blockedOn) &&
-          (activeMix === "all" || mixtapeStateOf(entry.row) === activeMix),
-      ),
-    [activeMix, staged, worklistDef],
-  );
-
-  // The board entries every variant reads — the filtered findings plus their derived
-  // lifecycle position and full step list (the shared model). One derivation feeds
-  // the table, the constellation, the lanes, all of them.
-  const entries = useMemo<BoardEntry[]>(
-    () =>
-      visible.map(({ blockedOn, row, stage }) => ({
-        blockedOn,
-        row,
-        stage,
-        steps: boardSteps(row),
-      })),
-    [visible],
-  );
-
-  // Each axis's pill counts reflect the OTHER axis's active filter, so a pill's
-  // number is exactly how many rows you'd see if you clicked it. Worklist counts are
-  // taken over the mixtape-filtered set; mix counts over the worklist-filtered set.
-  const byMix = useMemo(
-    () => staged.filter((entry) => activeMix === "all" || mixtapeStateOf(entry.row) === activeMix),
-    [activeMix, staged],
-  );
-  const byWorklist = useMemo(
-    () =>
-      staged.filter(
-        (entry) => worklistDef.key === "all" || entry.blockedOn === worklistDef.blockedOn,
-      ),
-    [staged, worklistDef],
-  );
-
-  const counts = useMemo(() => {
-    const byBlocked = new Map<BlockedOn, number>();
-    for (const entry of byMix) {
-      byBlocked.set(entry.blockedOn, (byBlocked.get(entry.blockedOn) ?? 0) + 1);
-    }
-    return (worklist: (typeof WORKLISTS)[number]) =>
-      worklist.key === "all" ? byMix.length : (byBlocked.get(worklist.blockedOn ?? null) ?? 0);
-  }, [byMix]);
-
-  const mixCounts = useMemo(() => {
-    const byState = new Map<MixState, number>();
-    for (const entry of byWorklist) {
-      const state = mixtapeStateOf(entry.row);
-      byState.set(state, (byState.get(state) ?? 0) + 1);
-    }
-    return (filter: MixFilter) =>
-      filter === "all" ? byWorklist.length : (byState.get(filter) ?? 0);
-  }, [byWorklist]);
-
-  // Advisory pending-draft count among loaded rows — surfaced inside the TikTok
-  // push dialog (cap 5/24h), not in the header. A STALE draft (past the 24h window)
-  // has already left the inbox one way or another — bounced or aged out — so it no
-  // longer occupies a cap slot and is excluded from the count.
-  const tiktokPending = useMemo(() => {
-    const now = Date.now();
-
-    return rows.filter((row) =>
-      row.posts.some(
-        (post) =>
-          post.platform === "tiktok" && post.status === "draft" && !isStaleTikTokDraft(post, now),
-      ),
-    ).length;
-  }, [rows]);
-
-  const setWorklist = useCallback(
-    (next: Worklist) => {
-      void navigate({ search: (prev) => ({ ...prev, stage: next }) });
-    },
-    [navigate],
-  );
-
-  const setMix = useCallback(
-    (next: MixFilter) => {
-      void navigate({ search: (prev) => ({ ...prev, mix: next }) });
-    },
-    [navigate],
-  );
-
-  // The Mixtape stage cell opens a per-finding plan picker (keyed by trackId, like
-  // the other dialogs). The plan targets load lazily the first time it opens.
-  const [mixtapeId, setMixtapeId] = useState<string | undefined>();
-  const mixtapeRow = rowFor(mixtapeId);
-
-  const { data: planTargets = [], isFetching: plansFetching } = useQuery({
-    enabled: mixtapeId !== undefined,
-    queryFn: fetchPlanTargets,
-    queryKey: PLAN_TARGETS_KEY,
-    refetchOnWindowFocus: true,
-  });
-
-  // After a successful add: close the picker and refresh both the board (the Mixtape
-  // cell's state) and the plan list (cue counts changed).
-  const onAddedToPlan = useCallback(() => {
-    setMixtapeId(undefined);
-    void queryClient.invalidateQueries({ queryKey: BOARD_KEY });
-    void queryClient.invalidateQueries({ queryKey: PLAN_TARGETS_KEY });
-  }, [queryClient]);
-
-  // Patch one row's own fields in the board cache (the publish hook patches posts;
-  // this is for the track-level fields tagging + enrichment change).
-  const patchRow = useCallback(
-    (trackId: string, patch: Partial<BoardRow>) => {
-      queryClient.setQueryData<InfiniteData<BoardPage, string | undefined>>(BOARD_KEY, (current) =>
-        current
-          ? {
-              ...current,
-              pages: current.pages.map((page) => ({
-                ...page,
-                tracks: page.tracks.map((row) =>
-                  row.trackId === trackId ? { ...row, ...patch } : row,
-                ),
-              })),
-            }
-          : current,
-      );
-    },
-    [queryClient],
-  );
-
-  const markCopied = useCallback((id: string) => {
-    setCopiedId(id);
-    window.setTimeout(() => setCopiedId((current) => (current === id ? undefined : current)), 1600);
+  // The queue's clock — ages and deadlines tick while the tab sits open (30s is
+  // honest for minute-grade readouts; tabular numerals keep the update quiet).
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
   }, []);
 
-  // Quick caption copy — lazily fetch the caption inside the tap and hand it to the
-  // clipboard as a Promise, so the async read stays within the user gesture (iOS
-  // rejects a write that lands after an awaited fetch).
-  const copyCaption = useCallback(
-    (row: BoardRow) => {
-      if (!row.logId) {
+  // Rows cleared optimistically this session (marked posted) — removed locally the
+  // moment the op lands; the next refetch reconciles with the server.
+  const [clearedIds, setClearedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const items = useMemo(
+    () => data.items.filter((item) => !clearedIds.has(item.id)),
+    [clearedIds, data.items],
+  );
+
+  // Prune decisions for rows that left the system, so the stored map stays
+  // bounded to what actually exists.
+  useEffect(() => {
+    pruneQueuePrefs(new Set(data.items.map((item) => item.id)));
+  }, [data.items]);
+
+  const ordered = useMemo(() => orderQueue(items, prefs, now), [items, now, prefs]);
+
+  const visible = useMemo<VisibleRow[]>(() => {
+    const rows: VisibleRow[] = ordered.due.map((item) => ({ item, state: "due" as const }));
+    if (showAll) {
+      rows.push(
+        ...ordered.backlog.map((item) => ({ item, state: "backlog" as const })),
+        ...ordered.snoozed.map((item) => ({ item, state: "snoozed" as const })),
+        ...ordered.dismissed.map((item) => ({ item, state: "dismissed" as const })),
+      );
+    }
+    return rows;
+  }, [ordered, showAll]);
+
+  // The latest visible list for callbacks that outlive a render (the 200ms settle).
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
+
+  // The keyboard cursor. Selection follows the row's identity; when its row
+  // leaves, the explicit advance (below) hands the cursor to the neighbour.
+  const [selectedId, setSelectedId] = useState<string | undefined>();
+  const selectedIndex = Math.max(
+    0,
+    visible.findIndex((row) => row.item.id === selectedId),
+  );
+  const selectedRow = visible[selectedIndex];
+
+  const primaryRefs = useRef(new Map<string, HTMLElement>());
+  const rowRefs = useRef(new Map<string, HTMLLIElement>());
+
+  const registerPrimary = useCallback((id: string, el: HTMLElement | null) => {
+    if (el) {
+      primaryRefs.current.set(id, el);
+    } else {
+      primaryRefs.current.delete(id);
+    }
+  }, []);
+
+  const registerRow = useCallback((id: string, el: HTMLLIElement | null) => {
+    if (el) {
+      rowRefs.current.set(id, el);
+    } else {
+      rowRefs.current.delete(id);
+    }
+  }, []);
+
+  const advanceFrom = useCallback((id: string) => {
+    const rows = visibleRef.current;
+    const index = rows.findIndex((row) => row.item.id === id);
+    const next = rows[index + 1] ?? rows[index - 1];
+    setSelectedId(next?.item.id);
+  }, []);
+
+  // ── Action state ────────────────────────────────────────────────────────────
+  const [busyId, setBusyId] = useState<string | undefined>();
+  const [copiedId, setCopiedId] = useState<string | undefined>();
+  const [flashId, setFlashId] = useState<string | undefined>();
+  const [leavingId, setLeavingId] = useState<string | undefined>();
+  const [snoozeFor, setSnoozeFor] = useState<string | undefined>();
+  const [markFor, setMarkFor] = useState<string | undefined>();
+  const [markUrl, setMarkUrl] = useState("");
+  // The zero state's cover — the last row dealt with this session; a fresh load
+  // falls back to the newest finding's cover from the snapshot.
+  const [lastCleared, setLastCleared] = useState<{ artUrl?: string } | undefined>();
+
+  // The tactile action-fire + settle-out: a gold flash while the row fades, then
+  // the state change lands (200ms, ease-out). Reduced motion: the change is
+  // instant — no flash, no fade.
+  const settleOut = useCallback(
+    (item: AttentionItem, finish: () => void) => {
+      setLastCleared(item.artUrl ? { artUrl: item.artUrl } : {});
+      const done = () => {
+        advanceFrom(item.id);
+        finish();
+        setLeavingId((current) => (current === item.id ? undefined : current));
+      };
+      if (prefersReducedMotion()) {
+        done();
         return;
       }
+      setLeavingId(item.id);
+      window.setTimeout(done, 220);
+    },
+    [advanceFrom],
+  );
 
-      setError(undefined);
-      const text = fetchCaption({ data: { logId: row.logId } }).then(({ caption }) =>
+  const handleSnooze = useCallback(
+    (item: AttentionItem, until: string) => {
+      setSnoozeFor(undefined);
+      settleOut(item, () => snoozeRow(item.id, until));
+    },
+    [settleOut],
+  );
+
+  const handleWontDo = useCallback(
+    (item: AttentionItem) => {
+      settleOut(item, () => {
+        dismissRow(item.id);
+        toast("Won't do", {
+          action: { label: "Undo", onClick: () => restoreRow(item.id) },
+          description: item.title,
+        });
+      });
+    },
+    [settleOut],
+  );
+
+  const handleRestore = useCallback((item: AttentionItem) => {
+    restoreRow(item.id);
+    setSelectedId(item.id);
+  }, []);
+
+  // Quick caption copy — the caption is fetched inside the tap and handed to the
+  // clipboard as a Promise, so the async read stays within the user gesture (iOS
+  // rejects a write that lands after an awaited fetch). Copying auto-advances the
+  // cursor: the loop keeps moving.
+  const copyCaption = useCallback(
+    (item: AttentionItem) => {
+      if (!item.logId) {
+        return;
+      }
+      const logId = item.logId;
+      const text = fetchCaption({ data: { logId } }).then(({ caption }) =>
         caption
           ? new Blob([caption], { type: "text/plain" })
           : Promise.reject(new Error("no caption")),
       );
       navigator.clipboard.write([new ClipboardItem({ "text/plain": text })]).then(
-        () => markCopied(row.trackId),
-        () => setError("Couldn't copy the caption."),
+        () => {
+          setCopiedId(item.id);
+          window.setTimeout(
+            () => setCopiedId((current) => (current === item.id ? undefined : current)),
+            1600,
+          );
+          advanceFrom(item.id);
+        },
+        () => toast.error("Couldn't copy the caption."),
       );
     },
-    [markCopied, setError],
+    [advanceFrom],
   );
 
-  // The Spotify connection light — polled on focus so an expired authorization
-  // (cleared server-side on invalid_grant) surfaces the moment the operator tabs
-  // back. Reconnecting hands the browser to the gated auth-start, which returns the
-  // Spotify authorize URL; the callback lands back on the board.
-  const { data: spotifyStatus } = useQuery({
-    queryFn: fetchSpotifyStatus,
-    queryKey: SPOTIFY_STATUS_KEY,
-    refetchOnWindowFocus: true,
-  });
-
-  const reconnectSpotify = useCallback(async () => {
-    setError(undefined);
-
-    try {
-      const response = await fetch("/api/admin/spotify/auth/start", { credentials: "same-origin" });
-      const data = (await response.json()) as { authUrl?: string };
-
-      if (!response.ok || !data.authUrl) {
-        throw new Error("Couldn't start the Spotify reconnect.");
-      }
-
-      window.location.href = data.authUrl;
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-    }
-  }, [setError]);
-
-  // The Tag dialog's map backdrop — fetched on first open, then cached.
-  const { data: points = [] } = useQuery({
-    enabled: tagId !== undefined,
-    queryFn: fetchVibePoints,
-    queryKey: POINTS_KEY,
-    refetchOnWindowFocus: true,
-  });
-
-  // The Context dialog's note text — lazily read the first time a Context cell is
-  // opened, keyed per finding so each opens its own note (cached, never refetched).
-  const { data: contextNoteData, isFetching: contextFetching } = useQuery({
-    enabled: contextId !== undefined,
-    queryFn: () => fetchContextNote({ data: { trackId: contextId as string } }),
-    queryKey: [...CONTEXT_NOTE_KEY, contextId],
-    staleTime: Number.POSITIVE_INFINITY,
-  });
-
-  // The Observation dialog's spoken transcript — lazily read the first time an
-  // Observation cell is opened, keyed per finding (cached, never refetched).
-  const { data: observationScriptData, isFetching: observationScriptFetching } = useQuery({
-    enabled: observationId !== undefined,
-    queryFn: () => fetchObservationScript({ data: { trackId: observationId as string } }),
-    queryKey: [...OBSERVATION_SCRIPT_KEY, observationId],
-    staleTime: Number.POSITIVE_INFINITY,
-  });
-
-  // The next finding in the current worklist — powers "Save & next" in the Tag and
-  // Note dialogs so a batch is one sitting. Undefined at the end of the list, which
-  // closes the dialog.
-  const nextVisibleTrackId = useCallback(
-    (currentTrackId: string): string | undefined => {
-      const index = visible.findIndex((entry) => entry.row.trackId === currentTrackId);
-      return index >= 0 && index + 1 < visible.length ? visible[index + 1]?.row.trackId : undefined;
-    },
-    [visible],
-  );
-
-  const saveTag = useCallback(
-    async (x: number, y: number, advance?: boolean) => {
-      if (!tagRow) {
+  // Re-push a bounced draft — the same gated op the board's push dialog calls.
+  // The row stays: its deadline resets to a fresh 24h on the refetch.
+  const rePush = useCallback(
+    async (item: AttentionItem) => {
+      if (!item.trackId || busyId) {
         return;
       }
-
-      setTagSaving(true);
-      setTagError(undefined);
-
+      setBusyId(item.id);
       try {
-        const response = await fetch(`/api/admin/tracks/${tagRow.trackId}`, {
-          body: JSON.stringify({ vibeX: x, vibeY: y }),
+        const response = await fetch(`/api/admin/tracks/${item.trackId}/social/tiktok/draft`, {
+          credentials: "same-origin",
+          method: "POST",
+        });
+        const result = (await response.json()) as { message?: string; ok?: boolean };
+        if (!response.ok || !result.ok) {
+          throw new Error(result.message ?? `Push failed (${response.status})`);
+        }
+        setFlashId(item.id);
+        window.setTimeout(
+          () => setFlashId((current) => (current === item.id ? undefined : current)),
+          400,
+        );
+        void queryClient.invalidateQueries({ queryKey: QUEUE_KEY });
+      } catch (caught) {
+        toast.error(caught instanceof Error ? caught.message : String(caught));
+      } finally {
+        setBusyId(undefined);
+      }
+    },
+    [busyId, queryClient],
+  );
+
+  // Record the hand-finished TikTok post — `update_track_social` with the real
+  // public URL (published requires one). The row clears; refetch reconciles.
+  const markPosted = useCallback(
+    async (item: AttentionItem, url: string) => {
+      if (!item.trackId || busyId) {
+        return;
+      }
+      setBusyId(item.id);
+      try {
+        const response = await fetch(`/api/admin/tracks/${item.trackId}/social/tiktok`, {
+          body: JSON.stringify({ status: "published", url }),
           credentials: "same-origin",
           headers: { "Content-Type": "application/json" },
           method: "PATCH",
         });
-
-        if (!response.ok) {
-          throw new Error(`Save failed (${response.status})`);
+        const result = (await response.json()) as { message?: string; ok?: boolean };
+        if (!response.ok || !result.ok) {
+          throw new Error(result.message ?? `Update failed (${response.status})`);
         }
-
-        const key = galaxyForVibe(x, y);
-        patchRow(tagRow.trackId, { galaxy: { key, name: GALAXIES[key].name }, vibeX: x, vibeY: y });
-        // Keep the tag-map cache in step so the Tag dialog's backdrop stays current.
-        queryClient.setQueryData<VibePoint[]>(POINTS_KEY, (current = []) => [
-          ...current.filter((point) => point.trackId !== tagRow.trackId),
-          {
-            artists: tagRow.artists,
-            title: tagRow.title,
-            trackId: tagRow.trackId,
-            vibeX: x,
-            vibeY: y,
-          },
-        ]);
-        setTagId(advance ? nextVisibleTrackId(tagRow.trackId) : undefined);
-      } catch (caught) {
-        setTagError(caught instanceof Error ? caught.message : String(caught));
-      } finally {
-        setTagSaving(false);
-      }
-    },
-    [nextVisibleTrackId, patchRow, queryClient, tagRow],
-  );
-
-  // Save the finding's note (the editorial "why" that feeds its log-page prose +
-  // schema). Optimistically patches the row; "Save & next" walks the worklist.
-  const saveNote = useCallback(
-    async (note: string, advance?: boolean) => {
-      if (!noteRow) {
-        return;
-      }
-
-      setNoteSaving(true);
-      setNoteError(undefined);
-
-      try {
-        const response = await fetch(`/api/admin/tracks/${noteRow.trackId}`, {
-          body: JSON.stringify({ note }),
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json" },
-          method: "PATCH",
+        setMarkFor(undefined);
+        setMarkUrl("");
+        settleOut(item, () => {
+          setClearedIds((current) => new Set(current).add(item.id));
+          void queryClient.invalidateQueries({ queryKey: QUEUE_KEY });
         });
-
-        if (!response.ok) {
-          throw new Error(`Save failed (${response.status})`);
-        }
-
-        patchRow(noteRow.trackId, { note: note.trim() || undefined });
-        setNoteId(advance ? nextVisibleTrackId(noteRow.trackId) : undefined);
       } catch (caught) {
-        setNoteError(caught instanceof Error ? caught.message : String(caught));
+        toast.error(caught instanceof Error ? caught.message : String(caught));
       } finally {
-        setNoteSaving(false);
+        setBusyId(undefined);
       }
     },
-    [nextVisibleTrackId, noteRow, patchRow],
+    [busyId, queryClient, settleOut],
   );
 
-  // Re-place an already-placed neighbour from inside the Tag dialog (edit-in-place).
-  // Same write as saveTag, but for any trackId, and it throws on failure so the
-  // dialog can surface the error + keep the marker live. Optimistically refreshes
-  // both the map backdrop (POINTS_KEY) and the board row if it's loaded.
-  const savePoint = useCallback(
-    async (trackId: string, x: number, y: number) => {
-      const response = await fetch(`/api/admin/tracks/${trackId}`, {
-        body: JSON.stringify({ vibeX: x, vibeY: y }),
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        method: "PATCH",
-      });
-
-      if (!response.ok) {
-        throw new Error(`Save failed (${response.status})`);
-      }
-
-      const key = galaxyForVibe(x, y);
-      patchRow(trackId, { galaxy: { key, name: GALAXIES[key].name }, vibeX: x, vibeY: y });
-      queryClient.setQueryData<VibePoint[]>(POINTS_KEY, (current = []) =>
-        current.map((point) =>
-          point.trackId === trackId ? { ...point, vibeX: x, vibeY: y } : point,
-        ),
-      );
-    },
-    [patchRow, queryClient],
-  );
-
-  const runEnrichment = useCallback(async () => {
-    if (!enrichRow?.logId) {
-      return;
-    }
-
-    setEnrichBusy(true);
-    setEnrichError(undefined);
-
-    try {
-      // Re-queue the finding for the on-box `fluncle-enrich` cron: PATCH the
-      // status back to "pending" (queue-eligible). The cron picks it up on its
-      // next ~5-min tick, analyzes on-box, and writes "done"/"failed" back.
-      const response = await fetch(`/api/admin/tracks/${enrichRow.trackId}`, {
-        body: JSON.stringify({ enrichmentStatus: "pending" }),
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        method: "PATCH",
-      });
-
-      if (!response.ok) {
-        throw new Error(`Queue failed (${response.status})`);
-      }
-
-      // Optimistic: show it queued immediately. Window-focus refetch reconciles
-      // with the cron's result.
-      patchRow(enrichRow.trackId, { enrichmentStatus: "pending" });
-      setEnrichId(undefined);
-    } catch (caught) {
-      setEnrichError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setEnrichBusy(false);
-    }
-  }, [enrichRow, patchRow]);
-
-  const onPush = useCallback(() => {
-    if (push) {
-      void pushDraft(push.trackId, push.platformKey);
-    }
-  }, [push, pushDraft]);
-
-  const markLive = useCallback(
-    async (url: string) => {
-      if (!push) {
-        return;
-      }
-      await setStatus(push.trackId, push.platformKey, "published", url);
-      setPush(undefined);
-    },
-    [push, setStatus],
-  );
-
-  const markFailed = useCallback(async () => {
-    if (!push) {
-      return;
-    }
-    await setStatus(push.trackId, push.platformKey, "failed");
-    setPush(undefined);
-  }, [push, setStatus]);
-
-  // Infinite scroll: auto-load when the sentinel nears the viewport bottom; the
-  // button stays as a manual fallback. After a load error, auto mode pauses until a
-  // manual retry clears it.
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
-
+  // ── The single-key loop ─────────────────────────────────────────────────────
+  // j/k (or arrows) move the cursor, Enter fires the selected row's primary, s
+  // snoozes, x won't-does. Inert while a popover owns the keys or focus sits in a
+  // field; Enter defers to whatever control actually has focus.
   useEffect(() => {
-    const sentinel = sentinelRef.current;
-
-    if (!sentinel || !hasNextPage || isFetchingNextPage || loadError) {
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          void fetchNextPage();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) {
+        return;
+      }
+      if (snoozeFor !== undefined || markFor !== undefined) {
+        return;
+      }
+      const target = event.target;
+      if (target instanceof HTMLElement) {
+        if (target.isContentEditable || /^(input|textarea|select)$/i.test(target.tagName)) {
+          return;
         }
-      },
-      { rootMargin: "320px" },
-    );
+        if (event.key === "Enter" && target.closest("button, a")) {
+          return;
+        }
+      }
+      const rows = visibleRef.current;
+      if (rows.length === 0) {
+        return;
+      }
+      const index = Math.max(
+        0,
+        rows.findIndex((row) => row.item.id === selectedId),
+      );
+      const current = rows[index];
+      switch (event.key) {
+        case "ArrowDown":
+        case "j": {
+          event.preventDefault();
+          const next = rows[Math.min(index + 1, rows.length - 1)];
+          setSelectedId(next?.item.id);
+          break;
+        }
+        case "ArrowUp":
+        case "k": {
+          event.preventDefault();
+          const previous = rows[Math.max(index - 1, 0)];
+          setSelectedId(previous?.item.id);
+          break;
+        }
+        case "Enter": {
+          if (current) {
+            event.preventDefault();
+            primaryRefs.current.get(current.item.id)?.click();
+          }
+          break;
+        }
+        case "s": {
+          if (current && current.state !== "dismissed") {
+            event.preventDefault();
+            setSelectedId(current.item.id);
+            setSnoozeFor(current.item.id);
+          }
+          break;
+        }
+        case "x": {
+          if (current && current.state !== "dismissed") {
+            event.preventDefault();
+            setSelectedId(current.item.id);
+            handleWontDo(current.item);
+          }
+          break;
+        }
+        default:
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [handleWontDo, markFor, selectedId, snoozeFor]);
 
-    observer.observe(sentinel);
+  // Keep the cursor's row on screen as j/k walk past the fold.
+  useEffect(() => {
+    if (selectedId) {
+      rowRefs.current.get(selectedId)?.scrollIntoView({ block: "nearest" });
+    }
+  }, [selectedId]);
 
-    return () => observer.disconnect();
-  }, [fetchNextPage, hasNextPage, isFetchingNextPage, loadError]);
+  const toggleShowAll = useCallback(() => {
+    void navigate({
+      search: (previous) => ({ ...previous, all: showAll ? undefined : (true as const) }),
+    });
+  }, [navigate, showAll]);
 
-  // The single action surface every variant opens its dialogs through — each maps a
-  // finding to the right keyed-by-identity dialog the page already owns. Setters are
-  // stable, so this never re-creates.
-  const actions = useMemo<BoardActions>(
-    () => ({
-      onContext: (row) => setContextId(row.trackId),
-      onEnrich: (row) => setEnrichId(row.trackId),
-      onMixtape: (row) => setMixtapeId(row.trackId),
-      onNote: (row) => setNoteId(row.trackId),
-      onObservation: (row) => setObservationId(row.trackId),
-      onPreview: (row) => setPreview(row),
-      onPush: (row, platformKey) => setPush({ platformKey, trackId: row.trackId }),
-      onTag: (row) => setTagId(row.trackId),
-    }),
-    [],
-  );
+  const activeCount = ordered.due.length + ordered.backlog.length;
+  const hiddenCount = showAll
+    ? 0
+    : ordered.backlog.length + ordered.snoozed.length + ordered.dismissed.length;
+  const allCount = items.length;
 
-  const subheader = (
-    <>
-      <SpotifyStatusBanner onReconnect={() => void reconnectSpotify()} status={spotifyStatus} />
-      {/* One filter strip, two axes: the pipeline worklist, then — past a divider —
-          the mixtape lens (the cassette glyph marks the group; every pill says
-          "tape"). Wraps to two lines on a phone. */}
-      <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-4 py-2.5 sm:px-5">
-        {WORKLISTS.map((worklist) => (
-          <FilterPill
-            active={worklist.key === activeWorklist}
-            count={counts(worklist)}
-            key={worklist.key}
-            label={worklist.label}
-            onClick={() => setWorklist(worklist.key)}
-          />
-        ))}
-        <span aria-hidden="true" className="mx-1 h-5 w-px bg-border" />
-        <CassetteTapeIcon
-          aria-hidden="true"
-          className="mr-0.5 size-3.5 text-muted-foreground"
-          weight="fill"
-        />
-        {MIX_FILTERS.map((filter) => (
-          <FilterPill
-            active={filter.key === activeMix}
-            count={mixCounts(filter.key)}
-            key={filter.key}
-            label={filter.label}
-            onClick={() => setMix(filter.key)}
-          />
-        ))}
-      </div>
-      {shownError ? (
-        <p className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive sm:px-5">
-          {shownError}
-        </p>
-      ) : undefined}
-    </>
-  );
+  const subtitleParts: string[] = [];
+  if (activeCount > 0) {
+    subtitleParts.push(`${activeCount} waiting`);
+  }
+  if (data.renderQueueDepth > 0) {
+    subtitleParts.push(`render queue ${data.renderQueueDepth}`);
+  }
+  // tabular-nums: the counts tick on refetch and must not jitter (The Tabular Rule).
+  const subtitle =
+    subtitleParts.length > 0 ? (
+      <span className="tabular-nums">{subtitleParts.join(" · ")}</span>
+    ) : undefined;
+
+  const loadError = queryError
+    ? queryError instanceof Error
+      ? queryError.message
+      : String(queryError)
+    : undefined;
+
+  const showZero = ordered.due.length === 0 && ordered.backlog.length === 0 && !showAll;
+  const zeroCover = lastCleared?.artUrl ?? data.latestCoverUrl;
+
+  const subheader =
+    visible.length > 0 || hiddenCount > 0 || showAll || loadError ? (
+      <>
+        <div className="flex min-h-10 items-center justify-between gap-2 border-b border-border px-3 py-1.5 sm:px-4">
+          {hiddenCount > 0 || showAll ? (
+            <Button onClick={toggleShowAll} size="sm" variant="ghost">
+              {showAll ? "Show less" : "Show all"}
+              <Badge className="tabular-nums" variant="secondary">
+                {showAll ? allCount : hiddenCount + ordered.due.length}
+              </Badge>
+            </Button>
+          ) : (
+            <span />
+          )}
+          {visible.length > 0 ? <KeyLegend /> : undefined}
+        </div>
+        {loadError ? (
+          <p className="border-b border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive sm:px-4">
+            {loadError}
+          </p>
+        ) : undefined}
+      </>
+    ) : undefined;
 
   return (
-    <AdminShell current="dashboard" subheader={subheader} title="Dashboard">
-      {rows.length === 0 ? (
-        <EmptyState body="Logged bangers will show up here." title="No findings yet" />
-      ) : visible.length === 0 ? (
-        <EmptyState
-          body="No loaded findings match these filters — widen the worklist or the mixtape lens."
-          title="Nothing in this view"
-        />
+    <AdminShell current="dashboard" subheader={subheader} subtitle={subtitle} title="Dashboard">
+      {showZero ? (
+        <ZeroState coverUrl={zeroCover} />
       ) : (
-        <>
-          <PipelineBoard actions={actions} entries={entries} />
-          {hasNextPage ? (
-            <div className="border-t border-border p-3 text-center sm:p-4" ref={sentinelRef}>
-              <Button
-                disabled={isFetchingNextPage}
-                onClick={() => void fetchNextPage()}
-                size="sm"
-                variant="outline"
-              >
-                {isFetchingNextPage ? (
-                  <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
-                ) : undefined}
-                {isFetchingNextPage ? "Loading…" : "Load more"}
-              </Button>
-            </div>
-          ) : undefined}
-        </>
-      )}
-
-      <EnrichDialog
-        error={enrichError}
-        onOpenChange={(open) => !open && setEnrichId(undefined)}
-        onTrigger={runEnrichment}
-        row={enrichRow ?? null}
-        triggering={enrichBusy}
-      />
-
-      <TagDialog
-        error={tagError}
-        hasNext={tagRow ? nextVisibleTrackId(tagRow.trackId) !== undefined : false}
-        onOpenChange={(open) => !open && setTagId(undefined)}
-        onSave={(x, y) => void saveTag(x, y)}
-        onSaveAndNext={(x, y) => void saveTag(x, y, true)}
-        onSavePoint={savePoint}
-        points={points}
-        row={tagRow ?? null}
-        saving={tagSaving}
-      />
-
-      <NoteDialog
-        error={noteError}
-        hasNext={noteRow ? nextVisibleTrackId(noteRow.trackId) !== undefined : false}
-        onOpenChange={(open) => !open && setNoteId(undefined)}
-        onSave={(note) => void saveNote(note)}
-        onSaveAndNext={(note) => void saveNote(note, true)}
-        row={noteRow ?? null}
-        saving={noteSaving}
-      />
-
-      <ContextDialog
-        contextNote={contextNoteData?.contextNote ?? ""}
-        loading={contextFetching}
-        onOpenChange={(open) => !open && setContextId(undefined)}
-        row={contextRow ?? null}
-      />
-
-      <ObservationDialog
-        onOpenChange={(open) => !open && setObservationId(undefined)}
-        row={observationRow ?? null}
-        script={observationScriptData?.script ?? ""}
-        scriptLoading={observationScriptFetching}
-      />
-
-      <PushDialog
-        busy={(status) =>
-          push ? Boolean(busy[`${push.trackId}:${push.platformKey}:${status}`]) : false
-        }
-        copied={copiedId === pushRow?.trackId}
-        onCopyCaption={() => pushRow && copyCaption(pushRow)}
-        onMarkFailed={markFailed}
-        onMarkLive={markLive}
-        onOpenChange={(open) => !open && setPush(undefined)}
-        onPush={onPush}
-        platform={pushPlatform}
-        pushing={push ? Boolean(busy[`${push.trackId}:${push.platformKey}:draft`]) : false}
-        row={pushRow ?? null}
-        tiktokPending={tiktokPending}
-      />
-
-      {/* Single-clip preview — the same Stories UI as /log/<id>, one post (no
-          swipe). Loads the clip only on open; handy for lining up the TikTok sound. */}
-      <Dialog onOpenChange={(open) => !open && setPreview(undefined)} open={preview !== undefined}>
-        <DialogContent
-          aria-label="Clip preview"
-          className="inset-0 top-0 left-0 block h-dvh w-full max-w-none translate-x-0 translate-y-0 rounded-none border-0 bg-transparent p-0 ring-0 sm:max-w-none"
-          showCloseButton={false}
-        >
-          {preview ? (
-            <StoriesPlayer
-              initialLogId={preview.logId ?? undefined}
-              onClose={() => setPreview(undefined)}
-              onStoryChange={() => {}}
-              presentation="dialog"
-              tracks={[preview]}
+        <ul aria-label="Attention queue" className="flex flex-col">
+          {visible.map((row) => (
+            <QueueRow
+              busy={busyId === row.item.id}
+              copied={copiedId === row.item.id}
+              flash={flashId === row.item.id}
+              key={row.item.id}
+              item={row.item}
+              leaving={leavingId === row.item.id}
+              markOpen={markFor === row.item.id}
+              markUrl={markUrl}
+              now={now}
+              onCopyCaption={copyCaption}
+              onMarkOpenChange={(open) => {
+                setMarkFor(open ? row.item.id : undefined);
+                setMarkUrl("");
+              }}
+              onMarkPosted={markPosted}
+              onMarkUrlChange={setMarkUrl}
+              onRePush={rePush}
+              onRestore={handleRestore}
+              onSelect={setSelectedId}
+              onSnooze={handleSnooze}
+              onSnoozeOpenChange={(open) => setSnoozeFor(open ? row.item.id : undefined)}
+              onWontDo={handleWontDo}
+              registerPrimary={registerPrimary}
+              registerRow={registerRow}
+              selected={selectedRow?.item.id === row.item.id}
+              snoozeOpen={snoozeFor === row.item.id}
+              snoozedUntil={prefs[row.item.id]?.snoozedUntil}
+              state={row.state}
             />
-          ) : undefined}
-        </DialogContent>
-      </Dialog>
-
-      <AddToPlanDialog
-        memberships={mixtapeRow?.mixtapes ?? []}
-        onAdded={onAddedToPlan}
-        onOpenChange={(open) => !open && setMixtapeId(undefined)}
-        planMemberships={mixtapeRow?.plans ?? []}
-        plans={planTargets}
-        plansLoading={plansFetching && planTargets.length === 0}
-        track={mixtapeRow ?? null}
-      />
+          ))}
+        </ul>
+      )}
     </AdminShell>
   );
 }
 
-// The Spotify connection banner — shown only when there's something to act on:
-// disconnected (the stored authorization is gone, so search + publishing are
-// paused) or stale (still working, but old enough to reconnect before the
-// six-month expiry). A quiet strip under the header with one Reconnect action.
-function SpotifyStatusBanner({
-  onReconnect,
-  status,
-}: {
-  onReconnect: () => void;
-  status?: SpotifyAuthStatus;
-}) {
-  if (!status || (status.connected && !status.stale)) {
-    return null;
+// ─── One row ──────────────────────────────────────────────────────────────────
+
+const SOURCE_ICONS: Record<AttentionSource, ComponentType<{ className?: string }>> = {
+  "attach-cues": FilmSlateIcon,
+  distribute: CassetteTapeIcon,
+  "drip-empty": InstagramIcon,
+  "post-tiktok": TiktokIcon,
+  "tiktok-draft": TiktokIcon,
+};
+
+// The glyph's text equivalent — the row's source, spoken (the glyph itself is
+// decorative, so a screen reader still hears which platform/task the row is).
+const SOURCE_LABELS: Record<AttentionSource, string> = {
+  "attach-cues": "Recording",
+  distribute: "Mixtape",
+  "drip-empty": "Instagram drip",
+  "post-tiktok": "TikTok",
+  "tiktok-draft": "TikTok draft",
+};
+
+type QueueRowProps = {
+  busy: boolean;
+  copied: boolean;
+  flash: boolean;
+  item: AttentionItem;
+  leaving: boolean;
+  markOpen: boolean;
+  markUrl: string;
+  now: number;
+  onCopyCaption: (item: AttentionItem) => void;
+  onMarkOpenChange: (open: boolean) => void;
+  onMarkPosted: (item: AttentionItem, url: string) => void;
+  onMarkUrlChange: (url: string) => void;
+  onRePush: (item: AttentionItem) => void;
+  onRestore: (item: AttentionItem) => void;
+  onSelect: (id: string) => void;
+  onSnooze: (item: AttentionItem, until: string) => void;
+  onSnoozeOpenChange: (open: boolean) => void;
+  onWontDo: (item: AttentionItem) => void;
+  registerPrimary: (id: string, el: HTMLElement | null) => void;
+  registerRow: (id: string, el: HTMLLIElement | null) => void;
+  selected: boolean;
+  snoozeOpen: boolean;
+  snoozedUntil?: string;
+  state: RowState;
+};
+
+function QueueRow({
+  busy,
+  copied,
+  flash,
+  item,
+  leaving,
+  markOpen,
+  markUrl,
+  now,
+  onCopyCaption,
+  onMarkOpenChange,
+  onMarkPosted,
+  onMarkUrlChange,
+  onRePush,
+  onRestore,
+  onSelect,
+  onSnooze,
+  onSnoozeOpenChange,
+  onWontDo,
+  registerPrimary,
+  registerRow,
+  selected,
+  snoozeOpen,
+  snoozedUntil,
+  state,
+}: QueueRowProps) {
+  const SourceIcon = SOURCE_ICONS[item.source];
+  const primary = primaryFor(item, now);
+  const deadline = item.deadlineAt ? deadlineReadout(item.deadlineAt, now) : undefined;
+  const markInputId = useId();
+  const canMarkPosted = item.source === "post-tiktok" || item.source === "tiktok-draft";
+  const parked = state === "snoozed" || state === "dismissed";
+
+  return (
+    <li
+      className={cn(
+        "flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border/70 px-3 py-2.5 transition-[opacity,background-color] duration-200 ease-out last:border-0 sm:px-4",
+        selected ? "bg-primary/10" : "hover:bg-primary/5",
+        flash && "bg-primary/15",
+        // 75%, not lower: the 11px Stardust meta must hold WCAG AA on the plate
+        // (The Legible Sky Rule) — the row still carries a live Restore control.
+        state === "dismissed" && "opacity-75",
+        leaving && "pointer-events-none bg-primary/15 opacity-0",
+      )}
+      onClick={() => onSelect(item.id)}
+      ref={(el) => registerRow(item.id, el)}
+    >
+      <RowArt artUrl={item.artUrl} Icon={SourceIcon} />
+
+      <div className="min-w-0 flex-1 basis-44">
+        <div className="flex min-w-0 items-baseline gap-2">
+          <span className="truncate text-sm font-bold">{item.title}</span>
+          {item.logId ? (
+            <span className="shrink-0 font-display text-xs tracking-[-0.01em] tabular-nums text-muted-foreground">
+              {item.logId}
+            </span>
+          ) : undefined}
+        </div>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
+          <SourceIcon aria-hidden="true" className="size-3" />
+          <span className="sr-only">{SOURCE_LABELS[item.source]}</span>
+          {state === "snoozed" && snoozedUntil ? (
+            <Chip>
+              <ClockCountdownIcon aria-hidden="true" className="size-3" />
+              <span
+                className="font-display tracking-[-0.01em] tabular-nums"
+                suppressHydrationWarning
+              >
+                {snoozeReadout(snoozedUntil, now)}
+              </span>
+            </Chip>
+          ) : undefined}
+          {state === "dismissed" ? (
+            <Chip>
+              <ProhibitIcon aria-hidden="true" className="size-3" />
+              Won't do
+            </Chip>
+          ) : undefined}
+          {deadline ? (
+            <span
+              className={cn(
+                "font-display tracking-[-0.01em] tabular-nums",
+                deadline.overdue && "font-bold text-destructive",
+              )}
+              suppressHydrationWarning
+            >
+              {deadline.label}
+            </span>
+          ) : (
+            <span className="font-display tracking-[-0.01em] tabular-nums" suppressHydrationWarning>
+              {formatAge(item.anchorAt, now)}
+            </span>
+          )}
+          {item.waiting !== undefined && item.waiting > 1 ? (
+            <span className="font-display tracking-[-0.01em] tabular-nums" suppressHydrationWarning>
+              {item.waiting} waiting
+            </span>
+          ) : undefined}
+          {item.source === "drip-empty" ? (
+            <span className="font-display tracking-[-0.01em] tabular-nums">0 queued</span>
+          ) : undefined}
+          {item.machine ? (
+            <Badge
+              className="px-1 py-0 font-display text-[10px] text-muted-foreground"
+              variant="outline"
+            >
+              {item.machine}
+            </Badge>
+          ) : undefined}
+          {item.missing?.map((leg) => {
+            const LegIcon = leg === "youtube" ? YoutubeIcon : MixcloudIcon;
+            return (
+              <span className="flex items-center" key={leg}>
+                <LegIcon className="size-3" />
+                <span className="sr-only">{leg} pending</span>
+              </span>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-1 max-sm:w-full max-sm:justify-end">
+        {parked ? (
+          <Button
+            onClick={() => onRestore(item)}
+            ref={(el: HTMLElement | null) => registerPrimary(item.id, el)}
+            size="sm"
+            variant={selected ? "default" : "outline"}
+          >
+            {state === "dismissed" ? (
+              <>
+                <ArrowCounterClockwiseIcon aria-hidden="true" />
+                Restore
+              </>
+            ) : (
+              "Unsnooze"
+            )}
+          </Button>
+        ) : (
+          <>
+            {canMarkPosted ? (
+              <Popover onOpenChange={onMarkOpenChange} open={markOpen}>
+                <PopoverTrigger
+                  render={
+                    <Button size="sm" variant="ghost">
+                      Mark posted
+                    </Button>
+                  }
+                />
+                <PopoverContent align="end" className="w-72 space-y-2">
+                  <Label htmlFor={markInputId}>Post URL</Label>
+                  <Input
+                    autoFocus
+                    id={markInputId}
+                    inputMode="url"
+                    onChange={(event) => onMarkUrlChange(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && isHttpUrl(markUrl.trim())) {
+                        event.preventDefault();
+                        onMarkPosted(item, markUrl.trim());
+                      }
+                    }}
+                    placeholder="https://www.tiktok.com/…"
+                    value={markUrl}
+                  />
+                  <Button
+                    className="w-full"
+                    disabled={busy || !isHttpUrl(markUrl.trim())}
+                    onClick={() => onMarkPosted(item, markUrl.trim())}
+                    size="sm"
+                  >
+                    {busy ? (
+                      <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+                    ) : undefined}
+                    Mark posted
+                  </Button>
+                </PopoverContent>
+              </Popover>
+            ) : undefined}
+            <PrimaryButton
+              busy={busy}
+              copied={copied}
+              item={item}
+              onCopyCaption={onCopyCaption}
+              onRePush={onRePush}
+              primary={primary}
+              registerPrimary={registerPrimary}
+              selected={selected}
+            />
+          </>
+        )}
+        {state !== "dismissed" ? (
+          <>
+            <Popover onOpenChange={onSnoozeOpenChange} open={snoozeOpen}>
+              <PopoverTrigger
+                render={
+                  <Button aria-label={`Snooze ${item.title}`} size="icon-sm" variant="ghost">
+                    <ClockCountdownIcon aria-hidden="true" />
+                  </Button>
+                }
+              />
+              <PopoverContent align="end" className="w-40 p-1">
+                <div className="flex flex-col">
+                  {snoozeSlots(now).map((slot) => (
+                    <Button
+                      className="justify-start"
+                      key={slot.label}
+                      onClick={() => onSnooze(item, slot.until)}
+                      size="sm"
+                      variant="ghost"
+                    >
+                      {slot.label}
+                    </Button>
+                  ))}
+                </div>
+              </PopoverContent>
+            </Popover>
+            <Button
+              aria-label={`Won't do ${item.title}`}
+              onClick={() => onWontDo(item)}
+              size="icon-sm"
+              variant="ghost"
+            >
+              <ProhibitIcon aria-hidden="true" />
+            </Button>
+          </>
+        ) : undefined}
+      </div>
+    </li>
+  );
+}
+
+type PrimaryButtonProps = {
+  busy: boolean;
+  copied: boolean;
+  item: AttentionItem;
+  onCopyCaption: (item: AttentionItem) => void;
+  onRePush: (item: AttentionItem) => void;
+  primary: PrimaryAction;
+  registerPrimary: (id: string, el: HTMLElement | null) => void;
+  selected: boolean;
+};
+
+// The row's primary action — the one thing Enter fires. The selected row's
+// primary carries the gold (the sun follows the cursor); every other row's stays
+// an outline.
+function PrimaryButton({
+  busy,
+  copied,
+  item,
+  onCopyCaption,
+  onRePush,
+  primary,
+  registerPrimary,
+  selected,
+}: PrimaryButtonProps) {
+  const variant = selected ? "default" : "outline";
+
+  if (primary.kind === "open") {
+    return (
+      <Button
+        nativeButton={false}
+        render={
+          <a
+            href={primary.href}
+            ref={(el: HTMLAnchorElement | null) => registerPrimary(item.id, el)}
+          />
+        }
+        size="sm"
+        variant={variant}
+      >
+        {primary.label}
+      </Button>
+    );
   }
 
-  const disconnected = !status.connected;
+  if (primary.kind === "re-push") {
+    return (
+      <Button
+        disabled={busy}
+        onClick={() => onRePush(item)}
+        ref={(el: HTMLElement | null) => registerPrimary(item.id, el)}
+        size="sm"
+        variant={variant}
+      >
+        {busy ? (
+          <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+        ) : undefined}
+        {primary.label}
+      </Button>
+    );
+  }
+
+  return (
+    <Button
+      disabled={!item.logId}
+      onClick={() => onCopyCaption(item)}
+      ref={(el: HTMLElement | null) => registerPrimary(item.id, el)}
+      size="sm"
+      variant={variant}
+    >
+      {copied ? "Copied" : primary.label}
+    </Button>
+  );
+}
+
+function Chip({ children }: { children: ReactNode }) {
+  return <span className="flex items-center gap-1">{children}</span>;
+}
+
+// The row's artwork tile. A failed load (a cover the dev bucket doesn't hold)
+// falls back to the same tile a coverless object gets: the source glyph over the
+// eclipse-tinted fallback (DESIGN.md, the Track Row's gold-to-red artwork
+// fallback, at instrument size).
+function RowArt({
+  artUrl,
+  Icon,
+}: {
+  artUrl?: string;
+  Icon: ComponentType<{ className?: string }>;
+}) {
+  const [failed, setFailed] = useState(false);
+
+  if (artUrl && !failed) {
+    return (
+      <img
+        alt=""
+        className="size-10 shrink-0 rounded-[6px] border border-border object-cover"
+        loading="lazy"
+        onError={() => setFailed(true)}
+        // A load that failed BEFORE hydration never re-fires `error`, so the
+        // mount ref re-checks the finished-but-empty state.
+        ref={(el) => {
+          if (el && el.complete && el.naturalWidth === 0) {
+            setFailed(true);
+          }
+        }}
+        src={artUrl}
+      />
+    );
+  }
 
   return (
     <div
-      className={cn(
-        "flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2 text-sm sm:px-5",
-        disconnected
-          ? "border-destructive/30 bg-destructive/10 text-destructive"
-          : "border-primary/30 bg-primary/10 text-primary",
-      )}
+      aria-hidden="true"
+      className="flex size-10 shrink-0 items-center justify-center rounded-[6px] border border-border bg-gradient-to-br from-primary/10 via-muted/30 to-destructive/10"
     >
-      <span>
-        {disconnected
-          ? "Spotify isn’t connected — search and publishing are paused until you reconnect."
-          : `Spotify authorization is ${status.ageDays} days old and will expire — reconnect to avoid disruption.`}
+      <Icon className="size-4 text-muted-foreground" />
+    </div>
+  );
+}
+
+// ─── The zero state ───────────────────────────────────────────────────────────
+
+// The one sanctioned motion exception (docs/cockpit-roadmap.md, the design
+// doctrine): the last cover cleared, warmly lit by a single gold bloom, one word,
+// a 200ms ease-out settle. Reduced motion: static (styles.css, .queue-clear).
+function ZeroState({ coverUrl }: { coverUrl?: string }) {
+  return (
+    <div className="relative flex flex-1 flex-col items-center justify-center gap-6 overflow-hidden px-4 py-24">
+      <div
+        aria-hidden="true"
+        className="absolute size-96 rounded-full bg-[radial-gradient(circle,_var(--gold-veil)_0%,_transparent_65%)]"
+      />
+      {coverUrl ? (
+        <img
+          alt=""
+          className="queue-clear relative size-40 rounded-[6px] border border-primary/30 object-cover sm:size-48"
+          src={coverUrl}
+        />
+      ) : undefined}
+      <p className="queue-clear relative font-display text-2xl font-bold tracking-[-0.02em] text-primary">
+        clear
+      </p>
+    </div>
+  );
+}
+
+// ─── The key legend ───────────────────────────────────────────────────────────
+
+function KeyLegend() {
+  return (
+    <p className="hidden items-center gap-3 text-[11px] text-muted-foreground md:flex">
+      <span className="flex items-center gap-1">
+        <Kbd>j</Kbd>
+        <Kbd>k</Kbd> move
       </span>
-      <Button onClick={onReconnect} size="sm" variant={disconnected ? "destructive" : "secondary"}>
-        Reconnect Spotify
-      </Button>
-    </div>
+      <span className="flex items-center gap-1">
+        <Kbd>↵</Kbd> act
+      </span>
+      <span className="flex items-center gap-1">
+        <Kbd>s</Kbd> snooze
+      </span>
+      <span className="flex items-center gap-1">
+        <Kbd>x</Kbd> won't do
+      </span>
+    </p>
   );
 }
 
-function EmptyState({ body, title }: { body: string; title: string }) {
+function Kbd({ children }: { children: ReactNode }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-1 px-4 py-20 text-center">
-      <p className="font-medium">{title}</p>
-      <p className="text-sm text-muted-foreground">{body}</p>
-    </div>
-  );
-}
-
-// One filter pill — a worklist or mixtape lens, with its live count. Shared by both
-// groups in the filter strip so they read identically.
-function FilterPill({
-  active,
-  count,
-  label,
-  onClick,
-}: {
-  active: boolean;
-  count: number;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <Button onClick={onClick} size="sm" variant={active ? "secondary" : "ghost"}>
-      {label}
-      <Badge
-        className={cn(
-          "ml-1 tabular-nums",
-          active ? "border-primary/40 bg-primary/10 text-primary" : "",
-        )}
-        variant={active ? "outline" : "secondary"}
-      >
-        {count}
-      </Badge>
-    </Button>
+    <kbd className="rounded-sm border border-border bg-muted/40 px-1 font-mono text-[10px]">
+      {children}
+    </kbd>
   );
 }

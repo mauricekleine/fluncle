@@ -21,7 +21,7 @@ const OUT_DIR = process.env.OUT_DIR ?? "/tmp/admin-shell-smoke";
 // plate h1) its target renders. System leaves the shell for the public /status.
 const ENTRIES: { expectH1: string; name: string; path: string }[] = [
   { expectH1: "Dashboard", name: "Dashboard", path: "/admin" },
-  { expectH1: "Dashboard", name: "Findings", path: "/admin" },
+  { expectH1: "Findings", name: "Findings", path: "/admin/findings" },
   { expectH1: "Plans", name: "Plans", path: "/admin/plans" },
   { expectH1: "Clip library", name: "Recordings", path: "/admin/clips" },
   { expectH1: "Plans", name: "Mixtapes", path: "/admin/plans" },

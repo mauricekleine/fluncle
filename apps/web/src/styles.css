@@ -2791,3 +2791,28 @@ body::before {
   text-transform: uppercase;
   white-space: nowrap;
 }
+
+/* The attention queue's zero-state settle — the one sanctioned motion exception
+   (docs/cockpit-roadmap.md, the design doctrine): the last cover cleared lands
+   warmly lit with a single 200ms ease-out settle. Reduced motion: static. */
+@keyframes queue-clear-settle {
+  from {
+    opacity: 0;
+    transform: scale(1.04) translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.queue-clear {
+  animation: queue-clear-settle 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .queue-clear {
+    animation: none;
+  }
+}

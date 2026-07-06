@@ -47,6 +47,7 @@ import { Route as AdminPlansRouteImport } from './routes/admin/plans'
 import { Route as AdminNewsletterRouteImport } from './routes/admin/newsletter'
 import { Route as AdminMixtapesRouteImport } from './routes/admin/mixtapes'
 import { Route as AdminLoginRouteImport } from './routes/admin/login'
+import { Route as AdminFindingsRouteImport } from './routes/admin/findings'
 import { Route as AdminClipsRouteImport } from './routes/admin/clips'
 import { Route as ApiV1StatusRouteImport } from './routes/api/v1/status'
 import { Route as ApiV1PostmanDotjsonRouteImport } from './routes/api/v1/postman[.]json'
@@ -271,6 +272,11 @@ const AdminLoginRoute = AdminLoginRouteImport.update({
   path: '/login',
   getParentRoute: () => AdminRouteRoute,
 } as any)
+const AdminFindingsRoute = AdminFindingsRouteImport.update({
+  id: '/findings',
+  path: '/findings',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
 const AdminClipsRoute = AdminClipsRouteImport.update({
   id: '/clips',
   path: '/clips',
@@ -472,6 +478,7 @@ export interface FileRoutesByFullPath {
   '/sprites': typeof SpritesRoute
   '/status': typeof StatusRoute
   '/admin/clips': typeof AdminClipsRoute
+  '/admin/findings': typeof AdminFindingsRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
   '/admin/newsletter': typeof AdminNewsletterRoute
@@ -542,6 +549,7 @@ export interface FileRoutesByTo {
   '/sprites': typeof SpritesRoute
   '/status': typeof StatusRoute
   '/admin/clips': typeof AdminClipsRoute
+  '/admin/findings': typeof AdminFindingsRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
   '/admin/newsletter': typeof AdminNewsletterRoute
@@ -615,6 +623,7 @@ export interface FileRoutesById {
   '/sprites': typeof SpritesRoute
   '/status': typeof StatusRoute
   '/admin/clips': typeof AdminClipsRoute
+  '/admin/findings': typeof AdminFindingsRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixtapes': typeof AdminMixtapesRoute
   '/admin/newsletter': typeof AdminNewsletterRoute
@@ -689,6 +698,7 @@ export interface FileRouteTypes {
     | '/sprites'
     | '/status'
     | '/admin/clips'
+    | '/admin/findings'
     | '/admin/login'
     | '/admin/mixtapes'
     | '/admin/newsletter'
@@ -759,6 +769,7 @@ export interface FileRouteTypes {
     | '/sprites'
     | '/status'
     | '/admin/clips'
+    | '/admin/findings'
     | '/admin/login'
     | '/admin/mixtapes'
     | '/admin/newsletter'
@@ -831,6 +842,7 @@ export interface FileRouteTypes {
     | '/sprites'
     | '/status'
     | '/admin/clips'
+    | '/admin/findings'
     | '/admin/login'
     | '/admin/mixtapes'
     | '/admin/newsletter'
@@ -1213,6 +1225,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminLoginRouteImport
       parentRoute: typeof AdminRouteRoute
     }
+    '/admin/findings': {
+      id: '/admin/findings'
+      path: '/findings'
+      fullPath: '/admin/findings'
+      preLoaderRoute: typeof AdminFindingsRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
     '/admin/clips': {
       id: '/admin/clips'
       path: '/clips'
@@ -1442,6 +1461,7 @@ declare module '@tanstack/react-router' {
 
 interface AdminRouteRouteChildren {
   AdminClipsRoute: typeof AdminClipsRoute
+  AdminFindingsRoute: typeof AdminFindingsRoute
   AdminLoginRoute: typeof AdminLoginRoute
   AdminMixtapesRoute: typeof AdminMixtapesRoute
   AdminNewsletterRoute: typeof AdminNewsletterRoute
@@ -1452,6 +1472,7 @@ interface AdminRouteRouteChildren {
 
 const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminClipsRoute: AdminClipsRoute,
+  AdminFindingsRoute: AdminFindingsRoute,
   AdminLoginRoute: AdminLoginRoute,
   AdminMixtapesRoute: AdminMixtapesRoute,
   AdminNewsletterRoute: AdminNewsletterRoute,
