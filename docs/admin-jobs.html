@@ -2455,15 +2455,13 @@
         );
 
         if (state.sort) {
-          rows = rows
-            .slice()
-            .sort(
-              (a, b) =>
-                state.dir *
-                String(a[state.sort]).localeCompare(String(b[state.sort]), undefined, {
-                  numeric: true,
-                }),
-            );
+          rows = rows.slice().sort(
+            (a, b) =>
+              state.dir *
+              String(a[state.sort]).localeCompare(String(b[state.sort]), undefined, {
+                numeric: true,
+              }),
+          );
         }
 
         return rows;
