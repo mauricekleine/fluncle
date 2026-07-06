@@ -8,7 +8,8 @@ import { cn } from "@/lib/utils";
 //
 //   kind  → SHAPE.  auto (an agent) is round; human (your hands) is a rounded square.
 //   state → FILL.   open = hollow, running = dashed + spinner, partial = dashed +
-//           gold veil, done = solid gold veil + check, planned = ghosted dotted.
+//           gold veil, done = solid gold veil + check, stale = dashed warning tint (a
+//           bounced TikTok draft — your move again), planned = ghosted dotted.
 //
 // The shape axis survives colour-blindness and AA on its own, so the board never
 // needs a dozen gold cells per row to be scannable.
@@ -26,6 +27,9 @@ const STATE_CLASS: Record<BoardStep["state"], string> = {
   partial: "border-dashed border-primary/60 bg-primary/10 text-foreground",
   planned: "border-dotted border-border/50 bg-transparent text-muted-foreground/45",
   running: "border-dashed border-primary/45 bg-primary/5 text-muted-foreground",
+  // A bounced TikTok draft: dashed + a muted destructive tint so it reads as "needs
+  // you again", never confusable with the gold `partial` veil or the hollow `open`.
+  stale: "border-dashed border-destructive/55 bg-destructive/10 text-foreground",
 };
 
 export function StepNode({

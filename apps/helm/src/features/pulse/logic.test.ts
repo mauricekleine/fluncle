@@ -141,39 +141,69 @@ describe("postFreshness", () => {
   });
 
   test("a live TikTok post marks postedToTikTok and sets the stamp", () => {
-    const { postedAt, postedToTikTok } = postFreshness([
-      at("2026-07-06T12:00:00Z", "tiktok", "published"),
-    ]);
+    const { postedAt, postedToTikTok } = postFreshness(
+      [at("2026-07-06T12:00:00Z", "tiktok", "published")],
+      NOW,
+    );
 
     expect(postedToTikTok).toBe(true);
     expect(postedAt).toBe(Date.parse("2026-07-06T12:00:00Z"));
   });
 
-  test("a drafted TikTok counts as gone out (it's in the inbox)", () => {
-    expect(postFreshness([at("2026-07-06T12:00:00Z", "tiktok", "draft")]).postedToTikTok).toBe(
-      true,
+  test("a FRESH drafted TikTok (under 24h) counts as gone out — it's in the inbox", () => {
+    const { postedToTikTok } = postFreshness(
+      [at("2026-07-06T12:00:00Z", "tiktok", "draft", "updatedAt")], // 8h before NOW
+      NOW,
     );
+
+    expect(postedToTikTok).toBe(true);
+  });
+
+  test("a STALE drafted TikTok (past 24h, likely bounced) re-opens as unposted", () => {
+    // The live bug: TikTok async-bounces the draft, Postiz still reports success, the
+    // row stays `draft` — so it used to count as posted forever. Past 24h off
+    // `updatedAt` it must read as unposted and NOT contribute a posted-at stamp.
+    const { postedAt, postedToTikTok } = postFreshness(
+      [at("2026-07-04T12:00:00Z", "tiktok", "draft", "updatedAt")], // 56h before NOW
+      NOW,
+    );
+
+    expect(postedToTikTok).toBe(false);
+    expect(postedAt).toBeNull();
+  });
+
+  test("clock injection flips the same draft from gone-out to bounced", () => {
+    const post = at("2026-07-05T12:00:00Z", "tiktok", "draft", "updatedAt");
+
+    // 8h after the push → still fresh, in the inbox.
+    expect(postFreshness([post], Date.parse("2026-07-05T20:00:00Z")).postedToTikTok).toBe(true);
+    // 32h after the push → bounced, re-opened.
+    expect(postFreshness([post], Date.parse("2026-07-06T20:00:00Z")).postedToTikTok).toBe(false);
   });
 
   test("a failed post re-opens the finding as unposted", () => {
-    const { postedAt, postedToTikTok } = postFreshness([
-      at("2026-07-06T12:00:00Z", "tiktok", "failed"),
-    ]);
+    const { postedAt, postedToTikTok } = postFreshness(
+      [at("2026-07-06T12:00:00Z", "tiktok", "failed")],
+      NOW,
+    );
 
     expect(postedToTikTok).toBe(false);
     expect(postedAt).toBeNull();
   });
 
   test("the freshest stamp wins across platforms; publishedAt over updatedAt", () => {
-    const { postedAt } = postFreshness([
-      at("2026-07-06T10:00:00Z", "youtube", "published"),
-      {
-        platform: "tiktok",
-        publishedAt: "2026-07-06T14:00:00Z",
-        status: "published",
-        updatedAt: "2000-01-01T00:00:00Z",
-      },
-    ]);
+    const { postedAt } = postFreshness(
+      [
+        at("2026-07-06T10:00:00Z", "youtube", "published"),
+        {
+          platform: "tiktok",
+          publishedAt: "2026-07-06T14:00:00Z",
+          status: "published",
+          updatedAt: "2000-01-01T00:00:00Z",
+        },
+      ],
+      NOW,
+    );
 
     expect(postedAt).toBe(Date.parse("2026-07-06T14:00:00Z"));
   });
