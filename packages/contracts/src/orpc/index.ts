@@ -131,7 +131,6 @@ export { searchTracks } from "./search";
 export { listStories } from "./stories";
 export { type SubmissionBody, submitTrack } from "./submissions";
 export { getRandomTrack, getSimilarFindings, getTrack, listTracks } from "./tracks";
-export { getRandomTrack, getTrack, listTracks } from "./tracks";
 export { recordLiveState } from "./admin-twitch";
 export {
   type ClipDTO,
