@@ -157,6 +157,45 @@ export async function createBroadcast(params: {
 }
 
 /**
+ * Best-effort count of the Fluncle segment's recipients — the billable quantity
+ * for a broadcast send (COST-01: Resend bills per email, and a broadcast mails the
+ * whole segment). Resend exposes no count field on the broadcast, so we read the
+ * segment's contact list and count it. Returns `null` on any failure — the caller
+ * emits no cost row rather than a wrong one, and this NEVER throws (it is a
+ * cost-ledger read, not part of the send). One page (the list is not paginated
+ * through here), so a very large list would undercount — acceptable for an
+ * `estimated` figure.
+ */
+export async function countSegmentRecipients(): Promise<number | null> {
+  try {
+    const segmentId = await readEnv("RESEND_SEGMENT_ID");
+    const response = await resendFetch(`/segments/${encodeURIComponent(segmentId)}/contacts`, {
+      method: "GET",
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const body = (await response.json().catch(() => undefined)) as
+      | { data?: { data?: unknown[] } | unknown[] }
+      | undefined;
+    // Resend nests the array under `data` (and some list shapes double-nest it).
+    const data = body?.data;
+
+    if (Array.isArray(data)) {
+      return data.length;
+    }
+
+    const nested = data?.data;
+
+    return Array.isArray(nested) ? nested.length : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Send a previously-created broadcast (the explicit human gate the old Loops
  * dashboard tap provided). An optional `scheduledAt` (ISO 8601 or Resend natural
  * language like "in 1 hour") defers the send. Idempotency-keyed on the broadcast id

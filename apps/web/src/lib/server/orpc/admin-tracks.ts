@@ -433,7 +433,10 @@ export function adminTracksHandlers(os: Implementer) {
       } else if (storedContextNote?.trim()) {
         contextNote = storedContextNote.trim().slice(0, 2000);
       } else {
-        const fetched = await fetchTrackContext(buildContextQuery(track));
+        const fetched = await fetchTrackContext(buildContextQuery(track), {
+          logId: track.logId,
+          trackId: track.trackId,
+        });
         contextNote = fetched.contextNote;
         freshlyFetched = Boolean(fetched.contextNote);
       }
@@ -445,6 +448,7 @@ export function adminTracksHandlers(os: Implementer) {
         typeof body.voiceId === "string" ? body.voiceId : undefined,
       );
       const { alignment, bytes, voiceId } = await renderObservationCartesia(cartesiaVoiceId, {
+        capture: { logId: track.logId, trackId: track.trackId },
         text: script,
       });
 
@@ -584,7 +588,10 @@ export function adminTracksHandlers(os: Implementer) {
         typeof input.query === "string" && input.query.trim()
           ? input.query.trim()
           : buildContextQuery(track);
-      const fetched = await fetchTrackContext(query);
+      const fetched = await fetchTrackContext(query, {
+        logId: track.logId,
+        trackId: track.trackId,
+      });
 
       // Persist the reliability marker alongside the note. The `context_status`
       // column makes a confirmed-empty fetch (`empty`) distinct from never-attempted

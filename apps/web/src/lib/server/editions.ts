@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { type EditionDTO } from "@fluncle/contracts";
 import { rowToEdition } from "../editions";
+import { captureCostEvents, costEventId } from "./costs";
 import { getDb, typedRow, typedRows } from "./db";
 import { renderEditionEmailHtml } from "./edition-email";
-import { createBroadcast, sendBroadcast } from "./resend";
+import { countSegmentRecipients, createBroadcast, sendBroadcast } from "./resend";
 import { ApiError } from "./spotify";
 
 const subjectMaxLength = 200;
@@ -245,6 +246,35 @@ export async function sendEdition(
 
   if (!row) {
     throw new ApiError("send_failed", "Edition could not be marked sent", 409);
+  }
+
+  // Cost capture (COST-01, Path A — `cash`): the broadcast mailed the whole
+  // segment, so the billable quantity is the recipient count (best-effort — Resend
+  // exposes no count, so we read the segment; a miss emits no row). A non-finding
+  // `newsletter` step (trackId/logId null). BEST-EFFORT throughout: this runs AFTER
+  // the send is durable and never throws, so it can't affect the mail-out.
+  const recipients = options.scheduledAt ? null : await countSegmentRecipients();
+
+  if (typeof recipients === "number" && recipients > 0) {
+    const occurredAt = new Date().toISOString();
+
+    await captureCostEvents([
+      {
+        costBasis: "cash",
+        id: costEventId({
+          occurredAt,
+          step: "newsletter",
+          unitType: "emails",
+          vendor: "resend",
+        }),
+        occurredAt,
+        quantity: recipients,
+        source: "estimated",
+        step: "newsletter",
+        unitType: "emails",
+        vendor: "resend",
+      },
+    ]);
   }
 
   return getEditionById(id, { includeDrafts: true });
