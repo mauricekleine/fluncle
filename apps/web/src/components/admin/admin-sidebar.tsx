@@ -24,6 +24,7 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuBadge,
@@ -36,18 +37,23 @@ import { isAdminRequest } from "@/lib/server/admin-auth";
 import { listTracks } from "@/lib/server/tracks";
 
 // The admin sidebar — the one navigation surface of the admin workspace
-// (docs/admin-shell.md). One flat object nav: every kind of thing the operator
-// works on is an entry, whether or not it has its own station yet. An entry
-// whose station doesn't exist points at the best CURRENT home for that object
-// and only lights up once a page declares it as its owner key — so the nav is
-// stable across waves while stations land behind it.
+// (docs/admin-shell.md). The object nav: every kind of thing the operator works
+// on is an entry, whether or not it has its own station yet. An entry whose
+// station doesn't exist points at the best CURRENT home for that object and only
+// lights up once a page declares it as its owner key — so the nav is stable
+// across waves while stations land behind it. Entries are grouped into sections
+// (ADM-01): a section renders as a Shadcn SidebarGroup, and a labelled section
+// gets a SidebarGroupLabel above it. The "Sets" group holds the set-level objects
+// (Playlists → Mixtapes); a later slice pulls Recordings + Clips into a "Studio"
+// group the same way.
 //
 // Owner keys today: `/admin` (the attention queue, the landing) → dashboard;
 // `/admin/findings` (the pipeline board) → findings; `/admin/renders` → renders;
-// `/admin/plans` → plans; `/admin/clips` → clips; `/admin/newsletter` → newsletter;
-// the Studio (`/admin/studio/$recordingId`, a recording's workstation) → recordings.
-// Recordings' list home is the recordings index on Clips; Mixtapes' closest home
-// is Plans (where a take is promoted); System is the live service map at /status.
+// `/admin/plans` → plans (labelled "Playlists"); `/admin/clips` → clips;
+// `/admin/newsletter` → newsletter; the Studio (`/admin/studio/$recordingId`, a
+// recording's workstation) → recordings. Recordings' list home is the recordings
+// index on Clips; Mixtapes' closest home is Plans (where a take is promoted);
+// System is the live service map at /status.
 
 /** A sidebar entry's key. A page passes the entry it OWNS as `current`. */
 export type AdminNavCurrent =
@@ -80,35 +86,67 @@ const HOME_ENTRY: NavEntry = {
   to: "/admin",
 };
 
+// A group of object entries. A section renders as one Shadcn SidebarGroup; a
+// `label` renders a SidebarGroupLabel above the entries (else the group is
+// unlabelled and reads as it did before).
+type NavSection = {
+  entries: NavEntry[];
+  /** Stable React key for the section. */
+  key: string;
+  /** The group heading. Omit for an unlabelled group. */
+  label?: string;
+};
+
 // The objects, in pipeline order: a finding is logged, filmed into a render,
 // planned into a set, captured as a recording, promoted to a mixtape, clipped, and
 // written up. Renders sits with Findings (its object is a finding's video) and
 // carries the render backlog badge — the count's dedicated home now it has a page.
-const OBJECT_ENTRIES: NavEntry[] = [
+//
+// "Sets" is the set-level objects: a Playlist (a plan) is lined up first and
+// promoted into a Mixtape, so Playlists leads. Recordings + Clips stay unlabelled
+// for now; a later slice lifts them into their own "Studio" group between Sets and
+// Newsletter using this same section shape.
+const OBJECT_SECTIONS: NavSection[] = [
   {
-    count: "untagged",
-    icon: VinylRecordIcon,
-    key: "findings",
-    label: "Findings",
-    to: "/admin/findings",
+    entries: [
+      {
+        count: "untagged",
+        icon: VinylRecordIcon,
+        key: "findings",
+        label: "Findings",
+        to: "/admin/findings",
+      },
+      {
+        count: "renderQueue",
+        icon: FilmReelIcon,
+        key: "renders",
+        label: "Renders",
+        to: "/admin/renders",
+      },
+      { icon: UsersThreeIcon, key: "artists", label: "Artists", to: "/admin/artists" },
+    ],
+    key: "objects",
   },
   {
-    count: "renderQueue",
-    icon: FilmReelIcon,
-    key: "renders",
-    label: "Renders",
-    to: "/admin/renders",
+    entries: [
+      { icon: ListNumbersIcon, key: "plans", label: "Playlists", to: "/admin/plans" },
+      { icon: CassetteTapeIcon, key: "mixtapes", label: "Mixtapes", to: "/admin/plans" },
+    ],
+    key: "sets",
+    label: "Sets",
   },
-  { icon: UsersThreeIcon, key: "artists", label: "Artists", to: "/admin/artists" },
-  { icon: ListNumbersIcon, key: "plans", label: "Plans", to: "/admin/plans" },
-  { icon: FilmSlateIcon, key: "recordings", label: "Recordings", to: "/admin/clips" },
-  { icon: CassetteTapeIcon, key: "mixtapes", label: "Mixtapes", to: "/admin/plans" },
-  { icon: FilmStripIcon, key: "clips", label: "Clips", to: "/admin/clips" },
   {
-    icon: PaperPlaneTiltIcon,
-    key: "newsletter",
-    label: "Newsletter",
-    to: "/admin/newsletter",
+    entries: [
+      { icon: FilmSlateIcon, key: "recordings", label: "Recordings", to: "/admin/clips" },
+      { icon: FilmStripIcon, key: "clips", label: "Clips", to: "/admin/clips" },
+      {
+        icon: PaperPlaneTiltIcon,
+        key: "newsletter",
+        label: "Newsletter",
+        to: "/admin/newsletter",
+      },
+    ],
+    key: "publish",
   },
 ];
 
@@ -210,11 +248,14 @@ export function AdminSidebar({ current }: { current: AdminNavCurrent }) {
               <SidebarMenu>{renderEntry(HOME_ENTRY)}</SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
-          <SidebarGroup>
-            <SidebarGroupContent>
-              <SidebarMenu>{OBJECT_ENTRIES.map(renderEntry)}</SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
+          {OBJECT_SECTIONS.map((section) => (
+            <SidebarGroup key={section.key}>
+              {section.label ? <SidebarGroupLabel>{section.label}</SidebarGroupLabel> : null}
+              <SidebarGroupContent>
+                <SidebarMenu>{section.entries.map(renderEntry)}</SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          ))}
           <SidebarGroup className="mt-auto">
             <SidebarGroupContent>
               <SidebarMenu>{renderEntry(SYSTEM_ENTRY)}</SidebarMenu>
