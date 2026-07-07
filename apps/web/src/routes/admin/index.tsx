@@ -3,8 +3,11 @@ import {
   CassetteTapeIcon,
   CircleNotchIcon,
   ClockCountdownIcon,
+  CopyIcon,
   FilmSlateIcon,
+  ImageIcon,
   MicrophoneStageIcon,
+  PaperPlaneTiltIcon,
   ProhibitIcon,
 } from "@phosphor-icons/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -22,6 +25,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { AdminShell } from "@/components/admin/admin-shell";
+import { usePublish } from "@/components/admin/use-publish";
 import { InstagramIcon, MixcloudIcon, TiktokIcon, YoutubeIcon } from "@/components/platform-icons";
 import { Badge } from "@fluncle/ui/components/badge";
 import { Button } from "@fluncle/ui/components/button";
@@ -46,6 +50,8 @@ import {
   snoozeRow,
   useQueuePrefs,
 } from "@/lib/queue-prefs";
+import { trackMedia } from "@/lib/media";
+import { type Platform } from "@/lib/platforms";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { readAttentionSnapshot } from "@/lib/server/attention";
 import { readCaptions } from "@/lib/server/captions";
@@ -65,6 +71,12 @@ import { cn } from "@/lib/utils";
 // /admin/findings; its old ?stage/?mix deep-links redirect there.
 
 const QUEUE_KEY = ["admin", "attention"] as const;
+
+// A scratch react-query key for `usePublish` on this page. The hook patches its
+// board cache after a push; the queue has no board query, so we point it at an
+// unused key (the patch no-ops on the absent cache) and instead invalidate
+// QUEUE_KEY ourselves so the row re-derives from the server.
+const DISTRIBUTE_KEY = ["admin", "attention-distribute"] as const;
 
 const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
   if (!(await isAdminRequest())) {
@@ -152,11 +164,84 @@ function prefersReducedMotion(): boolean {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
+// Trigger a file download for a URL without navigating away (the push dialog's
+// "Download cover" gesture, expressed programmatically for the row menu).
+function downloadUrl(url: string, filename: string): void {
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.rel = "noreferrer";
+  anchor.target = "_blank";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+}
+
+// Render the cover to a PNG blob (the one image type browsers reliably accept on
+// the clipboard). Needs the object to be CORS-readable; a taint or load failure
+// throws, and the caller falls back to a download.
+async function coverToPngBlob(url: string): Promise<Blob> {
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const element = new Image();
+    element.crossOrigin = "anonymous";
+    element.addEventListener("load", () => resolve(element));
+    element.addEventListener("error", () => reject(new Error("cover load failed")));
+    element.src = url;
+  });
+
+  const canvas = document.createElement("canvas");
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("no 2d context");
+  }
+  context.drawImage(image, 0, 0);
+
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+  if (!blob) {
+    throw new Error("cover encode failed");
+  }
+  return blob;
+}
+
+// Grab the cover for pasting/attaching into the target app: copy the image to the
+// clipboard when the browser + CORS allow it, otherwise fall back to a download
+// (matching the push dialog's "Download cover"). Never rejects — the download
+// path always resolves.
+async function copyOrDownloadCover(
+  url: string,
+  filename: string,
+): Promise<"copied" | "downloaded"> {
+  if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+    try {
+      const png = await coverToPngBlob(url);
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+      return "copied";
+    } catch {
+      // Fall through to the download path below.
+    }
+  }
+  downloadUrl(url, filename);
+  return "downloaded";
+}
+
 function AdminQueuePage() {
   const { snapshot: initial } = Route.useLoaderData();
   const { all: showAll = false } = Route.useSearch();
   const navigate = Route.useNavigate();
   const queryClient = useQueryClient();
+
+  // The board's publish engine, reused verbatim for the row's push actions — the
+  // same gated `/social/:platform/draft` op the board push dialog calls. Its cache
+  // patch targets DISTRIBUTE_KEY (an unused scratch key), so we invalidate the
+  // queue ourselves after each push (below) to re-derive the row.
+  const {
+    busy: pushBusy,
+    error: pushError,
+    pushDraft,
+    setError: setPushError,
+  } = usePublish(DISTRIBUTE_KEY);
 
   // Seeded from the SSR loader; window-focus refetch keeps the rows honest when
   // the operator tabs back from TikTok / the Studio / a terminal.
@@ -190,6 +275,15 @@ function AdminQueuePage() {
   useEffect(() => {
     pruneQueuePrefs(new Set(data.items.map((item) => item.id)));
   }, [data.items]);
+
+  // Surface a failed push (the hook swallows it into state) as a toast, then clear
+  // it so the same error can fire again on a retry.
+  useEffect(() => {
+    if (pushError) {
+      toast.error(pushError);
+      setPushError(undefined);
+    }
+  }, [pushError, setPushError]);
 
   const ordered = useMemo(() => orderQueue(items, prefs, now), [items, now, prefs]);
 
@@ -250,7 +344,8 @@ function AdminQueuePage() {
   const [flashId, setFlashId] = useState<string | undefined>();
   const [leavingId, setLeavingId] = useState<string | undefined>();
   const [snoozeFor, setSnoozeFor] = useState<string | undefined>();
-  const [markFor, setMarkFor] = useState<string | undefined>();
+  // The open Distribute popover (the finding row's prep → push → confirm panel).
+  const [distributeFor, setDistributeFor] = useState<string | undefined>();
   const [markUrl, setMarkUrl] = useState("");
   // The zero state's cover — the last row dealt with this session; a fresh load
   // falls back to the newest finding's cover from the snapshot.
@@ -384,7 +479,7 @@ function AdminQueuePage() {
         if (!response.ok || !result.ok) {
           throw new Error(result.message ?? `Update failed (${response.status})`);
         }
-        setMarkFor(undefined);
+        setDistributeFor(undefined);
         setMarkUrl("");
         settleOut(item, () => {
           setClearedIds((current) => new Set(current).add(item.id));
@@ -399,6 +494,33 @@ function AdminQueuePage() {
     [busyId, queryClient, settleOut],
   );
 
+  // Push the finding's video to a platform straight from the row — the same gated
+  // draft op as the board (YouTube posts a public Short; TikTok drops a silent
+  // inbox draft). Reconcile the queue afterwards: a fresh TikTok push becomes this
+  // finding's deadline row, a YouTube push leaves the TikTok-tracked row as-is.
+  const handlePush = useCallback(
+    async (item: AttentionItem, platform: Platform) => {
+      if (!item.trackId) {
+        return;
+      }
+      await pushDraft(item.trackId, platform);
+      void queryClient.invalidateQueries({ queryKey: QUEUE_KEY });
+    },
+    [pushDraft, queryClient],
+  );
+
+  // Grab the cover to paste/attach into the app — clipboard when the browser
+  // allows it, a download otherwise (the push dialog's cover gesture).
+  const copyCover = useCallback((item: AttentionItem) => {
+    if (!item.logId) {
+      return;
+    }
+    const { coverUrl } = trackMedia(item.logId);
+    void copyOrDownloadCover(coverUrl, `${item.logId}-cover.jpg`).then((mode) => {
+      toast(mode === "copied" ? "Cover copied to the clipboard" : "Cover downloaded");
+    });
+  }, []);
+
   // ── The single-key loop ─────────────────────────────────────────────────────
   // j/k (or arrows) move the cursor, Enter fires the selected row's primary, s
   // snoozes, x won't-does. Inert while a popover owns the keys or focus sits in a
@@ -408,7 +530,7 @@ function AdminQueuePage() {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) {
         return;
       }
-      if (snoozeFor !== undefined || markFor !== undefined) {
+      if (snoozeFor !== undefined || distributeFor !== undefined) {
         return;
       }
       const target = event.target;
@@ -472,7 +594,7 @@ function AdminQueuePage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [handleWontDo, markFor, selectedId, snoozeFor]);
+  }, [distributeFor, handleWontDo, selectedId, snoozeFor]);
 
   // Keep the cursor's row on screen as j/k walk past the fold.
   useEffect(() => {
@@ -553,22 +675,25 @@ function AdminQueuePage() {
               key={row.item.id}
               item={row.item}
               leaving={leavingId === row.item.id}
-              markOpen={markFor === row.item.id}
+              distributeOpen={distributeFor === row.item.id}
               markUrl={markUrl}
               now={now}
               onCopyCaption={copyCaption}
-              onMarkOpenChange={(open) => {
-                setMarkFor(open ? row.item.id : undefined);
+              onCopyCover={copyCover}
+              onDistributeOpenChange={(open) => {
+                setDistributeFor(open ? row.item.id : undefined);
                 setMarkUrl("");
               }}
               onMarkPosted={markPosted}
               onMarkUrlChange={setMarkUrl}
+              onPush={handlePush}
               onRePush={rePush}
               onRestore={handleRestore}
               onSelect={setSelectedId}
               onSnooze={handleSnooze}
               onSnoozeOpenChange={(open) => setSnoozeFor(open ? row.item.id : undefined)}
               onWontDo={handleWontDo}
+              pushBusy={pushBusy}
               registerPrimary={registerPrimary}
               registerRow={registerRow}
               selected={selectedRow?.item.id === row.item.id}
@@ -608,22 +733,26 @@ const SOURCE_LABELS: Record<AttentionSource, string> = {
 type QueueRowProps = {
   busy: boolean;
   copied: boolean;
+  distributeOpen: boolean;
   flash: boolean;
   item: AttentionItem;
   leaving: boolean;
-  markOpen: boolean;
   markUrl: string;
   now: number;
   onCopyCaption: (item: AttentionItem) => void;
-  onMarkOpenChange: (open: boolean) => void;
+  onCopyCover: (item: AttentionItem) => void;
+  onDistributeOpenChange: (open: boolean) => void;
   onMarkPosted: (item: AttentionItem, url: string) => void;
   onMarkUrlChange: (url: string) => void;
+  onPush: (item: AttentionItem, platform: Platform) => void;
   onRePush: (item: AttentionItem) => void;
   onRestore: (item: AttentionItem) => void;
   onSelect: (id: string) => void;
   onSnooze: (item: AttentionItem, until: string) => void;
   onSnoozeOpenChange: (open: boolean) => void;
   onWontDo: (item: AttentionItem) => void;
+  /** The publish hook's busy map, keyed `${trackId}:${platform}:${status}`. */
+  pushBusy: Record<string, boolean>;
   registerPrimary: (id: string, el: HTMLElement | null) => void;
   registerRow: (id: string, el: HTMLLIElement | null) => void;
   selected: boolean;
@@ -635,22 +764,25 @@ type QueueRowProps = {
 function QueueRow({
   busy,
   copied,
+  distributeOpen,
   flash,
   item,
   leaving,
-  markOpen,
   markUrl,
   now,
   onCopyCaption,
-  onMarkOpenChange,
+  onCopyCover,
+  onDistributeOpenChange,
   onMarkPosted,
   onMarkUrlChange,
+  onPush,
   onRePush,
   onRestore,
   onSelect,
   onSnooze,
   onSnoozeOpenChange,
   onWontDo,
+  pushBusy,
   registerPrimary,
   registerRow,
   selected,
@@ -662,7 +794,11 @@ function QueueRow({
   const primary = primaryFor(item, now);
   const deadline = item.deadlineAt ? deadlineReadout(item.deadlineAt, now) : undefined;
   const markInputId = useId();
-  const canMarkPosted = item.source === "post-tiktok" || item.source === "tiktok-draft";
+  // The distribution rows — a dressed finding (post-tiktok) or a live TikTok draft.
+  // Both carry a trackId + logId, so both host the full push/prep/confirm panel.
+  const canDistribute = item.source === "post-tiktok" || item.source === "tiktok-draft";
+  const ytBusy = item.trackId ? Boolean(pushBusy[`${item.trackId}:youtube:draft`]) : false;
+  const tiktokBusy = item.trackId ? Boolean(pushBusy[`${item.trackId}:tiktok:draft`]) : false;
   const parked = state === "snoozed" || state === "dismissed";
 
   return (
@@ -777,42 +913,118 @@ function QueueRow({
           </Button>
         ) : (
           <>
-            {canMarkPosted ? (
-              <Popover onOpenChange={onMarkOpenChange} open={markOpen}>
+            {canDistribute ? (
+              <Popover onOpenChange={onDistributeOpenChange} open={distributeOpen}>
                 <PopoverTrigger
                   render={
                     <Button size="sm" variant="ghost">
-                      Mark posted
+                      <PaperPlaneTiltIcon aria-hidden="true" />
+                      Distribute
                     </Button>
                   }
                 />
-                <PopoverContent align="end" className="w-72 space-y-2">
-                  <Label htmlFor={markInputId}>Post URL</Label>
-                  <Input
-                    autoFocus
-                    id={markInputId}
-                    inputMode="url"
-                    onChange={(event) => onMarkUrlChange(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" && isHttpUrl(markUrl.trim())) {
-                        event.preventDefault();
-                        onMarkPosted(item, markUrl.trim());
-                      }
-                    }}
-                    placeholder="https://www.tiktok.com/…"
-                    value={markUrl}
-                  />
-                  <Button
-                    className="w-full"
-                    disabled={busy || !isHttpUrl(markUrl.trim())}
-                    onClick={() => onMarkPosted(item, markUrl.trim())}
-                    size="sm"
-                  >
-                    {busy ? (
-                      <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
-                    ) : undefined}
-                    Mark posted
-                  </Button>
+                <PopoverContent align="end" className="w-72 space-y-4">
+                  {/* PUSH — the two gated video pushes, straight from the row. */}
+                  <div className="flex flex-col gap-2">
+                    <Label>Push</Label>
+                    <Button
+                      className="justify-start"
+                      disabled={!item.trackId || ytBusy}
+                      onClick={() => onPush(item, "youtube")}
+                      size="sm"
+                      variant="outline"
+                    >
+                      {ytBusy ? (
+                        <CircleNotchIcon
+                          aria-hidden="true"
+                          className="animate-spin"
+                          weight="bold"
+                        />
+                      ) : (
+                        <YoutubeIcon className="size-4" />
+                      )}
+                      Push to YouTube
+                    </Button>
+                    <Button
+                      className="justify-start"
+                      disabled={!item.trackId || tiktokBusy}
+                      onClick={() => onPush(item, "tiktok")}
+                      size="sm"
+                      variant="outline"
+                    >
+                      {tiktokBusy ? (
+                        <CircleNotchIcon
+                          aria-hidden="true"
+                          className="animate-spin"
+                          weight="bold"
+                        />
+                      ) : (
+                        <TiktokIcon className="size-4" />
+                      )}
+                      Push to TikTok
+                    </Button>
+                    <p className="text-[11px] text-muted-foreground">
+                      YouTube posts a public Short now; TikTok drops a silent draft in your inbox.
+                    </p>
+                  </div>
+
+                  {/* PREP — the two things you paste/attach into the app. */}
+                  <div className="flex flex-col gap-2">
+                    <Label>Prep</Label>
+                    <Button
+                      className="justify-start"
+                      disabled={!item.logId}
+                      onClick={() => onCopyCaption(item)}
+                      size="sm"
+                      variant="outline"
+                    >
+                      <CopyIcon aria-hidden="true" />
+                      {copied ? "Copied" : "Copy caption"}
+                    </Button>
+                    <Button
+                      className="justify-start"
+                      disabled={!item.logId}
+                      onClick={() => onCopyCover(item)}
+                      size="sm"
+                      variant="outline"
+                    >
+                      <ImageIcon aria-hidden="true" />
+                      Copy cover
+                    </Button>
+                  </div>
+
+                  {/* CONFIRM — paste the live URL once you've finished in-app. */}
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor={markInputId}>Mark posted</Label>
+                    <Input
+                      id={markInputId}
+                      inputMode="url"
+                      onChange={(event) => onMarkUrlChange(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && isHttpUrl(markUrl.trim())) {
+                          event.preventDefault();
+                          onMarkPosted(item, markUrl.trim());
+                        }
+                      }}
+                      placeholder="https://www.tiktok.com/…"
+                      value={markUrl}
+                    />
+                    <Button
+                      className="w-full"
+                      disabled={busy || !isHttpUrl(markUrl.trim())}
+                      onClick={() => onMarkPosted(item, markUrl.trim())}
+                      size="sm"
+                    >
+                      {busy ? (
+                        <CircleNotchIcon
+                          aria-hidden="true"
+                          className="animate-spin"
+                          weight="bold"
+                        />
+                      ) : undefined}
+                      Mark posted
+                    </Button>
+                  </div>
                 </PopoverContent>
               </Popover>
             ) : undefined}
