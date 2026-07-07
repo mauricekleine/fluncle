@@ -35,7 +35,7 @@ export type BoardRow = TrackListItem & {
   // Drives the Embeddings cell: the embed cron drains the `embedding_json IS NULL`
   // queue and stamps the vector. The vector is internal analysis fuel, so only its
   // presence rides this admin-only board path, never the public `TrackListItem`
-  // contract — see tracks.ts listEmbeddingPresenceForTracks + docs/audio-embedding-rfc.md.
+  // contract — see tracks.ts listEmbeddingPresenceForTracks + docs/rfcs/audio-embedding-rfc.md.
   hasEmbedding: boolean;
   // Whether the finding is already loved on Last.fm — the presence of
   // `backfill_lastfm_done_at`, the same stamp the Last.fm backfill writes on a

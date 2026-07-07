@@ -49,7 +49,7 @@ const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const BUN_BIN = process.env.BUN_BIN ?? "bun";
 
 // R2 (S3 API) — the PRIVATE fluncle-source-audio bucket the capture sweep writes the
-// full song to (RFC docs/full-audio-rfc.md § Unit 1/2). A dedicated, least-privilege
+// full song to (RFC docs/rfcs/full-audio-rfc.md § Unit 1/2). A dedicated, least-privilege
 // token: Object Read on this bucket only. Creds come from the shared secrets file
 // (enrich-sweep.sh sources it, mirroring capture-sweep.sh); absent creds → a GET 403 →
 // the sweep falls back to the preview path (capture must never gate enrichment).
@@ -128,7 +128,7 @@ function fluncleJson<T>(args: string[]): T {
  * fetched to a temp file), pass `--audio-file` so the analyzer reads the WHOLE song;
  * otherwise the analyzer resolves + reads the 30s preview itself (no URL passed). The
  * enrich queue is capture-INDEPENDENT — this selects the better SOURCE when it exists,
- * permanently (RFC docs/full-audio-rfc.md § Unit 2), it does not gate the queue.
+ * permanently (RFC docs/rfcs/full-audio-rfc.md § Unit 2), it does not gate the queue.
  */
 export function buildAnalyzeArgs(
   script: string,
@@ -307,7 +307,7 @@ async function enrichOne(finding: QueueFinding): Promise<Outcome> {
   // (b) Pick the analysis SOURCE. When capture has landed the full song (source_audio_key
   // present), S3-GET it to a temp file and analyze THAT; otherwise the analyzer resolves +
   // reads the 30s preview itself. The enrich queue is capture-INDEPENDENT (RFC
-  // docs/full-audio-rfc.md § Unit 2) — this only upgrades the source when it exists,
+  // docs/rfcs/full-audio-rfc.md § Unit 2) — this only upgrades the source when it exists,
   // permanently; a missing/broken key falls back to the preview and never blocks.
   let audioTmpDir: string | undefined;
   let audioFilePath: string | undefined;

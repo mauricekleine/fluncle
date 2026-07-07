@@ -2,7 +2,7 @@
 
 The set video is a mixtape's fiction made visible: **Fluncle dreaming, the set travelling through the findings' own worlds.** Where a per-track clip is one finding under the eclipse, the hour render is the whole mixtape as one continuous piece — each chapter is a finding's archived composition re-driven at chapter length, the transitions are travel between worlds, and a single set-level trajectory (the dreamer's continuity) breathes across the whole thing so it reads as a piece, not a playlist. The Log ID names each finding as it arrives (that moment doubles as a YouTube chapter) and the piece ends on the mixtape's `F`-marked coordinate.
 
-This is the offline sibling of Fluncle Live (`docs/live-longform-visuals-rfc.md`, Unit O). The live glass and this hour render share the spine but ship independently. The machinery lives in [`packages/video/src/set-video/`](../packages/video/src/set-video); the creative kit it renders against is unchanged (`packages/video/src/remotion/cosmos.ts`, the fluncle-video skill).
+This is the offline sibling of Fluncle Live (the live+longform RFC, Unit O; shipped #287–#291, now in git history). The live glass and this hour render share the spine but ship independently. The machinery lives in [`packages/video/src/set-video/`](../packages/video/src/set-video); the creative kit it renders against is unchanged (`packages/video/src/remotion/cosmos.ts`, the fluncle-video skill).
 
 ## The one command
 

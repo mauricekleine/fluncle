@@ -1,5 +1,5 @@
 // Focused test for the `--audio-file` full-song seam in analyze-track.ts (RFC
-// docs/full-audio-rfc.md § Unit 2). Exercises the factored decode seam
+// docs/rfcs/full-audio-rfc.md § Unit 2). Exercises the factored decode seam
 // (`decodeToSamples` / `loadLocalFile`) and the arg-routing (`--audio-file` skips
 // preview resolution → the whole pipeline runs on a LOCAL file and never touches the
 // network). Importing analyze-track.ts is safe: the CLI pipeline is guarded by

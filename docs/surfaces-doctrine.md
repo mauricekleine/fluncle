@@ -2,7 +2,7 @@
 
 The canonical map of every place Fluncle is reachable across the Galaxy — web routes, subdomains, the public API, the feeds, the agent-discovery maps, the delegated DNS zone, the SSH terminal, the MCP server, the CLI, and the on-box Hermes crons — and the checklist for wiring a new one in.
 
-This doc replaces the old `docs/public-surfaces-checklist.md` (a hand-maintained tickbox list that drifted from the code). The decisions it recorded (per-coordinate web subdomains dropped, the `dig` surface that superseded them, the Tor mirror, the data-graph anchors) live on either in the registry itself or in `docs/ROADMAP.md`'s long-tail section.
+This doc replaces the old `docs/public-surfaces-checklist.md` (a hand-maintained tickbox list that drifted from the code). The decisions it recorded (per-coordinate web subdomains dropped, the `dig` surface that superseded them, the Tor mirror, the data-graph anchors) live on either in the registry itself or in `docs/planning/ROADMAP.md`'s long-tail section.
 
 ## 1. The registry is the source of truth
 

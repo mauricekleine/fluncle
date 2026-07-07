@@ -3,7 +3,7 @@
 // scheduled by a rave-02 HOST systemd timer (../embed-timer/), not a Hermes gateway cron: a
 // windowed full-song MuQ forward is minutes-scale and must not occupy the shared serial
 // gateway runner (its ~300s global budget would starve the latency-sensitive 5-min sweeps —
-// the same reason capture is a host timer). See ../embed-timer/README.md + docs/full-audio-rfc.md § Unit 3.
+// the same reason capture is a host timer). See ../embed-timer/README.md + docs/rfcs/full-audio-rfc.md § Unit 3.
 //
 // LIVE-INTENT. Version-controlled source; the repo is canonical and the box is a deploy
 // target (fluncle-hermes-operator skill). Invoked by the bash wrapper (embed-sweep.sh) the
