@@ -11,6 +11,7 @@ import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type Dispatch, type ReactNode, type SetStateAction, useEffect, useState } from "react";
 import { AdminShell } from "@/components/admin/admin-shell";
+import { FindingIdentity } from "@/components/admin/finding-identity";
 import { StoriesPlayer } from "@/components/stories/stories-player";
 import {
   AlertDialog,
@@ -25,7 +26,7 @@ import {
 import { Badge } from "@fluncle/ui/components/badge";
 import { Button } from "@fluncle/ui/components/button";
 import { Dialog, DialogContent } from "@fluncle/ui/components/dialog";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { Empty } from "@fluncle/ui/components/empty";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { type ServiceHealthStatus, getServiceStatuses } from "@/lib/server/status";
 import { listRecentlyRenderedFindings, listTracks } from "@/lib/server/tracks";
@@ -49,8 +50,6 @@ import { listRecentlyRenderedFindings, listTracks } from "@/lib/server/tracks";
 
 const QUEUE_LIMIT = 60;
 const SHIPPED_LIMIT = 24;
-
-const OXANIUM_STACK = '"Oxanium", ui-sans-serif, system-ui, sans-serif';
 
 const RENDERS_KEY = ["admin", "renders"] as const;
 // The sidebar's render-backlog badge reads this key; invalidate it after a requeue so
@@ -474,33 +473,24 @@ function Ledger({ track }: { track: TrackListItem }) {
   return <span className="text-xs text-muted-foreground">{parts.join(" · ")}</span>;
 }
 
-// A finding's identity block — cover, Log ID (Oxanium tabular), title, artists — plus
-// a right-side slot for per-section state/controls. Local (not the board's
-// FindingLead, which is typed to a BoardRow); a Renders row carries a plain finding.
+// A finding's identity block plus a right-side slot for per-section state/controls. The
+// identity is the shared FindingIdentity (the board's FindingLead binds the same block to a
+// BoardRow; a Renders row carries a plain finding, so it feeds the primitives directly).
 function RenderRow({ children, track }: { children?: ReactNode; track: TrackListItem }) {
-  const cover = spotifyAlbumImageAtSize(track.albumImageUrl, "small") ?? "/fluncle-cover.png";
-
   // flex-wrap so a heavy right slot (the shipped row's ledger + three controls) drops
   // BELOW the identity on a phone instead of crushing the title; nowrap from sm up,
   // where the identity grows and the slot pins right. The identity is basis-full on a
   // phone (its own line) and basis-0/grow from sm.
   return (
     <li className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5 sm:flex-nowrap sm:px-4">
-      <div className="flex min-w-0 grow basis-full items-center gap-3 sm:basis-0">
-        <img alt="" className="size-11 shrink-0 rounded-md object-cover" src={cover} />
-        <div className="min-w-0">
-          {track.logId ? (
-            <p
-              className="truncate text-[11px] tracking-tight text-muted-foreground tabular-nums"
-              style={{ fontFamily: OXANIUM_STACK }}
-            >
-              {track.logId}
-            </p>
-          ) : null}
-          <p className="truncate text-sm font-medium">{track.title}</p>
-          <p className="truncate text-xs text-muted-foreground">{track.artists.join(", ")}</p>
-        </div>
-      </div>
+      <FindingIdentity
+        artists={track.artists}
+        className="grow basis-full sm:basis-0"
+        cover={track.albumImageUrl}
+        logId={track.logId ?? undefined}
+        size="md"
+        title={track.title}
+      />
       {children}
     </li>
   );
@@ -592,9 +582,7 @@ function SectionHeading({ count, label }: { count: number; label: string }) {
 
 function EmptyRow({ children }: { children: ReactNode }) {
   return (
-    <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-      {children}
-    </div>
+    <Empty className="border border-border p-6 text-sm text-muted-foreground">{children}</Empty>
   );
 }
 

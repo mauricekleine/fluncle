@@ -7,6 +7,13 @@ import { type Dispatch, type SetStateAction, useEffect, useMemo, useState } from
 import { AdminShell } from "@/components/admin/admin-shell";
 import { type ClipDrip, ClipCard } from "@/components/admin/clip-card";
 import { Button } from "@fluncle/ui/components/button";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@fluncle/ui/components/empty";
 import { Label } from "@fluncle/ui/components/label";
 import {
   Select,
@@ -507,14 +514,18 @@ function recordingSelectItems(recordings: RecordingDTO[]): Record<string, string
 
 function EmptyLibrary() {
   return (
-    <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
-      <FilmStripIcon aria-hidden="true" className="size-7 text-muted-foreground/70" />
-      <p className="font-medium">No clips yet</p>
-      <p className="max-w-sm text-sm text-muted-foreground">
-        Open a recording in the Studio and cut a few framed 9:16 clips. They land here, ready to
-        hand-post.
-      </p>
-    </div>
+    <Empty>
+      <EmptyHeader>
+        <EmptyMedia variant="default">
+          <FilmStripIcon aria-hidden="true" className="size-7 text-muted-foreground/70" />
+        </EmptyMedia>
+        <EmptyTitle>No clips yet</EmptyTitle>
+        <EmptyDescription>
+          Open a recording in the Studio and cut a few framed 9:16 clips. They land here, ready to
+          hand-post.
+        </EmptyDescription>
+      </EmptyHeader>
+    </Empty>
   );
 }
 

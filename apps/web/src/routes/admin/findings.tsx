@@ -33,6 +33,7 @@ import { StoriesPlayer } from "@/components/stories/stories-player";
 import { Badge } from "@fluncle/ui/components/badge";
 import { Button } from "@fluncle/ui/components/button";
 import { Dialog, DialogContent } from "@fluncle/ui/components/dialog";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@fluncle/ui/components/empty";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { listArtistFollowsForTracks } from "@/lib/server/artists";
 import { listBackfillRanForTracks, listLastfmLovedForTracks } from "@/lib/server/backfill";
@@ -856,12 +857,21 @@ function AdminBoardPage() {
       title="Findings"
     >
       {rows.length === 0 ? (
-        <EmptyState body="Logged bangers will show up here." title="No findings yet" />
+        <Empty>
+          <EmptyHeader>
+            <EmptyTitle>No findings yet</EmptyTitle>
+            <EmptyDescription>Logged bangers will show up here.</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       ) : visible.length === 0 ? (
-        <EmptyState
-          body="No loaded findings match these filters — widen the worklist or the mixtape lens."
-          title="Nothing in this view"
-        />
+        <Empty>
+          <EmptyHeader>
+            <EmptyTitle>Nothing in this view</EmptyTitle>
+            <EmptyDescription>
+              No loaded findings match these filters — widen the worklist or the mixtape lens.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       ) : (
         <>
           <PipelineBoard actions={actions} entries={entries} />
@@ -1008,15 +1018,6 @@ function SpotifyStatusBanner({
       <Button onClick={onReconnect} size="sm" variant={disconnected ? "destructive" : "secondary"}>
         Reconnect Spotify
       </Button>
-    </div>
-  );
-}
-
-function EmptyState({ body, title }: { body: string; title: string }) {
-  return (
-    <div className="flex flex-col items-center justify-center gap-1 px-4 py-20 text-center">
-      <p className="font-medium">{title}</p>
-      <p className="text-sm text-muted-foreground">{body}</p>
     </div>
   );
 }

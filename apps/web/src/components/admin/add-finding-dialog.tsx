@@ -12,7 +12,7 @@ import {
 import { Input } from "@fluncle/ui/components/input";
 import { Label } from "@fluncle/ui/components/label";
 import { Textarea } from "@fluncle/ui/components/textarea";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
+import { FindingIdentity } from "@/components/admin/finding-identity";
 import { spotifyTrackIdOf } from "@/lib/spotify-track-id";
 
 // The board's [Add finding] dialog — the web intake for the operator's own add
@@ -301,8 +301,9 @@ function FoundPanel({
   );
 }
 
-// One finding line: artwork, the artists — title, and the coordinate link when a
-// Log ID exists (the same /log deep-link the plan dialog uses).
+// One finding line: artwork, the artists — title, and the coordinate deep-link when a
+// Log ID exists (the shared FindingIdentity's inline/art form — the same block the plan
+// builder and the board render, bound to this dialog's plain track fields).
 function TrackLine({
   albumImageUrl,
   artists,
@@ -315,32 +316,16 @@ function TrackLine({
   title: string;
 }) {
   return (
-    <div className="flex items-center gap-2.5">
-      {albumImageUrl ? (
-        <img
-          alt=""
-          className="size-9 shrink-0 rounded-sm border border-border object-cover"
-          src={spotifyAlbumImageAtSize(albumImageUrl, "small")}
-        />
-      ) : (
-        <div className="track-artwork-fallback size-9 shrink-0 rounded-sm border border-border" />
-      )}
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm">
-          {artists.join(", ")} — {title}
-        </p>
-        {logId ? (
-          <a
-            className="font-mono text-xs text-muted-foreground hover:text-foreground hover:underline"
-            href={`/log/${encodeURIComponent(logId)}`}
-            rel="noreferrer"
-            target="_blank"
-          >
-            fluncle://{logId}
-          </a>
-        ) : undefined}
-      </div>
-    </div>
+    <FindingIdentity
+      artists={artists}
+      cover={albumImageUrl}
+      coverVariant="art"
+      logId={logId}
+      logIdHref={logId ? `/log/${encodeURIComponent(logId)}` : undefined}
+      size="sm"
+      title={title}
+      titleFormat="inline"
+    />
   );
 }
 

@@ -23,6 +23,7 @@ import {
 } from "@fluncle/ui/components/alert-dialog";
 import { Badge } from "@fluncle/ui/components/badge";
 import { Button } from "@fluncle/ui/components/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@fluncle/ui/components/empty";
 import { type EditionDTO, orderedGalaxies } from "@/lib/editions";
 import { logPageUrl } from "@/lib/fluncle-links";
 import { formatDateLong } from "@/lib/format";
@@ -107,10 +108,15 @@ function AdminNewsletterPage() {
     >
       <div className="p-4 sm:p-5">
         {editions.length === 0 ? (
-          <EmptyState
-            body="The Friday agent drafts an edition here when the week has finds. Nothing yet. The mothership hasn't loaded a letter."
-            title="No editions yet"
-          />
+          <Empty>
+            <EmptyHeader>
+              <EmptyTitle>No editions yet</EmptyTitle>
+              <EmptyDescription>
+                The Friday agent drafts an edition here when the week has finds. Nothing yet. The
+                mothership hasn't loaded a letter.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
         ) : (
           <div className="overflow-hidden rounded-lg border border-border">
             {editions.map((edition) => (
@@ -479,15 +485,6 @@ function DeleteControl({
           {error}
         </p>
       ) : null}
-    </div>
-  );
-}
-
-function EmptyState({ body, title }: { body: string; title: string }) {
-  return (
-    <div className="flex flex-col items-center justify-center gap-1 px-4 py-16 text-center">
-      <p className="font-medium">{title}</p>
-      <p className="max-w-prose text-sm text-muted-foreground">{body}</p>
     </div>
   );
 }
