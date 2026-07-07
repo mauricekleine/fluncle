@@ -11,7 +11,7 @@ vi.mock("./env", () => ({
   readOptionalEnv: async () => undefined,
 }));
 
-import { pushInstagramReel } from "./postiz";
+import { pushInstagramReel, resolveSocialUrl } from "./postiz";
 
 const BASE = "https://api.postiz.com/public/v1";
 
@@ -117,5 +117,73 @@ describe("pushInstagramReel", () => {
     await expect(
       pushInstagramReel({ caption: "c", videoUrl: "https://found.fluncle.com/x/footage.mp4" }),
     ).rejects.toThrow(/No connected instagram channel/);
+  });
+});
+
+// The Instagram permalink capture (`resolveSocialUrl(postId, "instagram")`): once the Reel
+// publishes, Postiz auto-populates the real Graph-API permalink onto the post object in the
+// dated `/posts` list. We capture it VERBATIM (a Reel shortcode can't be rebuilt from the
+// numeric media id). `./env` is mocked, so `getDatedPosts` reads from the fetch double.
+function stubDatedPosts(posts: unknown[]) {
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    if ((init?.method ?? "GET") === "GET" && url.startsWith(`${BASE}/posts`)) {
+      return new Response(JSON.stringify({ posts }), { status: 200 });
+    }
+
+    throw new Error(`unexpected fetch: ${init?.method ?? "GET"} ${url}`);
+  });
+
+  vi.stubGlobal("fetch", fetchMock);
+}
+
+describe("resolveSocialUrl (instagram)", () => {
+  it("captures a published Reel's real permalink verbatim + the media id", async () => {
+    stubDatedPosts([
+      {
+        id: "post-9",
+        releaseId: "media-9",
+        releaseURL: "https://www.instagram.com/reel/AbC123/",
+        state: "PUBLISHED",
+      },
+    ]);
+
+    const resolved = await resolveSocialUrl("post-9", "instagram");
+
+    expect(resolved).toEqual({
+      nativeId: "media-9",
+      url: "https://www.instagram.com/reel/AbC123/",
+    });
+  });
+
+  it("returns null when the Reel isn't published yet (retried next tick)", async () => {
+    stubDatedPosts([{ id: "post-9", releaseId: "", releaseURL: "", state: "QUEUE" }]);
+
+    expect(await resolveSocialUrl("post-9", "instagram")).toBeNull();
+  });
+
+  it("returns null when the published post carries no real Instagram URL", async () => {
+    stubDatedPosts([
+      {
+        id: "post-9",
+        releaseId: "media-9",
+        releaseURL: "https://api.postiz.com/messages?foo=bar",
+        state: "PUBLISHED",
+      },
+    ]);
+
+    expect(await resolveSocialUrl("post-9", "instagram")).toBeNull();
+  });
+
+  it("returns null when the post id isn't in the dated window", async () => {
+    stubDatedPosts([
+      {
+        id: "someone-else",
+        releaseId: "media-x",
+        releaseURL: "https://www.instagram.com/reel/Zzz/",
+        state: "PUBLISHED",
+      },
+    ]);
+
+    expect(await resolveSocialUrl("post-9", "instagram")).toBeNull();
   });
 });

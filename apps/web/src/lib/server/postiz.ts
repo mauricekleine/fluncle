@@ -319,6 +319,15 @@ export function isYouTubeUrl(value: string): boolean {
   return /^https:\/\/(www\.)?(youtube\.com|youtu\.be)\//i.test(value.trim());
 }
 
+/** Whether a string is a real Instagram permalink — the shape Postiz auto-populates
+ *  into `releaseURL` for a published Reel. Postiz's Instagram provider fetches the
+ *  canonical permalink off the Graph API (`GET /{mediaId}?fields=permalink`) once the
+ *  Reel publishes, so the post object carries a real `instagram.com/reel/…` (or `/p/…`)
+ *  URL. Guards against an empty / placeholder value. */
+export function isInstagramUrl(value: string): boolean {
+  return /^https:\/\/(www\.)?instagram\.com\//i.test(value.trim());
+}
+
 // A bare YouTube videoId: 11 chars of the URL-safe base64 alphabet.
 const YOUTUBE_VIDEO_ID = /^[\w-]{11}$/;
 // Pull the videoId out of a watch (`v=…`) or shorts (`shorts/…`) URL.
@@ -365,6 +374,13 @@ export type ResolvedSocialContent = { nativeId: string; url: string };
  *     to `/missing` and BUILD `…/@fluncle/video/<awemeId>` from the newest item's
  *     native id. The one-pending push gate keeps "newest" unambiguous. Empty →
  *     null (not finished in-app yet; retry).
+ *   - Instagram: a direct public Reel (the clip drip-feed's leg). Like YouTube it
+ *     publishes async, then Postiz AUTO-POPULATES `releaseURL` — but with the REAL
+ *     Graph-API permalink (fetched via `?fields=permalink`) and `releaseId` the media
+ *     id. Read the dated `/posts` list, find this post by id, and if it's PUBLISHED
+ *     with a real Instagram `releaseURL`, capture it VERBATIM (the shortcode permalink
+ *     can't be rebuilt from the numeric media id, so unlike YouTube we keep Postiz's
+ *     URL as-is). Not yet published → null (the drip capture pass retries next tick).
  *
  * Returns the permalink AND the native id (for the release-id link), or null on a
  * miss — the caller leaves the row's `url` unset, so the operator's manual
@@ -380,6 +396,10 @@ export async function resolveSocialUrl(
 
   if (platform === "tiktok") {
     return resolveTikTokFromMissing(postId);
+  }
+
+  if (platform === "instagram") {
+    return resolveInstagramFromList(postId);
   }
 
   return null;
@@ -426,6 +446,32 @@ async function resolveTikTokFromMissing(postId: string): Promise<ResolvedSocialC
     if (permalink) {
       return { nativeId: item.id, url: permalink };
     }
+  }
+
+  return null;
+}
+
+/** The Instagram path: find the post in the dated list; if published with a real
+ *  auto-populated Instagram `releaseURL` (Postiz fetched the permalink off the Graph
+ *  API on publish), capture it VERBATIM. Unlike YouTube we do NOT rebuild the URL — a
+ *  Reel's shortcode permalink isn't derivable from the numeric media id, so Postiz's
+ *  captured permalink IS the canonical form. Not yet published → null (retry next tick). */
+async function resolveInstagramFromList(postId: string): Promise<ResolvedSocialContent | null> {
+  const posts = await getDatedPosts();
+  const post = posts.find((item) => item.id === postId);
+
+  if (!post || post.state !== "PUBLISHED") {
+    return null;
+  }
+
+  const releaseId = typeof post.releaseId === "string" ? post.releaseId.trim() : "";
+  const releaseUrl = typeof post.releaseURL === "string" ? post.releaseURL.trim() : "";
+
+  // A genuine published Reel carries a real Instagram permalink in `releaseURL`. The
+  // `nativeId` (the media id in `releaseId`) links the Postiz analytics release-id; it
+  // may be absent (`postizSetReleaseId` no-ops on an empty id), so the URL is enough.
+  if (isInstagramUrl(releaseUrl)) {
+    return { nativeId: releaseId, url: releaseUrl };
   }
 
   return null;

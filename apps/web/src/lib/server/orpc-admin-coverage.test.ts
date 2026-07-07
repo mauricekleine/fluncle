@@ -110,6 +110,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // (agent-allowed): the on-box `fluncle-clip-drip` cron triggers it with the agent token
   // (the box holds no Postiz key; the Worker owns it). Kill-switch aware, bounded, idempotent.
   "POST /admin/clips/drip": "drip_clips",
+  // The batch-schedule op (the set_clip_schedule sibling) — contract-only oRPC (no TanStack
+  // route file). Operator tier: chain a whole selection onto the jittered drip queue in one
+  // move; the web clip library's batch bar drives it.
+  "POST /admin/clips/schedule": "set_clip_schedules",
   // The box's clip-cut finalize (Fluncle Studio Unit C) — contract-only oRPC (no
   // TanStack route file; oRPC owns the path directly, like finalize_track_video). Agent
   // tier: the box marks its own cut done + the handler purges the stale edge renditions.

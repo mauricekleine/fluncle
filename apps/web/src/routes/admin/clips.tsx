@@ -19,14 +19,7 @@ import {
 } from "@fluncle/ui/components/select";
 import { Switch } from "@fluncle/ui/components/switch";
 import { isAdminRequest } from "@/lib/server/admin-auth";
-import {
-  type ClipSocialPost,
-  isDripPaused,
-  listClipPosts,
-  nextDripSlot,
-  upsertClipPost,
-} from "@/lib/server/clip-social";
-import { buildClipCaption } from "@/lib/server/clip-caption";
+import { type ClipSocialPost, isDripPaused, listClipPosts } from "@/lib/server/clip-social";
 import { listClips } from "@/lib/server/clips";
 import { listRecordings } from "@/lib/server/recordings";
 import {
@@ -95,33 +88,6 @@ const fetchDripState = createServerFn({ method: "GET" }).handler(
     return { paused: await isDripPaused(), posts: await listClipPosts() };
   },
 );
-
-// Batch-schedule a selection onto the drip queue. Chains the jittered ~daily slots
-// SERVER-SIDE (one `nextDripSlot` roll per clip, each reading the extending queue tail so
-// consecutive slots drift in [23h, 25h]), snapshotting a fresh caption per clip. Gated by
-// the web admin grant — the "Login with Spotify" operator identity (the one web carrier),
-// the same tier the `set_clip_schedule` op it stands in for requires.
-const batchScheduleClips = createServerFn({ method: "POST" })
-  .validator((data: { clipIds: string[] }) => data)
-  .handler(async ({ data }): Promise<{ scheduled: number }> => {
-    if (!(await isAdminRequest())) {
-      throw redirect({ to: "/admin/login" });
-    }
-
-    let scheduled = 0;
-
-    for (const clipId of data.clipIds) {
-      // Chain off the live queue tail: each upsert extends it, so the next slot rolls ~24h
-      // past this one (real jitter, no bot-at-10:00 cadence). Sequential by design.
-      const scheduledFor = await nextDripSlot();
-      const built = await buildClipCaption(clipId);
-
-      await upsertClipPost({ caption: built.builtCaption, clipId, scheduledFor });
-      scheduled += 1;
-    }
-
-    return { scheduled };
-  });
 
 export const Route = createFileRoute("/admin/clips")({
   beforeLoad: () => ensureAdmin(),
@@ -283,7 +249,23 @@ function ClipLibraryPage() {
 
   // Batch-schedule the current selection onto the jittered drip queue (server-side chain).
   const batchSchedule = useMutation<{ scheduled: number }, Error, string[]>({
-    mutationFn: (clipIds: string[]) => batchScheduleClips({ data: { clipIds } }),
+    // The operator-tier batch op (POST /admin/clips/schedule → set_clip_schedules): chains
+    // the jittered ~daily slots server-side (one nextDripSlot roll per clip off the live
+    // queue tail), snapshotting a fresh caption each. Same contract carrier as the per-clip
+    // schedule op — a plain fetch to the REST path, gated by the web admin grant.
+    mutationFn: async (clipIds: string[]) => {
+      const response = await fetch("/api/admin/clips/schedule", {
+        body: JSON.stringify({ clipIds }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+
+      return (await response.json()) as { scheduled: number };
+    },
     onError: (caught) => setError(caught.message),
     onSuccess: async (result) => {
       setNotice(
