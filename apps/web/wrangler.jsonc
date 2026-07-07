@@ -47,8 +47,17 @@
   // wrangler/binding switch); until it is on, the code's one-shot onError fallback
   // plays the raw master. The operator enablement step is in the ops runbook note.
 
-  // R2 bucket for per-track videos and private analysis artifacts. Public reads are
-  // served from found.fluncle.com; the Worker owns the bucket (the agent uploads via
-  // the admin endpoint and never holds R2 credentials).
-  "r2_buckets": [{ "binding": "VIDEOS", "bucket_name": "fluncle-videos" }],
+  // R2 buckets. VIDEOS (fluncle-videos) holds per-track videos + public analysis
+  // artifacts, served world-readable from found.fluncle.com; the Worker owns the
+  // bucket (the agent uploads via the admin endpoint and never holds R2 creds).
+  // SOURCE_AUDIO (fluncle-source-audio) holds each finding's captured FULL SONG — a
+  // PRIVATE analysis artifact (no public domain, no r2.dev), read ONLY by the
+  // operator-tier `get_source_audio` endpoint (the M5 live-visuals bridge). The box
+  // capture/enrich/embed sweeps read+write it via a direct-S3 credential, never
+  // through the Worker. The bucket already exists (Unit 1 capture writes to it), so
+  // binding it is deploy-safe.
+  "r2_buckets": [
+    { "binding": "VIDEOS", "bucket_name": "fluncle-videos" },
+    { "binding": "SOURCE_AUDIO", "bucket_name": "fluncle-source-audio" },
+  ],
 }

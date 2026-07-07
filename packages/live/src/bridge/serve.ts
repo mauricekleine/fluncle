@@ -20,9 +20,9 @@ import {
   type PlanEntry,
   type ShowCommand,
 } from "../contract";
-import { fingerprintPlan } from "./fingerprint";
+import { fingerprintPlan, fingerprintPlanFullSong } from "./fingerprint";
 import { type Fingerprint } from "./matcher";
-import { buildPlan } from "./plan";
+import { buildPlan, loadAdminAuth } from "./plan";
 import { REMOTE_HTML } from "./remote";
 import { createShowState } from "./state";
 import { startSupervisor } from "./supervisor";
@@ -59,15 +59,26 @@ export function parsePlanArg(
   return env;
 }
 
-/** Build the plan (mixtape logId or plan handle) and fingerprint its previews. */
+/** Build the plan (mixtape logId or plan handle) and fingerprint each planned finding. */
 async function boot(planRef?: string): Promise<Boot> {
   const plan = await buildPlan(planRef);
-  console.error(
-    `bridge: plan built — ${plan.length} findings${planRef ? ` (${planRef})` : ""}; fingerprinting previews…`,
-  );
-  const fingerprints = await fingerprintPlan(plan.map((p) => p.logId));
+  const logIds = plan.map((p) => p.logId);
+  const suffix = planRef ? ` (${planRef})` : "";
+  // Prefer the FULL SONG (RFC full-audio, Tier-A): fingerprint each captured master
+  // from the private R2 via the operator-token `get_source_audio` endpoint, so a
+  // mix-in outside the 30s preview window can still match. With no admin token (a
+  // token-less dev boot) fall back to the open 30s preview relay so the bridge still
+  // boots. Either path pulls the fingerprints ONCE at boot (bounded concurrency) and
+  // holds them for the whole show — the matcher never touches the network again (the
+  // never-crash rail).
+  const auth = await loadAdminAuth();
+  const source = auth ? "full songs (private R2)" : "30s previews (no admin token)";
+  console.error(`bridge: plan built — ${plan.length} findings${suffix}; fingerprinting ${source}…`);
+  const fingerprints = auth
+    ? await fingerprintPlanFullSong(logIds, auth)
+    : await fingerprintPlan(logIds);
   const withFp = fingerprints.filter((f) => f.frames !== null).length;
-  console.error(`bridge: fingerprinted ${withFp}/${fingerprints.length} previews`);
+  console.error(`bridge: fingerprinted ${withFp}/${fingerprints.length} — ${source}`);
   return { fingerprints, plan };
 }
 

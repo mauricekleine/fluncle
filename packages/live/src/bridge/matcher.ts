@@ -111,11 +111,48 @@ export function frameCosine(a: Float32Array, b: Float32Array): number {
   return d;
 }
 
+// The CPU budget cap: the max number of sliding positions a single `bestOffsetScore`
+// call evaluates, regardless of reference length. A full-song reference (~2999 frames
+// @10Hz) vs a preview (~299) would otherwise slide ~10× as many positions — verified
+// ~927 vs ~27 at `windowFrames 220`, ~34× the per-call work, contending with OBS on
+// the M5 (RFC full-audio §6). Capping positions holds per-call cost roughly constant
+// AND puts every reference (full or preview) on the SAME offset budget, which
+// normalizes the score scale across a MIXED plan (some findings captured, some still
+// on preview during the transition/`unmatched` tail).
+export const OFFSET_POSITION_BUDGET = 150;
+
 /**
- * Best contiguous alignment of the rolling `window` against a preview `fp`: slide
- * the shorter over the longer at `offsetStep` and return the max mean per-frame
- * cosine. Returns 0 when either side is empty. Symmetric in length (early in a
- * show the window is shorter than the preview; both branches are covered).
+ * The budget-capped offset step for sliding a `short` window over a `long` reference.
+ * The number of positions is `floor((long - short) / step) + 1`; to keep it at or
+ * under OFFSET_POSITION_BUDGET we coarsen the step to `ceil((long - short) / budget)`,
+ * floored at `floorStep` (the config's `offsetStep`, 3 = 300ms) so short refs (a 30s
+ * preview) keep full resolution. A full song coarsens to ~19 frames (~1.9s), whose
+ * resolution loss is negligible: 22s windows overlap ~91% at a 1.9s shift and the
+ * alignment surface is smooth. Coarsening lowers self AND foreign scores, so the step
+ * and the gate thresholds are COUPLED — the operator's M5 accuracy re-tune recalibrates
+ * with this policy in place. Pure, so the arithmetic is unit-tested.
+ */
+export function budgetedOffsetStep(
+  shortLen: number,
+  longLen: number,
+  floorStep: number,
+  budget = OFFSET_POSITION_BUDGET,
+): number {
+  const floor = Math.max(1, floorStep);
+  const span = longLen - shortLen;
+  if (span <= 0 || budget <= 0) {
+    return floor;
+  }
+  return Math.max(floor, Math.ceil(span / budget));
+}
+
+/**
+ * Best contiguous alignment of the rolling `window` against a reference `fp`: slide
+ * the shorter over the longer and return the max mean per-frame cosine. Returns 0 when
+ * either side is empty. Symmetric in length (early in a show the window is shorter than
+ * the reference; both branches are covered). `offsetStep` is the FLOOR step for short
+ * (preview-length) refs; a long (full-song) ref is coarsened by `budgetedOffsetStep` so
+ * the per-call work stays under the position budget.
  */
 export function bestOffsetScore(
   window: Float32Array[],
@@ -127,11 +164,13 @@ export function bestOffsetScore(
   if (w === 0 || p === 0) {
     return 0;
   }
-  const step = Math.max(1, offsetStep);
   // Slide the shorter sequence over the longer one.
   const [short, long] = w <= p ? [window, fp] : [fp, window];
   const s = short.length;
   const l = long.length;
+  // Budget-cap the step so a full-song ref slides ~the same number of positions as a
+  // preview (the floor `offsetStep` is preserved for short refs).
+  const step = budgetedOffsetStep(s, l, offsetStep);
   let best = -1;
   for (let o = 0; o + s <= l; o += step) {
     let acc = 0;

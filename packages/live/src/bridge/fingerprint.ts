@@ -9,11 +9,19 @@
 // preview — the SAME source the de-risk spike used
 // (https://www.fluncle.com/api/preview/<logId>, open CORS). The result is the
 // tiny (~17-candidate) search space the matcher scores the live feed against.
+//
+// `fingerprintSourceAudio` / `fingerprintPlanFullSong` are the FULL-SONG siblings
+// (RFC full-audio, Tier-A): the same decode + never-crash rail, but pulling each
+// finding's captured full master from the authorized private `get_source_audio`
+// endpoint (operator-token auth) instead of the open preview relay — so a DJ mixing
+// in a section outside the 30s preview window can still match. A full song is ~10×
+// a preview, so the matcher budget-caps its offset step (see matcher.ts).
 
 import { spawn } from "node:child_process";
 
 import { type Fingerprint } from "./matcher";
 import { MEL_SAMPLE_RATE, melFrames } from "./mel";
+import { type AdminAuth } from "./plan";
 
 // ffmpeg on PATH by default (mirrors download-preview.ts's FLUNCLE_FFMPEG).
 const FFMPEG = process.env.FLUNCLE_FFMPEG ?? "ffmpeg";
@@ -153,6 +161,55 @@ export async function fingerprintPlan(
         return;
       }
       out[i] = await fingerprintPreview(logIds[i], baseUrl);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, logIds.length) }, worker));
+  return out;
+}
+
+/**
+ * Fetch a finding's captured FULL SONG from the authorized private endpoint and
+ * fingerprint it (RFC full-audio Tier-A). Mirrors `fingerprintPreview`'s never-crash
+ * rail EXACTLY: any non-OK / miss / uncaptured / decode failure returns a
+ * null-`frames` fingerprint (the matcher skips it, the operator nudges past) — the
+ * show never crashes on a capture gap. The bearer is sent the SAME way `plan.ts`'s
+ * `adminJson` sends it; `auth` is the operator token the bridge already resolves.
+ */
+export async function fingerprintSourceAudio(logId: string, auth: AdminAuth): Promise<Fingerprint> {
+  try {
+    const res = await fetch(`${auth.base}/api/admin/tracks/${logId}/source-audio`, {
+      headers: { Authorization: `Bearer ${auth.token}` },
+    });
+    if (!res.ok) {
+      return { frames: null, logId };
+    }
+    return await fingerprintBytes(logId, new Uint8Array(await res.arrayBuffer()));
+  } catch {
+    return { frames: null, logId };
+  }
+}
+
+/**
+ * Fingerprint a whole plan's FULL SONGS concurrently (bounded) at show start — the
+ * full-song sibling of `fingerprintPlan`. Same fetch-at-boot + bounded-concurrency +
+ * hold-in-memory contract (the matcher never touches the network again during the
+ * show), pulling each captured master through the authorized `get_source_audio`
+ * endpoint instead of the open 30s preview relay.
+ */
+export async function fingerprintPlanFullSong(
+  logIds: string[],
+  auth: AdminAuth,
+  concurrency = 4,
+): Promise<Fingerprint[]> {
+  const out: Fingerprint[] = Array.from({ length: logIds.length });
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const i = next++;
+      if (i >= logIds.length) {
+        return;
+      }
+      out[i] = await fingerprintSourceAudio(logIds[i], auth);
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, logIds.length) }, worker));
