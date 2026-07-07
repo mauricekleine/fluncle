@@ -22,7 +22,7 @@ import {
 } from "../contract";
 import { fingerprintPlan, fingerprintPlanFullSong } from "./fingerprint";
 import { type Fingerprint } from "./matcher";
-import { buildPlan, loadAdminAuth } from "./plan";
+import { type AdminAuth, buildPlan, loadAdminAuth } from "./plan";
 import { REMOTE_HTML } from "./remote";
 import { createShowState } from "./state";
 import { startSupervisor } from "./supervisor";
@@ -59,24 +59,48 @@ export function parsePlanArg(
   return env;
 }
 
+/**
+ * The Tier-A full-song swap is GATED, default OFF: the bridge fingerprints the full
+ * song only when BOTH an admin token is present (the operator machine) AND
+ * `FLUNCLE_FULL_SONG_FINGERPRINT` is explicitly enabled ("1"/"true", case-insensitive).
+ * Until the operator flips the flag AFTER the M5 accuracy re-tune, the bridge stays on
+ * preview references with the preview-calibrated thresholds — so merging Tier-A is a
+ * live-path NO-OP (the swap ships only when the flag is on). Additive: a token alone
+ * never flips it. Pure, so it is unit-tested.
+ */
+export function shouldFingerprintFullSong(
+  auth: AdminAuth | null,
+  flagEnv = process.env.FLUNCLE_FULL_SONG_FINGERPRINT,
+): boolean {
+  if (!auth) {
+    return false;
+  }
+  const flag = flagEnv?.trim().toLowerCase();
+  return flag === "1" || flag === "true";
+}
+
 /** Build the plan (mixtape logId or plan handle) and fingerprint each planned finding. */
 async function boot(planRef?: string): Promise<Boot> {
   const plan = await buildPlan(planRef);
   const logIds = plan.map((p) => p.logId);
   const suffix = planRef ? ` (${planRef})` : "";
-  // Prefer the FULL SONG (RFC full-audio, Tier-A): fingerprint each captured master
-  // from the private R2 via the operator-token `get_source_audio` endpoint, so a
-  // mix-in outside the 30s preview window can still match. With no admin token (a
-  // token-less dev boot) fall back to the open 30s preview relay so the bridge still
-  // boots. Either path pulls the fingerprints ONCE at boot (bounded concurrency) and
-  // holds them for the whole show — the matcher never touches the network again (the
-  // never-crash rail).
+  // Tier-A full-song references are GATED (default OFF): fingerprint the full song from
+  // the private R2 via the operator-token `get_source_audio` endpoint ONLY when a token
+  // is present AND FLUNCLE_FULL_SONG_FINGERPRINT is on — the operator flips it AFTER the
+  // M5 accuracy re-tune. Otherwise stay on the 30s preview relay (today's behavior, even
+  // when a token exists), so merging Tier-A is a live-path no-op. Either path pulls the
+  // fingerprints ONCE at boot (bounded concurrency) and holds them for the whole show —
+  // the matcher never touches the network again (the never-crash rail).
   const auth = await loadAdminAuth();
-  const source = auth ? "full songs (private R2)" : "30s previews (no admin token)";
+  const fullSong = shouldFingerprintFullSong(auth);
+  const source = fullSong
+    ? "full songs (private R2)"
+    : auth
+      ? "30s previews — full-song fingerprinting OFF (set FLUNCLE_FULL_SONG_FINGERPRINT=1 after the M5 accuracy re-tune)"
+      : "30s previews (no admin token)";
   console.error(`bridge: plan built — ${plan.length} findings${suffix}; fingerprinting ${source}…`);
-  const fingerprints = auth
-    ? await fingerprintPlanFullSong(logIds, auth)
-    : await fingerprintPlan(logIds);
+  const fingerprints =
+    fullSong && auth ? await fingerprintPlanFullSong(logIds, auth) : await fingerprintPlan(logIds);
   const withFp = fingerprints.filter((f) => f.frames !== null).length;
   console.error(`bridge: fingerprinted ${withFp}/${fingerprints.length} — ${source}`);
   return { fingerprints, plan };
