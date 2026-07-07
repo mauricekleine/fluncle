@@ -284,6 +284,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // of requeue_video) — operator-only (adminAuth + operatorGuard); the box agent
   // never acts on live videos, so an agent token 403s.
   purge_video: "operator",
+  // The append-only cost ledger's write (COST-01) — agent tier (adminAuth only, no
+  // operatorGuard), the record_health precedent; the box's sweeps POST their cost
+  // rows with the agent token, and it writes only the internal cost_events ledger
+  // (no publish), so the agent token drives it.
+  record_cost: "admin",
   // The box's status cron POSTs a health snapshot — agent tier (adminAuth only, no
   // operatorGuard), the context_track/note_track precedent; it writes only the
   // internal service_status/status_events tables (no publish), so the agent token drives it.

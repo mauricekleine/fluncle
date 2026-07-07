@@ -19,6 +19,8 @@
 // the ~0.35 MB mp3 fits in memory.
 
 import lamejs from "@breezystack/lamejs";
+import { priceOpenRouterTokens } from "./cost-rates";
+import { captureCostEvents, type CostCaptureContext, costEventId } from "./costs";
 import { readEnv, readOptionalEnv } from "./env";
 import { ApiError } from "./spotify";
 
@@ -371,6 +373,11 @@ export const CONTEXT_DISTIL_SYSTEM_PROMPT = [
 
 type OpenRouterChatResponse = {
   choices?: { message?: { content?: string } }[];
+  // The billed model + token usage OpenRouter returns in the SAME body we already
+  // parse (it was previously read only for `.content`). Read now to price the one
+  // genuinely-metered LLM call for the cost ledger (COST-01).
+  model?: string;
+  usage?: { completion_tokens?: number; prompt_tokens?: number };
 };
 
 /**
@@ -379,11 +386,14 @@ type OpenRouterChatResponse = {
  * cleaned raw note — a distil failure must never block the render). The model is
  * read from `OPENROUTER_CONTEXT_MODEL`, defaulting to `anthropic/claude-haiku-4.5`.
  */
-export async function distilContextNote(input: {
-  query: string;
-  snippets: string[];
-  sources: string[];
-}): Promise<string | null> {
+export async function distilContextNote(
+  input: {
+    query: string;
+    snippets: string[];
+    sources: string[];
+  },
+  capture?: CostCaptureContext,
+): Promise<string | null> {
   if (input.snippets.length === 0) {
     return null;
   }
@@ -431,6 +441,44 @@ export async function distilContextNote(input: {
     }
 
     const payload = (await response.json()) as OpenRouterChatResponse;
+
+    // Cost capture (COST-01, Path A — Worker-local, `cash`). The context-distil is
+    // the one genuinely-metered LLM call; read the token usage the body already
+    // carries and price it from the in/out split. BEST-EFFORT: `captureCostEvents`
+    // can never throw, so a ledger write can't break the distil (the note still
+    // returns). Only emit when a real usage number is present.
+    const promptTokens = payload.usage?.prompt_tokens;
+    const completionTokens = payload.usage?.completion_tokens;
+
+    if (typeof promptTokens === "number" && typeof completionTokens === "number") {
+      const billedModel = payload.model ?? model;
+      const occurredAt = new Date().toISOString();
+
+      await captureCostEvents([
+        {
+          costBasis: "cash",
+          id: costEventId({
+            logId: capture?.logId,
+            occurredAt,
+            step: "context",
+            trackId: capture?.trackId,
+            unitType: "tokens",
+            vendor: "openrouter",
+          }),
+          logId: capture?.logId,
+          model: billedModel,
+          occurredAt,
+          quantity: promptTokens + completionTokens,
+          source: "measured",
+          step: "context",
+          trackId: capture?.trackId,
+          unitType: "tokens",
+          usd: priceOpenRouterTokens(billedModel, promptTokens, completionTokens),
+          vendor: "openrouter",
+        },
+      ]);
+    }
+
     const content = payload.choices?.[0]?.message?.content?.trim();
 
     return content ? content.slice(0, 2000) : null;
@@ -450,7 +498,10 @@ export async function distilContextNote(input: {
  * raw note (`distilled: false`) rather than blocking the render. Only a non-empty
  * note is `status: "resolved"`.
  */
-export async function fetchTrackContext(query: string): Promise<ContextFetchResult> {
+export async function fetchTrackContext(
+  query: string,
+  capture?: CostCaptureContext,
+): Promise<ContextFetchResult> {
   const apiKey = await readEnv("FIRECRAWL_API_KEY");
 
   let payload: { data?: { web?: FirecrawlResult[] } } | undefined;
@@ -468,6 +519,32 @@ export async function fetchTrackContext(query: string): Promise<ContextFetchResu
     if (!response.ok) {
       return { contextNote: "", distilled: false, sources: [], status: "failed" };
     }
+
+    // Cost capture (COST-01, Path A — `cash`): one Firecrawl search fired. Priced
+    // from `cost-rates.ts` (no credit field in the response). BEST-EFFORT.
+    const occurredAt = new Date().toISOString();
+
+    await captureCostEvents([
+      {
+        costBasis: "cash",
+        id: costEventId({
+          logId: capture?.logId,
+          occurredAt,
+          step: "context",
+          trackId: capture?.trackId,
+          unitType: "requests",
+          vendor: "firecrawl",
+        }),
+        logId: capture?.logId,
+        occurredAt,
+        quantity: 1,
+        source: "estimated",
+        step: "context",
+        trackId: capture?.trackId,
+        unitType: "requests",
+        vendor: "firecrawl",
+      },
+    ]);
 
     payload = (await response.json()) as { data?: { web?: FirecrawlResult[] } };
   } catch {
@@ -504,7 +581,7 @@ export async function fetchTrackContext(query: string): Promise<ContextFetchResu
   // Distil the raw snippets into a clean note. A distil failure (unprovisioned key,
   // vendor down, empty completion) falls back to the cleaned raw snippets — never
   // blocking the render.
-  const distilled = await distilContextNote({ query, snippets, sources });
+  const distilled = await distilContextNote({ query, snippets, sources }, capture);
   const rawNote = snippets.join("\n").slice(0, 2000);
   const contextNote = distilled ?? rawNote;
 
@@ -746,7 +823,11 @@ function encodePcmToMp3(pcm: Uint8Array, sampleRate: number, kbps: number): Arra
  */
 export async function renderObservationCartesia(
   voiceId: string,
-  { speed = DEFAULT_CARTESIA_SPEED, text }: { speed?: number; text: string },
+  {
+    capture,
+    speed = DEFAULT_CARTESIA_SPEED,
+    text,
+  }: { capture?: CostCaptureContext; speed?: number; text: string },
 ): Promise<RenderedObservation> {
   const apiKey = await readEnv("CARTESIA_API_KEY");
 
@@ -783,6 +864,34 @@ export async function renderObservationCartesia(
   if (pcm.byteLength === 0) {
     throw new ApiError("cartesia_error", "Cartesia returned no audio", 502);
   }
+
+  // Cost capture (COST-01, Path A — `cash`): the billable quantity is the
+  // sanitized transcript's character count (the SSE response carries no cost
+  // field), priced per-character from `cost-rates.ts`. BEST-EFFORT — a ledger
+  // failure can never break the render (the audio bytes still return).
+  const occurredAt = new Date().toISOString();
+
+  await captureCostEvents([
+    {
+      costBasis: "cash",
+      id: costEventId({
+        logId: capture?.logId,
+        occurredAt,
+        step: "observe",
+        trackId: capture?.trackId,
+        unitType: "characters",
+        vendor: "cartesia",
+      }),
+      logId: capture?.logId,
+      occurredAt,
+      quantity: sanitizeForCartesia(text).length,
+      source: "measured",
+      step: "observe",
+      trackId: capture?.trackId,
+      unitType: "characters",
+      vendor: "cartesia",
+    },
+  ]);
 
   return {
     alignment: words ? { source: "cartesia", words } : null,

@@ -339,6 +339,84 @@ export const liveState = sqliteTable("live_state", {
   updatedAt: text("updated_at").notNull(),
 });
 
+// An append-only per-step COST ledger (COST-01) — one row per billable unit of
+// work spent on a finding (or a non-finding step). Sibling of
+// serviceCheckSamples / statusEvents: id PK + occurred_at time index + query keys
+// indexed. NEVER pruned (full history is the point; volume is trivial — dozens of
+// rows/day). Written two ways: Worker-local insertCostEvents() for Worker-side
+// vendor calls, and the agent-tier record_cost POST for box-side numbers (the
+// record_health precedent, MADE IDEMPOTENT — see id).
+//
+// costBasis is the load-bearing axis: `cash` = real incremental money (the
+// headline "cost per finding" sums THIS only); `subsidized` = a resource draw
+// under a fixed plan (subscription LLM tokens + on-box compute) — shown as
+// usage/proportion, NEVER summed into the cash total. source is the ORTHOGONAL
+// quantity-confidence: `measured` (a real usage number / timestamp diff) vs
+// `estimated` (a rate×count heuristic, incl. the one-time backfill).
+//
+// The enum-ish columns are plain TEXT with an inline `enum` that only NARROWS the
+// TS type — widening the vendor/step list needs ZERO DDL (the serviceCheckSamples
+// idiom).
+export const costEvents = sqliteTable(
+  "cost_events",
+  {
+    costBasis: text("cost_basis", { enum: ["cash", "subsidized"] }).notNull(),
+    // ISO write time — kept DISTINCT from occurred_at because a box row's spend
+    // time (occurred_at) precedes its Worker write time under clock skew / retry.
+    createdAt: text("created_at").notNull(),
+    // NULLABLE on purpose: a rate-miss (unknown vendor/unit) must surface as
+    // "—/unpriced", never launder to $0 (indistinguishable from a genuinely-free
+    // row). cash: real $; subsidized: API-equivalent / allocated (never summed
+    // into cash); null: unpriced.
+    estimatedUsd: real("estimated_usd"),
+    // A client-generated STABLE id = the idempotency key. Emitters build a
+    // deterministic key (e.g. `${step}:${logId ?? trackId ?? "global"}:${vendor}:${unitType}:${occurredAt}`)
+    // so a retried best-effort POST re-inserts the SAME id and is ignored (INSERT
+    // … ON CONFLICT(id) DO NOTHING) — an append-only ledger with a retried write
+    // DOUBLE-COUNTS without this.
+    id: text("id").primaryKey(),
+    logId: text("log_id"), // Log ID snapshot (coordinate-first read); NULL for non-finding steps
+    model: text("model"), // e.g. claude-sonnet-4-6 (from modelUsage, never assumed); NULL for non-LLM rows
+    occurredAt: text("occurred_at").notNull(), // ISO when the work was spent
+    // total tokens / characters / seconds / requests (the step's natural unit;
+    // real, since seconds/chars can be fractional).
+    quantity: real("quantity").notNull(),
+    source: text("source", { enum: ["measured", "estimated"] }).notNull(),
+    step: text("step", {
+      enum: [
+        "enrich",
+        "embed",
+        "context",
+        "observe",
+        "note",
+        "video",
+        "publish",
+        "discogs",
+        "lastfm",
+        "newsletter",
+        "studio-clip",
+      ],
+    }).notNull(),
+    // finding id (no declared FK — socialPosts.trackId / user_galaxy_collections
+    // precedent); NULL for non-finding steps.
+    trackId: text("track_id"),
+    unitType: text("unit_type", {
+      enum: ["tokens", "characters", "seconds", "requests", "emails"],
+    }).notNull(),
+    vendor: text("vendor", {
+      enum: ["anthropic", "openrouter", "cartesia", "firecrawl", "apify", "resend", "self"],
+    }).notNull(), // "self" = on-box compute (no invoice → subsidized)
+  },
+  (table) => [
+    // Index the QUERY SHAPE, not every column. The two aggregations group by step /
+    // track_id and window by occurred_at; a plain occurred_at serves the global
+    // window. No vendor index (nothing groups by vendor).
+    index("cost_events_step_occurred_at_idx").on(table.step, table.occurredAt),
+    index("cost_events_track_id_occurred_at_idx").on(table.trackId, table.occurredAt),
+    index("cost_events_occurred_at_idx").on(table.occurredAt),
+  ],
+);
+
 export const spotifyAuth = sqliteTable("spotify_auth", {
   accessToken: text("access_token").notNull(),
   expiresAt: text("expires_at").notNull(),

@@ -23,6 +23,7 @@
 
 import { adminArtistsContract } from "./admin-artists";
 import { adminBackfillsContract } from "./admin-backfills";
+import { adminCostsContract } from "./admin-costs";
 import { artistsContract } from "./artists";
 import { adminEditionsContract } from "./admin-editions";
 import { adminHealthContract } from "./admin-health";
@@ -64,6 +65,7 @@ export {
   ResolvedSocialSchema,
 } from "./admin-artists";
 export { backfillDiscogs, backfillLastfm } from "./admin-backfills";
+export { type CostEventInput, CostEventInputSchema, recordCost } from "./admin-costs";
 export { recordHealth, ServiceHealthStatusSchema } from "./admin-health";
 export {
   createEdition,
@@ -187,6 +189,7 @@ export {
 export const contract = {
   ...adminArtistsContract,
   ...adminBackfillsContract,
+  ...adminCostsContract,
   ...artistsContract,
   ...adminEditionsContract,
   ...adminHealthContract,

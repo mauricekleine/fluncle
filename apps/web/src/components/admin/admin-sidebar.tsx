@@ -1,5 +1,6 @@
 import {
   CassetteTapeIcon,
+  CurrencyDollarIcon,
   FilmReelIcon,
   FilmSlateIcon,
   FilmStripIcon,
@@ -69,7 +70,8 @@ export type AdminNavCurrent =
   | "plans"
   | "recordings"
   | "renders"
-  | "system";
+  | "system"
+  | "usage";
 
 type NavEntry = {
   /** Which live count this entry carries, when a cheap read exists. */
@@ -158,7 +160,10 @@ const OBJECT_SECTIONS: NavSection[] = [
     key: "publish",
   },
   {
-    entries: [{ icon: ReceiptIcon, key: "costs", label: "Costs", to: "/admin/costs" }],
+    entries: [
+      { icon: ReceiptIcon, key: "costs", label: "Costs", to: "/admin/costs" },
+      { icon: CurrencyDollarIcon, key: "usage", label: "Usage & cost", to: "/admin/usage" },
+    ],
     key: "ops",
     label: "Ops",
   },

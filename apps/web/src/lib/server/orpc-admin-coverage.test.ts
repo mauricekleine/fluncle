@@ -159,6 +159,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // Agent tier: a single-PUT presign for the clip's `<clipId>/footage.mp4`. Path-symmetric
   // with the finalize above (both nest under `/cut/`).
   "POST /admin/clips/{clipId}/cut/presign": "presign_clip_upload",
+  // The append-only cost ledger's write (COST-01) — contract-only oRPC (no TanStack
+  // route file; oRPC owns the path directly, like record_health). Admin tier
+  // (agent-allowed): the box's sweeps POST a tick's cost rows with the agent token.
+  "POST /admin/costs/events": "record_cost",
   // record_health (the public /status dashboard's write) is contract-only oRPC —
   // no TanStack route file; oRPC owns the path directly, like context_track. Admin
   // tier (agent-allowed): the box's status cron POSTs a snapshot with its agent token.

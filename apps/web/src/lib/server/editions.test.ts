@@ -64,8 +64,12 @@ vi.mock("./db", () => ({
 
 const createBroadcast = vi.hoisted(() => vi.fn(async () => ({ id: "bc_test_123" })));
 const sendBroadcast = vi.hoisted(() => vi.fn(async () => undefined));
+// COST-01: the send path now reads the segment size for the Resend cost row. 0 →
+// the best-effort capture is skipped, so these mint/broadcast tests are unchanged.
+const countSegmentRecipients = vi.hoisted(() => vi.fn(async () => 0));
 
 vi.mock("./resend", () => ({
+  countSegmentRecipients,
   createBroadcast,
   sendBroadcast,
 }));
