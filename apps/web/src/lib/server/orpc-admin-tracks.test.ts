@@ -1224,6 +1224,20 @@ describe("oRPC list_tracks_admin (GET /admin/tracks)", () => {
     expect(opts.order).toBe("desc");
   });
 
+  it("CARRIES sourceAudioKey through the admin capture-queue read (the sweeps need it)", async () => {
+    const captured = { ...LIST_ITEM, sourceAudioKey: "004.7.2I/abc123.m4a" };
+    listTracks.mockResolvedValueOnce({ totalCount: 1, tracks: [captured] });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(adminGet("?captureQueue=true&order=desc", AGENT_TOKEN));
+
+    expect(response?.status).toBe(200);
+    const body = (await readJson(response)) as { tracks: Array<{ sourceAudioKey?: string }> };
+    // The admin read is the on-box sweep's source of truth — the private key MUST survive
+    // here (only the PUBLIC reads strip it).
+    expect(body.tracks[0]?.sourceAudioKey).toBe("004.7.2I/abc123.m4a");
+  });
+
   it("leaves captureQueue false when absent (a separate, opt-in queue)", async () => {
     listTracks.mockResolvedValueOnce({ totalCount: 0, tracks: [] });
 

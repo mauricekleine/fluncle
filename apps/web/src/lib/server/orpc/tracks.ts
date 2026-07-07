@@ -3,7 +3,13 @@
 // op here and one spread line in the root — no other domain's file is touched.
 
 import { ORPCError } from "@orpc/server";
-import { decodeTrackCursor, getRandomTrack, getSimilarFindings, listTracks } from "../tracks";
+import {
+  decodeTrackCursor,
+  getRandomTrack,
+  getSimilarFindings,
+  listTracks,
+  toPublicTrackListItem,
+} from "../tracks";
 import { resolveLogPageTarget } from "../log-resolver";
 import { apiFault, type Implementer, parseLimit } from "./_shared";
 
@@ -51,7 +57,7 @@ export function tracksHandlers(os: Implementer) {
 
       return target.kind === "mixtape"
         ? ({ mixtape: target.mixtape, ok: true } as const)
-        : ({ ok: true, track: target.track } as const);
+        : ({ ok: true, track: toPublicTrackListItem(target.track) } as const);
     } catch (error) {
       // Re-throw oRPC's own errors (the 404 above) so the rails encoder shapes
       // the response; anything else is an unexpected fault.
@@ -74,13 +80,16 @@ export function tracksHandlers(os: Implementer) {
       const since = parseTimestamp(input.since);
       const until = parseTimestamp(input.until);
 
-      return await listTracks({
+      const page = await listTracks({
         cursor,
         includeMixtapes: since === undefined && until === undefined,
         limit,
         since,
         until,
       });
+
+      // Strip the private capture key from every item before it world-serves.
+      return { ...page, tracks: page.tracks.map(toPublicTrackListItem) };
     } catch (error) {
       throw apiFault(error);
     }
@@ -101,7 +110,7 @@ export function tracksHandlers(os: Implementer) {
         });
       }
 
-      return { ok: true, track } as const;
+      return { ok: true, track: toPublicTrackListItem(track) } as const;
     } catch (error) {
       if (error instanceof ORPCError) {
         throw error;
@@ -122,7 +131,7 @@ export function tracksHandlers(os: Implementer) {
       const limit = parseLimit(input.limit, SIMILAR_DEFAULT_LIMIT, SIMILAR_MAX_LIMIT);
       const findings = await getSimilarFindings(input.idOrLogId, limit);
 
-      return { findings, ok: true } as const;
+      return { findings: findings.map(toPublicTrackListItem), ok: true } as const;
     } catch (error) {
       throw apiFault(error);
     }

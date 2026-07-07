@@ -8,7 +8,12 @@ vi.mock("./db", () => ({
   typedRows: <T extends object>(rows: T[]) => rows,
 }));
 
-import { CAPTURE_FAILED_COOLDOWN_MS, CAPTURE_MAX_FAILURES, listTracks } from "./tracks";
+import {
+  CAPTURE_FAILED_COOLDOWN_MS,
+  CAPTURE_MAX_FAILURES,
+  groupArtistYoutubeChannelIds,
+  listTracks,
+} from "./tracks";
 
 // The full-song CAPTURE queue (RFC full-audio § Unit 1): `captureQueue=true` is a
 // SEPARATE, status-aware queue served NEWEST-FIRST so a fresh add jumps ahead of the
@@ -99,6 +104,19 @@ const archive: StoredTrack[] = [
   },
 ];
 
+// Per-finding artist YouTube socials the mocked `artist_socials` batch read returns.
+// `t-new-pending`'s artists carry a duplicate `/channel/UC…` (deduped) plus a `/@handle`
+// link (ignored — not a directly usable channel id); `t-null` has none (field stays
+// undefined). Keyed by the finding's track_id, matching the join the attach query runs.
+const ARTIST_YOUTUBE_SOCIALS: Record<string, string[]> = {
+  "t-failed-ready": ["https://www.youtube.com/channel/UC_BBB"],
+  "t-new-pending": [
+    "https://www.youtube.com/channel/UC_AAA",
+    "https://www.youtube.com/channel/UC_AAA",
+    "https://www.youtube.com/@handle-only",
+  ],
+};
+
 function fullRow(stored: StoredTrack) {
   return {
     ...stored,
@@ -159,6 +177,18 @@ beforeEach(() => {
   vi.setSystemTime(NOW);
   execute.mockReset();
   execute.mockImplementation(async (query: { args: unknown[]; sql: string }) => {
+    // The capture-queue-only artist-own-channel batch read: return each requested
+    // finding's canned YouTube socials as `{ track_id, url }` rows (the shape the join
+    // emits). Intercepted first — its SQL carries neither `count(*)` nor `capture_status`.
+    if (query.sql.includes("artist_socials")) {
+      const requestedIds = query.args as string[];
+      const rows = requestedIds.flatMap((trackId) =>
+        (ARTIST_YOUTUBE_SOCIALS[trackId] ?? []).map((url) => ({ track_id: trackId, url })),
+      );
+
+      return { rows };
+    }
+
     const isCount = query.sql.includes("count(*)");
     const wantsCapture = query.sql.includes("capture_status");
     // listTracks binds the capture cooldown cutoff as the first filter arg.
@@ -267,5 +297,66 @@ describe("listTracks captureQueue (the full-song capture queue)", () => {
     const sql = lastListSql();
     expect(sql).toContain("embedding_json is null");
     expect(sql).not.toContain("capture_status");
+  });
+});
+
+// The artist-own-channel trust signal (the sweep's strongest tier): the capture-queue
+// read populates each finding's `artistYoutubeChannelIds` from its artists'
+// `artist_socials` YouTube links — a single batched read, capture-queue only, off the
+// shared TRACK_SELECT path.
+describe("listTracks captureQueue — artistYoutubeChannelIds", () => {
+  it("populates artistYoutubeChannelIds (deduped, /channel/UC… only) on the capture queue", async () => {
+    const { tracks } = await listTracks({ captureQueue: true, limit: 50, order: "desc" });
+    const byId = new Map(tracks.map((t) => [t.trackId, t]));
+
+    // Deduped, and the /@handle link is ignored (no directly usable channel id).
+    expect(byId.get("t-new-pending")?.artistYoutubeChannelIds).toEqual(["UC_AAA"]);
+    expect(byId.get("t-failed-ready")?.artistYoutubeChannelIds).toEqual(["UC_BBB"]);
+    // A finding whose artists carry no /channel/UC… link keeps the field undefined
+    // (an empty set is omitted, never surfaced as []).
+    expect(byId.get("t-null")?.artistYoutubeChannelIds).toBeUndefined();
+  });
+
+  it("binds the track ids into the artist_socials read (never interpolated)", async () => {
+    await listTracks({ captureQueue: true, limit: 50, order: "desc" });
+    const socialsCall = execute.mock.calls.find((c) =>
+      (c[0] as { sql: string }).sql.includes("artist_socials"),
+    )?.[0] as { args: unknown[]; sql: string };
+
+    expect(socialsCall.sql).toContain("artist_socials.platform = 'youtube'");
+    // The queue's three findings are BOUND as `?` placeholders, not concatenated.
+    expect(socialsCall.args).toEqual(["t-new-pending", "t-null", "t-failed-ready"]);
+    expect(socialsCall.sql).toContain("in (?, ?, ?)");
+    for (const id of socialsCall.args) {
+      expect(socialsCall.sql).not.toContain(String(id));
+    }
+  });
+
+  it("does NOT read artist_socials for a non-capture list (capture-queue-only signal)", async () => {
+    await listTracks({ limit: 50 });
+    const firedArtistSocials = execute.mock.calls.some((c) =>
+      (c[0] as { sql: string }).sql.includes("artist_socials"),
+    );
+
+    expect(firedArtistSocials).toBe(false);
+  });
+});
+
+describe("groupArtistYoutubeChannelIds", () => {
+  it("groups by track_id, dedupes, and ignores non-/channel URLs", () => {
+    const grouped = groupArtistYoutubeChannelIds([
+      { track_id: "a", url: "https://www.youtube.com/channel/UC_1" },
+      { track_id: "a", url: "https://www.youtube.com/channel/UC_1" }, // duplicate
+      { track_id: "a", url: "https://www.youtube.com/channel/UC_2" }, // a second artist
+      { track_id: "a", url: "https://www.youtube.com/@handle" }, // ignored
+      { track_id: "b", url: "https://www.youtube.com/user/name" }, // ignored → b absent
+    ]);
+
+    expect(grouped.get("a")).toEqual(["UC_1", "UC_2"]);
+    expect(grouped.has("b")).toBe(false);
+  });
+
+  it("returns an empty map for no rows", () => {
+    expect(groupArtistYoutubeChannelIds([]).size).toBe(0);
   });
 });

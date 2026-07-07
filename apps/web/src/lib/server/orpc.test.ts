@@ -231,6 +231,21 @@ describe("oRPC public read — GET /tracks (list_tracks)", () => {
       until: undefined,
     });
   });
+
+  it("STRIPS the private sourceAudioKey from a captured finding before it world-serves", async () => {
+    // The admin capture-queue read surfaces the private R2 key; the PUBLIC feed must not.
+    const captured = { ...TRACK, sourceAudioKey: "004.7.2I/abc123.m4a", trackId: "captured" };
+    listTracks.mockResolvedValueOnce({ totalCount: 1, tracks: [captured] });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(get("https://www.fluncle.com/api/v1/tracks"));
+
+    expect(response?.status).toBe(200);
+    const body = (await readJson(response)) as { tracks: Array<Record<string, unknown>> };
+    expect(body.tracks[0]).not.toHaveProperty("sourceAudioKey");
+    // The rest of the finding survives — only the private key is removed.
+    expect(body.tracks[0]?.trackId).toBe("captured");
+  });
 });
 
 describe("oRPC public read — GET /tracks/random (get_random_track)", () => {
@@ -242,6 +257,18 @@ describe("oRPC public read — GET /tracks/random (get_random_track)", () => {
 
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({ ok: true, track: TRACK });
+  });
+
+  it("STRIPS the private sourceAudioKey from the served track", async () => {
+    getRandomTrack.mockResolvedValueOnce({ ...TRACK, sourceAudioKey: "004.7.2I/abc123.m4a" });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(get("https://www.fluncle.com/api/v1/tracks/random"));
+
+    expect(response?.status).toBe(200);
+    const body = (await readJson(response)) as { track: Record<string, unknown> };
+    expect(body.track).not.toHaveProperty("sourceAudioKey");
+    expect(body.track.trackId).toBe(TRACK.trackId);
   });
 
   it("404s an empty archive with the custom track_not_found code (byte parity)", async () => {

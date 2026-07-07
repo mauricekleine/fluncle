@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type TrackRow, toTrackListItem } from "./tracks";
+import { type TrackRow, toPublicTrackListItem, toTrackListItem } from "./tracks";
 
 // The served (mapped) observation audio URL must be versioned by
 // observation_generated_at, so a re-`observe` — which overwrites
@@ -33,6 +33,7 @@ const BASE_ROW: TrackRow = {
   preview_url: null,
   release_date: null,
   source_audio_failures: 0,
+  source_audio_key: null,
   spotify_url: "https://open.spotify.com/track/abc",
   tiktok_url: null,
   title: "A Finding",
@@ -82,5 +83,32 @@ describe("toTrackListItem — observation audio URL versioning", () => {
     });
 
     expect(item.observationAudioUrl).toBeUndefined();
+  });
+});
+
+// The private full-song capture key: the ADMIN DTO carries it (the on-box sweeps read
+// it), but every PUBLIC read strips it via toPublicTrackListItem — the captured full
+// song is a private analysis artifact and its R2 key must never world-serve.
+describe("sourceAudioKey — admin carries, public strips", () => {
+  const CAPTURED_ROW: TrackRow = { ...BASE_ROW, source_audio_key: "004.7.2I/abc123.m4a" };
+
+  it("the admin DTO (toTrackListItem) carries the captured source key", () => {
+    expect(toTrackListItem(CAPTURED_ROW).sourceAudioKey).toBe("004.7.2I/abc123.m4a");
+  });
+
+  it("toPublicTrackListItem strips the key from a captured finding", () => {
+    const publicItem = toPublicTrackListItem(toTrackListItem(CAPTURED_ROW));
+
+    expect(publicItem.sourceAudioKey).toBeUndefined();
+    // Everything else survives — only the private key is removed.
+    expect(publicItem.trackId).toBe(CAPTURED_ROW.track_id);
+    expect(publicItem.title).toBe(CAPTURED_ROW.title);
+  });
+
+  it("returns an un-captured item unchanged (nothing to strip)", () => {
+    const item = toTrackListItem(BASE_ROW);
+
+    expect(item.sourceAudioKey).toBeUndefined();
+    expect(toPublicTrackListItem(item)).toBe(item);
   });
 });

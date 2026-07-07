@@ -108,19 +108,34 @@ export async function getYouTubeAccessToken(): Promise<string> {
 const youtubeApiBaseUrl = "https://www.googleapis.com/youtube/v3";
 
 /**
+ * Extract a stable YouTube channel id (`UC…`) from a stored social URL — the PURE,
+ * network-free half of `resolveYouTubeChannelId`. ONLY the `…/channel/UC…` shape
+ * yields a channel id directly from the URL; a `/user/<name>` or `/@handle` URL needs
+ * an API lookup to resolve (a documented future refinement), so those return `null`
+ * here — as does any URL with no `/channel/UC…` segment (a `/watch` link, junk). Used
+ * by the capture queue's artist-own-channel trust signal, where an API round-trip per
+ * finding is off the table.
+ */
+export function extractYoutubeChannelId(url: string): string | null {
+  const match = url.match(/\/channel\/(UC[A-Za-z0-9_-]+)/);
+
+  return match?.[1] ?? null;
+}
+
+/**
  * Resolve a stored YouTube social URL to a stable channel id (`UC…`) — the durable
  * follow target `subscriptions.insert` needs. Two shapes:
- *   - `…/channel/UC…` → the id is already in the path (no quota).
+ *   - `…/channel/UC…` → the id is already in the path (no quota; `extractYoutubeChannelId`).
  *   - `…/@handle` (or a bare handle) → one `channels.list?forHandle=` lookup (1 quota
  *     unit) resolves the handle to its channel id.
  * Returns `undefined` when the URL carries no resolvable channel (e.g. a `/watch`
  * link) so the caller can skip the subscribe cleanly rather than fail the sweep.
  */
 export async function resolveYouTubeChannelId(url: string): Promise<string | undefined> {
-  const channelMatch = url.match(/\/channel\/(UC[\w-]+)/);
+  const channelId = extractYoutubeChannelId(url);
 
-  if (channelMatch?.[1]) {
-    return channelMatch[1];
+  if (channelId) {
+    return channelId;
   }
 
   const handleMatch = url.match(/\/@([\w.-]+)/) ?? url.match(/^@?([\w.-]+)$/);
