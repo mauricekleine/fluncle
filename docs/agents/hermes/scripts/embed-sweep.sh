@@ -1,43 +1,61 @@
 #!/usr/bin/env bash
-# embed-sweep.sh — the `--no-agent` audio-embedding cron's job ENTRY.
+# embed-sweep.sh — the audio-embedding sweep's job ENTRY (`fluncle-embed`).
 #
-# LIVE. Version-controlled source; the repo is canonical and the box is a deploy
-# target (fluncle-hermes-operator skill). This pair (+ embed-track.py) is deployed to
-# ~/.hermes/scripts/ on the devbox and the cron is wired there. See ../cron/README.md
-# and docs/audio-embedding-rfc.md.
+# SCHEDULED BY A HOST SYSTEMD TIMER, not a Hermes gateway cron: a windowed full-song MuQ
+# forward is minutes-scale and must not occupy the shared serial gateway runner (its ~300s
+# global timeout would starve the latency-sensitive 5-min sweeps — the same reason capture is
+# a host timer). The rave-02 host timer `docker exec`s this script inside the container on a
+# schedule — see ../embed-timer/README.md for the unit files + install. The container runner
+# dispatches by extension (bash for `.sh`), and a manual `bash /opt/data/scripts/embed-sweep.sh`
+# runs it the same way, so this thin bash wrapper is the entry; all the JSON work lives in the
+# bun orchestrator beside it (embed-sweep.ts, which in turn calls embed-track.py for the MuQ
+# inference). Its stdout is the run output the /status prober reads.
 #
-# Why a .sh that execs a .ts: the Hermes `--no-agent --script` runner dispatches by
-# extension — bash for `.sh`/`.bash`, Python for everything else — so a bare `.ts`
-# would be fed to Python. This thin wrapper is the bash entry; all the JSON work lives
-# in the bun orchestrator beside it (which in turn calls embed-track.py for the MuQ
-# inference). Its stdout is the cron's run output.
+# LIVE-INTENT. Version-controlled source; the repo is canonical and the box is a deploy
+# target (fluncle-hermes-operator skill). This trio (+ embed-track.py) deploys to
+# /opt/data/scripts/ on the devbox via `docker cp`. See ../embed-timer/README.md and
+# docs/full-audio-rfc.md § Unit 3.
 #
-# Operator wires it on the devbox (once the image carries the MuQ torch layer + baked
-# weights and this trio is under ~/.hermes/scripts/):
-#
-#   hermes cron create "every 5m" --no-agent --script embed-sweep.sh --deliver local --name fluncle-embed
-#
-# Confirm with `hermes cron list`; per-run output lands in
-# ~/.hermes/cron/output/{job_id}/{timestamp}.md.
+# PRODUCTION PRE-REQS (see ../embed-timer/README.md for the full runbook):
+#   - The MuQ torch layer + baked weights in the image; ffmpeg in the image (the decode path).
+#     NO yt-dlp is needed here — embed only reads R2 + runs python (unlike capture).
+#   - Secrets in the shared 0600 ${HOME}/.fluncle-secrets.env (op-injected by
+#     fluncle-secrets-sync), sourced below:
+#       FLUNCLE_SOURCE_AUDIO_R2_ACCESS_KEY_ID / _SECRET_ACCESS_KEY — an R2 token scoped
+#         Object Read on fluncle-source-audio (the captured full songs; the same credential
+#         capture writes with).
+#       R2_ACCOUNT_ID — the (non-secret) Cloudflare account id (also in wrangler.jsonc).
+#       optional: FLUNCLE_SOURCE_AUDIO_R2_BUCKET (default fluncle-source-audio).
+#     The `fluncle` CLI's own admin auth (the embed queue read + the vector write-back) is the
+#     box's baked config under HOME — unchanged from the gateway-cron era.
 set -euo pipefail
 
-# The Hermes cron `--no-agent --script` runner execs this with a minimal PATH that
-# omits /usr/local/bin (the bun + fluncle symlinks) and /root/.bun/bin, so a bare
-# `bun`/`fluncle`/`python3` is "not found" → exit 127 (the runner's env, not the
-# image's; a manual `bash embed-sweep.sh` works because it inherits the container's
-# full PATH). Prepend the known install dirs so this wrapper's `bun` AND the
-# orchestrator's `fluncle`/`bun`/`python3` spawns resolve regardless of the runner's PATH.
+# The docker-exec / runner context hands this a minimal PATH that omits /usr/local/bin (the
+# bun + fluncle symlinks) and /root/.bun/bin, so a bare `bun`/`fluncle`/`python3` is
+# "not found" → exit 127. Prepend the known install dirs so this wrapper's `bun` AND the
+# orchestrator's `fluncle`/`bun`/`python3` spawns resolve regardless of the caller's PATH.
 export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 
-# Belt-and-suspenders: the cron runner's exec context loses the PATH export above, so
-# pin ABSOLUTE paths for the interpreter + the CLI. The orchestrator reads
-# BUN_BIN/FLUNCLE_BIN/PYTHON_BIN, so its spawns resolve with zero PATH dependence; the
-# wrapper itself execs bun by absolute path too.
+# Belt-and-suspenders: the exec context can lose the PATH export above, so pin ABSOLUTE paths
+# for the interpreter + the CLI. The orchestrator reads BUN_BIN/FLUNCLE_BIN/PYTHON_BIN, so its
+# spawns resolve with zero PATH dependence; the wrapper itself execs bun by absolute path too.
 export BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 export FLUNCLE_BIN="${FLUNCLE_BIN:-/usr/local/bin/fluncle}"
 # The MuQ torch trio + muq live in the baked venv (see the Dockerfile MuQ layer), so
 # embed-track.py MUST run under that interpreter, not the system python3.
 export PYTHON_BIN="${PYTHON_BIN:-/opt/muq-venv/bin/python}"
+
+# Source the shared 0600 secrets file (the same single source every other sweep reads) so the
+# R2 creds are present. Provider creds are dropped from the cron env by Hermes' blocklist, so
+# the R2/account creds can only arrive via this file — they are unrecognized custom vars, so
+# they pass.
+EMBED_ENV_FILE="${EMBED_ENV_FILE:-${HOME:-/opt/data/home}/.fluncle-secrets.env}"
+if [ -r "${EMBED_ENV_FILE}" ]; then
+  set -a
+  # shellcheck source=/dev/null
+  . "${EMBED_ENV_FILE}"
+  set +a
+fi
 
 # Resolve the orchestrator next to this wrapper so it runs regardless of CWD.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
