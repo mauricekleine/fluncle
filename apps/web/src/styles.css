@@ -1638,6 +1638,108 @@ body::before {
   color: var(--starlight-cream);
 }
 
+/* The artist name links under a finding's title (the /log page) + the artist
+   page's own name. Subtle by default, cream on hover — a quiet cross-link. */
+.log-artist-link {
+  color: inherit;
+  text-decoration: none;
+  text-decoration-color: color-mix(in oklch, var(--primary) 40%, transparent);
+  text-underline-offset: 0.18em;
+  transition: color 150ms ease-out;
+}
+
+.log-artist-link:hover,
+.log-artist-link:focus-visible {
+  color: var(--starlight-cream);
+  text-decoration: underline;
+}
+
+.artist-name {
+  overflow-wrap: anywhere;
+}
+
+/* The confirmed-socials row under the artist masthead — brand marks + labels,
+   quiet chips that brighten on hover. */
+.artist-socials {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+}
+
+.artist-social {
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-md);
+  color: var(--muted-foreground);
+  display: inline-flex;
+  font-size: 0.78rem;
+  gap: 0.4rem;
+  padding: 0.32rem 0.6rem;
+  text-decoration: none;
+  transition:
+    color 150ms ease-out,
+    border-color 150ms ease-out;
+}
+
+.artist-social svg {
+  height: 0.95rem;
+  width: 0.95rem;
+}
+
+.artist-social:hover,
+.artist-social:focus-visible {
+  border-color: color-mix(in oklch, var(--primary) 42%, transparent);
+  color: var(--starlight-cream);
+}
+
+/* The Instagram-style cover grid of findings (artist page + /artists index):
+   square covers, tight gutters, dark and cover-led — a Fluncle grid, not a
+   streaming clone. Reuses the .track-artwork treatment on each cover. */
+.artist-grid {
+  display: grid;
+  gap: 0.9rem 0.7rem;
+  grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr));
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.artist-grid a {
+  color: var(--stardust);
+  display: grid;
+  gap: 0.4rem;
+  text-decoration: none;
+}
+
+.artist-grid-cover {
+  width: 100%;
+}
+
+.artist-grid a:hover .artist-grid-cover,
+.artist-grid a:focus-visible .artist-grid-cover {
+  border-color: color-mix(in oklch, var(--primary) 42%, transparent);
+}
+
+.artist-grid-line {
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  display: -webkit-box;
+  font-size: 0.74rem;
+  line-height: 1.25;
+  overflow: hidden;
+}
+
+.artist-grid a:hover .artist-grid-line,
+.artist-grid a:focus-visible .artist-grid-line {
+  color: var(--starlight-cream);
+}
+
+.artist-grid-count {
+  color: var(--muted-foreground);
+  font-size: 0.68rem;
+}
+
 .log-neighbors {
   border-top: 1px solid var(--border);
   display: flex;

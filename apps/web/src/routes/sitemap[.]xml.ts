@@ -2,8 +2,12 @@ import { createFileRoute } from "@tanstack/react-router";
 import { artistTitleLine, definitionalSentences } from "../lib/log-prose";
 import { mixtapeSetVideoUrl, spotifyAlbumImageAtSize, trackMedia } from "../lib/media";
 import { mixtapeCoverUrl } from "../lib/mixtapes";
-import { buildSitemapXml, type SitemapLogPage } from "../lib/sitemap";
-import { parseArtistsJson } from "../lib/server/artists";
+import { buildSitemapXml, type SitemapArtist, type SitemapLogPage } from "../lib/sitemap";
+import {
+  ARTIST_INDEX_MIN_FINDINGS,
+  listArtistsWithFindingCounts,
+  parseArtistsJson,
+} from "../lib/server/artists";
 import { getDb, typedRows } from "../lib/server/db";
 
 // One <url> per coordinate-bearing finding (plus the static surfaces). Each
@@ -105,7 +109,7 @@ export const Route = createFileRoute("/sitemap.xml")({
     handlers: {
       GET: async () => {
         const db = await getDb();
-        const [trackResult, mixtapeResult] = await Promise.all([
+        const [trackResult, mixtapeResult, artistEntries] = await Promise.all([
           // lastmod = freshest of (video_squared_at, updated_at, added_at). added_at
           // is NOT NULL, and ISO strings sort lexicographically, so coalescing the
           // nullable two to '' keeps max() honest (scalar max() returns NULL on any
@@ -125,11 +129,21 @@ export const Route = createFileRoute("/sitemap.xml")({
                   where status = 'published' and log_id is not null and added_at is not null
                   order by lastmod desc`,
           }),
+          listArtistsWithFindingCounts(),
         ]);
 
         const trackPages = typedRows<TrackRow>(trackResult.rows).map(trackPage);
         const mixtapePages = typedRows<MixtapeRow>(mixtapeResult.rows).map(mixtapePage);
-        const xml = buildSitemapXml([...trackPages, ...mixtapePages]);
+        // Thin-content gate: only artists past ARTIST_INDEX_MIN_FINDINGS enter the
+        // sitemap (the thin ones render `noindex, follow`).
+        const artistPages: SitemapArtist[] = artistEntries
+          .filter((artist) => artist.findingCount >= ARTIST_INDEX_MIN_FINDINGS)
+          .map((artist) => ({
+            imageLoc: spotifyAlbumImageAtSize(artist.coverImageUrl, "large"),
+            lastmod: artist.lastmod,
+            slug: artist.slug,
+          }));
+        const xml = buildSitemapXml([...trackPages, ...mixtapePages], artistPages);
 
         return new Response(xml, {
           headers: {
