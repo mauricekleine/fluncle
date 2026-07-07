@@ -23,11 +23,6 @@
       "skillPath": "skills/email-best-practices/SKILL.md",
       "computedHash": "c7218333381fa335b8a912bd55b3bb58b5b567a174f9e1d8b41940ff82f1a6b6"
     },
-    "fluncle-bpm-backfill": {
-      "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-bpm-backfill",
-      "sourceType": "local",
-      "computedHash": "d80e9d4113b2c6c92a3c0c0a7e29df7729cb92fbd36a780900e4aae731a7c626"
-    },
     "fluncle-goal-writer": {
       "source": "/Users/maurice/Projects/fluncle/packages/skills/fluncle-goal-writer",
       "sourceType": "local",
