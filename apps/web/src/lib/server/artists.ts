@@ -1264,13 +1264,20 @@ function spotifyArtistIdFromUrl(url: string): string | undefined {
 }
 
 /**
- * Follow a bounded batch of high-confidence artists across Spotify + YouTube — the
- * championing motion's automated half (`follow_artist`, agent tier). Acts only on
- * followable (`spotify`/`youtube`) socials that are `auto`/`confirmed` and not yet
- * followed (idempotent by `followed_at IS NULL`), oldest first, capped at `limit` so a
- * tick stays inside the platforms' quotas. On success it stamps `followed_at`; a per-
- * target failure never aborts the batch. `dryRun` reports what WOULD be followed
- * without calling the APIs or writing. `remaining` lets the on-box sweep loop until 0.
+ * Follow a bounded batch of high-confidence artists on YouTube — the championing motion's
+ * automated half (`follow_artist`, agent tier). Acts only on YouTube socials that are
+ * `auto`/`confirmed` and not yet followed (idempotent by `followed_at IS NULL`), oldest
+ * first, capped at `limit` (and the per-day YouTube quota ceiling) so a tick stays inside
+ * the Data API budget. On success it stamps `followed_at`; a per-target failure never
+ * aborts the batch. `dryRun` reports what WOULD be followed without calling the API or
+ * writing. `remaining` lets the on-box sweep loop until 0.
+ *
+ * SPOTIFY IS DELIBERATELY EXCLUDED. Spotify's artist-follow endpoint 403s for our
+ * Development-mode app (a permanent dev-mode endpoint gate — see docs/ROADMAP.md), so
+ * auto-following it can never succeed and would only churn the queue and starve the
+ * working YouTube follows. Spotify championing runs through the manual /admin/artists
+ * queue (Follow-now best-effort + manual). To re-enable if the gate ever lifts, add
+ * 'spotify' back to both the pending and `remaining` queries and restore the branch.
  */
 export async function followPendingArtists(limit = 5, dryRun = false): Promise<FollowBatchSummary> {
   const db = await getDb();
@@ -1278,11 +1285,10 @@ export async function followPendingArtists(limit = 5, dryRun = false): Promise<F
 
   const pending = await db.execute({
     args: [cap],
-    sql: `select s.id as social_id, s.platform, s.url, a.id as artist_id, a.name,
-                 a.spotify_artist_id
+    sql: `select s.id as social_id, s.platform, s.url, a.id as artist_id, a.name
           from artist_socials s
           join artists a on a.id = s.artist_id
-          where s.platform in ('spotify', 'youtube')
+          where s.platform = 'youtube'
             and s.status in ('auto', 'confirmed')
             and s.followed_at is null
             and s.muted_at is null
@@ -1310,13 +1316,12 @@ export async function followPendingArtists(limit = 5, dryRun = false): Promise<F
 
   for (const raw of pending.rows) {
     const row = raw as Record<string, unknown>;
-    const platform = row["platform"] === "youtube" ? "youtube" : "spotify";
+    // The pending query is YouTube-only, so every row here is a YouTube target.
+    const platform = "youtube" as const;
     const socialId = textOf(row["social_id"]);
     const artistId = textOf(row["artist_id"]);
     const artistName = textOf(row["name"]);
     const url = textOf(row["url"]);
-    const spotifyArtistId =
-      typeof row["spotify_artist_id"] === "string" ? row["spotify_artist_id"] : undefined;
 
     try {
       if (dryRun) {
@@ -1324,32 +1329,22 @@ export async function followPendingArtists(limit = 5, dryRun = false): Promise<F
         continue;
       }
 
-      if (platform === "spotify") {
-        const id = spotifyArtistId ?? spotifyArtistIdFromUrl(url);
-
-        if (!id) {
-          throw new Error("no resolvable Spotify artist id");
-        }
-
-        await followSpotifyArtist(id);
-      } else {
-        // Stop before spending quota past the daily ceiling — recorded as a failure (the
-        // target stays unfollowed for the next day's sweep), never a silent skip.
-        if (youtubeFollowedToday >= YOUTUBE_DAILY_FOLLOW_CAP) {
-          throw new Error(
-            `daily YouTube follow cap reached (${YOUTUBE_DAILY_FOLLOW_CAP}/day) — deferred`,
-          );
-        }
-
-        const channelId = await resolveYouTubeChannelId(url);
-
-        if (!channelId) {
-          throw new Error("no resolvable YouTube channel id");
-        }
-
-        await subscribeToYouTubeChannel(channelId);
-        youtubeFollowedToday += 1;
+      // Stop before spending quota past the daily ceiling — recorded as a failure (the
+      // target stays unfollowed for the next day's sweep), never a silent skip.
+      if (youtubeFollowedToday >= YOUTUBE_DAILY_FOLLOW_CAP) {
+        throw new Error(
+          `daily YouTube follow cap reached (${YOUTUBE_DAILY_FOLLOW_CAP}/day) — deferred`,
+        );
       }
+
+      const channelId = await resolveYouTubeChannelId(url);
+
+      if (!channelId) {
+        throw new Error("no resolvable YouTube channel id");
+      }
+
+      await subscribeToYouTubeChannel(channelId);
+      youtubeFollowedToday += 1;
 
       const now = new Date().toISOString();
       await db.execute({
@@ -1370,9 +1365,10 @@ export async function followPendingArtists(limit = 5, dryRun = false): Promise<F
   const remainingResult = await db.execute({
     args: [],
     sql: `select count(*) as n from artist_socials
-          where platform in ('spotify', 'youtube')
+          where platform = 'youtube'
             and status in ('auto', 'confirmed')
-            and followed_at is null`,
+            and followed_at is null
+            and muted_at is null`,
   });
   const remainingRow = remainingResult.rows[0] as Record<string, unknown> | undefined;
   const remaining = Number(remainingRow?.["n"] ?? 0);

@@ -226,11 +226,12 @@ export const listArtistSocials = oc
  * `follow_artist` → `POST /admin/artists/follow` (operationId `followArtist`).
  *
  * Agent tier (`adminAuth`). The championing motion's automated half: follow a bounded
- * batch of high-confidence artists across Spotify + YouTube (`status IN (auto,
- * confirmed)`, idempotent by `followed_at IS NULL`, quota-paced). The on-box
- * `fluncle-artist-follow` sweep loops it via `remaining`. Bodyless POST with query
- * params (the `backfill_artists` shape). Returns `{ ok, dryRun, followed, followedCount,
- * failed, failedCount, remaining }`.
+ * batch of high-confidence artists on YouTube (`status IN (auto, confirmed)`, idempotent
+ * by `followed_at IS NULL`, quota-paced). Spotify is excluded — its artist-follow endpoint
+ * is dev-mode-gated for our app, so Spotify championing runs through the manual
+ * /admin/artists queue (see docs/ROADMAP.md). The on-box `fluncle-artist-follow` sweep
+ * loops it via `remaining`. Bodyless POST with query params (the `backfill_artists`
+ * shape). Returns `{ ok, dryRun, followed, followedCount, failed, failedCount, remaining }`.
  */
 export const followArtist = oc
   .route({
@@ -238,7 +239,7 @@ export const followArtist = oc
     method: "POST",
     operationId: "followArtist",
     path: "/admin/artists/follow",
-    summary: "Auto-follow a batch of high-confidence artists (Spotify + YouTube)",
+    summary: "Auto-follow a batch of high-confidence artists on YouTube",
     tags: ["Admin"],
   })
   .input(

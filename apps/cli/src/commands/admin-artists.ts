@@ -109,9 +109,11 @@ export type FollowArtistResult = {
 };
 
 // One bounded pass of the auto-follow sweep (Epic B) via the admin API — the Worker
-// follows a batch of high-confidence artists across Spotify + YouTube (status auto/
-// confirmed, idempotent by followed_at IS NULL, quota-paced). `--dry-run` reports what
-// WOULD be followed without calling the platforms or writing. Loop while `remaining > 0`.
+// follows a batch of high-confidence artists on YouTube (status auto/confirmed, idempotent
+// by followed_at IS NULL, quota-paced). Spotify is excluded (its follow endpoint is
+// dev-mode-gated for our app; Spotify championing is manual — see docs/ROADMAP.md).
+// `--dry-run` reports what WOULD be followed without calling the platform or writing. Loop
+// while `remaining > 0`.
 export async function followArtistsCommand(
   limit: number,
   dryRun: boolean,

@@ -12,12 +12,13 @@
 # be fed to Python. This thin wrapper is the bash entry; the JSON work lives in the bun
 # orchestrator beside it. Its stdout is the cron's run output.
 #
-# THE WORKER-PACED MODEL: the box holds NO Spotify/YouTube tokens (the Worker does). So
-# this driver just PACES the follow endpoint — one bounded batch per tick via the
-# `fluncle` CLI — and the Worker performs the Spotify `PUT /me/following` +
-# YouTube `subscriptions.insert`, then stamps `followed_at`. Pure trigger, zero LLM
-# tokens on the box. Idempotent by construction (`followed_at IS NULL`), acting only on
-# `status IN (auto, confirmed)`. Mixcloud is CUT to link-only.
+# THE WORKER-PACED MODEL: the box holds NO YouTube token (the Worker does). So this driver
+# just PACES the follow endpoint — one bounded batch per tick via the `fluncle` CLI — and
+# the Worker performs the YouTube `subscriptions.insert`, then stamps `followed_at`. Pure
+# trigger, zero LLM tokens on the box. Idempotent by construction (`followed_at IS NULL`),
+# acting only on `status IN (auto, confirmed)`. YOUTUBE-ONLY: Spotify auto-follow is
+# dev-mode-gated for our app (manual championing via /admin/artists instead — see the
+# ROADMAP). Mixcloud is CUT to link-only.
 #
 # Operator wires it on the devbox (the image already carries bun + the fluncle CLI;
 # `follow_artist` is AGENT tier, so the box's existing agent-scoped token drives it — no

@@ -41,11 +41,21 @@ function wireDb(pending: PendingRow[], remaining: number) {
 
   execute.mockImplementation(async ({ args, sql }: { args: unknown[]; sql: string }) => {
     if (sql.includes("from artist_socials s") && sql.includes("join artists a")) {
-      return { rows: pending };
+      // Honour the sweep's YouTube-only platform filter — a seeded non-YouTube row is
+      // excluded exactly as the production query (`s.platform = 'youtube'`) excludes it.
+      const rows = sql.includes("s.platform = 'youtube'")
+        ? pending.filter((r) => r.platform === "youtube")
+        : pending;
+
+      return { rows };
     }
     if (sql.startsWith("update artist_socials set followed_at")) {
       updates.push(String(args[2]));
       return { rows: [] };
+    }
+    // The per-day YouTube ceiling count (`followed_at >=` day start): none followed yet in a test.
+    if (sql.includes("count(*)") && sql.includes("followed_at >=")) {
+      return { rows: [{ n: 0 }] };
     }
     if (sql.includes("count(*)")) {
       return { rows: [{ n: remaining }] };
@@ -66,7 +76,38 @@ beforeEach(() => {
 });
 
 describe("followPendingArtists", () => {
-  it("follows a Spotify + a YouTube target, stamps each, and reports remaining", async () => {
+  it("follows a YouTube target, stamps it, and reports remaining", async () => {
+    const updates = wireDb(
+      [
+        {
+          artist_id: "a2",
+          name: "Flowidus",
+          platform: "youtube",
+          social_id: "s2",
+          spotify_artist_id: null,
+          url: "https://www.youtube.com/@flowidus",
+        },
+      ],
+      0,
+    );
+
+    const { followPendingArtists } = await import("./artists");
+    const summary = await followPendingArtists(5, false);
+
+    expect(resolveYouTubeChannelId).toHaveBeenCalledWith("https://www.youtube.com/@flowidus");
+    expect(subscribeToYouTubeChannel).toHaveBeenCalledWith("UCchannel123");
+    // Spotify is never touched by the sweep (YouTube-only; dev-mode-gated).
+    expect(followSpotifyArtist).not.toHaveBeenCalled();
+    expect(summary.followedCount).toBe(1);
+    expect(summary.failedCount).toBe(0);
+    expect(summary.remaining).toBe(0);
+    expect(updates.length).toBe(1);
+  });
+
+  it("excludes Spotify rows from the sweep (dev-mode-gated — manual only)", async () => {
+    // A Spotify `auto` row + a YouTube `auto` row: the YouTube-only query drops the Spotify
+    // one, so the sweep follows only YouTube and never calls the Spotify API. Seeding the
+    // Spotify row here means: if the production query ever re-added 'spotify', this fails.
     const updates = wireDb(
       [
         {
@@ -92,26 +133,24 @@ describe("followPendingArtists", () => {
     const { followPendingArtists } = await import("./artists");
     const summary = await followPendingArtists(5, false);
 
-    expect(followSpotifyArtist).toHaveBeenCalledWith("3TVXtAsR1Inumwj472S9r4");
-    expect(resolveYouTubeChannelId).toHaveBeenCalledWith("https://www.youtube.com/@flowidus");
-    expect(subscribeToYouTubeChannel).toHaveBeenCalledWith("UCchannel123");
-    expect(summary.followedCount).toBe(2);
-    expect(summary.failedCount).toBe(0);
-    expect(summary.remaining).toBe(0);
-    // Both targets got a followed_at UPDATE (idempotency stamp).
-    expect(updates.length).toBe(2);
+    expect(followSpotifyArtist).not.toHaveBeenCalled();
+    expect(subscribeToYouTubeChannel).toHaveBeenCalledTimes(1);
+    expect(summary.followedCount).toBe(1);
+    expect(summary.followed[0]?.socialId).toBe("s2");
+    expect(summary.followed[0]?.platform).toBe("youtube");
+    expect(updates).toEqual(["s2"]);
   });
 
-  it("dry run reports targets but never calls the platforms or writes", async () => {
+  it("dry run reports targets but never calls the platform or writes", async () => {
     const updates = wireDb(
       [
         {
-          artist_id: "a1",
-          name: "Changing Faces",
-          platform: "spotify",
-          social_id: "s1",
-          spotify_artist_id: "3TVXtAsR1Inumwj472S9r4",
-          url: "https://open.spotify.com/artist/3TVXtAsR1Inumwj472S9r4",
+          artist_id: "a2",
+          name: "Flowidus",
+          platform: "youtube",
+          social_id: "s2",
+          spotify_artist_id: null,
+          url: "https://www.youtube.com/@flowidus",
         },
       ],
       1,
@@ -122,7 +161,7 @@ describe("followPendingArtists", () => {
 
     expect(summary.dryRun).toBe(true);
     expect(summary.followedCount).toBe(1);
-    expect(followSpotifyArtist).not.toHaveBeenCalled();
+    expect(subscribeToYouTubeChannel).not.toHaveBeenCalled();
     expect(updates.length).toBe(0);
   });
 
@@ -131,11 +170,11 @@ describe("followPendingArtists", () => {
       [
         {
           artist_id: "a1",
-          name: "Good",
-          platform: "spotify",
+          name: "Good channel",
+          platform: "youtube",
           social_id: "s1",
-          spotify_artist_id: "3TVXtAsR1Inumwj472S9r4",
-          url: "https://open.spotify.com/artist/3TVXtAsR1Inumwj472S9r4",
+          spotify_artist_id: null,
+          url: "https://www.youtube.com/@good",
         },
         {
           artist_id: "a2",
@@ -146,10 +185,12 @@ describe("followPendingArtists", () => {
           url: "https://www.youtube.com/watch?v=x",
         },
       ],
-      1,
+      0,
     );
-    // The YouTube URL has no resolvable channel → the sweep records a failure, keeps going.
-    resolveYouTubeChannelId.mockResolvedValue(undefined);
+    // The second URL has no resolvable channel → the sweep records a failure, keeps going.
+    resolveYouTubeChannelId.mockImplementation(async (url: string) =>
+      url.includes("@good") ? "UCgood" : undefined,
+    );
 
     const { followPendingArtists } = await import("./artists");
     const summary = await followPendingArtists(5, false);
@@ -158,27 +199,6 @@ describe("followPendingArtists", () => {
     expect(summary.failedCount).toBe(1);
     expect(summary.failed[0]?.platform).toBe("youtube");
     expect(summary.failed[0]?.socialId).toBe("s2");
-  });
-
-  it("falls back to the Spotify id parsed from the url when the artist row has none", async () => {
-    wireDb(
-      [
-        {
-          artist_id: "a1",
-          name: "White label",
-          platform: "spotify",
-          social_id: "s1",
-          spotify_artist_id: null,
-          url: "https://open.spotify.com/artist/1vCWHaC5f2uS3yhpwWbIA6",
-        },
-      ],
-      0,
-    );
-
-    const { followPendingArtists } = await import("./artists");
-    await followPendingArtists(5, false);
-
-    expect(followSpotifyArtist).toHaveBeenCalledWith("1vCWHaC5f2uS3yhpwWbIA6");
   });
 
   // BLOCKER-gate invariant: a scraped `candidate` (e.g. Firecrawl-sourced) is NEVER a follow
@@ -191,23 +211,23 @@ describe("followPendingArtists", () => {
         artist_id: "a1",
         followed_at: null,
         name: "Scraped Candidate",
-        platform: "spotify" as const,
+        platform: "youtube" as const,
         social_id: "cand1",
         source: "firecrawl",
-        spotify_artist_id: "3TVXtAsR1Inumwj472S9r4",
+        spotify_artist_id: null,
         status: "candidate",
-        url: "https://open.spotify.com/artist/3TVXtAsR1Inumwj472S9r4",
+        url: "https://www.youtube.com/@candidate",
       },
       {
         artist_id: "a2",
         followed_at: null,
         name: "Auto Artist",
-        platform: "spotify" as const,
+        platform: "youtube" as const,
         social_id: "auto1",
         source: "musicbrainz",
-        spotify_artist_id: "1vCWHaC5f2uS3yhpwWbIA6",
+        spotify_artist_id: null,
         status: "auto",
-        url: "https://open.spotify.com/artist/1vCWHaC5f2uS3yhpwWbIA6",
+        url: "https://www.youtube.com/@auto",
       },
     ];
     const followable = (status: string) => status === "auto" || status === "confirmed";
@@ -226,6 +246,10 @@ describe("followPendingArtists", () => {
 
         return { rows: [] };
       }
+      // The per-day YouTube ceiling count (`followed_at >=` day start) — none followed yet.
+      if (sql.includes("count(*)") && sql.includes("followed_at >=")) {
+        return { rows: [{ n: 0 }] };
+      }
       if (sql.includes("count(*)") && sql.includes("status in ('auto', 'confirmed')")) {
         const n = seeded.filter((r) => followable(r.status) && r.followed_at === null).length - 1;
 
@@ -241,8 +265,8 @@ describe("followPendingArtists", () => {
     expect(summary.followedCount).toBe(1);
     expect(summary.followed[0]?.socialId).toBe("auto1");
     expect(summary.followed.some((f) => f.socialId === "cand1")).toBe(false);
-    expect(followSpotifyArtist).toHaveBeenCalledTimes(1);
-    expect(followSpotifyArtist).toHaveBeenCalledWith("1vCWHaC5f2uS3yhpwWbIA6");
+    expect(subscribeToYouTubeChannel).toHaveBeenCalledTimes(1);
+    expect(followSpotifyArtist).not.toHaveBeenCalled();
     // The candidate is not a follow target, so it never counts toward `remaining` either.
     expect(summary.remaining).toBe(0);
     // Exactly one follow stamp, for the auto row (the followed_at UPDATE carries the socialId).

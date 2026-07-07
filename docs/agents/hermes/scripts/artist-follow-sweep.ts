@@ -8,23 +8,26 @@
 // the cron runner execs on a schedule — see that file's header for the wire-up and
 // ../cron/README.md for the cron model.
 //
-// THE WORKER-PACED MODEL. The box holds NO Spotify/YouTube tokens (the Worker does). So
-// the actual follows — Spotify `PUT /me/following`, YouTube `subscriptions.insert`, then
-// the `followed_at` stamp — happen IN THE WORKER; this box driver just TRIGGERS it, one
-// bounded batch per tick via the `fluncle admin artists follow` CLI. Pure trigger, zero
-// LLM tokens on the box. The CLI itself loops the batch until the queue's `remaining` is
-// 0 (bounded by `--limit`), so a single spawn per tick drains the backlog safely.
+// THE WORKER-PACED MODEL. The box holds NO YouTube token (the Worker does). So the actual
+// follow — YouTube `subscriptions.insert`, then the `followed_at` stamp — happens IN THE
+// WORKER; this box driver just TRIGGERS it, one bounded batch per tick via the `fluncle
+// admin artists follow` CLI. Pure trigger, zero LLM tokens on the box. The CLI itself loops
+// the batch until the queue's `remaining` is 0 (bounded by `--limit`), so a single spawn
+// per tick drains the backlog safely.
 //
-// Idempotent by construction (`followed_at IS NULL`), acting only on `status IN (auto,
-// confirmed)`. The queue is small most ticks (a no-op when nothing is pending), so the
-// cron is cheap. Mixcloud is CUT to link-only.
+// YOUTUBE-ONLY. Spotify is excluded from the auto-follow sweep — its artist-follow endpoint
+// is dev-mode-gated for our app (a permanent 403; see ../../../ROADMAP.md), so Spotify
+// championing runs through the manual /admin/artists queue. Idempotent by construction
+// (`followed_at IS NULL`), acting only on `status IN (auto, confirmed)`. The queue is small
+// most ticks (a no-op when nothing is pending), so the cron is cheap. Mixcloud is CUT to
+// link-only.
 //
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
 import { spawnSync } from "node:child_process";
 
 // The per-tick cap handed to the CLI (which drains up to this many, looping internally).
-// Small enough to stay well inside Spotify's + YouTube's quotas per run: a YouTube
+// Small enough to stay well inside YouTube's quota per run: a YouTube
 // `subscriptions.insert` costs 50 units against a 200/day quota (~4 subscribes/day), and
 // this cron runs every 6h — but cadence×cap is only the first line of defense. The real
 // ceiling is the server-side per-day guard in followPendingArtists (YOUTUBE_DAILY_FOLLOW_CAP),

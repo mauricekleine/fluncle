@@ -32,10 +32,12 @@ This is **gated on full-audio landing first** ([docs/full-audio-rfc.md](./full-a
 
 The artist-relationship epic shipped: the canonical artist entity, the public artist pages, the `/admin/artists` station (the "Yours" follow queue with confirm / add-remove-platform / Follow-now / Undo / mute), and the on-box `fluncle-artist-follow` sweep. Manual register + YouTube follow work; **Spotify auto-follow does not.** Spotify's artist-follow endpoint (`PUT /me/following?type=artist`, `user-follow-modify`) 403s for our app, and it's provably not our side: with the exact same token, a `playlist-modify-public` write returns 200 while the artist-follow 403s — so it's neither scope, account allow-list, nor Premium (verified 2026-07-07, after a full remove-app + re-auth and even a Premium upgrade). It's the **Development-mode endpoint gate**; the only lift is Extended Quota Mode, which since 2025-05-15 is **org-only** (≥250k MAU, a registered business entity) and unavailable to Fluncle.
 
-Current handling (shipped, not a stopgap): the Follow-now / Undo platform writes are **best-effort** — they record the follow-state and surface a soft `platformWarning` instead of hard-gating on the 403, so a Spotify row stays markable and the operator follows manually. Down the line:
+Current handling (shipped, not a stopgap):
 
-- **Revisit if the gate lifts** — Spotify reopening broader Web API access to dev-mode apps, or a Fluncle business entity ever qualifying for Extended Quota. Low priority; the manual path covers it.
-- **Validate YouTube auto-follow at ship** — it's a separate API (`subscriptions.insert`, the `@fluncle` grant) and isn't subject to this gate, so the auto-follow sweep's YouTube leg should genuinely work; confirm with one real follow once the sweep runs.
+- **The auto-follow sweep is YouTube-only.** `followPendingArtists` (and its `remaining` count) filter to `platform = 'youtube'` — Spotify is deliberately excluded, because auto-following it can never succeed and would only churn the queue and starve the working YouTube follows. Spotify championing runs through the manual `/admin/artists` queue instead. To re-enable if the gate ever lifts, add `'spotify'` back to both queries and restore the follow branch (one well-commented spot in `apps/web/src/lib/server/artists.ts`).
+- **Follow-now / Undo are best-effort.** The operator's per-row Spotify/YouTube writes record the follow-state and surface a soft `platformWarning` instead of hard-gating on the 403, so a Spotify row stays markable and the operator follows manually.
+
+Down the line: **revisit if the gate lifts** — Spotify reopening broader Web API access to dev-mode apps, or a Fluncle business entity ever qualifying for Extended Quota. Low priority; the manual path covers it.
 
 ### Hermes automation — follow-ups
 
