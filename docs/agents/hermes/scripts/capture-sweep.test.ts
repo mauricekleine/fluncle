@@ -18,6 +18,7 @@ import {
   needsBpmRederive,
   normalizeChannelName,
   pickCandidate,
+  rankCandidates,
 } from "./capture-sweep";
 
 describe("buildStickyProxyUrl", () => {
@@ -269,6 +270,34 @@ describe("pickCandidate", () => {
       opts,
     );
     expect(chosen?.candidate.id).toBe("untrusted-clean");
+  });
+});
+
+describe("rankCandidates", () => {
+  const opts = { tolerancePct: 0.03, toleranceSec: 3, trustedPadSec: 60 };
+
+  test("returns the full ordered list so the sweep can fall through a DRM/bot-walled top hit", () => {
+    // The top hit is a trusted exact-length master (e.g. DRM-locked at download time); the
+    // second is an untrusted-but-clean exact-length re-upload the sweep can fall through to.
+    const ranked = rankCandidates(
+      [
+        { channel: "randochan", durationSec: 388, id: "reupload", title: "Some Song" },
+        { channel: "UKF Drum & Bass", durationSec: 388, id: "label", title: "Some Song" },
+      ],
+      { durationMs: 388_000 },
+      opts,
+    );
+    expect(ranked.map((r) => r.candidate.id)).toEqual(["label", "reupload"]);
+    expect(ranked[0]?.trust).toBe(2);
+  });
+
+  test("returns [] when nothing passes the guard", () => {
+    const ranked = rankCandidates(
+      [{ durationSec: 157, id: "clip", title: "Some Song" }],
+      { durationMs: 388_000 },
+      opts,
+    );
+    expect(ranked).toEqual([]);
   });
 });
 

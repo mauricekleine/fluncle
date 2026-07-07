@@ -84,6 +84,10 @@ const TOLERANCE_PCT = Number(process.env.FLUNCLE_CAPTURE_TOLERANCE_PCT ?? "0.03"
 // padding above. Bounded so a trusted channel's hour-long DJ set (same title) is still
 // rejected. See the "1991 - If Only" case (191s master, 214s label video).
 const TRUSTED_PAD_SEC = Number(process.env.FLUNCLE_CAPTURE_TRUSTED_PAD_SEC ?? "60");
+// How many ranked candidates to attempt per finding before giving up: the top hit is
+// sometimes DRM-locked or bot-walled, and a different upload of the same track downloads
+// fine, so walk down the ranked list (fast-failing errors keep the cost low).
+const DOWNLOAD_ATTEMPTS = Number(process.env.FLUNCLE_CAPTURE_DOWNLOAD_ATTEMPTS ?? "3");
 
 const YT_SEARCH_TIMEOUT_MS = 60_000;
 const YT_DOWNLOAD_TIMEOUT_MS = 180_000;
@@ -311,7 +315,7 @@ export type YtCandidate = {
  * `- Topic`, then verified, then closest duration. Returns the pick WITH its trust tier (the
  * caller re-uses it for the post-download length re-check) or null → the finding is `unmatched`.
  */
-export function pickCandidate(
+export function rankCandidates(
   candidates: readonly YtCandidate[],
   context: { artistYoutubeChannelIds?: readonly string[]; durationMs?: number; label?: string },
   options: { tolerancePct: number; toleranceSec: number; trustedPadSec: number } = {
@@ -319,7 +323,7 @@ export function pickCandidate(
     toleranceSec: TOLERANCE_SEC,
     trustedPadSec: TRUSTED_PAD_SEC,
   },
-): { candidate: YtCandidate; trust: TrustTier } | null {
+): { candidate: YtCandidate; trust: TrustTier }[] {
   const targetSec = context.durationMs && context.durationMs > 0 ? context.durationMs / 1000 : 0;
   const scored = candidates
     .map((candidate) => ({ candidate, trust: classifyChannelTrust(candidate, context) }))
@@ -335,10 +339,6 @@ export function pickCandidate(
       verified: candidate.verified ? 1 : 0,
     }));
 
-  if (scored.length === 0) {
-    return null;
-  }
-
   scored.sort(
     (a, b) =>
       b.clean - a.clean ||
@@ -348,9 +348,20 @@ export function pickCandidate(
       a.delta - b.delta,
   );
 
-  const top = scored[0];
+  return scored.map(({ candidate, trust }) => ({ candidate, trust }));
+}
 
-  return top ? { candidate: top.candidate, trust: top.trust } : null;
+/**
+ * The single best candidate (rank 1) or null → `unmatched`. Thin wrapper over
+ * `rankCandidates`; the sweep itself walks the ranked list so it can fall through a
+ * DRM-locked or bot-walled top hit to the next-best downloadable one.
+ */
+export function pickCandidate(
+  candidates: readonly YtCandidate[],
+  context: { artistYoutubeChannelIds?: readonly string[]; durationMs?: number; label?: string },
+  options?: { tolerancePct: number; toleranceSec: number; trustedPadSec: number },
+): { candidate: YtCandidate; trust: TrustTier } | null {
+  return rankCandidates(candidates, context, options)[0] ?? null;
 }
 
 /**
@@ -613,6 +624,10 @@ function runYtDownload(
   if (result.status !== 0) {
     const err = new Error(`yt-dlp download failed: ${stderr.slice(0, 200)}`);
     (err as { is403?: boolean }).is403 = /HTTP Error 403|status code 403|\b403\b/.test(stderr);
+    // DRM-locked or bot-walled: this specific VIDEO can't be pulled, but another candidate
+    // for the same finding often can → the caller falls through to the next-ranked one.
+    (err as { isRecoverable?: boolean }).isRecoverable =
+      /DRM protected|Sign in to confirm|not a bot/i.test(stderr);
     throw err;
   }
 
@@ -673,32 +688,53 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
   const dir = mkdtempSync(join(tmpdir(), "fluncle-capture-"));
 
   try {
-    // Search candidates WITHOUT downloading, then pick the best one whose length passes the
+    // Search candidates WITHOUT downloading, then RANK them whose length passes the
     // trust-aware guard (a trusted label/artist channel tolerates video intro/outro padding;
     // wrong-version titles de-rank) — avoids downloading a wrong-length file.
     const candidates = runYtSearch(proxyUrl, query);
-    const chosen = pickCandidate(candidates, {
+    const ranked = rankCandidates(candidates, {
       artistYoutubeChannelIds: finding.artistYoutubeChannelIds,
       durationMs: finding.durationMs,
       label: finding.label,
     });
 
-    if (!chosen) {
+    if (ranked.length === 0) {
       await patchTrack(trackId, { captureStatus: "unmatched" });
       return "unmatched";
     }
 
-    // Download the chosen id; on a 403 surviving the sticky session, retry once with the
-    // tv/web_safari player clients before giving up.
-    let downloaded: { ext: string; path: string };
-    try {
-      downloaded = runYtDownload(proxyUrl, chosen.candidate.id, dir, false);
-    } catch (error) {
-      if ((error as { is403?: boolean }).is403) {
-        downloaded = runYtDownload(proxyUrl, chosen.candidate.id, dir, true);
-      } else {
+    // Walk the ranked candidates: download the best one, but fall through a DRM-locked or
+    // bot-walled hit to the next-ranked candidate (a different upload of the same track is
+    // usually pullable). On a 403 surviving the sticky session, retry once with the
+    // tv/web_safari player clients first. A non-recoverable error aborts (→ `failed`).
+    let downloaded: { ext: string; path: string } | undefined;
+    let chosen: { candidate: YtCandidate; trust: TrustTier } | undefined;
+    let lastError: unknown;
+    for (const candidate of ranked.slice(0, DOWNLOAD_ATTEMPTS)) {
+      try {
+        try {
+          downloaded = runYtDownload(proxyUrl, candidate.candidate.id, dir, false);
+        } catch (error) {
+          if ((error as { is403?: boolean }).is403) {
+            downloaded = runYtDownload(proxyUrl, candidate.candidate.id, dir, true);
+          } else {
+            throw error;
+          }
+        }
+        chosen = candidate;
+        break;
+      } catch (error) {
+        lastError = error;
+        if ((error as { isRecoverable?: boolean }).isRecoverable) {
+          log(`candidate ${candidate.candidate.id} unusable (DRM/bot-wall) — trying next`);
+          continue;
+        }
         throw error;
       }
+    }
+
+    if (!downloaded || !chosen) {
+      throw lastError ?? new Error("no downloadable candidate");
     }
 
     // Belt-and-suspenders: confirm the REAL downloaded duration passes the guard too (the
