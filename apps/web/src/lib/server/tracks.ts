@@ -719,6 +719,32 @@ export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<
   });
 }
 
+/**
+ * Which of the given tracks already carry a MuQ audio embedding (`embedding_json IS
+ * NOT NULL`). Returns the trackIds that have one as a Set — the admin board turns it
+ * into the Embeddings cell status. The embedding vector is INTERNAL analysis fuel: it
+ * never rides the public `TrackListItem` contract (only its presence, admin-only, and
+ * the derived `get_similar_findings` neighbours do), so the board reads it through
+ * this gated path like `context_note`. One batch query for the whole page, no N+1.
+ * See docs/audio-embedding-rfc.md.
+ */
+export async function listEmbeddingPresenceForTracks(trackIds: string[]): Promise<Set<string>> {
+  if (trackIds.length === 0) {
+    return new Set();
+  }
+
+  const db = await getDb();
+  const placeholders = trackIds.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: trackIds,
+    sql: `select track_id from tracks
+          where track_id in (${placeholders})
+            and embedding_json is not null`,
+  });
+
+  return new Set(typedRows<{ track_id: string }>(result.rows).map((row) => row.track_id));
+}
+
 type TrackCountRow = {
   total_count: number;
 };
@@ -1180,45 +1206,6 @@ export function mergeFeedPage(
  */
 export function feedFindingsCount(sqlCount: number | undefined, fallback: number): number {
   return Number(sqlCount ?? fallback);
-}
-
-export type VibePoint = {
-  artists: string[];
-  title: string;
-  trackId: string;
-  vibeX: number;
-  vibeY: number;
-};
-
-type VibePointRow = {
-  artists_json: string;
-  title: string;
-  track_id: string;
-  vibe_x: number;
-  vibe_y: number;
-};
-
-/**
- * Every placed finding as a lightweight vibe-map point — the backdrop the admin
- * tagging map draws so each new placement is judged RELATIVE to the ones before
- * it. Whole-set fetch is fine at this scale; cluster it when the map gets busy.
- */
-export async function listVibePoints(): Promise<VibePoint[]> {
-  const db = await getDb();
-  const result = await db.execute({
-    sql: `select track_id, title, artists_json, vibe_x, vibe_y
-          from tracks
-          where vibe_x is not null and vibe_y is not null
-          order by added_at desc`,
-  });
-
-  return typedRows<VibePointRow>(result.rows).map((row) => ({
-    artists: parseArtistsJson(row.artists_json),
-    title: row.title,
-    trackId: row.track_id,
-    vibeX: row.vibe_x,
-    vibeY: row.vibe_y,
-  }));
 }
 
 export function decodeTrackCursor(value: string | null): TrackCursor | undefined {

@@ -378,12 +378,12 @@
           runs_on: "rave-02",
           input: "the finding's official 30s preview (via /api/preview)",
           output: "embedding_json — a 1024-d MuQ vector on the tracks row",
-          surfaces: "cli-admin;box-script;api",
+          surfaces: "cli-admin;box-script;api;web-admin",
           primary_surface: "api",
           drop_from: "",
           tests: "partial",
           notes:
-            "embed-sweep.ts + embed-track.py (5m; on-box torch/MuQ) → admin tracks update --embedding-file; queue = embedding_json IS NULL (hasEmbedding filter); replaces manual vibe tagging (spike 2026-07-06); box deploy operator-gated on the MuQ image layer; embedding.test.ts",
+            "embed-sweep.ts + embed-track.py (5m; on-box torch/MuQ) → admin tracks update --embedding-file; queue = embedding_json IS NULL (hasEmbedding filter); replaces manual vibe tagging (spike 2026-07-06); box deploy operator-gated on the MuQ image layer; embedding.test.ts; the /admin/findings board surfaces per-finding embedding presence in the Agents lane (the Embeddings cell — Enr→Emb→Ctx — where the retired Tag cell sat) via listEmbeddingPresenceForTracks + hasEmbedding; board-model.test.ts",
         },
         {
           domain: "intake-enrichment",
@@ -400,7 +400,7 @@
           drop_from: "web-admin(tag tool retires)",
           tests: "none",
           notes:
-            "supersedes /admin/tag + the tag dialog; Phase 2 of the audio-embedding RFC (k-means over embedding_json); the four galaxies stay as brand fiction",
+            "supersedes /admin/tag + the tag dialog; Phase 2 of the audio-embedding RFC (k-means over embedding_json); the four galaxies stay as brand fiction; the board Tag cell + tag dialog + vibe map were REMOVED 2026-07-06 (replaced by the read-only Embeddings presence cell) — auto-clustering placement (this row) still pending",
         },
         {
           domain: "intake-enrichment",

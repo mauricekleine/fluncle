@@ -25,6 +25,12 @@ export type BoardRow = TrackListItem & {
   // facts that fuel the observation script). Pulled through the admin-only board
   // path, never the public `TrackListItem` contract — see observation-board.ts.
   hasContextNote: boolean;
+  // Whether the finding carries a MuQ audio embedding (`embedding_json IS NOT NULL`).
+  // Drives the Embeddings cell: the embed cron drains the `embedding_json IS NULL`
+  // queue and stamps the vector. The vector is internal analysis fuel, so only its
+  // presence rides this admin-only board path, never the public `TrackListItem`
+  // contract — see tracks.ts listEmbeddingPresenceForTracks + docs/audio-embedding-rfc.md.
+  hasEmbedding: boolean;
   // Whether the finding is already loved on Last.fm — the presence of
   // `backfill_lastfm_done_at`, the same stamp the Last.fm backfill writes on a
   // successful `track.love`. Pulled through the admin-only board path (the
