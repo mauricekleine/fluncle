@@ -14,6 +14,7 @@ import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, req, setAdminTokenEnv } from "./
 
 const listMixtapes = vi.fn();
 const updateMixtape = vi.fn();
+const announceMixtape = vi.fn();
 const getMixtapeById = vi.fn();
 const listMixtapeSocialPosts = vi.fn();
 const finalizeMixtapeDistribution = vi.fn();
@@ -25,6 +26,7 @@ const updateClip = vi.fn();
 const deleteClip = vi.fn();
 
 vi.mock("./mixtapes", () => ({
+  announceMixtape: (...args: unknown[]) => announceMixtape(...args),
   getMixtapeById: (...args: unknown[]) => getMixtapeById(...args),
   listMixtapes: (...args: unknown[]) => listMixtapes(...args),
   setMixtapeCue: (...args: unknown[]) => setMixtapeCue(...args),
@@ -73,6 +75,7 @@ beforeAll(setAdminTokenEnv);
 beforeEach(() => {
   listMixtapes.mockReset();
   updateMixtape.mockReset();
+  announceMixtape.mockReset();
   getMixtapeById.mockReset();
   listMixtapeSocialPosts.mockReset();
   finalizeMixtapeDistribution.mockReset();
@@ -174,6 +177,54 @@ describe("oRPC get_mixtape_social (GET .../social)", () => {
       ok: true,
       posts: [{ createdAt: "t", platform: "youtube", status: "published", updatedAt: "t" }],
     });
+  });
+});
+
+// ── announce_mixtape — operator tier + crew-post envelope ────────────────────
+describe("oRPC announce_mixtape (POST .../announce)", () => {
+  it("403s the AGENT (it posts to a public channel)", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(`/admin/mixtapes/${MIXTAPE_ID}/announce`, "POST", AGENT_TOKEN),
+    );
+
+    expect(response?.status).toBe(403);
+    expect(announceMixtape).not.toHaveBeenCalled();
+  });
+
+  it("announces for the operator and returns `{ message, mixtape, ok }`", async () => {
+    announceMixtape.mockResolvedValueOnce({
+      message: "🛸 Fresh mixtape\n\n…",
+      mixtape: { ...MIXTAPE, status: "published" },
+    });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(`/admin/mixtapes/${MIXTAPE_ID}/announce`, "POST", OPERATOR_TOKEN),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toEqual({
+      message: "🛸 Fresh mixtape\n\n…",
+      mixtape: { ...MIXTAPE, status: "published" },
+      ok: true,
+    });
+    expect(announceMixtape).toHaveBeenCalledWith(MIXTAPE_ID);
+  });
+
+  it("surfaces the already_announced 409 (idempotent — no double-post)", async () => {
+    const { ApiError } = await import("./spotify");
+    announceMixtape.mockRejectedValueOnce(
+      new ApiError("already_announced", "This mixtape has already been announced to the crew", 409),
+    );
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(`/admin/mixtapes/${MIXTAPE_ID}/announce`, "POST", OPERATOR_TOKEN),
+    );
+
+    expect(response?.status).toBe(409);
+    expect(((await readJson(response)) as { code: string }).code).toBe("already_announced");
   });
 });
 

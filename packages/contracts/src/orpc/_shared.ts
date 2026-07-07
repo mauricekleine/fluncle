@@ -107,6 +107,11 @@ const MixtapeMemberSchema = TrackListItemSchema.extend({
 export const MixtapeDTOSchema = z
   .object({
     addedAt: z.string().optional(),
+    // Set (ISO) once the mixtape has been announced to the crew (the Telegram crew
+    // channel) via `announce_mixtape` — the idempotency marker + the "already
+    // announced" signal the Studio reads to render its done state. Absent ⇒ not
+    // announced yet.
+    announcedAt: z.string().optional(),
     artists: z.tuple([z.literal("Fluncle")]),
     coverImageUrl: z.string().optional(),
     createdAt: z.string().optional(),

@@ -653,6 +653,11 @@ export const mixtapes = sqliteTable(
   "mixtapes",
   {
     addedAt: text("added_at"),
+    // When set (an ISO timestamp), the mixtape has been announced to the crew (the
+    // Telegram crew channel), so `announce_mixtape` won't double-post. A one-shot
+    // marker, filled by the operator-tier announce op the moment the post lands
+    // (released back to NULL only if the Telegram send fails, so a retry works).
+    announcedAt: text("announced_at"),
     createdAt: text("created_at").notNull(),
     durationMs: integer("duration_ms"),
     id: text("id").primaryKey(),

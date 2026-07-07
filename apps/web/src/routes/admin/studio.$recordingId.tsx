@@ -5,6 +5,7 @@ import {
   CheckCircleIcon,
   CircleNotchIcon,
   GearSixIcon,
+  MegaphoneIcon,
   ScissorsIcon,
   TrashIcon,
   UploadSimpleIcon,
@@ -1108,6 +1109,8 @@ function PromotedMixtapeBlock({ logId, mixtapeId }: { logId?: string; mixtapeId:
 
       <DistributionStrip mixtapeId={mixtapeId} status={mixtape.status ?? "distributing"} />
 
+      <AnnounceControl mixtape={mixtape} refresh={refresh} />
+
       {logId ? <SetVideoToggle mixtape={mixtape} refresh={refresh} /> : null}
 
       {logId ? (
@@ -1320,6 +1323,121 @@ function DistributionStatusBadge({ status }: { status: string }) {
     <Badge className="shrink-0 capitalize" variant={variant}>
       {status}
     </Badge>
+  );
+}
+
+// ── Announce to the crew ───────────────────────────────────────────────────────
+// The last lifecycle step: post the mixtape's crew callout to the Fluncle's Findings
+// Telegram channel — Fluncle sharing his own dream/checkpoint (its listen links + the
+// /log home, in the mixtape's own voice). Only once the mixtape is `published` (its
+// first platform link landed, so there's something to listen to). Posting to a public
+// channel is an external effect, so it sits behind a confirm (the resync/publish
+// precedent). Idempotent server-side by an `announced_at` marker — once it's out the
+// control flips to a quiet done state, so the crew is never double-posted. On success
+// it echoes the exact text that went out.
+function AnnounceControl({
+  mixtape,
+  refresh,
+}: {
+  mixtape: MixtapeDTO;
+  refresh: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useAutoNotice();
+  const [posted, setPosted] = useState<string | null>(null);
+  const id = mixtape.id;
+  const announced = Boolean(mixtape.announcedAt);
+
+  // Nothing to announce until a listen link exists (published = the first platform
+  // link landed). While still `distributing`, the control stays out of the way.
+  if (mixtape.status !== "published") {
+    return null;
+  }
+
+  const announce = async () => {
+    if (!id) {
+      return;
+    }
+
+    setBusy(true);
+    setError(undefined);
+
+    try {
+      const response = await fetch(`/api/admin/mixtapes/${encodeURIComponent(id)}/announce`, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+
+      const body = (await response.json()) as { message?: string };
+      setPosted(body.message ?? null);
+      await refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <Label className="flex items-center gap-1.5">
+        <MegaphoneIcon aria-hidden="true" weight="fill" />
+        Crew announcement
+      </Label>
+
+      {announced ? (
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <CheckCircleIcon aria-hidden="true" className="text-foreground" weight="fill" />
+          Announced to the crew.
+        </p>
+      ) : (
+        <AlertDialog>
+          <AlertDialogTrigger
+            render={
+              <Button disabled={busy} size="sm" variant="outline">
+                {busy ? (
+                  <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+                ) : (
+                  <MegaphoneIcon aria-hidden="true" weight="bold" />
+                )}
+                Announce to the crew
+              </Button>
+            }
+          />
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Post this mixtape to the crew?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This posts the mixtape's callout to the Fluncle's Findings Telegram channel, in
+                Fluncle's own dream/checkpoint voice, with its listen links and the log page. It
+                goes out once; you can't un-send it.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+              <AlertDialogAction disabled={busy} onClick={() => void announce()}>
+                Announce
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
+
+      {posted ? (
+        <pre className="whitespace-pre-wrap rounded-md border border-border bg-muted/40 p-2 text-xs text-foreground">
+          {posted}
+        </pre>
+      ) : null}
+
+      {error ? (
+        <p className="text-sm text-destructive" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </div>
   );
 }
 

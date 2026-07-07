@@ -128,6 +128,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/health": "record_health",
   "POST /admin/lastfm/auth/session": "exchange_lastfm_session",
   "POST /admin/mixcloud/token": "mint_mixcloud_token",
+  // The crew announcement — contract-only oRPC (no TanStack route file; oRPC owns the
+  // path directly). Operator tier: it posts a public Telegram crew callout, so the
+  // agent token 403s.
+  "POST /admin/mixtapes/{mixtapeId}/announce": "announce_mixtape",
   "POST /admin/mixtapes/{mixtapeId}/mixcloud/finalize": "finalize_mixtape_mixcloud",
   // The Mixcloud metadata re-sync — contract-only oRPC (no TanStack route file; oRPC
   // owns the path directly, like resync_mixtape_youtube). Operator tier: re-derives the

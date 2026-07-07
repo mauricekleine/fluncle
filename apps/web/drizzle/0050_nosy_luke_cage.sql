@@ -1,0 +1,1 @@
+ALTER TABLE `mixtapes` ADD `announced_at` text;
