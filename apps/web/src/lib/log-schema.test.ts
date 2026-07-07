@@ -9,6 +9,7 @@ import {
   musicRecordingJsonLd,
   videoObjectJsonLd,
 } from "./log-schema";
+import { fold } from "./server/track-match";
 
 const track = {
   addedAt: "2026-06-03T18:21:00.000Z",
@@ -88,6 +89,21 @@ describe("musicRecordingJsonLd (the log page schema)", () => {
       { "@id": "https://www.fluncle.com/artist/1991", "@type": "MusicGroup", name: "1991" },
     ]);
   });
+
+  it("stamps @id on a case/accent-variant display name (folded match, not exact)", () => {
+    // The slug map is keyed by the folded canonical name; the finding's display
+    // name drifted (accent + casing). An exact-name lookup would silently drop the
+    // link + the @id — the folded lookup still reconciles it.
+    const drifted = musicRecordingJsonLd(
+      { ...track, artistSlugs: { [fold("Axwell")]: "axwell" }, artists: ["ÁXWELL", "1991"] },
+      "https://img/cover.jpg",
+    );
+
+    expect(drifted.byArtist).toEqual([
+      { "@id": "https://www.fluncle.com/artist/axwell", "@type": "MusicGroup", name: "ÁXWELL" },
+      { "@type": "MusicGroup", name: "1991" },
+    ]);
+  });
 });
 
 describe("musicGroupJsonLd (the artist page schema)", () => {
@@ -141,6 +157,31 @@ describe("musicGroupJsonLd (the artist page schema)", () => {
         },
       ],
     });
+  });
+
+  it("stamps the artist's @id on the nested byArtist nodes, leaving co-artists id-less", () => {
+    const list = jsonLd.track as {
+      itemListElement: Array<{ item: { byArtist: unknown } }>;
+    };
+
+    // Every finding on the page credits this artist, so each nested MusicRecording
+    // reconciles back to the artist's @id (the free graph reconciliation, RFC §3).
+    expect(list.itemListElement[0]?.item.byArtist).toEqual([
+      {
+        "@id": "https://www.fluncle.com/artist/dimension",
+        "@type": "MusicGroup",
+        name: "Dimension",
+      },
+    ]);
+    // A co-artist with no slug on this page stays a bare, id-less MusicGroup.
+    expect(list.itemListElement[1]?.item.byArtist).toEqual([
+      {
+        "@id": "https://www.fluncle.com/artist/dimension",
+        "@type": "MusicGroup",
+        name: "Dimension",
+      },
+      { "@type": "MusicGroup", name: "Sub Focus" },
+    ]);
   });
 
   it("omits sameAs entirely when there are no anchors", () => {

@@ -39,6 +39,7 @@ import {
   type TrackNeighbor,
 } from "@/lib/server/tracks";
 import { getArtistSlugMap } from "@/lib/server/artists";
+import { fold } from "@/lib/server/track-match";
 import { TrackArtwork } from "@/components/track-artwork";
 
 // The standalone log page: one finding's permanent, readable, indexable record
@@ -309,7 +310,7 @@ function LogPage() {
           <h2 className="log-track-title">{track.title}</h2>
           <p className="log-track-artist">
             {track.artists.map((artist, index) => {
-              const slug = artistSlugs[artist];
+              const slug = artistSlugs[fold(artist)];
 
               return (
                 <Fragment key={artist}>

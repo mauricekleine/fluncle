@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { getDb } from "./db";
+import { fold } from "./track-match";
 
 // The thin-content gate for artist pages: a `/artist/<slug>` page indexes (and
 // enters the sitemap) only at this many coordinate-bearing findings or more.
@@ -132,8 +133,13 @@ export async function getPublicArtistSocials(artistId: string): Promise<ArtistSo
 /**
  * The name → slug map for a track's artists (via `track_artists`), so the log
  * page can link each artist name to `/artist/<slug>` and stamp the `@id` on the
- * `byArtist` MusicGroup node. Keyed by the artist's canonical name; a name with
- * no resolved entity is simply absent (the link/`@id` degrades to plain text).
+ * `byArtist` MusicGroup node. Keyed by the NORMALIZED name (`fold`: lowercased,
+ * accent-folded, punctuation-collapsed) so a casing/accent/`feat.` drift between
+ * the canonical `artists.name` and the `artists_json` display cache the page
+ * renders from still resolves — an EXACT-name key silently dropped both the link
+ * AND the `@id` on any drift. Lookups (`byArtistNode`, the log link) fold the
+ * display name the same way. A name with no resolved entity is simply absent
+ * (the link/`@id` degrades to plain text).
  */
 export async function getArtistSlugMap(trackId: string): Promise<Record<string, string>> {
   const db = await getDb();
@@ -153,11 +159,35 @@ export async function getArtistSlugMap(trackId: string): Promise<Record<string, 
     const slug = row["slug"];
 
     if (typeof name === "string" && typeof slug === "string") {
-      map[name] = slug;
+      map[fold(name)] = slug;
     }
   }
 
   return map;
+}
+
+/**
+ * The CANONICAL coordinate-bearing finding count for one artist — the pure
+ * `track_artists` inner join (NO `artists_json` fallback), the SAME count the
+ * `/artists` index and the sitemap key off (`listArtistsWithFindingCounts`). The
+ * artist page's `noindex` gate keys off THIS (not the fallback-inclusive grid
+ * count) so an indexable page is never orphaned from the sitemap + index during
+ * the backfill window (Unit 3, artist-relationship RFC §3).
+ */
+export async function countArtistFindings(artistId: string): Promise<number> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [artistId],
+    sql: `select count(*) as finding_count
+          from tracks
+          join track_artists on track_artists.track_id = tracks.track_id
+          where track_artists.artist_id = ? and tracks.log_id is not null`,
+  });
+
+  const row = result.rows[0] as Record<string, unknown> | undefined;
+  const count = row?.["finding_count"];
+
+  return typeof count === "number" ? count : 0;
 }
 
 /**

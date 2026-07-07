@@ -2,6 +2,7 @@ import { logPageUrl, siteUrl } from "./fluncle-links";
 import { formatIsoDuration } from "./format";
 import { artistTitleLine, definitionalProse, type LogProseInput } from "./log-prose";
 import { type MixtapeDTO } from "./mixtapes";
+import { fold } from "./server/track-match";
 
 // Re-exported for callers that have always reached the log-URL builder through
 // the log schema; the canonical definition now lives in fluncle-links.
@@ -37,12 +38,14 @@ export function artistPageUrl(slug: string): string {
 
 // A `byArtist` MusicGroup node, stamped with the artist entity's `@id` when the
 // name resolves to a slug — the id-less node today becomes the twin of the artist
-// page's own `@id` (the cross-page graph).
+// page's own `@id` (the cross-page graph). The lookup is on the NORMALIZED name
+// (`fold`), matching how the slug map is keyed, so a casing/accent/`feat.` drift
+// between the display name and the canonical `artists.name` still stamps the `@id`.
 function byArtistNode(
   name: string,
   artistSlugs: Record<string, string> | undefined,
 ): Record<string, unknown> {
-  const slug = artistSlugs?.[name];
+  const slug = artistSlugs?.[fold(name)];
 
   return slug
     ? { "@id": artistPageUrl(slug), "@type": "MusicGroup", name }
@@ -257,6 +260,12 @@ export function musicGroupJsonLd(
 ): Record<string, unknown> {
   const artistUrl = artistPageUrl(artist.slug);
   const sameAs = artistSameAs(artist);
+  // The page's OWN artist name → slug, folded to match `byArtistNode`'s lookup.
+  // Every finding on this page credits this artist, so stamping the nested
+  // `byArtist` nodes reconciles each recording back to the artist's `@id` for
+  // free — the same graph anchor the top-level MusicGroup + the `/log` byArtist
+  // nodes carry (Unit 3, artist-relationship RFC §3).
+  const artistSlugs: Record<string, string> = { [fold(artist.name)]: artist.slug };
 
   return {
     "@context": "https://schema.org",
@@ -273,7 +282,7 @@ export function musicGroupJsonLd(
           "@type": "ListItem";
           item: {
             "@type": "MusicRecording";
-            byArtist: Array<{ "@type": "MusicGroup"; name: string }>;
+            byArtist: Array<Record<string, unknown>>;
             name: string;
             url: string;
           };
@@ -284,7 +293,7 @@ export function musicGroupJsonLd(
           "@type": "ListItem",
           item: {
             "@type": "MusicRecording",
-            byArtist: finding.artists.map((name) => ({ "@type": "MusicGroup", name })),
+            byArtist: finding.artists.map((name) => byArtistNode(name, artistSlugs)),
             name: finding.title,
             url: logPageUrl(finding.logId),
           },

@@ -24,6 +24,7 @@ import {
   ARTIST_INDEX_MIN_FINDINGS,
   type ArtistSocialLink,
   type ArtistSocialPlatform,
+  countArtistFindings,
   getArtistBySlug,
   getPublicArtistSocials,
 } from "@/lib/server/artists";
@@ -81,40 +82,51 @@ const SOCIAL_LABEL: Record<ArtistSocialPlatform, string> = {
   youtube: "YouTube",
 };
 
+// Resolve the artist page's data. Extracted from the server fn so the
+// indexability decision is unit-testable (see artist-page.test.ts). The grid's
+// `findings` come from `getFindingsByArtist` (which has an `artists_json`
+// fallback so a pre-backfill artist still shows its covers), but the `noindex`
+// gate + JSON-LD key off `countArtistFindings` — the SAME pure `track_artists`
+// join the sitemap + `/artists` index use — so an indexable page is never
+// orphaned from the sitemap/index during the backfill window (RFC §3).
+export async function resolveArtistPageData(slug: string): Promise<ArtistPageData> {
+  const artist = await getArtistBySlug(slug);
+
+  if (!artist) {
+    return { status: "missing" };
+  }
+
+  const [findings, socials, canonicalFindingCount] = await Promise.all([
+    getFindingsByArtist(artist.id, artist.name),
+    getPublicArtistSocials(artist.id),
+    countArtistFindings(artist.id),
+  ]);
+
+  return {
+    findings,
+    // Thin-content gate: index only at ≥3 coordinate-bearing findings (counted via
+    // the canonical `track_artists` join, the same source as the sitemap + index);
+    // below that the page still serves 200 but is noindex + out of the sitemap.
+    indexable: canonicalFindingCount >= ARTIST_INDEX_MIN_FINDINGS,
+    mbid: artist.mbid,
+    name: artist.name,
+    slug: artist.slug,
+    socials,
+    spotifyUrl: artist.spotifyUrl,
+    status: "found",
+    wikidataQid: artist.wikidataQid,
+  };
+}
+
 const fetchArtist = createServerFn({ method: "GET" })
   .validator((data: { slug: string }) => data)
-  .handler(async ({ data: { slug } }): Promise<ArtistPageData> => {
-    const artist = await getArtistBySlug(slug);
-
-    if (!artist) {
-      return { status: "missing" };
-    }
-
-    const [findings, socials] = await Promise.all([
-      getFindingsByArtist(artist.id, artist.name),
-      getPublicArtistSocials(artist.id),
-    ]);
-
-    return {
-      findings,
-      // Thin-content gate: index only at ≥3 coordinate-bearing findings; below
-      // that the page still serves 200 but is noindex + out of the sitemap.
-      indexable: findings.length >= ARTIST_INDEX_MIN_FINDINGS,
-      mbid: artist.mbid,
-      name: artist.name,
-      slug: artist.slug,
-      socials,
-      spotifyUrl: artist.spotifyUrl,
-      status: "found",
-      wikidataQid: artist.wikidataQid,
-    };
-  });
+  .handler(({ data: { slug } }): Promise<ArtistPageData> => resolveArtistPageData(slug));
 
 // The first-person voice frame — Fluncle framing HIS relationship to the findings,
 // never a fabricated bio (VOICE.md); active voice, said-not-written.
 function artistVoiceFrame(count: number): string {
   if (count === 0) {
-    return "Got my eye on this one. Nothing logged yet.";
+    return "Nothing logged from this one yet.";
   }
 
   if (count === 1) {
@@ -247,9 +259,7 @@ function ArtistPage() {
         </header>
 
         {grid.length === 0 ? (
-          <p className="log-index-empty empty-scanlines">
-            Nothing logged from this one yet. Quiet sector.
-          </p>
+          <p className="log-index-empty empty-scanlines">Quiet sector.</p>
         ) : (
           <ul className="artist-grid" aria-label={`Findings featuring ${name}`}>
             {grid.map((finding) =>
