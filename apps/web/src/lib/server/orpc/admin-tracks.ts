@@ -219,6 +219,38 @@ export function adminTracksHandlers(os: Implementer) {
         update.logId = body.logId;
       }
 
+      // The full-song capture side-channel fields (RFC full-audio) — agent-writable
+      // analysis, like enrichmentStatus/embedding, so NOT in OPERATOR_ONLY_FIELDS.
+      // Narrow each: the status to the 4-value enum, the key/timestamps to non-empty
+      // strings, the failure count to a finite number.
+      if (
+        body.captureStatus === "pending" ||
+        body.captureStatus === "done" ||
+        body.captureStatus === "unmatched" ||
+        body.captureStatus === "failed"
+      ) {
+        update.captureStatus = body.captureStatus;
+      }
+
+      if (typeof body.sourceAudioKey === "string" && body.sourceAudioKey.trim()) {
+        update.sourceAudioKey = body.sourceAudioKey;
+      }
+
+      if (typeof body.sourceAudioCapturedAt === "string" && body.sourceAudioCapturedAt.trim()) {
+        update.sourceAudioCapturedAt = body.sourceAudioCapturedAt;
+      }
+
+      if (typeof body.sourceAudioAttemptedAt === "string" && body.sourceAudioAttemptedAt.trim()) {
+        update.sourceAudioAttemptedAt = body.sourceAudioAttemptedAt;
+      }
+
+      if (
+        typeof body.sourceAudioFailures === "number" &&
+        Number.isFinite(body.sourceAudioFailures)
+      ) {
+        update.sourceAudioFailures = body.sourceAudioFailures;
+      }
+
       // The agent role may only touch analysis fields. Reject (not silently drop)
       // an attempt at an operator-only field — a 403 the gate can voice. The role
       // is read from the oRPC context (lifted by `adminAuth`), not re-derived.
@@ -279,6 +311,7 @@ export function adminTracksHandlers(os: Implementer) {
       }
 
       return await listTracks({
+        captureQueue: parseTriStateBool(input.captureQueue) === true,
         cursor: decodeTrackCursor(input.cursor ?? null),
         hasContext: parseTriStateBool(input.hasContext),
         hasEmbedding: parseTriStateBool(input.hasEmbedding),

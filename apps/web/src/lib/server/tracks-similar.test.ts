@@ -52,6 +52,7 @@ function trackRow(trackId: string, logId: string, title: string, albumImageUrl: 
     posted_to_telegram: 0,
     preview_url: null,
     release_date: null,
+    source_audio_failures: 0,
     spotify_url: `https://open.spotify.com/track/${trackId}`,
     tiktok_url: null,
     title,

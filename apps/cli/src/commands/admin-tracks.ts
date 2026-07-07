@@ -7,6 +7,7 @@ import { mapTrack, type RecentTrack, type TracksResponse } from "./recent";
 const pageSize = 48;
 
 async function fetchAdminTracks(options: {
+  captureQueue?: boolean;
   hasContext?: boolean;
   hasEmbedding?: boolean;
   hasKey?: boolean;
@@ -19,6 +20,7 @@ async function fetchAdminTracks(options: {
   status?: string;
 }): Promise<RecentTrack[]> {
   const {
+    captureQueue,
     hasContext,
     hasEmbedding,
     hasKey,
@@ -46,6 +48,13 @@ async function fetchAdminTracks(options: {
 
     if (hasEmbedding !== undefined) {
       params.set("hasEmbedding", String(hasEmbedding));
+    }
+
+    // `captureQueue` is a boolean-ish flag (emit only when set, like
+    // `retryEmptyContext`): true = the full-song capture worklist (`capture_status`
+    // pending ∪ failed ∪ NULL). Server honours it as a SEPARATE queue.
+    if (captureQueue) {
+      params.set("captureQueue", "true");
     }
 
     if (hasContext !== undefined) {
@@ -159,6 +168,16 @@ export async function enrichQueueCommand(limit: number): Promise<RecentTrack[]> 
 // docs/audio-embedding-rfc.md.
 export async function embedQueueCommand(limit: number): Promise<RecentTrack[]> {
   return fetchAdminTracks({ hasEmbedding: false, max: limit, order: "asc" });
+}
+
+// The CAPTURE queue: findings still needing a full-song capture (`capture_status`
+// pending ∪ failed ∪ NULL) — the on-box `fluncle-capture` cron's worklist. NEWEST
+// FIRST (`order: "desc"`), unlike enrich/embed: a fresh add must jump ahead of the
+// whole-archive backfill instead of waiting behind it (RFC full-audio § Unit 1 / 5a).
+// The cron itself reads the queue via direct HTTP (pin-independent); this CLI view is
+// the operator/inspection surface. See docs/agents/hermes/scripts/capture-sweep.*.
+export async function captureQueueCommand(limit: number): Promise<RecentTrack[]> {
+  return fetchAdminTracks({ captureQueue: true, max: limit, order: "desc" });
 }
 
 // The CONTEXT queue: findings whose factual field notes haven't been gathered yet

@@ -60,6 +60,11 @@ export const TrackListItemSchema = z
     postedToTelegram: z.boolean(),
     previewUrl: z.string().optional(),
     releaseDate: z.string().optional(),
+    // The consecutive full-song capture failures (RFC full-audio § Unit 1). Internal
+    // capture state, surfaced so the `fluncle-capture` sweep reads the prior count and
+    // increments truthfully — the queue's failure-cap backoff depends on it. Present only
+    // when non-zero (a never-failed finding omits it).
+    sourceAudioFailures: z.number().optional(),
     spotifyUrl: z.string(),
     tiktokUrl: z.string().optional(),
     title: z.string(),

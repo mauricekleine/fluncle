@@ -34,6 +34,12 @@ import { FeedItemSchema, TrackListItemSchema } from "./_shared";
  */
 const UpdateTrackBodySchema = z.looseObject({
   bpm: z.unknown().optional(),
+  // The full-song capture side-channel state (RFC full-audio, the `fluncle-capture`
+  // cron) — all agent-writable analysis fields, like `embedding`. LOOSE like the rest:
+  // the handler narrows each (the captureStatus enum, the key/timestamps to strings,
+  // failures to a number). Internal — the handler keeps them out of VISIBLE_FIELDS so
+  // a capture write moves no public lastmod.
+  captureStatus: z.unknown().optional(),
   // The MuQ audio embedding (a JSON array of 1024 floats) — an agent-writable
   // analysis field the on-box `fluncle-embed` cron sets. LOOSE like the rest: the
   // handler validates the 1024-d shape itself and emits `invalid_embedding`/400.
@@ -44,6 +50,10 @@ const UpdateTrackBodySchema = z.looseObject({
   key: z.unknown().optional(),
   logId: z.unknown().optional(),
   note: z.unknown().optional(),
+  sourceAudioAttemptedAt: z.unknown().optional(),
+  sourceAudioCapturedAt: z.unknown().optional(),
+  sourceAudioFailures: z.unknown().optional(),
+  sourceAudioKey: z.unknown().optional(),
   vibeX: z.unknown().optional(),
   vibeY: z.unknown().optional(),
   videoUrl: z.unknown().optional(),
@@ -492,6 +502,11 @@ export const listTracksAdmin = oc
   })
   .input(
     z.object({
+      // `captureQueue` powers the full-song capture queue: `captureQueue=true` lists
+      // findings still needing a capture (`capture_status` pending ∪ failed ∪ NULL — the
+      // `fluncle-capture` cron's worklist). Tolerant string ("true"/absent), parsed
+      // in-handler like `retryEmptyContext`. A SEPARATE queue — it never gates enrich/embed.
+      captureQueue: z.string().optional(),
       cursor: z.string().optional(),
       // `hasContext` / `hasObservation` / `hasNote` power the three agent queues (the
       // context queue = `hasContext=false`; the observation queue = `hasContext=true`

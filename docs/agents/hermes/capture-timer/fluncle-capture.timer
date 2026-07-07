@@ -1,0 +1,15 @@
+[Unit]
+Description=fluncle-capture timer — trigger the full-song capture sweep every 5m on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# First tick shortly after boot, then every 5m — the capture cadence. Persistent catches
+# up a missed window (box reboot) on the next wake. The queue is idempotent + newest-first
+# with per-finding backoff, so a skipped tick just defers the batch; unlike a Hermes cron,
+# the host scheduler is never busy with long sweeps, so the tick fires on time even while
+# the whole-archive backfill drains.
+OnBootSec=3min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

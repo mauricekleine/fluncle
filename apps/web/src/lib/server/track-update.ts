@@ -18,6 +18,17 @@ import { ApiError } from "./spotify";
 export type TrackUpdate = {
   bpm?: number;
   /**
+   * The full-song capture side-channel state (RFC full-audio, the `fluncle-capture`
+   * cron). All five are machine-measured analysis fields the AGENT tier may write
+   * (like `enrichmentStatus`/`embedding`) — internal, so NONE is in VISIBLE_FIELDS: a
+   * capture write moves no public surface and must not bump updated_at / the sitemap
+   * lastmod. `captureStatus` is the enum (pending|done|unmatched|failed);
+   * `sourceAudioKey` is the R2 key of the captured song (presence = captured);
+   * `sourceAudioCapturedAt`/`sourceAudioAttemptedAt` are ISO stamps; `sourceAudioFailures`
+   * is the consecutive-failure count driving the backoff window. See schema.ts.
+   */
+  captureStatus?: "pending" | "done" | "unmatched" | "failed";
+  /**
    * Firecrawl-derived FACTUAL context (creative fuel for the observation script
    * + video agent). Internal only — never on /log, never in JSON-LD/RSS. Writing
    * it alone does NOT bump updated_at (it moves no public surface).
@@ -74,6 +85,14 @@ export type TrackUpdate = {
    * back-migration writes it standalone (must move no public surface).
    */
   observationScript?: string;
+  /** ISO of the last full-song capture attempt (backoff-cooldown anchor). See captureStatus. */
+  sourceAudioAttemptedAt?: string;
+  /** ISO stamp when the full-song bytes landed in R2. See captureStatus. */
+  sourceAudioCapturedAt?: string;
+  /** Consecutive capture failures (drives the backoff window). See captureStatus. */
+  sourceAudioFailures?: number;
+  /** The R2 key of the captured full song (presence = captured). See captureStatus. */
+  sourceAudioKey?: string;
   /** The AI model that authored the video, in <provider>/<model> notation. */
   videoModel?: string;
   /** The reasoning/thinking effort the authoring model ran at (e.g. "high"). */
@@ -217,6 +236,34 @@ export async function updateTrack(
     // embed queue treats a cleared row as un-embedded (re-embed on the next tick).
     sets.push("embedding_json = ?");
     args.push(update.embedding === "" ? null : update.embedding);
+  }
+
+  // The full-song capture side-channel (RFC full-audio). All internal analysis state
+  // written by the `fluncle-capture` cron — NONE is in VISIBLE_FIELDS, so a capture
+  // write bumps no public lastmod (mirrors the embedding/context discipline above).
+  if (update.captureStatus !== undefined) {
+    sets.push("capture_status = ?");
+    args.push(update.captureStatus);
+  }
+
+  if (update.sourceAudioKey !== undefined) {
+    sets.push("source_audio_key = ?");
+    args.push(update.sourceAudioKey);
+  }
+
+  if (update.sourceAudioCapturedAt !== undefined) {
+    sets.push("source_audio_captured_at = ?");
+    args.push(update.sourceAudioCapturedAt);
+  }
+
+  if (update.sourceAudioAttemptedAt !== undefined) {
+    sets.push("source_audio_attempted_at = ?");
+    args.push(update.sourceAudioAttemptedAt);
+  }
+
+  if (update.sourceAudioFailures !== undefined) {
+    sets.push("source_audio_failures = ?");
+    args.push(update.sourceAudioFailures);
   }
 
   if (update.note !== undefined) {

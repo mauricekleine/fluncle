@@ -788,6 +788,18 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    command: "fluncle admin tracks capture-audio --queue",
+    exposedContent: [
+      "capture each finding's full song once → private R2 (yt-dlp via a residential proxy)",
+    ],
+    kind: "cron",
+    name: "cron.capture",
+    operatorNotes:
+      "every 5m, run by a rave-02 HOST systemd timer (docs/agents/hermes/capture-timer/) — NOT a gateway cron: a proxied yt-dlp fetch has an unbounded tail that would starve the 5-min enrich/context/note sweeps on the shared serial runner. A NON-BLOCKING side-channel (never gates enrich/embed). Runs yt-dlp through a residential proxy on a per-track sticky session, duration-guards the match, stores the full song in the PRIVATE fluncle-source-audio bucket (S3-direct), and writes back via the agent-tier update_track (with per-finding backoff). yt-dlp + ffprobe are a box deploy prereq. Newest-first so a fresh add jumps the backfill. Source: docs/agents/hermes/scripts/capture-sweep.*. See docs/full-audio-rfc.md § Unit 1.",
+    probeConfig: { cadenceMs: 5 * MINUTE_MS, cronName: "fluncle-capture", kind: "cron" },
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin tracks context --queue",
     exposedContent: [
       "Firecrawl facts → distilled context_note + a Texture: line (Worker-side Haiku)",

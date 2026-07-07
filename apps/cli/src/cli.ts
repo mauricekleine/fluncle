@@ -626,6 +626,35 @@ function addAdminCommands(program: Command): void {
       await runAdminEmbedQueue(options, embedQueueCommand);
     });
 
+  // The full-song capture verb. Capture runs as the on-box `fluncle-capture`
+  // `--no-agent` host-timer cron (it runs yt-dlp through a residential proxy, stores
+  // the song in the private `fluncle-source-audio` R2 bucket, and writes back via
+  // `tracks update`), so the CLI surface is the worklist view: `--queue` shows findings
+  // still needing a capture, NEWEST FIRST (a fresh add jumps ahead of the backfill).
+  // Named `capture-audio` (not `capture`) to avoid colliding with `social --capture` /
+  // `cron.social-capture`. See docs/agents/hermes/scripts/capture-sweep.*.
+  adminTracks
+    .command("capture-audio")
+    .description("Full-song capture worklist (findings with no source audio yet) — use --queue")
+    .option("--queue", "Show the capture worklist, newest first", false)
+    .option("--limit <limit>", "Number of findings to show with --queue", "10")
+    .option("--json", "Print JSON", false)
+    .action(async (options: AdminQueueViewOptions) => {
+      // `--queue` is the worklist view — the on-box `fluncle-capture` cron's worklist.
+      // Capture has no single-track CLI form (it runs on the box), so without `--queue`
+      // there's nothing to act on; require it, mirroring `enrich`/`embed`.
+      if (!options.queue) {
+        console.error(
+          "`tracks capture-audio` is a worklist view — capture runs on the on-box `fluncle-capture` cron.\nUse `tracks capture-audio --queue` to see findings needing a full-song capture.",
+        );
+        process.exitCode = 1;
+        return;
+      }
+
+      const { captureQueueCommand } = await import("./commands/admin-tracks");
+      await runAdminCaptureQueue(options, captureQueueCommand);
+    });
+
   adminTracks
     .command("vehicles")
     .description("Recent video vehicles, newest first (the style ledger for diversity)")
@@ -3085,6 +3114,32 @@ async function runAdminEmbedQueue(
   const { trackRows } = await import("./format");
   const noun = tracks.length === 1 ? "finding" : "findings";
   console.log(`${tracks.length} ${noun} needing an audio embedding, oldest first:`);
+  console.log(trackRows(tracks).join("\n"));
+}
+
+async function runAdminCaptureQueue(
+  options: AdminListOptions,
+  captureQueueCommand: typeof import("./commands/admin-tracks").captureQueueCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const tracks = await captureQueueCommand(limit);
+
+  if (options.json) {
+    printJson({
+      ok: true,
+      tracks,
+    });
+    return;
+  }
+
+  if (tracks.length === 0) {
+    console.log("Nothing awaiting a capture. Every finding has its full song.");
+    return;
+  }
+
+  const { trackRows } = await import("./format");
+  const noun = tracks.length === 1 ? "finding" : "findings";
+  console.log(`${tracks.length} ${noun} needing a full-song capture, newest first:`);
   console.log(trackRows(tracks).join("\n"));
 }
 
