@@ -278,6 +278,19 @@ export const SURFACES: readonly Surface[] = [
     weights: { web: "secondary" },
   },
   {
+    discoveryUrl: `${SITE}/llms.txt`,
+    exposedContent: [
+      "/artist/:slug — one artist's page: every published finding from that artist, plus their identity links",
+    ],
+    kind: "web_route",
+    name: "web.artist",
+    operatorNotes:
+      "Slug is real-name kebab-case (e.g. /artist/dbridge). Read-only; only artists with at least one published finding resolve (others 404). No probeConfig — the route is slug-parameterized, so there is no fixed URL to GET-probe.",
+    route: "/artist",
+    url: `${SITE}/artist`,
+    weights: { ssh: "secondary", web: "secondary" },
+  },
+  {
     exposedContent: ["the privacy policy"],
     kind: "web_route",
     name: "web.privacy",
@@ -394,6 +407,20 @@ export const SURFACES: readonly Surface[] = [
     name: "api.mixtapes",
     route: "/api/v1/mixtapes",
     url: `${SITE}/api/v1/mixtapes`,
+    weights: { web: "secondary" },
+  },
+  {
+    apiFormat: "application/json",
+    discoveryUrl: `${SITE}/api/v1/openapi.json`,
+    exposedContent: [
+      "every artist with at least one published finding, finding-count ordered, as JSON",
+      "/api/v1/artists/{slug} — one artist's identity and finding count, as JSON",
+    ],
+    kind: "api",
+    name: "api.artists",
+    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
+    route: "/api/v1/artists",
+    url: `${SITE}/api/v1/artists`,
     weights: { web: "secondary" },
   },
   {
@@ -646,6 +673,13 @@ export const SURFACES: readonly Surface[] = [
     exposedContent: ["Fluncle's checkpoint sets"],
     kind: "cli",
     name: "cli.mixtapes",
+    weights: { cli: "secondary" },
+  },
+  {
+    command: "fluncle artists",
+    exposedContent: ["every artist with at least one published finding (bare `slug` looks one up)"],
+    kind: "cli",
+    name: "cli.artists",
     weights: { cli: "secondary" },
   },
   {

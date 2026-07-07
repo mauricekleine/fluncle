@@ -6,14 +6,15 @@ import { oc } from "@orpc/contract";
 import * as z from "zod";
 
 /**
- * A public artist list item — the minimal shape the list and get ops emit. Carries
- * identity fields sufficient for the CLI, SSH terminal, and llms.txt consumers;
+ * A public artist list item — the minimal shape the list and get ops emit. The
+ * public identifier is `slug` (the internal surrogate `id` never crosses the wire);
+ * these fields are sufficient for the CLI, SSH terminal, and llms.txt consumers, and
  * the `/artist/<slug>` page (Unit 3) derives its richer shape from the same row.
+ * `findingCount` counts only PUBLISHED findings.
  */
 export const ArtistListItemSchema = z
   .object({
     findingCount: z.number(),
-    id: z.string(),
     name: z.string(),
     slug: z.string(),
     spotifyUrl: z.string().optional(),
@@ -23,17 +24,18 @@ export const ArtistListItemSchema = z
 /**
  * `list_artists` → `GET /artists` (operationId `listArtists`).
  *
- * Every artist with at least one finding, ordered by finding count descending (the
- * most-represented artists first). Contract-only oRPC: there is no TanStack route
- * file under /api/v1/artists; oRPC serves it straight off the registry. The
- * response is `{ ok: true, artists }`, mirroring the `list_mixtapes` envelope.
+ * Every artist with at least one published finding, ordered by finding count
+ * descending (the most-represented artists first). Contract-only oRPC: there is no
+ * TanStack route file under /api/v1/artists; oRPC serves it straight off the
+ * registry. The response is `{ ok: true, artists }`, mirroring the `list_mixtapes`
+ * envelope.
  */
 export const listArtists = oc
   .route({
     method: "GET",
     operationId: "listArtists",
     path: "/artists",
-    summary: "List artists with at least one finding",
+    summary: "List artists with at least one published finding",
     tags: ["Artists"],
   })
   .output(z.object({ artists: z.array(ArtistListItemSchema), ok: z.literal(true) }));
@@ -43,7 +45,8 @@ export const listArtists = oc
  *
  * Public read of a single artist by their unique slug. Returns the same
  * `ArtistListItem` shape as the list, wrapped in `{ ok: true, artist }`. A slug
- * that does not match any artist row is a 404.
+ * that matches no artist with at least one published finding is a 404 (so list and
+ * get agree on which artists exist).
  */
 export const getArtist = oc
   .route({

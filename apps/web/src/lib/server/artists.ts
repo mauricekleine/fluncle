@@ -25,7 +25,6 @@ export function parseArtistsJson(value: string): string[] {
 
 export type ArtistListItem = {
   findingCount: number;
-  id: string;
   name: string;
   slug: string;
   spotifyUrl: string | undefined;
@@ -33,7 +32,6 @@ export type ArtistListItem = {
 
 type ArtistRow = {
   finding_count: number;
-  id: string;
   name: string;
   slug: string;
   spotify_url: string | null;
@@ -42,7 +40,6 @@ type ArtistRow = {
 function toArtistListItem(row: ArtistRow): ArtistListItem {
   return {
     findingCount: row.finding_count,
-    id: row.id,
     name: row.name,
     slug: row.slug,
     spotifyUrl: row.spotify_url ?? undefined,
@@ -50,21 +47,26 @@ function toArtistListItem(row: ArtistRow): ArtistListItem {
 }
 
 /**
- * All artists with at least one published finding, ordered by finding count
- * descending (most-represented artists first). Used by `list_artists`.
+ * All artists with at least one PUBLISHED finding, ordered by finding count
+ * descending (most-represented artists first). `finding_count` counts only
+ * published findings — a `track_artists` row whose track has a coordinate
+ * (`log_id IS NOT NULL`) — so it matches the "at least one published finding"
+ * promise the contract summary + llms.txt make. The inner join to published
+ * tracks also drops any artist with zero published findings from the list.
+ * Used by `list_artists`.
  */
 export async function listArtists(): Promise<ArtistListItem[]> {
   const db = await getDb();
   const result = await db.execute({
     args: [],
     sql: `select
-            a.id,
             a.name,
             a.slug,
             a.spotify_url,
             count(ta.track_id) as finding_count
           from artists a
           join track_artists ta on ta.artist_id = a.id
+          join tracks t on t.track_id = ta.track_id and t.log_id is not null
           group by a.id
           order by finding_count desc, a.name asc`,
   });
@@ -73,22 +75,25 @@ export async function listArtists(): Promise<ArtistListItem[]> {
 }
 
 /**
- * Look up one artist by their unique slug. Returns `undefined` when the slug
- * does not match any artist (the caller turns this into a 404). Used by
- * `get_artist`.
+ * Look up one artist by their unique slug. Applies the SAME published gate as
+ * `listArtists`: `finding_count` counts only published findings, and an artist
+ * with zero published findings resolves to `undefined` (the inner join yields no
+ * row) so a slug-guesser never gets a `findingCount: 0` artist — the caller turns
+ * `undefined` into a 404. List and get therefore agree on which artists exist.
+ * Used by `get_artist`.
  */
 export async function getArtistBySlug(slug: string): Promise<ArtistListItem | undefined> {
   const db = await getDb();
   const result = await db.execute({
     args: [slug],
     sql: `select
-            a.id,
             a.name,
             a.slug,
             a.spotify_url,
             count(ta.track_id) as finding_count
           from artists a
-          left join track_artists ta on ta.artist_id = a.id
+          join track_artists ta on ta.artist_id = a.id
+          join tracks t on t.track_id = ta.track_id and t.log_id is not null
           where a.slug = ?
           group by a.id
           limit 1`,

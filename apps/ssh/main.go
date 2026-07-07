@@ -504,7 +504,6 @@ type track struct {
 }
 
 type artist struct {
-	ID           string `json:"id"`
 	Name         string `json:"name"`
 	Slug         string `json:"slug"`
 	FindingCount int    `json:"findingCount"`
@@ -943,10 +942,13 @@ func (m model) handleMenuKey(key string) (tea.Model, tea.Cmd) {
 
 func (m model) handleListKey(key string) (tea.Model, tea.Cmd) {
 	length := len(m.tracks)
-	if m.screen == screenSearch {
+	switch m.screen {
+	case screenSearch:
 		length = len(m.results)
-	} else if m.screen == screenMixtapes {
+	case screenMixtapes:
 		length = len(m.mixtapes)
+	case screenArtists:
+		length = len(m.artists)
 	}
 
 	switch key {
@@ -959,6 +961,12 @@ func (m model) handleListKey(key string) (tea.Model, tea.Cmd) {
 		m.selected = wrap(m.selected+1, length)
 	case "enter":
 		if length == 0 {
+			return m, nil
+		}
+		if m.screen == screenArtists {
+			// The artist archive is a read-only scan (no per-artist detail
+			// screen in the terminal yet), so Enter is a no-op. Its help line
+			// omits "enter select" to match.
 			return m, nil
 		}
 		if m.screen == screenSearch {
