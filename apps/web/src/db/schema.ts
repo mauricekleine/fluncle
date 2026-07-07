@@ -3,6 +3,7 @@ import {
   check,
   index,
   integer,
+  primaryKey,
   real,
   sqliteTable,
   text,
@@ -956,6 +957,93 @@ export const recordingCues = sqliteTable(
     // start time is never negative.
     check("recording_cues_position_positive", sql`"position" >= 1`),
     check("recording_cues_start_ms_non_negative", sql`"start_ms" is null or "start_ms" >= 0`),
+  ],
+);
+
+// The artist entity — the canonical identity record for a music artist, keyed on the
+// Spotify artist ID (the most reliable cross-platform anchor). One row per unique
+// artist regardless of how many findings feature them; name variants collapse here.
+// `spotifyArtistId` is nullable to admit white-label or unsigned artists whose Spotify
+// profile is absent; the unique index still guards against duplicates when the id is
+// present. `slug` is the real-name kebab-cased public path segment, minted once and
+// never changed (collision-salted: "dimension", "dimension-2", ...). `mbid` and
+// `wikidataQid` are the KG anchors (the resolver fills them; the artist pages build
+// `sameAs` from them). `resolvedAt` is the single resolution stamp (null = never
+// attempted; the artist-sweep queue).
+export const artists = sqliteTable(
+  "artists",
+  {
+    createdAt: text("created_at").notNull(),
+    id: text("id").primaryKey(),
+    mbid: text("mbid"),
+    name: text("name").notNull(),
+    resolvedAt: text("resolved_at"),
+    slug: text("slug").notNull().unique(),
+    spotifyArtistId: text("spotify_artist_id").unique(),
+    spotifyUrl: text("spotify_url"),
+    updatedAt: text("updated_at").notNull(),
+    wikidataQid: text("wikidata_qid"),
+  },
+  (table) => [index("artists_name_idx").on(table.name)],
+);
+
+// The many-to-many join between tracks (findings) and their artists. `position` is
+// 1-based and records the original Spotify artist order (first = lead). Composite PK
+// (track_id, artist_id) enforces uniqueness. No `role` column in v1 — nothing reads
+// it (display comes from the kept `artists_json` cache); add via enum-widening later.
+export const trackArtists = sqliteTable(
+  "track_artists",
+  {
+    artistId: text("artist_id").notNull(),
+    position: integer("position").notNull(),
+    trackId: text("track_id").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.trackId, table.artistId] }),
+    index("track_artists_track_id_idx").on(table.trackId),
+    index("track_artists_artist_id_idx").on(table.artistId),
+  ],
+);
+
+// The artist social identity graph — one row per (artist, platform). Mirrors
+// `mixtape_social_posts` structurally. `platform` covers the social surfaces only
+// (spotify|youtube|mixcloud|soundcloud|instagram|tiktok|bandcamp|twitter|facebook|
+// homepage); the KG anchors mbid/wikidata live as `artists` columns, NOT here.
+// `source` records who found the link. `status` is the trust state: MB-sourced or
+// operator-added links are `auto` (trusted); Firecrawl-found links are `candidate`
+// until an operator confirms them — `candidate` rows are excluded from the public
+// artist page and `sameAs` JSON-LD until promoted to `confirmed`. `followedAt` is a
+// single stamp recording when Fluncle followed this platform's profile (null = not yet).
+export const artistSocials = sqliteTable(
+  "artist_socials",
+  {
+    artistId: text("artist_id").notNull(),
+    createdAt: text("created_at").notNull(),
+    followedAt: text("followed_at"),
+    id: text("id").primaryKey(),
+    platform: text("platform", {
+      enum: [
+        "spotify",
+        "youtube",
+        "mixcloud",
+        "soundcloud",
+        "instagram",
+        "tiktok",
+        "bandcamp",
+        "twitter",
+        "facebook",
+        "homepage",
+      ],
+    }).notNull(),
+    source: text("source", { enum: ["musicbrainz", "firecrawl", "operator"] }).notNull(),
+    status: text("status", { enum: ["auto", "candidate", "confirmed"] }).notNull(),
+    updatedAt: text("updated_at").notNull(),
+    url: text("url").notNull(),
+  },
+  (table) => [
+    uniqueIndex("artist_socials_artist_platform_idx").on(table.artistId, table.platform),
+    index("artist_socials_artist_id_idx").on(table.artistId),
+    index("artist_socials_platform_idx").on(table.platform),
   ],
 );
 

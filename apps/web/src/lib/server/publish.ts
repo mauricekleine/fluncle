@@ -4,7 +4,7 @@ export type { PublishTrackResult };
 
 import { logPageUrl } from "../fluncle-links";
 import { formatDuration } from "../format";
-import { parseArtistsJson } from "./artists";
+import { parseArtistsJson, upsertTrackArtists } from "./artists";
 import { getDb, typedRow } from "./db";
 import { enrichFromDeezer, lookupIsrcFromDeezer } from "./deezer";
 import { discogsResolveRelease } from "./discogs";
@@ -198,6 +198,17 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
         posted_to_telegram
       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
+
+  // Best-effort: populate the artist entity tables (artists + track_artists) so
+  // the identity graph is ready for the resolution sweep. Uses the artist IDs
+  // Spotify returns on the track response (no extra API call). A failure here
+  // must never block the publish — same discipline as the Deezer / Last.fm side
+  // channels; the backfill covers any rows a failed call leaves behind.
+  try {
+    await upsertTrackArtists(track.trackId, track.artists, track.spotifyArtistIds);
+  } catch (artistError) {
+    console.warn("publishTrack: artist entity upsert failed (non-fatal)", artistError);
+  }
 
   try {
     await withRetries("Spotify playlist add", () => addTrackToPlaylist(track));
