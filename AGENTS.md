@@ -40,24 +40,12 @@ Concise rules for working in Fluncle. Use MUST/SHOULD/NEVER to guide decisions.
 
 ## Picking the right models for workflows and subagents
 
-Rankings, higher = better. Cost reflects what I actually pay, not list price (fable-5 moved from subscription to API pricing on 2026-07-07 — the cost column reflects that). Intelligence is how hard a problem you can hand the model unsupervised. Taste covers UI/UX, code quality, API design, and copy.
+**Opus 4.8 across the board** — the orchestrator/reviewer AND every sub-agent and workflow stage run on Opus 4.8. Fable 5 is no longer available on the plan, and Sonnet has proven unreliable in practice (it passes its own checks but under-delivers or ships subtle bugs — e.g. a "surfaces" slice that silently omitted its core deliverable). So there is no model-tier tradeoff left to manage: hold the quality bar with Opus 4.8 everywhere.
 
-| model    | cost | intelligence | taste |
-| -------- | ---- | ------------ | ----- |
-| sonnet-5 | 5    | 5            | 7     |
-| opus-4.8 | 4    | 7            | 8     |
-| fable-5  | 1    | 9            | 9     |
-
-How to apply:
-
-- These are defaults, not limits. You have standing permission to override them: if a cheaper model's output doesn't meet the bar, rerun or redo the work with a smarter model without asking. Judge the output, not the price tag. Escalating costs less than shipping mediocre work.
-- Cost is a tie-breaker only; when axes conflict for anything that ships, intelligence > taste > cost.
-- Brainstorm, orchestration, delegation, and review — the "decide" and hold-the-overview work — run on opus-4.8, the top of the intelligence and taste axes among the models affordable day-to-day. The [agent-orchestration](./packages/skills/agent-orchestration) skill is driven by opus-4.8; it offloads execution to sub-agents picked per this matrix. Pull in a second review perspective (a fresh opus-4.8 pass, or sonnet-5 for a cheap first sweep) when one helps.
-- fable-5 outranks opus-4.8 on every quality axis but is API-priced — by far the most expensive tier. Reach for it deliberately, never by default: the rare problem opus-4.8 demonstrably can't crack after a real attempt, and flag the spend when you do.
-- Bulk/mechanical work (clear-spec implementation, data analysis, migrations): sonnet-5 — it's the cheapest.
-- Anything user-facing (UI, copy, API design) needs taste ≥ 7.
+- Orchestration, delegation, brainstorm, and review — the "decide" and hold-the-overview work — run on Opus 4.8. The [agent-orchestration](./packages/skills/agent-orchestration) skill is driven by Opus 4.8 and offloads execution to Opus 4.8 sub-agents.
+- Do NOT downgrade an execution slice to a cheaper tier to save cost — judge the output, not the price tag; a cheap agent that under-delivers costs more than it saves.
 - Never use Haiku.
-- Mechanics: Claude models (sonnet-5, opus-4.8, fable-5) run via the Agent/Workflow model parameter.
+- Mechanics: Opus 4.8 runs via the Agent/Workflow `model` parameter (`opus`).
 
 ## Before Editing
 
