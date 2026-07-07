@@ -45,6 +45,7 @@ import {
 } from "react";
 import { siBeatport } from "simple-icons";
 import { AdminShell } from "@/components/admin/admin-shell";
+import { FindingIdentity, TrackMetaChips } from "@/components/admin/finding-identity";
 import { BrandIcon } from "@/components/brand-icon";
 import {
   AlertDialog,
@@ -66,13 +67,12 @@ import {
   CommandItem,
   CommandList,
 } from "@fluncle/ui/components/command";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@fluncle/ui/components/empty";
 import { Input } from "@fluncle/ui/components/input";
 import { Label } from "@fluncle/ui/components/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@fluncle/ui/components/popover";
 import { beatportSearchUrl } from "@/lib/beatport";
 import { formatAlbumDuration } from "@/lib/format";
-import { formatKey, useKeyNotation } from "@/lib/key-notation";
-import { spotifyAlbumImageAtSize } from "@/lib/media";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { listClips } from "@/lib/server/clips";
 import { getRecordingCues, listRecordings } from "@/lib/server/recordings";
@@ -270,10 +270,15 @@ function AdminPlansPage() {
         ) : null}
 
         {plans.length === 0 ? (
-          <EmptyState
-            body="Start a plan to line up the findings for a set. It gets a handle you carry onto Beatport, Rekordbox, and the USB."
-            title="No plans yet"
-          />
+          <Empty>
+            <EmptyHeader>
+              <EmptyTitle>No plans yet</EmptyTitle>
+              <EmptyDescription>
+                Start a plan to line up the findings for a set. It gets a handle you carry onto
+                Beatport, Rekordbox, and the USB.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
         ) : (
           <div className="overflow-hidden rounded-lg border border-border">
             {plans.map((plan) => (
@@ -674,14 +679,17 @@ function TakeRow({ clipCount, take }: { clipCount: number; take: RecordingDTO })
       <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
         {clipCount} clip{clipCount === 1 ? "" : "s"}
       </span>
-      <a
+      <Button
         aria-label={`Open ${take.title} in the Studio`}
-        className="inline-flex size-9 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
-        href={`/admin/studio/${encodeURIComponent(take.id)}`}
+        className="text-muted-foreground"
+        nativeButton={false}
+        render={<a href={`/admin/studio/${encodeURIComponent(take.id)}`} />}
+        size="icon"
         title="Open in Studio"
+        variant="ghost"
       >
         <ScissorsIcon aria-hidden="true" />
-      </a>
+      </Button>
     </li>
   );
 }
@@ -797,11 +805,16 @@ function SortableMemberRow({
       >
         <DotsSixVerticalIcon aria-hidden="true" />
       </button>
-      <MemberThumb src={member.albumImageUrl} />
-      <span className="min-w-0 flex-1 truncate text-sm">
-        {member.artists.join(", ")} — {member.title}
-      </span>
-      <MemberMeta bpm={member.bpm} musicalKey={member.key} />
+      <FindingIdentity
+        artists={member.artists}
+        className="flex-1"
+        cover={member.albumImageUrl}
+        coverVariant="art"
+        size="xs"
+        title={member.title}
+        titleFormat="inline"
+      />
+      <TrackMetaChips bpm={member.bpm} musicalKey={member.key} />
       {member.logId ? (
         <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
           {member.logId}
@@ -812,24 +825,32 @@ function SortableMemberRow({
           {formatAlbumDuration(member.durationMs)}
         </span>
       ) : null}
-      <a
+      <Button
         aria-label={`Search ${member.title} on Beatport`}
-        className="inline-flex size-9 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
-        href={beatportSearchUrl(member.artists, member.title)}
-        rel="noreferrer"
-        target="_blank"
+        className="text-muted-foreground"
+        nativeButton={false}
+        render={
+          <a
+            href={beatportSearchUrl(member.artists, member.title)}
+            rel="noreferrer"
+            target="_blank"
+          />
+        }
+        size="icon"
         title="Search on Beatport"
+        variant="ghost"
       >
         <BrandIcon className="size-4" icon={siBeatport} />
-      </a>
-      <button
+      </Button>
+      <Button
         aria-label={`Remove ${member.title}`}
-        className="inline-flex size-9 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-destructive focus-visible:outline-2 focus-visible:outline-ring"
+        className="text-muted-foreground hover:text-destructive"
         onClick={() => onRemove(member.trackId)}
-        type="button"
+        size="icon"
+        variant="ghost"
       >
         <XIcon aria-hidden="true" />
-      </button>
+      </Button>
     </li>
   );
 }
@@ -893,11 +914,16 @@ function MemberSearch({
                     onSelect={() => onSelect(toMemberRef(track))}
                     value={track.trackId}
                   >
-                    <MemberThumb src={track.albumImageUrl} />
-                    <span className="min-w-0 flex-1 truncate">
-                      {track.artists.join(", ")} — {track.title}
-                    </span>
-                    <MemberMeta bpm={track.bpm} musicalKey={track.key} />
+                    <FindingIdentity
+                      artists={track.artists}
+                      className="flex-1"
+                      cover={track.albumImageUrl}
+                      coverVariant="art"
+                      size="xs"
+                      title={track.title}
+                      titleFormat="inline"
+                    />
+                    <TrackMetaChips bpm={track.bpm} musicalKey={track.key} />
                     <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
                       {track.logId ?? track.trackId}
                     </span>
@@ -910,34 +936,6 @@ function MemberSearch({
       </PopoverContent>
     </Popover>
   );
-}
-
-// Tempo + key as one quiet line — the match-up signal when ordering a set (a 174 banger reads
-// next to its neighbours). Tabular numerals like the Log ID column; nothing renders until
-// enrichment has produced a BPM or a key.
-function MemberMeta({ bpm, musicalKey }: { bpm?: number; musicalKey?: string }) {
-  const { notation } = useKeyNotation();
-  const formattedKey = formatKey(musicalKey, notation) || undefined;
-  const parts = [bpm ? `${Math.round(bpm)} BPM` : undefined, formattedKey].filter(Boolean);
-  if (parts.length === 0) {
-    return null;
-  }
-  return (
-    <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{parts.join(" · ")}</span>
-  );
-}
-
-function MemberThumb({ src }: { src?: string }) {
-  if (src) {
-    return (
-      <img
-        alt=""
-        className="size-8 shrink-0 rounded-sm border border-border object-cover"
-        src={spotifyAlbumImageAtSize(src, "small")}
-      />
-    );
-  }
-  return <div className="track-artwork-fallback size-8 shrink-0 rounded-sm border border-border" />;
 }
 
 function Field({
@@ -962,15 +960,6 @@ function Field({
       <Label htmlFor={id}>{label}</Label>
       <Input id={id} type={type} value={value} onChange={(event) => onChange(event.target.value)} />
       {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
-    </div>
-  );
-}
-
-function EmptyState({ body, title }: { body: string; title: string }) {
-  return (
-    <div className="flex flex-col items-center justify-center gap-1 px-4 py-16 text-center">
-      <p className="font-medium">{title}</p>
-      <p className="max-w-md text-sm text-muted-foreground">{body}</p>
     </div>
   );
 }
