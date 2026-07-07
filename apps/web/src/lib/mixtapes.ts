@@ -51,6 +51,7 @@ export type FeedItem = MixtapeDTO | TrackListItem;
 
 export type MixtapeRowLike = {
   added_at?: string | null;
+  announced_at?: string | null;
   created_at?: string | null;
   duration_ms?: number | null;
   id?: string | null;
@@ -73,6 +74,7 @@ export type MixtapeRowLike = {
 export function rowToMixtape(row: MixtapeRowLike, members: MixtapeMember[] = []): MixtapeDTO {
   return {
     addedAt: row.added_at ?? undefined,
+    announcedAt: row.announced_at ?? undefined,
     artists: ["Fluncle"],
     // The cover is derived, never stored: a minted mixtape's Log ID resolves to
     // the on-the-fly cover endpoint (mixtapeCoverUrl); an unminted claim (no Log

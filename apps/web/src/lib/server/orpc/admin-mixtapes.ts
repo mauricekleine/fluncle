@@ -41,6 +41,7 @@ import { youtubeDescription } from "../../mixtape-chapters";
 import { getMixcloudAccessToken } from "../mixcloud";
 import { finalizeMixtapeDistribution, listMixtapeSocialPosts } from "../mixtape-social";
 import {
+  announceMixtape,
   getMixtapeById,
   listMixtapes,
   setMixtapeCue,
@@ -629,6 +630,24 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
+  // POST /admin/mixtapes/{mixtapeId}/announce — operator tier. The last lifecycle
+  // step: post the crew callout to the Telegram crew channel. `announceMixtape` owns
+  // the gates (minted + published), the idempotency marker (atomic claim → no
+  // double-post; `already_announced`/409 on a re-run), and the Telegram post itself,
+  // returning the exact text sent. It posts to a public channel, so the agent 403s.
+  const announceMixtapeHandler = os.announce_mixtape
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const { message, mixtape } = await announceMixtape(input.mixtapeId);
+
+        return { message, mixtape, ok: true as const };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   // ── Fluncle Studio: clips + cue backfill ──
 
   // GET /admin/clips — admin tier (agent-allowed read). Optional ?recordingId/?status.
@@ -1047,6 +1066,7 @@ export function adminMixtapesHandlers(os: Implementer) {
     });
 
   return {
+    announce_mixtape: announceMixtapeHandler,
     create_clip: createClipHandler,
     delete_clip: deleteClipHandler,
     delete_clip_schedule: deleteClipScheduleHandler,

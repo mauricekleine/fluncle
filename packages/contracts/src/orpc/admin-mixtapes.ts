@@ -231,6 +231,31 @@ export const resyncMixtapeMixcloud = oc
   .input(z.object({ mixtapeId: z.string() }))
   .output(z.object({ ok: z.literal(true), url: z.string() }));
 
+/**
+ * `announce_mixtape` → `POST /admin/mixtapes/{mixtapeId}/announce` (operationId
+ * `announceMixtape`).
+ *
+ * Operator tier (live `requireOperator`). The last step of the mixtape lifecycle:
+ * post the crew callout to the Telegram crew channel — Fluncle sharing his own
+ * dream/checkpoint, in the mixtape's own voice, with its listen links + the `/log`
+ * home. It posts to a public channel, so the agent token 403s. Idempotent by an
+ * `announced_at` marker (claimed atomically → no double-post): a re-run 409s
+ * `already_announced`. Gates on the mixtape being minted + `published`
+ * (`mixtape_not_minted`/409, `mixtape_not_published`/409 — a listen link must exist
+ * to announce). Returns `{ mixtape, ok, message }` where `message` is the exact text
+ * posted to the crew.
+ */
+export const announceMixtape = oc
+  .route({
+    method: "POST",
+    operationId: "announceMixtape",
+    path: "/admin/mixtapes/{mixtapeId}/announce",
+    summary: "Announce a published mixtape to the crew (the Telegram crew channel)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ mixtapeId: z.string() }))
+  .output(z.object({ message: z.string(), mixtape: MixtapeDTOSchema, ok: z.literal(true) }));
+
 // ── Fluncle Studio: clips + cue backfill ──────────────────────────────────────
 // A clip is a lightweight 9:16 derivative of a mixtape's set video — many per set.
 // LOOSE/passthrough bodies, like the rest of the domain: the server helpers
@@ -642,6 +667,7 @@ export const setClipDrip = oc
 
 /** The `admin-mixtapes` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminMixtapesContract = {
+  announce_mixtape: announceMixtape,
   create_clip: createClip,
   delete_clip: deleteClip,
   delete_clip_schedule: deleteClipSchedule,

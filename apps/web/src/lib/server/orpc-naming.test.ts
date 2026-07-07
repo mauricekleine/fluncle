@@ -81,6 +81,10 @@ const APPROVED_VERBS = new Set<string>([
   // verbatim. Adding a genuinely new verb is a deliberate edit here (with a reason),
   // which is exactly the gate this test exists to enforce.
   "add",
+  // `announce` (post a published mixtape's crew callout to the Telegram crew channel) —
+  // added deliberately with the `announce_mixtape` op. The last lifecycle step; neither
+  // `publish` (mint/flip) nor `distribute` (the byte-move) names the act of telling the crew.
+  "announce",
   "approve",
   "collect",
   "context",

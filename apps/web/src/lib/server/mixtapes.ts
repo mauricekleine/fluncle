@@ -4,6 +4,7 @@ import { type MixtapeDTO, type MixtapeStatus, rowToMixtape } from "../mixtapes";
 import { getDb, typedRow, typedRows } from "./db";
 import { purgeLogCache } from "./edge-cache";
 import { ApiError } from "./spotify";
+import { postMixtapeToTelegram } from "./telegram";
 import { getTrackByIdOrLogId, getTracksForMixtape } from "./tracks";
 
 // A mixtape is also a finding with a `/log/<F-id>` page (and a row in the `/log`
@@ -29,6 +30,7 @@ const LEGACY_MIXTAPE_TITLE = "Untitled mixtape";
 
 type MixtapeRow = {
   added_at: string | null;
+  announced_at: string | null;
   created_at: string;
   duration_ms: number | null;
   id: string;
@@ -606,6 +608,79 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
   return purgeMixtapeLogCache(await getMixtapeById(id));
 }
 
+// Announce a published mixtape to the crew (the Telegram crew channel) — the last
+// step of the mixtape lifecycle (mint → distribute → make public → announce). It's
+// Fluncle sharing his own dream/checkpoint: the crew callout is formatted in the
+// mixtape's own first-person voice (see formatMixtapeAnnouncement in ./telegram) and
+// carries its listen links + the permanent /log home.
+//
+// Idempotent by an `announced_at` marker, claimed atomically so a re-run or a
+// double-click can NEVER double-post to the crew: the guarded UPDATE flips
+// `announced_at` from NULL exactly once (rowsAffected === 1 only for the winning
+// call); a later call finds it set and 409s. The marker is only made permanent once
+// the Telegram send actually lands — a send failure releases the claim so the
+// operator can retry. Returns the posted message alongside the refreshed mixtape.
+export async function announceMixtape(
+  id: string,
+): Promise<{ message: string; mixtape: MixtapeDTO }> {
+  const mixtape = await getMixtapeById(id);
+
+  // A coordinate + a live listen link are the two things a crew announcement needs.
+  // Both are guaranteed by `published` status: the mint commits the Log ID, and a
+  // mixtape only reaches `published` when its first platform link lands
+  // (finalizeMixtapeDistribution). So the announce sits AFTER distribution.
+  if (!mixtape.logId) {
+    throw new ApiError(
+      "mixtape_not_minted",
+      "Promote the recording before announcing it to the crew",
+      409,
+    );
+  }
+
+  if (mixtape.status !== "published") {
+    throw new ApiError(
+      "mixtape_not_published",
+      "Distribute a listen link before announcing the mixtape to the crew",
+      409,
+    );
+  }
+
+  // Claim the announce atomically. Only the call that flips `announced_at` from NULL
+  // owns the post; a second call affects 0 rows → the crew is never double-posted.
+  const now = new Date().toISOString();
+  const db = await getDb();
+  const claim = await db.execute({
+    args: [now, now, id],
+    sql: `update mixtapes set announced_at = ?, updated_at = ? where id = ? and announced_at is null`,
+  });
+
+  if ((claim.rowsAffected ?? 0) === 0) {
+    throw new ApiError(
+      "already_announced",
+      "This mixtape has already been announced to the crew",
+      409,
+    );
+  }
+
+  // Post to the crew channel. If Telegram fails, release the claim so a retry works —
+  // the marker only sticks once the post has actually landed.
+  let message: string;
+
+  try {
+    message = await postMixtapeToTelegram(mixtape);
+  } catch (error) {
+    await db.execute({
+      args: [id],
+      sql: `update mixtapes set announced_at = null where id = ?`,
+    });
+
+    throw error;
+  }
+
+  // The updated_at bump changes the public /log surface's freshness; drop it from cache.
+  return { message, mixtape: purgeMixtapeLogCache(await getMixtapeById(id)) };
+}
+
 export async function getMixtapeByLogId(logId: string): Promise<MixtapeDTO | undefined> {
   const db = await getDb();
   const result = await db.execute({
@@ -732,6 +807,7 @@ const MIXTAPE_SELECT = `select
      where s.mixtape_id = m.id and s.platform = 'soundcloud' and s.status = 'published' and s.url is not null
      order by published_at desc limit 1) as soundcloud_url,
   m.added_at,
+  m.announced_at,
   m.recorded_at,
   m.recording_id,
   m.published_at,

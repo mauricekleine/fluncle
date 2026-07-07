@@ -148,6 +148,9 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
 // private     = the `/me` cookie-session tier (read via privateUserAuth, write via
 //               privateUserMutation).
 const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> = {
+  // The crew announcement — operator tier: it posts a public Telegram crew callout
+  // (and is one-shot, marker-guarded), so the agent token 403s.
+  announce_mixtape: "operator",
   approve_submission: "operator",
   // The artist-entity backfill — agent tier (adminAuth only, no operatorGuard):
   // internal + reversible metadata enrichment (no publish), so the box's agent-token
