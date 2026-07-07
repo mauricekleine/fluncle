@@ -53,6 +53,14 @@ export const tracks = sqliteTable("tracks", {
   backfillNoteDoneAt: text("backfill_note_done_at"),
   backfillNoteFailures: integer("backfill_note_failures").notNull().default(0),
   bpm: real("bpm"),
+  // The full-song capture side-channel state (RFC full-audio). Models
+  // `enrichment_status` exactly — `notNull().default("pending")` is load-bearing:
+  // `publishTrack`'s insert never names this column, so the DDL default is what
+  // lands `'pending'` on a new add AND backfills every existing row to `'pending'`
+  // on migration (which enqueues the whole archive for capture-backfill for free).
+  // Enum: pending (never attempted) → done (key written) | unmatched (no confident
+  // match — terminal) | failed (attempt threw — retriable under backoff).
+  captureStatus: text("capture_status").notNull().default("pending"),
   // Firecrawl-derived FACTUAL context about the track (label/year/release
   // context/artist background), gathered during the observe step as CREATIVE
   // FUEL for the observation script and the video agent. Internal only: never
@@ -138,6 +146,16 @@ export const tracks = sqliteTable("tracks", {
   previewArchivedAt: text("preview_archived_at"),
   previewUrl: text("preview_url"),
   releaseDate: text("release_date"),
+  // ISO of the last full-song capture attempt → the backoff-cooldown anchor (grows
+  // with `source_audio_failures`), mirroring the backfill_* sweeps. Null until tried.
+  sourceAudioAttemptedAt: text("source_audio_attempted_at"),
+  // ISO stamp when the full-song bytes landed in R2. Null until captured.
+  sourceAudioCapturedAt: text("source_audio_captured_at"),
+  // CONSECUTIVE capture failures (reset to 0 on success); drives the backoff window.
+  sourceAudioFailures: integer("source_audio_failures").notNull().default(0),
+  // The R2 key of the captured full song (`analysis/source/<logId>/<sha256>.<ext>`
+  // in the private `fluncle-source-audio` bucket). PRESENCE = captured. Null until then.
+  sourceAudioKey: text("source_audio_key"),
   spotifyError: text("spotify_error"),
   spotifyUri: text("spotify_uri").notNull(),
   spotifyUrl: text("spotify_url").notNull(),
