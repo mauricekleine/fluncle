@@ -310,7 +310,7 @@ export function boardSteps(row: BoardRow, now: number = Date.now()): BoardStep[]
       // on-box `fluncle-embed` cron drains the `embedding_json IS NULL` queue and
       // stamps a MuQ vector; `done` (filled) once the finding carries one, grey while
       // it's still in the queue. This is the sonic fingerprint that supersedes the
-      // manual vibe map — see docs/audio-embedding-rfc.md.
+      // manual vibe map — see docs/rfcs/audio-embedding-rfc.md.
       actionable: false,
       gated: false,
       hint: row.hasEmbedding

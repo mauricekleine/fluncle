@@ -46,7 +46,7 @@ export type TrackUpdate = {
    * on-box `fluncle-embed` cron, never rendered, so writing it does NOT bump
    * updated_at (a whole-archive embed backfill must move no public lastmod). It IS the
    * sonic-similarity space `get_similar_findings` ranks over; the handler validates the
-   * 1024-d shape before it reaches here. See docs/audio-embedding-rfc.md.
+   * 1024-d shape before it reaches here. See docs/rfcs/audio-embedding-rfc.md.
    */
   embedding?: string;
   enrichmentStatus?: "pending" | "processing" | "done" | "failed";

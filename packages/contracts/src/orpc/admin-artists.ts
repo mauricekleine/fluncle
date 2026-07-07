@@ -229,7 +229,7 @@ export const listArtistSocials = oc
  * batch of high-confidence artists on YouTube (`status IN (auto, confirmed)`, idempotent
  * by `followed_at IS NULL`, quota-paced). Spotify is excluded — its artist-follow endpoint
  * is dev-mode-gated for our app, so Spotify championing runs through the manual
- * /admin/artists queue (see docs/ROADMAP.md). The on-box `fluncle-artist-follow` sweep
+ * /admin/artists queue (see docs/planning/ROADMAP.md). The on-box `fluncle-artist-follow` sweep
  * loops it via `remaining`. Bodyless POST with query params (the `backfill_artists`
  * shape). Returns `{ ok, dryRun, followed, followedCount, failed, failedCount, remaining }`.
  */

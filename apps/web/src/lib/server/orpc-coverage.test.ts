@@ -67,7 +67,7 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   "GET /tracks": "list_tracks",
   "GET /tracks/random": "get_random_track",
   "GET /tracks/{idOrLogId}": "get_track",
-  // The "more like this" sonic-neighbour read (docs/audio-embedding-rfc.md). Contract-only
+  // The "more like this" sonic-neighbour read (docs/rfcs/audio-embedding-rfc.md). Contract-only
   // oRPC — no TanStack route file under /api/v1/tracks (oRPC serves it straight off the
   // registry), so it has no route-file basename to enumerate; documented here as part of
   // the public surface net.

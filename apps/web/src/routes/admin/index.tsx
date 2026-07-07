@@ -51,7 +51,7 @@ import { readAttentionSnapshot } from "@/lib/server/attention";
 import { readCaptions } from "@/lib/server/captions";
 import { cn } from "@/lib/utils";
 
-// The operator's `/admin` home — the attention queue (docs/cockpit-roadmap.md,
+// The operator's `/admin` home — the attention queue (docs/planning/cockpit-roadmap.md,
 // "The queue"). Every action the system needs is a row: cover art, the object
 // line, its data, and the primary action inline (or a deep-link with the object
 // selected). Two-tier order (deadlines by time-left, then oldest-first), a
@@ -991,7 +991,7 @@ function RowArt({
 
 // ─── The zero state ───────────────────────────────────────────────────────────
 
-// The one sanctioned motion exception (docs/cockpit-roadmap.md, the design
+// The one sanctioned motion exception (docs/planning/cockpit-roadmap.md, the design
 // doctrine): the last cover cleared, warmly lit by a single gold bloom, one word,
 // a 200ms ease-out settle. Reduced motion: static (styles.css, .queue-clear).
 function ZeroState({ coverUrl }: { coverUrl?: string }) {

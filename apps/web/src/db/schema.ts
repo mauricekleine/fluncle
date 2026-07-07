@@ -90,7 +90,7 @@ export const tracks = sqliteTable("tracks", {
   // `get_similar_findings` op cosine-ranks these vectors to power the "more like this"
   // row on `/log` (and, later, browse-by-feel clusters + the game's solar systems).
   // NULL until the embed cron drains it (`embedding_json IS NULL` is the queue). See
-  // docs/audio-embedding-rfc.md + docs/track-lifecycle.md.
+  // docs/rfcs/audio-embedding-rfc.md + docs/track-lifecycle.md.
   embeddingJson: text("embedding_json"),
   enrichmentStatus: text("enrichment_status").notNull().default("pending"),
   featuresJson: text("features_json"),

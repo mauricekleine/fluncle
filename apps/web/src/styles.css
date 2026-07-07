@@ -1591,7 +1591,7 @@ body::before {
 }
 
 /* The "more like this" cluster — the automatic sonic neighbours (MuQ embeddings,
-   docs/audio-embedding-rfc.md). Cover-led + quiet: a strip of album covers that
+   docs/rfcs/audio-embedding-rfc.md). Cover-led + quiet: a strip of album covers that
    WRAPS on the narrow plate rather than forcing a horizontal page scroll. */
 .log-similar {
   display: grid;
@@ -2895,7 +2895,7 @@ body::before {
 }
 
 /* The attention queue's zero-state settle — the one sanctioned motion exception
-   (docs/cockpit-roadmap.md, the design doctrine): the last cover cleared lands
+   (docs/planning/cockpit-roadmap.md, the design doctrine): the last cover cleared lands
    warmly lit with a single 200ms ease-out settle. Reduced motion: static. */
 @keyframes queue-clear-settle {
   from {
