@@ -2,6 +2,7 @@ import { type TrackSearchResult } from "@fluncle/contracts";
 
 export type { TrackSearchResult };
 
+import { parseSpotifyTrackId } from "../spotify-track-id";
 import { getDb, typedRow } from "./db";
 import { readEnvs } from "./env";
 
@@ -171,36 +172,29 @@ export async function fetchSpotifyProfile(code: string): Promise<SpotifyProfile>
   };
 }
 
+// The grammar itself lives in the shared client-safe module (../spotify-track-id)
+// so the admin Add-finding dialog validates pastes with the SAME rules; this
+// wrapper maps each failure reason onto the exact legacy `invalid_spotify_url`
+// message the CLI and API consumers pin.
 export function parseSpotifyTrackUrl(input: string): string {
-  const uriMatch = input.match(/^spotify:track:([A-Za-z0-9]{22})$/);
+  const parsed = parseSpotifyTrackId(input);
 
-  if (uriMatch?.[1] !== undefined) {
-    return uriMatch[1];
+  if (parsed.ok) {
+    return parsed.trackId;
   }
 
-  let url: URL;
-
-  try {
-    url = new URL(input);
-  } catch {
-    throw new ApiError("invalid_spotify_url", "Invalid Spotify URL", 400);
+  switch (parsed.reason) {
+    case "not_a_url":
+      throw new ApiError("invalid_spotify_url", "Invalid Spotify URL", 400);
+    case "wrong_host":
+      throw new ApiError(
+        "invalid_spotify_url",
+        "Invalid Spotify URL: expected open.spotify.com",
+        400,
+      );
+    case "not_a_track":
+      throw new ApiError("invalid_spotify_url", "Invalid Spotify track URL", 400);
   }
-
-  if (url.hostname !== "open.spotify.com") {
-    throw new ApiError(
-      "invalid_spotify_url",
-      "Invalid Spotify URL: expected open.spotify.com",
-      400,
-    );
-  }
-
-  const [kind, trackId] = url.pathname.split("/").filter(Boolean);
-
-  if (kind !== "track" || !trackId || !/^[A-Za-z0-9]{22}$/.test(trackId)) {
-    throw new ApiError("invalid_spotify_url", "Invalid Spotify track URL", 400);
-  }
-
-  return trackId;
 }
 
 function tryParseSpotifyTrackUrl(input: string): string | undefined {
