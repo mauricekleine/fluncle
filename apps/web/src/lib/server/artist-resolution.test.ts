@@ -174,6 +174,12 @@ describe("normalizeProfileUrl", () => {
     const result = await normalizeProfileUrl("youtube", "https://www.youtube.com/watch?v=abc123");
     expect(result).toBeNull();
   });
+
+  it("rejects a non-http(s) scheme (stored-XSS defense at ingestion)", async () => {
+    expect(await normalizeProfileUrl("homepage", "javascript:alert(1)")).toBeNull();
+    expect(await normalizeProfileUrl("homepage", "data:text/html,<script>1</script>")).toBeNull();
+    expect(await normalizeProfileUrl("instagram", "javascript:alert(document.cookie)")).toBeNull();
+  });
 });
 
 // ── resolveArtistViaMb ────────────────────────────────────────────────────────
