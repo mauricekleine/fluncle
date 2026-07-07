@@ -410,6 +410,8 @@ const PUBLIC_OPERATION_IDS = [
   "deletePrivateAccount",
   "deregisterDevice",
   "exportPrivateAccountData",
+  // Artist reads — public, no auth required (Unit 4 of the artist-relationship RFC).
+  "getArtist",
   "getCurrentPrivateUser",
   "getEdition",
   "getHealth",
@@ -421,6 +423,7 @@ const PUBLIC_OPERATION_IDS = [
   "getRandomTrack",
   "getSimilarFindings",
   "getTrack",
+  "listArtists",
   "listEditions",
   "listMixtapes",
   "listPrivateSavedFindings",

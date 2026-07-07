@@ -26,6 +26,7 @@
 // (`z.unknown()`), so inferring them would erase the CLI's typed send shape.
 
 import { type z } from "zod";
+import { type ArtistListItemSchema } from "./orpc/artists.js";
 import { type ServiceHealthStatusSchema } from "./orpc/admin-health.js";
 import { type GalaxyProgressSchema } from "./orpc/me-galaxy.js";
 import {
@@ -62,6 +63,22 @@ export type ApiFailure = {
 
 /** The four vibe-map galaxies (the admin tagging quadrants). The web keeps the runtime `GALAXIES` map + `GalaxyMeta`. */
 export type Galaxy = "astral" | "lunar" | "nebular" | "solar";
+
+// ── Artist ───────────────────────────────────────────────────────────────────
+
+/**
+ * A public artist list item, as `GET /api/v1/artists` and `GET /api/v1/artists/:slug`
+ * emit it. Inferred from `ArtistListItemSchema` (./orpc/artists.ts) — the minimal
+ * identity shape (name, slug, finding count, optional Spotify URL) shared by the
+ * list and get ops.
+ */
+export type ArtistListItem = z.infer<typeof ArtistListItemSchema>;
+
+/** `GET /api/v1/artists` response — all artists with at least one finding. */
+export type ArtistsResponse = Ok<{ artists: ArtistListItem[] }>;
+
+/** `GET /api/v1/artists/:slug` response — one artist by slug. */
+export type ArtistGetResponse = Ok<{ artist: ArtistListItem }>;
 
 // ── Me (the private user tier) ───────────────────────────────────────────────
 

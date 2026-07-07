@@ -115,6 +115,8 @@ function deriveTier(op: unknown): AuthTier | null {
 // shipping an anonymous endpoint is always a conscious, reviewed choice.
 const PUBLIC_UNAUTH_OPS = new Set<string>([
   // The public archive reads + Spotify candidate search (orpc-coverage.test.ts).
+  // Artist reads — public, no auth required (Unit 4 of the artist-relationship RFC).
+  "get_artist",
   "get_edition",
   "get_health",
   "get_radio_now_playing",
@@ -122,6 +124,7 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
   "get_random_track",
   "get_similar_findings",
   "get_track",
+  "list_artists",
   "list_editions",
   "list_mixtapes",
   "list_stories",
@@ -148,6 +151,9 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
 // private     = the `/me` cookie-session tier (read via privateUserAuth, write via
 //               privateUserMutation).
 const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> = {
+  // The `/admin/artists` follow queue's inline add (Unit 5, Epic B) — operator tier: an
+  // operator-entered social lands confirmed + public at once.
+  add_artist_social: "operator",
   // The crew announcement — operator tier: it posts a public Telegram crew callout
   // (and is one-shot, marker-guarded), so the agent token 403s.
   announce_mixtape: "operator",
@@ -162,6 +168,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // Postiz withheld on create + links the analytics release-id — it publishes nothing.
   capture_post_urls: "admin",
   collect_private_galaxy_log: "private-session",
+  // The follow queue's one-tap confirm (candidate → confirmed) — operator tier: it lets
+  // a Firecrawl-sourced link onto the public artist page.
+  confirm_artist_social: "operator",
   context_track: "admin",
   // The Fluncle Studio clip writes — operator tier: the agent never cuts/mints/prunes
   // clips, so an agent token 403s. `create_clip` is now recording-scoped (RFC
@@ -194,6 +203,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The autonomous render box links its own cut + sets video_url — agent tier
   // (adminAuth only, no operatorGuard); the box's agent token publishes its renders.
   finalize_track_video: "admin",
+  // The championing motion's automated half (Unit 5, Epic B) — agent tier (adminAuth
+  // only, no operatorGuard): a follow is internal + one-click-reversible, so the box's
+  // agent-token `fluncle-artist-follow` cron drives it (the backfill_artists precedent).
+  follow_artist: "admin",
   // The built clip caption read — admin tier (agent-allowed), the list_clips precedent:
   // a read the clip-card UI + the box can both consume.
   get_clip_caption: "admin",
@@ -210,6 +223,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // the board + CLI + box can all consume.
   get_track_admin: "admin",
   initiate_mixtape_youtube: "operator",
+  // The `/admin/artists` follow queue read — admin tier (agent-allowed), the list_*_admin
+  // precedent; the operator's follow-queue station consumes it.
+  list_artist_socials: "admin",
   // Every clip's IG drip row — admin tier (agent-allowed read), the list_*_admin
   // precedent; the CLI / library merge it onto the clips.
   list_clip_posts: "admin",
@@ -224,6 +240,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   list_submissions: "admin",
   list_track_social: "admin",
   list_tracks_admin: "admin",
+  // The artist-sweep resolve worklist (artists awaiting social resolution) — agent
+  // tier (adminAuth only): a read the box's `fluncle-artist-sweep` cron drives with
+  // its agent-scoped token to pick the next batch, the list_*_admin precedent.
+  list_unresolved_artists: "admin",
   merge_private_galaxy_progress: "private-session",
   mint_mixcloud_token: "operator",
   mint_youtube_token: "operator",
@@ -264,7 +284,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // record_health precedent; it writes only the internal single-row live_state table
   // (no publish), so the box agent token drives it each minute.
   record_live_state: "admin",
+  // The follow queue's one-tap register of a manual follow (stamp followed_at) — operator tier.
+  record_operator_follow: "operator",
   reject_submission: "operator",
+  // The follow queue's inline remove of a social — operator tier.
+  remove_artist_social: "operator",
   // Replace a recording's whole cue set — operator tier (the Rekordbox derivation write
   // target): a write that reshapes what a clip/promote resolves to, so the agent 403s.
   replace_recording_cues: "operator",
@@ -272,6 +296,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // re-render — operator-only (adminAuth + operatorGuard); the box agent never
   // clears videos, so an agent token 403s.
   requeue_video: "operator",
+  // resolve_artist — the box's agent-token artist-socials resolution (MB + Firecrawl); internal
+  // enrichment only, so agent-tier (adminAuth, no operatorGuard) like backfill_artists.
+  resolve_artist: "admin",
   // The Mixcloud metadata re-sync — operator tier: it EDITS a LIVE published cloudcast's
   // sections[] (the Mixcloud edit endpoint, server-side with the mixcloud_auth token),
   // so the agent token 403s (the parity twin of resync_mixtape_youtube).

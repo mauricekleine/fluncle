@@ -33,6 +33,17 @@ export type SitemapLogPage = {
   video?: SitemapVideo;
 };
 
+// A `/artist/<slug>` page — added ONLY for artists past the thin-content gate
+// (≥ ARTIST_INDEX_MIN_FINDINGS coordinate-bearing findings); the thin ones stay
+// out (they render `noindex, follow`). The route filters; this just formats.
+export type SitemapArtist = {
+  /** Cover art for the Google Images `<image:image>` extension. */
+  imageLoc?: string;
+  /** ISO date of the artist's freshest finding. */
+  lastmod?: string;
+  slug: string;
+};
+
 // Escape the five XML metacharacters so a Spotify-sourced title/artist or an
 // operator note can't malform the document (a bare `&` invalidates the feed, and
 // Google rejects an invalid video sitemap wholesale).
@@ -85,9 +96,23 @@ function findingEntry(page: SitemapLogPage): string {
   return `  <url>\n    <loc>${loc}</loc>${lastmodTag(page.lastmod)}${image}${video}\n  </url>`;
 }
 
-export function buildSitemapXml(logPages: SitemapLogPage[]): string {
-  const latest = logPages
-    .map((page) => page.lastmod)
+// An artist entry: `<loc>` + optional `<lastmod>` + optional cover `<image:image>`.
+function artistEntry(page: SitemapArtist): string {
+  const loc = `${siteUrl}/artist/${encodeURIComponent(page.slug)}`;
+  const image = page.imageLoc ? imageTag(page.imageLoc) : "";
+
+  return `  <url>\n    <loc>${loc}</loc>${lastmodTag(page.lastmod)}${image}\n  </url>`;
+}
+
+export function buildSitemapXml(
+  logPages: SitemapLogPage[],
+  artistPages: SitemapArtist[] = [],
+): string {
+  const latest = [
+    ...logPages.map((page) => page.lastmod),
+    ...artistPages.map((page) => page.lastmod),
+  ]
+    .filter((value): value is string => Boolean(value))
     .sort()
     .at(-1);
 
@@ -95,10 +120,12 @@ export function buildSitemapXml(logPages: SitemapLogPage[]): string {
     staticEntry(`${siteUrl}/`, latest),
     staticEntry(`${siteUrl}/log`, latest),
     staticEntry(`${siteUrl}/mixtapes`, latest),
+    staticEntry(`${siteUrl}/artists`, latest),
     staticEntry(`${siteUrl}/about`),
     staticEntry(`${siteUrl}/privacy`),
     staticEntry(`${siteUrl}/galaxy`),
     ...logPages.map((page) => findingEntry(page)),
+    ...artistPages.map((page) => artistEntry(page)),
   ];
 
   return `<?xml version="1.0" encoding="UTF-8"?>

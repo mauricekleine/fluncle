@@ -32,6 +32,7 @@ Generated from the `SURFACES` catalog. Each row is the registry `name`, its addr
 | `web.docs`       | `/docs`       | the Fumadocs developer docs + `/docs/api`, the embedded Scalar API reference                                  | secondary |
 | `web.status`     | `/status`     | the public service-health dashboard — uptime per service, recent events                                       | secondary |
 | `web.radio`      | `/radio`      | the cycling observation station — Fluncle's spoken field observations on a loop (also at `radio.fluncle.com`) | secondary |
+| `web.artist`     | `/artist`     | `/artist/:slug` — one artist's page: every published finding from that artist, plus their identity links      | secondary |
 | `web.privacy`    | `/privacy`    | the privacy policy                                                                                            | tertiary  |
 
 ### Subdomains — sibling hosts on the same Worker
@@ -49,18 +50,19 @@ Generated from the `SURFACES` catalog. Each row is the registry `name`, its addr
 
 All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertises them.
 
-| Surface                 | Route                       | Exposes                                                      | Weight    |
-| ----------------------- | --------------------------- | ------------------------------------------------------------ | --------- |
-| `api.tracks`            | `/api/v1/tracks`            | the archive as JSON, cursor-paginated (limit max 48, cursor) | primary   |
-| `api.track`             | `/api/v1/tracks/:idOrLogId` | one finding or mixtape by Spotify id or Log ID               | secondary |
-| `api.tracks.random`     | `/api/v1/tracks/random`     | one finding at random                                        | secondary |
-| `api.mixtapes`          | `/api/v1/mixtapes`          | published mixtapes as JSON                                   | secondary |
-| `api.search`            | `/api/v1/search`            | Spotify search candidates for submitting a track             | secondary |
-| `api.submissions`       | `/api/v1/submissions`       | submit a track for review (POST)                             | secondary |
-| `api.newsletter`        | `/api/v1/newsletter`        | subscribe to the newsletter (POST); the editions archive     | secondary |
-| `api.stories`           | `/api/v1/stories`           | the Stories payload as JSON                                  | tertiary  |
-| `api.radio.now-playing` | `/api/v1/radio/now-playing` | the radio shared-clock now-playing slot                      | tertiary  |
-| `api.health`            | `/api/health`               | the liveness probe — the canonical web health check          | tertiary  |
+| Surface                 | Route                       | Exposes                                                                                                | Weight    |
+| ----------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------ | --------- |
+| `api.tracks`            | `/api/v1/tracks`            | the archive as JSON, cursor-paginated (limit max 48, cursor)                                           | primary   |
+| `api.track`             | `/api/v1/tracks/:idOrLogId` | one finding or mixtape by Spotify id or Log ID                                                         | secondary |
+| `api.tracks.random`     | `/api/v1/tracks/random`     | one finding at random                                                                                  | secondary |
+| `api.mixtapes`          | `/api/v1/mixtapes`          | published mixtapes as JSON                                                                             | secondary |
+| `api.artists`           | `/api/v1/artists`           | every artist with at least one published finding, finding-count ordered, plus `/api/v1/artists/{slug}` | secondary |
+| `api.search`            | `/api/v1/search`            | Spotify search candidates for submitting a track                                                       | secondary |
+| `api.submissions`       | `/api/v1/submissions`       | submit a track for review (POST)                                                                       | secondary |
+| `api.newsletter`        | `/api/v1/newsletter`        | subscribe to the newsletter (POST); the editions archive                                               | secondary |
+| `api.stories`           | `/api/v1/stories`           | the Stories payload as JSON                                                                            | tertiary  |
+| `api.radio.now-playing` | `/api/v1/radio/now-playing` | the radio shared-clock now-playing slot                                                                | tertiary  |
+| `api.health`            | `/api/health`               | the liveness probe — the canonical web health check                                                    | tertiary  |
 
 ### Feeds — subscribable syndication documents
 
@@ -109,6 +111,7 @@ All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertise
 | ---------------- | -------------------- | -------------------------------------------------------------------------------------------------- | --------- |
 | `cli.recent`     | `fluncle recent`     | the latest bangers, newest first (alias `list`)                                                    | primary   |
 | `cli.mixtapes`   | `fluncle mixtapes`   | Fluncle's checkpoint sets                                                                          | secondary |
+| `cli.artists`    | `fluncle artists`    | every artist with at least one published finding (a bare `slug` looks one up)                      | secondary |
 | `cli.open`       | `fluncle open`       | pick a track, open it in Spotify                                                                   | secondary |
 | `cli.random`     | `fluncle random`     | the archive throws one back                                                                        | secondary |
 | `cli.subscribe`  | `fluncle subscribe`  | subscribe to the Friday newsletter                                                                 | secondary |
@@ -171,6 +174,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `web.docs`                  | secondary |           |           |           |
 | `web.status`                | secondary |           |           | primary   |
 | `web.radio`                 | secondary |           |           |           |
+| `web.artist`                | secondary | secondary |           |           |
 | `web.privacy`               | tertiary  |           |           |           |
 | `subdomain.galaxy`          | primary   | secondary |           |           |
 | `subdomain.radio`           | secondary |           |           |           |
@@ -182,6 +186,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `api.track`                 | secondary |           |           |           |
 | `api.tracks.random`         | secondary |           |           |           |
 | `api.mixtapes`              | secondary |           |           |           |
+| `api.artists`               | secondary |           |           |           |
 | `api.search`                | secondary |           |           |           |
 | `api.submissions`           | secondary |           |           |           |
 | `api.newsletter`            | secondary |           |           |           |
@@ -206,6 +211,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `ssh.rave`                  | primary   | primary   |           | secondary |
 | `cli.recent`                | tertiary  |           | primary   |           |
 | `cli.mixtapes`              |           |           | secondary |           |
+| `cli.artists`               |           |           | secondary |           |
 | `cli.open`                  |           |           | secondary |           |
 | `cli.random`                |           |           | secondary |           |
 | `cli.subscribe`             |           |           | secondary |           |

@@ -1,5 +1,6 @@
 import { type InfiniteData, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
+import { type ArtistFollowTarget } from "@/lib/server/artists";
 import { type MixtapeMembership } from "@/lib/server/mixtapes";
 import { type PlanMembership } from "@/lib/server/recordings";
 import { type SocialPostItem } from "@/lib/server/social";
@@ -13,6 +14,11 @@ import { type TrackListItem } from "@/lib/server/tracks";
 
 /** A page row: a finding plus its per-platform posts and mixtape memberships. */
 export type BoardRow = TrackListItem & {
+  // The Spotify/YouTube follow targets for this finding's artist(s) — the automated-
+  // socials cell reads this (folded with the Last.fm love). Aggregated per platform:
+  // `followed` is true only when every such target is followed. Pulled through the
+  // admin-only board path (the identity graph never rides the public track contract).
+  artistFollows: ArtistFollowTarget[];
   // Whether the Discogs backfill has RUN for this finding — the presence of
   // `backfill_discogs_attempted_at`, stamped on every real attempt (a resolve OR a
   // clean no-match). The board's Discogs cell is a WORKFLOW tracker: `done` once it

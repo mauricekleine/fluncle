@@ -278,6 +278,19 @@ export const SURFACES: readonly Surface[] = [
     weights: { web: "secondary" },
   },
   {
+    discoveryUrl: `${SITE}/llms.txt`,
+    exposedContent: [
+      "/artist/:slug — one artist's page: every published finding from that artist, plus their identity links",
+    ],
+    kind: "web_route",
+    name: "web.artist",
+    operatorNotes:
+      "Slug is real-name kebab-case (e.g. /artist/dbridge). Read-only; only artists with at least one published finding resolve (others 404). No probeConfig — the route is slug-parameterized, so there is no fixed URL to GET-probe.",
+    route: "/artist",
+    url: `${SITE}/artist`,
+    weights: { ssh: "secondary", web: "secondary" },
+  },
+  {
     exposedContent: ["the privacy policy"],
     kind: "web_route",
     name: "web.privacy",
@@ -394,6 +407,20 @@ export const SURFACES: readonly Surface[] = [
     name: "api.mixtapes",
     route: "/api/v1/mixtapes",
     url: `${SITE}/api/v1/mixtapes`,
+    weights: { web: "secondary" },
+  },
+  {
+    apiFormat: "application/json",
+    discoveryUrl: `${SITE}/api/v1/openapi.json`,
+    exposedContent: [
+      "every artist with at least one published finding, finding-count ordered, as JSON",
+      "/api/v1/artists/{slug} — one artist's identity and finding count, as JSON",
+    ],
+    kind: "api",
+    name: "api.artists",
+    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
+    route: "/api/v1/artists",
+    url: `${SITE}/api/v1/artists`,
     weights: { web: "secondary" },
   },
   {
@@ -649,6 +676,13 @@ export const SURFACES: readonly Surface[] = [
     weights: { cli: "secondary" },
   },
   {
+    command: "fluncle artists",
+    exposedContent: ["every artist with at least one published finding (bare `slug` looks one up)"],
+    kind: "cli",
+    name: "cli.artists",
+    weights: { cli: "secondary" },
+  },
+  {
     command: "fluncle open",
     exposedContent: ["pick a track, open it in Spotify"],
     kind: "cli",
@@ -796,6 +830,29 @@ export const SURFACES: readonly Surface[] = [
     name: "cron.backfill",
     operatorNotes: "every 30m. Pure HTTP driving, zero LLM tokens. Agent tier.",
     probeConfig: { cadenceMs: 30 * MINUTE_MS, cronName: "fluncle-backfill", kind: "cron" },
+    weights: { status: "hidden" },
+  },
+  {
+    exposedContent: [
+      "resolve each artist's social identity: MB url-rel walk + Firecrawl gap-fill (TikTok + YouTube)",
+    ],
+    kind: "cron",
+    name: "cron.artist-sweep",
+    operatorNotes:
+      "every 60m. --no-agent trigger; the Worker does the MB walk + Firecrawl /v2/extract + YouTube channel resolution. Zero on-box tokens. MB rows land as status=auto (trusted); Firecrawl rows as status=candidate (operator-confirm before public). Source: docs/agents/hermes/scripts/artist-sweep.*",
+    probeConfig: { cadenceMs: 60 * MINUTE_MS, cronName: "fluncle-artist-sweep", kind: "cron" },
+    weights: { status: "hidden" },
+  },
+  {
+    command: "fluncle admin artists follow",
+    exposedContent: [
+      "auto-follow high-confidence artists on Spotify + YouTube — the championing motion (--no-agent, Worker HTTP)",
+    ],
+    kind: "cron",
+    name: "cron.artist-follow",
+    operatorNotes:
+      "every 6h. Pure HTTP trigger, zero LLM tokens. Agent tier (the box holds no Spotify/YouTube tokens; the Worker does the PUT /me/following + subscriptions.insert and stamps followed_at). Idempotent by followed_at IS NULL, acting only on status IN (auto, confirmed); quota-paced. Mixcloud is link-only (cut). Source: docs/agents/hermes/scripts/artist-follow-sweep.*. Probed on /status as cron.artist-follow.",
+    probeConfig: { cadenceMs: 6 * 60 * MINUTE_MS, cronName: "fluncle-artist-follow", kind: "cron" },
     weights: { status: "hidden" },
   },
   {

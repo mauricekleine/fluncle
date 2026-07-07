@@ -34,6 +34,7 @@ import { Route as NewsletterIndexRouteImport } from './routes/newsletter.index'
 import { Route as MixtapesIndexRouteImport } from './routes/mixtapes.index'
 import { Route as LogIndexRouteImport } from './routes/log.index'
 import { Route as DocsIndexRouteImport } from './routes/docs.index'
+import { Route as ArtistsIndexRouteImport } from './routes/artists.index'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as StoriesLogIdRouteImport } from './routes/stories.$logId'
 import { Route as NewsletterNumberRouteImport } from './routes/newsletter.$number'
@@ -42,6 +43,7 @@ import { Route as DocsApiRouteImport } from './routes/docs.api'
 import { Route as DocsSplatRouteImport } from './routes/docs.$'
 import { Route as DocsDotmdSplatRouteImport } from './routes/docs[.]md.$'
 import { Route as CliLatestDotshRouteImport } from './routes/cli/latest[.]sh'
+import { Route as ArtistSlugRouteImport } from './routes/artist.$slug'
 import { Route as ApiStatusRouteImport } from './routes/api/status'
 import { Route as AdminRendersRouteImport } from './routes/admin/renders'
 import { Route as AdminPlansRouteImport } from './routes/admin/plans'
@@ -50,6 +52,7 @@ import { Route as AdminMixtapesRouteImport } from './routes/admin/mixtapes'
 import { Route as AdminLoginRouteImport } from './routes/admin/login'
 import { Route as AdminFindingsRouteImport } from './routes/admin/findings'
 import { Route as AdminClipsRouteImport } from './routes/admin/clips'
+import { Route as AdminArtistsRouteImport } from './routes/admin/artists'
 import { Route as ApiV1StatusRouteImport } from './routes/api/v1/status'
 import { Route as ApiV1PostmanDotjsonRouteImport } from './routes/api/v1/postman[.]json'
 import { Route as ApiV1OpenapiDotjsonRouteImport } from './routes/api/v1/openapi[.]json'
@@ -208,6 +211,11 @@ const DocsIndexRoute = DocsIndexRouteImport.update({
   path: '/',
   getParentRoute: () => DocsRoute,
 } as any)
+const ArtistsIndexRoute = ArtistsIndexRouteImport.update({
+  id: '/artists/',
+  path: '/artists/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminIndexRoute = AdminIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -248,6 +256,11 @@ const CliLatestDotshRoute = CliLatestDotshRouteImport.update({
   path: '/cli/latest.sh',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ArtistSlugRoute = ArtistSlugRouteImport.update({
+  id: '/artist/$slug',
+  path: '/artist/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiStatusRoute = ApiStatusRouteImport.update({
   id: '/api/status',
   path: '/api/status',
@@ -286,6 +299,11 @@ const AdminFindingsRoute = AdminFindingsRouteImport.update({
 const AdminClipsRoute = AdminClipsRouteImport.update({
   id: '/clips',
   path: '/clips',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminArtistsRoute = AdminArtistsRouteImport.update({
+  id: '/artists',
+  path: '/artists',
   getParentRoute: () => AdminRouteRoute,
 } as any)
 const ApiV1StatusRoute = ApiV1StatusRouteImport.update({
@@ -483,6 +501,7 @@ export interface FileRoutesByFullPath {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/sprites': typeof SpritesRoute
   '/status': typeof StatusRoute
+  '/admin/artists': typeof AdminArtistsRoute
   '/admin/clips': typeof AdminClipsRoute
   '/admin/findings': typeof AdminFindingsRoute
   '/admin/login': typeof AdminLoginRoute
@@ -491,6 +510,7 @@ export interface FileRoutesByFullPath {
   '/admin/plans': typeof AdminPlansRoute
   '/admin/renders': typeof AdminRendersRoute
   '/api/status': typeof ApiStatusRoute
+  '/artist/$slug': typeof ArtistSlugRoute
   '/cli/latest.sh': typeof CliLatestDotshRoute
   '/docs.md/$': typeof DocsDotmdSplatRoute
   '/docs/$': typeof DocsSplatRoute
@@ -499,6 +519,7 @@ export interface FileRoutesByFullPath {
   '/newsletter/$number': typeof NewsletterNumberRoute
   '/stories/$logId': typeof StoriesLogIdRoute
   '/admin/': typeof AdminIndexRoute
+  '/artists/': typeof ArtistsIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/log/': typeof LogIndexRoute
   '/mixtapes/': typeof MixtapesIndexRoute
@@ -555,6 +576,7 @@ export interface FileRoutesByTo {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/sprites': typeof SpritesRoute
   '/status': typeof StatusRoute
+  '/admin/artists': typeof AdminArtistsRoute
   '/admin/clips': typeof AdminClipsRoute
   '/admin/findings': typeof AdminFindingsRoute
   '/admin/login': typeof AdminLoginRoute
@@ -563,6 +585,7 @@ export interface FileRoutesByTo {
   '/admin/plans': typeof AdminPlansRoute
   '/admin/renders': typeof AdminRendersRoute
   '/api/status': typeof ApiStatusRoute
+  '/artist/$slug': typeof ArtistSlugRoute
   '/cli/latest.sh': typeof CliLatestDotshRoute
   '/docs.md/$': typeof DocsDotmdSplatRoute
   '/docs/$': typeof DocsSplatRoute
@@ -571,6 +594,7 @@ export interface FileRoutesByTo {
   '/newsletter/$number': typeof NewsletterNumberRoute
   '/stories/$logId': typeof StoriesLogIdRoute
   '/admin': typeof AdminIndexRoute
+  '/artists': typeof ArtistsIndexRoute
   '/docs': typeof DocsIndexRoute
   '/log': typeof LogIndexRoute
   '/mixtapes': typeof MixtapesIndexRoute
@@ -630,6 +654,7 @@ export interface FileRoutesById {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/sprites': typeof SpritesRoute
   '/status': typeof StatusRoute
+  '/admin/artists': typeof AdminArtistsRoute
   '/admin/clips': typeof AdminClipsRoute
   '/admin/findings': typeof AdminFindingsRoute
   '/admin/login': typeof AdminLoginRoute
@@ -638,6 +663,7 @@ export interface FileRoutesById {
   '/admin/plans': typeof AdminPlansRoute
   '/admin/renders': typeof AdminRendersRoute
   '/api/status': typeof ApiStatusRoute
+  '/artist/$slug': typeof ArtistSlugRoute
   '/cli/latest.sh': typeof CliLatestDotshRoute
   '/docs.md/$': typeof DocsDotmdSplatRoute
   '/docs/$': typeof DocsSplatRoute
@@ -646,6 +672,7 @@ export interface FileRoutesById {
   '/newsletter/$number': typeof NewsletterNumberRoute
   '/stories/$logId': typeof StoriesLogIdRoute
   '/admin/': typeof AdminIndexRoute
+  '/artists/': typeof ArtistsIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/log/': typeof LogIndexRoute
   '/mixtapes/': typeof MixtapesIndexRoute
@@ -706,6 +733,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/sprites'
     | '/status'
+    | '/admin/artists'
     | '/admin/clips'
     | '/admin/findings'
     | '/admin/login'
@@ -714,6 +742,7 @@ export interface FileRouteTypes {
     | '/admin/plans'
     | '/admin/renders'
     | '/api/status'
+    | '/artist/$slug'
     | '/cli/latest.sh'
     | '/docs.md/$'
     | '/docs/$'
@@ -722,6 +751,7 @@ export interface FileRouteTypes {
     | '/newsletter/$number'
     | '/stories/$logId'
     | '/admin/'
+    | '/artists/'
     | '/docs/'
     | '/log/'
     | '/mixtapes/'
@@ -778,6 +808,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/sprites'
     | '/status'
+    | '/admin/artists'
     | '/admin/clips'
     | '/admin/findings'
     | '/admin/login'
@@ -786,6 +817,7 @@ export interface FileRouteTypes {
     | '/admin/plans'
     | '/admin/renders'
     | '/api/status'
+    | '/artist/$slug'
     | '/cli/latest.sh'
     | '/docs.md/$'
     | '/docs/$'
@@ -794,6 +826,7 @@ export interface FileRouteTypes {
     | '/newsletter/$number'
     | '/stories/$logId'
     | '/admin'
+    | '/artists'
     | '/docs'
     | '/log'
     | '/mixtapes'
@@ -852,6 +885,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/sprites'
     | '/status'
+    | '/admin/artists'
     | '/admin/clips'
     | '/admin/findings'
     | '/admin/login'
@@ -860,6 +894,7 @@ export interface FileRouteTypes {
     | '/admin/plans'
     | '/admin/renders'
     | '/api/status'
+    | '/artist/$slug'
     | '/cli/latest.sh'
     | '/docs.md/$'
     | '/docs/$'
@@ -868,6 +903,7 @@ export interface FileRouteTypes {
     | '/newsletter/$number'
     | '/stories/$logId'
     | '/admin/'
+    | '/artists/'
     | '/docs/'
     | '/log/'
     | '/mixtapes/'
@@ -928,11 +964,13 @@ export interface RootRouteChildren {
   SpritesRoute: typeof SpritesRoute
   StatusRoute: typeof StatusRoute
   ApiStatusRoute: typeof ApiStatusRoute
+  ArtistSlugRoute: typeof ArtistSlugRoute
   CliLatestDotshRoute: typeof CliLatestDotshRoute
   DocsDotmdSplatRoute: typeof DocsDotmdSplatRoute
   LogLogIdRoute: typeof LogLogIdRoute
   NewsletterNumberRoute: typeof NewsletterNumberRoute
   StoriesLogIdRoute: typeof StoriesLogIdRoute
+  ArtistsIndexRoute: typeof ArtistsIndexRoute
   LogIndexRoute: typeof LogIndexRoute
   MixtapesIndexRoute: typeof MixtapesIndexRoute
   NewsletterIndexRoute: typeof NewsletterIndexRoute
@@ -1146,6 +1184,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsIndexRouteImport
       parentRoute: typeof DocsRoute
     }
+    '/artists/': {
+      id: '/artists/'
+      path: '/artists'
+      fullPath: '/artists/'
+      preLoaderRoute: typeof ArtistsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/': {
       id: '/admin/'
       path: '/'
@@ -1202,6 +1247,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CliLatestDotshRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/artist/$slug': {
+      id: '/artist/$slug'
+      path: '/artist/$slug'
+      fullPath: '/artist/$slug'
+      preLoaderRoute: typeof ArtistSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/status': {
       id: '/api/status'
       path: '/api/status'
@@ -1256,6 +1308,13 @@ declare module '@tanstack/react-router' {
       path: '/clips'
       fullPath: '/admin/clips'
       preLoaderRoute: typeof AdminClipsRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/artists': {
+      id: '/admin/artists'
+      path: '/artists'
+      fullPath: '/admin/artists'
+      preLoaderRoute: typeof AdminArtistsRouteImport
       parentRoute: typeof AdminRouteRoute
     }
     '/api/v1/status': {
@@ -1479,6 +1538,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface AdminRouteRouteChildren {
+  AdminArtistsRoute: typeof AdminArtistsRoute
   AdminClipsRoute: typeof AdminClipsRoute
   AdminFindingsRoute: typeof AdminFindingsRoute
   AdminLoginRoute: typeof AdminLoginRoute
@@ -1491,6 +1551,7 @@ interface AdminRouteRouteChildren {
 }
 
 const AdminRouteRouteChildren: AdminRouteRouteChildren = {
+  AdminArtistsRoute: AdminArtistsRoute,
   AdminClipsRoute: AdminClipsRoute,
   AdminFindingsRoute: AdminFindingsRoute,
   AdminLoginRoute: AdminLoginRoute,
@@ -1543,11 +1604,13 @@ const rootRouteChildren: RootRouteChildren = {
   SpritesRoute: SpritesRoute,
   StatusRoute: StatusRoute,
   ApiStatusRoute: ApiStatusRoute,
+  ArtistSlugRoute: ArtistSlugRoute,
   CliLatestDotshRoute: CliLatestDotshRoute,
   DocsDotmdSplatRoute: DocsDotmdSplatRoute,
   LogLogIdRoute: LogLogIdRoute,
   NewsletterNumberRoute: NewsletterNumberRoute,
   StoriesLogIdRoute: StoriesLogIdRoute,
+  ArtistsIndexRoute: ArtistsIndexRoute,
   LogIndexRoute: LogIndexRoute,
   MixtapesIndexRoute: MixtapesIndexRoute,
   NewsletterIndexRoute: NewsletterIndexRoute,

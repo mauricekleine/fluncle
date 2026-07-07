@@ -14,12 +14,13 @@ describe("buildSitemapXml (sitemap enumeration)", () => {
     expect(xml).toContain("<loc>https://www.fluncle.com/</loc>");
     expect(xml).toContain("<loc>https://www.fluncle.com/log</loc>");
     expect(xml).toContain("<loc>https://www.fluncle.com/mixtapes</loc>");
+    expect(xml).toContain("<loc>https://www.fluncle.com/artists</loc>");
     expect(xml).toContain("<loc>https://www.fluncle.com/about</loc>");
     expect(xml).toContain("<loc>https://www.fluncle.com/privacy</loc>");
     expect(xml).toContain("<loc>https://www.fluncle.com/galaxy</loc>");
     expect(xml).toContain("<loc>https://www.fluncle.com/log/011.6.8K</loc>");
     expect(xml).toContain("<loc>https://www.fluncle.com/log/004.7.2I</loc>");
-    expect(xml.match(/<loc>/g)).toHaveLength(6 + pages.length);
+    expect(xml.match(/<loc>/g)).toHaveLength(7 + pages.length);
   });
 
   it("always includes the /galaxy surface", () => {
@@ -45,7 +46,24 @@ describe("buildSitemapXml (sitemap enumeration)", () => {
     const xml = buildSitemapXml([]);
 
     expect(xml).not.toContain("<lastmod>");
-    expect(xml.match(/<loc>/g)).toHaveLength(6);
+    expect(xml.match(/<loc>/g)).toHaveLength(7);
+  });
+
+  it("appends a <loc> per artist page (thin-gated upstream) with its cover + lastmod", () => {
+    const xml = buildSitemapXml(pages, [
+      {
+        imageLoc: "https://img/dimension.jpg",
+        lastmod: "2026-06-09T00:00:00.000Z",
+        slug: "dimension",
+      },
+      { slug: "sub-focus" },
+    ]);
+
+    expect(xml).toContain("<loc>https://www.fluncle.com/artist/dimension</loc>");
+    expect(xml).toContain("<loc>https://www.fluncle.com/artist/sub-focus</loc>");
+    expect(xml).toContain("<image:loc>https://img/dimension.jpg</image:loc>");
+    // 7 static + 2 findings + 2 artists.
+    expect(xml.match(/<loc>/g)).toHaveLength(7 + pages.length + 2);
   });
 
   it("declares the image + video namespaces on the urlset", () => {

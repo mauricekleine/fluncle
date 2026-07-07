@@ -36,6 +36,11 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   // so the "every public op is converted" check covers it.
   "DELETE /devices/{token}": "deregister_device",
   "DELETE /me/saved-findings/{trackId}": "unsave_private_finding",
+  // The artists domain — contract-only oRPC (Unit 4 of the artist-relationship RFC).
+  // No TanStack route file under /api/v1/artists; oRPC serves these straight off the
+  // registry. Public reads, no auth required.
+  "GET /artists": "list_artists",
+  "GET /artists/{slug}": "get_artist",
   "GET /health": "get_health",
   "GET /me": "get_current_private_user",
   "GET /me/csrf": "get_private_mutation_token",

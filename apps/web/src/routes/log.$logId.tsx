@@ -1,4 +1,5 @@
 import { CaretLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
+import { Fragment } from "react";
 import { Link, createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { siMixcloud, siSoundcloud, siSpotify, siTiktok, siYoutube } from "simple-icons";
@@ -37,6 +38,8 @@ import {
   type TrackListItem,
   type TrackNeighbor,
 } from "@/lib/server/tracks";
+import { getArtistSlugMap } from "@/lib/server/artists";
+import { fold } from "@/lib/server/track-match";
 import { TrackArtwork } from "@/components/track-artwork";
 
 // The standalone log page: one finding's permanent, readable, indexable record
@@ -48,6 +51,9 @@ import { TrackArtwork } from "@/components/track-artwork";
 type LogPageData =
   | {
       status: "found";
+      // Name → slug for the finding's resolved artists — the artist-name links +
+      // the `@id` stamped on the byArtist JSON-LD node (Unit 3).
+      artistSlugs: Record<string, string>;
       newer?: TrackNeighbor;
       older?: TrackNeighbor;
       related: TrackNeighbor[];
@@ -87,13 +93,14 @@ const fetchLogPage = createServerFn({ method: "GET" })
       return { logId: track.logId, status: "moved" };
     }
 
-    const [neighbors, related, similar] = await Promise.all([
+    const [neighbors, related, similar, artistSlugs] = await Promise.all([
       getTrackNeighbors(track),
       getRelatedTracks(track),
       getSimilarFindings(track.logId),
+      getArtistSlugMap(track.trackId),
     ]);
 
-    return { ...neighbors, related, similar, status: "found", track };
+    return { ...neighbors, artistSlugs, related, similar, status: "found", track };
   });
 
 // Typed helper outside the route options: an inline head() that reads
@@ -165,14 +172,14 @@ function logHead(loaderData: LogPageData | undefined) {
     };
   }
 
-  const { track } = loaderData;
+  const { artistSlugs, track } = loaderData;
   const logId = track.logId as string;
   const media = trackMedia(logId);
   const pageUrl = logPageUrl(logId);
   const title = `${logId} · ${artistTitleLine(track)} · Fluncle`;
   const description = definitionalSentences({ ...track, logId });
   const imageUrl = spotifyAlbumImageAtSize(track.albumImageUrl, "large") ?? media.coverUrl;
-  const recording = musicRecordingJsonLd({ ...track, logId }, imageUrl);
+  const recording = musicRecordingJsonLd({ ...track, artistSlugs, logId }, imageUrl);
   // The social card: the per-finding OG image (the poster frame + treatment),
   // versioned by `updatedAt` so a re-enriched finding re-renders (the /api/og
   // response is immutable + edge-cached). The JSON-LD `image` above stays the
@@ -277,7 +284,7 @@ function LogPage() {
     return null;
   }
 
-  const { newer, older, related, similar, track } = data;
+  const { artistSlugs, newer, older, related, similar, track } = data;
   const logId = track.logId as string;
   const { sector, tail } = splitLogId(logId);
 
@@ -301,7 +308,24 @@ function LogPage() {
 
         <section aria-label="The finding" className="log-definition">
           <h2 className="log-track-title">{track.title}</h2>
-          <p className="log-track-artist">{track.artists.join(", ")}</p>
+          <p className="log-track-artist">
+            {track.artists.map((artist, index) => {
+              const slug = artistSlugs[fold(artist)];
+
+              return (
+                <Fragment key={artist}>
+                  {index > 0 ? ", " : null}
+                  {slug ? (
+                    <Link className="log-artist-link" params={{ slug }} to="/artist/$slug">
+                      {artist}
+                    </Link>
+                  ) : (
+                    artist
+                  )}
+                </Fragment>
+              );
+            })}
+          </p>
           <p className="log-definition-prose">{definitionalProse({ ...track, logId })}</p>
         </section>
 

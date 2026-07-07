@@ -10,6 +10,7 @@ import {
   PulseIcon,
   SignOutIcon,
   SquaresFourIcon,
+  UsersThreeIcon,
   VinylRecordIcon,
 } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
@@ -50,6 +51,7 @@ import { listTracks } from "@/lib/server/tracks";
 
 /** A sidebar entry's key. A page passes the entry it OWNS as `current`. */
 export type AdminNavCurrent =
+  | "artists"
   | "clips"
   | "dashboard"
   | "findings"
@@ -97,6 +99,7 @@ const OBJECT_ENTRIES: NavEntry[] = [
     label: "Renders",
     to: "/admin/renders",
   },
+  { icon: UsersThreeIcon, key: "artists", label: "Artists", to: "/admin/artists" },
   { icon: ListNumbersIcon, key: "plans", label: "Plans", to: "/admin/plans" },
   { icon: FilmSlateIcon, key: "recordings", label: "Recordings", to: "/admin/clips" },
   { icon: CassetteTapeIcon, key: "mixtapes", label: "Mixtapes", to: "/admin/plans" },

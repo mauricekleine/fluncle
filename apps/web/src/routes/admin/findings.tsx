@@ -34,6 +34,7 @@ import { Badge } from "@fluncle/ui/components/badge";
 import { Button } from "@fluncle/ui/components/button";
 import { Dialog, DialogContent } from "@fluncle/ui/components/dialog";
 import { isAdminRequest } from "@/lib/server/admin-auth";
+import { listArtistFollowsForTracks } from "@/lib/server/artists";
 import { listBackfillRanForTracks, listLastfmLovedForTracks } from "@/lib/server/backfill";
 import { readCaptions } from "@/lib/server/captions";
 import { listMixtapeMembershipsForTracks } from "@/lib/server/mixtapes";
@@ -179,6 +180,7 @@ const fetchBoard = createServerFn({ method: "GET" })
       lastfmRan,
       lastfmLoved,
       noteRan,
+      artistFollows,
     ] = await Promise.all([
       listSocialPostsForTracks(trackIds),
       listMixtapeMembershipsForTracks(trackIds),
@@ -189,6 +191,8 @@ const fetchBoard = createServerFn({ method: "GET" })
       listBackfillRanForTracks(trackIds, "lastfm"),
       listLastfmLovedForTracks(trackIds),
       listBackfillRanForTracks(trackIds, "note"),
+      // The artist Spotify/YouTube follow state (Epic B) — the automated-socials cell.
+      listArtistFollowsForTracks(trackIds),
     ]);
 
     return {
@@ -196,6 +200,7 @@ const fetchBoard = createServerFn({ method: "GET" })
       totalCount: page.totalCount,
       tracks: page.tracks.map((track) => ({
         ...track,
+        artistFollows: artistFollows.get(track.trackId) ?? [],
         discogsRan: discogsRan.has(track.trackId),
         hasContextNote: contextNotes.has(track.trackId),
         hasEmbedding: embeddings.has(track.trackId),

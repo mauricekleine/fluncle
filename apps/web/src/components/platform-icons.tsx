@@ -1,4 +1,4 @@
-import { siInstagram, siMixcloud, siTiktok, siYoutube } from "simple-icons";
+import { siInstagram, siMixcloud, siSpotify, siTiktok, siYoutube } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
 
 // Platform logo components — the OFFICIAL brand marks from simple-icons, wrapped to
@@ -27,4 +27,8 @@ export function InstagramIcon({ className }: PlatformIconProps) {
 
 export function MixcloudIcon({ className }: PlatformIconProps) {
   return <BrandIcon className={className} icon={siMixcloud} />;
+}
+
+export function SpotifyIcon({ className }: PlatformIconProps) {
+  return <BrandIcon className={className} icon={siSpotify} />;
 }

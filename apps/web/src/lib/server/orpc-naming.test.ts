@@ -47,6 +47,8 @@ const APPROVED_VERBS = new Set<string>([
   // The convention's named non-CRUD action set.
   "authorize",
   "backfill",
+  // `resolve` — resolve an artist's social profiles from MB + Firecrawl (the artist-relationship epic).
+  "resolve",
   // `capture` (recover the public YouTube/TikTok post URLs Postiz withholds on
   // create, building each from the platform's native content id) — added
   // deliberately with the `capture_post_urls` sweep.
@@ -87,9 +89,17 @@ const APPROVED_VERBS = new Set<string>([
   "announce",
   "approve",
   "collect",
+  // `confirm` (promote a candidate artist social to `confirmed`, letting it onto the
+  // public artist page) — added deliberately with the artist-relationship `confirm_artist_social`
+  // op. The operator's one-tap trust gate; distinct from `update` (edit a field).
+  "confirm",
   "context",
   "deregister",
   "exchange",
+  // `follow` (champion a featured artist — follow them across Spotify + YouTube) — added
+  // deliberately with the artist-relationship `follow_artist` sweep. A genuinely new
+  // outward action verb, the automated half of the championing motion.
+  "follow",
   "export",
   "initiate",
   "merge",
@@ -104,6 +114,10 @@ const APPROVED_VERBS = new Set<string>([
   "record",
   "register",
   "reject",
+  // `remove` (drop one of an artist's social links inline in the follow queue) — added
+  // deliberately with the artist-relationship `remove_artist_social` op. The delete-a-
+  // sub-row sibling of `add_artist_social`; distinct from `delete` (drop a whole entity).
+  "remove",
   // `replace` (transactionally swap a recording's WHOLE cue set for a new ordered one)
   // — added deliberately with the `replace_recording_cues` op (the Wave-3 Rekordbox
   // derivation write target). Distinct from `set_*` (re-time an existing set) and

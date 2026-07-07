@@ -190,6 +190,12 @@ type BackfillSyncOptions = {
   limit?: string;
 };
 
+type ArtistResolveOptions = {
+  json: boolean;
+  limit?: string;
+  queue?: boolean;
+};
+
 type MixtapeUpdateOptions = {
   durationMs?: string;
   json: boolean;
@@ -302,6 +308,16 @@ function addListenCommands(program: Command): void {
     .action(async (options: RecentOptions) => {
       const { recentCommand } = await import("./commands/recent");
       await runRecent(options, recentCommand);
+    });
+
+  program
+    .command("artists")
+    .description("Browse artists in Fluncle's archive")
+    .argument("[slug]", "Artist slug — omit for the full list")
+    .option("--json", "Print JSON", false)
+    .action(async (slug: string | undefined, options: JsonOptions) => {
+      const { artistsListCommand, artistsGetCommand } = await import("./commands/artists");
+      await runArtists(slug, options, { artistsGetCommand, artistsListCommand });
     });
 
   program
@@ -1306,6 +1322,32 @@ function addAdminCommands(program: Command): void {
     });
 
   // `backfill_*` ops → plural `backfills` group (Convention B).
+  // `admin artists` — the artist-relationship epic's agent-tier commands. Today: the
+  // championing motion's auto-follow sweep (Epic B, Unit 5), driven by the on-box
+  // `fluncle-artist-follow` cron.
+  const artists = configureCommand(
+    admin.command("artists").description("Artist entity + championing commands"),
+  );
+
+  artists.action(() => {
+    artists.outputHelp();
+  });
+
+  artists
+    .command("follow")
+    .description("Auto-follow high-confidence artists on Spotify + YouTube (drains the queue)")
+    .option("--dry-run", "Report who WOULD be followed without calling the platforms", false)
+    // Default kept low on purpose: a YouTube `subscriptions.insert` costs 50 units against a
+    // 200/day quota (~4 inserts/day), so a manual run must not drain a big backlog in one go.
+    // The on-box cron paces itself (BATCH_CAP=20, every 6h); the server-side daily guard in
+    // followPendingArtists is the real ceiling regardless of what --limit is passed here.
+    .option("--limit <limit>", "Max artists to follow this run", "20")
+    .option("--json", "Print JSON", false)
+    .action(async (options: BackfillSyncOptions) => {
+      const { followArtistsCommand } = await import("./commands/admin-artists");
+      await runFollowArtists(options, followArtistsCommand);
+    });
+
   const backfill = configureCommand(
     admin.command("backfills").description("Backfill operator-only archives"),
   );
@@ -1366,6 +1408,35 @@ function addAdminCommands(program: Command): void {
     .action(async (options: BackfillSyncOptions) => {
       const { backfillArtistsCommand } = await import("./commands/admin-artists");
       await runBackfillArtists(options, backfillArtistsCommand);
+    });
+
+  // `list_artists` + `resolve_artist` → `admin artists resolve` (Convention B). The
+  // on-box `fluncle-artist-sweep` cron drives BOTH modes: `--queue` reads the resolve
+  // worklist (artists awaiting resolution), and `resolve <artistId>` triggers the
+  // Worker's MB url-rels walk + Firecrawl /v2/extract gap-fill for one artist.
+  artists
+    .command("resolve")
+    .description("Resolve an artist's social identity (MB url-rels + Firecrawl gap-fill)")
+    .argument("[artistId]")
+    .option(
+      "--queue",
+      "Show the resolve worklist (artists awaiting resolution), oldest first",
+      false,
+    )
+    .option("--limit <limit>", "Number of artists to show with --queue", "50")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (artistId: string | undefined, options: ArtistResolveOptions) => {
+      // `--queue` is the resolve worklist view (artists awaiting resolution) — the
+      // sweep's worklist. Otherwise resolve one artist's social identity.
+      if (options.queue) {
+        const { listArtistsCommand } = await import("./commands/admin-artists");
+        await runArtistResolveQueue(options, listArtistsCommand);
+        return;
+      }
+
+      const { resolveArtistCommand } = await import("./commands/admin-artists");
+      await runArtistResolve(artistId, options, resolveArtistCommand);
     });
 }
 
@@ -1755,6 +1826,133 @@ async function runBackfillArtists(
 
   for (const item of failed) {
     console.log(`  ${item.logId}: ${item.error}`);
+  }
+}
+
+// `admin artists resolve --queue`: the resolve worklist (artists awaiting social
+// resolution, oldest first). One bounded page — the sweep reads this, then resolves
+// each row. `--limit` caps the page (server-clamped to 50).
+async function runArtistResolveQueue(
+  options: ArtistResolveOptions,
+  listArtistsCommand: typeof import("./commands/admin-artists").listArtistsCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const result = await listArtistsCommand(limit ?? 50);
+
+  if (options.json) {
+    printJson({ artists: result.artists, ok: true });
+    return;
+  }
+
+  if (result.artists.length === 0) {
+    console.log("Every artist has been resolved. Nothing waiting on the sweep.");
+    return;
+  }
+
+  const noun = result.artists.length === 1 ? "artist" : "artists";
+  console.log(`${result.artists.length} ${noun} awaiting resolution, oldest first:`);
+
+  for (const artist of result.artists) {
+    console.log(`  ${artist.id}  ${artist.name}`);
+  }
+}
+
+// `admin artists resolve <artistId>`: trigger the Worker's social resolution for one
+// artist (MB url-rels walk + Firecrawl gap-fill). The sweep loops this over the queue.
+async function runArtistResolve(
+  artistId: string | undefined,
+  options: ArtistResolveOptions,
+  resolveArtistCommand: typeof import("./commands/admin-artists").resolveArtistCommand,
+): Promise<void> {
+  if (!artistId) {
+    throw new Error("Usage: fluncle admin artists resolve <artist_id> [--json]");
+  }
+
+  const result = await resolveArtistCommand(artistId);
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  if (result.rateLimited) {
+    console.log(
+      `MusicBrainz throttled the walk for ${artistId}. The sweep will swing back around.`,
+    );
+    return;
+  }
+
+  const mbid = result.mbid ?? "(no MusicBrainz match)";
+  const noun = result.socialsCount === 1 ? "social" : "socials";
+  console.log(`Resolved ${artistId}: mbid=${mbid}, ${result.socialsCount} ${noun}.`);
+
+  for (const social of result.socials) {
+    console.log(`  ${social.platform} (${social.source}): ${social.url}`);
+  }
+
+  if (result.wikidataQid) {
+    console.log(`  wikidata: ${result.wikidataQid}`);
+  }
+}
+
+async function runFollowArtists(
+  options: BackfillSyncOptions,
+  followArtistsCommand: typeof import("./commands/admin-artists").followArtistsCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const followed: Array<{ artistName: string; platform: string; socialId: string }> = [];
+  const failed: Array<{ error: string; platform: string; socialId: string }> = [];
+  let dryRun = options.dryRun;
+  let remaining = 0;
+
+  // The op self-drains a bounded batch per call and reports `remaining`; loop until it's
+  // 0 (or we hit the run's `--limit`). A dry run resolves nothing, so it loops once.
+  while (followed.length + failed.length < limit) {
+    const batchLimit = Math.min(50, limit - (followed.length + failed.length));
+    const result = await followArtistsCommand(batchLimit, options.dryRun);
+    dryRun = result.dryRun;
+    remaining = result.remaining;
+    followed.push(...result.followed);
+    failed.push(...result.failed);
+
+    if (!options.json) {
+      const verb = result.dryRun ? "would follow" : "followed";
+      console.log(
+        `  …${verb} ${result.followedCount}; ${result.failedCount} failed; ${result.remaining} remaining`,
+      );
+    }
+
+    // Stop when the queue is drained, a dry run (writes nothing, so `remaining` never
+    // moves), or the batch did no real work (all failures) to avoid a hot loop.
+    if (remaining === 0 || result.dryRun || result.followedCount === 0) {
+      break;
+    }
+  }
+
+  if (options.json) {
+    printJson({
+      dryRun,
+      failed,
+      failedCount: failed.length,
+      followed,
+      followedCount: followed.length,
+      ok: true,
+      remaining,
+    });
+    return;
+  }
+
+  const verb = dryRun ? "Would follow" : "Followed";
+  console.log(
+    `${verb} ${followed.length} artist(s); ${failed.length} failed; ${remaining} remaining.`,
+  );
+
+  for (const item of followed) {
+    console.log(`  ${item.platform}: ${item.artistName}`);
+  }
+
+  for (const item of failed) {
+    console.log(`  ${item.platform} ${item.socialId}: ${item.error}`);
   }
 }
 
@@ -2599,6 +2797,51 @@ async function runRecent(
 
   const { trackRows } = await import("./format");
   console.log(trackRows(tracks).join("\n"));
+}
+
+async function runArtists(
+  slug: string | undefined,
+  options: JsonOptions,
+  commands: {
+    artistsGetCommand: typeof import("./commands/artists").artistsGetCommand;
+    artistsListCommand: typeof import("./commands/artists").artistsListCommand;
+  },
+): Promise<void> {
+  if (slug) {
+    const artist = await commands.artistsGetCommand(slug);
+
+    if (options.json) {
+      printJson({ artist, ok: true });
+      return;
+    }
+
+    console.log(`${artist.name}  (${artist.slug})`);
+    console.log(`Findings: ${artist.findingCount}`);
+
+    if (artist.spotifyUrl) {
+      console.log(`Spotify: ${artist.spotifyUrl}`);
+    }
+
+    return;
+  }
+
+  const artists = await commands.artistsListCommand();
+
+  if (options.json) {
+    printJson({ artists, ok: true });
+    return;
+  }
+
+  if (artists.length === 0) {
+    console.log("No artists in the archive yet.");
+    return;
+  }
+
+  for (const a of artists) {
+    console.log(
+      `${a.name.padEnd(40)} ${String(a.findingCount).padStart(3)} finding${a.findingCount === 1 ? "" : "s"}`,
+    );
+  }
 }
 
 async function runMixtapes(

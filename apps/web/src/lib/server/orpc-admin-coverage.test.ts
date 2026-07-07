@@ -42,6 +42,9 @@ const PENDING = "__pending__" as const;
 // every route maps to its canonical converted op; the PENDING sentinel is retained
 // for future admin routes (a new route lands here as PENDING until it converts).
 const ADMIN_ROUTE_OPS: Record<string, string> = {
+  // The `/admin/artists` follow queue's inline remove (Unit 5, Epic B) — contract-only
+  // oRPC (no TanStack route file; oRPC owns the path directly). Operator tier.
+  "DELETE /admin/artists/socials/{socialId}": "remove_artist_social",
   // The Fluncle Studio clip ops: clip CRUD +
   // the hardened post-publish cue backfill. `list_clips` is admin tier
   // (agent-allowed read); the writes are operator tier.
@@ -58,6 +61,15 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // clip-cut cron resolves a recording); the writes + `promote` (mints a coordinate) are
   // operator tier.
   "DELETE /admin/recordings/{recordingId}": "delete_recording",
+  // The artist-relationship RFC ops (Unit 2.1). `list_unresolved_artists` (the resolve
+  // worklist) + `resolve_artist` are agent tier (the box's `fluncle-artist-sweep` cron
+  // drives both with its agent-scoped token); `backfill_artists` (Unit 1) is agent tier too.
+  "GET /admin/artists": "list_unresolved_artists",
+  // The artist follow queue read (Unit 5, Epic B) — contract-only oRPC (no TanStack
+  // route file). Admin tier (agent-allowed); the operator's follow-queue station reads it.
+  // `list_artist_socials` matches the public `list_` prefix so the "holds exactly" check
+  // skips it; it lives here for completeness.
+  "GET /admin/artists/socials": "list_artist_socials",
   "GET /admin/clips": "list_clips",
   // Every clip's Instagram drip-feed row (schedule + status) — contract-only oRPC (no
   // TanStack route file). Admin tier (agent-allowed read); the clip library / CLI merge
@@ -100,6 +112,18 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "PATCH /admin/recordings/{recordingId}": "update_recording",
   "PATCH /admin/tracks/{trackId}": "update_track",
   "PATCH /admin/tracks/{trackId}/social/{platform}": "update_track_social",
+  // The championing motion (Unit 5, Epic B) — all contract-only oRPC (no TanStack route
+  // files; oRPC owns the paths directly). `follow` is agent tier (the on-box
+  // `fluncle-artist-follow` cron auto-follows); the per-social register/confirm/add are
+  // operator tier (the queue's manual motion).
+  "POST /admin/artists/follow": "follow_artist",
+  "POST /admin/artists/socials/{socialId}/confirm": "confirm_artist_social",
+  "POST /admin/artists/socials/{socialId}/follow": "record_operator_follow",
+  // The artist social-identity resolution (Unit 2.1 of the artist-relationship RFC) —
+  // contract-only oRPC (no TanStack route file; oRPC owns the path directly).
+  // Agent tier: the box's `fluncle-artist-sweep` cron drives it with its agent token.
+  "POST /admin/artists/{artistId}/resolve": "resolve_artist",
+  "POST /admin/artists/{artistId}/socials": "add_artist_social",
   // The artist-entity backfill (Unit 1 of the artist-relationship RFC) —
   // contract-only oRPC (no TanStack route file; oRPC owns the path directly).
   // Agent tier: the box's `fluncle-artist-backfill` cron drives it with its agent token.
