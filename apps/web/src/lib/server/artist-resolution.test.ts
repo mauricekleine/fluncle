@@ -45,9 +45,10 @@ describe("classifyMbUrl", () => {
     expect(classifyMbUrl("https://open.spotify.com/artist/abc")).toBe("spotify");
   });
 
-  it("classifies YouTube channel URLs", () => {
+  it("classifies YouTube channel URLs (including music.youtube.com)", () => {
     expect(classifyMbUrl("https://www.youtube.com/channel/UCxxx")).toBe("youtube");
     expect(classifyMbUrl("https://youtube.com/@handle")).toBe("youtube");
+    expect(classifyMbUrl("https://music.youtube.com/channel/UCxxx")).toBe("youtube");
   });
 
   it("classifies SoundCloud URLs", () => {
@@ -93,8 +94,20 @@ describe("classifyMbUrl", () => {
     expect(classifyMbUrl("not-a-url")).toBeNull();
   });
 
-  it("classifies an artist's own homepage as homepage", () => {
-    expect(classifyMbUrl("https://artist.com")).toBe("homepage");
+  it("classifies an artist's own homepage as homepage only when relType is 'official homepage'", () => {
+    expect(classifyMbUrl("https://artist.com", "official homepage")).toBe("homepage");
+  });
+
+  it("returns null for homepage-looking URLs without the 'official homepage' relType", () => {
+    expect(classifyMbUrl("https://artist.com")).toBeNull();
+    expect(classifyMbUrl("https://artist.com", "wikipedia")).toBeNull();
+    expect(classifyMbUrl("https://artist.com", "streaming music")).toBeNull();
+  });
+
+  it("returns null for Wikipedia/VIAF/IMDb URLs regardless of relType", () => {
+    expect(classifyMbUrl("https://en.wikipedia.org/wiki/ArtistName", "wikipedia")).toBeNull();
+    expect(classifyMbUrl("https://viaf.org/viaf/12345", "VIAF")).toBeNull();
+    expect(classifyMbUrl("https://www.imdb.com/name/nm1234567/", "IMDb")).toBeNull();
   });
 });
 
@@ -374,6 +387,7 @@ describe("resolveGapViaFirecrawl (Firecrawl /v2/extract gap-fill)", () => {
     const result = await resolveGapViaFirecrawl(
       "Dimension",
       "https://open.spotify.com/artist/abc",
+      null,
       missing,
     );
 
@@ -401,7 +415,7 @@ describe("resolveGapViaFirecrawl (Firecrawl /v2/extract gap-fill)", () => {
       },
     ]);
 
-    const result = await resolveGapViaFirecrawl("Dimension", null, new Set(["tiktok"]));
+    const result = await resolveGapViaFirecrawl("Dimension", null, "mb-dim-1", new Set(["tiktok"]));
 
     expect(result).toHaveLength(1);
     expect(result[0]?.url).toBe("https://www.tiktok.com/@dimension");
@@ -409,7 +423,15 @@ describe("resolveGapViaFirecrawl (Firecrawl /v2/extract gap-fill)", () => {
 
   it("returns empty when no gap platforms are requested", async () => {
     const { calls } = mockFetch([]);
-    const result = await resolveGapViaFirecrawl("Dimension", null, new Set());
+    const result = await resolveGapViaFirecrawl("Dimension", null, null, new Set());
+
+    expect(result).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("returns empty when neither spotify URL nor mbid is present (no anchor)", async () => {
+    const { calls } = mockFetch([]);
+    const result = await resolveGapViaFirecrawl("Dimension", null, null, new Set(["tiktok"]));
 
     expect(result).toHaveLength(0);
     expect(calls).toHaveLength(0);
@@ -418,7 +440,7 @@ describe("resolveGapViaFirecrawl (Firecrawl /v2/extract gap-fill)", () => {
   it("returns empty when Firecrawl key is absent", async () => {
     delete process.env.FIRECRAWL_API_KEY;
     const { calls } = mockFetch([]);
-    const result = await resolveGapViaFirecrawl("Dimension", null, new Set(["tiktok"]));
+    const result = await resolveGapViaFirecrawl("Dimension", null, "mb-dim-1", new Set(["tiktok"]));
 
     expect(result).toHaveLength(0);
     expect(calls).toHaveLength(0);
@@ -432,7 +454,7 @@ describe("resolveGapViaFirecrawl (Firecrawl /v2/extract gap-fill)", () => {
       },
     ]);
 
-    const result = await resolveGapViaFirecrawl("Dimension", null, new Set(["tiktok"]));
+    const result = await resolveGapViaFirecrawl("Dimension", null, "mb-dim-1", new Set(["tiktok"]));
 
     expect(result).toHaveLength(0);
   });
@@ -445,7 +467,7 @@ describe("resolveGapViaFirecrawl (Firecrawl /v2/extract gap-fill)", () => {
       },
     ]);
 
-    const result = await resolveGapViaFirecrawl("Dimension", null, new Set(["tiktok"]));
+    const result = await resolveGapViaFirecrawl("Dimension", null, "mb-dim-1", new Set(["tiktok"]));
 
     expect(result).toHaveLength(0);
   });
@@ -461,7 +483,7 @@ describe("resolveGapViaFirecrawl (Firecrawl /v2/extract gap-fill)", () => {
       },
     ]);
 
-    const result = await resolveGapViaFirecrawl("Dimension", null, new Set(["tiktok"]));
+    const result = await resolveGapViaFirecrawl("Dimension", null, "mb-dim-1", new Set(["tiktok"]));
 
     expect(result).toHaveLength(0);
   });

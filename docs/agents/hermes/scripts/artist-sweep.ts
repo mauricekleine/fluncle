@@ -56,7 +56,7 @@ type ResolveResult = {
   socialsCount?: number;
 };
 
-type Outcome = "resolved" | "noop" | "failed";
+type Outcome = "resolved" | "noop" | "failed" | "rateLimited";
 
 // ---------------------------------------------------------------------------
 // Shell helper
@@ -103,8 +103,8 @@ function resolveOne(artist: QueueArtist): Outcome {
   const result = fluncleJson<ResolveResult>(["admin", "artists", "resolve", id]);
 
   if (result.rateLimited) {
-    log(`${label}: MB rate-limited — will retry next tick`);
-    return "failed";
+    log(`${label}: MB rate-limited — stopping batch, will retry next tick`);
+    return "rateLimited";
   }
 
   if (!result.ok) {
@@ -157,6 +157,9 @@ function main(): void {
         summary.resolved += 1;
       } else if (outcome === "noop") {
         summary.noop += 1;
+      } else if (outcome === "rateLimited") {
+        summary.failed += 1;
+        break; // MB is throttling — stop hammering, let remaining artists stay queued
       } else {
         summary.failed += 1;
       }
