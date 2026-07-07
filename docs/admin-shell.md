@@ -16,7 +16,7 @@ One home per kind of control. Put each control in its slot and nowhere else.
 
 ## The nav model
 
-The sidebar is a flat object nav: Dashboard, then the objects in pipeline order (Findings, Plans, Recordings, Mixtapes, Clips, Newsletter), then System. Dashboard owns `/admin` — the attention queue (docs/cockpit-roadmap.md "The queue"): every action the system needs as a row, zero rows the success state, snooze/won't-do persisted client-side (one operator, one browser — a localStorage map, since a server column could not see this browser's working set). Findings owns `/admin/findings`, the pipeline board (the queue's deep-link target for the publish loop; the board's `?stage`/`?mix` deep-links survive — old `/admin?stage=…` links redirect). An entry whose station doesn't exist yet points at the best current home for that object and stays unlit there; it lights only on the page that declares it as owner. Count badges carry live, cheap, honest server counts (a scoped `COUNT` per number); a number that can only be estimated stays off the rail.
+The sidebar is a flat object nav: Dashboard, then the objects in pipeline order (Findings, Plans, Recordings, Mixtapes, Clips, Newsletter), then System. Dashboard owns `/admin` — the attention queue (docs/planning/cockpit-roadmap.md "The queue"): every action the system needs as a row, zero rows the success state, snooze/won't-do persisted client-side (one operator, one browser — a localStorage map, since a server column could not see this browser's working set). Findings owns `/admin/findings`, the pipeline board (the queue's deep-link target for the publish loop; the board's `?stage`/`?mix` deep-links survive — old `/admin?stage=…` links redirect). An entry whose station doesn't exist yet points at the best current home for that object and stays unlit there; it lights only on the page that declares it as owner. Count badges carry live, cheap, honest server counts (a scoped `COUNT` per number); a number that can only be estimated stays off the rail.
 
 ## Auth
 
@@ -25,7 +25,7 @@ One identity, two carriers: the CLI and agents send `FLUNCLE_API_TOKEN` as a `Be
 ## The chrome gate
 
 - Admin UI ships through the impeccable flow (`shape` → build → `audit`) and honors DESIGN.md, PRODUCT.md, and VOICE.md.
-- Chrome is actions, data, and artwork (docs/cockpit-roadmap.md, the design doctrine). Every element is an action, a datum, or cover art.
+- Chrome is actions, data, and artwork (docs/planning/cockpit-roadmap.md, the design doctrine). Every element is an action, a datum, or cover art.
 - Components come from `@fluncle/ui` Shadcn exports. A missing component is added with `bunx --bun shadcn@latest add <component>` inside `packages/ui`, then aligned with the canon tokens.
 - Interface icons come from Phosphor (regular idle, fill active); platform marks from `simple-icons` via `BrandIcon`.
 - WCAG AA contrast, keyboard reach for every control, and reduced-motion fallbacks are part of done.

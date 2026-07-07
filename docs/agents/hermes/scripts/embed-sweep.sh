@@ -4,7 +4,7 @@
 # LIVE. Version-controlled source; the repo is canonical and the box is a deploy
 # target (fluncle-hermes-operator skill). This pair (+ embed-track.py) is deployed to
 # ~/.hermes/scripts/ on the devbox and the cron is wired there. See ../cron/README.md
-# and docs/audio-embedding-rfc.md.
+# and docs/rfcs/audio-embedding-rfc.md.
 #
 # Why a .sh that execs a .ts: the Hermes `--no-agent --script` runner dispatches by
 # extension — bash for `.sh`/`.bash`, Python for everything else — so a bare `.ts`

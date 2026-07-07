@@ -370,6 +370,24 @@
         },
         {
           domain: "intake-enrichment",
+          order_hint: "52",
+          job: "Capture a finding's full song (private)",
+          status: "partial",
+          trigger: "cron:fluncle-capture",
+          executor: "system",
+          runs_on: "rave-02;cloudflare",
+          input: "the finding's artists/title/durationMs",
+          output:
+            "full song in the PRIVATE fluncle-source-audio R2 bucket + source_audio_key/capture_status on the row",
+          surfaces: "cli-admin;box-script;api",
+          primary_surface: "api",
+          drop_from: "",
+          tests: "yes",
+          notes:
+            "capture-sweep.{sh,ts} run by a rave-02 HOST systemd timer (5m; docs/agents/hermes/capture-timer/ — NOT a gateway cron: a proxied yt-dlp fetch has an unbounded tail that would starve the 5-min sweeps) → yt-dlp via a residential STICKY-session proxy → duration-guard (±3s/±3% of durationMs, else unmatched) → S3-direct PUT to the private fluncle-source-audio bucket at <logId>/<sha>.<ext> → agent-tier update_track (capture_status/source_audio_key); NON-BLOCKING side-channel (never gates enrich/embed); queue = capture_status pending∪NULL + backed-off failed (cooldown + max-failures cap) newest-first (captureQueue filter); on done, clobber-safe enrich re-queue only when BPM null/missing; box deploy (yt-dlp+ffprobe+creds) operator-gated; capture-queue.test.ts + orpc-admin-tracks.test.ts + capture-sweep.test.ts; docs/rfcs/full-audio-rfc.md § Unit 1",
+        },
+        {
+          domain: "intake-enrichment",
           order_hint: "45",
           job: "Embed a track (MuQ)",
           status: "partial",
@@ -864,7 +882,7 @@
           drop_from: "web-admin;helm(frozen)",
           tests: "none",
           notes:
-            "cockpit-roadmap.md 'the desk push'; capability LIVE today via push-dialog.tsx; 5-drafts/24h warning; Phase-3 port deletes the web desk counterpart at parity",
+            "docs/planning/cockpit-roadmap.md 'the desk push'; capability LIVE today via push-dialog.tsx; 5-drafts/24h warning; Phase-3 port deletes the web desk counterpart at parity",
         },
         {
           domain: "curation-posting",
@@ -882,7 +900,7 @@
           drop_from: "",
           tests: "none",
           notes:
-            "cockpit-roadmap.md 'the phone finish' — the one admin surface built for the phone, stays on web; TODAY PushDialog serves it responsively; DESIRED adds the title+artist sound-search string (absent today) + cover-save-to-camera-roll",
+            "docs/planning/cockpit-roadmap.md 'the phone finish' — the one admin surface built for the phone, stays on web; TODAY PushDialog serves it responsively; DESIRED adds the title+artist sound-search string (absent today) + cover-save-to-camera-roll",
         },
         {
           domain: "curation-posting",
@@ -900,7 +918,7 @@
           drop_from: "helm(frozen)",
           tests: "none",
           notes:
-            "cockpit-roadmap.md 'one daily digest nudge'; today's 18h osascript nudge (scheduler.ts) is the seed; only true deadlines earn an individual push; future web/telegram",
+            "docs/planning/cockpit-roadmap.md 'one daily digest nudge'; today's 18h osascript nudge (scheduler.ts) is the seed; only true deadlines earn an individual push; future web/telegram",
         },
         {
           domain: "curation-posting",
@@ -1171,7 +1189,7 @@
           drop_from: "",
           tests: "none",
           notes:
-            "cockpit-roadmap.md queue source 'Unreviewed renders' NEEDS NEW STATE; LLM taste judge was dropped; neither column exists today",
+            "docs/planning/cockpit-roadmap.md queue source 'Unreviewed renders' NEEDS NEW STATE; LLM taste judge was dropped; neither column exists today",
         },
         {
           domain: "mixtape-lifecycle",
@@ -1896,7 +1914,7 @@
           drop_from: "helm(frozen)",
           tests: "none",
           notes:
-            "cockpit-roadmap.md Studio lane [Create clip] locally; clipCutFfmpegArgs→@fluncle/contracts; kills box clip-sweep ~15m latency",
+            "docs/planning/cockpit-roadmap.md Studio lane [Create clip] locally; clipCutFfmpegArgs→@fluncle/contracts; kills box clip-sweep ~15m latency",
         },
         {
           domain: "clips-drip",

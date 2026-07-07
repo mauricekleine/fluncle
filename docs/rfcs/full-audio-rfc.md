@@ -1,6 +1,6 @@
 # RFC: Full-song audio capture — a parallel side-channel that upgrades three readers
 
-**Status:** Final (divergent research → /taste → a four-role adversarial panel that verified every claim live → completeness-held, 2026-07-07). Supersedes and absorbs [docs/full-audio-embedding.md](./full-audio-embedding.md).
+**Status:** Final (divergent research → /taste → a four-role adversarial panel that verified every claim live → completeness-held, 2026-07-07). Supersedes and absorbs the earlier `docs/full-audio-embedding.md` (removed from the tree once superseded — see git history).
 **For:** a fresh build session or a team of agents.
 **Canon/authority:** the codebase arbitrates; this is planning, not spec (AGENTS.md: `docs/*-rfc.md` is non-canonical). Where this deviates from the code, the code wins.
 
@@ -12,7 +12,7 @@ Boil the ocean: capture (the host-timer cron + the private bucket + the schema) 
 
 One item remains legitimately **operator-gated, not deferred-as-excuse**: **retiring the `fluncle-bpm-backfill` skill**, gated on _measuring_ the post-capture "unmatched" tail rather than asserted up front (the panel proved full-audio only subsumes it for `capture_status='done'`; the unmatched tail still needs a repair path). The whole-archive **backfill + re-derive is ratified** (2026-07-07 — capture the entire catalogue, paced, in-place, clobber-safe) and ships as part of the delivery, not gated.
 
-The only fully out-of-scope item is **Tier B open-set free-mixing** (the tracklist-free live matcher) — a genuine dependency chain (it needs full-audio + Tier A shipped first) already tracked as a roadmap `Next` item ([docs/ROADMAP.md](./ROADMAP.md), "Live visuals — free mixing without a preloaded tracklist"). This RFC references it as the de-risked follow-on and states its prerequisites; it does not design it.
+The only fully out-of-scope item is **Tier B open-set free-mixing** (the tracklist-free live matcher) — a genuine dependency chain (it needs full-audio + Tier A shipped first) already tracked as a roadmap `Next` item ([docs/planning/ROADMAP.md](../planning/ROADMAP.md), "Live visuals — free mixing without a preloaded tracklist"). This RFC references it as the de-risked follow-on and states its prerequisites; it does not design it.
 
 ## 0. Summary / the reframe
 

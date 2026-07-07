@@ -16,7 +16,7 @@
 // per tick drains the backlog safely.
 //
 // YOUTUBE-ONLY. Spotify is excluded from the auto-follow sweep — its artist-follow endpoint
-// is dev-mode-gated for our app (a permanent 403; see ../../../ROADMAP.md), so Spotify
+// is dev-mode-gated for our app (a permanent 403; see ../../../planning/ROADMAP.md), so Spotify
 // championing runs through the manual /admin/artists queue. Idempotent by construction
 // (`followed_at IS NULL`), acting only on `status IN (auto, confirmed)`. The queue is small
 // most ticks (a no-op when nothing is pending), so the cron is cheap. Mixcloud is CUT to
