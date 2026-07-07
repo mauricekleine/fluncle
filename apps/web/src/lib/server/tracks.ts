@@ -822,6 +822,18 @@ export const ENRICHMENT_STATUS_FILTERS: readonly EnrichmentStatusFilter[] = [
 ];
 
 type ListTracksOptions = {
+  /**
+   * The full-song CAPTURE queue's filter (admin only) — the `fluncle-capture`
+   * cron's worklist. `true` = findings still NEEDING a capture: status-aware so a
+   * terminal `unmatched` (no confident YouTube match) or a `done` capture is never
+   * re-burned. It matches `capture_status` pending ∪ failed ∪ NULL (the NULL arm is
+   * defensive — the column is `notNull().default('pending')`, but a pre-column row
+   * would read NULL — mirroring the `context_status` style at L972-973). This is a
+   * SEPARATE queue: capture never gates the enrich/embed queues (RFC full-audio §
+   * "Capture does NOT gate the analysis queues"). The capture cron pairs it with
+   * `order: "desc"` so a fresh add jumps ahead of the backfill. Omitted for public reads.
+   */
+  captureQueue?: boolean;
   cursor?: TrackCursor;
   /**
    * Context-fetch state (admin only) — the `context_track` queue's filter.
@@ -900,6 +912,7 @@ export function listTracks(
 ): Promise<FeedListPage>;
 export function listTracks(options: ListTracksOptions): Promise<TrackListPage>;
 export async function listTracks({
+  captureQueue,
   cursor,
   hasContext,
   hasEmbedding,
@@ -990,6 +1003,18 @@ export async function listTracks({
     filterClauses.push("(note is not null and trim(note) != '')");
   } else if (hasNote === false) {
     filterClauses.push("(note is null or trim(note) = '')");
+  }
+
+  // The full-song CAPTURE queue: findings still needing a capture — `capture_status`
+  // pending ∪ failed ∪ NULL. Status-aware so a terminal `unmatched` (no confident
+  // match) and a `done` capture are never re-burned. The `capture_status is null` arm
+  // is defensive (the column is `notNull().default('pending')`, but a pre-column row
+  // would read NULL), mirroring the context_status style above. A SEPARATE queue — no
+  // capture predicate is ever added to the enrich/embed queues (capture must not gate
+  // them). The capture cron pairs this with order=desc so a fresh add jumps ahead of
+  // the backfill (RFC full-audio § Unit 1 / 5a).
+  if (captureQueue) {
+    filterClauses.push("(capture_status is null or capture_status in ('pending', 'failed'))");
   }
 
   if (placement === "unplaced") {

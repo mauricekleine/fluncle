@@ -67,6 +67,30 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
+  test("admin tracks capture-audio --queue validates --limit before fetching", async () => {
+    const result = await runCli([
+      "admin",
+      "tracks",
+      "capture-audio",
+      "--queue",
+      "--limit",
+      "0",
+      "--json",
+    ]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
+  });
+
+  test("admin tracks capture-audio requires --queue (a worklist view, no single-track form)", async () => {
+    const result = await runCli(["admin", "tracks", "capture-audio", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("worklist view");
+    expect(result.stderr).toContain("capture-audio --queue");
+  });
+
   test("admin tracks group lists the queue + pipeline subcommands", async () => {
     const tracksHelp = await runCli(["admin", "tracks", "--help"]);
 
@@ -75,6 +99,9 @@ describe("fluncle CLI parsing and JSON output", () => {
     // dash-compound `*-queue` commands). The enrichment sweep itself is the on-box
     // `fluncle-enrich` cron, which reads `tracks enrich --queue` to drain the queue.
     expect(tracksHelp.stdout).toContain("enrich");
+    // The full-song capture worklist verb (named `capture-audio`, not `capture`, to avoid
+    // colliding with `social --capture` / `cron.social-capture`).
+    expect(tracksHelp.stdout).toContain("capture-audio");
     expect(tracksHelp.stdout).not.toContain("enrich-queue");
     expect(tracksHelp.stdout).not.toContain("enrich-sweep");
     expect(tracksHelp.stdout).not.toContain("context-queue");

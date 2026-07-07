@@ -231,6 +231,92 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
     });
   });
 
+  // ── the full-song capture write-back (RFC full-audio § Unit 1) ────────────
+  it("lets the AGENT write the capture fields (analysis, NOT operator-only)", async () => {
+    updateTrack.mockResolvedValueOnce({
+      fields: ["capture_status", "source_audio_key", "source_audio_captured_at"],
+      trackId: TRACK_ID,
+    });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      patch(AGENT_TOKEN, {
+        captureStatus: "done",
+        sourceAudioCapturedAt: "2026-07-07T12:00:00.000Z",
+        sourceAudioKey: "analysis/source/004.7.2I/abc123.opus",
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    // Capture fields are agent-writable machine analysis — the box cron authenticates
+    // with the AGENT token, so they must NOT be in OPERATOR_ONLY_FIELDS (no 403).
+    expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, {
+      captureStatus: "done",
+      sourceAudioCapturedAt: "2026-07-07T12:00:00.000Z",
+      sourceAudioKey: "analysis/source/004.7.2I/abc123.opus",
+    });
+  });
+
+  it("lets the AGENT record a capture FAILURE (status + attempt stamp + failure count)", async () => {
+    updateTrack.mockResolvedValueOnce({ fields: ["capture_status"], trackId: TRACK_ID });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      patch(AGENT_TOKEN, {
+        captureStatus: "failed",
+        sourceAudioAttemptedAt: "2026-07-07T12:00:00.000Z",
+        sourceAudioFailures: 2,
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, {
+      captureStatus: "failed",
+      sourceAudioAttemptedAt: "2026-07-07T12:00:00.000Z",
+      sourceAudioFailures: 2,
+    });
+  });
+
+  it("the AGENT may pair a done capture with the clobber-safe enrichment re-queue", async () => {
+    updateTrack.mockResolvedValueOnce({ fields: ["capture_status"], trackId: TRACK_ID });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      patch(AGENT_TOKEN, {
+        captureStatus: "done",
+        enrichmentStatus: "pending",
+        sourceAudioKey: "analysis/source/004.7.2I/abc123.opus",
+      }),
+    );
+
+    // enrichmentStatus is already an agent-writable analysis field, so the mixed
+    // capture + re-queue payload passes the field guard wholesale.
+    expect(response?.status).toBe(200);
+    expect(updateTrack).toHaveBeenCalledWith(TRACK_ID, {
+      captureStatus: "done",
+      enrichmentStatus: "pending",
+      sourceAudioKey: "analysis/source/004.7.2I/abc123.opus",
+    });
+  });
+
+  it("drops an invalid captureStatus (not one of the 4 enum values) rather than storing it", async () => {
+    updateTrack.mockResolvedValueOnce({ fields: ["source_audio_key"], trackId: TRACK_ID });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      patch(AGENT_TOKEN, {
+        captureStatus: "bogus",
+        sourceAudioKey: "analysis/source/004.7.2I/abc123.opus",
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    // The bad enum value never reaches updateTrack; the valid key still writes.
+    const [, update] = updateTrack.mock.calls[0] as [string, Record<string, unknown>];
+    expect("captureStatus" in update).toBe(false);
+    expect(update.sourceAudioKey).toBe("analysis/source/004.7.2I/abc123.opus");
+  });
+
   it.each([
     ["note", { note: "an editorial take" }],
     ["vibeX", { vibeX: 0.5 }],
@@ -1124,6 +1210,31 @@ describe("oRPC list_tracks_admin (GET /admin/tracks)", () => {
     expect(response?.status).toBe(200);
     const [opts] = listTracks.mock.calls[0] as [Record<string, unknown>];
     expect(opts.hasKey).toBe(false);
+  });
+
+  it("parses the capture queue filter (captureQueue=true, newest-first)", async () => {
+    listTracks.mockResolvedValueOnce({ totalCount: 0, tracks: [] });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(adminGet("?captureQueue=true&order=desc", AGENT_TOKEN));
+
+    expect(response?.status).toBe(200);
+    const [opts] = listTracks.mock.calls[0] as [Record<string, unknown>];
+    expect(opts.captureQueue).toBe(true);
+    expect(opts.order).toBe("desc");
+  });
+
+  it("leaves captureQueue false when absent (a separate, opt-in queue)", async () => {
+    listTracks.mockResolvedValueOnce({ totalCount: 0, tracks: [] });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(adminGet("?hasEmbedding=false", AGENT_TOKEN));
+
+    expect(response?.status).toBe(200);
+    const [opts] = listTracks.mock.calls[0] as [Record<string, unknown>];
+    // The embed queue read must never carry a capture predicate — capture never gates it.
+    expect(opts.captureQueue).toBe(false);
+    expect(opts.hasEmbedding).toBe(false);
   });
 
   it("leaves the new filters undefined when absent (tri-state)", async () => {
