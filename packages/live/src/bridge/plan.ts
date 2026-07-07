@@ -154,16 +154,19 @@ export function parseDotenv(raw: string): Record<string, string> {
   return out;
 }
 
-/** The admin API base + bearer the plan-handle path reads (read-only). */
-type AdminAuth = { base: string; token: string };
+/** The admin API base + bearer the plan-handle path reads (read-only). Exported so the
+ * full-song fingerprinter (`fingerprint.ts`) can build an authorized `get_source_audio`
+ * request against the SAME credential — the operator token the bridge already resolves. */
+export type AdminAuth = { base: string; token: string };
 
 /**
  * Resolve the admin API base + token the SAME way the fluncle CLI does — the bridge runs on
  * the operator's machine, so it reuses the CLI's stored credential: `process.env` first (the
  * box sets `FLUNCLE_API_TOKEN`), then `~/.config/fluncle/.env.production` (read-only). Returns
- * null when no token is reachable — the plan-handle path then holds + falls to the fixture.
+ * null when no token is reachable — the plan-handle path then holds + falls to the fixture,
+ * and `boot()` falls back to preview fingerprinting (a token-less dev boot still works).
  */
-async function loadAdminAuth(): Promise<AdminAuth | null> {
+export async function loadAdminAuth(): Promise<AdminAuth | null> {
   let token = process.env.FLUNCLE_API_TOKEN;
   let base = process.env.FLUNCLE_API_BASE_URL;
   if (!token) {

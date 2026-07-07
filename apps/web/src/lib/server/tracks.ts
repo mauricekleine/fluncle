@@ -407,6 +407,24 @@ export async function getTrackContextNote(idOrLogId: string): Promise<string | n
   return row ? (row.context_note ?? null) : null;
 }
 
+/**
+ * The R2 key of a finding's captured FULL SONG (`source_audio_key`), or null when
+ * the finding is unknown OR not yet captured. A dedicated column-only read (like
+ * `getTrackContextNote`) rather than a widening of `TRACK_SELECT`/`toTrackListItem`:
+ * the full song is a private analysis artifact, never part of a public/admin DTO,
+ * and only the `get_source_audio` streaming endpoint (the M5 bridge) needs the key.
+ */
+export async function getSourceAudioKey(idOrLogId: string): Promise<string | null> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [idOrLogId, idOrLogId],
+    sql: `select source_audio_key from tracks where track_id = ? or log_id = ? limit 1`,
+  });
+  const row = typedRow<{ source_audio_key: string | null }>(result.rows);
+
+  return row ? (row.source_audio_key ?? null) : null;
+}
+
 const SEARCH_DEFAULT_LIMIT = 20;
 const SEARCH_MAX_LIMIT = 50;
 

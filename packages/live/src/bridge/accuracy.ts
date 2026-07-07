@@ -7,17 +7,26 @@
 //
 // The fixture dir (the plan-pointer spike beside align.ts) must hold:
 //   tracklist.json  — [{ i, logId, title, previewUrl|null, durationMs }, …] (17)
-//   anchors.json    — align.ts's per-preview global-best + top-20 candidates
-//   prev/<i>.mp3    — each track's official 30s preview (i matches tracklist.i)
+//   anchors.json    — align.ts's per-preview global-best + top-20 candidates,
+//                     RE-ANCHORED from full audio (RFC full-audio §6 — the preview
+//                     alignment that fails on the 2 recovery tracks is circular)
+//   full/<i>.<ext>  — each track's captured FULL SONG (i matches tracklist.i). The
+//                     container varies with the capture (webm/opus/m4a/mp3/…), so the
+//                     extension is probed; a missing file is an `unmatched`/`failed`
+//                     capture (mixed refs — that finding fingerprints null-frames)
 //   set.m4a         — the recorded ~72min set
 //
-// It fingerprints the local previews with the SAME mel pipeline the bridge uses,
+// It fingerprints the local FULL SONGS with the SAME mel pipeline the bridge uses,
 // decodes the set to the glass's 10Hz mel-frame feed, streams it through the
 // PlanMatcher with the production defaults, and scores the auto-advances against a
 // MONOTONIC ground truth (a DP over the anchors' top-20 candidates — the spike's
 // "perfect ordering" reconstruction; the raw per-track global-best is non-monotone
-// for a few tightly-mixed tail tracks, which is exactly why the DP exists).
+// for a few tightly-mixed tail tracks, which is exactly why the DP exists). The
+// `spurious` counter (phantom / >30s-early advances) is a HARD GATE: a non-zero
+// count exits non-zero (the ordering flag is a trivially-true structural fact — the
+// pointer is monotone-forward BY CONSTRUCTION — so it is reported, never gated).
 
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -29,13 +38,32 @@ const FIXTURES = process.env.FLUNCLE_ALIGN_FIXTURES;
 if (!FIXTURES) {
   console.error(
     "accuracy: set FLUNCLE_ALIGN_FIXTURES=<dir> (the plan-pointer spike beside align.ts:\n" +
-      "  tracklist.json + anchors.json + prev/<i>.mp3 + set.m4a).",
+      "  tracklist.json + anchors.json + full/<i>.<ext> + set.m4a).",
   );
   process.exit(2);
 }
 
 type Track = { i: number; logId: string; title: string; previewUrl: string | null };
 type Anchor = { i: number; logId: string; bestMs: number; top3: [number, number][] };
+
+// The captured full-song container varies (yt-dlp -f bestaudio yields webm/opus/m4a/
+// mp3/…), so the harness probes these extensions for `full/<i>.<ext>`, most-common
+// first. A track with no full-song file present is treated as an `unmatched`/`failed`
+// capture: it fingerprints null-frames and the matcher skips it (a MIXED reference set,
+// the live reality during the capture-backfill and the terminal unmatched tail).
+const FULL_AUDIO_EXTS = ["webm", "opus", "m4a", "mp4", "mp3", "ogg", "aac", "wav", "flac"];
+
+/** Resolve `full/<i>.<ext>` for a track by probing the known containers; null when
+ * no full-song file is present (an uncaptured finding — a mixed-reference plan). */
+function resolveFullAudioPath(dir: string, i: number): string | null {
+  for (const ext of FULL_AUDIO_EXTS) {
+    const path = join(dir, "full", `${i}.${ext}`);
+    if (existsSync(path)) {
+      return path;
+    }
+  }
+  return null;
+}
 
 /** Monotonic ground truth: DP over each anchored track's top-K candidate times so
  * the chosen hook times are non-decreasing (min 30s apart) and total score is max. */
@@ -103,16 +131,23 @@ async function main(): Promise<void> {
   const anchors = JSON.parse(await readFile(join(dir, "anchors.json"), "utf8")) as Anchor[];
   const gt = monotonicGroundTruth(anchors);
 
-  // 1. Fingerprint each planned preview (null where the finding has no preview).
-  console.error(`accuracy: fingerprinting ${tracklist.length} previews…`);
+  // 1. Fingerprint each planned FULL SONG (null-frames where the finding is uncaptured
+  //    — a mixed-reference plan, exactly what runs live during the capture-backfill).
+  console.error(`accuracy: fingerprinting ${tracklist.length} full songs…`);
   const fingerprints: Fingerprint[] = [];
+  let captured = 0;
   for (const t of tracklist) {
-    if (t.previewUrl) {
-      fingerprints.push(await fingerprintFile(t.logId, join(dir, "prev", `${t.i}.mp3`)));
+    const fullPath = resolveFullAudioPath(dir, t.i);
+    if (fullPath) {
+      fingerprints.push(await fingerprintFile(t.logId, fullPath));
+      captured++;
     } else {
       fingerprints.push({ frames: null, logId: t.logId });
     }
   }
+  console.error(
+    `accuracy: ${captured}/${tracklist.length} full songs present (rest = null-frames)`,
+  );
   const order = tracklist.map((t) => t.i);
 
   // 2. Decode the set to the glass's 10Hz mel feed + realistic per-frame energy.
@@ -189,13 +224,29 @@ async function main(): Promise<void> {
   console.log(rows.join("\n"));
   console.log(
     `\nadvances: ${events.length} · ground-truth transitions: ${gt.length} (+ opener)\n` +
-      `ordering integrity: ${ordered ? "PERFECT (monotone, no out-of-order)" : "BROKEN"}\n` +
+      // The pointer is monotone-forward BY CONSTRUCTION, so this flag is trivially
+      // true — a structural fact, reported but never the gate (RFC full-audio §6).
+      `ordering integrity (structural, always monotone): ${ordered ? "PERFECT" : "BROKEN"}\n` +
       `within ±20s of the hook: ${within20}/${gt.length + 1}\n` +
       `within ±30s of the hook: ${within30}/${gt.length + 1}\n` +
-      `spurious (phantom / >30s early): ${spurious}\n` +
+      `spurious (phantom / >30s early — THE GATE): ${spurious}\n` +
       `missed (need a manual nudge): ${missed.length ? missed.join(" ") : "none"}\n` +
       `structural latency compensated: ${(latency / 1000).toFixed(1)}s (half-window + sustain)`,
   );
+
+  // THE HARD GATE (RFC full-audio §6): a phantom advance (a track with no ground
+  // truth) or a >30s-early advance is the regression a full-song reference can
+  // actually introduce (premature/phantom advances — NOT the tautological monotone
+  // ordering). Exit non-zero so the operator's M5 re-run against real `full/<i>`
+  // fixtures fails LOUD on any phantom match instead of a green print hiding it.
+  if (spurious > 0) {
+    console.error(
+      `\naccuracy: FAILED — ${spurious} spurious (phantom / >30s-early) advance(s). ` +
+        `Re-anchor anchors.json from full audio and retune the skip params ` +
+        `(skipThreshold / skipMargin / skipSustainMs) on the mixed config, then re-run.`,
+    );
+    process.exit(1);
+  }
 }
 
 main().catch((err) => {

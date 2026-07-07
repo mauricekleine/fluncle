@@ -3,6 +3,7 @@
 // Runtime types generated with workerd@1.20260603.1 2026-06-03 nodejs_compat
 interface __BaseEnv_Env {
   VIDEOS: R2Bucket;
+  SOURCE_AUDIO: R2Bucket;
   VITE_FLUNCLE_SPOTIFY_PLAYLIST_URL: "https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0?si=054d3c6cbcf14a36";
   VITE_FLUNCLE_TELEGRAM_URL: "https://t.me/fluncle";
   R2_ACCOUNT_ID: "0651fd3b33d9e0b2fe72a5f13e5cf65d";

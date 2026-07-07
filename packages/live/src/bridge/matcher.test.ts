@@ -8,10 +8,12 @@ import { describe, expect, test } from "bun:test";
 import { MEL_BINS } from "../contract";
 import {
   bestOffsetScore,
+  budgetedOffsetStep,
   DEFAULT_MATCHER_CONFIG,
   EnergyPrearm,
   type Fingerprint,
   frameCosine,
+  OFFSET_POSITION_BUDGET,
   PlanMatcher,
 } from "./matcher";
 import { shapeNormalize } from "./mel";
@@ -68,6 +70,28 @@ describe("bestOffsetScore", () => {
     const longWindow = track(9, 300);
     const shortFp = longWindow.slice(50, 130);
     expect(bestOffsetScore(longWindow, shortFp, 1)).toBeCloseTo(1, 4);
+  });
+});
+
+describe("budgetedOffsetStep", () => {
+  // window ~22s (220 frames @10Hz), preview ~30s (299), full song ~5min (2999).
+  const WINDOW = 220;
+
+  test("keeps the floor step for a short (preview-length) reference", () => {
+    // span 79 « budget, so no coarsening — a preview keeps its 300ms (step 3) resolution.
+    expect(budgetedOffsetStep(WINDOW, 299, 3)).toBe(3);
+  });
+
+  test("coarsens a full-song reference so sliding positions stay within the budget", () => {
+    const step = budgetedOffsetStep(WINDOW, 2999, 3);
+    expect(step).toBeGreaterThan(3); // a full song must coarsen past the floor
+    const positions = Math.floor((2999 - WINDOW) / step) + 1;
+    expect(positions).toBeLessThanOrEqual(OFFSET_POSITION_BUDGET + 1);
+  });
+
+  test("never returns below 1, even for a degenerate/zero span", () => {
+    expect(budgetedOffsetStep(300, 300, 0)).toBeGreaterThanOrEqual(1);
+    expect(budgetedOffsetStep(400, 300, 3)).toBe(3); // span ≤ 0 → the floor
   });
 });
 
@@ -140,6 +164,28 @@ describe("PlanMatcher", () => {
       m.pushFrame(frame(5), 0.5, t); // a spectral bump far from every planned one
     }
     expect(m.pointerIndex).toBe(0);
+  });
+
+  test("emits NO spurious advance to a track whose audio never plays (no phantom/premature id)", () => {
+    // The accuracy harness's `spurious` property, automated at the unit level: over a
+    // LONG horizon (60s, many dwell+sustain windows) a window that is a slice of NONE
+    // of the planned fingerprints must never make the matcher EMIT a pending id — not
+    // via the single-advance gate and not via the double-advance skip path. seed 11's
+    // spectral bump (mel bin ~37) is maximally far from every planned bump (bins
+    // 7/14/21/28), so it scores ~0 against all of them. This is a real gate property,
+    // NOT the tautological monotone ordering (which is true by construction).
+    const m = new PlanMatcher(fps([1, 2, 3, 4]), cfg);
+    const advancedIds: number[] = [];
+    let t = 0;
+    for (let i = 0; i < 600; i++, t += 100) {
+      const tick = m.pushFrame(frame(11), 0.5, t);
+      if (tick.advanced) {
+        advancedIds.push(tick.pointer);
+      }
+    }
+    expect(advancedIds).toEqual([]);
+    expect(m.pointerIndex).toBe(0);
+    expect(m.pointerSource).toBe("boot");
   });
 
   test("skip-ahead: a weak pending is skipped when pending+1 confirms strongly", () => {
