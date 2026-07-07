@@ -115,6 +115,8 @@ function deriveTier(op: unknown): AuthTier | null {
 // shipping an anonymous endpoint is always a conscious, reviewed choice.
 const PUBLIC_UNAUTH_OPS = new Set<string>([
   // The public archive reads + Spotify candidate search (orpc-coverage.test.ts).
+  // Artist reads — public, no auth required (Unit 4 of the artist-relationship RFC).
+  "get_artist",
   "get_edition",
   "get_health",
   "get_radio_now_playing",
@@ -122,6 +124,7 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
   "get_random_track",
   "get_similar_findings",
   "get_track",
+  "list_artists",
   "list_editions",
   "list_mixtapes",
   "list_stories",

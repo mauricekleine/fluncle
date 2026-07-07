@@ -311,6 +311,16 @@ function addListenCommands(program: Command): void {
     });
 
   program
+    .command("artists")
+    .description("Browse artists in Fluncle's archive")
+    .argument("[slug]", "Artist slug — omit for the full list")
+    .option("--json", "Print JSON", false)
+    .action(async (slug: string | undefined, options: JsonOptions) => {
+      const { artistsListCommand, artistsGetCommand } = await import("./commands/artists");
+      await runArtists(slug, options, { artistsGetCommand, artistsListCommand });
+    });
+
+  program
     .command("mixtapes")
     .description("Fluncle's checkpoint sets")
     .option("--json", "Print JSON", false)
@@ -2706,6 +2716,51 @@ async function runRecent(
 
   const { trackRows } = await import("./format");
   console.log(trackRows(tracks).join("\n"));
+}
+
+async function runArtists(
+  slug: string | undefined,
+  options: JsonOptions,
+  commands: {
+    artistsGetCommand: typeof import("./commands/artists").artistsGetCommand;
+    artistsListCommand: typeof import("./commands/artists").artistsListCommand;
+  },
+): Promise<void> {
+  if (slug) {
+    const artist = await commands.artistsGetCommand(slug);
+
+    if (options.json) {
+      printJson({ artist, ok: true });
+      return;
+    }
+
+    console.log(`${artist.name}  (${artist.slug})`);
+    console.log(`Findings: ${artist.findingCount}`);
+
+    if (artist.spotifyUrl) {
+      console.log(`Spotify: ${artist.spotifyUrl}`);
+    }
+
+    return;
+  }
+
+  const artists = await commands.artistsListCommand();
+
+  if (options.json) {
+    printJson({ artists, ok: true });
+    return;
+  }
+
+  if (artists.length === 0) {
+    console.log("No artists in the archive yet.");
+    return;
+  }
+
+  for (const a of artists) {
+    console.log(
+      `${a.name.padEnd(40)} ${String(a.findingCount).padStart(3)} finding${a.findingCount === 1 ? "" : "s"}`,
+    );
+  }
 }
 
 async function runMixtapes(

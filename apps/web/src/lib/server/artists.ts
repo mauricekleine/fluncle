@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { getDb } from "./db";
+import { getDb, typedRow, typedRows } from "./db";
 import { fold } from "./track-match";
 
 // The thin-content gate for artist pages: a `/artist/<slug>` page indexes (and
@@ -235,6 +235,83 @@ export async function listArtistsWithFindingCounts(): Promise<ArtistIndexEntry[]
   }
 
   return entries;
+}
+
+/** A public artist list item — the `list_artists` / `get_artist` API shape. */
+export type ArtistListItem = {
+  findingCount: number;
+  name: string;
+  slug: string;
+  spotifyUrl: string | undefined;
+};
+
+type ArtistRow = {
+  finding_count: number;
+  name: string;
+  slug: string;
+  spotify_url: string | null;
+};
+
+function toArtistListItem(row: ArtistRow): ArtistListItem {
+  return {
+    findingCount: row.finding_count,
+    name: row.name,
+    slug: row.slug,
+    spotifyUrl: row.spotify_url ?? undefined,
+  };
+}
+
+/**
+ * All artists with at least one PUBLISHED finding, ordered by finding count
+ * descending. `finding_count` counts only published findings (a `track_artists`
+ * row whose track has `log_id IS NOT NULL`); the inner join also drops any artist
+ * with zero published findings. Used by `list_artists`.
+ */
+export async function listArtists(): Promise<ArtistListItem[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [],
+    sql: `select
+            a.name,
+            a.slug,
+            a.spotify_url,
+            count(ta.track_id) as finding_count
+          from artists a
+          join track_artists ta on ta.artist_id = a.id
+          join tracks t on t.track_id = ta.track_id and t.log_id is not null
+          group by a.id
+          order by finding_count desc, a.name asc`,
+  });
+
+  return typedRows<ArtistRow>(result.rows).map(toArtistListItem);
+}
+
+/**
+ * Look up one artist by slug for the public API, with the SAME published gate as
+ * `listArtists`: an artist with zero published findings resolves to `undefined`
+ * (the caller turns that into a 404), so list + get agree on which artists exist.
+ * Distinct from `getArtistBySlug`, which returns the richer `ArtistRecord` the
+ * artist PAGE + JSON-LD read. Used by `get_artist`.
+ */
+export async function getArtistListItemBySlug(slug: string): Promise<ArtistListItem | undefined> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [slug],
+    sql: `select
+            a.name,
+            a.slug,
+            a.spotify_url,
+            count(ta.track_id) as finding_count
+          from artists a
+          join track_artists ta on ta.artist_id = a.id
+          join tracks t on t.track_id = ta.track_id and t.log_id is not null
+          where a.slug = ?
+          group by a.id
+          limit 1`,
+  });
+
+  const row = typedRow<ArtistRow>(result.rows);
+  return row ? toArtistListItem(row) : undefined;
 }
 
 export function parseArtistsJson(value: string): string[] {
