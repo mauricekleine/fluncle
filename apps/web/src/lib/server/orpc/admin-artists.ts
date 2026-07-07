@@ -56,22 +56,24 @@ export function adminArtistsHandlers(os: Implementer) {
   // GET /admin/artists — agent tier (`adminAuth`): the artist-sweep worklist. A
   // bounded, cursor-paged page of artists still awaiting social resolution
   // (`resolved_at IS NULL`), oldest-first. The cron reads this, then resolves each.
-  const listArtistsHandler = os.list_artists.use(adminAuth).handler(async ({ input }) => {
-    try {
-      const result = await listUnresolvedArtists(
-        parseLimit(input.limit, QUEUE_DEFAULT_LIMIT, QUEUE_MAX_LIMIT),
-        input.cursor ?? undefined,
-      );
+  const listUnresolvedArtistsHandler = os.list_unresolved_artists
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const result = await listUnresolvedArtists(
+          parseLimit(input.limit, QUEUE_DEFAULT_LIMIT, QUEUE_MAX_LIMIT),
+          input.cursor ?? undefined,
+        );
 
-      return {
-        artists: result.artists,
-        nextCursor: result.nextCursor,
-        ok: true as const,
-      };
-    } catch (error) {
-      throw apiFault(error);
-    }
-  });
+        return {
+          artists: result.artists,
+          nextCursor: result.nextCursor,
+          ok: true as const,
+        };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
 
   // POST /admin/artists/{artistId}/resolve — agent tier (`adminAuth`): MB url-rels
   // walk + Firecrawl gap-fill for one artist. The on-box cron loops the worklist;
@@ -96,7 +98,7 @@ export function adminArtistsHandlers(os: Implementer) {
 
   return {
     backfill_artists: backfillArtistsHandler,
-    list_artists: listArtistsHandler,
+    list_unresolved_artists: listUnresolvedArtistsHandler,
     resolve_artist: resolveArtistHandler,
   };
 }

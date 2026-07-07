@@ -210,10 +210,6 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // the board + CLI + box can all consume.
   get_track_admin: "admin",
   initiate_mixtape_youtube: "operator",
-  // The artist-sweep resolve worklist (artists awaiting social resolution) — agent
-  // tier (adminAuth only): a read the box's `fluncle-artist-sweep` cron drives with
-  // its agent-scoped token to pick the next batch, the list_*_admin precedent.
-  list_artists: "admin",
   // Every clip's IG drip row — admin tier (agent-allowed read), the list_*_admin
   // precedent; the CLI / library merge it onto the clips.
   list_clip_posts: "admin",
@@ -228,6 +224,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   list_submissions: "admin",
   list_track_social: "admin",
   list_tracks_admin: "admin",
+  // The artist-sweep resolve worklist (artists awaiting social resolution) — agent
+  // tier (adminAuth only): a read the box's `fluncle-artist-sweep` cron drives with
+  // its agent-scoped token to pick the next batch, the list_*_admin precedent.
+  list_unresolved_artists: "admin",
   merge_private_galaxy_progress: "private-session",
   mint_mixcloud_token: "operator",
   mint_youtube_token: "operator",

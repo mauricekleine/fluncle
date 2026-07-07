@@ -129,18 +129,21 @@ export const resolveArtist = oc
   );
 
 /**
- * `list_artists` → `GET /admin/artists` (operationId `listArtists`).
+ * `list_unresolved_artists` → `GET /admin/artists` (operationId `listUnresolvedArtists`).
  *
  * Agent tier (`adminAuth`). The artist-sweep worklist: a bounded, cursor-paged
  * page of artists still awaiting social resolution (`resolved_at IS NULL`),
  * oldest-first by id. The on-box `fluncle-artist-sweep` cron reads this to pick
  * the next batch, then calls `resolve_artist` per row. Returns `{ ok, artists:
  * [{ id, name }], nextCursor }` (`nextCursor` is null when the queue is drained).
+ *
+ * Named `list_unresolved_artists` (not `list_artists`) to avoid a Convention-B
+ * collision with Unit 4's future public `api.artists` op.
  */
-export const listArtists = oc
+export const listUnresolvedArtists = oc
   .route({
     method: "GET",
-    operationId: "listArtists",
+    operationId: "listUnresolvedArtists",
     path: "/admin/artists",
     summary: "List artists awaiting social resolution, oldest first (the sweep worklist)",
     tags: ["Admin"],
@@ -162,6 +165,6 @@ export const listArtists = oc
 /** The `admin-artists` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminArtistsContract = {
   backfill_artists: backfillArtists,
-  list_artists: listArtists,
+  list_unresolved_artists: listUnresolvedArtists,
   resolve_artist: resolveArtist,
 };

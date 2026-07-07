@@ -58,10 +58,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // clip-cut cron resolves a recording); the writes + `promote` (mints a coordinate) are
   // operator tier.
   "DELETE /admin/recordings/{recordingId}": "delete_recording",
-  // The artist-relationship RFC ops (Unit 2.1). `list_artists` (the resolve worklist)
-  // + `resolve_artist` are agent tier (the box's `fluncle-artist-sweep` cron drives
-  // both with its agent-scoped token); `backfill_artists` (Unit 1) is agent tier too.
-  "GET /admin/artists": "list_artists",
+  // The artist-relationship RFC ops (Unit 2.1). `list_unresolved_artists` (the resolve
+  // worklist) + `resolve_artist` are agent tier (the box's `fluncle-artist-sweep` cron
+  // drives both with its agent-scoped token); `backfill_artists` (Unit 1) is agent tier too.
+  "GET /admin/artists": "list_unresolved_artists",
   "GET /admin/clips": "list_clips",
   // Every clip's Instagram drip-feed row (schedule + status) — contract-only oRPC (no
   // TanStack route file). Admin tier (agent-allowed read); the clip library / CLI merge

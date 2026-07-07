@@ -139,12 +139,22 @@ export type ArtistResolutionResult = {
 
 // ── URL classification ────────────────────────────────────────────────────────
 
-/** Classify an MB url-relation resource URL to a social platform (or null if unhandled). */
-export function classifyMbUrl(resource: string): ArtistSocialPlatform | "wikidata" | null {
+/**
+ * Classify an MB url-relation resource URL to a social platform (or null if unhandled).
+ *
+ * `relType` is the MB relation `type` field. Only an `"official homepage"` rel type
+ * maps to the `"homepage"` social; everything else that isn't a recognized
+ * social/aggregator returns null (skipped, not stored).
+ */
+export function classifyMbUrl(
+  resource: string,
+  relType?: string | null,
+): ArtistSocialPlatform | "wikidata" | null {
   let host: string;
 
   try {
-    host = new URL(resource).hostname.replace(/^www\./, "");
+    // Strip www. AND music. subdomains so music.youtube.com → youtube.com.
+    host = new URL(resource).hostname.replace(/^(www\.|music\.)/, "");
   } catch {
     return null;
   }
@@ -202,7 +212,13 @@ export function classifyMbUrl(resource: string): ArtistSocialPlatform | "wikidat
     return null;
   }
 
-  return "homepage";
+  // Only store a homepage when MB explicitly tagged it as one.
+  if (relType === "official homepage") {
+    return "homepage";
+  }
+
+  // Everything else (Wikipedia, streaming, VIAF, ISNI, IMDb, …) is unhandled → skip.
+  return null;
 }
 
 // ── URL normalization ─────────────────────────────────────────────────────────
@@ -497,7 +513,7 @@ export async function resolveArtistViaMb(
       continue;
     }
 
-    const classification = classifyMbUrl(resource);
+    const classification = classifyMbUrl(resource, relation.type);
 
     if (!classification) {
       continue;
@@ -541,6 +557,7 @@ export async function resolveArtistViaMb(
 export async function resolveGapViaFirecrawl(
   artistName: string,
   spotifyUrl: string | null,
+  mbid: string | null,
   missingPlatforms: Set<ArtistSocialPlatform>,
 ): Promise<ResolvedSocial[]> {
   // Only worth calling if TikTok or YouTube are actually missing.
@@ -551,16 +568,22 @@ export async function resolveGapViaFirecrawl(
     return [];
   }
 
+  // Without a Spotify URL or an MB-resolved identity to anchor, the only seed is
+  // a name-based Spotify search URL — a JS-rendered page Firecrawl can't scrape
+  // that risks matching a namesake artist. Skip rather than guess.
+  if (!spotifyUrl && !mbid) {
+    return [];
+  }
+
   const apiKey = await readOptionalEnv("FIRECRAWL_API_KEY");
 
   if (!apiKey) {
     return [];
   }
 
-  // The source URL: the artist's Spotify profile is the most reliable seed;
-  // fall back to a name-based search query understood by Firecrawl's web search.
+  // The source URL: the artist's Spotify profile is the most reliable seed.
   const sourceUrl =
-    spotifyUrl ?? `https://open.spotify.com/search/${encodeURIComponent(artistName)}`;
+    spotifyUrl ?? `https://musicbrainz.org/artist/${encodeURIComponent(mbid ?? "")}`;
 
   const platforms: string[] = [];
   if (wantTikTok) {
@@ -796,6 +819,17 @@ export async function resolveArtist(artistId: string): Promise<ArtistResolutionR
     existingPlatforms.add(s.platform);
   }
 
+  // Rate-limited: nothing to persist yet — stay in the unresolved queue (resolved_at NULL).
+  if (mbResult.rateLimited) {
+    return {
+      artistId,
+      mbid: null,
+      rateLimited: true,
+      socials: [],
+      wikidataQid: null,
+    };
+  }
+
   const gapPlatforms = new Set<ArtistSocialPlatform>();
   if (!existingPlatforms.has("tiktok")) {
     gapPlatforms.add("tiktok");
@@ -804,9 +838,12 @@ export async function resolveArtist(artistId: string): Promise<ArtistResolutionR
     gapPlatforms.add("youtube");
   }
 
-  const firecrawlSocials = mbResult.rateLimited
-    ? [] // don't fan out to Firecrawl when MB is actively throttling us
-    : await resolveGapViaFirecrawl(artist.name, artist.spotify_url, gapPlatforms);
+  const firecrawlSocials = await resolveGapViaFirecrawl(
+    artist.name,
+    artist.spotify_url,
+    mbResult.mbid,
+    gapPlatforms,
+  );
 
   // ── 3. Persist ─────────────────────────────────────────────────────────────
   await persistResolution(
@@ -820,7 +857,7 @@ export async function resolveArtist(artistId: string): Promise<ArtistResolutionR
   return {
     artistId,
     mbid: mbResult.mbid,
-    rateLimited: mbResult.rateLimited,
+    rateLimited: false,
     socials: [...mbResult.socials, ...firecrawlSocials],
     wikidataQid: mbResult.wikidataQid,
   };
