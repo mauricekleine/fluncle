@@ -40,6 +40,7 @@ import {
   type ArtistFollowQueueItem,
   type ArtistSocial,
   type ArtistSocialPlatform,
+  isHttpUrl,
   listArtistSocialsQueue,
 } from "@/lib/server/artists";
 
@@ -292,19 +293,32 @@ function SocialRow({
 }) {
   const followable = FOLLOWABLE.has(social.platform);
   const followed = social.followedAt !== null;
+  // Belt-and-suspenders: only emit a clickable href for an http(s) URL. React does NOT
+  // sanitize href, so a stored `javascript:`/`data:` URL (should the write-time guard ever
+  // be bypassed) would be click-to-execute XSS in the admin origin — render it inert instead.
+  const safeUrl = isHttpUrl(social.url);
 
   return (
     <li className="flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-background/40 px-3 py-2">
       <PlatformLogo className="size-4 shrink-0 text-muted-foreground" platform={social.platform} />
-      <a
-        className="inline-flex min-w-0 flex-1 items-center gap-1 truncate text-xs text-foreground hover:text-primary"
-        href={social.url}
-        rel="noreferrer"
-        target="_blank"
-      >
-        <span className="truncate">{social.url}</span>
-        <ArrowSquareOutIcon aria-hidden="true" className="size-3 shrink-0" />
-      </a>
+      {safeUrl ? (
+        <a
+          className="inline-flex min-w-0 flex-1 items-center gap-1 truncate text-xs text-foreground hover:text-primary"
+          href={social.url}
+          rel="noreferrer"
+          target="_blank"
+        >
+          <span className="truncate">{social.url}</span>
+          <ArrowSquareOutIcon aria-hidden="true" className="size-3 shrink-0" />
+        </a>
+      ) : (
+        <span
+          className="inline-flex min-w-0 flex-1 items-center gap-1 truncate text-xs text-muted-foreground line-through"
+          title="Unsupported URL scheme — not linkable"
+        >
+          <span className="truncate">{social.url}</span>
+        </span>
+      )}
 
       {social.status === "candidate" ? (
         <Badge variant="outline">Candidate</Badge>

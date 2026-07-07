@@ -172,4 +172,128 @@ describe("followPendingArtists", () => {
 
     expect(followSpotifyArtist).toHaveBeenCalledWith("1vCWHaC5f2uS3yhpwWbIA6");
   });
+
+  // BLOCKER-gate invariant: a scraped `candidate` (e.g. Firecrawl-sourced) is NEVER a follow
+  // target — only `auto`/`confirmed` rows are. The mock HONOURS the query's own status filter
+  // (it returns the candidate only if the SQL forgot the `status in ('auto','confirmed')`
+  // clause), so dropping that filter from the production query would fail this test.
+  it("never follows a firecrawl candidate — only auto/confirmed rows are targets", async () => {
+    const seeded = [
+      {
+        artist_id: "a1",
+        followed_at: null,
+        name: "Scraped Candidate",
+        platform: "spotify" as const,
+        social_id: "cand1",
+        source: "firecrawl",
+        spotify_artist_id: "3TVXtAsR1Inumwj472S9r4",
+        status: "candidate",
+        url: "https://open.spotify.com/artist/3TVXtAsR1Inumwj472S9r4",
+      },
+      {
+        artist_id: "a2",
+        followed_at: null,
+        name: "Auto Artist",
+        platform: "spotify" as const,
+        social_id: "auto1",
+        source: "musicbrainz",
+        spotify_artist_id: "1vCWHaC5f2uS3yhpwWbIA6",
+        status: "auto",
+        url: "https://open.spotify.com/artist/1vCWHaC5f2uS3yhpwWbIA6",
+      },
+    ];
+    const followable = (status: string) => status === "auto" || status === "confirmed";
+    const updates: string[] = [];
+
+    execute.mockImplementation(async ({ args, sql }: { args: unknown[]; sql: string }) => {
+      if (sql.includes("from artist_socials s") && sql.includes("join artists a")) {
+        const rows = sql.includes("s.status in ('auto', 'confirmed')")
+          ? seeded.filter((r) => followable(r.status) && r.followed_at === null)
+          : seeded;
+
+        return { rows };
+      }
+      if (sql.startsWith("update artist_socials set followed_at")) {
+        updates.push(String(args[2]));
+
+        return { rows: [] };
+      }
+      if (sql.includes("count(*)") && sql.includes("status in ('auto', 'confirmed')")) {
+        const n = seeded.filter((r) => followable(r.status) && r.followed_at === null).length - 1;
+
+        return { rows: [{ n: Math.max(0, n) }] };
+      }
+      return { rows: [{ n: 0 }] };
+    });
+
+    const { followPendingArtists } = await import("./artists");
+    const summary = await followPendingArtists(5, false);
+
+    // Only the `auto` row was followed; the candidate never was.
+    expect(summary.followedCount).toBe(1);
+    expect(summary.followed[0]?.socialId).toBe("auto1");
+    expect(summary.followed.some((f) => f.socialId === "cand1")).toBe(false);
+    expect(followSpotifyArtist).toHaveBeenCalledTimes(1);
+    expect(followSpotifyArtist).toHaveBeenCalledWith("1vCWHaC5f2uS3yhpwWbIA6");
+    // The candidate is not a follow target, so it never counts toward `remaining` either.
+    expect(summary.remaining).toBe(0);
+    // Exactly one follow stamp, for the auto row (the followed_at UPDATE carries the socialId).
+    expect(updates).toEqual(["auto1"]);
+  });
+});
+
+describe("addArtistSocial URL scheme guard (stored-XSS)", () => {
+  it.each(["javascript:alert(1)", "data:text/html,<script>alert(1)</script>", "vbscript:msgbox"])(
+    "rejects a non-http(s) URL: %s",
+    async (badUrl) => {
+      const { addArtistSocial, InvalidArtistSocialError } = await import("./artists");
+
+      await expect(addArtistSocial("a1", "homepage", badUrl)).rejects.toBeInstanceOf(
+        InvalidArtistSocialError,
+      );
+      // It threw at the scheme guard — before ever touching the DB.
+      expect(execute).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects an unparseable URL", async () => {
+    const { addArtistSocial, InvalidArtistSocialError } = await import("./artists");
+
+    await expect(addArtistSocial("a1", "homepage", "not a url")).rejects.toBeInstanceOf(
+      InvalidArtistSocialError,
+    );
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("accepts a valid https URL and persists it", async () => {
+    const stored = {
+      artist_id: "a1",
+      followed_at: null,
+      id: "s1",
+      platform: "spotify",
+      source: "operator",
+      status: "confirmed",
+      url: "https://open.spotify.com/artist/3TVXtAsR1Inumwj472S9r4",
+    };
+
+    execute.mockImplementation(async ({ sql }: { args: unknown[]; sql: string }) => {
+      if (sql.startsWith("insert into artist_socials")) {
+        return { rows: [] };
+      }
+      if (sql.includes("from artist_socials where artist_id = ?")) {
+        return { rows: [stored] };
+      }
+      return { rows: [] };
+    });
+
+    const { addArtistSocial } = await import("./artists");
+    const social = await addArtistSocial(
+      "a1",
+      "spotify",
+      "  https://open.spotify.com/artist/3TVXtAsR1Inumwj472S9r4  ",
+    );
+
+    expect(social.url).toBe("https://open.spotify.com/artist/3TVXtAsR1Inumwj472S9r4");
+    expect(execute).toHaveBeenCalled();
+  });
 });

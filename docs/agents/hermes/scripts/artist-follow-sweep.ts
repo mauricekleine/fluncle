@@ -24,7 +24,11 @@
 import { spawnSync } from "node:child_process";
 
 // The per-tick cap handed to the CLI (which drains up to this many, looping internally).
-// Small enough to stay well inside Spotify's + YouTube's quotas per run.
+// Small enough to stay well inside Spotify's + YouTube's quotas per run: a YouTube
+// `subscriptions.insert` costs 50 units against a 200/day quota (~4 subscribes/day), and
+// this cron runs every 6h — but cadence×cap is only the first line of defense. The real
+// ceiling is the server-side per-day guard in followPendingArtists (YOUTUBE_DAILY_FOLLOW_CAP),
+// which stops calling the API past the quota no matter how the sweep was triggered.
 const BATCH_CAP = 20;
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";

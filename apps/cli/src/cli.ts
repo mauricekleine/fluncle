@@ -1321,7 +1321,11 @@ function addAdminCommands(program: Command): void {
     .command("follow")
     .description("Auto-follow high-confidence artists on Spotify + YouTube (drains the queue)")
     .option("--dry-run", "Report who WOULD be followed without calling the platforms", false)
-    .option("--limit <limit>", "Max artists to follow this run", "50")
+    // Default kept low on purpose: a YouTube `subscriptions.insert` costs 50 units against a
+    // 200/day quota (~4 inserts/day), so a manual run must not drain a big backlog in one go.
+    // The on-box cron paces itself (BATCH_CAP=20, every 6h); the server-side daily guard in
+    // followPendingArtists is the real ceiling regardless of what --limit is passed here.
+    .option("--limit <limit>", "Max artists to follow this run", "20")
     .option("--json", "Print JSON", false)
     .action(async (options: BackfillSyncOptions) => {
       const { followArtistsCommand } = await import("./commands/admin-artists");

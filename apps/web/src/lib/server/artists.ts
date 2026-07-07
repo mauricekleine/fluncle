@@ -468,6 +468,16 @@ export async function recordOperatorFollow(socialId: string): Promise<ArtistSoci
  * `confirmed`/`auto` row (a no-op). Returns the fresh row.
  */
 export async function confirmArtistSocial(socialId: string): Promise<ArtistSocial> {
+  const existing = await getArtistSocialById(socialId);
+
+  if (!existing) {
+    throw new ArtistSocialNotFoundError(socialId);
+  }
+
+  // Defense for candidates written by OTHER units (the Firecrawl → candidate ingestion,
+  // Unit 2.1): never promote a stored URL whose scheme isn't http(s) onto the public page.
+  assertHttpUrl(existing.url);
+
   const db = await getDb();
   const now = new Date().toISOString();
 
@@ -486,11 +496,52 @@ export async function confirmArtistSocial(socialId: string): Promise<ArtistSocia
   return social;
 }
 
-/** Thrown when add_artist_social gets a platform outside the enum. */
+/** Thrown when add_artist_social gets a platform outside the enum, a malformed URL, or a non-http(s) scheme. */
 export class InvalidArtistSocialError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "InvalidArtistSocialError";
+  }
+}
+
+/**
+ * Guard a social URL's scheme: parse it and allow ONLY `http:`/`https:`, returning the
+ * trimmed, validated string. A `javascript:`/`data:`/`vbscript:` URL rendered into an
+ * admin `<a href>` is click-to-execute stored XSS in the admin origin (React does NOT
+ * sanitize `href`), and a promoted candidate carries it to the public artist page — so
+ * every write AND the render run through this. Throws `InvalidArtistSocialError` on an
+ * empty string, an unparseable URL, or a disallowed scheme.
+ */
+export function assertHttpUrl(raw: string): string {
+  const trimmed = raw.trim();
+
+  if (!trimmed) {
+    throw new InvalidArtistSocialError("A social URL is required");
+  }
+
+  let parsed: URL;
+
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new InvalidArtistSocialError(`Not a valid URL: ${trimmed}`);
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new InvalidArtistSocialError(`Unsupported URL scheme: ${parsed.protocol}`);
+  }
+
+  return trimmed;
+}
+
+/** Non-throwing sibling of `assertHttpUrl` — the defensive render guard (emit `href` only when true). */
+export function isHttpUrl(raw: string): boolean {
+  try {
+    assertHttpUrl(raw);
+
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -509,12 +560,7 @@ export async function addArtistSocial(
     throw new InvalidArtistSocialError(`Unknown platform: ${platform}`);
   }
 
-  const trimmed = url.trim();
-
-  if (!trimmed) {
-    throw new InvalidArtistSocialError("A social URL is required");
-  }
-
+  const trimmed = assertHttpUrl(url);
   const db = await getDb();
   const now = new Date().toISOString();
 
@@ -552,6 +598,24 @@ export async function removeArtistSocial(socialId: string): Promise<void> {
 }
 
 // ── The auto-follow sweep (agent tier) ───────────────────────────────────────
+
+// THE QUOTA CEILING. A YouTube `subscriptions.insert` costs 50 units against the Data API's
+// default 200 units/day → only ~4 real subscribes/day. The on-box `fluncle-artist-follow`
+// cron paces the trigger (BATCH_CAP=20, every 6h) and the CLI default `--limit` is low, but
+// cadence alone is fragile: a mis-set schedule or a manual `fluncle admin artists follow
+// --limit 50` could blow the quota. This server-side per-day cap is the real backstop — it
+// counts today's YouTube follows and stops calling the API past the ceiling regardless of how
+// the sweep was triggered. Spotify's follow endpoint is cheap, so only YouTube is capped.
+const YOUTUBE_DAILY_FOLLOW_CAP = 4;
+
+// The start of the current UTC day as an ISO stamp — the lower bound for "followed today".
+// `followed_at` is stored as an ISO-8601 string, so a lexicographic `>=` compares correctly.
+function startOfUtcDayIso(): string {
+  const d = new Date();
+  d.setUTCHours(0, 0, 0, 0);
+
+  return d.toISOString();
+}
 
 /** One target the auto-follow sweep acted on (or would, in a dry run). */
 export type FollowResult = {
@@ -612,6 +676,21 @@ export async function followPendingArtists(limit = 5, dryRun = false): Promise<F
   const followed: FollowResult[] = [];
   const failed: FollowFailure[] = [];
 
+  // How many YouTube subscribes already happened today — the running total the per-day cap
+  // guards. Only queried for a real run (a dry run calls no APIs, so the ceiling can't apply).
+  let youtubeFollowedToday = 0;
+
+  if (!dryRun) {
+    const dayCount = await db.execute({
+      args: [startOfUtcDayIso()],
+      sql: `select count(*) as n from artist_socials
+            where platform = 'youtube' and followed_at >= ?`,
+    });
+    const dayRow = dayCount.rows[0] as Record<string, unknown> | undefined;
+    const n = Number(dayRow?.["n"] ?? 0);
+    youtubeFollowedToday = Number.isFinite(n) ? n : 0;
+  }
+
   for (const raw of pending.rows) {
     const row = raw as Record<string, unknown>;
     const platform = row["platform"] === "youtube" ? "youtube" : "spotify";
@@ -637,6 +716,14 @@ export async function followPendingArtists(limit = 5, dryRun = false): Promise<F
 
         await followSpotifyArtist(id);
       } else {
+        // Stop before spending quota past the daily ceiling — recorded as a failure (the
+        // target stays unfollowed for the next day's sweep), never a silent skip.
+        if (youtubeFollowedToday >= YOUTUBE_DAILY_FOLLOW_CAP) {
+          throw new Error(
+            `daily YouTube follow cap reached (${YOUTUBE_DAILY_FOLLOW_CAP}/day) — deferred`,
+          );
+        }
+
         const channelId = await resolveYouTubeChannelId(url);
 
         if (!channelId) {
@@ -644,6 +731,7 @@ export async function followPendingArtists(limit = 5, dryRun = false): Promise<F
         }
 
         await subscribeToYouTubeChannel(channelId);
+        youtubeFollowedToday += 1;
       }
 
       const now = new Date().toISOString();
