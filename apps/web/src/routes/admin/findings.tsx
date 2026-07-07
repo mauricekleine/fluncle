@@ -1,4 +1,4 @@
-import { CassetteTapeIcon, CircleNotchIcon } from "@phosphor-icons/react";
+import { CassetteTapeIcon, CircleNotchIcon, PlusIcon, TrayIcon } from "@phosphor-icons/react";
 import { isStaleTikTokDraft } from "@fluncle/contracts/util";
 import {
   type InfiniteData,
@@ -9,6 +9,7 @@ import {
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AddFindingDialog } from "@/components/admin/add-finding-dialog";
 import {
   AddToPlanDialog,
   type PlanTarget,
@@ -26,6 +27,7 @@ import { NoteDialog } from "@/components/admin/note-dialog";
 import { ContextDialog, ObservationDialog } from "@/components/admin/observation-dialogs";
 import { PLATFORMS } from "@/components/admin/platform-cell";
 import { PushDialog } from "@/components/admin/push-dialog";
+import { SubmissionsTray } from "@/components/admin/submissions-tray";
 import { TagDialog } from "@/components/admin/tag-dialog";
 import { type BoardPage, type BoardRow, usePublish } from "@/components/admin/use-publish";
 import { StoriesPlayer } from "@/components/stories/stories-player";
@@ -49,6 +51,7 @@ import {
 } from "@/lib/server/recordings";
 import { listSocialPostsForTracks } from "@/lib/server/social";
 import { getSpotifyAuthStatus, type SpotifyAuthStatus } from "@/lib/server/spotify";
+import { listPendingSubmissions, type Submission } from "@/lib/server/submissions";
 import { type BlockedOn, trackStage } from "@/lib/server/track-stage";
 import { decodeTrackCursor, listTracks, listVibePoints, type VibePoint } from "@/lib/server/tracks";
 import { cn } from "@/lib/utils";
@@ -78,6 +81,8 @@ const BOARD_KEY = ["admin", "posts", "board"] as const;
 const POINTS_KEY = ["admin", "tag", "points"] as const;
 // The Spotify connection-status cache for the reconnect banner.
 const SPOTIFY_STATUS_KEY = ["admin", "spotify", "status"] as const;
+// The pending-submissions cache for the candidates tray (and its header badge).
+const SUBMISSIONS_KEY = ["admin", "submissions"] as const;
 // The plan targets for the "Add to a plan" sheet.
 const PLAN_TARGETS_KEY = ["admin", "plans", "targets"] as const;
 // The lazily-read context_note for the Context cell's view dialog, keyed by trackId.
@@ -295,6 +300,21 @@ const fetchVibePoints = createServerFn({ method: "GET" }).handler(
   },
 );
 
+// The candidates tray's pending queue — a small scoped read (pending rows only),
+// fetched on mount for the header badge's honest count and focus-refetched so a
+// fresh crew submission surfaces when the operator tabs back. The writes
+// (approve = the add path + the status flip, reject) go through the operator-tier
+// oRPC routes, same as the CLI.
+const fetchSubmissions = createServerFn({ method: "GET" }).handler(
+  async (): Promise<Submission[]> => {
+    if (!(await isAdminRequest())) {
+      throw redirect({ to: "/admin/login" });
+    }
+
+    return listPendingSubmissions();
+  },
+);
+
 type BoardSearch = { mix: MixFilter; stage: Worklist };
 
 // Route options follow TanStack's create-route-property-order (each step feeds the
@@ -371,6 +391,30 @@ function AdminBoardPage() {
   // the context note / play the observation; generating is left to the agent.
   const [contextId, setContextId] = useState<string | undefined>();
   const [observationId, setObservationId] = useState<string | undefined>();
+
+  // The web intake (docs/admin-jobs.csv intake-enrichment): [Add finding] is the
+  // board's primary header action; the candidates tray sits beside it as a quiet
+  // sheet. Both land on the same publish path the CLI uses, so a fresh add appears
+  // at the board's top on invalidation with its enrichment cells still open — the
+  // crons fill them in.
+  const [addOpen, setAddOpen] = useState(false);
+  const [trayOpen, setTrayOpen] = useState(false);
+
+  const { data: submissions = [], isFetching: submissionsFetching } = useQuery({
+    queryFn: () => fetchSubmissions(),
+    queryKey: SUBMISSIONS_KEY,
+    refetchOnWindowFocus: true,
+  });
+
+  const onFindingAdded = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: BOARD_KEY });
+  }, [queryClient]);
+
+  // An approve also publishes, so the board refetches alongside the tray.
+  const onSubmissionsChanged = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: SUBMISSIONS_KEY });
+    void queryClient.invalidateQueries({ queryKey: BOARD_KEY });
+  }, [queryClient]);
 
   const rowFor = useCallback(
     (trackId?: string) => (trackId ? rows.find((row) => row.trackId === trackId) : undefined),
@@ -870,8 +914,31 @@ function AdminBoardPage() {
     </>
   );
 
+  const headerActions = (
+    <>
+      <Button onClick={() => setTrayOpen(true)} size="sm" variant="ghost">
+        <TrayIcon aria-hidden="true" weight={submissions.length > 0 ? "fill" : "regular"} />
+        Submissions
+        {submissions.length > 0 ? (
+          <Badge className="tabular-nums" variant="secondary">
+            {submissions.length}
+          </Badge>
+        ) : undefined}
+      </Button>
+      <Button onClick={() => setAddOpen(true)} size="sm">
+        <PlusIcon aria-hidden="true" weight="bold" />
+        Add finding
+      </Button>
+    </>
+  );
+
   return (
-    <AdminShell current="findings" subheader={subheader} title="Findings">
+    <AdminShell
+      current="findings"
+      headerActions={headerActions}
+      subheader={subheader}
+      title="Findings"
+    >
       {rows.length === 0 ? (
         <EmptyState body="Logged bangers will show up here." title="No findings yet" />
       ) : visible.length === 0 ? (
@@ -899,6 +966,16 @@ function AdminBoardPage() {
           ) : undefined}
         </>
       )}
+
+      <AddFindingDialog onAdded={onFindingAdded} onOpenChange={setAddOpen} open={addOpen} />
+
+      <SubmissionsTray
+        loading={submissionsFetching}
+        onChanged={onSubmissionsChanged}
+        onOpenChange={setTrayOpen}
+        open={trayOpen}
+        submissions={submissions}
+      />
 
       <EnrichDialog
         error={enrichError}
