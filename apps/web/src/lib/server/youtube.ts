@@ -105,6 +105,87 @@ export async function getYouTubeAccessToken(): Promise<string> {
   return data.access_token;
 }
 
+const youtubeApiBaseUrl = "https://www.googleapis.com/youtube/v3";
+
+/**
+ * Resolve a stored YouTube social URL to a stable channel id (`UC…`) — the durable
+ * follow target `subscriptions.insert` needs. Two shapes:
+ *   - `…/channel/UC…` → the id is already in the path (no quota).
+ *   - `…/@handle` (or a bare handle) → one `channels.list?forHandle=` lookup (1 quota
+ *     unit) resolves the handle to its channel id.
+ * Returns `undefined` when the URL carries no resolvable channel (e.g. a `/watch`
+ * link) so the caller can skip the subscribe cleanly rather than fail the sweep.
+ */
+export async function resolveYouTubeChannelId(url: string): Promise<string | undefined> {
+  const channelMatch = url.match(/\/channel\/(UC[\w-]+)/);
+
+  if (channelMatch?.[1]) {
+    return channelMatch[1];
+  }
+
+  const handleMatch = url.match(/\/@([\w.-]+)/) ?? url.match(/^@?([\w.-]+)$/);
+  const handle = handleMatch?.[1];
+
+  if (!handle) {
+    return undefined;
+  }
+
+  const accessToken = await getYouTubeAccessToken();
+  const params = new URLSearchParams({ forHandle: `@${handle}`, part: "id" });
+  const response = await fetch(`${youtubeApiBaseUrl}/channels?${params.toString()}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (!response.ok) {
+    throw new ApiError(
+      "youtube_channel_lookup_failed",
+      `YouTube channel lookup failed: ${response.status} ${response.statusText}`,
+      response.status,
+    );
+  }
+
+  const data = (await response.json()) as { items?: Array<{ id?: string }> };
+
+  return data.items?.[0]?.id;
+}
+
+/**
+ * Subscribe the `@fluncle` channel to another channel — the YouTube half of the
+ * championing motion. IDEMPOTENT: a `subscriptionDuplicate` error means we already
+ * subscribe, which is a success, so it is swallowed. Any other error propagates.
+ * `youtube.force-ssl` (already granted for the unlisted→public flip) covers this.
+ */
+export async function subscribeToYouTubeChannel(channelId: string): Promise<void> {
+  const accessToken = await getYouTubeAccessToken();
+  const params = new URLSearchParams({ part: "snippet" });
+  const response = await fetch(`${youtubeApiBaseUrl}/subscriptions?${params.toString()}`, {
+    body: JSON.stringify({ snippet: { resourceId: { channelId, kind: "youtube#channel" } } }),
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+
+  if (response.ok) {
+    return;
+  }
+
+  const body = await response.text();
+
+  // Already subscribed → the insert 400s with reason `subscriptionDuplicate`. That is
+  // the idempotent-done case, not a failure.
+  if (body.includes("subscriptionDuplicate")) {
+    return;
+  }
+
+  throw new ApiError(
+    "youtube_subscribe_failed",
+    `YouTube subscribe failed: ${response.status} ${response.statusText} - ${body}`,
+    response.status,
+  );
+}
+
 async function requestToken(params: Record<string, string>): Promise<YouTubeTokenResponse> {
   const env = await readEnvs(["YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET"]);
   const response = await fetch(googleTokenUrl, {

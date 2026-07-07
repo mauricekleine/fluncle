@@ -1,26 +1,61 @@
-// The `admin-artists` domain router module — artist entity operations (artist-
-// relationship RFC). Follows the `admin-backfills` pattern for backfill; adds
-// the resolution op for the social-identity sweep.
+// The `admin-artists` domain router module — the artist-entity backfill (Unit 1 of
+// the artist-relationship RFC). Follows the `admin-backfills` pattern: a bounded,
+// cursor-resumable, agent-tier POST with query params.
 //
 //   - `backfill_artists` — agent tier (`adminAuth`): the box's `fluncle-artist-backfill`
 //     cron drives this. For each eligible finding (no track_artists row yet), the
 //     Worker re-fetches the Spotify track metadata and upserts artists + track_artists.
 //     Idempotent per finding; rate-paced to stay inside Spotify's burst ceiling.
-//
-//   - `resolve_artist` — agent tier (`adminAuth`): triggers the MB url-rels walk +
-//     Firecrawl /v2/extract gap-fill for one artist. Driven by the on-box
-//     `fluncle-artist-sweep` cron or the CLI for ad-hoc resolution.
 
-import { backfillArtists } from "../backfill-artists";
+import {
+  addArtistSocial,
+  ArtistSocialNotFoundError,
+  confirmArtistSocial,
+  followPendingArtists,
+  InvalidArtistSocialError,
+  listArtistSocialsQueue,
+  recordOperatorFollow,
+  removeArtistSocial,
+} from "../artists";
 import { listUnresolvedArtists, resolveArtist } from "../artist-resolution";
-import { adminAuth } from "../orpc-auth";
+import { backfillArtists } from "../backfill-artists";
+import { adminAuth, operatorGuard } from "../orpc-auth";
+import { ORPCError } from "@orpc/server";
 import { apiFault, type Implementer, parseBool, parseLimit } from "./_shared";
 
 const BACKFILL_DEFAULT_LIMIT = 10;
 const BACKFILL_MAX_LIMIT = 50;
 
+// The auto-follow sweep's per-tick cap: small so a tick stays inside Spotify's +
+// YouTube's quotas. The on-box `fluncle-artist-follow` sweep loops until `remaining` is 0.
+const FOLLOW_DEFAULT_LIMIT = 5;
+const FOLLOW_MAX_LIMIT = 50;
+
+// The resolve worklist page cap (Unit 2.1's `fluncle-artist-sweep` reads this page).
 const QUEUE_DEFAULT_LIMIT = 50;
 const QUEUE_MAX_LIMIT = 50;
+
+// Re-express a missing-social / invalid-input server error as the matching oRPC fault
+// so the rails encoder reproduces the legacy `{ code, message }` body at the right status.
+function toSocialFault(error: unknown): ORPCError<string, { apiCode: string; apiMessage: string }> {
+  if (error instanceof ArtistSocialNotFoundError) {
+    return new ORPCError("NOT_FOUND", {
+      data: { apiCode: "not_found", apiMessage: error.message },
+      message: error.message,
+      status: 404,
+    });
+  }
+
+  if (error instanceof InvalidArtistSocialError) {
+    return new ORPCError("BAD_REQUEST", {
+      data: { apiCode: "invalid_request", apiMessage: error.message },
+      message: error.message,
+      status: 400,
+    });
+  }
+
+  return apiFault(error);
+}
 
 /**
  * Build the `admin-artists` domain's handlers.
@@ -53,9 +88,96 @@ export function adminArtistsHandlers(os: Implementer) {
     }
   });
 
-  // GET /admin/artists — agent tier (`adminAuth`): the artist-sweep worklist. A
-  // bounded, cursor-paged page of artists still awaiting social resolution
-  // (`resolved_at IS NULL`), oldest-first. The cron reads this, then resolves each.
+  // GET /admin/artists/socials — admin tier (agent-allowed read): the follow queue for
+  // the `/admin/artists` station. Returns artists with actionable socials.
+  const listArtistSocialsHandler = os.list_artist_socials
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const limit = parseLimit(input.limit, 100, 500);
+
+        return { artists: await listArtistSocialsQueue(limit), ok: true as const };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  // POST /admin/artists/follow — agent tier (`adminAuth`, no operatorGuard): the
+  // championing motion's automated half. Internal + one-click-reversible (a follow), so
+  // the box's agent-token `fluncle-artist-follow` cron drives it, like the backfill.
+  const followArtistHandler = os.follow_artist.use(adminAuth).handler(async ({ input }) => {
+    try {
+      const { query } = input;
+      const summary = await followPendingArtists(
+        parseLimit(query.limit, FOLLOW_DEFAULT_LIMIT, FOLLOW_MAX_LIMIT),
+        parseBool(query.dryRun),
+      );
+
+      return { ok: true as const, ...summary };
+    } catch (error) {
+      throw apiFault(error);
+    }
+  });
+
+  // POST /admin/artists/socials/{socialId}/follow — operator tier: register a manual follow.
+  const recordOperatorFollowHandler = os.record_operator_follow
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        return { ok: true as const, social: await recordOperatorFollow(input.socialId) };
+      } catch (error) {
+        throw toSocialFault(error);
+      }
+    });
+
+  // POST /admin/artists/socials/{socialId}/confirm — operator tier: candidate → confirmed.
+  const confirmArtistSocialHandler = os.confirm_artist_social
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        return { ok: true as const, social: await confirmArtistSocial(input.socialId) };
+      } catch (error) {
+        throw toSocialFault(error);
+      }
+    });
+
+  // POST /admin/artists/{artistId}/socials — operator tier: add/replace a social by platform.
+  const addArtistSocialHandler = os.add_artist_social
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const platform = typeof input.platform === "string" ? input.platform : "";
+        const url = typeof input.url === "string" ? input.url : "";
+
+        return {
+          ok: true as const,
+          social: await addArtistSocial(input.artistId, platform, url),
+        };
+      } catch (error) {
+        throw toSocialFault(error);
+      }
+    });
+
+  // DELETE /admin/artists/socials/{socialId} — operator tier: remove a social.
+  const removeArtistSocialHandler = os.remove_artist_social
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        await removeArtistSocial(input.socialId);
+
+        return { ok: true as const };
+      } catch (error) {
+        throw toSocialFault(error);
+      }
+    });
+
+  // GET /admin/artists — agent tier (`adminAuth`): the artist-sweep worklist. A bounded,
+  // cursor-paged page of artists still awaiting social resolution (`resolved_at IS NULL`),
+  // oldest-first. The cron reads this, then resolves each.
   const listUnresolvedArtistsHandler = os.list_unresolved_artists
     .use(adminAuth)
     .handler(async ({ input }) => {
@@ -97,8 +219,14 @@ export function adminArtistsHandlers(os: Implementer) {
   });
 
   return {
+    add_artist_social: addArtistSocialHandler,
     backfill_artists: backfillArtistsHandler,
+    confirm_artist_social: confirmArtistSocialHandler,
+    follow_artist: followArtistHandler,
+    list_artist_socials: listArtistSocialsHandler,
     list_unresolved_artists: listUnresolvedArtistsHandler,
+    record_operator_follow: recordOperatorFollowHandler,
+    remove_artist_social: removeArtistSocialHandler,
     resolve_artist: resolveArtistHandler,
   };
 }

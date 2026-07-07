@@ -284,6 +284,20 @@ export async function addTrackToPlaylist(track: TrackMetadata): Promise<void> {
   });
 }
 
+/**
+ * Follow one artist on Spotify by Spotify artist id — the championing motion (Epic B
+ * of the artist-relationship RFC). Uses the same user grant as the playlist writes;
+ * the `user-follow-modify` scope (added to `spotifyScopes`) covers it. IDEMPOTENT:
+ * Spotify answers 204 whether or not the artist was already followed, so re-running is
+ * harmless. Throws the usual `ApiError`/reconnect signal if the grant is gone.
+ */
+export async function followSpotifyArtist(spotifyArtistId: string): Promise<void> {
+  const accessToken = await getSpotifyAccessToken();
+  const params = new URLSearchParams({ ids: spotifyArtistId, type: "artist" });
+
+  await spotifyFetch(`/me/following?${params.toString()}`, accessToken, { method: "PUT" });
+}
+
 export class ApiError extends Error {
   code: string;
   status: number;

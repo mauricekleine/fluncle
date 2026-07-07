@@ -1,4 +1,5 @@
 import {
+  BroadcastIcon,
   CassetteTapeIcon,
   FileTextIcon,
   FilmSlateIcon,
@@ -12,7 +13,7 @@ import {
 } from "@phosphor-icons/react";
 import { isStaleTikTokDraft, tikTokDraftAgeHours } from "@fluncle/contracts/util";
 import { type ComponentType } from "react";
-import { TiktokIcon, YoutubeIcon } from "@/components/platform-icons";
+import { SpotifyIcon, TiktokIcon, YoutubeIcon } from "@/components/platform-icons";
 import { type BlockedOn, type Stage } from "@/lib/server/track-stage";
 import { type BoardRow } from "@/components/admin/use-publish";
 
@@ -50,7 +51,7 @@ export type StepKey =
   | "youtube"
   | "tiktok"
   | "mixtape"
-  | "lastfm";
+  | "socials";
 
 /** Who advances the step: an agent (`auto`) or the operator (`human`). */
 export type StepKind = "auto" | "human";
@@ -123,7 +124,7 @@ export type BoardProps = {
 // finding notes_ slice); until that lands it is still operator-written, but it lives
 // among the agents it will join. Within your hands: the social pushes, then the mixtape.
 const STEP_DEFS: { key: StepKey; kind: StepKind; label: string; Icon: StepIcon }[] = [
-  { Icon: HeartIcon, key: "lastfm", kind: "auto", label: "Last.fm" },
+  { Icon: BroadcastIcon, key: "socials", kind: "auto", label: "Auto socials" },
   { Icon: VinylRecordIcon, key: "discogs", kind: "auto", label: "Discogs" },
   { Icon: WaveformIcon, key: "enrich", kind: "auto", label: "Enrich" },
   { Icon: FingerprintIcon, key: "embedding", kind: "auto", label: "Embeddings" },
@@ -188,6 +189,66 @@ function publishStep(
     actionable: !gated,
     gated,
     hint,
+    state,
+    statusLabel,
+  };
+}
+
+/** One line in the automated-socials Popover breakdown. */
+export type SocialBreakdownItem = { key: string; label: string; done: boolean; Icon: StepIcon };
+
+/**
+ * The per-action breakdown behind the automated-socials cell: the Last.fm love plus each
+ * of the finding's artist Spotify/YouTube auto-follow targets. Powers the board cell's
+ * Popover (each line an icon + a done/pending check). Kept beside the cell derivation so
+ * the two never disagree.
+ */
+export function automatedSocialsBreakdown(row: BoardRow): SocialBreakdownItem[] {
+  const items: SocialBreakdownItem[] = [
+    {
+      Icon: HeartIcon,
+      done: row.lastfmRan,
+      key: "lastfm",
+      label: row.lastfmLoved
+        ? "Last.fm — loved"
+        : row.lastfmRan
+          ? "Last.fm — checked, not loved"
+          : "Last.fm — pending",
+    },
+  ];
+
+  for (const target of row.artistFollows ?? []) {
+    const name = target.platform === "spotify" ? "Spotify" : "YouTube";
+    items.push({
+      Icon: target.platform === "spotify" ? SpotifyIcon : YoutubeIcon,
+      done: target.followed,
+      key: target.platform,
+      label: `${name} — ${target.followed ? "following the artist" : "not followed yet"}`,
+    });
+  }
+
+  return items;
+}
+
+// The automated-socials cell (the repurposed LFM cell): an aggregate of the finding's
+// hands-off "champion the artist" actions — the Last.fm love (workflow-tracker rule:
+// `done` once the backfill RAN) + each artist Spotify/YouTube auto-follow. `done` = all
+// actioned, `open` = none, `partial` = some. Not actionable (the follows are automated);
+// the cell's Popover shows the per-platform breakdown on hover.
+function socialsStep(
+  row: BoardRow,
+): Pick<BoardStep, "state" | "statusLabel" | "hint" | "actionable" | "gated"> {
+  const items = automatedSocialsBreakdown(row);
+  const doneCount = items.filter((item) => item.done).length;
+  const state: StepState =
+    doneCount === 0 ? "open" : doneCount === items.length ? "done" : "partial";
+  const statusLabel =
+    state === "done" ? "All" : state === "partial" ? `${doneCount}/${items.length}` : "Pending";
+
+  return {
+    actionable: false,
+    gated: false,
+    hint: "Automated socials — the Last.fm love + Spotify/YouTube artist follows",
     state,
     statusLabel,
   };
@@ -275,23 +336,6 @@ export function boardSteps(row: BoardRow, now: number = Date.now()): BoardStep[]
             ? "Enriching…"
             : "Enrich",
     },
-    lastfm: {
-      // Same workflow-tracker rule as Discogs. The Last.fm love runs on its own (the
-      // publish fan-out loves on add; the backfill loves older findings) — no board
-      // click. The cell closes `done` the moment the backfill RAN (`lastfmRan`, the
-      // `backfill_lastfm_attempted_at` stamp), whether or not the love landed; grey/
-      // `open` means only "not run yet". `lastfmLoved` (the `backfill_lastfm_done_at`
-      // stamp a successful `track.love` writes) only refines the label.
-      actionable: false,
-      gated: false,
-      hint: row.lastfmLoved
-        ? "Loved on Last.fm"
-        : row.lastfmRan
-          ? "Checked — not loved on Last.fm"
-          : "Last.fm love hasn't run yet",
-      state: row.lastfmRan ? "done" : "open",
-      statusLabel: row.lastfmLoved ? "Loved" : row.lastfmRan ? "Checked — not loved" : "Pending",
-    },
     mixtape: {
       actionable: true,
       gated: false,
@@ -328,6 +372,7 @@ export function boardSteps(row: BoardRow, now: number = Date.now()): BoardStep[]
       state: rendered ? "done" : row.hasContextNote ? "partial" : "open",
       statusLabel: rendered ? "Heard" : row.hasContextNote ? "Ready to voice" : "No clip",
     },
+    socials: socialsStep(row),
     tiktok: publishStep(row, "tiktok", now),
     video: {
       // Agent-rendered; clicking previews when there's a clip, otherwise it waits.
@@ -377,9 +422,9 @@ export function runStep(step: BoardStep, row: BoardRow, actions: BoardActions): 
       }
       return;
     case "embedding":
-    case "lastfm":
-      // Read-only presence trackers — the agent (the embed / Last.fm crons) advances
-      // them; the cell is a status mark, not a click target.
+    case "socials":
+      // Read-only presence trackers — the agent (the embed / Last.fm + follow crons)
+      // advances them; the cell is a status mark, not a click target.
       return;
   }
 }

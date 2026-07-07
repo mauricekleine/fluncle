@@ -51,8 +51,14 @@ import { tracksContract } from "./tracks";
 // keep their entrypoints.
 export { ArtistListItemSchema, artistsContract, getArtist, listArtists } from "./artists";
 export {
+  addArtistSocial,
   adminArtistsContract,
   backfillArtists,
+  confirmArtistSocial,
+  followArtist,
+  listArtistSocials,
+  recordOperatorFollow,
+  removeArtistSocial,
   resolveArtist,
   ResolvedSocialSchema,
 } from "./admin-artists";
