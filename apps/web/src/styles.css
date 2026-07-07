@@ -2863,19 +2863,26 @@ body::before {
 }
 
 /* The admin workspace sidebar (docs/admin-shell.md): its own pane sitting
-   directly on the cosmos (One Pane), in the plate's glass grammar — a
-   translucent Sleeve-Black tint that blurs the starfield behind it. Browsers
-   without backdrop-filter get the more opaque tint (Legible Sky holds either
-   way). The mobile sheet stays opaque like every floating dialog surface. */
+   directly on the cosmos (One Pane), in the plate's glass grammar. The floating
+   variant already makes it an inset, rounded, ring-bordered panel; here we align
+   its MATERIAL to the content plate (admin-shell.tsx: bg-card/80 + backdrop-blur-xl
+   + outline-offset-4) so the sidebar and the plate read as one continuous glass
+   rather than mismatched tints — same Sleeve-Black token at the same 80% opacity,
+   the same blur radius, the same xl radius, and the plate's offset outline halo.
+   Browsers without backdrop-filter get the more opaque tint (Legible Sky holds
+   either way). The mobile sheet stays opaque like every floating dialog surface. */
 [data-slot="sidebar-inner"] {
-  background: color-mix(in oklch, var(--sidebar) 86%, transparent);
+  background: color-mix(in oklch, var(--card) 88%, transparent);
+  border-radius: calc(var(--radius) * 1.4);
+  outline: 1px solid color-mix(in oklch, var(--border) 40%, transparent);
+  outline-offset: 4px;
 }
 
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   [data-slot="sidebar-inner"] {
-    -webkit-backdrop-filter: blur(18px) saturate(125%);
-    backdrop-filter: blur(18px) saturate(125%);
-    background: color-mix(in oklch, var(--sidebar) 55%, transparent);
+    -webkit-backdrop-filter: blur(24px);
+    backdrop-filter: blur(24px);
+    background: color-mix(in oklch, var(--card) 80%, transparent);
   }
 }
 
@@ -2892,6 +2899,30 @@ body::before {
   line-height: 1.2;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+/* The admin brand chip — the Fluncle mark on a light Starlight-Cream disc so the
+   mostly-dark, gold-rimmed art reads against the dark sidebar (it is otherwise
+   near-invisible on Sleeve-Black). Shown at all times: beside the wordmark when
+   expanded, alone on the icon rail when collapsed. A faint Eclipse-Gold inner
+   ring ties the disc to the mark's own glow. The art sits centred in a padded
+   square, so it is zoomed to fill the disc and the overflow is clipped. */
+.admin-brand-chip {
+  align-items: center;
+  background: color-mix(in oklch, var(--starlight-cream) 90%, transparent);
+  border-radius: 9999px;
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--eclipse-gold) 35%, transparent);
+  display: flex;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.admin-brand-chip img {
+  height: 200%;
+  max-width: none;
+  object-fit: contain;
+  transform: translateY(-3%);
+  width: 200%;
 }
 
 /* The attention queue's zero-state settle — the one sanctioned motion exception

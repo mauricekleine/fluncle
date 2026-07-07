@@ -236,13 +236,25 @@ export function AdminSidebar({ current }: { current: AdminNavCurrent }) {
   };
 
   return (
-    <Sidebar collapsible="icon">
+    <Sidebar collapsible="icon" variant="floating">
       <SidebarHeader>
+        {/* The nameplate + home link. The circular brand chip shows ALWAYS — the
+            mark alongside the wordmark when expanded, and the mark alone once the
+            rail collapses to icons (the wordmark hides, the chip stays, sized to
+            the icon-button footprint). The chip is a light disc so the mostly-dark
+            Fluncle art reads against the dark sidebar; the img alt carries the
+            link's accessible name in both states, so the visible wordmark is
+            marked decorative to avoid a doubled reading. */}
         <a
-          className="admin-wordmark rounded-md px-2 py-1.5 focus-visible:ring-3 focus-visible:ring-ring/50 group-data-[collapsible=icon]:hidden"
+          className="flex items-center gap-2 rounded-md p-1 focus-visible:ring-3 focus-visible:ring-ring/50 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0"
           href="/admin"
         >
-          Fluncle <span className="text-muted-foreground">admin</span>
+          <span className="admin-brand-chip size-8 shrink-0">
+            <img alt="Fluncle admin" src="/fluncle-transparant.png" />
+          </span>
+          <span aria-hidden="true" className="admin-wordmark group-data-[collapsible=icon]:hidden">
+            Fluncle <span className="text-muted-foreground">admin</span>
+          </span>
         </a>
       </SidebarHeader>
       <SidebarContent>
