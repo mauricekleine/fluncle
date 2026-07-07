@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { cronSurfaces } from "@fluncle/registry";
 import { siteUrl } from "@/lib/fluncle-links";
+import { estimateNextRun, formatCadence, formatCountdown } from "@/lib/next-run";
 import { Badge } from "@fluncle/ui/components/badge";
 import {
   getRecentStatusEvents,
@@ -21,6 +22,12 @@ import {
 // hostname, op-path, or raw error body — that public-safety constraint is enforced
 // at the write (the probe + the `record_health` handler), and this surface simply
 // never reaches for anything else.
+//
+// One derived read on top of the snapshot: each automation row shows a COMPUTED
+// "next ≈ …" — the next expected run, estimated from the cron's registry-declared
+// cadence + its last probe timestamp (see @/lib/next-run + CRON_CADENCE_MS below).
+// Public-safe by construction (cadence is already declared in the public registry),
+// and the operator's window onto "when does each system fire next" without the box.
 
 // The on-box Hermes crons, in @fluncle/registry catalog order — the single source of
 // truth for which crons exist + how they're ordered. The healthcheck cron POSTs one
@@ -30,6 +37,24 @@ import {
 // here automatically — no edit to this file.
 const CRON_SURFACES = cronSurfaces();
 const CRON_ORDER = CRON_SURFACES.map((surface) => surface.name);
+
+// The declared run cadence per cron service id, read straight from the registry's
+// `probeConfig.cadenceMs` (service id = the cron surface name, e.g. `cron.enrich`).
+// This is the fuel for the computed next-run estimate: a cron's row shows "next ≈ …"
+// from its cadence + the last probe timestamp, so the operator can see when each
+// automation will fire next — no box round-trip (docs/admin-jobs.csv platform-ops
+// "Surface every cron's last-run and next-run on web-admin"). A cron added to the
+// registry with a cadence surfaces its next-run here automatically; a self-posted
+// automation with no declared cadence (e.g. `self-deploy`) simply shows none.
+const CRON_CADENCE_MS: Record<string, number> = {};
+
+for (const surface of CRON_SURFACES) {
+  const cadence = surface.probeConfig?.cadenceMs;
+
+  if (cadence !== undefined) {
+    CRON_CADENCE_MS[surface.name] = cadence;
+  }
+}
 
 // Self-posted automations that belong under the Automation heading but are NOT registry
 // crons: `self-deploy` is the box's host systemd timer (pin-watch) reporting its own
@@ -408,6 +433,15 @@ function ServiceRow({
   const subtitle = serviceSubtitle(service.service);
   const oldest = samples[0];
 
+  // Scheduled automations (the registry crons) carry a declared cadence, so their
+  // next run is COMPUTED from that cadence + the last probe timestamp — the operator
+  // can see when each will fire without SSHing the box. Deadpan and honestly
+  // approximate ("next ≈"): the timestamp we have is the ~10m probe, not the cron's
+  // own last-run wall-clock, so a wall-clock schedule (the daily backup, the weekly
+  // newsletter) is a coarse estimate. A row with no declared cadence shows none.
+  const cadence = CRON_CADENCE_MS[service.service];
+  const nextRun = cadence === undefined ? null : estimateNextRun(service.checked_at, cadence, now);
+
   return (
     <article className="py-6 first:pt-0">
       <div className="flex items-baseline justify-between gap-3">
@@ -420,6 +454,13 @@ function ServiceRow({
           {subtitle}
           {subtitle && service.message ? " · " : ""}
           {service.message}
+        </p>
+      ) : undefined}
+
+      {nextRun && cadence !== undefined ? (
+        <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+          every {formatCadence(cadence)} · next ≈ {formatCheckedAt(nextRun)}{" "}
+          <span className="text-foreground/80">({formatCountdown(nextRun, now)})</span>
         </p>
       ) : undefined}
 
