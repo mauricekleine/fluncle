@@ -180,6 +180,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The RFC recording-primitive writes — operator tier: create/update/delete a captured
   // set + `promote` (mints a coordinate). The agent token 403s.
   create_recording: "operator",
+  // The operator's private cost ledger (COST-02) — the writes are operator tier (the
+  // operator's private spend data; a valid agent token 403s), the read is admin tier.
+  create_subscription: "operator",
   delete_clip: "operator",
   // The operator's "unschedule" (take a clip off the drip queue) — operator tier, symmetric
   // with set_clip_schedule; the agent token 403s.
@@ -187,6 +190,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   delete_edition: "operator",
   delete_private_account: "private-session",
   delete_recording: "operator",
+  delete_subscription: "operator",
   draft_track_social: "admin",
   // The clip drip-feed tick — ADMIN tier (adminAuth only, no operatorGuard): the on-box
   // `fluncle-clip-drip` cron drives it with the agent token (the `finalize_clip_cut` /
@@ -241,6 +245,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   list_private_submissions: "private-session",
   list_recordings: "admin",
   list_submissions: "admin",
+  list_subscriptions: "admin",
   list_track_social: "admin",
   list_tracks_admin: "admin",
   // The artist-sweep resolve worklist (artists awaiting social resolution) — agent
@@ -338,6 +343,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   update_mixtape_cue: "operator",
   update_private_profile: "private-session",
   update_recording: "operator",
+  update_subscription: "operator",
   update_track: "admin",
   update_track_social: "operator",
 };

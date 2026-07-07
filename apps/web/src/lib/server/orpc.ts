@@ -39,6 +39,7 @@ import { adminMixtapesHandlers } from "./orpc/admin-mixtapes";
 import { adminRecordingsHandlers } from "./orpc/admin-recordings";
 import { adminSocialHandlers } from "./orpc/admin-social";
 import { adminSubmissionsHandlers } from "./orpc/admin-submissions";
+import { adminSubscriptionsHandlers } from "./orpc/admin-subscriptions";
 import { adminTokensHandlers } from "./orpc/admin-tokens";
 import { adminTracksHandlers } from "./orpc/admin-tracks";
 import { adminTwitchHandlers } from "./orpc/admin-twitch";
@@ -80,6 +81,7 @@ export const router = os.router({
   ...adminRecordingsHandlers(os),
   ...adminSocialHandlers(os),
   ...adminSubmissionsHandlers(os),
+  ...adminSubscriptionsHandlers(os),
   ...adminTokensHandlers(os),
   ...adminTracksHandlers(os),
   ...adminTwitchHandlers(os),

@@ -283,6 +283,47 @@ export const EditionDTOSchema = z
   })
   .meta({ id: "EditionDTO" });
 
+/** The cost-ledger buckets a subscription line falls in (COST-02). */
+export const SubscriptionCategorySchema = z.enum([
+  "infra",
+  "AI",
+  "media",
+  "distribution",
+  "domains",
+  "tooling",
+]);
+
+/** How a subscription line's charge recurs (COST-02). */
+export const SubscriptionCadenceSchema = z.enum(["monthly", "annual", "one-off", "usage"]);
+
+/** A subscription line's lifecycle (COST-02). */
+export const SubscriptionStatusSchema = z.enum(["active", "cancelled", "trial"]);
+
+/**
+ * One line in the operator's private cost ledger (`SubscriptionDTO` in ../index.ts) —
+ * a recurring or one-off spend on some Fluncle vendor. The whole surface is operator
+ * tier: this shape never reaches a public route, only the admin `/admin/costs` station
+ * + its CRUD ops. `amount` is minor units (cents). Nullable fields are `.optional()`.
+ */
+export const SubscriptionDTOSchema = z
+  .object({
+    amount: z.number(),
+    billingUrl: z.string().optional(),
+    cadence: SubscriptionCadenceSchema,
+    category: SubscriptionCategorySchema,
+    createdAt: z.string(),
+    currency: z.string(),
+    id: z.string(),
+    name: z.string(),
+    notes: z.string().optional(),
+    powers: z.string().optional(),
+    renewsAt: z.string().optional(),
+    status: SubscriptionStatusSchema,
+    updatedAt: z.string(),
+    vendor: z.string(),
+  })
+  .meta({ id: "SubscriptionDTO" });
+
 /**
  * A clip — a lightweight 9:16 derivative cut from a recording's set video
  * (`mixtape_clips`; `ClipDTO` below). NOT a spine

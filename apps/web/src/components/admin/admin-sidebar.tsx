@@ -8,6 +8,7 @@ import {
   ListNumbersIcon,
   PaperPlaneTiltIcon,
   PulseIcon,
+  ReceiptIcon,
   SignOutIcon,
   SquaresFourIcon,
   UsersThreeIcon,
@@ -53,12 +54,14 @@ import { listTracks } from "@/lib/server/tracks";
 // the drip kill-switch) → clips; `/admin/newsletter` → newsletter. A recording's
 // per-set workstation is the Studio (`/admin/studio/$recordingId`), opened from a
 // Recordings row. `/admin/mixtapes` (the minted-mixtape index + distribution
-// links) → mixtapes; System is the live service map at /status.
+// links) → mixtapes; `/admin/costs` (the operator's private cost ledger) → costs;
+// System is the live service map at /status.
 
 /** A sidebar entry's key. A page passes the entry it OWNS as `current`. */
 export type AdminNavCurrent =
   | "artists"
   | "clips"
+  | "costs"
   | "dashboard"
   | "findings"
   | "mixtapes"
@@ -153,6 +156,11 @@ const OBJECT_SECTIONS: NavSection[] = [
       },
     ],
     key: "publish",
+  },
+  {
+    entries: [{ icon: ReceiptIcon, key: "costs", label: "Costs", to: "/admin/costs" }],
+    key: "ops",
+    label: "Ops",
   },
 ];
 
