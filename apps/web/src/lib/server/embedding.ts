@@ -1,5 +1,5 @@
 // The audio-embedding vector math — the pure core of the MuQ similarity pipeline
-// (docs/audio-embedding-rfc.md). The box's `fluncle-embed` cron produces a 1024-d
+// (docs/rfcs/audio-embedding-rfc.md). The box's `fluncle-embed` cron produces a 1024-d
 // MuQ vector per finding and stores it (as a JSON array) in `tracks.embedding_json`
 // via the agent-tier `update_track` path; the public `get_similar_findings` op
 // cosine-ranks those vectors to power the "more like this" `/log` row. All of that

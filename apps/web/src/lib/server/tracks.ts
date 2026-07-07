@@ -748,7 +748,7 @@ type EmbeddingRow = {
 
 /**
  * The N sonically-nearest findings to a given one — the automatic "more like this"
- * cluster (docs/audio-embedding-rfc.md, Phase 1). Loads the target's MuQ embedding,
+ * cluster (docs/rfcs/audio-embedding-rfc.md, Phase 1). Loads the target's MuQ embedding,
  * cosine-ranks it against every OTHER coordinate-bearing finding's embedding, and
  * hydrates the winners in similarity order. Powers the `/log` "more like this" row and
  * the public `get_similar_findings` op; a future "play something like this" radio hook
@@ -824,7 +824,7 @@ export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<
  * never rides the public `TrackListItem` contract (only its presence, admin-only, and
  * the derived `get_similar_findings` neighbours do), so the board reads it through
  * this gated path like `context_note`. One batch query for the whole page, no N+1.
- * See docs/audio-embedding-rfc.md.
+ * See docs/rfcs/audio-embedding-rfc.md.
  */
 export async function listEmbeddingPresenceForTracks(trackIds: string[]): Promise<Set<string>> {
   if (trackIds.length === 0) {
@@ -914,7 +914,7 @@ type ListTracksOptions = {
    * on file (`source_audio_key IS NOT NULL`), since MuQ embeds the CAPTURED full song,
    * not a preview or the unmatched tail (RFC full-audio § Unit 3) — a keyless finding is
    * excluded. `true` = a vector is on file (a pure presence check, no key gate). Omitted
-   * for public reads. Mirrors `hasVideo`/`hasKey`'s tri-state. See docs/audio-embedding-rfc.md.
+   * for public reads. Mirrors `hasVideo`/`hasKey`'s tri-state. See docs/rfcs/audio-embedding-rfc.md.
    */
   hasEmbedding?: boolean;
   /**

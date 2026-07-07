@@ -2,7 +2,7 @@
 
 **Status:** Final (research → /taste → 4-role adversarial panel synthesized, 2026-06-26) — completeness standard applied.
 **For:** a fresh build session (or a small fleet), executing the art-first rebuild of the `/factory` page in gates.
-**Canon/authority:** `DESIGN.md`, `VOICE.md` + the `copywriting-fluncle` skill, `PRODUCT.md` arbitrate (this is planning, not spec). Source vision: `docs/ROADMAP.md` "From Earth to Orbit". The codebase wins on any conflict.
+**Canon/authority:** `DESIGN.md`, `VOICE.md` + the `copywriting-fluncle` skill, `PRODUCT.md` arbitrate (this is planning, not spec). Source vision: `docs/planning/ROADMAP.md` "From Earth to Orbit". The codebase wins on any conflict.
 
 > Process note: divergent research across five threads (data wiring · AI-art generation · render engineering · canon/palette/voice · product/scope), a /taste pass, and a 4-role adversarial panel (staff engineer · design-brand · data/realtime · product-scope) that verified claims live. Their corrections **substantially reshaped this RFC** — from "rewrite `/factory` into a full-screen tableau" to "art-first, gated, diegetic, finding-as-hero." Verifications + sources in the appendix.
 

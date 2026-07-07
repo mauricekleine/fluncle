@@ -5,8 +5,8 @@ operator mixes. Two local processes — the **glass** (`bun run glass`, the WebG
 renderer on :4173) and the **bridge** (`bun run bridge`, plan + fingerprint
 identity + supervisor + phone remote on :4180) — bound by `src/contract.ts`.
 Local-only by design (the never-crash rail: no network dependency mid-show). The
-doctrine and architecture live in
-[docs/live-longform-visuals-rfc.md](../../docs/live-longform-visuals-rfc.md).
+doctrine and architecture originate in the live+longform RFC (shipped #287–#291;
+now in git history).
 
 ## The glass (Unit L)
 

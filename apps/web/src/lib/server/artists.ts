@@ -867,7 +867,7 @@ function platformWriteWarning(
  * warning line if the platform write missed (a 403 from our Development-mode app, an unresolvable
  * id, a network blip). NEVER throws for a platform miss — the caller stamps `followed_at` either
  * way, so a Spotify row (whose artist-follow endpoint is API-gated for our app — see
- * docs/ROADMAP.md) stays markable instead of hard-gating on the 403.
+ * docs/planning/ROADMAP.md) stays markable instead of hard-gating on the 403.
  */
 async function tryPlatformFollow(
   platform: "spotify" | "youtube",
@@ -942,7 +942,7 @@ async function tryPlatformUnfollow(
  *
  * The platform write is BEST-EFFORT: Spotify's artist-follow endpoint 403s for our
  * Development-mode app (verified — same token, playlist-modify writes 200; not scope/account/
- * Premium; docs/ROADMAP.md), so a hard gate here would make a Spotify row un-markable. On a
+ * Premium; docs/planning/ROADMAP.md), so a hard gate here would make a Spotify row un-markable. On a
  * platform miss we still stamp `followed_at` (the operator championed it) and return a soft
  * `platformWarning` for the UI, rather than throwing.
  */
@@ -1273,7 +1273,7 @@ function spotifyArtistIdFromUrl(url: string): string | undefined {
  * writing. `remaining` lets the on-box sweep loop until 0.
  *
  * SPOTIFY IS DELIBERATELY EXCLUDED. Spotify's artist-follow endpoint 403s for our
- * Development-mode app (a permanent dev-mode endpoint gate — see docs/ROADMAP.md), so
+ * Development-mode app (a permanent dev-mode endpoint gate — see docs/planning/ROADMAP.md), so
  * auto-following it can never succeed and would only churn the queue and starve the
  * working YouTube follows. Spotify championing runs through the manual /admin/artists
  * queue (Follow-now best-effort + manual). To re-enable if the gate ever lifts, add

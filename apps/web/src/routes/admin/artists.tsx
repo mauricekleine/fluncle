@@ -191,7 +191,7 @@ function AdminArtistsPage() {
   // "Follow now" — the REAL platform follow (Spotify/YouTube) via the API, then bookkeeping.
   // The platform write is best-effort: a miss (e.g. our Spotify Development-mode app 403s every
   // artist-follow) still records the follow and lands a soft `platformWarning` — surfaced as a
-  // quiet notice, not a hard error, so the row stays markable. See docs/ROADMAP.md.
+  // quiet notice, not a hard error, so the row stays markable. See docs/planning/ROADMAP.md.
   const followNow = useMutation({
     mutationFn: (socialId: string) =>
       mutateJson<{ platformWarning: string | null }>(

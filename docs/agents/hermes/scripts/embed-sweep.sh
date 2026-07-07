@@ -14,7 +14,7 @@
 # LIVE-INTENT. Version-controlled source; the repo is canonical and the box is a deploy
 # target (fluncle-hermes-operator skill). This trio (+ embed-track.py) deploys to
 # /opt/data/scripts/ on the devbox via `docker cp`. See ../embed-timer/README.md and
-# docs/full-audio-rfc.md § Unit 3.
+# docs/rfcs/full-audio-rfc.md § Unit 3.
 #
 # PRODUCTION PRE-REQS (see ../embed-timer/README.md for the full runbook):
 #   - The MuQ torch layer + baked weights in the image; ffmpeg in the image (the decode path).

@@ -2,7 +2,7 @@
 
 `/factory` is Fluncle's assembly line: the **works** where a find is made. The galaxy game (`/galaxy`) is the sky and `/earth` is the ground; the factory is the underworld between them — the pipeline that turns a fresh find into a launched finding. A finding enters on the left, rides a **station per lifecycle step**, piles up in front of the slow machines, and a finished finding boards a ship and lifts off to the Galaxy. _Found → assembled → launched → collected._
 
-Phase 1 (the public page) of the From-Earth-to-Orbit arc (see [docs/ROADMAP.md](./ROADMAP.md) "From Earth to Orbit"). A client-only Canvas app, the same shape as `/earth` and `/galaxy` (`apps/web/src/game/*`): the route boots it via a dynamic import in `useEffect`, the server never touches browser APIs, the bundle stays light.
+Phase 1 (the public page) of the From-Earth-to-Orbit arc (see [docs/planning/ROADMAP.md](./planning/ROADMAP.md) "From Earth to Orbit"). A client-only Canvas app, the same shape as `/earth` and `/galaxy` (`apps/web/src/game/*`): the route boots it via a dynamic import in `useEffect`, the server never touches browser APIs, the bundle stays light.
 
 ## The shape
 
@@ -64,4 +64,4 @@ The 8 machines are **procedural placeholders** (`sprites.ts`) — one shared ste
 - The route is `noindex` and **not yet in `@fluncle/registry`** / the nav — like `/earth`, it lights up on launch (register the surface, flip noindex, add an OG card via `packages/media`).
 - The Gemini machine-sprite pass (drop curated PNGs under `public/factory/`).
 - Feel iteration (the brief's "ship scruffy but real, then iterate hard"): belt/queue density tuning, the new-finding "N incoming" treatment, and a Durable-Object WebSocket if push earns it.
-- The later arc phases — per-track sprites, the collectable binder, public profiles — are tracked in [ROADMAP.md](./ROADMAP.md) under _From Earth to Orbit_.
+- The later arc phases — per-track sprites, the collectable binder, public profiles — are tracked in [ROADMAP.md](./planning/ROADMAP.md) under _From Earth to Orbit_.

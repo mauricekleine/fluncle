@@ -1,6 +1,6 @@
 # The artist relationship
 
-Fluncle keeps a canonical **artist entity** (`artists`, keyed on the Spotify artist id) with a `track_artists` many-to-many and an identity graph (`artist_socials`). The full plan is [docs/artist-relationship-rfc.md](./artist-relationship-rfc.md); the RFC splits into two epics on one spine:
+Fluncle keeps a canonical **artist entity** (`artists`, keyed on the Spotify artist id) with a `track_artists` many-to-many and an identity graph (`artist_socials`). The full plan is [docs/rfcs/artist-relationship-rfc.md](./rfcs/artist-relationship-rfc.md); the RFC splits into two epics on one spine:
 
 - **Epic A — the archive gets an artist.** The entity, resolution, the `/artist/<slug>` pages, and the SEO/AEO graph. No operator gates.
 - **Epic B — the championing motion.** Fluncle-the-account acting outward: following the artists it features across platforms, plus the `/admin/artists` follow queue. Gated on a Spotify re-auth (the `user-follow-modify` scope, already deployed + re-authed).

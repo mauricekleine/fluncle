@@ -1,4 +1,4 @@
-// The attention queue's pure model (docs/cockpit-roadmap.md, "The queue"). Every
+// The attention queue's pure model (docs/planning/cockpit-roadmap.md, "The queue"). Every
 // decision the `/admin` home makes — which rows exist, which tier they ride, what
 // order they land in, what the working set is, what a deadline reads as — lives
 // here as plain functions over plain data with an injected clock, so the queue's
@@ -37,7 +37,7 @@ export type AttentionItem = {
   /** Stable identity (`source:objectId`) — the snooze/won't-do map keys on it. */
   id: string;
   logId?: string;
-  /** The machine an action is bound to (docs/cockpit-roadmap.md, the machine model). */
+  /** The machine an action is bound to (docs/planning/cockpit-roadmap.md, the machine model). */
   machine?: "M2" | "M5";
   /** Distribution legs still missing on a promoted mixtape. */
   missing?: ("mixcloud" | "youtube")[];

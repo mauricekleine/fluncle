@@ -7,7 +7,7 @@
 // session), duration-guards the match against the finding's Spotify length, stores the
 // bytes in the PRIVATE `fluncle-source-audio` R2 bucket, and writes the key + status back
 // via the agent-tier `update_track` op. It is a NON-BLOCKING parallel side-channel: it
-// never gates the enrich/embed queues (RFC docs/full-audio-rfc.md § 3).
+// never gates the enrich/embed queues (RFC docs/rfcs/full-audio-rfc.md § 3).
 //
 // LIVE-INTENT. Version-controlled source; the repo is canonical and the box is a deploy
 // target (fluncle-hermes-operator skill). Invoked by the bash wrapper (capture-sweep.sh)

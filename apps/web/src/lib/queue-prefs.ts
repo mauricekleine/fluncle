@@ -1,7 +1,7 @@
 // The attention queue's snooze / won't-do store. A per-operator CLIENT pref, like
 // the key-notation toggle: one operator, one browser, so a small localStorage map
 // is the honest store — a server column could not see this browser's snoozes and
-// would report a dishonest "due" count (docs/cockpit-roadmap.md, the queue
+// would report a dishonest "due" count (docs/planning/cockpit-roadmap.md, the queue
 // mechanics; the store choice is deliberate and noted in the roadmap's terms).
 //
 // useSyncExternalStore over module state (the key-notation.ts singleton shape).
