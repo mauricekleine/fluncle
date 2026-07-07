@@ -1,16 +1,18 @@
 #!/usr/bin/env bun
-// capture-sweep.ts — the bun orchestrator behind the `--no-agent` full-song CAPTURE
-// cron (`fluncle-capture`). For each finding still needing a capture, it downloads the
-// full song ONCE (yt-dlp → a YouTube match, through a residential proxy on a per-track
-// STICKY session), duration-guards the match against the finding's Spotify length,
-// stores the bytes in the PRIVATE `fluncle-source-audio` R2 bucket, and writes the key
-// + status back via the agent-tier `update_track` op. It is a NON-BLOCKING parallel
-// side-channel: it never gates the enrich/embed queues (RFC docs/full-audio-rfc.md § 3).
+// capture-sweep.ts — the bun orchestrator behind the full-song CAPTURE sweep
+// (`fluncle-capture`), scheduled by a rave-02 HOST systemd timer (../capture-timer/), not
+// a Hermes gateway cron (a proxied yt-dlp fetch has an unbounded tail that would starve
+// the 5-min sweeps). For each finding still needing a capture, it downloads the full song
+// ONCE (yt-dlp → a YouTube match, through a residential proxy on a per-track STICKY
+// session), duration-guards the match against the finding's Spotify length, stores the
+// bytes in the PRIVATE `fluncle-source-audio` R2 bucket, and writes the key + status back
+// via the agent-tier `update_track` op. It is a NON-BLOCKING parallel side-channel: it
+// never gates the enrich/embed queues (RFC docs/full-audio-rfc.md § 3).
 //
 // LIVE-INTENT. Version-controlled source; the repo is canonical and the box is a deploy
 // target (fluncle-hermes-operator skill). Invoked by the bash wrapper (capture-sweep.sh)
-// the cron runner execs on a schedule — see that file's header for the wire-up and
-// ../cron/README.md § The full-song capture cron for the operator runbook.
+// the host timer `docker exec`s on a schedule — see that file's header for the wire-up and
+// ../capture-timer/README.md for the operator runbook.
 //
 // SELF-CONTAINED by necessity: box scripts can't import the workspace. The S3 signer
 // MIRRORS apps/web/src/lib/server/aws-sigv4.ts (unit-tested there via aws-sigv4.test.ts)
@@ -88,8 +90,8 @@ export type CaptureFinding = {
   bpm?: number | null;
   durationMs?: number;
   logId?: string;
-  // Only present if the admin DTO surfaces it (it does not today) — read defensively so
-  // the failure bump becomes a true increment for free the day it is exposed.
+  // The prior consecutive-failure count (the admin list DTO surfaces it when non-zero),
+  // read so the failure bump ACCUMULATES — the queue's failure-cap backoff depends on it.
   sourceAudioFailures?: number;
   title?: string;
   trackId: string;
@@ -489,9 +491,9 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
   const { logId, trackId } = finding;
 
   // No coordinate → nothing to key the archive under (like the video/observation
-  // pipelines, which hard-require a Log ID). Skip without a write; a later Log ID
-  // backfill lets it capture. Newest-first order keeps these rare legacy stragglers
-  // from blocking fresh adds.
+  // pipelines, which hard-require a Log ID). Belt-and-suspenders: the capture queue
+  // already excludes `log_id is null` rows, so this is a defensive skip (never re-picked;
+  // a later Log ID backfill lets it capture).
   if (!logId) {
     return "skipped";
   }
@@ -560,10 +562,11 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
 
     return "done";
   } catch (error) {
-    // A yt-dlp / proxy / R2 error → failed (retriable). Bump the consecutive-failure
-    // count + stamp the attempt (the columns a later backoff-cooldown layer reads). The
-    // queue row carries the prior count only if the admin DTO surfaces it (it does not
-    // today), so this is forward-compatible: absent → 0, so a first failure lands 1.
+    // A yt-dlp / proxy / R2 error → failed (retriable under backoff). ACCUMULATE the
+    // consecutive-failure count + stamp the attempt: the capture queue holds a `failed`
+    // row out until `source_audio_attempted_at` is past the cooldown, and drops it once
+    // the count hits the cap. The admin DTO surfaces the prior count (when non-zero), so
+    // absent → 0 → a first failure lands 1, a second lands 2, … up to the cap.
     const priorFailures =
       typeof finding.sourceAudioFailures === "number" ? finding.sourceAudioFailures : 0;
     await patchTrack(trackId, {

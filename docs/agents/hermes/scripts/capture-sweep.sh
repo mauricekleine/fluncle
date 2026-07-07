@@ -1,23 +1,27 @@
 #!/usr/bin/env bash
-# capture-sweep.sh — the `--no-agent` full-song CAPTURE cron's job ENTRY (`fluncle-capture`).
+# capture-sweep.sh — the full-song CAPTURE sweep's job ENTRY (`fluncle-capture`).
+#
+# SCHEDULED BY A HOST SYSTEMD TIMER, not a Hermes gateway cron: a proxied yt-dlp fetch has
+# an unbounded tail that would starve the latency-sensitive 5-min sweeps on the shared
+# serial runner. The rave-02 host timer `docker exec`s this script inside the container
+# every 5m — see ../capture-timer/README.md for the unit files + install. The container
+# runner dispatches by extension (bash for `.sh`), and a manual `bash /opt/data/scripts/
+# capture-sweep.sh` runs it the same way, so this thin bash wrapper is the entry; all the
+# work lives in the bun orchestrator beside it (capture-sweep.ts). Its stdout is the run
+# output the /status prober reads.
 #
 # LIVE-INTENT. Version-controlled source; the repo is canonical and the box is a deploy
-# target (fluncle-hermes-operator skill). This pair deploys to ~/.hermes/scripts/ on the
-# devbox and the cron is wired there. See ../cron/README.md § The full-song capture cron.
+# target (fluncle-hermes-operator skill). This pair deploys to /opt/data/scripts/ on the
+# devbox via `docker cp`. See ../cron/README.md § The full-song capture sweep + ../capture-timer/.
 #
-# Why a .sh that execs a .ts: the Hermes `--no-agent --script` runner dispatches by
-# extension — bash for `.sh`/`.bash`, Python for everything else — so a bare `.ts` would
-# be fed to Python. This thin wrapper is the bash entry; all the work lives in the bun
-# orchestrator beside it (capture-sweep.ts). Its stdout is the cron's run output.
-#
-# WHAT IT DOES: for each finding still needing a capture (newest-first), downloads the
-# full song ONCE via yt-dlp through a residential proxy on a per-track STICKY session,
-# duration-guards the YouTube match against the finding's Spotify length, stores the bytes
-# in the PRIVATE fluncle-source-audio R2 bucket (never fluncle-videos — that is
+# WHAT IT DOES: for each finding still needing a capture (newest-first, backoff-aware),
+# downloads the full song ONCE via yt-dlp through a residential proxy on a per-track STICKY
+# session, duration-guards the YouTube match against the finding's Spotify length, stores
+# the bytes in the PRIVATE fluncle-source-audio R2 bucket (never fluncle-videos — that is
 # world-served at found.fluncle.com), and writes the key + status back via the agent-tier
 # update_track op. A NON-BLOCKING side-channel: it never gates the enrich/embed queues.
 #
-# PRODUCTION PRE-REQS (see ../cron/README.md § The full-song capture cron):
+# PRODUCTION PRE-REQS (see ../capture-timer/README.md for the full runbook):
 #   - yt-dlp AND ffprobe on PATH (a box deploy prereq — the orchestrator installs them).
 #   - Secrets in the shared 0600 ${HOME}/.fluncle-secrets.env (op-injected by
 #     fluncle-secrets-sync), sourced below:
@@ -31,13 +35,11 @@
 #         FLUNCLE_CAPTURE_BATCH_CAP (4) / _QUEUE_LIMIT (8) / _TOLERANCE_SEC (3) / _TOLERANCE_PCT (0.03).
 #   - The private bucket must exist (operator step; done 2026-07-07).
 #
-# Operator wires it on the devbox (the image already carries bun; the job needs the AGENT
-# token but no operator token — it only writes analysis fields):
-#
-#   hermes cron create "every 5m" --no-agent --script capture-sweep.sh --deliver local --name fluncle-capture
-#
-# Confirm with `hermes cron list`; per-run output lands in
-# ~/.hermes/cron/output/{job_id}/{timestamp}.md.
+# Operator install (host timer — full runbook in ../capture-timer/README.md): docker cp
+# this pair into /opt/data/scripts/, then install fluncle-capture.{service,timer} into
+# /etc/systemd/system/ + `systemctl enable --now fluncle-capture.timer`. The job needs the
+# AGENT token but no operator token — it only writes analysis fields. Smoke-test as the
+# cron user: `docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/data/scripts/capture-sweep.sh`.
 set -euo pipefail
 
 # The runner execs this with a minimal PATH that omits /usr/local/bin (the bun symlink)

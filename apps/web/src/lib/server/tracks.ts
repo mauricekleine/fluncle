@@ -41,6 +41,7 @@ export type TrackRow = {
   popularity: number | null;
   preview_url: string | null;
   release_date: string | null;
+  source_audio_failures: number;
   spotify_url: string;
   tiktok_url: string | null;
   youtube_url: string | null;
@@ -79,7 +80,7 @@ type MixtapeFeedRow = {
 // surfaced (parsed) as creative fuel for the video agent.
 const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.title, tracks.album, tracks.album_image_url, tracks.artists_json,
   tracks.bpm, tracks.duration_ms, tracks.enrichment_status, tracks.features_json, tracks.in_release_id, tracks.isrc, tracks.key, tracks.label, tracks.log_id, tracks.popularity,
-  tracks.preview_url, tracks.release_date, tracks.video_url, tracks.video_squared_at, tracks.video_vehicle, tracks.video_grain, tracks.video_register, tracks.video_model, tracks.video_model_reasoning, tracks.note, tracks.added_at,
+  tracks.preview_url, tracks.release_date, tracks.source_audio_failures, tracks.video_url, tracks.video_squared_at, tracks.video_vehicle, tracks.video_grain, tracks.video_register, tracks.video_model, tracks.video_model_reasoning, tracks.note, tracks.added_at,
   tracks.updated_at, tracks.vibe_x, tracks.vibe_y, tracks.added_to_spotify, tracks.posted_to_telegram,
   tracks.observation_audio_url, tracks.observation_duration_ms, tracks.observation_generated_at, tracks.observation_alignment_json,
   (select url from social_posts
@@ -215,6 +216,10 @@ export function toTrackListItem(row: TrackRow): TrackListItem {
     postedToTelegram: Boolean(row.posted_to_telegram),
     previewUrl: row.preview_url ?? undefined,
     releaseDate: row.release_date ?? undefined,
+    // The consecutive full-song capture failures — surfaced so the `fluncle-capture`
+    // sweep reads the prior count and increments truthfully (the queue's failure cap
+    // depends on it). Only non-zero counts surface; a never-failed finding omits it.
+    sourceAudioFailures: row.source_audio_failures > 0 ? row.source_audio_failures : undefined,
     spotifyUrl: row.spotify_url,
     tiktokUrl: row.tiktok_url ?? undefined,
     title: row.title,
@@ -803,6 +808,14 @@ type TrackCountRow = {
  */
 export const ENRICH_STALE_PROCESSING_MS = 30 * 60 * 1000;
 
+// The full-song capture queue's BACKOFF (RFC full-audio § Unit 1). A `failed` finding is
+// held out of the queue until `source_audio_attempted_at` is older than the cooldown, and
+// is dropped entirely once `source_audio_failures` reaches the cap — so a persistently
+// failing finding stops re-attempting every tick (and, under newest-first order, stops
+// pinning the batch slots + burning proxy bandwidth). `pending`/NULL are always eligible.
+export const CAPTURE_FAILED_COOLDOWN_MS = 60 * 60 * 1000;
+export const CAPTURE_MAX_FAILURES = 8;
+
 /**
  * Enrichment state filters. The four are the real `enrichment_status` values;
  * `"queue"` is the SELF-HEALING meta-filter the sweep uses: tracks NEEDING
@@ -824,14 +837,15 @@ export const ENRICHMENT_STATUS_FILTERS: readonly EnrichmentStatusFilter[] = [
 type ListTracksOptions = {
   /**
    * The full-song CAPTURE queue's filter (admin only) — the `fluncle-capture`
-   * cron's worklist. `true` = findings still NEEDING a capture: status-aware so a
-   * terminal `unmatched` (no confident YouTube match) or a `done` capture is never
-   * re-burned. It matches `capture_status` pending ∪ failed ∪ NULL (the NULL arm is
-   * defensive — the column is `notNull().default('pending')`, but a pre-column row
-   * would read NULL — mirroring the `context_status` style at L972-973). This is a
-   * SEPARATE queue: capture never gates the enrich/embed queues (RFC full-audio §
-   * "Capture does NOT gate the analysis queues"). The capture cron pairs it with
-   * `order: "desc"` so a fresh add jumps ahead of the backfill. Omitted for public reads.
+   * cron's worklist. `true` = findings still NEEDING a capture: `pending`/NULL always
+   * eligible (the NULL arm is defensive — the column is notNull-default, but a pre-column
+   * row reads NULL), a terminal `unmatched`/`done` never re-burned, and a `failed` row
+   * BACKED OFF (re-picked only past the cooldown + below the failure cap —
+   * CAPTURE_FAILED_COOLDOWN_MS / CAPTURE_MAX_FAILURES). Coordinate-less rows are excluded
+   * (`log_id is not null`). This is a SEPARATE queue: capture never gates the enrich/embed
+   * queues (RFC full-audio § "Capture does NOT gate the analysis queues"). The capture
+   * cron pairs it with `order: "desc"` so a fresh add jumps ahead of the backfill. Omitted
+   * for public reads.
    */
   captureQueue?: boolean;
   cursor?: TrackCursor;
@@ -1005,16 +1019,23 @@ export async function listTracks({
     filterClauses.push("(note is null or trim(note) = '')");
   }
 
-  // The full-song CAPTURE queue: findings still needing a capture — `capture_status`
-  // pending ∪ failed ∪ NULL. Status-aware so a terminal `unmatched` (no confident
-  // match) and a `done` capture are never re-burned. The `capture_status is null` arm
-  // is defensive (the column is `notNull().default('pending')`, but a pre-column row
-  // would read NULL), mirroring the context_status style above. A SEPARATE queue — no
-  // capture predicate is ever added to the enrich/embed queues (capture must not gate
-  // them). The capture cron pairs this with order=desc so a fresh add jumps ahead of
-  // the backfill (RFC full-audio § Unit 1 / 5a).
+  // The full-song CAPTURE queue: findings still needing a capture. `pending`/NULL are
+  // ALWAYS eligible (the NULL arm is defensive — the column is notNull-default, but a
+  // pre-column row reads NULL — mirroring the context_status style above); a terminal
+  // `unmatched`/`done` is never re-burned. A `failed` row backs off: re-included only
+  // once `source_audio_attempted_at` is past the cooldown AND below the failure cap, so a
+  // persistently failing finding stops re-attempting every tick (CAPTURE_FAILED_COOLDOWN_MS
+  // / CAPTURE_MAX_FAILURES — the cutoff is BOUND like the enrich queue's staleCutoff; the
+  // cap is a trusted module int, interpolated). `log_id is not null` drops coordinate-less
+  // stragglers (the R2 key needs a Log ID) so they never re-pick. A SEPARATE queue — no
+  // capture predicate ever reaches the enrich/embed queues (capture must not gate them).
+  // The capture cron pairs this with order=desc so a fresh add jumps ahead of the backfill.
   if (captureQueue) {
-    filterClauses.push("(capture_status is null or capture_status in ('pending', 'failed'))");
+    const captureCooldown = new Date(Date.now() - CAPTURE_FAILED_COOLDOWN_MS).toISOString();
+    filterClauses.push(
+      `(log_id is not null and (capture_status is null or capture_status = 'pending' or (capture_status = 'failed' and source_audio_failures < ${CAPTURE_MAX_FAILURES} and (source_audio_attempted_at is null or source_audio_attempted_at < ?))))`,
+    );
+    filterArgs.push(captureCooldown);
   }
 
   if (placement === "unplaced") {

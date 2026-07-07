@@ -1,0 +1,24 @@
+[Unit]
+Description=fluncle-capture — rave-02 host trigger for the full-song capture sweep (decoupled from the latency-sensitive gateway cron runner)
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/capture-timer/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+# Runs as root: it drives the Docker daemon (docker exec into the hermes container).
+# The capture WORK lives in the container (the .sh/.ts pair under /opt/data/scripts/);
+# this host unit only TRIGGERS it. A per-tick yt-dlp fetch through a residential proxy has
+# an UNBOUNDED tail (60s search + up to a 180s download, times BATCH_CAP), so it must NOT
+# ride the one serial Hermes cron runner (a ~300s global budget) where a backfill-drain
+# tick would starve the latency-sensitive 5-min enrich/context/note sweeps — the same
+# reason the healthcheck prober and the pin-watch rebuild are host timers.
+ExecStart=/usr/bin/docker exec -e HOME=/opt/data/home hermes bash /opt/data/scripts/capture-sweep.sh
+# A worst-case tick (BATCH_CAP findings, each up to a 180s download) can run minutes; give
+# it headroom well past the gateway's ~300s global budget.
+TimeoutStartSec=600
+# Modest hardening for a root docker-driving oneshot.
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
