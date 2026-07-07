@@ -1,6 +1,212 @@
 import { randomUUID } from "node:crypto";
 import { getDb } from "./db";
 
+// The thin-content gate for artist pages: a `/artist/<slug>` page indexes (and
+// enters the sitemap) only at this many coordinate-bearing findings or more.
+// Below it the page still serves 200 (deep links + link equity) but is
+// `noindex,follow` and stays out of the sitemap. Shared by the route + the
+// sitemap so the gate is defined once (Unit 3, artist-relationship RFC §3).
+export const ARTIST_INDEX_MIN_FINDINGS = 3;
+
+// The socials the public artist page + `sameAs` render, in a stable display order
+// (the identity-anchor platforms first, then the rest). Rows outside this list, or
+// with a `candidate` status, never reach the public page.
+export type ArtistSocialPlatform =
+  | "spotify"
+  | "youtube"
+  | "soundcloud"
+  | "bandcamp"
+  | "instagram"
+  | "tiktok"
+  | "twitter"
+  | "facebook"
+  | "mixcloud"
+  | "homepage";
+
+const PUBLIC_SOCIAL_ORDER: ArtistSocialPlatform[] = [
+  "spotify",
+  "youtube",
+  "soundcloud",
+  "bandcamp",
+  "instagram",
+  "tiktok",
+  "twitter",
+  "facebook",
+  "mixcloud",
+  "homepage",
+];
+
+/** The canonical artist identity record the pages + JSON-LD read. */
+export type ArtistRecord = {
+  id: string;
+  mbid: string | undefined;
+  name: string;
+  slug: string;
+  spotifyUrl: string | undefined;
+  wikidataQid: string | undefined;
+};
+
+/** A public (auto/confirmed) social link on the artist page + `sameAs`. */
+export type ArtistSocialLink = {
+  platform: ArtistSocialPlatform;
+  url: string;
+};
+
+/** A row in the `/artists` index + a thin-gated sitemap candidate. */
+export type ArtistIndexEntry = {
+  coverImageUrl: string | undefined;
+  findingCount: number;
+  lastmod: string | undefined;
+  name: string;
+  slug: string;
+};
+
+function optionalText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+/** Resolve one artist by its public slug (null = no such artist). */
+export async function getArtistBySlug(slug: string): Promise<ArtistRecord | undefined> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [slug],
+    sql: `select id, name, slug, spotify_url, mbid, wikidata_qid
+          from artists where slug = ? limit 1`,
+  });
+
+  const row = result.rows[0] as Record<string, unknown> | undefined;
+
+  if (!row || typeof row["id"] !== "string" || typeof row["name"] !== "string") {
+    return undefined;
+  }
+
+  return {
+    id: row["id"],
+    mbid: optionalText(row["mbid"]),
+    name: row["name"],
+    slug: typeof row["slug"] === "string" ? row["slug"] : slug,
+    spotifyUrl: optionalText(row["spotify_url"]),
+    wikidataQid: optionalText(row["wikidata_qid"]),
+  };
+}
+
+const PUBLIC_SOCIAL_STATUSES = new Set<string>(["auto", "confirmed"]);
+
+/**
+ * The artist's PUBLIC social links — `status IN (auto, confirmed)` only, so a
+ * Firecrawl-only `candidate` never reaches the page or the `sameAs` until an
+ * operator confirms it (the page-facing trust gate, RFC §2.1). Ordered by the
+ * fixed display order; unknown platforms are dropped.
+ */
+export async function getPublicArtistSocials(artistId: string): Promise<ArtistSocialLink[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [artistId],
+    sql: `select platform, url, status from artist_socials where artist_id = ?`,
+  });
+
+  const links: ArtistSocialLink[] = [];
+
+  for (const raw of result.rows) {
+    const row = raw as Record<string, unknown>;
+    const platform = row["platform"];
+    const url = optionalText(row["url"]);
+    const status = row["status"];
+
+    if (
+      typeof platform === "string" &&
+      typeof status === "string" &&
+      PUBLIC_SOCIAL_STATUSES.has(status) &&
+      url &&
+      (PUBLIC_SOCIAL_ORDER as string[]).includes(platform)
+    ) {
+      links.push({ platform: platform as ArtistSocialPlatform, url });
+    }
+  }
+
+  return links.sort(
+    (a, b) => PUBLIC_SOCIAL_ORDER.indexOf(a.platform) - PUBLIC_SOCIAL_ORDER.indexOf(b.platform),
+  );
+}
+
+/**
+ * The name → slug map for a track's artists (via `track_artists`), so the log
+ * page can link each artist name to `/artist/<slug>` and stamp the `@id` on the
+ * `byArtist` MusicGroup node. Keyed by the artist's canonical name; a name with
+ * no resolved entity is simply absent (the link/`@id` degrades to plain text).
+ */
+export async function getArtistSlugMap(trackId: string): Promise<Record<string, string>> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [trackId],
+    sql: `select a.name, a.slug
+          from artists a
+          join track_artists ta on ta.artist_id = a.id
+          where ta.track_id = ?`,
+  });
+
+  const map: Record<string, string> = {};
+
+  for (const raw of result.rows) {
+    const row = raw as Record<string, unknown>;
+    const name = row["name"];
+    const slug = row["slug"];
+
+    if (typeof name === "string" && typeof slug === "string") {
+      map[name] = slug;
+    }
+  }
+
+  return map;
+}
+
+/**
+ * Every artist that has at least one coordinate-bearing finding, with its finding
+ * count, a representative cover (the most-recent finding's album art), and the
+ * freshest finding date (sitemap lastmod). Ordered by finding count desc, then
+ * name — the `/artists` index order; the sitemap filters this to
+ * `ARTIST_INDEX_MIN_FINDINGS`+ (the thin-content gate).
+ */
+export async function listArtistsWithFindingCounts(): Promise<ArtistIndexEntry[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    sql: `select a.name as name, a.slug as slug,
+                 count(t.track_id) as finding_count,
+                 max(t.added_at) as lastmod,
+                 (select t2.album_image_url
+                    from tracks t2
+                    join track_artists ta2 on ta2.track_id = t2.track_id
+                    where ta2.artist_id = a.id and t2.log_id is not null
+                    order by t2.added_at desc limit 1) as cover_url
+          from artists a
+          join track_artists ta on ta.artist_id = a.id
+          join tracks t on t.track_id = ta.track_id and t.log_id is not null
+          group by a.id
+          order by finding_count desc, a.name asc`,
+  });
+
+  const entries: ArtistIndexEntry[] = [];
+
+  for (const raw of result.rows) {
+    const row = raw as Record<string, unknown>;
+    const name = row["name"];
+    const slug = row["slug"];
+    const findingCount = row["finding_count"];
+
+    if (typeof name === "string" && typeof slug === "string" && typeof findingCount === "number") {
+      entries.push({
+        coverImageUrl: optionalText(row["cover_url"]),
+        findingCount,
+        lastmod: optionalText(row["lastmod"]),
+        name,
+        slug,
+      });
+    }
+  }
+
+  return entries;
+}
+
 export function parseArtistsJson(value: string): string[] {
   try {
     const artists = JSON.parse(value) as unknown;

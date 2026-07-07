@@ -34,6 +34,7 @@ import { Route as NewsletterIndexRouteImport } from './routes/newsletter.index'
 import { Route as MixtapesIndexRouteImport } from './routes/mixtapes.index'
 import { Route as LogIndexRouteImport } from './routes/log.index'
 import { Route as DocsIndexRouteImport } from './routes/docs.index'
+import { Route as ArtistsIndexRouteImport } from './routes/artists.index'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as StoriesLogIdRouteImport } from './routes/stories.$logId'
 import { Route as NewsletterNumberRouteImport } from './routes/newsletter.$number'
@@ -42,6 +43,7 @@ import { Route as DocsApiRouteImport } from './routes/docs.api'
 import { Route as DocsSplatRouteImport } from './routes/docs.$'
 import { Route as DocsDotmdSplatRouteImport } from './routes/docs[.]md.$'
 import { Route as CliLatestDotshRouteImport } from './routes/cli/latest[.]sh'
+import { Route as ArtistSlugRouteImport } from './routes/artist.$slug'
 import { Route as ApiStatusRouteImport } from './routes/api/status'
 import { Route as AdminRendersRouteImport } from './routes/admin/renders'
 import { Route as AdminPlansRouteImport } from './routes/admin/plans'
@@ -208,6 +210,11 @@ const DocsIndexRoute = DocsIndexRouteImport.update({
   path: '/',
   getParentRoute: () => DocsRoute,
 } as any)
+const ArtistsIndexRoute = ArtistsIndexRouteImport.update({
+  id: '/artists/',
+  path: '/artists/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminIndexRoute = AdminIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -246,6 +253,11 @@ const DocsDotmdSplatRoute = DocsDotmdSplatRouteImport.update({
 const CliLatestDotshRoute = CliLatestDotshRouteImport.update({
   id: '/cli/latest.sh',
   path: '/cli/latest.sh',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ArtistSlugRoute = ArtistSlugRouteImport.update({
+  id: '/artist/$slug',
+  path: '/artist/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiStatusRoute = ApiStatusRouteImport.update({
@@ -491,6 +503,7 @@ export interface FileRoutesByFullPath {
   '/admin/plans': typeof AdminPlansRoute
   '/admin/renders': typeof AdminRendersRoute
   '/api/status': typeof ApiStatusRoute
+  '/artist/$slug': typeof ArtistSlugRoute
   '/cli/latest.sh': typeof CliLatestDotshRoute
   '/docs.md/$': typeof DocsDotmdSplatRoute
   '/docs/$': typeof DocsSplatRoute
@@ -499,6 +512,7 @@ export interface FileRoutesByFullPath {
   '/newsletter/$number': typeof NewsletterNumberRoute
   '/stories/$logId': typeof StoriesLogIdRoute
   '/admin/': typeof AdminIndexRoute
+  '/artists/': typeof ArtistsIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/log/': typeof LogIndexRoute
   '/mixtapes/': typeof MixtapesIndexRoute
@@ -563,6 +577,7 @@ export interface FileRoutesByTo {
   '/admin/plans': typeof AdminPlansRoute
   '/admin/renders': typeof AdminRendersRoute
   '/api/status': typeof ApiStatusRoute
+  '/artist/$slug': typeof ArtistSlugRoute
   '/cli/latest.sh': typeof CliLatestDotshRoute
   '/docs.md/$': typeof DocsDotmdSplatRoute
   '/docs/$': typeof DocsSplatRoute
@@ -571,6 +586,7 @@ export interface FileRoutesByTo {
   '/newsletter/$number': typeof NewsletterNumberRoute
   '/stories/$logId': typeof StoriesLogIdRoute
   '/admin': typeof AdminIndexRoute
+  '/artists': typeof ArtistsIndexRoute
   '/docs': typeof DocsIndexRoute
   '/log': typeof LogIndexRoute
   '/mixtapes': typeof MixtapesIndexRoute
@@ -638,6 +654,7 @@ export interface FileRoutesById {
   '/admin/plans': typeof AdminPlansRoute
   '/admin/renders': typeof AdminRendersRoute
   '/api/status': typeof ApiStatusRoute
+  '/artist/$slug': typeof ArtistSlugRoute
   '/cli/latest.sh': typeof CliLatestDotshRoute
   '/docs.md/$': typeof DocsDotmdSplatRoute
   '/docs/$': typeof DocsSplatRoute
@@ -646,6 +663,7 @@ export interface FileRoutesById {
   '/newsletter/$number': typeof NewsletterNumberRoute
   '/stories/$logId': typeof StoriesLogIdRoute
   '/admin/': typeof AdminIndexRoute
+  '/artists/': typeof ArtistsIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/log/': typeof LogIndexRoute
   '/mixtapes/': typeof MixtapesIndexRoute
@@ -714,6 +732,7 @@ export interface FileRouteTypes {
     | '/admin/plans'
     | '/admin/renders'
     | '/api/status'
+    | '/artist/$slug'
     | '/cli/latest.sh'
     | '/docs.md/$'
     | '/docs/$'
@@ -722,6 +741,7 @@ export interface FileRouteTypes {
     | '/newsletter/$number'
     | '/stories/$logId'
     | '/admin/'
+    | '/artists/'
     | '/docs/'
     | '/log/'
     | '/mixtapes/'
@@ -786,6 +806,7 @@ export interface FileRouteTypes {
     | '/admin/plans'
     | '/admin/renders'
     | '/api/status'
+    | '/artist/$slug'
     | '/cli/latest.sh'
     | '/docs.md/$'
     | '/docs/$'
@@ -794,6 +815,7 @@ export interface FileRouteTypes {
     | '/newsletter/$number'
     | '/stories/$logId'
     | '/admin'
+    | '/artists'
     | '/docs'
     | '/log'
     | '/mixtapes'
@@ -860,6 +882,7 @@ export interface FileRouteTypes {
     | '/admin/plans'
     | '/admin/renders'
     | '/api/status'
+    | '/artist/$slug'
     | '/cli/latest.sh'
     | '/docs.md/$'
     | '/docs/$'
@@ -868,6 +891,7 @@ export interface FileRouteTypes {
     | '/newsletter/$number'
     | '/stories/$logId'
     | '/admin/'
+    | '/artists/'
     | '/docs/'
     | '/log/'
     | '/mixtapes/'
@@ -928,11 +952,13 @@ export interface RootRouteChildren {
   SpritesRoute: typeof SpritesRoute
   StatusRoute: typeof StatusRoute
   ApiStatusRoute: typeof ApiStatusRoute
+  ArtistSlugRoute: typeof ArtistSlugRoute
   CliLatestDotshRoute: typeof CliLatestDotshRoute
   DocsDotmdSplatRoute: typeof DocsDotmdSplatRoute
   LogLogIdRoute: typeof LogLogIdRoute
   NewsletterNumberRoute: typeof NewsletterNumberRoute
   StoriesLogIdRoute: typeof StoriesLogIdRoute
+  ArtistsIndexRoute: typeof ArtistsIndexRoute
   LogIndexRoute: typeof LogIndexRoute
   MixtapesIndexRoute: typeof MixtapesIndexRoute
   NewsletterIndexRoute: typeof NewsletterIndexRoute
@@ -1146,6 +1172,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsIndexRouteImport
       parentRoute: typeof DocsRoute
     }
+    '/artists/': {
+      id: '/artists/'
+      path: '/artists'
+      fullPath: '/artists/'
+      preLoaderRoute: typeof ArtistsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/': {
       id: '/admin/'
       path: '/'
@@ -1200,6 +1233,13 @@ declare module '@tanstack/react-router' {
       path: '/cli/latest.sh'
       fullPath: '/cli/latest.sh'
       preLoaderRoute: typeof CliLatestDotshRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/artist/$slug': {
+      id: '/artist/$slug'
+      path: '/artist/$slug'
+      fullPath: '/artist/$slug'
+      preLoaderRoute: typeof ArtistSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/status': {
@@ -1543,11 +1583,13 @@ const rootRouteChildren: RootRouteChildren = {
   SpritesRoute: SpritesRoute,
   StatusRoute: StatusRoute,
   ApiStatusRoute: ApiStatusRoute,
+  ArtistSlugRoute: ArtistSlugRoute,
   CliLatestDotshRoute: CliLatestDotshRoute,
   DocsDotmdSplatRoute: DocsDotmdSplatRoute,
   LogLogIdRoute: LogLogIdRoute,
   NewsletterNumberRoute: NewsletterNumberRoute,
   StoriesLogIdRoute: StoriesLogIdRoute,
+  ArtistsIndexRoute: ArtistsIndexRoute,
   LogIndexRoute: LogIndexRoute,
   MixtapesIndexRoute: MixtapesIndexRoute,
   NewsletterIndexRoute: NewsletterIndexRoute,

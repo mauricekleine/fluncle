@@ -309,6 +309,50 @@ export async function getTracksByIds(trackIds: string[]): Promise<Record<string,
 }
 
 /**
+ * Every coordinate-bearing finding that features an artist, newest-first — the
+ * artist page's cover grid (Unit 3, artist-relationship RFC §3). The canonical
+ * source is the `track_artists` join; when it returns nothing (an artist not yet
+ * backfilled into the join) it falls back to the kept `artists_json` cache,
+ * matching the name EXACTLY within the parsed array so a substring like "Sub"
+ * can't drag in "Subtronics". A finding with no Log ID never appears (the page is
+ * a grid of log links).
+ */
+export async function getFindingsByArtist(
+  artistId: string,
+  artistName: string,
+): Promise<TrackListItem[]> {
+  const db = await getDb();
+  const viaJoin = await db.execute({
+    args: [artistId],
+    sql: `select ${TRACK_SELECT} from tracks
+          join track_artists on track_artists.track_id = tracks.track_id
+          where track_artists.artist_id = ? and tracks.log_id is not null
+          order by tracks.added_at desc, tracks.track_id desc`,
+  });
+
+  const joined = typedRows<TrackRow>(viaJoin.rows);
+
+  if (joined.length > 0) {
+    return joined.map(toTrackListItem);
+  }
+
+  // Fallback: the artist has no track_artists rows yet (pre-backfill). Match the
+  // kept display cache, then keep only exact-name members (case-insensitive).
+  const needle = artistName.toLowerCase();
+  const viaJson = await db.execute({
+    args: [needle],
+    sql: `select ${TRACK_SELECT} from tracks
+          where tracks.log_id is not null
+            and lower(tracks.artists_json) like '%' || ? || '%'
+          order by tracks.added_at desc, tracks.track_id desc`,
+  });
+
+  return typedRows<TrackRow>(viaJson.rows)
+    .map(toTrackListItem)
+    .filter((finding) => finding.artists.some((name) => name.toLowerCase() === needle));
+}
+
+/**
  * Read the INTERNAL `context_note` for a track (the Firecrawl-derived facts).
  * `context_note` is deliberately OUTSIDE `TRACK_SELECT` (internal-only fuel,
  * never surfaced through `toTrackListItem`), so the observe steps read it

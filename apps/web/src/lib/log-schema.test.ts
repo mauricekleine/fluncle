@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { serializeJsonLd } from "./json-ld";
 import { definitionalProse } from "./log-prose";
 import {
+  artistBreadcrumbsJsonLd,
   breadcrumbsJsonLd,
   mixtapeAlbumJsonLd,
+  musicGroupJsonLd,
   musicRecordingJsonLd,
   videoObjectJsonLd,
 } from "./log-schema";
@@ -65,6 +68,117 @@ describe("musicRecordingJsonLd (the log page schema)", () => {
     expect(bare).not.toHaveProperty("isrcCode");
     expect(bare).not.toHaveProperty("inAlbum");
     expect(bare.sameAs).toEqual([track.spotifyUrl]);
+  });
+
+  it("leaves byArtist id-less when no artistSlugs are supplied", () => {
+    expect(jsonLd.byArtist).toEqual([
+      { "@type": "MusicGroup", name: "Axwell" },
+      { "@type": "MusicGroup", name: "1991" },
+    ]);
+  });
+
+  it("stamps @id on the byArtist node for a resolved artist (the cross-page graph)", () => {
+    const stamped = musicRecordingJsonLd(
+      { ...track, artistSlugs: { "1991": "1991" } },
+      "https://img/cover.jpg",
+    );
+
+    expect(stamped.byArtist).toEqual([
+      { "@type": "MusicGroup", name: "Axwell" },
+      { "@id": "https://www.fluncle.com/artist/1991", "@type": "MusicGroup", name: "1991" },
+    ]);
+  });
+});
+
+describe("musicGroupJsonLd (the artist page schema)", () => {
+  const findings = [
+    { artists: ["Dimension"], logId: "010.1.1A", title: "UK" },
+    { artists: ["Dimension", "Sub Focus"], logId: "011.2.3B", title: "Desire" },
+  ];
+  const jsonLd = musicGroupJsonLd(
+    {
+      imageUrl: "https://img/dimension.jpg",
+      mbid: "mbid-123",
+      name: "Dimension",
+      slug: "dimension",
+      socials: ["https://open.spotify.com/artist/abc", "https://instagram.com/dimensiondnb"],
+      spotifyUrl: "https://open.spotify.com/artist/abc",
+      wikidataQid: "Q123",
+    },
+    findings,
+  );
+
+  it("is a MusicGroup carrying its own @id (twin of the /log byArtist node)", () => {
+    expect(jsonLd["@type"]).toBe("MusicGroup");
+    expect(jsonLd["@id"]).toBe("https://www.fluncle.com/artist/dimension");
+    expect(jsonLd.url).toBe("https://www.fluncle.com/artist/dimension");
+    expect(jsonLd.genre).toBe("Drum and Bass");
+    expect(jsonLd.image).toBe("https://img/dimension.jpg");
+  });
+
+  it("orders sameAs Wikidata > MusicBrainz > Spotify > socials, de-duplicated", () => {
+    expect(jsonLd.sameAs).toEqual([
+      "https://www.wikidata.org/wiki/Q123",
+      "https://musicbrainz.org/artist/mbid-123",
+      "https://open.spotify.com/artist/abc",
+      "https://instagram.com/dimensiondnb",
+    ]);
+  });
+
+  it("emits the findings as a MusicRecording ItemList with log URLs", () => {
+    expect(jsonLd.track).toMatchObject({
+      "@type": "ItemList",
+      itemListElement: [
+        {
+          "@type": "ListItem",
+          item: { "@type": "MusicRecording", url: "https://www.fluncle.com/log/010.1.1A" },
+          position: 1,
+        },
+        {
+          "@type": "ListItem",
+          item: { url: "https://www.fluncle.com/log/011.2.3B" },
+          position: 2,
+        },
+      ],
+    });
+  });
+
+  it("omits sameAs entirely when there are no anchors", () => {
+    const bare = musicGroupJsonLd(
+      { imageUrl: "https://img/x.jpg", name: "Nobody", slug: "nobody", socials: [] },
+      [],
+    );
+
+    expect(bare).not.toHaveProperty("sameAs");
+  });
+
+  it("is XSS-safe through the serialize sink (a </script> in a name can't break out)", () => {
+    const evil = musicGroupJsonLd(
+      {
+        imageUrl: "https://img/x.jpg",
+        name: "Bad</script><script>alert(1)</script>",
+        slug: "bad",
+        socials: [],
+      },
+      [{ artists: ["Bad</script>"], logId: "001.1.1A", title: "Pwn</script>" }],
+    );
+
+    expect(serializeJsonLd(evil)).not.toContain("</script>");
+    expect(serializeJsonLd(evil)).toContain("\\u003c/script\\u003e");
+  });
+});
+
+describe("artistBreadcrumbsJsonLd", () => {
+  it("walks Fluncle → Artists → the artist name", () => {
+    const jsonLd = artistBreadcrumbsJsonLd("Dimension") as {
+      itemListElement: Array<{ name: string }>;
+    };
+
+    expect(jsonLd.itemListElement.map((item) => item.name)).toEqual([
+      "Fluncle",
+      "Artists",
+      "Dimension",
+    ]);
   });
 });
 
