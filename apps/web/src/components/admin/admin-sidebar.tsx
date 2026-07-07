@@ -44,15 +44,15 @@ import { listTracks } from "@/lib/server/tracks";
 // across waves while stations land behind it. Entries are grouped into sections
 // (ADM-01): a section renders as a Shadcn SidebarGroup, and a labelled section
 // gets a SidebarGroupLabel above it. The "Sets" group holds the set-level objects
-// (Playlists → Mixtapes); a later slice pulls Recordings + Clips into a "Studio"
-// group the same way.
+// (Playlists → Mixtapes); the "Studio" group (ADM-03) holds Recordings + Clips.
 //
 // Owner keys today: `/admin` (the attention queue, the landing) → dashboard;
 // `/admin/findings` (the pipeline board) → findings; `/admin/renders` → renders;
-// `/admin/plans` → plans (labelled "Playlists"); `/admin/clips` → clips;
-// `/admin/newsletter` → newsletter; the Studio (`/admin/studio/$recordingId`, a
-// recording's workstation) → recordings. Recordings' list home is the recordings
-// index on Clips; Mixtapes' closest home is Plans (where a take is promoted);
+// `/admin/plans` → plans (labelled "Playlists"); `/admin/recordings` (the
+// recordings index + the uploader) → recordings; `/admin/clips` (the clip library +
+// the drip kill-switch) → clips; `/admin/newsletter` → newsletter. A recording's
+// per-set workstation is the Studio (`/admin/studio/$recordingId`), opened from a
+// Recordings row. Mixtapes' closest home is Plans (where a take is promoted);
 // System is the live service map at /status.
 
 /** A sidebar entry's key. A page passes the entry it OWNS as `current`. */
@@ -103,9 +103,9 @@ type NavSection = {
 // carries the render backlog badge — the count's dedicated home now it has a page.
 //
 // "Sets" is the set-level objects: a Playlist (a plan) is lined up first and
-// promoted into a Mixtape, so Playlists leads. Recordings + Clips stay unlabelled
-// for now; a later slice lifts them into their own "Studio" group between Sets and
-// Newsletter using this same section shape.
+// promoted into a Mixtape, so Playlists leads. "Studio" (between Sets and
+// Newsletter) holds the capture-and-clip objects: a Recording is uploaded and
+// opened into its per-set Studio, then its cuts land in the Clips library.
 const OBJECT_SECTIONS: NavSection[] = [
   {
     entries: [
@@ -137,8 +137,14 @@ const OBJECT_SECTIONS: NavSection[] = [
   },
   {
     entries: [
-      { icon: FilmSlateIcon, key: "recordings", label: "Recordings", to: "/admin/clips" },
+      { icon: FilmSlateIcon, key: "recordings", label: "Recordings", to: "/admin/recordings" },
       { icon: FilmStripIcon, key: "clips", label: "Clips", to: "/admin/clips" },
+    ],
+    key: "studio",
+    label: "Studio",
+  },
+  {
+    entries: [
       {
         icon: PaperPlaneTiltIcon,
         key: "newsletter",
