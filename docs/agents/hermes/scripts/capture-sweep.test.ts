@@ -11,9 +11,12 @@ import { describe, expect, test } from "bun:test";
 import {
   buildSourceAudioKey,
   buildStickyProxyUrl,
+  classifyChannelTrust,
   contentTypeForExt,
+  durationAcceptable,
   durationWithinTolerance,
   needsBpmRederive,
+  normalizeChannelName,
   pickCandidate,
 } from "./capture-sweep";
 
@@ -85,8 +88,82 @@ describe("buildSourceAudioKey", () => {
   });
 });
 
+describe("normalizeChannelName", () => {
+  test("reduces a label/channel to a stable comparable token", () => {
+    expect(normalizeChannelName("UKF Drum & Bass")).toBe("ukf");
+    expect(normalizeChannelName("Hospital Records")).toBe("hospital");
+    expect(normalizeChannelName("Hospital")).toBe("hospital");
+    expect(normalizeChannelName("Liquicity")).toBe("liquicity");
+    expect(normalizeChannelName("1991")).toBe("1991");
+  });
+});
+
+describe("classifyChannelTrust", () => {
+  test("trusts the artist's own channel by id (the strongest signal)", () => {
+    const trust = classifyChannelTrust(
+      { channel: "Some Artist", channelId: "UC_artist", durationSec: 200, id: "x", title: "t" },
+      { artistYoutubeChannelIds: ["UC_artist"], label: "Some Label" },
+    );
+    expect(trust).toBe(2);
+  });
+
+  test("trusts a curated aggregator channel by name", () => {
+    const trust = classifyChannelTrust(
+      { channel: "UKF Drum & Bass", durationSec: 200, id: "x", title: "t" },
+      {},
+    );
+    expect(trust).toBe(2);
+  });
+
+  test("trusts a channel whose name equals the finding's label", () => {
+    const trust = classifyChannelTrust(
+      { channel: "1991", durationSec: 200, id: "x", title: "t" },
+      { label: "1991" },
+    );
+    expect(trust).toBe(2);
+  });
+
+  test("a merely-verified channel is a soft tier 1 (does not relax duration)", () => {
+    const trust = classifyChannelTrust(
+      { channel: "GALAXIES MUSIC", durationSec: 200, id: "x", title: "t", verified: true },
+      { label: "1991" },
+    );
+    expect(trust).toBe(1);
+  });
+
+  test("an unknown, unverified channel is untrusted", () => {
+    const trust = classifyChannelTrust(
+      { channel: "EDM Old&New", durationSec: 200, id: "x", title: "t" },
+      { label: "1991" },
+    );
+    expect(trust).toBe(0);
+  });
+});
+
+describe("durationAcceptable", () => {
+  const opts = { tolerancePct: 0.03, toleranceSec: 3, trustedPadSec: 60 };
+
+  test("untrusted takes the strict symmetric guard", () => {
+    expect(durationAcceptable(214, 191_724, 0, opts)).toBe(false); // 22s over → rejected
+    expect(durationAcceptable(192, 191_724, 0, opts)).toBe(true);
+  });
+
+  test("trusted tolerates intro/outro padding above the master (the 'If Only' case)", () => {
+    // 191.7s master, 214s label video (22.3s of padding) → accepted for a trusted channel.
+    expect(durationAcceptable(214, 191_724, 2, opts)).toBe(true);
+  });
+
+  test("trusted stays tight BELOW (a shorter upload is a radio edit, not the master)", () => {
+    expect(durationAcceptable(150, 191_724, 2, opts)).toBe(false);
+  });
+
+  test("trusted is still BOUNDED — an hour-long DJ set on the same channel is rejected", () => {
+    expect(durationAcceptable(3549, 191_724, 2, opts)).toBe(false);
+  });
+});
+
 describe("pickCandidate", () => {
-  const opts = { tolerancePct: 0.03, toleranceSec: 3 };
+  const opts = { tolerancePct: 0.03, toleranceSec: 3, trustedPadSec: 60 };
 
   test("returns null when no candidate passes the duration guard", () => {
     const chosen = pickCandidate(
@@ -94,7 +171,7 @@ describe("pickCandidate", () => {
         { durationSec: 157, id: "clip", title: "Some Song" },
         { durationSec: 600, id: "extended", title: "Some Song (Extended)" },
       ],
-      388_000,
+      { durationMs: 388_000 },
       opts,
     );
     expect(chosen).toBeNull();
@@ -106,10 +183,10 @@ describe("pickCandidate", () => {
         { durationSec: 388, id: "remix", title: "Some Song (Calibre Remix)" },
         { durationSec: 388, id: "orig", title: "Some Song" },
       ],
-      388_000,
+      { durationMs: 388_000 },
       opts,
     );
-    expect(chosen?.id).toBe("orig");
+    expect(chosen?.candidate.id).toBe("orig");
   });
 
   test("prefers an official / - Topic upload among in-tolerance candidates", () => {
@@ -118,10 +195,10 @@ describe("pickCandidate", () => {
         { durationSec: 389, id: "reupload", title: "Some Song (fan reupload)" },
         { durationSec: 388, id: "topic", title: "Some Song - Topic" },
       ],
-      388_000,
+      { durationMs: 388_000 },
       opts,
     );
-    expect(chosen?.id).toBe("topic");
+    expect(chosen?.candidate.id).toBe("topic");
   });
 
   test("falls back to the closest duration when scores tie", () => {
@@ -130,10 +207,68 @@ describe("pickCandidate", () => {
         { durationSec: 391, id: "far", title: "Some Song" },
         { durationSec: 388, id: "near", title: "Some Song" },
       ],
-      388_000,
+      { durationMs: 388_000 },
       opts,
     );
-    expect(chosen?.id).toBe("near");
+    expect(chosen?.candidate.id).toBe("near");
+  });
+
+  test("recovers 'If Only': a trusted label upload padded past the guard is chosen + tier 2", () => {
+    // The real 'ytsearch5:1991 if only' shape: four 214s hits (label master is 191.7s) plus a
+    // 59-min live set on the artist's channel. Only the trusted channels pass the padded guard;
+    // the untrusted 214s re-uploads and the live set are rejected.
+    const chosen = pickCandidate(
+      [
+        {
+          channel: "1991",
+          channelId: "UCA0G8t",
+          durationSec: 214,
+          id: "artist",
+          title: "1991 - If Only",
+          verified: true,
+        },
+        {
+          channel: "UKF Drum & Bass",
+          durationSec: 214,
+          id: "ukf",
+          title: "1991 - If Only",
+          verified: true,
+        },
+        { channel: "GALAXIES MUSIC", durationSec: 214, id: "junk1", title: "1991 - If Only" },
+        { channel: "EDM Old&New", durationSec: 214, id: "junk2", title: "1991 - If Only" },
+        {
+          channel: "1991",
+          channelId: "UCA0G8t",
+          durationSec: 3549,
+          id: "set",
+          title: "1991 @ circuitGROUNDS | EDC Vegas 2026",
+        },
+      ],
+      { durationMs: 191_724, label: "1991" },
+      opts,
+    );
+    // A trusted channel is chosen (the guard let the 22s padding through); the untrusted
+    // 214s re-uploads and the 3549s live set are excluded.
+    expect(chosen?.trust).toBe(2);
+    expect(["artist", "ukf"]).toContain(chosen?.candidate.id);
+  });
+
+  test("trust does NOT override a wrong-version title: an untrusted clean master beats a trusted remix", () => {
+    const chosen = pickCandidate(
+      [
+        // In-tolerance so it survives the guard — the sort (clean-title first) must still sink it.
+        {
+          channel: "UKF Drum & Bass",
+          durationSec: 388,
+          id: "trusted-remix",
+          title: "Some Song (VIP Mix)",
+        },
+        { channel: "randochan", durationSec: 388, id: "untrusted-clean", title: "Some Song" },
+      ],
+      { durationMs: 388_000 },
+      opts,
+    );
+    expect(chosen?.candidate.id).toBe("untrusted-clean");
   });
 });
 

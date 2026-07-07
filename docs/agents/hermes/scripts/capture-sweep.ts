@@ -76,6 +76,14 @@ const BATCH_CAP = Number(process.env.FLUNCLE_CAPTURE_BATCH_CAP ?? "4");
 // a same-length remaster is fine (Unit 4's shape-normalized log-mel tolerates it).
 const TOLERANCE_SEC = Number(process.env.FLUNCLE_CAPTURE_TOLERANCE_SEC ?? "3");
 const TOLERANCE_PCT = Number(process.env.FLUNCLE_CAPTURE_TOLERANCE_PCT ?? "0.03");
+// A candidate from a TRUSTED channel (the finding's label, a curated aggregator, or the
+// artist's own channel) is the right track even when its length runs OVER the master —
+// label/artist video uploads carry an intro sting + outro card the streaming master lacks.
+// So for trusted channels the guard widens ASYMMETRICALLY: stay tight below (a shorter
+// upload is a radio edit/snippet, a different arrangement), but allow up to this much
+// padding above. Bounded so a trusted channel's hour-long DJ set (same title) is still
+// rejected. See the "1991 - If Only" case (191s master, 214s label video).
+const TRUSTED_PAD_SEC = Number(process.env.FLUNCLE_CAPTURE_TRUSTED_PAD_SEC ?? "60");
 
 const YT_SEARCH_TIMEOUT_MS = 60_000;
 const YT_DOWNLOAD_TIMEOUT_MS = 180_000;
@@ -87,8 +95,18 @@ const log = (message: string) => console.error(`[capture-sweep] ${message}`);
 /** A finding as the capture queue (`GET /api/admin/tracks?captureQueue=true`) returns it. */
 export type CaptureFinding = {
   artists?: string[];
+  // The artist's own YouTube channel id(s), once `artist_socials` carries them (populated by
+  // the artist-links agent). When a candidate is on one of these it is the artist's OWN
+  // upload → the strongest trust signal. Absent today → the label/allowlist signals carry
+  // the trust classification until the queue DTO surfaces it (a clean fast-follow).
+  artistYoutubeChannelIds?: string[];
   bpm?: number | null;
   durationMs?: number;
+  // The release label (already on the admin list DTO). A YouTube candidate whose channel
+  // name equals the label is almost certainly the correct upload — it lets the duration
+  // guard relax for that candidate. For self-released tracks the label IS the artist name,
+  // so this doubles as an artist-channel signal before `artist_socials` lands.
+  label?: string;
   logId?: string;
   // The prior consecutive-failure count (the admin list DTO surfaces it when non-zero),
   // read so the failure bump ACCUMULATES — the queue's failure-cap backoff depends on it.
@@ -158,48 +176,181 @@ const WRONG_VERSION_MARKERS =
   /\b(remix|bootleg|live|sped[\s-]?up|slowed|nightcore|8d audio|cover|karaoke|instrumental|mashup|edit|rework|vip mix)\b/i;
 const OFFICIAL_MARKERS = /(-\s*topic\b|official audio|official video|official music video)/i;
 
-export type YtCandidate = { durationSec: number; id: string; title: string };
+/**
+ * Normalize a YouTube channel name (or a release label) to a comparison key: lowercase, map
+ * `&`→`and`, strip the boilerplate suffixes labels tack on (records/recordings/music/audio/
+ * "drum & bass"/dnb/official/tv/…), then drop every non-alphanumeric. So "UKF Drum & Bass",
+ * "Hospital Records" and a label field of "Hospital" all reduce to a stable comparable token.
+ */
+export function normalizeChannelName(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(
+      /\b(records?|recordings?|music|audio|drum\s*(?:and|n)?\s*bass|dnb|official|channel|tv|ltd)\b/g,
+      "",
+    )
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+// Curated trusted D&B channels: labels + aggregators that release/host the real master and
+// do NOT upload a wrong VERSION under a bare "Artist - Title". A clean-title hit on one of
+// these (or on a channel named like the finding's label, or the artist's own channel) lets
+// the duration guard relax to allow the video intro/outro padding. Matched by normalized
+// channel NAME (resilient to new uploads) OR stable channel_id where known. This is domain
+// curation — extend it with the labels/aggregators you trust (verified channels only).
+const TRUSTED_CHANNEL_NAMES = new Set(
+  [
+    "UKF",
+    "UKF Drum & Bass",
+    "Liquicity",
+    "Liquicity Records",
+    "Hospital Records",
+    "Hospitality",
+    "Shogun Audio",
+    "RAM Records",
+    "Critical Music",
+    "Blackout Music",
+    "Vision Recordings",
+    "Overview Music",
+    "Korsakov Music",
+    "Flashover Recordings",
+    "Sofa Sound",
+    "Metalheadz",
+    "V Recordings",
+    "Hospital Records TV",
+    "Monstercat",
+    "Monstercat Uncaged",
+  ].map(normalizeChannelName),
+);
+const TRUSTED_CHANNEL_IDS = new Set<string>([
+  "UCr8oc-LOaApCXWLjL7vdsgw", // UKF Drum & Bass (verified via box probe 2026-07-07)
+]);
+
+// 0 = untrusted, 1 = verified-only (a soft tiebreak, does NOT relax duration), 2 = trusted
+// (label match / curated allowlist / the artist's own channel — relaxes the duration guard).
+export type TrustTier = 0 | 1 | 2;
 
 /**
- * Pick the best YouTube candidate for a finding: keep only candidates whose duration
- * passes the guard, then prefer official/`- Topic` uploads and de-rank titles that carry
- * a wrong-version marker, tie-broken by the closest duration. Returns null when nothing
- * passes the guard → the caller marks the finding `unmatched`.
+ * Classify how much a candidate's CHANNEL can be trusted for this finding. Tier 2 (trusted)
+ * = the candidate is the artist's own upload (channel_id in `artistYoutubeChannelIds`), on a
+ * curated aggregator/label, or on a channel whose name equals the finding's label. Tier 1 =
+ * merely YouTube-verified (a weak corroborating signal). Tier 0 = anything else.
+ */
+export function classifyChannelTrust(
+  candidate: YtCandidate,
+  context: { artistYoutubeChannelIds?: readonly string[]; label?: string },
+): TrustTier {
+  const channelId = candidate.channelId ?? "";
+  const channelKey = normalizeChannelName(candidate.channel ?? "");
+
+  if (channelId && context.artistYoutubeChannelIds?.includes(channelId)) {
+    return 2;
+  }
+  if (channelId && TRUSTED_CHANNEL_IDS.has(channelId)) {
+    return 2;
+  }
+  if (channelKey && TRUSTED_CHANNEL_NAMES.has(channelKey)) {
+    return 2;
+  }
+  const labelKey = normalizeChannelName(context.label ?? "");
+  if (labelKey && channelKey && labelKey === channelKey) {
+    return 2;
+  }
+  return candidate.verified ? 1 : 0;
+}
+
+/**
+ * Whether a candidate's length is acceptable given its channel trust. Untrusted candidates
+ * take the strict symmetric guard (`durationWithinTolerance`). Trusted candidates (tier 2)
+ * take an ASYMMETRIC guard: tight below (no radio edit / snippet) but padded above by
+ * `trustedPadSec` (the label/artist video's intro sting + outro card) — bounded so an
+ * hour-long DJ set on the same trusted channel is still rejected.
+ */
+export function durationAcceptable(
+  candidateSec: number,
+  targetMs: number | undefined,
+  trust: TrustTier,
+  options: { tolerancePct: number; toleranceSec: number; trustedPadSec: number } = {
+    tolerancePct: TOLERANCE_PCT,
+    toleranceSec: TOLERANCE_SEC,
+    trustedPadSec: TRUSTED_PAD_SEC,
+  },
+): boolean {
+  if (trust < 2) {
+    return durationWithinTolerance(candidateSec, targetMs, options);
+  }
+  if (!Number.isFinite(candidateSec) || candidateSec <= 0) {
+    return false;
+  }
+  if (!targetMs || !Number.isFinite(targetMs) || targetMs <= 0) {
+    return false;
+  }
+  const targetSec = targetMs / 1000;
+  return (
+    candidateSec >= targetSec - options.toleranceSec &&
+    candidateSec <= targetSec + options.trustedPadSec
+  );
+}
+
+export type YtCandidate = {
+  channel?: string;
+  channelId?: string;
+  durationSec: number;
+  id: string;
+  title: string;
+  verified?: boolean;
+};
+
+/**
+ * Pick the best YouTube candidate for a finding. Keep only candidates whose duration passes
+ * the trust-aware guard (trusted channels tolerate video padding), then rank: CLEAN titles
+ * before wrong-version markers (a trusted remix never beats an untrusted clean master), then
+ * higher channel trust (the label/artist upload over a random re-host, even when the re-host
+ * is closer in length — identity safety beats a few seconds of fidelity), then official/
+ * `- Topic`, then verified, then closest duration. Returns the pick WITH its trust tier (the
+ * caller re-uses it for the post-download length re-check) or null → the finding is `unmatched`.
  */
 export function pickCandidate(
   candidates: readonly YtCandidate[],
-  targetMs: number | undefined,
-  options: { tolerancePct: number; toleranceSec: number } = {
+  context: { artistYoutubeChannelIds?: readonly string[]; durationMs?: number; label?: string },
+  options: { tolerancePct: number; toleranceSec: number; trustedPadSec: number } = {
     tolerancePct: TOLERANCE_PCT,
     toleranceSec: TOLERANCE_SEC,
+    trustedPadSec: TRUSTED_PAD_SEC,
   },
-): YtCandidate | null {
-  const targetSec = targetMs && targetMs > 0 ? targetMs / 1000 : 0;
-  const eligible = candidates.filter((candidate) =>
-    durationWithinTolerance(candidate.durationSec, targetMs, options),
-  );
+): { candidate: YtCandidate; trust: TrustTier } | null {
+  const targetSec = context.durationMs && context.durationMs > 0 ? context.durationMs / 1000 : 0;
+  const scored = candidates
+    .map((candidate) => ({ candidate, trust: classifyChannelTrust(candidate, context) }))
+    .filter(({ candidate, trust }) =>
+      durationAcceptable(candidate.durationSec, context.durationMs, trust, options),
+    )
+    .map(({ candidate, trust }) => ({
+      candidate,
+      clean: WRONG_VERSION_MARKERS.test(candidate.title) ? 0 : 1,
+      delta: Math.abs(candidate.durationSec - targetSec),
+      official: OFFICIAL_MARKERS.test(candidate.title) ? 1 : 0,
+      trust,
+      verified: candidate.verified ? 1 : 0,
+    }));
 
-  if (eligible.length === 0) {
+  if (scored.length === 0) {
     return null;
   }
 
-  const scored = eligible.map((candidate) => {
-    let score = 0;
+  scored.sort(
+    (a, b) =>
+      b.clean - a.clean ||
+      b.trust - a.trust ||
+      b.official - a.official ||
+      b.verified - a.verified ||
+      a.delta - b.delta,
+  );
 
-    if (OFFICIAL_MARKERS.test(candidate.title)) {
-      score += 2;
-    }
+  const top = scored[0];
 
-    if (WRONG_VERSION_MARKERS.test(candidate.title)) {
-      score -= 3;
-    }
-
-    return { candidate, delta: Math.abs(candidate.durationSec - targetSec), score };
-  });
-
-  scored.sort((a, b) => b.score - a.score || a.delta - b.delta);
-
-  return scored[0]?.candidate ?? null;
+  return top ? { candidate: top.candidate, trust: top.trust } : null;
 }
 
 /**
@@ -393,8 +544,11 @@ function runYtSearch(proxyUrl: string, query: string): YtCandidate[] {
       "--socket-timeout",
       "30",
       "--no-warnings",
+      // Tab-separated so title (which may itself contain tabs) stays LAST. Channel name +
+      // id + verified flag drive the trust classification (channel-trust matching); yt-dlp
+      // prints "NA" for an absent field.
       "--print",
-      "%(duration)s\t%(id)s\t%(title)s",
+      "%(duration)s\t%(id)s\t%(channel)s\t%(channel_id)s\t%(channel_is_verified)s\t%(title)s",
       `ytsearch5:${query}`,
     ],
     { encoding: "utf8", maxBuffer: 8 * 1024 * 1024, timeout: YT_SEARCH_TIMEOUT_MS },
@@ -404,14 +558,22 @@ function runYtSearch(proxyUrl: string, query: string): YtCandidate[] {
     throw new Error(`yt-dlp search failed: ${(result.stderr || "").slice(0, 200)}`);
   }
 
+  const naToUndefined = (value?: string) => (value && value !== "NA" ? value : undefined);
   const candidates: YtCandidate[] = [];
   for (const line of (result.stdout || "").split("\n")) {
-    const [durationRaw, id, ...titleParts] = line.split("\t");
+    const [durationRaw, id, channelRaw, channelIdRaw, verifiedRaw, ...titleParts] =
+      line.split("\t");
     if (!id) {
       continue;
     }
-    const durationSec = Number(durationRaw);
-    candidates.push({ durationSec, id, title: titleParts.join("\t") });
+    candidates.push({
+      channel: naToUndefined(channelRaw),
+      channelId: naToUndefined(channelIdRaw),
+      durationSec: Number(durationRaw),
+      id,
+      title: titleParts.join("\t"),
+      verified: verifiedRaw === "True",
+    });
   }
   return candidates;
 }
@@ -511,10 +673,15 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
   const dir = mkdtempSync(join(tmpdir(), "fluncle-capture-"));
 
   try {
-    // Search candidates WITHOUT downloading, then pick the one whose length passes the
-    // guard (de-ranking wrong-version markers) — avoids downloading a wrong-length file.
+    // Search candidates WITHOUT downloading, then pick the best one whose length passes the
+    // trust-aware guard (a trusted label/artist channel tolerates video intro/outro padding;
+    // wrong-version titles de-rank) — avoids downloading a wrong-length file.
     const candidates = runYtSearch(proxyUrl, query);
-    const chosen = pickCandidate(candidates, finding.durationMs);
+    const chosen = pickCandidate(candidates, {
+      artistYoutubeChannelIds: finding.artistYoutubeChannelIds,
+      durationMs: finding.durationMs,
+      label: finding.label,
+    });
 
     if (!chosen) {
       await patchTrack(trackId, { captureStatus: "unmatched" });
@@ -525,19 +692,20 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
     // tv/web_safari player clients before giving up.
     let downloaded: { ext: string; path: string };
     try {
-      downloaded = runYtDownload(proxyUrl, chosen.id, dir, false);
+      downloaded = runYtDownload(proxyUrl, chosen.candidate.id, dir, false);
     } catch (error) {
       if ((error as { is403?: boolean }).is403) {
-        downloaded = runYtDownload(proxyUrl, chosen.id, dir, true);
+        downloaded = runYtDownload(proxyUrl, chosen.candidate.id, dir, true);
       } else {
         throw error;
       }
     }
 
-    // Belt-and-suspenders: confirm the REAL downloaded duration passes the guard too
-    // (the search value can lie / point at a different manifest).
+    // Belt-and-suspenders: confirm the REAL downloaded duration passes the guard too (the
+    // search value can lie / point at a different manifest). Re-use the chosen candidate's
+    // trust tier so a trusted padded upload isn't rejected here after passing the pick.
     const realDurationSec = probeDurationSec(downloaded.path);
-    if (!durationWithinTolerance(realDurationSec, finding.durationMs)) {
+    if (!durationAcceptable(realDurationSec, finding.durationMs, chosen.trust)) {
       await patchTrack(trackId, { captureStatus: "unmatched" });
       return "unmatched";
     }
