@@ -138,7 +138,7 @@ RUN arch="$(uname -m)" \
        x86_64|amd64)  cpu="x64" ;; \
        *) echo "unsupported arch for the fluncle binary: $arch" >&2; exit 1 ;; \
      esac \
-  && curl -fsSL "https://github.com/mauricekleine/fluncle/releases/download/v0.102.0/fluncle-linux-${cpu}" \
+  && curl -fsSL "https://github.com/mauricekleine/fluncle/releases/download/v0.103.0/fluncle-linux-${cpu}" \
        -o /usr/local/bin/fluncle \
   && chmod 755 /usr/local/bin/fluncle
 
