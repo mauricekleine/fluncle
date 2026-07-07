@@ -40,6 +40,9 @@ describe("renderLlmsFull", () => {
     expect(doc).toContain("Drum & bass bangers from another dimension.");
     expect(doc).toContain("How to read a Log ID");
     expect(doc).toContain("## The findings (0)");
+    // The artist + mixtape entity surfaces are advertised in the crawler/LLM map.
+    expect(doc).toContain("/api/v1/artists");
+    expect(doc).toContain("/api/v1/mixtapes");
   });
 
   it("renders a finding with its coordinate and present facts", () => {

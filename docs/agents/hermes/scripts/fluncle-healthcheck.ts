@@ -373,6 +373,10 @@ const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 10 * 60_000, match: "note", service: "cron.note" },
   { cadenceMs: 60 * 60_000, match: "observation", service: "cron.observation" },
   { cadenceMs: 30 * 60_000, match: "backfill", service: "cron.backfill" },
+  // The two artist crons carry the shared "artist-" stem; the full tokens are distinct
+  // (neither is a prefix of the other), so longest-match-first claims each dir cleanly.
+  { cadenceMs: 60 * 60_000, match: "artist-sweep", service: "cron.artist-sweep" },
+  { cadenceMs: 6 * 60 * 60_000, match: "artist-follow", service: "cron.artist-follow" },
   { cadenceMs: 10 * 60_000, match: "social-capture", service: "cron.social-capture" },
   { cadenceMs: 20 * 60_000, match: "clip-drip", service: "cron.clip-drip" },
   { cadenceMs: 60 * 60_000, match: "render", service: "cron.render" },

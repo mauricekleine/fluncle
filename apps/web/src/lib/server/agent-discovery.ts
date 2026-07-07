@@ -213,6 +213,8 @@ ${tracks.join("\n")}
 - [RSS feed](${siteUrl}/rss.xml): the 25 most recent tracks
 - [Tracks API](${siteUrl}/api/v1/tracks): the archive as JSON, cursor-paginated; accepts limit (max 48) and cursor query params
 - [Random track](${siteUrl}/api/v1/tracks/random): one pick from the archive, as JSON
+- [Artists API](${siteUrl}/api/v1/artists): every artist with a published finding, most findings first, as JSON; /api/v1/artists/{slug} for one artist. Each resolves to a page at ${siteUrl}/artist/{slug} — that artist's findings plus their verified identity links (MusicGroup + sameAs)
+- [Mixtapes API](${siteUrl}/api/v1/mixtapes): Fluncle's own DJ mixtapes as JSON — each a checkpoint set with an F-marked Log ID and its tracklist; browse them at ${siteUrl}/mixtapes
 
 ## Submit
 
@@ -276,6 +278,8 @@ ${omitted > 0 ? `\n_${omitted} older findings omitted here; page the rest at ${s
 - The playlist: ${spotifyPlaylistUrl}
 - The Telegram feed: ${telegramUrl}
 - The JSON API: ${siteUrl}/api/v1/tracks
+- The artists: ${siteUrl}/api/v1/artists
+- The mixtapes: ${siteUrl}/api/v1/mixtapes
 - The MCP server: ${siteUrl}/mcp
 `;
 }

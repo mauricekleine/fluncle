@@ -76,6 +76,8 @@ const SERVICE_ORDER = ["web", "db", "r2", "dns", "ssh", "onion", "hermes", "rend
 // cron labels are keyed by their registry surface name; the fallback strips the `cron.`
 // prefix, so an as-yet-unlabeled cron still reads cleanly.
 const SERVICE_LABELS: Record<string, string> = {
+  "cron.artist-follow": "Artist follows",
+  "cron.artist-sweep": "Artist resolution",
   "cron.backfill": "Catalogue backfill",
   "cron.context-note": "Context notes",
   "cron.enrich": "Audio enrichment",
@@ -103,6 +105,8 @@ const SERVICE_LABELS: Record<string, string> = {
 // description of what it does. Public-safe (every domain here is already public; the
 // descriptions name no internal host). Absent for an unknown service.
 const SERVICE_SUBTITLES: Record<string, string> = {
+  "cron.artist-follow": "auto-follows new artists on YouTube",
+  "cron.artist-sweep": "resolves each artist's socials and identity links",
   "cron.backfill": "repairs Discogs ids and Last.fm loves",
   "cron.context-note": "distills the facts behind each finding",
   "cron.enrich": "BPM, key, and the spectral fingerprint",
