@@ -71,3 +71,6 @@ apps/web/public/galaxy/ufo.png
 
 # The show orchestrator's dedicated Chromium profile (runtime state, never content)
 packages/live/.show-profile/
+
+# Local, never-commit 1Password audit (item/field NAMES only, no values)
+docs/1password-audit.local.md
