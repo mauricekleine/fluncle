@@ -190,6 +190,12 @@ type BackfillSyncOptions = {
   limit?: string;
 };
 
+type ArtistResolveOptions = {
+  json: boolean;
+  limit?: string;
+  queue?: boolean;
+};
+
 type MixtapeUpdateOptions = {
   durationMs?: string;
   json: boolean;
@@ -1367,6 +1373,41 @@ function addAdminCommands(program: Command): void {
       const { backfillArtistsCommand } = await import("./commands/admin-artists");
       await runBackfillArtists(options, backfillArtistsCommand);
     });
+
+  // `list_artists` + `resolve_artist` → `admin artists resolve` (Convention B). The
+  // on-box `fluncle-artist-sweep` cron drives BOTH modes: `--queue` reads the resolve
+  // worklist (artists awaiting resolution), and `resolve <artistId>` triggers the
+  // Worker's MB url-rels walk + Firecrawl /v2/extract gap-fill for one artist.
+  const artists = configureCommand(admin.command("artists").description("Artist entity commands"));
+
+  artists.action(() => {
+    artists.outputHelp();
+  });
+
+  artists
+    .command("resolve")
+    .description("Resolve an artist's social identity (MB url-rels + Firecrawl gap-fill)")
+    .argument("[artistId]")
+    .option(
+      "--queue",
+      "Show the resolve worklist (artists awaiting resolution), oldest first",
+      false,
+    )
+    .option("--limit <limit>", "Number of artists to show with --queue", "50")
+    .option("--json", "Print JSON", false)
+    .allowExcessArguments()
+    .action(async (artistId: string | undefined, options: ArtistResolveOptions) => {
+      // `--queue` is the resolve worklist view (artists awaiting resolution) — the
+      // sweep's worklist. Otherwise resolve one artist's social identity.
+      if (options.queue) {
+        const { listArtistsCommand } = await import("./commands/admin-artists");
+        await runArtistResolveQueue(options, listArtistsCommand);
+        return;
+      }
+
+      const { resolveArtistCommand } = await import("./commands/admin-artists");
+      await runArtistResolve(artistId, options, resolveArtistCommand);
+    });
 }
 
 async function runTrackPreviewArchive(
@@ -1755,6 +1796,72 @@ async function runBackfillArtists(
 
   for (const item of failed) {
     console.log(`  ${item.logId}: ${item.error}`);
+  }
+}
+
+// `admin artists resolve --queue`: the resolve worklist (artists awaiting social
+// resolution, oldest first). One bounded page — the sweep reads this, then resolves
+// each row. `--limit` caps the page (server-clamped to 50).
+async function runArtistResolveQueue(
+  options: ArtistResolveOptions,
+  listArtistsCommand: typeof import("./commands/admin-artists").listArtistsCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const result = await listArtistsCommand(limit ?? 50);
+
+  if (options.json) {
+    printJson({ artists: result.artists, ok: true });
+    return;
+  }
+
+  if (result.artists.length === 0) {
+    console.log("Every artist has been resolved. Nothing waiting on the sweep.");
+    return;
+  }
+
+  const noun = result.artists.length === 1 ? "artist" : "artists";
+  console.log(`${result.artists.length} ${noun} awaiting resolution, oldest first:`);
+
+  for (const artist of result.artists) {
+    console.log(`  ${artist.id}  ${artist.name}`);
+  }
+}
+
+// `admin artists resolve <artistId>`: trigger the Worker's social resolution for one
+// artist (MB url-rels walk + Firecrawl gap-fill). The sweep loops this over the queue.
+async function runArtistResolve(
+  artistId: string | undefined,
+  options: ArtistResolveOptions,
+  resolveArtistCommand: typeof import("./commands/admin-artists").resolveArtistCommand,
+): Promise<void> {
+  if (!artistId) {
+    throw new Error("Usage: fluncle admin artists resolve <artist_id> [--json]");
+  }
+
+  const result = await resolveArtistCommand(artistId);
+
+  if (options.json) {
+    printJson(result);
+    return;
+  }
+
+  if (result.rateLimited) {
+    console.log(
+      `MusicBrainz throttled the walk for ${artistId}. The sweep will swing back around.`,
+    );
+    return;
+  }
+
+  const mbid = result.mbid ?? "(no MusicBrainz match)";
+  const noun = result.socialsCount === 1 ? "social" : "socials";
+  console.log(`Resolved ${artistId}: mbid=${mbid}, ${result.socialsCount} ${noun}.`);
+
+  for (const social of result.socials) {
+    console.log(`  ${social.platform} (${social.source}): ${social.url}`);
+  }
+
+  if (result.wikidataQid) {
+    console.log(`  wikidata: ${result.wikidataQid}`);
   }
 }
 

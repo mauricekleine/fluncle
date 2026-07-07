@@ -799,6 +799,17 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    exposedContent: [
+      "resolve each artist's social identity: MB url-rel walk + Firecrawl gap-fill (TikTok + YouTube)",
+    ],
+    kind: "cron",
+    name: "cron.artist-sweep",
+    operatorNotes:
+      "every 60m. --no-agent trigger; the Worker does the MB walk + Firecrawl /v2/extract + YouTube channel resolution. Zero on-box tokens. MB rows land as status=auto (trusted); Firecrawl rows as status=candidate (operator-confirm before public). Source: docs/agents/hermes/scripts/artist-sweep.*",
+    probeConfig: { cadenceMs: 60 * MINUTE_MS, cronName: "fluncle-artist-sweep", kind: "cron" },
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin tracks social --capture",
     exposedContent: [
       "capture the YouTube/TikTok post URLs Postiz withholds on create → write back (--no-agent, Worker HTTP)",

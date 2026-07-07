@@ -1,11 +1,16 @@
-// The `admin-artists` domain contract module — the artist-entity backfill
-// (Unit 1 of the artist-relationship RFC). Follows the `admin-backfills` pattern:
-// a bounded, cursor-resumable POST with query params (no request body).
+// The `admin-artists` domain contract module — artist entity operations (artist-
+// relationship RFC). Follows the `admin-backfills` pattern for backfill; the
+// `resolve_artist` op adds the social-identity resolution surface.
 //
 //   - `backfill_artists` — agent tier (`adminAuth`): re-fetches `/tracks/{trackId}`
 //     for existing findings that predate the artists/track_artists tables and upserts
 //     the entity rows. Idempotent: findings that already have a track_artists row are
 //     skipped. The CLI loops the cursor until null.
+//
+//   - `resolve_artist` — agent tier (`adminAuth`): triggers MB url-rels walk +
+//     Firecrawl /v2/extract gap-fill for one artist. MB rows → status=auto (trusted);
+//     Firecrawl rows → status=candidate (operator-confirm before public). The on-box
+//     `fluncle-artist-sweep` cron drives this in bulk.
 //
 // Input params are tolerant optional strings (the live route convention for
 // `limit`/`dryRun`/`cursor`): the handler parses + clamps them, never 400s on a
@@ -64,7 +69,99 @@ export const backfillArtists = oc
     }),
   );
 
+// The platform + source enums MUST stay in lockstep with the resolver's
+// `ArtistSocialPlatform` + `ResolvedSocial.source` in
+// `apps/web/src/lib/server/artist-resolution.ts` — the resolver is the source of
+// truth for the shape this op returns. (`wikidata` is classified during the MB
+// walk but routed to the `wikidataQid` KG anchor, not into `socials`.)
+/** A resolved social from the MB url-rels walk or the Firecrawl gap-fill. */
+export const ResolvedSocialSchema = z
+  .object({
+    platform: z.enum([
+      "bandcamp",
+      "facebook",
+      "homepage",
+      "instagram",
+      "mixcloud",
+      "soundcloud",
+      "spotify",
+      "tiktok",
+      "twitter",
+      "youtube",
+    ]),
+    source: z.enum(["musicbrainz", "firecrawl"]),
+    url: z.string().url(),
+  })
+  .meta({ id: "ResolvedSocial" });
+
+/**
+ * `resolve_artist` → `POST /admin/artists/{artistId}/resolve` (operationId
+ * `resolveArtist`).
+ *
+ * Agent tier (`adminAuth`). Triggers the MB url-rels walk + Firecrawl gap-fill
+ * for one artist. Returns the resolved socials, mbid, wikidata QID, and a
+ * `rateLimited` flag if MB throttled mid-walk. The on-box cron calls this in a
+ * loop; the CLI exposes it for ad-hoc resolution.
+ */
+export const resolveArtist = oc
+  .route({
+    method: "POST",
+    operationId: "resolveArtist",
+    path: "/admin/artists/{artistId}/resolve",
+    summary: "Resolve an artist's social identity (MB + Firecrawl gap-fill)",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      artistId: z.string(),
+    }),
+  )
+  .output(
+    z.object({
+      artistId: z.string(),
+      mbid: z.string().nullable(),
+      ok: z.literal(true),
+      rateLimited: z.boolean(),
+      socials: z.array(ResolvedSocialSchema),
+      socialsCount: z.number(),
+      wikidataQid: z.string().nullable(),
+    }),
+  );
+
+/**
+ * `list_artists` → `GET /admin/artists` (operationId `listArtists`).
+ *
+ * Agent tier (`adminAuth`). The artist-sweep worklist: a bounded, cursor-paged
+ * page of artists still awaiting social resolution (`resolved_at IS NULL`),
+ * oldest-first by id. The on-box `fluncle-artist-sweep` cron reads this to pick
+ * the next batch, then calls `resolve_artist` per row. Returns `{ ok, artists:
+ * [{ id, name }], nextCursor }` (`nextCursor` is null when the queue is drained).
+ */
+export const listArtists = oc
+  .route({
+    method: "GET",
+    operationId: "listArtists",
+    path: "/admin/artists",
+    summary: "List artists awaiting social resolution, oldest first (the sweep worklist)",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      cursor: z.string().optional(),
+      limit: z.string().optional(),
+    }),
+  )
+  .output(
+    z.object({
+      artists: z.array(z.object({ id: z.string(), name: z.string() })),
+      nextCursor: z.string().nullable(),
+      ok: z.literal(true),
+    }),
+  );
+
 /** The `admin-artists` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminArtistsContract = {
   backfill_artists: backfillArtists,
+  list_artists: listArtists,
+  resolve_artist: resolveArtist,
 };
