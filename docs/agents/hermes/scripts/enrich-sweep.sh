@@ -35,6 +35,20 @@ export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 export BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 export FLUNCLE_BIN="${FLUNCLE_BIN:-/usr/local/bin/fluncle}"
 
+# Source the shared 0600 secrets file (the same single source every other sweep reads)
+# so the R2 credentials for the captured full-song fetch are in this sweep's env (RFC
+# docs/full-audio-rfc.md § Unit 2). Match capture-sweep.sh: provider creds are dropped
+# from the cron env by Hermes' blocklist, so the R2 creds can only arrive via this file —
+# they are unrecognized custom vars, so they pass. Absent file → the sweep still enriches
+# on the preview (capture must never gate enrichment).
+ENRICH_ENV_FILE="${ENRICH_ENV_FILE:-${HOME:-/opt/data/home}/.fluncle-secrets.env}"
+if [ -r "${ENRICH_ENV_FILE}" ]; then
+  set -a
+  # shellcheck source=/dev/null
+  . "${ENRICH_ENV_FILE}"
+  set +a
+fi
+
 # Resolve the orchestrator next to this wrapper so it runs regardless of CWD.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
