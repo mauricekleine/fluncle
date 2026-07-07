@@ -52,8 +52,8 @@ import { listTracks } from "@/lib/server/tracks";
 // recordings index + the uploader) → recordings; `/admin/clips` (the clip library +
 // the drip kill-switch) → clips; `/admin/newsletter` → newsletter. A recording's
 // per-set workstation is the Studio (`/admin/studio/$recordingId`), opened from a
-// Recordings row. Mixtapes' closest home is Plans (where a take is promoted);
-// System is the live service map at /status.
+// Recordings row. `/admin/mixtapes` (the minted-mixtape index + distribution
+// links) → mixtapes; System is the live service map at /status.
 
 /** A sidebar entry's key. A page passes the entry it OWNS as `current`. */
 export type AdminNavCurrent =
@@ -130,7 +130,7 @@ const OBJECT_SECTIONS: NavSection[] = [
   {
     entries: [
       { icon: ListNumbersIcon, key: "plans", label: "Playlists", to: "/admin/plans" },
-      { icon: CassetteTapeIcon, key: "mixtapes", label: "Mixtapes", to: "/admin/plans" },
+      { icon: CassetteTapeIcon, key: "mixtapes", label: "Mixtapes", to: "/admin/mixtapes" },
     ],
     key: "sets",
     label: "Sets",
